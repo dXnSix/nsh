@@ -9,7 +9,12 @@
 //! surfaces with different asset bases never mix), bounded by bytes and
 //! evicting the least recently used; concurrent requests for one location
 //! share one load. Images decode at their full size: GSK scales them when
-//! drawing (trilinear filtering when shrinking a lot).
+//! drawing (trilinear filtering when shrinking a lot). SVG images (sniffed
+//! from their bytes) are drawn by [`nsh_core::svg`] at their intrinsic size
+//! × [`nsh_core::svg::OVERSAMPLE`] (at most
+//! [`nsh_core::svg::MAX_OVERSAMPLED_PX`] a side); their texture carries
+//! their intrinsic size in points ([`svg_points`]), which they are laid out
+//! with and report.
 //!
 //! Animated GIF and WebP images decode every frame (composited, at most
 //! [`MAX_FRAMES`] and [`MAX_ANIMATION_BYTES`]: larger ones show their first
@@ -391,9 +396,58 @@ fn animation(bytes: &[u8], format: image::ImageFormat) -> Result<Option<Picture>
     }))
 }
 
-/// Decodes an encoded image (any thread): GIF and WebP with the `image`
-/// crate (every frame of animations), others with GDK's loaders first.
+/// The key of an SVG texture's intrinsic size in points.
+const SVG_POINTS: &str = "nsh-svg-points";
+
+/// Draws an SVG oversampled into a texture that carries its intrinsic
+/// size in points; any thread.
+fn decode_svg(bytes: &[u8]) -> Result<Picture, String> {
+    let raster = nsh_core::svg::rasterize_oversampled(bytes).map_err(|e| e.to_string())?;
+    let (width, height) = (raster.width, raster.height);
+    let pixels = glib::Bytes::from_owned(raster.pixels);
+    let texture: gdk::Texture = gdk::MemoryTexture::new(
+        width as i32,
+        height as i32,
+        gdk::MemoryFormat::R8g8b8a8Premultiplied,
+        &pixels,
+        width as usize * 4,
+    )
+    .upcast();
+    let (w, h) = raster.size;
+    let points: (u32, u32) = ((w.round() as u32).max(1), (h.round() as u32).max(1));
+    // SAFETY: the key only ever holds a `(u32, u32)` ([`svg_points`]), set
+    // here before the texture is shared and never changed.
+    unsafe { texture.set_data(SVG_POINTS, points) };
+    Ok(Picture::still(texture))
+}
+
+/// An SVG texture's intrinsic size in points.
+fn svg_points(texture: &gdk::Texture) -> Option<(u32, u32)> {
+    // SAFETY: the key only ever holds a `(u32, u32)`, set by
+    // [`decode_svg`] before the texture was shared and never changed.
+    unsafe {
+        texture
+            .data::<(u32, u32)>(SVG_POINTS)
+            .map(|points| *points.as_ref())
+    }
+}
+
+/// The size `onLoad` and `Image.getSize` report: pixels, or an SVG's
+/// points.
+fn reported_size(texture: &gdk::Texture) -> (u32, u32) {
+    svg_points(texture).unwrap_or((
+        texture.width().max(0) as u32,
+        texture.height().max(0) as u32,
+    ))
+}
+
+/// Decodes an encoded image (any thread): SVG with the shared rasterizer,
+/// GIF and WebP with the `image` crate (every frame of animations), others
+/// with GDK's loaders first.
 fn decode(bytes: Vec<u8>) -> Result<Picture, String> {
+    if nsh_core::svg::sniff(&bytes) {
+        return decode_svg(&bytes);
+    }
     if let Some(format) = animated_format(&bytes) {
         match animation(&bytes, format) {
             Ok(Some(picture)) => return Ok(picture),
@@ -623,7 +677,8 @@ pub(crate) fn cached(surface: &Surface, uri: &str) -> Option<gdk::Texture> {
 }
 
 /// `Command::ImageInfo` (`Image.getSize`, `Image.prefetch`): loads the
-/// image into the texture cache and reports its size in pixels.
+/// image into the texture cache and reports its size in pixels (an SVG's:
+/// its intrinsic size in points).
 pub(crate) fn command(surface: &Rc<Surface>, _id: NodeId, command: &Command) {
     let Command::ImageInfo { id, uri } = command else {
         return;
@@ -637,8 +692,9 @@ pub(crate) fn command(surface: &Rc<Surface>, _id: NodeId, command: &Command) {
         let mut fields = vec![("id", PayloadValue::Number(request as f64))];
         match result {
             Ok(t) => {
-                fields.push(("width", PayloadValue::Number(t.width() as f64)));
-                fields.push(("height", PayloadValue::Number(t.height() as f64)));
+                let (w, h) = reported_size(&t);
+                fields.push(("width", PayloadValue::Number(w as f64)));
+                fields.push(("height", PayloadValue::Number(h as f64)));
             }
             Err(message) => fields.push(("error", PayloadValue::Str(message))),
         }
@@ -997,8 +1053,8 @@ fn loaded(
             id,
             EventKind::Load,
             EventPayload::Image {
-                width: picture.texture.width() as f32,
-                height: picture.texture.height() as f32,
+                width: reported_size(&picture.texture).0 as f32,
+                height: reported_size(&picture.texture).1 as f32,
             },
         ),
         Err(message) if events.contains(EventKind::Error) => surface.event(
@@ -1053,13 +1109,17 @@ fn density(uri: &str) -> f32 {
 }
 
 /// The natural size in points of `texture` loaded from `source`: the size
-/// the source declares, or its pixels over the file name's density.
+/// the source declares, an SVG's intrinsic size, or its pixels over the
+/// file name's density.
 fn natural(texture: &gdk::Texture, source: Option<&ImageSource>) -> (f32, f32) {
     if let Some(size) = source
         .and_then(|s| s.size)
         .filter(|(w, h)| *w > 0.0 && *h > 0.0)
     {
         return size;
+    }
+    if let Some((w, h)) = svg_points(texture) {
+        return (w as f32, h as f32);
     }
     let d = source.map_or(1.0, |s| density(&s.uri));
     (texture.width() as f32 / d, texture.height() as f32 / d)
@@ -1268,6 +1328,69 @@ mod tests {
         );
         assert_eq!(animated_format(b"\x89PNG\r\n"), None);
         assert_eq!(animated_format(b"RIFF"), None);
+    }
+
+    const SVG_LOGO: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="48" height="24"><rect width="24" height="24" fill="#f00"/><rect x="24" width="24" height="24" fill="#00f" fill-opacity="0.5"/></svg>"##;
+
+    /// The texture's pixels as premultiplied BGRA (Cairo's ARGB32 on a
+    /// little-endian machine), row by row.
+    fn pixels(texture: &gdk::Texture) -> Vec<u8> {
+        let (w, h) = (texture.width() as usize, texture.height() as usize);
+        let mut data = vec![0u8; w * h * 4];
+        texture.download(&mut data, w * 4);
+        data
+    }
+
+    #[test]
+    fn svg_decodes_oversampled() {
+        let picture = decode(SVG_LOGO.to_vec()).unwrap();
+        let texture = &picture.texture;
+        assert_eq!(
+            (texture.width(), texture.height()),
+            (192, 96),
+            "four pixels a point"
+        );
+        assert_eq!(svg_points(texture), Some((48, 24)));
+        let data = pixels(texture);
+        let at = |x: usize, y: usize| -> [u8; 4] {
+            let i = (y * 192 + x) * 4;
+            data[i..i + 4].try_into().unwrap()
+        };
+        assert_eq!(at(10, 10), [0, 0, 255, 255]);
+        let [b, g, r, a] = at(150, 50);
+        assert!((127..=128).contains(&a), "alpha {a}");
+        assert_eq!((b, g, r), (a, 0, 0));
+        let big = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="250"/>"#;
+        let big = decode(big.to_vec()).unwrap();
+        assert_eq!((big.texture.width(), big.texture.height()), (2048, 512));
+        assert!(decode(b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect".to_vec()).is_err());
+    }
+
+    #[test]
+    fn svg_size_is_in_points() {
+        let picture = decode(SVG_LOGO.to_vec()).unwrap();
+        assert_eq!(reported_size(&picture.texture), (48, 24));
+        let source = ImageSource {
+            uri: "asset:/logo@2x.svg".into(),
+            size: None,
+        };
+        assert_eq!(natural(&picture.texture, Some(&source)), (48.0, 24.0));
+        // Bitmaps keep their pixels.
+        let bitmap = texture(image::RgbaImage::new(20, 10));
+        assert_eq!(svg_points(&bitmap), None);
+        assert_eq!(reported_size(&bitmap), (20, 10));
+    }
+
+    #[test]
+    fn svg_tints_through_alpha() {
+        // `tintColor` masks the color with the texture's alpha: the shape
+        // is opaque, the rest transparent.
+        let icon = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="#000"/></svg>"##;
+        let picture = decode(icon.to_vec()).unwrap();
+        let data = pixels(&picture.texture);
+        let alpha = |x: usize, y: usize| data[(y * 96 + x) * 4 + 3];
+        assert_eq!(alpha(48, 48), 255);
+        assert_eq!(alpha(2, 2), 0);
     }
 
     #[test]
