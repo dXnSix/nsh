@@ -18,6 +18,7 @@ mod component_bench;
 mod components;
 mod counter;
 mod errors;
+mod external_wake;
 mod fetch;
 mod handle_bench;
 mod host_modules;

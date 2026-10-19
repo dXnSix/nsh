@@ -4,6 +4,7 @@
 //! build of it with the app's sets too, one per crate.
 
 mod android;
+mod bindgen;
 mod build;
 mod check;
 mod dev;

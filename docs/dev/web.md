@@ -177,6 +177,36 @@ Rust code meant for the web too uses the engine's services rather than threads a
 Rust app (2026-10) its `nsh.wasm` is 3.31 MB (1.06 MB gzipped, 0.75 MB with brotli): no QuickJS, so smaller than the
 prebuilt runtime, which a TSX entry (QuickJS) needs: the gallery under one was 5.26 MB (1.75 / 1.27 MB).
 
+### Crates that use wasm-bindgen
+
+The runtime is a raw module (`nsh_*` exports, `nsh` / `env` imports), not a wasm-bindgen one, so an app crate's
+`web-sys` / `js-sys` imports have nothing to call by themselves. When the app's web runtime links `wasm-bindgen`
+(`bindgen::version_in`: the crate in the `web` / `rust-web` member's normal dependencies, from `cargo metadata
+--filter-platform wasm32-unknown-unknown` of the generated workspace), `RustApp::web` runs the `wasm-bindgen` CLI
+(`NSH_WASM_BINDGEN`, else `PATH`; its version must equal the crate's, `bindgen::check_cli`, or the build stops with
+both versions and the install command) with `--target web --no-typescript` on the built module (`bindgen::process`).
+Its module replaces the built one (`nsh.wasm` / `nsh-dev.wasm` / `nsh-rust.wasm`), and its glue, adapted
+(`bindgen::adapt`), is written next to it as `<module>-bindgen.js`: the glue imports the module's other imports as ES
+modules (`import * as import1 from "nsh"`, a bare specifier no page resolves), which become empty objects `nsh.js`
+fills, and its `__wbg_get_imports` / `__wbg_finalize_init` are exported as `__nsh_imports` / `__nsh_finalize`. Only
+wasm-bindgen 0.2.1xx's glue has that shape; another is refused rather than shipped broken. A runtime without
+wasm-bindgen is built and served exactly as before, and a stale glue is removed.
+
+`WebRuntime::glue` carries it: the dev host serves it as `/nsh-bindgen.js` (`dev.html`'s `GLUE`; it is part of
+`nsh.version`), and `nsh package --target web` minifies it, names it by its content (`nsh-bindgen.<digest>.js`),
+preloads it (`<link rel="modulepreload">`) and passes it in `app.glue`. `createPlayer`'s option `glue` (a URL
+against the page) makes `Player.load` import it before instantiating, merge `__nsh_imports()` into the import object
+(NSH's own `nsh` and `env` keys win), and call `__nsh_finalize(instance, module)` (its memory views, wasm-bindgen's
+externref table) right after instantiating, before `nsh_app_init`. The glue keeps one instance per page, which is what
+an app's page has; the website's multi-player pages keep the prebuilt runtime.
+
+The browser calls the glue's closures outside any `nsh_*` call (a WebSocket message), so a task they wake must make
+the page pump: `LocalEngine::set_wake` hooks the core's task notify and the posts' notify (each still sends
+`Message::Wake`), and `nsh_platform_web` sets it to the `request_pump` import, which `Player.requestPump` coalesces
+into one `nsh_pump` in a task of its own (`setTimeout` 0, so a wake inside a pump never re-enters it; `call` defers
+it while the engine runs). The deadline scheduling (`schedule`) is unchanged. A wake during a call into the engine
+(a fetch reply's `nsh_fetch_*`, which pumps itself) requests one too: that pump finds the work done and returns.
+
 ## What WebAssembly changes in the shared crates
 
 - **No threads.** `nsh_engine::LocalEngine` drives the engine from the host's event loop: `pump()` handles what was

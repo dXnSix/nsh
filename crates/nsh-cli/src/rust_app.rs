@@ -1172,12 +1172,22 @@ opt-level = 3
     ) -> anyhow::Result<Option<crate::runtime::WebRuntime>> {
         const WASM: &str = "wasm32-unknown-unknown";
         let out = self.workspace.join("web-runtime");
-        let runtime = crate::runtime::WebRuntime {
-            wasm: if self.root.is_some() {
-                out.join("nsh-rust.wasm")
-            } else {
-                out.join(kind.file())
-            },
+        let wasm = if self.root.is_some() {
+            out.join("nsh-rust.wasm")
+        } else {
+            out.join(kind.file())
+        };
+        // The module's wasm-bindgen glue, when the app's crates use
+        // wasm-bindgen (`crate::bindgen`).
+        let stem = wasm
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("nsh")
+            .to_owned();
+        let glue = out.join(format!("{stem}-bindgen.js"));
+        let mut runtime = crate::runtime::WebRuntime {
+            glue: glue.exists().then(|| glue.clone()),
+            wasm,
             // A checkout's own, so edits to it apply; from crates.io the
             // published crate's, copied next to the module when it is built.
             js: match &self.nsh {
@@ -1222,15 +1232,56 @@ opt-level = 3
         };
         let built = self.build_with(cmd, &build)?;
         fs::create_dir_all(&out)?;
-        // Both kinds build to the same file: each keeps a copy of its own.
-        fs::copy(&built, &runtime.wasm)
-            .with_context(|| format!("copy {} to {}", built.display(), runtime.wasm.display()))?;
+        // Both kinds build to the same file: each keeps a copy of its own,
+        // through wasm-bindgen when the app's crates use it.
+        match self.wasm_bindgen(&package)? {
+            Some(version) => {
+                let (_, written) = crate::bindgen::process(&built, &version, &out, &stem)?;
+                runtime.glue = Some(written);
+            }
+            None => {
+                fs::copy(&built, &runtime.wasm).with_context(|| {
+                    format!("copy {} to {}", built.display(), runtime.wasm.display())
+                })?;
+                // Glue of a build that used wasm-bindgen before.
+                if glue.exists() {
+                    fs::remove_file(&glue).with_context(|| format!("remove {}", glue.display()))?;
+                }
+                runtime.glue = None;
+            }
+        }
         if self.nsh == Nsh::Registry {
             let js = self.registry_crate("nsh-platform-web")?.join("web/nsh.js");
             fs::copy(&js, &runtime.js)
                 .with_context(|| format!("copy {} to {}", js.display(), runtime.js.display()))?;
         }
         Ok(Some(runtime))
+    }
+
+    /// The version of `wasm-bindgen` the web runtime `package` links, if it
+    /// does ([`crate::bindgen::version_in`], from `cargo metadata` of the
+    /// workspace for `wasm32-unknown-unknown`).
+    fn wasm_bindgen(&self, package: &str) -> anyhow::Result<Option<String>> {
+        let output = Command::new(cargo())
+            .args(["metadata", "--format-version", "1"])
+            .args([
+                "--filter-platform",
+                "wasm32-unknown-unknown",
+                "--manifest-path",
+            ])
+            .arg(self.workspace.join("Cargo.toml"))
+            .output()
+            .context("run cargo metadata")?;
+        if !output.status.success() {
+            bail!(
+                "cargo metadata of {}:\n{}",
+                self.workspace.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&output.stdout).context("cargo metadata's output")?;
+        Ok(crate::bindgen::version_in(&metadata, package))
     }
 
     /// The directory Cargo unpacked nsh's crate `name` (from crates.io, at

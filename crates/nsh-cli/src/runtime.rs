@@ -217,6 +217,9 @@ fn android_existing(dir: PathBuf, dev: bool) -> anyhow::Result<PathBuf> {
 pub(crate) struct WebRuntime {
     pub(crate) wasm: PathBuf,
     pub(crate) js: PathBuf,
+    /// The wasm-bindgen glue of an app's runtime whose crates use
+    /// wasm-bindgen (`crate::bindgen`), served and packaged next to `nsh.js`.
+    pub(crate) glue: Option<PathBuf>,
 }
 
 /// Which web runtime: the two differ in QuickJS only.
@@ -255,6 +258,7 @@ pub(crate) fn web(kind: WebKind, build: bool) -> anyhow::Result<Option<WebRuntim
         let runtime = WebRuntime {
             wasm: dir.join(kind.file()),
             js: dir.join("nsh.js"),
+            glue: None,
         };
         (runtime.wasm.exists() && runtime.js.exists()).then_some(runtime)
     };
@@ -311,6 +315,7 @@ pub(crate) fn web(kind: WebKind, build: bool) -> anyhow::Result<Option<WebRuntim
     let runtime = WebRuntime {
         wasm: out.join(kind.file()),
         js: root.join("crates/nsh-platform-web/web/nsh.js"),
+        glue: None,
     };
     if runtime.wasm.exists() {
         return Ok(Some(runtime));

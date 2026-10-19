@@ -9,7 +9,9 @@
 //   const player = await createPlayer(container, { wasm: "nsh.wasm" });
 //   player.run(await (await fetch("app.js")).text());
 //
-// Options: `wasm` (its URL, or a `Response` promise), `assetBase` (where
+// Options: `wasm` (its URL, or a `Response` promise), `glue` (the URL of
+// the wasm-bindgen glue of an app's runtime whose crates use wasm-bindgen;
+// the CLI writes it next to the module), `assetBase` (where
 // `asset:/<path>` is served) or `assets` (a map from `<path>` to its URL,
 // as `nsh package --target web` writes it), `readAsset(uri)` (the bytes
 // of an asset the engine needs at once, a font: a `Uint8Array` or null),
@@ -477,6 +479,8 @@ class Player {
     // Of the views' own style rules (`op_css`).
     this.classPrefix = `nsh-p${++players}-`;
     this.timer = 0;
+    // An `nsh_pump` is queued (`requestPump`).
+    this.pumpRequested = false;
     this.frame = 0;
     this.measure = measureContext();
     this.measureUses = 0;
@@ -535,6 +539,7 @@ class Player {
           this.apply(batch);
         },
         request_frame: () => this.requestFrame(),
+        request_pump: () => this.requestPump(),
         report_error: (p, l) => this.showError(this.str(p, l)),
         log: (level, p, l) => {
           const message = this.str(p, l);
@@ -589,6 +594,15 @@ class Player {
     } catch {
       module = await WebAssembly.compile(await (await response()).arrayBuffer());
     }
+    // An app's crates that use wasm-bindgen (web-sys, js-sys): the CLI ran
+    // `wasm-bindgen --target web` on the runtime, and its glue provides the
+    // module's other imports. NSH's own (`nsh`, `env`) stay these.
+    const glue = this.options.glue ? await import(new URL(String(this.options.glue), document.baseURI).href) : null;
+    if (glue) {
+      for (const [name, fields] of Object.entries(glue.__nsh_imports())) {
+        imports[name] = name in imports ? { ...fields, ...imports[name] } : fields;
+      }
+    }
     // The compiler's dependencies link wasm-bindgen glue they never call
     // here (oxc-browserslist's dates): stubs that say so if they are.
     for (const { module: name, name: field, kind } of WebAssembly.Module.imports(module)) {
@@ -599,7 +613,11 @@ class Player {
       };
     }
     imports.__wbindgen_placeholder__ && (imports.__wbindgen_placeholder__.__wbindgen_describe = () => {});
-    this.wasm = (await WebAssembly.instantiate(module, imports)).exports;
+    const instance = await WebAssembly.instantiate(module, imports);
+    this.wasm = instance.exports;
+    // The glue's own setup (its view of the memory, wasm-bindgen's tables)
+    // before any of the app's code runs.
+    glue?.__nsh_finalize(instance, module);
     // An app's own runtime (Rust components: nsh.json "rust") registers
     // its UI sets before anything starts.
     this.wasm.nsh_app_init?.();
@@ -850,6 +868,20 @@ class Player {
     cancelAnimationFrame(this.frame);
     this.frame = 0;
     this.wasm?.nsh_stop();
+  }
+
+  /**
+   * The engine has work that came outside a call into it (`request_pump`:
+   * a task a browser callback woke): one `nsh_pump` in a task of its own,
+   * however many ask before it runs; `call` defers it if the engine runs.
+   */
+  requestPump() {
+    if (this.pumpRequested) return;
+    this.pumpRequested = true;
+    setTimeout(() => {
+      this.pumpRequested = false;
+      this.call((w) => w.nsh_pump());
+    }, 0);
   }
 
   /** The engine is due again in `delay` ms (-1: only for input). */
