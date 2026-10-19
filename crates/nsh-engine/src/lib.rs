@@ -9,6 +9,8 @@
 //! the engine.
 
 mod access;
+#[cfg(all(feature = "headless", not(target_arch = "wasm32")))]
+pub mod headless;
 mod local_storage;
 pub mod perf;
 mod script;
@@ -543,6 +545,31 @@ pub struct EngineConfig {
     /// names (the browser's `localStorage`, an embedder's own); `None`
     /// with no data directory either: in memory, for the engine's life.
     pub storage: Option<Arc<dyn nsh_core::storage::StorageBackend>>,
+}
+
+impl EngineConfig {
+    /// `app` on a phone-sized surface (390 × 844 points, iOS's header
+    /// heights) with nothing else: no network, assets, data directory or
+    /// UI sets, the default environment and limits, the shared runtime.
+    /// Set the fields that matter over it (`EngineConfig { ui_sets,
+    /// ..EngineConfig::new(app) }`). There is no `Default`: an engine has
+    /// no app to run by default.
+    pub fn new(app: impl Into<App>) -> Self {
+        Self {
+            app: app.into(),
+            viewport: Size::new(390.0, 844.0),
+            trace: false,
+            network: None,
+            assets: None,
+            environment: Environment::default(),
+            header_heights: (44.0, 96.0),
+            limits: Limits::default(),
+            ui_sets: Vec::new(),
+            runtime: None,
+            data_dir: None,
+            storage: None,
+        }
+    }
 }
 
 /// The storage of the app `config` runs: [`EngineConfig::storage`], or a
