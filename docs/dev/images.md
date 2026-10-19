@@ -24,3 +24,9 @@
   layout never depends on the variant. When the pixel ratio changes (`apply_environment`: a window moved to another
   screen, browser zoom) only the images whose pick changes are marked `dirty::IMAGE` and sent again, with no relayout.
   `Image.getSize` / `Image.prefetch` pick the same way, so a prefetch warms the bytes the views load.
+  The bundler finds the variants: its image `load` hook (`plugin.rs`) stats the fixed names `<stem>@<s>x.<ext>` for the
+  scales of `IMAGE_SCALES` above 1 (no directory listing), only for imports without a density suffix (`logo@3x.png`
+  probes nothing and ships alone). The ones found join `Bundle::assets`, so the dev server, `out/assets`, every package,
+  `.nshpkg` and the web package's asset map carry them, and the module gains `scales` (1 first) only when there is one:
+  an app without variants bundles byte for byte as before. Width and height still come from the imported file; a variant
+  whose pixels are off that size times its scale by a pixel or more is warned about on `nsh::build`.
