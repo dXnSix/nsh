@@ -30,3 +30,6 @@
   `.nshpkg` and the web package's asset map carry them, and the module gains `scales` (1 first) only when there is one:
   an app without variants bundles byte for byte as before. Width and height still come from the imported file; a variant
   whose pixels are off that size times its scale by a pixel or more is warned about on `nsh::build`.
+  Rust's `asset!` does the same for a crate image (`nsh-macros` `assets.rs`): `ImageAsset::scales` lists the siblings it
+  finds (`assets!()` already ships the whole directory) and `include_bytes!`s them, so a changed variant rebuilds the
+  crate. A proc macro cannot read nsh-core, so its `VARIANT_SCALES` repeats `IMAGE_SCALES` above 1: change them together.
