@@ -274,6 +274,21 @@ name and a specifier of its own; `nsh` reports a repeated one with the two paths
 `"root"` is a component of the first crate listed. During `nsh run` and `nsh dev`, a change to any of them, or to a
 crate they depend on by path, rebuilds the app and restarts it.
 
+## Where NSH's crates come from
+
+The crates of an app depend on NSH's crates (`nsh-core`, `nsh-ui-mobile`, …) in one of three ways, and `nsh` builds the
+app's hosts and runtimes with NSH's crates from the same place, so the app and its hosts share one core:
+
+| Dependency | Use it for |
+|---|---|
+| `nsh-core = "0.1.1"` | The published crates, at the version of the `nsh` you run (what `nsh init` writes) |
+| `nsh-core = { path = "../nsh/crates/nsh-core" }` | A checkout of NSH: trying a change to NSH itself (`nsh init --template rust --nsh-source <dir>`) |
+| `nsh-core = { git = "https://github.com/you/nsh", tag = "my-tag" }` | A git repository: a fork, or a change that is in NSH's repository but not yet on crates.io (`tag`, `branch` or `rev`) |
+
+All of the app's crates name the same place, and its version is the one of the `nsh` you run: install `nsh` from
+the same repository and tag (`cargo install --git <url> --tag <tag> --locked nsh-cli`) when the crates take NSH
+from git. When they disagree, `nsh` names both places and stops before building.
+
 ## See also
 
 - [Project structure](./project-structure.md): every key of `nsh.json`.
