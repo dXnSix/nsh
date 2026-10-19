@@ -9635,3 +9635,79 @@ mod builders {
         assert!(one_by_one[0].contains("\"right\""));
     }
 }
+
+mod remount {
+    use super::*;
+
+    #[test]
+    fn sends_every_view_again_without_creating_it() {
+        let mut c = core();
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::View,
+                },
+                Op::Create {
+                    id: 3,
+                    tag: Tag::Text,
+                },
+                Op::CreateText {
+                    id: 4,
+                    text: "hello".into(),
+                },
+                Op::Insert {
+                    parent: 3,
+                    child: 4,
+                    before: None,
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 3,
+                    before: None,
+                },
+                style_op(
+                    2,
+                    &[
+                        ("padding", StyleValue::Number(10.0)),
+                        ("borderRadius", StyleValue::Number(8.0)),
+                    ],
+                ),
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+        let first = c.commit().unwrap();
+        assert!(c.commit().is_none());
+
+        c.remount();
+        let again = c.commit().expect("a remount sends a batch");
+        assert!(
+            !again.items.iter().any(|i| matches!(
+                i,
+                MountItem::Create { .. } | MountItem::Insert { .. } | MountItem::Remove { .. }
+            )),
+            "the views stay: {:?}",
+            again.items
+        );
+        assert_eq!(frame_of(&again, 2), frame_of(&first, 2));
+        assert_eq!(frame_of(&again, 3), frame_of(&first, 3));
+        assert!(
+            again
+                .items
+                .iter()
+                .any(|i| matches!(i, MountItem::ViewStyle { id: 2, .. }))
+        );
+        assert!(
+            again
+                .items
+                .iter()
+                .any(|i| matches!(i, MountItem::Text { id: 3, .. }))
+        );
+        assert!(c.commit().is_none(), "nothing left to send");
+    }
+}
