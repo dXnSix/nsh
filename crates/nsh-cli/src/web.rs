@@ -115,6 +115,14 @@ pub(crate) fn package(
         Some(path) => {
             let glue =
                 fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+            // Its snippets first, under their content's names, which the
+            // glue then imports.
+            let mut published = Vec::new();
+            for (name, file) in crate::bindgen::snippets(path)? {
+                let bytes = fs::read(&file).with_context(|| format!("read {}", file.display()))?;
+                published.push((name.clone(), site.add(&name, &bytes)?));
+            }
+            let glue = crate::bindgen::link_snippets(&glue, &published);
             let glue = nsh_bundler::minify_module(crate::bindgen::GLUE, &glue)
                 .map_err(anyhow::Error::msg)?;
             Some(site.add(crate::bindgen::GLUE, glue.as_bytes())?)
@@ -251,8 +259,21 @@ pub(crate) fn dev_host(runtime: &WebRuntime, rust: bool) -> anyhow::Result<(Stri
     let js = read(&runtime.js)?;
     let wasm = read(&runtime.wasm)?;
     let glue = runtime.glue.as_deref().map(read).transpose()?;
+    // The snippets the glue imports, at the paths it imports them by.
+    let snippets = match &runtime.glue {
+        Some(path) => crate::bindgen::snippets(path)?
+            .into_iter()
+            .map(|(name, file)| Ok((name, read(&file)?)))
+            .collect::<anyhow::Result<Vec<_>>>()?,
+        None => Vec::new(),
+    };
     let mut parts = vec![digest(&js), digest(&wasm)];
     parts.extend(glue.as_deref().map(digest));
+    parts.extend(
+        snippets
+            .iter()
+            .map(|(name, bytes)| digest(&[name.as_bytes(), bytes].concat())),
+    );
     let version = digest(&parts.concat().into_bytes());
     let page = DEV_PAGE
         .replace(
@@ -278,6 +299,7 @@ pub(crate) fn dev_host(runtime: &WebRuntime, rust: bool) -> anyhow::Result<(Stri
     if let Some(glue) = glue {
         files.push((crate::bindgen::GLUE.to_owned(), glue));
     }
+    files.extend(snippets);
     Ok((page, files))
 }
 
@@ -698,6 +720,9 @@ mod tests {
         assert_eq!(names(&plain_files), ["nsh.js", "nsh.wasm", "nsh.version"]);
         let glue = dir.join("nsh-dev-bindgen.js");
         fs::write(&glue, "export {};").unwrap();
+        let snippet = crate::bindgen::output_dir(&glue).join("snippets/app-1/inline0.js");
+        fs::create_dir_all(snippet.parent().unwrap()).unwrap();
+        fs::write(&snippet, "export const a = 1;").unwrap();
         runtime.glue = Some(glue.clone());
         let (page, files) = dev_host(&runtime, false).unwrap();
         assert!(
@@ -705,9 +730,16 @@ mod tests {
             "{page}"
         );
         assert!(page.contains("glue: GLUE ?? undefined"), "{page}");
+        // The glue's snippets at the paths it imports them by.
         assert_eq!(
             names(&files),
-            ["nsh.js", "nsh.wasm", "nsh.version", "nsh-bindgen.js"]
+            [
+                "nsh.js",
+                "nsh.wasm",
+                "nsh.version",
+                "nsh-bindgen.js",
+                "snippets/app-1/inline0.js"
+            ]
         );
         // Another glue is another runtime: an open page loads again.
         let version = |files: &Files| {
@@ -724,6 +756,10 @@ mod tests {
             version(&dev_host(&runtime, false).unwrap().1)
         );
         assert_ne!(version(&files), version(&plain_files));
+        // So is another snippet.
+        let before = version(&dev_host(&runtime, false).unwrap().1);
+        fs::write(&snippet, "export const a = 2;").unwrap();
+        assert_ne!(before, version(&dev_host(&runtime, false).unwrap().1));
         let _ = fs::remove_dir_all(&dir);
     }
 

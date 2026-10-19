@@ -7,7 +7,10 @@
 //! (`nsh`, `env`) and runs the glue's setup before the app starts. A runtime
 //! without wasm-bindgen is built and served as before.
 //!
-//! The glue is wasm-bindgen's `--target web` output, adapted ([`adapt`]):
+//! The glue is wasm-bindgen's `--target web` output, adapted ([`adapt`]),
+//! with the JS snippets it imports (`#[wasm_bindgen(inline_js = …)]`,
+//! `module = …`: `snippets/<crate>/…`, [`snippets`]), served and packaged
+//! beside it ([`link_snippets`] points the glue at their published names):
 //! the imports wasm-bindgen does not provide (the `nsh` module) are not ES
 //! modules but `nsh.js`' own, and its import table and setup are exported for
 //! `nsh.js` to call.
@@ -91,7 +94,9 @@ pub(crate) fn check_cli(version: &str, output: Option<&str>) -> anyhow::Result<(
 
 /// Runs the `wasm-bindgen` CLI (`version`, checked first) on `module`,
 /// writing into `out` the module to load and the glue ([`adapt`]ed) as
-/// `<name>.wasm` and `<name>-bindgen.js`; returns their paths.
+/// `<name>.wasm` and `<name>-bindgen.js`; returns their paths. wasm-bindgen's
+/// own output stays in `<name>-bindgen/`, where the glue's snippets are
+/// ([`snippets`]).
 pub(crate) fn process(
     module: &Path,
     version: &str,
@@ -105,7 +110,11 @@ pub(crate) fn process(
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
     check_cli(version, printed.as_deref())?;
-    let dir = out.join("bindgen");
+    let dir = output_dir(&out.join(format!("{name}-bindgen.js")));
+    // A snippet a previous build had must not be served again.
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
+    }
     let mut command = Command::new(cli());
     command
         .args(["--target", "web", "--no-typescript", "--out-dir"])
@@ -127,6 +136,57 @@ pub(crate) fn process(
     std::fs::write(&glue_path, adapt(&glue)?)
         .with_context(|| format!("write {}", glue_path.display()))?;
     Ok((wasm, glue_path))
+}
+
+/// Where wasm-bindgen wrote the glue `glue` (`<name>-bindgen.js`) was made
+/// from: `<name>-bindgen/`.
+pub(crate) fn output_dir(glue: &Path) -> PathBuf {
+    glue.with_extension("")
+}
+
+/// The JS snippets the glue `glue` imports, as `(path, file)`: their path
+/// relative to the glue (`snippets/<crate>-<hash>/inline0.js`, as the glue
+/// imports them, `./` aside) and where they are. Sorted by path.
+pub(crate) fn snippets(glue: &Path) -> anyhow::Result<Vec<(String, PathBuf)>> {
+    let root = output_dir(glue);
+    let mut found = Vec::new();
+    let mut dirs = vec![root.join("snippets")];
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries {
+            let path = entry?.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if let Ok(relative) = path.strip_prefix(&root) {
+                let relative = relative
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                found.push((relative, path));
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// The glue with its snippet imports (`"./snippets/…"`) pointing at the
+/// snippets' published names (`published`: path to URL relative to the
+/// glue, `snippets/x/inline0.<digest>.js`).
+pub(crate) fn link_snippets(glue: &str, published: &[(String, String)]) -> String {
+    let mut glue = glue.to_owned();
+    for (path, url) in published {
+        for quote in ['"', '\''] {
+            glue = glue.replace(
+                &format!("{quote}./{path}{quote}"),
+                &format!("{quote}./{url}{quote}"),
+            );
+        }
+    }
+    glue
 }
 
 /// The glue wasm-bindgen wrote (`--target web`), for `nsh.js`: an import of
@@ -178,7 +238,7 @@ fn foreign_import(line: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{adapt, check_cli, version_in};
+    use super::{adapt, check_cli, link_snippets, snippets, version_in};
 
     /// `cargo metadata` of a workspace whose `web` depends on `app`, which
     /// depends on `wasm-bindgen` as `kind` (`null`: normal).
@@ -233,6 +293,51 @@ mod tests {
             none.contains("cargo install wasm-bindgen-cli --version 0.2.129"),
             "{none}"
         );
+    }
+
+    #[test]
+    fn wasm_bindgen_snippets_are_found_beside_the_glue_and_linked_by_their_names() {
+        let out = std::env::temp_dir().join(format!("nsh-bindgen-snippets-{}", std::process::id()));
+        let glue = out.join("nsh-bindgen.js");
+        let inline = super::output_dir(&glue).join("snippets/app-0123/inline0.js");
+        let module = super::output_dir(&glue).join("snippets/app-0123/js/clip.js");
+        std::fs::create_dir_all(module.parent().unwrap()).unwrap();
+        std::fs::write(&inline, "export function a() {}").unwrap();
+        std::fs::write(&module, "export function b() {}").unwrap();
+        let found = snippets(&glue).unwrap();
+        assert_eq!(
+            found,
+            [
+                ("snippets/app-0123/inline0.js".to_owned(), inline),
+                ("snippets/app-0123/js/clip.js".to_owned(), module),
+            ]
+        );
+        // No snippets: none.
+        assert!(snippets(&out.join("other-bindgen.js")).unwrap().is_empty());
+        let code = "import { a } from './snippets/app-0123/inline0.js';\n\
+                    import { b } from \"./snippets/app-0123/js/clip.js\";\n";
+        let linked = link_snippets(
+            code,
+            &[
+                (
+                    "snippets/app-0123/inline0.js".into(),
+                    "snippets/app-0123/inline0.1111.js".into(),
+                ),
+                (
+                    "snippets/app-0123/js/clip.js".into(),
+                    "snippets/app-0123/js/clip.2222.js".into(),
+                ),
+            ],
+        );
+        assert!(
+            linked.contains("from './snippets/app-0123/inline0.1111.js';"),
+            "{linked}"
+        );
+        assert!(
+            linked.contains("from \"./snippets/app-0123/js/clip.2222.js\";"),
+            "{linked}"
+        );
+        let _ = std::fs::remove_dir_all(&out);
     }
 
     #[test]

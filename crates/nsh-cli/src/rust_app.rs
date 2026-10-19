@@ -1243,9 +1243,14 @@ opt-level = 3
                 fs::copy(&built, &runtime.wasm).with_context(|| {
                     format!("copy {} to {}", built.display(), runtime.wasm.display())
                 })?;
-                // Glue of a build that used wasm-bindgen before.
+                // Glue (and snippets) of a build that used wasm-bindgen before.
                 if glue.exists() {
                     fs::remove_file(&glue).with_context(|| format!("remove {}", glue.display()))?;
+                }
+                let generated = crate::bindgen::output_dir(&glue);
+                if generated.exists() {
+                    fs::remove_dir_all(&generated)
+                        .with_context(|| format!("remove {}", generated.display()))?;
                 }
                 runtime.glue = None;
             }
