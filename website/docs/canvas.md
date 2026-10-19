@@ -194,7 +194,7 @@ Font families are the same as in styles: system families and the names of fonts 
 
 ## Images
 
-`drawImage` takes a URL, an imported asset (`import logo from "./logo.png"`) or `{ uri }`. The image is loaded natively, and the canvas draws again once it has loaded, so you do not need to track loading yourself. Remote URLs are subject to the app's [network capabilities](./sandbox-and-capabilities.md).
+`drawImage` takes a bitmap image: a URL, an imported asset (`import logo from "./logo.png"`) or `{ uri }`. SVG images show with [`<Image>`](./images-and-assets.md#svg-images), and their shapes can be drawn as `Path2D` paths. The image is loaded natively, and the canvas draws again once it has loaded, so you do not need to track loading yourself. Remote URLs are subject to the app's [network capabilities](./sandbox-and-capabilities.md).
 
 ```tsx
 import { Canvas } from "nsh/canvas";

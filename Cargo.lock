@@ -2234,6 +2234,7 @@ dependencies = [
  "rolldown_common",
  "rolldown_error",
  "rolldown_sourcemap",
+ "roxmltree",
  "serde_json",
  "string_wizard",
  "tokio",

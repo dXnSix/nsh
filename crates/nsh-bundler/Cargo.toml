@@ -24,6 +24,8 @@ bundle = [
   "dep:rolldown_sourcemap",
   "dep:string_wizard",
   "dep:imagesize",
+  "dep:roxmltree",
+  "nsh-core/svg",
   "dep:ttf-parser",
   "dep:tokio",
   "oxc/minifier",
@@ -40,6 +42,7 @@ rolldown_sourcemap = { version = "=1.2.13", optional = true }
 string_wizard = { workspace = true, optional = true }
 oxc_sourcemap.workspace = true
 imagesize = { workspace = true, optional = true }
+roxmltree = { workspace = true, optional = true }
 ttf-parser = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "sync", "fs"], optional = true }
 nsh-core.workspace = true
