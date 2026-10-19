@@ -32,9 +32,8 @@ pub(crate) struct Port {
     pub(crate) number: u16,
     /// Fail when it is taken instead of trying the next ones: something
     /// else expects the server on it (a process manager that health-checks
-    /// it, a proxy). Kept when the app's command line runs again after a
-    /// change to its Rust code, as it gets the same arguments and
-    /// environment ([`crate::rust_app::reexec`]).
+    /// it, a proxy). The server keeps its port for the whole session: a
+    /// change to the app's Rust code rebuilds in the same process.
     pub(crate) strict: bool,
 }
 
