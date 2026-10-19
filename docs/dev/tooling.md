@@ -261,7 +261,7 @@ toolchain cannot know the sets, so `nsh` builds the app its own (`crates/nsh-cli
   `nsh_platform_linux` / `nsh_platform_macos` / `nsh_platform_windows::set_ui_sets`; `windows-app` is a windowed
   program, with no console), `android` (the app's `libnsh.so`: `nsh::ui_sets!`, which the Android runtime looks up when
   an engine starts) and `web` (the app's web runtime, a `cdylib` for `wasm32-unknown-unknown` built with the `web`
-  profile: `nsh_platform_web::ui_sets!`, whose `nsh_app_init` export `nsh.js` calls; `docs/dev/web.md`, "Apps with Rust
+  profile, or the generated incremental `web-dev` one for `nsh run --target web`: `nsh_platform_web::ui_sets!`, whose `nsh_app_init` export `nsh.js` calls; `docs/dev/web.md`, "Apps with Rust
   components"). `gpui-host` / `gpui-app` (`nsh_platform_gpui::set_ui_sets`, under `cfg(any(target_os = "linux",
   target_os = "macos", windows))`; `gpui-app` is a windowed program on Windows too) are a workspace of their own in
   `.nsh/rust/gpui` (excluded from the main one), written only when a GPUI host or runner is built
