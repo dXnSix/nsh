@@ -264,7 +264,7 @@ NSH 的 crate，这样应用与宿主共用同一个核心：
 | 依赖 | 用途 |
 |---|---|
 | `nsh-core = "0.1.1"` | 已发布的 crate，版本与你运行的 `nsh` 相同（`nsh init` 生成的写法） |
-| `nsh-core = { path = "../nsh/crates/nsh-core" }` | NSH 的本地检出：试验对 NSH 本身的改动（`nsh init --nsh-source <dir>`） |
+| `nsh-core = { path = "../nsh/crates/nsh-core" }` | NSH 的本地检出：试验对 NSH 本身的改动（`nsh init --template rust --nsh-source <dir>`） |
 | `nsh-core = { git = "https://github.com/you/nsh", tag = "my-tag" }` | 一个 git 仓库：fork，或已进入 NSH 仓库但尚未发布到 crates.io 的改动（`tag`、`branch` 或 `rev`） |
 
 应用的所有 crate 都指向同一处，且其版本就是你运行的 `nsh` 的版本：当 crate 从 git 获取 NSH 时，从同一仓库和同一 tag 安装 `nsh`
