@@ -189,11 +189,17 @@ Its module replaces the built one (`nsh.wasm` / `nsh-dev.wasm` / `nsh-rust.wasm`
 (`bindgen::adapt`), is written next to it as `<module>-bindgen.js`: the glue imports the module's other imports as ES
 modules (`import * as import1 from "nsh"`, a bare specifier no page resolves), which become empty objects `nsh.js`
 fills, and its `__wbg_get_imports` / `__wbg_finalize_init` are exported as `__nsh_imports` / `__nsh_finalize`. Only
-wasm-bindgen 0.2.1xx's glue has that shape; another is refused rather than shipped broken. A runtime without
-wasm-bindgen is built and served exactly as before, and a stale glue is removed.
+wasm-bindgen 0.2.1xx's glue has that shape; another is refused rather than shipped broken. wasm-bindgen's own
+output stays in `<module>-bindgen/` (`bindgen::output_dir`), with the JS snippets the glue imports
+(`#[wasm_bindgen(inline_js = …)]` and `module = …`: `snippets/<crate>-<hash>/…`, `bindgen::snippets`); it is emptied
+before each run, so a snippet an earlier build had is not served again. A snippet that imports further files of its
+own is outside what is shipped. A runtime without wasm-bindgen is built and served exactly as before, and a stale
+glue is removed with its directory.
 
-`WebRuntime::glue` carries it: the dev host serves it as `/nsh-bindgen.js` (`dev.html`'s `GLUE`; it is part of
-`nsh.version`), and `nsh package --target web` minifies it, names it by its content (`nsh-bindgen.<digest>.js`),
+`WebRuntime::glue` carries it: the dev host serves it as `/nsh-bindgen.js` and its snippets at the paths it imports
+them by (`dev.html`'s `GLUE`; all of them are part of `nsh.version`), and `nsh package --target web` adds the
+snippets under their content's names, points the glue's imports at them (`bindgen::link_snippets`), minifies the
+glue, names it by its content (`nsh-bindgen.<digest>.js`),
 preloads it (`<link rel="modulepreload">`) and passes it in `app.glue`. `createPlayer`'s option `glue` (a URL
 against the page) makes `Player.load` import it before instantiating, merge `__nsh_imports()` into the import object
 (NSH's own `nsh` and `env` keys win), and call `__nsh_finalize(instance, module)` (its memory views, wasm-bindgen's
