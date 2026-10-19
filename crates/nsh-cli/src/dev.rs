@@ -416,7 +416,7 @@ fn start_server(
         }
     }
     let err = last_err.expect("at least one attempt");
-    if port.strict {
+    if port.strict && err.kind() == std::io::ErrorKind::AddrInUse {
         return Err(err).with_context(|| {
             format!(
                 "start dev server: port {} is taken (--strict-port): stop what uses it or choose another --port",
@@ -549,7 +549,13 @@ mod tests {
     /// Takes a free port, as another program would: the dev server's own
     /// address (all interfaces).
     fn taken_port() -> std::net::TcpListener {
-        std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap()
+        // Low enough that the ports tried after it exist.
+        loop {
+            let listener = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+            if listener.local_addr().unwrap().port() < u16::MAX - super::PORT_ATTEMPTS {
+                return listener;
+            }
+        }
     }
 
     #[test]
