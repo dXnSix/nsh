@@ -24,6 +24,20 @@ const DEBOUNCE: Duration = Duration::from_millis(30);
 /// Ports tried after the requested one when it is taken.
 const PORT_ATTEMPTS: u16 = 10;
 
+/// The dev server's port: the one asked for (`--port`) and whether only that
+/// one will do (`--strict-port`, `NSH_STRICT_PORT`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Port {
+    /// The port asked for.
+    pub(crate) number: u16,
+    /// Fail when it is taken instead of trying the next ones: something
+    /// else expects the server on it (a process manager that health-checks
+    /// it, a proxy). Kept when the app's command line runs again after a
+    /// change to its Rust code, as it gets the same arguments and
+    /// environment ([`crate::rust_app::reexec`]).
+    pub(crate) strict: bool,
+}
+
 /// A running dev server plus the source watcher feeding it.
 pub(crate) struct DevSession {
     entry: PathBuf,
@@ -43,7 +57,7 @@ pub(crate) struct DevSession {
 
 impl DevSession {
     /// Starts the server and publishes the first build (or its error).
-    pub(crate) fn start(entry: &Path, port: u16, release: bool) -> anyhow::Result<DevSession> {
+    pub(crate) fn start(entry: &Path, port: Port, release: bool) -> anyhow::Result<DevSession> {
         let entry = dunce::canonicalize(entry)
             .with_context(|| format!("entry not found: {}", entry.display()))?;
         let src_dir = entry
@@ -381,10 +395,17 @@ fn install_commands(dir: &Path) -> Vec<(HostPlatform, String)> {
     ]
 }
 
-fn start_server(port: u16, assets_root: &Path, devices: Arc<Devices>) -> anyhow::Result<DevServer> {
+/// Starts the dev server on `port`, else (unless it is strict) on one of the
+/// [`PORT_ATTEMPTS`] after it.
+fn start_server(
+    port: Port,
+    assets_root: &Path,
+    devices: Arc<Devices>,
+) -> anyhow::Result<DevServer> {
+    let attempts = if port.strict { 1 } else { PORT_ATTEMPTS };
     let mut last_err = None;
-    for port in port..port.saturating_add(PORT_ATTEMPTS) {
-        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    for number in port.number..port.number.saturating_add(attempts) {
+        let addr = SocketAddr::from(([0, 0, 0, 0], number));
         let root = Some(assets_root.to_path_buf());
         let devices = devices.clone();
         match DevServer::start(addr, nsh_js::BYTECODE_VERSION, root, move |event| {
@@ -394,7 +415,16 @@ fn start_server(port: u16, assets_root: &Path, devices: Arc<Devices>) -> anyhow:
             Err(err) => last_err = Some(err),
         }
     }
-    Err(last_err.expect("at least one attempt")).context("start dev server")
+    let err = last_err.expect("at least one attempt");
+    if port.strict {
+        return Err(err).with_context(|| {
+            format!(
+                "start dev server: port {} is taken (--strict-port): stop what uses it or choose another --port",
+                port.number
+            )
+        });
+    }
+    Err(err).context("start dev server")
 }
 
 fn is_source(event: &notify::Event) -> bool {
@@ -516,6 +546,61 @@ fn lan_ips() -> Vec<Ipv4Addr> {
 
 #[cfg(test)]
 mod tests {
+    /// Takes a free port, as another program would: the dev server's own
+    /// address (all interfaces).
+    fn taken_port() -> std::net::TcpListener {
+        std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap()
+    }
+
+    #[test]
+    fn strict_port_fails_naming_the_port_that_is_taken() {
+        let taken = taken_port();
+        let number = taken.local_addr().unwrap().port();
+        let port = super::Port {
+            number,
+            strict: true,
+        };
+        let dir = std::env::temp_dir();
+        let error = match super::start_server(port, &dir, Default::default()) {
+            Ok(server) => panic!("started on {}", server.local_addr()),
+            Err(error) => format!("{error:#}"),
+        };
+        assert!(
+            error.contains(&format!("port {number} is taken")),
+            "{error}"
+        );
+        assert!(error.contains("--strict-port"), "{error}");
+    }
+
+    #[test]
+    fn strict_port_off_moves_on_to_the_next_free_port() {
+        let taken = taken_port();
+        let number = taken.local_addr().unwrap().port();
+        let port = super::Port {
+            number,
+            strict: false,
+        };
+        let dir = std::env::temp_dir();
+        let server = super::start_server(port, &dir, Default::default()).unwrap();
+        let used = server.local_addr().port();
+        assert!(
+            used > number && used < number + super::PORT_ATTEMPTS,
+            "{used}"
+        );
+    }
+
+    #[test]
+    fn strict_port_on_a_free_port_uses_it() {
+        let free = taken_port().local_addr().unwrap().port();
+        let port = super::Port {
+            number: free,
+            strict: true,
+        };
+        let dir = std::env::temp_dir();
+        let server = super::start_server(port, &dir, Default::default()).unwrap();
+        assert_eq!(server.local_addr().port(), free);
+    }
+
     #[test]
     fn devices_go_by_short_names_unless_two_share_one() {
         let connected = [

@@ -90,7 +90,7 @@ pub(crate) struct HostWindow<'a> {
 /// loads bundles from the dev server and reloads on change.
 pub(crate) fn run(
     entry: &Path,
-    port: u16,
+    port: crate::dev::Port,
     release: bool,
     flags: HostFlags,
     target: Target,
@@ -239,7 +239,7 @@ pub(crate) fn run(
 /// address, on a phone) runs the app until the session ends. The browser
 /// is the user's to open: a session that starts again (the app's Rust code
 /// changed) finds its page still open, and it reloads by itself.
-fn run_web(entry: &Path, port: u16, release: bool) -> anyhow::Result<()> {
+fn run_web(entry: &Path, port: crate::dev::Port, release: bool) -> anyhow::Result<()> {
     // Built first in a checkout: the session serves the runtime it finds.
     crate::runtime::web(crate::runtime::WebKind::Dev, true)?.context("no web runtime")?;
     let session = DevSession::start(entry, port, release)?;
@@ -255,7 +255,7 @@ fn run_web(entry: &Path, port: u16, release: bool) -> anyhow::Result<()> {
 /// `nsh` builds it again and runs it anew.
 fn run_rust_app(
     entry: &Path,
-    port: u16,
+    port: crate::dev::Port,
     target: Target,
     device: Option<&str>,
     work: &Path,
@@ -520,7 +520,7 @@ impl Drop for KillOnClose {
 /// host.
 fn run_android(
     entry: &Path,
-    port: u16,
+    port: crate::dev::Port,
     release: bool,
     work: &Path,
     trace: bool,
