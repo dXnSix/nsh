@@ -65,6 +65,14 @@ final class Native {
     static final int FILE_DRAG_LEAVE = 54;
     static final int FILE_DROP = 55;
 
+    /**
+     * Draws the SVG {@code bytes} for a view {@code maxPx} pixels on its longer side, with its shorter side that long
+     * (0: its intrinsic size, a pixel per point), as premultiplied RGBA, setting {@code size} to the raster's width and height and the SVG's intrinsic size
+     * in points; {@code maxPx} below 0 only measures (an empty array). Null when the bytes are not a valid SVG. Any
+     * thread.
+     */
+    static native byte[] svg(byte[] bytes, int maxPx, int[] size);
+
     /** A host whose apps keep their data in {@code dataDir}, each in a directory named by its id. */
     static native long create(NshView view, float density, boolean trace, String dataDir);
 

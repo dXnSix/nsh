@@ -21,7 +21,9 @@ import java.util.concurrent.Future;
  * cached in memory, with concurrent requests for the same image coalesced
  * (one download per URI, reporting progress) and downloads nobody waits
  * for cancelled. `Image.prefetch` / `getSize` keep the bytes they fetched
- * for the views that show them next.
+ * for the views that show them next. SVG images are drawn by the shared
+ * rasterizer ({@link Native#svg}) at the requested size; their size is their
+ * intrinsic size in points.
  */
 final class Images {
     /** {@code image}: null on errors. */
@@ -32,12 +34,12 @@ final class Images {
         default void progress(long loaded, long total) {}
     }
 
-    /** The pixel size of an image, or an error. */
+    /** The size of an image in pixels (an SVG's: in points), or an error. */
     interface InfoCallback {
         void done(int width, int height, String error);
     }
 
-    /** A decoded image and the pixel size of its source (before downsampling). */
+    /** A decoded image and the pixel size of its source (before downsampling; an SVG's: points). */
     static final class Image {
         /** A {@link Bitmap}, or an animated {@code Drawable} (started by the view). */
         final Object content;
@@ -143,7 +145,7 @@ final class Images {
         return null;
     }
 
-    /** `Image.getSize` / `prefetch`: the pixel size of `uri`, keeping its bytes. */
+    /** `Image.getSize` / `prefetch`: the size of `uri` in pixels (an SVG's: in points), keeping its bytes. */
     void info(String uri, InfoCallback callback) {
         fetch(uri, null, callback);
     }
@@ -194,11 +196,19 @@ final class Images {
     /** Decodes `bytes` for `key` (off the UI thread), or reads their size for `info`. */
     private void serve(String uri, byte[] bytes, String key, InfoCallback info) {
         if (info != null) {
-            BitmapFactory.Options bounds = new BitmapFactory.Options();
-            bounds.inJustDecodeBounds = true;
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
-            if (bounds.outWidth > 0 && bounds.outHeight > 0) info.done(bounds.outWidth, bounds.outHeight, null);
-            else info.done(0, 0, "cannot read the size of " + uri);
+            if (maybeSvg(bytes)) {
+                // An SVG's size takes parsing it: measured on the image threads.
+                POOL.submit(() -> {
+                    int[] size = new int[4];
+                    boolean svg = Native.svg(bytes, -1, size) != null;
+                    main.post(() -> {
+                        if (svg) info.done(size[2], size[3], null);
+                        else infoOfBitmap(uri, bytes, info);
+                    });
+                });
+                return;
+            }
+            infoOfBitmap(uri, bytes, info);
             return;
         }
         Inflight request = inflight.get(key);
@@ -208,7 +218,8 @@ final class Images {
             Image image = null;
             String error = null;
             try {
-                image = animated(bytes) ? decodeAnimated(bytes, maxPx) : null;
+                image = maybeSvg(bytes) ? decodeSvg(bytes, maxPx, blurPx) : null;
+                if (image == null && animated(bytes)) image = decodeAnimated(bytes, maxPx);
                 if (image == null) image = decode(bytes, maxPx, blurPx);
                 if (image == null) error = "cannot decode " + uri;
             } catch (Exception e) {
@@ -220,6 +231,15 @@ final class Images {
         });
     }
 
+    /** Answers {@code info} with the pixel size in a bitmap's header. */
+    private static void infoOfBitmap(String uri, byte[] bytes, InfoCallback info) {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
+        if (bounds.outWidth > 0 && bounds.outHeight > 0) info.done(bounds.outWidth, bounds.outHeight, null);
+        else info.done(0, 0, "cannot read the size of " + uri);
+    }
+
     /** Download progress for the views waiting for `download`'s decodes. */
     private void progress(Download download, long loaded, long total) {
         for (String key : download.keys) {
@@ -227,6 +247,28 @@ final class Images {
             if (request == null) continue;
             for (Callback c : request.waiters) c.progress(loaded, total);
         }
+    }
+
+    /**
+     * Text starting with {@code <} (after a byte order mark and white space), or gzip: maybe an SVG, which
+     * {@link Native#svg} decides. Bitmap formats start otherwise.
+     */
+    private static boolean maybeSvg(byte[] b) {
+        if (b.length > 1 && (b[0] & 0xff) == 0x1f && (b[1] & 0xff) == 0x8b) return true;
+        int i = b.length >= 3 && (b[0] & 0xff) == 0xef && (b[1] & 0xff) == 0xbb && (b[2] & 0xff) == 0xbf ? 3 : 0;
+        while (i < b.length && (b[i] == ' ' || b[i] == '\t' || b[i] == '\r' || b[i] == '\n')) i++;
+        return i < b.length && b[i] == '<';
+    }
+
+    /** An SVG drawn for a view {@code maxPx} long, its shorter side that long (0: its intrinsic size); null if it is none. */
+    private static Image decodeSvg(byte[] bytes, int maxPx, int blurPx) {
+        int[] size = new int[4];
+        byte[] pixels = Native.svg(bytes, maxPx, size);
+        if (pixels == null) return null;
+        Bitmap bitmap = Bitmap.createBitmap(size[0], size[1], Bitmap.Config.ARGB_8888);
+        bitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(pixels));
+        if (blurPx > 0) bitmap = Blur.blurred(bitmap, blurPx);
+        return new Image(bitmap, size[2], size[3]);
     }
 
     /** GIF, animated WebP (VP8X with the animation flag) or APNG (acTL). */

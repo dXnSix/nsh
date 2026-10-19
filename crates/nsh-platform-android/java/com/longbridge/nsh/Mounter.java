@@ -1669,7 +1669,7 @@ final class Mounter {
         image.setImage(result.content, 0);
     }
 
-    /** `onLoad` reports the source's size in pixels, as on iOS. */
+    /** `onLoad` reports the source's size in pixels (an SVG's: in points), as on iOS. */
     private void loaded(ImageBox image, Images.Image result) {
         if (wants(image.id, Native.LOAD)) event(image.id, Native.LOAD, null, 0, result.width, result.height);
         if (wants(image.id, Native.LOAD_END)) event(image.id, Native.LOAD_END);
