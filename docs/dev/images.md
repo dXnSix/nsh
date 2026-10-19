@@ -16,3 +16,11 @@
   resolves, never JS) and keep the downloaded bytes in a data cache (32 MB) until a view
   decodes them. Android `ImageBox` draws its borders above the
   image (as Core Animation's layer border).
+- **Pixel-density variants**: an `ImageSource` carries `scales` (`ImageScales`, a `Copy` bitmask over `IMAGE_SCALES`,
+  `[1, 1.5, 2, 3, 4]`) when a bundled asset ships `@Nx` siblings. The core picks the variant when it emits
+  `MountItem::Image` (`ImageSource::uri_for`, for the source and the `defaultSource` placeholder): React Native's rule, the
+  smallest scale at least the surface's `pixel_ratio`, otherwise the largest, and only for `asset:/` URIs. The backends
+  load that URI as any other, so their caches and decoding are unchanged; the size in points still comes from the source, so
+  layout never depends on the variant. When the pixel ratio changes (`apply_environment`: a window moved to another
+  screen, browser zoom) only the images whose pick changes are marked `dirty::IMAGE` and sent again, with no relayout.
+  `Image.getSize` / `Image.prefetch` pick the same way, so a prefetch warms the bytes the views load.

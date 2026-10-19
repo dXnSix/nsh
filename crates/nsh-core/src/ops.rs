@@ -503,6 +503,109 @@ pub struct ImageSource {
     /// Natural size in points, when known up front (bundled assets): used
     /// as the intrinsic layout size.
     pub size: Option<(f32, f32)>,
+    /// The pixel densities a bundled asset ships in (`a.png`,
+    /// `a@2x.png`, ...): the core loads the one for the screen's pixel
+    /// ratio ([`Self::uri_for`]). Empty for a single file.
+    pub scales: ImageScales,
+}
+
+impl ImageSource {
+    /// The URI to load at `pixel_ratio` device pixels per point: the
+    /// variant [`ImageScales::pick`] chooses (`asset:/a.png` at 2 →
+    /// `asset:/a@2x.png`), or [`Self::uri`] itself when there are no
+    /// scales, the pick is the 1x file or the URI is not `asset:/`.
+    pub fn uri_for(&self, pixel_ratio: f32) -> Arc<str> {
+        match self.variant(pixel_ratio) {
+            Some(scale) => variant_uri(&self.uri, scale).into(),
+            None => self.uri.clone(),
+        }
+    }
+
+    /// The scale of the variant loaded at `pixel_ratio`, when it is not
+    /// [`Self::uri`] itself.
+    pub(crate) fn variant(&self, pixel_ratio: f32) -> Option<f32> {
+        if self.scales.is_empty() || !self.uri.starts_with("asset:/") {
+            return None;
+        }
+        self.scales.pick(pixel_ratio).filter(|s| *s != 1.0)
+    }
+
+    /// This source as the platform loads it at `pixel_ratio`: the chosen
+    /// variant's URI, the same size in points and no scales.
+    pub(crate) fn resolved(&self, pixel_ratio: f32) -> ImageSource {
+        ImageSource {
+            uri: self.uri_for(pixel_ratio),
+            size: self.size,
+            scales: ImageScales::NONE,
+        }
+    }
+}
+
+/// `asset:/dir/a.png` at 2 → `asset:/dir/a@2x.png` (`@1.5x` at 1.5).
+fn variant_uri(uri: &str, scale: f32) -> String {
+    let name = uri.rfind('/').map_or(0, |i| i + 1);
+    let (stem, ext) = match uri[name..].rfind('.') {
+        Some(dot) if dot > 0 => uri.split_at(name + dot),
+        _ => (uri, ""),
+    };
+    format!("{stem}@{scale}x{ext}")
+}
+
+/// The pixel densities an image asset can ship in, as the file name
+/// suffix says (`@1.5x` ... `@4x`; the file without a suffix is 1x). The
+/// bundler looks for these siblings of an imported image.
+pub const IMAGE_SCALES: [f32; 5] = [1.0, 1.5, 2.0, 3.0, 4.0];
+
+/// A set of [`IMAGE_SCALES`]: the variants an image asset has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+pub struct ImageScales(u8);
+
+impl ImageScales {
+    /// No variants: the URI is the only file.
+    pub const NONE: ImageScales = ImageScales(0);
+
+    /// The scales of `values` that are in [`IMAGE_SCALES`]; any other
+    /// value (NaN, negative, `2.5`) is left out.
+    pub fn from_scales(values: impl IntoIterator<Item = f32>) -> ImageScales {
+        values.into_iter().fold(Self::NONE, |set, v| set.with(v))
+    }
+
+    /// This set with `scale` added, when it is one of [`IMAGE_SCALES`].
+    #[must_use]
+    pub fn with(self, scale: f32) -> ImageScales {
+        match IMAGE_SCALES.iter().position(|s| *s == scale) {
+            Some(i) => ImageScales(self.0 | 1 << i),
+            None => self,
+        }
+    }
+
+    /// Whether the set has no scale.
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Whether `scale` is in the set.
+    pub fn contains(self, scale: f32) -> bool {
+        self.iter().any(|s| s == scale)
+    }
+
+    /// The scales in the set, smallest first.
+    pub fn iter(self) -> impl Iterator<Item = f32> {
+        IMAGE_SCALES
+            .into_iter()
+            .enumerate()
+            .filter(move |(i, _)| self.0 & 1 << i != 0)
+            .map(|(_, s)| s)
+    }
+
+    /// The scale to load at `pixel_ratio`, as React Native picks: the
+    /// smallest that is at least the ratio, otherwise the largest. `None`
+    /// for an empty set.
+    pub fn pick(self, pixel_ratio: f32) -> Option<f32> {
+        self.iter()
+            .find(|s| *s >= pixel_ratio)
+            .or_else(|| self.iter().last())
+    }
 }
 
 /// Keyboard layout of an input (`keyboardType`).

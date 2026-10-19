@@ -41,6 +41,8 @@ mod shutdown;
 mod split;
 mod storage;
 mod theme;
+mod variant_info;
+mod variant_repick;
 
 /// Hands the engine's batches to the test.
 struct ChannelSink(Sender<MountBatch>);
