@@ -219,7 +219,7 @@ impl Attrs {
             out.push(Prop::Source(self.src.as_ref().map(|src| ImageSource {
                 uri: src.uri.to_arc(),
                 size: src.size,
-                scales: crate::ImageScales::NONE,
+                scales: src.scales,
             })));
         }
         if self.inset_padding != old.inset_padding {
@@ -1519,7 +1519,7 @@ impl Image {
             Prop::Image(crate::ImageProp::DefaultSource(Some(ImageSource {
                 uri: src.uri.to_arc(),
                 size: src.size,
-                scales: crate::ImageScales::NONE,
+                scales: src.scales,
             }))),
         );
         self

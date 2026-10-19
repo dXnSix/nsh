@@ -19,6 +19,12 @@ pub struct ImageAsset {
     pub width: f32,
     /// Height in points.
     pub height: f32,
+    /// The pixel densities it ships in, 1 being the file itself:
+    /// `asset!("logo.png")` with `logo@2x.png` and `logo@3x.png` next to it
+    /// gives `[1.0, 2.0, 3.0]`, and images load the one for the screen's
+    /// pixel ratio ([`crate::ImageSource::uri_for`]). Empty when the file
+    /// is the only one (or its name has a density suffix).
+    pub scales: &'static [f32],
 }
 
 /// A font file of a crate (`asset!("Pacifico-Regular.ttf")`; TS: `import
@@ -79,6 +85,7 @@ impl AssetFile {
 pub struct ImageSrc {
     pub(crate) uri: SharedString,
     pub(crate) size: Option<(f32, f32)>,
+    pub(crate) scales: crate::ImageScales,
 }
 
 impl<T: Into<SharedString>> From<T> for ImageSrc {
@@ -86,6 +93,7 @@ impl<T: Into<SharedString>> From<T> for ImageSrc {
         Self {
             uri: uri.into(),
             size: None,
+            scales: crate::ImageScales::NONE,
         }
     }
 }
@@ -95,6 +103,7 @@ impl From<ImageAsset> for ImageSrc {
         Self {
             uri: asset.uri.into(),
             size: Some((asset.width, asset.height)),
+            scales: crate::ImageScales::from_scales(asset.scales.iter().copied()),
         }
     }
 }
