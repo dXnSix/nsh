@@ -50,6 +50,11 @@ log = "0.4"
 env_logger = "0.11"
 libc = "0.2"
 imagesize = "0.15"
+# SVG images on the native backends (`nsh-core` feature `svg`): no text,
+# system fonts or raster images, so an SVG never reads files or fonts.
+resvg = { version = "0.46", default-features = false }
+# The XML parser usvg reads SVGs with (same version).
+roxmltree = "0.21"
 ttf-parser = "0.25"
 oxc_sourcemap = "9"
 serde = { version = "1", features = ["derive"] }

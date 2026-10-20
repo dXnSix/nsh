@@ -64,7 +64,7 @@ pub(crate) struct ThemeSetup {
 }
 
 /// File types imported as image assets.
-pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "heic"];
+pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "heic", "svg"];
 
 /// File types imported as fonts.
 pub(crate) const FONT_EXTENSIONS: &[&str] = &["ttf", "otf"];
@@ -88,6 +88,59 @@ fn font_family(data: &[u8]) -> Result<String, String> {
     name(ttf_parser::name_id::TYPOGRAPHIC_FAMILY)
         .or_else(|| name(ttf_parser::name_id::FAMILY))
         .ok_or_else(|| "the font has no family name".to_owned())
+}
+
+/// An imported SVG's size in points, as the native backends size it
+/// ([`nsh_core::svg::size`]), and what of it shows in browsers only
+/// ([`svg_browser_only`]).
+fn svg_asset(data: &[u8]) -> Result<((f32, f32), Vec<&'static str>), String> {
+    let size = nsh_core::svg::size(data).map_err(|e| e.to_string())?;
+    Ok((size, svg_browser_only(data)))
+}
+
+/// What an SVG holds that browsers draw and the native backends'
+/// rasterizer leaves out: text, animation and embedded images.
+fn svg_browser_only(data: &[u8]) -> Vec<&'static str> {
+    let Ok(text) = std::str::from_utf8(data) else {
+        return Vec::new();
+    };
+    let options = roxmltree::ParsingOptions {
+        allow_dtd: true,
+        ..roxmltree::ParsingOptions::default()
+    };
+    let Ok(doc) = roxmltree::Document::parse_with_options(text, options) else {
+        return Vec::new();
+    };
+    let (mut texts, mut animation, mut images) = (false, false, false);
+    let animated_css = |css: &str| css.contains("@keyframes") || css.contains("animation");
+    for node in doc.descendants().filter(|n| n.is_element()) {
+        match node.tag_name().name() {
+            "text" => texts = true,
+            "animate" | "animateMotion" | "animateTransform" | "set" => animation = true,
+            "image" => images = true,
+            "style" => {
+                animation |= node
+                    .descendants()
+                    .filter_map(|n| n.text())
+                    .any(animated_css)
+            }
+            _ => {}
+        }
+        animation |= node.attribute("style").is_some_and(animated_css);
+    }
+    let mut found = Vec::new();
+    if texts {
+        found.push("its <text> shows in browsers; native platforms draw the SVG without it");
+    }
+    if animation {
+        found.push("its animation plays in browsers; native platforms draw the SVG still");
+    }
+    if images {
+        found.push(
+            "its <image> elements show in browsers; native platforms draw the SVG without them",
+        );
+    }
+    found
 }
 
 /// `logo@2x.png` -> 2.0: the pixel density encoded in the file name.
@@ -322,27 +375,41 @@ impl Plugin for NshPlugin {
             return Ok(None);
         }
         // An image import is an asset descriptor; the natural size (in
-        // points) lets the image lay out before it is decoded.
-        let dim = imagesize::size(path)
-            .map_err(|e| self.fail(path, &format!("cannot read image: {e}")))?;
-        let scale = density(path);
-        let (w, h) = (dim.width as f64 / scale, dim.height as f64 / scale);
-        // Its pixel-density variants ship too; the core loads the one for
-        // the screen.
-        let variants = variants(path);
-        for (scale, variant) in &variants {
-            let rel = self.rel(variant);
-            match imagesize::size(variant) {
-                Ok(d) => {
-                    if let Some(warning) =
-                        variant_mismatch(&rel, (w, h), *scale, (d.width, d.height))
-                    {
-                        log::warn!(target: "nsh::build", "{warning}");
-                    }
-                }
-                Err(e) => log::warn!(target: "nsh::build", "{rel}: cannot read image: {e}"),
+        // points) lets the image lay out before it is decoded. An SVG's is
+        // its own (a file name's `@2x` does not apply), as the native
+        // backends read it, and it ships no pixel-density variants: it is
+        // drawn for the screen at any ratio.
+        let (w, h, variants) = if has_extension(path, &["svg"]) {
+            let data = std::fs::read(path).map_err(|e| self.fail(path, &e.to_string()))?;
+            let ((w, h), browser_only) =
+                svg_asset(&data).map_err(|e| self.fail(path, &format!("cannot read SVG: {e}")))?;
+            for difference in browser_only {
+                log::warn!(target: "nsh::build", "{rel}: {difference}");
             }
-        }
+            (w as f64, h as f64, Vec::new())
+        } else {
+            let dim = imagesize::size(path)
+                .map_err(|e| self.fail(path, &format!("cannot read image: {e}")))?;
+            let scale = density(path);
+            let (w, h) = (dim.width as f64 / scale, dim.height as f64 / scale);
+            // Its pixel-density variants ship too; the core loads the one for
+            // the screen.
+            let variants = variants(path);
+            for (scale, variant) in &variants {
+                let rel = self.rel(variant);
+                match imagesize::size(variant) {
+                    Ok(d) => {
+                        if let Some(warning) =
+                            variant_mismatch(&rel, (w, h), *scale, (d.width, d.height))
+                        {
+                            log::warn!(target: "nsh::build", "{warning}");
+                        }
+                    }
+                    Err(e) => log::warn!(target: "nsh::build", "{rel}: cannot read image: {e}"),
+                }
+            }
+            (w, h, variants)
+        };
         {
             let mut assets = self.assets.lock().expect("assets lock");
             assets.push(path.to_path_buf());
@@ -433,6 +500,44 @@ mod tests {
 
     use super::*;
     use crate::{BundleOptions, bundle};
+
+    fn svg(body: &str) -> Vec<u8> {
+        format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">{body}</svg>"#)
+            .into_bytes()
+    }
+
+    #[test]
+    fn svg_import_warns_about_what_browsers_alone_draw() {
+        let warnings = |body| svg_asset(&svg(body)).unwrap().1;
+        assert!(warnings(r#"<rect width="5" height="5"/>"#).is_empty());
+        let text = warnings("<text>NSH</text>");
+        assert_eq!(text.len(), 1);
+        assert!(text[0].contains("<text>"), "{text:?}");
+        for animated in [
+            r#"<rect width="5" height="5"><animate attributeName="x" to="5" dur="1s"/></rect>"#,
+            r#"<rect width="5" height="5"><animateTransform attributeName="transform" type="rotate" to="90" dur="1s"/></rect>"#,
+            r#"<set attributeName="fill" to="red"/>"#,
+            "<style>@keyframes spin { to { transform: rotate(1turn) } }</style>",
+            "<style><![CDATA[ rect { animation: spin 1s } ]]></style>",
+            r#"<rect width="5" height="5" style="animation: spin 1s"/>"#,
+        ] {
+            let found = warnings(animated);
+            assert_eq!(found.len(), 1, "{animated}");
+            assert!(found[0].contains("animation"), "{animated}: {found:?}");
+        }
+        let images = warnings(r#"<image href="data:image/png;base64,AAAA" width="5" height="5"/>"#);
+        assert_eq!(images.len(), 1);
+        assert!(images[0].contains("<image>"), "{images:?}");
+        assert_eq!(warnings("<text>a</text><set/><image/>").len(), 3);
+    }
+
+    #[test]
+    fn svg_import_sizes_and_rejects() {
+        let (size, _) = svg_asset(&svg("")).unwrap();
+        assert_eq!(size, (10.0, 10.0));
+        assert!(svg_asset(b"<svg><rect").is_err());
+        assert!(svg_asset(b"\x89PNG\r\n\x1a\n").is_err());
+    }
 
     /// The header of a `w`×`h` PNG: all the image size reader looks at.
     fn png(w: u32, h: u32) -> Vec<u8> {
@@ -566,6 +671,19 @@ mod tests {
         );
         assert!(!bundle.code.contains("scales"));
         assert_eq!(assets(&bundle), ["img/flag.png"]);
+    }
+
+    /// An SVG is drawn for the screen at any ratio: its `@Nx` siblings
+    /// neither ship nor appear in `scales`.
+    #[test]
+    fn svg_import_ships_no_variants() {
+        let dir = app("svg", "mark.svg", &[]);
+        for file in ["mark.svg", "mark@2x.svg", "mark@3x.svg"] {
+            std::fs::write(dir.join("img").join(file), svg("")).unwrap();
+        }
+        let bundle = bundled(&dir);
+        assert!(!bundle.code.contains("scales"), "{}", bundle.code);
+        assert_eq!(assets(&bundle), ["img/mark.svg"]);
     }
 
     #[test]

@@ -171,7 +171,7 @@ ctx.fillText(label, 32 - 6 - ctx.measureText(label).width, 16);
 
 ## 图片
 
-`drawImage` 接受 URL、导入的资源（`import logo from "./logo.png"`）或 `{ uri }`。图片在原生端加载，加载完成后画布会重新绘制，你不需要自己跟踪加载状态。远程 URL 受应用的[网络能力声明](./sandbox-and-capabilities.md)约束。
+`drawImage` 接受位图：URL、导入的资源（`import logo from "./logo.png"`）或 `{ uri }`。SVG 图片用 [`<Image>`](./images-and-assets.md#svg-图片) 显示，它们的形状也可以作为 `Path2D` 路径绘制。图片在原生端加载，加载完成后画布会重新绘制，你不需要自己跟踪加载状态。远程 URL 受应用的[网络能力声明](./sandbox-and-capabilities.md)约束。
 
 ```tsx
 import { Canvas } from "nsh/canvas";

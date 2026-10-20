@@ -4976,11 +4976,14 @@ name = "nsh-core"
 version = "0.1.1"
 dependencies = [
  "cap-std",
+ "flate2",
  "futures-util",
  "libc",
  "log",
  "nsh-animation",
  "nsh-macros",
+ "resvg",
+ "roxmltree 0.21.1",
  "rustc-hash 2.1.3",
  "serde_json",
  "slab",

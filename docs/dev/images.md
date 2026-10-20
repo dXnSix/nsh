@@ -33,3 +33,20 @@
   Rust's `asset!` does the same for a crate image (`nsh-macros` `assets.rs`): `ImageAsset::scales` lists the siblings it
   finds (`assets!()` already ships the whole directory) and `include_bytes!`s them, so a changed variant rebuilds the
   crate. A proc macro cannot read nsh-core, so its `VARIANT_SCALES` repeats `IMAGE_SCALES` above 1: change them together.
+- **SVG** (`nsh_core::svg`, cargo feature `svg`, which every native platform crate enables and `nsh-platform-web` never
+  does: browsers draw SVG with `<img>`, and the tint mask works on it as on bitmaps). The decoders sniff the bytes
+  (`svg::sniff`: `<svg` after a BOM, XML declaration, comments and doctype, or gzip) before their platform decoder and
+  draw with resvg: iOS, macOS and Android for the requested pixel size, the view's longer side (the size bitmaps are
+  downsampled to), with the SVG's shorter side that long (`svg::rasterize_covering`: shown in the view, an image's
+  shorter side never exceeds it, so no resize mode, `cover` included, enlarges the raster; Android through `Native.svg`), Windows, Linux and GPUI once at `svg::OVERSAMPLE` (4) pixels per point,
+  at most `MAX_OVERSAMPLED_PX` (2048) a side (`svg::rasterize_oversampled`), since they cache one bitmap per location.
+  The premultiplied RGBA raster then takes the bitmap path (blur, color matrix, tint through alpha, cache). `onLoad`
+  and `Image.getSize` report the intrinsic size in points (`svg::size`: `width` / `height`, one of them plus the
+  `viewBox`'s ratio, or the `viewBox`), measured off the main thread, and a file name's `@2x` does not apply (an SVG import ships no `@Nx` variants either: it is drawn for the screen at any ratio). The
+  bundler sizes `.svg` imports with the same `svg::size` and warns (`nsh::build`) about `<text>`, animation and
+  `<image>`, which only browsers draw. An SVG reads nothing outside itself: usvg gets no resources directory and an
+  `<image>` resolver that resolves nothing (its default one reads files), resvg is built without `text`,
+  `system-fonts` and `raster-images` (in the main workspace: GPUI's own tree turns them on, where usvg's empty font
+  database and the resolver still draw no text and no embedded images, as the GPUI backend's `svg_` tests check), and
+  a `.svgz` inflates to at most `svg::MAX_INFLATED` (16 MiB). Like bitmaps, per-view backends draw an SVG at the
+  view's size when it loads: a view that grows later scales that raster until the image loads again.

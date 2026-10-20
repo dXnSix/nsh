@@ -339,8 +339,11 @@ struct Decoded {
     delays: Vec<u32>,
     /// Plays before it stops on its last frame; 0: forever.
     plays: u32,
-    /// The source's size in pixels (before any scaling down).
+    /// The source's size in pixels (before any scaling down; an SVG's:
+    /// points).
     size: (u32, u32),
+    /// An SVG: its size is in points, whatever its file name says.
+    vector: bool,
 }
 
 impl Decoded {
@@ -350,6 +353,7 @@ impl Decoded {
             delays: Vec::new(),
             plays: 0,
             size,
+            vector: false,
         }
     }
 }
@@ -424,8 +428,10 @@ impl Frame {
 struct Picture {
     /// The image, or an animation's first frame.
     frame: Rc<Frame>,
-    /// The source's size in pixels.
+    /// The source's size in pixels (an SVG's: points).
     size: (u32, u32),
+    /// An SVG: its size is in points, whatever its file name says.
+    vector: bool,
     animation: Option<Rc<Animation>>,
 }
 
@@ -436,6 +442,7 @@ impl Picture {
             delays,
             plays,
             size,
+            vector,
         } = decoded;
         let frames: Vec<Rc<Frame>> = frames.into_iter().map(Frame::new).collect();
         let frame = frames.first()?.clone();
@@ -449,6 +456,7 @@ impl Picture {
         Some(Picture {
             frame,
             size,
+            vector,
             animation,
         })
     }
@@ -557,6 +565,7 @@ fn animation(bytes: &[u8], format: image::ImageFormat) -> Result<Option<Decoded>
         delays,
         plays,
         size,
+        vector: false,
     }))
 }
 
@@ -636,9 +645,35 @@ fn decode_wic(bytes: &[u8]) -> Result<Decoded, String> {
     })
 }
 
-/// Decodes an encoded image (a worker): GIF and WebP with the `image`
-/// crate (every frame of animations), others with WIC first.
+/// Draws an SVG at its intrinsic size × [`nsh_core::svg::OVERSAMPLE`] (at
+/// most [`nsh_core::svg::MAX_OVERSAMPLED_PX`] a side), as premultiplied
+/// BGRA: Direct2D scales it down to the size it is drawn at.
+fn decode_svg(bytes: &[u8]) -> Result<Decoded, String> {
+    let raster = nsh_core::svg::rasterize_oversampled(bytes).map_err(|e| e.to_string())?;
+    let mut data = raster.pixels;
+    for px in data.as_chunks_mut::<4>().0 {
+        px.swap(0, 2);
+    }
+    let (w, h) = raster.size;
+    let size = ((w.round() as u32).max(1), (h.round() as u32).max(1));
+    let pixels = Pixels {
+        width: raster.width,
+        height: raster.height,
+        data,
+    };
+    Ok(Decoded {
+        vector: true,
+        ..Decoded::still(pixels, size)
+    })
+}
+
+/// Decodes an encoded image (a worker): SVG with the shared rasterizer,
+/// GIF and WebP with the `image` crate (every frame of animations), others
+/// with WIC first.
 fn decode(bytes: Vec<u8>) -> Result<Decoded, String> {
+    if nsh_core::svg::sniff(&bytes) {
+        return decode_svg(&bytes);
+    }
     if let Some(format) = animated_format(&bytes) {
         match animation(&bytes, format) {
             Ok(Some(decoded)) => return Ok(decoded),
@@ -872,7 +907,8 @@ pub(crate) fn cached(surface: &Surface, uri: &str) -> Option<Rc<Frame>> {
 }
 
 /// `Command::ImageInfo` (`Image.getSize`, `Image.prefetch`): loads the
-/// image into the cache and reports its size in pixels.
+/// image into the cache and reports its size in pixels (an SVG's: its
+/// intrinsic size in points).
 pub(crate) fn command(surface: &Rc<Surface>, _id: NodeId, command: &Command) {
     let Command::ImageInfo { id, uri } = command else {
         return;
@@ -1360,15 +1396,18 @@ fn density(uri: &str) -> f32 {
 
 /// The natural size in points of an image of `size` pixels loaded from
 /// `source`: the size the source declares, or its pixels over the file
-/// name's density.
-fn natural(size: (u32, u32), source: Option<&ImageSource>) -> (f32, f32) {
+/// name's density (an SVG's `size` is in points: `vector`).
+fn natural(size: (u32, u32), vector: bool, source: Option<&ImageSource>) -> (f32, f32) {
     if let Some(size) = source
         .and_then(|s| s.size)
         .filter(|(w, h)| *w > 0.0 && *h > 0.0)
     {
         return size;
     }
-    let d = source.map_or(1.0, |s| density(&s.uri));
+    let d = match source {
+        Some(s) if !vector => density(&s.uri),
+        _ => 1.0,
+    };
     (size.0 as f32 / d, size.1 as f32 / d)
 }
 
@@ -1459,11 +1498,11 @@ fn draw_one(
     state: &ViewState,
     image: &ImageState,
     frame: &Frame,
-    size: (u32, u32),
+    (size, vector): ((u32, u32), bool),
     source: Option<&ImageSource>,
 ) {
     let (w, h) = (state.frame.width, state.frame.height);
-    let (x, y, fw, fh) = fit(image.mode, natural(size, source), (w, h));
+    let (x, y, fw, fh) = fit(image.mode, natural(size, vector, source), (w, h));
     if fw <= 0.0 || fh <= 0.0 {
         return;
     }
@@ -1564,7 +1603,7 @@ pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
             state,
             image,
             &placeholder.frame,
-            placeholder.size,
+            (placeholder.size, placeholder.vector),
             source,
         );
     }
@@ -1589,7 +1628,14 @@ pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
     if alpha < 1.0 {
         cx.push_opacity(alpha);
     }
-    draw_one(cx, state, image, frame, picture.size, image.source.as_ref());
+    draw_one(
+        cx,
+        state,
+        image,
+        frame,
+        (picture.size, picture.vector),
+        image.source.as_ref(),
+    );
     if alpha < 1.0 {
         cx.pop();
     }
@@ -1730,6 +1776,61 @@ mod tests {
         );
     }
 
+    const SVG_LOGO: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="48" height="24"><rect width="24" height="24" fill="#f00"/><rect x="24" width="24" height="24" fill="#00f" fill-opacity="0.5"/></svg>"##;
+
+    #[test]
+    fn svg_decodes_oversampled() {
+        let decoded = decode(SVG_LOGO.to_vec()).unwrap();
+        assert!(decoded.vector);
+        assert_eq!(decoded.size, (48, 24), "intrinsic size in points");
+        let p = &decoded.frames[0];
+        assert_eq!((p.width, p.height), (192, 96), "four pixels a point");
+        let at = |x: u32, y: u32| -> [u8; 4] {
+            let i = ((y * p.width + x) * 4) as usize;
+            p.data[i..i + 4].try_into().unwrap()
+        };
+        // Premultiplied BGRA, as Direct2D's bitmaps.
+        assert_eq!(at(10, 10), [0, 0, 255, 255]);
+        let [b, g, r, a] = at(150, 50);
+        assert!((127..=128).contains(&a), "alpha {a}");
+        assert_eq!((b, g, r), (a, 0, 0));
+        let big = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="250"/>"#;
+        let big = decode(big.to_vec()).unwrap();
+        assert_eq!((big.frames[0].width, big.frames[0].height), (2048, 512));
+        assert!(decode(b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect".to_vec()).is_err());
+    }
+
+    #[test]
+    fn svg_size_is_in_points() {
+        let source = ImageSource {
+            uri: "asset:/logo@2x.svg".into(),
+            size: None,
+            scales: Default::default(),
+        };
+        let picture = Picture::new(decode(SVG_LOGO.to_vec()).unwrap()).unwrap();
+        assert_eq!((picture.size, picture.vector), ((48, 24), true));
+        assert_eq!(picture.frame.size(), (192, 96));
+        assert_eq!(
+            natural(picture.size, picture.vector, Some(&source)),
+            (48.0, 24.0)
+        );
+    }
+
+    #[test]
+    fn svg_tints_through_alpha() {
+        // `tintColor` is a color matrix over the premultiplied pixels: the
+        // SVG's alpha decides where the color shows.
+        let decoded = decode(SVG_LOGO.to_vec()).unwrap();
+        let p = &decoded.frames[0];
+        let m = tint_matrix(nsh_core::Color::rgba(0, 255, 0, 255));
+        let alpha = |x: u32, y: u32| p.data[((y * p.width + x) * 4 + 3) as usize];
+        // Green of the input's alpha only.
+        assert_eq!(&m[15..19], &[1.0, 0.0, 1.0, 0.0]);
+        assert_eq!(alpha(10, 10), 255);
+        assert_eq!(alpha(0, 0), 255);
+        assert!(alpha(150, 50) < 255);
+    }
+
     #[test]
     fn reads_densities() {
         assert_eq!(density("asset:/logo@2x.png"), 2.0);
@@ -1741,7 +1842,7 @@ mod tests {
             size: None,
             scales: Default::default(),
         };
-        assert_eq!(natural((200, 100), Some(&source)), (100.0, 50.0));
+        assert_eq!(natural((200, 100), false, Some(&source)), (100.0, 50.0));
     }
 
     #[test]
