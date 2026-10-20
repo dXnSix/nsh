@@ -16,3 +16,20 @@
   resolves, never JS) and keep the downloaded bytes in a data cache (32 MB) until a view
   decodes them. Android `ImageBox` draws its borders above the
   image (as Core Animation's layer border).
+- **Pixel-density variants**: an `ImageSource` carries `scales` (`ImageScales`, a `Copy` bitmask over `IMAGE_SCALES`,
+  `[1, 1.5, 2, 3, 4]`) when a bundled asset ships `@Nx` siblings. The core picks the variant when it emits
+  `MountItem::Image` (`ImageSource::uri_for`, for the source and the `defaultSource` placeholder): React Native's rule, the
+  smallest scale at least the surface's `pixel_ratio`, otherwise the largest, and only for `asset:/` URIs. The backends
+  load that URI as any other, so their caches and decoding are unchanged; the size in points still comes from the source, so
+  layout never depends on the variant. When the pixel ratio changes (`apply_environment`: a window moved to another
+  screen, browser zoom) only the images whose pick changes are marked `dirty::IMAGE` and sent again, with no relayout.
+  `Image.getSize` / `Image.prefetch` pick the same way, so a prefetch warms the bytes the views load.
+  The bundler finds the variants: its image `load` hook (`plugin.rs`) stats the fixed names `<stem>@<s>x.<ext>` for the
+  scales of `IMAGE_SCALES` above 1 (no directory listing), only for imports without a density suffix (`logo@3x.png`
+  probes nothing and ships alone). The ones found join `Bundle::assets`, so the dev server, `out/assets`, every package,
+  `.nshpkg` and the web package's asset map carry them, and the module gains `scales` (1 first) only when there is one:
+  an app without variants bundles byte for byte as before. Width and height still come from the imported file; a variant
+  whose pixels are off that size times its scale by a pixel or more is warned about on `nsh::build`.
+  Rust's `asset!` does the same for a crate image (`nsh-macros` `assets.rs`): `ImageAsset::scales` lists the siblings it
+  finds (`assets!()` already ships the whole directory) and `include_bytes!`s them, so a changed variant rebuilds the
+  crate. A proc macro cannot read nsh-core, so its `VARIANT_SCALES` repeats `IMAGE_SCALES` above 1: change them together.
