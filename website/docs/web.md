@@ -130,12 +130,47 @@ components and modules.
 
 Either way the crate's assets (`assets!()`) are published with the app's, and its fonts load before the first frame.
 During `nsh run --target web`, a change to the crate's Rust code builds the runtime again and the open page loads it by
-itself; TSX edits stay hot updates.
+itself; TSX edits stay hot updates. The development runtime builds incrementally, so a change to the crate is ready in
+about a second; `nsh package` builds the published one optimized for size.
 
 Rust code that runs on every platform, the web included, uses the engine's services: `fetch(url).await` makes
 HTTP requests through the same network stack as JS's `fetch` (the browser's here, with its CORS rules); `timer`,
 `set_timeout` and `set_interval` wait; and `nsh_core::time::Instant` and `nsh_core::time::unix_ms()` read the clock.
 `background` and `blocking` run work on the native targets' threads.
+
+### Browser APIs from Rust
+
+A crate can call the browser's own APIs through [wasm-bindgen](https://rustwasm.github.io/docs/wasm-bindgen/) and
+its `web-sys` and `js-sys` crates, behind `#[cfg(target_arch = "wasm32")]`: a WebSocket, `IndexedDB`, the
+clipboard, any Web API. When the app's web runtime links `wasm-bindgen`, `nsh` runs the `wasm-bindgen` CLI on it and
+ships its glue next to the runtime, in development and in published sites alike. Install the CLI at the version of
+the `wasm-bindgen` crate the app resolves (`cargo install wasm-bindgen-cli --version <version> --locked`); `nsh` names
+the version when they differ. The browser's callbacks (a message arriving, a timer of the page's) wake the app's
+tasks, which run at once:
+
+```rust
+#[cfg(target_arch = "wasm32")]
+async fn echo(url: &str, text: String) -> Result<String, String> {
+    use wasm_bindgen::{JsCast, prelude::*};
+    let ws = web_sys::WebSocket::new(url).map_err(|e| format!("{e:?}"))?;
+    let (tx, rx) = futures_channel::oneshot::channel();
+    let tx = std::cell::RefCell::new(Some(tx));
+    let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
+        if let (Some(tx), Some(data)) = (tx.borrow_mut().take(), e.data().as_string()) {
+            let _ = tx.send(data);
+        }
+    });
+    ws.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+    on_message.forget();
+    let open = ws.clone();
+    let on_open = Closure::<dyn FnMut()>::new(move || {
+        let _ = open.send_with_str(&text);
+    });
+    ws.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+    on_open.forget();
+    rx.await.map_err(|_| "closed".to_owned())
+}
+```
 
 The build needs the Rust target and a clang that compiles to WebAssembly, as the runtime's own build does:
 `rustup target add wasm32-unknown-unknown`, plus `clang` and `llvm-ar` (on macOS, an LLVM toolchain such as

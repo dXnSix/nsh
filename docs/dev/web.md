@@ -149,10 +149,17 @@ The prebuilt runtime serves the runtime's modules and `nsh/base`; an app with a 
 `nsh-platform-web` and the app's crate whose code is `nsh_platform_web::ui_sets!(vec![nsh_base::registry(), app_set()])`. The macro exports `nsh_app_init`, which `nsh.js` calls right after instantiating the module (there is
 no `main` to call `set_ui_sets` in a wasm module, nor a `dlsym` as Android's `ui_sets!` uses); a module without it
 (the prebuilt runtime) serves `nsh/base`. The `nsh_*` exports come from `nsh-platform-web`'s rlib: a `cdylib`
-exports its dependencies' `#[no_mangle]` functions. The workspace has the same `web` profile as nsh's `Cargo.toml`, and
-the crate's `build.rs` passes the 8 MiB stack as a link argument of its own (nsh's `.cargo/config.toml` may not apply
-where the app builds, and target-wide `rustflags` would rebuild every dependency instead of sharing nsh's builds).
-Both kinds build to `target/wasm32-unknown-unknown/web/nsh_app_<package>_web.wasm` and are copied to
+exports its dependencies' `#[no_mangle]` functions. The release runtime builds with the same `web` profile as nsh's
+`Cargo.toml`; the development one (`nsh run --target web`, built again on every change to the app's Rust code) with a
+generated `web-dev` profile (`RustApp::web_dev_profile`): `dev`'s incremental builds without LTO, the app's crates at
+`opt-level = 1`, the other crates at `"s"`, QuickJS at 3, `panic = "abort"` and no debug assertions, so the page
+behaves as a published one. A change to the app's crate then rebuilds that crate and links incrementally, where
+`web`'s fat LTO over one codegen unit re-optimizes the whole module: one edit of `examples/rust-exports`' crate rebuilds
+in 0.3 s instead of 7.8 s (2026-10, Apple M-series; the module is 6.5 MB instead of 3.7 MB). The workspace also gives `quickjs-jit-sys` and `taffy`
+`opt-level = 3` in `dev`, as nsh's own manifest does, for the debug hosts. The crate's `build.rs` passes the 8 MiB
+stack as a link argument of its own (nsh's `.cargo/config.toml` may not apply where the app builds, and target-wide
+`rustflags` would rebuild every dependency instead of sharing nsh's builds). The kinds build to
+`target/wasm32-unknown-unknown/{web,web-dev}/nsh_app_<package>_web.wasm` and are copied to
 `.nsh/rust/web-runtime/nsh.wasm` / `nsh-dev.wasm`; `nsh.js` is nsh's. Everything else (bundling, bytecode, the
 crate's assets, the dev server) already knows the set, from its description (`docs/dev/tooling.md`).
 
@@ -177,6 +184,42 @@ Rust code meant for the web too uses the engine's services rather than threads a
 (`nsh_core::ui::ambient::fetch`, below), the executor's timers, `nsh_core::time`. `examples/gallery-rs` does. As a
 Rust app (2026-10) its `nsh.wasm` is 3.31 MB (1.06 MB gzipped, 0.75 MB with brotli): no QuickJS, so smaller than the
 prebuilt runtime, which a TSX entry (QuickJS) needs: the gallery under one was 5.26 MB (1.75 / 1.27 MB).
+
+### Crates that use wasm-bindgen
+
+The runtime is a raw module (`nsh_*` exports, `nsh` / `env` imports), not a wasm-bindgen one, so an app crate's
+`web-sys` / `js-sys` imports have nothing to call by themselves. When the app's web runtime links `wasm-bindgen`
+(`bindgen::version_in`: the crate in the `web` / `rust-web` member's normal dependencies, from `cargo metadata
+--filter-platform wasm32-unknown-unknown` of the generated workspace), `RustApp::web` runs the `wasm-bindgen` CLI
+(`NSH_WASM_BINDGEN`, else `PATH`; its version must equal the crate's, `bindgen::check_cli`, or the build stops with
+both versions and the install command) with `--target web --no-typescript` on the built module (`bindgen::process`).
+Its module replaces the built one (`nsh.wasm` / `nsh-dev.wasm` / `nsh-rust.wasm`), and its glue, adapted
+(`bindgen::adapt`), is written next to it as `<module>-bindgen.js`: the glue imports the module's other imports as ES
+modules (`import * as import1 from "nsh"`, a bare specifier no page resolves), which become empty objects `nsh.js`
+fills, and its `__wbg_get_imports` / `__wbg_finalize_init` are exported as `__nsh_imports` / `__nsh_finalize`. Only
+wasm-bindgen 0.2.1xx's glue has that shape; another is refused rather than shipped broken. wasm-bindgen's own
+output stays in `<module>-bindgen/` (`bindgen::output_dir`), with the JS snippets the glue imports
+(`#[wasm_bindgen(inline_js = …)]` and `module = …`: `snippets/<crate>-<hash>/…`, `bindgen::snippets`); it is emptied
+before each run, so a snippet an earlier build had is not served again. A snippet that imports further files of its
+own is outside what is shipped. A runtime without wasm-bindgen is built and served exactly as before, and a stale
+glue is removed with its directory.
+
+`WebRuntime::glue` carries it: the dev host serves it as `/nsh-bindgen.js` and its snippets at the paths it imports
+them by (`dev.html`'s `GLUE`; all of them are part of `nsh.version`), and `nsh package --target web` adds the
+snippets under their content's names, points the glue's imports at them (`bindgen::link_snippets`), minifies the
+glue, names it by its content (`nsh-bindgen.<digest>.js`),
+preloads it (`<link rel="modulepreload">`) and passes it in `app.glue`. `createPlayer`'s option `glue` (a URL
+against the page) makes `Player.load` import it before instantiating, merge `__nsh_imports()` into the import object
+(NSH's own `nsh` and `env` keys win), and call `__nsh_finalize(instance, module)` (its memory views, wasm-bindgen's
+externref table) right after instantiating, before `nsh_app_init`. The glue keeps one instance per page, which is what
+an app's page has; the website's multi-player pages keep the prebuilt runtime.
+
+The browser calls the glue's closures outside any `nsh_*` call (a WebSocket message), so a task they wake must make
+the page pump: `LocalEngine::set_wake` hooks the core's task notify and the posts' notify (each still sends
+`Message::Wake`), and `nsh_platform_web` sets it to the `request_pump` import, which `Player.requestPump` coalesces
+into one `nsh_pump` in a task of its own (`setTimeout` 0, so a wake inside a pump never re-enters it; `call` defers
+it while the engine runs). The deadline scheduling (`schedule`) is unchanged. A wake during a call into the engine
+(a fetch reply's `nsh_fetch_*`, which pumps itself) requests one too: that pump finds the work done and returns.
 
 ## What WebAssembly changes in the shared crates
 

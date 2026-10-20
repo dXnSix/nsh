@@ -118,7 +118,7 @@ crates/
                        nsh.json `"rust"` names, one or a list, has a `#[native_module("…")]` fn; a generated workspace in `.nsh/rust`
                        with a `describe` program, which prints the sets as data for the CLI to bundle, compile and declare with, the
                        hosts and runners, and the headless runner of `nsh test`; it takes nsh's crates where the app's crates do:
-                       crates.io at the CLI's version, or the checkout they depend on by path; docs/dev/tooling.md); web packages and the
+                       crates.io at the CLI's version, the checkout they depend on by path, or the git repository they name; docs/dev/tooling.md); web packages and the
                        browser host's pages (`web.rs`, `web/`); what it prints (`ui.rs`:
                        one line per step, tools' output only on failure, `-v` for everything; docs/dev/tooling.md "Output")
   xtask/               Maintainer tasks: `cargo xtask android` (Android runtime), `ios-embed` (the iOS SDK), `dist` (the distribution),
