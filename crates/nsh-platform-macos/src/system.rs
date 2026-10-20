@@ -389,9 +389,17 @@ pub(crate) fn command(surface: &Rc<Surface>, _id: NodeId, command: &Command) {
         Command::ReadClipboardFiles { id } => read_clipboard_files(surface, *id),
         Command::Back => crate::navigation::default_back(surface),
         Command::ExitApp => {
-            if let Some(window) = surface.root.ns().window() {
-                window.close();
-            }
+            // Closing calls the window delegate synchronously, which stops
+            // the surface and clears its mounter. Wait until this batch has
+            // released the mounter's mutable borrow.
+            let key = surface.key();
+            DispatchQueue::main().exec_async(move || {
+                if let Some(surface) = Surface::with_key(key)
+                    && let Some(window) = surface.root.ns().window()
+                {
+                    window.close();
+                }
+            });
         }
         // The status bar is a phone's; layout animations arrive as mount
         // items.
@@ -532,15 +540,9 @@ fn show_dialog(surface: &Rc<Surface>, dialog: &Dialog) {
         (None, Some(message)) => alert.setMessageText(&NSString::from_str(message)),
         (None, None) => {}
     }
-    let ok = [nsh_core::DialogButton {
-        text: "OK".to_owned(),
-        style: DialogButtonStyle::Default,
-    }];
-    let buttons = if dialog.buttons.is_empty() {
-        &ok[..]
-    } else {
-        &dialog.buttons[..]
-    };
+    // `AlertDialog` always brings the app's actions (it rejects none): no
+    // label of NSH's own.
+    let buttons = &dialog.buttons[..];
     let cancel = buttons
         .iter()
         .position(|b| b.style == DialogButtonStyle::Cancel);

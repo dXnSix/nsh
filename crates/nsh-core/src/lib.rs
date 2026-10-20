@@ -16,6 +16,7 @@ mod css_named;
 pub mod desktop;
 mod effects;
 mod fenwick;
+pub mod filesystem;
 mod geometry;
 mod grid;
 pub mod js;
@@ -35,6 +36,7 @@ mod text;
 pub mod time;
 mod transform;
 pub mod ui;
+pub mod websocket;
 
 // The derive macros name `::nsh_core`, also in this crate's own tests.
 extern crate self as nsh_core;
@@ -53,8 +55,8 @@ pub use crate::{
     },
     geometry::{Rect, Size},
     mount::{
-        ImageOptions, InputConfig, ModalConfig, MountBatch, MountItem, NativeProps, ScreenConfig,
-        ScrollBehavior, StickyCell, VideoProps, ViewKind, WebProps,
+        ImageOptions, InputConfig, ModalConfig, MountBatch, MountItem, NO_NATIVE_HEADER,
+        NativeProps, ScreenConfig, ScrollBehavior, StickyCell, VideoProps, ViewKind, WebProps,
     },
     ops::{
         AutoCapitalize, AutoFill, CellSlot, Command, ContextMenuEvent, Dialog, DialogButton,
@@ -63,8 +65,8 @@ pub use crate::{
         KeyboardTaps, KeyboardType, ListContentStyle, ModalAnimation, ModalPresentation, ModalProp,
         NativeProp, NodeId, Op, PayloadValue, Prop, ROOT_ID, ResizeMode, ReturnKeyType,
         ScreenAnimation, ScreenProp, ScrollProp, SnapAlignment, StatusBarConfig, StatusBarSetting,
-        StatusBarStyle, SubmitBehavior, Tag, TouchEvent, TouchPhase, TouchPoint, UNDERLAY_OPACITY,
-        Viewability, WebSource,
+        StatusBarStyle, SubmitBehavior, Tag, TouchEvent, TouchPhase, TouchPoint, Viewability,
+        WebSource,
     },
     props::{
         Accessibility, AccessibilityActionDef, AccessibilityProp, AccessibilityRole,

@@ -105,6 +105,8 @@ impl Host {
             viewport,
             trace: self.trace,
             network: Some(crate::net::network()),
+            websocket: None,
+            filesystem: None,
             assets: Some(Arc::new(ViewAssets(self.clone()))),
             environment: *self.environment.lock().expect("environment"),
             // Android's toolbar is 56dp; it has no large titles.
@@ -967,6 +969,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_eventMap(
                 "error" => "error",
                 "text" => "text",
                 "has" => "has",
+                "reason" => "reason",
                 _ => continue,
             };
             if let Some(v) = read(&mut env, i) {

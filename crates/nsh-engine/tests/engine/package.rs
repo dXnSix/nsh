@@ -17,7 +17,7 @@ fn counter(build_number: u64, bytecode_version: &str) -> Contents {
         entry,
         minify: true,
         split: false,
-        ui_sets: vec![nsh_ui_mobile::registry().into()],
+        ui_sets: vec![nsh_base::registry().into()],
     })
     .unwrap();
     let bytecode = nsh_js::compile_bytecode(&bundle.code, true).unwrap();
@@ -44,6 +44,8 @@ fn first_texts(bundle: nsh_engine::Bundle) -> Vec<String> {
         viewport: Size::new(390.0, 844.0),
         trace: false,
         network: None,
+        websocket: None,
+        filesystem: None,
         assets: None,
         environment: Default::default(),
         header_heights: (44.0, 96.0),

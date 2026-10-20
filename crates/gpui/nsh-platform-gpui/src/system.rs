@@ -60,7 +60,7 @@ use std::{
 };
 
 use gpui::{
-    AnyWindowHandle, Context, FontWeight, Hsla, SharedString, TextAlign, TextRun, Window,
+    AnyWindowHandle, Context, Edges, FontWeight, Hsla, SharedString, TextAlign, TextRun, Window,
     WindowAppearance, px,
 };
 use nsh_core::{
@@ -74,7 +74,7 @@ use crate::{
     app::AppView,
     geom::rect,
     input::{Cursor, KeyEvent, PointerKind},
-    render::{DrawCx, corners},
+    render::{DrawCx, border_quad, corners},
     surface::Surface,
     view::{Hosted, ItemPointer},
 };
@@ -1340,13 +1340,13 @@ fn stroke_rounded(cx: &mut DrawCx<'_>, r: Rect, radius: f32, color: Color, width
         return;
     }
     let k = cx.transform_scale();
-    let quad = gpui::fill(
+    let quad = border_quad(
         cx.rect(r.x, r.y, r.width, r.height),
-        gpui::transparent_black(),
-    )
-    .corner_radii(corners([radius; 4], k))
-    .border_widths(px(width * k))
-    .border_color(cx.color(color));
+        corners([radius; 4], k),
+        Edges::all(px(width * k)),
+        cx.color(color),
+        gpui::BorderStyle::Solid,
+    );
     cx.paint_quad(quad);
 }
 
@@ -2058,15 +2058,9 @@ impl Hosted for DialogItem {
 /// button's index; -1 when dismissed (a click outside or Escape, when
 /// cancelable); Escape presses the cancel button when there is one.
 fn show_dialog(surface: &Rc<Surface>, dialog: &Dialog) {
-    let ok = [nsh_core::DialogButton {
-        text: "OK".to_owned(),
-        style: DialogButtonStyle::Default,
-    }];
-    let buttons = if dialog.buttons.is_empty() {
-        &ok[..]
-    } else {
-        &dialog.buttons[..]
-    };
+    // `AlertDialog` always brings the app's actions (it rejects none): no
+    // label of NSH's own.
+    let buttons = &dialog.buttons[..];
     let styles: Vec<DialogButtonStyle> = buttons.iter().map(|b| b.style).collect();
     let cancel = styles.iter().position(|s| *s == DialogButtonStyle::Cancel);
     let fs = surface.environment.get().font_scale;

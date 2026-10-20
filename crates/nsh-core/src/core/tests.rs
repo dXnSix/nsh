@@ -209,7 +209,7 @@ fn values_of_calls_into_rust_that_panic_as_they_drop_stay_in_the_core() {
         call: 0,
         run: RustCall::Op(Box::new(move |_| {
             let _ = &grenade;
-            Err(String::new())
+            Err(String::new().into())
         })),
     })]);
     assert!(js_events(&mut c).is_empty());
@@ -2039,7 +2039,7 @@ fn inputs_resolve_what_return_does() {
         ..InputConfig::default()
     };
     // React Native's defaults: one line submits and unfocuses, several
-    // lines take line breaks; `blurOnSubmit={false}` keeps the focus.
+    // lines take line breaks; `blur_on_submit` false keeps the focus.
     assert_eq!(config(false, true, None).submit(), S::BlurAndSubmit);
     assert_eq!(config(false, false, None).submit(), S::Submit);
     assert_eq!(config(true, true, None).submit(), S::Newline);
@@ -2995,6 +2995,49 @@ fn press_and_group_states() {
 }
 
 #[test]
+fn a_node_joining_a_group_in_a_state_reads_it() {
+    let mut c = core();
+    view_with_classes(&mut c, 2, "group");
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: 2,
+            prop: Prop::Native(NativeProp::Disabled(true)),
+        }],
+    );
+    c.commit().unwrap();
+    // A row inserted into the group after it was disabled reads its state.
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 3,
+                tag: Tag::View,
+            },
+            class_op(3, "h-4 opacity-100 group-disabled:opacity-40"),
+            Op::Insert {
+                parent: 2,
+                child: 3,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(view_style_of(&batch, 3).unwrap().opacity, 0.4);
+    // Moved out of the group, it drops it.
+    apply(
+        &mut c,
+        vec![Op::Insert {
+            parent: ROOT_ID,
+            child: 3,
+            before: None,
+        }],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(view_style_of(&batch, 3).unwrap().opacity, 1.0);
+}
+
+#[test]
 fn untracked_states_are_forgotten() {
     use crate::tailwind::state::{HOVERED, PRESSED};
     // A sidebar row: `hover:` while not selected, plain once selected.
@@ -3224,71 +3267,168 @@ fn disabled_views_take_no_presses() {
     assert_eq!(view_style_of(&batch, 2).unwrap().opacity, 1.0);
 }
 
+/// A style patch of `decls` (`activeStyle={{ … }}`).
+fn patch(decls: &[(&str, crate::StyleValue<'_>)]) -> Option<Arc<crate::StylePatch>> {
+    let mut style = crate::Style::default();
+    let mut patch = crate::StylePatch::default();
+    for (key, value) in decls {
+        patch.set(&mut style, key, *value).unwrap();
+    }
+    Some(Arc::new(patch))
+}
+
 #[test]
-fn underlay_shows_while_pressed() {
+fn disabled_views_are_disabled_for_screen_readers() {
+    let mut c = core();
+    view_with_classes(&mut c, 2, "");
+    let disabled = |d| Op::SetProp {
+        id: 2,
+        prop: Prop::Native(NativeProp::Disabled(d)),
+    };
+    let state_of = |batch: &MountBatch| {
+        batch.items.iter().rev().find_map(|i| match i {
+            MountItem::ViewProps { id: 2, props } => Some(props.accessibility.state.disabled),
+            _ => None,
+        })
+    };
+    apply(&mut c, vec![disabled(true)]);
+    assert_eq!(state_of(&c.commit().unwrap()), Some(true));
+    apply(&mut c, vec![disabled(false)]);
+    assert_eq!(state_of(&c.commit().unwrap()), Some(false));
+    // The app's own state stays when `disabled` is off.
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: 2,
+            prop: Prop::Accessibility(AccessibilityProp::State(crate::AccessibilityState {
+                disabled: true,
+                ..Default::default()
+            })),
+        }],
+    );
+    assert_eq!(state_of(&c.commit().unwrap()), Some(true));
+}
+
+#[test]
+fn active_style_applies_while_pressed_and_not_disabled() {
+    use crate::{StyleValue as V, tailwind::state};
     let mut c = core();
     view_with_classes(&mut c, 2, "bg-white");
-    view_with_classes(&mut c, 3, "opacity-50");
     apply(
         &mut c,
         vec![
-            Op::Remove {
-                parent: ROOT_ID,
-                child: 3,
-            },
-            Op::Insert {
-                parent: 2,
-                child: 3,
-                before: None,
+            // The inline style is under it.
+            Op::SetStyle {
+                id: 2,
+                style: Box::default(),
+                patch: {
+                    let mut s = crate::Style::default();
+                    let mut p = crate::StylePatch::default();
+                    p.set(&mut s, "opacity", V::Number(0.9)).unwrap();
+                    p
+                },
             },
             Op::SetProp {
                 id: 2,
-                prop: Prop::UnderlayColor(Color::parse("#dddddd")),
+                prop: Prop::ActiveStyle(patch(&[
+                    ("backgroundColor", V::Str("#dddddd")),
+                    ("opacity", V::Number(0.5)),
+                ])),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::DisabledStyle(patch(&[("opacity", V::Number(0.3))])),
             },
         ],
     );
     let batch = c.commit().unwrap();
     assert!(batch.items.iter().any(|i| matches!(
         i,
-        MountItem::TrackStates { id: 2, states } if *states == crate::tailwind::state::PRESSED
+        MountItem::TrackStates { id: 2, states } if *states == state::PRESSED
     )));
-    c.set_states(2, crate::tailwind::state::PRESSED);
+    assert_eq!(view_style_of(&batch, 2).unwrap().opacity, 0.9);
+    c.set_states(2, state::PRESSED);
     let batch = c.commit().unwrap();
-    assert_eq!(
-        view_style_of(&batch, 2).unwrap().background_color,
-        Color(0xdddd_ddff)
-    );
-    assert_eq!(view_style_of(&batch, 3).unwrap().opacity, 0.5 * 0.85);
+    let style = view_style_of(&batch, 2).unwrap();
+    assert_eq!(style.background_color, Color(0xdddd_ddff));
+    assert_eq!(style.opacity, 0.5);
     c.set_states(2, 0);
+    let batch = c.commit().unwrap();
+    let style = view_style_of(&batch, 2).unwrap();
+    assert_eq!(style.background_color, Color(0xffff_ffff));
+    assert_eq!(style.opacity, 0.9);
+    // Disabled: no active style, the disabled one.
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: 2,
+            prop: Prop::Native(NativeProp::Disabled(true)),
+        }],
+    );
+    c.set_states(2, state::PRESSED);
+    let batch = c.commit().unwrap();
+    let style = view_style_of(&batch, 2).unwrap();
+    assert_eq!(style.background_color, Color(0xffff_ffff));
+    assert_eq!(style.opacity, 0.3);
+    // Removed: the classes alone.
+    apply(
+        &mut c,
+        vec![
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Native(NativeProp::Disabled(false)),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::ActiveStyle(None),
+            },
+        ],
+    );
     let batch = c.commit().unwrap();
     assert_eq!(
         view_style_of(&batch, 2).unwrap().background_color,
         Color(0xffff_ffff)
     );
-    assert_eq!(view_style_of(&batch, 3).unwrap().opacity, 0.5);
 }
 
 #[test]
-fn underlay_replaces_gradients_while_pressed() {
+fn selected_style_follows_the_accessibility_state() {
+    use crate::{AccessibilityProp, AccessibilityState, StyleValue as V};
     let mut c = core();
-    view_with_classes(&mut c, 2, "bg-linear-to-b from-white to-black");
+    view_with_classes(&mut c, 2, "bg-white selected:bg-black");
+    let selected = |on| Op::SetProp {
+        id: 2,
+        prop: Prop::Accessibility(AccessibilityProp::State(AccessibilityState {
+            selected: on,
+            ..AccessibilityState::default()
+        })),
+    };
     apply(
         &mut c,
-        vec![Op::SetProp {
-            id: 2,
-            prop: Prop::UnderlayColor(Color::parse("#dddddd")),
-        }],
+        vec![
+            Op::SetProp {
+                id: 2,
+                prop: Prop::SelectedStyle(patch(&[("opacity", V::Number(0.7))])),
+            },
+            selected(true),
+        ],
     );
     let batch = c.commit().unwrap();
-    assert!(view_style_of(&batch, 2).unwrap().effects.is_some());
-    c.set_states(2, crate::tailwind::state::PRESSED);
+    let style = view_style_of(&batch, 2).unwrap();
+    assert_eq!(style.background_color, Color(0x0000_00ff));
+    assert_eq!(style.opacity, 0.7);
+    // The platform never tracks it.
+    assert!(
+        !batch
+            .items
+            .iter()
+            .any(|i| matches!(i, MountItem::TrackStates { .. }))
+    );
+    apply(&mut c, vec![selected(false)]);
     let batch = c.commit().unwrap();
     let style = view_style_of(&batch, 2).unwrap();
-    assert_eq!(style.background_color, Color(0xdddd_ddff));
-    assert!(style.effects.is_none());
-    c.set_states(2, 0);
-    let batch = c.commit().unwrap();
-    assert!(view_style_of(&batch, 2).unwrap().effects.is_some());
+    assert_eq!(style.background_color, Color(0xffff_ffff));
+    assert_eq!(style.opacity, 1.0);
 }
 
 #[test]
@@ -4507,6 +4647,40 @@ mod components {
         assert_eq!(child_ids(&c, 2), [10, 8, 12, 4]);
     }
 
+    /// A footer slot whose presses show and hide a note after it.
+    #[component]
+    fn Toggler(props: PanelProps) -> impl IntoElement {
+        let shown = signal(false);
+        view()
+            .child(
+                props
+                    .footer
+                    .place(move |f| f.on_press(move |_: &()| shown.update(|s| *s = !*s))),
+            )
+            .child(If::new(shown, || view().h(px(10.0))))
+    }
+
+    /// What a view gives a slot's node (its handlers) stays while the node
+    /// is its slot, also once a region of the view runs again.
+    #[test]
+    fn a_slots_handlers_outlive_the_views_regions() {
+        let mut c = mount_host::<Toggler>();
+        apply(&mut c, fill_footer());
+        c.commit().unwrap();
+        assert_eq!(child_ids(&c, 2), [4]);
+        let press = |c: &mut Core<FakeEngine>| {
+            c.component_event(4, EventKind::Press, &EventPayload::None);
+            let _ = c.commit();
+        };
+        press(&mut c);
+        assert_eq!(child_ids(&c, 2).len(), 2, "the note shows");
+        // The region ran again: the slot still hears its presses.
+        press(&mut c);
+        assert_eq!(child_ids(&c, 2), [4], "the note is gone");
+        press(&mut c);
+        assert_eq!(child_ids(&c, 2).len(), 2, "and shows again");
+    }
+
     #[test]
     fn slots_are_the_glues_nodes_placed_by_the_render() {
         let mut c = core();
@@ -5401,7 +5575,7 @@ mod components {
                                 ""
                             }
                         })
-                        .on_change_text(move |text: &str| name.set(text.to_owned()))
+                        .on_change(move |text: &str| name.set(text.to_owned()))
                         .on_focus(move |_: &()| focused.set(true)),
                 ),
             )
@@ -5413,7 +5587,7 @@ mod components {
                 move || name.with(String::len) > 2,
                 move || {
                     modal()
-                        .transparent(true)
+                        .close_on_swipe(false)
                         .child(text(move || format!("Hi {}", name.get())))
                 },
             ))

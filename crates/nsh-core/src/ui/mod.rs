@@ -1,4 +1,5 @@
-//! Components written in Rust: the UI sets' components (`nsh-ui-mobile`),
+//! Components written in Rust: those of the runtime (`SafeAreaView`, ...) and
+//! of apps' own crates (their UI sets),
 //! run by the core on the engine thread.
 //!
 //! A [`Component`] is a function that runs once ([`Component::view`]) and
@@ -60,6 +61,7 @@ mod scrollable;
 pub(crate) mod services;
 pub(crate) mod status_bar;
 mod style;
+mod system;
 pub(crate) mod task;
 mod theme;
 mod value;
@@ -110,7 +112,9 @@ pub use self::{
         AnyValue, EventToJs, JsEvent, JsResult, MethodCall, OpCall, ParkedPost, Posts, RustCall,
         RustOp, TaskStart, ToJs,
     },
-    callback::{Callback, CallbackArgs, CallbackHandle, CallbackRet, JsCall, Trace, Tracer},
+    callback::{
+        Callback, CallbackArgs, CallbackHandle, CallbackRet, Exception, JsCall, Trace, Tracer,
+    },
     class::{
         Arg, AsyncCall, Class, ClassDef, ClassInstance, ClassRefs, ClassSpec, Instance, Member,
         MemberCall, MemberKind, MemberSpec, Ret, Thrown,
@@ -140,8 +144,8 @@ pub use self::{
     },
     js::{JsHost, JsIn, JsKind, JsOwned, JsRaw},
     module::{
-        Function, FunctionCall, FunctionKind, FunctionSpec, Module, ModuleCx, ModuleFuture,
-        ModuleParam, ModuleSpec, SyncCall,
+        Constant, ConstantValue, Function, FunctionCall, FunctionKind, FunctionSpec, Module,
+        ModuleCx, ModuleFuture, ModuleParam, ModuleSpec, Overload, OverloadSpec, SyncCall,
     },
     once::Scope,
     prop::Prop,
@@ -154,10 +158,13 @@ pub use self::{
     responder::{ClaimRequest, PanGesture, ResponderEvent, TouchClaim},
     scrollable::Scrollable,
     services::{Fetch, HttpResponse, Prefetch, ToastDuration},
-    status_bar::StatusBarEntry,
     style::{
         AdaptiveColor, BorderCurve, FontWeight, Length, StyleRefinement, Styled, WritingDirection,
         px, relative, rgb, rgba,
+    },
+    system::{
+        CallCx, Cleanup, ErrorClass, ErrorFields, Held, IntoThrown, JsError, Later, Local, Locals,
+        Quotas, System, io_code,
     },
     task::{Answer, ClipboardImage, DialogAnswer, ImageSize, Task},
     theme::{Theme, ThemeColors, ThemeError},
@@ -199,6 +206,7 @@ pub mod prelude {
         BlendMode,
         BorderCurve,
         BoxShadow,
+        CallCx,
         Callback,
         CanvasView,
         Child,
@@ -243,6 +251,7 @@ pub mod prelude {
         IntoElement,
         IntoListener,
         Items,
+        JsError,
         JsObject,
         JsValue,
         // Scrolling and lists.
@@ -252,6 +261,7 @@ pub mod prelude {
         KeyboardType,
         KeyframeAnimation,
         Keyframes,
+        Later,
         Length,
         ListLayout,
         Listener,
@@ -291,8 +301,11 @@ pub mod prelude {
         SnapAlignment,
         Spring,
         Stack,
+        StatusBarSetting,
+        StatusBarStyle,
         Styled,
         SubmitBehavior,
+        System,
         Task,
         Text,
         Theme,
@@ -339,7 +352,7 @@ pub mod prelude {
         Each, If, IntoElements, IntoReactive, Memo, Owner, Prop, Reactive, ReadSignal, Resource,
         ResourceInfo, ResourceState, Scope, Signal, SignalEquals, Stored,
         ambient::{
-            Delay, KeyOptions, Spawned, add_status_bar, allow_rtl, animate_layout, animated_value,
+            Delay, KeyOptions, Spawned, allow_rtl, animate_layout, animated_value,
             announce_for_accessibility, clipboard_files, clipboard_has_image, clipboard_has_string,
             clipboard_image, clipboard_string, color, component_ref, dark, dialog,
             dismiss_keyboard, element_ref, fetch, font_scale, force_rtl, global, idiom, image_size,
@@ -347,8 +360,7 @@ pub mod prelude {
             next_frame, on_back_press, on_key, on_key_with, os, os_version, pixel_ratio,
             prefetch_image, reduce_motion, request_animation_frame, round_to_nearest_pixel, rtl,
             safe_area, screen_reader, set_clipboard, set_clipboard_image, set_color_scheme,
-            set_interval, set_timeout, spawn, theme, timer, timer_until, toast, update_status_bar,
-            window,
+            set_interval, set_timeout, spawn, theme, timer, timer_until, toast, window,
         },
         batch, catch_error, cleanup, component, computed, dynamic, effect, provide_context,
         resource, resource_with_value, signal, signal_with, stored, untracked, use_context,

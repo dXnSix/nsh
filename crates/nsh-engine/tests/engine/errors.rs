@@ -37,6 +37,8 @@ fn config(bundle: Bundle, limits: nsh_engine::Limits) -> EngineConfig {
         viewport: Size::new(100.0, 100.0),
         trace: false,
         network: None,
+        websocket: None,
+        filesystem: None,
         assets: None,
         environment: Default::default(),
         header_heights: (44.0, 96.0),
@@ -93,7 +95,7 @@ fn bundle_app(name: &str, minify: bool, source: &str) -> nsh_bundler::Bundle {
         entry,
         minify,
         split: false,
-        ui_sets: vec![nsh_ui_mobile::registry().into()],
+        ui_sets: vec![nsh_base::registry().into()],
     })
     .unwrap();
     let _ = std::fs::remove_dir_all(&dir);
@@ -111,6 +113,8 @@ fn first_error(bundle: Bundle) -> String {
         viewport: Size::new(100.0, 100.0),
         trace: false,
         network: None,
+        websocket: None,
+        filesystem: None,
         assets: None,
         environment: Default::default(),
         header_heights: (44.0, 96.0),

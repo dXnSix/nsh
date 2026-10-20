@@ -435,7 +435,7 @@ pub(super) struct Components {
     /// Slot nodes (`componentSlot`) -> their slot's name.
     slot_names: FxHashMap<NodeId, Arc<str>>,
     /// Slot nodes in a host -> the host.
-    slot_hosts: FxHashMap<NodeId, NodeId>,
+    pub(super) slot_hosts: FxHashMap<NodeId, NodeId>,
     styles: FxHashMap<StyleRefinement, Arc<ClassList>>,
     /// The styles a component on another's host gets from each above it,
     /// merged (by the lists', which the entry keeps).
@@ -451,7 +451,7 @@ pub(super) struct Components {
     /// Runs the components' async tasks and timers.
     pub(super) executor: Rc<Executor>,
     /// The status bar's settings, shared by components, modules and tasks.
-    pub(super) status_bars: crate::ui::status_bar::SharedStatusBars,
+    pub(super) status_bars: crate::ui::status_bar::StatusBars,
     /// Dialogs components show, by id: their answers.
     dialogs: FxHashMap<u32, AnswerSlot<i32>>,
     next_dialog: u32,
@@ -571,9 +571,7 @@ impl Components {
         let mut components = Self::default();
         components.environment.window = viewport;
         // What components that run once read of the core.
-        components
-            .runtime
-            .set_services(components.executor.clone(), components.status_bars.clone());
+        components.runtime.set_services(components.executor.clone());
         components.runtime.set_environment(components.environment);
         components.runtime.set_theme(components.theme.clone());
         components
@@ -643,7 +641,7 @@ fn same(a: &Option<Arc<ClassList>>, b: &Option<Arc<ClassList>>) -> bool {
 }
 
 impl<M: TextEngine> Core<M> {
-    /// The components this core can render (from `nsh-ui-mobile` and the
+    /// The components this core can render (from `nsh-base` and the
     /// like); set before the first op.
     pub fn set_components(&mut self, registry: Registry) {
         self.components.registry = registry;
@@ -702,6 +700,9 @@ impl<M: TextEngine> Core<M> {
     /// Mounts a Rust app's root component as the content of the root view;
     /// its view is made in the next commit.
     pub fn mount_root(&mut self, root: &Root) {
+        if let Some(setting) = root.status_bar_ref() {
+            self.components.status_bars.set_base(setting);
+        }
         let _entered = self.components.runtime.enter();
         let mut el = root.element().0;
         let ElKind::Component(c) = std::mem::replace(&mut el.kind, ElKind::Plain) else {
@@ -1185,7 +1186,7 @@ impl<M: TextEngine> Core<M> {
                         }
                         result
                     }
-                    Err(message) => Err(message),
+                    Err(message) => Err(message.into()),
                 };
                 self.apply_actions();
                 self.settle(call, result);
@@ -1212,7 +1213,7 @@ impl<M: TextEngine> Core<M> {
                         }),
                     );
                 }
-                Err(message) => self.settle(call, Err(message)),
+                Err(message) => self.settle(call, Err(message.into())),
             },
             RustCall::Method(host, method) => {
                 let mut failed = None;
@@ -1225,16 +1226,16 @@ impl<M: TextEngine> Core<M> {
                     Some(Inner::Component(inner)) => match caught(|| inner.call(method)) {
                         Ok(Some(result)) => result,
                         Ok(None) => {
-                            Err(format!("{} has no ref of this method's type", inner.name()))
+                            Err(format!("{} has no ref of this method's type", inner.name()).into())
                         }
                         Err(message) => {
                             failed = Some(message.clone());
-                            Err(message)
+                            Err(message.into())
                         }
                     },
                     _ => {
                         drop_caught(method);
-                        Err(format!("node {host} hosts no Rust component"))
+                        Err(format!("node {host} hosts no Rust component").into())
                     }
                 };
                 self.apply_actions();

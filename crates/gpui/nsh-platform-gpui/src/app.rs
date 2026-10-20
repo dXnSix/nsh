@@ -63,7 +63,7 @@ fn bind_keys(cx: &mut GpuiApp) {
 
 static UI_SETS: RwLock<Option<Vec<nsh_core::ui::Registry>>> = RwLock::new(None);
 
-/// Sets the UI sets every engine serves (default: `nsh/ui/mobile`); an app
+/// Sets the UI sets every engine serves (default: `nsh/base`); an app
 /// with Rust components of its own calls this before [`run_app`].
 pub fn set_ui_sets(sets: Vec<nsh_core::ui::Registry>) {
     *UI_SETS.write().unwrap_or_else(|e| e.into_inner()) = Some(sets);
@@ -75,10 +75,12 @@ pub(crate) fn ui_sets() -> Vec<nsh_core::ui::Registry> {
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
-        .unwrap_or_else(|| vec![nsh_ui_mobile::registry()])
+        .unwrap_or_else(|| vec![nsh_base::registry()])
 }
 
 /// What [`run_app`] runs.
+// Made once per app and moved into it: the size of a bundle is no cost.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum AppSource {
     /// A Rust app: its root component.
@@ -271,9 +273,12 @@ impl AppView {
             viewport: nsh_core::Size::new(0.0, 0.0),
             trace: options.trace,
             network: Some(crate::net::network()),
+            websocket: None,
+            filesystem: None,
             assets: Some(Arc::new(AssetReader(options.asset_base.clone()))),
             environment: self.surface.environment.get(),
-            header_heights: crate::navigation::HEADER_HEIGHTS,
+            // NSH draws no header: a page's `header` sits at its top.
+            header_heights: nsh_core::NO_NATIVE_HEADER,
             limits: options.limits,
             ui_sets: ui_sets(),
             runtime: None,
@@ -345,7 +350,7 @@ impl AppView {
     }
 
     /// Gives the app the embedding app's theme: the components of the UI
-    /// sets (`nsh/ui/mobile`) render with it instead of the app's own
+    /// sets (`nsh/base`, an app's own) render with it instead of the app's own
     /// (`nsh.json` `"theme"`), and the surface is drawn on its
     /// `background`. `None` gives the app its own theme back. It applies
     /// at once to what runs and to every app loaded later, from its first
