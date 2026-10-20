@@ -31,7 +31,10 @@ mod net;
 mod platform_modules;
 mod protocol;
 mod reactive;
+mod rejections;
+mod resource;
 mod sandbox;
+mod standard;
 mod state;
 mod timers;
 mod touch;
@@ -53,3 +56,13 @@ pub use crate::{
     net::{FetchEvent, FetchOp, HttpBody, HttpHead, HttpRequest, NetworkQueue, RequestId},
     sandbox::compile_harden,
 };
+
+/// The names native module `specifier` exports, if it is one: nsh's own
+/// modules, the runtime's and those of `ui_sets` (a bundler checks named
+/// imports against them).
+pub fn native_module_exports(
+    specifier: &str,
+    ui_sets: &[nsh_core::ui::description::SetDescription],
+) -> Option<Vec<String>> {
+    modules::ModuleTable::compiling(ui_sets).export_names(specifier)
+}

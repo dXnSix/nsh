@@ -9,13 +9,13 @@ use nsh_dev::{
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A host named `device` with bytecode `bytecode` serving the mobile UI.
+/// A host named `device` with bytecode `bytecode` serving `nsh/base`.
 fn host(device: &str, bytecode: &str) -> HostInfo {
     HostInfo {
         device: device.into(),
         platform: HostPlatform::Android,
         bytecode_version: bytecode.into(),
-        ui_sets: vec!["nsh/ui/mobile".into()],
+        ui_sets: vec!["app/native".into(), "app/charts".into()],
     }
 }
 
@@ -35,6 +35,7 @@ fn bundles_errors_and_logs_round_trip() {
         let _ = client_tx.send(event);
     })
     .unwrap();
+    server.set_limits(Some("memory=64MB,call=500ms".into()));
     server.publish(
         vec![1, 2, 3],
         "source v1".into(),
@@ -44,7 +45,7 @@ fn bundles_errors_and_logs_round_trip() {
             id: Some("com.example.roundtrip".into()),
         },
         None,
-        vec!["nsh/ui/mobile".into()],
+        vec!["app/native".into()],
     );
     let url = format!("ws://{}{WS_PATH}", server.local_addr());
 
@@ -64,8 +65,10 @@ fn bundles_errors_and_logs_round_trip() {
             source_map,
             capabilities,
             app_id,
+            limits,
         } => {
             assert_ne!(session, 0, "the server names its run");
+            assert_eq!(limits.as_deref(), Some("memory=64MB,call=500ms"));
             assert_eq!(app_id.as_deref(), Some("com.example.roundtrip"));
             assert_eq!(bytes, [1, 2, 3]);
             assert_eq!(source_map.as_deref(), Some("{\"version\":3}"));
@@ -194,7 +197,7 @@ fn a_host_without_the_apps_ui_set_is_told_it_cannot_run_it() {
         HostPlatform::Android,
         "nsh run examples/gallery-rs --target android".to_owned(),
     )]);
-    let needs = || vec!["gallery/native".to_owned(), "nsh/ui/mobile".to_owned()];
+    let needs = || vec!["gallery/native".to_owned(), "app/native".to_owned()];
     server.publish(
         vec![1],
         "v1".into(),
@@ -255,14 +258,14 @@ fn a_host_without_the_apps_ui_set_is_told_it_cannot_run_it() {
         needs(),
     );
     server.publish_error("syntax error");
-    // A bundle that needs only the mobile UI reaches it again.
+    // A bundle that needs only `nsh/base` reaches it again.
     server.publish(
         vec![3],
         "v3".into(),
         None,
         AppInfo::default(),
         None,
-        vec!["nsh/ui/mobile".into()],
+        vec!["app/native".into()],
     );
     match next_non_status(&rx) {
         DevEvent::Bundle {
