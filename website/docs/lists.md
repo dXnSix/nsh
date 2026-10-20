@@ -99,6 +99,7 @@ Pass a new array to change the items: `posts.set([...posts(), ...more])`. The li
 | `inverted` | `boolean` | `false` | Item 0 at the bottom (chat); starts at the end and keeps its distance from the end. |
 | `maintainVisibleContentPosition` | `{ autoscrollToBottomThreshold?: number }` | | A list that is not inverted stays at the end while it is within that many points of it, as content grows (see below). |
 | `stickyHeaderIndices` | `number[]` | | Items that stick to the top while scrolled past (one column, not inverted). |
+| `stickyHeaderOffset` | `number` | `0` | How far below the top the sticky items stick, as CSS `position: sticky`'s `top`; the content scrolls on under the space above them. |
 | `contentStyle` | `{ padding*, gap, rowGap, columnGap }` | | Padding and gaps of the content, numbers only. |
 | `contentClass` | `string` | | The same as classes (`p-*`, `gap-*`); `contentStyle` wins over them. |
 | `header` | component or element | | Before the items. |
@@ -161,6 +162,8 @@ for (const [letter, names] of groups) {
 ```
 
 Because a cell may show a header now and a name later, the row decides what to render with [`<If>`](../elements/control-flow.md), which switches when the item changes. Sticky headers need one column and a list that is not inverted.
+
+`stickyHeaderOffset` makes the headers stick that many points below the top instead, as CSS `position: sticky`'s `top` does: under a translucent bar 56 points tall, `stickyHeaderOffset={56}` keeps each header below the bar while the rows scroll on under it, and the next header pushes it out from there. A negative offset leaves part of a header out of view.
 
 ## Chat: inverted lists
 
