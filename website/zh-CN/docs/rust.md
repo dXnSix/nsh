@@ -437,7 +437,7 @@ crate，都会重新构建并重启应用。
 
 ## NSH 的 crate 从哪里来
 
-应用的 crate 以下面三种方式之一依赖 NSH 的 crate（`nsh-core`、`nsh-ui-mobile` 等），`nsh` 构建应用的宿主和运行时时也从同一处取
+应用的 crate 以下面三种方式之一依赖 NSH 的 crate（`nsh-core`、`nsh-base` 等），`nsh` 构建应用的宿主和运行时时也从同一处取
 NSH 的 crate，这样应用与宿主共用同一个核心：
 
 | 依赖 | 用途 |

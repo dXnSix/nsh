@@ -473,7 +473,7 @@ crate they depend on by path, rebuilds the app and restarts it.
 
 ## Where NSH's crates come from
 
-The crates of an app depend on NSH's crates (`nsh-core`, `nsh-ui-mobile`, …) in one of three ways, and `nsh` builds the
+The crates of an app depend on NSH's crates (`nsh-core`, `nsh-base`, …) in one of three ways, and `nsh` builds the
 app's hosts and runtimes with NSH's crates from the same place, so the app and its hosts share one core:
 
 | Dependency | Use it for |

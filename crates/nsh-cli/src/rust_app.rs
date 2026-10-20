@@ -2638,12 +2638,12 @@ mod tests {
         let tag = format!("nsh-core = {{ git = \"{url}\", tag = \"fork-0.1.1-1\" }}\n");
         // Cargo reads the dependencies without fetching the repository.
         assert_eq!(of(&[("a", &tag)]), Ok(Nsh::Git(git("tag", "fork-0.1.1-1"))));
-        let branch = format!("nsh-ui-mobile = {{ git = \"{url}\", branch = \"fork\" }}\n");
+        let branch = format!("nsh-base = {{ git = \"{url}\", branch = \"fork\" }}\n");
         assert_eq!(of(&[("a", &branch)]), Ok(Nsh::Git(git("branch", "fork"))));
         let rev = format!("nsh-core = {{ git = \"{url}\", rev = \"0123abcd\" }}\n");
         assert_eq!(of(&[("a", &rev)]), Ok(Nsh::Git(git("rev", "0123abcd"))));
         // Several crates, several of nsh's crates: one repository, one tag.
-        let both = format!("{tag}nsh-ui-mobile = {{ git = \"{url}\", tag = \"fork-0.1.1-1\" }}\n");
+        let both = format!("{tag}nsh-base = {{ git = \"{url}\", tag = \"fork-0.1.1-1\" }}\n");
         assert_eq!(
             of(&[("a", &tag), ("b", &both)]),
             Ok(Nsh::Git(git("tag", "fork-0.1.1-1")))
@@ -2710,7 +2710,7 @@ mod tests {
         let keys = "git = \"https://example.com/forks/nsh\", tag = \"fork-0.1.1-1\"";
         for file in [
             "describe/Cargo.toml",
-            "trace/Cargo.toml",
+            "test/Cargo.toml",
             "macos-host/Cargo.toml",
             "ios-app/Cargo.toml",
             "android/Cargo.toml",
