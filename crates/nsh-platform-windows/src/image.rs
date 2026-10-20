@@ -1805,6 +1805,7 @@ mod tests {
         let source = ImageSource {
             uri: "asset:/logo@2x.svg".into(),
             size: None,
+            scales: Default::default(),
         };
         let picture = Picture::new(decode(SVG_LOGO.to_vec()).unwrap()).unwrap();
         assert_eq!((picture.size, picture.vector), ((48, 24), true));

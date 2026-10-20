@@ -1373,6 +1373,7 @@ mod tests {
         let source = ImageSource {
             uri: "asset:/logo@2x.svg".into(),
             size: None,
+            scales: Default::default(),
         };
         assert_eq!(natural(&picture.texture, Some(&source)), (48.0, 24.0));
         // Bitmaps keep their pixels.
