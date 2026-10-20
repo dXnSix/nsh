@@ -36,7 +36,10 @@ pub fn registry() -> Registry {
     let mut registry = Registry::ui_set(SPECIFIER);
     registry
         .module::<Testing>()
+        .module::<TestVariants>()
+        .module::<DescribeVariants>()
         .class::<App>()
+        .class::<Clock>()
         .class::<Expectation>()
         .class::<Rejection>();
     registry
@@ -49,15 +52,141 @@ pub(crate) fn runner_registry() -> Registry {
     registry
 }
 
-thread_local! {
-    /// The tests the test file declared, in order (the engine's thread is
-    /// the test file's).
-    static TESTS: RefCell<Vec<(String, Callback)>> = const { RefCell::new(Vec::new()) };
+/// How long a test or a hook may take unless it says (Jest's `timeout`).
+const TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A `describe` block, or the file: its tests and blocks in order, and the
+/// hooks that run around them.
+#[derive(Default)]
+pub(crate) struct Suite {
+    /// Its name (empty for the file).
+    pub(crate) name: String,
+    pub(crate) mode: Mode,
+    pub(crate) before_all: Vec<Hook>,
+    pub(crate) after_all: Vec<Hook>,
+    pub(crate) before_each: Vec<Hook>,
+    pub(crate) after_each: Vec<Hook>,
+    pub(crate) items: Vec<Item>,
 }
 
-/// The tests declared so far, taken.
-pub(crate) fn take_tests() -> Vec<(String, Callback)> {
-    TESTS.with(|tests| std::mem::take(&mut *tests.borrow_mut()))
+/// What a suite holds.
+pub(crate) enum Item {
+    Test(Case),
+    Suite(Suite),
+}
+
+/// A test as the file declared it.
+pub(crate) struct Case {
+    pub(crate) name: String,
+    /// `None` for a `test.todo`.
+    pub(crate) body: Option<Callback>,
+    pub(crate) mode: Mode,
+    pub(crate) timeout: Duration,
+}
+
+/// A `beforeAll`, `afterAll`, `beforeEach` or `afterEach` function.
+pub(crate) struct Hook {
+    pub(crate) body: Callback,
+    pub(crate) timeout: Duration,
+}
+
+/// How a test or a block was declared.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mode {
+    #[default]
+    Run,
+    /// `.skip`: neither it nor what it holds runs.
+    Skip,
+    /// `.only`: a file with one runs only those.
+    Only,
+    /// `test.todo`: a test still to write.
+    Todo,
+}
+
+thread_local! {
+    /// The file's suite and the `describe` blocks being declared in it,
+    /// innermost last (the engine's thread is the test file's).
+    static DECLARING: RefCell<Vec<Suite>> = RefCell::new(vec![Suite::default()]);
+}
+
+/// The suite the file declared, taken: from now on it declares nothing.
+pub(crate) fn take_suite() -> Suite {
+    DECLARING.with(|declaring| {
+        let mut declaring = declaring.borrow_mut();
+        let suite = std::mem::take(&mut declaring[0]);
+        declaring.clear();
+        suite
+    })
+}
+
+/// Runs `f` on the suite being declared: an error once the tests run.
+fn declare(what: &str, f: impl FnOnce(&mut Suite)) -> Result<(), String> {
+    DECLARING.with(|declaring| match declaring.borrow_mut().last_mut() {
+        Some(suite) => {
+            f(suite);
+            Ok(())
+        }
+        None => Err(format!(
+            "{what} declares as the file loads, at its top level or in a `describe`: not in a test or a hook"
+        )),
+    })
+}
+
+/// A test of the suite being declared.
+fn declare_test(
+    name: String,
+    body: Option<Callback>,
+    mode: Mode,
+    timeout: Option<f64>,
+) -> Result<(), String> {
+    let timeout = milliseconds(timeout)?;
+    declare("`test`", |suite| {
+        suite.items.push(Item::Test(Case {
+            name,
+            body,
+            mode,
+            timeout,
+        }));
+    })
+}
+
+/// A `describe` block: `body` declares what it holds, at once.
+fn declare_suite(name: String, body: Callback, mode: Mode) -> Result<(), String> {
+    declare("`describe`", |_| ())?;
+    DECLARING.with(|declaring| {
+        declaring.borrow_mut().push(Suite {
+            name,
+            mode,
+            ..Suite::default()
+        })
+    });
+    let declared = body.call(());
+    let suite = DECLARING.with(|declaring| declaring.borrow_mut().pop());
+    declared.map_err(|e| format!("`describe` threw: {e}"))?;
+    let suite = suite.ok_or("`describe` lost its block")?;
+    declare("`describe`", |parent| parent.items.push(Item::Suite(suite)))
+}
+
+/// A hook of the suite being declared, which `pick` chooses.
+fn declare_hook(
+    what: &str,
+    body: Callback,
+    timeout: Option<f64>,
+    pick: fn(&mut Suite) -> &mut Vec<Hook>,
+) -> Result<(), String> {
+    let timeout = milliseconds(timeout)?;
+    declare(what, |suite| pick(suite).push(Hook { body, timeout }))
+}
+
+/// A timeout in milliseconds as a test gives it, [`TIMEOUT`] without one.
+fn milliseconds(ms: Option<f64>) -> Result<Duration, String> {
+    match ms {
+        None => Ok(TIMEOUT),
+        Some(ms) if ms.is_finite() && ms > 0.0 => Ok(Duration::from_secs_f64(ms / 1000.0)),
+        Some(ms) => Err(format!(
+            "a timeout is a positive number of milliseconds, not {ms}"
+        )),
+    }
 }
 
 /// Tests of an app, run headless by `nsh test`: each test opens the app on
@@ -70,9 +199,41 @@ impl Testing {
     /// Declares the test `name`: `nsh test` runs `body` after the file is
     /// loaded, the tests of a file one after the other, in order. A test
     /// fails when `body` throws or the promise it returns rejects, and
-    /// after 30 seconds. The apps it opened are closed when it ends.
-    pub fn test(name: String, body: Callback) {
-        TESTS.with(|tests| tests.borrow_mut().push((name, body)));
+    /// after `timeout` milliseconds (30 000). The apps it opened are closed
+    /// when it ends.
+    pub fn test(name: String, body: Callback, timeout: Option<f64>) -> Result<(), String> {
+        declare_test(name, Some(body), Mode::Run, timeout)
+    }
+
+    /// Groups the tests and blocks `body` declares (at once) under `name`:
+    /// their names start with it, and the hooks it declares run around
+    /// them only.
+    pub fn describe(name: String, body: Callback) -> Result<(), String> {
+        declare_suite(name, body, Mode::Run)
+    }
+
+    /// Runs `body` once before the first test of the block it is declared
+    /// in (the file, a `describe`); when it fails, so do those tests. Apps
+    /// it opens stay open until the block's tests ended.
+    pub fn before_all(body: Callback, timeout: Option<f64>) -> Result<(), String> {
+        declare_hook("`beforeAll`", body, timeout, |s| &mut s.before_all)
+    }
+
+    /// Runs `body` once after the last test of the block it is declared in.
+    pub fn after_all(body: Callback, timeout: Option<f64>) -> Result<(), String> {
+        declare_hook("`afterAll`", body, timeout, |s| &mut s.after_all)
+    }
+
+    /// Runs `body` before each test of the block it is declared in, the
+    /// outer blocks' first; when it fails, so does the test.
+    pub fn before_each(body: Callback, timeout: Option<f64>) -> Result<(), String> {
+        declare_hook("`beforeEach`", body, timeout, |s| &mut s.before_each)
+    }
+
+    /// Runs `body` after each test of the block it is declared in, the
+    /// inner blocks' first, whether the test passed or not.
+    pub fn after_each(body: Callback, timeout: Option<f64>) -> Result<(), String> {
+        declare_hook("`afterEach`", body, timeout, |s| &mut s.after_each)
     }
 
     /// Starts the app whose entry is `entry` (relative to the test file)
@@ -95,17 +256,22 @@ impl Testing {
             locale: options.locale,
             reduced_motion: options.reduced_motion.unwrap_or(false),
             platform: options.platform.unwrap_or_default(),
+            clock: options
+                .clock
+                .map(|c| c.time.map_or_else(std::time::SystemTime::now, |t| t.0)),
         };
         let opening = blocking(move || session.open(&entry, launch));
         let (app, storage, requests) = serve(server.as_ref(), opening)
             .await?
             .map_err(|e| e.to_string())??;
         Ok(App {
-            app,
+            steps: Steps {
+                app,
+                server: server.map(Rc::new),
+                dialog: Rc::default(),
+            },
             storage,
             requests,
-            server: server.map(Rc::new),
-            dialog: None,
         })
     }
 
@@ -126,6 +292,48 @@ impl Testing {
                 not: false,
             },
         }
+    }
+}
+
+/// Unused in TS: `test`'s properties document themselves.
+#[module]
+pub(crate) struct TestVariants;
+
+#[module(name = "test")]
+impl TestVariants {
+    /// Declares a test that does not run: it is reported as skipped.
+    pub(crate) fn skip(name: String, body: Callback, timeout: Option<f64>) -> Result<(), String> {
+        declare_test(name, Some(body), Mode::Skip, timeout)
+    }
+
+    /// Declares a test that runs while the file's other tests, but those
+    /// declared with `only`, are skipped: to focus on it for a while.
+    pub(crate) fn only(name: String, body: Callback, timeout: Option<f64>) -> Result<(), String> {
+        declare_test(name, Some(body), Mode::Only, timeout)
+    }
+
+    /// Declares a test still to write: it is reported as one.
+    pub(crate) fn todo(name: String) -> Result<(), String> {
+        declare_test(name, None, Mode::Todo, None)
+    }
+}
+
+/// Unused in TS: `describe`'s properties document themselves.
+#[module]
+pub(crate) struct DescribeVariants;
+
+#[module(name = "describe")]
+impl DescribeVariants {
+    /// Declares a block whose tests do not run: they are reported as
+    /// skipped.
+    pub(crate) fn skip(name: String, body: Callback) -> Result<(), String> {
+        declare_suite(name, body, Mode::Skip)
+    }
+
+    /// Declares a block whose tests run while the file's other tests, but
+    /// those declared with `only`, are skipped.
+    pub(crate) fn only(name: String, body: Callback) -> Result<(), String> {
+        declare_suite(name, body, Mode::Only)
     }
 }
 
@@ -151,10 +359,10 @@ pub struct OpenOptions {
     /// `*` matches any text): a response, or a function of the request that
     /// returns one; a request not listed fails. `"live"`: the network.
     pub network: Option<NetworkOption>,
-    /// The viewport's width in points (390).
-    pub width: Option<f64>,
-    /// The viewport's height in points (844).
-    pub height: Option<f64>,
+    /// The viewport's width (390 points).
+    pub width: Option<Points>,
+    /// The viewport's height (844 points).
+    pub height: Option<Points>,
     /// The safe area insets in points (none).
     pub safe_area: Option<SafeArea>,
     /// The text on the clipboard at the start (none).
@@ -167,6 +375,46 @@ pub struct OpenOptions {
     pub reduced_motion: Option<bool>,
     /// The platform the app believes it runs on (`"ios"`).
     pub platform: Option<MobilePlatform>,
+    /// A manual clock for the app (none: the system's): its time moves only
+    /// as the test moves it (`app.clock`), steps finish native animations
+    /// at once, and `app.wait` moves it.
+    pub clock: Option<ClockOptions>,
+}
+
+/// The manual clock `open` gives the app (`clock: {}`).
+#[derive(Debug, Default, Clone, PartialEq, JsObject)]
+#[non_exhaustive]
+pub struct ClockOptions {
+    /// Its wall time at the start (`Date.now()`): a `Date` or milliseconds
+    /// since the Unix epoch (now).
+    pub time: Option<Time>,
+}
+
+/// A point in time as a test gives it: a `Date`, or milliseconds since the
+/// Unix epoch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Time(pub std::time::SystemTime);
+
+impl JsValue for Time {
+    fn ts_type(_types: &mut TsTypes) -> String {
+        "Date | number".into()
+    }
+
+    fn from_js(value: JsIn<'_>) -> Result<Self, PropError> {
+        let ms = value.as_date().or_else(|| value.as_number());
+        let since = |ms: f64| Duration::from_secs_f64(ms.abs() / 1000.0);
+        let time = match ms {
+            Some(ms) if ms.is_finite() && ms >= 0.0 => std::time::UNIX_EPOCH.checked_add(since(ms)),
+            Some(ms) if ms.is_finite() => std::time::UNIX_EPOCH.checked_sub(since(ms)),
+            _ => None,
+        };
+        time.map(Time)
+            .ok_or_else(|| value.expected("a Date or milliseconds since the Unix epoch"))
+    }
+
+    fn to_js<'a>(&self, host: &'a dyn JsHost) -> Result<JsOwned<'a>, PropError> {
+        self.0.to_js(host)
+    }
 }
 
 /// The system's appearance.
@@ -258,16 +506,16 @@ impl From<&nsh_core::Dialog> for Dialog {
 pub struct SafeArea {
     /// The top inset.
     #[prop(default)]
-    pub top: f64,
+    pub top: Points,
     /// The right inset.
     #[prop(default)]
-    pub right: f64,
+    pub right: Points,
     /// The bottom inset.
     #[prop(default)]
-    pub bottom: f64,
+    pub bottom: Points,
     /// The left inset.
     #[prop(default)]
-    pub left: f64,
+    pub left: Points,
 }
 
 /// String entries by key: TS `Record<string, string>`.
@@ -436,14 +684,16 @@ impl From<&HttpRequest> for StubRequest {
 pub(crate) struct Launch {
     pub(crate) storage: Entries,
     pub(crate) network: NetworkSetup,
-    pub(crate) width: Option<f64>,
-    pub(crate) height: Option<f64>,
+    pub(crate) width: Option<Points>,
+    pub(crate) height: Option<Points>,
     pub(crate) safe_area: SafeArea,
     pub(crate) clipboard: Option<String>,
     pub(crate) color_scheme: ColorScheme,
     pub(crate) locale: Option<String>,
     pub(crate) reduced_motion: bool,
     pub(crate) platform: MobilePlatform,
+    /// A manual clock's start.
+    pub(crate) clock: Option<std::time::SystemTime>,
 }
 
 /// The network an app opens with, made where it starts (it is `Send`).
@@ -644,14 +894,68 @@ fn stub_response(value: &JsonValue) -> Result<StubResponse, PropError> {
 /// is on screen, when it cannot be taken or the app threw.
 #[class]
 pub struct App {
-    app: OpenApp,
+    steps: Steps,
     storage: Arc<MemoryStorage>,
     /// The requests the app made.
     requests: Arc<RecordingNetwork>,
+}
+
+/// What steps on an app take: `App`'s and its clock's.
+#[derive(Clone)]
+struct Steps {
+    app: OpenApp,
     /// The JS functions of its routes.
     server: Option<Rc<RouteServer>>,
     /// Answers the dialogs the app shows ([`App::on_dialog`]).
-    dialog: Option<Callback<Dialog, Option<String>>>,
+    dialog: Rc<RefCell<Option<DialogCallback>>>,
+}
+
+/// A test's answer to the dialogs (`app.onDialog`).
+type DialogCallback = Callback<Dialog, Option<String>>;
+
+/// The manual clock of an app (`app.clock`, after `open(entry, { clock:
+/// {} })`), as Playwright's `page.clock`: its time moves only as these
+/// say.
+#[class]
+pub struct Clock {
+    steps: Steps,
+}
+
+#[class]
+impl Clock {
+    /// Moves the clock by `ms` milliseconds, a display frame at a time:
+    /// timers, frames and native animations run as they come due, in order;
+    /// resolves once the app is quiet.
+    pub async fn run_for(this: Instance<Self>, ms: f64) -> Result<(), String> {
+        let time = duration(ms)?;
+        let steps = this.with(|c| c.steps.clone());
+        steps.run(move |app| app.run_for(time)).await
+    }
+
+    /// Moves the clock by `ms` milliseconds at once, as a device waking from
+    /// sleep: the timers due meanwhile run once each; resolves once the app
+    /// is quiet.
+    pub async fn fast_forward(this: Instance<Self>, ms: f64) -> Result<(), String> {
+        let time = duration(ms)?;
+        let steps = this.with(|c| c.steps.clone());
+        steps.run(move |app| app.fast_forward(time)).await
+    }
+
+    /// Sets the wall time (`Date.now()`, `new Date()`) to `time`, moving no
+    /// timer.
+    pub fn set_system_time(&self, time: Time) -> Result<(), String> {
+        let mut app = self.steps.app.lock().unwrap_or_else(|e| e.into_inner());
+        app.as_mut().ok_or(CLOSED)?.set_system_time(time.0)
+    }
+}
+
+/// `ms` milliseconds, which a test gives as a number.
+fn duration(ms: f64) -> Result<Duration, String> {
+    if ms.is_finite() && ms >= 0.0 {
+        Ok(Duration::from_secs_f64(ms / 1000.0))
+    } else {
+        Err(format!("a time is milliseconds, zero or more, not {ms}"))
+    }
 }
 
 /// What a step on an app that was closed says.
@@ -690,10 +994,14 @@ impl App {
         selector: String,
         distance: f64,
     ) -> Result<(), String> {
-        step(&this, move |app| app.scroll(&selector, distance as f32)).await
+        step(&this, move |app| {
+            app.scroll(&selector, nsh_core::geometry::px(distance as f32))
+        })
+        .await
     }
 
-    /// Lets the app run for `ms` milliseconds (timers and animations).
+    /// Lets the app run for `ms` milliseconds (timers and animations): on a
+    /// manual clock, moves it by `ms` (`clock.runFor`).
     pub async fn wait(this: Instance<Self>, ms: f64) -> Result<(), String> {
         let time = Duration::from_secs_f64(ms.max(0.0) / 1000.0);
         step(&this, move |app| app.wait(time)).await
@@ -727,8 +1035,8 @@ impl App {
     ) -> Result<(), String> {
         let timeout = options.unwrap_or_default().timeout();
         let deadline = std::time::Instant::now() + timeout;
-        let app = this.with(|a| a.app.clone());
-        let server = this.with(|a| a.server.clone());
+        let app = this.with(|a| a.steps.app.clone());
+        let server = this.with(|a| a.steps.server.clone());
         on_app(&app, |a| {
             a.step("waitUntil");
             Ok(())
@@ -821,12 +1129,20 @@ impl App {
     /// button is pressed, else it is closed when it can be, else the step
     /// that showed it rejects.
     pub fn on_dialog(&mut self, #[args(dialog)] handler: Callback<Dialog, Option<String>>) {
-        self.dialog = Some(handler);
+        *self.steps.dialog.borrow_mut() = Some(handler);
     }
 
     /// The dialogs the app showed, in order.
     pub fn dialogs(&self) -> Result<Vec<Dialog>, String> {
         self.with(|app| Ok(app.screen().dialogs().iter().map(Dialog::from).collect()))
+    }
+
+    /// The app's manual clock (`open`'s `clock`), which the test moves.
+    #[getter]
+    pub fn clock(&self) -> Clock {
+        Clock {
+            steps: self.steps.clone(),
+        }
     }
 
     /// The requests the app made, in order.
@@ -841,7 +1157,7 @@ impl App {
     /// Makes the viewport `width` × `height` points (a rotation, a resized
     /// window) and resolves once the app laid itself out again.
     pub async fn set_viewport(this: Instance<Self>, width: f64, height: f64) -> Result<(), String> {
-        let size = nsh_core::Size::new(width as f32, height as f32);
+        let size = nsh_core::Size::new(Points(width as f32), Points(height as f32));
         step(&this, move |app| app.set_viewport(size)).await
     }
 
@@ -862,7 +1178,7 @@ impl App {
 
     /// `f` with the app as it is now (the batches that came applied).
     fn with<R>(&self, f: impl FnOnce(&mut Headless) -> Result<R, String>) -> Result<R, String> {
-        let mut app = self.app.lock().unwrap_or_else(|e| e.into_inner());
+        let mut app = self.steps.app.lock().unwrap_or_else(|e| e.into_inner());
         let app = app.as_mut().ok_or(CLOSED)?;
         app.catch_up();
         f(app)
@@ -876,26 +1192,41 @@ async fn step(
     this: &Instance<App>,
     f: impl FnOnce(&mut Headless) -> Result<(), String> + Send + 'static,
 ) -> Result<(), String> {
-    let app = this.with(|a| a.app.clone());
-    let server = this.with(|a| a.server.clone());
-    serve(server.as_deref(), on_app(&app, f)).await??;
-    loop {
-        let pending = on_app(&app, |a| Ok(a.pending_dialog().cloned())).await?;
-        let Some(dialog) = pending else {
-            return Ok(());
-        };
-        let answer = match this.with(|a| a.dialog.clone()) {
-            Some(handler) => match handler.call_async((&dialog).into()).await? {
-                Some(text) => headless::DialogAnswer::Press(text),
-                None => headless::DialogAnswer::Dismiss,
-            },
-            None => default_answer(&dialog)?,
-        };
-        serve(
-            server.as_deref(),
-            on_app(&app, move |a| a.answer_dialog(answer)),
-        )
-        .await??;
+    this.with(|a| a.steps.clone()).run(f).await
+}
+
+impl Steps {
+    /// Runs the step `f` on a blocking thread, then answers the dialogs it
+    /// showed ([`step`]).
+    async fn run(
+        &self,
+        f: impl FnOnce(&mut Headless) -> Result<(), String> + Send + 'static,
+    ) -> Result<(), String> {
+        let Steps {
+            app,
+            server,
+            dialog,
+        } = self;
+        serve(server.as_deref(), on_app(app, f)).await??;
+        loop {
+            let pending = on_app(app, |a| Ok(a.pending_dialog().cloned())).await?;
+            let Some(shown) = pending else {
+                return Ok(());
+            };
+            let handler = dialog.borrow().clone();
+            let answer = match handler {
+                Some(handler) => match handler.call_async((&shown).into()).await? {
+                    Some(text) => headless::DialogAnswer::Press(text),
+                    None => headless::DialogAnswer::Dismiss,
+                },
+                None => default_answer(&shown)?,
+            };
+            serve(
+                server.as_deref(),
+                on_app(app, move |a| a.answer_dialog(answer)),
+            )
+            .await??;
+        }
     }
 }
 

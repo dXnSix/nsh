@@ -734,7 +734,8 @@ fn info_size(data: &CFData) -> Option<(u32, u32)> {
 }
 
 /// An SVG's intrinsic size in whole points (at least one).
-fn svg_size((w, h): (f32, f32)) -> (u32, u32) {
+fn svg_size(size: nsh_core::geometry::Size<nsh_core::geometry::Points>) -> (u32, u32) {
+    let (w, h) = (size.width.0, size.height.0);
     ((w.round() as u32).max(1), (h.round() as u32).max(1))
 }
 
@@ -744,8 +745,9 @@ fn svg_size((w, h): (f32, f32)) -> (u32, u32) {
 /// blurs and filters it as [`decode`] does bitmaps. Thread-safe.
 fn decode_svg(bytes: &[u8], d: Decoding) -> Option<DecodedImage> {
     let raster = match d.max_pixels {
-        0 => nsh_core::svg::size(bytes).and_then(|(w, h)| {
-            nsh_core::svg::rasterize(bytes, (w.max(h) as f64 * d.scale).ceil() as u32)
+        0 => nsh_core::svg::size(bytes).and_then(|s| {
+            let longest = s.width.0.max(s.height.0);
+            nsh_core::svg::rasterize(bytes, (longest as f64 * d.scale).ceil() as u32)
         }),
         n => nsh_core::svg::rasterize_covering(bytes, n),
     }

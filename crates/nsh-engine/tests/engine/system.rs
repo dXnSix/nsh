@@ -44,7 +44,7 @@ mount(() => <Text>{status()}</Text>);
     let (tx, rx) = crossbeam_channel::unbounded();
     let config = EngineConfig {
         app: nsh_engine::App::Js(bundle),
-        viewport: Size::new(400.0, 300.0),
+        viewport: Size::new(nsh_core::geometry::px(400.0), nsh_core::geometry::px(300.0)),
         trace: false,
         network: None,
         websocket: None,
@@ -58,12 +58,13 @@ mount(() => <Text>{status()}</Text>);
             },
             ..Default::default()
         },
-        header_heights: (44.0, 96.0),
+        header_heights: (nsh_core::Points(44.0), nsh_core::Points(96.0)),
         limits: nsh_engine::Limits::default(),
         ui_sets: Vec::new(),
         runtime: None,
         data_dir: Some(dir.join("data")),
         storage: None,
+        clock: Default::default(),
     };
     let engine = Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -130,7 +131,7 @@ mount(() => <Text>{status()}</Text>);"#,
     let (tx, rx) = crossbeam_channel::unbounded();
     let config = EngineConfig {
         app: nsh_engine::App::Js(bundle),
-        viewport: Size::new(400.0, 300.0),
+        viewport: Size::new(nsh_core::geometry::px(400.0), nsh_core::geometry::px(300.0)),
         trace: false,
         network: None,
         websocket: None,
@@ -140,12 +141,13 @@ mount(() => <Text>{status()}</Text>);"#,
             os: Os::Linux,
             ..Default::default()
         },
-        header_heights: (44.0, 96.0),
+        header_heights: (nsh_core::Points(44.0), nsh_core::Points(96.0)),
         limits: nsh_engine::Limits::default(),
         ui_sets: Vec::new(),
         runtime: None,
         data_dir: Some(root.join("data")),
         storage: None,
+        clock: Default::default(),
     };
     let engine = Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);

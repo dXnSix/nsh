@@ -33,10 +33,11 @@ use rustc_hash::FxHashMap;
 pub use self::theme::{Theme, ThemeError};
 pub(crate) use self::utilities::{Decl, Len, Part};
 use self::{
-    theme::Tokens,
+    theme::ClassTokens,
     utilities::{Parts, touched},
 };
 use crate::{
+    geometry::{Points, Size},
     ops::ResizeMode,
     props::PointerEvents,
     style::{Color, EllipsizeMode, Style, TextShadow},
@@ -58,6 +59,10 @@ pub mod state {
     /// `accessibilityState.selected`, a `Button`'s `selected`. Set by the
     /// core, never reported by the platform.
     pub const SELECTED: u8 = 32;
+    /// The view is checked (`checked:`): its `accessibilityState.checked`
+    /// (a checkbox, a switch, a radio; not when mixed). Set by the core,
+    /// never reported by the platform.
+    pub const CHECKED: u8 = 64;
 }
 
 /// The view's place among its siblings (`first:`, `odd:`, ...).
@@ -127,7 +132,7 @@ pub struct Context<'a> {
     /// The appearance, platform and motion setting.
     pub env: ClassEnvironment,
     /// The window (root view) size.
-    pub window: (f32, f32),
+    pub window: Size<Points>,
     /// Right-to-left layout.
     pub rtl: bool,
     /// [`state`] bits of the node.
@@ -171,11 +176,11 @@ impl Condition {
             || self
                 .reduce_motion
                 .is_some_and(|r| r != cx.env.reduce_motion)
-            || self.min_width.is_some_and(|w| cx.window.0 < w)
-            || self.max_width.is_some_and(|w| cx.window.0 >= w)
+            || self.min_width.is_some_and(|w| cx.window.width.0 < w)
+            || self.max_width.is_some_and(|w| cx.window.width.0 >= w)
             || self
                 .landscape
-                .is_some_and(|l| l != (cx.window.0 > cx.window.1))
+                .is_some_and(|l| l != (cx.window.width > cx.window.height))
             || cx.states & self.states != self.states
             || cx.states & self.not_states != 0
         {
@@ -261,6 +266,7 @@ pub(crate) mod rank {
     pub(crate) const ACTIVE: u16 = 33;
     pub(crate) const DISABLED: u16 = 35;
     pub(crate) const SELECTED: u16 = 29;
+    pub(crate) const CHECKED: u16 = 28;
     pub(crate) const DARK: u16 = 80;
 }
 
@@ -486,7 +492,7 @@ impl ClassList {
 
     fn add(&mut self, rule: Rule) {
         self.deps |= rule.cond.deps();
-        self.tracked |= rule.cond.states & !(state::DISABLED | state::SELECTED);
+        self.tracked |= rule.cond.states & !(state::DISABLED | state::SELECTED | state::CHECKED);
         if rule.cond.states & state::FOCUS_WITHIN != 0 {
             self.tracked |= state::FOCUS_WITHIN;
         }
@@ -535,12 +541,12 @@ impl Tailwind {
         self.cache.clear();
     }
 
-    /// Takes the tokens of component theme `theme`. Returns which classes
+    /// Takes design tokens `theme`. Returns which classes
     /// to resolve again: none ([`None`]) when the tokens did not change,
     /// those that name tokens ([`deps::THEME`]) when only their values
     /// did, else all (`u16::MAX`: unknown classes may name new ones).
-    pub(crate) fn set_tokens(&mut self, theme: &crate::ui::Theme) -> Option<u16> {
-        let tokens = Tokens::new(theme);
+    pub(crate) fn set_tokens(&mut self, theme: &crate::ui::Tokens) -> Option<u16> {
+        let tokens = ClassTokens::new(theme);
         let current = self.theme.tokens();
         if *current == tokens {
             return None;
@@ -769,6 +775,10 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<u16> {
             cond.selection = true;
             16
         }
+        "checked" => {
+            states(cond, CHECKED);
+            rank::CHECKED
+        }
         "selected" => {
             states(cond, SELECTED);
             29
@@ -851,6 +861,7 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<u16> {
                     "focus-within" => FOCUS_WITHIN,
                     "disabled" => DISABLED,
                     "selected" => SELECTED,
+                    "checked" => CHECKED,
                     _ => return None,
                 };
                 let entry = cond.group.get_or_insert_with(|| (name.into(), 0));

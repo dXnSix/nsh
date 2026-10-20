@@ -54,9 +54,45 @@ checks test files with the rest (`.nsh/types` declares `nsh/test`).
 
 Each test file runs on an engine of its own, and its tests run one after the other, in order. `open` starts the app on
 another engine, a fresh one each time, so tests never share state; the apps a test opened are closed when it ends. A
-test fails when it throws, when the promise it returns rejects, and after 30 seconds. An app with Rust crates of its own
+test fails when it throws, when the promise it returns rejects, and after its timeout: 30 seconds, or the milliseconds
+`test`'s third argument gives (`test("syncs", body, 60_000)`). An app with Rust crates of its own
 (`nsh.json` `"rust"`) runs its tests in a headless runner NSH builds with them, the same way; in a Rust app
 (`nsh.json` `"root"`, [Building with Rust](./rust.md)), `open(".")` starts its root component.
+
+### Grouping tests and setting them up
+
+`describe`, the hooks and the variants of `test` work as Jest's:
+
+```tsx
+import { beforeEach, describe, expect, open, test } from "nsh/test";
+import type { App } from "nsh/test";
+
+describe("the cart", () => {
+  let app: App;
+  beforeEach(async () => {
+    app = await open("./App.tsx", { storage: { cart: "[]" } });
+    await app.press("Cart");
+  });
+
+  test("starts empty", () => {
+    expect(app.texts()).toContain("No items");
+  });
+
+  test.todo("applies a coupon");
+});
+```
+
+| Function | Description |
+|---|---|
+| `describe(name, body)` | Groups the tests and blocks `body` declares (at once, as the file loads): their names start with `name` (`the cart › starts empty`), and the hooks it declares run around them only. Blocks nest. |
+| `beforeEach(fn, timeout?)`, `afterEach(fn, timeout?)` | Run `fn` before / after each test of the block they are declared in (the file, a `describe`): `beforeEach` of the outer blocks first, `afterEach` of the inner ones first. A `beforeEach` that fails fails the test; `afterEach` runs either way. |
+| `beforeAll(fn, timeout?)`, `afterAll(fn, timeout?)` | Run `fn` once before the first and after the last test of their block, when one of its tests runs. A `beforeAll` that fails fails the block's tests; an `afterAll` that fails is reported as a failed `<block> › afterAll`. An app a `beforeAll` opens stays open for the block's tests, and is closed after its `afterAll`. |
+| `test.skip(name, body, timeout?)`, `describe.skip(name, body)` | Declares a test, or a block whose tests, do not run: they are reported as skipped. |
+| `test.only(name, body, timeout?)`, `describe.only(name, body)` | While a test file has one, only those tests and blocks run; the file's others are reported as skipped. |
+| `test.todo(name)` | A test still to write, reported as one. |
+
+A hook may be `async`; its `timeout` is 30 seconds unless given. Tests and hooks are declared as the file loads: a
+test declared inside a test or a hook throws.
 
 ### Opening the app
 
@@ -74,6 +110,7 @@ starts it on a 390×844 viewport and resolves once it rendered and is quiet.
 | `locale` | `"en-US"` | The device's locale, a BCP 47 tag (`locale()`, `Intl`'s default). |
 | `reducedMotion` | `false` | The user asked for less motion (`reduceMotion()`). |
 | `platform` | `"ios"` | The platform the app runs as: `"ios"` or `"android"` (`Platform.OS`, `ios={{…}}` / `android={{…}}` props). |
+| `clock` | the system's | A manual clock, whose time moves only as the test moves it: `{}`, or `{ time }` to start at a `Date` (or milliseconds since the Unix epoch). See [Controlling time](#controlling-time). |
 
 ### Stubbing the network
 
@@ -101,11 +138,38 @@ expect(app.requests().map((r) => r.method)).toEqual(["GET", "POST"]);
 | `headers` | none | Header names and values. |
 | `body` | empty | A string, or a value sent as JSON (with `content-type: application/json` unless `headers` name one). |
 | `error` | none | The request fails with this message instead, as when the device is offline. |
-| `delay` | 0 | How long the response takes, in milliseconds; a step does not wait for it, `waitFor` does. |
+| `delay` | 0 | How long the response takes, in milliseconds; a step does not wait for it, `waitFor` does. On a manual clock, it comes once the clock passes it. |
 
 A route's function gets the request (`method`, `url`, `headers`, `body` as text) and runs in the test file, so it can
 count requests or answer from what the test set up. A function that throws fails the request and the step that made
 it. `app.requests()` lists the requests the app made, in order, the same way.
+
+### Controlling time
+
+On the system's clock, an app's timers and native animations take as long as on a device, and so do the tests that
+wait for them. With `open`'s `clock`, the app runs on a manual clock instead, as with Jest's fake timers or
+Playwright's `page.clock`. Its time moves only as the test moves it, and at once:
+
+```tsx
+const app = await open("./App.tsx", { clock: { time: new Date("2026-01-01T09:00:00Z") } });
+await app.type("label:Note", "Milk");
+await app.clock.runFor(10_000);            // the autosave, ten seconds later
+expect(app.texts()).toContain("Saved at 09:00:10");
+```
+
+| Step | Description |
+|---|---|
+| `await app.clock.runFor(ms)` | Moves the clock by `ms` milliseconds, one display frame at a time. Timers, `requestAnimationFrame`, native animations and delayed responses run as they come due, in order, each at its time. Resolves once the app is quiet. |
+| `await app.clock.fastForward(ms)` | Moves the clock by `ms` milliseconds at once, as a device waking from sleep does: the timers due meanwhile run once each. |
+| `app.clock.setSystemTime(time)` | Sets the wall time (`Date.now()`, `new Date()`) to a `Date` or milliseconds, moving no timer. |
+
+`Date`, `performance.now()` and `Intl`'s default date follow the clock. Steps finish what is running without waiting
+for it: while the app asks for frames or a native animation runs, frames come one after another, each a frame's time
+(1/60 s) later on the clock. A 300 ms transition takes a few milliseconds, and a timer due during it runs. `app.wait(ms)`
+and a long press move the clock by their time. A timer that comes due later runs only when the test moves the clock
+there. `waitFor`'s timeout stays real time, as it also waits for what comes from outside (a route's function, the
+network). The gallery's tests run this way (`examples/gallery/tests`): its twelve tests that wait for animations
+take 6 s instead of 28 s.
 
 ### Steps
 
@@ -134,7 +198,7 @@ one: a selector matching several fails the step, and the error says how to narro
 | `await app.type(selector, text)` | Types into the input (or the first input inside the view; `text:` also matches an input's text or placeholder) at the end of what it holds, key by key: it takes the focus, then each character is an `onKeyPress` and an `onChange`, within `maxLength`. A `\n` in a single-line input is the return key. |
 | `await app.submit(selector)` | The return key in the input, as its `submitBehavior` says: `onSubmit` (and the focus leaves a single-line input), or a line break in a multiline one. |
 | `await app.scroll(selector, distance)` | Drags the scroll view or list (the view, the one around it, or the first inside it) by `distance` points along its axis, 10 points per frame, within its content. Negative scrolls back. |
-| `await app.wait(ms)` | Lets the app run for `ms` milliseconds: timers, animations, requests. |
+| `await app.wait(ms)` | Lets the app run for `ms` milliseconds: timers, animations, requests. On a manual clock, moves it by `ms` (`app.clock.runFor`). |
 | `await app.waitFor(selector, options?)` | Resolves once a view matches, or with `{ state: "gone" }` once none does; rejects after `timeout` ms (5000). |
 | `await app.waitUntil(condition, options?)` | Resolves once `condition()` returns true, looking again after each change of the app: for what no selector says (`() => app.storage().note === "Milk"`). |
 | `app.shows(selector)` | Whether a view matches now. |
@@ -152,7 +216,8 @@ one: a selector matching several fails the step, and the error says how to narro
 | `await app.setColorScheme(scheme)` | Switches the system's appearance to `"light"` or `"dark"`, as the user does. |
 
 A step resolves once the app rendered nothing for 100 ms and no native animation runs (2 s at most, for apps that
-render all the time), so what it changed is on screen when the next line runs; use `waitFor` for what comes later (a
+render all the time; on a manual clock, also 2 s of the app's time), so what it changed is on screen when the next
+line runs; use `waitFor` for what comes later (a
 response, a timer). A step rejects, failing the test, when nothing matches its selector (the error lists the texts on
 screen), when the app threw an exception meanwhile, and when the app asked for what only a real platform answers.
 
@@ -202,7 +267,7 @@ The 1.2 s let the engine's idle garbage collection run before the first step, so
 uses shows it: its handlers stop working.
 
 The examples have tests to start from: `examples/counter` and `examples/gallery/tests` (storage, inputs, a long list,
-stubbed requests, dark mode) for TSX apps, `examples/rust-exports` for an app with a Rust crate, `examples/gallery-rs` for a Rust
+stubbed requests, dark mode, a manual clock) for TSX apps, `examples/rust-exports` for an app with a Rust crate, `examples/gallery-rs` for a Rust
 app.
 
 ## Tracing with --trace
@@ -326,10 +391,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: nsh test
+      - run: nsh test --junit test-results.xml
 ```
 
 (Install the `nsh` CLI on the runner the way you install it locally; see [Installation](./installation.md).)
+
+`--junit <FILE>` also writes the results as a JUnit XML report, which CI services (GitHub Actions test reporters,
+GitLab, Jenkins, Azure Pipelines) show per test: a `testsuite` per test file, a `testcase` per test, with what failed,
+where, and the texts on screen.
 
 To guard performance, record the item counts of a few interactions (the `── … : N items` lines and the `ops` /
 `mount items` numbers of `--trace`) and fail when they grow. Counts are deterministic; timings on shared CI machines

@@ -67,7 +67,7 @@ use std::{
 use gpui::{Corners, RenderImage};
 use nsh_core::{
     Color, Command, EventKind, EventPayload, ImageOptions, ImageSource, NodeId, PayloadValue,
-    ResizeMode, access::Access,
+    ResizeMode, access::Access, geometry::DevicePixels,
 };
 use rustc_hash::FxHashMap;
 
@@ -534,7 +534,7 @@ fn decode_svg(bytes: &[u8]) -> Result<Decoded, String> {
     swap_red_blue(&mut data);
     let frame = image::RgbaImage::from_raw(raster.width, raster.height, data)
         .ok_or("SVG raster of the wrong size")?;
-    let (w, h) = raster.size;
+    let (w, h) = (raster.size.width.0, raster.size.height.0);
     let size = ((w.round() as u32).max(1), (h.round() as u32).max(1));
     Ok(Decoded {
         vector: true,
@@ -1649,10 +1649,10 @@ fn loaded(
         Ok(picture) if events.contains(EventKind::Load) => surface.event(
             id,
             EventKind::Load,
-            EventPayload::Image {
-                width: picture.size.0 as f32,
-                height: picture.size.1 as f32,
-            },
+            EventPayload::Image(nsh_core::geometry::size(
+                DevicePixels(picture.size.0 as i32),
+                DevicePixels(picture.size.1 as i32),
+            )),
         ),
         Err(message) if events.contains(EventKind::Error) => surface.event(
             id,
@@ -1711,9 +1711,9 @@ fn density(uri: &str) -> f32 {
 fn natural(size: (u32, u32), vector: bool, source: Option<&ImageSource>) -> (f32, f32) {
     if let Some(size) = source
         .and_then(|s| s.size)
-        .filter(|(w, h)| *w > 0.0 && *h > 0.0)
+        .filter(|s| s.width.0 > 0.0 && s.height.0 > 0.0)
     {
-        return size;
+        return (size.width.0, size.height.0);
     }
     let d = match source {
         Some(s) if !vector => density(&s.uri),
@@ -1780,7 +1780,7 @@ fn draw_one(
     source: Option<&ImageSource>,
     alpha: f32,
 ) {
-    let (w, h) = (state.frame.width, state.frame.height);
+    let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
     let (x, y, fw, fh) = fit(
         image.mode,
         natural(picture.size, picture.vector, source),
@@ -1801,7 +1801,8 @@ fn draw_one(
         .as_ref()
         .map(|e| &e.filters[..])
         .unwrap_or(&[]);
-    let blur = ((image.options.blur_radius.max(0.0) + nsh_core::blur_radius(filters)) * px_per_pt)
+    let blur = ((image.options.blur_radius.0.max(0.0) + nsh_core::blur_radius(filters).0)
+        * px_per_pt)
         .round()
         .clamp(0.0, u16::MAX as f32);
     let (mip, blur_px) = level(picture.pixels, (fw * px_per_pt, fh * px_per_pt), blur);

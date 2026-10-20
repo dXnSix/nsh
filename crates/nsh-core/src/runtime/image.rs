@@ -75,9 +75,14 @@ impl Image {
     pub(crate) async fn get_size(source: ImageUri) -> Result<ImageSize, String> {
         let (uri, scale) = source.pick();
         let size = crate::ui::prelude::image_size(uri).await?;
+        // Over its scale, to the nearest pixel (a `@1.5x` file of an odd size
+        // has no exact 1x size).
+        let over = |pixels: crate::geometry::DevicePixels| {
+            crate::geometry::DevicePixels((pixels.0 as f32 / scale).round() as i32)
+        };
         Ok(ImageSize {
-            width: size.width / f64::from(scale),
-            height: size.height / f64::from(scale),
+            width: over(size.width),
+            height: over(size.height),
         })
     }
 

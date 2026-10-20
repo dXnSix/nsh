@@ -509,19 +509,20 @@ pub(crate) fn start_with(
                 .with_capabilities_json(capabilities)
                 .unwrap(),
         ),
-        viewport: Size::new(390.0, 844.0),
+        viewport: Size::new(px(390.0), px(844.0)),
         trace: false,
         network: None,
         websocket: None,
         filesystem: None,
         assets: None,
         environment: Environment::default(),
-        header_heights: (44.0, 96.0),
+        header_heights: (nsh_core::Points(44.0), nsh_core::Points(96.0)),
         limits: nsh_engine::Limits::default(),
         ui_sets,
         runtime: None,
         data_dir: None,
         storage: None,
+        clock: Default::default(),
     };
     (
         Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap(),
@@ -877,6 +878,48 @@ fn classes_a_signature_names_are_exported_with_it() {
     assert_eq!(shown(&rx, "done"), "done true true twin");
 }
 
+/// Checks, exported one by one.
+#[module]
+pub(crate) struct Checks;
+
+#[module(flat, default)]
+impl Checks {
+    /// `name`, checked.
+    pub(crate) fn check(name: String) -> String {
+        format!("check {name}")
+    }
+}
+
+/// The variants of `check`.
+#[module]
+pub(crate) struct CheckVariants;
+
+#[module(name = "check")]
+impl CheckVariants {
+    /// The variants there are.
+    pub(crate) const COUNT: u32 = 1;
+
+    /// `name`, skipped.
+    pub(crate) fn skip(name: String) -> String {
+        format!("skip {name}")
+    }
+}
+
+const MEMBERS: &str = r#"import { mount, Text } from "nsh";
+import Checks, { check } from "test/checks";
+
+const lines = [check("a"), check.skip("b"), String(check.COUNT), Checks.check.skip("c"), typeof Checks.check.skip];
+mount(() => <Text>{`done ${lines.join("|")}`}</Text>);
+"#;
+
+#[test]
+fn a_module_named_like_a_function_is_on_the_function() {
+    let mut set = Registry::ui_set("test/checks");
+    set.module::<Checks>().module::<CheckVariants>();
+    let (_engine, rx) = start(MEMBERS, vec![set]);
+    assert_eq!(shown(&rx, "done"), "done check a|skip b|1|skip c|function");
+}
+
 const FRAMED: &str = r#"import { mount } from "nsh";
 import { createAnimatedValue } from "nsh/animated";
 import { Framed } from "test/classes";
@@ -899,7 +942,7 @@ fn a_style_prop_takes_what_a_host_elements_style_does() {
         ),
         "{items}"
     );
-    assert!(items.contains("offset_x: 1.0, offset_y: 2.0"), "{items}");
+    assert!(items.contains("offset_x: 1pt, offset_y: 2pt"), "{items}");
     assert!(items.contains("bindings: [(Opacity, "), "{items}");
 }
 

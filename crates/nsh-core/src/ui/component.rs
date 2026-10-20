@@ -35,7 +35,7 @@ use super::{
 ///     view()
 ///         .px_4()
 ///         .py_3()
-///         .bg(move || theme().primary)
+///         .bg(move || theme().primary()) // nsh-base's theme
 ///         .on_press(move |_: &()| cx.emit(ButtonEvent::Press))
 ///         .child(text(props.title))
 /// }
@@ -473,7 +473,7 @@ pub(crate) trait AnyInstance {
 #[derive(Clone)]
 pub struct Root {
     make: Arc<dyn Fn() -> super::AnyElement + Send + Sync>,
-    theme: Option<Arc<super::Theme>>,
+    tokens: Option<Arc<super::Tokens>>,
     fonts: Vec<Arc<[u8]>>,
     appearance: Option<crate::platform::Appearance>,
     app_id: Option<String>,
@@ -485,7 +485,7 @@ impl Root {
     pub fn new<C: Component>(props: impl Fn() -> C::Props + Send + Sync + 'static) -> Self {
         Self {
             make: Arc::new(move || super::IntoElement::into_element(C::element(props()))),
-            theme: None,
+            tokens: None,
             fonts: Vec::new(),
             appearance: None,
             app_id: None,
@@ -505,9 +505,10 @@ impl Root {
         self.app_id.as_deref()
     }
 
-    /// Renders with `theme` (by default the default one).
-    pub fn theme(mut self, theme: super::Theme) -> Self {
-        self.theme = Some(Arc::new(theme));
+    /// Renders with design tokens `tokens` (`nsh-base`'s theme's; by
+    /// default the UI sets' defaults).
+    pub fn tokens(mut self, tokens: super::Tokens) -> Self {
+        self.tokens = Some(Arc::new(tokens));
         self
     }
 
@@ -544,9 +545,9 @@ impl Root {
         self.appearance
     }
 
-    /// The theme it renders with.
-    pub fn theme_ref(&self) -> Option<&super::Theme> {
-        self.theme.as_deref()
+    /// The design tokens it renders with.
+    pub fn tokens_ref(&self) -> Option<&super::Tokens> {
+        self.tokens.as_deref()
     }
 
     /// The font files to register.
@@ -622,6 +623,8 @@ pub struct Registry {
     ui_set: Option<&'static str>,
     /// The files its crates ship ([`Registry::assets`]).
     assets: Arc<Vec<&'static [super::AssetFile]>>,
+    /// Makes the design tokens of a theme ([`Registry::tokens_from`]).
+    tokens: Option<super::TokenSource>,
 }
 
 impl fmt::Debug for Registry {
@@ -809,6 +812,7 @@ impl Registry {
     pub fn merged(sets: &[Registry]) -> Self {
         let mut out = Self::default();
         for set in sets {
+            out.tokens = out.tokens.or(set.tokens);
             let types = Arc::make_mut(&mut out.types);
             for (name, ty) in set.types.iter() {
                 if let Some(old) = types.insert(name, ty.clone()) {
@@ -857,6 +861,20 @@ impl Registry {
         self
     }
 
+    /// Makes the design tokens of the app's theme file, and the defaults
+    /// (`nsh-base`'s theme): the core reads `nsh.json`'s `"theme"` with it.
+    pub fn tokens_from(&mut self, source: super::TokenSource) -> &mut Self {
+        self.tokens = Some(source);
+        self
+    }
+
+    /// The tokens of theme file `json` (`None`: the defaults), by the
+    /// source a set brings ([`Registry::tokens_from`]; `None`: no set
+    /// does).
+    pub fn tokens(&self, json: Option<&str>) -> Option<Result<super::Tokens, String>> {
+        self.tokens.map(|source| source(json))
+    }
+
     /// The files [`Registry::assets`] ships.
     pub fn asset_files(&self) -> impl Iterator<Item = &'static super::AssetFile> + '_ {
         self.assets.iter().flat_map(|files| files.iter())
@@ -895,6 +913,28 @@ impl Registry {
         specs
     }
 
+    /// The module whose functions JS finds on the function `function` of
+    /// a flat module of the set: a module named like it
+    /// (`#[module(name = "test")]`: `test.skip`), as a module named like a
+    /// component is on the component.
+    pub fn function_members(&self, function: &str) -> Option<Arc<ModuleSpec>> {
+        let exported = self.modules.values().any(|m| {
+            m.spec.flat
+                && m.spec
+                    .functions
+                    .iter()
+                    .any(|f| !f.getter && f.name == function)
+        });
+        exported
+            .then(|| {
+                self.modules
+                    .values()
+                    .find(|m| !m.spec.flat && m.spec.name == function)
+                    .map(|m| m.spec.clone())
+            })
+            .flatten()
+    }
+
     /// The registered components, by export.
     pub fn specs(&self) -> Vec<Arc<ComponentSpec>> {
         let mut specs: Vec<_> = self.types.values().map(|t| t.spec.clone()).collect();
@@ -908,8 +948,8 @@ impl Registry {
     /// doc comment. A component is documented by its `#[component]`
     /// function, a module or class by its struct, the rest by their own
     /// (a setter needs none beside its getter's; a module merged into a
-    /// component of its name, or exported flat, by its component or its
-    /// functions).
+    /// component or a function of its name, or exported flat, by that
+    /// component or function, or its functions).
     pub fn undocumented(&self) -> Vec<String> {
         let mut out = Vec::new();
         let specs = self.specs();
@@ -928,7 +968,8 @@ impl Registry {
             }
         }
         for m in self.module_specs() {
-            let merged = specs.iter().any(|c| c.export == m.name);
+            let merged = specs.iter().any(|c| c.export == m.name)
+                || (!m.flat && self.function_members(m.name).is_some());
             if m.doc.is_empty() && !merged && !m.flat {
                 out.push(m.name.to_owned());
             }
@@ -1167,7 +1208,9 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
         );
     }
     for m in &modules {
-        if specs.iter().any(|s| s.export == m.name) {
+        if specs.iter().any(|s| s.export == m.name)
+            || (!m.flat && registry.function_members(m.name).is_some())
+        {
             continue;
         }
         if m.flat {
@@ -1183,6 +1226,30 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
                         "export declare function {}({params}): {returns};",
                         f.name
                     );
+                }
+                // A module of its name: its functions on the function.
+                if let Some(members) = registry.function_members(f.name) {
+                    let _ = writeln!(out, "export declare namespace {} {{", f.name);
+                    for member in &members.functions {
+                        for (params, returns) in signatures(member) {
+                            doc(&mut out, "  ", member.doc);
+                            let _ = if member.getter {
+                                writeln!(out, "  const {}: {returns};", member.name)
+                            } else {
+                                writeln!(out, "  function {}({params}): {returns};", member.name)
+                            };
+                        }
+                    }
+                    for constant in &members.constants {
+                        doc(&mut out, "  ", constant.doc);
+                        let _ = writeln!(
+                            out,
+                            "  const {}: {};",
+                            constant.name,
+                            constant.value.ts_type()
+                        );
+                    }
+                    out.push_str("}\n");
                 }
                 out.push('\n');
             }
@@ -1520,6 +1587,94 @@ mod tests {
         r.class::<Lonely>();
         assert_eq!(r.class_specs().len(), 1);
         let _ = Registry::merged(&[r]);
+    }
+
+    /// Checks.
+    #[crate::ui::module]
+    struct Checks;
+
+    #[crate::ui::module(flat)]
+    impl Checks {
+        /// Declares a check.
+        pub(crate) fn check(name: String) {
+            let _ = name;
+        }
+    }
+
+    /// Unused: a module's doc when its functions are on `check`.
+    #[crate::ui::module]
+    struct CheckVariants;
+
+    #[crate::ui::module(name = "check")]
+    impl CheckVariants {
+        /// How many variants there are.
+        pub(crate) const COUNT: u32 = 2;
+
+        /// Declares a check that does not run.
+        pub(crate) fn skip(name: String) {
+            let _ = name;
+        }
+
+        pub(crate) fn todo(name: String) {
+            let _ = name;
+        }
+    }
+
+    /// Named like no function of the set: an object of its own.
+    #[crate::ui::module]
+    struct Loose;
+
+    #[crate::ui::module(name = "loose")]
+    impl Loose {
+        /// Nothing.
+        pub(crate) fn nothing() {}
+    }
+
+    #[test]
+    fn a_module_named_like_a_function_puts_its_functions_on_it() {
+        let mut r = Registry::ui_set("test/checks");
+        r.module::<Checks>()
+            .module::<CheckVariants>()
+            .module::<Loose>();
+        assert_eq!(r.function_members("check").unwrap().name, "check");
+        assert!(r.function_members("loose").is_none());
+        let ts = declarations(&r, &[]);
+        assert!(
+            ts.contains(
+                "/** Declares a check. */\n\
+                 export declare function check(name: string): void;\n\
+                 export declare namespace check {\n  \
+                 /** Declares a check that does not run. */\n  \
+                 function skip(name: string): void;\n  \
+                 function todo(name: string): void;\n  \
+                 /** How many variants there are. */\n  \
+                 const COUNT: number;\n}\n"
+            ),
+            "{ts}"
+        );
+        assert!(
+            !ts.contains("CheckVariants") && !ts.contains("checkModule"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("export declare const loose: looseModule;"),
+            "{ts}"
+        );
+        // The members are documented as the function's.
+        assert_eq!(r.undocumented(), ["check.todo"]);
+        let described = super::super::description::SetDescription::of(&r).unwrap();
+        let exports: Vec<_> = described
+            .exports
+            .iter()
+            .map(|e| (e.name.as_str(), e.kind))
+            .collect();
+        assert_eq!(
+            exports,
+            [
+                ("check", super::super::description::ExportKind::Function),
+                ("loose", super::super::description::ExportKind::Module)
+            ]
+        );
     }
 
     mod clash {

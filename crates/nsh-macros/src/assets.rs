@@ -178,7 +178,14 @@ fn asset_in(dir: &Path, package: &str, lit: LitStr) -> syn::Result<TokenStream> 
             quote! {{
                 const _: &[u8] = ::core::include_bytes!(#source);
                 #(const _: &[u8] = ::core::include_bytes!(#variant_sources);)*
-                #ui::ImageAsset { uri: #uri, width: #width, height: #height, scales: &[#(#scales),*] }
+                #ui::ImageAsset {
+                    uri: #uri,
+                    size: ::nsh_core::geometry::size(
+                        ::nsh_core::geometry::Points(#width),
+                        ::nsh_core::geometry::Points(#height),
+                    ),
+                    scales: &[#(#scales),*],
+                }
             }}
         }
         Kind::Font => {

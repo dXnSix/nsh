@@ -12,7 +12,10 @@ use std::{
     ptr,
 };
 
-use nsh_core::{Command, EventKind, NodeId, Op, Tag};
+use nsh_core::{
+    Command, EventKind, NodeId, Op, Tag,
+    geometry::{Percentage, Points},
+};
 use rquickjs::qjs;
 use rustc_hash::FxHashMap;
 
@@ -77,10 +80,10 @@ const OWN: &[&str] = &[
     "onEndReachedThreshold",
     "initialScrollIndex",
     "onViewableItemsChanged",
-    "ListHeaderComponent",
-    "ListFooterComponent",
-    "ListEmptyComponent",
-    "ItemSeparatorComponent",
+    "header",
+    "footer",
+    "empty",
+    "separator",
 ];
 
 /// What the app passes a Rust component's rows (`listItemsProps` of the
@@ -310,8 +313,8 @@ pub(crate) fn render(ctx: *mut JsContext, props: JsValue) -> Result<JsValue, JsV
                     command: Command::ScrollToIndex {
                         index: index.max(0.0) as u32,
                         animated: false,
-                        view_position: 0.0,
-                        view_offset: 0.0,
+                        view_position: Percentage(0.0),
+                        view_offset: Points::ZERO,
                     },
                 },
             )
@@ -1199,3 +1202,46 @@ export interface ListProps<T> extends Omit<ViewProps, "children">, ScrollingHost
  * layout. */
 export type ListItemsProps<T> = Pick<ListProps<T>, "each" | "children" | "keyExtractor" | "stickyHeaderIndices" | "initialScrollIndex" | "onViewableItemsChanged" | "viewabilityConfig" | "refreshing" | "onRefresh" | "onEndReached" | "onEndReachedThreshold" | "header" | "footer" | "empty">;
 "#;
+
+#[cfg(test)]
+mod tests {
+    use crate::{Host, HostOptions};
+
+    /// A list's slots are its own: it makes each once and never passes
+    /// them to its scroll view (as compiled JSX passes them: getters that
+    /// make the slot's elements each time they are read).
+    #[test]
+    fn a_lists_slots_stay_with_the_list() {
+        let host = Host::with_options(HostOptions::default()).unwrap();
+        host.eval_source(
+            "import { mount } from \"nsh\";\n\
+             import { text } from \"nsh:rt\";\n\
+             import { List } from \"nsh/list\";\n\
+             mount(() => List({\n\
+               each: [1, 2],\n\
+               children: (n) => text(`Row ${n()}`),\n\
+               get header() { return text(\"Head\"); },\n\
+               get footer() { return text(\"Foot\"); },\n\
+               get empty() { return text(\"None\"); },\n\
+               get separator() { return () => text(\"-\"); },\n\
+             }));",
+        )
+        .unwrap();
+        for name in ["header", "footer", "empty", "separator"] {
+            assert!(
+                !host.warned(&format!("unsupported prop `{name}`")),
+                "`{name}` went to the scroll view"
+            );
+        }
+        let mut ops = Vec::new();
+        host.take_ops(&mut ops);
+        let made = |wanted: &str| {
+            ops.iter()
+                .filter(
+                    |op| matches!(op, nsh_core::Op::CreateText { text, .. } if &**text == wanted),
+                )
+                .count()
+        };
+        assert_eq!((made("Head"), made("Foot")), (1, 1));
+    }
+}

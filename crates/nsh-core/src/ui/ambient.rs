@@ -1,7 +1,7 @@
 //! What components that run once read of the surface and ask of the
 //! platform, as free functions (TS: `nsh`'s accessors and modules).
 //!
-//! The environment, the theme, globals and screens' insets are signals the
+//! The environment, the design tokens, globals and screens' insets are signals the
 //! core writes: reading one in a binding subscribes it, so a change reaches
 //! only what read it. Services (dialogs, the clipboard, toasts) are actions
 //! for the core; tasks and timers belong to the current owner and end with
@@ -18,16 +18,16 @@ use std::{
 use rustc_hash::FxHashMap;
 
 use super::{
-    AdaptiveColor, Environment, Memo, Owner, Signal, SignalEquals, Theme, cleanup, computed,
+    AdaptiveColor, Environment, Memo, Owner, Signal, SignalEquals, Tokens, cleanup, computed,
     reactive::with_data,
     signal_with,
     task::{self, Action, Answer, ClipboardImage, DialogAnswer, Executor, ImageSize},
 };
 use crate::{
-    Command, Dialog, EdgeInsets, LayoutAnimation, NodeId, Size,
+    Command, Dialog, EdgeInsets, LayoutAnimation, NodeId, Points, Size,
     canvas::CanvasFont,
+    color::Hsla,
     platform::{Appearance, Idiom, Locale, Os},
-    style::Color,
     time::Instant,
 };
 
@@ -39,7 +39,7 @@ pub(crate) type MeasureFn = Rc<dyn Fn(&CanvasFont, &str) -> f32>;
 pub(crate) struct Ambient {
     executor: Option<Rc<Executor>>,
     env: Option<EnvSignals>,
-    theme: Option<Signal<Arc<Theme>>>,
+    tokens: Option<Signal<Arc<Tokens>>>,
     globals: FxHashMap<TypeId, Box<dyn Any>>,
     /// The insets of the screens or modals components are on, by host.
     insets: FxHashMap<NodeId, Signal<EdgeInsets>>,
@@ -59,10 +59,10 @@ impl Ambient {
 /// the readers of the parts that changed).
 struct EnvSignals {
     env: Signal<Environment>,
-    window: Memo<Size>,
+    window: Memo<Size<Points>>,
     safe_area: Memo<EdgeInsets>,
-    title_bar: Memo<crate::platform::Insets>,
-    keyboard_height: Memo<f32>,
+    title_bar: Memo<crate::geometry::Edges<crate::geometry::Points>>,
+    keyboard_height: Memo<Points>,
     keyboard_duration: Memo<f32>,
     dark: Memo<bool>,
     font_scale: Memo<f32>,
@@ -135,15 +135,15 @@ impl super::Runtime {
         }
     }
 
-    /// The theme now: what read it runs again.
-    pub(crate) fn set_theme(&self, theme: Arc<Theme>) {
+    /// The design tokens now: what read them runs again.
+    pub(crate) fn set_tokens(&self, tokens: Arc<Tokens>) {
         let _entered = self.enter();
-        let signal = with_data(|d| d.ambient.theme);
+        let signal = with_data(|d| d.ambient.tokens);
         match signal {
-            Some(signal) => signal.set(theme),
+            Some(signal) => signal.set(tokens),
             None => {
-                let signal = Owner::detached().run(|| signal_with(theme, SignalEquals::Never));
-                with_data(|d| d.ambient.theme = Some(signal));
+                let signal = Owner::detached().run(|| signal_with(tokens, SignalEquals::Never));
+                with_data(|d| d.ambient.tokens = Some(signal));
             }
         }
     }
@@ -186,7 +186,7 @@ fn act(action: Action) {
 // --- The environment ---------------------------------------------------------
 
 /// The surface's size in points (TS: `windowSize()`).
-pub fn window() -> Size {
+pub fn window() -> Size<Points> {
     env(|e| e.window)
 }
 
@@ -197,7 +197,7 @@ pub fn safe_area() -> EdgeInsets {
 
 /// The software keyboard's height over the surface, 0 when hidden (TS:
 /// `keyboardFrame().height`).
-pub fn keyboard_height() -> f32 {
+pub fn keyboard_height() -> Points {
     env(|e| e.keyboard_height)
 }
 
@@ -212,9 +212,9 @@ pub fn dark() -> bool {
     env(|e| e.dark)
 }
 
-/// `color` for the appearance now (props that take a [`Color`], such as an
+/// `color` for the appearance now (props that take one color, such as an
 /// input's placeholder color; styles take theme colors as they are).
-pub fn color(color: impl Into<AdaptiveColor>) -> Color {
+pub fn color(color: impl Into<AdaptiveColor>) -> Hsla {
     let color = color.into();
     if dark() { color.dark } else { color.light }
 }
@@ -246,9 +246,9 @@ pub fn pixel_ratio() -> f32 {
 
 /// `points` rounded to whole device pixels (TS:
 /// `PixelRatio.roundToNearestPixel`).
-pub fn round_to_nearest_pixel(points: f32) -> f32 {
+pub fn round_to_nearest_pixel(points: Points) -> Points {
     let ratio = pixel_ratio().max(f32::MIN_POSITIVE);
-    (points * ratio).round() / ratio
+    Points((points.0 * ratio).round() / ratio)
 }
 
 /// The user's locale (TS: what `Intl` formats for by default).
@@ -286,21 +286,21 @@ pub fn is_desktop() -> bool {
         .with_untracked(|e| e.idiom.desktop_on(e.os))
 }
 
-/// The app's theme (reading it subscribes: a new theme reaches what read
-/// it).
-pub fn theme() -> Arc<Theme> {
-    with_data(|d| d.ambient.theme)
-        .expect("the core sets the theme")
+/// The design tokens the app is drawn with (reading them subscribes: new
+/// tokens reach what read them).
+pub fn tokens() -> Arc<Tokens> {
+    with_data(|d| d.ambient.tokens)
+        .expect("the core sets the tokens")
         .get()
 }
 
 /// The width of `text` on one line in `font` (the CSS `font` shorthand; an
 /// invalid one measures in `10px sans-serif`), by the platform's text engine
 /// (TS: a canvas's `measureText(text).width`).
-pub fn measure_text(font: &str, text: &str) -> f32 {
+pub fn measure_text(font: &str, text: &str) -> Points {
     let font = CanvasFont::parse(font).unwrap_or_default();
     let measure = with_data(|d| d.ambient.measure.clone()).expect("the core sets the text engine");
-    measure(&font, text)
+    Points(measure(&font, text))
 }
 
 /// The surface's `G`: one signal per type, made with `Default` the first
@@ -550,10 +550,10 @@ pub fn set_timeout(delay: Duration, f: impl FnOnce() + 'static) -> Spawned<()> {
 pub fn set_interval(period: Duration, f: impl Fn() + 'static) -> Spawned<()> {
     let owner = Owner::current();
     spawn(async move {
-        let mut next = Instant::now() + period;
+        let mut next = crate::time::now() + period;
         loop {
             timer_until(next).await;
-            next = (next + period).max(Instant::now());
+            next = (next + period).max(crate::time::now());
             owner.run(&f);
         }
     })
@@ -571,7 +571,7 @@ pub fn request_animation_frame(f: impl FnOnce(Instant) + 'static) -> Spawned<()>
 
 /// Waits `delay` (in a task; TS: what `setTimeout` waits for).
 pub fn timer(delay: Duration) -> Delay {
-    timer_until(Instant::now() + delay)
+    timer_until(crate::time::now() + delay)
 }
 
 /// Waits until `at` (in a task).
@@ -608,7 +608,7 @@ impl Future for Delay {
         if let Some(sleep) = &mut self.elsewhere {
             return sleep.as_mut().poll(cx);
         }
-        if Instant::now() >= self.at {
+        if crate::time::now() >= self.at {
             return std::task::Poll::Ready(());
         }
         if self.registered {
@@ -787,7 +787,7 @@ pub fn on_back_press(f: impl Fn() -> bool + 'static) {
     cleanup(move || drop(subscription));
 }
 
-pub(crate) fn title_bar() -> crate::platform::Insets {
+pub(crate) fn title_bar() -> crate::geometry::Edges<crate::geometry::Points> {
     env(|e| e.title_bar)
 }
 

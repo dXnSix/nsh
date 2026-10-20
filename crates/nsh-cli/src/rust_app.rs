@@ -39,10 +39,9 @@
 //!
 //! The workspace takes nsh's crates where the app's crates do
 //! ([`Nsh::of`]): from crates.io at this `nsh`'s version ([`VERSION`]: the
-//! generated code calls their API), from the checkout they depend on by
-//! path, or from the git repository they name (a fork, a tag, a branch),
-//! with the app's crates.io dependencies on nsh patched to it. It
-//! builds in the app's own `target`, as a Cargo project in the app's
+//! generated code calls their API), or from the checkout they depend on by
+//! path or Git, with the app's crates.io and Git dependencies on nsh patched
+//! to that checkout. It builds in the app's own `target`, as a Cargo project in the app's
 //! directory would, or in `CARGO_TARGET_DIR`.
 
 use std::{
@@ -155,59 +154,8 @@ enum Nsh {
     /// --template rust --nsh-source <dir>`): nsh's own examples, or an app
     /// trying changes to nsh.
     Source(PathBuf),
-    /// The git repository the app's crates depend on (`nsh-core = { git =
-    /// "…", tag = "…" }`): a fork of nsh, or a change not yet on crates.io.
-    Git(GitSource),
-}
-
-/// A git repository of nsh and the commit the app's crates name in it, as
-/// `cargo metadata` reports a git dependency's `source`
-/// (`git+https://github.com/…/nsh?tag=v1`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct GitSource {
-    /// The repository's URL, as the app's crates write it.
-    url: String,
-    /// The `tag`, `branch` or `rev` key and its value; `None`: the default
-    /// branch.
-    reference: Option<(String, String)>,
-}
-
-impl GitSource {
-    /// The source of a `cargo metadata` dependency or package
-    /// (`git+<url>[?<key>=<value>][#<commit>]`), if it is a git one.
-    fn parse(source: &str) -> Option<GitSource> {
-        let rest = source.strip_prefix("git+")?;
-        // A resolved package's source ends in `#<commit>`; a dependency's
-        // never does, and both name the same request.
-        let rest = rest.split('#').next().unwrap_or(rest);
-        let (url, query) = rest.split_once('?').unwrap_or((rest, ""));
-        let reference = query.split('&').find_map(|pair| {
-            let (key, value) = pair.split_once('=')?;
-            matches!(key, "tag" | "branch" | "rev").then(|| (key.to_owned(), value.to_owned()))
-        });
-        Some(GitSource {
-            url: url.to_owned(),
-            reference,
-        })
-    }
-
-    /// Its keys in a manifest's dependency (`git = "…", tag = "…"`).
-    fn keys(&self) -> String {
-        let mut keys = format!("git = {:?}", self.url);
-        if let Some((key, value)) = &self.reference {
-            keys.push_str(&format!(", {key} = {value:?}"));
-        }
-        keys
-    }
-}
-
-impl std::fmt::Display for GitSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.reference {
-            Some((key, value)) => write!(f, "{} ({key} {value})", self.url),
-            None => write!(f, "{} (its default branch)", self.url),
-        }
-    }
+    /// The Git checkout Cargo resolved for the app, and its repository URL.
+    Git { checkout: PathBuf, url: String },
 }
 
 /// The version of nsh's crates an app builds with: this command line's, as
@@ -217,12 +165,10 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 impl Nsh {
     /// Where the app's `crates` take nsh's crates from, as their
     /// dependencies say (`cargo metadata --no-deps`): from crates.io, which
-    /// must accept [`VERSION`], by path from one checkout of that version,
-    /// or from one git repository at one tag, branch or commit (whose
-    /// version is checked once Cargo has fetched it,
-    /// [`RustApp::git_checkout`]). Mixed, or another version, stops the
-    /// command with what to change, rather than a build failing later on two
-    /// `nsh-core`s.
+    /// must accept [`VERSION`], or by path from one checkout of that
+    /// version. Git dependencies use Cargo's resolved checkout, including
+    /// patched registry dependencies. Mixed sources, or another version,
+    /// stop the command before a build fails on two `nsh-core`s.
     fn of(crates: &[AppCrate]) -> anyhow::Result<Nsh> {
         let wanted = semver::Version::parse(VERSION).context("nsh's own version")?;
         // The first dependency on nsh seen, and what it is (for errors).
@@ -231,13 +177,8 @@ impl Nsh {
             for dep in nsh_dependencies(c)? {
                 let name = dep["name"].as_str().unwrap_or_default();
                 let req = dep["req"].as_str().unwrap_or("*");
-                let git = dep["source"].as_str().and_then(GitSource::parse);
-                let (nsh, what) = match (dep["path"].as_str(), git) {
-                    (_, Some(git)) => {
-                        let what = format!("{} takes {name} from {git}", c.package);
-                        (Nsh::Git(git), what)
-                    }
-                    (Some(path), None) => {
+                let (nsh, what) = match dep["path"].as_str() {
+                    Some(path) => {
                         let checkout = checkout_of(Path::new(path)).with_context(|| {
                             format!(
                                 "{} depends on {name} at {path}, which is in no nsh checkout",
@@ -246,9 +187,16 @@ impl Nsh {
                         })?;
                         let what =
                             format!("{} takes {name} from {}", c.package, checkout.display());
-                        (Nsh::Source(checkout), what)
+                        let nsh = match dep["git"].as_str() {
+                            Some(url) => Nsh::Git {
+                                checkout,
+                                url: url.into(),
+                            },
+                            None => Nsh::Source(checkout),
+                        };
+                        (nsh, what)
                     }
-                    (None, None) => {
+                    None => {
                         if !semver::VersionReq::parse(req).is_ok_and(|r| r.matches(&wanted)) {
                             bail!(
                                 "{} asks for {name} {req} and this nsh is {VERSION}: install nsh {req}, or ask for {name} = \"{VERSION}\"",
@@ -271,7 +219,7 @@ impl Nsh {
             }
         }
         let nsh = first.map_or(Nsh::Registry, |(nsh, _)| nsh);
-        if let Nsh::Source(dir) = &nsh {
+        if let Some(dir) = nsh.source() {
             let version = checkout_version(dir)?;
             if version != VERSION {
                 bail!(
@@ -286,19 +234,18 @@ impl Nsh {
     /// The checkout, if it is one.
     fn source(&self) -> Option<&Path> {
         match self {
-            Nsh::Registry | Nsh::Git(_) => None,
-            Nsh::Source(dir) => Some(dir),
+            Nsh::Registry => None,
+            Nsh::Source(dir) | Nsh::Git { checkout: dir, .. } => Some(dir),
         }
     }
 
     /// The dependency on nsh's crate `name` for a generated manifest, with
-    /// `extra` keys (`, default-features = false`): `{ version = "=0.1.1" }`,
-    /// `{ path = "…" }` or `{ git = "…", tag = "…" }`.
+    /// `extra` keys (`, default-features = false`): `{ version = "=0.1.1" }`
+    /// or `{ path = "…" }`.
     fn dep(&self, name: &str, extra: &str) -> String {
         match self {
             Nsh::Registry => format!("{{ version = \"={VERSION}\"{extra} }}"),
-            Nsh::Git(git) => format!("{{ {}{extra} }}", git.keys()),
-            Nsh::Source(dir) => format!(
+            Nsh::Source(dir) | Nsh::Git { checkout: dir, .. } => format!(
                 "{{ path = {:?}{extra} }}",
                 nsh_crate(dir, name).to_string_lossy()
             ),
@@ -392,7 +339,6 @@ pub(crate) fn of(entry: &Path) -> anyhow::Result<Option<RustApp>> {
         root,
     };
     app.write_workspace()?;
-    app.git_checkout()?;
     Ok(Some(app))
 }
 
@@ -587,8 +533,7 @@ fn root_config(
     };
     if let Some(theme) = &theme {
         let json = fs::read_to_string(theme)?;
-        nsh_core::ui::Theme::from_json(&json)
-            .map_err(|e| anyhow::anyhow!("nsh.json: theme: {e}"))?;
+        nsh_base::Theme::from_json(&json).map_err(|e| anyhow::anyhow!("nsh.json: theme: {e}"))?;
     }
     let appearance = match config.get("appearance").and_then(|a| a.as_str()) {
         None | Some("system") => None,
@@ -617,13 +562,13 @@ fn root_config(
 /// nsh's crates an app's crate may depend on ([`Nsh::of`]; built against a
 /// checkout, `[patch.crates-io]` sends them to it).
 const NSH_CRATES: &[&str] = &[
-    "nsh-animation",
     "nsh-macros",
     "nsh-core",
     "nsh-base",
     "nsh-package",
     "nsh-js",
     "nsh-engine",
+    "nsh-testing",
     "nsh-bundler",
     "nsh-dev",
     "nsh-platform-ios",
@@ -667,7 +612,7 @@ fn nsh_dependencies(c: &AppCrate) -> anyhow::Result<Vec<serde_json::Value>> {
                 .find(|p| p["name"].as_str() == Some(&c.package))
         })
         .with_context(|| format!("cargo metadata has no package {}", c.package))?;
-    Ok(package["dependencies"]
+    let mut dependencies: Vec<_> = package["dependencies"]
         .as_array()
         .into_iter()
         .flatten()
@@ -677,7 +622,87 @@ fn nsh_dependencies(c: &AppCrate) -> anyhow::Result<Vec<serde_json::Value>> {
                 .is_some_and(|n| NSH_CRATES.contains(&n))
         })
         .cloned()
-        .collect())
+        .collect();
+    if dependencies.iter().any(|dep| {
+        dep["source"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("git+"))
+    }) {
+        // --no-deps reports declarations, not the locked Git checkout or
+        // registry dependencies redirected by the app's [patch] tables.
+        let output = Command::new(cargo())
+            .args(["metadata", "--format-version", "1", "--manifest-path"])
+            .arg(&manifest)
+            .output()
+            .context("resolve the app's nsh Git dependencies")?;
+        if !output.status.success() {
+            bail!(
+                "cargo cannot resolve {}:\n{}",
+                manifest.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let resolved: serde_json::Value =
+            serde_json::from_slice(&output.stdout).context("cargo metadata's resolved output")?;
+        resolve_git_dependencies(&mut dependencies, &resolved, &c.package)?;
+    }
+    Ok(dependencies)
+}
+
+/// Replace Git declarations and patched registry declarations with Cargo's
+/// resolved checkout, keeping the repository URL for generated patches.
+fn resolve_git_dependencies(
+    dependencies: &mut [serde_json::Value],
+    metadata: &serde_json::Value,
+    package: &str,
+) -> anyhow::Result<()> {
+    let packages = metadata["packages"]
+        .as_array()
+        .context("cargo metadata packages")?;
+    let app = packages
+        .iter()
+        .find(|p| p["name"] == package)
+        .context("cargo metadata app package")?;
+    let node = metadata["resolve"]["nodes"]
+        .as_array()
+        .and_then(|nodes| nodes.iter().find(|node| node["id"] == app["id"]))
+        .context("cargo metadata app dependencies")?;
+    for dep in dependencies {
+        let name = dep["rename"]
+            .as_str()
+            .or(dep["name"].as_str())
+            .unwrap_or_default()
+            .replace('-', "_");
+        let Some(edge) = node["deps"]
+            .as_array()
+            .and_then(|deps| deps.iter().find(|d| d["name"] == name))
+        else {
+            continue;
+        };
+        let resolved = packages
+            .iter()
+            .find(|p| p["id"] == edge["pkg"])
+            .context("cargo metadata resolved dependency")?;
+        if let Some(source) = resolved["source"]
+            .as_str()
+            .and_then(|s| s.strip_prefix("git+"))
+        {
+            let url = source
+                .split(['?', '#'])
+                .next()
+                .context("Git repository URL")?;
+            let path = Path::new(
+                resolved["manifest_path"]
+                    .as_str()
+                    .context("Git manifest path")?,
+            )
+            .parent()
+            .context("Git crate directory")?;
+            dep["path"] = path.to_string_lossy().as_ref().into();
+            dep["git"] = url.into();
+        }
+    }
+    Ok(())
 }
 
 /// The `name` of the `[package]` of `manifest`.
@@ -1255,8 +1280,8 @@ opt-level = 3
     /// LTO over one codegen unit re-optimizes the whole module (0.3 s
     /// against 7.8 s for `examples/rust-exports`).
     /// The app's crates are at `-O1` (what changes), the other crates for
-    /// size, QuickJS and layout at `-O3` as in nsh's own manifest (they
-    /// dominate runtime cost). It panics as `web` does (`abort`), and without
+    /// size, QuickJS at `-O3` (it dominates runtime cost); the workspace's
+    /// `dev` profile already raises QuickJS and layout for the hosts. It panics as `web` does (`abort`), and without
     /// debug assertions, so the page behaves as the published one.
     fn web_dev_profile(&self) -> String {
         let mut profile = String::from(
@@ -1283,15 +1308,6 @@ opt-level = 3
                 c.package
             ));
         }
-        profile.push_str(
-            "
-# As nsh's own manifest: the interpreter and layout fast in debug builds.
-[profile.dev.package.quickjs-jit-sys]
-opt-level = 3
-[profile.dev.package.taffy]
-opt-level = 3
-",
-        );
         profile
     }
 
@@ -1329,12 +1345,14 @@ opt-level = 3
         let mut runtime = crate::runtime::WebRuntime {
             glue: glue.exists().then(|| glue.clone()),
             wasm,
-            // A checkout's own, so edits to it apply; from crates.io or a git
-            // repository the fetched crate's, copied next to the module when
-            // it is built.
+            // A checkout's own, so edits to it apply; from crates.io the
+            // published crate's, copied next to the module when it is built.
             js: match &self.nsh {
-                Nsh::Source(source) => source.join("crates/nsh-platform-web/web/nsh.js"),
-                Nsh::Registry | Nsh::Git(_) => out.join("nsh.js"),
+                Nsh::Source(source)
+                | Nsh::Git {
+                    checkout: source, ..
+                } => source.join("crates/nsh-platform-web/web/nsh.js"),
+                Nsh::Registry => out.join("nsh.js"),
             },
         };
         if !build {
@@ -1397,8 +1415,8 @@ opt-level = 3
                 runtime.glue = None;
             }
         }
-        if self.nsh.source().is_none() {
-            let js = self.fetched_crate("nsh-platform-web")?.join("web/nsh.js");
+        if self.nsh == Nsh::Registry {
+            let js = self.registry_crate("nsh-platform-web")?.join("web/nsh.js");
             fs::copy(&js, &runtime.js)
                 .with_context(|| format!("copy {} to {}", js.display(), runtime.js.display()))?;
         }
@@ -1431,9 +1449,9 @@ opt-level = 3
         Ok(crate::bindgen::version_in(&metadata, package))
     }
 
-    /// The workspace's resolved packages, as `cargo metadata` reports them
-    /// (fetching what it needs: crates.io's crates, git repositories).
-    fn resolved_packages(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+    /// The directory Cargo unpacked nsh's crate `name` (from crates.io, at
+    /// [`VERSION`]) into for the workspace, as `cargo metadata` reports it.
+    fn registry_crate(&self, name: &str) -> anyhow::Result<PathBuf> {
         let output = Command::new(cargo())
             .args(["metadata", "--format-version", "1", "--manifest-path"])
             .arg(self.workspace.join("Cargo.toml"))
@@ -1448,15 +1466,10 @@ opt-level = 3
         }
         let metadata: serde_json::Value =
             serde_json::from_slice(&output.stdout).context("cargo metadata's output")?;
-        Ok(metadata["packages"].as_array().cloned().unwrap_or_default())
-    }
-
-    /// The directory Cargo unpacked nsh's crate `name` (from crates.io or a
-    /// git repository, at [`VERSION`]) into for the workspace, as `cargo
-    /// metadata` reports it.
-    fn fetched_crate(&self, name: &str) -> anyhow::Result<PathBuf> {
-        self.resolved_packages()?
-            .iter()
+        metadata["packages"]
+            .as_array()
+            .into_iter()
+            .flatten()
             .find(|p| p["name"].as_str() == Some(name) && p["version"].as_str() == Some(VERSION))
             .and_then(|p| {
                 Path::new(p["manifest_path"].as_str()?)
@@ -1464,17 +1477,6 @@ opt-level = 3
                     .map(Path::to_path_buf)
             })
             .with_context(|| format!("the workspace resolves no {name} {VERSION}"))
-    }
-
-    /// Taking nsh from a git repository: checks that the commit the app's
-    /// crates name is nsh [`VERSION`] (the generated code calls its API),
-    /// and returns the directory Cargo checked it out to. `None` for the
-    /// other sources.
-    fn git_checkout(&self) -> anyhow::Result<Option<PathBuf>> {
-        let Nsh::Git(git) = &self.nsh else {
-            return Ok(None);
-        };
-        git_checkout_of(git, &self.resolved_packages()?).map(Some)
     }
 
     /// The workspace of the app's GPUI development host and release
@@ -1505,33 +1507,38 @@ opt-level = 3
         Ok(ws)
     }
 
-    /// Built against a checkout or a git repository, the app's crates.io
-    /// dependencies on nsh are patched to it: they must resolve to the same
-    /// core as the generated hosts, or their component and registry types
-    /// differ.
+    /// Built against a checkout, the app's crates.io dependencies on nsh are
+    /// patched to it: they must resolve to the same core as the generated
+    /// hosts, or their component and registry types differ.
     fn write_workspace_manifest(&self, ws: &Path, base: &str, gpui: bool) -> anyhow::Result<()> {
         let path = ws.join("Cargo.toml");
         let mut manifest = base.to_owned();
-        let patch = |name: &str| match &self.nsh {
-            Nsh::Registry => None,
-            Nsh::Source(source) => Some(format!(
-                "path = {:?}",
-                nsh_crate(source, name).to_string_lossy()
-            )),
-            Nsh::Git(git) => Some(git.keys()),
-        };
-        if patch("nsh-core").is_some() {
+        // These run on every interaction. Keep Objective-C signature
+        // checks enabled, but optimize their parser as well as the bridge.
+        // App Rust code stays easy to debug.
+        for package in ["quickjs-jit-sys", "taffy", "objc2", "objc2-encode"] {
+            manifest.push_str(&format!(
+                "\n[profile.dev.package.{package}]\nopt-level = 3\n"
+            ));
+        }
+        if let Some(source) = self.nsh.source() {
             manifest.push_str("\n[patch.crates-io]\n");
-            // The generated crates never build the bundler (nor does an
-            // app's), and Cargo warns of a patch that goes unused.
+            let mut patches = String::new();
             for name in NSH_CRATES
                 .iter()
                 .filter(|name| gpui || **name != "nsh-platform-gpui")
-                .filter(|name| **name != "nsh-bundler")
+                .filter(|name| nsh_crate(source, name).join("Cargo.toml").is_file())
             {
-                if let Some(to) = patch(name) {
-                    manifest.push_str(&format!("{name} = {{ {to} }}\n"));
-                }
+                patches.push_str(&format!(
+                    "{name} = {{ path = {:?} }}\n",
+                    nsh_crate(source, name).to_string_lossy()
+                ));
+            }
+            manifest.push_str(&patches);
+            if let Nsh::Git { url, .. } = &self.nsh {
+                // The app still declares Git dependencies. Redirect those
+                // too so its types and the generated hosts share one core.
+                manifest.push_str(&format!("\n[patch.{url:?}]\n{patches}"));
             }
         }
         write(&path, &manifest)
@@ -1930,8 +1937,8 @@ fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
     let mut make = format!("nsh_core::ui::Root::of::<{krate}::{}>()", root.component);
     if let Some(theme) = &root.theme {
         make.push_str(&format!(
-            "\n        .theme(\n            nsh_core::ui::Theme::from_json(include_str!({:?}))\n                \
-             .expect(\"nsh.json: theme\"),\n        )",
+            "\n        .tokens(\n            nsh_base::Theme::from_json(include_str!({:?}))\n                \
+             .expect(\"nsh.json: theme\")\n                .into_tokens(),\n        )",
             theme.to_string_lossy()
         ));
     }
@@ -2098,32 +2105,6 @@ fn nsh_crate(source: &Path, name: &str) -> PathBuf {
     }
 }
 
-/// The checkout of the git repository `git` among a workspace's resolved
-/// `packages`: the one its `nsh-core` is in, which must be [`VERSION`].
-fn git_checkout_of(git: &GitSource, packages: &[serde_json::Value]) -> anyhow::Result<PathBuf> {
-    let core = packages
-        .iter()
-        .find(|p| {
-            p["name"].as_str() == Some("nsh-core")
-                && p["source"].as_str().and_then(GitSource::parse).as_ref() == Some(git)
-        })
-        .with_context(|| format!("the app's crates take nsh from {git}, which has no nsh-core"))?;
-    let version = core["version"].as_str().unwrap_or_default();
-    if version != VERSION {
-        bail!(
-            "the app's crates take nsh from {git}, which is nsh {version}, and this nsh is {VERSION}: install that commit's nsh (cargo install --git {} with the same tag, branch or rev, --locked nsh-cli)",
-            git.url
-        );
-    }
-    let manifest = Path::new(core["manifest_path"].as_str().unwrap_or_default());
-    manifest
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .with_context(|| format!("{} is in no nsh checkout", manifest.display()))
-}
-
 /// The profile the app's web runtime of `kind` builds with: `web` for
 /// published apps, `web-dev` for development ([`RustApp::web_dev_profile`]).
 fn web_profile(kind: crate::runtime::WebKind) -> &'static str {
@@ -2137,7 +2118,7 @@ fn web_profile(kind: crate::runtime::WebKind) -> &'static str {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{AppCrate, GitSource, Nsh, RootConfig, RustApp};
+    use super::{AppCrate, Nsh, RootConfig, RustApp};
 
     /// An app in `dir` with `crates` (package, directory), built against
     /// this checkout.
@@ -2634,6 +2615,25 @@ mod tests {
     }
 
     #[test]
+    fn generated_hosts_optimize_interaction_dependencies_in_debug() {
+        let dir =
+            std::env::temp_dir().join(format!("nsh-rust-debug-profile-{}", std::process::id()));
+        let app = app(&dir, &[("app-native", dir.join("native"))], None);
+        app.write_workspace().unwrap();
+        app.gpui_workspace().unwrap();
+        for file in ["Cargo.toml", "gpui/Cargo.toml"] {
+            let manifest = std::fs::read_to_string(app.workspace.join(file)).unwrap();
+            for package in ["quickjs-jit-sys", "taffy", "objc2", "objc2-encode"] {
+                assert!(
+                    manifest.contains(&format!("[profile.dev.package.{package}]\nopt-level = 3")),
+                    "{file} must keep {package} fast in debug builds"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn builds_go_to_cargo_target_dir_else_the_app_s_target() {
         let ws = Path::new("/apps/charts/.nsh/rust");
         let app = super::target_dir(ws, None).unwrap();
@@ -2701,204 +2701,103 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A git source as Cargo reports it: `nsh-core = { git = URL, <key> = <value> }`.
-    fn git(key: &str, value: &str) -> GitSource {
-        GitSource {
-            url: "https://example.com/forks/nsh".into(),
-            reference: Some((key.into(), value.into())),
-        }
-    }
-
     #[test]
-    fn git_source_reads_cargo_s_sources() {
-        let tag = git("tag", "fork-0.1.1-1");
-        for source in [
-            "git+https://example.com/forks/nsh?tag=fork-0.1.1-1",
-            // A resolved package's: the request plus the commit.
-            "git+https://example.com/forks/nsh?tag=fork-0.1.1-1#0123abcd",
-        ] {
-            assert_eq!(GitSource::parse(source), Some(tag.clone()), "{source}");
-        }
+    fn git_resolution_uses_patched_registry_dependencies_and_renamed_edges() {
+        let mut dependencies = vec![serde_json::json!({
+            "name": "nsh-core", "rename": "core_runtime", "req": "=0.1.1",
+            "source": "registry+https://github.com/rust-lang/crates.io-index"
+        })];
+        let metadata = serde_json::json!({
+            "packages": [
+                {"name": "app-native", "id": "app"},
+                {"name": "nsh-core", "id": "core",
+                 "source": "git+https://example.com/nsh.git?branch=main#locked-revision",
+                 "manifest_path": "/cargo/git/checkouts/nsh/locked/crates/nsh-core/Cargo.toml"}
+            ],
+            "resolve": {"nodes": [
+                {"id": "app", "deps": [{"name": "core_runtime", "pkg": "core"}]}
+            ]}
+        });
+        super::resolve_git_dependencies(&mut dependencies, &metadata, "app-native").unwrap();
+        assert_eq!(dependencies[0]["git"], "https://example.com/nsh.git");
         assert_eq!(
-            tag.keys(),
-            "git = \"https://example.com/forks/nsh\", tag = \"fork-0.1.1-1\""
-        );
-        let default = GitSource::parse("git+https://example.com/forks/nsh").unwrap();
-        assert_eq!(default.reference, None);
-        assert_eq!(default.keys(), "git = \"https://example.com/forks/nsh\"");
-        assert_eq!(
-            GitSource::parse("registry+https://github.com/rust-lang/crates.io-index"),
-            None
+            dependencies[0]["path"],
+            "/cargo/git/checkouts/nsh/locked/crates/nsh-core"
         );
     }
 
     #[test]
-    fn git_source_is_where_the_app_s_crates_take_nsh_from() {
+    fn git_dependencies_use_the_locked_checkout_and_patch_both_sources() {
         let dir = std::env::temp_dir().join(format!("nsh-rust-git-{}", std::process::id()));
-        let of = |crates: &[(&str, &str)]| {
-            let crates: Vec<AppCrate> = crates
-                .iter()
-                .map(|(package, deps)| {
-                    let crate_dir = dir.join(package);
-                    write_crate(&crate_dir, package, "", deps);
-                    AppCrate {
-                        package: (*package).into(),
-                        dir: crate_dir,
-                    }
-                })
-                .collect();
-            Nsh::of(&crates).map_err(|e| e.to_string())
-        };
-        let url = "https://example.com/forks/nsh";
-        let tag = format!("nsh-core = {{ git = \"{url}\", tag = \"fork-0.1.1-1\" }}\n");
-        // Cargo reads the dependencies without fetching the repository.
-        assert_eq!(of(&[("a", &tag)]), Ok(Nsh::Git(git("tag", "fork-0.1.1-1"))));
-        let branch = format!("nsh-base = {{ git = \"{url}\", branch = \"fork\" }}\n");
-        assert_eq!(of(&[("a", &branch)]), Ok(Nsh::Git(git("branch", "fork"))));
-        let rev = format!("nsh-core = {{ git = \"{url}\", rev = \"0123abcd\" }}\n");
-        assert_eq!(of(&[("a", &rev)]), Ok(Nsh::Git(git("rev", "0123abcd"))));
-        // Several crates, several of nsh's crates: one repository, one tag.
-        let both = format!("{tag}nsh-base = {{ git = \"{url}\", tag = \"fork-0.1.1-1\" }}\n");
-        assert_eq!(
-            of(&[("a", &tag), ("b", &both)]),
-            Ok(Nsh::Git(git("tag", "fork-0.1.1-1")))
-        );
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn git_source_mixed_with_another_source_stops_naming_both() {
-        let dir = std::env::temp_dir().join(format!("nsh-rust-git-mixed-{}", std::process::id()));
-        let of = |crates: &[(&str, String)]| {
-            let crates: Vec<AppCrate> = crates
-                .iter()
-                .map(|(package, deps)| {
-                    let crate_dir = dir.join(package);
-                    write_crate(&crate_dir, package, "", deps);
-                    AppCrate {
-                        package: (*package).into(),
-                        dir: crate_dir,
-                    }
-                })
-                .collect();
-            Nsh::of(&crates).map_err(|e| e.to_string())
-        };
-        let url = "https://example.com/forks/nsh";
-        let tag = format!("nsh-core = {{ git = \"{url}\", tag = \"fork-0.1.1-1\" }}\n");
-        let checkout =
-            dunce::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")).unwrap();
-        let by_path = format!(
-            "nsh-core = {{ path = {:?} }}\n",
-            checkout.join("crates/nsh-core").to_string_lossy()
-        );
-        let registry = format!("nsh-core = \"={}\"\n", super::VERSION);
-        let other_tag = format!("nsh-core = {{ git = \"{url}\", tag = \"fork-0.1.1-2\" }}\n");
-        for (other, says) in [
-            (registry, "b takes nsh-core".to_owned()),
-            (
-                by_path,
-                format!("b takes nsh-core from {}", checkout.display()),
-            ),
-            (
-                other_tag,
-                format!("b takes nsh-core from {url} (tag fork-0.1.1-2)"),
-            ),
+        let repo = dir.join("repo");
+        write_crate(&repo.join("crates/nsh-core"), "nsh-core", "", "");
+        write_crate(&repo.join("crates/nsh-base"), "nsh-base", "", "");
+        std::fs::write(repo.join("Cargo.toml"), format!(
+            "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"3\"\n[workspace.package]\nversion = {:?}\n", super::VERSION
+        )).unwrap();
+        for args in [
+            vec!["init"],
+            vec!["add", "."],
+            vec![
+                "-c",
+                "user.name=NSH test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "fixture",
+            ],
         ] {
-            let error = of(&[("a", tag.clone()), ("b", other)]).unwrap_err();
-            assert!(error.contains(&says), "{error}");
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
             assert!(
-                error.contains(&format!("a takes nsh-core from {url} (tag fork-0.1.1-1)")),
-                "{error}"
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
             );
-            assert!(error.contains("from one place"), "{error}");
         }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn git_source_every_crate_of_nsh_comes_from_the_repository() {
-        let dir = std::env::temp_dir().join(format!("nsh-rust-git-ws-{}", std::process::id()));
-        let mut app = app(&dir, &[("app-native", dir.join("native"))], None);
-        app.nsh = Nsh::Git(git("tag", "fork-0.1.1-1"));
-        app.write_workspace().unwrap();
-        app.gpui_workspace().unwrap();
-        let keys = "git = \"https://example.com/forks/nsh\", tag = \"fork-0.1.1-1\"";
-        for file in [
-            "describe/Cargo.toml",
-            "test/Cargo.toml",
-            "macos-host/Cargo.toml",
-            "ios-app/Cargo.toml",
-            "android/Cargo.toml",
-            "web/Cargo.toml",
-            "gpui/gpui-host/Cargo.toml",
-        ] {
-            let manifest = std::fs::read_to_string(app.workspace.join(file)).unwrap();
-            let nsh: Vec<&str> = manifest.lines().filter(|l| l.starts_with("nsh-")).collect();
-            assert!(!nsh.is_empty(), "{file}: {manifest}");
-            for line in nsh {
-                assert!(line.contains(keys), "{file}: {line}");
-            }
-        }
-        // The app's crates.io dependencies on nsh go to the same commit.
-        for (file, gpui) in [("Cargo.toml", false), ("gpui/Cargo.toml", true)] {
-            let manifest = std::fs::read_to_string(app.workspace.join(file)).unwrap();
-            let patch = manifest
-                .split("[patch.crates-io]")
-                .nth(1)
-                .unwrap_or_default();
-            for name in super::NSH_CRATES {
-                let line = format!("{name} = {{ {keys} }}");
-                // Nothing generated builds the bundler: it is not patched.
-                let wanted = (gpui || *name != "nsh-platform-gpui") && *name != "nsh-bundler";
-                assert_eq!(patch.contains(&line), wanted, "{file}: {name}: {manifest}");
-            }
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn git_source_checkout_is_this_version_of_nsh() {
-        let tag = git("tag", "fork-0.1.1-1");
-        let checkout = Path::new("/cargo/git/checkouts/nsh-0123/abcd");
-        let package = |name: &str, version: &str, source: &str| {
-            serde_json::json!({
-                "name": name,
-                "version": version,
-                "source": source,
-                "manifest_path": checkout.join("crates").join(name).join("Cargo.toml"),
-            })
+        let repo_path = dunce::canonicalize(&repo).unwrap();
+        let url = format!(
+            "{}{}",
+            if cfg!(windows) { "file:///" } else { "file://" },
+            repo_path.to_string_lossy().replace('\\', "/")
+        );
+        let native = dir.join("app/native");
+        write_crate(
+            &native,
+            "git-app",
+            "",
+            &format!("nsh-core = {{ git = {url:?} }}\nnsh-base = {{ git = {url:?} }}\n"),
+        );
+        let nsh = Nsh::of(&[AppCrate {
+            package: "git-app".into(),
+            dir: native.clone(),
+        }])
+        .unwrap();
+        let Nsh::Git {
+            checkout,
+            url: resolved_url,
+        } = &nsh
+        else {
+            panic!("Git dependencies must keep their resolved source: {nsh:?}");
         };
-        let resolved = "git+https://example.com/forks/nsh?tag=fork-0.1.1-1#abcd";
-        let this = super::VERSION;
-        let packages = [
-            package(
-                "serde",
-                "1.0.0",
-                "registry+https://github.com/rust-lang/crates.io-index",
-            ),
-            package("nsh-core", this, resolved),
-        ];
-        assert_eq!(super::git_checkout_of(&tag, &packages).unwrap(), checkout);
-        // The tag names another version of nsh: what to install.
-        let error = super::git_checkout_of(&tag, &[package("nsh-core", "0.0.1", resolved)])
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("which is nsh 0.0.1"), "{error}");
-        assert!(error.contains(&format!("this nsh is {this}")), "{error}");
-        assert!(
-            error.contains("cargo install --git https://example.com/forks/nsh"),
-            "{error}"
-        );
-        // Another commit of the same repository is not the one asked for.
-        let other = package(
-            "nsh-core",
-            this,
-            "git+https://example.com/forks/nsh?tag=other#ef",
-        );
-        let error = super::git_checkout_of(&tag, &[other])
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("has no nsh-core"), "{error}");
+        assert_eq!(resolved_url, &url);
+        assert_ne!(checkout, &repo);
+        assert!(checkout.join("crates/nsh-core/Cargo.toml").is_file());
+        let mut app = app(&dir.join("app"), &[("git-app", native)], None);
+        app.nsh = nsh;
+        app.write_workspace().unwrap();
+        let manifest = std::fs::read_to_string(app.workspace.join("Cargo.toml")).unwrap();
+        assert!(manifest.contains("[patch.crates-io]"), "{manifest}");
+        assert!(manifest.contains(&format!("[patch.{url:?}]")), "{manifest}");
+        let host = std::fs::read_to_string(app.workspace.join("ios-host/Cargo.toml")).unwrap();
+        assert!(host.contains("nsh-ios-host = { path ="), "{host}");
+        assert!(!host.contains("version = \"="), "{host}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2955,12 +2854,20 @@ mod tests {
             let name = format!("profile.web-dev.package.\"{package}\"");
             assert_eq!(profile(&name), ["opt-level = 1"], "{manifest}");
         }
-        // As nsh's own manifest, for the debug builds of the hosts.
+        // As nsh's own manifest, for the debug builds of the hosts: each
+        // table once, or Cargo rejects the manifest as a duplicate key.
         assert_eq!(
             profile("profile.dev.package.quickjs-jit-sys"),
             ["opt-level = 3"]
         );
         assert_eq!(profile("profile.dev.package.taffy"), ["opt-level = 3"]);
+        for table in [
+            "[profile.dev.package.quickjs-jit-sys]",
+            "[profile.dev.package.taffy]",
+            "[profile.web-dev]",
+        ] {
+            assert_eq!(manifest.matches(table).count(), 1, "{table}: {manifest}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

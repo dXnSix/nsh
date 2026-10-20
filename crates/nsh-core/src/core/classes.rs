@@ -41,6 +41,8 @@ pub(super) enum Part {
     Disabled,
     /// `selectedStyle`.
     Selected,
+    /// `checkedStyle`.
+    Checked,
     /// A page's `headerStyle` / `headerClass`.
     Header,
     /// A list's `contentClass`.
@@ -56,6 +58,7 @@ impl Part {
             Part::Focus => (state::FOCUSED, rank::FOCUS),
             Part::Disabled => (state::DISABLED, rank::DISABLED),
             Part::Selected => (state::SELECTED, rank::SELECTED),
+            Part::Checked => (state::CHECKED, rank::CHECKED),
             _ => return None,
         })
     }
@@ -66,8 +69,8 @@ impl Part {
 pub(super) struct NodeParts {
     /// The classes as set, before the state styles are merged in.
     base: Option<Arc<ClassList>>,
-    /// The state styles, by [`Part`] (the first five).
-    states: [Option<Arc<StylePatch>>; 5],
+    /// The state styles, by [`Part`] (the first six).
+    states: [Option<Arc<StylePatch>>; 6],
     /// The state styles as rules (none without any).
     state_rules: Option<Arc<ClassList>>,
     /// The inline styles of the other parts.
@@ -77,12 +80,13 @@ pub(super) struct NodeParts {
 }
 
 /// The state style parts, by their index in [`NodeParts::states`].
-const STATE_PARTS: [Part; 5] = [
+const STATE_PARTS: [Part; 6] = [
     Part::Active,
     Part::Hover,
     Part::Focus,
     Part::Disabled,
     Part::Selected,
+    Part::Checked,
 ];
 
 impl<M: TextEngine> Core<M> {
@@ -224,6 +228,21 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// `checked` of `key`'s accessibility state (true, not mixed): the
+    /// `checked:` variant.
+    pub(super) fn set_checked(&mut self, key: Key, checked: bool) {
+        let node = &mut self.nodes[key as usize];
+        let before = node.states;
+        if checked {
+            node.states |= state::CHECKED;
+        } else {
+            node.states &= !state::CHECKED;
+        }
+        if node.states != before {
+            self.states_changed(key);
+        }
+    }
+
     /// The view style of `key` as platforms take it: fractional
     /// translations resolved.
     pub(super) fn mounted_view_style(&self, key: Key) -> Box<ViewStyle> {
@@ -326,8 +345,8 @@ impl<M: TextEngine> Core<M> {
             return crate::ListContentStyle::default();
         };
         let px = |l: taffy::LengthPercentage| match l.expand() {
-            taffy::style::ExpandedLengthPercentage::Length(v) => v,
-            _ => 0.0,
+            taffy::style::ExpandedLengthPercentage::Length(v) => crate::geometry::Points(v),
+            _ => crate::geometry::Points::ZERO,
         };
         let p = &style.layout.padding;
         crate::ListContentStyle {
@@ -363,7 +382,7 @@ impl<M: TextEngine> Core<M> {
                 let group = |_: &str| 0;
                 let cx = Context {
                     env: self.class_env,
-                    window: (self.viewport.width, self.viewport.height),
+                    window: self.viewport,
                     rtl: node.rtl,
                     states: 0,
                     position: 0,
@@ -485,11 +504,11 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
-    /// The components' theme changed: classes naming its tokens
+    /// The design tokens changed: classes naming them
     /// (`bg-primary`) are resolved again, on nodes and on Rust components.
-    pub(super) fn theme_tokens_changed(&mut self) {
-        let theme = self.components.theme.clone();
-        let Some(changed) = self.tailwind.set_tokens(&theme) else {
+    pub(super) fn class_tokens_changed(&mut self) {
+        let tokens = self.components.tokens.clone();
+        let Some(changed) = self.tailwind.set_tokens(&tokens) else {
             return;
         };
         let reads =
@@ -698,7 +717,7 @@ impl<M: TextEngine> Core<M> {
                 0
             };
             let positional = pos != 0 && node.parent != NO_KEY;
-            let window = (self.viewport.width, self.viewport.height);
+            let window = self.viewport;
             let cx = Context {
                 env: self.class_env,
                 window,
