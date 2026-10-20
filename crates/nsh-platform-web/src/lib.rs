@@ -25,9 +25,11 @@ mod animation;
 mod canvas;
 mod encode;
 mod ffi;
+mod filesystem;
 mod net;
 mod storage;
 mod text;
+mod websocket;
 
 use std::{
     cell::{Cell, RefCell},
@@ -47,8 +49,10 @@ use nsh_engine::{Bundle, BundleCode, Chunk, HotUpdate, Policy};
 
 use crate::{animation::UiAnimation, encode::Out, text::WebTextEngine};
 pub use crate::{
+    filesystem::nsh_filesystem_reply,
     net::{nsh_fetch_body_wanted, nsh_fetch_data, nsh_fetch_end, nsh_fetch_failed, nsh_fetch_head},
     storage::nsh_storage_reply,
+    websocket::{nsh_websocket_event, nsh_websocket_reply},
 };
 
 thread_local! {
@@ -74,7 +78,7 @@ thread_local! {
     /// [`nsh_key`] while a key event is being handled. Apart from [`APP`]
     /// so that matching never needs the engine.
     static KEYMAP: RefCell<Option<std::sync::Arc<Keymap>>> = const { RefCell::new(None) };
-    /// The UI sets apps import ([`set_ui_sets`]; by default the mobile UI).
+    /// The UI sets apps import ([`set_ui_sets`]; by default `nsh/base`).
     static UI_SETS: RefCell<Option<Vec<nsh_core::ui::Registry>>> = const { RefCell::new(None) };
     /// What makes the Rust app's root ([`set_root`]), for [`nsh_start_rust`].
     static ROOT: RefCell<Option<Box<dyn Fn() -> nsh_core::ui::Root>>> = const { RefCell::new(None) };
@@ -86,22 +90,22 @@ thread_local! {
 /// What [`ui_sets!`] gives.
 pub use nsh_core::ui::Registry;
 
-/// Sets the UI sets the apps started from now on serve: the mobile UI and
+/// Sets the UI sets the apps started from now on serve: `nsh/base` and
 /// an app's own Rust components (`nsh.json` `"rust"`). A runtime built for
 /// the app ([`ui_sets!`]) passes them before the page starts anything.
 pub fn set_ui_sets(sets: Vec<Registry>) {
     UI_SETS.with(|s| *s.borrow_mut() = Some(sets));
 }
 
-/// The UI sets engines serve: [`set_ui_sets`]'s, else the mobile UI.
+/// The UI sets engines serve: [`set_ui_sets`]'s, else nsh's own.
 fn ui_sets() -> Vec<Registry> {
     UI_SETS
         .with(|s| s.borrow().clone())
-        .unwrap_or_else(|| vec![nsh_ui_mobile::registry()])
+        .unwrap_or_else(|| vec![nsh_base::registry()])
 }
 
 /// Makes this module an app's web runtime that serves `$sets` (an
-/// expression giving the `Vec<Registry>` of the mobile UI and the app's own
+/// expression giving the `Vec<Registry>` of `nsh/base` and the app's own
 /// Rust components): `nsh` builds one for apps with `"rust"` in `nsh.json`.
 /// It exports `nsh_app_init`, which `nsh.js` calls once the module is
 /// instantiated.
@@ -123,7 +127,7 @@ pub fn set_root(root: impl Fn() -> nsh_core::ui::Root + 'static) {
 }
 
 /// Makes this module the web runtime of a Rust app (`nsh.json` `"root"`):
-/// it serves `$sets` (the mobile UI and the app's own set) and runs the
+/// it serves `$sets` (`nsh/base` and the app's own set) and runs the
 /// root component `$root` makes (an expression giving a
 /// [`nsh_core::ui::Root`]) when the page calls [`nsh_start_rust`]. Built
 /// without the feature `js`, the module has no QuickJS: the app is Rust
@@ -157,6 +161,9 @@ struct BundleOptions {
     /// The app's id (`nsh.json` `"id"`): it names where the app keeps its
     /// data ([`storage::LocalStorage`]).
     app_id: Option<String>,
+    /// The VM limits the page runs the app with ([`nsh_bundle_limits`]);
+    /// `None`: none, as an app on its own.
+    limits: Option<String>,
 }
 
 struct Running {
@@ -428,7 +435,13 @@ pub extern "C" fn nsh_start_rust(width: f32, height: f32, dark: u32, pixel_ratio
     };
     APP.with(|a| a.borrow_mut().take());
     let environment = environment(width, height, dark != 0, pixel_ratio);
-    run(App::Rust(root), width, height, environment)
+    run(
+        App::Rust(root),
+        width,
+        height,
+        environment,
+        Limits::standalone(),
+    )
 }
 
 /// Sets up logging and panics once.
@@ -474,33 +487,42 @@ fn start(code: BundleCode, width: f32, height: f32, dark: u32, pixel_ratio: f32)
             return -1.0;
         }
     };
+    let limits = match Limits::development(options.limits.as_deref()) {
+        Ok(limits) => limits,
+        Err(err) => {
+            ffi::report_error(&format!("invalid limits: {err}"));
+            return -1.0;
+        }
+    };
     bundle.base_url = BASE_URL.with(|b| b.borrow().as_deref().map(Into::into));
     let bundle = bundle.with_app_id(options.app_id.as_deref());
-    run(App::Js(bundle), width, height, environment)
+    run(App::Js(bundle), width, height, environment, limits)
 }
 
 /// Starts `app` in the page's surface.
-fn run(app: App, width: f32, height: f32, environment: Environment) -> f64 {
+fn run(app: App, width: f32, height: f32, environment: Environment, limits: Limits) -> f64 {
     let storage =
         BASE_URL.with(|b| storage::LocalStorage::new(app.app_id(), b.borrow().as_deref()));
+    let namespace = BASE_URL.with(|b| {
+        nsh_engine::local_storage_prefix(app.app_id(), b.borrow().as_deref().unwrap_or(""))
+    });
     let config = EngineConfig {
         app,
         viewport: Size::new(width, height),
         trace: false,
         network: Some(std::sync::Arc::new(net::WebNetwork)),
+        websocket: Some(std::sync::Arc::new(websocket::BrowserWebSocket)),
         assets: Some(std::sync::Arc::new(PageAssets)),
         environment,
-        // A desktop browser's headers are as tall as the desktop backends'
-        // (`navigation::HEADER_HEIGHTS` there).
-        header_heights: if environment.idiom == Idiom::Desktop {
-            (47.0, 94.0)
-        } else {
-            (44.0, 96.0)
-        },
-        limits: Limits::default(),
+        // NSH draws no header: a page's `header` sits at its top.
+        header_heights: nsh_core::NO_NATIVE_HEADER,
+        limits,
         ui_sets: ui_sets(),
         runtime: None,
-        data_dir: None,
+        data_dir: Some("/app-data".into()),
+        filesystem: Some(std::sync::Arc::new(filesystem::BrowserFileSystem {
+            namespace,
+        })),
         storage: Some(std::sync::Arc::new(storage)),
     };
     let text = Rc::new(WebTextEngine::default());
@@ -573,8 +595,26 @@ pub unsafe extern "C" fn nsh_bundle_options(
             source_map: (!map.is_empty()).then_some(map),
             harden: None,
             app_id: (!app_id.is_empty()).then_some(app_id),
+            limits: None,
         }
     });
+}
+
+/// Sets the VM limits the next [`nsh_start`] / [`nsh_start_bytecode`]
+/// (after [`nsh_bundle_options`]) runs the app with, as an embedding app
+/// sets them (`nsh_core::js::HostLimits`' syntax, `memory=128MB,call=2s`;
+/// empty: the embedding defaults): the page decides, as the playground
+/// does for the code it runs. Without a call: none, as an app on its own.
+///
+/// # Safety
+///
+/// `ptr..ptr + len` is memory from [`nsh_alloc`].
+#[cfg(feature = "js")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nsh_bundle_limits(ptr: *const u8, len: usize) {
+    // SAFETY: guaranteed by the caller.
+    let limits = unsafe { string(ptr, len) };
+    OPTIONS.with(|o| o.borrow_mut().limits = Some(limits));
 }
 
 /// Sets the hardening the next [`nsh_start`] / [`nsh_start_bytecode`] of a
@@ -889,6 +929,36 @@ pub unsafe extern "C" fn nsh_event(
         EventKind::Error => EventPayload::Error {
             message: text("message"),
         },
+        EventKind::HoverMove => {
+            let flag = |k: &str| value.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+            EventPayload::Hover(nsh_core::HoverEvent {
+                location_x: num("locationX"),
+                location_y: num("locationY"),
+                page_x: num("pageX"),
+                page_y: num("pageY"),
+                modifiers: nsh_core::keymap::Modifiers {
+                    ctrl: flag("ctrlKey"),
+                    alt: flag("altKey"),
+                    shift: flag("shiftKey"),
+                    cmd: flag("metaKey"),
+                },
+            })
+        }
+        EventKind::ContextMenu => {
+            let flag = |k: &str| value.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+            EventPayload::ContextMenu(nsh_core::ContextMenuEvent {
+                location_x: num("locationX"),
+                location_y: num("locationY"),
+                page_x: num("pageX"),
+                page_y: num("pageY"),
+                modifiers: nsh_core::keymap::Modifiers {
+                    ctrl: flag("ctrlKey"),
+                    alt: flag("altKey"),
+                    shift: flag("shiftKey"),
+                    cmd: flag("metaKey"),
+                },
+            })
+        }
         EventKind::ChangeText | EventKind::SubmitEditing => EventPayload::Text {
             text: text("text"),
             count: num("count") as u32,
@@ -918,6 +988,8 @@ pub unsafe extern "C" fn nsh_event(
                             "left" => "left",
                             "text" => "text",
                             "has" => "has",
+                            "uri" => "uri",
+                            "files" => "files",
                             "error" => "error",
                             "url" => "url",
                             "title" => "title",
