@@ -66,7 +66,7 @@ pub trait HostList {
 /// Where decoding reports what it could not take.
 #[derive(Debug, Default)]
 pub struct HostCx {
-    /// Warnings for the app's console (`unknown accessibilityRole`).
+    /// Warnings for the app's console (`unknown role`).
     pub warnings: Vec<String>,
 }
 
@@ -334,6 +334,36 @@ export interface PanEvent {
   valueY?: number;
 }
 
+/** Where the mouse is over a hovered view: the payload of `onHoverMove`. */
+export interface HoverEvent {
+  /** Position in the view (points, its transforms undone). */
+  locationX: number;
+  locationY: number;
+  /** Position in the root view the view is in (the surface or its modal), as touches' `pageX`. */
+  pageX: number;
+  pageY: number;
+  altKey: boolean;
+  ctrlKey: boolean;
+  /** Command on Apple platforms, the Windows / Super key elsewhere. */
+  metaKey: boolean;
+  shiftKey: boolean;
+}
+
+/** Where a context menu was asked for: the payload of `onContextMenu`. */
+export interface ContextMenuEvent {
+  /** Position in the view (points, its transforms undone). */
+  locationX: number;
+  locationY: number;
+  /** Position in the root view the view is in: where `Menu.popup` opens a menu. */
+  pageX: number;
+  pageY: number;
+  altKey: boolean;
+  ctrlKey: boolean;
+  /** Command on Apple platforms, the Windows / Super key elsewhere. */
+  metaKey: boolean;
+  shiftKey: boolean;
+}
+
 /** Where a scroll view is: the payload of `onScroll`. */
 export interface ScrollEvent {
   x: number;
@@ -377,19 +407,31 @@ export interface WebViewNavigation {
 pub const EVENTS: &[(EventKind, u32, &str, &str)] = &[
     (EventKind::Press, on::ALL, "() => void", ""),
     (EventKind::LongPress, on::ALL, "() => void", ""),
-    (EventKind::PressIn, on::ALL, "() => void", ""),
-    (EventKind::PressOut, on::ALL, "() => void", ""),
+    (EventKind::PressDown, on::ALL, "() => void", ""),
+    (EventKind::PressUp, on::ALL, "() => void", ""),
     (
         EventKind::HoverIn,
         on::ALL,
         "() => void",
-        "The mouse came over the view or a view inside it (macOS and Linux; never on touches).",
+        "The mouse came over the view or a view inside it (never on touches).",
     ),
     (
         EventKind::HoverOut,
         on::ALL,
         "() => void",
-        "The mouse left the view and the views inside it, or the window (macOS and Linux).",
+        "The mouse left the view and the views inside it, or the window.",
+    ),
+    (
+        EventKind::HoverMove,
+        on::ALL,
+        "(e: HoverEvent) => void",
+        "The mouse moved over the view (or a view inside it) with no button down, at most once per frame.",
+    ),
+    (
+        EventKind::ContextMenu,
+        on::ALL,
+        "(e: ContextMenuEvent) => void",
+        "The secondary button (a right click, Control-click on Apple platforms) was pressed over the view: open a menu with `Menu.popup({ x: e.pageX, y: e.pageY })`. The nearest listener hears it; a text input or selectable text nearer shows its own menu instead.",
     ),
     (
         EventKind::FileDragEnter,
@@ -575,7 +617,7 @@ pub const EVENTS: &[(EventKind, u32, &str, &str)] = &[
         EventKind::ContentSizeChange,
         on::INPUT,
         "(e: { width: number; height: number }) => void",
-        "The size of the text (at the input's width when multiline): grow a multiline input with it.",
+        "The size of the text (at the input's width when `multiline`; one empty line's while it is empty, whatever its placeholder): grow a multiline input with it.",
     ),
     (
         EventKind::Message,
@@ -596,20 +638,6 @@ pub const EVENTS: &[(EventKind, u32, &str, &str)] = &[
         "(e: { isBuffering: boolean }) => void",
         "",
     ),
-    (
-        EventKind::BackRequest,
-        on::SCREEN,
-        "() => void",
-        "The user tried to leave a screen with `preventBack`.",
-    ),
-    (EventKind::Dismiss, on::SCREEN | on::MODAL, "() => void", ""),
-    (
-        EventKind::RequestClose,
-        on::MODAL,
-        "() => void",
-        "The user asked to close (Android back button, iOS sheet swipe): set `visible` to false to close it.",
-    ),
-    (EventKind::Show, on::MODAL, "() => void", ""),
 ];
 
 /// The events no element's props declare: the root's (`BackHandler`,
@@ -627,6 +655,13 @@ pub const INTERNAL_EVENTS: &[EventKind] = &[
     EventKind::KeyCommand,
     EventKind::Menu,
     EventKind::ViewableItemsChanged,
+    // `NavPage`'s `onDismiss` / `onBackPress` and `Dialog`'s `onClose` /
+    // `onCancel` / `onOpenChange` / `onOpen`: the navigation's handlers
+    // (`nsh-js` `navigation.rs`), declared with its components.
+    EventKind::BackRequest,
+    EventKind::Dismiss,
+    EventKind::RequestClose,
+    EventKind::Show,
 ];
 
 /// The interfaces of the host props, by the elements their props apply
@@ -643,8 +678,8 @@ const GROUPS: &[(u32, &str, &str)] = &[
     (on::SCROLL, "Scroll", "`<Scroll>`"),
     (on::LIST, "List", "lists"),
     (on::INPUT, "Input", "`<Input>`"),
-    (on::SCREEN, "Screen", "the screens of a stack"),
-    (on::MODAL, "Modal", "modals"),
+    (on::SCREEN, "NavPage", "the pages of a `NavStack`"),
+    (on::MODAL, "Dialog", "dialogs"),
     (on::WEBVIEW, "WebView", "web views"),
     (on::VIDEO, "Video", "videos"),
     (on::INPUT_ACCESSORY, "InputAccessory", "input accessories"),
@@ -697,7 +732,7 @@ pub fn declarations() -> String {
                 if !doc.is_empty() {
                     let _ = writeln!(out, "  /** {doc} */");
                 }
-                let _ = writeln!(out, "  {}?: {handler};", kind.prop_name());
+                let _ = writeln!(out, "  {}?: {handler};", kind.handler_name());
             }
             out.push_str("}\n");
         }
