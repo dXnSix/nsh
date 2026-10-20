@@ -69,11 +69,14 @@ pub(crate) struct Dom {
     rtl: Cell<Option<bool>>,
     /// The `onDismiss` handlers of modals the app removed, kept until the
     /// platform reports their dismissal, oldest first (owned): an app
-    /// removes a modal in `onRequestClose`, and the platform reports
+    /// removes a dialog in `onOpenChange` or `onCancel`, and the platform reports
     /// `onDismiss` once it has gone (after its animation).
     dismissed: RefCell<Vec<(NodeId, JsValue)>>,
     /// Whether the user's language is written right to left.
     env_rtl: Cell<bool>,
+    /// The tags (bits by `Tag as u32`; 63: the root) text was put in
+    /// without being shown, each reported once.
+    unshown_text: Cell<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -105,10 +108,14 @@ struct NodeData {
     /// Values of props that may hold native animation nodes (`style`,
     /// `pan`, ...), kept alive with the view (owned).
     retained: Vec<(&'static str, JsValue)>,
-    /// A `<Scroll>`'s content container (`contentContainerStyle` /
-    /// `contentContainerClass`), one of `children` that takes the others
+    /// A `<Scroll>`'s content container (`contentStyle` /
+    /// `contentClass`), one of `children` that takes the others
     /// ([`DETACHED`]: none).
     content: NodeId,
+    /// A Rust component's view or one of its slots (`component`,
+    /// `componentSlot`): the component places what is put in it, text in
+    /// a text of its own maybe.
+    places: bool,
     /// The node's object (not owned: the data goes with it).
     object: JsValue,
 }
@@ -238,6 +245,7 @@ impl Dom {
             desktop: Cell::new(false),
             rtl: Cell::new(None),
             env_rtl: Cell::new(false),
+            unshown_text: Cell::new(0),
             dismissed: RefCell::new(Vec::new()),
         }
     }
@@ -550,6 +558,7 @@ fn new_node(ctx: *mut JsContext, id: NodeId, text: bool, tag: Option<Tag>) -> Js
         children: Vec::new(),
         handlers: Vec::new(),
         content: DETACHED,
+        places: false,
         object: UNDEFINED,
     }));
     // SAFETY: a registered class; the opaque is the boxed data, freed by
@@ -904,6 +913,34 @@ fn is_ancestor(ctx: *mut JsContext, node: NodeId, of: NodeId) -> bool {
     false
 }
 
+/// Reports text put in an element of `tag` (`None`: the root), which does
+/// not show it, once per tag: only a `<Text>` shows text. Text the source
+/// holds is a compile error; this is a string an expression gives
+/// (`<View>{name}</View>`).
+#[cold]
+fn report_unshown_text(ctx: *mut JsContext, tag: Option<Tag>) {
+    let d = dom(ctx);
+    let bit = 1u64 << tag.map_or(63, |t| t as u32);
+    if d.unshown_text.get() & bit != 0 {
+        return;
+    }
+    d.unshown_text.set(d.unshown_text.get() | bit);
+    let place = match tag {
+        None => "the root".to_owned(),
+        Some(Tag::Cell) => "a <List> row".to_owned(),
+        Some(tag) => format!("a <{tag:?}>"),
+    };
+    d.shared.warnings.borrow_mut().warn(format!(
+        "a string in {place} is not shown: text shows in a <Text> (`<Text>{{name}}</Text>`)"
+    ));
+}
+
+/// The tags text was put in unshown ([`report_unshown_text`]'s bits).
+#[cfg(test)]
+pub(crate) fn unshown_text_tags(ctx: *mut JsContext) -> u64 {
+    dom(ctx).unshown_text.get()
+}
+
 /// Moves node `child` into `parent` before `before` (`None`: at the end).
 fn insert_before(
     ctx: *mut JsContext,
@@ -940,6 +977,10 @@ fn insert_before(
             ctx,
             "nsh: a node cannot be inserted into itself",
         ));
+    }
+    // SAFETY: live node data, read briefly.
+    if unsafe { (*c).text && !(*p).places && (*p).tag != Some(Tag::Text) } {
+        report_unshown_text(ctx, unsafe { (*p).tag });
     }
     let d = dom(ctx);
     // Out of its current parent (the core moves the view itself).
@@ -998,7 +1039,7 @@ fn content_of(ctx: *mut JsContext, parent: JsValue, child: JsValue) -> JsValue {
 
 /// The content container of `<Scroll>` `node` (borrowed), made on first
 /// use: a view the scroll view's children move into, styled by
-/// `contentContainerStyle` / `contentContainerClass` (React Native's
+/// `contentStyle` / `contentClass` (React Native's
 /// content container: `flexGrow: 1` with `justifyContent: "center"`
 /// centers what is shorter than the viewport and still scrolls what is
 /// longer).
@@ -1030,6 +1071,26 @@ fn scroll_content(ctx: *mut JsContext, node: JsValue) -> Result<JsValue, JsValue
     // The scroll view owns it now (as its child).
     unsafe { qjs::JS_FreeValue(ctx, content) };
     result.map(|()| content_of(ctx, node, UNDEFINED))
+}
+
+/// A state or part style prop's value (borrowed) as the core takes it:
+/// its declarations, none when it has none.
+fn part_style(
+    ctx: *mut JsContext,
+    name: &str,
+    value: JsValue,
+) -> Result<Option<std::sync::Arc<nsh_core::StylePatch>>, JsValue> {
+    // SAFETY: a context reference for the decoder, which reads a dup.
+    let cx = unsafe { Ctx::from_raw(std::ptr::NonNull::new_unchecked(ctx)) };
+    let v = unsafe { Value::from_raw(cx, qjs::JS_DupValue(ctx, value)) };
+    let mut warnings = crate::protocol::Warnings::deferred();
+    let patch = crate::protocol::style_patch(&v, &mut warnings);
+    dom(ctx).shared.warnings.borrow_mut().merge(warnings);
+    match patch {
+        Ok(patch) => Ok((!patch.is_empty()).then(|| std::sync::Arc::new(patch))),
+        Err(rquickjs::Error::Exception) => Err(qjs::JS_EXCEPTION),
+        Err(e) => Err(throw_type(ctx, &format!("nsh: prop `{name}`: {e}"))),
+    }
 }
 
 /// Removes node `child` from `parent` (nothing when it is not a child).
@@ -1143,32 +1204,48 @@ fn set_prop(
     match name {
         "children" => return Ok(()),
         "ref" => {
-            // SAFETY: a borrowed function, called untracked with the node.
-            if unsafe { qjs::JS_IsFunction(ctx, value) } {
-                let mut args = [node];
-                let r = reactive::untracked_with(ctx, || unsafe {
-                    qjs::JS_Call(ctx, value, UNDEFINED, 1, args.as_mut_ptr())
-                });
-                if unsafe { qjs::JS_IsException(r) } {
-                    return Err(r);
-                }
-                unsafe { qjs::JS_FreeValue(ctx, r) };
-            }
+            apply_ref(ctx, value, node)?;
             return Ok(());
         }
+        // SAFETY: live node data.
+        "component" | "componentSlot" => unsafe { (*p).places = true },
         "ios" | "android" | "desktop" | "web" => {
             return platform_props(ctx, node, name, value, prev);
         }
-        "contentContainerStyle" | "contentContainerClass"
-            if unsafe { (*p).tag } == Some(Tag::Scroll) =>
-        {
+        "contentStyle" | "contentClass" if unsafe { (*p).tag } == Some(Tag::Scroll) => {
             let content = scroll_content(ctx, node)?;
-            let name = if name == "contentContainerStyle" {
+            let name = if name == "contentStyle" {
                 "style"
             } else {
                 "class"
             };
             return set_prop(ctx, content, name, value, prev);
+        }
+        "activeStyle" | "hoverStyle" | "focusStyle" | "disabledStyle" | "selectedStyle"
+        | "headerStyle" => {
+            let patch = part_style(ctx, name, value)?;
+            let prop = match name {
+                "activeStyle" => nsh_core::Prop::ActiveStyle(patch),
+                "hoverStyle" => nsh_core::Prop::HoverStyle(patch),
+                "focusStyle" => nsh_core::Prop::FocusStyle(patch),
+                "disabledStyle" => nsh_core::Prop::DisabledStyle(patch),
+                "selectedStyle" => nsh_core::Prop::SelectedStyle(patch),
+                _ => nsh_core::Prop::HeaderStyle(patch),
+            };
+            return dom(ctx).push(ctx, Op::SetProp { id, prop });
+        }
+        "headerClass" | "contentClass" => {
+            // SAFETY: an inline tag check.
+            let names: Box<str> = if unsafe { qjs::JS_IsString(value) } {
+                string_arg(ctx, value).unwrap_or_default().into()
+            } else {
+                Box::default()
+            };
+            let prop = match name {
+                "headerClass" => nsh_core::Prop::HeaderClass(names),
+                _ => nsh_core::Prop::ListContentClass(names),
+            };
+            return dom(ctx).push(ctx, Op::SetProp { id, prop });
         }
         _ => {}
     }
@@ -1182,7 +1259,7 @@ fn set_prop(
     if name.len() > 2
         && name.starts_with("on")
         && name.as_bytes()[2].is_ascii_uppercase()
-        && let Some(event) = EventKind::from_prop(name)
+        && let Some(event) = EventKind::from_handler(name)
     {
         return set_event(ctx, p, event, value);
     }
@@ -1753,20 +1830,19 @@ fn insert_value(
     marker: Option<JsValue>,
 ) -> Result<(), JsValue> {
     if is_dynamic(ctx, value, 0) {
-        // A run of children (`{a()}{b()}`, one insert): each function gets
-        // a memo of its own, so a change in one runs only that one and the
-        // others' nodes stay (not made again).
-        let memos = memoize_run(ctx, value);
-        let value = memos.unwrap_or(value);
-        let mut data = [parent, marker.unwrap_or(UNDEFINED), value];
-        // SAFETY: the function keeps dups of `data`.
-        let func =
-            unsafe { qjs::JS_NewCFunctionData(ctx, Some(insert_run), 1, 0, 3, data.as_mut_ptr()) };
-        if let Some(memos) = memos {
-            unsafe { qjs::JS_FreeValue(ctx, memos) };
-        }
-        let r = reactive::render_effect(ctx, func);
-        unsafe { qjs::JS_FreeValue(ctx, r) };
+        // What the insert shows now, which its effects update.
+        let shown = new_array(ctx, Vec::new());
+        let r = if unsafe { qjs::JS_IsFunction(ctx, value) } {
+            insert_effect(
+                ctx,
+                insert_run,
+                [parent, marker.unwrap_or(UNDEFINED), value, shown],
+            )
+        } else {
+            insert_items(ctx, parent, marker.unwrap_or(UNDEFINED), value, shown)
+        };
+        unsafe { qjs::JS_FreeValue(ctx, shown) };
+        r?;
         // A throw in the effect is the round's error.
         let r = reactive::finish_value(ctx, UNDEFINED);
         return if unsafe { qjs::JS_IsException(r) } {
@@ -1792,6 +1868,53 @@ fn insert_value(
     });
     free_values(ctx, keep);
     result
+}
+
+/// A render effect of an insert running `run` with `data` (borrowed:
+/// the parent, the marker, the value and the array of the nodes shown).
+fn insert_effect(
+    ctx: *mut JsContext,
+    run: unsafe extern "C" fn(
+        *mut JsContext,
+        JsValue,
+        c_int,
+        *mut JsValue,
+        c_int,
+        *mut JsValue,
+    ) -> JsValue,
+    mut data: [JsValue; 4],
+) -> Result<(), JsValue> {
+    // SAFETY: the function keeps dups of `data`.
+    let func = unsafe { qjs::JS_NewCFunctionData(ctx, Some(run), 0, 0, 4, data.as_mut_ptr()) };
+    if unsafe { qjs::JS_IsException(func) } {
+        return Err(func);
+    }
+    let r = reactive::render_effect(ctx, func);
+    unsafe { qjs::JS_FreeValue(ctx, r) };
+    Ok(())
+}
+
+/// The insert of an array holding functions (`items`, borrowed): each
+/// function gets a memo of its own, so a change in one runs only that one
+/// and the others' nodes stay (not made again), and one render effect
+/// shows them all.
+fn insert_items(
+    ctx: *mut JsContext,
+    parent: JsValue,
+    marker: JsValue,
+    items: JsValue,
+    shown: JsValue,
+) -> Result<(), JsValue> {
+    let memos = memoize_run(ctx, items);
+    let r = insert_effect(
+        ctx,
+        insert_items_run,
+        [parent, marker, memos.unwrap_or(items), shown],
+    );
+    if let Some(memos) = memos {
+        unsafe { qjs::JS_FreeValue(ctx, memos) };
+    }
+    r
 }
 
 /// For an array of children holding functions, a copy with a memo for each
@@ -1866,27 +1989,84 @@ fn new_array(ctx: *mut JsContext, mut values: Vec<JsValue>) -> JsValue {
     unsafe { qjs::JS_NewArrayFrom(ctx, values.len() as c_int, values.as_mut_ptr()) }
 }
 
-/// A run of a dynamic insert: the nodes inserted last time (an array) in,
-/// the nodes inserted now out.
+/// A run of a dynamic insert of a function: calls it, and the functions it
+/// returns, tracked by this effect. An array holding functions gets an
+/// effect of its own ([`insert_items`]), made again only when this one
+/// runs again: a component's `children` getter makes every node of the
+/// array, and a change in one of its functions (an `<If>`, a ternary)
+/// must run only that one, not the getter.
 unsafe extern "C" fn insert_run(
     ctx: *mut JsContext,
     _this: JsValue,
-    argc: c_int,
-    argv: *mut JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
     _magic: c_int,
     data: *mut JsValue,
 ) -> JsValue {
-    // SAFETY: three data values (`insert_value`).
-    let (parent, marker, value) = unsafe { (*data, *data.add(1), *data.add(2)) };
+    // SAFETY: four data values (`insert_effect`).
+    let (parent, marker, value, shown) =
+        unsafe { (*data, *data.add(1), *data.add(2), *data.add(3)) };
+    // SAFETY: a dup of a live value; each call's result replaces it.
+    let mut value = unsafe { qjs::JS_DupValue(ctx, value) };
+    let mut depth = 0;
+    while unsafe { qjs::JS_IsFunction(ctx, value) } && node_ptr(ctx, value).is_null() {
+        if depth > MAX_DEPTH {
+            unsafe { qjs::JS_FreeValue(ctx, value) };
+            return throw_type(ctx, "nsh: children nested too deeply");
+        }
+        let r = unsafe { qjs::JS_Call(ctx, value, UNDEFINED, 0, ptr::null_mut()) };
+        unsafe { qjs::JS_FreeValue(ctx, value) };
+        if unsafe { qjs::JS_IsException(r) } {
+            return r;
+        }
+        value = r;
+        depth += 1;
+    }
+    let r = if unsafe { qjs::JS_IsArray(value) } && is_dynamic(ctx, value, 0) {
+        insert_items(ctx, parent, marker, value, shown)
+    } else {
+        show(ctx, parent, marker, value, shown)
+    };
+    unsafe { qjs::JS_FreeValue(ctx, value) };
+    r.err().unwrap_or(UNDEFINED)
+}
+
+/// A run of the effect of [`insert_items`]: shows the array, its functions
+/// called (tracked by this effect).
+unsafe extern "C" fn insert_items_run(
+    ctx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+    _magic: c_int,
+    data: *mut JsValue,
+) -> JsValue {
+    // SAFETY: four data values (`insert_effect`).
+    let (parent, marker, items, shown) =
+        unsafe { (*data, *data.add(1), *data.add(2), *data.add(3)) };
+    show(ctx, parent, marker, items, shown)
+        .err()
+        .unwrap_or(UNDEFINED)
+}
+
+/// Shows `value` (borrowed; its functions are called) in `parent` before
+/// `marker` in place of the nodes `shown` holds, which then holds the new
+/// ones.
+fn show(
+    ctx: *mut JsContext,
+    parent: JsValue,
+    marker: JsValue,
+    value: JsValue,
+    shown: JsValue,
+) -> Result<(), JsValue> {
     let marker = (!node_ptr(ctx, marker).is_null()).then_some(marker);
-    let old = array_items(ctx, arg(argc, argv, 0));
     let mut items = Vec::new();
     let mut keep = Vec::new();
     if let Err(e) = resolve(ctx, value, &mut items, &mut keep, 0) {
         free_values(ctx, keep);
-        free_values(ctx, old);
-        return e;
+        return Err(e);
     }
+    let old = array_items(ctx, shown);
     // A lone text node shown again as text is updated in place.
     let reuse = match old.as_slice() {
         [only] => Some(*only),
@@ -1898,7 +2078,7 @@ unsafe extern "C" fn insert_run(
         Err(e) => {
             free_values(ctx, keep);
             free_values(ctx, old);
-            return e;
+            return Err(e);
         }
     };
     free_values(ctx, keep);
@@ -1907,10 +2087,25 @@ unsafe extern "C" fn insert_run(
     // alive until then.
     free_values(ctx, old);
     match result {
-        Ok(()) => new_array(ctx, new),
+        Ok(()) => {
+            set_shown(ctx, shown, new);
+            Ok(())
+        }
         Err(e) => {
             free_values(ctx, new);
-            e
+            Err(e)
+        }
+    }
+}
+
+/// Makes array `shown` hold `nodes` (taken) alone.
+fn set_shown(ctx: *mut JsContext, shown: JsValue, nodes: Vec<JsValue>) {
+    // SAFETY: writes to a live array, which takes the values.
+    unsafe {
+        let len = qjs::JS_NewFloat64(0.0);
+        qjs::JS_SetPropertyStr(ctx, shown, c"length".as_ptr(), len);
+        for (i, node) in nodes.into_iter().enumerate() {
+            qjs::JS_SetPropertyUint32(ctx, shown, i as u32, node);
         }
     }
 }
@@ -2747,9 +2942,10 @@ unsafe extern "C" fn unmount(
     result
 }
 
-/// `setup(tailwind, theme, appearance)`: the app's Tailwind theme and the
-/// theme of the Rust components (JSON strings, or null) and its
-/// appearance (`"light"` / `"dark"`, or null), before anything renders.
+/// `setup(tailwind, theme, appearance, statusBar)`: the app's Tailwind
+/// theme and the theme of the Rust components (JSON strings, or null), its
+/// appearance (`"light"` / `"dark"`, or null) and the status bar's default
+/// (`nsh.json` `"statusBar"` as JSON, or null), before anything renders.
 unsafe extern "C" fn setup(
     ctx: *mut JsContext,
     _this: JsValue,
@@ -2765,6 +2961,21 @@ unsafe extern "C" fn setup(
         {
             return e;
         }
+    }
+    // Checked by the bundler; a hand-made bundle's wrong value is ignored.
+    let status_bar = string_arg(ctx, arg(argc, argv, 3))
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .and_then(|v| nsh_core::StatusBarSetting::from_json(&v).ok());
+    if let Some(setting) = status_bar
+        && let Err(e) = push_op(
+            ctx,
+            Op::Command {
+                id: nsh_core::ROOT_ID,
+                command: nsh_core::Command::SetStatusBar(setting),
+            },
+        )
+    {
+        return e;
     }
     let appearance =
         crate::env::parse_appearance(&string_arg(ctx, arg(argc, argv, 2)).unwrap_or_default());
@@ -2962,6 +3173,72 @@ pub(crate) fn install_globals(ctx: *mut JsContext) {
     }
 }
 
+/// Gives `node` (borrowed) to ref `target` (borrowed): a signal is set to
+/// it, a function called with it (untracked). False for other values,
+/// which the compiled code assigns the node to (`ref={el}` with `let el`,
+/// `ref={refs.input}`).
+pub(crate) fn apply_ref(
+    ctx: *mut JsContext,
+    target: JsValue,
+    node: JsValue,
+) -> Result<bool, JsValue> {
+    match reactive::signal_kind(ctx, target) {
+        (true, _) => {
+            // SAFETY: a dup the signal takes.
+            reactive::set_signal(ctx, target, unsafe { qjs::JS_DupValue(ctx, node) });
+            return Ok(true);
+        }
+        (_, true) => {
+            return Err(throw_type(
+                ctx,
+                "a ref cannot be a memo, which is read-only: give a signal, a function or a variable",
+            ));
+        }
+        _ => {}
+    }
+    // SAFETY: a borrowed function, called untracked with the node.
+    if unsafe { !qjs::JS_IsFunction(ctx, target) } {
+        return Ok(false);
+    }
+    let mut args = [node];
+    let r = reactive::untracked_with(ctx, || unsafe {
+        qjs::JS_Call(ctx, target, UNDEFINED, 1, args.as_mut_ptr())
+    });
+    if unsafe { qjs::JS_IsException(r) } {
+        return Err(r);
+    }
+    unsafe { qjs::JS_FreeValue(ctx, r) };
+    Ok(true)
+}
+
+/// `ref(target, node, name)`: what compiled `ref={…}` calls with the
+/// element (or a component's ref): [`apply_ref`], whether it took the
+/// node. With `name`, the binding the ref names cannot be assigned (a
+/// `const`, an import), so a target that takes no node is an error.
+unsafe extern "C" fn ref_(
+    ctx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let (target, node, name) = (arg(argc, argv, 0), arg(argc, argv, 1), arg(argc, argv, 2));
+    match apply_ref(ctx, target, node) {
+        Ok(true) => qjs::JS_TRUE,
+        Ok(false) if unsafe { qjs::JS_IsString(name) } => {
+            let name = to_string(ctx, name).unwrap_or_default();
+            throw_type(
+                ctx,
+                &format!(
+                    "ref={{{name}}}: `{name}` cannot be assigned (a const or an import) and is neither \
+                     a signal nor a function: declare it with `let`, or give a signal or a function"
+                ),
+            )
+        }
+        Ok(false) => qjs::JS_FALSE,
+        Err(e) => e,
+    }
+}
+
 /// The exports of `nsh:rt`.
 pub(crate) const RT_EXPORTS: &[crate::modules::Item] = &[
     ("element", Export::Function(element, 1), Ts::Internal),
@@ -2976,9 +3253,49 @@ pub(crate) const RT_EXPORTS: &[crate::modules::Item] = &[
     ("each", Export::Function(each, 3), Ts::Internal),
     ("merge", Export::Function(merge, 2), Ts::Internal),
     ("list", Export::Function(crate::list::list, 1), Ts::Internal),
-    ("setup", Export::Function(setup, 3), Ts::Internal),
+    ("setup", Export::Function(setup, 4), Ts::Internal),
     ("font", Export::Function(font, 2), Ts::Internal),
+    ("metaUrl", Export::Function(meta_url, 1), Ts::Internal),
+    ("ref", Export::Function(ref_, 3), Ts::Internal),
 ];
+
+/// `metaUrl(path)`: what `import.meta.url` of the app's module `path`
+/// (relative to the app's directory) compiles to. The app's directory
+/// is a `file:` URL where the host has one (`${pluginDir}`: a local or
+/// packaged desktop app), else the page's URL (the web), else `asset:/`,
+/// whose relative URLs the app's assets resolve (packaged mobile apps,
+/// devices on the dev server).
+unsafe extern "C" fn meta_url(
+    ctx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let Some(path) = string_arg(ctx, arg(argc, argv, 0)) else {
+        return qjs::JS_EXCEPTION;
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let located = dom(ctx)
+        .shared
+        .system_paths
+        .borrow()
+        .plugin_dir
+        .clone()
+        .and_then(|dir| url::Url::from_directory_path(dir).ok());
+    // A page has no directory of its own on disk.
+    #[cfg(target_arch = "wasm32")]
+    let located = None;
+    let base = located
+        .or_else(|| crate::web::web(ctx).base_url.clone())
+        .or_else(|| url::Url::parse("asset:/").ok());
+    let url = base
+        .and_then(|base| base.join(&path).ok())
+        .map_or_else(|| format!("asset:/{path}"), String::from);
+    match crate::web::js::string(ctx, &url) {
+        Ok(v) => v.take(),
+        Err(_) => qjs::JS_EXCEPTION,
+    }
+}
 
 /// `font(uri, family)`: what `import Inter from "./Inter.ttf"` evaluates
 /// to (its family); the host registers the font before the first frame.
@@ -3377,7 +3694,7 @@ mod tests {
         assert_eq!(reported(&host), ["1"]);
     }
 
-    /// `contentContainerStyle` moves a scroll view's children into a view
+    /// `contentStyle` moves a scroll view's children into a view
     /// it styles, whatever order props and children come in.
     #[test]
     fn scroll_content_container() {
@@ -3391,13 +3708,13 @@ mod tests {
             mount(() => {
                 const v = element("view");
                 const s = element("scroll");
-                prop(s, "contentContainerStyle", { flexGrow: 1 });
+                prop(s, "contentStyle", { flexGrow: 1 });
                 append(s, text("a"));
                 insert(s, () => (show() ? text("b") : null));
                 append(v, s);
                 const t = element("scroll");
                 append(t, text("c"));
-                prop(t, "contentContainerClass", "grow");
+                prop(t, "contentClass", "grow");
                 append(v, t);
                 return v;
             });

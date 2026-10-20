@@ -10,7 +10,6 @@ use nsh_core::{
     time::Instant,
     ui::{AnyElement, Dialog, DialogButton, DialogButtonStyle, prelude::*},
 };
-use nsh_ui_mobile::{BarStyle, StatusBar, StatusBarProps};
 
 use crate::ui::{
     Badge, Button, ButtonVariant, Card, DemoPage, Figure, Finish, Finished, IconName, IconTile,
@@ -19,10 +18,10 @@ use crate::ui::{
 };
 
 /// The status bar's styles, in the segments' order.
-const BAR_STYLES: [(BarStyle, &str, &str); 3] = [
-    (BarStyle::LightContent, "light-content", "Light"),
-    (BarStyle::DarkContent, "dark-content", "Dark"),
-    (BarStyle::Default, "default", "Default"),
+const BAR_STYLES: [(StatusBarStyle, &str, &str); 3] = [
+    (StatusBarStyle::Light, "light", "Light"),
+    (StatusBarStyle::Dark, "dark", "Dark"),
+    (StatusBarStyle::Default, "auto", "Auto"),
 ];
 
 /// The posts the network card asks for.
@@ -201,26 +200,66 @@ fn environment() -> AnyElement {
 }
 
 /// The status bar: its style (following the appearance until one is
-/// picked) and whether it is hidden.
+/// picked) and whether it is hidden, shown by a dialog's `status_bar`
+/// while it is open (over the page's).
 #[component]
 fn StatusBarCard() -> impl IntoElement {
     // The style the user picked.
     let picked = signal(None::<usize>);
     let hidden = signal(false);
+    let open = signal(false);
     // Until one is picked, the style follows the appearance (light text
     // on the dark page).
     let index = computed(move || picked.get().unwrap_or(if dark() { 0 } else { 1 }));
+    let preview = If::new(open, move || {
+        // The background its content is for.
+        let backdrop = move || match index.get() {
+            0 => AdaptiveColor::from(rgb(0x101113)),
+            1 => AdaptiveColor::from(rgb(0xf4f4f2)),
+            _ => colors::BACKGROUND,
+        };
+        let ink = move || {
+            if index.get() == 0 {
+                AdaptiveColor::from(rgb(0xffffff))
+            } else {
+                AdaptiveColor::from(rgb(0x111214))
+            }
+        };
+        modal()
+            .animation(ModalAnimation::Fade)
+            .status_bar(move || {
+                StatusBarSetting::default()
+                    .foreground(BAR_STYLES[index.get()].0)
+                    .hidden(hidden.get())
+                    .animated(true)
+            })
+            .on_cancel(move |_: &()| open.set(false))
+            .child(
+                view()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .gap_4()
+                    .bg(backdrop)
+                    .child(
+                        text(move || {
+                            format!(
+                                "statusBar: {{ foreground: \"{}\", hidden: {} }}",
+                                BAR_STYLES[index.get()].1,
+                                hidden.get()
+                            )
+                        })
+                        .text_size(px(13.0))
+                        .text_color(ink)
+                        .font_family(MONO),
+                    )
+                    .child(Button::new("Close", move |_: &()| open.set(false))),
+            )
+    });
     Card::new()
         .icon(IconName::Mobile)
         .title("Status bar")
-        .subtitle("StatusBar: style and visibility, animated")
-        .child(StatusBar::element(StatusBarProps {
-            bar_style: Prop::bind(move || Some(BAR_STYLES[index.get()].0)),
-            hidden: Prop::bind(move || Some(hidden.get())),
-            animated: Some(true).into(),
-            android: None.into(),
-            web: None.into(),
-        }))
+        .subtitle("A dialog's statusBar: over the page's while it is open")
         .child(
             segmented(
                 BAR_STYLES.map(|(_, _, label)| Segment::new(label)),
@@ -239,7 +278,7 @@ fn StatusBarCard() -> impl IntoElement {
                         .gap(px(2.0))
                         .child(text("Hidden").text_size(px(15.0)).text_color(colors::TEXT))
                         .child(
-                            text(move || format!("barStyle: \"{}\"", BAR_STYLES[index.get()].1))
+                            text(move || format!("foreground: \"{}\"", BAR_STYLES[index.get()].1))
                                 .text_size(px(12.0))
                                 .text_color(colors::MUTED)
                                 .font_family(MONO),
@@ -252,6 +291,8 @@ fn StatusBarCard() -> impl IntoElement {
                     },
                 )),
         )
+        .child(Button::new("Preview", move |_: &()| open.set(true)).icon(IconName::Mobile))
+        .child(preview)
 }
 
 /// A tappable row with an icon tile, a title, a detail and a chevron.
@@ -663,54 +704,60 @@ fn FramesAndTimers() -> impl IntoElement {
 /// Three posts loaded over HTTP, and a log line.
 #[component]
 fn Network() -> impl IntoElement {
-    // The posts loaded: id and title.
-    let posts = signal(Vec::<(u64, String)>::new());
-    // How the last request went.
-    let status = signal(None::<Toned>);
-    // A request is in progress.
-    let loading = signal(false);
-    let owner = Owner::current();
-    // Loads three posts (TS: `fetch`) with the engine's network stack: the
+    // Loads once asked, and again on each press after (TS: `resource`): it
+    // keeps the posts while it loads again, and a failure next to them. The
+    // request goes with the engine's network stack (TS: `fetch`): the
     // platform's, or the browser's on the web.
-    let load = move |_: &()| {
-        batch(|| {
-            status.set(Some(Toned {
+    let asked = signal(false);
+    let result = resource(
+        move || asked.get().then_some(()),
+        |(), _| async move {
+            let started = Instant::now();
+            let response = fetch(POSTS).await?;
+            let (code, posts) = (response.status(), parse_posts(&response.text())?);
+            let ms = started.elapsed().as_millis();
+            Ok::<_, String>((code, posts, ms))
+        },
+    );
+    // The posts loaded: id and title.
+    let posts = computed(move || {
+        result
+            .with(|r| r.map(|(_, posts, _)| posts.clone()))
+            .unwrap_or_default()
+    });
+    // How the last request went.
+    let status = computed(move || {
+        if result.loading() {
+            return Some(Toned {
                 text: "loading…".to_owned(),
                 tone: Tone::Neutral,
-            }));
-            loading.set(true);
-        });
-        owner.run(|| {
-            spawn(async move {
-                let started = Instant::now();
-                let result = fetch(POSTS)
-                    .await
-                    .map(|response| (response.status(), response.text()));
-                let ms = started.elapsed().as_millis();
-                batch(|| {
-                    loading.set(false);
-                    status.set(Some(
-                        match result.and_then(|(code, body)| Ok((code, parse_posts(&body)?))) {
-                            Ok((code, loaded)) => {
-                                posts.set(loaded);
-                                Toned {
-                                    text: format!("HTTP {code} · {ms} ms"),
-                                    tone: if (200..300).contains(&code) {
-                                        Tone::Up
-                                    } else {
-                                        Tone::Danger
-                                    },
-                                }
-                            }
-                            Err(error) => Toned {
-                                text: error,
-                                tone: Tone::Danger,
-                            },
-                        },
-                    ));
-                });
+            });
+        }
+        if let Some(error) = result.error() {
+            return Some(Toned {
+                text: error,
+                tone: Tone::Danger,
+            });
+        }
+        result.with(|r| {
+            r.map(|(code, _, ms)| Toned {
+                text: format!("HTTP {code} · {ms} ms"),
+                tone: if (200..300).contains(code) {
+                    Tone::Up
+                } else {
+                    Tone::Danger
+                },
             })
-        });
+        })
+    });
+    // A request is in progress.
+    let loading = computed(move || result.loading());
+    let load = move |_: &()| {
+        if asked.get_untracked() {
+            result.refetch();
+        } else {
+            asked.set(true);
+        }
     };
     let list = If::new(
         move || posts.with(Vec::is_empty),

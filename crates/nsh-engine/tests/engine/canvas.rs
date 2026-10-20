@@ -57,12 +57,11 @@ fn start(app: &str) -> (Engine, crossbeam_channel::Receiver<MountBatch>) {
         entry,
         minify: false,
         split: false,
-        ui_sets: vec![nsh_ui_mobile::registry().into()],
+        ui_sets: vec![nsh_base::registry().into()],
     })
     .unwrap();
     let bytecode =
-        nsh_js::compile_bytecode_with(&bundle.code, false, &[nsh_ui_mobile::registry().into()])
-            .unwrap();
+        nsh_js::compile_bytecode_with(&bundle.code, false, &[nsh_base::registry().into()]).unwrap();
     // SAFETY: compiled just now by this runtime.
     let app = unsafe { Bundle::bytecode(bytecode) };
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -71,11 +70,13 @@ fn start(app: &str) -> (Engine, crossbeam_channel::Receiver<MountBatch>) {
         viewport: Size::new(390.0, 844.0),
         trace: false,
         network: None,
+        websocket: None,
+        filesystem: None,
         assets: None,
         environment: Default::default(),
         header_heights: (44.0, 96.0),
         limits: nsh_engine::Limits::default(),
-        ui_sets: vec![nsh_ui_mobile::registry()],
+        ui_sets: vec![nsh_base::registry()],
         runtime: None,
         data_dir: None,
         storage: None,
