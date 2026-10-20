@@ -1280,8 +1280,8 @@ opt-level = 3
     /// LTO over one codegen unit re-optimizes the whole module (0.3 s
     /// against 7.8 s for `examples/rust-exports`).
     /// The app's crates are at `-O1` (what changes), the other crates for
-    /// size, QuickJS and layout at `-O3` as in nsh's own manifest (they
-    /// dominate runtime cost). It panics as `web` does (`abort`), and without
+    /// size, QuickJS at `-O3` (it dominates runtime cost); the workspace's
+    /// `dev` profile already raises QuickJS and layout for the hosts. It panics as `web` does (`abort`), and without
     /// debug assertions, so the page behaves as the published one.
     fn web_dev_profile(&self) -> String {
         let mut profile = String::from(
@@ -1308,15 +1308,6 @@ opt-level = 3
                 c.package
             ));
         }
-        profile.push_str(
-            "
-# As nsh's own manifest: the interpreter and layout fast in debug builds.
-[profile.dev.package.quickjs-jit-sys]
-opt-level = 3
-[profile.dev.package.taffy]
-opt-level = 3
-",
-        );
         profile
     }
 
@@ -2863,12 +2854,20 @@ mod tests {
             let name = format!("profile.web-dev.package.\"{package}\"");
             assert_eq!(profile(&name), ["opt-level = 1"], "{manifest}");
         }
-        // As nsh's own manifest, for the debug builds of the hosts.
+        // As nsh's own manifest, for the debug builds of the hosts: each
+        // table once, or Cargo rejects the manifest as a duplicate key.
         assert_eq!(
             profile("profile.dev.package.quickjs-jit-sys"),
             ["opt-level = 3"]
         );
         assert_eq!(profile("profile.dev.package.taffy"), ["opt-level = 3"]);
+        for table in [
+            "[profile.dev.package.quickjs-jit-sys]",
+            "[profile.dev.package.taffy]",
+            "[profile.web-dev]",
+        ] {
+            assert_eq!(manifest.matches(table).count(), 1, "{table}: {manifest}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
