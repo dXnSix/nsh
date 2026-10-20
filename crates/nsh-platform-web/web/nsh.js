@@ -1817,6 +1817,16 @@ class Player {
   op_sticky([, id, cells]) {
     const el = this.view(id);
     if (!el) return;
+    // Cells no longer sticky go back to their frames: a recycled cell
+    // shows another item now, which its old shift would move.
+    const kept = new Set(cells.map(([cellId]) => cellId));
+    for (const [cellId] of el._stickyCells ?? []) {
+      const cell = kept.has(cellId) ? null : this.view(cellId);
+      if (!cell) continue;
+      cell._sticky = undefined;
+      cell.style.translate = "";
+      cell.classList.remove("nsh-stuck");
+    }
     el._stickyCells = cells;
     this.updateSticky(el);
   }
