@@ -25,7 +25,6 @@ unreachable_pub = "deny"
 private_interfaces = "deny"
 
 [workspace.dependencies]
-nsh-animation = { version = "0.1.1", path = "crates/nsh-animation" }
 nsh-core = { version = "0.1.1", path = "crates/nsh-core" }
 nsh-package = { version = "0.1.1", path = "crates/nsh-package" }
 nsh-base = { version = "0.1.1", path = "crates/nsh-base" }
@@ -426,6 +425,10 @@ codegen-units = 1
 [profile.dev.package.quickjs-jit-sys]
 opt-level = 3
 [profile.dev.package.taffy]
+opt-level = 3
+[profile.dev.package.objc2]
+opt-level = 3
+[profile.dev.package.objc2-encode]
 opt-level = 3
 
 # The web runtime (`nsh.wasm`): what pages download, so Rust is optimized for

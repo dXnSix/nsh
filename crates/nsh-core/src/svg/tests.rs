@@ -41,6 +41,11 @@ fn scratch(test: &str) -> PathBuf {
     dir
 }
 
+/// A size in points as `(width, height)`, for the assertions.
+fn pt(size: crate::geometry::Size<crate::geometry::Points>) -> (f32, f32) {
+    (size.width.0, size.height.0)
+}
+
 #[test]
 fn svg_raster_sniffs_bytes_not_names() {
     assert!(sniff(ICON));
@@ -62,32 +67,32 @@ fn svg_raster_sniffs_bytes_not_names() {
 
 #[test]
 fn svg_raster_size_from_width_height_and_view_box() {
-    assert_eq!(size(ICON).unwrap(), (24.0, 24.0), "viewBox only");
+    assert_eq!(pt(size(ICON).unwrap()), (24.0, 24.0), "viewBox only");
     assert_eq!(
-        size(LOGO).unwrap(),
+        pt(size(LOGO).unwrap()),
         (48.0, 24.0),
         "width/height win over the viewBox"
     );
     assert_eq!(
-        size(&svg(r#"width="30" height="20""#)).unwrap(),
+        pt(size(&svg(r#"width="30" height="20""#)).unwrap()),
         (30.0, 20.0)
     );
     assert_eq!(
-        size(&svg(r#"width="30px" height="1in""#)).unwrap(),
+        pt(size(&svg(r#"width="30px" height="1in""#)).unwrap()),
         (30.0, 96.0),
         "CSS units"
     );
     // One side alone takes the other from the viewBox's aspect ratio.
     assert_eq!(
-        size(&svg(r#"width="16" viewBox="0 0 32 64""#)).unwrap(),
+        pt(size(&svg(r#"width="16" viewBox="0 0 32 64""#)).unwrap()),
         (16.0, 32.0)
     );
     assert_eq!(
-        size(&svg(r#"height="10" viewBox="0 0 32 64""#)).unwrap(),
+        pt(size(&svg(r#"height="10" viewBox="0 0 32 64""#)).unwrap()),
         (5.0, 10.0)
     );
     assert_eq!(
-        size(&svg(r#"width="0.25in" viewBox="0,0,1,2""#)).unwrap(),
+        pt(size(&svg(r#"width="0.25in" viewBox="0,0,1,2""#)).unwrap()),
         (24.0, 48.0)
     );
     let doc = br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" viewBox="0 0 32 64"><rect width="32" height="64" fill="#f00"/></svg>"##;
@@ -104,11 +109,11 @@ fn svg_raster_size_from_width_height_and_view_box() {
 #[test]
 fn svg_raster_size_percentages() {
     assert_eq!(
-        size(&svg(r#"width="50%" height="100%" viewBox="0 0 24 12""#)).unwrap(),
+        pt(size(&svg(r#"width="50%" height="100%" viewBox="0 0 24 12""#)).unwrap()),
         (12.0, 12.0)
     );
     assert_eq!(
-        size(&svg(r#"width="100%" height="25%" viewBox="0 0 8 8""#)).unwrap(),
+        pt(size(&svg(r#"width="100%" height="25%" viewBox="0 0 8 8""#)).unwrap()),
         (8.0, 2.0)
     );
     // Without a viewBox, percentages and a missing size fall back to the
@@ -118,16 +123,19 @@ fn svg_raster_size_percentages() {
             .into_bytes()
     };
     assert_eq!(
-        size(&drawing(r#"width="100%" height="100%""#)).unwrap(),
+        pt(size(&drawing(r#"width="100%" height="100%""#)).unwrap()),
         (22.0, 13.0)
     );
-    assert_eq!(size(&drawing("")).unwrap(), (22.0, 13.0));
+    assert_eq!(pt(size(&drawing("")).unwrap()), (22.0, 13.0));
 }
 
 #[test]
 fn svg_raster_dimensions_fit_the_longest_side() {
     let logo = rasterize(LOGO, 96).unwrap();
-    assert_eq!((logo.width, logo.height, logo.size), (96, 48, (48.0, 24.0)));
+    assert_eq!(
+        (logo.width, logo.height, pt(logo.size)),
+        (96, 48, (48.0, 24.0))
+    );
     assert_eq!(logo.pixels.len(), 96 * 48 * 4);
     let small = rasterize(LOGO, 10).unwrap();
     assert_eq!((small.width, small.height), (10, 5));
@@ -187,7 +195,7 @@ fn svg_raster_premultiplied_alpha() {
 fn svg_raster_svgz() {
     let raster = rasterize(&gzip(LOGO), 96).unwrap();
     assert_eq!(raster, rasterize(LOGO, 96).unwrap());
-    assert_eq!(size(&gzip(LOGO)).unwrap(), (48.0, 24.0));
+    assert_eq!(pt(size(&gzip(LOGO)).unwrap()), (48.0, 24.0));
 }
 
 #[test]
@@ -359,5 +367,5 @@ fn svg_safety_svgz_inflation_is_bounded() {
 fn svg_safety_text_is_not_drawn() {
     let raster = rasterize(TEXT, 40).unwrap();
     assert!(transparent(&raster));
-    assert_eq!(raster.size, (40.0, 20.0));
+    assert_eq!(pt(raster.size), (40.0, 20.0));
 }

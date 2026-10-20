@@ -20,7 +20,6 @@ bytecode-only = []
 serde_json.workspace = true
 log.workspace = true
 nsh-core.workspace = true
-nsh-animation.workspace = true
 rustc-hash.workspace = true
 thiserror.workspace = true
 percent-encoding.workspace = true
@@ -46,4 +45,6 @@ getrandom-stdlib.workspace = true
 brotli.workspace = true
 flate2.workspace = true
 zstd.workspace = true
+# The typed API check reads the crate's public API.
+syn = { workspace = true, features = ["visit"] }
 nsh-base.workspace = true

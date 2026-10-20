@@ -38,6 +38,7 @@ use std::{
 use dispatch2::{DispatchQueue, DispatchQueueGlobalPriority, GlobalQueueIdentifier};
 use nsh_core::{
     Command, EventKind, EventPayload, ImageOptions, ImageSource, NodeId, PayloadValue, ResizeMode,
+    geometry::{DevicePixels, size},
 };
 use objc2::{
     AnyThread, DefinedClass, define_class, msg_send,
@@ -583,7 +584,8 @@ fn info_size(bytes: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// An SVG's intrinsic size in whole points (at least one).
-fn svg_size((w, h): (f32, f32)) -> (u32, u32) {
+fn svg_size(size: nsh_core::geometry::Size<nsh_core::geometry::Points>) -> (u32, u32) {
+    let (w, h) = (size.width.0, size.height.0);
     ((w.round() as u32).max(1), (h.round() as u32).max(1))
 }
 
@@ -789,7 +791,7 @@ fn decode(bytes: &[u8], d: Decoding) -> Option<Decoded> {
 fn decode_svg(bytes: &[u8], d: Decoding) -> Option<Decoded> {
     let raster = match d.max_pixels {
         0 => nsh_core::svg::size(bytes)
-            .and_then(|(w, h)| nsh_core::svg::rasterize(bytes, w.max(h).ceil() as u32)),
+            .and_then(|s| nsh_core::svg::rasterize(bytes, s.width.0.max(s.height.0).ceil() as u32)),
         n => nsh_core::svg::rasterize_covering(bytes, n),
     }
     .inspect_err(|e| log::warn!("{e}"))
@@ -1068,7 +1070,9 @@ pub(crate) fn resume(view: &NshView) {
     let key = {
         let s = view.state();
         match &s.image {
-            Some(i) if i.pending && s.frame.width > 0.0 && s.frame.height > 0.0 => i.surface,
+            Some(i) if i.pending && s.frame.size.width.0 > 0.0 && s.frame.size.height.0 > 0.0 => {
+                i.surface
+            }
             _ => return,
         }
     };
@@ -1101,14 +1105,14 @@ fn start(surface: &Rc<Surface>, view: &NshView) {
     let (generation, source, placeholder, decoding, events, id) = {
         let mut guard = view.state_mut();
         let s = &mut *guard;
-        let (w, h) = (s.frame.width, s.frame.height);
+        let (w, h) = (s.frame.size.width.0, s.frame.size.height.0);
         let filters = s
             .style
             .effects
             .as_ref()
             .map(|e| &e.filters[..])
             .unwrap_or(&[]);
-        let blur = nsh_core::blur_radius(filters);
+        let blur = nsh_core::blur_radius(filters).0;
         let matrix = nsh_core::compose_color_matrices(filters);
         let (events, id) = (s.events, s.id);
         let Some(image) = s.image.as_mut() else {
@@ -1117,7 +1121,7 @@ fn start(surface: &Rc<Surface>, view: &NshView) {
         image.pending = false;
         let decoding = Decoding {
             max_pixels: (w.max(h) as CGFloat * scale).ceil() as u32,
-            blur: ((image.options.blur_radius + blur) as CGFloat * scale).max(0.0),
+            blur: ((image.options.blur_radius.0 + blur) as CGFloat * scale).max(0.0),
             matrix,
         };
         (
@@ -1262,10 +1266,10 @@ fn loaded(
         Ok(decoded) if events.contains(EventKind::Load) => surface.event(
             id,
             EventKind::Load,
-            EventPayload::Image {
-                width: decoded.width as f32,
-                height: decoded.height as f32,
-            },
+            EventPayload::Image(size(
+                DevicePixels(decoded.width as i32),
+                DevicePixels(decoded.height as i32),
+            )),
         ),
         Err(message) if events.contains(EventKind::Error) => surface.event(
             id,
@@ -1297,9 +1301,9 @@ fn density(uri: &str) -> f32 {
 fn natural(image: &Decoded, source: Option<&ImageSource>) -> (f32, f32) {
     if let Some(size) = source
         .and_then(|s| s.size)
-        .filter(|(w, h)| *w > 0.0 && *h > 0.0)
+        .filter(|s| s.width.0 > 0.0 && s.height.0 > 0.0)
     {
-        return size;
+        return (size.width.0, size.height.0);
     }
     let d = match source {
         Some(s) if !image.vector => density(&s.uri),

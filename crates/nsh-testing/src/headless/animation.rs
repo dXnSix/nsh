@@ -1,16 +1,16 @@
 //! The native animations of a headless app: the graph platforms run on
-//! their UI thread (`nsh-animation`, platform-free), run here frame by
+//! their UI thread (nsh-core's `animation`, platform-free), run here frame by
 //! frame while anything animates, finished animations reported to the
 //! engine as a platform reports them. Nothing is drawn: the values only
 //! move, so what waits for an animation's end goes on.
 
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, time::Duration};
 
-use nsh_animation::{Finished, Graph, NodeId as ValueId};
-use nsh_core::{MountItem, NodeId};
+use nsh_core::{
+    MountItem, NodeId, Point, Points,
+    animation::{Finished, Graph, NodeId as ValueId},
+    time::{Clock, Instant},
+};
 
 /// A display frame at 60 Hz.
 pub(crate) const FRAME: Duration = Duration::from_micros(16_667);
@@ -24,21 +24,23 @@ pub(crate) struct Animator {
     epoch: Instant,
     /// When the next frame is due, while anything animates.
     next: Option<Instant>,
+    /// The app's clock, whose time the frames are at.
+    clock: Clock,
 }
 
-impl Default for Animator {
-    fn default() -> Self {
+impl Animator {
+    /// An animator on `clock`, the app's.
+    pub(crate) fn new(clock: Clock) -> Self {
         Self {
             graph: Graph::default(),
             finished: Vec::new(),
             scrolls: HashMap::new(),
-            epoch: Instant::now(),
+            epoch: clock.now(),
             next: None,
+            clock,
         }
     }
-}
 
-impl Animator {
     /// Takes in one item of a batch: animation ops and scroll values.
     pub(crate) fn apply(&mut self, item: &MountItem) {
         match item {
@@ -65,10 +67,10 @@ impl Animator {
     }
 
     /// A scroll view moved: feeds its offset's value.
-    pub(crate) fn scrolled(&mut self, id: NodeId, x: f32, y: f32) {
+    pub(crate) fn scrolled(&mut self, id: NodeId, offset: Point<Points>) {
         if let Some(&(value, horizontal)) = self.scrolls.get(&id) {
-            self.graph
-                .set(value, if horizontal { x } else { y }, &mut self.finished);
+            let along = if horizontal { offset.x } else { offset.y };
+            self.graph.set(value, along.0, &mut self.finished);
             self.wake();
         }
     }
@@ -76,7 +78,7 @@ impl Animator {
     /// Starts the frames when something animates.
     fn wake(&mut self) {
         if self.graph.is_animating() && self.next.is_none() {
-            self.next = Some(Instant::now());
+            self.next = Some(self.clock.now());
         }
     }
 
@@ -95,7 +97,7 @@ impl Animator {
         let Some(next) = self.next else {
             return;
         };
-        let now = Instant::now();
+        let now = self.clock.now();
         if now < next {
             return;
         }

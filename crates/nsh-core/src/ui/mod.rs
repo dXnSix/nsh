@@ -5,7 +5,7 @@
 //! A [`Component`] is a function that runs once ([`Component::view`]) and
 //! makes a tree of elements ([`view`], [`text`], [`image`], other
 //! components) styled with typed methods ([`Styled`]: `.px_4()`,
-//! `.rounded_xl()`, `.bg(theme().primary)`) that lower into the same rules
+//! `.rounded_xl()`, `.bg(rgb(0x2563eb))`) that lower into the same rules
 //! as Tailwind classes. The core expands the tree into nodes of its own and
 //! lays it out in the same pass as everything else, so a component sizes
 //! like any view, with no round trip. What changes is bound: a text, prop
@@ -15,16 +15,16 @@
 //! is signals the view makes (under the component's owner: they go with
 //! it), changed by listeners, timers and tasks ([`ambient::spawn`]); the
 //! component's listeners hear its elements' events first and decide what
-//! reaches JS ([`Scope::emit`]). The environment and the theme are signals
-//! too ([`ambient::window`], [`ambient::theme`]): reading one in a binding
+//! reaches JS ([`Scope::emit`]). The environment and the design tokens are
+//! signals too ([`ambient::window`], [`ambient::tokens`]): reading one in a binding
 //! subscribes it.
 //!
 //! Props are a struct (`#[derive(Props)]`), events an enum
 //! (`#[derive(Event)]`); their JS face (`nsh-js`) and TypeScript
 //! declarations ([`declarations`]) are made from them. In JS a component is one host node:
 //! the root of its expansion. The app's `class` is appended to the root's
-//! styles and its `style` stays the root's inline style. Colors come from
-//! the [`Theme`], with a light and a dark value each.
+//! styles and its `style` stays the root's inline style. Colors have a
+//! light and a dark value each ([`AdaptiveColor`]; the design [`Tokens`]).
 //!
 //! Node ids: JS allocates even ids, the core odd ones for the nodes it
 //! expands, so both stay dense. How the core runs components:
@@ -63,7 +63,7 @@ pub(crate) mod status_bar;
 mod style;
 mod system;
 pub(crate) mod task;
-mod theme;
+pub(crate) mod tokens;
 mod value;
 pub(crate) mod virtual_list;
 
@@ -87,9 +87,6 @@ macro_rules! decl {
     };
 }
 
-pub use nsh_animation::{
-    Curve, EaseMode, Easing, Extrapolate, Output as AnimationOutput, sample_easing,
-};
 pub use nsh_macros::{
     Event, JsObject, PropEnum, Props, asset, assets, class, component, methods, module,
     native_module,
@@ -133,8 +130,8 @@ pub use self::{
     element_ref::{ComponentRef, ElementRef},
     env::Environment,
     events::{
-        FileDropEvent, GestureEvent, ImageProgress, NativeEvent, PanEvent, ScrollEvent,
-        ScrollOffset, Selection, VideoInfo, VideoProgress, WebNavigation,
+        FileDropEvent, GestureEvent, ImageProgress, NativeEvent, PanEvent, ScrollEvent, Selection,
+        VideoInfo, VideoProgress, WebNavigation,
     },
     flow::{Each, If, IntoElements, Reset, catch_error, dynamic},
     host::{
@@ -158,18 +155,21 @@ pub use self::{
     responder::{ClaimRequest, PanGesture, ResponderEvent, TouchClaim},
     scrollable::Scrollable,
     services::{Fetch, HttpResponse, Prefetch, ToastDuration},
-    style::{
-        AdaptiveColor, BorderCurve, FontWeight, Length, StyleRefinement, Styled, WritingDirection,
-        px, relative, rgb, rgba,
-    },
+    style::{AdaptiveColor, BorderCurve, FontWeight, StyleRefinement, Styled, WritingDirection},
     system::{
         CallCx, Cleanup, ErrorClass, ErrorFields, Held, IntoThrown, JsError, Later, Local, Locals,
         Quotas, System, io_code,
     },
     task::{Answer, ClipboardImage, DialogAnswer, ImageSize, Task},
-    theme::{Theme, ThemeColors, ThemeError},
+    tokens::{TokenSource, Tokens},
     value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},
     virtual_list::{ListLayout, ViewableItems, VirtualList, virtual_list},
+};
+/// The geometry Rust components style with (`crate::geometry`).
+pub use crate::geometry::{
+    AbsoluteLength, Bounds, Corners, DefiniteLength, DevicePixels, Edges, Length, Percentage,
+    Point, Points, Radians, Rems, Size, auto, bounds, deg, percentage, point, px, radians,
+    relative, rems, size,
 };
 pub use crate::{
     AccessibilityRole, AccessibilityState, AutoCapitalize, AutoFill, BlendMode, BoxShadow,
@@ -179,8 +179,13 @@ pub use crate::{
     LayoutTransition, Measurement, ModalAnimation, ModalPresentation, PanActivation, PointerEvents,
     ResizeMode, ReturnKeyType, ScreenAnimation, SnapAlignment, StatusBarConfig, StatusBarSetting,
     StatusBarStyle, SubmitBehavior, TouchEvent, TransformKind, TransformOrigin, Viewability,
+    animation::{Curve, EaseMode, Easing, Extrapolate, Output as AnimationOutput, sample_easing},
+    color::{
+        ColorParseError, Hsla, Rgba, black, blue, green, hsl, hsla, opaque_grey, red, rgb, rgba,
+        transparent_black, transparent_white, white, yellow,
+    },
     platform::{Appearance, HttpBody, HttpHead, HttpRequest, Idiom, Locale, Os},
-    style::{Color, OriginLen},
+    style::Color,
 };
 
 /// Everything a component's module needs: `use nsh_core::ui::prelude::*;`.
@@ -190,6 +195,7 @@ pub mod prelude {
     #[cfg(not(target_arch = "wasm32"))]
     pub use super::ambient::{background, blocking};
     pub use super::{
+        AbsoluteLength,
         AccessibilityRole,
         AccessibilityState,
         Accessible,
@@ -205,6 +211,7 @@ pub mod prelude {
         AutoCapitalize,
         BlendMode,
         BorderCurve,
+        Bounds,
         BoxShadow,
         CallCx,
         Callback,
@@ -212,19 +219,22 @@ pub mod prelude {
         Child,
         Children,
         ClaimRequest,
-        Color,
         Component,
         ComponentElement,
         ComponentError,
         ComponentRef,
         ContextMenuEvent,
+        Corners,
         Cursor,
         Curve,
+        DefiniteLength,
+        DevicePixels,
         DialogAnswer,
         EaseMode,
         // Native animation values.
         Easing,
         EdgeInsets,
+        Edges,
         Element,
         ElementRef,
         Environment,
@@ -239,6 +249,7 @@ pub mod prelude {
         FontWeight,
         GestureEvent,
         HoverEvent,
+        Hsla,
         // The network.
         HttpRequest,
         HttpResponse,
@@ -281,22 +292,28 @@ pub mod prelude {
         PanEvent,
         PanGesture,
         ParentElement,
+        Percentage,
+        Point,
         PointerEvents,
+        Points,
         Position,
         PropEnum,
         Props,
+        Radians,
         Registry,
+        Rems,
         ResizeMode,
         ResponderEvent,
         ReturnKeyType,
+        Rgba,
         Screen,
         ScreenAnimation,
         Scroll,
         ScrollEvent,
-        ScrollOffset,
         Scrollable,
         Selection,
         SharedString,
+        Size,
         Slot,
         SnapAlignment,
         Spring,
@@ -308,9 +325,9 @@ pub mod prelude {
         System,
         Task,
         Text,
-        Theme,
         Timing,
         ToastDuration,
+        Tokens,
         TouchClaim,
         Video,
         VideoInfo,
@@ -324,8 +341,14 @@ pub mod prelude {
         WritingDirection,
         asset,
         assets,
+        auto,
+        black,
+        bounds,
         canvas,
         class,
+        deg,
+        hsl,
+        hsla,
         image,
         input,
         input_accessory_view,
@@ -334,19 +357,28 @@ pub mod prelude {
         module,
         native,
         native_module,
+        opaque_grey,
+        percentage,
+        point,
         px,
+        radians,
         relative,
+        rems,
         rgb,
         rgba,
         screen,
         scroll,
+        size,
         stack,
         text,
+        transparent_black,
+        transparent_white,
         video,
         view,
         virtual_list,
         web_view,
         web_view_html,
+        white,
     };
     pub use super::{
         Each, If, IntoElements, IntoReactive, Memo, Owner, Prop, Reactive, ReadSignal, Resource,
@@ -360,7 +392,7 @@ pub mod prelude {
             next_frame, on_back_press, on_key, on_key_with, os, os_version, pixel_ratio,
             prefetch_image, reduce_motion, request_animation_frame, round_to_nearest_pixel, rtl,
             safe_area, screen_reader, set_clipboard, set_clipboard_image, set_color_scheme,
-            set_interval, set_timeout, spawn, theme, timer, timer_until, toast, window,
+            set_interval, set_timeout, spawn, timer, timer_until, toast, tokens, window,
         },
         batch, catch_error, cleanup, component, computed, dynamic, effect, provide_context,
         resource, resource_with_value, signal, signal_with, stored, untracked, use_context,

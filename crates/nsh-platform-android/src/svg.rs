@@ -33,8 +33,8 @@ extern "system" fn Java_com_longbridge_nsh_Native_svg<'local>(
     }
     let drawn = match max_px {
         ..0 => nsh_core::svg::size(&bytes).map(|size| (0, 0, Vec::new(), size)),
-        0 => nsh_core::svg::size(&bytes).and_then(|(w, h)| {
-            nsh_core::svg::rasterize(&bytes, w.max(h).ceil() as u32)
+        0 => nsh_core::svg::size(&bytes).and_then(|size| {
+            nsh_core::svg::rasterize(&bytes, size.width.0.max(size.height.0).ceil() as u32)
                 .map(|r| (r.width, r.height, r.pixels, r.size))
         }),
         // Its shorter side at the view's longer one: sharp in every
@@ -42,13 +42,14 @@ extern "system" fn Java_com_longbridge_nsh_Native_svg<'local>(
         n => nsh_core::svg::rasterize_covering(&bytes, n as u32)
             .map(|r| (r.width, r.height, r.pixels, r.size)),
     };
-    let (width, height, pixels, (w, h)) = match drawn {
+    let (width, height, pixels, intrinsic) = match drawn {
         Ok(drawn) => drawn,
         Err(e) => {
             log::warn!("{e}");
             return JByteArray::default();
         }
     };
+    let (w, h) = (intrinsic.width.0, intrinsic.height.0);
     let sizes = [
         width as jint,
         height as jint,

@@ -21,6 +21,8 @@ use std::{fmt, io::Read};
 
 use resvg::{tiny_skia, usvg};
 
+use crate::geometry::{Points, Size};
+
 #[cfg(test)]
 mod tests;
 
@@ -54,7 +56,7 @@ pub struct Raster {
     /// `width * height * 4` bytes of premultiplied RGBA.
     pub pixels: Vec<u8>,
     /// The SVG's intrinsic size in points (what [`size`] returns).
-    pub size: (f32, f32),
+    pub size: Size<Points>,
 }
 
 /// Why an SVG could not be read or drawn.
@@ -228,9 +230,9 @@ fn inflate(bytes: &[u8]) -> Result<Vec<u8>, Error> {
 /// (percentages of the `viewBox`; one of them alone takes the other from
 /// the `viewBox`'s aspect ratio), else the `viewBox`'s size. An SVG with
 /// neither a size nor a `viewBox` reaches as far as what it draws.
-pub fn size(bytes: &[u8]) -> Result<(f32, f32), Error> {
+pub fn size(bytes: &[u8]) -> Result<Size<Points>, Error> {
     let size = parse(bytes)?.size();
-    Ok((size.width(), size.height()))
+    Ok(Size::new(Points(size.width()), Points(size.height())))
 }
 
 /// Draws an SVG with its longest side `max_px` pixels long (at most
@@ -279,6 +281,6 @@ fn draw(tree: &usvg::Tree, max_px: u32) -> Result<Raster, Error> {
         width,
         height,
         pixels: pixmap.take(),
-        size: (w, h),
+        size: Size::new(Points(w), Points(h)),
     })
 }

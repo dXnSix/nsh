@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use nsh_core::{
     ApproxTextEngine, Core, EventKind, EventPayload, ListBind, MountItem, Size, ViewKind,
+    geometry::{point, px},
 };
 use nsh_js::Host;
 
@@ -95,7 +96,7 @@ export interface ButtonProps {
 
 const base = "flex-row items-center justify-center rounded-xl px-4 py-3 disabled:opacity-50";
 
-// The default theme's colors (`nsh_core::ui::Theme`).
+// The default theme's colors (`nsh_base::Theme`).
 const variants: Record<NonNullable<ButtonProps["variant"]>, string> = {
   primary:
     "bg-neutral-900 active:bg-neutral-950 text-neutral-50 dark:bg-neutral-50 dark:active:bg-neutral-200 dark:text-neutral-900",
@@ -180,10 +181,10 @@ impl App {
         .unwrap();
         // The runtime reads the environment while it loads.
         host.set_environment(&nsh_js::Environment {
-            window: (390.0, 844.0),
+            window: Size::new(px(390.0), px(844.0)),
             ..Default::default()
         });
-        let mut core = Core::new(ApproxTextEngine, Size::new(390.0, 844.0));
+        let mut core = Core::new(ApproxTextEngine, Size::new(px(390.0), px(844.0)));
         core.set_components(crate::test_ui::registry());
         Self {
             host,
@@ -304,7 +305,8 @@ fn rows(entry: &str) {
     let mut y = 0.0;
     for _ in 0..4000 {
         y += 8.0;
-        app.core.set_scroll_offset(list, 0.0, y, u32::MAX);
+        app.core
+            .set_scroll_offset(list, point(px(0.0), px(y)), u32::MAX);
         app.turn(|_| {});
         if app.ops_applied > 0 {
             js += app.js;

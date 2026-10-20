@@ -23,7 +23,6 @@ oxc_sourcemap = { workspace = true, optional = true }
 nsh-core.workspace = true
 nsh-package = { workspace = true, optional = true }
 serde_json.workspace = true
-nsh-animation.workspace = true
 nsh-js = { workspace = true, optional = true }
 crossbeam-channel.workspace = true
 tokio = { workspace = true, features = ["rt", "time"] }
@@ -37,6 +36,8 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 libc.workspace = true
 
 [dev-dependencies]
+# The typed API check reads the crate's public API.
+syn = { workspace = true, features = ["visit"] }
 nsh-base.workspace = true
 # The host's shared data in `nativeModule`'s tests.
 tokio = { workspace = true, features = ["sync"] }

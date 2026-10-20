@@ -63,19 +63,20 @@ fn external_wake_asks_for_one_pump_and_the_pump_runs_the_task() {
     let (tx, rx) = crossbeam_channel::unbounded();
     let config = EngineConfig {
         app: App::Rust(Root::of::<Echo>()),
-        viewport: Size::new(390.0, 844.0),
+        viewport: Size::new(nsh_core::Points(390.0), nsh_core::Points(844.0)),
         trace: false,
         network: None,
         websocket: None,
         filesystem: None,
         assets: None,
         environment: Environment::default(),
-        header_heights: (44.0, 96.0),
+        header_heights: (nsh_core::Points(44.0), nsh_core::Points(96.0)),
         limits: nsh_engine::Limits::default(),
         ui_sets: Vec::new(),
         runtime: None,
         data_dir: None,
         storage: None,
+        clock: Default::default(),
     };
     let mut engine = LocalEngine::start(config, ApproxTextEngine, ChannelSink(tx)).unwrap();
     let wakes = Arc::new(AtomicUsize::new(0));
@@ -113,19 +114,20 @@ fn external_wake_is_optional() {
     let (tx, rx) = crossbeam_channel::unbounded();
     let config = EngineConfig {
         app: App::Rust(Root::of::<Echo>()),
-        viewport: Size::new(390.0, 844.0),
+        viewport: Size::new(nsh_core::Points(390.0), nsh_core::Points(844.0)),
         trace: false,
         network: None,
         websocket: None,
         filesystem: None,
         assets: None,
         environment: Environment::default(),
-        header_heights: (44.0, 96.0),
+        header_heights: (nsh_core::Points(44.0), nsh_core::Points(96.0)),
         limits: nsh_engine::Limits::default(),
         ui_sets: Vec::new(),
         runtime: None,
         data_dir: None,
         storage: None,
+        clock: Default::default(),
     };
     let mut engine = LocalEngine::start(config, ApproxTextEngine, ChannelSink(tx)).unwrap();
     engine.pump();

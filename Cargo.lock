@@ -2761,14 +2761,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nsh-animation"
-version = "0.1.1"
-
-[[package]]
 name = "nsh-base"
 version = "0.1.1"
 dependencies = [
  "nsh-core",
+ "serde_json",
 ]
 
 [[package]]
@@ -2837,13 +2834,14 @@ dependencies = [
  "futures-util",
  "libc",
  "log",
- "nsh-animation",
  "nsh-macros",
  "resvg",
  "roxmltree",
  "rustc-hash",
+ "serde",
  "serde_json",
  "slab",
+ "syn 2.0.119",
  "taffy",
  "tokio",
  "tokio-tungstenite 0.28.0",
@@ -2872,7 +2870,6 @@ dependencies = [
  "crossbeam-channel",
  "libc",
  "log",
- "nsh-animation",
  "nsh-base",
  "nsh-bundler",
  "nsh-core",
@@ -2881,6 +2878,7 @@ dependencies = [
  "oxc_sourcemap",
  "rustc-hash",
  "serde_json",
+ "syn 2.0.119",
  "taffy",
  "tokio",
  "tokio-tungstenite 0.28.0",
@@ -2914,7 +2912,6 @@ dependencies = [
  "getrandom 0.4.3",
  "libc",
  "log",
- "nsh-animation",
  "nsh-base",
  "nsh-core",
  "percent-encoding",
@@ -2922,6 +2919,7 @@ dependencies = [
  "quickjs-jit-stdlib",
  "rustc-hash",
  "serde_json",
+ "syn 2.0.119",
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite 0.28.0",
@@ -2999,7 +2997,6 @@ dependencies = [
  "jni",
  "libc",
  "log",
- "nsh-animation",
  "nsh-base",
  "nsh-core",
  "nsh-dev",
@@ -3017,7 +3014,6 @@ dependencies = [
  "dispatch2",
  "libc",
  "log",
- "nsh-animation",
  "nsh-base",
  "nsh-core",
  "nsh-dev",
@@ -3042,7 +3038,6 @@ dependencies = [
  "gtk4",
  "image",
  "log",
- "nsh-animation",
  "nsh-base",
  "nsh-core",
  "nsh-dev",
@@ -3065,7 +3060,6 @@ dependencies = [
  "dispatch2",
  "libc",
  "log",
- "nsh-animation",
  "nsh-base",
  "nsh-core",
  "nsh-dev",
@@ -3088,7 +3082,6 @@ name = "nsh-platform-web"
 version = "0.1.1"
 dependencies = [
  "log",
- "nsh-animation",
  "nsh-base",
  "nsh-bundler",
  "nsh-core",
@@ -3108,7 +3101,6 @@ dependencies = [
  "crossbeam-channel",
  "image",
  "log",
- "nsh-animation",
  "nsh-base",
  "nsh-core",
  "nsh-dev",
@@ -3131,7 +3123,6 @@ dependencies = [
  "crossbeam-channel",
  "dunce",
  "log",
- "nsh-animation",
  "nsh-base",
  "nsh-bundler",
  "nsh-core",

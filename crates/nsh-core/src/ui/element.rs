@@ -10,9 +10,9 @@ use super::{
     style::{StyleRefinement, Styled, Variant},
 };
 use crate::{
-    AccessibilityProp, AccessibilityRole, AccessibilityState, ContextMenuEvent, EdgeInsets,
-    EventKind, EventPayload, HoverEvent, ImageSource, ListContentStyle, NativeProp, NodeId,
-    PointerEvents, Prop, Rect, Size, Tag, TouchEvent, style::Color,
+    AccessibilityProp, AccessibilityRole, AccessibilityState, Bounds, ContextMenuEvent, EdgeInsets,
+    EventKind, EventPayload, HoverEvent, Hsla, ImageSource, ListContentStyle, NativeProp, NodeId,
+    PointerEvents, Points, Prop, Size, Tag, TouchEvent, geometry::Radians, style::Color,
 };
 
 /// A handler of `E` on an element: a closure (`move |e: &E| ..`) that
@@ -214,7 +214,7 @@ impl Attrs {
         if self.src != old.src {
             out.push(Prop::Source(self.src.as_ref().map(|src| ImageSource {
                 uri: src.uri.to_arc(),
-                size: src.size,
+                size: src.size.map(|(w, h)| crate::geometry::size_pt(w, h)),
                 scales: src.scales,
             })));
         }
@@ -358,7 +358,9 @@ impl ListConfig {
     /// The props of the fields that differ from `old`.
     pub(crate) fn changes(&self, old: &ListConfig, out: &mut Vec<Prop>) {
         if self.estimated != old.estimated {
-            out.push(Prop::EstimatedItemSize(self.estimated.unwrap_or(50.0)));
+            out.push(Prop::EstimatedItemSize(Points(
+                self.estimated.unwrap_or(50.0),
+            )));
         }
         if self.columns != old.columns {
             out.push(Prop::Columns(self.columns.unwrap_or(1)));
@@ -376,7 +378,7 @@ impl ListConfig {
             out.push(Prop::ListContent(self.content.unwrap_or_default()));
         }
         if self.follow_end != old.follow_end {
-            out.push(Prop::FollowEnd(self.follow_end));
+            out.push(Prop::FollowEnd(self.follow_end.map(Points)));
         }
     }
 }
@@ -660,43 +662,43 @@ pub trait Element: IntoElement + Sized {
 
     /// Binds `opacity` to an animated value (it moves natively).
     fn bind_opacity(self, value: &impl super::Animated) -> Self {
-        self.bind(nsh_animation::AnimationProp::Opacity, value)
+        self.bind(crate::animation::AnimationProp::Opacity, value)
     }
 
     /// Binds the background color to a node of colors
     /// ([`super::AnimatedNode::interpolate_colors`]).
     fn bind_background(self, value: &impl super::Animated) -> Self {
-        self.bind(nsh_animation::AnimationProp::BackgroundColor, value)
+        self.bind(crate::animation::AnimationProp::BackgroundColor, value)
     }
 
     /// Binds the color of every border side to a node of colors.
     fn bind_border_color(self, value: &impl super::Animated) -> Self {
-        self.bind(nsh_animation::AnimationProp::BorderColor, value)
+        self.bind(crate::animation::AnimationProp::BorderColor, value)
     }
 
     /// Binds a text's color (the whole text) to a node of colors.
     fn bind_color(self, value: &impl super::Animated) -> Self {
-        self.bind(nsh_animation::AnimationProp::Color, value)
+        self.bind(crate::animation::AnimationProp::Color, value)
     }
 
     /// Binds the shadow's color to a node of colors (TS: `shadowColor`).
     fn bind_shadow_color(self, value: &impl super::Animated) -> Self {
-        self.bind(nsh_animation::AnimationProp::ShadowColor, value)
+        self.bind(crate::animation::AnimationProp::ShadowColor, value)
     }
 
     /// Binds the shadow's opacity, 0..1 (TS: `shadowOpacity`).
     fn bind_shadow_opacity(self, value: &impl super::Animated) -> Self {
-        self.bind(nsh_animation::AnimationProp::ShadowOpacity, value)
+        self.bind(crate::animation::AnimationProp::ShadowOpacity, value)
     }
 
     /// Binds the shadow's blur radius, in points (TS: `shadowRadius`).
     fn bind_shadow_radius(self, value: &impl super::Animated) -> Self {
-        self.bind(nsh_animation::AnimationProp::ShadowRadius, value)
+        self.bind(crate::animation::AnimationProp::ShadowRadius, value)
     }
 
     /// Binds `prop` (anything but a transform step or a canvas argument)
     /// to an animated value (nothing once the value's owner is gone).
-    fn bind(mut self, prop: nsh_animation::AnimationProp, value: &impl super::Animated) -> Self {
+    fn bind(mut self, prop: crate::animation::AnimationProp, value: &impl super::Animated) -> Self {
         if let Some(node) = value.animated_node().live() {
             let decl = crate::StyleDecl::Animated(prop, node.id());
             self.node().attrs.animated.push((decl, node));
@@ -778,12 +780,21 @@ pub struct Style(pub(crate) Option<Arc<crate::StylePatch>>);
 
 impl Style {
     /// A style of `decls`, applied in order; one that does not apply (a
-    /// value of the wrong type) is left out, as on a host element.
+    /// value of the wrong type or format) is left out and logged, as on a
+    /// host element.
     pub fn from_decls(decls: impl IntoIterator<Item = crate::StyleDecl>) -> Self {
         let mut style = crate::Style::default();
         let mut patch = crate::StylePatch::default();
         for decl in decls {
-            let _ = patch.push(&mut style, decl);
+            let key = match &decl {
+                crate::StyleDecl::Set(key, _) => Some(*key),
+                _ => None,
+            };
+            if patch.push(&mut style, decl).is_err()
+                && let Some(key) = key
+            {
+                log::warn!("invalid value for style `{}`", key.name());
+            }
         }
         Self(Some(Arc::new(patch)))
     }
@@ -1040,7 +1051,7 @@ pub trait Interactive: Element {
     }
 
     /// Its frame changed (relative to its parent).
-    fn on_layout<M>(self, listener: impl IntoListener<Rect, M>) -> Self {
+    fn on_layout<M>(self, listener: impl IntoListener<Bounds<Points>, M>) -> Self {
         self.on(
             EventKind::Layout,
             events::typed(listener.into_listener(), events::layout),
@@ -1219,8 +1230,8 @@ pub trait Interactive: Element {
         )
     }
 
-    /// A two-finger rotation started (radians).
-    fn on_rotation_start<M>(self, listener: impl IntoListener<GestureEvent, M>) -> Self {
+    /// A two-finger rotation started (its angle).
+    fn on_rotation_start<M>(self, listener: impl IntoListener<GestureEvent<Radians>, M>) -> Self {
         self.on(
             EventKind::RotationStart,
             events::typed(listener.into_listener(), events::rotation),
@@ -1228,7 +1239,7 @@ pub trait Interactive: Element {
     }
 
     /// The rotation ended.
-    fn on_rotation_end<M>(self, listener: impl IntoListener<GestureEvent, M>) -> Self {
+    fn on_rotation_end<M>(self, listener: impl IntoListener<GestureEvent<Radians>, M>) -> Self {
         self.on(
             EventKind::RotationEnd,
             events::typed(listener.into_listener(), events::rotation),
@@ -1269,8 +1280,8 @@ pub trait Interactive: Element {
     }
 
     /// The elevation shadow (Android).
-    fn elevation(mut self, elevation: f32) -> Self {
-        super::host::set(self.node(), Prop::Elevation(elevation));
+    fn elevation(mut self, elevation: impl Into<Points>) -> Self {
+        super::host::set(self.node(), Prop::Elevation(elevation.into()));
         self
     }
 
@@ -1355,6 +1366,14 @@ pub trait Interactive: Element {
     /// TS: a `Button`'s `selectedStyle`), as `selected:` classes apply.
     fn selected_style(mut self, style: impl IntoReactive<Style>) -> Self {
         super::host::bind_prop(self.node(), style, |s: Style| Prop::SelectedStyle(s.0));
+        self
+    }
+
+    /// An app's style while checked (`accessibility_state` `checked`, not
+    /// mixed: a checkbox's, a switch's, a radio's), as `checked:` classes
+    /// apply.
+    fn checked_style(mut self, style: impl IntoReactive<Style>) -> Self {
+        super::host::bind_prop(self.node(), style, |s: Style| Prop::CheckedStyle(s.0));
         self
     }
 }
@@ -1472,8 +1491,11 @@ impl Text {
     }
 
     /// The highlight of its selection, when it is selectable.
-    pub fn selection_color(mut self, color: Color) -> Self {
-        super::host::set(&mut self.0, Prop::SelectionColor(Some(color)));
+    pub fn selection_color(mut self, color: impl Into<Hsla>) -> Self {
+        super::host::set(
+            &mut self.0,
+            Prop::SelectionColor(Some(Color::from(color.into()))),
+        );
         self
     }
 
@@ -1514,7 +1536,7 @@ impl Image {
             &mut self.0,
             Prop::Image(crate::ImageProp::DefaultSource(Some(ImageSource {
                 uri: src.uri.to_arc(),
-                size: src.size,
+                size: src.size.map(|(w, h)| crate::geometry::size_pt(w, h)),
                 scales: src.scales,
             }))),
         );
@@ -1528,11 +1550,11 @@ impl Image {
         self
     }
 
-    /// Blurs it (points).
-    pub fn blur_radius(mut self, radius: f32) -> Self {
+    /// Blurs it.
+    pub fn blur_radius(mut self, radius: impl Into<Points>) -> Self {
         super::host::set(
             &mut self.0,
-            Prop::Image(crate::ImageProp::BlurRadius(radius)),
+            Prop::Image(crate::ImageProp::BlurRadius(radius.into())),
         );
         self
     }
@@ -1547,7 +1569,7 @@ impl Image {
     }
 
     /// It loaded: its size in pixels.
-    pub fn on_load<M>(self, listener: impl IntoListener<Size, M>) -> Self {
+    pub fn on_load<M>(self, listener: impl IntoListener<Size<Points>, M>) -> Self {
         self.on(
             EventKind::Load,
             events::typed(listener.into_listener(), events::size),

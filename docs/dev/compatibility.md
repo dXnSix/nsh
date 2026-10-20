@@ -55,7 +55,10 @@ NSH-owned declarations and behavior rather than copying the upstream API into it
    closes it adds the entries it removes to `api/closed.txt`, each with its reason (`<entry> -- <reason>`, the entry
    as the `compat` tests report the break: `[<module>] <path>`, `<file>: <Name>` or `<file>: <Name>.<member>`; the
    file's header has the details), and says why in its description and the release notes. `api/closed.txt` is the
-   only list of removals there will ever be.
+   only list of removals there will ever be. Its only entries not made for security record two changes made before
+   the first compatible release (v0.1.2): the alignment and grid utilities, changed to resolve exactly as Tailwind CSS
+   does (#181), and the fixtures of single cases, merged into one fixture per domain that runs the same cases and
+   steps (`apps/<fixture>` entries).
 
 ## How it is enforced
 
@@ -67,12 +70,12 @@ repository holds that suite and the record of what apps depend on:
 api/
   runtime.txt           every module's exports (`nsh:rt` included) and the globals, with their members and kinds
   types/                the declarations of `.nsh/types`
-  tailwind.txt          every Tailwind class the resolver offers and the style it resolves to, in each context
+  tailwind.txt          every Tailwind class the resolver offers and what it sets, in each context: scales, rules and classes
   apps/<app>/           fixture apps: bundle.js and assets/ as some checkout's `nsh build --release` wrote them
     script.txt          what a user does and sees in it, and the API it checks (`covers`)
-  cases/<case>.tsx      the sources of small fixtures: the tests of single APIs
+  cases/<domain>/       the sources of the fixtures that test single APIs: one app per domain, a module per case
   uncovered.txt         the API no fixture's script checks yet; it only shrinks
-  closed.txt            the entries closed for security (rule 7), each with its reason
+  closed.txt            the entries closed (rule 7), each with its reason
   in-force.txt          the start marker: the record holds from the commit that added it on
 ```
 
@@ -115,21 +118,38 @@ The engine's tests (`crates/nsh-engine/tests/engine/compat/`) check, on every pu
   test.
 - `declarations_are_understood`: every declaration is one `compare.rs` can read, so none escapes the comparison.
 
-`tailwind.txt` has one line per class, `<class> <style>`: the resolved style's fields that differ from the defaults,
-then ` | <context>: <style>` for each context (dark, a platform, a window width, a state, a group's state, a sibling
-position, rtl, reduce motion) where the class resolves differently. The classes are enumerated from the code: the
-resolver's utilities and prefixes, each prefix with every theme scale name, the component theme's tokens, a number
-scale, fractions and representative arbitrary values, and each variant on one utility. The style is printed from the
-resolver's own types, so renaming one of their fields changes the record without changing what apps see: such a pull
-request records it with `cargo xtask api` and says so.
+`tailwind.txt` says what each class sets as apps write styles: NSH's style keys with CSS's values (`p-4 padding: 16`,
+`bg-red-500 backgroundColor: #fb2c36`), then ` | <context>: <decls>` for each context (dark, a platform, a window
+width, a state, a group's state, a sibling position, rtl, reduce motion) where the class resolves differently, `-` for
+none. It never prints the core's types, so refactoring them leaves it alone; `tailwind_record_is_faithful` checks that
+it misses nothing they hold (two classes it writes alike set the same fields). It holds rules, not every value of every
+utility, in three sections:
+
+- `[scales]`: the values utilities share, each what a probe utility sets (`spacing` is what `p-*` sets, `color` what
+  `bg-*` sets) or numbers as written (`n`, `int`, `percent`), as `<scale> <name>=<value>`; a value that differs per
+  context is `<name>=<value>;<context>=<value>` (the theme's tokens, light and dark);
+- `[rules]`: `<utility>-{<scale>} <line>`: the utility takes every name of the scale, its line with `{<scale>}` (and
+  `{<scale>@<context>}`) as the name's value (`m-{spacing} margin: {spacing}`); an earlier rule's class wins;
+- `[classes]`: every other class with its line, and `!` for a class a rule names that is no class.
+
+The rules are inferred from what the classes resolve to, never written by hand, and the comparison expands the
+record into every class first, so a change to a scale's value shows as one line and is held for every class that
+takes it. The classes are enumerated from the code: the resolver's utilities and prefixes, each prefix with every
+theme scale name, the component theme's tokens (by name and as `(--token)`), a number scale, fractions and
+representative arbitrary values, negated where the sign does something, and each variant on one utility. Forms a
+utility ignores (an arbitrary value or a variable that sets nothing, a sign it drops) are not recorded: they are no
+API. A base recorded before this format (one line per class with the core's `{:?}`) only holds that its classes are
+still classes.
 
 ### Changing the API
 
 1. Make the change additive (the rules above).
-2. Test it: write `api/cases/<case>.tsx`, a small app that uses the new API and shows its result, and keep its build
-   with `cargo xtask api --keep api/cases/<case>.tsx` (it only builds the fixture, `api/apps/<case>-<version>/`, with
-   a stub script, and records nothing yet). Write steps in its `script.txt` that check the result, with a
-   `covers <item>` step for each part, and run them (`compat::apps_still_run`).
+2. Test it: write a case, `api/cases/<domain>/<case>.tsx`, a module whose default export is a component that uses the
+   new API and shows its result, add it to the domain's `App.tsx`, and keep the domain's build with
+   `cargo xtask api --keep api/cases/<domain>` (it only builds the fixture, `api/apps/<domain>-<version>/`, with the
+   domain's newest script, and records nothing yet). Append `tap id:case-<case>` and the steps that check the result
+   to its `script.txt`, with a `covers <item>` step for each part, and run them (`compat::apps_still_run`;
+   `NSH_API_APP=<domain>` runs one domain's fixtures).
 3. Then run `cargo xtask api` and commit `api/` with the change: it records the surface and checks that every part of
    the API is covered, which the new fixture's `covers` steps now do. The record's diff is the review of the API
    change, next to the `## Public API` section of the pull request, and `uncovered.txt` loses what the scripts now
@@ -147,13 +167,22 @@ for one), keep what the new compiler writes too:
 cargo xtask api --keep <app>...
 ```
 
-`<app>` is an example's name, or the path of an app directory or of a single entry module (`api/cases/<case>.tsx`).
-It is built with this checkout into `api/apps/<name>-<version>/`, with the newest script of that app or a stub;
+`<app>` is an example's name, or the path of an app directory (a domain, `api/cases/<domain>`) or of a single entry
+module. It is built with this checkout and kept as `api/apps/<name>-<version>/` (a second of one version as
+`<name>-<version>.2`, ...) with the newest script of that app or a stub, unless the build is byte for byte what the
+app's newest fixture holds: after a change to the compiler, keeping every domain adds only those whose output changed.
 `--keep` records nothing. Check that the scripts pass (`compat::apps_still_run`), extend them to what the change added,
 run `cargo xtask api`, and commit the fixtures with the change. Existing steps stay. An app whose `nsh.json` declares
-`capabilities` (a case directory, `api/cases/<case>/`) keeps the `capabilities.json` and `app.json` its build wrote,
-and runs with them and a new, empty data directory, so a script checks what a grant allows and what stays refused
-(`api/cases/mod-standard-files/`).
+`capabilities` keeps the `capabilities.json` and `app.json` its build wrote, and runs with them and a new, empty data
+directory, so a script checks what a grant allows and what stays refused (`api/cases/macos/`, whose files case does).
+
+The cases are grouped by domain (`base`, `core`, `events`, `layout`, `paint`, `props`, `modules`, `web`), one app
+each, so a compiler change copies a few fixtures, not one per case. The domain's `App.tsx` imports every case and
+shows one at a time: the script taps `id:case-<case>` (one of the one-point views over the top left corner, out of the
+layout) and checks that case, then the next. What applies to a whole app has a domain of its own: the platform
+(`android`; `macos`, which also declares capabilities; `browser`, a desktop browser with the user's text size at 2)
+and `nsh.json`'s settings (the `layout` domain's theme spacing, the `base` domain's status bar). A case goes where its
+platform and settings are, and where they change nothing its neighbors check.
 
 ### Scripts
 

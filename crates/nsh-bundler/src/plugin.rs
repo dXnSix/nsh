@@ -95,7 +95,7 @@ fn font_family(data: &[u8]) -> Result<String, String> {
 /// ([`svg_browser_only`]).
 fn svg_asset(data: &[u8]) -> Result<((f32, f32), Vec<&'static str>), String> {
     let size = nsh_core::svg::size(data).map_err(|e| e.to_string())?;
-    Ok((size, svg_browser_only(data)))
+    Ok(((size.width.0, size.height.0), svg_browser_only(data)))
 }
 
 /// What an SVG holds that browsers draw and the native backends'

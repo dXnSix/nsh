@@ -274,7 +274,7 @@ impl Dom {
 
     /// Queues the release of a collected animation node or composite (from
     /// a finalizer).
-    pub(crate) fn queue_animation_release(&self, op: nsh_animation::AnimationOp) {
+    pub(crate) fn queue_animation_release(&self, op: nsh_core::animation::AnimationOp) {
         self.shared.animation_releases.borrow_mut().push(op);
     }
 
@@ -1222,7 +1222,7 @@ fn set_prop(
             return set_prop(ctx, content, name, value, prev);
         }
         "activeStyle" | "hoverStyle" | "focusStyle" | "disabledStyle" | "selectedStyle"
-        | "headerStyle" => {
+        | "checkedStyle" | "headerStyle" => {
             let patch = part_style(ctx, name, value)?;
             let prop = match name {
                 "activeStyle" => nsh_core::Prop::ActiveStyle(patch),
@@ -1230,6 +1230,7 @@ fn set_prop(
                 "focusStyle" => nsh_core::Prop::FocusStyle(patch),
                 "disabledStyle" => nsh_core::Prop::DisabledStyle(patch),
                 "selectedStyle" => nsh_core::Prop::SelectedStyle(patch),
+                "checkedStyle" => nsh_core::Prop::CheckedStyle(patch),
                 _ => nsh_core::Prop::HeaderStyle(patch),
             };
             return dom(ctx).push(ctx, Op::SetProp { id, prop });
@@ -3825,8 +3826,8 @@ mod tests {
         assert_eq!(
             commands,
             [
-                "Command { id: 2, command: ScrollTo { x: 0.0, y: 10.0, animated: false } }",
-                "Command { id: 2, command: ScrollToIndex { index: 3, animated: true, view_position: 0.0, view_offset: 0.0 } }",
+                "Command { id: 2, command: ScrollTo { x: 0pt, y: 10pt, animated: false } }",
+                "Command { id: 2, command: ScrollToIndex { index: 3, animated: true, view_position: 0%, view_offset: 0pt } }",
                 "Command { id: 4, command: Focus }",
                 "Command { id: 4, command: SetSelection { start: 2, end: 2 } }",
             ]
