@@ -3,7 +3,7 @@ use std::cell::Cell;
 use nsh_animation::{AnimationOp, AnimationProp};
 
 use super::*;
-use crate::{Color, EventKind, StyleValue};
+use crate::{Color, EventKind, IMAGE_SCALES, ImageScales, StyleValue};
 
 /// 8pt per char, 16pt per line, wraps at `max_width`. Counts calls.
 #[derive(Default)]
@@ -960,6 +960,7 @@ fn image_uses_natural_size_and_aspect_ratio() {
                 prop: Prop::Source(Some(ImageSource {
                     uri: "asset:/logo.png".into(),
                     size: Some((200.0, 100.0)),
+                    scales: ImageScales::NONE,
                 })),
             },
             Op::Insert {
@@ -983,6 +984,7 @@ fn image_uses_natural_size_and_aspect_ratio() {
                 prop: Prop::Source(Some(ImageSource {
                     uri: "asset:/logo.png".into(),
                     size: Some((200.0, 100.0)),
+                    scales: ImageScales::NONE,
                 })),
             },
             Op::Insert {
@@ -3913,6 +3915,7 @@ fn refused_urls_fail_and_send_nothing() {
                 prop: Prop::Source(Some(ImageSource {
                     uri: uri.into(),
                     size: None,
+                    scales: ImageScales::NONE,
                 })),
             },
             Op::Insert {
@@ -10528,5 +10531,446 @@ mod builders {
         assert_eq!(run::<ChildrenTogether>(|| (), &[]), one_by_one);
         assert!(one_by_one[0].contains("\"row 1\""));
         assert!(one_by_one[0].contains("\"right\""));
+    }
+}
+
+/// An image node `id` showing `source` (and `placeholder`), in the root.
+fn image_ops(id: NodeId, source: ImageSource, placeholder: Option<ImageSource>) -> Vec<Op> {
+    let mut ops = vec![
+        Op::Create {
+            id,
+            tag: Tag::Image,
+        },
+        Op::SetProp {
+            id,
+            prop: Prop::Source(Some(source)),
+        },
+    ];
+    if placeholder.is_some() {
+        ops.push(Op::SetProp {
+            id,
+            prop: Prop::Image(ImageProp::DefaultSource(placeholder)),
+        });
+    }
+    ops.push(Op::Insert {
+        parent: ROOT_ID,
+        child: id,
+        before: None,
+    });
+    ops
+}
+
+fn asset(uri: &str, scales: &[f32]) -> ImageSource {
+    ImageSource {
+        uri: uri.into(),
+        size: Some((40.0, 30.0)),
+        scales: ImageScales::from_scales(scales.iter().copied()),
+    }
+}
+
+/// The source and placeholder URIs of `id`'s last image item.
+fn image_uris(batch: &MountBatch, id: NodeId) -> Option<(Option<String>, Option<String>)> {
+    batch.items.iter().rev().find_map(|i| match i {
+        MountItem::Image {
+            id: i,
+            source,
+            options,
+            ..
+        } if *i == id => Some((
+            source.as_ref().map(|s| s.uri.to_string()),
+            options.placeholder.as_ref().map(|s| s.uri.to_string()),
+        )),
+        _ => None,
+    })
+}
+
+fn at_ratio(c: &mut Core<FakeEngine>, pixel_ratio: f32) {
+    c.set_environment(crate::ui::Environment {
+        pixel_ratio,
+        ..Default::default()
+    });
+}
+
+#[test]
+fn image_scales_pick_the_smallest_at_least_the_ratio_else_the_largest() {
+    let set = ImageScales::from_scales([1.0, 2.0, 3.0]);
+    let picks: Vec<_> = [1.0, 1.5, 2.0, 2.625, 3.0, 3.5]
+        .into_iter()
+        .map(|r| set.pick(r))
+        .collect();
+    assert_eq!(
+        picks,
+        [
+            Some(1.0),
+            Some(2.0),
+            Some(2.0),
+            Some(3.0),
+            Some(3.0),
+            Some(3.0)
+        ]
+    );
+    assert_eq!(ImageScales::from_scales([1.0, 1.5]).pick(1.2), Some(1.5));
+    assert_eq!(ImageScales::from_scales([2.0, 4.0]).pick(1.0), Some(2.0));
+    assert_eq!(ImageScales::NONE.pick(2.0), None);
+    assert_eq!(
+        ImageScales::from_scales(IMAGE_SCALES)
+            .iter()
+            .collect::<Vec<_>>(),
+        IMAGE_SCALES
+    );
+}
+
+#[test]
+fn image_scales_name_the_variants_and_keep_the_1x_file() {
+    let a = asset("asset:/img/a.png", &[1.0, 1.5, 2.0, 3.0, 4.0]);
+    let uris: Vec<_> = [1.0, 1.5, 2.0, 3.0, 4.0]
+        .into_iter()
+        .map(|r| a.uri_for(r).to_string())
+        .collect();
+    assert_eq!(
+        uris,
+        [
+            "asset:/img/a.png",
+            "asset:/img/a@1.5x.png",
+            "asset:/img/a@2x.png",
+            "asset:/img/a@3x.png",
+            "asset:/img/a@4x.png"
+        ]
+    );
+    // The 1x file is the URI itself, not a copy.
+    assert!(std::sync::Arc::ptr_eq(&a.uri_for(1.0), &a.uri));
+    assert_eq!(
+        &*asset("asset:/x.y/b", &[1.0, 2.0]).uri_for(2.0),
+        "asset:/x.y/b@2x"
+    );
+    assert_eq!(
+        &*asset("asset:/.hidden", &[1.0, 2.0]).uri_for(2.0),
+        "asset:/.hidden@2x"
+    );
+    assert_eq!(
+        &*asset("asset:/c.d.webp", &[3.0]).uri_for(1.0),
+        "asset:/c.d@3x.webp"
+    );
+}
+
+#[test]
+fn image_scales_leave_remote_and_file_uris_alone() {
+    for uri in [
+        "https://x.org/a.png",
+        "http://x.org/a.png",
+        "/tmp/a.png",
+        "file:///a.png",
+    ] {
+        let source = asset(uri, &[1.0, 2.0, 3.0]);
+        assert!(
+            std::sync::Arc::ptr_eq(&source.uri_for(3.0), &source.uri),
+            "{uri}"
+        );
+    }
+}
+
+#[test]
+fn image_scales_drop_invalid_values() {
+    let set = ImageScales::from_scales([f32::NAN, -2.0, 0.0, 2.5, 5.0, f32::INFINITY, 2.0]);
+    assert_eq!(set.iter().collect::<Vec<_>>(), [2.0]);
+    assert!(ImageScales::from_scales([f32::NAN, -1.0]).is_empty());
+    assert!(set.contains(2.0) && !set.contains(1.0));
+}
+
+/// The JS shapes, through the host decoding (a JSON stand-in for JS
+/// values).
+#[test]
+fn image_scales_decode_from_js() {
+    use crate::js::host::{HostCx, HostInput, HostList, HostValue};
+
+    struct J(serde_json::Value);
+    struct L(Vec<serde_json::Value>);
+    impl HostList for L {
+        type Item = J;
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+        fn item(&self, i: usize) -> Option<J> {
+            self.0.get(i).cloned().map(J)
+        }
+    }
+    impl HostInput for J {
+        type List = L;
+        fn is_nullish(&self) -> bool {
+            self.0.is_null()
+        }
+        fn is_object(&self) -> bool {
+            self.0.is_object() || self.0.is_array()
+        }
+        fn as_bool(&self) -> Option<bool> {
+            self.0.as_bool()
+        }
+        fn as_number(&self) -> Option<f64> {
+            self.0.as_f64()
+        }
+        fn as_string(&self) -> Option<String> {
+            self.0.as_str().map(str::to_owned)
+        }
+        fn field(&self, key: &str) -> Option<J> {
+            self.0.get(key).cloned().map(J)
+        }
+        fn as_list(&self) -> Option<L> {
+            self.0.as_array().cloned().map(L)
+        }
+        fn entries(&self) -> Vec<(String, J)> {
+            Vec::new()
+        }
+        fn truthy(&self) -> bool {
+            !self.0.is_null()
+        }
+    }
+    let decode = |v: serde_json::Value| ImageSource::decode(&J(v), &mut HostCx::default());
+
+    let source = decode(serde_json::json!({
+        "uri": "asset:/a.png", "width": 40, "height": 30, "scales": [1, 2, "3", -1, 2.5, 3]
+    }))
+    .unwrap();
+    assert_eq!(source.size, Some((40.0, 30.0)));
+    assert_eq!(source.scales.iter().collect::<Vec<_>>(), [1.0, 2.0, 3.0]);
+    let plain = decode(serde_json::json!({ "uri": "asset:/a.png", "width": 40, "height": 30 }));
+    assert_eq!(plain.unwrap().scales, ImageScales::NONE);
+    assert_eq!(
+        decode(serde_json::json!("https://x.org/a.png"))
+            .unwrap()
+            .scales,
+        ImageScales::NONE
+    );
+    let odd = decode(serde_json::json!({ "uri": "asset:/a.png", "scales": "2" })).unwrap();
+    assert!(odd.scales.is_empty());
+}
+
+#[test]
+fn image_scales_mount_the_variant_for_the_pixel_ratio() {
+    for (ratio, file) in [
+        (1.0, "a.png"),
+        (2.0, "a@2x.png"),
+        (2.625, "a@3x.png"),
+        (3.0, "a@3x.png"),
+    ] {
+        let mut c = core();
+        at_ratio(&mut c, ratio);
+        let mut ops = image_ops(
+            2,
+            asset("asset:/a.png", &[1.0, 2.0, 3.0]),
+            Some(asset("asset:/p.png", &[1.0, 2.0])),
+        );
+        ops.extend(image_ops(3, asset("asset:/a.png", &[1.0, 2.0, 3.0]), None));
+        ops.push(style_op(3, &[("alignSelf", StyleValue::Str("flex-start"))]));
+        apply(&mut c, ops);
+        let batch = c.commit().unwrap();
+        let placeholder = if ratio > 1.0 { "p@2x.png" } else { "p.png" };
+        assert_eq!(
+            image_uris(&batch, 2),
+            Some((
+                Some(format!("asset:/{file}")),
+                Some(format!("asset:/{placeholder}"))
+            )),
+            "at {ratio}"
+        );
+        // The size in points does not depend on the variant.
+        assert_eq!(
+            frame_of(&batch, 3).map(|f| (f.width, f.height)),
+            Some((40.0, 30.0)),
+            "at {ratio}"
+        );
+    }
+}
+
+#[test]
+fn image_scales_change_nothing_without_scales() {
+    let mut c = core();
+    at_ratio(&mut c, 3.0);
+    let plain = asset("asset:/a.png", &[]);
+    apply(
+        &mut c,
+        image_ops(2, plain.clone(), Some(asset("asset:/a@3x.png", &[]))),
+    );
+    let batch = c.commit().unwrap();
+    let source = batch.items.iter().find_map(|i| match i {
+        MountItem::Image { id: 2, source, .. } => source.clone(),
+        _ => None,
+    });
+    assert_eq!(source, Some(plain));
+    assert_eq!(
+        image_uris(&batch, 2),
+        Some((Some("asset:/a.png".into()), Some("asset:/a@3x.png".into())))
+    );
+    // A ratio change sends nothing for them.
+    at_ratio(&mut c, 2.0);
+    let batch = c.commit();
+    assert!(
+        batch.is_none_or(|b| !b.items.iter().any(|i| matches!(i, MountItem::Image { .. }))),
+        "nothing for images without scales"
+    );
+}
+
+/// Rust components: an `asset!` image with variants (`ImageAsset::scales`)
+/// is picked as an imported one.
+mod asset_variants {
+    use super::*;
+    use crate::ui::{ImageAsset, prelude::*};
+
+    const FLAG: ImageAsset = ImageAsset {
+        uri: "asset:/@demo/flag.png",
+        width: 17.0,
+        height: 12.0,
+        scales: &[1.0, 2.0, 3.0],
+    };
+    const PLAIN: ImageAsset = ImageAsset {
+        uri: "asset:/@demo/plain.png",
+        width: 10.0,
+        height: 10.0,
+        scales: &[],
+    };
+
+    #[component]
+    fn Flags() -> impl IntoElement {
+        view()
+            .child(image(FLAG))
+            .child(image(PLAIN).placeholder(FLAG))
+    }
+
+    /// The image items' source and placeholder URIs, in mount order.
+    fn shown(pixel_ratio: f32) -> Vec<(Option<String>, Option<String>)> {
+        let mut c = core();
+        at_ratio(&mut c, pixel_ratio);
+        c.mount_root(&crate::ui::Root::new::<Flags>(|| ()));
+        let batch = c.commit().unwrap();
+        batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::Image { id, .. } => image_uris(&batch, *id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn some(uri: &str) -> Option<String> {
+        Some(uri.to_owned())
+    }
+
+    #[test]
+    fn asset_variants_pick_for_the_pixel_ratio() {
+        assert_eq!(
+            shown(3.0),
+            [
+                (some("asset:/@demo/flag@3x.png"), None),
+                (
+                    some("asset:/@demo/plain.png"),
+                    some("asset:/@demo/flag@3x.png")
+                )
+            ]
+        );
+        assert_eq!(
+            shown(2.0),
+            [
+                (some("asset:/@demo/flag@2x.png"), None),
+                (
+                    some("asset:/@demo/plain.png"),
+                    some("asset:/@demo/flag@2x.png")
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn asset_variants_none_keep_the_file() {
+        assert_eq!(
+            shown(1.0),
+            [
+                (some("asset:/@demo/flag.png"), None),
+                (
+                    some("asset:/@demo/plain.png"),
+                    some("asset:/@demo/flag.png")
+                )
+            ]
+        );
+        let src: crate::ui::ImageSrc = PLAIN.into();
+        assert!(src.scales.is_empty());
+        let src: crate::ui::ImageSrc = FLAG.into();
+        assert_eq!(src.scales.iter().collect::<Vec<_>>(), [1.0, 2.0, 3.0]);
+        assert_eq!(src.size, Some((17.0, 12.0)));
+    }
+}
+
+mod remount {
+    use super::*;
+
+    #[test]
+    fn sends_every_view_again_without_creating_it() {
+        let mut c = core();
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::View,
+                },
+                Op::Create {
+                    id: 3,
+                    tag: Tag::Text,
+                },
+                Op::CreateText {
+                    id: 4,
+                    text: "hello".into(),
+                },
+                Op::Insert {
+                    parent: 3,
+                    child: 4,
+                    before: None,
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 3,
+                    before: None,
+                },
+                style_op(
+                    2,
+                    &[
+                        ("padding", StyleValue::Number(10.0)),
+                        ("borderRadius", StyleValue::Number(8.0)),
+                    ],
+                ),
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+        let first = c.commit().unwrap();
+        assert!(c.commit().is_none());
+
+        c.remount();
+        let again = c.commit().expect("a remount sends a batch");
+        assert!(
+            !again.items.iter().any(|i| matches!(
+                i,
+                MountItem::Create { .. } | MountItem::Insert { .. } | MountItem::Remove { .. }
+            )),
+            "the views stay: {:?}",
+            again.items
+        );
+        assert_eq!(frame_of(&again, 2), frame_of(&first, 2));
+        assert_eq!(frame_of(&again, 3), frame_of(&first, 3));
+        assert!(
+            again
+                .items
+                .iter()
+                .any(|i| matches!(i, MountItem::ViewStyle { id: 2, .. }))
+        );
+        assert!(
+            again
+                .items
+                .iter()
+                .any(|i| matches!(i, MountItem::Text { id: 3, .. }))
+        );
+        assert!(c.commit().is_none(), "nothing left to send");
     }
 }

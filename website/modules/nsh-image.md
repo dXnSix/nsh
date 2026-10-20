@@ -34,7 +34,7 @@ interface ImageSize {
 }
 ```
 
-Loads the image and resolves with its size in pixels (of the source image, not a downsampled copy; an SVG's intrinsic size in points, [on the web as the browser measures it](../docs/images-and-assets.md#svg-images)). The loaded bytes stay in memory, so the `<Image>` that shows it next does not download it again. The promise rejects if the image cannot be loaded.
+Loads the image and resolves with its size in pixels (of the source image, not a downsampled copy; an SVG's intrinsic size in points, [on the web as the browser measures it](../docs/images-and-assets.md#svg-images)). An imported image with [pixel-density variants](../docs/images-and-assets.md#pixel-densities) loads the variant views load on this screen and resolves with the imported file's size, whichever variant it loaded. The loaded bytes stay in memory, so the `<Image>` that shows it next does not download it again. The promise rejects if the image cannot be loaded.
 
 ```tsx
 import { signal } from "nsh";
@@ -54,7 +54,7 @@ Image.getSize(url).then(({ width, height }) => ratio.set(width / height));
 prefetch(source: string | { uri: string }): Promise<boolean>;
 ```
 
-Loads an image ahead of showing it. Resolves with `true` once its bytes are in memory (`false` when it could not be loaded). Use it for the next page of a gallery or the image behind a tap.
+Loads an image ahead of showing it. Resolves with `true` once its bytes are in memory (`false` when it could not be loaded). For an imported image with pixel-density variants, it loads the variant views load on this screen. Use it for the next page of a gallery or the image behind a tap.
 
 ```ts
 const next = photos.slice(index + 1, index + 4);

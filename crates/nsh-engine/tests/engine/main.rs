@@ -19,6 +19,7 @@ mod component_bench;
 mod components;
 mod counter;
 mod errors;
+mod external_wake;
 mod fetch;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod fs;
@@ -51,6 +52,8 @@ mod storage;
 mod system;
 mod test_ui;
 mod theme;
+mod variant_info;
+mod variant_repick;
 mod websocket;
 
 /// Hands the engine's batches to the test.

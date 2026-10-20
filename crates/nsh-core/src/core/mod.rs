@@ -806,6 +806,28 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// The pixel ratio went from `old` to `new`: the images whose variant
+    /// changes are sent again (their layout does not change).
+    fn repick_images(&mut self, old: f32, new: f32) {
+        let changes = |s: &Option<ImageSource>| {
+            s.as_ref()
+                .is_some_and(|s| !s.scales.is_empty() && s.variant(old) != s.variant(new))
+        };
+        let images: Vec<Key> = self
+            .nodes
+            .iter()
+            .filter(|(_, n)| {
+                n.image
+                    .as_ref()
+                    .is_some_and(|i| changes(&i.source) || changes(&i.options.placeholder))
+            })
+            .map(|(k, _)| k as Key)
+            .collect();
+        for key in images {
+            self.mark(key, dirty::IMAGE);
+        }
+    }
+
     /// Number of live nodes, including the root.
     pub fn node_count(&self) -> usize {
         self.nodes.len()
@@ -959,6 +981,32 @@ impl<M: TextEngine> Core<M> {
                 self.mark(key, dirty::INPUT);
             }
         }
+    }
+
+    /// The platform's views must get everything again, as new views do, and
+    /// text is measured again: the unit the platform converted the values
+    /// with changed (Android's density). The views stay.
+    pub fn remount(&mut self) {
+        self.fonts_changed();
+        let keys: Vec<Key> = self
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.created)
+            .map(|(k, _)| k as Key)
+            .collect();
+        for key in keys {
+            let flags = self.mount_state(key);
+            self.mark(key, flags);
+            let node = &mut self.nodes[key as usize];
+            if let Some(root) = node.root.as_mut() {
+                root.laid_out = None;
+            }
+            if let Some(layout) = node.layout {
+                // Every frame is sent again.
+                self.layout.mark_dirty(layout).expect("taffy dirty");
+            }
+        }
+        self.needs_layout = true;
     }
 
     /// The user edited input `id` (before JS sees the edit): keeps the text
@@ -2960,13 +3008,67 @@ impl<M: TextEngine> Core<M> {
             return;
         }
         node.created = true;
+        let id = node.id;
+        let kind = node.kind;
+        let mut flags = self.mount_state(key);
+        let node = &mut self.nodes[key as usize];
+        if kind == Kind::Text && has_attachments {
+            // Its attachments' views go inside the new view.
+            node.attached.clear();
+            flags |= dirty::TEXT_BUILD;
+        }
+        self.mount.push(MountItem::Create {
+            id,
+            kind: kind.view_kind(),
+        });
+        if let Some(component) = self.nodes[key as usize].component.as_mut() {
+            match &component.name {
+                Some(name) => self.mount.push(MountItem::Component {
+                    id,
+                    name: name.clone(),
+                }),
+                None => log::warn!(target: "js", "a <native> element without `component`"),
+            }
+        }
+        if let Some(item) = self.creation_tracking(key) {
+            self.mount.push(item);
+        }
+        self.mark(key, flags);
+        if !kind.is_container() {
+            return;
+        }
+        // Bottom to top: by `zIndex`, then in order.
+        let mut children = std::mem::take(&mut self.nodes[key as usize].children);
+        let original = children.clone();
+        if children
+            .iter()
+            .any(|&c| self.nodes[c as usize].z_index != 0)
+        {
+            children.sort_by_key(|&c| self.nodes[c as usize].z_index);
+        }
+        for &child in &children {
+            if self.nodes[child as usize].layout.is_some() {
+                self.ensure_created(child);
+                let child_id = self.nodes[child as usize].id;
+                self.mount.push(MountItem::Insert {
+                    parent: id,
+                    child: child_id,
+                    before: None,
+                });
+            }
+        }
+        self.nodes[key as usize].children = original;
+    }
+
+    /// Resets what `key`'s native view was last sent and returns what a new
+    /// view needs: a new view has the default style and no listeners.
+    fn mount_state(&mut self, key: Key) -> u32 {
+        let node = &mut self.nodes[key as usize];
+        let kind = node.kind;
         node.frame = Rect::UNSET;
         if let Some(scroll) = node.scroll.as_mut() {
             scroll.content = None;
         }
-        let id = node.id;
-        let kind = node.kind;
-        // A new native view already has the default style and no listeners.
         let mut flags = 0;
         if node.view_style != ViewStyle::default() || node.elevation != 0.0 {
             flags |= dirty::VIEW;
@@ -2976,11 +3078,6 @@ impl<M: TextEngine> Core<M> {
         }
         if kind == Kind::Text {
             flags |= dirty::TEXT_MOUNT;
-            if has_attachments {
-                // Its attachments' views go inside the new view.
-                node.attached.clear();
-                flags |= dirty::TEXT_BUILD;
-            }
         }
         if node.image.as_ref().is_some_and(|i| i.source.is_some()) {
             flags |= dirty::IMAGE;
@@ -3021,50 +3118,12 @@ impl<M: TextEngine> Core<M> {
                 flags |= dirty::INPUT_VALUE;
             }
         }
-        self.mount.push(MountItem::Create {
-            id,
-            kind: kind.view_kind(),
-        });
-        if let Some(component) = self.nodes[key as usize].component.as_mut() {
-            match &component.name {
-                Some(name) => self.mount.push(MountItem::Component {
-                    id,
-                    name: name.clone(),
-                }),
-                None => log::warn!(target: "js", "a <native> element without `component`"),
-            }
+        if let Some(component) = node.component.as_mut() {
             // The new component gets every property.
             component.changed = component.props.iter().map(|(k, _)| k.clone()).collect();
             flags |= dirty::COMPONENT;
         }
-        if let Some(item) = self.creation_tracking(key) {
-            self.mount.push(item);
-        }
-        self.mark(key, flags);
-        if !kind.is_container() {
-            return;
-        }
-        // Bottom to top: by `zIndex`, then in order.
-        let mut children = std::mem::take(&mut self.nodes[key as usize].children);
-        let original = children.clone();
-        if children
-            .iter()
-            .any(|&c| self.nodes[c as usize].z_index != 0)
-        {
-            children.sort_by_key(|&c| self.nodes[c as usize].z_index);
-        }
-        for &child in &children {
-            if self.nodes[child as usize].layout.is_some() {
-                self.ensure_created(child);
-                let child_id = self.nodes[child as usize].id;
-                self.mount.push(MountItem::Insert {
-                    parent: id,
-                    child: child_id,
-                    before: None,
-                });
-            }
-        }
-        self.nodes[key as usize].children = original;
+        flags
     }
 
     #[inline]
@@ -3142,11 +3201,20 @@ impl<M: TextEngine> Core<M> {
                     Some(m) if image.resize_mode == ResizeMode::default() => m,
                     _ => image.resize_mode,
                 };
+                // Bundled assets with variants: the one for the screen.
+                let ratio = self.components.environment.pixel_ratio;
                 self.mount.push(MountItem::Image {
                     id,
-                    source: image.source.clone(),
+                    source: image.source.as_ref().map(|s| s.resolved(ratio)),
                     resize_mode,
-                    options: image.options.clone(),
+                    options: crate::mount::ImageOptions {
+                        placeholder: image
+                            .options
+                            .placeholder
+                            .as_ref()
+                            .map(|s| s.resolved(ratio)),
+                        ..image.options.clone()
+                    },
                 });
             }
             if let Some(scroll) = &node.scroll {

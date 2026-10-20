@@ -773,6 +773,7 @@ enum Message {
     Frame,
     States(NodeId, u8),
     FontsChanged,
+    Remount,
     /// An event of a request (by the hop it is for: events of a hop the
     /// engine left are dropped).
     Fetch(Requester, u64, FetchEvent),
@@ -904,6 +905,13 @@ impl EngineControl {
     /// is measured again.
     pub fn fonts_changed(&self) {
         let _ = self.tx.send(Message::FontsChanged);
+    }
+
+    /// The platform's views get everything again and text is measured
+    /// again: the unit the platform converts values with changed (Android's
+    /// density). Send the new environment and size too.
+    pub fn remount(&self) {
+        let _ = self.tx.send(Message::Remount);
     }
 
     /// Records the engine's commits into `monitor` from now on (`None`:
@@ -1078,6 +1086,22 @@ impl<M: TextEngine + 'static> LocalEngine<M> {
         self.control.clone()
     }
 
+    /// Calls `wake` whenever the engine has work outside a
+    /// [`pump`](Self::pump): a task woken (a timer, a reply, a callback of
+    /// the host's — a WebSocket's message through wasm-bindgen) or a JS
+    /// call Rust posted. The host then calls `pump` soon, instead of only at
+    /// the deadline it returned or at the next input. `wake` may run during
+    /// a pump too (a task waking another); the host coalesces the calls.
+    pub fn set_wake(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
+        let tx = self.control.tx.clone();
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = tx.send(Message::Wake);
+            wake();
+        });
+        self.driver.state.core.set_task_notify(notify.clone());
+        self.driver.posts.set_notify(notify);
+    }
+
     /// Handles the input sent since the last call, runs what is due
     /// (timers, tasks) and commits. Returns when to call again at the
     /// latest (sooner if input arrives); `None`: only for input.
@@ -1110,6 +1134,9 @@ struct Driver<M: TextEngine + 'static> {
     /// once; its views stay as they were and no JS runs any more.
     stopped: bool,
     last_gc: Instant,
+    /// The queue of the JS calls Rust posts: its notify wakes the engine,
+    /// as the core's task notify does ([`LocalEngine::set_wake`]).
+    posts: nsh_core::ui::Posts,
 }
 
 impl<M: TextEngine + 'static> Driver<M> {
@@ -1241,6 +1268,7 @@ impl<M: TextEngine + 'static> Driver<M> {
             assets: config.assets.clone(),
             stopped: false,
             last_gc: Instant::now(),
+            posts: posts.clone(),
         };
         let eval_us = match &config.app {
             App::Js(bundle) => {
@@ -2051,6 +2079,7 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
         }
         Message::States(id, states) => state.core.set_states(id, states),
         Message::FontsChanged => state.core.fonts_changed(),
+        Message::Remount => state.core.remount(),
         Message::Fetch(who, hop, event) => {
             if let Some(event) = state.net.event(who, hop, event) {
                 match who {

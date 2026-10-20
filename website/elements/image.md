@@ -35,7 +35,7 @@ follows the asset's aspect ratio. A URL has no known size before it loads, so gi
 
 | Value | Example | Description |
 |---|---|---|
-| An imported asset | `import logo from "./logo.png"` | An `ImageAsset` `{ uri, width, height }`, sized in points: a `@2x` file counts half its pixels. `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp` and `.heic` can be imported, and `.svg`, sized by its `width` and `height` or `viewBox` ([SVG images](../docs/images-and-assets.md#svg-images)). |
+| An imported asset | `import logo from "./logo.png"` | An `ImageAsset` `{ uri, width, height, scales? }`, sized in points: a `@2x` file counts half its pixels. With `logo@2x.png` / `logo@3x.png` next to `logo.png`, the variant for the screen's pixel ratio is loaded ([pixel densities](../docs/images-and-assets.md#pixel-densities)). `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp` and `.heic` can be imported, and `.svg`, sized by its `width` and `height` or `viewBox` ([SVG images](../docs/images-and-assets.md#svg-images)). |
 | A URL | `"https://example.com/a.jpg"` | Downloaded and cached. Downloads of the same URL are shared between views. |
 | An asset path | `"asset:/images/a.png"` | A file of the app's assets. |
 | `{ uri }` | `{ uri: "https://…" }` | The same as the string. |
@@ -91,7 +91,8 @@ const state = signal("loading");
 ```
 
 To know an image's size or load it before showing it, call `Image.getSize(uri)` and `Image.prefetch(uri)`: the same
-`Image` from [`nsh/image`](../modules/nsh-image.md) that renders the element carries them.
+`Image` from [`nsh/image`](../modules/nsh-image.md) that renders the element carries them. Given an imported image with
+variants, they load the variant this screen shows.
 
 ## Ref methods
 

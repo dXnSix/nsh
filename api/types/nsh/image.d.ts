@@ -12,9 +12,9 @@ export interface ImageSize {
 
 /** Image information and loading ahead. */
 export interface ImageModule {
-  /** The image's size in pixels; its bytes stay loaded for the views that show it next. */
+  /** The image's size in pixels; its bytes stay loaded for the views that show it next. For an imported image with variants, the variant the views load is asked for, and its size is given over its scale: the size of the imported file. */
   getSize(source: string | { uri: string }): Promise<ImageSize>;
-  /** Loads the image ahead of showing it: true once its bytes are in memory. */
+  /** Loads the image ahead of showing it: true once its bytes are in memory. For an imported image with variants, it loads the one the views load at the screen's pixel ratio. */
   prefetch(source: string | { uri: string }): Promise<boolean>;
 }
 

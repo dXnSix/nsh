@@ -98,7 +98,7 @@ before every `cargo run`): `✓` lines for its builds, cargo's and the tools' ou
 
 ## Dev server (nsh dev / nsh run)
 
-- The CLI watches sources with notify and pushes every rebuild over WebSocket (`/ws`, default port 8790, the next free port if taken) to all
+- The CLI watches sources with notify and pushes every rebuild over WebSocket (`/ws`, default port 8790, the next free port if taken, an error with `--strict-port`) to all
   connected hosts; new clients subscribe before receiving the current state, so no event is missed. Protocol: `crates/nsh-dev/src/protocol.rs`
   (JSON text frames + binary frames).
 - Bytecode version negotiation: the client reports `BYTECODE_VERSION` in its handshake; on a mismatch the server sends JS source instead
@@ -389,7 +389,8 @@ program that describes them, builds the hosts and runners with them, and does ev
     `nsh_platform_linux` / `nsh_platform_macos` / `nsh_platform_windows::set_ui_sets`; `windows-app` is a windowed
     program, with no console), `android` (the app's `libnsh.so`: `nsh::ui_sets!`, which the Android runtime looks up
     when an engine starts) and `web` (the app's web runtime, a `cdylib` for `wasm32-unknown-unknown` built with the
-    `web` profile: `nsh_platform_web::ui_sets!`, whose `nsh_app_init` export `nsh.js` calls; `docs/dev/web.md`, "Apps
+    `web` profile, or the generated incremental `web-dev` one for `nsh run --target web`: `nsh_platform_web::ui_sets!`,
+    whose `nsh_app_init` export `nsh.js` calls; `docs/dev/web.md`, "Apps
     with Rust components"). `gpui-host` / `gpui-app` (`nsh_platform_gpui::set_ui_sets`, under `cfg(any(target_os =
     "linux", target_os = "macos", windows))`; `gpui-app` is a windowed program on Windows too) are a workspace of their
     own in `.nsh/rust/gpui` (excluded from the main one), written only when a GPUI host or runner is built
@@ -398,11 +399,17 @@ program that describes them, builds the hosts and runners with them, and does ev
   They take nsh's crates where the app's crates do (`rust_app::Nsh::of`, from each crate's dependencies through `cargo
   metadata --no-deps`): from crates.io at the version of the running `nsh` (`=0.1.1` for nsh 0.1.1: the code it
   generates calls their API, and the description and the trace protocol must be the ones it reads), which the app's
-  requirements must accept, or by path from the checkout the app's crates depend on (nsh's own examples, as
-  `examples/gallery-rs`, through the workspace's path dependencies), which must be of that version, with the app's
-  crates.io dependencies on nsh patched to it (all of nsh's crates but the bundler, which nothing there builds).
-  Requirements of another version, or crates taking nsh from two places, stop the command with what to change, rather
-  than a build failing later on two `nsh-core`s. They build in the app's own `target/`, as a Cargo project in the app's
+  requirements must accept; by path from the checkout the app's crates depend on (nsh's own examples, as
+  `examples/gallery-rs`, through the workspace's path dependencies), which must be of that version; or from the git
+  repository the app's crates name (`nsh-core = { git = "…", tag = "…" }`, also `branch` or `rev`: a fork, or a change
+  not yet on crates.io), read from the dependency's `source` (`git+<url>?tag=<tag>`, `GitSource`). With a checkout or
+  a repository, the generated manifests name it for every nsh crate (`{ path = … }` / `{ git = …, tag = … }`) and the
+  app's crates.io dependencies on nsh are patched to it (all of nsh's crates but the bundler, which nothing there
+  builds). A git source's version is checked once Cargo has fetched it (`RustApp::git_checkout`, through `cargo
+  metadata` of the generated workspace): its `nsh-core` must be the running `nsh`'s version, else the command says
+  which `nsh` to install. The web runtime's `nsh.js` comes from the fetched `nsh-platform-web`, as from crates.io.
+  Requirements of another version, or crates taking nsh from two places (two sources, or two tags of one
+  repository), stop the command with both places named, rather than a build failing later on two `nsh-core`s. They build in the app's own `target/`, as a Cargo project in the app's
   directory does (`nsh init` ignores it), or in `CARGO_TARGET_DIR` when it is set (one directory several checkouts or
   CI jobs share), and Cargo resolves and keeps the workspace's own `Cargo.lock`. Every crate those workspaces depend on
   is published by `release-crate.yml`, the hosts and runners included; the binaries are named after the app

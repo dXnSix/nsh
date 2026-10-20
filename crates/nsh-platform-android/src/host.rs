@@ -27,13 +27,13 @@ use crate::{
     animation::UiAnimation,
     encode::{self, Obj},
     java::{java, with_env},
-    text::AndroidTextEngine,
+    text::{AndroidTextEngine, Density},
 };
 
 pub(crate) struct Host {
     /// The `NshView`.
     pub(crate) view: GlobalRef,
-    density: f32,
+    density: Density,
     trace: bool,
     engine: Mutex<Option<Engine>>,
     /// The running engine's control, for answers the sink gives itself
@@ -119,9 +119,15 @@ impl Host {
                 nsh_engine::FileStorage::open(dir) as Arc<dyn nsh_engine::StorageBackend>
             }),
         };
-        let density = self.density;
+        let density = self.density.clone();
         let sink = Sink(self.clone());
-        match Engine::start(config, move || AndroidTextEngine { density }, sink) {
+        match Engine::start(
+            config,
+            move || AndroidTextEngine {
+                density: density.clone(),
+            },
+            sink,
+        ) {
             Ok(engine) => {
                 *self.answers.lock().expect("answers") = Some(engine.control());
                 *self.engine.lock().expect("engine") = Some(engine);
@@ -376,7 +382,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_create(
         .map(|dir| std::path::PathBuf::from(String::from(dir)));
     let host = Arc::new(Host {
         view,
-        density,
+        density: Density::new(density),
         trace: trace != 0,
         engine: Mutex::new(None),
         answers: Mutex::new(None),
@@ -701,8 +707,14 @@ extern "system" fn Java_com_longbridge_nsh_Native_environment(
         ColorScheme::Light
     };
     let environment = *environment;
+    // `wm density` or a display change: `NshView` resized the viewport in
+    // dp, and every value it converted to pixels is sent again.
+    let remount = host.density.set(environment.pixel_ratio);
     if let Some(control) = host.control() {
         control.set_environment(environment);
+        if remount {
+            control.remount();
+        }
     }
 }
 

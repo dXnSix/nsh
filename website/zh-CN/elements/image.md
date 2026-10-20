@@ -32,7 +32,7 @@ import logo from "./assets/logo.png";
 
 | 值 | 示例 | 说明 |
 |---|---|---|
-| 导入的资源 | `import logo from "./logo.png"` | 一个 `ImageAsset` `{ uri, width, height }`，以点为单位：`@2x` 文件按像素的一半计算。可以导入 `.png`、`.jpg`、`.jpeg`、`.gif`、`.webp` 和 `.heic`，以及按 `width` 和 `height` 或 `viewBox` 确定尺寸的 `.svg`（[SVG 图片](../docs/images-and-assets.md#svg-图片)）。 |
+| 导入的资源 | `import logo from "./logo.png"` | 一个 `ImageAsset` `{ uri, width, height, scales? }`，以点为单位：`@2x` 文件按像素的一半计算。当 `logo.png` 旁边有 `logo@2x.png` / `logo@3x.png` 时，会加载适合屏幕像素比的变体（[像素密度](../docs/images-and-assets.md#像素密度)）。可以导入 `.png`、`.jpg`、`.jpeg`、`.gif`、`.webp` 和 `.heic`，以及按 `width` 和 `height` 或 `viewBox` 确定尺寸的 `.svg`（[SVG 图片](../docs/images-and-assets.md#svg-图片)）。 |
 | URL | `"https://example.com/a.jpg"` | 下载并缓存。同一 URL 的下载在多个视图之间共享。 |
 | 资源路径 | `"asset:/images/a.png"` | 应用资源中的文件。 |
 | `{ uri }` | `{ uri: "https://…" }` | 与字符串形式相同。 |
@@ -85,7 +85,7 @@ const state = signal("加载中");
 />;
 ```
 
-如果需要在显示前获取图片尺寸或预先加载，请调用 `Image.getSize(uri)` 和 `Image.prefetch(uri)`：它们就挂在渲染这个元素的、来自 [`nsh/image`](../modules/nsh-image.md) 的同一个 `Image` 上。
+如果需要在显示前获取图片尺寸或预先加载，请调用 `Image.getSize(uri)` 和 `Image.prefetch(uri)`：它们就挂在渲染这个元素的、来自 [`nsh/image`](../modules/nsh-image.md) 的同一个 `Image` 上。传入带有变体的导入图片时，它们加载当前屏幕显示的那个变体。
 
 ## ref 方法
 

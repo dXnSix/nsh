@@ -31,7 +31,32 @@ logo; // { uri: "asset:/assets/logo@2x.png", width: 64, height: 64 }
 
 Supported files: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.heic`, and `.svg` ([SVG images](#svg-images)).
 
-**Sizes are in points.** An `@2x` or `@3x` suffix in the file name says the file has 2 or 3 pixels per point, so `logo@2x.png` at 128×128 pixels is a 64×64 point asset. Without a suffix, one pixel is one point. There is no automatic choice between `logo@2x.png` and `logo@3x.png`: the file you import is the one that ships. Export at the highest density you need (`@3x` for the sharpest result on every phone); images are downsampled to the screen when decoded.
+**Sizes are in points.** An `@2x` or `@3x` suffix in the file name says the file has 2 or 3 pixels per point, so `logo@2x.png` at 128×128 pixels is a 64×64 point asset. Without a suffix, one pixel is one point.
+
+### Pixel densities
+
+Import the file without a suffix and put its denser versions next to it, and the app loads the one that fits the screen:
+
+```text
+assets/
+├── logo.png       64×64 pixels
+├── logo@2x.png    128×128
+└── logo@3x.png    192×192
+```
+
+```tsx
+import logo from "./assets/logo.png";
+
+logo; // { uri: "asset:/assets/logo.png", width: 64, height: 64, scales: [1, 2, 3] }
+```
+
+- The bundler looks for `@1.5x`, `@2x`, `@3x` and `@4x` siblings of every imported bitmap without a suffix, and ships the ones it finds. `scales` lists them, with 1 for the imported file; it is left out when there are none.
+- The image loads the smallest scale at least the screen's pixel ratio, otherwise the largest, as React Native picks: `logo.png` on a 1× screen, `logo@2x.png` on a 2× one, `logo@3x.png` on a 3× phone (and at 2.625). On the web only that file is downloaded.
+- When the pixel ratio changes (a window moved to another screen, browser zoom), the images whose choice changes load again. Their size does not change: it is the imported file's size, in points.
+- The build warns when a variant's pixels are not the imported file's size times its scale.
+- Importing a file with a suffix (`./logo@3x.png`) ships that file alone, as before; no siblings are looked for.
+
+One file is fine too: export it at the highest density you need (`@3x` for the sharpest result on every phone) and import it with its suffix; images are downsampled to the screen when decoded. Variants save the bytes of downloading, decoding and keeping the dense file on screens that do not need it.
 
 **Natural size.** An image from an asset lays out at its natural size when its style leaves the width or height open, so `<Image src={logo} />` needs no style. Set one dimension and `aspectRatio`, or both, to size it differently.
 
@@ -42,7 +67,7 @@ Assets are resolved relative to the importing module, and their `uri` is relativ
 
 ## SVG images
 
-Import an `.svg` file like any image. Its size in points is its `width` and `height` (or one of them, with the other from the `viewBox`'s aspect ratio), else its `viewBox`: a CSS pixel of the SVG is a point, and `@2x` suffixes leave SVG files as they are.
+Import an `.svg` file like any image. Its size in points is its `width` and `height` (or one of them, with the other from the `viewBox`'s aspect ratio), else its `viewBox`: a CSS pixel of the SVG is a point, and `@2x` suffixes leave SVG files as they are. An SVG ships no [pixel-density](#pixel-densities) siblings: one file is sharp at every pixel ratio.
 
 ```tsx
 import logo from "./assets/logo.svg"; // <svg width="120" height="40" …>
@@ -169,7 +194,7 @@ const ok = await Image.prefetch("https://example.com/next.jpg");      // true on
 | `Image.getSize(source)` | The image's size in pixels (an SVG's in points, [on the web as the browser measures it](#svg-images)). Rejects when it cannot be loaded |
 | `Image.prefetch(source)` | `true` once the image's bytes are loaded |
 
-`source` is a URL string or `{ uri }`. Both keep the downloaded bytes for the views that show the image next, so an image prefetched before it is shown appears without a download.
+`source` is a URL string, `{ uri }` or an imported image. For an imported image with [variants](#pixel-densities), both load the variant views load on this screen, and `getSize` gives the imported file's size. Both keep the downloaded bytes for the views that show the image next, so an image prefetched before it is shown appears without a download.
 
 A common use is sizing a remote image by its aspect ratio:
 

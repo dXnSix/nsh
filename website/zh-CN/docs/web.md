@@ -113,11 +113,20 @@ crate，不含 QuickJS；站点里没有 `app.nshc` 和 `harden.nshc`；运行�
 同一个应用像 TSX 应用一样运行在 QuickJS 上，并导入 crate 的组件和模块。
 
 两种方式下，crate 的资源（`assets!()`）都会随应用的资源一起发布，其中的字体在第一帧之前加载。`nsh run --target web`
-期间，修改 crate 的 Rust 代码会重新构建运行时，已打开的页面会自动加载新的运行时；TSX 的修改仍然是热更新。
+期间，修改 crate 的 Rust 代码会重新构建运行时，已打开的页面会自动加载新的运行时；TSX 的修改仍然是热更新。开发运行时以增量方式构建，修改 crate 后约一秒即可就绪；
+`nsh package` 构建的发布版运行时则针对体积进行优化。
 
 要在包括 Web 在内的所有平台上运行的 Rust 代码，使用引擎提供的服务：`fetch(url).await` 通过与 JS `fetch` 相同的网络栈发出 HTTP
 请求（这里是浏览器的网络栈，遵循它的 CORS 规则）；`timer`、`set_timeout` 和 `set_interval` 用于等待；`nsh_core::time::Instant`
 和 `nsh_core::time::unix_ms()` 读取时钟。`background` 和 `blocking` 在原生目标的线程上运行任务。
+
+### 在 Rust 中使用浏览器 API
+
+crate 可以通过 [wasm-bindgen](https://rustwasm.github.io/docs/wasm-bindgen/) 及其 `web-sys`、`js-sys` crate，在
+`#[cfg(target_arch = "wasm32")]` 下调用浏览器自身的 API：WebSocket、`IndexedDB`、剪贴板以及任何 Web API。当应用的 Web 运行时链接了
+`wasm-bindgen` 时，`nsh` 会对它运行 `wasm-bindgen` CLI，并把生成的胶水代码放在运行时旁边，开发时和发布的站点都是如此。请安装与应用解析到的
+`wasm-bindgen` crate 版本相同的 CLI（`cargo install wasm-bindgen-cli --version <version> --locked`）；两者版本不同时，`nsh` 会指出所需的版本。
+浏览器的回调（收到消息、页面的定时器）会唤醒应用的任务，任务随即运行。示例见英文页面中的 WebSocket 回显函数。
 
 构建需要 Rust 的目标和能编译到 WebAssembly 的 clang，与运行时本身的构建相同：`rustup target add wasm32-unknown-unknown`，
 以及 `clang` 和 `llvm-ar`（macOS 上使用 LLVM 工具链，例如 Homebrew 的 `llvm`，通过 `CC_wasm32_unknown_unknown` 和

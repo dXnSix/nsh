@@ -4,11 +4,11 @@
 
 use std::sync::Arc;
 
-use super::host::{HostCx, HostInput, HostValue, field};
+use super::host::{HostCx, HostInput, HostList, HostValue, field};
 use crate::{
     AccessibilityProp, AccessibilityRole, AccessibilityState, AutoFill, CellSlot, EdgeInsets,
-    ImageSource, KeyboardTaps, ListContentStyle, ModalProp, Prop, ScrollProp, StatusBarSetting,
-    StatusBarStyle, Viewability, WebSource,
+    ImageScales, ImageSource, KeyboardTaps, ListContentStyle, ModalProp, Prop, ScrollProp,
+    StatusBarSetting, StatusBarStyle, Viewability, WebSource,
     mount::ModalConfig,
     props::{AccessibilityActionDef, AccessibilityValue, Checked, PanActivation, Ripple},
     ui::TsTypes,
@@ -21,13 +21,25 @@ fn number<I: HostInput>(input: &I, key: &str) -> Option<f32> {
         .map(|n| n as f32)
 }
 
-/// `"https://…"` or a bundled asset `{ uri, width, height }`.
+/// The `scales` of an image asset; values that are not
+/// [`crate::IMAGE_SCALES`] are left out.
+fn scales<I: HostInput>(input: &I) -> ImageScales {
+    let Some(list) = input.field("scales").and_then(|s| s.as_list()) else {
+        return ImageScales::NONE;
+    };
+    (0..list.len())
+        .filter_map(|i| list.item(i)?.as_number())
+        .fold(ImageScales::NONE, |set, n| set.with(n as f32))
+}
+
+/// `"https://…"` or a bundled asset `{ uri, width, height, scales }`.
 impl HostValue for ImageSource {
     fn decode<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Self> {
         if let Some(uri) = input.as_string() {
             return (!uri.is_empty()).then(|| ImageSource {
                 uri: uri.into(),
                 size: None,
+                scales: ImageScales::NONE,
             });
         }
         let uri = input.field("uri")?.as_string()?;
@@ -38,6 +50,7 @@ impl HostValue for ImageSource {
         Some(ImageSource {
             uri: uri.into(),
             size,
+            scales: scales(input),
         })
     }
 
