@@ -45,6 +45,8 @@ fn start() -> (Engine, Receiver<MountBatch>) {
         viewport: Size::new(390.0, 844.0),
         trace: false,
         network: None,
+        websocket: None,
+        filesystem: None,
         assets: None,
         environment: Environment::default(),
         header_heights: (44.0, 96.0),
@@ -111,6 +113,8 @@ fn a_rust_app_starts_in_its_appearance() {
         viewport: Size::new(390.0, 844.0),
         trace: false,
         network: None,
+        websocket: None,
+        filesystem: None,
         assets: None,
         environment: Environment::default(),
         header_heights: (44.0, 96.0),
@@ -159,6 +163,8 @@ fn rust_components_navigate_with_native_stacks() {
         viewport: Size::new(390.0, 844.0),
         trace: false,
         network: None,
+        websocket: None,
+        filesystem: None,
         assets: None,
         environment: Environment::default(),
         header_heights: (44.0, 96.0),
@@ -220,13 +226,13 @@ fn rust_components_navigate_with_native_stacks() {
     assert!(deleted, "the popped screen goes");
 }
 
-/// Rust content in a Rust component of the mobile UI: a card's header
-/// and body.
+/// Rust content in a Rust component of a UI set: a card's header and
+/// body.
 #[component]
 fn WithCard() -> impl IntoElement {
     let taps = signal(0);
     view().flex_1().child(
-        nsh_ui_mobile::Card::element(nsh_ui_mobile::CardProps::default())
+        crate::test_ui::Card::element(crate::test_ui::CardProps::default())
             .fill("header", text("card header"))
             .child(
                 text(move || format!("card body {}", taps.get()))
@@ -243,6 +249,8 @@ fn rust_components_pass_content_to_rust_components() {
         viewport: Size::new(390.0, 844.0),
         trace: false,
         network: None,
+        websocket: None,
+        filesystem: None,
         assets: None,
         environment: Environment::default(),
         header_heights: (44.0, 96.0),
@@ -335,6 +343,8 @@ fn rust_components_take_the_back_button() {
         viewport: Size::new(390.0, 844.0),
         trace: false,
         network: None,
+        websocket: None,
+        filesystem: None,
         assets: None,
         environment: Environment::default(),
         header_heights: (44.0, 96.0),
@@ -409,6 +419,8 @@ fn rust_components_hear_layouts_and_scrolls() {
         viewport: Size::new(390.0, 844.0),
         trace: false,
         network: None,
+        websocket: None,
+        filesystem: None,
         assets: None,
         environment: Environment::default(),
         header_heights: (44.0, 96.0),
@@ -457,11 +469,11 @@ fn ButtonRows() -> impl IntoElement {
         .child(text(move || format!("pressed {:?}", pressed.get())))
         .child(
             virtual_list(20, move |at| {
-                nsh_ui_mobile::Button::element(nsh_ui_mobile::ButtonProps {
+                crate::test_ui::Button::element(crate::test_ui::ButtonProps {
                     title: Prop::bind(move || format!("row {}", at.index()).into()),
                     ..Default::default()
                 })
-                .on_event(move |_: &nsh_ui_mobile::ButtonEvent| pressed.set(Some(at.index())))
+                .on_event(move |_: &crate::test_ui::ButtonEvent| pressed.set(Some(at.index())))
             })
             .flex_1(),
         )
@@ -475,6 +487,8 @@ fn nested_components_in_list_rows_reach_the_list_owner() {
         viewport: Size::new(390.0, 844.0),
         trace: false,
         network: None,
+        websocket: None,
+        filesystem: None,
         assets: None,
         environment: Environment::default(),
         header_heights: (44.0, 96.0),
@@ -520,7 +534,7 @@ fn WithSheet() -> impl IntoElement {
         .flex_1()
         .child(text("open").on_press(move |_: &()| open.set(true)))
         .child(
-            nsh_ui_mobile::Sheet::element(nsh_ui_mobile::SheetProps {
+            crate::test_ui::Sheet::element(crate::test_ui::SheetProps {
                 open: open.into(),
                 ..Default::default()
             })
@@ -536,6 +550,8 @@ fn content_a_component_does_not_place_is_not_shown() {
         viewport: Size::new(390.0, 844.0),
         trace: false,
         network: None,
+        websocket: None,
+        filesystem: None,
         assets: None,
         environment: Environment::default(),
         header_heights: (44.0, 96.0),

@@ -24,7 +24,7 @@ fn config() -> EngineConfig {
         entry,
         minify: false,
         split: false,
-        ui_sets: vec![nsh_ui_mobile::registry().into()],
+        ui_sets: vec![nsh_base::registry().into()],
     })
     .unwrap();
     let bytecode = nsh_js::compile_bytecode(&bundle.code, false).unwrap();
@@ -34,6 +34,8 @@ fn config() -> EngineConfig {
         viewport: Size::new(390.0, 844.0),
         trace: false,
         network: None,
+        websocket: None,
+        filesystem: None,
         assets: None,
         environment: Default::default(),
         header_heights: (44.0, 96.0),

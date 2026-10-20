@@ -75,6 +75,8 @@ pub(crate) struct AppConfig {
     pub(crate) build: Option<u32>,
     /// App icon: a square PNG, ideally 1024×1024, relative to `nsh.json`.
     pub(crate) icon: Option<PathBuf>,
+    /// The lowest runtime that runs a signed package (`nsh publish`).
+    pub(crate) min_runtime: Option<String>,
     /// Read and checked by the bundler.
     #[serde(default, rename = "tailwind")]
     _tailwind: Option<serde::de::IgnoredAny>,
@@ -85,9 +87,16 @@ pub(crate) struct AppConfig {
     /// the bundler, which hands it to the runtime); packages also start in
     /// it (the launch screen, the window's theme).
     pub(crate) appearance: Option<String>,
+    /// `"statusBar"`: the status bar's default (checked by the bundler,
+    /// which hands it to the runtime); iOS packages also show it from the
+    /// launch screen on (Info.plist).
+    pub(crate) status_bar: Option<serde_json::Value>,
     /// Read and checked by the bundler.
     #[serde(default, rename = "theme")]
     _theme: Option<serde::de::IgnoredAny>,
+    /// Read and checked by the bundler.
+    #[serde(default, rename = "resolve")]
+    _resolve: Option<serde::de::IgnoredAny>,
     /// The app's Rust crate: its builds are the app's own (`rust_app.rs`).
     #[serde(default, rename = "rust")]
     _rust: Option<serde::de::IgnoredAny>,
@@ -767,6 +776,25 @@ fn info_plist(
         Some("dark") => d.insert("UIUserInterfaceStyle".into(), s("Dark")),
         _ => None,
     };
+    // The status bar's default, for the launch screen (pages and dialogs
+    // decide it afterwards, as view controllers).
+    if let Some(setting) = config
+        .status_bar
+        .as_ref()
+        .and_then(|v| nsh_core::StatusBarSetting::from_json(v).ok())
+    {
+        if let Some(style) = setting.style {
+            let style = match style {
+                nsh_core::StatusBarStyle::Default => "UIStatusBarStyleDefault",
+                nsh_core::StatusBarStyle::Light => "UIStatusBarStyleLightContent",
+                nsh_core::StatusBarStyle::Dark => "UIStatusBarStyleDarkContent",
+            };
+            d.insert("UIStatusBarStyle".into(), s(style));
+        }
+        if let Some(hidden) = setting.hidden {
+            d.insert("UIStatusBarHidden".into(), hidden.into());
+        }
+    }
     d.insert(
         "UISupportedInterfaceOrientations".into(),
         Value::Array(vec![
