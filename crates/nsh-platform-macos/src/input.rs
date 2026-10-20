@@ -23,7 +23,8 @@
 //!
 //! Presses follow React Native and the other backends: the innermost view
 //! listening to press events gets them (or the pressable text span under
-//! the pointer); `activeOpacity` fades the view natively. A move beyond
+//! the pointer; how it looks while pressed is the app's `activeStyle`,
+//! applied by the core from the reported states). A move beyond
 //! 6 pt starts the innermost pan that takes that direction; beyond 10 pt
 //! the press is over. Mouse drags never scroll: dragging the content is a
 //! touchscreen's way to scroll, the mouse scrolls with the wheel, the
@@ -87,10 +88,6 @@ const ZOOM_IDLE: u64 = 300;
 const LONG_PRESS: f32 = 500.0;
 /// Velocities are measured over this many milliseconds.
 const VELOCITY_WINDOW: f64 = 100.0;
-/// Duration of the `activeOpacity` fade when pressed.
-const FADE_IN_MS: f64 = 100.0;
-/// Duration of the fade back.
-const FADE_OUT_MS: f64 = 250.0;
 /// The mouse's back button (`buttonNumber`), as Linux's button 8.
 const BACK_BUTTON: isize = 3;
 
@@ -119,8 +116,6 @@ pub(crate) struct Input {
     hovered: RefCell<Vec<NshView>>,
     /// Native gesture values by view.
     gestures: RefCell<FxHashMap<NodeId, (objc2::rc::Weak<ViewObj>, GestureValues)>>,
-    /// Running `activeOpacity` fades.
-    fades: RefCell<FxHashMap<NodeId, Fade>>,
     /// The JS responder blocks native scrolling and pans.
     js_block: Cell<bool>,
     /// Where the mouse last was (root coordinates), while over the root.
@@ -130,7 +125,7 @@ pub(crate) struct Input {
     repick: Cell<bool>,
     /// Next touch identifier.
     next_id: Cell<u32>,
-    /// Next press / fade / zoom generation (invalidates callbacks of
+    /// Next press / zoom generation (invalidates callbacks of
     /// earlier ones).
     next_gen: Cell<u64>,
 }
@@ -178,11 +173,9 @@ struct Press {
     /// The node that gets the events.
     node: NodeId,
     events: EventMask,
-    /// `activeOpacity` (none for spans).
-    feedback: Option<f32>,
     /// Milliseconds before a long press.
     long_delay: f32,
-    /// `onPressIn` was reported.
+    /// `onPressDown` was reported.
     pressed: bool,
     /// `onLongPress` was reported: the release is no press.
     long: bool,
@@ -268,13 +261,6 @@ struct Wheel {
     held: bool,
 }
 
-/// An `activeOpacity` fade.
-struct Fade {
-    /// The view's fade before the press.
-    base: f32,
-    generation: u64,
-}
-
 /// Estimates a pointer's velocity from its recent positions.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct VelocityTracker {
@@ -334,7 +320,6 @@ pub(crate) fn reset(surface: &Surface) {
     input.hover_tracked.borrow_mut().clear();
     input.hovered.borrow_mut().clear();
     input.gestures.borrow_mut().clear();
-    input.fades.borrow_mut().clear();
     input.js_block.set(false);
 }
 
@@ -353,12 +338,13 @@ pub(crate) fn track_states(surface: &Rc<Surface>, view: &NshView, states: u8) {
 }
 
 /// Whether hovering `view` matters: for its `hover:` styles (the
-/// `HOVERED` state) or its `onHoverIn` / `onHoverOut`.
+/// `HOVERED` state) or its `onHoverIn` / `onHoverOut` / `onHoverMove`.
 fn hoverable(view: &NshView) -> bool {
     let s = view.state();
     s.tracked & HOVERED != 0
         || s.events.contains(EventKind::HoverIn)
         || s.events.contains(EventKind::HoverOut)
+        || s.events.contains(EventKind::HoverMove)
 }
 
 fn update_hover_tracking(surface: &Surface, view: &NshView) {
@@ -415,7 +401,7 @@ pub(crate) fn events_changed(surface: &Rc<Surface>, view: &NshView) {
 
 /// The view's props changed.
 pub(crate) fn props_changed(surface: &Rc<Surface>, view: &NshView) {
-    // `pointerEvents`, `hitSlop`, `activeOpacity` and `delayLongPress` are
+    // `pointerEvents`, `hitSlop` and `delayLongPress` are
     // read from the state when the pointer goes down.
     release_invalid_control_focus(surface, view);
 }
@@ -476,8 +462,8 @@ fn has_press(events: EventMask) -> bool {
     [
         EventKind::Press,
         EventKind::LongPress,
-        EventKind::PressIn,
-        EventKind::PressOut,
+        EventKind::PressDown,
+        EventKind::PressUp,
     ]
     .into_iter()
     .any(|k| events.contains(k))
@@ -601,6 +587,15 @@ pub(crate) fn event(surface: &Rc<Surface>, event: &NSEvent) {
     let time = event.timestamp() * 1000.0;
     let input = &surface.input;
     match ty {
+        // Control-click is the secondary click on macOS.
+        NSEventType::LeftMouseDown
+            if event
+                .modifierFlags()
+                .contains(NSEventModifierFlags::Control) =>
+        {
+            context_menu(surface, x, y, event.modifierFlags());
+        }
+        NSEventType::RightMouseDown => context_menu(surface, x, y, event.modifierFlags()),
         NSEventType::LeftMouseDown => {
             // A title bar of the app's own moves the window.
             if crate::chrome::mouse_down(surface, event, x, y) {
@@ -629,6 +624,7 @@ pub(crate) fn event(surface: &Rc<Surface>, event: &NSEvent) {
         NSEventType::MouseMoved | NSEventType::MouseEntered => {
             input.last.set(Some((x, y)));
             hover(surface, x, y);
+            hover_moved(surface, x, y, event.modifierFlags());
             reveal_indicators(surface, x, y);
             update_cursor(surface, x, y);
         }
@@ -644,9 +640,46 @@ pub(crate) fn event(surface: &Rc<Surface>, event: &NSEvent) {
         NSEventType::ScrollWheel => scroll_event(surface, event, x, y, time),
         NSEventType::Magnify => magnify(surface, event, x, y),
         NSEventType::Rotate => rotate(surface, event, x, y),
-        // Right and other buttons do nothing (no context menus), as on
-        // Linux.
         _ => {}
+    }
+}
+
+/// A secondary click at `(x, y)` (root coordinates): the nearest view
+/// around the one under it that listens to `onContextMenu` hears it. Text
+/// fields are AppKit's views, which show their own menu.
+fn context_menu(surface: &Surface, x: f32, y: f32, flags: NSEventModifierFlags) {
+    let Some(hit) = pick(&surface.root, x, y) else {
+        return;
+    };
+    for v in chain(&hit.view) {
+        let (id, listens, input) = {
+            let s = v.state();
+            (
+                s.id,
+                s.events.contains(EventKind::ContextMenu),
+                s.kind == ViewKind::Input,
+            )
+        };
+        if listens {
+            let (location_x, location_y) = local(surface, &v, x, y);
+            let event = nsh_core::ContextMenuEvent {
+                location_x,
+                location_y,
+                page_x: x,
+                page_y: y,
+                modifiers: nsh_core::keymap::Modifiers {
+                    ctrl: flags.contains(NSEventModifierFlags::Control),
+                    alt: flags.contains(NSEventModifierFlags::Option),
+                    shift: flags.contains(NSEventModifierFlags::Shift),
+                    cmd: flags.contains(NSEventModifierFlags::Command),
+                },
+            };
+            surface.event(id, EventKind::ContextMenu, EventPayload::ContextMenu(event));
+            return;
+        }
+        if input {
+            return;
+        }
     }
 }
 
@@ -662,7 +695,7 @@ pub(crate) fn key(surface: &Rc<Surface>, event: &NSEvent, down: bool) -> bool {
     if let Some(view) = control_activation_target(surface, event) {
         if down && !event.isARepeat() {
             let events = view.state().events;
-            for kind in [EventKind::PressIn, EventKind::PressOut, EventKind::Press] {
+            for kind in [EventKind::PressDown, EventKind::PressUp, EventKind::Press] {
                 if events.contains(kind) {
                     press_event(surface, view.id(), kind);
                 }
@@ -892,7 +925,7 @@ fn pick_in(view: &NshView, p: (f32, f32)) -> Option<Hit> {
     if pe != PointerEvents::BoxOnly {
         // Hosted views and children in their AppKit order, topmost first:
         // hosted views are usually above the children, but not always (a
-        // sheet's card is above its scrim, which the root hosts).
+        // modal is above the image of one leaving, which the root hosts).
         let container = view.container_view();
         let subviews: Vec<_> = view.ns().subviews().iter().collect();
         for sub in subviews.into_iter().rev() {
@@ -1467,7 +1500,6 @@ fn find_press(
                 view: target.clone(),
                 node: link.node,
                 events: link.events,
-                feedback: None,
                 long_delay: s.props.long_press_delay.unwrap_or(LONG_PRESS),
                 pressed: false,
                 long: false,
@@ -1481,7 +1513,6 @@ fn find_press(
             view: v.clone(),
             node: s.id,
             events: s.events,
-            feedback: s.props.active_opacity.filter(|o| *o < 1.0),
             long_delay: s.props.long_press_delay.unwrap_or(LONG_PRESS),
             pressed: false,
             long: false,
@@ -1495,26 +1526,20 @@ fn press_in(surface: &Rc<Surface>, press: &mut Press) {
         return;
     }
     press.pressed = true;
-    if let Some(opacity) = press.feedback {
-        fade(surface, &press.view, Some(opacity));
-    }
-    if press.events.contains(EventKind::PressIn) {
-        press_event(surface, press.node, EventKind::PressIn);
+    if press.events.contains(EventKind::PressDown) {
+        press_event(surface, press.node, EventKind::PressDown);
     }
 }
 
-/// Ends a press: `onPressOut`, then `onPress` if `fire` (released inside)
+/// Ends a press: `onPressUp`, then `onPress` if `fire` (released inside)
 /// and it was no long press.
 fn press_out(surface: &Rc<Surface>, press: &mut Press, fire: bool) {
     if !press.pressed {
         return;
     }
     press.pressed = false;
-    if press.feedback.is_some() {
-        fade(surface, &press.view, None);
-    }
-    if press.events.contains(EventKind::PressOut) {
-        press_event(surface, press.node, EventKind::PressOut);
+    if press.events.contains(EventKind::PressUp) {
+        press_event(surface, press.node, EventKind::PressUp);
     }
     if fire && !press.long && press.events.contains(EventKind::Press) {
         press_event(surface, press.node, EventKind::Press);
@@ -1543,56 +1568,6 @@ fn released_inside(surface: &Surface, view: &NshView, x: f32, y: f32) -> bool {
         && ly >= -slop.top - r
         && lx <= s.frame.width + slop.right + r
         && ly <= s.frame.height + slop.bottom + r
-}
-
-/// Fades `view` to `opacity` times its fade before the press, or back
-/// (`None`), over a few frames.
-fn fade(surface: &Rc<Surface>, view: &NshView, opacity: Option<f32>) {
-    let (id, from) = {
-        let s = view.state();
-        (s.id, s.fade)
-    };
-    let generation = surface.input.next_gen.get();
-    surface.input.next_gen.set(generation + 1);
-    let to = {
-        let mut fades = surface.input.fades.borrow_mut();
-        let entry = fades.entry(id).or_insert(Fade {
-            base: from,
-            generation,
-        });
-        entry.generation = generation;
-        opacity.map_or(entry.base, |o| entry.base * o)
-    };
-    let duration = if opacity.is_some() {
-        FADE_IN_MS
-    } else {
-        FADE_OUT_MS
-    };
-    let releasing = opacity.is_none();
-    let view = view.clone();
-    let mut start = None::<f64>;
-    surface.add_frame_callback(move |surface, now| {
-        let now = now * 1000.0;
-        {
-            let fades = surface.input.fades.borrow();
-            if fades.get(&id).is_none_or(|f| f.generation != generation) {
-                // A newer fade took over.
-                return false;
-            }
-        }
-        let t0 = *start.get_or_insert(now);
-        let k = ((now - t0) / duration).min(1.0) as f32;
-        let eased = 1.0 - (1.0 - k) * (1.0 - k);
-        view.state_mut().fade = from + (to - from) * eased;
-        view.place();
-        if k < 1.0 {
-            return true;
-        }
-        if releasing {
-            surface.input.fades.borrow_mut().remove(&id);
-        }
-        false
-    });
 }
 
 // --- Pans ---------------------------------------------------------------------------
@@ -1864,6 +1839,35 @@ fn set_hovered(surface: &Surface, views: Vec<NshView>) {
     for v in views.iter().rev().filter(|v| !old.contains(v)) {
         set_state(surface, v, HOVERED, true);
         hover_event(surface, v, EventKind::HoverIn);
+    }
+}
+
+/// `onHoverMove` of the hovered views that listen, with the mouse at
+/// `(x, y)` (root coordinates) in each.
+fn hover_moved(surface: &Surface, x: f32, y: f32, flags: NSEventModifierFlags) {
+    let hovered = surface.input.hovered.borrow().clone();
+    for v in hovered {
+        let id = {
+            let s = v.state();
+            if !s.events.contains(EventKind::HoverMove) {
+                continue;
+            }
+            s.id
+        };
+        let (location_x, location_y) = local(surface, &v, x, y);
+        let event = nsh_core::HoverEvent {
+            location_x,
+            location_y,
+            page_x: x,
+            page_y: y,
+            modifiers: nsh_core::keymap::Modifiers {
+                ctrl: flags.contains(NSEventModifierFlags::Control),
+                alt: flags.contains(NSEventModifierFlags::Option),
+                shift: flags.contains(NSEventModifierFlags::Shift),
+                cmd: flags.contains(NSEventModifierFlags::Command),
+            },
+        };
+        surface.event(id, EventKind::HoverMove, EventPayload::Hover(event));
     }
 }
 

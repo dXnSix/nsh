@@ -9,8 +9,8 @@
 //! the engine.
 
 mod access;
-#[cfg(all(feature = "headless", not(target_arch = "wasm32")))]
-pub mod headless;
+mod app_directory;
+mod error;
 mod local_storage;
 pub mod perf;
 mod script;
@@ -21,6 +21,7 @@ mod symbolicate;
 
 use std::{io, rc::Rc, sync::Arc, time::Duration};
 
+pub use app_directory::app_dir_name;
 use crossbeam_channel::{Receiver, Sender};
 pub use local_storage::local_storage_prefix;
 use nsh_core::{
@@ -29,10 +30,10 @@ use nsh_core::{
 };
 pub use nsh_core::{
     access::{Access, Capabilities},
-    js::Limits,
+    js::{HostLimits, Limits},
     platform::{
-        ColorScheme, Environment, FetchEvent, FetchOp, HttpBody, HttpHead, HttpRequest, Idiom,
-        Insets, Locale, Os,
+        ColorScheme, Environment, FetchEvent, FetchOp, HostEnvironment, HttpBody, HttpHead,
+        HttpRequest, Idiom, Insets, Locale, Os,
     },
     storage::{StorageBackend, StorageChange},
     ui::{Root, Theme},
@@ -44,8 +45,9 @@ pub use nsh_js::BYTECODE_VERSION;
 pub use nsh_package as package;
 use rustc_hash::FxHashMap;
 #[cfg(not(target_arch = "wasm32"))]
-pub use storage::{FileStorage, app_dir_name, data_dir};
+pub use storage::{FileStorage, data_dir};
 
+pub use crate::error::{AppError, AppErrorKind, PackageInfo};
 use crate::script::{NetworkQueue, RequestId, Script};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -59,8 +61,17 @@ const ENGINE_STACK_SIZE: usize = 8 * 1024 * 1024;
 /// parent/child links reference each other) wait for the collector.
 const IDLE_GC_INTERVAL: Duration = Duration::from_secs(1);
 
+/// The shortest time between two deliveries of `onHoverMove`: a frame at
+/// 120 Hz. Mice report moves far more often (up to 1000 Hz), and a handler
+/// that redraws a crosshair needs no more than one per frame.
+const HOVER_MOVE_INTERVAL: Duration = Duration::from_millis(8);
+
 /// The app an engine runs.
 #[derive(Debug, Clone)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one app per surface; keep the public constructor API without allocation"
+)]
 pub enum App {
     /// A Rust app: its root component, mounted as the surface's content.
     Rust(Root),
@@ -92,6 +103,7 @@ impl From<Root> for App {
 
 /// An app bundle: its code plus, in development, a source map.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Bundle {
     /// The code.
     pub code: BundleCode,
@@ -114,6 +126,13 @@ pub struct Bundle {
     /// The app's id (`nsh.json` `"id"`; a signed package's verified one):
     /// it names where the app keeps its data (`nsh/storage`).
     pub app_id: Option<String>,
+    /// Trusted filesystem anchors selected by the native host, never decoded
+    /// from application code, its manifest or a development server message.
+    /// Missing anchors deny relative and corresponding placeholder grants.
+    pub system_paths: nsh_core::access::TrustedPaths,
+    /// The signed package the bundle came from ([`Bundle::from_package`]),
+    /// named in the app's errors ([`AppError::package`]).
+    pub package: Option<Arc<PackageInfo>>,
 }
 
 /// A chunk of a split bundle (`nsh_bundler::Chunk`): app code that
@@ -212,6 +231,12 @@ pub enum BundleCode {
     Source(String),
 }
 
+impl Default for Bundle {
+    fn default() -> Self {
+        Self::source(String::new())
+    }
+}
+
 impl Bundle {
     /// A bytecode bundle.
     ///
@@ -231,6 +256,8 @@ impl Bundle {
             chunks: Arc::default(),
             harden_bytecode: None,
             app_id: None,
+            system_paths: nsh_core::access::TrustedPaths::default(),
+            package: None,
         }
     }
 
@@ -244,7 +271,20 @@ impl Bundle {
             chunks: Arc::default(),
             harden_bytecode: None,
             app_id: None,
+            system_paths: nsh_core::access::TrustedPaths::default(),
+            package: None,
         }
+    }
+
+    /// Selects trusted source/package and home directory anchors. Supplying a
+    /// path grants nothing by itself: the manifest and host grant must still
+    /// allow the filesystem operation. Only existing absolute directories
+    /// are accepted; unavailable anchors are left unset.
+    pub fn with_system_paths(mut self, mut paths: nsh_core::access::TrustedPaths) -> Self {
+        paths.plugin_dir = trusted_directory(paths.plugin_dir);
+        paths.home_dir = trusted_directory(paths.home_dir);
+        self.system_paths = paths;
+        self
     }
 
     /// The app's id ([`Bundle::app_id`]), as `nsh.json` or the dev server
@@ -326,6 +366,9 @@ impl Bundle {
             bundle.policy.declared = Some(parse_capabilities(&json).map_err(io::Error::other)?);
         }
         bundle.app_id = read_app_id(&path.with_file_name("app.json"));
+        bundle.system_paths.plugin_dir = nsh_core::access::canonicalize(path)?
+            .parent()
+            .map(std::path::Path::to_path_buf);
         Ok(bundle)
     }
 }
@@ -334,8 +377,13 @@ impl Bundle {
 impl Bundle {
     /// The bundle of a verified package: its bytecode when it was compiled
     /// for this runtime (else its source), its source map and its declared
-    /// capabilities.
+    /// capabilities. What a newer signer wrote that this runtime does not
+    /// know (header fields, files, capabilities) is logged and left out: an
+    /// unknown capability is not granted.
     pub fn from_package(package: &nsh_package::VerifiedPackage) -> Result<Bundle, String> {
+        for ignored in &package.ignored {
+            log::warn!("package {}: ignored {ignored}", package.app.id);
+        }
         let bundle = match package.bytecode() {
             // SAFETY: verified: signed by a certified release key, hashed,
             // and compiled for this runtime.
@@ -346,12 +394,21 @@ impl Bundle {
             Some(map) => bundle.with_source_map(map.clone()),
             None => bundle,
         };
-        bundle.policy.declared = package
-            .capabilities
-            .as_ref()
-            .map(Capabilities::from_json)
-            .transpose()?;
+        if let Some(json) = &package.capabilities {
+            let (declared, dropped) = Capabilities::from_json_lenient(json)?;
+            for dropped in dropped {
+                log::warn!("package {}: not granted: {dropped}", package.app.id);
+            }
+            bundle.policy.declared = Some(declared);
+        }
         bundle.app_id = Some(package.app.id.clone());
+        bundle.package = Some(Arc::new(PackageInfo {
+            id: package.app.id.clone(),
+            name: package.app.name.clone(),
+            version: package.app.version.clone(),
+            build: package.app.build,
+            sha256: package.sha256.clone(),
+        }));
         Ok(bundle)
     }
 }
@@ -363,7 +420,7 @@ fn read_app_id(path: &std::path::Path) -> Option<String> {
     json.get("id")?.as_str().map(str::to_owned)
 }
 
-/// A verified package, unpacked ([`load_package`]).
+/// A verified package, unpacked ([`load_package`], [`verify_package`]).
 #[cfg(feature = "js")]
 #[derive(Debug)]
 pub struct LoadedPackage {
@@ -373,14 +430,35 @@ pub struct LoadedPackage {
     pub assets: std::path::PathBuf,
     /// Its app.
     pub app: nsh_package::App,
+    /// What accepting it records ([`accept_package`]).
+    pub receipt: nsh_package::PackageReceipt,
 }
 
 /// Verifies the package `bytes` with `trust`, writes its assets under
 /// `assets_root` (`<root>/<app id>/<package hash>/`, once per package) and
-/// records its build (older builds of the app are refused from now on).
+/// records its build (older builds of the app are refused from now on):
+/// [`verify_package`], then [`accept_package`].
 #[cfg(feature = "js")]
 pub fn load_package(
     trust: &mut nsh_package::TrustStore,
+    bytes: &[u8],
+    assets_root: &std::path::Path,
+) -> Result<LoadedPackage, String> {
+    let package = verify_package(trust, bytes, assets_root)?;
+    accept_package(trust, &package)?;
+    Ok(package)
+}
+
+/// [`load_package`] without recording the build: the package is verified as
+/// strictly (signature, certificate, revocations, hashes, and its build not
+/// older than the highest accepted) and its assets written, but the builds
+/// accepted before keep verifying. An embedding app runs it, and once it
+/// decided the package is healthy (its first frame drawn, no fatal error for
+/// a while) calls [`accept_package`]; if it fails before, the app can go
+/// back to the package it ran before, which still verifies.
+#[cfg(feature = "js")]
+pub fn verify_package(
+    trust: &nsh_package::TrustStore,
     bytes: &[u8],
     assets_root: &std::path::Path,
 ) -> Result<LoadedPackage, String> {
@@ -403,10 +481,10 @@ pub fn load_package(
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         std::fs::write(&done, b"").map_err(|e| e.to_string())?;
     }
-    trust.accept(&package).map_err(|e| e.to_string())?;
     Ok(LoadedPackage {
         bundle,
         assets: dir.join("assets"),
+        receipt: package.receipt(),
         app: package.app,
     })
 }
@@ -418,6 +496,19 @@ pub fn load_package(
 #[cfg(feature = "js")]
 pub fn symbolicate(source_map: &str, text: &str) -> String {
     symbolicate::Symbolicator::new(Some(source_map.into())).rewrite(text)
+}
+
+/// Records the build of `package` ([`verify_package`]) in `trust`: older
+/// builds of its app are refused from now on. Refused if the package or its
+/// release key was revoked since it was verified.
+#[cfg(feature = "js")]
+pub fn accept_package(
+    trust: &mut nsh_package::TrustStore,
+    package: &LoadedPackage,
+) -> Result<(), String> {
+    trust
+        .accept_receipt(&package.receipt)
+        .map_err(|e| e.to_string())
 }
 
 /// Parses capabilities in their JSON form (`capabilities.json`, the dev
@@ -442,10 +533,19 @@ pub trait MountSink: Send + 'static {
     /// Called once per commit, in order.
     fn submit(&self, batch: MountBatch);
 
-    /// A fatal app error: the bundle failed to load, or an exception escaped
-    /// a JS callback. Errors are always logged; development hosts also show
-    /// them on screen.
+    /// An error of the app, as text (the message and the stack): the
+    /// bundle failed to load, an exception escaped a JS callback, the VM
+    /// was stopped. Errors are always logged; development hosts also show
+    /// them on screen. What [`MountSink::report`] calls unless it is
+    /// implemented.
     fn report_error(&self, _message: &str) {}
+
+    /// An error of the app, with its parts: what went wrong (whether the
+    /// app can go on), the message, the stack and the package it came
+    /// from. By default, [`MountSink::report_error`] with its text.
+    fn report(&self, error: &AppError) {
+        self.report_error(&error.to_string());
+    }
 
     /// JS or a component's task asked for a display frame
     /// (`requestAnimationFrame`, `ui::ambient::next_frame`): call
@@ -519,6 +619,10 @@ pub struct EngineConfig {
     pub trace: bool,
     /// The HTTP stack behind `fetch`; without one, requests fail.
     pub network: Option<Arc<dyn Network>>,
+    /// The host transport for WebSockets, including the browser WebSocket API.
+    pub websocket: Option<Arc<dyn nsh_core::websocket::WebSocketTransport>>,
+    /// App-private host filesystem service (for browser storage).
+    pub filesystem: Option<Arc<dyn nsh_core::filesystem::FileSystem>>,
     /// Source of bundled files such as fonts; without one, they fail to load.
     pub assets: Option<Arc<dyn Assets>>,
     /// The surface's initial environment (its `window` is `viewport`).
@@ -528,8 +632,8 @@ pub struct EngineConfig {
     pub header_heights: (f32, f32),
     /// The JS VM's resource limits (a JS app's; Rust code has none).
     pub limits: Limits,
-    /// The UI sets JS imports (`nsh_ui_mobile::registry()` on mobile, the
-    /// app's own): their Rust components and modules. A Rust app's
+    /// The UI sets JS imports (`nsh_base::registry()` by default, the app's
+    /// own): their Rust components and modules. A Rust app's
     /// components need no registration.
     pub ui_sets: Vec<nsh_core::ui::Registry>,
     /// The tokio runtime the components' async tasks use (timers, IO,
@@ -547,6 +651,37 @@ pub struct EngineConfig {
     pub storage: Option<Arc<dyn nsh_core::storage::StorageBackend>>,
 }
 
+fn trusted_directory(path: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
+    let path = path.filter(|path| path.is_absolute())?;
+    nsh_core::access::canonicalize(&path)
+        .ok()
+        .filter(|path| path.is_dir())
+}
+
+/// Native hosts choose these anchors before any application JavaScript runs.
+#[cfg(feature = "js")]
+fn bundle_system_paths(bundle: &Bundle) -> nsh_core::access::TrustedPaths {
+    let mut paths = bundle.system_paths.clone();
+    paths.plugin_dir = trusted_directory(paths.plugin_dir);
+    paths.home_dir = trusted_directory(paths.home_dir);
+    if paths.home_dir.is_none() {
+        paths.home_dir = ["HOME", "USERPROFILE"]
+            .into_iter()
+            .filter_map(std::env::var_os)
+            .map(std::path::PathBuf::from)
+            .find_map(|path| trusted_directory(Some(path)));
+    }
+    // Local `nsh run` passes its canonical entry directory directly to the
+    // native child process. Remote dev messages never contain this field.
+    // A packaged/hardened bundle cannot inherit a development source anchor.
+    if paths.plugin_dir.is_none() && !bundle.policy.harden {
+        paths.plugin_dir = std::env::var_os("NSH_DEV_APP_DIR")
+            .map(std::path::PathBuf::from)
+            .and_then(|path| trusted_directory(Some(path)));
+    }
+    paths
+}
+
 impl EngineConfig {
     /// `app` on a phone-sized surface (390 × 844 points, iOS's header
     /// heights) with nothing else: no network, assets, data directory or
@@ -560,6 +695,8 @@ impl EngineConfig {
             viewport: Size::new(390.0, 844.0),
             trace: false,
             network: None,
+            websocket: None,
+            filesystem: None,
             assets: None,
             environment: Environment::default(),
             header_heights: (44.0, 96.0),
@@ -993,6 +1130,8 @@ impl<M: TextEngine + 'static> Driver<M> {
         rx: &Receiver<Message>,
         stop: Arc<std::sync::atomic::AtomicBool>,
     ) -> Option<Self> {
+        #[cfg(feature = "js")]
+        let system_tx = tx.clone();
         let text_engine = Rc::new(text_engine);
         let access = Arc::new(match &config.app {
             App::Js(bundle) => bundle.policy.access(),
@@ -1033,7 +1172,10 @@ impl<M: TextEngine + 'static> Driver<M> {
             for font in root.fonts() {
                 if let Err(err) = core.register_font(font) {
                     log::error!("font failed: {err}");
-                    sink.report_error(&format!("font failed: {err}"));
+                    sink.report(&AppError::new(
+                        AppErrorKind::Asset,
+                        &format!("font failed: {err}"),
+                    ));
                 }
             }
         }
@@ -1051,7 +1193,12 @@ impl<M: TextEngine + 'static> Driver<M> {
             .and_then(|data| core.register_font(&data));
             if let Err(err) = result {
                 log::error!("font failed: {}: {err}", font.uri);
-                sink.report_error(&format!("font failed: {}: {err}", font.uri));
+                let message = format!("font failed: {}: {err}", font.uri);
+                let package = match &config.app {
+                    App::Js(bundle) => bundle.package.clone(),
+                    App::Rust(_) => None,
+                };
+                sink.report(&AppError::new(AppErrorKind::Asset, &message).with_package(package));
             }
         }
         // A task woken on any thread wakes the loop, and so does a JS call
@@ -1077,6 +1224,8 @@ impl<M: TextEngine + 'static> Driver<M> {
             hot: Vec::new(),
             scroll_events: FxHashMap::default(),
             touch_move: None,
+            hover_moves: Vec::new(),
+            hover_moved: None,
             resized: None,
             net: Net {
                 network: config.network.clone(),
@@ -1103,6 +1252,24 @@ impl<M: TextEngine + 'static> Driver<M> {
         };
         let eval_us = match &config.app {
             App::Js(bundle) => {
+                #[cfg(feature = "js")]
+                let system = {
+                    script::SystemConfig {
+                        access: (*access).clone(),
+                        websocket: config.websocket.clone(),
+                        filesystem: config.filesystem.clone(),
+                        data_dir: config
+                            .data_dir
+                            .as_ref()
+                            .map(|root| root.join(app_dir_name(config.app.app_id()))),
+                        paths: bundle_system_paths(bundle),
+                        wake: Arc::new(move || {
+                            let _ = system_tx.send(Message::Wake);
+                        }),
+                    }
+                };
+                #[cfg(not(feature = "js"))]
+                let system = script::SystemConfig;
                 let (script, eval_us) = Script::start(
                     bundle,
                     config.limits,
@@ -1112,6 +1279,7 @@ impl<M: TextEngine + 'static> Driver<M> {
                     text_engine,
                     stop,
                     sink,
+                    system,
                 )?;
                 driver.script = Some(script);
                 eval_us
@@ -1135,6 +1303,11 @@ impl<M: TextEngine + 'static> Driver<M> {
             if !handle(script, state, message) {
                 return None;
             }
+        }
+        // Workers may finish while the first bundle evaluates. Deliver their
+        // completions even when the startup drain already consumed their wakeup.
+        if let Some(script) = script {
+            script.run_system();
         }
         state.load_fonts(script, assets.as_deref(), &**sink);
         if let Some(batch) = state.commit(script) {
@@ -1165,6 +1338,7 @@ impl<M: TextEngine + 'static> Driver<M> {
             script.and_then(Script::next_timer),
             gc_deadline,
             self.state.next_scroll_event(),
+            self.state.next_hover_move(),
             task_timer,
         ]
         .into_iter()
@@ -1190,6 +1364,12 @@ impl<M: TextEngine + 'static> Driver<M> {
         let script = script.as_ref();
         let turn_start = state.trace.then(Instant::now);
         state.dispatch_touch_move(script);
+        if state
+            .next_hover_move()
+            .is_some_and(|due| due <= Instant::now())
+        {
+            state.dispatch_hover_moves(script);
+        }
         state.dispatch_scroll_events(script);
         let hot = std::mem::take(&mut state.hot);
         if let Some(script) = script {
@@ -1197,6 +1377,7 @@ impl<M: TextEngine + 'static> Driver<M> {
                 script.hot_update(update, &**sink);
             }
             script.run_timers(Instant::now());
+            script.run_system();
         }
         state.core.run_component_tasks();
         // What JS timers and Rust component tasks took; a Rust component
@@ -1245,7 +1426,7 @@ impl<M: TextEngine + 'static> Driver<M> {
             && let Some(reason) = script.fatal()
         {
             self.stopped = true;
-            script.report(&*self.sink, "stopped", &reason);
+            script.report(&*self.sink, AppErrorKind::Stopped, "stopped", &reason);
         }
     }
 }
@@ -1287,6 +1468,12 @@ struct State<M: TextEngine> {
     scroll_events: FxHashMap<NodeId, ScrollEvent>,
     /// Touch moves not delivered yet: those queued in one frame become one.
     touch_move: Option<(NodeId, Box<nsh_core::TouchEvent>)>,
+    /// `onHoverMove`s not delivered yet: the latest per view, in the order
+    /// they came; sent once per [`HOVER_MOVE_INTERVAL`] at most, and before
+    /// any other event.
+    hover_moves: Vec<(NodeId, nsh_core::HoverEvent)>,
+    /// When `hover_moves` were last delivered.
+    hover_moved: Option<Instant>,
     /// The viewport size a resize set this turn ([`MountSink::resized`]).
     resized: Option<Size>,
 }
@@ -1483,6 +1670,38 @@ impl<M: TextEngine> State<M> {
         }
     }
 
+    /// When the pending `onHoverMove`s are due.
+    fn next_hover_move(&self) -> Option<Instant> {
+        if self.hover_moves.is_empty() {
+            return None;
+        }
+        Some(
+            self.hover_moved
+                .map_or_else(Instant::now, |t| t + HOVER_MOVE_INTERVAL),
+        )
+    }
+
+    /// Delivers the pending `onHoverMove`s: to the Rust components whose
+    /// parts they are on, the others to JS.
+    fn dispatch_hover_moves(&mut self, script: Option<&Script>) {
+        if self.hover_moves.is_empty() {
+            return;
+        }
+        self.hover_moved = Some(Instant::now());
+        for (id, event) in std::mem::take(&mut self.hover_moves) {
+            let payload = EventPayload::Hover(event);
+            if self
+                .core
+                .component_event(id, EventKind::HoverMove, &payload)
+            {
+                continue;
+            }
+            if let Some(script) = script {
+                script.dispatch_event(id, EventKind::HoverMove, &payload);
+            }
+        }
+    }
+
     /// When a throttled `onScroll` is due.
     fn next_scroll_event(&self) -> Option<Instant> {
         self.scroll_events
@@ -1569,7 +1788,12 @@ impl<M: TextEngine> State<M> {
             }
             .and_then(|data| self.core.register_font(&data));
             if let Err(err) = result {
-                script.report(sink, "font failed", &format!("{uri}: {err}"));
+                script.report(
+                    sink,
+                    AppErrorKind::Asset,
+                    "font failed",
+                    &format!("{uri}: {err}"),
+                );
             }
         }
     }
@@ -1735,6 +1959,19 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             if state.trace {
                 log::info!(target: "nsh::perf", "event {event:?} on view {id}");
             }
+            // Hover moves wait for the frame, the latest per view; any other
+            // event comes after the moves before it (a view hears where the
+            // mouse went before it hears it leave).
+            if let EventPayload::Hover(hover) = payload
+                && event == EventKind::HoverMove
+            {
+                match state.hover_moves.iter_mut().find(|(v, _)| *v == id) {
+                    Some((_, pending)) => *pending = hover,
+                    None => state.hover_moves.push((id, hover)),
+                }
+                return true;
+            }
+            state.dispatch_hover_moves(script);
             // The core tracks input text for layout and to recognize stale
             // values (from JS and from Rust components alike).
             if let (EventKind::ChangeText, EventPayload::Text { text, count }) = (event, &payload) {
@@ -1881,6 +2118,52 @@ fn extend_frame(frame: &mut Vec<nsh_core::MountItem>, items: Vec<nsh_core::Mount
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bundle_default_has_no_application_selected_path_anchors() {
+        let bundle = super::Bundle::default();
+        assert!(bundle.system_paths.plugin_dir.is_none());
+        assert!(bundle.system_paths.home_dir.is_none());
+        assert!(matches!(bundle.code, super::BundleCode::Source(ref code) if code.is_empty()));
+    }
+
+    #[test]
+    fn bundle_trusted_paths_reject_relative_and_missing_directories() {
+        let mut paths = nsh_core::access::TrustedPaths::default();
+        paths.plugin_dir = Some(std::path::PathBuf::from("relative-app"));
+        paths.home_dir = Some(std::path::PathBuf::from("relative-home"));
+        let bundle = super::Bundle::default().with_system_paths(paths);
+        assert!(bundle.system_paths.plugin_dir.is_none());
+        assert!(bundle.system_paths.home_dir.is_none());
+        assert!(
+            super::trusted_directory(Some(std::path::PathBuf::from(
+                "/nsh-nonexistent-anchor-never-created"
+            )))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn local_bundle_anchors_its_canonical_parent_without_metadata_authority() {
+        let root = std::env::var_os("TMPDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME"))
+                    .join(".cache/nsh-benchs-test-tmp")
+            });
+        assert!(root.is_absolute() && !root.starts_with("/tmp"));
+        let directory = root.join(format!("nsh-bundle-anchors-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("bundle.js");
+        std::fs::write(&path, "export default null;").unwrap();
+        let bundle = super::Bundle::read(&path).unwrap();
+        assert_eq!(
+            bundle.system_paths.plugin_dir,
+            Some(nsh_core::access::canonicalize(&directory).unwrap())
+        );
+        assert!(bundle.system_paths.home_dir.is_none());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn rust_environment_preserves_native_title_bar_insets() {
         let title_bar = nsh_core::platform::Insets {
