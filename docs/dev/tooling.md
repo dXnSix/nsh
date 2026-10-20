@@ -399,11 +399,17 @@ program that describes them, builds the hosts and runners with them, and does ev
   They take nsh's crates where the app's crates do (`rust_app::Nsh::of`, from each crate's dependencies through `cargo
   metadata --no-deps`): from crates.io at the version of the running `nsh` (`=0.1.1` for nsh 0.1.1: the code it
   generates calls their API, and the description and the trace protocol must be the ones it reads), which the app's
-  requirements must accept, or by path from the checkout the app's crates depend on (nsh's own examples, as
-  `examples/gallery-rs`, through the workspace's path dependencies), which must be of that version, with the app's
-  crates.io dependencies on nsh patched to it (all of nsh's crates but the bundler, which nothing there builds).
-  Requirements of another version, or crates taking nsh from two places, stop the command with what to change, rather
-  than a build failing later on two `nsh-core`s. They build in the app's own `target/`, as a Cargo project in the app's
+  requirements must accept; by path from the checkout the app's crates depend on (nsh's own examples, as
+  `examples/gallery-rs`, through the workspace's path dependencies), which must be of that version; or from the git
+  repository the app's crates name (`nsh-core = { git = "…", tag = "…" }`, also `branch` or `rev`: a fork, or a change
+  not yet on crates.io), read from the dependency's `source` (`git+<url>?tag=<tag>`, `GitSource`). With a checkout or
+  a repository, the generated manifests name it for every nsh crate (`{ path = … }` / `{ git = …, tag = … }`) and the
+  app's crates.io dependencies on nsh are patched to it (all of nsh's crates but the bundler, which nothing there
+  builds). A git source's version is checked once Cargo has fetched it (`RustApp::git_checkout`, through `cargo
+  metadata` of the generated workspace): its `nsh-core` must be the running `nsh`'s version, else the command says
+  which `nsh` to install. The web runtime's `nsh.js` comes from the fetched `nsh-platform-web`, as from crates.io.
+  Requirements of another version, or crates taking nsh from two places (two sources, or two tags of one
+  repository), stop the command with both places named, rather than a build failing later on two `nsh-core`s. They build in the app's own `target/`, as a Cargo project in the app's
   directory does (`nsh init` ignores it), or in `CARGO_TARGET_DIR` when it is set (one directory several checkouts or
   CI jobs share), and Cargo resolves and keeps the workspace's own `Cargo.lock`. Every crate those workspaces depend on
   is published by `release-crate.yml`, the hosts and runners included; the binaries are named after the app

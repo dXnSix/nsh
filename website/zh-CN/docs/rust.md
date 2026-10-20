@@ -435,6 +435,20 @@ crate 会导出给 TSX。列出的每个 crate 都有自己的包名和导入名
 `"root"` 是列出的第一个 crate 中的组件。`nsh run` 和 `nsh dev` 期间，修改其中任何一个 crate，或它们通过路径依赖的
 crate，都会重新构建并重启应用。
 
+## NSH 的 crate 从哪里来
+
+应用的 crate 以下面三种方式之一依赖 NSH 的 crate（`nsh-core`、`nsh-base` 等），`nsh` 构建应用的宿主和运行时时也从同一处取
+NSH 的 crate，这样应用与宿主共用同一个核心：
+
+| 依赖 | 用途 |
+|---|---|
+| `nsh-core = "0.1.1"` | 已发布的 crate，版本与你运行的 `nsh` 相同（`nsh init` 生成的写法） |
+| `nsh-core = { path = "../nsh/crates/nsh-core" }` | NSH 的本地检出：试验对 NSH 本身的改动（`nsh init --template rust --nsh-source <dir>`） |
+| `nsh-core = { git = "https://github.com/you/nsh", tag = "my-tag" }` | 一个 git 仓库：fork，或已进入 NSH 仓库但尚未发布到 crates.io 的改动（`tag`、`branch` 或 `rev`） |
+
+应用的所有 crate 都指向同一处，且其版本就是你运行的 `nsh` 的版本：当 crate 从 git 获取 NSH 时，从同一仓库和同一 tag 安装 `nsh`
+（`cargo install --git <url> --tag <tag> --locked nsh-cli`）。两者不一致时，`nsh` 会指出两处来源并在构建前停止。
+
 ## 另请参阅
 
 - [项目结构](./project-structure.md)：`nsh.json` 的每个键。
