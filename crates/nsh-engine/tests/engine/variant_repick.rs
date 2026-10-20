@@ -37,6 +37,8 @@ pub(crate) fn start(app: &str, pixel_ratio: f32) -> (Engine, Receiver<MountBatch
         viewport: Size::new(390.0, 844.0),
         trace: false,
         network: None,
+        websocket: None,
+        filesystem: None,
         assets: None,
         environment: Environment {
             pixel_ratio,
