@@ -155,7 +155,7 @@ generated `web-dev` profile (`RustApp::web_dev_profile`): `dev`'s incremental bu
 `opt-level = 1`, the other crates at `"s"`, QuickJS at 3, `panic = "abort"` and no debug assertions, so the page
 behaves as a published one. A change to the app's crate then rebuilds that crate and links incrementally, where
 `web`'s fat LTO over one codegen unit re-optimizes the whole module: one edit of `examples/rust-exports`' crate rebuilds
-in 0.3 s instead of 7.8 s (2026-10, Apple M-series; the module is 6.5 MB instead of 3.7 MB). The workspace also gives `rquickjs-sys` and `taffy`
+in 0.3 s instead of 7.8 s (2026-10, Apple M-series; the module is 6.5 MB instead of 3.7 MB). The workspace also gives `quickjs-jit-sys` and `taffy`
 `opt-level = 3` in `dev`, as nsh's own manifest does, for the debug hosts. The crate's `build.rs` passes the 8 MiB
 stack as a link argument of its own (nsh's `.cargo/config.toml` may not apply where the app builds, and target-wide
 `rustflags` would rebuild every dependency instead of sharing nsh's builds). The kinds build to

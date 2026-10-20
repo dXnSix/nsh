@@ -1209,7 +1209,7 @@ overflow-checks = false
 panic = \"abort\"
 [profile.web-dev.package.\"*\"]
 opt-level = \"s\"
-[profile.web-dev.package.rquickjs-sys]
+[profile.web-dev.package.quickjs-jit-sys]
 opt-level = 3
 ",
         );
@@ -1222,7 +1222,7 @@ opt-level = 3
         profile.push_str(
             "
 # As nsh's own manifest: the interpreter and layout fast in debug builds.
-[profile.dev.package.rquickjs-sys]
+[profile.dev.package.quickjs-jit-sys]
 opt-level = 3
 [profile.dev.package.taffy]
 opt-level = 3
@@ -2577,7 +2577,7 @@ mod tests {
             ["opt-level = \"s\""]
         );
         assert_eq!(
-            profile("profile.web-dev.package.rquickjs-sys"),
+            profile("profile.web-dev.package.quickjs-jit-sys"),
             ["opt-level = 3"]
         );
         for package in ["app-charts", "app-storage"] {
@@ -2586,7 +2586,7 @@ mod tests {
         }
         // As nsh's own manifest, for the debug builds of the hosts.
         assert_eq!(
-            profile("profile.dev.package.rquickjs-sys"),
+            profile("profile.dev.package.quickjs-jit-sys"),
             ["opt-level = 3"]
         );
         assert_eq!(profile("profile.dev.package.taffy"), ["opt-level = 3"]);
@@ -2608,7 +2608,7 @@ lto = \"fat\"
 codegen-units = 1
 strip = true
 panic = \"abort\"
-[profile.web.package.rquickjs-sys]
+[profile.web.package.quickjs-jit-sys]
 opt-level = 3
 ";
         assert!(manifest.contains(web), "{manifest}");
