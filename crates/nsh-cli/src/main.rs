@@ -1,4 +1,4 @@
-//! `nsh`, the command line tool. It links the mobile UI; an app with Rust
+//! `nsh`, the command line tool. It links `nsh/base`; an app with Rust
 //! components of its own (`nsh.json` `"rust"`) is known to it by the
 //! description its describe program prints (`rust_app.rs`), and runs in the
 //! hosts and runners built for it.
@@ -15,7 +15,7 @@ mod run;
 mod runtime;
 mod rust_app;
 mod sign;
-mod trace;
+mod test;
 mod ui;
 mod web;
 mod windows;
@@ -26,20 +26,21 @@ use std::{
     sync::{Arc, OnceLock, RwLock},
 };
 
+use anyhow::Context as _;
 use clap::{Args, Parser, Subcommand};
 use nsh_core::ui::{Registry, description::SetDescription};
 
-/// The UI sets this command line links: the mobile UI.
+/// The UI sets this command line links: `nsh/base`.
 pub(crate) fn own_sets() -> &'static [Registry] {
     static OWN: OnceLock<Vec<Registry>> = OnceLock::new();
-    OWN.get_or_init(|| vec![nsh_ui_mobile::registry()])
+    OWN.get_or_init(|| vec![nsh_base::registry()])
 }
 
 /// The UI sets of the command's app, as data ([`set_app_sets`]).
 static UI_SETS: RwLock<Option<Arc<[SetDescription]>>> = RwLock::new(None);
 
 /// The UI sets the hosts serve, as data: what bundles import natively,
-/// what bytecode links against, what `.nsh/types` declares. The mobile UI,
+/// what bytecode links against, what `.nsh/types` declares. `nsh/base`,
 /// then an app's own sets ([`set_app_sets`]).
 pub(crate) fn ui_sets() -> Arc<[SetDescription]> {
     if let Some(sets) = &*UI_SETS.read().unwrap_or_else(|e| e.into_inner()) {
@@ -50,7 +51,7 @@ pub(crate) fn ui_sets() -> Arc<[SetDescription]> {
     sets
 }
 
-/// Makes [`ui_sets`] the mobile UI and `app`, the sets of the app's crates
+/// Makes [`ui_sets`] `nsh/base` and `app`, the sets of the app's crates
 /// (described again after a change to its Rust code).
 pub(crate) fn set_app_sets(app: Vec<SetDescription>) {
     let sets: Arc<[SetDescription]> = own_sets()
@@ -117,50 +118,25 @@ enum Command {
         #[arg(long)]
         split: bool,
     },
-    /// Run an app headless (a Rust app: its root) and print the mount
-    /// instructions and timings.
-    Trace {
-        /// The entry module, or the app's directory (default: the current one),
-        /// whose `App.tsx` is the entry.
+    /// Run an app's tests headless: its test files (`*.test.tsx`,
+    /// `*.test.ts`, importing `nsh/test`), each test opening the app on an
+    /// engine of its own; or, given the app's entry, open it and take the
+    /// steps standard input gives (`await app.press("Add")`).
+    Test {
+        /// A test file, a directory whose test files to run (default: the
+        /// current one), or an app's entry.
         #[arg(default_value = ".")]
+        path: PathBuf,
+        /// The entry of the app `path` is part of (set from it).
+        #[arg(skip)]
         entry: PathBuf,
-        /// Number of taps to send to the first pressable view (without
-        /// `--tap`).
-        #[arg(long, default_value_t = 2)]
-        taps: u32,
-        /// Tap a view (repeatable, in order): `id:<testID>`,
-        /// `label:<accessibilityLabel>`, `text:<text>`, `view:<id>`, or a
-        /// bare string matched as a testID, a label, then a text. A match
-        /// that is not pressable taps its nearest pressable ancestor.
-        #[arg(long, value_name = "SELECTOR")]
-        tap: Vec<String>,
-        /// Idle time before tapping, in milliseconds: the app must render
-        /// nothing for this long (at most 10 s). The default lets the
-        /// engine's idle GC run first, so retention bugs show up.
-        #[arg(long, default_value_t = 1200)]
-        idle_ms: u64,
-        /// Run timers and animations this long before the first tap and
-        /// after each one, in milliseconds, instead of waiting until the
-        /// app is idle.
-        #[arg(long, value_name = "MS")]
-        wait: Option<u64>,
-        /// Keep running this long after the last tap, in milliseconds.
-        #[arg(long, value_name = "MS", default_value_t = 0)]
-        duration: u64,
-        /// Simulated safe area insets in points: `top,right,bottom,left`
-        /// (or one value for all four), e.g. `47,0,34,0`.
-        #[arg(long, value_name = "INSETS", value_parser = nsh_engine::headless::parse_insets)]
-        safe_area: Option<nsh_engine::Insets>,
-        /// Scroll the first scroll view / list by this many points, in
-        /// 10 pt frames, and print each frame's batch.
+        /// Run only the tests whose name contains this.
         #[arg(long)]
-        scroll: Option<f32>,
-        /// Viewport width in points.
-        #[arg(long, default_value_t = 390.0)]
-        width: f32,
-        /// Viewport height in points.
-        #[arg(long, default_value_t = 844.0)]
-        height: f32,
+        filter: Option<String>,
+        /// Print every mount batch of the apps the tests open, under the
+        /// step it came in, and the time of every commit.
+        #[arg(long)]
+        trace: bool,
     },
     /// Type check an app with TypeScript's native compiler (TypeScript 7,
     /// downloaded once from the npm registry; no Node needed).
@@ -188,6 +164,14 @@ enum Command {
         /// Minify and strip debug info.
         #[arg(long)]
         release: bool,
+        /// Run the app as an app embedded in another one would, with the
+        /// VM limits such an app sets: `memory` and `stack` (`KB`, `MB`,
+        /// `GB`), `load` and `call` (`ms`, `s`) and `nodes`, as in
+        /// `--limits memory=128MB,call=500ms`; the rest keep the embedding
+        /// defaults (256 MB, 4 MB, 10 s, 2 s, 200000), which `--limits`
+        /// alone runs with. Without it the app runs on its own, with none.
+        #[arg(long, value_name = "LIMITS", num_args = 0..=1, default_missing_value = "", value_parser = parse_limits)]
+        limits: Option<nsh_core::js::HostLimits>,
     },
     /// Package an installable app from the prebuilt runtime (no Rust
     /// needed). Metadata comes from `nsh.json` next to the entry, overridden
@@ -209,6 +193,14 @@ enum Command {
         /// Minify and strip debug info.
         #[arg(long)]
         release: bool,
+        /// Run the app as an app embedded in another one would, with the
+        /// VM limits such an app sets: `memory` and `stack` (`KB`, `MB`,
+        /// `GB`), `load` and `call` (`ms`, `s`) and `nodes`, as in
+        /// `--limits memory=128MB,call=500ms`; the rest keep the embedding
+        /// defaults (256 MB, 4 MB, 10 s, 2 s, 200000), which `--limits`
+        /// alone runs with. Without it the app runs on its own, with none.
+        #[arg(long, value_name = "LIMITS", num_args = 0..=1, default_missing_value = "", value_parser = parse_limits)]
+        limits: Option<nsh_core::js::HostLimits>,
         /// Log per-commit timings.
         #[arg(long)]
         trace: bool,
@@ -300,6 +292,10 @@ enum Command {
         /// package whose error stacks have no positions.
         #[arg(long)]
         strip_debug: bool,
+        /// The lowest runtime that runs the package, e.g. `0.2.0` (default:
+        /// this CLI's version); older runtimes refuse it.
+        #[arg(long, value_name = "VERSION")]
+        min_runtime: Option<String>,
     },
     /// Map the positions in a reported error stack (`bundle.js:LINE:COL`)
     /// to the app's sources, with a package's source map.
@@ -402,7 +398,7 @@ impl Command {
     fn entry_mut(&mut self) -> Option<&mut PathBuf> {
         match self {
             Command::Build { entry, .. }
-            | Command::Trace { entry, .. }
+            | Command::Test { entry, .. }
             | Command::Check { entry, .. }
             | Command::Dev { entry, .. }
             | Command::Run { entry, .. }
@@ -437,25 +433,49 @@ fn main() -> ExitCode {
     }
 }
 
+/// `--limits`' value ([`nsh_core::js::HostLimits::parse`]).
+fn parse_limits(spec: &str) -> Result<nsh_core::js::HostLimits, String> {
+    nsh_core::js::HostLimits::parse(spec)
+}
+
+/// Refuses `--limits` for an app of Rust only: they are its JS VM's, and it
+/// runs no JS.
+fn no_limits_for_rust(
+    entry: &std::path::Path,
+    limits: Option<nsh_core::js::HostLimits>,
+) -> anyhow::Result<()> {
+    if limits.is_some() && rust_app::is_root(entry) {
+        anyhow::bail!(
+            "--limits sets the limits of an app's JS VM, and an app of Rust only runs no JS"
+        );
+    }
+    Ok(())
+}
+
 fn run(mut command: Command) -> anyhow::Result<()> {
-    let mut types = !matches!(command, Command::Trace { .. });
+    let mut types = true;
+    // The app a test's path is part of.
+    if let Command::Test { path, entry, .. } = &mut command {
+        *path = dunce::canonicalize(&*path).with_context(|| format!("{}", path.display()))?;
+        *entry = test::app_entry(path)?;
+    }
     if let Some(entry) = command.entry_mut() {
         *entry = entry::resolve(entry)?;
         // A Rust app has no TypeScript to declare things for.
         types &= !rust_app::is_root(entry);
     }
-    // A Rust app (`nsh.json` "root") has no bundle: it is built, traced,
+    // A Rust app (`nsh.json` "root") has no bundle: it is built, tested,
     // run and packaged.
     let rust_command = matches!(
         command,
-        Command::Build { .. } | Command::Trace { .. } | Command::Package(_) | Command::Run { .. }
+        Command::Build { .. } | Command::Test { .. } | Command::Package(_) | Command::Run { .. }
     );
     if let Some(entry) = command.entry_mut()
         && rust_app::is_root(entry)
         && !rust_command
     {
         anyhow::bail!(
-            "{} declares a Rust app (\"root\"): it is built with `nsh build`, traced with `nsh trace`, \
+            "{} declares a Rust app (\"root\"): it is built with `nsh build`, tested with `nsh test`, \
              run with `nsh run` and packaged with `nsh package`; the other commands take a TSX entry",
             ui::path(entry)
         );
@@ -526,38 +546,21 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             release,
             split,
         } => build::build(&entry, &out, release, split),
-        Command::Trace {
-            entry,
-            taps,
-            tap,
-            idle_ms,
-            wait,
-            duration,
-            safe_area,
-            scroll,
-            width,
-            height,
-        } => trace::trace(
-            &entry,
-            nsh_engine::headless::TraceOptions {
-                taps,
-                tap,
-                idle_ms,
-                wait,
-                duration,
-                scroll,
-                width,
-                height,
-                safe_area: safe_area.unwrap_or_default(),
-            },
-        ),
         Command::Check { entry, tsc, args } => check::check(&entry, tsc.as_deref(), &args),
+        Command::Test {
+            path,
+            entry,
+            filter,
+            trace,
+        } => test::test(&path, &entry, filter, trace),
         Command::Dev {
             entry,
             port,
             release,
+            limits,
         } => {
-            let session = dev::DevSession::start(&entry, port, release)?;
+            no_limits_for_rust(&entry, limits)?;
+            let session = dev::DevSession::start(&entry, port, release, limits)?;
             session.print_urls();
             session.watch(|| Ok(false))
         }
@@ -605,6 +608,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             entry,
             port,
             release,
+            limits,
             trace,
             fps,
             target,
@@ -612,19 +616,22 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             name,
             size,
             script,
-        } => run::run(
-            &entry,
-            port,
-            release,
-            run::HostFlags { trace, fps },
-            target,
-            device.as_deref(),
-            run::HostWindow {
-                name: name.as_deref(),
-                size: size.as_deref(),
-                script: script.as_deref(),
-            },
-        ),
+        } => {
+            no_limits_for_rust(&entry, limits)?;
+            run::run(
+                &entry,
+                port,
+                release,
+                run::HostFlags { limits, trace, fps },
+                target,
+                device.as_deref(),
+                run::HostWindow {
+                    name: name.as_deref(),
+                    size: size.as_deref(),
+                    script: script.as_deref(),
+                },
+            )
+        }
         Command::Keygen { name } => sign::keygen(&name),
         Command::Certify {
             root,
@@ -643,11 +650,13 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             build,
             source_map,
             strip_debug,
+            min_runtime,
         } => {
             let mut config = package::read_config(&entry)?;
             config.id = id.or(config.id);
             config.version = version.or(config.version);
             config.build = build.or(config.build);
+            config.min_runtime = min_runtime.or(config.min_runtime);
             sign::publish(sign::PublishOptions {
                 entry: &entry,
                 key: &key,

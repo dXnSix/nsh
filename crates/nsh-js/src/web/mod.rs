@@ -15,7 +15,7 @@
 
 pub(crate) mod js;
 
-mod blob;
+pub(crate) mod blob;
 mod encoding;
 mod event;
 mod fetch;
@@ -23,6 +23,7 @@ mod intl;
 mod iterator;
 mod streams;
 mod url;
+mod websocket;
 
 use std::{
     any::Any,
@@ -89,6 +90,7 @@ pub(crate) enum Class {
     Headers,
     Request,
     Response,
+    WebSocket,
     NumberFormat,
     DateTimeFormat,
 }
@@ -164,6 +166,7 @@ fn specs() -> impl Iterator<Item = &'static Spec> {
         encoding::SPECS,
         blob::SPECS,
         fetch::SPECS,
+        websocket::SPECS,
         intl::SPECS,
     ]
     .into_iter()
@@ -208,6 +211,7 @@ pub(crate) const TYPES: &[&str] = &[
     streams::writable::TYPES,
     streams::transform::TYPES,
     fetch::TYPES,
+    websocket::TYPES,
 ];
 
 /// The per-context state: the classes and the prototypes.
@@ -428,6 +432,17 @@ pub(crate) fn new_closure(ctx: Ctx, closure: Closure) -> R<V> {
         qjs::JS_SetOpaque(obj.raw(), Box::into_raw(Box::new(closure)) as *mut c_void);
         Ok(obj)
     }
+}
+
+/// A new `AbortSignal` (owned): a resource's load gets one, aborted when the
+/// load no longer counts.
+pub(crate) fn new_abort_signal(ctx: Ctx) -> R<Raw> {
+    event::new_signal(ctx).map(V::take)
+}
+
+/// Aborts `signal` with an `AbortError` (nothing when it is aborted).
+pub(crate) fn abort_signal(ctx: Ctx, signal: Raw) -> R<()> {
+    event::abort(ctx, signal, UNDEFINED)
 }
 
 /// The intrinsic `Promise.prototype.then`.

@@ -130,7 +130,7 @@ final class EmbedController: UIViewController {
         }
     }
 
-    // Let the embedded app's StatusBar decide the status bar.
+    // Let the embedded app's pages and dialogs decide the status bar.
     override var preferredStatusBarStyle: UIStatusBarStyle { NshAppView.preferredStatusBarStyle }
     override var prefersStatusBarHidden: Bool { NshAppView.prefersStatusBarHidden }
     override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation {
@@ -154,13 +154,15 @@ The complete sample, a UIKit app that shows an NSH app below its own native head
 | `onError: ((String) -> Void)?` | Receives fatal app errors (a bundle that fails to load, uncaught JS exceptions, a VM stopped by a limit) on the main thread. Errors are always logged; development builds also show them over the app. |
 | `limits: NshLimits` | The VM limits of the apps loaded from now on. |
 | `grantCapabilities(_ json: String?) throws` | The most the apps loaded from now on may do, as JSON in the form of `nsh.json`'s `capabilities`; `nil` grants what each app declares. Throws `NshError` for invalid JSON. |
+| `locale: Locale?` | The app's language and region in place of the user's: `Intl`, `locale()` and the components follow it at once, and the apps loaded later start in it. `nil` follows the system's. |
+| `fontScale: CGFloat?` | The text size in place of Dynamic Type's (1 is the default): texts and inputs are laid out again at it and `fontScale()` reads it, at once and for the apps loaded later; lengths keep their size. `nil` follows the system's. |
 | `storageDirectory: URL?` | Where the apps loaded from now on keep their [storage](../modules/nsh-storage.md); `nil`: `Library/Application Support/nsh/<app id>`, by the app's own id. |
 | `loadBundle(at url: URL) throws` | Runs a bundle written by `nsh build`. Assets come from `assets/` next to it; `bundle.js.map` and `capabilities.json` next to it are read too. |
 | `run(_ package: NshPackage)` | Runs a verified signed package (see below). A package runs once. |
 | `loadPackage(at:trust:) async throws -> NshPackage.Info` | Verifies the package at a URL off the main thread, then runs it. Throws why it was refused; the running app stays. |
 | `connectDevServer(_ url: URL) throws` | Development: loads from a `nsh dev` server and reloads on every change. Throws with `NativeShell.xcframework`, which has no development support. |
 | `register(component:_:)` | Registers a [native component](./native-components.md). |
-| `static preferredStatusBarStyle`, `prefersStatusBarHidden`, `preferredStatusBarUpdateAnimation` | What the running apps asked for with `StatusBar`: return them from the hosting view controller's overrides. |
+| `static preferredStatusBarStyle`, `prefersStatusBarHidden`, `preferredStatusBarUpdateAnimation` | What the running apps asked for (their pages' and dialogs' `statusBar`, `nsh.json`'s default): return them from the hosting view controller's overrides. |
 
 > [!IMPORTANT]
 > `bundle.nshc` (bytecode) loads only from inside the app bundle. QuickJS does not validate bytecode, so bytecode from
@@ -275,9 +277,9 @@ updates the app in place, logs appear in the `nsh dev` terminal, and errors show
 
 - **Threads.** `NshAppView` is main-actor isolated. `NshTrust`, `NshPackage` and `NshComponentContext` are thread-safe.
   The JS engine runs on its own thread; the main thread never waits for it.
-- **Status bar.** The embedded app's `StatusBar` changes what `NshAppView.preferredStatusBarStyle` and friends return;
+- **Status bar.** The embedded app's pages and dialogs (`statusBar`) change what `NshAppView.preferredStatusBarStyle` and friends return;
   the hosting view controller must forward them, as in the example above.
-- **Safe area.** Apps use `SafeAreaView` or `useSafeAreaInsets()` from [`nsh/ui/mobile`](../components/safe-area-view.md)
+- **Safe area.** Apps use `SafeAreaView` or `safeAreaInsets()` from [`nsh/base`](../modules/nsh-base.md#safeareaview)
   as usual. An `NshAppView` placed below your own header gets the insets that apply to it, not the window's.
 - **Mac Catalyst.** The same framework works in Catalyst apps.
 
