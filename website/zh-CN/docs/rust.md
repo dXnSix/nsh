@@ -449,6 +449,11 @@ NSH 的 crate，这样应用与宿主共用同一个核心：
 应用的所有 crate 都指向同一处，且其版本就是你运行的 `nsh` 的版本：当 crate 从 git 获取 NSH 时，从同一仓库和同一 tag 安装 `nsh`
 （`cargo install --git <url> --tag <tag> --locked nsh-cli`）。两者不一致时，`nsh` 会指出两处来源并在构建前停止。
 
+## 在 Web 上使用浏览器 API
+
+在 Web 上，crate 可以通过 wasm-bindgen 和 `web-sys` 调用浏览器的 API（WebSocket、`IndexedDB` 等）；`nsh` 会随运行时一起构建它们所需的胶水代码。
+见 [Web](./web.md#在-rust-中使用浏览器-api)。
+
 ## 另请参阅
 
 - [项目结构](./project-structure.md)：`nsh.json` 的每个键。

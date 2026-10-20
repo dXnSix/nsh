@@ -486,6 +486,11 @@ All of the app's crates name the same place, and its version is the one of the `
 the same repository and tag (`cargo install --git <url> --tag <tag> --locked nsh-cli`) when the crates take NSH
 from git. When they disagree, `nsh` names both places and stops before building.
 
+## Browser APIs on the web
+
+On the web, a crate can call the browser's APIs (a WebSocket, `IndexedDB`, …) through wasm-bindgen and `web-sys`;
+`nsh` builds the glue they need with the runtime. See [Web](./web.md#browser-apis-from-rust).
+
 ## See also
 
 - [Project structure](./project-structure.md): every key of `nsh.json`.
