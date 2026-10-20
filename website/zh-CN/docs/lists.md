@@ -98,6 +98,7 @@ const toggle = (id: number) =>
 | `numColumns` | `number` | `1` | 每行的条目数（纵向列表）。 |
 | `inverted` | `boolean` | `false` | 第 0 项在底部（聊天）；初始滚动到末尾，并保持与末尾的距离。 |
 | `stickyHeaderIndices` | `number[]` | | 滚过时吸附在顶部的条目（单列且非倒置）。 |
+| `stickyHeaderOffset` | `number` | `0` | 吸顶条目吸附在距顶部多远的位置，同 CSS `position: sticky` 的 `top`；内容继续在其上方的空间下滚动。 |
 | `contentStyle` | `{ padding*, gap, rowGap, columnGap }` | | 内容的内边距和间距，只接受数字。 |
 | `contentClass` | `string` | | 同上，写成类名（`p-*`、`gap-*`）；`contentStyle` 优先。 |
 | `header` | 组件或元素 | | 在条目之前。 |
@@ -160,6 +161,8 @@ for (const [letter, names] of groups) {
 ```
 
 同一个单元格可能这会儿显示标题、过一会儿显示名字，所以行用 [`<If>`](../elements/control-flow.md) 决定渲染什么，它会在条目改变时切换。吸顶标题要求单列且列表不倒置。
+
+`stickyHeaderOffset` 让标题吸附在距顶部这么多点的位置，如同 CSS `position: sticky` 的 `top`：在 56 点高的半透明栏下，`stickyHeaderOffset={56}` 让每个标题停在栏的下方，行则继续在栏下滚动，下一个标题从那里把它推出去。负值会让标题的一部分移出视口。
 
 ## 聊天：倒置列表
 
