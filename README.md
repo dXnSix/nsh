@@ -1,7 +1,11 @@
 # The NSH fork
 
 > This lives on the fork's orphan branch `private/fork-docs` (no shared history with upstream; a `pre-push` hook
-> refuses to send `private/*` to `upstream`). `scripts/nsh-fork/` below is in the Gamify repository.
+> refuses to send `private/*` to `upstream`), with the fork's maintenance script, [scripts/sync-main.sh](scripts/sync-main.sh),
+> and its recorded conflict resolutions. To run it, check this branch out next to the fork's checkout for the
+> time it takes (`git -C ../nsh worktree add ../nsh-fork-docs private/fork-docs`, then
+> `git -C ../nsh worktree remove ../nsh-fork-docs`); the commands below run from that checkout, with `../nsh` the
+> fork's.
 
 Gamify takes NSH from the fork `github.com/dXnSix/nsh` (`upstream` is `longbridge/nsh`), only through git tags. The
 fork's `main` is Gamify's integration line: upstream's `main` plus one pull request per topic branch (`feat/*` for a
@@ -18,14 +22,14 @@ rebases: AgentX records name its commits.
 ## Bringing in upstream
 
 ```bash
-scripts/nsh-fork/sync-main.sh branch ../nsh feat/<topic> --push   # or fix/<topic>
-scripts/nsh-fork/sync-main.sh upstream ../nsh --pr
+scripts/sync-main.sh branch ../nsh feat/<topic> --push   # or fix/<topic>
+scripts/sync-main.sh upstream ../nsh --pr
 ```
 
 `branch` merges the newest `upstream/main` into a topic branch. `upstream` cuts `sync/upstream-<sha>` from the fork's
 `main`, merges `upstream/main` into it and opens its pull request. Conflict resolutions are replayed from
-`scripts/nsh-fork/rr-cache/` (git rerere); after resolving a new one, commit the merge and run
-`sync-main.sh save-resolutions ../nsh`.
+`scripts/rr-cache/` (git rerere); after resolving a new one, commit the merge, run
+`scripts/sync-main.sh save-resolutions ../nsh` and commit `scripts/rr-cache/` on this branch.
 
 ## A branch into main
 
@@ -37,7 +41,7 @@ scripts/nsh-fork/sync-main.sh upstream ../nsh --pr
 ## Tags
 
 ```bash
-scripts/nsh-fork/sync-main.sh tag ../nsh fork-<nsh version>-<n>
+scripts/sync-main.sh tag ../nsh fork-<nsh version>-<n>
 ```
 
 Tags are `fork-<nsh version>-<n>` on the fork's `main`, never `v*` (the fork's copies of upstream's release
