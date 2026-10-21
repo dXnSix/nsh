@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     effects::{BlendMode, Cursor, GradientKind, Keyframes},
-    geometry::{DefiniteLength, deg, percentage, px},
+    geometry::{DefiniteLength, deg, px},
     style::{Color, FontFamily, Style},
     transform::TransformKind,
 };
@@ -731,6 +731,36 @@ fn effects_and_interaction() {
         vec![crate::effects::Filter::Blur(px(12.0))]
     );
     assert_eq!(s.view.blend_mode, BlendMode::Multiply);
+    // Every layer of a drop shadow is a `drop-shadow()` of the chain, after
+    // the other filters, as Tailwind's `--tw-drop-shadow`.
+    use crate::effects::Filter;
+    let filters = |classes| {
+        styled(classes)
+            .view
+            .effects
+            .map(|e| e.filters.clone())
+            .unwrap_or_default()
+    };
+    let drop = |y: f32, blur: f32, alpha: u32| Filter::DropShadow {
+        offset_x: px(0.0),
+        offset_y: px(y),
+        blur: px(blur),
+        color: Color(alpha),
+    };
+    assert_eq!(
+        filters("drop-shadow blur-sm"),
+        vec![
+            Filter::Blur(px(8.0)),
+            drop(1.0, 2.0, 0x1a),
+            drop(1.0, 1.0, 0x0f)
+        ]
+    );
+    assert_eq!(filters("drop-shadow-md").len(), 1);
+    assert_eq!(
+        filters("drop-shadow-[0_1px_1px_#000,0_2px_4px_#f00]").len(),
+        2
+    );
+    assert!(filters("drop-shadow drop-shadow-none").is_empty());
     assert_eq!(s.view.outline.width, px(2.0));
     assert_eq!(s.view.outline.offset, px(2.0));
     assert!(s.view.hidden);

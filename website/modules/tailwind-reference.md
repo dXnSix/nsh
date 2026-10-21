@@ -264,7 +264,7 @@ Container widths (points): `3xs` 256, `2xs` 288, `xs` 320, `sm` 384, `md` 448, `
 | `decoration-auto`, `decoration-from-font` | `textDecorationThickness: "auto"` |
 | `decoration-<color>` | `textDecorationColor` |
 | `underline-offset-<n>`, `underline-offset-[<length>]`, `underline-offset-auto` | `textUnderlineOffset` |
-| `text-shadow-2xs`, `-xs`, `-sm`, `-md`, `-lg` | a text shadow from the theme |
+| `text-shadow-2xs`, `-xs`, `-sm`, `-md`, `-lg` | a text shadow from the theme (one layer: the widest of the theme's) |
 | `text-shadow-<color>` | its color (keeps each layer's alpha unless the color has one) |
 | `text-shadow-none` | removes it |
 
@@ -362,7 +362,8 @@ Shadows, rings and inset shadows combine into one `boxShadow` list, as in CSS. A
 | `brightness-<n>`, `contrast-<n>`, `saturate-<n>` | percentage factors: `brightness-125` = 1.25 |
 | `grayscale`, `grayscale-<n>`, `invert`, `invert-<n>`, `sepia`, `sepia-<n>` | bare: 100% |
 | `hue-rotate-<deg>`, `-hue-rotate-<deg>` | `hue-rotate()` |
-| `drop-shadow`, `drop-shadow-xs`, `-sm`, `-md`, `-lg`, `-xl`, `-2xl`, `drop-shadow-[...]` | `drop-shadow()` (one layer natively: the widest) |
+| `drop-shadow`, `drop-shadow-xs`, `-sm`, `-md`, `-lg`, `-xl`, `-2xl`, `drop-shadow-[...]` | a `drop-shadow()` per layer, after the other filters; the web, Linux, Windows and GPUI draw every layer, iOS, macOS and Android the last one |
+| `drop-shadow-none` | removes it |
 | `filter-none` | removes all filters |
 | `backdrop-blur`, `backdrop-blur-<size>`, `backdrop-blur-[<length>]` | blurs what is behind the view |
 | `backdrop-brightness-<n>`, `backdrop-contrast-<n>`, `backdrop-grayscale`, `backdrop-hue-rotate-<deg>`, `backdrop-invert`, `backdrop-opacity-<n>`, `backdrop-saturate-<n>`, `backdrop-sepia` | backdrop filters |

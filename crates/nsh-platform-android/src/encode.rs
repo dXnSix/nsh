@@ -753,14 +753,15 @@ fn effects(e: &mut Encoded, s: &ViewStyle) {
     }
     let filter_list = |e: &mut Encoded, list: &[Filter]| {
         // Color filters as one composed matrix, then blur, then the drop
-        // shadow (what Android's render effects take).
+        // shadow (what Android's render effects take): the last of the
+        // chain, a Tailwind shadow's widest layer.
         let matrix = nsh_core::compose_color_matrices(list);
         e.bool(matrix.is_some());
         for v in matrix.unwrap_or([0.0; 20]) {
             e.float(v);
         }
         e.float(nsh_core::blur_radius(list).0);
-        let shadow = list.iter().find_map(|f| match *f {
+        let shadow = list.iter().rev().find_map(|f| match *f {
             Filter::DropShadow {
                 offset_x,
                 offset_y,

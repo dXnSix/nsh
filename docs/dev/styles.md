@@ -142,7 +142,9 @@
   `RenderEffect`, drawn clipped under the view's background.
   Known limits: iOS has no CSS filters on views (only `opacity`, `brightness` ≤ 1 and `drop-shadow`; images take every color filter
   and `blur`, applied while decoding); iOS texts draw no gradients or inset shadows; Android has no backdrop blur, `blur` or
-  `drop-shadow` before API 31.
+  `drop-shadow` before API 31; Linux and GPUI draw no backdrop filter; iOS, macOS and Android draw one `drop-shadow()`,
+  the last of the chain (a Tailwind shadow's widest layer; the web, Linux, Windows and GPUI draw every layer a class or
+  style gives); a text shadow is one layer everywhere (`text-shadow-*` keep the theme's widest).
 - **View styles**: `backgroundColor`, `borderWidth` / `borderColor` (also per side: `borderTopWidth`, `borderLeftColor`, ...),
   `borderStyle` (`solid` / `dashed` / `dotted`; `none` / `hidden` zero the used widths in layout and paint whatever
   order the widths come in, as `outlineStyle: "none"` does, `Pending`), `borderRadius` + the four `borderTopLeftRadius`-style corners, `borderCurve`

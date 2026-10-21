@@ -89,6 +89,9 @@ pub(crate) enum Part {
     FilterNone {
         backdrop: bool,
     },
+    /// `drop-shadow-*`: a `drop-shadow()` per layer, last in the filter
+    /// chain (Tailwind's `--tw-drop-shadow`).
+    DropShadows(Arc<[Filter]>),
     FontVariant {
         set: u8,
         clear: u8,
@@ -394,6 +397,8 @@ pub(crate) struct Parts {
     legacy_stops: [bool; 3],
     stop_positions: [Option<f32>; 3],
     filters: [Option<Filter>; 9],
+    /// After the filters of `filters`.
+    drop_shadows: Option<Arc<[Filter]>>,
     filters_set: bool,
     backdrop: [Option<Filter>; 9],
     backdrop_set: bool,
@@ -427,7 +432,8 @@ impl Parts {
             Filter {
                 backdrop: false, ..
             }
-            | FilterNone { backdrop: false } => touched::FILTERS,
+            | FilterNone { backdrop: false }
+            | DropShadows(_) => touched::FILTERS,
             Filter { backdrop: true, .. } | FilterNone { backdrop: true } => touched::BACKDROP,
             FontVariant { .. } => touched::FONT_VARIANT,
             TransitionProps(_) | Duration(_) | Ease(_) | Delay(_) | TransitionNone => {
@@ -498,6 +504,11 @@ impl Parts {
             }
             FilterNone { backdrop: false } => {
                 self.filters = [None; 9];
+                self.drop_shadows = None;
+                self.filters_set = true;
+            }
+            DropShadows(layers) => {
+                self.drop_shadows = Some(layers);
                 self.filters_set = true;
             }
             FilterNone { backdrop: true } => {
@@ -684,7 +695,11 @@ impl Parts {
             }
         }
         if self.filters_set && has(touched::FILTERS) {
-            style.set_filters(self.filters.iter().flatten().copied().collect(), false);
+            let drop = self.drop_shadows.as_deref().unwrap_or_default();
+            style.set_filters(
+                self.filters.iter().flatten().chain(drop).copied().collect(),
+                false,
+            );
         }
         if self.backdrop_set && has(touched::BACKDROP) {
             style.set_filters(self.backdrop.iter().flatten().copied().collect(), true);
@@ -1457,6 +1472,22 @@ fn outline_width(width: f32) -> Vec<Decl> {
     ]
 }
 
+/// A `drop-shadow()` per layer, in their order (CSS's chain: each one
+/// shadows what the ones before it drew too).
+fn drop_shadows(layers: &[BoxShadow]) -> Part {
+    Part::DropShadows(
+        layers
+            .iter()
+            .map(|l| Filter::DropShadow {
+                offset_x: l.offset_x,
+                offset_y: l.offset_y,
+                blur: l.blur,
+                color: l.color,
+            })
+            .collect(),
+    )
+}
+
 fn filter(backdrop: bool, slot: u8, f: Filter) -> Decl {
     Decl::Part(Part::Filter {
         backdrop,
@@ -2042,22 +2073,12 @@ static PREFIXES: &[(&str, Handler)] = &[
         one(filter(false, 7, Filter::Sepia(percent_factor(v)?)))
     }),
     ("drop-shadow", |t, v, _| {
-        let layers = match t.drop_shadows.get(v) {
-            Some(l) => l.clone(),
-            None => css::box_shadows(&arbitrary(v)?)?,
+        let layers = match (v, t.drop_shadows.get(v)) {
+            ("none", None) => Vec::new(),
+            (_, Some(l)) => l.clone(),
+            (_, None) => css::box_shadows(&arbitrary(v)?)?,
         };
-        // One drop shadow natively: the last (widest) layer.
-        let l = layers.last().copied().unwrap_or_default();
-        one(filter(
-            false,
-            8,
-            Filter::DropShadow {
-                offset_x: l.offset_x,
-                offset_y: l.offset_y,
-                blur: l.blur,
-                color: l.color,
-            },
-        ))
+        part(drop_shadows(&layers))
     }),
     // Transforms.
     ("translate-x", |t, v, n| {
@@ -2171,19 +2192,7 @@ fn bare(theme: &Theme, u: &str, neg: bool) -> Option<Vec<Decl>> {
                 theme.inset_shadows.get("")?.as_slice(),
             )));
         }
-        "drop-shadow" => {
-            let l = theme.drop_shadows.get("")?.last().copied()?;
-            vec![filter(
-                false,
-                8,
-                Filter::DropShadow {
-                    offset_x: l.offset_x,
-                    offset_y: l.offset_y,
-                    blur: l.blur,
-                    color: l.color,
-                },
-            )]
-        }
+        "drop-shadow" => return part(drop_shadows(theme.drop_shadows.get("")?)),
         "ring" => return part(Part::Ring(1.0)),
         "inset-ring" => return part(Part::InsetRing(1.0)),
         "border" => border_widths(&[K::BorderWidth], 1.0),

@@ -264,7 +264,7 @@ view()
 | `decoration-auto`、`decoration-from-font` | `textDecorationThickness: "auto"` |
 | `decoration-<color>` | `textDecorationColor` |
 | `underline-offset-<n>`、`underline-offset-[<length>]`、`underline-offset-auto` | `textUnderlineOffset` |
-| `text-shadow-2xs`、`-xs`、`-sm`、`-md`、`-lg` | 主题中的文字阴影 |
+| `text-shadow-2xs`、`-xs`、`-sm`、`-md`、`-lg` | 主题中的文字阴影（一层：主题中最宽的那层） |
 | `text-shadow-<color>` | 阴影颜色（颜色本身不带透明度时保留各层透明度） |
 | `text-shadow-none` | 去掉阴影 |
 
@@ -362,7 +362,8 @@ view()
 | `brightness-<n>`、`contrast-<n>`、`saturate-<n>` | 百分比倍数：`brightness-125` = 1.25 |
 | `grayscale`、`grayscale-<n>`、`invert`、`invert-<n>`、`sepia`、`sepia-<n>` | 不带值为 100% |
 | `hue-rotate-<deg>`、`-hue-rotate-<deg>` | `hue-rotate()` |
-| `drop-shadow`、`drop-shadow-xs`、`-sm`、`-md`、`-lg`、`-xl`、`-2xl`、`drop-shadow-[...]` | `drop-shadow()`（原生只画一层：最宽的那层） |
+| `drop-shadow`、`drop-shadow-xs`、`-sm`、`-md`、`-lg`、`-xl`、`-2xl`、`drop-shadow-[...]` | 每层一个 `drop-shadow()`，位于其他滤镜之后；Web、Linux、Windows 和 GPUI 绘制每一层，iOS、macOS 和 Android 绘制最后一层 |
+| `drop-shadow-none` | 去掉投影 |
 | `filter-none` | 去掉所有滤镜 |
 | `backdrop-blur`、`backdrop-blur-<size>`、`backdrop-blur-[<length>]` | 模糊视图背后的内容 |
 | `backdrop-brightness-<n>`、`backdrop-contrast-<n>`、`backdrop-grayscale`、`backdrop-hue-rotate-<deg>`、`backdrop-invert`、`backdrop-opacity-<n>`、`backdrop-saturate-<n>`、`backdrop-sepia` | 背景滤镜 |
