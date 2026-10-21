@@ -136,7 +136,10 @@ pub(crate) struct Surface {
 
 impl Surface {
     /// A surface with no app yet.
-    pub(crate) fn new(environment: Environment) -> Rc<Surface> {
+    pub(crate) fn new(mut environment: Environment) -> Rc<Surface> {
+        // Shaders fill views with OpenGL ES 3 (`crate::shader`).
+        environment.shaders =
+            nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::GlslEs300);
         let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
         let root = NshView::new(ROOT_ID, nsh_core::ViewKind::View);
         root.set_hexpand(true);

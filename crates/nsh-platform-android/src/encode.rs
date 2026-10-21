@@ -66,6 +66,8 @@ const COMPONENT_PROPS: i32 = 30;
 const OVERFLOW: i32 = 31;
 const ACCESSIBILITY_LABEL: i32 = 32;
 const APPEARANCE: i32 = 33;
+const SHADER_PROGRAM: i32 = 34;
+const SHADER: i32 = 35;
 
 /// An entry of the object table.
 pub(crate) enum Obj {
@@ -140,6 +142,7 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                     ViewKind::InputAccessory => 0,
                     ViewKind::Canvas => 14,
                     ViewKind::Native => 15,
+                    ViewKind::Shader => 16,
                 });
             }
             MountItem::Insert {
@@ -307,6 +310,15 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                 e.int(CANVAS);
                 e.int(id as i32);
                 canvas(&mut e, &drawing);
+            }
+            MountItem::ShaderProgram { program } => {
+                e.int(SHADER_PROGRAM);
+                shader_program(&mut e, &program);
+            }
+            MountItem::Shader { id, fill } => {
+                e.int(SHADER);
+                e.int(id as i32);
+                shader_fill(&mut e, fill.as_deref());
             }
             MountItem::Overflow { id, extent } => {
                 e.int(OVERFLOW);
@@ -1175,6 +1187,85 @@ fn input(e: &mut Encoded, c: &InputConfig) {
     });
     e.bool(c.rtl);
     e.bool(c.caret_hidden);
+}
+
+// --- Shaders (`ShaderBox.java`) ---------------------------------------------
+
+/// A shader's program: its id, then (an AGSL one) `1`, the source, its
+/// uniforms (name, buffer: 0 `nsh`, 1 the frame, 2 the uniforms; integers;
+/// the words of the buffer it reads, in order) and its `uniform shader`s
+/// (name, input index); `0` for a program in no language.
+fn shader_program(e: &mut Encoded, program: &nsh_core::shader::ShaderProgram) {
+    use nsh_core::shader::{AgslValue, ProgramCode};
+    e.int(program.id as i32);
+    let ProgramCode::Agsl(agsl) = &program.code else {
+        e.int(0);
+        return;
+    };
+    e.int(1);
+    e.string(agsl.source.clone());
+    e.int(agsl.uniforms.len() as i32);
+    for u in &agsl.uniforms {
+        e.string(u.name.clone());
+        e.int(match u.value {
+            AgslValue::Nsh => 0,
+            AgslValue::Frame => 1,
+            _ => 2,
+        });
+        e.bool(u.ty.is_int());
+        let words = uniform_words(u);
+        e.int(words.len() as i32);
+        for w in words {
+            e.int(w as i32);
+        }
+    }
+    e.int(agsl.shaders.len() as i32);
+    for (name, input) in &agsl.shaders {
+        e.string(name.clone());
+        e.int(input.index() as i32);
+    }
+}
+
+/// The 32-bit words of its buffer an AGSL uniform takes, in order: each
+/// element's components, a matrix's column by column.
+fn uniform_words(u: &nsh_core::shader::AgslUniform) -> Vec<u32> {
+    let mut out = Vec::new();
+    for element in 0..u.count {
+        let base = u.offset + u.stride * element;
+        match u.ty.columns() {
+            Some((columns, stride)) => {
+                for c in 0..columns {
+                    for r in 0..columns {
+                        out.push((base + c * stride + r * 4) / 4);
+                    }
+                }
+            }
+            None => out.extend((0..u.ty.components()).map(|k| (base + k * 4) / 4)),
+        }
+    }
+    out
+}
+
+/// What a shader view draws: its program's id (`-1`: nothing), whether it
+/// reads `nsh.time`, the uniforms' buffer as words, and its images (URI or
+/// -1, the word of their size).
+fn shader_fill(e: &mut Encoded, fill: Option<&nsh_core::shader::ShaderFill>) {
+    let Some(fill) = fill else {
+        e.int(-1);
+        return;
+    };
+    e.int(fill.program as i32);
+    e.bool(fill.time);
+    let words = fill.uniforms.len() / 4;
+    e.int(words as i32);
+    for w in fill.uniforms.as_chunks::<4>().0 {
+        e.int(i32::from_le_bytes(*w));
+    }
+    e.int(fill.images.len() as i32);
+    for image in &fill.images {
+        e.opt_string(image.source.as_ref().map(|s| &*s.uri));
+        e.int((image.offset / 4) as i32);
+    }
 }
 
 // --- Canvas drawings (`CanvasBox.java`) -------------------------------------

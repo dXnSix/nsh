@@ -86,6 +86,53 @@ WGSL's integer `/` and `%` (by zero: `x` and 0), its truncating float `%`, `roun
 hyperbolic functions, integer `abs` / `min` / `max` / `clamp` / `sign` / `dot`, `transpose`, `determinant`, and
 arrays element by element (constant arrays as local arrays).
 
+## The element
+
+`<Shader src uniforms>` (TSX, from `nsh`) and `shader(source).uniforms(..)` (Rust, `nsh_core::ui`) are a host element,
+`Tag::Shader` / `ViewKind::Shader`: a view the shader fills under its children, with every style of a view.
+
+- **Making a shader.** `createShader(source)` (`nsh-js` `shader.rs`) compiles in Rust with the VM's limits
+  (`max_shader_samples`) and returns a frozen `{ uniforms: [names], __shader: id }`; a VM keeps its shaders by id and
+  by source, so the same source is the same shader (a component making its shader on each render, a module run again
+  by hot module replacement) and counts once against `max_shaders`. Errors throw a `SyntaxError` with
+  `Error::render`'s text. A `.wgsl` import is a module of the bundler (`plugin.rs`: checked with the default limits at
+  build time, then `export default createShader(source)`); `.nsh/types` declares each file's uniforms
+  (`types.rs` `shader_declarations`, `tooling.md`). Rust makes `ShaderSource::new(source, &limits)` once and keeps it.
+  Ids are unique per process (`ShaderSource::next_id`): the platforms keep programs by id.
+- **Uniforms.** The prop holds values by name (`Uniforms`, `UniformValue`: numbers, lists, colors, animated values,
+  images; strings are colors, else image URIs). At commit the core packs them for the shader's reflection
+  (`shader::pack`): WGSL's uniform layout, colors premultiplied, integers rounded, a number filling a vector, images by
+  slot (their size written when the source knows it, the platform writes it once the image loads), and warns about
+  names the shader lacks and values its types do not take. Animated values become bindings
+  (`AnimationProp::ShaderUniform(component)`, an `f32` index of the buffer), sent with the view's other
+  `AnimationBindings`: the platform's animator writes a number into one component, a color into four, premultiplied
+  (`shader::write_animated`), and the shader draws again; JS runs nothing per frame.
+- **Programs and fills.** The first time a view draws a shader, the core translates it into the platform's language
+  (`ShaderProgram::translate`, `Environment::shaders.language`) on the engine thread and sends it once per engine
+  (`MountItem::ShaderProgram`); each view then gets `MountItem::Shader { fill }` (`ShaderFill`: the program's id, the
+  packed buffer, the images, whether it reads `nsh.time`) when it changes. A translation that fails is logged and the
+  view draws its children only.
+- **`shaderSupport()`** reads `Environment::shaders` (`ShaderSupport`: the language and, per kind, `Live`, `Snapshot`
+  or `No`). Each platform sets it on its surface; a headless engine (`nsh test`, `ShaderLanguage::None`) says fills
+  are live, sends programs (with no code) and fills, so tests check what a shader view gets.
+
+The platforms fill three buffers per draw (`shader::nsh_buffer`, `shader::frame_buffer` with each loaded image's size
+in pixels: an image without one samples transparent, `shader::write_image_size`) and bind each image as the program's
+inputs say.
+
+| Platform | Draws with | Where | Draws every frame |
+|---|---|---|---|
+| iOS, Mac Catalyst, macOS | Metal (`nsh-metal`: loaded with `dlopen`, programs compiled off the main thread) | a `CAMetalLayer` in the view's layer, above its background (`decor::BEHIND / 2`) | the macOS surface's frame callbacks / the iOS mounter's shader display link, while in a window |
+| Android 13+ | `RuntimeShader` (AGSL) in `ShaderBox.onDraw` | the view's canvas, over its background | `postInvalidateOnAnimation` while shown |
+| Windows | Direct3D 11 into a texture Direct2D draws (`HlslProgram::d3d11`, `D3DCompile`) | the view's drawing, before its text and children | each frame the surface draws |
+| Linux | OpenGL ES 3 in a `GdkGLContext` of its own (glow over libepoxy) into a texture, a `GdkGLTexture` with a fence | the view's snapshot, flipped as `GtkGLArea`'s | the widget's tick callback |
+| Web | WebGL 2 on one shared canvas, copied to a bitmap canvas in the view's element | the element, under its children | `requestAnimationFrame` |
+| GPUI | (draws the children) | | |
+
+In-process screenshots on macOS (`nsh test --target macos`) draw each shader again into a texture the CPU reads
+(`ShaderLayer::picture`), since `cacheDisplayInRect` does not draw a `CAMetalLayer`. Android's screenshots use
+`PixelCopy`: a software canvas draws no `RuntimeShader`.
+
 ## Verification
 
 `cargo test -p nsh-shader` runs the profile's cases and every corpus shader through all four writers. The platforms'
@@ -101,3 +148,9 @@ Size, release with fat LTO, stripped, over an empty binary: the checker (naga's 
 profile) is 0.94 MB on macOS arm64, 1.04 MB on Android arm64 and 0.79 MB on WebAssembly (`opt-level = "z"`, 0.24 MB
 with brotli); the writers add MSL 0.27 MB, HLSL 0.33 MB, GLSL 0.19 MB (WebAssembly 0.14 MB, 0.04 MB with brotli) and
 AGSL 0.10 MB.
+
+The element: `nsh-core`'s `shader::tests` (packing, bindings, images, the buffers), `nsh-engine`'s `shader` tests (a
+`.wgsl` import and `createShader` end to end: one program per shader, the packed fills, the bindings, errors and
+`shaderSupport()`), the `paint` domain's `paint-shader` case in `tests/compat`, and the gallery's Shaders demo
+(`examples/gallery/demos/ShaderDemo.tsx`: `nsh.time`, animated uniforms, an image). The platforms are checked by
+running them: `nsh test <entry> --target macos|ios|android|web` with `app.screenshot(..)` steps.

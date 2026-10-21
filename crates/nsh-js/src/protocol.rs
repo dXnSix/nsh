@@ -339,6 +339,11 @@ impl<'js> HostInput for Js<'js> {
     fn node(&self) -> Option<NodeId> {
         crate::dom::node_id(self.0.ctx().as_raw().as_ptr(), self.0.as_raw())
     }
+
+    fn shader(&self) -> Option<nsh_core::shader::ShaderSource> {
+        let id = self.field("__shader")?.as_number()?;
+        crate::shader::lookup(self.0.ctx().as_raw().as_ptr(), id as u32)
+    }
 }
 
 /// The op setting prop `name` to `value`: a style, a registered native

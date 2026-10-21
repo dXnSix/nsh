@@ -1272,6 +1272,15 @@ class Player {
       el.append(canvas);
       el._canvas = canvas;
       el._slots = [];
+    } else if (kind === "shader") {
+      // Its picture under its children (`drawShader`).
+      el = document.createElement("div");
+      const canvas = document.createElement("canvas");
+      canvas.className = "nsh-fill";
+      canvas.style.pointerEvents = "none";
+      el.append(canvas);
+      el._shaderCanvas = canvas;
+      el._args = new Map();
     } else if (kind === "web") {
       el = document.createElement("div");
       const frame = document.createElement("iframe");
@@ -1431,6 +1440,7 @@ class Player {
       el._frameAnimation = a;
     }
     if (el._kind === "canvas") this.drawSoon(el);
+    if (el._kind === "shader") this.shaderSoon(el);
     if (el._kind === "stack") for (const screen of el.children) if (screen._kind === "screen") this.reportRoot(screen, w, h, this.screenInsets(screen));
   }
 
@@ -1485,6 +1495,13 @@ class Player {
     if (prop.startsWith("canvas:")) {
       el._slots[Number(prop.slice(7))] = isNaN(Number(value)) ? value : Number(value);
       this.drawSoon(el);
+      return;
+    }
+    if (prop.startsWith("shader:")) {
+      const values = String(value).split(",").map(Number);
+      el._args.set(Number(prop.slice(7)), values);
+      if (el._uniforms) this.writeArgs(el);
+      this.shaderSoon(el);
       return;
     }
     el._animation[prop] = value;
@@ -2587,6 +2604,213 @@ class Player {
       }
     }
     cx.restore();
+  }
+
+  // Shaders: one WebGL 2 context draws every shader view, into an
+  // offscreen canvas whose picture goes to the view's canvas (browsers
+  // allow a page few contexts).
+
+  op_sp([, id, program]) {
+    this.shaderPrograms ??= new Map();
+    this.shaderPrograms.set(id, program);
+  }
+
+  op_sh([, id, fill]) {
+    const el = this.view(id);
+    if (!el || !el._shaderCanvas) return;
+    el._fill = fill;
+    el._uniforms = fill ? new Uint32Array(fill.uniforms) : null;
+    if (el._uniforms) this.writeArgs(el);
+    el._images = [];
+    for (const [slot, [uri, at]] of (fill?.images ?? []).entries()) {
+      if (!uri) continue;
+      const img = this.shaderImage(uri, el);
+      if (img) this.imageReady(el, slot, img, at);
+    }
+    this.shaderSoon(el);
+  }
+
+  /** Animated uniforms written into the view's uniforms. */
+  writeArgs(el) {
+    const words = new Float32Array(el._uniforms.buffer);
+    for (const [k, values] of el._args) values.forEach((v, i) => { if (k + i < words.length) words[k + i] = v; });
+  }
+
+  /** The image of `slot` loaded: its size in points (unless the source said it). */
+  imageReady(el, slot, img, at) {
+    el._images[slot] = img;
+    const words = new Float32Array(el._uniforms.buffer);
+    if (words[at] === 0 && words[at + 1] === 0) {
+      words[at] = img.naturalWidth;
+      words[at + 1] = img.naturalHeight;
+    }
+  }
+
+  shaderImage(uri, el) {
+    const src = this.asset(uri);
+    let entry = this.images.get(src);
+    if (!entry) {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      entry = { img, ready: false, waiting: new Set() };
+      img.onload = () => {
+        entry.ready = true;
+        for (const w of entry.waiting) {
+          if (w._shaderCanvas && w._fill) {
+            for (const [slot, [u, at]] of w._fill.images.entries()) if (u && this.asset(u) === src) this.imageReady(w, slot, img, at);
+            this.shaderSoon(w);
+          } else this.drawSoon(w);
+        }
+      };
+      img.src = src;
+      this.images.set(src, entry);
+    }
+    if (!entry.ready) entry.waiting.add(el);
+    return entry.ready ? entry.img : null;
+  }
+
+  shaderSoon(el) {
+    if (el._shaderQueued) return;
+    el._shaderQueued = true;
+    queueMicrotask(() => {
+      el._shaderQueued = false;
+      this.drawShader(el);
+    });
+  }
+
+  /** The shared context and what it compiled: programs and textures. */
+  gl() {
+    if (this._gl !== undefined) return this._gl;
+    const canvas = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
+    const gl = canvas.getContext("webgl2", { premultipliedAlpha: true, antialias: false });
+    this._gl = gl ? { gl, canvas, programs: new Map(), textures: new Map(), buffers: [gl.createBuffer(), gl.createBuffer(), gl.createBuffer()] } : null;
+    if (!gl) console.warn("[nsh] <Shader>: WebGL 2 is not available: shader views show their children only");
+    return this._gl;
+  }
+
+  /** Program `id` compiled in the shared context, or null. */
+  glProgram(g, id) {
+    if (g.programs.has(id)) return g.programs.get(id);
+    const source = this.shaderPrograms?.get(id);
+    let made = null;
+    if (source) {
+      const gl = g.gl;
+      const stage = (type, text) => {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, text);
+        gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+        return s;
+      };
+      try {
+        const p = gl.createProgram();
+        gl.attachShader(p, stage(gl.VERTEX_SHADER, source.vertex));
+        gl.attachShader(p, stage(gl.FRAGMENT_SHADER, source.fragment));
+        gl.linkProgram(p);
+        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+        for (const [name, buffer] of source.blocks) {
+          const index = gl.getUniformBlockIndex(p, name);
+          if (index !== gl.INVALID_INDEX) gl.uniformBlockBinding(p, index, buffer);
+        }
+        const samplers = source.samplers.map(([name, input]) => [gl.getUniformLocation(p, name), input]);
+        made = { program: p, samplers };
+      } catch (err) {
+        console.error("[nsh] <Shader>: WebGL could not compile the shader:", err);
+      }
+    }
+    g.programs.set(id, made);
+    return made;
+  }
+
+  /** A transparent texture for inputs without a picture (an unbound one samples black). */
+  emptyTexture(g) {
+    if (g.empty) return g.empty;
+    const gl = g.gl;
+    g.empty = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, g.empty);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+    return g.empty;
+  }
+
+  glTexture(g, img) {
+    let t = g.textures.get(img);
+    if (t) return t;
+    const gl = g.gl;
+    t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) {
+      gl.texParameteri(gl.TEXTURE_2D, k, v);
+    }
+    g.textures.set(img, t);
+    return t;
+  }
+
+  drawShader(el) {
+    const fill = el._fill;
+    const canvas = el._shaderCanvas;
+    if (!fill || !el._frame || !el.isConnected) {
+      if (!fill && canvas.width) canvas.width = 0;
+      return;
+    }
+    const g = this.gl();
+    const made = g && this.glProgram(g, fill.program);
+    if (!made) return;
+    const gl = g.gl;
+    const ratio = (devicePixelRatio || 1) * Math.min(4, this.zoomOf(el));
+    const [, , w, h] = el._frame;
+    const pw = Math.max(1, Math.round(w * ratio));
+    const ph = Math.max(1, Math.round(h * ratio));
+    if (g.canvas.width !== pw || g.canvas.height !== ph) {
+      g.canvas.width = pw;
+      g.canvas.height = ph;
+    }
+    el._started ??= performance.now();
+    const time = (performance.now() - el._started) / 1000;
+    const nsh = new Float32Array(8);
+    nsh.set([w, h, ratio, time, 0]);
+    const frame = new Float32Array(104);
+    frame.set([0, 0, w, h]);
+    for (const [slot, img] of (el._images ?? []).entries()) {
+      if (!img) continue;
+      frame.set([0, 0, w, h, img.naturalWidth, img.naturalHeight], 8 + 8 * (4 + slot));
+    }
+    gl.viewport(0, 0, pw, ph);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(made.program);
+    [nsh, frame, el._uniforms].forEach((data, i) => {
+      gl.bindBuffer(gl.UNIFORM_BUFFER, g.buffers[i]);
+      gl.bufferData(gl.UNIFORM_BUFFER, data.byteLength ? data : new Float32Array(4), gl.DYNAMIC_DRAW);
+      gl.bindBufferBase(gl.UNIFORM_BUFFER, i, g.buffers[i]);
+    });
+    made.samplers.forEach(([location, input], unit) => {
+      const img = input >= 4 ? el._images?.[input - 4] : null;
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, img ? this.glTexture(g, img) : this.emptyTexture(g));
+      gl.uniform1i(location, unit);
+    });
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    if (canvas.width !== pw || canvas.height !== ph) {
+      canvas.width = pw;
+      canvas.height = ph;
+    }
+    if (g.canvas.transferToImageBitmap) {
+      el._bitmapContext ??= canvas.getContext("bitmaprenderer");
+      el._bitmapContext.transferFromImageBitmap(g.canvas.transferToImageBitmap());
+    } else {
+      const cx = (el._shaderContext ??= canvas.getContext("2d"));
+      cx.clearRect(0, 0, pw, ph);
+      cx.drawImage(g.canvas, 0, 0);
+    }
+    // A shader that reads `nsh.time` draws on every frame while it shows.
+    if (fill.time && !el._shaderFrame) {
+      el._shaderFrame = requestAnimationFrame(() => {
+        el._shaderFrame = 0;
+        if (el.isConnected && el._fill?.time) this.drawShader(el);
+      });
+    }
   }
 
   canvasImage(uri, el) {

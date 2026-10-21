@@ -204,6 +204,12 @@ host_element! {
 }
 
 host_element! {
+    /// A view a shader fills (`<shader>`), made by [`shader`]: its children
+    /// are drawn over it.
+    ShaderView
+}
+
+host_element! {
     /// A web page (`<webview>`), made by [`web_view`].
     WebView
 }
@@ -228,6 +234,7 @@ host_element! {
 }
 
 impl ParentElement for Overlay {}
+impl ParentElement for ShaderView {}
 impl ParentElement for Scroll {}
 impl ParentElement for Stack {}
 impl ParentElement for Screen {}
@@ -335,6 +342,25 @@ pub fn canvas(painter: impl IntoReactive<Painter>) -> CanvasView {
 }
 
 crate::static_reactive!(Painter: Painter, Drawing);
+
+/// A view `source` fills (a bound one draws the new one when it changes),
+/// its children drawn over it; [`ShaderView::uniforms`] gives the values
+/// of its uniforms. Made with [`crate::shader::ShaderSource::new`].
+pub fn shader(source: impl IntoReactive<crate::shader::ShaderSource>) -> ShaderView {
+    ShaderView(ElNode::new(Tag::Shader)).bind_prop(source, |s| Prop::ShaderSource(Some(s)))
+}
+
+crate::static_reactive!(crate::shader::ShaderSource: crate::shader::ShaderSource);
+crate::static_reactive!(crate::shader::Uniforms: crate::shader::Uniforms);
+
+impl ShaderView {
+    /// The values of the shader's uniforms, by name (a bound set changes
+    /// them when it changes): numbers, lists of them, colors and images
+    /// ([`crate::shader::UniformValue`]).
+    pub fn uniforms(self, uniforms: impl IntoReactive<crate::shader::Uniforms>) -> Self {
+        self.bind_prop(uniforms, Prop::Uniforms)
+    }
+}
 
 /// A web view loading `url` (a bound one loads again when it changes).
 pub fn web_view(url: impl IntoReactive<String>) -> WebView {

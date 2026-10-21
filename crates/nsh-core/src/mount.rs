@@ -43,6 +43,8 @@ pub enum ViewKind {
     InputAccessory,
     /// A canvas ([`MountItem::Canvas`]).
     Canvas,
+    /// A view a shader fills ([`MountItem::Shader`]), under its children.
+    Shader,
     /// A web view.
     WebView,
     /// The container of a registered native component: the platform
@@ -734,6 +736,22 @@ pub enum MountItem {
         id: NodeId,
         /// The drawing.
         drawing: Arc<crate::canvas::Drawing>,
+    },
+    /// A shader's program in the platform's language, before the first
+    /// [`MountItem::Shader`] that draws it (once per program and engine;
+    /// the platform keeps it by [`crate::shader::ShaderProgram::id`]).
+    ShaderProgram {
+        /// The program.
+        program: Arc<crate::shader::ShaderProgram>,
+    },
+    /// What a shader view draws (`None`: nothing, its children only). Its
+    /// animated uniforms come as
+    /// [`crate::animation::AnimationProp::ShaderUniform`] bindings.
+    Shader {
+        /// The shader view.
+        id: NodeId,
+        /// What it draws.
+        fill: Option<Arc<crate::shader::ShaderFill>>,
     },
     /// Bind visual properties to native animation nodes.
     AnimationBindings {

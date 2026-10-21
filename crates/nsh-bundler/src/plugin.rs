@@ -71,6 +71,9 @@ pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "web
 /// File types imported as fonts.
 pub(crate) const FONT_EXTENSIONS: &[&str] = &["ttf", "otf"];
 
+/// File types imported as shaders.
+pub(crate) const SHADER_EXTENSIONS: &[&str] = &["wgsl"];
+
 fn has_extension(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -431,6 +434,26 @@ impl Plugin for NshPlugin {
             let code = format!(
                 "import {{ font }} from \"nsh:rt\";\nexport default font({uri:?}, {family:?});",
                 uri = format!("asset:/{rel}"),
+            );
+            return Ok(Some(HookLoadOutput {
+                code: code.into(),
+                module_type: Some(ModuleType::Js),
+                ..Default::default()
+            }));
+        }
+        if has_extension(path, SHADER_EXTENSIONS) {
+            // A shader import is its shader, checked now (the device checks
+            // it again when it is made: `createShader`).
+            let source =
+                std::fs::read_to_string(path).map_err(|e| self.fail(path, &e.to_string()))?;
+            if let Err(e) =
+                nsh_core::shader::compile(&source, &nsh_core::shader::ShaderLimits::default())
+            {
+                return Err(self.fail(path, e.render(&rel, &source).trim_end()));
+            }
+            let code = format!(
+                "import {{ createShader }} from \"nsh\";\nexport default createShader({});",
+                serde_json::to_string(&source).expect("a string")
             );
             return Ok(Some(HookLoadOutput {
                 code: code.into(),

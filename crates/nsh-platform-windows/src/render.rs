@@ -666,6 +666,7 @@ pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) {
         // stays in its backing store.
         cx.push_clip_rect(0.0, 0.0, w, h);
     }
+    crate::shader::draw(cx, &state);
     crate::text::draw(cx, &state);
     crate::image::draw(cx, &state);
     crate::canvas::draw(cx, &state);

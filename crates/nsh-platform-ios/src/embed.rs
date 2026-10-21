@@ -224,6 +224,7 @@ pub unsafe extern "C" fn nsh_app_set_limits(
         load_budget: ms(load_ms),
         call_budget: ms(call_ms),
         max_nodes: set(max_nodes),
+        ..Default::default()
     };
     app.view.set_limits(limits.limits());
 }

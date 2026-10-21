@@ -31,7 +31,7 @@ use objc2_ui_kit::{UIColor, UIImage, UIView};
 /// Fills sit behind the children. Borders too (CSS), except where the
 /// children are clipped: there the layer's own border, which Core Animation
 /// always draws in front, looks the same and needs no shape.
-const BEHIND: CGFloat = -1024.0;
+pub(crate) const BEHIND: CGFloat = -1024.0;
 const BORDER_BEHIND: CGFloat = BEHIND + 1.0;
 const IN_FRONT: CGFloat = 1024.0;
 

@@ -9,7 +9,7 @@
 //! bounds picking.
 //!
 //! A view draws itself in `snapshot`: shadows and background
-//! ([`crate::decor`]), its content (text, image, canvas), its children
+//! ([`crate::decor`]), its content (text, image, canvas, shader), its children
 //! (clipped to the rounded bounds when `overflow: hidden`), then its
 //! border, as UIKit draws layer borders over the content. Views with text
 //! widen their damage by the pixels glyphs paint outside their nodes
@@ -75,6 +75,8 @@ pub(crate) struct ViewState {
     pub(crate) image: Option<crate::image::ImageState>,
     /// Canvas content.
     pub(crate) canvas: Option<crate::canvas::CanvasState>,
+    /// What a shader view draws.
+    pub(crate) shader: Option<crate::shader::ShaderState>,
     /// Text field (input views).
     pub(crate) input: Option<std::rc::Rc<crate::text_input::InputState>>,
     /// Hosted GTK widgets.
@@ -107,6 +109,7 @@ impl ViewState {
             area_selection: None,
             image: None,
             canvas: None,
+            shader: None,
             input: None,
             natives: Vec::new(),
             overflow: None,
@@ -472,6 +475,7 @@ mod imp {
             crate::text::draw(snapshot, &state);
             crate::image::draw(snapshot, &state);
             crate::canvas::draw(snapshot, &state);
+            crate::shader::draw(snapshot, &state, &obj);
             if !clip {
                 snapshot.pop();
             }

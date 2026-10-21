@@ -106,6 +106,11 @@ define_class!(
             self.with_mounter(|m| m.frame());
         }
 
+        #[unsafe(method(shaderFrame:))]
+        fn shader_frame(&self, _link: &CADisplayLink) {
+            self.with_mounter(|m| m.shader_frame());
+        }
+
         #[unsafe(method(handlePan:))]
         fn handle_pan(&self, recognizer: &UIPanGestureRecognizer) {
             let Some(view) = recognizer.view() else { return };
@@ -628,6 +633,11 @@ impl EventTarget {
     /// Runs `f` on the mounter. UIKit can call back synchronously while the
     /// mounter applies a batch (e.g. setting `contentOffset`); then the call
     /// is deferred to the next main-queue turn instead of re-entering.
+    /// The mounter it hands events to.
+    pub(crate) fn mounter(&self) -> crate::mount::SharedMounter {
+        self.ivars().mounter.clone()
+    }
+
     fn with_mounter(&self, f: impl FnOnce(&mut crate::mount::Mounter) + Send + 'static) {
         let mtm = self.mtm();
         let shared = &self.ivars().mounter;

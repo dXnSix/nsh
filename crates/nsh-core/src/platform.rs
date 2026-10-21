@@ -161,6 +161,9 @@ pub struct Environment {
     pub apple_keyboard: bool,
     /// The user's locale (number and date formats: `Intl`'s default).
     pub locale: Locale,
+    /// The shaders the platform runs, and their language
+    /// (`shaderSupport()`).
+    pub shaders: crate::shader::ShaderSupport,
 }
 
 impl Environment {
@@ -191,6 +194,7 @@ impl Default for Environment {
             idiom: Idiom::Phone,
             apple_keyboard: false,
             locale: Locale::EN_US,
+            shaders: crate::shader::ShaderSupport::default(),
         }
     }
 }

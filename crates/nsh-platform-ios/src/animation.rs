@@ -92,6 +92,18 @@ pub(crate) fn frame_link(target: &EventTarget) -> Retained<CADisplayLink> {
     link
 }
 
+/// A paused display link calling `shaderFrame:` on `target`, unpaused
+/// while a shader that reads `nsh.time` shows.
+pub(crate) fn shader_link(target: &EventTarget) -> Retained<CADisplayLink> {
+    // SAFETY: `shaderFrame:` is implemented by `EventTarget`, which outlives
+    // the link (the mounter invalidates it when dropped).
+    let link = unsafe { CADisplayLink::displayLinkWithTarget_selector(target, sel!(shaderFrame:)) };
+    link.setPaused(true);
+    // SAFETY: the main run loop and standard modes.
+    unsafe { link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSRunLoopCommonModes) };
+    link
+}
+
 impl Drop for Animator {
     fn drop(&mut self) {
         self.link.invalidate();

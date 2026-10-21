@@ -43,6 +43,7 @@ mod navigation;
 mod net;
 mod scroll;
 mod selection_area;
+mod shader;
 mod surface;
 #[cfg(feature = "dev")]
 mod synth;

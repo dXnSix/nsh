@@ -60,6 +60,10 @@ final class Mounter {
     private static final int OVERFLOW = 31;
     private static final int ACCESSIBILITY_LABEL = 32;
     private static final int APPEARANCE = 33;
+    private static final int SHADER_PROGRAM = 34;
+    private static final int SHADER = 35;
+    /** Shader programs by id (`encode.rs` `shader_program`); null for one in no language. */
+    private final java.util.HashMap<Integer, ShaderBox.Program> shaderPrograms = new java.util.HashMap<>();
     /** The surface lays out right to left: native widgets mirror. */
     boolean rtl;
     /** The app's appearance (`nsh_core::platform::Appearance`): 0 the system's, 1 light, 2 dark. */
@@ -313,6 +317,57 @@ final class Mounter {
                     trackStates(id, states);
                     break;
                 }
+                case SHADER_PROGRAM: {
+                    int id = b.getInt();
+                    if (b.getInt() == 0) {
+                        shaderPrograms.put(id, null);
+                        break;
+                    }
+                    ShaderBox.Program p = new ShaderBox.Program();
+                    p.source = (String) objects[b.getInt()];
+                    int n = b.getInt();
+                    p.uniforms = new String[n];
+                    p.buffers = new int[n];
+                    p.ints = new boolean[n];
+                    p.words = new int[n][];
+                    for (int i = 0; i < n; i++) {
+                        p.uniforms[i] = (String) objects[b.getInt()];
+                        p.buffers[i] = b.getInt();
+                        p.ints[i] = b.getInt() != 0;
+                        p.words[i] = new int[b.getInt()];
+                        for (int k = 0; k < p.words[i].length; k++) p.words[i][k] = b.getInt();
+                    }
+                    int s = b.getInt();
+                    p.shaders = new String[s];
+                    p.inputs = new int[s];
+                    for (int i = 0; i < s; i++) {
+                        p.shaders[i] = (String) objects[b.getInt()];
+                        p.inputs[i] = b.getInt();
+                    }
+                    shaderPrograms.put(id, p);
+                    break;
+                }
+                case SHADER: {
+                    View v = views.get(b.getInt());
+                    int program = b.getInt();
+                    if (program < 0) {
+                        if (v instanceof ShaderBox) ((ShaderBox) v).setFill(null, false, new int[0], new String[0], new int[0]);
+                        break;
+                    }
+                    boolean time = b.getInt() != 0;
+                    int[] uniforms = new int[b.getInt()];
+                    for (int k = 0; k < uniforms.length; k++) uniforms[k] = b.getInt();
+                    int n = b.getInt();
+                    String[] uris = new String[n];
+                    int[] sizes = new int[n];
+                    for (int i = 0; i < n; i++) {
+                        int s = b.getInt();
+                        uris[i] = s >= 0 ? (String) objects[s] : null;
+                        sizes[i] = b.getInt();
+                    }
+                    if (v instanceof ShaderBox) shader((ShaderBox) v, shaderPrograms.get(program), time, uniforms, uris, sizes);
+                    break;
+                }
                 case CANVAS: {
                     int id = b.getInt(), words = b.getInt();
                     int[] code = new int[words];
@@ -547,6 +602,7 @@ final class Mounter {
             case 13: v = new VideoBox(context, this, host, id); break;
             case 14: v = new CanvasBox(context, this, id); break;
             case 15: v = new ComponentBox(context, this, id); break;
+            case 16: v = new ShaderBox(context, this, id); break;
             default: v = new Box(context, this, id);
         }
         views.put(id, v);
@@ -1354,12 +1410,35 @@ final class Mounter {
         }
     }
 
+    /** What a shader box draws; loads its images (bitmaps, at their natural size). */
+    private void shader(ShaderBox box, ShaderBox.Program program, boolean time, int[] uniforms, String[] uris, int[] sizes) {
+        String[] before = box.uris;
+        box.setFill(program, time, uniforms, uris, sizes);
+        for (int slot = 0; slot < uris.length && slot < box.images.length; slot++) {
+            String uri = uris[slot];
+            if (uri == null || (slot < before.length && uri.equals(before[slot]) && box.images[slot] != null)) continue;
+            final int at = slot;
+            Images.Image cached = images.request(uri, 0, 0, (image, error) -> {
+                if (image != null && !image.vector && image.content instanceof android.graphics.Bitmap) {
+                    box.setImage(at, uri, (android.graphics.Bitmap) image.content, image.width, image.height);
+                } else {
+                    android.util.Log.w("nsh", "<Shader> image failed: " + (image != null ? notABitmap(uri) : error));
+                }
+            });
+            if (cached != null && !cached.vector && cached.content instanceof android.graphics.Bitmap) {
+                box.setImage(at, uri, (android.graphics.Bitmap) cached.content, cached.width, cached.height);
+            }
+        }
+    }
+
     private static String notABitmap(String uri) {
         return uri + " is an SVG image: canvases draw bitmaps (PNG, JPEG, ...)";
     }
 
     /** Canvas animated value slot `n` arrives as property `CANVAS_ARG + n` (`animation.rs`). */
     private static final int CANVAS_ARG = 1000;
+    /** A shader's uniform component `n` arrives as `SHADER_NUMBER + n` or, a color, `SHADER_COLOR + n`. */
+    private static final int SHADER_NUMBER = 100_000, SHADER_COLOR = 200_000;
 
     void outputs(float[] out) {
         if (out == null || out.length == 0) return;
@@ -1368,6 +1447,13 @@ final class Mounter {
             if (v == null) continue;
             float value = out[i + 2];
             int prop = (int) out[i + 1];
+            if (prop >= SHADER_NUMBER) {
+                if (v instanceof ShaderBox) {
+                    if (prop >= SHADER_COLOR) ((ShaderBox) v).setColor(prop - SHADER_COLOR, Float.floatToRawIntBits(value));
+                    else ((ShaderBox) v).setNumber(prop - SHADER_NUMBER, value);
+                }
+                continue;
+            }
             if (prop >= CANVAS_ARG) {
                 if (v instanceof CanvasBox) ((CanvasBox) v).setSlot(prop - CANVAS_ARG, value);
                 continue;

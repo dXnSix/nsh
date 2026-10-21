@@ -219,7 +219,10 @@ impl Animator {
                             *t = Some(value.number());
                         }
                     }
-                    AnimationProp::CanvasArg(k) => canvas.push((k, value)),
+                    // A view is a canvas or a shader: its slots are one's or the other's.
+                    AnimationProp::CanvasArg(k) | AnimationProp::ShaderUniform(k) => {
+                        canvas.push((k, value))
+                    }
                 }
             }
             set(view, values, canvas);
