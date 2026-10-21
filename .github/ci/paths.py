@@ -27,7 +27,7 @@ WORKFLOWS = {
     "core.yml": {
         "packages": [
             "nsh-core", "nsh-macros", "nsh-js", "nsh-engine",
-            "nsh-bundler", "nsh-package", "nsh-base", "nsh-testing",
+            "nsh-bundler", "nsh-package", "nsh-base", "nsh-testing", "nsh-shader",
         ],
         "files": ["examples/counter/**", "examples/gallery/**", "examples/bench/**"],
     },
@@ -51,7 +51,7 @@ WORKFLOWS = {
     "windows.yml": {
         "packages": [
             "nsh-platform-windows", "nsh-windows-host", "nsh-windows-app",
-            "nsh-cli", "nsh-dev", "xtask",
+            "nsh-cli", "nsh-dev", "xtask", "nsh-shader",
         ],
         # `nsh test --target` runs the examples' tests.
         "files": ["examples/counter/**", "examples/gallery/**"],
