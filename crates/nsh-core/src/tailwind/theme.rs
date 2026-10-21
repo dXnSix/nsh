@@ -255,8 +255,6 @@ impl Default for Theme {
                 ("5xl", 64.0 * rem),
                 ("6xl", 72.0 * rem),
                 ("7xl", 80.0 * rem),
-                // 65 characters of a 16pt font, roughly.
-                ("prose", 65.0 * 0.5 * rem),
             ]),
             text: map(&[
                 ("xs", (0.75 * rem, Some(1.0 / 0.75))),
@@ -345,7 +343,6 @@ impl Default for Theme {
                 ("2xs", shadows("inset 0 1px rgb(0 0 0 / 0.05)")),
                 ("xs", shadows("inset 0 1px 1px rgb(0 0 0 / 0.05)")),
                 ("sm", shadows("inset 0 2px 4px rgb(0 0 0 / 0.05)")),
-                ("", shadows("inset 0 2px 4px rgb(0 0 0 / 0.05)")),
             ]),
             drop_shadows: map(&[
                 ("xs", shadows("0 1px 1px rgb(0 0 0 / 0.05)")),

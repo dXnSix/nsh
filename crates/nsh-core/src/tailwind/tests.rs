@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     effects::{BlendMode, Cursor, GradientKind, Keyframes},
-    geometry::{DefiniteLength, deg, percentage, px},
+    geometry::{DefiniteLength, deg, px},
     style::{Color, FontFamily, Style},
     transform::TransformKind,
 };
@@ -90,6 +90,166 @@ fn spacing_and_layout() {
 }
 
 #[test]
+fn physical_classes_name_the_other_side_right_to_left() {
+    // The core lays left and right out as start and end right to left
+    // (React Native's rule for inline styles); classes are physical, so
+    // right to left they set the other side, and come out where they say.
+    let theme = themed();
+    let resolve = |classes: &str, rtl: bool| {
+        let list = parse(&theme, classes);
+        assert_ne!(list.deps() & deps::RTL, 0, "{classes}");
+        let group = |_: &str| 0;
+        let cx = Context {
+            env: ClassEnvironment::default(),
+            window: crate::geometry::size_pt(390.0, 844.0),
+            rtl,
+            states: 0,
+            position: 0,
+            group: &group,
+        };
+        let mut style = Style::default();
+        list.apply(&cx, &theme, &mut style, &mut ClassProps::default(), |_| {});
+        style
+    };
+    let s = resolve("pl-4 mr-2 left-1", true);
+    assert_eq!(
+        s.layout.padding.right,
+        taffy::LengthPercentage::length(16.0)
+    );
+    assert_eq!(
+        s.layout.margin.left,
+        taffy::LengthPercentageAuto::length(8.0)
+    );
+    assert_eq!(
+        s.layout.inset.right,
+        taffy::LengthPercentageAuto::length(4.0)
+    );
+    let s = resolve("pl-4", false);
+    assert_eq!(s.layout.padding.left, taffy::LengthPercentage::length(16.0));
+    let s = resolve("text-left", true);
+    assert_eq!(s.text.text_align, Some(crate::style::TextAlign::Right));
+    // Logical classes need nothing: the core places them.
+    let list = parse(
+        &theme,
+        "ps-4 me-2 start-1 rounded-s-lg border-e-2 text-end text-center px-2",
+    );
+    assert_eq!(list.deps() & deps::RTL, 0);
+}
+
+#[test]
+fn space_gives_the_children_margins() {
+    // `space-x-4` is `:where(& > :not(:last-child)) { margin-inline-end }`:
+    // the view's children get it, not the view (no gap).
+    let (s, props) = styled_with(
+        "gap-2 space-x-4 -space-y-px",
+        ClassEnvironment::default(),
+        (390.0, 844.0),
+        0,
+    );
+    assert_eq!(s.layout.gap.width, taffy::LengthPercentage::length(8.0));
+    assert_eq!(s.layout.gap.height, taffy::LengthPercentage::length(8.0));
+    assert_eq!(
+        s.layout.margin.right,
+        taffy::LengthPercentageAuto::length(0.0)
+    );
+    let space = props.space.unwrap();
+    assert_eq!(space.x, Some(crate::style::PatchValue::Number(16.0)));
+    assert_eq!(space.y, Some(crate::style::PatchValue::Number(-1.0)));
+    assert!(!space.reverse_x);
+    let (_, props) = styled_with(
+        "space-y-reverse space-y-2",
+        ClassEnvironment::default(),
+        (390.0, 844.0),
+        0,
+    );
+    let space = props.space.unwrap();
+    assert!(space.reverse_y);
+    let mut child = Style::default();
+    space.apply(&mut child);
+    assert_eq!(
+        child.layout.margin.top,
+        taffy::LengthPercentageAuto::length(8.0)
+    );
+    assert_eq!(
+        child.layout.margin.bottom,
+        taffy::LengthPercentageAuto::length(0.0)
+    );
+}
+
+#[test]
+fn widths_without_a_color_are_current_color() {
+    let theme = themed();
+    let resolve = |classes: &str, current: CurrentColor| {
+        let list = parse(&theme, classes);
+        let group = |_: &str| 0;
+        let cx = Context {
+            env: ClassEnvironment::default(),
+            window: crate::geometry::size_pt(390.0, 844.0),
+            rtl: false,
+            states: 0,
+            position: 0,
+            group: &group,
+        };
+        let mut style = Style::default();
+        list.apply_with(
+            &cx,
+            &theme,
+            current,
+            DEFAULT_CH,
+            &mut style,
+            &mut ClassProps::default(),
+            |_| {},
+        );
+        style
+    };
+    let white = Color(0xffff_ffff);
+    let inherited = CurrentColor {
+        inherited: Some(white),
+        inline: None,
+    };
+    // Preflight's `border: 0 solid` is `currentColor`; so are a ring's and
+    // an outline's: the inherited text color...
+    let s = resolve("border-2 outline ring", inherited);
+    assert_eq!(s.view.borders.colors, [white; 4]);
+    assert_eq!(s.view.outline.color, white);
+    let e = s.view.effects.unwrap();
+    assert_eq!(e.box_shadows[0].color, white);
+    assert_ne!(parse(&theme, "border").deps() & deps::CURRENT_COLOR, 0);
+    assert_ne!(
+        parse(&theme, "inset-ring-2").deps() & deps::CURRENT_COLOR,
+        0
+    );
+    assert_eq!(
+        parse(&theme, "border-red-500 p-4").deps() & deps::CURRENT_COLOR,
+        0
+    );
+    // ...or the node's own, a class's or its inline style's...
+    let red = Color(0xfb2c_36ff);
+    let s = resolve("border-t text-red-500 inset-ring", inherited);
+    assert_eq!(s.view.borders.colors[0], red);
+    assert_eq!(s.view.effects.unwrap().box_shadows[0].color, red);
+    let blue = Color(0x0000_ffff);
+    let s = resolve(
+        "border text-red-500",
+        CurrentColor {
+            inherited: Some(white),
+            inline: Some(blue),
+        },
+    );
+    assert_eq!(s.view.borders.colors[0], blue);
+    // ...whichever comes first; a color class wins wherever it is.
+    let s = resolve(
+        "border-sky-500 border-2 outline-red-500 outline-dashed",
+        inherited,
+    );
+    assert_eq!(s.view.borders.colors[0], Color(0x00a6_f4ff));
+    assert_eq!(s.view.outline.color, red);
+    // Without one, React Native's black, as inline styles have it.
+    let s = resolve("border", CurrentColor::default());
+    assert_eq!(s.view.borders.colors[0], Color::BLACK);
+}
+
+#[test]
 fn later_classes_win() {
     let s = styled("p-4 p-2 bg-red-500 bg-blue-500");
     assert_eq!(s.layout.padding.top, taffy::LengthPercentage::length(8.0));
@@ -112,6 +272,25 @@ fn colors_and_opacity() {
     assert_eq!(s.view.borders.widths.to_array().map(|w| w.0), [1.0; 4]);
     assert_eq!(s.view.borders.colors[0], Color(0xff00_00ff));
     assert_eq!(s.view.opacity, 0.75);
+    // `border-none` is `border-style: none`: no border, in any order, and a
+    // later style shows it again.
+    for classes in [
+        "border-2 border-none",
+        "border-none border-2",
+        "border-hidden border-t-4",
+    ] {
+        let s = styled(classes);
+        assert!(!s.view.borders.is_visible(), "{classes}");
+        assert_eq!(s.layout.border.top, taffy::LengthPercentage::length(0.0));
+    }
+    let (env, states) = cx(0);
+    let (s, _) = styled_with(
+        "border border-none md:border-solid",
+        env,
+        (800.0, 844.0),
+        states,
+    );
+    assert_eq!(s.view.borders.widths.to_array().map(|w| w.0), [1.0; 4]);
     let s = styled("bg-[rgb(0_0_255)]/25 text-black/[0.5]");
     assert_eq!(s.view.background_color, Color(0x0000_ff40));
     assert_eq!(s.text.color, Some(Color(0x0000_0080)));
@@ -293,6 +472,42 @@ fn typography() {
             .unwrap()
             .has(crate::style::FontVariant::TABULAR_NUMS)
     );
+    // A unitless arbitrary line height is a multiple of the font size, as
+    // in CSS (`line-height: 1.5`); lengths are points.
+    let s = styled("text-base leading-[1.5]");
+    assert_eq!(s.text.line_height_multiple, Some(1.5));
+    assert_eq!(s.text.line_height, None);
+    let s = styled("text-sm/[1.25]");
+    assert_eq!(s.text.line_height_multiple, Some(1.25));
+    assert_eq!(
+        styled("leading-[150%]").text.line_height_multiple,
+        Some(1.5)
+    );
+    assert_eq!(styled("leading-[2em]").text.line_height_multiple, Some(2.0));
+    assert_eq!(styled("leading-[22px]").text.line_height, Some(px(22.0)));
+    assert_eq!(styled("leading-6").text.line_height, Some(px(24.0)));
+    // `leading-*` wins over a size's own line height whatever the order
+    // or the variant (`line-height: var(--tw-leading, ...)`).
+    let s = styled("leading-tight text-lg");
+    assert_eq!(s.text.font_size, Some(px(18.0)));
+    assert_eq!(s.text.line_height_multiple, Some(1.25));
+    let (env, states) = cx(0);
+    let (s, _) = styled_with("leading-tight md:text-lg", env, (800.0, 844.0), states);
+    assert_eq!(s.text.line_height_multiple, Some(1.25));
+    assert_eq!(
+        styled("text-lg").text.line_height_multiple,
+        Some(1.75 / 1.125)
+    );
+    // An explicit `/<line>` is the size utility's own line height.
+    assert_eq!(styled("text-lg/6").text.line_height, Some(px(24.0)));
+    // `normal-nums` resets `font-variant-numeric` only.
+    let s = styled("small-caps tabular-nums normal-nums");
+    assert_eq!(
+        s.text.font_variant,
+        Some(crate::style::FontVariant(
+            crate::style::FontVariant::SMALL_CAPS
+        ))
+    );
     let s = styled("text-sm/6 font-mono");
     assert_eq!(s.text.font_size, Some(px(14.0)));
     assert_eq!(s.text.line_height, Some(px(24.0)));
@@ -330,10 +545,32 @@ fn gradients() {
     let s = styled("bg-linear-to-r from-blue-500 via-purple-500 via-40% to-pink-500");
     let g = &s.view.effects.as_ref().unwrap().background_images[0];
     assert_eq!(g.kind, GradientKind::Linear { angle: deg(90.0) });
-    assert_eq!(g.stops.len(), 3);
+    // Tailwind's stops, and between them stops sampled in Oklab (Tailwind
+    // writes `in oklab`).
+    let blue = Color(0x2b7f_ffff);
+    let purple = Color(0xad46_ffff);
+    let pink = Color(0xf633_9aff);
+    let at = |stop: &crate::effects::ColorStop| match stop.position {
+        Some(DefiniteLength::Fraction(f)) => f.0,
+        _ => panic!("placed by fractions"),
+    };
+    assert!(g.stops.len() > 3);
+    assert_eq!((g.stops[0].color, at(&g.stops[0])), (blue, 0.0));
+    let via = g.stops.iter().position(|s| s.color == purple).unwrap();
+    assert!((at(&g.stops[via]) - 0.4).abs() < 1e-6);
+    let last = g.stops.last().unwrap();
+    assert_eq!((last.color, at(last)), (pink, 1.0));
+    assert!(g.stops.windows(2).all(|w| at(&w[0]) < at(&w[1])));
+    // Halfway from blue to purple, the Oklab mix (CSS's `color-mix(in
+    // oklab, ...)`), not the sRGB one.
+    let mid = g
+        .stops
+        .iter()
+        .find(|s| (at(s) - 0.2).abs() < 1e-6)
+        .expect("a stop halfway");
     assert_eq!(
-        g.stops[1].position,
-        Some(DefiniteLength::from(percentage(0.4)))
+        mid.color,
+        crate::css::color("color-mix(in oklab, #2b7fff, #ad46ff)").unwrap()
     );
     let s = styled("bg-linear-to-br from-red-500");
     let g = &s.view.effects.as_ref().unwrap().background_images[0];
@@ -348,6 +585,20 @@ fn gradients() {
     let s = styled("bg-[linear-gradient(45deg,red,blue)]");
     let g = &s.view.effects.as_ref().unwrap().background_images[0];
     assert_eq!(g.kind, GradientKind::Linear { angle: deg(45.0) });
+    assert_eq!(g.stops.len(), 2);
+    // At an arbitrary position Tailwind writes no `in oklab`: CSS's default,
+    // Oklab with the palette's (OKLCH) colors, sRGB with legacy ones.
+    let stops = |classes: &str| {
+        styled(classes).view.effects.unwrap().background_images[0]
+            .stops
+            .len()
+    };
+    assert!(stops("bg-linear-[25deg] from-red-500 to-blue-500") > 2);
+    assert_eq!(stops("bg-linear-[25deg] from-[#f00] to-[rgb(0_0_255)]"), 2);
+    assert!(stops("bg-linear-[25deg] from-[#f00] to-[oklch(60%_0.2_250)]") > 2);
+    assert!(stops("bg-linear-45 from-[#f00] to-[#00f]") > 2);
+    assert!(stops("bg-conic from-[#f00] to-[#00f]") > 2);
+    assert_eq!(stops("bg-conic-[90deg] from-[#f00] to-[#00f]"), 2);
     let s = styled("bg-[repeating-linear-gradient(90deg,red_0px,blue_10px)]");
     let g = &s.view.effects.as_ref().unwrap().background_images[0];
     assert!(g.repeating);
@@ -410,6 +661,57 @@ fn transforms() {
         .resolve_fractions(crate::geometry::size(px(100.0), px(40.0)));
     assert_eq!(t.ops()[0].kind, TransformKind::TranslateX);
     assert_eq!(t.ops()[0].value, -50.0);
+    let kinds = |classes: &str| {
+        styled(classes)
+            .view
+            .transform
+            .ops()
+            .iter()
+            .map(|op| (op.kind, op.value))
+            .collect::<Vec<_>>()
+    };
+    // `transform-none` is `transform: none`: the 3D rotations and the
+    // skews; `translate`, `rotate` and `scale` are properties of their own.
+    assert_eq!(
+        kinds("translate-x-2 rotate-12 scale-90 rotate-x-45 skew-x-6 transform-none"),
+        [
+            (TransformKind::TranslateX, 8.0),
+            (TransformKind::Rotate, 12.0),
+            (TransformKind::Scale, 0.9),
+        ]
+    );
+    assert_eq!(
+        kinds("translate-x-2 rotate-12 scale-90 rotate-x-45 translate-none scale-none rotate-none"),
+        [(TransformKind::RotateX, 45.0)]
+    );
+    // `rotate-z-*` is `rotateZ()` in `transform`, after `rotateX()` and
+    // `rotateY()`, and composes with `rotate-*` (CSS's `rotate`, applied
+    // after the transform).
+    assert_eq!(
+        kinds("rotate-z-30 rotate-x-45 rotate-12 scale-50"),
+        [
+            (TransformKind::Rotate, 12.0),
+            (TransformKind::Scale, 0.5),
+            (TransformKind::RotateX, 45.0),
+            (TransformKind::Rotate, 30.0),
+        ]
+    );
+    // `perspective-*` is CSS's `perspective`: its children's depth, no
+    // step of its own transform.
+    let s = styled("perspective-near rotate-x-45");
+    assert_eq!(s.perspective, Some(px(300.0)));
+    assert_eq!(
+        kinds("perspective-near rotate-x-45"),
+        [(TransformKind::RotateX, 45.0)]
+    );
+    // Every step Tailwind composes fits.
+    assert_eq!(
+        kinds(
+            "translate-x-1 translate-y-2 rotate-3 scale-x-50 scale-y-75 rotate-x-6 rotate-y-12 rotate-z-45 skew-x-1 skew-y-2"
+        )
+        .len(),
+        10
+    );
 }
 
 #[test]
@@ -430,9 +732,72 @@ fn effects_and_interaction() {
         vec![crate::effects::Filter::Blur(px(12.0))]
     );
     assert_eq!(s.view.blend_mode, BlendMode::Multiply);
+    // Every layer of a drop shadow is a `drop-shadow()` of the chain, after
+    // the other filters, as Tailwind's `--tw-drop-shadow`.
+    use crate::effects::Filter;
+    let filters = |classes| {
+        styled(classes)
+            .view
+            .effects
+            .map(|e| e.filters.clone())
+            .unwrap_or_default()
+    };
+    let drop = |y: f32, blur: f32, alpha: u32| Filter::DropShadow {
+        offset_x: px(0.0),
+        offset_y: px(y),
+        blur: px(blur),
+        color: Color(alpha),
+    };
+    assert_eq!(
+        filters("drop-shadow blur-sm"),
+        vec![
+            Filter::Blur(px(8.0)),
+            drop(1.0, 2.0, 0x1a),
+            drop(1.0, 1.0, 0x0f)
+        ]
+    );
+    assert_eq!(filters("drop-shadow-md").len(), 1);
+    assert_eq!(
+        filters("drop-shadow-[0_1px_1px_#000,0_2px_4px_#f00]").len(),
+        2
+    );
+    assert!(filters("drop-shadow drop-shadow-none").is_empty());
     assert_eq!(s.view.outline.width, px(2.0));
     assert_eq!(s.view.outline.offset, px(2.0));
     assert!(s.view.hidden);
+    // `outline-<n>` is `outline-style: var(--tw-outline-style)`: solid
+    // unless a style utility is anywhere in the string.
+    use crate::style::BorderStyle;
+    let outline = |classes| {
+        let o = styled(classes).view.outline;
+        (o.style, o.width)
+    };
+    assert_eq!(outline("outline-2"), (BorderStyle::Solid, px(2.0)));
+    assert_eq!(outline("outline"), (BorderStyle::Solid, px(1.0)));
+    assert_eq!(
+        outline("outline-dashed outline-2"),
+        (BorderStyle::Dashed, px(2.0))
+    );
+    assert_eq!(
+        outline("outline-2 outline-dotted"),
+        (BorderStyle::Dotted, px(2.0))
+    );
+    assert_eq!(outline("outline-none outline-2").1, px(0.0));
+    assert_eq!(outline("outline-2 outline-hidden").1, px(0.0));
+    // A style alone is CSS's initial `medium` width.
+    assert_eq!(outline("outline-dashed"), (BorderStyle::Dashed, px(3.0)));
+    assert_eq!(outline("outline-solid"), (BorderStyle::Solid, px(3.0)));
+    let (env, states) = cx(state::FOCUSED);
+    let (focused, _) = styled_with(
+        "outline-2 focus:outline-dashed",
+        env,
+        (390.0, 844.0),
+        states,
+    );
+    assert_eq!(
+        (focused.view.outline.style, focused.view.outline.width),
+        (BorderStyle::Dashed, px(2.0))
+    );
     assert_eq!(s.view.cursor, Cursor::Pointer);
 }
 
@@ -501,7 +866,14 @@ fn display() {
     // Block formatting contexts use Taffy's block layout.
     assert_eq!(styled("block").layout.display, taffy::Display::Block);
     assert_eq!(styled("flow-root").layout.display, taffy::Display::Block);
-    assert_eq!(styled("inline-block").layout.display, taffy::Display::Flex);
+    // Inline boxes in a flex or grid parent are blockified, as a browser
+    // computes them (`display: inline-block` -> `block`).
+    assert_eq!(styled("inline-block").layout.display, taffy::Display::Block);
+    assert_eq!(styled("inline").layout.display, taffy::Display::Block);
+    assert_eq!(
+        wide("hidden md:inline-block").layout.display,
+        taffy::Display::Block
+    );
 }
 
 #[test]
@@ -794,6 +1166,16 @@ fn groups() {
     };
     child.apply(&context, &theme, &mut style, &mut props, |_| {});
     assert_eq!(style.view.opacity, 0.5);
+    // Tailwind registers `group-*` before `first:` ... `even:`, so the
+    // structural variants win over it whatever the order in the string
+    // (`.group:hover .x` comes before `.y:last-child` in the CSS).
+    let child = parse(&theme, "last:opacity-25 group-hover/card:opacity-50");
+    let context = Context {
+        position: position::LAST,
+        ..context
+    };
+    child.apply(&context, &theme, &mut style, &mut props, |_| {});
+    assert_eq!(style.view.opacity, 0.25);
 }
 
 #[test]
@@ -805,9 +1187,65 @@ fn unknown_classes_are_reported() {
 }
 
 #[test]
+fn classes_without_a_native_meaning_are_unknown() {
+    let theme = themed();
+    let unknown = |classes: &str| -> Vec<String> {
+        parse(&theme, classes)
+            .unknown()
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    };
+    let all_unknown = |classes: &str| {
+        assert_eq!(
+            unknown(classes),
+            classes.split_whitespace().collect::<Vec<_>>(),
+            "{classes}"
+        );
+    };
+    // What Tailwind CSS generates that NSH cannot do: unknown, never a
+    // different meaning.
+    all_unknown(
+        "sticky transform-3d order-1 order-first -order-2 order-[3] select-all border-double outline-double",
+    );
+    all_unknown("w-fit h-min size-max min-w-fit min-h-max max-w-min max-h-fit w-max");
+    all_unknown(
+        "snap-x snap-center scroll-smooth scroll-mt-4 scroll-px-2 overscroll-none touch-none isolate box-content md:snap-x scroll-anything",
+    );
+    // What Tailwind CSS generates nothing for.
+    all_unknown(
+        "-gap-4 -gap-x-2 -space-x-1/2 -w-4 -h-2 -size-4 -min-w-0 -max-w-sm -basis-4 -flex-1 -grow -opacity-50 -text-lg -text-red-500 -bg-red-500 -rounded-lg -border-2 -blur-sm -p-4 -px-2 -leading-6 -shadow-md -ring-2 -from-red-500 -perspective-near -duration-100",
+    );
+    all_unknown(
+        "p-1/2 p-full px-1/3 m-full m-1/2 -m-full mt-1/4 gap-1/2 gap-full gap-x-full space-y-1/2",
+    );
+    all_unknown("z-1.5 z-[1.5] -z-auto inset-shadow");
+    // What stays: rendering hints, negatives and fractions Tailwind has.
+    assert_eq!(
+        unknown(
+            "antialiased subpixel-antialiased box-border isolation-auto appearance-none appearance-auto will-change-transform will-change-[opacity] md:antialiased"
+        ),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        unknown(
+            "-mt-2 -mx-px -m-4 -top-1/2 -inset-x-4 -start-2 -z-10 z-[100] -z-[5] -translate-x-1/2 -rotate-6 -rotate-x-12 -scale-x-100 -skew-y-3 -tracking-wide -underline-offset-2 -outline-offset-2 -hue-rotate-30 -backdrop-hue-rotate-15 -bg-linear-45 -bg-conic-90 -col-start-2 -row-end-1 -space-y-2 w-1/2 inset-full basis-1/3 translate-full"
+        ),
+        Vec::<String>::new()
+    );
+    assert_eq!(styled("-z-10").z_index, -10);
+    assert_eq!(styled("z-[100]").z_index, 100);
+    // A theme of the app's own may give the bare form a value, as a
+    // `--inset-shadow` in Tailwind's `@theme` does.
+    let theme =
+        Theme::from_json(r#"{"insetShadow": {"": "inset 0 1px 2px rgb(0 0 0 / 0.1)"}}"#).unwrap();
+    assert!(parse(&theme, "inset-shadow").unknown().is_empty());
+}
+
+#[test]
 fn placeholder_and_props() {
     let (_, props) = styled_with(
-        "placeholder:text-zinc-400 selection:text-blue-500 caret-blue-500 line-clamp-2 pointer-events-none object-contain select-none",
+        "placeholder:text-zinc-400 selection:bg-blue-500 caret-blue-500 line-clamp-2 pointer-events-none object-contain select-none",
         ClassEnvironment::default(),
         (390.0, 844.0),
         0,
@@ -822,6 +1260,35 @@ fn placeholder_and_props() {
     );
     assert_eq!(props.resize_mode, Some(crate::ops::ResizeMode::Contain));
     assert_eq!(props.selectable, Some(false));
+    // CSS's `object-fit: none` (natural size) and `scale-down`.
+    let resize = |c| {
+        styled_with(c, ClassEnvironment::default(), (390.0, 844.0), 0)
+            .1
+            .resize_mode
+    };
+    assert_eq!(resize("object-none"), Some(crate::ops::ResizeMode::Center));
+    assert_eq!(
+        resize("object-scale-down"),
+        Some(crate::ops::ResizeMode::ScaleDown)
+    );
+    // `::selection`'s background is the highlight; the color of the
+    // selected glyphs and the other properties of the pseudo-elements
+    // have no native counterpart.
+    let theme = themed();
+    let list = parse(
+        &theme,
+        "selection:text-blue-500 placeholder:italic placeholder:bg-red-500 selection:opacity-50 placeholder:text-muted-foreground selection:bg-primary",
+    );
+    let unknown: Vec<&str> = list.unknown().iter().map(|s| &**s).collect();
+    assert_eq!(
+        unknown,
+        [
+            "selection:text-blue-500",
+            "placeholder:italic",
+            "placeholder:bg-red-500",
+            "selection:opacity-50"
+        ]
+    );
 }
 
 #[test]

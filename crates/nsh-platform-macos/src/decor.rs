@@ -238,8 +238,8 @@ impl Decor {
     }
 
     /// Sets the image layers' gravity and scale for the resize mode: a
-    /// centered image shows at its natural size unless it is larger than
-    /// the view (then it is shrunk to fit, as React Native does).
+    /// centered image shows at its natural size; a `scale-down` one too,
+    /// unless it is larger than the view (then it is shrunk to fit).
     fn fit_contents(&self) {
         let Some(layer) = &self.image else { return };
         let bounds = layer.bounds().size;
@@ -253,8 +253,9 @@ impl Decor {
                 ResizeMode::Cover => kCAGravityResizeAspectFill,
                 ResizeMode::Contain => kCAGravityResizeAspect,
                 ResizeMode::Stretch => kCAGravityResize,
-                ResizeMode::Center if center_fits => kCAGravityCenter,
-                ResizeMode::Center => kCAGravityResizeAspect,
+                ResizeMode::Center => kCAGravityCenter,
+                ResizeMode::ScaleDown if center_fits => kCAGravityCenter,
+                ResizeMode::ScaleDown => kCAGravityResizeAspect,
             }
         };
         // Pixels per point of the decoded image at its natural size: what

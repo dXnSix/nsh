@@ -1454,8 +1454,10 @@ fn fit(mode: ResizeMode, natural: (f32, f32), bounds: (f32, f32)) -> (f32, f32, 
     let scale = match mode {
         ResizeMode::Cover => (bw / nw).max(bh / nh),
         ResizeMode::Contain => contain,
+        // Natural size (cropped where larger, as the view clips).
+        ResizeMode::Center => 1.0,
         // Natural size, shrunk to fit when larger.
-        ResizeMode::Center => contain.min(1.0),
+        ResizeMode::ScaleDown => contain.min(1.0),
         ResizeMode::Stretch => 1.0,
     };
     let (w, h) = (nw * scale, nh * scale);
@@ -1954,11 +1956,12 @@ mod tests {
         assert_eq!(fit(ResizeMode::Cover, n, b), (-50.0, 0.0, 200.0, 100.0));
         assert_eq!(fit(ResizeMode::Contain, n, b), (0.0, 25.0, 100.0, 50.0));
         assert_eq!(fit(ResizeMode::Stretch, n, b), (0.0, 0.0, 100.0, 100.0));
-        assert_eq!(fit(ResizeMode::Center, n, b), (0.0, 25.0, 100.0, 50.0));
-        assert_eq!(
-            fit(ResizeMode::Center, n, (400.0, 400.0)),
-            (100.0, 150.0, 200.0, 100.0)
-        );
+        // CSS's `object-fit: none` and `scale-down`.
+        assert_eq!(fit(ResizeMode::Center, n, b), (-50.0, 0.0, 200.0, 100.0));
+        assert_eq!(fit(ResizeMode::ScaleDown, n, b), (0.0, 25.0, 100.0, 50.0));
+        for mode in [ResizeMode::Center, ResizeMode::ScaleDown] {
+            assert_eq!(fit(mode, n, (400.0, 400.0)), (100.0, 150.0, 200.0, 100.0));
+        }
     }
 
     #[test]
