@@ -512,6 +512,39 @@ fn effects_and_interaction() {
     assert_eq!(s.view.outline.width, px(2.0));
     assert_eq!(s.view.outline.offset, px(2.0));
     assert!(s.view.hidden);
+    // `outline-<n>` is `outline-style: var(--tw-outline-style)`: solid
+    // unless a style utility is anywhere in the string.
+    use crate::style::BorderStyle;
+    let outline = |classes| {
+        let o = styled(classes).view.outline;
+        (o.style, o.width)
+    };
+    assert_eq!(outline("outline-2"), (BorderStyle::Solid, px(2.0)));
+    assert_eq!(outline("outline"), (BorderStyle::Solid, px(1.0)));
+    assert_eq!(
+        outline("outline-dashed outline-2"),
+        (BorderStyle::Dashed, px(2.0))
+    );
+    assert_eq!(
+        outline("outline-2 outline-dotted"),
+        (BorderStyle::Dotted, px(2.0))
+    );
+    assert_eq!(outline("outline-none outline-2").1, px(0.0));
+    assert_eq!(outline("outline-2 outline-hidden").1, px(0.0));
+    // A style alone is CSS's initial `medium` width.
+    assert_eq!(outline("outline-dashed"), (BorderStyle::Dashed, px(3.0)));
+    assert_eq!(outline("outline-solid"), (BorderStyle::Solid, px(3.0)));
+    let (env, states) = cx(state::FOCUSED);
+    let (focused, _) = styled_with(
+        "outline-2 focus:outline-dashed",
+        env,
+        (390.0, 844.0),
+        states,
+    );
+    assert_eq!(
+        (focused.view.outline.style, focused.view.outline.width),
+        (BorderStyle::Dashed, px(2.0))
+    );
     assert_eq!(s.view.cursor, Cursor::Pointer);
 }
 

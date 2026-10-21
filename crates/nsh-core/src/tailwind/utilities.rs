@@ -1144,9 +1144,10 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         "border-dashed" => sets(K::BorderStyle, "dashed"),
         "border-dotted" => sets(K::BorderStyle, "dotted"),
         "border-none" | "border-hidden" => setn(K::BorderWidth, 0.0),
-        "outline-solid" | "outline-double" => sets(K::OutlineStyle, "solid"),
-        "outline-dashed" => sets(K::OutlineStyle, "dashed"),
-        "outline-dotted" => sets(K::OutlineStyle, "dotted"),
+        // A style without a width: CSS's initial `medium` width (3px).
+        "outline-solid" | "outline-double" => return outline_style("solid"),
+        "outline-dashed" => return outline_style("dashed"),
+        "outline-dotted" => return outline_style("dotted"),
         "outline-none" | "outline-hidden" => sets(K::OutlineStyle, "none"),
         "ring-inset" => Decl::Part(Part::RingInset),
         // Effects.
@@ -1204,6 +1205,24 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         _ => return None,
     };
     Some(vec![d])
+}
+
+/// `outline-<style>`: the style, and a medium width unless a width
+/// utility sets one.
+fn outline_style(style: &str) -> Option<Vec<Decl>> {
+    Some(vec![
+        sets(K::OutlineStyle, style),
+        Decl::Default(K::OutlineWidth, PatchValue::Number(3.0)),
+    ])
+}
+
+/// `outline-<width>`: the width, solid unless a style utility says
+/// otherwise wherever it is (`outline-style: var(--tw-outline-style)`).
+fn outline_width(width: f32) -> Vec<Decl> {
+    vec![
+        setn(K::OutlineWidth, width),
+        Decl::Default(K::OutlineStyle, PatchValue::Str("solid".into())),
+    ]
 }
 
 fn filter(backdrop: bool, slot: u8, f: Filter) -> Decl {
@@ -1655,18 +1674,12 @@ static PREFIXES: &[(&str, Handler)] = &[
     }),
     ("outline", |t, v, _| {
         if let Some(n) = num(v) {
-            return Some(vec![
-                setn(K::OutlineWidth, n),
-                sets(K::OutlineStyle, "solid"),
-            ]);
+            return Some(outline_width(n));
         }
         if let Some(c) = color(t, v) {
             return one(set(K::OutlineColor, color_str(c)));
         }
-        Some(vec![
-            setn(K::OutlineWidth, points(t, v)?),
-            sets(K::OutlineStyle, "solid"),
-        ])
+        Some(outline_width(points(t, v)?))
     }),
     ("inset-ring", |t, v, _| {
         if let Some(n) = num(v).or_else(|| arbitrary(v).and_then(|a| css::length(&a))) {
@@ -1937,7 +1950,7 @@ fn bare(theme: &Theme, u: &str, neg: bool) -> Option<Vec<Decl>> {
         "border-l" => vec![setn(K::BorderLeftWidth, 1.0)],
         "border-s" => vec![setn(K::BorderStartWidth, 1.0)],
         "border-e" => vec![setn(K::BorderEndWidth, 1.0)],
-        "outline" => vec![setn(K::OutlineWidth, 1.0), sets(K::OutlineStyle, "solid")],
+        "outline" => outline_width(1.0),
         "rounded" => return radius(theme, "sm", &[K::BorderRadius]),
         "rounded-t" | "rounded-r" | "rounded-b" | "rounded-l" | "rounded-tl" | "rounded-tr"
         | "rounded-br" | "rounded-bl" | "rounded-s" | "rounded-e" | "rounded-ss" | "rounded-se"

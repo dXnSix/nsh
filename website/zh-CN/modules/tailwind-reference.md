@@ -319,9 +319,9 @@ view()
 | `rounded`、`rounded-<size>`、`rounded-none`、`rounded-full`、`rounded-[<length>]` | `borderRadius`（不带值为 `sm`） |
 | `rounded-t-`、`-r-`、`-b-`、`-l-`、`-tl-`、`-tr-`、`-br-`、`-bl-` | 对应的角 |
 | `rounded-s-`、`-e-`、`-ss-`、`-se-`、`-es-`、`-ee-` | 起始 / 结束侧的角（随书写方向） |
-| `outline`、`outline-<n>`、`outline-[<length>]` | `outlineWidth` 及实线 `outlineStyle`（不带值为 1） |
+| `outline`、`outline-<n>`、`outline-[<length>]` | `outlineWidth`（不带值为 1），字符串中任何位置有样式类时用该样式，否则为实线（`outline-dashed outline-2` 是虚线，`outline-none outline-2` 不绘制） |
 | `outline-<color>` | `outlineColor` |
-| `outline-solid`、`outline-dashed`、`outline-dotted`、`outline-none`、`outline-hidden` | `outlineStyle` |
+| `outline-solid`、`outline-dashed`、`outline-dotted`、`outline-none`、`outline-hidden` | `outlineStyle`；只有样式类时宽度为 CSS 的 medium，即 3 点 |
 | `outline-offset-<n>`、`outline-offset-[<length>]` | `outlineOffset` |
 
 圆角尺寸（点）：`xs` 2、`sm` 4、`md` 6、`lg` 8、`xl` 12、`2xl` 16、`3xl` 24、`4xl` 32、`full` 9999。

@@ -384,6 +384,11 @@ pub(crate) enum Declaration {
     Number(StyleKey, Bits),
     Length(StyleKey, Length),
     Keyword(StyleKey, &'static str),
+    /// What a declaration implies for another property, which any
+    /// declaration of that property overrides wherever it is (an outline
+    /// width's solid style).
+    DefaultKeyword(StyleKey, &'static str),
+    DefaultNumber(StyleKey, Bits),
     Str(StyleKey, SharedString),
     Color(StyleKey, AdaptiveColor),
     /// Tailwind's `text-*` size and line height.
@@ -477,6 +482,12 @@ impl Declaration {
             Declaration::Number(key, n) => out.push(Decl::Set(*key, PatchValue::Number(n.0))),
             Declaration::Length(key, l) => out.push(Decl::Set(*key, length_patch(*l))),
             Declaration::Keyword(key, k) => out.push(Decl::Set(*key, PatchValue::Str((*k).into()))),
+            Declaration::DefaultKeyword(key, k) => {
+                out.push(Decl::Default(*key, PatchValue::Str((*k).into())))
+            }
+            Declaration::DefaultNumber(key, n) => {
+                out.push(Decl::Default(*key, PatchValue::Number(n.0)))
+            }
             Declaration::Str(key, s) => {
                 out.push(Decl::Set(*key, PatchValue::Str(s.as_str().into())))
             }
@@ -1812,10 +1823,11 @@ pub trait Styled: Sized {
     }
 
     /// An outline `width` wide, outside the border; it takes no space.
+    /// Solid unless a style method says otherwise, before or after it.
     fn outline(mut self, width: impl Into<AbsoluteLength>) -> Self {
         let s = self.style();
         s.number(StyleKey::OutlineWidth, points(width.into()));
-        s.keyword(StyleKey::OutlineStyle, "solid");
+        s.push(Declaration::DefaultKeyword(StyleKey::OutlineStyle, "solid"));
         self
     }
 
@@ -1836,15 +1848,27 @@ pub trait Styled: Sized {
         self
     }
 
-    /// A dashed outline.
+    /// A dashed outline (3 points wide unless [`Styled::outline`] sets a
+    /// width, as CSS's `medium`).
     fn outline_dashed(mut self) -> Self {
-        self.style().keyword(StyleKey::OutlineStyle, "dashed");
+        let s = self.style();
+        s.keyword(StyleKey::OutlineStyle, "dashed");
+        s.push(Declaration::DefaultNumber(
+            StyleKey::OutlineWidth,
+            Bits(3.0),
+        ));
         self
     }
 
-    /// A dotted outline.
+    /// A dotted outline (3 points wide unless [`Styled::outline`] sets a
+    /// width).
     fn outline_dotted(mut self) -> Self {
-        self.style().keyword(StyleKey::OutlineStyle, "dotted");
+        let s = self.style();
+        s.keyword(StyleKey::OutlineStyle, "dotted");
+        s.push(Declaration::DefaultNumber(
+            StyleKey::OutlineWidth,
+            Bits(3.0),
+        ));
         self
     }
 
@@ -3387,6 +3411,11 @@ mod tests {
                 .outline_color(PINK.shade(500)),
             "outline-2 outline-offset-2 outline-dashed outline-pink-500",
         );
+        same(
+            s().outline_dotted().outline(px(2.0)),
+            "outline-dotted outline-2",
+        );
+        same(s().outline_dashed(), "outline-dashed");
         let curved = s().border_curve(BorderCurve::Continuous).lower();
         let mut style = Style::default();
         let _ = style.set_key(StyleKey::BorderCurve, crate::StyleValue::Str("continuous"));

@@ -319,9 +319,9 @@ view()
 | `rounded`, `rounded-<size>`, `rounded-none`, `rounded-full`, `rounded-[<length>]` | `borderRadius` (bare: `sm`) |
 | `rounded-t-`, `-r-`, `-b-`, `-l-`, `-tl-`, `-tr-`, `-br-`, `-bl-` | the matching corners |
 | `rounded-s-`, `-e-`, `-ss-`, `-se-`, `-es-`, `-ee-` | start / end corners (direction-aware) |
-| `outline`, `outline-<n>`, `outline-[<length>]` | `outlineWidth` and a solid `outlineStyle` (bare: 1) |
+| `outline`, `outline-<n>`, `outline-[<length>]` | `outlineWidth` (bare: 1), solid unless a style class is anywhere in the string (`outline-dashed outline-2` is dashed, `outline-none outline-2` draws nothing) |
 | `outline-<color>` | `outlineColor` |
-| `outline-solid`, `outline-dashed`, `outline-dotted`, `outline-none`, `outline-hidden` | `outlineStyle` |
+| `outline-solid`, `outline-dashed`, `outline-dotted`, `outline-none`, `outline-hidden` | `outlineStyle`; a style alone is CSS's medium width, 3 points |
 | `outline-offset-<n>`, `outline-offset-[<length>]` | `outlineOffset` |
 
 Radius sizes (points): `xs` 2, `sm` 4, `md` 6, `lg` 8, `xl` 12, `2xl` 16, `3xl` 24, `4xl` 32, `full` 9999.
