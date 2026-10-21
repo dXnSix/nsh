@@ -9,6 +9,8 @@
 //! manifest.webmanifest             name, icons, colors (installing it as an app)
 //! nsh.<digest>.js                  the DOM runtime
 //! nsh.<digest>.wasm                the engine, the core, the components and QuickJS
+//! nsh-bindgen.<digest>.js          wasm-bindgen's glue, for crates that call JS (`crate::bindgen`)
+//! snippets.<digest>/<crate>-<hash>/ the JS snippets the glue imports, under their own paths
 //! app.<digest>.nshc                the app's bundle, compiled to QuickJS bytecode
 //! harden.<digest>.nshc             the sandbox's hardening, compiled likewise
 //! chunks/<name>.<digest>.nshc      what `import()` loads, fetched when first imported
@@ -109,26 +111,13 @@ pub(crate) fn package(
         "nsh.wasm",
         &fs::read(&runtime.wasm).with_context(|| format!("read {}", runtime.wasm.display()))?,
     )?;
-    // The wasm-bindgen glue of a runtime whose crates use wasm-bindgen
-    // (`crate::bindgen`), named by its content as the runtime is.
-    let glue = match &runtime.glue {
-        Some(path) => {
-            let glue =
-                fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-            // Its snippets first, under their content's names, which the
-            // glue then imports.
-            let mut published = Vec::new();
-            for (name, file) in crate::bindgen::snippets(path)? {
-                let bytes = fs::read(&file).with_context(|| format!("read {}", file.display()))?;
-                published.push((name.clone(), site.add(&name, &bytes)?));
-            }
-            let glue = crate::bindgen::link_snippets(&glue, &published);
-            let glue = nsh_bundler::minify_module(crate::bindgen::GLUE, &glue)
-                .map_err(anyhow::Error::msg)?;
-            Some(site.add(crate::bindgen::GLUE, glue.as_bytes())?)
-        }
-        None => None,
-    };
+    // The wasm-bindgen glue of a runtime whose crates call JS through
+    // wasm-bindgen (`crate::bindgen`).
+    let glue = runtime
+        .glue
+        .as_deref()
+        .map(|path| publish_glue(&site, path))
+        .transpose()?;
     // A Rust app has no code of its own besides its runtime (no QuickJS):
     // the page mounts its root.
     let (code, harden) = if built.rust_root {
@@ -230,6 +219,40 @@ fn serve(dir: &Path) -> anyhow::Result<()> {
         std::thread::sleep(Duration::from_millis(200));
     }
     Ok(())
+}
+
+/// Adds the wasm-bindgen glue `path` (`crate::bindgen`) to `site`, named by
+/// its content as the runtime is, and returns its URL. The snippets it
+/// imports go under one directory named by all of them and their paths
+/// (`snippets.<digest>/`), where they keep the paths they have under
+/// `snippets/`: their imports of one another resolve as in development.
+fn publish_glue(site: &Site, path: &Path) -> anyhow::Result<String> {
+    let glue = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let mut snippets = Vec::new();
+    for (name, file) in crate::bindgen::snippets(path)? {
+        let bytes = fs::read(&file).with_context(|| format!("read {}", file.display()))?;
+        snippets.push((name, bytes));
+    }
+    let glue = if snippets.is_empty() {
+        glue
+    } else {
+        let mut all = Vec::new();
+        for (name, bytes) in &snippets {
+            all.extend(name.as_bytes());
+            all.push(0);
+            all.extend((bytes.len() as u64).to_le_bytes());
+            all.extend(bytes);
+        }
+        let dir = format!("snippets.{}", digest(&all));
+        for (name, bytes) in &snippets {
+            let name = name.strip_prefix("snippets/").unwrap_or(name);
+            site.write(&format!("{dir}/{name}"), bytes)?;
+        }
+        crate::bindgen::link_snippets(&glue, &dir)
+    };
+    let glue =
+        nsh_bundler::minify_module(crate::bindgen::GLUE, &glue).map_err(anyhow::Error::msg)?;
+    site.add(crate::bindgen::GLUE, glue.as_bytes())
 }
 
 /// The first [`DIGEST_LEN`] hex digits of the SHA-256 of `bytes`.
@@ -349,12 +372,18 @@ impl Site {
     /// ([`hashed_name`]); returns its URL relative to the page.
     fn add(&self, path: &str, bytes: &[u8]) -> anyhow::Result<String> {
         let name = hashed_name(path, bytes);
-        let file = self.dir.join(&name);
+        self.write(&name, bytes)?;
+        Ok(url_path(&name))
+    }
+
+    /// Writes `bytes` as `path`, a name that changes with them already (in
+    /// a directory named by its content).
+    fn write(&self, path: &str, bytes: &[u8]) -> anyhow::Result<()> {
+        let file = self.dir.join(path);
         if let Some(parent) = file.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&file, bytes).with_context(|| format!("write {}", file.display()))?;
-        Ok(url_path(&name))
+        fs::write(&file, bytes).with_context(|| format!("write {}", file.display()))
     }
 }
 
@@ -620,17 +649,22 @@ fn page(parts: &PageParts<'_>) -> String {
     if let Some(glue) = parts.glue {
         let _ = writeln!(head, "<link rel=\"modulepreload\" href=\"{glue}\">");
     }
-    // The script asks for these only once the runtime has loaded.
-    for url in [parts.wasm, parts.code, parts.harden]
+    // Requested while the page is parsed, before the runtime has loaded, and
+    // once: the page's script takes these responses (`fetches`) and reports
+    // their errors (the empty `catch` only keeps a failure that happens
+    // before then from being logged as unhandled). Not `<link rel=preload>`:
+    // WebKit does not hand a preload still in flight to the `fetch` of the
+    // same URL, which downloads the file again.
+    let urls: Vec<&str> = [parts.wasm, parts.code, parts.harden]
         .into_iter()
         .filter(|url| !url.is_empty())
         .chain(parts.fonts.iter().map(String::as_str))
-    {
-        let _ = writeln!(
-            head,
-            "<link rel=\"preload\" href=\"{url}\" as=\"fetch\" crossorigin>"
-        );
-    }
+        .collect();
+    let urls = serde_json::json!(urls).to_string().replace("</", "<\\/");
+    let _ = writeln!(
+        head,
+        "<script>const fetches = new Map({urls}.map((url) => {{ const response = fetch(url); response.catch(() => {{}}); return [url, response]; }}));</script>"
+    );
     // JSON in a script: `</script>` in a string must not end it.
     let app = parts.app.to_string().replace("</", "<\\/");
     // The page's colors until the app draws (and on its error screen).
@@ -792,6 +826,76 @@ mod tests {
     }
 
     #[test]
+    fn wasm_bindgen_snippets_are_published_under_one_directory_named_by_them() {
+        let dir = std::env::temp_dir().join(format!("nsh-web-snippets-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let glue = dir.join("runtime/nsh-bindgen.js");
+        let snippets = crate::bindgen::output_dir(&glue).join("snippets/app-1");
+        fs::create_dir_all(snippets.join("js")).unwrap();
+        fs::write(
+            &glue,
+            "import { twice } from './snippets/app-1/inline0.js';\n\
+             export function __nsh_imports() { return { twice }; }\n",
+        )
+        .unwrap();
+        // A snippet that imports another one, as in development.
+        fs::write(
+            snippets.join("inline0.js"),
+            "import { shout } from './js/shout.js';\n\
+             export function twice(s) { return shout(s + s); }\n",
+        )
+        .unwrap();
+        fs::write(
+            snippets.join("js/shout.js"),
+            "export function shout(s) { return s.toUpperCase(); }\n",
+        )
+        .unwrap();
+        let publish = |name: &str| {
+            let site = Site::new(&dir.join(name)).unwrap();
+            let url = publish_glue(&site, &glue).unwrap();
+            let published = fs::read_to_string(site.dir.join(&url)).unwrap();
+            let snippets = fs::read_dir(&site.dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| name.starts_with("snippets."))
+                .collect::<Vec<_>>();
+            (site.dir.clone(), url, published, snippets)
+        };
+        let (site, url, published, found) = publish("one");
+        assert!(
+            url.starts_with("nsh-bindgen.") && url.ends_with(".js"),
+            "{url}"
+        );
+        let [snippets] = found.as_slice() else {
+            panic!("one directory of snippets: {found:?}");
+        };
+        assert_eq!(snippets.len(), "snippets.".len() + DIGEST_LEN);
+        assert!(
+            published.contains(&format!("./{snippets}/app-1/inline0.js")),
+            "{published}"
+        );
+        // The snippets keep their paths and their imports of one another.
+        let inline = fs::read_to_string(site.join(snippets).join("app-1/inline0.js")).unwrap();
+        assert!(inline.contains("from './js/shout.js'"), "{inline}");
+        assert!(site.join(snippets).join("app-1/js/shout.js").exists());
+        // Another snippet is another directory, and another glue.
+        fs::write(
+            crate::bindgen::output_dir(&glue).join("snippets/app-1/js/shout.js"),
+            "export function shout(s) { return s.toLowerCase(); }\n",
+        )
+        .unwrap();
+        let (_, other_url, _, other) = publish("two");
+        assert_ne!(other, found);
+        assert_ne!(other_url, url);
+        // Without snippets, only the glue.
+        fs::remove_dir_all(crate::bindgen::output_dir(&glue)).unwrap();
+        let (_, _, plain, none) = publish("three");
+        assert!(none.is_empty(), "{none:?}");
+        assert!(plain.contains("./snippets/app-1/inline0.js"), "{plain}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn wasm_bindgen_glue_is_preloaded_by_the_package_page() {
         let icons = Icons::default();
         let app = serde_json::Value::Null;
@@ -844,8 +948,20 @@ mod tests {
         });
         assert!(html.contains("<title>A &lt;b&gt; &amp; &quot;c&quot;</title>"));
         assert!(html.contains("from \"./nsh.0123456789.js\""));
-        assert!(html.contains("<link rel=\"preload\" href=\"assets/f.1.ttf\""));
-        assert!(html.contains("<link rel=\"preload\" href=\"harden.2.nshc\""));
+        let fetches = html
+            .lines()
+            .find(|line| line.starts_with("<script>const fetches = "))
+            .unwrap_or_default();
+        for url in [
+            "nsh.0123456789.wasm",
+            "app.1.nshc",
+            "harden.2.nshc",
+            "assets/f.1.ttf",
+        ] {
+            assert!(fetches.contains(&format!("\"{url}\"")), "{fetches}");
+        }
+        assert!(html.contains("wasm: take(app.wasm)"));
+        assert!(!html.contains("rel=\"preload\""));
         assert!(html.contains("media=\"(prefers-color-scheme: dark)\""));
         assert!(!html.contains("</script><b>"));
         assert!(!html.contains("{{"), "{html}");

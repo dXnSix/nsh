@@ -23,8 +23,8 @@ pub struct ImageAsset {
     /// The pixel densities it ships in, 1 being the file itself:
     /// `asset!("logo.png")` with `logo@2x.png` and `logo@3x.png` next to it
     /// gives `[1.0, 2.0, 3.0]`, and images load the one for the screen's
-    /// pixel ratio ([`crate::ImageSource::uri_for`]). Empty when the file
-    /// is the only one (or its name has a density suffix).
+    /// pixel ratio. Empty when the file is the only one (or its name has a
+    /// density suffix).
     pub scales: &'static [f32],
 }
 
@@ -104,7 +104,7 @@ impl From<ImageAsset> for ImageSrc {
         Self {
             uri: asset.uri.into(),
             size: Some((asset.size.width.0, asset.size.height.0)),
-            scales: crate::ImageScales::from_scales(asset.scales.iter().copied()),
+            scales: asset.scales.iter().copied().collect(),
         }
     }
 }

@@ -253,6 +253,10 @@ impl Nsh {
     }
 }
 
+/// `nsh-base`'s features the hosts and runners name: they show TextView's
+/// code blocks highlighted, whatever `nsh-base`'s defaults are.
+const HIGHLIGHT: &str = ", features = [\"highlight\"]";
+
 /// The checkout of nsh the crate directory `path` is in: the nearest
 /// directory above it with `crates/nsh-core` (GPUI's crates are in
 /// `crates/gpui`, a level deeper).
@@ -968,15 +972,25 @@ opt-level = 3
                 self.android_lib(false),
                 src("nsh-core"),
                 src("nsh-platform-android"),
-                src("nsh-base"),
+                self.nsh.dep("nsh-base", HIGHLIGHT),
             ),
         )?;
+        let android = "#[cfg(target_os = \"android\")]\n";
+        // A Rust app's root, which the development library runs when a
+        // test session says so (`nsh test --target android`).
+        let root = match &self.root {
+            Some(root) => format!(
+                "{android}nsh::root!(app_root());\n{}",
+                self.root_fn(android, root)
+            ),
+            None => String::new(),
+        };
         write(
             &ws.join("android/lib.rs"),
             &format!(
                 "//! The app's `libnsh.so`: the Android runtime with `nsh/base` and the\n//! app's Rust components.\n\n\
-                 #[cfg(target_os = \"android\")]\nnsh::ui_sets!({sets});\n{}",
-                self.app_sets("#[cfg(target_os = \"android\")]\n")
+                 {android}nsh::ui_sets!({sets});\n{root}{}",
+                self.app_sets(android)
             ),
         )?;
         Ok(())
@@ -1075,7 +1089,7 @@ opt-level = 3
                 self.bin("rust-android"),
                 self.android_lib(true),
                 self.nsh.dep("nsh-core", ""),
-                self.nsh.dep("nsh-base", ""),
+                self.nsh.dep("nsh-base", HIGHLIGHT),
                 self.nsh
                     .dep("nsh-platform-android", ", default-features = false"),
             ),
@@ -1105,7 +1119,7 @@ opt-level = 3
                 self.bin("rust-web"),
                 self.rust_web_lib(),
                 self.nsh.dep("nsh-core", ""),
-                self.nsh.dep("nsh-base", ""),
+                self.nsh.dep("nsh-base", HIGHLIGHT),
                 self.nsh
                     .dep("nsh-platform-web", ", default-features = false"),
             ),
@@ -1127,7 +1141,7 @@ opt-level = 3
     }
 
     /// Writes the crate `<ws>/<dir>` (`rust-linux`, `rust-macos`,
-    /// `rust-windows`, `rust-ios`, `rust-gpui`): the platform's release
+    /// `rust-windows`, `rust-ios`): the platform's release
     /// runner (`nsh-linux-app`, ...) without the feature `js`, whose
     /// `run_rust` mounts the app's root.
     fn write_rust_runner(&self, ws: &Path, dir: &str, root: &RootConfig) -> anyhow::Result<()> {
@@ -1155,13 +1169,6 @@ opt-level = 3
                 "",
                 true,
             ),
-            "rust-gpui" => (
-                "any(target_os = \"linux\", target_os = \"macos\", windows)",
-                "nsh-gpui-app",
-                "nsh-platform-gpui",
-                "",
-                true,
-            ),
             _ => (
                 "target_os = \"ios\"",
                 "nsh-ios-app",
@@ -1183,7 +1190,7 @@ opt-level = 3
                 self.nsh
                     .dep(lib, &format!(", default-features = false{features}")),
                 self.nsh.dep("nsh-core", ""),
-                self.nsh.dep("nsh-base", ""),
+                self.nsh.dep("nsh-base", HIGHLIGHT),
                 self.nsh.dep(platform, ", default-features = false"),
             ),
         )?;
@@ -1191,7 +1198,7 @@ opt-level = 3
         let platform = platform.replace('-', "_");
         let cfg = format!("#[cfg({os})]\n");
         // A windowed program: no console opens with the app.
-        let subsystem = if dir == "rust-windows" || dir == "rust-gpui" {
+        let subsystem = if dir == "rust-windows" {
             "\n#![cfg_attr(windows, windows_subsystem = \"windows\")]\n"
         } else {
             ""
@@ -1245,13 +1252,15 @@ opt-level = 3
                 "[package]\nname = {:?}\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n\
                  [lib]\nname = {:?}\npath = \"lib.rs\"\ncrate-type = [\"cdylib\"]\n\n\
                  [features]\n# The runtime of published apps: bytecode only (nsh-platform-web).\n\
-                 bytecode-only = [\"nsh-platform-web/bytecode-only\"]\n\n\
+                 bytecode-only = [\"nsh-platform-web/bytecode-only\"]\n\
+                 # The development host's: what `nsh test --target web` asks about.\n\
+                 dev = [\"nsh-platform-web/dev\"]\n\n\
                  [dependencies]\nnsh-core = {}\nnsh-base = {}\n{app}\n\n\
                  [target.'cfg(target_arch = \"wasm32\")'.dependencies]\nnsh-platform-web = {}\n",
                 self.bin("web"),
                 self.web_lib(),
                 src("nsh-core"),
-                src("nsh-base"),
+                self.nsh.dep("nsh-base", HIGHLIGHT),
                 src("nsh-platform-web"),
             ),
         )?;
@@ -1259,11 +1268,23 @@ opt-level = 3
         // (QuickJS recursion, deep component trees); the app's build does
         // not run under it, so this package passes the link argument.
         write(&ws.join("web/build.rs"), WEB_BUILD_RS)?;
+        // A Rust app's root too, which the development host's page runs
+        // when a test session says so (`nsh test --target web`).
+        let (register, root) = match &self.root {
+            Some(root) => (
+                format!("nsh_platform_web::rust_app!({sets}, app_root());"),
+                self.root_fn(wasm, root),
+            ),
+            None => (
+                format!("nsh_platform_web::ui_sets!({sets});"),
+                String::new(),
+            ),
+        };
         write(
             &ws.join("web/lib.rs"),
             &format!(
                 "//! The app's web runtime: `nsh.wasm` with `nsh/base` and the app's\n//! Rust components.\n\n\
-                 {wasm}nsh_platform_web::ui_sets!({sets});\n{}\n\
+                 {wasm}{register}\n{}{root}\n\
                  // Off WebAssembly it is empty, as nsh-platform-web is.\n\
                  #[cfg(not(target_arch = \"wasm32\"))]\nuse nsh_core as _;\n\
                  #[cfg(not(target_arch = \"wasm32\"))]\nuse nsh_base as _;\n",
@@ -1327,15 +1348,33 @@ opt-level = 3
         kind: crate::runtime::WebKind,
         build: bool,
     ) -> anyhow::Result<Option<crate::runtime::WebRuntime>> {
+        self.web_runtime(kind, build, self.root.is_some())
+    }
+
+    /// The web runtime `nsh test --target web` runs the app in: the
+    /// development host's, a Rust app's too (with its root, which the page
+    /// runs when the test session says so).
+    pub(crate) fn test_web(&self) -> anyhow::Result<crate::runtime::WebRuntime> {
+        self.web_runtime(crate::runtime::WebKind::Dev, true, false)?
+            .context("no web runtime")
+    }
+
+    /// [`Self::web`]; `rust`: a Rust app's runtime, with no QuickJS.
+    fn web_runtime(
+        &self,
+        kind: crate::runtime::WebKind,
+        build: bool,
+        rust: bool,
+    ) -> anyhow::Result<Option<crate::runtime::WebRuntime>> {
         const WASM: &str = "wasm32-unknown-unknown";
         let out = self.workspace.join("web-runtime");
-        let wasm = if self.root.is_some() {
+        let wasm = if rust {
             out.join("nsh-rust.wasm")
         } else {
             out.join(kind.file())
         };
-        // The module's wasm-bindgen glue, when the app's crates use
-        // wasm-bindgen (`crate::bindgen`).
+        // The module's wasm-bindgen glue, when the app's crates call JS
+        // through wasm-bindgen (`crate::bindgen`).
         let stem = wasm
             .file_stem()
             .and_then(|s| s.to_str())
@@ -1343,7 +1382,7 @@ opt-level = 3
             .to_owned();
         let glue = out.join(format!("{stem}-bindgen.js"));
         let mut runtime = crate::runtime::WebRuntime {
-            glue: glue.exists().then(|| glue.clone()),
+            glue: glue.exists().then_some(glue),
             wasm,
             // A checkout's own, so edits to it apply; from crates.io the
             // published crate's, copied next to the module when it is built.
@@ -1366,11 +1405,10 @@ opt-level = 3
         }
         // A Rust app's runtime is one: no QuickJS, so neither the parser
         // nor hot updates.
-        let rust = self.root.is_some();
         let features: &[&str] = match kind {
             _ if rust => &[],
             crate::runtime::WebKind::Release => &["--features", "bytecode-only"],
-            crate::runtime::WebKind::Dev => &[],
+            crate::runtime::WebKind::Dev => &["--features", "dev"],
         };
         let (package, artifact) = if rust {
             (
@@ -1393,60 +1431,14 @@ opt-level = 3
         let built = self.build_with(cmd, &build)?;
         fs::create_dir_all(&out)?;
         // Both kinds build to the same file: each keeps a copy of its own,
-        // through wasm-bindgen when the app's crates use it.
-        match self.wasm_bindgen(&package)? {
-            Some(version) => {
-                let (_, written) = crate::bindgen::process(&built, &version, &out, &stem)?;
-                runtime.glue = Some(written);
-            }
-            None => {
-                fs::copy(&built, &runtime.wasm).with_context(|| {
-                    format!("copy {} to {}", built.display(), runtime.wasm.display())
-                })?;
-                // Glue (and snippets) of a build that used wasm-bindgen before.
-                if glue.exists() {
-                    fs::remove_file(&glue).with_context(|| format!("remove {}", glue.display()))?;
-                }
-                let generated = crate::bindgen::output_dir(&glue);
-                if generated.exists() {
-                    fs::remove_dir_all(&generated)
-                        .with_context(|| format!("remove {}", generated.display()))?;
-                }
-                runtime.glue = None;
-            }
-        }
+        // through wasm-bindgen when the app's crates call JS through it.
+        runtime.glue = crate::bindgen::install(&built, &out, &stem)?;
         if self.nsh == Nsh::Registry {
             let js = self.registry_crate("nsh-platform-web")?.join("web/nsh.js");
             fs::copy(&js, &runtime.js)
                 .with_context(|| format!("copy {} to {}", js.display(), runtime.js.display()))?;
         }
         Ok(Some(runtime))
-    }
-
-    /// The version of `wasm-bindgen` the web runtime `package` links, if it
-    /// does ([`crate::bindgen::version_in`], from `cargo metadata` of the
-    /// workspace for `wasm32-unknown-unknown`).
-    fn wasm_bindgen(&self, package: &str) -> anyhow::Result<Option<String>> {
-        let output = Command::new(cargo())
-            .args(["metadata", "--format-version", "1"])
-            .args([
-                "--filter-platform",
-                "wasm32-unknown-unknown",
-                "--manifest-path",
-            ])
-            .arg(self.workspace.join("Cargo.toml"))
-            .output()
-            .context("run cargo metadata")?;
-        if !output.status.success() {
-            bail!(
-                "cargo metadata of {}:\n{}",
-                self.workspace.display(),
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-        }
-        let metadata: serde_json::Value =
-            serde_json::from_slice(&output.stdout).context("cargo metadata's output")?;
-        Ok(crate::bindgen::version_in(&metadata, package))
     }
 
     /// The directory Cargo unpacked nsh's crate `name` (from crates.io, at
@@ -1479,31 +1471,21 @@ opt-level = 3
             .with_context(|| format!("the workspace resolves no {name} {VERSION}"))
     }
 
-    /// The workspace of the app's GPUI development host and release
-    /// runner (`<workspace>/gpui`), written when one of them is built: GPUI
-    /// pulls in crates (wry, GStreamer, ...) the other targets never need,
-    /// and a member of the main workspace would make every build resolve
-    /// them. It builds in the same target directory.
+    /// The workspace of the app's GPUI development host
+    /// (`<workspace>/gpui`), written when it is built: GPUI pulls in crates
+    /// (wry, GStreamer, ...) the other targets never need, and a member of
+    /// the main workspace would make every build resolve them. It builds in
+    /// the same target directory. GPUI has no release runner: it is the
+    /// backend for embedding in GPUI apps.
     fn gpui_workspace(&self) -> anyhow::Result<PathBuf> {
         let ws = self.workspace.join("gpui");
-        let rust = if self.root.is_some() {
-            ", \"rust-gpui\""
-        } else {
-            ""
-        };
         self.write_workspace_manifest(
             &ws,
-            &format!(
-                "# Generated by nsh for the app's Rust crate (nsh.json \"rust\"): do not edit.\n\
-                 [workspace]\nresolver = \"3\"\nmembers = [\"gpui-host\", \"gpui-app\"{rust}]\n"
-            ),
+            "# Generated by nsh for the app's Rust crate (nsh.json \"rust\"): do not edit.\n\
+             [workspace]\nresolver = \"3\"\nmembers = [\"gpui-host\"]\n",
             true,
         )?;
         self.write_host(&ws, "gpui-host", "nsh-gpui-host", "development host")?;
-        self.write_host(&ws, "gpui-app", "nsh-gpui-app", "release runner")?;
-        if let Some(root) = &self.root {
-            self.write_rust_runner(&ws, "rust-gpui", root)?;
-        }
         Ok(ws)
     }
 
@@ -1581,24 +1563,34 @@ opt-level = 3
                 self.bin(dir),
                 src(lib),
                 src("nsh-core"),
-                src("nsh-base"),
+                self.nsh.dep("nsh-base", HIGHLIGHT),
                 src(platform),
             ),
         )?;
         let lib = lib.replace('-', "_");
         let platform = platform.replace('-', "_");
         // A windowed program: no console opens with the app.
-        let subsystem = if dir == "windows-app" || dir == "gpui-app" {
+        let subsystem = if dir == "windows-app" {
             "\n#![cfg_attr(windows, windows_subsystem = \"windows\")]\n"
         } else {
             ""
+        };
+        let cfg = format!("#[cfg({os})]\n");
+        // A Rust app's development host runs its root when a test session
+        // says so (`nsh test --target`): its runners have no dev server.
+        let (set_root, root_fn) = match &self.root {
+            Some(root) if dir.ends_with("-host") => (
+                format!("\n    #[cfg({os})]\n    {platform}::set_root(app_root);"),
+                self.root_fn(&cfg, root),
+            ),
+            _ => (String::new(), String::new()),
         };
         write(
             &ws.join(dir).join("main.rs"),
             &format!(
                 "//! The {name} {what} with `nsh/base` and the app's Rust components.\n{subsystem}\n\
-                 fn main(){exit} {{\n    #[cfg({os})]\n    {platform}::set_ui_sets({sets});\n    {lib}::main()\n}}\n{}",
-                self.app_sets(&format!("#[cfg({os})]\n"))
+                 fn main(){exit} {{\n    #[cfg({os})]\n    {platform}::set_ui_sets({sets});{set_root}\n    {lib}::main()\n}}\n{}{root_fn}",
+                self.app_sets(&cfg)
             ),
         )
     }
@@ -1699,6 +1691,19 @@ opt-level = 3
         if self.root.is_some() {
             return self.rust_runner(platform, runner);
         }
+        self.host(platform, runner)
+    }
+
+    /// The development host `nsh test --target` runs the app in: a Rust
+    /// app's too, built with its root (its runners have no dev server
+    /// client), which it runs when the test session says so.
+    pub(crate) fn test_host(&self, platform: Platform) -> anyhow::Result<PathBuf> {
+        self.host(platform, false)
+    }
+
+    /// The development host (`runner` false) or release runner for
+    /// `platform` with the app's crates.
+    fn host(&self, platform: Platform, runner: bool) -> anyhow::Result<PathBuf> {
         let name = match (platform, runner) {
             (Platform::Linux, false) => "linux-host",
             (Platform::Linux, true) => "linux-app",
@@ -1707,7 +1712,7 @@ opt-level = 3
             (Platform::Windows, false) => "windows-host",
             (Platform::Windows, true) => "windows-app",
             (Platform::Gpui, false) => "gpui-host",
-            (Platform::Gpui, true) => "gpui-app",
+            (Platform::Gpui, true) => unreachable!("GPUI apps are embedded, never packaged"),
             (_, false) => "ios-host",
             (_, true) => "ios-app",
         };
@@ -1731,14 +1736,12 @@ opt-level = 3
     /// build for packages (`release`), a debug one for `nsh run`. Both run
     /// the app's root with no JS runtime.
     fn rust_runner(&self, platform: Platform, release: bool) -> anyhow::Result<PathBuf> {
-        let (dir, workspace) = match platform {
-            Platform::Linux => ("rust-linux", self.workspace.clone()),
-            Platform::MacOs => ("rust-macos", self.workspace.clone()),
-            Platform::Windows => ("rust-windows", self.workspace.clone()),
-            Platform::Gpui => ("rust-gpui", self.gpui_workspace()?),
-            Platform::IphoneOs | Platform::IphoneSimulator | Platform::MacCatalyst => {
-                ("rust-ios", self.workspace.clone())
-            }
+        let dir = match platform {
+            Platform::Linux => "rust-linux",
+            Platform::MacOs => "rust-macos",
+            Platform::Windows => "rust-windows",
+            Platform::Gpui => unreachable!("a Rust app does not run on GPUI's host"),
+            Platform::IphoneOs | Platform::IphoneSimulator | Platform::MacCatalyst => "rust-ios",
         };
         let what = format!(
             "the {} runner of {}{}",
@@ -1746,7 +1749,7 @@ opt-level = 3
                 Platform::Linux => "Linux",
                 Platform::MacOs => "macOS",
                 Platform::Windows => "Windows",
-                Platform::Gpui => "GPUI",
+                Platform::Gpui => unreachable!(),
                 Platform::IphoneOs => "iOS",
                 Platform::IphoneSimulator => "iOS simulator",
                 Platform::MacCatalyst => "Mac Catalyst",
@@ -1754,16 +1757,12 @@ opt-level = 3
             self.packages(),
             if release { "" } else { " (debug)" }
         );
-        let features = match platform {
-            Platform::Gpui => crate::runtime::gpui_features(),
-            _ => &[],
-        };
         self.build(
-            &workspace,
+            &self.workspace,
             &self.bin(dir),
             platform.triple(),
             release,
-            features,
+            &[],
             &what,
         )
     }
@@ -1802,8 +1801,20 @@ opt-level = 3
     /// The Android runtime of the app: the prebuilt runtime's `classes.dex`
     /// with the app's `libnsh.so` for each of its ABIs.
     pub(crate) fn android(&self, prebuilt: &Path, dev: bool) -> anyhow::Result<PathBuf> {
+        self.android_runtime(prebuilt, dev, self.root.is_some())
+    }
+
+    /// The Android runtime `nsh test --target android` runs the app in: the
+    /// development library, a Rust app's too (with its root, which it runs
+    /// when the test session says so).
+    pub(crate) fn test_android(&self, prebuilt: &Path) -> anyhow::Result<PathBuf> {
+        self.android_runtime(prebuilt, true, false)
+    }
+
+    /// [`Self::android`]; `rust`: a Rust app's runner library, with no
+    /// development support.
+    fn android_runtime(&self, prebuilt: &Path, dev: bool, rust: bool) -> anyhow::Result<PathBuf> {
         let sdk = crate::android::Sdk::find()?;
-        let rust = self.root.is_some();
         let out = self.workspace.join(match (rust, dev) {
             (true, true) => "android-rust-dev",
             (true, false) => "android-rust-release",
@@ -2098,9 +2109,7 @@ fn target_dir(
 /// backend's crates are a workspace of their own, in `crates/gpui`.
 fn nsh_crate(source: &Path, name: &str) -> PathBuf {
     match name {
-        "nsh-platform-gpui" | "nsh-gpui-host" | "nsh-gpui-app" => {
-            source.join("crates/gpui").join(name)
-        }
+        "nsh-platform-gpui" | "nsh-gpui-host" => source.join("crates/gpui").join(name),
         _ => source.join("crates").join(name),
     }
 }
@@ -2549,9 +2558,33 @@ mod tests {
             "{test}"
         );
         assert!(manifest.contains("\"rust-web\"]"), "{manifest}");
+        // GPUI has no runner: a Rust app is embedded in GPUI apps instead.
         app.gpui_workspace().unwrap();
-        assert!(read("gpui/Cargo.toml").contains("\"rust-gpui\""));
-        assert!(read("gpui/rust-gpui/main.rs").contains("nsh_gpui_app::run_rust(app_root())"));
+        assert!(!read("gpui/Cargo.toml").contains("rust-gpui"));
+        // Its development hosts run the root when a test session says so
+        // (`nsh test --target`); its release runners are the `rust-*` ones.
+        for (dir, platform) in [
+            ("linux-host", "nsh_platform_linux"),
+            ("macos-host", "nsh_platform_macos"),
+            ("windows-host", "nsh_platform_windows"),
+            ("ios-host", "nsh_platform_ios"),
+            ("gpui/gpui-host", "nsh_platform_gpui"),
+        ] {
+            let main = read(&format!("{dir}/main.rs"));
+            assert!(
+                main.contains(&format!("{platform}::set_root(app_root);")),
+                "{main}"
+            );
+            assert!(
+                main.contains("nsh_core::ui::Root::of::<app_app_native::App>()"),
+                "{main}"
+            );
+        }
+        assert!(!read("macos-app/main.rs").contains("set_root"));
+        let android = read("android/lib.rs");
+        assert!(android.contains("nsh::root!(app_root());"), "{android}");
+        let web = read("web/lib.rs");
+        assert!(web.contains("nsh_platform_web::rust_app!(vec![nsh_base::registry(), set_app_app_native()], app_root());"), "{web}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2921,7 +2954,7 @@ opt-level = 3
         assert!(read("web/lib.rs").contains("nsh_platform_web::ui_sets!("));
         assert!(!app.workspace.join("gpui").exists());
         assert_eq!(app.gpui_workspace().unwrap(), app.workspace.join("gpui"));
-        assert!(read("gpui/Cargo.toml").contains("members = [\"gpui-host\", \"gpui-app\"]"));
+        assert!(read("gpui/Cargo.toml").contains("members = [\"gpui-host\"]"));
         for (file, cfg) in [
             ("test/main.rs", ""),
             ("ios-host/main.rs", "#[cfg(target_os = \"ios\")]\n"),
@@ -2934,10 +2967,6 @@ opt-level = 3
             ("windows-app/main.rs", "#[cfg(target_os = \"windows\")]\n"),
             (
                 "gpui/gpui-host/main.rs",
-                "#[cfg(any(target_os = \"linux\", target_os = \"macos\", windows))]\n",
-            ),
-            (
-                "gpui/gpui-app/main.rs",
                 "#[cfg(any(target_os = \"linux\", target_os = \"macos\", windows))]\n",
             ),
             ("android/lib.rs", "#[cfg(target_os = \"android\")]\n"),
@@ -2968,7 +2997,6 @@ opt-level = 3
             "windows-host",
             "windows-app",
             "gpui/gpui-host",
-            "gpui/gpui-app",
             "android",
             "web",
         ] {
@@ -3012,7 +3040,6 @@ opt-level = 3
             "windows-host",
             "windows-app",
             "gpui/gpui-host",
-            "gpui/gpui-app",
             "android",
             "web",
             "rust-linux",
@@ -3021,7 +3048,6 @@ opt-level = 3
             "rust-ios",
             "rust-android",
             "rust-web",
-            "gpui/rust-gpui",
         ] {
             let cargo = read(&format!("{dir}/Cargo.toml"));
             for (name, package, path) in [

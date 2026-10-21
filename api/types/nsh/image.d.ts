@@ -12,9 +12,9 @@ export interface ImageSize {
 
 /** Image information and loading ahead. */
 export interface ImageModule {
-  /** The image's size in pixels; its bytes stay loaded for the views that show it next. For an imported image with variants, the variant the views load is asked for, and its size is given over its scale: the size of the imported file. */
+  /** The image's size in pixels; its bytes stay loaded for the views that show it next. An imported image with variants loads the variant the views load and resolves with the imported file's size. Without dimensions, it falls back to the variant's pixels over its scale. */
   getSize(source: string | { uri: string }): Promise<ImageSize>;
-  /** Loads the image ahead of showing it: true once its bytes are in memory. For an imported image with variants, it loads the one the views load at the screen's pixel ratio. */
+  /** Loads the image ahead of showing it: true once its bytes are in memory. An imported image with variants loads the variant the views load at the screen's pixel ratio. */
   prefetch(source: string | { uri: string }): Promise<boolean>;
 }
 
@@ -22,6 +22,8 @@ export interface ImageModule {
  * An image (a URL or `import logo from "./logo.png"`), decoded and cached
  * natively; `Image.getSize(uri)` and `Image.prefetch(uri)` ask about one
  * without showing it.
+ *
+ * @deprecated Import from "nsh".
  */
 export declare const Image: ((props: ImageProps) => YNode) & ImageModule;
 

@@ -12,6 +12,8 @@ mod access;
 mod app_directory;
 mod error;
 mod local_storage;
+#[cfg(feature = "net")]
+pub mod net;
 pub mod perf;
 mod script;
 #[cfg(not(target_arch = "wasm32"))]
@@ -75,7 +77,7 @@ const ENGINE_STACK_SIZE: usize = 8 * 1024 * 1024;
 /// parent/child links reference each other) wait for the collector.
 const IDLE_GC_INTERVAL: Duration = Duration::from_secs(1);
 
-/// The shortest time between two deliveries of `onHoverMove`: a frame at
+/// The shortest time between two deliveries of mouse motion: a frame at
 /// 120 Hz. Mice report moves far more often (up to 1000 Hz), and a handler
 /// that redraws a crosshair needs no more than one per frame.
 const HOVER_MOVE_INTERVAL: Duration = Duration::from_millis(8);
@@ -667,6 +669,42 @@ pub struct EngineConfig {
     /// moves (`nsh_core::time::Clock::manual`), which its timers, frames
     /// and `Date` follow.
     pub clock: Clock,
+    /// Values of the environment kept whatever the platform reports (a
+    /// test's locale, reduced motion and safe area: `nsh test --target`).
+    pub pinned: EnvironmentPins,
+    /// Serves the app's clipboard calls in place of the platform's
+    /// clipboard (a test's own: `nsh test --target`); `None`: the
+    /// platform's.
+    pub clipboard: Option<Arc<dyn nsh_core::clipboard::ClipboardBackend>>,
+}
+
+/// Values of the environment an engine keeps whatever its platform reports
+/// ([`EngineConfig::pinned`]); `None` leaves the platform's.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[non_exhaustive]
+pub struct EnvironmentPins {
+    /// The locale (`Environment::locale`).
+    pub locale: Option<nsh_core::platform::Locale>,
+    /// Whether the user asked for less motion
+    /// (`Environment::reduce_motion`).
+    pub reduce_motion: Option<bool>,
+    /// The safe area insets (`Environment::safe_area`).
+    pub safe_area: Option<nsh_core::geometry::Edges<Points>>,
+}
+
+impl EnvironmentPins {
+    /// `environment` with these values in place of the platform's.
+    pub fn apply(&self, environment: &mut Environment) {
+        if let Some(locale) = self.locale {
+            environment.locale = locale;
+        }
+        if let Some(reduce_motion) = self.reduce_motion {
+            environment.reduce_motion = reduce_motion;
+        }
+        if let Some(safe_area) = self.safe_area {
+            environment.safe_area = safe_area;
+        }
+    }
 }
 
 fn trusted_directory(path: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
@@ -724,6 +762,8 @@ impl EngineConfig {
             data_dir: None,
             storage: None,
             clock: Clock::system(),
+            pinned: EnvironmentPins::default(),
+            clipboard: None,
         }
     }
 }
@@ -774,6 +814,8 @@ impl std::fmt::Debug for EngineConfig {
             .field("limits", &self.limits)
             .field("ui_sets", &self.ui_sets)
             .field("clock", &self.clock)
+            .field("pinned", &self.pinned)
+            .field("clipboard", &self.clipboard.is_some())
             .finish()
     }
 }
@@ -1103,6 +1145,11 @@ pub struct LocalEngine<M: TextEngine + 'static> {
     driver: Driver<M>,
     rx: Receiver<Message>,
     control: EngineControl,
+    /// The host's wake ([`LocalEngine::set_wake`]).
+    wake: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Set while [`LocalEngine::pump`] runs: what it wakes it runs itself,
+    /// so the host's wake is not called for it.
+    pumping: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl<M: TextEngine + 'static> LocalEngine<M> {
@@ -1118,6 +1165,8 @@ impl<M: TextEngine + 'static> LocalEngine<M> {
             driver,
             rx,
             control,
+            wake: None,
+            pumping: Arc::default(),
         })
     }
 
@@ -1126,20 +1175,29 @@ impl<M: TextEngine + 'static> LocalEngine<M> {
         self.control.clone()
     }
 
-    /// Calls `wake` whenever the engine has work outside a
-    /// [`pump`](Self::pump): a task woken (a timer, a reply, a callback of
-    /// the host's — a WebSocket's message through wasm-bindgen) or a JS
-    /// call Rust posted. The host then calls `pump` soon, instead of only at
-    /// the deadline it returned or at the next input. `wake` may run during
-    /// a pump too (a task waking another); the host coalesces the calls.
+    /// Calls `wake` when there is work outside a [`pump`](Self::pump): a
+    /// component task is woken or Rust posts a JS call while no pump runs
+    /// (a callback of the host's completing what a task waits for, such as
+    /// a WebSocket message through wasm-bindgen), once per wake-up, or a
+    /// pump ends with work its bound left. The host then calls `pump` soon,
+    /// instead of only at the deadline it returned or at the next input.
+    /// What a pump wakes itself (a task waking another, a reply it hands
+    /// over) it runs without calling `wake`.
     pub fn set_wake(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
         let tx = self.control.tx.clone();
+        let pumping = self.pumping.clone();
+        let host = wake.clone();
         let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = tx.send(Message::Wake);
-            wake();
+            // After the send: a pump that is ending sees the message
+            // (`pump` clears the flag, then looks at the queue).
+            if !pumping.load(std::sync::atomic::Ordering::SeqCst) {
+                host();
+            }
         });
         self.driver.state.core.set_task_notify(notify.clone());
         self.driver.posts.set_notify(notify);
+        self.wake = Some(wake);
     }
 
     /// Handles the input sent since the last call, runs what is due
@@ -1147,6 +1205,8 @@ impl<M: TextEngine + 'static> LocalEngine<M> {
     /// latest (sooner if input arrives); `None`: only for input.
     pub fn pump(&mut self) -> Option<Instant> {
         let _clock = self.driver.clock.enter();
+        self.pumping
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         // Bounded: messages sent while handling (a task waking another)
         // are handled in the same call, a loop that never settles is not.
         for _ in 0..4 {
@@ -1161,6 +1221,15 @@ impl<M: TextEngine + 'static> LocalEngine<M> {
             }
         }
         self.driver.collect_if_idle();
+        self.pumping
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        // What the bound left waits for the next pump: soon, not at the
+        // deadline.
+        if !self.rx.is_empty()
+            && let Some(wake) = &self.wake
+        {
+            wake();
+        }
         self.driver.deadline()
     }
 }
@@ -1185,13 +1254,14 @@ struct Driver<M: TextEngine + 'static> {
 impl<M: TextEngine + 'static> Driver<M> {
     /// Sets up the core, starts the app and submits its first frame.
     fn start(
-        config: EngineConfig,
+        mut config: EngineConfig,
         text_engine: M,
         sink: Rc<dyn MountSink>,
         tx: Sender<Message>,
         rx: &Receiver<Message>,
         stop: Arc<std::sync::atomic::AtomicBool>,
     ) -> Option<Self> {
+        config.pinned.apply(&mut config.environment);
         #[cfg(feature = "js")]
         let system_tx = tx.clone();
         let text_engine = Rc::new(text_engine);
@@ -1213,6 +1283,7 @@ impl<M: TextEngine + 'static> Driver<M> {
         }
         core.set_access(access.clone());
         core.set_storage(app_storage(&config));
+        core.set_clipboard(config.clipboard.clone());
         core.set_font_scale(config.environment.font_scale);
         core.set_class_environment(class_environment(&config.environment));
         core.set_header_heights(config.header_heights.0, config.header_heights.1);
@@ -1289,6 +1360,7 @@ impl<M: TextEngine + 'static> Driver<M> {
             hover_moves: Vec::new(),
             hover_moved: None,
             resized: None,
+            pinned: config.pinned,
             net: Net {
                 network: config.network.clone(),
                 tx,
@@ -1573,6 +1645,9 @@ struct ScrollEvent {
 
 struct State<M: TextEngine> {
     core: Core<M>,
+    /// What the environment keeps whatever the platform reports
+    /// ([`EngineConfig::pinned`]).
+    pinned: EnvironmentPins,
     /// A display frame was requested and has not begun yet.
     frame_requested: bool,
     ops: Vec<Op>,
@@ -1595,10 +1670,10 @@ struct State<M: TextEngine> {
     scroll_events: FxHashMap<NodeId, ScrollEvent>,
     /// Touch moves not delivered yet: those queued in one frame become one.
     touch_move: Option<(NodeId, Box<nsh_core::TouchEvent>)>,
-    /// `onHoverMove`s not delivered yet: the latest per view, in the order
+    /// Hover and mouse moves not delivered yet: the latest per view, in the order
     /// they came; sent once per [`HOVER_MOVE_INTERVAL`] at most, and before
     /// any other event.
-    hover_moves: Vec<(NodeId, nsh_core::HoverEvent)>,
+    hover_moves: Vec<(NodeId, EventKind, EventPayload)>,
     /// When `hover_moves` were last delivered.
     hover_moved: Option<Instant>,
     /// The viewport size a resize set this turn ([`MountSink::resized`]).
@@ -1815,16 +1890,12 @@ impl<M: TextEngine> State<M> {
             return;
         }
         self.hover_moved = Some(nsh_core::time::now());
-        for (id, event) in std::mem::take(&mut self.hover_moves) {
-            let payload = EventPayload::Hover(event);
-            if self
-                .core
-                .component_event(id, EventKind::HoverMove, &payload)
-            {
+        for (id, kind, payload) in std::mem::take(&mut self.hover_moves) {
+            if self.core.component_event(id, kind, &payload) {
                 continue;
             }
             if let Some(script) = script {
-                script.dispatch_event(id, EventKind::HoverMove, &payload);
+                script.dispatch_event(id, kind, &payload);
             }
         }
     }
@@ -2083,12 +2154,16 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             // Hover moves wait for the frame, the latest per view; any other
             // event comes after the moves before it (a view hears where the
             // mouse went before it hears it leave).
-            if let EventPayload::Hover(hover) = payload
-                && event == EventKind::HoverMove
+            if event == EventKind::MouseMove
+                || (event == EventKind::HoverMove && matches!(payload, EventPayload::Hover(_)))
             {
-                match state.hover_moves.iter_mut().find(|(v, _)| *v == id) {
-                    Some((_, pending)) => *pending = hover,
-                    None => state.hover_moves.push((id, hover)),
+                match state
+                    .hover_moves
+                    .iter_mut()
+                    .find(|(v, kind, _)| *v == id && *kind == event)
+                {
+                    Some((_, _, pending)) => *pending = payload,
+                    None => state.hover_moves.push((id, event, payload)),
                 }
                 return true;
             }
@@ -2160,7 +2235,8 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             state.resized = Some(size);
         }
         Message::Wake => {}
-        Message::Environment(env) => {
+        Message::Environment(mut env) => {
+            state.pinned.apply(&mut env);
             state.core.set_font_scale(env.font_scale);
             state.core.set_class_environment(class_environment(&env));
             state.core.set_safe_area(insets(&env));
@@ -2243,6 +2319,26 @@ fn extend_frame(frame: &mut Vec<nsh_core::MountItem>, items: Vec<nsh_core::Mount
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pinned_values_hold_whatever_the_platform_reports() {
+        let pins = super::EnvironmentPins {
+            locale: nsh_core::platform::Locale::parse("de-DE"),
+            reduce_motion: Some(true),
+            ..Default::default()
+        };
+        let mut reported = super::Environment {
+            locale: nsh_core::platform::Locale::parse("en-US").unwrap(),
+            font_scale: 1.5,
+            ..Default::default()
+        };
+        pins.apply(&mut reported);
+        assert_eq!(reported.locale.as_str(), "de-DE");
+        assert!(reported.reduce_motion);
+        // What is not pinned stays the platform's.
+        assert_eq!(reported.font_scale, 1.5);
+        assert_eq!(reported.safe_area, Default::default());
+    }
+
     #[test]
     fn bundle_default_has_no_application_selected_path_anchors() {
         let bundle = super::Bundle::default();

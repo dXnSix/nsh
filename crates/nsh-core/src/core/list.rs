@@ -1288,6 +1288,37 @@ mod tests {
     }
 
     #[test]
+    fn sticky_items_stick_at_their_offset() {
+        let mut l = list(100, 50.0, 400.0);
+        l.set_sticky(vec![0, 30]);
+        l.set_sticky_offset(20.0);
+        // Ranges are scroll offsets: item 0 is pinned 20 from the top from
+        // the start (pushed down by 20), item 30 from 1480 on; 30 pushes 0
+        // out when it reaches 0's end, 50 below the offset.
+        assert_eq!(
+            l.sticky_range(0, 1, 50.0),
+            StickyRange {
+                cell: 1,
+                start: -20.0,
+                end: 1430.0
+            }
+        );
+        assert_eq!(l.sticky_range(30, 2, 50.0).start, 1480.0);
+        // The pinned item is the last one that reached the offset.
+        l.offset = 1470.0;
+        assert_eq!(l.active_sticky(), Some(0));
+        l.offset = 1480.0;
+        assert_eq!(l.active_sticky(), Some(30));
+        // Without it again: as before.
+        l.set_sticky_offset(0.0);
+        assert_eq!(l.sticky_range(0, 1, 50.0).start, 0.0);
+        assert_eq!(l.active_sticky(), Some(0));
+        // A negative offset sticks items partly out of view.
+        l.set_sticky_offset(-10.0);
+        assert_eq!(l.sticky_range(30, 2, 50.0).start, 1510.0);
+    }
+
+    #[test]
     fn sticky_items_stay_rendered_and_travel_until_the_next() {
         let mut l = list(100, 50.0, 400.0);
         l.set_sticky(vec![30, 0]);
@@ -1327,37 +1358,6 @@ mod tests {
         l.update_window(&mut binds);
         assert!(bound(&l, 30) && bound(&l, 0), "{binds:?}");
         assert!(!bound(&l, 60));
-    }
-
-    #[test]
-    fn sticky_items_stick_at_their_offset() {
-        let mut l = list(100, 50.0, 400.0);
-        l.set_sticky(vec![0, 30]);
-        l.set_sticky_offset(20.0);
-        // Ranges are scroll offsets: item 0 is pinned 20 from the top from
-        // the start (pushed down by 20), item 30 from 1480 on; 30 pushes 0
-        // out when it reaches 0's end, 50 below the offset.
-        assert_eq!(
-            l.sticky_range(0, 1, 50.0),
-            StickyRange {
-                cell: 1,
-                start: -20.0,
-                end: 1430.0
-            }
-        );
-        assert_eq!(l.sticky_range(30, 2, 50.0).start, 1480.0);
-        // The pinned item is the last one that reached the offset.
-        l.offset = 1470.0;
-        assert_eq!(l.active_sticky(), Some(0));
-        l.offset = 1480.0;
-        assert_eq!(l.active_sticky(), Some(30));
-        // Without it again: as before.
-        l.set_sticky_offset(0.0);
-        assert_eq!(l.sticky_range(0, 1, 50.0).start, 0.0);
-        assert_eq!(l.active_sticky(), Some(0));
-        // A negative offset sticks items partly out of view.
-        l.set_sticky_offset(-10.0);
-        assert_eq!(l.sticky_range(30, 2, 50.0).start, 1510.0);
     }
 
     #[test]

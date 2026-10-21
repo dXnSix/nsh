@@ -303,6 +303,10 @@ pub(super) enum Part {
     Filled(&'static str),
 }
 
+/// A node's app classes ([`Components::app_classes`]): its own rules, the
+/// classes, and what goes after them.
+pub(super) type AppClass = (Option<Arc<ClassList>>, SharedString, Option<Arc<ClassList>>);
+
 /// The node's classes: its styles lowered, and what was merged after them.
 pub(super) type Classes = (Option<Arc<ClassList>>, Option<Arc<ClassList>>);
 
@@ -518,6 +522,13 @@ pub(super) struct Components {
     /// script): a call posted during a synchronous call from JS waits for
     /// its op ([`RustCall::Post`]).
     posts: Posts,
+    /// What the app's JS functions render for the views
+    /// ([`crate::ui::Renderer`]).
+    pub(super) renders: super::renders::Renders,
+    /// Nodes of views with the app's classes (`Element::app_class`): their
+    /// own rules, the classes and what goes after them, resolved again
+    /// when the tokens change.
+    pub(super) app_classes: FxHashMap<NodeId, AppClass>,
 }
 
 impl Default for Components {
@@ -569,6 +580,8 @@ impl Default for Components {
             regions: FxHashMap::default(),
             next_region: 1,
             posts: Posts::default(),
+            renders: Default::default(),
+            app_classes: FxHashMap::default(),
         }
     }
 }
@@ -584,7 +597,7 @@ impl Components {
         components
     }
 
-    fn alloc(&mut self) -> NodeId {
+    pub(super) fn alloc(&mut self) -> NodeId {
         let id = self.next_id;
         self.next_id += 2;
         id
@@ -844,9 +857,9 @@ impl<M: TextEngine> Core<M> {
                 // The node's own style is the view's that makes it, then
                 // what is given it.
                 let base = self.base_of(id);
-                let ctx = self.root_context_of(base).expect("a host");
-                let app = if ctx.combined {
-                    ctx.app
+                let cx = self.root_context_of(base).expect("a host");
+                let app = if cx.combined {
+                    cx.app
                 } else {
                     self.components.instances[&base].app_style.clone()
                 };
@@ -860,6 +873,23 @@ impl<M: TextEngine> Core<M> {
                     &animated,
                     app.as_ref(),
                 )))
+            }
+            // A render's holder joins its host: placed in its placeholder.
+            Op::Insert { parent, child, .. }
+                if self.is_host(parent) && self.is_render_holder(child) =>
+            {
+                self.insert_render_holder(parent, child);
+                Ok(None)
+            }
+            Op::Remove { parent, child }
+                if self.is_host(parent) && self.is_render_holder(child) =>
+            {
+                self.remove_render_holder(child, false);
+                Ok(None)
+            }
+            Op::Release { id } if self.is_render_holder(id) => {
+                self.remove_render_holder(id, true);
+                Ok(Some(Op::Release { id }))
             }
             // A slot's node joins its host: the view places it.
             Op::Insert { parent, child, .. }
@@ -1404,6 +1434,18 @@ impl<M: TextEngine> Core<M> {
                 break;
             }
         }
+        self.flush_renders();
+    }
+
+    /// Node `id` goes: what the views' renders and the app's classes knew
+    /// of it goes too.
+    fn forget_node_extras(&mut self, id: NodeId) {
+        if !self.components.renders.is_empty() {
+            self.forget_render_place(id);
+        }
+        if !self.components.app_classes.is_empty() {
+            self.components.app_classes.remove(&id);
+        }
     }
 
     /// Sends the failures of views' code (bindings, effects, listeners) to
@@ -1481,11 +1523,19 @@ impl<M: TextEngine> Core<M> {
             self.components.mark(rooted);
             return;
         }
-        let ctx = self.root_context(inst);
+        let cx = self.root_context(inst);
         let given_changed = std::mem::take(&mut inst.given_changed);
         let attrs = if let Some(node) = inst.bound.get_mut(&host) {
             let (style, classes) = (node.style.clone(), node.classes.clone());
-            let classes = self.apply_styles(host, &style, &style, classes, ctx.user.clone());
+            let class = node.attrs.class.clone();
+            let classes = self.apply_el_styles(
+                host,
+                &style,
+                &style,
+                classes,
+                class.as_ref(),
+                cx.user.clone(),
+            );
             if let Some(node) = inst.bound.get_mut(&host) {
                 node.classes = classes;
                 given_changed.then(|| node.attrs.clone())
@@ -1494,7 +1544,15 @@ impl<M: TextEngine> Core<M> {
             }
         } else if let Some(root) = inst.root.as_mut() {
             let (style, classes) = (root.style.clone(), root.classes.clone());
-            root.classes = self.apply_styles(host, &style, &style, classes, ctx.user.clone());
+            let class = root.attrs.class.clone();
+            root.classes = self.apply_el_styles(
+                host,
+                &style,
+                &style,
+                classes,
+                class.as_ref(),
+                cx.user.clone(),
+            );
             given_changed.then(|| root.attrs.clone())
         } else {
             None
@@ -1502,8 +1560,8 @@ impl<M: TextEngine> Core<M> {
         // What the views above give it changed: applied again over its
         // root's own.
         if let Some(attrs) = attrs {
-            let app = if ctx.combined {
-                ctx.app.as_ref()
+            let app = if cx.combined {
+                cx.app.as_ref()
             } else {
                 inst.app_style.as_ref()
             };
@@ -1515,8 +1573,8 @@ impl<M: TextEngine> Core<M> {
             ));
             let applied = inst.root_insets_applied;
             let insets = (
-                ctx.inset_padding.or(attrs.inset_padding),
-                ctx.inset_margin.or(attrs.inset_margin),
+                cx.inset_padding.or(attrs.inset_padding),
+                cx.inset_margin.or(attrs.inset_margin),
             );
             if insets.0 != applied.0 {
                 let _ = self.apply_op(Op::SetProp {
@@ -1722,8 +1780,7 @@ impl<M: TextEngine> Core<M> {
                             // Between rows: after each but the last (before
                             // it, inverted), while it is not.
                             let separator = separator.map(|s| {
-                                crate::ui::If::new(move || !at.is_last(), move || s())
-                                    .into_element()
+                                crate::ui::when(move || !at.is_last(), move || s()).into_element()
                             });
                             match separator {
                                 Some(s) if inverted => view().child(s).child(row),
@@ -1902,13 +1959,13 @@ impl<M: TextEngine> Core<M> {
             };
         // What the views above give it and the components on its host, the
         // outer last.
-        let ctx = self.root_context(inst);
-        let app = if ctx.combined {
-            ctx.app.as_ref()
+        let cx = self.root_context(inst);
+        let app = if cx.combined {
+            cx.app.as_ref()
         } else {
             inst.app_style.as_ref()
         };
-        let attrs = ctx.over(el.attrs.clone());
+        let attrs = cx.over(el.attrs.clone());
         // As it was applied: with the insets its node got.
         let mut old_over = old_attrs.clone();
         (old_over.inset_padding, old_over.inset_margin) = inst.root_insets_applied;
@@ -1917,7 +1974,7 @@ impl<M: TextEngine> Core<M> {
         // Given an inline style or animated values while its own did not
         // change: they go now.
         let given_changed = std::mem::take(&mut inst.given_changed) || first;
-        if ctx.given
+        if cx.given
             && given_changed
             && attrs.inline == old_over.inline
             && attrs.animated == old_over.animated
@@ -1929,9 +1986,16 @@ impl<M: TextEngine> Core<M> {
                 app,
             ));
         }
-        let user = ctx.user.clone();
-        let top_js = ctx.js;
-        let classes = self.apply_styles(host, &el.style, &old_style, old_classes, user);
+        let user = cx.user.clone();
+        let top_js = cx.js;
+        let classes = self.apply_el_styles(
+            host,
+            &el.style,
+            &old_style,
+            old_classes,
+            el.attrs.class.as_ref(),
+            user,
+        );
         let text = self.reconcile_text(host, host, el.text.take(), old_text);
         if bound.is_some() {
             Self::keep_bound(
@@ -2036,7 +2100,7 @@ impl<M: TextEngine> Core<M> {
     /// components whose views' roots it is (the outer last), the app's
     /// style and JS's events on the top host.
     pub(super) fn root_context(&mut self, inst: &Instance) -> RootContext {
-        let mut ctx = RootContext {
+        let mut cx = RootContext {
             user: inst.user.clone(),
             combined: false,
             app: None,
@@ -2046,21 +2110,21 @@ impl<M: TextEngine> Core<M> {
             given: false,
         };
         if inst.above.is_none() && inst.given.is_none() {
-            return ctx;
+            return cx;
         }
-        ctx.combined = true;
+        cx.combined = true;
         let mut decls: Vec<crate::StyleDecl> = Vec::new();
-        let mut take = |ctx: &mut RootContext, given: &Attrs| {
-            ctx.given = true;
+        let mut take = |cx: &mut RootContext, given: &Attrs| {
+            cx.given = true;
             if let Some(inline) = &given.inline {
                 decls.extend(inline.decls().iter().cloned());
             }
             decls.extend(given.animated.iter().map(|(d, _)| d.clone()));
-            ctx.inset_padding = given.inset_padding.or(ctx.inset_padding);
-            ctx.inset_margin = given.inset_margin.or(ctx.inset_margin);
+            cx.inset_padding = given.inset_padding.or(cx.inset_padding);
+            cx.inset_margin = given.inset_margin.or(cx.inset_margin);
         };
         if let Some(given) = &inst.given {
-            take(&mut ctx, given);
+            take(&mut cx, given);
         }
         let mut app = inst.app_style.clone();
         let mut at = inst.above;
@@ -2070,12 +2134,12 @@ impl<M: TextEngine> Core<M> {
             };
             let (outer, given) = (above.user.clone(), above.given.clone());
             app = above.app_style.clone();
-            ctx.js = Some(above.js_events);
+            cx.js = Some(above.js_events);
             at = above.above;
             if let Some(given) = &given {
-                take(&mut ctx, given);
+                take(&mut cx, given);
             }
-            ctx.user = self.merge_user(ctx.user.take(), outer);
+            cx.user = self.merge_user(cx.user.take(), outer);
         }
         if let Some(app) = &app {
             decls.extend(app.decls().iter().cloned());
@@ -2086,17 +2150,17 @@ impl<M: TextEngine> Core<M> {
             for decl in decls {
                 let _ = patch.push(&mut style, decl);
             }
-            ctx.app = Some(patch);
+            cx.app = Some(patch);
         }
-        ctx
+        cx
     }
 
     /// [`Self::root_context`] of the component hosted by `host`.
     pub(super) fn root_context_of(&mut self, host: NodeId) -> Option<RootContext> {
         let inst = self.components.instances.remove(&host)?;
-        let ctx = self.root_context(&inst);
+        let cx = self.root_context(&inst);
         self.components.instances.insert(host, inst);
-        Some(ctx)
+        Some(cx)
     }
 
     /// What the view `host` is in gives its element besides styles is `attrs`:
@@ -2115,7 +2179,7 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// `inner`'s rules, then `outer`'s (one list per pair, kept).
-    fn merge_user(
+    pub(super) fn merge_user(
         &mut self,
         inner: Option<Arc<ClassList>>,
         outer: Option<Arc<ClassList>>,
@@ -2197,7 +2261,7 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
-    fn detach_id(&mut self, id: NodeId) {
+    pub(super) fn detach_id(&mut self, id: NodeId) {
         if let Ok(key) = self.key(id)
             && self.nodes[key as usize].parent != NO_KEY
         {
@@ -2227,6 +2291,9 @@ impl<M: TextEngine> Core<M> {
         }
         if let Some(r) = &new.element_ref {
             r.attach(node);
+        }
+        if new.render != old.render {
+            self.update_render(node, old.render.as_ref(), new.render.as_ref());
         }
         let mut props = std::mem::take(&mut self.components.props);
         new.changes(old, &mut props);
@@ -2275,6 +2342,51 @@ impl<M: TextEngine> Core<M> {
             }
         }
         (own, user)
+    }
+
+    /// [`Self::apply_styles`] for an element of a view: the app's classes
+    /// it carries (`class`, [`crate::ui::Element::app_class`]) go after its
+    /// own styles, then `outer` (a root's: what the views and the app give
+    /// its host).
+    pub(super) fn apply_el_styles(
+        &mut self,
+        id: NodeId,
+        style: &StyleRefinement,
+        old_style: &StyleRefinement,
+        old: Classes,
+        class: Option<&SharedString>,
+        outer: Option<Arc<ClassList>>,
+    ) -> Classes {
+        let Some(class) = class.filter(|c| !c.trim().is_empty()) else {
+            if !self.components.app_classes.is_empty() {
+                self.components.app_classes.remove(&id);
+            }
+            return self.apply_styles(id, style, old_style, old, outer);
+        };
+        let app = self.app_class_list(class);
+        let user = self.merge_user(Some(app), outer.clone());
+        let classes = self.apply_styles(id, style, old_style, old, user);
+        self.components
+            .app_classes
+            .insert(id, (classes.0.clone(), class.clone(), outer));
+        classes
+    }
+
+    /// The rules of the app's classes `class` (the unknown ones warned of
+    /// once, as a host's).
+    pub(super) fn app_class_list(&mut self, class: &str) -> Arc<ClassList> {
+        let (list, fresh) = self.tailwind.get(class);
+        if fresh && !list.unknown().is_empty() {
+            log::warn!(
+                "unknown classes: {}",
+                list.unknown()
+                    .iter()
+                    .map(|s| &**s)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
+        list
     }
 
     /// Registers `el`'s handlers for node `id` and listens to their events
@@ -2456,7 +2568,7 @@ impl<M: TextEngine> Core<M> {
                     // position follows it.
                     let place = place.clone();
                     let count = crate::ui::computed(move || children.with(Vec::len));
-                    let region = crate::ui::Each::new(
+                    let region = crate::ui::each(
                         children,
                         |&child: &NodeId| child,
                         move |child, index| {
@@ -3218,7 +3330,14 @@ impl<M: TextEngine> Core<M> {
             ),
         };
         self.apply_attrs(node, &el.attrs, &old_attrs);
-        let classes = self.apply_styles(node, &el.style, &old_style, old_classes, None);
+        let classes = self.apply_el_styles(
+            node,
+            &el.style,
+            &old_style,
+            old_classes,
+            el.attrs.class.as_ref(),
+            None,
+        );
         // Its events are the component's first (`component_event` finds it
         // by its host); the node stays JS's or the placing view's.
         let events = self.apply_handlers(node, &el, old_events, EventMask::default(), inst);
@@ -3381,7 +3500,7 @@ impl<M: TextEngine> Core<M> {
                 content = slots;
                 if !kids.is_empty() {
                     let wanted = self.children_wanted_signal(id);
-                    let shown = crate::ui::If::new(wanted, move || {
+                    let shown = crate::ui::when(wanted, move || {
                         kids.iter()
                             .cloned()
                             .map(crate::ui::AnyElement)
@@ -3409,7 +3528,14 @@ impl<M: TextEngine> Core<M> {
             };
         }
         self.apply_attrs(id, &el.attrs, &old_attrs);
-        let classes = self.apply_styles(id, &el.style, &old_style, old_classes, None);
+        let classes = self.apply_el_styles(
+            id,
+            &el.style,
+            &old_style,
+            old_classes,
+            el.attrs.class.as_ref(),
+            None,
+        );
         let text = self.reconcile_text(id, host, el.text.take(), old_text);
         if bound.is_some() {
             Self::keep_bound(
@@ -3846,6 +3972,7 @@ impl<M: TextEngine> Core<M> {
 
     fn release_id(&mut self, id: NodeId) {
         self.components.owners.remove(&id);
+        self.forget_node_extras(id);
         // A root component's host is its view's: only the name goes.
         if self.is_alias(id) {
             self.unalias(id);
@@ -3921,6 +4048,8 @@ impl<M: TextEngine> Core<M> {
         let Some(mut inst) = self.components.instances.remove(&host) else {
             return;
         };
+        // Its root's (a render or classes of the app's) on the host.
+        self.forget_node_extras(host);
         if let Inner::Component(inner) = &mut inst.inner {
             if let Err(message) = caught(|| inner.cleanup()) {
                 log::error!(target: "js", "{} failed in its cleanup: {message}", inner.name());
@@ -4007,9 +4136,14 @@ impl<M: TextEngine> Core<M> {
         // finger: the components hear theirs, JS its own.
         if kind == EventKind::Touch && id == ROOT_ID {
             if let EventPayload::Touch(touch) = payload {
+                self.overlay_touches(touch);
                 self.touches(payload, touch);
             }
             return false;
+        }
+        // Hints follow the pointer on their anchors, whoever else listens.
+        if matches!(kind, EventKind::HoverIn | EventKind::HoverOut) {
+            self.overlay_hover(id, kind);
         }
         if self.platform_event(id, kind, payload) {
             return true;
@@ -4213,6 +4347,7 @@ impl<M: TextEngine> Core<M> {
                 }));
             }
             Action::ReportViewable(list) => self.report_viewable(list),
+            Action::Hint(overlay) => self.hint_due(overlay),
             Action::Frame(answer) => self.wait_frame(answer),
             Action::Direction(change) => self.change_direction(change),
             Action::Appearance(appearance) => self.set_appearance(appearance),
@@ -4401,6 +4536,10 @@ impl<M: TextEngine> Core<M> {
                 if binding < crate::ui::keys::FIRST_ID {
                     return false;
                 }
+                if binding == super::overlay::ESCAPE_BINDING {
+                    self.overlay_cancel();
+                    return true;
+                }
                 let found = self.components.executor.keys.borrow().handler(binding);
                 // A binding removed since the platform matched it.
                 if let Some((text, handler)) = found {
@@ -4413,6 +4552,10 @@ impl<M: TextEngine> Core<M> {
                 true
             }
             EventKind::BackPress if id == crate::ROOT_ID => {
+                // The top overlay listening takes it first.
+                if self.overlay_cancel() {
+                    return true;
+                }
                 let listeners = self.components.executor.back.borrow().newest_first();
                 for listener in listeners {
                     if self.back_pressed(&listener) {
@@ -4498,7 +4641,7 @@ impl<M: TextEngine> Core<M> {
         let _ = self.apply_op(Op::Listen {
             id: crate::ROOT_ID,
             event: EventKind::BackPress,
-            enabled: rust || self.components.js_back,
+            enabled: rust || self.components.js_back || self.overlay_state.cancel,
         });
     }
 
@@ -4520,7 +4663,7 @@ impl<M: TextEngine> Core<M> {
         let _ = self.apply_op(Op::Listen {
             id: crate::ROOT_ID,
             event: EventKind::KeyCommand,
-            enabled: rust || self.components.js_keys,
+            enabled: rust || self.components.js_keys || self.overlay_state.cancel,
         });
     }
 
@@ -4528,7 +4671,8 @@ impl<M: TextEngine> Core<M> {
     /// may fire wins, so a view's wins over JS's of the same keystroke).
     fn keymap(&self) -> Arc<crate::keymap::Keymap> {
         let keys = self.components.executor.keys.borrow();
-        if keys.list.is_empty() {
+        let overlay = self.overlay_key_binding();
+        if keys.list.is_empty() && overlay.is_none() {
             return self.components.js_keymap.clone();
         }
         let bindings = self
@@ -4538,6 +4682,7 @@ impl<M: TextEngine> Core<M> {
             .iter()
             .copied()
             .chain(keys.list.iter().map(|k| k.binding))
+            .chain(overlay)
             .collect();
         Arc::new(crate::keymap::Keymap::new(bindings))
     }

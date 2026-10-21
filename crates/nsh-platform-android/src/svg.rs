@@ -5,25 +5,27 @@
 
 use jni::{
     JNIEnv,
-    objects::{JByteArray, JClass, JIntArray},
-    sys::jint,
+    objects::{JByteArray, JClass, JFloatArray, JIntArray},
+    sys::{jfloat, jint},
 };
 
-/// `Native.svg(bytes, maxPx, size)`: draws the SVG `bytes` for a view
-/// `max_px` pixels on its longer side, with its shorter side that long, so
-/// it stays sharp in every resize mode (0: its intrinsic size, a pixel per
-/// point),
-/// as premultiplied RGBA, and sets `size` to the raster's width and height
-/// and the SVG's intrinsic size in points; `max_px` below 0 only measures
-/// (an empty array). Null when the bytes are not an SVG or not a valid one.
-/// Called on the image threads.
+/// `Native.svg(bytes, maxPx, density, size, intrinsic)`: draws the SVG `bytes` for a
+/// view `max_px` pixels on its longer side, with its shorter side that
+/// long, so it stays sharp in every resize mode (0: at its intrinsic size,
+/// `density` pixels per point), as premultiplied RGBA, and sets `size` to
+/// the raster's width and height and the SVG's intrinsic size in whole
+/// points, and `intrinsic` to its unrounded size in points; `max_px` below
+/// 0 only measures (an empty array). Null when the
+/// bytes are not an SVG or not a valid one. Called on the image threads.
 #[unsafe(no_mangle)]
 extern "system" fn Java_com_longbridge_nsh_Native_svg<'local>(
     env: JNIEnv<'local>,
     _: JClass<'local>,
     bytes: JByteArray<'local>,
     max_px: jint,
+    density: jfloat,
     size: JIntArray<'local>,
+    intrinsic: JFloatArray<'local>,
 ) -> JByteArray<'local> {
     let Ok(bytes) = env.convert_byte_array(&bytes) else {
         return JByteArray::default();
@@ -33,28 +35,32 @@ extern "system" fn Java_com_longbridge_nsh_Native_svg<'local>(
     }
     let drawn = match max_px {
         ..0 => nsh_core::svg::size(&bytes).map(|size| (0, 0, Vec::new(), size)),
-        0 => nsh_core::svg::size(&bytes).and_then(|size| {
-            nsh_core::svg::rasterize(&bytes, size.width.0.max(size.height.0).ceil() as u32)
-                .map(|r| (r.width, r.height, r.pixels, r.size))
-        }),
+        0 => nsh_core::svg::rasterize_scaled(&bytes, density)
+            .map(|r| (r.width, r.height, r.pixels, r.size)),
         // Its shorter side at the view's longer one: sharp in every
         // resize mode.
         n => nsh_core::svg::rasterize_covering(&bytes, n as u32)
             .map(|r| (r.width, r.height, r.pixels, r.size)),
     };
-    let (width, height, pixels, intrinsic) = match drawn {
+    let (width, height, pixels, points) = match drawn {
         Ok(drawn) => drawn,
         Err(e) => {
             log::warn!("{e}");
             return JByteArray::default();
         }
     };
-    let (w, h) = (intrinsic.width.0, intrinsic.height.0);
+    if env
+        .set_float_array_region(&intrinsic, 0, &[points.width.0, points.height.0])
+        .is_err()
+    {
+        return JByteArray::default();
+    }
+    let reported = nsh_core::svg::reported_size(points);
     let sizes = [
         width as jint,
         height as jint,
-        (w.round() as jint).max(1),
-        (h.round() as jint).max(1),
+        reported.width.0,
+        reported.height.0,
     ];
     if env.set_int_array_region(&size, 0, &sizes).is_err() {
         return JByteArray::default();

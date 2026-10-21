@@ -3,6 +3,7 @@
 
 use crate::{
     ImageScales, ImageSource,
+    geometry::DevicePixels,
     ui::{ImageSize, JsHost, JsIn, JsKind, JsOwned, JsValue, PropError, TsTypes, module},
 };
 
@@ -16,6 +17,7 @@ pub(crate) struct Image;
 pub(crate) struct ImageUri {
     uri: String,
     scales: ImageScales,
+    size: Option<ImageSize>,
 }
 
 impl ImageUri {
@@ -43,6 +45,7 @@ impl JsValue for ImageUri {
             return Ok(Self {
                 uri,
                 scales: ImageScales::NONE,
+                size: None,
             });
         }
         if value.kind() == JsKind::Object
@@ -51,12 +54,31 @@ impl JsValue for ImageUri {
             let list = value.field("scales")?;
             let list = list.get();
             let mut scales = ImageScales::NONE;
-            for i in 0..list.array_len()?.unwrap_or(0) {
+            let len = list.array_len()?.unwrap_or(0);
+            for i in 0..len.min(crate::ops::SCALES_READ) {
                 if let Some(n) = list.index(i)?.get().as_number() {
                     scales = scales.with(n as f32);
                 }
             }
-            return Ok(Self { uri, scales });
+            // Only variant assets use the imported file's dimensions.
+            // Plain sources keep reporting the loaded file's pixels.
+            let size =
+                if !scales.is_empty() && uri.starts_with("asset:/") && !uri.contains(['?', '#']) {
+                    let dimension = |key| -> Result<Option<DevicePixels>, PropError> {
+                        Ok(value
+                            .field(key)?
+                            .get()
+                            .as_number()
+                            .filter(|n| n.is_finite() && *n > 0.0 && *n <= f64::from(i32::MAX))
+                            .map(|n| DevicePixels(n.round() as i32)))
+                    };
+                    dimension("width")?
+                        .zip(dimension("height")?)
+                        .map(|(width, height)| ImageSize { width, height })
+                } else {
+                    None
+                };
+            return Ok(Self { uri, scales, size });
         }
         Err(value.expected("a URI or { uri }"))
     }
@@ -69,26 +91,26 @@ impl JsValue for ImageUri {
 #[module]
 impl Image {
     /// The image's size in pixels; its bytes stay loaded for the views that
-    /// show it next. For an imported image with variants, the variant the
-    /// views load is asked for, and its size is given over its scale: the
-    /// size of the imported file.
+    /// show it next. An imported image with variants loads the variant the
+    /// views load and resolves with the imported file's size. Without
+    /// dimensions, it falls back to the variant's pixels over its scale.
     pub(crate) async fn get_size(source: ImageUri) -> Result<ImageSize, String> {
+        let imported_size = source.size;
         let (uri, scale) = source.pick();
         let size = crate::ui::prelude::image_size(uri).await?;
-        // Over its scale, to the nearest pixel (a `@1.5x` file of an odd size
-        // has no exact 1x size).
-        let over = |pixels: crate::geometry::DevicePixels| {
-            crate::geometry::DevicePixels((pixels.0 as f32 / scale).round() as i32)
-        };
+        if let Some(size) = imported_size {
+            return Ok(size);
+        }
+        let unscaled = |px: DevicePixels| DevicePixels((px.0 as f32 / scale).round() as i32);
         Ok(ImageSize {
-            width: over(size.width),
-            height: over(size.height),
+            width: unscaled(size.width),
+            height: unscaled(size.height),
         })
     }
 
     /// Loads the image ahead of showing it: true once its bytes are in
-    /// memory. For an imported image with variants, it loads the one the
-    /// views load at the screen's pixel ratio.
+    /// memory. An imported image with variants loads the variant the views
+    /// load at the screen's pixel ratio.
     pub(crate) async fn prefetch(source: ImageUri) -> bool {
         crate::ui::prelude::prefetch_image(source.pick().0).await
     }

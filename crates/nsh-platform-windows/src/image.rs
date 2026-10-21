@@ -52,6 +52,7 @@ use std::{
 
 use nsh_core::{
     Command, EventKind, EventPayload, ImageOptions, ImageSource, NodeId, PayloadValue, ResizeMode,
+    geometry::{Points, Size},
 };
 use rustc_hash::FxHashMap;
 use windows::{
@@ -340,10 +341,11 @@ struct Decoded {
     /// Plays before it stops on its last frame; 0: forever.
     plays: u32,
     /// The source's size in pixels (before any scaling down; an SVG's:
-    /// points).
+    /// whole points).
     size: (u32, u32),
-    /// An SVG: its size is in points, whatever its file name says.
-    vector: bool,
+    /// An SVG's intrinsic size, unrounded: what it lays out at, whatever its
+    /// file name says.
+    points: Option<Size<Points>>,
 }
 
 impl Decoded {
@@ -353,7 +355,7 @@ impl Decoded {
             delays: Vec::new(),
             plays: 0,
             size,
-            vector: false,
+            points: None,
         }
     }
 }
@@ -428,10 +430,10 @@ impl Frame {
 struct Picture {
     /// The image, or an animation's first frame.
     frame: Rc<Frame>,
-    /// The source's size in pixels (an SVG's: points).
+    /// The source's size in pixels (an SVG's: whole points).
     size: (u32, u32),
-    /// An SVG: its size is in points, whatever its file name says.
-    vector: bool,
+    /// An SVG's intrinsic size, unrounded.
+    points: Option<Size<Points>>,
     animation: Option<Rc<Animation>>,
 }
 
@@ -442,7 +444,7 @@ impl Picture {
             delays,
             plays,
             size,
-            vector,
+            points,
         } = decoded;
         let frames: Vec<Rc<Frame>> = frames.into_iter().map(Frame::new).collect();
         let frame = frames.first()?.clone();
@@ -456,7 +458,7 @@ impl Picture {
         Some(Picture {
             frame,
             size,
-            vector,
+            points,
             animation,
         })
     }
@@ -565,7 +567,7 @@ fn animation(bytes: &[u8], format: image::ImageFormat) -> Result<Option<Decoded>
         delays,
         plays,
         size,
-        vector: false,
+        points: None,
     }))
 }
 
@@ -646,7 +648,7 @@ fn decode_wic(bytes: &[u8]) -> Result<Decoded, String> {
 }
 
 /// Draws an SVG at its intrinsic size × [`nsh_core::svg::OVERSAMPLE`] (at
-/// most [`nsh_core::svg::MAX_OVERSAMPLED_PX`] a side), as premultiplied
+/// most [`nsh_core::svg::MAX_OVERSAMPLED_SIDE`] a side), as premultiplied
 /// BGRA: Direct2D scales it down to the size it is drawn at.
 fn decode_svg(bytes: &[u8]) -> Result<Decoded, String> {
     let raster = nsh_core::svg::rasterize_oversampled(bytes).map_err(|e| e.to_string())?;
@@ -654,15 +656,15 @@ fn decode_svg(bytes: &[u8]) -> Result<Decoded, String> {
     for px in data.as_chunks_mut::<4>().0 {
         px.swap(0, 2);
     }
-    let (w, h) = (raster.size.width.0, raster.size.height.0);
-    let size = ((w.round() as u32).max(1), (h.round() as u32).max(1));
+    let reported = nsh_core::svg::reported_size(raster.size);
+    let size = (reported.width.0 as u32, reported.height.0 as u32);
     let pixels = Pixels {
         width: raster.width,
         height: raster.height,
         data,
     };
     Ok(Decoded {
-        vector: true,
+        points: Some(raster.size),
         ..Decoded::still(pixels, size)
     })
 }
@@ -895,6 +897,25 @@ pub(crate) fn load(
     done: impl FnOnce(Result<(Rc<Frame>, (u32, u32)), String>) + 'static,
 ) {
     let done = move |result: Result<Picture, String>| done(result.map(|p| (p.frame, p.size)));
+    fetch(surface, uri, None, Box::new(done));
+}
+
+/// Loads the bitmap `uri` for a canvas, as [`load`] does: canvases draw
+/// bitmaps, so an SVG is an image that failed to load.
+pub(crate) fn load_bitmap(
+    surface: &Rc<Surface>,
+    uri: &str,
+    done: impl FnOnce(Result<Rc<Frame>, String>) + 'static,
+) {
+    let source = uri.to_owned();
+    let done = move |result: Result<Picture, String>| {
+        done(result.and_then(|p| match p.points {
+            Some(_) => Err(format!(
+                "{source} is an SVG image: canvases draw bitmaps (PNG, JPEG, ...)"
+            )),
+            None => Ok(p.frame),
+        }));
+    };
     fetch(surface, uri, None, Box::new(done));
 }
 
@@ -1395,19 +1416,23 @@ fn density(uri: &str) -> f32 {
 }
 
 /// The natural size in points of an image of `size` pixels loaded from
-/// `source`: the size the source declares, or its pixels over the file
-/// name's density (an SVG's `size` is in points: `vector`).
-fn natural(size: (u32, u32), vector: bool, source: Option<&ImageSource>) -> (f32, f32) {
+/// `source`: the size the source declares, an SVG's intrinsic size
+/// (`points`), or its pixels over the file name's density.
+fn natural(
+    size: (u32, u32),
+    points: Option<Size<Points>>,
+    source: Option<&ImageSource>,
+) -> (f32, f32) {
     if let Some(size) = source
         .and_then(|s| s.size)
         .filter(|s| s.width.0 > 0.0 && s.height.0 > 0.0)
     {
         return (size.width.0, size.height.0);
     }
-    let d = match source {
-        Some(s) if !vector => density(&s.uri),
-        _ => 1.0,
-    };
+    if let Some(points) = points {
+        return (points.width.0, points.height.0);
+    }
+    let d = source.map_or(1.0, |s| density(&s.uri));
     (size.0 as f32 / d, size.1 as f32 / d)
 }
 
@@ -1498,11 +1523,11 @@ fn draw_one(
     state: &ViewState,
     image: &ImageState,
     frame: &Frame,
-    (size, vector): ((u32, u32), bool),
+    (size, points): ((u32, u32), Option<Size<Points>>),
     source: Option<&ImageSource>,
 ) {
     let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
-    let (x, y, fw, fh) = fit(image.mode, natural(size, vector, source), (w, h));
+    let (x, y, fw, fh) = fit(image.mode, natural(size, points, source), (w, h));
     if fw <= 0.0 || fh <= 0.0 {
         return;
     }
@@ -1603,7 +1628,7 @@ pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
             state,
             image,
             &placeholder.frame,
-            (placeholder.size, placeholder.vector),
+            (placeholder.size, placeholder.points),
             source,
         );
     }
@@ -1633,7 +1658,7 @@ pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
         state,
         image,
         frame,
-        (picture.size, picture.vector),
+        (picture.size, picture.points),
         image.source.as_ref(),
     );
     if alpha < 1.0 {
@@ -1781,7 +1806,7 @@ mod tests {
     #[test]
     fn svg_decodes_oversampled() {
         let decoded = decode(SVG_LOGO.to_vec()).unwrap();
-        assert!(decoded.vector);
+        assert_eq!(decoded.points, Some(Size::new(Points(48.0), Points(24.0))));
         assert_eq!(decoded.size, (48, 24), "intrinsic size in points");
         let p = &decoded.frames[0];
         assert_eq!((p.width, p.height), (192, 96), "four pixels a point");
@@ -1805,15 +1830,20 @@ mod tests {
         let source = ImageSource {
             uri: "asset:/logo@2x.svg".into(),
             size: None,
-            scales: Default::default(),
+            scales: nsh_core::ImageScales::NONE,
         };
         let picture = Picture::new(decode(SVG_LOGO.to_vec()).unwrap()).unwrap();
-        assert_eq!((picture.size, picture.vector), ((48, 24), true));
+        assert_eq!(picture.size, (48, 24));
         assert_eq!(picture.frame.size(), (192, 96));
         assert_eq!(
-            natural(picture.size, picture.vector, Some(&source)),
+            natural(picture.size, picture.points, Some(&source)),
             (48.0, 24.0)
         );
+        // Fractions lay out as they are; reports round them.
+        let odd = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10.5" height="10"/>"#;
+        let odd = decode(odd.to_vec()).unwrap();
+        assert_eq!(odd.size, (11, 10));
+        assert_eq!(natural(odd.size, odd.points, None), (10.5, 10.0));
     }
 
     #[test]
@@ -1842,7 +1872,7 @@ mod tests {
             size: None,
             scales: Default::default(),
         };
-        assert_eq!(natural((200, 100), false, Some(&source)), (100.0, 50.0));
+        assert_eq!(natural((200, 100), None, Some(&source)), (100.0, 50.0));
     }
 
     #[test]

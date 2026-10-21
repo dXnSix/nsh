@@ -14,7 +14,7 @@ use nsh_engine::{App, Engine, EngineConfig, Environment};
 
 use crate::{
     ChannelSink,
-    test_ui::{ListView, ListViewProps, Stepper, StepperApi, StepperProps},
+    test_ui::{Stepper, StepperApi, list_view, stepper},
 };
 
 fn start(root: Root) -> (Engine, Receiver<MountBatch>) {
@@ -35,6 +35,8 @@ fn start(root: Root) -> (Engine, Receiver<MountBatch>) {
         data_dir: None,
         storage: None,
         clock: Default::default(),
+        pinned: Default::default(),
+        clipboard: None,
     };
     (
         Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap(),
@@ -248,7 +250,7 @@ fn Stocks() -> impl IntoElement {
     let pressed = signal(String::new());
     let ended = signal(0);
     view().flex_1().child(
-        ListView::element(ListViewProps::default()).items(
+        list_view().items(
             virtual_list(rows.len(), move |at| {
                 let rows = rows.clone();
                 text(move || rows[at.index()].clone())
@@ -333,6 +335,8 @@ fn start_js(app: &str) -> (Engine, Receiver<MountBatch>) {
         data_dir: None,
         storage: None,
         clock: Default::default(),
+        pinned: Default::default(),
+        clipboard: None,
     };
     (
         Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap(),
@@ -377,12 +381,12 @@ fn the_apps_handlers_on_a_list_views_rows_run() {
 #[component]
 fn Asker() -> impl IntoElement {
     let asked = signal(String::new());
-    let stepper = component_ref::<Stepper>();
+    let stepper_ref = component_ref::<Stepper>();
     view()
         .flex_1()
         .child(
             text(move || format!("asked {}", asked.get())).on_press(move |_: &()| {
-                let value = stepper.api::<StepperApi>().map(|api| {
+                let value = stepper_ref.api::<StepperApi>().map(|api| {
                     let value = api.value();
                     api.set_value(5.0);
                     value
@@ -390,13 +394,7 @@ fn Asker() -> impl IntoElement {
                 asked.set(format!("{value:?}"));
             }),
         )
-        .child(
-            Stepper::element(StepperProps {
-                default_value: 3.0.into(),
-                ..StepperProps::default()
-            })
-            .component_ref(&stepper),
-        )
+        .child(stepper().default_value(3.0).component_ref(&stepper_ref))
 }
 
 #[test]
