@@ -250,5 +250,6 @@ AGSL 0.10 MB.
 
 The element: `nsh-core`'s `shader::tests` (packing, bindings, images, the buffers), `nsh-engine`'s `shader` tests (a
 `.wgsl` import and `createShader` end to end: one program per shader, the packed fills, the bindings, errors and
-`shaderSupport()`) and the `paint` domain's `paint-shader` case in `tests/compat`. The platforms are checked by
+`shaderSupport()`), the `paint` domain's `paint-shader` case in `tests/compat`, and the gallery's Shaders demo
+(`examples/gallery/demos/ShaderDemo.tsx`: `nsh.time`, animated uniforms, an image). The platforms are checked by
 running them: `nsh test <entry> --target macos|ios|android|web` with `app.screenshot(..)` steps.
