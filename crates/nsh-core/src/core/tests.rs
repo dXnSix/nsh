@@ -2891,6 +2891,121 @@ fn right_to_left_layouts() {
 }
 
 #[test]
+fn right_to_left_classes_stay_physical() {
+    let mut c = core();
+    // The surface is right to left before anything is made.
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: ROOT_ID,
+            prop: Prop::LayoutDirection(true),
+        }],
+    );
+    view_with_classes(&mut c, 2, "flex-row w-[300px] h-[50px]");
+    let n = |v: f32| StyleValue::Number(v);
+    let mut ops = Vec::new();
+    // `ml-*` is the left margin right to left too (CSS); `ms-*` the start,
+    // and an inline `marginLeft` keeps React Native's meaning, the start.
+    for (id, classes) in [
+        (3, "w-[50px] h-[50px] ml-[10px]"),
+        (4, "w-[50px] h-[50px] ms-[10px]"),
+        (5, "w-[50px] h-[50px]"),
+        (
+            6,
+            "absolute left-[5px] w-[20px] h-[20px] border-l-4 border-l-red-500 rounded-tl-lg",
+        ),
+    ] {
+        ops.push(Op::Create { id, tag: Tag::View });
+        ops.push(class_op(id, classes));
+        ops.push(Op::Insert {
+            parent: 2,
+            child: id,
+            before: None,
+        });
+    }
+    ops.push(style_op(5, &[("marginLeft", n(10.0))]));
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    let x = |batch: &MountBatch, id| frame_of(batch, id).map(|f| f.origin.x.0);
+    // The row runs from the right: 3 is the first, at the right edge, with
+    // its margin on its left; 4 has its start margin on its right.
+    assert_eq!(x(&batch, 3), Some(300.0 - 50.0));
+    assert_eq!(x(&batch, 4), Some(300.0 - 60.0 - 10.0 - 50.0));
+    assert_eq!(x(&batch, 5), Some(300.0 - 60.0 - 60.0 - 10.0 - 50.0));
+    assert_eq!(x(&batch, 6), Some(5.0));
+    let v = view_style_of(&batch, 6).unwrap();
+    assert_eq!(v.borders.widths.left, px(4.0));
+    assert_eq!(v.borders.widths.right, px(0.0));
+    assert_eq!(v.borders.colors[3], Color(0xfb2c_36ff));
+    assert_eq!(v.corner_radius.top_left, Some(px(8.0)));
+    assert_eq!(v.corner_radius.top_right, None);
+    // Back to left to right, the same.
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: ROOT_ID,
+            prop: Prop::LayoutDirection(false),
+        }],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(x(&batch, 3), Some(10.0));
+    assert_eq!(x(&batch, 4), Some(60.0 + 10.0));
+    // Where it was: no new frame.
+    assert_eq!(x(&batch, 6), None);
+    let v = view_style_of(&batch, 6).unwrap();
+    assert_eq!(v.borders.widths.left, px(4.0));
+    assert_eq!(v.corner_radius.top_left, Some(px(8.0)));
+}
+
+#[test]
+fn right_to_left_text_alignment_classes_stay_physical() {
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: ROOT_ID,
+            prop: Prop::LayoutDirection(true),
+        }],
+    );
+    let mut ops = Vec::new();
+    for (id, classes) in [(2, "text-left"), (4, "text-end"), (6, "text-right")] {
+        ops.extend([
+            Op::Create { id, tag: Tag::Text },
+            class_op(id, classes),
+            Op::CreateText {
+                id: id + 1,
+                text: "hello".into(),
+            },
+            Op::Insert {
+                parent: id,
+                child: id + 1,
+                before: None,
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: id,
+                before: None,
+            },
+        ]);
+    }
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    let align = |id| {
+        batch
+            .items
+            .iter()
+            .find_map(|i| match i {
+                MountItem::Text { id: i, text, .. } if *i == id => Some(text.align),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(align(2), TextAlign::Left);
+    assert_eq!(align(4), TextAlign::Left);
+    assert_eq!(align(6), TextAlign::Right);
+}
+
+#[test]
 fn right_to_left_horizontal_scrolls() {
     let mut c = core();
     let n = |v: f32| StyleValue::Number(v);

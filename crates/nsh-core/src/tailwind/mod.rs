@@ -422,7 +422,8 @@ impl ClassList {
             }
             for decl in &rule.decls {
                 if let Decl::Default(key, value) = decl {
-                    let _ = style.set_key(*key, value.as_value());
+                    let (key, value) = utilities::directed(*key, value, cx.rtl);
+                    let _ = style.set_key(key, value.as_value());
                 }
             }
         }
@@ -437,7 +438,7 @@ impl ClassList {
             }
             important |= rule.important;
             for decl in &rule.decls {
-                decl.apply(cx.env.dark, style, props, &mut parts);
+                decl.apply(cx.env.dark, cx.rtl, style, props, &mut parts);
             }
             let background = rule.decls.iter().any(Decl::sets_background_color);
             if rule.cond.interactive() {
@@ -481,7 +482,7 @@ impl ClassList {
             {
                 if rule.cond.matches(cx) {
                     for decl in &rule.decls {
-                        decl.apply(cx.env.dark, style, props, &mut parts);
+                        decl.apply(cx.env.dark, cx.rtl, style, props, &mut parts);
                     }
                 }
             }

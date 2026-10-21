@@ -131,17 +131,72 @@ pub(crate) enum Decl {
     AdaptivePart(Box<[Part; 2]>),
 }
 
+/// `key` with the value it gets in a layout of direction `rtl`. Classes
+/// are physical, as in CSS (`pl-4` is the left padding right to left
+/// too), while the core lays left and right properties out as start and
+/// end right to left, React Native's rule for inline styles: right to
+/// left, a class names the other side, so it comes out on its own.
+pub(crate) fn directed<'a>(
+    key: StyleKey,
+    value: &'a PatchValue,
+    rtl: bool,
+) -> (StyleKey, std::borrow::Cow<'a, PatchValue>) {
+    use std::borrow::Cow;
+    if !rtl {
+        return (key, Cow::Borrowed(value));
+    }
+    if key == K::TextAlign {
+        let mirrored = match value {
+            PatchValue::Str(s) if &**s == "left" => "right",
+            PatchValue::Str(s) if &**s == "right" => "left",
+            _ => return (key, Cow::Borrowed(value)),
+        };
+        return (key, Cow::Owned(PatchValue::Str(mirrored.into())));
+    }
+    (mirrored(key).unwrap_or(key), Cow::Borrowed(value))
+}
+
+/// The left / right key on the other side.
+fn mirrored(key: StyleKey) -> Option<StyleKey> {
+    Some(match key {
+        K::PaddingLeft => K::PaddingRight,
+        K::PaddingRight => K::PaddingLeft,
+        K::MarginLeft => K::MarginRight,
+        K::MarginRight => K::MarginLeft,
+        K::Left => K::Right,
+        K::Right => K::Left,
+        K::BorderLeftWidth => K::BorderRightWidth,
+        K::BorderRightWidth => K::BorderLeftWidth,
+        K::BorderLeftColor => K::BorderRightColor,
+        K::BorderRightColor => K::BorderLeftColor,
+        K::BorderTopLeftRadius => K::BorderTopRightRadius,
+        K::BorderTopRightRadius => K::BorderTopLeftRadius,
+        K::BorderBottomLeftRadius => K::BorderBottomRightRadius,
+        K::BorderBottomRightRadius => K::BorderBottomLeftRadius,
+        _ => return None,
+    })
+}
+
+/// Whether `key = value` lands elsewhere right to left ([`directed`]).
+fn sided(key: StyleKey, value: &PatchValue) -> bool {
+    mirrored(key).is_some()
+        || key == K::TextAlign
+            && matches!(value, PatchValue::Str(s) if matches!(&**s, "left" | "right"))
+}
+
 impl Decl {
     pub(crate) fn apply(
         &self,
         dark: bool,
+        rtl: bool,
         style: &mut Style,
         props: &mut ClassProps,
         parts: &mut Parts,
     ) {
         match self {
             Decl::Set(key, value) => {
-                let _ = style.set_key(*key, value.as_value());
+                let (key, value) = directed(*key, value, rtl);
+                let _ = style.set_key(key, value.as_value());
             }
             // Applied by `ClassList::apply` before the rules.
             Decl::Default(..) => {}
@@ -163,7 +218,8 @@ impl Decl {
                 parts.touched |= touched::SCREEN;
             }
             Decl::Adaptive(key, values) => {
-                let _ = style.set_key(*key, values[usize::from(dark)].as_value());
+                let (key, value) = directed(*key, &values[usize::from(dark)], rtl);
+                let _ = style.set_key(key, value.as_value());
             }
             Decl::AdaptivePart(pair) => parts.push(pair[usize::from(dark)].clone()),
         }
@@ -224,7 +280,16 @@ impl Decl {
                 (if *w != 0.0 { deps::WIDTH } else { 0 })
                     | (if *h != 0.0 { deps::HEIGHT } else { 0 })
             }
-            Decl::Adaptive(..) | Decl::AdaptivePart(_) => deps::DARK,
+            Decl::Adaptive(key, values) => {
+                deps::DARK
+                    | if sided(*key, &values[0]) {
+                        deps::RTL
+                    } else {
+                        0
+                    }
+            }
+            Decl::AdaptivePart(_) => deps::DARK,
+            Decl::Set(key, value) | Decl::Default(key, value) if sided(*key, value) => deps::RTL,
             _ => 0,
         }
     }
@@ -1113,7 +1178,13 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         "text-right" => sets(K::TextAlign, "right"),
         "text-justify" => sets(K::TextAlign, "justify"),
         "text-start" => sets(K::TextAlign, "auto"),
-        "text-end" => sets(K::TextAlign, "right"),
+        // React Native's `right`, which the core lays out as the end right
+        // to left (an inline style's meaning, never mirrored as `text-right`
+        // is).
+        "text-end" => Decl::Style(StyleDecl::Set(
+            K::TextAlign,
+            PatchValue::Str("right".into()),
+        )),
         // `vertical-align` of views and images inside a text (`align-top`,
         // `align-bottom`, `align-sub` and `align-super` are the line box's
         // or the baseline's, which NSH does not place by).

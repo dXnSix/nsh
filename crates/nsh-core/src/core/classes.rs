@@ -783,7 +783,10 @@ impl<M: TextEngine> Core<M> {
             let cx = Context {
                 env: self.class_env,
                 window,
-                rtl: node.rtl,
+                // The direction it lays out in once styled (a node created
+                // detached takes the root's), so its sided classes land
+                // right the first time.
+                rtl: self.resolved_rtl(key),
                 states: node.states | node.projected,
                 position: pos,
                 group: &group,

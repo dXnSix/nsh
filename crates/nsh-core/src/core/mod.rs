@@ -1839,13 +1839,18 @@ impl<M: TextEngine> Core<M> {
         }
         if flipped {
             self.update_children_direction(key);
+            // Its own `direction` turned it: classes resolved for the other
+            // direction (`pl-*`, `rtl:`) resolve again.
+            if self.reads_direction(key) {
+                self.restyle(key);
+            }
         }
         Ok(())
     }
 
     /// The direction `key` lays out in: its own, else its parent's (the
     /// root's while detached).
-    fn resolved_rtl(&self, key: Key) -> bool {
+    pub(super) fn resolved_rtl(&self, key: Key) -> bool {
         let node = &self.nodes[key as usize];
         if let Some(rtl) = node.direction {
             return rtl;

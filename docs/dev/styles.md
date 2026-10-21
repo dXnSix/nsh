@@ -58,6 +58,11 @@
   where Tailwind has none: `-gap-4`, `-p-2`; fractions and `full` on padding, margin and gaps; non-integer `z-*`; bare
   `inset-shadow` without a theme value). Rendering hints are accepted and do nothing (`ignored` in
   `tailwind/mod.rs`: `antialiased`, `will-change-*`'s values, ...); `space-x/y-*` are gaps.
+- **Right to left**, classes are physical as in a browser: `pl-*`, `ml-*`, `left-*`, `border-l*`, `rounded-l*` /
+  `-tl` ..., `text-left` / `text-right` keep their side, while style keys keep React Native's swap. The core swaps every
+  left / right property of a node right to left (`apply_direction`), so a class names the other side there
+  (`utilities::directed`, applied with the node's resolved direction; such classes depend on `deps::RTL`), and the
+  swap puts it back. `text-end` is React Native's `right`, which the swap makes the end.
 - **Text style inheritance** (CSS-like): a view's text properties (color, font, size, alignment, ...) pass to the texts and inputs
   inside it, so `class="text-white"` on a button styles its label. Inset padding / margin (set by Rust
   components: `SafeAreaView`, `KeyboardAvoidingView`) are added to the resolved padding / margin, so classes and

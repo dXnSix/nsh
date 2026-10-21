@@ -90,6 +90,53 @@ fn spacing_and_layout() {
 }
 
 #[test]
+fn physical_classes_name_the_other_side_right_to_left() {
+    // The core lays left and right out as start and end right to left
+    // (React Native's rule for inline styles); classes are physical, so
+    // right to left they set the other side, and come out where they say.
+    let theme = themed();
+    let resolve = |classes: &str, rtl: bool| {
+        let list = parse(&theme, classes);
+        assert_ne!(list.deps() & deps::RTL, 0, "{classes}");
+        let group = |_: &str| 0;
+        let cx = Context {
+            env: ClassEnvironment::default(),
+            window: crate::geometry::size_pt(390.0, 844.0),
+            rtl,
+            states: 0,
+            position: 0,
+            group: &group,
+        };
+        let mut style = Style::default();
+        list.apply(&cx, &theme, &mut style, &mut ClassProps::default(), |_| {});
+        style
+    };
+    let s = resolve("pl-4 mr-2 left-1", true);
+    assert_eq!(
+        s.layout.padding.right,
+        taffy::LengthPercentage::length(16.0)
+    );
+    assert_eq!(
+        s.layout.margin.left,
+        taffy::LengthPercentageAuto::length(8.0)
+    );
+    assert_eq!(
+        s.layout.inset.right,
+        taffy::LengthPercentageAuto::length(4.0)
+    );
+    let s = resolve("pl-4", false);
+    assert_eq!(s.layout.padding.left, taffy::LengthPercentage::length(16.0));
+    let s = resolve("text-left", true);
+    assert_eq!(s.text.text_align, Some(crate::style::TextAlign::Right));
+    // Logical classes need nothing: the core places them.
+    let list = parse(
+        &theme,
+        "ps-4 me-2 start-1 rounded-s-lg border-e-2 text-end text-center px-2",
+    );
+    assert_eq!(list.deps() & deps::RTL, 0);
+}
+
+#[test]
 fn later_classes_win() {
     let s = styled("p-4 p-2 bg-red-500 bg-blue-500");
     assert_eq!(s.layout.padding.top, taffy::LengthPercentage::length(8.0));
