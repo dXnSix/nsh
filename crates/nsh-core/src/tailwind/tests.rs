@@ -801,6 +801,16 @@ fn groups() {
     };
     child.apply(&context, &theme, &mut style, &mut props, |_| {});
     assert_eq!(style.view.opacity, 0.5);
+    // Tailwind registers `group-*` before `first:` ... `even:`, so the
+    // structural variants win over it whatever the order in the string
+    // (`.group:hover .x` comes before `.y:last-child` in the CSS).
+    let child = parse(&theme, "last:opacity-25 group-hover/card:opacity-50");
+    let context = Context {
+        position: position::LAST,
+        ..context
+    };
+    child.apply(&context, &theme, &mut style, &mut props, |_| {});
+    assert_eq!(style.view.opacity, 0.25);
 }
 
 #[test]

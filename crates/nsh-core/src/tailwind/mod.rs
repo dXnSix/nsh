@@ -265,7 +265,8 @@ pub(crate) struct Rule {
 /// Ranks of the variants Rust components use (Tailwind's order, as
 /// [`variant`] gives them).
 pub(crate) mod rank {
-    pub(crate) const GROUP: u16 = 20;
+    /// Before the pseudo-elements and `first:` ... `even:`.
+    pub(crate) const GROUP: u16 = 10;
     pub(crate) const HOVER: u16 = 31;
     pub(crate) const FOCUS: u16 = 32;
     pub(crate) const ACTIVE: u16 = 33;
@@ -758,34 +759,36 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<u16> {
     let states = |cond: &mut Condition, s: u8| {
         cond.states |= s;
     };
+    // Tailwind registers `group-*` first, then the pseudo-elements, then
+    // the structural pseudo-classes: later ones win over earlier ones.
     Some(match v {
-        "first" => {
-            cond.position |= position::FIRST;
-            10
-        }
-        "last" => {
-            cond.position |= position::LAST;
+        "selection" => {
+            cond.selection = true;
             11
-        }
-        "only" => {
-            cond.position |= position::ONLY;
-            12
-        }
-        "odd" => {
-            cond.position |= position::ODD;
-            13
-        }
-        "even" => {
-            cond.position |= position::EVEN;
-            14
         }
         "placeholder" => {
             cond.placeholder = true;
+            12
+        }
+        "first" => {
+            cond.position |= position::FIRST;
+            13
+        }
+        "last" => {
+            cond.position |= position::LAST;
+            14
+        }
+        "only" => {
+            cond.position |= position::ONLY;
             15
         }
-        "selection" => {
-            cond.selection = true;
+        "odd" => {
+            cond.position |= position::ODD;
             16
+        }
+        "even" => {
+            cond.position |= position::EVEN;
+            17
         }
         "checked" => {
             states(cond, CHECKED);
@@ -886,7 +889,7 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<u16> {
                     return None;
                 }
                 entry.1 |= bit;
-                return Some(20);
+                return Some(rank::GROUP);
             }
             // Breakpoints: `md:`, `max-md:`, `min-[600px]:`, `max-[600px]:`.
             let (max, name) = match v.strip_prefix("max-") {
