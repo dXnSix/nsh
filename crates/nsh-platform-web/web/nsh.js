@@ -132,7 +132,11 @@ const KEYFRAMES = `
 .nsh-scheme-dark { color-scheme: dark; }
 .nsh-hidden { visibility: hidden; }
 .nsh-gone { display: none; }
-.nsh-inert { pointer-events: none; }
+/* \`pointerEvents\`: "none" takes the whole subtree out; "box-none" the view only, its child views stay targets (its
+   own layers, which take no pointer events, keep theirs). */
+:where(.nsh-box-none > *) { pointer-events: auto; }
+.nsh-box-none { pointer-events: none; }
+.nsh-inert, .nsh-inert * { pointer-events: none !important; }
 .nsh-clip { overflow: clip; }
 /* A sticky list cell's range of travel (op_sticky): it lifts the cell above the other cells, and with no breadth
    across it takes no pointer events. The cell sticks inside it, at its left in either direction. */
@@ -1609,8 +1613,8 @@ class Player {
     if (props.testID) el.dataset.testid = props.testID;
     else delete el.dataset.testid;
     const pe = props.pointerEvents;
-    el.classList.toggle("nsh-inert", pe === "none" || pe === "box-none");
-    if (pe === "box-none") el._boxNone = true;
+    el.classList.toggle("nsh-inert", pe === "none");
+    el.classList.toggle("nsh-box-none", pe === "box-none");
     el.classList.toggle("nsh-area", !!props.selectionArea);
     this.updateFocusable(el);
     this.updateTouchAction(el);
