@@ -13,7 +13,6 @@ use nsh_core::{
     animation::AnimationValue,
     shader::{ShaderFill, ShaderProgram},
 };
-use objc2::rc::Retained;
 use objc2_core_graphics::CGImage;
 use objc2_quartz_core::CALayer;
 
@@ -223,7 +222,8 @@ fn tick(view: &NshView) {
 /// What it shows, for an in-process picture of the window (screenshots),
 /// which does not draw a `CAMetalLayer`: a sublayer with it as an image,
 /// removed when the returned guard drops.
-pub(crate) fn picture_layer(view: &NshView) -> Option<Retained<CALayer>> {
+#[cfg(feature = "dev")]
+pub(crate) fn picture_layer(view: &NshView) -> Option<objc2::rc::Retained<CALayer>> {
     let (w, h, rgba) = view.state_mut().shader.as_mut()?.layer.picture()?;
     let image = crate::image::rgba_pixels_image(w, h, &rgba)?;
     let layer = CALayer::new();
@@ -236,7 +236,7 @@ pub(crate) fn picture_layer(view: &NshView) -> Option<Retained<CALayer>> {
     let ptr = &*image as *const CGImage as *mut objc2::runtime::AnyObject;
     // SAFETY: CF objects are Objective-C objects; a CGImage is a valid
     // layer content.
-    unsafe { layer.setContents(Retained::retain(ptr).as_deref()) };
+    unsafe { layer.setContents(objc2::rc::Retained::retain(ptr).as_deref()) };
     layer.setZPosition(crate::decor::SHADER);
     // Shaped as the shader's layer is (the view's corners).
     {
@@ -263,7 +263,9 @@ pub(crate) fn picture_layer(view: &NshView) -> Option<Retained<CALayer>> {
     Some(layer)
 }
 
-/// The shader views under `view` (itself included).
+/// Every shader view of the process (the screenshot keeps those in its
+/// window).
+#[cfg(feature = "dev")]
 pub(crate) fn shader_views() -> Vec<NshView> {
     views()
 }
