@@ -112,7 +112,7 @@ view()
 | `flex`、`inline-flex` | `display: "flex"`，没有方向类时为横向 |
 | `grid`、`inline-grid` | `display: "grid"` |
 | `block`、`flow-root` | `display: "block"`（块级布局） |
-| `inline`、`inline-block` | `display: "flex"`（没有行内格式化上下文，按视图布局） |
+| `inline`、`inline-block` | `display: "block"`：浏览器在 flex 或 grid 父元素中为它们计算的值 |
 | `hidden` | `display: "none"` |
 | `relative`、`static`、`sticky` | `position: "relative"`（`sticky` 不会吸顶） |
 | `absolute`、`fixed` | `position: "absolute"`（`fixed` 相对父元素而不是屏幕） |

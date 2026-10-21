@@ -112,7 +112,7 @@ Arbitrary CSS properties (`[mask-type:luminance]`) are not supported.
 | `flex`, `inline-flex` | `display: "flex"`, and a row unless a direction utility is present |
 | `grid`, `inline-grid` | `display: "grid"` |
 | `block`, `flow-root` | `display: "block"` (block layout) |
-| `inline`, `inline-block` | `display: "flex"` (there is no inline formatting context: they lay out as views) |
+| `inline`, `inline-block` | `display: "block"`: what a browser computes for them in a flex or grid parent |
 | `hidden` | `display: "none"` |
 | `relative`, `static`, `sticky` | `position: "relative"` (`sticky` does not stick) |
 | `absolute`, `fixed` | `position: "absolute"` (`fixed` is relative to the parent, not the screen) |

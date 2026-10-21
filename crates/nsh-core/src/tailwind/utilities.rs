@@ -803,9 +803,11 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
                 Decl::Default(K::FlexDirection, PatchValue::Str("row".into())),
             ]);
         }
-        "block" | "flow-root" => sets(K::Display, "block"),
-        // No inline formatting context: inline boxes lay out as views.
-        "inline-block" | "inline" => sets(K::Display, "flex"),
+        // Inside a flex or grid container, which every NSH parent but a
+        // block is, a browser blockifies inline boxes: `inline` and
+        // `inline-block` compute to `block` there. (Inside a block there is
+        // no inline formatting context: they are blocks too.)
+        "block" | "flow-root" | "inline-block" | "inline" => sets(K::Display, "block"),
         "grid" | "inline-grid" => sets(K::Display, "grid"),
         "hidden" => sets(K::Display, "none"),
         "static" | "relative" | "sticky" => sets(K::Position, "relative"),

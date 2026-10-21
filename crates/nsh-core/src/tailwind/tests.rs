@@ -501,7 +501,14 @@ fn display() {
     // Block formatting contexts use Taffy's block layout.
     assert_eq!(styled("block").layout.display, taffy::Display::Block);
     assert_eq!(styled("flow-root").layout.display, taffy::Display::Block);
-    assert_eq!(styled("inline-block").layout.display, taffy::Display::Flex);
+    // Inline boxes in a flex or grid parent are blockified, as a browser
+    // computes them (`display: inline-block` -> `block`).
+    assert_eq!(styled("inline-block").layout.display, taffy::Display::Block);
+    assert_eq!(styled("inline").layout.display, taffy::Display::Block);
+    assert_eq!(
+        wide("hidden md:inline-block").layout.display,
+        taffy::Display::Block
+    );
 }
 
 #[test]
