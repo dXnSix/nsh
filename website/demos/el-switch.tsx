@@ -1,14 +1,13 @@
 import { mount, signal, Text, View } from "nsh";
 import { Switch } from "nsh/base";
-import { Platform } from "nsh/device";
-import { ui } from "./palette";
+import { desktop, Log, Panel, size, Split, ui } from "./palette";
 
-// The parts, styled with classes: `checked:` and `disabled:` follow the
-// switch, `dark:` the page's theme.
-const row = "flex-row-reverse items-center justify-between gap-3 px-4 py-3 disabled:opacity-40";
-const track =
-  "w-11 rounded-full bg-[#dcdcd6] p-0.5 transition-colors dark:bg-[#2c2e33] checked:bg-[#0f8a55] dark:checked:bg-[#45d49a]";
-const thumb = "size-5 rounded-full bg-white shadow-sm transition-transform dark:bg-[#eceef1] checked:translate-x-5";
+// The parts: geometry and motion in classes (`checked:` moves the thumb,
+// `disabled:` dims the row, both following the switch), colors from the
+// palette by the value the app owns. A pointer gets the compact size.
+const row = `flex-row-reverse items-center justify-between gap-3 ${desktop ? "px-3 py-2" : "px-4 py-3"} active:opacity-70 disabled:opacity-40`;
+const track = `${desktop ? "w-9" : "w-12"} rounded-full p-0.5 transition-colors`;
+const thumb = desktop ? "size-4 rounded-full transition-transform checked:translate-x-4" : "size-5.5 rounded-full transition-transform checked:translate-x-5";
 
 function Setting(props: { label: string; detail: string; checked: boolean; disabled?: boolean; onChange: (next: boolean) => void }) {
   return (
@@ -18,11 +17,13 @@ function Setting(props: { label: string; detail: string; checked: boolean; disab
       onChange={props.onChange}
       class={row}
       trackClass={track}
+      trackStyle={props.checked ? ui().accentFill : ui().inset}
       thumbClass={thumb}
+      thumbStyle={props.checked ? { backgroundColor: ui().onAccent } : ui().raised}
     >
       <View style={{ flex: 1, gap: 2 }}>
-        <Text style={{ fontSize: 15, fontWeight: "500", color: ui().text }}>{props.label}</Text>
-        <Text style={{ fontSize: 12, color: ui().muted }}>{props.detail}</Text>
+        <Text style={{ fontSize: size.label, fontWeight: "500", color: ui().text }}>{props.label}</Text>
+        <Text style={{ fontSize: size.detail, color: ui().muted }}>{props.detail}</Text>
       </View>
     </Switch>
   );
@@ -32,21 +33,34 @@ function App() {
   const wifi = signal(true);
   const bluetooth = signal(false);
   const ask = signal(true);
-  const last = signal("–");
+  const events = signal<string[]>([]);
   const change = (name: string, value: { set: (v: boolean) => void }) => (next: boolean) => {
     value.set(next);
-    last.set(`${name} → ${next}`);
+    events.set([`${name} → ${next}`, ...events()].slice(0, 3));
   };
-  const line = () => <View style={{ height: 1, marginLeft: 16, backgroundColor: ui().line }} />;
+  const line = () => <View style={{ height: 1, marginLeft: desktop ? 12 : 16, backgroundColor: ui().line }} />;
   return (
-    <View style={{ flex: 1, backgroundColor: ui().page, padding: 20, paddingTop: 24, gap: 12 }}>
+    <View style={{ flex: 1, backgroundColor: ui().page, padding: 20, paddingTop: 24, gap: 14 }}>
       <Text style={{ fontSize: 22, fontWeight: "700", color: ui().text }}>switch</Text>
       <Text style={{ color: ui().muted }}>
-        {Platform.isDesktop ? "Click a row, or Tab to a switch and press Space" : "Tap a row: the label toggles it too"}
+        {desktop ? "Click a row, or Tab to a switch and press Space" : "Tap a row: the label toggles it too"}
       </Text>
 
-      <View style={{ maxWidth: 390, gap: 12 }}>
-        <View style={{ ...ui().card, borderRadius: 14, overflow: "hidden" }}>
+      <Split
+        gap={14}
+        inspector={
+          <>
+            <Panel title="checked · disabled">
+              <Text style={{ fontSize: 13, color: ui().text }}>
+                Wi-Fi {wifi() ? "on" : "off"} · ask {ask() ? "on" : "off"}
+                {wifi() ? "" : " (disabled)"} · Bluetooth {bluetooth() ? "on" : "off"}
+              </Text>
+            </Panel>
+            <Log title="onChange(checked)" lines={events()} minHeight={92} />
+          </>
+        }
+      >
+        <View style={{ ...ui().card, borderRadius: 16, overflow: "hidden" }}>
           <Setting label="Wi-Fi" detail={wifi() ? "Connected to Studio" : "Off"} checked={wifi()} onChange={change("Wi-Fi", wifi)} />
           {line()}
           <Setting
@@ -59,13 +73,7 @@ function App() {
           {line()}
           <Setting label="Bluetooth" detail={bluetooth() ? "Discoverable as “Desk”" : "Off"} checked={bluetooth()} onChange={change("Bluetooth", bluetooth)} />
         </View>
-
-        <Text style={{ color: ui().muted, fontSize: 13 }}>
-          Wi-Fi {wifi() ? "on" : "off"} · ask {ask() ? "on" : "off"}
-          {wifi() ? "" : " (disabled)"} · Bluetooth {bluetooth() ? "on" : "off"}
-        </Text>
-        <Text style={{ color: ui().up }}>last onChange: {last()}</Text>
-      </View>
+      </Split>
     </View>
   );
 }

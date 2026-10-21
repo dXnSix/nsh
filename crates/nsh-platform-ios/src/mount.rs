@@ -478,6 +478,15 @@ impl Mounter {
         Some(self.slot(id)?.native.view().retain())
     }
 
+    /// Text view `id` (`None`: it is no text view).
+    #[cfg(feature = "dev")]
+    pub(crate) fn text_view(&self, id: NodeId) -> Option<Retained<TextView>> {
+        match &self.slot(id)?.native {
+            Native::Text(text) => Some(text.clone()),
+            _ => None,
+        }
+    }
+
     /// The text input `id` holds (`None`: it is no input).
     #[cfg(feature = "dev")]
     pub(crate) fn input_text(&self, id: NodeId) -> Option<String> {
@@ -799,7 +808,7 @@ impl Mounter {
             MountItem::ScrollConfig {
                 id,
                 horizontal,
-                shows_indicator,
+                scrollbar_visible,
                 scroll_value,
                 keyboard_dismiss,
                 mirrored,
@@ -835,8 +844,8 @@ impl Mounter {
                     let bounces = s.behavior.as_ref().is_none_or(|b| b.bounces);
                     scroll.setAlwaysBounceVertical(bounces && !horizontal);
                     scroll.setAlwaysBounceHorizontal(bounces && horizontal);
-                    scroll.setShowsVerticalScrollIndicator(shows_indicator && !horizontal);
-                    scroll.setShowsHorizontalScrollIndicator(shows_indicator && horizontal);
+                    scroll.setShowsVerticalScrollIndicator(scrollbar_visible && !horizontal);
+                    scroll.setShowsHorizontalScrollIndicator(scrollbar_visible && horizontal);
                     s.horizontal = horizontal;
                     s.scroll_value = scroll_value;
                 }
@@ -1798,8 +1807,8 @@ impl Mounter {
         // UIKeyModifierShift, Control, Alternate, Command.
         let has = |bit: u32| modifiers & (1 << bit) != 0;
         let event = nsh_core::HoverEvent {
-            location: point(Points(local.x as f32), Points(local.y as f32)),
-            page: point(Points(page.x as f32), Points(page.y as f32)),
+            position: point(Points(local.x as f32), Points(local.y as f32)),
+            page_position: point(Points(page.x as f32), Points(page.y as f32)),
             modifiers: nsh_core::keymap::Modifiers {
                 ctrl: has(18),
                 alt: has(19),
@@ -1824,8 +1833,8 @@ impl Mounter {
         // UIKeyModifierShift, Control, Alternate, Command.
         let has = |bit: u32| modifiers & (1 << bit) != 0;
         let event = nsh_core::ContextMenuEvent {
-            location: point(Points(local.x as f32), Points(local.y as f32)),
-            page: point(Points(page.x as f32), Points(page.y as f32)),
+            position: point(Points(local.x as f32), Points(local.y as f32)),
+            page_position: point(Points(page.x as f32), Points(page.y as f32)),
             modifiers: nsh_core::keymap::Modifiers {
                 ctrl: has(18),
                 alt: has(19),
@@ -2169,12 +2178,13 @@ impl Mounter {
         slot.events = events;
         let v = slot.values;
         let any = |kinds: &[EventKind]| kinds.iter().any(|&k| events.contains(k));
-        let own_press = any(&[
+        let handles_press = any(&[
             EventKind::Press,
             EventKind::LongPress,
             EventKind::PressDown,
             EventKind::PressUp,
-        ]) || slot.tracked & nsh_core::tailwind::state::PRESSED != 0;
+        ]);
+        let own_press = handles_press || slot.tracked & nsh_core::tailwind::state::PRESSED != 0;
         let (links, links_long_press) = match &slot.native {
             Native::Text(t) => (t.has_links(), t.links_long_press()),
             _ => (false, false),
@@ -2225,7 +2235,7 @@ impl Mounter {
         }
         if let Some(press) = &g.press {
             press.set_long_press(events.contains(EventKind::LongPress) || links_long_press);
-            press.set_own(own_press);
+            press.set_own(own_press, handles_press);
             press.set_long_press_delay(slot.long_press_delay);
         }
         let wants_hover = slot.tracked & nsh_core::tailwind::state::HOVERED != 0
@@ -2489,7 +2499,7 @@ impl Mounter {
             return;
         };
         let c = &screen.config;
-        nav.setNavigationBarHidden_animated(!c.header_shown, animated);
+        nav.setNavigationBarHidden_animated(!c.header_visible, animated);
         crate::navigation::style_bar(&nav.navigationBar(), c);
     }
 

@@ -28,7 +28,7 @@ Things that were found the hard way. Read the section of the area you change bef
   by hand in `nsh-js`.
 - **rquickjs converts `Option::None` to `undefined`, not `null`**: compare native results with `== null` in JS.
 - **`on*` props are event handlers to the renderer** (held on the node, sent to the core as a listener flag): settings must not
-  be named `on...` on host elements (`List` sends `onEndReachedThreshold` as `endReachedThreshold`).
+  be named `on...` on host elements (`List` sends `loadMoreThreshold` as `loadMoreThreshold`).
 - **There is no error boundary**: hot component proxies catch what a component throws, report it and render nothing until the
   fix (`nsh-js` `hot.rs`).
 - **Hot proxies return accessors**, not nodes: runtime code that inspects what a component returned (`NavStack` looks for a
@@ -64,7 +64,7 @@ Things that were found the hard way. Read the section of the area you change bef
   before shrinking it; Android sizes the content view at once in `setContentSize` (not at the next layout pass).
 - **Scroll reports can predate the core's own scrolls**: each report carries how many `ScrollBy` / list `ScrollTo` the view
   has applied (`EngineControl::scroll(.., applied)`), and the core adds the ones still pending; otherwise a stale offset
-  moves the window (and fires `onEndReached`) backwards.
+  moves the window (and fires `onLoadMore`) backwards.
 - **Unbound list cells still show their last item**: the core moves them out of sight (never with a NaN frame: cells that
   were never placed are skipped; UIKit throws on NaN geometry).
 - **Tailwind variant order decides between variants**, not their order in the string: `odd:bg-a last:bg-b` gives an odd last row
@@ -87,6 +87,11 @@ Things that were found the hard way. Read the section of the area you change bef
 - **IPAs are zipped with `ditto -c -k --norsrc --keepParent`**: `--sequesterRsrc` adds `__MACOSX/` resource forks.
 
 ## iOS, UIKit and Mac Catalyst
+
+- **Pressed-style observers must leave ancestor clicks working**: a view with only `activeStyle` / `active:`
+  has a `PressRecognizer` to report its pressed state, but yields the click to the nearest ancestor with press
+  handlers. `handled_deeper` counts handlers and pressable text spans; a style-only recognizer ends as failed
+  after reporting its state, so it does not compete with the ancestor's recognizer.
 
 - **UIFont and CTFont are toll-free bridged**: the text engine gets system fonts with `UIFont::systemFontOfSize_weight` and uses them as
   CTFonts (verified by rendering). CoreText attributes must use CT keys (colors are CGColors), not UIKit's NSForegroundColor.
@@ -182,6 +187,14 @@ Things that were found the hard way. Read the section of the area you change bef
   whether a rectangle is visible. `NshView` is a scroll container (`setScrollContainer(true)`) so that windows without a soft
   input mode resize instead of panning: the system picks the mode at the first layout, before the app's content is mounted,
   and a mode set from code afterwards is overridden. Windows that ask for `adjustPan` are left to the system.
+- **Android, passive press feedback**: `activeStyle` / `active:` and `android.ripple` observe a touch without
+  consuming it. The root's `TouchTracker` feeds style-only views through `Pressable`; `Box` and leaf views take
+  clicks for their press handlers or text spans. Feedback is cancelled when scrolling, panning, pinching or rotation
+  takes over, so a styled child leaves its parent's overlay or menu trigger clickable. The walk up from the touched
+  view stops at the first press handler, or at a text only when the finger is on one of its pressable spans (as
+  iOS's `handled_deeper` checks the link at the touch), so a card around plain text still shows its pressed style.
+  While feedback shows, the root claims the gesture as a clickable view would: Android sends the release only to
+  the view that took the down, and the release is what ends the feedback.
 - **Android, drags that start on a child**: a pannable `Box` intercepts the move that exceeds the slop and starts its pan right
   there; that intercepted move never reaches its `onTouchEvent`, so starting the pan there is what makes a quick flick (few moves)
   pan and end at all.
@@ -359,7 +372,7 @@ Things that were found the hard way. Read the section of the area you change bef
 - **Synthetic clicks on the Simulator / Catalyst windows go to whatever macOS window is on top at that point**: floating windows
   of other apps (e.g. a Slack huddle bar at window level 1001) silently swallow clicks over a band of the app. When a tap does
   nothing, list the windows at the point (`CGWindowListCopyWindowInfo`) before suspecting hit testing.
-- **Not supported / not verifiable here**: `I18nManager.swapLeftAndRightInRTL(false)` (left / right always swap right to left);
+- **Not supported / not verifiable here**: keeping left and right unswapped right to left (left / right always swap right to left);
   after switching direction at runtime UIKit keeps an existing back button's chevron; Android has no skew transforms (as in React Native); the iOS simulator cannot
   inject edge swipes (interactive back is untested there); Android's stylus handwriting mode (on by default on recent
   emulators) intercepts taps on inputs — turn it off with `adb shell settings put secure stylus_handwriting_enabled 0`.
