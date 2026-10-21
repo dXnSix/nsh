@@ -125,7 +125,10 @@ fn hlsl_compiles() {
     };
 
     for (name, source) in corpus() {
-        let hlsl = compile(&source, &Limits::default()).unwrap().to_hlsl().unwrap();
+        let hlsl = compile(&source, &Limits::default())
+            .unwrap()
+            .to_hlsl()
+            .unwrap();
         let stages = [
             (&hlsl.d2d, nsh_shader::HlslProgram::D2D_ENTRY, "ps_5_0"),
             (&hlsl.d3d11, hlsl.vertex.as_str(), "vs_5_0"),
@@ -154,10 +157,15 @@ fn hlsl_compiles() {
             };
             let message = errors.map(|e| {
                 // SAFETY: the blob holds the compiler's messages, `GetBufferSize` bytes of text.
-                let bytes = unsafe { std::slice::from_raw_parts(e.GetBufferPointer().cast::<u8>(), e.GetBufferSize()) };
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(e.GetBufferPointer().cast::<u8>(), e.GetBufferSize())
+                };
                 String::from_utf8_lossy(bytes).into_owned()
             });
-            assert!(result.is_ok() && blob.is_some(), "{name} ({entry:?}, {target:?}): {message:?}\n{code}");
+            assert!(
+                result.is_ok() && blob.is_some(),
+                "{name} ({entry:?}, {target:?}): {message:?}\n{code}"
+            );
         }
     }
 }
