@@ -209,7 +209,7 @@ view()
 
 ### 字号、颜色与行高
 
-`text-<size>` 同时设置字号和 Tailwind 对应的行高：
+`text-<size>` 同时设置字号和 Tailwind 对应的行高；`leading-*` 类会替换这个行高，与它在字符串中的位置和变体无关（`leading-tight md:text-lg` 保持 tight 行高）：
 
 | Class | 字号 | 行高 |
 |---|---|---|
@@ -234,6 +234,7 @@ view()
 | `text-<color>` | `color` |
 | `leading-none`（1）、`leading-tight`（1.25）、`leading-snug`（1.375）、`leading-normal`（1.5）、`leading-relaxed`（1.625）、`leading-loose`（2） | `lineHeight`，字号的倍数 |
 | `leading-<n>`、`leading-[<length>]` | `lineHeight`，单位为点（`leading-6` = 24） |
+| `leading-[<number>]` | `lineHeight`，字号的倍数（`leading-[1.5]`；`em` 和 `%` 同理），`text-sm/[1.5]` 也是如此 |
 | `tracking-tighter`（-0.05em）、`tracking-tight`（-0.025em）、`tracking-normal`（0）、`tracking-wide`（0.025em）、`tracking-wider`（0.05em）、`tracking-widest`（0.1em） | 相对字号的 `letterSpacing` |
 | `tracking-[<value>]` | `letterSpacing`：`tracking-[0.2em]`、`tracking-[1px]` |
 

@@ -293,6 +293,34 @@ fn typography() {
             .unwrap()
             .has(crate::style::FontVariant::TABULAR_NUMS)
     );
+    // A unitless arbitrary line height is a multiple of the font size, as
+    // in CSS (`line-height: 1.5`); lengths are points.
+    let s = styled("text-base leading-[1.5]");
+    assert_eq!(s.text.line_height_multiple, Some(1.5));
+    assert_eq!(s.text.line_height, None);
+    let s = styled("text-sm/[1.25]");
+    assert_eq!(s.text.line_height_multiple, Some(1.25));
+    assert_eq!(
+        styled("leading-[150%]").text.line_height_multiple,
+        Some(1.5)
+    );
+    assert_eq!(styled("leading-[2em]").text.line_height_multiple, Some(2.0));
+    assert_eq!(styled("leading-[22px]").text.line_height, Some(px(22.0)));
+    assert_eq!(styled("leading-6").text.line_height, Some(px(24.0)));
+    // `leading-*` wins over a size's own line height whatever the order
+    // or the variant (`line-height: var(--tw-leading, ...)`).
+    let s = styled("leading-tight text-lg");
+    assert_eq!(s.text.font_size, Some(px(18.0)));
+    assert_eq!(s.text.line_height_multiple, Some(1.25));
+    let (env, states) = cx(0);
+    let (s, _) = styled_with("leading-tight md:text-lg", env, (800.0, 844.0), states);
+    assert_eq!(s.text.line_height_multiple, Some(1.25));
+    assert_eq!(
+        styled("text-lg").text.line_height_multiple,
+        Some(1.75 / 1.125)
+    );
+    // An explicit `/<line>` is the size utility's own line height.
+    assert_eq!(styled("text-lg/6").text.line_height, Some(px(24.0)));
     // `normal-nums` resets `font-variant-numeric` only.
     let s = styled("small-caps tabular-nums normal-nums");
     assert_eq!(

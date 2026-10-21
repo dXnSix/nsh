@@ -1478,15 +1478,7 @@ static PREFIXES: &[(&str, Handler)] = &[
             &format!("{}em", if n { -em } else { em }),
         ))
     }),
-    ("leading", |t, v, _| {
-        if let Some(m) = t.leading.get(v) {
-            return one(sets(K::LineHeight, &m.to_string()));
-        }
-        match length_value(t, v, false, false)? {
-            PatchValue::Number(n) => one(setn(K::LineHeight, n)),
-            _ => None,
-        }
-    }),
+    ("leading", |t, v, _| one(line_height(t, v)?)),
     ("line-clamp", |_, v, _| {
         one(Decl::Prop(PropDecl::Lines(num(v)? as u32)))
     }),
@@ -2123,23 +2115,19 @@ fn text(theme: &Theme, v: &str, _neg: bool) -> Option<Vec<Decl>> {
         }
         _ => (v, None),
     };
-    let line_height = || -> Option<Decl> {
-        let l = line?;
-        Some(match theme.leading.get(l) {
-            Some(m) => sets(K::LineHeight, &m.to_string()),
-            None => match length_value(theme, l, false, false)? {
-                PatchValue::Number(n) => setn(K::LineHeight, n),
-                _ => return None,
-            },
-        })
-    };
+    let line_height = || line_height(theme, line?);
     if let Some(&(size, multiple)) = theme.text.get(base) {
         let mut out = vec![setn(K::FontSize, size)];
         match line {
             Some(_) => out.push(line_height()?),
+            // `line-height: var(--tw-leading, var(--text-lg--line-height))`:
+            // any `leading-*` wins, wherever it is and whatever its variant.
             None => {
                 if let Some(m) = multiple {
-                    out.push(sets(K::LineHeight, &m.to_string()));
+                    out.push(Decl::Default(
+                        K::LineHeight,
+                        PatchValue::Str(m.to_string().into()),
+                    ));
                 }
             }
         }
@@ -2162,6 +2150,30 @@ fn text(theme: &Theme, v: &str, _neg: bool) -> Option<Vec<Decl>> {
         }
     }
     one(set(K::Color, color_str(color(theme, v)?)))
+}
+
+/// A line height (`leading-*`, `text-sm/<line>`): a theme multiple
+/// (`tight`), spacing steps (`6`, 24 points), or arbitrary: a number
+/// without a unit, `em` or a percentage is a multiple of the font size
+/// (`[1.5]`), a length is points (`[22px]`).
+fn line_height(theme: &Theme, v: &str) -> Option<Decl> {
+    if let Some(m) = theme.leading.get(v) {
+        return Some(sets(K::LineHeight, &m.to_string()));
+    }
+    if let Some(a) = arbitrary(v) {
+        let a = a.trim();
+        let multiple = match a.strip_suffix('%') {
+            Some(p) => css::number(p).map(|p| p / 100.0),
+            None => css::number(a.strip_suffix("em").unwrap_or(a)),
+        };
+        if let Some(m) = multiple.filter(|m| *m >= 0.0) {
+            return Some(sets(K::LineHeight, &m.to_string()));
+        }
+    }
+    match length_value(theme, v, false, false)? {
+        PatchValue::Number(n) => Some(setn(K::LineHeight, n)),
+        _ => None,
+    }
 }
 
 /// Tailwind's timing of `animate-*`.

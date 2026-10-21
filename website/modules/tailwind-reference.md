@@ -209,7 +209,7 @@ Container widths (points): `3xs` 256, `2xs` 288, `xs` 320, `sm` 384, `md` 448, `
 
 ### Size, color and line height
 
-`text-<size>` sets the font size and Tailwind's matching line height:
+`text-<size>` sets the font size and Tailwind's matching line height, which a `leading-*` class replaces wherever it is in the string and whatever its variant (`leading-tight md:text-lg` keeps the tight leading):
 
 | Class | Size | Line height |
 |---|---|---|
@@ -234,6 +234,7 @@ Container widths (points): `3xs` 256, `2xs` 288, `xs` 320, `sm` 384, `md` 448, `
 | `text-<color>` | `color` |
 | `leading-none` (1), `leading-tight` (1.25), `leading-snug` (1.375), `leading-normal` (1.5), `leading-relaxed` (1.625), `leading-loose` (2) | `lineHeight` as a multiple of the font size |
 | `leading-<n>`, `leading-[<length>]` | `lineHeight` in points (`leading-6` = 24) |
+| `leading-[<number>]` | `lineHeight` as a multiple of the font size (`leading-[1.5]`; also `em` and `%`), as in `text-sm/[1.5]` |
 | `tracking-tighter` (-0.05em), `tracking-tight` (-0.025em), `tracking-normal` (0), `tracking-wide` (0.025em), `tracking-wider` (0.05em), `tracking-widest` (0.1em) | `letterSpacing` relative to the font size |
 | `tracking-[<value>]` | `letterSpacing`: `tracking-[0.2em]`, `tracking-[1px]` |
 

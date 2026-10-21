@@ -483,8 +483,9 @@ impl Declaration {
             Declaration::TextPreset(name) => {
                 if let Some(&(size, line)) = PRESETS.text.get(*name) {
                     out.push(Decl::Set(StyleKey::FontSize, PatchValue::Number(size)));
+                    // As `text-lg`'s: a line height set anywhere wins.
                     if let Some(m) = line {
-                        out.push(Decl::Set(
+                        out.push(Decl::Default(
                             StyleKey::LineHeight,
                             PatchValue::Str(m.to_string().into()),
                         ));
