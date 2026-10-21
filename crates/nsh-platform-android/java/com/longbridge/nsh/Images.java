@@ -23,7 +23,8 @@ import java.util.concurrent.Future;
  * for cancelled. `Image.prefetch` / `getSize` keep the bytes they fetched
  * for the views that show them next. SVG images are drawn by the shared
  * rasterizer ({@link Native#svg}) at the requested size; their size is their
- * intrinsic size in points.
+ * intrinsic size in points. A decode that runs out of memory fails like one
+ * of bytes that are no image.
  */
 final class Images {
     /** {@code image}: null on errors. */
@@ -39,16 +40,27 @@ final class Images {
         void done(int width, int height, String error);
     }
 
-    /** A decoded image and the pixel size of its source (before downsampling; an SVG's: points). */
+    /** A decoded image and the pixel size of its source (before downsampling; an SVG's: whole points). */
     static final class Image {
         /** A {@link Bitmap}, or an animated {@code Drawable} (started by the view). */
         final Object content;
         final int width, height;
+        /** An SVG drawn into a bitmap: {@code width} and {@code height} are its size in points. */
+        final boolean vector;
+        /** Unrounded intrinsic SVG size in points, used for drawing. */
+        final float intrinsicWidth, intrinsicHeight;
 
         Image(Object content, int width, int height) {
+            this(content, width, height, false, 0, 0);
+        }
+
+        Image(Object content, int width, int height, boolean vector, float intrinsicWidth, float intrinsicHeight) {
             this.content = content;
             this.width = width;
             this.height = height;
+            this.vector = vector;
+            this.intrinsicWidth = intrinsicWidth;
+            this.intrinsicHeight = intrinsicHeight;
         }
     }
 
@@ -200,7 +212,14 @@ final class Images {
                 // An SVG's size takes parsing it: measured on the image threads.
                 POOL.submit(() -> {
                     int[] size = new int[4];
-                    boolean svg = Native.svg(bytes, -1, size) != null;
+                    boolean svg;
+                    try {
+                        svg = Native.svg(bytes, -1, 0, size, new float[2]) != null;
+                    } catch (Throwable e) {
+                        String error = String.valueOf(e);
+                        main.post(() -> info.done(0, 0, error));
+                        return;
+                    }
                     main.post(() -> {
                         if (svg) info.done(size[2], size[3], null);
                         else infoOfBitmap(uri, bytes, info);
@@ -222,7 +241,7 @@ final class Images {
                 if (image == null && animated(bytes)) image = decodeAnimated(bytes, maxPx);
                 if (image == null) image = decode(bytes, maxPx, blurPx);
                 if (image == null) error = "cannot decode " + uri;
-            } catch (Exception e) {
+            } catch (Exception | OutOfMemoryError e) {
                 error = String.valueOf(e);
             }
             Image result = image;
@@ -260,15 +279,20 @@ final class Images {
         return i < b.length && b[i] == '<';
     }
 
-    /** An SVG drawn for a view {@code maxPx} long, its shorter side that long (0: its intrinsic size); null if it is none. */
+    /**
+     * An SVG drawn for a view {@code maxPx} long, its shorter side that long (0: its intrinsic size at the display's
+     * density); null if it is none.
+     */
     private static Image decodeSvg(byte[] bytes, int maxPx, int blurPx) {
         int[] size = new int[4];
-        byte[] pixels = Native.svg(bytes, maxPx, size);
+        float density = android.content.res.Resources.getSystem().getDisplayMetrics().density;
+        float[] intrinsic = new float[2];
+        byte[] pixels = Native.svg(bytes, maxPx, density, size, intrinsic);
         if (pixels == null) return null;
         Bitmap bitmap = Bitmap.createBitmap(size[0], size[1], Bitmap.Config.ARGB_8888);
         bitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(pixels));
         if (blurPx > 0) bitmap = Blur.blurred(bitmap, blurPx);
-        return new Image(bitmap, size[2], size[3]);
+        return new Image(bitmap, size[2], size[3], true, intrinsic[0], intrinsic[1]);
     }
 
     /** GIF, animated WebP (VP8X with the animation flag) or APNG (acTL). */

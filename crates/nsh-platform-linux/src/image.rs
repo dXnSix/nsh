@@ -12,9 +12,9 @@
 //! drawing (trilinear filtering when shrinking a lot). SVG images (sniffed
 //! from their bytes) are drawn by [`nsh_core::svg`] at their intrinsic size
 //! × [`nsh_core::svg::OVERSAMPLE`] (at most
-//! [`nsh_core::svg::MAX_OVERSAMPLED_PX`] a side); their texture carries
-//! their intrinsic size in points ([`svg_points`]), which they are laid out
-//! with and report.
+//! [`nsh_core::svg::MAX_OVERSAMPLED_SIDE`] a side); their picture keeps
+//! their intrinsic size in points, which they are laid out with and report.
+//! Canvases draw bitmaps only ([`load_bitmap`]).
 //!
 //! Animated GIF and WebP images decode every frame (composited, at most
 //! [`MAX_FRAMES`] and [`MAX_ANIMATION_BYTES`]: larger ones show their first
@@ -47,7 +47,7 @@ use gtk4::{self as gtk, gdk, glib, graphene, gsk, prelude::*};
 use nsh_core::{
     Command, EventKind, EventPayload, ImageOptions, ImageSource, NodeId, PayloadValue, ResizeMode,
     access::Access,
-    geometry::{DevicePixels, size},
+    geometry::{DevicePixels, Points, Size, size},
 };
 use rustc_hash::FxHashMap;
 
@@ -265,6 +265,9 @@ struct Picture {
     /// The image, or an animation's first frame.
     texture: gdk::Texture,
     animation: Option<Arc<Animation>>,
+    /// An SVG's intrinsic size: what it lays out at and reports, whatever
+    /// its file name says.
+    points: Option<Size<Points>>,
 }
 
 impl Picture {
@@ -272,6 +275,7 @@ impl Picture {
         Picture {
             texture,
             animation: None,
+            points: None,
         }
     }
 
@@ -394,14 +398,11 @@ fn animation(bytes: &[u8], format: image::ImageFormat) -> Result<Option<Picture>
             delays,
             plays,
         })),
+        points: None,
     }))
 }
 
-/// The key of an SVG texture's intrinsic size in points.
-const SVG_POINTS: &str = "nsh-svg-points";
-
-/// Draws an SVG oversampled into a texture that carries its intrinsic
-/// size in points; any thread.
+/// Draws an SVG oversampled into a texture; any thread.
 fn decode_svg(bytes: &[u8]) -> Result<Picture, String> {
     let raster = nsh_core::svg::rasterize_oversampled(bytes).map_err(|e| e.to_string())?;
     let (width, height) = (raster.width, raster.height);
@@ -414,32 +415,22 @@ fn decode_svg(bytes: &[u8]) -> Result<Picture, String> {
         width as usize * 4,
     )
     .upcast();
-    let (w, h) = (raster.size.width.0, raster.size.height.0);
-    let points: (u32, u32) = ((w.round() as u32).max(1), (h.round() as u32).max(1));
-    // SAFETY: the key only ever holds a `(u32, u32)` ([`svg_points`]), set
-    // here before the texture is shared and never changed.
-    unsafe { texture.set_data(SVG_POINTS, points) };
-    Ok(Picture::still(texture))
+    Ok(Picture {
+        points: Some(raster.size),
+        ..Picture::still(texture)
+    })
 }
 
-/// An SVG texture's intrinsic size in points.
-fn svg_points(texture: &gdk::Texture) -> Option<(u32, u32)> {
-    // SAFETY: the key only ever holds a `(u32, u32)`, set by
-    // [`decode_svg`] before the texture was shared and never changed.
-    unsafe {
-        texture
-            .data::<(u32, u32)>(SVG_POINTS)
-            .map(|points| *points.as_ref())
-    }
-}
-
-/// The size `onLoad` and `Image.getSize` report: pixels, or an SVG's
+/// The size `onLoad` and `Image.getSize` report: pixels, or an SVG's whole
 /// points.
-fn reported_size(texture: &gdk::Texture) -> (u32, u32) {
-    svg_points(texture).unwrap_or((
-        texture.width().max(0) as u32,
-        texture.height().max(0) as u32,
-    ))
+fn reported_size(picture: &Picture) -> Size<DevicePixels> {
+    match picture.points {
+        Some(points) => nsh_core::svg::reported_size(points),
+        None => size(
+            DevicePixels(picture.texture.width()),
+            DevicePixels(picture.texture.height()),
+        ),
+    }
 }
 
 /// Decodes an encoded image (any thread): SVG with the shared rasterizer,
@@ -654,18 +645,27 @@ fn fetch(surface: &Surface, uri: &str, progress: Option<Progress>, done: Done) -
     false
 }
 
-/// Loads `uri` (`https://…`, `asset:/…`, a file path, `data:`) off the
-/// main thread, through the texture cache; `done` runs on the main thread
-/// with the image (an animation's first frame).
+/// Loads the bitmap `uri` (`https://…`, `asset:/…`, a file path, `data:`)
+/// for a canvas off the main thread, through the texture cache; `done` runs
+/// on the main thread with the image (an animation's first frame).
+/// Canvases draw bitmaps: an SVG is an image that failed to load.
 ///
 /// A cached texture is handed over before this returns: callers must not
 /// hold a borrow of view state that `done` takes.
-pub(crate) fn load(
+pub(crate) fn load_bitmap(
     surface: &Rc<Surface>,
     uri: &str,
     done: impl FnOnce(Result<gdk::Texture, String>) + 'static,
 ) {
-    let done = move |result: Result<Picture, String>| done(result.map(|p| p.texture));
+    let source = uri.to_owned();
+    let done = move |result: Result<Picture, String>| {
+        done(result.and_then(|p| match p.points {
+            Some(_) => Err(format!(
+                "{source} is an SVG image: canvases draw bitmaps (PNG, JPEG, ...)"
+            )),
+            None => Ok(p.texture),
+        }));
+    };
     fetch(surface, uri, None, Box::new(done));
 }
 
@@ -686,16 +686,16 @@ pub(crate) fn command(surface: &Rc<Surface>, _id: NodeId, command: &Command) {
     };
     let request = *id;
     let weak = Rc::downgrade(surface);
-    load(surface, uri, move |result| {
+    let done = move |result: Result<Picture, String>| {
         let Some(surface) = weak.upgrade() else {
             return;
         };
         let mut fields = vec![("id", PayloadValue::Number(request as f64))];
         match result {
-            Ok(t) => {
-                let (w, h) = reported_size(&t);
-                fields.push(("width", PayloadValue::Number(w as f64)));
-                fields.push(("height", PayloadValue::Number(h as f64)));
+            Ok(picture) => {
+                let size = reported_size(&picture);
+                fields.push(("width", PayloadValue::Number(size.width.0 as f64)));
+                fields.push(("height", PayloadValue::Number(size.height.0 as f64)));
             }
             Err(message) => fields.push(("error", PayloadValue::Str(message))),
         }
@@ -704,7 +704,8 @@ pub(crate) fn command(surface: &Rc<Surface>, _id: NodeId, command: &Command) {
             EventKind::ImageInfo,
             EventPayload::Map(fields),
         );
-    });
+    };
+    fetch(surface, uri, None, Box::new(done));
 }
 
 /// A fade-in in progress.
@@ -722,10 +723,10 @@ pub(crate) struct ImageState {
     source: Option<ImageSource>,
     mode: ResizeMode,
     options: ImageOptions,
-    /// The source's texture, once loaded.
-    image: Option<gdk::Texture>,
-    /// The placeholder's texture, until the image shows.
-    placeholder: Option<gdk::Texture>,
+    /// The source's picture, once loaded.
+    image: Option<Picture>,
+    /// The placeholder's picture, until the image shows.
+    placeholder: Option<Picture>,
     /// Bumped on every source change: older loads are stale.
     generation: u64,
     /// The image's opacity while it fades in.
@@ -979,20 +980,21 @@ pub(crate) fn set(
         .as_ref()
         .is_some_and(|i| i.image.is_none() && i.placeholder.is_none());
     if let Some(placeholder) = options.placeholder.as_ref().filter(|_| wants_placeholder) {
-        load(surface, &placeholder.uri, move |result| {
+        let done = move |result: Result<Picture, String>| {
             let Some(view) = weak.upgrade() else { return };
             match result {
-                Ok(texture) => {
+                Ok(picture) => {
                     if let Some(i) = view.state_mut().image.as_mut()
                         && i.generation == generation
                     {
-                        i.placeholder = Some(texture);
+                        i.placeholder = Some(picture);
                     }
                     view.changed();
                 }
                 Err(message) => log::warn!("image placeholder failed: {message}"),
             }
-        });
+        };
+        fetch(surface, &placeholder.uri, None, Box::new(done));
     }
 }
 
@@ -1014,7 +1016,7 @@ fn loaded(
         let mut hook = false;
         match &result {
             Ok(picture) => {
-                image.image = Some(picture.texture.clone());
+                image.image = Some(picture.clone());
                 if let Some(mut old) = image.playback.take() {
                     old.pause();
                 }
@@ -1053,10 +1055,7 @@ fn loaded(
         Ok(picture) if events.contains(EventKind::Load) => surface.event(
             id,
             EventKind::Load,
-            EventPayload::Image(size(
-                DevicePixels(reported_size(&picture.texture).0 as i32),
-                DevicePixels(reported_size(&picture.texture).1 as i32),
-            )),
+            EventPayload::Image(reported_size(picture)),
         ),
         Err(message) if events.contains(EventKind::Error) => surface.event(
             id,
@@ -1110,9 +1109,13 @@ fn density(uri: &str) -> f32 {
 }
 
 /// The natural size in points of `texture` loaded from `source`: the size
-/// the source declares, an SVG's intrinsic size, or its pixels over the
-/// file name's density.
-fn natural(texture: &gdk::Texture, source: Option<&ImageSource>) -> (f32, f32) {
+/// the source declares, an SVG's intrinsic size (`points`), or its pixels
+/// over the file name's density.
+fn natural(
+    texture: &gdk::Texture,
+    points: Option<Size<Points>>,
+    source: Option<&ImageSource>,
+) -> (f32, f32) {
     if let Some(size) = source
         .and_then(|s| s.size)
         .map(|s| (s.width.0, s.height.0))
@@ -1120,8 +1123,8 @@ fn natural(texture: &gdk::Texture, source: Option<&ImageSource>) -> (f32, f32) {
     {
         return size;
     }
-    if let Some((w, h)) = svg_points(texture) {
-        return (w as f32, h as f32);
+    if let Some(points) = points {
+        return (points.width.0, points.height.0);
     }
     let d = source.map_or(1.0, |s| density(&s.uri));
     (texture.width() as f32 / d, texture.height() as f32 / d)
@@ -1159,16 +1162,17 @@ fn draw_texture(snapshot: &gtk::Snapshot, texture: &gdk::Texture, rect: &graphen
     snapshot.append_scaled_texture(texture, filter, rect);
 }
 
-/// Draws one picture with the view's mode, tint and blur.
+/// Draws one picture (`texture`, the frame showing) with the view's mode,
+/// tint and blur.
 fn draw_one(
     snapshot: &gtk::Snapshot,
     state: &ViewState,
     image: &ImageState,
-    texture: &gdk::Texture,
+    (texture, points): (&gdk::Texture, Option<Size<Points>>),
     source: Option<&ImageSource>,
 ) {
     let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
-    let (x, y, fw, fh) = fit(image.mode, natural(texture, source), (w, h));
+    let (x, y, fw, fh) = fit(image.mode, natural(texture, points, source), (w, h));
     let mut rect = graphene::Rect::new(x, y, fw, fh);
     let blur = image.options.blur_radius.0.max(0.0);
     if blur > 0.0 {
@@ -1207,16 +1211,17 @@ pub(crate) fn draw(snapshot: &gtk::Snapshot, state: &ViewState) {
         && (image.image.is_none() || fading)
     {
         let source = image.options.placeholder.as_ref();
-        draw_one(snapshot, state, image, placeholder, source);
+        let shown = (&placeholder.texture, placeholder.points);
+        draw_one(snapshot, state, image, shown, source);
     }
-    let Some(texture) = image
+    let Some(picture) = &image.image else {
+        return;
+    };
+    let texture = image
         .playback
         .as_ref()
         .map(Playback::texture)
-        .or(image.image.as_ref())
-    else {
-        return;
-    };
+        .unwrap_or(&picture.texture);
     let alpha = if fading { image.alpha } else { 1.0 };
     if alpha <= 0.0 {
         return;
@@ -1224,7 +1229,8 @@ pub(crate) fn draw(snapshot: &gtk::Snapshot, state: &ViewState) {
     if alpha < 1.0 {
         snapshot.push_opacity(alpha as f64);
     }
-    draw_one(snapshot, state, image, texture, image.source.as_ref());
+    let shown = (texture, picture.points);
+    draw_one(snapshot, state, image, shown, image.source.as_ref());
     if alpha < 1.0 {
         snapshot.pop();
     }
@@ -1352,7 +1358,7 @@ mod tests {
             (192, 96),
             "four pixels a point"
         );
-        assert_eq!(svg_points(texture), Some((48, 24)));
+        assert_eq!(picture.points, Some(Size::new(Points(48.0), Points(24.0))));
         let data = pixels(texture);
         let at = |x: usize, y: usize| -> [u8; 4] {
             let i = (y * 192 + x) * 4;
@@ -1371,17 +1377,34 @@ mod tests {
     #[test]
     fn svg_size_is_in_points() {
         let picture = decode(SVG_LOGO.to_vec()).unwrap();
-        assert_eq!(reported_size(&picture.texture), (48, 24));
+        assert_eq!(
+            reported_size(&picture),
+            size(DevicePixels(48), DevicePixels(24))
+        );
         let source = ImageSource {
             uri: "asset:/logo@2x.svg".into(),
             size: None,
-            scales: Default::default(),
+            scales: nsh_core::ImageScales::NONE,
         };
-        assert_eq!(natural(&picture.texture, Some(&source)), (48.0, 24.0));
+        assert_eq!(
+            natural(&picture.texture, picture.points, Some(&source)),
+            (48.0, 24.0)
+        );
+        // Fractions lay out as they are; reports round them.
+        let odd = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10.5" height="10"/>"#;
+        let odd = decode(odd.to_vec()).unwrap();
+        assert_eq!(natural(&odd.texture, odd.points, None), (10.5, 10.0));
+        assert_eq!(
+            reported_size(&odd),
+            size(DevicePixels(11), DevicePixels(10))
+        );
         // Bitmaps keep their pixels.
-        let bitmap = texture(image::RgbaImage::new(20, 10));
-        assert_eq!(svg_points(&bitmap), None);
-        assert_eq!(reported_size(&bitmap), (20, 10));
+        let bitmap = Picture::still(texture(image::RgbaImage::new(20, 10)));
+        assert_eq!(bitmap.points, None);
+        assert_eq!(
+            reported_size(&bitmap),
+            size(DevicePixels(20), DevicePixels(10))
+        );
     }
 
     #[test]

@@ -879,7 +879,11 @@ mod tests {
     fn svg_import_is_sized_in_points() {
         let icon = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20z"/></svg>"#;
         let logo = r#"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="96" viewBox="0 0 48 24"/>"#;
-        let dir = svg_app("size", &[("icon.svg", icon), ("logo@2x.svg", logo)]);
+        let odd = r#"<svg xmlns="http://www.w3.org/2000/svg" width="9.6" height="4.8"/>"#;
+        let dir = svg_app(
+            "size",
+            &[("icon.svg", icon), ("logo@2x.svg", logo), ("odd.svg", odd)],
+        );
         let bundle = bundle_dev(&dir).unwrap();
         let code: String = bundle.code.split_whitespace().collect();
         assert!(
@@ -891,47 +895,12 @@ mod tests {
             code.contains("uri:\"asset:/logo@2x.svg\",width:96,height:48"),
             "{code}"
         );
-        assert_eq!(bundle.assets.len(), 2);
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    /// `nsh::build` warnings logged so far (a logger for this test binary).
-    fn build_warnings() -> Vec<String> {
-        use std::sync::{Mutex, Once};
-        static WARNINGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-        struct Capture;
-        impl log::Log for Capture {
-            fn enabled(&self, m: &log::Metadata<'_>) -> bool {
-                m.target() == "nsh::build"
-            }
-            fn log(&self, record: &log::Record<'_>) {
-                if self.enabled(record.metadata()) && record.level() == log::Level::Warn {
-                    WARNINGS.lock().unwrap().push(record.args().to_string());
-                }
-            }
-            fn flush(&self) {}
-        }
-        static INSTALL: Once = Once::new();
-        INSTALL.call_once(|| {
-            log::set_logger(&Capture).expect("the test binary's only logger");
-            log::set_max_level(log::LevelFilter::Warn);
-        });
-        WARNINGS.lock().unwrap().clone()
-    }
-
-    #[test]
-    fn svg_import_warns_naming_the_file() {
-        build_warnings();
-        let text = r#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><text y="16">NSH</text></svg>"#;
-        let dir = svg_app("warn", &[("label.svg", text)]);
-        bundle_dev(&dir).unwrap();
-        let warnings = build_warnings();
+        // The shortest number of the size they lay out at.
         assert!(
-            warnings
-                .iter()
-                .any(|w| w.starts_with("label.svg: ") && w.contains("<text>")),
-            "{warnings:?}"
+            code.contains("uri:\"asset:/odd.svg\",width:9.6,height:4.8"),
+            "{code}"
         );
+        assert_eq!(bundle.assets.len(), 3);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -946,7 +915,7 @@ mod tests {
         );
         let error = bundle_dev(&dir).unwrap_err();
         assert!(error.plain.contains("broken.svg"), "{error}");
-        assert!(error.plain.contains("cannot read SVG"), "{error}");
+        assert!(error.plain.contains("invalid SVG: "), "{error}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

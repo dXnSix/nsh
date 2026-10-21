@@ -10,16 +10,17 @@
 //   player.run(await (await fetch("app.js")).text());
 //
 // Options: `wasm` (its URL, or a `Response` promise), `glue` (the URL of
-// the wasm-bindgen glue of an app's runtime whose crates use wasm-bindgen;
-// the CLI writes it next to the module), `assetBase` (where
-// `asset:/<path>` is served) or `assets` (a map from `<path>` to its URL,
-// as `nsh package --target web` writes it), `readAsset(uri)` (the bytes
-// of an asset the engine needs at once, a font: a `Uint8Array` or null),
-// `chunks` / `chunkBase` (see `run`), `prepareChunk(id)` (a promise for
-// what chunk `id` needs once it runs, such as fonts for `readAsset`;
-// awaited with the chunk's download), `dark`, `idiom` ("phone", "pad" or
-// "desktop" instead of the one the pointer and the viewport suggest),
-// `overlay` (false: no error box), `onError`, `onLog`.
+// the wasm-bindgen glue of a runtime whose crates call JS through
+// wasm-bindgen, which the CLI writes next to it; each player imports an
+// instance of its own), `assetBase` (where `asset:/<path>` is served) or
+// `assets` (a map from `<path>` to its URL, as `nsh package --target web`
+// writes it), `readAsset(uri)` (the bytes of an asset the engine needs at
+// once, a font: a `Uint8Array` or null), `chunks` / `chunkBase` (see
+// `run`), `prepareChunk(id)` (a promise for what chunk `id` needs once it
+// runs, such as fonts for `readAsset`; awaited with the chunk's download),
+// `dark`, `idiom` ("phone", "pad" or "desktop" instead of the one the
+// pointer and the viewport suggest), `overlay` (false: no error box),
+// `onError`, `onLog`.
 //
 // A split bundle (`nsh build --split`) loads its chunks on demand: from
 // `chunks[id]` when given (`app.<digest>.js` on a CDN), else `id` relative
@@ -172,6 +173,14 @@ img.nsh-fill { pointer-events: none; }
 .nsh-desktop .nsh-press .nsh-autoselect, .nsh-desktop .nsh-press .nsh-autoselect *,
 .nsh-desktop .nsh-autoselect.nsh-press, .nsh-desktop .nsh-autoselect.nsh-press * { -webkit-user-select: none; user-select: none; }
 .nsh-autoselect ::selection { background: var(--nsh-selection, Highlight); }
+/* A selection area (nsh-area) is selectable as a whole, with every idiom
+   and inside views that take presses too: one browser selection spans its
+   texts, and a drag may start between them. Texts set off (nsh-noselect),
+   images and videos are not. Repeated classes outweigh the rules above. */
+.nsh-root .nsh-area.nsh-area, .nsh-root .nsh-area.nsh-area * {
+  -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+.nsh-root .nsh-area .nsh-noselect.nsh-noselect, .nsh-root .nsh-area .nsh-noselect.nsh-noselect *,
+.nsh-root .nsh-area.nsh-area img, .nsh-root .nsh-area.nsh-area video { -webkit-user-select: none; user-select: none; }
 /* A page's header (the app's view): above the page's content. */
 .nsh-page-header { z-index: 1; }
 .nsh-screen { isolation: isolate; }
@@ -381,6 +390,23 @@ function swapClass(el, slot, name) {
 
 let players = 0;
 
+/** How many players imported each wasm-bindgen glue, by URL. */
+const glueImports = new Map();
+
+/**
+ * Imports the wasm-bindgen glue at `url` for one player. The glue keeps its
+ * module's state (memory views, wasm-bindgen's heap) at its top level, so
+ * every player after the first imports it under a URL of its own: another
+ * instance of the module. The first keeps the URL the page preloads.
+ */
+function importGlue(url) {
+  const href = new URL(String(url), document.baseURI);
+  const imported = glueImports.get(href.href) ?? 0;
+  glueImports.set(href.href, imported + 1);
+  if (imported > 0) href.searchParams.set("player", String(imported));
+  return import(href.href);
+}
+
 /**
  * The script a web view's HTML starts with: the first message from the
  * player carrying `token` hands it the port `ReactNativeWebView.postMessage`
@@ -459,6 +485,7 @@ class Player {
     // right-to-left layout), which replaces its inline style.
     container.append(this.root);
     this.views = new Map();
+    this.mouseTracked = new Set();
     // Of the views' own style rules (`op_css`).
     this.classPrefix = `nsh-p${++players}-`;
     this.timer = 0;
@@ -489,6 +516,12 @@ class Player {
   }
 
   async load(url) {
+    // An app's crates that call JS through wasm-bindgen (web-sys, js-sys):
+    // the CLI ran `wasm-bindgen --target web` on the runtime, and its glue
+    // provides the module's other imports. It loads while the module
+    // compiles; a failed compile does not leave its rejection unhandled.
+    const glueLoad = this.options.glue ? importGlue(this.options.glue) : null;
+    glueLoad?.catch(() => {});
     const imports = {
       env: {
         __rquickjs_host_now_us: () => Date.now() * 1000,
@@ -537,6 +570,7 @@ class Player {
         request_frame: () => this.requestFrame(),
         request_pump: () => this.requestPump(),
         report_error: (p, l) => this.showError(this.str(p, l)),
+        test_send: (p, l) => this.onTestSend?.(JSON.parse(this.str(p, l))),
         log: (level, p, l) => {
           const message = this.str(p, l);
           (level <= 1 ? console.error : level === 2 ? console.warn : console.log)("[nsh]", message);
@@ -597,24 +631,29 @@ class Player {
         }),
       },
     };
-    const response = () => (typeof url === "string" || url instanceof URL ? fetch(url) : url);
-    let module;
-    try {
-      module = await WebAssembly.compileStreaming(response());
-    } catch {
-      module = await WebAssembly.compile(await (await response()).arrayBuffer());
-    }
-    // An app's crates that use wasm-bindgen (web-sys, js-sys): the CLI ran
-    // `wasm-bindgen --target web` on the runtime, and its glue provides the
-    // module's other imports. NSH's own (`nsh`, `env`) stay these.
-    const glue = this.options.glue ? await import(new URL(String(this.options.glue), document.baseURI).href) : null;
+    // One request either way: a host that does not serve exactly
+    // `application/wasm` (streaming compilation rejects any other type,
+    // parameters such as `; charset=utf-8` included) gets the body compiled
+    // whole instead of streamed.
+    const response = await (typeof url === "string" || url instanceof URL ? fetch(url) : url);
+    const type = response.headers.get("Content-Type")?.trim().toLowerCase();
+    const module = type === "application/wasm" && WebAssembly.compileStreaming
+      ? await WebAssembly.compileStreaming(response)
+      : await WebAssembly.compile(await response.arrayBuffer());
+    const glue = glueLoad && (await glueLoad);
     if (glue) {
+      if (typeof glue.__nsh_imports !== "function" || typeof glue.__nsh_finalize !== "function") {
+        throw new Error(`the glue ${this.options.glue} exports no __nsh_imports / __nsh_finalize: it must be the glue the nsh CLI adapts (nsh-bindgen.js), not wasm-bindgen's own output`);
+      }
+      // NSH's own imports (`nsh`, `env`) stay these.
       for (const [name, fields] of Object.entries(glue.__nsh_imports())) {
         imports[name] = name in imports ? { ...fields, ...imports[name] } : fields;
       }
     }
-    // The compiler's dependencies link wasm-bindgen glue they never call
-    // here (oxc-browserslist's dates): stubs that say so if they are.
+    // A module that links wasm-bindgen without calling JS through it (the
+    // compiler's dependencies, oxc-browserslist's dates; a crate's default
+    // features) imports intrinsics it never calls here: stubs that say so
+    // if they are.
     for (const { module: name, name: field, kind } of WebAssembly.Module.imports(module)) {
       if (kind !== "function" || imports[name]?.[field]) continue;
       imports[name] ??= {};
@@ -639,6 +678,109 @@ class Player {
     });
     this.installEnvironment();
     this.installInput();
+  }
+
+  // Tests ---------------------------------------------------------------
+
+  /**
+   * A test session runs (`nsh test --target web`): the module keeps the
+   * model of the app its agent asks about, from the next bundle on.
+   */
+  testStart() {
+    this.wasm.nsh_test_start?.();
+  }
+
+  /**
+   * What the test sets the app up with (`ServerMessage::TestSetup`): the
+   * storage it starts with, whether it traces the app, and what it fixes of
+   * the environment and the clipboard. Its requests,
+   * and a traced app's batches, then go to the test through `onTestSend`
+   * (`{type: "fetch", id, request}`, `{type: "fetch_cancel", id}`,
+   * `{type: "trace", items}`).
+   */
+  testSetup(storage, trace, environment) {
+    if (!this.wasm.nsh_test_setup) return;
+    const setup = JSON.stringify({ storage: storage ?? [], trace: !!trace, environment: environment ?? {} });
+    this.withStrings([setup], (p, l) => this.wasm.nsh_test_setup(p, l));
+  }
+
+  /** The test's answer to the app's request `id` (`ServerMessage::Fetch`). */
+  testFetchReply(id, reply) {
+    if (!this.wasm.nsh_test_fetch_reply) return;
+    this.withStrings([JSON.stringify({ id, reply })], (p, l) => this.wasm.nsh_test_fetch_reply(p, l));
+  }
+
+  /** Whether this runtime answers test steps (the development host's). */
+  get takesTests() {
+    return typeof this.wasm?.nsh_test_answer === "function";
+  }
+
+  /**
+   * Answers a test step (`nsh_dev::protocol::TestStep`) as an
+   * `nsh_dev::protocol::StepOutcome`: the module's model answers what it
+   * knows of the app, the page's views where they are.
+   */
+  testStep(step) {
+    if (!this.takesTests) return { outcome: "failed", message: "this runtime takes no test steps" };
+    const len = this.withStrings([JSON.stringify(step)], (p, l) => this.wasm.nsh_test_answer(p, l));
+    const answer = JSON.parse(this.str(this.wasm.nsh_test_answer_ptr(), len));
+    if (step.query?.query === "animating" && "done" in answer) {
+      // The native graph's, or the page's own (a screen sliding in, a
+      // dialog fading): a finite animation still running.
+      return { outcome: "done", value: answer.done === true || this.pageAnimating() };
+    }
+    if ("done" in answer) return { outcome: "done", value: answer.done ?? null };
+    if ("failed" in answer) return { outcome: "failed", message: answer.failed };
+    try {
+      return { outcome: "done", value: this.testPage(step.query ?? {}) };
+    } catch (e) {
+      return { outcome: "failed", message: String(e?.message ?? e) };
+    }
+  }
+
+  /** Whether a finite CSS or Web Animations animation of the app runs. */
+  pageAnimating() {
+    return this.root.getAnimations({ subtree: true }).some((a) => {
+      if (a.playState !== "running") return false;
+      const end = a.effect?.getComputedTiming().endTime;
+      return end != null && Number.isFinite(Number(end));
+    });
+  }
+
+  /** What only the page's views answer of a test agent's question. */
+  testPage(query) {
+    switch (query.query) {
+      case "bounds": {
+        // CSS pixels from the viewport's top left: what the browser's input
+        // (the DevTools protocol's) takes.
+        const el = this.views.get(query.id);
+        if (!el?.isConnected) return null;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) return null;
+        return [r.left, r.top, r.width, r.height];
+      }
+      case "viewport":
+        return [window.innerWidth, window.innerHeight];
+      case "input_text": {
+        const field = this.views.get(query.id)?._field;
+        return field ? field.value : null;
+      }
+      case "dialog_point": {
+        const backdrops = this.root.querySelectorAll(".nsh-dialog-backdrop");
+        const backdrop = backdrops[backdrops.length - 1];
+        if (!backdrop) throw new Error("no dialog is shown");
+        if (query.button == null) {
+          // Outside its card: the backdrop's corner.
+          const r = backdrop.getBoundingClientRect();
+          return [r.left + 2, r.top + 2];
+        }
+        const button = [...backdrop.querySelectorAll("button")].find((b) => b.textContent.trim() === query.button);
+        if (!button) throw new Error(`the dialog has no button ${JSON.stringify(query.button)}`);
+        const r = button.getBoundingClientRect();
+        return [r.left + r.width / 2, r.top + r.height / 2];
+      }
+    }
+    throw new Error(`the page cannot answer ${JSON.stringify(query)}`);
   }
 
   // Memory --------------------------------------------------------------
@@ -794,6 +936,7 @@ class Player {
     root.textContent = "";
     root.append(this.live);
     this.views.clear();
+    this.mouseTracked.clear();
     root._id = ROOT_ID;
     root._kind = "root";
     root._events = new Set();
@@ -889,8 +1032,9 @@ class Player {
 
   /**
    * The engine has work that came outside a call into it (`request_pump`:
-   * a task a browser callback woke): one `nsh_pump` in a task of its own,
-   * however many ask before it runs; `call` defers it if the engine runs.
+   * a task a browser callback woke, or what a pump left for the next): one
+   * `nsh_pump` in a task of its own, however many ask before it runs;
+   * `call` defers it if the engine runs.
    */
   requestPump() {
     if (this.pumpRequested) return;
@@ -1236,6 +1380,7 @@ class Player {
     const el = this.view(id);
     if (!el) return;
     this.views.delete(id);
+    this.mouseTracked.delete(id);
     if (el._video) {
       // A removed media element keeps playing until it is collected.
       clearInterval(el._progressTimer);
@@ -1381,6 +1526,7 @@ class Player {
     el.insertBefore(frag, el.firstChild);
     el.classList.toggle("nsh-selectable", !!selectable);
     el.classList.toggle("nsh-autoselect", selectable == null);
+    el.classList.toggle("nsh-noselect", selectable === false);
     // Its `--nsh-selection`.
     swapClass(el, "_selection", this.styleClass(selection));
     el._textLabel = runs.map((r) => r[2]).join("");
@@ -1391,6 +1537,8 @@ class Player {
     const el = this.view(id);
     if (!el) return;
     el._events = new Set(events);
+    if (el._events.has("onMouseMove")) this.mouseTracked.add(id);
+    else this.mouseTracked.delete(id);
     const pressable = PRESS_EVENTS.some((e) => el._events.has(e));
     // Under the view's own `cursor` (its class).
     el.classList.toggle("nsh-pointer", pressable);
@@ -1465,6 +1613,7 @@ class Player {
     const pe = props.pointerEvents;
     el.classList.toggle("nsh-inert", pe === "none" || pe === "box-none");
     if (pe === "box-none") el._boxNone = true;
+    el.classList.toggle("nsh-area", !!props.selectionArea);
     this.updateFocusable(el);
     this.updateTouchAction(el);
   }
@@ -1811,9 +1960,16 @@ class Player {
     const viewport = el._frame[2 + axis];
     const max = Math.max(0, el._content[axis] - viewport);
     let points = [];
-    if (b.snapInterval > 0) for (let p = 0; p <= max + 0.5; p += b.snapInterval) points.push(p);
-    else if (b.snapOffsets.length) points = b.snapOffsets;
-    else if (b.paging && viewport > 0) for (let p = 0; p <= max + 0.5; p += viewport) points.push(p);
+    if (b.snapInterval > 0) {
+      const interval = b.snapInterval;
+      const shift = b.snapAlignment === "center" ? (viewport - interval) / 2
+        : b.snapAlignment === "end" ? viewport - interval : 0;
+      const count = Math.max(0, Math.ceil((max + shift) / interval));
+      for (let i = 0; i <= count; i++) points.push(Math.min(max, Math.max(0, i * interval - shift)));
+    } else if (b.snapOffsets.length) points = b.snapOffsets.map(p => Math.min(max, Math.max(0, p)));
+    else if (b.paging && viewport > 0) {
+      for (let i = 0; i <= Math.ceil(max / viewport); i++) points.push(Math.min(max, i * viewport));
+    }
     if (!points.length) return;
     el._snapPoints = [...points].sort((a, b) => a - b);
     el.classList.add(el._horizontal ? "nsh-snap-x" : "nsh-snap-y");
@@ -1902,7 +2058,7 @@ class Player {
   }
 
   // Desktop scroll bars (the desktop idiom): nsh's own, thin, over the
-  // content, shown while the view scrolls or the mouse moves over it and
+  // content, shown while the view scrolls or the mouse reaches its thumb and
   // fading after, and dragged by the mouse as a scroll bar's thumb, as on
   // the desktop backends.
 
@@ -1949,6 +2105,22 @@ class Player {
     if (!el._barHeld) el._barTimer = setTimeout(() => el._bar && (el._bar.firstChild.style.opacity = "0"), BAR_HOLD);
   }
 
+  /** Whether the pointer reaches the draggable thumb, even while faded. */
+  barHit(el, e) {
+    if (!this.barShown(el)) return false;
+    const thumb = this.barThumb(el);
+    if (!thumb) return false;
+    const r = el.getBoundingClientRect();
+    const [x, y] = [e.clientX - r.left, e.clientY - r.top];
+    const [along, across, edge] = el._horizontal ? [x, y, el.clientHeight] : [y, x, el.clientWidth];
+    return across >= edge - BAR_GRAB && across <= edge && along >= thumb[0] - 4 && along <= thumb[0] + thumb[1] + 4;
+  }
+
+  /** Content hover leaves the bar and its fade timer unchanged. */
+  hoverBar(el, e) {
+    if (this.barHit(el, e)) this.showBar(el);
+  }
+
   /** A mouse press on the bar of a scroll view around `e`'s target grabs
    * it, faded or not: the content moves the other way, so the thumb
    * follows the pointer. */
@@ -1956,14 +2128,8 @@ class Player {
     const view = this.viewOf(e.target);
     if (!view) return false;
     for (const el of this.ancestors(view)) {
-      if (el._kind !== "scroll" || !this.barShown(el)) continue;
-      const thumb = this.barThumb(el);
-      if (!thumb) continue;
-      const r = el.getBoundingClientRect();
-      const [x, y] = [e.clientX - r.left, e.clientY - r.top];
+      if (!this.barHit(el, e)) continue;
       const h = !!el._horizontal;
-      const [along, across, edge] = h ? [x, y, el.clientHeight] : [y, x, el.clientWidth];
-      if (across < edge - BAR_GRAB || across > edge || along < thumb[0] - 4 || along > thumb[0] + thumb[1] + 4) continue;
       e.preventDefault();
       el._barHeld = true;
       // Snapping would move the content under the thumb: back once it ends.
@@ -2360,19 +2526,19 @@ class Player {
       canvas.width = pw;
       canvas.height = ph;
     }
-    const ctx = canvas.getContext("2d");
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-    ctx.save();
+    const cx = canvas.getContext("2d");
+    cx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    cx.clearRect(0, 0, w, h);
+    cx.save();
     const slots = el._slots;
     const v = (n) => (Array.isArray(n) && n[0] === "$" ? (slots[n[1]] ?? 0) : n);
     const paint = (p) => {
       if (Array.isArray(p) && p[0] === "$") return slots[p[1]] ?? "transparent";
       if (p && typeof p === "object" && p.g) {
         const a = p.args;
-        const g = p.g === "linear" ? ctx.createLinearGradient(a[0], a[1], a[2], a[3])
-          : p.g === "radial" ? ctx.createRadialGradient(a[0], a[1], a[2], a[3], a[4], a[5])
-            : ctx.createConicGradient(a[0], a[1], a[2]);
+        const g = p.g === "linear" ? cx.createLinearGradient(a[0], a[1], a[2], a[3])
+          : p.g === "radial" ? cx.createRadialGradient(a[0], a[1], a[2], a[3], a[4], a[5])
+            : cx.createConicGradient(a[0], a[1], a[2]);
         for (const [offset, color] of p.stops) g.addColorStop(Math.min(1, Math.max(0, offset)), color);
         return g;
       }
@@ -2390,36 +2556,36 @@ class Player {
       try {
         if (name.startsWith("=")) {
           const prop = name.slice(1);
-          ctx[prop] = prop.endsWith("Style") ? paint(args[0]) : v(args[0]);
+          cx[prop] = prop.endsWith("Style") ? paint(args[0]) : v(args[0]);
         } else if (name === "fill" || name === "clip") {
-          if (args[0]) ctx[name](path(args[0]), args[1]);
-          else ctx[name](args[1]);
+          if (args[0]) cx[name](path(args[0]), args[1]);
+          else cx[name](args[1]);
         } else if (name === "stroke") {
-          if (args[0]) ctx.stroke(path(args[0]));
-          else ctx.stroke();
+          if (args[0]) cx.stroke(path(args[0]));
+          else cx.stroke();
         } else if (name === "shadowOffset") {
-          ctx.shadowOffsetX = args[0];
-          ctx.shadowOffsetY = args[1];
+          cx.shadowOffsetX = args[0];
+          cx.shadowOffsetY = args[1];
         } else if (name === "roundRect") {
-          ctx.roundRect(...args.slice(0, 4).map(v), args[4].map(v));
+          cx.roundRect(...args.slice(0, 4).map(v), args[4].map(v));
         } else if (name === "drawImage") {
           const img = this.canvasImage(args[0], el);
           if (!img) continue;
           const dest = args.slice(2).map(v);
-          if (args[1]) ctx.drawImage(img, ...args[1], ...dest);
-          else ctx.drawImage(img, ...dest);
+          if (args[1]) cx.drawImage(img, ...args[1], ...dest);
+          else cx.drawImage(img, ...dest);
         } else if (name === "fillText" || name === "strokeText") {
-          ctx[name](args[0], ...args.slice(1).map(v));
+          cx[name](args[0], ...args.slice(1).map(v));
         } else if (name === "setLineDash") {
-          ctx.setLineDash(args[0]);
-        } else if (typeof ctx[name] === "function") {
-          ctx[name](...args.map(v));
+          cx.setLineDash(args[0]);
+        } else if (typeof cx[name] === "function") {
+          cx[name](...args.map(v));
         }
       } catch (err) {
         console.warn("[nsh] canvas", name, err);
       }
     }
-    ctx.restore();
+    cx.restore();
   }
 
   canvasImage(uri, el) {
@@ -2462,6 +2628,10 @@ class Player {
       field = document.createElement(tag);
       field.className = "nsh-field";
       field._count = 0;
+      // The text last reported or set: an `input` event that leaves it
+      // (a composition's end in Safari, after the text it committed was
+      // reported) reports nothing.
+      field._known = "";
       this.wireInput(el, field);
       el._field = field;
       el.append(field);
@@ -2496,9 +2666,25 @@ class Player {
   }
 
   wireInput(el, field) {
-    field.addEventListener("input", () => {
-      field._count++;
-      this.event(el._id, "onChangeText", { text: field.value, count: field._count });
+    field.addEventListener("input", () => this.textChanged(el, field));
+    // An input method's composition: the app's value is held while it
+    // lasts (`op_iv`), since setting a field's value ends the composition
+    // and commits its text as typed (pinyin letters instead of the
+    // characters chosen).
+    field.addEventListener("compositionstart", (e) => {
+      field._composing = true;
+      this.compositionChanged(el, field, e.data ?? "");
+    });
+    field.addEventListener("compositionupdate", (e) => this.compositionChanged(el, field, e.data ?? ""));
+    field.addEventListener("compositionend", () => {
+      field._composing = false;
+      // The committed text is reported before the end (browsers differ in
+      // whether its `input` event comes before or after).
+      this.textChanged(el, field);
+      this.compositionChanged(el, field, "");
+      const pending = field._pending;
+      field._pending = null;
+      if (pending) this.op_iv([, el._id, ...pending]);
     });
     field.addEventListener("keydown", (e) => {
       if (el._events.has("onKeyPress")) {
@@ -2529,6 +2715,21 @@ class Player {
     field.addEventListener("pointerup", () => this.selectionChanged(el, field));
   }
 
+  textChanged(el, field) {
+    if (field.value === field._known) return;
+    field._known = field.value;
+    field._count++;
+    this.event(el._id, "onChangeText", { text: field.value, count: field._count });
+  }
+
+  compositionChanged(el, field, text) {
+    const composing = !!field._composing;
+    const last = field._composition;
+    if (last && last[0] === composing && last[1] === text) return;
+    field._composition = [composing, text];
+    if (el._events.has("onCompositionChange")) this.event(el._id, "onCompositionChange", { composing, text });
+  }
+
   selectionChanged(el, field) {
     if (!el._events.has("onSelectionChange")) return;
     const sel = [field.selectionStart ?? 0, field.selectionEnd ?? 0];
@@ -2540,6 +2741,11 @@ class Player {
   op_iv([, id, text, count]) {
     const field = this.view(id)?._field;
     if (!field || count < field._count) return;
+    if (field._composing) {
+      field._pending = [text, count];
+      return;
+    }
+    field._known = text;
     if (field.value !== text) field.value = text;
   }
 
@@ -2873,6 +3079,13 @@ class Player {
     if (!el) return;
     el._modal = { animation, closeOnEscape };
     if (el.isConnected && !el._leaving) this.placeModal(el);
+    // Its config comes after its insert in the batch that presents it: it
+    // starts out of sight the way it now comes in.
+    if (el._entering) {
+      el.style.transform = "";
+      el.style.opacity = "";
+      this.hideModal(el, this.modalMotion(el));
+    }
   }
 
   /** Sizes presented modal `el` to the root (a transparent layer over it,
@@ -2920,9 +3133,11 @@ class Player {
     this.placeModal(el);
     el.style.transition = "none";
     this.hideModal(el, motion);
+    el._entering = true;
     this.scopeFocus();
     this.syncHistorySoon();
     requestAnimationFrame(() => requestAnimationFrame(() => {
+      el._entering = false;
       el.style.transition = "";
       el.style.transform = "";
       el.style.opacity = "";
@@ -3763,6 +3978,40 @@ class Player {
     return out;
   }
 
+  /** Convert viewport coordinates through the view's composed 2D transforms. */
+  mousePoint(el, e) {
+    let a = 1, b = 0, c = 0, d = 1;
+    for (let node = el; node; node = node.parentElement) {
+      const transform = getComputedStyle(node).transform;
+      if (transform === "none") continue;
+      const m = new DOMMatrix(transform);
+      [a, b, c, d] = [m.a * a + m.c * b, m.b * a + m.d * b,
+        m.a * c + m.c * d, m.b * c + m.d * d];
+    }
+    const r = el.getBoundingClientRect();
+    const det = a * d - b * c;
+    if (!det) return null;
+    const style = getComputedStyle(el);
+    const w = parseFloat(style.width), h = parseFloat(style.height);
+    // The bounding rectangle includes transform origins and scrolling;
+    // its top left is the minimum of the transformed border-box corners.
+    const x = e.clientX - r.left + Math.min(0, a * w, c * h, a * w + c * h);
+    const y = e.clientY - r.top + Math.min(0, b * w, d * h, b * w + d * h);
+    return [(d * x - c * y) / det, (a * y - b * x) / det];
+  }
+
+  /** Mouse motion follows the hit view, even during pointer capture. */
+  mouseMoved(e) {
+    if (e.pointerType !== "mouse" || !this.mouseTracked.size) return;
+    const target = document.elementFromPoint(e.clientX, e.clientY);
+    if (!target || !this.root.contains(target)) return;
+    for (const el of this.ancestors(this.viewOf(target))) {
+      if (!el._events?.has("onMouseMove")) continue;
+      const point = this.mousePoint(el, e);
+      if (point) this.event(el._id, "onMouseMove", { x: point[0], y: point[1] });
+    }
+  }
+
   installInput() {
     const root = this.root;
     root.addEventListener("pointerdown", (e) => this.pointerDown(e));
@@ -3790,12 +4039,13 @@ class Player {
     root.addEventListener("gesturechange", (e) => this.gesture && this.gestureZoom(e, 1));
     root.addEventListener("gestureend", (e) => this.gesture && this.gestureZoom(e, 2));
     root.addEventListener("pointermove", (e) => {
+      this.mouseMoved(e);
       if (e.pointerType !== "mouse") return;
       this.hover = [e.clientX, e.clientY];
-      // The scroll views under the mouse show their bars.
+      // Reveal only a draggable thumb under the pointer.
       if (!this.desktopUI || e.buttons) return;
       const view = this.viewOf(e.target);
-      if (view) for (const el of this.ancestors(view)) if (el._kind === "scroll") this.showBar(el);
+      if (view) for (const el of this.ancestors(view)) if (el._kind === "scroll") this.hoverBar(el, e);
     });
     root.addEventListener("focusin", () => (Player.active = this));
     window.addEventListener("keydown", (e) => this.keyDown(e));
@@ -3847,15 +4097,36 @@ class Player {
   /** Whether the browser handles presses at `target` itself: fields,
    * selectable text, hosted pages and videos. */
   editable(target) {
-    return !!target?.closest?.(".nsh-field, .nsh-selectable, iframe, video") || !!this.textAt(target);
+    return !!target?.closest?.(".nsh-field, .nsh-selectable, iframe, video") || !!this.textAt(target) || this.areaGap(target);
   }
 
-  /** The text at `target` that is selectable by default (desktop idiom:
-   * not set off, in nothing that takes presses or touches). */
+  /** Whether `target` is in a selection area outside its texts, where a
+   * drag starts a selection as between a web page's paragraphs: not in a
+   * view inside the area that takes presses (they keep theirs) nor in a
+   * text set off. */
+  areaGap(target) {
+    const area = target?.closest?.(".nsh-area");
+    if (!area || target.closest(".nsh-noselect")) return false;
+    const press = target.closest(".nsh-press");
+    return !press || !area.contains(press);
+  }
+
+  /** The text at `target` that is selectable by default: not set off, and
+   * in a selection area, or (desktop idiom) in nothing that takes presses
+   * or touches. */
   textAt(target) {
-    if (!this.desktopUI) return null;
     const text = target?.closest?.(".nsh-autoselect");
-    return text && !text.closest(".nsh-press") ? text : null;
+    if (!text) return null;
+    if (text.closest(".nsh-area")) return text;
+    return this.desktopUI && !text.closest(".nsh-press") ? text : null;
+  }
+
+  /** The selection area `el` is in: the outermost, as an area inside
+   * another is part of it. */
+  areaOf(el) {
+    let area = null;
+    for (let a = el?.closest?.(".nsh-area"); a; a = a.parentElement?.closest(".nsh-area")) area = a;
+    return area;
   }
 
   /** This player takes the keys: the focus is in it, or it was the last
@@ -3943,7 +4214,10 @@ class Player {
 
   /** What copying the selection in text gives: its runs in order, each
    * line's break after its last run (`_after`) and a newline between
-   * texts; absolutely placed runs would each be a line of their own. */
+   * texts; absolutely placed runs would each be a line of their own. In a
+   * selection area, texts on one row (their boxes overlap vertically: a
+   * table's cells) are joined by a tab instead, and attachments (U+FFFC)
+   * are left out, as the native platforms copy. */
   copyText(e) {
     const sel = getSelection();
     if (e.target.closest?.(".nsh-field")) return;
@@ -3951,6 +4225,8 @@ class Player {
     const range = sel.getRangeAt(0);
     let out = "";
     let last = null;
+    let lastArea = null;
+    let lastBox = null;
     let found = false;
     for (const run of this.root.querySelectorAll(".nsh-run")) {
       // Text that cannot be selected is not copied, as by the browser.
@@ -3962,9 +4238,18 @@ class Player {
       const to = range.endContainer === node ? range.endOffset : text.length;
       if (from >= to) continue;
       found = true;
-      if (last && last !== run.parentNode && !out.endsWith("\n")) out += "\n";
-      last = run.parentNode;
-      out += text.slice(from, to);
+      const area = this.areaOf(run.parentNode);
+      if (last !== run.parentNode) {
+        const box = area ? run.parentNode.getBoundingClientRect() : null;
+        if (last && area && area === lastArea && box.top < lastBox.bottom && lastBox.top < box.bottom) {
+          out = out.replace(/\n$/, "") + "\t";
+        } else if (last && !out.endsWith("\n")) out += "\n";
+        last = run.parentNode;
+        lastArea = area;
+        lastBox = box;
+      }
+      const part = text.slice(from, to);
+      out += area ? part.replaceAll("\uFFFC", "") : part;
       if (to === text.length && run._after) out += run._after;
     }
     if (!found) return;
@@ -3982,7 +4267,8 @@ class Player {
     if (!text) return false;
     if (e.key === "a" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
       e.preventDefault();
-      sel.selectAllChildren(text);
+      // In a selection area: all of its texts.
+      sel.selectAllChildren(this.areaOf(text) ?? text);
       return true;
     }
     if (e.key === "Escape") {

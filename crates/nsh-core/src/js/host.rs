@@ -41,6 +41,10 @@ pub trait HostInput: Sized {
     fn entries(&self) -> Vec<(String, Self)>;
     /// Truthy, as JS sees it.
     fn truthy(&self) -> bool;
+    /// The host element this value is (the node object a `ref` holds).
+    fn node(&self) -> Option<crate::NodeId> {
+        None
+    }
     /// The native animation node this value is (`AnimatedNode.__av`).
     fn animated_node(&self) -> Option<crate::animation::NodeId> {
         self.field("__av")
@@ -113,6 +117,8 @@ pub mod on {
     pub const VIDEO: u32 = 1 << 10;
     /// Input accessories (iOS).
     pub const INPUT_ACCESSORY: u32 = 1 << 11;
+    /// `<overlay>`.
+    pub const OVERLAY: u32 = 1 << 12;
     /// Set by the runtime itself, not part of the elements' types.
     pub const INTERNAL: u32 = 1 << 31;
 }
@@ -331,7 +337,21 @@ pub fn field<T: HostValue, I: HostInput>(input: &I, key: &str, cx: &mut HostCx) 
 }
 
 /// The payloads of the host elements' events.
-const EVENT_TYPES: &str = r#"/** A frame relative to the parent: the payload of `onLayout`. */
+const EVENT_TYPES: &str = r#"/** Where the core placed an overlay: the payload of `onPosition`. */
+export interface OverlayPosition {
+  /** The side of the anchor it went on: the one asked for, or the other one when only that one has room. */
+  placement: "top" | "bottom" | "left" | "right";
+  /** Its frame in the root view (the surface, or the dialog it is in). */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** The room on that side, inside the safe area less `margin`: what a menu may grow to. */
+  availableWidth: number;
+  availableHeight: number;
+}
+
+/** A frame relative to the parent: the payload of `onLayout`. */
 export interface LayoutEvent {
   x: number;
   y: number;
@@ -449,6 +469,12 @@ pub const EVENTS: &[(EventKind, u32, &str, &str)] = &[
         on::ALL,
         "(e: ContextMenuEvent) => void",
         "The secondary button (a right click, Control-click on Apple platforms) was pressed over the view: open a menu with `Menu.popup({ x: e.pageX, y: e.pageY })`. The nearest listener hears it; a text input or selectable text nearer shows its own menu instead.",
+    ),
+    (
+        EventKind::MouseMove,
+        on::ALL,
+        "(e: { x: number; y: number }) => void",
+        "The mouse moved inside the view, including with a button down (desktops and web); `x`/`y` are local coordinates in points, delivered at most once per frame.",
     ),
     (
         EventKind::FileDragEnter,
@@ -631,6 +657,12 @@ pub const EVENTS: &[(EventKind, u32, &str, &str)] = &[
         "Before the text changes: `key` is the typed text, `Backspace` or `Enter`.",
     ),
     (
+        EventKind::CompositionChange,
+        on::INPUT,
+        "(e: { composing: boolean; text: string }) => void",
+        "An input method's composition started, changed or ended: `text` is what is being composed (pinyin before a character is chosen), empty once it ends. The committed text reaches `onChange` before the composition's end; while composing, the platform holds the `value` the app sets and shows it once the composition ends.",
+    ),
+    (
         EventKind::ContentSizeChange,
         on::INPUT,
         "(e: { width: number; height: number }) => void",
@@ -654,6 +686,24 @@ pub const EVENTS: &[(EventKind, u32, &str, &str)] = &[
         on::VIDEO,
         "(e: { isBuffering: boolean }) => void",
         "",
+    ),
+    (
+        EventKind::PressOutside,
+        on::OVERLAY,
+        "(e: { pageX: number; pageY: number }) => void",
+        "A press went down outside the overlay, its anchor and the overlays inside it (where, in the root view). Closing is the app's: leave the overlay out.",
+    ),
+    (
+        EventKind::Cancel,
+        on::OVERLAY,
+        "() => void",
+        "Escape or the Android back button, while this is the top overlay listening to it (it takes the key from the overlays below, the pages and `BackHandler`). Closing is the app's.",
+    ),
+    (
+        EventKind::Position,
+        on::OVERLAY,
+        "(e: OverlayPosition) => void",
+        "The core placed the overlay (again: the anchor moved, the overlay changed size, it went to the other side).",
     ),
 ];
 
@@ -700,6 +750,7 @@ const GROUPS: &[(u32, &str, &str)] = &[
     (on::WEBVIEW, "WebView", "web views"),
     (on::VIDEO, "Video", "videos"),
     (on::INPUT_ACCESSORY, "InputAccessory", "input accessories"),
+    (on::OVERLAY, "Overlay", "`<Overlay>`"),
 ];
 
 /// The declarations of the host elements' props: the named types they use

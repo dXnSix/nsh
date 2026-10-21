@@ -2,7 +2,7 @@
 //! main thread) learns when there is work outside a pump: a task woken by
 //! one of the host's callbacks (a WebSocket message through wasm-bindgen)
 //! calls the wake set with `LocalEngine::set_wake` exactly once, and the
-//! next pump runs it.
+//! next pump runs it. What a pump wakes itself it runs, without a wake.
 
 use std::{
     cell::RefCell,
@@ -15,10 +15,10 @@ use std::{
 
 use crossbeam_channel::Receiver;
 use nsh_core::{
-    ApproxTextEngine, MountBatch, MountItem, Size,
+    ApproxTextEngine, MountBatch, MountItem,
     ui::{Root, prelude::*},
 };
-use nsh_engine::{App, EngineConfig, Environment, LocalEngine};
+use nsh_engine::{App, EngineConfig, LocalEngine};
 use tokio::sync::oneshot;
 
 use crate::ChannelSink;
@@ -43,6 +43,26 @@ fn Echo() -> impl IntoElement {
     text(move || shown.get())
 }
 
+#[component]
+fn Relay() -> impl IntoElement {
+    let shown = signal(String::from("waiting"));
+    let (tx, rx) = oneshot::channel::<String>();
+    // Polled first, so it waits: the next task wakes it, inside the pump.
+    spawn(async move {
+        if let Ok(text) = rx.await {
+            shown.set(text);
+        }
+    });
+    spawn(async move {
+        let _ = tx.send("relayed".into());
+        // So is a task spawned there.
+        spawn(async move {
+            shown.update(|text| text.push('!'));
+        });
+    });
+    text(move || shown.get())
+}
+
 /// The texts in the batches received so far.
 fn texts(rx: &Receiver<MountBatch>) -> Vec<String> {
     let mut texts = Vec::new();
@@ -61,23 +81,7 @@ fn external_wake_asks_for_one_pump_and_the_pump_runs_the_task() {
     let (send, message) = oneshot::channel();
     MESSAGE.with(|m| *m.borrow_mut() = Some(message));
     let (tx, rx) = crossbeam_channel::unbounded();
-    let config = EngineConfig {
-        app: App::Rust(Root::of::<Echo>()),
-        viewport: Size::new(nsh_core::Points(390.0), nsh_core::Points(844.0)),
-        trace: false,
-        network: None,
-        websocket: None,
-        filesystem: None,
-        assets: None,
-        environment: Environment::default(),
-        header_heights: (nsh_core::Points(44.0), nsh_core::Points(96.0)),
-        limits: nsh_engine::Limits::default(),
-        ui_sets: Vec::new(),
-        runtime: None,
-        data_dir: None,
-        storage: None,
-        clock: Default::default(),
-    };
+    let config = EngineConfig::new(App::Rust(Root::of::<Echo>()));
     let mut engine = LocalEngine::start(config, ApproxTextEngine, ChannelSink(tx)).unwrap();
     let wakes = Arc::new(AtomicUsize::new(0));
     let counted = wakes.clone();
@@ -112,27 +116,32 @@ fn external_wake_is_optional() {
     let (send, message) = oneshot::channel();
     MESSAGE.with(|m| *m.borrow_mut() = Some(message));
     let (tx, rx) = crossbeam_channel::unbounded();
-    let config = EngineConfig {
-        app: App::Rust(Root::of::<Echo>()),
-        viewport: Size::new(nsh_core::Points(390.0), nsh_core::Points(844.0)),
-        trace: false,
-        network: None,
-        websocket: None,
-        filesystem: None,
-        assets: None,
-        environment: Environment::default(),
-        header_heights: (nsh_core::Points(44.0), nsh_core::Points(96.0)),
-        limits: nsh_engine::Limits::default(),
-        ui_sets: Vec::new(),
-        runtime: None,
-        data_dir: None,
-        storage: None,
-        clock: Default::default(),
-    };
+    let config = EngineConfig::new(App::Rust(Root::of::<Echo>()));
     let mut engine = LocalEngine::start(config, ApproxTextEngine, ChannelSink(tx)).unwrap();
     engine.pump();
     assert_eq!(texts(&rx).last().map(String::as_str), Some("waiting"));
     send.send("later".into()).unwrap();
     engine.pump();
     assert_eq!(texts(&rx).last().map(String::as_str), Some("later"));
+}
+
+#[test]
+fn external_wake_is_not_called_for_what_a_pump_wakes() {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let config = EngineConfig::new(App::Rust(Root::of::<Relay>()));
+    let mut engine = LocalEngine::start(config, ApproxTextEngine, ChannelSink(tx)).unwrap();
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let counted = wakes.clone();
+    engine.set_wake(Arc::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+    }));
+    // The first pump polls the tasks: one wakes the other and spawns a
+    // third, and the same pump runs both.
+    engine.pump();
+    assert_eq!(texts(&rx).last().map(String::as_str), Some("relayed!"));
+    assert_eq!(
+        wakes.load(Ordering::SeqCst),
+        0,
+        "a pump asks for no pump for what it runs itself"
+    );
 }

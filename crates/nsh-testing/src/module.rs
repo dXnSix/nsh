@@ -16,10 +16,9 @@ use nsh_core::{
 use nsh_engine::{HttpBody, HttpRequest};
 
 use crate::{
-    headless::{
-        self, Headless, MemoryStorage, RecordingNetwork, StubReply, StubResponse, StubRoute,
-        default_answer,
-    },
+    MemoryStorage,
+    driver::{Driver, headless_only},
+    headless::{self, RecordingNetwork, StubReply, StubResponse, StubRoute, default_answer},
     run::{OpenApp, Session},
 };
 
@@ -373,8 +372,10 @@ pub struct OpenOptions {
     pub locale: Option<String>,
     /// The user asked for less motion (false).
     pub reduced_motion: Option<bool>,
-    /// The platform the app believes it runs on (`"ios"`).
-    pub platform: Option<MobilePlatform>,
+    /// The platform the app believes it runs on headless (`"ios"`; a
+    /// desktop's: `"macos"`, `"windows"`, `"linux"`, `"web"`). On a real
+    /// platform it is that one.
+    pub platform: Option<Platform>,
     /// A manual clock for the app (none: the system's): its time moves only
     /// as the test moves it (`app.clock`), steps finish native animations
     /// at once, and `app.wait` moves it.
@@ -436,15 +437,28 @@ impl From<ColorScheme> for nsh_core::platform::ColorScheme {
     }
 }
 
-/// The mobile platform an app is opened as.
+/// The platform a headless app is opened as.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PropEnum)]
-pub enum MobilePlatform {
+pub enum Platform {
     /// iOS.
     #[default]
     Ios,
     /// Android.
     Android,
+    /// macOS: a desktop (keyboard shortcuts, the mouse's hover and context
+    /// menus).
+    Macos,
+    /// Windows: a desktop.
+    Windows,
+    /// Linux: a desktop.
+    Linux,
+    /// A browser, in the desktop idiom.
+    Web,
 }
+
+/// The platform a headless app is opened as.
+#[deprecated(note = "use `Platform`, which has the desktops too")]
+pub type MobilePlatform = Platform;
 
 /// A dialog the app showed (`AlertDialog.show`, an action sheet).
 #[derive(Debug, Clone, PartialEq, JsObject)]
@@ -469,6 +483,29 @@ pub struct WaitOptions {
     /// What it waits for: a view matching to show (`"shown"`, the default)
     /// or no view to match any more (`"gone"`).
     pub state: Option<WaitState>,
+}
+
+/// How far a drag moves the finger ([`App::drag`]), in points.
+#[derive(Debug, Default, Clone, Copy, PartialEq, JsObject)]
+pub struct DragBy {
+    /// Rightwards (negative: leftwards).
+    #[prop(default)]
+    pub x: Points,
+    /// Downwards (negative: upwards).
+    #[prop(default)]
+    pub y: Points,
+}
+
+/// An action of the context menu the app shows (`app.menu()`).
+#[derive(Debug, Clone, PartialEq, JsObject)]
+pub struct MenuEntry {
+    /// Its label; a submenu's actions after the submenu's (`"Share > Mail"`).
+    pub label: String,
+    /// It can be chosen.
+    pub enabled: bool,
+    /// Its check mark, when it is a checkable item.
+    #[prop(skip_none)]
+    pub checked: Option<bool>,
 }
 
 /// What [`WaitOptions`] waits for.
@@ -502,7 +539,7 @@ impl From<&nsh_core::Dialog> for Dialog {
 }
 
 /// Safe area insets in points.
-#[derive(Debug, Default, Clone, Copy, JsObject)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, JsObject)]
 pub struct SafeArea {
     /// The top inset.
     #[prop(default)]
@@ -691,7 +728,7 @@ pub(crate) struct Launch {
     pub(crate) color_scheme: ColorScheme,
     pub(crate) locale: Option<String>,
     pub(crate) reduced_motion: bool,
-    pub(crate) platform: MobilePlatform,
+    pub(crate) platform: Platform,
     /// A manual clock's start.
     pub(crate) clock: Option<std::time::SystemTime>,
 }
@@ -895,9 +932,10 @@ fn stub_response(value: &JsonValue) -> Result<StubResponse, PropError> {
 #[class]
 pub struct App {
     steps: Steps,
-    storage: Arc<MemoryStorage>,
-    /// The requests the app made.
-    requests: Arc<RecordingNetwork>,
+    /// Its storage, on a headless engine.
+    storage: Option<Arc<MemoryStorage>>,
+    /// The requests the app made, on a headless engine.
+    requests: Option<Arc<RecordingNetwork>>,
 }
 
 /// What steps on an app take: `App`'s and its clock's.
@@ -946,6 +984,25 @@ impl Clock {
     pub fn set_system_time(&self, time: Time) -> Result<(), String> {
         let mut app = self.steps.app.lock().unwrap_or_else(|e| e.into_inner());
         app.as_mut().ok_or(CLOSED)?.set_system_time(time.0)
+    }
+}
+
+/// The keyboard of an app (`app.keyboard`), as Playwright's
+/// `page.keyboard`: a hardware keyboard's keys.
+#[class]
+pub struct Keyboard {
+    steps: Steps,
+}
+
+#[class]
+impl Keyboard {
+    /// Presses `keys`, a keystroke as `nsh/keymap` names it (`"mod+k"`,
+    /// `"shift+/"`, `"escape"`; `mod` is the platform's command key): the
+    /// app's shortcut of it hears it (`onKeyCommand`), else the focused
+    /// input takes it, else Escape goes back.
+    pub async fn press(this: Instance<Self>, keys: String) -> Result<(), String> {
+        let steps = this.with(|k| k.steps.clone());
+        steps.run(move |app| app.press_key(&keys)).await
     }
 }
 
@@ -1000,6 +1057,44 @@ impl App {
         .await
     }
 
+    /// Drags what `selector` names: a finger lands on its middle, rests for
+    /// 100 ms, moves by `by` points, 10 per display frame, and lifts. A pan moves with it
+    /// (`onPanStart`, `onPanEnd`), the views listening to touches hear them,
+    /// a scroll view scrolls (pulled past its top, it refreshes), and the
+    /// press under the finger is cancelled.
+    pub async fn drag(this: Instance<Self>, selector: String, by: DragBy) -> Result<(), String> {
+        let by = nsh_core::geometry::point(by.x, by.y);
+        step(&this, move |app| app.drag(&selector, by)).await
+    }
+
+    /// The mouse's secondary button over the middle of what `selector`
+    /// names: it, or the nearest view around it listening, hears
+    /// `onContextMenu`, whose handler shows a menu (`Menu.popup`: read it
+    /// with `menu()`). Desktops and the web only: a phone has no mouse.
+    pub async fn right_click(this: Instance<Self>, selector: String) -> Result<(), String> {
+        step(&this, move |app| app.right_click(&selector)).await
+    }
+
+    /// Chooses the open context menu's action labelled `label` (a
+    /// submenu's: `"Share > Mail"`), as a click on it: the app hears
+    /// `onMenu`, then the menu closes.
+    pub async fn choose_menu_item(this: Instance<Self>, label: String) -> Result<(), String> {
+        step(&this, move |app| app.choose_menu_item(&label)).await
+    }
+
+    /// Closes the open context menu with nothing chosen, as Escape does.
+    pub async fn close_menu(this: Instance<Self>) -> Result<(), String> {
+        step(&this, move |app| app.close_menu()).await
+    }
+
+    /// Moves the mouse over the middle of what `selector` names: the views
+    /// under it hear `onHoverIn` (and the ones it left `onHoverOut`), take
+    /// their `hover:` styles and hear `onHoverMove`. Desktops and the web
+    /// only: a phone has no mouse.
+    pub async fn hover(this: Instance<Self>, selector: String) -> Result<(), String> {
+        step(&this, move |app| app.hover(&selector)).await
+    }
+
     /// Lets the app run for `ms` milliseconds (timers and animations): on a
     /// manual clock, moves it by `ms` (`clock.runFor`).
     pub async fn wait(this: Instance<Self>, ms: f64) -> Result<(), String> {
@@ -1048,7 +1143,7 @@ impl App {
             }
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             if left.is_zero() {
-                let screen = on_app(&app, |a| Ok(format!("{:?}", a.screen().texts()))).await?;
+                let screen = on_app(&app, |a| Ok(format!("{:?}", a.texts()?))).await?;
                 return Err(format!(
                     "the condition never held in {} ms; on screen: {screen}",
                     timeout.as_millis()
@@ -1078,40 +1173,39 @@ impl App {
 
     /// How many views on screen match `selector` now.
     pub fn count(&self, selector: String) -> Result<u32, String> {
-        self.with(|app| Ok(app.screen().count(&selector)? as u32))
+        self.with(|app| Ok(app.count(&selector)? as u32))
     }
 
     /// Whether the view `selector` names takes input now: neither it nor a
     /// view around it is disabled, and an input is not `readonly`.
     pub fn enabled(&self, selector: String) -> Result<bool, String> {
-        self.with(|app| app.screen().enabled(&selector))
+        self.with(|app| app.enabled(&selector))
     }
 
     /// Whether a view on screen matches `selector` now.
     pub fn shows(&self, selector: String) -> Result<bool, String> {
-        self.with(|app| app.screen().matches(&selector))
+        self.with(|app| app.shows(&selector))
     }
 
     /// The texts on screen now, in order.
     pub fn texts(&self) -> Result<Vec<String>, String> {
-        self.with(|app| {
-            Ok(app
-                .screen()
-                .texts()
-                .into_iter()
-                .map(str::to_owned)
-                .collect())
-        })
+        self.with(|app| app.texts())
     }
 
     /// The text of the input `selector` names, `null` when none matches.
     pub fn value(&self, selector: String) -> Result<Option<String>, String> {
-        self.with(|app| Ok(app.screen().input_text(&selector)?.map(str::to_owned)))
+        self.with(|app| app.value(&selector))
     }
 
     /// What the app's storage holds now.
-    pub fn storage(&self) -> Entries {
-        Entries(self.storage.entries())
+    pub fn storage(&self) -> Result<Entries, String> {
+        if let Some(storage) = &self.storage {
+            return Ok(Entries(storage.entries()));
+        }
+        // On a real host: as the host's app keeps it.
+        let mut app = self.steps.app.lock().unwrap_or_else(|e| e.into_inner());
+        let driver = app.as_mut().ok_or("the app is closed")?;
+        Ok(Entries(driver.storage()?))
     }
 
     /// Goes back as the user does (a header's back button, swiping a sheet
@@ -1120,7 +1214,7 @@ impl App {
     /// one, the newest modal asks to close. Rejects when there is nothing
     /// to go back from.
     pub async fn back(this: Instance<Self>) -> Result<(), String> {
-        step(&this, Headless::back).await
+        step(&this, |app| app.back()).await
     }
 
     /// Answers the dialogs the app shows from now on (`AlertDialog.show`, action
@@ -1134,7 +1228,33 @@ impl App {
 
     /// The dialogs the app showed, in order.
     pub fn dialogs(&self) -> Result<Vec<Dialog>, String> {
-        self.with(|app| Ok(app.screen().dialogs().iter().map(Dialog::from).collect()))
+        self.with(|app| Ok(app.dialogs()?.iter().map(Dialog::from).collect()))
+    }
+
+    /// The actions of the context menu the app shows (`Menu.popup`), a
+    /// submenu's after its label (`"Share > Mail"`); `null` when none is
+    /// open.
+    pub fn menu(&self) -> Result<Option<Vec<MenuEntry>>, String> {
+        self.with(|app| {
+            Ok(app.menu()?.map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|e| MenuEntry {
+                        label: e.label,
+                        enabled: e.enabled,
+                        checked: e.checked,
+                    })
+                    .collect()
+            }))
+        })
+    }
+
+    /// The app's keyboard, whose keys the test presses.
+    #[getter]
+    pub fn keyboard(&self) -> Keyboard {
+        Keyboard {
+            steps: self.steps.clone(),
+        }
     }
 
     /// The app's manual clock (`open`'s `clock`), which the test moves.
@@ -1146,12 +1266,30 @@ impl App {
     }
 
     /// The requests the app made, in order.
-    pub fn requests(&self) -> Vec<StubRequest> {
-        self.requests
-            .requests()
-            .iter()
-            .map(StubRequest::from)
-            .collect()
+    pub fn requests(&self) -> Result<Vec<StubRequest>, String> {
+        let requests = self
+            .requests
+            .as_ref()
+            .ok_or_else(|| headless_only("`requests()`"))?;
+        Ok(requests.requests().iter().map(StubRequest::from).collect())
+    }
+
+    /// A picture of the app's window as a PNG, also saved at `path`
+    /// (relative to the current directory, on this machine) when given: a
+    /// real platform's (`nsh test --target`), which draws the app; a
+    /// headless run draws nothing.
+    pub async fn screenshot(this: Instance<Self>, path: Option<String>) -> Result<Vec<u8>, String> {
+        let app = this.with(|a| a.steps.app.clone());
+        let png = on_app(&app, |a| a.screenshot()).await?;
+        if let Some(path) = path {
+            let saved = png.clone();
+            blocking(move || {
+                std::fs::write(&path, saved).map_err(|e| format!("screenshot({path:?}): {e}"))
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+        }
+        Ok(png)
     }
 
     /// Makes the viewport `width` × `height` points (a rotation, a resized
@@ -1163,25 +1301,18 @@ impl App {
 
     /// Switches the system's appearance to `scheme`, as the user does.
     pub async fn set_color_scheme(this: Instance<Self>, scheme: ColorScheme) -> Result<(), String> {
-        step(&this, move |app| {
-            app.set_environment(&format!("setColorScheme({})", scheme.js_name()), |e| {
-                e.color_scheme = scheme.into();
-            })
-        })
-        .await
+        step(&this, move |app| app.set_color_scheme(scheme.into())).await
     }
 
     /// The text on the clipboard now, `null` when it holds none.
     pub fn clipboard(&self) -> Result<Option<String>, String> {
-        self.with(|app| Ok(app.screen().clipboard().map(str::to_owned)))
+        self.with(|app| app.clipboard())
     }
 
     /// `f` with the app as it is now (the batches that came applied).
-    fn with<R>(&self, f: impl FnOnce(&mut Headless) -> Result<R, String>) -> Result<R, String> {
+    fn with<R>(&self, f: impl FnOnce(&mut dyn Driver) -> Result<R, String>) -> Result<R, String> {
         let mut app = self.steps.app.lock().unwrap_or_else(|e| e.into_inner());
-        let app = app.as_mut().ok_or(CLOSED)?;
-        app.catch_up();
-        f(app)
+        f(app.as_deref_mut().ok_or(CLOSED)?)
     }
 }
 
@@ -1190,7 +1321,7 @@ impl App {
 /// else as [`default_answer`] says.
 async fn step(
     this: &Instance<App>,
-    f: impl FnOnce(&mut Headless) -> Result<(), String> + Send + 'static,
+    f: impl FnOnce(&mut dyn Driver) -> Result<(), String> + Send + 'static,
 ) -> Result<(), String> {
     this.with(|a| a.steps.clone()).run(f).await
 }
@@ -1200,7 +1331,7 @@ impl Steps {
     /// showed ([`step`]).
     async fn run(
         &self,
-        f: impl FnOnce(&mut Headless) -> Result<(), String> + Send + 'static,
+        f: impl FnOnce(&mut dyn Driver) -> Result<(), String> + Send + 'static,
     ) -> Result<(), String> {
         let Steps {
             app,
@@ -1209,7 +1340,7 @@ impl Steps {
         } = self;
         serve(server.as_deref(), on_app(app, f)).await??;
         loop {
-            let pending = on_app(app, |a| Ok(a.pending_dialog().cloned())).await?;
+            let pending = on_app(app, |a| Ok(a.pending_dialog())).await?;
             let Some(shown) = pending else {
                 return Ok(());
             };
@@ -1233,12 +1364,12 @@ impl Steps {
 /// `f` with the app `app`, on a blocking thread.
 async fn on_app<R: Send + 'static>(
     app: &OpenApp,
-    f: impl FnOnce(&mut Headless) -> Result<R, String> + Send + 'static,
+    f: impl FnOnce(&mut dyn Driver) -> Result<R, String> + Send + 'static,
 ) -> Result<R, String> {
     let app = app.clone();
     blocking(move || {
         let mut app = app.lock().unwrap_or_else(|e| e.into_inner());
-        f(app.as_mut().ok_or(CLOSED)?)
+        f(app.as_deref_mut().ok_or(CLOSED)?)
     })
     .await
     .map_err(|e| e.to_string())?

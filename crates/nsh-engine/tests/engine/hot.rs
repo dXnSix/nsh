@@ -26,8 +26,7 @@ impl MountSink for ChannelSink {
 }
 
 const APP: &str = r#"
-import { mount, signal, Text, View } from "nsh";
-import { Image } from "nsh/image";
+import { Image, mount, signal, Text, View } from "nsh";
 import { Counter } from "./Counter";
 import dot from "./dot.png";
 
@@ -175,6 +174,8 @@ fn edits_replace_modules_and_keep_unrelated_state() {
         data_dir: None,
         storage: None,
         clock: Default::default(),
+        pinned: Default::default(),
+        clipboard: None,
     };
     let engine = Engine::start(
         config,
@@ -325,6 +326,8 @@ fn entry_edits_keep_navigation_and_state() {
             data_dir: None,
             storage: None,
             clock: Default::default(),
+            pinned: Default::default(),
+            clipboard: None,
         };
         let engine = Engine::start(
             config,

@@ -79,6 +79,18 @@ pub struct Selection {
     pub end: u32,
 }
 
+/// An input method's composition in an input (`on_composition_change`):
+/// the text being composed (pinyin before a character is chosen, kana
+/// before conversion), not yet the input's text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Composition {
+    /// A composition is in progress.
+    pub composing: bool,
+    /// The text being composed, empty once the composition ends.
+    pub text: String,
+}
+
 /// Where a web view is (`on_navigation_state_change`, `on_load`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WebNavigation {
@@ -132,6 +144,17 @@ pub struct NativeEvent {
     pub data: JsonValue,
 }
 
+/// Where the core placed an overlay (`Overlay::on_position`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct OverlayPosition {
+    /// The side of the anchor it went on.
+    pub placement: crate::overlay::Placement,
+    /// Its frame in the root view.
+    pub bounds: Bounds<Points>,
+    /// The room on that side, inside the safe area less the margin.
+    pub available: Size<Points>,
+}
+
 /// A field of a map payload.
 fn field<'a>(payload: &'a EventPayload, key: &str) -> Option<&'a PayloadValue> {
     match payload {
@@ -179,6 +202,38 @@ pub(crate) fn unit(_: &EventPayload) -> Option<Cow<'_, ()>> {
     Some(Cow::Owned(()))
 }
 
+pub(crate) fn overlay_position(p: &EventPayload) -> Option<Cow<'_, OverlayPosition>> {
+    use crate::overlay::Placement;
+    let placement = match string(p, "placement")? {
+        "top" => Placement::Top,
+        "left" => Placement::Left,
+        "right" => Placement::Right,
+        _ => Placement::Bottom,
+    };
+    Some(Cow::Owned(OverlayPosition {
+        placement,
+        bounds: Bounds {
+            origin: point(px(number(p, "x")), px(number(p, "y"))),
+            size: Size {
+                width: px(number(p, "width")),
+                height: px(number(p, "height")),
+            },
+        },
+        available: Size {
+            width: px(number(p, "availableWidth")),
+            height: px(number(p, "availableHeight")),
+        },
+    }))
+}
+
+/// Where a press went down, in the root view (`Overlay::on_press_outside`).
+pub(crate) fn page_point(p: &EventPayload) -> Option<Cow<'_, Point<Points>>> {
+    Some(Cow::Owned(point(
+        px(number(p, "pageX")),
+        px(number(p, "pageY")),
+    )))
+}
+
 pub(crate) fn layout(p: &EventPayload) -> Option<Cow<'_, Bounds<Points>>> {
     match *p {
         EventPayload::Layout(frame) => Some(Cow::Owned(frame)),
@@ -216,6 +271,13 @@ pub(crate) fn selection(p: &EventPayload) -> Option<Cow<'_, Selection>> {
     Some(Cow::Owned(Selection {
         start: number(p, "start") as u32,
         end: number(p, "end") as u32,
+    }))
+}
+
+pub(crate) fn composition(p: &EventPayload) -> Option<Cow<'_, Composition>> {
+    Some(Cow::Owned(Composition {
+        composing: flag(p, "composing"),
+        text: string(p, "text").unwrap_or_default().to_owned(),
     }))
 }
 
@@ -384,6 +446,26 @@ mod tests {
                 .unwrap()
                 .uris,
             uris
+        );
+    }
+
+    #[test]
+    fn composition_reads_its_state_and_text() {
+        use crate::{EventPayload, PayloadValue};
+        let composing = EventPayload::Map(vec![
+            ("composing", PayloadValue::Bool(true)),
+            ("text", PayloadValue::Str("teng".into())),
+        ]);
+        let c = super::composition(&composing).unwrap();
+        assert!(c.composing);
+        assert_eq!(c.text, "teng");
+        let ended = EventPayload::Map(vec![
+            ("composing", PayloadValue::Bool(false)),
+            ("text", PayloadValue::Str(String::new())),
+        ]);
+        assert_eq!(
+            super::composition(&ended).unwrap().into_owned(),
+            super::Composition::default()
         );
     }
 }

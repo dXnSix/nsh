@@ -8,9 +8,13 @@
 //! SVG images (sniffed from their bytes) are drawn by [`nsh_core::svg`] at
 //! the requested pixel size instead, then blurred, filtered, tinted and
 //! cached as bitmaps; their size is their intrinsic size in points.
+//! Canvases draw bitmaps only.
 
 use dispatch2::{DispatchQueue, DispatchQueueGlobalPriority, GlobalQueueIdentifier};
-use nsh_core::NodeId;
+use nsh_core::{
+    NodeId,
+    geometry::{Points, Size},
+};
 use objc2::{
     AnyThread, DefinedClass, Message, define_class, msg_send, rc::Retained, runtime::ProtocolObject,
 };
@@ -37,12 +41,20 @@ const CACHE_BYTES: usize = 96 << 20;
 
 /// A decoded image handed from a background queue to the main thread,
 /// with the pixel size of its source (before downsampling: `onLoad`
-/// reports it, whatever size the view decodes at; an SVG's is in points).
+/// reports it, whatever size the view decodes at; an SVG's is in whole
+/// points).
 #[derive(Clone)]
 pub(crate) struct DecodedImage {
     pub(crate) image: Retained<UIImage>,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    /// An SVG, which canvases do not draw.
+    pub(crate) vector: bool,
+}
+
+/// Why a canvas leaves out the SVG image `uri`.
+pub(crate) fn not_a_bitmap(uri: &str) -> String {
+    format!("{uri} is an SVG image: canvases draw bitmaps (PNG, JPEG, ...)")
 }
 
 define_class!(
@@ -720,12 +732,15 @@ fn download(
 /// first ones).
 const MAX_FRAMES: usize = 600;
 
-/// The size `Image.getSize` reports: pixels, or an SVG's points.
+/// The size `Image.getSize` reports: pixels, or an SVG's whole points.
 fn info_size(data: &CFData) -> Option<(u32, u32)> {
     // SAFETY: the data is immutable while it is read.
     let bytes = unsafe { data.as_bytes_unchecked() };
     let size = if nsh_core::svg::sniff(bytes) {
-        nsh_core::svg::size(bytes).ok().map(svg_size)
+        nsh_core::svg::size(bytes)
+            .inspect_err(|e| log::warn!("{e}"))
+            .ok()
+            .map(svg_size)
     } else {
         // SAFETY: valid data; only the header is read.
         unsafe { CGImageSource::with_data(data, None) }.map(|source| source_size(&source))
@@ -733,10 +748,11 @@ fn info_size(data: &CFData) -> Option<(u32, u32)> {
     size.filter(|(w, h)| *w > 0 && *h > 0)
 }
 
-/// An SVG's intrinsic size in whole points (at least one).
-fn svg_size(size: nsh_core::geometry::Size<nsh_core::geometry::Points>) -> (u32, u32) {
-    let (w, h) = (size.width.0, size.height.0);
-    ((w.round() as u32).max(1), (h.round() as u32).max(1))
+/// An SVG's intrinsic size in whole points, as `onLoad` and
+/// `Image.getSize` report it.
+fn svg_size(size: Size<Points>) -> (u32, u32) {
+    let reported = nsh_core::svg::reported_size(size);
+    (reported.width.0 as u32, reported.height.0 as u32)
 }
 
 /// Draws an SVG for a view `max_pixels` pixels on its longer side, with
@@ -745,10 +761,7 @@ fn svg_size(size: nsh_core::geometry::Size<nsh_core::geometry::Points>) -> (u32,
 /// blurs and filters it as [`decode`] does bitmaps. Thread-safe.
 fn decode_svg(bytes: &[u8], d: Decoding) -> Option<DecodedImage> {
     let raster = match d.max_pixels {
-        0 => nsh_core::svg::size(bytes).and_then(|s| {
-            let longest = s.width.0.max(s.height.0);
-            nsh_core::svg::rasterize(bytes, (longest as f64 * d.scale).ceil() as u32)
-        }),
+        0 => nsh_core::svg::rasterize_scaled(bytes, d.scale as f32),
         n => nsh_core::svg::rasterize_covering(bytes, n),
     }
     .inspect_err(|e| log::warn!("{e}"))
@@ -758,15 +771,20 @@ fn decode_svg(bytes: &[u8], d: Decoding) -> Option<DecodedImage> {
         true => crate::blur::filtered(&image, d.blur, d.matrix).unwrap_or(image),
         false => image,
     };
+    // `center` shows an image at its size in points, the raster's pixels
+    // over its scale: the SVG's intrinsic size, or as large as a bitmap
+    // decoded for the view when that is smaller.
+    let scale = (raster.width as f64 / raster.size.width.0 as f64).max(d.scale);
     let (width, height) = svg_size(raster.size);
     Some(DecodedImage {
         image: UIImage::imageWithCGImage_scale_orientation(
             &image,
-            d.scale as CGFloat,
+            scale as CGFloat,
             UIImageOrientation::Up,
         ),
         width,
         height,
+        vector: true,
     })
 }
 
@@ -855,6 +873,7 @@ fn decode(data: &CFData, d: Decoding) -> Option<DecodedImage> {
             image,
             width,
             height,
+            vector: false,
         };
         let count = source.count().min(MAX_FRAMES);
         if count <= 1 {
@@ -1043,12 +1062,17 @@ mod tests {
         // SAFETY: a plain property of an immutable image.
         assert_eq!(unsafe { icon.image.scale() }, 3.0);
         let logo = decode(&CFData::from_bytes(LOGO), decoding(144, 2.0)).unwrap();
+        assert!(logo.vector);
         let image = cg(&logo);
         assert_eq!(
             (CGImage::width(Some(&image)), CGImage::height(Some(&image))),
             (288, 144),
             "the shorter side at the view's longer one: sharp when `cover` crops it"
         );
+        // `center` shows it at its intrinsic size.
+        // SAFETY: a plain property of an immutable image.
+        let size = unsafe { logo.image.size() };
+        assert_eq!((size.width, size.height), (48.0, 24.0));
         assert_eq!(pixel(&image, 10, 36), [255, 0, 0, 255]);
         assert_eq!(pixel(&image, 270, 72), [0, 0, 255, 255]);
         // Natural size: the intrinsic size at the screen scale.
@@ -1065,6 +1089,11 @@ mod tests {
         assert_eq!(info_size(&CFData::from_bytes(ICON)), Some((24, 24)));
         assert_eq!(info_size(&CFData::from_bytes(LOGO)), Some((48, 24)));
         assert_eq!(info_size(&CFData::from_bytes(b"<svg><rect")), None);
+        let odd = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10.5" height="1e30"/>"#;
+        assert_eq!(
+            info_size(&CFData::from_bytes(odd)),
+            Some((11, i32::MAX as u32))
+        );
     }
 
     #[test]

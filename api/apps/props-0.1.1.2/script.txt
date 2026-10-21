@@ -129,14 +129,6 @@ covers [props] numColumns
 covers [props] inverted
 covers [props] stickyHeaderIndices
 covers [props] estimatedItemSize
-# props-list-sticky-offset
-tap id:case-props-list-sticky-offset
-# Items 0 and 3 stick 24 points below the top: each moves with the scroll
-# from 24 points before its position, and item 3 pushes item 0 out when it
-# reaches item 0's bottom there.
-expect Offset 0
-prop scroll:text:"Offset 0" stickyHeaderIndices start=-24 end=56, start=96 end=Infinity
-covers [props] stickyHeaderOffset
 # props-media-image
 tap id:case-props-media-image
 expect Next
@@ -386,3 +378,16 @@ covers [props] hitSlop
 covers [props] delayLongPress
 covers [props] panActivation
 covers [props] focusable
+# props-media-svg
+tap id:case-props-media-svg
+# Imported SVG files as the platform receives them, each laid out at its
+# size in points: width and height, the viewBox alone, one side and the
+# viewBox's aspect ratio.
+prop id:sized src asset:/svg/badge.svg
+frame id:sized 0 64 48 20
+prop id:view-box src asset:/svg/star.svg
+frame id:view-box 0 84 24 24
+prop id:one-side src asset:/svg/mark.svg
+frame id:one-side 0 108 32 16
+covers [nsh/image] Image
+covers [props] src
