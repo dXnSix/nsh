@@ -2872,9 +2872,10 @@ pub trait Styled: Sized {
         font_variant(self, FontVariant::SMALL_CAPS, 0)
     }
 
-    /// No number or letter forms (undoes the ones set before).
+    /// The font's own number forms (undoes the number forms set before;
+    /// `small_caps` stays).
     fn normal_nums(self) -> Self {
-        font_variant(self, 0, 0xff)
+        font_variant(self, 0, !FontVariant::SMALL_CAPS)
     }
 
     /// The layout direction of the view and its subtree (by default its

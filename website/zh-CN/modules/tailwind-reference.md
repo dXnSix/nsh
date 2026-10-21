@@ -205,7 +205,7 @@ view()
 | `font-thin`（100）、`font-extralight`（200）、`font-light`（300）、`font-normal`（400）、`font-medium`（500）、`font-semibold`（600）、`font-bold`（700）、`font-extrabold`（800）、`font-black`（900） | `fontWeight` |
 | `font-[<weight>]`、`font-[<family>]` | 数字为字重，否则为字体族：`font-[650]`、`font-[Inter]` |
 | `italic`、`not-italic` | `fontStyle` |
-| `normal-nums`、`small-caps`、`oldstyle-nums`、`lining-nums`、`tabular-nums`、`proportional-nums` | `fontVariant`（可组合） |
+| `normal-nums`、`small-caps`、`oldstyle-nums`、`lining-nums`、`tabular-nums`、`proportional-nums` | `fontVariant`（可组合；`normal-nums` 重置数字形式） |
 
 ### 字号、颜色与行高
 

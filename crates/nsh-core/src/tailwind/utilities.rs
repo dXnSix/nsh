@@ -1046,9 +1046,10 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
             Decl::Prop(PropDecl::NoWrap(false))
         }
         "line-clamp-none" => Decl::Prop(PropDecl::Lines(0)),
+        // `font-variant-numeric: normal`: the number forms only.
         "normal-nums" => Decl::Part(Part::FontVariant {
             set: 0,
-            clear: 0xff,
+            clear: !FontVariant::SMALL_CAPS,
         }),
         "small-caps" => Decl::Part(Part::FontVariant {
             set: FontVariant::SMALL_CAPS,

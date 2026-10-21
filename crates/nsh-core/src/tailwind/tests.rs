@@ -293,6 +293,14 @@ fn typography() {
             .unwrap()
             .has(crate::style::FontVariant::TABULAR_NUMS)
     );
+    // `normal-nums` resets `font-variant-numeric` only.
+    let s = styled("small-caps tabular-nums normal-nums");
+    assert_eq!(
+        s.text.font_variant,
+        Some(crate::style::FontVariant(
+            crate::style::FontVariant::SMALL_CAPS
+        ))
+    );
     let s = styled("text-sm/6 font-mono");
     assert_eq!(s.text.font_size, Some(px(14.0)));
     assert_eq!(s.text.line_height, Some(px(24.0)));

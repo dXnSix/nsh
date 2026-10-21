@@ -205,7 +205,7 @@ Container widths (points): `3xs` 256, `2xs` 288, `xs` 320, `sm` 384, `md` 448, `
 | `font-thin` (100), `font-extralight` (200), `font-light` (300), `font-normal` (400), `font-medium` (500), `font-semibold` (600), `font-bold` (700), `font-extrabold` (800), `font-black` (900) | `fontWeight` |
 | `font-[<weight>]`, `font-[<family>]` | a numeric weight, otherwise a family: `font-[650]`, `font-[Inter]` |
 | `italic`, `not-italic` | `fontStyle` |
-| `normal-nums`, `small-caps`, `oldstyle-nums`, `lining-nums`, `tabular-nums`, `proportional-nums` | `fontVariant` (they combine) |
+| `normal-nums`, `small-caps`, `oldstyle-nums`, `lining-nums`, `tabular-nums`, `proportional-nums` | `fontVariant` (they combine; `normal-nums` resets the number forms) |
 
 ### Size, color and line height
 
