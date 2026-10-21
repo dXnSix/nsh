@@ -48,11 +48,13 @@ final class ShaderBox extends Box {
     final Bitmap[] images = new Bitmap[8];
     String[] uris = new String[0];
     int[] sizeWords = new int[0];
-    private final Path clipPath = new Path();
+    private final Path shapePath = new Path();
 
     ShaderBox(Context context, Mounter mounter, int id) {
         super(context, mounter, id);
         setWillNotDraw(false);
+        // The fill goes over the background and under the borders.
+        decor.bordersAbove = true;
     }
 
     /** What it draws: `program` (null: nothing) with `uniforms`. */
@@ -124,10 +126,14 @@ final class ShaderBox extends Box {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         // Software canvases (pictures drawn into a bitmap) take no runtime shader.
-        if (shader == null || Build.VERSION.SDK_INT < 33 || getWidth() == 0 || getHeight() == 0
-                || !canvas.isHardwareAccelerated()) {
-            return;
+        if (shader != null && Build.VERSION.SDK_INT >= 33 && getWidth() > 0 && getHeight() > 0
+                && canvas.isHardwareAccelerated()) {
+            drawShader(canvas);
         }
+        decor.drawBorders(canvas);
+    }
+
+    private void drawShader(Canvas canvas) {
         float density = mounter.density;
         float width = getWidth() / density, height = getHeight() / density;
         long now = SystemClock.uptimeMillis();
@@ -174,13 +180,12 @@ final class ShaderBox extends Box {
             }
         }
         paint.setShader(shader);
-        boolean clipped = decor.needsPathClip(clip);
-        if (clipped) {
-            canvas.save();
-            canvas.clipPath(decor.shape(new Rect(0, 0, getWidth(), getHeight()), 0, clipPath));
+        // The fill follows the view's corners, as a background does.
+        if (decor.rounded()) {
+            canvas.drawPath(decor.shape(new Rect(0, 0, getWidth(), getHeight()), 0, shapePath), paint);
+        } else {
+            canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
         }
-        canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
-        if (clipped) canvas.restore();
         // A shader that reads `nsh.time` draws on every frame while it shows.
         if (time && isShown()) postInvalidateOnAnimation();
     }

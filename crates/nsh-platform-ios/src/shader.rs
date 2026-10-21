@@ -44,9 +44,9 @@ impl ShaderHost {
             // SAFETY: a `CAMetalLayer` is a `CALayer`.
             let ca: &CALayer =
                 unsafe { &*(layer.layer() as *const objc2::runtime::AnyObject as *const CALayer) };
-            // Above the decoration behind it, below the borders in front and
-            // the children.
-            ca.setZPosition(crate::decor::BEHIND / 2.0);
+            // Above the decoration behind it, below the borders and the
+            // children.
+            ca.setZPosition(crate::decor::SHADER);
             self.view.layer().addSublayer(ca);
             *self.layer.borrow_mut() = Some(layer);
             self.layout();
@@ -58,6 +58,16 @@ impl ShaderHost {
         let load = layer.set_fill(fill);
         layer.draw();
         load
+    }
+
+    /// Its `CAMetalLayer`, once it has one (the decoration shapes it).
+    pub(crate) fn content_layer(&self) -> Option<Retained<CALayer>> {
+        let layer = self.layer.borrow();
+        // SAFETY: a `CAMetalLayer` is a `CALayer`.
+        let ca: &CALayer = unsafe {
+            &*(layer.as_ref()?.layer() as *const objc2::runtime::AnyObject as *const CALayer)
+        };
+        Some(objc2::Message::retain(ca))
     }
 
     /// The view's bounds or scale changed (or may have): the layer covers

@@ -1278,6 +1278,8 @@ class Player {
       const canvas = document.createElement("canvas");
       canvas.className = "nsh-fill";
       canvas.style.pointerEvents = "none";
+      // The fill follows the view's corners, as a background does.
+      canvas.style.borderRadius = "inherit";
       el.append(canvas);
       el._shaderCanvas = canvas;
       el._args = new Map();

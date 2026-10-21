@@ -386,6 +386,12 @@ pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
         }
         t.fresh = true;
     }
+    // The fill follows the view's corners, as a background does.
+    let radii = state.radii();
+    let rounded = radii.iter().any(|&r| r > 0.0);
+    if rounded {
+        cx.push_clip_rounded(crate::geom::rect(0.0, 0.0, w, h), radii);
+    }
     // SAFETY: a COM call on the live context with a bitmap of its device.
     unsafe {
         cx.dc.DrawBitmap(
@@ -397,6 +403,9 @@ pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
             None,
         )
     };
+    if rounded {
+        cx.pop();
+    }
 }
 
 fn make_target(gfx: &Gfx, size: (u32, u32), generation: u64) -> windows::core::Result<Target> {

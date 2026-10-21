@@ -122,15 +122,19 @@ inputs say.
 
 | Platform | Draws with | Where | Draws every frame |
 |---|---|---|---|
-| iOS, Mac Catalyst, macOS | Metal (`nsh-metal`: loaded with `dlopen`, programs compiled off the main thread) | a `CAMetalLayer` in the view's layer, above its background (`decor::BEHIND / 2`) | the macOS surface's frame callbacks / the iOS mounter's shader display link, while in a window |
+| iOS, Mac Catalyst, macOS | Metal (`nsh-metal`: loaded with `dlopen`, programs compiled off the main thread) | a `CAMetalLayer` in the view's layer (`decor::SHADER`), shaped by the decoration as image content is | the macOS surface's frame callbacks / the iOS mounter's shader display link, while in a window |
 | Android 13+ | `RuntimeShader` (AGSL) in `ShaderBox.onDraw` | the view's canvas, over its background | `postInvalidateOnAnimation` while shown |
 | Windows | Direct3D 11 into a texture Direct2D draws (`HlslProgram::d3d11`, `D3DCompile`) | the view's drawing, before its text and children | each frame the surface draws |
 | Linux | OpenGL ES 3 in a `GdkGLContext` of its own (glow over libepoxy) into a texture, a `GdkGLTexture` with a fence | the view's snapshot, flipped as `GtkGLArea`'s | the widget's tick callback |
 | Web | WebGL 2 on one shared canvas, copied to a bitmap canvas in the view's element | the element, under its children | `requestAnimationFrame` |
 | GPUI | (draws the children) | | |
 
+On every platform the fill follows the view's corners and draws above its background, gradients and inset shadows
+and below its borders, as a background does (Android draws the borders itself after the fill, `Decor.bordersAbove`,
+as its image views do).
+
 In-process screenshots on macOS (`nsh test --target macos`) draw each shader again into a texture the CPU reads
-(`ShaderLayer::picture`), since `cacheDisplayInRect` does not draw a `CAMetalLayer`. Android's screenshots use
+(`ShaderLayer::picture`, shaped as the layer is), since `cacheDisplayInRect` does not draw a `CAMetalLayer`. Android's screenshots use
 `PixelCopy`: a software canvas draws no `RuntimeShader`.
 
 ## Verification

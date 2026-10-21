@@ -2092,6 +2092,19 @@ impl Mounter {
             self.shader_frames.push(id);
             self.shader_link.setPaused(false);
         }
+        // The fill follows the view's corners.
+        let content = match self.slot(id) {
+            Some(Slot {
+                native: Native::Shader(host),
+                ..
+            }) => host.content_layer(),
+            _ => None,
+        };
+        if let Some(s) = self.views.get_mut(id as usize).and_then(Option::as_mut)
+            && s.decor.set_shader_layer(content)
+        {
+            self.decorate(id);
+        }
     }
 
     /// Image `uri` of shader view `id` loaded (into `slot`, or each slot

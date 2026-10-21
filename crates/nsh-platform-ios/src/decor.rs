@@ -33,6 +33,9 @@ use objc2_ui_kit::{UIColor, UIImage, UIView};
 /// always draws in front, looks the same and needs no shape.
 pub(crate) const BEHIND: CGFloat = -1024.0;
 const BORDER_BEHIND: CGFloat = BEHIND + 1.0;
+/// A shader's fill: above the background, gradients and inset shadows,
+/// below borders drawn behind the children (as a background is).
+pub(crate) const SHADER: CGFloat = BEHIND + 0.75;
 const IN_FRONT: CGFloat = 1024.0;
 
 /// What a native view is, as far as decoration goes.
@@ -72,6 +75,9 @@ pub(crate) struct Decor {
     sized: bool,
     /// Layered shadows, gradients, outline, backdrop blur.
     visual: crate::visual::Visual,
+    /// A shader view's `CAMetalLayer` (`crate::shader`), shaped as image
+    /// content is: the fill follows the view's corners.
+    shader: Option<Retained<CALayer>>,
 }
 
 impl Decor {
@@ -90,6 +96,19 @@ impl Decor {
     /// The view children are added to.
     pub(crate) fn container<'a>(&'a self, view: &'a UIView) -> &'a UIView {
         self.content.as_deref().unwrap_or(view)
+    }
+
+    /// Shapes `layer`, a shader's, with the view from now on: whether it
+    /// is new (apply the decoration again).
+    pub(crate) fn set_shader_layer(&mut self, layer: Option<Retained<CALayer>>) -> bool {
+        if self.shader == layer {
+            return false;
+        }
+        if let Some(l) = &layer {
+            l.setMasksToBounds(true);
+        }
+        self.shader = layer;
+        true
     }
 
     /// True if [`Decor::apply`] must run again when the view is resized.
@@ -526,6 +545,19 @@ impl Decor {
             }
             if image.superlayer().is_none() {
                 layer.addSublayer(image);
+            }
+        }
+        // So does a shader's fill, as a background does.
+        if let Some(content) = &self.shader {
+            set_corners(content, r, corners, raw.continuous);
+            if shared.is_some() {
+                // SAFETY: clearing the mask.
+                unsafe { content.setMask(None) };
+            } else {
+                let m = CAShapeLayer::new();
+                m.setPath(Some(&rounded(local, radii)));
+                // SAFETY: a fresh mask layer, owned by the shader's layer.
+                unsafe { content.setMask(Some(&m)) };
             }
         }
 

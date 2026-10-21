@@ -543,11 +543,19 @@ pub(crate) fn draw(snapshot: &gtk::Snapshot, state: &ViewState, widget: &NshView
     let Some(picture) = &cache.picture else {
         return;
     };
+    // The fill follows the view's corners, as a background does.
+    let rounded = state.radii().iter().any(|&r| r > 0.0);
+    if rounded {
+        snapshot.push_rounded_clip(&state.rounded_bounds());
+    }
     snapshot.save();
     snapshot.translate(&graphene::Point::new(0.0, h));
     snapshot.scale(1.0, -1.0);
     snapshot.append_texture(picture, &graphene::Rect::new(0.0, 0.0, w, h));
     snapshot.restore();
+    if rounded {
+        snapshot.pop();
+    }
 }
 
 /// Renders the view into a texture of the pool.

@@ -90,16 +90,22 @@ pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, fill: Option<Arc<Shader
         let ca: &CALayer =
             unsafe { &*(layer.layer() as *const objc2::runtime::AnyObject as *const CALayer) };
         // Above the decoration behind it (fills, gradients, inset shadows),
-        // below the children and the borders in front.
-        ca.setZPosition(crate::decor::BEHIND / 2.0);
+        // below the borders and the children.
+        ca.setZPosition(crate::decor::SHADER);
         if let Some(host) = view.ns().layer() {
             host.addSublayer(ca);
         }
-        view.state_mut().shader = Some(ShaderState {
-            layer,
-            ticking: false,
-            surface: Rc::downgrade(surface),
-        });
+        {
+            let mut s = view.state_mut();
+            s.decor.set_shader_layer(objc2::Message::retain(ca));
+            s.shader = Some(ShaderState {
+                layer,
+                ticking: false,
+                surface: Rc::downgrade(surface),
+            });
+        }
+        // The fill follows the view's corners.
+        crate::decor::apply(view);
         VIEWS.with(|v| v.borrow_mut().push(view.downgrade()));
         resized(view);
     }
@@ -231,7 +237,28 @@ pub(crate) fn picture_layer(view: &NshView) -> Option<Retained<CALayer>> {
     // SAFETY: CF objects are Objective-C objects; a CGImage is a valid
     // layer content.
     unsafe { layer.setContents(Retained::retain(ptr).as_deref()) };
-    layer.setZPosition(crate::decor::BEHIND / 2.0);
+    layer.setZPosition(crate::decor::SHADER);
+    // Shaped as the shader's layer is (the view's corners).
+    {
+        let s = view.state();
+        // SAFETY: a `CAMetalLayer` is a `CALayer`.
+        let content: &CALayer = unsafe {
+            &*(s.shader.as_ref()?.layer.layer() as *const objc2::runtime::AnyObject
+                as *const CALayer)
+        };
+        layer.setCornerRadius(content.cornerRadius());
+        layer.setCornerCurve(&content.cornerCurve());
+        layer.setMasksToBounds(content.masksToBounds());
+        if let Some(mask) = content
+            .mask()
+            .and_then(|m| m.downcast::<objc2_quartz_core::CAShapeLayer>().ok())
+        {
+            let m = objc2_quartz_core::CAShapeLayer::new();
+            m.setPath(mask.path().as_deref());
+            // SAFETY: a fresh mask layer, owned by the picture layer.
+            unsafe { layer.setMask(Some(&m)) };
+        }
+    }
     view.ns().layer()?.addSublayer(&layer);
     Some(layer)
 }
