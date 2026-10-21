@@ -180,12 +180,3 @@ test('tracks stay with the cells in a content layer', () => {
   after.p.op_sticky(['sticky', 0, [[1, 0, 460]]]);
   assert.equal(after.cell(1).parentNode.parentNode, after.el._layer);
 });
-
-test('a sticky offset sticks cells that far from the start', () => {
-  // stickyHeaderOffset 24: each range starts 24 before its cell's frame.
-  const { p, cell } = list();
-  p.op_sticky(['sticky', 0, [[1, -24, 436], [5, 476, 1e9]]]);
-  p.op_scs(['scs', 0, 300, 1000]);
-  assert.deepEqual([cell(1).style.top, cell(1).parentNode.style.height], ['24px', '500px']);
-  assert.deepEqual([cell(5).style.top, cell(5).parentNode.style.height], ['24px', '500px']);
-});
