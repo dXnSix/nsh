@@ -64,11 +64,15 @@ pub(crate) fn number(s: &str) -> Option<f32> {
     s.trim().parse::<f32>().ok().filter(|n| n.is_finite())
 }
 
-/// A length in points: `4`, `4px`, `0.5rem`, `1pt`.
+/// A length in points: `4`, `4px`, `0.5rem`, `1pt` (CSS's point, 4/3 of
+/// a pixel).
 pub(crate) fn length(s: &str) -> Option<f32> {
     let s = s.trim();
-    if let Some(n) = s.strip_suffix("px").or_else(|| s.strip_suffix("pt")) {
+    if let Some(n) = s.strip_suffix("px") {
         return number(n);
+    }
+    if let Some(n) = s.strip_suffix("pt") {
+        return number(n).map(|n| n * 4.0 / 3.0);
     }
     if let Some(n) = s.strip_suffix("rem") {
         return number(n).map(|n| n * REM);
@@ -1029,7 +1033,7 @@ mod tests {
                 Some(fraction(0.0)),
                 Some(points(16.0)),
                 Some(fraction(0.5)),
-                Some(points(2.0))
+                Some(points(8.0 / 3.0))
             ]
         );
         let g = gradient("radial-gradient(circle, red 4px, blue 20px)").unwrap();
@@ -1069,6 +1073,8 @@ mod tests {
     #[test]
     fn units() {
         assert_eq!(length("0.5rem"), Some(8.0));
+        // CSS's absolute units: 1pt is 1/72 of an inch, 4/3 of a pixel.
+        assert_eq!(length("12pt"), Some(16.0));
         assert_eq!(angle("0.25turn"), Some(90.0));
         assert_eq!(words("a rgb(0 0 0) b"), ["a", "rgb(0 0 0)", "b"]);
         assert_eq!(split_top("a(1,2), b", ','), ["a(1,2)", "b"]);

@@ -98,7 +98,7 @@ view()
 方括号用于传入主题中没有的值：`w-[37px]`、`grid-cols-[200px_1fr]`、`bg-[linear-gradient(45deg,red,blue)]`。
 
 - `_` 表示空格（`grid-cols-[1fr_2fr]`）；字面下划线写作 `\_`。
-- 长度：裸数字或 `px`（点）、`pt`、`rem`（16 点），在合理的地方可用 `%`。
+- 长度：裸数字或 `px`（点）、`pt`（与 CSS 相同，为 4/3 点）、`rem`（16 点），在合理的地方可用 `%`。
 - 角度（`rotate-[...]`、`hue-rotate-[...]`、`bg-linear-[...]`）：`deg`、`rad`、`grad`、`turn`。
 - 时间（`duration-[...]`、`delay-[...]`）：`ms` 或 `s`；裸数字表示毫秒。
 - 类型提示用于消除歧义：`text-[length:22px]` 是字号，`text-[color:#333]` 是颜色；`border-[length:3px]` 同理。

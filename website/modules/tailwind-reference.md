@@ -98,7 +98,7 @@ Every color utility takes:
 Square brackets pass a value the theme does not have: `w-[37px]`, `grid-cols-[200px_1fr]`, `bg-[linear-gradient(45deg,red,blue)]`.
 
 - `_` stands for a space (`grid-cols-[1fr_2fr]`); write `\_` for a literal underscore.
-- Lengths: a bare number or `px` (points), `pt`, `rem` (16 points), and `%` where percentages make sense.
+- Lengths: a bare number or `px` (points), `pt` (4/3 of a point, as in CSS), `rem` (16 points), and `%` where percentages make sense.
 - Angles (`rotate-[...]`, `hue-rotate-[...]`, `bg-linear-[...]`): `deg`, `rad`, `grad`, `turn`.
 - Times (`duration-[...]`, `delay-[...]`): `ms` or `s`; a bare number is milliseconds.
 - Type hints settle ambiguous values: `text-[length:22px]` is a size, `text-[color:#333]` a color; `border-[length:3px]` likewise.
