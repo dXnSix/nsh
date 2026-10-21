@@ -1,0 +1,47 @@
+# The NSH fork
+
+Gamify takes NSH from the fork `github.com/dXnSix/nsh` (`upstream` is `longbridge/nsh`), only through git tags. The
+fork's `main` is Gamify's integration line: upstream's `main` plus one pull request per topic branch (`feat/*` for a
+feature, `fix/*` for a fix), each merged with a merge commit. Nothing is pushed to upstream or opened there: the drafts
+in [prs/](prs/) and [issues/](issues/) are for the owner to post.
+
+## Branches
+
+Each topic is a branch in its own worktree under `../nsh-wt/<topic>`: `feat/<topic>` for a feature, `fix/<topic>` for a
+fix of NSH's behaviour as it is. Both follow NSH's `AGENTS.md` and `CONTRIBUTING.md` (one topic, `<area>: <Sentence>`
+subjects, docs in English and zh-CN, `cargo +nightly fmt` and clippy clean, no Gamify or AgentX files). A branch never
+rebases: AgentX records name its commits.
+
+## Bringing in upstream
+
+```bash
+scripts/nsh-fork/sync-main.sh branch ../nsh feat/<topic> --push   # or fix/<topic>
+scripts/nsh-fork/sync-main.sh upstream ../nsh --pr
+```
+
+`branch` merges the newest `upstream/main` into a topic branch. `upstream` cuts `sync/upstream-<sha>` from the fork's
+`main`, merges `upstream/main` into it and opens its pull request. Conflict resolutions are replayed from
+`scripts/nsh-fork/rr-cache/` (git rerere); after resolving a new one, commit the merge and run
+`sync-main.sh save-resolutions ../nsh`.
+
+## A branch into main
+
+1. Open its pull request with its draft as the body: `gh pr create --repo dXnSix/nsh --base main --head <feat|fix>/<topic>`.
+2. Wait for the fork's GitHub Actions. When the pull request conflicts with `main` (a branch merged before it touched
+   the same files), merge `origin/main` into the branch and rerun its focused tests.
+3. Merge with a merge commit, never squash: `gh pr merge <n> --repo dXnSix/nsh --merge`.
+
+## Tags
+
+```bash
+scripts/nsh-fork/sync-main.sh tag ../nsh six-gamify-<nsh version>-<n>
+```
+
+Tags are `six-gamify-<nsh version>-<n>` on the fork's `main`, never `v*`; Cargo versions stay upstream's.
+`six-gamify-0.1.1-1` to `-4` are aliases of the older `gamify-0.1.1-1` to `-4`, which are kept. The old `gamify`
+integration branch is frozen at `gamify-0.1.1-4`. After tagging, move every pin in Gamify (`cargo xtask nsh verify`
+names them) and reinstall the CLI:
+
+```bash
+cargo install --git https://github.com/dXnSix/nsh --tag six-gamify-<nsh version>-<n> --locked nsh-cli
+```
