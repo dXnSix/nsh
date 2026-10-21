@@ -114,8 +114,9 @@ view()
 | `block`、`flow-root` | `display: "block"`（块级布局） |
 | `inline`、`inline-block` | `display: "block"`：浏览器在 flex 或 grid 父元素中为它们计算的值 |
 | `hidden` | `display: "none"` |
-| `relative`、`static` | `position: "relative"` |
-| `absolute`、`fixed` | `position: "absolute"`（`fixed` 相对父元素而不是屏幕） |
+| `relative`、`absolute` | `position` |
+| `static` | `position: "static"`：留在文档流中，忽略其偏移（与所有视图一样，仍是其绝对定位子元素的包含块） |
+| `fixed` | `position: "fixed"`：视图在其根视图（窗口或所在模态框）的范围内布局，位于该根视图的子元素之上，周围内容滚动时保持不动 |
 | `inset-<n>`、`inset-x-<n>`、`inset-y-<n>` | `top` / `right` / `bottom` / `left` |
 | `top-<n>`、`right-<n>`、`bottom-<n>`、`left-<n>` | 对应的偏移 |
 | `start-<n>`、`end-<n>` | `start` / `end`（随书写方向） |

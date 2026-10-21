@@ -114,8 +114,9 @@ Arbitrary CSS properties (`[mask-type:luminance]`) are not supported.
 | `block`, `flow-root` | `display: "block"` (block layout) |
 | `inline`, `inline-block` | `display: "block"`: what a browser computes for them in a flex or grid parent |
 | `hidden` | `display: "none"` |
-| `relative`, `static` | `position: "relative"` |
-| `absolute`, `fixed` | `position: "absolute"` (`fixed` is relative to the parent, not the screen) |
+| `relative`, `absolute` | `position` |
+| `static` | `position: "static"`: in the flow, its insets ignored (still the containing block of its absolute children, as every view is) |
+| `fixed` | `position: "fixed"`: a view laid out in its root view's box (the window or its modal) above that root view's children, in place while what is around it scrolls |
 | `inset-<n>`, `inset-x-<n>`, `inset-y-<n>` | `top` / `right` / `bottom` / `left` |
 | `top-<n>`, `right-<n>`, `bottom-<n>`, `left-<n>` | the matching offset |
 | `start-<n>`, `end-<n>` | `start` / `end` (direction-aware) |

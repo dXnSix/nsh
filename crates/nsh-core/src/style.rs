@@ -858,6 +858,11 @@ pub(crate) struct Pending {
     border_logical: [Option<Points>; 2],
     /// `borderStyle: "none"` / `"hidden"`: every used width is 0.
     border_hidden: bool,
+    /// `position: "static"`: laid out as `relative`, its insets ignored.
+    pub(crate) static_position: bool,
+    /// `position: "fixed"`: laid out in its root view's box (a view; other
+    /// elements as `absolute`).
+    pub(crate) fixed_position: bool,
     /// `animationDuration`.
     animation_duration: Option<f32>,
     /// `animationDelay`.
@@ -1134,7 +1139,7 @@ macro_rules! style_keys {
 
 style_keys! {
     Display = "display": Layout "\"flex\" | \"grid\" | \"block\" | \"none\"",
-    Position = "position": Layout "\"relative\" | \"absolute\"",
+    Position = "position": Layout "\"relative\" | \"absolute\" | \"static\" | \"fixed\"" "`static`: in the flow, its insets ignored (it stays the containing block of its absolute children, as every view is). `fixed`: a view laid out in its root view's box (the surface, or the modal it is in) and drawn above that root view's children, so it stays in place while what is around it scrolls; other elements are `absolute`.",
     FlexDirection = "flexDirection": Layout "\"row\" | \"column\" | \"row-reverse\" | \"column-reverse\"",
     FlexWrap = "flexWrap": Layout "\"wrap\" | \"nowrap\" | \"wrap-reverse\"",
     Flex = "flex": Layout "number",
@@ -1973,11 +1978,16 @@ impl Style {
                 }
             }
             StyleKey::Position => {
-                l.position = match keyword(value)? {
-                    None | Some("relative") => Position::Relative,
-                    Some("absolute") => Position::Absolute,
+                let (position, fixed, is_static) = match keyword(value)? {
+                    None | Some("relative") => (Position::Relative, false, false),
+                    Some("absolute") => (Position::Absolute, false, false),
+                    Some("fixed") => (Position::Absolute, true, false),
+                    Some("static") => (Position::Relative, false, true),
                     Some(_) => return Err(StyleError::InvalidValue),
-                }
+                };
+                l.position = position;
+                self.pending.fixed_position = fixed;
+                self.pending.static_position = is_static;
             }
             StyleKey::FlexDirection => {
                 l.flex_direction = match keyword(value)? {

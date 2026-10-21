@@ -92,7 +92,7 @@ card().style_when(selected, |s| s.border_color(rgb(0x2563eb)).border(px(2.0)))
 | 键 | 类型 | Rust | 说明 |
 |---|---|---|---|
 | `display` | `"flex" \| "grid" \| "block" \| "none"` | `.flex()`、`.grid()`、`.hidden()` | 子元素的布局方式。`"none"` 将元素移出布局并隐藏。`"block"` 按 CSS 块级布局堆叠子元素。默认 `"flex"`。 |
-| `position` | `"relative" \| "absolute"` | `.relative()`、`.absolute()` | `"absolute"` 使元素脱离文档流，按 `top` / `right` / `bottom` / `left` 相对父元素定位。默认 `"relative"`。 |
+| `position` | `"relative" \| "absolute" \| "static" \| "fixed"` | `.relative()`、`.absolute()` | `"absolute"` 使元素脱离文档流，按 `top` / `right` / `bottom` / `left` 相对父元素定位。`"static"` 留在文档流中并忽略其偏移。`"fixed"` 让视图在其根视图（窗口或所在的模态框）的范围内布局，并绘制在该根视图的子元素之上，因此周围内容滚动时它保持不动；没有偏移时位于根视图左上角，其他元素按 `"absolute"` 定位。无论自身的 `position` 是什么，每个视图都是其绝对定位子元素的包含块。默认 `"relative"`。 |
 | `top` | `DimensionValue` | `.top(…)`、`.inset(…)` | 距父元素上边（绝对定位），或相对自身位置的偏移（相对定位）。 |
 | `right` | `DimensionValue` | `.right(…)` | 距右边的偏移。从右到左布局中表示结束边。 |
 | `bottom` | `DimensionValue` | `.bottom(…)` | 距下边的偏移。 |

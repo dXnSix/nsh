@@ -397,6 +397,10 @@ struct Node {
     /// The text color it inherits (`None`: React Native's black), CSS's
     /// `currentColor` unless it sets its own.
     inherited_color: Option<Color>,
+    /// Its style says `position: fixed`.
+    wants_fixed: bool,
+    /// A view made an overlay by `position: fixed` (`overlay.rs` `fix_view`).
+    fixed_view: bool,
     /// What its view takes from the `pointer-events-*` classes around it
     /// (`classes.rs` `update_pointer_events`); an explicit prop wins.
     class_pointer: crate::props::PointerEvents,
@@ -522,6 +526,8 @@ impl Node {
             positional_children: false,
             spaced: false,
             inherited_color: None,
+            wants_fixed: false,
+            fixed_view: false,
             class_pointer: crate::props::PointerEvents::Auto,
             pointer_auto_inside: false,
             insets: None,
@@ -694,6 +700,9 @@ pub struct Core<M: TextEngine> {
     /// Nodes whose classes say `pointer-events-none`: without any, moving
     /// nodes skips what CSS's inherited `pointer-events` needs.
     pointer_none_classes: u32,
+    /// Nodes whose `position: fixed` changed: made overlays (or views again)
+    /// as the commit starts ([`Core::sync_fixed`]).
+    fixed_changed: Vec<(Key, NodeId)>,
     /// The user's preferred text size (1.0 is the default).
     font_scale: f32,
     /// The font text is drawn with unless it sets its own: the tokens'
@@ -786,6 +795,7 @@ impl<M: TextEngine> Core<M> {
             status_bar_nodes: Vec::new(),
             status_bars_moved: false,
             pointer_none_classes: 0,
+            fixed_changed: Vec::new(),
             font_scale: 1.0,
             default_font: None,
             queue: Vec::new(),
@@ -1288,6 +1298,7 @@ impl<M: TextEngine> Core<M> {
     fn commit_round(&mut self) {
         // The views' patches and the views to make first.
         self.render_components();
+        self.sync_fixed();
         self.sync_overlays();
         self.sync_back();
         self.sync_keys();
@@ -1746,7 +1757,7 @@ impl<M: TextEngine> Core<M> {
             vertical_align,
             direction,
             logical,
-            pending: _,
+            pending,
         } = style;
         if animated
             .iter()
@@ -1763,6 +1774,29 @@ impl<M: TextEngine> Core<M> {
         let rtl = self.resolved_rtl(key);
         crate::style::resolve_normal_alignment(&mut layout);
         crate::style::apply_direction(&mut layout, &mut view, &logical, rtl);
+        if pending.static_position {
+            // CSS ignores a static box's insets, whatever order they came
+            // in.
+            layout.inset = taffy::Rect {
+                left: taffy::LengthPercentageAuto::auto(),
+                right: taffy::LengthPercentageAuto::auto(),
+                top: taffy::LengthPercentageAuto::auto(),
+                bottom: taffy::LengthPercentageAuto::auto(),
+            };
+        }
+        let node = &mut self.nodes[key as usize];
+        if node.wants_fixed != pending.fixed_position {
+            // Made an overlay, or a view again: at once while it is in no
+            // parent (classes are set before the node is inserted), else as
+            // the commit starts.
+            node.wants_fixed = pending.fixed_position;
+            let id = node.id;
+            if node.parent == NO_KEY {
+                self.fix_or_unfix(key);
+            } else {
+                self.fixed_changed.push((key, id));
+            }
+        }
         let node = &mut self.nodes[key as usize];
         if let Some([padding, margin]) = node.insets.as_deref() {
             // On top of points; percentages cannot take an addition.

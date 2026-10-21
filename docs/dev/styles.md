@@ -61,6 +61,12 @@
   element child but the last, as Tailwind's `:where(& > :not(:last-child))`: the parent's `ClassProps::space`, which
   the core applies to a child's style before its classes and inline style (`classes.rs` `space_of`), so the child's
   own margins win; an insert or removal restyles only the children whose last-ness changed (`spacing_changed`).
+- **`position`**: `static` is taffy's `relative` with its insets set to `auto` after they are placed (`Pending`, so in any
+  order); every view stays a containing block for absolute children, a static one too (taffy places absolute children in
+  their parent). `fixed` (`fixed`, `position: "fixed"`) makes a `View` one of the core's overlays of no anchor (`overlay.rs`
+  `fix_view`: a layout root in a box the size of its root view, its native view in that root view above its children,
+  shown while the views around it are, as `Kind::Overlay`'s): at once while it is in no parent, else as the commit starts
+  (`sync_fixed`), and a view in its parent again when its style drops it. Other elements are laid out `absolute`.
 - **`pointer-events-*` classes** inherit as CSS's `pointer-events` (the `pointerEvents` prop keeps React Native's
   subtree meaning, and wins): a view that is `none` by its own class or the nearest one above mounts `box-none` when a
   `pointer-events-auto` inside it is a target, `none` at the top of what it blocks, and nothing below that

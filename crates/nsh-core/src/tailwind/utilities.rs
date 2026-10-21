@@ -1043,8 +1043,10 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         "block" | "flow-root" | "inline-block" | "inline" => sets(K::Display, "block"),
         "grid" | "inline-grid" => sets(K::Display, "grid"),
         "hidden" => sets(K::Display, "none"),
-        "static" | "relative" => sets(K::Position, "relative"),
-        "absolute" | "fixed" => sets(K::Position, "absolute"),
+        "static" => sets(K::Position, "static"),
+        "relative" => sets(K::Position, "relative"),
+        "absolute" => sets(K::Position, "absolute"),
+        "fixed" => sets(K::Position, "fixed"),
         "visible" => sets(K::Visibility, "visible"),
         "invisible" | "collapse" => sets(K::Visibility, "hidden"),
         "overflow-hidden" | "overflow-clip" | "overflow-x-hidden" | "overflow-y-hidden" => {

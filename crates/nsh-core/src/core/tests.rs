@@ -12513,6 +12513,75 @@ fn overlay_prop(id: NodeId, prop: crate::OverlayProp) -> Op {
 }
 
 #[test]
+fn fixed_views_are_laid_out_in_their_root_view() {
+    let mut c = core();
+    // A padded box below another; a `fixed` bar inside it.
+    view_with_classes(&mut c, 2, "h-[100px]");
+    view_with_classes(&mut c, 3, "p-[20px] h-[200px]");
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 4,
+                tag: Tag::View,
+            },
+            class_op(4, "fixed inset-x-0 bottom-0 h-[40px]"),
+            Op::Insert {
+                parent: 3,
+                child: 4,
+                before: None,
+            },
+            Op::Create {
+                id: 5,
+                tag: Tag::View,
+            },
+            class_op(5, "h-[10px]"),
+            Op::Insert {
+                parent: 3,
+                child: 5,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    // Against the surface (320 x 480), in the root view's native view,
+    // out of its parent's layout (5 is the first in flow).
+    assert_eq!(frame_of(&batch, 4), Some(rect(0.0, 440.0, 320.0, 40.0)));
+    let ins = inserts(&batch);
+    assert!(ins.contains(&(ROOT_ID, 4, None)), "{ins:?}");
+    assert!(!ins.iter().any(|&(p, c, _)| p == 3 && c == 4), "{ins:?}");
+    assert_eq!(frame_of(&batch, 5), Some(rect(20.0, 20.0, 280.0, 10.0)));
+    // No longer fixed: back in its parent, laid out there.
+    c.apply(class_op(4, "absolute inset-x-0 bottom-0 h-[40px]"))
+        .unwrap();
+    let batch = c.commit().unwrap();
+    let ins = inserts(&batch);
+    assert!(ins.contains(&(3, 4, Some(5))), "{ins:?}");
+    assert_eq!(frame_of(&batch, 4), Some(rect(0.0, 160.0, 320.0, 40.0)));
+    // And fixed again.
+    c.apply(class_op(4, "fixed inset-x-0 bottom-0 h-[40px]"))
+        .unwrap();
+    let batch = c.commit().unwrap();
+    assert!(inserts(&batch).contains(&(ROOT_ID, 4, None)));
+    assert_eq!(frame_of(&batch, 4), Some(rect(0.0, 440.0, 320.0, 40.0)));
+}
+
+#[test]
+fn static_views_ignore_their_insets() {
+    let mut c = core();
+    view_with_classes(&mut c, 2, "relative top-4 left-2 size-[10px] static");
+    view_with_classes(&mut c, 3, "static top-4 size-[10px]");
+    view_with_classes(&mut c, 4, "static md:relative top-4 size-[10px]");
+    let batch = c.commit().unwrap();
+    assert_eq!(frame_of(&batch, 2), Some(rect(0.0, 0.0, 10.0, 10.0)));
+    assert_eq!(frame_of(&batch, 3), Some(rect(0.0, 10.0, 10.0, 10.0)));
+    assert_eq!(frame_of(&batch, 4), Some(rect(0.0, 20.0, 10.0, 10.0)));
+    c.set_viewport(size_pt(800.0, 480.0));
+    let batch = c.commit().unwrap();
+    assert_eq!(frame_of(&batch, 4), Some(rect(0.0, 36.0, 10.0, 10.0)));
+}
+
+#[test]
 fn overlays_show_in_their_root_view_above_its_children() {
     use StyleValue::Number;
     let mut c = core();
