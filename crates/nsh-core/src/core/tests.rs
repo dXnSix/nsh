@@ -3618,6 +3618,61 @@ fn text_inherits_from_views_and_classes_set_props() {
 }
 
 #[test]
+fn texts_inherit_white_space_and_user_select_from_views() {
+    let mut c = core();
+    view_with_classes(&mut c, 2, "whitespace-nowrap select-text");
+    let mut ops = Vec::new();
+    for (id, classes) in [
+        (3, ""),
+        (5, "select-none whitespace-normal"),
+        (7, "select-none md:select-auto"),
+    ] {
+        ops.extend([
+            Op::Create { id, tag: Tag::Text },
+            class_op(id, classes),
+            Op::CreateText {
+                id: id + 1,
+                text: "hello".into(),
+            },
+            Op::Insert {
+                parent: id,
+                child: id + 1,
+                before: None,
+            },
+            Op::Insert {
+                parent: 2,
+                child: id,
+                before: None,
+            },
+        ]);
+    }
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    let text = |batch: &MountBatch, id| {
+        batch.items.iter().rev().find_map(|i| match i {
+            MountItem::Text { id: i, text, .. } if *i == id => {
+                Some((text.no_wrap, text.selectable))
+            }
+            _ => None,
+        })
+    };
+    // As CSS's `white-space` and `user-select: auto`, a view's reach the
+    // texts in it; a text's own win.
+    assert_eq!(text(&batch, 3), Some((true, Some(true))));
+    assert_eq!(text(&batch, 5), Some((false, Some(false))));
+    assert_eq!(text(&batch, 7), Some((true, Some(false))));
+    // `select-auto` takes the view's again (the window is 320 wide; at md
+    // it applies).
+    c.set_viewport(size_pt(800.0, 480.0));
+    let batch = c.commit().unwrap();
+    assert_eq!(text(&batch, 7), Some((true, Some(true))));
+    // The view's change reaches them.
+    c.apply(class_op(2, "truncate")).unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(text(&batch, 3), Some((true, None)));
+}
+
+#[test]
 fn sibling_positions() {
     let mut c = core();
     view_with_classes(&mut c, 2, "flex-row");

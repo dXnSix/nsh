@@ -113,7 +113,9 @@ pub(crate) enum PropDecl {
     NoWrap(bool),
     PointerEvents(PointerEvents),
     Resize(ResizeMode),
-    Selectable(bool),
+    /// `select-text` / `select-none`; `None` (`select-auto`): what the
+    /// view around it says.
+    Selectable(Option<bool>),
     Caret(Color),
     /// `space-x-*` (`false`) / `space-y-*` (`true`).
     Space(bool, PatchValue),
@@ -226,7 +228,7 @@ impl Decl {
                 PropDecl::NoWrap(b) => props.no_wrap = Some(*b),
                 PropDecl::PointerEvents(p) => props.pointer_events = Some(*p),
                 PropDecl::Resize(m) => props.resize_mode = Some(*m),
-                PropDecl::Selectable(b) => props.selectable = Some(*b),
+                PropDecl::Selectable(b) => props.selectable = *b,
                 PropDecl::Caret(c) => props.caret_color = Some(*c),
                 PropDecl::Space(y, v) => {
                     let space = props.space.get_or_insert_default();
@@ -1415,11 +1417,13 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         // Interactivity.
         "pointer-events-none" => Decl::Prop(PropDecl::PointerEvents(PointerEvents::None)),
         "pointer-events-auto" => Decl::Prop(PropDecl::PointerEvents(PointerEvents::Auto)),
-        "select-none" => Decl::Prop(PropDecl::Selectable(false)),
-        "select-text" => Decl::Prop(PropDecl::Selectable(true)),
+        // `user-select` of a text that says `auto` is its parent's: the
+        // classes of the views around it reach it (`Core::rebuild_text`).
+        "select-none" => Decl::Prop(PropDecl::Selectable(Some(false))),
+        "select-text" => Decl::Prop(PropDecl::Selectable(Some(true))),
+        "select-auto" => Decl::Prop(PropDecl::Selectable(None)),
         "space-x-reverse" => Decl::Prop(PropDecl::SpaceReverse(false)),
         "space-y-reverse" => Decl::Prop(PropDecl::SpaceReverse(true)),
-        "select-auto" => return Some(Vec::new()),
         // Images.
         "object-contain" => Decl::Prop(PropDecl::Resize(ResizeMode::Contain)),
         "object-cover" => Decl::Prop(PropDecl::Resize(ResizeMode::Cover)),

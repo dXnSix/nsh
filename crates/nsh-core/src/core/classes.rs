@@ -945,10 +945,17 @@ impl<M: TextEngine> Core<M> {
             || old.caret_color != props.caret_color
             || old.selection_color != props.selection_color;
         let selection = old.selection_color != props.selection_color;
+        let (props_no_wrap, props_selectable) = (props.no_wrap, props.selectable);
         node.class_props = (props != ClassProps::default()).then(|| Box::new(props));
         let kind = node.kind;
         if paragraph && kind == Kind::Text {
             self.mark_text_block(key);
+        }
+        if (old.no_wrap != props_no_wrap || old.selectable != props_selectable)
+            && kind != Kind::Text
+        {
+            // The texts inside inherit them.
+            self.mark_inheriting_text(key);
         }
         if view_props {
             self.mark(key, dirty::VIEW_PROPS);

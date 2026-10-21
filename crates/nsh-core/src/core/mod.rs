@@ -3704,6 +3704,21 @@ impl<M: TextEngine> Core<M> {
             })
     }
 
+    /// What the classes of `key`, else of the nearest view around it that
+    /// says, set (`get`): `whitespace-*` and `select-*` inherit, as CSS's
+    /// `white-space` and `user-select: auto` do.
+    fn class_prop<T>(&self, key: Key, get: impl Fn(&ClassProps) -> Option<T>) -> Option<T> {
+        let mut k = key;
+        while k != NO_KEY {
+            let node = &self.nodes[k as usize];
+            if let Some(v) = node.class_props.as_deref().and_then(&get) {
+                return Some(v);
+            }
+            k = node.parent;
+        }
+        None
+    }
+
     /// The nearest `textAlign` set on a view around `key`.
     fn inherited_text_align(&self, key: Key) -> Option<TextAlign> {
         let mut k = self.nodes[key as usize].parent;
@@ -3765,12 +3780,12 @@ impl<M: TextEngine> Core<M> {
             ellipsize,
             // A line clamp already keeps lines from wrapping past it, and
             // must ellipsize at the box (`truncate`).
-            no_wrap: max_lines == 0 && class.and_then(|c| c.no_wrap).unwrap_or(false),
+            no_wrap: max_lines == 0 && self.class_prop(key, |c| c.no_wrap).unwrap_or(false),
             shadow: node.text_style.shadow(),
             selectable: node
                 .paragraph
                 .selectable
-                .or(class.and_then(|c| c.selectable)),
+                .or_else(|| self.class_prop(key, |c| c.selectable)),
             selection_color: node
                 .paragraph
                 .selection_color

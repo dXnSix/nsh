@@ -245,12 +245,13 @@ Container widths (points): `3xs` 256, `2xs` 288, `xs` 320, `sm` 384, `md` 448, `
 | `align-baseline`, `align-text-top`, `align-text-bottom`, `align-middle` | `verticalAlign` (views and images inside a text) |
 | `text-end` | `textAlign: "right"` |
 | `uppercase`, `lowercase`, `capitalize`, `normal-case` | `textTransform` |
-| `truncate` | one line, tail ellipsis, no wrapping, `overflow: hidden` |
+| `truncate` | one line, tail ellipsis, no wrapping, `overflow: hidden` (on a view: its texts do not wrap) |
 | `line-clamp-<n>`, `line-clamp-none` | `numberOfLines` (`none` removes the limit) |
 | `text-ellipsis`, `text-clip` | `ellipsizeMode` `"tail"` / `"clip"` |
-| `whitespace-nowrap`, `text-nowrap` | lines never wrap |
+| `whitespace-nowrap`, `text-nowrap` | lines never wrap; on a view, the lines of the texts in it (inherited, as CSS's `white-space`) |
 | `whitespace-normal`, `text-wrap`, `text-balance`, `text-pretty` | lines wrap (balancing is not done) |
-| `select-text`, `select-none` | `selectable` |
+| `select-text`, `select-none` | `selectable`; on a view, of the texts in it that set none |
+| `select-auto` | the `selectable` of the view around it, as CSS's `user-select: auto` (`select-none md:select-auto`) |
 
 ### Decoration and shadow
 
@@ -418,7 +419,7 @@ Transitions run on the UI thread when a value changes, including when a variant 
 
 ## Accepted without effect
 
-These utilities are rendering hints, or what every native view already is; they parse without a warning and change nothing: `antialiased`, `subpixel-antialiased`, `isolation-auto`, `box-border`, `appearance-none`, `appearance-auto`, `will-change-auto`, `will-change-scroll`, `will-change-contents`, `will-change-transform`, `will-change-[<value>]`, `select-auto`, `transform`, `transform-gpu`, `transform-cpu`, `transform-flat`. Scrolling, snapping and overscroll are props of [scroll](../elements/scroll.md).
+These utilities are rendering hints, or what every native view already is; they parse without a warning and change nothing: `antialiased`, `subpixel-antialiased`, `isolation-auto`, `box-border`, `appearance-none`, `appearance-auto`, `will-change-auto`, `will-change-scroll`, `will-change-contents`, `will-change-transform`, `will-change-[<value>]`, `transform`, `transform-gpu`, `transform-cpu`, `transform-flat`. Scrolling, snapping and overscroll are props of [scroll](../elements/scroll.md).
 
 ## Not supported
 

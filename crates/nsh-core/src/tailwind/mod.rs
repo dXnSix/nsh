@@ -357,12 +357,15 @@ pub struct ClassProps {
     /// `text-ellipsis`, `text-clip`, `truncate`.
     pub ellipsize: Option<EllipsizeMode>,
     /// `whitespace-nowrap`, `text-nowrap`, `truncate`: lines never wrap.
+    /// Inherited, as CSS's `white-space`: a view's reaches the texts in it.
     pub no_wrap: Option<bool>,
     /// `pointer-events-none` / `-auto`.
     pub pointer_events: Option<PointerEvents>,
     /// `object-cover` and friends (images).
     pub resize_mode: Option<ResizeMode>,
-    /// `select-none` / `select-text`.
+    /// `select-none` / `select-text` (`select-auto`: none). A view's reach
+    /// the texts in it that say none, as CSS's `user-select: auto` takes
+    /// its parent's.
     pub selectable: Option<bool>,
     /// `placeholder:text-*` (inputs).
     pub placeholder_color: Option<Color>,

@@ -245,12 +245,13 @@ view()
 | `align-baseline`、`align-text-top`、`align-text-bottom`、`align-middle` | `verticalAlign`（文本中的视图和图片） |
 | `text-end` | `textAlign: "right"` |
 | `uppercase`、`lowercase`、`capitalize`、`normal-case` | `textTransform` |
-| `truncate` | 单行、尾部省略、不换行、`overflow: hidden` |
+| `truncate` | 单行、尾部省略、不换行、`overflow: hidden`（用在视图上时：其中的文本不换行） |
 | `line-clamp-<n>`、`line-clamp-none` | `numberOfLines`（`none` 取消限制） |
 | `text-ellipsis`、`text-clip` | `ellipsizeMode` 为 `"tail"` / `"clip"` |
-| `whitespace-nowrap`、`text-nowrap` | 不换行 |
+| `whitespace-nowrap`、`text-nowrap` | 不换行；用在视图上时，作用于其中文本的行（与 CSS 的 `white-space` 一样会继承） |
 | `whitespace-normal`、`text-wrap`、`text-balance`、`text-pretty` | 正常换行（不做行平衡） |
-| `select-text`、`select-none` | `selectable` |
+| `select-text`、`select-none` | `selectable`；用在视图上时，作用于其中未自行设置的文本 |
+| `select-auto` | 取外层视图的 `selectable`，与 CSS 的 `user-select: auto` 一样（`select-none md:select-auto`） |
 
 ### 装饰线与阴影
 
@@ -418,7 +419,7 @@ view()
 
 ## 可写但不起作用
 
-以下工具类是渲染提示，或描述的正是每个原生视图本来的样子；它们可以通过解析、不会产生警告，也不改变任何东西：`antialiased`、`subpixel-antialiased`、`isolation-auto`、`box-border`、`appearance-none`、`appearance-auto`、`will-change-auto`、`will-change-scroll`、`will-change-contents`、`will-change-transform`、`will-change-[<value>]`、`select-auto`、`transform`、`transform-gpu`、`transform-cpu`、`transform-flat`。滚动、吸附和越界滚动是 [scroll](../elements/scroll.md) 的属性。
+以下工具类是渲染提示，或描述的正是每个原生视图本来的样子；它们可以通过解析、不会产生警告，也不改变任何东西：`antialiased`、`subpixel-antialiased`、`isolation-auto`、`box-border`、`appearance-none`、`appearance-auto`、`will-change-auto`、`will-change-scroll`、`will-change-contents`、`will-change-transform`、`will-change-[<value>]`、`transform`、`transform-gpu`、`transform-cpu`、`transform-flat`。滚动、吸附和越界滚动是 [scroll](../elements/scroll.md) 的属性。
 
 ## 不支持
 
