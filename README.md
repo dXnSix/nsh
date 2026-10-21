@@ -1,6 +1,6 @@
 # The NSH fork
 
-> This lives on the fork's orphan branch `private/gamify-docs` (no shared history with upstream; a `pre-push` hook
+> This lives on the fork's orphan branch `private/fork-docs` (no shared history with upstream; a `pre-push` hook
 > refuses to send `private/*` to `upstream`). `scripts/nsh-fork/` below is in the Gamify repository.
 
 Gamify takes NSH from the fork `github.com/dXnSix/nsh` (`upstream` is `longbridge/nsh`), only through git tags. The
@@ -37,14 +37,15 @@ scripts/nsh-fork/sync-main.sh upstream ../nsh --pr
 ## Tags
 
 ```bash
-scripts/nsh-fork/sync-main.sh tag ../nsh six-gamify-<nsh version>-<n>
+scripts/nsh-fork/sync-main.sh tag ../nsh fork-<nsh version>-<n>
 ```
 
-Tags are `six-gamify-<nsh version>-<n>` on the fork's `main`, never `v*`; Cargo versions stay upstream's.
-`six-gamify-0.1.1-1` to `-4` are aliases of the older `gamify-0.1.1-1` to `-4`, which are kept. The old `gamify`
-integration branch is frozen at `gamify-0.1.1-4`. After tagging, move every pin in Gamify (`cargo xtask nsh verify`
+Tags are `fork-<nsh version>-<n>` on the fork's `main`, never `v*` (the fork's copies of upstream's release
+workflows run on those) and never named after a consumer; Cargo versions stay upstream's. The older `gamify-*` and
+`six-gamify-*` tags were deleted on 2026-10-21, so Gamify commits that pin them no longer build from a fresh clone.
+After tagging, move every pin in Gamify (`cargo xtask nsh verify`
 names them) and reinstall the CLI:
 
 ```bash
-cargo install --git https://github.com/dXnSix/nsh --tag six-gamify-<nsh version>-<n> --locked nsh-cli
+cargo install --git https://github.com/dXnSix/nsh --tag fork-<nsh version>-<n> --locked nsh-cli
 ```
