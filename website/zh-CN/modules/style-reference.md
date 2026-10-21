@@ -81,7 +81,7 @@ card().style_when(selected, |s| s.border_color(rgb(0x2563eb)).border(px(2.0)))
 | `ColorValue` | CSS 颜色字符串：`#rgb`、`#rgba`、`#rrggbb`、`#rrggbbaa`、`rgb()`、`rgba()`、`hsl()`、`hsla()`、`oklch()`、`oklab()`，或 CSS 命名颜色（`black`、`white`、`transparent`、`rebeccapurple` 等）。 | `Hsla` / `AdaptiveColor`：`rgb(0x2563eb)`、`hsla(…)`, 主题颜色（`theme().primary`） |
 | `AnimatedNode` | 原生动画值，或由它派生的节点（见 [nsh/animated](./nsh-animated.md)）。`backgroundColor`、`opacity` 和 `transform` 的各步骤接受它，值会在 UI 线程上动画，不经过 JS。 | `AnimatedValue` / `AnimatedNode`，用 `.bind_opacity(&v)`、`.bind_background(&v)`、`.bind_translate_x(&v)` 等绑定 |
 
-采用 CSS 语法的字符串（`boxShadow`、`backgroundImage`、`filter`、`gridTemplateColumns` 等）中，长度可写 `px` 或裸数字（都是点）、`pt`，或 `rem`（16 点）。
+采用 CSS 语法的字符串（`boxShadow`、`backgroundImage`、`filter`、`gridTemplateColumns` 等）中，长度可写 `px` 或裸数字（都是点）、`pt`（与 CSS 相同，为 4/3 点），或 `rem`（16 点）。
 
 ## LayoutStyle
 
@@ -92,7 +92,7 @@ card().style_when(selected, |s| s.border_color(rgb(0x2563eb)).border(px(2.0)))
 | 键 | 类型 | Rust | 说明 |
 |---|---|---|---|
 | `display` | `"flex" \| "grid" \| "block" \| "none"` | `.flex()`、`.grid()`、`.hidden()` | 子元素的布局方式。`"none"` 将元素移出布局并隐藏。`"block"` 按 CSS 块级布局堆叠子元素。默认 `"flex"`。 |
-| `position` | `"relative" \| "absolute"` | `.relative()`、`.absolute()` | `"absolute"` 使元素脱离文档流，按 `top` / `right` / `bottom` / `left` 相对父元素定位。默认 `"relative"`。 |
+| `position` | `"relative" \| "absolute" \| "static" \| "fixed"` | `.relative()`、`.absolute()` | `"absolute"` 使元素脱离文档流，按 `top` / `right` / `bottom` / `left` 相对父元素定位。`"static"` 留在文档流中并忽略其偏移。`"fixed"` 让视图在其根视图（窗口或所在的模态框）的范围内布局，并绘制在该根视图的子元素之上，因此周围内容滚动时它保持不动；没有偏移时位于根视图左上角，其他元素按 `"absolute"` 定位。无论自身的 `position` 是什么，每个视图都是其绝对定位子元素的包含块。默认 `"relative"`。 |
 | `top` | `DimensionValue` | `.top(…)`、`.inset(…)` | 距父元素上边（绝对定位），或相对自身位置的偏移（相对定位）。 |
 | `right` | `DimensionValue` | `.right(…)` | 距右边的偏移。从右到左布局中表示结束边。 |
 | `bottom` | `DimensionValue` | `.bottom(…)` | 距下边的偏移。 |
@@ -235,7 +235,7 @@ view().h(px(120.0)).rounded(px(16.0)).bg_linear(deg(135.0)).gradient_from(rgb(0x
 | `borderLeftColor` | `ColorValue` | `.border_l_color(c)` | 左边。 |
 | `borderStartColor` | `ColorValue` | `.border_s_color(c)` | 起始边。 |
 | `borderEndColor` | `ColorValue` | `.border_e_color(c)` | 结束边。 |
-| `borderStyle` | `"solid" \| "dashed" \| "dotted"` | `.border_solid()`、`.border_dashed()`、`.border_dotted()` | 线型。默认 `"solid"`。 |
+| `borderStyle` | `"solid" \| "dashed" \| "dotted" \| "none" \| "hidden"` | `.border_solid()`、`.border_dashed()`、`.border_dotted()`、`.border_none()` | 线型。默认 `"solid"`。`"none"` 和 `"hidden"` 与 CSS 一样，无论宽度在之前还是之后设置，都不绘制边框，也不占布局空间。 |
 
 ### 圆角
 
@@ -260,7 +260,7 @@ view().h(px(120.0)).rounded(px(16.0)).bg_linear(deg(135.0)).gradient_from(rgb(0x
 |---|---|---|---|
 | `outlineWidth` | `number` | `.outline(w)` | 线宽。 |
 | `outlineColor` | `ColorValue` | `.outline_color(c)` | 颜色。 |
-| `outlineStyle` | `"solid" \| "double" \| "dashed" \| "dotted" \| "none" \| "hidden"` | `.outline_dashed()`、`.outline_dotted()`、`.outline_none()` | 线型。 |
+| `outlineStyle` | `"solid" \| "dashed" \| "dotted" \| "none" \| "hidden"` | `.outline_dashed()`、`.outline_dotted()`、`.outline_none()` | 线型。 |
 | `outlineOffset` | `number` | `.outline_offset(o)` | 与边框外缘的距离；负值向内。 |
 
 ### 阴影
@@ -434,7 +434,7 @@ view()
 | 键 | 类型 | Rust | 说明 |
 |---|---|---|---|
 | `placeholderColor` | `ColorValue` | 输入框的 `.placeholder_color(c)` | `<Input>` 占位文字的颜色（`placeholder:text-*`）。 |
-| `selectionColor` | `ColorValue` | 输入框或文本的 `.selection_color(c)` | `<Input>` 的光标和选区、可选 `<Text>` 的选区高亮和选择柄（`selection:text-*`）；默认为平台的强调色。 |
+| `selectionColor` | `ColorValue` | 输入框或文本的 `.selection_color(c)` | `<Input>` 的光标和选区、可选 `<Text>` 的选区高亮和选择柄（`selection:bg-*`）；默认为平台的强调色。 |
 
 ### 文字阴影
 

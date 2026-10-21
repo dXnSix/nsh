@@ -75,13 +75,15 @@ pub(crate) fn draws_outside(style: &ViewStyle) -> bool {
             .is_some_and(|e| e.box_shadows.iter().any(|s| !s.inset && s.is_visible()))
 }
 
-/// The view's drop shadow filter, if any (it follows the content's shape).
+/// The view's drop shadow filter, if any (it follows the content's shape):
+/// one is drawn, the last of the chain (a Tailwind shadow's widest layer).
 pub(crate) fn drop_shadow(style: &ViewStyle) -> Option<(f32, f32, f32, Color)> {
     style
         .effects
         .as_ref()?
         .filters
         .iter()
+        .rev()
         .find_map(|f| match *f {
             Filter::DropShadow {
                 offset_x,

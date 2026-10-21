@@ -81,7 +81,7 @@ card().style_when(selected, |s| s.border_color(rgb(0x2563eb)).border(px(2.0)))
 | `ColorValue` | A CSS color string: `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`, `rgba()`, `hsl()`, `hsla()`, `oklch()`, `oklab()`, or a named CSS color (`black`, `white`, `transparent`, `rebeccapurple`, ...). | `Hsla` / `AdaptiveColor`: `rgb(0x2563eb)`, `hsla(…)`, theme colors (`theme().primary`) |
 | `AnimatedNode` | A native animated value or a node derived from it (see [nsh/animated](./nsh-animated.md)). Accepted by `backgroundColor`, `opacity` and the steps of `transform`; the value then animates on the UI thread without JS. | `AnimatedValue` / `AnimatedNode`, bound with `.bind_opacity(&v)`, `.bind_background(&v)`, `.bind_translate_x(&v)`, ... |
 
-Strings with CSS syntax (`boxShadow`, `backgroundImage`, `filter`, `gridTemplateColumns`, ...) take lengths in `px` and bare numbers (both points), `pt`, or `rem` (16 points).
+Strings with CSS syntax (`boxShadow`, `backgroundImage`, `filter`, `gridTemplateColumns`, ...) take lengths in `px` and bare numbers (both points), `pt` (4/3 of a point, as in CSS), or `rem` (16 points).
 
 ## LayoutStyle
 
@@ -92,7 +92,7 @@ Layout is computed in Rust (flexbox and CSS grid). The defaults differ from CSS'
 | Key | Type | Rust | Description |
 |---|---|---|---|
 | `display` | `"flex" \| "grid" \| "block" \| "none"` | `.flex()`, `.grid()`, `.hidden()` | The layout of the children. `"none"` removes the element from layout and hides it. `"block"` stacks children as CSS block layout does. Default `"flex"`. |
-| `position` | `"relative" \| "absolute"` | `.relative()`, `.absolute()` | `"absolute"` takes the element out of the flow and places it by `top` / `right` / `bottom` / `left` relative to its parent. Default `"relative"`. |
+| `position` | `"relative" \| "absolute" \| "static" \| "fixed"` | `.relative()`, `.absolute()` | `"absolute"` takes the element out of the flow and places it by `top` / `right` / `bottom` / `left` relative to its parent. `"static"` stays in the flow and ignores its insets. `"fixed"` lays a view out in its root view's box (the window, or the modal it is in) and draws it above that root view's children, so it stays in place while what is around it scrolls; without insets it sits at the root view's top left, and other elements are placed as `"absolute"`. Every view is the containing block of its absolute children, whatever its own `position`. Default `"relative"`. |
 | `top` | `DimensionValue` | `.top(…)`, `.inset(…)` | Offset from the parent's top edge (absolute) or from the element's own position (relative). |
 | `right` | `DimensionValue` | `.right(…)` | Offset from the right edge. In right-to-left layouts it means the end edge. |
 | `bottom` | `DimensionValue` | `.bottom(…)` | Offset from the bottom edge. |
@@ -235,7 +235,7 @@ view().h(px(120.0)).rounded(px(16.0)).bg_linear(deg(135.0)).gradient_from(rgb(0x
 | `borderLeftColor` | `ColorValue` | `.border_l_color(c)` | Left side. |
 | `borderStartColor` | `ColorValue` | `.border_s_color(c)` | Start side. |
 | `borderEndColor` | `ColorValue` | `.border_e_color(c)` | End side. |
-| `borderStyle` | `"solid" \| "dashed" \| "dotted"` | `.border_solid()`, `.border_dashed()`, `.border_dotted()` | Line style. Default `"solid"`. |
+| `borderStyle` | `"solid" \| "dashed" \| "dotted" \| "none" \| "hidden"` | `.border_solid()`, `.border_dashed()`, `.border_dotted()`, `.border_none()` | Line style. Default `"solid"`. `"none"` and `"hidden"` draw and lay out no border whatever the widths, set before or after, as in CSS. |
 
 ### Corners
 
@@ -260,7 +260,7 @@ An outline is drawn outside the border and takes no space in layout.
 |---|---|---|---|
 | `outlineWidth` | `number` | `.outline(w)` | Line width. |
 | `outlineColor` | `ColorValue` | `.outline_color(c)` | Line color. |
-| `outlineStyle` | `"solid" \| "double" \| "dashed" \| "dotted" \| "none" \| "hidden"` | `.outline_dashed()`, `.outline_dotted()`, `.outline_none()` | Line style. |
+| `outlineStyle` | `"solid" \| "dashed" \| "dotted" \| "none" \| "hidden"` | `.outline_dashed()`, `.outline_dotted()`, `.outline_none()` | Line style. |
 | `outlineOffset` | `number` | `.outline_offset(o)` | Distance from the border edge; negative values move it inside. |
 
 ### Shadows
@@ -434,7 +434,7 @@ Text styles apply to `<Text>` and `<Input>`. They are also inherited, as in CSS:
 | Key | Type | Rust | Description |
 |---|---|---|---|
 | `placeholderColor` | `ColorValue` | `.placeholder_color(c)` of an input | The color of an `<Input>`'s placeholder (`placeholder:text-*`). |
-| `selectionColor` | `ColorValue` | `.selection_color(c)` of an input or a text | An `<Input>`'s caret and selection, a selectable `<Text>`'s selection highlight and handles (`selection:text-*`); the platform's accent by default. |
+| `selectionColor` | `ColorValue` | `.selection_color(c)` of an input or a text | An `<Input>`'s caret and selection, a selectable `<Text>`'s selection highlight and handles (`selection:bg-*`); the platform's accent by default. |
 
 ### Text shadow
 

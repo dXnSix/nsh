@@ -30,7 +30,7 @@ use crate::{
         ROOT_ID, ResizeMode, ScreenAnimation, ScreenProp, ScrollProp, Tag,
     },
     props::{AccessibilityProp, EdgeInsets, GestureValues, LayoutAnimation, ViewProps},
-    style::{EllipsizeMode, Style, StylePatch, TextAlign, TextStyle, ViewStyle},
+    style::{Color, EllipsizeMode, Style, StylePatch, TextAlign, TextStyle, ViewStyle},
     tailwind::{ClassEnvironment, ClassList, ClassProps, Tailwind},
     text::{AttributedText, MeasureCache, ResolvedTextStyle, TextEngine, TextLayout},
 };
@@ -392,6 +392,29 @@ struct Node {
     parts: Option<Box<classes::NodeParts>>,
     /// A child's classes read their position among siblings.
     positional_children: bool,
+    /// Styled with the margin its parent's `space-*` gives it.
+    spaced: bool,
+    /// The text color it inherits (`None`: React Native's black), CSS's
+    /// `currentColor` unless it sets its own.
+    inherited_color: Option<Color>,
+    /// CSS's `perspective` its style gives its children.
+    child_perspective: Option<Points>,
+    /// The `ch` its classes were resolved with (`max-w-prose`).
+    ch: f32,
+    /// The inherited text color its classes were resolved with
+    /// (`currentColor`), and whether it waits in `Core::color_changed`.
+    color_used: Option<Color>,
+    color_queued: bool,
+    /// Its style says `position: fixed`.
+    wants_fixed: bool,
+    /// A view made an overlay by `position: fixed` (`overlay.rs` `fix_view`).
+    fixed_view: bool,
+    /// What its view takes from the `pointer-events-*` classes around it
+    /// (`classes.rs` `update_pointer_events`); an explicit prop wins.
+    class_pointer: crate::props::PointerEvents,
+    /// A `pointer-events-auto` is inside it, under a `pointer-events-none`
+    /// (scratch of `update_pointer_events`).
+    pointer_auto_inside: bool,
     /// The inset padding and margin components set: added to the style's.
     insets: Option<Box<[EdgeInsets; 2]>>,
     events: EventMask,
@@ -509,6 +532,16 @@ impl Node {
             projected: 0,
             parts: None,
             positional_children: false,
+            spaced: false,
+            inherited_color: None,
+            child_perspective: None,
+            ch: 0.0,
+            color_used: None,
+            color_queued: false,
+            wants_fixed: false,
+            fixed_view: false,
+            class_pointer: crate::props::PointerEvents::Auto,
+            pointer_auto_inside: false,
             insets: None,
             events: EventMask::default(),
             z_index: 0,
@@ -676,6 +709,22 @@ pub struct Core<M: TextEngine> {
     /// The tree changed with `status_bar_nodes` in it: the commit checks
     /// which are in the tree.
     status_bars_moved: bool,
+    /// Nodes whose classes say `pointer-events-none`: without any, moving
+    /// nodes skips what CSS's inherited `pointer-events` needs.
+    pointer_none_classes: u32,
+    /// Nodes whose `position: fixed` changed: made overlays (or views again)
+    /// as the commit starts ([`Core::sync_fixed`]).
+    fixed_changed: Vec<(Key, NodeId)>,
+    /// The advance of each font's `0` (CSS's `ch`), by family, size,
+    /// weight and italic.
+    zero_advances: rustc_hash::FxHashMap<(Option<crate::style::FontFamily>, u32, u16, bool), f32>,
+    /// Nodes with lengths in `ch` styled since the last commit, perhaps
+    /// before the views around them (and their fonts) were in place
+    /// ([`Core::sync_ch`]).
+    ch_styled: Vec<(Key, NodeId)>,
+    /// Nodes whose inherited text color changed since they were styled
+    /// with it (`currentColor`; [`Core::sync_colors`]).
+    color_changed: Vec<(Key, NodeId)>,
     /// The user's preferred text size (1.0 is the default).
     font_scale: f32,
     /// The font text is drawn with unless it sets its own: the tokens'
@@ -767,6 +816,11 @@ impl<M: TextEngine> Core<M> {
             layout_animation: None,
             status_bar_nodes: Vec::new(),
             status_bars_moved: false,
+            pointer_none_classes: 0,
+            fixed_changed: Vec::new(),
+            zero_advances: Default::default(),
+            ch_styled: Vec::new(),
+            color_changed: Vec::new(),
             font_scale: 1.0,
             default_font: None,
             queue: Vec::new(),
@@ -1295,6 +1349,9 @@ impl<M: TextEngine> Core<M> {
     fn commit_round(&mut self) {
         // The views' patches and the views to make first.
         self.render_components();
+        self.sync_colors();
+        self.sync_ch();
+        self.sync_fixed();
         self.sync_overlays();
         self.sync_back();
         self.sync_keys();
@@ -1734,7 +1791,7 @@ impl<M: TextEngine> Core<M> {
         let key = self.key(id)?;
         let node = &mut self.nodes[key as usize];
         node.inline_style = patch;
-        if node.classes.is_some() {
+        if node.classes.is_some() || node.spaced {
             self.restyle(key);
             return Ok(());
         }
@@ -1753,7 +1810,8 @@ impl<M: TextEngine> Core<M> {
             vertical_align,
             direction,
             logical,
-            pending: _,
+            pending,
+            perspective: child_perspective,
         } = style;
         if animated
             .iter()
@@ -1770,6 +1828,39 @@ impl<M: TextEngine> Core<M> {
         let rtl = self.resolved_rtl(key);
         crate::style::resolve_normal_alignment(&mut layout);
         crate::style::apply_direction(&mut layout, &mut view, &logical, rtl);
+        if pending.static_position {
+            // CSS ignores a static box's insets, whatever order they came
+            // in.
+            layout.inset = taffy::Rect {
+                left: taffy::LengthPercentageAuto::auto(),
+                right: taffy::LengthPercentageAuto::auto(),
+                top: taffy::LengthPercentageAuto::auto(),
+                bottom: taffy::LengthPercentageAuto::auto(),
+            };
+        }
+        let node = &mut self.nodes[key as usize];
+        if node.child_perspective != child_perspective {
+            node.child_perspective = child_perspective;
+            // Its children's transforms compose it (their animated steps
+            // move by its steps).
+            let children = node.children.clone();
+            for c in children {
+                self.mark(c, dirty::VIEW | dirty::ANIMATION);
+            }
+        }
+        let node = &mut self.nodes[key as usize];
+        if node.wants_fixed != pending.fixed_position {
+            // Made an overlay, or a view again: at once while it is in no
+            // parent (classes are set before the node is inserted), else as
+            // the commit starts.
+            node.wants_fixed = pending.fixed_position;
+            let id = node.id;
+            if node.parent == NO_KEY {
+                self.fix_or_unfix(key);
+            } else {
+                self.fixed_changed.push((key, id));
+            }
+        }
         let node = &mut self.nodes[key as usize];
         if let Some([padding, margin]) = node.insets.as_deref() {
             // On top of points; percentages cannot take an addition.
@@ -1801,6 +1892,9 @@ impl<M: TextEngine> Core<M> {
             && node.kind == Kind::Text
             && span_background(&node.view_style, node.id) != span_background(&view, node.id);
         let text_changed = node.text_style != text || span_background_changed;
+        // What its children inherit as `currentColor`.
+        let passed_color = |node: &Node, text: &TextStyle| text.color.or(node.inherited_color);
+        let color_passed = passed_color(node, &node.text_style) != passed_color(node, &text);
         let animation_changed = node.animated != animated;
         let z_changed = node.z_index != z_index;
         // An attachment's place in its line is part of its block's text.
@@ -1845,7 +1939,13 @@ impl<M: TextEngine> Core<M> {
         if view_changed {
             flags |= dirty::VIEW;
         }
-        if animation_changed {
+        let parent = self.nodes[key as usize].parent;
+        let in_perspective =
+            parent != NO_KEY && self.nodes[parent as usize].child_perspective.is_some();
+        if animation_changed
+            || view_changed && in_perspective && !self.nodes[key as usize].animated.is_empty()
+        {
+            // Its animated steps move with its parent's perspective.
             flags |= dirty::ANIMATION;
         }
         if flags != 0 {
@@ -1863,15 +1963,25 @@ impl<M: TextEngine> Core<M> {
                 _ => {}
             }
         }
+        if color_passed {
+            let node = &self.nodes[key as usize];
+            let color = node.text_style.color.or(node.inherited_color);
+            self.inherit_color(key, color);
+        }
         if flipped {
             self.update_children_direction(key);
+            // Its own `direction` turned it: classes resolved for the other
+            // direction (`pl-*`, `rtl:`) resolve again.
+            if self.reads_direction(key) {
+                self.restyle(key);
+            }
         }
         Ok(())
     }
 
     /// The direction `key` lays out in: its own, else its parent's (the
     /// root's while detached).
-    fn resolved_rtl(&self, key: Key) -> bool {
+    pub(super) fn resolved_rtl(&self, key: Key) -> bool {
         let node = &self.nodes[key as usize];
         if let Some(rtl) = node.direction {
             return rtl;
@@ -2858,6 +2968,14 @@ impl<M: TextEngine> Core<M> {
         self.nodes[parent as usize].children.insert(pos, child);
         self.status_bars_moved |= !self.status_bar_nodes.is_empty();
         self.update_direction(child);
+        if self.nodes[parent as usize].child_perspective.is_some() {
+            self.mark(child, dirty::VIEW | dirty::ANIMATION);
+        }
+        let node = &self.nodes[parent as usize];
+        let color = node.text_style.color.or(node.inherited_color);
+        if self.nodes[child as usize].inherited_color != color {
+            self.inherit_color_from(child, color);
+        }
         self.groups_changed(child, parent);
         if self.nodes[child as usize]
             .classes
@@ -2868,6 +2986,10 @@ impl<M: TextEngine> Core<M> {
         }
         if self.nodes[parent as usize].positional_children {
             self.positions_changed(parent);
+        }
+        self.spacing_changed(parent, child);
+        if self.pointer_none_classes > 0 {
+            self.pointer_events_moved(parent);
         }
 
         if inline {
@@ -2944,6 +3066,16 @@ impl<M: TextEngine> Core<M> {
             self.positions_changed(parent);
         }
         self.nodes[key as usize].parent = NO_KEY;
+        if self.nodes[parent as usize].child_perspective.is_some() {
+            // Without the perspective wherever it goes next.
+            self.mark(key, dirty::VIEW | dirty::ANIMATION);
+        }
+        self.spacing_changed(parent, NO_KEY);
+        if self.pointer_none_classes > 0 && self.pointer_region(parent).is_some() {
+            // It no longer inherits the region's `none`.
+            self.update_pointer_events(key);
+            self.pointer_events_moved(parent);
+        }
         self.groups_changed(key, parent);
         self.status_bars_moved |= !self.status_bar_nodes.is_empty();
         let node = &self.nodes[key as usize];
@@ -3093,6 +3225,11 @@ impl<M: TextEngine> Core<M> {
         }
         let node = self.nodes.remove(key as usize);
         self.slots[id as usize] = 0;
+        if node.class_props.as_ref().and_then(|c| c.pointer_events)
+            == Some(crate::props::PointerEvents::None)
+        {
+            self.pointer_none_classes -= 1;
+        }
         if node.kind == Kind::List {
             self.lists.retain(|&k| k != key);
         }
@@ -3490,6 +3627,15 @@ impl<M: TextEngine> Core<M> {
             }
             if flags & dirty::ANIMATION != 0 {
                 let mut bindings = node.animated.clone();
+                // Its transform's steps come after its parent's perspective.
+                let steps = self.perspective_steps(key);
+                if steps > 0 {
+                    for (prop, _) in &mut bindings {
+                        if let AnimationProp::Transform(i) = prop {
+                            *i += steps;
+                        }
+                    }
+                }
                 if let Some(d) = &node.drawing {
                     bindings.extend(
                         d.slots
@@ -3517,10 +3663,8 @@ impl<M: TextEngine> Core<M> {
             }
             if flags & dirty::VIEW_PROPS != 0 {
                 let mut props = node.props.clone().unwrap_or_default();
-                if let Some(p) = node.class_props.as_ref().and_then(|c| c.pointer_events)
-                    && props.pointer_events == crate::props::PointerEvents::Auto
-                {
-                    props.pointer_events = p;
+                if props.pointer_events == crate::props::PointerEvents::Auto {
+                    props.pointer_events = node.class_pointer;
                 }
                 // A `disabled` view is so for screen readers too, as a Rust
                 // component's `disabled` and React Native's `Pressable`.
@@ -3584,7 +3728,7 @@ impl<M: TextEngine> Core<M> {
                         .and_then(|name| self.accessories.get(name).copied());
                     // An explicit prop (Rust), then the style key, then
                     // the classes (`placeholder:text-*`, `caret-*`,
-                    // `selection:text-*`).
+                    // `selection:bg-*`).
                     config.placeholder_color = config
                         .placeholder_color
                         .or(node.text_style.placeholder_color);
@@ -3714,6 +3858,24 @@ impl<M: TextEngine> Core<M> {
             })
     }
 
+    /// What the classes of `key`, else of the nearest view around it that
+    /// says, set for its lines' wrapping and its selection: `whitespace-*`
+    /// and `select-*` inherit, as CSS's `white-space` and `user-select:
+    /// auto` do. One walk up for both.
+    fn inherited_text_props(&self, key: Key) -> (Option<bool>, Option<bool>) {
+        let (mut no_wrap, mut selectable) = (None, None);
+        let mut k = key;
+        while k != NO_KEY && (no_wrap.is_none() || selectable.is_none()) {
+            let node = &self.nodes[k as usize];
+            if let Some(c) = node.class_props.as_deref() {
+                no_wrap = no_wrap.or(c.no_wrap);
+                selectable = selectable.or(c.selectable);
+            }
+            k = node.parent;
+        }
+        (no_wrap, selectable)
+    }
+
     /// The nearest `textAlign` set on a view around `key`.
     fn inherited_text_align(&self, key: Key) -> Option<TextAlign> {
         let mut k = self.nodes[key as usize].parent;
@@ -3738,7 +3900,17 @@ impl<M: TextEngine> Core<M> {
                     self.mark(k, dirty::INPUT);
                 }
                 Kind::RawText => {}
-                _ => stack.extend_from_slice(&self.nodes[k as usize].children),
+                _ => {
+                    // Lengths in `ch` follow the font (`max-w-prose`).
+                    if self.nodes[k as usize]
+                        .classes
+                        .as_ref()
+                        .is_some_and(|c| c.deps() & crate::tailwind::deps::CH != 0)
+                    {
+                        self.restyle(k);
+                    }
+                    stack.extend_from_slice(&self.nodes[k as usize].children)
+                }
             }
         }
     }
@@ -3761,6 +3933,7 @@ impl<M: TextEngine> Core<M> {
             _ => node.paragraph.ellipsize,
         };
         let inherited = self.inherited_text_style(key);
+        let (no_wrap, selectable) = self.inherited_text_props(key);
         let mut text = AttributedText {
             align: directed_align(
                 node.text_style
@@ -3775,12 +3948,9 @@ impl<M: TextEngine> Core<M> {
             ellipsize,
             // A line clamp already keeps lines from wrapping past it, and
             // must ellipsize at the box (`truncate`).
-            no_wrap: max_lines == 0 && class.and_then(|c| c.no_wrap).unwrap_or(false),
+            no_wrap: max_lines == 0 && no_wrap.unwrap_or(false),
             shadow: node.text_style.shadow(),
-            selectable: node
-                .paragraph
-                .selectable
-                .or(class.and_then(|c| c.selectable)),
+            selectable: node.paragraph.selectable.or(selectable),
             selection_color: node
                 .paragraph
                 .selection_color
@@ -4672,10 +4842,19 @@ impl<M: TextEngine> Core<M> {
             }
             self.mount.push(MountItem::Frame { id, frame });
             let node = &self.nodes[key as usize];
-            // Translations by a fraction of the size follow it.
-            if node.view_style.transform.has_fractions() {
+            // Translations by a fraction of the size follow it, and so does
+            // the perspective of its parent, seen from the parent's center.
+            let parent_perspective = self.perspective_steps(key) > 0;
+            if node.view_style.transform.has_fractions() || parent_perspective {
                 let style = self.mounted_view_style(key);
                 self.mount.push(MountItem::ViewStyle { id, style });
+            }
+            if node.child_perspective.is_some() {
+                // Its center moved for its children.
+                let children = node.children.clone();
+                for c in children {
+                    self.mark(c, dirty::VIEW);
+                }
             }
             if is_text {
                 self.queue_text(key);

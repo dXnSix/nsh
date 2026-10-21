@@ -32,15 +32,25 @@ pub(crate) enum Len {
 pub(crate) enum Part {
     TranslateX(Len),
     TranslateY(Len),
+    /// The `rotate` property (`rotate-*`).
     Rotate(f32),
+    /// `rotateX()` in the `transform` property (`rotate-x-*`).
     RotateX(f32),
     RotateY(f32),
+    RotateZ(f32),
     ScaleX(f32),
     ScaleY(f32),
     SkewX(f32),
     SkewY(f32),
     Perspective(f32),
+    /// `transform: none`: the 3D rotations and the skews.
     TransformNone,
+    /// `translate: none`.
+    TranslateNone,
+    /// `scale: none`.
+    ScaleNone,
+    /// `rotate: none`.
+    RotateNone,
     Shadow(Arc<[BoxShadow]>),
     /// A color for the shadow layers; `true` when it has its own alpha
     /// (`shadow-black/50`), else the layers keep theirs.
@@ -54,11 +64,19 @@ pub(crate) enum Part {
     RingOffsetColor(Color),
     InsetRing(f32),
     InsetRingColor(Color),
+    /// A gradient of a utility that mixes `in oklab` (`bg-linear-to-r`,
+    /// `bg-radial`).
     Gradient(GradientKind),
+    /// A gradient at an arbitrary position (`bg-linear-[25deg]`), where
+    /// Tailwind writes no interpolation: CSS's default, Oklab unless every
+    /// stop is a legacy sRGB color.
+    ArbitraryGradient(GradientKind),
     GradientNone,
-    From(Color),
-    Via(Color),
-    To(Color),
+    /// A stop's color, and whether it is a legacy sRGB color (hex,
+    /// `rgb()`, `hsl()`, a name; the palette's are OKLCH).
+    From(Color, bool),
+    Via(Color, bool),
+    To(Color, bool),
     FromPos(f32),
     ViaPos(f32),
     ToPos(f32),
@@ -71,6 +89,9 @@ pub(crate) enum Part {
     FilterNone {
         backdrop: bool,
     },
+    /// `drop-shadow-*`: a `drop-shadow()` per layer, last in the filter
+    /// chain (Tailwind's `--tw-drop-shadow`).
+    DropShadows(Arc<[Filter]>),
     FontVariant {
         set: u8,
         clear: u8,
@@ -95,8 +116,14 @@ pub(crate) enum PropDecl {
     NoWrap(bool),
     PointerEvents(PointerEvents),
     Resize(ResizeMode),
-    Selectable(bool),
+    /// `select-text` / `select-none`; `None` (`select-auto`): what the
+    /// view around it says.
+    Selectable(Option<bool>),
     Caret(Color),
+    /// `space-x-*` (`false`) / `space-y-*` (`true`).
+    Space(bool, PatchValue),
+    /// `space-x-reverse` / `space-y-reverse`.
+    SpaceReverse(bool),
 }
 
 /// What one utility declares.
@@ -119,22 +146,84 @@ pub(crate) enum Decl {
     /// [`Decl::Adaptive`] for a part (a shadow's, ring's or gradient
     /// stop's theme color).
     AdaptivePart(Box<[Part; 2]>),
+    /// CSS's `currentColor` for a color property, implied as
+    /// [`Decl::Default`] is (a border width's color): the node's text
+    /// color, its own or the one it inherits.
+    CurrentColor(StyleKey),
+    /// A length in CSS's `ch` (the advance of the font's `0`):
+    /// `max-w-prose`, `65ch`.
+    Ch(StyleKey, f32),
+}
+
+/// `key` with the value it gets in a layout of direction `rtl`. Classes
+/// are physical, as in CSS (`pl-4` is the left padding right to left
+/// too), while the core lays left and right properties out as start and
+/// end right to left, React Native's rule for inline styles: right to
+/// left, a class names the other side, so it comes out on its own.
+pub(crate) fn directed<'a>(
+    key: StyleKey,
+    value: &'a PatchValue,
+    rtl: bool,
+) -> (StyleKey, std::borrow::Cow<'a, PatchValue>) {
+    use std::borrow::Cow;
+    if !rtl {
+        return (key, Cow::Borrowed(value));
+    }
+    if key == K::TextAlign {
+        let mirrored = match value {
+            PatchValue::Str(s) if &**s == "left" => "right",
+            PatchValue::Str(s) if &**s == "right" => "left",
+            _ => return (key, Cow::Borrowed(value)),
+        };
+        return (key, Cow::Owned(PatchValue::Str(mirrored.into())));
+    }
+    (mirrored(key).unwrap_or(key), Cow::Borrowed(value))
+}
+
+/// The left / right key on the other side.
+fn mirrored(key: StyleKey) -> Option<StyleKey> {
+    Some(match key {
+        K::PaddingLeft => K::PaddingRight,
+        K::PaddingRight => K::PaddingLeft,
+        K::MarginLeft => K::MarginRight,
+        K::MarginRight => K::MarginLeft,
+        K::Left => K::Right,
+        K::Right => K::Left,
+        K::BorderLeftWidth => K::BorderRightWidth,
+        K::BorderRightWidth => K::BorderLeftWidth,
+        K::BorderLeftColor => K::BorderRightColor,
+        K::BorderRightColor => K::BorderLeftColor,
+        K::BorderTopLeftRadius => K::BorderTopRightRadius,
+        K::BorderTopRightRadius => K::BorderTopLeftRadius,
+        K::BorderBottomLeftRadius => K::BorderBottomRightRadius,
+        K::BorderBottomRightRadius => K::BorderBottomLeftRadius,
+        _ => return None,
+    })
+}
+
+/// Whether `key = value` lands elsewhere right to left ([`directed`]).
+fn sided(key: StyleKey, value: &PatchValue) -> bool {
+    mirrored(key).is_some()
+        || key == K::TextAlign
+            && matches!(value, PatchValue::Str(s) if matches!(&**s, "left" | "right"))
 }
 
 impl Decl {
     pub(crate) fn apply(
         &self,
         dark: bool,
+        rtl: bool,
         style: &mut Style,
         props: &mut ClassProps,
         parts: &mut Parts,
     ) {
         match self {
             Decl::Set(key, value) => {
-                let _ = style.set_key(*key, value.as_value());
+                let (key, value) = directed(*key, value, rtl);
+                let _ = style.set_key(key, value.as_value());
             }
             // Applied by `ClassList::apply` before the rules.
-            Decl::Default(..) => {}
+            Decl::Default(..) | Decl::CurrentColor(_) => {}
             Decl::Style(decl) => {
                 let _ = decl.apply(style);
             }
@@ -145,21 +234,41 @@ impl Decl {
                 PropDecl::NoWrap(b) => props.no_wrap = Some(*b),
                 PropDecl::PointerEvents(p) => props.pointer_events = Some(*p),
                 PropDecl::Resize(m) => props.resize_mode = Some(*m),
-                PropDecl::Selectable(b) => props.selectable = Some(*b),
+                PropDecl::Selectable(b) => props.selectable = *b,
                 PropDecl::Caret(c) => props.caret_color = Some(*c),
+                PropDecl::Space(y, v) => {
+                    let space = props.space.get_or_insert_default();
+                    if *y {
+                        space.y = Some(v.clone());
+                    } else {
+                        space.x = Some(v.clone());
+                    }
+                }
+                PropDecl::SpaceReverse(y) => {
+                    let space = props.space.get_or_insert_default();
+                    if *y {
+                        space.reverse_y = true;
+                    } else {
+                        space.reverse_x = true;
+                    }
+                }
             },
             Decl::Screen(key, fw, fh) => {
                 parts.screen.push((*key, *fw, *fh));
                 parts.touched |= touched::SCREEN;
             }
+            Decl::Ch(key, n) => {
+                parts.lengths_ch.push((*key, *n));
+                parts.touched |= touched::CH;
+            }
             Decl::Adaptive(key, values) => {
-                let _ = style.set_key(*key, values[usize::from(dark)].as_value());
+                let (key, value) = directed(*key, &values[usize::from(dark)], rtl);
+                let _ = style.set_key(key, value.as_value());
             }
             Decl::AdaptivePart(pair) => parts.push(pair[usize::from(dark)].clone()),
         }
     }
 
-    /// The text color this declares, for `placeholder:` rules.
     /// Sets the background color.
     pub(crate) fn sets_background_color(&self) -> bool {
         matches!(
@@ -176,10 +285,11 @@ impl Decl {
             matches!(
                 p,
                 Part::Gradient(_)
+                    | Part::ArbitraryGradient(_)
                     | Part::GradientNone
-                    | Part::From(_)
-                    | Part::Via(_)
-                    | Part::To(_)
+                    | Part::From(..)
+                    | Part::Via(..)
+                    | Part::To(..)
                     | Part::FromPos(_)
                     | Part::ViaPos(_)
                     | Part::ToPos(_)
@@ -201,13 +311,47 @@ impl Decl {
         }
     }
 
+    /// The text color this sets, if it sets one (`Some(None)`: the default).
+    pub(crate) fn sets_text_color(&self, dark: bool) -> Option<Option<Color>> {
+        let value = match self {
+            Decl::Set(StyleKey::Color, v) | Decl::Style(StyleDecl::Set(StyleKey::Color, v)) => v,
+            Decl::Adaptive(StyleKey::Color, values) => &values[usize::from(dark)],
+            _ => return None,
+        };
+        Some(match value {
+            PatchValue::Str(s) => Color::parse(s),
+            _ => None,
+        })
+    }
+
+    /// The background color this declares, for `selection:` rules.
+    pub(crate) fn background_color(&self) -> Option<Color> {
+        match self {
+            Decl::Set(StyleKey::BackgroundColor, PatchValue::Str(s)) => Color::parse(s),
+            _ => None,
+        }
+    }
+
     pub(crate) fn deps(&self) -> u16 {
         match self {
             Decl::Screen(_, w, h) => {
                 (if *w != 0.0 { deps::WIDTH } else { 0 })
                     | (if *h != 0.0 { deps::HEIGHT } else { 0 })
             }
-            Decl::Adaptive(..) | Decl::AdaptivePart(_) => deps::DARK,
+            Decl::Adaptive(key, values) => {
+                deps::DARK
+                    | if sided(*key, &values[0]) {
+                        deps::RTL
+                    } else {
+                        0
+                    }
+            }
+            Decl::AdaptivePart(_) => deps::DARK,
+            Decl::Set(key, value) | Decl::Default(key, value) if sided(*key, value) => deps::RTL,
+            Decl::CurrentColor(_) | Decl::Part(Part::Ring(_) | Part::InsetRing(_)) => {
+                deps::CURRENT_COLOR
+            }
+            Decl::Ch(..) => deps::CH,
             _ => 0,
         }
     }
@@ -225,6 +369,7 @@ pub(crate) mod touched {
     pub(crate) const TRANSITION: u16 = 128;
     pub(crate) const ANIMATE: u16 = 256;
     pub(crate) const TEXT_SHADOW: u16 = 512;
+    pub(crate) const CH: u16 = 1024;
     pub(crate) const ALL: u16 = u16::MAX;
 }
 
@@ -234,7 +379,10 @@ pub(crate) struct Parts {
     /// [`touched`] groups the parts pushed since this was last cleared.
     pub(crate) touched: u16,
     translate: [Option<Len>; 2],
-    rotate: [Option<f32>; 3],
+    /// The `rotate` property.
+    rotate: Option<f32>,
+    /// The `transform` property's `rotateX()`, `rotateY()`, `rotateZ()`.
+    rotate_3d: [Option<f32>; 3],
     scale: [Option<f32>; 2],
     skew: [Option<f32>; 2],
     perspective: Option<f32>,
@@ -251,10 +399,15 @@ pub(crate) struct Parts {
     inset_ring: Option<f32>,
     inset_ring_color: Option<Color>,
     shadows_set: bool,
-    gradient: Option<Option<GradientKind>>,
+    /// The gradient, and whether it mixes `in oklab` whatever its colors.
+    gradient: Option<Option<(GradientKind, bool)>>,
     stops: [Option<Color>; 3],
+    /// The stops' colors are legacy sRGB ones.
+    legacy_stops: [bool; 3],
     stop_positions: [Option<f32>; 3],
     filters: [Option<Filter>; 9],
+    /// After the filters of `filters`.
+    drop_shadows: Option<Arc<[Filter]>>,
     filters_set: bool,
     backdrop: [Option<Filter>; 9],
     backdrop_set: bool,
@@ -269,25 +422,30 @@ pub(crate) struct Parts {
     text_shadow_color: Option<(Color, bool)>,
     /// `w-screen` and friends, resolved against the window.
     pub(crate) screen: Vec<(StyleKey, f32, f32)>,
+    /// CSS's `currentColor`: the ring's color when no class sets one.
+    pub(crate) current: Color,
+    /// Lengths in `ch`, and what one is.
+    pub(crate) lengths_ch: Vec<(StyleKey, f32)>,
+    pub(crate) ch: f32,
 }
 
 impl Parts {
     fn push(&mut self, part: Part) {
         use Part::*;
         self.touched |= match &part {
-            TranslateX(_) | TranslateY(_) | Rotate(_) | RotateX(_) | RotateY(_) | ScaleX(_)
-            | ScaleY(_) | SkewX(_) | SkewY(_) | Perspective(_) | TransformNone => {
-                touched::TRANSFORM
-            }
+            TranslateX(_) | TranslateY(_) | Rotate(_) | RotateX(_) | RotateY(_) | RotateZ(_)
+            | ScaleX(_) | ScaleY(_) | SkewX(_) | SkewY(_) | Perspective(_) | TransformNone
+            | TranslateNone | ScaleNone | RotateNone => touched::TRANSFORM,
             Shadow(_) | ShadowColor(..) | InsetShadow(_) | InsetShadowColor(..) | Ring(_)
             | RingInset | RingColor(_) | RingOffset(_) | RingOffsetColor(_) | InsetRing(_)
             | InsetRingColor(_) => touched::SHADOWS,
-            Gradient(_) | GradientNone | From(_) | Via(_) | To(_) | FromPos(_) | ViaPos(_)
-            | ToPos(_) => touched::GRADIENT,
+            Gradient(_) | ArbitraryGradient(_) | GradientNone | From(..) | Via(..) | To(..)
+            | FromPos(_) | ViaPos(_) | ToPos(_) => touched::GRADIENT,
             Filter {
                 backdrop: false, ..
             }
-            | FilterNone { backdrop: false } => touched::FILTERS,
+            | FilterNone { backdrop: false }
+            | DropShadows(_) => touched::FILTERS,
             Filter { backdrop: true, .. } | FilterNone { backdrop: true } => touched::BACKDROP,
             FontVariant { .. } => touched::FONT_VARIANT,
             TransitionProps(_) | Duration(_) | Ease(_) | Delay(_) | TransitionNone => {
@@ -299,22 +457,25 @@ impl Parts {
         match part {
             TranslateX(l) => (self.translate[0], self.transform_set) = (Some(l), true),
             TranslateY(l) => (self.translate[1], self.transform_set) = (Some(l), true),
-            Rotate(d) => (self.rotate[2], self.transform_set) = (Some(d), true),
-            RotateX(d) => (self.rotate[0], self.transform_set) = (Some(d), true),
-            RotateY(d) => (self.rotate[1], self.transform_set) = (Some(d), true),
+            Rotate(d) => (self.rotate, self.transform_set) = (Some(d), true),
+            RotateX(d) => (self.rotate_3d[0], self.transform_set) = (Some(d), true),
+            RotateY(d) => (self.rotate_3d[1], self.transform_set) = (Some(d), true),
+            RotateZ(d) => (self.rotate_3d[2], self.transform_set) = (Some(d), true),
             ScaleX(s) => (self.scale[0], self.transform_set) = (Some(s), true),
             ScaleY(s) => (self.scale[1], self.transform_set) = (Some(s), true),
             SkewX(d) => (self.skew[0], self.transform_set) = (Some(d), true),
             SkewY(d) => (self.skew[1], self.transform_set) = (Some(d), true),
             Perspective(p) => (self.perspective, self.transform_set) = (Some(p), true),
+            // `translate`, `rotate` and `scale` are properties of their
+            // own: `transform: none` leaves them.
             TransformNone => {
-                self.translate = [None; 2];
-                self.rotate = [None; 3];
-                self.scale = [None; 2];
+                self.rotate_3d = [None; 3];
                 self.skew = [None; 2];
-                self.perspective = None;
                 self.transform_set = true;
             }
+            TranslateNone => (self.translate, self.transform_set) = ([None; 2], true),
+            ScaleNone => (self.scale, self.transform_set) = ([None; 2], true),
+            RotateNone => (self.rotate, self.transform_set) = (None, true),
             Shadow(s) => (self.shadow, self.shadows_set) = (Some(s), true),
             ShadowColor(c, a) => (self.shadow_color, self.shadows_set) = (Some((c, a)), true),
             InsetShadow(s) => (self.inset_shadow, self.shadows_set) = (Some(s), true),
@@ -328,11 +489,12 @@ impl Parts {
             RingOffsetColor(c) => (self.ring_offset_color, self.shadows_set) = (Some(c), true),
             InsetRing(w) => (self.inset_ring, self.shadows_set) = (Some(w), true),
             InsetRingColor(c) => (self.inset_ring_color, self.shadows_set) = (Some(c), true),
-            Gradient(k) => self.gradient = Some(Some(k)),
+            Gradient(k) => self.gradient = Some(Some((k, true))),
+            ArbitraryGradient(k) => self.gradient = Some(Some((k, false))),
             GradientNone => self.gradient = Some(None),
-            From(c) => self.stops[0] = Some(c),
-            Via(c) => self.stops[1] = Some(c),
-            To(c) => self.stops[2] = Some(c),
+            From(c, legacy) => (self.stops[0], self.legacy_stops[0]) = (Some(c), legacy),
+            Via(c, legacy) => (self.stops[1], self.legacy_stops[1]) = (Some(c), legacy),
+            To(c, legacy) => (self.stops[2], self.legacy_stops[2]) = (Some(c), legacy),
             FromPos(p) => self.stop_positions[0] = Some(p),
             ViaPos(p) => self.stop_positions[1] = Some(p),
             ToPos(p) => self.stop_positions[2] = Some(p),
@@ -354,6 +516,11 @@ impl Parts {
             }
             FilterNone { backdrop: false } => {
                 self.filters = [None; 9];
+                self.drop_shadows = None;
+                self.filters_set = true;
+            }
+            DropShadows(layers) => {
+                self.drop_shadows = Some(layers);
                 self.filters_set = true;
             }
             FilterNone { backdrop: true } => {
@@ -393,6 +560,9 @@ impl Parts {
         only: u16,
     ) {
         let has = |group: u16| only & group != 0;
+        for &(key, n) in self.lengths_ch.iter().filter(|_| has(touched::CH)) {
+            let _ = style.set_key(key, crate::style::StyleValue::Number(n * self.ch));
+        }
         for &(key, fw, fh) in self.screen.iter().filter(|_| has(touched::SCREEN)) {
             let _ = style.set_key(
                 key,
@@ -402,13 +572,14 @@ impl Parts {
         if self.transform_set && has(touched::TRANSFORM) {
             let _ = StyleDecl::ClearTransform.apply(style);
             // CSS: `translate`, `rotate`, `scale`, then `transform`
-            // (rotate-x / -y, skews); a list applies right to left.
+            // (`rotateX() rotateY() rotateZ() skewX() skewY()`, as Tailwind
+            // writes it); a list applies right to left.
+            // `perspective-*` is CSS's `perspective` property: depth for the
+            // children, not a step of the view's own transform.
+            style.perspective = self.perspective.map(px);
             let mut push = |kind: TransformKind, v: f32| {
                 let _ = style.view.transform.push(kind, v);
             };
-            if let Some(p) = self.perspective {
-                push(TransformKind::Perspective, p);
-            }
             for (i, t) in self.translate.iter().enumerate() {
                 match (i, t) {
                     (0, Some(Len::Points(v))) => push(TransformKind::TranslateX, *v),
@@ -418,7 +589,7 @@ impl Parts {
                     _ => {}
                 }
             }
-            if let Some(r) = self.rotate[2] {
+            if let Some(r) = self.rotate {
                 push(TransformKind::Rotate, r);
             }
             match self.scale {
@@ -432,11 +603,14 @@ impl Parts {
                     }
                 }
             }
-            if let Some(r) = self.rotate[0] {
+            if let Some(r) = self.rotate_3d[0] {
                 push(TransformKind::RotateX, r);
             }
-            if let Some(r) = self.rotate[1] {
+            if let Some(r) = self.rotate_3d[1] {
                 push(TransformKind::RotateY, r);
+            }
+            if let Some(r) = self.rotate_3d[2] {
+                push(TransformKind::Rotate, r);
             }
             if let Some(s) = self.skew[0] {
                 push(TransformKind::SkewX, s);
@@ -446,7 +620,7 @@ impl Parts {
             }
         }
         if self.shadows_set && has(touched::SHADOWS) {
-            let current = style.text.color.unwrap_or(Color::BLACK);
+            let current = self.current;
             let recolor = |layers: &[BoxShadow], color: Option<(Color, bool)>| -> Vec<BoxShadow> {
                 layers
                     .iter()
@@ -497,10 +671,10 @@ impl Parts {
             }
             style.set_box_shadows(list);
         }
-        if let Some(kind) = self.gradient.filter(|_| has(touched::GRADIENT)) {
-            match kind {
+        if let Some(gradient) = self.gradient.filter(|_| has(touched::GRADIENT)) {
+            match gradient {
                 None => style.set_background_images(Vec::new()),
-                Some(kind) => {
+                Some((kind, oklab)) => {
                     let [from, via, to] = self.stops;
                     let [fp, vp, tp] = self.stop_positions;
                     let mut stops = vec![ColorStop {
@@ -517,16 +691,30 @@ impl Parts {
                         color: to.unwrap_or(Color::TRANSPARENT),
                         position: Some(percentage(tp.unwrap_or(1.0)).into()),
                     });
+                    // Tailwind's gradients mix `in oklab`; at an arbitrary
+                    // position, as CSS does without a method: in Oklab
+                    // unless every color is a legacy one (the ends Tailwind
+                    // leaves out are `#0000`).
+                    let modern = (0..3).any(|i| self.stops[i].is_some() && !self.legacy_stops[i]);
+                    let method = if oklab || modern {
+                        css::Interpolation::OKLAB
+                    } else {
+                        css::Interpolation::SRGB
+                    };
                     style.set_background_images(vec![Gradient {
                         kind,
-                        stops,
+                        stops: css::interpolate_stops(stops, method),
                         repeating: false,
                     }]);
                 }
             }
         }
         if self.filters_set && has(touched::FILTERS) {
-            style.set_filters(self.filters.iter().flatten().copied().collect(), false);
+            let drop = self.drop_shadows.as_deref().unwrap_or_default();
+            style.set_filters(
+                self.filters.iter().flatten().chain(drop).copied().collect(),
+                false,
+            );
         }
         if self.backdrop_set && has(touched::BACKDROP) {
             style.set_filters(self.backdrop.iter().flatten().copied().collect(), true);
@@ -660,6 +848,15 @@ fn length_value(theme: &Theme, v: &str, neg: bool, auto: bool) -> Option<PatchVa
     })
 }
 
+/// [`length_value`] of a utility Tailwind CSS takes no fractions or
+/// `full` for (padding, margin, gaps).
+fn spacing_value(theme: &Theme, v: &str, neg: bool, auto: bool) -> Option<PatchValue> {
+    if v == "full" || v.contains('/') && !v.starts_with('[') {
+        return None;
+    }
+    length_value(theme, v, neg, auto)
+}
+
 /// A length in points (no percentages).
 fn points(theme: &Theme, v: &str) -> Option<f32> {
     match length_value(theme, v, false, false)? {
@@ -699,6 +896,17 @@ fn color_value(theme: &Theme, v: &str) -> Option<(Color, bool)> {
             Some((color.with_alpha(alpha), true))
         }
     }
+}
+
+/// Whether the color value `v` is a legacy sRGB color in CSS (an arbitrary
+/// hex, `rgb()`, `hsl()`, `hwb()` or named color), which a gradient without
+/// an interpolation method mixes in sRGB; the palette's colors are OKLCH.
+fn legacy_color(v: &str) -> bool {
+    let base = match v.find(']') {
+        Some(end) if v.starts_with('[') => &v[1..end],
+        _ => return false,
+    };
+    css::is_legacy_color(arbitrary_hinted(base, "color").unwrap_or(base))
 }
 
 fn color(theme: &Theme, v: &str) -> Option<Color> {
@@ -775,6 +983,9 @@ pub(crate) fn parse(theme: &Theme, utility: &str) -> Option<Vec<Decl>> {
     };
     // The longest matching prefix decides (`inset-x-` before `inset-`).
     for &(prefix, handler) in PREFIXES {
+        if neg && !NEGATIVE.contains(&prefix) {
+            continue;
+        }
         if let Some(value) = u.strip_prefix(prefix)
             && let Some(value) = value.strip_prefix('-')
             && !value.is_empty()
@@ -788,6 +999,58 @@ pub(crate) fn parse(theme: &Theme, utility: &str) -> Option<Vec<Decl>> {
 }
 
 type Handler = fn(&Theme, &str, bool) -> Option<Vec<Decl>>;
+
+/// The prefixes Tailwind CSS has a negative form of (`-mt-2`); a leading
+/// `-` on any other is no class.
+static NEGATIVE: &[&str] = &[
+    "mx",
+    "my",
+    "mt",
+    "mr",
+    "mb",
+    "ml",
+    "ms",
+    "me",
+    "m",
+    "space-x",
+    "space-y",
+    "inset-x",
+    "inset-y",
+    "inset",
+    "top",
+    "right",
+    "bottom",
+    "left",
+    "start",
+    "end",
+    "z",
+    "col-start",
+    "col-end",
+    "row-start",
+    "row-end",
+    "col",
+    "row",
+    "tracking",
+    "underline-offset",
+    "outline-offset",
+    "bg-linear",
+    "bg-conic",
+    "hue-rotate",
+    "backdrop-hue-rotate",
+    "translate-x",
+    "translate-y",
+    "translate",
+    "rotate-x",
+    "rotate-y",
+    "rotate-z",
+    "rotate",
+    "scale-x",
+    "scale-y",
+    "scale",
+    "skew-x",
+    "skew-y",
+    "skew",
+];
 
 use StyleKey as K;
 
@@ -803,13 +1066,17 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
                 Decl::Default(K::FlexDirection, PatchValue::Str("row".into())),
             ]);
         }
-        "block" | "flow-root" => sets(K::Display, "block"),
-        // No inline formatting context: inline boxes lay out as views.
-        "inline-block" | "inline" => sets(K::Display, "flex"),
+        // Inside a flex or grid container, which every NSH parent but a
+        // block is, a browser blockifies inline boxes: `inline` and
+        // `inline-block` compute to `block` there. (Inside a block there is
+        // no inline formatting context: they are blocks too.)
+        "block" | "flow-root" | "inline-block" | "inline" => sets(K::Display, "block"),
         "grid" | "inline-grid" => sets(K::Display, "grid"),
         "hidden" => sets(K::Display, "none"),
-        "static" | "relative" | "sticky" => sets(K::Position, "relative"),
-        "absolute" | "fixed" => sets(K::Position, "absolute"),
+        "static" => sets(K::Position, "static"),
+        "relative" => sets(K::Position, "relative"),
+        "absolute" => sets(K::Position, "absolute"),
+        "fixed" => sets(K::Position, "fixed"),
         "visible" => sets(K::Visibility, "visible"),
         "invisible" | "collapse" => sets(K::Visibility, "hidden"),
         "overflow-hidden" | "overflow-clip" | "overflow-x-hidden" | "overflow-y-hidden" => {
@@ -1021,7 +1288,13 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         "text-right" => sets(K::TextAlign, "right"),
         "text-justify" => sets(K::TextAlign, "justify"),
         "text-start" => sets(K::TextAlign, "auto"),
-        "text-end" => sets(K::TextAlign, "right"),
+        // React Native's `right`, which the core lays out as the end right
+        // to left (an inline style's meaning, never mirrored as `text-right`
+        // is).
+        "text-end" => Decl::Style(StyleDecl::Set(
+            K::TextAlign,
+            PatchValue::Str("right".into()),
+        )),
         // `vertical-align` of views and images inside a text (`align-top`,
         // `align-bottom`, `align-sub` and `align-super` are the line box's
         // or the baseline's, which NSH does not place by).
@@ -1044,9 +1317,10 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
             Decl::Prop(PropDecl::NoWrap(false))
         }
         "line-clamp-none" => Decl::Prop(PropDecl::Lines(0)),
+        // `font-variant-numeric: normal`: the number forms only.
         "normal-nums" => Decl::Part(Part::FontVariant {
             set: 0,
-            clear: 0xff,
+            clear: !FontVariant::SMALL_CAPS,
         }),
         "small-caps" => Decl::Part(Part::FontVariant {
             set: FontVariant::SMALL_CAPS,
@@ -1118,13 +1392,16 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
             y: percentage(0.5),
         })),
         // Borders and outlines.
-        "border-solid" | "border-double" => sets(K::BorderStyle, "solid"),
+        "border-solid" => sets(K::BorderStyle, "solid"),
         "border-dashed" => sets(K::BorderStyle, "dashed"),
         "border-dotted" => sets(K::BorderStyle, "dotted"),
-        "border-none" | "border-hidden" => setn(K::BorderWidth, 0.0),
-        "outline-solid" | "outline-double" => sets(K::OutlineStyle, "solid"),
-        "outline-dashed" => sets(K::OutlineStyle, "dashed"),
-        "outline-dotted" => sets(K::OutlineStyle, "dotted"),
+        // `border-style: none`: no border whatever the width utilities.
+        "border-none" => sets(K::BorderStyle, "none"),
+        "border-hidden" => sets(K::BorderStyle, "hidden"),
+        // A style without a width: CSS's initial `medium` width (3px).
+        "outline-solid" => return outline_style("solid"),
+        "outline-dashed" => return outline_style("dashed"),
+        "outline-dotted" => return outline_style("dotted"),
         "outline-none" | "outline-hidden" => sets(K::OutlineStyle, "none"),
         "ring-inset" => Decl::Part(Part::RingInset),
         // Effects.
@@ -1141,9 +1418,13 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         "backdrop-sepia" => filter(true, 8, Filter::Sepia(1.0)),
         // Transforms.
         "transform-none" => Decl::Part(Part::TransformNone),
+        "translate-none" => Decl::Part(Part::TranslateNone),
+        "scale-none" => Decl::Part(Part::ScaleNone),
+        "rotate-none" => Decl::Part(Part::RotateNone),
         "backface-hidden" => sets(K::BackfaceVisibility, "hidden"),
         "backface-visible" => sets(K::BackfaceVisibility, "visible"),
-        "transform" | "transform-gpu" | "transform-cpu" | "transform-3d" | "transform-flat" => {
+        // NSH composes every transform alike, and flat is the default.
+        "transform" | "transform-gpu" | "transform-cpu" | "transform-flat" => {
             return Some(Vec::new());
         }
         // Transitions and animations.
@@ -1168,17 +1449,58 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         // Interactivity.
         "pointer-events-none" => Decl::Prop(PropDecl::PointerEvents(PointerEvents::None)),
         "pointer-events-auto" => Decl::Prop(PropDecl::PointerEvents(PointerEvents::Auto)),
-        "select-none" => Decl::Prop(PropDecl::Selectable(false)),
-        "select-text" | "select-all" => Decl::Prop(PropDecl::Selectable(true)),
-        "select-auto" => return Some(Vec::new()),
+        // `user-select` of a text that says `auto` is its parent's: the
+        // classes of the views around it reach it (`Core::rebuild_text`).
+        "select-none" => Decl::Prop(PropDecl::Selectable(Some(false))),
+        "select-text" => Decl::Prop(PropDecl::Selectable(Some(true))),
+        "select-auto" => Decl::Prop(PropDecl::Selectable(None)),
+        "space-x-reverse" => Decl::Prop(PropDecl::SpaceReverse(false)),
+        "space-y-reverse" => Decl::Prop(PropDecl::SpaceReverse(true)),
         // Images.
         "object-contain" => Decl::Prop(PropDecl::Resize(ResizeMode::Contain)),
         "object-cover" => Decl::Prop(PropDecl::Resize(ResizeMode::Cover)),
         "object-fill" => Decl::Prop(PropDecl::Resize(ResizeMode::Stretch)),
-        "object-none" | "object-scale-down" => Decl::Prop(PropDecl::Resize(ResizeMode::Center)),
+        "object-none" => Decl::Prop(PropDecl::Resize(ResizeMode::Center)),
+        "object-scale-down" => Decl::Prop(PropDecl::Resize(ResizeMode::ScaleDown)),
         _ => return None,
     };
     Some(vec![d])
+}
+
+/// `outline-<style>`: the style, and a medium width unless a width
+/// utility sets one.
+fn outline_style(style: &str) -> Option<Vec<Decl>> {
+    Some(vec![
+        sets(K::OutlineStyle, style),
+        Decl::Default(K::OutlineWidth, PatchValue::Number(3.0)),
+        Decl::CurrentColor(K::OutlineColor),
+    ])
+}
+
+/// `outline-<width>`: the width, solid unless a style utility says
+/// otherwise wherever it is (`outline-style: var(--tw-outline-style)`).
+fn outline_width(width: f32) -> Vec<Decl> {
+    vec![
+        setn(K::OutlineWidth, width),
+        Decl::Default(K::OutlineStyle, PatchValue::Str("solid".into())),
+        Decl::CurrentColor(K::OutlineColor),
+    ]
+}
+
+/// A `drop-shadow()` per layer, in their order (CSS's chain: each one
+/// shadows what the ones before it drew too).
+fn drop_shadows(layers: &[BoxShadow]) -> Part {
+    Part::DropShadows(
+        layers
+            .iter()
+            .map(|l| Filter::DropShadow {
+                offset_x: l.offset_x,
+                offset_y: l.offset_y,
+                blur: l.blur,
+                color: l.color,
+            })
+            .collect(),
+    )
 }
 
 fn filter(backdrop: bool, slot: u8, f: Filter) -> Decl {
@@ -1193,75 +1515,81 @@ fn filter(backdrop: bool, slot: u8, f: Filter) -> Decl {
 static PREFIXES: &[(&str, Handler)] = &[
     // Spacing.
     ("px", |t, v, n| {
-        one(set(K::PaddingHorizontal, length_value(t, v, n, false)?))
+        one(set(K::PaddingHorizontal, spacing_value(t, v, n, false)?))
     }),
     ("py", |t, v, n| {
-        one(set(K::PaddingVertical, length_value(t, v, n, false)?))
+        one(set(K::PaddingVertical, spacing_value(t, v, n, false)?))
     }),
     ("pt", |t, v, n| {
-        one(set(K::PaddingTop, length_value(t, v, n, false)?))
+        one(set(K::PaddingTop, spacing_value(t, v, n, false)?))
     }),
     ("pr", |t, v, n| {
-        one(set(K::PaddingRight, length_value(t, v, n, false)?))
+        one(set(K::PaddingRight, spacing_value(t, v, n, false)?))
     }),
     ("pb", |t, v, n| {
-        one(set(K::PaddingBottom, length_value(t, v, n, false)?))
+        one(set(K::PaddingBottom, spacing_value(t, v, n, false)?))
     }),
     ("pl", |t, v, n| {
-        one(set(K::PaddingLeft, length_value(t, v, n, false)?))
+        one(set(K::PaddingLeft, spacing_value(t, v, n, false)?))
     }),
     ("ps", |t, v, n| {
-        one(set(K::PaddingStart, length_value(t, v, n, false)?))
+        one(set(K::PaddingStart, spacing_value(t, v, n, false)?))
     }),
     ("pe", |t, v, n| {
-        one(set(K::PaddingEnd, length_value(t, v, n, false)?))
+        one(set(K::PaddingEnd, spacing_value(t, v, n, false)?))
     }),
     ("p", |t, v, n| {
-        one(set(K::Padding, length_value(t, v, n, false)?))
+        one(set(K::Padding, spacing_value(t, v, n, false)?))
     }),
     ("mx", |t, v, n| {
-        one(set(K::MarginHorizontal, length_value(t, v, n, true)?))
+        one(set(K::MarginHorizontal, spacing_value(t, v, n, true)?))
     }),
     ("my", |t, v, n| {
-        one(set(K::MarginVertical, length_value(t, v, n, true)?))
+        one(set(K::MarginVertical, spacing_value(t, v, n, true)?))
     }),
     ("mt", |t, v, n| {
-        one(set(K::MarginTop, length_value(t, v, n, true)?))
+        one(set(K::MarginTop, spacing_value(t, v, n, true)?))
     }),
     ("mr", |t, v, n| {
-        one(set(K::MarginRight, length_value(t, v, n, true)?))
+        one(set(K::MarginRight, spacing_value(t, v, n, true)?))
     }),
     ("mb", |t, v, n| {
-        one(set(K::MarginBottom, length_value(t, v, n, true)?))
+        one(set(K::MarginBottom, spacing_value(t, v, n, true)?))
     }),
     ("ml", |t, v, n| {
-        one(set(K::MarginLeft, length_value(t, v, n, true)?))
+        one(set(K::MarginLeft, spacing_value(t, v, n, true)?))
     }),
     ("ms", |t, v, n| {
-        one(set(K::MarginStart, length_value(t, v, n, true)?))
+        one(set(K::MarginStart, spacing_value(t, v, n, true)?))
     }),
     ("me", |t, v, n| {
-        one(set(K::MarginEnd, length_value(t, v, n, true)?))
+        one(set(K::MarginEnd, spacing_value(t, v, n, true)?))
     }),
     ("m", |t, v, n| {
-        one(set(K::Margin, length_value(t, v, n, true)?))
+        one(set(K::Margin, spacing_value(t, v, n, true)?))
     }),
     ("gap-x", |t, v, _| {
-        one(set(K::ColumnGap, length_value(t, v, false, false)?))
+        one(set(K::ColumnGap, spacing_value(t, v, false, false)?))
     }),
     ("gap-y", |t, v, _| {
-        one(set(K::RowGap, length_value(t, v, false, false)?))
+        one(set(K::RowGap, spacing_value(t, v, false, false)?))
     }),
     ("gap", |t, v, _| {
-        one(set(K::Gap, length_value(t, v, false, false)?))
+        one(set(K::Gap, spacing_value(t, v, false, false)?))
     }),
-    // `space-*` puts margins between children; in flex layouts a gap is
-    // the same thing.
-    ("space-x", |t, v, _| {
-        one(set(K::ColumnGap, length_value(t, v, false, false)?))
+    // `space-*` gives the children but the last a margin (the view's
+    // `ClassProps::space`, which the core gives them).
+    ("space-x", |t, v, n| {
+        one(Decl::Prop(PropDecl::Space(
+            false,
+            spacing_value(t, v, n, false)?,
+        )))
     }),
-    ("space-y", |t, v, _| {
-        one(set(K::RowGap, length_value(t, v, false, false)?))
+    ("space-y", |t, v, n| {
+        one(Decl::Prop(PropDecl::Space(
+            true,
+            spacing_value(t, v, n, false)?,
+        )))
     }),
     // Insets.
     ("inset-x", |t, v, n| {
@@ -1300,9 +1628,13 @@ static PREFIXES: &[(&str, Handler)] = &[
         one(set(K::End, length_value(t, v, n, true)?))
     }),
     ("z", |_, v, n| {
+        // `z-index` takes integers: bare positive ones, any arbitrary one.
         let z = match v {
-            "auto" => 0.0,
-            v => num(v).or_else(|| arbitrary(v).and_then(|a| css::number(&a)))?,
+            "auto" if !n => 0.0,
+            v => match arbitrary(v) {
+                Some(a) => unhinted(&a).trim().parse::<i32>().ok()? as f32,
+                None => v.parse::<u32>().ok()? as f32,
+            },
         };
         one(setn(K::ZIndex, if n { -z } else { z }))
     }),
@@ -1433,7 +1765,6 @@ static PREFIXES: &[(&str, Handler)] = &[
     }),
     ("auto-cols", |_, v, n| auto_tracks(K::GridAutoColumns, v, n)),
     ("auto-rows", |_, v, n| auto_tracks(K::GridAutoRows, v, n)),
-    ("order", |_, _, _| Some(Vec::new())),
     // Typography.
     ("font", |t, v, _| {
         if let Some(w) = t.weights.get(v) {
@@ -1475,15 +1806,7 @@ static PREFIXES: &[(&str, Handler)] = &[
             &format!("{}em", if n { -em } else { em }),
         ))
     }),
-    ("leading", |t, v, _| {
-        if let Some(m) = t.leading.get(v) {
-            return one(sets(K::LineHeight, &m.to_string()));
-        }
-        match length_value(t, v, false, false)? {
-            PatchValue::Number(n) => one(setn(K::LineHeight, n)),
-            _ => None,
-        }
-    }),
+    ("leading", |t, v, _| one(line_height(t, v)?)),
     ("line-clamp", |_, v, _| {
         one(Decl::Prop(PropDecl::Lines(num(v)? as u32)))
     }),
@@ -1506,17 +1829,27 @@ static PREFIXES: &[(&str, Handler)] = &[
     // Backgrounds.
     ("bg-linear", |_, v, n| {
         let a = degrees(v)?;
-        part(Part::Gradient(GradientKind::Linear {
+        let kind = GradientKind::Linear {
             angle: deg(if n { -a } else { a }),
-        }))
+        };
+        part(if v.starts_with('[') {
+            Part::ArbitraryGradient(kind)
+        } else {
+            Part::Gradient(kind)
+        })
     }),
     ("bg-conic", |_, v, n| {
         let a = degrees(v)?;
-        part(Part::Gradient(GradientKind::Conic {
+        let kind = GradientKind::Conic {
             from: deg(if n { -a } else { a }),
             x: percentage(0.5),
             y: percentage(0.5),
-        }))
+        };
+        part(if v.starts_with('[') {
+            Part::ArbitraryGradient(kind)
+        } else {
+            Part::Gradient(kind)
+        })
     }),
     ("bg", |t, v, _| {
         if let Some(a) = arbitrary(v)
@@ -1537,15 +1870,15 @@ static PREFIXES: &[(&str, Handler)] = &[
     }),
     ("from", |t, v, _| match stop_position(v) {
         Some(p) => part(Part::FromPos(p)),
-        None => part(Part::From(color(t, v)?)),
+        None => part(Part::From(color(t, v)?, legacy_color(v))),
     }),
     ("via", |t, v, _| match stop_position(v) {
         Some(p) => part(Part::ViaPos(p)),
-        None => part(Part::Via(color(t, v)?)),
+        None => part(Part::Via(color(t, v)?, legacy_color(v))),
     }),
     ("to", |t, v, _| match stop_position(v) {
         Some(p) => part(Part::ToPos(p)),
-        None => part(Part::To(color(t, v)?)),
+        None => part(Part::To(color(t, v)?, legacy_color(v))),
     }),
     // Borders.
     ("rounded-tl", |t, v, _| {
@@ -1638,18 +1971,12 @@ static PREFIXES: &[(&str, Handler)] = &[
     }),
     ("outline", |t, v, _| {
         if let Some(n) = num(v) {
-            return Some(vec![
-                setn(K::OutlineWidth, n),
-                sets(K::OutlineStyle, "solid"),
-            ]);
+            return Some(outline_width(n));
         }
         if let Some(c) = color(t, v) {
             return one(set(K::OutlineColor, color_str(c)));
         }
-        Some(vec![
-            setn(K::OutlineWidth, points(t, v)?),
-            sets(K::OutlineStyle, "solid"),
-        ])
+        Some(outline_width(points(t, v)?))
     }),
     ("inset-ring", |t, v, _| {
         if let Some(n) = num(v).or_else(|| arbitrary(v).and_then(|a| css::length(&a))) {
@@ -1761,22 +2088,12 @@ static PREFIXES: &[(&str, Handler)] = &[
         one(filter(false, 7, Filter::Sepia(percent_factor(v)?)))
     }),
     ("drop-shadow", |t, v, _| {
-        let layers = match t.drop_shadows.get(v) {
-            Some(l) => l.clone(),
-            None => css::box_shadows(&arbitrary(v)?)?,
+        let layers = match (v, t.drop_shadows.get(v)) {
+            ("none", None) => Vec::new(),
+            (_, Some(l)) => l.clone(),
+            (_, None) => css::box_shadows(&arbitrary(v)?)?,
         };
-        // One drop shadow natively: the last (widest) layer.
-        let l = layers.last().copied().unwrap_or_default();
-        one(filter(
-            false,
-            8,
-            Filter::DropShadow {
-                offset_x: l.offset_x,
-                offset_y: l.offset_y,
-                blur: l.blur,
-                color: l.color,
-            },
-        ))
+        part(drop_shadows(&layers))
     }),
     // Transforms.
     ("translate-x", |t, v, n| {
@@ -1799,7 +2116,7 @@ static PREFIXES: &[(&str, Handler)] = &[
         part(Part::RotateY(signed(degrees(v)?, n)))
     }),
     ("rotate-z", |_, v, n| {
-        part(Part::Rotate(signed(degrees(v)?, n)))
+        part(Part::RotateZ(signed(degrees(v)?, n)))
     }),
     ("rotate", |_, v, n| {
         part(Part::Rotate(signed(degrees(v)?, n)))
@@ -1890,37 +2207,19 @@ fn bare(theme: &Theme, u: &str, neg: bool) -> Option<Vec<Decl>> {
                 theme.inset_shadows.get("")?.as_slice(),
             )));
         }
-        "drop-shadow" => {
-            let l = theme.drop_shadows.get("")?.last().copied()?;
-            vec![filter(
-                false,
-                8,
-                Filter::DropShadow {
-                    offset_x: l.offset_x,
-                    offset_y: l.offset_y,
-                    blur: l.blur,
-                    color: l.color,
-                },
-            )]
-        }
+        "drop-shadow" => return part(drop_shadows(theme.drop_shadows.get("")?)),
         "ring" => return part(Part::Ring(1.0)),
         "inset-ring" => return part(Part::InsetRing(1.0)),
-        "border" => vec![setn(K::BorderWidth, 1.0)],
-        "border-x" => vec![
-            setn(K::BorderLeftWidth, 1.0),
-            setn(K::BorderRightWidth, 1.0),
-        ],
-        "border-y" => vec![
-            setn(K::BorderTopWidth, 1.0),
-            setn(K::BorderBottomWidth, 1.0),
-        ],
-        "border-t" => vec![setn(K::BorderTopWidth, 1.0)],
-        "border-r" => vec![setn(K::BorderRightWidth, 1.0)],
-        "border-b" => vec![setn(K::BorderBottomWidth, 1.0)],
-        "border-l" => vec![setn(K::BorderLeftWidth, 1.0)],
-        "border-s" => vec![setn(K::BorderStartWidth, 1.0)],
-        "border-e" => vec![setn(K::BorderEndWidth, 1.0)],
-        "outline" => vec![setn(K::OutlineWidth, 1.0), sets(K::OutlineStyle, "solid")],
+        "border" => border_widths(&[K::BorderWidth], 1.0),
+        "border-x" => border_widths(&[K::BorderLeftWidth, K::BorderRightWidth], 1.0),
+        "border-y" => border_widths(&[K::BorderTopWidth, K::BorderBottomWidth], 1.0),
+        "border-t" => border_widths(&[K::BorderTopWidth], 1.0),
+        "border-r" => border_widths(&[K::BorderRightWidth], 1.0),
+        "border-b" => border_widths(&[K::BorderBottomWidth], 1.0),
+        "border-l" => border_widths(&[K::BorderLeftWidth], 1.0),
+        "border-s" => border_widths(&[K::BorderStartWidth], 1.0),
+        "border-e" => border_widths(&[K::BorderEndWidth], 1.0),
+        "outline" => outline_width(1.0),
         "rounded" => return radius(theme, "sm", &[K::BorderRadius]),
         "rounded-t" | "rounded-r" | "rounded-b" | "rounded-l" | "rounded-tl" | "rounded-tr"
         | "rounded-br" | "rounded-bl" | "rounded-s" | "rounded-e" | "rounded-ss" | "rounded-se"
@@ -2033,23 +2332,17 @@ fn size(theme: &Theme, v: &str, key: StyleKey, width: bool) -> Option<Vec<Decl>>
     if let Some((fw, fh)) = screen {
         return one(Decl::Screen(key, fw, fh));
     }
-    match v {
-        "min" | "max" | "fit" => {
-            return one(match key {
-                K::MinWidth | K::MinHeight => setn(key, 0.0),
-                K::MaxWidth | K::MaxHeight => Decl::Set(key, PatchValue::Null),
-                _ => sets(key, "auto"),
-            });
-        }
-        "none" if matches!(key, K::MaxWidth | K::MaxHeight) => {
-            return one(Decl::Set(key, PatchValue::Null));
-        }
-        _ => {}
+    if v == "none" && matches!(key, K::MaxWidth | K::MaxHeight) {
+        return one(Decl::Set(key, PatchValue::Null));
     }
-    if matches!(key, K::MaxWidth | K::Width | K::MinWidth)
-        && let Some(w) = theme.containers.get(v)
-    {
-        return one(setn(key, *w));
+    if matches!(key, K::MaxWidth | K::Width | K::MinWidth) {
+        if let Some(w) = theme.containers.get(v) {
+            return one(setn(key, *w));
+        }
+        // Tailwind's `--container-prose: 65ch`, of the node's font.
+        if v == "prose" {
+            return one(Decl::Ch(key, 65.0));
+        }
     }
     let auto = matches!(key, K::Width | K::Height);
     one(set(key, length_value(theme, v, false, auto)?))
@@ -2069,17 +2362,25 @@ fn radius(theme: &Theme, v: &str, keys: &[StyleKey]) -> Option<Vec<Decl>> {
 
 fn border(theme: &Theme, v: &str, widths: &[StyleKey], colors: &[StyleKey]) -> Option<Vec<Decl>> {
     if let Some(n) = num(v) {
-        return Some(widths.iter().map(|k| setn(*k, n)).collect());
+        return Some(border_widths(widths, n));
     }
     if let Some(a) = arbitrary(v)
         && let Some(w) = arbitrary_hinted(&a, "length")
             .and_then(css::length)
             .or_else(|| css::length(&a))
     {
-        return Some(widths.iter().map(|k| setn(*k, w)).collect());
+        return Some(border_widths(widths, w));
     }
     let c = color(theme, v)?;
     Some(colors.iter().map(|k| set(*k, color_str(c))).collect())
+}
+
+/// Border widths, in `currentColor` unless a color utility says otherwise
+/// (preflight's `border: 0 solid`, whose color is `currentColor`).
+fn border_widths(keys: &[StyleKey], width: f32) -> Vec<Decl> {
+    let mut out: Vec<Decl> = keys.iter().map(|k| setn(*k, width)).collect();
+    out.push(Decl::CurrentColor(K::BorderColor));
+    out
 }
 
 fn blur(theme: &Theme, v: &str, backdrop: bool) -> Option<Vec<Decl>> {
@@ -2120,23 +2421,19 @@ fn text(theme: &Theme, v: &str, _neg: bool) -> Option<Vec<Decl>> {
         }
         _ => (v, None),
     };
-    let line_height = || -> Option<Decl> {
-        let l = line?;
-        Some(match theme.leading.get(l) {
-            Some(m) => sets(K::LineHeight, &m.to_string()),
-            None => match length_value(theme, l, false, false)? {
-                PatchValue::Number(n) => setn(K::LineHeight, n),
-                _ => return None,
-            },
-        })
-    };
+    let line_height = || line_height(theme, line?);
     if let Some(&(size, multiple)) = theme.text.get(base) {
         let mut out = vec![setn(K::FontSize, size)];
         match line {
             Some(_) => out.push(line_height()?),
+            // `line-height: var(--tw-leading, var(--text-lg--line-height))`:
+            // any `leading-*` wins, wherever it is and whatever its variant.
             None => {
                 if let Some(m) = multiple {
-                    out.push(sets(K::LineHeight, &m.to_string()));
+                    out.push(Decl::Default(
+                        K::LineHeight,
+                        PatchValue::Str(m.to_string().into()),
+                    ));
                 }
             }
         }
@@ -2159,6 +2456,30 @@ fn text(theme: &Theme, v: &str, _neg: bool) -> Option<Vec<Decl>> {
         }
     }
     one(set(K::Color, color_str(color(theme, v)?)))
+}
+
+/// A line height (`leading-*`, `text-sm/<line>`): a theme multiple
+/// (`tight`), spacing steps (`6`, 24 points), or arbitrary: a number
+/// without a unit, `em` or a percentage is a multiple of the font size
+/// (`[1.5]`), a length is points (`[22px]`).
+fn line_height(theme: &Theme, v: &str) -> Option<Decl> {
+    if let Some(m) = theme.leading.get(v) {
+        return Some(sets(K::LineHeight, &m.to_string()));
+    }
+    if let Some(a) = arbitrary(v) {
+        let a = a.trim();
+        let multiple = match a.strip_suffix('%') {
+            Some(p) => css::number(p).map(|p| p / 100.0),
+            None => css::number(a.strip_suffix("em").unwrap_or(a)),
+        };
+        if let Some(m) = multiple.filter(|m| *m >= 0.0) {
+            return Some(sets(K::LineHeight, &m.to_string()));
+        }
+    }
+    match length_value(theme, v, false, false)? {
+        PatchValue::Number(n) => Some(setn(K::LineHeight, n)),
+        _ => None,
+    }
 }
 
 /// Tailwind's timing of `animate-*`.
