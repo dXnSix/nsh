@@ -399,6 +399,8 @@ struct Node {
     inherited_color: Option<Color>,
     /// CSS's `perspective` its style gives its children.
     child_perspective: Option<Points>,
+    /// The `ch` its classes were resolved with (`max-w-prose`).
+    ch: f32,
     /// Its style says `position: fixed`.
     wants_fixed: bool,
     /// A view made an overlay by `position: fixed` (`overlay.rs` `fix_view`).
@@ -529,6 +531,7 @@ impl Node {
             spaced: false,
             inherited_color: None,
             child_perspective: None,
+            ch: 0.0,
             wants_fixed: false,
             fixed_view: false,
             class_pointer: crate::props::PointerEvents::Auto,
@@ -706,6 +709,13 @@ pub struct Core<M: TextEngine> {
     /// Nodes whose `position: fixed` changed: made overlays (or views again)
     /// as the commit starts ([`Core::sync_fixed`]).
     fixed_changed: Vec<(Key, NodeId)>,
+    /// The advance of each font's `0` (CSS's `ch`), by family, size,
+    /// weight and italic.
+    zero_advances: rustc_hash::FxHashMap<(Option<crate::style::FontFamily>, u32, u16, bool), f32>,
+    /// Nodes with lengths in `ch` styled since the last commit, perhaps
+    /// before the views around them (and their fonts) were in place
+    /// ([`Core::sync_ch`]).
+    ch_styled: Vec<(Key, NodeId)>,
     /// The user's preferred text size (1.0 is the default).
     font_scale: f32,
     /// The font text is drawn with unless it sets its own: the tokens'
@@ -799,6 +809,8 @@ impl<M: TextEngine> Core<M> {
             status_bars_moved: false,
             pointer_none_classes: 0,
             fixed_changed: Vec::new(),
+            zero_advances: Default::default(),
+            ch_styled: Vec::new(),
             font_scale: 1.0,
             default_font: None,
             queue: Vec::new(),
@@ -1301,6 +1313,7 @@ impl<M: TextEngine> Core<M> {
     fn commit_round(&mut self) {
         // The views' patches and the views to make first.
         self.render_components();
+        self.sync_ch();
         self.sync_fixed();
         self.sync_overlays();
         self.sync_back();
@@ -3836,7 +3849,17 @@ impl<M: TextEngine> Core<M> {
                     self.mark(k, dirty::INPUT);
                 }
                 Kind::RawText => {}
-                _ => stack.extend_from_slice(&self.nodes[k as usize].children),
+                _ => {
+                    // Lengths in `ch` follow the font (`max-w-prose`).
+                    if self.nodes[k as usize]
+                        .classes
+                        .as_ref()
+                        .is_some_and(|c| c.deps() & crate::tailwind::deps::CH != 0)
+                    {
+                        self.restyle(k);
+                    }
+                    stack.extend_from_slice(&self.nodes[k as usize].children)
+                }
             }
         }
     }

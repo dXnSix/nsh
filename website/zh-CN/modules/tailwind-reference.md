@@ -191,7 +191,7 @@ view()
 | `max-w-none`、`max-h-none` | 不限制 |
 | `w-<container>`、`min-w-<container>`、`max-w-<container>` | 容器宽度（见下） |
 
-容器宽度（点）：`3xs` 256、`2xs` 288、`xs` 320、`sm` 384、`md` 448、`lg` 512、`xl` 576、`2xl` 672、`3xl` 768、`4xl` 896、`5xl` 1024、`6xl` 1152、`7xl` 1280、`prose` 520。
+容器宽度（点）：`3xs` 256、`2xs` 288、`xs` 320、`sm` 384、`md` 448、`lg` 512、`xl` 576、`2xl` 672、`3xl` 768、`4xl` 896、`5xl` 1024、`6xl` 1152、`7xl` 1280；与 Tailwind CSS 一样，`prose` 是元素字体中 `0` 宽度的 65 倍（CSS 的 `65ch`）。
 
 ## 排版
 

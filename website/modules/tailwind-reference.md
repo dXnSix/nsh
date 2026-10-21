@@ -191,7 +191,7 @@ Scrolling is an element, not a class: `overflow-auto` and `overflow-scroll` are 
 | `max-w-none`, `max-h-none` | no limit |
 | `w-<container>`, `min-w-<container>`, `max-w-<container>` | a container width (below) |
 
-Container widths (points): `3xs` 256, `2xs` 288, `xs` 320, `sm` 384, `md` 448, `lg` 512, `xl` 576, `2xl` 672, `3xl` 768, `4xl` 896, `5xl` 1024, `6xl` 1152, `7xl` 1280, `prose` 520.
+Container widths (points): `3xs` 256, `2xs` 288, `xs` 320, `sm` 384, `md` 448, `lg` 512, `xl` 576, `2xl` 672, `3xl` 768, `4xl` 896, `5xl` 1024, `6xl` 1152, `7xl` 1280; `prose` is 65 times the width of the element's font's `0` (CSS's `65ch`), as in Tailwind CSS.
 
 ## Typography
 

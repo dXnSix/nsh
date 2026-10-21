@@ -61,6 +61,11 @@
   element child but the last, as Tailwind's `:where(& > :not(:last-child))`: the parent's `ClassProps::space`, which
   the core applies to a child's style before its classes and inline style (`classes.rs` `space_of`), so the child's
   own margins win; an insert or removal restyles only the children whose last-ness changed (`spacing_changed`).
+- **`ch`**: `w-/min-w-/max-w-prose` are Tailwind's `65ch`, the advance of the node's font's `0` (`Decl::Ch`; the core
+  measures it with the text engine, cached per font, `Core::zero_advance`): the font it inherits, or its own once its
+  classes set one. Such classes depend on `deps::CH`; a font change around them restyles them (`mark_inheriting_text`),
+  and the ones styled in a batch are checked again as the commit starts, with the tree in place (`sync_ch`). Without a
+  tree (`ClassList::apply`), `1ch` is 8 points. An app's theme `container.prose` (points) replaces it.
 - **`perspective-*`** (and the typed `.perspective()`) is CSS's `perspective`: depth for the children, seen from the
   view's center (`Style::perspective`). The core composes `translate(-d) perspective() translate(d)` before the
   own transform of each child that turns out of its plane (`rotateX` / `rotateY`; a flat one looks the same), `d` its

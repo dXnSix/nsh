@@ -897,16 +897,100 @@ impl<M: TextEngine> Core<M> {
 
     /// Resolves `key`'s style from its classes and inline style.
     pub(super) fn restyle(&mut self, key: Key) {
-        let mut style = Style::default();
+        let mut base = Style::default();
         // Under its own classes and style, as `:where()` is in CSS.
         let space = self.space_of(key);
         if let Some(space) = space {
-            space.apply(&mut style);
+            space.apply(&mut base);
         }
         let spaced = space.is_some();
         self.nodes[key as usize].spaced = spaced;
+        // CSS's `ch` (`max-w-prose`): the `0` of the font it inherits, or of
+        // its own once its classes set one.
+        let reads_ch = self.nodes[key as usize]
+            .classes
+            .as_ref()
+            .is_some_and(|c| c.deps() & deps::CH != 0);
+        let inherited_font = reads_ch.then(|| self.inherited_text_style(key));
+        let mut ch = match inherited_font {
+            Some(font) => self.zero_advance(font),
+            None => crate::tailwind::DEFAULT_CH,
+        };
+        let mut style;
+        let mut props;
+        loop {
+            style = base.clone();
+            props = ClassProps::default();
+            self.resolve_classes(key, ch, &mut style, &mut props);
+            let Some(inherited) = inherited_font else {
+                break;
+            };
+            let own = self.zero_advance(inherited.inherit(&style.text));
+            if own == ch {
+                break;
+            }
+            ch = own;
+        }
+        if reads_ch {
+            let node = &mut self.nodes[key as usize];
+            node.ch = ch;
+            let id = node.id;
+            self.ch_styled.push((key, id));
+        }
+        self.set_class_props(key, props);
+        let id = self.nodes[key as usize].id;
+        let _ = self.set_style(id, style);
+    }
+
+    /// The nodes with lengths in `ch` styled since the last commit are
+    /// styled again where the font they now inherit (the tree complete)
+    /// gives another `ch` than they were styled with.
+    pub(super) fn sync_ch(&mut self) {
+        if self.ch_styled.is_empty() {
+            return;
+        }
+        let styled = std::mem::take(&mut self.ch_styled);
+        for (key, id) in styled {
+            if self.nodes.get(key as usize).is_none_or(|n| n.id != id) {
+                continue;
+            }
+            let font = self.inherited_text_style(key);
+            let font = font.inherit(&self.nodes[key as usize].text_style);
+            if self.zero_advance(font) != self.nodes[key as usize].ch {
+                self.restyle(key);
+            }
+        }
+        // Styled just now, with the fonts in place.
+        self.ch_styled.clear();
+    }
+
+    /// The advance of `font`'s `0`, CSS's `ch` (cached per font).
+    pub(super) fn zero_advance(&mut self, font: crate::text::ResolvedTextStyle) -> f32 {
+        let at = (
+            font.font_family,
+            font.font_size.0.to_bits(),
+            font.font_weight,
+            font.italic,
+        );
+        if let Some(&w) = self.zero_advances.get(&at) {
+            return w;
+        }
+        let mut text = crate::text::AttributedText::default();
+        text.push("0", font);
+        let prepared = self.text_engine.prepare(&text);
+        let w = self.text_engine.measure(&prepared, None).width.0;
+        // Fonts are few; a bound keeps scaled sizes from growing it.
+        if self.zero_advances.len() >= 64 {
+            self.zero_advances.clear();
+        }
+        self.zero_advances.insert(at, w);
+        w
+    }
+
+    /// `key`'s classes and inline style over `style`, `ch` the advance of
+    /// its font's `0`.
+    fn resolve_classes(&mut self, key: Key, ch: f32, style: &mut Style, props: &mut ClassProps) {
         let node = &self.nodes[key as usize];
-        let mut props = ClassProps::default();
         if let Some(classes) = node.classes.clone() {
             let group = |name: &str| self.group_states(key, name);
             let pos = if classes.deps() & deps::POSITION != 0 {
@@ -932,24 +1016,16 @@ impl<M: TextEngine> Core<M> {
                 inherited: node.inherited_color,
                 inline: inline_color(inline),
             };
-            classes.apply_with(
-                &cx,
-                self.tailwind.theme(),
-                current,
-                &mut style,
-                &mut props,
-                |s| inline.apply(s),
-            );
+            classes.apply_with(&cx, self.tailwind.theme(), current, ch, style, props, |s| {
+                inline.apply(s)
+            });
             if positional {
                 let parent = self.nodes[key as usize].parent;
                 self.nodes[parent as usize].positional_children = true;
             }
         } else {
-            node.inline_style.apply(&mut style);
+            node.inline_style.apply(style);
         }
-        self.set_class_props(key, props);
-        let id = self.nodes[key as usize].id;
-        let _ = self.set_style(id, style);
     }
 
     /// `key`'s children inherit text color `color` (`None`: React Native's

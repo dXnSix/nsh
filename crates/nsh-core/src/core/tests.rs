@@ -301,7 +301,7 @@ fn style_op(id: NodeId, props: &[(&str, StyleValue<'_>)]) -> Op {
     Op::SetStyle { id, style, patch }
 }
 
-fn apply(core: &mut Core<FakeEngine>, ops: Vec<Op>) {
+fn apply<M: TextEngine>(core: &mut Core<M>, ops: Vec<Op>) {
     for op in ops {
         core.apply(op).unwrap();
     }
@@ -12630,6 +12630,80 @@ fn perspective_gives_children_depth_from_the_center() {
     c.apply(class_op(2, "w-[200px] h-[200px]")).unwrap();
     let batch = c.commit().unwrap();
     assert_eq!(steps(&batch, 3).unwrap(), [(T::RotateY, 45.0)]);
+}
+
+/// Each character half its font size wide, one line: lengths in `ch`.
+struct SizedEngine;
+
+impl TextEngine for SizedEngine {
+    type Prepared = f32;
+
+    fn prepare(&self, text: &AttributedText) -> f32 {
+        text.spans
+            .iter()
+            .map(|s| (s.end - s.start) as f32 * s.style.font_size.0 / 2.0)
+            .sum()
+    }
+
+    fn measure(&self, w: &f32, _: Option<Points>) -> Size<Points> {
+        size_pt(*w, 16.0)
+    }
+
+    fn layout(&self, _: &f32, _: Size<Points>) -> TextLayout {
+        TextLayout(Arc::new(()))
+    }
+}
+
+#[test]
+fn prose_is_65ch_of_the_font() {
+    let mut c = Core::new(SizedEngine, size_pt(2000.0, 480.0));
+    // Built from the inside out, as JSX does: the font is in place when
+    // the commit comes.
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 3,
+                tag: Tag::View,
+            },
+            class_op(3, "max-w-prose w-full h-[10px]"),
+            Op::Create {
+                id: 4,
+                tag: Tag::View,
+            },
+            class_op(4, "max-w-prose w-full h-[10px] text-[10px]"),
+            Op::Create {
+                id: 2,
+                tag: Tag::View,
+            },
+            class_op(2, "text-[20px]"),
+            Op::Insert {
+                parent: 2,
+                child: 3,
+                before: None,
+            },
+            Op::Insert {
+                parent: 2,
+                child: 4,
+                before: None,
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    let width = |batch: &MountBatch, id| frame_of(batch, id).map(|f| f.size.width.0);
+    // 65 times the `0` of the font: the inherited 20pt one's (10pt), its
+    // own 10pt one's (5pt).
+    assert_eq!(width(&batch, 3), Some(650.0));
+    assert_eq!(width(&batch, 4), Some(325.0));
+    // The font around it changes: so does `ch`.
+    c.apply(class_op(2, "text-[16px]")).unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(width(&batch, 3), Some(520.0));
 }
 
 #[test]

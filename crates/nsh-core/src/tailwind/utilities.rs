@@ -150,6 +150,9 @@ pub(crate) enum Decl {
     /// [`Decl::Default`] is (a border width's color): the node's text
     /// color, its own or the one it inherits.
     CurrentColor(StyleKey),
+    /// A length in CSS's `ch` (the advance of the font's `0`):
+    /// `max-w-prose`, `65ch`.
+    Ch(StyleKey, f32),
 }
 
 /// `key` with the value it gets in a layout of direction `rtl`. Classes
@@ -254,6 +257,10 @@ impl Decl {
                 parts.screen.push((*key, *fw, *fh));
                 parts.touched |= touched::SCREEN;
             }
+            Decl::Ch(key, n) => {
+                parts.lengths_ch.push((*key, *n));
+                parts.touched |= touched::CH;
+            }
             Decl::Adaptive(key, values) => {
                 let (key, value) = directed(*key, &values[usize::from(dark)], rtl);
                 let _ = style.set_key(key, value.as_value());
@@ -344,6 +351,7 @@ impl Decl {
             Decl::CurrentColor(_) | Decl::Part(Part::Ring(_) | Part::InsetRing(_)) => {
                 deps::CURRENT_COLOR
             }
+            Decl::Ch(..) => deps::CH,
             _ => 0,
         }
     }
@@ -361,6 +369,7 @@ pub(crate) mod touched {
     pub(crate) const TRANSITION: u16 = 128;
     pub(crate) const ANIMATE: u16 = 256;
     pub(crate) const TEXT_SHADOW: u16 = 512;
+    pub(crate) const CH: u16 = 1024;
     pub(crate) const ALL: u16 = u16::MAX;
 }
 
@@ -415,6 +424,9 @@ pub(crate) struct Parts {
     pub(crate) screen: Vec<(StyleKey, f32, f32)>,
     /// CSS's `currentColor`: the ring's color when no class sets one.
     pub(crate) current: Color,
+    /// Lengths in `ch`, and what one is.
+    pub(crate) lengths_ch: Vec<(StyleKey, f32)>,
+    pub(crate) ch: f32,
 }
 
 impl Parts {
@@ -548,6 +560,9 @@ impl Parts {
         only: u16,
     ) {
         let has = |group: u16| only & group != 0;
+        for &(key, n) in self.lengths_ch.iter().filter(|_| has(touched::CH)) {
+            let _ = style.set_key(key, crate::style::StyleValue::Number(n * self.ch));
+        }
         for &(key, fw, fh) in self.screen.iter().filter(|_| has(touched::SCREEN)) {
             let _ = style.set_key(
                 key,
@@ -2320,10 +2335,14 @@ fn size(theme: &Theme, v: &str, key: StyleKey, width: bool) -> Option<Vec<Decl>>
     if v == "none" && matches!(key, K::MaxWidth | K::MaxHeight) {
         return one(Decl::Set(key, PatchValue::Null));
     }
-    if matches!(key, K::MaxWidth | K::Width | K::MinWidth)
-        && let Some(w) = theme.containers.get(v)
-    {
-        return one(setn(key, *w));
+    if matches!(key, K::MaxWidth | K::Width | K::MinWidth) {
+        if let Some(w) = theme.containers.get(v) {
+            return one(setn(key, *w));
+        }
+        // Tailwind's `--container-prose: 65ch`, of the node's font.
+        if v == "prose" {
+            return one(Decl::Ch(key, 65.0));
+        }
     }
     let auto = matches!(key, K::Width | K::Height);
     one(set(key, length_value(theme, v, false, auto)?))

@@ -195,6 +195,7 @@ fn widths_without_a_color_are_current_color() {
             &cx,
             &theme,
             current,
+            DEFAULT_CH,
             &mut style,
             &mut ClassProps::default(),
             |_| {},

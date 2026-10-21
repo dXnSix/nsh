@@ -109,7 +109,13 @@ pub mod deps {
     /// The text color it inherits (CSS's `currentColor`: a border, an
     /// outline or a ring without a color of its own).
     pub const CURRENT_COLOR: u16 = 512;
+    /// The advance of its font's `0` (CSS's `ch`: `max-w-prose`).
+    pub const CH: u16 = 1024;
 }
+
+/// CSS's `ch` where no font is known ([`ClassList::apply`]): half a `rem`,
+/// so `max-w-prose` is 520 points there.
+pub(crate) const DEFAULT_CH: f32 = 8.0;
 
 /// What CSS's `currentColor` is for a node: its own text color (its
 /// inline style's, else its classes'), else the one it inherits, else
@@ -476,21 +482,32 @@ impl ClassList {
         props: &mut ClassProps,
         inline: impl FnOnce(&mut Style),
     ) {
-        self.apply_with(cx, theme, CurrentColor::default(), style, props, inline);
+        self.apply_with(
+            cx,
+            theme,
+            CurrentColor::default(),
+            DEFAULT_CH,
+            style,
+            props,
+            inline,
+        );
     }
 
     /// [`ClassList::apply`] in a tree, where `current` says what the
-    /// node's `currentColor` comes from.
+    /// node's `currentColor` comes from and `ch` is its font's `0` advance.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_with(
         &self,
         cx: &Context<'_>,
         theme: &Theme,
         current: CurrentColor,
+        ch: f32,
         style: &mut Style,
         props: &mut ClassProps,
         inline: impl FnOnce(&mut Style),
     ) {
         let mut parts = Parts::default();
+        parts.ch = ch;
         let mut important = false;
         let current = if self.deps & deps::CURRENT_COLOR != 0 {
             let [plain, important] = self.text_colors(cx);

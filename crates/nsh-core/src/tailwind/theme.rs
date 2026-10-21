@@ -255,8 +255,6 @@ impl Default for Theme {
                 ("5xl", 64.0 * rem),
                 ("6xl", 72.0 * rem),
                 ("7xl", 80.0 * rem),
-                // 65 characters of a 16pt font, roughly.
-                ("prose", 65.0 * 0.5 * rem),
             ]),
             text: map(&[
                 ("xs", (0.75 * rem, Some(1.0 / 0.75))),
