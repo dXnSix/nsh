@@ -66,6 +66,8 @@ pub(crate) struct Decor {
     /// `tintColor`: the image layer shows this color through a mask of the
     /// image.
     tint: Option<(Color, Retained<CALayer>)>,
+    /// How the image fits the view (`resizeMode`).
+    mode: ResizeMode,
     /// Borders whose sides differ: one even-odd ring per color.
     ring: Vec<Retained<CAShapeLayer>>,
     /// The shapes depend on the view's size: update them on resize.
@@ -104,6 +106,9 @@ impl Decor {
     pub(crate) fn set_image(&mut self, image: Option<&UIImage>, fade: f64) {
         // SAFETY: plain getters on a valid image.
         self.contents = image.and_then(|i| unsafe { i.CGImage().map(|cg| (cg, i.scale())) });
+        if self.mode == ResizeMode::ScaleDown {
+            self.fit_contents();
+        }
         let Some(layer) = self.image.clone() else {
             return;
         };
@@ -172,16 +177,40 @@ impl Decor {
         };
     }
 
+    /// How the image fits the view.
+    pub(crate) fn resize_mode(&self) -> ResizeMode {
+        self.mode
+    }
+
     /// How an image view fits its image.
-    pub(crate) fn set_resize_mode(&self, mode: ResizeMode) {
+    pub(crate) fn set_resize_mode(&mut self, mode: ResizeMode) {
+        self.mode = mode;
+        self.fit_contents();
+    }
+
+    /// The image layers' gravity for the resize mode and the view's size:
+    /// `scale-down` shows the image at its natural size, unless it is
+    /// larger than the view, which it then fits.
+    fn fit_contents(&self) {
         let Some(layer) = &self.image else { return };
+        let fits = || {
+            let bounds = layer.bounds().size;
+            self.contents.as_ref().is_some_and(|(cg, scale)| {
+                let scale = scale.max(0.01);
+                let w = CGImage::width(Some(cg)) as CGFloat / scale;
+                let h = CGImage::height(Some(cg)) as CGFloat / scale;
+                w <= bounds.width && h <= bounds.height
+            })
+        };
         // SAFETY: immutable Core Animation constants.
         let gravity = unsafe {
-            match mode {
+            match self.mode {
                 ResizeMode::Cover => kCAGravityResizeAspectFill,
                 ResizeMode::Contain => kCAGravityResizeAspect,
                 ResizeMode::Stretch => kCAGravityResize,
                 ResizeMode::Center => kCAGravityCenter,
+                ResizeMode::ScaleDown if fits() => kCAGravityCenter,
+                ResizeMode::ScaleDown => kCAGravityResizeAspect,
             }
         };
         quiet(|| {
@@ -514,6 +543,9 @@ impl Decor {
         self.set_tint(style.tint_color.filter(|_| kind == Kind::Image), local);
         if let Some(image) = &self.image {
             image.setFrame(local);
+            if self.mode == ResizeMode::ScaleDown {
+                self.fit_contents();
+            }
             set_corners(image, r, corners, raw.continuous);
             if shared.is_some() {
                 // SAFETY: clearing the mask.

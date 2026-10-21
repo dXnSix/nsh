@@ -245,6 +245,7 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                     ResizeMode::Contain => 1,
                     ResizeMode::Stretch => 2,
                     ResizeMode::Center => 3,
+                    ResizeMode::ScaleDown => 4,
                 });
                 e.opt_string(options.placeholder.as_ref().map(|p| &*p.uri));
                 e.float(options.blur_radius.0);

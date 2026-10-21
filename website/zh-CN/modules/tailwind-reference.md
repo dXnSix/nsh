@@ -415,7 +415,7 @@ view()
 
 | Class | 设置 |
 |---|---|
-| `object-cover`、`object-contain`、`object-fill`、`object-none`、`object-scale-down` | `resizeMode`（`fill` 拉伸，`none` 和 `scale-down` 居中） |
+| `object-cover`、`object-contain`、`object-fill`、`object-none`、`object-scale-down` | `resizeMode`（`fill` 拉伸；`none` 即 `"center"`：原始尺寸居中；`scale-down` 即 `"scale-down"`：同样居中，较大时缩小以适应） |
 | `tint-<color>` | `tintColor`（为模板图片着色） |
 
 ## 可写但不起作用

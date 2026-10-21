@@ -1430,7 +1430,8 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         "object-contain" => Decl::Prop(PropDecl::Resize(ResizeMode::Contain)),
         "object-cover" => Decl::Prop(PropDecl::Resize(ResizeMode::Cover)),
         "object-fill" => Decl::Prop(PropDecl::Resize(ResizeMode::Stretch)),
-        "object-none" | "object-scale-down" => Decl::Prop(PropDecl::Resize(ResizeMode::Center)),
+        "object-none" => Decl::Prop(PropDecl::Resize(ResizeMode::Center)),
+        "object-scale-down" => Decl::Prop(PropDecl::Resize(ResizeMode::ScaleDown)),
         _ => return None,
     };
     Some(vec![d])

@@ -1221,6 +1221,17 @@ fn placeholder_and_props() {
     );
     assert_eq!(props.resize_mode, Some(crate::ops::ResizeMode::Contain));
     assert_eq!(props.selectable, Some(false));
+    // CSS's `object-fit: none` (natural size) and `scale-down`.
+    let resize = |c| {
+        styled_with(c, ClassEnvironment::default(), (390.0, 844.0), 0)
+            .1
+            .resize_mode
+    };
+    assert_eq!(resize("object-none"), Some(crate::ops::ResizeMode::Center));
+    assert_eq!(
+        resize("object-scale-down"),
+        Some(crate::ops::ResizeMode::ScaleDown)
+    );
     // `::selection`'s background is the highlight; the color of the
     // selected glyphs and the other properties of the pseudo-elements
     // have no native counterpart.

@@ -146,6 +146,7 @@ img.nsh-fill { pointer-events: none; }
 .nsh-fit-contain { object-fit: contain; }
 .nsh-fit-fill { object-fit: fill; }
 .nsh-fit-scale-down { object-fit: scale-down; }
+.nsh-fit-none { object-fit: none; }
 .nsh-spacer { position: absolute; left: 0; top: 0; width: 1px; height: 1px; pointer-events: none; visibility: hidden; }
 /* Over the style's \`overflow: clip\`. */
 .nsh-scroll.nsh-ox.nsh-ox { overflow-x: auto; overflow-y: hidden; }
@@ -1858,7 +1859,8 @@ class Player {
     if (el._tint && el._src) {
       el._img.classList.add("nsh-hidden");
       const fit = el._fit;
-      const size = fit === "fill" ? "100% 100%" : fit === "scale-down" ? "contain" : fit || "cover";
+      const size =
+        fit === "fill" ? "100% 100%" : fit === "scale-down" ? "contain" : fit === "none" ? "auto" : fit || "cover";
       const mask = `url(${JSON.stringify(el._src)}) center / ${size} no-repeat`;
       // Over the view's own background.
       swapClass(el, "_tintClass", cssClass(`background-color:${el._tint};-webkit-mask:${mask};mask:${mask};`, 3));

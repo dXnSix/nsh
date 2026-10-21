@@ -415,7 +415,7 @@ Transitions run on the UI thread when a value changes, including when a variant 
 
 | Class | Sets |
 |---|---|
-| `object-cover`, `object-contain`, `object-fill`, `object-none`, `object-scale-down` | `resizeMode` (`fill` stretches, `none` and `scale-down` center) |
+| `object-cover`, `object-contain`, `object-fill`, `object-none`, `object-scale-down` | `resizeMode` (`fill` stretches, `none` is `"center"`: natural size, centered, `scale-down` is `"scale-down"`: the same, shrunk to fit where larger) |
 | `tint-<color>` | `tintColor` (recolors template images) |
 
 ## Accepted without effect
