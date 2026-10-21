@@ -290,6 +290,8 @@ Tailwind's text shadows have several layers; natively one shadow is drawn, the w
 | `from-<p>%`, `via-<p>%`, `to-<p>%` | stop positions: `via-40%`, `from-[15%]` |
 | `bg-none` | removes the gradient |
 
+Gradient utilities mix their colors in Oklab, as Tailwind CSS writes them (`in oklab`); at an arbitrary position (`bg-linear-[25deg]`, `bg-conic-[0.25turn]`) they follow CSS's default, Oklab with the palette's colors and sRGB when every stop is a hex, `rgb()`, `hsl()` or named color.
+
 ```rust tabs
 view()
     .h_32()

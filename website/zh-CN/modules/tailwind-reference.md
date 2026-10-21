@@ -290,6 +290,8 @@ Tailwind 的文字阴影有多层；原生只绘制一层，即最宽的那层�
 | `from-<p>%`、`via-<p>%`、`to-<p>%` | 色标位置：`via-40%`、`from-[15%]` |
 | `bg-none` | 去掉渐变 |
 
+与 Tailwind CSS 的写法（`in oklab`）一致，渐变工具类在 Oklab 中混合颜色；位置为任意值时（`bg-linear-[25deg]`、`bg-conic-[0.25turn]`）遵循 CSS 的默认规则：使用调色板颜色时在 Oklab 中混合，所有色标都是十六进制、`rgb()`、`hsl()` 或具名颜色时在 sRGB 中混合。
+
 ```rust tabs
 view()
     .h_32()

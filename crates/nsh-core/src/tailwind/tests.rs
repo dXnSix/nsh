@@ -472,10 +472,32 @@ fn gradients() {
     let s = styled("bg-linear-to-r from-blue-500 via-purple-500 via-40% to-pink-500");
     let g = &s.view.effects.as_ref().unwrap().background_images[0];
     assert_eq!(g.kind, GradientKind::Linear { angle: deg(90.0) });
-    assert_eq!(g.stops.len(), 3);
+    // Tailwind's stops, and between them stops sampled in Oklab (Tailwind
+    // writes `in oklab`).
+    let blue = Color(0x2b7f_ffff);
+    let purple = Color(0xad46_ffff);
+    let pink = Color(0xf633_9aff);
+    let at = |stop: &crate::effects::ColorStop| match stop.position {
+        Some(DefiniteLength::Fraction(f)) => f.0,
+        _ => panic!("placed by fractions"),
+    };
+    assert!(g.stops.len() > 3);
+    assert_eq!((g.stops[0].color, at(&g.stops[0])), (blue, 0.0));
+    let via = g.stops.iter().position(|s| s.color == purple).unwrap();
+    assert!((at(&g.stops[via]) - 0.4).abs() < 1e-6);
+    let last = g.stops.last().unwrap();
+    assert_eq!((last.color, at(last)), (pink, 1.0));
+    assert!(g.stops.windows(2).all(|w| at(&w[0]) < at(&w[1])));
+    // Halfway from blue to purple, the Oklab mix (CSS's `color-mix(in
+    // oklab, ...)`), not the sRGB one.
+    let mid = g
+        .stops
+        .iter()
+        .find(|s| (at(s) - 0.2).abs() < 1e-6)
+        .expect("a stop halfway");
     assert_eq!(
-        g.stops[1].position,
-        Some(DefiniteLength::from(percentage(0.4)))
+        mid.color,
+        crate::css::color("color-mix(in oklab, #2b7fff, #ad46ff)").unwrap()
     );
     let s = styled("bg-linear-to-br from-red-500");
     let g = &s.view.effects.as_ref().unwrap().background_images[0];
@@ -490,6 +512,20 @@ fn gradients() {
     let s = styled("bg-[linear-gradient(45deg,red,blue)]");
     let g = &s.view.effects.as_ref().unwrap().background_images[0];
     assert_eq!(g.kind, GradientKind::Linear { angle: deg(45.0) });
+    assert_eq!(g.stops.len(), 2);
+    // At an arbitrary position Tailwind writes no `in oklab`: CSS's default,
+    // Oklab with the palette's (OKLCH) colors, sRGB with legacy ones.
+    let stops = |classes: &str| {
+        styled(classes).view.effects.unwrap().background_images[0]
+            .stops
+            .len()
+    };
+    assert!(stops("bg-linear-[25deg] from-red-500 to-blue-500") > 2);
+    assert_eq!(stops("bg-linear-[25deg] from-[#f00] to-[rgb(0_0_255)]"), 2);
+    assert!(stops("bg-linear-[25deg] from-[#f00] to-[oklch(60%_0.2_250)]") > 2);
+    assert!(stops("bg-linear-45 from-[#f00] to-[#00f]") > 2);
+    assert!(stops("bg-conic from-[#f00] to-[#00f]") > 2);
+    assert_eq!(stops("bg-conic-[90deg] from-[#f00] to-[#00f]"), 2);
     let s = styled("bg-[repeating-linear-gradient(90deg,red_0px,blue_10px)]");
     let g = &s.view.effects.as_ref().unwrap().background_images[0];
     assert!(g.repeating);

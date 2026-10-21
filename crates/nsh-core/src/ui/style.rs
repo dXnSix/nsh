@@ -280,9 +280,10 @@ impl ColorPart {
             ColorPart::Ring => Part::RingColor(c),
             ColorPart::RingOffset => Part::RingOffsetColor(c),
             ColorPart::InsetRing => Part::InsetRingColor(c),
-            ColorPart::From => Part::From(c),
-            ColorPart::Via => Part::Via(c),
-            ColorPart::To => Part::To(c),
+            // Theme and palette colors, which Tailwind writes in OKLCH.
+            ColorPart::From => Part::From(c, false),
+            ColorPart::Via => Part::Via(c, false),
+            ColorPart::To => Part::To(c, false),
         }
     }
 }

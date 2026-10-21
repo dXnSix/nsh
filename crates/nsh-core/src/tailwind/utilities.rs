@@ -64,11 +64,19 @@ pub(crate) enum Part {
     RingOffsetColor(Color),
     InsetRing(f32),
     InsetRingColor(Color),
+    /// A gradient of a utility that mixes `in oklab` (`bg-linear-to-r`,
+    /// `bg-radial`).
     Gradient(GradientKind),
+    /// A gradient at an arbitrary position (`bg-linear-[25deg]`), where
+    /// Tailwind writes no interpolation: CSS's default, Oklab unless every
+    /// stop is a legacy sRGB color.
+    ArbitraryGradient(GradientKind),
     GradientNone,
-    From(Color),
-    Via(Color),
-    To(Color),
+    /// A stop's color, and whether it is a legacy sRGB color (hex,
+    /// `rgb()`, `hsl()`, a name; the palette's are OKLCH).
+    From(Color, bool),
+    Via(Color, bool),
+    To(Color, bool),
     FromPos(f32),
     ViaPos(f32),
     ToPos(f32),
@@ -261,10 +269,11 @@ impl Decl {
             matches!(
                 p,
                 Part::Gradient(_)
+                    | Part::ArbitraryGradient(_)
                     | Part::GradientNone
-                    | Part::From(_)
-                    | Part::Via(_)
-                    | Part::To(_)
+                    | Part::From(..)
+                    | Part::Via(..)
+                    | Part::To(..)
                     | Part::FromPos(_)
                     | Part::ViaPos(_)
                     | Part::ToPos(_)
@@ -356,8 +365,11 @@ pub(crate) struct Parts {
     inset_ring: Option<f32>,
     inset_ring_color: Option<Color>,
     shadows_set: bool,
-    gradient: Option<Option<GradientKind>>,
+    /// The gradient, and whether it mixes `in oklab` whatever its colors.
+    gradient: Option<Option<(GradientKind, bool)>>,
     stops: [Option<Color>; 3],
+    /// The stops' colors are legacy sRGB ones.
+    legacy_stops: [bool; 3],
     stop_positions: [Option<f32>; 3],
     filters: [Option<Filter>; 9],
     filters_set: bool,
@@ -386,8 +398,8 @@ impl Parts {
             Shadow(_) | ShadowColor(..) | InsetShadow(_) | InsetShadowColor(..) | Ring(_)
             | RingInset | RingColor(_) | RingOffset(_) | RingOffsetColor(_) | InsetRing(_)
             | InsetRingColor(_) => touched::SHADOWS,
-            Gradient(_) | GradientNone | From(_) | Via(_) | To(_) | FromPos(_) | ViaPos(_)
-            | ToPos(_) => touched::GRADIENT,
+            Gradient(_) | ArbitraryGradient(_) | GradientNone | From(..) | Via(..) | To(..)
+            | FromPos(_) | ViaPos(_) | ToPos(_) => touched::GRADIENT,
             Filter {
                 backdrop: false, ..
             }
@@ -435,11 +447,12 @@ impl Parts {
             RingOffsetColor(c) => (self.ring_offset_color, self.shadows_set) = (Some(c), true),
             InsetRing(w) => (self.inset_ring, self.shadows_set) = (Some(w), true),
             InsetRingColor(c) => (self.inset_ring_color, self.shadows_set) = (Some(c), true),
-            Gradient(k) => self.gradient = Some(Some(k)),
+            Gradient(k) => self.gradient = Some(Some((k, true))),
+            ArbitraryGradient(k) => self.gradient = Some(Some((k, false))),
             GradientNone => self.gradient = Some(None),
-            From(c) => self.stops[0] = Some(c),
-            Via(c) => self.stops[1] = Some(c),
-            To(c) => self.stops[2] = Some(c),
+            From(c, legacy) => (self.stops[0], self.legacy_stops[0]) = (Some(c), legacy),
+            Via(c, legacy) => (self.stops[1], self.legacy_stops[1]) = (Some(c), legacy),
+            To(c, legacy) => (self.stops[2], self.legacy_stops[2]) = (Some(c), legacy),
             FromPos(p) => self.stop_positions[0] = Some(p),
             ViaPos(p) => self.stop_positions[1] = Some(p),
             ToPos(p) => self.stop_positions[2] = Some(p),
@@ -608,10 +621,10 @@ impl Parts {
             }
             style.set_box_shadows(list);
         }
-        if let Some(kind) = self.gradient.filter(|_| has(touched::GRADIENT)) {
-            match kind {
+        if let Some(gradient) = self.gradient.filter(|_| has(touched::GRADIENT)) {
+            match gradient {
                 None => style.set_background_images(Vec::new()),
-                Some(kind) => {
+                Some((kind, oklab)) => {
                     let [from, via, to] = self.stops;
                     let [fp, vp, tp] = self.stop_positions;
                     let mut stops = vec![ColorStop {
@@ -628,9 +641,19 @@ impl Parts {
                         color: to.unwrap_or(Color::TRANSPARENT),
                         position: Some(percentage(tp.unwrap_or(1.0)).into()),
                     });
+                    // Tailwind's gradients mix `in oklab`; at an arbitrary
+                    // position, as CSS does without a method: in Oklab
+                    // unless every color is a legacy one (the ends Tailwind
+                    // leaves out are `#0000`).
+                    let modern = (0..3).any(|i| self.stops[i].is_some() && !self.legacy_stops[i]);
+                    let method = if oklab || modern {
+                        css::Interpolation::OKLAB
+                    } else {
+                        css::Interpolation::SRGB
+                    };
                     style.set_background_images(vec![Gradient {
                         kind,
-                        stops,
+                        stops: css::interpolate_stops(stops, method),
                         repeating: false,
                     }]);
                 }
@@ -819,6 +842,17 @@ fn color_value(theme: &Theme, v: &str) -> Option<(Color, bool)> {
             Some((color.with_alpha(alpha), true))
         }
     }
+}
+
+/// Whether the color value `v` is a legacy sRGB color in CSS (an arbitrary
+/// hex, `rgb()`, `hsl()`, `hwb()` or named color), which a gradient without
+/// an interpolation method mixes in sRGB; the palette's colors are OKLCH.
+fn legacy_color(v: &str) -> bool {
+    let base = match v.find(']') {
+        Some(end) if v.starts_with('[') => &v[1..end],
+        _ => return false,
+    };
+    css::is_legacy_color(arbitrary_hinted(base, "color").unwrap_or(base))
 }
 
 fn color(theme: &Theme, v: &str) -> Option<Color> {
@@ -1718,17 +1752,27 @@ static PREFIXES: &[(&str, Handler)] = &[
     // Backgrounds.
     ("bg-linear", |_, v, n| {
         let a = degrees(v)?;
-        part(Part::Gradient(GradientKind::Linear {
+        let kind = GradientKind::Linear {
             angle: deg(if n { -a } else { a }),
-        }))
+        };
+        part(if v.starts_with('[') {
+            Part::ArbitraryGradient(kind)
+        } else {
+            Part::Gradient(kind)
+        })
     }),
     ("bg-conic", |_, v, n| {
         let a = degrees(v)?;
-        part(Part::Gradient(GradientKind::Conic {
+        let kind = GradientKind::Conic {
             from: deg(if n { -a } else { a }),
             x: percentage(0.5),
             y: percentage(0.5),
-        }))
+        };
+        part(if v.starts_with('[') {
+            Part::ArbitraryGradient(kind)
+        } else {
+            Part::Gradient(kind)
+        })
     }),
     ("bg", |t, v, _| {
         if let Some(a) = arbitrary(v)
@@ -1749,15 +1793,15 @@ static PREFIXES: &[(&str, Handler)] = &[
     }),
     ("from", |t, v, _| match stop_position(v) {
         Some(p) => part(Part::FromPos(p)),
-        None => part(Part::From(color(t, v)?)),
+        None => part(Part::From(color(t, v)?, legacy_color(v))),
     }),
     ("via", |t, v, _| match stop_position(v) {
         Some(p) => part(Part::ViaPos(p)),
-        None => part(Part::Via(color(t, v)?)),
+        None => part(Part::Via(color(t, v)?, legacy_color(v))),
     }),
     ("to", |t, v, _| match stop_position(v) {
         Some(p) => part(Part::ToPos(p)),
-        None => part(Part::To(color(t, v)?)),
+        None => part(Part::To(color(t, v)?, legacy_color(v))),
     }),
     // Borders.
     ("rounded-tl", |t, v, _| {

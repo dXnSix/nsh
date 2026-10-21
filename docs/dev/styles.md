@@ -76,7 +76,11 @@
   (a `DefiniteLength::Absolute` position: `Gradient::resolve_stops` places them against `Gradient::line_length` of the box when it is
   drawn, so every native backend passes the view's size; Android's `Decor.Gradient.resolve` does the same for the
   gradients `encode.rs` sends as written, with their stop count negated; the web hands them to the browser as `px`), or
-  at angles around conic ones (fractions of a turn), up to two per stop; transition hints are not parsed; a gradient
+  at angles around conic ones (fractions of a turn), up to two per stop; transition hints are not parsed; colors mix as in
+  CSS (`in <space>`: `color-mix()`'s spaces and hue methods; without one, sRGB when every color is a legacy one, else
+  Oklab; Tailwind's utilities `in oklab`), which the core gives the platforms, all drawing sRGB, as stops sampled in that
+  space between each two placed in one unit (`css::interpolate_stops`: bisected until a segment is within about one
+  8-bit step of the curve, at most 32 per pair); a gradient
   that does not parse is logged (inline styles, `bg-[…]` classes, Rust components' `Style`); but press feedback must show, so a background color an interaction state sets (`active:` / `hover:` / `focus:` /
   `focus-within:` / `group-*:` classes, Rust components' `.active(..)`, on a nested component's element too, `activeStyle` / `hoverStyle` / `focusStyle` / `disabledStyle`) or a native
   animation drives (`Animated` `backgroundColor`) replaces the gradients, unless that state sets a gradient of its own:
