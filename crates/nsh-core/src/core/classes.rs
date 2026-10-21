@@ -766,10 +766,73 @@ impl<M: TextEngine> Core<M> {
         0
     }
 
+    /// The margins `key`'s parent gives it (`space-*`): it is an element
+    /// child, and not the last.
+    fn space_of(&self, key: Key) -> Option<&crate::tailwind::Space> {
+        let node = &self.nodes[key as usize];
+        let parent = node.parent;
+        if parent == NO_KEY || node.inline {
+            return None;
+        }
+        let space = self.nodes[parent as usize]
+            .class_props
+            .as_ref()?
+            .space
+            .as_ref()?;
+        let last = self.nodes[parent as usize]
+            .children
+            .iter()
+            .rev()
+            .find(|&&c| self.is_element_child(c))?;
+        (*last != key && self.is_element_child(key)).then_some(space)
+    }
+
+    /// A child that counts among its siblings (`:last-child`, `first:`):
+    /// not a raw text, not a tooltip's overlay.
+    fn is_element_child(&self, key: Key) -> bool {
+        self.nodes[key as usize].kind != Kind::RawText && !self.is_tooltip_overlay(key)
+    }
+
+    /// `parent`'s children changed (`moved` joined it, or one left): the
+    /// ones whose `space-*` margin that changes are styled again, the one
+    /// that joined, and the last two, one of which was last before.
+    pub(super) fn spacing_changed(&mut self, parent: Key, moved: Key) {
+        let spacing = self.nodes[parent as usize]
+            .class_props
+            .as_ref()
+            .is_some_and(|p| p.space.is_some());
+        if !spacing && (moved == NO_KEY || !self.nodes[moved as usize].spaced) {
+            return;
+        }
+        let mut keys = [moved, NO_KEY, NO_KEY];
+        let mut elements = self.nodes[parent as usize]
+            .children
+            .iter()
+            .rev()
+            .filter(|&&c| self.is_element_child(c));
+        keys[1] = elements.next().copied().unwrap_or(NO_KEY);
+        keys[2] = elements.next().copied().unwrap_or(NO_KEY);
+        for (i, k) in keys.into_iter().enumerate() {
+            if k != NO_KEY
+                && !keys[..i].contains(&k)
+                && self.space_of(k).is_some() != self.nodes[k as usize].spaced
+            {
+                self.restyle(k);
+            }
+        }
+    }
+
     /// Resolves `key`'s style from its classes and inline style.
     pub(super) fn restyle(&mut self, key: Key) {
-        let node = &self.nodes[key as usize];
         let mut style = Style::default();
+        // Under its own classes and style, as `:where()` is in CSS.
+        let space = self.space_of(key);
+        if let Some(space) = space {
+            space.apply(&mut style);
+        }
+        let spaced = space.is_some();
+        self.nodes[key as usize].spaced = spaced;
+        let node = &self.nodes[key as usize];
         let mut props = ClassProps::default();
         if let Some(classes) = node.classes.clone() {
             let group = |name: &str| self.group_states(key, name);
@@ -821,6 +884,7 @@ impl<M: TextEngine> Core<M> {
             || old.no_wrap != props.no_wrap;
         let view_props = old.pointer_events != props.pointer_events;
         let image = old.resize_mode != props.resize_mode;
+        let space = old.space != props.space;
         let input = old.placeholder_color != props.placeholder_color
             || old.caret_color != props.caret_color
             || old.selection_color != props.selection_color;
@@ -841,6 +905,15 @@ impl<M: TextEngine> Core<M> {
         }
         if input && kind == Kind::Input {
             self.mark(key, dirty::INPUT);
+        }
+        if space {
+            // The margins of its children.
+            let children = self.nodes[key as usize].children.clone();
+            for child in children {
+                if self.is_element_child(child) && !self.nodes[child as usize].inline {
+                    self.restyle(child);
+                }
+            }
         }
     }
 }

@@ -137,6 +137,46 @@ fn physical_classes_name_the_other_side_right_to_left() {
 }
 
 #[test]
+fn space_gives_the_children_margins() {
+    // `space-x-4` is `:where(& > :not(:last-child)) { margin-inline-end }`:
+    // the view's children get it, not the view (no gap).
+    let (s, props) = styled_with(
+        "gap-2 space-x-4 -space-y-px",
+        ClassEnvironment::default(),
+        (390.0, 844.0),
+        0,
+    );
+    assert_eq!(s.layout.gap.width, taffy::LengthPercentage::length(8.0));
+    assert_eq!(s.layout.gap.height, taffy::LengthPercentage::length(8.0));
+    assert_eq!(
+        s.layout.margin.right,
+        taffy::LengthPercentageAuto::length(0.0)
+    );
+    let space = props.space.unwrap();
+    assert_eq!(space.x, Some(crate::style::PatchValue::Number(16.0)));
+    assert_eq!(space.y, Some(crate::style::PatchValue::Number(-1.0)));
+    assert!(!space.reverse_x);
+    let (_, props) = styled_with(
+        "space-y-reverse space-y-2",
+        ClassEnvironment::default(),
+        (390.0, 844.0),
+        0,
+    );
+    let space = props.space.unwrap();
+    assert!(space.reverse_y);
+    let mut child = Style::default();
+    space.apply(&mut child);
+    assert_eq!(
+        child.layout.margin.top,
+        taffy::LengthPercentageAuto::length(8.0)
+    );
+    assert_eq!(
+        child.layout.margin.bottom,
+        taffy::LengthPercentageAuto::length(0.0)
+    );
+}
+
+#[test]
 fn later_classes_win() {
     let s = styled("p-4 p-2 bg-red-500 bg-blue-500");
     assert_eq!(s.layout.padding.top, taffy::LengthPercentage::length(8.0));
@@ -1027,7 +1067,7 @@ fn classes_without_a_native_meaning_are_unknown() {
     );
     // What Tailwind CSS generates nothing for.
     all_unknown(
-        "-gap-4 -gap-x-2 -space-x-px2 -w-4 -h-2 -size-4 -min-w-0 -max-w-sm -basis-4 -flex-1 -grow -opacity-50 -text-lg -text-red-500 -bg-red-500 -rounded-lg -border-2 -blur-sm -p-4 -px-2 -leading-6 -shadow-md -ring-2 -from-red-500 -perspective-near -duration-100",
+        "-gap-4 -gap-x-2 -space-x-1/2 -w-4 -h-2 -size-4 -min-w-0 -max-w-sm -basis-4 -flex-1 -grow -opacity-50 -text-lg -text-red-500 -bg-red-500 -rounded-lg -border-2 -blur-sm -p-4 -px-2 -leading-6 -shadow-md -ring-2 -from-red-500 -perspective-near -duration-100",
     );
     all_unknown(
         "p-1/2 p-full px-1/3 m-full m-1/2 -m-full mt-1/4 gap-1/2 gap-full gap-x-full space-y-1/2",

@@ -153,7 +153,8 @@ view()
 | `place-items-center`、`-start`、`-end`、`-stretch` | `alignItems` 和 `justifyItems` |
 | `place-self-auto`、`-center`、`-start`、`-end`、`-stretch` | `alignSelf` 和 `justifySelf` |
 | `gap-<n>`、`gap-x-<n>`、`gap-y-<n>` | `gap`、`columnGap`、`rowGap` |
-| `space-x-<n>`、`space-y-<n>` | `columnGap`、`rowGap`（是 gap，而不是给子元素加外边距） |
+| `space-x-<n>`、`space-y-<n>`（及负值） | 给除最后一个之外的每个子元素加外边距：`space-x` 为结束侧外边距，`space-y` 为底部外边距；与 Tailwind CSS 一样，子元素自身的外边距优先，并与 `gap` 叠加 |
+| `space-x-reverse`、`space-y-reverse` | 改为起始侧 / 顶部的外边距（子元素逆序排列时） |
 | `grid-cols-<n>` | `gridTemplateColumns: "repeat(n, minmax(0, 1fr))"` |
 | `grid-cols-[<tracks>]`、`grid-cols-none` | `gridTemplateColumns`（`grid-cols-[200px_1fr]`） |
 | `grid-rows-<n>`、`grid-rows-[<tracks>]`、`grid-rows-none` | `gridTemplateRows` |

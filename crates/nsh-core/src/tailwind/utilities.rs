@@ -107,6 +107,10 @@ pub(crate) enum PropDecl {
     Resize(ResizeMode),
     Selectable(bool),
     Caret(Color),
+    /// `space-x-*` (`false`) / `space-y-*` (`true`).
+    Space(bool, PatchValue),
+    /// `space-x-reverse` / `space-y-reverse`.
+    SpaceReverse(bool),
 }
 
 /// What one utility declares.
@@ -212,6 +216,22 @@ impl Decl {
                 PropDecl::Resize(m) => props.resize_mode = Some(*m),
                 PropDecl::Selectable(b) => props.selectable = Some(*b),
                 PropDecl::Caret(c) => props.caret_color = Some(*c),
+                PropDecl::Space(y, v) => {
+                    let space = props.space.get_or_insert_default();
+                    if *y {
+                        space.y = Some(v.clone());
+                    } else {
+                        space.x = Some(v.clone());
+                    }
+                }
+                PropDecl::SpaceReverse(y) => {
+                    let space = props.space.get_or_insert_default();
+                    if *y {
+                        space.reverse_y = true;
+                    } else {
+                        space.reverse_x = true;
+                    }
+                }
             },
             Decl::Screen(key, fw, fh) => {
                 parts.screen.push((*key, *fw, *fh));
@@ -1341,6 +1361,8 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         "pointer-events-auto" => Decl::Prop(PropDecl::PointerEvents(PointerEvents::Auto)),
         "select-none" => Decl::Prop(PropDecl::Selectable(false)),
         "select-text" => Decl::Prop(PropDecl::Selectable(true)),
+        "space-x-reverse" => Decl::Prop(PropDecl::SpaceReverse(false)),
+        "space-y-reverse" => Decl::Prop(PropDecl::SpaceReverse(true)),
         "select-auto" => return Some(Vec::new()),
         // Images.
         "object-contain" => Decl::Prop(PropDecl::Resize(ResizeMode::Contain)),
@@ -1444,13 +1466,19 @@ static PREFIXES: &[(&str, Handler)] = &[
     ("gap", |t, v, _| {
         one(set(K::Gap, spacing_value(t, v, false, false)?))
     }),
-    // `space-*` puts margins between children; in flex layouts a gap is
-    // the same thing.
-    ("space-x", |t, v, _| {
-        one(set(K::ColumnGap, spacing_value(t, v, false, false)?))
+    // `space-*` gives the children but the last a margin (the view's
+    // `ClassProps::space`, which the core gives them).
+    ("space-x", |t, v, n| {
+        one(Decl::Prop(PropDecl::Space(
+            false,
+            spacing_value(t, v, n, false)?,
+        )))
     }),
-    ("space-y", |t, v, _| {
-        one(set(K::RowGap, spacing_value(t, v, false, false)?))
+    ("space-y", |t, v, n| {
+        one(Decl::Prop(PropDecl::Space(
+            true,
+            spacing_value(t, v, n, false)?,
+        )))
     }),
     // Insets.
     ("inset-x", |t, v, n| {

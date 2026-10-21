@@ -3006,6 +3006,107 @@ fn right_to_left_text_alignment_classes_stay_physical() {
 }
 
 #[test]
+fn space_classes_give_children_but_the_last_margins() {
+    let mut c = core();
+    view_with_classes(&mut c, 2, "flex-row space-x-4 w-[300px] h-[20px]");
+    let mut ops = Vec::new();
+    for (id, classes) in [
+        (3, "size-[20px]"),
+        (4, "size-[20px] mr-1"),
+        (5, "size-[20px]"),
+    ] {
+        ops.push(Op::Create { id, tag: Tag::View });
+        ops.push(class_op(id, classes));
+        ops.push(Op::Insert {
+            parent: 2,
+            child: id,
+            before: None,
+        });
+    }
+    // A child with no classes gets it too.
+    ops.push(Op::Create {
+        id: 6,
+        tag: Tag::View,
+    });
+    ops.push(style_op(
+        6,
+        &[
+            ("width", StyleValue::Number(20.0)),
+            ("height", StyleValue::Number(20.0)),
+        ],
+    ));
+    ops.push(Op::Insert {
+        parent: 2,
+        child: 6,
+        before: Some(5),
+    });
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    let x = |batch: &MountBatch, id| frame_of(batch, id).map(|f| f.origin.x.0);
+    // 3: 16 after it; 4: its own `mr-1` wins (4); 6: 16; 5 is last.
+    assert_eq!(x(&batch, 3), Some(0.0));
+    assert_eq!(x(&batch, 4), Some(36.0));
+    assert_eq!(x(&batch, 6), Some(60.0));
+    assert_eq!(x(&batch, 5), Some(96.0));
+    // Appended: the last before gets its margin, the new one has none.
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 7,
+                tag: Tag::View,
+            },
+            class_op(7, "size-[20px]"),
+            Op::Insert {
+                parent: 2,
+                child: 7,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(x(&batch, 7), Some(132.0));
+    // The last one gone, the one before it is last again.
+    c.apply(Op::Remove {
+        parent: 2,
+        child: 7,
+    })
+    .unwrap();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 8,
+                tag: Tag::View,
+            },
+            class_op(8, "size-[20px]"),
+        ],
+    );
+    apply(
+        &mut c,
+        vec![Op::Insert {
+            parent: 2,
+            child: 8,
+            before: None,
+        }],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(x(&batch, 8), Some(132.0));
+    // Reversed, the margin is on the start side; without the class, none.
+    c.apply(class_op(
+        2,
+        "flex-row space-x-4 space-x-reverse w-[300px] h-[20px]",
+    ))
+    .unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(x(&batch, 3), Some(16.0));
+    c.apply(class_op(2, "flex-row w-[300px] h-[20px]")).unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(x(&batch, 3), Some(0.0));
+    assert_eq!(x(&batch, 6), Some(44.0));
+}
+
+#[test]
 fn right_to_left_horizontal_scrolls() {
     let mut c = core();
     let n = |v: f32| StyleValue::Number(v);

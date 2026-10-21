@@ -154,7 +154,6 @@ view()
 - **单位是点（point）。** `p-4`（`.p_4()`）是 16 点（1 个间距步长 = 4pt，1rem = 16pt）。以 `px` 写的任意值也按点计算：`p-[13px]`（`.p(px(13.0))`）就是 13pt。
 - **`flex` 是横向排列**，与 CSS 一致：`class="flex"` 会让子元素横向排列，除非有方向类另行指定（在字符串中的任何位置都可以：`flex-col flex` 是纵向）。没有 `flex` 或 `inline-flex` 的视图保持 NSH 默认的纵向排列。`block` 和 `flow-root` 使用块布局，`inline` 和 `inline-block` 也是如此，与浏览器在 flex 或 grid 父元素中的布局一致。在 Rust 中由 `.flex_row()` 和 `.flex_col()` 设置方向。
 - **视图上的文字类会被继承。** 视图上的 `text-*`、`font-*`、`leading-*`、`tracking-*` 等文字工具类（Rust 中的 `.text_color(..)`、`.font_weight(..)` 等）会像 CSS 继承那样传给其内部的文本和输入元素：`<View class="text-white">` 会让其中的标签变成白色。
-- **`space-x-*` / `space-y-*` 是间距**（等同 `gap-x` / `gap-y`）。
 - **状态背景色显示在渐变之上。** 在 CSS 中渐变会盖住 `background-color`，因此 `bg-linear-*` 表面上的 `active:bg-*` 永远看不到；在 NSH 中，来自 `active:`、`hover:`、`focus:` 或 `group-*:` 的背景色会在该状态期间替换渐变（除非该状态设置了自己的渐变，例如 `active:from-*`）。`activeStyle` 等状态样式以及动画背景色也是如此。
 - **在 NSH 中属于属性的设置，以类的形式也可用**：`line-clamp-*`、`truncate`、`whitespace-nowrap`、`pointer-events-*`、`object-*`（图片缩放模式）、`select-text`、`caret-*` 和 `placeholder:text-*` 都能使用；若同时设置了对应的显式属性（`numberOfLines`、`pointerEvents`、`resizeMode` 等），以属性为准。在 Rust 中它们是元素的方法（`.number_of_lines(..)`、`.resize_mode(..)` 等）。
 - **支持的范围**：Tailwind 4 中在原生层有意义的工具类和变体。`peer-*` 变体、伪元素（`before:`、`after:`）和任意属性（`[mask-type:luminance]`）会报告为未知类；NSH 在原生层没有对应含义的工具类也都是未知类，因此一个类不会有与浏览器不同的含义。渲染提示类（`antialiased`、`will-change-transform`、`appearance-none`、`box-border` 等）会被接受，但不改变任何东西。

@@ -57,7 +57,10 @@
   `snap-*`, `scroll-*`, `overscroll-*`, `touch-*`, `isolate`, `box-content`) or without CSS in Tailwind (a negative
   where Tailwind has none: `-gap-4`, `-p-2`; fractions and `full` on padding, margin and gaps; non-integer `z-*`; bare
   `inset-shadow` without a theme value). Rendering hints are accepted and do nothing (`ignored` in
-  `tailwind/mod.rs`: `antialiased`, `will-change-*`'s values, ...); `space-x/y-*` are gaps.
+  `tailwind/mod.rs`: `antialiased`, `will-change-*`'s values, ...). `space-x/y-*` (and `-reverse`) are margins on each
+  element child but the last, as Tailwind's `:where(& > :not(:last-child))`: the parent's `ClassProps::space`, which
+  the core applies to a child's style before its classes and inline style (`classes.rs` `space_of`), so the child's
+  own margins win; an insert or removal restyles only the children whose last-ness changed (`spacing_changed`).
 - **Right to left**, classes are physical as in a browser: `pl-*`, `ml-*`, `left-*`, `border-l*`, `rounded-l*` /
   `-tl` ..., `text-left` / `text-right` keep their side, while style keys keep React Native's swap. The core swaps every
   left / right property of a node right to left (`apply_direction`), so a class names the other side there

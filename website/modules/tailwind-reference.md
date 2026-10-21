@@ -153,7 +153,8 @@ Scrolling is an element, not a class: `overflow-auto` and `overflow-scroll` are 
 | `place-items-center`, `-start`, `-end`, `-stretch` | `alignItems` and `justifyItems` |
 | `place-self-auto`, `-center`, `-start`, `-end`, `-stretch` | `alignSelf` and `justifySelf` |
 | `gap-<n>`, `gap-x-<n>`, `gap-y-<n>` | `gap`, `columnGap`, `rowGap` |
-| `space-x-<n>`, `space-y-<n>` | `columnGap`, `rowGap` (a gap, not margins on the children) |
+| `space-x-<n>`, `space-y-<n>` (and negative) | a margin on each child but the last: the end margin (`space-x`) or the bottom one (`space-y`), under the child's own margins, as in Tailwind CSS; it adds to a `gap` |
+| `space-x-reverse`, `space-y-reverse` | the margin on the start / top side instead (children in reverse order) |
 | `grid-cols-<n>` | `gridTemplateColumns: "repeat(n, minmax(0, 1fr))"` |
 | `grid-cols-[<tracks>]`, `grid-cols-none` | `gridTemplateColumns` (`grid-cols-[200px_1fr]`) |
 | `grid-rows-<n>`, `grid-rows-[<tracks>]`, `grid-rows-none` | `gridTemplateRows` |

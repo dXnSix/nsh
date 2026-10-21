@@ -392,6 +392,8 @@ struct Node {
     parts: Option<Box<classes::NodeParts>>,
     /// A child's classes read their position among siblings.
     positional_children: bool,
+    /// Styled with the margin its parent's `space-*` gives it.
+    spaced: bool,
     /// The inset padding and margin components set: added to the style's.
     insets: Option<Box<[EdgeInsets; 2]>>,
     events: EventMask,
@@ -509,6 +511,7 @@ impl Node {
             projected: 0,
             parts: None,
             positional_children: false,
+            spaced: false,
             insets: None,
             events: EventMask::default(),
             z_index: 0,
@@ -1708,7 +1711,7 @@ impl<M: TextEngine> Core<M> {
         let key = self.key(id)?;
         let node = &mut self.nodes[key as usize];
         node.inline_style = patch;
-        if node.classes.is_some() {
+        if node.classes.is_some() || node.spaced {
             self.restyle(key);
             return Ok(());
         }
@@ -2848,6 +2851,7 @@ impl<M: TextEngine> Core<M> {
         if self.nodes[parent as usize].positional_children {
             self.positions_changed(parent);
         }
+        self.spacing_changed(parent, child);
 
         if inline {
             self.mark_text_block(parent);
@@ -2923,6 +2927,7 @@ impl<M: TextEngine> Core<M> {
             self.positions_changed(parent);
         }
         self.nodes[key as usize].parent = NO_KEY;
+        self.spacing_changed(parent, NO_KEY);
         self.groups_changed(key, parent);
         self.status_bars_moved |= !self.status_bar_nodes.is_empty();
         let node = &self.nodes[key as usize];

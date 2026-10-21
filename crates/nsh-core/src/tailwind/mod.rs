@@ -40,7 +40,7 @@ use crate::{
     geometry::{Points, Size},
     ops::ResizeMode,
     props::PointerEvents,
-    style::{Color, EllipsizeMode, Style, TextShadow},
+    style::{Color, EllipsizeMode, PatchValue, Style, TextShadow},
 };
 
 /// Interaction states a class can depend on (`active:`, `hover:`, ...).
@@ -359,6 +359,50 @@ pub struct ClassProps {
     pub caret_color: Option<Color>,
     /// `text-shadow-*` layers beyond the first (drawn as one shadow).
     pub text_shadows: Option<Vec<TextShadow>>,
+    /// `space-x-*` / `space-y-*`: margins the view gives its children.
+    pub space: Option<Space>,
+}
+
+/// `space-x-*` / `space-y-*` (and `-reverse`): the margins a view gives
+/// each of its children but the last, as Tailwind CSS's `:where(& >
+/// :not(:last-child))`: under the child's own margins, which win.
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
+pub struct Space {
+    /// `space-x-*`: the end margin (`margin-inline-end`; the start one
+    /// with `space-x-reverse`).
+    pub x: Option<PatchValue>,
+    /// `space-y-*`: the bottom margin (`margin-block-end`; the top one
+    /// with `space-y-reverse`).
+    pub y: Option<PatchValue>,
+    /// `space-x-reverse`.
+    pub reverse_x: bool,
+    /// `space-y-reverse`.
+    pub reverse_y: bool,
+}
+
+impl Space {
+    /// The margins of a child: React Native's `marginRight` is the end
+    /// side in either direction, `marginLeft` the start side.
+    pub(crate) fn apply(&self, style: &mut Style) {
+        use crate::style::StyleKey as K;
+        if let Some(v) = &self.x {
+            let key = if self.reverse_x {
+                K::MarginLeft
+            } else {
+                K::MarginRight
+            };
+            let _ = style.set_key(key, v.as_value());
+        }
+        if let Some(v) = &self.y {
+            let key = if self.reverse_y {
+                K::MarginTop
+            } else {
+                K::MarginBottom
+            };
+            let _ = style.set_key(key, v.as_value());
+        }
+    }
 }
 
 /// A parsed class string.
