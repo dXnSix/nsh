@@ -70,12 +70,12 @@ view()
 | 步长（可用四分之一步） | `p-4`、`gap-1.5`、`m-0.25` | 步长 × 4 点 |
 | `px` | `p-px`、`-mt-px` | 1 点 |
 | `0` | `m-0` | 0 |
-| 分数 | `w-1/2`、`left-1/3` | 父元素的百分比 |
-| `full` | `w-full`、`inset-full` | 100% |
+| 分数（inset、宽高、`basis`、`translate`） | `w-1/2`、`left-1/3` | 父元素的百分比 |
+| `full`（同上） | `w-full`、`inset-full` | 100% |
 | `auto`（外边距、inset、宽高、basis） | `mx-auto`、`w-auto` | `"auto"` |
 | 任意值 | `p-[13px]`、`w-[42%]`、`mt-[1.5rem]` | 给定长度 |
 
-外边距、inset、`translate`、`rotate`、`skew`、`scale`、`z`、`hue-rotate`、`tracking`、`underline-offset`、`outline-offset`、网格线和渐变角度可以加前缀 `-` 表示负值：`-mt-2`、`-translate-x-1/2`、`-rotate-6`。
+外边距、inset、`translate`、`rotate`、`skew`、`scale`、`z`、`hue-rotate`、`tracking`、`underline-offset`、`outline-offset`、网格线和渐变角度可以加前缀 `-` 表示负值：`-mt-2`、`-translate-x-1/2`、`-rotate-6`。其他工具类（`-p-4`、`-gap-2`、`-w-4`）在 Tailwind 中没有负值形式，NSH 也没有。
 
 ### 颜色
 
@@ -114,7 +114,7 @@ view()
 | `block`、`flow-root` | `display: "block"`（块级布局） |
 | `inline`、`inline-block` | `display: "block"`：浏览器在 flex 或 grid 父元素中为它们计算的值 |
 | `hidden` | `display: "none"` |
-| `relative`、`static`、`sticky` | `position: "relative"`（`sticky` 不会吸顶） |
+| `relative`、`static` | `position: "relative"` |
 | `absolute`、`fixed` | `position: "absolute"`（`fixed` 相对父元素而不是屏幕） |
 | `inset-<n>`、`inset-x-<n>`、`inset-y-<n>` | `top` / `right` / `bottom` / `left` |
 | `top-<n>`、`right-<n>`、`bottom-<n>`、`left-<n>` | 对应的偏移 |
@@ -165,8 +165,6 @@ view()
 | `auto-cols-auto`、`-min`、`-max`、`-fr`、`auto-cols-[<track>]` | `gridAutoColumns` |
 | `auto-rows-auto`、`-min`、`-max`、`-fr`、`auto-rows-[<track>]` | `gridAutoRows` |
 
-`order-*` 可以写，但不起作用：子元素保持原有顺序。
-
 ## 间距
 
 | Class | 设置 |
@@ -187,9 +185,8 @@ view()
 | `min-w-<n>`、`max-w-<n>`、`min-h-<n>`、`max-h-<n>` | 对应的限制 |
 | `w-screen`、`w-dvw`、`w-svw`、`w-lvw` | 窗口宽度（`min-w-` / `max-w-` 也可用） |
 | `h-screen`、`h-dvh`、`h-svh`、`h-lvh` | 窗口高度（`min-h-` / `max-h-` 也可用） |
-| `w-min`、`w-max`、`w-fit`（及 `h-`） | `auto`（由内容决定） |
-| `min-w-min`、`min-w-max`、`min-w-fit`（及 `min-h-`） | 0 |
-| `max-w-none`、`max-h-none`、`max-w-min`、`max-w-max`、`max-w-fit` | 不限制 |
+| `w-auto`、`h-auto` | `auto`（由内容决定） |
+| `max-w-none`、`max-h-none` | 不限制 |
 | `w-<container>`、`min-w-<container>`、`max-w-<container>` | 容器宽度（见下） |
 
 容器宽度（点）：`3xs` 256、`2xs` 288、`xs` 320、`sm` 384、`md` 448、`lg` 512、`xl` 576、`2xl` 672、`3xl` 768、`4xl` 896、`5xl` 1024、`6xl` 1152、`7xl` 1280、`prose` 520。
@@ -252,7 +249,7 @@ view()
 | `text-ellipsis`、`text-clip` | `ellipsizeMode` 为 `"tail"` / `"clip"` |
 | `whitespace-nowrap`、`text-nowrap` | 不换行 |
 | `whitespace-normal`、`text-wrap`、`text-balance`、`text-pretty` | 正常换行（不做行平衡） |
-| `select-text`、`select-all`、`select-none` | `selectable` |
+| `select-text`、`select-none` | `selectable` |
 
 ### 装饰线与阴影
 
@@ -314,7 +311,7 @@ view()
 | `border`、`border-<n>`、`border-[<length>]` | `borderWidth`（不带值为 1） |
 | `border-x`、`border-y`、`border-t`、`border-r`、`border-b`、`border-l`、`border-s`、`border-e`（带 `-<n>` 或不带值） | 对应边的宽度 |
 | `border-<color>`、`border-t-<color>` 等 | `borderColor` 及各边颜色 |
-| `border-solid`、`border-dashed`、`border-dotted` | `borderStyle`（`border-double` 画实线） |
+| `border-solid`、`border-dashed`、`border-dotted` | `borderStyle` |
 | `border-none`、`border-hidden` | `borderStyle: "none"` / `"hidden"`：无论宽度类如何、顺序如何都没有边框（`md:border-solid` 会重新显示） |
 | `rounded`、`rounded-<size>`、`rounded-none`、`rounded-full`、`rounded-[<length>]` | `borderRadius`（不带值为 `sm`） |
 | `rounded-t-`、`-r-`、`-b-`、`-l-`、`-tl-`、`-tr-`、`-br-`、`-bl-` | 对应的角 |
@@ -384,7 +381,7 @@ view()
 | `transform-none` | 清除 3D 旋转和斜切（CSS 的 `transform: none`） |
 | `translate-none`、`rotate-none`、`scale-none` | 分别清除平移、旋转、缩放 |
 
-变换类与 CSS 一样组合：`translate-*`、`rotate-*` 和 `scale-*` 无论顺序都会叠加。`transform`、`transform-gpu`、`transform-cpu`、`transform-3d` 和 `transform-flat` 可以写，但不起作用。按尺寸分数的平移会根据元素的实际尺寸计算，尺寸变化时自动更新。
+变换类与 CSS 一样组合：`translate-*`、`rotate-*` 和 `scale-*` 无论顺序都会叠加。`transform`、`transform-gpu`、`transform-cpu` 和 `transform-flat` 可以写，但不起作用：NSH 以同一种方式合成所有变换，且都是平面的。按尺寸分数的平移会根据元素的实际尺寸计算，尺寸变化时自动更新。
 
 ## 过渡与动画
 
@@ -407,7 +404,7 @@ view()
 |---|---|
 | `pointer-events-none`、`pointer-events-auto` | `pointerEvents` |
 | `cursor-<name>`、`cursor-[<name>]` | `cursor`：`cursor-pointer`、`cursor-grab`、`cursor-not-allowed` 等（所有 CSS 光标关键字） |
-| `select-none`、`select-text`、`select-all`、`select-auto` | 文字选择（见排版） |
+| `select-none`、`select-text`、`select-auto` | 文字选择（见排版） |
 
 ## 图片
 
@@ -418,11 +415,11 @@ view()
 
 ## 可写但不起作用
 
-以下网页工具类可以通过解析、不会产生警告，但在原生侧不起作用：`antialiased`、`subpixel-antialiased`、`isolate`、`isolation-auto`、`box-border`、`box-content`、`order-*`、`select-auto`、`transform`、`transform-gpu`、`transform-cpu`、`transform-3d`、`transform-flat`，以及所有 `will-change-*`、`touch-*`、`appearance-*`、`scroll-*`、`snap-*` 和 `overscroll-*` 类。滚动、吸附和越界滚动是 [scroll](../elements/scroll.md) 的属性。
+以下工具类是渲染提示，或描述的正是每个原生视图本来的样子；它们可以通过解析、不会产生警告，也不改变任何东西：`antialiased`、`subpixel-antialiased`、`isolation-auto`、`box-border`、`appearance-none`、`appearance-auto`、`will-change-auto`、`will-change-scroll`、`will-change-contents`、`will-change-transform`、`will-change-[<value>]`、`select-auto`、`transform`、`transform-gpu`、`transform-cpu`、`transform-flat`。滚动、吸附和越界滚动是 [scroll](../elements/scroll.md) 的属性。
 
 ## 不支持
 
-`peer-*` 变体、伪元素（`before:`、`after:`）、任意属性（`[prop:value]`）、`overflow-auto` / `overflow-scroll`、`divide-*`、`columns-*`、`float-*`、`container` 以及容器查询。`nsh build` 和 `nsh dev` 会对源码中发现的未知类给出警告（`file:line:col: unknown class '...'`），运行时也会对每个未知类记录一次日志。
+`peer-*` 变体、伪元素（`before:`、`after:`）、任意属性（`[prop:value]`）、`overflow-auto` / `overflow-scroll`、`divide-*`、`columns-*`、`float-*`、`container`、容器查询、`sticky`、`order-*`、`transform-3d`、`select-all`、`border-double` / `outline-double`、固有尺寸（`w-fit`、`h-min`、`max-w-max` 等）、`snap-*`、`scroll-*`、`overscroll-*`、`touch-*`、`isolate` 和 `box-content` 都是未知类。`nsh build` 和 `nsh dev` 会对源码中发现的未知类给出警告（`file:line:col: unknown class '...'`），运行时也会对每个未知类记录一次日志。
 
 ## 变体
 

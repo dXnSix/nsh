@@ -640,7 +640,7 @@ enum Token {
     /// A utility naming theme tokens: one rule, or one per appearance.
     Themed(Rule, Option<Box<Rule>>),
     Group(Box<str>),
-    /// Accepted, but has no effect natively (`antialiased`).
+    /// Accepted, but has no effect natively (`antialiased`; [`ignored`]).
     Ignored,
 }
 
@@ -684,33 +684,14 @@ fn parse_token(theme: &Theme, token: &str) -> Option<Token> {
         if let Some(name) = utility.strip_prefix("group/") {
             return Some(Token::Group(name.into()));
         }
-        // Web-only utilities that need nothing natively.
-        if matches!(
-            utility,
-            "antialiased"
-                | "subpixel-antialiased"
-                | "isolate"
-                | "isolation-auto"
-                | "box-border"
-                | "box-content"
-        ) || [
-            "will-change-",
-            "touch-",
-            "appearance-",
-            "scroll-",
-            "snap-",
-            "overscroll-",
-        ]
-        .iter()
-        .any(|p| utility.starts_with(p))
-        {
-            return Some(Token::Ignored);
-        }
     }
     let mut cond = Condition::default();
     let mut rank = 0u16;
     for v in variants {
         rank = rank.max(variant(theme, v, &mut cond)?);
+    }
+    if ignored(utility) {
+        return Some(Token::Ignored);
     }
     if theme.tokens().replaces(utility) {
         return themed(theme, cond, rank, important, utility);
@@ -728,6 +709,27 @@ fn parse_token(theme: &Theme, token: &str) -> Option<Token> {
         important,
         theme: false,
     }))
+}
+
+/// Utilities whose CSS is a rendering hint or what every native view
+/// already is: accepted, and they do nothing (`box-border` is preflight's
+/// `box-sizing`, NSH's only one).
+fn ignored(utility: &str) -> bool {
+    matches!(
+        utility,
+        "antialiased"
+            | "subpixel-antialiased"
+            | "box-border"
+            | "isolation-auto"
+            | "appearance-none"
+            | "appearance-auto"
+            | "will-change-auto"
+            | "will-change-scroll"
+            | "will-change-contents"
+            | "will-change-transform"
+    ) || utility
+        .strip_prefix("will-change-[")
+        .is_some_and(|v| v.len() > 1 && v.ends_with(']'))
 }
 
 /// `utility` naming theme tokens (`bg-primary`, `rounded-(--radius)`):

@@ -260,7 +260,7 @@ An outline is drawn outside the border and takes no space in layout.
 |---|---|---|---|
 | `outlineWidth` | `number` | `.outline(w)` | Line width. |
 | `outlineColor` | `ColorValue` | `.outline_color(c)` | Line color. |
-| `outlineStyle` | `"solid" \| "double" \| "dashed" \| "dotted" \| "none" \| "hidden"` | `.outline_dashed()`, `.outline_dotted()`, `.outline_none()` | Line style. |
+| `outlineStyle` | `"solid" \| "dashed" \| "dotted" \| "none" \| "hidden"` | `.outline_dashed()`, `.outline_dotted()`, `.outline_none()` | Line style. |
 | `outlineOffset` | `number` | `.outline_offset(o)` | Distance from the border edge; negative values move it inside. |
 
 ### Shadows

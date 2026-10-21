@@ -70,12 +70,12 @@ Utilities that take a spacing value (padding, margin, gap, inset, width, height,
 | Steps (quarter steps allowed) | `p-4`, `gap-1.5`, `m-0.25` | step × 4 points |
 | `px` | `p-px`, `-mt-px` | 1 point |
 | `0` | `m-0` | 0 |
-| Fraction | `w-1/2`, `left-1/3` | percentage of the parent |
-| `full` | `w-full`, `inset-full` | 100% |
+| Fraction (inset, width, height, `basis`, `translate`) | `w-1/2`, `left-1/3` | percentage of the parent |
+| `full` (the same) | `w-full`, `inset-full` | 100% |
 | `auto` (margin, inset, width, height, basis) | `mx-auto`, `w-auto` | `"auto"` |
 | Arbitrary | `p-[13px]`, `w-[42%]`, `mt-[1.5rem]` | the given length |
 
-Margins, insets, `translate`, `rotate`, `skew`, `scale`, `z`, `hue-rotate`, `tracking`, `underline-offset`, `outline-offset`, grid lines and gradient angles take a leading `-` for negative values: `-mt-2`, `-translate-x-1/2`, `-rotate-6`.
+Margins, insets, `translate`, `rotate`, `skew`, `scale`, `z`, `hue-rotate`, `tracking`, `underline-offset`, `outline-offset`, grid lines and gradient angles take a leading `-` for negative values: `-mt-2`, `-translate-x-1/2`, `-rotate-6`. Tailwind has no negative form of the others (`-p-4`, `-gap-2`, `-w-4`), and neither has NSH.
 
 ### Colors
 
@@ -114,7 +114,7 @@ Arbitrary CSS properties (`[mask-type:luminance]`) are not supported.
 | `block`, `flow-root` | `display: "block"` (block layout) |
 | `inline`, `inline-block` | `display: "block"`: what a browser computes for them in a flex or grid parent |
 | `hidden` | `display: "none"` |
-| `relative`, `static`, `sticky` | `position: "relative"` (`sticky` does not stick) |
+| `relative`, `static` | `position: "relative"` |
 | `absolute`, `fixed` | `position: "absolute"` (`fixed` is relative to the parent, not the screen) |
 | `inset-<n>`, `inset-x-<n>`, `inset-y-<n>` | `top` / `right` / `bottom` / `left` |
 | `top-<n>`, `right-<n>`, `bottom-<n>`, `left-<n>` | the matching offset |
@@ -165,8 +165,6 @@ Scrolling is an element, not a class: `overflow-auto` and `overflow-scroll` are 
 | `auto-cols-auto`, `-min`, `-max`, `-fr`, `auto-cols-[<track>]` | `gridAutoColumns` |
 | `auto-rows-auto`, `-min`, `-max`, `-fr`, `auto-rows-[<track>]` | `gridAutoRows` |
 
-`order-*` is accepted but has no effect: children keep their order.
-
 ## Spacing
 
 | Class | Sets |
@@ -187,9 +185,8 @@ Scrolling is an element, not a class: `overflow-auto` and `overflow-scroll` are 
 | `min-w-<n>`, `max-w-<n>`, `min-h-<n>`, `max-h-<n>` | the matching limit |
 | `w-screen`, `w-dvw`, `w-svw`, `w-lvw` | the window width (also on `min-w-` / `max-w-`) |
 | `h-screen`, `h-dvh`, `h-svh`, `h-lvh` | the window height (also on `min-h-` / `max-h-`) |
-| `w-min`, `w-max`, `w-fit` (and `h-`) | `auto` (sized by content) |
-| `min-w-min`, `min-w-max`, `min-w-fit` (and `min-h-`) | 0 |
-| `max-w-none`, `max-h-none`, `max-w-min`, `max-w-max`, `max-w-fit` | no limit |
+| `w-auto`, `h-auto` | `auto` (sized by content) |
+| `max-w-none`, `max-h-none` | no limit |
 | `w-<container>`, `min-w-<container>`, `max-w-<container>` | a container width (below) |
 
 Container widths (points): `3xs` 256, `2xs` 288, `xs` 320, `sm` 384, `md` 448, `lg` 512, `xl` 576, `2xl` 672, `3xl` 768, `4xl` 896, `5xl` 1024, `6xl` 1152, `7xl` 1280, `prose` 520.
@@ -252,7 +249,7 @@ Container widths (points): `3xs` 256, `2xs` 288, `xs` 320, `sm` 384, `md` 448, `
 | `text-ellipsis`, `text-clip` | `ellipsizeMode` `"tail"` / `"clip"` |
 | `whitespace-nowrap`, `text-nowrap` | lines never wrap |
 | `whitespace-normal`, `text-wrap`, `text-balance`, `text-pretty` | lines wrap (balancing is not done) |
-| `select-text`, `select-all`, `select-none` | `selectable` |
+| `select-text`, `select-none` | `selectable` |
 
 ### Decoration and shadow
 
@@ -314,7 +311,7 @@ view()
 | `border`, `border-<n>`, `border-[<length>]` | `borderWidth` (bare: 1) |
 | `border-x`, `border-y`, `border-t`, `border-r`, `border-b`, `border-l`, `border-s`, `border-e` (with `-<n>` or bare) | the matching sides' widths |
 | `border-<color>`, `border-t-<color>`, ... | `borderColor` and the per-side colors |
-| `border-solid`, `border-dashed`, `border-dotted` | `borderStyle` (`border-double` draws solid) |
+| `border-solid`, `border-dashed`, `border-dotted` | `borderStyle` |
 | `border-none`, `border-hidden` | `borderStyle: "none"` / `"hidden"`: no border whatever the width classes, in any order (`md:border-solid` shows it again) |
 | `rounded`, `rounded-<size>`, `rounded-none`, `rounded-full`, `rounded-[<length>]` | `borderRadius` (bare: `sm`) |
 | `rounded-t-`, `-r-`, `-b-`, `-l-`, `-tl-`, `-tr-`, `-br-`, `-bl-` | the matching corners |
@@ -384,7 +381,7 @@ Shadows, rings and inset shadows combine into one `boxShadow` list, as in CSS. A
 | `transform-none` | clears the 3D rotations and the skews (CSS's `transform: none`) |
 | `translate-none`, `rotate-none`, `scale-none` | clears the translation, the rotation, the scale |
 
-Transform utilities compose like CSS: `translate-*`, `rotate-*` and `scale-*` combine regardless of order. `transform`, `transform-gpu`, `transform-cpu`, `transform-3d` and `transform-flat` are accepted and do nothing. Translations by a fraction of the size are resolved against the element's frame and follow it when it resizes.
+Transform utilities compose like CSS: `translate-*`, `rotate-*` and `scale-*` combine regardless of order. `transform`, `transform-gpu`, `transform-cpu` and `transform-flat` are accepted and do nothing: NSH composes every transform alike, flat. Translations by a fraction of the size are resolved against the element's frame and follow it when it resizes.
 
 ## Transitions and animation
 
@@ -407,7 +404,7 @@ Transitions run on the UI thread when a value changes, including when a variant 
 |---|---|
 | `pointer-events-none`, `pointer-events-auto` | `pointerEvents` |
 | `cursor-<name>`, `cursor-[<name>]` | `cursor`: `cursor-pointer`, `cursor-grab`, `cursor-not-allowed`, ... (every CSS cursor keyword) |
-| `select-none`, `select-text`, `select-all`, `select-auto` | text selection (see Typography) |
+| `select-none`, `select-text`, `select-auto` | text selection (see Typography) |
 
 ## Images
 
@@ -418,11 +415,11 @@ Transitions run on the UI thread when a value changes, including when a variant 
 
 ## Accepted without effect
 
-These web utilities parse without a warning and do nothing natively: `antialiased`, `subpixel-antialiased`, `isolate`, `isolation-auto`, `box-border`, `box-content`, `order-*`, `select-auto`, `transform`, `transform-gpu`, `transform-cpu`, `transform-3d`, `transform-flat`, and every `will-change-*`, `touch-*`, `appearance-*`, `scroll-*`, `snap-*` and `overscroll-*` class. Scrolling, snapping and overscroll are props of [scroll](../elements/scroll.md).
+These utilities are rendering hints, or what every native view already is; they parse without a warning and change nothing: `antialiased`, `subpixel-antialiased`, `isolation-auto`, `box-border`, `appearance-none`, `appearance-auto`, `will-change-auto`, `will-change-scroll`, `will-change-contents`, `will-change-transform`, `will-change-[<value>]`, `select-auto`, `transform`, `transform-gpu`, `transform-cpu`, `transform-flat`. Scrolling, snapping and overscroll are props of [scroll](../elements/scroll.md).
 
 ## Not supported
 
-`peer-*` variants, pseudo-elements (`before:`, `after:`), arbitrary properties (`[prop:value]`), `overflow-auto` / `overflow-scroll`, `divide-*`, `columns-*`, `float-*`, `container`, and container queries. `nsh build` and `nsh dev` warn about unknown classes they find in your source (`file:line:col: unknown class '...'`), and the runtime logs each unknown class once.
+`peer-*` variants, pseudo-elements (`before:`, `after:`), arbitrary properties (`[prop:value]`), `overflow-auto` / `overflow-scroll`, `divide-*`, `columns-*`, `float-*`, `container`, container queries, `sticky`, `order-*`, `transform-3d`, `select-all`, `border-double` / `outline-double`, intrinsic sizes (`w-fit`, `h-min`, `max-w-max`, ...), `snap-*`, `scroll-*`, `overscroll-*`, `touch-*`, `isolate` and `box-content` are unknown classes. `nsh build` and `nsh dev` warn about unknown classes they find in your source (`file:line:col: unknown class '...'`), and the runtime logs each unknown class once.
 
 ## Variants
 

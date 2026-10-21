@@ -953,6 +953,62 @@ fn unknown_classes_are_reported() {
 }
 
 #[test]
+fn classes_without_a_native_meaning_are_unknown() {
+    let theme = themed();
+    let unknown = |classes: &str| -> Vec<String> {
+        parse(&theme, classes)
+            .unknown()
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    };
+    let all_unknown = |classes: &str| {
+        assert_eq!(
+            unknown(classes),
+            classes.split_whitespace().collect::<Vec<_>>(),
+            "{classes}"
+        );
+    };
+    // What Tailwind CSS generates that NSH cannot do: unknown, never a
+    // different meaning.
+    all_unknown(
+        "sticky transform-3d order-1 order-first -order-2 order-[3] select-all border-double outline-double",
+    );
+    all_unknown("w-fit h-min size-max min-w-fit min-h-max max-w-min max-h-fit w-max");
+    all_unknown(
+        "snap-x snap-center scroll-smooth scroll-mt-4 scroll-px-2 overscroll-none touch-none isolate box-content md:snap-x scroll-anything",
+    );
+    // What Tailwind CSS generates nothing for.
+    all_unknown(
+        "-gap-4 -gap-x-2 -space-x-px2 -w-4 -h-2 -size-4 -min-w-0 -max-w-sm -basis-4 -flex-1 -grow -opacity-50 -text-lg -text-red-500 -bg-red-500 -rounded-lg -border-2 -blur-sm -p-4 -px-2 -leading-6 -shadow-md -ring-2 -from-red-500 -perspective-near -duration-100",
+    );
+    all_unknown(
+        "p-1/2 p-full px-1/3 m-full m-1/2 -m-full mt-1/4 gap-1/2 gap-full gap-x-full space-y-1/2",
+    );
+    all_unknown("z-1.5 z-[1.5] -z-auto inset-shadow");
+    // What stays: rendering hints, negatives and fractions Tailwind has.
+    assert_eq!(
+        unknown(
+            "antialiased subpixel-antialiased box-border isolation-auto appearance-none appearance-auto will-change-transform will-change-[opacity] md:antialiased"
+        ),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        unknown(
+            "-mt-2 -mx-px -m-4 -top-1/2 -inset-x-4 -start-2 -z-10 z-[100] -z-[5] -translate-x-1/2 -rotate-6 -rotate-x-12 -scale-x-100 -skew-y-3 -tracking-wide -underline-offset-2 -outline-offset-2 -hue-rotate-30 -backdrop-hue-rotate-15 -bg-linear-45 -bg-conic-90 -col-start-2 -row-end-1 -space-y-2 w-1/2 inset-full basis-1/3 translate-full"
+        ),
+        Vec::<String>::new()
+    );
+    assert_eq!(styled("-z-10").z_index, -10);
+    assert_eq!(styled("z-[100]").z_index, 100);
+    // A theme of the app's own may give the bare form a value, as a
+    // `--inset-shadow` in Tailwind's `@theme` does.
+    let theme =
+        Theme::from_json(r#"{"insetShadow": {"": "inset 0 1px 2px rgb(0 0 0 / 0.1)"}}"#).unwrap();
+    assert!(parse(&theme, "inset-shadow").unknown().is_empty());
+}
+
+#[test]
 fn placeholder_and_props() {
     let (_, props) = styled_with(
         "placeholder:text-zinc-400 selection:bg-blue-500 caret-blue-500 line-clamp-2 pointer-events-none object-contain select-none",

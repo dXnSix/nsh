@@ -157,7 +157,7 @@ view()
 - **`space-x-*` / `space-y-*` 是间距**（等同 `gap-x` / `gap-y`）。
 - **状态背景色显示在渐变之上。** 在 CSS 中渐变会盖住 `background-color`，因此 `bg-linear-*` 表面上的 `active:bg-*` 永远看不到；在 NSH 中，来自 `active:`、`hover:`、`focus:` 或 `group-*:` 的背景色会在该状态期间替换渐变（除非该状态设置了自己的渐变，例如 `active:from-*`）。`activeStyle` 等状态样式以及动画背景色也是如此。
 - **在 NSH 中属于属性的设置，以类的形式也可用**：`line-clamp-*`、`truncate`、`whitespace-nowrap`、`pointer-events-*`、`object-*`（图片缩放模式）、`select-text`、`caret-*` 和 `placeholder:text-*` 都能使用；若同时设置了对应的显式属性（`numberOfLines`、`pointerEvents`、`resizeMode` 等），以属性为准。在 Rust 中它们是元素的方法（`.number_of_lines(..)`、`.resize_mode(..)` 等）。
-- **支持的范围**：Tailwind 4 中在原生层有意义的工具类和变体。`peer-*` 变体、伪元素（`before:`、`after:`）和任意属性（`[mask-type:luminance]`）会报告为未知类。原生无需处理的纯 Web 工具类（`antialiased`、`will-change-*`、`touch-*`、`scroll-*`、`snap-*`、`overscroll-*`、`box-border` 等）会被接受并忽略。
+- **支持的范围**：Tailwind 4 中在原生层有意义的工具类和变体。`peer-*` 变体、伪元素（`before:`、`after:`）和任意属性（`[mask-type:luminance]`）会报告为未知类；NSH 在原生层没有对应含义的工具类也都是未知类，因此一个类不会有与浏览器不同的含义。渲染提示类（`antialiased`、`will-change-transform`、`appearance-none`、`box-border` 等）会被接受，但不改变任何东西。
 
 其余部分都与 Tailwind 4 文档一致：调色板、透明度修饰符（`bg-black/40`）、任意值（`bg-[#34c759]`、`w-[72px]`、`grid-cols-[1fr_2fr]`）、分数（`w-1/2`、`translate-x-1/2`）、阴影和 ring、渐变（`bg-linear-to-r`、`bg-radial`、`bg-conic` 配合 `from-` / `via-` / `to-`）、滤镜、`backdrop-blur-*`、`mix-blend-*`、变换、`transition-*` 和 `duration-*`、`animate-spin` / `ping` / `pulse` / `bounce`，以及网格，每一项在 Rust 中都有对应的类型化方法。[滤镜与混合](./styling.md#滤镜与混合) 的平台限制对类名同样适用。
 

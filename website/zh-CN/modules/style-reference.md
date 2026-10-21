@@ -260,7 +260,7 @@ view().h(px(120.0)).rounded(px(16.0)).bg_linear(deg(135.0)).gradient_from(rgb(0x
 |---|---|---|---|
 | `outlineWidth` | `number` | `.outline(w)` | 线宽。 |
 | `outlineColor` | `ColorValue` | `.outline_color(c)` | 颜色。 |
-| `outlineStyle` | `"solid" \| "double" \| "dashed" \| "dotted" \| "none" \| "hidden"` | `.outline_dashed()`、`.outline_dotted()`、`.outline_none()` | 线型。 |
+| `outlineStyle` | `"solid" \| "dashed" \| "dotted" \| "none" \| "hidden"` | `.outline_dashed()`、`.outline_dotted()`、`.outline_none()` | 线型。 |
 | `outlineOffset` | `number` | `.outline_offset(o)` | 与边框外缘的距离；负值向内。 |
 
 ### 阴影

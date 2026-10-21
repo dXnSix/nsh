@@ -1186,7 +1186,7 @@ style_keys! {
     MixBlendMode = "mixBlendMode": View "\"normal\" | \"multiply\" | \"screen\" | \"overlay\" | \"darken\" | \"lighten\" | \"color-dodge\" | \"color-burn\" | \"hard-light\" | \"soft-light\" | \"difference\" | \"exclusion\" | \"hue\" | \"saturation\" | \"color\" | \"luminosity\" | \"plus-darker\" | \"plus-lighter\"" "How the view blends with what is behind it.",
     OutlineWidth = "outlineWidth": View "number" "A line outside the border that takes no space.",
     OutlineColor = "outlineColor": View "ColorValue",
-    OutlineStyle = "outlineStyle": View "\"solid\" | \"double\" | \"dashed\" | \"dotted\" | \"none\" | \"hidden\"",
+    OutlineStyle = "outlineStyle": View "\"solid\" | \"dashed\" | \"dotted\" | \"none\" | \"hidden\"",
     OutlineOffset = "outlineOffset": View "number" "Distance from the border edge (negative: inside).",
     Visibility = "visibility": View "\"visible\" | \"hidden\" | \"collapse\"" "Hidden views keep their space.",
     Cursor = "cursor": View "\"auto\" | \"default\" | \"context-menu\" | \"alias\" | \"copy\" | \"cell\" | \"pointer\" | \"text\" | \"vertical-text\" | \"wait\" | \"progress\" | \"help\" | \"crosshair\" | \"move\" | \"all-scroll\" | \"grab\" | \"grabbing\" | \"not-allowed\" | \"no-drop\" | \"zoom-in\" | \"zoom-out\" | \"col-resize\" | \"e-resize\" | \"w-resize\" | \"ew-resize\" | \"row-resize\" | \"n-resize\" | \"s-resize\" | \"ns-resize\" | \"ne-resize\" | \"nw-resize\" | \"se-resize\" | \"sw-resize\" | \"nesw-resize\" | \"nwse-resize\" | \"none\"" "The pointer over the view (pointers and desktops).",
@@ -2371,7 +2371,7 @@ impl Style {
                 // `none` draws no outline whatever the width, set before
                 // or after it (CSS).
                 let (style, hidden) = match keyword(value)? {
-                    None | Some("solid") | Some("double") => (BorderStyle::Solid, false),
+                    None | Some("solid") => (BorderStyle::Solid, false),
                     Some("dashed") => (BorderStyle::Dashed, false),
                     Some("dotted") => (BorderStyle::Dotted, false),
                     Some("none") | Some("hidden") => (BorderStyle::Solid, true),

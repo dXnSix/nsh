@@ -52,8 +52,12 @@
   unknown class '...'`, target `nsh::build`); the core logs each unknown class once at run time. Class-only settings
   that are props in React Native (`line-clamp-*`, `truncate`, `whitespace-nowrap`, `pointer-events-*`, `object-*`,
   `caret-*`) lose to explicit props; `placeholder:text-*` / `selection:bg-*` lose to the `placeholderColor` /
-  `selectionColor` style keys. Not supported: `peer-*`, pseudo-elements, arbitrary CSS
-  properties; `space-x/y-*` are gaps.
+  `selectionColor` style keys. Not supported, so unknown: `peer-*`, pseudo-elements, arbitrary CSS properties, and every
+  utility without a native meaning (`sticky`, `order-*`, `transform-3d`, `select-all`, `border-double`, intrinsic sizes,
+  `snap-*`, `scroll-*`, `overscroll-*`, `touch-*`, `isolate`, `box-content`) or without CSS in Tailwind (a negative
+  where Tailwind has none: `-gap-4`, `-p-2`; fractions and `full` on padding, margin and gaps; non-integer `z-*`; bare
+  `inset-shadow` without a theme value). Rendering hints are accepted and do nothing (`ignored` in
+  `tailwind/mod.rs`: `antialiased`, `will-change-*`'s values, ...); `space-x/y-*` are gaps.
 - **Text style inheritance** (CSS-like): a view's text properties (color, font, size, alignment, ...) pass to the texts and inputs
   inside it, so `class="text-white"` on a button styles its label. Inset padding / margin (set by Rust
   components: `SafeAreaView`, `KeyboardAvoidingView`) are added to the resolved padding / margin, so classes and

@@ -686,6 +686,15 @@ fn length_value(theme: &Theme, v: &str, neg: bool, auto: bool) -> Option<PatchVa
     })
 }
 
+/// [`length_value`] of a utility Tailwind CSS takes no fractions or
+/// `full` for (padding, margin, gaps).
+fn spacing_value(theme: &Theme, v: &str, neg: bool, auto: bool) -> Option<PatchValue> {
+    if v == "full" || v.contains('/') && !v.starts_with('[') {
+        return None;
+    }
+    length_value(theme, v, neg, auto)
+}
+
 /// A length in points (no percentages).
 fn points(theme: &Theme, v: &str) -> Option<f32> {
     match length_value(theme, v, false, false)? {
@@ -801,6 +810,9 @@ pub(crate) fn parse(theme: &Theme, utility: &str) -> Option<Vec<Decl>> {
     };
     // The longest matching prefix decides (`inset-x-` before `inset-`).
     for &(prefix, handler) in PREFIXES {
+        if neg && !NEGATIVE.contains(&prefix) {
+            continue;
+        }
         if let Some(value) = u.strip_prefix(prefix)
             && let Some(value) = value.strip_prefix('-')
             && !value.is_empty()
@@ -814,6 +826,58 @@ pub(crate) fn parse(theme: &Theme, utility: &str) -> Option<Vec<Decl>> {
 }
 
 type Handler = fn(&Theme, &str, bool) -> Option<Vec<Decl>>;
+
+/// The prefixes Tailwind CSS has a negative form of (`-mt-2`); a leading
+/// `-` on any other is no class.
+static NEGATIVE: &[&str] = &[
+    "mx",
+    "my",
+    "mt",
+    "mr",
+    "mb",
+    "ml",
+    "ms",
+    "me",
+    "m",
+    "space-x",
+    "space-y",
+    "inset-x",
+    "inset-y",
+    "inset",
+    "top",
+    "right",
+    "bottom",
+    "left",
+    "start",
+    "end",
+    "z",
+    "col-start",
+    "col-end",
+    "row-start",
+    "row-end",
+    "col",
+    "row",
+    "tracking",
+    "underline-offset",
+    "outline-offset",
+    "bg-linear",
+    "bg-conic",
+    "hue-rotate",
+    "backdrop-hue-rotate",
+    "translate-x",
+    "translate-y",
+    "translate",
+    "rotate-x",
+    "rotate-y",
+    "rotate-z",
+    "rotate",
+    "scale-x",
+    "scale-y",
+    "scale",
+    "skew-x",
+    "skew-y",
+    "skew",
+];
 
 use StyleKey as K;
 
@@ -836,7 +900,7 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         "block" | "flow-root" | "inline-block" | "inline" => sets(K::Display, "block"),
         "grid" | "inline-grid" => sets(K::Display, "grid"),
         "hidden" => sets(K::Display, "none"),
-        "static" | "relative" | "sticky" => sets(K::Position, "relative"),
+        "static" | "relative" => sets(K::Position, "relative"),
         "absolute" | "fixed" => sets(K::Position, "absolute"),
         "visible" => sets(K::Visibility, "visible"),
         "invisible" | "collapse" => sets(K::Visibility, "hidden"),
@@ -1147,14 +1211,14 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
             y: percentage(0.5),
         })),
         // Borders and outlines.
-        "border-solid" | "border-double" => sets(K::BorderStyle, "solid"),
+        "border-solid" => sets(K::BorderStyle, "solid"),
         "border-dashed" => sets(K::BorderStyle, "dashed"),
         "border-dotted" => sets(K::BorderStyle, "dotted"),
         // `border-style: none`: no border whatever the width utilities.
         "border-none" => sets(K::BorderStyle, "none"),
         "border-hidden" => sets(K::BorderStyle, "hidden"),
         // A style without a width: CSS's initial `medium` width (3px).
-        "outline-solid" | "outline-double" => return outline_style("solid"),
+        "outline-solid" => return outline_style("solid"),
         "outline-dashed" => return outline_style("dashed"),
         "outline-dotted" => return outline_style("dotted"),
         "outline-none" | "outline-hidden" => sets(K::OutlineStyle, "none"),
@@ -1178,7 +1242,8 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         "rotate-none" => Decl::Part(Part::RotateNone),
         "backface-hidden" => sets(K::BackfaceVisibility, "hidden"),
         "backface-visible" => sets(K::BackfaceVisibility, "visible"),
-        "transform" | "transform-gpu" | "transform-cpu" | "transform-3d" | "transform-flat" => {
+        // NSH composes every transform alike, and flat is the default.
+        "transform" | "transform-gpu" | "transform-cpu" | "transform-flat" => {
             return Some(Vec::new());
         }
         // Transitions and animations.
@@ -1204,7 +1269,7 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         "pointer-events-none" => Decl::Prop(PropDecl::PointerEvents(PointerEvents::None)),
         "pointer-events-auto" => Decl::Prop(PropDecl::PointerEvents(PointerEvents::Auto)),
         "select-none" => Decl::Prop(PropDecl::Selectable(false)),
-        "select-text" | "select-all" => Decl::Prop(PropDecl::Selectable(true)),
+        "select-text" => Decl::Prop(PropDecl::Selectable(true)),
         "select-auto" => return Some(Vec::new()),
         // Images.
         "object-contain" => Decl::Prop(PropDecl::Resize(ResizeMode::Contain)),
@@ -1246,75 +1311,75 @@ fn filter(backdrop: bool, slot: u8, f: Filter) -> Decl {
 static PREFIXES: &[(&str, Handler)] = &[
     // Spacing.
     ("px", |t, v, n| {
-        one(set(K::PaddingHorizontal, length_value(t, v, n, false)?))
+        one(set(K::PaddingHorizontal, spacing_value(t, v, n, false)?))
     }),
     ("py", |t, v, n| {
-        one(set(K::PaddingVertical, length_value(t, v, n, false)?))
+        one(set(K::PaddingVertical, spacing_value(t, v, n, false)?))
     }),
     ("pt", |t, v, n| {
-        one(set(K::PaddingTop, length_value(t, v, n, false)?))
+        one(set(K::PaddingTop, spacing_value(t, v, n, false)?))
     }),
     ("pr", |t, v, n| {
-        one(set(K::PaddingRight, length_value(t, v, n, false)?))
+        one(set(K::PaddingRight, spacing_value(t, v, n, false)?))
     }),
     ("pb", |t, v, n| {
-        one(set(K::PaddingBottom, length_value(t, v, n, false)?))
+        one(set(K::PaddingBottom, spacing_value(t, v, n, false)?))
     }),
     ("pl", |t, v, n| {
-        one(set(K::PaddingLeft, length_value(t, v, n, false)?))
+        one(set(K::PaddingLeft, spacing_value(t, v, n, false)?))
     }),
     ("ps", |t, v, n| {
-        one(set(K::PaddingStart, length_value(t, v, n, false)?))
+        one(set(K::PaddingStart, spacing_value(t, v, n, false)?))
     }),
     ("pe", |t, v, n| {
-        one(set(K::PaddingEnd, length_value(t, v, n, false)?))
+        one(set(K::PaddingEnd, spacing_value(t, v, n, false)?))
     }),
     ("p", |t, v, n| {
-        one(set(K::Padding, length_value(t, v, n, false)?))
+        one(set(K::Padding, spacing_value(t, v, n, false)?))
     }),
     ("mx", |t, v, n| {
-        one(set(K::MarginHorizontal, length_value(t, v, n, true)?))
+        one(set(K::MarginHorizontal, spacing_value(t, v, n, true)?))
     }),
     ("my", |t, v, n| {
-        one(set(K::MarginVertical, length_value(t, v, n, true)?))
+        one(set(K::MarginVertical, spacing_value(t, v, n, true)?))
     }),
     ("mt", |t, v, n| {
-        one(set(K::MarginTop, length_value(t, v, n, true)?))
+        one(set(K::MarginTop, spacing_value(t, v, n, true)?))
     }),
     ("mr", |t, v, n| {
-        one(set(K::MarginRight, length_value(t, v, n, true)?))
+        one(set(K::MarginRight, spacing_value(t, v, n, true)?))
     }),
     ("mb", |t, v, n| {
-        one(set(K::MarginBottom, length_value(t, v, n, true)?))
+        one(set(K::MarginBottom, spacing_value(t, v, n, true)?))
     }),
     ("ml", |t, v, n| {
-        one(set(K::MarginLeft, length_value(t, v, n, true)?))
+        one(set(K::MarginLeft, spacing_value(t, v, n, true)?))
     }),
     ("ms", |t, v, n| {
-        one(set(K::MarginStart, length_value(t, v, n, true)?))
+        one(set(K::MarginStart, spacing_value(t, v, n, true)?))
     }),
     ("me", |t, v, n| {
-        one(set(K::MarginEnd, length_value(t, v, n, true)?))
+        one(set(K::MarginEnd, spacing_value(t, v, n, true)?))
     }),
     ("m", |t, v, n| {
-        one(set(K::Margin, length_value(t, v, n, true)?))
+        one(set(K::Margin, spacing_value(t, v, n, true)?))
     }),
     ("gap-x", |t, v, _| {
-        one(set(K::ColumnGap, length_value(t, v, false, false)?))
+        one(set(K::ColumnGap, spacing_value(t, v, false, false)?))
     }),
     ("gap-y", |t, v, _| {
-        one(set(K::RowGap, length_value(t, v, false, false)?))
+        one(set(K::RowGap, spacing_value(t, v, false, false)?))
     }),
     ("gap", |t, v, _| {
-        one(set(K::Gap, length_value(t, v, false, false)?))
+        one(set(K::Gap, spacing_value(t, v, false, false)?))
     }),
     // `space-*` puts margins between children; in flex layouts a gap is
     // the same thing.
     ("space-x", |t, v, _| {
-        one(set(K::ColumnGap, length_value(t, v, false, false)?))
+        one(set(K::ColumnGap, spacing_value(t, v, false, false)?))
     }),
     ("space-y", |t, v, _| {
-        one(set(K::RowGap, length_value(t, v, false, false)?))
+        one(set(K::RowGap, spacing_value(t, v, false, false)?))
     }),
     // Insets.
     ("inset-x", |t, v, n| {
@@ -1353,9 +1418,13 @@ static PREFIXES: &[(&str, Handler)] = &[
         one(set(K::End, length_value(t, v, n, true)?))
     }),
     ("z", |_, v, n| {
+        // `z-index` takes integers: bare positive ones, any arbitrary one.
         let z = match v {
-            "auto" => 0.0,
-            v => num(v).or_else(|| arbitrary(v).and_then(|a| css::number(&a)))?,
+            "auto" if !n => 0.0,
+            v => match arbitrary(v) {
+                Some(a) => unhinted(&a).trim().parse::<i32>().ok()? as f32,
+                None => v.parse::<u32>().ok()? as f32,
+            },
         };
         one(setn(K::ZIndex, if n { -z } else { z }))
     }),
@@ -1486,7 +1555,6 @@ static PREFIXES: &[(&str, Handler)] = &[
     }),
     ("auto-cols", |_, v, n| auto_tracks(K::GridAutoColumns, v, n)),
     ("auto-rows", |_, v, n| auto_tracks(K::GridAutoRows, v, n)),
-    ("order", |_, _, _| Some(Vec::new())),
     // Typography.
     ("font", |t, v, _| {
         if let Some(w) = t.weights.get(v) {
@@ -2072,18 +2140,8 @@ fn size(theme: &Theme, v: &str, key: StyleKey, width: bool) -> Option<Vec<Decl>>
     if let Some((fw, fh)) = screen {
         return one(Decl::Screen(key, fw, fh));
     }
-    match v {
-        "min" | "max" | "fit" => {
-            return one(match key {
-                K::MinWidth | K::MinHeight => setn(key, 0.0),
-                K::MaxWidth | K::MaxHeight => Decl::Set(key, PatchValue::Null),
-                _ => sets(key, "auto"),
-            });
-        }
-        "none" if matches!(key, K::MaxWidth | K::MaxHeight) => {
-            return one(Decl::Set(key, PatchValue::Null));
-        }
-        _ => {}
+    if v == "none" && matches!(key, K::MaxWidth | K::MaxHeight) {
+        return one(Decl::Set(key, PatchValue::Null));
     }
     if matches!(key, K::MaxWidth | K::Width | K::MinWidth)
         && let Some(w) = theme.containers.get(v)

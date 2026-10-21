@@ -345,7 +345,6 @@ impl Default for Theme {
                 ("2xs", shadows("inset 0 1px rgb(0 0 0 / 0.05)")),
                 ("xs", shadows("inset 0 1px 1px rgb(0 0 0 / 0.05)")),
                 ("sm", shadows("inset 0 2px 4px rgb(0 0 0 / 0.05)")),
-                ("", shadows("inset 0 2px 4px rgb(0 0 0 / 0.05)")),
             ]),
             drop_shadows: map(&[
                 ("xs", shadows("0 1px 1px rgb(0 0 0 / 0.05)")),
