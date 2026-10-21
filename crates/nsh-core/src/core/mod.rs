@@ -397,6 +397,8 @@ struct Node {
     /// The text color it inherits (`None`: React Native's black), CSS's
     /// `currentColor` unless it sets its own.
     inherited_color: Option<Color>,
+    /// CSS's `perspective` its style gives its children.
+    child_perspective: Option<Points>,
     /// Its style says `position: fixed`.
     wants_fixed: bool,
     /// A view made an overlay by `position: fixed` (`overlay.rs` `fix_view`).
@@ -526,6 +528,7 @@ impl Node {
             positional_children: false,
             spaced: false,
             inherited_color: None,
+            child_perspective: None,
             wants_fixed: false,
             fixed_view: false,
             class_pointer: crate::props::PointerEvents::Auto,
@@ -1758,6 +1761,7 @@ impl<M: TextEngine> Core<M> {
             direction,
             logical,
             pending,
+            perspective: child_perspective,
         } = style;
         if animated
             .iter()
@@ -1783,6 +1787,16 @@ impl<M: TextEngine> Core<M> {
                 top: taffy::LengthPercentageAuto::auto(),
                 bottom: taffy::LengthPercentageAuto::auto(),
             };
+        }
+        let node = &mut self.nodes[key as usize];
+        if node.child_perspective != child_perspective {
+            node.child_perspective = child_perspective;
+            // Its children's transforms compose it (their animated steps
+            // move by its steps).
+            let children = node.children.clone();
+            for c in children {
+                self.mark(c, dirty::VIEW | dirty::ANIMATION);
+            }
         }
         let node = &mut self.nodes[key as usize];
         if node.wants_fixed != pending.fixed_position {
@@ -1875,7 +1889,13 @@ impl<M: TextEngine> Core<M> {
         if view_changed {
             flags |= dirty::VIEW;
         }
-        if animation_changed {
+        let parent = self.nodes[key as usize].parent;
+        let in_perspective =
+            parent != NO_KEY && self.nodes[parent as usize].child_perspective.is_some();
+        if animation_changed
+            || view_changed && in_perspective && !self.nodes[key as usize].animated.is_empty()
+        {
+            // Its animated steps move with its parent's perspective.
             flags |= dirty::ANIMATION;
         }
         if flags != 0 {
@@ -2898,6 +2918,9 @@ impl<M: TextEngine> Core<M> {
         self.nodes[parent as usize].children.insert(pos, child);
         self.status_bars_moved |= !self.status_bar_nodes.is_empty();
         self.update_direction(child);
+        if self.nodes[parent as usize].child_perspective.is_some() {
+            self.mark(child, dirty::VIEW | dirty::ANIMATION);
+        }
         let node = &self.nodes[parent as usize];
         let color = node.text_style.color.or(node.inherited_color);
         if self.nodes[child as usize].inherited_color != color {
@@ -2993,6 +3016,10 @@ impl<M: TextEngine> Core<M> {
             self.positions_changed(parent);
         }
         self.nodes[key as usize].parent = NO_KEY;
+        if self.nodes[parent as usize].child_perspective.is_some() {
+            // Without the perspective wherever it goes next.
+            self.mark(key, dirty::VIEW | dirty::ANIMATION);
+        }
         self.spacing_changed(parent, NO_KEY);
         if self.pointer_none_classes > 0 && self.pointer_region(parent).is_some() {
             // It no longer inherits the region's `none`.
@@ -3539,6 +3566,15 @@ impl<M: TextEngine> Core<M> {
             }
             if flags & dirty::ANIMATION != 0 {
                 let mut bindings = node.animated.clone();
+                // Its transform's steps come after its parent's perspective.
+                let steps = self.perspective_steps(key);
+                if steps > 0 {
+                    for (prop, _) in &mut bindings {
+                        if let AnimationProp::Transform(i) = prop {
+                            *i += steps;
+                        }
+                    }
+                }
                 if let Some(d) = &node.drawing {
                     bindings.extend(
                         d.slots
@@ -4734,10 +4770,19 @@ impl<M: TextEngine> Core<M> {
             }
             self.mount.push(MountItem::Frame { id, frame });
             let node = &self.nodes[key as usize];
-            // Translations by a fraction of the size follow it.
-            if node.view_style.transform.has_fractions() {
+            // Translations by a fraction of the size follow it, and so does
+            // the perspective of its parent, seen from the parent's center.
+            let parent_perspective = self.perspective_steps(key) > 0;
+            if node.view_style.transform.has_fractions() || parent_perspective {
                 let style = self.mounted_view_style(key);
                 self.mount.push(MountItem::ViewStyle { id, style });
+            }
+            if node.child_perspective.is_some() {
+                // Its center moved for its children.
+                let children = node.children.clone();
+                for c in children {
+                    self.mark(c, dirty::VIEW);
+                }
             }
             if is_text {
                 self.queue_text(key);

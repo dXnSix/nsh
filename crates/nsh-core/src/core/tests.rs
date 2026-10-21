@@ -12567,6 +12567,72 @@ fn fixed_views_are_laid_out_in_their_root_view() {
 }
 
 #[test]
+fn perspective_gives_children_depth_from_the_center() {
+    use crate::transform::TransformKind as T;
+    let mut c = core();
+    view_with_classes(&mut c, 2, "perspective-[400px] w-[200px] h-[200px]");
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 3,
+                tag: Tag::View,
+            },
+            class_op(3, "size-[100px] rotate-y-45"),
+            Op::Insert {
+                parent: 2,
+                child: 3,
+                before: None,
+            },
+            Op::Create {
+                id: 4,
+                tag: Tag::View,
+            },
+            class_op(4, "size-[100px] rotate-12"),
+            Op::Insert {
+                parent: 2,
+                child: 4,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    let steps = |batch: &MountBatch, id| {
+        view_style_of(batch, id).map(|v| {
+            v.transform
+                .ops()
+                .iter()
+                .map(|op| (op.kind, op.value))
+                .collect::<Vec<_>>()
+        })
+    };
+    // 3's center is 50 left of and 50 above the parent's: the perspective
+    // is seen from the parent's center, before 3's own rotation.
+    assert_eq!(
+        steps(&batch, 3).unwrap(),
+        [
+            (T::TranslateX, 50.0),
+            (T::TranslateY, 50.0),
+            (T::Perspective, 400.0),
+            (T::TranslateX, -50.0),
+            (T::TranslateY, -50.0),
+            (T::RotateY, 45.0),
+        ]
+    );
+    // A view that stays in its plane is as it was.
+    assert_eq!(steps(&batch, 4).unwrap(), [(T::Rotate, 12.0)]);
+    // The parent's own transform does not get it.
+    assert_eq!(
+        view_style_of(&batch, 2).map(|v| v.transform.ops().len()),
+        None
+    );
+    // Without it, the children's own transforms.
+    c.apply(class_op(2, "w-[200px] h-[200px]")).unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(steps(&batch, 3).unwrap(), [(T::RotateY, 45.0)]);
+}
+
+#[test]
 fn static_views_ignore_their_insets() {
     let mut c = core();
     view_with_classes(&mut c, 2, "relative top-4 left-2 size-[10px] static");

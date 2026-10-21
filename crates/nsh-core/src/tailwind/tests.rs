@@ -695,6 +695,14 @@ fn transforms() {
             (TransformKind::Rotate, 30.0),
         ]
     );
+    // `perspective-*` is CSS's `perspective`: its children's depth, no
+    // step of its own transform.
+    let s = styled("perspective-near rotate-x-45");
+    assert_eq!(s.perspective, Some(px(300.0)));
+    assert_eq!(
+        kinds("perspective-near rotate-x-45"),
+        [(TransformKind::RotateX, 45.0)]
+    );
     // Every step Tailwind composes fits.
     assert_eq!(
         kinds(

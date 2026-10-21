@@ -838,6 +838,10 @@ pub struct Style {
     pub logical: Logical,
     /// Values that only show together with another property.
     pub(crate) pending: Pending,
+    /// CSS's `perspective` (`perspective-*`, `Styled::perspective`): the
+    /// depth the view gives its children's 3D transforms, seen from its
+    /// center; the core composes it into their transforms.
+    pub perspective: Option<Points>,
 }
 
 /// Values of properties that take effect only together with another one,
@@ -1051,6 +1055,7 @@ impl Default for Style {
             direction: None,
             logical: Logical::default(),
             pending: Pending::default(),
+            perspective: None,
         }
     }
 }

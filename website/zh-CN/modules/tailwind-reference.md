@@ -380,7 +380,7 @@ view()
 | `rotate-x-<deg>`、`rotate-y-<deg>`、`rotate-z-<deg>` | 3D 旋转（属于 `transform`，在平移、旋转和缩放之后） |
 | `scale-<pct>`、`scale-x-<pct>`、`scale-y-<pct>`、`scale-[<factor>]` | 缩放：`scale-95` = 0.95，`-scale-x-100` 为水平镜像 |
 | `skew-<deg>`、`skew-x-<deg>`、`skew-y-<deg>` | 斜切（Android 不支持） |
-| `perspective-dramatic`（100）、`-near`（300）、`-normal`（500）、`-midrange`（800）、`-distant`（1200）、`perspective-[<length>]` | 3D 旋转的透视距离 |
+| `perspective-dramatic`（100）、`-near`（300）、`-normal`（500）、`-midrange`（800）、`-distant`（1200）、`perspective-[<length>]` | 元素子元素 3D 旋转的透视距离，从元素中心观察（CSS 的 `perspective`：`<View class="perspective-near"><View class="rotate-y-45" /></View>`） |
 | `origin-center`、`-top`、`-top-right`、`-right`、`-bottom-right`、`-bottom`、`-bottom-left`、`-left`、`-top-left`、`origin-[<value>]` | `transformOrigin` |
 | `backface-hidden`、`backface-visible` | `backfaceVisibility` |
 | `transform-none` | 清除 3D 旋转和斜切（CSS 的 `transform: none`） |

@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use super::{Core, Key, Kind, NO_KEY, dirty, disabling_changes};
 use crate::{
+    geometry::{Points, Size},
     mount::MountItem,
     ops::NodeId,
     platform::{Appearance, ColorScheme},
@@ -284,10 +285,70 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// The steps of its parent's perspective that `key`'s transform starts
+    /// with as mounted ([`Self::mounted_view_style`]): 5, or 0 without one.
+    /// Only a view that turns out of its plane (`rotateX`, `rotateY`) shows
+    /// a perspective; a flat one stays as it is.
+    pub(super) fn perspective_steps(&self, key: Key) -> u8 {
+        let node = &self.nodes[key as usize];
+        let has = node.parent != NO_KEY
+            && !node.inline
+            && self.nodes[node.parent as usize].child_perspective.is_some()
+            && node.view_style.transform.ops().iter().any(|op| {
+                matches!(
+                    op.kind,
+                    crate::transform::TransformKind::RotateX
+                        | crate::transform::TransformKind::RotateY
+                )
+            });
+        if has { 5 } else { 0 }
+    }
+
     /// The view style of `key` as platforms take it: fractional
-    /// translations resolved.
+    /// translations resolved, its parent's perspective composed in.
     pub(super) fn mounted_view_style(&self, key: Key) -> Box<ViewStyle> {
-        self.nodes[key as usize].mounted_view_style()
+        let node = &self.nodes[key as usize];
+        let mut style = node.mounted_view_style();
+        let parent = node.parent;
+        if parent == NO_KEY || node.inline {
+            return style;
+        }
+        let parent = &self.nodes[parent as usize];
+        let Some(distance) = parent
+            .child_perspective
+            .filter(|_| self.perspective_steps(key) > 0)
+        else {
+            return style;
+        };
+        // CSS: the parent's perspective, around its center, applies to the
+        // child's plane: `translate(-d) perspective() translate(d)` before
+        // its own transform, `d` its origin's distance from that center.
+        let size = |s: Size<Points>| if s.width.is_nan() { Size::default() } else { s };
+        let (own, parent_size) = (size(node.frame.size), size(parent.frame.size));
+        let origin = if node.frame.size.width.is_nan() {
+            crate::geometry::Point::default()
+        } else {
+            node.frame.origin
+        };
+        let (offset, _) = style.transform_origin.offset(own);
+        let dx = origin.x.0 + own.width.0 / 2.0 + offset.x.0 - parent_size.width.0 / 2.0;
+        let dy = origin.y.0 + own.height.0 / 2.0 + offset.y.0 - parent_size.height.0 / 2.0;
+        use crate::transform::{Transform, TransformKind as T};
+        let mut composed = Transform::IDENTITY;
+        for (kind, value) in [
+            (T::TranslateX, -dx),
+            (T::TranslateY, -dy),
+            (T::Perspective, distance.0),
+            (T::TranslateX, dx),
+            (T::TranslateY, dy),
+        ] {
+            let _ = composed.push(kind, value);
+        }
+        for op in style.transform.ops() {
+            let _ = composed.push(op.kind, op.value);
+        }
+        style.transform = composed;
+        style
     }
 
     /// Sets the inline style of `key`'s `part` (`None`: removes it).

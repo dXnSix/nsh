@@ -548,12 +548,12 @@ impl Parts {
             // CSS: `translate`, `rotate`, `scale`, then `transform`
             // (`rotateX() rotateY() rotateZ() skewX() skewY()`, as Tailwind
             // writes it); a list applies right to left.
+            // `perspective-*` is CSS's `perspective` property: depth for the
+            // children, not a step of the view's own transform.
+            style.perspective = self.perspective.map(px);
             let mut push = |kind: TransformKind, v: f32| {
                 let _ = style.view.transform.push(kind, v);
             };
-            if let Some(p) = self.perspective {
-                push(TransformKind::Perspective, p);
-            }
             for (i, t) in self.translate.iter().enumerate() {
                 match (i, t) {
                     (0, Some(Len::Points(v))) => push(TransformKind::TranslateX, *v),

@@ -380,7 +380,7 @@ Shadows, rings and inset shadows combine into one `boxShadow` list, as in CSS. A
 | `rotate-x-<deg>`, `rotate-y-<deg>`, `rotate-z-<deg>` | 3D rotation (in `transform`, after the translation, the rotation and the scale) |
 | `scale-<pct>`, `scale-x-<pct>`, `scale-y-<pct>`, `scale-[<factor>]` | scale: `scale-95` = 0.95, `-scale-x-100` mirrors |
 | `skew-<deg>`, `skew-x-<deg>`, `skew-y-<deg>` | skew (not on Android) |
-| `perspective-dramatic` (100), `-near` (300), `-normal` (500), `-midrange` (800), `-distant` (1200), `perspective-[<length>]` | perspective for 3D rotations |
+| `perspective-dramatic` (100), `-near` (300), `-normal` (500), `-midrange` (800), `-distant` (1200), `perspective-[<length>]` | depth for the 3D rotations of the element's children, seen from its center (CSS's `perspective`: `<View class="perspective-near"><View class="rotate-y-45" /></View>`) |
 | `origin-center`, `-top`, `-top-right`, `-right`, `-bottom-right`, `-bottom`, `-bottom-left`, `-left`, `-top-left`, `origin-[<value>]` | `transformOrigin` |
 | `backface-hidden`, `backface-visible` | `backfaceVisibility` |
 | `transform-none` | clears the 3D rotations and the skews (CSS's `transform: none`) |

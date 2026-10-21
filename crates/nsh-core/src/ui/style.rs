@@ -2532,7 +2532,7 @@ pub trait Styled: Sized {
         })
     }
 
-    /// Rotates by `angle` around the horizontal axis (3D; with
+    /// Rotates by `angle` around the horizontal axis (3D; in a view with
     /// [`Styled::perspective`] it tilts towards the viewer).
     fn rotate_x(self, angle: impl IntoReactive<Radians>) -> Self {
         transform_with(self, angle, |a: Radians| {
@@ -2561,7 +2561,9 @@ pub trait Styled: Sized {
         })
     }
 
-    /// Looks at its 3D rotations from `distance` away (smaller: stronger).
+    /// Gives its children depth: their 3D rotations are seen from
+    /// `distance` away (smaller: stronger), from its center (CSS's
+    /// `perspective`, `perspective-*`).
     fn perspective(self, distance: impl IntoReactive<AbsoluteLength>) -> Self {
         transform_with(self, distance, |d: AbsoluteLength| {
             (TransformKind::Perspective, points(d))
@@ -2569,8 +2571,8 @@ pub trait Styled: Sized {
     }
 
     /// The step `kind` of its transform, by `amount`. The steps compose in
-    /// CSS's order, whatever the order of the calls: perspective,
-    /// translate, rotate, scale, then the 3D rotations and the skews.
+    /// CSS's order, whatever the order of the calls: translate, rotate,
+    /// scale, then the 3D rotations and the skews.
     fn transform_step(self, kind: TransformKind, amount: impl IntoReactive<f32>) -> Self {
         transform_with(self, amount, move |amount| (kind, amount))
     }

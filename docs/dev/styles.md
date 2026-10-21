@@ -61,6 +61,13 @@
   element child but the last, as Tailwind's `:where(& > :not(:last-child))`: the parent's `ClassProps::space`, which
   the core applies to a child's style before its classes and inline style (`classes.rs` `space_of`), so the child's
   own margins win; an insert or removal restyles only the children whose last-ness changed (`spacing_changed`).
+- **`perspective-*`** (and the typed `.perspective()`) is CSS's `perspective`: depth for the children, seen from the
+  view's center (`Style::perspective`). The core composes `translate(-d) perspective() translate(d)` before the
+  own transform of each child that turns out of its plane (`rotateX` / `rotateY`; a flat one looks the same), `d` its
+  origin's distance from the parent's center (`classes.rs` `mounted_view_style`; sent again when either frame changes;
+  the child's animated steps move by those five, `perspective_steps`). iOS, macOS, the web and the desktops draw it
+  exactly; Android decomposes the matrix into its view properties, a camera distance about the child's own pivot. The
+  inline `transform: [{ perspective }]` stays a step of the view's own transform (React Native).
 - **`position`**: `static` is taffy's `relative` with its insets set to `auto` after they are placed (`Pending`, so in any
   order); every view stays a containing block for absolute children, a static one too (taffy places absolute children in
   their parent). `fixed` (`fixed`, `position: "fixed"`) makes a `View` one of the core's overlays of no anchor (`overlay.rs`
