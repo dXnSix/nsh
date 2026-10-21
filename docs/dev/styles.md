@@ -73,6 +73,15 @@
   the child's animated steps move by those five, `perspective_steps`). iOS, macOS, the web and the desktops draw it
   exactly; Android decomposes the matrix into its view properties, a camera distance about the child's own pivot. The
   inline `transform: [{ perspective }]` stays a step of the view's own transform (React Native).
+- **Boxes** (kept, documented in the guide): `overflow-x-hidden` / `overflow-y-hidden` clip both axes and never scroll
+  (views are no scroll containers; CSS's other axis would be scrollable); `invisible` hides the subtree (`setHidden`,
+  `View.INVISIBLE`; CSS's `visible` child would show); `mix-blend-*` blends with everything drawn behind (no stacking
+  context isolates it); `block` boxes never collapse margins with their children (an unset `align-content` resolves to
+  `flex-start`, which makes taffy's block a formatting context); strings keep their whitespace (`whitespace-*` sets
+  wrapping only; the JSX compiler collapses literal JSX text); `transition` / `transition-all` animate their groups
+  (`TransitionProps`: colors, opacity, transform, shadows, shape), and filters, backdrop filters, gradients and layout
+  take their new values at once; `focus-visible:` is `focus:` (the state bits, a `u8`, have none left for a focus's
+  origin, which only the desktops and the web report).
 - **`position`**: `static` is taffy's `relative` with its insets set to `auto` after they are placed (`Pending`, so in any
   order); every view stays a containing block for absolute children, a static one too (taffy places absolute children in
   their parent). `fixed` (`fixed`, `position: "fixed"`) makes a `View` one of the core's overlays of no anchor (`overlay.rs`
@@ -147,7 +156,7 @@
   `RenderEffect`, drawn clipped under the view's background.
   Known limits: iOS has no CSS filters on views (only `opacity`, `brightness` ≤ 1 and `drop-shadow`; images take every color filter
   and `blur`, applied while decoding); iOS texts draw no gradients or inset shadows; Android has no backdrop blur, `blur` or
-  `drop-shadow` before API 31; Linux and GPUI draw no backdrop filter; iOS, macOS and Android draw one `drop-shadow()`,
+  `drop-shadow` before API 31; Linux and GPUI draw no backdrop filter, GPUI no `blur()` or `mixBlendMode`; iOS, macOS and Android draw one `drop-shadow()`,
   the last of the chain (a Tailwind shadow's widest layer; the web, Linux, Windows and GPUI draw every layer a class or
   style gives); a text shadow is one layer everywhere (`text-shadow-*` keep the theme's widest).
 - **View styles**: `backgroundColor`, `borderWidth` / `borderColor` (also per side: `borderTopWidth`, `borderLeftColor`, ...),

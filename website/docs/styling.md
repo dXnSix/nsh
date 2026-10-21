@@ -294,6 +294,8 @@ Platform support differs:
 | `backdropFilter` | A system blur material, approximating the radius | From Android 12 (API 31) |
 | `mixBlendMode` | Yes | From Android 10 (API 29) |
 
+The web, Windows and Linux apply every filter to views, macOS as iOS does; GPUI draws the color filters and `drop-shadow()`. The backdrop filter is a blur on iOS, macOS and Android, every filter on the web and Windows; Linux and GPUI draw none, and GPUI draws views in the normal blend mode. Of a `filter` with several `drop-shadow()`s, iOS, macOS and Android draw the last. `mixBlendMode` blends the view with everything drawn behind it.
+
 ## Outlines, opacity and visibility
 
 - `outlineWidth`, `outlineColor`, `outlineStyle`, `outlineOffset` (`.outline(..)`, `.outline_color(..)`, `.outline_dashed()`, `.outline_offset(..)`): a line outside the border that takes no space (negative offsets draw inside). `outlineStyle: "none"` (or `"hidden"`, `.outline_none()`) hides the outline whatever its width, as in CSS.

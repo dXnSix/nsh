@@ -294,6 +294,8 @@ view()
 | `backdropFilter` | 系统模糊材质，近似给定半径 | Android 12（API 31）起支持 |
 | `mixBlendMode` | 支持 | Android 10（API 29）起支持 |
 
+Web、Windows 和 Linux 对视图应用所有滤镜，macOS 与 iOS 相同；GPUI 绘制颜色滤镜和 `drop-shadow()`。背景滤镜在 iOS、macOS 和 Android 上是模糊，在 Web 和 Windows 上支持所有滤镜；Linux 和 GPUI 不绘制背景滤镜，GPUI 以普通混合模式绘制视图。对于包含多个 `drop-shadow()` 的 `filter`，iOS、macOS 和 Android 绘制最后一个。`mixBlendMode` 让视图与其后绘制的一切混合。
+
 ## 轮廓线、不透明度与可见性
 
 - `outlineWidth`、`outlineColor`、`outlineStyle`、`outlineOffset`（`.outline(..)`、`.outline_color(..)`、`.outline_dashed()`、`.outline_offset(..)`）：边框之外、不占空间的一条线（负偏移会画在内侧）。与 CSS 一样，`outlineStyle: "none"`（或 `"hidden"`，`.outline_none()`）会隐藏轮廓，无论宽度是多少。
