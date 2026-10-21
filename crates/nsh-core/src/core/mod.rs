@@ -401,6 +401,10 @@ struct Node {
     child_perspective: Option<Points>,
     /// The `ch` its classes were resolved with (`max-w-prose`).
     ch: f32,
+    /// The inherited text color its classes were resolved with
+    /// (`currentColor`), and whether it waits in `Core::color_changed`.
+    color_used: Option<Color>,
+    color_queued: bool,
     /// Its style says `position: fixed`.
     wants_fixed: bool,
     /// A view made an overlay by `position: fixed` (`overlay.rs` `fix_view`).
@@ -532,6 +536,8 @@ impl Node {
             inherited_color: None,
             child_perspective: None,
             ch: 0.0,
+            color_used: None,
+            color_queued: false,
             wants_fixed: false,
             fixed_view: false,
             class_pointer: crate::props::PointerEvents::Auto,
@@ -716,6 +722,9 @@ pub struct Core<M: TextEngine> {
     /// before the views around them (and their fonts) were in place
     /// ([`Core::sync_ch`]).
     ch_styled: Vec<(Key, NodeId)>,
+    /// Nodes whose inherited text color changed since they were styled
+    /// with it (`currentColor`; [`Core::sync_colors`]).
+    color_changed: Vec<(Key, NodeId)>,
     /// The user's preferred text size (1.0 is the default).
     font_scale: f32,
     /// The font text is drawn with unless it sets its own: the tokens'
@@ -811,6 +820,7 @@ impl<M: TextEngine> Core<M> {
             fixed_changed: Vec::new(),
             zero_advances: Default::default(),
             ch_styled: Vec::new(),
+            color_changed: Vec::new(),
             font_scale: 1.0,
             default_font: None,
             queue: Vec::new(),
@@ -1313,6 +1323,7 @@ impl<M: TextEngine> Core<M> {
     fn commit_round(&mut self) {
         // The views' patches and the views to make first.
         self.render_components();
+        self.sync_colors();
         self.sync_ch();
         self.sync_fixed();
         self.sync_overlays();
@@ -3811,18 +3822,21 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// What the classes of `key`, else of the nearest view around it that
-    /// says, set (`get`): `whitespace-*` and `select-*` inherit, as CSS's
-    /// `white-space` and `user-select: auto` do.
-    fn class_prop<T>(&self, key: Key, get: impl Fn(&ClassProps) -> Option<T>) -> Option<T> {
+    /// says, set for its lines' wrapping and its selection: `whitespace-*`
+    /// and `select-*` inherit, as CSS's `white-space` and `user-select:
+    /// auto` do. One walk up for both.
+    fn inherited_text_props(&self, key: Key) -> (Option<bool>, Option<bool>) {
+        let (mut no_wrap, mut selectable) = (None, None);
         let mut k = key;
-        while k != NO_KEY {
+        while k != NO_KEY && (no_wrap.is_none() || selectable.is_none()) {
             let node = &self.nodes[k as usize];
-            if let Some(v) = node.class_props.as_deref().and_then(&get) {
-                return Some(v);
+            if let Some(c) = node.class_props.as_deref() {
+                no_wrap = no_wrap.or(c.no_wrap);
+                selectable = selectable.or(c.selectable);
             }
             k = node.parent;
         }
-        None
+        (no_wrap, selectable)
     }
 
     /// The nearest `textAlign` set on a view around `key`.
@@ -3882,6 +3896,7 @@ impl<M: TextEngine> Core<M> {
             _ => node.paragraph.ellipsize,
         };
         let inherited = self.inherited_text_style(key);
+        let (no_wrap, selectable) = self.inherited_text_props(key);
         let mut text = AttributedText {
             align: directed_align(
                 node.text_style
@@ -3896,12 +3911,9 @@ impl<M: TextEngine> Core<M> {
             ellipsize,
             // A line clamp already keeps lines from wrapping past it, and
             // must ellipsize at the box (`truncate`).
-            no_wrap: max_lines == 0 && self.class_prop(key, |c| c.no_wrap).unwrap_or(false),
+            no_wrap: max_lines == 0 && no_wrap.unwrap_or(false),
             shadow: node.text_style.shadow(),
-            selectable: node
-                .paragraph
-                .selectable
-                .or_else(|| self.class_prop(key, |c| c.selectable)),
+            selectable: node.paragraph.selectable.or(selectable),
             selection_color: node
                 .paragraph
                 .selection_color

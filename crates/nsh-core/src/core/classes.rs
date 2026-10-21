@@ -904,7 +904,10 @@ impl<M: TextEngine> Core<M> {
             space.apply(&mut base);
         }
         let spaced = space.is_some();
-        self.nodes[key as usize].spaced = spaced;
+        let node = &mut self.nodes[key as usize];
+        node.spaced = spaced;
+        // The color it is styled with (`currentColor`, `sync_colors`).
+        node.color_used = node.inherited_color;
         // CSS's `ch` (`max-w-prose`): the `0` of the font it inherits, or of
         // its own once its classes set one.
         let reads_ch = self.nodes[key as usize]
@@ -918,18 +921,23 @@ impl<M: TextEngine> Core<M> {
         };
         let mut style;
         let mut props;
-        loop {
-            style = base.clone();
-            props = ClassProps::default();
-            self.resolve_classes(key, ch, &mut style, &mut props);
-            let Some(inherited) = inherited_font else {
-                break;
-            };
-            let own = self.zero_advance(inherited.inherit(&style.text));
-            if own == ch {
-                break;
+        match inherited_font {
+            None => {
+                style = base;
+                props = ClassProps::default();
+                self.resolve_classes(key, ch, &mut style, &mut props);
             }
-            ch = own;
+            // Again with its own font's, once its classes set one.
+            Some(inherited) => loop {
+                style = base.clone();
+                props = ClassProps::default();
+                self.resolve_classes(key, ch, &mut style, &mut props);
+                let own = self.zero_advance(inherited.inherit(&style.text));
+                if own == ch {
+                    break;
+                }
+                ch = own;
+            },
         }
         if reads_ch {
             let node = &mut self.nodes[key as usize];
@@ -962,6 +970,26 @@ impl<M: TextEngine> Core<M> {
         }
         // Styled just now, with the fonts in place.
         self.ch_styled.clear();
+    }
+
+    /// The nodes queued by [`Self::inherit_color`] are styled again where
+    /// the text color they inherit is not the one they were styled with.
+    pub(super) fn sync_colors(&mut self) {
+        if self.color_changed.is_empty() {
+            return;
+        }
+        for (key, id) in std::mem::take(&mut self.color_changed) {
+            let Some(node) = self.nodes.get_mut(key as usize) else {
+                continue;
+            };
+            if node.id != id {
+                continue;
+            }
+            node.color_queued = false;
+            if node.inherited_color != node.color_used {
+                self.restyle(key);
+            }
+        }
     }
 
     /// The advance of `font`'s `0`, CSS's `ch` (cached per font).
@@ -1050,12 +1078,18 @@ impl<M: TextEngine> Core<M> {
                 continue;
             }
             node.inherited_color = color;
-            if node
-                .classes
-                .as_ref()
-                .is_some_and(|c| c.deps() & deps::CURRENT_COLOR != 0)
+            // Styled again as the commit starts, where the color it was
+            // styled with is not the one it inherits then (a subtree built
+            // from the inside out passes through several).
+            if !node.color_queued
+                && node
+                    .classes
+                    .as_ref()
+                    .is_some_and(|c| c.deps() & deps::CURRENT_COLOR != 0)
             {
-                self.restyle(k);
+                node.color_queued = true;
+                let id = node.id;
+                self.color_changed.push((k, id));
             }
             let node = &self.nodes[k as usize];
             if node.text_style.color.is_none() {
