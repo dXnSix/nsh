@@ -374,14 +374,15 @@ view()
 | Class | 设置 |
 |---|---|
 | `translate-x-<n>`、`translate-y-<n>`、`translate-<n>` | 平移（间距、`full`、元素自身尺寸的分数：`-translate-x-1/2`、任意值） |
-| `rotate-<deg>`、`rotate-z-<deg>`、`rotate-[<angle>]` | 旋转 |
-| `rotate-x-<deg>`、`rotate-y-<deg>` | 3D 旋转 |
+| `rotate-<deg>`、`rotate-[<angle>]` | 旋转（CSS 的 `rotate`） |
+| `rotate-x-<deg>`、`rotate-y-<deg>`、`rotate-z-<deg>` | 3D 旋转（属于 `transform`，在平移、旋转和缩放之后） |
 | `scale-<pct>`、`scale-x-<pct>`、`scale-y-<pct>`、`scale-[<factor>]` | 缩放：`scale-95` = 0.95，`-scale-x-100` 为水平镜像 |
 | `skew-<deg>`、`skew-x-<deg>`、`skew-y-<deg>` | 斜切（Android 不支持） |
 | `perspective-dramatic`（100）、`-near`（300）、`-normal`（500）、`-midrange`（800）、`-distant`（1200）、`perspective-[<length>]` | 3D 旋转的透视距离 |
 | `origin-center`、`-top`、`-top-right`、`-right`、`-bottom-right`、`-bottom`、`-bottom-left`、`-left`、`-top-left`、`origin-[<value>]` | `transformOrigin` |
 | `backface-hidden`、`backface-visible` | `backfaceVisibility` |
-| `transform-none` | 清除变换 |
+| `transform-none` | 清除 3D 旋转和斜切（CSS 的 `transform: none`） |
+| `translate-none`、`rotate-none`、`scale-none` | 分别清除平移、旋转、缩放 |
 
 变换类与 CSS 一样组合：`translate-*`、`rotate-*` 和 `scale-*` 无论顺序都会叠加。`transform`、`transform-gpu`、`transform-cpu`、`transform-3d` 和 `transform-flat` 可以写，但不起作用。按尺寸分数的平移会根据元素的实际尺寸计算，尺寸变化时自动更新。
 

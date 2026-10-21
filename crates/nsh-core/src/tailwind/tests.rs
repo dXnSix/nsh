@@ -446,6 +446,49 @@ fn transforms() {
         .resolve_fractions(crate::geometry::size(px(100.0), px(40.0)));
     assert_eq!(t.ops()[0].kind, TransformKind::TranslateX);
     assert_eq!(t.ops()[0].value, -50.0);
+    let kinds = |classes: &str| {
+        styled(classes)
+            .view
+            .transform
+            .ops()
+            .iter()
+            .map(|op| (op.kind, op.value))
+            .collect::<Vec<_>>()
+    };
+    // `transform-none` is `transform: none`: the 3D rotations and the
+    // skews; `translate`, `rotate` and `scale` are properties of their own.
+    assert_eq!(
+        kinds("translate-x-2 rotate-12 scale-90 rotate-x-45 skew-x-6 transform-none"),
+        [
+            (TransformKind::TranslateX, 8.0),
+            (TransformKind::Rotate, 12.0),
+            (TransformKind::Scale, 0.9),
+        ]
+    );
+    assert_eq!(
+        kinds("translate-x-2 rotate-12 scale-90 rotate-x-45 translate-none scale-none rotate-none"),
+        [(TransformKind::RotateX, 45.0)]
+    );
+    // `rotate-z-*` is `rotateZ()` in `transform`, after `rotateX()` and
+    // `rotateY()`, and composes with `rotate-*` (CSS's `rotate`, applied
+    // after the transform).
+    assert_eq!(
+        kinds("rotate-z-30 rotate-x-45 rotate-12 scale-50"),
+        [
+            (TransformKind::Rotate, 12.0),
+            (TransformKind::Scale, 0.5),
+            (TransformKind::RotateX, 45.0),
+            (TransformKind::Rotate, 30.0),
+        ]
+    );
+    // Every step Tailwind composes fits.
+    assert_eq!(
+        kinds(
+            "translate-x-1 translate-y-2 rotate-3 scale-x-50 scale-y-75 rotate-x-6 rotate-y-12 rotate-z-45 skew-x-1 skew-y-2"
+        )
+        .len(),
+        10
+    );
 }
 
 #[test]

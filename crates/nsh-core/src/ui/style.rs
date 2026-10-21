@@ -407,7 +407,12 @@ pub(crate) enum Declaration {
     /// One step of the transform the styles compose (CSS's order:
     /// translate, rotate, scale, then the 3D rotations and skews).
     Transform(TransformKind, Bits),
+    /// `transform: none` (the 3D rotations and the skews).
     TransformNone,
+    /// `translate: none`, `scale: none`, `rotate: none`.
+    TranslateNone,
+    ScaleNone,
+    RotateNone,
     /// `transformOrigin` at points or fractions (`true`) of the size.
     Origin([(bool, Bits); 2]),
     Gradient(GradientShape),
@@ -548,6 +553,9 @@ impl Declaration {
                 out.extend(parts.iter().cloned().map(Decl::Part));
             }
             Declaration::TransformNone => part(out, Part::TransformNone),
+            Declaration::TranslateNone => part(out, Part::TranslateNone),
+            Declaration::ScaleNone => part(out, Part::ScaleNone),
+            Declaration::RotateNone => part(out, Part::RotateNone),
             Declaration::Origin(axes) => {
                 let [x, y] = axes.map(|(fraction, v)| {
                     if fraction {
@@ -2515,15 +2523,27 @@ pub trait Styled: Sized {
         transform_with(self, amount, move |amount| (kind, amount))
     }
 
-    /// No transform (also none of the steps set before).
-    fn transform_none(mut self) -> Self {
-        let style = self.style();
-        if style.is_bound() {
-            style.bind(|s| s.push(Declaration::TransformNone));
-        } else {
-            style.push(Declaration::TransformNone);
-        }
-        self
+    /// No 3D rotations and skews (CSS's `transform: none`; the
+    /// translation, rotation and scale are properties of their own, which
+    /// [`Styled::translate_none`], [`Styled::rotate_none`] and
+    /// [`Styled::scale_none`] remove).
+    fn transform_none(self) -> Self {
+        transform_reset(self, Declaration::TransformNone)
+    }
+
+    /// No translation (also none set before).
+    fn translate_none(self) -> Self {
+        transform_reset(self, Declaration::TranslateNone)
+    }
+
+    /// No scale (also none set before).
+    fn scale_none(self) -> Self {
+        transform_reset(self, Declaration::ScaleNone)
+    }
+
+    /// No rotation (also none set before; the 3D rotations stay).
+    fn rotate_none(self) -> Self {
+        transform_reset(self, Declaration::RotateNone)
     }
 
     /// The point its transform turns and scales around (the center by
@@ -3188,6 +3208,17 @@ fn transform_with<S: Styled, T: Clone + 'static>(
     s
 }
 
+/// `reset` (`transform_none()`, ...), in order with the bound steps.
+fn transform_reset<S: Styled>(mut s: S, reset: Declaration) -> S {
+    let style = s.style();
+    if style.is_bound() {
+        style.bind(move |st| st.push(reset.clone()));
+    } else {
+        style.push(reset);
+    }
+    s
+}
+
 /// A translation's step: points (a rem at [`REM_SIZE`]) or a fraction of
 /// the size.
 fn translation(
@@ -3579,6 +3610,23 @@ mod tests {
             "perspective-[400px] rotate-y-35 rotate-x-40",
         );
         same(s().scale_x(1.5).skew_y(deg(-3.0)), "scale-x-150 -skew-y-3");
+        same(
+            s().rotate(deg(12.0))
+                .rotate_x(deg(40.0))
+                .skew_x(deg(6.0))
+                .scale(0.9)
+                .transform_none(),
+            "rotate-12 rotate-x-40 skew-x-6 scale-90 transform-none",
+        );
+        same(
+            s().translate_x(px(8.0))
+                .rotate(deg(12.0))
+                .scale(0.9)
+                .translate_none()
+                .rotate_none()
+                .scale_none(),
+            "translate-x-2 rotate-12 scale-90 translate-none rotate-none scale-none",
+        );
         same(
             s().origin_top_left().backface_hidden(),
             "origin-top-left backface-hidden",

@@ -32,15 +32,25 @@ pub(crate) enum Len {
 pub(crate) enum Part {
     TranslateX(Len),
     TranslateY(Len),
+    /// The `rotate` property (`rotate-*`).
     Rotate(f32),
+    /// `rotateX()` in the `transform` property (`rotate-x-*`).
     RotateX(f32),
     RotateY(f32),
+    RotateZ(f32),
     ScaleX(f32),
     ScaleY(f32),
     SkewX(f32),
     SkewY(f32),
     Perspective(f32),
+    /// `transform: none`: the 3D rotations and the skews.
     TransformNone,
+    /// `translate: none`.
+    TranslateNone,
+    /// `scale: none`.
+    ScaleNone,
+    /// `rotate: none`.
+    RotateNone,
     Shadow(Arc<[BoxShadow]>),
     /// A color for the shadow layers; `true` when it has its own alpha
     /// (`shadow-black/50`), else the layers keep theirs.
@@ -234,7 +244,10 @@ pub(crate) struct Parts {
     /// [`touched`] groups the parts pushed since this was last cleared.
     pub(crate) touched: u16,
     translate: [Option<Len>; 2],
-    rotate: [Option<f32>; 3],
+    /// The `rotate` property.
+    rotate: Option<f32>,
+    /// The `transform` property's `rotateX()`, `rotateY()`, `rotateZ()`.
+    rotate_3d: [Option<f32>; 3],
     scale: [Option<f32>; 2],
     skew: [Option<f32>; 2],
     perspective: Option<f32>,
@@ -275,10 +288,9 @@ impl Parts {
     fn push(&mut self, part: Part) {
         use Part::*;
         self.touched |= match &part {
-            TranslateX(_) | TranslateY(_) | Rotate(_) | RotateX(_) | RotateY(_) | ScaleX(_)
-            | ScaleY(_) | SkewX(_) | SkewY(_) | Perspective(_) | TransformNone => {
-                touched::TRANSFORM
-            }
+            TranslateX(_) | TranslateY(_) | Rotate(_) | RotateX(_) | RotateY(_) | RotateZ(_)
+            | ScaleX(_) | ScaleY(_) | SkewX(_) | SkewY(_) | Perspective(_) | TransformNone
+            | TranslateNone | ScaleNone | RotateNone => touched::TRANSFORM,
             Shadow(_) | ShadowColor(..) | InsetShadow(_) | InsetShadowColor(..) | Ring(_)
             | RingInset | RingColor(_) | RingOffset(_) | RingOffsetColor(_) | InsetRing(_)
             | InsetRingColor(_) => touched::SHADOWS,
@@ -299,22 +311,25 @@ impl Parts {
         match part {
             TranslateX(l) => (self.translate[0], self.transform_set) = (Some(l), true),
             TranslateY(l) => (self.translate[1], self.transform_set) = (Some(l), true),
-            Rotate(d) => (self.rotate[2], self.transform_set) = (Some(d), true),
-            RotateX(d) => (self.rotate[0], self.transform_set) = (Some(d), true),
-            RotateY(d) => (self.rotate[1], self.transform_set) = (Some(d), true),
+            Rotate(d) => (self.rotate, self.transform_set) = (Some(d), true),
+            RotateX(d) => (self.rotate_3d[0], self.transform_set) = (Some(d), true),
+            RotateY(d) => (self.rotate_3d[1], self.transform_set) = (Some(d), true),
+            RotateZ(d) => (self.rotate_3d[2], self.transform_set) = (Some(d), true),
             ScaleX(s) => (self.scale[0], self.transform_set) = (Some(s), true),
             ScaleY(s) => (self.scale[1], self.transform_set) = (Some(s), true),
             SkewX(d) => (self.skew[0], self.transform_set) = (Some(d), true),
             SkewY(d) => (self.skew[1], self.transform_set) = (Some(d), true),
             Perspective(p) => (self.perspective, self.transform_set) = (Some(p), true),
+            // `translate`, `rotate` and `scale` are properties of their
+            // own: `transform: none` leaves them.
             TransformNone => {
-                self.translate = [None; 2];
-                self.rotate = [None; 3];
-                self.scale = [None; 2];
+                self.rotate_3d = [None; 3];
                 self.skew = [None; 2];
-                self.perspective = None;
                 self.transform_set = true;
             }
+            TranslateNone => (self.translate, self.transform_set) = ([None; 2], true),
+            ScaleNone => (self.scale, self.transform_set) = ([None; 2], true),
+            RotateNone => (self.rotate, self.transform_set) = (None, true),
             Shadow(s) => (self.shadow, self.shadows_set) = (Some(s), true),
             ShadowColor(c, a) => (self.shadow_color, self.shadows_set) = (Some((c, a)), true),
             InsetShadow(s) => (self.inset_shadow, self.shadows_set) = (Some(s), true),
@@ -402,7 +417,8 @@ impl Parts {
         if self.transform_set && has(touched::TRANSFORM) {
             let _ = StyleDecl::ClearTransform.apply(style);
             // CSS: `translate`, `rotate`, `scale`, then `transform`
-            // (rotate-x / -y, skews); a list applies right to left.
+            // (`rotateX() rotateY() rotateZ() skewX() skewY()`, as Tailwind
+            // writes it); a list applies right to left.
             let mut push = |kind: TransformKind, v: f32| {
                 let _ = style.view.transform.push(kind, v);
             };
@@ -418,7 +434,7 @@ impl Parts {
                     _ => {}
                 }
             }
-            if let Some(r) = self.rotate[2] {
+            if let Some(r) = self.rotate {
                 push(TransformKind::Rotate, r);
             }
             match self.scale {
@@ -432,11 +448,14 @@ impl Parts {
                     }
                 }
             }
-            if let Some(r) = self.rotate[0] {
+            if let Some(r) = self.rotate_3d[0] {
                 push(TransformKind::RotateX, r);
             }
-            if let Some(r) = self.rotate[1] {
+            if let Some(r) = self.rotate_3d[1] {
                 push(TransformKind::RotateY, r);
+            }
+            if let Some(r) = self.rotate_3d[2] {
+                push(TransformKind::Rotate, r);
             }
             if let Some(s) = self.skew[0] {
                 push(TransformKind::SkewX, s);
@@ -1144,6 +1163,9 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         "backdrop-sepia" => filter(true, 8, Filter::Sepia(1.0)),
         // Transforms.
         "transform-none" => Decl::Part(Part::TransformNone),
+        "translate-none" => Decl::Part(Part::TranslateNone),
+        "scale-none" => Decl::Part(Part::ScaleNone),
+        "rotate-none" => Decl::Part(Part::RotateNone),
         "backface-hidden" => sets(K::BackfaceVisibility, "hidden"),
         "backface-visible" => sets(K::BackfaceVisibility, "visible"),
         "transform" | "transform-gpu" | "transform-cpu" | "transform-3d" | "transform-flat" => {
@@ -1794,7 +1816,7 @@ static PREFIXES: &[(&str, Handler)] = &[
         part(Part::RotateY(signed(degrees(v)?, n)))
     }),
     ("rotate-z", |_, v, n| {
-        part(Part::Rotate(signed(degrees(v)?, n)))
+        part(Part::RotateZ(signed(degrees(v)?, n)))
     }),
     ("rotate", |_, v, n| {
         part(Part::Rotate(signed(degrees(v)?, n)))

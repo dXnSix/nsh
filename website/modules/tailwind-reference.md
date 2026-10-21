@@ -374,14 +374,15 @@ Shadows, rings and inset shadows combine into one `boxShadow` list, as in CSS. A
 | Class | Sets |
 |---|---|
 | `translate-x-<n>`, `translate-y-<n>`, `translate-<n>` | translation (spacing, `full`, fractions of the element's own size: `-translate-x-1/2`, arbitrary) |
-| `rotate-<deg>`, `rotate-z-<deg>`, `rotate-[<angle>]` | rotation |
-| `rotate-x-<deg>`, `rotate-y-<deg>` | 3D rotation |
+| `rotate-<deg>`, `rotate-[<angle>]` | rotation (CSS's `rotate`) |
+| `rotate-x-<deg>`, `rotate-y-<deg>`, `rotate-z-<deg>` | 3D rotation (in `transform`, after the translation, the rotation and the scale) |
 | `scale-<pct>`, `scale-x-<pct>`, `scale-y-<pct>`, `scale-[<factor>]` | scale: `scale-95` = 0.95, `-scale-x-100` mirrors |
 | `skew-<deg>`, `skew-x-<deg>`, `skew-y-<deg>` | skew (not on Android) |
 | `perspective-dramatic` (100), `-near` (300), `-normal` (500), `-midrange` (800), `-distant` (1200), `perspective-[<length>]` | perspective for 3D rotations |
 | `origin-center`, `-top`, `-top-right`, `-right`, `-bottom-right`, `-bottom`, `-bottom-left`, `-left`, `-top-left`, `origin-[<value>]` | `transformOrigin` |
 | `backface-hidden`, `backface-visible` | `backfaceVisibility` |
-| `transform-none` | clears the transform |
+| `transform-none` | clears the 3D rotations and the skews (CSS's `transform: none`) |
+| `translate-none`, `rotate-none`, `scale-none` | clears the translation, the rotation, the scale |
 
 Transform utilities compose like CSS: `translate-*`, `rotate-*` and `scale-*` combine regardless of order. `transform`, `transform-gpu`, `transform-cpu`, `transform-3d` and `transform-flat` are accepted and do nothing. Translations by a fraction of the size are resolved against the element's frame and follow it when it resizes.
 
