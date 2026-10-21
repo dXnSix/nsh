@@ -406,7 +406,7 @@ view()
 
 | Class | 设置 |
 |---|---|
-| `pointer-events-none`、`pointer-events-auto` | `pointerEvents` |
+| `pointer-events-none`、`pointer-events-auto` | 视图是否接收触摸和指针事件，与 CSS 一样会继承：在 `pointer-events-none` 视图内，`pointer-events-auto` 的视图仍会接收事件（`pointerEvents` 属性保持自身的含义：`"none"` 使整个子树都不接收事件） |
 | `cursor-<name>`、`cursor-[<name>]` | `cursor`：`cursor-pointer`、`cursor-grab`、`cursor-not-allowed` 等（所有 CSS 光标关键字） |
 | `select-none`、`select-text`、`select-auto` | 文字选择（见排版） |
 

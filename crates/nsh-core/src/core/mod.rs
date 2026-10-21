@@ -397,6 +397,12 @@ struct Node {
     /// The text color it inherits (`None`: React Native's black), CSS's
     /// `currentColor` unless it sets its own.
     inherited_color: Option<Color>,
+    /// What its view takes from the `pointer-events-*` classes around it
+    /// (`classes.rs` `update_pointer_events`); an explicit prop wins.
+    class_pointer: crate::props::PointerEvents,
+    /// A `pointer-events-auto` is inside it, under a `pointer-events-none`
+    /// (scratch of `update_pointer_events`).
+    pointer_auto_inside: bool,
     /// The inset padding and margin components set: added to the style's.
     insets: Option<Box<[EdgeInsets; 2]>>,
     events: EventMask,
@@ -516,6 +522,8 @@ impl Node {
             positional_children: false,
             spaced: false,
             inherited_color: None,
+            class_pointer: crate::props::PointerEvents::Auto,
+            pointer_auto_inside: false,
             insets: None,
             events: EventMask::default(),
             z_index: 0,
@@ -683,6 +691,9 @@ pub struct Core<M: TextEngine> {
     /// The tree changed with `status_bar_nodes` in it: the commit checks
     /// which are in the tree.
     status_bars_moved: bool,
+    /// Nodes whose classes say `pointer-events-none`: without any, moving
+    /// nodes skips what CSS's inherited `pointer-events` needs.
+    pointer_none_classes: u32,
     /// The user's preferred text size (1.0 is the default).
     font_scale: f32,
     /// The font text is drawn with unless it sets its own: the tokens'
@@ -774,6 +785,7 @@ impl<M: TextEngine> Core<M> {
             layout_animation: None,
             status_bar_nodes: Vec::new(),
             status_bars_moved: false,
+            pointer_none_classes: 0,
             font_scale: 1.0,
             default_font: None,
             queue: Vec::new(),
@@ -2869,6 +2881,9 @@ impl<M: TextEngine> Core<M> {
             self.positions_changed(parent);
         }
         self.spacing_changed(parent, child);
+        if self.pointer_none_classes > 0 {
+            self.pointer_events_moved(parent);
+        }
 
         if inline {
             self.mark_text_block(parent);
@@ -2945,6 +2960,11 @@ impl<M: TextEngine> Core<M> {
         }
         self.nodes[key as usize].parent = NO_KEY;
         self.spacing_changed(parent, NO_KEY);
+        if self.pointer_none_classes > 0 && self.pointer_region(parent).is_some() {
+            // It no longer inherits the region's `none`.
+            self.update_pointer_events(key);
+            self.pointer_events_moved(parent);
+        }
         self.groups_changed(key, parent);
         self.status_bars_moved |= !self.status_bar_nodes.is_empty();
         let node = &self.nodes[key as usize];
@@ -3094,6 +3114,11 @@ impl<M: TextEngine> Core<M> {
         }
         let node = self.nodes.remove(key as usize);
         self.slots[id as usize] = 0;
+        if node.class_props.as_ref().and_then(|c| c.pointer_events)
+            == Some(crate::props::PointerEvents::None)
+        {
+            self.pointer_none_classes -= 1;
+        }
         if node.kind == Kind::List {
             self.lists.retain(|&k| k != key);
         }
@@ -3507,10 +3532,8 @@ impl<M: TextEngine> Core<M> {
             }
             if flags & dirty::VIEW_PROPS != 0 {
                 let mut props = node.props.clone().unwrap_or_default();
-                if let Some(p) = node.class_props.as_ref().and_then(|c| c.pointer_events)
-                    && props.pointer_events == crate::props::PointerEvents::Auto
-                {
-                    props.pointer_events = p;
+                if props.pointer_events == crate::props::PointerEvents::Auto {
+                    props.pointer_events = node.class_pointer;
                 }
                 // A `disabled` view is so for screen readers too, as a Rust
                 // component's `disabled` and React Native's `Pressable`.

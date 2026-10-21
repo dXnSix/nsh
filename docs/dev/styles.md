@@ -61,6 +61,12 @@
   element child but the last, as Tailwind's `:where(& > :not(:last-child))`: the parent's `ClassProps::space`, which
   the core applies to a child's style before its classes and inline style (`classes.rs` `space_of`), so the child's
   own margins win; an insert or removal restyles only the children whose last-ness changed (`spacing_changed`).
+- **`pointer-events-*` classes** inherit as CSS's `pointer-events` (the `pointerEvents` prop keeps React Native's
+  subtree meaning, and wins): a view that is `none` by its own class or the nearest one above mounts `box-none` when a
+  `pointer-events-auto` inside it is a target, `none` at the top of what it blocks, and nothing below that
+  (`classes.rs` `update_pointer_events`, run over a region when a class, an insert or a removal changes it; the node
+  keeps what it mounts, `class_pointer`, so only changes are sent; `pointer_none_classes` counts the views with
+  `none`, so apps without one skip it).
 - **`currentColor`**: a border, an outline or a ring whose classes set a width and no color (`border`, `outline-2`,
   `ring`; preflight's `border: 0 solid`) is drawn in the node's text color: its inline style's, its classes', else the one
   it inherits, else black (`CurrentColor`, `Decl::CurrentColor`; such classes depend on `deps::CURRENT_COLOR`). Each node

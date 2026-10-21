@@ -10,6 +10,7 @@ use crate::{
     mount::MountItem,
     ops::NodeId,
     platform::{Appearance, ColorScheme},
+    props::PointerEvents,
     style::{Color, Style, StylePatch, ViewStyle},
     tailwind::{
         ClassEnvironment, ClassList, ClassProps, Context, Rule, Theme, deps, position, rank, state,
@@ -926,6 +927,99 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// The outermost of `key` and its ancestors whose classes say
+    /// `pointer-events-none`, with no `pointer-events-auto` above it: the
+    /// top of the region `key`'s class `pointer-events` depends on.
+    pub(super) fn pointer_region(&self, key: Key) -> Option<Key> {
+        let mut top = None;
+        let mut k = key;
+        while k != NO_KEY {
+            let node = &self.nodes[k as usize];
+            match node.class_props.as_ref().and_then(|c| c.pointer_events) {
+                Some(PointerEvents::None) => top = Some(k),
+                // Above an `auto`, nothing reaches below it.
+                Some(_) if top.is_some() => return top,
+                _ => {}
+            }
+            k = node.parent;
+        }
+        top
+    }
+
+    /// `parent` gained or lost a child: the region it is in follows.
+    pub(super) fn pointer_events_moved(&mut self, parent: Key) {
+        if let Some(top) = self.pointer_region(parent) {
+            self.update_pointer_events(top);
+        }
+    }
+
+    /// What the views of `top`'s subtree mount for the `pointer-events-*`
+    /// classes, as CSS's inherited `pointer-events`: a view that is
+    /// `none` (its own class, else the nearest one above) is no target;
+    /// it mounts `box-none` when a `pointer-events-auto` inside it is one,
+    /// `none` when it holds none and the view above it lets touches
+    /// through (the top of the region), and nothing more below a `none`.
+    /// Only the views whose value changed are mounted again.
+    pub(super) fn update_pointer_events(&mut self, top: Key) {
+        let inherited = {
+            let parent = self.nodes[top as usize].parent;
+            let mut k = parent;
+            let mut found = None;
+            while k != NO_KEY {
+                let node = &self.nodes[k as usize];
+                if let Some(v) = node.class_props.as_ref().and_then(|c| c.pointer_events) {
+                    found = Some(v);
+                    break;
+                }
+                k = node.parent;
+            }
+            found
+        };
+        self.mark_pointer_auto(top, inherited);
+        // `top` is the outermost `none` (or a view without one): nothing
+        // above it blocks touches natively.
+        let mut stack = vec![(top, inherited, false)];
+        while let Some((k, inherited, blocked)) = stack.pop() {
+            let node = &self.nodes[k as usize];
+            let own = node.class_props.as_ref().and_then(|c| c.pointer_events);
+            let effective = own.or(inherited);
+            let mounted = match effective {
+                Some(PointerEvents::None) if node.pointer_auto_inside => PointerEvents::BoxNone,
+                // A view above already blocks the subtree.
+                Some(PointerEvents::None) if blocked => PointerEvents::Auto,
+                Some(PointerEvents::None) => PointerEvents::None,
+                _ => PointerEvents::Auto,
+            };
+            let blocked = blocked || mounted == PointerEvents::None;
+            for &c in &node.children {
+                stack.push((c, effective, blocked));
+            }
+            if self.nodes[k as usize].class_pointer != mounted {
+                self.nodes[k as usize].class_pointer = mounted;
+                self.mark(k, dirty::VIEW_PROPS);
+            }
+        }
+    }
+
+    /// Sets `pointer_auto_inside` over `key`'s subtree (`inherited`: the
+    /// class value above it); returns whether a `pointer-events-auto` is in
+    /// it or it is one under a `none`.
+    fn mark_pointer_auto(&mut self, key: Key, inherited: Option<PointerEvents>) -> bool {
+        let own = self.nodes[key as usize]
+            .class_props
+            .as_ref()
+            .and_then(|c| c.pointer_events);
+        let effective = own.or(inherited);
+        let children = std::mem::take(&mut self.nodes[key as usize].children);
+        let mut inside = false;
+        for &c in &children {
+            inside |= self.mark_pointer_auto(c, effective);
+        }
+        self.nodes[key as usize].children = children;
+        self.nodes[key as usize].pointer_auto_inside = inside;
+        inside || own == Some(PointerEvents::Auto) && inherited == Some(PointerEvents::None)
+    }
+
     /// Applies the node props classes set (explicit props win).
     fn set_class_props(&mut self, key: Key, props: ClassProps) {
         let node = &mut self.nodes[key as usize];
@@ -938,7 +1032,14 @@ impl<M: TextEngine> Core<M> {
             || old.selectable != props.selectable
             || old.ellipsize != props.ellipsize
             || old.no_wrap != props.no_wrap;
-        let view_props = old.pointer_events != props.pointer_events;
+        let pointer = old.pointer_events != props.pointer_events;
+        let none = Some(crate::props::PointerEvents::None);
+        match (old.pointer_events == none, props.pointer_events == none) {
+            (false, true) => self.pointer_none_classes += 1,
+            (true, false) => self.pointer_none_classes -= 1,
+            _ => {}
+        }
+        let node = &mut self.nodes[key as usize];
         let image = old.resize_mode != props.resize_mode;
         let space = old.space != props.space;
         let input = old.placeholder_color != props.placeholder_color
@@ -957,8 +1058,9 @@ impl<M: TextEngine> Core<M> {
             // The texts inside inherit them.
             self.mark_inheriting_text(key);
         }
-        if view_props {
-            self.mark(key, dirty::VIEW_PROPS);
+        if pointer {
+            let top = self.pointer_region(key).unwrap_or(key);
+            self.update_pointer_events(top);
         }
         if image {
             self.mark(key, dirty::IMAGE);

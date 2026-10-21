@@ -3673,6 +3673,88 @@ fn texts_inherit_white_space_and_user_select_from_views() {
 }
 
 #[test]
+fn pointer_events_classes_inherit_as_in_css() {
+    use crate::props::PointerEvents as P;
+    let mut c = core();
+    // 2 none { 3 { 4 }, 5 auto { 6 } }
+    view_with_classes(&mut c, 2, "pointer-events-none");
+    let mut ops = Vec::new();
+    for (id, parent, classes) in [
+        (3, 2, "p-1"),
+        (4, 3, "p-1"),
+        (5, 2, "pointer-events-auto"),
+        (6, 5, "p-1"),
+    ] {
+        ops.extend([
+            Op::Create { id, tag: Tag::View },
+            class_op(id, classes),
+            Op::Insert {
+                parent,
+                child: id,
+                before: None,
+            },
+        ]);
+    }
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    let pointer = |batch: &MountBatch, id| {
+        batch.items.iter().rev().find_map(|i| match i {
+            MountItem::ViewProps { id: i, props } if *i == id => Some(props.pointer_events),
+            _ => None,
+        })
+    };
+    // 2 lets touches through to 5, which takes them; 3 is no target, and
+    // blocks 4.
+    assert_eq!(pointer(&batch, 2), Some(P::BoxNone));
+    assert_eq!(pointer(&batch, 3), Some(P::None));
+    assert_eq!(pointer(&batch, 4), None);
+    assert_eq!(pointer(&batch, 5), None);
+    assert_eq!(pointer(&batch, 6), None);
+    // Without the `auto`, 2 blocks the whole subtree.
+    c.apply(class_op(5, "p-1")).unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(pointer(&batch, 2), Some(P::None));
+    assert_eq!(pointer(&batch, 3), Some(P::Auto));
+    // An `auto` moved in brings `box-none` back; moved out, `none`.
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 7,
+                tag: Tag::View,
+            },
+            class_op(7, "pointer-events-auto"),
+            Op::Insert {
+                parent: 4,
+                child: 7,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(pointer(&batch, 2), Some(P::BoxNone));
+    assert_eq!(pointer(&batch, 3), Some(P::BoxNone));
+    assert_eq!(pointer(&batch, 4), Some(P::BoxNone));
+    assert_eq!(pointer(&batch, 5), Some(P::None));
+    c.apply(Op::Remove {
+        parent: 4,
+        child: 7,
+    })
+    .unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(pointer(&batch, 2), Some(P::None));
+    assert_eq!(pointer(&batch, 4), Some(P::Auto));
+    // The `pointerEvents` prop keeps React Native's meaning, and wins.
+    c.apply(Op::SetProp {
+        id: 2,
+        prop: Prop::PointerEvents(P::BoxOnly),
+    })
+    .unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(pointer(&batch, 2), Some(P::BoxOnly));
+}
+
+#[test]
 fn sibling_positions() {
     let mut c = core();
     view_with_classes(&mut c, 2, "flex-row");

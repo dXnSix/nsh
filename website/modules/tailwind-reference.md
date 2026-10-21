@@ -406,7 +406,7 @@ Transitions run on the UI thread when a value changes, including when a variant 
 
 | Class | Sets |
 |---|---|
-| `pointer-events-none`, `pointer-events-auto` | `pointerEvents` |
+| `pointer-events-none`, `pointer-events-auto` | whether the view is a target for touches and the pointer, inherited as in CSS: inside a `pointer-events-none` view, a `pointer-events-auto` one is a target again (the `pointerEvents` prop keeps its own meaning: `"none"` takes the whole subtree out) |
 | `cursor-<name>`, `cursor-[<name>]` | `cursor`: `cursor-pointer`, `cursor-grab`, `cursor-not-allowed`, ... (every CSS cursor keyword) |
 | `select-none`, `select-text`, `select-auto` | text selection (see Typography) |
 
