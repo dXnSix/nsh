@@ -141,6 +141,10 @@ pub(crate) enum Decl {
     /// [`Decl::Adaptive`] for a part (a shadow's, ring's or gradient
     /// stop's theme color).
     AdaptivePart(Box<[Part; 2]>),
+    /// CSS's `currentColor` for a color property, implied as
+    /// [`Decl::Default`] is (a border width's color): the node's text
+    /// color, its own or the one it inherits.
+    CurrentColor(StyleKey),
 }
 
 /// `key` with the value it gets in a layout of direction `rtl`. Classes
@@ -211,7 +215,7 @@ impl Decl {
                 let _ = style.set_key(key, value.as_value());
             }
             // Applied by `ClassList::apply` before the rules.
-            Decl::Default(..) => {}
+            Decl::Default(..) | Decl::CurrentColor(_) => {}
             Decl::Style(decl) => {
                 let _ = decl.apply(style);
             }
@@ -295,6 +299,19 @@ impl Decl {
         }
     }
 
+    /// The text color this sets, if it sets one (`Some(None)`: the default).
+    pub(crate) fn sets_text_color(&self, dark: bool) -> Option<Option<Color>> {
+        let value = match self {
+            Decl::Set(StyleKey::Color, v) | Decl::Style(StyleDecl::Set(StyleKey::Color, v)) => v,
+            Decl::Adaptive(StyleKey::Color, values) => &values[usize::from(dark)],
+            _ => return None,
+        };
+        Some(match value {
+            PatchValue::Str(s) => Color::parse(s),
+            _ => None,
+        })
+    }
+
     /// The background color this declares, for `selection:` rules.
     pub(crate) fn background_color(&self) -> Option<Color> {
         match self {
@@ -319,6 +336,9 @@ impl Decl {
             }
             Decl::AdaptivePart(_) => deps::DARK,
             Decl::Set(key, value) | Decl::Default(key, value) if sided(*key, value) => deps::RTL,
+            Decl::CurrentColor(_) | Decl::Part(Part::Ring(_) | Part::InsetRing(_)) => {
+                deps::CURRENT_COLOR
+            }
             _ => 0,
         }
     }
@@ -386,6 +406,8 @@ pub(crate) struct Parts {
     text_shadow_color: Option<(Color, bool)>,
     /// `w-screen` and friends, resolved against the window.
     pub(crate) screen: Vec<(StyleKey, f32, f32)>,
+    /// CSS's `currentColor`: the ring's color when no class sets one.
+    pub(crate) current: Color,
 }
 
 impl Parts {
@@ -570,7 +592,7 @@ impl Parts {
             }
         }
         if self.shadows_set && has(touched::SHADOWS) {
-            let current = style.text.color.unwrap_or(Color::BLACK);
+            let current = self.current;
             let recolor = |layers: &[BoxShadow], color: Option<(Color, bool)>| -> Vec<BoxShadow> {
                 layers
                     .iter()
@@ -1414,6 +1436,7 @@ fn outline_style(style: &str) -> Option<Vec<Decl>> {
     Some(vec![
         sets(K::OutlineStyle, style),
         Decl::Default(K::OutlineWidth, PatchValue::Number(3.0)),
+        Decl::CurrentColor(K::OutlineColor),
     ])
 }
 
@@ -1423,6 +1446,7 @@ fn outline_width(width: f32) -> Vec<Decl> {
     vec![
         setn(K::OutlineWidth, width),
         Decl::Default(K::OutlineStyle, PatchValue::Str("solid".into())),
+        Decl::CurrentColor(K::OutlineColor),
     ]
 }
 
@@ -2155,21 +2179,15 @@ fn bare(theme: &Theme, u: &str, neg: bool) -> Option<Vec<Decl>> {
         }
         "ring" => return part(Part::Ring(1.0)),
         "inset-ring" => return part(Part::InsetRing(1.0)),
-        "border" => vec![setn(K::BorderWidth, 1.0)],
-        "border-x" => vec![
-            setn(K::BorderLeftWidth, 1.0),
-            setn(K::BorderRightWidth, 1.0),
-        ],
-        "border-y" => vec![
-            setn(K::BorderTopWidth, 1.0),
-            setn(K::BorderBottomWidth, 1.0),
-        ],
-        "border-t" => vec![setn(K::BorderTopWidth, 1.0)],
-        "border-r" => vec![setn(K::BorderRightWidth, 1.0)],
-        "border-b" => vec![setn(K::BorderBottomWidth, 1.0)],
-        "border-l" => vec![setn(K::BorderLeftWidth, 1.0)],
-        "border-s" => vec![setn(K::BorderStartWidth, 1.0)],
-        "border-e" => vec![setn(K::BorderEndWidth, 1.0)],
+        "border" => border_widths(&[K::BorderWidth], 1.0),
+        "border-x" => border_widths(&[K::BorderLeftWidth, K::BorderRightWidth], 1.0),
+        "border-y" => border_widths(&[K::BorderTopWidth, K::BorderBottomWidth], 1.0),
+        "border-t" => border_widths(&[K::BorderTopWidth], 1.0),
+        "border-r" => border_widths(&[K::BorderRightWidth], 1.0),
+        "border-b" => border_widths(&[K::BorderBottomWidth], 1.0),
+        "border-l" => border_widths(&[K::BorderLeftWidth], 1.0),
+        "border-s" => border_widths(&[K::BorderStartWidth], 1.0),
+        "border-e" => border_widths(&[K::BorderEndWidth], 1.0),
         "outline" => outline_width(1.0),
         "rounded" => return radius(theme, "sm", &[K::BorderRadius]),
         "rounded-t" | "rounded-r" | "rounded-b" | "rounded-l" | "rounded-tl" | "rounded-tr"
@@ -2309,17 +2327,25 @@ fn radius(theme: &Theme, v: &str, keys: &[StyleKey]) -> Option<Vec<Decl>> {
 
 fn border(theme: &Theme, v: &str, widths: &[StyleKey], colors: &[StyleKey]) -> Option<Vec<Decl>> {
     if let Some(n) = num(v) {
-        return Some(widths.iter().map(|k| setn(*k, n)).collect());
+        return Some(border_widths(widths, n));
     }
     if let Some(a) = arbitrary(v)
         && let Some(w) = arbitrary_hinted(&a, "length")
             .and_then(css::length)
             .or_else(|| css::length(&a))
     {
-        return Some(widths.iter().map(|k| setn(*k, w)).collect());
+        return Some(border_widths(widths, w));
     }
     let c = color(theme, v)?;
     Some(colors.iter().map(|k| set(*k, color_str(c))).collect())
+}
+
+/// Border widths, in `currentColor` unless a color utility says otherwise
+/// (preflight's `border: 0 solid`, whose color is `currentColor`).
+fn border_widths(keys: &[StyleKey], width: f32) -> Vec<Decl> {
+    let mut out: Vec<Decl> = keys.iter().map(|k| setn(*k, width)).collect();
+    out.push(Decl::CurrentColor(K::BorderColor));
+    out
 }
 
 fn blur(theme: &Theme, v: &str, backdrop: bool) -> Option<Vec<Decl>> {

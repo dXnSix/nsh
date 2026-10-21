@@ -30,7 +30,7 @@ use crate::{
         ROOT_ID, ResizeMode, ScreenAnimation, ScreenProp, ScrollProp, Tag,
     },
     props::{AccessibilityProp, EdgeInsets, GestureValues, LayoutAnimation, ViewProps},
-    style::{EllipsizeMode, Style, StylePatch, TextAlign, TextStyle, ViewStyle},
+    style::{Color, EllipsizeMode, Style, StylePatch, TextAlign, TextStyle, ViewStyle},
     tailwind::{ClassEnvironment, ClassList, ClassProps, Tailwind},
     text::{AttributedText, MeasureCache, ResolvedTextStyle, TextEngine, TextLayout},
 };
@@ -394,6 +394,9 @@ struct Node {
     positional_children: bool,
     /// Styled with the margin its parent's `space-*` gives it.
     spaced: bool,
+    /// The text color it inherits (`None`: React Native's black), CSS's
+    /// `currentColor` unless it sets its own.
+    inherited_color: Option<Color>,
     /// The inset padding and margin components set: added to the style's.
     insets: Option<Box<[EdgeInsets; 2]>>,
     events: EventMask,
@@ -512,6 +515,7 @@ impl Node {
             parts: None,
             positional_children: false,
             spaced: false,
+            inherited_color: None,
             insets: None,
             events: EventMask::default(),
             z_index: 0,
@@ -1778,6 +1782,9 @@ impl<M: TextEngine> Core<M> {
             && node.kind == Kind::Text
             && span_background(&node.view_style, node.id) != span_background(&view, node.id);
         let text_changed = node.text_style != text || span_background_changed;
+        // What its children inherit as `currentColor`.
+        let passed_color = |node: &Node, text: &TextStyle| text.color.or(node.inherited_color);
+        let color_passed = passed_color(node, &node.text_style) != passed_color(node, &text);
         let animation_changed = node.animated != animated;
         let z_changed = node.z_index != z_index;
         // An attachment's place in its line is part of its block's text.
@@ -1839,6 +1846,11 @@ impl<M: TextEngine> Core<M> {
                 _ if text_changed => self.mark_inheriting_text(key),
                 _ => {}
             }
+        }
+        if color_passed {
+            let node = &self.nodes[key as usize];
+            let color = node.text_style.color.or(node.inherited_color);
+            self.inherit_color(key, color);
         }
         if flipped {
             self.update_children_direction(key);
@@ -2840,6 +2852,11 @@ impl<M: TextEngine> Core<M> {
         self.nodes[parent as usize].children.insert(pos, child);
         self.status_bars_moved |= !self.status_bar_nodes.is_empty();
         self.update_direction(child);
+        let node = &self.nodes[parent as usize];
+        let color = node.text_style.color.or(node.inherited_color);
+        if self.nodes[child as usize].inherited_color != color {
+            self.inherit_color_from(child, color);
+        }
         self.groups_changed(child, parent);
         if self.nodes[child as usize]
             .classes

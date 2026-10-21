@@ -3107,6 +3107,80 @@ fn space_classes_give_children_but_the_last_margins() {
 }
 
 #[test]
+fn borders_and_rings_without_a_color_are_the_inherited_text_color() {
+    let mut c = core();
+    view_with_classes(&mut c, 2, "text-white");
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 3,
+                tag: Tag::View,
+            },
+            Op::Create {
+                id: 4,
+                tag: Tag::View,
+            },
+            class_op(4, "border-2 ring"),
+            Op::Insert {
+                parent: 3,
+                child: 4,
+                before: None,
+            },
+            // Built apart, then inserted: the color reaches it through 3.
+            Op::Insert {
+                parent: 2,
+                child: 3,
+                before: None,
+            },
+            Op::Create {
+                id: 5,
+                tag: Tag::View,
+            },
+            style_op(5, &[("borderWidth", StyleValue::Number(1.0))]),
+            Op::Insert {
+                parent: 2,
+                child: 5,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    let v = view_style_of(&batch, 4).unwrap();
+    assert_eq!(v.borders.colors, [Color(0xffff_ffff); 4]);
+    assert_eq!(
+        v.effects.as_ref().unwrap().box_shadows[0].color,
+        Color(0xffff_ffff)
+    );
+    // An inline style's border keeps React Native's black.
+    assert_eq!(
+        view_style_of(&batch, 5).unwrap().borders.colors[0],
+        Color::BLACK
+    );
+    // The ancestor's color changes: so does the border's.
+    c.apply(class_op(2, "text-red-500")).unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(
+        view_style_of(&batch, 4).unwrap().borders.colors[0],
+        Color(0xfb2c_36ff)
+    );
+    // Moved under a view of no color: black.
+    apply(
+        &mut c,
+        vec![Op::Insert {
+            parent: ROOT_ID,
+            child: 4,
+            before: None,
+        }],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(
+        view_style_of(&batch, 4).unwrap().borders.colors[0],
+        Color::BLACK
+    );
+}
+
+#[test]
 fn right_to_left_horizontal_scrolls() {
     let mut c = core();
     let n = |v: f32| StyleValue::Number(v);

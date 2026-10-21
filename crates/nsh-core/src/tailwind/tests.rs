@@ -177,6 +177,78 @@ fn space_gives_the_children_margins() {
 }
 
 #[test]
+fn widths_without_a_color_are_current_color() {
+    let theme = themed();
+    let resolve = |classes: &str, current: CurrentColor| {
+        let list = parse(&theme, classes);
+        let group = |_: &str| 0;
+        let cx = Context {
+            env: ClassEnvironment::default(),
+            window: crate::geometry::size_pt(390.0, 844.0),
+            rtl: false,
+            states: 0,
+            position: 0,
+            group: &group,
+        };
+        let mut style = Style::default();
+        list.apply_with(
+            &cx,
+            &theme,
+            current,
+            &mut style,
+            &mut ClassProps::default(),
+            |_| {},
+        );
+        style
+    };
+    let white = Color(0xffff_ffff);
+    let inherited = CurrentColor {
+        inherited: Some(white),
+        inline: None,
+    };
+    // Preflight's `border: 0 solid` is `currentColor`; so are a ring's and
+    // an outline's: the inherited text color...
+    let s = resolve("border-2 outline ring", inherited);
+    assert_eq!(s.view.borders.colors, [white; 4]);
+    assert_eq!(s.view.outline.color, white);
+    let e = s.view.effects.unwrap();
+    assert_eq!(e.box_shadows[0].color, white);
+    assert_ne!(parse(&theme, "border").deps() & deps::CURRENT_COLOR, 0);
+    assert_ne!(
+        parse(&theme, "inset-ring-2").deps() & deps::CURRENT_COLOR,
+        0
+    );
+    assert_eq!(
+        parse(&theme, "border-red-500 p-4").deps() & deps::CURRENT_COLOR,
+        0
+    );
+    // ...or the node's own, a class's or its inline style's...
+    let red = Color(0xfb2c_36ff);
+    let s = resolve("border-t text-red-500 inset-ring", inherited);
+    assert_eq!(s.view.borders.colors[0], red);
+    assert_eq!(s.view.effects.unwrap().box_shadows[0].color, red);
+    let blue = Color(0x0000_ffff);
+    let s = resolve(
+        "border text-red-500",
+        CurrentColor {
+            inherited: Some(white),
+            inline: Some(blue),
+        },
+    );
+    assert_eq!(s.view.borders.colors[0], blue);
+    // ...whichever comes first; a color class wins wherever it is.
+    let s = resolve(
+        "border-sky-500 border-2 outline-red-500 outline-dashed",
+        inherited,
+    );
+    assert_eq!(s.view.borders.colors[0], Color(0x00a6_f4ff));
+    assert_eq!(s.view.outline.color, red);
+    // Without one, React Native's black, as inline styles have it.
+    let s = resolve("border", CurrentColor::default());
+    assert_eq!(s.view.borders.colors[0], Color::BLACK);
+}
+
+#[test]
 fn later_classes_win() {
     let s = styled("p-4 p-2 bg-red-500 bg-blue-500");
     assert_eq!(s.layout.padding.top, taffy::LengthPercentage::length(8.0));

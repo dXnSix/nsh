@@ -91,7 +91,7 @@ view()
 | 任意颜色 | `bg-[#0ea5e9]`、`border-[rgb(0_0_0_/_0.1)]`、`text-[oklch(70%_0.2_50)]` |
 | 任意颜色加修饰 | `bg-[rgb(0_0_255)]/25` |
 
-`currentColor` 和 `inherit` 不是可用的颜色值；未指定环颜色时，环默认使用元素的文字颜色。
+`currentColor` 和 `inherit` 不是可用的颜色值。与浏览器一样，没有颜色类的边框、轮廓或环使用元素的文字颜色，可以是它自己的，也可以是继承的（`<View class="text-white"><View class="border ring-2" /></View>` 两者都是白色）；在 `style` 属性中设置的边框默认是黑色。
 
 ## 任意值
 

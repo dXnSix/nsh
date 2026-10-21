@@ -1940,6 +1940,16 @@ impl Style {
         Ok(())
     }
 
+    /// Sets color property `key` (`borderColor`, `outlineColor`) to `color`;
+    /// other keys are left as they are.
+    pub(crate) fn set_color(&mut self, key: StyleKey, color: Color) {
+        match key {
+            StyleKey::BorderColor => self.view.borders.colors = [color; 4],
+            StyleKey::OutlineColor => self.view.outline.color = color,
+            _ => debug_assert!(false, "set_color({key:?})"),
+        }
+    }
+
     /// Sets one property using its React Native name.
     pub fn set(&mut self, key: &str, value: StyleValue<'_>) -> Result<(), StyleError> {
         self.set_key(

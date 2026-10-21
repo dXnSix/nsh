@@ -61,6 +61,12 @@
   element child but the last, as Tailwind's `:where(& > :not(:last-child))`: the parent's `ClassProps::space`, which
   the core applies to a child's style before its classes and inline style (`classes.rs` `space_of`), so the child's
   own margins win; an insert or removal restyles only the children whose last-ness changed (`spacing_changed`).
+- **`currentColor`**: a border, an outline or a ring whose classes set a width and no color (`border`, `outline-2`,
+  `ring`; preflight's `border: 0 solid`) is drawn in the node's text color: its inline style's, its classes', else the one
+  it inherits, else black (`CurrentColor`, `Decl::CurrentColor`; such classes depend on `deps::CURRENT_COLOR`). Each node
+  keeps the color it inherits (`inherited_color`): an insert compares it with its new parent's, and a change of a node's
+  color passes down to the descendants that set none (`Core::inherit_color`), restyling those that read it. Inline
+  styles keep React Native's black.
 - **Right to left**, classes are physical as in a browser: `pl-*`, `ml-*`, `left-*`, `border-l*`, `rounded-l*` /
   `-tl` ..., `text-left` / `text-right` keep their side, while style keys keep React Native's swap. The core swaps every
   left / right property of a node right to left (`apply_direction`), so a class names the other side there

@@ -91,7 +91,7 @@ Every color utility takes:
 | An arbitrary color | `bg-[#0ea5e9]`, `border-[rgb(0_0_0_/_0.1)]`, `text-[oklch(70%_0.2_50)]` |
 | An arbitrary color with a modifier | `bg-[rgb(0_0_255)]/25` |
 
-`currentColor` and `inherit` are not color values; rings default to the element's text color when no ring color is given.
+`currentColor` and `inherit` are not color values. As in a browser, a border, an outline or a ring without a color class is drawn in the element's text color, its own or the one it inherits (`<View class="text-white"><View class="border ring-2" /></View>` draws both white); a border set in the `style` prop is black by default.
 
 ## Arbitrary values
 

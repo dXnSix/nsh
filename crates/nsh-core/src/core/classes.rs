@@ -10,12 +10,23 @@ use crate::{
     mount::MountItem,
     ops::NodeId,
     platform::{Appearance, ColorScheme},
-    style::{Style, StylePatch, ViewStyle},
+    style::{Color, Style, StylePatch, ViewStyle},
     tailwind::{
         ClassEnvironment, ClassList, ClassProps, Context, Rule, Theme, deps, position, rank, state,
     },
     text::TextEngine,
 };
+
+/// The text color an inline style sets (`color`).
+fn inline_color(patch: &StylePatch) -> Option<Color> {
+    patch.decls().iter().rev().find_map(|d| match d {
+        crate::style::StyleDecl::Set(crate::style::StyleKey::Color, value) => Some(match value {
+            crate::style::PatchValue::Str(s) => Color::parse(s),
+            _ => None,
+        }),
+        _ => None,
+    })?
+}
 
 /// The states the platform reports ([`Core::set_states`]).
 const REPORTED: u8 = state::PRESSED | state::HOVERED | state::FOCUSED;
@@ -855,9 +866,18 @@ impl<M: TextEngine> Core<M> {
                 group: &group,
             };
             let inline = &node.inline_style;
-            classes.apply(&cx, self.tailwind.theme(), &mut style, &mut props, |s| {
-                inline.apply(s)
-            });
+            let current = crate::tailwind::CurrentColor {
+                inherited: node.inherited_color,
+                inline: inline_color(inline),
+            };
+            classes.apply_with(
+                &cx,
+                self.tailwind.theme(),
+                current,
+                &mut style,
+                &mut props,
+                |s| inline.apply(s),
+            );
             if positional {
                 let parent = self.nodes[key as usize].parent;
                 self.nodes[parent as usize].positional_children = true;
@@ -868,6 +888,42 @@ impl<M: TextEngine> Core<M> {
         self.set_class_props(key, props);
         let id = self.nodes[key as usize].id;
         let _ = self.set_style(id, style);
+    }
+
+    /// `key`'s children inherit text color `color` (`None`: React Native's
+    /// black) from it: those whose `currentColor` it changes are styled
+    /// again, and the change goes on below those that set no color of their
+    /// own.
+    pub(super) fn inherit_color(&mut self, key: Key, color: Option<Color>) {
+        let stack = self.nodes[key as usize].children.clone();
+        self.pass_color(stack, color);
+    }
+
+    /// [`Self::inherit_color`] for `key` itself, which joined a parent
+    /// passing `color`.
+    pub(super) fn inherit_color_from(&mut self, key: Key, color: Option<Color>) {
+        self.pass_color(vec![key], color);
+    }
+
+    fn pass_color(&mut self, mut stack: Vec<Key>, color: Option<Color>) {
+        while let Some(k) = stack.pop() {
+            let node = &mut self.nodes[k as usize];
+            if node.inherited_color == color {
+                continue;
+            }
+            node.inherited_color = color;
+            if node
+                .classes
+                .as_ref()
+                .is_some_and(|c| c.deps() & deps::CURRENT_COLOR != 0)
+            {
+                self.restyle(k);
+            }
+            let node = &self.nodes[k as usize];
+            if node.text_style.color.is_none() {
+                stack.extend_from_slice(&node.children);
+            }
+        }
     }
 
     /// Applies the node props classes set (explicit props win).

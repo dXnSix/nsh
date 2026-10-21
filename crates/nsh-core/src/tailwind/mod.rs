@@ -106,6 +106,20 @@ pub mod deps {
     /// The component theme's tokens (`bg-primary`): parsed again when they
     /// change.
     pub const THEME: u16 = 256;
+    /// The text color it inherits (CSS's `currentColor`: a border, an
+    /// outline or a ring without a color of its own).
+    pub const CURRENT_COLOR: u16 = 512;
+}
+
+/// What CSS's `currentColor` is for a node: its own text color (its
+/// inline style's, else its classes'), else the one it inherits, else
+/// black, React Native's default.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct CurrentColor {
+    /// The text color the node inherits.
+    pub(crate) inherited: Option<Color>,
+    /// The color its inline style sets.
+    pub(crate) inline: Option<Color>,
 }
 
 /// The platform classes run on (`ios:`, `android:`, `web:`).
@@ -449,7 +463,8 @@ impl ClassList {
 
     /// Applies the rules matching `cx` to `style` and `props`, then
     /// `inline` (the node's inline style, which only `!` utilities win
-    /// over).
+    /// over). `currentColor` (a border without a color) is the node's own
+    /// text color, else black.
     pub fn apply(
         &self,
         cx: &Context<'_>,
@@ -458,16 +473,45 @@ impl ClassList {
         props: &mut ClassProps,
         inline: impl FnOnce(&mut Style),
     ) {
+        self.apply_with(cx, theme, CurrentColor::default(), style, props, inline);
+    }
+
+    /// [`ClassList::apply`] in a tree, where `current` says what the
+    /// node's `currentColor` comes from.
+    pub(crate) fn apply_with(
+        &self,
+        cx: &Context<'_>,
+        theme: &Theme,
+        current: CurrentColor,
+        style: &mut Style,
+        props: &mut ClassProps,
+        inline: impl FnOnce(&mut Style),
+    ) {
         let mut parts = Parts::default();
         let mut important = false;
+        let current = if self.deps & deps::CURRENT_COLOR != 0 {
+            let [plain, important] = self.text_colors(cx);
+            important
+                .or(current.inline)
+                .or(plain)
+                .or(current.inherited)
+                .unwrap_or(Color::BLACK)
+        } else {
+            Color::BLACK
+        };
+        parts.current = current;
         for rule in &self.rules {
             if rule.cond.pseudo() || !rule.cond.matches(cx) {
                 continue;
             }
             for decl in &rule.decls {
-                if let Decl::Default(key, value) = decl {
-                    let (key, value) = utilities::directed(*key, value, cx.rtl);
-                    let _ = style.set_key(key, value.as_value());
+                match decl {
+                    Decl::Default(key, value) => {
+                        let (key, value) = utilities::directed(*key, value, cx.rtl);
+                        let _ = style.set_key(key, value.as_value());
+                    }
+                    Decl::CurrentColor(key) => style.set_color(*key, current),
+                    _ => {}
                 }
             }
         }
@@ -540,6 +584,23 @@ impl ClassList {
 }
 
 impl ClassList {
+    /// The text colors the rules matching `cx` set: the plain ones' and
+    /// the `!` ones' (which win over the inline style).
+    fn text_colors(&self, cx: &Context<'_>) -> [Option<Color>; 2] {
+        let mut out = [None; 2];
+        for rule in &self.rules {
+            if rule.cond.pseudo() || !rule.cond.matches(cx) {
+                continue;
+            }
+            for decl in &rule.decls {
+                if let Some(c) = decl.sets_text_color(cx.env.dark) {
+                    out[usize::from(rule.important)] = c;
+                }
+            }
+        }
+        out
+    }
+
     /// The rules of a Rust component's styles (already in order), on a
     /// view that is the groups `groups` (`""`: unnamed).
     pub(crate) fn from_rules(rules: Vec<Rule>, groups: Vec<Box<str>>) -> Self {

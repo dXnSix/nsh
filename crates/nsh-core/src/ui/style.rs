@@ -480,14 +480,34 @@ impl Declaration {
     fn lower(&self, out: &mut Vec<Decl>) {
         let part = |out: &mut Vec<Decl>, p: Part| out.push(Decl::Part(p));
         match self {
-            Declaration::Number(key, n) => out.push(Decl::Set(*key, PatchValue::Number(n.0))),
+            Declaration::Number(key, n) => {
+                out.push(Decl::Set(*key, PatchValue::Number(n.0)));
+                // As the classes': a width's color is `currentColor` unless
+                // a color method sets one.
+                match key {
+                    StyleKey::BorderWidth
+                    | StyleKey::BorderTopWidth
+                    | StyleKey::BorderRightWidth
+                    | StyleKey::BorderBottomWidth
+                    | StyleKey::BorderLeftWidth
+                    | StyleKey::BorderStartWidth
+                    | StyleKey::BorderEndWidth => {
+                        out.push(Decl::CurrentColor(StyleKey::BorderColor))
+                    }
+                    StyleKey::OutlineWidth => out.push(Decl::CurrentColor(StyleKey::OutlineColor)),
+                    _ => {}
+                }
+            }
             Declaration::Length(key, l) => out.push(Decl::Set(*key, length_patch(*l))),
             Declaration::Keyword(key, k) => out.push(Decl::Set(*key, PatchValue::Str((*k).into()))),
             Declaration::DefaultKeyword(key, k) => {
                 out.push(Decl::Default(*key, PatchValue::Str((*k).into())))
             }
             Declaration::DefaultNumber(key, n) => {
-                out.push(Decl::Default(*key, PatchValue::Number(n.0)))
+                out.push(Decl::Default(*key, PatchValue::Number(n.0)));
+                if *key == StyleKey::OutlineWidth {
+                    out.push(Decl::CurrentColor(StyleKey::OutlineColor));
+                }
             }
             Declaration::Str(key, s) => {
                 out.push(Decl::Set(*key, PatchValue::Str(s.as_str().into())))
