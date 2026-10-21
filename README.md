@@ -1,5 +1,8 @@
 # The NSH fork
 
+> This lives on the fork's orphan branch `private/gamify-docs` (no shared history with upstream; a `pre-push` hook
+> refuses to send `private/*` to `upstream`). `scripts/nsh-fork/` below is in the Gamify repository.
+
 Gamify takes NSH from the fork `github.com/dXnSix/nsh` (`upstream` is `longbridge/nsh`), only through git tags. The
 fork's `main` is Gamify's integration line: upstream's `main` plus one pull request per topic branch (`feat/*` for a
 feature, `fix/*` for a fix), each merged with a merge commit. Nothing is pushed to upstream or opened there: the drafts
