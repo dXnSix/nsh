@@ -101,7 +101,8 @@
   and `blur`, applied while decoding); iOS texts draw no gradients or inset shadows; Android has no backdrop blur, `blur` or
   `drop-shadow` before API 31.
 - **View styles**: `backgroundColor`, `borderWidth` / `borderColor` (also per side: `borderTopWidth`, `borderLeftColor`, ...),
-  `borderStyle` (`solid` / `dashed` / `dotted`), `borderRadius` + the four `borderTopLeftRadius`-style corners, `borderCurve`
+  `borderStyle` (`solid` / `dashed` / `dotted`; `none` / `hidden` zero the used widths in layout and paint whatever
+  order the widths come in, as `outlineStyle: "none"` does, `Pending`), `borderRadius` + the four `borderTopLeftRadius`-style corners, `borderCurve`
   (`continuous`: corners easing into the edges, Figma's 60% corner smoothing, shrinking to circular where the box is too
   small, so pills stay pills; the outline geometry is `nsh_core::shape::rounded_rect`, ported to `Decor.java`; iOS layers that
   draw their own corners use `cornerCurve`), `overflow`, `opacity`,

@@ -1689,6 +1689,13 @@ pub trait Styled: Sized {
         self
     }
 
+    /// No border, whatever the widths set before or after (they take no
+    /// space); [`Styled::border_solid`] and the other styles show it again.
+    fn border_none(mut self) -> Self {
+        self.style().keyword(StyleKey::BorderStyle, "none");
+        self
+    }
+
     /// The shape of its rounded corners.
     fn border_curve(mut self, curve: BorderCurve) -> Self {
         self.style().keyword(
@@ -3387,6 +3394,7 @@ mod tests {
                 .border_dashed(),
             "border-y-3 border-s border-e-2 border-dashed",
         );
+        same(s().border_none().border(px(2.0)), "border-none border-2");
         same(
             s().border(px(3.0)).border_dotted(),
             "border-3 border-dotted",

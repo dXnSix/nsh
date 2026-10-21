@@ -235,7 +235,7 @@ view().h(px(120.0)).rounded(px(16.0)).bg_linear(deg(135.0)).gradient_from(rgb(0x
 | `borderLeftColor` | `ColorValue` | `.border_l_color(c)` | 左边。 |
 | `borderStartColor` | `ColorValue` | `.border_s_color(c)` | 起始边。 |
 | `borderEndColor` | `ColorValue` | `.border_e_color(c)` | 结束边。 |
-| `borderStyle` | `"solid" \| "dashed" \| "dotted"` | `.border_solid()`、`.border_dashed()`、`.border_dotted()` | 线型。默认 `"solid"`。 |
+| `borderStyle` | `"solid" \| "dashed" \| "dotted" \| "none" \| "hidden"` | `.border_solid()`、`.border_dashed()`、`.border_dotted()`、`.border_none()` | 线型。默认 `"solid"`。`"none"` 和 `"hidden"` 与 CSS 一样，无论宽度在之前还是之后设置，都不绘制边框，也不占布局空间。 |
 
 ### 圆角
 

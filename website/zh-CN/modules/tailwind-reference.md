@@ -315,7 +315,7 @@ view()
 | `border-x`、`border-y`、`border-t`、`border-r`、`border-b`、`border-l`、`border-s`、`border-e`（带 `-<n>` 或不带值） | 对应边的宽度 |
 | `border-<color>`、`border-t-<color>` 等 | `borderColor` 及各边颜色 |
 | `border-solid`、`border-dashed`、`border-dotted` | `borderStyle`（`border-double` 画实线） |
-| `border-none`、`border-hidden` | 宽度为 0 |
+| `border-none`、`border-hidden` | `borderStyle: "none"` / `"hidden"`：无论宽度类如何、顺序如何都没有边框（`md:border-solid` 会重新显示） |
 | `rounded`、`rounded-<size>`、`rounded-none`、`rounded-full`、`rounded-[<length>]` | `borderRadius`（不带值为 `sm`） |
 | `rounded-t-`、`-r-`、`-b-`、`-l-`、`-tl-`、`-tr-`、`-br-`、`-bl-` | 对应的角 |
 | `rounded-s-`、`-e-`、`-ss-`、`-se-`、`-es-`、`-ee-` | 起始 / 结束侧的角（随书写方向） |

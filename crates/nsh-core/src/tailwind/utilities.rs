@@ -1143,7 +1143,9 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         "border-solid" | "border-double" => sets(K::BorderStyle, "solid"),
         "border-dashed" => sets(K::BorderStyle, "dashed"),
         "border-dotted" => sets(K::BorderStyle, "dotted"),
-        "border-none" | "border-hidden" => setn(K::BorderWidth, 0.0),
+        // `border-style: none`: no border whatever the width utilities.
+        "border-none" => sets(K::BorderStyle, "none"),
+        "border-hidden" => sets(K::BorderStyle, "hidden"),
         // A style without a width: CSS's initial `medium` width (3px).
         "outline-solid" | "outline-double" => return outline_style("solid"),
         "outline-dashed" => return outline_style("dashed"),

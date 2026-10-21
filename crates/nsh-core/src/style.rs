@@ -842,7 +842,8 @@ pub struct Style {
 
 /// Values of properties that take effect only together with another one,
 /// kept so that the result does not depend on the order they are set in:
-/// `outlineWidth` under `outlineStyle: "none"` (no outline, as in CSS),
+/// `outlineWidth` under `outlineStyle: "none"` and the border widths under
+/// `borderStyle: "none"` (no outline, no border, as in CSS),
 /// `animationDuration` and the other `animation*` keys before
 /// `animationName`.
 #[derive(Clone, Copy, Default)]
@@ -851,6 +852,12 @@ pub(crate) struct Pending {
     outline_width: Points,
     /// `outlineStyle: "none"` / `"hidden"`.
     outline_hidden: bool,
+    /// The border widths as set: top, right, bottom, left.
+    border_widths: [Points; 4],
+    /// `borderStartWidth`, `borderEndWidth` as set.
+    border_logical: [Option<Points>; 2],
+    /// `borderStyle: "none"` / `"hidden"`: every used width is 0.
+    border_hidden: bool,
     /// `animationDuration`.
     animation_duration: Option<f32>,
     /// `animationDelay`.
@@ -1237,7 +1244,7 @@ style_keys! {
     BorderRightColor = "borderRightColor": View "ColorValue",
     BorderBottomColor = "borderBottomColor": View "ColorValue",
     BorderLeftColor = "borderLeftColor": View "ColorValue",
-    BorderStyle = "borderStyle": View "\"solid\" | \"dashed\" | \"dotted\"",
+    BorderStyle = "borderStyle": View "\"solid\" | \"dashed\" | \"dotted\" | \"none\" | \"hidden\"" "`none` and `hidden`: no border whatever the widths (they take no space).",
     BorderCurve = "borderCurve": View "\"circular\" | \"continuous\"" "`continuous`: corners whose curvature eases into the edges (iOS app icons).",
     TintColor = "tintColor": Image "ColorValue" "Recolors a template image.",
     BackfaceVisibility = "backfaceVisibility": View "\"visible\" | \"hidden\"" "`\"hidden\"`: invisible while turned away (3D rotations).",
@@ -1885,17 +1892,38 @@ impl Style {
         sides: &[usize],
         value: StyleValue<'_>,
     ) -> Result<(), StyleError> {
-        let w = number(value, 0.0)?.max(0.0);
-        let v = LengthPercentage::length(w);
+        let w = px(number(value, 0.0)?.max(0.0));
         for &side in sides {
-            *self.view.borders.width_mut(side) = px(w);
-            let b = &mut self.layout.border;
-            match side {
-                0 => b.top = v,
-                1 => b.right = v,
-                2 => b.bottom = v,
-                _ => b.left = v,
+            self.pending.border_widths[side] = w;
+            if !self.pending.border_hidden {
+                self.set_used_border_width(side, w);
             }
+        }
+        Ok(())
+    }
+
+    /// The width side `side` lays out and draws with.
+    fn set_used_border_width(&mut self, side: usize, w: Points) {
+        *self.view.borders.width_mut(side) = w;
+        let v = LengthPercentage::length(w.0);
+        let b = &mut self.layout.border;
+        match side {
+            0 => b.top = v,
+            1 => b.right = v,
+            2 => b.bottom = v,
+            _ => b.left = v,
+        }
+    }
+
+    fn set_logical_border_width(
+        &mut self,
+        i: usize,
+        value: StyleValue<'_>,
+    ) -> Result<(), StyleError> {
+        let w = opt_points(value)?.map(|w| w.max(Points::ZERO));
+        self.pending.border_logical[i] = w;
+        if !self.pending.border_hidden {
+            self.logical.border_width[i] = w;
         }
         Ok(())
     }
@@ -2077,12 +2105,8 @@ impl Style {
             StyleKey::PaddingEnd => self.logical.padding[1] = opt_lp(value)?,
             StyleKey::Start => self.logical.inset[0] = opt_lpa(value)?,
             StyleKey::End => self.logical.inset[1] = opt_lpa(value)?,
-            StyleKey::BorderStartWidth => {
-                self.logical.border_width[0] = opt_points(value)?.map(|w| w.max(Points::ZERO))
-            }
-            StyleKey::BorderEndWidth => {
-                self.logical.border_width[1] = opt_points(value)?.map(|w| w.max(Points::ZERO))
-            }
+            StyleKey::BorderStartWidth => self.set_logical_border_width(0, value)?,
+            StyleKey::BorderEndWidth => self.set_logical_border_width(1, value)?,
             StyleKey::BorderStartColor => self.logical.border_color[0] = color(value)?,
             StyleKey::BorderEndColor => self.logical.border_color[1] = color(value)?,
             StyleKey::BorderTopStartRadius => self.logical.radius[0] = opt_points(value)?,
@@ -2120,11 +2144,32 @@ impl Style {
             StyleKey::BorderBottomColor => self.set_border_color(&[2], value)?,
             StyleKey::BorderLeftColor => self.set_border_color(&[3], value)?,
             StyleKey::BorderStyle => {
-                self.view.borders.style = match keyword(value)? {
-                    None | Some("solid") => BorderStyle::Solid,
-                    Some("dashed") => BorderStyle::Dashed,
-                    Some("dotted") => BorderStyle::Dotted,
+                // `none` (and `hidden`, the same outside tables) draws and
+                // lays out no border whatever the widths, set before or
+                // after it (CSS).
+                let (style, hidden) = match keyword(value)? {
+                    None | Some("solid") => (BorderStyle::Solid, false),
+                    Some("dashed") => (BorderStyle::Dashed, false),
+                    Some("dotted") => (BorderStyle::Dotted, false),
+                    Some("none") | Some("hidden") => (BorderStyle::Solid, true),
                     Some(_) => return Err(StyleError::InvalidValue),
+                };
+                self.view.borders.style = style;
+                if hidden != self.pending.border_hidden {
+                    self.pending.border_hidden = hidden;
+                    for side in 0..4 {
+                        let w = if hidden {
+                            Points::ZERO
+                        } else {
+                            self.pending.border_widths[side]
+                        };
+                        self.set_used_border_width(side, w);
+                    }
+                    self.logical.border_width = if hidden {
+                        [None; 2]
+                    } else {
+                        self.pending.border_logical
+                    };
                 }
             }
             StyleKey::BorderCurve => {
@@ -2749,6 +2794,41 @@ mod tests {
         s.set("outlineStyle", Str("none")).unwrap();
         s.set("outlineStyle", Null).unwrap();
         assert_eq!(s.view.outline.width, px(3.0));
+    }
+
+    #[test]
+    fn border_style_none_hides_the_border_in_any_order() {
+        use StyleValue::{Null, Number, Str};
+        for none in ["none", "hidden"] {
+            in_any_order(
+                &[
+                    ("borderStyle", Str(none)),
+                    ("borderWidth", Number(3.0)),
+                    ("borderTopWidth", Number(4.0)),
+                    ("borderStartWidth", Number(5.0)),
+                ],
+                |s| {
+                    assert!(!s.view.borders.is_visible());
+                    assert_eq!(s.view.borders.widths.to_array(), [Points::ZERO; 4]);
+                    assert_eq!(s.layout.border.top, LengthPercentage::length(0.0));
+                    assert_eq!(s.layout.border.left, LengthPercentage::length(0.0));
+                    assert_eq!(s.logical.border_width, [None; 2]);
+                },
+            );
+        }
+        // A later style showing it again gets the widths back.
+        let mut s = Style::default();
+        s.set("borderWidth", Number(3.0)).unwrap();
+        s.set("borderEndWidth", Number(1.0)).unwrap();
+        s.set("borderStyle", Str("none")).unwrap();
+        s.set("borderStyle", Str("dashed")).unwrap();
+        assert_eq!(s.view.borders.widths.to_array(), [px(3.0); 4]);
+        assert_eq!(s.layout.border.right, LengthPercentage::length(3.0));
+        assert_eq!(s.logical.border_width, [None, Some(px(1.0))]);
+        assert_eq!(s.view.borders.style, BorderStyle::Dashed);
+        s.set("borderStyle", Str("hidden")).unwrap();
+        s.set("borderStyle", Null).unwrap();
+        assert_eq!(s.view.borders.widths.to_array(), [px(3.0); 4]);
     }
 
     #[test]

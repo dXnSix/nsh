@@ -235,7 +235,7 @@ view().h(px(120.0)).rounded(px(16.0)).bg_linear(deg(135.0)).gradient_from(rgb(0x
 | `borderLeftColor` | `ColorValue` | `.border_l_color(c)` | Left side. |
 | `borderStartColor` | `ColorValue` | `.border_s_color(c)` | Start side. |
 | `borderEndColor` | `ColorValue` | `.border_e_color(c)` | End side. |
-| `borderStyle` | `"solid" \| "dashed" \| "dotted"` | `.border_solid()`, `.border_dashed()`, `.border_dotted()` | Line style. Default `"solid"`. |
+| `borderStyle` | `"solid" \| "dashed" \| "dotted" \| "none" \| "hidden"` | `.border_solid()`, `.border_dashed()`, `.border_dotted()`, `.border_none()` | Line style. Default `"solid"`. `"none"` and `"hidden"` draw and lay out no border whatever the widths, set before or after, as in CSS. |
 
 ### Corners
 

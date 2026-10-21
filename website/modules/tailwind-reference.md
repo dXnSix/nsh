@@ -315,7 +315,7 @@ view()
 | `border-x`, `border-y`, `border-t`, `border-r`, `border-b`, `border-l`, `border-s`, `border-e` (with `-<n>` or bare) | the matching sides' widths |
 | `border-<color>`, `border-t-<color>`, ... | `borderColor` and the per-side colors |
 | `border-solid`, `border-dashed`, `border-dotted` | `borderStyle` (`border-double` draws solid) |
-| `border-none`, `border-hidden` | width 0 |
+| `border-none`, `border-hidden` | `borderStyle: "none"` / `"hidden"`: no border whatever the width classes, in any order (`md:border-solid` shows it again) |
 | `rounded`, `rounded-<size>`, `rounded-none`, `rounded-full`, `rounded-[<length>]` | `borderRadius` (bare: `sm`) |
 | `rounded-t-`, `-r-`, `-b-`, `-l-`, `-tl-`, `-tr-`, `-br-`, `-bl-` | the matching corners |
 | `rounded-s-`, `-e-`, `-ss-`, `-se-`, `-es-`, `-ee-` | start / end corners (direction-aware) |

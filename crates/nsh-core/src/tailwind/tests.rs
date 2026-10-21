@@ -112,6 +112,25 @@ fn colors_and_opacity() {
     assert_eq!(s.view.borders.widths.to_array().map(|w| w.0), [1.0; 4]);
     assert_eq!(s.view.borders.colors[0], Color(0xff00_00ff));
     assert_eq!(s.view.opacity, 0.75);
+    // `border-none` is `border-style: none`: no border, in any order, and a
+    // later style shows it again.
+    for classes in [
+        "border-2 border-none",
+        "border-none border-2",
+        "border-hidden border-t-4",
+    ] {
+        let s = styled(classes);
+        assert!(!s.view.borders.is_visible(), "{classes}");
+        assert_eq!(s.layout.border.top, taffy::LengthPercentage::length(0.0));
+    }
+    let (env, states) = cx(0);
+    let (s, _) = styled_with(
+        "border border-none md:border-solid",
+        env,
+        (800.0, 844.0),
+        states,
+    );
+    assert_eq!(s.view.borders.widths.to_array().map(|w| w.0), [1.0; 4]);
     let s = styled("bg-[rgb(0_0_255)]/25 text-black/[0.5]");
     assert_eq!(s.view.background_color, Color(0x0000_ff40));
     assert_eq!(s.text.color, Some(Color(0x0000_0080)));
