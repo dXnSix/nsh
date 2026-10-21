@@ -275,7 +275,7 @@ Tailwind's text shadows have several layers; natively one shadow is drawn, the w
 | Class | Sets |
 |---|---|
 | `placeholder:text-<color>` | `placeholderColor` |
-| `selection:text-<color>` | `selectionColor` (an input's caret and selection, a selectable text's highlight) |
+| `selection:bg-<color>` | `selectionColor` (the highlight of an input's or a selectable text's selection) |
 | `caret-<color>` | the cursor color |
 
 ## Backgrounds
@@ -575,7 +575,7 @@ each(items, |item: &Item| item.id, move |item, index| {
 
 ### Placeholder and selection
 
-`placeholder:` applies to an `<Input>`'s placeholder and only takes a text color: `placeholder:text-zinc-400` (the style key `placeholderColor`). `selection:` applies to the selection of an `<Input>` (its caret too) or a selectable `<Text>`, and also only takes a text color: `selection:text-violet-500` (the style key `selectionColor`).
+`placeholder:` applies to an `<Input>`'s placeholder and only takes a text color: `placeholder:text-zinc-400` (the style key `placeholderColor`). `selection:` applies to the selection of an `<Input>` or a selectable `<Text>` and takes its background, the highlight: `selection:bg-violet-200` (the style key `selectionColor`, which also tints an input's caret where the platform draws them in one color).
 
 ### Important
 

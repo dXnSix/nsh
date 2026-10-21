@@ -1268,7 +1268,7 @@ style_keys! {
     TextTransform = "textTransform": Text "\"none\" | \"uppercase\" | \"lowercase\" | \"capitalize\"",
     TextAlign = "textAlign": Text "\"auto\" | \"left\" | \"center\" | \"right\" | \"justify\"",
     PlaceholderColor = "placeholderColor": Text "ColorValue" "An input's placeholder (`placeholder:text-*`).",
-    SelectionColor = "selectionColor": Text "ColorValue" "An input's caret and selection, a selectable text's selection highlight (`selection:text-*`).",
+    SelectionColor = "selectionColor": Text "ColorValue" "An input's caret and selection, a selectable text's selection highlight (`selection:bg-*`).",
     VerticalAlign = "verticalAlign": View "\"baseline\" | \"text-top\" | \"text-bottom\" | \"middle\"" "Where a view or image inside a `<Text>` sits in its line (CSS `vertical-align`, `align-*`): its bottom on the baseline (the default), its top or bottom at the top or bottom of the text's font, or its middle half the font's x height above the baseline. The line grows to hold it.",
 }
 

@@ -169,7 +169,6 @@ impl Decl {
         }
     }
 
-    /// The text color this declares, for `placeholder:` rules.
     /// Sets the background color.
     pub(crate) fn sets_background_color(&self) -> bool {
         matches!(
@@ -207,6 +206,14 @@ impl Decl {
         match self {
             Decl::Set(StyleKey::Color, PatchValue::Str(s)) => Color::parse(s),
             // `placeholder:` rules are Tailwind's: never adaptive.
+            _ => None,
+        }
+    }
+
+    /// The background color this declares, for `selection:` rules.
+    pub(crate) fn background_color(&self) -> Option<Color> {
+        match self {
+            Decl::Set(StyleKey::BackgroundColor, PatchValue::Str(s)) => Color::parse(s),
             _ => None,
         }
     }

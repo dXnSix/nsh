@@ -3547,7 +3547,7 @@ impl<M: TextEngine> Core<M> {
                         .and_then(|name| self.accessories.get(name).copied());
                     // An explicit prop (Rust), then the style key, then
                     // the classes (`placeholder:text-*`, `caret-*`,
-                    // `selection:text-*`).
+                    // `selection:bg-*`).
                     config.placeholder_color = config
                         .placeholder_color
                         .or(node.text_style.placeholder_color);

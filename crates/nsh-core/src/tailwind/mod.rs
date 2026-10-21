@@ -208,6 +208,18 @@ impl Condition {
         self.placeholder || self.selection
     }
 
+    /// The color a pseudo-element rule's `decls` give it: the placeholder's
+    /// text color (`placeholder:text-*`), the selection's background, its
+    /// highlight (`selection:bg-*`). `None`: the rule sets something else,
+    /// which NSH has no native counterpart for.
+    fn pseudo_color(&self, decls: &[Decl]) -> Option<Color> {
+        match decls {
+            [decl] if self.placeholder => decl.text_color(),
+            [decl] if self.selection => decl.background_color(),
+            _ => None,
+        }
+    }
+
     /// Applies only while the view (or its group) is pressed, hovered or
     /// focused: press feedback.
     fn interactive(&self) -> bool {
@@ -340,7 +352,8 @@ pub struct ClassProps {
     pub selectable: Option<bool>,
     /// `placeholder:text-*` (inputs).
     pub placeholder_color: Option<Color>,
-    /// `selection:text-*` (inputs, selectable texts).
+    /// `selection:bg-*`: the highlight of a selection (inputs, selectable
+    /// texts).
     pub selection_color: Option<Color>,
     /// `caret-*` (inputs).
     pub caret_color: Option<Color>,
@@ -444,13 +457,11 @@ impl ClassList {
             if !rule.cond.matches(cx) {
                 continue;
             }
-            for decl in &rule.decls {
-                if let Some(c) = decl.text_color() {
-                    if rule.cond.placeholder {
-                        props.placeholder_color = Some(c);
-                    } else {
-                        props.selection_color = Some(c);
-                    }
+            if let Some(c) = rule.cond.pseudo_color(&rule.decls) {
+                if rule.cond.placeholder {
+                    props.placeholder_color = Some(c);
+                } else {
+                    props.selection_color = Some(c);
                 }
             }
         }
@@ -707,6 +718,9 @@ fn parse_token(theme: &Theme, token: &str) -> Option<Token> {
     let Some(decls) = utilities::parse(theme, utility) else {
         return themed(theme, cond, rank, important, utility);
     };
+    if cond.pseudo() && cond.pseudo_color(&decls).is_none() {
+        return None;
+    }
     Some(Token::Rule(Rule {
         cond,
         decls,
@@ -727,7 +741,15 @@ fn themed(
     utility: &str,
 ) -> Option<Token> {
     let tokens = theme.tokens();
-    let parse = |dark: bool| utilities::parse(theme, &tokens.substitute(utility, dark)?);
+    let pseudo = Condition {
+        placeholder: cond.placeholder,
+        selection: cond.selection,
+        ..Condition::default()
+    };
+    let parse = |dark: bool| {
+        let decls = utilities::parse(theme, &tokens.substitute(utility, dark)?)?;
+        (!pseudo.pseudo() || pseudo.pseudo_color(&decls).is_some()).then_some(decls)
+    };
     let rule = |cond: Condition, decls: Vec<Decl>| Rule {
         cond,
         decls,

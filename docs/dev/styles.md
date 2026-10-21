@@ -20,8 +20,8 @@
   `focus:` / `focus-within:` / `disabled:` / `enabled:` / `selected:` (`accessibilityState.selected`, a `Button`'s
   `selected`) / `checked:` (`accessibilityState.checked`, not mixed) / `indeterminate:` (`accessibilityState.checked`
   mixed, CSS's `:indeterminate`), `group-*:` (named groups `group/name`), `first:` / `last:` /
-  `odd:` / `even:` / `only:`, `placeholder:` / `selection:` (a color only: the `placeholderColor` / `selectionColor`
-  style keys), `!` (important). The state classes have style props of their own (`activeStyle`, `hoverStyle`,
+  `odd:` / `even:` / `only:`, `placeholder:` / `selection:` (a color only, the pseudo-element's: `placeholder:text-*` / `selection:bg-*`, the
+  `placeholderColor` / `selectionColor` style keys; other utilities under them are unknown), `!` (important). The state classes have style props of their own (`activeStyle`, `hoverStyle`,
   `focusStyle`, `disabledStyle`, `checkedStyle`, `indeterminateStyle`, a `Button`'s `selectedStyle`), resolved the same
   way: later states win, `disabled` over all. `selected`, `checked` and `indeterminate` are value states the core sets
   from the accessibility state (never reported by the platform), below the interaction states: `checked` and
@@ -51,7 +51,7 @@
   their nodes (and the app's classes on Rust components) again; when the names change, every class. `nsh build` / `nsh dev` warn about unknown static classes in app code (`file:line:col:
   unknown class '...'`, target `nsh::build`); the core logs each unknown class once at run time. Class-only settings
   that are props in React Native (`line-clamp-*`, `truncate`, `whitespace-nowrap`, `pointer-events-*`, `object-*`,
-  `caret-*`) lose to explicit props; `placeholder:text-*` / `selection:text-*` lose to the `placeholderColor` /
+  `caret-*`) lose to explicit props; `placeholder:text-*` / `selection:bg-*` lose to the `placeholderColor` /
   `selectionColor` style keys. Not supported: `peer-*`, pseudo-elements, arbitrary CSS
   properties; `space-x/y-*` are gaps.
 - **Text style inheritance** (CSS-like): a view's text properties (color, font, size, alignment, ...) pass to the texts and inputs

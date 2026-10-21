@@ -88,7 +88,7 @@ Rust 组件（`SafeAreaView`、`KeyboardAvoidingView` 以及应用自己 crate �
 | `group-active/name:` ... | 同上，针对标记为 `group/name` 的祖先 | `.group_named("name")`；`.group_active_named("name", ..)` 等 |
 | `first:`、`last:`、`odd:`、`even:`、`only:` | 元素自身在兄弟节点中的位置。要按行的位置给行内标签上色，把 `last:text-*` 写在行上，标签会继承它 | 根据行的索引用普通 Rust 判断（`at.is_first()`、`at.is_last()`、`at.index() % 2`） |
 | `placeholder:` | 设置输入框占位文字的样式（`placeholder:text-zinc-400`） | `.placeholder_color(..)` |
-| `selection:` | 设置输入框或可选文本的选区样式（`selection:text-violet-500`） | `.selection_color(..)` |
+| `selection:` | 设置输入框或可选文本的选区高亮颜色（`selection:bg-violet-200`） | `.selection_color(..)` |
 | `dark:` | 系统外观为深色 | `AdaptiveColor`，或 `.dark(\|s\| ..)` |
 | `sm:`、`md:`、`lg:`、`xl:`、`2xl:` | 窗口宽度至少为 640、768、1024、1280、1536 点 | `.style_when(\|\| window().width >= px(768.0), \|s\| ..)` |
 | `max-sm:`、`max-md:` ... | 窗口宽度小于该断点 | 同上，使用 `<` |

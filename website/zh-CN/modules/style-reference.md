@@ -434,7 +434,7 @@ view()
 | 键 | 类型 | Rust | 说明 |
 |---|---|---|---|
 | `placeholderColor` | `ColorValue` | 输入框的 `.placeholder_color(c)` | `<Input>` 占位文字的颜色（`placeholder:text-*`）。 |
-| `selectionColor` | `ColorValue` | 输入框或文本的 `.selection_color(c)` | `<Input>` 的光标和选区、可选 `<Text>` 的选区高亮和选择柄（`selection:text-*`）；默认为平台的强调色。 |
+| `selectionColor` | `ColorValue` | 输入框或文本的 `.selection_color(c)` | `<Input>` 的光标和选区、可选 `<Text>` 的选区高亮和选择柄（`selection:bg-*`）；默认为平台的强调色。 |
 
 ### 文字阴影
 

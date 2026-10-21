@@ -955,7 +955,7 @@ fn unknown_classes_are_reported() {
 #[test]
 fn placeholder_and_props() {
     let (_, props) = styled_with(
-        "placeholder:text-zinc-400 selection:text-blue-500 caret-blue-500 line-clamp-2 pointer-events-none object-contain select-none",
+        "placeholder:text-zinc-400 selection:bg-blue-500 caret-blue-500 line-clamp-2 pointer-events-none object-contain select-none",
         ClassEnvironment::default(),
         (390.0, 844.0),
         0,
@@ -970,6 +970,24 @@ fn placeholder_and_props() {
     );
     assert_eq!(props.resize_mode, Some(crate::ops::ResizeMode::Contain));
     assert_eq!(props.selectable, Some(false));
+    // `::selection`'s background is the highlight; the color of the
+    // selected glyphs and the other properties of the pseudo-elements
+    // have no native counterpart.
+    let theme = themed();
+    let list = parse(
+        &theme,
+        "selection:text-blue-500 placeholder:italic placeholder:bg-red-500 selection:opacity-50 placeholder:text-muted-foreground selection:bg-primary",
+    );
+    let unknown: Vec<&str> = list.unknown().iter().map(|s| &**s).collect();
+    assert_eq!(
+        unknown,
+        [
+            "selection:text-blue-500",
+            "placeholder:italic",
+            "placeholder:bg-red-500",
+            "selection:opacity-50"
+        ]
+    );
 }
 
 #[test]

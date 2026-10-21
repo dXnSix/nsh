@@ -88,7 +88,7 @@ Rust components (`SafeAreaView`, `KeyboardAvoidingView` and those of an app's ow
 | `group-active/name:` ... | The same, for an ancestor marked `group/name` | `.group_named("name")`; `.group_active_named("name", ..)`, ... |
 | `first:`, `last:`, `odd:`, `even:`, `only:` | The element's own position among its siblings. To color a row's label by the row's position, put `last:text-*` on the row: the label inherits it | Plain Rust from the row's index (`at.is_first()`, `at.is_last()`, `at.index() % 2`) |
 | `placeholder:` | Styles an input's placeholder (`placeholder:text-zinc-400`) | `.placeholder_color(..)` |
-| `selection:` | Styles the selection of an input or a selectable text (`selection:text-violet-500`) | `.selection_color(..)` |
+| `selection:` | Colors the selection highlight of an input or a selectable text (`selection:bg-violet-200`) | `.selection_color(..)` |
 | `dark:` | The system appearance is dark | An `AdaptiveColor`, or `.dark(\|s\| ..)` |
 | `sm:`, `md:`, `lg:`, `xl:`, `2xl:` | The window is at least 640, 768, 1024, 1280, 1536 points wide | `.style_when(\|\| window().width >= px(768.0), \|s\| ..)` |
 | `max-sm:`, `max-md:`, ... | The window is narrower than the breakpoint | The same, with `<` |

@@ -275,7 +275,7 @@ Tailwind 的文字阴影有多层；原生只绘制一层，即最宽的那层�
 | Class | 设置 |
 |---|---|
 | `placeholder:text-<color>` | `placeholderColor` |
-| `selection:text-<color>` | `selectionColor`（输入框的光标和选区、可选文本的选区高亮） |
+| `selection:bg-<color>` | `selectionColor`（输入框或可选文本的选区高亮） |
 | `caret-<color>` | 光标颜色 |
 
 ## 背景
@@ -575,7 +575,7 @@ each(items, |item: &Item| item.id, move |item, index| {
 
 ### 占位符与选区
 
-`placeholder:` 作用于 `<Input>` 的占位文字，只接受文字颜色：`placeholder:text-zinc-400`（样式键 `placeholderColor`）。`selection:` 作用于 `<Input>` 的选区（包括光标）或可选 `<Text>` 的选区，同样只接受文字颜色：`selection:text-violet-500`（样式键 `selectionColor`）。
+`placeholder:` 作用于 `<Input>` 的占位文字，只接受文字颜色：`placeholder:text-zinc-400`（样式键 `placeholderColor`）。`selection:` 作用于 `<Input>` 或可选 `<Text>` 的选区，接受选区的背景色，即高亮颜色：`selection:bg-violet-200`（样式键 `selectionColor`；在平台用同一种颜色绘制光标和选区时，也决定输入框光标的颜色）。
 
 ### 重要标记
 

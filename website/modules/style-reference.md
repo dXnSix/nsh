@@ -434,7 +434,7 @@ Text styles apply to `<Text>` and `<Input>`. They are also inherited, as in CSS:
 | Key | Type | Rust | Description |
 |---|---|---|---|
 | `placeholderColor` | `ColorValue` | `.placeholder_color(c)` of an input | The color of an `<Input>`'s placeholder (`placeholder:text-*`). |
-| `selectionColor` | `ColorValue` | `.selection_color(c)` of an input or a text | An `<Input>`'s caret and selection, a selectable `<Text>`'s selection highlight and handles (`selection:text-*`); the platform's accent by default. |
+| `selectionColor` | `ColorValue` | `.selection_color(c)` of an input or a text | An `<Input>`'s caret and selection, a selectable `<Text>`'s selection highlight and handles (`selection:bg-*`); the platform's accent by default. |
 
 ### Text shadow
 
