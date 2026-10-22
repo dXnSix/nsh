@@ -14,9 +14,19 @@
 //!
 //! The texture is drawn as `GtkGLArea` draws its own: GL's rows go bottom
 //! up, so the snapshot flips it.
+//!
+//! A `<ShaderEffect>`'s children are its content: whenever GTK draws the
+//! effect again (it or something in it changed), they are drawn into a
+//! render node of their own, which the window's renderer renders into a
+//! texture, downloaded and uploaded into the shader's context. What is
+//! behind a view (`sample_backdrop`) is a picture: once the frame is
+//! painted after a change (the core's `ShaderInput`, [`ui_changed`]), the
+//! surface's views are drawn anew up to the view ([`skipped`]: the view
+//! and what comes after it are above it), rendered and downloaded alike,
+//! and the view draws again with it.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     ffi::c_void,
     rc::Rc,
@@ -28,10 +38,10 @@ use std::{
 };
 
 use glow::HasContext;
-use gtk4::{self as gtk, gdk, glib, graphene, prelude::*};
+use gtk4::{self as gtk, gdk, glib, graphene, gsk, prelude::*};
 use nsh_core::{
     animation::AnimationValue,
-    geometry::{DevicePixels, Percentage, Points, Size},
+    geometry::{Bounds, DevicePixels, Percentage, Point, Points, Size},
     shader::{self, GlslProgram, ProgramCode, ShaderFill, ShaderInput, ShaderProgram},
 };
 
@@ -66,6 +76,11 @@ thread_local! {
     static SOURCES: RefCell<HashMap<u32, Option<GlslProgram>>> = RefCell::default();
     /// Textures of views that are gone: images' and rendered ones.
     static ORPHANS: RefCell<(Vec<glow::Texture>, Vec<Pooled>)> = RefCell::default();
+    /// Views whose shader reads what is behind them.
+    static BACKDROPS: RefCell<Vec<glib::WeakRef<NshView>>> = RefCell::default();
+    /// While a picture of what is behind a view is taken: the view, and
+    /// whether the drawing reached it.
+    static TRACE: RefCell<Option<(NshView, bool)>> = const { RefCell::new(None) };
 }
 
 /// libepoxy's GL functions: `epoxy_<name>` is a pointer to `<name>` of
@@ -289,7 +304,17 @@ pub(crate) struct ShaderState {
     /// The fill's uniforms with the animated values and the images' sizes
     /// written in.
     uniforms: Vec<u8>,
+    /// `nsh.progress`: the fill's, or its animated value.
+    progress: f32,
     args: Vec<(u16, AnimationValue)>,
+    /// A `<ShaderEffect>`: its children are the shader's content.
+    effect: bool,
+    /// The picture of what is behind it, once taken.
+    backdrop: Option<Rc<Pixels>>,
+    /// What is behind it changed: a picture is to be taken.
+    marked: Cell<bool>,
+    /// A picture is taken after the frame being painted.
+    scheduled: Cell<bool>,
     /// The images by slot, once loaded.
     images: Vec<Option<Rc<Pixels>>>,
     started: Option<Instant>,
@@ -306,6 +331,8 @@ struct Cache {
     /// The images' textures in the context, by slot (and the pixels they
     /// hold).
     images: Vec<Option<(Rc<Pixels>, glow::Texture)>>,
+    /// The content's and the backdrop's textures (and their pixels).
+    inputs: [Option<(Rc<Pixels>, glow::Texture)>; 2],
 }
 
 impl Drop for Cache {
@@ -315,6 +342,7 @@ impl Drop for Cache {
         let textures = self
             .images
             .drain(..)
+            .chain(self.inputs.iter_mut().map(Option::take))
             .flatten()
             .map(|(_, t)| t)
             .collect::<Vec<_>>();
@@ -346,9 +374,12 @@ impl ShaderState {
     }
 }
 
-/// Sets up a shader view.
-pub(crate) fn create(view: &NshView) {
-    view.state_mut().shader = Some(ShaderState::default());
+/// Sets up a shader view; `effect`: a `<ShaderEffect>`.
+pub(crate) fn create(view: &NshView, effect: bool) {
+    view.state_mut().shader = Some(ShaderState {
+        effect,
+        ..ShaderState::default()
+    });
 }
 
 /// What `view` draws now (`None`: its children only); loads its images.
@@ -362,9 +393,8 @@ pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, fill: Option<Arc<Shader
         let old = state.fill.take();
         if let Some(fill) = &fill {
             state.uniforms = fill.uniforms.to_vec();
-            for &(k, value) in &state.args {
-                shader::write_animated(&mut state.uniforms, k, value);
-            }
+            state.progress = fill.progress;
+            shader::write_args(&mut state.uniforms, &mut state.progress, &state.args);
             state.images.resize(fill.images.len(), None);
             for (slot, image) in fill.images.iter().enumerate() {
                 let before = old
@@ -388,6 +418,21 @@ pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, fill: Option<Arc<Shader
                 }
             }
         }
+        if fill
+            .as_ref()
+            .is_some_and(|f| f.samples(ShaderInput::Backdrop))
+        {
+            if state.backdrop.is_none() {
+                state.marked.set(true);
+            }
+            BACKDROPS.with(|b| {
+                let mut b = b.borrow_mut();
+                b.retain(|w| w.upgrade().is_some());
+                if !b.iter().any(|w| w.upgrade().as_ref() == Some(view)) {
+                    b.push(view.downgrade());
+                }
+            });
+        }
         state.fill = fill;
         state.started.get_or_insert_with(Instant::now);
         state.stale();
@@ -404,11 +449,11 @@ pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, fill: Option<Arc<Shader
         });
     }
     tick(view);
-    view.changed();
+    view.redraw();
 }
 
-/// The image of `slot` (`uri`'s) loaded.
-fn loaded(view: &NshView, slot: usize, uri: &str, texture: &gdk::Texture) {
+/// `texture`'s pixels.
+fn pixels_of(texture: &gdk::Texture) -> Pixels {
     let (width, height) = (texture.width(), texture.height());
     let mut downloader = gdk::TextureDownloader::new(texture);
     downloader.set_format(gdk::MemoryFormat::R8g8b8a8Premultiplied);
@@ -418,11 +463,16 @@ fn loaded(view: &NshView, slot: usize, uri: &str, texture: &gdk::Texture) {
     for line in bytes.chunks(stride).take(height as usize) {
         rgba.extend_from_slice(&line[..row]);
     }
-    let pixels = Pixels {
+    Pixels {
         width,
         height,
         rgba,
-    };
+    }
+}
+
+/// The image of `slot` (`uri`'s) loaded.
+fn loaded(view: &NshView, slot: usize, uri: &str, texture: &gdk::Texture) {
+    let pixels = pixels_of(texture);
     {
         let mut s = view.state_mut();
         let Some(state) = s.shader.as_mut() else {
@@ -445,7 +495,7 @@ fn loaded(view: &NshView, slot: usize, uri: &str, texture: &gdk::Texture) {
         state.images[slot] = Some(Rc::new(pixels));
         state.stale();
     }
-    view.changed();
+    view.redraw();
 }
 
 /// Animated uniforms' values (`AnimationProp::ShaderUniform`).
@@ -461,21 +511,22 @@ pub(crate) fn set_args(view: &NshView, values: &[(u16, AnimationValue)]) {
         state.args.clear();
         state.args.extend_from_slice(values);
         if state.fill.is_some() {
-            for &(k, value) in values {
-                shader::write_animated(&mut state.uniforms, k, value);
-            }
+            shader::write_args(&mut state.uniforms, &mut state.progress, values);
         }
         state.stale();
     }
-    view.changed();
+    view.redraw();
 }
 
 /// Its size changed: it renders again.
 pub(crate) fn resized(view: &NshView) {
     if let Some(state) = view.state_mut().shader.as_mut() {
         state.stale();
+        state
+            .marked
+            .set(state.backdrop.is_some() || state.marked.get());
     }
-    view.changed();
+    view.redraw();
 }
 
 /// A shader that reads `nsh.time` draws on every frame of the view's
@@ -503,93 +554,355 @@ fn tick(view: &NshView) {
             }
             state.stale();
         }
-        view.changed();
+        view.redraw();
         glib::ControlFlow::Continue
     });
 }
 
-/// Draws a shader view's picture, rendering it first if it is stale (or
-/// its scale changed).
-pub(crate) fn draw(snapshot: &gtk::Snapshot, state: &ViewState, widget: &NshView) {
-    let Some(shader) = state.shader.as_ref() else {
-        return;
-    };
-    let Some(fill) = &shader.fill else { return };
-    let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
-    if w <= 0.0 || h <= 0.0 {
+/// True when `state` is an effect drawing its children through its
+/// shader ([`draw_effect`]).
+pub(crate) fn effect(state: &ViewState) -> bool {
+    state
+        .shader
+        .as_ref()
+        .is_some_and(|s| s.effect && s.fill.is_some())
+}
+
+/// What the core says changed under an effect or behind a view
+/// (`MountItem::ShaderInput`): an effect draws again with GTK, what is
+/// behind a view is taken again.
+pub(crate) fn input_changed(view: &NshView) {
+    mark(view);
+}
+
+/// Something on the UI thread changed (an animation, scrolling, an
+/// image): what is behind each view that reads it is taken again.
+pub(crate) fn ui_changed() {
+    if tracing() {
         return;
     }
-    let scale = widget.scale_factor().max(1) as f32;
-    let mut cache = shader.cache.borrow_mut();
-    let pixels = (
-        (w * scale).round().max(1.0) as i32,
-        (h * scale).round().max(1.0) as i32,
+    let views: Vec<NshView> = BACKDROPS.with(|b| {
+        let mut b = b.borrow_mut();
+        b.retain(|w| w.upgrade().is_some());
+        b.iter().filter_map(|w| w.upgrade()).collect()
+    });
+    for view in views {
+        mark(&view);
+    }
+}
+
+/// What is behind `view` is to be taken again, after the next frame.
+fn mark(view: &NshView) {
+    let samples = {
+        let s = view.state();
+        let Some(state) = s.shader.as_ref() else {
+            return;
+        };
+        let samples = state
+            .fill
+            .as_ref()
+            .is_some_and(|f| f.samples(ShaderInput::Backdrop));
+        if samples {
+            state.marked.set(true);
+        }
+        samples
+    };
+    if samples {
+        // Its snapshot asks for the picture after the frame.
+        view.queue_draw();
+    }
+}
+
+/// True while a picture of what is behind a view is drawn.
+pub(crate) fn tracing() -> bool {
+    TRACE.with(|t| t.borrow().is_some())
+}
+
+/// True while a picture of what is behind a view is drawn and the drawing
+/// reached it: what follows is above it.
+pub(crate) fn past() -> bool {
+    TRACE.with(|t| t.borrow().as_ref().is_some_and(|(_, reached)| *reached))
+}
+
+/// True when `view` is left out of the picture being drawn: it is the view
+/// the picture is behind, or above it.
+pub(crate) fn skipped(view: &NshView) -> bool {
+    TRACE.with(|t| {
+        let mut t = t.borrow_mut();
+        let Some((of, reached)) = t.as_mut() else {
+            return false;
+        };
+        if !*reached && of == view {
+            *reached = true;
+        }
+        *reached
+    })
+}
+
+/// The area a shader view draws (points from its top-left: the view, and
+/// an effect's `maxSampleOffset` beyond it) and its size in pixels.
+fn area(state: &ViewState, scale: f32) -> Option<(Bounds<Points>, (i32, i32))> {
+    let shader = state.shader.as_ref()?;
+    let fill = shader.fill.as_ref()?;
+    let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let o = if shader.effect {
+        fill.max_offset.0.max(0.0)
+    } else {
+        0.0
+    };
+    let area = Bounds::new(
+        Point::new(Points(-o), Points(-o)),
+        Size::new(Points(w + 2.0 * o), Points(h + 2.0 * o)),
     );
-    if cache
-        .picture
-        .as_ref()
-        .is_some_and(|p| (p.width(), p.height()) != pixels)
+    let pixels = (
+        (area.size.width.0 * scale).round().max(1.0) as i32,
+        (area.size.height.0 * scale).round().max(1.0) as i32,
+    );
+    Some((area, pixels))
+}
+
+/// Draws a shader view's picture, rendering it first if it is stale (or
+/// its scale changed); an effect draws with its children
+/// ([`draw_effect`]).
+pub(crate) fn draw(snapshot: &gtk::Snapshot, state: &ViewState, widget: &NshView) {
+    if state.shader.as_ref().is_none_or(|s| s.effect) {
+        return;
+    }
+    // The fill follows the view's corners, as a background does.
+    let rounded = state.radii().iter().any(|&r| r > 0.0);
+    if rounded {
+        snapshot.push_rounded_clip(&state.rounded_bounds());
+    }
+    picture(snapshot, state, widget, None, false);
+    if rounded {
+        snapshot.pop();
+    }
+}
+
+/// Draws an effect: `view`'s children into its content, then the shader.
+/// False when it draws nothing: the children are then drawn as they are.
+pub(crate) fn draw_effect(snapshot: &gtk::Snapshot, view: &NshView) -> bool {
+    let scale = view.scale_factor().max(1) as f32;
+    let (area, pixels, samples) = {
+        let s = view.state();
+        let Some((area, pixels)) = area(&s, scale) else {
+            return false;
+        };
+        let samples = s
+            .shader
+            .as_ref()
+            .and_then(|s| s.fill.as_ref())
+            .is_some_and(|f| f.samples(ShaderInput::Content));
+        (area, pixels, samples)
+    };
+    let content = match samples {
+        true => content(view, area, scale, pixels),
+        false => None,
+    };
+    picture(snapshot, &view.state(), view, Some(content), true)
+}
+
+/// `view`'s children rendered over `area` at `scale` (`pixels` in all).
+fn content(
+    view: &NshView,
+    area: Bounds<Points>,
+    scale: f32,
+    pixels: (i32, i32),
+) -> Option<Rc<Pixels>> {
+    let renderer = view.native()?.renderer()?;
+    let inner = gtk::Snapshot::new();
+    inner.scale(scale, scale);
+    inner.translate(&graphene::Point::new(-area.origin.x.0, -area.origin.y.0));
+    view.snapshot_children(&inner);
+    let node = inner.to_node()?;
+    let viewport = graphene::Rect::new(0.0, 0.0, pixels.0 as f32, pixels.1 as f32);
+    let texture = renderer.render_texture(&node, Some(&viewport));
+    Some(Rc::new(pixels_of(&texture)))
+}
+
+/// Renders (if stale, or `content` is given: an effect's, always) and
+/// draws the shader's picture over its area. False when it has none.
+fn picture(
+    snapshot: &gtk::Snapshot,
+    state: &ViewState,
+    widget: &NshView,
+    content: Option<Option<Rc<Pixels>>>,
+    flush: bool,
+) -> bool {
+    let Some(shader) = state.shader.as_ref() else {
+        return false;
+    };
+    let Some(fill) = &shader.fill else {
+        return false;
+    };
+    let scale = widget.scale_factor().max(1) as f32;
+    let Some((area, pixels)) = area(state, scale) else {
+        return false;
+    };
+    if shader.marked.get() && !shader.scheduled.get() && !tracing() {
+        shader.scheduled.set(true);
+        schedule(widget);
+    }
+    let mut cache = shader.cache.borrow_mut();
+    if flush
+        || cache
+            .picture
+            .as_ref()
+            .is_some_and(|p| (p.width(), p.height()) != pixels)
     {
         cache.picture = None;
     }
     if cache.picture.is_none() {
         let time = shader.started.map_or(0.0, |s| s.elapsed().as_secs_f32());
         let program = fill.program;
+        let content = content.flatten();
+        let size = state.frame.size;
         cache.picture = with_gl(&widget.display(), |gl| {
-            render(gl, &mut cache, shader, program, (w, h), scale, time)
+            render(
+                gl,
+                &mut cache,
+                shader,
+                program,
+                (size, area),
+                scale,
+                time,
+                content.as_ref(),
+            )
         })
         .flatten();
     }
     let Some(picture) = &cache.picture else {
-        return;
+        return false;
     };
-    // The fill follows the view's corners, as a background does.
-    let rounded = state.radii().iter().any(|&r| r > 0.0);
-    if rounded {
-        snapshot.push_rounded_clip(&state.rounded_bounds());
-    }
+    let (x, y) = (area.origin.x.0, area.origin.y.0);
+    let (w, h) = (area.size.width.0, area.size.height.0);
     snapshot.save();
-    snapshot.translate(&graphene::Point::new(0.0, h));
+    snapshot.translate(&graphene::Point::new(x, y + h));
     snapshot.scale(1.0, -1.0);
     snapshot.append_texture(picture, &graphene::Rect::new(0.0, 0.0, w, h));
     snapshot.restore();
-    if rounded {
-        snapshot.pop();
-    }
+    true
 }
 
-/// Renders the view into a texture of the pool.
+/// Takes the picture of what is behind `view` once the frame being painted
+/// is (its views drawn and placed).
+fn schedule(view: &NshView) {
+    let Some(clock) = view.frame_clock() else {
+        if let Some(s) = view.state().shader.as_ref() {
+            s.scheduled.set(false);
+        }
+        return;
+    };
+    let handler = Rc::new(Cell::new(None::<glib::SignalHandlerId>));
+    let weak = view.downgrade();
+    let id = clock.connect_after_paint({
+        let handler = handler.clone();
+        move |clock| {
+            if let Some(id) = handler.take() {
+                clock.disconnect(id);
+            }
+            if let Some(view) = weak.upgrade() {
+                take_backdrop(&view);
+            }
+        }
+    });
+    handler.set(Some(id));
+}
+
+/// Draws the surface's views anew up to `view` (what is behind it) over
+/// its area and keeps the picture; the view draws again with it.
+fn take_backdrop(view: &NshView) {
+    let scale = view.scale_factor().max(1) as f32;
+    let area = {
+        let s = view.state();
+        let Some(shader) = s.shader.as_ref() else {
+            return;
+        };
+        shader.scheduled.set(false);
+        if !shader.marked.replace(false) {
+            return;
+        }
+        area(&s, scale)
+    };
+    let Some((area, pixels)) = area else { return };
+    let mut root = view.clone();
+    while let Some(parent) = root.parent_view() {
+        root = parent;
+    }
+    let picture = (|| {
+        let renderer = view.native()?.renderer()?;
+        let at = view.compute_point(
+            &root,
+            &graphene::Point::new(area.origin.x.0, area.origin.y.0),
+        )?;
+        let snapshot = gtk::Snapshot::new();
+        snapshot.scale(scale, scale);
+        snapshot.translate(&graphene::Point::new(-at.x(), -at.y()));
+        TRACE.with(|t| *t.borrow_mut() = Some((view.clone(), false)));
+        if root != *view {
+            root.draw(&snapshot);
+        }
+        TRACE.with(|t| *t.borrow_mut() = None);
+        let viewport = graphene::Rect::new(0.0, 0.0, pixels.0 as f32, pixels.1 as f32);
+        // Nothing behind it: transparent.
+        let node = snapshot
+            .to_node()
+            .unwrap_or_else(|| gsk::ColorNode::new(&gdk::RGBA::TRANSPARENT, &viewport).upcast());
+        Some(pixels_of(&renderer.render_texture(&node, Some(&viewport))))
+    })();
+    {
+        let mut s = view.state_mut();
+        let Some(shader) = s.shader.as_mut() else {
+            return;
+        };
+        shader.backdrop = picture.map(Rc::new);
+        shader.stale();
+    }
+    view.redraw();
+}
+
+/// Renders the shader over `area` of a view of `size` into a texture of
+/// the pool, with an effect's `content`.
+#[allow(clippy::too_many_arguments)]
 fn render(
     gl: &mut Gl,
     cache: &mut Cache,
     shader: &ShaderState,
     program: u32,
-    (w, h): (f32, f32),
+    (size, area): (Size<Points>, Bounds<Points>),
     scale: f32,
     time: f32,
+    content: Option<&Rc<Pixels>>,
 ) -> Option<gdk::Texture> {
     let (pw, ph) = (
-        (w * scale).round().max(1.0) as i32,
-        (h * scale).round().max(1.0) as i32,
+        (area.size.width.0 * scale).round().max(1.0) as i32,
+        (area.size.height.0 * scale).round().max(1.0) as i32,
     );
     let compiled = compiled(gl, program)?;
     let (program, samplers) = (compiled.program, compiled.samplers.clone());
     let g = &gl.gl;
-    let size = Size::new(Points(w), Points(h));
-    let nsh = shader::nsh_buffer(size, scale, time, Percentage(0.0));
-    let sizes: Vec<(usize, Size<DevicePixels>)> = shader
+    let nsh = shader::nsh_buffer(size, scale, time, Percentage(shader.progress));
+    let view = Bounds::new(Point::default(), size);
+    let px = |p: &Pixels| Size::new(DevicePixels(p.width), DevicePixels(p.height));
+    let mut rects: Vec<(ShaderInput, Bounds<Points>, Size<DevicePixels>)> = shader
         .images
         .iter()
         .enumerate()
-        .filter_map(|(slot, i)| {
-            let i = i.as_ref()?;
-            Some((
-                slot,
-                Size::new(DevicePixels(i.width), DevicePixels(i.height)),
-            ))
-        })
+        .filter_map(|(slot, i)| Some((ShaderInput::Image(slot as u8), view, px(i.as_ref()?))))
         .collect();
-    let frame = shader::frame_buffer(size, &sizes);
+    let inputs = [content, shader.backdrop.as_ref()];
+    for (input, pixels) in [ShaderInput::Content, ShaderInput::Backdrop]
+        .into_iter()
+        .zip(inputs)
+    {
+        if let Some(p) = pixels {
+            rects.push((input, area, px(p)));
+        }
+    }
+    let frame = shader::frame_buffer_of(area, &rects);
     // SAFETY: GL calls with the context current; the textures and fences
     // are this context's.
     unsafe {
@@ -670,6 +983,10 @@ fn render(
                     .get(*slot as usize)
                     .and_then(|p| p.as_ref())
                     .and_then(|p| image_texture(g, &mut cache.images, *slot as usize, p)),
+                ShaderInput::Content | ShaderInput::Backdrop => {
+                    let at = usize::from(*input == ShaderInput::Backdrop);
+                    inputs[at].and_then(|p| input_texture(g, &mut cache.inputs[at], p))
+                }
                 _ => None,
             };
             g.active_texture(glow::TEXTURE0 + unit as u32);
@@ -694,6 +1011,47 @@ fn render(
             .set_sync(fence.map(|f| f.0 as *const c_void))
             .build_with_release_func(move || free.store(true, Ordering::Release));
         Some(built)
+    }
+}
+
+/// The texture of an input's picture in the context, written once per
+/// picture (into the same texture).
+///
+/// # Safety
+///
+/// The context is current.
+unsafe fn input_texture(
+    g: &glow::Context,
+    held: &mut Option<(Rc<Pixels>, glow::Texture)>,
+    pixels: &Rc<Pixels>,
+) -> Option<glow::Texture> {
+    if let Some((p, t)) = held
+        && Rc::ptr_eq(p, pixels)
+    {
+        return Some(*t);
+    }
+    // SAFETY: the context is current (the caller promised); `rgba` holds
+    // `width` × `height` pixels.
+    unsafe {
+        let t = match held.take() {
+            Some((_, t)) => t,
+            None => g.create_texture().ok()?,
+        };
+        g.bind_texture(glow::TEXTURE_2D, Some(t));
+        g.tex_image_2d(
+            glow::TEXTURE_2D,
+            0,
+            glow::RGBA8 as i32,
+            pixels.width,
+            pixels.height,
+            0,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelUnpackData::Slice(Some(&pixels.rgba)),
+        );
+        sampled(g);
+        *held = Some((pixels.clone(), t));
+        Some(t)
     }
 }
 

@@ -250,7 +250,7 @@ A shader effect takes the same, with an optional `src` (`shader_effect(Some(sour
 `"snapshot"` or `false`. `fill` is `<Shader>`: `"live"` on iOS, Mac Catalyst, macOS, Android 13 and later, Windows,
 Linux and the web. `effect` is `<ShaderEffect>` and `backdrop` a shader that samples what is behind it: `"live"` on
 Android 13 and later and Windows, and `"snapshot"` on iOS, Mac Catalyst, macOS and the web: there the shader reads a picture of its input, taken again when it
-changes. Where `fill` is `false`, a shader view shows its children and its own styles, so a layout that
+changes. On Linux `effect` is `"live"` and `backdrop` `"snapshot"`. Where `fill` is `false`, a shader view shows its children and its own styles, so a layout that
 puts content over a shader reads the same everywhere; where `effect` is `false`, an effect shows its children as they
 are, and where `backdrop` is `false`, `sample_backdrop` reads transparent.
 
@@ -276,7 +276,8 @@ a shader takes up to 128 texture samples, which the host app sets with its
   read their input live. A shader there reads one live input, its content or its backdrop.
 - Windows renders with Direct3D 11 into a texture Direct2D draws. An effect's children and what is behind a backdrop
   are drawn into textures with each frame, so both read their input live.
-- Linux renders with OpenGL ES 3 into a texture GTK draws.
+- Linux renders with OpenGL ES 3 into a texture GTK draws. An effect renders its children with each frame it draws;
+  a backdrop reads a picture of what is behind the view, taken again on the next frame after it changes.
 - The web renders with WebGL 2 into a canvas in the view's element. An effect and a backdrop read a picture NSH paints
   of the elements (backgrounds, rounded corners, borders, images, canvases and text), taken again on the next frame
   after they change.
