@@ -8,6 +8,7 @@ import LayoutBox from "./layout-box";
 import LayoutDirection from "./layout-direction";
 import LayoutFlex from "./layout-flex";
 import LayoutGrid from "./layout-grid";
+import LayoutSticky from "./layout-sticky";
 import LayoutTailwind from "./layout-tailwind";
 
 const cases: Record<string, () => JSX.Element> = {
@@ -16,6 +17,7 @@ const cases: Record<string, () => JSX.Element> = {
   "layout-direction": LayoutDirection,
   "layout-flex": LayoutFlex,
   "layout-grid": LayoutGrid,
+  "layout-sticky": LayoutSticky,
   "layout-tailwind": LayoutTailwind,
 };
 const shown = signal("");

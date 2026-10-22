@@ -117,6 +117,7 @@ view()
 | `relative`、`absolute` | `position` |
 | `static` | `position: "static"`：留在文档流中，忽略其偏移（与所有视图一样，仍是其绝对定位子元素的包含块） |
 | `fixed` | `position: "fixed"`：视图在其根视图（窗口或所在模态框）的范围内布局，位于该根视图的子元素之上，周围内容滚动时保持不动 |
+| `sticky` | `position: "sticky"`：留在文档流中，在父元素可见时吸附在滚动视图视口起始处 `top-*`（横向滚动视图中为 `left-*`）的位置，绘制在兄弟元素之上 |
 | `inset-<n>`、`inset-x-<n>`、`inset-y-<n>` | `top` / `right` / `bottom` / `left` |
 | `top-<n>`、`right-<n>`、`bottom-<n>`、`left-<n>` | 对应的偏移 |
 | `start-<n>`、`end-<n>` | `start` / `end`（随书写方向） |
@@ -425,7 +426,7 @@ view()
 
 ## 不支持
 
-`peer-*` 变体、伪元素（`before:`、`after:`）、任意属性（`[prop:value]`）、`overflow-auto` / `overflow-scroll`、`divide-*`、`columns-*`、`float-*`、`container`、容器查询、`sticky`、`order-*`、`transform-3d`、`select-all`、`border-double` / `outline-double`、固有尺寸（`w-fit`、`h-min`、`max-w-max` 等）、`snap-*`、`scroll-*`、`overscroll-*`、`touch-*`、`isolate` 和 `box-content` 都是未知类。`nsh build` 和 `nsh dev` 会对源码中发现的未知类给出警告（`file:line:col: unknown class '...'`），运行时也会对每个未知类记录一次日志。
+`peer-*` 变体、伪元素（`before:`、`after:`）、任意属性（`[prop:value]`）、`overflow-auto` / `overflow-scroll`、`divide-*`、`columns-*`、`float-*`、`container`、容器查询、`order-*`、`transform-3d`、`select-all`、`border-double` / `outline-double`、固有尺寸（`w-fit`、`h-min`、`max-w-max` 等）、`snap-*`、`scroll-*`、`overscroll-*`、`touch-*`、`isolate` 和 `box-content` 都是未知类。`nsh build` 和 `nsh dev` 会对源码中发现的未知类给出警告（`file:line:col: unknown class '...'`），运行时也会对每个未知类记录一次日志。
 
 ## 变体
 
