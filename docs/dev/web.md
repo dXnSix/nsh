@@ -583,7 +583,9 @@ between them); the core bounds their travel by the list's end. A cell's animated
 
 A smooth scroll of the core's (`scrollTo` with `animated`) in flight moves with a `ScrollBy` (`op_sb` retargets it),
 as the native backends move theirs: setting `scrollTop` would stop the browser's smooth scroll. The user's wheel,
-pointer, touch or key takes it over.
+pointer, touch or key takes it over. The glides of the wheel and the keys are nsh's (`scrollSmoothly`, on animation
+frames), and each frame writes the glide's offset: a `ScrollBy` moves the glide with the content, and `scrollTo` /
+`scrollToEnd` stop it where it is (`stopGlide`) before they scroll, as the native backends interrupt theirs.
 
 ## Platform services
 
