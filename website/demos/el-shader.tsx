@@ -1,4 +1,4 @@
-import { createShader, mount, Shader, ShaderEffect, shaderSupport, signal, Text, View } from "nsh";
+import { createShader, mount, Shader, ShaderEffect, ShaderTransition, shaderSupport, signal, Text, View } from "nsh";
 import { createAnimatedValue, Easing } from "nsh/animated";
 import { desktop, Log, Panel, Segmented, size, Split, ui } from "./palette";
 
@@ -55,7 +55,22 @@ fn main(p: vec2f) -> vec4f {
 }
 `);
 
-const kinds = ["fill", "effect", "backdrop"] as const;
+// `<ShaderTransition>`: the new side grows from the middle in a circle.
+const reveal = createShader(`
+fn main(p: vec2f) -> vec4f {
+  let c = nsh.size * 0.5;
+  let r = length(nsh.size) * 0.5 * nsh.progress;
+  let t = smoothstep(r - 3.0, r + 3.0, length(p - c));
+  return mix(sample_to(p), sample_from(p), t);
+}
+`);
+
+const kinds = ["fill", "effect", "backdrop", "transition"] as const;
+const pages = [
+  { name: "One", color: "#7ea8ff" },
+  { name: "Two", color: "#ff6f91" },
+  { name: "Three", color: "#c8f26d" },
+];
 const sizes = ["S", "M", "L"] as const;
 const radii = { S: 36, M: 64, L: 96 };
 const tints = ["lime", "sky", "rose"] as const;
@@ -65,6 +80,7 @@ function App() {
   const kind = signal<(typeof kinds)[number]>("fill");
   const progress = createAnimatedValue(0);
   const presses = signal(0);
+  const page = signal(0);
   const sized = signal<(typeof sizes)[number]>("M");
   const tinted = signal<(typeof tints)[number]>("lime");
   const rings = signal(0);
@@ -86,7 +102,11 @@ function App() {
             ? desktop
               ? "Click Bend to move the wave; the button inside still takes clicks"
               : "Tap Bend to move the wave; the button inside still takes taps"
-            : "The glass reads what is behind it"}
+            : kind() === "backdrop"
+              ? "The glass reads what is behind it"
+              : desktop
+                ? "Click Next: the page changes through the shader"
+                : "Tap Next: the page changes through the shader"}
       </Text>
 
       <Split
@@ -99,7 +119,7 @@ function App() {
               value={kind()}
               onChange={(k) => {
                 kind.set(k);
-                log(k === "fill" ? "<Shader>" : k === "effect" ? "<ShaderEffect>" : "sample_backdrop");
+                log(k === "fill" ? "<Shader>" : k === "effect" ? "<ShaderEffect>" : k === "backdrop" ? "sample_backdrop" : "<ShaderTransition>");
               }}
             />
             <If when={kind() === "fill"}>
@@ -146,9 +166,22 @@ function App() {
                 <Text style={{ fontSize: 13, fontWeight: "500", color: ui().text }}>Bend</Text>
               </View>
             </If>
+            <If when={kind() === "transition"}>
+              <View
+                onPress={() => {
+                  page.set((page() + 1) % pages.length);
+                  log(`value = ${page()}`);
+                }}
+                activeStyle={{ opacity: 0.6 }}
+                style={{ alignSelf: "flex-start", height: 32, paddingHorizontal: 14, borderRadius: 8, justifyContent: "center", ...ui().raised }}
+              >
+                <Text style={{ fontSize: 13, fontWeight: "500", color: ui().text }}>Next</Text>
+              </View>
+            </If>
             <Panel title="shaderSupport()">
               <Text style={{ fontSize: 13, color: ui().text }}>
-                fill {String(support.fill)} · effect {String(support.effect)} · backdrop {String(support.backdrop)}
+                fill {String(support.fill)} · effect {String(support.effect)} · backdrop {String(support.backdrop)} · transition{" "}
+                {String(support.transition)}
               </Text>
             </Panel>
             <Log title="changes" lines={events()} minHeight={92} />
@@ -188,6 +221,15 @@ function App() {
                 </View>
               </View>
             </ShaderEffect>
+          </View>
+        </If>
+        <If when={kind() === "transition"}>
+          <View style={{ flex: 1, minHeight: desktop ? 260 : 240, justifyContent: "center", padding: 16 }}>
+            <ShaderTransition src={reveal} value={page()} duration={700}>
+              <View style={{ height: 180, borderRadius: 16, padding: 18, justifyContent: "flex-end", backgroundColor: pages[page()].color }}>
+                <Text style={{ fontSize: 28, fontWeight: "800", color: "#101113" }}>{`Page ${pages[page()].name}`}</Text>
+              </View>
+            </ShaderTransition>
           </View>
         </If>
         <If when={kind() === "backdrop"}>
