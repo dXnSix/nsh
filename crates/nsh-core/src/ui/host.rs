@@ -813,7 +813,17 @@ impl Screen {
 
     /// How the screen enters and leaves.
     pub fn animation(self, animation: impl IntoReactive<ScreenAnimation>) -> Self {
-        self.bind_prop(animation, |a| Prop::Screen(ScreenProp::Animation(a)))
+        self.bind_prop(animation, |a: ScreenAnimation| {
+            Prop::Screen(ScreenProp::Animation(a.into()))
+        })
+    }
+
+    /// The screen enters and leaves through a shader: the screen below is
+    /// its `sample_from`, this one its `sample_to`
+    /// ([`crate::shader::ShaderAnimation`]); where the platform draws no
+    /// shader transitions, through its own.
+    pub fn shader_animation(self, animation: crate::shader::ShaderAnimation) -> Self {
+        self.set(Prop::Screen(ScreenProp::Animation(animation.into())))
     }
 
     /// What the status bar shows while the screen is up (iOS and Android;
@@ -984,6 +994,14 @@ impl Modal {
         self.bind_prop(animation, |animation: ModalAnimation| {
             Prop::Modal(ModalProp::Animation(animation))
         })
+    }
+
+    /// It comes in and goes through a shader: what is behind it is its
+    /// `sample_from`, the dialog its `sample_to`
+    /// ([`crate::shader::ShaderAnimation`]); where the platform draws no
+    /// shader transitions, it fades.
+    pub fn shader_animation(self, animation: crate::shader::ShaderAnimation) -> Self {
+        self.set(Prop::Screen(ScreenProp::Animation(animation.into())))
     }
 
     /// Full screen, or a sheet (iOS).

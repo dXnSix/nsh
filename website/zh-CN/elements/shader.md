@@ -242,6 +242,19 @@ fn main(p: vec2f) -> vec4f {
 }
 ```
 
+## 经过着色器的页面和对话框
+
+页面和对话框的 `animation` 除了预设，也接受着色器：`{ shader, uniforms, duration }`。下层（下面的页面、对话框背后的内容）是着色器的 `sample_from(p)`，上层（页面、对话框）是 `sample_to(p)`，`nsh.progress` 是上层显示的程度：进入时在 `duration` 毫秒（默认 350）内从 0 变到 1，离开时从 1 变到 0，返回手势中随手指变化。同一个着色器适用于两个方向。
+
+```tsx
+import { NavPage } from "nsh/base";
+import reveal from "./reveal.wgsl";
+
+<NavPage title="Details" animation={{ shader: reveal, duration: 500 }}>
+  <Details />
+</NavPage>;
+```
+
 ## 属性
 
 着色器视图接受[视图](./view.md)的属性（样式、子元素、按压和手势属性、`onLayout`、无障碍、`ref` 等），另外还有：
@@ -268,7 +281,7 @@ fn main(p: vec2f) -> vec4f {
 
 ## 支持情况
 
-`nsh` 的 `shaderSupport()` 说明平台绘制什么：`{ fill, backdrop, effect, transition }`，每项为 `"live"`、`"snapshot"` 或 `false`。`fill` 对应 `<Shader>`：在 iOS、Mac Catalyst、macOS、Android 13 及以上、Windows、Linux 和 Web 上为 `"live"`。`effect` 对应 `<ShaderEffect>`，`backdrop` 对应采样视图背后内容的着色器：在 Android 13 及以上和 Windows 上为 `"live"`，在 iOS、Mac Catalyst、macOS 和 Web 上为 `"snapshot"`：那里着色器读取输入的一张图片，输入变化时重新拍下。在 Linux 上 `effect` 为 `"live"`，`backdrop` 为 `"snapshot"`。`transition` 对应 `<ShaderTransition>`：在 Android 13 及以上、Windows 和 Linux 上为 `"live"`，在 iOS、Mac Catalyst、macOS 和 Web 上为 `"snapshot"`；为 `false` 时，子元素立即变化。`fill` 为 `false` 时，着色器视图显示它的子元素和自身样式，因此把内容放在着色器之上的布局在所有平台上读起来都一样；`effect` 为 `false` 时，效果按原样显示子元素；`backdrop` 为 `false` 时，`sample_backdrop` 读到透明。
+`nsh` 的 `shaderSupport()` 说明平台绘制什么：`{ fill, backdrop, effect, transition }`，每项为 `"live"`、`"snapshot"` 或 `false`。`fill` 对应 `<Shader>`：在 iOS、Mac Catalyst、macOS、Android 13 及以上、Windows、Linux 和 Web 上为 `"live"`。`effect` 对应 `<ShaderEffect>`，`backdrop` 对应采样视图背后内容的着色器：在 Android 13 及以上和 Windows 上为 `"live"`，在 iOS、Mac Catalyst、macOS 和 Web 上为 `"snapshot"`：那里着色器读取输入的一张图片，输入变化时重新拍下。在 Linux 上 `effect` 为 `"live"`，`backdrop` 为 `"snapshot"`。`transition` 对应 `<ShaderTransition>` 以及页面和对话框的着色器动画：在 Android 13 及以上、Windows 和 Linux 上为 `"live"`，在 iOS、Mac Catalyst、macOS 和 Web 上为 `"snapshot"`；为 `false` 时，子元素立即变化，页面和对话框使用平台自己的过渡（对话框淡入淡出）。`fill` 为 `false` 时，着色器视图显示它的子元素和自身样式，因此把内容放在着色器之上的布局在所有平台上读起来都一样；`effect` 为 `false` 时，效果按原样显示子元素；`backdrop` 为 `false` 时，`sample_backdrop` 读到透明。
 
 ```tsx
 import { shaderSupport } from "nsh";

@@ -231,7 +231,7 @@ the props' snake-case names.
 | `headerClass` | `.header_style_with(\|s\| ..)` | `string` | none | The same colors as classes: `bg-*`, `text-*` for the title, `tint-*` for the buttons (in Rust `.bg(..)`, `.text_color(..)`, `.tint_color(..)`, theme colors following the appearance). `headerStyle` wins over them. |
 | `popOnBack` | `.pop_on_back(..)` | `boolean` | `true` | The back buttons and the swipe back pop the page. See [Leaving a page](#leaving-a-page). |
 | `popOnSwipe` | `.pop_on_swipe(..)` | `boolean` | `true` | The interactive back gesture pops the page: iOS swipe back, Android predictive back that follows the finger. The back buttons pop either way. |
-| `animation` | `.animation(..)` | `"default" \| "slide" \| "fade" \| "none"` | `"default"` | How the page enters and leaves. |
+| `animation` | `.animation(..)`, `.shader_animation(ShaderAnimation)` | `"default" \| "slide" \| "fade" \| "none" \| ShaderAnimation` | `"default"` | How the page enters and leaves: a preset, or through a shader (`{ shader, uniforms, duration }`: the page below is the shader's `sample_from`, this page its `sample_to`, `nsh.progress` how much of it shows, also as a back gesture moves; [Shader](./shader.md#pages-and-dialogs-through-a-shader)). |
 | `statusBar` | `.status_bar(..)` | `{ foreground?, hidden?, animated? }` | none | iOS and Android: the status bar while the page is on top. See [Status bar](../modules/nsh-base.md#status-bar). |
 | `style`, `class` | style methods | | none | The page's style. |
 | `children` | `.child(..)` | `JSX.Element` | none | The content. |

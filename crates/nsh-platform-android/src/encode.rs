@@ -443,7 +443,7 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                 e.int(id as i32);
                 native_props(&mut e, &props);
             }
-            MountItem::ModalConfig { id, config } => {
+            MountItem::ModalConfig { id, config, shader } => {
                 e.int(MODAL_CONFIG);
                 e.int(id as i32);
                 e.int(match config.animation {
@@ -459,6 +459,7 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                 e.bool(config.status_bar_translucent);
                 // The back button is Escape (`closeOnEscape`).
                 e.bool(config.close_on_escape);
+                nav_shader(&mut e, shader.as_ref());
             }
             MountItem::LayoutAnimation(animation) => {
                 e.int(LAYOUT_ANIMATION);
@@ -974,6 +975,24 @@ fn screen_config(e: &mut Encoded, c: &ScreenConfig) {
     }
     e.float(c.header_height.0);
     e.opt_string(c.back_title.as_deref());
+    nav_shader(e, c.shader.as_ref());
+}
+
+/// A page's or a dialog's transition through a shader (`ShaderBox.Nav`):
+/// its program (-1: none), inputs, uniforms' words and milliseconds.
+fn nav_shader(e: &mut Encoded, shader: Option<&nsh_core::NavShader>) {
+    let Some(shader) = shader else {
+        e.int(-1);
+        return;
+    };
+    let fill = &shader.fill;
+    e.int(fill.program as i32);
+    e.int(fill.inputs as i32);
+    e.int((fill.uniforms.len() / 4) as i32);
+    for w in fill.uniforms.as_chunks::<4>().0 {
+        e.int(i32::from_le_bytes(*w));
+    }
+    e.float(shader.duration.as_secs_f32() * 1000.0);
 }
 
 fn view_props(e: &mut Encoded, p: &ViewProps) {

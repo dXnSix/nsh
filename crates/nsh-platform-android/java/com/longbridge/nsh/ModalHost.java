@@ -27,6 +27,8 @@ final class ModalHost {
     private final Container container;
     private Dialog dialog;
     int animation; // 0 slide, 1 fade, 2 none
+    /** Its transition through a shader (over the dialog's window), if any. */
+    ShaderBox.Nav nav;
     /** `closeOnEscape`: the back button (Android's Escape) closes it here, then tells JS. */
     boolean closeOnEscape = true;
     /** The content reaches under the status bar (else it starts below). */
@@ -96,6 +98,18 @@ final class ModalHost {
         }
         dialog.show();
         matchSystemBars(window);
+        if (nav != null && Build.VERSION.SDK_INT >= 33 && window != null) {
+            container.setAlpha(1);
+            container.getViewTreeObserver().addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
+                @Override
+                public boolean onPreDraw() {
+                    container.getViewTreeObserver().removeOnPreDrawListener(this);
+                    shaderAnimate(window, 0, 1, () -> mounter.event(id, Native.SHOW));
+                    return true;
+                }
+            });
+            return;
+        }
         container.setAlpha(animation == 1 ? 0 : 1);
         container.post(() -> {
             if (animation == 2) {
@@ -173,6 +187,10 @@ final class ModalHost {
             done.run();
             return;
         }
+        if (nav != null && Build.VERSION.SDK_INT >= 33 && d.getWindow() != null) {
+            shaderAnimate(d.getWindow(), 1, 0, done);
+            return;
+        }
         container.animate()
                 .alpha(animation == 1 ? 0 : 1)
                 .translationY(animation == 0 ? container.getHeight() : 0)
@@ -184,6 +202,32 @@ final class ModalHost {
                         done.run();
                     }
                 }).start();
+    }
+
+    /**
+     * The dialog comes (`from` 0 to `to` 1) or goes under a shader over its
+     * window: what is behind it (the app's root view) is `sample_from`,
+     * the dialog over it `sample_to`. Runs `done` at the end.
+     */
+    private void shaderAnimate(Window window, float from, float to, Runnable done) {
+        ViewGroup decor = (ViewGroup) window.getDecorView();
+        View behind = mounter.host;
+        ShaderBox o = new ShaderBox(mounter.context, mounter, -1, false, false);
+        o.setFill(nav.program, false, nav.inputs, from, 0, nav.uniforms.clone(), new String[0], new int[0]);
+        o.setSides(ShaderBox.picture(behind), ShaderBox.picture(behind, container));
+        decor.addView(o, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        android.animation.ValueAnimator a = android.animation.ValueAnimator.ofFloat(from, to);
+        a.setDuration(Math.max(1, Math.round(nav.ms)));
+        a.setInterpolator(null);
+        a.addUpdateListener(x -> o.setNumber(0xffff, (float) x.getAnimatedValue()));
+        a.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                decor.removeView(o);
+                done.run();
+            }
+        });
+        a.start();
     }
 
     /** Reports the window's size and insets: the content is laid out at them. */

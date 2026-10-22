@@ -301,7 +301,7 @@ impl Screen {
             MountItem::ScreenConfig { id, config } => {
                 self.nodes.entry(*id).or_default().prevent_back = config.prevent_back;
             }
-            MountItem::ModalConfig { id, config } => {
+            MountItem::ModalConfig { id, config, .. } => {
                 self.nodes.entry(*id).or_default().close_on_escape = config.close_on_escape;
             }
             MountItem::Frame { id, frame } => self.nodes.entry(*id).or_default().frame = *frame,

@@ -86,6 +86,21 @@ final class Mounter {
         boolean shown = true, transparent, backVisible = true, gesture = true, preventBack;
         int tint, background, titleColor, animation, left = -1, right = -1, titleView = -1;
         float headerHeight;
+        /** Its push / pop transition through a shader, if any. */
+        ShaderBox.Nav nav;
+    }
+
+    /** `encode.rs` `nav_shader`: a page's or a dialog's transition through a shader. */
+    private ShaderBox.Nav nav(ByteBuffer b) {
+        int program = b.getInt();
+        if (program < 0) return null;
+        ShaderBox.Nav n = new ShaderBox.Nav();
+        n.program = shaderPrograms.get(program);
+        n.inputs = b.getInt();
+        n.uniforms = new int[b.getInt()];
+        for (int k = 0; k < n.uniforms.length; k++) n.uniforms[k] = b.getInt();
+        n.ms = b.getFloat();
+        return n.program != null ? n : null;
     }
 
     /** Properties that animations can override, as last set by a style. */
@@ -178,7 +193,7 @@ final class Mounter {
     /** Modals by id (their root views are in `views`). */
     private final SparseArray<ModalHost> modals = new SparseArray<>();
     /** Screens' options, applied once the batch's stacks are settled. */
-    private final SparseArray<ScreenOptions> screenOptions = new SparseArray<>();
+    final SparseArray<ScreenOptions> screenOptions = new SparseArray<>();
     /** Parents of screens, header items and modals (not their superviews). */
     private final android.util.SparseIntArray hosts = new android.util.SparseIntArray();
     private final java.util.LinkedHashSet<Integer> dirtyStacks = new java.util.LinkedHashSet<>();
@@ -521,7 +536,9 @@ final class Mounter {
                     b.getInt(); // presentation: Android modals cover the window
                     boolean translucent = b.getInt() != 0;
                     boolean closeOnEscape = b.getInt() != 0;
+                    ShaderBox.Nav nav = nav(b);
                     if (modal != null) {
+                        modal.nav = nav;
                         modal.animation = animation;
                         modal.closeOnEscape = closeOnEscape;
                         modal.setStatusBarTranslucent(translucent);
@@ -1644,6 +1661,7 @@ final class Mounter {
         o.titleView = b.getInt();
         o.headerHeight = b.getFloat();
         o.backTitle = string(objects, b.getInt());
+        o.nav = nav(b);
         screenOptions.put(id, o);
         dirtyScreens.add(id);
         int stack = hosts.get(id, -1);

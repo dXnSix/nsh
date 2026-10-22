@@ -427,3 +427,80 @@ fn shader_transitions_start_before_their_children_change() {
         "{changed:?}"
     );
 }
+
+const NAVIGATION: &str = r##"import { mount, createShader, signal, Text } from "nsh";
+import { createNavStack, Dialog, NavPage, NavStack } from "nsh/base";
+
+const reveal = createShader("fn main(p: vec2f) -> vec4f { return mix(sample_from(p), sample_to(p), nsh.progress); }");
+const nav = createNavStack(["home"]);
+const open = signal(false);
+setTimeout(() => {
+  nav.push("detail");
+  open.set(true);
+}, 50);
+
+mount(() => (
+  <>
+    <NavStack state={nav}>
+      {(route) => (
+        <NavPage title={route} animation={route === "detail" ? { shader: reveal, duration: 500 } : "fade"}>
+          <Text>{route}</Text>
+        </NavPage>
+      )}
+    </NavStack>
+    <Dialog open={open()} animation={{ shader: reveal }}>
+      <Text>dialog</Text>
+    </Dialog>
+  </>
+));
+"##;
+
+#[test]
+fn pages_and_dialogs_take_a_shader_as_their_animation() {
+    let (_engine, rx) = start(NAVIGATION);
+    let items = items(&rx, Duration::from_millis(600));
+    let programs: Vec<u32> = items
+        .iter()
+        .filter_map(|i| match i {
+            MountItem::ShaderProgram { program } => Some(program.id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(programs.len(), 1, "{items:?}");
+    let screens: Vec<_> = items
+        .iter()
+        .filter_map(|i| match i {
+            MountItem::ScreenConfig { config, .. } => Some(config.clone()),
+            _ => None,
+        })
+        .collect();
+    // The page that comes through the shader; the other one fades.
+    let shaded = screens
+        .iter()
+        .rev()
+        .find(|c| c.shader.is_some())
+        .expect("a page with a shader animation");
+    let shader = shaded.shader.as_ref().unwrap();
+    assert_eq!(shader.fill.program, programs[0]);
+    assert!(shader.fill.samples(ShaderInput::From) && shader.fill.samples(ShaderInput::To));
+    assert_eq!(shader.duration, Duration::from_millis(500));
+    assert!(
+        screens
+            .iter()
+            .any(|c| c.shader.is_none() && c.animation == nsh_core::ScreenAnimation::Fade)
+    );
+    let (modal, shader) = items
+        .iter()
+        .rev()
+        .find_map(|i| match i {
+            MountItem::ModalConfig { config, shader, .. } => Some((*config, shader.clone())),
+            _ => None,
+        })
+        .expect("the dialog's config");
+    let shader = shader.expect("the dialog's shader animation");
+    assert_eq!(shader.fill.program, programs[0]);
+    // As long as the desktops' slide without a duration; a fade where
+    // shaders draw no transitions.
+    assert_eq!(shader.duration, Duration::from_millis(350));
+    assert_eq!(modal.animation, nsh_core::ModalAnimation::Fade);
+}

@@ -190,6 +190,21 @@ export interface ShaderProps<U = ShaderUniforms> extends CommonProps, Omit<Shade
   uniforms?: U;
 }
 
+/**
+ * A page's or a dialog's transition through a shader (`animation`):
+ * `sample_from` is the page below (what is behind the dialog), `sample_to`
+ * the page (the dialog), `nsh.progress` how much of it shows: 0 to 1 as it
+ * comes, 1 to 0 as it goes, and as a back gesture moves.
+ */
+export interface ShaderAnimation<U = ShaderUniforms> {
+  /** The shader. */
+  shader: ShaderAsset<U>;
+  /** The values of its uniforms, by name (those left out are 0). */
+  uniforms?: U;
+  /** How long it runs, in milliseconds (350). */
+  duration?: number;
+}
+
 /** `<ShaderTransition>`: a view whose children change through a shader. */
 export interface ShaderTransitionProps<U = ShaderUniforms> extends CommonProps, Omit<ShaderTransitionHostProps, "src" | "uniforms"> {
   style?: StyleProp<ViewStyle>;

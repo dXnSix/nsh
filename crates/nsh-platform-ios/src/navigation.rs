@@ -15,7 +15,7 @@ use std::cell::Cell;
 
 use nsh_core::{
     Color, EdgeInsets, EventKind, EventPayload, ModalAnimation, ModalConfig, ModalPresentation,
-    NodeId, PayloadValue, Points, ScreenAnimation, ScreenConfig, Size,
+    NavShader, NodeId, PayloadValue, Points, ScreenAnimation, ScreenConfig, Size,
 };
 use nsh_engine::EngineControl;
 use objc2::{
@@ -592,15 +592,23 @@ impl StackHost {
     }
 
     /// Shows the app's screens: pushes, pops or replaces as needed.
-    /// `leaving` is the transition of the screen on top until now.
+    /// `leaving` is the transition of the screen on top until now. A
+    /// transition through a shader changes the screens at once and returns
+    /// what its overlay needs: the shader, a picture of the navigation
+    /// controller's view before the change, and whether it pops.
     pub(crate) fn reconcile(
         &self,
-        screens: &[(NodeId, Retained<ScreenController>, ScreenAnimation)],
-        leaving: Option<ScreenAnimation>,
-    ) {
+        screens: &[(
+            NodeId,
+            Retained<ScreenController>,
+            ScreenAnimation,
+            Option<NavShader>,
+        )],
+        leaving: Option<(ScreenAnimation, Option<NavShader>)>,
+    ) -> Option<(NavShader, crate::shader::Picture, bool)> {
         let desired: Vec<Retained<UIViewController>> = screens
             .iter()
-            .map(|(_, c, _)| Retained::into_super(c.clone()))
+            .map(|(_, c, _, _)| Retained::into_super(c.clone()))
             .collect();
         let current = self.nav.viewControllers();
         let same = current.count() == desired.len()
@@ -609,7 +617,7 @@ impl StackHost {
                 .zip(current.iter())
                 .all(|(a, b)| std::ptr::eq::<UIViewController>(&**a, &*b));
         if same {
-            return;
+            return None;
         }
         let top_changed = match (current.lastObject(), desired.last()) {
             (Some(a), Some(b)) => !std::ptr::eq::<UIViewController>(&*a, &**b),
@@ -617,14 +625,32 @@ impl StackHost {
         };
         // The animation of the screen that appears (push) or leaves (pop).
         let pushing = desired.len() >= current.count();
-        let animation = if pushing {
-            screens.last().map(|s| s.2)
+        let (animation, shader) = if pushing {
+            screens.last().map(|s| (s.2, s.3.clone()))
         } else {
             leaving
         }
         .unwrap_or_default();
-        let animated = top_changed && current.count() > 0 && animation == ScreenAnimation::Default;
-        if top_changed && current.count() > 0 && animation == ScreenAnimation::Fade {
+        // Through a shader: a picture before, the change at once.
+        let shader = shader
+            .filter(|_| top_changed && current.count() > 0)
+            .and_then(|shader| {
+                // Over the navigation controller's view, in the view around
+                // it: UIKit orders the views inside it as it changes.
+                let view = self.nav.view()?;
+                let host = view.superview()?;
+                let before = crate::shader::picture(&host, view.frame());
+                Some((shader, before, !pushing))
+            });
+        let animated = shader.is_none()
+            && top_changed
+            && current.count() > 0
+            && animation == ScreenAnimation::Default;
+        if shader.is_none()
+            && top_changed
+            && current.count() > 0
+            && animation == ScreenAnimation::Fade
+        {
             let fade = CATransition::new();
             fade.setDuration(0.25);
             if let Some(view) = self.nav.view() {
@@ -632,10 +658,11 @@ impl StackHost {
             }
         }
         let array = NSArray::from_retained_slice(&desired);
-        *self.applied.borrow_mut() = screens.iter().map(|(id, _, _)| *id).collect();
+        *self.applied.borrow_mut() = screens.iter().map(|(id, _, _, _)| *id).collect();
         self.nav.ivars().applying.set(true);
         self.nav.setViewControllers_animated(&array, animated);
         self.nav.ivars().applying.set(false);
+        shader
     }
 }
 
@@ -787,7 +814,11 @@ pub(crate) struct ModalHost {
     /// The modal's root view, placed by the core.
     pub(crate) view: Retained<NshView>,
     pub(crate) config: ModalConfig,
+    /// How it appears and goes through a shader.
+    shader: Option<nsh_core::NavShader>,
     pub(crate) presented: bool,
+    /// The surface's root view it was presented from.
+    from: Option<Retained<UIView>>,
 }
 
 impl ModalHost {
@@ -801,23 +832,33 @@ impl ModalHost {
             controller,
             view,
             config: ModalConfig::default(),
+            shader: None,
             presented: false,
+            from: None,
         }
     }
 
-    /// Presents the modal over the controller showing `from`.
-    pub(crate) fn present(&mut self, from: &UIView) {
+    /// Presents the modal over the controller showing `from`. Through a
+    /// shader it comes at once and the overlay's plan is returned
+    /// ([`NavPlan`]).
+    pub(crate) fn present(&mut self, from: &UIView) -> Option<NavPlan> {
         if self.presented && !self.controller.ivars().closed.get() {
-            return;
+            return None;
         }
         self.controller.ivars().closed.set(false);
         let Some(mut presenter) = controller_of(from) else {
-            return log::warn!("cannot present a modal: no view controller shows the app");
+            log::warn!("cannot present a modal: no view controller shows the app");
+            return None;
         };
         while let Some(next) = presenter.presentedViewController() {
             presenter = next;
         }
         let c = self.config;
+        let plan = self
+            .shader
+            .clone()
+            .and_then(|shader| NavPlan::before(from, shader, false));
+        self.from = Some(objc2::Message::retain(from));
         let controller = &self.controller;
         let mut mask = UIInterfaceOrientationMask::empty();
         for (bit, m) in [
@@ -884,30 +925,37 @@ impl ModalHost {
         controller.setOverrideUserInterfaceStyle(crate::system::appearance());
         presenter.presentViewController_animated_completion(
             controller,
-            c.animation != ModalAnimation::None,
+            plan.is_none() && c.animation != ModalAnimation::None,
             None,
         );
         self.presented = true;
+        plan
     }
 
     /// Applies `config` (the close flags also while presented).
-    pub(crate) fn configure(&mut self, config: ModalConfig) {
+    pub(crate) fn configure(&mut self, config: ModalConfig, shader: Option<nsh_core::NavShader>) {
         self.controller.set_flags(&config);
         self.config = config;
+        self.shader = shader;
     }
 
-    /// Dismisses the modal; `done` runs when it is gone.
-    pub(crate) fn dismiss(&mut self, done: impl Fn() + 'static) {
+    /// Dismisses the modal; `done` runs when it is gone. Through a shader
+    /// it goes at once and the overlay's plan is returned ([`NavPlan`]).
+    pub(crate) fn dismiss(&mut self, done: impl Fn() + 'static) -> Option<NavPlan> {
         if !self.presented {
-            return;
+            return None;
         }
         self.presented = false;
         // Closed by the user already (and reported).
         if self.controller.ivars().closed.replace(false) {
-            return;
+            return None;
         }
         let block = block2::RcBlock::new(done);
-        let animated = self.config.animation != ModalAnimation::None;
+        let plan = match (&self.from, self.shader.clone()) {
+            (Some(from), Some(shader)) => NavPlan::before(from, shader, true),
+            _ => None,
+        };
+        let animated = plan.is_none() && self.config.animation != ModalAnimation::None;
         // Through the presenter: a modal that presents another one (a sheet
         // over it) would otherwise only dismiss that one, and stay on
         // screen with its content already gone (closing a sheet and its
@@ -921,6 +969,37 @@ impl ModalHost {
                 .controller
                 .dismissViewControllerAnimated_completion(animated, Some(&block)),
         }
+        plan
+    }
+}
+
+/// What a dialog's transition through a shader needs for its overlay
+/// ([`crate::shader::NavOverlay`]): over the window, on the surface's
+/// rectangle only (what is behind the dialog there is the app's; the host
+/// app's views around it are never the shader's input), with a picture of
+/// it before the change.
+pub(crate) struct NavPlan {
+    pub(crate) host: Retained<UIView>,
+    pub(crate) rect: objc2_core_foundation::CGRect,
+    pub(crate) shader: NavShader,
+    pub(crate) before: crate::shader::Picture,
+    pub(crate) reverse: bool,
+}
+
+impl NavPlan {
+    /// Before the change, over the window of `surface` (its root view).
+    fn before(surface: &UIView, shader: NavShader, reverse: bool) -> Option<Self> {
+        let window = surface.window()?;
+        let rect = surface.convertRect_toView(surface.bounds(), Some(&window));
+        let host: Retained<UIView> = Retained::into_super(window);
+        let before = crate::shader::picture(&host, rect);
+        Some(Self {
+            host,
+            rect,
+            shader,
+            before,
+            reverse,
+        })
     }
 }
 

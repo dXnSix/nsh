@@ -180,6 +180,25 @@ otherwise):
 | Linux | live | the children rendered to a texture as an effect's content (`shader::start_transition`), or the last picture (flipped from GL's rows) | the view's tick callback |
 | GPUI | `false` | | |
 
+Pages and dialogs take a shader as their `animation` (`ScreenTransition::Shader` /
+`ShaderAnimation { source, uniforms, duration }`; dialogs read the value pages share). The core packs it when it
+sends the config (`Core::nav_shader`: the program sent once, the uniforms packed, 350 ms without a duration) into
+`ScreenConfig::shader` / `MountItem::ModalConfig`'s `shader` (`NavShader { fill, duration }`), keeping the preset for platforms
+that draw no shader transitions (a dialog's is `Fade`). The lower side (the page below, what is behind the dialog)
+is `sample_from`, the upper side `sample_to`, `nsh.progress` how much of the upper side shows: 0 → 1 as it comes,
+1 → 0 as it goes (linear over `duration`), and 1 − the gesture's progress in a back gesture. Every platform draws it
+over the stack (the surface for a dialog) while the views stand where they end under it:
+
+| Platform | Pictures | Progress |
+|---|---|---|
+| macOS | `renderInContext:` of the stack / root with the upper view hidden, and with its own layer drawn over (a view that just came has no layer in the tree until AppKit displays it: the upper side of a push or a dialog that opens is pictured on the first display frame; an image that leaves is drawn upright) (`navigation::Motion::add_overlay`, `shader::NavOverlay`, a `CAMetalLayer` over the host; in-process screenshots add its picture as a topmost subview) | the navigation's frame callback, its own clock |
+| iOS, Mac Catalyst | the navigation controller's view (in its superview, as UIKit reorders the views inside it) or the window over the surface's rectangle for a dialog (the host app's views around it are never an input), before UIKit changes it at once and on the next display frame (`StackHost::reconcile`, `NavPlan`, `shader::NavOverlay`); the system's swipe back stays UIKit's | the shader display link (`Mounter::nav_overlays`) |
+| Android 13+ | each side recorded into a `RenderNode` and rendered by a `HardwareRenderer` (`ShaderBox.picture`); the page that comes once laid out, before it draws; a `ShaderBox` over the stack (in the dialog's window for a dialog) | a `ValueAnimator`; predictive back sets it from the gesture (`backProgressed`), and cancelling runs it back to 1 |
+| Web | painted from the elements (`paintTree`, the upper element as the stop for the lower side) into an element over the stack / root drawn by `drawShader` (`shaderNav`) | `requestAnimationFrame` |
+| Windows | both sides recorded into command lists (`navigation::record`, the upper view concealed for the lower one), drawn into textures by a `shader::NavItem` a layer view over the host hosts | the navigation's frame callback |
+| Linux | both sides drawn anew (`NshView::draw`, the upper view and what follows left out for the lower one) and rendered to textures (`shader::nav_picture`), a `NavPainter`'s node in a layer over the host | the navigation's tick callback |
+| GPUI | the platform's own transition | |
+
 `nsh_metal::ShaderLayer` holds pictures of all four inputs (`set_input`, `clear_input`) and takes a transition's
 progress (`set_progress`).
 

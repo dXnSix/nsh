@@ -359,9 +359,9 @@ impl Mounter {
                     crate::navigation::screen_config(surface, view, config);
                 }
             }
-            MountItem::ModalConfig { id, config } => {
+            MountItem::ModalConfig { id, config, shader } => {
                 if let Some(view) = &self.get(*id) {
-                    crate::navigation::modal_config(surface, view, config);
+                    crate::navigation::modal_config(surface, view, config, shader);
                 }
             }
             MountItem::NativeProps { id, props } => {

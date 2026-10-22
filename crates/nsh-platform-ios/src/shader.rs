@@ -434,3 +434,126 @@ pub(crate) fn hide_children(content: &UIView, hidden: bool) {
         unsafe { layer.setMask(mask.as_deref()) };
     });
 }
+
+/// A picture of part of a view: premultiplied RGBA, its size in pixels.
+pub(crate) struct Picture {
+    rgba: Vec<u8>,
+    width: usize,
+    height: usize,
+}
+
+/// `view` drawn as it shows now over `rect` (its points), at the screen's
+/// scale.
+pub(crate) fn picture(view: &UIView, rect: objc2_core_foundation::CGRect) -> Picture {
+    let scale = view.contentScaleFactor();
+    let (width, height) = (
+        (rect.size.width * scale).round().max(1.0) as usize,
+        (rect.size.height * scale).round().max(1.0) as usize,
+    );
+    let rgba = crate::decor::quiet(|| {
+        render(
+            &view.layer(),
+            (rect.origin.x, rect.origin.y),
+            width,
+            height,
+            scale,
+        )
+    });
+    Picture {
+        rgba,
+        width,
+        height,
+    }
+}
+
+/// A page's or a dialog's transition through a shader
+/// ([`nsh_core::NavShader`]) over a part of `host` (the navigation
+/// controller's view; the window over the surface for a dialog): UIKit
+/// makes the change at once, a picture taken before it and one taken on
+/// the next display frame after it are the shader's two sides (`before`
+/// is the lower one for a push, the upper one for a pop), and the shader
+/// display link moves `nsh.progress`.
+pub(crate) struct NavOverlay {
+    view: Retained<UIView>,
+    layer: nsh_metal::ShaderLayer,
+    host: Retained<UIView>,
+    rect: objc2_core_foundation::CGRect,
+    start: std::time::Instant,
+    duration: std::time::Duration,
+    reverse: bool,
+    /// The picture after the change is still to take.
+    after_due: bool,
+}
+
+impl NavOverlay {
+    /// Over `rect` of `host`, with `before` (taken before the change);
+    /// backwards (`nsh.progress` from 1 to 0, `before` the upper side)
+    /// when `reverse`. `None` where Metal draws nothing.
+    pub(crate) fn new(
+        host: &UIView,
+        rect: objc2_core_foundation::CGRect,
+        shader: &nsh_core::NavShader,
+        before: Picture,
+        reverse: bool,
+    ) -> Option<Self> {
+        let mut layer = nsh_metal::ShaderLayer::new()?;
+        layer.set_frame(rect.size.width, rect.size.height, host.contentScaleFactor());
+        let _ = layer.set_fill(Some(shader.fill.clone()));
+        let area = layer.area();
+        let side = if reverse {
+            ShaderInput::To
+        } else {
+            ShaderInput::From
+        };
+        layer.set_input(side, &before.rgba, before.width, before.height, area);
+        layer.set_progress(if reverse { 1.0 } else { 0.0 });
+        let mtm = objc2::MainThreadMarker::from(host);
+        let view = UIView::initWithFrame(mtm.alloc(), rect);
+        view.setUserInteractionEnabled(false);
+        // SAFETY: a `CAMetalLayer` is a `CALayer`.
+        let ca: &CALayer =
+            unsafe { &*(layer.layer() as *const objc2::runtime::AnyObject as *const CALayer) };
+        view.layer().addSublayer(ca);
+        host.addSubview(&view);
+        layer.draw();
+        Some(Self {
+            view,
+            layer,
+            host: objc2::Message::retain(host),
+            rect,
+            start: std::time::Instant::now(),
+            duration: shader.duration,
+            reverse,
+            after_due: true,
+        })
+    }
+
+    /// A display frame: the picture after the change (the first time),
+    /// then `nsh.progress` now. Whether it still runs (removed when not).
+    pub(crate) fn tick(&mut self) -> bool {
+        if std::mem::take(&mut self.after_due) {
+            self.view.setHidden(true);
+            let after = picture(&self.host, self.rect);
+            self.view.setHidden(false);
+            let area = self.layer.area();
+            let side = if self.reverse {
+                ShaderInput::From
+            } else {
+                ShaderInput::To
+            };
+            self.layer
+                .set_input(side, &after.rgba, after.width, after.height, area);
+        }
+        let t = (self.start.elapsed().as_secs_f32()
+            / self.duration.as_secs_f32().max(f32::EPSILON))
+        .min(1.0);
+        self.layer
+            .set_progress(if self.reverse { 1.0 - t } else { t });
+        self.layer.draw();
+        if t < 1.0 {
+            return true;
+        }
+        self.view.removeFromSuperview();
+        false
+    }
+}

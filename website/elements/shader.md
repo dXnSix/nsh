@@ -270,6 +270,23 @@ fn main(p: vec2f) -> vec4f {
 }
 ```
 
+## Pages and dialogs through a shader
+
+A page's and a dialog's `animation` takes a shader as well as a preset: `{ shader, uniforms, duration }`. The lower
+side (the page below, what is behind the dialog) is the shader's `sample_from(p)`, the upper side (the page, the
+dialog) its `sample_to(p)`, and `nsh.progress` is how much of the upper side shows: from 0 to 1 over `duration`
+milliseconds (350 by default) as it comes, from 1 to 0 as it goes, and with the finger in a back gesture. One shader
+serves both ways.
+
+```tsx
+import { NavPage } from "nsh/base";
+import reveal from "./reveal.wgsl";
+
+<NavPage title="Details" animation={{ shader: reveal, duration: 500 }}>
+  <Details />
+</NavPage>;
+```
+
 ## Props
 
 A shader view takes the props of a [view](./view.md) (styles, children, press and gesture props, `onLayout`,
@@ -302,9 +319,10 @@ A shader transition takes the props of a view, `uniforms` and `maxSampleOffset` 
 `"snapshot"` or `false`. `fill` is `<Shader>`: `"live"` on iOS, Mac Catalyst, macOS, Android 13 and later, Windows,
 Linux and the web. `effect` is `<ShaderEffect>` and `backdrop` a shader that samples what is behind it: `"live"` on
 Android 13 and later and Windows, and `"snapshot"` on iOS, Mac Catalyst, macOS and the web: there the shader reads a picture of its input, taken again when it
-changes. On Linux `effect` is `"live"` and `backdrop` `"snapshot"`. `transition` is `<ShaderTransition>`: `"live"`
-on Android 13 and later, Windows and Linux, `"snapshot"` on iOS, Mac Catalyst, macOS and the web; where it is
-`false`, the children change at once. Where `fill` is `false`, a shader view shows its children and its own styles, so a layout that
+changes. On Linux `effect` is `"live"` and `backdrop` `"snapshot"`. `transition` is `<ShaderTransition>` and the
+pages' and dialogs' shader animations: `"live"` on Android 13 and later, Windows and Linux, `"snapshot"` on iOS, Mac
+Catalyst, macOS and the web; where it is `false`, the children change at once, and pages and dialogs come and go with
+the platform's own transition (a dialog fades). Where `fill` is `false`, a shader view shows its children and its own styles, so a layout that
 puts content over a shader reads the same everywhere; where `effect` is `false`, an effect shows its children as they
 are, and where `backdrop` is `false`, `sample_backdrop` reads transparent.
 
