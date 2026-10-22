@@ -210,6 +210,10 @@ final class Mounter {
         this.density = host.getResources().getDisplayMetrics().density;
         this.images = images;
         images.redirects = (base, location) -> Native.mediaRedirect(handle(), base, location);
+        images.inline = uri -> {
+            long handle = handle();
+            return handle == 0 ? null : Native.imageBytes(handle, uri);
+        };
         root = new Box(context, this, 1);
         views.put(1, root);
     }
@@ -303,7 +307,19 @@ final class Mounter {
                     int id = b.getInt(), uri = b.getInt(), mode = b.getInt();
                     String placeholder = optString(b, objects);
                     float blur = b.getFloat(), fade = b.getFloat();
+                    int xFlags = b.getInt();
+                    float x = b.getFloat();
+                    int yFlags = b.getInt();
+                    float y = b.getFloat();
                     image(id, uri >= 0 ? (String) objects[uri] : null, mode, placeholder, px(blur), fade < 0 ? -1 : Math.round(fade));
+                    View iv = views.get(id);
+                    if (iv instanceof ImageBox) {
+                        ImageBox image = (ImageBox) iv;
+                        // Lengths in pixels; fractions stay fractions of the free space.
+                        image.positionX = (xFlags & 2) != 0 ? x : x * density;
+                        image.positionY = (yFlags & 2) != 0 ? y : y * density;
+                        image.positionFlags = (xFlags & 3) | ((yFlags & 3) << 2);
+                    }
                     break;
                 }
                 case SCROLL_CONFIG: {
@@ -1483,6 +1499,17 @@ final class Mounter {
     private static final int CANVAS_ARG = 1000;
     /** A shader's uniform component `n` arrives as `SHADER_NUMBER + n` or, a color, `SHADER_COLOR + n`. */
     private static final int SHADER_NUMBER = 100_000, SHADER_COLOR = 200_000;
+
+    /** How much further each sticky cell sticks (px; an animated `StickyCell::offset`). */
+    private final java.util.HashMap<Integer, Float> stickyOffsets = new java.util.HashMap<>();
+    /** The scroll view that pins each sticky cell. */
+    final java.util.HashMap<Integer, ScrollBox> stickyHosts = new java.util.HashMap<>();
+
+    /** How much further sticky cell `id` sticks (px). */
+    float stickyOffset(int id) {
+        Float offset = stickyOffsets.get(id);
+        return offset == null ? 0 : offset;
+    }
 
     /** How much further each sticky cell sticks (px; an animated `StickyCell::offset`). */
     private final java.util.HashMap<Integer, Float> stickyOffsets = new java.util.HashMap<>();

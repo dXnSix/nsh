@@ -1030,6 +1030,7 @@ mod tests {
             uri: "asset:/a.png".into(),
             size: Some(Size::new(Points(20.0), Points(10.0))),
             scales: Default::default(),
+            data: None,
         };
         let packed = pack(
             s.reflection(),
