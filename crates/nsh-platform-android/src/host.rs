@@ -548,6 +548,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_setLimits(
         load_budget: ms(load_ms),
         call_budget: ms(call_ms),
         max_nodes: set(max_nodes),
+        ..Default::default()
     };
     host.set_limits(limits.limits());
 }

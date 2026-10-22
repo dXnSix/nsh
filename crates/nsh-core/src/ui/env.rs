@@ -43,6 +43,8 @@ pub struct Environment {
     /// conventions ([`crate::keymap::apple_keys`]); the other OSes imply
     /// theirs.
     pub apple_keyboard: bool,
+    /// The shaders the platform runs, and their language.
+    pub shaders: crate::shader::ShaderSupport,
 }
 
 impl Default for Environment {
@@ -64,6 +66,7 @@ impl Default for Environment {
             idiom: Idiom::Phone,
             locale: Locale::EN_US,
             apple_keyboard: false,
+            shaders: crate::shader::ShaderSupport::default(),
         }
     }
 }

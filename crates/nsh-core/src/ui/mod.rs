@@ -143,8 +143,9 @@ pub use self::{
     flow::{Each, If, IntoElements, Reset, catch_error, dynamic, each, when},
     host::{
         CanvasArg, CanvasPaint, CanvasView, Input, InputAccessoryView, Modal, NativeView,
-        Orientation, Overlay, Painter, Screen, Scroll, Stack, Video, WebView, canvas, input,
-        input_accessory_view, native, overlay, scroll, video, web_view, web_view_html,
+        Orientation, Overlay, Painter, Screen, Scroll, ShaderView, Stack, Video, WebView, canvas,
+        input, input_accessory_view, native, overlay, scroll, shader, video, web_view,
+        web_view_html,
     },
     js::{JsHost, JsIn, JsKind, JsOwned, JsRaw},
     module::{
@@ -338,6 +339,7 @@ pub mod prelude {
         ScrollEvent,
         Scrollable,
         Selection,
+        ShaderView,
         SharedString,
         Size,
         Slot,
@@ -393,6 +395,7 @@ pub mod prelude {
         rgb,
         rgba,
         scroll,
+        shader,
         size,
         text,
         transparent_black,

@@ -3030,6 +3030,7 @@ dependencies = [
  "libc",
  "log",
  "nsh-macros",
+ "nsh-shader",
  "resvg",
  "rustc-hash 2.1.3",
  "serde",

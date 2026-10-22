@@ -28,6 +28,10 @@ pub enum AnimationProp {
     /// Animated value slot `n` of a canvas drawing: the canvas draws again
     /// with it (a number or a color).
     CanvasArg(u16),
+    /// Component `n` (an `f32` index) of a shader view's uniforms: a
+    /// number there, a color's premultiplied components from there
+    /// ([`crate::shader::write_animated`]); the shader draws again.
+    ShaderUniform(u16),
 }
 
 impl AnimationProp {

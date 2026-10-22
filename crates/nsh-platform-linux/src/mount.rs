@@ -277,6 +277,8 @@ impl Mounter {
                     crate::scroll::refreshing(surface, view, *refreshing);
                 }
             }
+            // No shaders drawn: a shader view shows its children.
+            MountItem::ShaderProgram { .. } | MountItem::Shader { .. } => {}
             MountItem::Canvas { id, drawing } => {
                 if let Some(view) = self.get(*id) {
                     crate::canvas::set(surface, view, drawing.clone());

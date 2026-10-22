@@ -287,6 +287,16 @@ covers [styles] animationDuration
 covers [styles] animationDelay
 covers [styles] animationTimingFunction
 covers [styles] animationIterationCount
+# paint-shader
+tap id:case-paint-shader
+expect Shaders
+expect glow: color, radius, center
+expect plain: 0 uniforms
+expect invalid: SyntaxError: names it
+expect fill false, backdrop false
+expect Over the shader
+covers [nsh] createShader
+covers [nsh] shaderSupport
 # paint-shadows
 tap id:case-paint-shadows
 expect Shadows

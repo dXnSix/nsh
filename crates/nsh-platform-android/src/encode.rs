@@ -124,7 +124,8 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                 e.int(CREATE);
                 e.int(id as i32);
                 e.int(match kind {
-                    ViewKind::View => 0,
+                    // No shaders drawn: a shader view is a view.
+                    ViewKind::View | ViewKind::Shader => 0,
                     ViewKind::Text => 1,
                     ViewKind::Image => 2,
                     ViewKind::Scroll => 3,
@@ -311,6 +312,8 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                 e.int(APPEARANCE);
                 e.int(appearance as i32);
             }
+            // No shaders drawn: a shader view shows its children.
+            MountItem::ShaderProgram { .. } | MountItem::Shader { .. } => {}
             MountItem::Canvas { id, drawing } => {
                 e.int(CANVAS);
                 e.int(id as i32);

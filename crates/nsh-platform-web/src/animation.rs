@@ -176,6 +176,8 @@ impl UiAnimation {
             let static_shadow = statics.map_or(Shadow::DEFAULT, |s| s.1);
             for &(prop, node) in bindings {
                 match prop {
+                    // No shaders drawn.
+                    AnimationProp::ShaderUniform(_) => {}
                     // `nsh.js` puts these on the border overlay and the
                     // text's runs.
                     AnimationProp::BorderColor => {

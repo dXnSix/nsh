@@ -520,7 +520,8 @@ impl Mounter {
         match item {
             MountItem::Create { id, kind } => {
                 let native = match kind {
-                    ViewKind::View => Native::View(NshView::new(self.mtm)),
+                    // No shaders drawn: a shader view is a view.
+                    ViewKind::View | ViewKind::Shader => Native::View(NshView::new(self.mtm)),
                     ViewKind::Text => Native::Text(TextView::new(self.mtm)),
                     ViewKind::Image => Native::Image(NshView::new(self.mtm)),
                     ViewKind::Input => {
@@ -948,6 +949,8 @@ impl Mounter {
                 }
             }
             MountItem::Refreshing { id, refreshing } => self.set_refreshing(id, refreshing),
+            // No shaders drawn: a shader view shows its children.
+            MountItem::ShaderProgram { .. } | MountItem::Shader { .. } => {}
             MountItem::Canvas { id, drawing } => self.set_drawing(id, drawing),
             MountItem::AnimationBindings { id, bindings } => {
                 if let Some(s) = self.slot_mut(id) {

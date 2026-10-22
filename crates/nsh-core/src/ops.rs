@@ -51,6 +51,9 @@ pub enum Tag {
     InputAccessory,
     /// A 2D drawing (`<canvas>`, filled by [`Op::Draw`]).
     Canvas,
+    /// A view a shader fills (`<shader>`, TS: `Shader` of `nsh`), its
+    /// children drawn over it ([`crate::shader`]).
+    Shader,
     /// A web page (`<webview>`).
     WebView,
     /// A video player (`<video>`).
@@ -82,6 +85,7 @@ impl Tag {
             "headeritem" => Tag::HeaderItem,
             "inputaccessory" => Tag::InputAccessory,
             "canvas" => Tag::Canvas,
+            "shader" => Tag::Shader,
             "webview" => Tag::WebView,
             "video" => Tag::Video,
             "native" => Tag::Native,
@@ -1551,6 +1555,14 @@ pub enum Prop {
     /// `src`: a URL, `asset:/path`, or an imported asset.
     #[prop(js = "src", on = IMAGE, shared)]
     Source(Option<ImageSource>),
+    /// `src` of a shader view: the shader it draws (`createShader`, a
+    /// `.wgsl` import).
+    #[prop(js = "src", on = SHADER, shared)]
+    ShaderSource(Option<crate::shader::ShaderSource>),
+    /// `uniforms`: the values of the shader's uniforms, by name; animated
+    /// values change them on the UI thread.
+    #[prop(js = "uniforms", on = SHADER)]
+    Uniforms(crate::shader::Uniforms),
     /// `resizeMode`: how an image (or a video) fits its box.
     #[prop(js = "resizeMode", on = IMAGE | VIDEO)]
     ResizeMode(ResizeMode),

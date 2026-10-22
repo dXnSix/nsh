@@ -220,6 +220,8 @@ impl UiAnimation {
             let static_shadow = statics.map_or(Shadow::DEFAULT, |s| s.1);
             for &(prop, node) in bindings {
                 match prop {
+                    // No shaders drawn.
+                    AnimationProp::ShaderUniform(_) => {}
                     AnimationProp::BorderColor | AnimationProp::Color => {
                         let code = if prop == AnimationProp::Color {
                             TEXT_COLOR

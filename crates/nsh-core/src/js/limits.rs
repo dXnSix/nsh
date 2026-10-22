@@ -29,6 +29,15 @@ pub struct Limits {
     /// Nodes the core keeps (each may have a native view, whose memory the
     /// heap limit does not cover either; `usize::MAX`: no limit).
     pub max_nodes: usize,
+    /// Shaders a VM makes (`createShader`, `.wgsl` imports; the same
+    /// source counts once): each is a program the GPU keeps (`usize::MAX`:
+    /// no limit).
+    pub max_shaders: usize,
+    /// Texture samples a pixel of a shader takes at most, counted when it
+    /// is made (`docs/dev/shaders.md`): what a GPU frame costs. The same
+    /// for every app, so a shader that compiles in development compiles
+    /// when embedded, unless the embedding app sets another.
+    pub max_shader_samples: u32,
 }
 
 impl Limits {
@@ -45,6 +54,8 @@ impl Limits {
             max_op_values: usize::MAX,
             max_canvas_ops: usize::MAX,
             max_nodes: usize::MAX,
+            max_shaders: usize::MAX,
+            max_shader_samples: Self::default().max_shader_samples,
         }
     }
 
@@ -72,6 +83,8 @@ impl Default for Limits {
             max_op_values: 8_000_000,
             max_canvas_ops: 1_000_000,
             max_nodes: 200_000,
+            max_shaders: 64,
+            max_shader_samples: 128,
         }
     }
 }
@@ -93,6 +106,8 @@ pub struct HostLimits {
     pub call_budget: Option<Duration>,
     /// Nodes the core keeps.
     pub max_nodes: Option<usize>,
+    /// Texture samples a pixel of a shader takes at most.
+    pub max_shader_samples: Option<u32>,
 }
 
 const KB: usize = 1 << 10;
@@ -111,14 +126,17 @@ impl HostLimits {
             load_budget: self.load_budget.unwrap_or(defaults.load_budget),
             call_budget: self.call_budget.unwrap_or(defaults.call_budget),
             max_nodes: self.max_nodes.unwrap_or(defaults.max_nodes),
+            max_shader_samples: self
+                .max_shader_samples
+                .unwrap_or(defaults.max_shader_samples),
             ..defaults
         }
     }
 
     /// Reads limits written as `nsh run --limits` takes them: `key=value`
     /// pairs separated by commas, of `memory` and `stack` (a size in `KB`,
-    /// `MB` or `GB`), `load` and `call` (a time in `ms` or `s`) and `nodes`
-    /// (a count), say `memory=128MB,call=500ms`. Each value is above zero;
+    /// `MB` or `GB`), `load` and `call` (a time in `ms` or `s`), `nodes`
+    /// and `samples` (counts), say `memory=128MB,call=500ms`. Each value is above zero;
     /// the empty string sets none.
     pub fn parse(spec: &str) -> Result<Self, String> {
         let mut limits = HostLimits::default();
@@ -133,9 +151,13 @@ impl HostLimits {
                 "load" => limits.load_budget.replace(time(key, value)?).is_some(),
                 "call" => limits.call_budget.replace(time(key, value)?).is_some(),
                 "nodes" => limits.max_nodes.replace(count(key, value)?).is_some(),
+                "samples" => limits
+                    .max_shader_samples
+                    .replace(count(key, value)?.min(u32::MAX as usize) as u32)
+                    .is_some(),
                 _ => {
                     return Err(format!(
-                        "unknown limit `{key}` (memory, stack, load, call or nodes)"
+                        "unknown limit `{key}` (memory, stack, load, call, nodes or samples)"
                     ));
                 }
             };
@@ -165,6 +187,7 @@ impl fmt::Display for HostLimits {
             self.call_budget
                 .map(|d| format!("call={}ms", d.as_millis())),
             self.max_nodes.map(|n| format!("nodes={n}")),
+            self.max_shader_samples.map(|n| format!("samples={n}")),
         ];
         let pairs: Vec<String> = pairs.into_iter().flatten().collect();
         f.write_str(&pairs.join(","))
@@ -240,6 +263,10 @@ mod tests {
             all.to_string(),
             "memory=1024MB,stack=512KB,load=5000ms,call=2000ms,nodes=1"
         );
+        // Shaders' texture samples per pixel.
+        let samples = HostLimits::parse("samples=16").unwrap();
+        assert_eq!(samples.limits().max_shader_samples, 16);
+        assert_eq!(samples.to_string(), "samples=16");
         // The stack stays within the engine thread's.
         let stack = HostLimits::parse("stack=64MB").unwrap().limits();
         assert_eq!(stack.stack_bytes, Limits::default().stack_bytes);
@@ -254,7 +281,7 @@ mod tests {
             ("load=0s", "`load`: `0s` is not above zero"),
             (
                 "heap=1MB",
-                "unknown limit `heap` (memory, stack, load, call or nodes)",
+                "unknown limit `heap` (memory, stack, load, call, nodes or samples)",
             ),
             ("call=1s,call=2s", "`call` is set twice"),
             ("memory", "`memory` is not `key=value`"),

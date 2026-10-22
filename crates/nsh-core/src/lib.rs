@@ -37,6 +37,7 @@ pub mod resource;
 pub mod runtime;
 pub mod scroll;
 pub mod selection;
+pub mod shader;
 pub mod shape;
 pub mod storage;
 mod style;

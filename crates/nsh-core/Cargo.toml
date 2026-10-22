@@ -24,11 +24,18 @@ resvg = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
 url.workspace = true
 sha2.workspace = true
+nsh-shader.workspace = true
 
 [features]
 # SVG images for the native backends (`svg`: sniffing, sizes and rasters with
 # resvg). The web runtime leaves it off: the browser draws SVG itself.
 svg = ["dep:resvg", "dep:flate2"]
+# The language each platform runs shaders in (`shader.rs`): a platform turns
+# on its own, so its runtime links one writer only.
+shader-msl = ["nsh-shader/msl"]
+shader-hlsl = ["nsh-shader/hlsl"]
+shader-glsl = ["nsh-shader/glsl"]
+shader-agsl = ["nsh-shader/agsl"]
 
 # Native socket/file implementations. Browser WebSockets and files use
 # the host services; their shared checks do not need these dependencies.

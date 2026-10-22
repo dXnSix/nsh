@@ -86,6 +86,8 @@ mod dirty {
     /// Emit [`crate::MountItem::AccessibilityLabel`] (unless
     /// [`VIEW_PROPS`] sends everything).
     pub(super) const LABEL: u32 = 1 << 18;
+    /// Emit [`crate::MountItem::Shader`] (and its program, the first time).
+    pub(super) const SHADER: u32 = 1 << 19;
 }
 
 /// A layout root other than the surface's: screens, modals and header
@@ -188,6 +190,7 @@ enum Kind {
     HeaderItem,
     InputAccessory,
     Canvas,
+    Shader,
     WebView,
     Video,
     Native,
@@ -209,6 +212,7 @@ impl Kind {
                 | Kind::HeaderItem
                 | Kind::InputAccessory
                 | Kind::Overlay
+                | Kind::Shader
         )
     }
 
@@ -232,6 +236,7 @@ impl Kind {
             Kind::HeaderItem => ViewKind::HeaderItem,
             Kind::InputAccessory => ViewKind::InputAccessory,
             Kind::Canvas => ViewKind::Canvas,
+            Kind::Shader => ViewKind::Shader,
             Kind::WebView => ViewKind::WebView,
             Kind::Video => ViewKind::Video,
             Kind::Native => ViewKind::Native,
@@ -256,6 +261,7 @@ impl Kind {
             Tag::HeaderItem => Kind::HeaderItem,
             Tag::InputAccessory => Kind::InputAccessory,
             Tag::Canvas => Kind::Canvas,
+            Tag::Shader => Kind::Shader,
             Tag::WebView => Kind::WebView,
             Tag::Video => Kind::Video,
             Tag::Native => Kind::Native,
@@ -274,6 +280,35 @@ impl Kind {
                 | Kind::Modal
                 | Kind::Overlay
         )
+    }
+}
+
+/// A shader view's source and uniforms, and what was made of them.
+#[derive(Debug, Default)]
+struct ShaderState {
+    source: Option<crate::shader::ShaderSource>,
+    uniforms: crate::shader::Uniforms,
+    /// The uniforms packed for the source's program.
+    packed: crate::shader::Packed,
+    /// What the view was last sent.
+    sent: Option<Arc<crate::shader::ShaderFill>>,
+}
+
+impl ShaderState {
+    /// Packs the uniforms for the source again: whether the animated
+    /// values it binds changed.
+    fn repack(&mut self, id: NodeId) -> bool {
+        let packed = match &self.source {
+            Some(source) => crate::shader::pack(
+                source.shader.reflection(),
+                &self.uniforms,
+                &mut |w| log::warn!(target: "js", "<Shader> (node {id}): {w}"),
+            ),
+            None => crate::shader::Packed::default(),
+        };
+        let rebound = packed.bindings != self.packed.bindings;
+        self.packed = packed;
+        rebound
     }
 }
 
@@ -397,6 +432,8 @@ struct Node {
     animated: Vec<(AnimationProp, crate::animation::NodeId)>,
     /// What a canvas draws.
     drawing: Option<Arc<crate::canvas::Drawing>>,
+    /// What a shader view draws.
+    shader: Option<Box<ShaderState>>,
     /// The `style` prop as written, applied over the class styles.
     inline_style: StylePatch,
     /// `class` / `classList` as set.
@@ -543,6 +580,7 @@ impl Node {
             text_style: TextStyle::default(),
             animated: Vec::new(),
             drawing: None,
+            shader: matches!(kind, Kind::Shader).then(Box::default),
             inline_style: StylePatch::default(),
             class_names: None,
             classes: None,
@@ -774,6 +812,9 @@ pub struct Core<M: TextEngine> {
     overlays: Vec<Key>,
     /// What the shown overlays listen to.
     overlay_state: overlay::Overlays,
+    /// The shaders' programs sent to the platform (`true`) or that failed
+    /// to translate (`false`), by id.
+    shader_programs: rustc_hash::FxHashMap<u32, bool>,
 }
 
 impl<M: TextEngine + 'static> Core<M> {
@@ -854,6 +895,7 @@ impl<M: TextEngine> Core<M> {
             system_dark: false,
             overlays: Vec::new(),
             overlay_state: overlay::Overlays::default(),
+            shader_programs: Default::default(),
         }
     }
 
@@ -964,6 +1006,75 @@ impl<M: TextEngine> Core<M> {
             .collect();
         for key in images {
             self.mark(key, dirty::IMAGE);
+        }
+        let shaders: Vec<Key> = self
+            .nodes
+            .iter()
+            .filter(|(_, n)| {
+                n.shader
+                    .as_ref()
+                    .is_some_and(|s| s.packed.images.iter().any(|i| changes(&i.source)))
+            })
+            .map(|(k, _)| k as Key)
+            .collect();
+        for key in shaders {
+            self.mark(key, dirty::SHADER);
+        }
+    }
+
+    /// Sends what shader view `key` draws, if it changed, and its program
+    /// first, the first time a view draws it: translated into the
+    /// platform's language here, on the engine thread.
+    fn flush_shader(&mut self, key: Key) {
+        let ratio = self.components.environment.pixel_ratio;
+        let language = self.components.environment.shaders.language;
+        let node = &self.nodes[key as usize];
+        let id = node.id;
+        let Some(shader) = node.shader.as_ref() else {
+            return;
+        };
+        let fill = match &shader.source {
+            Some(source) => {
+                let ready = *self.shader_programs.entry(source.id).or_insert_with(|| {
+                    match crate::shader::ShaderProgram::translate(source, language) {
+                        Ok(program) => {
+                            self.mount.push(MountItem::ShaderProgram {
+                                program: Arc::new(program),
+                            });
+                            true
+                        }
+                        Err(e) => {
+                            log::error!(target: "js", "<Shader>: {e}");
+                            false
+                        }
+                    }
+                });
+                ready.then(|| {
+                    Arc::new(crate::shader::ShaderFill {
+                        program: source.id,
+                        uniforms: shader.packed.bytes.as_slice().into(),
+                        images: shader
+                            .packed
+                            .images
+                            .iter()
+                            .map(|i| crate::shader::ShaderImage {
+                                source: i.source.as_ref().map(|s| s.resolved(ratio)),
+                                offset: i.offset,
+                            })
+                            .collect(),
+                        time: source.shader.reflection().time,
+                    })
+                })
+            }
+            None => None,
+        };
+        let shader = self.nodes[key as usize]
+            .shader
+            .as_mut()
+            .expect("a shader view");
+        if shader.sent != fill {
+            shader.sent = fill.clone();
+            self.mount.push(MountItem::Shader { id, fill });
         }
     }
 
@@ -2259,6 +2370,30 @@ impl<M: TextEngine> Core<M> {
                     }
                 }
             }
+            Prop::ShaderSource(source) => {
+                let id = node.id;
+                if let Some(shader) = node.shader.as_mut()
+                    && shader.source != source
+                {
+                    shader.source = source;
+                    flags |= dirty::SHADER;
+                    if shader.repack(id) {
+                        flags |= dirty::ANIMATION;
+                    }
+                }
+            }
+            Prop::Uniforms(uniforms) => {
+                let id = node.id;
+                if let Some(shader) = node.shader.as_mut()
+                    && shader.uniforms != uniforms
+                {
+                    shader.uniforms = uniforms;
+                    flags |= dirty::SHADER;
+                    if shader.repack(id) {
+                        flags |= dirty::ANIMATION;
+                    }
+                }
+            }
             Prop::Image(option) => {
                 if let Some(image) = node.image.as_mut() {
                     match option {
@@ -3500,6 +3635,16 @@ impl<M: TextEngine> Core<M> {
         if node.drawing.is_some() {
             flags |= dirty::CANVAS;
         }
+        if let Some(shader) = node.shader.as_mut() {
+            // The new view has drawn nothing.
+            shader.sent = None;
+            if shader.source.is_some() {
+                flags |= dirty::SHADER;
+            }
+            if !shader.packed.bindings.is_empty() {
+                flags |= dirty::ANIMATION;
+            }
+        }
         if !node.gestures.is_empty() {
             flags |= dirty::PAN;
         }
@@ -3704,6 +3849,15 @@ impl<M: TextEngine> Core<M> {
                             .map(|(i, &n)| (AnimationProp::CanvasArg(i as u16), n)),
                     );
                 }
+                if let Some(shader) = &node.shader {
+                    bindings.extend(
+                        shader
+                            .packed
+                            .bindings
+                            .iter()
+                            .map(|&(k, n)| (AnimationProp::ShaderUniform(k), n)),
+                    );
+                }
                 self.mount
                     .push(MountItem::AnimationBindings { id, bindings });
             }
@@ -3765,6 +3919,9 @@ impl<M: TextEngine> Core<M> {
                     })
                     .collect();
                 self.mount.push(MountItem::ComponentProps { id, props });
+            }
+            if flags & dirty::SHADER != 0 {
+                self.flush_shader(key);
             }
             let node = &self.nodes[key as usize];
             if flags & dirty::NATIVE != 0

@@ -627,7 +627,8 @@ fn border_style(s: BorderStyle) -> &'static str {
 
 fn kind_name(kind: ViewKind) -> &'static str {
     match kind {
-        ViewKind::View => "view",
+        // No shaders drawn: a shader view is a view.
+        ViewKind::View | ViewKind::Shader => "view",
         ViewKind::Text => "text",
         ViewKind::Image => "image",
         ViewKind::Scroll => "scroll",
@@ -1161,6 +1162,8 @@ pub(crate) fn encode(out: &mut Out, item: &MountItem) {
         MountItem::Refreshing { id, refreshing } => {
             out.item("ref").num(*id).bool(*refreshing).end();
         }
+        // No shaders drawn: a shader view shows its children.
+        MountItem::ShaderProgram { .. } | MountItem::Shader { .. } => {}
         MountItem::Canvas { id, drawing } => {
             out.item("cv")
                 .num(*id)
