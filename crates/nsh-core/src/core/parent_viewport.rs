@@ -31,12 +31,12 @@
 
 use super::{
     Core, Key, Kind, NO_KEY, ScrollState, dirty,
-    list::{Outer, PendingScroll, ignored, replay},
+    list::{Outer, PendingScroll, StickyRange, ignored, replay},
 };
 use crate::{
     ListViewport,
     geometry::Points,
-    mount::{MountItem, ScrollBehavior, ViewKind},
+    mount::{MountItem, ScrollBehavior, StickyCell, ViewKind},
     ops::{Command, EventKind},
     text::TextEngine,
 };
@@ -222,6 +222,8 @@ impl<M: TextEngine> Core<M> {
                 continue;
             }
             list.dirty = true;
+            // Its sticky cells go to the new view with ranges in its offsets.
+            let had_sticky = !std::mem::take(&mut list.sent_sticky).is_empty();
             if let Some(old) = old
                 && let Some(scroll) = self
                     .nodes
@@ -229,6 +231,9 @@ impl<M: TextEngine> Core<M> {
                     .and_then(|n| n.scroll.as_mut())
             {
                 scroll.dependents.retain(|&k| k != key);
+                if had_sticky {
+                    self.sticky_views.push(old.view);
+                }
             }
             if let Some(found) = found
                 && found.scrolls
@@ -299,6 +304,7 @@ impl<M: TextEngine> Core<M> {
         let Some(list) = self.nodes[key as usize].list.as_mut() else {
             return;
         };
+        let had_sticky = !std::mem::take(&mut list.sent_sticky).is_empty();
         if let Some(outer) = list.outer.take()
             && let Some(scroll) = self
                 .nodes
@@ -306,6 +312,90 @@ impl<M: TextEngine> Core<M> {
                 .and_then(|n| n.scroll.as_mut())
         {
             scroll.dependents.retain(|&k| k != key);
+            if had_sticky {
+                self.sticky_views.push(outer.view);
+            }
+        }
+    }
+
+    /// The sticky cells of list `key`, in the viewport of `view`, changed
+    /// from `old`: the cells that became sticky go on top of the list's
+    /// other cells (the platforms keep the cells of a scroll view's own
+    /// list on top), and the view's sticky cells are sent again.
+    pub(super) fn page_sticky_changed(&mut self, key: Key, view: Key, old: &[StickyRange]) {
+        let list = self.nodes[key as usize].list.as_ref().expect("list");
+        let id = self.nodes[key as usize].id;
+        let new: Vec<u32> = list
+            .sent_sticky
+            .iter()
+            .map(|r| r.cell)
+            .filter(|c| !old.iter().any(|o| o.cell == *c))
+            .collect();
+        for cell in new {
+            self.mount.push(MountItem::Insert {
+                parent: id,
+                child: cell,
+                before: None,
+            });
+        }
+        self.sticky_views.push(view);
+    }
+
+    /// Where a cell inserted into list `key` in its parent's viewport goes:
+    /// below its sticky cells.
+    pub(super) fn below_sticky(&self, key: Key, child: Key) -> Option<crate::NodeId> {
+        let list = self.nodes[key as usize].list.as_ref()?;
+        let child = self.nodes[child as usize].id;
+        list.sent_sticky.iter().map(|r| r.cell).find(|&c| {
+            c != child
+                && self.key(c).is_ok_and(|k| {
+                    self.nodes[k as usize].parent == key && self.nodes[k as usize].created
+                })
+        })
+    }
+
+    /// Sends each view in `sticky_views` its sticky cells: its lists' in
+    /// its viewport, and its own when it is a list.
+    pub(super) fn send_page_sticky(&mut self) {
+        let mut views = std::mem::take(&mut self.sticky_views);
+        views.sort_unstable();
+        views.dedup();
+        for view in views {
+            let Some(node) = self.nodes.get(view as usize) else {
+                continue;
+            };
+            let Some(scroll) = node.scroll.as_ref() else {
+                continue;
+            };
+            let mut all: Vec<StickyRange> = node
+                .list
+                .as_ref()
+                .map(|l| l.sent_sticky.clone())
+                .unwrap_or_default();
+            for &d in &scroll.dependents {
+                if let Some(list) = self.nodes[d as usize].list.as_ref() {
+                    all.extend_from_slice(&list.sent_sticky);
+                }
+            }
+            all.sort_by_key(|r| r.cell);
+            if all == scroll.page_sticky {
+                continue;
+            }
+            let id = node.id;
+            let cells = all
+                .iter()
+                .map(|r| StickyCell {
+                    cell: r.cell,
+                    start: Points(r.start),
+                    end: Points(r.end),
+                })
+                .collect();
+            self.nodes[view as usize]
+                .scroll
+                .as_mut()
+                .expect("scroll")
+                .page_sticky = all;
+            self.mount.push(MountItem::StickyCells { id, cells });
         }
     }
 
@@ -599,14 +689,9 @@ const AROUND: &str = "the scroll view around the list scrolls it";
 const OWN: &str = "it needs a scroll view of its own (viewport=\"own\")";
 
 /// What each [`ignored`] bit stands for, and why.
-const IGNORED: [(u16, &str, &str); 8] = [
+const IGNORED: [(u16, &str, &str); 7] = [
     (ignored::INVERTED, "`inverted`", OWN),
     (ignored::FOLLOW_END, "`maintainVisibleContentPosition`", OWN),
-    (
-        ignored::STICKY,
-        "`stickyHeaderIndices` and `stickyHeaderOffset`",
-        OWN,
-    ),
     (
         ignored::ON_SCROLL,
         "`onScroll` and the other scroll events",

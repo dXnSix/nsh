@@ -64,8 +64,16 @@
   replayed over stale reports, as a list does its own; scroll commands for a list not placed in its view yet wait
   for the update that places it. The scroll view's props (`onScroll` and the other scroll events, `scrollValue`,
   `refreshing`, paging and snapping, `contentInset`, `scrollbar`, `scrollable`, `keyboardDismissMode`) and what
-  needs a scroll view of the list's own (`inverted`, `maintainVisibleContentPosition`, sticky rows) are ignored
-  there, each warned of once; a zoomable scroll view around it is not supported. Lists of their own pay nothing:
+  needs a scroll view of the list's own (`inverted`, `maintainVisibleContentPosition`) are ignored there, each
+  warned of once; a zoomable scroll view around it is not supported. Sticky rows stick to the view's viewport:
+  their ranges are in the view's offsets, the last one stopping where its bottom meets the end of the list's
+  content (CSS `position: sticky` in its container), and the view gets one `StickyCells` with all its lists' (and
+  its own, when it is a list). The cells are not the view's children, so the core keeps them on top among their
+  list's cells itself (it moves a cell that became sticky last with an `Insert`, and puts new cells below them);
+  the platforms find them by id (the desktops' `with_cell` also looks below the view's children while a batch is
+  applied), and the web hosts a cell's track in its list, offset by where the list is in the view's content
+  (`trackOrigin`; views clip with `overflow: clip`, which lets `position: sticky` reach the scroll view). Lists of
+  their own pay nothing:
   every step is reached through a list in parent mode, and a plain scroll view checks an empty list
   (`crates/nsh-core/src/core/parent_viewport.rs`).
 - **List internals** (the window, binding cells, recycling): `crates/nsh-core/src/core/list.rs`.

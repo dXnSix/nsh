@@ -45,8 +45,10 @@
 //! of its own. The scroll view moves only for changes wholly above the top
 //! of its viewport, as a browser's scroll anchoring does: rows measured or
 //! spliced above the first visible row while the list's start is scrolled
-//! past. Inverted lists, `maintainVisibleContentPosition` and sticky rows
-//! need a scroll view of their own and are off.
+//! past. Inverted lists and `maintainVisibleContentPosition` need a scroll
+//! view of their own and are off. Sticky rows stick to the view's viewport:
+//! their ranges are in its offsets, and the last one stops at the end of
+//! the list's content, as CSS `position: sticky` stops at its container's.
 
 use rustc_hash::FxHashMap;
 
@@ -161,15 +163,12 @@ pub(super) struct Outer {
 struct SetAside {
     inverted: bool,
     follow_end: Option<f32>,
-    sticky: Vec<u32>,
-    sticky_offset: f32,
 }
 
 /// Props a list in its parent's viewport ignores, each warned of once.
 pub(super) mod ignored {
     pub(crate) const INVERTED: u16 = 1 << 0;
     pub(crate) const FOLLOW_END: u16 = 1 << 1;
-    pub(crate) const STICKY: u16 = 1 << 2;
     pub(crate) const ON_SCROLL: u16 = 1 << 3;
     pub(crate) const SCROLL_VALUE: u16 = 1 << 4;
     pub(crate) const REFRESH: u16 = 1 << 5;
@@ -309,9 +308,8 @@ pub(super) struct ListState {
     /// Parent mode: the spacer that gives the list its length in layout,
     /// and the length it was given.
     pub(super) spacer: Option<(taffy::NodeId, f32)>,
-    /// What parent mode turned off (`inverted`, `follow_end`, `sticky`,
-    /// `sticky_offset`), given back if the list goes back to its own
-    /// scroll view before it is made.
+    /// What parent mode turned off (`inverted`, `follow_end`), given back
+    /// if the list goes back to its own scroll view before it is made.
     set_aside: Option<Box<SetAside>>,
     /// Ignored props set ([`ignored`] bits), and those already warned of.
     pub(super) ignored: u16,
@@ -381,8 +379,6 @@ impl ListState {
             let set_aside = SetAside {
                 inverted: std::mem::take(&mut self.inverted),
                 follow_end: self.follow_end.take(),
-                sticky: std::mem::take(&mut self.sticky),
-                sticky_offset: std::mem::take(&mut self.sticky_offset),
             };
             if set_aside.inverted {
                 self.ignored |= ignored::INVERTED;
@@ -390,21 +386,14 @@ impl ListState {
             if set_aside.follow_end.is_some() {
                 self.ignored |= ignored::FOLLOW_END;
             }
-            if !set_aside.sticky.is_empty() || set_aside.sticky_offset != 0.0 {
-                self.ignored |= ignored::STICKY;
-            }
             self.set_aside = Some(Box::new(set_aside));
         } else if let Some(set_aside) = self.set_aside.take() {
             let SetAside {
                 inverted,
                 follow_end,
-                sticky,
-                sticky_offset,
             } = *set_aside;
             self.inverted = inverted;
             self.follow_end = follow_end;
-            self.sticky = sticky;
-            self.sticky_offset = sticky_offset;
         }
     }
 
@@ -945,14 +934,6 @@ impl ListState {
     }
 
     pub(super) fn set_sticky(&mut self, mut sticky: Vec<u32>) {
-        if self.parent {
-            self.ignored |= if sticky.is_empty() {
-                0
-            } else {
-                ignored::STICKY
-            };
-            return;
-        }
         sticky.sort_unstable();
         sticky.dedup();
         if sticky != self.sticky {
@@ -964,10 +945,6 @@ impl ListState {
     /// `stickyHeaderOffset`.
     pub(super) fn set_sticky_offset(&mut self, offset: f32) {
         let offset = if offset.is_finite() { offset } else { 0.0 };
-        if self.parent {
-            self.ignored |= if offset == 0.0 { 0 } else { ignored::STICKY };
-            return;
-        }
         if offset != self.sticky_offset {
             self.sticky_offset = offset;
             self.dirty = true;
@@ -1208,13 +1185,29 @@ impl ListState {
     /// The travel range of sticky item `index`: from where it reaches the
     /// sticky offset from the viewport's start to where the next sticky item
     /// pushes it out.
+    ///
+    /// In its parent's viewport, the range is in the offsets of the view
+    /// around the list, and the last sticky item stops where its bottom
+    /// meets the end of the list's content.
     pub(super) fn sticky_range(&self, index: u32, cell: u32, size: f32) -> StickyRange {
         let start = self.item_at(index) - self.sticky_offset;
         let next = self.sticky.iter().find(|&&s| s > index && s < self.count);
         let end = match next {
             Some(&n) => (self.item_at(n) - size - self.sticky_offset).max(start),
+            None if self.parent => {
+                let end = self.blocks().total - self.main_padding().1;
+                (end - size - self.sticky_offset).max(start)
+            }
             None => f32::INFINITY,
         };
+        if self.parent {
+            let at = self.outer_start;
+            return StickyRange {
+                cell,
+                start: at + start,
+                end: at + end,
+            };
+        }
         StickyRange { cell, start, end }
     }
 
@@ -1768,8 +1761,9 @@ mod tests {
         l.set_inverted(true);
         l.set_sticky(vec![0]);
         l.set_parent(true);
-        assert!(!l.inverted && !l.sticky_enabled());
-        assert_eq!(l.ignored, ignored::INVERTED | ignored::STICKY);
+        // Sticky rows stay: they stick to the view around the list.
+        assert!(!l.inverted && l.sticky_enabled());
+        assert_eq!(l.ignored, ignored::INVERTED);
         l.set_follow_end(Some(10.0));
         assert_eq!(l.follow_end, None);
         assert_ne!(l.ignored & ignored::FOLLOW_END, 0);
@@ -1779,11 +1773,36 @@ mod tests {
     fn back_to_its_own_scroll_view_a_list_gets_back_what_parent_mode_set_aside() {
         let mut l = list(100, 50.0, 400.0);
         l.set_inverted(true);
-        l.set_sticky(vec![0, 3]);
+        l.set_follow_end(Some(10.0));
         l.set_parent(true);
         l.set_parent(false);
         assert!(l.inverted);
-        assert_eq!(l.sticky, [0, 3]);
+        assert_eq!(l.follow_end, Some(10.0));
+    }
+
+    #[test]
+    fn in_a_page_sticky_rows_travel_in_the_pages_offsets_to_the_lists_end() {
+        // 100 rows of 50 from 100 down the page; rows 0 and 30 stick 20
+        // below its top.
+        let mut l = in_page(100.0, 0.0, 4700.0);
+        l.set_sticky(vec![0, 30]);
+        l.set_sticky_offset(20.0);
+        // Row 0 sticks from 80 (its 100 less 20) until row 30 pushes it out.
+        assert_eq!(
+            l.sticky_range(0, 1, 50.0),
+            StickyRange {
+                cell: 1,
+                start: 80.0,
+                end: 100.0 + 1500.0 - 50.0 - 20.0
+            }
+        );
+        // The last one stops with its bottom at the list's end (5100).
+        let last = l.sticky_range(30, 2, 50.0);
+        assert_eq!(last.start, 100.0 + 1500.0 - 20.0);
+        assert_eq!(last.end, 100.0 + 5000.0 - 50.0 - 20.0);
+        // Pinned in list coordinates, as in a list of its own.
+        l.set_outer(100.0, 1700.0, 400.0, 4700.0, true);
+        assert_eq!(l.active_sticky(), Some(30));
     }
 
     #[test]

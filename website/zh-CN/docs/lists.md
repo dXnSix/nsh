@@ -527,7 +527,8 @@ scroll()
 - 它的行跟随沿其方向最近的外层滚动视图，或者它所在的屏幕。
 - 页面会像浏览器一样保持你正在阅读的内容不动：完全位于视口顶部以上的行改变尺寸时，页面随之移动同样的距离；列表开头在视口内时，变高的行会把下面的内容往下推。
 - `scrollToIndex`、`scrollToEnd` 和 `initialScrollIndex` 会在页面内容范围内把页面滚动到列表的行；列表末尾接近视口时触发 `onLoadMore`，`onViewableItemsChange` 报告页面视口中的行。
-- 页面如何滚动由它的滚动视图决定：把 `onScroll` 等滚动事件、`scrollValue`、`refreshing` / `onRefresh`、分页和吸附、`contentInset`、`scrollbar`、`scrollable` 和 `keyboardDismissMode` 设置在 `Scroll` 上。倒置列表、`maintainVisibleContentPosition` 和吸顶标题属于拥有自己视口的列表（`viewport="own"`，默认值）。
+- `stickyHeaderIndices` 和 `stickyHeaderOffset` 让行吸附在页面顶部：分组标题停在顶部，它的行从下面滚过，直到下一个标题把它推出；最后一个标题随列表的末尾一起离开。
+- 页面如何滚动由它的滚动视图决定：把 `onScroll` 等滚动事件、`scrollValue`、`refreshing` / `onRefresh`、分页和吸附、`contentInset`、`scrollbar`、`scrollable` 和 `keyboardDismissMode` 设置在 `Scroll` 上。倒置列表和 `maintainVisibleContentPosition` 属于拥有自己视口的列表（`viewport="own"`，默认值）。
 - 视口在列表创建时确定：要切换，请渲染一个新的列表。
 
 ## 加载更多：onLoadMore

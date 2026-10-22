@@ -319,6 +319,9 @@ struct ScrollState {
     pending: Vec<(u32, PendingScroll)>,
     /// What its lists asked of it in this commit, sent at its end.
     asked: Option<parent_viewport::Asked>,
+    /// The sticky cells it was last sent with its lists' (its own too, when
+    /// it is a list), while its lists have any.
+    page_sticky: Vec<list::StickyRange>,
 }
 
 impl Default for ScrollState {
@@ -340,6 +343,7 @@ impl Default for ScrollState {
             dependents: Vec::new(),
             pending: Vec::new(),
             asked: None,
+            page_sticky: Vec::new(),
         }
     }
 }
@@ -675,6 +679,8 @@ pub struct Core<M: TextEngine> {
     extent_changed: bool,
     /// The scroll views such lists asked to scroll in this commit.
     outer_asked: Vec<Key>,
+    /// The views whose lists' sticky cells changed in this commit.
+    sticky_views: Vec<Key>,
     /// Live screens, modals and header items.
     roots: Vec<Key>,
     /// Attached input accessories by `nativeID`.
@@ -787,6 +793,7 @@ impl<M: TextEngine> Core<M> {
             outer_moved: false,
             extent_changed: false,
             outer_asked: Vec::new(),
+            sticky_views: Vec::new(),
             roots: Vec::new(),
             accessories: Default::default(),
             header_heights: (Points(44.0), Points(96.0)),
@@ -3030,7 +3037,14 @@ impl<M: TextEngine> Core<M> {
             // (`sync_overlays`).
             if parent_created && child_kind != Kind::Overlay {
                 self.ensure_created(child);
-                let before = self.native_before(parent, child);
+                let before = match self.nodes[parent as usize].list.as_ref() {
+                    // Below the sticky cells of a list in its parent's
+                    // viewport, which stay on top.
+                    Some(list) if list.parent && !list.sent_sticky.is_empty() => {
+                        self.below_sticky(parent, child)
+                    }
+                    _ => self.native_before(parent, child),
+                };
                 // By the nodes' own ids (the ops may name an alias).
                 self.mount.push(MountItem::Insert {
                     parent: self.nodes[parent as usize].id,
@@ -3234,6 +3248,7 @@ impl<M: TextEngine> Core<M> {
             if scroll.asked.is_some() {
                 self.outer_asked.retain(|&k| k != key);
             }
+            self.sticky_views.retain(|&k| k != key);
         }
         if let Some((spacer, _)) = node.list.as_ref().and_then(|l| l.spacer) {
             self.layout.remove(spacer).expect("taffy remove");
@@ -4929,6 +4944,9 @@ impl<M: TextEngine> Core<M> {
                 self.update_list(key, relayout, Some(outer));
             }
         }
+        if !self.sticky_views.is_empty() {
+            self.send_page_sticky();
+        }
     }
 
     /// [`Core::update_lists`] for list `key`; `outer`: where a list in its
@@ -5248,7 +5266,13 @@ impl<M: TextEngine> Core<M> {
 
         sticky_cells.sort_by_key(|c| c.cell);
         let list = self.nodes[key as usize].list.as_mut().expect("list");
-        if sticky_cells != list.sent_sticky {
+        if let Some(o) = &outer {
+            // The view around the list pins them, with its other lists'.
+            if sticky_cells != list.sent_sticky {
+                let old = std::mem::replace(&mut list.sent_sticky, sticky_cells);
+                self.page_sticky_changed(key, o.view, &old);
+            }
+        } else if sticky_cells != list.sent_sticky {
             let cells = sticky_cells
                 .iter()
                 .map(|r| StickyCell {
@@ -5259,6 +5283,11 @@ impl<M: TextEngine> Core<M> {
                 .collect();
             list.sent_sticky = sticky_cells;
             self.mount.push(MountItem::StickyCells { id, cells });
+            // Its lists in its viewport pin theirs with its own.
+            let scroll = self.nodes[key as usize].scroll.as_ref();
+            if scroll.is_some_and(|s| !s.page_sticky.is_empty()) {
+                self.sticky_views.push(key);
+            }
         }
 
         if let Some(o) = &outer {

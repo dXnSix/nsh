@@ -556,7 +556,11 @@ range of travel, with no breadth across it, so it takes no pointer events, at `z
 list isolates that z-index (`nsh-sticky`): as natively, a sticky cell never covers the views after the list, such as a
 bar the content scrolls under. The next sticky cell's track starts where it pushes the cell out, the last one's ends
 with the content, and a cell no longer sticky goes back to its frame. Entering a track cancels any frame
-animation already running on the cell, so its content coordinates cannot override the sticky insets.
+animation already running on the cell, so its content coordinates cannot override the sticky insets. The cells of a
+list in the scroll view's viewport (`viewport="parent"`) are in that list: their tracks go there, the list isolates
+their z-index, and their insets add where the list is in the scroll view's content (`trackOrigin`, the frames
+between them); the core bounds their travel by the list's end. Views clip with `overflow: clip`, which, unlike
+`hidden`, makes no scroll container, so `position: sticky` reaches the scroll view through the list.
 
 ## Platform services
 

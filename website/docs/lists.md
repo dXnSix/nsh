@@ -527,7 +527,8 @@ scroll()
 - Its rows follow the nearest scroll view around it along its axis, or the screen it is on.
 - The page keeps what you read in place, as a browser does: rows that change size wholly above the top of the viewport move the page by as much; while the list's start is in view, rows that grow push what is below them down.
 - `scrollToIndex`, `scrollToEnd` and `initialScrollIndex` scroll the page to the list's rows, within the page's content; `onLoadMore` fires as the list's end comes near the viewport, and `onViewableItemsChange` reports the rows in the page's viewport.
-- How the page scrolls is its scroll view's: set `onScroll` and the other scroll events, `scrollValue`, `refreshing` / `onRefresh`, paging and snapping, `contentInset`, `scrollbar`, `scrollable` and `keyboardDismissMode` on the `Scroll`. Inverted lists, `maintainVisibleContentPosition` and sticky headers are features of a list with a viewport of its own (`viewport="own"`, the default).
+- `stickyHeaderIndices` and `stickyHeaderOffset` stick rows to the top of the page: a section header stays at the top while its rows scroll under it, until the next one pushes it out, and the last one leaves with the end of its list.
+- How the page scrolls is its scroll view's: set `onScroll` and the other scroll events, `scrollValue`, `refreshing` / `onRefresh`, paging and snapping, `contentInset`, `scrollbar`, `scrollable` and `keyboardDismissMode` on the `Scroll`. Inverted lists and `maintainVisibleContentPosition` are features of a list with a viewport of its own (`viewport="own"`, the default).
 - The viewport is chosen when the list is made: to switch, render a new list.
 
 ## Loading more: onLoadMore

@@ -429,6 +429,9 @@ expect Row 0
 expect Row 34
 absent Row 35
 frame id:rows 0 300 390 8000
+# Row 0 sticks to the page's top from the list's start (300) until row 50
+# pushes it out; the page pins it, in its offsets.
+prop scroll:text:"Row 1" stickyHeaderIndices start=300 end=2260
 # The page scrolls it: 5000 down, the rows 4700 into it show.
 scroll id:page 0 5000
 expect Row 120

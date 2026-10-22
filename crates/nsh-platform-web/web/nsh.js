@@ -2009,8 +2009,13 @@ class Player {
         const track = document.createElement("div");
         track.className = "nsh-track";
         track._list = el;
-        // Where the list's cells are: in it, or in its content layer.
-        const host = el._layer ?? el;
+        // Where the list's cells are: in it, or in its content layer; the
+        // cells of a list in the scroll view's viewport are in that list,
+        // which keeps their z-index to itself.
+        const own = el._layer ?? el;
+        const host = cell.parentNode ?? own;
+        track._page = host !== own;
+        if (track._page) host.classList.add("nsh-sticky");
         host.insertBefore(track, cell.parentNode === host ? cell : null);
         track.append(cell);
         cell._track = track;
@@ -2031,6 +2036,18 @@ class Player {
     this.placeFrame(cell);
   }
 
+  /** Where the views around `track` (up to its scroll view) put it in the
+   * scroll view's content along its axis. */
+  trackOrigin(track, horizontal) {
+    const list = track._list;
+    let at = 0;
+    for (let n = track.parentNode; n && n !== list && n !== list._layer; n = n.parentNode) {
+      const f = n._frame;
+      if (f) at += horizontal ? f[0] : f[1];
+    }
+    return at;
+  }
+
   /** Places `cell`'s track along its range of travel and the cell in it:
    * it sticks the distance from its range's start to its frame's from the
    * scroll view's start. */
@@ -2042,16 +2059,21 @@ class Player {
     const horizontal = !!list._horizontal;
     const [at, size] = horizontal ? [f[0], f[2]] : [f[1], f[3]];
     // The last one's range ends past the content: it travels to its end
-    // (not at all before the list's content size arrives).
+    // (not at all before the list's content size arrives). A page list's
+    // ranges end within it, and are in the scroll view's content, where
+    // the list starts at `origin`.
+    const page = cell._track._page;
+    const origin = page ? this.trackOrigin(cell._track, horizontal) : 0;
     const content = list._content?.[horizontal ? 0 : 1] ?? 0;
-    const length = size + Math.max(0, Math.min(range[1] - range[0], content - at - size));
+    const travel = page ? range[1] - range[0] : Math.min(range[1] - range[0], content - at - size);
+    const length = size + Math.max(0, travel);
     const t = cell._track.style;
     t.left = `${f[0]}px`;
     t.top = `${f[1]}px`;
     t.width = `${horizontal ? length : 0}px`;
     t.height = `${horizontal ? 0 : length}px`;
     const s = cell.style;
-    const inset = `${at - range[0]}px`;
+    const inset = `${at + origin - range[0]}px`;
     s.left = horizontal ? inset : "auto";
     s.top = horizontal ? "auto" : inset;
     s.width = `${f[2]}px`;

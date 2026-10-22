@@ -13849,3 +13849,130 @@ fn a_page_list_keeps_its_scroll_commands_until_it_is_placed() {
     let batch = c.commit().unwrap();
     assert_eq!(page_scrolls(&batch), [(true, 600.0)]);
 }
+
+/// The sticky cells sent to view `id` in `batch` (the last set), by cell.
+fn sticky_of(batch: &MountBatch, id: NodeId) -> Option<Vec<(NodeId, f32, f32)>> {
+    batch.items.iter().rev().find_map(|i| match i {
+        MountItem::StickyCells { id: v, cells } if *v == id => {
+            Some(cells.iter().map(|c| (c.cell, c.start.0, c.end.0)).collect())
+        }
+        _ => None,
+    })
+}
+
+/// [`render_binds`] for the lists of a page: each list's cells by slot.
+fn render_lists_binds(
+    c: &mut Core<FakeEngine>,
+    next_id: &mut u32,
+    cells: &mut rustc_hash::FxHashMap<NodeId, Vec<u32>>,
+    row_height: f32,
+) {
+    let mut binds = Vec::new();
+    c.take_list_binds(&mut binds);
+    for bind in binds {
+        let list_cells = cells.entry(bind.list).or_default();
+        for (slot, index) in bind.binds {
+            while list_cells.len() <= slot as usize {
+                let id = *next_id;
+                *next_id += 1;
+                apply(
+                    c,
+                    vec![
+                        Op::Create { id, tag: Tag::Cell },
+                        Op::SetProp {
+                            id,
+                            prop: Prop::Slot(CellSlot::Item(list_cells.len() as u32)),
+                        },
+                        Op::Insert {
+                            parent: bind.list,
+                            child: id,
+                            before: None,
+                        },
+                    ],
+                );
+                list_cells.push(id);
+            }
+            let cell = list_cells[slot as usize];
+            c.apply(style_op(
+                cell,
+                &[("height", StyleValue::Number(row_height))],
+            ))
+            .unwrap();
+            c.apply(Op::SetProp {
+                id: cell,
+                prop: Prop::CellIndex(index),
+            })
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn page_lists_sticky_rows_stick_to_the_pages_viewport() {
+    let mut c = core();
+    // Two lists of 20 rows (1000) below a 100 pt header; rows 0 and 10 of
+    // each stick.
+    page(&mut c, 100.0, &[20, 20]);
+    for id in [4, 5] {
+        c.apply(Op::SetProp {
+            id,
+            prop: Prop::StickyIndices(vec![0, 10]),
+        })
+        .unwrap();
+    }
+    c.commit();
+    let (mut next_id, mut cells) = (100, rustc_hash::FxHashMap::default());
+    render_lists_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    let batch = c.commit().unwrap();
+    // The page's scroll view pins them, in its offsets: the first list's
+    // row 0 from 100 until row 10 pushes it out, row 10 from 600 until its
+    // bottom meets the list's end (1100).
+    let pinned = sticky_of(&batch, 2).expect("the page's sticky cells");
+    assert!(
+        pinned.contains(&(cells[&4][bound_slot(&c, 4, 0) as usize], 100.0, 550.0)),
+        "{pinned:?}"
+    );
+    assert!(
+        pinned.contains(&(cells[&4][bound_slot(&c, 4, 10) as usize], 600.0, 1050.0)),
+        "{pinned:?}"
+    );
+    // None for the lists themselves.
+    assert_eq!(sticky_of(&batch, 4), None);
+    // The second list's rows are not bound yet (it starts at 1100, past
+    // the window); scrolled there, its row 0 joins, from 1100.
+    c.set_scroll_offset(2, point(px(0.0), px(1200.0)), 0);
+    c.commit();
+    render_lists_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    let batch = c.commit().unwrap();
+    let pinned = sticky_of(&batch, 2).expect("the page's sticky cells");
+    assert!(
+        pinned.contains(&(cells[&5][bound_slot(&c, 5, 0) as usize], 1100.0, 1550.0)),
+        "{pinned:?}"
+    );
+    assert!(
+        pinned.contains(&(cells[&4][bound_slot(&c, 4, 10) as usize], 600.0, 1050.0)),
+        "{pinned:?}"
+    );
+    // A sticky cell goes on top of its list's other cells.
+    assert!(batch.items.iter().any(|i| matches!(
+        i,
+        MountItem::Insert { parent: 5, child, before: None } if *child == cells[&5][bound_slot(&c, 5, 0) as usize]
+    )));
+    // The first list leaves the page: its cells leave the page's set, and
+    // the second list's move up with it (it now starts at 100).
+    c.apply(Op::Remove {
+        parent: 2,
+        child: 4,
+    })
+    .unwrap();
+    let batch = c.commit().unwrap();
+    let pinned = sticky_of(&batch, 2).expect("the page's sticky cells");
+    assert!(
+        pinned.iter().all(|p| cells[&5].contains(&p.0)),
+        "{pinned:?}"
+    );
+    assert!(
+        pinned.contains(&(cells[&5][bound_slot(&c, 5, 0) as usize], 100.0, 550.0)),
+        "{pinned:?}"
+    );
+}
