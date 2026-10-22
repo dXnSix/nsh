@@ -177,6 +177,7 @@ shader::UniformValue::Number.0                                   # a shader unif
 shader::nsh_buffer(scale)                                        # the screen's pixel ratio
 shader::nsh_buffer(time)                                         # time
 shader::premultiplied ->                                         # color components (0 to 1)
+shader::write_args(progress)                                     # a shader's `nsh.progress` (any number the app gives it)
 shape::SMOOTHING                                                 # a corner smoothing factor
 style::Color::to_f64 ->                                          # color components
 style::PatchValue::Number.0                                      # a generic number (a JS value, a recorded slot)
