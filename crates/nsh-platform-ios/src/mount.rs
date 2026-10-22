@@ -368,6 +368,10 @@ pub(crate) struct Mounter {
     shader_link: Retained<objc2_quartz_core::CADisplayLink>,
     /// Shader views that read `nsh.time`.
     shader_frames: Vec<NodeId>,
+    /// Shader views and effects that sample an input.
+    sampling: usize,
+    /// Pictures of shaders' inputs are due ([`Mounter::pictures_due`]).
+    pictures: bool,
     /// Parents of screens, header items and modals (which are not
     /// subviews of their parent).
     hosts: rustc_hash::FxHashMap<NodeId, NodeId>,
@@ -449,6 +453,8 @@ impl Mounter {
             frame_link: crate::animation::frame_link(&target_for_link),
             shader_link: crate::animation::shader_link(&target_for_link),
             shader_frames: Vec::new(),
+            sampling: 0,
+            pictures: false,
             hosts: Default::default(),
             dirty_stacks: Vec::new(),
             deferred_stacks: Vec::new(),
@@ -553,7 +559,11 @@ impl Mounter {
                     ViewKind::Canvas => Native::Canvas(crate::canvas::CanvasView::new(self.mtm)),
                     ViewKind::Shader => Native::Shader(Box::new(crate::shader::ShaderHost::new(
                         NshView::new(self.mtm),
+                        false,
                     ))),
+                    ViewKind::ShaderEffect => Native::Shader(Box::new(
+                        crate::shader::ShaderHost::new(NshView::new(self.mtm), true),
+                    )),
                     ViewKind::WebView => Native::Web(Box::new(WebHost::new(
                         self.mtm,
                         id,
@@ -601,7 +611,12 @@ impl Mounter {
                         .resize_with((idx + 1).next_power_of_two(), || None);
                 }
                 let modal = matches!(native, Native::Modal(_));
-                self.views[idx] = Some(Slot::new(native));
+                let mut slot = Slot::new(native);
+                // An effect's children go into the content view it hides.
+                if kind == ViewKind::ShaderEffect {
+                    slot.decor.set_effect();
+                }
+                self.views[idx] = Some(slot);
                 if modal && self.touch_listeners > 0 {
                     self.add_touch_tracker(id);
                 }
@@ -973,6 +988,16 @@ impl Mounter {
                 }
             }
             MountItem::Shader { id, fill } => self.set_shader(id, fill),
+            MountItem::ShaderInput { id } => {
+                if let Some(Slot {
+                    native: Native::Shader(host),
+                    ..
+                }) = self.slot(id)
+                {
+                    host.mark(crate::shader::CONTENT | crate::shader::BACKDROP);
+                    self.pictures_due();
+                }
+            }
             MountItem::AnimationBindings { id, bindings } => {
                 if let Some(s) = self.slot_mut(id) {
                     // Properties no longer animated fall back to the static style.
@@ -1928,6 +1953,8 @@ impl Mounter {
         if bound.is_some() {
             apply_bound_decor(s, animator);
         }
+        // The content view of an effect is made by the decoration.
+        self.sync_effect(id);
     }
 
     fn set_image(
@@ -2102,17 +2129,92 @@ impl Mounter {
             self.shader_link.setPaused(false);
         }
         // The fill follows the view's corners.
-        let content = match self.slot(id) {
+        // A fill follows the view's corners; an effect reaches beyond them.
+        let (content, effect, sampling) = match self.slot(id) {
             Some(Slot {
                 native: Native::Shader(host),
                 ..
-            }) => host.content_layer(),
-            _ => None,
+            }) => (
+                (!host.effect).then(|| host.content_layer()).flatten(),
+                host.effect,
+                host.inputs() != 0,
+            ),
+            _ => (None, false, false),
         };
         if let Some(s) = self.views.get_mut(id as usize).and_then(Option::as_mut)
+            && !effect
             && s.decor.set_shader_layer(content)
         {
             self.decorate(id);
+        }
+        if effect {
+            self.sync_effect(id);
+        }
+        self.sampling = self
+            .views
+            .iter()
+            .flatten()
+            .filter(|s| matches!(&s.native, Native::Shader(h) if h.inputs() != 0))
+            .count();
+        if sampling {
+            self.pictures_due();
+        }
+    }
+
+    /// An effect's children show through its shader only while it draws
+    /// one.
+    fn sync_effect(&self, id: NodeId) {
+        if let Some(Slot {
+            native: Native::Shader(host),
+            decor,
+            ..
+        }) = self.slot(id)
+            && host.effect
+            && let Some(content) = decor.content()
+        {
+            crate::shader::hide_children(content, host.shows());
+        }
+    }
+
+    /// Pictures of shaders' inputs are due: taken on the shader display
+    /// link's next frame (after UIKit drew what changed).
+    fn pictures_due(&mut self) {
+        self.pictures = true;
+        self.shader_link.setPaused(false);
+    }
+
+    /// The UI thread changed view `id` (an animated value, scrolling, an
+    /// image that loaded): the effects around it and every backdrop take
+    /// their pictures again.
+    fn ui_changed(&mut self, id: NodeId) {
+        if self.sampling == 0 {
+            return;
+        }
+        let mut marked = false;
+        let mut view = self.slot(id).map(|s| s.native.view().retain());
+        while let Some(v) = view {
+            if let Some(Slot {
+                native: Native::Shader(host),
+                ..
+            }) = self.slot(v.tag() as NodeId)
+                && host.effect
+                && std::ptr::eq(&*host.view as &UIView, &*v)
+            {
+                host.mark(crate::shader::CONTENT);
+                marked = true;
+            }
+            view = v.superview();
+        }
+        for slot in self.views.iter().flatten() {
+            if let Native::Shader(host) = &slot.native
+                && host.inputs() & crate::shader::BACKDROP != 0
+            {
+                host.mark(crate::shader::BACKDROP);
+                marked = true;
+            }
+        }
+        if marked {
+            self.pictures_due();
         }
     }
 
@@ -2151,8 +2253,23 @@ impl Mounter {
         }
     }
 
-    /// The shader display link fired: the shaders that read `nsh.time` draw.
+    /// The shader display link fired: the pictures due are taken and the
+    /// shaders that read `nsh.time` draw.
     pub(crate) fn shader_frame(&mut self) {
+        if std::mem::take(&mut self.pictures) {
+            let root = self
+                .slot(nsh_core::ROOT_ID)
+                .map(|s| s.native.view().retain());
+            if let Some(root) = root {
+                for slot in self.views.iter().flatten() {
+                    if let Native::Shader(host) = &slot.native
+                        && host.due()
+                    {
+                        host.take_pictures(slot.decor.content(), &root);
+                    }
+                }
+            }
+        }
         let ids = std::mem::take(&mut self.shader_frames);
         let mut keep = Vec::with_capacity(ids.len());
         for id in ids {
@@ -2169,7 +2286,7 @@ impl Mounter {
             // Kept while the view lives: it may show again.
             keep.push(id);
         }
-        if keep.is_empty() {
+        if keep.is_empty() && !self.pictures {
             self.shader_link.setPaused(true);
         }
         self.shader_frames = keep;
@@ -2218,6 +2335,7 @@ impl Mounter {
 
     pub(crate) fn image_loaded(&mut self, key: &str, result: Result<DecodedImage, String>) {
         for id in self.images.finish(key, &result) {
+            self.ui_changed(id);
             if let Some(Slot {
                 native: Native::Shader(_),
                 ..
@@ -3205,6 +3323,7 @@ impl Mounter {
 
     pub(crate) fn scrolled(&mut self, id: NodeId, offset: CGPoint) {
         self.pin_sticky(id);
+        self.ui_changed(id);
         for (_, area) in &self.areas {
             area.scrolled();
         }
@@ -3230,6 +3349,11 @@ impl Mounter {
         for &id in &self.animated {
             if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref) {
                 apply_dynamic(s, animator);
+            }
+        }
+        if self.sampling > 0 {
+            for id in self.animated.clone() {
+                self.ui_changed(id);
             }
         }
     }

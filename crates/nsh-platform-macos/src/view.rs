@@ -975,6 +975,11 @@ impl NshView {
         self.ivars().state.borrow_mut()
     }
 
+    /// Its state, to change, unless it is in use.
+    pub(crate) fn try_state_mut(&self) -> Option<RefMut<'_, ViewState>> {
+        self.ivars().state.try_borrow_mut().ok()
+    }
+
     /// Node id.
     pub(crate) fn id(&self) -> NodeId {
         self.state().id
@@ -1044,6 +1049,7 @@ impl NshView {
     pub(crate) fn set_bounds_origin(&self, x: f32, y: f32) {
         let c = self.ensure_container();
         c.setBoundsOrigin(NSPoint::new(x as CGFloat, y as CGFloat));
+        crate::shader::ui_changed(self);
     }
 
     /// Something it draws changed: content (text, canvas) is drawn again
@@ -1051,6 +1057,8 @@ impl NshView {
     pub(crate) fn changed(&self) {
         self.restyle();
         self.redraw();
+        // Shader effects around it and backdrops show it in a picture.
+        crate::shader::ui_changed(self);
     }
 
     /// Its style changed: the decoration is applied again (the content is
@@ -1078,6 +1086,9 @@ impl NshView {
         if let Some(layer) = self.content_layer() {
             layer.setNeedsDisplay();
         }
+        // An effect's picture of it is taken again (it may have been put
+        // off while out of sight, `Mounter::draw_when_shown`).
+        crate::shader::ui_changed(self);
     }
 
     /// The layer its content is drawn in (made on first use).
@@ -1174,6 +1185,7 @@ impl NshView {
     pub(crate) fn moved(&self) {
         self.place();
         crate::decor::apply(self);
+        crate::shader::ui_changed(self);
     }
 
     /// Places the view at its frame (with its parent's mirroring and its

@@ -373,6 +373,12 @@ Text (`src/text.rs`) is broken into lines here, with widths and font metrics fro
 positions computed here with a line height equal to the font's ascent + descent, so the baseline lands where layout
 put it.
 
+## Shader effects and backdrops
+
+Browsers give WebGL no pixels of the page, so `<ShaderEffect>` and `sample_backdrop` read pictures NSH paints
+itself from the elements (`nsh.js` `paintTree`), taken again on the next animation frame after the subtree (or, for a
+backdrop, the surface) changed; [shaders.md](shaders.md) has what the painter draws.
+
 ## Styles as classes
 
 No element has an inline style but its geometry (frames, a field's content box, sticky offsets, a zoomed layer, snap

@@ -655,6 +655,7 @@ pub(crate) fn draw_view(cx: &mut DrawCx<'_>, view: &NshView, parent: Mat4, origi
 /// border and outline.
 pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) {
     let state = view.state();
+    crate::shader::take_backdrop(cx, &state);
     crate::decor::draw_backdrop(cx, &state);
     crate::decor::draw_background(cx, &state);
     let clip = state.clips();
@@ -674,16 +675,20 @@ pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) {
         cx.pop();
     }
     let natives = state.natives.clone();
+    let effect = crate::shader::effect(&state);
     drop(state);
-    view.with_children(|children| {
-        for child in children {
-            let origin = {
-                let s = child.state();
-                view.state().child_origin(s.frame, s.shift)
-            };
-            draw_view(cx, child, world, origin);
-        }
-    });
+    // An effect's children are its shader's content.
+    if !effect || !crate::shader::draw_effect(cx, view, world) {
+        view.with_children(|children| {
+            for child in children {
+                let origin = {
+                    let s = child.state();
+                    view.state().child_origin(s.frame, s.shift)
+                };
+                draw_view(cx, child, world, origin);
+            }
+        });
+    }
     cx.set_transform(world);
     for native in &natives {
         let r = native.rect;

@@ -90,6 +90,15 @@ arrays element by element (constant arrays as local arrays).
 
 `<Shader src uniforms>` (TSX, from `nsh`) and `shader(source).uniforms(..)` (Rust, `nsh_core::ui`) are a host element,
 `Tag::Shader` / `ViewKind::Shader`: a view the shader fills under its children, with every style of a view.
+`<ShaderEffect src uniforms progress maxSampleOffset>` and `shader_effect(source)` are another, `Tag::ShaderEffect` /
+`ViewKind::ShaderEffect`: a view whose children draw through the shader. They are its content input
+(`sample_content`); its own background and borders draw as any view's, under the shader's result. Without `src` the
+children draw as they are. `maxSampleOffset` (points) is how far beyond a pixel the shader samples its content: the
+children are drawn that much beyond the view's bounds for it (`ShaderFill::max_offset`; the frame's area and the
+content input's rect start that far outside the view). `progress` (both elements) is `nsh.progress`: a number, or an
+animated value bound as `AnimationProp::ShaderUniform(shader::PROGRESS)`, which the platforms write into the `nsh`
+buffer instead of the uniforms. Any shader may sample what is behind its view (`sample_backdrop`): the surface's
+drawing under the view, excluding the view, its subtree and what is above it.
 
 - **Making a shader.** `createShader(source)` (`nsh-js` `shader.rs`) compiles in Rust with the VM's limits
   (`max_shader_samples`) and returns a frozen `{ uniforms: [names], __shader: id }`; a VM keeps its shaders by id and
@@ -112,6 +121,11 @@ arrays element by element (constant arrays as local arrays).
   (`MountItem::ShaderProgram`); each view then gets `MountItem::Shader { fill }` (`ShaderFill`: the program's id, the
   packed buffer, the images, whether it reads `nsh.time`) when it changes. A translation that fails is logged and the
   view draws its children only.
+- **Inputs.** `ShaderFill::inputs` says which inputs a shader samples (`ShaderFill::samples`). Platforms that draw
+  from a picture of an input take it again when it changes: the core sends `MountItem::ShaderInput { id }` after a
+  commit that changed a view in an effect's subtree (the effect included) and, once anything changed, for every shader
+  that samples the backdrop (`Core::mark_shader_inputs`, a set of the shaders with inputs, walked only while it is not
+  empty). What changes on the UI thread (animations, scrolling, loads) the platform notices itself.
 - **`shaderSupport()`** reads `Environment::shaders` (`ShaderSupport`: the language and, per kind, `Live`, `Snapshot`
   or `No`). Each platform sets it on its surface; a headless engine (`nsh test`, `ShaderLanguage::None`) says fills
   are live, sends programs (with no code) and fills, so tests check what a shader view gets.
@@ -128,6 +142,21 @@ inputs say.
 | Linux | OpenGL ES 3 in a `GdkGLContext` of its own (glow over libepoxy) into a texture, a `GdkGLTexture` with a fence | the view's snapshot, flipped as `GtkGLArea`'s | the widget's tick callback |
 | Web | WebGL 2 on one shared canvas, copied to a bitmap canvas in the view's element | the element, under its children | `requestAnimationFrame` |
 | GPUI | (draws the children) | | |
+
+Effects and backdrops, per platform:
+
+| Platform | `effect` | `backdrop` | How |
+|---|---|---|---|
+| Android 13+ | live | live | an effect records its children into a `RenderNode` (`maxSampleOffset` beyond the view) whose `RenderEffect` is the runtime shader, its content input that node; a backdrop shader runs as the render effect of a node drawing `Backdrop.java`'s recording. A render effect gives one live input: an effect that samples both reads the backdrop as transparent |
+| macOS | snapshot | snapshot | an effect's children live in a container (`NshView::ensure_container`) whose layer an empty mask hides while the shader draws (AppKit hit-tests views, so they keep their clicks); the shader's `CAMetalLayer` covers the view and `maxSampleOffset` beyond it, above the container (`decor::EFFECT`). The content is the container rendered with `renderInContext:` (without its mask) into a bitmap; the backdrop is the surface's root rendered at the view's place with the view at opacity 0. Pictures are taken on the next display frame after a `ShaderInput` or a UI-thread change (`shader::ui_changed`, from `NshView::changed` / `moved` / `redraw` and scrolling: a text drawn once it scrolls into sight is a change), all at once, and uploaded (`ShaderLayer::set_input`); layers due to draw are drawn first (`displayIfNeeded`). `renderInContext:` draws no Metal layer, video or web page; in-process screenshots hide effects' containers |
+| iOS, Mac Catalyst | snapshot | snapshot | as macOS, with the decoration's content view (`Decor::set_effect`; it neither clips nor takes the decoration's mask for an effect) hidden by an empty mask: UIKit skips views at alpha 0 in hit testing, not masked ones. The backdrop is the surface's root view (never the host app's window). Marks come from `ShaderInput`, animations, scrolling and loaded images (`Mounter::ui_changed`, which finds the effects around a view by the views' tags); pictures are taken on the shader display link's next frame |
+| Web | snapshot | snapshot | NSH paints the input itself from the elements into a 2D canvas (`nsh.js` `paintTree`: backgrounds, rounded corners, uniform borders, images by `object-fit`, canvases (other shaders' pictures), text runs at the positions NSH laid them out, clipping and opacity; no rotations, gradients or shadows; cross-origin images without CORS are left out, they would taint the picture). An effect's children are at `opacity: 0` (`.nsh-fx`; browsers hit-test them still) under its canvas (`.nsh-fx-out`, `maxSampleOffset` beyond the element); the backdrop is the surface painted up to the view (what comes after it is above it). A `MutationObserver` on the effect (on the root for backdrops) and capture-phase `scroll` / `load` listeners mark the pictures stale, taken on the next animation frame |
+| Windows | live | live | drawn with the frame: an effect's children are drawn by Direct2D into a texture of the area (the view and `maxSampleOffset` beyond it; `shader::draw_effect`, another context of the device, so what is pushed on the window's stays), not into the window; a backdrop shader's input is what the frame drew so far under the area, copied into a texture before the view draws its own background (`shader::take_backdrop`; transparent in passes drawn offscreen, for a filtered or 3D-transformed view). Both textures are bound with the images; the window is drawn again whenever anything in it changes, so the inputs are always current (`ShaderInput` needs nothing). Web views inside an effect are not in its content |
+| Linux | live | snapshot | an effect's children are drawn, whenever GTK draws the effect again (it or something in it queued a draw), into a render node of their own (`NshView::snapshot_children`, not into the frame's) that the window's renderer renders over the area (`render_texture`); the texture is downloaded and uploaded into the shaders' context. The backdrop is a picture: after the frame clock's `after-paint` that follows a mark (`ShaderInput`, `shader::ui_changed` from `NshView::changed` / `moved` and scrolling; a shader's own redraws, `NshView::redraw`, mark nothing), the surface's views are drawn anew from its root (`NshView::draw`, not GTK's render nodes of the last frame, which have the view in them) up to the view: `shader::skipped` leaves out the view and whatever draws after it, `shader::past` the borders and scroll indicators of the views around it. GTK's damage phase is left alone in that pass |
+| others | `false` | `false` | an effect draws its children as they are; `sample_backdrop` reads transparent |
+
+AGSL computes `p` as the pixel's coordinate over the scale plus `nsh_origin`, the frame area's origin, as the other
+writers' vertex stages place `p` over the area: an effect drawn beyond its view starts outside it.
 
 On every platform the fill follows the view's corners and draws above its background, gradients and inset shadows
 and below its borders, as a background does (Android draws the borders itself after the fill, `Decor.bordersAbove`,

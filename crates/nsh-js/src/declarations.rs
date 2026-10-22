@@ -190,6 +190,15 @@ export interface ShaderProps<U = ShaderUniforms> extends CommonProps, Omit<Shade
   uniforms?: U;
 }
 
+/** `<ShaderEffect>`: a view whose children draw through a shader. */
+export interface ShaderEffectProps<U = ShaderUniforms> extends CommonProps, Omit<ShaderEffectHostProps, "src" | "uniforms"> {
+  style?: StyleProp<ViewStyle>;
+  /** The shader; without one the children draw as they are. */
+  src?: ShaderAsset<U> | null;
+  /** The values of its uniforms, by name (those left out are 0). */
+  uniforms?: U;
+}
+
 /** What JS sets on a Rust component's host itself: the app's classes
  * (appended to the component's own), its inline and state styles, its test id, its
  * tooltip, layout events and the ref (`ref.command(name, args)`). */

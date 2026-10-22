@@ -633,6 +633,7 @@ fn kind_name(kind: ViewKind) -> &'static str {
         ViewKind::InputAccessory => "accessory",
         ViewKind::Canvas => "canvas",
         ViewKind::Shader => "shader",
+        ViewKind::ShaderEffect => "shadereffect",
         ViewKind::WebView => "web",
         ViewKind::Native => "native",
         ViewKind::Video => "video",
@@ -673,13 +674,22 @@ fn shader_program(program: &nsh_core::shader::ShaderProgram) -> String {
 
 /// What a shader view draws: `{ program, time, uniforms: [32-bit words],
 /// images: [[uri, size word]] }`, or `null`.
+/// A finite number for JSON (0 otherwise).
+fn finite(n: f32) -> f32 {
+    if n.is_finite() { n } else { 0.0 }
+}
+
 fn shader_fill(fill: Option<&nsh_core::shader::ShaderFill>) -> String {
     let Some(fill) = fill else {
         return "null".into();
     };
     let mut s = format!(
-        "{{\"program\":{},\"time\":{},\"uniforms\":[",
-        fill.program, fill.time
+        "{{\"program\":{},\"time\":{},\"inputs\":{},\"progress\":{},\"offset\":{},\"uniforms\":[",
+        fill.program,
+        fill.time,
+        fill.inputs,
+        finite(fill.progress),
+        finite(fill.max_offset.0)
     );
     for (i, w) in fill.uniforms.as_chunks::<4>().0.iter().enumerate() {
         if i > 0 {
@@ -1222,6 +1232,9 @@ pub(crate) fn encode(out: &mut Out, item: &MountItem) {
                 .num(program.id)
                 .raw(&shader_program(program))
                 .end();
+        }
+        MountItem::ShaderInput { id } => {
+            out.item("si").num(*id).end();
         }
         MountItem::Shader { id, fill } => {
             out.item("sh")

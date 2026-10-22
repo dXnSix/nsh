@@ -34,7 +34,7 @@ use std::{
 
 use nsh_core::{
     animation::AnimationValue,
-    geometry::{DevicePixels, Percentage, Points, Size},
+    geometry::{Bounds, DevicePixels, Percentage, Point, Points, Size},
     shader::{self, ProgramCode, ShaderFill, ShaderInput, ShaderProgram},
 };
 use objc2::{
@@ -384,7 +384,14 @@ pub struct ShaderLayer {
     args: Vec<(u16, AnimationValue)>,
     /// The images, by slot.
     textures: Vec<Option<(Id, Size<DevicePixels>)>>,
-    /// Its size in points and its scale.
+    /// Pictures of its content and of what is behind it
+    /// ([`ShaderLayer::set_input`]), by input index.
+    inputs: [Option<Picture>; 2],
+    /// `nsh.progress`.
+    progress: f32,
+    /// How far beyond the view it draws (an effect's `maxSampleOffset`).
+    offset: f64,
+    /// Its view's size in points and its scale.
     size: (f64, f64),
     scale: f64,
     /// When it first drew (`nsh.time`).
@@ -424,6 +431,9 @@ impl ShaderLayer {
             uniforms: Vec::new(),
             args: Vec::new(),
             textures: Vec::new(),
+            inputs: [None, None],
+            progress: 0.0,
+            offset: 0.0,
             size: (0.0, 0.0),
             scale: 1.0,
             started: None,
@@ -437,23 +447,91 @@ impl ShaderLayer {
         &self.layer
     }
 
-    /// The view's size in points and its scale: the layer covers it.
+    /// The view's size in points and its scale: the layer covers it (and
+    /// the offset an effect draws beyond it).
     pub fn set_frame(&mut self, width: f64, height: f64, scale: f64) -> bool {
         if self.size == (width, height) && self.scale == scale {
             return false;
         }
         self.size = (width, height);
         self.scale = scale;
-        let pixels = CGSize::new(
-            (width * scale).round().max(1.0),
-            (height * scale).round().max(1.0),
+        self.place();
+        true
+    }
+
+    /// What it draws, in points from the view's top-left: the view, and
+    /// for an effect its `maxSampleOffset` beyond it on every side.
+    pub fn area(&self) -> Bounds<Points> {
+        let (w, h) = self.size;
+        let o = self.offset;
+        Bounds::new(
+            Point::new(Points(-o as f32), Points(-o as f32)),
+            size(w + 2.0 * o, h + 2.0 * o),
+        )
+    }
+
+    /// The area's size in pixels.
+    fn pixels(&self) -> (usize, usize) {
+        let a = self.area();
+        (
+            (a.size.width.0 as f64 * self.scale).round().max(1.0) as usize,
+            (a.size.height.0 as f64 * self.scale).round().max(1.0) as usize,
+        )
+    }
+
+    /// Covers the area.
+    fn place(&self) {
+        let a = self.area();
+        let (pw, ph) = self.pixels();
+        let frame = CGRect::new(
+            CGPoint::new(a.origin.x.0 as f64, a.origin.y.0 as f64),
+            CGSize::new(a.size.width.0 as f64, a.size.height.0 as f64),
         );
         // SAFETY: `CALayer`'s and `CAMetalLayer`'s API.
         unsafe {
-            let _: () = msg_send![&*self.layer, setFrame: CGRect::new(CGPoint::ZERO, CGSize::new(width, height))];
-            let _: () = msg_send![&*self.layer, setContentsScale: scale as CGFloat];
-            let _: () = msg_send![&*self.layer, setDrawableSize: pixels];
+            let _: () = msg_send![&*self.layer, setFrame: frame];
+            let _: () = msg_send![&*self.layer, setContentsScale: self.scale as CGFloat];
+            let _: () = msg_send![&*self.layer, setDrawableSize: CGSize::new(pw as f64, ph as f64)];
         }
+    }
+
+    /// A picture of `input` (its content or what is behind it): `rgba`
+    /// premultiplied, `width` × `height` pixels top row first, lying at
+    /// `rect` (points from the view's top-left). Whether it was taken.
+    pub fn set_input(
+        &mut self,
+        input: ShaderInput,
+        rgba: &[u8],
+        width: usize,
+        height: usize,
+        rect: Bounds<Points>,
+    ) -> bool {
+        let at = match input {
+            ShaderInput::Content => 0,
+            ShaderInput::Backdrop => 1,
+            _ => return false,
+        };
+        let Some(gpu) = gpu() else { return false };
+        if width == 0 || height == 0 {
+            return false;
+        }
+        let px = Size::new(DevicePixels(width as i32), DevicePixels(height as i32));
+        // The same size: the texture is written again.
+        let reuse = self.inputs[at]
+            .as_ref()
+            .filter(|p| p.px == px)
+            .map(|p| p.texture.clone());
+        let texture = match reuse {
+            Some(t) => {
+                write_texture(&t, width, height, rgba);
+                t
+            }
+            None => match texture(&gpu.device, width, height, rgba) {
+                Some(t) => t,
+                None => return false,
+            },
+        };
+        self.inputs[at] = Some(Picture { texture, px, rect });
         true
     }
 
@@ -464,8 +542,12 @@ impl ShaderLayer {
         let mut load = Vec::new();
         if let Some(fill) = &fill {
             self.uniforms = fill.uniforms.to_vec();
-            for &(k, value) in &self.args {
-                shader::write_animated(&mut self.uniforms, k, value);
+            self.progress = fill.progress;
+            shader::write_args(&mut self.uniforms, &mut self.progress, &self.args);
+            let offset = fill.max_offset.0.max(0.0) as f64;
+            if offset != self.offset {
+                self.offset = offset;
+                self.place();
             }
             self.textures.resize(fill.images.len(), None);
             for (slot, image) in fill.images.iter().enumerate() {
@@ -485,6 +567,7 @@ impl ShaderLayer {
         } else {
             self.uniforms.clear();
             self.textures.clear();
+            self.inputs = [None, None];
         }
         self.fill = fill;
         load
@@ -499,9 +582,7 @@ impl ShaderLayer {
         self.args.clear();
         self.args.extend_from_slice(values);
         if self.fill.is_some() {
-            for &(k, value) in values {
-                shader::write_animated(&mut self.uniforms, k, value);
-            }
+            shader::write_args(&mut self.uniforms, &mut self.progress, values);
         }
         true
     }
@@ -549,6 +630,53 @@ impl ShaderLayer {
             .collect()
     }
 
+    /// The `nsh` and frame buffers of a drawing now.
+    fn buffers(&mut self) -> ([u8; shader::layout::NSH_SIZE as usize], Vec<u8>) {
+        let (width, height) = self.size;
+        let time = self
+            .started
+            .get_or_insert_with(Instant::now)
+            .elapsed()
+            .as_secs_f32();
+        let nsh = shader::nsh_buffer(
+            size(width, height),
+            self.scale as f32,
+            time,
+            Percentage(self.progress),
+        );
+        let view = Bounds::new(Point::default(), size(width, height));
+        let mut inputs: Vec<_> = self
+            .images()
+            .into_iter()
+            .map(|(slot, px)| (ShaderInput::Image(slot as u8), view, px))
+            .collect();
+        for (i, input) in [ShaderInput::Content, ShaderInput::Backdrop]
+            .into_iter()
+            .enumerate()
+        {
+            if let Some(p) = &self.inputs[i] {
+                inputs.push((input, p.rect, p.px));
+            }
+        }
+        (nsh, shader::frame_buffer_of(self.area(), &inputs))
+    }
+
+    /// The texture input `input` of the program reads.
+    fn texture_of(&self, input: ShaderInput, gpu: &Gpu) -> Id {
+        match input {
+            ShaderInput::Image(slot) => self
+                .textures
+                .get(slot as usize)
+                .cloned()
+                .flatten()
+                .map(|(t, _)| t),
+            ShaderInput::Content => self.inputs[0].as_ref().map(|p| p.texture.clone()),
+            ShaderInput::Backdrop => self.inputs[1].as_ref().map(|p| p.texture.clone()),
+            _ => None,
+        }
+        .unwrap_or_else(|| gpu.empty.clone())
+    }
+
     /// Whether it draws every frame (it reads `nsh.time`).
     pub fn draws_every_frame(&self) -> bool {
         self.fill.as_ref().is_some_and(|f| f.time)
@@ -583,18 +711,7 @@ impl ShaderLayer {
         if width <= 0.0 || height <= 0.0 {
             return;
         }
-        let time = self
-            .started
-            .get_or_insert_with(Instant::now)
-            .elapsed()
-            .as_secs_f32();
-        let nsh = shader::nsh_buffer(
-            size(width, height),
-            self.scale as f32,
-            time,
-            Percentage(0.0),
-        );
-        let frame = shader::frame_buffer(size(width, height), &self.images());
+        let (nsh, frame) = self.buffers();
         // SAFETY: Metal's API; the bytes outlive the calls that copy them
         // (`set…Bytes:` copies, a buffer is made from them).
         unsafe {
@@ -659,17 +776,8 @@ impl ShaderLayer {
             bytes("fragment", &nsh, shader_index::NSH);
             bytes("fragment", &frame, shader_index::FRAME);
             bytes("fragment", &self.uniforms, shader_index::UNIFORMS);
-            for (index, input) in pipeline.textures.iter().enumerate() {
-                let texture = match input {
-                    ShaderInput::Image(slot) => self
-                        .textures
-                        .get(*slot as usize)
-                        .cloned()
-                        .flatten()
-                        .map(|(t, _)| t),
-                    _ => None,
-                }
-                .unwrap_or_else(|| gpu.empty.clone());
+            for (index, &input) in pipeline.textures.iter().enumerate() {
+                let texture = self.texture_of(input, &gpu);
                 let _: () = msg_send![&*encoder, setFragmentTexture: &*texture, atIndex: index];
             }
             let _: () = msg_send![&*encoder, drawPrimitives: TRIANGLE_STRIP, vertexStart: 0usize, vertexCount: 4usize];
@@ -718,25 +826,11 @@ impl ShaderLayer {
         let fill = self.fill.clone()?;
         let gpu = gpu()?;
         let pipeline = gpu.pipeline(fill.program)?;
-        let (pw, ph) = (
-            (width * self.scale).round() as usize,
-            (height * self.scale).round() as usize,
-        );
-        if pw == 0 || ph == 0 {
+        if width <= 0.0 || height <= 0.0 {
             return None;
         }
-        let time = self
-            .started
-            .get_or_insert_with(Instant::now)
-            .elapsed()
-            .as_secs_f32();
-        let nsh = shader::nsh_buffer(
-            size(width, height),
-            self.scale as f32,
-            time,
-            Percentage(0.0),
-        );
-        let frame = shader::frame_buffer(size(width, height), &self.images());
+        let (pw, ph) = self.pixels();
+        let (nsh, frame) = self.buffers();
         // SAFETY: Metal's API, as `draw`'s; the target is shared storage
         // (readable once the command buffer completed).
         unsafe {
@@ -778,17 +872,8 @@ impl ShaderLayer {
             set(&nsh, shader_index::NSH, false);
             set(&frame, shader_index::FRAME, false);
             set(&self.uniforms, shader_index::UNIFORMS, false);
-            for (index, input) in pipeline.textures.iter().enumerate() {
-                let texture = match input {
-                    ShaderInput::Image(slot) => self
-                        .textures
-                        .get(*slot as usize)
-                        .cloned()
-                        .flatten()
-                        .map(|(t, _)| t),
-                    _ => None,
-                }
-                .unwrap_or_else(|| gpu.empty.clone());
+            for (index, &input) in pipeline.textures.iter().enumerate() {
+                let texture = self.texture_of(input, &gpu);
                 let _: () = msg_send![&*encoder, setFragmentTexture: &*texture, atIndex: index];
             }
             let _: () = msg_send![&*encoder, drawPrimitives: TRIANGLE_STRIP, vertexStart: 0usize, vertexCount: 4usize];
@@ -813,6 +898,33 @@ impl ShaderLayer {
             }
             Some((pw, ph, bgra))
         }
+    }
+}
+
+/// A picture of an input, in a texture.
+struct Picture {
+    texture: Id,
+    px: Size<DevicePixels>,
+    /// Where it lies, in points from the view's top-left.
+    rect: Bounds<Points>,
+}
+
+/// Writes `rgba` (`width` × `height` pixels, top row first) into `texture`.
+fn write_texture(texture: &AnyObject, width: usize, height: usize, rgba: &[u8]) {
+    let region = Region {
+        origin: Triple(0, 0, 0),
+        size: Triple(width, height, 1),
+    };
+    // SAFETY: `MTLTexture`'s API; `rgba` holds `width * height * 4` bytes and
+    // the texture has that size.
+    unsafe {
+        let _: () = msg_send![
+            texture,
+            replaceRegion: region,
+            mipmapLevel: 0usize,
+            withBytes: rgba.as_ptr().cast::<c_void>(),
+            bytesPerRow: width * 4
+        ];
     }
 }
 

@@ -332,6 +332,11 @@ impl Mounter {
                     crate::shader::set(surface, view, fill.clone());
                 }
             }
+            MountItem::ShaderInput { id } => {
+                if let Some(view) = self.get(*id) {
+                    crate::shader::input_changed(surface, view);
+                }
+            }
             MountItem::Gestures { id, values } => {
                 if let Some(view) = self.get(*id) {
                     crate::input::gestures(surface, view, *values);
