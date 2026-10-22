@@ -1,9 +1,11 @@
-import { createShader, Shader, shaderSupport, signal, Text, View } from "nsh";
+import { createShader, Shader, ShaderEffect, shaderSupport, signal, Text, View } from "nsh";
 import { createAnimatedValue, Easing } from "nsh/animated";
 import logo from "../logo@2x.png";
 import { Button, Caption, Card, colors, DemoPage, Legend, Segmented } from "../ui";
 import aurora from "./shaders/aurora.wgsl";
+import frost from "./shaders/frost.wgsl";
 import ripple from "./shaders/ripple.wgsl";
+import wave from "./shaders/wave.wgsl";
 
 // ---------------------------------------------------------------------------
 // A `.wgsl` import that reads `nsh.time`: it draws every frame while it is
@@ -97,6 +99,65 @@ function Ripple() {
 }
 
 // ---------------------------------------------------------------------------
+// A `<ShaderEffect>`: its children are the shader's content, bent by a wave
+// that `progress` (animated) moves along. They stay what they are: the
+// button inside still takes presses.
+
+function Wave() {
+  const progress = createAnimatedValue(0);
+  const taps = signal(0);
+  const run = () => {
+    progress.set(0);
+    progress.timing(1, { duration: 1800, easing: Easing.inOut(Easing.quad) });
+  };
+  return (
+    <Card icon="spark" title="Wave" subtitle="ShaderEffect: children drawn through a shader">
+      <ShaderEffect src={wave} uniforms={{ amount: 12 }} progress={progress} maxSampleOffset={14}>
+        <View style={{ padding: 16, gap: 10, borderRadius: 12, backgroundColor: "#0ea5e9" }}>
+          <Text style={{ fontSize: 20, fontWeight: "700", color: "#ffffff" }}>Through a shader</Text>
+          <Text style={{ fontSize: 13, color: "rgba(255,255,255,0.85)" }}>The views keep their presses</Text>
+          <View style={{ flexDirection: "row" }}>
+            <Button label={`Tapped ${taps()}×`} onPress={() => taps.set(taps() + 1)} />
+          </View>
+        </View>
+      </ShaderEffect>
+      <View style={{ flexDirection: "row" }}>
+        <Button label="Bend" icon="spark" onPress={run} />
+      </View>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// A shader that samples what is behind its view (`sample_backdrop`):
+// frosted glass over stripes and a title, its own children drawn over it.
+
+function Frost() {
+  return (
+    <Card icon="spark" title="Frosted glass" subtitle="sample_backdrop: what is behind the view">
+      <View style={{ height: 180, borderRadius: 12, overflow: "hidden" }}>
+        <View style={{ position: "absolute", left: 0, top: 0, right: 0, bottom: 0, flexDirection: "row" }}>
+          <View style={{ flex: 1, backgroundColor: "#f43f5e" }} />
+          <View style={{ flex: 1, backgroundColor: "#facc15" }} />
+          <View style={{ flex: 1, backgroundColor: "#22c55e" }} />
+          <View style={{ flex: 1, backgroundColor: "#6366f1" }} />
+        </View>
+        <Text style={{ position: "absolute", left: 20, top: 72, fontSize: 26, fontWeight: "800", color: "#111111" }}>
+          BEHIND THE GLASS
+        </Text>
+        <Shader
+          src={frost}
+          uniforms={{ tint: "rgba(255,255,255,0.25)", radius: 7 }}
+          style={{ position: "absolute", left: 36, top: 30, right: 36, bottom: 30, borderRadius: 18, padding: 12 }}
+        >
+          <Text style={{ fontSize: 14, fontWeight: "600", color: "#111111" }}>Frosted backdrop</Text>
+        </Shader>
+      </View>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // What this platform draws: a view a shader fills shows its children alone
 // where shaders do not draw.
 
@@ -115,5 +176,5 @@ function Support() {
 }
 
 export function ShaderDemo() {
-  return <DemoPage cards={[Aurora, Spotlight, Ripple, Support]} />;
+  return <DemoPage cards={[Aurora, Spotlight, Ripple, Wave, Frost, Support]} />;
 }
