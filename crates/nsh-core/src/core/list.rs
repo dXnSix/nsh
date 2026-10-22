@@ -18,11 +18,16 @@
 //! index. The engine runs at most 8 "bind → JS → layout" rounds per frame,
 //! merged into one batch. Row-local state travels with recycled cells, so
 //! apps keep it outside, keyed by id. Unbound cells keep their last content:
-//! the core moves them out of sight (never with a NaN frame; cells never
-//! placed are skipped). The header, footer and empty placeholder are cells
-//! with a role (`slot="header"`, ...) and are never recycled. Each cell is a
-//! Taffy root of its own (its width follows the list's cross axis), so
-//! scrolling relays out dirty cells only.
+//! the core moves those in the render window out of sight (never with a NaN
+//! frame; cells never placed are skipped) and hides them (`visibility:
+//! hidden` and `accessibilityElementsHidden`, so neither touches nor screen
+//! readers reach them) until they are placed again, as it hides the cells
+//! never placed and, once the items change, every unbound one. The few the
+//! window leaves behind while scrolling show their own rows where those
+//! are, and are soon reused. The header, footer and empty placeholder are
+//! cells with a role (`slot="header"`, ...) and are never recycled. Each
+//! cell is a Taffy root of its own (its width follows the list's cross
+//! axis), so scrolling relays out dirty cells only.
 //!
 //! # Scroll commands
 //!
@@ -296,6 +301,9 @@ pub(super) struct ListState {
     /// Cells whose item moved to another index (a splice): the runtime
     /// learns their new index with the next bindings.
     moved: Vec<(u32, u32)>,
+    /// The items changed (a splice, a new count) since the core last
+    /// hid the cells without an item: the rows those show may be gone.
+    pub(super) items_changed: bool,
     /// Scroll that keeps the visible content in place after a splice.
     splice_anchor: f32,
     /// The target of the last scroll command, until it is reached with
@@ -355,6 +363,7 @@ impl ListState {
             issued: 0,
             pending: Vec::new(),
             moved: Vec::new(),
+            items_changed: false,
             splice_anchor: 0.0,
             pin: None,
             parent: false,
@@ -458,6 +467,7 @@ impl ListState {
         if removed == 0 && inserted == 0 {
             return;
         }
+        self.items_changed = true;
         // The visible content keeps its place instead.
         self.pin = None;
         // The first visible item and where it is in the viewport.
@@ -838,6 +848,7 @@ impl ListState {
             return;
         }
         self.count = count;
+        self.items_changed = true;
         self.sizes.resize(count as usize, f32::NAN);
         self.rebuild_offsets();
         if self.load_more_at.is_some_and(|c| c != count) {

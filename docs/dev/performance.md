@@ -30,6 +30,11 @@ coalescing interval, with the latest coordinates kept independently per view and
   the rows match their estimates). Lists of their own pay nothing for it: `Bench.tsx --scroll 3000` and the
   gallery's Lists pages send the same mount items in every commit before and after (1226 ops / 1029 items first,
   1064 ops / 914 items over 39 scrolling commits), with commit times within the run-to-run spread.
+- Hiding spare list cells (`Core::set_spare`: a `ViewStyle` and a `ViewProps` per cell, once until it is placed
+  again) costs scrolling nothing: the cells the window leaves behind are not hidden, and `Bench.tsx --scroll 3000`
+  sends the same 1064 ops / 914 items over 39 commits, the Lists › Page tab scrolled 3000 pt the same 740 ops /
+  701 items over 50 commits (debug, headless). A list whose estimates are short sends two items for each cell it
+  made in excess on its first frame (opening Lists: 928 items instead of 916).
 - On Catalyst (release), rebinding one row while scrolling slowly takes ~0.4ms (clocked down) and rebinding a whole screen of ~32 rows on a
   fast fling 0.9–1.6ms.
 - Host startup (`Host::new`, release): ~75–155µs (clock state). The web APIs add nothing until first used, then ~90µs to
