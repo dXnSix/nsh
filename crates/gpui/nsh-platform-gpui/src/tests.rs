@@ -12,7 +12,7 @@ use gpui::{
     VisualTestContext, Window, div,
 };
 
-use crate::{App, AppOptions, AppView, Bundle, NativeComponent};
+use crate::{App, AppOptions, AppView, Bundle, NativeComponent, Root};
 
 /// A native component that only draws a box.
 struct Square;
