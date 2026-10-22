@@ -1254,7 +1254,8 @@ impl Nav {
                 tail.push(Retained::into_super(image.fill.clone()));
             }
         }
-        keep_last(surface.root.ns(), &tail);
+        // Into the root's container when a screen effect gave it one.
+        keep_last(&surface.root.container(), &tail);
     }
 
     /// Sizes modal `id` to the surface and reports it (with the surface's

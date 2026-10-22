@@ -186,6 +186,10 @@ impl Surface {
             support.effect = nsh_core::shader::Support::Live;
             support.backdrop = nsh_core::shader::Support::Live;
             support.transition = nsh_core::shader::Support::Live;
+            // The root draws through the screen effect, its children live;
+            // a screen transition draws recordings of the root.
+            support.screen_effect = nsh_core::shader::Support::Live;
+            support.screen_transition = nsh_core::shader::Support::Snapshot;
             support
         };
         let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);

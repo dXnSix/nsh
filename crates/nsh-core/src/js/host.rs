@@ -122,6 +122,8 @@ pub fn element_bits(tag: crate::Tag) -> u32 {
             Tag::Shader => on::SHADER,
             Tag::ShaderEffect => on::SHADER_EFFECT,
             Tag::ShaderTransition => on::SHADER_TRANSITION,
+            Tag::ScreenEffect => on::SCREEN_EFFECT,
+            Tag::ScreenTransition => on::SCREEN_TRANSITION,
             Tag::View
             | Tag::Cell
             | Tag::Stack
@@ -176,6 +178,10 @@ pub mod on {
     pub const SHADER_EFFECT: u32 = 1 << 14;
     /// `<shadertransition>`.
     pub const SHADER_TRANSITION: u32 = 1 << 15;
+    /// `<screeneffect>`.
+    pub const SCREEN_EFFECT: u32 = 1 << 16;
+    /// `<screentransition>`.
+    pub const SCREEN_TRANSITION: u32 = 1 << 17;
     /// Set by the runtime itself, not part of the elements' types.
     pub const INTERNAL: u32 = 1 << 31;
 }
@@ -858,6 +864,12 @@ const GROUPS: &[(u32, &str, &str)] = &[
         on::SHADER_TRANSITION,
         "ShaderTransition",
         "`<ShaderTransition>`",
+    ),
+    (on::SCREEN_EFFECT, "ScreenEffect", "`<ScreenEffect>`"),
+    (
+        on::SCREEN_TRANSITION,
+        "ScreenTransition",
+        "`<ScreenTransition>`",
     ),
 ];
 

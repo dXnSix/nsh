@@ -329,17 +329,29 @@ impl Mounter {
             MountItem::ShaderProgram { program } => crate::shader::program(program),
             MountItem::Shader { id, fill } => {
                 if let Some(view) = self.get(*id) {
-                    crate::shader::set(surface, view, fill.clone());
+                    if is_screen(view) {
+                        crate::screen::set(surface, view, fill.clone());
+                    } else {
+                        crate::shader::set(surface, view, fill.clone());
+                    }
                 }
             }
             MountItem::ShaderInput { id } => {
                 if let Some(view) = self.get(*id) {
-                    crate::shader::input_changed(surface, view);
+                    if is_screen(view) {
+                        crate::screen::input_changed(surface, view);
+                    } else {
+                        crate::shader::input_changed(surface, view);
+                    }
                 }
             }
             MountItem::ShaderTransition { id, duration } => {
                 if let Some(view) = self.get(*id) {
-                    crate::shader::start_transition(surface, view, *duration);
+                    if is_screen(view) {
+                        crate::screen::start_transition(surface, view, *duration);
+                    } else {
+                        crate::shader::start_transition(surface, view, *duration);
+                    }
                 }
             }
             MountItem::Gestures { id, values } => {
@@ -465,4 +477,12 @@ impl Mounter {
             other => crate::system::command(surface, id, other),
         }
     }
+}
+
+/// A screen effect or transition: a shader over the whole surface.
+fn is_screen(view: &NshView) -> bool {
+    matches!(
+        view.kind(),
+        nsh_core::ViewKind::ScreenEffect | nsh_core::ViewKind::ScreenTransition
+    )
 }

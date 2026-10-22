@@ -255,6 +255,71 @@ import reveal from "./reveal.wgsl";
 </NavPage>;
 ```
 
+## 经过着色器的整个屏幕
+
+`<ScreenEffect>` 让整个界面经过着色器绘制：界面显示的内容（页面、对话框和浮层）是着色器的 `sample_content(p)`，`p` 以点为单位、从界面左上角算起，`nsh.size` 是界面的尺寸，显示出来的是着色器的结果。视图留在原处：照常布局、接收触摸和点击，并保留在无障碍树中。`<ScreenTransition>` 在 `value` 变化时让整个界面经过着色器变化，就像 `<ShaderTransition>` 对它的子元素那样：界面之前的样子是 `sample_from(p)`，现在的样子是 `sample_to(p)`，`nsh.progress` 在 `duration` 毫秒（默认 300）内从 0 变到 1；没有 `src` 时运行它的 `fallback`。两者都可以在任何地方声明，不占空间，也没有子元素；没有 `src` 的屏幕效果让界面保持原样，有多个屏幕效果时，由最后创建的那个绘制。它们绘制的是这个界面，绝不包括外面的宿主应用。
+
+主题经过一个从用户按下的位置扩大的圆变化：
+
+```rust tabs
+static REVEAL: LazyLock<ShaderSource> = LazyLock::new(|| {
+    ShaderSource::new(include_str!("reveal-at.wgsl"), &ShaderLimits::default()).expect("a shader")
+});
+
+let dark = signal(false);
+
+v_flex()
+    .child(
+        screen_transition(Some(REVEAL.clone()))
+            .value(move || TransitionKey::from(dark.get()))
+            .uniforms(Uniforms::new().set("center", [40.0, 80.0]))
+            .duration(Duration::from_millis(600)),
+    )
+    .child(settings(dark))
+```
+
+```tsx tabs
+import { ScreenTransition, signal } from "nsh";
+import reveal from "./reveal-at.wgsl";
+
+const dark = signal(false);
+
+<>
+  <ScreenTransition src={reveal} value={dark()} uniforms={{ center: { x: 40, y: 80 } }} duration={600} />
+  <Settings dark={dark} />
+</>;
+```
+
+```wgsl
+// reveal-at.wgsl：新的一侧从 `center` 以圆形扩大。
+struct Uniforms { center: vec2f }
+
+fn main(p: vec2f, u: Uniforms) -> vec4f {
+  let r = length(nsh.size) * nsh.progress;
+  let edge = smoothstep(r - 2.0, r + 2.0, length(p - u.center));
+  return mix(sample_to(p), sample_from(p), edge);
+}
+```
+
+以及整个界面变为灰度，越靠近边缘越暗：
+
+```tsx
+import { ScreenEffect } from "nsh";
+import vignette from "./vignette.wgsl";
+
+<ScreenEffect src={calm() ? vignette : null} />;
+```
+
+```wgsl
+// vignette.wgsl
+fn main(p: vec2f) -> vec4f {
+  let c = sample_content(p);
+  let l = dot(c.rgb, vec3f(0.2126, 0.7152, 0.0722));
+  let v = 1.0 - 0.6 * smoothstep(0.3, 0.9, length(p / nsh.size - 0.5) * 1.4);
+  return vec4f(vec3f(l) * v, c.a);
+}
+```
+
 ## 属性
 
 着色器视图接受[视图](./view.md)的属性（样式、子元素、按压和手势属性、`onLayout`、无障碍、`ref` 等），另外还有：
@@ -279,9 +344,11 @@ import reveal from "./reveal.wgsl";
 | `duration` | `.duration(Duration)` | `number` | 过渡持续的时间，单位为毫秒（300）。 |
 | `fallback` | `.fallback(TransitionFallback)` | `"fade" \| "none"` | 没有 `src` 时运行的内容：交叉淡入淡出（默认）或不做过渡。 |
 
+屏幕效果接受可省略的 `src`（`screen_effect(Some(source))`，`None` 表示没有）、`uniforms` 和 `progress`；屏幕过渡接受可省略的 `src`（`screen_transition(Some(source))`）、`uniforms`、`value`、`duration` 和 `fallback`，与着色器过渡相同。两者都不接受样式和子元素。
+
 ## 支持情况
 
-`nsh` 的 `shaderSupport()` 说明平台绘制什么：`{ fill, backdrop, effect, transition }`，每项为 `"live"`、`"snapshot"` 或 `false`。`fill` 对应 `<Shader>`：在 iOS、Mac Catalyst、macOS、Android 13 及以上、Windows、Linux 和 Web 上为 `"live"`。`effect` 对应 `<ShaderEffect>`，`backdrop` 对应采样视图背后内容的着色器：在 Android 13 及以上和 Windows 上为 `"live"`，在 iOS、Mac Catalyst、macOS 和 Web 上为 `"snapshot"`：那里着色器读取输入的一张图片，输入变化时重新拍下。在 Linux 上 `effect` 为 `"live"`，`backdrop` 为 `"snapshot"`。`transition` 对应 `<ShaderTransition>` 以及页面和对话框的着色器动画：在 Android 13 及以上、Windows 和 Linux 上为 `"live"`，在 iOS、Mac Catalyst、macOS 和 Web 上为 `"snapshot"`；为 `false` 时，子元素立即变化，页面和对话框使用平台自己的过渡（对话框淡入淡出）。`fill` 为 `false` 时，着色器视图显示它的子元素和自身样式，因此把内容放在着色器之上的布局在所有平台上读起来都一样；`effect` 为 `false` 时，效果按原样显示子元素；`backdrop` 为 `false` 时，`sample_backdrop` 读到透明。
+`nsh` 的 `shaderSupport()` 说明平台绘制什么：`{ fill, backdrop, effect, transition, screenEffect, screenTransition }`，每项为 `"live"`、`"snapshot"` 或 `false`。`fill` 对应 `<Shader>`：在 iOS、Mac Catalyst、macOS、Android 13 及以上、Windows、Linux 和 Web 上为 `"live"`。`effect` 对应 `<ShaderEffect>`，`backdrop` 对应采样视图背后内容的着色器：在 Android 13 及以上和 Windows 上为 `"live"`，在 iOS、Mac Catalyst、macOS 和 Web 上为 `"snapshot"`：那里着色器读取输入的一张图片，输入变化时重新拍下。在 Linux 上 `effect` 为 `"live"`，`backdrop` 为 `"snapshot"`。`transition` 对应 `<ShaderTransition>` 以及页面和对话框的着色器动画：在 Android 13 及以上、Windows 和 Linux 上为 `"live"`，在 iOS、Mac Catalyst、macOS 和 Web 上为 `"snapshot"`；为 `false` 时，子元素立即变化，页面和对话框使用平台自己的过渡（对话框淡入淡出）。`screenEffect` 对应 `<ScreenEffect>`：在 Android 13 及以上、Windows 和 Linux 上为 `"live"`，在 iOS、Mac Catalyst、macOS 和 Web 上为 `"snapshot"`。`screenTransition` 对应 `<ScreenTransition>`：在 iOS、Mac Catalyst、macOS、Android 13 及以上、Windows、Linux 和 Web 上为 `"snapshot"`；为 `false` 时，界面立即变化。`fill` 为 `false` 时，着色器视图显示它的子元素和自身样式，因此把内容放在着色器之上的布局在所有平台上读起来都一样；`effect` 为 `false` 时，效果按原样显示子元素；`backdrop` 为 `false` 时，`sample_backdrop` 读到透明。
 
 ```tsx
 import { shaderSupport } from "nsh";
@@ -300,3 +367,4 @@ const fancy = shaderSupport().fill !== false;
 - Windows 用 Direct3D 11 渲染到一张由 Direct2D 绘制的纹理。效果的子元素和背景着色器背后的内容随每一帧绘制到纹理中，因此两者都实时读取输入，过渡的新一侧也是如此；它的旧一侧在开始时绘制一次。
 - Linux 用 OpenGL ES 3 渲染到一张由 GTK 绘制的纹理。效果在它绘制的每一帧渲染其子元素，过渡的新一侧也是如此（旧一侧在开始时渲染一次）；背景着色器读取视图背后内容的一张图片，内容变化后的下一帧重新拍下。
 - Web 用 WebGL 2 渲染到视图元素中的一个 canvas。效果和背景读取 NSH 根据元素绘制的一张图片（背景、圆角、边框、图片、canvas 和文字），元素变化后的下一帧重新绘制，过渡的两侧也是如此。
+- 屏幕效果绘制在界面的根视图及其对话框之上，它们照常接收触摸：在 iOS 和 Mac Catalyst 上覆盖窗口中界面所在的区域，包括 UIKit 呈现的对话框及其周围由 UIKit 绘制的内容；在 Android 上作为应用视图和每个对话框窗口的渲染效果，实时读取；在 macOS、Windows、Linux 和 Web 上，根视图包含界面的全部内容。页面、对话框或屏幕经过着色器的过渡也属于屏幕效果显示的内容。屏幕过渡在变化前后拍下同一区域的图片。

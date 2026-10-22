@@ -147,6 +147,10 @@ pub struct ShaderSupport {
     pub effect: Support,
     /// Shader transitions.
     pub transition: Support,
+    /// `<ScreenEffect>`: the whole surface drawn through a shader.
+    pub screen_effect: Support,
+    /// `<ScreenTransition>`: the whole surface changing through a shader.
+    pub screen_transition: Support,
 }
 
 impl ShaderSupport {
@@ -158,6 +162,8 @@ impl ShaderSupport {
             backdrop: Support::No,
             effect: Support::No,
             transition: Support::No,
+            screen_effect: Support::No,
+            screen_transition: Support::No,
         }
     }
 }

@@ -50,6 +50,7 @@ fn start(app: &str) -> (Engine, crossbeam_channel::Receiver<MountBatch>) {
     // A platform that draws transitions: they start.
     let mut shaders = ShaderSupport::fills(ShaderLanguage::None);
     shaders.transition = nsh_core::shader::Support::Snapshot;
+    shaders.screen_transition = nsh_core::shader::Support::Snapshot;
     let environment = Environment {
         shaders,
         ..Environment::default()
@@ -254,7 +255,9 @@ fn create_shader_checks_its_source_and_shader_support_says_what_draws() {
     );
     assert!(line.contains(r#"["color","radius","center"]"#), "{line}");
     assert!(
-        line.contains(r#"{"fill":"live","backdrop":false,"effect":false,"transition":"snapshot"}"#),
+        line.contains(
+            r#"{"fill":"live","backdrop":false,"effect":false,"transition":"snapshot","screenEffect":false,"screenTransition":"snapshot"}"#
+        ),
         "{line}"
     );
 }
@@ -503,4 +506,99 @@ fn pages_and_dialogs_take_a_shader_as_their_animation() {
     // shaders draw no transitions.
     assert_eq!(shader.duration, Duration::from_millis(350));
     assert_eq!(modal.animation, nsh_core::ModalAnimation::Fade);
+}
+
+const SCREEN: &str = r##"import { mount, createShader, ScreenEffect, ScreenTransition, signal, Text, View } from "nsh";
+
+const tint = createShader("fn main(p: vec2f) -> vec4f { return sample_content(p) * 0.5; }");
+const wipe = createShader("fn main(p: vec2f) -> vec4f { return select(sample_from(p), sample_to(p), p.x < nsh.size.x * nsh.progress); }");
+const page = signal(0);
+const second = signal(true);
+setTimeout(() => page.set(1), 50);
+setTimeout(() => second.set(false), 150);
+
+mount(() => (
+  <View style={{ flexDirection: "row" }}>
+    <ScreenEffect src={tint} />
+    <Text>{`page ${page()}`}</Text>
+    {second() ? <ScreenEffect src={tint} /> : null}
+    <ScreenTransition src={wipe} value={page()} />
+  </View>
+));
+"##;
+
+#[test]
+fn screen_shaders_take_no_space_and_one_effect_draws() {
+    let (_engine, rx) = start(SCREEN);
+    let mut batches = Vec::new();
+    while let Ok(batch) = rx.recv_timeout(Duration::from_millis(500)) {
+        batches.push(batch.items);
+    }
+    let items: Vec<&MountItem> = batches.iter().flatten().collect();
+    let made = |kind: ViewKind| -> Vec<_> {
+        items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::Create { id, kind: k } if *k == kind => Some(*id),
+                _ => None,
+            })
+            .collect()
+    };
+    let effects = made(ViewKind::ScreenEffect);
+    let transitions = made(ViewKind::ScreenTransition);
+    assert_eq!((effects.len(), transitions.len()), (2, 1), "{items:?}");
+    // They take no space where they are declared.
+    for id in effects.iter().chain(&transitions) {
+        for frame in items.iter().filter_map(|i| match i {
+            MountItem::Frame { id: of, frame } if of == id => Some(frame),
+            _ => None,
+        }) {
+            assert_eq!(frame.size, Size::default(), "{id}: {items:?}");
+        }
+    }
+    let fills = |id| -> Vec<bool> {
+        items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::Shader { id: of, fill } if *of == id => Some(fill.is_some()),
+                _ => None,
+            })
+            .collect()
+    };
+    // The last one made draws; once it is gone, the first one does.
+    assert_eq!(fills(effects[1]), [true], "{items:?}");
+    assert_eq!(fills(effects[0]), [true], "{items:?}");
+    let handed = items
+        .iter()
+        .position(|i| matches!(i, MountItem::Shader { id, fill: Some(_) } if *id == effects[0]))
+        .unwrap();
+    let gone = items
+        .iter()
+        .position(|i| matches!(i, MountItem::Remove { id } | MountItem::Delete { id } if *id == effects[1]))
+        .expect("the second effect goes");
+    assert!(handed > gone, "{items:?}");
+    // A change anywhere in the surface is a change of its input.
+    let change = batches
+        .iter()
+        .find(|b| {
+            b.iter()
+                .any(|i| matches!(i, MountItem::ShaderTransition { .. }))
+        })
+        .expect("the batch of the change");
+    assert!(
+        matches!(change[0], MountItem::ShaderTransition { id, duration } if id == transitions[0] && duration == Duration::from_millis(300)),
+        "{change:?}"
+    );
+    assert!(
+        change
+            .iter()
+            .any(|i| matches!(i, MountItem::ShaderInput { id } if *id == effects[1])),
+        "{change:?}"
+    );
+    assert!(
+        change
+            .iter()
+            .any(|i| matches!(i, MountItem::ShaderInput { id } if *id == transitions[0])),
+        "{change:?}"
+    );
 }

@@ -287,6 +287,79 @@ import reveal from "./reveal.wgsl";
 </NavPage>;
 ```
 
+## The whole screen through a shader
+
+`<ScreenEffect>` draws the whole surface through a shader: what it shows (its pages, dialogs and overlays) is the
+shader's `sample_content(p)`, `p` in points from the surface's top-left, `nsh.size` the surface's size, and the
+shader's result is what shows. The views stay where they are: they lay out, take touches and clicks and stay in the
+accessibility tree. `<ScreenTransition>` changes the whole surface through a shader when its `value` changes, as
+`<ShaderTransition>` does its children: the surface as it showed is `sample_from(p)`, as it shows now `sample_to(p)`,
+and `nsh.progress` goes from 0 to 1 over `duration` milliseconds (300 by default); without `src` it runs its
+`fallback`. Both are declared anywhere, take no space and have no children; a screen effect without `src` leaves the
+surface as it is, and of several screen effects the last one made draws. What they draw is the surface: never the
+app around it.
+
+A theme that changes through a circle growing from where the user pressed:
+
+```rust tabs
+static REVEAL: LazyLock<ShaderSource> = LazyLock::new(|| {
+    ShaderSource::new(include_str!("reveal-at.wgsl"), &ShaderLimits::default()).expect("a shader")
+});
+
+let dark = signal(false);
+
+v_flex()
+    .child(
+        screen_transition(Some(REVEAL.clone()))
+            .value(move || TransitionKey::from(dark.get()))
+            .uniforms(Uniforms::new().set("center", [40.0, 80.0]))
+            .duration(Duration::from_millis(600)),
+    )
+    .child(settings(dark))
+```
+
+```tsx tabs
+import { ScreenTransition, signal } from "nsh";
+import reveal from "./reveal-at.wgsl";
+
+const dark = signal(false);
+
+<>
+  <ScreenTransition src={reveal} value={dark()} uniforms={{ center: { x: 40, y: 80 } }} duration={600} />
+  <Settings dark={dark} />
+</>;
+```
+
+```wgsl
+// reveal-at.wgsl: the new side grows in a circle from `center`.
+struct Uniforms { center: vec2f }
+
+fn main(p: vec2f, u: Uniforms) -> vec4f {
+  let r = length(nsh.size) * nsh.progress;
+  let edge = smoothstep(r - 2.0, r + 2.0, length(p - u.center));
+  return mix(sample_to(p), sample_from(p), edge);
+}
+```
+
+And the whole surface in grayscale, darker toward its edges:
+
+```tsx
+import { ScreenEffect } from "nsh";
+import vignette from "./vignette.wgsl";
+
+<ScreenEffect src={calm() ? vignette : null} />;
+```
+
+```wgsl
+// vignette.wgsl
+fn main(p: vec2f) -> vec4f {
+  let c = sample_content(p);
+  let l = dot(c.rgb, vec3f(0.2126, 0.7152, 0.0722));
+  let v = 1.0 - 0.6 * smoothstep(0.3, 0.9, length(p / nsh.size - 0.5) * 1.4);
+  return vec4f(vec3f(l) * v, c.a);
+}
+```
+
 ## Props
 
 A shader view takes the props of a [view](./view.md) (styles, children, press and gesture props, `onLayout`,
@@ -313,16 +386,24 @@ A shader transition takes the props of a view, `uniforms` and `maxSampleOffset` 
 | `duration` | `.duration(Duration)` | `number` | How long a transition runs, in milliseconds (300). |
 | `fallback` | `.fallback(TransitionFallback)` | `"fade" \| "none"` | What it runs without `src`: a cross-fade (the default) or nothing. |
 
+A screen effect takes an optional `src` (`screen_effect(Some(source))`, `None` for none), `uniforms` and `progress`;
+a screen transition an optional `src` (`screen_transition(Some(source))`), `uniforms`, `value`, `duration` and
+`fallback`, as a shader transition does. Neither takes styles or children.
+
 ## Support
 
-`shaderSupport()` from `nsh` says what the platform draws: `{ fill, backdrop, effect, transition }`, each `"live"`,
+`shaderSupport()` from `nsh` says what the platform draws: `{ fill, backdrop, effect, transition, screenEffect,
+screenTransition }`, each `"live"`,
 `"snapshot"` or `false`. `fill` is `<Shader>`: `"live"` on iOS, Mac Catalyst, macOS, Android 13 and later, Windows,
 Linux and the web. `effect` is `<ShaderEffect>` and `backdrop` a shader that samples what is behind it: `"live"` on
 Android 13 and later and Windows, and `"snapshot"` on iOS, Mac Catalyst, macOS and the web: there the shader reads a picture of its input, taken again when it
 changes. On Linux `effect` is `"live"` and `backdrop` `"snapshot"`. `transition` is `<ShaderTransition>` and the
 pages' and dialogs' shader animations: `"live"` on Android 13 and later, Windows and Linux, `"snapshot"` on iOS, Mac
 Catalyst, macOS and the web; where it is `false`, the children change at once, and pages and dialogs come and go with
-the platform's own transition (a dialog fades). Where `fill` is `false`, a shader view shows its children and its own styles, so a layout that
+the platform's own transition (a dialog fades). `screenEffect` is `<ScreenEffect>`: `"live"` on Android 13 and later,
+Windows and Linux, `"snapshot"` on iOS, Mac Catalyst, macOS and the web. `screenTransition` is `<ScreenTransition>`:
+`"snapshot"` on iOS, Mac Catalyst, macOS, Android 13 and later, Windows, Linux and the web; where it is `false`, the
+surface changes at once. Where `fill` is `false`, a shader view shows its children and its own styles, so a layout that
 puts content over a shader reads the same everywhere; where `effect` is `false`, an effect shows its children as they
 are, and where `backdrop` is `false`, `sample_backdrop` reads transparent.
 
@@ -358,3 +439,9 @@ a shader takes up to 128 texture samples, which the host app sets with its
 - The web renders with WebGL 2 into a canvas in the view's element. An effect and a backdrop read a picture NSH paints
   of the elements (backgrounds, rounded corners, borders, images, canvases and text), taken again on the next frame
   after they change, and so does a transition of its two sides.
+- A screen effect draws over the surface's root view and its dialogs, which keep their touches: on iOS and Mac
+  Catalyst over the window's area of the surface, with the dialogs UIKit presents and what it draws around them; on
+  Android as the render effect of the app's view and of each dialog's window, read live; on macOS, Windows, Linux and
+  the web the root view holds everything of the surface. A page's, a dialog's or the screen's transition through a
+  shader is part of what a screen effect shows. A screen transition pictures the same area before its change and
+  after it.

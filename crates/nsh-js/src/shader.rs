@@ -120,7 +120,8 @@ fn object(cx: *mut JsContext, shader: &ShaderSource) -> JsValue {
     }
 }
 
-/// `shaderSupport()`: `{ fill, backdrop, effect, transition }`, each
+/// `shaderSupport()`: `{ fill, backdrop, effect, transition, screenEffect,
+/// screenTransition }`, each
 /// `"live"`, `"snapshot"` or `false`.
 pub(crate) unsafe extern "C" fn shader_support(
     cx: *mut JsContext,
@@ -142,6 +143,8 @@ pub(crate) unsafe extern "C" fn shader_support(
             (c"backdrop", support.backdrop),
             (c"effect", support.effect),
             (c"transition", support.transition),
+            (c"screenEffect", support.screen_effect),
+            (c"screenTransition", support.screen_transition),
         ] {
             qjs::JS_SetPropertyStr(cx, obj, key.as_ptr(), value(s));
         }

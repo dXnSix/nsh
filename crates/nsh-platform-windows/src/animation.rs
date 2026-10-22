@@ -70,6 +70,11 @@ impl UiAnimation {
                         | nsh_core::ViewKind::ShaderTransition
                 ) {
                     crate::shader::set_args(view, canvas);
+                } else if view.kind() == nsh_core::ViewKind::ScreenEffect {
+                    // The root draws the screen effect.
+                    if mounter.screen_effect == Some(view.id()) {
+                        crate::shader::set_args(&mounter.root, canvas);
+                    }
                 } else {
                     for &(k, value) in canvas {
                         crate::canvas::set_arg(view, k, value);

@@ -187,6 +187,55 @@ import -window root -display :170 whole.png        # the display, if the window'
 | Networking | `nsh_engine::net` | ureq, the stack Windows and Linux use |
 | Dev | `dev.rs` | `AppView::connect_dev_server` (also what `AppSource::DevServer` runs): the dev client on its own thread (reconnecting with a backoff); its events, runtime errors and the reload key drained by a foreground task of the view, which ends when the view connects again; the status line and the error overlay are GPUI elements over the surface; the surface reports errors to the overlay and to the embedding app's `on_error` alike |
 
+## Shaders: the plan
+
+The other backends draw `<Shader>`, `<ShaderEffect>`, `<ShaderTransition>`, `<ScreenEffect>`, `<ScreenTransition>` and
+the pages' and dialogs' shader animations (`shaders.md`). GPUI Fast 0.1.9 has neither of the two things they rest on:
+a primitive whose fragment stage is the app's program, and offscreen passes whose results later primitives sample. Its
+scene (`gpui::scene`) holds a closed set of primitives (shadows, quads, paths, underlines, sprites, surfaces) that each
+renderer (Metal on macOS, DirectX 11 on Windows, `gpui-fast-wgpu` on Linux) draws in batches by kind, in order, within
+layers that only clip. The work therefore starts in GPUI Fast; zed's closed pull request #42905 (custom fragment
+shaders: WGSL through naga into each renderer's language) is the template for its first half.
+
+**In GPUI Fast**
+
+1. *A shader primitive.* `Window::paint_shader(bounds, program, uniforms, inputs)`: a quad whose fragment stage is a
+   program registered once (`Window::register_shader(id, source)`), with the uniform buffer's bytes and up to four
+   input textures plus image textures, in scene order with the other primitives (one more `PrimitiveKind`, its own
+   batch, never merged across programs). Each renderer makes a pipeline per program, cached by id: MSL on Metal, HLSL
+   (shader model 5.0) on DirectX 11, WGSL as it is on wgpu. NSH already writes MSL and HLSL (`nsh-shader`'s writers,
+   the vertex and fragment entry points of `glue.rs`) and its WGSL is valid naga input, so the renderers take NSH's
+   programs as they are; GPUI compiles nothing of its own. Content masks clip it; GPUI's lack of transforms means a
+   rotated view's shader draws at its bounds, as its images do.
+2. *Offscreen layers.* `Window::paint_layer(bounds, scale, |window| …) -> LayerTexture`: the primitives painted in
+   the closure rendered into a texture of the area (its own render pass, before the frame's main pass, ordered by
+   nesting), which `paint_shader` takes as an input; a texture kept from an earlier frame (`LayerTexture::retain`)
+   stays valid until dropped. A copy of the frame drawn so far under an area (`Window::backdrop(bounds)`) splits the
+   main pass there; it is what `sample_backdrop` reads and costs one pass split per backdrop shader.
+3. Limits next to GPUI's atlas ones: programs, texture bytes, the area of offscreen layers per frame.
+
+**In `nsh-platform-gpui`** (as the Windows backend does it, which draws live with each frame too)
+
+- `shaderSupport()`: `fill`, `effect`, `transition` and `screenEffect` `"live"`, `backdrop` `"live"` (the pass
+  split), `screenTransition` `"snapshot"`; the core's `ShaderSupport::language` gets the renderer's language per OS
+  (MSL, HLSL, WGSL: a `ShaderLanguage::Wgsl` writing the prelude's glue as WGSL), so programs reach the renderer
+  translated, as on the other backends.
+- `MountItem::ShaderProgram` registers the program; `Shader` keeps the fill on the view (`ShaderState`, uniforms with
+  animated values written in, images as `RenderImage`s uploaded once); `render::draw_view` paints a fill between the
+  background and the children, opacity and color filters folded into a last multiply (GPUI's opacity is per color).
+- An effect paints its children into `paint_layer` (its area, `maxSampleOffset` beyond) and the shader over it with
+  that texture as `sample_content`; a transition does the same while it runs, its `sample_from` a retained texture of
+  what showed when it started (`ShaderTransition`, before the batch); `ShaderInput` needs nothing (live).
+- Pages and dialogs: the departing page or dialog already stays in a layer drawn moving out; with a shader its side
+  is a retained layer texture and the coming side a live one, through `paint_shader` at the navigation's progress.
+- `<ScreenEffect>`: the surface element paints the root's subtree into one layer and the shader over the surface;
+  `<ScreenTransition>`: a retained texture of that layer when it starts, the live layer after.
+- Tests: `nsh test --target gpui` with screenshots (the `shot` feature on macOS and Windows, the X server on Linux),
+  the engine's shader tests unchanged (the core's items are the same).
+
+The order is GPUI Fast's two pieces first (each with its own tests and a release), then fills in NSH (no inputs),
+then effects and transitions, then navigation and the screen.
+
 ## Frame statistics: `--fps`
 
 `nsh-gpui-host --fps` (`AppOptions::fps`, `AppView::set_fps_monitor` for embedders) logs one `nsh::perf` line a
@@ -227,6 +276,8 @@ and Windows.
   corners, but glyphs, borders, videos and native components are cut by its rectangle.
 - **Effects GPUI cannot draw**: `filter: blur()`, `backdropFilter` and `mixBlendMode` are not drawn (no offscreen
   passes); shadows are not cut out of a translucent fill; `borderCurve: "continuous"` draws circular corners.
+- **Shaders**: `shaderSupport()` is `false` for every kind: a `<Shader>` and an effect show their children, a
+  transition runs at once, pages and dialogs keep their sliding (the plan: "Shaders: the plan" below).
 - **Canvas text** is approximated: clipped to its clip's bounds, upright under rotations, made smaller rather than
   narrower for `maxWidth`, gradients paint it in their middle color, `strokeText` fills, its shadows are not blurred,
   composite operations and `clearRect` do not apply to it.

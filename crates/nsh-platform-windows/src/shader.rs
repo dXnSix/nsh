@@ -1073,7 +1073,9 @@ fn render(
 pub(crate) struct NavItem {
     state: ShaderState,
     lower: ID2D1Image,
-    upper: ID2D1Image,
+    upper: RefCell<ID2D1Image>,
+    /// Its sides changed: they are drawn into their textures again.
+    redraw: std::cell::Cell<bool>,
     progress: std::cell::Cell<f32>,
 }
 
@@ -1089,9 +1091,17 @@ impl NavItem {
                 ..ShaderState::default()
             },
             lower,
-            upper,
+            upper: RefCell::new(upper),
+            redraw: std::cell::Cell::new(false),
             progress: std::cell::Cell::new(0.0),
         }
+    }
+
+    /// Its upper side, recorded later (a screen transition's, after its
+    /// batch).
+    pub(crate) fn set_upper(&self, upper: ID2D1Image) {
+        *self.upper.borrow_mut() = upper;
+        self.redraw.set(true);
     }
 
     /// How much of the upper side shows.
@@ -1127,13 +1137,14 @@ impl crate::view::Hosted for NavItem {
         let Some(t) = target.as_mut() else { return };
         // The two sides into their textures (from the recordings, once per
         // target).
-        let fresh = t.inputs[0].is_none() || t.inputs[2].is_none();
+        let fresh = t.inputs[0].is_none() || t.inputs[2].is_none() || self.redraw.take();
         let (Some(to), Some(from)) = (t.input(cx.gfx, 0, cx.scale), t.input(cx.gfx, 2, cx.scale))
         else {
             return;
         };
         if fresh {
-            for (input, image) in [(&from, &self.lower), (&to, &self.upper)] {
+            let upper = self.upper.borrow().clone();
+            for (input, image) in [(&from, &self.lower), (&to, &upper)] {
                 let Ok(bitmap) = input.bitmap.cast::<ID2D1Image>() else {
                     continue;
                 };

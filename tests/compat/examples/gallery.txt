@@ -59,6 +59,11 @@ expect Spring
 tap label:Next season
 expect Summer
 expect Dialog through a shader
+expect The whole screen
+tap label:Calm the screen
+expect Bring the color back
+tap text:Bring the color back
+expect Calm the screen
 tap text:Styles
 expect Continuous corners ease into the edges
 expect 44 · 6 · 28 · 0 pt, clockwise

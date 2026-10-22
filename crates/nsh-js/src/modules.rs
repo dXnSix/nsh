@@ -261,6 +261,22 @@ const NSH: &[Item] = &[
         ),
     ),
     (
+        "ScreenEffect",
+        Export::Value(|cx| dom::host_component(cx, "screeneffect", true)),
+        Ts::function(
+            "The whole surface drawn through a shader: what it shows (its pages,\ndialogs and overlays, never the app around it) is what `sample_content(p)`\nreads, `p` in points from the surface's top-left, and the shader's result\nis what shows; the views stay where they are for touches and\naccessibility. Declared anywhere, it takes no space; without `src` the\nsurface draws as it is. With several, the last one made draws.",
+            &["<U = ShaderUniforms>(props: ScreenEffectProps<U>): YNode"],
+        ),
+    ),
+    (
+        "ScreenTransition",
+        Export::Value(|cx| dom::host_component(cx, "screentransition", true)),
+        Ts::function(
+            "The whole surface changing through a shader: when `value` changes, a\npicture of what the surface showed is what `sample_from(p)` reads and\nwhat it shows now what `sample_to(p)` reads, while `nsh.progress` goes\nfrom 0 to 1 over `duration` milliseconds (300 by default). Declared\nanywhere, it takes no space; without `src` it runs `fallback`: a\ncross-fade, or `\"none\"`.",
+            &["<U = ShaderUniforms>(props: ScreenTransitionProps<U>): YNode"],
+        ),
+    ),
+    (
         "createShader",
         Export::Function(crate::shader::create_shader, 1),
         Ts::function(
