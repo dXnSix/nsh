@@ -6,6 +6,7 @@ mod overlay;
 mod parent_viewport;
 mod renders;
 mod services;
+mod sticky;
 #[cfg(test)]
 mod tests;
 mod touch;
@@ -322,6 +323,8 @@ struct ScrollState {
     /// The sticky cells it was last sent with its lists' (its own too, when
     /// it is a list), while its lists have any.
     page_sticky: Vec<list::StickyRange>,
+    /// The ranges of the `position: sticky` views in it.
+    view_sticky: Vec<list::StickyRange>,
 }
 
 impl Default for ScrollState {
@@ -344,6 +347,7 @@ impl Default for ScrollState {
             pending: Vec::new(),
             asked: None,
             page_sticky: Vec::new(),
+            view_sticky: Vec::new(),
         }
     }
 }
@@ -413,6 +417,9 @@ struct Node {
     parts: Option<Box<classes::NodeParts>>,
     /// A child's classes read their position among siblings.
     positional_children: bool,
+    /// `position: sticky`: its insets, where it sticks in the viewport of
+    /// the scroll view around it ([`Core::update_sticky_views`]).
+    sticky: Option<Box<taffy::Rect<taffy::LengthPercentageAuto>>>,
     /// The inset padding and margin components set: added to the style's.
     insets: Option<Box<[EdgeInsets; 2]>>,
     events: EventMask,
@@ -492,6 +499,13 @@ impl Node {
         events
     }
 
+    /// Where its native view goes among its siblings': by `zIndex`, then a
+    /// sticky view above the others (as above a page's in-flow boxes),
+    /// then in order.
+    fn stack_rank(&self) -> (i32, bool) {
+        (self.z_index, self.sticky.is_some())
+    }
+
     /// The view style as platforms take it: translations by a fraction of
     /// the size resolved with the current frame.
     fn mounted_view_style(&self) -> Box<ViewStyle> {
@@ -535,6 +549,7 @@ impl Node {
             projected: 0,
             parts: None,
             positional_children: false,
+            sticky: None,
             insets: None,
             events: EventMask::default(),
             z_index: 0,
@@ -681,6 +696,15 @@ pub struct Core<M: TextEngine> {
     outer_asked: Vec<Key>,
     /// The views whose lists' sticky cells changed in this commit.
     sticky_views: Vec<Key>,
+    /// Views with `position: sticky` ([`Core::update_sticky_views`]).
+    sticky_nodes: Vec<Key>,
+    /// The scroll views their ranges were last sent to.
+    sticky_scrollers: Vec<Key>,
+    /// Sticky views came, went or moved: their ranges are worked out
+    /// again.
+    sticky_changed: bool,
+    /// The warning about `bottom` / `right` sticky insets was logged.
+    sticky_warned: bool,
     /// Live screens, modals and header items.
     roots: Vec<Key>,
     /// Attached input accessories by `nativeID`.
@@ -797,6 +821,10 @@ impl<M: TextEngine> Core<M> {
             extent_changed: false,
             outer_asked: Vec::new(),
             sticky_views: Vec::new(),
+            sticky_nodes: Vec::new(),
+            sticky_scrollers: Vec::new(),
+            sticky_changed: false,
+            sticky_warned: false,
             roots: Vec::new(),
             accessories: Default::default(),
             header_heights: (Points(44.0), Points(96.0)),
@@ -1835,7 +1863,7 @@ impl<M: TextEngine> Core<M> {
             vertical_align,
             direction,
             logical,
-            pending: _,
+            pending,
         } = style;
         if animated
             .iter()
@@ -1852,6 +1880,21 @@ impl<M: TextEngine> Core<M> {
         let rtl = self.resolved_rtl(key);
         crate::style::resolve_normal_alignment(&mut layout);
         crate::style::apply_direction(&mut layout, &mut view, &logical, rtl);
+        // A sticky box's insets say where it sticks, not where it is laid
+        // out.
+        let sticky = pending.sticky_position.then(|| Box::new(layout.inset));
+        if sticky.is_some() {
+            layout.inset = taffy::Rect {
+                left: taffy::LengthPercentageAuto::auto(),
+                right: taffy::LengthPercentageAuto::auto(),
+                top: taffy::LengthPercentageAuto::auto(),
+                bottom: taffy::LengthPercentageAuto::auto(),
+            };
+        }
+        let node = &mut self.nodes[key as usize];
+        if node.sticky != sticky {
+            self.set_sticky(key, sticky);
+        }
         let node = &mut self.nodes[key as usize];
         if let Some([padding, margin]) = node.insets.as_deref() {
             // On top of points; percentages cannot take an addition.
@@ -2991,6 +3034,7 @@ impl<M: TextEngine> Core<M> {
         self.nodes[parent as usize].children.insert(pos, child);
         self.status_bars_moved |= !self.status_bar_nodes.is_empty();
         self.outer_moved |= !self.parent_lists.is_empty() && self.may_hold_page_list(child);
+        self.sticky_changed |= !self.sticky_nodes.is_empty();
         self.update_direction(child);
         self.groups_changed(child, parent);
         if self.nodes[child as usize]
@@ -3088,6 +3132,7 @@ impl<M: TextEngine> Core<M> {
         self.groups_changed(key, parent);
         self.status_bars_moved |= !self.status_bar_nodes.is_empty();
         self.outer_moved |= !self.parent_lists.is_empty() && self.may_hold_page_list(key);
+        self.sticky_changed |= !self.sticky_nodes.is_empty();
         let node = &self.nodes[key as usize];
         let (inline, layout, created, id) = (node.inline, node.layout, node.created, node.id);
         if inline {
@@ -3204,6 +3249,10 @@ impl<M: TextEngine> Core<M> {
         if node.kind == Kind::List {
             self.lists.retain(|&k| k != key);
         }
+        if node.sticky.is_some() {
+            self.sticky_nodes.retain(|&k| k != key);
+            self.sticky_changed = true;
+        }
         if let Some(scroll) = node.scroll.as_ref() {
             if !scroll.dependents.is_empty() {
                 self.outer_released(&scroll.dependents);
@@ -3212,6 +3261,7 @@ impl<M: TextEngine> Core<M> {
                 self.outer_asked.retain(|&k| k != key);
             }
             self.sticky_views.retain(|&k| k != key);
+            self.sticky_scrollers.retain(|&k| k != key);
         }
         if let Some((spacer, _)) = node.list.as_ref().and_then(|l| l.spacer) {
             self.layout.remove(spacer).expect("taffy remove");
@@ -3263,9 +3313,9 @@ impl<M: TextEngine> Core<M> {
     /// `zIndex`, then in tree order.
     fn native_before(&self, parent: Key, child: Key) -> Option<NodeId> {
         let children = &self.nodes[parent as usize].children;
-        let z = self.nodes[child as usize].z_index;
+        let z = self.nodes[child as usize].stack_rank();
         let pos = children.iter().position(|&c| c == child)?;
-        let mut best: Option<(i32, usize, NodeId)> = None;
+        let mut best: Option<((i32, bool), usize, NodeId)> = None;
         for (i, &c) in children.iter().enumerate() {
             let n = &self.nodes[c as usize];
             if c == child || !n.created || n.layout.is_none() {
@@ -3274,8 +3324,9 @@ impl<M: TextEngine> Core<M> {
             if n.kind == Kind::Overlay {
                 continue;
             }
-            if (n.z_index, i) > (z, pos) && best.is_none_or(|b| (n.z_index, i) < (b.0, b.1)) {
-                best = Some((n.z_index, i, n.id));
+            let rank = n.stack_rank();
+            if (rank, i) > (z, pos) && best.is_none_or(|b| (rank, i) < (b.0, b.1)) {
+                best = Some((rank, i, n.id));
             }
         }
         // Below the overlays shown in it, when it is a root view.
@@ -3475,9 +3526,9 @@ impl<M: TextEngine> Core<M> {
         let original = children.clone();
         if children
             .iter()
-            .any(|&c| self.nodes[c as usize].z_index != 0)
+            .any(|&c| self.nodes[c as usize].stack_rank() != (0, false))
         {
-            children.sort_by_key(|&c| self.nodes[c as usize].z_index);
+            children.sort_by_key(|&c| self.nodes[c as usize].stack_rank());
         }
         for &child in &children {
             let c = &self.nodes[child as usize];
@@ -4986,6 +5037,9 @@ impl<M: TextEngine> Core<M> {
                 };
                 self.update_list(key, relayout, Some(outer));
             }
+        }
+        if !self.sticky_nodes.is_empty() || !self.sticky_scrollers.is_empty() {
+            self.update_sticky_views(relayout);
         }
         if !self.sticky_views.is_empty() {
             self.send_page_sticky();
