@@ -531,7 +531,8 @@ impl Mounter {
         match item {
             MountItem::Create { id, kind } => {
                 let native = match kind {
-                    ViewKind::View => Native::View(NshView::new(self.mtm)),
+                    // Shader effects draw their children only here.
+                    ViewKind::View | ViewKind::ShaderEffect => Native::View(NshView::new(self.mtm)),
                     ViewKind::Text => Native::Text(TextView::new(self.mtm)),
                     ViewKind::Image => Native::Image(NshView::new(self.mtm)),
                     ViewKind::Input => {
@@ -973,6 +974,7 @@ impl Mounter {
                 }
             }
             MountItem::Shader { id, fill } => self.set_shader(id, fill),
+            MountItem::ShaderInput { .. } => {}
             MountItem::AnimationBindings { id, bindings } => {
                 if let Some(s) = self.slot_mut(id) {
                     // Properties no longer animated fall back to the static style.

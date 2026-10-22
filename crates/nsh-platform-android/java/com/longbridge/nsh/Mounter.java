@@ -351,10 +351,12 @@ final class Mounter {
                     View v = views.get(b.getInt());
                     int program = b.getInt();
                     if (program < 0) {
-                        if (v instanceof ShaderBox) ((ShaderBox) v).setFill(null, false, new int[0], new String[0], new int[0]);
+                        if (v instanceof ShaderBox) ((ShaderBox) v).setFill(null, false, 0, 0, 0, new int[0], new String[0], new int[0]);
                         break;
                     }
                     boolean time = b.getInt() != 0;
+                    int inputs = b.getInt();
+                    float progress = b.getFloat(), maxOffset = b.getFloat();
                     int[] uniforms = new int[b.getInt()];
                     for (int k = 0; k < uniforms.length; k++) uniforms[k] = b.getInt();
                     int n = b.getInt();
@@ -365,7 +367,9 @@ final class Mounter {
                         uris[i] = s >= 0 ? (String) objects[s] : null;
                         sizes[i] = b.getInt();
                     }
-                    if (v instanceof ShaderBox) shader((ShaderBox) v, shaderPrograms.get(program), time, uniforms, uris, sizes);
+                    if (v instanceof ShaderBox) {
+                        shader((ShaderBox) v, shaderPrograms.get(program), time, inputs, progress, maxOffset, uniforms, uris, sizes);
+                    }
                     break;
                 }
                 case CANVAS: {
@@ -602,7 +606,8 @@ final class Mounter {
             case 13: v = new VideoBox(context, this, host, id); break;
             case 14: v = new CanvasBox(context, this, id); break;
             case 15: v = new ComponentBox(context, this, id); break;
-            case 16: v = new ShaderBox(context, this, id); break;
+            case 16: v = new ShaderBox(context, this, id, false); break;
+            case 17: v = new ShaderBox(context, this, id, true); break;
             default: v = new Box(context, this, id);
         }
         views.put(id, v);
@@ -1411,9 +1416,10 @@ final class Mounter {
     }
 
     /** What a shader box draws; loads its images (bitmaps, at their natural size). */
-    private void shader(ShaderBox box, ShaderBox.Program program, boolean time, int[] uniforms, String[] uris, int[] sizes) {
+    private void shader(ShaderBox box, ShaderBox.Program program, boolean time, int inputs, float progress,
+            float maxOffset, int[] uniforms, String[] uris, int[] sizes) {
         String[] before = box.uris;
-        box.setFill(program, time, uniforms, uris, sizes);
+        box.setFill(program, time, inputs, progress, maxOffset, uniforms, uris, sizes);
         for (int slot = 0; slot < uris.length && slot < box.images.length; slot++) {
             String uri = uris[slot];
             if (uri == null || (slot < before.length && uri.equals(before[slot]) && box.images[slot] != null)) continue;

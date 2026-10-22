@@ -31,6 +31,7 @@ pub enum AnimationProp {
     /// Component `n` (an `f32` index) of a shader view's uniforms: a
     /// number there, a color's premultiplied components from there
     /// ([`crate::shader::write_animated`]); the shader draws again.
+    /// [`crate::shader::PROGRESS`] is its `nsh.progress` instead.
     ShaderUniform(u16),
 }
 

@@ -633,6 +633,8 @@ fn kind_name(kind: ViewKind) -> &'static str {
         ViewKind::InputAccessory => "accessory",
         ViewKind::Canvas => "canvas",
         ViewKind::Shader => "shader",
+        // Shader effects draw their children only here.
+        ViewKind::ShaderEffect => "view",
         ViewKind::WebView => "web",
         ViewKind::Native => "native",
         ViewKind::Video => "video",
@@ -1223,6 +1225,7 @@ pub(crate) fn encode(out: &mut Out, item: &MountItem) {
                 .raw(&shader_program(program))
                 .end();
         }
+        MountItem::ShaderInput { .. } => {}
         MountItem::Shader { id, fill } => {
             out.item("sh")
                 .num(*id)

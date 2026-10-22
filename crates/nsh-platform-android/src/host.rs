@@ -737,9 +737,14 @@ extern "system" fn Java_com_longbridge_nsh_Native_environment(
     environment.screen_reader = v[10] != 0.0;
     environment.os = nsh_engine::Os::Android;
     environment.os_version = (v[11] as u16, 0);
-    // Shaders fill views with runtime shaders (AGSL), from Android 13.
+    // Runtime shaders (AGSL), from Android 13: fills, and effects and
+    // backdrops as render effects on the live content (`ShaderBox.java`).
     environment.shaders = if v[11] as u16 >= 33 {
-        nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Agsl)
+        let mut support =
+            nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Agsl);
+        support.effect = nsh_core::shader::Support::Live;
+        support.backdrop = nsh_core::shader::Support::Live;
+        support
     } else {
         nsh_core::shader::ShaderSupport::default()
     };

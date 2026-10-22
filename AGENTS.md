@@ -377,7 +377,7 @@ repository's `target/`; dependencies only it uses are declared in `crates/gpui/C
   (legacy, to migrate) does not list (`docs/dev/geometry.md`).
 - TSX tags are PascalCase, everywhere (examples, docs, tests): every tag names a binding in scope, only `<If>` and
   `<Each>` are globals that need no import. Imports mirror the Rust crates' layers: every primitive comes from `nsh`
-  (`View`, `Text`, `Scroll`, `Input`, `Overlay`, `Image`, `List`, `Canvas` and its classes, `Shader`, `WebView`, `Video`), as
+  (`View`, `Text`, `Scroll`, `Input`, `Overlay`, `Image`, `List`, `Canvas` and its classes, `Shader`, `ShaderEffect`, `WebView`, `Video`), as
   `nsh_core::ui::prelude` holds them, every base component from `nsh/base` (`Dialog`, `Button`, `NavStack`, ...), and
   `InputAccessoryView` from `nsh/ios`; the compiler makes their tags in place (`jsx::PRIMITIVES`). `nsh/image`,
   `nsh/list`, `nsh/canvas`, `nsh/webview` and `nsh/video`, where primitives were first, still export them (the same

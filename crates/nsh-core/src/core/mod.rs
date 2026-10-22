@@ -189,6 +189,7 @@ enum Kind {
     InputAccessory,
     Canvas,
     Shader,
+    ShaderEffect,
     WebView,
     Video,
     Native,
@@ -211,6 +212,7 @@ impl Kind {
                 | Kind::InputAccessory
                 | Kind::Overlay
                 | Kind::Shader
+                | Kind::ShaderEffect
         )
     }
 
@@ -235,6 +237,7 @@ impl Kind {
             Kind::InputAccessory => ViewKind::InputAccessory,
             Kind::Canvas => ViewKind::Canvas,
             Kind::Shader => ViewKind::Shader,
+            Kind::ShaderEffect => ViewKind::ShaderEffect,
             Kind::WebView => ViewKind::WebView,
             Kind::Video => ViewKind::Video,
             Kind::Native => ViewKind::Native,
@@ -260,6 +263,7 @@ impl Kind {
             Tag::InputAccessory => Kind::InputAccessory,
             Tag::Canvas => Kind::Canvas,
             Tag::Shader => Kind::Shader,
+            Tag::ShaderEffect => Kind::ShaderEffect,
             Tag::WebView => Kind::WebView,
             Tag::Video => Kind::Video,
             Tag::Native => Kind::Native,
@@ -281,11 +285,15 @@ impl Kind {
     }
 }
 
-/// A shader view's source and uniforms, and what was made of them.
+/// A shader view's (or effect's) source, uniforms and progress, and what
+/// was made of them.
 #[derive(Debug, Default)]
 struct ShaderState {
     source: Option<crate::shader::ShaderSource>,
     uniforms: crate::shader::Uniforms,
+    progress: crate::shader::ShaderNumber,
+    /// An effect's `maxSampleOffset`.
+    max_offset: Points,
     /// The uniforms packed for the source's program.
     packed: crate::shader::Packed,
     /// What the view was last sent.
@@ -560,7 +568,7 @@ impl Node {
             text_style: TextStyle::default(),
             animated: Vec::new(),
             drawing: None,
-            shader: matches!(kind, Kind::Shader).then(Box::default),
+            shader: matches!(kind, Kind::Shader | Kind::ShaderEffect).then(Box::default),
             inline_style: StylePatch::default(),
             class_names: None,
             classes: None,
@@ -799,6 +807,10 @@ pub struct Core<M: TextEngine> {
     /// The shaders' programs sent to the platform (`true`) or that failed
     /// to translate (`false`), by id.
     shader_programs: rustc_hash::FxHashMap<u32, bool>,
+    /// The shader views and effects that sample their content or what is
+    /// behind them ([`Core::mark_shader_inputs`]); removed views drop out
+    /// as their ids no longer resolve.
+    shader_inputs: rustc_hash::FxHashSet<NodeId>,
 }
 
 impl<M: TextEngine + 'static> Core<M> {
@@ -873,6 +885,7 @@ impl<M: TextEngine> Core<M> {
             overlays: Vec::new(),
             overlay_state: overlay::Overlays::default(),
             shader_programs: Default::default(),
+            shader_inputs: Default::default(),
         }
     }
 
@@ -999,6 +1012,64 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// Tells the platform which shaders' inputs this commit changed
+    /// ([`MountItem::ShaderInput`]): the effects with a changed view in
+    /// their subtree (themselves included), and every shader that samples
+    /// what is behind it once anything changed.
+    fn mark_shader_inputs(&mut self) {
+        if self.shader_inputs.is_empty() || self.mount.is_empty() {
+            return;
+        }
+        use crate::shader::ShaderInput as I;
+        let gone: Vec<NodeId> = self
+            .shader_inputs
+            .iter()
+            .copied()
+            .filter(|&id| self.key(id).is_err())
+            .collect();
+        for id in gone {
+            self.shader_inputs.remove(&id);
+        }
+        let samples = |node: &Node, input: I| {
+            node.shader
+                .as_ref()
+                .and_then(|s| s.sent.as_ref())
+                .is_some_and(|f| f.samples(input))
+        };
+        let mut marked: Vec<NodeId> = Vec::new();
+        for &id in &self.shader_inputs {
+            if let Ok(key) = self.key(id)
+                && samples(&self.nodes[key as usize], I::Backdrop)
+            {
+                marked.push(id);
+            }
+        }
+        let mut seen = rustc_hash::FxHashSet::default();
+        for item in &self.mount {
+            let Some(id) = item.view() else { continue };
+            if !seen.insert(id) {
+                continue;
+            }
+            let Ok(mut key) = self.key(id) else { continue };
+            loop {
+                let node = &self.nodes[key as usize];
+                if node.kind == Kind::ShaderEffect
+                    && samples(node, I::Content)
+                    && !marked.contains(&node.id)
+                {
+                    marked.push(node.id);
+                }
+                if node.parent == NO_KEY {
+                    break;
+                }
+                key = node.parent;
+            }
+        }
+        for id in marked {
+            self.mount.push(MountItem::ShaderInput { id });
+        }
+    }
+
     /// Sends what shader view `key` draws, if it changed, and its program
     /// first, the first time a view draws it: translated into the
     /// platform's language here, on the engine thread.
@@ -1040,6 +1111,14 @@ impl<M: TextEngine> Core<M> {
                             })
                             .collect(),
                         time: source.shader.reflection().time,
+                        inputs: source
+                            .shader
+                            .reflection()
+                            .inputs
+                            .iter()
+                            .fold(0, |bits, input| bits | 1 << input.index()),
+                        progress: shader.progress.constant(),
+                        max_offset: shader.max_offset,
                     })
                 })
             }
@@ -1050,8 +1129,17 @@ impl<M: TextEngine> Core<M> {
             .as_mut()
             .expect("a shader view");
         if shader.sent != fill {
+            let inputs = fill.as_ref().is_some_and(|f| {
+                f.samples(crate::shader::ShaderInput::Content)
+                    || f.samples(crate::shader::ShaderInput::Backdrop)
+            });
             shader.sent = fill.clone();
             self.mount.push(MountItem::Shader { id, fill });
+            if inputs {
+                self.shader_inputs.insert(id);
+            } else {
+                self.shader_inputs.remove(&id);
+            }
         }
     }
 
@@ -1444,6 +1532,7 @@ impl<M: TextEngine> Core<M> {
             }
             self.commit_round();
         }
+        self.mark_shader_inputs();
         if self.mount.is_empty() || matches!(self.mount[..], [MountItem::LayoutAnimation(_)]) {
             self.mount.clear();
             None
@@ -2327,6 +2416,27 @@ impl<M: TextEngine> Core<M> {
                     if shader.repack(id) {
                         flags |= dirty::ANIMATION;
                     }
+                }
+            }
+            Prop::ShaderProgress(progress) => {
+                if let Some(shader) = node.shader.as_mut()
+                    && shader.progress != progress
+                {
+                    let rebound = matches!(progress, crate::shader::ShaderNumber::Animated(_))
+                        || matches!(shader.progress, crate::shader::ShaderNumber::Animated(_));
+                    shader.progress = progress;
+                    flags |= dirty::SHADER;
+                    if rebound {
+                        flags |= dirty::ANIMATION;
+                    }
+                }
+            }
+            Prop::MaxSampleOffset(offset) => {
+                if let Some(shader) = node.shader.as_mut()
+                    && shader.max_offset != offset
+                {
+                    shader.max_offset = offset;
+                    flags |= dirty::SHADER;
                 }
             }
             Prop::Image(option) => {
@@ -3618,7 +3728,9 @@ impl<M: TextEngine> Core<M> {
             if shader.source.is_some() {
                 flags |= dirty::SHADER;
             }
-            if !shader.packed.bindings.is_empty() {
+            if !shader.packed.bindings.is_empty()
+                || matches!(shader.progress, crate::shader::ShaderNumber::Animated(_))
+            {
                 flags |= dirty::ANIMATION;
             }
         }
@@ -3797,6 +3909,9 @@ impl<M: TextEngine> Core<M> {
                             .iter()
                             .map(|&(k, n)| (AnimationProp::ShaderUniform(k), n)),
                     );
+                    if let crate::shader::ShaderNumber::Animated(n) = shader.progress {
+                        bindings.push((AnimationProp::ShaderUniform(crate::shader::PROGRESS), n));
+                    }
                 }
                 self.mount
                     .push(MountItem::AnimationBindings { id, bindings });

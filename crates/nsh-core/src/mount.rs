@@ -45,6 +45,9 @@ pub enum ViewKind {
     Canvas,
     /// A view a shader fills ([`MountItem::Shader`]), under its children.
     Shader,
+    /// A view whose children draw through a shader ([`MountItem::Shader`]):
+    /// they are the shader's content input.
+    ShaderEffect,
     /// A web view.
     WebView,
     /// The container of a registered native component: the platform
@@ -753,6 +756,16 @@ pub enum MountItem {
         /// What it draws.
         fill: Option<Arc<crate::shader::ShaderFill>>,
     },
+    /// What a shader reads changed, as far as the core knows: the views
+    /// in a shader effect (its content), or anything in the surface for a
+    /// shader that samples what is behind it. Platforms that draw shaders
+    /// from a picture of their input take it again; those drawing the
+    /// live input ignore it. Animations, scrolling and loads on the UI
+    /// thread change the input too: the platform notices those itself.
+    ShaderInput {
+        /// The shader view or effect.
+        id: NodeId,
+    },
     /// Bind visual properties to native animation nodes.
     AnimationBindings {
         /// View.
@@ -858,6 +871,55 @@ pub enum MountItem {
         /// The call.
         command: Command,
     },
+}
+
+impl MountItem {
+    /// The view whose look or content the item changes (a parent for its
+    /// children's insertions and removals), if it is about one.
+    pub fn view(&self) -> Option<NodeId> {
+        use MountItem as M;
+        match self {
+            M::Create { id, .. }
+            | M::TrackStates { id, .. }
+            | M::Remove { id }
+            | M::Delete { id }
+            | M::Frame { id, .. }
+            | M::Overflow { id, .. }
+            | M::ViewStyle { id, .. }
+            | M::Text { id, .. }
+            | M::Events { id, .. }
+            | M::Image { id, .. }
+            | M::ScrollConfig { id, .. }
+            | M::ScrollContent { id, .. }
+            | M::ScrollBy { id, .. }
+            | M::StickyCells { id, .. }
+            | M::ScrollBehavior { id, .. }
+            | M::Refreshing { id, .. }
+            | M::Canvas { id, .. }
+            | M::Shader { id, .. }
+            | M::AnimationBindings { id, .. }
+            | M::Gestures { id, .. }
+            | M::ViewProps { id, .. }
+            | M::AccessibilityLabel { id, .. }
+            | M::Input { id, .. }
+            | M::InputValue { id, .. }
+            | M::InputContent { id, .. }
+            | M::ScreenConfig { id, .. }
+            | M::NativeProps { id, .. }
+            | M::ModalConfig { id, .. }
+            | M::Component { id, .. }
+            | M::ComponentProps { id, .. }
+            | M::Command { id, .. } => Some(*id),
+            M::Insert { parent, .. } => Some(*parent),
+            M::ShaderProgram { .. }
+            | M::ShaderInput { .. }
+            | M::LayoutDirection { .. }
+            | M::Appearance { .. }
+            | M::Keymap(_)
+            | M::LayoutAnimation(_)
+            | M::Animation(_) => None,
+        }
+    }
 }
 
 /// All mount items produced by one commit.

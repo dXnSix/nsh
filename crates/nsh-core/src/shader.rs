@@ -373,6 +373,64 @@ impl HostValue for Uniforms {
     }
 }
 
+/// The component [`crate::animation::AnimationProp::ShaderUniform`]
+/// names for a shader's `nsh.progress` (its `progress` prop, animated).
+pub const PROGRESS: u16 = u16::MAX;
+
+/// A number the shader reads: a constant, or an animated value the UI
+/// thread writes (`progress`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShaderNumber {
+    /// A constant.
+    Number(f32),
+    /// An animated value.
+    Animated(AnimationNode),
+}
+
+impl Default for ShaderNumber {
+    fn default() -> Self {
+        ShaderNumber::Number(0.0)
+    }
+}
+
+impl ShaderNumber {
+    /// Its value now: the constant, or 0 until the UI thread writes it.
+    pub fn constant(self) -> f32 {
+        match self {
+            ShaderNumber::Number(n) => n,
+            ShaderNumber::Animated(_) => 0.0,
+        }
+    }
+}
+
+impl From<f32> for ShaderNumber {
+    fn from(n: f32) -> Self {
+        ShaderNumber::Number(n)
+    }
+}
+
+/// The value as it moves, written on the UI thread; the app keeps the
+/// value while the shader reads it.
+impl<A: crate::ui::Animated> From<&A> for ShaderNumber {
+    fn from(a: &A) -> Self {
+        ShaderNumber::Animated(a.animated_node().id())
+    }
+}
+
+/// A number or an animated value (TS: `ShaderNumber`).
+impl HostValue for ShaderNumber {
+    fn decode<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Self> {
+        if let Some(n) = input.as_number() {
+            return Some(ShaderNumber::Number(n as f32));
+        }
+        input.animated_node().map(ShaderNumber::Animated)
+    }
+
+    fn ts_type(_: &mut TsTypes) -> String {
+        "ShaderNumber".into()
+    }
+}
+
 /// An image a shader samples.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[non_exhaustive]
@@ -398,6 +456,21 @@ pub struct ShaderFill {
     pub images: Vec<ShaderImage>,
     /// It reads `nsh.time`: it draws every frame while it shows.
     pub time: bool,
+    /// The inputs it samples, bit [`ShaderInput::index`] each: its
+    /// content (an effect's children) and what is behind it.
+    pub inputs: u32,
+    /// `nsh.progress`, until an animated value writes it.
+    pub progress: f32,
+    /// How far outside a pixel it samples its content (an effect's
+    /// `maxSampleOffset`): the content is drawn that far beyond the view.
+    pub max_offset: Points,
+}
+
+impl ShaderFill {
+    /// It samples input `input`.
+    pub fn samples(&self, input: ShaderInput) -> bool {
+        self.inputs & (1 << input.index()) != 0
+    }
 }
 
 /// The uniforms packed for a program: the buffer, the components animated

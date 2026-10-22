@@ -245,6 +245,14 @@ const NSH: &[Item] = &[
         ),
     ),
     (
+        "ShaderEffect",
+        Export::Value(|cx| dom::host_component(cx, "shadereffect", true)),
+        Ts::function(
+            "A view whose children draw through a shader: they are what its\n`sample_content(p)` reads, the shader's result is what shows. Without\n`src` the children draw as they are. `progress` is `nsh.progress`,\n`maxSampleOffset` how far beyond a pixel the shader samples them.",
+            &["<U = ShaderUniforms>(props: ShaderEffectProps<U>): YNode"],
+        ),
+    ),
+    (
         "createShader",
         Export::Function(crate::shader::create_shader, 1),
         Ts::function(

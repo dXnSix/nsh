@@ -386,6 +386,18 @@ impl Shader {
             });
         }
 
+        // Where the drawing starts, in points from the view's top-left (an
+        // effect drawn beyond the view starts outside it).
+        header.push_str("uniform float2 nsh_origin;\n");
+        program.uniforms.push(AgslUniform {
+            name: "nsh_origin".to_string(),
+            value: AgslValue::Frame,
+            ty: UniformType::Vec2,
+            offset: layout::FRAME_AREA,
+            count: 1,
+            stride: 0,
+        });
+
         // The uniforms' fields, each a uniform of its own.
         let mut fields = Vec::new();
         let mut slots = Vec::new();
@@ -477,7 +489,7 @@ impl Shader {
         let main = &writer.names[&NameKey::Function(self.analysis.main)];
         let _ = write!(
             body,
-            "half4 main(float2 nsh_coord) {{\n    return half4({main}(nsh_coord / nsh_scale));\n}}\n"
+            "half4 main(float2 nsh_coord) {{\n    return half4({main}(nsh_coord / nsh_scale + nsh_origin));\n}}\n"
         );
 
         program.source = format!("{header}\n{}{body}", writer.helpers.out);

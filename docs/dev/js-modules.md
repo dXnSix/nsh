@@ -20,7 +20,7 @@ host elements' props and events, the easings and the canvas methods from the cor
 element and JSX types `nsh` exports), `nsh/jsx-runtime.d.ts` and `nsh/globals.d.ts`, and tests check every module's
 exports against its declarations; the CLI writes them into `.nsh/types` (`tooling.md`).
 `nsh` itself only has the reactive API, `mount`, the primitives every UI is made of (`View`, `Text`, `Scroll`,
-`Input`, `Image`, `List`, `Canvas` and its classes, `Shader` with `createShader` and `shaderSupport`, `WebView`,
+`Input`, `Image`, `List`, `Canvas` and its classes, `Shader` and `ShaderEffect` with `createShader` and `shaderSupport`, `WebView`,
 `Video`) and the types; there is no catch-all module.
 TSX imports mirror the Rust crates' layers: the primitives from `nsh`, as Rust takes them from
 `nsh_core::ui::prelude`, the base components from `nsh/base` (`nsh-base`). A released API that moves keeps its old
@@ -33,7 +33,7 @@ re-exported by `nsh`). Apps import a primitive's tag from `nsh` (`native-pipelin
 
 | Module | Exports | Implemented in (`crates/nsh-js/src`) |
 |---|---|---|
-| `nsh` | `signal`, `computed`, `effect`, `batch`, `untracked`, `cleanup`, `context`, `split`, `mount`, `resource` (`resource.rs`: a callable object over four signals, its loads kept by `nsh_core::resource::Runs`); `View`, `Text`, `Scroll`, `Input` (host elements as components: `dom::host_component`); `Image`, `List`, `Canvas`, `Path2D`, `CanvasRenderingContext2D`, `CanvasGradient`, `WebView`, `Video` (the modules' below, the same values); `Shader`, `createShader`, `shaderSupport` (`shader.rs`, [shaders.md](shaders.md)); `YNode`, `Accessor`, `Signal`, `Context`, `Component`, the types of styles, element props, events and `JSX` | `reactive.rs`, `dom.rs`, `modules.rs` |
+| `nsh` | `signal`, `computed`, `effect`, `batch`, `untracked`, `cleanup`, `context`, `split`, `mount`, `resource` (`resource.rs`: a callable object over four signals, its loads kept by `nsh_core::resource::Runs`); `View`, `Text`, `Scroll`, `Input` (host elements as components: `dom::host_component`); `Image`, `List`, `Canvas`, `Path2D`, `CanvasRenderingContext2D`, `CanvasGradient`, `WebView`, `Video` (the modules' below, the same values); `Shader`, `ShaderEffect`, `createShader`, `shaderSupport` (`shader.rs`, [shaders.md](shaders.md)); `YNode`, `Accessor`, `Signal`, `Context`, `Component`, the types of styles, element props, events and `JSX` | `reactive.rs`, `dom.rs`, `modules.rs` |
 | `nsh:rt` | what compiled JSX calls (`element`, `insert`, `spread`, `cond`, `each`, `list`, `font`, ...); apps never import it | `dom.rs`, `list.rs` |
 | (globals) | `If`, `Each` (control flow; their tags compile to `cond` / `each`) | `dom.rs` |
 | `nsh/animated` | `createAnimatedValue`, `AnimatedValue`, `AnimatedNode`, `Animated`, `Easing`, `LayoutAnimation` | `animated.rs` |
