@@ -34,15 +34,24 @@ fn main(p: vec2f, u: Uniforms) -> vec4f {
 }
 `);
 
-// Frosted glass: what is behind the view, averaged around each pixel.
+// Frosted glass: what is behind the view, blurred (a Gaussian of 7 points) and lightened.
 const frost = createShader(`
 fn main(p: vec2f) -> vec4f {
+  // Noise per device pixel turns and shifts its samples: an even grain
+  // instead of copies of what is behind.
+  var h = fract(vec3f(floor(p * nsh.scale).xyx) * vec3f(0.1031, 0.1030, 0.0973));
+  h += dot(h, h.yzx + 33.33);
+  let noise = fract((h.xx + h.yz) * h.zy);
   var c = vec4f(0.0);
-  for (var i = 0; i < 16; i++) {
-    let a = f32(i) * 0.3927;
-    c += sample_backdrop(p + vec2f(cos(a), sin(a)) * 7.0);
+  var total = 0.0;
+  for (var i = 0; i < 96; i++) {
+    let d = sqrt((f32(i) + noise.y) / 96.0) * 17.5;
+    let a = f32(i) * 2.3999632 + noise.x * 6.2831853;
+    let w = exp(-0.5 * d * d / 49.0);
+    c += sample_backdrop(p + vec2f(cos(a), sin(a)) * d) * w;
+    total += w;
   }
-  return c / 16.0 * 0.75 + vec4f(0.25);
+  return c / total * 0.75 + vec4f(0.25);
 }
 `);
 
