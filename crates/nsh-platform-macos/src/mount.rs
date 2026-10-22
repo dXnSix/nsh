@@ -328,14 +328,15 @@ impl Mounter {
             }
             MountItem::ShaderProgram { program } => crate::shader::program(program),
             MountItem::Shader { id, fill } => {
-                if let Some(view) = self.get(*id)
-                    && view.kind() == ViewKind::Shader
-                {
+                if let Some(view) = self.get(*id) {
                     crate::shader::set(surface, view, fill.clone());
                 }
             }
-            // Shader effects and backdrops draw their children only here.
-            MountItem::ShaderInput { .. } => {}
+            MountItem::ShaderInput { id } => {
+                if let Some(view) = self.get(*id) {
+                    crate::shader::input_changed(surface, view);
+                }
+            }
             MountItem::Gestures { id, values } => {
                 if let Some(view) = self.get(*id) {
                     crate::input::gestures(surface, view, *values);

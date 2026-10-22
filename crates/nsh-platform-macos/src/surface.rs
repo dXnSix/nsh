@@ -232,8 +232,14 @@ impl Surface {
     /// A surface with no app yet.
     pub(crate) fn new(mtm: MainThreadMarker, mut environment: Environment) -> Rc<Surface> {
         // Shaders fill views with Metal (`crate::shader`).
-        environment.shaders =
-            nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Msl);
+        // Effects and backdrops from pictures taken again when they change.
+        environment.shaders = {
+            let mut support =
+                nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Msl);
+            support.effect = nsh_core::shader::Support::Snapshot;
+            support.backdrop = nsh_core::shader::Support::Snapshot;
+            support
+        };
         let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
         let root = NshView::new(mtm, ROOT_ID, nsh_core::ViewKind::View);
         let surface = Rc::new(Surface {

@@ -1044,6 +1044,7 @@ impl NshView {
     pub(crate) fn set_bounds_origin(&self, x: f32, y: f32) {
         let c = self.ensure_container();
         c.setBoundsOrigin(NSPoint::new(x as CGFloat, y as CGFloat));
+        crate::shader::ui_changed(self);
     }
 
     /// Something it draws changed: content (text, canvas) is drawn again
@@ -1051,6 +1052,8 @@ impl NshView {
     pub(crate) fn changed(&self) {
         self.restyle();
         self.redraw();
+        // Shader effects around it and backdrops show it in a picture.
+        crate::shader::ui_changed(self);
     }
 
     /// Its style changed: the decoration is applied again (the content is
@@ -1174,6 +1177,7 @@ impl NshView {
     pub(crate) fn moved(&self) {
         self.place();
         crate::decor::apply(self);
+        crate::shader::ui_changed(self);
     }
 
     /// Places the view at its frame (with its parent's mirroring and its

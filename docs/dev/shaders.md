@@ -148,6 +148,7 @@ Effects and backdrops, per platform:
 | Platform | `effect` | `backdrop` | How |
 |---|---|---|---|
 | Android 13+ | live | live | an effect records its children into a `RenderNode` (`maxSampleOffset` beyond the view) whose `RenderEffect` is the runtime shader, its content input that node; a backdrop shader runs as the render effect of a node drawing `Backdrop.java`'s recording. A render effect gives one live input: an effect that samples both reads the backdrop as transparent |
+| macOS | snapshot | snapshot | an effect's children live in a container (`NshView::ensure_container`) whose layer an empty mask hides while the shader draws (AppKit hit-tests views, so they keep their clicks); the shader's `CAMetalLayer` covers the view and `maxSampleOffset` beyond it, above the container (`decor::EFFECT`). The content is the container rendered with `renderInContext:` (without its mask) into a bitmap; the backdrop is the surface's root rendered at the view's place with the view at opacity 0. Pictures are taken on the next display frame after a `ShaderInput` or a UI-thread change (`shader::ui_changed`, from `NshView::changed` / `moved` and scrolling), all at once, and uploaded (`ShaderLayer::set_input`). `renderInContext:` draws no Metal layer, video or web page; in-process screenshots hide effects' containers |
 | others | `false` | `false` | an effect draws its children as they are; `sample_backdrop` reads transparent |
 
 AGSL computes `p` as the pixel's coordinate over the scale plus `nsh_origin`, the frame area's origin, as the other

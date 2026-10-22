@@ -32,7 +32,7 @@ pub use nsh_shader::{GlslBlock, GlslProgram, GlslVersion};
 use crate::{
     ImageSource,
     animation::{AnimationValue, NodeId as AnimationNode},
-    geometry::{DevicePixels, Percentage, Points, Size},
+    geometry::{Bounds, DevicePixels, Percentage, Point, Points, Size},
     js::host::{HostCx, HostInput, HostValue},
     style::Color,
     ui::TsTypes,
@@ -725,21 +725,47 @@ pub fn nsh_buffer(
 /// (`size`) and its images, by slot, are stretched over it, each as many
 /// pixels in its own coordinates as it has (AGSL; none elsewhere).
 pub fn frame_buffer(size: Size<Points>, images: &[(usize, Size<DevicePixels>)]) -> Vec<u8> {
+    let view = Bounds::new(Point::default(), size);
+    let inputs: Vec<_> = images
+        .iter()
+        .map(|&(slot, px)| (ShaderInput::Image(slot as u8), view, px))
+        .collect();
+    frame_buffer_of(view, &inputs)
+}
+
+/// The frame buffer ([`layout`]) of a drawing of `area` (points from the
+/// view's top-left: an effect draws beyond its view) whose inputs lie at
+/// their rects, each as many pixels as it has (AGSL reads them in those).
+pub fn frame_buffer_of(
+    area: Bounds<Points>,
+    inputs: &[(ShaderInput, Bounds<Points>, Size<DevicePixels>)],
+) -> Vec<u8> {
     let mut out = vec![0u8; layout::FRAME_SIZE as usize];
-    let (width, height) = (size.width.0, size.height.0);
-    for (i, v) in [0.0, 0.0, width, height].into_iter().enumerate() {
+    let corners = |b: Bounds<Points>| [b.origin.x.0, b.origin.y.0, b.size.width.0, b.size.height.0];
+    for (i, v) in corners(area).into_iter().enumerate() {
         write_f32(&mut out, layout::FRAME_AREA + 4 * i as u32, v);
     }
-    for &(slot, px) in images {
-        let input = layout::FRAME_INPUTS
-            + layout::INPUT_STRIDE * ShaderInput::Image(slot as u8).index() as u32;
-        for (i, v) in [0.0, 0.0, width, height].into_iter().enumerate() {
-            write_f32(&mut out, input + layout::INPUT_RECT + 4 * i as u32, v);
+    for &(input, rect, px) in inputs {
+        let at = layout::FRAME_INPUTS + layout::INPUT_STRIDE * input.index() as u32;
+        for (i, v) in corners(rect).into_iter().enumerate() {
+            write_f32(&mut out, at + layout::INPUT_RECT + 4 * i as u32, v);
         }
-        write_f32(&mut out, input + layout::INPUT_PX, px.width.0 as f32);
-        write_f32(&mut out, input + layout::INPUT_PX + 4, px.height.0 as f32);
+        write_f32(&mut out, at + layout::INPUT_PX, px.width.0 as f32);
+        write_f32(&mut out, at + layout::INPUT_PX + 4, px.height.0 as f32);
     }
     out
+}
+
+/// Writes animated values ([`crate::animation::AnimationProp::ShaderUniform`])
+/// into a uniforms' buffer, or `progress` for [`PROGRESS`].
+pub fn write_args(bytes: &mut [u8], progress: &mut f32, values: &[(u16, AnimationValue)]) {
+    for &(k, value) in values {
+        if k == PROGRESS {
+            *progress = value.number();
+        } else {
+            write_animated(bytes, k, value);
+        }
+    }
 }
 
 #[cfg(test)]

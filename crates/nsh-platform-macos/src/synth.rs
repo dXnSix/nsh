@@ -260,7 +260,13 @@ pub(crate) fn shot(window: &NSWindow) -> Result<Vec<u8>, String> {
     let rep = view
         .bitmapImageRepForCachingDisplayInRect(bounds)
         .ok_or("cannot make a bitmap of the window")?;
+    // An in-process picture draws masked layers whole: the children of
+    // effects (shown through their shader's picture) stay out of it.
+    let hidden = crate::shader::hide_effect_children(window);
     view.cacheDisplayInRect_toBitmapImageRep(bounds, &rep);
+    for container in hidden {
+        container.setHidden(false);
+    }
     crate::surface::quiet(|| pictures.iter().for_each(|l| l.removeFromSuperlayer()));
     let properties = NSDictionary::<NSBitmapImageRepPropertyKey, objc2::runtime::AnyObject>::new();
     // SAFETY: an empty property dictionary is valid for PNG.
