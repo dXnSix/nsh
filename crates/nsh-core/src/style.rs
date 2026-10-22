@@ -867,6 +867,9 @@ pub(crate) struct Pending {
     /// `position: "fixed"`: laid out in its root view's box (a view; other
     /// elements as `absolute`).
     pub(crate) fixed_position: bool,
+    /// `position: "sticky"`: laid out as `relative`, its insets where it
+    /// sticks in the viewport of the scroll view around it.
+    pub(crate) sticky_position: bool,
     /// `animationDuration`.
     animation_duration: Option<f32>,
     /// `animationDelay`.
@@ -1144,7 +1147,7 @@ macro_rules! style_keys {
 
 style_keys! {
     Display = "display": Layout "\"flex\" | \"grid\" | \"block\" | \"none\"",
-    Position = "position": Layout "\"relative\" | \"absolute\" | \"static\" | \"fixed\"" "`static`: in the flow, its insets ignored (it stays the containing block of its absolute children, as every view is). `fixed`: a view laid out in its root view's box (the surface, or the modal it is in) and drawn above that root view's children, so it stays in place while what is around it scrolls; other elements are `absolute`.",
+    Position = "position": Layout "\"relative\" | \"absolute\" | \"static\" | \"fixed\" | \"sticky\"" "`static`: in the flow, its insets ignored (it stays the containing block of its absolute children, as every view is). `fixed`: a view laid out in its root view's box (the surface, or the modal it is in) and drawn above that root view's children, so it stays in place while what is around it scrolls; other elements are `absolute`. `sticky`: in the flow, and while its parent shows it stays `top` (in a horizontal scroll view `left`) from the start of the viewport of the scroll view around it, as far as the end of its parent's content box; it draws above its siblings of the same `zIndex`.",
     FlexDirection = "flexDirection": Layout "\"row\" | \"column\" | \"row-reverse\" | \"column-reverse\"",
     FlexWrap = "flexWrap": Layout "\"wrap\" | \"nowrap\" | \"wrap-reverse\"",
     Flex = "flex": Layout "number",
@@ -1983,16 +1986,18 @@ impl Style {
                 }
             }
             StyleKey::Position => {
-                let (position, fixed, is_static) = match keyword(value)? {
-                    None | Some("relative") => (Position::Relative, false, false),
-                    Some("absolute") => (Position::Absolute, false, false),
-                    Some("fixed") => (Position::Absolute, true, false),
-                    Some("static") => (Position::Relative, false, true),
+                let (position, fixed, is_static, sticky) = match keyword(value)? {
+                    None | Some("relative") => (Position::Relative, false, false, false),
+                    Some("absolute") => (Position::Absolute, false, false, false),
+                    Some("fixed") => (Position::Absolute, true, false, false),
+                    Some("static") => (Position::Relative, false, true, false),
+                    Some("sticky") => (Position::Relative, false, false, true),
                     Some(_) => return Err(StyleError::InvalidValue),
                 };
                 l.position = position;
                 self.pending.fixed_position = fixed;
                 self.pending.static_position = is_static;
+                self.pending.sticky_position = sticky;
             }
             StyleKey::FlexDirection => {
                 l.flex_direction = match keyword(value)? {
