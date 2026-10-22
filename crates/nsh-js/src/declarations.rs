@@ -190,6 +190,15 @@ export interface ShaderProps<U = ShaderUniforms> extends CommonProps, Omit<Shade
   uniforms?: U;
 }
 
+/** `<ShaderTransition>`: a view whose children change through a shader. */
+export interface ShaderTransitionProps<U = ShaderUniforms> extends CommonProps, Omit<ShaderTransitionHostProps, "src" | "uniforms"> {
+  style?: StyleProp<ViewStyle>;
+  /** The shader; without one the transition runs its `fallback`. */
+  src?: ShaderAsset<U> | null;
+  /** The values of its uniforms, by name (those left out are 0). */
+  uniforms?: U;
+}
+
 /** `<ShaderEffect>`: a view whose children draw through a shader. */
 export interface ShaderEffectProps<U = ShaderUniforms> extends CommonProps, Omit<ShaderEffectHostProps, "src" | "uniforms"> {
   style?: StyleProp<ViewStyle>;

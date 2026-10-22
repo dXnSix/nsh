@@ -640,6 +640,7 @@ fn kind_name(kind: ViewKind) -> &'static str {
         ViewKind::Canvas => "canvas",
         ViewKind::Shader => "shader",
         ViewKind::ShaderEffect => "shadereffect",
+        ViewKind::ShaderTransition => "shadertransition",
         ViewKind::WebView => "web",
         ViewKind::Native => "native",
         ViewKind::Video => "video",
@@ -1250,6 +1251,12 @@ pub(crate) fn encode(out: &mut Out, item: &MountItem) {
         }
         MountItem::ShaderInput { id } => {
             out.item("si").num(*id).end();
+        }
+        MountItem::ShaderTransition { id, duration } => {
+            out.item("st")
+                .num(*id)
+                .num(duration.as_secs_f64() * 1000.0)
+                .end();
         }
         MountItem::Shader { id, fill } => {
             out.item("sh")

@@ -2,6 +2,13 @@
 //! view's size, which Direct2D draws over its background and under its
 //! children (`docs/dev/shaders.md` "Windows").
 //!
+//! A `<ShaderTransition>` draws as an effect while a transition runs
+//! ([`start_transition`]): its children, drawn with the frame, are its
+//! `sample_to`; before the batch that changes them they are drawn once
+//! into another texture, its `sample_from` (or the running transition's
+//! picture is copied there), and a frame callback moves `nsh.progress`
+//! from 0 to 1.
+//!
 //! The inputs are live, drawn with the frame: a `<ShaderEffect>`'s children
 //! are drawn by Direct2D into a texture (its content) instead of the
 //! window, and what the frame drew behind a view so far is copied into
@@ -188,8 +195,12 @@ pub(crate) struct ShaderState {
     /// `nsh.progress`: the fill's, or its animated value.
     progress: f32,
     args: Vec<(u16, AnimationValue)>,
-    /// A `<ShaderEffect>`: its children are the shader's content.
+    /// A `<ShaderEffect>` or `<ShaderTransition>`: its children are the
+    /// shader's content (or its `sample_to`).
     effect: bool,
+    /// A `<ShaderTransition>`; when it runs, its start and duration.
+    transition: bool,
+    running: Option<(Instant, std::time::Duration)>,
     /// The images, by slot, once loaded.
     images: Vec<Option<Rc<crate::image::Frame>>>,
     started: Option<Instant>,
@@ -210,8 +221,10 @@ struct Target {
     buffers: [Option<ID3D11Buffer>; 3],
     images: Vec<Option<(usize, ID3D11ShaderResourceView)>>,
     sampler: Option<ID3D11SamplerState>,
-    /// The content's and the backdrop's textures, of the target's size.
-    inputs: [Option<Input>; 2],
+    /// The textures of the children (an effect's content, a transition's
+    /// `sample_to`), the backdrop and a transition's `sample_from`, of the
+    /// target's size.
+    inputs: [Option<Input>; 3],
     /// The backdrop was copied in this frame ([`take_backdrop`]).
     backdrop: bool,
 }
@@ -226,7 +239,8 @@ struct Input {
 }
 
 impl Target {
-    /// The texture of input `at` (0: the content, 1: the backdrop).
+    /// The texture of input `at` (0: the children, 1: the backdrop, 2: a
+    /// transition's `sample_from`).
     fn input(&mut self, gfx: &Gfx, at: usize, scale: f32) -> Option<Input> {
         if self.inputs[at].is_none() {
             self.inputs[at] = texture(gfx, self.size, scale, D2D1_BITMAP_OPTIONS_TARGET)
@@ -250,11 +264,144 @@ impl ShaderState {
     }
 }
 
-/// Sets up a shader view; `effect`: a `<ShaderEffect>`.
-pub(crate) fn create(view: &NshView, effect: bool) {
+/// Sets up a shader view; `effect`: a `<ShaderEffect>`, `transition`: a
+/// `<ShaderTransition>`.
+pub(crate) fn create(view: &NshView, effect: bool, transition: bool) {
     view.state_mut().shader = Some(ShaderState {
-        effect,
+        effect: effect || transition,
+        transition,
         ..ShaderState::default()
+    });
+}
+
+impl ShaderState {
+    /// The input its children are: an effect's content, a transition's
+    /// `sample_to`.
+    fn children(&self) -> ShaderInput {
+        if self.transition {
+            ShaderInput::To
+        } else {
+            ShaderInput::Content
+        }
+    }
+}
+
+/// A shader transition starts ([`nsh_core::MountItem::ShaderTransition`],
+/// before the rest of its batch): what shows now is drawn into its
+/// `sample_from`, and a frame callback moves `nsh.progress` from 0 to 1
+/// over `duration`.
+pub(crate) fn start_transition(
+    surface: &Rc<Surface>,
+    view: &NshView,
+    duration: std::time::Duration,
+) {
+    let Ok(gfx) = gfx::get() else { return };
+    let scale = surface.scale();
+    let (area, from, running) = {
+        let state = view.state();
+        let Some(shader) = state.shader.as_ref() else {
+            return;
+        };
+        let Some(fill) = shader.fill.as_ref() else {
+            return;
+        };
+        if !shader.transition || shaders(&gfx, fill.program).is_none() {
+            return;
+        }
+        let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let o = fill.max_offset.0.max(0.0);
+        let area = Bounds::new(
+            Point::new(Points(-o), Points(-o)),
+            Size::new(Points(w + 2.0 * o), Points(h + 2.0 * o)),
+        );
+        let size = (
+            (area.size.width.0 * scale).round().max(1.0) as u32,
+            (area.size.height.0 * scale).round().max(1.0) as u32,
+        );
+        let mut target = shader.target.borrow_mut();
+        let generation = gfx::generation();
+        if target
+            .as_ref()
+            .is_none_or(|t| t.generation != generation || t.size != size)
+        {
+            *target = make_target(&gfx, size, generation)
+                .map_err(|e| log::warn!("<Shader>: {e}"))
+                .ok();
+        }
+        let Some(t) = target.as_mut() else { return };
+        let Some(from) = t.input(&gfx, 2, scale) else {
+            return;
+        };
+        let running = shader.running.is_some();
+        if running {
+            // What shows: the transition as it was last drawn.
+            // SAFETY: COM calls on bitmaps of the live device, of one size.
+            if let Err(e) = unsafe { from.bitmap.CopyFromBitmap(None, &t.bitmap, None) } {
+                log::debug!("<ShaderTransition>: no picture of the transition: {e}");
+            }
+        }
+        (area, from, running)
+    };
+    if !running && let Ok(image) = from.bitmap.cast::<ID2D1Image>() {
+        // The children as they are, at the picture's origin.
+        let base = Mat4::new().translate(-area.origin.x.0, -area.origin.y.0);
+        crate::render::draw_offscreen(surface, &image, scale, |cx| {
+            view.with_children(|children| {
+                for child in children {
+                    let origin = {
+                        let s = child.state();
+                        view.state().child_origin(s.frame, s.shift)
+                    };
+                    crate::render::draw_view(cx, child, base, origin);
+                }
+            });
+        });
+    }
+    {
+        let mut s = view.state_mut();
+        let Some(shader) = s.shader.as_mut() else {
+            return;
+        };
+        shader.running = Some((Instant::now(), duration));
+        shader.progress = 0.0;
+        shader.stale();
+    }
+    view.changed();
+    if running {
+        // Its frame callback runs on.
+        return;
+    }
+    let id = view.id();
+    surface.on_frame(move |surface, _| {
+        let Some(view) = surface.view(id) else {
+            return false;
+        };
+        let runs = {
+            let mut s = view.state_mut();
+            let Some(shader) = s.shader.as_mut() else {
+                return false;
+            };
+            let Some((start, duration)) = shader.running else {
+                return false;
+            };
+            let t =
+                (start.elapsed().as_secs_f32() / duration.as_secs_f32().max(f32::EPSILON)).min(1.0);
+            shader.progress = t;
+            if t >= 1.0 {
+                // Its children draw as they are again.
+                shader.running = None;
+                if let Some(t) = shader.target.get_mut() {
+                    t.inputs[2] = None;
+                }
+            }
+            shader.stale();
+            t < 1.0
+        };
+        view.changed();
+        runs
     });
 }
 
@@ -398,7 +545,7 @@ pub(crate) fn effect(state: &ViewState) -> bool {
     state
         .shader
         .as_ref()
-        .is_some_and(|s| s.effect && s.fill.is_some())
+        .is_some_and(|s| s.effect && s.fill.is_some() && (!s.transition || s.running.is_some()))
 }
 
 /// Draws a shader view's picture (rendering it first if it is stale);
@@ -438,7 +585,7 @@ pub(crate) fn draw_effect(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) -> b
         let samples = shader
             .fill
             .as_ref()
-            .is_some_and(|f| f.samples(ShaderInput::Content));
+            .is_some_and(|f| f.samples(shader.children()));
         let content = match samples {
             true => shader
                 .target
@@ -529,13 +676,21 @@ fn finish(cx: &mut DrawCx<'_>, state: &ViewState, area: Bounds<Points>) {
             true => t.inputs[1].clone(),
             false => None,
         };
-        let content = match fill.samples(ShaderInput::Content) && shader.effect {
+        let children = match fill.samples(shader.children()) && shader.effect {
             true => t.inputs[0].clone(),
+            false => None,
+        };
+        let from = match shader.running.is_some() && fill.samples(ShaderInput::From) {
+            true => t.inputs[2].clone(),
             false => None,
         };
         let size = state.frame.size;
         let time = shader.started.map_or(0.0, |s| s.elapsed().as_secs_f32());
-        let inputs = [content, backdrop];
+        // By input: the content, the backdrop, `sample_from`, `sample_to`.
+        let inputs = match shader.transition {
+            true => [None, backdrop, from, children],
+            false => [children, backdrop, None, None],
+        };
         if let Err(e) = render(cx, t, &program, shader, size, area, &inputs, time) {
             log::warn!("<Shader>: {e}");
             return;
@@ -720,7 +875,7 @@ fn make_target(gfx: &Gfx, size: (u32, u32), generation: u64) -> windows::core::R
         buffers: [None, None, None],
         images: Vec::new(),
         sampler: None,
-        inputs: [None, None],
+        inputs: [None, None, None],
         backdrop: false,
     })
 }
@@ -788,7 +943,8 @@ fn image_view(
 }
 
 /// Renders the shader over `area` of a view of `size`, with the content's
-/// and the backdrop's textures (`inputs`) where it has them.
+/// the backdrop's and a transition's textures (`inputs`, by input index)
+/// where it has them.
 #[allow(clippy::too_many_arguments)]
 fn render(
     cx: &mut DrawCx<'_>,
@@ -797,7 +953,7 @@ fn render(
     shader: &ShaderState,
     size: Size<Points>,
     area: Bounds<Points>,
-    inputs: &[Option<Input>; 2],
+    inputs: &[Option<Input>; 4],
     time: f32,
 ) -> windows::core::Result<()> {
     let gfx = cx.gfx;
@@ -817,9 +973,14 @@ fn render(
             ))
         })
         .collect();
-    for (input, texture) in [ShaderInput::Content, ShaderInput::Backdrop]
-        .into_iter()
-        .zip(inputs)
+    for (input, texture) in [
+        ShaderInput::Content,
+        ShaderInput::Backdrop,
+        ShaderInput::From,
+        ShaderInput::To,
+    ]
+    .into_iter()
+    .zip(inputs)
     {
         if texture.is_some() {
             rects.push((input, area, px));
@@ -835,16 +996,8 @@ fn render(
     for input in &program.textures {
         let slot = match *input {
             ShaderInput::Image(slot) => slot,
-            ShaderInput::Content => {
-                views.push(inputs[0].as_ref().map(|i| i.view.clone()));
-                continue;
-            }
-            ShaderInput::Backdrop => {
-                views.push(inputs[1].as_ref().map(|i| i.view.clone()));
-                continue;
-            }
-            _ => {
-                views.push(None);
+            input => {
+                views.push(inputs[input.index()].as_ref().map(|i| i.view.clone()));
                 continue;
             }
         };

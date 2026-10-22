@@ -68,6 +68,7 @@ const ACCESSIBILITY_LABEL: i32 = 32;
 const APPEARANCE: i32 = 33;
 const SHADER_PROGRAM: i32 = 34;
 const SHADER: i32 = 35;
+const SHADER_TRANSITION: i32 = 36;
 
 /// An entry of the object table.
 pub(crate) enum Obj {
@@ -144,6 +145,7 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                     ViewKind::Native => 15,
                     ViewKind::Shader => 16,
                     ViewKind::ShaderEffect => 17,
+                    ViewKind::ShaderTransition => 18,
                 });
             }
             MountItem::Insert {
@@ -331,6 +333,11 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
             }
             // Android's shaders read their inputs live.
             MountItem::ShaderInput { .. } => {}
+            MountItem::ShaderTransition { id, duration } => {
+                e.int(SHADER_TRANSITION);
+                e.int(id as i32);
+                e.float(duration.as_secs_f32() * 1000.0);
+            }
             MountItem::Overflow { id, extent } => {
                 e.int(OVERFLOW);
                 e.int(id as i32);

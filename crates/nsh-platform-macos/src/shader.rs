@@ -19,6 +19,12 @@
 //! draws no `CAMetalLayer`, video or web page: shaders, videos and web
 //! views inside an effect or behind a backdrop read as transparent.
 //!
+//! `<ShaderTransition>`: as an effect, but only while a transition runs
+//! ([`start_transition`]): its children are pictured as they were when it
+//! starts (`sample_from`) and as they are after the batch (`sample_to`,
+//! taken again as they change), and a frame callback moves `nsh.progress`
+//! from 0 to 1 over the duration; then the children show as they are.
+//!
 //! It draws when what it draws changes (the fill, an animated uniform, an
 //! image that loaded, its size or scale, its program once compiled, a new
 //! picture of an input) and, for a shader that reads `nsh.time`, on every
@@ -51,8 +57,12 @@ pub(crate) struct ShaderState {
     ticking: bool,
     /// The surface whose frames draw it.
     surface: std::rc::Weak<Surface>,
-    /// A shader effect (its children are its content).
+    /// A shader effect or transition (its children are its content or its
+    /// `sample_to`).
     effect: bool,
+    /// A shader transition; when it runs, its start and duration.
+    transition: bool,
+    running: Option<(std::time::Instant, std::time::Duration)>,
     /// The inputs it samples ([`ShaderFill::inputs`]).
     inputs: u32,
     /// Inputs whose picture is out of date, bit [`ShaderInput::index`].
@@ -113,7 +123,8 @@ fn views() -> Vec<NshView> {
 
 /// What `view` draws now (`None`: its children only).
 pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, fill: Option<Arc<ShaderFill>>) {
-    let effect = view.kind() == ViewKind::ShaderEffect;
+    let transition = view.kind() == ViewKind::ShaderTransition;
+    let effect = transition || view.kind() == ViewKind::ShaderEffect;
     if view.state().shader.is_none() {
         if fill.is_none() {
             return;
@@ -146,6 +157,8 @@ pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, fill: Option<Arc<Shader
                 ticking: false,
                 surface: Rc::downgrade(surface),
                 effect,
+                transition,
+                running: None,
                 inputs: 0,
                 stale: 0,
             });
@@ -156,9 +169,14 @@ pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, fill: Option<Arc<Shader
         VIEWS.with(|v| v.borrow_mut().push(view.downgrade()));
         resized(view);
     }
-    let shows = fill.is_some();
+    // A transition's children are its `sample_to`.
+    let children = if transition {
+        ShaderInput::To
+    } else {
+        ShaderInput::Content
+    };
     let inputs = fill.as_ref().map_or(0, |f| {
-        (f.samples(ShaderInput::Content) as u32 * CONTENT)
+        (f.samples(children) as u32 * CONTENT)
             | (f.samples(ShaderInput::Backdrop) as u32 * BACKDROP)
     });
     let load = {
@@ -183,12 +201,12 @@ pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, fill: Option<Arc<Shader
         }
         state.inputs = inputs;
         state.stale = inputs;
-        content_layer(&state.layer).setHidden(!shows);
+        if fill.is_none() {
+            state.running = None;
+        }
         state.layer.set_fill(fill)
     };
-    if effect {
-        hide_children(view, shows);
-    }
+    show(view);
     if inputs != 0 {
         schedule(surface);
     }
@@ -279,6 +297,116 @@ fn content_layer(layer: &nsh_metal::ShaderLayer) -> &CALayer {
     unsafe { &*(layer.layer() as *const objc2::runtime::AnyObject as *const CALayer) }
 }
 
+/// Shows the shader's layer while it draws, and an effect's children
+/// through it only: a fill always, an effect while it has a shader, a
+/// transition while it runs.
+fn show(view: &NshView) {
+    let (shows, effect) = {
+        let s = view.state();
+        let Some(state) = s.shader.as_ref() else {
+            return;
+        };
+        let shows =
+            state.layer.program().is_some() && (!state.transition || state.running.is_some());
+        content_layer(&state.layer).setHidden(!shows);
+        (shows, state.effect)
+    };
+    if effect {
+        hide_children(view, shows);
+    }
+}
+
+/// A shader transition starts ([`nsh_core::MountItem::ShaderTransition`],
+/// before the rest of its batch): what shows now is its `sample_from`, its
+/// children's next picture its `sample_to`, and a frame callback moves
+/// `nsh.progress` from 0 to 1 over `duration`.
+pub(crate) fn start_transition(
+    surface: &Rc<Surface>,
+    view: &NshView,
+    duration: std::time::Duration,
+) {
+    let (area, running) = {
+        let s = view.state();
+        let Some(state) = s.shader.as_ref() else {
+            return;
+        };
+        if !state.transition || state.layer.program().is_none() {
+            return;
+        }
+        (state.layer.area(), state.running.is_some())
+    };
+    let scale = view.backing_scale();
+    // What shows: the transition as it is drawn, or the children.
+    let from = if running {
+        view.state_mut()
+            .shader
+            .as_mut()
+            .and_then(|s| s.layer.picture())
+    } else {
+        view.container_view()
+            .and_then(|c| c.layer())
+            .map(|container| {
+                let (pw, ph) = (
+                    (area.size.width.0 as f64 * scale).round().max(1.0) as usize,
+                    (area.size.height.0 as f64 * scale).round().max(1.0) as usize,
+                );
+                let origin = (area.origin.x.0 as f64, area.origin.y.0 as f64);
+                let rgba = crate::surface::quiet(|| render(&container, origin, pw, ph, scale));
+                (pw, ph, rgba)
+            })
+    };
+    {
+        let mut s = view.state_mut();
+        let Some(state) = s.shader.as_mut() else {
+            return;
+        };
+        if let Some((w, h, rgba)) = from {
+            state.layer.set_input(ShaderInput::From, &rgba, w, h, area);
+        }
+        state.layer.clear_input(ShaderInput::To);
+        state.layer.set_progress(0.0);
+        state.running = Some((std::time::Instant::now(), duration));
+        state.stale |= state.inputs;
+    }
+    show(view);
+    draw(view);
+    schedule(surface);
+    if running {
+        // Its frame callback runs on.
+        return;
+    }
+    let weak = view.downgrade();
+    surface.add_frame_callback(move |_, _| {
+        let Some(view) = NshView::upgrade(&weak) else {
+            return false;
+        };
+        let done = {
+            let mut s = view.state_mut();
+            let Some(state) = s.shader.as_mut() else {
+                return false;
+            };
+            let Some((start, duration)) = state.running else {
+                return false;
+            };
+            let t =
+                (start.elapsed().as_secs_f32() / duration.as_secs_f32().max(f32::EPSILON)).min(1.0);
+            state.layer.set_progress(t);
+            if t >= 1.0 {
+                state.running = None;
+                state.layer.clear_input(ShaderInput::From);
+                state.layer.clear_input(ShaderInput::To);
+            }
+            t >= 1.0
+        };
+        if done {
+            show(&view);
+        } else {
+            draw(&view);
+        }
+        !done
+    });
+}
+
 /// An effect's children show through its shader only, while it has one:
 /// their container's layer is masked by an empty layer (nothing shows),
 /// and they keep their clicks.
@@ -319,6 +447,7 @@ pub(crate) fn ui_changed(view: &NshView) {
         if let Some(mut st) = v.try_state_mut()
             && let Some(s) = st.shader.as_mut()
             && s.effect
+            && (!s.transition || s.running.is_some())
             && s.inputs & CONTENT != 0
         {
             s.stale |= CONTENT;
@@ -356,15 +485,27 @@ fn schedule(surface: &Rc<Surface>) {
 
 /// Takes the pictures `view`'s shader is due, then draws it.
 fn take_pictures(view: &NshView) {
-    let (stale, area, effect, surface) = {
+    let (stale, area, effect, children, surface) = {
         let s = view.state();
         let Some(state) = s.shader.as_ref() else {
             return;
         };
+        // An idle transition draws nothing: its children show.
+        let stale = if state.transition && state.running.is_none() {
+            0
+        } else {
+            state.stale
+        };
+        let children = if state.transition {
+            ShaderInput::To
+        } else {
+            ShaderInput::Content
+        };
         (
-            state.stale,
+            stale,
             state.layer.area(),
             state.effect,
+            children,
             state.surface.upgrade(),
         )
     };
@@ -391,7 +532,7 @@ fn take_pictures(view: &NshView) {
             unsafe { container.setMask(mask.as_deref()) };
             rgba
         });
-        pictures.push((ShaderInput::Content, rgba));
+        pictures.push((children, rgba));
     }
     if stale & BACKDROP != 0
         && let Some(surface) = &surface

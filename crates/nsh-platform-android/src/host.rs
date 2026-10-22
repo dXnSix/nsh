@@ -820,6 +820,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_environment(
             nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Agsl);
         support.effect = nsh_core::shader::Support::Live;
         support.backdrop = nsh_core::shader::Support::Live;
+        support.transition = nsh_core::shader::Support::Live;
         support
     } else {
         nsh_core::shader::ShaderSupport::default()

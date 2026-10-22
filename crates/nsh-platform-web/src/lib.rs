@@ -333,6 +333,7 @@ fn page() -> Environment {
                 nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::GlslEs300);
             support.effect = nsh_core::shader::Support::Snapshot;
             support.backdrop = nsh_core::shader::Support::Snapshot;
+            support.transition = nsh_core::shader::Support::Snapshot;
             support
         },
         ..Environment::default()

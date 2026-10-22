@@ -100,6 +100,18 @@ animated value bound as `AnimationProp::ShaderUniform(shader::PROGRESS)`, which 
 buffer instead of the uniforms. Any shader may sample what is behind its view (`sample_backdrop`): the surface's
 drawing under the view, excluding the view, its subtree and what is above it.
 
+`<ShaderTransition src uniforms value duration fallback maxSampleOffset>` and `shader_transition(source).value(..)`
+are a third, `Tag::ShaderTransition` / `ViewKind::ShaderTransition`: a view whose children change through the shader.
+When a commit changes its `value` (`TransitionKey`: a string, number or boolean; the first value starts nothing), the
+core sends `MountItem::ShaderTransition { id, duration }` first in that batch (`Core::transition_starts`, spliced in at
+the end of `commit`): the platform pictures the children as they are before the batch's other items, its
+`sample_from`, and draws them through the shader from then on, their new drawing its `sample_to` (the content input of
+an effect, kept current the same way), while `nsh.progress` goes linearly from 0 to 1 over `duration` (300 ms by
+default); then the children draw as they are. A transition that starts while one runs starts from what shows. Without
+`src` it runs `fallback`: `"fade"` (the default) is a cross-fade the core supplies (`shader::crossfade`, one program
+per process), `"none"` sends no fill and no start. Where `shaderSupport().transition` is `false` the core starts none,
+so the children change at once.
+
 - **Making a shader.** `createShader(source)` (`nsh-js` `shader.rs`) compiles in Rust with the VM's limits
   (`max_shader_samples`) and returns a frozen `{ uniforms: [names], __shader: id }`; a VM keeps its shaders by id and
   by source, so the same source is the same shader (a component making its shader on each render, a module run again
@@ -154,6 +166,22 @@ Effects and backdrops, per platform:
 | Windows | live | live | drawn with the frame: an effect's children are drawn by Direct2D into a texture of the area (the view and `maxSampleOffset` beyond it; `shader::draw_effect`, another context of the device, so what is pushed on the window's stays), not into the window; a backdrop shader's input is what the frame drew so far under the area, copied into a texture before the view draws its own background (`shader::take_backdrop`; transparent in passes drawn offscreen, for a filtered or 3D-transformed view). Both textures are bound with the images; the window is drawn again whenever anything in it changes, so the inputs are always current (`ShaderInput` needs nothing). Web views inside an effect are not in its content |
 | Linux | live | snapshot | an effect's children are drawn, whenever GTK draws the effect again (it or something in it queued a draw), into a render node of their own (`NshView::snapshot_children`, not into the frame's) that the window's renderer renders over the area (`render_texture`); the texture is downloaded and uploaded into the shaders' context. The backdrop is a picture: after the frame clock's `after-paint` that follows a mark (`ShaderInput`, `shader::ui_changed` from `NshView::changed` / `moved` and scrolling; a shader's own redraws, `NshView::redraw`, mark nothing), the surface's views are drawn anew from its root (`NshView::draw`, not GTK's render nodes of the last frame, which have the view in them) up to the view: `shader::skipped` leaves out the view and whatever draws after it, `shader::past` the borders and scroll indicators of the views around it. GTK's damage phase is left alone in that pass |
 | others | `false` | `false` | an effect draws its children as they are; `sample_backdrop` reads transparent |
+
+Transitions, per platform (each draws as its effect does while a transition runs, and its children as they are
+otherwise):
+
+| Platform | `transition` | `sample_from` | Progress |
+|---|---|---|---|
+| Android 13+ | live | the children recorded into a `RenderNode` and rendered once by a `HardwareRenderer` into an `ImageReader`'s hardware bitmap (`ShaderBox.startTransition`), an input shader of the runtime shader; `sample_to` is the live render effect input | `dispatchDraw`, from `SystemClock.uptimeMillis` |
+| macOS | snapshot | the container rendered with `renderInContext:` (`shader::start_transition`), or the running transition's picture (`ShaderLayer::picture`) | a frame callback |
+| iOS, Mac Catalyst | snapshot | as macOS, from the decoration's content view (`ShaderHost::start`; effects and transitions are decorated when created, so the content view exists without styles) | the shader display link (`Mounter::transitions`) |
+| Web | snapshot | painted from the elements (`op_st`, `paintTree`), or the running transition's canvas | `requestAnimationFrame` |
+| Windows | live | the children drawn by Direct2D into a third input texture outside the frame (`render::draw_offscreen`), or the target copied (`CopyFromBitmap`) | `Surface::on_frame` |
+| Linux | live | the children rendered to a texture as an effect's content (`shader::start_transition`), or the last picture (flipped from GL's rows) | the view's tick callback |
+| GPUI | `false` | | |
+
+`nsh_metal::ShaderLayer` holds pictures of all four inputs (`set_input`, `clear_input`) and takes a transition's
+progress (`set_progress`).
 
 AGSL computes `p` as the pixel's coordinate over the scale plus `nsh_origin`, the frame area's origin, as the other
 writers' vertex stages place `p` over the area: an effect drawn beyond its view starts outside it.
