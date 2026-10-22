@@ -93,7 +93,10 @@
   list around it (from its place less its `top`, or `left` in a horizontal one, to where its end meets its parent's
   content box) and sends it with that view's sticky list rows (`core/sticky.rs`, `MountItem::StickyCells`), which the
   platforms pin on every scroll. It draws above its siblings of the same `zIndex` (`Node::stack_rank`), as above a
-  page's in-flow boxes. `bottom` / `right` stickiness and a zoomable scroll view are not supported.
+  page's in-flow boxes. An animated `top` (`left`) is where it sticks, followed every frame: the core keeps it out of
+  the view's bindings (`AnimationProp::StickyTop` / `StickyLeft`, warned once on a view that is not sticky) and sends
+  it as the range's `StickyCell::offset`, which the platforms add as they pin, as for a list's animated
+  `stickyHeaderOffset`. `bottom` / `right` stickiness and a zoomable scroll view are not supported.
 - **`pointer-events-*` classes** inherit as CSS's `pointer-events` (the `pointerEvents` prop keeps React Native's
   subtree meaning, and wins): a view that is `none` by its own class or the nearest one above mounts `box-none` when a
   `pointer-events-auto` inside it is a target, `none` at the top of what it blocks, and nothing below that
@@ -133,7 +136,9 @@
   animation drives (`Animated` `backgroundColor`) replaces the gradients, unless that state sets a gradient of its own:
   done in the core, so every platform shows it alike), `filter` (`brightness`, `contrast`,
   `grayscale`, `hue-rotate`, `invert`, `saturate`, `sepia`, `opacity`, `blur`, `drop-shadow`; color filters are composed into one
-  matrix), `backdropFilter` (blur), `mixBlendMode`, `outline*`, `visibility`, `cursor`, `transition*` (CSS: property groups,
+  matrix), `backdropFilter` (blur), `glassEffect` (Apple's Liquid Glass, drawn in the
+  `backdropFilter`'s place on iOS 26 and later and nowhere else, so give a glass view a blur to fall back
+  to), `mixBlendMode`, `outline*`, `visibility`, `cursor`, `transition*` (CSS: property groups,
   duration, delay, easing) and `animation*` (Tailwind's `spin` / `ping` / `pulse` / `bounce`), `display: grid` with
   `gridTemplateColumns/Rows` (line names: `grid.rs` turns them into taffy's `grid_template_*_names`, one set per
   line between components, a `repeat()` counting as one), `gridAutoFlow/Columns/Rows`, `gridColumn/Row(Start/End)` (by

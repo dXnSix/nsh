@@ -1268,6 +1268,7 @@ fn set_prop(
         "pinch",
         "rotation",
         "scrollValue",
+        "stickyHeaderOffset",
         "tooltip",
         "uniforms",
         "progress",

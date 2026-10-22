@@ -310,6 +310,12 @@ pub struct StickyCell {
     /// The scroll offset at which the next sticky cell pushes it out (may be
     /// infinite).
     pub end: Points,
+    /// An animated value added to the scroll offset: it sticks that much
+    /// further from the viewport's start (below a header that moves), at
+    /// `clamp(offset + value - start, 0, end - start)`. The platforms read
+    /// it from the animation graph whenever they pin, and pin again on the
+    /// graph's frames.
+    pub offset: Option<crate::animation::NodeId>,
 }
 
 /// The header heights a platform without a native header gives the core

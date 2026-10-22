@@ -30,14 +30,17 @@
 - **List** props: `each`, `estimatedItemSize`, `numColumns`, `inverted` (chat: item 0 at the bottom, starts at the end and keeps its
   distance from the end as content changes), `maintainVisibleContentPosition` (`autoscrollToBottomThreshold`: a list
   that is not inverted follows its end while within that distance of it, `ListState::anchor_end`; scrolled up, growth
-  below the viewport moves nothing; Rust components: `ListLayout::follow_end`, on their own lists and the lists they place), `stickyHeaderIndices` (one column, not inverted) + `stickyHeaderOffset` (where they stick: the core subtracts it from the sticky ranges, so platforms pin as they do without one), `header` /
+  below the viewport moves nothing; Rust components: `ListLayout::follow_end`, on their own lists and the lists they place), `stickyHeaderIndices` (one column, not inverted) + `stickyHeaderOffset` (where they stick: the core subtracts a number from the sticky ranges, so platforms pin as they do without one; an animated node rides along in `StickyCell::offset`, `ListState::sticky_node`, and the platforms add its value as they pin), `header` /
   `footer` / `empty` / `separator` (a component or an element), `contentStyle`
   (padding and gaps, numbers) / `contentClass` (`p-*`, `gap-*`), `initialScrollIndex`, `onLoadMore` + `loadMoreThreshold`, `onViewableItemsChange` +
   `viewabilityConfig` (`itemVisiblePercentThreshold` / `viewAreaCoveragePercentThreshold` / `minimumViewTime`), `keyExtractor`,
   `refreshing` / `onRefresh`, `scrollValue`. Every other prop (`testID`, accessibility, `class`, `onLayout`, touch
   props, ...) goes to the scroll view as on a `<Scroll>` (`list.rs` `OWN`: the names are read once, when the list is
   made; their values follow their getters). Positions, columns, sticky travel and viewability are all computed in the core; sticky cells
-  are pinned natively on every scroll (`MountItem::StickyCells`: translate by `clamp(offset - start, 0, end - start)`);
+  are pinned natively on every scroll (`MountItem::StickyCells`: translate by `clamp(offset + value - start, 0, end - start)`, `value` the cell's animated offset or 0);
+  cells with an animated offset are pinned again on the animation graph's frames too (the desktops' `Animator::sticky_views`,
+  iOS's `apply_animations`, Android's output code 15, the web's `sticky-offset` output), so they follow a moving bar
+  while the content stands still;
   the web, whose scroll events trail the browser's scrolling by a frame, puts each in a track spanning that travel
   instead and lets the browser's `position: sticky` keep it pinned (`nsh.js` `op_sticky`).
 - **List scroll commands**: the core resolves a list's `scrollToEnd` / `scrollToIndex` to a `ScrollTo` with the sizes it

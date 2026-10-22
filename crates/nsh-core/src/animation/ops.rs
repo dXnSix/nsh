@@ -33,6 +33,13 @@ pub enum AnimationProp {
     /// ([`crate::shader::write_animated`]); the shader draws again.
     /// [`crate::shader::PROGRESS`] is its `nsh.progress` instead.
     ShaderUniform(u16),
+    /// `top` of a `position: sticky` view: how far from the viewport's
+    /// start of a vertical scroll view it sticks. The core hands it to the
+    /// scroll view's sticky cells (`StickyCell::offset`), never to the
+    /// view's bindings.
+    StickyTop,
+    /// `left`: the same in a horizontal scroll view.
+    StickyLeft,
 }
 
 impl AnimationProp {
@@ -46,6 +53,8 @@ impl AnimationProp {
             "shadowColor" => AnimationProp::ShadowColor,
             "shadowOpacity" => AnimationProp::ShadowOpacity,
             "shadowRadius" => AnimationProp::ShadowRadius,
+            "top" => AnimationProp::StickyTop,
+            "left" => AnimationProp::StickyLeft,
             _ => return None,
         })
     }

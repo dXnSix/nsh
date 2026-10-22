@@ -2964,6 +2964,8 @@ dependencies = [
  "markdown",
  "markup5ever_rcdom",
  "nsh-core",
+ "nsh-engine",
+ "nsh-testing",
  "regex",
  "rustc-hash 2.1.3",
  "serde",

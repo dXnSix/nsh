@@ -643,6 +643,19 @@ final class Mounter {
     final java.util.Map<String, NshComponent.Factory> components = new java.util.HashMap<>();
     private final java.util.Set<String> missingComponents = new java.util.HashSet<>();
 
+    /**
+     * The app stopped (the view was destroyed, or another app replaced it):
+     * its native components hear {@link NshComponent#destroy} now, since no
+     * {@code DELETE} follows for them. Those already deleted are not told
+     * again.
+     */
+    void destroyComponents() {
+        for (int i = 0; i < views.size(); i++) {
+            View v = views.valueAt(i);
+            if (v instanceof ComponentBox) ((ComponentBox) v).destroy();
+        }
+    }
+
     /** Makes registered component {@code name} in box {@code id}. */
     private void component(int id, String name) {
         View v = views.get(id);
@@ -1471,6 +1484,17 @@ final class Mounter {
     /** A shader's uniform component `n` arrives as `SHADER_NUMBER + n` or, a color, `SHADER_COLOR + n`. */
     private static final int SHADER_NUMBER = 100_000, SHADER_COLOR = 200_000;
 
+    /** How much further each sticky cell sticks (px; an animated `StickyCell::offset`). */
+    private final java.util.HashMap<Integer, Float> stickyOffsets = new java.util.HashMap<>();
+    /** The scroll view that pins each sticky cell. */
+    final java.util.HashMap<Integer, ScrollBox> stickyHosts = new java.util.HashMap<>();
+
+    /** How much further sticky cell `id` sticks (px). */
+    float stickyOffset(int id) {
+        Float offset = stickyOffsets.get(id);
+        return offset == null ? 0 : offset;
+    }
+
     void outputs(float[] out) {
         if (out == null || out.length == 0) return;
         for (int i = 1; i + 2 < out.length; i += 3) {
@@ -1544,6 +1568,14 @@ final class Mounter {
                         decor.shadowRadius = radius;
                         v.invalidate();
                     }
+                    break;
+                }
+                case 15: {
+                    // A sticky cell sticks further in: its scroll view pins it again.
+                    int id = Float.floatToRawIntBits(out[i]);
+                    Float old = stickyOffsets.put(id, value * density);
+                    ScrollBox s = stickyHosts.get(id);
+                    if (s != null && (old == null || old != value * density)) s.pinSticky();
                     break;
                 }
                 default: break;

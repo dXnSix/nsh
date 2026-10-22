@@ -313,6 +313,21 @@ const CODE_CHARS = {
 };
 
 /**
+ * The browser's offset of local time from UTC at `ms` (ms since the epoch),
+ * in seconds east, as `struct tm`'s `tm_gmtoff` holds it (`local_time.rs`):
+ * daylight saving time included; 0 for a time the browser cannot place.
+ */
+function localOffset(ms) {
+  const west = new Date(ms).getTimezoneOffset();
+  return Number.isFinite(west) ? 0 - west * 60 : 0;
+}
+
+/** The browser's time zone (`Asia/Shanghai`), Intl's default; "" when unknown. */
+function timeZoneName() {
+  return new Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
+}
+
+/**
  * The key of a key event as `nsh_key` takes it (-1: none): the character
  * it types without modifiers, or, when Shift or Option change it or the
  * layout types no ASCII there, the US layout's character of the same key
@@ -547,6 +562,13 @@ class Player {
       nsh: {
         now_ms: () => performance.now(),
         date_now_ms: () => Date.now(),
+        // QuickJS' local time (`local_time.rs`) and Intl's default zone.
+        local_offset: (ms) => localOffset(ms),
+        time_zone: (p, cap) => {
+          const zone = encoder.encode(timeZoneName());
+          if (zone.length <= cap) this.bytes(p, cap).set(zone);
+          return zone.length;
+        },
         measure_text: (fp, fl, tp, tl) => {
           // Blink keeps every shaped string in the measuring context's
           // PlainTextPainter (a FrameShapeCache keyed by font), and drops it
@@ -1530,6 +1552,14 @@ class Player {
       this.shaderSoon(el);
       return;
     }
+    if (prop === "sticky-offset") {
+      // A sticky cell sticks this much further in (an animated offset).
+      const offset = Number(value);
+      if (el._stickyOffset === offset) return;
+      el._stickyOffset = offset;
+      if (el._track) this.placeTrack(el);
+      return;
+    }
     el._animation[prop] = value;
     if (prop === "border-color") {
       // Borders are drawn by an overlay.
@@ -2124,7 +2154,7 @@ class Player {
     t.width = `${horizontal ? length : 0}px`;
     t.height = `${horizontal ? 0 : length}px`;
     const s = cell.style;
-    const inset = `${at + origin - range[0]}px`;
+    const inset = `${at + origin - range[0] + (cell._stickyOffset ?? 0)}px`;
     s.left = horizontal ? inset : "auto";
     s.top = horizontal ? "auto" : inset;
     s.width = `${f[2]}px`;

@@ -93,10 +93,10 @@ Layout is computed in Rust (flexbox and CSS grid). The defaults differ from CSS'
 |---|---|---|---|
 | `display` | `"flex" \| "grid" \| "block" \| "none"` | `.flex()`, `.grid()`, `.hidden()` | The layout of the children. `"none"` removes the element from layout and hides it. `"block"` stacks children as CSS block layout does. Default `"flex"`. |
 | `position` | `"relative" \| "absolute" \| "static" \| "fixed" \| "sticky"` | `.relative()`, `.absolute()` | `"absolute"` takes the element out of the flow and places it by `top` / `right` / `bottom` / `left` relative to its parent. `"static"` stays in the flow and ignores its insets. `"fixed"` lays a view out in its root view's box (the window, or the modal it is in) and draws it above that root view's children, so it stays in place while what is around it scrolls; without insets it sits at the root view's top left, and other elements are placed as `"absolute"`. `"sticky"` stays in the flow and, while its parent is in view, sticks `top` (`left` in a horizontal scroll view) from the start of the viewport of the scroll view around it, until its end meets its parent's content box's; it draws above its siblings of the same `zIndex`. Every view is the containing block of its absolute children, whatever its own `position`. Default `"relative"`. |
-| `top` | `DimensionValue` | `.top(…)`, `.inset(…)` | Offset from the parent's top edge (absolute) or from the element's own position (relative). |
+| `top` | `DimensionValue \| AnimatedNode` | `.top(…)`, `.inset(…)`, `.bind_sticky_top(&node)` | Offset from the parent's top edge (absolute) or from the element's own position (relative). On a sticky view, where it sticks, which an animated value moves every frame. |
 | `right` | `DimensionValue` | `.right(…)` | Offset from the right edge. In right-to-left layouts it means the end edge. |
 | `bottom` | `DimensionValue` | `.bottom(…)` | Offset from the bottom edge. |
-| `left` | `DimensionValue` | `.left(…)` | Offset from the left edge. In right-to-left layouts it means the start edge. |
+| `left` | `DimensionValue \| AnimatedNode` | `.left(…)`, `.bind_sticky_left(&node)` | Offset from the left edge. In right-to-left layouts it means the start edge. On a sticky view in a horizontal scroll view, where it sticks, which an animated value moves every frame. |
 | `start` | `DimensionValue` | | Left in left-to-right layouts, right in right-to-left ones. |
 | `end` | `DimensionValue` | | Right in left-to-right layouts, left in right-to-left ones. |
 | `zIndex` | `number` | `.z_index(z)` | Order among siblings (stable for equal values); also the native stacking order. |
@@ -334,6 +334,7 @@ view().perspective(px(600.0)).rotate_y(deg(20.0)).scale(0.95)
 |---|---|---|---|
 | `filter` | `string` | `.blur(r)`, `.brightness(…)`, `.contrast(…)`, `.grayscale(…)`, `.hue_rotate(…)`, `.invert(…)`, `.saturate(…)`, `.sepia(…)` | CSS filters of the view and its content: `brightness()`, `contrast()`, `grayscale()`, `hue-rotate()`, `invert()`, `saturate()`, `sepia()`, `opacity()`, `blur()`, `drop-shadow()`. |
 | `backdropFilter` | `string` | `.backdrop_blur(r)`, `.backdrop_brightness(…)`, ... | CSS filters of what is behind the view, such as `"blur(10px)"` for frosted glass. |
+| `glassEffect` | `"none" \| "regular" \| "clear"` | `ViewStyle::glass_effect` (`GlassEffect`) | Liquid Glass behind the view's content on iOS 26 and later. `"regular"` uses the standard material; `"clear"` takes less color from the background. `"none"` is the default. Pair with `backdropFilter` for the blur shown on earlier iOS versions and other platforms. |
 | `mixBlendMode` | `"normal" \| "multiply" \| "screen" \| "overlay" \| "darken" \| "lighten" \| "color-dodge" \| "color-burn" \| "hard-light" \| "soft-light" \| "difference" \| "exclusion" \| "hue" \| "saturation" \| "color" \| "luminosity" \| "plus-darker" \| "plus-lighter"` | `.mix_blend_mode(mode)` | How the view blends with what is behind it. |
 
 > [!WARNING]
