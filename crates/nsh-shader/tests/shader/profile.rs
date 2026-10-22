@@ -33,9 +33,10 @@ fn counted_loops_compile() {
         "var c = vec4f(0.0); for (var i = 0; i < 3; i++) { c += u.a[i + 1] * u.a[3 - i]; } return c;",
         "var c = 0.0; for (var i = 0; i < 4; i++) { for (var j = i; j < 4; j++) { c += 1.0; } } return vec4f(c);",
     ] {
-        shader(&with_main(
+        let s = shader(&with_main(
             body.replace("for (var j = i;", "for (var j = 0;").as_str(),
         ));
+        assert!(s.to_agsl().is_ok());
     }
     let s = shader(&with_main(
         "var c = 0.0; for (var i = 10; i > 0; i -= 2) { c += 1.0; } return vec4f(c);",
@@ -161,7 +162,9 @@ fn uniforms_and_images_are_read_where_they_are() {
     let s = shader(&format!(
         "{image}fn f(p: vec2f, u: U) -> vec4f {{ return sample_image(u.photo, p) * u.photo.size.x; }}\nfn main(p: vec2f, u: U) -> vec4f {{ let v = u; return f(p, v); }}"
     ));
-    assert_eq!(s.reflection().inputs, [nsh_shader::Input::Image(0)]);
+    let agsl = s.to_agsl().unwrap();
+    assert!(agsl.source.contains("nsh_sample_4(p"), "{}", agsl.source);
+    assert!(agsl.source.contains("nsh_u0_photo_size"), "{}", agsl.source);
 }
 
 #[test]

@@ -1,7 +1,8 @@
-//! nsh-shader's tests: the profile's rules and reflection, over a corpus of fills, effects,
-//! backdrops and transitions (`corpus/`).
+//! nsh-shader's tests: the profile's rules, reflection, and the writers over a corpus of fills,
+//! effects, backdrops and transitions (`corpus/`).
 
 mod corpus;
+mod external;
 mod profile;
 
 use std::path::PathBuf;

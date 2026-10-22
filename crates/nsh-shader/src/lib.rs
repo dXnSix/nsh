@@ -19,14 +19,34 @@
 //!
 //! [`compile`] parses the source with naga, checks it against NSH's profile (the WGSL that Android's
 //! AGSL can say too; `profile.rs`) and the [`Limits`], and reflects its uniforms and what it reads
-//! ([`Reflection`]) (`docs/dev/shaders.md`).
+//! ([`Reflection`]). A [`Shader`] then writes each platform's language: Metal (feature `msl`),
+//! Direct2D and Direct3D 11 HLSL (`hlsl`), OpenGL 3.30 / ES 3.00 (`glsl`) and AGSL (`agsl`, NSH's
+//! own writer over naga's IR). The bundler checks shaders when it builds an app; each platform
+//! compiles them again with its own writer only (`docs/dev/shaders.md`).
 
 mod error;
 mod glue;
 mod profile;
 mod reflect;
 
+#[cfg(feature = "agsl")]
+mod agsl;
+#[cfg(feature = "glsl")]
+mod glsl;
+#[cfg(feature = "hlsl")]
+mod hlsl;
+#[cfg(feature = "msl")]
+mod msl;
+
+#[cfg(feature = "agsl")]
+pub use agsl::{AgslProgram, AgslUniform, AgslValue};
 pub use error::Error;
+#[cfg(feature = "glsl")]
+pub use glsl::{GlslBlock, GlslProgram, GlslVersion};
+#[cfg(feature = "hlsl")]
+pub use hlsl::HlslProgram;
+#[cfg(feature = "msl")]
+pub use msl::MslProgram;
 use naga::{Module, valid::ModuleInfo};
 pub use reflect::{Reflection, Uniform, UniformType};
 
@@ -79,7 +99,8 @@ const INPUTS: usize = 4 + layout::MAX_IMAGES;
 ///
 /// A program reads three uniform buffers: `nsh` (what the app's code reads), the frame (where the
 /// program draws and where its inputs are) and the app's uniforms, laid out as WGSL lays out their
-/// struct in the uniform address space ([`Reflection::uniforms`]).
+/// struct in the uniform address space ([`Reflection::uniforms`]). Direct2D takes them in one
+/// buffer ([`HlslProgram`]); AGSL as separate uniforms ([`AgslProgram`]).
 pub mod layout {
     /// Images a shader takes at most.
     pub const MAX_IMAGES: usize = 8;
@@ -135,10 +156,18 @@ impl Default for Limits {
     }
 }
 
-/// A checked shader: its source and what it reads.
+/// A checked shader: its module and what it reads. Writing a platform's program from it cannot
+/// fail for a reason of the app's (an error then is NSH's).
 #[derive(Debug)]
 pub struct Shader {
     source: String,
+    uniforms: Option<String>,
+    // The checked module, which the AGSL writer reads (naga's writers read the glue's).
+    #[cfg_attr(not(feature = "agsl"), allow(dead_code))]
+    module: Module,
+    #[cfg_attr(not(feature = "agsl"), allow(dead_code))]
+    info: ModuleInfo,
+    analysis: profile::Analysis,
     reflection: Reflection,
 }
 
@@ -157,6 +186,7 @@ pub fn compile(source: &str, limits: &Limits) -> Result<Shader, Error> {
     let uniforms = profile::signature(&module, source)?;
     let spec = Spec {
         uniforms: uniforms.as_deref(),
+        inputs: 0,
     };
     let module = parse(&glue::source(source, Glue::Check, spec), source)?;
     let info = validate(&module, source)?;
@@ -164,6 +194,10 @@ pub fn compile(source: &str, limits: &Limits) -> Result<Shader, Error> {
     let reflection = reflect::reflect(&module, &analysis);
     Ok(Shader {
         source: source.to_string(),
+        uniforms,
+        module,
+        info,
+        analysis,
         reflection,
     })
 }
@@ -191,4 +225,47 @@ impl Shader {
     pub fn reflection(&self) -> &Reflection {
         &self.reflection
     }
+
+    /// The module with `glue` for a writer, validated.
+    #[cfg_attr(
+        not(any(feature = "msl", feature = "glsl", feature = "hlsl")),
+        allow(dead_code)
+    )]
+    fn module(&self, glue: Glue) -> Result<(Module, ModuleInfo), Error> {
+        let spec = Spec {
+            uniforms: self.uniforms.as_deref(),
+            inputs: self.analysis.inputs,
+        };
+        let module =
+            parse(&glue::source(&self.source, glue, spec), &self.source).map_err(internal)?;
+        let info = validate(&module, &self.source).map_err(internal)?;
+        Ok((module, info))
+    }
+
+    /// The inputs a program samples, in their binding order.
+    #[cfg_attr(not(any(feature = "msl", feature = "hlsl")), allow(dead_code))]
+    fn inputs(&self) -> Vec<Input> {
+        (0..INPUTS)
+            .filter(|i| self.analysis.inputs & (1 << i) != 0)
+            .filter_map(Input::from_index)
+            .collect()
+    }
+}
+
+/// Indexes the checker could not prove in bounds are clamped (it proves all of the app's).
+#[cfg(any(feature = "msl", feature = "glsl"))]
+const BOUNDS: naga::proc::BoundsCheckPolicies = naga::proc::BoundsCheckPolicies {
+    index: naga::proc::BoundsCheckPolicy::Restrict,
+    buffer: naga::proc::BoundsCheckPolicy::Restrict,
+    image_load: naga::proc::BoundsCheckPolicy::Restrict,
+    binding_array: naga::proc::BoundsCheckPolicy::Restrict,
+};
+
+/// An error writing a checked shader: NSH's, not the app's.
+#[cfg_attr(
+    not(any(feature = "msl", feature = "glsl", feature = "hlsl", feature = "agsl")),
+    allow(dead_code)
+)]
+fn internal(error: Error) -> Error {
+    Error::new(format!("NSH could not translate this shader: {error}"))
 }

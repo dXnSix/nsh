@@ -51,7 +51,7 @@ WORKFLOWS = {
     "windows.yml": {
         "packages": [
             "nsh-platform-windows", "nsh-windows-host", "nsh-windows-app",
-            "nsh-cli", "nsh-dev", "xtask",
+            "nsh-cli", "nsh-dev", "xtask", "nsh-shader",
         ],
         # `nsh test --target` runs the examples' tests.
         "files": ["examples/counter/**", "examples/gallery/**"],

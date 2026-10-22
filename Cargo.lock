@@ -3323,6 +3323,7 @@ name = "nsh-shader"
 version = "0.2.0"
 dependencies = [
  "naga",
+ "windows",
 ]
 
 [[package]]

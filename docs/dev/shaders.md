@@ -1,7 +1,7 @@
 # Shaders
 
-Apps write fragment shaders in WGSL; NSH checks them against a profile every platform runs and reflects them
-(`crates/nsh-shader`). Nothing NSH ships is a shader of its own (no
+Apps write fragment shaders in WGSL; NSH checks them against a profile every platform runs, reflects them and
+translates them into each platform's language (`crates/nsh-shader`). Nothing NSH ships is a shader of its own (no
 built-in looks: "No styles in NSH"); the corpus in `crates/nsh-shader/tests/shader/corpus/` (fills, effects, a
 glass, transitions) is test material and a reference for apps, not an API.
 
@@ -65,10 +65,39 @@ images with their slot), the size of their buffer, the inputs `main` samples, wh
 draws every frame while it is shown; otherwise it draws only when something it reads changes) and `nsh.progress`, and
 its cost (samples, iterations).
 
+## Programs
+
+A program reads three buffers, filled by the platform (`nsh_shader::layout`): `nsh` (size, scale, time, progress),
+the frame (the area it draws, in points; per input its rect in points, flipped by a negative height, and its size in
+its own pixels) and the app's uniforms. Each writer is a feature, so a runtime links only its own:
+
+| Feature | Platforms | Writer | Program |
+|---|---|---|---|
+| `msl` | iOS, macOS | naga's MSL | `nsh_vertex` / `nsh_fragment` over a 4-vertex strip; buffers 0, 1, 2; textures 0...; an inline sampler (linear, clamped to zero) |
+| `hlsl` | Windows | naga's HLSL, shader model 5.0 | a Direct2D effect's pixel shader (`NshD2dMain`, one constant buffer `b0`, each input at Direct2D's texel coordinates); Direct3D 11 shaders as the fallback (`b0`..`b2`, `t0`..., `s0`) |
+| `glsl` | Linux, the web | naga's GLSL, ES 3.00 / 3.30 core | a vertex and a fragment shader; uniform blocks and samplers by name |
+| `agsl` | Android | NSH's own (`agsl.rs`) | a `RuntimeShader` source: each uniform field a `uniform` of its own, each input a `uniform shader` |
+
+naga's HLSL declares samplers as indexes into a Direct3D 12 sampler heap; `hlsl.rs` replaces that with one sampler at
+`s0` for Direct3D 11 and Direct2D. The AGSL writer maps naga's IR to AGSL as naga's writers map it to theirs (the same
+expressions kept in variables), and writes out what ES 1.00 lacks: counted loops as `for` loops (their counters read
+in place, never through a variable: ES 1.00 indexes with loop indexes and constants only), `switch` as an `if` chain,
+WGSL's integer `/` and `%` (by zero: `x` and 0), its truncating float `%`, `round` (halves to even), `trunc`, the
+hyperbolic functions, integer `abs` / `min` / `max` / `clamp` / `sign` / `dot`, `transpose`, `determinant`, and
+arrays element by element (constant arrays as local arrays).
+
 ## Verification
 
-`cargo test -p nsh-shader` runs the profile's cases and checks and reflects every corpus shader.
+`cargo test -p nsh-shader` runs the profile's cases and every corpus shader through all four writers. The platforms'
+own compilers check the programs: `metal_compiles` (ignored by default: it needs Xcode's Metal toolchain) runs `xcrun
+metal` for macOS and iOS; `hlsl_compiles` (Windows) runs `D3DCompile` at `ps_5_0` / `vs_5_0`. `NSH_SHADER_EXPORT=<dir>`
+writes every program to `<dir>` for compilers outside the tests: AGSL through `new RuntimeShader(source)` on a device
+or emulator (a dex run with `app_process`), GLSL ES 3.00 through WebGL 2 in a headless Chrome, GLSL 3.30 through
+macOS's OpenGL; `NSH_SHADER_CORPUS=<dir>` adds a directory of someone else's `.wgsl` files (gl-transitions translated
+from GLSL with naga: 119 of 120 fit the profile, the other declares a global variable; all 119 compile with every
+compiler above).
 
 Size, release with fat LTO, stripped, over an empty binary: the checker (naga's WGSL front end and validator, the
 profile) is 0.94 MB on macOS arm64, 1.04 MB on Android arm64 and 0.79 MB on WebAssembly (`opt-level = "z"`, 0.24 MB
-with brotli).
+with brotli); the writers add MSL 0.27 MB, HLSL 0.33 MB, GLSL 0.19 MB (WebAssembly 0.14 MB, 0.04 MB with brotli) and
+AGSL 0.10 MB.

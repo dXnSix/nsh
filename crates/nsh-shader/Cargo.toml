@@ -1,6 +1,6 @@
 [package]
 name = "nsh-shader"
-description = "NSH's shader language: WGSL in a profile every platform runs, checked and reflected."
+description = "NSH's shader language: WGSL in a profile every platform runs, checked and translated to MSL, HLSL, GLSL and AGSL."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,5 +11,21 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# One writer per platform: the runtime of each links only its own (`docs/dev/shaders.md`).
+default = ["msl", "hlsl", "glsl", "agsl"]
+# Metal (iOS, macOS).
+msl = ["naga/msl-out"]
+# Direct2D custom effects and Direct3D 11 (Windows).
+hlsl = ["naga/hlsl-out"]
+# OpenGL 3.30 and OpenGL ES 3.00 / WebGL 2 (Linux, the web).
+glsl = ["naga/glsl-out"]
+# Android's runtime shaders (API 33+); NSH's own writer over naga's IR.
+agsl = []
+
 [dependencies]
 naga.workspace = true
+
+# The HLSL corpus test compiles with Windows' own compiler (`d3dcompiler_47`).
+[target.'cfg(windows)'.dev-dependencies]
+windows.workspace = true

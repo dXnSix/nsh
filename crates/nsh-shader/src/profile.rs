@@ -27,9 +27,7 @@ pub(crate) enum Builtin {
 
 /// A `for` loop of the profile: `for (var i = start; i < bound; i += step)`.
 #[derive(Debug, Clone, Copy)]
-// The loop as written (its start, comparison, bound and step) is kept for a writer that writes
-// it out again as a `for` loop (AGSL's).
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "agsl"), allow(dead_code))]
 pub(crate) struct CountedLoop {
     /// The counter.
     pub counter: Handle<LocalVariable>,
