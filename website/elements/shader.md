@@ -218,6 +218,66 @@ fn main(p: vec2f) -> vec4f {
 }
 ```
 
+## Transitions: children that change through a shader
+
+`<ShaderTransition>` changes its children through a shader when its `value` changes: a picture of what they drew
+before is the shader's `sample_from(p)`, what they draw now its `sample_to(p)`, and `nsh.progress` goes from 0 to 1
+over `duration` milliseconds (300 by default). Then the children show as they are. The new children are views from
+the start: they lay out, take touches and clicks and update while the transition runs. A transition that starts while
+another runs starts from what shows. Without `src` it runs its `fallback`: a cross-fade (`"fade"`, the default) or
+nothing (`"none"`).
+
+```rust tabs
+static REVEAL: LazyLock<ShaderSource> = LazyLock::new(|| {
+    ShaderSource::new(include_str!("reveal.wgsl"), &ShaderLimits::default()).expect("a shader")
+});
+
+let page = signal(0.0);
+
+shader_transition(Some(REVEAL.clone()))
+    .value(move || TransitionKey::from(page.get()))
+    .duration(Duration::from_millis(500))
+    .child(dynamic(move || card(page.get())))
+```
+
+```tsx tabs
+import { ShaderTransition, signal } from "nsh";
+import reveal from "./reveal.wgsl";
+
+const page = signal(0);
+
+<ShaderTransition src={reveal} value={page()} duration={500}>
+  <Card n={page()} />
+</ShaderTransition>;
+```
+
+```wgsl
+// reveal.wgsl: the new side grows from the middle in a circle.
+fn main(p: vec2f) -> vec4f {
+  let c = nsh.size * 0.5;
+  let r = length(nsh.size) * 0.5 * nsh.progress;
+  let edge = smoothstep(r - 2.0, r + 2.0, length(p - c));
+  return mix(sample_to(p), sample_from(p), edge);
+}
+```
+
+## Pages and dialogs through a shader
+
+A page's and a dialog's `animation` takes a shader as well as a preset: `{ shader, uniforms, duration }`. The lower
+side (the page below, what is behind the dialog) is the shader's `sample_from(p)`, the upper side (the page, the
+dialog) its `sample_to(p)`, and `nsh.progress` is how much of the upper side shows: from 0 to 1 over `duration`
+milliseconds (350 by default) as it comes, from 1 to 0 as it goes, and with the finger in a back gesture. One shader
+serves both ways.
+
+```tsx
+import { NavPage } from "nsh/base";
+import reveal from "./reveal.wgsl";
+
+<NavPage title="Details" animation={{ shader: reveal, duration: 500 }}>
+  <Details />
+</NavPage>;
+```
+
 ## Props
 
 A shader view takes the props of a [view](./view.md) (styles, children, press and gesture props, `onLayout`,
@@ -235,13 +295,25 @@ A shader effect takes the same, with an optional `src` (`shader_effect(Some(sour
 |---|---|---|---|
 | `maxSampleOffset` | `.max_sample_offset(px(…))` | `number` | How far beyond a pixel the shader samples its content, in points. |
 
+A shader transition takes the props of a view, `uniforms` and `maxSampleOffset` as an effect does, an optional `src`
+(`shader_transition(Some(source))`), plus:
+
+| Prop | Rust | Type | Description |
+|---|---|---|---|
+| `value` | `.value(value)` | `string \| number \| boolean` | What its children show: when it changes, they change through the shader. |
+| `duration` | `.duration(Duration)` | `number` | How long a transition runs, in milliseconds (300). |
+| `fallback` | `.fallback(TransitionFallback)` | `"fade" \| "none"` | What it runs without `src`: a cross-fade (the default) or nothing. |
+
 ## Support
 
 `shaderSupport()` from `nsh` says what the platform draws: `{ fill, backdrop, effect, transition }`, each `"live"`,
 `"snapshot"` or `false`. `fill` is `<Shader>`: `"live"` on iOS, Mac Catalyst, macOS, Android 13 and later, Windows,
 Linux and the web. `effect` is `<ShaderEffect>` and `backdrop` a shader that samples what is behind it: `"live"` on
 Android 13 and later and Windows, and `"snapshot"` on iOS, Mac Catalyst, macOS and the web: there the shader reads a picture of its input, taken again when it
-changes. On Linux `effect` is `"live"` and `backdrop` `"snapshot"`. Where `fill` is `false`, a shader view shows its children and its own styles, so a layout that
+changes. On Linux `effect` is `"live"` and `backdrop` `"snapshot"`. `transition` is `<ShaderTransition>` and the
+pages' and dialogs' shader animations: `"live"` on Android 13 and later, Windows and Linux, `"snapshot"` on iOS, Mac
+Catalyst, macOS and the web; where it is `false`, the children change at once, and pages and dialogs come and go with
+the platform's own transition (a dialog fades). Where `fill` is `false`, a shader view shows its children and its own styles, so a layout that
 puts content over a shader reads the same everywhere; where `effect` is `false`, an effect shows its children as they
 are, and where `backdrop` is `false`, `sample_backdrop` reads transparent.
 
@@ -261,14 +333,19 @@ a shader takes up to 128 texture samples, which the host app sets with its
 
 - iOS, Mac Catalyst and macOS draw with Metal in a `CAMetalLayer` over the view's background; programs compile off the
   main thread. There an effect and a backdrop read a picture of their input, taken again on the next frame after it
-  changes; shaders, videos and web views inside an effect or behind a backdrop read as transparent there.
+  changes; shaders, videos and web views inside an effect or behind a backdrop read as transparent there. A
+  transition's two sides are pictures too: the children before the change, and as they are, taken again as they
+  change.
 - Android draws with a `RuntimeShader` (Android 13, API 33, and later) when the view draws. An effect runs it as the
   render effect of its children's drawing, a backdrop shader as the render effect of what is behind the view: both
-  read their input live. A shader there reads one live input, its content or its backdrop.
+  read their input live. A shader there reads one live input, its content or its backdrop. A transition reads its new
+  children live and a picture of the old ones, taken when it starts.
 - Windows renders with Direct3D 11 into a texture Direct2D draws. An effect's children and what is behind a backdrop
-  are drawn into textures with each frame, so both read their input live.
-- Linux renders with OpenGL ES 3 into a texture GTK draws. An effect renders its children with each frame it draws;
-  a backdrop reads a picture of what is behind the view, taken again on the next frame after it changes.
+  are drawn into textures with each frame, so both read their input live, as does a transition's new side; its old
+  side is drawn once when it starts.
+- Linux renders with OpenGL ES 3 into a texture GTK draws. An effect renders its children with each frame it draws,
+  as does a transition its new side (its old side is rendered once when it starts); a backdrop reads a picture of
+  what is behind the view, taken again on the next frame after it changes.
 - The web renders with WebGL 2 into a canvas in the view's element. An effect and a backdrop read a picture NSH paints
   of the elements (backgrounds, rounded corners, borders, images, canvases and text), taken again on the next frame
-  after they change.
+  after they change, and so does a transition of its two sides.

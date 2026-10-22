@@ -372,6 +372,10 @@ pub(crate) struct Mounter {
     sampling: usize,
     /// Pictures of shaders' inputs are due ([`Mounter::pictures_due`]).
     pictures: bool,
+    /// The shader transitions that run (the shader display link moves them).
+    transitions: Vec<NodeId>,
+    /// Pages' and dialogs' transitions through a shader that run.
+    nav_overlays: Vec<crate::shader::NavOverlay>,
     /// Parents of screens, header items and modals (which are not
     /// subviews of their parent).
     hosts: rustc_hash::FxHashMap<NodeId, NodeId>,
@@ -455,6 +459,8 @@ impl Mounter {
             shader_frames: Vec::new(),
             sampling: 0,
             pictures: false,
+            transitions: Vec::new(),
+            nav_overlays: Vec::new(),
             hosts: Default::default(),
             dirty_stacks: Vec::new(),
             deferred_stacks: Vec::new(),
@@ -560,10 +566,15 @@ impl Mounter {
                     ViewKind::Shader => Native::Shader(Box::new(crate::shader::ShaderHost::new(
                         NshView::new(self.mtm),
                         false,
+                        false,
                     ))),
-                    ViewKind::ShaderEffect => Native::Shader(Box::new(
-                        crate::shader::ShaderHost::new(NshView::new(self.mtm), true),
-                    )),
+                    ViewKind::ShaderEffect | ViewKind::ShaderTransition => {
+                        Native::Shader(Box::new(crate::shader::ShaderHost::new(
+                            NshView::new(self.mtm),
+                            true,
+                            kind == ViewKind::ShaderTransition,
+                        )))
+                    }
                     ViewKind::WebView => Native::Web(Box::new(WebHost::new(
                         self.mtm,
                         id,
@@ -613,10 +624,16 @@ impl Mounter {
                 let modal = matches!(native, Native::Modal(_));
                 let mut slot = Slot::new(native);
                 // An effect's children go into the content view it hides.
-                if kind == ViewKind::ShaderEffect {
+                let effect = matches!(kind, ViewKind::ShaderEffect | ViewKind::ShaderTransition);
+                if effect {
                     slot.decor.set_effect();
                 }
                 self.views[idx] = Some(slot);
+                if effect {
+                    // Its content view exists before its children come,
+                    // styled or not.
+                    self.decorate(id);
+                }
                 if modal && self.touch_listeners > 0 {
                     self.add_touch_tracker(id);
                 }
@@ -998,6 +1015,23 @@ impl Mounter {
                     self.pictures_due();
                 }
             }
+            MountItem::ShaderTransition { id, duration } => {
+                let started = match self.slot(id) {
+                    Some(Slot {
+                        native: Native::Shader(host),
+                        decor,
+                        ..
+                    }) => host.start(decor.content(), duration),
+                    _ => false,
+                };
+                if started {
+                    self.sync_effect(id);
+                    if !self.transitions.contains(&id) {
+                        self.transitions.push(id);
+                    }
+                    self.pictures_due();
+                }
+            }
             MountItem::AnimationBindings { id, bindings } => {
                 if let Some(s) = self.slot_mut(id) {
                     // Properties no longer animated fall back to the static style.
@@ -1041,13 +1075,13 @@ impl Mounter {
                 }
             }
             MountItem::NativeProps { id, props } => self.set_native_props(id, props),
-            MountItem::ModalConfig { id, config } => {
+            MountItem::ModalConfig { id, config, shader } => {
                 if let Some(Slot {
                     native: Native::Modal(modal),
                     ..
                 }) = self.slot_mut(id)
                 {
-                    modal.configure(config);
+                    modal.configure(config, shader);
                 }
             }
             MountItem::Animation(op) => {
@@ -2286,7 +2320,28 @@ impl Mounter {
             // Kept while the view lives: it may show again.
             keep.push(id);
         }
-        if keep.is_empty() && !self.pictures {
+        let running = std::mem::take(&mut self.transitions);
+        for id in running {
+            let ticks = match self.slot(id) {
+                Some(Slot {
+                    native: Native::Shader(host),
+                    ..
+                }) => host.tick(),
+                _ => continue,
+            };
+            if ticks {
+                self.transitions.push(id);
+            } else {
+                // Ended: its children show again.
+                self.sync_effect(id);
+            }
+        }
+        self.nav_overlays.retain_mut(|o| o.tick());
+        if keep.is_empty()
+            && !self.pictures
+            && self.transitions.is_empty()
+            && self.nav_overlays.is_empty()
+        {
             self.shader_link.setPaused(true);
         }
         self.shader_frames = keep;
@@ -2682,9 +2737,12 @@ impl Mounter {
                 .iter()
                 .filter(|s| !stack.popped.contains(s))
                 .filter_map(|&s| match self.slot(s).map(|s| &s.native) {
-                    Some(Native::Screen(screen)) => {
-                        Some((s, screen.controller.clone(), screen.config.animation))
-                    }
+                    Some(Native::Screen(screen)) => Some((
+                        s,
+                        screen.controller.clone(),
+                        screen.config.animation,
+                        screen.config.shader.clone(),
+                    )),
                     _ => None,
                 })
                 .collect();
@@ -2693,10 +2751,20 @@ impl Mounter {
                 .topViewController()
                 .and_then(|c| c.downcast::<crate::navigation::ScreenController>().ok())
                 .and_then(|c| match self.slot(c.screen_id()).map(|s| &s.native) {
-                    Some(Native::Screen(screen)) => Some(screen.config.animation),
+                    Some(Native::Screen(screen)) => {
+                        Some((screen.config.animation, screen.config.shader.clone()))
+                    }
                     _ => None,
                 });
-            stack.reconcile(&screens, leaving);
+            if let Some((shader, before, reverse)) = stack.reconcile(&screens, leaving)
+                && let Some(view) = stack.nav.view()
+                && let Some(host) = view.superview()
+                && let Some(overlay) =
+                    crate::shader::NavOverlay::new(&host, view.frame(), &shader, before, reverse)
+            {
+                self.nav_overlays.push(overlay);
+                self.shader_link.setPaused(false);
+            }
             if let Some(Slot {
                 native: Native::Stack(stack),
                 ..
@@ -2743,14 +2811,19 @@ impl Mounter {
             else {
                 continue;
             };
-            if shown {
-                if let Some(root) = &root {
-                    modal.present(root);
-                }
+            let plan = if shown {
+                root.as_ref().and_then(|root| modal.present(root))
             } else {
                 modal.dismiss(move || {
                     control.dispatch_event(id, EventKind::Dismiss, EventPayload::None)
-                });
+                })
+            };
+            if let Some(p) = plan
+                && let Some(overlay) =
+                    crate::shader::NavOverlay::new(&p.host, p.rect, &p.shader, p.before, p.reverse)
+            {
+                self.nav_overlays.push(overlay);
+                self.shader_link.setPaused(false);
             }
         }
     }

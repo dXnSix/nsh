@@ -75,8 +75,9 @@ impl Mounter {
                 match kind {
                     ViewKind::Input => crate::text_input::create(surface, &view),
                     ViewKind::Canvas => crate::canvas::create(&view),
-                    ViewKind::Shader => crate::shader::create(&view, false),
-                    ViewKind::ShaderEffect => crate::shader::create(&view, true),
+                    ViewKind::Shader => crate::shader::create(&view, false, false),
+                    ViewKind::ShaderEffect => crate::shader::create(&view, true, false),
+                    ViewKind::ShaderTransition => crate::shader::create(&view, true, true),
                     ViewKind::Image => crate::image::create(&view),
                     ViewKind::WebView | ViewKind::Video | ViewKind::Native => {
                         crate::native::create(surface, &view)
@@ -182,7 +183,9 @@ impl Mounter {
                 match view.kind() {
                     ViewKind::Stack => crate::navigation::stack_resized(surface, view),
                     ViewKind::Canvas => view.changed(),
-                    ViewKind::Shader | ViewKind::ShaderEffect => crate::shader::resized(view),
+                    ViewKind::Shader | ViewKind::ShaderEffect | ViewKind::ShaderTransition => {
+                        crate::shader::resized(view)
+                    }
                     _ => {}
                 }
             }
@@ -296,6 +299,11 @@ impl Mounter {
                     crate::shader::input_changed(view);
                 }
             }
+            MountItem::ShaderTransition { id, duration } => {
+                if let Some(view) = self.get(*id) {
+                    crate::shader::start_transition(view, *duration);
+                }
+            }
             MountItem::Gestures { id, values } => {
                 if let Some(view) = self.get(*id) {
                     crate::input::gestures(surface, view, *values);
@@ -330,9 +338,9 @@ impl Mounter {
                     crate::navigation::screen_config(surface, view, config);
                 }
             }
-            MountItem::ModalConfig { id, config } => {
+            MountItem::ModalConfig { id, config, shader } => {
                 if let Some(view) = self.get(*id) {
-                    crate::navigation::modal_config(surface, view, config);
+                    crate::navigation::modal_config(surface, view, config, shader);
                 }
             }
             MountItem::NativeProps { id, props } => {

@@ -185,6 +185,7 @@ impl Surface {
                 nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Hlsl);
             support.effect = nsh_core::shader::Support::Live;
             support.backdrop = nsh_core::shader::Support::Live;
+            support.transition = nsh_core::shader::Support::Live;
             support
         };
         let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);

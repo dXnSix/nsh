@@ -431,6 +431,139 @@ impl HostValue for ShaderNumber {
     }
 }
 
+/// What a shader transition's children show (`value`): a change runs the
+/// transition.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum TransitionKey {
+    /// None given.
+    #[default]
+    Unset,
+    /// A boolean.
+    Bool(bool),
+    /// A number, by its bits (`NaN` equals itself).
+    Number(u64),
+    /// A string.
+    Text(Arc<str>),
+}
+
+impl HostValue for TransitionKey {
+    fn decode<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Self> {
+        if input.is_nullish() {
+            return Some(TransitionKey::Unset);
+        }
+        if let Some(b) = input.as_bool() {
+            return Some(TransitionKey::Bool(b));
+        }
+        if let Some(n) = input.as_number() {
+            return Some(TransitionKey::Number(n.to_bits()));
+        }
+        input.as_string().map(|s| TransitionKey::Text(s.into()))
+    }
+
+    fn ts_type(_: &mut TsTypes) -> String {
+        "string | number | boolean".into()
+    }
+}
+
+impl From<bool> for TransitionKey {
+    fn from(b: bool) -> Self {
+        TransitionKey::Bool(b)
+    }
+}
+
+impl From<f64> for TransitionKey {
+    fn from(n: f64) -> Self {
+        TransitionKey::Number(n.to_bits())
+    }
+}
+
+impl From<&str> for TransitionKey {
+    fn from(s: &str) -> Self {
+        TransitionKey::Text(s.into())
+    }
+}
+
+impl From<String> for TransitionKey {
+    fn from(s: String) -> Self {
+        TransitionKey::Text(s.into())
+    }
+}
+
+/// A page's or a dialog's transition through a shader (`animation: {
+/// shader, uniforms, duration }`): its `sample_from` is the lower side
+/// (the page below, what is behind the dialog), its `sample_to` the upper
+/// one, and `nsh.progress` how much of the upper side shows (0 to 1 as it
+/// comes, 1 to 0 as it goes, a back gesture's as it moves).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShaderAnimation {
+    /// The shader.
+    pub source: ShaderSource,
+    /// Its uniforms' values.
+    pub uniforms: Uniforms,
+    /// How long it runs, in milliseconds (`None`: the platform's own
+    /// transition's length).
+    pub duration: Option<f32>,
+}
+
+impl ShaderAnimation {
+    /// `source` with no uniforms, as long as the platform's own transition.
+    pub fn new(source: ShaderSource) -> Self {
+        Self {
+            source,
+            uniforms: Uniforms::default(),
+            duration: None,
+        }
+    }
+}
+
+impl HostValue for ShaderAnimation {
+    fn decode<I: HostInput>(input: &I, cx: &mut HostCx) -> Option<Self> {
+        let source = input.field("shader")?.shader()?;
+        let uniforms = match input.field("uniforms") {
+            Some(u) if !u.is_nullish() => Uniforms::decode(&u, cx)?,
+            _ => Uniforms::default(),
+        };
+        let duration = input
+            .field("duration")
+            .and_then(|d| d.as_number())
+            .map(|d| d.max(0.0) as f32);
+        Some(Self {
+            source,
+            uniforms,
+            duration,
+        })
+    }
+
+    fn ts_type(_: &mut TsTypes) -> String {
+        "ShaderAnimation<any>".into()
+    }
+}
+
+/// What a shader transition runs without a shader of its own (`fallback`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, crate::ui::PropEnum)]
+pub enum TransitionFallback {
+    /// A cross-fade.
+    #[default]
+    Fade,
+    /// None: the children change at once.
+    None,
+}
+
+/// The cross-fade a transition runs as its `fade` fallback: one program
+/// per process.
+pub fn crossfade() -> ShaderSource {
+    static CROSSFADE: std::sync::OnceLock<ShaderSource> = std::sync::OnceLock::new();
+    CROSSFADE
+        .get_or_init(|| {
+            ShaderSource::new(
+                "fn main(p: vec2f) -> vec4f {\n  return mix(sample_from(p), sample_to(p), nsh.progress);\n}\n",
+                &ShaderLimits::default(),
+            )
+            .expect("the cross-fade compiles")
+        })
+        .clone()
+}
+
 /// An image a shader samples.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[non_exhaustive]

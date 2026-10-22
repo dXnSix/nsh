@@ -375,9 +375,11 @@ put it.
 
 ## Shader effects and backdrops
 
-Browsers give WebGL no pixels of the page, so `<ShaderEffect>` and `sample_backdrop` read pictures NSH paints
-itself from the elements (`nsh.js` `paintTree`), taken again on the next animation frame after the subtree (or, for a
-backdrop, the surface) changed; [shaders.md](shaders.md) has what the painter draws.
+Browsers give WebGL no pixels of the page, so `<ShaderEffect>`, `<ShaderTransition>` and `sample_backdrop` read
+pictures NSH paints itself from the elements (`nsh.js` `paintTree`), taken again on the next animation frame after the
+subtree (or, for a backdrop, the surface) changed; [shaders.md](shaders.md) has what the painter draws. A transition's
+`sample_from` is painted when its `["st", id, ms]` item comes, before the rest of the batch; its progress moves on
+animation frames, and its element has `.nsh-fx` only while it runs.
 
 ## Styles as classes
 

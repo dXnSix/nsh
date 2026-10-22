@@ -11,6 +11,12 @@
 //! never the host app's), is a picture taken with `renderInContext:` on
 //! the shader display link's next frame after it changed, as on macOS.
 //!
+//! `<ShaderTransition>`: as an effect while a transition runs
+//! ([`ShaderHost::start`]): its children pictured as they were when it
+//! starts are `sample_from`, as they are after the batch `sample_to`, and
+//! the shader display link moves `nsh.progress` from 0 to 1
+//! ([`ShaderHost::tick`]); then the children show as they are.
+//!
 //! It draws when what it draws changes (the fill, an animated uniform, an
 //! image that loaded, its size or scale, its program once compiled) and,
 //! for a shader that reads `nsh.time`, on every frame of the mounter's
@@ -38,8 +44,12 @@ pub(crate) struct ShaderHost {
     /// The view (its children are the shader view's).
     pub(crate) view: Retained<NshView>,
     layer: RefCell<Option<nsh_metal::ShaderLayer>>,
-    /// A shader effect (its children are its content).
+    /// A shader effect or transition (its children are its content or its
+    /// `sample_to`).
     pub(crate) effect: bool,
+    /// A shader transition; when it runs, its start and duration.
+    transition: bool,
+    running: Cell<Option<(std::time::Instant, std::time::Duration)>>,
     /// The inputs it samples, [`CONTENT`] and [`BACKDROP`].
     inputs: Cell<u32>,
     /// Inputs whose picture is out of date.
@@ -52,11 +62,13 @@ pub(crate) const CONTENT: u32 = 1 << 0;
 pub(crate) const BACKDROP: u32 = 1 << 1;
 
 impl ShaderHost {
-    pub(crate) fn new(view: Retained<NshView>, effect: bool) -> Self {
+    pub(crate) fn new(view: Retained<NshView>, effect: bool, transition: bool) -> Self {
         Self {
             view,
             layer: RefCell::new(None),
-            effect,
+            effect: effect || transition,
+            transition,
+            running: Cell::new(None),
             inputs: Cell::new(0),
             stale: Cell::new(0),
         }
@@ -103,9 +115,18 @@ impl ShaderHost {
             *self.layer.borrow_mut() = Some(layer);
             self.layout();
         }
-        let shows = fill.is_some();
+        if fill.is_none() {
+            self.running.set(None);
+        }
+        let shows = fill.is_some() && (!self.transition || self.running.get().is_some());
+        // A transition's children are its `sample_to`.
+        let children = if self.transition {
+            ShaderInput::To
+        } else {
+            ShaderInput::Content
+        };
         let inputs = fill.as_ref().map_or(0, |f| {
-            let content = self.effect && f.samples(ShaderInput::Content);
+            let content = self.effect && f.samples(children);
             (content as u32 * CONTENT) | (f.samples(ShaderInput::Backdrop) as u32 * BACKDROP)
         });
         self.inputs.set(inputs);
@@ -123,21 +144,105 @@ impl ShaderHost {
         load
     }
 
-    /// Whether it draws a shader now (an effect then hides its children).
+    /// Whether it draws a shader now (an effect then hides its children):
+    /// a transition only while it runs.
     pub(crate) fn shows(&self) -> bool {
         self.layer
             .borrow()
             .as_ref()
             .is_some_and(|l| l.program().is_some())
+            && (!self.transition || self.running.get().is_some())
+    }
+
+    /// A transition starts ([`nsh_core::MountItem::ShaderTransition`],
+    /// before the rest of its batch): what shows now, `content` holding its
+    /// children, is its `sample_from`. Whether it started.
+    pub(crate) fn start(&self, content: Option<&UIView>, duration: std::time::Duration) -> bool {
+        if !self.transition {
+            return false;
+        }
+        let mut layer = self.layer.borrow_mut();
+        let Some(layer) = layer.as_mut() else {
+            return false;
+        };
+        if layer.program().is_none() {
+            return false;
+        }
+        let area = layer.area();
+        // What shows: the transition as it is drawn, or the children.
+        let from = if self.running.get().is_some() {
+            layer.picture()
+        } else {
+            content.map(|content| {
+                let scale = self.view.contentScaleFactor();
+                let (pw, ph) = (
+                    (area.size.width.0 as f64 * scale).round().max(1.0) as usize,
+                    (area.size.height.0 as f64 * scale).round().max(1.0) as usize,
+                );
+                let origin = (area.origin.x.0 as f64, area.origin.y.0 as f64);
+                let rgba = crate::decor::quiet(|| render(&content.layer(), origin, pw, ph, scale));
+                (pw, ph, rgba)
+            })
+        };
+        if let Some((w, h, rgba)) = from {
+            layer.set_input(ShaderInput::From, &rgba, w, h, area);
+        }
+        layer.clear_input(ShaderInput::To);
+        layer.set_progress(0.0);
+        self.running
+            .set(Some((std::time::Instant::now(), duration)));
+        self.stale.set(self.stale.get() | self.inputs.get());
+        // SAFETY: a `CAMetalLayer` is a `CALayer`.
+        let ca: &CALayer =
+            unsafe { &*(layer.layer() as *const objc2::runtime::AnyObject as *const CALayer) };
+        ca.setHidden(false);
+        layer.draw();
+        true
+    }
+
+    /// A display frame of a running transition: `nsh.progress` moves on.
+    /// Whether it still runs (when it ends, its children show).
+    pub(crate) fn tick(&self) -> bool {
+        let Some((start, duration)) = self.running.get() else {
+            return false;
+        };
+        let t = (start.elapsed().as_secs_f32() / duration.as_secs_f32().max(f32::EPSILON)).min(1.0);
+        let mut layer = self.layer.borrow_mut();
+        let Some(layer) = layer.as_mut() else {
+            self.running.set(None);
+            return false;
+        };
+        layer.set_progress(t);
+        if t < 1.0 {
+            layer.draw();
+            return true;
+        }
+        self.running.set(None);
+        layer.clear_input(ShaderInput::From);
+        layer.clear_input(ShaderInput::To);
+        // SAFETY: a `CAMetalLayer` is a `CALayer`.
+        let ca: &CALayer =
+            unsafe { &*(layer.layer() as *const objc2::runtime::AnyObject as *const CALayer) };
+        ca.setHidden(true);
+        false
     }
 
     /// Takes the pictures due, `content` holding an effect's children and
     /// `root` the surface's root view, then draws.
     pub(crate) fn take_pictures(&self, content: Option<&UIView>, root: &UIView) {
         let stale = self.stale.replace(0);
-        if stale == 0 || self.view.window().is_none() {
+        // An idle transition draws nothing: its children show.
+        if stale == 0
+            || self.view.window().is_none()
+            || self.transition && self.running.get().is_none()
+        {
             return;
         }
+        let children = if self.transition {
+            ShaderInput::To
+        } else {
+            ShaderInput::Content
+        };
         let mut layer = self.layer.borrow_mut();
         let Some(layer) = layer.as_mut() else { return };
         let area = layer.area();
@@ -160,7 +265,7 @@ impl ShaderHost {
                 unsafe { cl.setMask(mask.as_deref()) };
                 rgba
             });
-            layer.set_input(ShaderInput::Content, &rgba, pw, ph, area);
+            layer.set_input(children, &rgba, pw, ph, area);
         }
         if stale & BACKDROP != 0 {
             let own = self.view.layer();
@@ -328,4 +433,127 @@ pub(crate) fn hide_children(content: &UIView, hidden: bool) {
         // SAFETY: a fresh, empty mask layer owned by the content view's layer.
         unsafe { layer.setMask(mask.as_deref()) };
     });
+}
+
+/// A picture of part of a view: premultiplied RGBA, its size in pixels.
+pub(crate) struct Picture {
+    rgba: Vec<u8>,
+    width: usize,
+    height: usize,
+}
+
+/// `view` drawn as it shows now over `rect` (its points), at the screen's
+/// scale.
+pub(crate) fn picture(view: &UIView, rect: objc2_core_foundation::CGRect) -> Picture {
+    let scale = view.contentScaleFactor();
+    let (width, height) = (
+        (rect.size.width * scale).round().max(1.0) as usize,
+        (rect.size.height * scale).round().max(1.0) as usize,
+    );
+    let rgba = crate::decor::quiet(|| {
+        render(
+            &view.layer(),
+            (rect.origin.x, rect.origin.y),
+            width,
+            height,
+            scale,
+        )
+    });
+    Picture {
+        rgba,
+        width,
+        height,
+    }
+}
+
+/// A page's or a dialog's transition through a shader
+/// ([`nsh_core::NavShader`]) over a part of `host` (the navigation
+/// controller's view; the window over the surface for a dialog): UIKit
+/// makes the change at once, a picture taken before it and one taken on
+/// the next display frame after it are the shader's two sides (`before`
+/// is the lower one for a push, the upper one for a pop), and the shader
+/// display link moves `nsh.progress`.
+pub(crate) struct NavOverlay {
+    view: Retained<UIView>,
+    layer: nsh_metal::ShaderLayer,
+    host: Retained<UIView>,
+    rect: objc2_core_foundation::CGRect,
+    start: std::time::Instant,
+    duration: std::time::Duration,
+    reverse: bool,
+    /// The picture after the change is still to take.
+    after_due: bool,
+}
+
+impl NavOverlay {
+    /// Over `rect` of `host`, with `before` (taken before the change);
+    /// backwards (`nsh.progress` from 1 to 0, `before` the upper side)
+    /// when `reverse`. `None` where Metal draws nothing.
+    pub(crate) fn new(
+        host: &UIView,
+        rect: objc2_core_foundation::CGRect,
+        shader: &nsh_core::NavShader,
+        before: Picture,
+        reverse: bool,
+    ) -> Option<Self> {
+        let mut layer = nsh_metal::ShaderLayer::new()?;
+        layer.set_frame(rect.size.width, rect.size.height, host.contentScaleFactor());
+        let _ = layer.set_fill(Some(shader.fill.clone()));
+        let area = layer.area();
+        let side = if reverse {
+            ShaderInput::To
+        } else {
+            ShaderInput::From
+        };
+        layer.set_input(side, &before.rgba, before.width, before.height, area);
+        layer.set_progress(if reverse { 1.0 } else { 0.0 });
+        let mtm = objc2::MainThreadMarker::from(host);
+        let view = UIView::initWithFrame(mtm.alloc(), rect);
+        view.setUserInteractionEnabled(false);
+        // SAFETY: a `CAMetalLayer` is a `CALayer`.
+        let ca: &CALayer =
+            unsafe { &*(layer.layer() as *const objc2::runtime::AnyObject as *const CALayer) };
+        view.layer().addSublayer(ca);
+        host.addSubview(&view);
+        layer.draw();
+        Some(Self {
+            view,
+            layer,
+            host: objc2::Message::retain(host),
+            rect,
+            start: std::time::Instant::now(),
+            duration: shader.duration,
+            reverse,
+            after_due: true,
+        })
+    }
+
+    /// A display frame: the picture after the change (the first time),
+    /// then `nsh.progress` now. Whether it still runs (removed when not).
+    pub(crate) fn tick(&mut self) -> bool {
+        if std::mem::take(&mut self.after_due) {
+            self.view.setHidden(true);
+            let after = picture(&self.host, self.rect);
+            self.view.setHidden(false);
+            let area = self.layer.area();
+            let side = if self.reverse {
+                ShaderInput::From
+            } else {
+                ShaderInput::To
+            };
+            self.layer
+                .set_input(side, &after.rgba, after.width, after.height, area);
+        }
+        let t = (self.start.elapsed().as_secs_f32()
+            / self.duration.as_secs_f32().max(f32::EPSILON))
+        .min(1.0);
+        self.layer
+            .set_progress(if self.reverse { 1.0 - t } else { t });
+        self.layer.draw();
+        if t < 1.0 {
+            return true;
+        }
+        self.view.removeFromSuperview();
+        false
+    }
 }

@@ -112,8 +112,9 @@ impl Mounter {
                 match kind {
                     ViewKind::Input => crate::text_input::create(surface, &view),
                     ViewKind::Canvas => crate::canvas::create(&view),
-                    ViewKind::Shader => crate::shader::create(&view, false),
-                    ViewKind::ShaderEffect => crate::shader::create(&view, true),
+                    ViewKind::Shader => crate::shader::create(&view, false, false),
+                    ViewKind::ShaderEffect => crate::shader::create(&view, true, false),
+                    ViewKind::ShaderTransition => crate::shader::create(&view, true, true),
                     ViewKind::Image => crate::image::create(&view),
                     ViewKind::WebView | ViewKind::Video | ViewKind::Native => {
                         crate::native::create(surface, &view)
@@ -321,6 +322,11 @@ impl Mounter {
             }
             // Effects and backdrops draw their inputs with every frame.
             MountItem::ShaderInput { .. } => {}
+            MountItem::ShaderTransition { id, duration } => {
+                if let Some(view) = &self.get(*id) {
+                    crate::shader::start_transition(surface, view, *duration);
+                }
+            }
             MountItem::Gestures { id, values } => {
                 if let Some(view) = &self.get(*id) {
                     crate::input::gestures(surface, view, *values);
@@ -353,9 +359,9 @@ impl Mounter {
                     crate::navigation::screen_config(surface, view, config);
                 }
             }
-            MountItem::ModalConfig { id, config } => {
+            MountItem::ModalConfig { id, config, shader } => {
                 if let Some(view) = &self.get(*id) {
-                    crate::navigation::modal_config(surface, view, config);
+                    crate::navigation::modal_config(surface, view, config, shader);
                 }
             }
             MountItem::NativeProps { id, props } => {

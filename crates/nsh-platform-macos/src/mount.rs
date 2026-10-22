@@ -337,6 +337,11 @@ impl Mounter {
                     crate::shader::input_changed(surface, view);
                 }
             }
+            MountItem::ShaderTransition { id, duration } => {
+                if let Some(view) = self.get(*id) {
+                    crate::shader::start_transition(surface, view, *duration);
+                }
+            }
             MountItem::Gestures { id, values } => {
                 if let Some(view) = self.get(*id) {
                     crate::input::gestures(surface, view, *values);
@@ -369,9 +374,9 @@ impl Mounter {
                     crate::navigation::screen_config(surface, view, config);
                 }
             }
-            MountItem::ModalConfig { id, config } => {
+            MountItem::ModalConfig { id, config, shader } => {
                 if let Some(view) = self.get(*id) {
-                    crate::navigation::modal_config(surface, view, config);
+                    crate::navigation::modal_config(surface, view, config, shader);
                 }
             }
             MountItem::NativeProps { id, props } => {

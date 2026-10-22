@@ -6,6 +6,12 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorSpace;
+import android.graphics.HardwareRenderer;
+import android.graphics.PixelFormat;
+import android.hardware.HardwareBuffer;
+import android.media.Image;
+import android.media.ImageReader;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Rect;
@@ -16,6 +22,7 @@ import android.graphics.RuntimeShader;
 import android.graphics.Shader;
 import android.os.Build;
 import android.os.SystemClock;
+import android.view.View;
 
 /**
  * `<shader>` and `<shadereffect>`: AGSL runtime shaders (`nsh_core::shader`,
@@ -30,6 +37,13 @@ import android.os.SystemClock;
  * views (touch, accessibility) and the shader reads them live. A render
  * effect gives a shader one live input: an effect that samples its content
  * and the backdrop reads the backdrop as transparent.
+ *
+ * A transition ({@code transition}) is an effect while it runs
+ * ({@link #startTransition}): its children are its live `sample_to`, a
+ * picture of them taken when it starts (rendered by a {@link
+ * HardwareRenderer} into a hardware bitmap, which later changes to the
+ * children leave as it is) its `sample_from`, and `nsh.progress` moves
+ * from 0 to 1 on animation frames; then the children draw as they are.
  *
  * The program (`encode.rs` `shader_program`) names each AGSL uniform and the
  * words of a buffer it takes: `nsh` (size, scale, time, progress), the frame
@@ -50,11 +64,30 @@ final class ShaderBox extends Box {
         int[] inputs;
     }
 
+    /**
+     * A page's or a dialog's transition through a shader
+     * (`nsh_core::NavShader`): its program, inputs and uniforms, and how
+     * long it runs.
+     */
+    static final class Nav {
+        Program program;
+        int inputs;
+        int[] uniforms;
+        float ms;
+    }
+
     /** `nsh_core::shader::PROGRESS`: the component an animated `progress` writes. */
     private static final int PROGRESS = 0xffff;
-    private static final int CONTENT = 0, BACKDROP = 1;
+    private static final int CONTENT = 0, BACKDROP = 1, FROM = 2, TO = 3;
 
     private final boolean effect;
+    private final boolean transition;
+    /** A running transition's `sample_from`, start (uptime) and length. */
+    private Bitmap from;
+    /** A page's or a dialog's transition: a picture of its upper side (`sample_to`). */
+    private Bitmap toPicture;
+    private long transitionStart = -1;
+    private float transitionMs;
     private Program program;
     private RuntimeShader shader;
     private final Paint paint = new Paint();
@@ -74,9 +107,10 @@ final class ShaderBox extends Box {
     private RenderNode node;
     private boolean warned;
 
-    ShaderBox(Context context, Mounter mounter, int id, boolean effect) {
+    ShaderBox(Context context, Mounter mounter, int id, boolean effect, boolean transition) {
         super(context, mounter, id);
         this.effect = effect;
+        this.transition = transition;
         setWillNotDraw(false);
         // A fill goes over the background and under the borders.
         if (!effect) decor.bordersAbove = true;
@@ -108,14 +142,15 @@ final class ShaderBox extends Box {
         }
         this.uris = uris;
         this.sizeWords = sizeWords;
-        boolean behind = Build.VERSION.SDK_INT >= 33 && samples(BACKDROP) && !(effect && samples(CONTENT));
+        if (program == null) endTransition();
+        boolean behind = Build.VERSION.SDK_INT >= 33 && samples(BACKDROP) && !(effect && samples(children()));
         if (behind && backdrop == null) {
             backdrop = new Backdrop(this);
         } else if (!behind && backdrop != null) {
             backdrop.release();
             backdrop = null;
         }
-        if (effect && samples(CONTENT) && samples(BACKDROP) && !warned) {
+        if (effect && samples(children()) && samples(BACKDROP) && !warned) {
             warned = true;
             android.util.Log.w("nsh", "<ShaderEffect>: Android gives a shader one live input; the backdrop reads as transparent");
         }
@@ -124,6 +159,97 @@ final class ShaderBox extends Box {
 
     private boolean samples(int input) {
         return (inputs & (1 << input)) != 0;
+    }
+
+    /** The input its children are: an effect's content, a transition's `sample_to`. */
+    private int children() {
+        return transition ? TO : CONTENT;
+    }
+
+    private boolean running() {
+        return transitionStart >= 0;
+    }
+
+    /**
+     * A transition starts, before the rest of its batch: what shows now
+     * (the children, or the transition as it is drawn) becomes its
+     * `sample_from`, and `nsh.progress` goes from 0 to 1 over `ms`.
+     */
+    void startTransition(float ms) {
+        if (!transition || shader == null || Build.VERSION.SDK_INT < 33 || getWidth() <= 0 || getHeight() <= 0) return;
+        int m = Math.round(maxOffset * mounter.density);
+        int w = getWidth() + 2 * m, h = getHeight() + 2 * m;
+        RenderNode picture = new RenderNode("nsh-transition-from");
+        picture.setPosition(0, 0, w, h);
+        RecordingCanvas recording = picture.beginRecording(w, h);
+        if (running() && node != null) {
+            recording.drawRenderNode(node);
+        } else {
+            recording.translate(m, m);
+            super.dispatchDraw(recording);
+        }
+        picture.endRecording();
+        Bitmap bitmap = render(picture, w, h);
+        if (bitmap == null) return;
+        if (from != null) from.recycle();
+        from = bitmap;
+        transitionStart = SystemClock.uptimeMillis();
+        transitionMs = Math.max(1, ms);
+        invalidate();
+    }
+
+    /**
+     * A page's or a dialog's transition through a shader, this view over
+     * them: pictures of its lower side (`sample_from`) and its upper side
+     * (`sample_to`).
+     */
+    void setSides(Bitmap lower, Bitmap upper) {
+        from = lower;
+        toPicture = upper;
+        invalidate();
+    }
+
+    /**
+     * `views` drawn one over the other as they are now, rendered once into
+     * a hardware bitmap the size of the first (null if it cannot be).
+     */
+    static Bitmap picture(View... views) {
+        if (Build.VERSION.SDK_INT < 33 || views.length == 0) return null;
+        int w = views[0].getWidth(), h = views[0].getHeight();
+        if (w <= 0 || h <= 0) return null;
+        RenderNode node = new RenderNode("nsh-nav-picture");
+        node.setPosition(0, 0, w, h);
+        RecordingCanvas recording = node.beginRecording(w, h);
+        for (View v : views) {
+            if (v != null && v.getWidth() > 0) v.draw(recording);
+        }
+        node.endRecording();
+        return render(node, w, h);
+    }
+
+    /** `node` rendered once into a hardware bitmap of `w` × `h` pixels (null if it could not be). */
+    private static Bitmap render(RenderNode node, int w, int h) {
+        ImageReader reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 1,
+                HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE | HardwareBuffer.USAGE_GPU_COLOR_OUTPUT);
+        HardwareRenderer renderer = new HardwareRenderer();
+        try {
+            renderer.setSurface(reader.getSurface());
+            renderer.setContentRoot(node);
+            renderer.createRenderRequest().setWaitForPresent(true).syncAndDraw();
+            Image image = reader.acquireNextImage();
+            if (image == null) return null;
+            HardwareBuffer buffer = image.getHardwareBuffer();
+            Bitmap bitmap = buffer != null ? Bitmap.wrapHardwareBuffer(buffer, ColorSpace.get(ColorSpace.Named.SRGB)) : null;
+            if (buffer != null) buffer.close();
+            image.close();
+            return bitmap;
+        } catch (RuntimeException e) {
+            android.util.Log.w("nsh", "<ShaderTransition>: no picture of the children: " + e.getMessage());
+            return null;
+        } finally {
+            renderer.destroy();
+            reader.close();
+        }
     }
 
     /** The image of `slot` loaded (it was `uri`'s); `width` × `height` points. */
@@ -188,9 +314,23 @@ final class ShaderBox extends Box {
         if (!effect) decor.drawBorders(canvas);
     }
 
+    private void endTransition() {
+        transitionStart = -1;
+        if (from != null) {
+            from.recycle();
+            from = null;
+        }
+    }
+
     @Override
     protected void dispatchDraw(Canvas canvas) {
-        if (!effect || !runs(canvas)) {
+        if (transition && running()) {
+            float t = (SystemClock.uptimeMillis() - transitionStart) / transitionMs;
+            if (t >= 1) endTransition();
+            else progress = t;
+        }
+        // An idle transition draws its children as they are.
+        if (!effect || !runs(canvas) || (transition && !running())) {
             super.dispatchDraw(canvas);
             return;
         }
@@ -215,12 +355,13 @@ final class ShaderBox extends Box {
         node.endRecording();
         float mp = m / density;
         prepare(-mp, -mp, w / density, h / density, w, h);
-        node.setRenderEffect(RenderEffect.createRuntimeShaderEffect(shader, inputName(CONTENT)));
+        node.setRenderEffect(RenderEffect.createRuntimeShaderEffect(shader, inputName(children())));
         canvas.save();
         canvas.translate(-m, -m);
         canvas.drawRenderNode(node);
         canvas.restore();
-        if (time && isShown()) postInvalidateOnAnimation();
+        if ((time || running()) && isShown()) postInvalidateOnAnimation();
+        else if (running()) invalidate();
     }
 
     /** What is behind the view through the shader, in the view's shape. */
@@ -283,7 +424,29 @@ final class ShaderBox extends Box {
         for (int i = 0; i < program.inputs.length; i++) {
             int input = program.inputs[i];
             int at = 8 + 8 * input;
-            if (input == CONTENT || input == BACKDROP) {
+            if (input == FROM) {
+                frame[at] = Float.floatToRawIntBits(x);
+                frame[at + 1] = Float.floatToRawIntBits(y);
+                frame[at + 2] = Float.floatToRawIntBits(w);
+                frame[at + 3] = Float.floatToRawIntBits(h);
+                frame[at + 4] = Float.floatToRawIntBits(from != null ? from.getWidth() : 1);
+                frame[at + 5] = Float.floatToRawIntBits(from != null ? from.getHeight() : 1);
+                shader.setInputShader(program.shaders[i], from != null
+                        ? new BitmapShader(from, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP) : transparent());
+                continue;
+            }
+            if (input == TO && toPicture != null) {
+                frame[at] = Float.floatToRawIntBits(x);
+                frame[at + 1] = Float.floatToRawIntBits(y);
+                frame[at + 2] = Float.floatToRawIntBits(w);
+                frame[at + 3] = Float.floatToRawIntBits(h);
+                frame[at + 4] = Float.floatToRawIntBits(toPicture.getWidth());
+                frame[at + 5] = Float.floatToRawIntBits(toPicture.getHeight());
+                shader.setInputShader(program.shaders[i],
+                        new BitmapShader(toPicture, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP));
+                continue;
+            }
+            if (input == CONTENT || input == BACKDROP || input == TO) {
                 frame[at] = Float.floatToRawIntBits(x);
                 frame[at + 1] = Float.floatToRawIntBits(y);
                 frame[at + 2] = Float.floatToRawIntBits(w);
@@ -291,7 +454,7 @@ final class ShaderBox extends Box {
                 frame[at + 4] = Float.floatToRawIntBits(pw);
                 frame[at + 5] = Float.floatToRawIntBits(ph);
                 // The render effect binds the live one; the other reads transparent.
-                boolean live = node != null && (effect && backdrop == null ? input == CONTENT : input == BACKDROP);
+                boolean live = node != null && (effect && backdrop == null ? input == children() : input == BACKDROP);
                 if (!live) shader.setInputShader(program.shaders[i], transparent());
                 continue;
             }

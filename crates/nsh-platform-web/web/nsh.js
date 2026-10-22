@@ -1281,7 +1281,7 @@ class Player {
       el.append(canvas);
       el._canvas = canvas;
       el._slots = [];
-    } else if (kind === "shader" || kind === "shadereffect") {
+    } else if (kind === "shader" || kind === "shadereffect" || kind === "shadertransition") {
       // A fill's picture under its children, an effect's over them
       // (`drawShader`).
       el = document.createElement("div");
@@ -1293,7 +1293,10 @@ class Player {
       canvas._shaderOutput = true;
       el.append(canvas);
       el._shaderCanvas = canvas;
-      el._effect = kind === "shadereffect";
+      el._effect = kind !== "shader";
+      // A transition's children are its `sample_to` (input 3), an
+      // effect's its content (input 0).
+      el._transition = kind === "shadertransition";
       el._args = new Map();
     } else if (kind === "web") {
       el = document.createElement("div");
@@ -1457,7 +1460,7 @@ class Player {
       el._frameAnimation = a;
     }
     if (el._kind === "canvas") this.drawSoon(el);
-    if (el._kind === "shader" || el._kind === "shadereffect") {
+    if (el._kind === "shader" || el._kind === "shadereffect" || el._kind === "shadertransition") {
       this.shaderSoon(el);
       if (el._fill?.inputs) {
         el._stale = el._fill.inputs;
@@ -2692,6 +2695,116 @@ class Player {
     this.inputsSoon(el);
   }
 
+  /**
+   * A shader transition starts, before the rest of its batch: what shows
+   * now (its children, or the transition as it is drawn) is its
+   * `sample_from`, its children painted after the batch its `sample_to`,
+   * and `nsh.progress` goes from 0 to 1 over `ms` on animation frames.
+   */
+  op_st([, id, ms]) {
+    const el = this.view(id);
+    if (!el?._transition || !el._fill || !el._frame) return;
+    const from = this.inputCanvas(el, "_fromPicture");
+    if (el._running) {
+      from.cx.setTransform(1, 0, 0, 1, 0, 0);
+      from.cx.drawImage(el._shaderCanvas, 0, 0, from.canvas.width, from.canvas.height);
+    } else {
+      this.paintTree(from.cx, el, el.getBoundingClientRect(), 1, null, el);
+    }
+    el._fromDirty = true;
+    el._running = { start: performance.now(), ms: Math.max(1, ms) };
+    el._t = 0;
+    el.classList.add("nsh-fx");
+    el._stale = 1;
+    this.inputsSoon(el);
+    // The class is the transition's own change, not its children's.
+    el._contentObserver?.takeRecords();
+    if (el._transitionFrame) return;
+    const step = () => {
+      el._transitionFrame = 0;
+      const run = el._running;
+      if (!run || !el.isConnected) return;
+      el._t = Math.min(1, (performance.now() - run.start) / run.ms);
+      if (el._t >= 1) {
+        el._running = null;
+        el.classList.remove("nsh-fx");
+        el._shaderCanvas.width = 0;
+        el._contentObserver?.takeRecords();
+        return;
+      }
+      this.drawShader(el);
+      el._transitionFrame = requestAnimationFrame(step);
+    };
+    el._transitionFrame = requestAnimationFrame(step);
+  }
+
+  /**
+   * A page's or a dialog's transition through a shader (`spec`: its fill
+   * and length) over `host` (the stack, the root): `upper` (the page that
+   * comes or goes, the dialog) painted over what is before it is its
+   * `sample_to`, what is before it alone its `sample_from`, and
+   * `nsh.progress` how much of the upper side shows: 0 to 1, or 1 to 0
+   * when `reverse`. The views are where they end at once under it. Calls
+   * `done` when it ends; false where it cannot run (no WebGL 2).
+   */
+  shaderNav(host, upper, spec, reverse, done) {
+    const r = host.getBoundingClientRect();
+    if (!r.width || !r.height || !this.gl()) return false;
+    const o = document.createElement("div");
+    o.className = "nsh-nav-shader";
+    Object.assign(o.style, { position: "absolute", left: "0", top: "0", width: `${r.width}px`, height: `${r.height}px`, zIndex: "2147483001", pointerEvents: "none" });
+    const canvas = document.createElement("canvas");
+    canvas.className = "nsh-fill";
+    canvas._shaderOutput = true;
+    o.append(canvas);
+    Object.assign(o, {
+      _shaderCanvas: canvas,
+      _fill: spec.fill,
+      _uniforms: new Uint32Array(spec.fill.uniforms),
+      _frame: [0, 0, r.width, r.height],
+      _effect: false,
+      _transition: true,
+      _args: new Map(),
+      _images: [],
+    });
+    const from = this.inputCanvas(o, "_fromPicture");
+    this.paintTree(from.cx, host, r, 1, upper, null);
+    const to = this.inputCanvas(o, "_contentPicture");
+    this.paintTree(to.cx, host, r, 1, null, null);
+    o._fromDirty = o._contentDirty = true;
+    host.append(o);
+    const start = performance.now();
+    o._running = { start, ms: Math.max(1, spec.ms) };
+    const step = () => {
+      const t = Math.min(1, (performance.now() - start) / o._running.ms);
+      o._t = reverse ? 1 - t : t;
+      if (t >= 1 || !o.isConnected) {
+        o.remove();
+        done?.();
+        return;
+      }
+      this.drawShader(o);
+      requestAnimationFrame(step);
+    };
+    o._t = reverse ? 1 : 0;
+    this.drawShader(o);
+    requestAnimationFrame(step);
+    return true;
+  }
+
+  /** A canvas for a picture of `el`'s input (`key`), covering its area, with its context in points from the view's top-left. */
+  inputCanvas(el, key) {
+    const ratio = devicePixelRatio || 1;
+    const m = el._effect ? Math.max(0, el._fill?.offset || 0) : 0;
+    const [, , w, h] = el._frame;
+    const c = (el[key] ??= document.createElement("canvas"));
+    c.width = Math.max(1, Math.round((w + 2 * m) * ratio));
+    c.height = Math.max(1, Math.round((h + 2 * m) * ratio));
+    const cx = c.getContext("2d");
+    cx.setTransform(ratio, 0, 0, ratio, m * ratio, m * ratio);
+    return { canvas: c, cx };
+  }
+
   /** Animated uniforms written into the view's uniforms; `nsh.progress` is component 0xffff. */
   writeArgs(el) {
     const words = new Float32Array(el._uniforms.buffer);
@@ -2706,12 +2819,13 @@ class Player {
   // (`paintTree`), taken again on the next frame after a change: a mutation
   // in the subtree (in the surface, for a backdrop), a scroll or a load.
 
-  /** Watches what the view's shader samples (`fill.inputs`: 1 content, 2 backdrop). */
+  /** Watches what the view's shader samples (`fill.inputs`: 1 content, 2 backdrop, 8 a transition's `sample_to`). */
   watchInputs(el) {
     const fill = el._fill;
-    const content = el._effect && fill && (fill.inputs & 1);
+    const content = el._effect && fill && (fill.inputs & (el._transition ? 8 : 1));
     const backdrop = fill && (fill.inputs & 2);
-    el.classList.toggle("nsh-fx", Boolean(el._effect && fill));
+    // A transition draws through its shader only while it runs.
+    el.classList.toggle("nsh-fx", Boolean(el._effect && fill && (!el._transition || el._running)));
     if (content && !el._contentObserver) {
       const mark = (list) => {
         if (list && list.every((m) => m.target._shaderOutput)) return;
@@ -2779,7 +2893,8 @@ class Player {
     const fill = el._fill;
     const stale = el._stale || 0;
     el._stale = 0;
-    if (!fill || !el._frame || !stale) return;
+    // An idle transition shows its children as they are.
+    if (!fill || !el._frame || !stale || (el._transition && !el._running)) return;
     const ratio = devicePixelRatio || 1;
     const m = el._effect ? Math.max(0, fill.offset || 0) : 0;
     const [, , w, h] = el._frame;
@@ -3011,9 +3126,11 @@ class Player {
   /** The texture of an input's picture (0: content, 1: backdrop), uploaded again after a paint. */
   pictureTexture(g, el, input) {
     const gl = g.gl;
-    el._pictureTextures ??= [null, null];
+    el._pictureTextures ??= [null, null, null, null];
     let t = el._pictureTextures[input];
-    const dirty = input === 0 ? "_contentDirty" : "_backdropDirty";
+    // A transition's `sample_to` is its children's picture, as an effect's content.
+    const dirty = ["_contentDirty", "_backdropDirty", "_fromDirty", "_contentDirty"][input];
+    const source = [el._contentPicture, el._backdropPicture, el._fromPicture, el._contentPicture][input];
     if (!t) {
       t = el._pictureTextures[input] = gl.createTexture();
       el[dirty] = true;
@@ -3022,7 +3139,7 @@ class Player {
     if (el[dirty]) {
       el[dirty] = false;
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, input === 0 ? el._contentPicture : el._backdropPicture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
       for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) {
         gl.texParameteri(gl.TEXTURE_2D, k, v);
       }
@@ -3048,8 +3165,8 @@ class Player {
   drawShader(el) {
     const fill = el._fill;
     const canvas = el._shaderCanvas;
-    if (!fill || !el._frame || !el.isConnected) {
-      if (!fill && canvas.width) canvas.width = 0;
+    if (!fill || !el._frame || !el.isConnected || (el._transition && !el._running)) {
+      if ((!fill || el._transition) && canvas.width) canvas.width = 0;
       return;
     }
     const g = this.gl();
@@ -3069,7 +3186,7 @@ class Player {
     el._started ??= performance.now();
     const time = (performance.now() - el._started) / 1000;
     const nsh = new Float32Array(8);
-    nsh.set([w, h, ratio, time, el._progress ?? fill.progress ?? 0]);
+    nsh.set([w, h, ratio, time, el._transition ? el._t ?? 0 : el._progress ?? fill.progress ?? 0]);
     const frame = new Float32Array(104);
     frame.set([-m, -m, w + 2 * m, h + 2 * m]);
     for (const [slot, img] of (el._images ?? []).entries()) {
@@ -3077,7 +3194,12 @@ class Player {
       frame.set([0, 0, w, h, img.naturalWidth, img.naturalHeight], 8 + 8 * (4 + slot));
     }
     // The pictures of its inputs cover the area drawn.
-    const pictures = [el._effect && fill.inputs & 1 ? el._contentPicture : null, fill.inputs & 2 ? el._backdropPicture : null];
+    const pictures = [
+      el._effect && !el._transition && fill.inputs & 1 ? el._contentPicture : null,
+      fill.inputs & 2 ? el._backdropPicture : null,
+      el._transition && fill.inputs & 4 ? el._fromPicture : null,
+      el._transition && fill.inputs & 8 ? el._contentPicture : null,
+    ];
     pictures.forEach((c, input) => {
       if (c) frame.set([-m, -m, w + 2 * m, h + 2 * m, c.width, c.height], 8 + 8 * input);
     });
@@ -3093,7 +3215,7 @@ class Player {
     made.samplers.forEach(([location, input], unit) => {
       const img = input >= 4 ? el._images?.[input - 4] : null;
       gl.activeTexture(gl.TEXTURE0 + unit);
-      const picture = input < 2 ? pictures[input] : null;
+      const picture = input < 4 ? pictures[input] : null;
       const texture = picture ? this.pictureTexture(g, el, input) : img ? this.glTexture(g, img) : this.emptyTexture(g);
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.uniform1i(location, unit);
@@ -3308,10 +3430,10 @@ class Player {
 
   // Navigation
 
-  op_scr([, id, height, preventBack, header, animation]) {
+  op_scr([, id, height, preventBack, header, animation, shader, shaderMs]) {
     const el = this.view(id);
     if (!el) return;
-    el._screen = { height, preventBack, header, animation };
+    el._screen = { height, preventBack, header, animation, shader: shader ? { fill: shader, ms: shaderMs } : null };
     this.placeHeader(el);
     const stack = el.parentNode;
     if (stack?._kind === "stack" && stack._frame) this.reportRoot(el, stack._frame[2], stack._frame[3], this.screenInsets(el));
@@ -3379,6 +3501,11 @@ class Player {
   /** Animates a stack's top screen changing from `old` to `top`:
    * pushed (`pushing`) or popped. Calls `done` when the motion ends. */
   moveScreens(old, top, pushing, done) {
+    // Through a shader: the page below is its lower side, the page above
+    // its upper one.
+    const shader = (pushing ? top : old)?._screen?.shader;
+    const stack = (top ?? old)?.parentNode;
+    if (shader && stack && this.shaderNav(stack, pushing ? top : old, shader, !pushing, done)) return;
     const motion = this.screenMotion(pushing ? top : old);
     if (!motion) {
       done?.();
@@ -3613,10 +3740,10 @@ class Player {
 
   // Modals
 
-  op_mc([, id, animation, closeOnEscape]) {
+  op_mc([, id, animation, closeOnEscape, shader, shaderMs]) {
     const el = this.view(id);
     if (!el) return;
-    el._modal = { animation, closeOnEscape };
+    el._modal = { animation, closeOnEscape, shader: shader ? { fill: shader, ms: shaderMs } : null };
     if (el.isConnected && !el._leaving) this.placeModal(el);
     // Its config comes after its insert in the batch that presents it: it
     // starts out of sight the way it now comes in.
@@ -3677,6 +3804,16 @@ class Player {
     this.syncHistorySoon();
     requestAnimationFrame(() => requestAnimationFrame(() => {
       el._entering = false;
+      const shader = el._modal?.shader;
+      if (shader) {
+        // It shows at once, under a shader over the root.
+        el.style.transform = "";
+        el.style.opacity = "";
+        if (this.shaderNav(this.root, el, shader, false, () => this.event(el._id, "onShow"))) {
+          requestAnimationFrame(() => { el.style.transition = ""; });
+          return;
+        }
+      }
       el.style.transition = "";
       el.style.transform = "";
       el.style.opacity = "";
@@ -3689,6 +3826,24 @@ class Player {
     if (el._leaving) return;
     el._leaving = true;
     const motion = this.modalMotion(el);
+    // Through a shader: pictured as it shows, then gone under it at once.
+    const leave = () => {
+      if (el._leaving) {
+        el.remove();
+        this.dropLeftWith(el);
+      }
+      if (!reported) this.event(el._id, "onDismiss");
+    };
+    const shader = el._modal?.shader;
+    if (shader && this.shaderNav(this.root, el, shader, true, leave)) {
+      el.style.transition = "none";
+      el.style.opacity = "0";
+      this.scopeFocus();
+      this.syncHistorySoon();
+      const restore = el._restoreFocus;
+      if (restore?.isConnected && !this.topModal()) restore.focus({ preventScroll: true });
+      return;
+    }
     this.hideModal(el, motion);
     this.scopeFocus();
     this.syncHistorySoon();

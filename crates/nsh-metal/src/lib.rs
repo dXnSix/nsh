@@ -61,6 +61,14 @@ const LOAD_CLEAR: usize = 2;
 const STORE: usize = 1;
 /// Bytes `set…Bytes:` takes; more goes into a buffer.
 const MAX_INLINE_BYTES: usize = 4096;
+/// The inputs a layer holds pictures of, in order.
+const INPUTS: [ShaderInput; 4] = [
+    ShaderInput::Content,
+    ShaderInput::Backdrop,
+    ShaderInput::From,
+    ShaderInput::To,
+];
+
 /// Drawables a layer has waiting to be shown at most.
 pub const MAX_IN_FLIGHT: usize = 2;
 
@@ -386,7 +394,7 @@ pub struct ShaderLayer {
     textures: Vec<Option<(Id, Size<DevicePixels>)>>,
     /// Pictures of its content and of what is behind it
     /// ([`ShaderLayer::set_input`]), by input index.
-    inputs: [Option<Picture>; 2],
+    inputs: [Option<Picture>; 4],
     /// `nsh.progress`.
     progress: f32,
     /// How far beyond the view it draws (an effect's `maxSampleOffset`).
@@ -431,7 +439,7 @@ impl ShaderLayer {
             uniforms: Vec::new(),
             args: Vec::new(),
             textures: Vec::new(),
-            inputs: [None, None],
+            inputs: [None, None, None, None],
             progress: 0.0,
             offset: 0.0,
             size: (0.0, 0.0),
@@ -495,7 +503,8 @@ impl ShaderLayer {
         }
     }
 
-    /// A picture of `input` (its content or what is behind it): `rgba`
+    /// A picture of `input` (its content, what is behind it, or a
+    /// transition's side): `rgba`
     /// premultiplied, `width` × `height` pixels top row first, lying at
     /// `rect` (points from the view's top-left). Whether it was taken.
     pub fn set_input(
@@ -509,6 +518,8 @@ impl ShaderLayer {
         let at = match input {
             ShaderInput::Content => 0,
             ShaderInput::Backdrop => 1,
+            ShaderInput::From => 2,
+            ShaderInput::To => 3,
             _ => return false,
         };
         let Some(gpu) = gpu() else { return false };
@@ -567,7 +578,7 @@ impl ShaderLayer {
         } else {
             self.uniforms.clear();
             self.textures.clear();
-            self.inputs = [None, None];
+            self.inputs = [None, None, None, None];
         }
         self.fill = fill;
         load
@@ -650,10 +661,7 @@ impl ShaderLayer {
             .into_iter()
             .map(|(slot, px)| (ShaderInput::Image(slot as u8), view, px))
             .collect();
-        for (i, input) in [ShaderInput::Content, ShaderInput::Backdrop]
-            .into_iter()
-            .enumerate()
-        {
+        for (i, input) in INPUTS.into_iter().enumerate() {
             if let Some(p) = &self.inputs[i] {
                 inputs.push((input, p.rect, p.px));
             }
@@ -670,11 +678,28 @@ impl ShaderLayer {
                 .cloned()
                 .flatten()
                 .map(|(t, _)| t),
-            ShaderInput::Content => self.inputs[0].as_ref().map(|p| p.texture.clone()),
-            ShaderInput::Backdrop => self.inputs[1].as_ref().map(|p| p.texture.clone()),
-            _ => None,
+            input => INPUTS
+                .iter()
+                .position(|&i| i == input)
+                .and_then(|i| self.inputs[i].as_ref())
+                .map(|p| p.texture.clone()),
         }
         .unwrap_or_else(|| gpu.empty.clone())
+    }
+
+    /// Sets `nsh.progress` (a transition's, as it runs); whether it
+    /// changed.
+    pub fn set_progress(&mut self, progress: f32) -> bool {
+        let changed = self.progress != progress;
+        self.progress = progress;
+        changed
+    }
+
+    /// Drops the picture of `input` (a transition that ended).
+    pub fn clear_input(&mut self, input: ShaderInput) {
+        if let Some(i) = INPUTS.iter().position(|&i| i == input) {
+            self.inputs[i] = None;
+        }
     }
 
     /// Whether it draws every frame (it reads `nsh.time`).

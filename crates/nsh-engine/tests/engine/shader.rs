@@ -47,8 +47,11 @@ fn start(app: &str) -> (Engine, crossbeam_channel::Receiver<MountBatch>) {
     // SAFETY: compiled just now by this runtime.
     let app = unsafe { Bundle::bytecode(bytecode) };
     let (tx, rx) = crossbeam_channel::unbounded();
+    // A platform that draws transitions: they start.
+    let mut shaders = ShaderSupport::fills(ShaderLanguage::None);
+    shaders.transition = nsh_core::shader::Support::Snapshot;
     let environment = Environment {
-        shaders: ShaderSupport::fills(ShaderLanguage::None),
+        shaders,
         ..Environment::default()
     };
     let config = EngineConfig {
@@ -250,7 +253,7 @@ fn create_shader_checks_its_source_and_shader_support_says_what_draws() {
     );
     assert!(line.contains(r#"["color","radius","center"]"#), "{line}");
     assert!(
-        line.contains(r#"{"fill":"live","backdrop":false,"effect":false,"transition":false}"#),
+        line.contains(r#"{"fill":"live","backdrop":false,"effect":false,"transition":"snapshot"}"#),
         "{line}"
     );
 }
@@ -336,4 +339,167 @@ fn shader_effects_take_their_children_and_learn_when_they_change() {
     assert!(marks(effects[0]) >= 2, "{items:?}");
     assert!(marks(backdrop) >= 2, "{items:?}");
     assert_eq!(marks(effects[1]), 0);
+}
+
+const TRANSITION: &str = r##"import { mount, createShader, ShaderTransition, signal, Text } from "nsh";
+
+const wipe = createShader("fn main(p: vec2f) -> vec4f { return select(sample_from(p), sample_to(p), p.x < nsh.size.x * nsh.progress); }");
+const page = signal(0);
+setTimeout(() => page.set(1), 50);
+
+mount(() => (
+  <>
+    <ShaderTransition src={wipe} value={page()} duration={400}>
+      <Text>{`page ${page()}`}</Text>
+    </ShaderTransition>
+    <ShaderTransition value={page()}>
+      <Text>{`faded ${page()}`}</Text>
+    </ShaderTransition>
+    <ShaderTransition value={page()} fallback="none">
+      <Text>{`swapped ${page()}`}</Text>
+    </ShaderTransition>
+  </>
+));
+"##;
+
+#[test]
+fn shader_transitions_start_before_their_children_change() {
+    let (_engine, rx) = start(TRANSITION);
+    let mut batches = Vec::new();
+    while let Ok(batch) = rx.recv_timeout(Duration::from_millis(500)) {
+        batches.push(batch.items);
+    }
+    let items: Vec<&MountItem> = batches.iter().flatten().collect();
+    let ids: Vec<_> = items
+        .iter()
+        .filter_map(|i| match i {
+            MountItem::Create {
+                id,
+                kind: ViewKind::ShaderTransition,
+            } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids.len(), 3, "{items:?}");
+    let fill = |id| {
+        items.iter().rev().find_map(|i| match i {
+            MountItem::Shader { id: of, fill } if *of == id => Some(fill.clone()),
+            _ => None,
+        })
+    };
+    let wipe = fill(ids[0]).flatten().expect("the wipe's fill");
+    assert!(wipe.samples(ShaderInput::From) && wipe.samples(ShaderInput::To));
+    // Without a shader: the cross-fade, or nothing.
+    let fade = fill(ids[1]).flatten().expect("the fallback's cross-fade");
+    assert!(fade.samples(ShaderInput::From) && fade.samples(ShaderInput::To));
+    assert!(fill(ids[2]).flatten().is_none(), "{items:?}");
+    // The value changed: the batch that changes the children starts the
+    // transitions first, none on the first batch or without a fill.
+    let starts: Vec<_> = items
+        .iter()
+        .filter_map(|i| match i {
+            MountItem::ShaderTransition { id, duration } => Some((*id, *duration)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        starts,
+        [
+            (ids[0], Duration::from_millis(400)),
+            (ids[1], Duration::from_millis(300)),
+        ],
+        "{items:?}"
+    );
+    let changed = batches
+        .iter()
+        .find(|b| {
+            b.iter()
+                .any(|i| matches!(i, MountItem::ShaderTransition { .. }))
+        })
+        .expect("the batch of the change");
+    assert!(matches!(changed[0], MountItem::ShaderTransition { .. }));
+    assert!(matches!(changed[1], MountItem::ShaderTransition { .. }));
+    assert!(
+        changed
+            .iter()
+            .any(|i| matches!(i, MountItem::ShaderInput { id } if *id == ids[0])),
+        "{changed:?}"
+    );
+}
+
+const NAVIGATION: &str = r##"import { mount, createShader, signal, Text } from "nsh";
+import { createNavStack, Dialog, NavPage, NavStack } from "nsh/base";
+
+const reveal = createShader("fn main(p: vec2f) -> vec4f { return mix(sample_from(p), sample_to(p), nsh.progress); }");
+const nav = createNavStack(["home"]);
+const open = signal(false);
+setTimeout(() => {
+  nav.push("detail");
+  open.set(true);
+}, 50);
+
+mount(() => (
+  <>
+    <NavStack state={nav}>
+      {(route) => (
+        <NavPage title={route} animation={route === "detail" ? { shader: reveal, duration: 500 } : "fade"}>
+          <Text>{route}</Text>
+        </NavPage>
+      )}
+    </NavStack>
+    <Dialog open={open()} animation={{ shader: reveal }}>
+      <Text>dialog</Text>
+    </Dialog>
+  </>
+));
+"##;
+
+#[test]
+fn pages_and_dialogs_take_a_shader_as_their_animation() {
+    let (_engine, rx) = start(NAVIGATION);
+    let items = items(&rx, Duration::from_millis(600));
+    let programs: Vec<u32> = items
+        .iter()
+        .filter_map(|i| match i {
+            MountItem::ShaderProgram { program } => Some(program.id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(programs.len(), 1, "{items:?}");
+    let screens: Vec<_> = items
+        .iter()
+        .filter_map(|i| match i {
+            MountItem::ScreenConfig { config, .. } => Some(config.clone()),
+            _ => None,
+        })
+        .collect();
+    // The page that comes through the shader; the other one fades.
+    let shaded = screens
+        .iter()
+        .rev()
+        .find(|c| c.shader.is_some())
+        .expect("a page with a shader animation");
+    let shader = shaded.shader.as_ref().unwrap();
+    assert_eq!(shader.fill.program, programs[0]);
+    assert!(shader.fill.samples(ShaderInput::From) && shader.fill.samples(ShaderInput::To));
+    assert_eq!(shader.duration, Duration::from_millis(500));
+    assert!(
+        screens
+            .iter()
+            .any(|c| c.shader.is_none() && c.animation == nsh_core::ScreenAnimation::Fade)
+    );
+    let (modal, shader) = items
+        .iter()
+        .rev()
+        .find_map(|i| match i {
+            MountItem::ModalConfig { config, shader, .. } => Some((*config, shader.clone())),
+            _ => None,
+        })
+        .expect("the dialog's config");
+    let shader = shader.expect("the dialog's shader animation");
+    assert_eq!(shader.fill.program, programs[0]);
+    // As long as the desktops' slide without a duration; a fade where
+    // shaders draw no transitions.
+    assert_eq!(shader.duration, Duration::from_millis(350));
+    assert_eq!(modal.animation, nsh_core::ModalAnimation::Fade);
 }

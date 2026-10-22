@@ -634,6 +634,7 @@ fn kind_name(kind: ViewKind) -> &'static str {
         ViewKind::Canvas => "canvas",
         ViewKind::Shader => "shader",
         ViewKind::ShaderEffect => "shadereffect",
+        ViewKind::ShaderTransition => "shadertransition",
         ViewKind::WebView => "web",
         ViewKind::Native => "native",
         ViewKind::Video => "video",
@@ -677,6 +678,13 @@ fn shader_program(program: &nsh_core::shader::ShaderProgram) -> String {
 /// A finite number for JSON (0 otherwise).
 fn finite(n: f32) -> f32 {
     if n.is_finite() { n } else { 0.0 }
+}
+
+/// A page's or a dialog's shader transition: its fill (as `shader_fill`)
+/// and its duration in milliseconds, or `null, 0`.
+fn nav_shader(out: &mut Out, shader: Option<&nsh_core::NavShader>) {
+    out.raw(&shader_fill(shader.map(|s| &*s.fill)))
+        .num(shader.map_or(0.0, |s| s.duration.as_secs_f64() * 1000.0));
 }
 
 fn shader_fill(fill: Option<&nsh_core::shader::ShaderFill>) -> String {
@@ -1236,6 +1244,12 @@ pub(crate) fn encode(out: &mut Out, item: &MountItem) {
         MountItem::ShaderInput { id } => {
             out.item("si").num(*id).end();
         }
+        MountItem::ShaderTransition { id, duration } => {
+            out.item("st")
+                .num(*id)
+                .num(duration.as_secs_f64() * 1000.0)
+                .end();
+        }
         MountItem::Shader { id, fill } => {
             out.item("sh")
                 .num(*id)
@@ -1298,15 +1312,17 @@ pub(crate) fn encode(out: &mut Out, item: &MountItem) {
                 ScreenAnimation::Default => "default",
                 ScreenAnimation::Fade => "fade",
                 ScreenAnimation::None => "none",
-            })
-            .end();
+            });
+            nav_shader(out, config.shader.as_ref());
+            out.end();
         }
-        MountItem::ModalConfig { id, config } => {
+        MountItem::ModalConfig { id, config, shader } => {
             out.item("mc")
                 .num(*id)
                 .str(enum_name(&config.animation))
-                .bool(config.close_on_escape)
-                .end();
+                .bool(config.close_on_escape);
+            nav_shader(out, shader.as_ref());
+            out.end();
         }
         MountItem::NativeProps { id, props } => match props {
             NativeProps::WebView(w) => {

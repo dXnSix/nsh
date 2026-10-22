@@ -60,7 +60,9 @@ impl UiAnimation {
                 }
                 if matches!(
                     view.kind(),
-                    nsh_core::ViewKind::Shader | nsh_core::ViewKind::ShaderEffect
+                    nsh_core::ViewKind::Shader
+                        | nsh_core::ViewKind::ShaderEffect
+                        | nsh_core::ViewKind::ShaderTransition
                 ) {
                     crate::shader::set_args(view, canvas);
                 } else {

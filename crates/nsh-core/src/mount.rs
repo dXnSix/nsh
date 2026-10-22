@@ -48,6 +48,11 @@ pub enum ViewKind {
     /// A view whose children draw through a shader ([`MountItem::Shader`]):
     /// they are the shader's content input.
     ShaderEffect,
+    /// A view whose children change through a shader
+    /// ([`MountItem::Shader`], [`MountItem::ShaderTransition`]): its
+    /// children are the shader's `sample_to`, a picture of what they drew
+    /// before its `sample_from`.
+    ShaderTransition,
     /// A web view.
     WebView,
     /// The container of a registered native component: the platform
@@ -351,6 +356,10 @@ pub struct ScreenConfig {
     pub prevent_back: bool,
     /// Push / pop transition.
     pub animation: ScreenAnimation,
+    /// The push / pop transition through a shader, where the platform
+    /// draws shader transitions ([`crate::shader::Support`]); otherwise
+    /// [`Self::animation`].
+    pub shader: Option<NavShader>,
     /// Leading header item view.
     pub left: Option<NodeId>,
     /// Trailing header item view.
@@ -383,6 +392,7 @@ impl Default for ScreenConfig {
             gesture_enabled: true,
             prevent_back: false,
             animation: ScreenAnimation::Default,
+            shader: None,
             left: None,
             right: None,
             title_view: None,
@@ -390,6 +400,22 @@ impl Default for ScreenConfig {
             header_height: Points::ZERO,
         }
     }
+}
+
+/// A page's or a dialog's transition through a shader
+/// ([`crate::shader::ShaderAnimation`]): `sample_from` is the lower side
+/// (the page below, what is behind the dialog), `sample_to` the upper one,
+/// and `nsh.progress` how much of the upper side shows: 0 to 1 over
+/// `duration` as it comes (a push, a dialog that opens), 1 to 0 as it goes
+/// (a pop, a dialog that closes), and as a back gesture moves.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct NavShader {
+    /// What the shader draws: its program (sent before as
+    /// [`MountItem::ShaderProgram`]) and uniforms.
+    pub fill: Arc<crate::shader::ShaderFill>,
+    /// How long it runs.
+    pub duration: std::time::Duration,
 }
 
 /// Options of a modal (`Dialog`).
@@ -766,6 +792,17 @@ pub enum MountItem {
         /// The shader view or effect.
         id: NodeId,
     },
+    /// A shader transition starts: what its children draw now, before the
+    /// items after this one in the batch, is its `sample_from`; what they
+    /// draw from then on its `sample_to`, while `nsh.progress` goes from 0
+    /// to 1 over `duration` (linearly). It comes first in its batch. A
+    /// transition that starts while one runs starts from what shows.
+    ShaderTransition {
+        /// The transition view ([`ViewKind::ShaderTransition`]).
+        id: NodeId,
+        /// How long it runs.
+        duration: std::time::Duration,
+    },
     /// Bind visual properties to native animation nodes.
     AnimationBindings {
         /// View.
@@ -846,6 +883,9 @@ pub enum MountItem {
         id: NodeId,
         /// The options.
         config: ModalConfig,
+        /// How it appears and goes through a shader, where the platform
+        /// draws shader transitions; otherwise `config.animation`.
+        shader: Option<NavShader>,
     },
     /// Create the registered component `name` in a [`ViewKind::Native`]
     /// container (right after its `Create`). Unknown names leave the
@@ -913,6 +953,7 @@ impl MountItem {
             M::Insert { parent, .. } => Some(*parent),
             M::ShaderProgram { .. }
             | M::ShaderInput { .. }
+            | M::ShaderTransition { .. }
             | M::LayoutDirection { .. }
             | M::Appearance { .. }
             | M::Keymap(_)

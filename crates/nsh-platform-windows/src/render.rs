@@ -857,6 +857,42 @@ fn draw_flat(cx: &mut DrawCx<'_>, view: &mut NshView, base: Mat4) {
     s.fade = saved_fade;
 }
 
+/// Draws with `f` into `target` (a target bitmap of `scale` pixels per
+/// point, cleared first) outside the window's pass: a shader transition's
+/// picture of its children before a batch changes them. False when drawing
+/// failed.
+pub(crate) fn draw_offscreen(
+    surface: &Rc<Surface>,
+    target: &ID2D1Image,
+    scale: f32,
+    f: impl FnOnce(&mut DrawCx<'_>),
+) -> bool {
+    let Ok(gfx) = gfx::get() else { return false };
+    crate::decor::layer::with_context(&gfx, |dc| {
+        // SAFETY: COM calls on a context nobody else draws with; `EndDraw`
+        // follows `BeginDraw`.
+        unsafe {
+            dc.SetTarget(target);
+            dc.SetDpi(96.0 * scale, 96.0 * scale);
+            dc.BeginDraw();
+            dc.SetTransform(&Matrix3x2::identity());
+            dc.Clear(Some(&color_f(Color::TRANSPARENT)));
+        }
+        match DrawCx::with_dc(&gfx, dc, scale, crate::system::dark(surface), surface.now()) {
+            Ok(mut cx) => {
+                // Nothing behind it to read, no window to place items in.
+                cx.offscreen = true;
+                cx.backdrop = false;
+                f(&mut cx);
+            }
+            Err(err) => log::debug!("render: offscreen pass not started: {err}"),
+        }
+        // SAFETY: closes the `BeginDraw` above.
+        unsafe { dc.EndDraw(None, None) }.is_ok()
+    })
+    .unwrap_or(false)
+}
+
 /// Draws the surface's window: the whole tree, then presents it.
 pub(crate) fn frame(surface: &Rc<Surface>) {
     let Ok(gfx) = gfx::get() else { return };
