@@ -641,6 +641,8 @@ fn kind_name(kind: ViewKind) -> &'static str {
         ViewKind::Shader => "shader",
         ViewKind::ShaderEffect => "shadereffect",
         ViewKind::ShaderTransition => "shadertransition",
+        ViewKind::ScreenEffect => "screeneffect",
+        ViewKind::ScreenTransition => "screentransition",
         ViewKind::WebView => "web",
         ViewKind::Native => "native",
         ViewKind::Video => "video",

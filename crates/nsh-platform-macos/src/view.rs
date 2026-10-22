@@ -1070,7 +1070,7 @@ impl NshView {
     }
 
     /// Sizes the container to the view's bounds.
-    fn size_container(&self) {
+    pub(crate) fn size_container(&self) {
         if let Some(c) = &*self.ivars().container.borrow() {
             let f = self.state().frame;
             let origin = crate::scroll::bounds_origin(self);
@@ -1359,6 +1359,15 @@ impl NshView {
             sup = superview(&sup)?;
         }
         NshView::from_ns(&sup)
+    }
+
+    /// The surface of the root view it is in, if it is in one.
+    pub(crate) fn surface(&self) -> Option<std::rc::Rc<Surface>> {
+        let mut view = self.clone();
+        while let Some(parent) = view.parent_view() {
+            view = parent;
+        }
+        view.ivars().surface.borrow().upgrade()
     }
 
     /// Whether it is in a parent view.

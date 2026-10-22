@@ -117,6 +117,7 @@ fn ready(id: u32) {
         let draws = view.state().shader.as_ref().and_then(|s| s.layer.program()) == Some(id);
         if draws {
             draw(&view);
+            show(&view);
         }
     }
 }
@@ -133,6 +134,29 @@ fn views() -> Vec<NshView> {
 pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, fill: Option<Arc<ShaderFill>>) {
     let transition = view.kind() == ViewKind::ShaderTransition;
     let effect = transition || view.kind() == ViewKind::ShaderEffect;
+    set_on(surface, view, fill, transition, effect);
+}
+
+/// The surface's screen effect (`<ScreenEffect>`): its root view draws
+/// through `fill` as an effect does, everything it holds (pages, dialogs,
+/// overlays) its content, the shader's layer above all of it, the page and
+/// dialog transitions' overlays among it ([`take_pictures`]).
+pub(crate) fn set_screen(surface: &Rc<Surface>, fill: Option<Arc<ShaderFill>>) {
+    set_on(surface, &surface.root, fill, false, true);
+}
+
+/// Whether `view` is a surface's root drawn through its screen effect.
+fn is_screen(view: &NshView) -> bool {
+    view.id() == nsh_core::ROOT_ID && view.state().shader.as_ref().is_some_and(|s| s.effect)
+}
+
+fn set_on(
+    surface: &Rc<Surface>,
+    view: &NshView,
+    fill: Option<Arc<ShaderFill>>,
+    transition: bool,
+    effect: bool,
+) {
     if view.state().shader.is_none() {
         if fill.is_none() {
             return;
@@ -142,7 +166,12 @@ pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, fill: Option<Arc<Shader
             return;
         };
         let ca = content_layer(&layer);
-        if effect {
+        if view.id() == nsh_core::ROOT_ID {
+            // Over everything of the surface, the navigation's overlays
+            // among it.
+            ca.setZPosition(2.0e6);
+            view.ensure_container();
+        } else if effect {
             // Over the children it draws, below the borders in front.
             ca.setZPosition(crate::decor::EFFECT);
             view.ensure_container();
@@ -314,9 +343,18 @@ fn show(view: &NshView) {
         let Some(state) = s.shader.as_ref() else {
             return;
         };
-        let shows =
-            state.layer.program().is_some() && (!state.transition || state.running.is_some());
-        content_layer(&state.layer).setHidden(!shows);
+        // An effect hides its children once it draws them: its program
+        // compiled and their first picture taken (a running transition
+        // shows its pictures).
+        let pictured =
+            state.transition || state.inputs & CONTENT == 0 || state.stale & CONTENT == 0;
+        let shows = if state.transition {
+            state.layer.program().is_some() && state.running.is_some()
+        } else {
+            state.layer.ready() && pictured
+        };
+        // At once: Core Animation would fade it in, over children already hidden.
+        crate::surface::quiet(|| content_layer(&state.layer).setHidden(!shows));
         (shows, state.effect)
     };
     if effect {
@@ -540,6 +578,12 @@ fn take_pictures(view: &NshView) {
             unsafe { container.setMask(mask.as_deref()) };
             rgba
         });
+        let mut rgba = rgba;
+        if view.id() == nsh_core::ROOT_ID {
+            // The page and dialog transitions that run, which no
+            // `renderInContext:` draws.
+            add_overlays(view, &mut rgba, pw, ph, scale);
+        }
         pictures.push((children, rgba));
     }
     if stale & BACKDROP != 0
@@ -577,6 +621,7 @@ fn take_pictures(view: &NshView) {
         }
     }
     draw(view);
+    show(view);
 }
 
 /// Draws the layers of `layer`'s tree that are due to draw (text and
@@ -625,6 +670,51 @@ fn render(layer: &CALayer, origin: (f64, f64), pw: usize, ph: usize, scale: CGFl
         layer.renderInContext(&context);
     }
     out
+}
+
+/// The navigation overlays that run in `root` (a surface's root, of
+/// `pw` × `ph` pixels at `scale`) drawn over `rgba`, at their hosts'
+/// places.
+fn add_overlays(root: &NshView, rgba: &mut [u8], pw: usize, ph: usize, scale: CGFloat) {
+    let entries: Vec<_> = OVERLAYS.with(|o| {
+        o.borrow()
+            .iter()
+            .filter_map(|(l, h)| Some((l.upgrade()?, h.load()?)))
+            .collect()
+    });
+    for (layer, host) in entries {
+        if !host.isDescendantOf(root.ns()) {
+            continue;
+        }
+        let at =
+            host.convertPoint_toView(objc2_foundation::NSPoint::new(0.0, 0.0), Some(root.ns()));
+        let Some((w, h, over)) = layer.borrow_mut().picture() else {
+            continue;
+        };
+        let (x0, y0) = (
+            (at.x * scale).round() as isize,
+            (at.y * scale).round() as isize,
+        );
+        for y in 0..h {
+            let ty = y0 + y as isize;
+            if ty < 0 || ty as usize >= ph {
+                continue;
+            }
+            for x in 0..w {
+                let tx = x0 + x as isize;
+                if tx < 0 || tx as usize >= pw {
+                    continue;
+                }
+                let u = &over[(y * w + x) * 4..(y * w + x) * 4 + 4];
+                let b = &mut rgba[(ty as usize * pw + tx as usize) * 4..][..4];
+                // Premultiplied: over = upper + below × (1 − upper's alpha).
+                let keep = 255 - u[3] as u16;
+                for i in 0..4 {
+                    b[i] = (u[i] as u16 + (b[i] as u16 * keep + 127) / 255).min(255) as u8;
+                }
+            }
+        }
+    }
 }
 
 /// A shader that reads `nsh.time` draws on every frame while its view is
@@ -802,6 +892,8 @@ pub(crate) fn shader_views() -> Vec<NshView> {
 /// navigation's motion runs; removed when it is dropped.
 pub(crate) struct NavOverlay {
     layer: Rc<RefCell<nsh_metal::ShaderLayer>>,
+    /// The view it covers.
+    host: objc2::rc::Weak<ViewObj>,
     start: std::time::Instant,
     duration: std::time::Duration,
     /// It runs backwards (a pop, a dialog that closes): `nsh.progress`
@@ -842,10 +934,23 @@ pub(crate) fn picture_of(
         (size.width.0 as f64 * scale).round().max(1.0) as usize,
         (size.height.0 as f64 * scale).round().max(1.0) as usize,
     );
+    // A root drawn through its screen effect: the views under it.
+    let masked = is_screen(host)
+        .then(|| host.container_view().and_then(|c| c.layer()))
+        .flatten();
     let rgba = crate::surface::quiet(|| {
         let was: Vec<bool> = hidden.iter().map(|l| l.isHidden()).collect();
         hidden.iter().for_each(|l| l.setHidden(true));
+        let mask = masked.as_ref().and_then(|c| c.mask());
+        if let Some(c) = &masked {
+            // SAFETY: clearing and restoring the container's own mask.
+            unsafe { c.setMask(None) };
+        }
         let mut rgba = render(&layer, (0.0, 0.0), width, height, scale);
+        if let Some(c) = &masked {
+            // SAFETY: as above.
+            unsafe { c.setMask(mask.as_deref()) };
+        }
         hidden.iter().zip(was).for_each(|(l, w)| l.setHidden(w));
         if let Some((view, image)) = over
             && let Some(top) = view.layer()
@@ -921,6 +1026,7 @@ impl NavOverlay {
         });
         Some(Self {
             layer,
+            host: host.downgrade(),
             start: std::time::Instant::now(),
             duration: shader.duration,
             reverse,
@@ -939,14 +1045,35 @@ impl NavOverlay {
         let t = (self.start.elapsed().as_secs_f32()
             / self.duration.as_secs_f32().max(f32::EPSILON))
         .min(1.0);
-        let mut layer = self.layer.borrow_mut();
-        layer.set_progress(if self.reverse { 1.0 - t } else { t });
-        layer.draw();
+        {
+            let mut layer = self.layer.borrow_mut();
+            layer.set_progress(if self.reverse { 1.0 - t } else { t });
+            layer.draw();
+        }
+        // A screen effect over it draws it from a picture.
+        if let Some(host) = NshView::upgrade(&self.host) {
+            ui_changed(&host);
+        }
     }
 
     /// Its duration.
     pub(crate) fn duration(&self) -> std::time::Duration {
         self.duration
+    }
+
+    /// How long it has run.
+    pub(crate) fn elapsed(&self) -> std::time::Duration {
+        self.start.elapsed()
+    }
+
+    /// What it shows now, drawn again into a picture.
+    pub(crate) fn picture(&self) -> Option<Picture> {
+        let (width, height, rgba) = self.layer.borrow_mut().picture()?;
+        Some(Picture {
+            rgba,
+            width,
+            height,
+        })
     }
 }
 

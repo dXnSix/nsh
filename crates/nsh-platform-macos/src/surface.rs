@@ -170,6 +170,8 @@ pub(crate) struct Surface {
     pub(crate) anim: RefCell<UiAnimation>,
     /// Stacks, screens and modals.
     pub(crate) nav: RefCell<crate::navigation::Nav>,
+    /// The shaders over the whole surface.
+    pub(crate) screen: RefCell<crate::screen::Screen>,
     /// Pointer input state ([`crate::input`]).
     pub(crate) input: crate::input::Input,
     /// The text selection ([`crate::text::Selected`]).
@@ -239,6 +241,8 @@ impl Surface {
             support.effect = nsh_core::shader::Support::Snapshot;
             support.backdrop = nsh_core::shader::Support::Snapshot;
             support.transition = nsh_core::shader::Support::Snapshot;
+            support.screen_transition = nsh_core::shader::Support::Snapshot;
+            support.screen_effect = nsh_core::shader::Support::Snapshot;
             support
         };
         let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
@@ -250,6 +254,7 @@ impl Surface {
             mounter: RefCell::new(Mounter::new(root.clone())),
             anim: RefCell::new(UiAnimation::default()),
             nav: RefCell::default(),
+            screen: RefCell::default(),
             input: Default::default(),
             selection: Default::default(),
             engine: RefCell::new(None),
@@ -412,6 +417,7 @@ impl Surface {
         });
         crate::navigation::surface_resized(self, width, height);
         crate::system::surface_resized(self, width, height);
+        crate::screen::resized(self);
         // Full screen and the window's size change the title bar's area.
         crate::chrome::update_area(self);
         self.await_layout(Size::new(Points(width), Points(height)));

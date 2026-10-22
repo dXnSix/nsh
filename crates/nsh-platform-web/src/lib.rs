@@ -334,6 +334,8 @@ fn page() -> Environment {
             support.effect = nsh_core::shader::Support::Snapshot;
             support.backdrop = nsh_core::shader::Support::Snapshot;
             support.transition = nsh_core::shader::Support::Snapshot;
+            support.screen_effect = nsh_core::shader::Support::Snapshot;
+            support.screen_transition = nsh_core::shader::Support::Snapshot;
             support
         },
         ..Environment::default()

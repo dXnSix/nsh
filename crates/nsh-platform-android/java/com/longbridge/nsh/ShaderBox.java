@@ -45,6 +45,14 @@ import android.view.View;
  * children leave as it is) its `sample_from`, and `nsh.progress` moves
  * from 0 to 1 on animation frames; then the children draw as they are.
  *
+ * A screen effect ({@link #screen} 1, `<ScreenEffect>`) is a box of no
+ * size whose shader runs as the render effect of the surface's root and of
+ * each dialog's view ({@link Mounter#applyScreen}), every one of them its
+ * live content, in points from the surface's top-left: `nsh.size` is the
+ * surface's ({@link #screenEffect}). A screen transition ({@link #screen}
+ * 2, `<ScreenTransition>`) makes an overlay of its shader over the surface
+ * ({@link #overlay}, {@link Mounter#screenTransition}).
+ *
  * The program (`encode.rs` `shader_program`) names each AGSL uniform and the
  * words of a buffer it takes: `nsh` (size, scale, time, progress), the frame
  * (the area drawn and the inputs' rects and pixel sizes) or the app's
@@ -106,6 +114,10 @@ final class ShaderBox extends Box {
     /** The node the shader runs on as its render effect (an effect's children, or the backdrop). */
     private RenderNode node;
     private boolean warned;
+    /** A screen effect's (1) or a screen transition's (2) box; 0 otherwise. */
+    int screen;
+    /** The surface's size in points while a screen effect prepares its uniforms (`nsh.size`); -1 otherwise. */
+    private float screenWidth = -1, screenHeight = -1;
 
     ShaderBox(Context context, Mounter mounter, int id, boolean effect, boolean transition) {
         super(context, mounter, id);
@@ -220,8 +232,17 @@ final class ShaderBox extends Box {
         RenderNode node = new RenderNode("nsh-nav-picture");
         node.setPosition(0, 0, w, h);
         RecordingCanvas recording = node.beginRecording(w, h);
+        // Each where it is on the screen, from the first's top-left (a
+        // dialog's window covers the screen, the app's view may not).
+        int[] base = new int[2], at = new int[2];
+        views[0].getLocationOnScreen(base);
         for (View v : views) {
-            if (v != null && v.getWidth() > 0) v.draw(recording);
+            if (v == null || v.getWidth() <= 0) continue;
+            v.getLocationOnScreen(at);
+            int saved = recording.save();
+            recording.translate(at[0] - base[0], at[1] - base[1]);
+            v.draw(recording);
+            recording.restoreToCount(saved);
         }
         node.endRecording();
         return render(node, w, h);
@@ -250,6 +271,48 @@ final class ShaderBox extends Box {
             renderer.destroy();
             reader.close();
         }
+    }
+
+    /** Whether its shader runs (Android 13 and later, a program that compiled). */
+    boolean screenRuns() {
+        return shader != null && Build.VERSION.SDK_INT >= 33;
+    }
+
+    /** Whether its shader reads `nsh.time`. */
+    boolean readsTime() {
+        return time;
+    }
+
+    /**
+     * A screen effect over a view covering `x, y, w, h` (points from the
+     * surface's top-left) at `pw` × `ph` pixels, the view's content its
+     * live `sample_content`, the surface `surfaceW` × `surfaceH` points.
+     */
+    RenderEffect screenEffect(float x, float y, float w, float h, int pw, int ph, float surfaceW, float surfaceH) {
+        screenWidth = surfaceW;
+        screenHeight = surfaceH;
+        try {
+            prepare(x, y, w, h, pw, ph);
+        } finally {
+            screenWidth = -1;
+            screenHeight = -1;
+        }
+        return RenderEffect.createRuntimeShaderEffect(shader, inputName(CONTENT));
+    }
+
+    /** A screen transition's overlay: a box drawing its shader, its sides set by {@link #setSides}. */
+    ShaderBox overlay() {
+        ShaderBox o = new ShaderBox(getContext(), mounter, -1, false, false);
+        o.setFill(program, time, inputs, 0, 0, uniforms.clone(), uris, sizeWords);
+        System.arraycopy(images, 0, o.images, 0, images.length);
+        return o;
+    }
+
+    @Override
+    public void invalidate() {
+        super.invalidate();
+        // A screen effect draws over other views: they take it again.
+        if (screen == 1 && mounter != null) mounter.screenDirty();
     }
 
     /** The image of `slot` loaded (it was `uri`'s); `width` × `height` points. */
@@ -408,7 +471,8 @@ final class ShaderBox extends Box {
      */
     private void prepare(float x, float y, float w, float h, int pw, int ph) {
         float density = mounter.density;
-        float width = getWidth() / density, height = getHeight() / density;
+        float width = screenWidth >= 0 ? screenWidth : getWidth() / density;
+        float height = screenWidth >= 0 ? screenHeight : getHeight() / density;
         long now = SystemClock.uptimeMillis();
         if (started < 0) started = now;
         float seconds = (now - started) / 1000f;
@@ -454,7 +518,8 @@ final class ShaderBox extends Box {
                 frame[at + 4] = Float.floatToRawIntBits(pw);
                 frame[at + 5] = Float.floatToRawIntBits(ph);
                 // The render effect binds the live one; the other reads transparent.
-                boolean live = node != null && (effect && backdrop == null ? input == children() : input == BACKDROP);
+                boolean live = screenWidth >= 0 ? input == CONTENT
+                        : node != null && (effect && backdrop == null ? input == children() : input == BACKDROP);
                 if (!live) shader.setInputShader(program.shaders[i], transparent());
                 continue;
             }

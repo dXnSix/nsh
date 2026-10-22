@@ -199,6 +199,25 @@ over the stack (the surface for a dialog) while the views stand where they end u
 | Linux | both sides drawn anew (`NshView::draw`, the upper view and what follows left out for the lower one) and rendered to textures (`shader::nav_picture`), a `NavPainter`'s node in a layer over the host | the navigation's tick callback |
 | GPUI | the platform's own transition | |
 
+`<ScreenEffect>` and `<ScreenTransition>` (`Tag::ScreenEffect` / `ScreenTransition`, `ViewKind::ScreenEffect` /
+`ScreenTransition`) are shader views of no size (`display: none`, no children) that draw over the whole surface: its
+root view, its dialogs and overlays, never the app around it. The core keeps their shader state as for the other
+kinds and sends the same items: `Shader` (one screen effect at a time has a fill: the last one made with a shader,
+`Core::screen_effects`; the others are sent `None`), `ShaderInput` on every batch that changes anything (the
+surface is their input), `ShaderTransition` first in the batch that changes a screen transition's `value`
+(`shaderSupport().screenTransition` gates it). `nsh.size` is the surface's size and `p` is in points from its
+top-left. The platforms:
+
+| Platform | `screenEffect` | `screenTransition` |
+|---|---|---|
+| macOS | snapshot: the root becomes an effect (`shader::set_screen`): its children move into a container an empty mask hides, the shader's layer is above everything (z 2e6, over the navigation's overlays), its content the container pictured with the navigation's overlays (`NavOverlay`s, which `renderInContext:` does not draw) drawn over it (`add_overlays`); a navigation overlay that ticks marks it. `picture_of` lifts the root's mask, so the navigation's and the screen's transitions picture the views | a `NavOverlay` over the root (`screen.rs`): the root pictured now, again on the first display frame |
+| iOS, Mac Catalyst | snapshot: a `ShaderHost` (`new_screen`) whose view is out of the tree, over the surface's rectangle on top of the window (`Mounter::sync_screen`), the root's and the presented dialogs' layers masked; its content the window over that rectangle without the effect (`shader::picture` leaves every screen effect out, `set_screen`) with the running `NavOverlay`s drawn over it, taken again on `ShaderInput`, UI-thread changes and every frame while a navigation overlay or UIKit's own presentation runs (`screen_busy`, 700 ms after dialogs change). `render` displays the layers due first (`display_tree`: a text drawn again in this batch) | `NavPlan::before` over the surface's rectangle of the window and a `NavOverlay`, as a dialog's |
+| Android 13+ | live: the screen effect's `ShaderBox` (no size, `screen` 1) prepares its uniforms for each covered view (`screenEffect`, `nsh.size` the surface's, the view's rect in surface points) and its shader becomes the `RenderEffect` of the root, of each shown dialog's view and of the transitions' overlays (`Mounter.applyScreen`, after each batch and on uniform changes, every frame for `nsh.time`) | pictures of the app's view and the dialogs' windows at their screen offsets (`ShaderBox.picture`), the second before the first draw after the batch, through an overlay `ShaderBox` on the topmost window over the surface (`Mounter.screenTransition`) |
+| Web | snapshot: the root element becomes an effect (`screenFill`: its canvas last in it, `.nsh-fx` on it); `drawShader` of any shader in it marks it (`screenDrew`), so the navigation's and the screen's transitions are part of its picture | `shaderNav` over the root with its upper side painted on the first animation frame (`later`), or from the running one's canvas |
+| Windows | live: the root becomes an effect (`Mounter::screen_effect`, `shader::create` on the root): its children, the navigation's layers among them, draw into its content with each frame | `navigation::screen_transition`: the root recorded now and on the first frame (its layer concealed), a `NavItem` (`set_upper`) on a layer view over the root |
+| Linux | live: the root becomes an effect, as on Windows | `navigation::screen_transition`: the root drawn anew now and on the first tick, a `NavPainter` (`set_to`) in a layer over the root |
+| GPUI | `false` | `false` |
+
 `nsh_metal::ShaderLayer` holds pictures of all four inputs (`set_input`, `clear_input`) and takes a transition's
 progress (`set_progress`).
 

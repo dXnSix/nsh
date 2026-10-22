@@ -59,6 +59,16 @@ final class ModalHost {
         return container.touches;
     }
 
+    /** The dialog's view in its window (a screen effect covers it too). */
+    View view() {
+        return container;
+    }
+
+    /** Its window's decor (the top of its window), while it shows. */
+    ViewGroup decor() {
+        return dialog != null && dialog.getWindow() != null ? (ViewGroup) dialog.getWindow().getDecorView() : null;
+    }
+
     boolean shown() {
         return dialog != null && !closing;
     }
@@ -216,6 +226,8 @@ final class ModalHost {
         o.setFill(nav.program, false, nav.inputs, from, 0, nav.uniforms.clone(), new String[0], new int[0]);
         o.setSides(ShaderBox.picture(behind), ShaderBox.picture(behind, container));
         decor.addView(o, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        mounter.screenOverlays.add(o);
+        mounter.screenDirty();
         android.animation.ValueAnimator a = android.animation.ValueAnimator.ofFloat(from, to);
         a.setDuration(Math.max(1, Math.round(nav.ms)));
         a.setInterpolator(null);
@@ -224,6 +236,8 @@ final class ModalHost {
             @Override
             public void onAnimationEnd(Animator animation) {
                 decor.removeView(o);
+                mounter.screenOverlays.remove(o);
+                mounter.screenDirty();
                 done.run();
             }
         });

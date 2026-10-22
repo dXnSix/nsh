@@ -179,6 +179,10 @@ export interface ShaderSupport {
   effect: ShaderSupportLevel;
   /** Shader transitions (`sample_from`, `sample_to`). */
   transition: ShaderSupportLevel;
+  /** `<ScreenEffect>`: the whole surface drawn through a shader. */
+  screenEffect: ShaderSupportLevel;
+  /** `<ScreenTransition>`: the whole surface changing through a shader. */
+  screenTransition: ShaderSupportLevel;
 }
 
 /** `<Shader>`: a view a shader fills, its children drawn over it. */
@@ -208,6 +212,22 @@ export interface ShaderAnimation<U = ShaderUniforms> {
 /** `<ShaderTransition>`: a view whose children change through a shader. */
 export interface ShaderTransitionProps<U = ShaderUniforms> extends CommonProps, Omit<ShaderTransitionHostProps, "src" | "uniforms"> {
   style?: StyleProp<ViewStyle>;
+  /** The shader; without one the transition runs its `fallback`. */
+  src?: ShaderAsset<U> | null;
+  /** The values of its uniforms, by name (those left out are 0). */
+  uniforms?: U;
+}
+
+/** `<ScreenEffect>`: the whole surface drawn through a shader. */
+export interface ScreenEffectProps<U = ShaderUniforms> extends Omit<ScreenEffectHostProps, "src" | "uniforms"> {
+  /** The shader; without one the surface draws as it is. */
+  src?: ShaderAsset<U> | null;
+  /** The values of its uniforms, by name (those left out are 0). */
+  uniforms?: U;
+}
+
+/** `<ScreenTransition>`: the whole surface changing through a shader. */
+export interface ScreenTransitionProps<U = ShaderUniforms> extends Omit<ScreenTransitionHostProps, "src" | "uniforms"> {
   /** The shader; without one the transition runs its `fallback`. */
   src?: ShaderAsset<U> | null;
   /** The values of its uniforms, by name (those left out are 0). */

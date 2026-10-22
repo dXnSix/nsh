@@ -302,6 +302,7 @@ expect Faded 1
 tap id:next-page
 expect Page 2
 expect Faded 2
+expect screen effect false, screen transition false
 covers [nsh] createShader
 covers [nsh] shaderSupport
 # paint-shadows

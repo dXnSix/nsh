@@ -63,6 +63,17 @@ pub enum Tag {
     /// picture of what they drew is the shader's `sample_from` and what
     /// they draw now its `sample_to` ([`crate::shader`]).
     ShaderTransition,
+    /// The whole surface drawn through a shader (`<screeneffect>`, TS:
+    /// `ScreenEffect` of `nsh`): what the surface shows (its pages,
+    /// dialogs and overlays) is the shader's `sample_content`. It takes no
+    /// space and has no children ([`crate::shader`]).
+    ScreenEffect,
+    /// The whole surface changing through a shader (`<screentransition>`,
+    /// TS: `ScreenTransition` of `nsh`): when its `value` changes, a
+    /// picture of what the surface showed is the shader's `sample_from` and
+    /// what it shows now its `sample_to`. It takes no space and has no
+    /// children ([`crate::shader`]).
+    ScreenTransition,
     /// A web page (`<webview>`).
     WebView,
     /// A video player (`<video>`).
@@ -97,6 +108,8 @@ impl Tag {
             "shader" => Tag::Shader,
             "shadereffect" => Tag::ShaderEffect,
             "shadertransition" => Tag::ShaderTransition,
+            "screeneffect" => Tag::ScreenEffect,
+            "screentransition" => Tag::ScreenTransition,
             "webview" => Tag::WebView,
             "video" => Tag::Video,
             "native" => Tag::Native,
@@ -1619,15 +1632,15 @@ pub enum Prop {
     /// `src` of a shader view, effect or transition: the shader it draws
     /// (`createShader`, a `.wgsl` import); an effect without one draws its
     /// children as they are, a transition without one runs its `fallback`.
-    #[prop(js = "src", on = SHADER | SHADER_EFFECT | SHADER_TRANSITION, shared)]
+    #[prop(js = "src", on = SHADER | SHADER_EFFECT | SHADER_TRANSITION | SCREEN_EFFECT | SCREEN_TRANSITION, shared)]
     ShaderSource(Option<crate::shader::ShaderSource>),
     /// `uniforms`: the values of the shader's uniforms, by name; animated
     /// values change them on the UI thread.
-    #[prop(js = "uniforms", on = SHADER | SHADER_EFFECT | SHADER_TRANSITION)]
+    #[prop(js = "uniforms", on = SHADER | SHADER_EFFECT | SHADER_TRANSITION | SCREEN_EFFECT | SCREEN_TRANSITION)]
     Uniforms(crate::shader::Uniforms),
     /// `progress`: what the shader reads as `nsh.progress` (0 to 1 by
     /// convention): a number, or an animated value the UI thread writes.
-    #[prop(js = "progress", on = SHADER | SHADER_EFFECT)]
+    #[prop(js = "progress", on = SHADER | SHADER_EFFECT | SCREEN_EFFECT)]
     ShaderProgress(crate::shader::ShaderNumber),
     /// `maxSampleOffset`: how far outside a pixel a shader effect samples
     /// its content, in points (a blur's radius, a ripple's reach): the
@@ -1636,15 +1649,15 @@ pub enum Prop {
     MaxSampleOffset(Points),
     /// `value`: what a shader transition's children show; when it changes,
     /// they change through the shader.
-    #[prop(js = "value", on = SHADER_TRANSITION, shared)]
+    #[prop(js = "value", on = SHADER_TRANSITION | SCREEN_TRANSITION, shared)]
     TransitionValue(crate::shader::TransitionKey),
     /// `duration`: how long a shader transition runs, in milliseconds
     /// (default 300); `nsh.progress` goes from 0 to 1 over it.
-    #[prop(js = "duration", min = 0, on = SHADER_TRANSITION)]
+    #[prop(js = "duration", min = 0, on = SHADER_TRANSITION | SCREEN_TRANSITION)]
     TransitionDuration(Option<f32>),
     /// `fallback`: what a shader transition runs without a shader of its
     /// own (no `src`, or one the platform could not translate).
-    #[prop(js = "fallback", on = SHADER_TRANSITION)]
+    #[prop(js = "fallback", on = SHADER_TRANSITION | SCREEN_TRANSITION)]
     TransitionFallback(crate::shader::TransitionFallback),
     /// `resizeMode`: how an image (or a video) fits its box.
     #[prop(js = "resizeMode", on = IMAGE | VIDEO)]

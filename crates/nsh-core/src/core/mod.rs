@@ -200,6 +200,8 @@ enum Kind {
     Shader,
     ShaderEffect,
     ShaderTransition,
+    ScreenEffect,
+    ScreenTransition,
     WebView,
     Video,
     Native,
@@ -250,6 +252,8 @@ impl Kind {
             Kind::Shader => ViewKind::Shader,
             Kind::ShaderEffect => ViewKind::ShaderEffect,
             Kind::ShaderTransition => ViewKind::ShaderTransition,
+            Kind::ScreenEffect => ViewKind::ScreenEffect,
+            Kind::ScreenTransition => ViewKind::ScreenTransition,
             Kind::WebView => ViewKind::WebView,
             Kind::Video => ViewKind::Video,
             Kind::Native => ViewKind::Native,
@@ -277,6 +281,8 @@ impl Kind {
             Tag::Shader => Kind::Shader,
             Tag::ShaderEffect => Kind::ShaderEffect,
             Tag::ShaderTransition => Kind::ShaderTransition,
+            Tag::ScreenEffect => Kind::ScreenEffect,
+            Tag::ScreenTransition => Kind::ScreenTransition,
             Tag::WebView => Kind::WebView,
             Tag::Video => Kind::Video,
             Tag::Native => Kind::Native,
@@ -294,6 +300,8 @@ impl Kind {
                 | Kind::Screen
                 | Kind::Modal
                 | Kind::Overlay
+                | Kind::ScreenEffect
+                | Kind::ScreenTransition
         )
     }
 }
@@ -615,7 +623,11 @@ impl Node {
             drawing: None,
             shader: matches!(
                 kind,
-                Kind::Shader | Kind::ShaderEffect | Kind::ShaderTransition
+                Kind::Shader
+                    | Kind::ShaderEffect
+                    | Kind::ShaderTransition
+                    | Kind::ScreenEffect
+                    | Kind::ScreenTransition
             )
             .then(Box::default),
             inline_style: StylePatch::default(),
@@ -859,6 +871,11 @@ pub struct Core<M: TextEngine> {
     /// Shader transitions this commit starts
     /// ([`MountItem::ShaderTransition`]), first in its batch.
     transition_starts: Vec<MountItem>,
+    /// The screen effects, as they were made: the last one with a shader
+    /// draws, the others are sent none ([`ViewKind::ScreenEffect`]).
+    screen_effects: Vec<Key>,
+    /// One was made or released since the last commit.
+    screen_effects_changed: bool,
 }
 
 impl<M: TextEngine + 'static> Core<M> {
@@ -942,6 +959,8 @@ impl<M: TextEngine> Core<M> {
             shader_programs: Default::default(),
             shader_inputs: Default::default(),
             transition_starts: Vec::new(),
+            screen_effects: Vec::new(),
+            screen_effects_changed: false,
         }
     }
 
@@ -1068,6 +1087,32 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// Which screen effect draws changed (one was made or released, or a
+    /// shader of one changed): each is flushed again, the last with a
+    /// shader sends it and the others none.
+    fn sync_screen_effects(&mut self) {
+        let changed = std::mem::take(&mut self.screen_effects_changed)
+            || self
+                .screen_effects
+                .iter()
+                .any(|&k| self.nodes[k as usize].dirty & dirty::SHADER != 0);
+        if changed {
+            for key in self.screen_effects.clone() {
+                self.mark(key, dirty::SHADER);
+            }
+        }
+    }
+
+    /// The screen effect that draws: the last one made with a shader.
+    fn drawn_screen_effect(&self) -> Option<Key> {
+        self.screen_effects.iter().rev().copied().find(|&k| {
+            self.nodes[k as usize]
+                .shader
+                .as_ref()
+                .is_some_and(|s| s.source.is_some())
+        })
+    }
+
     /// Tells the platform which shaders' inputs this commit changed
     /// ([`MountItem::ShaderInput`]): the effects with a changed view in
     /// their subtree (themselves included), and every shader that samples
@@ -1094,8 +1139,13 @@ impl<M: TextEngine> Core<M> {
         };
         let mut marked: Vec<NodeId> = Vec::new();
         for &id in &self.shader_inputs {
-            if let Ok(key) = self.key(id)
-                && samples(&self.nodes[key as usize], I::Backdrop)
+            let Ok(key) = self.key(id) else { continue };
+            let node = &self.nodes[key as usize];
+            // What is behind a view, and the whole surface for a screen
+            // effect or transition, changes with anything in it.
+            if samples(node, I::Backdrop)
+                || node.kind == Kind::ScreenEffect && samples(node, I::Content)
+                || node.kind == Kind::ScreenTransition && samples(node, I::To)
             {
                 marked.push(id);
             }
@@ -1134,8 +1184,14 @@ impl<M: TextEngine> Core<M> {
         let language = self.components.environment.shaders.language;
         let node = &self.nodes[key as usize];
         let id = node.id;
-        let transition = node.kind == Kind::ShaderTransition;
-        let Some(shader) = node.shader.as_ref() else {
+        let kind = node.kind;
+        let transition = matches!(kind, Kind::ShaderTransition | Kind::ScreenTransition);
+        // One screen effect draws: the others are sent none.
+        let silent = kind == Kind::ScreenEffect && self.drawn_screen_effect() != Some(key);
+        let Some(shader) = node.shader.as_ref().filter(|_| !silent) else {
+            if silent {
+                self.send_fill(key, None);
+            }
             return;
         };
         // A transition without a shader of its own runs its fallback.
@@ -1186,27 +1242,14 @@ impl<M: TextEngine> Core<M> {
             }
             None => None,
         };
-        let shader = self.nodes[key as usize]
-            .shader
-            .as_mut()
-            .expect("a shader view");
-        if shader.sent != fill {
-            let inputs = fill.as_ref().is_some_and(|f| {
-                f.samples(crate::shader::ShaderInput::Content)
-                    || f.samples(crate::shader::ShaderInput::Backdrop)
-                    || f.samples(crate::shader::ShaderInput::To)
-            });
-            shader.sent = fill.clone();
-            self.mount.push(MountItem::Shader { id, fill });
-            if inputs {
-                self.shader_inputs.insert(id);
-            } else {
-                self.shader_inputs.remove(&id);
-            }
-        }
+        self.send_fill(key, fill);
         if transition {
-            let drawn =
-                self.components.environment.shaders.transition != crate::shader::Support::No;
+            let support = &self.components.environment.shaders;
+            let drawn = if kind == Kind::ScreenTransition {
+                support.screen_transition
+            } else {
+                support.transition
+            } != crate::shader::Support::No;
             let shader = self.nodes[key as usize]
                 .shader
                 .as_mut()
@@ -1220,6 +1263,29 @@ impl<M: TextEngine> Core<M> {
                     duration: std::time::Duration::from_micros((ms as f64 * 1000.0).round() as u64),
                 });
             }
+        }
+    }
+
+    /// Sends shader view `key` what it draws, if that changed.
+    fn send_fill(&mut self, key: Key, fill: Option<Arc<crate::shader::ShaderFill>>) {
+        let id = self.nodes[key as usize].id;
+        let Some(shader) = self.nodes[key as usize].shader.as_mut() else {
+            return;
+        };
+        if shader.sent == fill {
+            return;
+        }
+        let inputs = fill.as_ref().is_some_and(|f| {
+            f.samples(crate::shader::ShaderInput::Content)
+                || f.samples(crate::shader::ShaderInput::Backdrop)
+                || f.samples(crate::shader::ShaderInput::To)
+        });
+        shader.sent = fill.clone();
+        self.mount.push(MountItem::Shader { id, fill });
+        if inputs {
+            self.shader_inputs.insert(id);
+        } else {
+            self.shader_inputs.remove(&id);
         }
     }
 
@@ -1649,6 +1715,7 @@ impl<M: TextEngine> Core<M> {
         self.sync_overlays();
         self.sync_back();
         self.sync_keys();
+        self.sync_screen_effects();
         // Platforms animate the frames, insertions and removals that follow
         // in the batch; ops may already have queued some.
         if let Some(animation) = self.layout_animation.take() {
@@ -1922,6 +1989,10 @@ impl<M: TextEngine> Core<M> {
         {
             self.overlay_made(key, layout);
         }
+        if kind == Kind::ScreenEffect {
+            self.screen_effects.push(key);
+            self.screen_effects_changed = true;
+        }
         self.sync_layout_style(key);
     }
 
@@ -2072,6 +2143,8 @@ impl<M: TextEngine> Core<M> {
                     style.overflow.y = Overflow::Scroll;
                 }
             }
+            // A shader over the whole surface takes no space where it is.
+            Kind::ScreenEffect | Kind::ScreenTransition => style.display = taffy::Display::None,
             Kind::List => {
                 style.overflow = taffy::Point {
                     x: Overflow::Hidden,
@@ -3642,6 +3715,10 @@ impl<M: TextEngine> Core<M> {
         }
         if node.kind == Kind::Text {
             self.attachment_blocks.retain(|&k| k != key);
+        }
+        if node.kind == Kind::ScreenEffect {
+            self.screen_effects.retain(|&k| k != key);
+            self.screen_effects_changed = true;
         }
         if node.kind.is_root() {
             self.roots.retain(|&k| k != key);

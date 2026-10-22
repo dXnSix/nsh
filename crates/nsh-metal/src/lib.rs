@@ -712,6 +712,13 @@ impl ShaderLayer {
         self.fill.as_ref().map(|f| f.program)
     }
 
+    /// Whether it can draw: it has a fill whose program is compiled.
+    pub fn ready(&self) -> bool {
+        self.fill
+            .as_ref()
+            .is_some_and(|f| gpu().is_some_and(|g| g.pipeline(f.program).is_some()))
+    }
+
     /// Whether a draw was skipped since it last drew.
     pub fn is_stale(&self) -> bool {
         self.stale

@@ -1292,6 +1292,13 @@ impl NavPainter {
         }
     }
 
+    /// Its upper side, pictured later (a screen transition's, after its
+    /// batch).
+    pub(crate) fn set_to(&mut self, to: Rc<Pixels>) {
+        // Uploaded again: the input's texture holds other pixels.
+        self.to = to;
+    }
+
     /// The transition at `progress` (how much of the upper side shows), at
     /// `widget`'s scale.
     pub(crate) fn node(
