@@ -374,6 +374,10 @@ Things that were found the hard way. Read the section of the area you change bef
   controllers in the window's DirectComposition tree for this reason (`compose.rs`); native components that bring an
   `HWND` of their own still cover NSH content. Offscreen drawings of the window have no web views: the test
   agent's screenshots capture them (`PrintWindow` with `PW_RENDERFULLCONTENT`).
+- **UI Automation's tree is NSH's own** (`access.rs`): a view the renderer skips is still an element unless
+  `access::part` hides it, so every way of hiding a view (`visibility: hidden`, a concealed screen,
+  `accessibilityElementsHidden`) is checked there and in UIA's hit test (`uia::hit`), and a change of one marks the
+  view for comparison, or narrators read and focus what nobody sees.
 - **`IDCompositionVisual::AddVisual(visual, TRUE, NULL)` puts the visual below all its siblings**, not on top: to
   stack bottom to top, insert each one above the one added before it (`compose.rs`).
 - **A focused WebView2 page has the keyboard in a window of its own** (`Chrome_WidgetWin_0`, a child of the
