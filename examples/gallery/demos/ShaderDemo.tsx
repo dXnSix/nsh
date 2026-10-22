@@ -1,11 +1,24 @@
-import { createShader, Shader, ShaderEffect, ShaderTransition, shaderSupport, signal, Text, View } from "nsh";
+import {
+  createShader,
+  ScreenEffect,
+  ScreenTransition,
+  Shader,
+  ShaderEffect,
+  ShaderTransition,
+  shaderSupport,
+  signal,
+  Text,
+  View,
+} from "nsh";
 import { createAnimatedValue, Easing } from "nsh/animated";
 import { Dialog } from "nsh/base";
 import logo from "../logo@2x.png";
 import { Button, Caption, Card, colors, DemoPage, Legend, Segmented } from "../ui";
 import aurora from "./shaders/aurora.wgsl";
+import calm from "./shaders/calm.wgsl";
 import frost from "./shaders/frost.wgsl";
 import reveal from "./shaders/reveal.wgsl";
+import ring from "./shaders/ring.wgsl";
 import ripple from "./shaders/ripple.wgsl";
 import wave from "./shaders/wave.wgsl";
 
@@ -220,6 +233,30 @@ function DialogReveal() {
 }
 
 // ---------------------------------------------------------------------------
+// The whole screen through a shader: a screen effect draws every page,
+// dialog and overlay through calm.wgsl while it is on; a screen transition
+// changes the whole screen through ring.wgsl when its value changes. Both
+// take no space where they are declared, and go with the page.
+
+const tints = ["#0ea5e9", "#f97316", "#22c55e", "#a855f7"];
+
+function Screen() {
+  const on = signal(false);
+  const tint = signal(0);
+  return (
+    <Card icon="spark" title="The whole screen" subtitle="ScreenEffect and ScreenTransition: pages, dialogs, overlays">
+      <ScreenEffect src={on() ? calm : null} />
+      <ScreenTransition src={ring} value={tint()} duration={900} />
+      <View style={{ height: 64, borderRadius: 12, backgroundColor: tints[tint() % tints.length] }} />
+      <View style={{ flexDirection: "row", gap: 8 }}>
+        <Button label={on() ? "Bring the color back" : "Calm the screen"} icon="spark" onPress={() => on.set(!on())} />
+        <Button label="Ripple the screen" icon="spark" onPress={() => tint.set(tint() + 1)} />
+      </View>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // What this platform draws: a view a shader fills shows its children alone
 // where shaders do not draw.
 
@@ -232,11 +269,13 @@ function Support() {
       <Legend color={support.backdrop ? colors.up : colors.faint} label="Backdrop" value={say(support.backdrop)} />
       <Legend color={support.effect ? colors.up : colors.faint} label="Effect" value={say(support.effect)} />
       <Legend color={support.transition ? colors.up : colors.faint} label="Transition" value={say(support.transition)} />
+      <Legend color={support.screenEffect ? colors.up : colors.faint} label="Screen effect" value={say(support.screenEffect)} />
+      <Legend color={support.screenTransition ? colors.up : colors.faint} label="Screen transition" value={say(support.screenTransition)} />
       <Caption label={`uniforms of ripple.wgsl: ${ripple.uniforms.join(", ")}`} />
     </Card>
   );
 }
 
 export function ShaderDemo() {
-  return <DemoPage cards={[Aurora, Spotlight, Ripple, Wave, Frost, Reveal, DialogReveal, Support]} />;
+  return <DemoPage cards={[Aurora, Spotlight, Ripple, Wave, Frost, Reveal, DialogReveal, Screen, Support]} />;
 }
