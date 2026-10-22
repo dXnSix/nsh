@@ -4,14 +4,17 @@
 // SyntaxError; `shaderSupport()` says what the platform draws; `<Shader>`
 // fills a view under its children, with constant and animated uniforms;
 // `<ShaderEffect>` draws its children through a shader (or as they are
-// without one), and a shader reads what is behind it.
-import { createShader, Shader, ShaderEffect, shaderSupport, Text, View } from "nsh";
+// without one), and a shader reads what is behind it; `<ShaderTransition>`
+// changes its children through a shader when its `value` changes (a
+// cross-fade without one).
+import { createShader, Shader, ShaderEffect, ShaderTransition, shaderSupport, signal, Text, View } from "nsh";
 import { createAnimatedValue } from "nsh/animated";
 import glow from "./glow.wgsl";
 
 const plain = createShader("fn main(p: vec2f) -> vec4f { return vec4f(p / nsh.size, 0.5, 1.0); }");
 const wave = createShader("fn main(p: vec2f) -> vec4f { return sample_content(p + vec2f(sin(p.y * 0.1) * nsh.progress * 8.0, 0.0)); }");
 const frost = createShader("fn main(p: vec2f) -> vec4f { return sample_backdrop(p) * 0.6 + vec4f(0.4); }");
+const wipe = createShader("fn main(p: vec2f) -> vec4f { return select(sample_from(p), sample_to(p), p.x < nsh.size.x * nsh.progress); }");
 
 function invalid() {
   try {
@@ -24,6 +27,7 @@ function invalid() {
 
 function App() {
   const radius = createAnimatedValue(12);
+  const page = signal(1);
   const support = shaderSupport();
   return (
     <View style={{ flex: 1, paddingTop: 64 }}>
@@ -48,6 +52,15 @@ function App() {
         <Text>No shader, as it is</Text>
       </ShaderEffect>
       <Shader testID="frost" src={frost} style={{ height: 20 }} />
+      <ShaderTransition testID="wipe" src={wipe} value={page()} duration={200} maxSampleOffset={0}>
+        <Text>{`Page ${page()}`}</Text>
+      </ShaderTransition>
+      <ShaderTransition testID="fade" value={page()} fallback="fade">
+        <Text>{`Faded ${page()}`}</Text>
+      </ShaderTransition>
+      <View testID="next-page" onPress={() => page.set(page() + 1)} style={{ padding: 8 }}>
+        <Text>Next page</Text>
+      </View>
     </View>
   );
 }

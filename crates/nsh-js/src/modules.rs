@@ -253,6 +253,14 @@ const NSH: &[Item] = &[
         ),
     ),
     (
+        "ShaderTransition",
+        Export::Value(|cx| dom::host_component(cx, "shadertransition", true)),
+        Ts::function(
+            "A view whose children change through a shader: when `value` changes,\na picture of what they drew is what `sample_from(p)` reads and what\nthey draw now what `sample_to(p)` reads, while `nsh.progress` goes from\n0 to 1 over `duration` milliseconds (300 by default). Without `src` it\nruns `fallback`: a cross-fade, or `\"none\"`.",
+            &["<U = ShaderUniforms>(props: ShaderTransitionProps<U>): YNode"],
+        ),
+    ),
+    (
         "createShader",
         Export::Function(crate::shader::create_shader, 1),
         Ts::function(

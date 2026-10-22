@@ -15,6 +15,12 @@
 //! The texture is drawn as `GtkGLArea` draws its own: GL's rows go bottom
 //! up, so the snapshot flips it.
 //!
+//! A `<ShaderTransition>` draws as an effect while a transition runs
+//! ([`start_transition`]): its children are its `sample_to`, rendered as
+//! an effect's content; before the batch that changes them they are
+//! rendered once (or the running transition's picture is kept) as its
+//! `sample_from`, and a tick callback moves `nsh.progress` from 0 to 1.
+//!
 //! A `<ShaderEffect>`'s children are its content: whenever GTK draws the
 //! effect again (it or something in it changed), they are drawn into a
 //! render node of their own, which the window's renderer renders into a
@@ -290,6 +296,14 @@ struct Pixels {
 }
 
 impl Pixels {
+    /// The same pixels upside down.
+    fn flipped(mut self) -> Self {
+        let row = self.width as usize * 4;
+        let rows: Vec<Vec<u8>> = self.rgba.chunks(row).rev().map(<[u8]>::to_vec).collect();
+        self.rgba = rows.concat();
+        self
+    }
+
     /// Its size in points: images are as many points as pixels, as a
     /// canvas draws them.
     fn points(&self) -> Size<Points> {
@@ -307,8 +321,14 @@ pub(crate) struct ShaderState {
     /// `nsh.progress`: the fill's, or its animated value.
     progress: f32,
     args: Vec<(u16, AnimationValue)>,
-    /// A `<ShaderEffect>`: its children are the shader's content.
+    /// A `<ShaderEffect>` or `<ShaderTransition>`: its children are the
+    /// shader's content (or its `sample_to`).
     effect: bool,
+    /// A `<ShaderTransition>`; when it runs, its start and duration, and
+    /// its `sample_from`.
+    transition: bool,
+    running: Option<(Instant, std::time::Duration)>,
+    from: Option<Rc<Pixels>>,
     /// The picture of what is behind it, once taken.
     backdrop: Option<Rc<Pixels>>,
     /// What is behind it changed: a picture is to be taken.
@@ -332,7 +352,7 @@ struct Cache {
     /// hold).
     images: Vec<Option<(Rc<Pixels>, glow::Texture)>>,
     /// The content's and the backdrop's textures (and their pixels).
-    inputs: [Option<(Rc<Pixels>, glow::Texture)>; 2],
+    inputs: [Option<(Rc<Pixels>, glow::Texture)>; 4],
 }
 
 impl Drop for Cache {
@@ -374,11 +394,97 @@ impl ShaderState {
     }
 }
 
-/// Sets up a shader view; `effect`: a `<ShaderEffect>`.
-pub(crate) fn create(view: &NshView, effect: bool) {
+/// Sets up a shader view; `effect`: a `<ShaderEffect>`, `transition`: a
+/// `<ShaderTransition>`.
+pub(crate) fn create(view: &NshView, effect: bool, transition: bool) {
     view.state_mut().shader = Some(ShaderState {
-        effect,
+        effect: effect || transition,
+        transition,
         ..ShaderState::default()
+    });
+}
+
+impl ShaderState {
+    /// The input its children are: an effect's content, a transition's
+    /// `sample_to`.
+    fn children(&self) -> ShaderInput {
+        if self.transition {
+            ShaderInput::To
+        } else {
+            ShaderInput::Content
+        }
+    }
+}
+
+/// A shader transition starts ([`nsh_core::MountItem::ShaderTransition`],
+/// before the rest of its batch): what shows now becomes its
+/// `sample_from`, and a tick callback moves `nsh.progress` from 0 to 1
+/// over `duration`.
+pub(crate) fn start_transition(view: &NshView, duration: std::time::Duration) {
+    let scale = view.scale_factor().max(1) as f32;
+    let (area, pixels, last) = {
+        let s = view.state();
+        let Some(shader) = s.shader.as_ref() else {
+            return;
+        };
+        if !shader.transition || shader.fill.is_none() {
+            return;
+        }
+        let Some((area, pixels)) = area(&s, scale) else {
+            return;
+        };
+        // A running transition starts from its last picture.
+        let last = shader.running.and(shader.cache.borrow().picture.clone());
+        (area, pixels, last)
+    };
+    let from = match last {
+        // GL's rows go bottom up.
+        Some(texture) => Some(Rc::new(pixels_of(&texture).flipped())),
+        None => content(view, area, scale, pixels),
+    };
+    let running = {
+        let mut s = view.state_mut();
+        let Some(shader) = s.shader.as_mut() else {
+            return;
+        };
+        let running = shader.running.is_some();
+        shader.from = from;
+        shader.running = Some((Instant::now(), duration));
+        shader.progress = 0.0;
+        shader.stale();
+        running
+    };
+    view.redraw();
+    if running {
+        // Its tick callback runs on.
+        return;
+    }
+    view.add_tick_callback(|view, _| {
+        let runs = {
+            let mut s = view.state_mut();
+            let Some(shader) = s.shader.as_mut() else {
+                return glib::ControlFlow::Break;
+            };
+            let Some((start, duration)) = shader.running else {
+                return glib::ControlFlow::Break;
+            };
+            let t =
+                (start.elapsed().as_secs_f32() / duration.as_secs_f32().max(f32::EPSILON)).min(1.0);
+            shader.progress = t;
+            if t >= 1.0 {
+                // Its children draw as they are again.
+                shader.running = None;
+                shader.from = None;
+            }
+            shader.stale();
+            t < 1.0
+        };
+        view.redraw();
+        if runs {
+            glib::ControlFlow::Continue
+        } else {
+            glib::ControlFlow::Break
+        }
     });
 }
 
@@ -565,7 +671,7 @@ pub(crate) fn effect(state: &ViewState) -> bool {
     state
         .shader
         .as_ref()
-        .is_some_and(|s| s.effect && s.fill.is_some())
+        .is_some_and(|s| s.effect && s.fill.is_some() && (!s.transition || s.running.is_some()))
 }
 
 /// What the core says changed under an effect or behind a view
@@ -694,8 +800,8 @@ pub(crate) fn draw_effect(snapshot: &gtk::Snapshot, view: &NshView) -> bool {
         let samples = s
             .shader
             .as_ref()
-            .and_then(|s| s.fill.as_ref())
-            .is_some_and(|f| f.samples(ShaderInput::Content));
+            .and_then(|s| s.fill.as_ref().map(|f| f.samples(s.children())))
+            .unwrap_or(false);
         (area, pixels, samples)
     };
     let content = match samples {
@@ -893,10 +999,24 @@ fn render(
         .enumerate()
         .filter_map(|(slot, i)| Some((ShaderInput::Image(slot as u8), view, px(i.as_ref()?))))
         .collect();
-    let inputs = [content, shader.backdrop.as_ref()];
-    for (input, pixels) in [ShaderInput::Content, ShaderInput::Backdrop]
-        .into_iter()
-        .zip(inputs)
+    // By input: the content, the backdrop, `sample_from`, `sample_to`.
+    let inputs = match shader.transition {
+        true => [
+            None,
+            shader.backdrop.as_ref(),
+            shader.from.as_ref(),
+            content,
+        ],
+        false => [content, shader.backdrop.as_ref(), None, None],
+    };
+    for (input, pixels) in [
+        ShaderInput::Content,
+        ShaderInput::Backdrop,
+        ShaderInput::From,
+        ShaderInput::To,
+    ]
+    .into_iter()
+    .zip(inputs)
     {
         if let Some(p) = pixels {
             rects.push((input, area, px(p)));
@@ -983,11 +1103,10 @@ fn render(
                     .get(*slot as usize)
                     .and_then(|p| p.as_ref())
                     .and_then(|p| image_texture(g, &mut cache.images, *slot as usize, p)),
-                ShaderInput::Content | ShaderInput::Backdrop => {
-                    let at = usize::from(*input == ShaderInput::Backdrop);
+                input => {
+                    let at = input.index();
                     inputs[at].and_then(|p| input_texture(g, &mut cache.inputs[at], p))
                 }
-                _ => None,
             };
             g.active_texture(glow::TEXTURE0 + unit as u32);
             g.bind_texture(glow::TEXTURE_2D, Some(bound.unwrap_or(gl.empty)));

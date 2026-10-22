@@ -192,6 +192,7 @@ enum Kind {
     Canvas,
     Shader,
     ShaderEffect,
+    ShaderTransition,
     WebView,
     Video,
     Native,
@@ -215,6 +216,7 @@ impl Kind {
                 | Kind::Overlay
                 | Kind::Shader
                 | Kind::ShaderEffect
+                | Kind::ShaderTransition
         )
     }
 
@@ -240,6 +242,7 @@ impl Kind {
             Kind::Canvas => ViewKind::Canvas,
             Kind::Shader => ViewKind::Shader,
             Kind::ShaderEffect => ViewKind::ShaderEffect,
+            Kind::ShaderTransition => ViewKind::ShaderTransition,
             Kind::WebView => ViewKind::WebView,
             Kind::Video => ViewKind::Video,
             Kind::Native => ViewKind::Native,
@@ -266,6 +269,7 @@ impl Kind {
             Tag::Canvas => Kind::Canvas,
             Tag::Shader => Kind::Shader,
             Tag::ShaderEffect => Kind::ShaderEffect,
+            Tag::ShaderTransition => Kind::ShaderTransition,
             Tag::WebView => Kind::WebView,
             Tag::Video => Kind::Video,
             Tag::Native => Kind::Native,
@@ -287,6 +291,9 @@ impl Kind {
     }
 }
 
+/// How long a shader transition runs without a `duration`.
+const DEFAULT_TRANSITION_MS: f32 = 300.0;
+
 /// A shader view's (or effect's) source, uniforms and progress, and what
 /// was made of them.
 #[derive(Debug, Default)]
@@ -296,6 +303,13 @@ struct ShaderState {
     progress: crate::shader::ShaderNumber,
     /// An effect's `maxSampleOffset`.
     max_offset: Points,
+    /// A transition's `value`, `duration` (milliseconds) and `fallback`.
+    key: crate::shader::TransitionKey,
+    duration: Option<f32>,
+    fallback: crate::shader::TransitionFallback,
+    /// The `value` its children showed as of the last commit (`None`
+    /// before the first): a commit that changes it starts the transition.
+    shown: Option<crate::shader::TransitionKey>,
     /// The uniforms packed for the source's program.
     packed: crate::shader::Packed,
     /// What the view was last sent.
@@ -608,7 +622,11 @@ impl Node {
             text_style: TextStyle::default(),
             animated: Vec::new(),
             drawing: None,
-            shader: matches!(kind, Kind::Shader | Kind::ShaderEffect).then(Box::default),
+            shader: matches!(
+                kind,
+                Kind::Shader | Kind::ShaderEffect | Kind::ShaderTransition
+            )
+            .then(Box::default),
             inline_style: StylePatch::default(),
             class_names: None,
             classes: None,
@@ -872,6 +890,9 @@ pub struct Core<M: TextEngine> {
     /// behind them ([`Core::mark_shader_inputs`]); removed views drop out
     /// as their ids no longer resolve.
     shader_inputs: rustc_hash::FxHashSet<NodeId>,
+    /// Shader transitions this commit starts
+    /// ([`MountItem::ShaderTransition`]), first in its batch.
+    transition_starts: Vec<MountItem>,
 }
 
 impl<M: TextEngine + 'static> Core<M> {
@@ -959,6 +980,7 @@ impl<M: TextEngine> Core<M> {
             overlay_state: overlay::Overlays::default(),
             shader_programs: Default::default(),
             shader_inputs: Default::default(),
+            transition_starts: Vec::new(),
         }
     }
 
@@ -1126,8 +1148,8 @@ impl<M: TextEngine> Core<M> {
             let Ok(mut key) = self.key(id) else { continue };
             loop {
                 let node = &self.nodes[key as usize];
-                if node.kind == Kind::ShaderEffect
-                    && samples(node, I::Content)
+                if (node.kind == Kind::ShaderEffect && samples(node, I::Content)
+                    || node.kind == Kind::ShaderTransition && samples(node, I::To))
                     && !marked.contains(&node.id)
                 {
                     marked.push(node.id);
@@ -1151,10 +1173,16 @@ impl<M: TextEngine> Core<M> {
         let language = self.components.environment.shaders.language;
         let node = &self.nodes[key as usize];
         let id = node.id;
+        let transition = node.kind == Kind::ShaderTransition;
         let Some(shader) = node.shader.as_ref() else {
             return;
         };
-        let fill = match &shader.source {
+        // A transition without a shader of its own runs its fallback.
+        let fallback = (transition
+            && shader.source.is_none()
+            && shader.fallback == crate::shader::TransitionFallback::Fade)
+            .then(crate::shader::crossfade);
+        let fill = match shader.source.as_ref().or(fallback.as_ref()) {
             Some(source) => {
                 let ready = *self.shader_programs.entry(source.id).or_insert_with(|| {
                     match crate::shader::ShaderProgram::translate(source, language) {
@@ -1205,6 +1233,7 @@ impl<M: TextEngine> Core<M> {
             let inputs = fill.as_ref().is_some_and(|f| {
                 f.samples(crate::shader::ShaderInput::Content)
                     || f.samples(crate::shader::ShaderInput::Backdrop)
+                    || f.samples(crate::shader::ShaderInput::To)
             });
             shader.sent = fill.clone();
             self.mount.push(MountItem::Shader { id, fill });
@@ -1212,6 +1241,23 @@ impl<M: TextEngine> Core<M> {
                 self.shader_inputs.insert(id);
             } else {
                 self.shader_inputs.remove(&id);
+            }
+        }
+        if transition {
+            let drawn =
+                self.components.environment.shaders.transition != crate::shader::Support::No;
+            let shader = self.nodes[key as usize]
+                .shader
+                .as_mut()
+                .expect("a shader view");
+            let before = shader.shown.replace(shader.key.clone());
+            let ms = shader.duration.unwrap_or(DEFAULT_TRANSITION_MS).max(0.0);
+            if before.is_some_and(|b| b != shader.key) && drawn && shader.sent.is_some() && ms > 0.0
+            {
+                self.transition_starts.push(MountItem::ShaderTransition {
+                    id,
+                    duration: std::time::Duration::from_micros((ms as f64 * 1000.0).round() as u64),
+                });
             }
         }
     }
@@ -1639,6 +1685,12 @@ impl<M: TextEngine> Core<M> {
             self.send_outer_scrolls();
         }
         self.mark_shader_inputs();
+        if !self.transition_starts.is_empty() {
+            // Before the changes they are about: the platform pictures the
+            // children as they were.
+            let starts = std::mem::take(&mut self.transition_starts);
+            self.mount.splice(0..0, starts);
+        }
         if self.mount.is_empty() || matches!(self.mount[..], [MountItem::LayoutAnimation(_)]) {
             self.mount.clear();
             None
@@ -2599,6 +2651,27 @@ impl<M: TextEngine> Core<M> {
                     if rebound {
                         flags |= dirty::ANIMATION;
                     }
+                }
+            }
+            Prop::TransitionValue(key) => {
+                if let Some(shader) = node.shader.as_mut()
+                    && shader.key != key
+                {
+                    shader.key = key;
+                    flags |= dirty::SHADER;
+                }
+            }
+            Prop::TransitionDuration(ms) => {
+                if let Some(shader) = node.shader.as_mut() {
+                    shader.duration = ms;
+                }
+            }
+            Prop::TransitionFallback(fallback) => {
+                if let Some(shader) = node.shader.as_mut()
+                    && shader.fallback != fallback
+                {
+                    shader.fallback = fallback;
+                    flags |= dirty::SHADER;
                 }
             }
             Prop::MaxSampleOffset(offset) => {

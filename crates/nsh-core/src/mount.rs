@@ -48,6 +48,11 @@ pub enum ViewKind {
     /// A view whose children draw through a shader ([`MountItem::Shader`]):
     /// they are the shader's content input.
     ShaderEffect,
+    /// A view whose children change through a shader
+    /// ([`MountItem::Shader`], [`MountItem::ShaderTransition`]): its
+    /// children are the shader's `sample_to`, a picture of what they drew
+    /// before its `sample_from`.
+    ShaderTransition,
     /// A web view.
     WebView,
     /// The container of a registered native component: the platform
@@ -766,6 +771,17 @@ pub enum MountItem {
         /// The shader view or effect.
         id: NodeId,
     },
+    /// A shader transition starts: what its children draw now, before the
+    /// items after this one in the batch, is its `sample_from`; what they
+    /// draw from then on its `sample_to`, while `nsh.progress` goes from 0
+    /// to 1 over `duration` (linearly). It comes first in its batch. A
+    /// transition that starts while one runs starts from what shows.
+    ShaderTransition {
+        /// The transition view ([`ViewKind::ShaderTransition`]).
+        id: NodeId,
+        /// How long it runs.
+        duration: std::time::Duration,
+    },
     /// Bind visual properties to native animation nodes.
     AnimationBindings {
         /// View.
@@ -913,6 +929,7 @@ impl MountItem {
             M::Insert { parent, .. } => Some(*parent),
             M::ShaderProgram { .. }
             | M::ShaderInput { .. }
+            | M::ShaderTransition { .. }
             | M::LayoutDirection { .. }
             | M::Appearance { .. }
             | M::Keymap(_)

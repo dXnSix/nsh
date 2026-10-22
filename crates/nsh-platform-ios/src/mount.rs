@@ -372,6 +372,8 @@ pub(crate) struct Mounter {
     sampling: usize,
     /// Pictures of shaders' inputs are due ([`Mounter::pictures_due`]).
     pictures: bool,
+    /// The shader transitions that run (the shader display link moves them).
+    transitions: Vec<NodeId>,
     /// Parents of screens, header items and modals (which are not
     /// subviews of their parent).
     hosts: rustc_hash::FxHashMap<NodeId, NodeId>,
@@ -455,6 +457,7 @@ impl Mounter {
             shader_frames: Vec::new(),
             sampling: 0,
             pictures: false,
+            transitions: Vec::new(),
             hosts: Default::default(),
             dirty_stacks: Vec::new(),
             deferred_stacks: Vec::new(),
@@ -560,10 +563,15 @@ impl Mounter {
                     ViewKind::Shader => Native::Shader(Box::new(crate::shader::ShaderHost::new(
                         NshView::new(self.mtm),
                         false,
+                        false,
                     ))),
-                    ViewKind::ShaderEffect => Native::Shader(Box::new(
-                        crate::shader::ShaderHost::new(NshView::new(self.mtm), true),
-                    )),
+                    ViewKind::ShaderEffect | ViewKind::ShaderTransition => {
+                        Native::Shader(Box::new(crate::shader::ShaderHost::new(
+                            NshView::new(self.mtm),
+                            true,
+                            kind == ViewKind::ShaderTransition,
+                        )))
+                    }
                     ViewKind::WebView => Native::Web(Box::new(WebHost::new(
                         self.mtm,
                         id,
@@ -613,10 +621,16 @@ impl Mounter {
                 let modal = matches!(native, Native::Modal(_));
                 let mut slot = Slot::new(native);
                 // An effect's children go into the content view it hides.
-                if kind == ViewKind::ShaderEffect {
+                let effect = matches!(kind, ViewKind::ShaderEffect | ViewKind::ShaderTransition);
+                if effect {
                     slot.decor.set_effect();
                 }
                 self.views[idx] = Some(slot);
+                if effect {
+                    // Its content view exists before its children come,
+                    // styled or not.
+                    self.decorate(id);
+                }
                 if modal && self.touch_listeners > 0 {
                     self.add_touch_tracker(id);
                 }
@@ -995,6 +1009,23 @@ impl Mounter {
                 }) = self.slot(id)
                 {
                     host.mark(crate::shader::CONTENT | crate::shader::BACKDROP);
+                    self.pictures_due();
+                }
+            }
+            MountItem::ShaderTransition { id, duration } => {
+                let started = match self.slot(id) {
+                    Some(Slot {
+                        native: Native::Shader(host),
+                        decor,
+                        ..
+                    }) => host.start(decor.content(), duration),
+                    _ => false,
+                };
+                if started {
+                    self.sync_effect(id);
+                    if !self.transitions.contains(&id) {
+                        self.transitions.push(id);
+                    }
                     self.pictures_due();
                 }
             }
@@ -2286,7 +2317,23 @@ impl Mounter {
             // Kept while the view lives: it may show again.
             keep.push(id);
         }
-        if keep.is_empty() && !self.pictures {
+        let running = std::mem::take(&mut self.transitions);
+        for id in running {
+            let ticks = match self.slot(id) {
+                Some(Slot {
+                    native: Native::Shader(host),
+                    ..
+                }) => host.tick(),
+                _ => continue,
+            };
+            if ticks {
+                self.transitions.push(id);
+            } else {
+                // Ended: its children show again.
+                self.sync_effect(id);
+            }
+        }
+        if keep.is_empty() && !self.pictures && self.transitions.is_empty() {
             self.shader_link.setPaused(true);
         }
         self.shader_frames = keep;

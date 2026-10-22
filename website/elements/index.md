@@ -93,6 +93,7 @@ Imported from `nsh` in TSX, from `nsh_core::ui::prelude` in Rust.
 | `<Canvas>` | `canvas(painter)` | a view replaying a 2D drawing | [Canvas](./canvas.md) |
 | `<Shader>` | `shader(source)` | a view a GPU shader fills, its children over it | [Shader](./shader.md) |
 | `<ShaderEffect>` | `shader_effect(source)` | a view whose children draw through a shader | [Shader](./shader.md#effects-children-through-a-shader) |
+| `<ShaderTransition>` | `shader_transition(source)` | a view whose children change through a shader | [Shader](./shader.md#transitions-children-that-change-through-a-shader) |
 | `<WebView>` | `web_view(url)`, `web_view_html(html, base)` | WKWebView / android.webkit.WebView | [WebView](./web-view.md) |
 | `<Video>` | `video(url)` | AVPlayerLayer / MediaPlayer on a TextureView | [Video](./video.md) |
 | `<Overlay>` | `overlay()` | a view on top of the window (or the dialog it is in), placed against an anchor | [Overlay](./overlay.md) |

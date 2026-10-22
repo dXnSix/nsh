@@ -62,6 +62,7 @@ final class Mounter {
     private static final int APPEARANCE = 33;
     private static final int SHADER_PROGRAM = 34;
     private static final int SHADER = 35;
+    private static final int SHADER_TRANSITION = 36;
     /** Shader programs by id (`encode.rs` `shader_program`); null for one in no language. */
     private final java.util.HashMap<Integer, ShaderBox.Program> shaderPrograms = new java.util.HashMap<>();
     /** The surface lays out right to left: native widgets mirror. */
@@ -372,6 +373,12 @@ final class Mounter {
                     }
                     break;
                 }
+                case SHADER_TRANSITION: {
+                    View v = views.get(b.getInt());
+                    float ms = b.getFloat();
+                    if (v instanceof ShaderBox) ((ShaderBox) v).startTransition(ms);
+                    break;
+                }
                 case CANVAS: {
                     int id = b.getInt(), words = b.getInt();
                     int[] code = new int[words];
@@ -606,8 +613,9 @@ final class Mounter {
             case 13: v = new VideoBox(context, this, host, id); break;
             case 14: v = new CanvasBox(context, this, id); break;
             case 15: v = new ComponentBox(context, this, id); break;
-            case 16: v = new ShaderBox(context, this, id, false); break;
-            case 17: v = new ShaderBox(context, this, id, true); break;
+            case 16: v = new ShaderBox(context, this, id, false, false); break;
+            case 17: v = new ShaderBox(context, this, id, true, false); break;
+            case 18: v = new ShaderBox(context, this, id, true, true); break;
             default: v = new Box(context, this, id);
         }
         views.put(id, v);

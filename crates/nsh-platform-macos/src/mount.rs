@@ -337,6 +337,11 @@ impl Mounter {
                     crate::shader::input_changed(surface, view);
                 }
             }
+            MountItem::ShaderTransition { id, duration } => {
+                if let Some(view) = self.get(*id) {
+                    crate::shader::start_transition(surface, view, *duration);
+                }
+            }
             MountItem::Gestures { id, values } => {
                 if let Some(view) = self.get(*id) {
                     crate::input::gestures(surface, view, *values);

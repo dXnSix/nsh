@@ -58,6 +58,11 @@ pub enum Tag {
     /// `ShaderEffect` of `nsh`): what they draw is the shader's
     /// `sample_content` ([`crate::shader`]).
     ShaderEffect,
+    /// A view whose children change through a shader (`<shadertransition>`,
+    /// TS: `ShaderTransition` of `nsh`): when its `value` changes, a
+    /// picture of what they drew is the shader's `sample_from` and what
+    /// they draw now its `sample_to` ([`crate::shader`]).
+    ShaderTransition,
     /// A web page (`<webview>`).
     WebView,
     /// A video player (`<video>`).
@@ -91,6 +96,7 @@ impl Tag {
             "canvas" => Tag::Canvas,
             "shader" => Tag::Shader,
             "shadereffect" => Tag::ShaderEffect,
+            "shadertransition" => Tag::ShaderTransition,
             "webview" => Tag::WebView,
             "video" => Tag::Video,
             "native" => Tag::Native,
@@ -1462,14 +1468,14 @@ pub enum Prop {
     /// `src`: a URL, `asset:/path`, or an imported asset.
     #[prop(js = "src", on = IMAGE, shared)]
     Source(Option<ImageSource>),
-    /// `src` of a shader view or effect: the shader it draws
+    /// `src` of a shader view, effect or transition: the shader it draws
     /// (`createShader`, a `.wgsl` import); an effect without one draws its
-    /// children as they are.
-    #[prop(js = "src", on = SHADER | SHADER_EFFECT, shared)]
+    /// children as they are, a transition without one runs its `fallback`.
+    #[prop(js = "src", on = SHADER | SHADER_EFFECT | SHADER_TRANSITION, shared)]
     ShaderSource(Option<crate::shader::ShaderSource>),
     /// `uniforms`: the values of the shader's uniforms, by name; animated
     /// values change them on the UI thread.
-    #[prop(js = "uniforms", on = SHADER | SHADER_EFFECT)]
+    #[prop(js = "uniforms", on = SHADER | SHADER_EFFECT | SHADER_TRANSITION)]
     Uniforms(crate::shader::Uniforms),
     /// `progress`: what the shader reads as `nsh.progress` (0 to 1 by
     /// convention): a number, or an animated value the UI thread writes.
@@ -1478,8 +1484,20 @@ pub enum Prop {
     /// `maxSampleOffset`: how far outside a pixel a shader effect samples
     /// its content, in points (a blur's radius, a ripple's reach): the
     /// content is drawn that much beyond the view's bounds for it.
-    #[prop(js = "maxSampleOffset", on = SHADER_EFFECT)]
+    #[prop(js = "maxSampleOffset", on = SHADER_EFFECT | SHADER_TRANSITION)]
     MaxSampleOffset(Points),
+    /// `value`: what a shader transition's children show; when it changes,
+    /// they change through the shader.
+    #[prop(js = "value", on = SHADER_TRANSITION, shared)]
+    TransitionValue(crate::shader::TransitionKey),
+    /// `duration`: how long a shader transition runs, in milliseconds
+    /// (default 300); `nsh.progress` goes from 0 to 1 over it.
+    #[prop(js = "duration", min = 0, on = SHADER_TRANSITION)]
+    TransitionDuration(Option<f32>),
+    /// `fallback`: what a shader transition runs without a shader of its
+    /// own (no `src`, or one the platform could not translate).
+    #[prop(js = "fallback", on = SHADER_TRANSITION)]
+    TransitionFallback(crate::shader::TransitionFallback),
     /// `resizeMode`: how an image (or a video) fits its box.
     #[prop(js = "resizeMode", on = IMAGE | VIDEO)]
     ResizeMode(ResizeMode),

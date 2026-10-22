@@ -1281,7 +1281,7 @@ class Player {
       el.append(canvas);
       el._canvas = canvas;
       el._slots = [];
-    } else if (kind === "shader" || kind === "shadereffect") {
+    } else if (kind === "shader" || kind === "shadereffect" || kind === "shadertransition") {
       // A fill's picture under its children, an effect's over them
       // (`drawShader`).
       el = document.createElement("div");
@@ -1293,7 +1293,10 @@ class Player {
       canvas._shaderOutput = true;
       el.append(canvas);
       el._shaderCanvas = canvas;
-      el._effect = kind === "shadereffect";
+      el._effect = kind !== "shader";
+      // A transition's children are its `sample_to` (input 3), an
+      // effect's its content (input 0).
+      el._transition = kind === "shadertransition";
       el._args = new Map();
     } else if (kind === "web") {
       el = document.createElement("div");
@@ -1457,7 +1460,7 @@ class Player {
       el._frameAnimation = a;
     }
     if (el._kind === "canvas") this.drawSoon(el);
-    if (el._kind === "shader" || el._kind === "shadereffect") {
+    if (el._kind === "shader" || el._kind === "shadereffect" || el._kind === "shadertransition") {
       this.shaderSoon(el);
       if (el._fill?.inputs) {
         el._stale = el._fill.inputs;
@@ -2692,6 +2695,62 @@ class Player {
     this.inputsSoon(el);
   }
 
+  /**
+   * A shader transition starts, before the rest of its batch: what shows
+   * now (its children, or the transition as it is drawn) is its
+   * `sample_from`, its children painted after the batch its `sample_to`,
+   * and `nsh.progress` goes from 0 to 1 over `ms` on animation frames.
+   */
+  op_st([, id, ms]) {
+    const el = this.view(id);
+    if (!el?._transition || !el._fill || !el._frame) return;
+    const from = this.inputCanvas(el, "_fromPicture");
+    if (el._running) {
+      from.cx.setTransform(1, 0, 0, 1, 0, 0);
+      from.cx.drawImage(el._shaderCanvas, 0, 0, from.canvas.width, from.canvas.height);
+    } else {
+      this.paintTree(from.cx, el, el.getBoundingClientRect(), 1, null, el);
+    }
+    el._fromDirty = true;
+    el._running = { start: performance.now(), ms: Math.max(1, ms) };
+    el._t = 0;
+    el.classList.add("nsh-fx");
+    el._stale = 1;
+    this.inputsSoon(el);
+    // The class is the transition's own change, not its children's.
+    el._contentObserver?.takeRecords();
+    if (el._transitionFrame) return;
+    const step = () => {
+      el._transitionFrame = 0;
+      const run = el._running;
+      if (!run || !el.isConnected) return;
+      el._t = Math.min(1, (performance.now() - run.start) / run.ms);
+      if (el._t >= 1) {
+        el._running = null;
+        el.classList.remove("nsh-fx");
+        el._shaderCanvas.width = 0;
+        el._contentObserver?.takeRecords();
+        return;
+      }
+      this.drawShader(el);
+      el._transitionFrame = requestAnimationFrame(step);
+    };
+    el._transitionFrame = requestAnimationFrame(step);
+  }
+
+  /** A canvas for a picture of `el`'s input (`key`), covering its area, with its context in points from the view's top-left. */
+  inputCanvas(el, key) {
+    const ratio = devicePixelRatio || 1;
+    const m = el._effect ? Math.max(0, el._fill?.offset || 0) : 0;
+    const [, , w, h] = el._frame;
+    const c = (el[key] ??= document.createElement("canvas"));
+    c.width = Math.max(1, Math.round((w + 2 * m) * ratio));
+    c.height = Math.max(1, Math.round((h + 2 * m) * ratio));
+    const cx = c.getContext("2d");
+    cx.setTransform(ratio, 0, 0, ratio, m * ratio, m * ratio);
+    return { canvas: c, cx };
+  }
+
   /** Animated uniforms written into the view's uniforms; `nsh.progress` is component 0xffff. */
   writeArgs(el) {
     const words = new Float32Array(el._uniforms.buffer);
@@ -2706,12 +2765,13 @@ class Player {
   // (`paintTree`), taken again on the next frame after a change: a mutation
   // in the subtree (in the surface, for a backdrop), a scroll or a load.
 
-  /** Watches what the view's shader samples (`fill.inputs`: 1 content, 2 backdrop). */
+  /** Watches what the view's shader samples (`fill.inputs`: 1 content, 2 backdrop, 8 a transition's `sample_to`). */
   watchInputs(el) {
     const fill = el._fill;
-    const content = el._effect && fill && (fill.inputs & 1);
+    const content = el._effect && fill && (fill.inputs & (el._transition ? 8 : 1));
     const backdrop = fill && (fill.inputs & 2);
-    el.classList.toggle("nsh-fx", Boolean(el._effect && fill));
+    // A transition draws through its shader only while it runs.
+    el.classList.toggle("nsh-fx", Boolean(el._effect && fill && (!el._transition || el._running)));
     if (content && !el._contentObserver) {
       const mark = (list) => {
         if (list && list.every((m) => m.target._shaderOutput)) return;
@@ -2779,7 +2839,8 @@ class Player {
     const fill = el._fill;
     const stale = el._stale || 0;
     el._stale = 0;
-    if (!fill || !el._frame || !stale) return;
+    // An idle transition shows its children as they are.
+    if (!fill || !el._frame || !stale || (el._transition && !el._running)) return;
     const ratio = devicePixelRatio || 1;
     const m = el._effect ? Math.max(0, fill.offset || 0) : 0;
     const [, , w, h] = el._frame;
@@ -3011,9 +3072,11 @@ class Player {
   /** The texture of an input's picture (0: content, 1: backdrop), uploaded again after a paint. */
   pictureTexture(g, el, input) {
     const gl = g.gl;
-    el._pictureTextures ??= [null, null];
+    el._pictureTextures ??= [null, null, null, null];
     let t = el._pictureTextures[input];
-    const dirty = input === 0 ? "_contentDirty" : "_backdropDirty";
+    // A transition's `sample_to` is its children's picture, as an effect's content.
+    const dirty = ["_contentDirty", "_backdropDirty", "_fromDirty", "_contentDirty"][input];
+    const source = [el._contentPicture, el._backdropPicture, el._fromPicture, el._contentPicture][input];
     if (!t) {
       t = el._pictureTextures[input] = gl.createTexture();
       el[dirty] = true;
@@ -3022,7 +3085,7 @@ class Player {
     if (el[dirty]) {
       el[dirty] = false;
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, input === 0 ? el._contentPicture : el._backdropPicture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
       for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) {
         gl.texParameteri(gl.TEXTURE_2D, k, v);
       }
@@ -3048,8 +3111,8 @@ class Player {
   drawShader(el) {
     const fill = el._fill;
     const canvas = el._shaderCanvas;
-    if (!fill || !el._frame || !el.isConnected) {
-      if (!fill && canvas.width) canvas.width = 0;
+    if (!fill || !el._frame || !el.isConnected || (el._transition && !el._running)) {
+      if ((!fill || el._transition) && canvas.width) canvas.width = 0;
       return;
     }
     const g = this.gl();
@@ -3069,7 +3132,7 @@ class Player {
     el._started ??= performance.now();
     const time = (performance.now() - el._started) / 1000;
     const nsh = new Float32Array(8);
-    nsh.set([w, h, ratio, time, el._progress ?? fill.progress ?? 0]);
+    nsh.set([w, h, ratio, time, el._transition ? el._t ?? 0 : el._progress ?? fill.progress ?? 0]);
     const frame = new Float32Array(104);
     frame.set([-m, -m, w + 2 * m, h + 2 * m]);
     for (const [slot, img] of (el._images ?? []).entries()) {
@@ -3077,7 +3140,12 @@ class Player {
       frame.set([0, 0, w, h, img.naturalWidth, img.naturalHeight], 8 + 8 * (4 + slot));
     }
     // The pictures of its inputs cover the area drawn.
-    const pictures = [el._effect && fill.inputs & 1 ? el._contentPicture : null, fill.inputs & 2 ? el._backdropPicture : null];
+    const pictures = [
+      el._effect && !el._transition && fill.inputs & 1 ? el._contentPicture : null,
+      fill.inputs & 2 ? el._backdropPicture : null,
+      el._transition && fill.inputs & 4 ? el._fromPicture : null,
+      el._transition && fill.inputs & 8 ? el._contentPicture : null,
+    ];
     pictures.forEach((c, input) => {
       if (c) frame.set([-m, -m, w + 2 * m, h + 2 * m, c.width, c.height], 8 + 8 * input);
     });
@@ -3093,7 +3161,7 @@ class Player {
     made.samplers.forEach(([location, input], unit) => {
       const img = input >= 4 ? el._images?.[input - 4] : null;
       gl.activeTexture(gl.TEXTURE0 + unit);
-      const picture = input < 2 ? pictures[input] : null;
+      const picture = input < 4 ? pictures[input] : null;
       const texture = picture ? this.pictureTexture(g, el, input) : img ? this.glTexture(g, img) : this.emptyTexture(g);
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.uniform1i(location, unit);

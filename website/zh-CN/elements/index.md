@@ -79,6 +79,7 @@ TSX 从 `nsh` 导入，Rust 从 `nsh_core::ui::prelude` 导入。
 | `<Canvas>` | `canvas(painter)` | 回放 2D 绘制的视图 | [Canvas](./canvas.md) |
 | `<Shader>` | `shader(source)` | 由 GPU 着色器填充、子元素绘制在其上的视图 | [Shader](./shader.md) |
 | `<ShaderEffect>` | `shader_effect(source)` | 子元素经过着色器绘制的视图 | [Shader](./shader.md#效果子元素经过着色器) |
+| `<ShaderTransition>` | `shader_transition(source)` | 子元素经过着色器变化的视图 | [Shader](./shader.md#过渡经过着色器变化的子元素) |
 | `<WebView>` | `web_view(url)`、`web_view_html(html, base)` | WKWebView / android.webkit.WebView | [WebView](./web-view.md) |
 | `<Video>` | `video(url)` | AVPlayerLayer / TextureView 上的 MediaPlayer | [Video](./video.md) |
 | `<Overlay>` | `overlay()` | 窗口（或所在对话框）之上的视图，相对锚点放置 | [Overlay](./overlay.md) |

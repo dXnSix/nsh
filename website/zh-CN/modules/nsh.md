@@ -243,7 +243,7 @@ function Input(props: InputProps): YNode;
 function Overlay(props: OverlayProps): YNode;
 ```
 
-`nsh` 导出的宿主元素，写作标签：`<View>`、`<Text>`、`<Scroll>`、`<Input>`、`<Overlay>`（把子元素显示在窗口之上，相对锚点放置：[Overlay](../elements/overlay.md)）。当标签通过导入（包括别名）指向它们之一时，编译器会就地创建原生视图，所以导入它们在运行时没有任何开销。它们也是普通的组件，可以作为值传递（`const Tag = inline ? Text : View`）。`nsh` 以同样的方式导出其他原语：[`List`](./nsh-list.md)、[`Image`](./nsh-image.md)、[`Canvas`](./nsh-canvas.md)、[`WebView`](./nsh-webview.md) 和 [`Video`](./nsh-video.md)，各有自己的参考页面；还有 [`Shader`](../elements/shader.md) 和 `ShaderEffect`，以及 `createShader(source)`（用 WGSL 源码创建着色器；`.wgsl` 导入也是着色器）和 `shaderSupport()`（平台的着色器绘制什么）。它们的属性见[元素](../elements/index.md)。
+`nsh` 导出的宿主元素，写作标签：`<View>`、`<Text>`、`<Scroll>`、`<Input>`、`<Overlay>`（把子元素显示在窗口之上，相对锚点放置：[Overlay](../elements/overlay.md)）。当标签通过导入（包括别名）指向它们之一时，编译器会就地创建原生视图，所以导入它们在运行时没有任何开销。它们也是普通的组件，可以作为值传递（`const Tag = inline ? Text : View`）。`nsh` 以同样的方式导出其他原语：[`List`](./nsh-list.md)、[`Image`](./nsh-image.md)、[`Canvas`](./nsh-canvas.md)、[`WebView`](./nsh-webview.md) 和 [`Video`](./nsh-video.md)，各有自己的参考页面；还有 [`Shader`](../elements/shader.md)、`ShaderEffect` 和 `ShaderTransition`，以及 `createShader(source)`（用 WGSL 源码创建着色器；`.wgsl` 导入也是着色器）和 `shaderSupport()`（平台的着色器绘制什么）。它们的属性见[元素](../elements/index.md)。
 
 ## 类型
 
