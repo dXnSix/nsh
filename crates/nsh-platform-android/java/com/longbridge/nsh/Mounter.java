@@ -1511,17 +1511,6 @@ final class Mounter {
         return offset == null ? 0 : offset;
     }
 
-    /** How much further each sticky cell sticks (px; an animated `StickyCell::offset`). */
-    private final java.util.HashMap<Integer, Float> stickyOffsets = new java.util.HashMap<>();
-    /** The scroll view that pins each sticky cell. */
-    final java.util.HashMap<Integer, ScrollBox> stickyHosts = new java.util.HashMap<>();
-
-    /** How much further sticky cell `id` sticks (px). */
-    float stickyOffset(int id) {
-        Float offset = stickyOffsets.get(id);
-        return offset == null ? 0 : offset;
-    }
-
     void outputs(float[] out) {
         if (out == null || out.length == 0) return;
         for (int i = 1; i + 2 < out.length; i += 3) {
