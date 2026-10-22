@@ -222,7 +222,7 @@ fn main(p: vec2f) -> vec4f {
 
 ## 支持情况
 
-`nsh` 的 `shaderSupport()` 说明平台绘制什么：`{ fill, backdrop, effect, transition }`，每项为 `"live"`、`"snapshot"` 或 `false`。`fill` 对应 `<Shader>`：在 iOS、Mac Catalyst、macOS、Android 13 及以上、Windows、Linux 和 Web 上为 `"live"`。`effect` 对应 `<ShaderEffect>`，`backdrop` 对应采样视图背后内容的着色器：在 Android 13 及以上为 `"live"`，在 iOS、Mac Catalyst、macOS 和 Web 上为 `"snapshot"`：那里着色器读取输入的一张图片，输入变化时重新拍下。`fill` 为 `false` 时，着色器视图显示它的子元素和自身样式，因此把内容放在着色器之上的布局在所有平台上读起来都一样；`effect` 为 `false` 时，效果按原样显示子元素；`backdrop` 为 `false` 时，`sample_backdrop` 读到透明。
+`nsh` 的 `shaderSupport()` 说明平台绘制什么：`{ fill, backdrop, effect, transition }`，每项为 `"live"`、`"snapshot"` 或 `false`。`fill` 对应 `<Shader>`：在 iOS、Mac Catalyst、macOS、Android 13 及以上、Windows、Linux 和 Web 上为 `"live"`。`effect` 对应 `<ShaderEffect>`，`backdrop` 对应采样视图背后内容的着色器：在 Android 13 及以上和 Windows 上为 `"live"`，在 iOS、Mac Catalyst、macOS 和 Web 上为 `"snapshot"`：那里着色器读取输入的一张图片，输入变化时重新拍下。`fill` 为 `false` 时，着色器视图显示它的子元素和自身样式，因此把内容放在着色器之上的布局在所有平台上读起来都一样；`effect` 为 `false` 时，效果按原样显示子元素；`backdrop` 为 `false` 时，`sample_backdrop` 读到透明。
 
 ```tsx
 import { shaderSupport } from "nsh";
@@ -238,6 +238,6 @@ const fancy = shaderSupport().fill !== false;
 
 - iOS、Mac Catalyst 和 macOS 用 Metal 在视图背景之上的 `CAMetalLayer` 中绘制；程序在主线程之外编译。在这些平台上，效果和背景读取输入的一张图片，输入变化后的下一帧重新拍下；效果之内或背景之后的着色器、视频和网页在那里读到透明。
 - Android 在视图绘制时用 `RuntimeShader`（Android 13，API 33 及以上）绘制。效果把它作为子元素绘制内容的渲染效果运行，背景着色器把它作为视图背后内容的渲染效果运行：两者都实时读取输入。那里的着色器读取一个实时输入：内容或背景。
-- Windows 用 Direct3D 11 渲染到一张由 Direct2D 绘制的纹理。
+- Windows 用 Direct3D 11 渲染到一张由 Direct2D 绘制的纹理。效果的子元素和背景着色器背后的内容随每一帧绘制到纹理中，因此两者都实时读取输入。
 - Linux 用 OpenGL ES 3 渲染到一张由 GTK 绘制的纹理。
 - Web 用 WebGL 2 渲染到视图元素中的一个 canvas。效果和背景读取 NSH 根据元素绘制的一张图片（背景、圆角、边框、图片、canvas 和文字），元素变化后的下一帧重新绘制。

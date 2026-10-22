@@ -2,6 +2,12 @@
 //! view's size, which Direct2D draws over its background and under its
 //! children (`docs/dev/shaders.md` "Windows").
 //!
+//! The inputs are live, drawn with the frame: a `<ShaderEffect>`'s children
+//! are drawn by Direct2D into a texture (its content) instead of the
+//! window, and what the frame drew behind a view so far is copied into
+//! another (its backdrop) before the pass. Both cover the area the shader
+//! draws: the view and an effect's `maxSampleOffset` beyond it.
+//!
 //! The program is `HlslProgram::d3d11` (`nsh_vertex` / `nsh_fragment`,
 //! shader model 5.0), compiled with `D3DCompile` (`d3dcompiler_47`, part of
 //! Windows) when it arrives, on the device Direct2D draws with: the texture
@@ -15,15 +21,15 @@ use std::{cell::RefCell, collections::HashMap, ffi::CString, rc::Rc, sync::Arc, 
 
 use nsh_core::{
     animation::AnimationValue,
-    geometry::{DevicePixels, Percentage, Points, Size},
+    geometry::{Bounds, DevicePixels, Percentage, Point, Points, Size},
     shader::{self, ProgramCode, ShaderFill, ShaderInput, ShaderProgram},
 };
 use windows::{
     Win32::Graphics::{
         Direct2D::{
-            Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT},
-            D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1, D2D1_INTERPOLATION_MODE_LINEAR,
-            ID2D1Bitmap1,
+            Common::{D2D_POINT_2U, D2D_RECT_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT},
+            D2D1_BITMAP_OPTIONS, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET,
+            D2D1_BITMAP_PROPERTIES1, D2D1_INTERPOLATION_MODE_LINEAR, ID2D1Bitmap1, ID2D1Image,
         },
         Direct3D::{D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, Fxc::D3DCompile, ID3DBlob, ID3DInclude},
         Direct3D11::{
@@ -43,6 +49,7 @@ use windows::{
 };
 
 use crate::{
+    geom::Mat4,
     gfx::{self, Gfx},
     render::DrawCx,
     surface::Surface,
@@ -178,7 +185,11 @@ pub(crate) struct ShaderState {
     fill: Option<Arc<ShaderFill>>,
     /// The fill's uniforms with the animated values written in.
     uniforms: Vec<u8>,
+    /// `nsh.progress`: the fill's, or its animated value.
+    progress: f32,
     args: Vec<(u16, AnimationValue)>,
+    /// A `<ShaderEffect>`: its children are the shader's content.
+    effect: bool,
     /// The images, by slot, once loaded.
     images: Vec<Option<Rc<crate::image::Frame>>>,
     started: Option<Instant>,
@@ -199,6 +210,36 @@ struct Target {
     buffers: [Option<ID3D11Buffer>; 3],
     images: Vec<Option<(usize, ID3D11ShaderResourceView)>>,
     sampler: Option<ID3D11SamplerState>,
+    /// The content's and the backdrop's textures, of the target's size.
+    inputs: [Option<Input>; 2],
+    /// The backdrop was copied in this frame ([`take_backdrop`]).
+    backdrop: bool,
+}
+
+/// A texture an input is drawn (the content) or copied (the backdrop)
+/// into, and the Direct2D bitmap of it.
+#[derive(Clone)]
+struct Input {
+    view: ID3D11ShaderResourceView,
+    target: ID3D11RenderTargetView,
+    bitmap: ID2D1Bitmap1,
+}
+
+impl Target {
+    /// The texture of input `at` (0: the content, 1: the backdrop).
+    fn input(&mut self, gfx: &Gfx, at: usize, scale: f32) -> Option<Input> {
+        if self.inputs[at].is_none() {
+            self.inputs[at] = texture(gfx, self.size, scale, D2D1_BITMAP_OPTIONS_TARGET)
+                .map(|(view, target, bitmap)| Input {
+                    view,
+                    target,
+                    bitmap,
+                })
+                .map_err(|e| log::warn!("<Shader>: {e}"))
+                .ok();
+        }
+        self.inputs[at].clone()
+    }
 }
 
 impl ShaderState {
@@ -209,9 +250,12 @@ impl ShaderState {
     }
 }
 
-/// Sets up a shader view.
-pub(crate) fn create(view: &NshView) {
-    view.state_mut().shader = Some(ShaderState::default());
+/// Sets up a shader view; `effect`: a `<ShaderEffect>`.
+pub(crate) fn create(view: &NshView, effect: bool) {
+    view.state_mut().shader = Some(ShaderState {
+        effect,
+        ..ShaderState::default()
+    });
 }
 
 /// What `view` draws now (`None`: its children only); loads its images.
@@ -225,9 +269,8 @@ pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, fill: Option<Arc<Shader
         let old = state.fill.take();
         if let Some(fill) = &fill {
             state.uniforms = fill.uniforms.to_vec();
-            for &(k, value) in &state.args {
-                shader::write_animated(&mut state.uniforms, k, value);
-            }
+            state.progress = fill.progress;
+            shader::write_args(&mut state.uniforms, &mut state.progress, &state.args);
             state.images.resize(fill.images.len(), None);
             for (slot, image) in fill.images.iter().enumerate() {
                 let before = old
@@ -308,9 +351,7 @@ pub(crate) fn set_args(view: &NshView, values: &[(u16, AnimationValue)]) {
         state.args.clear();
         state.args.extend_from_slice(values);
         if state.fill.is_some() {
-            for &(k, value) in values {
-                shader::write_animated(&mut state.uniforms, k, value);
-            }
+            shader::write_args(&mut state.uniforms, &mut state.progress, values);
         }
         state.stale();
     }
@@ -328,6 +369,7 @@ fn tick(surface: &Rc<Surface>, view: &NshView) {
             return;
         }
         state.ticking = true;
+        state.started.get_or_insert_with(Instant::now);
     }
     let id = view.id();
     surface.on_frame(move |surface, _| {
@@ -350,22 +392,111 @@ fn tick(surface: &Rc<Surface>, view: &NshView) {
     });
 }
 
-/// Draws a shader view's picture (rendering it first if it is stale).
+/// True when `state` is an effect drawing its children through its
+/// shader ([`draw_effect`]): they are not drawn into the window.
+pub(crate) fn effect(state: &ViewState) -> bool {
+    state
+        .shader
+        .as_ref()
+        .is_some_and(|s| s.effect && s.fill.is_some())
+}
+
+/// Draws a shader view's picture (rendering it first if it is stale);
+/// an effect draws with its children ([`draw_effect`]).
 pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
-    let Some(shader) = state.shader.as_ref() else {
-        return;
-    };
-    let Some(fill) = &shader.fill else { return };
-    let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
-    if w <= 0.0 || h <= 0.0 {
+    if state.shader.as_ref().is_none_or(|s| s.effect) {
         return;
     }
-    let Some(program) = shaders(cx.gfx, fill.program) else {
+    let Some(area) = prepare(cx, state) else {
         return;
     };
+    // The fill follows the view's corners, as a background does.
+    let radii = state.radii();
+    let rounded = radii.iter().any(|&r| r > 0.0);
+    if rounded {
+        let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
+        cx.push_clip_rounded(crate::geom::rect(0.0, 0.0, w, h), radii);
+    }
+    finish(cx, state, area);
+    if rounded {
+        cx.pop();
+    }
+}
+
+/// Draws an effect: `view`'s children into its content, then the shader
+/// at `world` (set on the context). False when it draws nothing: the
+/// children are then drawn as they are.
+pub(crate) fn draw_effect(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) -> bool {
+    let (area, content) = {
+        let state = view.state();
+        let Some(area) = prepare(cx, &state) else {
+            return false;
+        };
+        let Some(shader) = state.shader.as_ref() else {
+            return false;
+        };
+        let samples = shader
+            .fill
+            .as_ref()
+            .is_some_and(|f| f.samples(ShaderInput::Content));
+        let content = match samples {
+            true => shader
+                .target
+                .borrow_mut()
+                .as_mut()
+                .and_then(|t| t.input(cx.gfx, 0, cx.scale)),
+            false => None,
+        };
+        (area, content)
+    };
+    if let Some(content) = content
+        && let Ok(image) = content.bitmap.cast::<ID2D1Image>()
+    {
+        // The children at the content's origin, drawn by another context:
+        // what is pushed on this one stays as it is.
+        let base = Mat4::new().translate(-area.origin.x.0, -area.origin.y.0);
+        let composed = cx.composed.len();
+        crate::decor::layer::draw_into(cx, &image, cx.scale, true, |inner| {
+            view.with_children(|children| {
+                for child in children {
+                    let origin = {
+                        let s = child.state();
+                        view.state().child_origin(s.frame, s.shift)
+                    };
+                    crate::render::draw_view(inner, child, base, origin);
+                }
+            });
+        });
+        // Web views in it were placed in the content's coordinates.
+        cx.composed.truncate(composed);
+    }
+    cx.set_transform(world);
+    finish(cx, &view.state(), area);
+    true
+}
+
+/// The area a shader view draws (points from its top-left), once its
+/// program is ready and its target made; `None` when it draws nothing.
+fn prepare(cx: &DrawCx<'_>, state: &ViewState) -> Option<Bounds<Points>> {
+    let shader = state.shader.as_ref()?;
+    let fill = shader.fill.as_ref()?;
+    let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    shaders(cx.gfx, fill.program)?;
+    let o = if shader.effect {
+        fill.max_offset.0.max(0.0)
+    } else {
+        0.0
+    };
+    let area = Bounds::new(
+        Point::new(Points(-o), Points(-o)),
+        Size::new(Points(w + 2.0 * o), Points(h + 2.0 * o)),
+    );
     let size = (
-        (w * cx.scale).round().max(1.0) as u32,
-        (h * cx.scale).round().max(1.0) as u32,
+        (area.size.width.0 * cx.scale).round().max(1.0) as u32,
+        (area.size.height.0 * cx.scale).round().max(1.0) as u32,
     );
     let mut target = shader.target.borrow_mut();
     let generation = gfx::generation();
@@ -377,38 +508,161 @@ pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
             .map_err(|e| log::warn!("<Shader>: {e}"))
             .ok();
     }
+    target.as_ref().map(|_| area)
+}
+
+/// Renders the shader if its picture is stale (always when it reads an
+/// input) and draws it over `area`.
+fn finish(cx: &mut DrawCx<'_>, state: &ViewState, area: Bounds<Points>) {
+    let Some(shader) = state.shader.as_ref() else {
+        return;
+    };
+    let Some(fill) = &shader.fill else { return };
+    let Some(program) = shaders(cx.gfx, fill.program) else {
+        return;
+    };
+    let mut target = shader.target.borrow_mut();
     let Some(t) = target.as_mut() else { return };
-    if !t.fresh {
+    let live = shader.effect || fill.samples(ShaderInput::Backdrop);
+    if !t.fresh || live {
+        let backdrop = match std::mem::take(&mut t.backdrop) {
+            true => t.inputs[1].clone(),
+            false => None,
+        };
+        let content = match fill.samples(ShaderInput::Content) && shader.effect {
+            true => t.inputs[0].clone(),
+            false => None,
+        };
+        let size = state.frame.size;
         let time = shader.started.map_or(0.0, |s| s.elapsed().as_secs_f32());
-        if let Err(e) = render(cx, t, &program, shader, (w, h), time) {
+        let inputs = [content, backdrop];
+        if let Err(e) = render(cx, t, &program, shader, size, area, &inputs, time) {
             log::warn!("<Shader>: {e}");
             return;
         }
         t.fresh = true;
     }
-    // The fill follows the view's corners, as a background does.
-    let radii = state.radii();
-    let rounded = radii.iter().any(|&r| r > 0.0);
-    if rounded {
-        cx.push_clip_rounded(crate::geom::rect(0.0, 0.0, w, h), radii);
-    }
+    let (x, y) = (area.origin.x.0, area.origin.y.0);
+    let (w, h) = (area.size.width.0, area.size.height.0);
     // SAFETY: a COM call on the live context with a bitmap of its device.
     unsafe {
         cx.dc.DrawBitmap(
             &t.bitmap,
-            Some(&crate::render::rect_f(0.0, 0.0, w, h)),
+            Some(&crate::render::rect_f(x, y, w, h)),
             1.0,
             D2D1_INTERPOLATION_MODE_LINEAR,
             None,
             None,
         )
     };
-    if rounded {
-        cx.pop();
-    }
 }
 
-fn make_target(gfx: &Gfx, size: (u32, u32), generation: u64) -> windows::core::Result<Target> {
+/// Copies what is behind a view whose shader reads it, before the view
+/// draws anything: its own background is not behind it.
+pub(crate) fn take_backdrop(cx: &mut DrawCx<'_>, state: &ViewState) {
+    let Some(shader) = state.shader.as_ref() else {
+        return;
+    };
+    let samples = shader
+        .fill
+        .as_ref()
+        .is_some_and(|f| f.samples(ShaderInput::Backdrop));
+    if !samples {
+        return;
+    }
+    let Some(area) = prepare(cx, state) else {
+        return;
+    };
+    let mut target = shader.target.borrow_mut();
+    let Some(t) = target.as_mut() else { return };
+    let Some(input) = t.input(cx.gfx, 1, cx.scale) else {
+        return;
+    };
+    t.backdrop = copy_backdrop(cx, &input, area);
+}
+
+/// Copies what the pass drew so far under `area` (the view's points, at
+/// the context's transform) into `input`, transparent where the target
+/// has nothing (beyond the window, a pass drawn offscreen). False when
+/// the copy failed.
+fn copy_backdrop(cx: &mut DrawCx<'_>, input: &Input, area: Bounds<Points>) -> bool {
+    // SAFETY: COM calls on the live device; the texture is not drawn with.
+    unsafe {
+        if let Ok(context) = cx.gfx.d3d.GetImmediateContext() {
+            context.ClearRenderTargetView(&input.target, &[0.0, 0.0, 0.0, 0.0]);
+        }
+    }
+    if !cx.backdrop {
+        return true;
+    }
+    let Some((x, y, _, _)) = cx.transform.bounds(
+        area.origin.x.0,
+        area.origin.y.0,
+        area.size.width.0,
+        area.size.height.0,
+    ) else {
+        return false;
+    };
+    let scale = cx.scale;
+    // Layers pushed reach the target when they pop: the copy is made while
+    // they are closed.
+    cx.flatten(|dc| {
+        // SAFETY: COM calls on the live context, its target and the
+        // input's bitmap; the pending drawing is flushed first.
+        unsafe {
+            if dc.Flush(None, None).is_err() {
+                return false;
+            }
+            let Some(target) = dc
+                .GetTarget()
+                .ok()
+                .and_then(|t| t.cast::<ID2D1Bitmap1>().ok())
+            else {
+                return false;
+            };
+            let window = target.GetPixelSize();
+            let px = input.bitmap.GetPixelSize();
+            let (x, y) = ((x * scale).round() as i64, (y * scale).round() as i64);
+            let left = x.clamp(0, window.width as i64);
+            let top = y.clamp(0, window.height as i64);
+            let right = (x + px.width as i64).clamp(0, window.width as i64);
+            let bottom = (y + px.height as i64).clamp(0, window.height as i64);
+            if right <= left || bottom <= top {
+                return true;
+            }
+            input
+                .bitmap
+                .CopyFromBitmap(
+                    Some(&D2D_POINT_2U {
+                        x: (left - x) as u32,
+                        y: (top - y) as u32,
+                    }),
+                    &target,
+                    Some(&D2D_RECT_U {
+                        left: left as u32,
+                        top: top as u32,
+                        right: right as u32,
+                        bottom: bottom as u32,
+                    }),
+                )
+                .map_err(|e| log::debug!("<Shader>: backdrop not copied: {e}"))
+                .is_ok()
+        }
+    })
+}
+
+/// A texture of `size` pixels Direct3D renders into and samples, and a
+/// Direct2D bitmap of it (`scale` pixels per point, with `options`).
+fn texture(
+    gfx: &Gfx,
+    size: (u32, u32),
+    scale: f32,
+    options: D2D1_BITMAP_OPTIONS,
+) -> windows::core::Result<(
+    ID3D11ShaderResourceView,
+    ID3D11RenderTargetView,
+    ID2D1Bitmap1,
+)> {
     let desc = D3D11_TEXTURE2D_DESC {
         Width: size.0,
         Height: size.1,
@@ -429,9 +683,12 @@ fn make_target(gfx: &Gfx, size: (u32, u32), generation: u64) -> windows::core::R
         let mut texture: Option<ID3D11Texture2D> = None;
         gfx.d3d.CreateTexture2D(&desc, None, Some(&mut texture))?;
         let texture = texture.ok_or_else(fail)?;
+        let mut target = None;
+        gfx.d3d
+            .CreateRenderTargetView(&texture, None, Some(&mut target))?;
         let mut view = None;
         gfx.d3d
-            .CreateRenderTargetView(&texture, None, Some(&mut view))?;
+            .CreateShaderResourceView(&texture, None, Some(&mut view))?;
         let surface: IDXGISurface = texture.cast()?;
         let bitmap = gfx.dc.CreateBitmapFromDxgiSurface(
             &surface,
@@ -440,25 +697,32 @@ fn make_target(gfx: &Gfx, size: (u32, u32), generation: u64) -> windows::core::R
                     format: DXGI_FORMAT_B8G8R8A8_UNORM,
                     alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
                 },
-                // Pixels per DIP as the context draws: the bitmap covers the
-                // view's points.
-                dpiX: 96.0,
-                dpiY: 96.0,
-                bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+                dpiX: 96.0 * scale,
+                dpiY: 96.0 * scale,
+                bitmapOptions: options,
                 colorContext: std::mem::ManuallyDrop::new(None),
             }),
         )?;
-        Ok(Target {
-            generation,
-            size,
-            view: view.ok_or_else(fail)?,
-            bitmap,
-            fresh: false,
-            buffers: [None, None, None],
-            images: Vec::new(),
-            sampler: None,
-        })
+        Ok((view.ok_or_else(fail)?, target.ok_or_else(fail)?, bitmap))
     }
+}
+
+fn make_target(gfx: &Gfx, size: (u32, u32), generation: u64) -> windows::core::Result<Target> {
+    // Pixels per DIP as the context draws: the bitmap is drawn over the
+    // area's points.
+    let (_, view, bitmap) = texture(gfx, size, 1.0, D2D1_BITMAP_OPTIONS_NONE)?;
+    Ok(Target {
+        generation,
+        size,
+        view,
+        bitmap,
+        fresh: false,
+        buffers: [None, None, None],
+        images: Vec::new(),
+        sampler: None,
+        inputs: [None, None],
+        backdrop: false,
+    })
 }
 
 fn fail() -> windows::core::Error {
@@ -523,30 +787,45 @@ fn image_view(
     }
 }
 
+/// Renders the shader over `area` of a view of `size`, with the content's
+/// and the backdrop's textures (`inputs`) where it has them.
+#[allow(clippy::too_many_arguments)]
 fn render(
     cx: &mut DrawCx<'_>,
     t: &mut Target,
     program: &Program,
     shader: &ShaderState,
-    (w, h): (f32, f32),
+    size: Size<Points>,
+    area: Bounds<Points>,
+    inputs: &[Option<Input>; 2],
     time: f32,
 ) -> windows::core::Result<()> {
     let gfx = cx.gfx;
-    let size = Size::new(Points(w), Points(h));
-    let nsh = shader::nsh_buffer(size, cx.scale, time, Percentage(0.0));
-    let images: Vec<(usize, Size<DevicePixels>)> = shader
+    let nsh = shader::nsh_buffer(size, cx.scale, time, Percentage(shader.progress));
+    let view = Bounds::new(Point::default(), size);
+    let px = Size::new(DevicePixels(t.size.0 as i32), DevicePixels(t.size.1 as i32));
+    let mut rects: Vec<(ShaderInput, Bounds<Points>, Size<DevicePixels>)> = shader
         .images
         .iter()
         .enumerate()
         .filter_map(|(slot, f)| {
             let (w, h) = f.as_ref()?.size();
             Some((
-                slot,
+                ShaderInput::Image(slot as u8),
+                view,
                 Size::new(DevicePixels(w as i32), DevicePixels(h as i32)),
             ))
         })
         .collect();
-    let frame = shader::frame_buffer(size, &images);
+    for (input, texture) in [ShaderInput::Content, ShaderInput::Backdrop]
+        .into_iter()
+        .zip(inputs)
+    {
+        if texture.is_some() {
+            rects.push((input, area, px));
+        }
+    }
+    let frame = shader::frame_buffer_of(area, &rects);
     t.buffers = [Some(buffer(gfx, &nsh)?), Some(buffer(gfx, &frame)?), None];
     if !shader.uniforms.is_empty() {
         t.buffers[2] = Some(buffer(gfx, &shader.uniforms)?);
@@ -554,9 +833,20 @@ fn render(
     // Each image's texture, made once per picture.
     let mut views = Vec::with_capacity(program.textures.len());
     for input in &program.textures {
-        let ShaderInput::Image(slot) = *input else {
-            views.push(None);
-            continue;
+        let slot = match *input {
+            ShaderInput::Image(slot) => slot,
+            ShaderInput::Content => {
+                views.push(inputs[0].as_ref().map(|i| i.view.clone()));
+                continue;
+            }
+            ShaderInput::Backdrop => {
+                views.push(inputs[1].as_ref().map(|i| i.view.clone()));
+                continue;
+            }
+            _ => {
+                views.push(None);
+                continue;
+            }
         };
         let slot = slot as usize;
         let Some(frame) = shader.images.get(slot).cloned().flatten() else {
