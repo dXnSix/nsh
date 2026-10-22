@@ -326,6 +326,10 @@ fn environment(width: f32, height: f32, dark: bool, pixel_ratio: f32) -> Environ
 fn page() -> Environment {
     PAGE.with(Cell::get).unwrap_or(Environment {
         os: Os::Web,
+        // Shaders fill views with WebGL 2 (`web/nsh.js`).
+        shaders: nsh_core::shader::ShaderSupport::fills(
+            nsh_core::shader::ShaderLanguage::GlslEs300,
+        ),
         ..Environment::default()
     })
 }

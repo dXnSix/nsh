@@ -627,8 +627,7 @@ fn border_style(s: BorderStyle) -> &'static str {
 
 fn kind_name(kind: ViewKind) -> &'static str {
     match kind {
-        // No shaders drawn: a shader view is a view.
-        ViewKind::View | ViewKind::Shader => "view",
+        ViewKind::View => "view",
         ViewKind::Text => "text",
         ViewKind::Image => "image",
         ViewKind::Scroll => "scroll",
@@ -639,10 +638,75 @@ fn kind_name(kind: ViewKind) -> &'static str {
         ViewKind::HeaderItem => "header",
         ViewKind::InputAccessory => "accessory",
         ViewKind::Canvas => "canvas",
+        ViewKind::Shader => "shader",
         ViewKind::WebView => "web",
         ViewKind::Native => "native",
         ViewKind::Video => "video",
     }
+}
+
+/// A shader's program for WebGL 2: `{ vertex, fragment, blocks: [[name,
+/// buffer]], samplers: [[name, input]] }`, or `null` without GLSL.
+fn shader_program(program: &nsh_core::shader::ShaderProgram) -> String {
+    let nsh_core::shader::ProgramCode::Glsl(glsl) = &program.code else {
+        return "null".into();
+    };
+    let mut s = String::from("{\"vertex\":");
+    push_str(&mut s, &glsl.vertex);
+    s.push_str(",\"fragment\":");
+    push_str(&mut s, &glsl.fragment);
+    s.push_str(",\"blocks\":[");
+    for (i, b) in glsl.blocks.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push('[');
+        push_str(&mut s, &b.name);
+        let _ = write!(s, ",{}]", b.buffer);
+    }
+    s.push_str("],\"samplers\":[");
+    for (i, (name, input)) in glsl.samplers.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push('[');
+        push_str(&mut s, name);
+        let _ = write!(s, ",{}]", input.index());
+    }
+    s.push_str("]}");
+    s
+}
+
+/// What a shader view draws: `{ program, time, uniforms: [32-bit words],
+/// images: [[uri, size word]] }`, or `null`.
+fn shader_fill(fill: Option<&nsh_core::shader::ShaderFill>) -> String {
+    let Some(fill) = fill else {
+        return "null".into();
+    };
+    let mut s = format!(
+        "{{\"program\":{},\"time\":{},\"uniforms\":[",
+        fill.program, fill.time
+    );
+    for (i, w) in fill.uniforms.as_chunks::<4>().0.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        let _ = write!(s, "{}", u32::from_le_bytes(*w));
+    }
+    s.push_str("],\"images\":[");
+    for (i, image) in fill.images.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push('[');
+        match &image.source {
+            Some(source) => push_str(&mut s, &source.uri),
+            None => s.push_str("null"),
+        }
+        let _ = write!(s, ",{}]", image.offset / 4);
+    }
+    s.push_str("]}");
+    s
 }
 
 fn image_uri(s: &Option<ImageSource>) -> Option<&str> {
@@ -1162,12 +1226,22 @@ pub(crate) fn encode(out: &mut Out, item: &MountItem) {
         MountItem::Refreshing { id, refreshing } => {
             out.item("ref").num(*id).bool(*refreshing).end();
         }
-        // No shaders drawn: a shader view shows its children.
-        MountItem::ShaderProgram { .. } | MountItem::Shader { .. } => {}
         MountItem::Canvas { id, drawing } => {
             out.item("cv")
                 .num(*id)
                 .raw(&crate::canvas::encode(drawing))
+                .end();
+        }
+        MountItem::ShaderProgram { program } => {
+            out.item("sp")
+                .num(program.id)
+                .raw(&shader_program(program))
+                .end();
+        }
+        MountItem::Shader { id, fill } => {
+            out.item("sh")
+                .num(*id)
+                .raw(&shader_fill(fill.as_deref()))
                 .end();
         }
         MountItem::Gestures { id, values } => {

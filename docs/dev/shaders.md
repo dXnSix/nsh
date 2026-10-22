@@ -123,13 +123,17 @@ inputs say.
 | Platform | Draws with | Where | Draws every frame |
 |---|---|---|---|
 | iOS, Mac Catalyst, macOS | Metal (`nsh-metal`: loaded with `dlopen`, programs compiled off the main thread) | a `CAMetalLayer` in the view's layer (`decor::SHADER`), shaped by the decoration as image content is | the macOS surface's frame callbacks / the iOS mounter's shader display link, while in a window |
+| Android 13+ | `RuntimeShader` (AGSL) in `ShaderBox.onDraw` | the view's canvas, over its background | `postInvalidateOnAnimation` while shown |
+| Web | WebGL 2 on one shared canvas, copied to a bitmap canvas in the view's element | the element, under its children | `requestAnimationFrame` |
 | GPUI | (draws the children) | | |
 
 On every platform the fill follows the view's corners and draws above its background, gradients and inset shadows
-and below its borders, as a background does.
+and below its borders, as a background does (Android draws the borders itself after the fill, `Decor.bordersAbove`,
+as its image views do).
 
 In-process screenshots on macOS (`nsh test --target macos`) draw each shader again into a texture the CPU reads
-(`ShaderLayer::picture`, shaped as the layer is), since `cacheDisplayInRect` does not draw a `CAMetalLayer`.
+(`ShaderLayer::picture`, shaped as the layer is), since `cacheDisplayInRect` does not draw a `CAMetalLayer`. Android's screenshots use
+`PixelCopy`: a software canvas draws no `RuntimeShader`.
 
 ## Verification
 
@@ -150,4 +154,4 @@ AGSL 0.10 MB.
 The element: `nsh-core`'s `shader::tests` (packing, bindings, images, the buffers), `nsh-engine`'s `shader` tests (a
 `.wgsl` import and `createShader` end to end: one program per shader, the packed fills, the bindings, errors and
 `shaderSupport()`) and the `paint` domain's `paint-shader` case in `tests/compat`. The platforms are checked by
-running them: `nsh test <entry> --target macos|ios` with `app.screenshot(..)` steps.
+running them: `nsh test <entry> --target macos|ios|android|web` with `app.screenshot(..)` steps.

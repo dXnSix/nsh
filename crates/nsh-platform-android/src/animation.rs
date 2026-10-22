@@ -21,6 +21,11 @@ const SHADOW_COLOR: f32 = 13.0;
 const SHADOW_RADIUS: f32 = 14.0;
 /// Canvas animated value slot `n` is `CANVAS_ARG + n` (a color as ARGB bits).
 const CANVAS_ARG: f32 = 1000.0;
+/// A shader's uniform component `n` is `SHADER_NUMBER + n` (a number) or
+/// `SHADER_COLOR + n` (a color as ARGB bits, written premultiplied from
+/// there).
+const SHADER_NUMBER: f32 = 100_000.0;
+const SHADER_COLOR: f32 = 200_000.0;
 /// A color value as Java's ARGB bits.
 fn argb(value: AnimationValue) -> f32 {
     match value {
@@ -220,8 +225,6 @@ impl UiAnimation {
             let static_shadow = statics.map_or(Shadow::DEFAULT, |s| s.1);
             for &(prop, node) in bindings {
                 match prop {
-                    // No shaders drawn.
-                    AnimationProp::ShaderUniform(_) => {}
                     AnimationProp::BorderColor | AnimationProp::Color => {
                         let code = if prop == AnimationProp::Color {
                             TEXT_COLOR
@@ -259,6 +262,15 @@ impl UiAnimation {
                             other => other.number(),
                         };
                         out.extend_from_slice(&[v, CANVAS_ARG + k as f32, value]);
+                    }
+                    AnimationProp::ShaderUniform(k) => {
+                        let (code, value) = match self.graph.eval(node) {
+                            AnimationValue::Color(c) => {
+                                (SHADER_COLOR, f32::from_bits(c.rotate_right(8)))
+                            }
+                            other => (SHADER_NUMBER, other.number()),
+                        };
+                        out.extend_from_slice(&[v, code + k as f32, value]);
                     }
                     AnimationProp::Transform(i) => {
                         if let Some(o) = overrides.get_mut(i as usize) {

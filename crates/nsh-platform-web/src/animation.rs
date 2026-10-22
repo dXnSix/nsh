@@ -176,8 +176,6 @@ impl UiAnimation {
             let static_shadow = statics.map_or(Shadow::DEFAULT, |s| s.1);
             for &(prop, node) in bindings {
                 match prop {
-                    // No shaders drawn.
-                    AnimationProp::ShaderUniform(_) => {}
                     // `nsh.js` puts these on the border overlay and the
                     // text's runs.
                     AnimationProp::BorderColor => {
@@ -211,6 +209,19 @@ impl UiAnimation {
                             &format!("canvas:{k}"),
                             &value_css(self.graph.eval(node)),
                         );
+                    }
+                    // Words of the uniforms from `k`: a number, or a color's
+                    // premultiplied components.
+                    AnimationProp::ShaderUniform(k) => {
+                        let value = match self.graph.eval(node) {
+                            AnimationValue::Color(c) => {
+                                let [r, g, b, a] =
+                                    nsh_core::shader::premultiplied(nsh_core::Color(c));
+                                format!("{r},{g},{b},{a}")
+                            }
+                            other => other.number().to_string(),
+                        };
+                        out.animation(view, &format!("shader:{k}"), &value);
                     }
                     AnimationProp::Transform(i) => {
                         if let Some(o) = overrides.get_mut(i as usize) {
