@@ -705,6 +705,9 @@ pub struct Core<M: TextEngine> {
     sticky_changed: bool,
     /// The warning about `bottom` / `right` sticky insets was logged.
     sticky_warned: bool,
+    /// The warning about animated insets of views that are not sticky was
+    /// logged.
+    inset_warned: bool,
     /// Live screens, modals and header items.
     roots: Vec<Key>,
     /// Attached input accessories by `nativeID`.
@@ -825,6 +828,7 @@ impl<M: TextEngine> Core<M> {
             sticky_scrollers: Vec::new(),
             sticky_changed: false,
             sticky_warned: false,
+            inset_warned: false,
             roots: Vec::new(),
             accessories: Default::default(),
             header_heights: (Points(44.0), Points(96.0)),
@@ -1970,6 +1974,8 @@ impl<M: TextEngine> Core<M> {
         if view_changed {
             flags |= dirty::VIEW;
         }
+        // A sticky view's animated inset is part of its range.
+        self.sticky_changed |= animation_changed && self.nodes[key as usize].sticky.is_some();
         if animation_changed {
             flags |= dirty::ANIMATION;
         }
@@ -2406,10 +2412,17 @@ impl<M: TextEngine> Core<M> {
             }
             Prop::StickyOffset(offset) => {
                 if let Some(list) = node.list.as_mut() {
+                    list.set_sticky_node(None);
                     list.set_sticky_offset(offset.0);
                     if list.parent {
                         self.warn_ignored(key);
                     }
+                }
+            }
+            Prop::StickyOffsetNode(node_id) => {
+                if let Some(list) = node.list.as_mut() {
+                    list.set_sticky_offset(0.0);
+                    list.set_sticky_node(node_id);
                 }
             }
             Prop::ListContent(content) => {
@@ -3665,6 +3678,23 @@ impl<M: TextEngine> Core<M> {
             }
             if flags & dirty::ANIMATION != 0 {
                 let mut bindings = node.animated.clone();
+                // A sticky view's animated inset is its scroll view's
+                // (`sticky.rs`); other views' insets do not animate.
+                if bindings
+                    .iter()
+                    .any(|(p, _)| matches!(p, AnimationProp::StickyTop | AnimationProp::StickyLeft))
+                {
+                    if node.sticky.is_none() && !self.inset_warned {
+                        self.inset_warned = true;
+                        log::warn!(
+                            target: "js",
+                            "an animated `top` / `left` only moves a `position: sticky` view's sticking point; it is ignored on view {id}"
+                        );
+                    }
+                    bindings.retain(|(p, _)| {
+                        !matches!(p, AnimationProp::StickyTop | AnimationProp::StickyLeft)
+                    });
+                }
                 if let Some(d) = &node.drawing {
                     bindings.extend(
                         d.slots
@@ -5373,6 +5403,7 @@ impl<M: TextEngine> Core<M> {
                     cell: r.cell,
                     start: Points(r.start),
                     end: Points(r.end),
+                    offset: r.offset,
                 })
                 .collect();
             list.sent_sticky = sticky_cells;
