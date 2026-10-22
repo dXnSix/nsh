@@ -355,7 +355,8 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// Sends each view in `sticky_views` its sticky cells: its lists' in
-    /// its viewport, and its own when it is a list.
+    /// its viewport, its own when it is a list, and its sticky views'
+    /// ([`super::sticky`]).
     pub(super) fn send_page_sticky(&mut self) {
         let mut views = std::mem::take(&mut self.sticky_views);
         views.sort_unstable();
@@ -377,6 +378,8 @@ impl<M: TextEngine> Core<M> {
                     all.extend_from_slice(&list.sent_sticky);
                 }
             }
+            // And its `position: sticky` views'.
+            all.extend_from_slice(&scroll.view_sticky);
             all.sort_by_key(|r| r.cell);
             if all == scroll.page_sticky {
                 continue;

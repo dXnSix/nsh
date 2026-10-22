@@ -53,7 +53,7 @@
   that are props in React Native (`line-clamp-*`, `truncate`, `whitespace-nowrap`, `pointer-events-*`, `object-*`,
   `caret-*`) lose to explicit props; `placeholder:text-*` / `selection:bg-*` lose to the `placeholderColor` /
   `selectionColor` style keys. Not supported, so unknown: `peer-*`, pseudo-elements, arbitrary CSS properties, and every
-  utility without a native meaning (`sticky`, `order-*`, `transform-3d`, `select-all`, `border-double`, intrinsic sizes,
+  utility without a native meaning (`order-*`, `transform-3d`, `select-all`, `border-double`, intrinsic sizes,
   `snap-*`, `scroll-*`, `overscroll-*`, `touch-*`, `isolate`, `box-content`) or without CSS in Tailwind (a negative
   where Tailwind has none: `-gap-4`, `-p-2`; fractions and `full` on padding, margin and gaps; non-integer `z-*`; bare
   `inset-shadow` without a theme value). Rendering hints are accepted and do nothing (`ignored` in
@@ -88,6 +88,12 @@
   `fix_view`: a layout root in a box the size of its root view, its native view in that root view above its children,
   shown while the views around it are, as `Kind::Overlay`'s): at once while it is in no parent, else as the commit starts
   (`sync_fixed`), and a view in its parent again when its style drops it. Other elements are laid out `absolute`.
+  `sticky` (`sticky`, `position: "sticky"`) is laid out `relative` with its insets kept as where it sticks
+  (`Node::sticky`): after layout the core gives it a range of travel in the offsets of the nearest scroll view or own
+  list around it (from its place less its `top`, or `left` in a horizontal one, to where its end meets its parent's
+  content box) and sends it with that view's sticky list rows (`core/sticky.rs`, `MountItem::StickyCells`), which the
+  platforms pin on every scroll. It draws above its siblings of the same `zIndex` (`Node::stack_rank`), as above a
+  page's in-flow boxes. `bottom` / `right` stickiness and a zoomable scroll view are not supported.
 - **`pointer-events-*` classes** inherit as CSS's `pointer-events` (the `pointerEvents` prop keeps React Native's
   subtree meaning, and wins): a view that is `none` by its own class or the nearest one above mounts `box-none` when a
   `pointer-events-auto` inside it is a target, `none` at the top of what it blocks, and nothing below that

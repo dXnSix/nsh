@@ -15325,3 +15325,155 @@ fn list_cells_take_the_rounded_cross_size() {
         assert_eq!(frame_of(&batch, cell).unwrap().size.width, px(101.0));
     }
 }
+
+/// A view of `height` in `parent`, with `style` on top.
+fn child_view(
+    id: NodeId,
+    parent: NodeId,
+    height: f32,
+    style: &[(&str, StyleValue<'_>)],
+) -> Vec<Op> {
+    let mut props = vec![("height", StyleValue::Number(height))];
+    props.extend_from_slice(style);
+    vec![
+        Op::Create { id, tag: Tag::View },
+        style_op(id, &props),
+        Op::Insert {
+            parent,
+            child: id,
+            before: None,
+        },
+    ]
+}
+
+#[test]
+fn sticky_views_stick_in_the_viewport_of_the_scroll_view_around_them() {
+    let mut c = core();
+    let sticky = [
+        ("position", StyleValue::Str("sticky")),
+        ("top", StyleValue::Number(10.0)),
+    ];
+    let mut ops = vec![
+        Op::Create {
+            id: 2,
+            tag: Tag::Scroll,
+        },
+        style_op(2, &[("height", StyleValue::Number(400.0))]),
+    ];
+    // A 100 pt header, a sticky bar of 40 sticking 10 below the top, then
+    // a section of 500 whose heading (0 below its top) sticks within it.
+    ops.extend(child_view(3, 2, 100.0, &[]));
+    ops.extend(child_view(4, 2, 40.0, &sticky));
+    ops.extend(child_view(6, 2, 500.0, &[]));
+    ops.extend(child_view(
+        7,
+        6,
+        40.0,
+        &[
+            ("position", StyleValue::Str("sticky")),
+            ("top", StyleValue::Number(0.0)),
+        ],
+    ));
+    ops.extend(child_view(8, 6, 460.0, &[]));
+    ops.extend(child_view(5, 2, 2000.0, &[]));
+    ops.push(Op::Insert {
+        parent: ROOT_ID,
+        child: 2,
+        before: None,
+    });
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    let pinned = sticky_of(&batch, 2).expect("the scroll view's sticky views");
+    // The bar sticks from 90 (its 100 less 10) until its bottom meets the
+    // end of the content (2640); the heading from 140 until its bottom
+    // meets its section's end (640).
+    assert!(
+        pinned.contains(&(4, 90.0, 90.0 + 2640.0 - 140.0)),
+        "{pinned:?}"
+    );
+    assert!(pinned.contains(&(7, 140.0, 140.0 + 460.0)), "{pinned:?}");
+    // They draw above their later siblings: made in one go, the views go
+    // in in that order.
+    let order = |parent: NodeId| -> Vec<NodeId> {
+        batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::Insert {
+                    parent: p,
+                    child,
+                    before: None,
+                } if *p == parent => Some(*child),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(order(2), [3, 6, 5, 4]);
+    assert_eq!(order(6), [8, 7]);
+    // Its insets say where it sticks: it is laid out in the flow.
+    assert_eq!(frame_of(&batch, 4), Some(rect(0.0, 100.0, 320.0, 40.0)));
+    // A view added later goes below the bar.
+    apply(&mut c, child_view(9, 2, 10.0, &[]));
+    let batch = c.commit().unwrap();
+    assert!(batch.items.iter().any(|i| matches!(
+        i,
+        MountItem::Insert {
+            parent: 2,
+            child: 9,
+            before: Some(4)
+        }
+    )));
+    // No longer sticky: the scroll view gets the heading alone.
+    c.apply(style_op(4, &[("height", StyleValue::Number(40.0))]))
+        .unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(sticky_of(&batch, 2), Some(vec![(7, 140.0, 600.0)]));
+}
+
+#[test]
+fn sticky_views_in_a_horizontal_scroll_view_stick_at_their_left() {
+    let mut c = core();
+    let mut ops = vec![
+        Op::Create {
+            id: 2,
+            tag: Tag::Scroll,
+        },
+        Op::SetProp {
+            id: 2,
+            prop: Prop::Horizontal(true),
+        },
+        style_op(2, &[("height", StyleValue::Number(100.0))]),
+    ];
+    for (id, style) in [
+        (3, vec![("width", StyleValue::Number(50.0))]),
+        (
+            4,
+            vec![
+                ("width", StyleValue::Number(30.0)),
+                ("position", StyleValue::Str("sticky")),
+                ("left", StyleValue::Number(0.0)),
+                // Not where it sticks in a horizontal scroll view.
+                ("top", StyleValue::Number(5.0)),
+            ],
+        ),
+        (5, vec![("width", StyleValue::Number(1000.0))]),
+    ] {
+        ops.extend([
+            Op::Create { id, tag: Tag::View },
+            style_op(id, &style),
+            Op::Insert {
+                parent: 2,
+                child: id,
+                before: None,
+            },
+        ]);
+    }
+    ops.push(Op::Insert {
+        parent: ROOT_ID,
+        child: 2,
+        before: None,
+    });
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    assert_eq!(sticky_of(&batch, 2), Some(vec![(4, 50.0, 1050.0)]));
+}

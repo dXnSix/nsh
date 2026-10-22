@@ -1206,7 +1206,7 @@ fn classes_without_a_native_meaning_are_unknown() {
     // What Tailwind CSS generates that NSH cannot do: unknown, never a
     // different meaning.
     all_unknown(
-        "sticky transform-3d order-1 order-first -order-2 order-[3] select-all border-double outline-double",
+        "transform-3d order-1 order-first -order-2 order-[3] select-all border-double outline-double",
     );
     all_unknown("w-fit h-min size-max min-w-fit min-h-max max-w-min max-h-fit w-max");
     all_unknown(
