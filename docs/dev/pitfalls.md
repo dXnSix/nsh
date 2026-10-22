@@ -391,6 +391,11 @@ Things that were found the hard way. Read the section of the area you change bef
   Safari: the wasm twice in 4 of 11 cold loads on Wi-Fi, each time the runtime asked before the preload was done;
   Chromium hands it over). The published page starts its downloads with `fetch` in a head script instead
   (`web::page`, `fetches`).
+- **A scroll view's smooth wheel and key scrolling is nsh's glide, which no browser call cancels**: `wheel` and the
+  scroll keys are prevented and `scrollSmoothly` moves the view on animation frames, so an instant `scrollTo` lasted
+  one frame and the glide's next one put its offset back (Chromium 141: a 900 px wheel notch, `scrollTo(0)` 50 ms
+  later, then 778, 848, … 900). Commands stop the glide first (`stopGlide`) and `op_sb` moves it. Headless Chrome
+  (141, 155) scrolls a wheel's delta at once by itself: the scroll that animates there is the glide.
 
 ## Testing on simulators and emulators
 

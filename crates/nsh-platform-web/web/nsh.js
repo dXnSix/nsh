@@ -1972,6 +1972,14 @@ class Player {
       el.scrollTo({ left: el._smooth[0], top: el._smooth[1], behavior: "smooth" });
       return;
     }
+    // So does a glide of the wheel's or the keys' (`scrollSmoothly`):
+    // its next frame would put the offset back.
+    const a = el._glide;
+    if (a) {
+      a.x += dx;
+      a.y += dy;
+      if (a.at) a.at = [a.at[0] + dx, a.at[1] + dy];
+    }
     el.scrollLeft += dx;
     el.scrollTop += dy;
   }
@@ -3436,12 +3444,14 @@ class Player {
       case "scrollTo":
         if (!el) break;
         el._applied++;
+        this.stopGlide(el);
         el._smooth = args[2] ? [args[0], args[1]] : null;
         el.scrollTo({ left: args[0], top: args[1], behavior: args[2] ? "smooth" : "instant" });
         break;
       case "scrollToEnd":
         if (!el) break;
         el._applied++;
+        this.stopGlide(el);
         el.scrollTo({ left: el._horizontal ? el.scrollWidth : 0, top: el._horizontal ? 0 : el.scrollHeight, behavior: args[0] ? "smooth" : "instant" });
         break;
       case "zoomTo": if (el) this.zoomCommand(el, ...args); break;
@@ -4484,6 +4494,18 @@ class Player {
       a.timer = 0;
       settle();
     }, 200);
+  }
+
+  /** Stops `el`'s glide where it is for a scroll command of the core's, as
+   * the native backends interrupt theirs: left running, its next frame
+   * would put the offset back. */
+  stopGlide(el) {
+    const a = el._glide;
+    if (!a) return;
+    cancelAnimationFrame(a.frame);
+    clearTimeout(a.timer);
+    el._glide = null;
+    this.drive(el, -1);
   }
 
   /** The snap point of a snapping view next to where it is towards `dir`
