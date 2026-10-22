@@ -521,11 +521,38 @@ function EntryRow(props: { entry: Entry; label: string }) {
   );
 }
 
+/** A week's heading in the page's first list: it sticks to the top of the
+ * page while its rows scroll under it. */
+function WeekHeading(props: { week: number }) {
+  return (
+    <View
+      style={{
+        height: 34,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+        paddingHorizontal: 4,
+        // Opaque: rows scroll under it while it sticks.
+        backgroundColor: colors.background,
+      }}
+    >
+      <Text style={{ fontSize: 13, fontWeight: "700", color: colors.accent }}>Week {props.week}</Text>
+      <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
+    </View>
+  );
+}
+
+type PageRow = Entry | { week: number };
+
 /** Headers and two lists on one page: the lists have no scroll view of
  * their own (`viewport="parent"`), the page scrolls them as one, and only
- * their rows near its viewport exist. */
+ * their rows near its viewport exist. The first list's week headings stick
+ * to the top of the page. */
 function Page() {
-  const recent = entries(0, 200);
+  // 200 entries, a week heading before every 20.
+  const recent: PageRow[] = entries(0, 200).flatMap((e) => (e.id % 20 === 0 ? [{ week: e.id / 20 + 1 }, e] : [e]));
+  const weeks = recent.flatMap((row, i) => ("week" in row ? [i] : []));
+  const indexOf = (id: number) => recent.findIndex((row) => "id" in row && row.id === id);
   const archive = signal(entries(0, 100));
   let list!: YNode;
   const loadMore = () => {
@@ -546,13 +573,17 @@ function Page() {
             rows near its viewport exist, in recycled cells.
           </Text>
           <View style={{ flexDirection: "row", gap: 8 }}>
-            <Action label="Recent 150" icon="arrow-down" onPress={() => list.scrollToIndex({ index: 149, viewPosition: 0.5 })} />
+            <Action label="Recent 150" icon="arrow-down" onPress={() => list.scrollToIndex({ index: indexOf(149), viewPosition: 0.5 })} />
             <Action label="End of recent" onPress={() => list.scrollToEnd()} />
           </View>
         </Section>
         {heading("Recent", "200 rows")}
-        <List ref={list} viewport="parent" each={recent} estimatedItemSize={56} contentStyle={{ gap: 6 }}>
-          {(entry) => <EntryRow entry={entry()} label="Recent" />}
+        <List ref={list} viewport="parent" each={recent} estimatedItemSize={56} stickyHeaderIndices={weeks} contentStyle={{ gap: 6 }}>
+          {(row) => (
+            <If when={"week" in row()} else={<EntryRow entry={row() as Entry} label="Recent" />}>
+              <WeekHeading week={(row() as { week: number }).week} />
+            </If>
+          )}
         </List>
         {heading("Archive", `${archive().length} rows`)}
         <List
