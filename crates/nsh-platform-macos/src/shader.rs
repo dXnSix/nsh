@@ -547,9 +547,10 @@ fn take_pictures(view: &NshView) {
         && let (Some(root), Some(layer)) = (surface.root.ns().layer(), view.ns().layer())
     {
         // What is behind: the surface without the view (and what it holds).
-        let at = view
-            .ns()
-            .convertRect_toView(view.ns().bounds(), Some(surface.root.ns()));
+        // Where the view is in the layer tree `render` draws: while a scroll
+        // runs, AppKit has moved the views before it moves their layers, and
+        // the views' place would picture what is a scroll step away.
+        let at = layer.convertRect_toLayer(layer.bounds(), Some(&root));
         let rgba = crate::surface::quiet(|| {
             let opacity = layer.opacity();
             layer.setOpacity(0.0);
