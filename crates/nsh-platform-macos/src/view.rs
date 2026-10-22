@@ -975,6 +975,11 @@ impl NshView {
         self.ivars().state.borrow_mut()
     }
 
+    /// Its state, to change, unless it is in use.
+    pub(crate) fn try_state_mut(&self) -> Option<RefMut<'_, ViewState>> {
+        self.ivars().state.try_borrow_mut().ok()
+    }
+
     /// Node id.
     pub(crate) fn id(&self) -> NodeId {
         self.state().id
@@ -1081,6 +1086,9 @@ impl NshView {
         if let Some(layer) = self.content_layer() {
             layer.setNeedsDisplay();
         }
+        // An effect's picture of it is taken again (it may have been put
+        // off while out of sight, `Mounter::draw_when_shown`).
+        crate::shader::ui_changed(self);
     }
 
     /// The layer its content is drawn in (made on first use).
