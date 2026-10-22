@@ -33,6 +33,9 @@ use objc2_ui_kit::{UIColor, UIImage, UIView};
 /// always draws in front, looks the same and needs no shape.
 pub(crate) const BEHIND: CGFloat = -1024.0;
 const BORDER_BEHIND: CGFloat = BEHIND + 1.0;
+/// A shader effect's result: over the children it draws (their content
+/// view, hidden), below borders and outlines in front.
+pub(crate) const EFFECT: CGFloat = 512.0;
 /// A shader's fill: above the background, gradients and inset shadows,
 /// below borders drawn behind the children (as a background is).
 pub(crate) const SHADER: CGFloat = BEHIND + 0.75;
@@ -80,6 +83,9 @@ pub(crate) struct Decor {
     /// A shader view's `CAMetalLayer` (`crate::shader`), shaped as image
     /// content is: the fill follows the view's corners.
     shader: Option<Retained<CALayer>>,
+    /// A shader effect: its children live in the content view, which the
+    /// effect hides while its shader draws them.
+    effect: bool,
 }
 
 impl Decor {
@@ -111,6 +117,17 @@ impl Decor {
         }
         self.shader = layer;
         true
+    }
+
+    /// The view is a shader effect: its children go into the content view
+    /// from the next [`Decor::apply`].
+    pub(crate) fn set_effect(&mut self) {
+        self.effect = true;
+    }
+
+    /// The content view holding a shader effect's children, once made.
+    pub(crate) fn content(&self) -> Option<&UIView> {
+        self.content.as_deref()
     }
 
     /// True if [`Decor::apply`] must run again when the view is resized.
@@ -387,7 +404,7 @@ impl Decor {
         });
         let corners = corner_mask(&raw);
         let outside = shadow || crate::visual::draws_outside(style);
-        let content = kind == Kind::View && style.overflow_hidden && outside;
+        let content = (kind == Kind::View && style.overflow_hidden && outside) || self.effect;
 
         // Text draws into the layer's own contents, below every sublayer: it
         // cannot have a fill layer, so its odd corners clip it instead.
@@ -514,6 +531,13 @@ impl Decor {
         // Children in a content view: it clips, the view casts the shadow.
         self.set_content(view, content, mtm);
         let border_layer = match &self.content {
+            // An effect's content view only holds the children (it hides
+            // them with a mask of its own): the view keeps its clipping and
+            // borders.
+            Some(c) if self.effect => {
+                c.setFrame(local);
+                layer.clone()
+            }
             Some(c) => {
                 layer.setBorderWidth(0.0);
                 c.setFrame(local);
@@ -540,7 +564,7 @@ impl Decor {
         border_layer.setBorderColor(color.as_deref());
 
         // Clipping of the view's own layer.
-        if self.content.is_none() {
+        if self.content.is_none() || self.effect {
             let clips = kind == Kind::Scroll || (style.overflow_hidden && shared.is_some());
             layer.setMasksToBounds(clips);
             if mask {
