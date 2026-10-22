@@ -266,8 +266,8 @@ impl RootView {
             locale: current_locale(),
             // Only read for the web: iOS keys are always Apple's.
             apple_keyboard: true,
-            // No shaders drawn: a shader view shows its children.
-            shaders: nsh_core::shader::ShaderSupport::default(),
+            // Shaders fill views with Metal (`crate::shader`).
+            shaders: nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Msl),
         };
         // The embedding app's settings over the system's.
         self.ivars().host.get().apply(&mut env);

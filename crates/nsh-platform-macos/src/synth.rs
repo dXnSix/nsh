@@ -244,6 +244,15 @@ pub(crate) fn shot(window: &NSWindow) -> Result<Vec<u8>, String> {
     use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRepPropertyKey};
     use objc2_foundation::NSDictionary;
     let view = window.contentView().ok_or("the window has no content")?;
+    // A `CAMetalLayer` is not drawn in process: shaders show as pictures
+    // for the shot.
+    let pictures: Vec<_> = crate::surface::quiet(|| {
+        crate::shader::shader_views()
+            .iter()
+            .filter(|v| v.ns().window().as_deref() == Some(window))
+            .filter_map(crate::shader::picture_layer)
+            .collect()
+    });
     if let Some(layer) = view.layer() {
         crate::surface::quiet(|| order_by_z(&layer));
     }
@@ -252,6 +261,7 @@ pub(crate) fn shot(window: &NSWindow) -> Result<Vec<u8>, String> {
         .bitmapImageRepForCachingDisplayInRect(bounds)
         .ok_or("cannot make a bitmap of the window")?;
     view.cacheDisplayInRect_toBitmapImageRep(bounds, &rep);
+    crate::surface::quiet(|| pictures.iter().for_each(|l| l.removeFromSuperlayer()));
     let properties = NSDictionary::<NSBitmapImageRepPropertyKey, objc2::runtime::AnyObject>::new();
     // SAFETY: an empty property dictionary is valid for PNG.
     let data =

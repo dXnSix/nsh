@@ -124,6 +124,8 @@ impl Mounter {
                 match kind {
                     ViewKind::Input => crate::text_input::create(surface, &view),
                     ViewKind::Canvas => crate::canvas::create(&view),
+                    // Its layer is made with its first fill.
+                    ViewKind::Shader => {}
                     ViewKind::Image => crate::image::create(&view),
                     ViewKind::WebView | ViewKind::Video | ViewKind::Native => {
                         crate::native::create(surface, &view)
@@ -318,12 +320,16 @@ impl Mounter {
                     crate::scroll::refreshing(surface, view, *refreshing);
                 }
             }
-            // No shaders drawn: a shader view shows its children.
-            MountItem::ShaderProgram { .. } | MountItem::Shader { .. } => {}
             MountItem::Canvas { id, drawing } => {
                 if let Some(view) = self.get(*id) {
                     crate::canvas::set(surface, view, drawing.clone());
                     self.draw_when_shown(view, Damage::All);
+                }
+            }
+            MountItem::ShaderProgram { program } => crate::shader::program(program),
+            MountItem::Shader { id, fill } => {
+                if let Some(view) = self.get(*id) {
+                    crate::shader::set(surface, view, fill.clone());
                 }
             }
             MountItem::Gestures { id, values } => {

@@ -57,7 +57,9 @@ impl UiAnimation {
                 if moved.is_some() {
                     crate::text_input::animated(view);
                 }
-                if !canvas.is_empty() {
+                if !canvas.is_empty() && view.kind() == nsh_core::ViewKind::Shader {
+                    crate::shader::set_args(view, canvas);
+                } else if !canvas.is_empty() {
                     let damage = crate::canvas::set_args(view, canvas);
                     if damage != Damage::None {
                         mounter.draw_when_shown(view, damage);

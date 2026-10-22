@@ -130,6 +130,8 @@ pub(crate) struct ViewState {
     pub(crate) image: Option<crate::image::ImageState>,
     /// Canvas content.
     pub(crate) canvas: Option<crate::canvas::CanvasState>,
+    /// What a shader view draws.
+    pub(crate) shader: Option<crate::shader::ShaderState>,
     /// Text field (input views).
     pub(crate) input: Option<std::rc::Rc<crate::text_input::InputState>>,
     /// Hosted AppKit views.
@@ -163,6 +165,7 @@ impl ViewState {
             text: None,
             image: None,
             canvas: None,
+            shader: None,
             input: None,
             natives: Vec::new(),
             overflow: None,
@@ -1182,13 +1185,24 @@ impl NshView {
     }
 
     /// The scale of its window's backing (2 before it has one).
-    fn backing_scale(&self) -> CGFloat {
+    pub(crate) fn backing_scale(&self) -> CGFloat {
         self.ns().window().map_or(2.0, |w| w.backingScaleFactor())
+    }
+
+    /// A weak reference to it.
+    pub(crate) fn downgrade(&self) -> objc2::rc::Weak<ViewObj> {
+        objc2::rc::Weak::from_retained(&self.0)
+    }
+
+    /// The view of a weak reference, while it lives.
+    pub(crate) fn upgrade(weak: &objc2::rc::Weak<ViewObj>) -> Option<NshView> {
+        weak.load().map(NshView)
     }
 
     /// Its window or screen changed: the content layer draws at the new
     /// scale.
     fn rescale(&self) {
+        crate::shader::resized(self);
         if let Some((layer, _)) = &*self.ivars().content.borrow() {
             let scale = self.backing_scale();
             if layer.contentsScale() != scale {
@@ -1277,6 +1291,7 @@ impl NshView {
                 // A new size draws it again (`needsDisplayOnBoundsChange`).
                 layer.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), rect.size));
             }
+            crate::shader::resized(self);
         }
         self.set_layer_geometry();
     }

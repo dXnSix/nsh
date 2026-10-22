@@ -48,6 +48,9 @@ use crate::{
 /// border always is.
 pub(crate) const BEHIND: CGFloat = -1024.0;
 const BORDER_BEHIND: CGFloat = BEHIND + 1.0;
+/// A shader's fill: above the background, gradients and inset shadows,
+/// below borders drawn behind the children (as a background is).
+pub(crate) const SHADER: CGFloat = BEHIND + 0.75;
 const IN_FRONT: CGFloat = 1024.0;
 
 /// What a view is, as far as decoration goes.
@@ -131,12 +134,23 @@ pub(crate) struct Decor {
     tint: Option<(Color, Retained<CALayer>)>,
     /// Layered shadows, gradients, outline, filters.
     visual: crate::visual::Visual,
+    /// A shader view's `CAMetalLayer` (`crate::shader`), shaped as image
+    /// content is: the fill follows the view's corners.
+    shader: Option<Retained<CALayer>>,
     /// What was applied last.
     shape: Option<Box<Shape>>,
     colors: Option<Colors>,
 }
 
 impl Decor {
+    /// Shapes `layer`, a shader's, with the view from now on (the next
+    /// [`apply`] shapes it).
+    pub(crate) fn set_shader_layer(&mut self, layer: Retained<CALayer>) {
+        layer.setMasksToBounds(true);
+        self.shader = Some(layer);
+        self.shape = None;
+    }
+
     /// The image layer of an image view, made on first use (clipped on its
     /// own, so the view's layer can cast an unclipped shadow), with the
     /// picture layer inside it.
@@ -530,6 +544,19 @@ impl Decor {
                 layer.addSublayer(image);
             }
             self.fit_contents();
+        }
+        // So does a shader's fill, as a background does.
+        if let Some(content) = &self.shader {
+            set_corners(content, r, continuous);
+            if shared.is_some() {
+                // SAFETY: clearing the mask.
+                unsafe { content.setMask(None) };
+            } else {
+                let m = CAShapeLayer::new();
+                m.setPath(Some(&rounded(local, radii)));
+                // SAFETY: a fresh mask layer, owned by the shader's layer.
+                unsafe { content.setMask(Some(&m)) };
+            }
         }
 
         // Shadow. With a background the shape is known and passed as a

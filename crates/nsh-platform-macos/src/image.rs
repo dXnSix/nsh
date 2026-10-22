@@ -824,12 +824,25 @@ fn decode_svg(bytes: &[u8], d: Decoding) -> Option<Decoded> {
 
 /// A CGImage of premultiplied sRGB RGBA pixels.
 fn rgba_image(raster: &nsh_core::svg::Raster) -> Option<CFRetained<CGImage>> {
+    rgba_pixels_image(
+        raster.width as usize,
+        raster.height as usize,
+        &raster.pixels,
+    )
+}
+
+/// A CGImage of `width` × `height` premultiplied sRGB RGBA pixels, top row
+/// first.
+pub(crate) fn rgba_pixels_image(
+    width: usize,
+    height: usize,
+    rgba: &[u8],
+) -> Option<CFRetained<CGImage>> {
     use objc2_core_graphics::{
         CGBitmapContextCreate, CGBitmapContextCreateImage, CGBitmapContextGetBytesPerRow,
         CGBitmapContextGetData, CGColorSpace, CGImageAlphaInfo, CGImageByteOrderInfo,
         kCGColorSpaceSRGB,
     };
-    let (width, height) = (raster.width as usize, raster.height as usize);
     // SAFETY: a constant of CoreGraphics.
     let space = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB }))?;
     // SAFETY: CoreGraphics allocates the pixels (null data) of an RGBA
@@ -851,7 +864,7 @@ fn rgba_image(raster: &nsh_core::svg::Raster) -> Option<CFRetained<CGImage>> {
         }
         let stride = CGBitmapContextGetBytesPerRow(Some(&context));
         let pixels = std::slice::from_raw_parts_mut(data, stride * height);
-        for (row, src) in raster.pixels.chunks_exact(width * 4).enumerate() {
+        for (row, src) in rgba.chunks_exact(width * 4).enumerate().take(height) {
             pixels[row * stride..row * stride + width * 4].copy_from_slice(src);
         }
         CGBitmapContextCreateImage(Some(&context))

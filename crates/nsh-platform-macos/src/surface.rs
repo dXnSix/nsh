@@ -230,7 +230,10 @@ pub(crate) type FrameCallback = Box<dyn FnMut(&Rc<Surface>, f64) -> bool>;
 
 impl Surface {
     /// A surface with no app yet.
-    pub(crate) fn new(mtm: MainThreadMarker, environment: Environment) -> Rc<Surface> {
+    pub(crate) fn new(mtm: MainThreadMarker, mut environment: Environment) -> Rc<Surface> {
+        // Shaders fill views with Metal (`crate::shader`).
+        environment.shaders =
+            nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Msl);
         let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
         let root = NshView::new(mtm, ROOT_ID, nsh_core::ViewKind::View);
         let surface = Rc::new(Surface {
