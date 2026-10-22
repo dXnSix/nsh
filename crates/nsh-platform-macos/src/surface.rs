@@ -629,8 +629,10 @@ impl Surface {
     /// a JS frame request): while it does, a bounds commit mid-scroll
     /// lands on a live frame.
     pub(crate) fn wants_frames(&self) -> bool {
+        // An animation writing its values (they may ask for a frame: a
+        // shader's pictures) is animating.
         self.js_frame.get()
-            || self.anim.borrow().animating()
+            || self.anim.try_borrow().map_or(true, |a| a.animating())
             || !self.frame_callbacks.borrow().is_empty()
     }
 

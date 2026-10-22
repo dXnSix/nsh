@@ -314,8 +314,10 @@ pub(crate) fn ui_changed(view: &NshView) {
     }
     let mut surface = None;
     let mut ancestor = Some(view.clone());
+    // A view whose state is in use (drawing itself again) is not a shader.
     while let Some(v) = ancestor {
-        if let Some(s) = v.state_mut().shader.as_mut()
+        if let Some(mut st) = v.try_state_mut()
+            && let Some(s) = st.shader.as_mut()
             && s.effect
             && s.inputs & CONTENT != 0
         {
@@ -325,7 +327,8 @@ pub(crate) fn ui_changed(view: &NshView) {
         ancestor = v.parent_view();
     }
     for v in views() {
-        if let Some(s) = v.state_mut().shader.as_mut()
+        if let Some(mut st) = v.try_state_mut()
+            && let Some(s) = st.shader.as_mut()
             && s.inputs & BACKDROP != 0
         {
             s.stale |= BACKDROP;
@@ -426,6 +429,20 @@ fn take_pictures(view: &NshView) {
     draw(view);
 }
 
+/// Draws the layers of `layer`'s tree that are due to draw (text and
+/// canvases, which draw through a delegate): `renderInContext:` takes
+/// their contents as they are, and one marked since Core Animation's last
+/// commit (a text drawn again just now) has its old contents still.
+fn display_tree(layer: &CALayer) {
+    layer.displayIfNeeded();
+    // SAFETY: a getter; the sublayers are retained while they are drawn.
+    if let Some(sublayers) = unsafe { layer.sublayers() } {
+        for sublayer in sublayers.iter() {
+            display_tree(&sublayer);
+        }
+    }
+}
+
 /// `layer` (its views draw y down) rendered into premultiplied RGBA of
 /// `pw` × `ph` pixels, top row first: its point `origin` at the top-left.
 fn render(layer: &CALayer, origin: (f64, f64), pw: usize, ph: usize, scale: CGFloat) -> Vec<u8> {
@@ -433,6 +450,7 @@ fn render(layer: &CALayer, origin: (f64, f64), pw: usize, ph: usize, scale: CGFl
         CGBitmapContextCreate, CGColorSpace, CGContext, CGImageAlphaInfo, CGImageByteOrderInfo,
         kCGColorSpaceSRGB,
     };
+    display_tree(layer);
     let mut out = vec![0u8; pw * ph * 4];
     // SAFETY: `out` holds `pw * 4 * ph` bytes and outlives the context; the
     // layer is rendered on the main thread, which owns it.
