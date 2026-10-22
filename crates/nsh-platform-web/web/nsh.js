@@ -141,6 +141,10 @@ const KEYFRAMES = `
 /* A list with sticky cells keeps their z-index to itself: above its other cells, never over the views after it. */
 .nsh-sticky { isolation: isolate; }
 .nsh-fill { position: absolute; left: 0; top: 0; width: 100%; height: 100%; border: 0; }
+/* A shader effect (op_sh): its children show through its shader's canvas, over them; at opacity 0 they keep their
+   pointer events. */
+.nsh-fx > :not(.nsh-fx-out) { opacity: 0 !important; }
+.nsh-fx-out { z-index: 2147483000; }
 img.nsh-fill { pointer-events: none; }
 .nsh-fit-cover { object-fit: cover; }
 .nsh-fit-contain { object-fit: contain; }
@@ -1313,16 +1317,19 @@ class Player {
       el.append(canvas);
       el._canvas = canvas;
       el._slots = [];
-    } else if (kind === "shader") {
-      // Its picture under its children (`drawShader`).
+    } else if (kind === "shader" || kind === "shadereffect") {
+      // A fill's picture under its children, an effect's over them
+      // (`drawShader`).
       el = document.createElement("div");
       const canvas = document.createElement("canvas");
-      canvas.className = "nsh-fill";
+      canvas.className = kind === "shader" ? "nsh-fill" : "nsh-fill nsh-fx-out";
       canvas.style.pointerEvents = "none";
-      // The fill follows the view's corners, as a background does.
-      canvas.style.borderRadius = "inherit";
+      // A fill follows the view's corners, as a background does.
+      if (kind === "shader") canvas.style.borderRadius = "inherit";
+      canvas._shaderOutput = true;
       el.append(canvas);
       el._shaderCanvas = canvas;
+      el._effect = kind === "shadereffect";
       el._args = new Map();
     } else if (kind === "web") {
       el = document.createElement("div");
@@ -1486,7 +1493,13 @@ class Player {
       el._frameAnimation = a;
     }
     if (el._kind === "canvas") this.drawSoon(el);
-    if (el._kind === "shader") this.shaderSoon(el);
+    if (el._kind === "shader" || el._kind === "shadereffect") {
+      this.shaderSoon(el);
+      if (el._fill?.inputs) {
+        el._stale = el._fill.inputs;
+        this.inputsSoon(el);
+      }
+    }
     if (el._kind === "stack") for (const screen of el.children) if (screen._kind === "screen") this.reportRoot(screen, w, h, this.screenInsets(screen));
   }
 
@@ -2708,13 +2721,235 @@ class Player {
       const img = this.shaderImage(uri, el);
       if (img) this.imageReady(el, slot, img, at);
     }
+    this.watchInputs(el);
     this.shaderSoon(el);
   }
 
-  /** Animated uniforms written into the view's uniforms. */
+  op_si([, id]) {
+    const el = this.view(id);
+    if (!el?._fill?.inputs) return;
+    el._stale = el._fill.inputs;
+    this.inputsSoon(el);
+  }
+
+  /** Animated uniforms written into the view's uniforms; `nsh.progress` is component 0xffff. */
   writeArgs(el) {
     const words = new Float32Array(el._uniforms.buffer);
-    for (const [k, values] of el._args) values.forEach((v, i) => { if (k + i < words.length) words[k + i] = v; });
+    for (const [k, values] of el._args) {
+      if (k === 0xffff) el._progress = values[0];
+      else values.forEach((v, i) => { if (k + i < words.length) words[k + i] = v; });
+    }
+  }
+
+  // Shader inputs: an effect's children (its content) and what is behind a
+  // view (its backdrop) are pictures NSH paints itself from the elements
+  // (`paintTree`), taken again on the next frame after a change: a mutation
+  // in the subtree (in the surface, for a backdrop), a scroll or a load.
+
+  /** Watches what the view's shader samples (`fill.inputs`: 1 content, 2 backdrop). */
+  watchInputs(el) {
+    const fill = el._fill;
+    const content = el._effect && fill && (fill.inputs & 1);
+    const backdrop = fill && (fill.inputs & 2);
+    el.classList.toggle("nsh-fx", Boolean(el._effect && fill));
+    if (content && !el._contentObserver) {
+      const mark = (list) => {
+        if (list && list.every((m) => m.target._shaderOutput)) return;
+        el._stale |= 1;
+        this.inputsSoon(el);
+      };
+      el._contentObserver = new MutationObserver(mark);
+      el._contentObserver.observe(el, { subtree: true, childList: true, attributes: true, characterData: true });
+      el._contentMark = () => mark();
+      el.addEventListener("scroll", el._contentMark, true);
+      el.addEventListener("load", el._contentMark, true);
+    } else if (!content && el._contentObserver) {
+      el._contentObserver.disconnect();
+      el.removeEventListener("scroll", el._contentMark, true);
+      el.removeEventListener("load", el._contentMark, true);
+      el._contentObserver = el._contentMark = null;
+    }
+    this.backdrops ??= new Set();
+    if (backdrop) this.backdrops.add(el);
+    else this.backdrops.delete(el);
+    this.watchBackdrops();
+    el._stale = (content ? 1 : 0) | (backdrop ? 2 : 0);
+    if (el._stale) this.inputsSoon(el);
+  }
+
+  /** A change anywhere in the surface changes what is behind every backdrop shader. */
+  watchBackdrops() {
+    for (const el of this.backdrops) if (!el.isConnected && !this.views.has(el._id)) this.backdrops.delete(el);
+    const wanted = this.backdrops.size > 0;
+    if (wanted && !this._backdropObserver) {
+      const mark = (list) => {
+        if (list && list.every((m) => m.target._shaderOutput)) return;
+        for (const el of this.backdrops) {
+          el._stale |= 2;
+          this.inputsSoon(el);
+        }
+      };
+      this._backdropObserver = new MutationObserver(mark);
+      this._backdropObserver.observe(this.root, { subtree: true, childList: true, attributes: true, characterData: true });
+      this._backdropMark = () => mark();
+      this.root.addEventListener("scroll", this._backdropMark, true);
+      this.root.addEventListener("load", this._backdropMark, true);
+    } else if (!wanted && this._backdropObserver) {
+      this._backdropObserver.disconnect();
+      this.root.removeEventListener("scroll", this._backdropMark, true);
+      this.root.removeEventListener("load", this._backdropMark, true);
+      this._backdropObserver = this._backdropMark = null;
+    }
+  }
+
+  /** Paints the view's stale inputs on the next frame, then draws it. */
+  inputsSoon(el) {
+    if (el._inputsQueued) return;
+    el._inputsQueued = true;
+    requestAnimationFrame(() => {
+      el._inputsQueued = false;
+      if (!el.isConnected || !el._fill) return;
+      this.paintInputs(el);
+      this.drawShader(el);
+    });
+  }
+
+  /** Paints the pictures `el._stale` names: its children (1) and what is behind it (2). */
+  paintInputs(el) {
+    const fill = el._fill;
+    const stale = el._stale || 0;
+    el._stale = 0;
+    if (!fill || !el._frame || !stale) return;
+    const ratio = devicePixelRatio || 1;
+    const m = el._effect ? Math.max(0, fill.offset || 0) : 0;
+    const [, , w, h] = el._frame;
+    const pw = Math.max(1, Math.round((w + 2 * m) * ratio));
+    const ph = Math.max(1, Math.round((h + 2 * m) * ratio));
+    const picture = (key) => {
+      const c = (el[key] ??= document.createElement("canvas"));
+      c.width = pw;
+      c.height = ph;
+      const cx = c.getContext("2d");
+      // Points from the view's top-left, `m` inside the picture.
+      cx.setTransform(ratio, 0, 0, ratio, m * ratio, m * ratio);
+      return cx;
+    };
+    const base = el.getBoundingClientRect();
+    if (stale & 1 && el._effect) {
+      const cx = picture("_contentPicture");
+      // Its children as they show without the effect.
+      el.classList.remove("nsh-fx");
+      try {
+        this.paintTree(cx, el, base, 1, null, el);
+      } finally {
+        el.classList.add("nsh-fx");
+      }
+      el._contentDirty = true;
+    }
+    if (stale & 2) {
+      const cx = picture("_backdropPicture");
+      // The surface up to the view: what draws after it is above it.
+      this.paintTree(cx, this.root, base, 1, el, null);
+      el._backdropDirty = true;
+    }
+    // The class change above is the painter's own.
+    el._contentObserver?.takeRecords();
+    this._backdropObserver?.takeRecords();
+  }
+
+  /**
+   * Paints `node`'s children into `cx`, in points from `base`'s top-left:
+   * backgrounds, rounded corners, uniform borders, images, canvases (other
+   * shaders' pictures among them), text runs and their clipping, with
+   * their opacities. Stops at `stop` (returns true); skips `owner`'s own
+   * shader canvas. Rotations and gradients are left out.
+   */
+  paintTree(cx, node, base, opacity, stop, owner) {
+    for (const child of node.children) {
+      if (child === stop) return true;
+      if (child._shaderOutput && child.parentElement === owner) continue;
+      const cs = getComputedStyle(child);
+      if (cs.display === "none") continue;
+      const alpha = opacity * Number(cs.opacity);
+      if (alpha <= 0 || cs.visibility === "hidden") {
+        if (stop && child.contains(stop)) return true;
+        continue;
+      }
+      const r = child.getBoundingClientRect();
+      const x = r.left - base.left, y = r.top - base.top, w = r.width, h = r.height;
+      const radii = [cs.borderTopLeftRadius, cs.borderTopRightRadius, cs.borderBottomRightRadius, cs.borderBottomLeftRadius]
+        .map((v) => Math.min(parseFloat(v) || 0, w / 2, h / 2));
+      const shape = () => {
+        cx.beginPath();
+        cx.roundRect(x, y, w, h, radii);
+      };
+      cx.save();
+      cx.globalAlpha = alpha;
+      const bg = cs.backgroundColor;
+      if (bg && bg !== "transparent" && !/rgba\([^)]*,\s*0\)$/.test(bg)) {
+        cx.fillStyle = bg;
+        shape();
+        cx.fill();
+      }
+      const bw = parseFloat(cs.borderTopWidth) || 0;
+      if (bw > 0 && cs.borderTopStyle !== "none" && cs.borderTopStyle !== "hidden") {
+        cx.strokeStyle = cs.borderTopColor;
+        cx.lineWidth = bw;
+        cx.beginPath();
+        cx.roundRect(x + bw / 2, y + bw / 2, Math.max(0, w - bw), Math.max(0, h - bw), radii.map((v) => Math.max(0, v - bw / 2)));
+        cx.stroke();
+      }
+      if (child.tagName === "IMG") {
+        if (child.complete && child.naturalWidth && this.paintable(child)) this.paintImage(cx, child, cs, x, y, w, h, radii);
+      } else if (child.tagName === "CANVAS") {
+        if (child.width && child.height) cx.drawImage(child, x, y, w, h);
+      } else if (child.classList.contains("nsh-run")) {
+        cx.font = cs.font;
+        cx.fillStyle = cs.color;
+        cx.textBaseline = "alphabetic";
+        const text = child.textContent;
+        const m = cx.measureText(text);
+        cx.fillText(text, x, y + (m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent));
+      }
+      if (cs.overflow === "clip" || cs.overflow === "hidden") {
+        shape();
+        cx.clip();
+      }
+      const done = this.paintTree(cx, child, base, alpha, stop, owner);
+      cx.restore();
+      if (done) return true;
+    }
+    return false;
+  }
+
+  /** Whether an image can be painted without tainting the picture (same origin or CORS). */
+  paintable(img) {
+    try {
+      return new URL(img.currentSrc || img.src, location.href).origin === location.origin || img.crossOrigin != null;
+    } catch {
+      return false;
+    }
+  }
+
+  /** An image in its box, fitted as its `object-fit` says. */
+  paintImage(cx, img, cs, x, y, w, h, radii) {
+    const iw = img.naturalWidth, ih = img.naturalHeight;
+    let dw = w, dh = h;
+    const fit = cs.objectFit;
+    if (fit === "contain" || fit === "cover" || fit === "scale-down") {
+      const s = fit === "cover" ? Math.max(w / iw, h / ih) : Math.min(w / iw, h / ih, fit === "scale-down" ? 1 : Infinity);
+      dw = iw * s;
+      dh = ih * s;
+    } else if (fit === "none") {
+      dw = iw;
+      dh = ih;
+    }
+    cx.save();
+    cx.beginPath();
+    cx.roundRect(x, y, w, h, radii);
+    cx.clip();
+    cx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+    cx.restore();
   }
 
   /** The image of `slot` loaded: its size in points (unless the source said it). */
@@ -2813,6 +3048,28 @@ class Player {
     return g.empty;
   }
 
+  /** The texture of an input's picture (0: content, 1: backdrop), uploaded again after a paint. */
+  pictureTexture(g, el, input) {
+    const gl = g.gl;
+    el._pictureTextures ??= [null, null];
+    let t = el._pictureTextures[input];
+    const dirty = input === 0 ? "_contentDirty" : "_backdropDirty";
+    if (!t) {
+      t = el._pictureTextures[input] = gl.createTexture();
+      el[dirty] = true;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    if (el[dirty]) {
+      el[dirty] = false;
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, input === 0 ? el._contentPicture : el._backdropPicture);
+      for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) {
+        gl.texParameteri(gl.TEXTURE_2D, k, v);
+      }
+    }
+    return t;
+  }
+
   glTexture(g, img) {
     let t = g.textures.get(img);
     if (t) return t;
@@ -2841,8 +3098,10 @@ class Player {
     const gl = g.gl;
     const ratio = (devicePixelRatio || 1) * Math.min(4, this.zoomOf(el));
     const [, , w, h] = el._frame;
-    const pw = Math.max(1, Math.round(w * ratio));
-    const ph = Math.max(1, Math.round(h * ratio));
+    // An effect draws `offset` beyond its view, for what its shader samples there.
+    const m = el._effect ? Math.max(0, fill.offset || 0) : 0;
+    const pw = Math.max(1, Math.round((w + 2 * m) * ratio));
+    const ph = Math.max(1, Math.round((h + 2 * m) * ratio));
     if (g.canvas.width !== pw || g.canvas.height !== ph) {
       g.canvas.width = pw;
       g.canvas.height = ph;
@@ -2850,13 +3109,18 @@ class Player {
     el._started ??= performance.now();
     const time = (performance.now() - el._started) / 1000;
     const nsh = new Float32Array(8);
-    nsh.set([w, h, ratio, time, 0]);
+    nsh.set([w, h, ratio, time, el._progress ?? fill.progress ?? 0]);
     const frame = new Float32Array(104);
-    frame.set([0, 0, w, h]);
+    frame.set([-m, -m, w + 2 * m, h + 2 * m]);
     for (const [slot, img] of (el._images ?? []).entries()) {
       if (!img) continue;
       frame.set([0, 0, w, h, img.naturalWidth, img.naturalHeight], 8 + 8 * (4 + slot));
     }
+    // The pictures of its inputs cover the area drawn.
+    const pictures = [el._effect && fill.inputs & 1 ? el._contentPicture : null, fill.inputs & 2 ? el._backdropPicture : null];
+    pictures.forEach((c, input) => {
+      if (c) frame.set([-m, -m, w + 2 * m, h + 2 * m, c.width, c.height], 8 + 8 * input);
+    });
     gl.viewport(0, 0, pw, ph);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -2869,13 +3133,22 @@ class Player {
     made.samplers.forEach(([location, input], unit) => {
       const img = input >= 4 ? el._images?.[input - 4] : null;
       gl.activeTexture(gl.TEXTURE0 + unit);
-      gl.bindTexture(gl.TEXTURE_2D, img ? this.glTexture(g, img) : this.emptyTexture(g));
+      const picture = input < 2 ? pictures[input] : null;
+      const texture = picture ? this.pictureTexture(g, el, input) : img ? this.glTexture(g, img) : this.emptyTexture(g);
+      gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.uniform1i(location, unit);
     });
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     if (canvas.width !== pw || canvas.height !== ph) {
       canvas.width = pw;
       canvas.height = ph;
+    }
+    if (el._effect) {
+      const box = [`${-m}px`, `${-m}px`, `${w + 2 * m}px`, `${h + 2 * m}px`];
+      const style = canvas.style;
+      if (style.left !== box[0] || style.width !== box[2] || style.height !== box[3]) {
+        [style.left, style.top, style.width, style.height] = box;
+      }
     }
     if (g.canvas.transferToImageBitmap) {
       el._bitmapContext ??= canvas.getContext("bitmaprenderer");

@@ -148,6 +148,7 @@ Effects and backdrops, per platform:
 | Platform | `effect` | `backdrop` | How |
 |---|---|---|---|
 | Android 13+ | live | live | an effect records its children into a `RenderNode` (`maxSampleOffset` beyond the view) whose `RenderEffect` is the runtime shader, its content input that node; a backdrop shader runs as the render effect of a node drawing `Backdrop.java`'s recording. A render effect gives one live input: an effect that samples both reads the backdrop as transparent |
+| Web | snapshot | snapshot | NSH paints the input itself from the elements into a 2D canvas (`nsh.js` `paintTree`: backgrounds, rounded corners, uniform borders, images by `object-fit`, canvases (other shaders' pictures), text runs at the positions NSH laid them out, clipping and opacity; no rotations, gradients or shadows; cross-origin images without CORS are left out, they would taint the picture). An effect's children are at `opacity: 0` (`.nsh-fx`; browsers hit-test them still) under its canvas (`.nsh-fx-out`, `maxSampleOffset` beyond the element); the backdrop is the surface painted up to the view (what comes after it is above it). A `MutationObserver` on the effect (on the root for backdrops) and capture-phase `scroll` / `load` listeners mark the pictures stale, taken on the next animation frame |
 | others | `false` | `false` | an effect draws its children as they are; `sample_backdrop` reads transparent |
 
 AGSL computes `p` as the pixel's coordinate over the scale plus `nsh_origin`, the frame area's origin, as the other
