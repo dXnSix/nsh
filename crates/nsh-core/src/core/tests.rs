@@ -301,7 +301,7 @@ fn style_op(id: NodeId, props: &[(&str, StyleValue<'_>)]) -> Op {
     Op::SetStyle { id, style, patch }
 }
 
-fn apply(core: &mut Core<FakeEngine>, ops: Vec<Op>) {
+fn apply<M: TextEngine>(core: &mut Core<M>, ops: Vec<Op>) {
     for op in ops {
         core.apply(op).unwrap();
     }
@@ -2891,6 +2891,296 @@ fn right_to_left_layouts() {
 }
 
 #[test]
+fn right_to_left_classes_stay_physical() {
+    let mut c = core();
+    // The surface is right to left before anything is made.
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: ROOT_ID,
+            prop: Prop::LayoutDirection(true),
+        }],
+    );
+    view_with_classes(&mut c, 2, "flex-row w-[300px] h-[50px]");
+    let n = |v: f32| StyleValue::Number(v);
+    let mut ops = Vec::new();
+    // `ml-*` is the left margin right to left too (CSS); `ms-*` the start,
+    // and an inline `marginLeft` keeps React Native's meaning, the start.
+    for (id, classes) in [
+        (3, "w-[50px] h-[50px] ml-[10px]"),
+        (4, "w-[50px] h-[50px] ms-[10px]"),
+        (5, "w-[50px] h-[50px]"),
+        (
+            6,
+            "absolute left-[5px] w-[20px] h-[20px] border-l-4 border-l-red-500 rounded-tl-lg",
+        ),
+    ] {
+        ops.push(Op::Create { id, tag: Tag::View });
+        ops.push(class_op(id, classes));
+        ops.push(Op::Insert {
+            parent: 2,
+            child: id,
+            before: None,
+        });
+    }
+    ops.push(style_op(5, &[("marginLeft", n(10.0))]));
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    let x = |batch: &MountBatch, id| frame_of(batch, id).map(|f| f.origin.x.0);
+    // The row runs from the right: 3 is the first, at the right edge, with
+    // its margin on its left; 4 has its start margin on its right.
+    assert_eq!(x(&batch, 3), Some(300.0 - 50.0));
+    assert_eq!(x(&batch, 4), Some(300.0 - 60.0 - 10.0 - 50.0));
+    assert_eq!(x(&batch, 5), Some(300.0 - 60.0 - 60.0 - 10.0 - 50.0));
+    assert_eq!(x(&batch, 6), Some(5.0));
+    let v = view_style_of(&batch, 6).unwrap();
+    assert_eq!(v.borders.widths.left, px(4.0));
+    assert_eq!(v.borders.widths.right, px(0.0));
+    assert_eq!(v.borders.colors[3], Color(0xfb2c_36ff));
+    assert_eq!(v.corner_radius.top_left, Some(px(8.0)));
+    assert_eq!(v.corner_radius.top_right, None);
+    // Back to left to right, the same.
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: ROOT_ID,
+            prop: Prop::LayoutDirection(false),
+        }],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(x(&batch, 3), Some(10.0));
+    assert_eq!(x(&batch, 4), Some(60.0 + 10.0));
+    // Where it was: no new frame.
+    assert_eq!(x(&batch, 6), None);
+    let v = view_style_of(&batch, 6).unwrap();
+    assert_eq!(v.borders.widths.left, px(4.0));
+    assert_eq!(v.corner_radius.top_left, Some(px(8.0)));
+}
+
+#[test]
+fn right_to_left_text_alignment_classes_stay_physical() {
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: ROOT_ID,
+            prop: Prop::LayoutDirection(true),
+        }],
+    );
+    let mut ops = Vec::new();
+    for (id, classes) in [(2, "text-left"), (4, "text-end"), (6, "text-right")] {
+        ops.extend([
+            Op::Create { id, tag: Tag::Text },
+            class_op(id, classes),
+            Op::CreateText {
+                id: id + 1,
+                text: "hello".into(),
+            },
+            Op::Insert {
+                parent: id,
+                child: id + 1,
+                before: None,
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: id,
+                before: None,
+            },
+        ]);
+    }
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    let align = |id| {
+        batch
+            .items
+            .iter()
+            .find_map(|i| match i {
+                MountItem::Text { id: i, text, .. } if *i == id => Some(text.align),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(align(2), TextAlign::Left);
+    assert_eq!(align(4), TextAlign::Left);
+    assert_eq!(align(6), TextAlign::Right);
+}
+
+#[test]
+fn space_classes_give_children_but_the_last_margins() {
+    let mut c = core();
+    view_with_classes(&mut c, 2, "flex-row space-x-4 w-[300px] h-[20px]");
+    let mut ops = Vec::new();
+    for (id, classes) in [
+        (3, "size-[20px]"),
+        (4, "size-[20px] mr-1"),
+        (5, "size-[20px]"),
+    ] {
+        ops.push(Op::Create { id, tag: Tag::View });
+        ops.push(class_op(id, classes));
+        ops.push(Op::Insert {
+            parent: 2,
+            child: id,
+            before: None,
+        });
+    }
+    // A child with no classes gets it too.
+    ops.push(Op::Create {
+        id: 6,
+        tag: Tag::View,
+    });
+    ops.push(style_op(
+        6,
+        &[
+            ("width", StyleValue::Number(20.0)),
+            ("height", StyleValue::Number(20.0)),
+        ],
+    ));
+    ops.push(Op::Insert {
+        parent: 2,
+        child: 6,
+        before: Some(5),
+    });
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    let x = |batch: &MountBatch, id| frame_of(batch, id).map(|f| f.origin.x.0);
+    // 3: 16 after it; 4: its own `mr-1` wins (4); 6: 16; 5 is last.
+    assert_eq!(x(&batch, 3), Some(0.0));
+    assert_eq!(x(&batch, 4), Some(36.0));
+    assert_eq!(x(&batch, 6), Some(60.0));
+    assert_eq!(x(&batch, 5), Some(96.0));
+    // Appended: the last before gets its margin, the new one has none.
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 7,
+                tag: Tag::View,
+            },
+            class_op(7, "size-[20px]"),
+            Op::Insert {
+                parent: 2,
+                child: 7,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(x(&batch, 7), Some(132.0));
+    // The last one gone, the one before it is last again.
+    c.apply(Op::Remove {
+        parent: 2,
+        child: 7,
+    })
+    .unwrap();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 8,
+                tag: Tag::View,
+            },
+            class_op(8, "size-[20px]"),
+        ],
+    );
+    apply(
+        &mut c,
+        vec![Op::Insert {
+            parent: 2,
+            child: 8,
+            before: None,
+        }],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(x(&batch, 8), Some(132.0));
+    // Reversed, the margin is on the start side; without the class, none.
+    c.apply(class_op(
+        2,
+        "flex-row space-x-4 space-x-reverse w-[300px] h-[20px]",
+    ))
+    .unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(x(&batch, 3), Some(16.0));
+    c.apply(class_op(2, "flex-row w-[300px] h-[20px]")).unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(x(&batch, 3), Some(0.0));
+    assert_eq!(x(&batch, 6), Some(44.0));
+}
+
+#[test]
+fn borders_and_rings_without_a_color_are_the_inherited_text_color() {
+    let mut c = core();
+    view_with_classes(&mut c, 2, "text-white");
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 3,
+                tag: Tag::View,
+            },
+            Op::Create {
+                id: 4,
+                tag: Tag::View,
+            },
+            class_op(4, "border-2 ring"),
+            Op::Insert {
+                parent: 3,
+                child: 4,
+                before: None,
+            },
+            // Built apart, then inserted: the color reaches it through 3.
+            Op::Insert {
+                parent: 2,
+                child: 3,
+                before: None,
+            },
+            Op::Create {
+                id: 5,
+                tag: Tag::View,
+            },
+            style_op(5, &[("borderWidth", StyleValue::Number(1.0))]),
+            Op::Insert {
+                parent: 2,
+                child: 5,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    let v = view_style_of(&batch, 4).unwrap();
+    assert_eq!(v.borders.colors, [Color(0xffff_ffff); 4]);
+    assert_eq!(
+        v.effects.as_ref().unwrap().box_shadows[0].color,
+        Color(0xffff_ffff)
+    );
+    // An inline style's border keeps React Native's black.
+    assert_eq!(
+        view_style_of(&batch, 5).unwrap().borders.colors[0],
+        Color::BLACK
+    );
+    // The ancestor's color changes: so does the border's.
+    c.apply(class_op(2, "text-red-500")).unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(
+        view_style_of(&batch, 4).unwrap().borders.colors[0],
+        Color(0xfb2c_36ff)
+    );
+    // Moved under a view of no color: black.
+    apply(
+        &mut c,
+        vec![Op::Insert {
+            parent: ROOT_ID,
+            child: 4,
+            before: None,
+        }],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(
+        view_style_of(&batch, 4).unwrap().borders.colors[0],
+        Color::BLACK
+    );
+}
+
+#[test]
 fn right_to_left_horizontal_scrolls() {
     let mut c = core();
     let n = |v: f32| StyleValue::Number(v);
@@ -3325,6 +3615,143 @@ fn text_inherits_from_views_and_classes_set_props() {
     c.apply(class_op(2, "text-black text-lg")).unwrap();
     let batch = c.commit().unwrap();
     assert!(batch.items.iter().any(|i| matches!(i, MountItem::Text { id: 3, text, .. } if text.spans[0].style.color == Color(0x0000_00ff))));
+}
+
+#[test]
+fn texts_inherit_white_space_and_user_select_from_views() {
+    let mut c = core();
+    view_with_classes(&mut c, 2, "whitespace-nowrap select-text");
+    let mut ops = Vec::new();
+    for (id, classes) in [
+        (3, ""),
+        (5, "select-none whitespace-normal"),
+        (7, "select-none md:select-auto"),
+    ] {
+        ops.extend([
+            Op::Create { id, tag: Tag::Text },
+            class_op(id, classes),
+            Op::CreateText {
+                id: id + 1,
+                text: "hello".into(),
+            },
+            Op::Insert {
+                parent: id,
+                child: id + 1,
+                before: None,
+            },
+            Op::Insert {
+                parent: 2,
+                child: id,
+                before: None,
+            },
+        ]);
+    }
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    let text = |batch: &MountBatch, id| {
+        batch.items.iter().rev().find_map(|i| match i {
+            MountItem::Text { id: i, text, .. } if *i == id => {
+                Some((text.no_wrap, text.selectable))
+            }
+            _ => None,
+        })
+    };
+    // As CSS's `white-space` and `user-select: auto`, a view's reach the
+    // texts in it; a text's own win.
+    assert_eq!(text(&batch, 3), Some((true, Some(true))));
+    assert_eq!(text(&batch, 5), Some((false, Some(false))));
+    assert_eq!(text(&batch, 7), Some((true, Some(false))));
+    // `select-auto` takes the view's again (the window is 320 wide; at md
+    // it applies).
+    c.set_viewport(size_pt(800.0, 480.0));
+    let batch = c.commit().unwrap();
+    assert_eq!(text(&batch, 7), Some((true, Some(true))));
+    // The view's change reaches them.
+    c.apply(class_op(2, "truncate")).unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(text(&batch, 3), Some((true, None)));
+}
+
+#[test]
+fn pointer_events_classes_inherit_as_in_css() {
+    use crate::props::PointerEvents as P;
+    let mut c = core();
+    // 2 none { 3 { 4 }, 5 auto { 6 } }
+    view_with_classes(&mut c, 2, "pointer-events-none");
+    let mut ops = Vec::new();
+    for (id, parent, classes) in [
+        (3, 2, "p-1"),
+        (4, 3, "p-1"),
+        (5, 2, "pointer-events-auto"),
+        (6, 5, "p-1"),
+    ] {
+        ops.extend([
+            Op::Create { id, tag: Tag::View },
+            class_op(id, classes),
+            Op::Insert {
+                parent,
+                child: id,
+                before: None,
+            },
+        ]);
+    }
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    let pointer = |batch: &MountBatch, id| {
+        batch.items.iter().rev().find_map(|i| match i {
+            MountItem::ViewProps { id: i, props } if *i == id => Some(props.pointer_events),
+            _ => None,
+        })
+    };
+    // 2 lets touches through to 5, which takes them; 3 is no target, and
+    // blocks 4.
+    assert_eq!(pointer(&batch, 2), Some(P::BoxNone));
+    assert_eq!(pointer(&batch, 3), Some(P::None));
+    assert_eq!(pointer(&batch, 4), None);
+    assert_eq!(pointer(&batch, 5), None);
+    assert_eq!(pointer(&batch, 6), None);
+    // Without the `auto`, 2 blocks the whole subtree.
+    c.apply(class_op(5, "p-1")).unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(pointer(&batch, 2), Some(P::None));
+    assert_eq!(pointer(&batch, 3), Some(P::Auto));
+    // An `auto` moved in brings `box-none` back; moved out, `none`.
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 7,
+                tag: Tag::View,
+            },
+            class_op(7, "pointer-events-auto"),
+            Op::Insert {
+                parent: 4,
+                child: 7,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(pointer(&batch, 2), Some(P::BoxNone));
+    assert_eq!(pointer(&batch, 3), Some(P::BoxNone));
+    assert_eq!(pointer(&batch, 4), Some(P::BoxNone));
+    assert_eq!(pointer(&batch, 5), Some(P::None));
+    c.apply(Op::Remove {
+        parent: 4,
+        child: 7,
+    })
+    .unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(pointer(&batch, 2), Some(P::None));
+    assert_eq!(pointer(&batch, 4), Some(P::Auto));
+    // The `pointerEvents` prop keeps React Native's meaning, and wins.
+    c.apply(Op::SetProp {
+        id: 2,
+        prop: Prop::PointerEvents(P::BoxOnly),
+    })
+    .unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(pointer(&batch, 2), Some(P::BoxOnly));
 }
 
 #[test]
@@ -12083,6 +12510,215 @@ fn overlay_prop(id: NodeId, prop: crate::OverlayProp) -> Op {
         id,
         prop: Prop::Overlay(prop),
     }
+}
+
+#[test]
+fn fixed_views_are_laid_out_in_their_root_view() {
+    let mut c = core();
+    // A padded box below another; a `fixed` bar inside it.
+    view_with_classes(&mut c, 2, "h-[100px]");
+    view_with_classes(&mut c, 3, "p-[20px] h-[200px]");
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 4,
+                tag: Tag::View,
+            },
+            class_op(4, "fixed inset-x-0 bottom-0 h-[40px]"),
+            Op::Insert {
+                parent: 3,
+                child: 4,
+                before: None,
+            },
+            Op::Create {
+                id: 5,
+                tag: Tag::View,
+            },
+            class_op(5, "h-[10px]"),
+            Op::Insert {
+                parent: 3,
+                child: 5,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    // Against the surface (320 x 480), in the root view's native view,
+    // out of its parent's layout (5 is the first in flow).
+    assert_eq!(frame_of(&batch, 4), Some(rect(0.0, 440.0, 320.0, 40.0)));
+    let ins = inserts(&batch);
+    assert!(ins.contains(&(ROOT_ID, 4, None)), "{ins:?}");
+    assert!(!ins.iter().any(|&(p, c, _)| p == 3 && c == 4), "{ins:?}");
+    assert_eq!(frame_of(&batch, 5), Some(rect(20.0, 20.0, 280.0, 10.0)));
+    // No longer fixed: back in its parent, laid out there.
+    c.apply(class_op(4, "absolute inset-x-0 bottom-0 h-[40px]"))
+        .unwrap();
+    let batch = c.commit().unwrap();
+    let ins = inserts(&batch);
+    assert!(ins.contains(&(3, 4, Some(5))), "{ins:?}");
+    assert_eq!(frame_of(&batch, 4), Some(rect(0.0, 160.0, 320.0, 40.0)));
+    // And fixed again.
+    c.apply(class_op(4, "fixed inset-x-0 bottom-0 h-[40px]"))
+        .unwrap();
+    let batch = c.commit().unwrap();
+    assert!(inserts(&batch).contains(&(ROOT_ID, 4, None)));
+    assert_eq!(frame_of(&batch, 4), Some(rect(0.0, 440.0, 320.0, 40.0)));
+}
+
+#[test]
+fn perspective_gives_children_depth_from_the_center() {
+    use crate::transform::TransformKind as T;
+    let mut c = core();
+    view_with_classes(&mut c, 2, "perspective-[400px] w-[200px] h-[200px]");
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 3,
+                tag: Tag::View,
+            },
+            class_op(3, "size-[100px] rotate-y-45"),
+            Op::Insert {
+                parent: 2,
+                child: 3,
+                before: None,
+            },
+            Op::Create {
+                id: 4,
+                tag: Tag::View,
+            },
+            class_op(4, "size-[100px] rotate-12"),
+            Op::Insert {
+                parent: 2,
+                child: 4,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    let steps = |batch: &MountBatch, id| {
+        view_style_of(batch, id).map(|v| {
+            v.transform
+                .ops()
+                .iter()
+                .map(|op| (op.kind, op.value))
+                .collect::<Vec<_>>()
+        })
+    };
+    // 3's center is 50 left of and 50 above the parent's: the perspective
+    // is seen from the parent's center, before 3's own rotation.
+    assert_eq!(
+        steps(&batch, 3).unwrap(),
+        [
+            (T::TranslateX, 50.0),
+            (T::TranslateY, 50.0),
+            (T::Perspective, 400.0),
+            (T::TranslateX, -50.0),
+            (T::TranslateY, -50.0),
+            (T::RotateY, 45.0),
+        ]
+    );
+    // A view that stays in its plane is as it was.
+    assert_eq!(steps(&batch, 4).unwrap(), [(T::Rotate, 12.0)]);
+    // The parent's own transform does not get it.
+    assert_eq!(
+        view_style_of(&batch, 2).map(|v| v.transform.ops().len()),
+        None
+    );
+    // Without it, the children's own transforms.
+    c.apply(class_op(2, "w-[200px] h-[200px]")).unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(steps(&batch, 3).unwrap(), [(T::RotateY, 45.0)]);
+}
+
+/// Each character half its font size wide, one line: lengths in `ch`.
+struct SizedEngine;
+
+impl TextEngine for SizedEngine {
+    type Prepared = f32;
+
+    fn prepare(&self, text: &AttributedText) -> f32 {
+        text.spans
+            .iter()
+            .map(|s| (s.end - s.start) as f32 * s.style.font_size.0 / 2.0)
+            .sum()
+    }
+
+    fn measure(&self, w: &f32, _: Option<Points>) -> Size<Points> {
+        size_pt(*w, 16.0)
+    }
+
+    fn layout(&self, _: &f32, _: Size<Points>) -> TextLayout {
+        TextLayout(Arc::new(()))
+    }
+}
+
+#[test]
+fn prose_is_65ch_of_the_font() {
+    let mut c = Core::new(SizedEngine, size_pt(2000.0, 480.0));
+    // Built from the inside out, as JSX does: the font is in place when
+    // the commit comes.
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 3,
+                tag: Tag::View,
+            },
+            class_op(3, "max-w-prose w-full h-[10px]"),
+            Op::Create {
+                id: 4,
+                tag: Tag::View,
+            },
+            class_op(4, "max-w-prose w-full h-[10px] text-[10px]"),
+            Op::Create {
+                id: 2,
+                tag: Tag::View,
+            },
+            class_op(2, "text-[20px]"),
+            Op::Insert {
+                parent: 2,
+                child: 3,
+                before: None,
+            },
+            Op::Insert {
+                parent: 2,
+                child: 4,
+                before: None,
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    let width = |batch: &MountBatch, id| frame_of(batch, id).map(|f| f.size.width.0);
+    // 65 times the `0` of the font: the inherited 20pt one's (10pt), its
+    // own 10pt one's (5pt).
+    assert_eq!(width(&batch, 3), Some(650.0));
+    assert_eq!(width(&batch, 4), Some(325.0));
+    // The font around it changes: so does `ch`.
+    c.apply(class_op(2, "text-[16px]")).unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(width(&batch, 3), Some(520.0));
+}
+
+#[test]
+fn static_views_ignore_their_insets() {
+    let mut c = core();
+    view_with_classes(&mut c, 2, "relative top-4 left-2 size-[10px] static");
+    view_with_classes(&mut c, 3, "static top-4 size-[10px]");
+    view_with_classes(&mut c, 4, "static md:relative top-4 size-[10px]");
+    let batch = c.commit().unwrap();
+    assert_eq!(frame_of(&batch, 2), Some(rect(0.0, 0.0, 10.0, 10.0)));
+    assert_eq!(frame_of(&batch, 3), Some(rect(0.0, 10.0, 10.0, 10.0)));
+    assert_eq!(frame_of(&batch, 4), Some(rect(0.0, 20.0, 10.0, 10.0)));
+    c.set_viewport(size_pt(800.0, 480.0));
+    let batch = c.commit().unwrap();
+    assert_eq!(frame_of(&batch, 4), Some(rect(0.0, 36.0, 10.0, 10.0)));
 }
 
 #[test]

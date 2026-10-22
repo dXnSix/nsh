@@ -545,8 +545,13 @@ pub enum ResizeMode {
     Contain,
     /// Stretch to the box.
     Stretch,
-    /// Center at natural size.
+    /// Center at natural size, cropped where larger than the box (CSS's
+    /// `object-fit: none`).
     Center,
+    /// Center at natural size, shrunk to fit the box where larger (CSS's
+    /// `object-fit: scale-down`, React Native's `center`).
+    #[prop(rename = "scale-down")]
+    ScaleDown,
 }
 
 /// An image source.
@@ -1605,7 +1610,7 @@ pub enum Prop {
     NativeId(Option<Box<str>>),
     /// An input's caret and selection, the highlight of a `selectable`
     /// text's selection (Rust components; TS sets the `selectionColor`
-    /// style key or `selection:text-*`).
+    /// style key or `selection:bg-*`).
     SelectionColor(Option<Color>),
     /// `autoComplete` (iOS: also `textContentType`): what an input holds, for
     /// autofill (React Native's values, e.g. "username", "current-password",

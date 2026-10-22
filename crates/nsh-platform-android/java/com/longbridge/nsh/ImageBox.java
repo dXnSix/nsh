@@ -21,7 +21,7 @@ import android.view.View;
 final class ImageBox extends View implements Node {
     final Decor decor = new Decor();
     final int id;
-    int resizeMode; // 0 cover, 1 contain, 2 stretch, 3 center
+    int resizeMode; // 0 cover, 1 contain, 2 stretch, 3 center, 4 scale-down
     String uri;
     /** Size the pending load decodes at. */
     int requestedPx;
@@ -184,10 +184,17 @@ final class ImageBox extends View implements Node {
             case 2:
                 matrix.setScale(w / bw, h / bh);
                 break;
-            case 3: {
+            case 3:
+            case 4: {
                 // Preserve the intrinsic SVG dimensions within the decoded raster, as before.
                 float sx = naturalWidth > 0 ? Math.min(1, naturalWidth / bw) : 1;
                 float sy = naturalHeight > 0 ? Math.min(1, naturalHeight / bh) : 1;
+                if (resizeMode == 4) {
+                    // Scale-down: shrunk to fit the view where larger.
+                    float fit = Math.min(1, Math.min(w / (bw * sx), h / (bh * sy)));
+                    sx *= fit;
+                    sy *= fit;
+                }
                 matrix.setScale(sx, sy);
                 matrix.postTranslate((w - bw * sx) / 2, (h - bh * sy) / 2);
                 break;

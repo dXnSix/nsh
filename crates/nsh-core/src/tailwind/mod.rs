@@ -40,7 +40,7 @@ use crate::{
     geometry::{Points, Size},
     ops::ResizeMode,
     props::PointerEvents,
-    style::{Color, EllipsizeMode, Style, TextShadow},
+    style::{Color, EllipsizeMode, PatchValue, Style, TextShadow},
 };
 
 /// Interaction states a class can depend on (`active:`, `hover:`, ...).
@@ -106,6 +106,26 @@ pub mod deps {
     /// The component theme's tokens (`bg-primary`): parsed again when they
     /// change.
     pub const THEME: u16 = 256;
+    /// The text color it inherits (CSS's `currentColor`: a border, an
+    /// outline or a ring without a color of its own).
+    pub const CURRENT_COLOR: u16 = 512;
+    /// The advance of its font's `0` (CSS's `ch`: `max-w-prose`).
+    pub const CH: u16 = 1024;
+}
+
+/// CSS's `ch` where no font is known ([`ClassList::apply`]): half a `rem`,
+/// so `max-w-prose` is 520 points there.
+pub(crate) const DEFAULT_CH: f32 = 8.0;
+
+/// What CSS's `currentColor` is for a node: its own text color (its
+/// inline style's, else its classes'), else the one it inherits, else
+/// black, React Native's default.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct CurrentColor {
+    /// The text color the node inherits.
+    pub(crate) inherited: Option<Color>,
+    /// The color its inline style sets.
+    pub(crate) inline: Option<Color>,
 }
 
 /// The platform classes run on (`ios:`, `android:`, `web:`).
@@ -208,6 +228,18 @@ impl Condition {
         self.placeholder || self.selection
     }
 
+    /// The color a pseudo-element rule's `decls` give it: the placeholder's
+    /// text color (`placeholder:text-*`), the selection's background, its
+    /// highlight (`selection:bg-*`). `None`: the rule sets something else,
+    /// which NSH has no native counterpart for.
+    fn pseudo_color(&self, decls: &[Decl]) -> Option<Color> {
+        match decls {
+            [decl] if self.placeholder => decl.text_color(),
+            [decl] if self.selection => decl.background_color(),
+            _ => None,
+        }
+    }
+
     /// Applies only while the view (or its group) is pressed, hovered or
     /// focused: press feedback.
     fn interactive(&self) -> bool {
@@ -265,7 +297,8 @@ pub(crate) struct Rule {
 /// Ranks of the variants Rust components use (Tailwind's order, as
 /// [`variant`] gives them).
 pub(crate) mod rank {
-    pub(crate) const GROUP: u16 = 20;
+    /// Before the pseudo-elements and `first:` ... `even:`.
+    pub(crate) const GROUP: u16 = 10;
     pub(crate) const HOVER: u16 = 31;
     pub(crate) const FOCUS: u16 = 32;
     pub(crate) const ACTIVE: u16 = 33;
@@ -330,21 +363,69 @@ pub struct ClassProps {
     /// `text-ellipsis`, `text-clip`, `truncate`.
     pub ellipsize: Option<EllipsizeMode>,
     /// `whitespace-nowrap`, `text-nowrap`, `truncate`: lines never wrap.
+    /// Inherited, as CSS's `white-space`: a view's reaches the texts in it.
     pub no_wrap: Option<bool>,
     /// `pointer-events-none` / `-auto`.
     pub pointer_events: Option<PointerEvents>,
     /// `object-cover` and friends (images).
     pub resize_mode: Option<ResizeMode>,
-    /// `select-none` / `select-text`.
+    /// `select-none` / `select-text` (`select-auto`: none). A view's reach
+    /// the texts in it that say none, as CSS's `user-select: auto` takes
+    /// its parent's.
     pub selectable: Option<bool>,
     /// `placeholder:text-*` (inputs).
     pub placeholder_color: Option<Color>,
-    /// `selection:text-*` (inputs, selectable texts).
+    /// `selection:bg-*`: the highlight of a selection (inputs, selectable
+    /// texts).
     pub selection_color: Option<Color>,
     /// `caret-*` (inputs).
     pub caret_color: Option<Color>,
     /// `text-shadow-*` layers beyond the first (drawn as one shadow).
     pub text_shadows: Option<Vec<TextShadow>>,
+    /// `space-x-*` / `space-y-*`: margins the view gives its children.
+    pub space: Option<Space>,
+}
+
+/// `space-x-*` / `space-y-*` (and `-reverse`): the margins a view gives
+/// each of its children but the last, as Tailwind CSS's `:where(& >
+/// :not(:last-child))`: under the child's own margins, which win.
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
+pub struct Space {
+    /// `space-x-*`: the end margin (`margin-inline-end`; the start one
+    /// with `space-x-reverse`).
+    pub x: Option<PatchValue>,
+    /// `space-y-*`: the bottom margin (`margin-block-end`; the top one
+    /// with `space-y-reverse`).
+    pub y: Option<PatchValue>,
+    /// `space-x-reverse`.
+    pub reverse_x: bool,
+    /// `space-y-reverse`.
+    pub reverse_y: bool,
+}
+
+impl Space {
+    /// The margins of a child: React Native's `marginRight` is the end
+    /// side in either direction, `marginLeft` the start side.
+    pub(crate) fn apply(&self, style: &mut Style) {
+        use crate::style::StyleKey as K;
+        if let Some(v) = &self.x {
+            let key = if self.reverse_x {
+                K::MarginLeft
+            } else {
+                K::MarginRight
+            };
+            let _ = style.set_key(key, v.as_value());
+        }
+        if let Some(v) = &self.y {
+            let key = if self.reverse_y {
+                K::MarginTop
+            } else {
+                K::MarginBottom
+            };
+            let _ = style.set_key(key, v.as_value());
+        }
+    }
 }
 
 /// A parsed class string.
@@ -391,7 +472,8 @@ impl ClassList {
 
     /// Applies the rules matching `cx` to `style` and `props`, then
     /// `inline` (the node's inline style, which only `!` utilities win
-    /// over).
+    /// over). `currentColor` (a border without a color) is the node's own
+    /// text color, else black.
     pub fn apply(
         &self,
         cx: &Context<'_>,
@@ -400,15 +482,56 @@ impl ClassList {
         props: &mut ClassProps,
         inline: impl FnOnce(&mut Style),
     ) {
+        self.apply_with(
+            cx,
+            theme,
+            CurrentColor::default(),
+            DEFAULT_CH,
+            style,
+            props,
+            inline,
+        );
+    }
+
+    /// [`ClassList::apply`] in a tree, where `current` says what the
+    /// node's `currentColor` comes from and `ch` is its font's `0` advance.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_with(
+        &self,
+        cx: &Context<'_>,
+        theme: &Theme,
+        current: CurrentColor,
+        ch: f32,
+        style: &mut Style,
+        props: &mut ClassProps,
+        inline: impl FnOnce(&mut Style),
+    ) {
         let mut parts = Parts::default();
+        parts.ch = ch;
         let mut important = false;
+        let current = if self.deps & deps::CURRENT_COLOR != 0 {
+            let [plain, important] = self.text_colors(cx);
+            important
+                .or(current.inline)
+                .or(plain)
+                .or(current.inherited)
+                .unwrap_or(Color::BLACK)
+        } else {
+            Color::BLACK
+        };
+        parts.current = current;
         for rule in &self.rules {
             if rule.cond.pseudo() || !rule.cond.matches(cx) {
                 continue;
             }
             for decl in &rule.decls {
-                if let Decl::Default(key, value) = decl {
-                    let _ = style.set_key(*key, value.as_value());
+                match decl {
+                    Decl::Default(key, value) => {
+                        let (key, value) = utilities::directed(*key, value, cx.rtl);
+                        let _ = style.set_key(key, value.as_value());
+                    }
+                    Decl::CurrentColor(key) => style.set_color(*key, current),
+                    _ => {}
                 }
             }
         }
@@ -423,7 +546,7 @@ impl ClassList {
             }
             important |= rule.important;
             for decl in &rule.decls {
-                decl.apply(cx.env.dark, style, props, &mut parts);
+                decl.apply(cx.env.dark, cx.rtl, style, props, &mut parts);
             }
             let background = rule.decls.iter().any(Decl::sets_background_color);
             if rule.cond.interactive() {
@@ -443,13 +566,11 @@ impl ClassList {
             if !rule.cond.matches(cx) {
                 continue;
             }
-            for decl in &rule.decls {
-                if let Some(c) = decl.text_color() {
-                    if rule.cond.placeholder {
-                        props.placeholder_color = Some(c);
-                    } else {
-                        props.selection_color = Some(c);
-                    }
+            if let Some(c) = rule.cond.pseudo_color(&rule.decls) {
+                if rule.cond.placeholder {
+                    props.placeholder_color = Some(c);
+                } else {
+                    props.selection_color = Some(c);
                 }
             }
         }
@@ -469,7 +590,7 @@ impl ClassList {
             {
                 if rule.cond.matches(cx) {
                     for decl in &rule.decls {
-                        decl.apply(cx.env.dark, style, props, &mut parts);
+                        decl.apply(cx.env.dark, cx.rtl, style, props, &mut parts);
                     }
                 }
             }
@@ -483,6 +604,23 @@ impl ClassList {
 }
 
 impl ClassList {
+    /// The text colors the rules matching `cx` set: the plain ones' and
+    /// the `!` ones' (which win over the inline style).
+    fn text_colors(&self, cx: &Context<'_>) -> [Option<Color>; 2] {
+        let mut out = [None; 2];
+        for rule in &self.rules {
+            if rule.cond.pseudo() || !rule.cond.matches(cx) {
+                continue;
+            }
+            for decl in &rule.decls {
+                if let Some(c) = decl.sets_text_color(cx.env.dark) {
+                    out[usize::from(rule.important)] = c;
+                }
+            }
+        }
+        out
+    }
+
     /// The rules of a Rust component's styles (already in order), on a
     /// view that is the groups `groups` (`""`: unnamed).
     pub(crate) fn from_rules(rules: Vec<Rule>, groups: Vec<Box<str>>) -> Self {
@@ -628,7 +766,7 @@ enum Token {
     /// A utility naming theme tokens: one rule, or one per appearance.
     Themed(Rule, Option<Box<Rule>>),
     Group(Box<str>),
-    /// Accepted, but has no effect natively (`antialiased`).
+    /// Accepted, but has no effect natively (`antialiased`; [`ignored`]).
     Ignored,
 }
 
@@ -672,33 +810,14 @@ fn parse_token(theme: &Theme, token: &str) -> Option<Token> {
         if let Some(name) = utility.strip_prefix("group/") {
             return Some(Token::Group(name.into()));
         }
-        // Web-only utilities that need nothing natively.
-        if matches!(
-            utility,
-            "antialiased"
-                | "subpixel-antialiased"
-                | "isolate"
-                | "isolation-auto"
-                | "box-border"
-                | "box-content"
-        ) || [
-            "will-change-",
-            "touch-",
-            "appearance-",
-            "scroll-",
-            "snap-",
-            "overscroll-",
-        ]
-        .iter()
-        .any(|p| utility.starts_with(p))
-        {
-            return Some(Token::Ignored);
-        }
     }
     let mut cond = Condition::default();
     let mut rank = 0u16;
     for v in variants {
         rank = rank.max(variant(theme, v, &mut cond)?);
+    }
+    if ignored(utility) {
+        return Some(Token::Ignored);
     }
     if theme.tokens().replaces(utility) {
         return themed(theme, cond, rank, important, utility);
@@ -706,6 +825,9 @@ fn parse_token(theme: &Theme, token: &str) -> Option<Token> {
     let Some(decls) = utilities::parse(theme, utility) else {
         return themed(theme, cond, rank, important, utility);
     };
+    if cond.pseudo() && cond.pseudo_color(&decls).is_none() {
+        return None;
+    }
     Some(Token::Rule(Rule {
         cond,
         decls,
@@ -713,6 +835,27 @@ fn parse_token(theme: &Theme, token: &str) -> Option<Token> {
         important,
         theme: false,
     }))
+}
+
+/// Utilities whose CSS is a rendering hint or what every native view
+/// already is: accepted, and they do nothing (`box-border` is preflight's
+/// `box-sizing`, NSH's only one).
+fn ignored(utility: &str) -> bool {
+    matches!(
+        utility,
+        "antialiased"
+            | "subpixel-antialiased"
+            | "box-border"
+            | "isolation-auto"
+            | "appearance-none"
+            | "appearance-auto"
+            | "will-change-auto"
+            | "will-change-scroll"
+            | "will-change-contents"
+            | "will-change-transform"
+    ) || utility
+        .strip_prefix("will-change-[")
+        .is_some_and(|v| v.len() > 1 && v.ends_with(']'))
 }
 
 /// `utility` naming theme tokens (`bg-primary`, `rounded-(--radius)`):
@@ -726,7 +869,15 @@ fn themed(
     utility: &str,
 ) -> Option<Token> {
     let tokens = theme.tokens();
-    let parse = |dark: bool| utilities::parse(theme, &tokens.substitute(utility, dark)?);
+    let pseudo = Condition {
+        placeholder: cond.placeholder,
+        selection: cond.selection,
+        ..Condition::default()
+    };
+    let parse = |dark: bool| {
+        let decls = utilities::parse(theme, &tokens.substitute(utility, dark)?)?;
+        (!pseudo.pseudo() || pseudo.pseudo_color(&decls).is_some()).then_some(decls)
+    };
     let rule = |cond: Condition, decls: Vec<Decl>| Rule {
         cond,
         decls,
@@ -758,34 +909,36 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<u16> {
     let states = |cond: &mut Condition, s: u8| {
         cond.states |= s;
     };
+    // Tailwind registers `group-*` first, then the pseudo-elements, then
+    // the structural pseudo-classes: later ones win over earlier ones.
     Some(match v {
-        "first" => {
-            cond.position |= position::FIRST;
-            10
-        }
-        "last" => {
-            cond.position |= position::LAST;
+        "selection" => {
+            cond.selection = true;
             11
-        }
-        "only" => {
-            cond.position |= position::ONLY;
-            12
-        }
-        "odd" => {
-            cond.position |= position::ODD;
-            13
-        }
-        "even" => {
-            cond.position |= position::EVEN;
-            14
         }
         "placeholder" => {
             cond.placeholder = true;
+            12
+        }
+        "first" => {
+            cond.position |= position::FIRST;
+            13
+        }
+        "last" => {
+            cond.position |= position::LAST;
+            14
+        }
+        "only" => {
+            cond.position |= position::ONLY;
             15
         }
-        "selection" => {
-            cond.selection = true;
+        "odd" => {
+            cond.position |= position::ODD;
             16
+        }
+        "even" => {
+            cond.position |= position::EVEN;
+            17
         }
         "checked" => {
             states(cond, CHECKED);
@@ -886,7 +1039,7 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<u16> {
                     return None;
                 }
                 entry.1 |= bit;
-                return Some(20);
+                return Some(rank::GROUP);
             }
             // Breakpoints: `md:`, `max-md:`, `min-[600px]:`, `max-[600px]:`.
             let (max, name) = match v.strip_prefix("max-") {
