@@ -1270,6 +1270,7 @@ fn set_prop(
         "scrollValue",
         "tooltip",
         "uniforms",
+        "progress",
     ]
     .iter()
     .find(|k| **k == name)

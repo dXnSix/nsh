@@ -120,6 +120,7 @@ pub fn element_bits(tag: crate::Tag) -> u32 {
             Tag::Video => on::VIDEO,
             Tag::InputAccessory => on::INPUT_ACCESSORY,
             Tag::Shader => on::SHADER,
+            Tag::ShaderEffect => on::SHADER_EFFECT,
             Tag::View
             | Tag::Cell
             | Tag::Stack
@@ -170,6 +171,8 @@ pub mod on {
     pub const OVERLAY: u32 = 1 << 12;
     /// `<shader>`.
     pub const SHADER: u32 = 1 << 13;
+    /// `<shadereffect>`.
+    pub const SHADER_EFFECT: u32 = 1 << 14;
     /// Set by the runtime itself, not part of the elements' types.
     pub const INTERNAL: u32 = 1 << 31;
 }
@@ -847,6 +850,7 @@ const GROUPS: &[(u32, &str, &str)] = &[
     (on::INPUT_ACCESSORY, "InputAccessory", "input accessories"),
     (on::OVERLAY, "Overlay", "`<Overlay>`"),
     (on::SHADER, "Shader", "`<Shader>`"),
+    (on::SHADER_EFFECT, "ShaderEffect", "`<ShaderEffect>`"),
 ];
 
 /// The declarations of the host elements' props: the named types they use

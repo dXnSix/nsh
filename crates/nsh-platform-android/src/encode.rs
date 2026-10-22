@@ -143,6 +143,7 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                     ViewKind::Canvas => 14,
                     ViewKind::Native => 15,
                     ViewKind::Shader => 16,
+                    ViewKind::ShaderEffect => 17,
                 });
             }
             MountItem::Insert {
@@ -328,6 +329,8 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                 e.int(id as i32);
                 shader_fill(&mut e, fill.as_deref());
             }
+            // Android's shaders read their inputs live.
+            MountItem::ShaderInput { .. } => {}
             MountItem::Overflow { id, extent } => {
                 e.int(OVERFLOW);
                 e.int(id as i32);
@@ -1273,6 +1276,9 @@ fn shader_fill(e: &mut Encoded, fill: Option<&nsh_core::shader::ShaderFill>) {
     };
     e.int(fill.program as i32);
     e.bool(fill.time);
+    e.int(fill.inputs as i32);
+    e.float(fill.progress);
+    e.float(fill.max_offset.0);
     let words = fill.uniforms.len() / 4;
     e.int(words as i32);
     for w in fill.uniforms.as_chunks::<4>().0 {

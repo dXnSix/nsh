@@ -54,6 +54,10 @@ pub enum Tag {
     /// A view a shader fills (`<shader>`, TS: `Shader` of `nsh`), its
     /// children drawn over it ([`crate::shader`]).
     Shader,
+    /// A view whose children draw through a shader (`<shadereffect>`, TS:
+    /// `ShaderEffect` of `nsh`): what they draw is the shader's
+    /// `sample_content` ([`crate::shader`]).
+    ShaderEffect,
     /// A web page (`<webview>`).
     WebView,
     /// A video player (`<video>`).
@@ -86,6 +90,7 @@ impl Tag {
             "inputaccessory" => Tag::InputAccessory,
             "canvas" => Tag::Canvas,
             "shader" => Tag::Shader,
+            "shadereffect" => Tag::ShaderEffect,
             "webview" => Tag::WebView,
             "video" => Tag::Video,
             "native" => Tag::Native,
@@ -1555,14 +1560,24 @@ pub enum Prop {
     /// `src`: a URL, `asset:/path`, or an imported asset.
     #[prop(js = "src", on = IMAGE, shared)]
     Source(Option<ImageSource>),
-    /// `src` of a shader view: the shader it draws (`createShader`, a
-    /// `.wgsl` import).
-    #[prop(js = "src", on = SHADER, shared)]
+    /// `src` of a shader view or effect: the shader it draws
+    /// (`createShader`, a `.wgsl` import); an effect without one draws its
+    /// children as they are.
+    #[prop(js = "src", on = SHADER | SHADER_EFFECT, shared)]
     ShaderSource(Option<crate::shader::ShaderSource>),
     /// `uniforms`: the values of the shader's uniforms, by name; animated
     /// values change them on the UI thread.
-    #[prop(js = "uniforms", on = SHADER)]
+    #[prop(js = "uniforms", on = SHADER | SHADER_EFFECT)]
     Uniforms(crate::shader::Uniforms),
+    /// `progress`: what the shader reads as `nsh.progress` (0 to 1 by
+    /// convention): a number, or an animated value the UI thread writes.
+    #[prop(js = "progress", on = SHADER | SHADER_EFFECT)]
+    ShaderProgress(crate::shader::ShaderNumber),
+    /// `maxSampleOffset`: how far outside a pixel a shader effect samples
+    /// its content, in points (a blur's radius, a ripple's reach): the
+    /// content is drawn that much beyond the view's bounds for it.
+    #[prop(js = "maxSampleOffset", on = SHADER_EFFECT)]
+    MaxSampleOffset(Points),
     /// `resizeMode`: how an image (or a video) fits its box.
     #[prop(js = "resizeMode", on = IMAGE | VIDEO)]
     ResizeMode(ResizeMode),

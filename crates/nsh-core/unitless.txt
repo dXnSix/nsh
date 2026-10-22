@@ -170,6 +170,9 @@ scroll::snap_duration(velocity)                                  # a velocity, p
 scroll::spokes ->                                                # an opacity per spoke, 0..1
 scroll::wheel_end(vx)                                            # a velocity, points per second
 scroll::wheel_end(vy)                                            # a velocity, points per second
+shader::ShaderFill.progress                                      # a shader's `nsh.progress` (any number the app gives it)
+shader::ShaderNumber::Number.0                                   # a number a shader reads (any unit the shader gives it)
+shader::ShaderNumber::constant ->                                # a number a shader reads (any unit the shader gives it)
 shader::UniformValue::Number.0                                   # a shader uniform's component (any of its types' units)
 shader::nsh_buffer(scale)                                        # the screen's pixel ratio
 shader::nsh_buffer(time)                                         # time

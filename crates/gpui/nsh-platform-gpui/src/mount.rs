@@ -303,7 +303,7 @@ impl Mounter {
             }
             // GPUI draws no shaders of an app's (`shaderSupport().fill` is
             // "no"): a shader view shows its children.
-            MountItem::ShaderProgram { .. } | MountItem::Shader { .. } => {}
+            MountItem::ShaderProgram { .. } | MountItem::Shader { .. } | MountItem::ShaderInput { .. } => {}
             MountItem::Gestures { id, values } => {
                 if let Some(view) = &self.get(*id) {
                     crate::input::gestures(surface, view, *values);

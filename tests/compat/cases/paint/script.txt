@@ -293,8 +293,10 @@ expect Shaders
 expect glow: color, radius, center
 expect plain: 0 uniforms
 expect invalid: SyntaxError: names it
-expect fill false, backdrop false
+expect fill false, backdrop false, effect false
 expect Over the shader
+expect Through the shader
+expect No shader, as it is
 covers [nsh] createShader
 covers [nsh] shaderSupport
 # paint-shadows

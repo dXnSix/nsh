@@ -210,6 +210,12 @@ host_element! {
 }
 
 host_element! {
+    /// A view whose children draw through a shader (`<shadereffect>`),
+    /// made by [`shader_effect`].
+    ShaderEffectView
+}
+
+host_element! {
     /// A web page (`<webview>`), made by [`web_view`].
     WebView
 }
@@ -235,6 +241,7 @@ host_element! {
 
 impl ParentElement for Overlay {}
 impl ParentElement for ShaderView {}
+impl ParentElement for ShaderEffectView {}
 impl ParentElement for Scroll {}
 impl ParentElement for Stack {}
 impl ParentElement for Screen {}
@@ -359,6 +366,42 @@ impl ShaderView {
     /// ([`crate::shader::UniformValue`]).
     pub fn uniforms(self, uniforms: impl IntoReactive<crate::shader::Uniforms>) -> Self {
         self.bind_prop(uniforms, Prop::Uniforms)
+    }
+
+    /// What the shader reads as `nsh.progress`: a number, or an animated
+    /// value the UI thread writes.
+    pub fn progress(self, progress: impl Into<crate::shader::ShaderNumber>) -> Self {
+        self.set(Prop::ShaderProgress(progress.into()))
+    }
+}
+
+/// A view whose children draw through `source` (a bound one draws the new
+/// one when it changes; `None` draws them as they are): they are what the
+/// shader's `sample_content` reads. Made with
+/// [`crate::shader::ShaderSource::new`].
+pub fn shader_effect(
+    source: impl IntoReactive<Option<crate::shader::ShaderSource>>,
+) -> ShaderEffectView {
+    ShaderEffectView(ElNode::new(Tag::ShaderEffect)).bind_prop(source, Prop::ShaderSource)
+}
+
+impl ShaderEffectView {
+    /// The values of the shader's uniforms, by name (as
+    /// [`ShaderView::uniforms`]).
+    pub fn uniforms(self, uniforms: impl IntoReactive<crate::shader::Uniforms>) -> Self {
+        self.bind_prop(uniforms, Prop::Uniforms)
+    }
+
+    /// What the shader reads as `nsh.progress` (as
+    /// [`ShaderView::progress`]).
+    pub fn progress(self, progress: impl Into<crate::shader::ShaderNumber>) -> Self {
+        self.set(Prop::ShaderProgress(progress.into()))
+    }
+
+    /// How far outside a pixel the shader samples its content: the
+    /// children are drawn that much beyond the view for it.
+    pub fn max_sample_offset(self, offset: Points) -> Self {
+        self.set(Prop::MaxSampleOffset(offset))
     }
 }
 

@@ -80,8 +80,8 @@ A shader is one function, `main`, that returns the color of a pixel:
 - The uniforms are the fields of the struct `main` takes as its second parameter (`fn main(p: vec2f) -> vec4f` takes
   none): `f32`, `i32`, vectors of them, square `f32` matrices, fixed arrays of those (`array<vec4f, 8>`: an array's
   elements are 16 bytes apart) and `Image`.
-- `nsh` holds the view: `nsh.size` (its size in points), `nsh.scale` (pixels per point) and `nsh.time` (seconds since
-  the shader first drew).
+- `nsh` holds the view: `nsh.size` (its size in points), `nsh.scale` (pixels per point), `nsh.time` (seconds since
+  the shader first drew) and `nsh.progress` (the element's `progress`).
 - `sample_image(u.field, p)` reads an `Image` uniform at a position in points, the image stretched over the view
   (`u.field.size` is its size in points, to fit it another way). Outside the image a sample is transparent.
 
@@ -153,6 +153,71 @@ radius.spring(96);
 A shader draws when what it reads changes: its uniforms, an image that loaded, the view's size, an animated value as
 it moves. A shader that reads `nsh.time` draws every frame while it is on screen.
 
+## Effects: children through a shader
+
+`<ShaderEffect>` draws its children through a shader: what they draw is the shader's input, `sample_content(p)`, and
+the shader's result is what shows. The children stay views: they lay out, take touches and clicks, and read to
+screen readers as usual. `maxSampleOffset` is how far beyond a pixel the shader samples them, in points (a ripple's
+reach, a blur's radius): the children are drawn that much beyond the view's bounds for it. Without `src` the
+children draw as they are.
+
+```rust tabs
+static WAVE: LazyLock<ShaderSource> = LazyLock::new(|| {
+    ShaderSource::new(include_str!("wave.wgsl"), &ShaderLimits::default()).expect("a shader")
+});
+
+let progress = animated_value(0.0);
+progress.timing(1.0, 2000.0, Easing::Linear);
+
+shader_effect(Some(WAVE.clone()))
+    .uniforms(Uniforms::new().set("amount", 8.0))
+    .progress(&progress)
+    .max_sample_offset(px(12.0))
+    .child(card())
+```
+
+```tsx tabs
+import { ShaderEffect } from "nsh";
+import { createAnimatedValue, Easing } from "nsh/animated";
+import wave from "./wave.wgsl";
+
+const progress = createAnimatedValue(0);
+progress.timing(1, { duration: 2000, easing: Easing.linear });
+
+<ShaderEffect src={wave} uniforms={{ amount: 8 }} progress={progress} maxSampleOffset={12}>
+  <Card />
+</ShaderEffect>;
+```
+
+```wgsl
+// wave.wgsl
+struct Uniforms { amount: f32 }
+
+fn main(p: vec2f, u: Uniforms) -> vec4f {
+  let shift = sin(p.y * 0.09 + nsh.progress * 6.2832) * u.amount;
+  return sample_content(p + vec2f(shift, 0.0));
+}
+```
+
+`progress` is what the shader reads as `nsh.progress`: a number, or an animated value the UI thread writes. Both
+elements take it.
+
+## What is behind a view
+
+`sample_backdrop(p)` reads what the window draws behind the view: the views under it, without the view itself and
+what it contains. A `<Shader>` that samples it makes frosted glass, tinted panes, lenses:
+
+```wgsl
+fn main(p: vec2f) -> vec4f {
+  var c = vec4f(0.0);
+  for (var i = 0; i < 16; i++) {
+    let a = f32(i) * 0.3927;
+    c += sample_backdrop(p + vec2f(cos(a), sin(a)) * 7.0);
+  }
+  return c / 16.0 * 0.8 + vec4f(0.2);
+}
+```
+
 ## Props
 
 A shader view takes the props of a [view](./view.md) (styles, children, press and gesture props, `onLayout`,
@@ -162,13 +227,22 @@ accessibility, `ref`, …) plus:
 |---|---|---|---|
 | `src` | `shader(source)` | `ShaderAsset<U>` | The shader: a `.wgsl` import or `createShader`'s result. |
 | `uniforms` | `.uniforms(uniforms)` | `U` (the shader's uniforms) | The values of its uniforms, by name. |
+| `progress` | `.progress(progress)` | `number \| AnimatedNode` | What the shader reads as `nsh.progress`. |
+
+A shader effect takes the same, with an optional `src` (`shader_effect(Some(source))`, `None` for none), plus:
+
+| Prop | Rust | Type | Description |
+|---|---|---|---|
+| `maxSampleOffset` | `.max_sample_offset(px(…))` | `number` | How far beyond a pixel the shader samples its content, in points. |
 
 ## Support
 
 `shaderSupport()` from `nsh` says what the platform draws: `{ fill, backdrop, effect, transition }`, each `"live"`,
 `"snapshot"` or `false`. `fill` is `<Shader>`: `"live"` on iOS, Mac Catalyst, macOS, Android 13 and later, Windows,
-Linux and the web. Where it is `false`, a shader view shows its children and its own styles, so a layout that puts
-content over a shader reads the same everywhere.
+Linux and the web. `effect` is `<ShaderEffect>` and `backdrop` a shader that samples what is behind it: `"live"` on
+Android 13 and later. Where `fill` is `false`, a shader view shows its children and its own styles, so a layout that
+puts content over a shader reads the same everywhere; where `effect` is `false`, an effect shows its children as they
+are, and where `backdrop` is `false`, `sample_backdrop` reads transparent.
 
 ```tsx
 import { shaderSupport } from "nsh";
@@ -186,7 +260,9 @@ a shader takes up to 128 texture samples, which the host app sets with its
 
 - iOS, Mac Catalyst and macOS draw with Metal in a `CAMetalLayer` over the view's background; programs compile off the
   main thread.
-- Android draws with a `RuntimeShader` (Android 13, API 33, and later) when the view draws.
+- Android draws with a `RuntimeShader` (Android 13, API 33, and later) when the view draws. An effect runs it as the
+  render effect of its children's drawing, a backdrop shader as the render effect of what is behind the view: both
+  read their input live. A shader there reads one live input, its content or its backdrop.
 - Windows renders with Direct3D 11 into a texture Direct2D draws.
 - Linux renders with OpenGL ES 3 into a texture GTK draws.
 - The web renders with WebGL 2 into a canvas in the view's element.

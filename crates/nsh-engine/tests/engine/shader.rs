@@ -9,7 +9,7 @@ use nsh_core::{
     ApproxTextEngine, MountBatch, MountItem, Size, ViewKind,
     animation::AnimationProp,
     geometry::px,
-    shader::{ShaderFill, ShaderLanguage, ShaderSupport},
+    shader::{PROGRESS, ShaderFill, ShaderInput, ShaderLanguage, ShaderSupport},
 };
 use nsh_engine::{Bundle, Engine, EngineConfig, Environment};
 
@@ -254,4 +254,87 @@ fn create_shader_checks_its_source_and_shader_support_says_what_draws() {
         line.contains(r#"{"fill":"live","backdrop":false,"effect":false,"transition":false}"#),
         "{line}"
     );
+}
+
+const EFFECT: &str = r##"import { mount, createShader, ShaderEffect, Shader, signal, Text, View } from "nsh";
+import { createAnimatedValue } from "nsh/animated";
+
+const wave = createShader("fn main(p: vec2f) -> vec4f { return sample_content(p + vec2f(nsh.progress, 0.0)); }");
+const frost = createShader("fn main(p: vec2f) -> vec4f { return sample_backdrop(p) * 0.5; }");
+const label = signal("one");
+setTimeout(() => label.set("two"), 50);
+
+mount(() => {
+  const progress = createAnimatedValue(0);
+  return (
+    <View>
+      <ShaderEffect src={wave} progress={progress} maxSampleOffset={12}>
+        <Text>{label()}</Text>
+      </ShaderEffect>
+      <ShaderEffect progress={0.25}>
+        <Text>plain</Text>
+      </ShaderEffect>
+      <Shader src={frost} style={{ height: 10 }} />
+    </View>
+  );
+});
+"##;
+
+#[test]
+fn shader_effects_take_their_children_and_learn_when_they_change() {
+    let (_engine, rx) = start(EFFECT);
+    let items = items(&rx, Duration::from_millis(500));
+    let effects: Vec<_> = items
+        .iter()
+        .filter_map(|i| match i {
+            MountItem::Create {
+                id,
+                kind: ViewKind::ShaderEffect,
+            } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(effects.len(), 2, "{items:?}");
+    let backdrop = items
+        .iter()
+        .find_map(|i| match i {
+            MountItem::Create {
+                id,
+                kind: ViewKind::Shader,
+            } => Some(*id),
+            _ => None,
+        })
+        .expect("the backdrop shader");
+    let fill = |id| {
+        items.iter().rev().find_map(|i| match i {
+            MountItem::Shader { id: of, fill } if *of == id => Some(fill.clone()),
+            _ => None,
+        })
+    };
+    let wave = fill(effects[0]).flatten().expect("the wave's fill");
+    assert!(wave.samples(ShaderInput::Content));
+    assert!(!wave.samples(ShaderInput::Backdrop));
+    assert_eq!(wave.max_offset, nsh_core::Points(12.0));
+    // Without a shader an effect draws its children as they are.
+    assert!(fill(effects[1]).flatten().is_none(), "{items:?}");
+    assert!(
+        fill(backdrop)
+            .flatten()
+            .expect("the frost's fill")
+            .samples(ShaderInput::Backdrop)
+    );
+    // The animated progress is bound to `nsh.progress`.
+    assert!(items.iter().any(|i| matches!(i, MountItem::AnimationBindings { id, bindings }
+        if *id == effects[0] && bindings.iter().any(|(p, _)| *p == AnimationProp::ShaderUniform(PROGRESS)))));
+    // The text in the effect changed: the effect's input did, and every
+    // backdrop's (something in the surface changed).
+    let marks = |id| {
+        items
+            .iter()
+            .filter(|i| matches!(i, MountItem::ShaderInput { id: of } if *of == id))
+            .count()
+    };
+    assert!(marks(effects[0]) >= 2, "{items:?}");
+    assert!(marks(backdrop) >= 2, "{items:?}");
+    assert_eq!(marks(effects[1]), 0);
 }
