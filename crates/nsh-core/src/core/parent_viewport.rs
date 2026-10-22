@@ -419,7 +419,7 @@ impl<M: TextEngine> Core<M> {
         let list = node.list.as_ref()?;
         let outer = list.outer?;
         let horizontal = list.horizontal;
-        let l = self.layout.layout(node.layout?).ok()?;
+        let l = self.rounded_layout(node.layout?);
         let (inset, cross) = if horizontal {
             (
                 (l.border.left + l.padding.left, l.border.top + l.padding.top),
@@ -448,7 +448,7 @@ impl<M: TextEngine> Core<M> {
             let size = if outer.view == self.root {
                 self.viewport
             } else {
-                let l = self.layout.layout(view.layout?).ok()?;
+                let l = self.rounded_layout(view.layout?);
                 crate::geometry::size_pt(l.size.width, l.size.height)
             };
             (0.0, main(size.width, size.height), 0.0, true)
