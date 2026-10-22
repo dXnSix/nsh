@@ -69,6 +69,9 @@ crates/
                        (`declarations.rs`, from the declaration next to each export and spec)
   nsh-engine/          Engine thread: drives nsh-js + nsh-core and hands one MountBatch per frame to the platform
   nsh-package/         Signed packages (`.nshpkg`): Ed25519 keys, release-key certificates, revocation lists, the trust store
+  nsh-shader/          Shaders: WGSL in NSH's profile (what AGSL can say too), checked on naga's IR (`profile.rs`: counted
+                       loops, indexes proven in bounds, the sample budget) and reflected (uniforms, inputs, time / progress);
+                       NSH's prelude as WGSL (`glue.rs`) (docs/dev/shaders.md)
   nsh-bundler/         Bundler: rolldown + Oxc (TS stripping) + NSH's JSX compiler (`jsx.rs`, docs/dev/native-pipeline.md) + source maps;
                        imports of the native modules stay imports (`plugin.rs`), so a bundle holds only the app's code;
                        the app's themes (nsh.json `tailwind` / `theme`, checked, handed to the renderer by the entry) and the
@@ -176,6 +179,7 @@ are never linked into the CLI: it reads their UI sets as data (`nsh_core::ui::de
 | units and geometry (`Points`, `Length`, `Bounds`, ...) | `docs/dev/geometry.md` |
 | scroll views, zooming, `List` | `docs/dev/scrolling-and-lists.md` |
 | animation, canvas, images | `docs/dev/animation.md`, `canvas.md`, `images.md` |
+| shaders: the profile, the prelude | `docs/dev/shaders.md` |
 | VM limits, capabilities, signed packages | `docs/dev/sandbox.md`, `signed-packages.md` |
 | packaging, the iOS / Android SDKs, native components | `docs/dev/embedding.md` |
 | `.nsh/types`, the dev server, hot reload | `docs/dev/tooling.md` |

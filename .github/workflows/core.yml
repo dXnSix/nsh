@@ -19,6 +19,7 @@ on:
       - "crates/nsh-package/**"
       - "crates/nsh-testing/**"
       - "crates/nsh-base/**"
+      - "crates/nsh-shader/**"
       - "examples/counter/**"
       - "examples/gallery/**"
       - "examples/bench/**"
@@ -38,6 +39,7 @@ on:
       - "crates/nsh-package/**"
       - "crates/nsh-testing/**"
       - "crates/nsh-base/**"
+      - "crates/nsh-shader/**"
       - "examples/counter/**"
       - "examples/gallery/**"
       - "examples/bench/**"
@@ -68,7 +70,7 @@ env:
   # whole pipeline), so its tests all run.
   PACKAGES: >-
     -p nsh-core -p nsh-macros -p nsh-js -p nsh-base -p nsh-engine
-    -p nsh-bundler -p nsh-package -p nsh-testing
+    -p nsh-bundler -p nsh-package -p nsh-testing -p nsh-shader
     --features nsh-bundler/bundle,nsh-testing/bundle,nsh-testing/agent
 
 jobs:
