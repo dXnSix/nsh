@@ -11,8 +11,8 @@ demo: el-shader
 A shader view is a view the GPU fills: gradients that drift, glows, noise, an image distorted by ripples, any look a
 function of the pixel's position can describe. The app writes the shader in WGSL, the language of WebGPU; NSH checks
 it when the app builds and when it is made, and each platform runs it on its own GPU API: Metal on iOS, Mac Catalyst
-and macOS, AGSL runtime shaders on Android 13 and later and WebGL 2 on the
-web. The view's children draw over the shader, and its styles (corners, borders, clipping, shadows) apply as on
+and macOS, AGSL runtime shaders on Android 13 and later, Direct3D 11 on Windows, OpenGL ES 3 on Linux and WebGL 2 on
+the web. The view's children draw over the shader, and its styles (corners, borders, clipping, shadows) apply as on
 any view.
 
 ```rust tabs
@@ -166,8 +166,8 @@ accessibility, `ref`, …) plus:
 ## Support
 
 `shaderSupport()` from `nsh` says what the platform draws: `{ fill, backdrop, effect, transition }`, each `"live"`,
-`"snapshot"` or `false`. `fill` is `<Shader>`: `"live"` on iOS, Mac Catalyst, macOS, Android 13 and later and the
-web. Where it is `false`, a shader view shows its children and its own styles, so a layout that puts
+`"snapshot"` or `false`. `fill` is `<Shader>`: `"live"` on iOS, Mac Catalyst, macOS, Android 13 and later, Windows,
+Linux and the web. Where it is `false`, a shader view shows its children and its own styles, so a layout that puts
 content over a shader reads the same everywhere.
 
 ```tsx
@@ -187,4 +187,6 @@ a shader takes up to 128 texture samples, which the host app sets with its
 - iOS, Mac Catalyst and macOS draw with Metal in a `CAMetalLayer` over the view's background; programs compile off the
   main thread.
 - Android draws with a `RuntimeShader` (Android 13, API 33, and later) when the view draws.
+- Windows renders with Direct3D 11 into a texture Direct2D draws.
+- Linux renders with OpenGL ES 3 into a texture GTK draws.
 - The web renders with WebGL 2 into a canvas in the view's element.

@@ -58,8 +58,12 @@ impl UiAnimation {
                 if moved.is_some() {
                     crate::text_input::animated(view);
                 }
-                for &(k, value) in canvas {
-                    crate::canvas::set_arg(view, k, value);
+                if view.kind() == nsh_core::ViewKind::Shader {
+                    crate::shader::set_args(view, canvas);
+                } else {
+                    for &(k, value) in canvas {
+                        crate::canvas::set_arg(view, k, value);
+                    }
                 }
             },
         );

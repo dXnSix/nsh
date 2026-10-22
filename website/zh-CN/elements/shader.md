@@ -8,7 +8,7 @@ demo: el-shader
 
 # Shader
 
-着色器视图是由 GPU 填充的视图：缓缓流动的渐变、光晕、噪点、被涟漪扭曲的图片，凡是能用像素位置的函数描述的效果都可以。应用用 WebGPU 的语言 WGSL 编写着色器；NSH 在应用构建时和着色器创建时检查它，每个平台用自己的 GPU API 运行它：iOS、Mac Catalyst 和 macOS 上是 Metal，Android 13 及以上是 AGSL 运行时着色器，Web 上是 WebGL 2。视图的子元素绘制在着色器之上，视图的样式（圆角、边框、裁剪、阴影）与任何视图一样生效。
+着色器视图是由 GPU 填充的视图：缓缓流动的渐变、光晕、噪点、被涟漪扭曲的图片，凡是能用像素位置的函数描述的效果都可以。应用用 WebGPU 的语言 WGSL 编写着色器；NSH 在应用构建时和着色器创建时检查它，每个平台用自己的 GPU API 运行它：iOS、Mac Catalyst 和 macOS 上是 Metal，Android 13 及以上是 AGSL 运行时着色器，Windows 上是 Direct3D 11，Linux 上是 OpenGL ES 3，Web 上是 WebGL 2。视图的子元素绘制在着色器之上，视图的样式（圆角、边框、裁剪、阴影）与任何视图一样生效。
 
 ```rust tabs
 use std::sync::LazyLock;
@@ -147,7 +147,7 @@ radius.spring(96);
 
 ## 支持情况
 
-`nsh` 的 `shaderSupport()` 说明平台绘制什么：`{ fill, backdrop, effect, transition }`，每项为 `"live"`、`"snapshot"` 或 `false`。`fill` 对应 `<Shader>`：在 iOS、Mac Catalyst、macOS、Android 13 及以上和 Web 上为 `"live"`。为 `false` 时，着色器视图显示它的子元素和自身样式，因此把内容放在着色器之上的布局在所有平台上读起来都一样。
+`nsh` 的 `shaderSupport()` 说明平台绘制什么：`{ fill, backdrop, effect, transition }`，每项为 `"live"`、`"snapshot"` 或 `false`。`fill` 对应 `<Shader>`：在 iOS、Mac Catalyst、macOS、Android 13 及以上、Windows、Linux 和 Web 上为 `"live"`。为 `false` 时，着色器视图显示它的子元素和自身样式，因此把内容放在着色器之上的布局在所有平台上读起来都一样。
 
 ```tsx
 import { shaderSupport } from "nsh";
@@ -163,4 +163,6 @@ const fancy = shaderSupport().fill !== false;
 
 - iOS、Mac Catalyst 和 macOS 用 Metal 在视图背景之上的 `CAMetalLayer` 中绘制；程序在主线程之外编译。
 - Android 在视图绘制时用 `RuntimeShader`（Android 13，API 33 及以上）绘制。
+- Windows 用 Direct3D 11 渲染到一张由 Direct2D 绘制的纹理。
+- Linux 用 OpenGL ES 3 渲染到一张由 GTK 绘制的纹理。
 - Web 用 WebGL 2 渲染到视图元素中的一个 canvas。
