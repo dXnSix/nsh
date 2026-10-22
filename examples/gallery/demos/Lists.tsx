@@ -458,9 +458,10 @@ function More() {
             </View>
           </View>
           <List
+            viewport="parent"
             each={items()}
             estimatedItemSize={48}
-            style={{ height: 196, borderRadius: radius.control, backgroundColor: colors.surface, ...finish.card, borderWidth: 1, borderColor: colors.line }}
+            style={{ borderRadius: radius.control, backgroundColor: colors.surface, ...finish.card, borderWidth: 1, borderColor: colors.line }}
             empty={
               <View style={{ alignItems: "center", justifyContent: "center", gap: 10, height: 194 }}>
                 <IconTile name="lists" tint={colors.faint} />
@@ -479,7 +480,8 @@ function More() {
           </List>
           <Text style={{ fontSize: 13, color: colors.muted }}>
             <Text style={{ fontFamily: mono, color: colors.text }}>ListEmptyComponent</Text> while empty, separators between rows; changes animate with{" "}
-            <Text style={{ fontFamily: mono, color: colors.text }}>LayoutAnimation</Text>.
+            <Text style={{ fontFamily: mono, color: colors.text }}>LayoutAnimation</Text>. In the page (
+            <Text style={{ fontFamily: mono, color: colors.text }}>viewport="parent"</Text>), the list is as tall as its rows.
           </Text>
         </Section>
       </View>
@@ -487,12 +489,98 @@ function More() {
   );
 }
 
-type ListTab = "grid" | "sections" | "chat" | "more";
+type Entry = { id: number; tone: Tone };
+
+const entries = (from: number, count: number): Entry[] =>
+  Array.from({ length: count }, (_, i) => ({ id: from + i, tone: tones[(from + i) % (tones.length - 1)] }));
+
+/** One row of the page's lists. */
+function EntryRow(props: { entry: Entry; label: string }) {
+  return (
+    <View
+      style={{
+        height: 56,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+        paddingHorizontal: 14,
+        borderRadius: radius.inset,
+        borderCurve: "continuous",
+        backgroundColor: colors.raised,
+        borderWidth: 1,
+        borderColor: colors.border,
+        ...finish.raised,
+      }}
+    >
+      <View style={{ width: 8, height: 8, borderRadius: 2.5, backgroundColor: toneColor(props.entry.tone) }} />
+      <Text style={{ flex: 1, fontSize: 15, color: colors.text, fontVariant: ["tabular-nums"] }}>
+        {props.label} {props.entry.id + 1}
+      </Text>
+      <Badge label={props.entry.tone} tone={props.entry.tone} />
+    </View>
+  );
+}
+
+/** Headers and two lists on one page: the lists have no scroll view of
+ * their own (`viewport="parent"`), the page scrolls them as one, and only
+ * their rows near its viewport exist. */
+function Page() {
+  const recent = entries(0, 200);
+  const archive = signal(entries(0, 100));
+  let list!: YNode;
+  const loadMore = () => {
+    if (archive().length < 500) archive.update((a) => [...a, ...entries(a.length, 100)]);
+  };
+  const heading = (title: string, note: string) => (
+    <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8, paddingHorizontal: 4, paddingTop: 8 }}>
+      <Text style={{ flex: 1, fontSize: 17, fontWeight: "600", color: colors.text }}>{title}</Text>
+      <Text style={{ fontSize: 13, color: colors.faint, fontVariant: ["tabular-nums"] }}>{note}</Text>
+    </View>
+  );
+  return (
+    <Scroll testID="page" style={{ flex: 1 }}>
+      <View style={{ padding: 16, gap: 10, width: "100%", maxWidth: 720, alignSelf: "center" }}>
+        <Section title="One page, two lists" note={'viewport="parent"'}>
+          <Text style={{ fontSize: 13, color: colors.muted }}>
+            The lists below lie in the page at their full length, and the page scrolls them with this header: only the
+            rows near its viewport exist, in recycled cells.
+          </Text>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <Action label="Recent 150" icon="arrow-down" onPress={() => list.scrollToIndex({ index: 149, viewPosition: 0.5 })} />
+            <Action label="End of recent" onPress={() => list.scrollToEnd()} />
+          </View>
+        </Section>
+        {heading("Recent", "200 rows")}
+        <List ref={list} viewport="parent" each={recent} estimatedItemSize={56} contentStyle={{ gap: 6 }}>
+          {(entry) => <EntryRow entry={entry()} label="Recent" />}
+        </List>
+        {heading("Archive", `${archive().length} rows`)}
+        <List
+          viewport="parent"
+          each={archive()}
+          estimatedItemSize={56}
+          contentStyle={{ gap: 6 }}
+          onLoadMore={loadMore}
+          footer={
+            <Text style={{ textAlign: "center", color: colors.faint, fontSize: 13, padding: 16 }}>
+              {archive().length < 500 ? "Loading more…" : "End of the archive"}
+            </Text>
+          }
+        >
+          {(entry) => <EntryRow entry={entry()} label="Archived" />}
+        </List>
+      </View>
+    </Scroll>
+  );
+}
+
+type ListTab = "grid" | "sections" | "chat" | "page" | "more";
 
 const tabs = [
   { value: "grid", label: "Grid" },
   { value: "sections", label: "Sections" },
   { value: "chat", label: "Chat" },
+  { value: "page", label: "Page" },
   { value: "more", label: "More" },
 ] as const;
 
@@ -521,6 +609,12 @@ export function Lists() {
             return (
               <Appear flex>
                 <Chat />
+              </Appear>
+            );
+          case "page":
+            return (
+              <Appear flex>
+                <Page />
               </Appear>
             );
           case "more":
