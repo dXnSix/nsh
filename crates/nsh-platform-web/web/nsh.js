@@ -2911,7 +2911,8 @@ class Player {
         const m = cx.measureText(text);
         cx.fillText(text, x, y + (m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent));
       }
-      if (cs.overflow === "clip" || cs.overflow === "hidden") {
+      // A view that clips its content (a scroll view among them) clips it here too.
+      if (cs.overflowX !== "visible" || cs.overflowY !== "visible") {
         shape();
         cx.clip();
       }
