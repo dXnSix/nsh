@@ -108,7 +108,7 @@ pub(crate) use self::{
 pub use self::{
     animated::{
         Animated, AnimatedNode, AnimatedValue, Animation, AnimationEnd, AnimationOperand,
-        Interpolation, Spring, Timing, sample_decay, sample_decay_within, sample_spring,
+        DiffClamp, Interpolation, Spring, Timing, sample_decay, sample_decay_within, sample_spring,
     },
     asset::{AssetFile, AssetKind, FileAsset, FontAsset, ImageAsset, ImageSrc},
     call::{
@@ -247,6 +247,7 @@ pub mod prelude {
         DefiniteLength,
         DevicePixels,
         DialogAnswer,
+        DiffClamp,
         EaseMode,
         // Native animation values.
         Easing,
