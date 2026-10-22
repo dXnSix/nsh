@@ -1924,7 +1924,17 @@ impl<M: TextEngine> Core<M> {
         }
         let flipped = node.rtl != rtl;
         node.rtl = rtl;
-        let view_changed = node.view_style != view;
+        // `objectPosition` is the image's (`MountItem::Image`), not the view's.
+        let position_changed = node.view_style.object_position != view.object_position;
+        let view_changed = if position_changed {
+            node.view_style
+                != ViewStyle {
+                    object_position: node.view_style.object_position,
+                    ..view.clone()
+                }
+        } else {
+            node.view_style != view
+        };
         // A span's background is part of its block's text.
         let span_background_changed = node.inline
             && node.kind == Kind::Text
@@ -1973,6 +1983,9 @@ impl<M: TextEngine> Core<M> {
         let mut flags = 0;
         if view_changed {
             flags |= dirty::VIEW;
+        }
+        if position_changed && self.nodes[key as usize].image.is_some() {
+            flags |= dirty::IMAGE;
         }
         // A sticky view's animated inset is part of its range.
         self.sticky_changed |= animation_changed && self.nodes[key as usize].sticky.is_some();
@@ -2233,7 +2246,9 @@ impl<M: TextEngine> Core<M> {
             Prop::Source(source) => {
                 if let Some(image) = node.image.as_mut() {
                     let size = source.as_ref().and_then(|s| s.size);
-                    image.source = source;
+                    // A `data:` URI is decoded here, once, not by every
+                    // platform at every load.
+                    image.source = source.map(ImageSource::inline);
                     flags |= dirty::IMAGE;
                     let layout = node.layout.expect("image layout");
                     if let Some(LeafContext::Image(natural)) =
@@ -2249,7 +2264,9 @@ impl<M: TextEngine> Core<M> {
             Prop::Image(option) => {
                 if let Some(image) = node.image.as_mut() {
                     match option {
-                        ImageProp::Placeholder(source) => image.options.placeholder = source,
+                        ImageProp::Placeholder(source) => {
+                            image.options.placeholder = source.map(ImageSource::inline)
+                        }
                         ImageProp::BlurRadius(r) => image.options.blur_radius = r.max(Points::ZERO),
                         ImageProp::FadeDuration(ms) => image.options.fade_ms = ms,
                     }
@@ -3647,6 +3664,7 @@ impl<M: TextEngine> Core<M> {
                             .map(|s| s.resolved(ratio)),
                         blur_radius: image.options.blur_radius,
                         fade_ms: image.options.fade_ms,
+                        position: node.view_style.object_position,
                     },
                 });
             }

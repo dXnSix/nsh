@@ -565,10 +565,49 @@ pub enum ResizeMode {
     Center,
 }
 
+impl ResizeMode {
+    /// Where content of `natural` size goes in a box of `size`: scaled as
+    /// the mode scales it (`Center` shrinks content larger than the box,
+    /// as CSS's `scale-down`), then placed at `position`. The rectangle
+    /// may reach outside the box (a covering image), which crops it.
+    /// Content without a size fills the box.
+    pub fn fit(
+        self,
+        natural: Size<Points>,
+        size: Size<Points>,
+        position: crate::style::ObjectPosition,
+    ) -> Bounds<Points> {
+        let (nw, nh) = (natural.width.0, natural.height.0);
+        if nw <= 0.0 || nh <= 0.0 || self == ResizeMode::Stretch {
+            return Bounds {
+                origin: Point::default(),
+                size,
+            };
+        }
+        let contain = (size.width.0 / nw).min(size.height.0 / nh);
+        let scale = match self {
+            ResizeMode::Cover => (size.width.0 / nw).max(size.height.0 / nh),
+            ResizeMode::Contain => contain,
+            ResizeMode::Center => contain.min(1.0),
+            ResizeMode::Stretch => 1.0,
+        };
+        let content = Size {
+            width: Points(nw * scale),
+            height: Points(nh * scale),
+        };
+        Bounds {
+            origin: position.place(size, content),
+            size: content,
+        }
+    }
+}
+
 /// An image source.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ImageSource {
-    /// `https://…`, `asset:/path` (bundled file) or a file path.
+    /// `https://…`, `asset:/path` (bundled file), a file path, a `data:` URI
+    /// or a `blob:` URL (`URL.createObjectURL`). A source with [`Self::data`]
+    /// goes by a short key instead of a `data:` URI ([`crate::image`]).
     pub uri: Arc<str>,
     /// Natural size in points, when known up front (bundled assets): used
     /// as the intrinsic layout size.
@@ -577,9 +616,43 @@ pub struct ImageSource {
     /// `a@2x.png`, ...): the core mounts the one for the screen's pixel
     /// ratio. Empty for a single file.
     pub scales: ImageScales,
+    /// The image's bytes when they are in memory (a `data:` URI's, the
+    /// blob of a `blob:` URL): the platforms decode these instead of
+    /// loading [`Self::uri`], which stays the cache key.
+    pub data: Option<crate::image::ImageData>,
 }
 
 impl ImageSource {
+    /// This source with its bytes in hand when its URI holds them: a
+    /// `data:` URI decoded (once, when the source is set) and named by a
+    /// short key. Other sources, and `data:` URIs that do not decode, stay
+    /// as they are (the platforms then report the error).
+    #[must_use]
+    pub fn inline(self) -> ImageSource {
+        if self.data.is_some() || !self.uri.starts_with("data:") {
+            return self;
+        }
+        match crate::image::decode_data_uri(&self.uri) {
+            Ok((mime, bytes)) => {
+                let mime = mime.to_owned();
+                self.with_bytes(&mime, bytes.into())
+            }
+            Err(_) => self,
+        }
+    }
+
+    /// This source showing `data`, of media type `mime` (a blob's bytes),
+    /// named by a digest of the bytes: equal images share their loads and
+    /// cache entries, whatever URL named them.
+    #[must_use]
+    pub fn with_bytes(self, mime: &str, data: crate::image::ImageData) -> ImageSource {
+        ImageSource {
+            uri: crate::image::data_key(mime, &data).into(),
+            data: Some(data),
+            ..self
+        }
+    }
+
     /// The URI to load at `pixel_ratio` device pixels per point: the
     /// variant [`ImageScales::pick`] chooses (`asset:/a.png` at 2 →
     /// `asset:/a@2x.png`), or [`Self::uri`] itself when there are no
@@ -612,6 +685,7 @@ impl ImageSource {
             uri: self.uri_for(pixel_ratio),
             size: self.size,
             scales: ImageScales::NONE,
+            data: self.data.clone(),
         }
     }
 }
