@@ -1313,6 +1313,9 @@ class Player {
       el._applied = 0;
       el.addEventListener("scroll", () => this.scrolled(el), { passive: true });
       el.addEventListener("scrollend", () => this.scrollEnded(el));
+      // The user takes over a smooth scroll of the core's (`op_sb`).
+      const takeOver = () => { el._smooth = null; };
+      for (const type of ["wheel", "pointerdown", "touchstart", "keydown"]) el.addEventListener(type, takeOver, { passive: true });
     }
     if (kind === "screen") el.classList.add("nsh-screen");
     if (kind === "modal") el.classList.add("nsh-modal");
@@ -1916,6 +1919,13 @@ class Player {
     const el = this.view(id);
     if (!el) return;
     el._applied++;
+    // A smooth scroll of the core's in flight moves with it, as on the
+    // native backends: setting the offset would stop it.
+    if (el._smooth) {
+      el._smooth = [el._smooth[0] + dx, el._smooth[1] + dy];
+      el.scrollTo({ left: el._smooth[0], top: el._smooth[1], behavior: "smooth" });
+      return;
+    }
     el.scrollLeft += dx;
     el.scrollTop += dy;
   }
@@ -2207,6 +2217,7 @@ class Player {
   /** The browser's scrolling stopped: the end, unless the scroll is driven
    * here (`drive`) or a finger still holds it. */
   scrollEnded(el) {
+    el._smooth = null;
     if (el._driven || el._touchDrag) return;
     // The browser's end of a scroll that ended here (`ownEnd`).
     const own = el._ownEnd;
@@ -3379,6 +3390,7 @@ class Player {
       case "scrollTo":
         if (!el) break;
         el._applied++;
+        el._smooth = args[2] ? [args[0], args[1]] : null;
         el.scrollTo({ left: args[0], top: args[1], behavior: args[2] ? "smooth" : "instant" });
         break;
       case "scrollToEnd":

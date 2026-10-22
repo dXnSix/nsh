@@ -562,6 +562,10 @@ their z-index, and their insets add where the list is in the scroll view's conte
 between them); the core bounds their travel by the list's end. Views clip with `overflow: clip`, which, unlike
 `hidden`, makes no scroll container, so `position: sticky` reaches the scroll view through the list.
 
+A smooth scroll of the core's (`scrollTo` with `animated`) in flight moves with a `ScrollBy` (`op_sb` retargets it),
+as the native backends move theirs: setting `scrollTop` would stop the browser's smooth scroll. The user's wheel,
+pointer, touch or key takes it over.
+
 ## Platform services
 
 - **Storage** (`nsh/storage`, `src/storage.rs`): `localStorage`, each entry under `nsh:<app id>:<key>`

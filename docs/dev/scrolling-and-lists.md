@@ -72,8 +72,9 @@
   list's cells itself (it moves a cell that became sticky last with an `Insert`, and puts new cells below them);
   the platforms find them by id (the desktops' `with_cell` also looks below the view's children while a batch is
   applied), and the web hosts a cell's track in its list, offset by where the list is in the view's content
-  (`trackOrigin`; views clip with `overflow: clip`, which lets `position: sticky` reach the scroll view). Lists of
-  their own pay nothing:
+  (`trackOrigin`; views clip with `overflow: clip`, which lets `position: sticky` reach the scroll view). The web
+  moves a smooth scroll of the core's in flight with a `ScrollBy` (`op_sb`), as the native backends move theirs:
+  setting the offset would stop it. Lists of their own pay nothing:
   every step is reached through a list in parent mode, and a plain scroll view checks an empty list
   (`crates/nsh-core/src/core/parent_viewport.rs`).
 - **List internals** (the window, binding cells, recycling): `crates/nsh-core/src/core/list.rs`.
