@@ -827,6 +827,10 @@ extern "system" fn Java_com_longbridge_nsh_Native_environment(
         support.effect = nsh_core::shader::Support::Live;
         support.backdrop = nsh_core::shader::Support::Live;
         support.transition = nsh_core::shader::Support::Live;
+        // The screen effect on the live views, a screen transition from
+        // pictures of the surface's windows (`Mounter.applyScreen`).
+        support.screen_effect = nsh_core::shader::Support::Live;
+        support.screen_transition = nsh_core::shader::Support::Snapshot;
         support
     } else {
         nsh_core::shader::ShaderSupport::default()

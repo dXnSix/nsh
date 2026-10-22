@@ -988,7 +988,7 @@ pub(crate) struct NavPlan {
 
 impl NavPlan {
     /// Before the change, over the window of `surface` (its root view).
-    fn before(surface: &UIView, shader: NavShader, reverse: bool) -> Option<Self> {
+    pub(crate) fn before(surface: &UIView, shader: NavShader, reverse: bool) -> Option<Self> {
         let window = surface.window()?;
         let rect = surface.convertRect_toView(surface.bounds(), Some(&window));
         let host: Retained<UIView> = Retained::into_super(window);

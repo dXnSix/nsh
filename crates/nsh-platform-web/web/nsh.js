@@ -150,6 +150,8 @@ const KEYFRAMES = `
 .nsh-fx > :not(.nsh-fx-out) { opacity: 0 !important; }
 /* Its canvas is over its children only: never over what comes after it, such as a dialog. */
 .nsh-fx { isolation: isolate; }
+/* While NSH paints an effect's children (paintInputs): shown at once, without a CSS transition from opacity 0. */
+.nsh-painting, .nsh-painting * { transition: none !important; }
 .nsh-fx-out { z-index: 2147483000; }
 img.nsh-fill { pointer-events: none; }
 .nsh-fit-cover { object-fit: cover; }
@@ -1142,6 +1144,11 @@ class Player {
     this.size = [width, height];
     this.call((w) => w.nsh_resize(width, height));
     this.environmentChanged();
+    if (this.root._fill) {
+      this.root._frame = [0, 0, width, height];
+      this.root._stale = this.root._fill.inputs;
+      this.inputsSoon(this.root);
+    }
     for (const el of this.views.values()) if (el._kind === "modal" && el.isConnected && !el._leaving) this.placeModal(el);
   }
 
@@ -1340,6 +1347,12 @@ class Player {
       // A transition's children are its `sample_to` (input 3), an
       // effect's its content (input 0).
       el._transition = kind === "shadertransition";
+      el._args = new Map();
+    } else if (kind === "screeneffect" || kind === "screentransition") {
+      // A shader over the whole surface (`screenFill`): nothing where it
+      // is declared.
+      el = document.createElement("div");
+      el._screen = kind;
       el._args = new Map();
     } else if (kind === "web") {
       el = document.createElement("div");
@@ -1569,8 +1582,10 @@ class Player {
     if (prop.startsWith("shader:")) {
       const values = String(value).split(",").map(Number);
       el._args.set(Number(prop.slice(7)), values);
-      if (el._uniforms) this.writeArgs(el);
-      this.shaderSoon(el);
+      // A screen effect's are the root's, which draws it.
+      const target = el._screen ? (this.screenEffect === el ? this.root : null) : el;
+      if (target?._uniforms) this.writeArgs(target);
+      if (target) this.shaderSoon(target);
       return;
     }
     if (prop === "sticky-offset") {
@@ -2730,7 +2745,13 @@ class Player {
 
   op_sh([, id, fill]) {
     const el = this.view(id);
+    if (el?._screen) return this.screenFill(el, fill);
     if (!el || !el._shaderCanvas) return;
+    this.setFill(el, fill);
+  }
+
+  /** What shader view `el` draws now (`null`: its children only). */
+  setFill(el, fill) {
     el._fill = fill;
     el._uniforms = fill ? new Uint32Array(fill.uniforms) : null;
     if (el._uniforms) this.writeArgs(el);
@@ -2745,7 +2766,8 @@ class Player {
   }
 
   op_si([, id]) {
-    const el = this.view(id);
+    let el = this.view(id);
+    if (el?._screen) el = this.screenEffect === el ? this.root : null;
     if (!el?._fill?.inputs) return;
     el._stale = el._fill.inputs;
     this.inputsSoon(el);
@@ -2759,6 +2781,7 @@ class Player {
    */
   op_st([, id, ms]) {
     const el = this.view(id);
+    if (el?._screen) return this.screenTransition(el, ms);
     if (!el?._transition || !el._fill || !el._frame) return;
     const from = this.inputCanvas(el, "_fromPicture");
     if (el._running) {
@@ -2795,6 +2818,64 @@ class Player {
   }
 
   /**
+   * What screen view `el` draws (`fill`, or `null`). A screen effect makes
+   * the root an effect: its children (pages, dialogs, overlays) at
+   * opacity 0 under its canvas, their picture its content, painted again
+   * after a change and whenever a shader in it draws (`drawShader`). The
+   * core gives one screen effect a fill at a time. A screen transition
+   * keeps its fill for `screenTransition`.
+   */
+  screenFill(el, fill) {
+    if (el._screen === "screentransition") {
+      el._screenFill = fill;
+      return;
+    }
+    if (!fill && this.screenEffect !== el) return;
+    this.screenEffect = fill ? el : null;
+    const root = this.root;
+    if (!root._shaderCanvas) {
+      const canvas = document.createElement("canvas");
+      canvas.className = "nsh-fill nsh-fx-out";
+      canvas.style.pointerEvents = "none";
+      canvas._shaderOutput = true;
+      root.append(canvas);
+      Object.assign(root, { _shaderCanvas: canvas, _effect: true, _transition: false });
+    }
+    root._args = el._args;
+    root._frame = [0, 0, this.size[0], this.size[1]];
+    this.setFill(root, fill);
+    // Over everything the root holds, what comes later among it.
+    if (fill) root.append(root._shaderCanvas);
+  }
+
+  /**
+   * Screen transition `el` starts, before the rest of its batch: the
+   * surface as it shows now is its `sample_from`, painted again on the
+   * next animation frame (after the batch) its `sample_to`, through an
+   * element over the root (`shaderNav`). One that starts while another
+   * runs starts from what that one shows.
+   */
+  screenTransition(el, ms) {
+    const fill = el._screenFill;
+    if (!fill) return;
+    const running = this.screenRunning;
+    this.screenRunning = null;
+    const ran = this.shaderNav(this.root, null, { fill, ms }, false, () => {
+      if (this.screenRunning === ran) this.screenRunning = null;
+    }, { later: true, from: running?.isConnected ? running._shaderCanvas : null });
+    running?.remove();
+    if (ran) this.screenRunning = ran;
+  }
+
+  /** A shader in the root drew: the screen effect pictures it again. */
+  screenDrew(el) {
+    const root = this.root;
+    if (el === root || !root._fill || !root._effect || !root.contains(el)) return;
+    root._stale |= 1;
+    this.inputsSoon(root);
+  }
+
+  /**
    * A page's or a dialog's transition through a shader (`spec`: its fill
    * and length) over `host` (the stack, the root): `upper` (the page that
    * comes or goes, the dialog) painted over what is before it is its
@@ -2803,7 +2884,7 @@ class Player {
    * when `reverse`. The views are where they end at once under it. Calls
    * `done` when it ends; false where it cannot run (no WebGL 2).
    */
-  shaderNav(host, upper, spec, reverse, done) {
+  shaderNav(host, upper, spec, reverse, done, options = {}) {
     const r = host.getBoundingClientRect();
     if (!r.width || !r.height || !this.gl()) return false;
     const o = document.createElement("div");
@@ -2824,19 +2905,34 @@ class Player {
       _images: [],
     });
     const from = this.inputCanvas(o, "_fromPicture");
-    this.paintTree(from.cx, host, r, 1, upper, null);
+    if (options.from?.width) {
+      // What a transition that ran showed.
+      from.cx.setTransform(1, 0, 0, 1, 0, 0);
+      from.cx.drawImage(options.from, 0, 0, from.canvas.width, from.canvas.height);
+    } else {
+      this.paintHost(from.cx, host, r, upper);
+    }
     const to = this.inputCanvas(o, "_contentPicture");
-    this.paintTree(to.cx, host, r, 1, null, null);
+    // After the batch: on the first frame.
+    if (!options.later) this.paintHost(to.cx, host, r, null);
     o._fromDirty = o._contentDirty = true;
     host.append(o);
     const start = performance.now();
     o._running = { start, ms: Math.max(1, spec.ms) };
     const step = () => {
+      if (options.later) {
+        options.later = false;
+        to.canvas.width = to.canvas.width;
+        to.cx.setTransform(devicePixelRatio || 1, 0, 0, devicePixelRatio || 1, 0, 0);
+        this.paintHost(to.cx, host, r, o);
+        o._contentDirty = true;
+      }
       const t = Math.min(1, (performance.now() - start) / o._running.ms);
       o._t = reverse ? 1 - t : t;
       if (t >= 1 || !o.isConnected) {
         o.remove();
         done?.();
+        this.screenDrew(host);
         return;
       }
       this.drawShader(o);
@@ -2845,7 +2941,29 @@ class Player {
     o._t = reverse ? 1 : 0;
     this.drawShader(o);
     requestAnimationFrame(step);
-    return true;
+    return o;
+  }
+
+  /**
+   * Paints `host` (up to `stop`) for a transition's picture: the root
+   * with a screen effect without it (its children as they show without
+   * the effect).
+   */
+  paintHost(cx, host, r, stop) {
+    const lifted = host === this.root && host.classList.contains("nsh-fx");
+    if (lifted) {
+      host.classList.add("nsh-painting");
+      host.classList.remove("nsh-fx");
+    }
+    try {
+      this.paintTree(cx, host, r, 1, stop, host);
+    } finally {
+      if (lifted) {
+        host.classList.add("nsh-fx");
+        host.classList.remove("nsh-painting");
+      }
+      host._contentObserver?.takeRecords();
+    }
   }
 
   /**
@@ -2914,6 +3032,9 @@ class Player {
     else this.backdrops.delete(el);
     this.watchBackdrops();
     el._stale = (content ? 1 : 0) | (backdrop ? 2 : 0);
+    // An effect that comes hides its children: their first picture now,
+    // so it never draws without them.
+    if (content && el.classList.contains("nsh-fx") && !el._contentPicture) this.paintInputs(el);
     if (el._stale) this.inputsSoon(el);
   }
 
@@ -2979,11 +3100,13 @@ class Player {
     if (stale & 1 && el._effect) {
       const cx = picture("_contentPicture");
       // Its children as they show without the effect.
+      el.classList.add("nsh-painting");
       el.classList.remove("nsh-fx");
       try {
         this.paintTree(cx, el, base, 1, null, el);
       } finally {
         el.classList.add("nsh-fx");
+        el.classList.remove("nsh-painting");
       }
       el._contentDirty = true;
     }
@@ -3307,6 +3430,7 @@ class Player {
       cx.clearRect(0, 0, pw, ph);
       cx.drawImage(g.canvas, 0, 0);
     }
+    this.screenDrew(el);
     // A shader that reads `nsh.time` draws on every frame while it shows.
     if (fill.time && !el._shaderFrame) {
       el._shaderFrame = requestAnimationFrame(() => {

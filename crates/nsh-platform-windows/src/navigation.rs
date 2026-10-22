@@ -554,6 +554,84 @@ impl NavRun {
     }
 }
 
+/// A screen transition starts (`<ScreenTransition>`, before the rest of
+/// its batch): the surface's root recorded now (a running one's layer
+/// in it) is its `sample_from`; on the first frame after the batch, the
+/// root recorded again without the transition's layer is its `sample_to`,
+/// drawn through `fill` by a [`crate::shader::NavItem`] in a layer view
+/// over the root, while `nsh.progress` goes from 0 to 1.
+pub(crate) fn screen_transition(
+    surface: &Rc<Surface>,
+    fill: std::sync::Arc<nsh_core::shader::ShaderFill>,
+    duration: Duration,
+) {
+    use windows::core::Interface;
+    let root = surface.root.clone();
+    let Some(lower) = record(surface, &root) else {
+        return;
+    };
+    let Ok(lower) = lower
+        .list
+        .cast::<windows::Win32::Graphics::Direct2D::ID2D1Image>()
+    else {
+        return;
+    };
+    let item = Rc::new(crate::shader::NavItem::new(fill, lower.clone(), lower));
+    item.set_progress(0.0);
+    let frame = root.state().frame;
+    let layer = layer_view();
+    let area = rect(0.0, 0.0, frame.size.width.0, frame.size.height.0);
+    set_frame(&layer, area);
+    let hosted: Rc<dyn Hosted> = item.clone();
+    layer.set_native(&hosted, area);
+    layer.insert_before(&root, None);
+    let run = NavRun {
+        layer: layer.clone(),
+        item: item.clone(),
+        start: std::time::Instant::now(),
+        duration,
+        reverse: false,
+    };
+    // One that ran goes: this one started from what it showed.
+    let ran = surface.nav.borrow_mut().screen.replace(run);
+    drop(ran);
+    let mut upper_due = true;
+    surface.on_frame(move |surface, _| {
+        let runs = surface
+            .nav
+            .borrow()
+            .screen
+            .as_ref()
+            .is_some_and(|r| Rc::ptr_eq(&r.item, &item));
+        if !runs {
+            return false;
+        }
+        if std::mem::take(&mut upper_due) {
+            let root = surface.root.clone();
+            set_concealed(surface, &layer, true);
+            let upper = record(surface, &root).and_then(|p| {
+                p.list
+                    .cast::<windows::Win32::Graphics::Direct2D::ID2D1Image>()
+                    .ok()
+            });
+            set_concealed(surface, &layer, false);
+            if let Some(upper) = upper {
+                item.set_upper(upper);
+            }
+        }
+        let mut nav = surface.nav.borrow_mut();
+        let Some(run) = nav.screen.as_ref() else {
+            return false;
+        };
+        run.tick();
+        if run.start.elapsed() < run.duration {
+            return true;
+        }
+        nav.screen = None;
+        false
+    });
+}
+
 impl Drop for NavRun {
     fn drop(&mut self) {
         self.layer.unparent();
@@ -682,6 +760,8 @@ pub(crate) struct Nav {
     /// The images of top screens and modals recorded in this batch, before
     /// their views were torn down.
     images: Vec<(NodeId, Picture)>,
+    /// The screen transition that runs (`<ScreenTransition>`).
+    screen: Option<NavRun>,
 }
 
 impl Nav {

@@ -246,6 +246,63 @@ impl NavRun {
     }
 }
 
+/// A screen transition starts (`<ScreenTransition>`, before the rest of
+/// its batch): the surface's root drawn anew now (a running one's layer in
+/// it) is its `sample_from`; on the first frame after the batch, the root
+/// drawn again without the transition's layer is its `sample_to`, both
+/// through `fill` by a [`crate::shader::NavPainter`] in a layer over the
+/// root, while `nsh.progress` goes from 0 to 1.
+pub(crate) fn screen_transition(
+    surface: &Rc<Surface>,
+    fill: std::sync::Arc<nsh_core::shader::ShaderFill>,
+    duration: Duration,
+) {
+    let root = surface.root.clone();
+    let Some(from) = crate::shader::nav_picture(&root, None, None) else {
+        return;
+    };
+    let size = root.state().frame.size;
+    let painter = crate::shader::NavPainter::new(fill, from.clone(), from, size);
+    let layer = Layer::new();
+    root.set_native(&layer, rect(0.0, 0.0, size.width.0, size.height.0));
+    let run = NavRun {
+        host: root.clone(),
+        layer: layer.clone(),
+        painter: std::cell::RefCell::new(painter),
+        start: std::time::Instant::now(),
+        duration,
+        reverse: false,
+    };
+    run.tick();
+    // One that ran goes: this one started from what it showed.
+    let ran = surface.nav.borrow_mut().screen.replace(run);
+    drop(ran);
+    let weak = Rc::downgrade(surface);
+    let upper_due = std::cell::Cell::new(true);
+    root.add_tick_callback(move |_, _| {
+        let Some(surface) = weak.upgrade() else {
+            return glib::ControlFlow::Break;
+        };
+        let Ok(mut nav) = surface.nav.try_borrow_mut() else {
+            return glib::ControlFlow::Continue;
+        };
+        let Some(run) = nav.screen.as_ref().filter(|r| r.layer == layer) else {
+            return glib::ControlFlow::Break;
+        };
+        if upper_due.replace(false)
+            && let Some(to) = crate::shader::nav_picture(&run.host, None, Some(layer.upcast_ref()))
+        {
+            run.painter.borrow_mut().set_to(to);
+        }
+        run.tick();
+        if run.start.elapsed() < run.duration {
+            return glib::ControlFlow::Continue;
+        }
+        nav.screen = None;
+        glib::ControlFlow::Break
+    });
+}
+
 impl Drop for NavRun {
     fn drop(&mut self) {
         self.host.remove_native(&self.layer);
@@ -368,6 +425,8 @@ pub(crate) struct Nav {
     keys_installed: bool,
     /// The appearance the screens' backgrounds have.
     dark: Option<bool>,
+    /// The screen transition that runs (`<ScreenTransition>`).
+    screen: Option<NavRun>,
 }
 
 fn dark(surface: &Surface) -> bool {

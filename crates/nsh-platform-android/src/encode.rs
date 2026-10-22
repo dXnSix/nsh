@@ -146,6 +146,8 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                     ViewKind::Shader => 16,
                     ViewKind::ShaderEffect => 17,
                     ViewKind::ShaderTransition => 18,
+                    ViewKind::ScreenEffect => 19,
+                    ViewKind::ScreenTransition => 20,
                 });
             }
             MountItem::Insert {

@@ -54,6 +54,9 @@ pub(crate) struct ShaderHost {
     inputs: Cell<u32>,
     /// Inputs whose picture is out of date.
     stale: Cell<u32>,
+    /// The surface's screen effect (`<ScreenEffect>`): its view is over the
+    /// surface in the window, not in the views ([`ShaderHost::take_screen`]).
+    pub(crate) screen: bool,
 }
 
 /// An effect's children.
@@ -71,7 +74,54 @@ impl ShaderHost {
             running: Cell::new(None),
             inputs: Cell::new(0),
             stale: Cell::new(0),
+            screen: false,
         }
+    }
+
+    /// A screen effect's: its view goes over the surface in its window.
+    pub(crate) fn new_screen(view: Retained<NshView>) -> Self {
+        view.setUserInteractionEnabled(false);
+        Self {
+            screen: true,
+            ..Self::new(view, true, false)
+        }
+    }
+
+    /// A screen effect's content: `window` over `rect` (the surface's
+    /// root, its dialogs and what UIKit draws around them) without the
+    /// screen effect ([`set_screen`]), and the page and
+    /// dialog transitions that run (`overlays`, pictures at their places in
+    /// the window) drawn over it; then it draws.
+    pub(crate) fn take_screen(
+        &self,
+        window: &UIView,
+        rect: objc2_core_foundation::CGRect,
+        overlays: &[(objc2_core_foundation::CGRect, Picture)],
+    ) {
+        if self.stale.replace(0) & CONTENT == 0 {
+            return;
+        }
+        let mut layer = self.layer.borrow_mut();
+        let Some(layer) = layer.as_mut() else { return };
+        let area = layer.area();
+        let scale = self.view.contentScaleFactor();
+        // Without the effect (`picture` leaves it out).
+        let mut shot = picture(window, rect);
+        for (at, over) in overlays {
+            let (x0, y0) = (
+                ((at.origin.x - rect.origin.x) * scale).round() as isize,
+                ((at.origin.y - rect.origin.y) * scale).round() as isize,
+            );
+            over_at(&mut shot, over, x0, y0);
+        }
+        layer.set_input(
+            ShaderInput::Content,
+            &shot.rgba,
+            shot.width,
+            shot.height,
+            area,
+        );
+        layer.draw();
     }
 
     /// The inputs it samples.
@@ -393,11 +443,27 @@ fn each(f: impl Fn(&mut crate::mount::Mounter)) {
 
 /// `layer` rendered into premultiplied RGBA of `pw` × `ph` pixels, top row
 /// first: its point `origin` at the top-left.
+/// Draws the layers of `layer`'s tree that are due to draw (texts and
+/// canvases, which draw through their views): `renderInContext:` takes
+/// their contents as they are, and one marked in this batch (a text drawn
+/// again in a new color) has its old contents, or none, until UIKit
+/// displays it.
+fn display_tree(layer: &CALayer) {
+    layer.displayIfNeeded();
+    // SAFETY: a getter; the sublayers are retained while they are drawn.
+    if let Some(sublayers) = unsafe { layer.sublayers() } {
+        for sublayer in sublayers.iter() {
+            display_tree(&sublayer);
+        }
+    }
+}
+
 fn render(layer: &CALayer, origin: (f64, f64), pw: usize, ph: usize, scale: CGFloat) -> Vec<u8> {
     use objc2_core_graphics::{
         CGBitmapContextCreate, CGColorSpace, CGContext, CGImageAlphaInfo, CGImageByteOrderInfo,
         kCGColorSpaceSRGB,
     };
+    display_tree(layer);
     let mut out = vec![0u8; pw * ph * 4];
     // SAFETY: `out` holds `pw * 4 * ph` bytes and outlives the context; the
     // layer is rendered on the main thread, which owns it.
@@ -442,8 +508,57 @@ pub(crate) struct Picture {
     height: usize,
 }
 
+/// `over` drawn over `under` (both premultiplied) with its top-left at
+/// pixel (`x0`, `y0`).
+fn over_at(under: &mut Picture, over: &Picture, x0: isize, y0: isize) {
+    for y in 0..over.height {
+        let ty = y0 + y as isize;
+        if ty < 0 || ty as usize >= under.height {
+            continue;
+        }
+        for x in 0..over.width {
+            let tx = x0 + x as isize;
+            if tx < 0 || tx as usize >= under.width {
+                continue;
+            }
+            let u = &over.rgba[(y * over.width + x) * 4..][..4];
+            let b = &mut under.rgba[(ty as usize * under.width + tx as usize) * 4..][..4];
+            let keep = 255 - u[3] as u16;
+            for i in 0..4 {
+                b[i] = (u[i] as u16 + (b[i] as u16 * keep + 127) / 255).min(255) as u8;
+            }
+        }
+    }
+}
+
+/// A surface's screen effect: the surface's root view (as a key), the
+/// effect's view (over the surface in the window) and the layers it masks.
+type Screen = (usize, Retained<UIView>, Vec<Retained<CALayer>>);
+
+thread_local! {
+    /// Each surface's screen effect: pictures leave its view out and lift
+    /// its masks ([`picture`]).
+    static SCREENS: RefCell<Vec<Screen>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The screen effect of the surface whose root is `root`: `view` and the
+/// layers it masks (`None` when it has none).
+pub(crate) fn set_screen(
+    root: &UIView,
+    screen: Option<(Retained<UIView>, Vec<Retained<CALayer>>)>,
+) {
+    let key = root as *const UIView as usize;
+    SCREENS.with(|s| {
+        let mut s = s.borrow_mut();
+        s.retain(|(k, ..)| *k != key);
+        if let Some((view, masks)) = screen {
+            s.push((key, view, masks));
+        }
+    });
+}
+
 /// `view` drawn as it shows now over `rect` (its points), at the screen's
-/// scale.
+/// scale, without the screen effects over it (the views as they are).
 pub(crate) fn picture(view: &UIView, rect: objc2_core_foundation::CGRect) -> Picture {
     let scale = view.contentScaleFactor();
     let (width, height) = (
@@ -451,13 +566,31 @@ pub(crate) fn picture(view: &UIView, rect: objc2_core_foundation::CGRect) -> Pic
         (rect.size.height * scale).round().max(1.0) as usize,
     );
     let rgba = crate::decor::quiet(|| {
-        render(
+        let screens: Vec<_> = SCREENS.with(|s| s.borrow().clone());
+        let was: Vec<(bool, Vec<_>)> = screens
+            .iter()
+            .map(|(_, v, masks)| (v.isHidden(), masks.iter().map(|l| l.mask()).collect()))
+            .collect();
+        for (_, v, masks) in &screens {
+            v.setHidden(true);
+            // SAFETY: lifting the masks the screen effect set, restored below.
+            masks.iter().for_each(|l| unsafe { l.setMask(None) });
+        }
+        let rgba = render(
             &view.layer(),
             (rect.origin.x, rect.origin.y),
             width,
             height,
             scale,
-        )
+        );
+        for ((_, v, masks), (hidden, old)) in screens.iter().zip(was) {
+            v.setHidden(hidden);
+            for (l, m) in masks.iter().zip(old) {
+                // SAFETY: as above.
+                unsafe { l.setMask(m.as_deref()) };
+            }
+        }
+        rgba
     });
     Picture {
         rgba,
@@ -526,6 +659,26 @@ impl NavOverlay {
             reverse,
             after_due: true,
         })
+    }
+
+    /// What it shows now, drawn again into a picture, and where it is in
+    /// `window`.
+    pub(crate) fn picture_in(
+        &mut self,
+        window: &UIView,
+    ) -> Option<(objc2_core_foundation::CGRect, Picture)> {
+        let (width, height, rgba) = self.layer.picture()?;
+        let at = self
+            .view
+            .convertRect_toView(self.view.bounds(), Some(window));
+        Some((
+            at,
+            Picture {
+                rgba,
+                width,
+                height,
+            },
+        ))
     }
 
     /// A display frame: the picture after the change (the first time),

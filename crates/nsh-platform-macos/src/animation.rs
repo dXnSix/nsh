@@ -66,6 +66,10 @@ impl UiAnimation {
                     )
                 {
                     crate::shader::set_args(view, canvas);
+                } else if !canvas.is_empty() && view.kind() == nsh_core::ViewKind::ScreenEffect {
+                    if let Some(surface) = view.surface() {
+                        crate::screen::set_args(&surface, view, canvas);
+                    }
                 } else if !canvas.is_empty() {
                     let damage = crate::canvas::set_args(view, canvas);
                     if damage != Damage::None {

@@ -53,6 +53,18 @@ pub enum ViewKind {
     /// children are the shader's `sample_to`, a picture of what they drew
     /// before its `sample_from`.
     ShaderTransition,
+    /// The whole surface drawn through a shader ([`MountItem::Shader`]):
+    /// what the surface shows (its root view, its dialogs and overlays,
+    /// never anything of the app around it) is the shader's content input,
+    /// and the shader's result is what shows over all of it. The view
+    /// itself has no size and no children. A surface has one at most with
+    /// a fill: the core sends `None` to the others.
+    ScreenEffect,
+    /// The whole surface changing through a shader ([`MountItem::Shader`],
+    /// [`MountItem::ShaderTransition`]): what the surface shows is the
+    /// shader's `sample_to`, a picture of what it showed before its
+    /// `sample_from`. The view itself has no size and no children.
+    ScreenTransition,
     /// A web view.
     WebView,
     /// The container of a registered native component: the platform
@@ -793,7 +805,8 @@ pub enum MountItem {
     },
     /// What a shader reads changed, as far as the core knows: the views
     /// in a shader effect (its content), or anything in the surface for a
-    /// shader that samples what is behind it. Platforms that draw shaders
+    /// shader that samples what is behind it and for a screen effect or
+    /// transition. Platforms that draw shaders
     /// from a picture of their input take it again; those drawing the
     /// live input ignore it. Animations, scrolling and loads on the UI
     /// thread change the input too: the platform notices those itself.
@@ -807,7 +820,9 @@ pub enum MountItem {
     /// to 1 over `duration` (linearly). It comes first in its batch. A
     /// transition that starts while one runs starts from what shows.
     ShaderTransition {
-        /// The transition view ([`ViewKind::ShaderTransition`]).
+        /// The transition view ([`ViewKind::ShaderTransition`]), or a
+        /// [`ViewKind::ScreenTransition`]: then it is the whole surface
+        /// that changes.
         id: NodeId,
         /// How long it runs.
         duration: std::time::Duration,
