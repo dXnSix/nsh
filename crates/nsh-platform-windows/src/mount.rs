@@ -112,7 +112,8 @@ impl Mounter {
                 match kind {
                     ViewKind::Input => crate::text_input::create(surface, &view),
                     ViewKind::Canvas => crate::canvas::create(&view),
-                    ViewKind::Shader => crate::shader::create(&view),
+                    ViewKind::Shader => crate::shader::create(&view, false),
+                    ViewKind::ShaderEffect => crate::shader::create(&view, true),
                     ViewKind::Image => crate::image::create(&view),
                     ViewKind::WebView | ViewKind::Video | ViewKind::Native => {
                         crate::native::create(surface, &view)
@@ -318,7 +319,7 @@ impl Mounter {
                     crate::shader::set(surface, view, fill.clone());
                 }
             }
-            // Shader effects and backdrops draw their children only here.
+            // Effects and backdrops draw their inputs with every frame.
             MountItem::ShaderInput { .. } => {}
             MountItem::Gestures { id, values } => {
                 if let Some(view) = &self.get(*id) {
