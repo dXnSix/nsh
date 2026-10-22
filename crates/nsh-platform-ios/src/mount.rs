@@ -3031,7 +3031,10 @@ impl Mounter {
         let offset = if l.horizontal { offset.x } else { offset.y } as f32;
         for c in cells {
             let Some(s) = self.slot(c.cell) else { continue };
-            let t = (offset - c.start.0).clamp(0.0, c.end.0 - c.start.0) as CGFloat;
+            // An animated offset is the graph's (pinned again with its frames).
+            let extra = c.offset.map_or(0.0, |n| self.animator.value(n));
+            let t =
+                (offset + extra - c.start.0).clamp(0.0, (c.end.0 - c.start.0).max(0.0)) as CGFloat;
             let (x, y) = if l.horizontal { (t, 0.0) } else { (0.0, t) };
             s.native
                 .view()
@@ -3083,6 +3086,17 @@ impl Mounter {
         for &id in &self.animated {
             if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref) {
                 apply_dynamic(s, animator);
+            }
+        }
+        // Sticky cells that stick an animated value further in follow it.
+        let animated_sticky = |cells: &Vec<StickyCell>| cells.iter().any(|c| c.offset.is_some());
+        if self.sticky.values().any(animated_sticky) {
+            let lists: Vec<NodeId> = (self.sticky.iter())
+                .filter(|(_, cells)| animated_sticky(cells))
+                .map(|(&id, _)| id)
+                .collect();
+            for id in lists {
+                self.pin_sticky(id);
             }
         }
     }

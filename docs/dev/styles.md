@@ -93,7 +93,10 @@
   list around it (from its place less its `top`, or `left` in a horizontal one, to where its end meets its parent's
   content box) and sends it with that view's sticky list rows (`core/sticky.rs`, `MountItem::StickyCells`), which the
   platforms pin on every scroll. It draws above its siblings of the same `zIndex` (`Node::stack_rank`), as above a
-  page's in-flow boxes. `bottom` / `right` stickiness and a zoomable scroll view are not supported.
+  page's in-flow boxes. An animated `top` (`left`) is where it sticks, followed every frame: the core keeps it out of
+  the view's bindings (`AnimationProp::StickyTop` / `StickyLeft`, warned once on a view that is not sticky) and sends
+  it as the range's `StickyCell::offset`, which the platforms add as they pin, as for a list's animated
+  `stickyHeaderOffset`. `bottom` / `right` stickiness and a zoomable scroll view are not supported.
 - **`pointer-events-*` classes** inherit as CSS's `pointer-events` (the `pointerEvents` prop keeps React Native's
   subtree meaning, and wins): a view that is `none` by its own class or the nearest one above mounts `box-none` when a
   `pointer-events-auto` inside it is a target, `none` at the top of what it blocks, and nothing below that

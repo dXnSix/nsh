@@ -93,10 +93,10 @@ card().style_when(selected, |s| s.border_color(rgb(0x2563eb)).border(px(2.0)))
 |---|---|---|---|
 | `display` | `"flex" \| "grid" \| "block" \| "none"` | `.flex()`、`.grid()`、`.hidden()` | 子元素的布局方式。`"none"` 将元素移出布局并隐藏。`"block"` 按 CSS 块级布局堆叠子元素。默认 `"flex"`。 |
 | `position` | `"relative" \| "absolute" \| "static" \| "fixed" \| "sticky"` | `.relative()`、`.absolute()` | `"absolute"` 使元素脱离文档流，按 `top` / `right` / `bottom` / `left` 相对父元素定位。`"static"` 留在文档流中并忽略其偏移。`"fixed"` 让视图在其根视图（窗口或所在的模态框）的范围内布局，并绘制在该根视图的子元素之上，因此周围内容滚动时它保持不动；没有偏移时位于根视图左上角，其他元素按 `"absolute"` 定位。`"sticky"` 留在文档流中，在其父元素可见时，吸附在外层滚动视图视口起始处 `top`（横向滚动视图中为 `left`）的位置，直到它的末端碰到父元素内容框的末端；它绘制在 `zIndex` 相同的兄弟元素之上。无论自身的 `position` 是什么，每个视图都是其绝对定位子元素的包含块。默认 `"relative"`。 |
-| `top` | `DimensionValue` | `.top(…)`、`.inset(…)` | 距父元素上边（绝对定位），或相对自身位置的偏移（相对定位）。 |
+| `top` | `DimensionValue \| AnimatedNode` | `.top(…)`、`.inset(…)`、`.bind_sticky_top(&node)` | 距父元素上边（绝对定位），或相对自身位置的偏移（相对定位）。在吸附视图上表示吸附的位置，动画值让它逐帧移动。 |
 | `right` | `DimensionValue` | `.right(…)` | 距右边的偏移。从右到左布局中表示结束边。 |
 | `bottom` | `DimensionValue` | `.bottom(…)` | 距下边的偏移。 |
-| `left` | `DimensionValue` | `.left(…)` | 距左边的偏移。从右到左布局中表示起始边。 |
+| `left` | `DimensionValue \| AnimatedNode` | `.left(…)`、`.bind_sticky_left(&node)` | 距左边的偏移。从右到左布局中表示起始边。在横向滚动视图中的吸附视图上表示吸附的位置，动画值让它逐帧移动。 |
 | `start` | `DimensionValue` | | 从左到右布局中为左，从右到左布局中为右。 |
 | `end` | `DimensionValue` | | 从左到右布局中为右，从右到左布局中为左。 |
 | `zIndex` | `number` | `.z_index(z)` | 在兄弟元素间的次序（值相同时保持原顺序），也是原生视图的叠放次序。 |
