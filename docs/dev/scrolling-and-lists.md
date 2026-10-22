@@ -45,6 +45,29 @@
   around it are measured the list follows it (a `ScrollBy`, or a retargeted `ScrollTo` while an animated scroll is in
   flight) until the rows in the viewport are all measured, the user scrolls away or the items change. Platforms only
   apply what they get.
+- **Lists in their parent's viewport** (`viewport="parent"`, `ListLayout::viewport(ListViewport::Parent)`; `own`,
+  the default, is a scroll view of its own): fixed when the list's native view is made (a change in the batch that
+  makes it counts; later ones warn once). The list mounts as a plain view clipping its cells, its Taffy node gets a
+  layout-only child (the spacer) `content_len` long, so it lies in its parent's layout at its full length (padding,
+  border and size limits as in a browser) and the scroll view around it covers it; a change of length lays the page
+  out again in the same commit (`Core::commit`'s rounds). Its view is the nearest scroll view or own list around it
+  on its axis, else the root view it is in (screen, modal, overlay, ...), found again when views move in a tree with
+  such lists; the scroll view keeps its lists (`ScrollState::dependents`) and marks them for an update when it
+  scrolls. The list's `ListState` gets the view's offset less where the list starts in its content (frames summed up
+  to the view, plus the list's border and padding; negative while the list is below the viewport's start) and the
+  view's viewport, so the window, `onLoadMore`, viewability and pins run unchanged in list coordinates; lists in
+  the cells of other lists update after them. Anchoring is a browser's: the view moves only for rows measured or
+  spliced wholly above its viewport's top while the list's start is scrolled past; `scrollToIndex`,
+  `scrollToEnd` and `initialScrollIndex` scroll the view, clamped to its content. Those scrolls are summed per view
+  and sent at the end of the commit (one `ScrollBy`, growing content first, shrinking after), counted with the
+  view's own (`ScrollState::issued`; platforms count every `ScrollBy` and `ScrollTo` from the view's creation) and
+  replayed over stale reports, as a list does its own; scroll commands for a list not placed in its view yet wait
+  for the update that places it. The scroll view's props (`onScroll` and the other scroll events, `scrollValue`,
+  `refreshing`, paging and snapping, `contentInset`, `scrollbar`, `scrollable`, `keyboardDismissMode`) and what
+  needs a scroll view of the list's own (`inverted`, `maintainVisibleContentPosition`, sticky rows) are ignored
+  there, each warned of once; a zoomable scroll view around it is not supported. Lists of their own pay nothing:
+  every step is reached through a list in parent mode, and a plain scroll view checks an empty list
+  (`crates/nsh-core/src/core/parent_viewport.rs`).
 - **List internals** (the window, binding cells, recycling): `crates/nsh-core/src/core/list.rs`.
 - **Rust components**: the same props are `Scrollable`'s methods (`scroll()`, `virtual_list(..)`) and
   `VirtualList`'s (header, footer, empty view, separators, sticky rows, viewability); `docs/dev/components.md`.

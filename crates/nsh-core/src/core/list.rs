@@ -31,6 +31,22 @@
 //! after each round of measurements the list follows it (`follow_pin`),
 //! retargeting an animated scroll in flight, until the rows in the
 //! viewport are measured, the user scrolls away or the items change.
+//!
+//! # In its parent's viewport
+//!
+//! A list with `viewport="parent"` has no scroll view of its own: it lies in
+//! its parent's layout at its full length (a layout-only Taffy child, the
+//! spacer, is `content_len` long) and is virtualized against the nearest
+//! scroll view around it on its axis, or the root view it is in
+//! ([`Outer`]). The core feeds the state that view's offset less the
+//! list's start in its content (negative while the list starts below the
+//! viewport's start) and that view's viewport, so the window, `onLoadMore`
+//! and viewability work in the list's coordinates as they do for a list
+//! of its own. The scroll view moves only for changes wholly above the top
+//! of its viewport, as a browser's scroll anchoring does: rows measured or
+//! spliced above the first visible row while the list's start is scrolled
+//! past. Inverted lists, `maintainVisibleContentPosition` and sticky rows
+//! need a scroll view of their own and are off.
 
 use rustc_hash::FxHashMap;
 
@@ -108,9 +124,59 @@ pub(super) struct Blocks {
 /// A scroll the core asked the platform for, not yet reflected in the
 /// offsets it reports.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum PendingScroll {
+pub(super) enum PendingScroll {
     By(f32),
     To(f32),
+}
+
+/// Where the platform's reported `offset` ends up once the `pending`
+/// scrolls (issued, not applied yet) are applied.
+pub(super) fn replay(offset: f32, pending: &[(u32, PendingScroll)]) -> f32 {
+    let mut at = offset;
+    for &(_, scroll) in pending {
+        match scroll {
+            PendingScroll::By(d) => at += d,
+            PendingScroll::To(t) => at = t,
+        }
+    }
+    at
+}
+
+/// The view a `viewport="parent"` list is virtualized against: the
+/// nearest scroll view around it on its axis, or the root view it is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Outer {
+    /// The view's node key.
+    pub(super) view: u32,
+    /// It scrolls (a scroll view or a list); a root view does not.
+    pub(super) scrolls: bool,
+    /// Views between the list and it: lists nearer theirs are updated
+    /// first, so a list in a cell of another sees the cell placed.
+    pub(super) depth: u32,
+}
+
+/// What parent mode turns off ([`ListState::set_parent`]), kept to give
+/// back.
+#[derive(Debug)]
+struct SetAside {
+    inverted: bool,
+    follow_end: Option<f32>,
+    sticky: Vec<u32>,
+    sticky_offset: f32,
+}
+
+/// Props a list in its parent's viewport ignores, each warned of once.
+pub(super) mod ignored {
+    pub(crate) const INVERTED: u16 = 1 << 0;
+    pub(crate) const FOLLOW_END: u16 = 1 << 1;
+    pub(crate) const STICKY: u16 = 1 << 2;
+    pub(crate) const ON_SCROLL: u16 = 1 << 3;
+    pub(crate) const SCROLL_VALUE: u16 = 1 << 4;
+    pub(crate) const REFRESH: u16 = 1 << 5;
+    pub(crate) const BEHAVIOR: u16 = 1 << 6;
+    pub(crate) const SCROLLBAR: u16 = 1 << 7;
+    /// `viewport` changed after the list was made.
+    pub(crate) const VIEWPORT: u16 = 1 << 8;
 }
 
 /// What a list scroll command asked to show: kept after the command, so
@@ -231,6 +297,25 @@ pub(super) struct ListState {
     /// The target of the last scroll command, until it is reached with
     /// measured cells or the user scrolls away.
     pin: Option<Pin>,
+    /// `viewport="parent"`: virtualized against the view around it.
+    pub(super) parent: bool,
+    /// The parent mode's view, once found.
+    pub(super) outer: Option<Outer>,
+    /// Parent mode: where the list's content starts in its view's content
+    /// (NaN until placed).
+    outer_start: f32,
+    /// Parent mode: the list offsets its view can scroll to.
+    limits: (f32, f32),
+    /// Parent mode: the spacer that gives the list its length in layout,
+    /// and the length it was given.
+    pub(super) spacer: Option<(taffy::NodeId, f32)>,
+    /// What parent mode turned off (`inverted`, `follow_end`, `sticky`,
+    /// `sticky_offset`), given back if the list goes back to its own
+    /// scroll view before it is made.
+    set_aside: Option<Box<SetAside>>,
+    /// Ignored props set ([`ignored`] bits), and those already warned of.
+    pub(super) ignored: u16,
+    pub(super) warned: u16,
 }
 
 impl ListState {
@@ -268,6 +353,103 @@ impl ListState {
             moved: Vec::new(),
             splice_anchor: 0.0,
             pin: None,
+            parent: false,
+            outer: None,
+            outer_start: f32::NAN,
+            limits: (0.0, 0.0),
+            spacer: None,
+            set_aside: None,
+            ignored: 0,
+            warned: 0,
+        }
+    }
+
+    /// Switches to (or from) virtualizing against the view around the
+    /// list. What needs a scroll view of its own is turned off and noted
+    /// as ignored.
+    pub(super) fn set_parent(&mut self, parent: bool) {
+        if parent == self.parent {
+            return;
+        }
+        self.parent = parent;
+        self.outer = None;
+        self.outer_start = f32::NAN;
+        self.pin = None;
+        self.dirty = true;
+        self.anchored_end = f32::NAN;
+        if parent {
+            let set_aside = SetAside {
+                inverted: std::mem::take(&mut self.inverted),
+                follow_end: self.follow_end.take(),
+                sticky: std::mem::take(&mut self.sticky),
+                sticky_offset: std::mem::take(&mut self.sticky_offset),
+            };
+            if set_aside.inverted {
+                self.ignored |= ignored::INVERTED;
+            }
+            if set_aside.follow_end.is_some() {
+                self.ignored |= ignored::FOLLOW_END;
+            }
+            if !set_aside.sticky.is_empty() || set_aside.sticky_offset != 0.0 {
+                self.ignored |= ignored::STICKY;
+            }
+            self.set_aside = Some(Box::new(set_aside));
+        } else if let Some(set_aside) = self.set_aside.take() {
+            let SetAside {
+                inverted,
+                follow_end,
+                sticky,
+                sticky_offset,
+            } = *set_aside;
+            self.inverted = inverted;
+            self.follow_end = follow_end;
+            self.sticky = sticky;
+            self.sticky_offset = sticky_offset;
+        }
+    }
+
+    /// Parent mode: the list starts at `start` of its view's content, the
+    /// view is at `offset` with a viewport of `viewport`, and scrolls as
+    /// far as `max`; `settled`: none of the scrolls the core issued to it
+    /// is pending. Returns whether the list's window moved.
+    pub(super) fn set_outer(
+        &mut self,
+        start: f32,
+        offset: f32,
+        viewport: f32,
+        max: f32,
+        settled: bool,
+    ) -> bool {
+        let shift = start - self.outer_start;
+        if shift != 0.0
+            && !shift.is_nan()
+            && let Some(pin) = &mut self.pin
+        {
+            // What moved the list in its view is no scroll of the user's.
+            pin.at -= shift;
+        }
+        self.outer_start = start;
+        self.limits = (-start, (max - start).max(-start));
+        let resized = viewport != self.viewport;
+        self.viewport = viewport;
+        let before = self.offset;
+        self.moved_to(offset - start, settled);
+        resized || before != self.offset
+    }
+
+    /// `offset` within the offsets the list can be scrolled to.
+    pub(super) fn clamped(&self, offset: f32) -> f32 {
+        let (min, max) = self.offset_limits();
+        offset.clamp(min, max)
+    }
+
+    /// The offsets the list can be scrolled to: its own content's, or in
+    /// parent mode its view's, in the list's coordinates.
+    fn offset_limits(&self) -> (f32, f32) {
+        if self.parent {
+            self.limits
+        } else {
+            (0.0, (self.content_len() - self.viewport).max(0.0))
         }
     }
 
@@ -284,13 +466,19 @@ impl ListState {
         // The visible content keeps its place instead.
         self.pin = None;
         // The first visible item and where it is in the viewport.
-        let anchor = (!self.inverted && self.count > 0 && self.viewport > 0.0).then(|| {
-            let top = self.natural_offset();
-            let body = self.blocks().body;
-            let row = self.rows.find((top - body).max(0.0) as f64) as u32;
-            let index = (row * self.columns).min(self.count - 1);
-            (index, self.item_at(index) - top)
-        });
+        // In its parent's viewport, only while the list's start is scrolled
+        // past (when it shows, the content below it moves instead).
+        let anchor = (!self.inverted
+            && self.count > 0
+            && self.viewport > 0.0
+            && (!self.parent || self.offset > 0.0))
+            .then(|| {
+                let top = self.natural_offset();
+                let body = self.blocks().body;
+                let row = self.rows.find((top - body).max(0.0) as f64) as u32;
+                let index = (row * self.columns).min(self.count - 1);
+                (index, self.item_at(index) - top)
+            });
         let end = (at + removed) as usize;
         self.sizes.splice(
             at as usize..end,
@@ -365,19 +553,25 @@ impl ListState {
     /// report that predates them does not move the window backwards.
     pub(super) fn reported(&mut self, offset: f32, applied: u32) {
         self.pending.retain(|&(n, _)| n > applied);
-        let mut at = offset;
-        for &(_, scroll) in &self.pending {
-            match scroll {
-                PendingScroll::By(d) => at += d,
-                PendingScroll::To(t) => at = t,
-            }
-        }
+        let at = replay(offset, &self.pending);
+        self.moved_to(at, self.pending.is_empty());
+    }
+
+    /// No scroll the core issued is waiting for the platform.
+    pub(super) fn settled(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    /// The list is at `at`; `settled`: with every scroll the core issued
+    /// applied, so a pinned target the list is away from was left by the
+    /// user.
+    fn moved_to(&mut self, at: f32, settled: bool) {
         if at != self.offset {
             self.offset = at;
             self.dirty = true;
         }
         if let Some(pin) = &mut self.pin
-            && self.pending.is_empty()
+            && settled
         {
             if (at - pin.at).abs() <= PIN_SLACK {
                 if pin.animating {
@@ -723,6 +917,10 @@ impl ListState {
     }
 
     pub(super) fn set_inverted(&mut self, inverted: bool) {
+        if self.parent {
+            self.ignored |= if inverted { ignored::INVERTED } else { 0 };
+            return;
+        }
         if inverted != self.inverted {
             self.inverted = inverted;
             self.anchored_end = f32::NAN;
@@ -731,6 +929,14 @@ impl ListState {
     }
 
     pub(super) fn set_follow_end(&mut self, threshold: Option<f32>) {
+        if self.parent {
+            self.ignored |= if threshold.is_some() {
+                ignored::FOLLOW_END
+            } else {
+                0
+            };
+            return;
+        }
         if threshold != self.follow_end {
             self.follow_end = threshold;
             self.anchored_end = f32::NAN;
@@ -739,6 +945,14 @@ impl ListState {
     }
 
     pub(super) fn set_sticky(&mut self, mut sticky: Vec<u32>) {
+        if self.parent {
+            self.ignored |= if sticky.is_empty() {
+                0
+            } else {
+                ignored::STICKY
+            };
+            return;
+        }
         sticky.sort_unstable();
         sticky.dedup();
         if sticky != self.sticky {
@@ -750,6 +964,10 @@ impl ListState {
     /// `stickyHeaderOffset`.
     pub(super) fn set_sticky_offset(&mut self, offset: f32) {
         let offset = if offset.is_finite() { offset } else { 0.0 };
+        if self.parent {
+            self.ignored |= if offset == 0.0 { 0 } else { ignored::STICKY };
+            return;
+        }
         if offset != self.sticky_offset {
             self.sticky_offset = offset;
             self.dirty = true;
@@ -867,12 +1085,17 @@ impl ListState {
         } else {
             at - view_position * free - view_offset
         };
-        offset.clamp(0.0, (self.content_len() - self.viewport).max(0.0))
+        let (min, max) = self.offset_limits();
+        offset.clamp(min, max)
     }
 
     pub(super) fn end_offset(&self) -> f32 {
         if self.inverted {
             0.0
+        } else if self.parent {
+            // The list's end at the end of the viewport.
+            let (min, max) = self.limits;
+            (self.content_len() - self.viewport).clamp(min, max)
         } else {
             (self.content_len() - self.viewport).max(0.0)
         }
@@ -1458,6 +1681,129 @@ mod tests {
         // Splices end it too.
         l.pin(Some(PinTarget::End), 4650.0, false);
         l.splice(0, 1, 0);
+        assert!(!l.pinned());
+    }
+
+    /// A list in its parent's viewport, 100 rows of 50, starting `start`
+    /// down a page of `max + 400` in a 400 pt viewport scrolled to
+    /// `offset`.
+    fn in_page(start: f32, offset: f32, max: f32) -> ListState {
+        let mut l = list(100, 50.0, 0.0);
+        l.set_parent(true);
+        l.set_outer(start, offset, 400.0, max, true);
+        l
+    }
+
+    fn bound(l: &ListState) -> Vec<u32> {
+        let mut bound: Vec<u32> = l.slots.iter().filter_map(|s| s.index).collect();
+        bound.sort_unstable();
+        bound
+    }
+
+    #[test]
+    fn in_a_page_the_window_is_the_viewport_over_the_list() {
+        // The list starts 100 below the viewport's top: its offset is
+        // -100, and the rows from its start to 700 (the viewport and the
+        // overscan below it) render.
+        let mut l = in_page(100.0, 0.0, 4700.0);
+        assert_eq!(l.offset, -100.0);
+        let mut binds = Vec::new();
+        l.update_window(&mut binds);
+        assert_eq!(bound(&l), (0..=14).collect::<Vec<_>>());
+        // Entirely below the viewport and its overscan: nothing.
+        let mut l = in_page(1000.0, 0.0, 4700.0);
+        l.update_window(&mut binds);
+        assert!(bound(&l).is_empty());
+        // Scrolled past: nothing either.
+        let mut l = in_page(0.0, 5500.0, 6000.0);
+        l.update_window(&mut binds);
+        assert!(bound(&l).is_empty());
+    }
+
+    #[test]
+    fn in_a_page_load_more_fires_as_the_lists_end_nears() {
+        // 20 rows (1000) below a 1000 pt header.
+        let mut l = list(20, 50.0, 0.0);
+        l.set_parent(true);
+        let mut binds = Vec::new();
+        for (offset, fires) in [(0.0, false), (1100.0, false), (1300.0, true)] {
+            l.set_outer(1000.0, offset, 400.0, 1600.0, true);
+            assert_eq!(l.update_window(&mut binds), fires, "at {offset}");
+        }
+    }
+
+    #[test]
+    fn in_a_page_only_changes_above_the_viewport_scroll_it() {
+        // The list's start shows: rows growing move what is below them.
+        let mut l = in_page(100.0, 0.0, 4700.0);
+        assert_eq!(l.measured(0, 80.0), 0.0);
+        l.splice(0, 0, 3);
+        assert_eq!(l.take_splice_anchor(), 0.0);
+        // Scrolled 1000 into it: a row above the viewport keeps the visible
+        // rows in place, one in it does not.
+        let mut l = in_page(100.0, 1100.0, 4700.0);
+        assert_eq!(l.offset, 1000.0);
+        assert_eq!(l.measured(2, 80.0), 30.0);
+        assert_eq!(l.measured(25, 80.0), 0.0);
+        l.splice(0, 0, 2);
+        assert_eq!(l.take_splice_anchor(), 100.0);
+    }
+
+    #[test]
+    fn in_a_page_scroll_targets_are_clamped_by_the_page() {
+        // The page scrolls 4700: from the list's start, 100 down, it
+        // reaches -100 to 4600 of the list.
+        let l = in_page(100.0, 0.0, 4700.0);
+        assert_eq!(l.offset_for_index(10, 0.0, 0.0), 500.0);
+        assert_eq!(l.offset_for_index(99, 0.0, 0.0), 4600.0);
+        assert_eq!(l.offset_for_index(0, 1.0, 0.0), -100.0);
+        // The end of the list at the end of the viewport.
+        assert_eq!(l.end_offset(), 4600.0);
+        assert_eq!(l.clamped(-500.0), -100.0);
+    }
+
+    #[test]
+    fn in_a_page_what_needs_a_scroll_view_of_its_own_is_off() {
+        let mut l = list(100, 50.0, 400.0);
+        l.set_inverted(true);
+        l.set_sticky(vec![0]);
+        l.set_parent(true);
+        assert!(!l.inverted && !l.sticky_enabled());
+        assert_eq!(l.ignored, ignored::INVERTED | ignored::STICKY);
+        l.set_follow_end(Some(10.0));
+        assert_eq!(l.follow_end, None);
+        assert_ne!(l.ignored & ignored::FOLLOW_END, 0);
+    }
+
+    #[test]
+    fn back_to_its_own_scroll_view_a_list_gets_back_what_parent_mode_set_aside() {
+        let mut l = list(100, 50.0, 400.0);
+        l.set_inverted(true);
+        l.set_sticky(vec![0, 3]);
+        l.set_parent(true);
+        l.set_parent(false);
+        assert!(l.inverted);
+        assert_eq!(l.sticky, [0, 3]);
+    }
+
+    #[test]
+    fn in_a_page_a_pin_survives_the_list_moving_in_the_page() {
+        let mut l = in_page(100.0, 600.0, 4700.0);
+        l.pin(
+            Some(PinTarget::Index {
+                index: 10,
+                view_position: 0.0,
+                view_offset: 0.0,
+            }),
+            500.0,
+            false,
+        );
+        // A header above the list grows by 40: the page did not scroll,
+        // the list moved.
+        l.set_outer(140.0, 600.0, 400.0, 4740.0, true);
+        assert!(l.pinned());
+        // The user scrolls.
+        l.set_outer(140.0, 900.0, 400.0, 4740.0, true);
         assert!(!l.pinned());
     }
 

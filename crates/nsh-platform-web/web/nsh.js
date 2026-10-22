@@ -2312,7 +2312,7 @@ class Player {
   /** `zoomTo({ scale, x, y, animated })`: content point (x, y) to the middle of the viewport, or the point there now. */
   zoomCommand(el, scale, x, y, animated) {
     if (!this.zooms(el) || !el._frame) return;
-    el._applied++;
+    // Not one of the core's counted scrolls (`ScrollBy`, `ScrollTo`), as on the other platforms.
     const target = this.limitZoom(el, scale, false);
     const fx = el._frame[2] / 2;
     const fy = el._frame[3] / 2;
