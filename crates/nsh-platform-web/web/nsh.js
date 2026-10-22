@@ -148,6 +148,8 @@ const KEYFRAMES = `
 /* A shader effect (op_sh): its children show through its shader's canvas, over them; at opacity 0 they keep their
    pointer events. */
 .nsh-fx > :not(.nsh-fx-out) { opacity: 0 !important; }
+/* Its canvas is over its children only: never over what comes after it, such as a dialog. */
+.nsh-fx { isolation: isolate; }
 .nsh-fx-out { z-index: 2147483000; }
 img.nsh-fill { pointer-events: none; }
 .nsh-fit-cover { object-fit: cover; }
@@ -2728,7 +2730,7 @@ class Player {
       if (el._t >= 1) {
         el._running = null;
         el.classList.remove("nsh-fx");
-        el._shaderCanvas.width = 0;
+        this.clearShader(el);
         el._contentObserver?.takeRecords();
         return;
       }
@@ -2790,6 +2792,16 @@ class Player {
     this.drawShader(o);
     requestAnimationFrame(step);
     return true;
+  }
+
+  /**
+   * Takes `el`'s shader picture off its canvas. A `bitmaprenderer` canvas
+   * goes on showing the last bitmap it was given through a resize (Chrome,
+   * Edge), so it is given none.
+   */
+  clearShader(el) {
+    el._bitmapContext?.transferFromImageBitmap(null);
+    el._shaderCanvas.width = 0;
   }
 
   /** A canvas for a picture of `el`'s input (`key`), covering its area, with its context in points from the view's top-left. */
@@ -3166,7 +3178,7 @@ class Player {
     const fill = el._fill;
     const canvas = el._shaderCanvas;
     if (!fill || !el._frame || !el.isConnected || (el._transition && !el._running)) {
-      if ((!fill || el._transition) && canvas.width) canvas.width = 0;
+      if ((!fill || el._transition) && canvas.width) this.clearShader(el);
       return;
     }
     const g = this.gl();
