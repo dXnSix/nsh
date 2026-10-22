@@ -46,6 +46,11 @@ wait 600
 expect 1 drop
 tap label:Drop
 expect 2 drops
+expect Through a shader
+expect Tapped 0×
+tap text:Tapped 0×
+expect Tapped 1×
+expect Frosted backdrop
 tap text:Styles
 expect Continuous corners ease into the edges
 expect 44 · 6 · 28 · 0 pt, clockwise
