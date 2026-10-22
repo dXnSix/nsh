@@ -54,6 +54,7 @@ expect Frosted backdrop
 expect Spring
 tap label:Next season
 expect Summer
+expect Dialog through a shader
 tap text:Styles
 expect Continuous corners ease into the edges
 expect 44 · 6 · 28 · 0 pt, clockwise
