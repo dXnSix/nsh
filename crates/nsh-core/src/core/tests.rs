@@ -13951,3 +13951,1377 @@ fn text_takes_the_tokens_sans_font() {
         Some(crate::style::FontFamily::new("Inter"))
     );
 }
+
+/// A page: scroll view 2 (400 tall) holding a header (view 3, `header`
+/// tall) and, for each of `lists`, a list in its parent's viewport (ids 4,
+/// 5, …) of that many rows estimated at 50, then a footer (view 9, 10
+/// tall).
+fn page(c: &mut Core<FakeEngine>, header: f32, lists: &[u32]) {
+    let mut ops = vec![
+        Op::Create {
+            id: 2,
+            tag: Tag::Scroll,
+        },
+        style_op(2, &[("height", StyleValue::Number(400.0))]),
+        Op::Create {
+            id: 3,
+            tag: Tag::View,
+        },
+        style_op(3, &[("height", StyleValue::Number(header))]),
+        Op::Insert {
+            parent: 2,
+            child: 3,
+            before: None,
+        },
+    ];
+    for (i, &count) in lists.iter().enumerate() {
+        let id = 4 + i as u32;
+        ops.extend([
+            Op::Create { id, tag: Tag::List },
+            Op::SetProp {
+                id,
+                prop: Prop::ListViewport(crate::ListViewport::Parent),
+            },
+            Op::SetProp {
+                id,
+                prop: Prop::EstimatedItemSize(px(50.0)),
+            },
+            Op::SetProp {
+                id,
+                prop: Prop::Count(count),
+            },
+            Op::Insert {
+                parent: 2,
+                child: id,
+                before: None,
+            },
+        ]);
+    }
+    ops.extend([
+        Op::Create {
+            id: 9,
+            tag: Tag::View,
+        },
+        style_op(9, &[("height", StyleValue::Number(10.0))]),
+        Op::Insert {
+            parent: 2,
+            child: 9,
+            before: None,
+        },
+        Op::Insert {
+            parent: ROOT_ID,
+            child: 2,
+            before: None,
+        },
+    ]);
+    apply(c, ops);
+}
+
+/// The items list `id` has bound, in order.
+fn bound_items(c: &Core<FakeEngine>, id: NodeId) -> Vec<u32> {
+    let list = c.nodes[c.key(id).unwrap() as usize].list.as_ref().unwrap();
+    let mut items: Vec<u32> = list.slots.iter().filter_map(|s| s.index).collect();
+    items.sort_unstable();
+    items
+}
+
+fn scroll_content(batch: &MountBatch, id: NodeId) -> Option<f32> {
+    batch.items.iter().rev().find_map(|i| match i {
+        MountItem::ScrollContent { id: i, size } if *i == id => Some(size.height.0),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_list_below_a_header_renders_the_rows_in_the_pages_viewport() {
+    let mut c = core();
+    page(&mut c, 100.0, &[100]);
+    let batch = c.commit().unwrap();
+    // A plain view that clips its cells, at its full length in the page:
+    // the page's content covers it, in the same batch.
+    assert!(batch.items.iter().any(|i| matches!(
+        i,
+        MountItem::Create {
+            id: 4,
+            kind: ViewKind::View
+        }
+    )));
+    assert!(!batch.items.iter().any(|i| matches!(
+        i,
+        MountItem::ScrollConfig { id: 4, .. } | MountItem::ScrollContent { id: 4, .. }
+    )));
+    assert!(batch.items.iter().any(|i| matches!(
+        i,
+        MountItem::ViewStyle { id: 4, style } if style.overflow_hidden
+    )));
+    assert_eq!(frame_of(&batch, 4), Some(rect(0.0, 100.0, 320.0, 5000.0)));
+    assert_eq!(frame_of(&batch, 9), Some(rect(0.0, 5100.0, 320.0, 10.0)));
+    assert_eq!(scroll_content(&batch, 2), Some(5110.0));
+    // The rows from the list's start to the viewport's end and a screen
+    // more: 0 to 700 of the list.
+    assert_eq!(bound_items(&c, 4), (0..=14).collect::<Vec<_>>());
+    let (mut next_id, mut cells) = (100, Vec::new());
+    render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    let batch = c.commit().unwrap();
+    assert_eq!(
+        frame_of(&batch, cells[3]),
+        Some(rect(0.0, 150.0, 320.0, 50.0))
+    );
+
+    // The page scrolls: the list's rows follow, 1900 into it.
+    c.set_scroll_offset(2, point(px(0.0), px(2000.0)), 0);
+    c.commit();
+    assert_eq!(bound_items(&c, 4), (30..=54).collect::<Vec<_>>());
+    render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    let batch = c.commit().unwrap();
+    let cell = cells[bound_slot(&c, 4, 40) as usize];
+    assert_eq!(frame_of(&batch, cell), Some(rect(0.0, 2000.0, 320.0, 50.0)));
+}
+
+/// The slot list `id` bound item `index` to.
+fn bound_slot(c: &Core<FakeEngine>, id: NodeId, index: u32) -> u32 {
+    let list = c.nodes[c.key(id).unwrap() as usize].list.as_ref().unwrap();
+    list.slots
+        .iter()
+        .position(|s| s.index == Some(index))
+        .unwrap() as u32
+}
+
+#[test]
+fn lists_in_one_page_scroll_with_it() {
+    let mut c = core();
+    // 20 rows (1000) then 100 rows, below no header.
+    page(&mut c, 0.0, &[20, 100]);
+    c.commit();
+    assert_eq!(bound_items(&c, 4), (0..=16).collect::<Vec<_>>());
+    // The second starts at 1000, below the viewport and its overscan.
+    assert!(bound_items(&c, 5).is_empty());
+    let key = c.key(2).unwrap();
+    assert_eq!(
+        c.nodes[key as usize]
+            .scroll
+            .as_ref()
+            .unwrap()
+            .dependents
+            .len(),
+        2
+    );
+    // Scrolled 1500: the first list is past, the second 500 into its rows.
+    c.set_scroll_offset(2, point(px(0.0), px(1500.0)), 0);
+    c.commit();
+    assert!(bound_items(&c, 4).is_empty());
+    assert_eq!(bound_items(&c, 5), (2..=26).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_list_far_below_the_viewport_renders_nothing() {
+    let mut c = core();
+    page(&mut c, 2000.0, &[100]);
+    c.commit();
+    assert!(bound_items(&c, 4).is_empty());
+    let mut binds = Vec::new();
+    c.take_list_binds(&mut binds);
+    assert!(binds.is_empty());
+    c.set_scroll_offset(2, point(px(0.0), px(1700.0)), 0);
+    c.commit();
+    assert_eq!(bound_items(&c, 4), (0..=10).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_page_list_loads_more_as_its_end_nears() {
+    let mut c = core();
+    page(&mut c, 1000.0, &[20]);
+    c.commit();
+    let load_more = |c: &mut Core<FakeEngine>| {
+        js_events(c)
+            .iter()
+            .any(|e| e.0 == 4 && e.1 == EventKind::LoadMore)
+    };
+    assert!(!load_more(&mut c));
+    c.set_scroll_offset(2, point(px(0.0), px(1100.0)), 0);
+    c.commit();
+    assert!(!load_more(&mut c));
+    // Its end 600 below the viewport's end, within a viewport.
+    c.set_scroll_offset(2, point(px(0.0), px(1300.0)), 0);
+    c.commit();
+    assert!(load_more(&mut c));
+}
+
+/// The scrolls of page 2 in `batch`: `ScrollBy` deltas and `ScrollTo`
+/// offsets, in order.
+fn page_scrolls(batch: &MountBatch) -> Vec<(bool, f32)> {
+    batch
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            MountItem::ScrollBy { id: 2, dy, .. } => Some((false, dy.0)),
+            MountItem::Command {
+                id: 2,
+                command: Command::ScrollTo { y, .. },
+            } => Some((true, y.0)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_page_moves_only_for_rows_wholly_above_its_viewport() {
+    let mut c = core();
+    page(&mut c, 100.0, &[100]);
+    c.commit();
+    let (mut next_id, mut cells) = (100, Vec::new());
+    // The list's start shows: rows taller than estimated push what is
+    // below them down, and the page stays.
+    render_binds(&mut c, &mut next_id, &mut cells, 80.0);
+    let batch = c.commit().unwrap();
+    assert!(page_scrolls(&batch).is_empty());
+    assert_eq!(
+        frame_of(&batch, 9),
+        Some(rect(0.0, 100.0 + 15.0 * 80.0 + 85.0 * 50.0, 320.0, 10.0))
+    );
+    // Far down, then back up over rows not measured yet: those wholly
+    // above the viewport's top keep the visible rows in place.
+    c.set_scroll_offset(2, point(px(0.0), px(3000.0)), 0);
+    c.commit();
+    render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    c.commit();
+    c.set_scroll_offset(2, point(px(0.0), px(2200.0)), 0);
+    c.commit();
+    render_binds(&mut c, &mut next_id, &mut cells, 80.0);
+    let batch = c.commit().unwrap();
+    let scrolls = page_scrolls(&batch);
+    assert_eq!(scrolls.len(), 1, "one ScrollBy per commit: {scrolls:?}");
+    let (to, by) = scrolls[0];
+    assert!(!to && by > 0.0, "{scrolls:?}");
+    // The page's content grew first.
+    let grow = batch
+        .items
+        .iter()
+        .position(|i| matches!(i, MountItem::ScrollContent { id: 2, .. }))
+        .unwrap();
+    let scroll = batch
+        .items
+        .iter()
+        .position(|i| matches!(i, MountItem::ScrollBy { id: 2, .. }))
+        .unwrap();
+    assert!(grow < scroll);
+    // The window already moved with it: a stale report (before the
+    // platform applied the scroll) does not move it back.
+    let list = c.nodes[c.key(4).unwrap() as usize].list.as_ref().unwrap();
+    let local = list.offset;
+    c.set_scroll_offset(2, point(px(0.0), px(2200.0)), 0);
+    c.commit();
+    let list = c.nodes[c.key(4).unwrap() as usize].list.as_ref().unwrap();
+    assert_eq!(list.offset, local);
+    // Applied, it reports where it is.
+    c.set_scroll_offset(2, point(px(0.0), px(2200.0 + by)), 1);
+    c.commit();
+    let list = c.nodes[c.key(4).unwrap() as usize].list.as_ref().unwrap();
+    assert_eq!(list.offset, local);
+}
+
+#[test]
+fn scroll_to_index_in_a_page_scrolls_the_page_within_its_content() {
+    let mut c = core();
+    page(&mut c, 100.0, &[100]);
+    c.commit();
+    c.apply(Op::Command {
+        id: 4,
+        command: Command::ScrollToIndex {
+            index: 10,
+            animated: false,
+            view_position: crate::geometry::Percentage(0.0),
+            view_offset: px(0.0),
+        },
+    })
+    .unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(page_scrolls(&batch), [(true, 600.0)]);
+    assert!(
+        !batch
+            .items
+            .iter()
+            .any(|i| matches!(i, MountItem::Command { id: 4, .. }))
+    );
+    // The window followed in the same commit.
+    assert_eq!(bound_items(&c, 4).first(), Some(&2));
+    // The last row: as far as the page scrolls (5110 - 400).
+    c.apply(Op::Command {
+        id: 4,
+        command: Command::ScrollToIndex {
+            index: 99,
+            animated: false,
+            view_position: crate::geometry::Percentage(0.0),
+            view_offset: px(0.0),
+        },
+    })
+    .unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(page_scrolls(&batch), [(true, 4710.0)]);
+    // The list's end at the viewport's end.
+    c.apply(Op::Command {
+        id: 4,
+        command: Command::ScrollToEnd { animated: false },
+    })
+    .unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(page_scrolls(&batch), [(true, 4700.0)]);
+}
+
+#[test]
+fn the_viewport_is_fixed_when_the_list_is_made() {
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 4,
+                tag: Tag::List,
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 4,
+                before: None,
+            },
+            // In the batch that makes it: it counts.
+            Op::SetProp {
+                id: 4,
+                prop: Prop::ListViewport(crate::ListViewport::Parent),
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert!(batch.items.iter().any(|i| matches!(
+        i,
+        MountItem::Create {
+            id: 4,
+            kind: ViewKind::View
+        }
+    )));
+    // Later: ignored.
+    c.apply(Op::SetProp {
+        id: 4,
+        prop: Prop::ListViewport(crate::ListViewport::Own),
+    })
+    .unwrap();
+    let list = c.nodes[c.key(4).unwrap() as usize].list.as_ref().unwrap();
+    assert!(list.parent);
+    assert_ne!(list.warned & list::ignored::VIEWPORT, 0);
+    assert!(c.commit().is_none());
+}
+
+#[test]
+fn own_lists_have_no_spacer_and_scroll_themselves() {
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::Scroll,
+            },
+            Op::Create {
+                id: 4,
+                tag: Tag::List,
+            },
+            Op::SetProp {
+                id: 4,
+                prop: Prop::Count(100),
+            },
+            Op::Insert {
+                parent: 2,
+                child: 4,
+                before: None,
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert!(batch.items.iter().any(|i| matches!(
+        i,
+        MountItem::Create {
+            id: 4,
+            kind: ViewKind::Scroll
+        }
+    )));
+    // No height of its own in a scroll view: nothing to show.
+    assert_eq!(frame_of(&batch, 4).map(|f| f.size.height.0), Some(0.0));
+    assert!(c.parent_lists.is_empty());
+    let key = c.key(4).unwrap();
+    let layout = c.nodes[key as usize].layout.unwrap();
+    assert!(c.layout.children(layout).unwrap().is_empty());
+    let key = c.key(2).unwrap();
+    assert!(
+        c.nodes[key as usize]
+            .scroll
+            .as_ref()
+            .unwrap()
+            .dependents
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_page_lists_padding_and_border_place_its_cells() {
+    let mut c = core();
+    page(&mut c, 0.0, &[3]);
+    c.apply(style_op(
+        4,
+        &[
+            ("paddingTop", StyleValue::Number(20.0)),
+            ("paddingLeft", StyleValue::Number(16.0)),
+            ("paddingRight", StyleValue::Number(16.0)),
+            ("paddingBottom", StyleValue::Number(30.0)),
+        ],
+    ))
+    .unwrap();
+    let batch = c.commit().unwrap();
+    // Its padding around the rows, as in a browser.
+    assert_eq!(frame_of(&batch, 9).map(|f| f.origin.y.0), Some(200.0));
+    let (mut next_id, mut cells) = (100, Vec::new());
+    render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    let batch = c.commit().unwrap();
+    assert_eq!(
+        frame_of(&batch, cells[1]),
+        Some(rect(16.0, 70.0, 288.0, 50.0))
+    );
+}
+
+#[test]
+fn a_page_list_with_no_scroll_view_around_it_renders_for_the_screen() {
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 4,
+                tag: Tag::List,
+            },
+            Op::SetProp {
+                id: 4,
+                prop: Prop::ListViewport(crate::ListViewport::Parent),
+            },
+            Op::SetProp {
+                id: 4,
+                prop: Prop::Count(100),
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 4,
+                before: None,
+            },
+        ],
+    );
+    c.commit();
+    // The screen (480 tall) and a screen more.
+    assert_eq!(bound_items(&c, 4), (0..=19).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_page_list_in_a_cell_of_a_list_follows_that_list() {
+    let mut c = core();
+    // An outer list of its own (400 tall) with one row: a list in its
+    // parent's viewport, below a 100 pt header in the row.
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::List,
+            },
+            style_op(2, &[("height", StyleValue::Number(400.0))]),
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Count(1),
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    c.commit();
+    let mut binds = Vec::new();
+    c.take_list_binds(&mut binds);
+    assert_eq!(binds[0].binds, [(0, 0)]);
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 50,
+                tag: Tag::Cell,
+            },
+            Op::SetProp {
+                id: 50,
+                prop: Prop::Slot(CellSlot::Item(0)),
+            },
+            Op::Insert {
+                parent: 2,
+                child: 50,
+                before: None,
+            },
+            Op::Create {
+                id: 3,
+                tag: Tag::View,
+            },
+            style_op(3, &[("height", StyleValue::Number(100.0))]),
+            Op::Insert {
+                parent: 50,
+                child: 3,
+                before: None,
+            },
+            Op::Create {
+                id: 4,
+                tag: Tag::List,
+            },
+            Op::SetProp {
+                id: 4,
+                prop: Prop::ListViewport(crate::ListViewport::Parent),
+            },
+            Op::SetProp {
+                id: 4,
+                prop: Prop::Count(100),
+            },
+            Op::Insert {
+                parent: 50,
+                child: 4,
+                before: None,
+            },
+            Op::SetProp {
+                id: 50,
+                prop: Prop::CellIndex(0),
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    // The outer row is as tall as the header and the list.
+    assert_eq!(scroll_content(&batch, 2), Some(5100.0));
+    assert_eq!(bound_items(&c, 4), (0..=14).collect::<Vec<_>>());
+    let key = c.key(2).unwrap();
+    assert_eq!(
+        c.nodes[key as usize]
+            .scroll
+            .as_ref()
+            .unwrap()
+            .dependents
+            .len(),
+        1
+    );
+    // The outer list scrolls 2100: 2000 into the inner one.
+    c.set_scroll_offset(2, point(px(0.0), px(2100.0)), u32::MAX);
+    c.commit();
+    assert_eq!(bound_items(&c, 4), (32..=56).collect::<Vec<_>>());
+    // Released, the outer list leaves the inner one without a view.
+    c.apply(Op::Remove {
+        parent: ROOT_ID,
+        child: 2,
+    })
+    .unwrap();
+    c.apply(Op::Release { id: 2 }).unwrap();
+    c.commit();
+    let key = c.key(4).unwrap();
+    assert_eq!(c.nodes[key as usize].list.as_ref().unwrap().outer, None);
+}
+
+#[test]
+fn a_page_list_keeps_its_scroll_commands_until_it_is_placed() {
+    let mut c = core();
+    page(&mut c, 100.0, &[100]);
+    c.commit();
+    // Out of the page: no view to scroll yet.
+    c.apply(Op::Remove {
+        parent: 2,
+        child: 4,
+    })
+    .unwrap();
+    c.apply(Op::Command {
+        id: 4,
+        command: Command::ScrollToIndex {
+            index: 10,
+            animated: false,
+            view_position: crate::geometry::Percentage(0.0),
+            view_offset: px(0.0),
+        },
+    })
+    .unwrap();
+    let batch = c.commit().unwrap();
+    assert!(page_scrolls(&batch).is_empty());
+    // Back in the page: the page scrolls to the row.
+    c.apply(Op::Insert {
+        parent: 2,
+        child: 4,
+        before: Some(9),
+    })
+    .unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(page_scrolls(&batch), [(true, 600.0)]);
+}
+
+/// The sticky cells sent to view `id` in `batch` (the last set), by cell.
+fn sticky_of(batch: &MountBatch, id: NodeId) -> Option<Vec<(NodeId, f32, f32)>> {
+    batch.items.iter().rev().find_map(|i| match i {
+        MountItem::StickyCells { id: v, cells } if *v == id => {
+            Some(cells.iter().map(|c| (c.cell, c.start.0, c.end.0)).collect())
+        }
+        _ => None,
+    })
+}
+
+/// [`render_binds`] for the lists of a page: each list's cells by slot.
+fn render_lists_binds(
+    c: &mut Core<FakeEngine>,
+    next_id: &mut u32,
+    cells: &mut rustc_hash::FxHashMap<NodeId, Vec<u32>>,
+    row_height: f32,
+) {
+    let mut binds = Vec::new();
+    c.take_list_binds(&mut binds);
+    for bind in binds {
+        let list_cells = cells.entry(bind.list).or_default();
+        for (slot, index) in bind.binds {
+            while list_cells.len() <= slot as usize {
+                let id = *next_id;
+                *next_id += 1;
+                apply(
+                    c,
+                    vec![
+                        Op::Create { id, tag: Tag::Cell },
+                        Op::SetProp {
+                            id,
+                            prop: Prop::Slot(CellSlot::Item(list_cells.len() as u32)),
+                        },
+                        Op::Insert {
+                            parent: bind.list,
+                            child: id,
+                            before: None,
+                        },
+                    ],
+                );
+                list_cells.push(id);
+            }
+            let cell = list_cells[slot as usize];
+            c.apply(style_op(
+                cell,
+                &[("height", StyleValue::Number(row_height))],
+            ))
+            .unwrap();
+            c.apply(Op::SetProp {
+                id: cell,
+                prop: Prop::CellIndex(index),
+            })
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn page_lists_sticky_rows_stick_to_the_pages_viewport() {
+    let mut c = core();
+    // Two lists of 20 rows (1000) below a 100 pt header; rows 0 and 10 of
+    // each stick.
+    page(&mut c, 100.0, &[20, 20]);
+    for id in [4, 5] {
+        c.apply(Op::SetProp {
+            id,
+            prop: Prop::StickyIndices(vec![0, 10]),
+        })
+        .unwrap();
+    }
+    c.commit();
+    let (mut next_id, mut cells) = (100, rustc_hash::FxHashMap::default());
+    render_lists_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    let batch = c.commit().unwrap();
+    // The page's scroll view pins them, in its offsets: the first list's
+    // row 0 from 100 until row 10 pushes it out, row 10 from 600 until its
+    // bottom meets the list's end (1100).
+    let pinned = sticky_of(&batch, 2).expect("the page's sticky cells");
+    assert!(
+        pinned.contains(&(cells[&4][bound_slot(&c, 4, 0) as usize], 100.0, 550.0)),
+        "{pinned:?}"
+    );
+    assert!(
+        pinned.contains(&(cells[&4][bound_slot(&c, 4, 10) as usize], 600.0, 1050.0)),
+        "{pinned:?}"
+    );
+    // None for the lists themselves.
+    assert_eq!(sticky_of(&batch, 4), None);
+    // The second list's rows are not bound yet (it starts at 1100, past
+    // the window); scrolled there, its row 0 joins, from 1100.
+    c.set_scroll_offset(2, point(px(0.0), px(1200.0)), 0);
+    c.commit();
+    render_lists_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    let batch = c.commit().unwrap();
+    let pinned = sticky_of(&batch, 2).expect("the page's sticky cells");
+    assert!(
+        pinned.contains(&(cells[&5][bound_slot(&c, 5, 0) as usize], 1100.0, 1550.0)),
+        "{pinned:?}"
+    );
+    assert!(
+        pinned.contains(&(cells[&4][bound_slot(&c, 4, 10) as usize], 600.0, 1050.0)),
+        "{pinned:?}"
+    );
+    // A sticky cell goes on top of its list's other cells.
+    assert!(batch.items.iter().any(|i| matches!(
+        i,
+        MountItem::Insert { parent: 5, child, before: None } if *child == cells[&5][bound_slot(&c, 5, 0) as usize]
+    )));
+    // The first list leaves the page: its cells leave the page's set, and
+    // the second list's move up with it (it now starts at 100).
+    c.apply(Op::Remove {
+        parent: 2,
+        child: 4,
+    })
+    .unwrap();
+    let batch = c.commit().unwrap();
+    let pinned = sticky_of(&batch, 2).expect("the page's sticky cells");
+    assert!(
+        pinned.iter().all(|p| cells[&5].contains(&p.0)),
+        "{pinned:?}"
+    );
+    assert!(
+        pinned.contains(&(cells[&5][bound_slot(&c, 5, 0) as usize], 100.0, 550.0)),
+        "{pinned:?}"
+    );
+}
+
+/// A view (or a text) moved into a container inside a `display: none`
+/// view, absolutely positioned or not, loses its old frame: its native
+/// view is not left showing at its former size in a parent of no size.
+#[test]
+fn views_moved_into_a_hidden_subtree_lose_their_frames() {
+    for (tag, position) in [
+        (Tag::View, "relative"),
+        (Tag::Text, "relative"),
+        (Tag::View, "absolute"),
+        (Tag::Text, "absolute"),
+    ] {
+        let mut c = core();
+        let mut ops = vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::View,
+            },
+            style_op(2, &[("display", StyleValue::Str("none"))]),
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+            Op::Create {
+                id: 4,
+                tag: Tag::View,
+            },
+            style_op(4, &[("position", StyleValue::Str(position))]),
+            Op::Insert {
+                parent: 2,
+                child: 4,
+                before: None,
+            },
+            Op::Create { id: 6, tag },
+            style_op(6, &[("height", StyleValue::Number(20.0))]),
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 6,
+                before: None,
+            },
+        ];
+        if tag == Tag::Text {
+            ops.push(Op::CreateText {
+                id: 8,
+                text: "hello".into(),
+            });
+            ops.push(Op::Insert {
+                parent: 6,
+                child: 8,
+                before: None,
+            });
+        }
+        apply(&mut c, ops);
+        let shown = c.commit().unwrap();
+        assert_eq!(frame_of(&shown, 6).unwrap().size, size_pt(320.0, 20.0));
+        apply(
+            &mut c,
+            vec![
+                Op::Remove {
+                    parent: ROOT_ID,
+                    child: 6,
+                },
+                Op::Insert {
+                    parent: 4,
+                    child: 6,
+                    before: None,
+                },
+            ],
+        );
+        let hidden = c.commit().unwrap();
+        assert_eq!(
+            frame_of(&hidden, 6),
+            Some(Bounds::default()),
+            "{tag:?} in a {position} container"
+        );
+    }
+}
+
+/// The layout an incremental commit gives equals the one a core laid out
+/// from scratch gives the same tree: random trees of views and texts,
+/// changed by random insertions, moves, removals, style and text changes,
+/// compared node by node after each commit. What makes layout incremental
+/// (caches, dirty propagation, partial walks) is held to this.
+mod layout_consistency {
+    use std::collections::{BTreeMap, HashMap};
+
+    use super::*;
+
+    /// A seeded xorshift64*: the same seed, the same trees.
+    struct Rng(u64);
+
+    impl Rng {
+        fn new(seed: u64) -> Rng {
+            Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
+        }
+
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+
+        fn pick<T: Copy>(&mut self, of: &[T]) -> T {
+            of[self.below(of.len())]
+        }
+
+        /// True `percent`% of the time.
+        fn chance(&mut self, percent: u64) -> bool {
+            self.next() % 100 < percent
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Value {
+        N(f32),
+        S(&'static str),
+    }
+
+    /// A view or a text (its raw text child and content) in the model.
+    #[derive(Clone, Debug)]
+    struct Node {
+        parent: NodeId,
+        text: Option<(NodeId, String)>,
+        style: Vec<(&'static str, Value)>,
+        children: Vec<NodeId>,
+    }
+
+    /// The tree as the test made it.
+    #[derive(Default)]
+    struct Model {
+        nodes: BTreeMap<NodeId, Node>,
+        next: NodeId,
+    }
+
+    impl Model {
+        fn id(&mut self) -> NodeId {
+            self.next += 2;
+            self.next
+        }
+
+        fn children(&self, parent: NodeId) -> Vec<NodeId> {
+            if parent == ROOT_ID {
+                self.roots().to_vec()
+            } else {
+                self.nodes[&parent].children.clone()
+            }
+        }
+
+        fn roots(&self) -> &[NodeId] {
+            self.nodes
+                .get(&0)
+                .map_or(&[][..], |root| root.children.as_slice())
+        }
+
+        fn is_inside(&self, mut id: NodeId, ancestor: NodeId) -> bool {
+            loop {
+                if id == ancestor {
+                    return true;
+                }
+                match self.nodes.get(&id) {
+                    Some(node) if node.parent != ROOT_ID => id = node.parent,
+                    _ => return false,
+                }
+            }
+        }
+
+        /// The live nodes: views and texts, the root's holder aside.
+        fn live(&self) -> Vec<NodeId> {
+            self.nodes.keys().copied().filter(|&id| id != 0).collect()
+        }
+
+        fn views(&self) -> Vec<NodeId> {
+            self.nodes
+                .iter()
+                .filter(|(id, n)| **id != 0 && n.text.is_none())
+                .map(|(&id, _)| id)
+                .collect()
+        }
+
+        /// The subtree of `id`, it first.
+        fn subtree(&self, id: NodeId) -> Vec<NodeId> {
+            let mut out = vec![id];
+            let mut at = 0;
+            while at < out.len() {
+                out.extend(self.nodes[&out[at]].children.iter().copied());
+                at += 1;
+            }
+            out
+        }
+
+        fn detach(&mut self, id: NodeId) -> NodeId {
+            let parent = self.nodes[&id].parent;
+            let holder = if parent == ROOT_ID { 0 } else { parent };
+            self.nodes
+                .get_mut(&holder)
+                .unwrap()
+                .children
+                .retain(|&c| c != id);
+            parent
+        }
+
+        fn attach(&mut self, id: NodeId, parent: NodeId, at: usize) -> Option<NodeId> {
+            let holder = if parent == ROOT_ID { 0 } else { parent };
+            let siblings = &mut self.nodes.get_mut(&holder).unwrap().children;
+            let at = at.min(siblings.len());
+            let before = siblings.get(at).copied();
+            siblings.insert(at, id);
+            self.nodes.get_mut(&id).unwrap().parent = parent;
+            before
+        }
+
+        /// The ops that make `id` and what it holds, detached.
+        fn create(&self, id: NodeId, ops: &mut Vec<Op>) {
+            let node = &self.nodes[&id];
+            ops.push(Op::Create {
+                id,
+                tag: if node.text.is_some() {
+                    Tag::Text
+                } else {
+                    Tag::View
+                },
+            });
+            ops.push(style_of(id, &node.style));
+            if let Some((raw, content)) = &node.text {
+                ops.push(Op::CreateText {
+                    id: *raw,
+                    text: content.as_str().into(),
+                });
+                ops.push(Op::Insert {
+                    parent: id,
+                    child: *raw,
+                    before: None,
+                });
+            }
+            for &child in &node.children {
+                self.create(child, ops);
+                ops.push(Op::Insert {
+                    parent: id,
+                    child,
+                    before: None,
+                });
+            }
+        }
+
+        /// The ops that make the whole tree on a new core.
+        fn build(&self) -> Vec<Op> {
+            let mut ops = Vec::new();
+            for &id in self.roots() {
+                self.create(id, &mut ops);
+                ops.push(Op::Insert {
+                    parent: ROOT_ID,
+                    child: id,
+                    before: None,
+                });
+            }
+            ops
+        }
+    }
+
+    fn style_of(id: NodeId, style: &[(&'static str, Value)]) -> Op {
+        let props: Vec<(&str, StyleValue<'_>)> = style
+            .iter()
+            .map(|&(k, v)| {
+                (
+                    k,
+                    match v {
+                        Value::N(n) => StyleValue::Number(n),
+                        Value::S(s) => StyleValue::Str(s),
+                    },
+                )
+            })
+            .collect();
+        style_op(id, &props)
+    }
+
+    /// A random style for a view (or, `text`, a text): sizes fixed,
+    /// relative or free, flex and grid containers, absolute positions,
+    /// `display: none`, clipping, minimums and maximums.
+    fn random_style(rng: &mut Rng, text: bool, fractions: bool) -> Vec<(&'static str, Value)> {
+        use Value::{N, S};
+        // Fractional values, where rounding to whole points matters; the
+        // same number of choices either way, so a seed makes the same tree
+        // shapes.
+        let f = |whole: Value, fraction: Value| if fractions { fraction } else { whole };
+        let mut style = Vec::new();
+        let mut maybe = |rng: &mut Rng, percent, key, values: &[Value]| {
+            if rng.chance(percent) {
+                style.push((key, rng.pick(values)));
+            }
+        };
+        if !text {
+            maybe(rng, 50, "flexDirection", &[S("row"), S("column")]);
+            maybe(
+                rng,
+                15,
+                "display",
+                &[S("none"), S("grid"), S("block"), S("flex")],
+            );
+            maybe(rng, 30, "flexWrap", &[S("wrap"), S("nowrap")]);
+            maybe(
+                rng,
+                30,
+                "alignItems",
+                &[S("center"), S("flex-start"), S("stretch"), S("flex-end")],
+            );
+            maybe(
+                rng,
+                30,
+                "justifyContent",
+                &[S("center"), S("space-between"), S("flex-end")],
+            );
+            maybe(rng, 30, "padding", &[N(4.0), f(N(10.0), N(4.5))]);
+            maybe(rng, 30, "gap", &[N(3.0), f(N(8.0), N(2.5))]);
+            maybe(rng, 15, "overflow", &[S("hidden")]);
+            maybe(
+                rng,
+                15,
+                "gridTemplateColumns",
+                &[
+                    S("repeat(2, 1fr)"),
+                    S("40px 1fr"),
+                    S("repeat(3, minmax(0, 1fr))"),
+                ],
+            );
+            maybe(
+                rng,
+                40,
+                "height",
+                &[
+                    N(24.0),
+                    f(N(60.0), N(24.5)),
+                    f(S("50%"), S("33.3%")),
+                    S("auto"),
+                ],
+            );
+        }
+        maybe(
+            rng,
+            45,
+            "width",
+            &[
+                N(40.0),
+                f(N(120.0), N(37.5)),
+                f(S("50%"), S("33.3%")),
+                S("100%"),
+                S("auto"),
+            ],
+        );
+        maybe(rng, 25, "flexGrow", &[N(1.0), N(2.0)]);
+        maybe(rng, 25, "flexShrink", &[N(1.0), N(0.0)]);
+        maybe(rng, 15, "flexBasis", &[N(30.0), S("50%")]);
+        maybe(rng, 20, "margin", &[N(2.0), f(N(6.0), N(2.5))]);
+        maybe(rng, 15, "minWidth", &[N(20.0), N(90.0)]);
+        maybe(rng, 15, "maxWidth", &[N(60.0), N(150.0)]);
+        maybe(
+            rng,
+            15,
+            "alignSelf",
+            &[S("center"), S("stretch"), S("flex-end")],
+        );
+        if rng.chance(10) {
+            style.push(("position", S("absolute")));
+            style.push((
+                "left",
+                rng.pick(&[N(5.0), N(30.0), f(S("10%"), S("12.5%"))]),
+            ));
+            style.push(("top", rng.pick(&[N(4.0), N(50.0)])));
+        }
+        style
+    }
+
+    fn random_text(rng: &mut Rng) -> String {
+        let words = [
+            "a",
+            "price",
+            "12.50",
+            "a longer label",
+            "x",
+            "quote board",
+            "—",
+        ];
+        (0..1 + rng.below(4))
+            .map(|_| rng.pick(&words))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// The frames of every view the core laid out: what `batches` set,
+    /// latest last.
+    fn note_frames(frames: &mut HashMap<NodeId, Bounds<Points>>, batch: Option<MountBatch>) {
+        for item in batch.iter().flat_map(|b| &b.items) {
+            match item {
+                MountItem::Frame { id, frame } => {
+                    frames.insert(*id, *frame);
+                }
+                MountItem::Delete { id } => {
+                    frames.remove(id);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// One random change of the tree: its ops, and what it was.
+    fn change(rng: &mut Rng, model: &mut Model, fractions: bool) -> (Vec<Op>, String) {
+        let live = model.live();
+        let views = model.views();
+        let mut ops = Vec::new();
+        let roll = if live.len() < 8 { 0 } else { rng.below(100) };
+        let what = match roll {
+            // Add a view or a text.
+            0..=34 if live.len() < 70 => {
+                let id = model.id();
+                let text = rng.chance(45);
+                let raw = text.then(|| model.id());
+                model.nodes.insert(
+                    id,
+                    Node {
+                        parent: ROOT_ID,
+                        text: raw.map(|raw| (raw, random_text(rng))),
+                        style: random_style(rng, text, fractions),
+                        children: Vec::new(),
+                    },
+                );
+                let parent = if views.is_empty() || rng.chance(10) {
+                    ROOT_ID
+                } else {
+                    rng.pick(&views)
+                };
+                let at = rng.below(model.children(parent).len() + 1);
+                model.create(id, &mut ops);
+                let before = model.attach(id, parent, at);
+                ops.push(Op::Insert {
+                    parent,
+                    child: id,
+                    before,
+                });
+                format!("add {id} to {parent}")
+            }
+            // Change a style.
+            0..=59 => {
+                let id = rng.pick(&live);
+                let text = model.nodes[&id].text.is_some();
+                let style = random_style(rng, text, fractions);
+                ops.push(style_of(id, &style));
+                model.nodes.get_mut(&id).unwrap().style = style;
+                format!("style {id}")
+            }
+            // Change a text.
+            60..=74 => {
+                let texts: Vec<NodeId> = live
+                    .iter()
+                    .copied()
+                    .filter(|id| model.nodes[id].text.is_some())
+                    .collect();
+                if texts.is_empty() {
+                    return (ops, "nothing".into());
+                }
+                let id = rng.pick(&texts);
+                let content = random_text(rng);
+                let raw = model.nodes[&id].text.as_ref().unwrap().0;
+                ops.push(Op::SetText {
+                    id: raw,
+                    text: content.as_str().into(),
+                });
+                model.nodes.get_mut(&id).unwrap().text.as_mut().unwrap().1 = content;
+                format!("text {id}")
+            }
+            // Move a node elsewhere.
+            75..=89 => {
+                let id = rng.pick(&live);
+                let targets: Vec<NodeId> = views
+                    .iter()
+                    .copied()
+                    .filter(|&v| !model.is_inside(v, id))
+                    .chain([ROOT_ID])
+                    .collect();
+                let parent = rng.pick(&targets);
+                let old = model.detach(id);
+                ops.push(Op::Remove {
+                    parent: old,
+                    child: id,
+                });
+                let at = rng.below(model.children(parent).len() + 1);
+                let before = model.attach(id, parent, at);
+                ops.push(Op::Insert {
+                    parent,
+                    child: id,
+                    before,
+                });
+                format!("move {id} from {old} to {parent}")
+            }
+            // Remove a node and what it holds.
+            _ => {
+                let id = rng.pick(&live);
+                let parent = model.detach(id);
+                ops.push(Op::Remove { parent, child: id });
+                for gone in model.subtree(id) {
+                    let node = model.nodes.remove(&gone).unwrap();
+                    if let Some((raw, _)) = node.text {
+                        ops.push(Op::Release { id: raw });
+                    }
+                    ops.push(Op::Release { id: gone });
+                }
+                format!("remove {id}")
+            }
+        };
+        (ops, what)
+    }
+
+    /// `seed`'s run: `steps` commits of changes, each compared with a
+    /// layout from scratch; with `fractions`, sizes and offsets that are
+    /// not whole points.
+    fn run(seed: u64, steps: usize, fractions: bool) {
+        let mut rng = Rng::new(seed);
+        let mut model = Model::default();
+        model.nodes.insert(
+            0,
+            Node {
+                parent: ROOT_ID,
+                text: None,
+                style: Vec::new(),
+                children: Vec::new(),
+            },
+        );
+        let mut c = core();
+        let mut frames = HashMap::new();
+        let mut log = Vec::new();
+        for step in 0..steps {
+            // A commit takes a few changes at once, as a turn does.
+            let changes = 1 + rng.below(3);
+            let changes = if std::env::var_os("ONE_CHANGE").is_some() {
+                let _ = changes;
+                1
+            } else {
+                changes
+            };
+            for _ in 0..changes {
+                let (ops, what) = change(&mut rng, &mut model, fractions);
+                apply(&mut c, ops);
+                log.push(what);
+            }
+            note_frames(&mut frames, c.commit());
+            let mut fresh = core();
+            apply(&mut fresh, model.build());
+            let mut expected = HashMap::new();
+            note_frames(&mut expected, fresh.commit());
+            for id in model.live() {
+                let got = frames.get(&id).copied().unwrap_or_default();
+                let want = expected.get(&id).copied().unwrap_or_default();
+                assert_eq!(
+                    got,
+                    want,
+                    "seed {seed}, step {step}: node {id} laid out incrementally at {got:?}, from \
+                     scratch at {want:?}; the node and the views around it: {:?}; changes so far: \
+                     {log:?}",
+                    {
+                        let mut chain = Vec::new();
+                        let mut at = id;
+                        while let Some(node) = model.nodes.get(&at) {
+                            chain.push((at, node.style.clone(), node.text.clone()));
+                            if node.parent == ROOT_ID {
+                                break;
+                            }
+                            at = node.parent;
+                        }
+                        chain
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn incremental_layout_equals_layout_from_scratch() {
+        for seed in 0..24 {
+            run(seed, 60, true);
+        }
+        // A view of a hidden subtree's absolutely positioned container
+        // removed while the root was laid out again: Taffy's rounding pass
+        // reached it through a list that still held it, and panicked.
+        run(39, 70, false);
+    }
+}
+
+/// A list's cells take its rounded cross size, as every other view's frame
+/// is rounded: a list at a fractional place and size gives them whole
+/// points.
+#[test]
+fn list_cells_take_the_rounded_cross_size() {
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::List,
+            },
+            style_op(
+                2,
+                &[
+                    ("height", StyleValue::Number(400.0)),
+                    ("width", StyleValue::Number(100.6)),
+                    ("marginLeft", StyleValue::Number(0.3)),
+                ],
+            ),
+            Op::SetProp {
+                id: 2,
+                prop: Prop::EstimatedItemSize(px(50.0)),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Count(3),
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    let first = c.commit().unwrap();
+    assert_eq!(frame_of(&first, 2).unwrap().size.width, px(101.0));
+    let (mut next, mut cells) = (100, Vec::new());
+    render_binds(&mut c, &mut next, &mut cells, 50.0);
+    let batch = c.commit().unwrap();
+    assert!(!cells.is_empty());
+    for &cell in &cells {
+        assert_eq!(frame_of(&batch, cell).unwrap().size.width, px(101.0));
+    }
+}
