@@ -1,9 +1,10 @@
-import { createShader, Shader, ShaderEffect, shaderSupport, signal, Text, View } from "nsh";
+import { createShader, Shader, ShaderEffect, ShaderTransition, shaderSupport, signal, Text, View } from "nsh";
 import { createAnimatedValue, Easing } from "nsh/animated";
 import logo from "../logo@2x.png";
 import { Button, Caption, Card, colors, DemoPage, Legend, Segmented } from "../ui";
 import aurora from "./shaders/aurora.wgsl";
 import frost from "./shaders/frost.wgsl";
+import reveal from "./shaders/reveal.wgsl";
 import ripple from "./shaders/ripple.wgsl";
 import wave from "./shaders/wave.wgsl";
 
@@ -158,6 +159,36 @@ function Frost() {
 }
 
 // ---------------------------------------------------------------------------
+// A `<ShaderTransition>`: when its `value` changes, the children change
+// through the shader, the old ones a picture (`sample_from`), the new ones
+// live (`sample_to`).
+
+const seasons = [
+  { name: "Spring", note: "Blossom and rain", color: "#22c55e" },
+  { name: "Summer", note: "Long light evenings", color: "#f59e0b" },
+  { name: "Autumn", note: "Leaves and wind", color: "#ef4444" },
+  { name: "Winter", note: "Frost and still air", color: "#3b82f6" },
+];
+
+function Reveal() {
+  const index = signal(0);
+  const season = () => seasons[index() % seasons.length];
+  return (
+    <Card icon="spark" title="Reveal" subtitle="ShaderTransition: children that change through a shader">
+      <ShaderTransition src={reveal} uniforms={{ edge: 3 }} value={index()} duration={700}>
+        <View style={{ height: 140, borderRadius: 12, padding: 16, justifyContent: "flex-end", backgroundColor: season().color }}>
+          <Text style={{ fontSize: 24, fontWeight: "800", color: "#ffffff" }}>{season().name}</Text>
+          <Text style={{ fontSize: 13, color: "rgba(255,255,255,0.85)" }}>{season().note}</Text>
+        </View>
+      </ShaderTransition>
+      <View style={{ flexDirection: "row" }}>
+        <Button label="Next season" icon="spark" onPress={() => index.set(index() + 1)} />
+      </View>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // What this platform draws: a view a shader fills shows its children alone
 // where shaders do not draw.
 
@@ -176,5 +207,5 @@ function Support() {
 }
 
 export function ShaderDemo() {
-  return <DemoPage cards={[Aurora, Spotlight, Ripple, Wave, Frost, Support]} />;
+  return <DemoPage cards={[Aurora, Spotlight, Ripple, Wave, Frost, Reveal, Support]} />;
 }

@@ -43,7 +43,7 @@ const groups: { title: string; demos: DemoEntry[] }[] = [
     title: "Drawing and type",
     demos: [
       { name: "Canvas", detail: "2D context: paths, gradients, text, images, native animation", icon: "canvas", screen: lazy(() => import("./demos/CanvasDemo").then((m) => m.CanvasDemo)) },
-      { name: "Shaders", detail: "WGSL fills, effects through children, frosted backdrops", icon: "spark", screen: lazy(() => import("./demos/ShaderDemo").then((m) => m.ShaderDemo)) },
+      { name: "Shaders", detail: "WGSL fills, effects, backdrops and transitions", icon: "spark", screen: lazy(() => import("./demos/ShaderDemo").then((m) => m.ShaderDemo)) },
       { name: "Styles", detail: "Corners, borders, shadows, clipping, 3D transforms", icon: "styles", screen: lazy(() => import("./demos/Styles").then((m) => m.Styles)) },
       { name: "Tailwind", detail: "class=\"…\" resolved natively: variants, grid, shadows, motion", icon: "tailwind", screen: lazy(() => import("./demos/Tailwind").then((m) => m.Tailwind)) },
       { name: "Text", detail: "Fonts, spans, inline views and images, decorations, truncation, languages", icon: "text", screen: lazy(() => import("./demos/TextDemo").then((m) => m.TextDemo)) },
