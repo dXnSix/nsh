@@ -249,7 +249,7 @@ A shader effect takes the same, with an optional `src` (`shader_effect(Some(sour
 `shaderSupport()` from `nsh` says what the platform draws: `{ fill, backdrop, effect, transition }`, each `"live"`,
 `"snapshot"` or `false`. `fill` is `<Shader>`: `"live"` on iOS, Mac Catalyst, macOS, Android 13 and later, Windows,
 Linux and the web. `effect` is `<ShaderEffect>` and `backdrop` a shader that samples what is behind it: `"live"` on
-Android 13 and later and `"snapshot"` on the web: there the shader reads a picture of its input, taken again when it
+Android 13 and later and `"snapshot"` on macOS and the web: there the shader reads a picture of its input, taken again when it
 changes. Where `fill` is `false`, a shader view shows its children and its own styles, so a layout that
 puts content over a shader reads the same everywhere; where `effect` is `false`, an effect shows its children as they
 are, and where `backdrop` is `false`, `sample_backdrop` reads transparent.
@@ -269,7 +269,8 @@ a shader takes up to 128 texture samples, which the host app sets with its
 ## Platform notes
 
 - iOS, Mac Catalyst and macOS draw with Metal in a `CAMetalLayer` over the view's background; programs compile off the
-  main thread.
+  main thread. On macOS an effect and a backdrop read a picture of their input, taken again on the next frame after it
+  changes; shaders, videos and web views inside an effect or behind a backdrop read as transparent there.
 - Android draws with a `RuntimeShader` (Android 13, API 33, and later) when the view draws. An effect runs it as the
   render effect of its children's drawing, a backdrop shader as the render effect of what is behind the view: both
   read their input live. A shader there reads one live input, its content or its backdrop.

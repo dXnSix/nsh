@@ -51,6 +51,9 @@ const BORDER_BEHIND: CGFloat = BEHIND + 1.0;
 /// A shader's fill: above the background, gradients and inset shadows,
 /// below borders drawn behind the children (as a background is).
 pub(crate) const SHADER: CGFloat = BEHIND + 0.75;
+/// A shader effect's result: over the children it draws (their container,
+/// hidden), below borders and outlines in front.
+pub(crate) const EFFECT: CGFloat = 512.0;
 const IN_FRONT: CGFloat = 1024.0;
 
 /// What a view is, as far as decoration goes.
