@@ -211,6 +211,8 @@ Hide what adds nothing: decorative images, dividers, an icon next to a text that
 
 `accessibilityElementsHidden` (iOS's name) and `importantForAccessibility="no-hide-descendants"` (Android's) both hide the subtree on both platforms; setting both is harmless.
 
+A view with `visibility: "hidden"` (`invisible`) is skipped with its subtree as well, as in a browser: what is not drawn is not read.
+
 ## The screen reader and the user's settings
 
 In Rust, the prelude reports the user's settings and talks to the screen reader: `screen_reader()` and `reduce_motion()` are reactive, `announce_for_accessibility(message)` has the screen reader read a message, and an element's `element_ref()` moves the screen reader's focus to it with `set_accessibility_focus()`. In TSX, `nsh/accessibility` reports the user's settings and lets you talk to the screen reader.
