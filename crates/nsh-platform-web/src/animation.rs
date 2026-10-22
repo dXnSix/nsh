@@ -210,6 +210,19 @@ impl UiAnimation {
                             &value_css(self.graph.eval(node)),
                         );
                     }
+                    // Words of the uniforms from `k`: a number, or a color's
+                    // premultiplied components.
+                    AnimationProp::ShaderUniform(k) => {
+                        let value = match self.graph.eval(node) {
+                            AnimationValue::Color(c) => {
+                                let [r, g, b, a] =
+                                    nsh_core::shader::premultiplied(nsh_core::Color(c));
+                                format!("{r},{g},{b},{a}")
+                            }
+                            other => other.number().to_string(),
+                        };
+                        out.animation(view, &format!("shader:{k}"), &value);
+                    }
                     AnimationProp::Transform(i) => {
                         if let Some(o) = overrides.get_mut(i as usize) {
                             *o = Some(self.graph.eval(node).number());

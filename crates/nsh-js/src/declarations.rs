@@ -136,6 +136,60 @@ export interface OverlayProps extends CommonProps, OverlayHostProps {
   style?: StyleProp<ViewStyle>;
 }
 
+/** A shader: what `createShader(source)` returns, or a `.wgsl` file
+ * imported (`import glass from "./glass.wgsl"`), whose uniforms `U` are
+ * typed from the file. */
+export interface ShaderAsset<U = ShaderUniforms> {
+  /** The names of its uniforms, in the order its `Uniforms` struct
+   * declares them. */
+  readonly uniforms: readonly string[];
+  readonly [shaderUniforms]?: U;
+}
+declare const shaderUniforms: unique symbol;
+
+/** A number a shader's uniform takes: a constant, or an animated value the
+ * UI thread writes. */
+export type ShaderNumber = number | AnimatedNode;
+
+/** A value of a shader's uniform: a number (`f32`, `i32`; a vector of
+ * that number), a list (a vector's components, a matrix's column by
+ * column, an array's elements), a `Point` or `Size` (`vec2f`), a CSS color
+ * (`vec4f`: premultiplied RGBA; `vec3f`: RGB), an animated value (a number,
+ * or a color for `vec4f`) or an image (`Image`). */
+export type ShaderUniformValue =
+  | ShaderNumber
+  | string
+  | readonly (ShaderNumber | readonly ShaderNumber[])[]
+  | Point
+  | Size
+  | ImageAsset;
+
+/** How a platform runs shaders of a kind: on the live input, from a
+ * picture of it taken again when it changes, or not (`false`: the element
+ * draws its children only). */
+export type ShaderSupportLevel = "live" | "snapshot" | false;
+
+/** What `shaderSupport()` says. */
+export interface ShaderSupport {
+  /** `<Shader>` filling its view. */
+  fill: ShaderSupportLevel;
+  /** `<Shader>` reading what is behind it (`sample_backdrop`). */
+  backdrop: ShaderSupportLevel;
+  /** Children drawn through a shader (`sample_content`). */
+  effect: ShaderSupportLevel;
+  /** Shader transitions (`sample_from`, `sample_to`). */
+  transition: ShaderSupportLevel;
+}
+
+/** `<Shader>`: a view a shader fills, its children drawn over it. */
+export interface ShaderProps<U = ShaderUniforms> extends CommonProps, Omit<ShaderHostProps, "src" | "uniforms"> {
+  style?: StyleProp<ViewStyle>;
+  /** The shader. */
+  src: ShaderAsset<U>;
+  /** The values of its uniforms, by name (those left out are 0). */
+  uniforms?: U;
+}
+
 /** What JS sets on a Rust component's host itself: the app's classes
  * (appended to the component's own), its inline and state styles, its test id, its
  * tooltip, layout events and the ref (`ref.command(name, args)`). */

@@ -41,7 +41,9 @@ use crate::{
 };
 
 /// The mounter of one surface, shared with native callbacks.
-pub(crate) type SharedMounter = Arc<MainThreadBound<RefCell<Option<Mounter>>>>;
+pub(crate) type SharedMounter = Arc<SharedMounterInner>;
+/// What [`SharedMounter`] holds.
+pub(crate) type SharedMounterInner = MainThreadBound<RefCell<Option<Mounter>>>;
 
 enum Native {
     /// The surface root (owned by the platform).
@@ -59,6 +61,8 @@ enum Native {
     /// Shown over the keyboard by the inputs naming it; UIKit places it.
     InputAccessory(Retained<NshView>),
     Canvas(Retained<crate::canvas::CanvasView>),
+    /// A view a shader fills, under its children.
+    Shader(Box<crate::shader::ShaderHost>),
     Web(Box<WebHost>),
     Video(Box<VideoHost>),
     /// A registered native component in its container.
@@ -80,6 +84,7 @@ impl Native {
             Native::Modal(m) => &m.view,
             Native::HeaderItem(v) | Native::InputAccessory(v) => v,
             Native::Canvas(v) => v,
+            Native::Shader(s) => &s.view,
             Native::Web(w) => &w.view,
             Native::Video(v) => &v.view,
             Native::Component(c) => &c.container,
@@ -96,6 +101,7 @@ impl Native {
             | Native::InputAccessory(v) => Some(v),
             Native::Component(c) => Some(&c.container),
             Native::Canvas(v) => Some(v),
+            Native::Shader(s) => Some(&s.view),
             Native::Text(t) => Some(t),
             Native::Stack(s) => Some(&s.container),
             Native::Screen(s) => Some(&s.view),
@@ -117,6 +123,7 @@ impl Native {
             | Native::HeaderItem(_)
             | Native::InputAccessory(_)
             | Native::Canvas(_)
+            | Native::Shader(_)
             | Native::Web(_)
             | Native::Video(_)
             | Native::Component(_) => decor::Kind::View,
@@ -356,6 +363,11 @@ pub(crate) struct Mounter {
     disappearing: rustc_hash::FxHashSet<NodeId>,
     /// One-shot display link for `requestAnimationFrame`.
     frame_link: Retained<objc2_quartz_core::CADisplayLink>,
+    /// The display link of the shaders that read `nsh.time`, paused
+    /// without them.
+    shader_link: Retained<objc2_quartz_core::CADisplayLink>,
+    /// Shader views that read `nsh.time`.
+    shader_frames: Vec<NodeId>,
     /// Parents of screens, header items and modals (which are not
     /// subviews of their parent).
     hosts: rustc_hash::FxHashMap<NodeId, NodeId>,
@@ -435,6 +447,8 @@ impl Mounter {
             created: Vec::new(),
             disappearing: Default::default(),
             frame_link: crate::animation::frame_link(&target_for_link),
+            shader_link: crate::animation::shader_link(&target_for_link),
+            shader_frames: Vec::new(),
             hosts: Default::default(),
             dirty_stacks: Vec::new(),
             deferred_stacks: Vec::new(),
@@ -537,6 +551,9 @@ impl Mounter {
                     ViewKind::HeaderItem => Native::HeaderItem(NshView::new(self.mtm)),
                     ViewKind::InputAccessory => Native::InputAccessory(NshView::new(self.mtm)),
                     ViewKind::Canvas => Native::Canvas(crate::canvas::CanvasView::new(self.mtm)),
+                    ViewKind::Shader => Native::Shader(Box::new(crate::shader::ShaderHost::new(
+                        NshView::new(self.mtm),
+                    ))),
                     ViewKind::WebView => Native::Web(Box::new(WebHost::new(
                         self.mtm,
                         id,
@@ -726,6 +743,9 @@ impl Mounter {
                     }
                     if let Native::Video(video) = &s.native {
                         video.layout();
+                    }
+                    if let Native::Shader(host) = &s.native {
+                        host.layout();
                     }
                     if s.decor.sized() {
                         self.decorate(id);
@@ -946,6 +966,13 @@ impl Mounter {
             }
             MountItem::Refreshing { id, refreshing } => self.set_refreshing(id, refreshing),
             MountItem::Canvas { id, drawing } => self.set_drawing(id, drawing),
+            MountItem::ShaderProgram { program } => {
+                if let Some(gpu) = nsh_metal::gpu() {
+                    crate::shader::watch(&gpu, self.target.mounter());
+                    gpu.add_program(&program);
+                }
+            }
+            MountItem::Shader { id, fill } => self.set_shader(id, fill),
             MountItem::AnimationBindings { id, bindings } => {
                 if let Some(s) = self.slot_mut(id) {
                     // Properties no longer animated fall back to the static style.
@@ -2045,6 +2072,109 @@ impl Mounter {
         }
     }
 
+    /// What shader view `id` draws; loads its images.
+    fn set_shader(&mut self, id: NodeId, fill: Option<Arc<nsh_core::shader::ShaderFill>>) {
+        let Some(Slot {
+            native: Native::Shader(host),
+            ..
+        }) = self.slot(id)
+        else {
+            return;
+        };
+        let scale = host.view.contentScaleFactor();
+        let load = host.set(fill);
+        let every_frame = host.draws_every_frame();
+        for (slot, uri) in load {
+            // At their natural size: the shader stretches them anyway.
+            match self
+                .images
+                .request(id, &uri, 0, scale, crate::image::Look::default())
+            {
+                Request::Ready(decoded) if decoded.vector => {
+                    log::warn!(target: "js", "<Shader> image failed: {}", not_a_bitmap(&uri));
+                }
+                Request::Ready(decoded) => self.shader_image(id, Some(slot), &uri, &decoded),
+                Request::Pending => {}
+            }
+        }
+        if every_frame && !self.shader_frames.contains(&id) {
+            self.shader_frames.push(id);
+            self.shader_link.setPaused(false);
+        }
+        // The fill follows the view's corners.
+        let content = match self.slot(id) {
+            Some(Slot {
+                native: Native::Shader(host),
+                ..
+            }) => host.content_layer(),
+            _ => None,
+        };
+        if let Some(s) = self.views.get_mut(id as usize).and_then(Option::as_mut)
+            && s.decor.set_shader_layer(content)
+        {
+            self.decorate(id);
+        }
+    }
+
+    /// Image `uri` of shader view `id` loaded (into `slot`, or each slot
+    /// showing it).
+    fn shader_image(&mut self, id: NodeId, slot: Option<usize>, uri: &str, decoded: &DecodedImage) {
+        let Some(Slot {
+            native: Native::Shader(host),
+            ..
+        }) = self.slot(id)
+        else {
+            return;
+        };
+        // SAFETY: UIImage's documented getters.
+        let (image, size) = unsafe { (decoded.image.CGImage(), decoded.image.size()) };
+        let Some(image) = image else { return };
+        match slot {
+            Some(slot) => host.set_image(slot, uri, &image, (size.width, size.height)),
+            None => {
+                for slot in 0..nsh_core::shader::layout::MAX_IMAGES {
+                    host.set_image(slot, uri, &image, (size.width, size.height));
+                }
+            }
+        }
+    }
+
+    /// Program `program` is ready, or a drawable was shown: the shader
+    /// views waiting for either draw.
+    pub(crate) fn shaders_draw(&mut self, program: Option<u32>) {
+        for slot in self.views.iter().flatten() {
+            if let Native::Shader(host) = &slot.native
+                && host.waits_for(program)
+            {
+                host.draw();
+            }
+        }
+    }
+
+    /// The shader display link fired: the shaders that read `nsh.time` draw.
+    pub(crate) fn shader_frame(&mut self) {
+        let ids = std::mem::take(&mut self.shader_frames);
+        let mut keep = Vec::with_capacity(ids.len());
+        for id in ids {
+            let Some(Slot {
+                native: Native::Shader(host),
+                ..
+            }) = self.slot(id)
+            else {
+                continue;
+            };
+            if host.draws_every_frame() {
+                host.draw();
+            }
+            // Kept while the view lives: it may show again.
+            keep.push(id);
+        }
+        if keep.is_empty() {
+            self.shader_link.setPaused(true);
+        }
+        self.shader_frames = keep;
+    }
+
     /// What the image loader reports.
     pub(crate) fn load_event(&mut self, event: crate::image::LoadEvent) {
         use crate::image::LoadEvent;
@@ -2088,6 +2218,23 @@ impl Mounter {
 
     pub(crate) fn image_loaded(&mut self, key: &str, result: Result<DecodedImage, String>) {
         for id in self.images.finish(key, &result) {
+            if let Some(Slot {
+                native: Native::Shader(_),
+                ..
+            }) = self.slot(id)
+            {
+                match (&result, key.strip_prefix("0@")) {
+                    (Ok(decoded), Some(uri)) if decoded.vector => {
+                        log::warn!(target: "js", "<Shader> image failed: {}", not_a_bitmap(uri));
+                    }
+                    (Ok(decoded), Some(uri)) => self.shader_image(id, None, uri, decoded),
+                    (Err(message), _) => {
+                        log::warn!(target: "js", "<Shader> image failed: {message}")
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             if let Some(Slot {
                 native: Native::Canvas(view),
                 ..
@@ -3095,6 +3242,7 @@ impl Drop for Mounter {
     fn drop(&mut self) {
         // The link retains its target; invalidating breaks the cycle.
         self.frame_link.invalidate();
+        self.shader_link.invalidate();
     }
 }
 
@@ -3359,6 +3507,17 @@ fn apply_dynamic(slot: &Slot, animator: &Animator) {
             AnimationProp::CanvasArg(k) => Some((k, animator.eval(node))),
             _ => None,
         }));
+    }
+    if let Native::Shader(host) = &slot.native {
+        let values: Vec<_> = slot
+            .bindings
+            .iter()
+            .filter_map(|&(prop, node)| match prop {
+                AnimationProp::ShaderUniform(k) => Some((k, animator.eval(node))),
+                _ => None,
+            })
+            .collect();
+        host.set_args(&values);
     }
     let view = slot.native.view();
     let mut background = slot.style.background_color;

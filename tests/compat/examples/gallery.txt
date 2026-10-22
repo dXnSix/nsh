@@ -39,6 +39,13 @@ expect Animated.stagger
 tap text:Canvas
 expect Turbine 3 load
 expect 7,296 rpm
+tap text:Shaders
+expect Northern lights
+expect uniforms of ripple.wgsl: photo, center, phase, strength
+wait 600
+expect 1 drop
+tap label:Drop
+expect 2 drops
 tap text:Styles
 expect Continuous corners ease into the edges
 expect 44 · 6 · 28 · 0 pt, clockwise

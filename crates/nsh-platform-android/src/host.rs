@@ -501,6 +501,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_setLimits(
         load_budget: ms(load_ms),
         call_budget: ms(call_ms),
         max_nodes: set(max_nodes),
+        ..Default::default()
     };
     host.set_limits(limits.limits());
 }
@@ -736,6 +737,12 @@ extern "system" fn Java_com_longbridge_nsh_Native_environment(
     environment.screen_reader = v[10] != 0.0;
     environment.os = nsh_engine::Os::Android;
     environment.os_version = (v[11] as u16, 0);
+    // Shaders fill views with runtime shaders (AGSL), from Android 13.
+    environment.shaders = if v[11] as u16 >= 33 {
+        nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Agsl)
+    } else {
+        nsh_core::shader::ShaderSupport::default()
+    };
     environment.idiom = match v[12] as u8 {
         1 => Idiom::Pad,
         3 => Idiom::Tv,

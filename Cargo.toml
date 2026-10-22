@@ -40,8 +40,12 @@ nsh-platform-macos = { version = "0.2.0", path = "crates/nsh-platform-macos", de
 nsh-platform-windows = { version = "0.2.0", path = "crates/nsh-platform-windows", default-features = false }
 nsh-dev = { version = "0.2.0", path = "crates/nsh-dev" }
 nsh-testing = { version = "0.2.0", path = "crates/nsh-testing", default-features = false }
+nsh-shader = { version = "0.2.0", path = "crates/nsh-shader", default-features = false }
+nsh-metal = { version = "0.2.0", path = "crates/nsh-metal" }
 
 anyhow = "1"
+# Shaders (`nsh-shader`): WGSL in, each platform's language out (features per writer).
+naga = { version = "30", default-features = false, features = ["wgsl-in"] }
 thiserror = "2"
 clap = { version = "4.6", features = ["derive"] }
 crossbeam-channel = "0.5"
@@ -49,6 +53,7 @@ notify = "8.2"
 log = "0.4"
 env_logger = "0.11"
 libc = "0.2"
+glow = "0.17"
 imagesize = "0.15"
 # SVG images on the native backends (`nsh-core` feature `svg`): no text,
 # system fonts or raster images, so an SVG never reads files or fonts.
@@ -102,6 +107,7 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Direct2D_Common",
   "Win32_Graphics_Direct3D",
   "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Direct3D_Fxc",
   "Win32_Graphics_DirectComposition",
   "Win32_Graphics_DirectWrite",
   "Win32_Graphics_Dwm",

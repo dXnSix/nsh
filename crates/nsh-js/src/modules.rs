@@ -237,6 +237,30 @@ const NSH: &[Item] = &[
         ),
     ),
     (
+        "Shader",
+        Export::Value(|cx| dom::host_component(cx, "shader", true)),
+        Ts::function(
+            "A view a shader fills (Metal, Direct2D, OpenGL, WebGL 2, Android's\nruntime shaders), its children drawn over it: `src` is what\n`createShader` returns or a `.wgsl` file imported, `uniforms` the\nvalues of its uniforms (animated values change them on the UI thread).",
+            &["<U = ShaderUniforms>(props: ShaderProps<U>): YNode"],
+        ),
+    ),
+    (
+        "createShader",
+        Export::Function(crate::shader::create_shader, 1),
+        Ts::function(
+            "A shader from WGSL source (`docs/dev/shaders.md`): `fn main(p: vec2f) -> vec4f`\nor `fn main(p: vec2f, u: Uniforms) -> vec4f`, `p` in points from the view's\ntop-left, the color premultiplied. Checked against NSH's profile, so it\nruns on every platform; throws a `SyntaxError` naming the line otherwise.\nThe same source is the same shader.",
+            &["<U = ShaderUniforms>(source: string): ShaderAsset<U>"],
+        ),
+    ),
+    (
+        "shaderSupport",
+        Export::Function(crate::shader::shader_support, 0),
+        Ts::function(
+            "How this platform runs shaders of each kind: `\"live\"`, `\"snapshot\"`\n(from a picture of the input, taken again when it changes) or `false` (the\nelement draws its children only).",
+            &["(): ShaderSupport"],
+        ),
+    ),
+    (
         "Overlay",
         Export::Value(|cx| dom::host_component(cx, "overlay", true)),
         Ts::function(

@@ -1269,6 +1269,7 @@ fn set_prop(
         "rotation",
         "scrollValue",
         "tooltip",
+        "uniforms",
     ]
     .iter()
     .find(|k| **k == name)

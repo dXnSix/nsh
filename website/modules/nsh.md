@@ -250,7 +250,9 @@ native view in place for a tag that names one of them through its import (an ali
 nothing at run time. They are components like any other, so they can also be passed around (`const Tag = inline ? Text : View`).
 `nsh` exports the other primitives the same way: [`List`](./nsh-list.md), [`Image`](./nsh-image.md),
 [`Canvas`](./nsh-canvas.md), [`WebView`](./nsh-webview.md) and [`Video`](./nsh-video.md), each with its own reference
-page. Their props are documented under [Elements](../elements/index.md).
+page, and [`Shader`](../elements/shader.md) with `createShader(source)` (a shader from WGSL source; `.wgsl` imports
+are shaders too) and `shaderSupport()` (what the platform's shaders draw). Their props are documented under
+[Elements](../elements/index.md).
 
 ## Types
 

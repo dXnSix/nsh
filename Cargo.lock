@@ -315,7 +315,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "shlex 1.3.0",
  "syn 2.0.119",
 ]
@@ -326,7 +326,16 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
 dependencies = [
- "bit-vec",
+ "bit-vec 0.8.0",
+]
+
+[[package]]
+name = "bit-set"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09ec2f926cc3060f09db9ebc5b52823d85268d24bb917e472c0c4bea35780a7d"
+dependencies = [
+ "bit-vec 0.9.1",
 ]
 
 [[package]]
@@ -334,6 +343,12 @@ name = "bit-vec"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
+
+[[package]]
+name = "bit-vec"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
 
 [[package]]
 name = "bitflags"
@@ -571,6 +586,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "cfg_aliases"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
+
+[[package]]
 name = "chacha20"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -669,6 +690,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
 dependencies = [
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "codespan-reporting"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
+dependencies = [
+ "unicode-width",
 ]
 
 [[package]]
@@ -1319,7 +1349,7 @@ version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "998b056554fbe42e03ae0e152895cd1a7e1002aec800fdc6635d20270260c46f"
 dependencies = [
- "bit-set",
+ "bit-set 0.8.0",
  "regex-automata",
  "regex-syntax",
 ]
@@ -1788,6 +1818,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
+name = "glow"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29038e1c483364cc6bb3cf78feee1816002e127c331a1eec55a4d202b9e1adb5"
+dependencies = [
+ "js-sys",
+ "slotmap",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "gobject-sys"
 version = "0.22.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1921,6 +1963,7 @@ checksum = "6ea2d84b969582b4b1864a92dc5d27cd2b77b622a8d79306834f1be5ba20d84b"
 dependencies = [
  "cfg-if",
  "crunchy",
+ "num-traits",
  "zerocopy",
 ]
 
@@ -2638,6 +2681,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2797,6 +2846,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "naga"
+version = "30.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a616d2fb8c89516ac2723a581f69d6c18576046bed761bd6b305e5618e6ae130"
+dependencies = [
+ "arrayvec",
+ "bit-set 0.10.0",
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "codespan-reporting",
+ "half",
+ "hashbrown 0.17.1",
+ "indexmap",
+ "libm",
+ "log",
+ "naga-types",
+ "num-traits",
+ "once_cell",
+ "rustc-hash 1.1.0",
+ "thiserror 2.0.21",
+ "unicode-ident",
+]
+
+[[package]]
+name = "naga-types"
+version = "30.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "590afbf58a6f4f62873cd5cff4468061844bafa1cdf399cc954537c22d768d49"
+dependencies = [
+ "hashbrown 0.17.1",
+ "indexmap",
+ "rustc-hash 1.1.0",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2879,7 +2965,7 @@ dependencies = [
  "markup5ever_rcdom",
  "nsh-core",
  "regex",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
  "syntect",
@@ -2954,8 +3040,9 @@ dependencies = [
  "libc",
  "log",
  "nsh-macros",
+ "nsh-shader",
  "resvg",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
  "slab",
@@ -2995,7 +3082,7 @@ dependencies = [
  "nsh-js",
  "nsh-package",
  "oxc_sourcemap",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde_json",
  "syn 2.0.119",
  "tokio",
@@ -3036,7 +3123,7 @@ dependencies = [
  "percent-encoding",
  "quickjs-jit",
  "quickjs-jit-stdlib",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde_json",
  "syn 2.0.119",
  "thiserror 2.0.21",
@@ -3096,6 +3183,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "nsh-metal"
+version = "0.2.0"
+dependencies = [
+ "block2",
+ "dispatch2",
+ "libc",
+ "log",
+ "nsh-core",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
+]
+
+[[package]]
 name = "nsh-package"
 version = "0.2.0"
 dependencies = [
@@ -3121,7 +3223,7 @@ dependencies = [
  "nsh-dev",
  "nsh-engine",
  "nsh-testing",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde_json",
  "ttf-parser",
 ]
@@ -3138,6 +3240,7 @@ dependencies = [
  "nsh-core",
  "nsh-dev",
  "nsh-engine",
+ "nsh-metal",
  "nsh-testing",
  "objc2",
  "objc2-core-foundation",
@@ -3147,7 +3250,7 @@ dependencies = [
  "objc2-image-io",
  "objc2-quartz-core",
  "objc2-ui-kit",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde_json",
 ]
 
@@ -3156,8 +3259,10 @@ name = "nsh-platform-linux"
 version = "0.2.0"
 dependencies = [
  "crossbeam-channel",
+ "glow",
  "gtk4",
  "image",
+ "libc",
  "log",
  "nsh-base",
  "nsh-core",
@@ -3166,7 +3271,7 @@ dependencies = [
  "nsh-testing",
  "pango",
  "pangocairo",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde_json",
  "ttf-parser",
  "ureq",
@@ -3186,6 +3291,7 @@ dependencies = [
  "nsh-core",
  "nsh-dev",
  "nsh-engine",
+ "nsh-metal",
  "nsh-testing",
  "objc2",
  "objc2-app-kit",
@@ -3196,7 +3302,7 @@ dependencies = [
  "objc2-image-io",
  "objc2-io-kit",
  "objc2-quartz-core",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde_json",
 ]
 
@@ -3213,7 +3319,7 @@ dependencies = [
  "nsh-js",
  "nsh-testing",
  "quickjs-jit",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde_json",
  "ttf-parser",
 ]
@@ -3231,7 +3337,7 @@ dependencies = [
  "nsh-dev",
  "nsh-engine",
  "nsh-testing",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde_json",
  "ttf-parser",
  "ureq",
@@ -3240,6 +3346,14 @@ dependencies = [
  "windows",
  "windows-core",
  "windows-numerics",
+]
+
+[[package]]
+name = "nsh-shader"
+version = "0.2.0"
+dependencies = [
+ "naga",
+ "windows",
 ]
 
 [[package]]
@@ -3323,6 +3437,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+ "libm",
 ]
 
 [[package]]
@@ -3513,7 +3628,7 @@ dependencies = [
  "libc",
  "miniz_oxide 0.9.1",
  "postcard",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -3528,7 +3643,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "oxc_data_structures",
  "oxc_estree",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
 ]
 
@@ -3592,7 +3707,7 @@ dependencies = [
  "oxc_span",
  "oxc_str",
  "oxc_syntax",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "smallvec",
 ]
 
@@ -3605,7 +3720,7 @@ dependencies = [
  "cow-utils",
  "oxc-browserslist",
  "oxc_syntax",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
 ]
 
@@ -3694,7 +3809,7 @@ dependencies = [
  "oxc_span",
  "oxc_str",
  "oxc_syntax",
- "rustc-hash",
+ "rustc-hash 2.1.3",
 ]
 
 [[package]]
@@ -3713,7 +3828,7 @@ dependencies = [
  "oxc_span",
  "oxc_str",
  "oxc_syntax",
- "rustc-hash",
+ "rustc-hash 2.1.3",
 ]
 
 [[package]]
@@ -3739,7 +3854,7 @@ dependencies = [
  "oxc_str",
  "oxc_syntax",
  "oxc_traverse",
- "rustc-hash",
+ "rustc-hash 2.1.3",
 ]
 
 [[package]]
@@ -3762,7 +3877,7 @@ dependencies = [
  "oxc_span",
  "oxc_str",
  "oxc_syntax",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "seq-macro",
 ]
 
@@ -3779,7 +3894,7 @@ dependencies = [
  "oxc_span",
  "oxc_str",
  "phf 0.14.0",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "unicode-id-start",
 ]
 
@@ -3799,7 +3914,7 @@ dependencies = [
  "once_cell",
  "percent-encoding",
  "pnp",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "rustix",
  "self_cell",
  "serde",
@@ -3829,7 +3944,7 @@ dependencies = [
  "oxc_span",
  "oxc_str",
  "oxc_syntax",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "self_cell",
  "smallvec",
 ]
@@ -3842,7 +3957,7 @@ checksum = "1133371a5fadc14b9f66a8fec14be3564a77647c7ab21b1ef0ec973bd82613ce"
 dependencies = [
  "base64-simd",
  "json-escape-simd",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
 ]
@@ -3920,7 +4035,7 @@ dependencies = [
  "oxc_str",
  "oxc_syntax",
  "oxc_traverse",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
 ]
@@ -3945,7 +4060,7 @@ dependencies = [
  "oxc_syntax",
  "oxc_transformer",
  "oxc_traverse",
- "rustc-hash",
+ "rustc-hash 2.1.3",
 ]
 
 [[package]]
@@ -3964,7 +4079,7 @@ dependencies = [
  "oxc_span",
  "oxc_str",
  "oxc_syntax",
- "rustc-hash",
+ "rustc-hash 2.1.3",
 ]
 
 [[package]]
@@ -4323,7 +4438,7 @@ dependencies = [
  "pathdiff",
  "radix_trie",
  "regress",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -4883,7 +4998,7 @@ dependencies = [
  "rolldown_std_utils",
  "rolldown_tracing",
  "rolldown_utils",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
  "smallvec",
@@ -4932,7 +5047,7 @@ dependencies = [
  "rolldown_sourcemap",
  "rolldown_std_utils",
  "rolldown_utils",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
  "simdutf8",
@@ -4962,7 +5077,7 @@ checksum = "0539fef780da719bad7ebdbf7e759d946c252e5d1911bc485ec037685586c604"
 dependencies = [
  "blake3",
  "rolldown_devtools_action",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
  "tracing",
@@ -5019,7 +5134,7 @@ dependencies = [
  "oxc",
  "oxc_resolver",
  "rolldown-ariadne",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "sugar_path",
 ]
 
@@ -5054,7 +5169,7 @@ dependencies = [
  "rolldown_resolver",
  "rolldown_sourcemap",
  "rolldown_utils",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
  "string_wizard",
@@ -5075,7 +5190,7 @@ dependencies = [
  "rolldown_plugin",
  "rolldown_plugin_utils",
  "rolldown_utils",
- "rustc-hash",
+ "rustc-hash 2.1.3",
 ]
 
 [[package]]
@@ -5088,7 +5203,7 @@ dependencies = [
  "rolldown_common",
  "rolldown_plugin",
  "rolldown_utils",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde_json",
  "xxhash-rust",
 ]
@@ -5105,7 +5220,7 @@ dependencies = [
  "rolldown_plugin",
  "rolldown_plugin_utils",
  "rolldown_utils",
- "rustc-hash",
+ "rustc-hash 2.1.3",
 ]
 
 [[package]]
@@ -5259,7 +5374,7 @@ dependencies = [
  "regress",
  "rolldown_error",
  "rolldown_std_utils",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde_json",
  "simdutf8",
  "sugar_path",
@@ -5315,6 +5430,12 @@ dependencies = [
  "nsh-engine",
  "nsh-testing",
 ]
+
+[[package]]
+name = "rustc-hash"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustc-hash"
@@ -5811,7 +5932,7 @@ dependencies = [
  "oxc_index",
  "oxc_sourcemap",
  "regex",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
 ]
 
@@ -6674,6 +6795,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "web-sys"
+version = "0.3.106"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88261b9deccee56594c11a3460c462c41f58d148598fe70ad77070126a68aba4"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]

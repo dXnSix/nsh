@@ -19,6 +19,7 @@ on:
       - "crates/nsh-platform-windows/**"
       - "crates/nsh-testing/**"
       - "crates/nsh-base/**"
+      - "crates/nsh-shader/**"
       - "crates/nsh-windows-app/**"
       - "crates/nsh-windows-host/**"
       - "crates/xtask/**"
@@ -42,6 +43,7 @@ on:
       - "crates/nsh-platform-windows/**"
       - "crates/nsh-testing/**"
       - "crates/nsh-base/**"
+      - "crates/nsh-shader/**"
       - "crates/nsh-windows-app/**"
       - "crates/nsh-windows-host/**"
       - "crates/xtask/**"
@@ -96,12 +98,12 @@ jobs:
         run: >
           cargo clippy --all-targets
           -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app
-          -p nsh-cli -p nsh-dev -p xtask
+          -p nsh-cli -p nsh-dev -p xtask -p nsh-shader
           -- -D warnings
 
       # Tests need no display: they open no window.
       - name: Test
-        run: cargo test -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app -p nsh-cli -p nsh-dev -p xtask
+        run: cargo test -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app -p nsh-cli -p nsh-dev -p xtask -p nsh-shader
 
       # The examples' tests in Win32 windows, with the platform's input
       # (`nsh test --target windows`): those a real platform runs (real

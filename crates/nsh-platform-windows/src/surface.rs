@@ -177,7 +177,10 @@ pub(crate) struct Surface {
 
 impl Surface {
     /// A surface with no app and no window yet.
-    pub(crate) fn new(environment: Environment) -> Rc<Surface> {
+    pub(crate) fn new(mut environment: Environment) -> Rc<Surface> {
+        // Shaders fill views with Direct3D 11 (`crate::shader`).
+        environment.shaders =
+            nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Hlsl);
         let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
         let root = NshView::new(ROOT_ID, nsh_core::ViewKind::View);
         let mounter = Mounter::new(root.clone());

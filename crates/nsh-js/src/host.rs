@@ -83,6 +83,8 @@ pub(crate) struct Shared {
     pub(crate) measurer: RefCell<Option<TextMeasurer>>,
     /// The VM's limits.
     pub(crate) limits: Limits,
+    /// The shaders the VM made (`createShader`).
+    pub(crate) shaders: RefCell<crate::shader::Shaders>,
     /// Why the VM was stopped (out of memory, over a quota): no JS runs
     /// after that.
     pub(crate) fatal: RefCell<Option<String>>,

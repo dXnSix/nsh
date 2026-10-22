@@ -1,0 +1,27 @@
+[package]
+name = "nsh-metal"
+description = "Metal on Apple platforms: NSH's shader programs drawn into a CAMetalLayer (iOS, macOS)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+readme.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+log.workspace = true
+
+# Empty off Apple platforms (like the platform crates off their targets).
+[target.'cfg(target_vendor = "apple")'.dependencies]
+nsh-core = { workspace = true, features = ["shader-msl"] }
+objc2.workspace = true
+objc2-foundation.workspace = true
+# `objc2`: CGPoint, CGSize and CGRect as message arguments.
+objc2-core-foundation = { workspace = true, features = ["objc2"] }
+objc2-core-graphics = { workspace = true, features = ["objc2"] }
+dispatch2.workspace = true
+block2.workspace = true
+libc.workspace = true

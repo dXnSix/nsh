@@ -45,6 +45,10 @@ pub trait HostInput: Sized {
     fn node(&self) -> Option<crate::NodeId> {
         None
     }
+    /// The shader this value is (what `createShader` returned).
+    fn shader(&self) -> Option<crate::shader::ShaderSource> {
+        None
+    }
     /// The native animation node this value is (`AnimatedNode.__av`).
     fn animated_node(&self) -> Option<crate::animation::NodeId> {
         self.field("__av")
@@ -115,6 +119,7 @@ pub fn element_bits(tag: crate::Tag) -> u32 {
             Tag::WebView => on::WEBVIEW,
             Tag::Video => on::VIDEO,
             Tag::InputAccessory => on::INPUT_ACCESSORY,
+            Tag::Shader => on::SHADER,
             Tag::View
             | Tag::Cell
             | Tag::Stack
@@ -163,6 +168,8 @@ pub mod on {
     pub const INPUT_ACCESSORY: u32 = 1 << 11;
     /// `<overlay>`.
     pub const OVERLAY: u32 = 1 << 12;
+    /// `<shader>`.
+    pub const SHADER: u32 = 1 << 13;
     /// Set by the runtime itself, not part of the elements' types.
     pub const INTERNAL: u32 = 1 << 31;
 }
@@ -811,6 +818,7 @@ const GROUPS: &[(u32, &str, &str)] = &[
     (on::VIDEO, "Video", "videos"),
     (on::INPUT_ACCESSORY, "InputAccessory", "input accessories"),
     (on::OVERLAY, "Overlay", "`<Overlay>`"),
+    (on::SHADER, "Shader", "`<Shader>`"),
 ];
 
 /// The declarations of the host elements' props: the named types they use

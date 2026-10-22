@@ -381,6 +381,11 @@ impl Frame {
         (self.pixels.width, self.pixels.height)
     }
 
+    /// Its pixels: width, height, premultiplied BGRA rows.
+    pub(crate) fn pixels(&self) -> (u32, u32, &[u8]) {
+        (self.pixels.width, self.pixels.height, &self.pixels.data)
+    }
+
     /// Its bitmap on `dc`'s device, made on first use and again after a
     /// device loss.
     pub(crate) fn bitmap(&self, dc: &ID2D1DeviceContext) -> Option<ID2D1Bitmap1> {
