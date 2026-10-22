@@ -468,6 +468,8 @@ struct Node {
     relaid: bool,
     /// `android={{ elevation }}`.
     elevation: Points,
+    /// `ios={{ backdropMaterial }}`.
+    backdrop_material: crate::BackdropMaterial,
     /// A text block: its attachments (inline views and images, in text
     /// order) whose native views are inside its own.
     attached: Vec<NodeId>,
@@ -511,6 +513,7 @@ impl Node {
     fn mounted_view_style(&self) -> Box<ViewStyle> {
         let mut style = Box::new(self.view_style.clone());
         style.elevation = self.elevation;
+        style.backdrop_material = self.backdrop_material;
         // A list in its parent's viewport is a plain view clipping its
         // cells (a scroll view clips its content).
         if self.list.as_ref().is_some_and(|l| l.parent) {
@@ -580,6 +583,7 @@ impl Node {
             attached: Vec::new(),
             overlay_watched: 0,
             elevation: Points::ZERO,
+            backdrop_material: crate::BackdropMaterial::default(),
             dirty: 0,
             queued: false,
             text_queued: false,
@@ -2630,6 +2634,12 @@ impl<M: TextEngine> Core<M> {
                     flags |= dirty::VIEW;
                 }
             }
+            Prop::BackdropMaterial(value) => {
+                if node.backdrop_material != value {
+                    node.backdrop_material = value;
+                    flags |= dirty::VIEW;
+                }
+            }
             Prop::ActiveStyle(patch) => {
                 self.set_part_style(key, classes::Part::Active, patch);
                 return Ok(());
@@ -3468,7 +3478,10 @@ impl<M: TextEngine> Core<M> {
         let kind = node.kind;
         // A new native view already has the default style and no listeners.
         let mut flags = 0;
-        if node.view_style != ViewStyle::default() || node.elevation != Points::ZERO || parent_list
+        if node.view_style != ViewStyle::default()
+            || node.elevation != Points::ZERO
+            || node.backdrop_material != crate::BackdropMaterial::default()
+            || parent_list
         {
             flags |= dirty::VIEW;
         }
