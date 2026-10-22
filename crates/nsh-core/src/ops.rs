@@ -959,6 +959,56 @@ pub enum HeaderSlot {
     Header,
 }
 
+/// How a screen enters and leaves (`animation`): a preset, or a shader.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScreenTransition {
+    /// The platform's transition, a cross-fade, or none.
+    Preset(ScreenAnimation),
+    /// Through a shader ([`crate::shader::ShaderAnimation`]); where the
+    /// platform draws no shader transitions, its own.
+    Shader(Arc<crate::shader::ShaderAnimation>),
+}
+
+impl Default for ScreenTransition {
+    fn default() -> Self {
+        ScreenTransition::Preset(ScreenAnimation::Default)
+    }
+}
+
+impl From<ScreenAnimation> for ScreenTransition {
+    fn from(a: ScreenAnimation) -> Self {
+        ScreenTransition::Preset(a)
+    }
+}
+
+impl From<crate::shader::ShaderAnimation> for ScreenTransition {
+    fn from(a: crate::shader::ShaderAnimation) -> Self {
+        ScreenTransition::Shader(Arc::new(a))
+    }
+}
+
+impl crate::js::host::HostValue for ScreenTransition {
+    fn decode<I: crate::js::host::HostInput>(
+        input: &I,
+        cx: &mut crate::js::host::HostCx,
+    ) -> Option<Self> {
+        if input.as_string().is_some() {
+            return <ScreenAnimation as crate::js::host::HostValue>::decode(input, cx)
+                .map(ScreenTransition::Preset);
+        }
+        <crate::shader::ShaderAnimation as crate::js::host::HostValue>::decode(input, cx)
+            .map(|a| ScreenTransition::Shader(Arc::new(a)))
+    }
+
+    fn ts_type(types: &mut crate::ui::TsTypes) -> String {
+        format!(
+            "{} | {}",
+            <ScreenAnimation as crate::js::host::HostValue>::ts_type(types),
+            <crate::shader::ShaderAnimation as crate::js::host::HostValue>::ts_type(types)
+        )
+    }
+}
+
 /// How a screen enters and leaves (`animation`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
 pub enum ScreenAnimation {
@@ -1013,9 +1063,9 @@ pub enum ScreenProp {
     /// so set it before the user acts.
     #[prop(js = "popOnBack", default = true, on = SCREEN)]
     PopOnBack(bool),
-    /// `animation`: how the page enters and leaves.
+    /// `animation`: how the page enters and leaves: a preset, or a shader.
     #[prop(js = "animation", on = SCREEN)]
-    Animation(ScreenAnimation),
+    Animation(ScreenTransition),
     /// `statusBar`: what the status bar shows while the page or dialog is
     /// up (iOS and Android; ignored on the desktops and the web), as a view
     /// controller's `preferredStatusBarStyle` decides it on iOS. The most

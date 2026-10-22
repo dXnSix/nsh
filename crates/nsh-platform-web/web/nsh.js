@@ -2738,6 +2738,60 @@ class Player {
     el._transitionFrame = requestAnimationFrame(step);
   }
 
+  /**
+   * A page's or a dialog's transition through a shader (`spec`: its fill
+   * and length) over `host` (the stack, the root): `upper` (the page that
+   * comes or goes, the dialog) painted over what is before it is its
+   * `sample_to`, what is before it alone its `sample_from`, and
+   * `nsh.progress` how much of the upper side shows: 0 to 1, or 1 to 0
+   * when `reverse`. The views are where they end at once under it. Calls
+   * `done` when it ends; false where it cannot run (no WebGL 2).
+   */
+  shaderNav(host, upper, spec, reverse, done) {
+    const r = host.getBoundingClientRect();
+    if (!r.width || !r.height || !this.gl()) return false;
+    const o = document.createElement("div");
+    o.className = "nsh-nav-shader";
+    Object.assign(o.style, { position: "absolute", left: "0", top: "0", width: `${r.width}px`, height: `${r.height}px`, zIndex: "2147483001", pointerEvents: "none" });
+    const canvas = document.createElement("canvas");
+    canvas.className = "nsh-fill";
+    canvas._shaderOutput = true;
+    o.append(canvas);
+    Object.assign(o, {
+      _shaderCanvas: canvas,
+      _fill: spec.fill,
+      _uniforms: new Uint32Array(spec.fill.uniforms),
+      _frame: [0, 0, r.width, r.height],
+      _effect: false,
+      _transition: true,
+      _args: new Map(),
+      _images: [],
+    });
+    const from = this.inputCanvas(o, "_fromPicture");
+    this.paintTree(from.cx, host, r, 1, upper, null);
+    const to = this.inputCanvas(o, "_contentPicture");
+    this.paintTree(to.cx, host, r, 1, null, null);
+    o._fromDirty = o._contentDirty = true;
+    host.append(o);
+    const start = performance.now();
+    o._running = { start, ms: Math.max(1, spec.ms) };
+    const step = () => {
+      const t = Math.min(1, (performance.now() - start) / o._running.ms);
+      o._t = reverse ? 1 - t : t;
+      if (t >= 1 || !o.isConnected) {
+        o.remove();
+        done?.();
+        return;
+      }
+      this.drawShader(o);
+      requestAnimationFrame(step);
+    };
+    o._t = reverse ? 1 : 0;
+    this.drawShader(o);
+    requestAnimationFrame(step);
+    return true;
+  }
+
   /** A canvas for a picture of `el`'s input (`key`), covering its area, with its context in points from the view's top-left. */
   inputCanvas(el, key) {
     const ratio = devicePixelRatio || 1;
@@ -3376,10 +3430,10 @@ class Player {
 
   // Navigation
 
-  op_scr([, id, height, preventBack, header, animation]) {
+  op_scr([, id, height, preventBack, header, animation, shader, shaderMs]) {
     const el = this.view(id);
     if (!el) return;
-    el._screen = { height, preventBack, header, animation };
+    el._screen = { height, preventBack, header, animation, shader: shader ? { fill: shader, ms: shaderMs } : null };
     this.placeHeader(el);
     const stack = el.parentNode;
     if (stack?._kind === "stack" && stack._frame) this.reportRoot(el, stack._frame[2], stack._frame[3], this.screenInsets(el));
@@ -3447,6 +3501,11 @@ class Player {
   /** Animates a stack's top screen changing from `old` to `top`:
    * pushed (`pushing`) or popped. Calls `done` when the motion ends. */
   moveScreens(old, top, pushing, done) {
+    // Through a shader: the page below is its lower side, the page above
+    // its upper one.
+    const shader = (pushing ? top : old)?._screen?.shader;
+    const stack = (top ?? old)?.parentNode;
+    if (shader && stack && this.shaderNav(stack, pushing ? top : old, shader, !pushing, done)) return;
     const motion = this.screenMotion(pushing ? top : old);
     if (!motion) {
       done?.();
@@ -3681,10 +3740,10 @@ class Player {
 
   // Modals
 
-  op_mc([, id, animation, closeOnEscape]) {
+  op_mc([, id, animation, closeOnEscape, shader, shaderMs]) {
     const el = this.view(id);
     if (!el) return;
-    el._modal = { animation, closeOnEscape };
+    el._modal = { animation, closeOnEscape, shader: shader ? { fill: shader, ms: shaderMs } : null };
     if (el.isConnected && !el._leaving) this.placeModal(el);
     // Its config comes after its insert in the batch that presents it: it
     // starts out of sight the way it now comes in.
@@ -3745,6 +3804,16 @@ class Player {
     this.syncHistorySoon();
     requestAnimationFrame(() => requestAnimationFrame(() => {
       el._entering = false;
+      const shader = el._modal?.shader;
+      if (shader) {
+        // It shows at once, under a shader over the root.
+        el.style.transform = "";
+        el.style.opacity = "";
+        if (this.shaderNav(this.root, el, shader, false, () => this.event(el._id, "onShow"))) {
+          requestAnimationFrame(() => { el.style.transition = ""; });
+          return;
+        }
+      }
       el.style.transition = "";
       el.style.transform = "";
       el.style.opacity = "";
@@ -3757,6 +3826,24 @@ class Player {
     if (el._leaving) return;
     el._leaving = true;
     const motion = this.modalMotion(el);
+    // Through a shader: pictured as it shows, then gone under it at once.
+    const leave = () => {
+      if (el._leaving) {
+        el.remove();
+        this.dropLeftWith(el);
+      }
+      if (!reported) this.event(el._id, "onDismiss");
+    };
+    const shader = el._modal?.shader;
+    if (shader && this.shaderNav(this.root, el, shader, true, leave)) {
+      el.style.transition = "none";
+      el.style.opacity = "0";
+      this.scopeFocus();
+      this.syncHistorySoon();
+      const restore = el._restoreFocus;
+      if (restore?.isConnected && !this.topModal()) restore.focus({ preventScroll: true });
+      return;
+    }
     this.hideModal(el, motion);
     this.scopeFocus();
     this.syncHistorySoon();

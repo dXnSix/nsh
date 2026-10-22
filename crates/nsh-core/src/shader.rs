@@ -489,6 +489,56 @@ impl From<String> for TransitionKey {
     }
 }
 
+/// A page's or a dialog's transition through a shader (`animation: {
+/// shader, uniforms, duration }`): its `sample_from` is the lower side
+/// (the page below, what is behind the dialog), its `sample_to` the upper
+/// one, and `nsh.progress` how much of the upper side shows (0 to 1 as it
+/// comes, 1 to 0 as it goes, a back gesture's as it moves).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShaderAnimation {
+    /// The shader.
+    pub source: ShaderSource,
+    /// Its uniforms' values.
+    pub uniforms: Uniforms,
+    /// How long it runs, in milliseconds (`None`: the platform's own
+    /// transition's length).
+    pub duration: Option<f32>,
+}
+
+impl ShaderAnimation {
+    /// `source` with no uniforms, as long as the platform's own transition.
+    pub fn new(source: ShaderSource) -> Self {
+        Self {
+            source,
+            uniforms: Uniforms::default(),
+            duration: None,
+        }
+    }
+}
+
+impl HostValue for ShaderAnimation {
+    fn decode<I: HostInput>(input: &I, cx: &mut HostCx) -> Option<Self> {
+        let source = input.field("shader")?.shader()?;
+        let uniforms = match input.field("uniforms") {
+            Some(u) if !u.is_nullish() => Uniforms::decode(&u, cx)?,
+            _ => Uniforms::default(),
+        };
+        let duration = input
+            .field("duration")
+            .and_then(|d| d.as_number())
+            .map(|d| d.max(0.0) as f32);
+        Some(Self {
+            source,
+            uniforms,
+            duration,
+        })
+    }
+
+    fn ts_type(_: &mut TsTypes) -> String {
+        "ShaderAnimation<any>".into()
+    }
+}
+
 /// What a shader transition runs without a shader of its own (`fallback`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, crate::ui::PropEnum)]
 pub enum TransitionFallback {

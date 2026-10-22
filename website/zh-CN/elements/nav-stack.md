@@ -220,7 +220,7 @@ TSX 的子函数接收路由值本身，以及一个表示它在栈中位置的 
 | `headerClass` | `.header_style_with(\|s\| ..)` | `string` | 无 | 以类表示的同样的颜色：`bg-*`，标题用 `text-*`，按钮用 `tint-*`（Rust 中为 `.bg(..)`、`.text_color(..)`、`.tint_color(..)`，主题颜色随外观切换）。`headerStyle` 优先于它们。 |
 | `popOnBack` | `.pop_on_back(..)` | `boolean` | `true` | 返回按钮和侧滑返回会弹出页面。见[离开页面](#leaving-a-page)。 |
 | `popOnSwipe` | `.pop_on_swipe(..)` | `boolean` | `true` | 交互式返回手势会弹出页面：iOS 的侧滑返回、Android 跟随手指的预测性返回。返回按钮在任何情况下都会弹出页面。 |
-| `animation` | `.animation(..)` | `"default" \| "slide" \| "fade" \| "none"` | `"default"` | 页面进入和离开的方式。 |
+| `animation` | `.animation(..)`、`.shader_animation(ShaderAnimation)` | `"default" \| "slide" \| "fade" \| "none" \| ShaderAnimation` | `"default"` | 页面进入和离开的方式：预设，或经过着色器（`{ shader, uniforms, duration }`：下面的页面是着色器的 `sample_from`，这个页面是 `sample_to`，`nsh.progress` 是它显示的程度，返回手势移动时也是如此；[Shader](./shader.md#经过着色器的页面和对话框)）。 |
 | `statusBar` | `.status_bar(..)` | `{ foreground?, hidden?, animated? }` | 无 | iOS 和 Android：页面位于顶部时的状态栏。见[状态栏](../modules/nsh-base.md#status-bar)。 |
 | `style`、`class` | 样式方法 | | 无 | 页面的样式。 |
 | `children` | `.child(..)` | `JSX.Element` | 无 | 内容。 |

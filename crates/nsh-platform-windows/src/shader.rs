@@ -1064,3 +1064,126 @@ fn render(
     }
     Ok(())
 }
+
+/// A page's or a dialog's transition through a shader
+/// ([`nsh_core::NavShader`]): an item hosted by a layer view over the
+/// stack (the root for a dialog) that draws recordings of its two sides,
+/// the lower one `sample_from` and the upper one `sample_to`, through the
+/// shader at `nsh.progress`, which navigation moves.
+pub(crate) struct NavItem {
+    state: ShaderState,
+    lower: ID2D1Image,
+    upper: ID2D1Image,
+    progress: std::cell::Cell<f32>,
+}
+
+impl NavItem {
+    /// `fill` over `lower` and `upper` (recordings in the host's points).
+    pub(crate) fn new(fill: Arc<ShaderFill>, lower: ID2D1Image, upper: ID2D1Image) -> Self {
+        Self {
+            state: ShaderState {
+                uniforms: fill.uniforms.to_vec(),
+                fill: Some(fill),
+                effect: true,
+                transition: true,
+                ..ShaderState::default()
+            },
+            lower,
+            upper,
+            progress: std::cell::Cell::new(0.0),
+        }
+    }
+
+    /// How much of the upper side shows.
+    pub(crate) fn set_progress(&self, progress: f32) {
+        self.progress.set(progress);
+    }
+}
+
+impl crate::view::Hosted for NavItem {
+    fn draw(&self, cx: &mut DrawCx<'_>, (w, h): (f32, f32)) {
+        let Some(fill) = &self.state.fill else { return };
+        let Some(program) = shaders(cx.gfx, fill.program) else {
+            return;
+        };
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let area = Bounds::new(Point::default(), Size::new(Points(w), Points(h)));
+        let size = (
+            (w * cx.scale).round().max(1.0) as u32,
+            (h * cx.scale).round().max(1.0) as u32,
+        );
+        let mut target = self.state.target.borrow_mut();
+        let generation = gfx::generation();
+        if target
+            .as_ref()
+            .is_none_or(|t| t.generation != generation || t.size != size)
+        {
+            *target = make_target(cx.gfx, size, generation)
+                .map_err(|e| log::warn!("<Shader>: {e}"))
+                .ok();
+        }
+        let Some(t) = target.as_mut() else { return };
+        // The two sides into their textures (from the recordings, once per
+        // target).
+        let fresh = t.inputs[0].is_none() || t.inputs[2].is_none();
+        let (Some(to), Some(from)) = (t.input(cx.gfx, 0, cx.scale), t.input(cx.gfx, 2, cx.scale))
+        else {
+            return;
+        };
+        if fresh {
+            for (input, image) in [(&from, &self.lower), (&to, &self.upper)] {
+                let Ok(bitmap) = input.bitmap.cast::<ID2D1Image>() else {
+                    continue;
+                };
+                let scale = cx.scale;
+                crate::decor::layer::with_context(cx.gfx, |dc| {
+                    // SAFETY: COM calls on a context nobody else draws with;
+                    // `EndDraw` follows `BeginDraw`.
+                    unsafe {
+                        dc.SetTarget(&bitmap);
+                        dc.SetDpi(96.0 * scale, 96.0 * scale);
+                        dc.BeginDraw();
+                        dc.Clear(None);
+                        dc.DrawImage(
+                            image,
+                            None,
+                            None,
+                            D2D1_INTERPOLATION_MODE_LINEAR,
+                            windows::Win32::Graphics::Direct2D::Common::D2D1_COMPOSITE_MODE_SOURCE_OVER,
+                        );
+                        let _ = dc.EndDraw(None, None);
+                    }
+                });
+            }
+        }
+        let mut state = ShaderState {
+            progress: self.progress.get(),
+            ..ShaderState::default()
+        };
+        state.uniforms.clone_from(&self.state.uniforms);
+        state.transition = true;
+        let inputs = [None, None, Some(from), Some(to)];
+        let size = Size::new(Points(w), Points(h));
+        if let Err(e) = render(cx, t, &program, &state, size, area, &inputs, 0.0) {
+            log::warn!("<Shader>: {e}");
+            return;
+        }
+        // SAFETY: a COM call on the live context with a bitmap of its device.
+        unsafe {
+            cx.dc.DrawBitmap(
+                &t.bitmap,
+                Some(&crate::render::rect_f(0.0, 0.0, w, h)),
+                1.0,
+                D2D1_INTERPOLATION_MODE_LINEAR,
+                None,
+                None,
+            )
+        };
+    }
+
+    fn hit(&self, _x: f32, _y: f32, _size: (f32, f32)) -> bool {
+        false
+    }
+}

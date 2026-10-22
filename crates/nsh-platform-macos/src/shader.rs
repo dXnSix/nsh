@@ -69,7 +69,15 @@ pub(crate) struct ShaderState {
     stale: u32,
 }
 
+/// A navigation overlay's layer and the view it covers.
+type OverlayEntry = (
+    std::rc::Weak<RefCell<nsh_metal::ShaderLayer>>,
+    objc2::rc::Weak<objc2_app_kit::NSView>,
+);
+
 thread_local! {
+    /// The navigation overlays that run ([`NavOverlay`]), for screenshots.
+    static OVERLAYS: RefCell<Vec<OverlayEntry>> = const { RefCell::new(Vec::new()) };
     /// The shader views, to draw again when their program is ready.
     static VIEWS: RefCell<Vec<objc2::rc::Weak<ViewObj>>> = const { RefCell::new(Vec::new()) };
     /// Shader views that sample an input: [`ui_changed`] looks for them.
@@ -730,9 +738,219 @@ pub(crate) fn hide_effect_children(
         .collect()
 }
 
+/// Pictures of the navigation overlays that run in `window`, added over
+/// the views they cover for an in-process picture (which draws no
+/// `CAMetalLayer`, and a view's sublayers under its subviews): views, the
+/// last subviews of the views they cover; the caller removes them.
+#[cfg(feature = "dev")]
+pub(crate) fn overlay_pictures(
+    window: &objc2_app_kit::NSWindow,
+) -> Vec<objc2::rc::Retained<objc2_app_kit::NSView>> {
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+    let entries: Vec<_> = OVERLAYS.with(|o| {
+        o.borrow()
+            .iter()
+            .filter_map(|(l, h)| Some((l.upgrade()?, h.load()?)))
+            .collect()
+    });
+    let mut out = Vec::new();
+    for (layer, host) in entries {
+        if host.window().as_deref() != Some(window) {
+            continue;
+        }
+        let mut layer = layer.borrow_mut();
+        let area = layer.area();
+        let Some((w, h, rgba)) = layer.picture() else {
+            continue;
+        };
+        let Some(image) = crate::image::rgba_pixels_image(w, h, &rgba) else {
+            continue;
+        };
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            continue;
+        };
+        let frame = CGRect::new(
+            CGPoint::new(area.origin.x.0 as f64, area.origin.y.0 as f64),
+            CGSize::new(area.size.width.0 as f64, area.size.height.0 as f64),
+        );
+        let picture = objc2_app_kit::NSView::initWithFrame(mtm.alloc(), frame);
+        picture.setWantsLayer(true);
+        if let Some(l) = picture.layer() {
+            let ptr = &*image as *const CGImage as *mut objc2::runtime::AnyObject;
+            // SAFETY: CF objects are Objective-C objects; a CGImage is a
+            // valid layer content.
+            unsafe { l.setContents(objc2::rc::Retained::retain(ptr).as_deref()) };
+        }
+        host.addSubview(&picture);
+        out.push(picture);
+    }
+    out
+}
+
 /// Every shader view of the process (the screenshot keeps those in its
 /// window).
 #[cfg(feature = "dev")]
 pub(crate) fn shader_views() -> Vec<NshView> {
     views()
+}
+
+/// A page's or a dialog's transition through a shader
+/// ([`nsh_core::NavShader`]): a `CAMetalLayer` over `host` (the stack, or
+/// the surface's root for a dialog) drawing pictures of its two sides, the
+/// lower one `sample_from` and the upper one `sample_to`, while the
+/// navigation's motion runs; removed when it is dropped.
+pub(crate) struct NavOverlay {
+    layer: Rc<RefCell<nsh_metal::ShaderLayer>>,
+    start: std::time::Instant,
+    duration: std::time::Duration,
+    /// It runs backwards (a pop, a dialog that closes): `nsh.progress`
+    /// goes from 1 to 0.
+    reverse: bool,
+    /// Takes the picture of the upper side on the first display frame:
+    /// AppKit puts a view that came in this batch into the layer tree only
+    /// then.
+    upper: RefCell<Option<TakePicture>>,
+}
+
+/// Takes a picture when it is called ([`NavOverlay`]'s upper side).
+type TakePicture = Box<dyn Fn() -> Option<Picture>>;
+
+/// A picture of a view: premultiplied RGBA, its size in pixels.
+pub(crate) struct Picture {
+    rgba: Vec<u8>,
+    width: usize,
+    height: usize,
+}
+
+/// `host` drawn as it shows now with `hidden` left out, then `over` (a
+/// view in it) drawn over it from its own layer, at its backing scale; its
+/// `bool`: the layer shows an image as its contents, which comes out
+/// upside down in the flipped drawing.
+/// AppKit puts the layer of a view added since its last display into the
+/// tree only when it displays it: a view that just came draws from its
+/// own layer.
+pub(crate) fn picture_of(
+    host: &NshView,
+    hidden: &[&CALayer],
+    over: Option<(&objc2_app_kit::NSView, bool)>,
+) -> Option<Picture> {
+    let layer = host.ns().layer()?;
+    let size = host.state().frame.size;
+    let scale = host.backing_scale();
+    let (width, height) = (
+        (size.width.0 as f64 * scale).round().max(1.0) as usize,
+        (size.height.0 as f64 * scale).round().max(1.0) as usize,
+    );
+    let rgba = crate::surface::quiet(|| {
+        let was: Vec<bool> = hidden.iter().map(|l| l.isHidden()).collect();
+        hidden.iter().for_each(|l| l.setHidden(true));
+        let mut rgba = render(&layer, (0.0, 0.0), width, height, scale);
+        hidden.iter().zip(was).for_each(|(l, w)| l.setHidden(w));
+        if let Some((view, image)) = over
+            && let Some(top) = view.layer()
+        {
+            let f = view.frame();
+            let was = top.isHidden();
+            top.setHidden(false);
+            let mut upper = render(&top, (-f.origin.x, -f.origin.y), width, height, scale);
+            top.setHidden(was);
+            if image {
+                // Its rows within its frame, the other way up.
+                let row = width * 4;
+                let y0 = ((f.origin.y * scale).round().max(0.0) as usize).min(height);
+                let y1 =
+                    (((f.origin.y + f.size.height) * scale).round().max(0.0) as usize).min(height);
+                let (mut a, mut b) = (y0, y1);
+                while a + 1 < b {
+                    b -= 1;
+                    let (top_rows, rest) = upper.split_at_mut(b * row);
+                    top_rows[a * row..a * row + row].swap_with_slice(&mut rest[..row]);
+                    a += 1;
+                }
+            }
+            // Premultiplied: over = upper + below × (1 − upper's alpha).
+            for (b, u) in rgba.chunks_mut(4).zip(upper.chunks(4)) {
+                let keep = 255 - u[3] as u16;
+                for i in 0..4 {
+                    b[i] = (u[i] as u16 + (b[i] as u16 * keep + 127) / 255).min(255) as u8;
+                }
+            }
+        }
+        rgba
+    });
+    Some(Picture {
+        rgba,
+        width,
+        height,
+    })
+}
+
+impl NavOverlay {
+    /// Over `host`, `from` (the lower side) through `shader` to what `to`
+    /// pictures on the first display frame (the upper side); backwards
+    /// when `reverse`. `None` where Metal draws nothing.
+    pub(crate) fn new(
+        host: &NshView,
+        shader: &nsh_core::NavShader,
+        from: Picture,
+        to: Box<dyn Fn() -> Option<Picture>>,
+        reverse: bool,
+    ) -> Option<Self> {
+        let mut layer = nsh_metal::ShaderLayer::new()?;
+        let size = host.state().frame.size;
+        layer.set_frame(
+            size.width.0 as f64,
+            size.height.0 as f64,
+            host.backing_scale(),
+        );
+        let _ = layer.set_fill(Some(shader.fill.clone()));
+        let area = layer.area();
+        layer.set_input(ShaderInput::From, &from.rgba, from.width, from.height, area);
+        layer.set_progress(if reverse { 1.0 } else { 0.0 });
+        let ca = content_layer(&layer);
+        // Over the screens and modals it stands for.
+        ca.setZPosition(1.0e6);
+        host.ns().layer()?.addSublayer(ca);
+        layer.draw();
+        let layer = Rc::new(RefCell::new(layer));
+        OVERLAYS.with(|o| {
+            let mut o = o.borrow_mut();
+            o.retain(|(l, _)| l.strong_count() > 0);
+            o.push((Rc::downgrade(&layer), objc2::rc::Weak::from(host.ns())));
+        });
+        Some(Self {
+            layer,
+            start: std::time::Instant::now(),
+            duration: shader.duration,
+            reverse,
+            upper: RefCell::new(Some(to)),
+        })
+    }
+
+    /// Draws it at its progress now (linear over its duration).
+    pub(crate) fn tick(&self) {
+        let to = self.upper.borrow_mut().take();
+        if let Some(p) = to.and_then(|to| to()) {
+            let mut layer = self.layer.borrow_mut();
+            let area = layer.area();
+            layer.set_input(ShaderInput::To, &p.rgba, p.width, p.height, area);
+        }
+        let t = (self.start.elapsed().as_secs_f32()
+            / self.duration.as_secs_f32().max(f32::EPSILON))
+        .min(1.0);
+        let mut layer = self.layer.borrow_mut();
+        layer.set_progress(if self.reverse { 1.0 - t } else { t });
+        layer.draw();
+    }
+
+    /// Its duration.
+    pub(crate) fn duration(&self) -> std::time::Duration {
+        self.duration
+    }
+}
+
+impl Drop for NavOverlay {
+    fn drop(&mut self) {
+        crate::surface::quiet(|| content_layer(&self.layer.borrow()).removeFromSuperlayer());
+    }
 }

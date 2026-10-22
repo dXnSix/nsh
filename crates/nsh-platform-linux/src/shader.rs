@@ -289,7 +289,7 @@ fn link(gl: &glow::Context, source: &GlslProgram) -> Result<Program, String> {
 }
 
 /// An image's pixels (RGBA, premultiplied) and size.
-struct Pixels {
+pub(crate) struct Pixels {
     width: i32,
     height: i32,
     rgba: Vec<u8>,
@@ -1215,5 +1215,115 @@ unsafe fn image_texture(
         sampled(g);
         images[slot] = Some((pixels.clone(), t));
         Some(t)
+    }
+}
+
+/// `host` drawn anew into pixels (its views' own drawing, not GTK's render
+/// nodes of the last frame): without `upper` and what draws after it when
+/// given (a transition's lower side), and without `hidden` (an image
+/// navigation hosts).
+pub(crate) fn nav_picture(
+    host: &NshView,
+    upper: Option<&NshView>,
+    hidden: Option<&gtk::Widget>,
+) -> Option<Rc<Pixels>> {
+    let renderer = host.native()?.renderer()?;
+    let scale = host.scale_factor().max(1) as f32;
+    let size = host.state().frame.size;
+    let (pw, ph) = (
+        (size.width.0 * scale).round().max(1.0) as i32,
+        (size.height.0 * scale).round().max(1.0) as i32,
+    );
+    let snapshot = gtk::Snapshot::new();
+    snapshot.scale(scale, scale);
+    // A view that is never drawn stands for no upper side.
+    let upper = upper
+        .cloned()
+        .unwrap_or_else(|| NshView::new(nsh_core::NodeId::MAX, nsh_core::ViewKind::View));
+    let shown = hidden.map(|w| (w, w.is_child_visible()));
+    if let Some((w, _)) = &shown {
+        w.set_child_visible(false);
+    }
+    TRACE.with(|t| *t.borrow_mut() = Some((upper, false)));
+    host.draw(&snapshot);
+    TRACE.with(|t| *t.borrow_mut() = None);
+    if let Some((w, visible)) = shown {
+        w.set_child_visible(visible);
+    }
+    let viewport = graphene::Rect::new(0.0, 0.0, pw as f32, ph as f32);
+    let node = snapshot
+        .to_node()
+        .unwrap_or_else(|| gsk::ColorNode::new(&gdk::RGBA::TRANSPARENT, &viewport).upcast());
+    Some(Rc::new(pixels_of(
+        &renderer.render_texture(&node, Some(&viewport)),
+    )))
+}
+
+/// A page's or a dialog's transition through a shader
+/// ([`nsh_core::NavShader`]): pictures of its lower side (`sample_from`)
+/// and upper side (`sample_to`), drawn through the shader into a render
+/// node at a progress navigation gives, which a layer over the stack (the
+/// root for a dialog) shows.
+pub(crate) struct NavPainter {
+    state: ShaderState,
+    to: Rc<Pixels>,
+    size: Size<Points>,
+}
+
+impl NavPainter {
+    /// `fill` over `from` and `to`, pictures of a host of `size`.
+    pub(crate) fn new(
+        fill: Arc<ShaderFill>,
+        from: Rc<Pixels>,
+        to: Rc<Pixels>,
+        size: Size<Points>,
+    ) -> Self {
+        Self {
+            state: ShaderState {
+                uniforms: fill.uniforms.to_vec(),
+                fill: Some(fill),
+                effect: true,
+                transition: true,
+                from: Some(from),
+                ..ShaderState::default()
+            },
+            to,
+            size,
+        }
+    }
+
+    /// The transition at `progress` (how much of the upper side shows), at
+    /// `widget`'s scale.
+    pub(crate) fn node(
+        &mut self,
+        widget: &impl IsA<gtk::Widget>,
+        progress: f32,
+    ) -> Option<gsk::RenderNode> {
+        let program = self.state.fill.as_ref()?.program;
+        let scale = widget.scale_factor().max(1) as f32;
+        self.state.progress = progress;
+        let area = Bounds::new(Point::default(), self.size);
+        let state = &self.state;
+        let mut cache = state.cache.borrow_mut();
+        let texture = with_gl(&widget.display(), |gl| {
+            render(
+                gl,
+                &mut cache,
+                state,
+                program,
+                (self.size, area),
+                scale,
+                0.0,
+                Some(&self.to),
+            )
+        })
+        .flatten()?;
+        let (w, h) = (self.size.width.0, self.size.height.0);
+        let snapshot = gtk::Snapshot::new();
+        // GL's rows go bottom up.
+        snapshot.translate(&graphene::Point::new(0.0, h));
+        snapshot.scale(1.0, -1.0);
+        snapshot.append_texture(&texture, &graphene::Rect::new(0.0, 0.0, w, h));
+        snapshot.to_node()
     }
 }

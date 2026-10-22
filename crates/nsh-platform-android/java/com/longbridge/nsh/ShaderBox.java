@@ -22,6 +22,7 @@ import android.graphics.RuntimeShader;
 import android.graphics.Shader;
 import android.os.Build;
 import android.os.SystemClock;
+import android.view.View;
 
 /**
  * `<shader>` and `<shadereffect>`: AGSL runtime shaders (`nsh_core::shader`,
@@ -63,6 +64,18 @@ final class ShaderBox extends Box {
         int[] inputs;
     }
 
+    /**
+     * A page's or a dialog's transition through a shader
+     * (`nsh_core::NavShader`): its program, inputs and uniforms, and how
+     * long it runs.
+     */
+    static final class Nav {
+        Program program;
+        int inputs;
+        int[] uniforms;
+        float ms;
+    }
+
     /** `nsh_core::shader::PROGRESS`: the component an animated `progress` writes. */
     private static final int PROGRESS = 0xffff;
     private static final int CONTENT = 0, BACKDROP = 1, FROM = 2, TO = 3;
@@ -71,6 +84,8 @@ final class ShaderBox extends Box {
     private final boolean transition;
     /** A running transition's `sample_from`, start (uptime) and length. */
     private Bitmap from;
+    /** A page's or a dialog's transition: a picture of its upper side (`sample_to`). */
+    private Bitmap toPicture;
     private long transitionStart = -1;
     private float transitionMs;
     private Program program;
@@ -181,6 +196,35 @@ final class ShaderBox extends Box {
         transitionStart = SystemClock.uptimeMillis();
         transitionMs = Math.max(1, ms);
         invalidate();
+    }
+
+    /**
+     * A page's or a dialog's transition through a shader, this view over
+     * them: pictures of its lower side (`sample_from`) and its upper side
+     * (`sample_to`).
+     */
+    void setSides(Bitmap lower, Bitmap upper) {
+        from = lower;
+        toPicture = upper;
+        invalidate();
+    }
+
+    /**
+     * `views` drawn one over the other as they are now, rendered once into
+     * a hardware bitmap the size of the first (null if it cannot be).
+     */
+    static Bitmap picture(View... views) {
+        if (Build.VERSION.SDK_INT < 33 || views.length == 0) return null;
+        int w = views[0].getWidth(), h = views[0].getHeight();
+        if (w <= 0 || h <= 0) return null;
+        RenderNode node = new RenderNode("nsh-nav-picture");
+        node.setPosition(0, 0, w, h);
+        RecordingCanvas recording = node.beginRecording(w, h);
+        for (View v : views) {
+            if (v != null && v.getWidth() > 0) v.draw(recording);
+        }
+        node.endRecording();
+        return render(node, w, h);
     }
 
     /** `node` rendered once into a hardware bitmap of `w` × `h` pixels (null if it could not be). */
@@ -389,6 +433,17 @@ final class ShaderBox extends Box {
                 frame[at + 5] = Float.floatToRawIntBits(from != null ? from.getHeight() : 1);
                 shader.setInputShader(program.shaders[i], from != null
                         ? new BitmapShader(from, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP) : transparent());
+                continue;
+            }
+            if (input == TO && toPicture != null) {
+                frame[at] = Float.floatToRawIntBits(x);
+                frame[at + 1] = Float.floatToRawIntBits(y);
+                frame[at + 2] = Float.floatToRawIntBits(w);
+                frame[at + 3] = Float.floatToRawIntBits(h);
+                frame[at + 4] = Float.floatToRawIntBits(toPicture.getWidth());
+                frame[at + 5] = Float.floatToRawIntBits(toPicture.getHeight());
+                shader.setInputShader(program.shaders[i],
+                        new BitmapShader(toPicture, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP));
                 continue;
             }
             if (input == CONTENT || input == BACKDROP || input == TO) {

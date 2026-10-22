@@ -206,7 +206,7 @@ export interface DialogProps extends DialogHostProps {
   /** Shown while true (default). */
   open?: boolean;
   /** How it comes in and goes (default `"slide"`). */
-  animation?: "slide" | "fade" | "none";
+  animation?: "slide" | "fade" | "none" | ShaderAnimation<any>;
   /** It finished appearing. */
   onOpen?: () => void;
   /** It went away: the user closed it, or the app removed it. */

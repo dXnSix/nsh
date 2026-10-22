@@ -251,8 +251,9 @@ pub(crate) fn shot(window: &NSWindow) -> Result<Vec<u8>, String> {
             .iter()
             .filter(|v| v.ns().window().as_deref() == Some(window))
             .filter_map(crate::shader::picture_layer)
-            .collect()
+            .collect::<Vec<_>>()
     });
+    let overlays = crate::surface::quiet(|| crate::shader::overlay_pictures(window));
     if let Some(layer) = view.layer() {
         crate::surface::quiet(|| order_by_z(&layer));
     }
@@ -268,6 +269,7 @@ pub(crate) fn shot(window: &NSWindow) -> Result<Vec<u8>, String> {
         container.setHidden(false);
     }
     crate::surface::quiet(|| pictures.iter().for_each(|l| l.removeFromSuperlayer()));
+    crate::surface::quiet(|| overlays.iter().for_each(|v| v.removeFromSuperview()));
     let properties = NSDictionary::<NSBitmapImageRepPropertyKey, objc2::runtime::AnyObject>::new();
     // SAFETY: an empty property dictionary is valid for PNG.
     let data =

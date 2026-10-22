@@ -374,6 +374,8 @@ pub(crate) struct Mounter {
     pictures: bool,
     /// The shader transitions that run (the shader display link moves them).
     transitions: Vec<NodeId>,
+    /// Pages' and dialogs' transitions through a shader that run.
+    nav_overlays: Vec<crate::shader::NavOverlay>,
     /// Parents of screens, header items and modals (which are not
     /// subviews of their parent).
     hosts: rustc_hash::FxHashMap<NodeId, NodeId>,
@@ -458,6 +460,7 @@ impl Mounter {
             sampling: 0,
             pictures: false,
             transitions: Vec::new(),
+            nav_overlays: Vec::new(),
             hosts: Default::default(),
             dirty_stacks: Vec::new(),
             deferred_stacks: Vec::new(),
@@ -1072,13 +1075,13 @@ impl Mounter {
                 }
             }
             MountItem::NativeProps { id, props } => self.set_native_props(id, props),
-            MountItem::ModalConfig { id, config } => {
+            MountItem::ModalConfig { id, config, shader } => {
                 if let Some(Slot {
                     native: Native::Modal(modal),
                     ..
                 }) = self.slot_mut(id)
                 {
-                    modal.configure(config);
+                    modal.configure(config, shader);
                 }
             }
             MountItem::Animation(op) => {
@@ -2333,7 +2336,12 @@ impl Mounter {
                 self.sync_effect(id);
             }
         }
-        if keep.is_empty() && !self.pictures && self.transitions.is_empty() {
+        self.nav_overlays.retain_mut(|o| o.tick());
+        if keep.is_empty()
+            && !self.pictures
+            && self.transitions.is_empty()
+            && self.nav_overlays.is_empty()
+        {
             self.shader_link.setPaused(true);
         }
         self.shader_frames = keep;
@@ -2729,9 +2737,12 @@ impl Mounter {
                 .iter()
                 .filter(|s| !stack.popped.contains(s))
                 .filter_map(|&s| match self.slot(s).map(|s| &s.native) {
-                    Some(Native::Screen(screen)) => {
-                        Some((s, screen.controller.clone(), screen.config.animation))
-                    }
+                    Some(Native::Screen(screen)) => Some((
+                        s,
+                        screen.controller.clone(),
+                        screen.config.animation,
+                        screen.config.shader.clone(),
+                    )),
                     _ => None,
                 })
                 .collect();
@@ -2740,10 +2751,20 @@ impl Mounter {
                 .topViewController()
                 .and_then(|c| c.downcast::<crate::navigation::ScreenController>().ok())
                 .and_then(|c| match self.slot(c.screen_id()).map(|s| &s.native) {
-                    Some(Native::Screen(screen)) => Some(screen.config.animation),
+                    Some(Native::Screen(screen)) => {
+                        Some((screen.config.animation, screen.config.shader.clone()))
+                    }
                     _ => None,
                 });
-            stack.reconcile(&screens, leaving);
+            if let Some((shader, before, reverse)) = stack.reconcile(&screens, leaving)
+                && let Some(view) = stack.nav.view()
+                && let Some(host) = view.superview()
+                && let Some(overlay) =
+                    crate::shader::NavOverlay::new(&host, view.frame(), &shader, before, reverse)
+            {
+                self.nav_overlays.push(overlay);
+                self.shader_link.setPaused(false);
+            }
             if let Some(Slot {
                 native: Native::Stack(stack),
                 ..
@@ -2790,14 +2811,19 @@ impl Mounter {
             else {
                 continue;
             };
-            if shown {
-                if let Some(root) = &root {
-                    modal.present(root);
-                }
+            let plan = if shown {
+                root.as_ref().and_then(|root| modal.present(root))
             } else {
                 modal.dismiss(move || {
                     control.dispatch_event(id, EventKind::Dismiss, EventPayload::None)
-                });
+                })
+            };
+            if let Some(p) = plan
+                && let Some(overlay) =
+                    crate::shader::NavOverlay::new(&p.host, p.rect, &p.shader, p.before, p.reverse)
+            {
+                self.nav_overlays.push(overlay);
+                self.shader_link.setPaused(false);
             }
         }
     }

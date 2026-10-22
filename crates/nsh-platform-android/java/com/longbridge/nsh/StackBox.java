@@ -24,6 +24,13 @@ import java.util.List;
  * push / pop transitions and the back button (predictive back on
  * Android 14). The core lays every screen out at the stack's size, below
  * its header.
+ *
+ * A screen whose `animation` is a shader (`Mounter.ScreenOptions.nav`)
+ * comes and goes under a {@link ShaderBox} over the stack, which draws
+ * pictures of the page below (`sample_from`) and of the screen
+ * (`sample_to`) through it; `nsh.progress` is how much of the screen
+ * shows: 0 to 1 as it comes, 1 to 0 as it goes, and with the finger in a
+ * predictive back gesture. The pages stay where they end under it.
  */
 @SuppressLint("ViewConstructor")
 final class StackBox extends FrameLayout implements Node {
@@ -37,6 +44,10 @@ final class StackBox extends FrameLayout implements Node {
     /** The screens currently shown, bottom to top. */
     private final List<ScreenBox> shown = new ArrayList<>();
     private Animator transition;
+    /** The overlay of a transition through a shader, while it runs. */
+    private ShaderBox navShader;
+    /** Its `nsh.progress` now. */
+    private float navProgress;
 
     StackBox(Context context, Mounter mounter, int id) {
         super(context);
@@ -88,12 +99,96 @@ final class StackBox extends FrameLayout implements Node {
             settle(leaving);
             return;
         }
+        ShaderBox.Nav nav = navOf(pushing ? newTop : oldTop);
+        if (nav != null && shaderAnimate(pushing ? oldTop : newTop, pushing ? newTop : oldTop, pushing,
+                pushing ? 0 : 1, nav, leaving)) {
+            return;
+        }
         int animation = pushing ? newTop.animation : oldTop.animation;
         if (animation == 2) {
             settle(leaving);
             return;
         }
         animate(pushing ? oldTop : newTop, pushing ? newTop : oldTop, pushing, animation == 1, 0, leaving);
+    }
+
+    /** Screen `s`'s transition through a shader, if any. */
+    private ShaderBox.Nav navOf(ScreenBox s) {
+        Mounter.ScreenOptions o = s != null ? mounter.screenOptions.get(s.id) : null;
+        return o != null && android.os.Build.VERSION.SDK_INT >= 33 ? o.nav : null;
+    }
+
+    /** The overlay of a transition through `nav` over the stack, at `progress`. */
+    private ShaderBox overlay(ShaderBox.Nav nav, float progress) {
+        if (navShader != null) removeView(navShader);
+        ShaderBox o = new ShaderBox(getContext(), mounter, -1, false, false);
+        o.setFill(nav.program, false, nav.inputs, progress, 0, nav.uniforms.clone(), new String[0], new int[0]);
+        addView(o, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+        o.bringToFront();
+        navShader = o;
+        navProgress = progress;
+        return o;
+    }
+
+    /**
+     * `upper` comes over `lower` (`push`) or goes from it under a shader,
+     * from `progress` (how much of `upper` shows) to 1 or 0; then `leaving`
+     * go. False where it cannot run.
+     */
+    private boolean shaderAnimate(ScreenBox lower, ScreenBox upper, boolean push, float progress,
+                                  ShaderBox.Nav nav, List<ScreenBox> leaving) {
+        if (lower == null || upper == null) return false;
+        for (ScreenBox s : new ScreenBox[] {lower, upper}) {
+            s.setVisibility(VISIBLE);
+            s.setTranslationX(0);
+            s.setAlpha(1);
+        }
+        ShaderBox o = navShader != null ? navShader : overlay(nav, progress);
+        Runnable run = () -> {
+            o.setSides(ShaderBox.picture(lower), ShaderBox.picture(lower, upper));
+            float target = push ? 1 : 0;
+            android.animation.ValueAnimator a = android.animation.ValueAnimator.ofFloat(navProgress, target);
+            a.setDuration(Math.max(1, Math.round(nav.ms * Math.abs(target - navProgress))));
+            a.setInterpolator(null);
+            a.addUpdateListener(x -> {
+                navProgress = (float) x.getAnimatedValue();
+                o.setNumber(0xffff, navProgress);
+            });
+            a.addListener(new AnimatorListenerAdapter() {
+                private boolean cancelled;
+
+                @Override
+                public void onAnimationCancel(Animator animation) {
+                    cancelled = true;
+                }
+
+                @Override
+                public void onAnimationEnd(Animator animation) {
+                    if (navShader == o) {
+                        removeView(o);
+                        navShader = null;
+                    }
+                    if (!cancelled) settle(leaving);
+                }
+            });
+            transition = a;
+            a.start();
+        };
+        if (push && (upper.getWidth() == 0 || upper.isLayoutRequested())) {
+            // The screen that comes is pictured once laid out, before it draws.
+            android.view.ViewTreeObserver tree = getViewTreeObserver();
+            tree.addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
+                @Override
+                public boolean onPreDraw() {
+                    getViewTreeObserver().removeOnPreDrawListener(this);
+                    run.run();
+                    return true;
+                }
+            });
+        } else {
+            run.run();
+        }
+        return true;
     }
 
     /** Only the top screen is visible; removed screens leave. */
@@ -192,6 +287,13 @@ final class StackBox extends FrameLayout implements Node {
         backProgress = 0;
         ScreenBox lower = shown.get(shown.size() - 2);
         lower.setVisibility(VISIBLE);
+        ShaderBox.Nav nav = navOf(top());
+        if (nav != null) {
+            // Through the shader: the finger moves `nsh.progress`.
+            ShaderBox o = overlay(nav, 1);
+            o.setSides(ShaderBox.picture(lower), ShaderBox.picture(lower, top()));
+            return;
+        }
         place(lower, top(), 0, getWidth(), false);
     }
 
@@ -199,6 +301,11 @@ final class StackBox extends FrameLayout implements Node {
     void backProgressed(float progress) {
         if (backProgress < 0) return;
         backProgress = progress;
+        if (navShader != null) {
+            navProgress = 1 - progress;
+            navShader.setNumber(0xffff, navProgress);
+            return;
+        }
         // Follow the finger part of the way, like the system animation.
         place(shown.get(shown.size() - 2), top(), progress * 0.4f, getWidth(), false);
     }
@@ -209,6 +316,12 @@ final class StackBox extends FrameLayout implements Node {
         backProgress = -1;
         List<ScreenBox> none = new ArrayList<>();
         ScreenBox lower = shown.get(shown.size() - 2), upper = top();
+        ShaderBox.Nav nav = navOf(upper);
+        if (navShader != null && nav != null) {
+            // Back to the screen: the shader to 1, then the stack as it was.
+            shaderAnimate(lower, upper, true, navProgress, nav, none);
+            return;
+        }
         android.animation.ValueAnimator a = android.animation.ValueAnimator.ofFloat(upper.getTranslationX() / Math.max(1, getWidth()), 0);
         a.setDuration(200);
         a.addUpdateListener(x -> place(lower, upper, (float) x.getAnimatedValue(), getWidth(), false));
@@ -232,6 +345,11 @@ final class StackBox extends FrameLayout implements Node {
         popped.add(upper.id);
         List<ScreenBox> leaving = new ArrayList<>();
         leaving.add(upper);
+        ShaderBox.Nav nav = navOf(upper);
+        if (nav != null && shaderAnimate(lower, upper, false, navShader != null ? navProgress : 1, nav, leaving)) {
+            mounter.event(upper.id, Native.DISMISS);
+            return;
+        }
         if (upper.animation == 2) {
             settle(leaving);
         } else {
