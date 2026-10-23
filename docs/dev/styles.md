@@ -11,7 +11,9 @@
 - **Tailwind** (`class` / `classList` on every element): JS only passes the strings; the core resolves them (how, and
   what is cached: `crates/nsh-core/src/tailwind/mod.rs`, `core/classes.rs`). The inline `style` always wins over classes; a key set to `undefined` sets nothing, so the class value (or the default) stays, while `null` sets the default.
   Later utilities win over earlier ones (components append a `class` prop, no `tailwind-merge`); variant rules apply
-  after plain ones in Tailwind's variant order. Display follows CSS: `flex` / `inline-flex` are rows unless a direction
+  after plain ones in Tailwind's variant order: a rule's `Rank` is its variants' places highest first, compared as
+  Tailwind compares the bit sets of a candidate's variants (`group-*` by inner state, then name; breakpoints by unit
+  name, then value, `max-*` widest first), so `dark:hover:` follows `dark:`. Display follows CSS: `flex` / `inline-flex` are rows unless a direction
   utility says otherwise, wherever it is in the string (`flex-col flex` is a column; the implied row is a
   `Decl::Default`, applied before every rule), while views without them keep React Native's column; `block` /
   `flow-root` use Taffy's block layout, and so do `inline` / `inline-block`: a browser blockifies inline boxes in flex
@@ -24,9 +26,9 @@
   `placeholderColor` / `selectionColor` style keys; other utilities under them are unknown), `!` (important). The state classes have style props of their own (`activeStyle`, `hoverStyle`,
   `focusStyle`, `disabledStyle`, `checkedStyle`, `indeterminateStyle`, a `Button`'s `selectedStyle`), resolved the same
   way: later states win, `disabled` over all. `selected`, `checked` and `indeterminate` are value states the core sets
-  from the accessibility state (never reported by the platform), below the interaction states: `checked` and
-  `indeterminate` (one rank: a view is never both), then `selected`, then `hover`, `focus`, `active` (gpui-base's order
-  of value states). `disabled` (any element) applies `disabled:` and drops
+  from the accessibility state (never reported by the platform), below the interaction states: `checked`, then
+  `indeterminate` (Tailwind's order), then `selected`, then `hover`, `focus`, `active` (gpui-base's order of value
+  states). `disabled` (any element) applies `disabled:` and drops
   the node's press listeners from what is mounted, so it shows no press feedback either. A part of a Rust component
   shows its control's `checked`, `indeterminate` and `disabled` to its own classes and state styles
   (`Interactive::project_checked`, `project_indeterminate`, `project_disabled`; `Prop::ProjectedStates`): a switch's thumb styled `checked:translate-x-4`, with no accessibility
@@ -53,18 +55,18 @@
   that are props in React Native (`line-clamp-*`, `truncate`, `whitespace-nowrap`, `pointer-events-*`, `object-*`,
   `caret-*`) lose to explicit props; `placeholder:text-*` / `selection:bg-*` lose to the `placeholderColor` /
   `selectionColor` style keys. Not supported, so unknown: `peer-*`, pseudo-elements, arbitrary CSS properties, and every
-  utility without a native meaning (`order-*`, `transform-3d`, `select-all`, `border-double`, intrinsic sizes,
-  `snap-*`, `scroll-*`, `overscroll-*`, `touch-*`, `isolate`, `box-content`) or without CSS in Tailwind (a negative
+  utility without a native meaning (`order-*`, `transform-3d`, `select-all`, `border-double`, intrinsic min/max constraints,
+  `snap-*`, `scroll-*`, `overscroll-*`, `touch-*`, `isolate`) or without CSS in Tailwind (a negative
   where Tailwind has none: `-gap-4`, `-p-2`; fractions and `full` on padding, margin and gaps; non-integer `z-*`; bare
   `inset-shadow` without a theme value). Rendering hints are accepted and do nothing (`ignored` in
   `tailwind/mod.rs`: `antialiased`, `will-change-*`'s values, ...). `space-x/y-*` (and `-reverse`) are margins on each
   element child but the last, as Tailwind's `:where(& > :not(:last-child))`: the parent's `ClassProps::space`, which
   the core applies to a child's style before its classes and inline style (`classes.rs` `space_of`), so the child's
-  own margins win; an insert or removal restyles only the children whose last-ness changed (`spacing_changed`).
+  own margins win. An important space utility is applied after normal child styles and before the child's important classes; an insert or removal restyles only the children whose last-ness changed (`spacing_changed`).
 - **`ch`**: `w-/min-w-/max-w-prose` are Tailwind's `65ch`, the advance of the node's font's `0` (`Decl::Ch`; the core
   measures it with the text engine, cached per font, `Core::zero_advance`): the font it inherits, or its own once its
   classes set one. Such classes depend on `deps::CH`; a font change around them restyles them (`mark_inheriting_text`),
-  and the ones styled in a batch are checked again as the commit starts, with the tree in place (`sync_ch`). Without a
+  including text nodes and reparented subtrees; the ones styled in a batch are checked again as the commit starts, with the tree in place (`sync_ch`). Without a
   tree (`ClassList::apply`), `1ch` is 8 points. An app's theme `container.prose` (points) replaces it.
 - **`perspective-*`** (and the typed `.perspective()`) is CSS's `perspective`: depth for the children, seen from the
   view's center (`Style::perspective`). The core composes `translate(-d) perspective() translate(d)` before the
@@ -82,21 +84,26 @@
   (`TransitionProps`: colors, opacity, transform, shadows, shape), and filters, backdrop filters, gradients and layout
   take their new values at once; `focus-visible:` is `focus:` (the state bits, a `u8`, have none left for a focus's
   origin, which only the desktops and the web report).
-- **`position`**: `static` is taffy's `relative` with its insets set to `auto` after they are placed (`Pending`, so in any
-  order); every view stays a containing block for absolute children, a static one too (taffy places absolute children in
-  their parent). `fixed` (`fixed`, `position: "fixed"`) makes a `View` one of the core's overlays of no anchor (`overlay.rs`
-  `fix_view`: a layout root in a box the size of its root view, its native view in that root view above its children,
-  shown while the views around it are, as `Kind::Overlay`'s): at once while it is in no parent, else as the commit starts
-  (`sync_fixed`), and a view in its parent again when its style drops it. Other elements are laid out `absolute`.
-  `sticky` (`sticky`, `position: "sticky"`) is laid out `relative` with its insets kept as where it sticks
-  (`Node::sticky`): after layout the core gives it a range of travel in the offsets of the nearest scroll view or own
-  list around it (from its place less its `top`, or `left` in a horizontal one, to where its end meets its parent's
-  content box) and sends it with that view's sticky list rows (`core/sticky.rs`, `MountItem::StickyCells`), which the
-  platforms pin on every scroll. It draws above its siblings of the same `zIndex` (`Node::stack_rank`), as above a
-  page's in-flow boxes. An animated `top` (`left`) is where it sticks, followed every frame: the core keeps it out of
-  the view's bindings (`AnimationProp::StickyTop` / `StickyLeft`, warned once on a view that is not sticky) and sends
-  it as the range's `StickyCell::offset`, which the platforms add as they pin, as for a list's animated
-  `stickyHeaderOffset`. `bottom` / `right` stickiness and a zoomable scroll view are not supported.
+- **Layout values**: `box-content` / `box-border` select Taffy's content-box / border-box sizing. Width and
+  height accept `min-content`, `max-content` and `fit-content` (`w/h/size-min/max/fit`); min-content text measures
+  each Unicode line-breaking segment with the platform text engine and caches the widest one. `flow-root` uses
+  Taffy's flow-root display. Intrinsic min/max constraints remain unknown classes.
+- **`position`**: `static` uses Taffy's static positioning: it stays in flow, ignores insets and lets absolute
+  descendants use the nearest positioned ancestor. The core converts containing-block offsets to native-parent
+  coordinates. `fixed` retains the element's kind and uses Taffy's fixed positioning in a root-sized overlay wrapper
+  (`overlay.rs`, `sync_fixed`); its native view mounts in the surface or modal root and returns to its logical parent
+  when fixed positioning is removed.
+- **`position: "sticky"`** is laid out `relative` with its insets kept as where it sticks (`Node::sticky`): after
+  layout the core gives it a range of travel in the offsets of the nearest scroll view or own list around it (from its
+  place less its `top`, or `left` in a horizontal one, to where its end meets its parent's content box) and sends it
+  with that view's sticky list rows (`core/sticky.rs`, `MountItem::StickyCells`), which the platforms pin on every
+  scroll. It draws above its siblings of the same `zIndex` (`Node::stack_rank`), as above a page's in-flow boxes.
+  An animated `top` (`left`) is where it sticks, followed every frame: the core keeps it out of the view's bindings
+  (`AnimationProp::StickyTop` / `StickyLeft`, warned once on a view that is not sticky) and sends it as the range's
+  `StickyCell::offset`, which the platforms add as they pin, as for a list's animated `stickyHeaderOffset`. `bottom` /
+  `right` stickiness and a zoomable scroll view are not supported. The `sticky` class sets it, as Tailwind's does.
+- **Line heights**: unitless values inherit as multipliers. Percentages and `em` resolve against the element's
+  font size before inheritance, so descendants inherit a computed length (`TextStyle::line_height_em`).
 - **`pointer-events-*` classes** inherit as CSS's `pointer-events` (the `pointerEvents` prop keeps React Native's
   subtree meaning, and wins): a view that is `none` by its own class or the nearest one above mounts `box-none` when a
   `pointer-events-auto` inside it is a target, `none` at the top of what it blocks, and nothing below that
@@ -171,7 +178,7 @@
   Known limits: iOS has no CSS filters on views (only `opacity`, `brightness` ≤ 1 and `drop-shadow`; images take every color filter
   and `blur`, applied while decoding); iOS texts draw no gradients or inset shadows; Android has no backdrop blur, `blur` or
   `drop-shadow` before API 31; Linux and GPUI draw no backdrop filter, GPUI no `blur()` or `mixBlendMode`; iOS, macOS and Android draw one `drop-shadow()`,
-  the last of the chain (a Tailwind shadow's widest layer; the web, Linux, Windows and GPUI draw every layer a class or
+  the widest of the chain's (the last of equals; the web, Linux, Windows and GPUI draw every layer a class or
   style gives); a text shadow is one layer everywhere (`text-shadow-*` keep the theme's widest).
 - **View styles**: `backgroundColor`, `borderWidth` / `borderColor` (also per side: `borderTopWidth`, `borderLeftColor`, ...),
   `borderStyle` (`solid` / `dashed` / `dotted`; `none` / `hidden` zero the used widths in layout and paint whatever

@@ -164,6 +164,9 @@ pub struct Environment {
     /// The shaders the platform runs, and their language
     /// (`shaderSupport()`).
     pub shaders: crate::shader::ShaderSupport,
+    /// The app embedding NSH answers `nsh/host`'s calls
+    /// ([`crate::Command::HostCall`]); without it, they reject at once.
+    pub host: bool,
 }
 
 impl Environment {
@@ -195,6 +198,7 @@ impl Default for Environment {
             apple_keyboard: false,
             locale: Locale::EN_US,
             shaders: crate::shader::ShaderSupport::default(),
+            host: false,
         }
     }
 }

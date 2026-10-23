@@ -1,8 +1,8 @@
 // A case of the API's test suite (docs/dev/compatibility.md): views with
-// `position: sticky` (the `sticky` class and the style, its `top` a
-// length or an animated value), laid out in the flow and sticking in the
-// viewport of the scroll view around them. Its script checks where they
-// are laid out and the travel the scroll view gets.
+// `position: "sticky"` (its `top` a length or an animated value), laid
+// out in the flow and sticking in the viewport of the scroll view around
+// them. Its script checks where they are laid out and the travel the
+// scroll view gets.
 import { Scroll, Text, View } from "nsh";
 import { createAnimatedValue } from "nsh/animated";
 
@@ -10,11 +10,11 @@ function App() {
   const bar = createAnimatedValue(20);
   return (
     <View style={{ flex: 1 }}>
-      <Scroll testID="sticky-class-page" style={{ height: 300 }}>
+      <Scroll testID="sticky-bar-page" style={{ height: 300 }}>
         <View style={{ height: 100 }}>
-          <Text>Class page header</Text>
+          <Text>Bar page header</Text>
         </View>
-        <View testID="sticky-bar" class="sticky top-2" style={{ height: 40 }}>
+        <View testID="sticky-bar" style={{ position: "sticky", top: 16, height: 40 }}>
           <Text>Sticky bar</Text>
         </View>
         <View style={{ height: 1000 }} />

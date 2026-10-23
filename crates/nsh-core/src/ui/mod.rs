@@ -59,6 +59,7 @@ pub mod reactive;
 pub(crate) mod renderer;
 mod resource;
 pub(crate) mod responder;
+mod rows;
 mod scrollable;
 pub(crate) mod services;
 pub(crate) mod status_bar;
@@ -108,7 +109,8 @@ pub(crate) use self::{
 pub use self::{
     animated::{
         Animated, AnimatedNode, AnimatedValue, Animation, AnimationEnd, AnimationOperand,
-        DiffClamp, Interpolation, Spring, Timing, sample_decay, sample_decay_within, sample_spring,
+        DiffClamp, Interpolation, Motion, Spring, Timing, sample_decay, sample_decay_within,
+        sample_spring,
     },
     asset::{AssetFile, AssetKind, FileAsset, FontAsset, ImageAsset, ImageSrc},
     call::{
@@ -137,8 +139,8 @@ pub use self::{
     engine_context::{EngineContext, EngineContextGuard, engine_context},
     env::Environment,
     events::{
-        Composition, FileDropEvent, GestureEvent, ImageProgress, NativeEvent, OverlayPosition,
-        PanEvent, ScrollEvent, Selection, VideoInfo, VideoProgress, WebNavigation,
+        CaretEvent, Composition, FileDropEvent, GestureEvent, ImageProgress, NativeEvent,
+        OverlayPosition, PanEvent, ScrollEvent, Selection, VideoInfo, VideoProgress, WebNavigation,
     },
     flow::{Each, If, IntoElements, Reset, catch_error, dynamic, each, when},
     host::{
@@ -163,6 +165,7 @@ pub use self::{
     renderer::{__decoding_props_of, RenderValue, Rendered, Renderer},
     resource::{Resource, ResourceInfo, ResourceState, resource, resource_with_value},
     responder::{ClaimRequest, PanGesture, ResponderEvent, TouchClaim},
+    rows::Rows,
     scrollable::Scrollable,
     services::{Fetch, HttpResponse, Prefetch, ToastDuration},
     style::{
@@ -187,13 +190,18 @@ pub use crate::geometry::{
 pub use crate::{
     AccessibilityRole, AccessibilityState, AutoCapitalize, AutoFill, BackdropMaterial, BlendMode,
     BoxShadow, ContextMenuEvent, Cursor, Dialog, DialogButton, DialogButtonStyle, EdgeInsets,
-    EllipsizeMode, EventKind, EventPayload, HoverEvent, KeyboardAppearance, KeyboardDismissMode,
-    KeyboardTaps, KeyboardType, KeyframeAnimation, Keyframes, LayoutAnimation, LayoutCurve,
-    LayoutProperty, LayoutTransition, ListViewport, Measurement, ModalAnimation, ModalPresentation,
-    PanActivation, PointerEvents, PressEvent, ResizeMode, ReturnKeyType, ScreenAnimation,
-    SnapAlignment, StatusBarConfig, StatusBarSetting, StatusBarStyle, SubmitBehavior, TouchEvent,
-    TransformKind, TransformOrigin, Viewability,
-    animation::{Curve, EaseMode, Easing, Extrapolate, Output as AnimationOutput, sample_easing},
+    EllipsizeMode, EventKind, EventPayload, HeaderSystemItem, HoverEvent, KeyboardAppearance,
+    KeyboardDismissMode, KeyboardTaps, KeyboardType, KeyframeAnimation, Keyframes, LayoutAnimation,
+    LayoutCurve, LayoutProperty, LayoutTransition, ListViewport, Measurement, ModalAnimation,
+    ModalPresentation, PanActivation, PasteBehavior, PasteEvent, PastedFile, PointerEvents,
+    PressEvent, ResizeMode, ReturnKeyType, ScreenAnimation, SnapAlignment, StatusBarConfig,
+    StatusBarSetting, StatusBarStyle, SubmitBehavior, TouchEvent, TransformKind, TransformOrigin,
+    Viewability,
+    animation::{
+        Curve, EaseMode, Easing, Extrapolate, Keyframe, KeyframeTiming, MotionChannel, MotionKind,
+        MotionPreset, MotionSpec, Output as AnimationOutput, PlaybackDirection, StaggerFrom,
+        StepPosition, sample_easing,
+    },
     color::{
         ColorParseError, Hsla, Rgba, black, blue, green, hsl, hsla, opaque_grey, red, rgb, rgba,
         transparent_black, transparent_white, white, yellow,
@@ -233,6 +241,7 @@ pub mod prelude {
         CallCx,
         Callback,
         CanvasView,
+        CaretEvent,
         Child,
         Children,
         ClaimRequest,
@@ -291,7 +300,9 @@ pub mod prelude {
         KeyboardDismissMode,
         KeyboardTaps,
         KeyboardType,
+        Keyframe,
         KeyframeAnimation,
+        KeyframeTiming,
         Keyframes,
         Later,
         LayoutDirection,
@@ -306,6 +317,10 @@ pub mod prelude {
         ModalAnimation,
         ModalPresentation,
         ModuleCx,
+        Motion,
+        MotionChannel,
+        MotionPreset,
+        MotionSpec,
         NativeEvent,
         NativeView,
         NoEvent,
@@ -317,8 +332,12 @@ pub mod prelude {
         PanEvent,
         PanGesture,
         ParentElement,
+        PasteBehavior,
+        PasteEvent,
+        PastedFile,
         Percentage,
         Placement,
+        PlaybackDirection,
         Point,
         PointerEvents,
         Points,
@@ -352,8 +371,10 @@ pub mod prelude {
         SnapAlignment,
         Spring,
         Stack,
+        StaggerFrom,
         StatusBarSetting,
         StatusBarStyle,
+        StepPosition,
         Styled,
         SubmitBehavior,
         System,
@@ -425,11 +446,11 @@ pub mod prelude {
             clipboard_files, clipboard_has_image, clipboard_has_string, clipboard_image,
             clipboard_string, color, component_ref, dark, dismiss_keyboard, element_ref, fetch,
             font_scale, global, idiom, image_size, is_desktop, key_label, keyboard_duration,
-            keyboard_height, locale, measure_text, next_frame, on_back_press, on_key, on_key_with,
-            os, os_version, pixel_ratio, prefetch_image, reduce_motion, request_animation_frame,
-            round_to_nearest_pixel, safe_area, screen_reader, set_clipboard, set_clipboard_image,
-            set_color_scheme, set_interval, set_timeout, spawn, timer, timer_until, toast, tokens,
-            window,
+            keyboard_height, locale, measure_text, motion, next_frame, on_back_press, on_key,
+            on_key_with, open_url, os, os_version, pick_images, pixel_ratio, prefetch_image,
+            reduce_motion, request_animation_frame, round_to_nearest_pixel, safe_area,
+            screen_reader, set_clipboard, set_clipboard_image, set_color_scheme, set_interval,
+            set_timeout, spawn, text_metrics, timer, timer_until, toast, tokens, window,
         },
         batch, catch_error, cleanup, component, computed, dynamic, each, effect, engine_context,
         provide_context, resource, resource_with_value, signal, signal_with, stored, untracked,

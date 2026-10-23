@@ -513,6 +513,37 @@ impl Mounter {
         for (_, area) in &self.areas {
             area.batch_applied();
         }
+        self.focused_caret_moved();
+    }
+
+    /// Reports the focused input's caret if the batch moved it (the input
+    /// was laid out again: its text wraps elsewhere).
+    fn focused_caret_moved(&self) {
+        let Some(id) = self.focused else { return };
+        let Some(Slot {
+            native: Native::Input(input),
+            events,
+            ..
+        }) = self.slot(id)
+        else {
+            return;
+        };
+        if !events.contains(EventKind::CaretMove) {
+            return;
+        }
+        let view = input.editor_view();
+        view.layoutIfNeeded();
+        let Some(caret) = crate::input::caret(view) else {
+            return;
+        };
+        if crate::input::caret_changed(view, caret) {
+            self.input_event(id, EventKind::CaretMove, EventPayload::caret(caret));
+        }
+    }
+
+    /// The surface's event target.
+    pub(crate) fn target(&self) -> &Retained<EventTarget> {
+        &self.target
     }
 
     /// Node `id`'s view (`nsh test --target ios`).
@@ -537,6 +568,22 @@ impl Mounter {
             Native::Input(input) => Some(input.text()),
             _ => None,
         }
+    }
+
+    /// VoiceOver's escape gesture (or the test agent's `back`) reached the
+    /// surface: while the app listens to going back (an overlay's
+    /// `onCancel`, a back listener), the core hears it as the back button
+    /// (the top overlay listening first). Whether it was taken.
+    pub(crate) fn escape(&self) -> bool {
+        if !self
+            .slot(nsh_core::ROOT_ID)
+            .is_some_and(|s| s.events.contains(EventKind::BackPress))
+        {
+            return false;
+        }
+        self.control
+            .dispatch_event(nsh_core::ROOT_ID, EventKind::BackPress, EventPayload::None);
+        true
     }
 
     /// Whether a native animation runs.
@@ -1215,7 +1262,7 @@ impl Mounter {
             }
             MountItem::Command { id, command } => self.command(id, command),
             // Hardware keyboards' shortcuts are not matched yet.
-            MountItem::Keymap(_) => {}
+            MountItem::Keymap(keymap) => self.target.keymap().set(keymap),
         }
         false
     }
@@ -1286,6 +1333,15 @@ impl Mounter {
             (Command::Dialog(dialog), native) if id == nsh_core::ROOT_ID => {
                 crate::system::show_dialog(&dialog, native.view(), &self.control);
             }
+            (
+                Command::PickImages {
+                    id: request,
+                    request: asked,
+                },
+                native,
+            ) if id == nsh_core::ROOT_ID => {
+                crate::picker::pick_images(request, asked, native.view(), &self.control);
+            }
             (Command::SetJsResponder { block }, _) => self.set_js_responder(id, block),
             (Command::SetSelection { start, end }, Native::Input(input)) => {
                 input.select(start, end)
@@ -1296,6 +1352,7 @@ impl Mounter {
             (Command::Announce(text), _) => crate::system::announce(&text),
             (Command::ImageInfo { id, uri }, _) => self.images.info(id, &uri),
             (Command::SetClipboard(text), _) => crate::system::set_clipboard(&text),
+            (Command::OpenUrl { id, url }, _) => crate::system::open_url(id, &url, &self.control),
             (Command::ReadClipboard { id, has_only }, _) => {
                 let (has, text) = crate::system::read_clipboard(has_only);
                 let mut fields = vec![
@@ -2635,11 +2692,17 @@ impl Mounter {
     }
 
     /// What the image loader reports.
+    /// The disk cache the images it loads go through.
+    pub(crate) fn set_image_cache(&mut self, cache: Option<nsh_core::image::DiskCache>) {
+        self.images.set_disk_cache(cache);
+    }
+
     pub(crate) fn load_event(&mut self, event: crate::image::LoadEvent) {
         use crate::image::LoadEvent;
         match event {
             LoadEvent::Decoded { key, result } => self.image_loaded(&key, result),
             LoadEvent::Bytes { uri, result } => self.images.bytes_ready(&uri, result),
+            LoadEvent::Download { uri, headers } => self.images.download(&uri, &headers),
             LoadEvent::Progress { uri, loaded, total } => {
                 for id in self.images.waiting(&uri) {
                     let Some(s) = self.slot(id) else { continue };
@@ -2792,6 +2855,9 @@ impl Mounter {
             return;
         };
         slot.events = events;
+        if let Native::Input(input) = &mut slot.native {
+            input.set_paste_listens(events.contains(EventKind::Paste));
+        }
         let v = slot.values;
         let any = |kinds: &[EventKind]| kinds.iter().any(|&k| events.contains(k));
         let handles_press = any(&[
@@ -2881,6 +2947,11 @@ impl Mounter {
                     Some(sel!(handleContextMenu:)),
                 );
                 let _: () = objc2::msg_send![&r, setButtonMaskRequired: 1isize << 1];
+                // A finger has no buttons, so the mask does not hold it:
+                // a tap would open the menu and cancel the presses inside.
+                // Only a mouse or a trackpad (UITouchTypeIndirectPointer).
+                let pointer = objc2_foundation::NSNumber::new_isize(3);
+                r.setAllowedTouchTypes(&objc2_foundation::NSArray::from_retained_slice(&[pointer]));
                 r
             }
         });
@@ -3071,10 +3142,14 @@ impl Mounter {
             else {
                 continue;
             };
-            screen.apply_header(|item| match self.slot(item).map(|s| &s.native) {
-                Some(Native::HeaderItem(v)) => Some(Retained::into_super(v.clone())),
-                _ => None,
-            });
+            let press = Some(self.shared.clone());
+            screen.apply_header(
+                |item| match self.slot(item).map(|s| &s.native) {
+                    Some(Native::HeaderItem(v)) => Some(Retained::into_super(v.clone())),
+                    _ => None,
+                },
+                press,
+            );
             if screen.config.large_title {
                 // Large titles collapse as the content scrolls under them.
                 if let Some(scroll) = first_scroll_view(&screen.view) {
@@ -3356,6 +3431,45 @@ impl Mounter {
         };
         if s.events.contains(event) {
             self.control.dispatch_event(id, event, EventPayload::None);
+        }
+    }
+
+    /// Presses the element the app put in the trailing header slot, as a tap
+    /// on a system bar button does: the first view inside the slot that
+    /// takes a press (the one made first), resolved now (the slot's content
+    /// arrives after the button is made). A slot with none takes no press.
+    pub(crate) fn press_trailing_header(&mut self, screen: NodeId) {
+        let Some(Slot {
+            native: Native::Screen(host),
+            ..
+        }) = self.slot(screen)
+        else {
+            return;
+        };
+        let Some(slot_node) = host.config.right else {
+            return;
+        };
+        let Some(container) = self.slot(slot_node).map(|s| s.native.view().retain()) else {
+            return;
+        };
+        let mut found = None;
+        for (index, slot) in self.views.iter().enumerate() {
+            let Some(slot) = slot else { continue };
+            if !slot.events.contains(EventKind::Press) {
+                continue;
+            }
+            let id = index as NodeId;
+            if let Some(view) = self.slot(id).map(|s| s.native.view().retain())
+                && view != container
+                && view.isDescendantOfView(&container)
+            {
+                found = Some(id);
+                break;
+            }
+        }
+        if let Some(node) = found {
+            self.control
+                .dispatch_event(node, EventKind::Press, EventPayload::None);
         }
     }
 
@@ -3732,13 +3846,8 @@ impl Mounter {
             }
         }
         // Sticky cells that stick an animated value further in follow it.
-        let animated_sticky = |cells: &Vec<StickyCell>| cells.iter().any(|c| c.offset.is_some());
-        if self.sticky.values().any(animated_sticky) {
-            let lists: Vec<NodeId> = (self.sticky.iter())
-                .filter(|(_, cells)| animated_sticky(cells))
-                .map(|(&id, _)| id)
-                .collect();
-            for id in lists {
+        for (&id, cells) in &self.sticky {
+            if cells.iter().any(|c| c.offset.is_some()) {
                 self.pin_sticky(id);
             }
         }
