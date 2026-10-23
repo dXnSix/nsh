@@ -1524,9 +1524,21 @@ fn render_binds(
     cells: &mut Vec<u32>,
     row_height: f32,
 ) -> usize {
+    render_list_binds(c, next_id, cells, row_height, usize::MAX)
+}
+
+/// [`render_binds`] with at most `paced` of the overscan's waiting binds,
+/// as an engine short of time.
+fn render_list_binds(
+    c: &mut Core<FakeEngine>,
+    next_id: &mut u32,
+    cells: &mut Vec<u32>,
+    row_height: f32,
+    paced: usize,
+) -> usize {
     let mut binds = Vec::new();
     c.take_list_binds(&mut binds);
-    c.take_paced_list_binds(usize::MAX, &mut binds);
+    c.take_paced_list_binds(paced, &mut binds);
     let mut count = 0;
     for bind in binds {
         for (slot, index) in bind.binds {
@@ -1913,6 +1925,75 @@ fn list_cells_unbound_before_they_are_placed_are_hidden() {
             assert_eq!(frame_of(&batch, cell), None, "cell {cell} was never placed");
         }
     }
+}
+
+#[test]
+fn spare_list_cells_waiting_for_a_paced_bind_show_when_it_lands() {
+    let mut c = core();
+    thousand_rows(&mut c);
+    c.commit();
+    let (mut next_id, mut cells) = (100, Vec::new());
+    assert_eq!(render_binds(&mut c, &mut next_id, &mut cells, 50.0), 17);
+    c.commit();
+    // Shrunk to 3 rows, the other 14 cells are hidden; grown back, the
+    // viewport's rows bind at once and the overscan's wait.
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: 2,
+            prop: Prop::Count(3),
+        }],
+    );
+    c.commit();
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: 2,
+            prop: Prop::Count(1000),
+        }],
+    );
+    c.commit();
+    assert_eq!(
+        render_list_binds(&mut c, &mut next_id, &mut cells, 50.0, 0),
+        5
+    );
+    assert!(c.has_paced_list_binds());
+    let batch = c.commit().unwrap();
+    let mut waiting = Vec::new();
+    for &cell in &cells[3..] {
+        match hidden_in(&batch, cell) {
+            (Some(false), Some(false)) => {
+                assert!(frame_of(&batch, cell).is_some(), "cell {cell}")
+            }
+            // Still hidden, out of sight, until its bind lands.
+            (None, None) => {
+                assert_eq!(frame_of(&batch, cell), None, "cell {cell}");
+                waiting.push(cell);
+            }
+            other => panic!("cell {cell}: {other:?}"),
+        }
+    }
+    assert_eq!(waiting.len(), 9);
+    // The paced binds land: those cells show, at their rows.
+    assert_eq!(render_binds(&mut c, &mut next_id, &mut cells, 50.0), 9);
+    assert!(!c.has_paced_list_binds());
+    let batch = c.commit().unwrap();
+    let mut rows: Vec<f32> = waiting
+        .iter()
+        .map(|&cell| {
+            assert_eq!(
+                hidden_in(&batch, cell),
+                (Some(false), Some(false)),
+                "cell {cell}"
+            );
+            frame_of(&batch, cell).expect("placed").origin.y.0
+        })
+        .collect();
+    rows.sort_by(f32::total_cmp);
+    assert_eq!(
+        rows,
+        (8..17).map(|row| 50.0 * row as f32).collect::<Vec<_>>()
+    );
 }
 
 /// A list of 100 rows estimated at 50 pt in a 400 pt viewport.
