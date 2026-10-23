@@ -288,3 +288,49 @@ test('a scroll a command stops ends once, with or without moving', (t) => {
     assert.equal(el._driven, 0);
   }
 });
+
+test('fractional scroll commands end once at the browser destination', (t) => {
+  t.mock.method(performance, 'now', () => clock);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const animated of [false, true]) {
+    for (const destination of [40, 40.5]) {
+      const { p, el } = scroller();
+      const ends = [];
+      el._events.add('onScrollEnd');
+      p.event = (id, name, e) => ends.push(e.y);
+      p.wheel(wheel(el, 20));
+      p.wheel(wheel(el, 20));
+      // Model a browser that rounds to physical pixels, including a
+      // destination that rounds back to the current position.
+      el.scrollTo = () => { el.scrollTop = destination; };
+      p.op_cmd(['cmd', 1, 'scrollTo', 0, 40.4, animated]);
+      assert.deepEqual(ends, []);
+      if (destination !== 40) p.scrollEnded(el);
+      t.mock.timers.tick(200);
+      assert.deepEqual(ends, [destination]);
+      if (destination === 40) {
+        p.scrollEnded(el);
+        assert.deepEqual(ends, [destination]);
+      }
+    }
+  }
+});
+
+test('the command end fallback waits while a smooth scroll moves', (t) => {
+  t.mock.method(performance, 'now', () => clock);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { p, el } = scroller();
+  const ends = [];
+  el._events.add('onScrollEnd');
+  p.event = (id, name, e) => ends.push(e.y);
+  p.call = () => {};
+  p.wheel(wheel(el, 20));
+  p.op_cmd(['cmd', 1, 'scrollTo', 0, 400, true]);
+  t.mock.timers.tick(150);
+  p.scrolled(el);
+  t.mock.timers.tick(150);
+  assert.deepEqual(ends, []);
+  p.scrollEnded(el);
+  t.mock.timers.tick(200);
+  assert.deepEqual(ends, [400]);
+});

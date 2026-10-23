@@ -436,6 +436,10 @@ Things that were found the hard way. Read the section of the area you change bef
   where the view already is, instant or smooth, sends neither `scroll` nor `scrollend` (Chromium 152): `stopGlide`
   sends the `onScrollEnd` of the scroll it stops then. Headless Chrome (141, 155) scrolls a wheel's delta at once by
   itself: the scroll that animates there is the glide.
+- **Fractional scroll targets can move less than half a CSS pixel**: at DPR 2, Chromium rounds a target of 40.4
+  to 40.5. A half-pixel stationary tolerance therefore ends the scroll early and duplicates `onScrollEnd`.
+  `stopGlide` compares clamped offsets exactly; a quiet-period fallback covers targets rounded back to the
+  current offset, for which the browser emits no `scrollend`.
 
 ## Testing on simulators and emulators
 

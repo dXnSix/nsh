@@ -581,6 +581,9 @@ pointer, touch or key takes it over. The glides of the wheel and the keys are ns
 frames), and each frame writes the glide's offset: a `ScrollBy` moves the glide with the content, and `scrollTo` /
 `scrollToEnd` stop it where it is (`stopGlide`) before they scroll, as the native backends interrupt theirs. The
 scroll they stop ends with theirs (the browser's `scrollend`), or at once when they leave the view where it is.
+The stationary check uses exact clamped offsets: fractional movement can reach another physical pixel. If a
+fractional target instead rounds back to the current offset, a 200 ms quiet-period fallback ends the scroll;
+scroll events postpone it, and the browser's `scrollend` cancels it.
 
 ## Platform services
 

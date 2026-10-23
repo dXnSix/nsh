@@ -2292,6 +2292,7 @@ class Player {
   }
 
   scrolled(el) {
+    if (el._commandEnd) this.waitCommandEnd(el);
     if (this.desktopUI) this.showBar(el);
     // Still moving after the finger left (touch scrolling is the
     // browser's): a glide.
@@ -2306,6 +2307,8 @@ class Player {
   /** The browser's scrolling stopped: the end, unless the scroll is driven
    * here (`drive`) or a finger still holds it. */
   scrollEnded(el) {
+    clearTimeout(el._commandEnd);
+    el._commandEnd = 0;
     el._smooth = null;
     if (el._driven || el._touchDrag) return;
     // The browser's end of a scroll that ended here (`ownEnd`).
@@ -4653,10 +4656,25 @@ class Player {
     el._glide = null;
     this.drive(el, -1);
     // Browsers clamp the offsets of scrolls.
-    const stays = (to, at, max) => Math.abs(Math.min(Math.max(to, 0), max) - at) < 0.5;
+    const stays = (to, at, max) => Math.min(Math.max(to, 0), max) === at;
     if (stays(x, el.scrollLeft, el.scrollWidth - el.clientWidth) && stays(y, el.scrollTop, el.scrollHeight - el.clientHeight)) {
       this.ownEnd(el);
+    } else {
+      // A fractional destination may round back to the current offset,
+      // in which case the browser sends no scrollend. Moving commands
+      // keep this fallback waiting through their scroll events.
+      this.waitCommandEnd(el);
     }
+  }
+
+  /** Ends a command rounded to the current offset when no browser event
+   * follows; scroll events keep a moving command's fallback waiting. */
+  waitCommandEnd(el) {
+    clearTimeout(el._commandEnd);
+    el._commandEnd = setTimeout(() => {
+      this.scrollEnded(el);
+      el._ownEnd = [el.scrollLeft, el.scrollTop];
+    }, 200);
   }
 
   /** The snap point of a snapping view next to where it is towards `dir`
