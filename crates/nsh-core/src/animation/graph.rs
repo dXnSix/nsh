@@ -96,10 +96,17 @@ enum Node {
 struct Snap {
     from: f32,
     to: f32,
-    /// The input it settled at: moving it again ends the settling.
+    /// The scroll value that came to rest, and where: scrolling it again
+    /// ends the settling.
+    source: NodeId,
+    at: f32,
+    /// Its input at the last evaluation: a snapping `diffClamp` it reads
+    /// settles too and moves it meanwhile.
     input: f32,
     /// The first frame's time.
     start: Option<f64>,
+    /// It arrived: the next evaluation takes in where its input went.
+    done: bool,
 }
 
 /// Nodes deeper than this are treated as cycles (JS bug) and evaluate to 0.
@@ -652,44 +659,61 @@ impl Graph {
     /// bar's height shows the whole bar). True if one starts settling.
     pub fn settle(&mut self, source: NodeId) -> bool {
         let mut started = false;
-        for i in 0..self.nodes.len() {
-            let Some(Node::DiffClamp {
-                input,
-                min,
-                max,
-                snap: true,
-                ..
-            }) = &self.nodes[i]
-            else {
-                continue;
-            };
-            let (input, min, max) = (*input, *min, *max);
-            if !self.depends(input, source, 0) {
-                continue;
+        let at = self.eval(source).number();
+        // Register moving nodes first, independent of their ids. Bound
+        // dependents then hold their output while those inputs settle.
+        for hold_bounds in [false, true] {
+            if hold_bounds && !started {
+                break;
             }
-            // Brings its output up to the input.
-            let out = self.eval(i as NodeId).number();
-            let x = self.eval(input).number();
-            if out <= min || out >= max {
-                continue;
+            for i in 0..self.nodes.len() {
+                let Some(Node::DiffClamp {
+                    input,
+                    min,
+                    max,
+                    snap: true,
+                    ..
+                }) = &self.nodes[i]
+                else {
+                    continue;
+                };
+                let (input, min, max) = (*input, *min, *max);
+                if !self.depends(input, source, 0) {
+                    continue;
+                }
+                // Brings its output up to the input.
+                let out = self.eval(i as NodeId).number();
+                let x = self.eval(input).number();
+                let bounded = out <= min || out >= max;
+                if bounded != hold_bounds {
+                    continue;
+                }
+                if hold_bounds && !self.snaps.iter().any(|&node| self.depends(input, node, 0)) {
+                    continue;
+                }
+                let to = if hold_bounds {
+                    out
+                } else if out - min >= (max - min) / 2.0 && x >= max {
+                    max
+                } else {
+                    min
+                };
+                if let Some(Node::DiffClamp { snapping, .. }) = &self.nodes[i] {
+                    snapping.set(Some(Snap {
+                        from: out,
+                        to,
+                        source,
+                        at,
+                        input: x,
+                        start: None,
+                        done: false,
+                    }));
+                }
+                if !self.snaps.contains(&(i as NodeId)) {
+                    self.snaps.push(i as NodeId);
+                }
+                started = true;
             }
-            let to = if out - min >= (max - min) / 2.0 && x >= max {
-                max
-            } else {
-                min
-            };
-            if let Some(Node::DiffClamp { snapping, .. }) = &self.nodes[i] {
-                snapping.set(Some(Snap {
-                    from: out,
-                    to,
-                    input: x,
-                    start: None,
-                }));
-            }
-            if !self.snaps.contains(&(i as NodeId)) {
-                self.snaps.push(i as NodeId);
-            }
-            started = true;
         }
         started
     }
@@ -725,7 +749,7 @@ impl Graph {
             else {
                 return false;
             };
-            // Gone: its input moved again.
+            // Gone: its scroll view scrolled again.
             let Some(mut snap) = snapping.get() else {
                 return false;
             };
@@ -734,13 +758,9 @@ impl Graph {
             let out = snap.from + (snap.to - snap.from) * ease(Easing::EaseOut, p);
             state.set(Some((snap.input, out)));
             changed = true;
-            if p >= 1.0 {
-                snapping.set(None);
-                false
-            } else {
-                snapping.set(Some(snap));
-                true
-            }
+            snap.done = p >= 1.0;
+            snapping.set(Some(snap));
+            !snap.done
         });
         changed
     }
@@ -880,10 +900,20 @@ impl Graph {
                 ..
             })) => {
                 let x = self.eval_depth(*input, depth + 1).number();
-                if snapping.get().is_some_and(|s| s.input != x) {
-                    // Scrolled again: it follows the input from where the
-                    // settling left it.
-                    snapping.set(None);
+                if let Some(mut snap) = snapping.get() {
+                    if self.eval_depth(snap.source, depth + 1).number() != snap.at {
+                        // Scrolled again: it follows the input from where
+                        // the settling left it.
+                        snapping.set(None);
+                    } else {
+                        // Its input moved with a snapping `diffClamp` it
+                        // reads, which settles too: it settles on.
+                        if let Some((_, out)) = state.get() {
+                            state.set(Some((x, out)));
+                        }
+                        snap.input = x;
+                        snapping.set((!snap.done).then_some(snap));
+                    }
                 }
                 let out = match state.get() {
                     None => x.clamp(*min, *max),
@@ -1489,6 +1519,101 @@ mod tests {
         g.tick(1.15, &mut f);
         assert!(!g.is_animating());
         assert_eq!(g.eval(2).number(), (at + 5.0).min(50.0));
+    }
+
+    #[test]
+    fn a_snapping_diff_clamp_of_a_snapping_one_settles_too() {
+        let mut g = Graph::default();
+        let mut f = Vec::new();
+        snapping(&mut g, &mut f);
+        // One of the first, in `0..=100`.
+        g.apply(
+            AnimationOp::CreateDiffClamp {
+                node: 3,
+                input: 2,
+                min: 0.0,
+                max: 100.0,
+                snap: true,
+            },
+            &mut f,
+        );
+        let at = |g: &Graph| (g.eval(2).number(), g.eval(3).number());
+        for o in [0.0, 200.0, 190.0] {
+            g.set(1, o, &mut f);
+            g.eval(3);
+        }
+        assert_eq!(at(&g), (40.0, 40.0));
+        // The first hides, past half; the second, short of half, shows.
+        assert!(g.settle(1));
+        g.tick(1.0, &mut f);
+        assert_eq!(at(&g), (40.0, 40.0));
+        g.tick(1.1, &mut f);
+        let (first, second) = at(&g);
+        assert!(first > 40.0 && first < 50.0, "{first}");
+        assert!(second > 0.0 && second < 40.0, "{second}");
+        g.tick(1.2, &mut f);
+        assert_eq!(at(&g), (50.0, 0.0));
+        assert!(!g.is_animating());
+        // Both follow the scrolling from there.
+        g.set(1, 180.0, &mut f);
+        assert_eq!(at(&g), (40.0, 0.0));
+        g.set(1, 185.0, &mut f);
+        assert_eq!(at(&g), (45.0, 5.0));
+
+        // The second stays at its lower bound while the first hides.
+        g.set(1, 180.0, &mut f);
+        assert_eq!(at(&g), (40.0, 0.0));
+        assert!(g.settle(1));
+        for now in [2.0, 2.1, 2.3] {
+            g.tick(now, &mut f);
+            assert_eq!(g.eval(3).number(), 0.0);
+        }
+        assert_eq!(at(&g), (50.0, 0.0));
+        assert!(!g.is_animating());
+        g.set(1, 170.0, &mut f);
+        assert_eq!(at(&g), (40.0, 0.0));
+        g.set(1, 175.0, &mut f);
+        assert_eq!(at(&g), (45.0, 5.0));
+    }
+
+    #[test]
+    fn a_bound_diff_clamp_holds_while_its_input_settles_regardless_of_node_order() {
+        for (first, second) in [(2, 3), (3, 2)] {
+            let mut g = Graph::default();
+            let mut f = Vec::new();
+            values(&mut g, &mut f, &[1]);
+            for (node, input, max) in [(first, 1, 50.0), (second, first, 10.0)] {
+                g.apply(
+                    AnimationOp::CreateDiffClamp {
+                        node,
+                        input,
+                        min: 0.0,
+                        max,
+                        snap: true,
+                    },
+                    &mut f,
+                );
+            }
+            for y in [0.0, 40.0] {
+                g.set(1, y, &mut f);
+                g.eval(second);
+            }
+            assert_eq!(g.eval(second).number(), 10.0);
+            assert!(g.settle(1));
+            for now in [1.0, 1.1, 1.3] {
+                g.tick(now, &mut f);
+                assert_eq!(g.eval(second).number(), 10.0);
+            }
+            assert_eq!(g.eval(first).number(), 0.0);
+            assert!(!g.is_animating());
+            assert!(!g.settle(1));
+            g.set(1, 35.0, &mut f);
+            assert_eq!(g.eval(second).number(), 10.0);
+            g.set(1, 45.0, &mut f);
+            assert_eq!(g.eval(second).number(), 10.0);
+            g.set(1, 40.0, &mut f);
+            assert_eq!(g.eval(second).number(), 5.0);
+        }
     }
 
     #[test]
