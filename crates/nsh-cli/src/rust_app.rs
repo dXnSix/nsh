@@ -1285,17 +1285,15 @@ opt-level = 3
         )
     }
 
-    /// The profiles of the development web runtime (`web-dev`, for
-    /// [`WebKind::Dev`](crate::runtime::WebKind::Dev)) and of the debug
-    /// builds of the hosts. The development runtime is built again on every
-    /// change to the app's Rust code: incremental and without LTO, an edit
-    /// to an app crate rebuilds in well under a second where `web`'s fat
-    /// LTO over one codegen unit re-optimizes the whole module (0.3 s
-    /// against 7.8 s for `examples/rust-exports`).
+    /// The profile of the development web runtime (`web-dev`, for
+    /// [`WebKind::Dev`](crate::runtime::WebKind::Dev)), which is built again
+    /// on every change to the app's Rust code: incremental and without LTO,
+    /// so an edit to an app crate rebuilds in well under a second where
+    /// `web`'s fat LTO over one codegen unit re-optimizes the whole module.
     /// The app's crates are at `-O1` (what changes), the other crates for
-    /// size, QuickJS at `-O3` (it dominates runtime cost); the workspace's
-    /// `dev` profile already raises QuickJS and layout for the hosts. It panics as `web` does (`abort`), and without
-    /// debug assertions, so the page behaves as the published one.
+    /// size and QuickJS at `-O3` (it dominates the runtime's cost). It panics
+    /// as `web` does (`abort`) and has no debug assertions, so the page
+    /// behaves as the published one.
     fn web_dev_profile(&self) -> String {
         let mut profile = String::from(
             "
