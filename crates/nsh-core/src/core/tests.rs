@@ -11004,6 +11004,69 @@ mod views {
         assert_eq!(dark.background_color, Some(crate::Color(0x000000ff)));
     }
 
+    /// A screen whose trailing header button is UIKit's own.
+    #[derive(Default)]
+    struct SystemItemPage;
+
+    #[derive(Clone, PartialEq, Props)]
+    struct SystemItemPageProps {}
+
+    impl Component for SystemItemPage {
+        type Props = SystemItemPageProps;
+        type Event = NoEvent;
+
+        // The core's own stack and screen: `nsh_base`'s wrap them.
+        #[allow(deprecated)]
+        fn view(_: SystemItemPageProps, _: Scope<NoEvent>) -> impl IntoElement {
+            stack().flex_1().child(
+                screen()
+                    .header_right_system_item(crate::HeaderSystemItem::Add)
+                    .header_right(view().on_press(|_: &()| {}))
+                    .child(view().flex_1()),
+            )
+        }
+    }
+
+    /// The platform draws the trailing header button itself, by the name the
+    /// screen passes (`add` here); the `headerRight` view stays the press
+    /// target either way.
+    #[test]
+    fn a_system_header_button_reaches_the_screens_config() {
+        let mut c = core();
+        c.mount_root(&Root::new::<SystemItemPage>(|| SystemItemPageProps {}));
+        let config = c
+            .commit()
+            .unwrap()
+            .items
+            .iter()
+            .find_map(|i| match i {
+                MountItem::ScreenConfig { config, .. } => Some((**config).clone()),
+                _ => None,
+            })
+            .expect("a screen");
+        assert_eq!(config.right_system_item, Some(crate::HeaderSystemItem::Add));
+        assert!(config.right.is_some(), "the trailing slot is set");
+    }
+
+    /// Without the prop the header is built as before: no system button, so
+    /// the platform wraps the app's `headerRight` view instead.
+    #[test]
+    fn a_screen_without_the_prop_has_no_system_header_button() {
+        let mut c = core();
+        c.mount_root(&Root::new::<Page>(|| PageProps {}));
+        let config = c
+            .commit()
+            .unwrap()
+            .items
+            .iter()
+            .find_map(|i| match i {
+                MountItem::ScreenConfig { config, .. } => Some((**config).clone()),
+                _ => None,
+            })
+            .expect("a screen");
+        assert_eq!(config.right_system_item, None);
+    }
+
     /// A holder of its children as its view's root.
     #[derive(Default)]
     struct Tray;
@@ -13973,6 +14036,62 @@ fn anchored_overlays_go_beside_their_anchor_and_follow_it() {
     );
     let batch = c.commit().unwrap();
     assert_eq!(frame_of(&batch, 10), Some(rect(192.0, 54.0, 120.0, 60.0)));
+
+    // A box anchor (an input's caret): below its bottom.
+    apply(
+        &mut c,
+        vec![overlay_prop(
+            10,
+            crate::OverlayProp::Anchor(crate::overlay::OverlayAnchor::Bounds(rect(
+                200.0, 50.0, 1.0, 20.0,
+            ))),
+        )],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(frame_of(&batch, 10), Some(rect(192.0, 74.0, 120.0, 60.0)));
+}
+
+#[test]
+fn a_caret_is_located_in_the_root_view() {
+    use StyleValue::Number;
+    let mut c = core();
+    add(
+        &mut c,
+        2,
+        Tag::View,
+        ROOT_ID,
+        &[("paddingTop", Number(30.0)), ("paddingLeft", Number(12.0))],
+    );
+    add(
+        &mut c,
+        4,
+        Tag::Input,
+        2,
+        &[("width", Number(200.0)), ("height", Number(40.0))],
+    );
+    c.commit().unwrap();
+    let mut payload = EventPayload::caret(rect(25.0, 10.0, 1.0, 18.0));
+    c.locate_caret(4, &mut payload);
+    let EventPayload::Map(fields) = &payload else {
+        panic!("a map");
+    };
+    assert!(fields.contains(&("bounds", PayloadValue::Bounds(rect(25.0, 10.0, 1.0, 18.0)))));
+    assert!(fields.contains(&(
+        "pageBounds",
+        PayloadValue::Bounds(rect(37.0, 40.0, 1.0, 18.0))
+    )));
+
+    // A caret the platform could not place: empty, where the input is.
+    let mut payload = EventPayload::None;
+    c.locate_caret(4, &mut payload);
+    let EventPayload::Map(fields) = &payload else {
+        panic!("a map");
+    };
+    assert!(fields.contains(&("bounds", PayloadValue::Bounds(Bounds::default()))));
+    assert!(fields.contains(&(
+        "pageBounds",
+        PayloadValue::Bounds(rect(12.0, 30.0, 0.0, 0.0))
+    )));
 }
 
 fn touch_down(path: Vec<NodeId>) -> EventPayload {
@@ -16965,6 +17084,58 @@ fn sticky_views_stick_at_an_animated_top() {
         i,
         MountItem::AnimationBindings { id: 4, bindings } if !bindings.is_empty()
     )));
+}
+
+#[test]
+fn an_animated_inset_across_the_scroll_axis_is_ignored() {
+    let mut c = core();
+    let mut ops = vec![
+        Op::Animation(AnimationOp::CreateValue {
+            node: 2,
+            value: 40.0,
+        }),
+        Op::Create {
+            id: 2,
+            tag: Tag::Scroll,
+        },
+        style_op(2, &[("height", StyleValue::Number(400.0))]),
+    ];
+    ops.extend(child_view(3, 2, 100.0, &[]));
+    let mut style = Box::<Style>::default();
+    let mut patch = StylePatch::default();
+    patch
+        .set(&mut style, "position", StyleValue::Str("sticky"))
+        .unwrap();
+    patch
+        .set(&mut style, "height", StyleValue::Number(30.0))
+        .unwrap();
+    // `left` in a vertical scroll view: it sticks nowhere.
+    style.animated.push((AnimationProp::StickyLeft, 2));
+    ops.extend([
+        Op::Create {
+            id: 4,
+            tag: Tag::View,
+        },
+        Op::SetStyle {
+            id: 4,
+            style,
+            patch,
+        },
+        Op::Insert {
+            parent: 2,
+            child: 4,
+            before: None,
+        },
+    ]);
+    ops.extend(child_view(5, 2, 1000.0, &[]));
+    ops.push(Op::Insert {
+        parent: ROOT_ID,
+        child: 2,
+        before: None,
+    });
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    assert!(sticky_of(&batch, 2).is_none_or(|cells| cells.is_empty()));
 }
 
 #[test]

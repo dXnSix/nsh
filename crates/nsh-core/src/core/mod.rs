@@ -874,8 +874,8 @@ pub struct Core<M: TextEngine> {
     sticky_changed: bool,
     /// The warning about `bottom` / `right` sticky insets was logged.
     sticky_warned: bool,
-    /// The warning about animated insets of views that are not sticky was
-    /// logged.
+    /// The warning about animated insets of views that are not sticky, or
+    /// on the axis their scroll view does not scroll, was logged.
     inset_warned: bool,
     /// Live screens, modals and header items.
     roots: Vec<Key>,
@@ -3488,6 +3488,7 @@ impl<M: TextEngine> Core<M> {
                         ScreenProp::HeaderTransparent(v) => c.header_transparent = v,
                         ScreenProp::HeaderBackTitle(v) => c.back_title = v,
                         ScreenProp::HeaderBackVisible(v) => c.back_visible = v,
+                        ScreenProp::HeaderRightSystemItem(v) => c.right_system_item = v,
                         ScreenProp::PopOnSwipe(v) => c.gesture_enabled = v,
                         ScreenProp::PopOnBack(v) => c.prevent_back = !v,
                         ScreenProp::Animation(ScreenTransition::Preset(v)) => {
@@ -3685,6 +3686,10 @@ impl<M: TextEngine> Core<M> {
                     }
                     Prop::SubmitBehavior(behavior) => {
                         c.submit_behavior = behavior;
+                        false
+                    }
+                    Prop::PasteBehavior(behavior) => {
+                        c.paste_behavior = behavior;
                         false
                     }
                     Prop::AutoFocus(on) => {
