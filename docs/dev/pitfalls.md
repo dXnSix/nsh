@@ -88,11 +88,9 @@ Things that were found the hard way. Read the section of the area you change bef
   has applied (`EngineControl::scroll(.., applied)`), and the core adds the ones still pending; otherwise a stale offset
   moves the window (and fires `onLoadMore`) backwards.
 - **Unbound list cells still show their last item**: the core moves them out of sight (never with a NaN frame: cells that
-  were never placed are skipped; UIKit throws on NaN geometry). Out of sight is not out of reach: no backend takes a
-  view out of its accessibility tree for its frame (iOS `NshView::a11y_element`, macOS and Linux `access.rs` go by
-  the props; Windows only flags it `IsOffscreen`), and a browser keeps it in its accessibility tree, as a Tab stop
-  and for test-id lookups. The core also hides them (`Core::set_spare`: `visibility: hidden` and
-  `accessibilityElementsHidden`) until it places them again.
+  were never placed are skipped; UIKit throws on NaN geometry). Out of sight is not out of reach: the backends'
+  accessibility trees go by props, not frames, and a browser keeps such a cell in its accessibility tree, as a Tab
+  stop and for test-id lookups. The core hides them too (`Core::set_spare`) until it places them again.
 - **Tailwind variant order decides between variants**, not their order in the string: `odd:bg-a last:bg-b` gives an odd last row
   `bg-a` (Tailwind sorts `odd` after `last`), exactly as in CSS.
 
@@ -473,12 +471,6 @@ Things that were found the hard way. Read the section of the area you change bef
   to 40.5. A half-pixel stationary tolerance therefore ends the scroll early and duplicates `onScrollEnd`.
   `stopGlide` compares clamped offsets exactly; a quiet-period fallback covers targets rounded back to the
   current offset, for which the browser emits no `scrollend`.
-- **A view out of sight is still in the page for everything but the eye**: an element moved 1e6 px away, or
-  never framed (0×0 where absolute positioning leaves it), stays in Chromium's accessibility tree (a `button` with
-  its `aria-label`), is a Tab stop and matches `[data-testid=…]`; only `visibility: hidden`, `display: none`,
-  `aria-hidden` or `inert` take it out. Spare list cells reached screen readers that way (a page list jumping to
-  the top after its rows changed left 65 stale `button`s, Chromium 141); the core sends them `visibility: hidden`
-  and `accessibilityElementsHidden` (`aria-hidden`).
 
 ## Testing on simulators and emulators
 
