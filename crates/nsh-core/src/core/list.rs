@@ -30,15 +30,12 @@
 //! Row-local state travels with recycled cells, so
 //! apps keep it outside, keyed by id. Unbound cells keep their last content:
 //! the core moves those in the render window out of sight (never with a NaN
-//! frame; cells never placed are skipped) and hides them (`visibility:
-//! hidden` and `accessibilityElementsHidden`, so neither touches nor screen
-//! readers reach them) until they are placed again, as it hides the cells
-//! never placed and, once the items change, every unbound one. The few the
-//! window leaves behind while scrolling show their own rows where those
-//! are, and are soon reused. The header, footer and empty placeholder are
-//! cells with a role (`slot="header"`, ...) and are never recycled. Each
-//! cell is a Taffy root of its own (its width follows the list's cross
-//! axis), so scrolling relays out dirty cells only.
+//! frame; cells never placed are skipped) and hides them from touches and
+//! screen readers until they are placed again (`Core::set_spare`). The
+//! header, footer and empty placeholder are cells with a role
+//! (`slot="header"`, ...) and are never recycled. Each cell is a Taffy root
+//! of its own (its width follows the list's cross axis), so scrolling
+//! relays out dirty cells only.
 //!
 //! # Scroll commands
 //!

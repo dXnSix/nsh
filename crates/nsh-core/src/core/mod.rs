@@ -654,8 +654,8 @@ impl Node {
 
     /// The touch, accessibility and test properties as platforms take
     /// them: the `pointer-events-*` classes around it apply unless a prop
-    /// says otherwise, a `disabled` view is so for screen readers too (as
-    /// a Rust component's `disabled` and React Native's `Pressable`), and
+    /// says otherwise, a `disabled` view is so for screen readers too (as a
+    /// Rust component's `disabled` and React Native's `Pressable`), and
     /// screen readers skip a spare list cell.
     fn mounted_props(&self) -> Box<ViewProps> {
         let mut props = self.props.clone().unwrap_or_default();
@@ -6023,12 +6023,10 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
-    /// Hides list cell `key` (`spare`), which has no item but still shows
-    /// its last row, or shows it again as its list places it: not drawn,
-    /// not touchable (`visibility: hidden`) and out of the screen readers'
-    /// reach (`accessibilityElementsHidden`), as the platforms' own lists
-    /// hide the cells waiting for reuse. Sent now: the views' dirty flags
-    /// of this round were flushed before the lists' update.
+    /// Hides list cell `key`, which has no item but still shows its last
+    /// row (`visibility: hidden` and `accessibilityElementsHidden`), or
+    /// shows it again as its list places it. Sent at once: this round's
+    /// dirty flags were flushed before the lists' update.
     fn set_spare(&mut self, key: Key, spare: bool) {
         let node = &mut self.nodes[key as usize];
         if node.spare == spare {
@@ -6036,7 +6034,7 @@ impl<M: TextEngine> Core<M> {
         }
         node.spare = spare;
         if !node.created {
-            // Its new view gets both (`mount_state`).
+            // Its new view gets both (`ensure_created`).
             return;
         }
         let (id, props) = (node.id, node.mounted_props());
@@ -6284,19 +6282,15 @@ impl<M: TextEngine> Core<M> {
         // Cells left without an item, or not showing theirs yet (a paced
         // bind, or one the frame's rounds did not reach), still show their
         // last one. Those in the render window (the data changed, the list
-        // jumped) would show through: move them out of sight. Cells the
-        // window left behind while scrolling are out of sight already,
-        // showing their own rows where those are. Hidden too, from touches
-        // and screen readers ([`Core::set_spare`]), until they are placed
-        // again: those moved away, those never placed (nowhere near their
-        // rows) and, once the items changed (their rows may be gone), all
-        // of them. Hiding the few the window leaves behind would cost a
-        // batch a row while scrolling.
+        // jumped) would show through: move them out of sight. They, the ones
+        // never placed and, once the items changed, all of them are hidden
+        // until placed again ([`Core::set_spare`]); the few the window leaves
+        // behind while scrolling are out of sight already and soon reused.
         let (window_start, window_end) = list.render_window();
         // In its parent's viewport, the cells start inside the list's
         // border and padding.
         let inset = outer.map_or((0.0, 0.0), |o| o.inset);
-        let hidden: Vec<Key> = list
+        let unbound: Vec<Key> = list
             .slots
             .iter()
             .filter(|s| s.ready().is_none() && s.cell != u32::MAX)
@@ -6309,7 +6303,7 @@ impl<M: TextEngine> Core<M> {
                 .expect("list")
                 .items_changed,
         );
-        for cell in hidden {
+        for cell in unbound {
             let frame = self.nodes[cell as usize].frame;
             if frame.size.width.0.is_nan() {
                 // Never placed: nowhere to move it from.

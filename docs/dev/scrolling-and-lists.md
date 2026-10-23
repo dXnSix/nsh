@@ -44,13 +44,6 @@
   while the content stands still;
   the web, whose scroll events trail the browser's scrolling by a frame, puts each in a track spanning that travel
   instead and lets the browser's `position: sticky` keep it pinned (`nsh.js` `op_sticky`).
-- **Spare list cells** (recycled cells without an item) keep their last row's content. The core hides them
-  (`Core::set_spare`: `visibility: hidden` in their `ViewStyle`, `accessibilityElementsHidden` in their `ViewProps`,
-  so they are neither drawn, touched nor read, and a test id matches the row the list shows) when they lie in the
-  render window (it also moves them out of sight), were never placed (their content sits at the list's origin) or
-  the items changed (a splice or a new count: their rows may be gone), and shows them again as it places them. The
-  one or two the window leaves behind while scrolling show their own rows where those are and are reused within a
-  row, so scrolling sends nothing for them (hiding them would cost every row a batch).
 - **Loading at either end** (`ListState::update_window`, which returns the `Edges` to raise; both raised by the core):
   `onLoadMore` fires once per item count when the viewport comes within `loadMoreThreshold` viewports of the end (also
   where the list opens: a first page shorter than that asks for the next). `onLoadMoreAtStart` is its counterpart at
@@ -67,6 +60,9 @@
   distance from the end (the bottom) only while it is at its start, where item 0 shows (a chat's new message);
   scrolled away from it, a splice or a measurement before the viewport keeps the visible rows in place as on other
   lists (`ListState::loads_at_start`, `keeps_visible_rows`; `measured` returns what cancels `anchor_end`'s scroll).
+- **Spare list cells** (recycled cells without an item) keep their last row. The core hides them (`Core::set_spare`:
+  `visibility: hidden` and `accessibilityElementsHidden`) when they lie in the render window, were never placed or
+  the items changed, and shows them as it places them; the few the window leaves behind while scrolling stay shown.
 - **List scroll commands**: the core resolves a list's `scrollToEnd` / `scrollToIndex` to a `ScrollTo` with the sizes it
   knows, which are estimates for rows never rendered; the target stays pinned (`ListState::follow_pin`), and as the rows
   around it are measured the list follows it (a `ScrollBy`, or a retargeted `ScrollTo` while an animated scroll is in
