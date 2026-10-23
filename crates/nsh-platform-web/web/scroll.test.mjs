@@ -197,11 +197,15 @@ function runFrames(n = 120) {
   }
 }
 
-/** A vertical scroll view 300 × 200 with content 5000 tall, at the top. */
+/** A vertical scroll view 300 × 200 with content 5000 tall, at the top;
+ * `p.ended` lists the scroll ends the engine got. */
 function scroller() {
   const p = Object.create(Player.prototype);
   p.root = { parentNode: null };
   p.size = [300, 200];
+  p.ended = [];
+  // -1: the engine is not due again (`schedule`).
+  p.wasm = { nsh_scroll_ended: (id) => (p.ended.push(id), -1) };
   const el = {
     _id: 1, _kind: 'scroll', _events: new Set(), _applied: 0, parentNode: p.root,
     clientWidth: 300, clientHeight: 200, scrollWidth: 300, scrollHeight: 5000, scrollLeft: 0, scrollTop: 0,
@@ -241,6 +245,8 @@ test('scroll commands win over a wheel or key glide', (t) => {
 
 test('a glide moves with the content the core keeps in place', (t) => {
   t.mock.method(performance, 'now', () => clock);
+  // Scrolls end 200 ms after their last input (`scrollSmoothly`).
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const { p, el } = scroller();
   p.wheel(wheel(el, 900));
   runFrames(2);
@@ -250,10 +256,14 @@ test('a glide moves with the content the core keeps in place', (t) => {
   runFrames();
   assert.equal(el.scrollTop, 1000);
   assert.equal(el._applied, 1);
+  t.mock.timers.tick(200);
+  assert.deepEqual(p.ended, [1]);
   // A touchpad's scroll goes on from there too.
   const pad = scroller();
   pad.p.wheel(wheel(pad.el, 20));
   pad.p.op_sb(['sb', 1, 0, 100]);
   pad.p.wheel(wheel(pad.el, 20));
   assert.equal(pad.el.scrollTop, 140);
+  t.mock.timers.tick(200);
+  assert.deepEqual(pad.p.ended, [1]);
 });
