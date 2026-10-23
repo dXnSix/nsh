@@ -267,3 +267,80 @@ test('a glide moves with the content the core keeps in place', (t) => {
   t.mock.timers.tick(200);
   assert.deepEqual(pad.p.ended, [1]);
 });
+
+test('a scroll a command stops ends once, with or without moving', (t) => {
+  t.mock.method(performance, 'now', () => clock);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  // Each from `start`, scrolled 40 down.
+  const commands = [
+    [['cmd', 1, 'scrollTo', 0, 40, false], 0, 40],
+    [['cmd', 1, 'scrollTo', 0, 40, true], 0, 40],
+    [['cmd', 1, 'scrollToEnd', false], 4760, 4800],
+    [['cmd', 1, 'scrollTo', 0, 0, false], 0, 0],
+  ];
+  for (const [command, start, end] of commands) {
+    const { p, el } = scroller();
+    el.scrollTop = start;
+    const ends = [];
+    el._events.add('onScrollEnd');
+    p.event = (id, name, e) => ends.push(e.y);
+    // A touchpad moves the view at once; its end waits for it to settle,
+    // and the browser's `scrollend` meanwhile is not the end.
+    p.wheel(wheel(el, 20));
+    p.wheel(wheel(el, 20));
+    p.scrollEnded(el);
+    const at = el.scrollTop;
+    p.op_cmd(command);
+    t.mock.timers.tick(200);
+    // The browser's `scrollend` follows a scroll that moved, only then.
+    if (el.scrollTop !== at) p.scrollEnded(el);
+    assert.deepEqual(ends, [end], command.slice(2).join(' '));
+    assert.equal(el._driven, 0);
+  }
+});
+
+test('fractional scroll commands end once at the browser destination', (t) => {
+  t.mock.method(performance, 'now', () => clock);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const animated of [false, true]) {
+    for (const destination of [40, 40.5]) {
+      const { p, el } = scroller();
+      const ends = [];
+      el._events.add('onScrollEnd');
+      p.event = (id, name, e) => ends.push(e.y);
+      p.wheel(wheel(el, 20));
+      p.wheel(wheel(el, 20));
+      // Model a browser that rounds to physical pixels, including a
+      // destination that rounds back to the current position.
+      el.scrollTo = () => { el.scrollTop = destination; };
+      p.op_cmd(['cmd', 1, 'scrollTo', 0, 40.4, animated]);
+      assert.deepEqual(ends, []);
+      if (destination !== 40) p.scrollEnded(el);
+      t.mock.timers.tick(200);
+      assert.deepEqual(ends, [destination]);
+      if (destination === 40) {
+        p.scrollEnded(el);
+        assert.deepEqual(ends, [destination]);
+      }
+    }
+  }
+});
+
+test('the command end fallback waits while a smooth scroll moves', (t) => {
+  t.mock.method(performance, 'now', () => clock);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { p, el } = scroller();
+  const ends = [];
+  el._events.add('onScrollEnd');
+  p.event = (id, name, e) => ends.push(e.y);
+  p.call = () => {};
+  p.wheel(wheel(el, 20));
+  p.op_cmd(['cmd', 1, 'scrollTo', 0, 400, true]);
+  t.mock.timers.tick(150);
+  p.scrolled(el);
+  t.mock.timers.tick(150);
+  assert.deepEqual(ends, []);
+  p.scrollEnded(el);
+  t.mock.timers.tick(200);
+  assert.deepEqual(ends, [400]);
+});

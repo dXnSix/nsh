@@ -211,8 +211,6 @@ view()
 
 `accessibilityElementsHidden`（iOS 的叫法）和 `importantForAccessibility="no-hide-descendants"`（Android 的叫法）在两个平台上都会隐藏子树；两者同时设置也没有坏处。
 
-与浏览器中一样，`visibility: "hidden"`（`invisible`）的视图及其子树也会被跳过：不绘制的内容也不会被朗读。
-
 ## 屏幕阅读器与用户的设置
 
 在 Rust 中，prelude 报告用户的设置并与屏幕阅读器交互：`screen_reader()` 和 `reduce_motion()` 是响应式的，`announce_for_accessibility(message)` 让屏幕阅读器朗读一条消息，元素的 `element_ref()` 用 `set_accessibility_focus()` 把屏幕阅读器的焦点移到它上面。在 TSX 中，`nsh/accessibility` 报告用户的设置，并让你与屏幕阅读器交互。
