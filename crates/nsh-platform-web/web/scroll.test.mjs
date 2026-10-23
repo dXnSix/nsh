@@ -202,6 +202,9 @@ function scroller() {
   const p = Object.create(Player.prototype);
   p.root = { parentNode: null };
   p.size = [300, 200];
+  // A scroll that ends tells the engine (`nsh_scroll_ended`), which these
+  // players run without; -1: the engine is not due again (`schedule`).
+  p.wasm = { nsh_scroll_ended: () => -1 };
   const el = {
     _id: 1, _kind: 'scroll', _events: new Set(), _applied: 0, parentNode: p.root,
     clientWidth: 300, clientHeight: 200, scrollWidth: 300, scrollHeight: 5000, scrollLeft: 0, scrollTop: 0,
