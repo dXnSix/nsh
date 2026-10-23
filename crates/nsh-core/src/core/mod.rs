@@ -1279,7 +1279,8 @@ impl<M: TextEngine> Core<M> {
 
     /// The platform's views must get everything again, as new views do, and
     /// text is measured again: the unit the platform converted the values
-    /// with changed (Android's density). The views stay.
+    /// with changed (Android's density). The views stay, scrolled where they
+    /// are.
     pub fn remount(&mut self) {
         self.fonts_changed();
         let keys: Vec<Key> = self
@@ -1294,6 +1295,17 @@ impl<M: TextEngine> Core<M> {
             let node = &mut self.nodes[key as usize];
             if let Some(root) = node.root.as_mut() {
                 root.laid_out = None;
+            }
+            // A scroll view keeps where it is scrolled to: its content size
+            // goes again as it is, not as a first one (which would put a
+            // right to left one at its right end). A new size from the
+            // layout below replaces it ([`Self::set_scroll_content`]).
+            let id = node.id;
+            if let Some(scroll) = node.scroll.as_mut()
+                && let Some(size) = scroll.content
+            {
+                scroll.content_item = Some((self.batches, self.mount.len()));
+                self.mount.push(MountItem::ScrollContent { id, size });
             }
             if let Some(layout) = node.layout {
                 // Every frame is sent again.
@@ -3748,6 +3760,7 @@ impl<M: TextEngine> Core<M> {
         }
         node.created = true;
         if let Some(scroll) = node.scroll.as_mut() {
+            scroll.content = None;
             // The new native view counts the core's scrolls from zero.
             scroll.issued = 0;
             scroll.pending.clear();
@@ -3818,9 +3831,6 @@ impl<M: TextEngine> Core<M> {
         let node = &mut self.nodes[key as usize];
         let kind = node.kind;
         node.frame = Bounds::UNSET;
-        if let Some(scroll) = node.scroll.as_mut() {
-            scroll.content = None;
-        }
         // A list in its parent's viewport is a plain view clipping its
         // cells (`Node::mounted_view_style`), with no scroll view's config.
         let parent_list = node.list.as_ref().is_some_and(|l| l.parent);

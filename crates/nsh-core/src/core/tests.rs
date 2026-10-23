@@ -17048,4 +17048,73 @@ mod remount {
         );
         assert!(c.commit().is_none(), "nothing left to send");
     }
+
+    /// A right to left horizontal scroll view the user scrolled stays where
+    /// it is: it gets its content size again, never the scroll to its right
+    /// end a new one gets.
+    #[test]
+    fn keeps_a_scrolled_right_to_left_scroll_view_where_it_is() {
+        let mut c = core();
+        let n = |v: f32| StyleValue::Number(v);
+        let mut ops = vec![
+            Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::LayoutDirection(true),
+            },
+            Op::Create {
+                id: 2,
+                tag: Tag::Scroll,
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Horizontal(true),
+            },
+            style_op(2, &[("width", n(150.0)), ("height", n(50.0))]),
+        ];
+        for id in [3, 4] {
+            ops.push(Op::Create { id, tag: Tag::View });
+            ops.push(style_op(id, &[("width", n(100.0)), ("height", n(50.0))]));
+            ops.push(Op::Insert {
+                parent: 2,
+                child: id,
+                before: None,
+            });
+        }
+        ops.push(Op::Insert {
+            parent: ROOT_ID,
+            child: 2,
+            before: None,
+        });
+        apply(&mut c, ops);
+        let first = c.commit().unwrap();
+        let scrolls = |batch: &MountBatch| {
+            batch
+                .items
+                .iter()
+                .filter(|i| {
+                    matches!(
+                        i,
+                        MountItem::Command { id: 2, .. } | MountItem::ScrollBy { id: 2, .. }
+                    )
+                })
+                .count()
+        };
+        // A new one starts at its right end.
+        assert_eq!(scrolls(&first), 1);
+        // The user scrolls it to its left end.
+        c.set_scroll_offset(2, point(px(0.0), px(0.0)), u32::MAX);
+        c.remount();
+        let again = c.commit().expect("a remount sends a batch");
+        let content: Vec<_> = again
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::ScrollContent { id: 2, size } => Some(*size),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(content, [size_pt(200.0, 50.0)]);
+        assert_eq!(scrolls(&again), 0, "{:?}", again.items);
+        assert!(c.commit().is_none(), "nothing left to send");
+    }
 }
