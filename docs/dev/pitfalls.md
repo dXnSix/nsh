@@ -242,6 +242,9 @@ Things that were found the hard way. Read the section of the area you change bef
   under the watched one as given: watch a canonical path (a `..` in it makes every path look like a dot entry).
 - **GDK frame times are microseconds** (`FrameClock::frame_time`); `nsh_anim::Graph::tick` takes seconds and the
   scroll and transition code milliseconds: convert at each call site.
+- **AT-SPI reads widgets, not what NSH draws**: a view `snapshot` skips (`visibility: hidden`) is still presented, with
+  its subtree, until its accessible state is `Hidden` (`access.rs`); GTK's AT-SPI bridge then leaves out the widget
+  and its subtree (`gtk_accessible_should_present`; checked with an AT-SPI client on GTK 4.14).
 - **A widget's accessible role is effectively fixed** once its AT context is realized: GTK refuses to change it (with a
   critical), and nothing tells whether it is. Roles are decided when the view is created, from the batch that creates
   it (`access::prepare`); a later change detaches the view and puts it back.
@@ -348,6 +351,11 @@ Things that were found the hard way. Read the section of the area you change bef
   clip spaces are the placed frames (`ns().frame()`).
 - In `define_class!` methods, an early `return` of a `bool` or `Option<Retained<_>>` does not compile (the macro wraps
   the return type): write the body as one expression.
+- VoiceOver reads views, not layers: `visibility: hidden` hides only the view's layer (an `NSView`'s own `hidden` is
+  the navigation's, for screens under the top one), so `access.rs` takes such a view and its subtree out as it does
+  for `accessibilityElementsHidden`. `setAccessibilityChildren:` cannot be undone: `nil` leaves the view without
+  children instead of AppKit's again, so a subtree shown again stayed out of reach; `NshView` answers
+  `accessibilityChildren` itself (none while hidden or grouped, else `NSView`'s).
 - In-process screenshots (`cacheDisplayInRect:`, `renderInContext:`) ignore `maskedCorners`, `shadowPath`, Core Image
   filters and cut masks at the mask layer's bounds; they show no sheets or `AVPlayerLayer` content, and
   `renderInContext:` no `WKWebView` pages either (`cacheDisplayInRect:`, the test agent's screenshot, shows them: WebKit
@@ -373,6 +381,10 @@ Things that were found the hard way. Read the section of the area you change bef
   controllers in the window's DirectComposition tree for this reason (`compose.rs`); native components that bring an
   `HWND` of their own still cover NSH content. Offscreen drawings of the window have no web views: the test
   agent's screenshots capture them (`PrintWindow` with `PW_RENDERFULLCONTENT`).
+- **UI Automation's tree is NSH's own** (`access.rs`): a view the renderer skips is still an element unless
+  `access::part` hides it, so every way of hiding a view (`visibility: hidden`, a concealed screen,
+  `accessibilityElementsHidden`) is checked there and in UIA's hit test (`uia::hit`), and a change of one marks the
+  view for comparison, or narrators read and focus what nobody sees.
 - **`IDCompositionVisual::AddVisual(visual, TRUE, NULL)` puts the visual below all its siblings**, not on top: to
   stack bottom to top, insert each one above the one added before it (`compose.rs`).
 - **A focused WebView2 page has the keyboard in a window of its own** (`Chrome_WidgetWin_0`, a child of the
