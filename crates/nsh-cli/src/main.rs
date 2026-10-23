@@ -196,7 +196,11 @@ enum Command {
         /// Fail when the port is taken instead of using the next free one:
         /// for a port something else expects the server on (a process
         /// manager that health-checks it, a proxy).
-        #[arg(long, env = "NSH_STRICT_PORT")]
+        #[arg(
+            long,
+            env = "NSH_STRICT_PORT",
+            value_parser = clap::builder::BoolishValueParser::new()
+        )]
         strict_port: bool,
         /// Minify and strip debug info.
         #[arg(long)]
@@ -238,7 +242,11 @@ enum Command {
         /// Fail when the port is taken instead of using the next free one:
         /// for a port something else expects the server on (a process
         /// manager that health-checks it, a proxy).
-        #[arg(long, env = "NSH_STRICT_PORT")]
+        #[arg(
+            long,
+            env = "NSH_STRICT_PORT",
+            value_parser = clap::builder::BoolishValueParser::new()
+        )]
         strict_port: bool,
         /// Minify and strip debug info.
         #[arg(long)]
@@ -894,6 +902,19 @@ mod tests {
                 Some("NSH_STRICT_PORT"),
                 "{name}"
             );
+            // The variable takes what `NSH_VERBOSE` takes: `1` / `0` as
+            // well as `true` / `false` (clap's default takes only those).
+            let values: Vec<_> = arg
+                .get_possible_values()
+                .iter()
+                .map(|v| v.get_name().to_owned())
+                .collect();
+            for value in ["1", "0", "true", "false"] {
+                assert!(
+                    values.iter().any(|v| v == value),
+                    "{name}: NSH_STRICT_PORT={value}"
+                );
+            }
         }
         // Off unless asked for (or NSH_STRICT_PORT is set, which the test
         // environment does not do).

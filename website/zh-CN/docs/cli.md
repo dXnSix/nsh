@@ -120,7 +120,7 @@ nsh dev [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|web] [--
   browsers on this network: http://192.168.1.20:8790/
 ```
 
-用 `nsh dev --server-only` 连接嵌入了开发版 SDK（`NativeShellDev.xcframework`、`nsh-dev.aar`）的应用。`--target`、`--device`、`--port`、`--release` 和 `--limits` 的含义与 `nsh run` 相同。
+用 `nsh dev --server-only` 连接嵌入了开发版 SDK（`NativeShellDev.xcframework`、`nsh-dev.aar`）的应用。`--target`、`--device`、`--port`、`--strict-port`、`--release` 和 `--limits` 的含义与 `nsh run` 相同。
 
 ## nsh test
 
