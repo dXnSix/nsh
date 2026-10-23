@@ -365,8 +365,9 @@ function More() {
       <View style={{ padding: 16, gap: 16 }}>
         {/* `position: sticky`: in the flow, then at the top while the page scrolls under it. */}
         <View
-          class="sticky top-0"
           style={{
+            position: "sticky",
+            top: 0,
             flexDirection: "row",
             alignItems: "baseline",
             gap: 8,
@@ -380,7 +381,7 @@ function More() {
           }}
         >
           <Text style={{ flex: 1, fontSize: 15, fontWeight: "600", color: colors.text }}>More list features</Text>
-          <Text style={{ fontSize: 13, color: colors.faint, fontFamily: mono }}>sticky top-0</Text>
+          <Text style={{ fontSize: 13, color: colors.faint, fontFamily: mono }}>position: sticky</Text>
         </View>
         <Section title="Pull to refresh">
           <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
