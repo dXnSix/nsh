@@ -195,6 +195,11 @@ reasons: `reactive-components.md`.
     when a view places a key twice; none placed: it waits out of the tree for the `Unrender`). The roots go with their
     holder or with the component (`core/renders.rs`; `nsh-js` `components.rs`). The decoded prop names its host, so a
     view may pass it on to a nested component's prop. Keys are unique among a component's renders of one prop.
+  - `data: Prop<Rows>`: rows of data the component reads by key, `data: T[]` in TS with `#[props(generic)]` on the
+    props (the props generic over `T`, as a component with rows is; a field typed `Extract<keyof T, string>` names a
+    key TS checks against the rows' type, `nsh_base::plot::RowKey`). `Rows` reads each row's number fields once, when
+    JS sets the prop, into a column per key (`Rows::column(key)`, `NaN` where a row has no number), so the component
+    scales and draws them without calling into JS again (`nsh/base/plot`).
   - `items: Items`: virtualized rows. In JS the component takes `List`'s data props (`each`, the row renderer as
     children, `keyExtractor`, `onLoadMore`, `header`, ... : `ListItemsProps<T>`, so the component is
     generic over the row type). `.list(props.items, |l| l.flex_1().estimated_item_size(px(48.0)), |row, at|
@@ -710,7 +715,9 @@ what changed.
   node that follows it (or keeps them out of the tree while the view has none: a `Children` in a region that is not
   shown). The core sets the `Prop<Children>` when JS adds the first child or removes the last, so
   `props.children.get().is_empty()` in a binding follows it. With `children_each`, the children are an `Each` keyed by the child's node over a signal of the host's JS
-  children: one wrapper per child, so a child added or removed leaves the others' wrappers in place.
+  children: one wrapper per child, so a child added or removed leaves the others' wrappers in place. The JS face inserts a component's
+  children through a memo of their getter, so their expression runs again only when what it reads itself changes: an
+  `<Each>` among them is made once and keeps its rows, as a host element's does.
 - A view passes its children on by placing its `Children` among a nested component's (`<Inset>{children}</Inset>`):
   they become that component's children (`Placement::Nested`), in that place among the content the view gives it,
   so its view places them, as deep as they are passed on; JS's insertions and removals follow them there, and content

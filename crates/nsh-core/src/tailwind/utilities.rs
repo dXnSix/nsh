@@ -4,6 +4,8 @@
 
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
+
 use super::{ClassProps, Theme, deps};
 use crate::{
     css,
@@ -42,7 +44,8 @@ pub(crate) enum Part {
     ScaleY(f32),
     SkewX(f32),
     SkewY(f32),
-    Perspective(f32),
+    /// The children's depth (`perspective-*`); `None`: `perspective-none`.
+    Perspective(Option<f32>),
     /// `transform: none`: the 3D rotations and the skews.
     TransformNone,
     /// `translate: none`.
@@ -52,11 +55,15 @@ pub(crate) enum Part {
     /// `rotate: none`.
     RotateNone,
     Shadow(Arc<[BoxShadow]>),
-    /// A color for the shadow layers; `true` when it has its own alpha
-    /// (`shadow-black/50`), else the layers keep theirs.
-    ShadowColor(Color, bool),
+    /// A color for the shadow layers (`shadow-red-500`), mixed with the
+    /// shadow's alpha.
+    ShadowColor(Color),
+    /// The alpha a size's modifier gives the shadow colors (`shadow-xl/20`,
+    /// Tailwind's `--tw-shadow-alpha`).
+    ShadowAlpha(f32),
     InsetShadow(Arc<[BoxShadow]>),
-    InsetShadowColor(Color, bool),
+    InsetShadowColor(Color),
+    InsetShadowAlpha(f32),
     Ring(f32),
     RingInset,
     RingColor(Color),
@@ -92,6 +99,9 @@ pub(crate) enum Part {
     /// `drop-shadow-*`: a `drop-shadow()` per layer, last in the filter
     /// chain (Tailwind's `--tw-drop-shadow`).
     DropShadows(Arc<[Filter]>),
+    /// A color for the drop shadows (`drop-shadow-red-500`).
+    DropShadowColor(Color),
+    DropShadowAlpha(f32),
     FontVariant {
         set: u8,
         clear: u8,
@@ -105,7 +115,24 @@ pub(crate) enum Part {
     /// A keyframe animation with its own timing.
     Animation(KeyframeAnimation),
     TextShadow(Arc<[TextShadow]>),
-    TextShadowColor(Color, bool),
+    TextShadowColor(Color),
+    TextShadowAlpha(f32),
+}
+
+/// A color of a part, which currentColor can give (`ring-current`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ColorSlot {
+    Shadow,
+    InsetShadow,
+    TextShadow,
+    DropShadow,
+    Ring,
+    InsetRing,
+    RingOffset,
+    From,
+    Via,
+    To,
+    Caret,
 }
 
 /// A node property set by a class.
@@ -150,6 +177,12 @@ pub(crate) enum Decl {
     /// [`Decl::Default`] is (a border width's color): the node's text
     /// color, its own or the one it inherits.
     CurrentColor(StyleKey),
+    /// An explicit currentColor declaration, in normal cascade order, at
+    /// an alpha (`bg-current/50`).
+    SetCurrentColor(StyleKey, f32),
+    /// A part's color in currentColor (`ring-current`, `shadow-current`),
+    /// at an alpha.
+    CurrentPart(ColorSlot, f32),
     /// A length in CSS's `ch` (the advance of the font's `0`):
     /// `max-w-prose`, `65ch`.
     Ch(StyleKey, f32),
@@ -213,17 +246,52 @@ impl Decl {
         &self,
         dark: bool,
         rtl: bool,
+        important: bool,
         style: &mut Style,
         props: &mut ClassProps,
         parts: &mut Parts,
     ) {
         match self {
             Decl::Set(key, value) => {
-                let (key, value) = directed(*key, value, rtl);
-                let _ = style.set_key(key, value.as_value());
+                if *key == K::TextAlign {
+                    let _ = style.set_key(*key, value.as_value());
+                    style.text.text_align_physical = matches!(
+                        style.text.text_align,
+                        Some(crate::style::TextAlign::Left | crate::style::TextAlign::Right)
+                    );
+                } else {
+                    let (key, value) = directed(*key, value, rtl);
+                    let _ = style.set_key(key, value.as_value());
+                }
             }
             // Applied by `ClassList::apply` before the rules.
             Decl::Default(..) | Decl::CurrentColor(_) => {}
+            Decl::SetCurrentColor(key, alpha) => {
+                let key = if rtl {
+                    mirrored(*key).unwrap_or(*key)
+                } else {
+                    *key
+                };
+                style.set_color(key, mixed(parts.current, *alpha));
+            }
+            Decl::CurrentPart(slot, alpha) => {
+                let c = mixed(parts.current, *alpha);
+                match slot {
+                    ColorSlot::Caret => props.caret_color = Some(c),
+                    slot => parts.push(match slot {
+                        ColorSlot::Shadow => Part::ShadowColor(c),
+                        ColorSlot::InsetShadow => Part::InsetShadowColor(c),
+                        ColorSlot::TextShadow => Part::TextShadowColor(c),
+                        ColorSlot::DropShadow => Part::DropShadowColor(c),
+                        ColorSlot::Ring => Part::RingColor(c),
+                        ColorSlot::InsetRing => Part::InsetRingColor(c),
+                        ColorSlot::RingOffset => Part::RingOffsetColor(c),
+                        ColorSlot::From => Part::From(c, true),
+                        ColorSlot::Via => Part::Via(c, true),
+                        _ => Part::To(c, true),
+                    }),
+                }
+            }
             Decl::Style(decl) => {
                 let _ = decl.apply(style);
             }
@@ -240,8 +308,10 @@ impl Decl {
                     let space = props.space.get_or_insert_default();
                     if *y {
                         space.y = Some(v.clone());
+                        space.important_y = important;
                     } else {
                         space.x = Some(v.clone());
+                        space.important_x = important;
                     }
                 }
                 PropDecl::SpaceReverse(y) => {
@@ -258,8 +328,7 @@ impl Decl {
                 parts.touched |= touched::SCREEN;
             }
             Decl::Ch(key, n) => {
-                parts.lengths_ch.push((*key, *n));
-                parts.touched |= touched::CH;
+                let _ = style.set_key(*key, crate::style::StyleValue::Number(n * parts.ch));
             }
             Decl::Adaptive(key, values) => {
                 let (key, value) = directed(*key, &values[usize::from(dark)], rtl);
@@ -274,6 +343,7 @@ impl Decl {
         matches!(
             self,
             Decl::Set(StyleKey::BackgroundColor, _)
+                | Decl::SetCurrentColor(StyleKey::BackgroundColor, _)
                 | Decl::Adaptive(StyleKey::BackgroundColor, _)
                 | Decl::Style(StyleDecl::Set(StyleKey::BackgroundColor, _))
         )
@@ -348,8 +418,16 @@ impl Decl {
             }
             Decl::AdaptivePart(_) => deps::DARK,
             Decl::Set(key, value) | Decl::Default(key, value) if sided(*key, value) => deps::RTL,
-            Decl::CurrentColor(_) | Decl::Part(Part::Ring(_) | Part::InsetRing(_)) => {
+            Decl::CurrentColor(_)
+            | Decl::CurrentPart(..)
+            | Decl::Part(Part::Ring(_) | Part::InsetRing(_)) => deps::CURRENT_COLOR,
+            Decl::SetCurrentColor(key, _) => {
                 deps::CURRENT_COLOR
+                    | if mirrored(*key).is_some() {
+                        deps::RTL
+                    } else {
+                        0
+                    }
             }
             Decl::Ch(..) => deps::CH,
             _ => 0,
@@ -369,7 +447,6 @@ pub(crate) mod touched {
     pub(crate) const TRANSITION: u16 = 128;
     pub(crate) const ANIMATE: u16 = 256;
     pub(crate) const TEXT_SHADOW: u16 = 512;
-    pub(crate) const CH: u16 = 1024;
     pub(crate) const ALL: u16 = u16::MAX;
 }
 
@@ -385,12 +462,15 @@ pub(crate) struct Parts {
     rotate_3d: [Option<f32>; 3],
     scale: [Option<f32>; 2],
     skew: [Option<f32>; 2],
-    perspective: Option<f32>,
+    /// `perspective-none` is `Some(None)`.
+    perspective: Option<Option<f32>>,
     transform_set: bool,
     shadow: Option<Arc<[BoxShadow]>>,
-    shadow_color: Option<(Color, bool)>,
+    shadow_color: Option<Color>,
+    shadow_alpha: Option<f32>,
     inset_shadow: Option<Arc<[BoxShadow]>>,
-    inset_shadow_color: Option<(Color, bool)>,
+    inset_shadow_color: Option<Color>,
+    inset_shadow_alpha: Option<f32>,
     ring: Option<f32>,
     ring_inset: bool,
     ring_color: Option<Color>,
@@ -408,6 +488,8 @@ pub(crate) struct Parts {
     filters: [Option<Filter>; 9],
     /// After the filters of `filters`.
     drop_shadows: Option<Arc<[Filter]>>,
+    drop_shadow_color: Option<Color>,
+    drop_shadow_alpha: Option<f32>,
     filters_set: bool,
     backdrop: [Option<Filter>; 9],
     backdrop_set: bool,
@@ -419,13 +501,13 @@ pub(crate) struct Parts {
     transition_none: bool,
     animate: Option<Option<KeyframeAnimation>>,
     text_shadow: Option<Arc<[TextShadow]>>,
-    text_shadow_color: Option<(Color, bool)>,
+    text_shadow_color: Option<Color>,
+    text_shadow_alpha: Option<f32>,
     /// `w-screen` and friends, resolved against the window.
     pub(crate) screen: Vec<(StyleKey, f32, f32)>,
     /// CSS's `currentColor`: the ring's color when no class sets one.
     pub(crate) current: Color,
-    /// Lengths in `ch`, and what one is.
-    pub(crate) lengths_ch: Vec<(StyleKey, f32)>,
+    /// The advance of the node font's `0`.
     pub(crate) ch: f32,
 }
 
@@ -436,23 +518,25 @@ impl Parts {
             TranslateX(_) | TranslateY(_) | Rotate(_) | RotateX(_) | RotateY(_) | RotateZ(_)
             | ScaleX(_) | ScaleY(_) | SkewX(_) | SkewY(_) | Perspective(_) | TransformNone
             | TranslateNone | ScaleNone | RotateNone => touched::TRANSFORM,
-            Shadow(_) | ShadowColor(..) | InsetShadow(_) | InsetShadowColor(..) | Ring(_)
-            | RingInset | RingColor(_) | RingOffset(_) | RingOffsetColor(_) | InsetRing(_)
-            | InsetRingColor(_) => touched::SHADOWS,
+            Shadow(_) | ShadowColor(_) | ShadowAlpha(_) | InsetShadow(_) | InsetShadowColor(_)
+            | InsetShadowAlpha(_) | Ring(_) | RingInset | RingColor(_) | RingOffset(_)
+            | RingOffsetColor(_) | InsetRing(_) | InsetRingColor(_) => touched::SHADOWS,
             Gradient(_) | ArbitraryGradient(_) | GradientNone | From(..) | Via(..) | To(..)
             | FromPos(_) | ViaPos(_) | ToPos(_) => touched::GRADIENT,
             Filter {
                 backdrop: false, ..
             }
             | FilterNone { backdrop: false }
-            | DropShadows(_) => touched::FILTERS,
+            | DropShadows(_)
+            | DropShadowColor(_)
+            | DropShadowAlpha(_) => touched::FILTERS,
             Filter { backdrop: true, .. } | FilterNone { backdrop: true } => touched::BACKDROP,
             FontVariant { .. } => touched::FONT_VARIANT,
             TransitionProps(_) | Duration(_) | Ease(_) | Delay(_) | TransitionNone => {
                 touched::TRANSITION
             }
             Animate(_) | Animation(_) => touched::ANIMATE,
-            TextShadow(_) | TextShadowColor(..) => touched::TEXT_SHADOW,
+            TextShadow(_) | TextShadowColor(_) | TextShadowAlpha(_) => touched::TEXT_SHADOW,
         };
         match part {
             TranslateX(l) => (self.translate[0], self.transform_set) = (Some(l), true),
@@ -477,11 +561,11 @@ impl Parts {
             ScaleNone => (self.scale, self.transform_set) = ([None; 2], true),
             RotateNone => (self.rotate, self.transform_set) = (None, true),
             Shadow(s) => (self.shadow, self.shadows_set) = (Some(s), true),
-            ShadowColor(c, a) => (self.shadow_color, self.shadows_set) = (Some((c, a)), true),
+            ShadowColor(c) => (self.shadow_color, self.shadows_set) = (Some(c), true),
+            ShadowAlpha(a) => (self.shadow_alpha, self.shadows_set) = (Some(a), true),
             InsetShadow(s) => (self.inset_shadow, self.shadows_set) = (Some(s), true),
-            InsetShadowColor(c, a) => {
-                (self.inset_shadow_color, self.shadows_set) = (Some((c, a)), true)
-            }
+            InsetShadowColor(c) => (self.inset_shadow_color, self.shadows_set) = (Some(c), true),
+            InsetShadowAlpha(a) => (self.inset_shadow_alpha, self.shadows_set) = (Some(a), true),
             Ring(w) => (self.ring, self.shadows_set) = (Some(w), true),
             RingInset => (self.ring_inset, self.shadows_set) = (true, true),
             RingColor(c) => (self.ring_color, self.shadows_set) = (Some(c), true),
@@ -523,6 +607,8 @@ impl Parts {
                 self.drop_shadows = Some(layers);
                 self.filters_set = true;
             }
+            DropShadowColor(c) => (self.drop_shadow_color, self.filters_set) = (Some(c), true),
+            DropShadowAlpha(a) => (self.drop_shadow_alpha, self.filters_set) = (Some(a), true),
             FilterNone { backdrop: true } => {
                 self.backdrop = [None; 9];
                 self.backdrop_set = true;
@@ -545,7 +631,8 @@ impl Parts {
             Animate(k) => self.animate = Some(k.map(preset)),
             Animation(a) => self.animate = Some(Some(a)),
             TextShadow(layers) => self.text_shadow = Some(layers),
-            TextShadowColor(c, a) => self.text_shadow_color = Some((c, a)),
+            TextShadowColor(c) => self.text_shadow_color = Some(c),
+            TextShadowAlpha(a) => self.text_shadow_alpha = Some(a),
         }
     }
 
@@ -560,9 +647,6 @@ impl Parts {
         only: u16,
     ) {
         let has = |group: u16| only & group != 0;
-        for &(key, n) in self.lengths_ch.iter().filter(|_| has(touched::CH)) {
-            let _ = style.set_key(key, crate::style::StyleValue::Number(n * self.ch));
-        }
         for &(key, fw, fh) in self.screen.iter().filter(|_| has(touched::SCREEN)) {
             let _ = style.set_key(
                 key,
@@ -576,7 +660,7 @@ impl Parts {
             // writes it); a list applies right to left.
             // `perspective-*` is CSS's `perspective` property: depth for the
             // children, not a step of the view's own transform.
-            style.perspective = self.perspective.map(px);
+            style.perspective = self.perspective.flatten().map(px);
             let mut push = |kind: TransformKind, v: f32| {
                 let _ = style.view.transform.push(kind, v);
             };
@@ -621,16 +705,19 @@ impl Parts {
         }
         if self.shadows_set && has(touched::SHADOWS) {
             let current = self.current;
-            let recolor = |layers: &[BoxShadow], color: Option<(Color, bool)>| -> Vec<BoxShadow> {
+            // A color class replaces the layers' colors, alpha too
+            // (Tailwind's `--tw-shadow-color` mixed at `--tw-shadow-alpha`).
+            let recolor = |layers: &[BoxShadow],
+                           color: Option<Color>,
+                           alpha: Option<f32>|
+             -> Vec<BoxShadow> {
                 layers
                     .iter()
                     .map(|l| match color {
-                        // The layer keeps its alpha unless the color sets one.
-                        Some((c, false)) => BoxShadow {
-                            color: c.with_alpha((l.color.0 & 0xff) as f32 / 255.0),
+                        Some(c) => BoxShadow {
+                            color: mixed(c, alpha.unwrap_or(1.0)),
                             ..*l
                         },
-                        Some((c, true)) => BoxShadow { color: c, ..*l },
                         None => *l,
                     })
                     .collect()
@@ -639,7 +726,7 @@ impl Parts {
             // offset, ring, shadow.
             let mut list = Vec::new();
             if let Some(s) = &self.inset_shadow {
-                list.extend(recolor(s, self.inset_shadow_color));
+                list.extend(recolor(s, self.inset_shadow_color, self.inset_shadow_alpha));
             }
             if let Some(w) = self.inset_ring {
                 list.push(BoxShadow {
@@ -667,7 +754,7 @@ impl Parts {
                 });
             }
             if let Some(s) = &self.shadow {
-                list.extend(recolor(s, self.shadow_color));
+                list.extend(recolor(s, self.shadow_color, self.shadow_alpha));
             }
             style.set_box_shadows(list);
         }
@@ -711,8 +798,21 @@ impl Parts {
         }
         if self.filters_set && has(touched::FILTERS) {
             let drop = self.drop_shadows.as_deref().unwrap_or_default();
+            let color = self
+                .drop_shadow_color
+                .map(|c| mixed(c, self.drop_shadow_alpha.unwrap_or(1.0)));
+            let drop = drop.iter().map(|f| match (f, color) {
+                (Filter::DropShadow { .. }, Some(c)) => {
+                    let mut f = *f;
+                    if let Filter::DropShadow { color, .. } = &mut f {
+                        *color = c;
+                    }
+                    f
+                }
+                _ => *f,
+            });
             style.set_filters(
-                self.filters.iter().flatten().chain(drop).copied().collect(),
+                self.filters.iter().flatten().copied().chain(drop).collect(),
                 false,
             );
         }
@@ -753,12 +853,11 @@ impl Parts {
                 .iter()
                 .copied()
                 .max_by(|a, b| a.radius.0.total_cmp(&b.radius.0));
-            if let (Some(s), Some((c, own))) = (shadow.as_mut(), self.text_shadow_color) {
-                s.color = if own {
-                    c
-                } else {
-                    c.with_alpha((s.color.0 & 0xff) as f32 / 255.0)
-                };
+            let color = self
+                .text_shadow_color
+                .map(|c| mixed(c, self.text_shadow_alpha.unwrap_or(1.0)));
+            if let (Some(s), Some(c)) = (shadow.as_mut(), color) {
+                s.color = c;
             }
             match shadow {
                 Some(s) => {
@@ -772,7 +871,10 @@ impl Parts {
                     style.text.shadow_radius = None;
                 }
             }
-            props.text_shadows = Some(layers.to_vec());
+            props.text_shadows = Some(match color {
+                Some(color) => layers.iter().map(|l| TextShadow { color, ..*l }).collect(),
+                None => layers.to_vec(),
+            });
         }
     }
 }
@@ -802,8 +904,28 @@ fn arbitrary_hinted<'a>(v: &'a str, hint: &str) -> Option<&'a str> {
     v.strip_prefix(hint).and_then(|v| v.strip_prefix(':'))
 }
 
+/// A bare number as Tailwind takes one: written as JavaScript prints it
+/// (`2.5`, not `+2.5`, `.5`, `2.50` or `1e1`), not negative.
 fn num(v: &str) -> Option<f32> {
+    let n: f64 = v.parse().ok()?;
+    (n >= 0.0 && !v.starts_with('-') && format!("{n}") == v).then_some(n as f32)
+}
+
+/// A bare whole number (`2`, not `2.5`): border widths, filters,
+/// durations and the other utilities Tailwind takes integers for.
+fn int(v: &str) -> Option<f32> {
+    num(v).filter(|n| n.fract() == 0.0)
+}
+
+/// A number in brackets (`flex-[2]`, `duration-[0.3s]`): CSS's syntax.
+fn arbitrary_num(v: &str) -> Option<f32> {
     css::number(v).filter(|n| *n >= 0.0)
+}
+
+/// A length in brackets only (`outline-offset-[3px]`): for utilities whose
+/// bare values are integers of pixels.
+fn arbitrary_points(theme: &Theme, v: &str) -> Option<f32> {
+    v.starts_with('[').then(|| points(theme, v))?
 }
 
 /// A spacing step count (`4`, `1.5`; quarter steps as in v4).
@@ -815,8 +937,19 @@ fn steps(v: &str) -> Option<f32> {
 /// `a/b` as a fraction.
 fn fraction(v: &str) -> Option<f32> {
     let (a, b) = v.split_once('/')?;
-    let (a, b) = (num(a)?, num(b)?);
+    let (a, b) = (int(a)?, int(b)?);
     (b > 0.0).then(|| a / b)
+}
+
+fn class_length(theme: &Theme, value: &str) -> Option<f32> {
+    let value = value.trim();
+    if css::number(value).is_some_and(|n| n != 0.0) {
+        return None;
+    }
+    if let Some(n) = value.strip_suffix("rem") {
+        return css::number(n).map(|n| n * theme.rem);
+    }
+    css::length(value)
 }
 
 /// A length value of a spacing-like utility: steps, `px`, fractions,
@@ -838,7 +971,12 @@ fn length_value(theme: &Theme, v: &str, neg: bool, auto: bool) -> Option<PatchVa
         v => {
             let a = arbitrary(v)?;
             let a = arbitrary_hinted(&a, "length").unwrap_or(&a).to_string();
-            match css::length_or_percent(&a)? {
+            let length = if let Some(percent) = a.strip_suffix('%') {
+                crate::geometry::percentage(css::number(percent)? / 100.0).into()
+            } else {
+                px(class_length(theme, &a)?).into()
+            };
+            match length {
                 DefiniteLength::Absolute(l) => PatchValue::Number(sign * l.to_points(REM_SIZE).0),
                 DefiniteLength::Fraction(f) => {
                     PatchValue::Str(format!("{}%", sign * f.0 * 100.0).into())
@@ -888,13 +1026,7 @@ fn color_value(theme: &Theme, v: &str) -> Option<(Color, bool)> {
     };
     match modifier {
         None => Some((color, own_alpha)),
-        Some(m) => {
-            let alpha = match arbitrary(m) {
-                Some(a) => css::amount(&a)?,
-                None => num(m)? / 100.0,
-            };
-            Some((color.with_alpha(alpha), true))
-        }
+        Some(m) => Some((mixed(color, alpha_modifier(m)?), true)),
     }
 }
 
@@ -911,6 +1043,52 @@ fn legacy_color(v: &str) -> bool {
 
 fn color(theme: &Theme, v: &str) -> Option<Color> {
     color_value(theme, v).map(|(c, _)| c)
+}
+
+/// `c` at `alpha` of its own alpha (CSS's `color-mix(in oklab, c alpha,
+/// transparent)`).
+fn mixed(c: Color, alpha: f32) -> Color {
+    c.with_alpha(alpha)
+}
+
+/// `c` with alpha `alpha` (CSS's `oklab(from c l a b / alpha)`).
+fn alpha_of(c: Color, alpha: f32) -> Color {
+    Color(c.0 & 0xffff_ff00 | (alpha.clamp(0.0, 1.0) * 255.0).round() as u32)
+}
+
+/// An alpha modifier (`/50`, `/2.5`, `/[0.3]`, `/[30%]`).
+fn alpha_modifier(m: &str) -> Option<f32> {
+    match arbitrary(m) {
+        Some(a) => css::amount(&a),
+        None => num(m).map(|n| n / 100.0),
+    }
+}
+
+/// `current` or `current/50`: currentColor at an alpha.
+fn current(v: &str) -> Option<f32> {
+    match v.split_once('/') {
+        None => (v == "current").then_some(1.0),
+        Some(("current", m)) => alpha_modifier(m),
+        _ => None,
+    }
+}
+
+/// `name/50` of a theme's shadow sizes: the layers, and the modifier's
+/// alpha, which replaces the alpha of the layers' own colors.
+fn sized<T: Copy>(
+    sizes: &FxHashMap<Box<str>, Vec<T>>,
+    v: &str,
+    recolor: impl Fn(T, f32) -> T,
+) -> Option<(Vec<T>, Option<f32>)> {
+    let (base, alpha) = match v.split_once('/') {
+        Some((b, m)) => (b, Some(alpha_modifier(m)?)),
+        None => (v, None),
+    };
+    let layers = sizes.get(base)?;
+    Some(match alpha {
+        Some(a) => (layers.iter().map(|&l| recolor(l, a)).collect(), Some(a)),
+        None => (layers.clone(), None),
+    })
 }
 
 fn color_str(c: Color) -> PatchValue {
@@ -940,8 +1118,8 @@ fn part(p: Part) -> Option<Vec<Decl>> {
 /// An angle in degrees: a number (`45`) or arbitrary (`[0.5turn]`).
 fn degrees(v: &str) -> Option<f32> {
     match arbitrary(v) {
-        Some(a) => css::angle(&a).or_else(|| css::number(&a)),
-        None => num(v),
+        Some(a) => css::angle(&a),
+        None => int(v),
     }
 }
 
@@ -951,14 +1129,14 @@ fn millis(v: &str) -> Option<f32> {
         Some(a) => {
             let a = a.trim();
             if let Some(n) = a.strip_suffix("ms") {
-                num(n)
+                arbitrary_num(n)
             } else if let Some(n) = a.strip_suffix('s') {
-                num(n).map(|s| s * 1000.0)
+                arbitrary_num(n).map(|s| s * 1000.0)
             } else {
-                num(a)
+                arbitrary_num(a)
             }
         }
-        None => num(v),
+        None => int(v),
     }
 }
 
@@ -966,7 +1144,24 @@ fn millis(v: &str) -> Option<f32> {
 fn percent_factor(v: &str) -> Option<f32> {
     match arbitrary(v) {
         Some(a) => css::amount(&a),
+        None => int(v).map(|n| n / 100.0),
+    }
+}
+
+/// An opacity from a percentage (`opacity-50`, `opacity-2.5`) or
+/// arbitrary.
+fn opacity_factor(v: &str) -> Option<f32> {
+    match arbitrary(v) {
+        Some(a) => css::amount(&a),
         None => num(v).map(|n| n / 100.0),
+    }
+}
+
+fn scale_factor(v: &str) -> Option<f32> {
+    if v.starts_with('[') {
+        percent_factor(v)
+    } else {
+        int(v).map(|n| n / 100.0)
     }
 }
 
@@ -974,6 +1169,12 @@ fn percent_factor(v: &str) -> Option<f32> {
 
 /// Parses one utility.
 pub(crate) fn parse(theme: &Theme, utility: &str) -> Option<Vec<Decl>> {
+    if theme.rem != REM_SIZE.0 && utility.contains('[') && utility.contains("rem") {
+        let normalized = rem_lengths(utility, theme.rem);
+        if normalized != utility {
+            return parse(theme, &normalized);
+        }
+    }
     if let Some(d) = keyword(utility) {
         return Some(d);
     }
@@ -991,11 +1192,119 @@ pub(crate) fn parse(theme: &Theme, utility: &str) -> Option<Vec<Decl>> {
             && !value.is_empty()
             && let Some(d) = handler(theme, value, neg)
         {
-            return Some(d);
+            return valid(d);
         }
     }
     // Bare forms that also take a value (`shadow`, `ring`, `border`, ...).
     bare(theme, u, neg)
+}
+
+/// `decls`, unless one is a negative value of a property CSS takes none
+/// for (`p-[-4px]`, `w-[-10px]`): a browser drops that declaration.
+fn valid(decls: Vec<Decl>) -> Option<Vec<Decl>> {
+    let negative = |v: &PatchValue| match v {
+        PatchValue::Number(n) => *n < 0.0,
+        PatchValue::Str(s) => s.starts_with('-'),
+        _ => false,
+    };
+    let invalid = decls.iter().any(|d| match d {
+        Decl::Set(key, v) => {
+            matches!(
+                key,
+                K::Width
+                    | K::Height
+                    | K::MinWidth
+                    | K::MinHeight
+                    | K::MaxWidth
+                    | K::MaxHeight
+                    | K::FlexBasis
+                    | K::Padding
+                    | K::PaddingHorizontal
+                    | K::PaddingVertical
+                    | K::PaddingTop
+                    | K::PaddingRight
+                    | K::PaddingBottom
+                    | K::PaddingLeft
+                    | K::PaddingStart
+                    | K::PaddingEnd
+                    | K::Gap
+                    | K::RowGap
+                    | K::ColumnGap
+                    | K::BorderWidth
+                    | K::BorderTopWidth
+                    | K::BorderRightWidth
+                    | K::BorderBottomWidth
+                    | K::BorderLeftWidth
+                    | K::BorderStartWidth
+                    | K::BorderEndWidth
+                    | K::BorderRadius
+                    | K::BorderTopLeftRadius
+                    | K::BorderTopRightRadius
+                    | K::BorderBottomRightRadius
+                    | K::BorderBottomLeftRadius
+                    | K::BorderTopStartRadius
+                    | K::BorderTopEndRadius
+                    | K::BorderBottomEndRadius
+                    | K::BorderBottomStartRadius
+                    | K::OutlineWidth
+                    | K::FontSize
+                    | K::LineHeight
+            ) && negative(v)
+        }
+        _ => false,
+    });
+    (!invalid).then_some(decls)
+}
+
+/// Normalize arbitrary CSS lengths before shared CSS parsers consume them.
+/// Quoted font names and strings retain their literal contents.
+fn rem_lengths(value: &str, rem: f32) -> String {
+    let bytes = value.as_bytes();
+    let mut out = String::with_capacity(value.len());
+    let mut at = 0;
+    let mut copied = 0;
+    let mut quote = None;
+    while at < bytes.len() {
+        let ch = bytes[at];
+        if ch == b'\\' {
+            at = (at + 2).min(bytes.len());
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            at += 1;
+            continue;
+        }
+        if ch == b'\'' || ch == b'"' {
+            quote = Some(ch);
+            at += 1;
+            continue;
+        }
+        if ch.is_ascii_digit() || ch == b'.' {
+            let start = at;
+            while at < bytes.len()
+                && (bytes[at].is_ascii_digit()
+                    || matches!(bytes[at], b'.' | b'e' | b'E' | b'+' | b'-'))
+            {
+                at += 1;
+            }
+            if value[at..].starts_with("rem")
+                && !bytes.get(at + 3).is_some_and(u8::is_ascii_alphabetic)
+                && let Some(n) = css::number(&value[start..at])
+            {
+                out.push_str(&value[copied..start]);
+                out.push_str(&format!("{}px", n * rem));
+                at += 3;
+                copied = at;
+            }
+        } else {
+            at += 1;
+        }
+    }
+    out.push_str(&value[copied..]);
+    out
 }
 
 type Handler = fn(&Theme, &str, bool) -> Option<Vec<Decl>>;
@@ -1014,6 +1323,8 @@ static NEGATIVE: &[&str] = &[
     "m",
     "space-x",
     "space-y",
+    "inset-s",
+    "inset-e",
     "inset-x",
     "inset-y",
     "inset",
@@ -1070,7 +1381,10 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
         // block is, a browser blockifies inline boxes: `inline` and
         // `inline-block` compute to `block` there. (Inside a block there is
         // no inline formatting context: they are blocks too.)
-        "block" | "flow-root" | "inline-block" | "inline" => sets(K::Display, "block"),
+        "block" | "inline-block" | "inline" => sets(K::Display, "block"),
+        "flow-root" => sets(K::Display, "flow-root"),
+        "box-content" => sets(K::BoxSizing, "content-box"),
+        "box-border" => sets(K::BoxSizing, "border-box"),
         "grid" | "inline-grid" => sets(K::Display, "grid"),
         "hidden" => sets(K::Display, "none"),
         "static" => sets(K::Position, "static"),
@@ -1344,6 +1658,7 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
             clear: FontVariant::TABULAR_NUMS,
         }),
         // Backgrounds.
+        "text-inherit" | "text-current" => Decl::Set(K::Color, PatchValue::Null),
         "bg-none" => Decl::Part(Part::GradientNone),
         "bg-linear-to-t" | "bg-gradient-to-t" => {
             Decl::Part(Part::Gradient(GradientKind::Linear { angle: deg(0.0) }))
@@ -1488,6 +1803,41 @@ fn outline_width(width: f32) -> Vec<Decl> {
     ]
 }
 
+/// A shadow size of the theme or arbitrary layers (`shadow-xl`,
+/// `shadow-[0_35px_35px_red]`), with an alpha modifier (`/20`) replacing
+/// the alpha of their colors; `inset` for an inset shadow's arbitrary
+/// layers.
+fn shadow_layers(
+    sizes: &FxHashMap<Box<str>, Vec<BoxShadow>>,
+    v: &str,
+    inset: bool,
+) -> Option<(Vec<BoxShadow>, Option<f32>)> {
+    let with_alpha = |l: BoxShadow, a: f32| BoxShadow {
+        color: alpha_of(l.color, a),
+        ..l
+    };
+    if let Some(found) = sized(sizes, v, with_alpha) {
+        return Some(found);
+    }
+    let (base, modifier) = match v.find(']') {
+        Some(end) if v.starts_with('[') => (&v[..=end], v[end + 1..].strip_prefix('/')),
+        _ => return None,
+    };
+    let layers = css::box_shadows(&arbitrary(base)?)?
+        .into_iter()
+        .map(|s| BoxShadow {
+            inset: inset || s.inset,
+            ..s
+        });
+    Some(match modifier {
+        Some(m) => {
+            let a = alpha_modifier(m)?;
+            (layers.map(|l| with_alpha(l, a)).collect(), Some(a))
+        }
+        None => (layers.collect(), None),
+    })
+}
+
 /// A `drop-shadow()` per layer, in their order (CSS's chain: each one
 /// shadows what the ones before it drew too).
 fn drop_shadows(layers: &[BoxShadow]) -> Part {
@@ -1622,6 +1972,12 @@ static PREFIXES: &[(&str, Handler)] = &[
     ("left", |t, v, n| {
         one(set(K::Left, length_value(t, v, n, true)?))
     }),
+    ("inset-s", |t, v, n| {
+        one(set(K::Start, length_value(t, v, n, true)?))
+    }),
+    ("inset-e", |t, v, n| {
+        one(set(K::End, length_value(t, v, n, true)?))
+    }),
     ("start", |t, v, n| {
         one(set(K::Start, length_value(t, v, n, true)?))
     }),
@@ -1634,7 +1990,7 @@ static PREFIXES: &[(&str, Handler)] = &[
             "auto" if !n => 0.0,
             v => match arbitrary(v) {
                 Some(a) => unhinted(&a).trim().parse::<i32>().ok()? as f32,
-                None => v.parse::<u32>().ok()? as f32,
+                None => int(v)?,
             },
         };
         one(setn(K::ZIndex, if n { -z } else { z }))
@@ -1645,6 +2001,10 @@ static PREFIXES: &[(&str, Handler)] = &[
     ("min-h", |t, v, _| size(t, v, K::MinHeight, false)),
     ("max-h", |t, v, _| size(t, v, K::MaxHeight, false)),
     ("size", |t, v, _| {
+        // `screen` is `100vw` or `100vh`, one axis's.
+        if v == "screen" {
+            return None;
+        }
         let mut w = size(t, v, K::Width, true)?;
         w.extend(size(t, v, K::Height, false)?);
         Some(w)
@@ -1652,13 +2012,16 @@ static PREFIXES: &[(&str, Handler)] = &[
     ("w", |t, v, _| size(t, v, K::Width, true)),
     ("h", |t, v, _| size(t, v, K::Height, false)),
     ("basis", |t, v, _| {
+        if let Some(w) = t.containers.get(v) {
+            return one(setn(K::FlexBasis, *w));
+        }
         one(set(K::FlexBasis, length_value(t, v, false, true)?))
     }),
     ("aspect", |t, v, _| {
         let r = match t.aspect.get(v) {
             Some(r) => *r,
             None => match arbitrary(v) {
-                Some(a) => fraction(&a.replace(' ', "")).or_else(|| num(&a))?,
+                Some(a) => fraction(&a.replace(' ', "")).or_else(|| arbitrary_num(&a))?,
                 None => fraction(v)?,
             },
         };
@@ -1666,7 +2029,7 @@ static PREFIXES: &[(&str, Handler)] = &[
     }),
     // Flex and grid.
     ("flex", |t, v, _| {
-        if let Some(n) = num(v) {
+        if let Some(n) = int(v) {
             return Some(vec![
                 setn(K::FlexGrow, n),
                 setn(K::FlexShrink, 1.0),
@@ -1678,7 +2041,7 @@ static PREFIXES: &[(&str, Handler)] = &[
         let w = css::words(&a);
         match w.as_slice() {
             [g] => Some(vec![
-                setn(K::FlexGrow, num(g)?),
+                setn(K::FlexGrow, arbitrary_num(g)?),
                 setn(K::FlexShrink, 1.0),
                 setn(K::FlexBasis, 0.0),
             ]),
@@ -1688,8 +2051,8 @@ static PREFIXES: &[(&str, Handler)] = &[
                     b => length_value(t, &format!("[{b}]"), false, true)?,
                 };
                 Some(vec![
-                    setn(K::FlexGrow, num(g)?),
-                    setn(K::FlexShrink, num(s)?),
+                    setn(K::FlexGrow, arbitrary_num(g)?),
+                    setn(K::FlexShrink, arbitrary_num(s)?),
                     set(K::FlexBasis, basis),
                 ])
             }
@@ -1699,13 +2062,13 @@ static PREFIXES: &[(&str, Handler)] = &[
     ("grow", |_, v, _| {
         one(setn(
             K::FlexGrow,
-            num(v).or_else(|| arbitrary(v).and_then(|a| num(&a)))?,
+            int(v).or_else(|| arbitrary(v).and_then(|a| arbitrary_num(&a)))?,
         ))
     }),
     ("shrink", |_, v, _| {
         one(setn(
             K::FlexShrink,
-            num(v).or_else(|| arbitrary(v).and_then(|a| num(&a)))?,
+            int(v).or_else(|| arbitrary(v).and_then(|a| arbitrary_num(&a)))?,
         ))
     }),
     // Tailwind CSS has no negative grid templates, spans or auto tracks.
@@ -1781,17 +2144,24 @@ static PREFIXES: &[(&str, Handler)] = &[
         if let Some(family) = arbitrary_hinted(&a, "family-name") {
             return one(sets(K::FontFamily, family.trim_matches(['"', '\''])));
         }
-        match num(&a) {
+        match arbitrary_num(&a) {
             Some(w) => one(setn(K::FontWeight, w)),
             None => one(sets(K::FontFamily, a.trim_matches(['"', '\'']))),
         }
     }),
     ("text-shadow", |t, v, _| {
-        if let Some(layers) = t.text_shadows.get(v) {
-            return part(Part::TextShadow(Arc::from(layers.as_slice())));
+        if let Some((layers, alpha)) = sized(&t.text_shadows, v, |l, a| TextShadow {
+            color: alpha_of(l.color, a),
+            ..l
+        }) {
+            let mut d = vec![Decl::Part(Part::TextShadow(Arc::from(layers)))];
+            d.extend(alpha.map(|a| Decl::Part(Part::TextShadowAlpha(a))));
+            return Some(d);
         }
-        let (c, own) = color_value(t, v)?;
-        part(Part::TextShadowColor(c, own))
+        if let Some(a) = current(v) {
+            return one(Decl::CurrentPart(ColorSlot::TextShadow, a));
+        }
+        part(Part::TextShadowColor(color(t, v)?))
     }),
     ("text", text),
     ("tracking", |t, v, n| {
@@ -1809,22 +2179,28 @@ static PREFIXES: &[(&str, Handler)] = &[
     }),
     ("leading", |t, v, _| one(line_height(t, v)?)),
     ("line-clamp", |_, v, _| {
-        one(Decl::Prop(PropDecl::Lines(num(v)? as u32)))
+        one(Decl::Prop(PropDecl::Lines(int(v)? as u32)))
     }),
     ("decoration", |t, v, _| {
-        if let Some(n) = num(v) {
+        if let Some(n) = int(v) {
             return one(setn(K::TextDecorationThickness, n));
+        }
+        if let Some(a) = current(v) {
+            return one(Decl::SetCurrentColor(K::TextDecorationColor, a));
         }
         if let Some(c) = color(t, v) {
             return one(set(K::TextDecorationColor, color_str(c)));
         }
-        one(setn(K::TextDecorationThickness, points(t, v)?))
+        one(setn(K::TextDecorationThickness, arbitrary_points(t, v)?))
     }),
     ("underline-offset", |t, v, n| {
-        let p = num(v).or_else(|| points(t, v))?;
+        let p = int(v).or_else(|| arbitrary_points(t, v))?;
         one(setn(K::TextUnderlineOffset, if n { -p } else { p }))
     }),
     ("caret", |t, v, _| {
+        if let Some(a) = current(v) {
+            return one(Decl::CurrentPart(ColorSlot::Caret, a));
+        }
         one(Decl::Prop(PropDecl::Caret(color(t, v)?)))
     }),
     // Backgrounds.
@@ -1867,19 +2243,25 @@ static PREFIXES: &[(&str, Handler)] = &[
                 PatchValue::Str(a.into()),
             )));
         }
+        if let Some(a) = current(v) {
+            return one(Decl::SetCurrentColor(K::BackgroundColor, a));
+        }
         one(set(K::BackgroundColor, color_str(color(t, v)?)))
     }),
-    ("from", |t, v, _| match stop_position(v) {
-        Some(p) => part(Part::FromPos(p)),
-        None => part(Part::From(color(t, v)?, legacy_color(v))),
+    ("from", |t, v, _| match (stop_position(v), current(v)) {
+        (Some(p), _) => part(Part::FromPos(p)),
+        (_, Some(a)) => one(Decl::CurrentPart(ColorSlot::From, a)),
+        _ => part(Part::From(color(t, v)?, legacy_color(v))),
     }),
-    ("via", |t, v, _| match stop_position(v) {
-        Some(p) => part(Part::ViaPos(p)),
-        None => part(Part::Via(color(t, v)?, legacy_color(v))),
+    ("via", |t, v, _| match (stop_position(v), current(v)) {
+        (Some(p), _) => part(Part::ViaPos(p)),
+        (_, Some(a)) => one(Decl::CurrentPart(ColorSlot::Via, a)),
+        _ => part(Part::Via(color(t, v)?, legacy_color(v))),
     }),
-    ("to", |t, v, _| match stop_position(v) {
-        Some(p) => part(Part::ToPos(p)),
-        None => part(Part::To(color(t, v)?, legacy_color(v))),
+    ("to", |t, v, _| match (stop_position(v), current(v)) {
+        (Some(p), _) => part(Part::ToPos(p)),
+        (_, Some(a)) => one(Decl::CurrentPart(ColorSlot::To, a)),
+        _ => part(Part::To(color(t, v)?, legacy_color(v))),
     }),
     // Borders.
     ("rounded-tl", |t, v, _| {
@@ -1967,67 +2349,73 @@ static PREFIXES: &[(&str, Handler)] = &[
         border(t, v, &[K::BorderWidth], &[K::BorderColor])
     }),
     ("outline-offset", |t, v, n| {
-        let p = num(v).or_else(|| points(t, v))?;
+        let p = int(v).or_else(|| arbitrary_points(t, v))?;
         one(setn(K::OutlineOffset, if n { -p } else { p }))
     }),
     ("outline", |t, v, _| {
-        if let Some(n) = num(v) {
+        if let Some(n) = int(v) {
             return Some(outline_width(n));
+        }
+        if let Some(a) = current(v) {
+            return one(Decl::SetCurrentColor(K::OutlineColor, a));
         }
         if let Some(c) = color(t, v) {
             return one(set(K::OutlineColor, color_str(c)));
         }
-        Some(outline_width(points(t, v)?))
+        Some(outline_width(arbitrary_points(t, v)?))
     }),
     ("inset-ring", |t, v, _| {
-        if let Some(n) = num(v).or_else(|| arbitrary(v).and_then(|a| css::length(&a))) {
+        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| class_length(t, &a))) {
             return part(Part::InsetRing(n));
+        }
+        if let Some(a) = current(v) {
+            return one(Decl::CurrentPart(ColorSlot::InsetRing, a));
         }
         part(Part::InsetRingColor(color(t, v)?))
     }),
     ("ring-offset", |t, v, _| {
-        if let Some(n) = num(v).or_else(|| arbitrary(v).and_then(|a| css::length(&a))) {
+        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| class_length(t, &a))) {
             return part(Part::RingOffset(n));
+        }
+        if let Some(a) = current(v) {
+            return one(Decl::CurrentPart(ColorSlot::RingOffset, a));
         }
         part(Part::RingOffsetColor(color(t, v)?))
     }),
     ("ring", |t, v, _| {
-        if let Some(n) = num(v).or_else(|| arbitrary(v).and_then(|a| css::length(&a))) {
+        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| class_length(t, &a))) {
             return part(Part::Ring(n));
+        }
+        if let Some(a) = current(v) {
+            return one(Decl::CurrentPart(ColorSlot::Ring, a));
         }
         part(Part::RingColor(color(t, v)?))
     }),
     // Effects.
     ("inset-shadow", |t, v, _| {
-        if let Some(s) = t.inset_shadows.get(v) {
-            return part(Part::InsetShadow(Arc::from(s.as_slice())));
+        if let Some((s, alpha)) = shadow_layers(&t.inset_shadows, v, true) {
+            let mut d = vec![Decl::Part(Part::InsetShadow(Arc::from(s)))];
+            d.extend(alpha.map(|a| Decl::Part(Part::InsetShadowAlpha(a))));
+            return Some(d);
         }
-        if let Some(a) = arbitrary(v)
-            && let Some(s) = css::box_shadows(&a)
-        {
-            return part(Part::InsetShadow(Arc::from(
-                s.into_iter()
-                    .map(|s| BoxShadow { inset: true, ..s })
-                    .collect::<Vec<_>>(),
-            )));
+        if let Some(a) = current(v) {
+            return one(Decl::CurrentPart(ColorSlot::InsetShadow, a));
         }
-        let (c, own) = color_value(t, v)?;
-        part(Part::InsetShadowColor(c, own))
+        part(Part::InsetShadowColor(color(t, v)?))
     }),
     ("shadow", |t, v, _| {
-        if let Some(s) = t.shadows.get(v) {
-            return part(Part::Shadow(Arc::from(s.as_slice())));
+        if let Some((s, alpha)) = shadow_layers(&t.shadows, v, false) {
+            let mut d = vec![Decl::Part(Part::Shadow(Arc::from(s)))];
+            d.extend(alpha.map(|a| Decl::Part(Part::ShadowAlpha(a))));
+            return Some(d);
         }
-        if let Some(a) = arbitrary(v)
-            && let Some(s) = css::box_shadows(&a)
-        {
-            return part(Part::Shadow(Arc::from(s)));
+        if let Some(a) = current(v) {
+            return one(Decl::CurrentPart(ColorSlot::Shadow, a));
         }
-        let (c, own) = color_value(t, v)?;
-        part(Part::ShadowColor(c, own))
+        part(Part::ShadowColor(color(t, v)?))
     }),
     ("opacity", |_, v, _| {
-        one(setn(K::Opacity, percent_factor(v)?.clamp(0.0, 1.0)))
+        one(setn(K::Opacity, opacity_factor(v)?.clamp(0.0, 1.0)))
     }),
     ("mix-blend", |_, v, _| {
         crate::effects::BlendMode::parse(v)?;
@@ -2054,7 +2442,7 @@ static PREFIXES: &[(&str, Handler)] = &[
         one(filter(true, 5, Filter::Invert(percent_factor(v)?)))
     }),
     ("backdrop-opacity", |_, v, _| {
-        one(filter(true, 6, Filter::Opacity(percent_factor(v)?)))
+        one(filter(true, 6, Filter::Opacity(opacity_factor(v)?)))
     }),
     ("backdrop-saturate", |_, v, _| {
         one(filter(true, 7, Filter::Saturate(percent_factor(v)?)))
@@ -2089,12 +2477,18 @@ static PREFIXES: &[(&str, Handler)] = &[
         one(filter(false, 7, Filter::Sepia(percent_factor(v)?)))
     }),
     ("drop-shadow", |t, v, _| {
-        let layers = match (v, t.drop_shadows.get(v)) {
-            ("none", None) => Vec::new(),
-            (_, Some(l)) => l.clone(),
-            (_, None) => css::box_shadows(&arbitrary(v)?)?,
-        };
-        part(drop_shadows(&layers))
+        if v == "none" && !t.drop_shadows.contains_key("none") {
+            return part(drop_shadows(&[]));
+        }
+        if let Some((layers, alpha)) = shadow_layers(&t.drop_shadows, v, false) {
+            let mut d = vec![Decl::Part(drop_shadows(&layers))];
+            d.extend(alpha.map(|a| Decl::Part(Part::DropShadowAlpha(a))));
+            return Some(d);
+        }
+        if let Some(a) = current(v) {
+            return one(Decl::CurrentPart(ColorSlot::DropShadow, a));
+        }
+        part(Part::DropShadowColor(color(t, v)?))
     }),
     // Transforms.
     ("translate-x", |t, v, n| {
@@ -2123,13 +2517,13 @@ static PREFIXES: &[(&str, Handler)] = &[
         part(Part::Rotate(signed(degrees(v)?, n)))
     }),
     ("scale-x", |_, v, n| {
-        part(Part::ScaleX(signed(percent_factor(v)?, n)))
+        part(Part::ScaleX(signed(scale_factor(v)?, n)))
     }),
     ("scale-y", |_, v, n| {
-        part(Part::ScaleY(signed(percent_factor(v)?, n)))
+        part(Part::ScaleY(signed(scale_factor(v)?, n)))
     }),
     ("scale", |_, v, n| {
-        let s = signed(percent_factor(v)?, n);
+        let s = signed(scale_factor(v)?, n);
         Some(vec![
             Decl::Part(Part::ScaleX(s)),
             Decl::Part(Part::ScaleY(s)),
@@ -2146,9 +2540,10 @@ static PREFIXES: &[(&str, Handler)] = &[
         Some(vec![Decl::Part(Part::SkewX(s)), Decl::Part(Part::SkewY(s))])
     }),
     ("perspective", |t, v, _| {
-        let p = match t.perspective.get(v) {
-            Some(p) => *p,
-            None => css::length(&arbitrary(v)?)?,
+        let p = match (v, t.perspective.get(v)) {
+            (_, Some(p)) => Some(*p),
+            ("none", None) => None,
+            _ => Some(class_length(t, &arbitrary(v)?)?),
         };
         part(Part::Perspective(p))
     }),
@@ -2265,7 +2660,7 @@ fn count(v: &str, neg: bool) -> Option<u32> {
     }
     match arbitrary(v) {
         Some(a) => unhinted(&a).trim().parse().ok().filter(|&n| n > 0),
-        None => v.parse().ok().filter(|&n| n > 0),
+        None => int(v).map(|n| n as u32).filter(|&n| n > 0),
     }
 }
 
@@ -2283,7 +2678,7 @@ fn line_index(v: &str, neg: bool) -> Option<String> {
             }
             Err(_) => return None,
         },
-        None => v.parse().ok()?,
+        None => int(v)? as i32,
     };
     Some((if neg { -n } else { n }).to_string())
 }
@@ -2292,8 +2687,8 @@ fn grid_template(v: &str, neg: bool) -> Option<PatchValue> {
     if neg {
         return None;
     }
-    if let Ok(n) = v.parse::<u16>() {
-        return (n > 0).then(|| PatchValue::Str(format!("repeat({n}, minmax(0, 1fr))").into()));
+    if let Some(n) = int(v) {
+        return (n > 0.0).then(|| PatchValue::Str(format!("repeat({n}, minmax(0, 1fr))").into()));
     }
     let a = arbitrary(v)?;
     let a = track_list(&a)?;
@@ -2336,17 +2731,32 @@ fn unhinted(a: &str) -> &str {
 
 fn stop_position(v: &str) -> Option<f32> {
     if let Some(p) = v.strip_suffix('%') {
-        return num(p).map(|p| p / 100.0);
+        return int(p).map(|p| p / 100.0);
     }
     let a = arbitrary(v)?;
-    a.strip_suffix('%').and_then(num).map(|p| p / 100.0)
+    a.strip_suffix('%')
+        .and_then(arbitrary_num)
+        .map(|p| p / 100.0)
 }
 
 fn size(theme: &Theme, v: &str, key: StyleKey, width: bool) -> Option<Vec<Decl>> {
-    // Window-relative: `w-screen`, `h-dvh`, `min-h-svh`...
+    if matches!(key, K::Width | K::Height) {
+        let intrinsic = match v {
+            "fit" => Some("fit-content"),
+            "min" => Some("min-content"),
+            "max" => Some("max-content"),
+            _ => None,
+        };
+        if let Some(value) = intrinsic {
+            return one(sets(key, value));
+        }
+    }
+    // Window-relative: `w-screen` (`100vw`), `h-dvh`, `w-dvh`, `min-h-svh`...
     let screen = match v {
-        "screen" | "dvw" | "svw" | "lvw" if width => Some((1.0, 0.0)),
-        "screen" | "dvh" | "svh" | "lvh" if !width => Some((0.0, 1.0)),
+        "screen" if width => Some((1.0, 0.0)),
+        "screen" => Some((0.0, 1.0)),
+        "dvw" | "svw" | "lvw" => Some((1.0, 0.0)),
+        "dvh" | "svh" | "lvh" => Some((0.0, 1.0)),
         _ => None,
     };
     if let Some((fw, fh)) = screen {
@@ -2359,8 +2769,8 @@ fn size(theme: &Theme, v: &str, key: StyleKey, width: bool) -> Option<Vec<Decl>>
         if let Some(w) = theme.containers.get(v) {
             return one(setn(key, *w));
         }
-        // Tailwind's `--container-prose: 65ch`, of the node's font.
-        if v == "prose" {
+        // Tailwind's `--max-width-prose: 65ch`, of the node's font.
+        if v == "prose" && key == K::MaxWidth {
             return one(Decl::Ch(key, 65.0));
         }
     }
@@ -2374,20 +2784,28 @@ fn radius(theme: &Theme, v: &str, keys: &[StyleKey]) -> Option<Vec<Decl>> {
         "full" => 9999.0,
         v => match theme.radius.get(v) {
             Some(r) => *r,
-            None => css::length(&arbitrary(v)?)?,
+            None => class_length(theme, &arbitrary(v)?)?,
         },
     };
     Some(keys.iter().map(|k| setn(*k, r)).collect())
 }
 
 fn border(theme: &Theme, v: &str, widths: &[StyleKey], colors: &[StyleKey]) -> Option<Vec<Decl>> {
-    if let Some(n) = num(v) {
+    if let Some(a) = current(v) {
+        return Some(
+            colors
+                .iter()
+                .map(|&key| Decl::SetCurrentColor(key, a))
+                .collect(),
+        );
+    }
+    if let Some(n) = int(v) {
         return Some(border_widths(widths, n));
     }
     if let Some(a) = arbitrary(v)
         && let Some(w) = arbitrary_hinted(&a, "length")
-            .and_then(css::length)
-            .or_else(|| css::length(&a))
+            .and_then(|s| class_length(theme, s))
+            .or_else(|| class_length(theme, &a))
     {
         return Some(border_widths(widths, w));
     }
@@ -2408,7 +2826,7 @@ fn blur(theme: &Theme, v: &str, backdrop: bool) -> Option<Vec<Decl>> {
         "none" => 0.0,
         v => match theme.blur.get(v) {
             Some(r) => *r,
-            None => css::length(&arbitrary(v)?)?,
+            None => class_length(theme, &arbitrary(v)?)?,
         },
     };
     one(filter(backdrop, 0, Filter::Blur(px(r))))
@@ -2461,13 +2879,13 @@ fn text(theme: &Theme, v: &str, _neg: bool) -> Option<Vec<Decl>> {
     }
     if base.starts_with('[') {
         let a = arbitrary(base)?;
-        if let Some(l) = arbitrary_hinted(&a, "length").and_then(css::length) {
+        if let Some(l) = arbitrary_hinted(&a, "length").and_then(|s| class_length(theme, s)) {
             return one(setn(K::FontSize, l));
         }
         if let Some(c) = arbitrary_hinted(&a, "color").and_then(css::color) {
             return one(set(K::Color, color_str(c)));
         }
-        if let Some(l) = css::length(&a) {
+        if let Some(l) = class_length(theme, &a) {
             let mut out = vec![setn(K::FontSize, l)];
             if line.is_some() {
                 out.push(line_height()?);
@@ -2488,10 +2906,10 @@ fn line_height(theme: &Theme, v: &str) -> Option<Decl> {
     }
     if let Some(a) = arbitrary(v) {
         let a = a.trim();
-        let multiple = match a.strip_suffix('%') {
-            Some(p) => css::number(p).map(|p| p / 100.0),
-            None => css::number(a.strip_suffix("em").unwrap_or(a)),
-        };
+        if a.ends_with('%') || a.ends_with("em") && !a.ends_with("rem") {
+            return Some(sets(K::LineHeight, a));
+        }
+        let multiple = css::number(a);
         if let Some(m) = multiple.filter(|m| *m >= 0.0) {
             return Some(sets(K::LineHeight, &m.to_string()));
         }

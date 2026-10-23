@@ -4,7 +4,8 @@
 // `inline-block` is a block (no gap between its children); `space-x-*` puts
 // a margin after each child but the last (negative ones too); right to
 // left, `ml-*` / `mr-*` stay on their side while the `marginRight` key
-// keeps React Native's meaning (the end). Arbitrary values, as this
+// keeps React Native's meaning (the end); `max-*` breakpoints sort widest
+// first, so the narrowest wins. Arbitrary values, as this
 // domain's theme has a spacing of its own. The script checks each frame.
 import { Text, View } from "nsh";
 
@@ -32,6 +33,19 @@ function App() {
       <View testID="overlap" class="flex-row -space-x-[10px] w-[300px] h-[20px]">
         <View testID="overlap-a" style={{ width: 50, height: 20 }} />
         <View testID="overlap-b" style={{ width: 50, height: 20 }} />
+      </View>
+      <View testID="content-box" class="box-content w-[100px] h-[20px] p-[10px] border-[2px]" />
+      <View class="flex-row space-x-[20px]! w-[200px] h-[20px]">
+        <View class="w-[30px] h-[20px] mr-0" />
+        <View testID="important-space" class="w-[30px] h-[20px]" />
+      </View>
+      <View class="relative w-[200px] h-[80px] p-[20px]">
+        <View class="static w-[100px] h-[40px]">
+          <View testID="static-containing-block" class="absolute left-0 top-0 size-[10px]" />
+        </View>
+      </View>
+      <View>
+        <View testID="variant-order" class="h-[20px] max-md:w-[20px] max-lg:w-[40px]" />
       </View>
       <View style={{ direction: "rtl" }}>
         <View testID="rtl-classes" class="flex-row w-[300px] h-[20px]">

@@ -66,7 +66,7 @@ pub(super) enum Part {
 
 impl Part {
     /// The state bits and rank of a state style.
-    fn state(self) -> Option<(u8, u16)> {
+    fn state(self) -> Option<(u8, crate::tailwind::Key)> {
         Some(match self {
             Part::Active => (state::PRESSED, rank::ACTIVE),
             Part::Hover => (state::HOVERED, rank::HOVER),
@@ -922,10 +922,13 @@ impl<M: TextEngine> Core<M> {
         keys[1] = elements.next().copied().unwrap_or(NO_KEY);
         keys[2] = elements.next().copied().unwrap_or(NO_KEY);
         for (i, k) in keys.into_iter().enumerate() {
-            if k != NO_KEY
-                && !keys[..i].contains(&k)
-                && self.space_of(k).is_some() != self.nodes[k as usize].spaced
-            {
+            if k == NO_KEY || keys[..i].contains(&k) {
+                continue;
+            }
+            let (now, was) = (self.space_of(k).is_some(), self.nodes[k as usize].spaced);
+            // The one that moved may have left another `space-*` parent,
+            // whose margin it still has.
+            if now != was || i == 0 && now {
                 self.restyle(k);
             }
         }
@@ -937,7 +940,7 @@ impl<M: TextEngine> Core<M> {
         // Under its own classes and style, as `:where()` is in CSS.
         let space = self.space_of(key);
         if let Some(space) = space {
-            space.apply(&mut base);
+            space.apply(&mut base, false);
         }
         let spaced = space.is_some();
         let node = &mut self.nodes[key as usize];
@@ -950,6 +953,15 @@ impl<M: TextEngine> Core<M> {
             .classes
             .as_ref()
             .is_some_and(|c| c.deps() & deps::CH != 0);
+        let node = &mut self.nodes[key as usize];
+        if node.reads_ch != reads_ch {
+            if reads_ch {
+                self.ch_readers += 1;
+            } else {
+                self.ch_readers -= 1;
+            }
+            node.reads_ch = reads_ch;
+        }
         let inherited_font = reads_ch.then(|| self.inherited_text_style(key));
         let mut ch = match inherited_font {
             Some(font) => self.zero_advance(font),
@@ -984,6 +996,25 @@ impl<M: TextEngine> Core<M> {
         self.set_class_props(key, props);
         let id = self.nodes[key as usize].id;
         let _ = self.set_style(id, style);
+    }
+
+    /// A moved subtree or a changed font can change every descendant's `ch`.
+    pub(super) fn ch_changed(&mut self, key: Key) {
+        if self.ch_readers == 0 {
+            return;
+        }
+        let mut stack = vec![key];
+        while let Some(k) = stack.pop() {
+            let node = &self.nodes[k as usize];
+            if node
+                .classes
+                .as_ref()
+                .is_some_and(|c| c.deps() & deps::CH != 0)
+            {
+                self.ch_styled.push((k, node.id));
+            }
+            stack.extend_from_slice(&node.children);
+        }
     }
 
     /// The nodes with lengths in `ch` styled since the last commit are
@@ -1081,7 +1112,10 @@ impl<M: TextEngine> Core<M> {
                 inline: inline_color(inline),
             };
             classes.apply_with(&cx, self.tailwind.theme(), current, ch, style, props, |s| {
-                inline.apply(s)
+                inline.apply(s);
+                if let Some(space) = self.space_of(key) {
+                    space.apply(s, true);
+                }
             });
             if positional {
                 let parent = self.nodes[key as usize].parent;
@@ -1089,6 +1123,9 @@ impl<M: TextEngine> Core<M> {
             }
         } else {
             node.inline_style.apply(style);
+            if let Some(space) = self.space_of(key) {
+                space.apply(style, true);
+            }
         }
     }
 
@@ -1259,7 +1296,7 @@ impl<M: TextEngine> Core<M> {
         if paragraph && kind == Kind::Text {
             self.mark_text_block(key);
         }
-        if (old.no_wrap != props_no_wrap || old.selectable != props_selectable)
+        if (old.no_wrap != props_no_wrap || old.selectable != props_selectable || selection)
             && kind != Kind::Text
         {
             // The texts inside inherit them.

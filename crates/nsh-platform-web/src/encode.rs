@@ -21,7 +21,7 @@ use nsh_core::{
 };
 use rustc_hash::FxHashMap;
 
-use crate::text::{WebLayout, css_font};
+use crate::text::{WebLayout, css_font, font_variant_numeric};
 
 /// JSON output.
 pub(crate) struct Out {
@@ -781,24 +781,10 @@ fn text_css(style: &nsh_core::ResolvedTextStyle, shadow: Option<&nsh_core::TextS
             let _ = write!(css, "text-underline-offset:{o}px;");
         }
     }
-    let v = style.font_variant.0;
-    let mut numeric = Vec::new();
-    if v & nsh_core::FontVariant::OLDSTYLE_NUMS != 0 {
-        numeric.push("oldstyle-nums");
+    if let Some(numeric) = font_variant_numeric(style.font_variant) {
+        let _ = write!(css, "font-variant-numeric:{numeric};");
     }
-    if v & nsh_core::FontVariant::LINING_NUMS != 0 {
-        numeric.push("lining-nums");
-    }
-    if v & nsh_core::FontVariant::TABULAR_NUMS != 0 {
-        numeric.push("tabular-nums");
-    }
-    if v & nsh_core::FontVariant::PROPORTIONAL_NUMS != 0 {
-        numeric.push("proportional-nums");
-    }
-    if !numeric.is_empty() {
-        let _ = write!(css, "font-variant-numeric:{};", numeric.join(" "));
-    }
-    if v & nsh_core::FontVariant::SMALL_CAPS != 0 {
+    if style.font_variant.0 & nsh_core::FontVariant::SMALL_CAPS != 0 {
         css.push_str("font-variant-caps:small-caps;");
     }
     if let Some(s) = shadow
@@ -1480,6 +1466,13 @@ fn encode_command(out: &mut Out, id: u32, command: &Command) {
                 .end();
         }
         Command::SetClipboard(text) => out.item("cmd").num(id).str("setClipboard").str(text).end(),
+        Command::OpenUrl { id: request, url } => out
+            .item("cmd")
+            .num(id)
+            .str("openUrl")
+            .num(*request)
+            .str(url)
+            .end(),
         Command::ReadClipboard {
             id: request,
             has_only,
@@ -1513,6 +1506,38 @@ fn encode_command(out: &mut Out, id: u32, command: &Command) {
                 .num(id)
                 .str("readClipboardFiles")
                 .num(*request)
+                .end();
+        }
+        // `nsh.js` `pickImages`: the request, the limit, the longest side
+        // (0: any), the quality (-1: none), whether the stored format is
+        // asked for.
+        Command::PickImages {
+            id: request,
+            request: asked,
+        } => {
+            out.item("cmd")
+                .num(id)
+                .str("pickImages")
+                .num(*request)
+                .num(asked.limit)
+                .num(asked.max_dimension.map_or(0, |d| d.0.max(1)))
+                .num(asked.quality.map_or(-1.0, |q| q.0))
+                .bool(asked.format == nsh_core::picker::PickFormat::Current)
+                .end();
+        }
+        // The id is written whole (`num` rounds); the page answers with
+        // `onHost` `{ type: "reply" }` (`nsh.js` `hostCall`).
+        Command::HostCall {
+            id: request,
+            name,
+            args,
+        } => {
+            out.item("cmd")
+                .num(id)
+                .str("hostCall")
+                .raw(&request.to_string())
+                .str(name)
+                .raw(&args.to_string())
                 .end();
         }
         Command::ImageInfo { id: request, uri } => {

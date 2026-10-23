@@ -52,7 +52,7 @@ view()
 ## How classes combine
 
 - **Later wins.** Among utilities of the same variant level, the one later in the string wins: `"p-4 p-2"` is `p-2`. A component can take a `class` prop and append it to its own classes without `tailwind-merge`.
-- **Variants apply after plain utilities**, in Tailwind's variant order: `group-*:`, `selection:`, `placeholder:`, position (`first:` ...), `checked:`, `indeterminate:`, `selected:`, `focus-within:`, `hover:`, `focus:`, `active:`, `enabled:`, `disabled:`, motion, `max-*:` breakpoints, then breakpoints ascending, orientation, direction, `dark:`, then platform. So `"active:bg-red-500 bg-blue-500"` is red while pressed.
+- **Variants apply after plain utilities**, in Tailwind's variant order: `group-*:` (by their state, then by group name), `selection:`, `placeholder:`, position (`first:` ...), `checked:`, `indeterminate:`, `selected:`, `focus-within:`, `hover:`, `focus:`, `focus-visible:`, `active:`, `enabled:`, `disabled:`, motion, `max-*:` breakpoints widest first, then breakpoints ascending, orientation, direction, `dark:`, then platform. A class's highest variant decides, then its next highest, and one more variant comes later (`dark:hover:` after `dark:`), as Tailwind sorts them. So `"active:bg-red-500 bg-blue-500"` is red while pressed.
 - **`style` wins over classes.** The inline `style` is applied on top of the resolved classes. An important utility (`!p-4` or `p-4!`) wins over the inline style too.
 - **Text styles inherit.** Text utilities on a view (`text-white`, `font-bold`, `text-center`, ...) pass to the `<Text>` and `<Input>` elements inside it, as in CSS.
 - **Display is CSS's.** `flex` and `inline-flex` make a row unless a direction utility says otherwise, wherever it is in the string (`flex-col flex` is a column). Views without `flex` keep NSH's column default.
@@ -79,7 +79,7 @@ Margins, insets, `translate`, `rotate`, `skew`, `scale`, `z`, `hue-rotate`, `tra
 
 ### Colors
 
-The full Tailwind 4 palette is built in: `red`, `orange`, `amber`, `yellow`, `lime`, `green`, `emerald`, `teal`, `cyan`, `sky`, `blue`, `indigo`, `violet`, `purple`, `fuchsia`, `pink`, `rose`, `slate`, `gray`, `zinc`, `neutral`, `stone`, each in shades `50`, `100`–`900`, `950`; plus `black`, `white` and `transparent`. Your own colors come from `nsh.json` (see [Theme customization](#theme-customization)).
+The full Tailwind 4 palette is built in: `red`, `orange`, `amber`, `yellow`, `lime`, `green`, `emerald`, `teal`, `cyan`, `sky`, `blue`, `indigo`, `violet`, `purple`, `fuchsia`, `pink`, `rose`, `slate`, `gray`, `zinc`, `neutral`, `stone`, `mauve`, `olive`, `mist`, `taupe`, each in shades `50`, `100`–`900`, `950`; plus `black`, `white` and `transparent`. Your own colors come from `nsh.json` (see [Theme customization](#theme-customization)).
 
 Every color utility takes:
 
@@ -111,13 +111,15 @@ Arbitrary CSS properties (`[mask-type:luminance]`) are not supported.
 |---|---|
 | `flex`, `inline-flex` | `display: "flex"`, and a row unless a direction utility is present |
 | `grid`, `inline-grid` | `display: "grid"` |
-| `block`, `flow-root` | `display: "block"` (block layout) |
+| `block`, `flow-root` | block layout or an independent block formatting context |
+| `box-border`, `box-content` | dimensions include borders and padding, or content alone |
+| `w/h/size-min`, `w/h/size-max`, `w/h/size-fit` | Taffy intrinsic sizes: `min-content`, `max-content`, `fit-content` |
 | `inline`, `inline-block` | `display: "block"`: what a browser computes for them in a flex or grid parent |
 | `hidden` | `display: "none"` |
 | `relative`, `absolute` | `position` |
-| `static` | `position: "static"`: in the flow, its insets ignored (still the containing block of its absolute children, as every view is) |
-| `fixed` | `position: "fixed"`: a view laid out in its root view's box (the window or its modal) above that root view's children, in place while what is around it scrolls |
-| `sticky` | `position: "sticky"`: in the flow, it sticks `top-*` (`left-*` in a horizontal scroll view) from the start of the scroll view's viewport while its parent shows, above its siblings |
+| `static` | `position: "static"`: in the flow, its insets ignored ; absolute descendants use their nearest positioned ancestor |
+| `sticky` | `position: "sticky"`: in the flow, it sticks `top` (`left` in a horizontal scroll view) within the scroll view around it while its parent is in view |
+| `fixed` | `position: "fixed"`: an element laid out in its root view's box (the window or its modal) above that root view's children, in place while what is around it scrolls |
 | `inset-<n>`, `inset-x-<n>`, `inset-y-<n>` | `top` / `right` / `bottom` / `left` |
 | `top-<n>`, `right-<n>`, `bottom-<n>`, `left-<n>` | the matching offset |
 | `start-<n>`, `end-<n>` | `start` / `end` (direction-aware) |
@@ -234,7 +236,7 @@ Container widths (points): `3xs` 256, `2xs` 288, `xs` 320, `sm` 384, `md` 448, `
 | `text-<color>` | `color` |
 | `leading-none` (1), `leading-tight` (1.25), `leading-snug` (1.375), `leading-normal` (1.5), `leading-relaxed` (1.625), `leading-loose` (2) | `lineHeight` as a multiple of the font size |
 | `leading-<n>`, `leading-[<length>]` | `lineHeight` in points (`leading-6` = 24) |
-| `leading-[<number>]` | `lineHeight` as a multiple of the font size (`leading-[1.5]`; also `em` and `%`), as in `text-sm/[1.5]` |
+| `leading-[<number>]` | `lineHeight` as a multiple of the font size (`leading-[1.5]`), inherited as that multiplier; `em` and `%` compute a length at the element's font size before inheritance |
 | `tracking-tighter` (-0.05em), `tracking-tight` (-0.025em), `tracking-normal` (0), `tracking-wide` (0.025em), `tracking-wider` (0.05em), `tracking-widest` (0.1em) | `letterSpacing` relative to the font size |
 | `tracking-[<value>]` | `letterSpacing`: `tracking-[0.2em]`, `tracking-[1px]` |
 
@@ -265,8 +267,8 @@ Container widths (points): `3xs` 256, `2xs` 288, `xs` 320, `sm` 384, `md` 448, `
 | `decoration-auto`, `decoration-from-font` | `textDecorationThickness: "auto"` |
 | `decoration-<color>` | `textDecorationColor` |
 | `underline-offset-<n>`, `underline-offset-[<length>]`, `underline-offset-auto` | `textUnderlineOffset` |
-| `text-shadow-2xs`, `-xs`, `-sm`, `-md`, `-lg` | a text shadow from the theme (one layer: the widest of the theme's) |
-| `text-shadow-<color>` | its color (keeps each layer's alpha unless the color has one) |
+| `text-shadow-2xs`, `-xs`, `-sm`, `-md`, `-lg`; `/<alpha>` | a text shadow from the theme (one layer: the widest of the theme's); the modifier is the layers' alpha: `text-shadow-md/20` |
+| `text-shadow-<color>`, `text-shadow-current` | its color, at the size's alpha |
 | `text-shadow-none` | removes it |
 
 Tailwind's text shadows have several layers; natively one shadow is drawn, the widest layer.
@@ -276,7 +278,7 @@ Tailwind's text shadows have several layers; natively one shadow is drawn, the w
 | Class | Sets |
 |---|---|
 | `placeholder:text-<color>` | `placeholderColor` |
-| `selection:bg-<color>` | `selectionColor` (the highlight of an input's or a selectable text's selection) |
+| `selection:bg-<color>` | `selectionColor` (the highlight of an input's or a selectable text's selection, and of those inside the element) |
 | `caret-<color>` | the cursor color |
 
 ## Backgrounds
@@ -345,15 +347,15 @@ Rings are box shadows with a spread, drawn outside the border without taking spa
 
 | Class | Sets |
 |---|---|
-| `shadow-2xs`, `shadow-xs`, `shadow-sm`, `shadow`, `shadow-md`, `shadow-lg`, `shadow-xl`, `shadow-2xl` | `boxShadow` from the theme |
+| `shadow-2xs`, `shadow-xs`, `shadow-sm`, `shadow`, `shadow-md`, `shadow-lg`, `shadow-xl`, `shadow-2xl`; `/<alpha>` | `boxShadow` from the theme; the modifier is the layers' alpha: `shadow-xl/20` |
 | `shadow-[<box-shadow>]` | an arbitrary shadow: `shadow-[0_8px_24px_rgb(0_0_0_/_0.12)]` |
-| `shadow-<color>` | recolors the shadow layers: `shadow-indigo-500/40` |
+| `shadow-<color>`, `shadow-current` | recolors the shadow layers, at the size's alpha: `shadow-indigo-500/40` |
 | `shadow-none` | no shadow |
 | `inset-shadow-2xs`, `-xs`, `-sm`, `inset-shadow`, `inset-shadow-[...]`, `inset-shadow-<color>`, `inset-shadow-none` | an inner shadow |
 | `opacity-<n>`, `opacity-[<value>]` | `opacity`: `opacity-50` = 0.5 |
 | `mix-blend-<mode>` | `mixBlendMode`: `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `color-dodge`, `color-burn`, `hard-light`, `soft-light`, `difference`, `exclusion`, `hue`, `saturation`, `color`, `luminosity`, `plus-darker`, `plus-lighter` |
 
-Shadows, rings and inset shadows combine into one `boxShadow` list, as in CSS. A shadow color without its own alpha keeps each layer's alpha.
+Shadows, rings and inset shadows combine into one `boxShadow` list, as in CSS. A shadow color replaces each layer's color, alpha too, as Tailwind's `--tw-shadow-color`: `shadow-md shadow-red-500` is an opaque red shadow, `shadow-md/20 shadow-red-500` one at 20%.
 
 ## Filters
 
@@ -363,7 +365,7 @@ Shadows, rings and inset shadows combine into one `boxShadow` list, as in CSS. A
 | `brightness-<n>`, `contrast-<n>`, `saturate-<n>` | percentage factors: `brightness-125` = 1.25 |
 | `grayscale`, `grayscale-<n>`, `invert`, `invert-<n>`, `sepia`, `sepia-<n>` | bare: 100% |
 | `hue-rotate-<deg>`, `-hue-rotate-<deg>` | `hue-rotate()` |
-| `drop-shadow`, `drop-shadow-xs`, `-sm`, `-md`, `-lg`, `-xl`, `-2xl`, `drop-shadow-[...]` | a `drop-shadow()` per layer, after the other filters; the web, Linux, Windows and GPUI draw every layer, iOS, macOS and Android the last one |
+| `drop-shadow`, `drop-shadow-xs`, `-sm`, `-md`, `-lg`, `-xl`, `-2xl`, `drop-shadow-[...]`, `drop-shadow-none`; `drop-shadow-<color>`, `drop-shadow-current`; `/<alpha>` on either | a `drop-shadow()` per layer, after the other filters; a color replaces the layers', at the size's alpha; the web, Linux, Windows and GPUI draw every layer, iOS, macOS and Android the widest |
 | `drop-shadow-none` | removes it |
 | `filter-none` | removes all filters |
 | `backdrop-blur`, `backdrop-blur-<size>`, `backdrop-blur-[<length>]` | blurs what is behind the view |
@@ -382,7 +384,7 @@ Shadows, rings and inset shadows combine into one `boxShadow` list, as in CSS. A
 | `rotate-x-<deg>`, `rotate-y-<deg>`, `rotate-z-<deg>` | 3D rotation (in `transform`, after the translation, the rotation and the scale) |
 | `scale-<pct>`, `scale-x-<pct>`, `scale-y-<pct>`, `scale-[<factor>]` | scale: `scale-95` = 0.95, `-scale-x-100` mirrors |
 | `skew-<deg>`, `skew-x-<deg>`, `skew-y-<deg>` | skew (not on Android) |
-| `perspective-dramatic` (100), `-near` (300), `-normal` (500), `-midrange` (800), `-distant` (1200), `perspective-[<length>]` | depth for the 3D rotations of the element's children, seen from its center (CSS's `perspective`: `<View class="perspective-near"><View class="rotate-y-45" /></View>`) |
+| `perspective-dramatic` (100), `-near` (300), `-normal` (500), `-midrange` (800), `-distant` (1200), `perspective-[<length>]`, `perspective-none` | depth for the 3D rotations of the element's children, seen from its center (CSS's `perspective`: `<View class="perspective-near"><View class="rotate-y-45" /></View>`) |
 | `origin-center`, `-top`, `-top-right`, `-right`, `-bottom-right`, `-bottom`, `-bottom-left`, `-left`, `-top-left`, `origin-[<value>]` | `transformOrigin` |
 | `backface-hidden`, `backface-visible` | `backfaceVisibility` |
 | `transform-none` | clears the 3D rotations and the skews (CSS's `transform: none`) |
@@ -427,7 +429,7 @@ These utilities are rendering hints, or what every native view already is; they 
 
 ## Not supported
 
-`peer-*` variants, pseudo-elements (`before:`, `after:`), arbitrary properties (`[prop:value]`), `overflow-auto` / `overflow-scroll`, `divide-*`, `columns-*`, `float-*`, `container`, container queries, `order-*`, `transform-3d`, `select-all`, `border-double` / `outline-double`, intrinsic sizes (`w-fit`, `h-min`, `max-w-max`, ...), `snap-*`, `scroll-*`, `overscroll-*`, `touch-*`, `isolate` and `box-content` are unknown classes. `nsh build` and `nsh dev` warn about unknown classes they find in your source (`file:line:col: unknown class '...'`), and the runtime logs each unknown class once.
+`peer-*` variants, pseudo-elements (`before:`, `after:`), arbitrary properties (`[prop:value]`), `overflow-auto` / `overflow-scroll`, `divide-*`, `columns-*`, `float-*`, `container`, container queries, `order-*`, `transform-3d`, `select-all`, `border-double` / `outline-double`, intrinsic min/max constraints (such as `max-w-max`), `snap-*`, `scroll-*`, `overscroll-*`, `touch-*` and `isolate` are unknown classes. `nsh build` and `nsh dev` warn about unknown classes they find in your source (`file:line:col: unknown class '...'`), and the runtime logs each unknown class once.
 
 ## Variants
 
@@ -580,7 +582,7 @@ each(items, |item: &Item| item.id, move |item, index| {
 
 ### Placeholder and selection
 
-`placeholder:` applies to an `<Input>`'s placeholder and only takes a text color: `placeholder:text-zinc-400` (the style key `placeholderColor`). `selection:` applies to the selection of an `<Input>` or a selectable `<Text>` and takes its background, the highlight: `selection:bg-violet-200` (the style key `selectionColor`, which also tints an input's caret where the platform draws them in one color).
+`placeholder:` applies to an `<Input>`'s placeholder and only takes a text color: `placeholder:text-zinc-400` (the style key `placeholderColor`). `selection:` applies to the selection of an `<Input>` or a selectable `<Text>`, and on any element to those inside it (Tailwind's `& *::selection`; the nearest element's wins), and takes its background, the highlight: `selection:bg-violet-200` (the style key `selectionColor`, which also tints an input's caret where the platform draws them in one color).
 
 ### Important
 

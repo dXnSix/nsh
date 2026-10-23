@@ -91,8 +91,9 @@ Layout is computed in Rust (flexbox and CSS grid). The defaults differ from CSS'
 
 | Key | Type | Rust | Description |
 |---|---|---|---|
-| `display` | `"flex" \| "grid" \| "block" \| "none"` | `.flex()`, `.grid()`, `.hidden()` | The layout of the children. `"none"` removes the element from layout and hides it. `"block"` stacks children as CSS block layout does. Default `"flex"`. |
-| `position` | `"relative" \| "absolute" \| "static" \| "fixed" \| "sticky"` | `.relative()`, `.absolute()` | `"absolute"` takes the element out of the flow and places it by `top` / `right` / `bottom` / `left` relative to its parent. `"static"` stays in the flow and ignores its insets. `"fixed"` lays a view out in its root view's box (the window, or the modal it is in) and draws it above that root view's children, so it stays in place while what is around it scrolls; without insets it sits at the root view's top left, and other elements are placed as `"absolute"`. `"sticky"` stays in the flow and, while its parent is in view, sticks `top` (`left` in a horizontal scroll view) from the start of the viewport of the scroll view around it, until its end meets its parent's content box's; it draws above its siblings of the same `zIndex`. Every view is the containing block of its absolute children, whatever its own `position`. Default `"relative"`. |
+| `display` | `"flex" \| "grid" \| "block" \| "flow-root" \| "none"` | `.flex()`, `.grid()`, `.hidden()` | The layout of the children. `"none"` removes the element from layout and hides it. `"block"` stacks children as CSS block layout does. Default `"flex"`. |
+| `boxSizing` | `"border-box" \| "content-box"` | | Dimensions include borders and padding, or content alone. Default `"border-box"`. |
+| `position` | `"relative" \| "absolute" \| "static" \| "fixed" \| "sticky"` | `.relative()`, `.absolute()` | `"absolute"` takes the element out of the flow and places it by `top` / `right` / `bottom` / `left` relative to its nearest positioned ancestor (its parent unless that is `"static"`). `"static"` stays in flow and ignores insets. `"fixed"` preserves the element type and lays out and mounts it in its surface or modal root, keeping it in place while surrounding content scrolls. `"sticky"` stays in the flow and, while its parent is in view, sticks `top` (`left` in a horizontal scroll view) from the start of the viewport of the scroll view around it, until its end meets its parent's content box's; it draws above its siblings of the same `zIndex`. Default `"relative"`. |
 | `top` | `DimensionValue \| AnimatedNode` | `.top(…)`, `.inset(…)`, `.bind_sticky_top(&node)` | Offset from the parent's top edge (absolute) or from the element's own position (relative). On a sticky view, where it sticks, which an animated value moves every frame. |
 | `right` | `DimensionValue` | `.right(…)` | Offset from the right edge. In right-to-left layouts it means the end edge. |
 | `bottom` | `DimensionValue` | `.bottom(…)` | Offset from the bottom edge. |
@@ -315,10 +316,10 @@ A `TransformStep` is an object with one key:
 | `scale`, `scaleX`, `scaleY` | `number` (factor) | `.scale(f)`, `.scale_x(f)`, `.scale_y(f)`; `.bind_scale(&v)` | yes |
 | `rotate`, `rotateZ`, `rotateX`, `rotateY` | `number` (degrees) or `string` (`"45deg"`, `"0.5rad"`) | `.rotate(deg(…))`, `.rotate_x(…)`, `.rotate_y(…)`; `.bind_rotate(&v)` | yes |
 | `skewX`, `skewY` | `number` (degrees) or `string` | `.skew_x(…)`, `.skew_y(…)` | no |
-| `perspective` | `number` | `.perspective(d)` | no |
+| `perspective` | `number` | `.perspective(d)` on the parent (CSS's `perspective` property) | no |
 
 ```rust tabs
-view().perspective(px(600.0)).rotate_y(deg(20.0)).scale(0.95)
+view().perspective(px(600.0)).child(view().rotate_y(deg(20.0)).scale(0.95))
 ```
 
 ```tsx tabs
@@ -478,3 +479,5 @@ Some settings are props in NSH, not style keys. Their Tailwind classes exist, bu
 - [Tailwind reference](./tailwind-reference.md): every supported utility and variant.
 - [Layout](../docs/layout.md): flexbox and grid in practice.
 - [view](../elements/view.md), [text](../elements/text.md), [image](../elements/image.md): the elements these styles apply to.
+
+`width`, `height` and `flexBasis` also accept `"min-content"`, `"max-content"` and `"fit-content"`, computed by Taffy.

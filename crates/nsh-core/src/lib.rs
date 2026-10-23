@@ -8,6 +8,8 @@
 //! Everything here is single-threaded and allocation-conscious: the core runs
 //! on the engine thread, between the JS host and the platform backend.
 
+mod byte_size;
+pub use byte_size::ByteSize;
 pub mod access;
 pub mod animation;
 pub mod canvas;
@@ -22,14 +24,17 @@ mod fenwick;
 pub mod filesystem;
 pub mod geometry;
 mod grid;
+pub mod host_channel;
 pub mod image;
 pub mod input;
 pub mod js;
 pub mod keymap;
 mod mount;
 pub mod navigation;
+pub mod open_url;
 mod ops;
 pub mod overlay;
+pub mod picker;
 pub mod platform;
 mod props;
 pub mod reactive;
@@ -70,9 +75,9 @@ pub use crate::{
     geometry::{Bounds, Corners, Edges, Point, Points, Size},
     image::ImageData,
     mount::{
-        ImageOptions, InputConfig, ModalConfig, MountBatch, MountItem, NO_NATIVE_HEADER,
-        NativeProps, NavShader, ScreenConfig, ScrollBehavior, StickyCell, VideoProps, ViewKind,
-        WebProps,
+        AudioSession, ImageOptions, InputConfig, ModalConfig, MountBatch, MountItem,
+        NO_NATIVE_HEADER, NativeProps, NavShader, ScreenConfig, ScrollBehavior, StickyCell,
+        VideoProps, ViewKind, WebProps,
     },
     ops::{
         AutoCapitalize, AutoFill, CellSlot, Command, ContextMenuEvent, Dialog, DialogButton,
