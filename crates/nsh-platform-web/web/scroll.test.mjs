@@ -257,3 +257,34 @@ test('a glide moves with the content the core keeps in place', (t) => {
   pad.p.wheel(wheel(pad.el, 20));
   assert.equal(pad.el.scrollTop, 140);
 });
+
+test('a scroll a command stops ends once, with or without moving', (t) => {
+  t.mock.method(performance, 'now', () => clock);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  // Each from `start`, scrolled 40 down.
+  const commands = [
+    [['cmd', 1, 'scrollTo', 0, 40, false], 0, 40],
+    [['cmd', 1, 'scrollTo', 0, 40, true], 0, 40],
+    [['cmd', 1, 'scrollToEnd', false], 4760, 4800],
+    [['cmd', 1, 'scrollTo', 0, 0, false], 0, 0],
+  ];
+  for (const [command, start, end] of commands) {
+    const { p, el } = scroller();
+    el.scrollTop = start;
+    const ends = [];
+    el._events.add('onScrollEnd');
+    p.event = (id, name, e) => ends.push(e.y);
+    // A touchpad moves the view at once; its end waits for it to settle,
+    // and the browser's `scrollend` meanwhile is not the end.
+    p.wheel(wheel(el, 20));
+    p.wheel(wheel(el, 20));
+    p.scrollEnded(el);
+    const at = el.scrollTop;
+    p.op_cmd(command);
+    t.mock.timers.tick(200);
+    // The browser's `scrollend` follows a scroll that moved, only then.
+    if (el.scrollTop !== at) p.scrollEnded(el);
+    assert.deepEqual(ends, [end], command.slice(2).join(' '));
+    assert.equal(el._driven, 0);
+  }
+});

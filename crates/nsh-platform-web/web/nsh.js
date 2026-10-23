@@ -3444,16 +3444,18 @@ class Player {
       case "scrollTo":
         if (!el) break;
         el._applied++;
-        this.stopGlide(el);
+        this.stopGlide(el, args[0], args[1]);
         el._smooth = args[2] ? [args[0], args[1]] : null;
         el.scrollTo({ left: args[0], top: args[1], behavior: args[2] ? "smooth" : "instant" });
         break;
-      case "scrollToEnd":
+      case "scrollToEnd": {
         if (!el) break;
         el._applied++;
-        this.stopGlide(el);
-        el.scrollTo({ left: el._horizontal ? el.scrollWidth : 0, top: el._horizontal ? 0 : el.scrollHeight, behavior: args[0] ? "smooth" : "instant" });
+        const [x, y] = el._horizontal ? [el.scrollWidth, 0] : [0, el.scrollHeight];
+        this.stopGlide(el, x, y);
+        el.scrollTo({ left: x, top: y, behavior: args[0] ? "smooth" : "instant" });
         break;
+      }
       case "zoomTo": if (el) this.zoomCommand(el, ...args); break;
       case "dialog": this.dialog(args[0], args[1], args[2], args[3], args[4] ?? [], args[5] ?? true, args[6] ?? false); break;
       case "toast": this.toast(args[0], args[1]); break;
@@ -4496,16 +4498,24 @@ class Player {
     }, 200);
   }
 
-  /** Stops `el`'s glide where it is for a scroll command of the core's, as
-   * the native backends interrupt theirs: left running, its next frame
-   * would put the offset back. */
-  stopGlide(el) {
+  /** Stops `el`'s glide where it is for a scroll command of the core's to
+   * (`x`, `y`), as the native backends interrupt theirs: left running, its
+   * next frame would put the offset back. The browser's `scrollend` after
+   * the command's scroll ends the scroll it stopped; a command that leaves
+   * the view where it is moves nothing, and no `scrollend` follows, so its
+   * `onScrollEnd` is sent here. */
+  stopGlide(el, x, y) {
     const a = el._glide;
     if (!a) return;
     cancelAnimationFrame(a.frame);
     clearTimeout(a.timer);
     el._glide = null;
     this.drive(el, -1);
+    // Browsers clamp the offsets of scrolls.
+    const stays = (to, at, max) => Math.abs(Math.min(Math.max(to, 0), max) - at) < 0.5;
+    if (stays(x, el.scrollLeft, el.scrollWidth - el.clientWidth) && stays(y, el.scrollTop, el.scrollHeight - el.clientHeight)) {
+      this.ownEnd(el);
+    }
   }
 
   /** The snap point of a snapping view next to where it is towards `dir`
