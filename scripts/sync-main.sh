@@ -14,7 +14,10 @@
 #
 # upstream  Merges the newest `upstream/main` into a new `sync/upstream-<sha>`
 #           branch cut from `origin/main` and pushes it; `--pr` opens its pull
-#           request into the fork's `main`. Merge it with a merge commit.
+#           request into the fork's `main`. Merge it with a merge commit. When
+#           the merged range changes upstream's `.github/workflows/release.yml`,
+#           it warns: the fork's `fork-release.yml` copies its `dist` steps by
+#           hand.
 # branch    Merges the newest `upstream/main` into a topic branch (`feat/*`
 #           for a feature, `fix/*` for a fix; in its own worktree under
 #           `../nsh-wt/`), never rebasing it: sealed AgentX records name its
@@ -45,7 +48,7 @@ git_ remote get-url origin | grep -q 'dXnSix/nsh' || die "origin is not github.c
 
 replay() {
   mkdir -p "$common/rr-cache"
-  [ -d "$here/rr-cache" ] && cp -R "$here/rr-cache/." "$common/rr-cache/"
+  if [ -d "$here/rr-cache" ]; then cp -R "$here/rr-cache/." "$common/rr-cache/"; fi
 }
 merge_in() { # <worktree> <ref>
   if ! git -C "$1" -c rerere.enabled=true -c rerere.autoUpdate=true merge --no-edit --quiet "$2"; then
@@ -53,6 +56,17 @@ merge_in() { # <worktree> <ref>
     [ -z "$left" ] || die "merging $2 left conflicts in: $left
 resolve them, commit the merge, then run save-resolutions and commit rr-cache/"
     git -C "$1" commit --quiet --no-edit
+  fi
+}
+
+# Warns when the upstream range just merged changes upstream's release
+# workflow, whose `dist` job `fork-release.yml` (on `fork/release`) copies.
+release_changed() { # <worktree>
+  local base
+  base="$(git -C "$1" merge-base origin/main upstream/main)"
+  if ! git -C "$1" diff --quiet "$base" upstream/main -- .github/workflows/release.yml; then
+    echo "sync-main: warning: this upstream range changes .github/workflows/release.yml;" >&2
+    echo "sync-main: copy what its dist job changed into .github/workflows/fork-release.yml on fork/release" >&2
   fi
 }
 
@@ -76,6 +90,7 @@ case "$cmd" in
     merge_in "$checkout" upstream/main
     git_ push --quiet origin "$branch"
     echo "sync-main: pushed $branch"
+    release_changed "$checkout"
     if [ "$pr" = 1 ]; then
       gh pr create --repo dXnSix/nsh --base main --head "$branch" \
         --title "Merge upstream/main $(git_ rev-parse --short upstream/main)" \
