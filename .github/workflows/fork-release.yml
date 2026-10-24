@@ -1,0 +1,322 @@
+name: Fork release
+
+# Builds NSH's distribution (`cargo xtask dist`: the CLI with its prebuilt
+# hosts and runtimes) for every platform the fork serves and publishes it as
+# the GitHub release of a `fork-*` tag, so tools that pin a fork tag (rayx)
+# download it instead of compiling NSH.
+#
+# - Pushing a tag `fork-<workspace version>-<n>` (`scripts/sync-main.sh tag`
+#   on the fork's `private/fork-docs` branch pushes it) builds and releases it.
+# - Running it by hand builds and releases an existing tag, such as one made
+#   before this workflow existed.
+#
+# A fork-only file (branch kind `fork/*`): it never goes upstream. Its build
+# steps are upstream's `dist` job in `release.yml`, which keeps running on
+# `v*` tags only, and the fork creates none. When an upstream sync changes
+# `release.yml`, copy the change here (`sync-main.sh upstream` warns).
+#
+# Assets: `nsh-<platform>.tar.gz` (`.zip` on Windows), each holding one
+# `nsh/` directory laid out as `dist/nsh`, with a `.sha256` beside it, and a
+# build provenance attestation for each. The release is published at once,
+# never kept back for review: a download must not need a signed-in user. It
+# is made once the four required platforms built; Windows ARM64 is attached
+# when it built and never holds the release back.
+
+on:
+  push:
+    tags: ["fork-*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The fork tag to build and release (e.g. fork-0.2.0-4)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  check:
+    name: Check the tag
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      # `fork-<workspace version>-<n>` on a commit of the fork's `main`.
+      - name: Check the tag
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          if [[ ! "$TAG" =~ ^fork-${version//./\\.}-[0-9]+$ ]]; then
+            echo "::error::tag $TAG is not fork-$version-<n> (the workspace version is $version)"
+            exit 1
+          fi
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$(git rev-parse "$TAG^{commit}")" origin/main; then
+            echo "::error::tag $TAG is not on origin/main"
+            exit 1
+          fi
+
+  dist:
+    name: dist (${{ matrix.name }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The iOS runtimes and SDK need Xcode; the macOS runtime is built
+          # for this machine (Apple silicon).
+          - name: macos-arm64
+            os: macos-15
+          # 24.04 has GTK 4.14 and Pango 1.52+, what the Linux runtime needs;
+          # its binaries need glibc 2.39 and GTK 4.14 or newer where they run.
+          - name: linux-x86_64
+            os: ubuntu-24.04
+          # The Linux guests (Lima) on Apple silicon Macs.
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+          - name: windows-x86_64
+            os: windows-latest
+          # Not proven yet: it may fail without holding the release back.
+          - name: windows-arm64
+            os: windows-11-arm
+            optional: true
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.optional == true }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A release run builds the tag, never the branch it was started on.
+          ref: ${{ env.TAG }}
+
+      # Temporary directories (tests, tools) outside the checkout.
+      - name: Set up the environment
+        run: |
+          mkdir -p "$RUNNER_TEMP/tmp"
+          echo "TMPDIR=$RUNNER_TEMP/tmp" >> "$GITHUB_ENV"
+          echo "ARCHIVE=nsh-${{ matrix.name }}" >> "$GITHUB_ENV"
+
+      - name: Set up Windows
+        if: runner.os == 'Windows'
+        run: |
+          # QuickJS is C: bindgen needs libclang, which the image's LLVM has.
+          echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+          # rustc can overflow its default stack on the `windows` crate.
+          echo "RUST_MIN_STACK=268435456" >> "$GITHUB_ENV"
+
+      # QuickJS is C (bindgen needs libclang); the Linux runtime links GTK 4,
+      # the GPUI runtime X11, Wayland, xkbcommon, fontconfig and FreeType,
+      # GTK 3 and WebKitGTK 4.1 (web views) and GStreamer (videos).
+      - name: Install clang, GTK 4 and GPUI's libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libclang-dev libgtk-4-dev libwebkitgtk-6.0-dev \
+            libfontconfig-dev libfreetype-dev libwayland-dev libx11-xcb-dev libxcb1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libzstd-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+
+      # The Android runtime: `javac` + `d8` (Java 17), the SDK's
+      # `platforms;android-35` and an NDK (the images have the SDK and NDKs).
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install the Android platform
+        run: |
+          if [[ ! -f "$ANDROID_HOME/platforms/android-35/android.jar" ]]; then
+            sdkmanager=$(ls "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager* | head -1)
+            yes | "$sdkmanager" "platforms;android-35" > /dev/null || true
+          fi
+          test -f "$ANDROID_HOME/platforms/android-35/android.jar"
+          ls "$ANDROID_HOME/ndk" || true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # QuickJS's WebAssembly build needs upstream LLVM: Apple's clang
+      # does not target wasm32. Check the C tools before building runtimes.
+      - name: Set up WebAssembly C tools
+        run: |
+          suffix=""
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            brew list llvm > /dev/null 2>&1 || brew install llvm
+            llvm_bin="$(brew --prefix llvm)/bin"
+          elif [[ "$RUNNER_OS" == Windows ]]; then
+            llvm_bin="C:/Program Files/LLVM/bin"
+            suffix=".exe"
+          else
+            llvm_bin=/usr/bin
+          fi
+          cc="$llvm_bin/clang$suffix"
+          ar="$llvm_bin/llvm-ar$suffix"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            # quickjs-jit-sys canonicalizes its vendored WASI include directory
+            # to a verbatim Windows path. Give clang ordinary drive paths
+            # so nested includes such as bits/alltypes.h resolve correctly.
+            cat > "$RUNNER_TEMP/nsh-wasm-clang.py" <<'PYTHON'
+          import os
+          import subprocess
+          import sys
+
+          def normalize(argument):
+              for prefix in ("-isystem", "-I", "-L", ""):
+                  marker = prefix + "\\\\?\\"
+                  if argument.startswith(marker):
+                      path = argument[len(marker):]
+                      if len(path) > 2 and path[1:3] == ":\\":
+                          return prefix + path.replace("\\", "/")
+              return argument
+
+          if __name__ == "__main__":
+              sys.exit(subprocess.call([os.environ["NSH_WASM_CLANG"], *map(normalize, sys.argv[1:])]))
+          PYTHON
+            printf '@echo off\r\npython "%%~dp0nsh-wasm-clang.py" %%*\r\n' > "$RUNNER_TEMP/nsh-wasm-clang.cmd"
+            export NSH_WASM_CLANG="$cc"
+            echo "NSH_WASM_CLANG=$cc" >> "$GITHUB_ENV"
+            cc="$(cygpath -m "$RUNNER_TEMP")/nsh-wasm-clang.cmd"
+          fi
+          printf 'int nsh_wasm_probe(void) { return 0; }\n' | \
+            "$cc" --target=wasm32-unknown-unknown -x c -c - -o "$RUNNER_TEMP/wasm-probe.o"
+          "$ar" rcs "$RUNNER_TEMP/wasm-probe.a" "$RUNNER_TEMP/wasm-probe.o"
+          echo "CC_wasm32_unknown_unknown=$cc" >> "$GITHUB_ENV"
+          echo "AR_wasm32_unknown_unknown=$ar" >> "$GITHUB_ENV"
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-${{ runner.arch }}-fork-release-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-fork-release-cargo-
+
+      # Compile the actual WASI headers before the native runtimes: a bare
+      # clang probe does not exercise quickjs-jit-sys's vendored include path.
+      - name: Check the Windows web runtime
+        if: runner.os == 'Windows'
+        run: |
+          cargo metadata --locked --format-version 1 --filter-platform wasm32-unknown-unknown > "$RUNNER_TEMP/wasm-metadata.json"
+          python - "$RUNNER_TEMP/wasm-metadata.json" <<'PYTHON'
+          import json
+          import pathlib
+          import sys
+          packages = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["packages"]
+          package = next(p for p in packages if p["name"] == "quickjs-jit-sys")
+          include = pathlib.Path(package["manifest_path"]).parent / "vendor/wasi-libc/include"
+          for name in ("stdlib.h", "bits/alltypes.h"):
+              header = include / name
+              if not header.is_file():
+                  sys.exit(f"Missing vendored WASI header: {header}")
+              print(f"Verified WASI header: {header}")
+          PYTHON
+          cargo build --profile web -p nsh-platform-web --target wasm32-unknown-unknown --features bytecode-only
+
+      - name: Build the distribution
+        run: cargo xtask dist -v
+
+      # The packaged CLI makes and bundles a new app.
+      - name: Smoke test
+        run: |
+          nsh=dist/nsh/bin/nsh
+          [[ "$RUNNER_OS" != Windows ]] || nsh=dist/nsh/bin/nsh.exe
+          "$nsh" --version
+          app="$RUNNER_TEMP/smoke-app"
+          "$nsh" init "$app"
+          "$nsh" build "$app" -o "$RUNNER_TEMP/smoke-out" --release
+          ls "$RUNNER_TEMP/smoke-out"
+          find dist/nsh -type f | sort
+
+      - name: Package
+        run: |
+          mkdir -p target/release-assets
+          cd target/release-assets
+          cp -R ../../dist/nsh nsh
+          cp ../../README.md ../../LICENSE-APACHE nsh/
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            7z a -tzip "$ARCHIVE.zip" nsh > /dev/null
+            sha256sum "$ARCHIVE.zip" > "$ARCHIVE.zip.sha256"
+          else
+            tar -czf "$ARCHIVE.tar.gz" nsh
+            shasum -a 256 "$ARCHIVE.tar.gz" > "$ARCHIVE.tar.gz.sha256"
+          fi
+          rm -rf nsh
+          ls -l
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nsh-${{ matrix.name }}
+          path: target/release-assets/*
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: dist
+    # After the matrix, also when the optional Windows ARM64 build failed.
+    if: ${{ !cancelled() && needs.dist.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nsh-*
+          path: assets
+          merge-multiple: true
+
+      # The four required platforms must have built; Windows ARM64 is
+      # attached when it did.
+      - name: Check the archives
+        run: |
+          missing=0
+          for archive in nsh-macos-arm64.tar.gz nsh-linux-x86_64.tar.gz nsh-linux-arm64.tar.gz nsh-windows-x86_64.zip; do
+            for file in "$archive" "$archive.sha256"; do
+              if [[ ! -f "assets/$file" ]]; then
+                echo "::error::$file did not build"
+                missing=1
+              fi
+            done
+          done
+          exit "$missing"
+
+      - name: Check the digests
+        working-directory: assets
+        run: |
+          for digest in *.sha256; do
+            shasum -a 256 -c "$digest"
+          done
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            assets/nsh-*.tar.gz
+            assets/nsh-*.zip
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TAG }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: assets/*
