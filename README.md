@@ -42,7 +42,8 @@ steps of its `dist` job, so carry the change over on `fork/release` (a new tool,
 
 ## A branch into main
 
-1. Open its pull request with its draft as the body: `gh pr create --repo dXnSix/nsh --base main --head <feat|fix>/<topic>`.
+1. Open its pull request with its draft as the body (a `fork/*` branch has none; its description says what it adds):
+   `gh pr create --repo dXnSix/nsh --base main --head <feat|fix|fork>/<topic>`.
 2. Wait for the fork's GitHub Actions. When the pull request conflicts with `main` (a branch merged before it touched
    the same files), merge `origin/main` into the branch and rerun its focused tests.
 3. Merge with a merge commit, never squash: `gh pr merge <n> --repo dXnSix/nsh --merge`.
@@ -65,6 +66,13 @@ four platforms are required; `windows-arm64` is attached when it builds and neve
 tag is released by running the workflow by hand with its `tag`
 (`gh workflow run fork-release.yml --repo dXnSix/nsh -f tag=fork-<nsh version>-<n>`).
 
-After tagging, move every pin in Gamify (`.cargo/config.toml`, then `cargo update` writes `Cargo.lock`) and run
-`rayx setup` there: rayx reads the new pin from the lock and installs that tag's release, or builds it from source
-while the release is still running.
+After tagging, move every pin in Gamify: the `[patch.crates-io]` entries of `src/frontend/.cargo/config.toml` and the
+other places `cargo xtask nsh verify` names; Cargo rewrites the NSH entries of `Cargo.lock` on the next build. Until
+Gamify runs NSH through `rayx`, reinstall the CLI that `cargo xtask nsh verify` checks:
+
+```bash
+cargo install --git https://github.com/dXnSix/nsh --tag fork-<nsh version>-<n> --locked nsh-cli
+```
+
+Once it does, run `rayx setup` in `src/frontend` instead: rayx reads the new pin from the lock and installs that tag's
+release, or builds it from source while the release is still running.
