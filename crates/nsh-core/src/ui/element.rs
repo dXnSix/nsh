@@ -744,6 +744,19 @@ pub trait Element: IntoElement + Sized {
         self
     }
 
+    /// A sticky view ([`super::Styled::sticky`]) sticks this animated value
+    /// from the top of the scroll view's viewport, following it (below a
+    /// header that moves: `header.add(8.0)`; TS: `top` set to an animated
+    /// value).
+    fn bind_sticky_top(self, value: &impl super::Animated) -> Self {
+        self.bind(crate::animation::AnimationProp::StickyTop, value)
+    }
+
+    /// The same as [`Self::bind_sticky_top`] in a horizontal scroll view.
+    fn bind_sticky_left(self, value: &impl super::Animated) -> Self {
+        self.bind(crate::animation::AnimationProp::StickyLeft, value)
+    }
+
     /// Appends a transform step driven by an animated value, after the styles'
     /// transforms.
     fn bind_transform(mut self, kind: crate::TransformKind, value: &impl super::Animated) -> Self {
@@ -752,6 +765,28 @@ pub trait Element: IntoElement + Sized {
             self.node().attrs.animated.push((decl, node));
         }
         self
+    }
+
+    /// Binds a motion's channels: its opacity, and its transform after the
+    /// styles' transforms (translations, then rotations, then the scales,
+    /// `scale` folded into `scale_x` and `scale_y`: 7 steps of a view's 8).
+    fn bind_motion(self, motion: &super::Motion) -> Self {
+        use crate::animation::MotionChannel::*;
+        let mut this = self.bind_opacity(&motion.value(Opacity));
+        for channel in [TranslateX, TranslateY, Rotate, RotateX, RotateY] {
+            if let Some(kind) = channel.transform() {
+                this = this.bind_transform(kind, &motion.value(channel));
+            }
+        }
+        let scale = motion.value(Scale);
+        this.bind_transform(
+            crate::TransformKind::ScaleX,
+            &scale.mul(&motion.value(ScaleX)),
+        )
+        .bind_transform(
+            crate::TransformKind::ScaleY,
+            &scale.mul(&motion.value(ScaleY)),
+        )
     }
 
     /// Moves it right by an animated value (points).
