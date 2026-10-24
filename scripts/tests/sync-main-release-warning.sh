@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# TAP test: `sync-main.sh upstream` warns when the upstream range it merges
-# changes `.github/workflows/release.yml` (whose `dist` job the fork's
-# `fork-release.yml` copies), and says nothing about it otherwise. Every
+# TAP test: `sync-main.sh upstream` and `sync-main.sh branch` warn when the
+# upstream range they merge changes `.github/workflows/release.yml` (whose
+# `dist` job the fork's `fork-release.yml` copies), and say nothing about it
+# otherwise. Every
 # repository is a throwaway one under `mktemp -d`; nothing is pushed anywhere
 # else and `--pr` is never passed.
 set -euo pipefail
@@ -53,7 +54,7 @@ setup() { # <name> <changed>
 }
 
 failed=0
-echo "1..2"
+echo "1..3"
 
 checkout="$(setup release .github/workflows/release.yml)"
 output="$("$script" upstream "$checkout" 2>&1)" || output+=$'\n'"(sync-main.sh exited $?)"
@@ -72,6 +73,19 @@ if ! grep -q 'release\.yml' <<<"$output" && grep -q 'pushed sync/upstream-' <<<"
   echo "ok 2 - a range that leaves release.yml alone says nothing about it"
 else
   echo "not ok 2 - a range that leaves release.yml alone says nothing about it"
+  failed=1
+  sed 's/^/# /' <<<"$output"
+fi
+
+# A topic branch in its own worktree takes upstream's range the same way.
+checkout="$(setup branch .github/workflows/release.yml)"
+git -C "$checkout" worktree add --quiet -b feat/topic "$root/branch/wt-topic" origin/main
+output="$("$script" branch "$checkout" feat/topic 2>&1)" || output+=$'\n'"(sync-main.sh exited $?)"
+if grep -q '\.github/workflows/release\.yml' <<<"$output" && grep -q 'fork-release\.yml' <<<"$output" \
+  && grep -q 'sync-main: feat/topic' <<<"$output"; then
+  echo "ok 3 - a topic branch that takes a release.yml change warns too"
+else
+  echo "not ok 3 - a topic branch that takes a release.yml change warns too"
   failed=1
   sed 's/^/# /' <<<"$output"
 fi

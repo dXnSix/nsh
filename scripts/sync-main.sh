@@ -21,7 +21,8 @@
 # branch    Merges the newest `upstream/main` into a topic branch (`feat/*`
 #           for a feature, `fix/*` for a fix; in its own worktree under
 #           `../nsh-wt/`), never rebasing it: sealed AgentX records name its
-#           commits. `--push` pushes it to `origin`. Before a
+#           commits. `--push` pushes it to `origin`. Warns like `upstream`
+#           when the merged range changes upstream's release workflow. Before a
 #           branch's pull request merges, merge `origin/main` into it the same
 #           way when it overlaps a branch merged before it.
 # tag       Tags the fork's `origin/main` (annotated) and pushes the tag. Cargo
@@ -59,12 +60,11 @@ resolve them, commit the merge, then run save-resolutions and commit rr-cache/"
   fi
 }
 
-# Warns when the upstream range just merged changes upstream's release
-# workflow, whose `dist` job `fork-release.yml` (on `fork/release`) copies.
-release_changed() { # <worktree>
-  local base
-  base="$(git -C "$1" merge-base origin/main upstream/main)"
-  if ! git -C "$1" diff --quiet "$base" upstream/main -- .github/workflows/release.yml; then
+# Warns when the upstream range just merged (from <base> to upstream/main)
+# changes upstream's release workflow, whose `dist` job `fork-release.yml`
+# (on `fork/release`) copies.
+release_changed() { # <worktree> <base>
+  if ! git -C "$1" diff --quiet "$2" upstream/main -- .github/workflows/release.yml; then
     echo "sync-main: warning: this upstream range changes .github/workflows/release.yml;" >&2
     echo "sync-main: copy what its dist job changed into .github/workflows/fork-release.yml on fork/release" >&2
   fi
@@ -85,12 +85,13 @@ case "$cmd" in
       echo "sync-main: origin/main already contains upstream/main"; exit 0
     fi
     branch="sync/upstream-$(git_ rev-parse --short upstream/main)"
+    base="$(git_ merge-base origin/main upstream/main)"
     replay
     git_ checkout --quiet -B "$branch" origin/main
     merge_in "$checkout" upstream/main
     git_ push --quiet origin "$branch"
     echo "sync-main: pushed $branch"
-    release_changed "$checkout"
+    release_changed "$checkout" "$base"
     if [ "$pr" = 1 ]; then
       gh pr create --repo dXnSix/nsh --base main --head "$branch" \
         --title "Merge upstream/main $(git_ rev-parse --short upstream/main)" \
@@ -105,9 +106,11 @@ case "$cmd" in
     [ -n "$worktree" ] || die "$topic has no worktree"
     [ -z "$(git -C "$worktree" status --porcelain)" ] || die "$worktree has uncommitted changes"
     git_ fetch --quiet upstream
+    base="$(git -C "$worktree" merge-base HEAD upstream/main)"
     replay
     merge_in "$worktree" upstream/main
     echo "sync-main: $topic $(git -C "$worktree" log --oneline -1)"
+    release_changed "$worktree" "$base"
     [ "$push" = 1 ] && git -C "$worktree" push --quiet origin "$topic"
     ;;
   tag)
