@@ -36,8 +36,9 @@ scripts/sync-main.sh upstream ../nsh --pr
 `scripts/rr-cache/` (git rerere); after resolving a new one, commit the merge, run
 `scripts/sync-main.sh save-resolutions ../nsh` and commit `scripts/rr-cache/` on this branch.
 
-When the merged upstream range changes `.github/workflows/release.yml`, `upstream` warns: `fork-release.yml` copies the
-steps of its `dist` job, so carry the change over on `fork/release` (a new tool, a new runner) before the next tag.
+When the upstream range they merge changes `.github/workflows/release.yml`, `upstream` and `branch` warn before merging,
+so a merge that stops on a conflict has warned too: `fork-release.yml` copies the steps of its `dist` job, so carry the
+change over on `fork/release` (a new tool, a new runner) before the next tag.
 `scripts/tests/sync-main-release-warning.sh` tests the warning (TAP, throwaway repositories).
 
 ## A branch into main

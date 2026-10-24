@@ -15,8 +15,9 @@
 # upstream  Merges the newest `upstream/main` into a new `sync/upstream-<sha>`
 #           branch cut from `origin/main` and pushes it; `--pr` opens its pull
 #           request into the fork's `main`. Merge it with a merge commit. When
-#           the merged range changes upstream's `.github/workflows/release.yml`,
-#           it warns: the fork's `fork-release.yml` copies its `dist` steps by
+#           the range it merges changes upstream's `.github/workflows/release.yml`,
+#           it warns before merging, so a merge that stops on a conflict has
+#           warned too: the fork's `fork-release.yml` copies its `dist` steps by
 #           hand.
 # branch    Merges the newest `upstream/main` into a topic branch (`feat/*`
 #           for a feature, `fix/*` for a fix; in its own worktree under
@@ -60,7 +61,7 @@ resolve them, commit the merge, then run save-resolutions and commit rr-cache/"
   fi
 }
 
-# Warns when the upstream range just merged (from <base> to upstream/main)
+# Warns when the upstream range about to be merged (from <base> to upstream/main)
 # changes upstream's release workflow, whose `dist` job `fork-release.yml`
 # (on `fork/release`) copies.
 release_changed() { # <worktree> <base>
@@ -86,12 +87,12 @@ case "$cmd" in
     fi
     branch="sync/upstream-$(git_ rev-parse --short upstream/main)"
     base="$(git_ merge-base origin/main upstream/main)"
+    release_changed "$checkout" "$base"
     replay
     git_ checkout --quiet -B "$branch" origin/main
     merge_in "$checkout" upstream/main
     git_ push --quiet origin "$branch"
     echo "sync-main: pushed $branch"
-    release_changed "$checkout" "$base"
     if [ "$pr" = 1 ]; then
       gh pr create --repo dXnSix/nsh --base main --head "$branch" \
         --title "Merge upstream/main $(git_ rev-parse --short upstream/main)" \
@@ -107,11 +108,11 @@ case "$cmd" in
     [ -z "$(git -C "$worktree" status --porcelain)" ] || die "$worktree has uncommitted changes"
     git_ fetch --quiet upstream
     base="$(git -C "$worktree" merge-base HEAD upstream/main)"
+    release_changed "$worktree" "$base"
     replay
     merge_in "$worktree" upstream/main
     echo "sync-main: $topic $(git -C "$worktree" log --oneline -1)"
-    release_changed "$worktree" "$base"
-    [ "$push" = 1 ] && git -C "$worktree" push --quiet origin "$topic"
+    if [ "$push" = 1 ]; then git -C "$worktree" push --quiet origin "$topic"; fi
     ;;
   tag)
     [ $# -ge 1 ] || die "tag needs fork-<nsh version>-<n>"
