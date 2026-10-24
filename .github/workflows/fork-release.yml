@@ -21,6 +21,11 @@ name: Fork release
 # never kept back for review: a download must not need a signed-in user. It
 # is made once the four required platforms built; Windows ARM64 is attached
 # when it built and never holds the release back.
+#
+# The Android NDK has no toolchain for arm64 Linux, so the linux-arm64
+# archive has no Android runtime: its leg builds `cargo xtask dist` with the
+# Android part switched off (a change in the runner's checkout only, which
+# stops the run when NSH's code no longer matches it).
 
 on:
   push:
@@ -86,9 +91,10 @@ jobs:
           # its binaries need glibc 2.39 and GTK 4.14 or newer where they run.
           - name: linux-x86_64
             os: ubuntu-24.04
-          # The Linux guests (Lima) on Apple silicon Macs.
+          # The Linux guests (Lima) on Apple silicon Macs; no Android runtime.
           - name: linux-arm64
             os: ubuntu-24.04-arm
+            android: "none"
           - name: windows-x86_64
             os: windows-latest
           # Not proven yet: it may fail without holding the release back.
@@ -133,11 +139,18 @@ jobs:
       # The Android runtime: `javac` + `d8` (Java 17), the SDK's
       # `platforms;android-35` and an NDK (the images have the SDK and NDKs).
       - uses: actions/setup-java@v4
+        if: matrix.android != 'none'
         with:
           distribution: temurin
           java-version: "17"
       - name: Install the Android platform
+        if: matrix.android != 'none'
         run: |
+          # `xtask dist` makes a Windows distribution without an Android SDK.
+          if [[ "$RUNNER_OS" == Windows && -z "${ANDROID_HOME:-}" ]]; then
+            echo "no Android SDK on this runner: the distribution has no Android runtime"
+            exit 0
+          fi
           if [[ ! -f "$ANDROID_HOME/platforms/android-35/android.jar" ]]; then
             sdkmanager=$(ls "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager* | head -1)
             yes | "$sdkmanager" "platforms;android-35" > /dev/null || true
@@ -228,6 +241,21 @@ jobs:
               print(f"Verified WASI header: {header}")
           PYTHON
           cargo build --profile web -p nsh-platform-web --target wasm32-unknown-unknown --features bytecode-only
+
+      # `xtask dist` builds the Android runtime on every Linux host with the
+      # NDK's x86-64 toolchain; switch that off where it cannot run.
+      - name: Leave the Android runtime out
+        if: matrix.android == 'none'
+        env:
+          ANDROID_LINE: "let android = !cfg!(windows) || android::Sdk::find().is_ok();"
+        run: |
+          file=crates/xtask/src/dist.rs
+          if ! grep -qF "$ANDROID_LINE" "$file"; then
+            echo "::error::$file no longer decides on Android with \`$ANDROID_LINE\`: update this step of fork-release.yml"
+            exit 1
+          fi
+          perl -pi -e 's/\Q$ENV{ANDROID_LINE}\E/let android = false;/' "$file"
+          grep -qF 'let android = false;' "$file"
 
       - name: Build the distribution
         run: cargo xtask dist -v
