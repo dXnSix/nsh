@@ -580,6 +580,11 @@ public class NshView extends FrameLayout {
     // --- Environment ---------------------------------------------------------
 
     private float keyboard;
+    /**
+     * Whether the app is in use (`appState()`): its activity's state, 0 resumed (active), 1 paused or started
+     * again (inactive: visible without the focus), 2 stopped (background). Active until the activity says otherwise.
+     */
+    private int appState;
     /** The host app's locale and text size ({@link #setLocale}, {@link #setFontScale}). */
     private java.util.Locale hostLocale;
     private float hostFontScale;
@@ -691,8 +696,27 @@ public class NshView extends FrameLayout {
             Build.VERSION.SDK_INT,
             (c.uiMode & Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION ? 3
                     : c.smallestScreenWidthDp >= 600 ? 1 : 0,
+            appState,
         }, dark, locale.toLanguageTag());
     }
+
+    /** The view's activity going through its lifecycle: `appState()`. */
+    private final android.app.Application.ActivityLifecycleCallbacks lifecycle =
+            new android.app.Application.ActivityLifecycleCallbacks() {
+        private void state(Activity activity, int state) {
+            if (activity != activity(getContext()) || state == appState) return;
+            appState = state;
+            publishEnvironment(getRootWindowInsets());
+        }
+
+        @Override public void onActivityResumed(Activity a) { state(a, 0); }
+        @Override public void onActivityPaused(Activity a) { state(a, 1); }
+        @Override public void onActivityStarted(Activity a) { state(a, 1); }
+        @Override public void onActivityStopped(Activity a) { state(a, 2); }
+        @Override public void onActivityCreated(Activity a, android.os.Bundle b) {}
+        @Override public void onActivitySaveInstanceState(Activity a, android.os.Bundle b) {}
+        @Override public void onActivityDestroyed(Activity a) {}
+    };
 
     private android.view.accessibility.AccessibilityManager accessibility() {
         return (android.view.accessibility.AccessibilityManager) getContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
@@ -794,6 +818,8 @@ public class NshView extends FrameLayout {
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         accessibility().addTouchExplorationStateChangeListener(screenReader);
+        Activity activity = activity(getContext());
+        if (activity != null) activity.getApplication().registerActivityLifecycleCallbacks(lifecycle);
         // The dispatcher exists once attached.
         if (handle != 0) mounter.updateBack();
     }
@@ -802,6 +828,8 @@ public class NshView extends FrameLayout {
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
         accessibility().removeTouchExplorationStateChangeListener(screenReader);
+        Activity activity = activity(getContext());
+        if (activity != null) activity.getApplication().unregisterActivityLifecycleCallbacks(lifecycle);
     }
 
     /** `BackHandler.exitApp()`: what the back button does without the app. */
