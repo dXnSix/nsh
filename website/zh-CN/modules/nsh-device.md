@@ -81,7 +81,7 @@ const locale: Accessor<string>;
 const timeZone: Accessor<string>;
 ```
 
-设备的时区，即系统给它的名称：IANA 名称（`"Europe/Berlin"`、`"America/New_York"`）、`"UTC"`，或系统使用偏移量时区时的名称（Android 上的 `"GMT+01:00"`）。响应式：随系统设置变化，例如用户出行时。Rust：`time_zone() -> TimeZone`（`time_zone().as_str()` 即名称）。`Date` 的本地时间跟随系统时区；读取这个名称来显示它、和日期一起保存，或交给时区库（[设备与环境](../docs/device-and-environment.md#时区)）。除非 `open` 设置了 `timeZone`，headless 测试中它是 `"UTC"`。
+设备的时区，即系统给它的名称：IANA 名称（`"Europe/Berlin"`、`"America/New_York"`）、`"UTC"`，或系统使用偏移量时区时的名称（Android 上的 `"GMT+01:00"`）。响应式：随系统设置变化，例如用户出行时。Rust：`time_zone() -> TimeZone`（`time_zone().as_str()` 即名称）。`Intl` 默认按它书写日期，`Date` 的本地时间跟随系统时区；读取这个名称来显示它，或和日期一起保存（[设备与环境](../docs/device-and-environment.md#时区)）。除非 `open` 设置了 `timeZone`，headless 测试中它是 `"UTC"`。
 
 ## appState
 
