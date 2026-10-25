@@ -3,7 +3,7 @@
 
 use crate::{
     EdgeInsets, Points, Size,
-    platform::{AppState, Idiom, Locale, Os},
+    platform::{AppState, Idiom, Locale, Os, TimeZone},
 };
 
 /// The environment of a surface, as the platform reports it.
@@ -39,6 +39,8 @@ pub struct Environment {
     pub idiom: Idiom,
     /// The user's locale, for formatting numbers and dates.
     pub locale: Locale,
+    /// The device's time zone, as the system names it (`Europe/Berlin`).
+    pub time_zone: TimeZone,
     /// In a browser, it runs on an Apple platform: shortcuts follow Apple's
     /// conventions ([`crate::keymap::apple_keys`]); the other OSes imply
     /// theirs.
@@ -75,6 +77,7 @@ impl Default for Environment {
             os_version: (0, 0),
             idiom: Idiom::Phone,
             locale: Locale::EN_US,
+            time_zone: TimeZone::UTC,
             apple_keyboard: false,
             host: false,
             app_state: AppState::Active,

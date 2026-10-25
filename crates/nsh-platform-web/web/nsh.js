@@ -1536,7 +1536,8 @@ class Player {
     addEventListener("languagechange", changed);
     addEventListener("resize", changed);
     // `appState()`: hidden (another tab, a minimized window) or without
-    // the focus.
+    // the focus. `timeZone()` is read again then too: browsers tell no
+    // change of the system's zone, which the user makes away from the page.
     document.addEventListener("visibilitychange", changed);
     addEventListener("focus", changed);
     addEventListener("blur", changed);
@@ -1595,6 +1596,7 @@ class Player {
       appState: document.visibilityState === "hidden"
         ? "background"
         : document.hasFocus() ? "active" : "inactive",
+      timeZone: timeZoneName(),
       screenColor: typeof window.EyeDropper === "function",
     };
   }
