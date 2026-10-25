@@ -708,7 +708,7 @@ pub(crate) const DEVICE_EXPORTS: &[Item] = &[
         "timeZone",
         Export::Value(|cx| accessor(cx, Part::TimeZone)),
         Ts::value(
-            "The device's time zone as the system names it (reactive): an IANA name\n(`\"Europe/Berlin\"`, `\"America/New_York\"`), `\"UTC\"`, or an offset zone\nwhere the system has one (`\"GMT+01:00\"` on Android). It changes with the\nsystem's setting, as the user travels. `\"UTC\"` in headless tests unless\n`open` sets one.",
+            "The device's time zone as the system names it (reactive): an IANA name\n(`\"Europe/Berlin\"`, `\"America/New_York\"`), `\"UTC\"`, or an offset zone\nwhere the system has one (`\"GMT+01:00\"` on Android). It changes with the\nsystem's setting, as the user travels, and `Intl` writes dates in it by\ndefault. `\"UTC\"` in headless tests unless `open` sets one.",
             "Accessor<string>",
         ),
     ),

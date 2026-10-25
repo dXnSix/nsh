@@ -175,7 +175,7 @@ options as the test gives them: one the target's platform cannot honor makes `op
 | `firstDayOfWeek` | the locale's region's | The day weeks start on, 1 for Monday to 7 for Sunday (`firstDayOfWeek()`). |
 | `measurementSystem` | the locale's region's | `"metric"`, `"us"` or `"uk"` (`measurementSystem()`). |
 | `temperatureUnit` | the locale's region's | `"celsius"` or `"fahrenheit"` (`temperatureUnit()`). |
-| `timeZone` | `"UTC"` | The device's time zone, an IANA name (`timeZone()`). It names the zone: `Date`'s local times stay the machine's. |
+| `timeZone` | `"UTC"` | The device's time zone, an IANA name (`timeZone()`), which `Intl` writes dates in by default. `Date`'s own local times stay the machine's. |
 | `reducedMotion` | `false` | The user asked for less motion (`reduceMotion()`). |
 | `platform` | `"ios"` | The platform the app runs as headless: `"ios"`, `"android"`, or a desktop's, `"macos"`, `"windows"`, `"linux"`, or `"web"` in the desktop idiom (`platform.os`, `ios={{…}}` / `android={{…}}` / `desktop={{…}}` props, keyboard shortcuts). With `--target`, the app runs as the target's platform: a desktop's `platform` on any desktop and the web, `"ios"` and `"android"` on their own. |
 | `clock` | the system's | A manual clock, whose time moves only as the test moves it: `{}`, or `{ time }` to start at a `Date` (or milliseconds since the Unix epoch). See [Controlling time](#controlling-time). |

@@ -165,7 +165,7 @@ describe("the cart", () => {
 | `firstDayOfWeek` | 区域设置所在地区的 | 每周从哪一天开始，1 是星期一，7 是星期日（`firstDayOfWeek()`）。 |
 | `measurementSystem` | 区域设置所在地区的 | `"metric"`、`"us"` 或 `"uk"`（`measurementSystem()`）。 |
 | `temperatureUnit` | 区域设置所在地区的 | `"celsius"` 或 `"fahrenheit"`（`temperatureUnit()`）。 |
-| `timeZone` | `"UTC"` | 设备的时区，IANA 名称（`timeZone()`）。它只给出时区的名称：`Date` 的本地时间仍是这台机器的。 |
+| `timeZone` | `"UTC"` | 设备的时区，IANA 名称（`timeZone()`），`Intl` 默认按它书写日期。`Date` 自身的本地时间仍是这台机器的。 |
 | `reducedMotion` | `false` | 用户要求减少动态效果（`reduceMotion()`）。 |
 | `platform` | `"ios"` | headless 时应用运行所在的平台：`"ios"`、`"android"`，或桌面平台 `"macos"`、`"windows"`、`"linux"`，以及桌面形态的 `"web"`（`platform.os`、`ios={{…}}` / `android={{…}}` / `desktop={{…}}` 属性、键盘快捷键）。使用 `--target` 时，应用以目标平台运行：桌面平台的 `platform` 可用于任何桌面目标和 web，`"ios"` 和 `"android"` 只用于各自的目标。 |
 | `clock` | 系统时钟 | 手动时钟，它的时间只随测试推进：`{}`，或者用 `{ time }` 从某个 `Date`（或自 Unix 纪元起的毫秒数）开始。见[控制时间](#控制时间)。 |

@@ -340,7 +340,7 @@ import { timeZone } from "nsh";
 <Text>{`Times in ${timeZone()}`}</Text>
 ```
 
-`Date`'s local times follow the system's zone, as they always have: `time_zone()` names it. In tests, `open`'s `timeZone` sets the name (`UTC` otherwise) and `app.setTimeZone("Asia/Tokyo")` moves the device to another zone ([Testing](./testing-and-trace.md#steps)); `Date`'s local times stay the machine's.
+In TSX, `Intl` writes dates in it by default: `new Date().toLocaleTimeString()` shows the time in the device's zone, and `timeZone` takes any other IANA zone (`{ timeZone: "Asia/Tokyo" }`), with the rules of the IANA time zone database: the one NSH carries, the same on every native platform, and in a browser the browser's own. `Date`'s own local times (`getHours()`, `toString()`) follow the system's zone, as they always have. In tests, `open`'s `timeZone` sets the zone (`UTC` otherwise) and `app.setTimeZone("Asia/Tokyo")` moves the device to another one ([Testing](./testing-and-trace.md#steps)): `Intl` follows them, while `Date`'s own local times stay the machine's.
 
 ## In an embedding app
 
