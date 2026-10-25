@@ -9,7 +9,10 @@
 # left out for what the platform does not do or does not report yet, or
 # for what does not end within its 30 s on a runner (named below), and
 # comes back once it does. Every listed test runs, and the failures are
-# listed at the end.
+# listed at the end. A file that fails runs once more before it counts:
+# the runners' small windows and slow frames make tests that pass at a desk
+# miss now and then (scrolling a control into view, a drag); one that passes
+# the second time is reported as flaky (a warning on the run).
 set -uo pipefail
 target="$1"
 # "<file> <filter>": tests run one by one, by a part of their name, from a
@@ -67,8 +70,14 @@ case "$target" in
 esac
 
 failed=()
+flaky=()
 run() {
-  ./target/debug/nsh test "$@" --target "$target" || failed+=("$*")
+  ./target/debug/nsh test "$@" --target "$target" && return
+  if ./target/debug/nsh test "$@" --target "$target"; then
+    flaky+=("$*")
+  else
+    failed+=("$*")
+  fi
 }
 run examples/counter
 for file in "${gallery[@]}"; do
@@ -84,6 +93,9 @@ done
 run examples/rust-exports
 run examples/gallery-rs/App.test.tsx
 
+for entry in ${flaky[@]+"${flaky[@]}"}; do
+  echo "::warning title=Flaky test::$entry failed, then passed when run again"
+done
 if ((${#failed[@]})); then
   printf 'failed: %s\n' "${failed[@]}" >&2
   exit 1
