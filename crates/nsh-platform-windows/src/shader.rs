@@ -539,6 +539,12 @@ fn tick(surface: &Rc<Surface>, view: &NshView) {
     });
 }
 
+/// The view's shader is a fill, drawn as its own content (an effect draws
+/// its children instead).
+pub(crate) fn fills(state: &ViewState) -> bool {
+    state.shader.as_ref().is_some_and(|s| !s.effect)
+}
+
 /// True when `state` is an effect drawing its children through its
 /// shader ([`draw_effect`]): they are not drawn into the window.
 pub(crate) fn effect(state: &ViewState) -> bool {

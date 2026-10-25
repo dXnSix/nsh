@@ -919,7 +919,7 @@ pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) {
     let content = state.text.is_some()
         || state.image.is_some()
         || state.canvas.is_some()
-        || state.shader.as_ref().is_some_and(|s| !s.effect);
+        || crate::shader::fills(&state);
     if clip {
         cx.push_clip_rounded(crate::geom::rect(0.0, 0.0, w, h), state.radii());
     } else if content {

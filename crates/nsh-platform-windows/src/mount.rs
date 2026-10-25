@@ -532,7 +532,9 @@ fn redrawn(item: &MountItem) -> Redraw {
         | MountItem::Keymap(_)
         | MountItem::LayoutAnimation(_)
         | MountItem::Animation(_)
-        | MountItem::AnimationBindings { .. } => Redraw::Nothing,
+        | MountItem::AnimationBindings { .. }
+        // A program is drawn by the shaders that use it.
+        | MountItem::ShaderProgram { .. } => Redraw::Nothing,
         MountItem::Frame { id, .. }
         | MountItem::ViewStyle { id, .. }
         | MountItem::Text { id, .. }
@@ -556,5 +558,11 @@ fn redrawn(item: &MountItem) -> Redraw {
         | MountItem::ComponentProps { id, .. }
         | MountItem::Command { id, .. } => Redraw::View(*id),
         MountItem::LayoutDirection { .. } | MountItem::Appearance { .. } => Redraw::Window,
+        // A shader can be the screen's (an effect or a transition over the
+        // surface), or read what is behind it: what it changes is not its
+        // view's alone.
+        MountItem::Shader { .. } | MountItem::ShaderInput { .. } | MountItem::ShaderTransition { .. } => {
+            Redraw::Window
+        }
     }
 }
