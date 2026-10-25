@@ -98,6 +98,7 @@ expect Font scale: 1
 expect Window: 390x844
 expect Scheme: light
 expect App state: active
+expect Time zone: UTC
 tap id:dark
 expect Scheme: dark
 absent Scheme: light
@@ -115,6 +116,7 @@ covers [nsh/device] setColorScheme
 covers [nsh/device] fontScale
 covers [nsh/device] windowSize
 covers [nsh/device] appState
+covers [nsh/device] timeZone
 # mod-host-channel
 tap id:case-mod-host-channel
 # no embedding app: no parameters, posts go nowhere and calls fail at once.

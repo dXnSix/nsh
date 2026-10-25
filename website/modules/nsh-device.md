@@ -1,22 +1,22 @@
 ---
 title: nsh/device
-description: The window size, color scheme, font scale, locale, whether the app is in use, platform, pixel ratio, layout direction and opening URLs outside the app.
+description: The window size, color scheme, font scale, locale, time zone, whether the app is in use, platform, pixel ratio, layout direction and opening URLs outside the app.
 order: 6
 ---
 
 # nsh/device
 
-The device API tells the app about the device and its environment. Rust code calls the functions of `nsh_core::ui::prelude` (`window()`, `dark()`, `font_scale()`, `locale()`, `app_state()`, `os()`, `idiom()`, `pixel_ratio()`, `set_color_scheme()`, ...); TSX imports `nsh/device`. The window size, the color scheme, the font scale, the pixel ratio, the locale and the app state are reactive: read them in a binding (a closure passed to an element in Rust, JSX in TSX), `computed` or `effect`, and what reads them updates when the platform reports a change (rotation, a window resize, switching to dark mode, changing the text size or the language, moving to a screen of another density, leaving the app and coming back).
+The device API tells the app about the device and its environment. Rust code calls the functions of `nsh_core::ui::prelude` (`window()`, `dark()`, `font_scale()`, `locale()`, `time_zone()`, `app_state()`, `os()`, `idiom()`, `pixel_ratio()`, `set_color_scheme()`, ...); TSX imports `nsh/device`. The window size, the color scheme, the font scale, the pixel ratio, the locale, the time zone and the app state are reactive: read them in a binding (a closure passed to an element in Rust, JSX in TSX), `computed` or `effect`, and what reads them updates when the platform reports a change (rotation, a window resize, switching to dark mode, changing the text size or the language, moving to another time zone, moving to a screen of another density, leaving the app and coming back).
 
 ```rust tabs
 use nsh_core::{
-    platform::{AppState, Appearance, Idiom, Os},
-    ui::prelude::*, // window, dark, font_scale, locale, app_state, os, idiom, pixel_ratio, set_color_scheme, ...
+    platform::{AppState, Appearance, Idiom, Os, TimeZone},
+    ui::prelude::*, // window, dark, font_scale, locale, time_zone, app_state, os, idiom, pixel_ratio, set_color_scheme, ...
 };
 ```
 
 ```tsx tabs
-import { appState, colorScheme, fontScale, locale, openUrl, pixelRatio, platform, setColorScheme, windowSize } from "nsh/device";
+import { appState, colorScheme, fontScale, locale, openUrl, pixelRatio, platform, setColorScheme, timeZone, windowSize } from "nsh/device";
 ```
 
 See [Device and environment](../docs/device-and-environment.md) for the guide.
@@ -74,6 +74,14 @@ const locale: Accessor<string>;
 ```
 
 The user's locale as a BCP 47 tag (`"en-US"`, `"zh-Hans-CN"`), or the locale the embedding app sets in its place. Reactive. Rust: `locale() -> Locale` (`locale().as_str()` is the tag). `Intl` formats for it by default; read it to choose the strings of your own translations ([Device and environment](../docs/device-and-environment.md#language-and-region)).
+
+## timeZone
+
+```ts
+const timeZone: Accessor<string>;
+```
+
+The device's time zone as the system names it: an IANA name (`"Europe/Berlin"`, `"America/New_York"`), `"UTC"`, or an offset zone where the system has one (`"GMT+01:00"` on Android). Reactive: it changes with the system's setting, as when the user travels. Rust: `time_zone() -> TimeZone` (`time_zone().as_str()` is the name). `Date`'s local times follow the system's zone; read the name to show it, to store it with a date or to give it to a time zone library ([Device and environment](../docs/device-and-environment.md#time-zone)). Headless tests are in `"UTC"` unless `open` sets `timeZone`.
 
 ## appState
 

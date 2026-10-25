@@ -264,6 +264,7 @@ impl Testing {
             clipboard: options.clipboard,
             color_scheme: options.color_scheme.unwrap_or_default(),
             locale: options.locale,
+            time_zone: options.time_zone,
             reduced_motion: options.reduced_motion.unwrap_or(false),
             platform: options.platform.unwrap_or_default(),
             clock: options
@@ -385,6 +386,9 @@ pub struct OpenOptions {
     pub color_scheme: Option<ColorScheme>,
     /// The device's locale, a BCP 47 tag (`"en-US"`).
     pub locale: Option<String>,
+    /// The device's time zone, an IANA name (`"UTC"`). It names the zone;
+    /// `Date`'s local times stay the machine's.
+    pub time_zone: Option<String>,
     /// The user asked for less motion (false).
     pub reduced_motion: Option<bool>,
     /// The platform the app believes it runs on headless (`"ios"`; a
@@ -1081,6 +1085,7 @@ pub(crate) struct Launch {
     pub(crate) clipboard: Option<String>,
     pub(crate) color_scheme: ColorScheme,
     pub(crate) locale: Option<String>,
+    pub(crate) time_zone: Option<String>,
     pub(crate) reduced_motion: bool,
     pub(crate) platform: Platform,
     /// A manual clock's start.
@@ -1817,6 +1822,15 @@ impl App {
     /// and comes back (`"active"`); `appState()` follows. Headless only.
     pub async fn set_app_state(this: Instance<Self>, state: AppState) -> Result<(), String> {
         step(&this, move |app| app.set_app_state(state.into())).await
+    }
+
+    /// Moves the device to the time zone `name` (an IANA name,
+    /// `"Asia/Tokyo"`), as the system does when the user travels or changes
+    /// the setting; `timeZone()` follows. Headless only.
+    pub async fn set_time_zone(this: Instance<Self>, name: String) -> Result<(), String> {
+        let zone = nsh_core::platform::TimeZone::parse(&name)
+            .ok_or_else(|| format!("setTimeZone: {name:?} is not a time zone"))?;
+        step(&this, move |app| app.set_time_zone(zone)).await
     }
 
     /// The text on the clipboard now, `null` when it holds none.
