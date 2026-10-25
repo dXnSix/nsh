@@ -19,7 +19,7 @@ use objc2::{
 use objc2_core_foundation::{CGRect, CGSize};
 use objc2_foundation::{
     NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSOperationQueue,
-    NSValue,
+    NSSystemTimeZoneDidChangeNotification, NSTimeZone, NSValue,
 };
 use objc2_ui_kit::{
     NSValueUIGeometryExtensions, UIApplication, UIApplicationDidBecomeActiveNotification,
@@ -345,7 +345,7 @@ impl RootView {
             _ => Idiom::Phone,
         };
         env.locale = current_locale();
-        env.time_zone = nsh_engine::TimeZone::UTC;
+        env.time_zone = time_zone();
         // Only read for the web: iOS keys are always Apple's.
         env.apple_keyboard = true;
         // No host answers `nsh/host` here: an embedding app talks to its
@@ -376,6 +376,30 @@ impl RootView {
     /// notifications of the app's state, the embedding app's for an
     /// embedded surface. The state is the notification's: during
     /// `willResignActive`, `applicationState` still says active.
+    /// The environment follows the system's time zone: the user changed
+    /// it, or the device moved to another zone. Foundation caches the
+    /// system's zone until it is reset.
+    fn observe_time_zone(this: &Retained<Self>) {
+        let center = NSNotificationCenter::defaultCenter();
+        let weak = Weak::from_retained(this);
+        let block = RcBlock::new(move |_: NonNull<NSNotification>| {
+            let Some(view) = weak.load() else { return };
+            NSTimeZone::resetSystemTimeZone();
+            view.publish_environment();
+        });
+        // SAFETY: as in `observe_keyboard`; the block only touches the view
+        // on the main queue it is delivered on.
+        let observer = unsafe {
+            center.addObserverForName_object_queue_usingBlock(
+                Some(NSSystemTimeZoneDidChangeNotification),
+                None,
+                Some(&NSOperationQueue::mainQueue()),
+                &block,
+            )
+        };
+        this.ivars().observers.borrow_mut().push(observer);
+    }
+
     fn observe_app_state(this: &Retained<Self>) {
         let center = NSNotificationCenter::defaultCenter();
         let weak = Weak::from_retained(this);
@@ -791,6 +815,7 @@ impl Surface {
         let view = RootView::new(mtm, frame, app.into(), options);
         RootView::observe_keyboard(&view);
         RootView::observe_app_state(&view);
+        RootView::observe_time_zone(&view);
         Ok(Surface { view })
     }
 
@@ -923,6 +948,12 @@ fn current_locale() -> nsh_engine::Locale {
 
 /// The app's state as UIApplication reports it now, before its
 /// notifications say more.
+/// The system's time zone (`timeZone()`): its IANA name.
+fn time_zone() -> nsh_engine::TimeZone {
+    nsh_engine::TimeZone::parse(&NSTimeZone::systemTimeZone().name().to_string())
+        .unwrap_or_default()
+}
+
 fn app_state(mtm: MainThreadMarker) -> AppState {
     match UIApplication::sharedApplication(mtm).applicationState() {
         UIApplicationState::Active => AppState::Active,
