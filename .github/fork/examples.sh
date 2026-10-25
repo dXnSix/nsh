@@ -56,12 +56,14 @@ case "$target" in
   # Left out: context-menu, dock, hover, overlays, resizable, toasts (a
   # mouse or a desktop's windows), picker (the system's photo picker);
   # environment runs its appearance only (its rotation expects a 390 × 844
-  # window, the newest simulators are bigger).
+  # window, the newest simulators are bigger). On the runner, form's typing
+  # lost the second of two equal keys ("hello" became "HELO", then "HEO"),
+  # so only its maxLength test runs.
   ios)
-    gallery=(animations context-menu-press controls device error-boundary form gestures links
+    gallery=(animations context-menu-press controls device error-boundary gestures links
       list-search mention menus navigation network photos press shortcuts storage text-view
       timers)
-    filtered=("environment appearance")
+    filtered=("environment appearance" "form maxLength")
     ;;
   *)
     echo "examples.sh: no tests for target $target" >&2
