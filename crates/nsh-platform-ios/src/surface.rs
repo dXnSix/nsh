@@ -345,6 +345,7 @@ impl RootView {
             _ => Idiom::Phone,
         };
         env.locale = current_locale();
+        env.time_zone = nsh_engine::TimeZone::UTC;
         // Only read for the web: iOS keys are always Apple's.
         env.apple_keyboard = true;
         // No host answers `nsh/host` here: an embedding app talks to its
