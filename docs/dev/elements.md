@@ -294,7 +294,9 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   `background`, React Native's states; the platforms write it as the system reports the app's, the web from the
   page's `visibilityState` and focus, iOS from UIApplication's `didBecomeActive` / `willResignActive` /
   `didEnterBackground` / `willEnterForeground` notifications, by the notification: `applicationState` still says
-  active during `willResignActive`). `padding-bottom: env(keyboard-inset-height)` pads a view by the keyboard's height, animated with the keyboard
+  active during `willResignActive`; Android from `NshView`'s activity: resumed is `active`, paused or started again
+  `inactive`, stopped `background`, through the application's `ActivityLifecycleCallbacks` while the view is
+  attached). `padding-bottom: env(keyboard-inset-height)` pads a view by the keyboard's height, animated with the keyboard
   natively, for content outside scroll views (message bars). Inputs inside a scroll view are kept clear of the keyboard natively (bottom inset + scroll to the
   focused input), with no JS involved.
   Both move as one with the keyboard: `LayoutCurve::Keyboard` (`type: "keyboard"`) is the system keyboard's own curve,
