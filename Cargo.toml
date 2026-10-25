@@ -48,6 +48,9 @@ anyhow = "1"
 # Shaders (`nsh-shader`): WGSL in, each platform's language out (features per writer).
 naga = { version = "30", default-features = false, features = ["wgsl-in"] }
 thiserror = "2"
+# The IANA time zone database, bundled: the same rules on every platform
+# (`Intl`'s zones, `nsh-js`).
+jiff = { version = "0.2.38", default-features = false, features = ["std", "tzdb-bundle-always"] }
 clap = { version = "4.6", features = ["derive"] }
 crossbeam-channel = "0.5"
 notify = "8.2"

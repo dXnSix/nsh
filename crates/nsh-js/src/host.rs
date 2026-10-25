@@ -2308,6 +2308,54 @@ const report = (v) => text(String(v));
         );
     }
 
+    /// `Intl` writes times in any zone of the bundled database, with its
+    /// daylight saving time, and in the environment's zone by default.
+    #[test]
+    fn intl_formats_dates_in_any_zone_and_the_environments() {
+        let host = Host::new().unwrap();
+        let script = format!(
+            r#"{REPORT}
+            const summer = Date.UTC(2026, 9, 16, 15, 4, 5);
+            const winter = Date.UTC(2026, 0, 16, 15, 4, 5);
+            const time = (zone, at) => new Intl.DateTimeFormat("en-US", {{ timeZone: zone, hour: "2-digit", minute: "2-digit", hour12: false }}).format(at);
+            report(time("Asia/Tokyo", summer));
+            report(time("Europe/Berlin", summer) + " " + time("Europe/Berlin", winter));
+            report(time("America/Argentina/Buenos_Aires", summer));
+            report(new Intl.DateTimeFormat("en", {{ timeZone: "asia/kolkata" }}).resolvedOptions().timeZone);
+            report(new Date(summer).toLocaleTimeString("en-US", {{ timeZone: "America/New_York", timeZoneName: "short" }}));
+            try {{ new Intl.DateTimeFormat("en", {{ timeZone: "Mars/Olympus" }}); }} catch (e) {{ report(e.name); }}
+            globalThis.local = () => [
+              new Intl.DateTimeFormat().resolvedOptions().timeZone,
+              new Date(summer).toLocaleTimeString("en-US", {{ hour12: false }}),
+            ].join(" ");
+            report(local());
+            "#
+        );
+        host.eval_source(&script).unwrap();
+        for zone in ["America/New_York", "GMT+01:00"] {
+            host.set_environment(&Environment {
+                time_zone: nsh_core::platform::TimeZone::parse(zone).unwrap(),
+                ..Environment::default()
+            });
+            host.eval_source(&format!("{REPORT}\nreport(local());"))
+                .unwrap();
+        }
+        assert_eq!(
+            reported(&host),
+            [
+                "00:04",
+                "17:04 16:04",
+                "12:04",
+                "Asia/Kolkata",
+                "11:04:05 AM GMT-4",
+                "RangeError",
+                "UTC 15:04:05",
+                "America/New_York 11:04:05",
+                "+01:00 16:04:05",
+            ]
+        );
+    }
+
     #[test]
     fn timers_fire_in_order_and_cancel() {
         let host = Host::new().unwrap();

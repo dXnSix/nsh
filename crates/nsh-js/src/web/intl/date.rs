@@ -1,8 +1,10 @@
 //! Date and time formatting (`Intl.DateTimeFormat`, `Date.prototype.
 //! toLocale{,Date,Time}String`): the Gregorian calendar, the fields asked
-//! for in the locale's order, 12- or 24-hour times. Times are local (the
-//! offset QuickJS's `Date` uses), UTC, or a fixed offset: there is no time
-//! zone database.
+//! for in the locale's order, 12- or 24-hour times. Times are in an IANA
+//! zone (the environment's by default) with the offsets of the bundled
+//! time zone database (`jiff`'s), in UTC, at a fixed offset, or local (the
+//! offset QuickJS's `Date` uses: for an environment's zone the database
+//! does not know).
 
 use super::{
     Part,
@@ -54,6 +56,9 @@ pub(crate) enum Zone {
     Utc,
     /// Minutes east of UTC.
     Offset(i32),
+    /// An IANA zone of the database, by its canonical name
+    /// (`super::named_zone`).
+    Named(nsh_core::platform::TimeZone),
 }
 
 /// Resolved options: the fields to write.

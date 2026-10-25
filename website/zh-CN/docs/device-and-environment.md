@@ -266,7 +266,7 @@ import { timeZone } from "nsh/device";
 <Text>{`Times in ${timeZone()}`}</Text>
 ```
 
-`Date` 的本地时间一如既往地跟随系统时区：`time_zone()` 给出它的名称。测试中，`open` 的 `timeZone` 设置这个名称（否则是 `UTC`），`app.setTimeZone("Asia/Tokyo")` 把设备移到另一个时区（[测试](./testing-and-trace.md#操作步骤)）；`Date` 的本地时间仍是这台机器的。
+在 TSX 中，`Intl` 默认按它书写日期：`new Date().toLocaleTimeString()` 显示设备时区的时间，`timeZone` 也接受任意其他 IANA 时区（`{ timeZone: "Asia/Tokyo" }`），使用 NSH 自带的时区数据库的规则，各平台相同。`Date` 自身的本地时间（`getHours()`、`toString()`）一如既往地跟随系统时区。测试中，`open` 的 `timeZone` 设置时区（否则是 `UTC`），`app.setTimeZone("Asia/Tokyo")` 把设备移到另一个时区（[测试](./testing-and-trace.md#操作步骤)）：`Intl` 随之变化，而 `Date` 自身的本地时间仍是这台机器的。
 
 ## 在嵌入它的应用中
 
