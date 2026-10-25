@@ -16,6 +16,12 @@
 //! - right to left: the user's first preferred language;
 //! - reduce motion and VoiceOver: `NSWorkspace`'s accessibility settings,
 //!   live;
+//! - whether the app is in use (`appState()`): `background` while none of
+//!   it shows (hidden, or `NSApplication.occlusionState` without
+//!   `visible`: its windows minimized or covered), `active` while it is the
+//!   active app, `inactive` otherwise; live, from `NSApplication`'s
+//!   activation, hiding and occlusion notifications. An embedded surface
+//!   follows the embedding app's, which is the application;
 //! - the pixel ratio: the window's backing scale factor;
 //! - the OS version: `NSProcessInfo.operatingSystemVersion`.
 //!
@@ -48,7 +54,7 @@ use nsh_core::{
     geometry::{Point, Size, px},
     platform::clipboard,
 };
-use nsh_engine::{ColorScheme, Edges, Environment, Idiom, Locale, Os};
+use nsh_engine::{AppState, ColorScheme, Edges, Environment, Idiom, Locale, Os};
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
@@ -56,10 +62,13 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSAccessibilityPriorityLevel, NSAlert, NSAlertFirstButtonReturn, NSAlertStyle, NSAppearance,
-    NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-    NSBitmapImageFileType, NSBitmapImageRep, NSColor, NSFont, NSModalResponse, NSPasteboard,
-    NSPasteboardTypeString, NSResponder, NSScreen, NSTextAlignment, NSTextField, NSView,
-    NSWorkspace, NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
+    NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
+    NSApplicationDidBecomeActiveNotification, NSApplicationDidChangeOcclusionStateNotification,
+    NSApplicationDidHideNotification, NSApplicationDidResignActiveNotification,
+    NSApplicationDidUnhideNotification, NSApplicationOcclusionState, NSBitmapImageFileType,
+    NSBitmapImageRep, NSColor, NSFont, NSModalResponse, NSPasteboard, NSPasteboardTypeString,
+    NSResponder, NSScreen, NSTextAlignment, NSTextField, NSView, NSWorkspace,
+    NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
 };
 use objc2_core_foundation::{CGPoint, CGSize};
 use objc2_foundation::{
@@ -227,6 +236,35 @@ fn install(mtm: MainThreadMarker) {
             ),
         ]
     };
+    // Whether the app is in use (`app_state`).
+    // SAFETY: as above.
+    let observers = observers
+        .into_iter()
+        .chain(
+            unsafe {
+                [
+                    NSApplicationDidBecomeActiveNotification,
+                    NSApplicationDidResignActiveNotification,
+                    NSApplicationDidHideNotification,
+                    NSApplicationDidUnhideNotification,
+                    NSApplicationDidChangeOcclusionStateNotification,
+                ]
+            }
+            .into_iter()
+            .map(|name| {
+                // SAFETY: as above.
+                unsafe {
+                    NSNotificationCenter::defaultCenter()
+                        .addObserverForName_object_queue_usingBlock(
+                            Some(name),
+                            None,
+                            Some(&queue),
+                            &block,
+                        )
+                }
+            }),
+        )
+        .collect();
     // VoiceOver posts no notification: its setting is observed.
     // SAFETY: NSObject's initializer.
     let observer: Retained<Observer> = unsafe { msg_send![Observer::alloc(mtm), init] };
@@ -284,7 +322,26 @@ fn update(surface: &Surface) {
     env.idiom = Idiom::Desktop;
     env.safe_area = Edges::default();
     env.keyboard_height = px(0.0);
+    env.app_state = app_state(surface.mtm);
     surface.set_environment(env);
+}
+
+/// Whether the app is in use: `background` while none of it shows (hidden,
+/// or its windows minimized or covered), `active` while it is the active
+/// app, `inactive` otherwise.
+fn app_state(mtm: MainThreadMarker) -> AppState {
+    let app = NSApplication::sharedApplication(mtm);
+    if app.isHidden()
+        || !app
+            .occlusionState()
+            .contains(NSApplicationOcclusionState::Visible)
+    {
+        AppState::Background
+    } else if app.isActive() {
+        AppState::Active
+    } else {
+        AppState::Inactive
+    }
 }
 
 /// The surface's environment changed: its background follows the scheme.
