@@ -47,10 +47,12 @@ case "$target" in
   # toasts (a mouse, a keyboard or a desktop's windows), picker (the
   # system's photo picker stays open over the tests after it); environment
   # runs its appearance only (its rotation expects a 390 × 844 window).
-  # On the runner, animations does not end in 30 s.
+  # On the runner, animations does not end in 30 s, and network's
+  # `fetch()`, far down its page, did not scroll into the emulator's
+  # 320 × 640 (the request itself is the engine's, run on iOS and the web).
   android)
     gallery=(context-menu-press controls device error-boundary form gestures links
-      list-search mention menus navigation network photos press storage text-view timers)
+      list-search mention menus navigation photos press storage text-view timers)
     filtered=("environment appearance")
     ;;
   # Left out: context-menu, dock, hover, overlays, resizable, toasts (a
