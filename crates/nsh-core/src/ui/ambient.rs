@@ -27,7 +27,7 @@ use crate::{
     Command, Dialog, EdgeInsets, LayoutAnimation, NodeId, Points, Size,
     canvas::CanvasFont,
     color::Hsla,
-    platform::{AppState, Appearance, Idiom, Locale, Os},
+    platform::{AppState, Appearance, Idiom, Locale, Os, TimeZone},
     time::Instant,
 };
 
@@ -70,6 +70,7 @@ struct EnvSignals {
     screen_reader: Memo<bool>,
     pixel_ratio: Memo<f32>,
     locale: Memo<Locale>,
+    time_zone: Memo<TimeZone>,
     app_state: Memo<AppState>,
 }
 
@@ -95,6 +96,7 @@ impl EnvSignals {
                 screen_reader: part!(screen_reader),
                 pixel_ratio: part!(pixel_ratio),
                 locale: part!(locale),
+                time_zone: part!(time_zone),
                 app_state: part!(app_state),
             }
         })
@@ -249,6 +251,13 @@ pub fn round_to_nearest_pixel(points: Points) -> Points {
 /// The user's locale (TS: what `Intl` formats for by default).
 pub fn locale() -> Locale {
     env(|e| e.locale)
+}
+
+/// The device's time zone, as the system names it (`Europe/Berlin`; TS:
+/// `timeZone()`). Reading it subscribes, so what shows times in it follows
+/// the user's travels and changes in the system's settings.
+pub fn time_zone() -> TimeZone {
+    env(|e| e.time_zone)
 }
 
 /// Whether the app is in use: in the foreground, visible without the

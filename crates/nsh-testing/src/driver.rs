@@ -8,7 +8,7 @@ use std::time::Duration;
 use nsh_core::{
     Dialog, ResolvedTextStyle,
     geometry::{Point, Points, Size},
-    platform::{AppState, ColorScheme},
+    platform::{AppState, ColorScheme, TimeZone},
 };
 use nsh_dev::protocol::{ClockChange, TestStep};
 use serde_json::Value;
@@ -45,6 +45,11 @@ pub(crate) trait Driver: Send {
     fn set_app_state(&mut self, state: AppState) -> Result<(), String> {
         let _ = state;
         Err(headless_only("setAppState"))
+    }
+    /// The device's time zone, as the system reports it (`timeZone()`).
+    fn set_time_zone(&mut self, zone: TimeZone) -> Result<(), String> {
+        let _ = zone;
+        Err(headless_only("setTimeZone"))
     }
     fn run_for(&mut self, time: Duration) -> Result<(), String>;
     fn fast_forward(&mut self, time: Duration) -> Result<(), String>;
@@ -164,6 +169,11 @@ impl Driver for Headless {
     fn set_app_state(&mut self, state: AppState) -> Result<(), String> {
         self.set_environment(&format!("setAppState({})", state.name()), |e| {
             e.app_state = state;
+        })
+    }
+    fn set_time_zone(&mut self, zone: TimeZone) -> Result<(), String> {
+        self.set_environment(&format!("setTimeZone({zone})"), |e| {
+            e.time_zone = zone;
         })
     }
     fn run_for(&mut self, time: Duration) -> Result<(), String> {

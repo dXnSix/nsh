@@ -207,7 +207,9 @@ pub use crate::{
         transparent_black, transparent_white, white, yellow,
     },
     overlay::{Align, Placement},
-    platform::{AppState, Appearance, HttpBody, HttpHead, HttpRequest, Idiom, Locale, Os},
+    platform::{
+        AppState, Appearance, HttpBody, HttpHead, HttpRequest, Idiom, Locale, Os, TimeZone,
+    },
     style::Color,
 };
 
@@ -450,7 +452,7 @@ pub mod prelude {
             on_key_with, open_url, os, os_version, pick_images, pixel_ratio, prefetch_image,
             reduce_motion, request_animation_frame, round_to_nearest_pixel, safe_area,
             screen_reader, set_clipboard, set_clipboard_image, set_color_scheme, set_interval,
-            set_timeout, spawn, text_metrics, timer, timer_until, toast, tokens, window,
+            set_timeout, spawn, text_metrics, time_zone, timer, timer_until, toast, tokens, window,
         },
         batch, catch_error, cleanup, component, computed, dynamic, each, effect, engine_context,
         provide_context, resource, resource_with_value, signal, signal_with, stored, untracked,

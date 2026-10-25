@@ -345,6 +345,7 @@ impl RootView {
                 _ => Idiom::Phone,
             },
             locale: current_locale(),
+            time_zone: nsh_engine::TimeZone::UTC,
             // Only read for the web: iOS keys are always Apple's.
             apple_keyboard: true,
             // Shaders fill views with Metal (`crate::shader`).
