@@ -23,7 +23,7 @@ use nsh_core::{
     ApproxTextEngine, MountBatch,
     element::{Callback, Registry, Root},
     geometry::{Points, Size},
-    platform::{Idiom, Locale, Os},
+    platform::{Idiom, Locale, Os, TimeZone},
     prelude::timer,
 };
 use nsh_engine::{
@@ -498,6 +498,13 @@ impl Session {
             ),
             None => None,
         };
+        let time_zone = match &launch.time_zone {
+            Some(name) => Some(
+                TimeZone::parse(name)
+                    .ok_or_else(|| format!("open({entry:?}): {name:?} is not a time zone"))?,
+            ),
+            None => None,
+        };
         let storage = MemoryStorage::new(launch.storage.0);
         let files = set_files(&self.run.ui_sets);
         let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
@@ -532,6 +539,7 @@ impl Session {
                 },
                 color_scheme: launch.color_scheme.unwrap_or_default().into(),
                 locale: locale.unwrap_or(Locale::EN_US),
+                time_zone: time_zone.unwrap_or(TimeZone::UTC),
                 reduce_motion: launch.reduced_motion.unwrap_or(false),
                 os: match platform {
                     Platform::Ios => Os::Ios,
@@ -602,6 +610,11 @@ impl Session {
         {
             return Err(format!("open({entry:?}): {tag:?} is not a locale"));
         }
+        if let Some(name) = &launch.time_zone
+            && TimeZone::parse(name).is_none()
+        {
+            return Err(format!("open({entry:?}): {name:?} is not a time zone"));
+        }
         check_launch(entry, &launch, self.run.target.as_ref())?;
         // What the test gives is pinned, its defaults included; what it
         // leaves out is the platform's.
@@ -610,6 +623,7 @@ impl Session {
         environment.host_params = (!params.is_empty()).then_some(params);
         environment.clipboard = launch.clipboard.clone();
         environment.locale = launch.locale.clone();
+        environment.time_zone = launch.time_zone.clone();
         environment.reduced_motion = launch.reduced_motion;
         environment.safe_area = launch.safe_area.map(|safe_area| {
             [
@@ -1120,6 +1134,7 @@ mod tests {
             clipboard: None,
             color_scheme: None,
             locale: None,
+            time_zone: None,
             reduced_motion: None,
             platform: None,
             clock: None,
