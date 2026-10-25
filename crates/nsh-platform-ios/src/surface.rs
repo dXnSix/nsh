@@ -357,6 +357,7 @@ impl RootView {
                 _ => Idiom::Phone,
             },
             locale: current_locale(),
+            time_zone: nsh_engine::TimeZone::UTC,
             app_state: self.ivars().app_state.get(),
             // Only read for the web: iOS keys are always Apple's.
             apple_keyboard: true,
