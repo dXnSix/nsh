@@ -117,6 +117,33 @@ impl Idiom {
     }
 }
 
+/// Whether the app is in use (`appState()`), in React Native's `AppState`
+/// terms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AppState {
+    /// In the foreground and taking input.
+    #[default]
+    Active,
+    /// Still visible, but not taking input: another app or window has the
+    /// focus, or the system shows something over it (the app switcher, an
+    /// incoming call, Control Center).
+    Inactive,
+    /// Not visible: in the background, minimized or hidden. The system may
+    /// suspend it there.
+    Background,
+}
+
+impl AppState {
+    /// Its `appState()` name: `"active"`, `"inactive"` or `"background"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            AppState::Active => "active",
+            AppState::Inactive => "inactive",
+            AppState::Background => "background",
+        }
+    }
+}
+
 /// What the platform knows about the surface.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Environment {
@@ -164,6 +191,10 @@ pub struct Environment {
     /// The app embedding NSH answers `nsh/host`'s calls
     /// ([`crate::Command::HostCall`]); without it, they reject at once.
     pub host: bool,
+    /// Whether the app is in use: in the foreground, visible without the
+    /// focus, or in the background. For an embedded surface, the embedding
+    /// app's.
+    pub app_state: AppState,
 }
 
 impl Environment {
@@ -195,6 +226,7 @@ impl Default for Environment {
             apple_keyboard: false,
             locale: Locale::EN_US,
             host: false,
+            app_state: AppState::Active,
         }
     }
 }

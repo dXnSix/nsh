@@ -204,7 +204,7 @@ pub use crate::{
         transparent_black, transparent_white, white, yellow,
     },
     overlay::{Align, Placement},
-    platform::{Appearance, HttpBody, HttpHead, HttpRequest, Idiom, Locale, Os},
+    platform::{AppState, Appearance, HttpBody, HttpHead, HttpRequest, Idiom, Locale, Os},
     style::Color,
 };
 
@@ -429,7 +429,7 @@ pub mod prelude {
         ResourceInfo, ResourceState, Scope, Signal, SignalEquals, Stored,
         ambient::{
             Delay, KeyOptions, Spawned, animate_layout, animated_value, announce_for_accessibility,
-            clipboard_files, clipboard_has_image, clipboard_has_string, clipboard_image,
+            app_state, clipboard_files, clipboard_has_image, clipboard_has_string, clipboard_image,
             clipboard_string, color, component_ref, dark, dismiss_keyboard, element_ref, fetch,
             font_scale, global, idiom, image_size, is_desktop, key_label, keyboard_duration,
             keyboard_height, locale, measure_text, motion, next_frame, on_back_press, on_key,

@@ -44,8 +44,8 @@ use nsh_core::{
     keymap::{Key, KeyMatch, Keymap, Keystroke, Modifiers},
 };
 use nsh_engine::{
-    App, Assets, ColorScheme, EngineConfig, EngineControl, Environment, Idiom, Limits, LocalEngine,
-    MountSink, Os,
+    App, AppState, Assets, ColorScheme, EngineConfig, EngineControl, Environment, Idiom, Limits,
+    LocalEngine, MountSink, Os,
 };
 #[cfg(feature = "js")]
 use nsh_engine::{Bundle, BundleCode, Chunk, HotUpdate, Policy};
@@ -392,6 +392,12 @@ pub unsafe extern "C" fn nsh_environment(ptr: *const u8, len: usize) -> f64 {
     }
     env.keyboard_height = Points(num("keyboard").unwrap_or(env.keyboard_height.0));
     env.host = flag("host").unwrap_or(env.host);
+    env.app_state = match value.get("appState").and_then(|v| v.as_str()) {
+        Some("background") => AppState::Background,
+        Some("inactive") => AppState::Inactive,
+        Some(_) => AppState::Active,
+        None => env.app_state,
+    };
     PAGE.with(|p| p.set(Some(env)));
     send(|app| {
         let e = &mut app.environment;
@@ -403,6 +409,7 @@ pub unsafe extern "C" fn nsh_environment(ptr: *const u8, len: usize) -> f64 {
         e.pixel_ratio = env.pixel_ratio;
         e.safe_area = env.safe_area;
         e.keyboard_height = env.keyboard_height;
+        e.app_state = env.app_state;
         app.control.set_environment(app.environment);
     })
 }
