@@ -172,9 +172,9 @@ jobs:
           api-level: 35
           arch: x86_64
           target: google_apis
-          # A phone's screen (411 × 914 dp), not the default 320 × 640, so
-          # that the gallery's pages scroll as they do on a phone.
-          profile: pixel_6
+          # The default screen (320 × 640 at 160 dpi): a phone's (pixel_6,
+          # 1080 × 2400) is seven times the pixels for the software renderer,
+          # and the tests ran out of time.
           disk-size: 6G
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
