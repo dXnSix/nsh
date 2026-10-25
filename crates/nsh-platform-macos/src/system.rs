@@ -13,6 +13,9 @@
 //!   root view's effective appearance (the window's, the system's), live;
 //! - the locale (`Intl`'s default): `NSLocale.currentLocale` (the region
 //!   format of System Settings), live;
+//! - the time zone (`timeZone()`): `NSTimeZone.systemTimeZone`'s name,
+//!   live (`NSSystemTimeZoneDidChangeNotification`, after which
+//!   Foundation's cached zone is reset);
 //! - right to left: the user's first preferred language;
 //! - reduce motion and VoiceOver: `NSWorkspace`'s accessibility settings,
 //!   live;
@@ -54,7 +57,7 @@ use nsh_core::{
     geometry::{Point, Size, px},
     platform::clipboard,
 };
-use nsh_engine::{AppState, ColorScheme, Edges, Environment, Idiom, Locale, Os};
+use nsh_engine::{AppState, ColorScheme, Edges, Environment, Idiom, Locale, Os, TimeZone};
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
@@ -75,7 +78,7 @@ use objc2_foundation::{
     NSCurrentLocaleDidChangeNotification, NSData, NSDictionary, NSKeyValueObservingOptions,
     NSLocale, NSLocaleLanguageDirection, NSNotification, NSNotificationCenter, NSObject,
     NSObjectNSKeyValueObserverRegistration, NSObjectProtocol, NSOperationQueue, NSPoint,
-    NSProcessInfo, NSString, NSURL, ns_string,
+    NSProcessInfo, NSString, NSSystemTimeZoneDidChangeNotification, NSTimeZone, NSURL, ns_string,
 };
 
 use crate::{surface::Surface, view::NshView};
@@ -236,10 +239,25 @@ fn install(mtm: MainThreadMarker) {
             ),
         ]
     };
+    // The time zone: Foundation caches the system's until it is reset.
+    let zone_changed = RcBlock::new(|_: NonNull<NSNotification>| {
+        NSTimeZone::resetSystemTimeZone();
+        system_changed();
+    });
+    // SAFETY: as above.
+    let zone_observer = unsafe {
+        NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+            Some(NSSystemTimeZoneDidChangeNotification),
+            None,
+            Some(&queue),
+            &zone_changed,
+        )
+    };
     // Whether the app is in use (`app_state`).
     // SAFETY: as above.
     let observers = observers
         .into_iter()
+        .chain([zone_observer])
         .chain(
             unsafe {
                 [
@@ -323,7 +341,13 @@ fn update(surface: &Surface) {
     env.safe_area = Edges::default();
     env.keyboard_height = px(0.0);
     env.app_state = app_state(surface.mtm);
+    env.time_zone = time_zone();
     surface.set_environment(env);
+}
+
+/// The system's time zone (`timeZone()`): its IANA name.
+fn time_zone() -> TimeZone {
+    TimeZone::parse(&NSTimeZone::systemTimeZone().name().to_string()).unwrap_or_default()
 }
 
 /// Whether the app is in use: `background` while none of it shows (hidden,
