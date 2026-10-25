@@ -726,8 +726,25 @@ public class NshView extends FrameLayout {
             (c.uiMode & Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION ? 3
                     : c.smallestScreenWidthDp >= 600 ? 1 : 0,
             appState,
-        }, dark, locale.toLanguageTag());
+        }, dark, locale.toLanguageTag(), timeZone);
     }
+
+    /** The system's time zone's ID (`timeZone()`). */
+    private String timeZone = java.util.TimeZone.getDefault().getID();
+
+    /**
+     * The system's time zone changed (the user's setting, or a new zone with
+     * automatic time zones): the broadcast names it, before the process's
+     * default zone may have caught up.
+     */
+    private final android.content.BroadcastReceiver timeZoneChanged = new android.content.BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, android.content.Intent intent) {
+            String zone = intent.getStringExtra(android.content.Intent.EXTRA_TIMEZONE);
+            timeZone = zone != null ? zone : java.util.TimeZone.getDefault().getID();
+            publishEnvironment(getRootWindowInsets());
+        }
+    };
 
     /** The view's activity going through its lifecycle: `appState()`. */
     private final android.app.Application.ActivityLifecycleCallbacks lifecycle =
@@ -849,6 +866,11 @@ public class NshView extends FrameLayout {
         accessibility().addTouchExplorationStateChangeListener(screenReader);
         Activity activity = activity(getContext());
         if (activity != null) activity.getApplication().registerActivityLifecycleCallbacks(lifecycle);
+        // The zone may have changed while the view was detached. The
+        // broadcast is the system's alone: no export flag is needed.
+        timeZone = java.util.TimeZone.getDefault().getID();
+        getContext().registerReceiver(timeZoneChanged,
+                new android.content.IntentFilter(android.content.Intent.ACTION_TIMEZONE_CHANGED));
         // The dispatcher exists once attached.
         if (handle != 0) mounter.updateBack();
     }
@@ -859,6 +881,7 @@ public class NshView extends FrameLayout {
         accessibility().removeTouchExplorationStateChangeListener(screenReader);
         Activity activity = activity(getContext());
         if (activity != null) activity.getApplication().unregisterActivityLifecycleCallbacks(lifecycle);
+        getContext().unregisterReceiver(timeZoneChanged);
     }
 
     /** `BackHandler.exitApp()`: what the back button does without the app. */
