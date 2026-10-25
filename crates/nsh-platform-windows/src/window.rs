@@ -772,6 +772,10 @@ fn handle(
         WM_SETTINGCHANGE | WM_THEMECHANGED | WM_SYSCOLORCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED => {
             crate::system::settings_changed(surface);
         }
+        WM_ACTIVATEAPP => crate::system::app_activated(surface, wparam.0 != 0),
+        // Shown, hidden, minimized or restored (before default handling
+        // sends `WM_SIZE`).
+        WM_WINDOWPOSCHANGED if data.top_level => crate::system::app_state_changed(surface),
         WM_DESTROY => {
             surface.stop();
             surface.set_hwnd(HWND::default());
