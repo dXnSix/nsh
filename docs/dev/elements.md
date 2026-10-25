@@ -245,7 +245,9 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   offset logic stays left to right.
 - **Environment** (reactive accessors; `nsh/device` and `nsh/base` (`safeArea()`, `keyboardFrame()`)): `windowSize()`, `safeArea()`, `keyboardFrame()` (`{ height, duration }`: how
   far the keyboard reaches into the surface, the bottom safe area under it included, on every platform),
-  `colorScheme()`, `fontScale()`. `KeyboardAvoidingView` pads its bottom by `keyboardFrame().height`, animated with the keyboard,
+  `colorScheme()`, `fontScale()`, `appState()` (`Environment::app_state`, `AppState`: `active` / `inactive` /
+  `background`, React Native's states; the platforms write it as the system reports the app's, the web from the
+  page's `visibilityState` and focus). `KeyboardAvoidingView` pads its bottom by `keyboardFrame().height`, animated with the keyboard,
   for content outside scroll views (message bars). Inputs inside a scroll view are kept clear of the keyboard natively (bottom inset + scroll to the
   focused input), with no JS involved.
 - **Controlled inputs**: each native edit carries an edit count; a `value` from JS is applied only if it is based on the latest
