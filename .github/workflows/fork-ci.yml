@@ -126,7 +126,10 @@ jobs:
       - name: Install clang
         run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
       # The Android runtime: `javac` + `d8` (Java 17), the SDK's
-      # `platforms;android-35` and an NDK (the image has the SDK and NDKs).
+      # `platforms;android-35` and an NDK: the image's default
+      # (`ANDROID_NDK_HOME`, 27). QuickJS's bindings, generated with the
+      # image's clang, do not build against the headers of its newest (30:
+      # "Unversioned target triples are not supported").
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -138,7 +141,7 @@ jobs:
             yes | "$sdkmanager" "platforms;android-35" > /dev/null || true
           fi
           test -f "$ANDROID_HOME/platforms/android-35/android.jar"
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          test -d "$ANDROID_NDK_HOME"
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
