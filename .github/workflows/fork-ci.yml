@@ -1,0 +1,207 @@
+name: Fork CI
+
+# Every pull request of the fork is checked on every platform, whatever it
+# changes. Upstream's workflows run only when a pull request touches what
+# they build, and none of them runs on macOS, iOS, Android or the web, whose
+# changes upstream checks by hand. This adds both:
+#
+# - `upstream`: starts, on the pull request's branch, each upstream workflow
+#   its own `pull_request` event did not run (`.github/fork/dispatch.py`):
+#   Core, Linux, Windows, GPUI, Examples, Rust application and Compat, as
+#   they are defined upstream. Their checks show on the pull request with the
+#   others.
+# - `macos`, `ios`, `android`, `web`: clippy, tests, and the examples' tests on
+#   the platform (`nsh test --target <platform>`, `.github/fork/examples.sh`):
+#   macOS windows, an iOS simulator, an Android emulator, headless Chrome.
+#
+# A fork-only file (branch kind `fork/*`): it never goes upstream, and adds
+# files of its own (`.github/fork/`) rather than editing upstream's, so an
+# upstream sync never conflicts with it. Pushes to `main` run the platform
+# jobs too, which keeps their dependency caches for the pull requests.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+
+jobs:
+  upstream:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Start the upstream workflows this pull request did not run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python3 -c "import yaml" 2>/dev/null || pip install pyyaml
+          python3 .github/fork/dispatch.py "${{ github.event.pull_request.base.sha }}" "${{ github.head_ref }}"
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Clippy
+        run: >
+          cargo clippy --all-targets
+          -p nsh-platform-macos -p nsh-macos-host -p nsh-macos-app
+          --features nsh-platform-macos/dev
+          -- -D warnings
+      - name: Test
+        run: cargo test -p nsh-platform-macos -p nsh-macos-host -p nsh-macos-app
+      - name: Run the examples' tests in macOS windows
+        run: |
+          cargo build -p nsh-cli
+          bash .github/fork/examples.sh macos
+
+  ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim, aarch64-apple-ios-macabi
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # `nsh-platform-ios` is empty off iOS: Catalyst checks it on the Mac.
+      - name: Clippy (Mac Catalyst)
+        run: >
+          cargo clippy
+          -p nsh-platform-ios -p nsh-ios-host -p nsh-ios-app
+          --target aarch64-apple-ios-macabi
+          --features nsh-platform-ios/embed,nsh-platform-ios/dev
+          -- -D warnings
+      - name: Build the simulator's development host
+        run: cargo build -p nsh-ios-host --target aarch64-apple-ios-sim
+      # `nsh test --target ios` boots the newest iPhone simulator.
+      - name: Run the examples' tests in an iOS simulator
+        run: |
+          cargo build -p nsh-cli
+          bash .github/fork/examples.sh ios
+
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # The emulator runs with hardware acceleration.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # GTK 4: `gallery-rs`'s crate is built for this machine too (GTK's Linux platform).
+      - name: Install clang and GTK 4
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev
+      # The Android runtime: `javac` + `d8` (Java 17), the SDK's
+      # `platforms;android-35` and an NDK: the image's default
+      # (`ANDROID_NDK_HOME`, 27). QuickJS's bindings, generated with the
+      # image's clang, do not build against the headers of its newest (30:
+      # "Unversioned target triples are not supported").
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install the Android platform
+        run: |
+          if [[ ! -f "$ANDROID_HOME/platforms/android-35/android.jar" ]]; then
+            sdkmanager=$(ls "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager* | head -1)
+            yes | "$sdkmanager" "platforms;android-35" > /dev/null || true
+          fi
+          test -f "$ANDROID_HOME/platforms/android-35/android.jar"
+          test -d "$ANDROID_NDK_HOME"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Clippy
+        run: cargo xtask clippy-android
+      # The emulator's ABI only, stripped: the development runtime of all
+      # three ABIs at debug is larger than an emulator's storage.
+      - name: Build the development runtime for the emulator
+        run: |
+          cargo xtask android --dev --abi x86_64
+          runtime="$RUNNER_TEMP/nsh-runtime/android/dev"
+          mkdir -p "$runtime"
+          cp -R target/android/debug-dev/. "$runtime/"
+          strip=$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-strip | head -1)
+          "$strip" --strip-debug "$runtime/lib/x86_64/libnsh.so"
+          echo "NSH_RUNTIME=$RUNNER_TEMP/nsh-runtime" >> "$GITHUB_ENV"
+          cargo build -p nsh-cli
+      - name: Run the examples' tests in an Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          # The default screen (320 × 640 at 160 dpi): a phone's (pixel_6,
+          # 1080 × 2400) is seven times the pixels for the software renderer,
+          # and the tests ran out of time.
+          disk-size: 6G
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: bash .github/fork/examples.sh android
+
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # QuickJS's WebAssembly build needs LLVM (clang, llvm-ar); GTK 4:
+      # `gallery-rs`'s crate is built for this machine too (GTK's Linux platform).
+      - name: Install clang, LLVM and GTK 4
+        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev libgtk-4-dev
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # `nsh-platform-web` is empty off WebAssembly.
+      - name: Clippy
+        run: cargo clippy -p nsh-platform-web --target wasm32-unknown-unknown --features compiler -- -D warnings
+      # `nsh test --target web` opens the apps in the image's Chrome.
+      - name: Run the examples' tests in headless Chrome
+        run: |
+          cargo build -p nsh-cli
+          bash .github/fork/examples.sh web
