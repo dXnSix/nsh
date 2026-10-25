@@ -23,16 +23,16 @@ case "$target" in
   # runner: the menu's tracking loop), context-menu-press, overlays (touch
   # screens' menus and tooltips), controls (the segmented control is not a
   # tab list), menus (a row's menu, submenus), text-view (a streamed reply's
-  # code), picker (`picks()` runs headless only). On the runner: animations,
-  # network's second request and toasts' pointer (13.6 s of waits) do not
-  # end in 30 s, and the window is 390 × 653 (environment's rotation expects
-  # 844).
+  # code), picker (`picks()` runs headless only). On the runner: animations
+  # and toasts' pointer (13.6 s of waits) do not end in 30 s, network's
+  # presses on `fetch()`, far down its page, stall in the window (390 × 653;
+  # the request itself is the engine's, run on the other platforms), and
+  # environment's rotation expects an 844 pt tall window.
   macos)
     gallery=(device dock error-boundary form gestures hover links list-search mention navigation
       photos press resizable shortcuts storage timers)
-    filtered=("environment appearance" "network loads the posts" "network shows why"
-      "toasts a toast shows" "toasts its action" "toasts its close button" "toasts at most three"
-      "toasts a swipe")
+    filtered=("environment appearance" "toasts a toast shows" "toasts its action"
+      "toasts its close button" "toasts at most three" "toasts a swipe")
     ;;
   # Left out: context-menu (the menu is not reported), controls (the
   # segmented control is not a tab list), links, text-view (span positions
