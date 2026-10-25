@@ -19,6 +19,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
+import android.view.WindowInsetsAnimation;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -195,6 +196,25 @@ public class NshView extends FrameLayout {
         // sets no soft input mode, this makes the system resize (and report
         // the keyboard as insets) instead of panning the window.
         setScrollContainer(true);
+        // The keyboard's curve and duration, as it starts to move: what makes
+        // room for it moves with it (`LayoutCurve::Keyboard`).
+        if (Build.VERSION.SDK_INT >= 30) {
+            setWindowInsetsAnimationCallback(new WindowInsetsAnimation.Callback(
+                    WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+                @Override
+                public void onPrepare(WindowInsetsAnimation animation) {
+                    // Before the end state's insets are applied.
+                    if ((animation.getTypeMask() & WindowInsets.Type.ime()) == 0) return;
+                    keyboardDuration = animation.getDurationMillis();
+                    mounter.keyboardMotion(animation.getInterpolator(), keyboardDuration);
+                }
+
+                @Override
+                public WindowInsets onProgress(WindowInsets insets, java.util.List<WindowInsetsAnimation> running) {
+                    return insets;
+                }
+            });
+        }
         // The back key where the window has no OnBackInvokedCallback in
         // effect (below Android 13, or `enableOnBackInvokedCallback` off).
         addOnUnhandledKeyEventListener((v, e) -> onBackKey(e));
@@ -427,10 +447,17 @@ public class NshView extends FrameLayout {
      * Registers native component {@code name} ({@code nativeComponent(name, ...)}
      * in JS): {@code factory} makes one for every element created from now on.
      *
+     * Names under {@code nsh/} are NSH's own: registering one logs a warning
+     * and changes nothing.
+     *
      * @param name the name JS uses
      * @param factory makes the components (UI thread)
      */
     public void registerComponent(String name, NshComponent.Factory factory) {
+        if (name.startsWith("nsh/")) {
+            android.util.Log.w("nsh", "native component `" + name + "` is not registered: names under `nsh/` are NSH's");
+            return;
+        }
         mounter.components.put(name, factory);
     }
 
@@ -580,6 +607,13 @@ public class NshView extends FrameLayout {
     // --- Environment ---------------------------------------------------------
 
     private float keyboard;
+    /**
+     * Whether the app is in use (`appState()`): its activity's state, 0 resumed (active), 1 paused or started
+     * again (inactive: visible without the focus), 2 stopped (background). Active until the activity says otherwise.
+     */
+    private int appState;
+    /** How long the keyboard's last move took (ms; `keyboardFrame().duration`). */
+    private long keyboardDuration = 250;
     /** The host app's locale and text size ({@link #setLocale}, {@link #setFontScale}). */
     private java.util.Locale hostLocale;
     private float hostFontScale;
@@ -681,7 +715,7 @@ public class NshView extends FrameLayout {
         java.util.Locale locale = hostLocale != null ? hostLocale : java.util.Locale.getDefault();
         float fontScale = hostFontScale > 0 && !Float.isInfinite(hostFontScale) ? hostFontScale : c.fontScale;
         Native.environment(handle, new float[] {
-            top / density, right / density, bottom / density, left / density, ime / density, 0.25f, fontScale,
+            top / density, right / density, bottom / density, left / density, ime / density, keyboardDuration / 1000f, fontScale,
             android.text.TextUtils.getLayoutDirectionFromLocale(java.util.Locale.getDefault()) == LAYOUT_DIRECTION_RTL ? 1 : 0,
             // "Remove animations" sets the animator scale to 0.
             android.provider.Settings.Global.getFloat(getContext().getContentResolver(),
@@ -691,8 +725,27 @@ public class NshView extends FrameLayout {
             Build.VERSION.SDK_INT,
             (c.uiMode & Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION ? 3
                     : c.smallestScreenWidthDp >= 600 ? 1 : 0,
+            appState,
         }, dark, locale.toLanguageTag());
     }
+
+    /** The view's activity going through its lifecycle: `appState()`. */
+    private final android.app.Application.ActivityLifecycleCallbacks lifecycle =
+            new android.app.Application.ActivityLifecycleCallbacks() {
+        private void state(Activity activity, int state) {
+            if (activity != activity(getContext()) || state == appState) return;
+            appState = state;
+            publishEnvironment(getRootWindowInsets());
+        }
+
+        @Override public void onActivityResumed(Activity a) { state(a, 0); }
+        @Override public void onActivityPaused(Activity a) { state(a, 1); }
+        @Override public void onActivityStarted(Activity a) { state(a, 1); }
+        @Override public void onActivityStopped(Activity a) { state(a, 2); }
+        @Override public void onActivityCreated(Activity a, android.os.Bundle b) {}
+        @Override public void onActivitySaveInstanceState(Activity a, android.os.Bundle b) {}
+        @Override public void onActivityDestroyed(Activity a) {}
+    };
 
     private android.view.accessibility.AccessibilityManager accessibility() {
         return (android.view.accessibility.AccessibilityManager) getContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
@@ -794,6 +847,8 @@ public class NshView extends FrameLayout {
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         accessibility().addTouchExplorationStateChangeListener(screenReader);
+        Activity activity = activity(getContext());
+        if (activity != null) activity.getApplication().registerActivityLifecycleCallbacks(lifecycle);
         // The dispatcher exists once attached.
         if (handle != 0) mounter.updateBack();
     }
@@ -802,6 +857,8 @@ public class NshView extends FrameLayout {
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
         accessibility().removeTouchExplorationStateChangeListener(screenReader);
+        Activity activity = activity(getContext());
+        if (activity != null) activity.getApplication().unregisterActivityLifecycleCallbacks(lifecycle);
     }
 
     /** `BackHandler.exitApp()`: what the back button does without the app. */

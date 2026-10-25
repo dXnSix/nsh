@@ -247,9 +247,19 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   far the keyboard reaches into the surface, the bottom safe area under it included, on every platform),
   `colorScheme()`, `fontScale()`, `appState()` (`Environment::app_state`, `AppState`: `active` / `inactive` /
   `background`, React Native's states; the platforms write it as the system reports the app's, the web from the
-  page's `visibilityState` and focus). `KeyboardAvoidingView` pads its bottom by `keyboardFrame().height`, animated with the keyboard,
+  page's `visibilityState` and focus, iOS from UIApplication's `didBecomeActive` / `willResignActive` /
+  `didEnterBackground` / `willEnterForeground` notifications, by the notification: `applicationState` still says
+  active during `willResignActive`; Android from `NshView`'s activity: resumed is `active`, paused or started again
+  `inactive`, stopped `background`, through the application's `ActivityLifecycleCallbacks` while the view is
+  attached). `KeyboardAvoidingView` pads its bottom by `keyboardFrame().height`, animated with the keyboard,
   for content outside scroll views (message bars). Inputs inside a scroll view are kept clear of the keyboard natively (bottom inset + scroll to the
   focused input), with no JS involved.
+  Both move as one with the keyboard: `LayoutCurve::Keyboard` (`type: "keyboard"`) is the system keyboard's own curve,
+  started when the keyboard started to move, however late the batch arrives. iOS takes the notification's curve (7, a
+  spring UIKit has no name for) and moves the layers' new animations back to the notification's time (`beginTime`,
+  `KeyboardMotion::aligned`), and runs the scroll view's inset and scroll in one animation of that curve; Android takes
+  the IME's `WindowInsetsAnimation` (interpolator, duration, start; API 30+) and fast-forwards its animators to it
+  (`Mounter.keyboardAligned`), the scroll to the input included.
 - **Controlled inputs**: each native edit carries an edit count; a `value` from JS is applied only if it is based on the latest
   edit, so a slow JS round trip can never overwrite newer typing (React Native's eventCount).
   While an input method composes, a `value` is held natively and applied when the composition ends, if no edit came

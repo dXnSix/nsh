@@ -9,7 +9,7 @@ use block2::RcBlock;
 use dispatch2::{DispatchQueue, MainThreadBound};
 use nsh_core::{MountBatch, Points, Size};
 use nsh_engine::{
-    App, ColorScheme, Edges, Engine, EngineConfig, Environment, Idiom, MountSink, Policy,
+    App, AppState, ColorScheme, Edges, Engine, EngineConfig, Environment, Idiom, MountSink, Policy,
 };
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
@@ -22,7 +22,10 @@ use objc2_foundation::{
     NSValue,
 };
 use objc2_ui_kit::{
-    NSValueUIGeometryExtensions, UIDevice, UIFont, UIFontTextStyleBody,
+    NSValueUIGeometryExtensions, UIApplication, UIApplicationDidBecomeActiveNotification,
+    UIApplicationDidEnterBackgroundNotification, UIApplicationState,
+    UIApplicationWillEnterForegroundNotification, UIApplicationWillResignActiveNotification,
+    UIDevice, UIFont, UIFontTextStyleBody, UIKeyboardAnimationCurveUserInfoKey,
     UIKeyboardAnimationDurationUserInfoKey, UIKeyboardFrameEndUserInfoKey,
     UIKeyboardWillChangeFrameNotification, UIKeyboardWillHideNotification, UIResponder,
     UITraitCollection, UITraitEnvironment, UIUserInterfaceIdiom, UIUserInterfaceStyle, UIView,
@@ -120,6 +123,9 @@ pub(crate) struct RootViewIvars {
     on_hot_failed: SharedHandler,
     /// Keyboard height over the view and its animation duration.
     keyboard: Cell<(f32, f32)>,
+    /// Whether the app is in use, as UIApplication's notifications said last
+    /// ([`RootView::observe_app_state`]).
+    app_state: Cell<AppState>,
     /// Last environment sent to the engine.
     environment: Cell<Option<Environment>>,
     /// The embedding app's locale and text size over the system's
@@ -269,6 +275,7 @@ impl RootView {
             on_error: Arc::new(MainThreadBound::new(RefCell::new(None), mtm)),
             on_hot_failed: Arc::new(MainThreadBound::new(RefCell::new(None), mtm)),
             keyboard: Cell::new((0.0, 0.25)),
+            app_state: Cell::new(app_state(mtm)),
             environment: Cell::new(None),
             host: Cell::default(),
             host_tokens: RefCell::new(None),
@@ -356,6 +363,7 @@ impl RootView {
             // No host answers `nsh/host` here: an embedding app talks to its
             // apps through its own UI sets (`nsh/native`).
             host: false,
+            app_state: self.ivars().app_state.get(),
         };
         // The embedding app's settings over the system's.
         self.ivars().host.get().apply(&mut env);
@@ -372,6 +380,56 @@ impl RootView {
         if self.ivars().environment.get() != Some(env) {
             self.ivars().environment.set(Some(env));
             running.engine.control().set_environment(env);
+        }
+    }
+
+    /// Tracks whether the app is in use (`appState()`): UIApplication's
+    /// notifications of the app's state, the embedding app's for an
+    /// embedded surface. The state is the notification's: during
+    /// `willResignActive`, `applicationState` still says active.
+    fn observe_app_state(this: &Retained<Self>) {
+        let center = NSNotificationCenter::defaultCenter();
+        let weak = Weak::from_retained(this);
+        let block = RcBlock::new(move |note: NonNull<NSNotification>| {
+            let Some(view) = weak.load() else { return };
+            // SAFETY: a valid notification for the duration of the call.
+            let name = unsafe { note.as_ref() }.name();
+            // SAFETY: immutable UIKit constants.
+            let state = unsafe {
+                if *name == *UIApplicationDidBecomeActiveNotification {
+                    AppState::Active
+                } else if *name == *UIApplicationDidEnterBackgroundNotification {
+                    AppState::Background
+                } else {
+                    // Resigning active, or coming back to the foreground
+                    // before it is active again.
+                    AppState::Inactive
+                }
+            };
+            view.ivars().app_state.set(state);
+            view.publish_environment();
+        });
+        // SAFETY: immutable UIKit constants.
+        let names = unsafe {
+            [
+                UIApplicationDidBecomeActiveNotification,
+                UIApplicationWillResignActiveNotification,
+                UIApplicationDidEnterBackgroundNotification,
+                UIApplicationWillEnterForegroundNotification,
+            ]
+        };
+        let mut observers = this.ivars().observers.borrow_mut();
+        for name in names {
+            // SAFETY: as in `observe_keyboard`; the block only touches the
+            // view on the main queue it is delivered on.
+            observers.push(unsafe {
+                center.addObserverForName_object_queue_usingBlock(
+                    Some(name),
+                    None,
+                    Some(&NSOperationQueue::mainQueue()),
+                    &block,
+                )
+            });
         }
     }
 
@@ -433,10 +491,13 @@ impl RootView {
     }
 
     fn keyboard_changed(&self, note: &NSNotification) {
+        // The keyboard starts to move now, in the transaction posting this.
+        let start = objc2_quartz_core::CACurrentMediaTime();
         let Some(info) = note.userInfo() else { return };
         // SAFETY: UIKit documents these user info keys and their value types
-        // (NSValue of a CGRect in screen coordinates, NSNumber of seconds).
-        let (frame, duration) = unsafe {
+        // (NSValue of a CGRect in screen coordinates, NSNumber of seconds,
+        // NSNumber of a UIViewAnimationCurve).
+        let (frame, duration, curve) = unsafe {
             let frame = info
                 .objectForKey(UIKeyboardFrameEndUserInfoKey)
                 .and_then(|v| v.downcast::<NSValue>().ok())
@@ -445,7 +506,11 @@ impl RootView {
                 .objectForKey(UIKeyboardAnimationDurationUserInfoKey)
                 .and_then(|v| v.downcast::<NSNumber>().ok())
                 .map_or(0.25, |n| n.doubleValue());
-            (frame, duration)
+            let curve = info
+                .objectForKey(UIKeyboardAnimationCurveUserInfoKey)
+                .and_then(|v| v.downcast::<NSNumber>().ok())
+                .map_or(7, |n| n.integerValue());
+            (frame, duration, curve)
         };
         let hiding = note.name().isEqualToString(
             // SAFETY: an immutable UIKit constant.
@@ -480,12 +545,17 @@ impl RootView {
             return;
         };
         let height = height as f32;
+        let motion = crate::mount::KeyboardMotion {
+            curve,
+            duration,
+            start,
+        };
         // Focusing an input while a batch is applied can post this
         // synchronously: then run it on the next main-queue turn.
         let busy = match mounter.get(self.mtm()).try_borrow_mut() {
             Ok(mut m) => {
                 if let Some(m) = m.as_mut() {
-                    m.keyboard_changed(height, duration);
+                    m.keyboard_changed(height, motion);
                 }
                 false
             }
@@ -495,7 +565,7 @@ impl RootView {
             DispatchQueue::main().exec_async(move || {
                 let mtm = MainThreadMarker::new().expect("main queue");
                 if let Some(m) = mounter.get(mtm).borrow_mut().as_mut() {
-                    m.keyboard_changed(height, duration);
+                    m.keyboard_changed(height, motion);
                 }
             });
         }
@@ -594,6 +664,9 @@ impl RootView {
         );
         // The app's downloaded images go through its disk cache.
         installed.set_image_cache(engine.image_cache());
+        if self.ivars().options.fps {
+            installed.measure();
+        }
         *mounter.get(mtm).borrow_mut() = Some(installed);
         *self.ivars().running.borrow_mut() = Some(Running { engine, mounter });
         self.ivars().environment.set(Some(self.environment()));
@@ -655,6 +728,9 @@ pub struct SurfaceOptions {
     /// parameters, events and handlers of their calls and posts, one for
     /// every app the surface runs.
     pub host: nsh_engine::HostChannel,
+    /// Logs the performance monitor's readings once a second (target
+    /// `nsh::perf`): frame rate, frame and commit costs, CPU, memory.
+    pub fps: bool,
 }
 
 impl Default for SurfaceOptions {
@@ -669,6 +745,7 @@ impl Default for SurfaceOptions {
             cache: nsh_engine::CacheOptions::default(),
             components: crate::component::Components::default(),
             host: nsh_engine::HostChannel::default(),
+            fps: false,
         }
     }
 }
@@ -720,6 +797,7 @@ impl Surface {
             .spawn(crate::text::prewarm)?;
         let view = RootView::new(mtm, frame, app.into(), options);
         RootView::observe_keyboard(&view);
+        RootView::observe_app_state(&view);
         Ok(Surface { view })
     }
 
@@ -848,6 +926,16 @@ fn current_locale() -> nsh_engine::Locale {
         .localeIdentifier()
         .to_string();
     nsh_engine::Locale::parse(&identifier).unwrap_or_default()
+}
+
+/// The app's state as UIApplication reports it now, before its
+/// notifications say more.
+fn app_state(mtm: MainThreadMarker) -> AppState {
+    match UIApplication::sharedApplication(mtm).applicationState() {
+        UIApplicationState::Active => AppState::Active,
+        UIApplicationState::Background => AppState::Background,
+        _ => AppState::Inactive,
+    }
 }
 
 /// The iOS version (`UIDevice.systemVersion`, the iOS version Catalyst

@@ -74,10 +74,8 @@ impl UiAnimation {
                     if mounter.screen_effect == Some(view.id()) {
                         crate::shader::set_args(&mounter.root, canvas);
                     }
-                } else {
-                    for &(k, value) in canvas {
-                        crate::canvas::set_arg(view, k, value);
-                    }
+                } else if !canvas.is_empty() {
+                    crate::canvas::set_args(view, canvas);
                 }
             },
         );

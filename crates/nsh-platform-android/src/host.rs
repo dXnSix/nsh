@@ -22,8 +22,8 @@ use nsh_core::{
     geometry::{DevicePixels, point, px, size},
 };
 use nsh_engine::{
-    App, Assets, Bundle, ColorScheme, Edges, Engine, EngineConfig, EngineControl, Environment,
-    Idiom, Locale, MountSink, Policy, Root,
+    App, AppState, Assets, Bundle, ColorScheme, Edges, Engine, EngineConfig, EngineControl,
+    Environment, Idiom, Locale, MountSink, Policy, Root,
 };
 
 use crate::{
@@ -1055,7 +1055,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_environment(
 ) {
     // SAFETY: Java passes its live handle.
     let host = unsafe { host(handle) };
-    let mut v = [0f32; 13];
+    let mut v = [0f32; 14];
     if env.get_float_array_region(&values, 0, &mut v).is_err() {
         return;
     }
@@ -1095,6 +1095,12 @@ extern "system" fn Java_com_longbridge_nsh_Native_environment(
         1 => Idiom::Pad,
         3 => Idiom::Tv,
         _ => Idiom::Phone,
+    };
+    // `NshView`'s activity: resumed, paused or stopped.
+    environment.app_state = match v[13] as u8 {
+        1 => AppState::Inactive,
+        2 => AppState::Background,
+        _ => AppState::Active,
     };
     if let Ok(tag) = env.get_string(&locale) {
         environment.locale = Locale::parse(&String::from(tag)).unwrap_or_default();
@@ -1607,12 +1613,22 @@ extern "system" fn Java_com_longbridge_nsh_Native_pan(
         ui.pan_moved(id as u32, tx, ty);
     }
     let (value_x, value_y) = ui.pan_values(id as u32);
-    let payload = EventPayload::Pan {
-        translation: point(px(tx), px(ty)),
-        velocity_x: vx,
-        velocity_y: vy,
-        value_x: value_x.map(Points),
-        value_y: value_y.map(Points),
+    let payload = if state == 3 {
+        EventPayload::PanCancelled {
+            translation: point(px(tx), px(ty)),
+            velocity_x: vx,
+            velocity_y: vy,
+            value_x: value_x.map(Points),
+            value_y: value_y.map(Points),
+        }
+    } else {
+        EventPayload::Pan {
+            translation: point(px(tx), px(ty)),
+            velocity_x: vx,
+            velocity_y: vy,
+            value_x: value_x.map(Points),
+            value_y: value_y.map(Points),
+        }
     };
     match (state, &control) {
         (0, Some(c)) => c.dispatch_event(id as NodeId, EventKind::PanStart, payload),
