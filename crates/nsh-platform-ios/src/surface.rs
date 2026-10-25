@@ -339,6 +339,8 @@ impl RootView {
                 _ => Idiom::Phone,
             },
             locale: current_locale(),
+            // Until iOS reports the app's state: in use.
+            app_state: nsh_engine::AppState::Active,
             // Only read for the web: iOS keys are always Apple's.
             apple_keyboard: true,
             // No host answers `nsh/host` here: an embedding app talks to its
