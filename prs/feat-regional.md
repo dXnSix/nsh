@@ -1,7 +1,7 @@
 # core: Tell apps the user's regional preferences
 
 Branch: `feat/regional` on `github.com/dXnSix/nsh`, stacked on `feat/languages` (`core: Tell apps the user's
-preferred languages`, #63), which touches the same lines. One commit: `core: Tell apps the user's regional
+preferred languages`, #63), which touches the same lines. One commit, `55576a21`: `core: Tell apps the user's regional
 preferences`. Opened as a pull request into the fork's `main`; once #63 merges, it is its own commit only. Not opened
 upstream: the owner decides and posts there.
 
