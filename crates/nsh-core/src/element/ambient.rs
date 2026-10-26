@@ -28,7 +28,10 @@ use crate::{
     Command, Dialog, EdgeInsets, LayoutAnimation, NodeId, Points, Size,
     canvas::CanvasFont,
     color::Hsla,
-    platform::{AppState, Appearance, Idiom, Languages, Locale, Os, TimeZone},
+    platform::{
+        AppState, Appearance, HourCycle, Idiom, Languages, Locale, MeasurementSystem, Os,
+        TemperatureUnit, TimeZone, Weekday,
+    },
     time::Instant,
 };
 
@@ -72,6 +75,10 @@ struct EnvSignals {
     pixel_ratio: Memo<f32>,
     locale: Memo<Locale>,
     languages: Memo<Languages>,
+    hour_cycle: Memo<HourCycle>,
+    first_day_of_week: Memo<Weekday>,
+    measurement_system: Memo<MeasurementSystem>,
+    temperature_unit: Memo<TemperatureUnit>,
     time_zone: Memo<TimeZone>,
     app_state: Memo<AppState>,
     screen_color: Memo<bool>,
@@ -82,8 +89,8 @@ impl EnvSignals {
         Owner::detached().run(|| {
             let signal = super::signal(env);
             macro_rules! part {
-                ($field:ident) => {
-                    computed(move || signal.with(|e| e.$field))
+                ($($field:ident).+) => {
+                    computed(move || signal.with(|e| e.$($field).+))
                 };
             }
             Self {
@@ -100,6 +107,10 @@ impl EnvSignals {
                 pixel_ratio: part!(pixel_ratio),
                 locale: part!(locale),
                 languages: part!(languages),
+                hour_cycle: part!(regional.hour_cycle),
+                first_day_of_week: part!(regional.first_day_of_week),
+                measurement_system: part!(regional.measurement_system),
+                temperature_unit: part!(regional.temperature_unit),
                 time_zone: part!(time_zone),
                 app_state: part!(app_state),
                 screen_color: part!(screen_color),
@@ -265,6 +276,31 @@ pub fn locale() -> Locale {
 /// which comes first).
 pub fn languages() -> Languages {
     env(|e| e.languages)
+}
+
+/// Whether the user has 12- or 24-hour time (TS: `hourCycle()`): the
+/// system's setting, else the region's. Reading it subscribes, so times
+/// follow the setting.
+pub fn hour_cycle() -> HourCycle {
+    env(|e| e.hour_cycle)
+}
+
+/// The day the user's weeks start on (TS: `firstDayOfWeek()`): a calendar's
+/// first column. Reading it subscribes, so calendars follow the setting.
+pub fn first_day_of_week() -> Weekday {
+    env(|e| e.first_day_of_week)
+}
+
+/// The units the user measures lengths, weights and volumes in (TS:
+/// `measurementSystem()`). Reading it subscribes.
+pub fn measurement_system() -> MeasurementSystem {
+    env(|e| e.measurement_system)
+}
+
+/// The unit the user reads temperatures in (TS: `temperatureUnit()`).
+/// Reading it subscribes.
+pub fn temperature_unit() -> TemperatureUnit {
+    env(|e| e.temperature_unit)
 }
 
 /// The device's time zone, as the system names it (`Europe/Berlin`; TS:
