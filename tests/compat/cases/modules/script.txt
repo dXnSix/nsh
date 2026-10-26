@@ -100,6 +100,7 @@ expect Scheme: light
 expect App state: active
 expect Time zone: UTC
 expect Languages: en-US
+expect Regional: h12, week from 7, us, fahrenheit
 tap id:dark
 expect Scheme: dark
 absent Scheme: light
@@ -119,6 +120,10 @@ covers [nsh/device] windowSize
 covers [nsh/device] appState
 covers [nsh/device] timeZone
 covers [nsh/device] languages
+covers [nsh/device] hourCycle
+covers [nsh/device] firstDayOfWeek
+covers [nsh/device] measurementSystem
+covers [nsh/device] temperatureUnit
 # mod-host-channel
 tap id:case-mod-host-channel
 # no embedding app: no parameters, posts go nowhere and calls fail at once.

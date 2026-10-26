@@ -160,6 +160,10 @@ describe("the cart", () => {
 | `colorScheme` | `"light"` | 系统外观：`"light"` 或 `"dark"`（`colorScheme()`、`dark:` 类）。 |
 | `locale` | `"en-US"` | 设备的区域设置，BCP 47 标签（`locale()`、`Intl` 的默认值）。 |
 | `languages` | `[locale]` | 用户的偏好语言，BCP 47 标签，按偏好从高到低排列（`languages()`）。 |
+| `hourCycle` | 区域设置所在地区的 | 12 小时制或 24 小时制：`"h12"`、`"h23"`、`"h11"` 或 `"h24"`（`hourCycle()`）。 |
+| `firstDayOfWeek` | 区域设置所在地区的 | 每周从哪一天开始，1 是星期一，7 是星期日（`firstDayOfWeek()`）。 |
+| `measurementSystem` | 区域设置所在地区的 | `"metric"`、`"us"` 或 `"uk"`（`measurementSystem()`）。 |
+| `temperatureUnit` | 区域设置所在地区的 | `"celsius"` 或 `"fahrenheit"`（`temperatureUnit()`）。 |
 | `timeZone` | `"UTC"` | 设备的时区，IANA 名称（`timeZone()`），`Intl` 默认按它书写日期。`Date` 自身的本地时间仍是这台机器的。 |
 | `reducedMotion` | `false` | 用户要求减少动态效果（`reduceMotion()`）。 |
 | `platform` | `"ios"` | headless 时应用运行所在的平台：`"ios"`、`"android"`，或桌面平台 `"macos"`、`"windows"`、`"linux"`，以及桌面形态的 `"web"`（`platform.os`、`ios={{…}}` / `android={{…}}` / `desktop={{…}}` 属性、键盘快捷键）。在真实平台上就是该平台。 |
@@ -363,6 +367,7 @@ expect(app.texts()).toContain("Saved at 09:00:10");
 | `await app.setColorScheme(scheme)` | 像用户那样把系统外观切换为 `"light"` 或 `"dark"`。 |
 | `await app.setAppState(state)` | 把应用移到 `"background"`、`"inactive"` 或 `"active"`，就像用户离开应用、切换到另一个应用或窗口、再回来时系统所做的那样（`appState()`）。仅限 headless 运行。 |
 | `await app.setLanguages(tags)` | 把用户的偏好语言设为 `tags`（`["ja-JP", "en-US"]`），就像用户修改系统列表时那样（`languages()`）。仅限 headless 运行。 |
+| `await app.setRegionalPreferences(preferences)` | 修改 `preferences` 中列出的地区偏好（`{ hourCycle: "h23", firstDayOfWeek: 1 }`；还有 `measurementSystem` 和 `temperatureUnit`），就像用户修改系统设置时那样；其余不变（`hourCycle()` 等）。仅限 headless 运行。 |
 | `await app.setTimeZone(name)` | 把设备移到时区 `name`（IANA 名称，`"Asia/Tokyo"`），就像用户出行或修改设置时那样（`timeZone()`）。仅限 headless 运行。 |
 | `await app.screenshot(path?)` | 应用窗口的 PNG 截图（`Uint8Array`）；给出 `path` 时同时保存到本机的这个路径（相对当前目录）。只有真实平台会绘制应用：见[在真实平台上运行](#在真实平台上运行)。 |
 
@@ -458,7 +463,7 @@ nsh test tests/form.test.tsx --target macos   # 只运行一个文件
 `fastForward` 和 `setSystemTime` 立即推进应用的时间（计时器、每隔一帧的 `requestAnimationFrame`、`Date`），`app.wait(ms)` 也会推进它；
 平台每显示一帧，时钟前进一帧（1/60 秒），所以应用在动画时时间照常流逝。平台自身的动画和路由的 `delay` 按真实时间进行。应用的请求和 headless
 时一样交给测试：由 `network` 路由应答，没有路由匹配的请求会失败，`"live"` 则放行到 host 的真实网络；`app.requests()` 列出全部请求。
-`storage` 在应用启动时就已写入应用存储，`app.storage()` 从应用中读取。`locale`、`languages`、`timeZone`、`reducedMotion` 和 `safeArea` 不随平台上报的值变化；
+`storage` 在应用启动时就已写入应用存储，`app.storage()` 从应用中读取。`locale`、`languages`、地区偏好、`timeZone`、`reducedMotion` 和 `safeArea` 不随平台上报的值变化；
 应用的剪贴板调用由测试自己的剪贴板应答（`clipboard` 是它的初始文本，`app.clipboard()` 读取它），机器的剪贴板保持不变；文本输入框自身的复制和
 粘贴使用系统剪贴板。`host.params` 会传给应用，`app.host.send` 发送事件，应用打开的 URL 被记录下来供 `app.openedUrls()` 读取，而不会真正打开。
 `host.handlers` 只在 headless 运行：开发 host 不回答任何调用，在那里 `open` 会拒绝 handlers。带有自己 Rust crate 的应用运行在 NSH 为该平台用这些 crate 构建的开发 host 中；
