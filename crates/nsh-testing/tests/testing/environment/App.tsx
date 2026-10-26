@@ -1,6 +1,6 @@
 import { mount, signal, Text, View } from "nsh";
 import { reduceMotion } from "nsh/accessibility";
-import { appState, colorScheme, locale, platform, timeZone, windowSize } from "nsh/device";
+import { appState, colorScheme, languages, locale, platform, timeZone, windowSize } from "nsh/device";
 
 function App() {
   const result = signal("none");
@@ -26,6 +26,7 @@ function App() {
       <Text>{`Size: ${windowSize().width}x${windowSize().height}`}</Text>
       <Text>{`App: ${appState()}`}</Text>
       <Text>{`Zone: ${timeZone()}`}</Text>
+      <Text>{`Languages: ${languages().join(",")}`}</Text>
       {button("Echo", "echo")}
       {button("Item", "items/7")}
       {button("Down", "down")}

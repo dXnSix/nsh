@@ -1,22 +1,22 @@
 ---
 title: nsh/device
-description: 窗口尺寸、配色方案、字体缩放、区域设置、时区、应用是否正在使用、平台信息、像素密度、布局方向，以及在应用之外打开 URL。
+description: 窗口尺寸、配色方案、字体缩放、区域设置、偏好语言、时区、应用是否正在使用、平台信息、像素密度、布局方向，以及在应用之外打开 URL。
 order: 6
 ---
 
 # nsh/device
 
-设备 API 向应用提供设备及其环境的信息。Rust 代码调用 `nsh_core::ui::prelude` 中的函数（`window()`、`dark()`、`font_scale()`、`locale()`、`time_zone()`、`app_state()`、`os()`、`idiom()`、`pixel_ratio()`、`set_color_scheme()` 等）；TSX 导入 `nsh/device`。窗口尺寸、配色方案、字体缩放、像素密度、区域设置、时区和应用状态是响应式的：在绑定（Rust 中传给元素的闭包，TSX 中的 JSX）、`computed` 或 `effect` 中读取它们，平台报告变化（旋转、窗口缩放、切换深色模式、修改文字大小或语言、移到另一个时区、移到另一种像素密度的屏幕、离开应用再回来）时，读取它们的地方会随之更新。
+设备 API 向应用提供设备及其环境的信息。Rust 代码调用 `nsh_core::ui::prelude` 中的函数（`window()`、`dark()`、`font_scale()`、`locale()`、`languages()`、`time_zone()`、`app_state()`、`os()`、`idiom()`、`pixel_ratio()`、`set_color_scheme()` 等）；TSX 导入 `nsh/device`。窗口尺寸、配色方案、字体缩放、像素密度、区域设置、偏好语言、时区和应用状态是响应式的：在绑定（Rust 中传给元素的闭包，TSX 中的 JSX）、`computed` 或 `effect` 中读取它们，平台报告变化（旋转、窗口缩放、切换深色模式、修改文字大小或语言、移到另一个时区、移到另一种像素密度的屏幕、离开应用再回来）时，读取它们的地方会随之更新。
 
 ```rust tabs
 use nsh_core::{
     platform::{AppState, Appearance, Idiom, Os, TimeZone},
-    ui::prelude::*, // window、dark、font_scale、locale、time_zone、app_state、os、idiom、pixel_ratio、set_color_scheme……
+    ui::prelude::*, // window、dark、font_scale、locale、languages、time_zone、app_state、os、idiom、pixel_ratio、set_color_scheme……
 };
 ```
 
 ```tsx tabs
-import { appState, colorScheme, fontScale, locale, openUrl, pixelRatio, platform, setColorScheme, timeZone, windowSize } from "nsh/device";
+import { appState, colorScheme, fontScale, languages, locale, openUrl, pixelRatio, platform, setColorScheme, timeZone, windowSize } from "nsh/device";
 ```
 
 教程见[设备与环境](../docs/device-and-environment.md)。
@@ -74,6 +74,14 @@ const locale: Accessor<string>;
 ```
 
 用户的区域设置，BCP 47 标签（`"en-US"`、`"zh-Hans-CN"`），或嵌入它的应用设置的区域设置。响应式。Rust：`locale() -> Locale`（`locale().as_str()` 即标签）。`Intl` 默认按它格式化；读取它来选择你自己的翻译文案（[设备与环境](../docs/device-and-environment.md#语言和地区)）。
+
+## languages
+
+```ts
+const languages: Accessor<readonly string[]>;
+```
+
+用户的偏好语言，BCP 47 标签，按偏好从高到低排列（`["de-DE", "en-US"]`）：系统的列表；嵌入它的应用设置了自己的语言时，那个语言排在最前。从不为空。响应式：用户修改列表时变化。Rust：`languages() -> Languages`（`iter()`、`first()`、`as_slice()`，每项是一个 `Locale`）。用其中第一个有翻译的语言显示应用的文字，其余是它的后备（[设备与环境](../docs/device-and-environment.md#偏好语言)）。`locale()` 是区域格式，可以不同（英文文字、德国日期）。除非 `open` 设置了 `languages`，headless 测试中它是 `[locale]`。
 
 ## timeZone
 
