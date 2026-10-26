@@ -345,7 +345,7 @@ impl RootView {
             _ => Idiom::Phone,
         };
         env.locale = current_locale();
-        env.languages = nsh_engine::Languages::EN_US;
+        env.languages = preferred_languages();
         env.time_zone = time_zone();
         // Only read for the web: iOS keys are always Apple's.
         env.apple_keyboard = true;
@@ -936,6 +936,19 @@ fn preferred_language_rtl() -> bool {
             NSLocale::characterDirectionForLanguage(&language)
                 == NSLocaleLanguageDirection::RightToLeft
         })
+}
+
+/// The user's preferred languages (`languages()`), most preferred first:
+/// `NSLocale.preferredLanguages`, Settings' list (the app's own language
+/// first when the user chose one for it). iOS restarts apps when the user
+/// changes the list, so it is read as the environment is published.
+fn preferred_languages() -> nsh_engine::Languages {
+    let tags: Vec<String> = objc2_foundation::NSLocale::preferredLanguages()
+        .iter()
+        .map(|tag| tag.to_string())
+        .collect();
+    nsh_engine::Languages::parse(tags.iter().map(String::as_str))
+        .unwrap_or_else(|| nsh_engine::Languages::one(current_locale()))
 }
 
 /// The user's region format (`NSLocale.currentLocale`: language and
