@@ -3670,26 +3670,25 @@ mod tests {
     }
 
     /// A `fontFamily` list sets text in its first family the system has,
-    /// the others it has (registered ones too) its fallback.
+    /// the others it has its fallback. (Registered families take part too:
+    /// `registered_fonts_lay_out`, as registering is process-wide.)
     #[test]
     fn a_family_list_falls_back_to_its_other_families() {
         let engine = engine();
-        let data = include_bytes!("../../../examples/gallery/fonts/Pacifico-Regular.ttf");
-        engine.register_font(data).expect("registered");
         let style = |family: &str| ResolvedTextStyle {
             font_family: Some(nsh_core::FontFamily::new(family)),
             font_size: px(20.0),
             ..Default::default()
         };
-        let face = engine.face(&style("No Such Family, Pacifico, Consolas"));
-        assert_eq!(face.name.to_string(), "Pacifico");
-        assert!(face.custom);
+        let face = engine.face(&style("No Such Family, Consolas, Segoe UI"));
+        assert_eq!(face.name.to_string(), "Consolas");
+        assert!(!face.custom);
         assert!(face.fallback.is_some());
         assert!(engine.face(&style("Consolas")).fallback.is_none());
         // Laid out with the fallback.
         let t = text(&[(
-            "Pacifico → 中文",
-            style("Pacifico, Consolas, Microsoft YaHei"),
+            "Consolas → 中文",
+            style("Consolas, Segoe UI, Microsoft YaHei"),
         )]);
         let size = engine.measure(&engine.prepare(&t), None);
         assert!(size.width.0 > 0.0);
@@ -3714,6 +3713,17 @@ mod tests {
         assert!(engine.face(&style).custom);
         // Pacifico is tall: its lines are more than 1.5 ems.
         assert!(after.height > px(30.0), "{after:?}");
+        // A registered family in a list, with installed ones as its fallback.
+        let listed = ResolvedTextStyle {
+            font_family: Some(nsh_core::FontFamily::new(
+                "No Such Family, Pacifico, Consolas",
+            )),
+            ..style
+        };
+        let face = engine.face(&listed);
+        assert_eq!(face.name.to_string(), "Pacifico");
+        assert!(face.custom);
+        assert!(face.fallback.is_some());
     }
 
     #[test]
