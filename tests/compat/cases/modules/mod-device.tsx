@@ -1,10 +1,10 @@
 // A case of the API's test suite (docs/dev/compatibility.md): `nsh/device`
 // as the headless runtime reports it (iOS, a phone, 1 pixel per point, the
-// script's viewport; mobile, so `platform.desktop` is false; the app in use, UTC, en-US), the color scheme an app sets and
+// script's viewport; mobile, so `platform.desktop` is false; the app in use, UTC, en-US and its regional preferences), the color scheme an app sets and
 // `openUrl`: a promise for a URL it opens (the headless runtime answers none), one rejected with a `TypeError` for
 // a URL it never opens (it never throws). Its script checks each.
 import { Text, View, signal } from "nsh";
-import { appState, colorScheme, fontScale, languages, openUrl, pixelRatio, platform, setColorScheme, timeZone, windowSize } from "nsh";
+import { appState, colorScheme, firstDayOfWeek, fontScale, hourCycle, languages, measurementSystem, openUrl, pixelRatio, platform, setColorScheme, temperatureUnit, timeZone, windowSize } from "nsh";
 
 function App() {
   const opened = signal("not opened");
@@ -24,6 +24,7 @@ function App() {
       <Text>{`App state: ${appState()}`}</Text>
       <Text>{`Time zone: ${timeZone()}`}</Text>
       <Text>{`Languages: ${languages().join(", ")}`}</Text>
+      <Text>{`Regional: ${hourCycle()}, week from ${firstDayOfWeek()}, ${measurementSystem()}, ${temperatureUnit()}`}</Text>
       <View testID="dark" onPress={() => setColorScheme("dark")}>
         <Text>Go dark</Text>
       </View>
