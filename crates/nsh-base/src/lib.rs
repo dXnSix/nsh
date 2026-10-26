@@ -1,8 +1,11 @@
 //! `nsh/base`: the behavior and infrastructure foundation of NSH apps' UI,
 //! written in Rust, with no look of its own (as `gpui-base` is GPUI Kit's):
 //! controls (`Button`, `Checkbox`, `Radio` in a `RadioGroup`, `Switch`,
-//! `Tab` in `Tabs`), a progress bar (`Progress`), disclosure (`Collapsible`), navigation (stacks and pages), dialogs, popups on the core's overlays
-//! (`Popover`, `Menu`, `ContextMenu`, `Tooltip`, `Sheet`), toasts (`Toast`,
+//! `Tab` in `Tabs`), a progress bar (`Progress`), disclosure (`Collapsible`),
+//! the parts of charts (`plot`: `nsh/base/plot`), navigation (stacks and pages), dialogs, popups on the core's overlays
+//! (`Popover`, `Menu`, `ContextMenu`, `Tooltip`, `Sheet`), a code editor
+//! (`Editor`), the changes between two texts (`DiffView`), tables over any number of rows and columns (`DataTable`) and static tables
+//! with a table's semantics (`Table` and its parts), toasts (`Toast`,
 //! `ToastStack`, `ToastManager`), safe areas,
 //! selection areas,
 //! the system's dialogs and the software keyboard, and the theme's semantic
@@ -18,10 +21,14 @@ mod alert_dialog;
 mod button;
 mod checkbox;
 mod collapsible;
+mod data_table;
+mod diff;
 pub mod dock;
+pub mod editor;
 mod keyboard;
 mod menu;
 mod navigation;
+pub mod plot;
 mod popover;
 mod popup;
 mod progress;
@@ -31,11 +38,14 @@ mod safe_area;
 mod selection_area;
 mod sheet;
 mod switch;
+mod syntax;
+mod table;
 mod tabs;
 pub mod text_view;
 mod theme;
 mod toast;
 mod tooltip;
+mod window;
 
 use std::sync::Arc;
 
@@ -49,7 +59,29 @@ pub use crate::{
     button::{Button, ButtonElement, ButtonEvent, ButtonProps, button},
     checkbox::{Checkbox, CheckboxElement, CheckboxEvent, CheckboxProps, checkbox},
     collapsible::{Collapsible, CollapsibleElement, CollapsibleProps, collapsible},
+    data_table::{
+        DataTable, DataTableAlign, DataTableApi, DataTableCell, DataTableClasses, DataTableColumn,
+        DataTableColumnGroup, DataTableColumnMove, DataTableContextMenu, DataTableDump,
+        DataTableElement, DataTableEvent, DataTableHeaderCell, DataTablePart, DataTablePress,
+        DataTableProps, DataTableRange, DataTableRows, DataTableSelection, DataTableSort,
+        DataTableSortDirection, DataTableStyles, DataTableTarget, data_table,
+    },
+    diff::{
+        DiffAnnotation, DiffChange, DiffExpand, DiffFile, DiffFileStatus, DiffHunk, DiffIndicators,
+        DiffInline, DiffLayout, DiffLine, DiffLineRange, DiffSeparator, DiffSide, DiffStats,
+        DiffView, DiffViewApi, DiffViewClasses, DiffViewElement, DiffViewEvent, DiffViewPart,
+        DiffViewProps, DiffViewStyles, diff_view,
+    },
     dock::{DockArea, DockAreaElement, DockAreaEvent, DockAreaProps, dock_area},
+    editor::{
+        Editor, EditorApi, EditorBounds, EditorClasses, EditorCommand, EditorContextMenuEvent,
+        EditorDecoration, EditorDiagnostic, EditorDiagnosticCodeDescription,
+        EditorDiagnosticRelatedInformation, EditorDiagnosticSeverity, EditorDiagnosticTag,
+        EditorElement, EditorEvent, EditorFoldRange, EditorHoverEvent, EditorLocation, EditorPart,
+        EditorPosition, EditorProps, EditorRange, EditorRect, EditorScrollBeyond, EditorSearch,
+        EditorSearchResult, EditorSelection, EditorStyles, EditorTextPressEvent, EditorToken,
+        editor,
+    },
     keyboard::{
         AvoidBehavior, Keyboard, KeyboardAvoidingView, KeyboardAvoidingViewElement,
         KeyboardAvoidingViewProps, keyboard_avoiding_view,
@@ -80,6 +112,13 @@ pub use crate::{
     selection_area::{SelectionArea, SelectionAreaElement, SelectionAreaProps, selection_area},
     sheet::{Sheet, SheetElement, SheetEvent, SheetProps, sheet},
     switch::{Switch, SwitchElement, SwitchEvent, SwitchProps, switch},
+    table::{
+        Table, TableBody, TableBodyElement, TableCaption, TableCaptionElement, TableCell,
+        TableCellElement, TableElement, TableFooter, TableFooterElement, TableHead,
+        TableHeadElement, TableHeader, TableHeaderElement, TablePartProps, TableProps, TableRow,
+        TableRowElement, table, table_body, table_caption, table_cell, table_footer, table_head,
+        table_header, table_row,
+    },
     tabs::{Tab, TabElement, TabEvent, TabProps, Tabs, TabsElement, TabsProps, tab, tabs},
     text_view::{
         CodeHighlighter, MarkdownExtension, MarkdownOptions, MarkdownPlugin, MarkdownPlugins,
@@ -117,12 +156,23 @@ pub fn registry() -> Registry {
         .register::<SelectionArea>()
         .register::<Checkbox>()
         .register::<Collapsible>()
+        .register::<DataTable>()
         .register::<DockArea>()
+        .register::<DiffView>()
+        .register::<Editor>()
         .register::<Radio>()
         .register::<RadioGroup>()
         .register::<ResizablePanelGroup>()
         .register::<ResizablePanel>()
         .register::<Switch>()
+        .register::<Table>()
+        .register::<TableHeader>()
+        .register::<TableBody>()
+        .register::<TableFooter>()
+        .register::<TableRow>()
+        .register::<TableHead>()
+        .register::<TableCell>()
+        .register::<TableCaption>()
         .register::<Progress>()
         .register::<Tab>()
         .register::<Tabs>()
@@ -138,7 +188,9 @@ pub fn registry() -> Registry {
         // Navigation: made by `nsh-js` (`navigation.rs`), declared by hand.
         .native_values(&["NavStack", "NavPage", "Dialog", "createNavStack"])
         // The theme: the app's over the default, as design tokens.
-        .tokens_from(tokens_of);
+        .tokens_from(tokens_of)
+        // Charts' parts, a module of their own: `nsh/base/plot`.
+        .submodule(plot::registry());
     registry
 }
 
@@ -163,7 +215,10 @@ mod tests {
                 "Checkbox",
                 "Collapsible",
                 "ContextMenu",
+                "DataTable",
+                "DiffView",
                 "DockArea",
+                "Editor",
                 "KeyboardAvoidingView",
                 "Menu",
                 "MenuItem",
@@ -180,6 +235,14 @@ mod tests {
                 "Submenu",
                 "Switch",
                 "Tab",
+                "Table",
+                "TableBody",
+                "TableCaption",
+                "TableCell",
+                "TableFooter",
+                "TableHead",
+                "TableHeader",
+                "TableRow",
                 "Tabs",
                 "TextView",
                 "Toast",
@@ -189,11 +252,20 @@ mod tests {
         );
         let modules: Vec<_> = registry.module_specs().iter().map(|m| m.name).collect();
         assert_eq!(modules, ["AlertDialog", "Keyboard", "TextView"]);
+        let sets: Vec<_> = registry.sets().iter().map(|s| s.specifier()).collect();
+        assert_eq!(sets, [Some("nsh/base"), Some("nsh/base/plot")]);
+        let plot: Vec<_> = super::plot::registry()
+            .specs()
+            .iter()
+            .map(|s| s.export.clone())
+            .collect();
+        assert_eq!(plot, ["Area", "Grid", "Line", "Plot"]);
     }
 
     /// Every export TS sees has a doc comment (the declarations show it).
     #[test]
     fn every_export_is_documented() {
         assert_eq!(super::registry().undocumented(), Vec::<String>::new());
+        assert_eq!(super::plot::registry().undocumented(), Vec::<String>::new());
     }
 }

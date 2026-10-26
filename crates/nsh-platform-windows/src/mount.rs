@@ -426,7 +426,9 @@ impl Mounter {
             }
             MountItem::Command { id, command } => self.command(surface, *id, command),
             // The animator's (`Surface::apply`).
-            MountItem::Animation(_) | MountItem::AnimationBindings { .. } => {}
+            MountItem::Animation(_)
+            | MountItem::AnimationBindings { .. }
+            | MountItem::ComponentPropSlots { .. } => {}
         }
         // What the item may change on screen is drawn again, whether or not
         // what applied it said so: a partial frame draws only that.
@@ -533,6 +535,7 @@ fn redrawn(item: &MountItem) -> Redraw {
         | MountItem::LayoutAnimation(_)
         | MountItem::Animation(_)
         | MountItem::AnimationBindings { .. }
+        | MountItem::ComponentPropSlots { .. }
         // A program is drawn by the shaders that use it.
         | MountItem::ShaderProgram { .. } => Redraw::Nothing,
         MountItem::Frame { id, .. }

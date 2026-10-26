@@ -364,6 +364,23 @@ struct ComponentState {
     props: Vec<(Arc<str>, crate::JsonValue)>,
     /// Properties changed since the last commit.
     changed: Vec<Arc<str>>,
+    /// The names of its animated prop slots (`AnimationProp::ComponentSlot`):
+    /// a name keeps its slot once given one.
+    slots: Vec<Arc<str>>,
+    /// The bound slots and their animation nodes. A bound prop's value in
+    /// `props` is kept but not sent until it is unbound.
+    bound: Vec<(u16, crate::animation::NodeId)>,
+    /// `slots` changed since the platform was last told (a `Cell`: the
+    /// commit clears it while it reads the node).
+    slots_changed: std::cell::Cell<bool>,
+}
+
+impl ComponentState {
+    fn is_bound(&self, name: &str) -> bool {
+        self.bound
+            .iter()
+            .any(|(s, _)| &*self.slots[*s as usize] == name)
+    }
 }
 
 #[derive(Debug)]
@@ -372,6 +389,7 @@ struct ScrollState {
     scrollbar_visible: bool,
     refreshing: bool,
     scroll_value: Option<crate::animation::NodeId>,
+    pull_value: Option<crate::animation::NodeId>,
     keyboard_dismiss: KeyboardDismissMode,
     /// Last content size sent to the platform.
     content: Option<Size<Points>>,
@@ -415,6 +433,7 @@ impl Default for ScrollState {
             scrollbar_visible: true,
             refreshing: false,
             scroll_value: None,
+            pull_value: None,
             keyboard_dismiss: KeyboardDismissMode::None,
             content: None,
             content_item: None,
@@ -649,6 +668,13 @@ impl Node {
         }
         if self.spare {
             style.hidden = true;
+        }
+        // A canvas whose drawing fills with its background shows it there
+        // only (`Painter::fill_background_from_view`).
+        if self.kind == Kind::Canvas && self.drawing.as_ref().is_some_and(|d| d.paints_background())
+        {
+            style.background_color = crate::style::Color::TRANSPARENT;
+            style.clear_background_images();
         }
         if style.transform.has_fractions() {
             let size = if self.frame.size.width.is_nan() {
@@ -1871,8 +1897,19 @@ impl<M: TextEngine> Core<M> {
                 if node.drawing.as_deref() == Some(&*drawing) {
                     return Ok(());
                 }
+                // An empty drawing on a canvas that has drawn nothing shows
+                // nothing new (a component's canvas before its first layout).
+                if node.drawing.is_none() && drawing.ops.is_empty() && drawing.nodes.is_empty() {
+                    return Ok(());
+                }
+                // Whether the view draws its background (it does not where
+                // the drawing fills with it).
+                let background_moved = node.drawing.as_ref().is_some_and(|d| d.paints_background())
+                    != drawing.paints_background();
                 node.drawing = Some(Arc::from(drawing));
-                let flags = dirty::CANVAS | if slots_changed { dirty::ANIMATION } else { 0 };
+                let flags = dirty::CANVAS
+                    | if slots_changed { dirty::ANIMATION } else { 0 }
+                    | if background_moved { dirty::VIEW } else { 0 };
                 self.mark(key, flags);
                 Ok(())
             }
@@ -2634,6 +2671,15 @@ impl<M: TextEngine> Core<M> {
         let mut flags = 0;
         if view_changed {
             flags |= dirty::VIEW;
+            // A drawing filling with the view's background paints the new
+            // one.
+            if self.nodes[key as usize]
+                .drawing
+                .as_ref()
+                .is_some_and(|d| d.paints_background())
+            {
+                flags |= dirty::CANVAS;
+            }
         }
         if position_changed && self.nodes[key as usize].image.is_some() {
             flags |= dirty::IMAGE;
@@ -2937,10 +2983,15 @@ impl<M: TextEngine> Core<M> {
                 | Prop::Scrollbar(_)
                 | Prop::Refreshing(_)
                 | Prop::ScrollValue(_)
+                | Prop::PullValue(_)
                 | Prop::Native(NativeProp::Scrollable(_))
         ) && let Some(list) = self.nodes[key as usize].list.as_mut().filter(|l| l.parent)
         {
             list.ignored |= match prop {
+                Prop::Scroll(ScrollProp::RefreshIndicator(None)) => 0,
+                Prop::Scroll(ScrollProp::RefreshIndicator(Some(_))) | Prop::PullValue(Some(_)) => {
+                    list::ignored::REFRESH
+                }
                 Prop::Scroll(_)
                 | Prop::KeyboardDismissMode(
                     KeyboardDismissMode::OnDrag | KeyboardDismissMode::Interactive,
@@ -3111,6 +3162,10 @@ impl<M: TextEngine> Core<M> {
                         ScrollProp::BouncesZoom(on) => b.bounces_zoom = on,
                         ScrollProp::Pinch(on) => b.pinch = on,
                         ScrollProp::CenterContent(on) => b.center_content = on,
+                        ScrollProp::RefreshIndicator(h) => {
+                            // No height, no indicator: every release would refresh.
+                            b.refresh_indicator = h.filter(|h| h.0 > 0.0);
+                        }
                         ScrollProp::Zoom(scale) => {
                             // After the limits (sent with this commit's
                             // behavior) are applied.
@@ -3150,6 +3205,12 @@ impl<M: TextEngine> Core<M> {
             Prop::ScrollValue(value) => {
                 if let Some(scroll) = node.scroll.as_mut() {
                     scroll.scroll_value = value;
+                    flags |= dirty::SCROLL;
+                }
+            }
+            Prop::PullValue(value) => {
+                if let Some(scroll) = node.scroll.as_mut() {
+                    scroll.pull_value = value;
                     flags |= dirty::SCROLL;
                 }
             }
@@ -3710,6 +3771,10 @@ impl<M: TextEngine> Core<M> {
                                 component.props.iter().map(|(k, _)| k.clone()).collect();
                             self.mount.push(MountItem::Component { id, name });
                             flags |= dirty::COMPONENT;
+                            if !component.slots.is_empty() {
+                                component.slots_changed.set(true);
+                                flags |= dirty::ANIMATION;
+                            }
                         }
                         None => component.name = Some(name),
                         Some(old) if *old != name => log::warn!(
@@ -3717,6 +3782,36 @@ impl<M: TextEngine> Core<M> {
                             "a native component cannot change from `{old}` to `{name}`; render a new element"
                         ),
                         Some(_) => {}
+                    }
+                }
+            }
+            Prop::ComponentPropBinding(name, value) => {
+                if let Some(component) = node.component.as_mut() {
+                    let slot = match component.slots.iter().position(|k| *k == name) {
+                        Some(s) => Some(s as u16),
+                        None if value.is_none() => None,
+                        None => {
+                            component.slots.push(name.clone());
+                            component.slots_changed.set(true);
+                            Some((component.slots.len() - 1) as u16)
+                        }
+                    };
+                    if let Some(slot) = slot {
+                        let at = component.bound.iter().position(|(s, _)| *s == slot);
+                        match (at, value) {
+                            (Some(i), Some(n)) => component.bound[i].1 = n,
+                            (None, Some(n)) => component.bound.push((slot, n)),
+                            (Some(i), None) => {
+                                component.bound.remove(i);
+                                // Its static value (or its removal) is sent again.
+                                if !component.changed.contains(&name) {
+                                    component.changed.push(name);
+                                }
+                                flags |= dirty::COMPONENT;
+                            }
+                            (None, None) => {}
+                        }
+                        flags |= dirty::ANIMATION;
                     }
                 }
             }
@@ -4437,7 +4532,10 @@ impl<M: TextEngine> Core<M> {
                 flags |= dirty::REFRESHING;
             }
         }
-        if !node.animated.is_empty() || node.drawing.as_ref().is_some_and(|d| !d.slots.is_empty()) {
+        if !node.animated.is_empty()
+            || node.drawing.as_ref().is_some_and(|d| !d.slots.is_empty())
+            || node.component.as_ref().is_some_and(|c| !c.slots.is_empty())
+        {
             flags |= dirty::ANIMATION;
         }
         if node.drawing.is_some() {
@@ -4480,8 +4578,9 @@ impl<M: TextEngine> Core<M> {
             }
         }
         if let Some(component) = node.component.as_mut() {
-            // The new component gets every property.
+            // The new component gets every property, and its slots' names.
             component.changed = component.props.iter().map(|(k, _)| k.clone()).collect();
+            component.slots_changed.set(!component.slots.is_empty());
             flags |= dirty::COMPONENT;
         }
         flags
@@ -4589,6 +4688,7 @@ impl<M: TextEngine> Core<M> {
                         horizontal: scroll.horizontal,
                         scrollbar_visible: scroll.scrollbar_visible,
                         scroll_value: scroll.scroll_value,
+                        pull_value: scroll.pull_value,
                         keyboard_dismiss: scroll.keyboard_dismiss,
                         mirrored: node.kind == Kind::List && scroll.horizontal && node.rtl,
                     });
@@ -4654,6 +4754,22 @@ impl<M: TextEngine> Core<M> {
                         bindings.push((AnimationProp::ShaderUniform(crate::shader::PROGRESS), n));
                     }
                 }
+                if let Some(component) = &node.component {
+                    bindings.extend(
+                        component
+                            .bound
+                            .iter()
+                            .map(|&(s, n)| (AnimationProp::ComponentSlot(s), n)),
+                    );
+                }
+                if let Some(component) = &node.component
+                    && component.slots_changed.replace(false)
+                {
+                    self.mount.push(MountItem::ComponentPropSlots {
+                        id,
+                        names: component.slots.clone(),
+                    });
+                }
                 self.mount
                     .push(MountItem::AnimationBindings { id, bindings });
             }
@@ -4664,7 +4780,12 @@ impl<M: TextEngine> Core<M> {
                     drawing.clone()
                 } else {
                     let (paint, current) = self.resolved_paint(key);
-                    Arc::new(drawing.painted(&paint, current))
+                    let style = &node.view_style;
+                    let images = style
+                        .effects
+                        .as_deref()
+                        .map_or(&[][..], |e| &e.background_images[..]);
+                    Arc::new(drawing.painted(&paint, current, style.background_color, images))
                 };
                 self.mount.push(MountItem::Canvas { id, drawing });
             }
@@ -4707,8 +4828,11 @@ impl<M: TextEngine> Core<M> {
                 && let Some(component) = self.nodes[key as usize].component.as_mut()
                 && !component.changed.is_empty()
             {
-                let props = std::mem::take(&mut component.changed)
+                let changed = std::mem::take(&mut component.changed);
+                let props: Vec<_> = changed
                     .into_iter()
+                    // A bound prop's value waits until it is unbound.
+                    .filter(|name| !component.is_bound(name))
                     .map(|name| {
                         let value = component
                             .props
@@ -4718,7 +4842,9 @@ impl<M: TextEngine> Core<M> {
                         (name, value)
                     })
                     .collect();
-                self.mount.push(MountItem::ComponentProps { id, props });
+                if !props.is_empty() {
+                    self.mount.push(MountItem::ComponentProps { id, props });
+                }
             }
             if flags & dirty::SHADER != 0 {
                 self.flush_shader(key);
