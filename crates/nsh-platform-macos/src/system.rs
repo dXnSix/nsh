@@ -13,6 +13,10 @@
 //!   root view's effective appearance (the window's, the system's), live;
 //! - the locale (`Intl`'s default): `NSLocale.currentLocale` (the region
 //!   format of System Settings), live;
+//! - the preferred languages (`languages()`): `NSLocale.preferredLanguages`
+//!   (System Settings' list, the app's own language first when the user
+//!   chose one for it), read again with the other settings, as on
+//!   `NSCurrentLocaleDidChangeNotification`;
 //! - the time zone (`timeZone()`): `NSTimeZone.systemTimeZone`'s name,
 //!   live (`NSSystemTimeZoneDidChangeNotification`, after which
 //!   Foundation's cached zone is reset);
@@ -57,7 +61,9 @@ use nsh_core::{
     geometry::{Point, Size, px},
     platform::clipboard,
 };
-use nsh_engine::{AppState, ColorScheme, Edges, Environment, Idiom, Locale, Os, TimeZone};
+use nsh_engine::{
+    AppState, ColorScheme, Edges, Environment, Idiom, Languages, Locale, Os, TimeZone,
+};
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
@@ -330,6 +336,7 @@ fn update(surface: &Surface) {
     let mut env: Environment = surface.environment.get();
     env.color_scheme = color_scheme(surface);
     env.locale = current_locale();
+    env.languages = preferred_languages(env.locale);
     env.font_scale = 1.0;
     env.reduce_motion = workspace.accessibilityDisplayShouldReduceMotion();
     env.screen_reader = workspace.isVoiceOverEnabled();
@@ -424,6 +431,16 @@ fn pixel_ratio(surface: &Surface) -> f32 {
 fn current_locale() -> Locale {
     let identifier = NSLocale::currentLocale().localeIdentifier().to_string();
     Locale::parse(&identifier).unwrap_or_default()
+}
+
+/// The user's preferred languages, most preferred first (`languages()`);
+/// `locale` alone when the list names none.
+fn preferred_languages(locale: Locale) -> Languages {
+    let tags: Vec<String> = NSLocale::preferredLanguages()
+        .iter()
+        .map(|tag| tag.to_string())
+        .collect();
+    Languages::parse(tags.iter().map(String::as_str)).unwrap_or(Languages::one(locale))
 }
 
 /// Whether the user's first language is written right to left (as React
