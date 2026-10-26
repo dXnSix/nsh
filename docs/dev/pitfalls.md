@@ -109,6 +109,11 @@ Things that were found the hard way. Read the section of the area you change bef
 - **Development hosts never restore windows**: `nsh run` launches the Catalyst host with `-ApplePersistenceIgnoreState YES`;
   after a crash, macOS would otherwise show a modal "reopen windows?" alert over it.
 - **IPAs are zipped with `ditto -c -k --norsrc --keepParent`**: `--sequesterRsrc` adds `__MACOSX/` resource forks.
+- **Float fields of the dev protocol decode through `nsh_dev::protocol`'s `float`** (`deserialize_with`): rolldown turns
+  on serde_json's `arbitrary_precision`, which feature unification can carry into a host's build, and then a number
+  with a fraction inside an internally tagged enum (every message, `TestStep`, `SceneQuery`) is buffered as a map
+  `{"$serde_json::private::Number": "390.5"}` that a plain `f32` / `f64` field rejects ("invalid type: map, expected
+  f64"); integers decode either way. A new float field in a message takes the same attribute.
 
 ## iOS, UIKit and Mac Catalyst
 
@@ -125,9 +130,11 @@ Things that were found the hard way. Read the section of the area you change bef
 - **UIFont and CTFont are toll-free bridged**: the text engine gets system fonts with `UIFont::systemFontOfSize_weight` and uses them as
   CTFonts (verified by rendering). CoreText attributes must use CT keys (colors are CGColors), not UIKit's NSForegroundColor.
 - **Catalyst's Mac idiom does not support `UIRefreshControl`** (attaching one throws `_UICatalystUnsupportedMacIdiomBehavior`): in the Mac
-  idiom the pull is detected in the scroll delegate and shown with a spinner + contentInset; iOS uses the native control.
+  idiom the pull is detected in the scroll delegate and shown with a spinner + contentInset; iOS uses the native control unless the
+  app draws its own indicator (`refreshIndicator`), which `UIRefreshControl` cannot give way to: then it takes the Mac idiom's way,
+  without the spinner (`Mounter::sync_refresh`, on the events and on each behavior).
 - **Mac idiom custom pull to refresh**: on release, the system's bounce already targets the old inset (back to 0), so changing only
-  `contentInset` hides the spinner; once refreshing starts, the offset is animated to `-REFRESH_INSET` on the next main-queue turn. Synthetic
+  `contentInset` hides the spinner; once refreshing starts, the offset is animated to the top inset plus the refresh room on the next main-queue turn. Synthetic
   tests need continuous scroll events with phases (began / changed / ended); plain wheel events never overscroll.
 - **Set backgrounds on `layer.backgroundColor`, not `UIView.backgroundColor`**: views with `drawRect:` (`TextView`) paint the latter into their
   contents bitmap, where corners cannot round it.
@@ -231,6 +238,10 @@ Things that were found the hard way. Read the section of the area you change bef
   measures again. A layout of precomputed text does not draw `UnderlineSpan` / `StrikethroughSpan` (even ones set after
   `create`): runs carry a `TextLayouts.Decoration` marker and `TextBox` draws the lines. `Layout.Alignment` is relative to each
   paragraph's direction: absolute left / right alignment sets an `AlignmentSpan` per paragraph from its resolved direction.
+- **Android, text hit testing**: `Layout.getOffsetForHorizontal` stops before the last cluster of a wrapped (non-last)
+  line, so a hit past its end is snapped to the line's end (`TextLayouts.hitTest`, upstream); `getSelectionPath` adds
+  margin rectangles when a range ends at a wrapped line's end, so range boxes come from the run's carets
+  (`TextLayouts.rangeRects`), not from the path.
 - **Android, JNI event maps intern their keys from a fixed list** (`Java_com_longbridge_nsh_Native_eventMap`): a new payload key must be
   added there or it is dropped silently.
 - **Android, inputs**: `EditText` reconfiguration (input type, filters, single line) sets the same text again and fires

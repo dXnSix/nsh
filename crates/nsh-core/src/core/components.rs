@@ -694,10 +694,15 @@ fn same(a: &Option<Arc<ClassList>>, b: &Option<Arc<ClassList>>) -> bool {
 impl<M: TextEngine> Core<M> {
     /// The components this core can render (from `nsh-base` and the
     /// like), and the design tokens their sets bring
-    /// ([`Registry::tokens_from`]); set before the first op.
+    /// ([`Registry::tokens_from`]); set before the first op. Runs the
+    /// sets' setup functions ([`Registry::setup`]).
     pub fn set_components(&mut self, registry: Registry) {
         if let Some(Ok(tokens)) = registry.tokens(None) {
             self.set_tokens(tokens);
+        }
+        {
+            let _entered = self.components.runtime.enter();
+            registry.run_setups();
         }
         self.components.registry = registry;
     }
@@ -724,6 +729,16 @@ impl<M: TextEngine> Core<M> {
     pub fn set_host_tokens(&mut self, tokens: Option<Tokens>) {
         self.components.host_tokens = tokens.map(Arc::new);
         self.tokens_changed();
+    }
+
+    /// What [`Core::tokens`] become when the root's `uiTheme` (the app's
+    /// theme file) is set, with the embedding app's tokens of now: JS reads
+    /// them in the turn that sends the theme, before it reaches the core.
+    pub fn theme_tokens(&self) -> crate::ui::ThemeTokens {
+        crate::ui::ThemeTokens::new(
+            self.components.registry.token_source(),
+            self.components.host_tokens.clone(),
+        )
     }
 
     /// The design tokens the app is drawn with now: the app's, under the
