@@ -310,8 +310,10 @@ fn week_columns() -> [u8; 7] {
 ```tsx tabs
 import { firstDayOfWeek, hourCycle, temperatureUnit } from "nsh";
 
-const time = (date: Date) =>
-  date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", hourCycle: hourCycle() });
+// 按用户的小时周期：`Intl` 对设备区域设置的默认值。
+const time = (date: Date) => date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+const twelveHour = () => hourCycle() === "h11" || hourCycle() === "h12";
 
 const temperature = (celsius: number) =>
   temperatureUnit() === "fahrenheit" ? `${Math.round((celsius * 9) / 5 + 32)} °F` : `${Math.round(celsius)} °C`;
@@ -320,7 +322,7 @@ const temperature = (celsius: number) =>
 const weekColumns = () => Array.from({ length: 7 }, (_, i) => ((firstDayOfWeek() - 1 + i) % 7) + 1);
 ```
 
-`Intl` 按区域设置自己的小时周期书写时间：像上面那样把 `hourCycle()` 作为它的 `hourCycle` 选项传入，就能按用户的习惯书写。在 Web 上，浏览器不提供这些用户设置：小时周期和每周的第一天是浏览器按其语言给出的，单位是其地区的。测试中，`open` 的 `hourCycle`、`firstDayOfWeek`、`measurementSystem` 和 `temperatureUnit` 设置它们（否则是区域设置所在地区的），`app.setRegionalPreferences({ hourCycle: "h23" })` 修改它们（[测试](./testing-and-trace.md#操作步骤)）。
+`Intl` 默认按用户的小时周期书写设备区域设置的时间，就像它按用户的时区书写日期：不带区域设置（或带设备的区域设置）的 `toLocaleTimeString()` 和 `Intl.DateTimeFormat()` 跟随 `hourCycle()`；其他区域设置的时间保持该区域设置自己的周期，`hourCycle` 或 `hour12` 选项优先。在 Web 上，浏览器不提供这些用户设置：小时周期和每周的第一天是浏览器按其语言给出的，单位是其地区的。测试中，`open` 的 `hourCycle`、`firstDayOfWeek`、`measurementSystem` 和 `temperatureUnit` 设置它们（否则是区域设置所在地区的），`app.setRegionalPreferences({ hourCycle: "h23" })` 修改它们（[测试](./testing-and-trace.md#操作步骤)）。
 
 ## 时区
 
