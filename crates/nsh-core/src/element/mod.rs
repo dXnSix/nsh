@@ -214,8 +214,8 @@ pub use crate::{
     },
     overlay::{Align, Placement},
     platform::{
-        AppState, Appearance, HttpBody, HttpHead, HttpRequest, Idiom, Languages, Locale, Os,
-        TimeZone,
+        AppState, Appearance, HourCycle, HttpBody, HttpHead, HttpRequest, Idiom, Languages, Locale,
+        MeasurementSystem, Os, RegionalPreferences, TemperatureUnit, TimeZone, Weekday,
     },
     style::Color,
 };
