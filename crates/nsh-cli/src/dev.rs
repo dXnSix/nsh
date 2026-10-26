@@ -637,13 +637,21 @@ mod tests {
 
     #[test]
     fn strict_port_on_a_free_port_uses_it() {
-        let free = taken_port().local_addr().unwrap().port();
-        let port = super::Port {
-            number: free,
-            strict: true,
-        };
         let dir = std::env::temp_dir();
-        let server = super::start_server(port, &dir, Default::default()).unwrap();
+        // The tests run in parallel: a port just freed may go to another
+        // test before the server binds it (Windows hands ports out again at
+        // once), so a few fresh ones are tried.
+        let (server, free) = (0..5)
+            .find_map(|_| {
+                let free = taken_port().local_addr().unwrap().port();
+                let port = super::Port {
+                    number: free,
+                    strict: true,
+                };
+                let server = super::start_server(port, &dir, Default::default()).ok()?;
+                Some((server, free))
+            })
+            .expect("a free port binds");
         assert_eq!(server.local_addr().port(), free);
     }
 
