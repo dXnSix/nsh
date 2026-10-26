@@ -214,7 +214,8 @@ pub use crate::{
     },
     overlay::{Align, Placement},
     platform::{
-        AppState, Appearance, HttpBody, HttpHead, HttpRequest, Idiom, Locale, Os, TimeZone,
+        AppState, Appearance, HttpBody, HttpHead, HttpRequest, Idiom, Languages, Locale, Os,
+        TimeZone,
     },
     style::Color,
 };
