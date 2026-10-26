@@ -40,6 +40,12 @@ The fork's own code and docs that named the old paths: `crate::ui` in `nsh-core`
 `ops.rs`; `nsh_core::ui` in an engine test; `nsh/device` and `nsh_core::ui::prelude` in the device guide, the shader
 element page and `docs/dev/shaders.md`; `nsh/animated` in the shader demos, tests and docs (`nsh` now).
 
+## And a test fix
+
+`cli: Try fresh ports in the strict port test`: `strict_port_on_a_free_port_uses_it` let a free port go before the
+server bound it, and on Windows, where freed ports are handed out again at once, another test took it now and then
+(this pull request's Windows check, and #72's and #75's before it). It tries a few fresh ports now.
+
 ## Validation
 
 On macOS (Rust 1.99): `cargo fmt --all --check`; clippy `-D warnings` for `nsh-core`, `nsh-engine`, `nsh-js`,
