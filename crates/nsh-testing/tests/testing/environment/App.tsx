@@ -1,6 +1,18 @@
 import { mount, signal, Text, View } from "nsh";
 import { reduceMotion } from "nsh";
-import { appState, colorScheme, languages, locale, platform, timeZone, windowSize } from "nsh";
+import {
+  appState,
+  colorScheme,
+  firstDayOfWeek,
+  hourCycle,
+  languages,
+  locale,
+  measurementSystem,
+  platform,
+  temperatureUnit,
+  timeZone,
+  windowSize,
+} from "nsh";
 
 function App() {
   const result = signal("none");
@@ -27,6 +39,9 @@ function App() {
       <Text>{`App: ${appState()}`}</Text>
       <Text>{`Zone: ${timeZone()}`}</Text>
       <Text>{`Languages: ${languages().join(",")}`}</Text>
+      <Text>
+        {`Regional: ${hourCycle()} ${firstDayOfWeek()} ${measurementSystem()} ${temperatureUnit()}`}
+      </Text>
       {button("Echo", "echo")}
       {button("Item", "items/7")}
       {button("Down", "down")}
