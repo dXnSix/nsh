@@ -37,6 +37,7 @@ animation::ops::AnimationOp::CreateInterpolate.input_range       # interpolation
 animation::ops::AnimationOp::CreateValue.value                   # a generic animated value (any prop: opacity, a color channel, a length)
 animation::ops::AnimationOp::Set.value                           # a generic animated value (any prop: opacity, a color channel, a length)
 animation::ops::AnimationOp::SetOffset.offset                    # a generic animated value (any prop: opacity, a color channel, a length)
+animation::ops::AnimatedPropValue::Number.0                          # a native component's animated prop, whatever the component makes of it
 animation::ops::Composite::Delay.0                               # time
 animation::ops::Curve::Back.0                                    # an easing curve parameter
 animation::ops::Curve::Elastic.0                                 # an easing curve parameter
@@ -367,5 +368,10 @@ animation::animator::Animator::value ->                          # a generic ani
 scroll::ScrollState::sticky_shifts_with(value)                  # a generic animated value read from the graph (a sticky cell's offset)
 ui::rows::Rows::column ->                                        # the app's data: numbers of any unit, which a component scales
 ui::rows::Rows::from_columns(columns)                            # the app's data: numbers of any unit, which a component scales
+ui::rows::RowAccessor::Js.0                                      # the app's data: numbers of any unit, which a component scales
+ui::rows::RowAccessor::Rust.0                                    # the app's data: numbers of any unit, which a component scales
+ui::rows::RowAccessor::from_fn(f)                                # the app's data: numbers of any unit, which a component scales
+ui::rows::RowAccessor::values ->                                 # the app's data: numbers of any unit, which a component scales
+ui::rows::RowAccessor::values_now ->                             # the app's data: numbers of any unit, which a component scales
 
 style::TextStyle.line_height_em                                  # a line-height length in multiples of the element font size

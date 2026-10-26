@@ -1253,7 +1253,7 @@ pub trait Interactive: Element {
     fn on_mouse_move<M>(self, listener: impl IntoListener<crate::Point<crate::Points>, M>) -> Self {
         self.on(
             EventKind::MouseMove,
-            events::typed(listener.into_listener(), events::offset),
+            events::typed(listener.into_listener(), events::mouse_position),
         )
     }
 
@@ -1265,6 +1265,24 @@ pub trait Interactive: Element {
         self.on(
             EventKind::ContextMenu,
             events::typed(listener.into_listener(), events::context_menu),
+        )
+    }
+
+    /// It took the keyboard focus: an input, or a view that takes presses
+    /// reached by Tab (or `focus()`) on the platforms that move the focus
+    /// between pressables.
+    fn on_focus<M>(self, listener: impl IntoListener<(), M>) -> Self {
+        self.on(
+            EventKind::Focus,
+            events::typed(listener.into_listener(), events::unit),
+        )
+    }
+
+    /// It lost the keyboard focus.
+    fn on_blur<M>(self, listener: impl IntoListener<(), M>) -> Self {
+        self.on(
+            EventKind::Blur,
+            events::typed(listener.into_listener(), events::unit),
         )
     }
 

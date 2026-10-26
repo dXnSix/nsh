@@ -40,6 +40,8 @@ const HOVERED = 2;
 const FOCUSED = 4;
 const PRESS_EVENTS = ["onPress", "onLongPress", "onPressIn", "onPressOut"];
 const HOVER_EVENTS = ["onHoverIn", "onHoverOut", "onHoverMove"];
+/** The keys whose press or release is reported as a hover move. */
+const MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta"]);
 // What lays out a field's text, copied to the hidden copy that finds its
 // caret (`caretBounds`).
 const CARET_STYLE = [
@@ -54,7 +56,7 @@ const ARIA_ROLES = {
   search: "searchbox", text: null, summary: "status", togglebutton: "button", dropdownlist: "combobox",
 };
 
-/** How far a refreshable scroll view is pulled to refresh, and the room its spinner takes while refreshing (as on Linux and macOS). */
+/** How far a refreshable scroll view is pulled to refresh, and the room its spinner takes while refreshing (as on Linux and macOS), unless the app draws its own indicator (`refreshIndicator`: its height is both). */
 const REFRESH_PULL = 64;
 const REFRESH_SPACE = 56;
 /** Desktop scroll bars (`showBar`): thickness, margin, the band along the
@@ -138,7 +140,6 @@ const KEYFRAMES = `
 .nsh-run { position: absolute; white-space: pre; }
 .nsh-run-bg { position: absolute; pointer-events: none; }
 .nsh-border { position: absolute; inset: 0; pointer-events: none; }
-.nsh-pointer { cursor: pointer; }
 /* The mounter's own styles: no element has an inline style but its frame
    and animated values (generated classes, \`op_css\`, come after these). */
 .nsh-page { overscroll-behavior: none; }
@@ -514,10 +515,29 @@ function measureNumericText(font, numeric, text) {
     document.body.append(box);
   }
   // `font` resets the variant: set it first, as the run's CSS does.
+  numericSpan.style.letterSpacing = "normal";
   numericSpan.style.font = font;
   numericSpan.style.fontVariantNumeric = numeric;
   numericSpan.textContent = text;
   return numericSpan.getBoundingClientRect().width;
+}
+
+/** Cluster rectangles in a complete drawn run. Reuse the measuring span;
+ * range queries keep shaping and bidi ordering exactly as the DOM draws them.
+ * Only the first hit test of a layout pays for these measurements. */
+function textClusterBoxes(font, numeric, spacing, text, ranges) {
+  measureNumericText(font, numeric || "normal", text);
+  numericSpan.style.direction = "ltr";
+  numericSpan.style.letterSpacing = `${spacing}px`;
+  const origin = numericSpan.getBoundingClientRect().left;
+  const node = numericSpan.firstChild;
+  const range = document.createRange();
+  return ranges.map(([start, end]) => {
+    range.setStart(node, start);
+    range.setEnd(node, end);
+    const box = range.getBoundingClientRect();
+    return [box.left - origin, box.right - origin];
+  });
 }
 
 /** Whether `locale`'s script is written right to left. */
@@ -648,6 +668,14 @@ class Player {
           if (width != null) return width;
           this.measure.font = font;
           return this.measure.measureText(text).width;
+        },
+        text_cluster_boxes: (fp, fl, np, nl, spacing, tp, tl, rp, op, count) => {
+          const input = new Uint32Array(this.wasm.memory.buffer, rp, count * 2);
+          const ranges = Array.from({ length: count }, (_, i) => [input[2*i], input[2*i+1]]);
+          const boxes = textClusterBoxes(this.str(fp, fl), this.str(np, nl), spacing, this.str(tp, tl), ranges);
+          // DOM layout cannot grow wasm memory, so this view stays valid.
+          const output = new Float32Array(this.wasm.memory.buffer, op, count * 2);
+          boxes.forEach(([left, right], i) => { output[2*i] = left; output[2*i+1] = right; });
         },
         font_ascent: (fp, fl) => this.metrics(this.str(fp, fl))[0],
         font_descent: (fp, fl) => this.metrics(this.str(fp, fl))[1],
@@ -1003,7 +1031,8 @@ class Player {
    * `"memory=128MB,call=2s"`, `""` for the embedding defaults; without it
    * the app runs on its own, with none), and where a split bundle's chunks are: `chunks[id]`
    * (a URL), else `id` relative to `chunkBase` (default: the page); the
-   * chunks of a bytecode bundle are bytecode too.
+   * chunks of a bytecode bundle are bytecode too. Static entry dependencies
+   * are supplied as preloadedChunks[id] (source or bytecode).
    */
   run(code, {
     release = false,
@@ -1012,6 +1041,7 @@ class Player {
     sourceMap = "",
     appId = "",
     limits = null,
+    preloadedChunks = {},
     chunks = this.options.chunks,
     chunkBase = this.options.chunkBase,
   } = {}) {
@@ -1021,6 +1051,11 @@ class Player {
     this.chunks = { map: chunks ?? {}, base: chunkBase ?? document.baseURI, bytecode };
     this.call(() => this.withStrings([capabilities ?? "", sourceMap ?? "", appId ?? ""], (cp, cl, mp, ml, ip, il) =>
       this.wasm.nsh_bundle_options(release ? 1 : 0, cp, cl, mp, ml, ip, il)));
+    for (const [id, source] of Object.entries(preloadedChunks)) {
+      const bytes = source instanceof ArrayBuffer ? new Uint8Array(source) : source;
+      this.call(() => this.withStrings([id, bytes], (np, nl, cp, cl) =>
+        this.wasm.nsh_bundle_chunk(np, nl, cp, cl, typeof bytes === "string" ? 0 : 1)));
+    }
     if (harden) this.call(() => this.withStrings([new Uint8Array(harden)], (p, l) => this.wasm.nsh_bundle_harden(p, l)));
     if (limits != null) this.call(() => this.withStrings([limits], (p, l) => this.wasm.nsh_bundle_limits(p, l)));
     this.begin(width, (environment) => {
@@ -1746,8 +1781,6 @@ class Player {
     if (el._events.has("onMouseMove")) this.mouseTracked.add(id);
     else this.mouseTracked.delete(id);
     const pressable = PRESS_EVENTS.some((e) => el._events.has(e));
-    // Under the view's own `cursor` (its class).
-    el.classList.toggle("nsh-pointer", pressable);
     el._pressable = pressable;
     this.updateFocusable(el);
     this.updateTouchAction(el);
@@ -1863,10 +1896,20 @@ class Player {
     if (!focusable && !el._a11yFocus && document.activeElement === el) el.blur();
     if (focusable && !el._focusListeners) {
       el._focusListeners = true;
-      // `focus:` classes follow the keyboard focus (the browser draws a
-      // ring only then), not the focus a click would give.
-      el.addEventListener("focus", () => el.matches(":focus-visible") && this.setState(el, FOCUSED, true));
-      el.addEventListener("blur", () => this.setState(el, FOCUSED, false));
+      // `focus:` classes and `onFocus` follow the keyboard focus (the
+      // browser draws a ring only then), not the focus a click would give.
+      el.addEventListener("focus", () => {
+        if (!el.matches(":focus-visible")) return;
+        el._keyFocus = true;
+        this.setState(el, FOCUSED, true);
+        this.event(el._id, "onFocus");
+      });
+      el.addEventListener("blur", () => {
+        this.setState(el, FOCUSED, false);
+        if (!el._keyFocus) return;
+        el._keyFocus = false;
+        this.event(el._id, "onBlur");
+      });
     }
     this.updateAria(el);
   }
@@ -2148,7 +2191,11 @@ class Player {
   op_sbh([, id, behavior]) {
     const el = this.view(id);
     if (!el) return;
+    const refresh = el._behavior?.refreshIndicator?.height !== behavior.refreshIndicator?.height;
     el._behavior = behavior;
+    // A refresh in progress keeps the room of the indicator now showing.
+    if (refresh && el._refreshing && !el._pulling && el._pull > 0) this.animatePull(el, this.refreshSpace(el));
+    if (refresh) this.updateSpinner(el);
     if (this.zooms(el)) {
       this.ensureLayer(el);
       el._zoom = Math.min(Math.max(el._zoom, behavior.minZoom), behavior.maxZoom);
@@ -2633,10 +2680,18 @@ class Player {
     this.ensureLayer(el);
     el._refreshing = refreshing;
     if (!el._pulling) {
-      if (refreshing && el.scrollTop <= 0.5) this.animatePull(el, REFRESH_SPACE);
+      if (refreshing && el.scrollTop <= 0.5) this.animatePull(el, this.refreshSpace(el));
       else if (!refreshing && el._pull > 0) this.animatePull(el, 0);
     }
     this.updateSpinner(el);
+  }
+
+  refreshThreshold(el) {
+    return el._behavior?.refreshIndicator?.height ?? REFRESH_PULL;
+  }
+
+  refreshSpace(el) {
+    return el._behavior?.refreshIndicator?.height ?? REFRESH_SPACE;
   }
 
   refreshable(el) {
@@ -2691,16 +2746,17 @@ class Player {
     el.scrollTop = 0;
     const over = -v;
     // Refreshing, the spinner's room is the pull's start.
-    this.setPull(el, el._refreshing ? Math.min(over, REFRESH_SPACE) + Math.max(0, over - REFRESH_SPACE) * 0.5 : over * 0.5);
+    const space = this.refreshSpace(el);
+    this.setPull(el, el._refreshing ? Math.min(over, space) + Math.max(0, over - space) * 0.5 : over * 0.5);
   }
 
   releasePull(el) {
-    if (!el._refreshing && el._events.has("onRefresh") && el._pull >= REFRESH_PULL) {
+    if (!el._refreshing && el._events.has("onRefresh") && el._pull >= this.refreshThreshold(el)) {
       // Shown right away, as UIRefreshControl does; JS turns it off.
       el._refreshing = true;
       this.event(el._id, "onRefresh");
     }
-    this.animatePull(el, el._refreshing && el._pull > 0 ? REFRESH_SPACE : 0);
+    this.animatePull(el, el._refreshing && el._pull > 0 ? this.refreshSpace(el) : 0);
   }
 
   setPull(el, pull) {
@@ -2709,6 +2765,7 @@ class Player {
     this.placeLayer(el);
     this.updateSpinner(el);
     this.scrolled(el);
+    this.call((w) => w.nsh_pull(el._id, pull));
   }
 
   animatePull(el, target) {
@@ -2726,7 +2783,8 @@ class Player {
 
   /** The spinner above the content: its spokes appear as it is pulled, and turn while refreshing. */
   updateSpinner(el) {
-    const shown = el._pull > 0;
+    // Off, the app draws its own (from `pullValue`).
+    const shown = el._pull > 0 && !el._behavior?.refreshIndicator;
     let spinner = el._spinner;
     if (!shown) {
       spinner?.classList.add("nsh-gone");
@@ -2741,8 +2799,8 @@ class Player {
       el.append(spinner);
     }
     spinner.classList.remove("nsh-gone");
-    spinner.style.top = `${el._pull - REFRESH_SPACE / 2 - 10}px`;
-    const progress = el._refreshing ? 1 : Math.min(1, el._pull / REFRESH_PULL);
+    spinner.style.top = `${el._pull - this.refreshSpace(el) / 2 - 10}px`;
+    const progress = el._refreshing ? 1 : Math.min(1, el._pull / this.refreshThreshold(el));
     const count = Math.min(8, Math.ceil(progress * 8));
     [...spinner.children].forEach((spoke, i) => spoke.classList.toggle("nsh-hidden", i >= count));
     // Pulled all the way, the spokes fade behind the lead one.
@@ -5251,6 +5309,7 @@ class Player {
       this.mouseMoved(e);
       if (e.pointerType !== "mouse") return;
       this.hover = [e.clientX, e.clientY];
+      this.hoverButtons = e.buttons;
       // Reveal only a draggable thumb under the pointer.
       if (!this.desktopUI || e.buttons) return;
       const view = this.viewOf(e.target);
@@ -5343,7 +5402,32 @@ class Player {
 
   // Keyboard
 
+  /**
+   * A modifier key went down or up while the mouse rests over the page
+   * with no button down: the hovered views that listen hear
+   * `onHoverMove` again where it is, with the modifiers as they are now
+   * (an editor underlines a definition while Mod is held), as they would
+   * on the next move.
+   */
+  modifiersChanged(e) {
+    if (!MODIFIER_KEYS.has(e.key) || e.repeat || !this.hover || this.hoverButtons) return;
+    const [x, y] = this.hover;
+    const target = document.elementFromPoint(x, y);
+    if (!target || !this.root.contains(target)) return;
+    const r = this.root.getBoundingClientRect();
+    for (const el of this.ancestors(this.viewOf(target))) {
+      if (!el._hoverIn || !el._events?.has("onHoverMove")) continue;
+      const b = el.getBoundingClientRect();
+      this.event(el._id, "onHoverMove", {
+        position: { x: x - b.left, y: y - b.top },
+        pagePosition: { x: x - r.left, y: y - r.top },
+        modifiers: { control: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, platform: e.metaKey },
+      });
+    }
+  }
+
   keyDown(e) {
+    if (this.wasm) this.modifiersChanged(e);
     if (!this.wasm || !this.takesKeys()) return;
     const focus = document.activeElement;
     const inRoot = focus && this.root.contains(focus);
@@ -5401,6 +5485,7 @@ class Player {
   }
 
   keyUp(e) {
+    if (this.wasm) this.modifiersChanged(e);
     if (e.key === " " && this.keyPress) this.keyPressEnd(true);
   }
 
@@ -5768,6 +5853,9 @@ class Player {
       x, y, startX: x, startY: y, t: performance.now(), vx: 0, vy: 0,
       touchPath: chain.filter((v) => v._events.has("onTouch")).map((v) => v._id),
       press: isField ? null : chain.find((v) => PRESS_EVENTS.some((n) => v._events.has(n)) && !v._props?.disabled) ?? null,
+      // What presses report: the modifier keys at the press and its clicks.
+      modifiers: { control: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, platform: e.metaKey },
+      clicks: e.pointerType === "mouse" ? this.clickCount(x, y) : 1,
       pan: chain.find((v) => v._gestures?.pan || v._events.has("onPanStart") || v._events.has("onPanEnd")) ?? null,
       scroll: !selects && scrollView && e.pointerType !== "mouse" && this.zooms(scrollView) ? scrollView : null,
       // Touch scrolling is the browser's, reported from here (`touchScroll`).
@@ -5791,11 +5879,11 @@ class Player {
   pressIn(p) {
     const el = p.press;
     p.pressed = true;
-    if (el._events.has("onPressIn")) this.event(el._id, "onPressIn");
+    if (el._events.has("onPressIn")) this.event(el._id, "onPressIn", this.pressPayload(p));
     if (el._events.has("onLongPress")) {
       p.longTimer = setTimeout(() => {
         p.long = true;
-        this.event(el._id, "onLongPress");
+        this.event(el._id, "onLongPress", this.pressPayload(p));
       }, el._props?.longPressDelay ?? 500);
     }
   }
@@ -5805,8 +5893,33 @@ class Player {
     if (!el || !p.pressed) return;
     p.pressed = false;
     clearTimeout(p.longTimer);
-    if (el._events.has("onPressOut")) this.event(el._id, "onPressOut");
-    if (inside && !p.long && el._events.has("onPress")) this.event(el._id, "onPress");
+    if (el._events.has("onPressOut")) this.event(el._id, "onPressOut", this.pressPayload(p));
+    if (inside && !p.long && el._events.has("onPress")) this.event(el._id, "onPress", this.pressPayload(p));
+  }
+
+  /** The payload of pointer `p`'s press events, `{ position, pagePosition,
+   * modifiers, clicks }` as handlers get it; none for a press from the
+   * keyboard (`keyPress`), which has no pointer. */
+  pressPayload(p) {
+    if (p.x === undefined) return null;
+    const r = p.press.getBoundingClientRect();
+    const root = this.root.getBoundingClientRect();
+    return {
+      position: { x: p.x + root.left - r.left, y: p.y + root.top - r.top },
+      pagePosition: { x: p.x, y: p.y },
+      modifiers: p.modifiers,
+      clicks: p.clicks,
+    };
+  }
+
+  /** A mouse press's click count at `(x, y)` (root coordinates): 2 or 3
+   * when it follows the last one quickly and close by. */
+  clickCount(x, y) {
+    const now = performance.now();
+    const last = this.lastClick;
+    const n = last && now - last.t <= 500 && Math.abs(x - last.x) <= 5 && Math.abs(y - last.y) <= 5 ? (last.n % 3) + 1 : 1;
+    this.lastClick = { t: now, x, y, n };
+    return n;
   }
 
   /** Remembers where pointer `p` is at `now` (ms), for its velocity. */
@@ -5931,6 +6044,7 @@ class Player {
       this.scrollEvent(p.scroll, "onScrollDragEnd");
       this.glide(p.scroll, -p.vx, -p.vy);
     } else if (p.press) {
+      if (!cancelled) [p.x, p.y] = this.point(e);
       const rect = p.press.getBoundingClientRect();
       const inside = e.clientX >= rect.left - 8 && e.clientX <= rect.right + 8 && e.clientY >= rect.top - 8 && e.clientY <= rect.bottom + 8;
       this.pressOut(p, inside && !cancelled);
