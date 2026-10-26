@@ -139,6 +139,42 @@ impl std::fmt::Debug for FontFamily {
     }
 }
 
+/// A family of a `fontFamily` list ([`font_families`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FamilyName<'a> {
+    /// The system font: `system-ui`, `sans-serif`, `ui-sans-serif`,
+    /// `-apple-system`, `BlinkMacSystemFont`.
+    System,
+    /// The system's serif: `serif`, `ui-serif`.
+    Serif,
+    /// The system's monospace font: `monospace`, `ui-monospace`.
+    Monospace,
+    /// The system's rounded font (`ui-rounded`), where it has one.
+    Rounded,
+    /// A family installed on the device or registered by the app.
+    Named(&'a str),
+}
+
+/// The families of a `fontFamily` value, most preferred first, as CSS lists
+/// them: names separated by commas, each trimmed and unquoted
+/// (`"Inter, \"Noto Sans SC\", sans-serif"`), the generic families as
+/// [`FamilyName`]'s. Text is set in the first family a platform has, and a
+/// character that family lacks in the next that has it.
+pub fn font_families(value: &str) -> impl Iterator<Item = FamilyName<'_>> {
+    value.split(',').filter_map(|family| {
+        let family = family.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+        Some(match family {
+            "" => return None,
+            "system-ui" | "sans-serif" | "ui-sans-serif" | "-apple-system"
+            | "BlinkMacSystemFont" => FamilyName::System,
+            "serif" | "ui-serif" => FamilyName::Serif,
+            "monospace" | "ui-monospace" => FamilyName::Monospace,
+            "ui-rounded" => FamilyName::Rounded,
+            name => FamilyName::Named(name),
+        })
+    })
+}
+
 /// Lines drawn through or under text (`textDecorationLine`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct TextDecoration {
@@ -1591,7 +1627,7 @@ style_keys! {
     FontSize = "fontSize": Text "number",
     FontWeight = "fontWeight": Text "\"normal\" | \"bold\" | number | `${number}`" "`\"normal\"` (400), `\"bold\"` (700) or 100–900.",
     LineHeight = "lineHeight": Text "number",
-    FontFamily = "fontFamily": Text "string" "A system family or the name an imported font (`import Inter from \"./Inter.ttf\"`) evaluates to.",
+    FontFamily = "fontFamily": Text "string" "A system family or the name an imported font (`import Inter from \"./Inter.ttf\"`) evaluates to, or a list of them as CSS writes it, most preferred first (`\"Brand, 'Noto Sans SC', sans-serif\"`): characters the first lacks come from the next that has them.",
     FontStyle = "fontStyle": Text "\"normal\" | \"italic\"",
     LetterSpacing = "letterSpacing": Text "number",
     TextDecorationLine = "textDecorationLine": Text "\"none\" | \"underline\" | \"line-through\" | \"underline line-through\"",
@@ -3031,6 +3067,33 @@ impl Style {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn font_family_lists_name_their_families_in_order() {
+        use super::{FamilyName, font_families};
+        let list: Vec<_> =
+            font_families(" Inter , \"Noto Sans SC\",'Brand Mono', ui-monospace, sans-serif,")
+                .collect();
+        assert_eq!(
+            list,
+            [
+                FamilyName::Named("Inter"),
+                FamilyName::Named("Noto Sans SC"),
+                FamilyName::Named("Brand Mono"),
+                FamilyName::Monospace,
+                FamilyName::System,
+            ]
+        );
+        assert_eq!(
+            font_families("serif").collect::<Vec<_>>(),
+            [FamilyName::Serif]
+        );
+        assert_eq!(
+            font_families("ui-rounded").collect::<Vec<_>>(),
+            [FamilyName::Rounded]
+        );
+        assert_eq!(font_families(" , ").count(), 0);
+    }
+
     use super::*;
     use crate::geometry::{relative, size};
 

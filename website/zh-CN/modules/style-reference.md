@@ -417,7 +417,7 @@ CSS 中 SVG 图形的绘制属性：任何元素都可以设置，并像在浏�
 | `color` | `ColorValue` | `.text_color(c)` | 文字颜色。 |
 | `fontSize` | `number` | `.text_size(s)`、`.text_sm()`、`.text_lg()` 等 | 字号，单位为点。 |
 | `fontWeight` | `"normal" \| "bold" \| number \| "${number}"` | `.font_weight(FontWeight::SEMIBOLD)` | `"normal"`（400）、`"bold"`（700）或 100–900。 |
-| `fontFamily` | `string` | `.font_family(name)` | 系统字体族，或导入字体得到的名字（`import Inter from "./Inter.ttf"`）。见 [字体](../docs/fonts.md)。 |
+| `fontFamily` | `string` | `.font_family(name)` | 系统字体族，或导入字体得到的名字（`import Inter from "./Inter.ttf"`），或按偏好从高到低排列的它们的列表（`"Brand, 'Noto Sans SC', sans-serif"`）。见 [字体](../docs/fonts.md#回退列表)。 |
 | `fontStyle` | `"normal" \| "italic"` | `.italic()` | 斜体。 |
 | `fontVariant` | `("small-caps" \| "oldstyle-nums" \| "lining-nums" \| "tabular-nums" \| "proportional-nums")[]` | `.small_caps()`、`.oldstyle_nums()`、`.lining_nums()`、`.tabular_nums()`、`.proportional_nums()` | OpenType 数字与字母形式。`tabular-nums` 让数字等宽，适合计数器和计时器。 |
 

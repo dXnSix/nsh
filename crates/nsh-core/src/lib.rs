@@ -99,11 +99,11 @@ pub use crate::{
         PointerEvents, Ripple, ViewProps,
     },
     style::{
-        BorderStyle, Borders, Color, CornerRadii, DecorationStyle, EllipsizeMode, FontFamily,
-        FontVariant, ObjectPosition, PaintStyle, PatchValue, PositionAxis, Shadow, Style,
-        StyleDecl, StyleError, StyleKey, StylePatch, StyleValue, SvgPaint, TextAlign,
+        BorderStyle, Borders, Color, CornerRadii, DecorationStyle, EllipsizeMode, FamilyName,
+        FontFamily, FontVariant, ObjectPosition, PaintStyle, PatchValue, PositionAxis, Shadow,
+        Style, StyleDecl, StyleError, StyleKey, StylePatch, StyleValue, SvgPaint, TextAlign,
         TextDecoration, TextShadow, TextStyle, TextTransform, TransformOrigin, VerticalAlign,
-        ViewStyle,
+        ViewStyle, font_families,
     },
     text::{
         ATTACHMENT_CHAR, Affinity, ApproxTextEngine, AttachmentAlignments, AttributedText,
