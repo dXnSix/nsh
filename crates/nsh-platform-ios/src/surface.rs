@@ -346,6 +346,7 @@ impl RootView {
         };
         env.locale = current_locale();
         env.languages = preferred_languages();
+        env.regional = nsh_engine::RegionalPreferences::EN_US;
         env.time_zone = time_zone();
         // Only read for the web: iOS keys are always Apple's.
         env.apple_keyboard = true;
