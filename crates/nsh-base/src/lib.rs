@@ -37,6 +37,10 @@ mod selection_area;
 mod sheet;
 mod switch;
 mod syntax;
+/// For platforms: how the built-in highlighting gets its syntaxes.
+#[cfg(feature = "highlight")]
+#[doc(hidden)]
+pub use crate::syntax::syntax_data;
 mod table;
 mod tabs;
 pub mod text_view;

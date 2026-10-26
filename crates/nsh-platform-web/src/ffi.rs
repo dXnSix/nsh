@@ -53,6 +53,10 @@ unsafe extern "C" {
     fn js_request_frame();
     #[link_name = "request_pump"]
     fn js_request_pump();
+    /// Fetches the syntax highlighting data (`nsh_base::syntax_data`); the
+    /// page hands it over with `nsh_syntaxes`.
+    #[link_name = "want_syntaxes"]
+    fn js_want_syntaxes();
     #[link_name = "report_error"]
     fn js_report_error(message: *const u8, len: usize);
     /// A message of a test session's app for the dev server (JSON
@@ -241,6 +245,13 @@ pub(crate) fn request_frame() {
 pub(crate) fn request_pump() {
     // SAFETY: no arguments.
     unsafe { js_request_pump() }
+}
+
+/// Asks the page for the syntax highlighting data (once, when code is
+/// first highlighted): it answers with `nsh_syntaxes`, later.
+pub(crate) fn want_syntaxes() {
+    // SAFETY: no arguments.
+    unsafe { js_want_syntaxes() }
 }
 
 /// Sends a test session's app's message to the dev server (JSON).

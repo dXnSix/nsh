@@ -1358,6 +1358,7 @@ impl Ed {
             }
             #[cfg(target_arch = "wasm32")]
             {
+                crate::syntax::syntaxes_loaded().await;
                 next_frame().await;
                 Highlighter::load();
             }

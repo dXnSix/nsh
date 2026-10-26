@@ -139,6 +139,14 @@ interpreter is about 10% slower, and QuickJS is the slowest link. `nsh-platform-
 `disable-assertions` (QuickJS' internal `assert`s, which check its own invariants: 37 KB, and a little faster); the
 native platforms keep them.
 
+The syntaxes of the built-in highlighting (`nsh-base`'s `highlight`: two-face's, 0.92 MB that gzip and brotli leave
+nearly as large, as they are compressed already) are not in the module but a file of their own,
+`nsh-syntaxes.<digest>.bin` (`nsh_base::syntax_data::dump`, written by the CLI: `package`, the dev host, `cargo xtask
+web`), which the page fetches when the app first highlights code (a `TextView` code block with a language, an `Editor`,
+a `DiffView`): the module asks (`want_syntaxes`), `nsh.js` fetches `options.syntaxes` (default: `nsh-syntaxes.bin` next
+to `nsh.js`; `fetchSyntaxes`) and hands the bytes over (`nsh_syntaxes`), and what waited highlights. Code shows plain
+until then, as it does natively while the syntaxes load; when the fetch fails it stays plain, with a warning.
+
 Published apps' runtime has no QuickJS parser ("Two runtimes"): 0.17 MB, 40 KB with brotli. The runtime carries no
 declaration text (the documentation and TypeScript of the specs, which only make
 `.nsh/types`: `docs/dev/tooling.md`): 69 KB, 20 KB with brotli.

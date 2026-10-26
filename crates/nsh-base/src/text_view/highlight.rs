@@ -114,10 +114,11 @@ mod syntect_highlighter {
     }
 
     /// WebAssembly has no threads: the block is highlighted after the
-    /// frame that shows it plain.
+    /// frame that shows it plain, once the page fetched the syntaxes.
     #[cfg(target_arch = "wasm32")]
     fn later(language: String, code: String, highlighted: Signal<Tokens>) {
         spawn(async move {
+            crate::syntax::syntaxes_loaded().await;
             next_frame().await;
             highlighted.set(tokens(&language, &code));
         });

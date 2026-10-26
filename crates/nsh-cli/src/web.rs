@@ -9,6 +9,7 @@
 //! manifest.webmanifest             name, icons, colors (installing it as an app)
 //! nsh.<digest>.js                  the DOM runtime
 //! nsh.<digest>.wasm                the engine, the core, the components and QuickJS
+//! nsh-syntaxes.<digest>.bin        syntax highlighting, fetched when code is first highlighted
 //! nsh-bindgen.<digest>.js          wasm-bindgen's glue, for crates that call JS (`crate::bindgen`)
 //! snippets.<digest>/<crate>-<hash>/ the JS snippets the glue imports, under their own paths
 //! app.<digest>.nshc                the app's bundle, compiled to QuickJS bytecode
@@ -70,6 +71,11 @@ const CODE: (&str, &str) = ("app", "nshc");
 /// Hex digits of the SHA-256 in content-addressed names.
 const DIGEST_LEN: usize = 10;
 
+/// The syntax highlighting data the runtime fetches when the app first
+/// highlights code (`nsh_base::syntax_data`): not in `nsh.wasm`, which
+/// pages without code would download for nothing.
+const SYNTAXES: &str = "nsh-syntaxes.bin";
+
 /// Ports `--run` tries first (the next free one is used).
 const PORT: u16 = 4173;
 
@@ -112,6 +118,8 @@ pub(crate) fn package(
         "nsh.wasm",
         &fs::read(&runtime.wasm).with_context(|| format!("read {}", runtime.wasm.display()))?,
     )?;
+    // Fetched only when the app first highlights code (`nsh_base::syntax_data`).
+    let syntaxes = site.add(SYNTAXES, &nsh_base::syntax_data::dump())?;
     // The wasm-bindgen glue of a runtime whose crates call JS through
     // wasm-bindgen (`crate::bindgen`).
     let glue = runtime
@@ -170,6 +178,7 @@ pub(crate) fn package(
     let mut app = serde_json::json!({
         "id": id,
         "wasm": wasm,
+        "syntaxes": syntaxes,
         "code": code,
         "harden": harden,
         "capabilities": built.capabilities_json(),
@@ -335,6 +344,8 @@ pub(crate) fn dev_host(runtime: &WebRuntime, rust: bool) -> anyhow::Result<(Stri
         ("nsh.js".to_owned(), js),
         ("nsh.wasm".to_owned(), wasm),
         ("nsh.version".to_owned(), version.into_bytes()),
+        // Next to `nsh.js`, where the player looks for it by default.
+        (SYNTAXES.to_owned(), nsh_base::syntax_data::dump()),
     ];
     if let Some(glue) = glue {
         files.push((crate::bindgen::GLUE.to_owned(), glue));
@@ -875,7 +886,10 @@ mod tests {
         let (plain, plain_files) = dev_host(&runtime, false).unwrap();
         assert!(plain.contains("const GLUE = null;"), "{plain}");
         let names = |files: &Files| files.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>();
-        assert_eq!(names(&plain_files), ["nsh.js", "nsh.wasm", "nsh.version"]);
+        assert_eq!(
+            names(&plain_files),
+            ["nsh.js", "nsh.wasm", "nsh.version", SYNTAXES]
+        );
         let glue = dir.join("nsh-dev-bindgen.js");
         fs::write(&glue, "export {};").unwrap();
         let snippet = crate::bindgen::output_dir(&glue).join("snippets/app-1/inline0.js");
@@ -895,6 +909,7 @@ mod tests {
                 "nsh.js",
                 "nsh.wasm",
                 "nsh.version",
+                SYNTAXES,
                 "nsh-bindgen.js",
                 "snippets/app-1/inline0.js"
             ]

@@ -140,18 +140,22 @@ pub(crate) fn build(out: &Path) -> anyhow::Result<()> {
     step.done("packaged the gallery");
 
     // The player loads the gallery's runtime.
-    let runtime = |ext: &str| -> anyhow::Result<String> {
+    let runtime = |stem: &str, ext: &str| -> anyhow::Result<String> {
         fs::read_dir(&gallery)?
             .filter_map(Result::ok)
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .find(|name| name.starts_with("nsh.") && name.ends_with(ext))
-            .with_context(|| format!("the gallery has no nsh.<digest>{ext}"))
+            .find(|name| name.starts_with(stem) && name.ends_with(ext))
+            .with_context(|| format!("the gallery has no {stem}<digest>{ext}"))
     };
     let mut player = fs::read_to_string(web.join("index.html"))?;
-    for (file, ext) in [("./nsh.js", ".js"), ("./nsh.wasm", ".wasm")] {
+    for (file, stem, ext) in [
+        ("./nsh.js", "nsh.", ".js"),
+        ("./nsh.wasm", "nsh.", ".wasm"),
+        ("./nsh-syntaxes.bin", "nsh-syntaxes.", ".bin"),
+    ] {
         let quoted = format!("\"{file}\"");
         anyhow::ensure!(player.contains(&quoted), "the player does not load {file}");
-        player = player.replace(&quoted, &format!("\"./gallery/{}\"", runtime(ext)?));
+        player = player.replace(&quoted, &format!("\"./gallery/{}\"", runtime(stem, ext)?));
     }
     fs::write(out.join("index.html"), player)?;
     term::note(out.strip_prefix(&root).unwrap_or(&out).display());

@@ -309,6 +309,21 @@ pub unsafe extern "C" fn nsh_asset_bytes(ptr: *const u8, len: usize) {
     ASSET.with(|a| *a.borrow_mut() = Some(data));
 }
 
+/// The page's answer to `want_syntaxes`: the syntax highlighting data it
+/// fetched (`nsh_base::syntax_data`), or none (`len` 0) when it could not,
+/// and code stays plain. Returns the pump delay: what waited highlights.
+///
+/// # Safety
+///
+/// `ptr..ptr + len` is memory from [`nsh_alloc`] (any pointer with `len` 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nsh_syntaxes(ptr: *const u8, len: usize) -> f64 {
+    // SAFETY: guaranteed by the caller.
+    let dump = (len > 0).then(|| unsafe { bytes(ptr, len) });
+    nsh_base::syntax_data::provide(dump);
+    pump()
+}
+
 fn environment(width: f32, height: f32, dark: bool, pixel_ratio: f32) -> Environment {
     Environment {
         window: nsh_core::Size::new(nsh_core::Points(width), nsh_core::Points(height)),
@@ -482,6 +497,9 @@ fn init() {
         std::panic::set_hook(Box::new(|info| {
             ffi::report_error(&format!("nsh panicked: {info}"));
         }));
+        // Not in the module: the page fetches them when code is first
+        // highlighted (`nsh_syntaxes`).
+        nsh_base::syntax_data::on_wanted(ffi::want_syntaxes);
     });
 }
 

@@ -18,6 +18,9 @@
 // once, a font: a `Uint8Array` or null), `chunks` / `chunkBase` (see
 // `run`), `prepareChunk(id)` (a promise for what chunk `id` needs once it
 // runs, such as fonts for `readAsset`; awaited with the chunk's download),
+// `syntaxes` (the URL of the syntax highlighting data, fetched when code
+// is first highlighted, or a `Response` promise; default:
+// `nsh-syntaxes.bin` next to this file; without it code stays plain),
 // `dark`, `idiom` ("phone", "pad" or "desktop" instead of the one the
 // pointer and the viewport suggest), `overlay` (false: no error box),
 // `onError`, `onLog`, `host` (the functions `nsh/host`'s
@@ -700,6 +703,7 @@ class Player {
         },
         request_frame: () => this.requestFrame(),
         request_pump: () => this.requestPump(),
+        want_syntaxes: () => this.fetchSyntaxes(),
         report_error: (p, l) => this.showError(this.str(p, l)),
         test_send: (p, l) => this.onTestSend?.(JSON.parse(this.str(p, l))),
         log: (level, p, l) => {
@@ -1203,6 +1207,29 @@ class Player {
    * engine is not reentrant: a call made while it runs (from a batch being
    * applied) waits until it returns.
    */
+  /**
+   * Fetches the syntax highlighting data the module asked for, once, when
+   * code is first highlighted (`want_syntaxes`): `options.syntaxes`, or
+   * `nsh-syntaxes.bin` next to this file. When it cannot be had the module
+   * is told so, and code stays plain.
+   */
+  fetchSyntaxes() {
+    const source = this.options.syntaxes ?? new URL("nsh-syntaxes.bin", import.meta.url);
+    const response = typeof source === "string" || source instanceof URL ? fetch(source) : source;
+    Promise.resolve(response)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.arrayBuffer();
+      })
+      .catch((err) => {
+        console.warn(`[nsh] code is not highlighted: no syntaxes from ${source}: ${err?.message ?? err}`);
+        return null;
+      })
+      .then((data) => this.call((w) => data
+        ? this.withStrings([new Uint8Array(data)], (p, l) => w.nsh_syntaxes(p, l))
+        : w.nsh_syntaxes(0, 0)));
+  }
+
   call(f) {
     if (this.depth > 0) {
       (this.deferred ??= []).push(f);

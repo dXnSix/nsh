@@ -13,6 +13,7 @@ workspace = true
 [features]
 default = ["highlight"]
 # Built-in syntax highlighting of `TextView`'s code blocks (syntect).
+# Native builds carry the syntaxes (two-face); WebAssembly fetches them.
 highlight = ["dep:syntect", "dep:two-face"]
 
 [dependencies]
@@ -29,7 +30,16 @@ unicode-segmentation.workspace = true
 imara-diff.workspace = true
 log.workspace = true
 syntect = { workspace = true, optional = true }
+
+# The syntaxes are in native builds, which also write the dump the web
+# runtime fetches when it first highlights (`syntax_data`): they are 0.9 MB
+# that compression barely shrinks, which pages without code never need.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 two-face = { workspace = true, optional = true }
+syntect = { workspace = true, optional = true, features = ["dump-create"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+syntect = { workspace = true, optional = true, features = ["dump-load"] }
 
 [dev-dependencies]
 # The components' tests run them headless (`tests/base`), without QuickJS.

@@ -111,7 +111,8 @@ The built-in highlighter (`highlight.rs`, on the tokens, palette and syntaxes of
 regexes (`regex-fancy`, so it builds for WebAssembly; no Oniguruma) and two-face's syntaxes (bat's set: syntect's own
 plus TypeScript / TSX, TOML, Dockerfile, ...). A block's language is found by extension or name, case-insensitive
 (`ts`, `tsx`, `rs`, `py`, `sh`, `yml`, `md`, `Rust`, ...) plus the other names fences use (`jsx`, `shell`, `golang`,
-`c++`, `csharp`, `jsonc`, ...); no language, `text` or one syntect does not know leaves the block plain.
+`c++`, `csharp`, `jsonc`, ...); no language, `text` or one syntect does not know leaves the block plain. On the web the
+syntaxes are not in the runtime: the page fetches them when code is first highlighted (`docs/dev/web.md`, "Size").
 
 Colors: Allsum's reading palette (its `--hl-*` tokens, light and dark). TextMate scopes map to its kinds of token in code
 (`token()`), not through syntect themes: one parse gives one range list whose colors are `AdaptiveColor`s, so both

@@ -83,6 +83,7 @@
     const [loaded, code, harden, hostModule] = await Promise.all([
       createPlayer(document.getElementById("app"), {
         wasm: take(app.wasm),
+        syntaxes: app.syntaxes,
         glue: app.glue,
         host: app.host ? { call: (name, args) => host.call(name, args) } : undefined,
         assets: app.assets,
