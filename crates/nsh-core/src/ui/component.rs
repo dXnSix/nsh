@@ -169,15 +169,20 @@ fn specs_of<A: Api>(types: &mut TsTypes) -> Vec<MethodSpec> {
         .map(|m| MethodSpec {
             name: m.name,
             doc: m.doc,
-            params: m.params.iter().map(|(n, ts)| (*n, ts(types))).collect(),
+            params: m
+                .params
+                .iter()
+                .map(|(n, ts, optional)| (*n, ts(types), *optional))
+                .collect(),
             returns: m.returns.map(|ts| ts(types)),
             call: m.call,
         })
         .collect()
 }
 
-/// A method's parameter: its JS name, and its TypeScript type.
-pub type Param = (&'static str, TsType);
+/// A method's parameter: its JS name, its TypeScript type, and whether JS
+/// may leave it out (an `Option` after which every parameter is optional).
+pub type Param = (&'static str, TsType, bool);
 
 /// One method, for the glue and its declarations.
 #[derive(Debug, Clone)]
@@ -186,8 +191,9 @@ pub struct MethodSpec {
     pub name: &'static str,
     /// Documentation.
     pub doc: &'static str,
-    /// Its parameters: JS names and TypeScript types.
-    pub params: Vec<(&'static str, String)>,
+    /// Its parameters: JS names, TypeScript types, and whether each is
+    /// optional.
+    pub params: Vec<(&'static str, String, bool)>,
     /// The TypeScript type of its result; `None`: nothing (`void`).
     pub returns: Option<String>,
     /// Its call (the arguments converted in the JS call).
@@ -668,7 +674,12 @@ pub struct Registry {
     /// The UI sets served under paths of this one's specifier
     /// ([`Registry::submodule`]).
     submodules: Arc<Vec<Registry>>,
+    /// What each engine serving the set runs once ([`Registry::setup`]).
+    setups: Arc<Vec<Setup>>,
 }
+
+/// A function each engine serving a set runs once ([`Registry::setup`]).
+type Setup = Arc<dyn Fn() + Send + Sync>;
 
 impl fmt::Debug for Registry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -856,6 +867,7 @@ impl Registry {
         let mut out = Self::default();
         for set in sets.iter().flat_map(Registry::sets) {
             out.tokens = out.tokens.or(set.tokens);
+            Arc::make_mut(&mut out.setups).extend(set.setups.iter().cloned());
             let types = Arc::make_mut(&mut out.types);
             for (name, ty) in set.types.iter() {
                 if let Some(old) = types.insert(name, ty.clone()) {
@@ -950,11 +962,36 @@ impl Registry {
         self
     }
 
+    /// Runs `f` once on each engine that serves the set, in its reactive
+    /// runtime, before the app's first op: what the set's crates keep per
+    /// engine is set up there (the languages an `Editor` knows,
+    /// `nsh_base::editor::register_language`; a value of
+    /// [`global`](super::prelude::global)), as a Rust app's root sets it up
+    /// before its children. An app's crate calls it from its
+    /// `#[native_module]` function.
+    pub fn setup(&mut self, f: impl Fn() + Send + Sync + 'static) -> &mut Self {
+        Arc::make_mut(&mut self.setups).push(Arc::new(f));
+        self
+    }
+
+    /// Runs the functions [`Registry::setup`] gave the set (a merged set's:
+    /// every set's, in order). The core runs them when it takes its sets.
+    pub(crate) fn run_setups(&self) {
+        for setup in self.setups.iter() {
+            setup();
+        }
+    }
+
     /// The tokens of theme file `json` (`None`: the defaults), by the
     /// source a set brings ([`Registry::tokens_from`]; `None`: no set
     /// does).
     pub fn tokens(&self, json: Option<&str>) -> Option<Result<super::Tokens, String>> {
         self.tokens.map(|source| source(json))
+    }
+
+    /// How the set reads a theme file ([`Registry::tokens_from`]).
+    pub(crate) fn token_source(&self) -> Option<super::TokenSource> {
+        self.tokens
     }
 
     /// The files [`Registry::assets`] ships.
@@ -1215,10 +1252,12 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
     };
     for spec in &specs {
         // A component with rows is generic over their type, like `List`.
-        let (generic, extends) = match spec.items() {
-            Some(_) => ("<T>", ", ListItemsProps<T>"),
-            None if spec.generic => ("<T>", ""),
-            None => ("", ""),
+        // Props generic over their rows' type default it to `any`, so a mark
+        // without rows of its own takes any field name.
+        let (generic, params, extends) = match spec.items() {
+            Some(_) => ("<T>", "<T>", ", ListItemsProps<T>"),
+            None if spec.generic => ("<T>", "<T = any>", ""),
+            None => ("", "", ""),
         };
         // A component with methods: its ref is an object of them.
         let host = if spec.methods.is_empty() {
@@ -1234,7 +1273,9 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
                 let params = m
                     .params
                     .iter()
-                    .map(|(n, ts)| format!("{n}: {ts}"))
+                    .map(|(n, ts, optional)| {
+                        format!("{n}{}: {ts}", if *optional { "?" } else { "" })
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 let returns = match &m.returns {
@@ -1248,7 +1289,7 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
         };
         let _ = writeln!(
             out,
-            "export interface {}Props{generic} extends {host}{extends} {{",
+            "export interface {}Props{params} extends {host}{extends} {{",
             spec.export
         );
         if !spec.methods.is_empty() {
@@ -1288,7 +1329,7 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
         }
         let _ = write!(
             out,
-            "export declare const {}: ({generic}(props: {}Props{generic}) => JSX.Element){with};\n\n",
+            "export declare const {}: ({params}(props: {}Props{generic}) => JSX.Element){with};\n\n",
             spec.export, spec.export,
         );
     }
@@ -1864,7 +1905,9 @@ mod tests {
         b.register::<other::Stepper>();
         let merged = Registry::merged(&[a.clone(), b]);
         assert_eq!(merged.specs().len(), 2);
-        let twice = std::panic::catch_unwind(|| Registry::merged(&[a.clone(), a]));
+        let twice = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Registry::merged(&[a.clone(), a])
+        }));
         let message = *twice.unwrap_err().downcast::<String>().unwrap();
         assert_eq!(
             message,
