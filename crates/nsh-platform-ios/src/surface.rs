@@ -345,6 +345,7 @@ impl RootView {
                 _ => Idiom::Phone,
             },
             locale: current_locale(),
+            languages: nsh_engine::Languages::EN_US,
             time_zone: time_zone(),
             // Only read for the web: iOS keys are always Apple's.
             apple_keyboard: true,

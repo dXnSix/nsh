@@ -27,7 +27,7 @@ use crate::{
     Command, Dialog, EdgeInsets, LayoutAnimation, NodeId, Points, Size,
     canvas::CanvasFont,
     color::Hsla,
-    platform::{AppState, Appearance, Idiom, Locale, Os, TimeZone},
+    platform::{AppState, Appearance, Idiom, Languages, Locale, Os, TimeZone},
     time::Instant,
 };
 
@@ -70,6 +70,7 @@ struct EnvSignals {
     screen_reader: Memo<bool>,
     pixel_ratio: Memo<f32>,
     locale: Memo<Locale>,
+    languages: Memo<Languages>,
     time_zone: Memo<TimeZone>,
     app_state: Memo<AppState>,
 }
@@ -96,6 +97,7 @@ impl EnvSignals {
                 screen_reader: part!(screen_reader),
                 pixel_ratio: part!(pixel_ratio),
                 locale: part!(locale),
+                languages: part!(languages),
                 time_zone: part!(time_zone),
                 app_state: part!(app_state),
             }
@@ -251,6 +253,15 @@ pub fn round_to_nearest_pixel(points: Points) -> Points {
 /// The user's locale (TS: what `Intl` formats for by default).
 pub fn locale() -> Locale {
     env(|e| e.locale)
+}
+
+/// The user's preferred languages, most preferred first (TS:
+/// `languages()`): the language to show the app's text in is the first the
+/// app has, the others its fallbacks. Reading it subscribes, so texts follow
+/// a change of the system's setting (or of an embedding app's language,
+/// which comes first).
+pub fn languages() -> Languages {
+    env(|e| e.languages)
 }
 
 /// The device's time zone, as the system names it (`Europe/Berlin`; TS:

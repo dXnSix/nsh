@@ -22,7 +22,7 @@ use crossbeam_channel::{Receiver, Sender};
 use nsh_core::{
     ApproxTextEngine, MountBatch,
     geometry::{Points, Size},
-    platform::{Idiom, Locale, Os, TimeZone},
+    platform::{Idiom, Languages, Locale, Os, TimeZone},
     ui::{Callback, Registry, Root, prelude::timer},
 };
 use nsh_engine::{
@@ -480,6 +480,13 @@ impl Session {
             ),
             None => None,
         };
+        let languages = match &launch.languages {
+            Some(tags) => Some(
+                Languages::parse(tags.iter().map(String::as_str))
+                    .ok_or_else(|| format!("open({entry:?}): {tags:?} names no language"))?,
+            ),
+            None => None,
+        };
         let storage = MemoryStorage::new(launch.storage.0);
         let files = set_files(&self.run.ui_sets);
         let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
@@ -512,6 +519,9 @@ impl Session {
                 },
                 color_scheme: launch.color_scheme.into(),
                 locale: locale.unwrap_or(Locale::EN_US),
+                // The device's language is its locale's unless the test
+                // lists others.
+                languages: languages.unwrap_or(Languages::one(locale.unwrap_or(Locale::EN_US))),
                 time_zone: time_zone.unwrap_or(TimeZone::UTC),
                 reduce_motion: launch.reduced_motion,
                 os: match launch.platform {
@@ -593,6 +603,11 @@ impl Session {
         {
             return Err(format!("open({entry:?}): {name:?} is not a time zone"));
         }
+        if let Some(tags) = &launch.languages
+            && Languages::parse(tags.iter().map(String::as_str)).is_none()
+        {
+            return Err(format!("open({entry:?}): {tags:?} names no language"));
+        }
         // The host's dev host plays no handlers of the test's: they run
         // headless only. The launch parameters reach its engine.
         if launch.host_handlers {
@@ -608,6 +623,7 @@ impl Session {
         environment.clipboard = launch.clipboard.clone();
         environment.locale = launch.locale.clone();
         environment.time_zone = launch.time_zone.clone();
+        environment.languages = launch.languages.clone();
         environment.reduced_motion = launch.reduced_motion.then_some(true);
         environment.safe_area = (safe_area != SafeArea::default()).then_some([
             safe_area.top.0,

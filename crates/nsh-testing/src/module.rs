@@ -265,6 +265,7 @@ impl Testing {
             color_scheme: options.color_scheme.unwrap_or_default(),
             locale: options.locale,
             time_zone: options.time_zone,
+            languages: options.languages,
             reduced_motion: options.reduced_motion.unwrap_or(false),
             platform: options.platform.unwrap_or_default(),
             clock: options
@@ -389,6 +390,9 @@ pub struct OpenOptions {
     /// The device's time zone, an IANA name (`"UTC"`). It names the zone;
     /// `Date`'s local times stay the machine's.
     pub time_zone: Option<String>,
+    /// The user's preferred languages, BCP 47 tags, most preferred first
+    /// (`[locale]`).
+    pub languages: Option<Vec<String>>,
     /// The user asked for less motion (false).
     pub reduced_motion: Option<bool>,
     /// The platform the app believes it runs on headless (`"ios"`; a
@@ -1086,6 +1090,7 @@ pub(crate) struct Launch {
     pub(crate) color_scheme: ColorScheme,
     pub(crate) locale: Option<String>,
     pub(crate) time_zone: Option<String>,
+    pub(crate) languages: Option<Vec<String>>,
     pub(crate) reduced_motion: bool,
     pub(crate) platform: Platform,
     /// A manual clock's start.
@@ -1822,6 +1827,15 @@ impl App {
     /// and comes back (`"active"`); `appState()` follows. Headless only.
     pub async fn set_app_state(this: Instance<Self>, state: AppState) -> Result<(), String> {
         step(&this, move |app| app.set_app_state(state.into())).await
+    }
+
+    /// Gives the user the preferred languages `tags` (BCP 47 tags, most
+    /// preferred first, `["de-DE", "en-US"]`), as the system does when the
+    /// user changes them; `languages()` follows. Headless only.
+    pub async fn set_languages(this: Instance<Self>, tags: Vec<String>) -> Result<(), String> {
+        let languages = nsh_core::platform::Languages::parse(tags.iter().map(String::as_str))
+            .ok_or_else(|| format!("setLanguages: {tags:?} names no language"))?;
+        step(&this, move |app| app.set_languages(languages)).await
     }
 
     /// Moves the device to the time zone `name` (an IANA name,
