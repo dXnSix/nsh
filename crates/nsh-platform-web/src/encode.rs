@@ -941,7 +941,7 @@ fn field_css(c: &InputConfig) -> String {
 fn behavior_json(b: &ScrollBehavior) -> String {
     let offsets: Vec<String> = b.snap_offsets.iter().map(|o| o.0.to_string()).collect();
     format!(
-        "{{\"paging\":{},\"snapInterval\":{},\"snapOffsets\":[{}],\"snapAlignment\":{},\"enabled\":{},\"bounces\":{},\"inset\":[{},{},{},{}],\"minZoom\":{},\"maxZoom\":{},\"bouncesZoom\":{},\"pinch\":{},\"centerContent\":{}}}",
+        "{{\"paging\":{},\"snapInterval\":{},\"snapOffsets\":[{}],\"snapAlignment\":{},\"enabled\":{},\"bounces\":{},\"inset\":[{},{},{},{}],\"minZoom\":{},\"maxZoom\":{},\"bouncesZoom\":{},\"pinch\":{},\"centerContent\":{},\"refreshIndicator\":{}}}",
         b.paging,
         b.snap_interval.0,
         offsets.join(","),
@@ -956,7 +956,9 @@ fn behavior_json(b: &ScrollBehavior) -> String {
         b.max_zoom,
         b.bounces_zoom,
         b.pinch,
-        b.center_content
+        b.center_content,
+        b.refresh_indicator
+            .map_or("null".to_owned(), |h| format!("{{\"height\":{}}}", h.0))
     )
 }
 
@@ -1371,7 +1373,9 @@ pub(crate) fn encode(out: &mut Out, item: &MountItem) {
         MountItem::Component { id, name } => out.item("comp").num(*id).str(name).end(),
         // Browsers hit-test what overflows a box themselves; the keymap
         // stays in Rust (`nsh_key`).
+        // No registered native components on the web.
         MountItem::ComponentProps { .. }
+        | MountItem::ComponentPropSlots { .. }
         | MountItem::Keymap(_)
         | MountItem::Overflow { .. }
         | MountItem::AnimationBindings { .. }

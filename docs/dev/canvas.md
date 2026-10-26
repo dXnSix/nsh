@@ -10,7 +10,9 @@
   browsers), `textAlign` / `textBaseline`),
   transforms, paths (`arc`, `arcTo`, `ellipse`, curves, `rect`, `roundRect`), `fill` / `stroke` / `clip` (also of a `Path2D`,
   which takes SVG path data; arcs become cubics), `fillRect` / `strokeRect` / `clearRect`, `fillText` / `strokeText` /
-  `measureText` (synchronous, through the engine's text engine; only `width`), `isPointInPath` / `isPointInStroke`
+  `measureText` (synchronous, through the engine's text engine; only `width`, trailing white space included as in a
+  browser: text engines lay a line out without it, so a text ending in white space is measured with a mark after it,
+  less the mark), `isPointInPath` / `isPointInStroke`
   (synchronous too, answered in Rust without the platform: `nsh_core::canvas::point_in_path` replays what was recorded
   for its transform, current path and line style and tests the flattened path; after `draw` returned a kept context
   answers from everything it drew, so press handlers can hit-test the shapes; strokes take joins as round and ignore
@@ -71,7 +73,11 @@ canvas view's paint properties (`Painter::fill_style_from_view` and the like: `D
 operations whose value is the view's `fill` / `stroke` / `strokeWidth` / `strokeDasharray`, which the core resolves,
 inherited from the views around as CSS inherits them and `currentColor` the view's text color, and sets into the
 drawing it mounts, `Drawing::painted`; a change of those properties, the canvas's or a view's around it, sends the
-drawing again, so no platform knows of it), measure text
+drawing again, so no platform knows of it), fill a shape with the canvas view's background
+(`Painter::fill_background_from_view(area)`: its `backgroundColor` and `backgroundImage` gradients, the app's `bg-*` /
+`bg-linear-*` classes, positioned over `area` as over a box of that size and shown only where the path fills, as
+CSS's `clip-path` shows a box's background; the core expands it into fills with `CanvasGradient::from_css` and mounts
+the view without its background, so the background is drawn once, inside the shape), measure text
 with `measure_text(font, text)` and `text_metrics(font, text)` (its width and the font's ascent, descent and line
 height, from the first line the core's text engine lays it out in: `canvas::line_metrics`), and hit-test what a painter recorded with the same
 `point_in_path` / `point_in_stroke` (`Painter::is_point_in_path` / `is_point_in_stroke` for the current path,
