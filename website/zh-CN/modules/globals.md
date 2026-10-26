@@ -8,7 +8,7 @@ order: 15
 
 除了 ECMAScript 标准库，NSH 应用的 JS 环境还提供一组标准全局对象：`fetch` 及其 `Headers`、`Request`、`Response`；Streams 标准；`URL` 和 `URLSearchParams`；`TextEncoder` / `TextDecoder`；`Blob`、`File` 和 `FormData`；`EventTarget`、`Event` 和 `AbortController`；定时器、`requestAnimationFrame` 和 `console`；以及用于数字与日期格式化的 `Intl`。它们都用 Rust 原生实现，遵循 WHATWG 标准，无需 import，因此大量基于这些标准的 JavaScript 库（HTTP 客户端、URL 与编码工具、流处理工具）可以直接使用。
 
-本页列出了应用拥有的全部全局对象。它们属于 TSX 环境：Rust 代码改用 Rust 标准库、crates.io 和 `nsh_core::ui::prelude` 中 NSH 的服务（`fetch`、定时器、任务；见[用 Rust 开发](../docs/rust.md)），表格的 Rust 列给出了对应项。界面用[元素](../elements/index.md)和应用自己的组件搭建，其余能力来自应用导入的[模块](./index.md)。
+本页列出了应用拥有的全部全局对象。它们属于 TSX 环境：Rust 代码改用 Rust 标准库、crates.io 和 `nsh_core::prelude` 中 NSH 的服务（`fetch`、定时器、任务；见[用 Rust 开发](../docs/rust.md)），表格的 Rust 列给出了对应项。界面用[元素](../elements/index.md)和应用自己的组件搭建，其余能力来自应用导入的[模块](./index.md)。
 
 这些全局对象的 TypeScript 声明会生成到 `.nsh/types/nsh/globals.d.ts`（见[项目结构](../docs/project-structure.md)）。
 
@@ -98,7 +98,7 @@ requestAnimationFrame(tick);
 ```
 
 > [!TIP]
-> 在 JS 里逐帧驱动动画，意味着每一帧都要在 QuickJS 中执行你的代码。样式和变换的动画请优先使用 [nsh/animated](./nsh-animated.md)，它的驱动器在原生侧运行，不回调 JS（见[动画](../docs/animation.md)）。
+> 在 JS 里逐帧驱动动画，意味着每一帧都要在 QuickJS 中执行你的代码。样式和变换的动画请优先使用 [`nsh` 的动画 API](./nsh.md#animation)，它的驱动器在原生侧运行，不回调 JS（见[动画](../docs/animation.md)）。
 
 ## Base64 与错误
 
@@ -686,7 +686,7 @@ new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).fo
 不传 `locales` 时使用设备的区域设置（iOS 的 `NSLocale.currentLocale`、Android 的 `Locale.getDefault()`）；`nsh test` 和 Web 上为 `en-US`。
 
 - **数字**：`decimal`、`percent`、`currency`（`currencyDisplay` 为 `symbol`、`narrowSymbol`、`code`）和 `unit`（常用单位：长度、质量、时长、数据大小、温度、速度）样式；`minimumIntegerDigits`、`minimum` / `maximumFractionDigits`、`minimum` / `maximumSignificantDigits`、`roundingPriority`、`trailingZeroDisplay`、`useGrouping`、`signDisplay`；`standard`、`scientific`、`engineering` 和 `compact` 记数法（`compactDisplay` 为 `short` / `long`）。舍入方式是四舍五入（远离零），按数字的书写形式进行（`1.005` 舍入为 `1.01`，与浏览器一致）。`format` 也精确地接受 BigInt 和十进制字符串。`formatToParts` 和 `resolvedOptions` 与浏览器一致。
-- **日期**：`weekday`、`year`、`month`（`numeric`、`2-digit`、`short`、`long`、`narrow`）、`day`、`hour`、`minute`、`second`、`fractionalSecondDigits`、`hour12` / `hourCycle`、`timeZoneName` 以及 `dateStyle` / `timeStyle`，使用公历。`timeZone` 支持任意 IANA 时区（`"Asia/Tokyo"`，大小写不限）、`UTC` 和偏移量（`"+08:00"`），使用 NSH 自带的 IANA 时区数据库的规则，各平台相同；其他名称会抛出 `RangeError`。不设 `timeZone` 时，日期按设备时区书写（`nsh/device` 的 `timeZone()`；headless 测试中为 `UTC`，或 `open` 的 `timeZone`）。
+- **日期**：`weekday`、`year`、`month`（`numeric`、`2-digit`、`short`、`long`、`narrow`）、`day`、`hour`、`minute`、`second`、`fractionalSecondDigits`、`hour12` / `hourCycle`、`timeZoneName` 以及 `dateStyle` / `timeStyle`，使用公历。`timeZone` 支持任意 IANA 时区（`"Asia/Tokyo"`，大小写不限）、`UTC` 和偏移量（`"+08:00"`），使用 NSH 自带的 IANA 时区数据库的规则，各平台相同；其他名称会抛出 `RangeError`。不设 `timeZone` 时，日期按设备时区书写（`nsh` 的 `timeZone()`；headless 测试中为 `UTC`，或 `open` 的 `timeZone`）。
 - **区域**：区域数据是一张常用语言的表（英语、德语、法语、西班牙语、意大利语、葡萄牙语、荷兰语、俄语、瑞典语、波兰语、土耳其语、印尼语、越南语、泰语、印地语、中文、日语、韩语）及其地区变体（`en-GB`、`en-IN`、`de-CH`、`es-MX`、`pt-PT`、`zh-TW` 等），而不是完整的 CLDR，所以细节可能与浏览器的输出不同。没有数据的区域会依次回退到下一个请求的区域、设备的区域、`en-US`；俄语、瑞典语、波兰语、土耳其语、印尼语、越南语、泰语和印地语的日期没有月份名（月份写成数字，星期用英语）。数字始终是拉丁数字。
 - **不支持**：`Intl.Collator`（`String.prototype.localeCompare` 是 QuickJS 自带的，不区分区域）、`PluralRules`、`RelativeTimeFormat`、`ListFormat`、`DisplayNames`、`Segmenter` 和 `Intl.Locale`；`currencySign: "accounting"` 和 `currencyDisplay: "name"` 分别按 `standard` 和 `code` 格式化。
 

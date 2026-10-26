@@ -47,7 +47,7 @@ Name the product **Native Shell** in formal places (page titles, the home page,
 a page's first mention, the README's opening, meta descriptions) and **NSH**
 everywhere else in prose, as GPUI is written: "NSH apps", "NSH's components",
 "NSH 应用". Lowercase `nsh` is for code only, in backticks: the CLI (`nsh run`),
-`nsh.json`, the modules (`nsh`, `nsh/animated`), crates and packages. A short,
+`nsh.json`, the modules (`nsh`, `nsh/base`), crates and packages. A short,
 uppercase name is one the community can build on (`nsh-*` crates, NSH plugins).
 
 Write in positive terms: say what nsh, a platform or a feature is and does,
@@ -145,7 +145,8 @@ base64url).
 
 `demos/<name>.tsx` are small runnable nsh apps (try one with
 `nsh run website/demos/<name>.tsx`). A page with `demo: <name>` shows the demo
-after its first paragraph: a frame with the app running in an iframe of
+after its first paragraph, and a section with a demo of its own shows it where
+its `<!-- demo: <name> -->` line is (on the English and the Chinese page alike): a frame with the app running in an iframe of
 `play/index.html?idiom=…#<name>`, beside its source (wide pages, Mobile) or
 behind a Preview / Source switch (narrow ones), and two icon buttons: edit in
 the playground, open in a new tab. The home page runs `demos/counter.tsx` the

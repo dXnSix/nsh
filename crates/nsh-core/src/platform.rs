@@ -30,7 +30,7 @@ pub enum ColorScheme {
 
 /// The appearance an app asks for (`nsh.json` `"appearance"`, TS
 /// `setColorScheme`): one of its own, or the system's.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, crate::ui::PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, crate::element::PropEnum)]
 pub enum Appearance {
     /// The system appearance (default).
     #[default]
@@ -766,7 +766,7 @@ const SATURDAY_REGIONS: &[&str] = &[
 const FRIDAY_REGIONS: &[&str] = &["MV"];
 
 /// How hours are counted, as `Intl`'s `hourCycle` names it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, crate::ui::PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, crate::element::PropEnum)]
 pub enum HourCycle {
     /// 12-hour time from 0 to 11 (`h11`: `0:30 PM`).
     H11,
@@ -885,7 +885,7 @@ impl Weekday {
 }
 
 /// The units of lengths, weights and volumes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, crate::ui::PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, crate::element::PropEnum)]
 pub enum MeasurementSystem {
     /// Metres, kilograms and litres (`metric`).
     #[default]
@@ -919,7 +919,7 @@ impl MeasurementSystem {
 }
 
 /// The unit of temperatures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, crate::ui::PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, crate::element::PropEnum)]
 pub enum TemperatureUnit {
     /// Degrees Celsius (`celsius`).
     #[default]
@@ -946,7 +946,7 @@ impl TemperatureUnit {
 }
 
 /// An HTTP request for the platform's network stack (made by JS `fetch`
-/// and by Rust components' [`crate::ui::ambient::fetch`]).
+/// and by Rust components' [`crate::element::ambient::fetch`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpRequest {
     /// Upper-case method (`GET`, `POST`, ...).

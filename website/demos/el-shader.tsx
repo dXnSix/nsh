@@ -1,5 +1,5 @@
 import { createShader, mount, Shader, ShaderEffect, ShaderTransition, shaderSupport, signal, Text, View } from "nsh";
-import { createAnimatedValue, Easing } from "nsh/animated";
+import { createAnimatedValue, Easing } from "nsh";
 import { desktop, Log, Panel, Segmented, size, Split, ui } from "./palette";
 
 // A glow that breathes with `nsh.time`, its size and color animated

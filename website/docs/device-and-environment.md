@@ -10,25 +10,25 @@ demo: guide-device
 
 The environment an app runs in changes while it runs: the window resizes (rotation, split view, a Mac window), the user switches to dark mode or a larger text size, the keyboard comes and goes. NSH exposes each of these as a **reactive accessor**: call it like a signal, and whatever read it (a style, a text, a computed value) updates when it changes. There are no listeners to add or remove.
 
-In Rust the accessors are functions of `nsh_core::ui::prelude`; in TSX they come from the modules listed.
+In Rust the accessors are functions of `nsh_core::prelude`; in TSX they come from the modules listed.
 
 | Rust | TSX | Value |
 |---|---|---|
-| `window()` | `windowSize()` (`nsh/device`) | The surface's width and height, in points. |
-| `dark()` | `colorScheme()` (`nsh/device`) | Dark or light: the system's, or the app's own (`set_color_scheme`, `setColorScheme`). |
-| `font_scale()` | `fontScale()` (`nsh/device`) | The user's preferred text size relative to the default (1 is the default). |
-| `safe_area()` | `safeArea()` (`nsh/base`) | Insets of the surface not covered by system UI: top, right, bottom, left. |
-| `cx.insets()` | `safeAreaInsets()` (`nsh/base`) | The insets where the calling component renders (a page, a dialog). |
-| `keyboard_height()`, `keyboard_duration()` | `keyboardFrame()` (`nsh/base`) | The software keyboard's height and animation duration. |
-| `locale()` | `locale()` (`nsh/device`) | The user's locale as a BCP 47 tag (`"en-US"`, `"zh-Hans-CN"`): what `Intl` formats for by default. |
-| `languages()` | `languages()` (`nsh/device`) | The user's preferred languages, most preferred first (`["de-DE", "en-US"]`) ([Preferred languages](#preferred-languages)). |
-| `hour_cycle()`, `first_day_of_week()`, `measurement_system()`, `temperature_unit()` | `hourCycle()`, `firstDayOfWeek()`, `measurementSystem()`, `temperatureUnit()` (`nsh/device`) | 12- or 24-hour time, the day weeks start on, the units of measurements and of temperatures ([Regional preferences](#regional-preferences)). |
-| `time_zone()` | `timeZone()` (`nsh/device`) | The device's time zone as the system names it (`"Europe/Berlin"`) ([Time zone](#time-zone)). |
-| `app_state()` | `appState()` (`nsh/device`) | Whether the app is in use: `active`, `inactive` (visible without the focus) or `background` ([In the background](#in-the-background)). |
-| `reduce_motion()`, `screen_reader()` | `reduceMotion()`, `screenReaderEnabled()` (`nsh/accessibility`) | See [Accessibility](./accessibility.md). |
+| `window()` | `windowSize()` (`nsh`) | The surface's width and height, in points. |
+| `dark()` | `colorScheme()` (`nsh`) | Dark or light: the system's, or the app's own (`set_color_scheme`, `setColorScheme`). |
+| `font_scale()` | `fontScale()` (`nsh`) | The user's preferred text size relative to the default (1 is the default). |
+| `safe_area()` | `safeArea()` (`nsh`) | Insets of the surface not covered by system UI: top, right, bottom, left. |
+| `cx.insets()` | `safeAreaInsets()` (`nsh`) | The insets where the calling component renders (a page, a dialog). |
+| `keyboard_height()`, `keyboard_duration()` | `keyboardFrame()` (`nsh`) | The software keyboard's height and animation duration. |
+| `locale()` | `locale()` (`nsh`) | The user's locale as a BCP 47 tag (`"en-US"`, `"zh-Hans-CN"`): what `Intl` formats for by default. |
+| `languages()` | `languages()` (`nsh`) | The user's preferred languages, most preferred first (`["de-DE", "en-US"]`) ([Preferred languages](#preferred-languages)). |
+| `hour_cycle()`, `first_day_of_week()`, `measurement_system()`, `temperature_unit()` | `hourCycle()`, `firstDayOfWeek()`, `measurementSystem()`, `temperatureUnit()` (`nsh`) | 12- or 24-hour time, the day weeks start on, the units of measurements and of temperatures ([Regional preferences](#regional-preferences)). |
+| `time_zone()` | `timeZone()` (`nsh`) | The device's time zone as the system names it (`"Europe/Berlin"`) ([Time zone](#time-zone)). |
+| `app_state()` | `appState()` (`nsh`) | Whether the app is in use: `active`, `inactive` (visible without the focus) or `background` ([In the background](#in-the-background)). |
+| `reduce_motion()`, `screen_reader()` | `reduceMotion()`, `screenReaderEnabled()` (`nsh`) | See [Accessibility](./accessibility.md). |
 
 ```rust tabs
-use nsh_core::ui::prelude::*;
+use nsh_core::prelude::*;
 
 #[component]
 pub fn App() -> impl IntoElement {
@@ -54,9 +54,8 @@ pub fn App() -> impl IntoElement {
 ```
 
 ```tsx tabs
-import { mount, Text, View } from "nsh";
-import { colorScheme, fontScale, windowSize } from "nsh/device";
-import { safeArea } from "nsh/base";
+import { mount, Text, View, safeArea } from "nsh";
+import { colorScheme, fontScale, windowSize } from "nsh";
 
 function App() {
   return (
@@ -76,7 +75,7 @@ mount(App);
 `window()` (TSX: `windowSize()`) is the size of the surface NSH renders into: the screen on a phone, the window on an iPad in split view or on a Mac, the host view when NSH is embedded. Use it to change the layout, not only sizes:
 
 ```rust tabs
-use nsh_core::ui::prelude::*;
+use nsh_core::prelude::*;
 
 fn gallery() -> impl IntoElement {
     let columns = || {
@@ -94,7 +93,7 @@ fn gallery() -> impl IntoElement {
 
 ```tsx tabs
 import { Image, View } from "nsh";
-import { windowSize } from "nsh/device";
+import { windowSize } from "nsh";
 
 function Gallery() {
   const columns = () => (windowSize().width >= 700 ? 4 : windowSize().width >= 500 ? 3 : 2);
@@ -134,7 +133,7 @@ view()
 For anything else, read `dark()` (TSX: `colorScheme()`) in a closure or a computed value; in TSX, for more than a few colors, derive a palette once:
 
 ```rust tabs
-use nsh_core::ui::prelude::*;
+use nsh_core::prelude::*;
 
 // `dark()` is reactive: the closure runs again when the appearance changes.
 view()
@@ -145,7 +144,7 @@ view()
 
 ```tsx tabs
 import { computed, Text, View } from "nsh";
-import { colorScheme } from "nsh/device";
+import { colorScheme } from "nsh";
 
 const palette = computed(() =>
   colorScheme() === "dark"
@@ -168,10 +167,10 @@ An app that is always dark (or always light) says so in `nsh.json`, and `dark()`
 { "appearance": "dark" }
 ```
 
-`set_color_scheme(Appearance::Dark)` (TSX: `setColorScheme` from `nsh/device`) changes it at run time, for an in-app appearance setting; `Appearance::System` (`"system"`) follows the system again:
+`set_color_scheme(Appearance::Dark)` (TSX: `setColorScheme` from `nsh`) changes it at run time, for an in-app appearance setting; `Appearance::System` (`"system"`) follows the system again:
 
 ```rust tabs
-use nsh_core::ui::prelude::*;
+use nsh_core::prelude::*;
 
 view()
     .on_press(move || {
@@ -190,7 +189,7 @@ view()
 
 ```tsx tabs
 import { Text, View } from "nsh";
-import { colorScheme, setColorScheme } from "nsh/device";
+import { colorScheme, setColorScheme } from "nsh";
 
 <View onPress={() => setColorScheme(colorScheme() === "dark" ? "light" : "dark")} role="button" class="rounded-lg px-4 py-2 bg-neutral-200 dark:bg-neutral-800">
   <Text class="text-neutral-900 dark:text-neutral-50">{colorScheme() === "dark" ? "Light" : "Dark"}</Text>
@@ -229,7 +228,7 @@ The text size scales text: every text and input that allows font scaling, and th
 `locale()` is the user's locale, as a BCP 47 tag (`locale().as_str()` in Rust). In TSX, `Intl` formats numbers and dates for it by default, so `new Intl.NumberFormat().format(1234.5)` gives `1,234.5` in `en-US` and `1.234,5` in `de-DE`. Read `locale()` to pick the strings of your own translations: the texts that read it update when it changes.
 
 ```rust tabs
-use nsh_core::ui::prelude::*;
+use nsh_core::prelude::*;
 
 fn greeting() -> &'static str {
     match locale().as_str().split('-').next() {
@@ -244,7 +243,7 @@ text(greeting)
 
 ```tsx tabs
 import { Text } from "nsh";
-import { locale } from "nsh/device";
+import { locale } from "nsh";
 
 const greetings: Record<string, string> = { en: "Welcome", de: "Willkommen", zh: "欢迎" };
 
@@ -256,7 +255,7 @@ const greetings: Record<string, string> = { en: "Welcome", de: "Willkommen", zh:
 `languages()` is the user's list of preferred languages, most preferred first, as BCP 47 tags: the system's (Settings' language list on a phone, the UI languages of a desktop, the browser's on the web). Show the app's text in the first one it has a translation for, and fall back along the list: a user who prefers Swiss German, then German, then English gets German text from an app that has German and English. `locale()` is something else, the region format numbers and dates follow, which can be another (English text, German dates). The list is never empty, and what read it updates when the user changes it.
 
 ```rust tabs
-use nsh_core::ui::prelude::*;
+use nsh_core::prelude::*;
 
 const TRANSLATED: [&str; 3] = ["en", "de", "zh"];
 
@@ -269,7 +268,7 @@ fn text_language() -> &'static str {
 ```
 
 ```tsx tabs
-import { languages } from "nsh/device";
+import { languages } from "nsh";
 
 const TRANSLATED = ["en", "de", "zh"];
 
@@ -291,7 +290,7 @@ The systems keep a few settings of how the user reads times, weeks and measureme
 Each is the system's setting where the user made one, else the region's own (as the Unicode CLDR gives them: 12-hour time and weeks from Sunday in the US, 24-hour time and weeks from Monday in Germany). What read them updates when the user changes them.
 
 ```rust tabs
-use nsh_core::{platform::TemperatureUnit, ui::prelude::*};
+use nsh_core::{platform::TemperatureUnit, prelude::*};
 
 /// A temperature in degrees Celsius, in the user's unit.
 fn temperature(celsius: f32) -> String {
@@ -310,7 +309,7 @@ fn week_columns() -> [u8; 7] {
 ```
 
 ```tsx tabs
-import { firstDayOfWeek, hourCycle, temperatureUnit } from "nsh/device";
+import { firstDayOfWeek, hourCycle, temperatureUnit } from "nsh";
 
 const time = (date: Date) =>
   date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", hourCycle: hourCycle() });
@@ -329,14 +328,14 @@ const weekColumns = () => Array.from({ length: 7 }, (_, i) => ((firstDayOfWeek()
 `time_zone()` (TSX: `timeZone()`) is the device's time zone as the system names it: an IANA name such as `Europe/Berlin` or `America/New_York`, `UTC`, or an offset zone where the system has one (`GMT+01:00` on Android). It changes when the user changes the setting or the device moves to another zone, and what read it updates: a clock that names its zone, a list of times in the user's zone, a date saved with the zone it was made in.
 
 ```rust tabs
-use nsh_core::ui::prelude::*;
+use nsh_core::prelude::*;
 
 text(move || format!("Times in {}", time_zone()))
 ```
 
 ```tsx tabs
 import { Text } from "nsh";
-import { timeZone } from "nsh/device";
+import { timeZone } from "nsh";
 
 <Text>{`Times in ${timeZone()}`}</Text>
 ```
@@ -376,15 +375,15 @@ Notches, the home indicator, the status bar, Android's navigation bar and the Ma
 
 - `safe_area()` (TSX: `safeArea()`) gives the surface's insets.
 - A component's `cx.insets()` (TSX: `safeAreaInsets()`) gives the insets **where the component renders**: inside a navigation [page](./navigation.md#safe-areas-under-the-header) they are measured below its header, inside a [dialog](../elements/dialog.md) they are the dialog's. Prefer it in components that may be shown in several places.
-- `safe_area_view()` from `nsh_base` (TSX: `SafeAreaView` from `nsh/base`) is a view padded by those insets (all edges by default, or `.edges(vec![Edge::Top, Edge::Bottom])`, `edges={["top", "bottom"]}`), on top of its own padding.
+- CSS's `env(safe-area-inset-top)`, `-right`, `-bottom` and `-left` pad or space any view by the insets where it renders, in `padding*` and `margin*` (`calc(env(safe-area-inset-bottom) + 8px)` adds a length; Tailwind `pt-[env(safe-area-inset-top)]`; Rust `.p_safe_area()`, `.pt_safe_area()`, `.pb_safe_area_plus(px(8.0))`, ...). The padding updates natively when the insets change ([Safe area](../elements/safe-area.md)).
 
 ```rust tabs
-use nsh_base::{Edge, safe_area_view};
-use nsh_core::ui::prelude::*;
+use nsh_core::prelude::*;
 
 fn screen() -> impl IntoElement {
-    safe_area_view()
-        .edges(vec![Edge::Top, Edge::Left, Edge::Right])
+    view()
+        .pt_safe_area()
+        .px_safe_area()
         .flex_1()
         .bg(white())
         .child(content())
@@ -403,15 +402,14 @@ fn BottomBar(cx: Scope<NoEvent>) -> impl IntoElement {
 ```
 
 ```tsx tabs
-import { View } from "nsh";
-import { SafeAreaView, safeAreaInsets } from "nsh/base";
+import { View, safeAreaInsets } from "nsh";
 
 function Screen() {
   return (
-    <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1, backgroundColor: "#ffffff" }}>
+    <View class="flex-1 bg-white pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)]">
       <Content />
       <BottomBar />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -425,7 +423,7 @@ On Android, a view embedded below a toolbar gets only the parts of the system ba
 
 ## The platform
 
-`os()`, `os_version()`, `idiom()` and `is_desktop()` in Rust, and the `platform` constant from `nsh/device` in TSX, describe where the app runs. They stay the same while the app runs.
+`os()`, `os_version()`, `idiom()` and `is_desktop()` in Rust, and the `platform` constant from `nsh` in TSX, describe where the app runs. They stay the same while the app runs.
 
 | Rust | TSX | Description |
 |---|---|---|
@@ -445,13 +443,13 @@ TSX's `platform` in full:
 | `platform.select(spec)` | The value for this platform; see [Platform-specific code](./platform-specific.md#platformselect). |
 
 ```rust tabs
-use nsh_core::ui::{Os, prelude::*};
+use nsh_core::{element::Os, prelude::*};
 
 let haptics_supported = os() == Os::Ios || (os() == Os::Android && os_version().0 >= 30);
 ```
 
 ```tsx tabs
-import { platform } from "nsh/device";
+import { platform } from "nsh";
 
 const hapticsSupported = platform.os === "ios" || (platform.os === "android" && Number(platform.version) >= 30);
 ```
@@ -479,7 +477,7 @@ the safe area and the keyboard height come from the browser and follow it live.
 
 ## Pixel density
 
-`pixel_ratio()` and `round_to_nearest_pixel(points)` in Rust, and `pixelRatio()` from `nsh/device` in TSX, convert between points and device pixels.
+`pixel_ratio()` and `round_to_nearest_pixel(points)` in Rust, and `pixelRatio()` from `nsh` in TSX, convert between points and device pixels.
 
 | Rust | TSX | Description |
 |---|---|---|
@@ -496,7 +494,7 @@ view()
 
 ```tsx tabs
 import { View } from "nsh";
-import { pixelRatio } from "nsh/device";
+import { pixelRatio } from "nsh";
 
 <View style={{ height: 1 / pixelRatio(), backgroundColor: "#d0d7de" }} />
 ```
@@ -515,8 +513,8 @@ Horizontal scroll views and lists start at the right end in right-to-left layout
 
 ## Related
 
-- [`nsh/device`](../modules/nsh-device.md): the reference.
+- [`nsh`'s device API](../modules/nsh.md#device): the reference.
 - [Platform-specific code](./platform-specific.md): `platform.select`, platform props and modules.
 - [Accessibility](./accessibility.md): screen readers and reduced motion.
-- [`SafeAreaView`](../modules/nsh-base.md#safeareaview) and [the status bar](../modules/nsh-base.md#status-bar).
+- [Safe area](../elements/safe-area.md), [Keyboard](../elements/keyboard.md) and [the status bar](../modules/nsh-base.md#status-bar).
 - [Tailwind](./tailwind.md): `dark:`, breakpoint and orientation variants.

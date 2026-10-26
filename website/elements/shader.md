@@ -20,7 +20,7 @@ use std::sync::LazyLock;
 
 use nsh_core::{
     shader::{ShaderLimits, ShaderSource, Uniforms},
-    ui::prelude::*,
+    prelude::*,
 };
 
 /// Made once: each `ShaderSource::new` checks the source again.
@@ -140,7 +140,7 @@ shader(GLOW.clone()).uniforms(Uniforms::new().set("tint", rgb(0x38bdf8)).set("ra
 ```
 
 ```tsx tabs
-import { createAnimatedValue } from "nsh/animated";
+import { createAnimatedValue } from "nsh";
 
 const radius = createAnimatedValue(24);
 radius.spring(96);
@@ -178,7 +178,7 @@ shader_effect(Some(WAVE.clone()))
 
 ```tsx tabs
 import { ShaderEffect } from "nsh";
-import { createAnimatedValue, Easing } from "nsh/animated";
+import { createAnimatedValue, Easing } from "nsh";
 import wave from "./wave.wgsl";
 
 const progress = createAnimatedValue(0);
