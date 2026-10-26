@@ -1,6 +1,6 @@
 # text: Let apps register fonts while they run
 
-Branch: `feat/register-font` on `github.com/dXnSix/nsh`, stacked on `feat/woff` (`text: Read WOFF and WOFF2 fonts`),
+Branch: `feat/register-font` on `github.com/dXnSix/nsh`, stacked on `feat/woff` (`text: Read WOFF and WOFF2 fonts`, #80),
 which it uses. One commit, `c26f6133`. Opened as a pull request into the fork's `main`; once the WOFF pull request
 merges, it is its own commit only. Not opened upstream: the owner decides and posts there.
 

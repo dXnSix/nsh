@@ -41,6 +41,6 @@ crate's `assets!()` shipped it as one. Web fonts are mostly WOFF2, often half th
   family, glyph count and glyphs; TrueType comes back as it is; a broken WOFF2 is refused.
 - `plugin::tests::a_font_import_names_its_family_from_truetype_woff_and_woff2` (`nsh-bundler`), and
   `assets::tests::a_woff_or_woff2_font_names_the_family_it_holds` (`nsh-macros`).
-- With the run-time registration on top: `cargo test` of `nsh-core`, `nsh-engine`, `nsh-js`, `nsh-bundler`,
+- With the run-time registration (#81) on top: `cargo test` of `nsh-core`, `nsh-engine`, `nsh-js`, `nsh-bundler`,
   `nsh-macros`, `nsh-testing` and GPUI's; clippy `-D warnings` for them, the macOS crates, iOS (Mac Catalyst),
   Android and the web.
