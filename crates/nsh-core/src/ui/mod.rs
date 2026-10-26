@@ -165,7 +165,7 @@ pub use self::{
     renderer::{__decoding_props_of, RenderValue, Rendered, Renderer},
     resource::{Resource, ResourceInfo, ResourceState, resource, resource_with_value},
     responder::{ClaimRequest, PanGesture, ResponderEvent, TouchClaim},
-    rows::Rows,
+    rows::{RowAccessor, RowRef, Rows},
     scrollable::Scrollable,
     services::{Fetch, HttpResponse, Prefetch, ToastDuration},
     style::{
@@ -177,7 +177,7 @@ pub use self::{
         Quotas, System, io_code,
     },
     task::{Answer, ClipboardImage, DialogAnswer, ImageSize, Task},
-    tokens::{FONT_MONO, FONT_SANS, Token, TokenSource, Tokens},
+    tokens::{FONT_MONO, FONT_SANS, ThemeTokens, Token, TokenSource, Tokens},
     value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},
     virtual_list::{ListLayout, ViewableItems, VirtualList, virtual_list},
 };
@@ -454,7 +454,7 @@ pub mod prelude {
             prefetch_image, reduce_motion, request_animation_frame, round_to_nearest_pixel,
             safe_area, screen_reader, set_clipboard, set_clipboard_image, set_color_scheme,
             set_interval, set_timeout, spawn, text_metrics, time_zone, timer, timer_until, toast,
-            tokens, window,
+            tokens, try_global, window,
         },
         batch, catch_error, cleanup, component, computed, dynamic, each, effect, engine_context,
         provide_context, resource, resource_with_value, signal, signal_with, stored, untracked,

@@ -111,6 +111,9 @@ pub struct Screen {
     commands: Vec<(NodeId, Command)>,
     /// The input that has the focus.
     focused: Option<NodeId>,
+    /// The view that takes presses Tab gave the keyboard focus to (macOS,
+    /// the web).
+    key_focus: Option<NodeId>,
     /// Scroll views a command moved, whose offset the engine is told
     /// ([`Screen::take_scrolled`]), as a platform reports it.
     scrolled: Vec<NodeId>,
@@ -185,6 +188,8 @@ struct View {
     role: AccessibilityRole,
     /// It takes no presses (`disabled`, its accessibility state).
     disabled: bool,
+    /// `focusable`: `Some(false)` keeps a pressable out of Tab's stops.
+    focusable: Option<bool>,
     /// It is selected (`selected`, its accessibility state; a canvas node's
     /// `selected`).
     selected: bool,
@@ -298,6 +303,8 @@ pub(crate) struct Scroll {
     content: Option<Size<Points>>,
     /// The user cannot scroll it (`scrollable={false}`).
     pub(crate) locked: bool,
+    /// How it scrolls (where a pull refreshes).
+    pub(crate) behavior: nsh_core::ScrollBehavior,
 }
 
 impl Screen {
@@ -367,6 +374,7 @@ impl Screen {
             MountItem::ScrollBehavior { id, behavior } => {
                 if let Some(scroll) = self.scroll_mut(*id) {
                     scroll.locked = !behavior.enabled;
+                    scroll.behavior = (**behavior).clone();
                 }
             }
             MountItem::Events { id, events } => self.nodes.entry(*id).or_default().events = *events,
@@ -376,6 +384,7 @@ impl Screen {
                 view.label = props.accessibility.label.clone();
                 view.role = props.accessibility.role;
                 view.disabled = props.accessibility.state.disabled;
+                view.focusable = props.focusable;
                 view.selected = props.accessibility.state.selected;
                 view.long_press_delay = props.long_press_delay;
                 view.selection_area = props.selection_area;
@@ -1001,6 +1010,26 @@ impl Screen {
             .partition(|id| *id == *top || self.is_inside(*id, *top));
         first.extend(rest);
         first
+    }
+
+    /// The view `selector` matches inside `target` (a text in the button
+    /// a press goes to); `None` when the match is `target` itself.
+    pub(crate) fn match_inside(&self, selector: &Selector, target: NodeId) -> Option<NodeId> {
+        self.resolve(selector)
+            .into_iter()
+            .find(|id| self.is_inside(*id, target))
+    }
+
+    /// Where in `target` a press of what `selector` names lands: the
+    /// center of the view it matches inside `target`, as a finger taps the
+    /// text it reads. `None` when the match is `target` itself.
+    pub(crate) fn press_point(&self, selector: &Selector, target: NodeId) -> Option<Point<Points>> {
+        let inner = self.bounds_in_root(self.match_inside(selector, target)?)?;
+        let outer = self.bounds_in_root(target)?;
+        Some(nsh_core::geometry::point(
+            inner.origin.x - outer.origin.x + inner.size.width / 2.0,
+            inner.origin.y - outer.origin.y + inner.size.height / 2.0,
+        ))
     }
 
     fn is_inside(&self, mut id: NodeId, ancestor: NodeId) -> bool {
@@ -1658,6 +1687,36 @@ impl Screen {
 
     pub(crate) fn set_focused(&mut self, id: Option<NodeId>) {
         self.focused = id;
+    }
+
+    /// The pressable with the keyboard focus, while it is mounted.
+    pub(crate) fn key_focus(&self) -> Option<NodeId> {
+        self.key_focus.filter(|id| self.nodes.contains_key(id))
+    }
+
+    pub(crate) fn set_key_focus(&mut self, id: Option<NodeId>) {
+        self.key_focus = id;
+    }
+
+    /// Tab's stops, in tree order, as macOS and the web have them: the
+    /// inputs that edit and the views that take presses, shown, enabled
+    /// and not `focusable={false}`.
+    pub(crate) fn tab_stops(&self) -> Vec<NodeId> {
+        self.shown()
+            .into_iter()
+            .filter(|&id| {
+                let Some(v) = self.nodes.get(&id) else {
+                    return false;
+                };
+                if let Some(input) = &v.input {
+                    return input.config.editable && !self.disabled_from(id, None);
+                }
+                v.span.is_none()
+                    && v.events.contains(EventKind::Press)
+                    && v.focusable != Some(false)
+                    && !self.disabled_from(id, None)
+            })
+            .collect()
     }
 
     pub(crate) fn scroll(&self, id: NodeId) -> Option<&Scroll> {
