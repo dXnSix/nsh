@@ -1,7 +1,7 @@
 # core: Tell apps the user's regional preferences
 
 Branch: `feat/regional` on `github.com/dXnSix/nsh`, stacked on `feat/languages` (`core: Tell apps the user's
-preferred languages`, #63), which touches the same lines. One commit, `55576a21`: `core: Tell apps the user's regional
+preferred languages`, #63), which touches the same lines. One commit, `34ca38b4`: `core: Tell apps the user's regional
 preferences`. Opened as a pull request into the fork's `main`; once #63 merges, it is its own commit only. Not opened
 upstream: the owner decides and posts there.
 
@@ -25,6 +25,8 @@ American whose weeks start on Monday.
     keyword's) with its Unicode extension keywords `hc`, `fw`, `ms` and `mu` over them, in BCP 47's form
     (`en-US-u-fw-mon-mu-celsius`, how Android 14 keeps its regional preferences) or ICU's (`en_US@hours=h23;rg=gbzzzz`).
     The native platforms' changes use it.
+  - `HourCycle::of_pattern`: the cycle of a date pattern's hour field (`h`, `H`, `K`, `k` outside quoted text), as
+    Apple's date formats and Windows' time formats write them.
   - `Locale::language()` and `Locale::region()`.
   - `Environment::regional` (default `EN_US`: 12-hour, Sunday, US units, Fahrenheit) and the reactive
     `ui::ambient::hour_cycle()`, `first_day_of_week()`, `measurement_system()` and `temperature_unit()` (in the
@@ -53,7 +55,7 @@ option. Making it `Intl`'s default, as the time zone is, can follow.
 ## Public API
 
 - Rust: `nsh_core::platform::{RegionalPreferences, HourCycle, Weekday, MeasurementSystem, TemperatureUnit}`
-  (`RegionalPreferences::EN_US`, `of`, `parse`; `HourCycle::name`, `parse`, `twelve_hour`; `Weekday::number`,
+  (`RegionalPreferences::EN_US`, `of`, `parse`; `HourCycle::name`, `parse`, `of_pattern`, `twelve_hour`; `Weekday::number`,
   `from_number`; `MeasurementSystem::name`, `parse`; `TemperatureUnit::name`, `parse`), `Locale::language`,
   `Locale::region`, `Environment::regional`, `ui::Environment::regional`, `ui::ambient::{hour_cycle,
   first_day_of_week, measurement_system, temperature_unit}` (prelude), their `nsh_engine` re-exports,
@@ -69,6 +71,7 @@ A struct literal that lists every field of `Environment` (as iOS's does) needs t
 - `platform::tests::regional_preferences_are_the_regions_unless_the_locale_sets_others` (`nsh-core`): CLDR's
   defaults (the US, Germany, a language exception, Saturday and Friday weeks, the UK's units, Liberia's Celsius), and
   identifiers with keywords in both forms, `rg`, and values it does not know.
+  `HourCycle::of_pattern` reads `h:mm a`, `HH 'Uhr'` and a quoted `h`.
 - `platform::tests::locales_parse_platform_identifiers`: `language()` and `region()`.
 - `rust_platform::components_follow_the_regional_preferences` (`nsh-engine`): a component shows a time, a temperature
   and the week as the preferences say and follows them; an effect that reads the hour cycle alone does not run again
