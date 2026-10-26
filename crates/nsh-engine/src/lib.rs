@@ -84,6 +84,17 @@ const ENGINE_STACK_SIZE: usize = 8 * 1024 * 1024;
 /// parent/child links reference each other) wait for the collector.
 const IDLE_GC_INTERVAL: Duration = Duration::from_secs(1);
 
+/// How long the engine has had nothing to do (no message, no timer due)
+/// before an idle collection: a collection walks every object of the VM,
+/// tens of milliseconds for an app holding a lot of data, so it waits for
+/// a pause rather than land between the turns of a paste held down or of
+/// work done in slices on timers. An engine never quiet that long (a
+/// timer every few frames) still collects every [`IDLE_GC_LONGEST`].
+const IDLE_GC_QUIET: Duration = Duration::from_millis(300);
+
+/// The longest time between idle collections, quiet or not.
+const IDLE_GC_LONGEST: Duration = Duration::from_secs(5);
+
 /// The shortest time between two deliveries of mouse motion: a frame at
 /// 120 Hz. Mice report moves far more often (up to 1000 Hz), and a handler
 /// that redraws a crosshair needs no more than one per frame.
@@ -1356,6 +1367,9 @@ struct Driver<M: TextEngine + 'static> {
     /// once; its views stay as they were and no JS runs any more.
     stopped: bool,
     last_gc: Instant,
+    /// When a message or a due timer last gave the engine work
+    /// ([`IDLE_GC_QUIET`]).
+    last_active: Instant,
     /// The queue of the JS calls Rust posts: its notify wakes the engine,
     /// as the core's task notify does ([`LocalEngine::set_wake`]).
     posts: nsh_core::ui::Posts,
@@ -1477,6 +1491,16 @@ impl<M: TextEngine + 'static> Driver<M> {
         posts.set_notify(Arc::new(move || {
             let _ = wake.send(Message::Wake);
         }));
+        // The embedding app's tokens sent before the start
+        // (`Engine::start_with`) are there as the bundle evaluates, so its
+        // first render reads them; the rest comes after it, in order.
+        let mut early = Vec::new();
+        while let Ok(message) = rx.try_recv() {
+            match message {
+                Message::Tokens(tokens) => core.set_host_tokens(tokens.map(|t| *t)),
+                message => early.push(message),
+            }
+        }
         let js_tokens = core.tokens().clone();
         let state = State {
             core,
@@ -1524,6 +1548,7 @@ impl<M: TextEngine + 'static> Driver<M> {
             assets: config.assets.clone(),
             stopped: false,
             last_gc: Instant::now(),
+            last_active: Instant::now(),
             posts: posts.clone(),
             clock: config.clock.clone(),
             context: config.context.clone(),
@@ -1558,6 +1583,7 @@ impl<M: TextEngine + 'static> Driver<M> {
                     posts,
                     &environment,
                     driver.state.js_tokens.clone(),
+                    driver.state.core.theme_tokens(),
                     text_engine,
                     stop,
                     sink,
@@ -1582,7 +1608,10 @@ impl<M: TextEngine + 'static> Driver<M> {
         // What was sent before the start (`Engine::start_with`) is in the
         // first frame; a move of the clock comes after it.
         let mut moves = Vec::new();
-        while let Ok(message) = rx.try_recv() {
+        let pending = early
+            .into_iter()
+            .chain(std::iter::from_fn(|| rx.try_recv().ok()));
+        for message in pending {
             if let Message::Advance(..) = message {
                 moves.push(message);
             } else if !handle(script, state, message) {
@@ -1621,8 +1650,8 @@ impl<M: TextEngine + 'static> Driver<M> {
     /// (on the system's clock; a manual one moves only when told), or the
     /// idle collection (the system's time, whatever the clock).
     fn deadline(&self) -> Option<Instant> {
-        let gc_deadline = (self.script.is_some() && self.state.committed_since_gc)
-            .then(|| self.last_gc + IDLE_GC_INTERVAL);
+        let gc_deadline =
+            (self.script.is_some() && self.state.committed_since_gc).then(|| self.next_gc());
         let due = if self.clock.is_manual() {
             None
         } else {
@@ -1647,6 +1676,7 @@ impl<M: TextEngine + 'static> Driver<M> {
 
     /// Handles one message; false on shutdown.
     fn handle(&mut self, message: Message, rx: &Receiver<Message>) -> bool {
+        self.last_active = Instant::now();
         match message {
             Message::Advance(by, done) => {
                 let running = self.advance(by, rx, self.clock.moves_with_frames());
@@ -1748,6 +1778,12 @@ impl<M: TextEngine + 'static> Driver<M> {
             ..
         } = self;
         let script = script.as_ref();
+        if script
+            .and_then(Script::next_timer)
+            .is_some_and(|due| due <= nsh_core::time::now())
+        {
+            self.last_active = Instant::now();
+        }
         let turn_start = state.trace.then(Instant::now);
         state.dispatch_touch_move(script);
         if state
@@ -1790,14 +1826,26 @@ impl<M: TextEngine + 'static> Driver<M> {
         self.check_stopped();
     }
 
+    /// When the next idle collection may run: a second after the last, once
+    /// the engine has been quiet for [`IDLE_GC_QUIET`] (or at the latest
+    /// [`IDLE_GC_LONGEST`] after the last).
+    fn next_gc(&self) -> Instant {
+        let quiet = (self.last_active + IDLE_GC_QUIET).min(self.last_gc + IDLE_GC_LONGEST);
+        (self.last_gc + IDLE_GC_INTERVAL).max(quiet)
+    }
+
     /// Collects cycles when the engine has been idle long enough, so
     /// released nodes free their views.
     fn collect_if_idle(&mut self) {
         if let Some(script) = &self.script
             && self.state.committed_since_gc
-            && self.last_gc.elapsed() >= IDLE_GC_INTERVAL
+            && Instant::now() >= self.next_gc()
         {
+            let start = self.state.trace.then(Instant::now);
             script.collect_garbage();
+            if let Some(start) = start {
+                log::info!(target: "nsh::perf", "gc: {}µs", start.elapsed().as_micros());
+            }
             self.last_gc = Instant::now();
             self.state.committed_since_gc = false;
             if let Some(batch) = self.state.commit(Some(script)) {
@@ -2690,7 +2738,12 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             state.perf = monitor;
             state.perf_commit = perf::CommitTiming::default();
         }
-        Message::Tokens(tokens) => state.core.set_host_tokens(tokens.map(|t| *t)),
+        Message::Tokens(tokens) => {
+            state.core.set_host_tokens(tokens.map(|t| *t));
+            if let Some(script) = script {
+                script.set_theme_tokens(state.core.theme_tokens());
+            }
+        }
         // A Rust app has no `nsh/host`: what the host sends it goes.
         Message::HostEvent(name, data) => {
             if let Some(script) = script {
