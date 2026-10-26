@@ -926,7 +926,7 @@ const languages: Accessor<readonly string[]>;
 const hourCycle: Accessor<"h11" | "h12" | "h23" | "h24">;
 ```
 
-用户使用 12 小时制还是 24 小时制，用 `Intl` 对小时周期的命名：`"h12"`（`12:30 PM`）、`"h23"`（`00:30`），以及较少见的 `"h11"`（`0:30 PM`）和 `"h24"`（`24:30`）。是系统的设置，否则是所在地区的。响应式。Rust：`hour_cycle() -> HourCycle`（`twelve_hour()` 表示有上午和下午）。`Intl` 按区域设置自己的小时周期书写时间：把 `hourCycle()` 作为它的 `hourCycle` 选项传入，就能按用户的习惯书写（[设备与环境](../docs/device-and-environment.md#地区偏好)）。除非 `open` 设置了 `hourCycle`，headless 测试中它是区域设置所在地区的。
+用户使用 12 小时制还是 24 小时制，用 `Intl` 对小时周期的命名：`"h12"`（`12:30 PM`）、`"h23"`（`00:30`），以及较少见的 `"h11"`（`0:30 PM`）和 `"h24"`（`24:30`）。是系统的设置，否则是所在地区的。响应式。Rust：`hour_cycle() -> HourCycle`（`twelve_hour()` 表示有上午和下午）。`Intl` 默认按它书写设备区域设置的时间（`new Date().toLocaleTimeString()`）；其他区域设置的时间保持该区域设置自己的周期（[设备与环境](../docs/device-and-environment.md#地区偏好)）。除非 `open` 设置了 `hourCycle`，headless 测试中它是区域设置所在地区的。
 
 ### firstDayOfWeek
 

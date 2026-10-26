@@ -311,8 +311,10 @@ fn week_columns() -> [u8; 7] {
 ```tsx tabs
 import { firstDayOfWeek, hourCycle, temperatureUnit } from "nsh";
 
-const time = (date: Date) =>
-  date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", hourCycle: hourCycle() });
+// In the user's hour cycle: `Intl`'s default for the device's locale.
+const time = (date: Date) => date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+const twelveHour = () => hourCycle() === "h11" || hourCycle() === "h12";
 
 const temperature = (celsius: number) =>
   temperatureUnit() === "fahrenheit" ? `${Math.round((celsius * 9) / 5 + 32)} °F` : `${Math.round(celsius)} °C`;
@@ -321,7 +323,7 @@ const temperature = (celsius: number) =>
 const weekColumns = () => Array.from({ length: 7 }, (_, i) => ((firstDayOfWeek() - 1 + i) % 7) + 1);
 ```
 
-`Intl` writes times in the locale's own hour cycle: pass `hourCycle()` as its `hourCycle` option, as above, to write them as the user reads them. On the web, the browser tells no user settings of these: the hour cycle and the first day of the week are the browser's for its language, the units its region's. In tests, `open`'s `hourCycle`, `firstDayOfWeek`, `measurementSystem` and `temperatureUnit` set them (the locale's region's otherwise) and `app.setRegionalPreferences({ hourCycle: "h23" })` changes them ([Testing](./testing-and-trace.md#steps)).
+`Intl` writes the device's locale's times in the user's hour cycle by default, as it writes dates in their time zone: `toLocaleTimeString()` and `Intl.DateTimeFormat()` without a locale (or with the device's) follow `hourCycle()`; another locale's times keep that locale's cycle, and an `hourCycle` or `hour12` option wins. On the web, the browser tells no user settings of these: the hour cycle and the first day of the week are the browser's for its language, the units its region's. In tests, `open`'s `hourCycle`, `firstDayOfWeek`, `measurementSystem` and `temperatureUnit` set them (the locale's region's otherwise) and `app.setRegionalPreferences({ hourCycle: "h23" })` changes them ([Testing](./testing-and-trace.md#steps)).
 
 ## Time zone
 

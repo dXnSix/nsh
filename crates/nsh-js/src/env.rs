@@ -673,7 +673,7 @@ pub(crate) const DEVICE_EXPORTS: &[Item] = &[
         "hourCycle",
         Export::Value(|cx| accessor(cx, Part::HourCycle)),
         Ts::value(
-            "Whether the user has 12- or 24-hour time (reactive), as `Intl` names its\nhour cycles: `\"h12\"` (`12:30 PM`), `\"h23\"` (`00:30`), and the rarer\n`\"h11\"` (`0:30 PM`) and `\"h24\"` (`24:30`). The system's setting, else the\nregion's; pass it as `Intl.DateTimeFormat`'s `hourCycle` to write times as\nthe user reads them. The locale's region's in headless tests unless `open`\nsets `hourCycle`.",
+            "Whether the user has 12- or 24-hour time (reactive), as `Intl` names its\nhour cycles: `\"h12\"` (`12:30 PM`), `\"h23\"` (`00:30`), and the rarer\n`\"h11\"` (`0:30 PM`) and `\"h24\"` (`24:30`). The system's setting, else the\nregion's; `Intl` writes the device's locale's times in it by default,\nanother locale's in that locale's own. The locale's region's in headless tests unless `open`\nsets `hourCycle`.",
             "Accessor<\"h11\" | \"h12\" | \"h23\" | \"h24\">",
         ),
     ),
