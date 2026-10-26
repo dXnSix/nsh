@@ -1,8 +1,9 @@
 # core: Tell apps the user's regional preferences
 
 Branch: `feat/regional` on `github.com/dXnSix/nsh`, stacked on `feat/languages` (`core: Tell apps the user's
-preferred languages`, #63), which touches the same lines. One commit, `34ca38b4`: `core: Tell apps the user's regional
-preferences`. Opened as a pull request into the fork's `main`; once #63 merges, it is its own commit only. Not opened
+preferred languages`, #63), which touches the same lines. Two commits: `34ca38b4` `core: Tell apps the user's regional
+preferences`, and `fd1a4f34` `gpui: Box the dev client's events` (the test setup's new fields made GPUI's dev
+message cross clippy's `large_enum_variant` limit on Windows, where paths are larger). Opened as a pull request into the fork's `main`; once #63 merges, it is its own commit only. Not opened
 upstream: the owner decides and posts there.
 
 ## Summary
