@@ -10,7 +10,7 @@ Every tag is a component in scope (`native-pipeline.md`): the primitives `View`,
 | `<View>` | `NshView` (UIView) | `onPress` / `onLongPress` / `onPressDown` / `onPressUp`, `activeStyle` / `hoverStyle` / `focusStyle` / `disabledStyle`, `pan={{x, y}}` + `onPanStart` / `onPanEnd`, `pinch` / `rotation`; `desktop={{ windowDrag }}` (any element: pressing it drags the window; the platforms decide on the main thread from `ViewProps::window_drag`, the nearest view that sets it decides, inputs and views with press / touch handlers nearer than it stay clickable; `nsh/desktop`) |
 | `<Text>` | `TextView` (CTFrame) | nested `<Text>` is a span, other elements are inline attachments ([text.md](text.md)); `numberOfLines`, `ellipsizeMode`, `allowFontScaling`, `maxFontSizeMultiplier`, `adjustsFontSizeToFit` + `minimumFontScale`, `selectable` (range selection) + the `selectionColor` style key (`selection:text-*`), `onTextLayout` |
 | `<Image src>` | UIView + image CALayer | `src` is a URL or `import img from "./a.png"` (an asset descriptor with its size); `resizeMode`; `placeholder` (a URL or an asset, shown until the image loads), `blurRadius`, `fadeDuration`; `onLoadStart` / `onProgress` (`loaded` / `total` bytes) / `onLoad` (the source's pixel size) / `onError` / `onLoadEnd`; `tintColor`; animated GIF / WebP / APNG; `Image.getSize(src)` / `Image.prefetch(src)` |
-| `<Scroll>` | UIScrollView | `horizontal`, `contentStyle` / `contentClass`, `refreshing` + `onRefresh`, `scrollValue`, `onScrollEnd`, `keyboardDismissMode`, zooming, see [scrolling-and-lists.md](scrolling-and-lists.md) |
+| `<Scroll>` | UIScrollView | `horizontal`, `contentStyle` / `contentClass`, `refreshing` + `onRefresh` (with `refreshIndicator` + `pullValue` for an indicator of the app's own), `scrollValue`, `onScrollEnd`, `keyboardDismissMode`, zooming, see [scrolling-and-lists.md](scrolling-and-lists.md) |
 | `<Canvas draw>` | `CanvasView` (drawRect replay) | see [canvas.md](canvas.md) |
 | `<Shader src>` | `NshView` + a `CAMetalLayer` (`nsh-metal`) | `uniforms`, `progress`; children over the shader; `sample_backdrop`; see [shaders.md](shaders.md) |
 | `<ShaderEffect src>` | `NshView` | `uniforms`, `progress`, `maxSampleOffset`; the children through the shader (`sample_content`); see [shaders.md](shaders.md) |
@@ -22,7 +22,7 @@ Every tag is a component in scope (`native-pipeline.md`): the primitives `View`,
 | `<Overlay>` | a `NshView` in the root view (the surface's, or the dialog's around it) | its children on top of that root view, outside the parent's layout and clipping; `anchor` (a ref, `{ x, y }` or `{ origin, size }`), `placement`, `align`, `offset`, `margin`, `onPosition`, `onPressOutside`, `onCancel` ("Overlays" below) |
 | `<InputAccessoryView>` | a NshView set as `inputAccessoryView` | `nativeID`; inputs name it with `ios={{ inputAccessoryViewID }}`. A layout root as wide as the window and as tall as its content; the core resolves the id (`InputConfig::accessory`). Renders nothing on Android |
 | `<WebView>` | WKWebView (WebKit loaded on first use) | `src` (a URL) or `html` (inline HTML, shown instead of `src`) + `baseUrl`, `injectedJavaScript(BeforeContentLoaded)`, `onMessage` (pages call `window.nsh.postMessage`), `onLoad*`, `onNavigationStateChange`; ref: `reload()`, `goBack()`, `goForward()`, `postMessage(data)`, `injectJavaScript(js)` |
-| `nativeComponent` (`nsh/native`) | a `NshView` box filled by the registered component's view | see [embedding.md](embedding.md) |
+| `nativeComponent` (`nsh/native`) | a `NshView` box filled by the registered component's view; own props may be bound to animated values | see [embedding.md](embedding.md) |
 | `<Video>` | AVPlayerLayer / AVPlayerViewController (AVFoundation loaded on first use) | `src` (a URL), `paused`, `muted`, `volume`, `rate`, `repeat`, `resizeMode`, `controls`, `onLoad` / `onProgress` / `onEnd` / `onBuffer` / `onError`; ref: `seek(seconds)` |
 
 On Android the same elements map to `Box` (ViewGroup), `TextBox`, `ImageBox`, `ScrollBox` (ScrollView), `InputBox` (EditText),
@@ -113,7 +113,12 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   a view that does not listen gets no event. When the set changes, the views left hear `onHoverOut` from the inside
   out, then the views entered `onHoverIn` from the outside in; then each hovered view with `onHoverMove` hears where
   the mouse is (`EventPayload::Hover`, JS `{ position, pagePosition, modifiers }`: the `Point` in the view, its transforms undone,
-  the `Point` in the root view as touches have it, the modifier keys as GPUI's `Modifiers`). The mouse leaving the window (while no button is down on
+  the `Point` in the root view as touches have it, the modifier keys as GPUI's `Modifiers`). A modifier key pressed or
+  released while the mouse rests is a move to where it is with the new modifiers, so a view hears Control or Command
+  come and go under a still mouse (an `Editor`'s definition link): Linux from the root's key events, macOS from a
+  local `flagsChanged` monitor (installed once a view hears hover moves), Windows from the modifiers' `WM_KEYDOWN` /
+  `WM_KEYUP`, GPUI from `on_modifiers_changed`, the web from `keydown` / `keyup` of `Control`, `Alt`, `Shift` and
+  `Meta` (`nsh.js` `modifiersChanged`). The mouse leaving the window (while no button is down on
   macOS) unhovers everything; on macOS and GPUI hover is picked again after every batch (on macOS also after every
   scroll), so a view removed or moved from under a still mouse hears `onHoverOut` and one that arrives there
   `onHoverIn`; on Linux and Windows that waits for the next mouse move. Moves with a button down are touches
@@ -136,7 +141,9 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   Space press the focused one; a click presses without focusing, so a pressable's `FOCUSED` state (`focus:` classes,
   `.focus(..)`) is keyboard focus, and `focus-visible:` is the same variant. `focusable={false}` (`Prop::Focusable`,
   `ViewProps::focusable`; Rust `.focusable(false)`) keeps a pressable out of the stops: a backdrop that closes a
-  popover, rows a list moves between with the arrow keys. Inputs are always stops; `focusable` changes only views
+  popover, rows a list moves between with the arrow keys. A pressable hears `onFocus` / `onBlur` (`EventKind::Focus` /
+  `Blur`, as inputs do) when the keyboard focus reaches and leaves it: AppKit's first responder, the browser's
+  `:focus-visible`; the headless driver's Tab moves it the same way there. Inputs are always stops; `focusable` changes only views
   that take presses (unlike React Native's, `true` makes nothing focusable that is not). Windows, Linux and GPUI move the focus between fields and
   native components only so far.
 - **`onPanEnd` / `onPanStart`** carry `valueX` / `valueY`: the bound pan values at that moment (a drag may grab a value mid

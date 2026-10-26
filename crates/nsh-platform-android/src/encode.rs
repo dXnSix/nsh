@@ -66,9 +66,10 @@ const COMPONENT_PROPS: i32 = 30;
 const OVERFLOW: i32 = 31;
 const ACCESSIBILITY_LABEL: i32 = 32;
 const APPEARANCE: i32 = 33;
-const SHADER_PROGRAM: i32 = 34;
-const SHADER: i32 = 35;
-const SHADER_TRANSITION: i32 = 36;
+const COMPONENT_PROP_SLOTS: i32 = 34;
+const SHADER_PROGRAM: i32 = 35;
+const SHADER: i32 = 36;
+const SHADER_TRANSITION: i32 = 37;
 
 /// An entry of the object table.
 pub(crate) enum Obj {
@@ -275,6 +276,7 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                 horizontal,
                 scrollbar_visible,
                 scroll_value,
+                pull_value,
                 keyboard_dismiss,
                 mirrored,
             } => {
@@ -293,6 +295,7 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                     horizontal,
                     scrollbar_visible,
                     scroll_value,
+                    pull_value,
                     keyboard_dismiss,
                     mirrored,
                 });
@@ -395,6 +398,8 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                 e.bool(b.bounces_zoom);
                 e.bool(b.pinch);
                 e.bool(b.center_content);
+                e.bool(b.refresh_indicator.is_some());
+                e.float(b.refresh_indicator.map_or(0.0, |h| h.0));
             }
             MountItem::ScrollBy { id, dx, dy } => {
                 e.int(SCROLL_BY);
@@ -502,6 +507,14 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                 e.int(COMPONENT);
                 e.int(id as i32);
                 e.string(name.to_string());
+            }
+            MountItem::ComponentPropSlots { id, names } => {
+                e.int(COMPONENT_PROP_SLOTS);
+                e.int(id as i32);
+                e.int(names.len() as i32);
+                for name in names {
+                    e.string(name.to_string());
+                }
             }
             MountItem::ComponentProps { id, props } => {
                 e.int(COMPONENT_PROPS);
@@ -1153,6 +1166,11 @@ fn role_index(role: AccessibilityRole) -> i32 {
         Toolbar => 26,
         List => 27,
         Grid => 28,
+        Table => 29,
+        Row => 30,
+        Cell => 31,
+        ColumnHeader => 32,
+        RowGroup => 33,
     }
 }
 
