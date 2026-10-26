@@ -1,7 +1,7 @@
 # android: Fall back along fontFamily lists
 
 Branch: `feat/android-font-fallbacks` on `github.com/dXnSix/nsh`, stacked on `feat/font-fallbacks` (`text: Name the families
-of fontFamily lists`, #(core)). One commit, `61d9331a`. Opened as a pull request into the fork's `main`; once the stack
+of fontFamily lists`, #82). One commit, `61d9331a`. Opened as a pull request into the fork's `main`; once the stack
 below it merges, it is its own commit only. Not opened upstream: the owner decides and posts there.
 
 ## Summary
@@ -14,7 +14,7 @@ Android read a `fontFamily` list as one family name, which no typeface has: text
 
 ## Public API
 
-None: `fontFamily` lists (#(core)) work on Android.
+None: `fontFamily` lists (#82) work on Android.
 
 ## Tests
 

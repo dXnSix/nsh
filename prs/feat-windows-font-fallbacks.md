@@ -1,7 +1,7 @@
 # windows: Fall back along fontFamily lists
 
 Branch: `feat/windows-font-fallbacks` on `github.com/dXnSix/nsh`, stacked on `feat/font-fallbacks` (`text: Name the families
-of fontFamily lists`, #(core)). One commit, `3e2a1dd4`. Opened as a pull request into the fork's `main`; once the stack
+of fontFamily lists`, #82). One commit, `3e2a1dd4`. Opened as a pull request into the fork's `main`; once the stack
 below it merges, it is its own commit only. Not opened upstream: the owner decides and posts there.
 
 ## Summary
@@ -15,7 +15,7 @@ DirectWrite set text in the first family of a `fontFamily` list Windows has, and
 
 ## Public API
 
-None: `fontFamily` lists (#(core)) work on Windows.
+None: `fontFamily` lists (#82) work on Windows.
 
 ## Tests
 

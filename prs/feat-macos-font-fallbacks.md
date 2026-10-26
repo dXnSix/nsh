@@ -1,7 +1,7 @@
 # macos: Fall back along fontFamily lists
 
 Branch: `feat/macos-font-fallbacks` on `github.com/dXnSix/nsh`, stacked on `feat/font-fallbacks` (`text: Name the families
-of fontFamily lists`, #(core)). One commit, `42b85414`. Opened as a pull request into the fork's `main`; once the stack
+of fontFamily lists`, #82). One commit, `42b85414`. Opened as a pull request into the fork's `main`; once the stack
 below it merges, it is its own commit only. Not opened upstream: the owner decides and posts there.
 
 ## Summary
@@ -15,7 +15,7 @@ CoreText read a `fontFamily` list as one family name, which no font has: text wa
 
 ## Public API
 
-None: `fontFamily` lists (#(core)) work on macOS.
+None: `fontFamily` lists (#82) work on macOS.
 
 ## Tests
 
