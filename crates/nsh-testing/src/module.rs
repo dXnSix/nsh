@@ -266,6 +266,12 @@ impl Testing {
             locale: options.locale,
             time_zone: options.time_zone,
             languages: options.languages,
+            regional: RegionalPreferences {
+                hour_cycle: options.hour_cycle,
+                first_day_of_week: options.first_day_of_week,
+                measurement_system: options.measurement_system,
+                temperature_unit: options.temperature_unit,
+            },
             reduced_motion: options.reduced_motion.unwrap_or(false),
             platform: options.platform.unwrap_or_default(),
             clock: options
@@ -393,6 +399,17 @@ pub struct OpenOptions {
     /// The user's preferred languages, BCP 47 tags, most preferred first
     /// (`[locale]`).
     pub languages: Option<Vec<String>>,
+    /// 12- or 24-hour time (the locale's region's: `"h12"` in `en-US`).
+    pub hour_cycle: Option<nsh_core::platform::HourCycle>,
+    /// The day weeks start on, 1 for Monday to 7 for Sunday (the locale's
+    /// region's: 7 in `en-US`).
+    pub first_day_of_week: Option<u32>,
+    /// The units of lengths, weights and volumes (the locale's region's:
+    /// `"us"` in `en-US`).
+    pub measurement_system: Option<nsh_core::platform::MeasurementSystem>,
+    /// The unit of temperatures (the locale's region's: `"fahrenheit"` in
+    /// `en-US`).
+    pub temperature_unit: Option<nsh_core::platform::TemperatureUnit>,
     /// The user asked for less motion (false).
     pub reduced_motion: Option<bool>,
     /// The platform the app believes it runs on headless (`"ios"`; a
@@ -407,6 +424,62 @@ pub struct OpenOptions {
     /// launch parameters it reads as `host.params` and the handlers of its
     /// `host.call` and `host.post`.
     pub host: Option<HostOptions>,
+}
+
+/// Regional preferences a test gives the user
+/// (`app.setRegionalPreferences`): the ones it names change, the others
+/// stay.
+#[derive(Debug, Default, Clone, Copy, PartialEq, JsObject)]
+#[non_exhaustive]
+pub struct RegionalPreferences {
+    /// 12- or 24-hour time (`hourCycle()`).
+    pub hour_cycle: Option<nsh_core::platform::HourCycle>,
+    /// The day weeks start on, 1 for Monday to 7 for Sunday
+    /// (`firstDayOfWeek()`).
+    pub first_day_of_week: Option<u32>,
+    /// The units of lengths, weights and volumes (`measurementSystem()`).
+    pub measurement_system: Option<nsh_core::platform::MeasurementSystem>,
+    /// The unit of temperatures (`temperatureUnit()`).
+    pub temperature_unit: Option<nsh_core::platform::TemperatureUnit>,
+}
+
+impl RegionalPreferences {
+    /// The ones these name, as pins of the environment; `what` (the call)
+    /// begins the error of a day that is none.
+    pub(crate) fn pins(&self, what: &str) -> Result<nsh_engine::EnvironmentPins, String> {
+        let mut pins = nsh_engine::EnvironmentPins::default();
+        pins.hour_cycle = self.hour_cycle;
+        pins.first_day_of_week = match self.first_day_of_week {
+            Some(day) => Some(
+                u8::try_from(day)
+                    .ok()
+                    .and_then(nsh_core::platform::Weekday::from_number)
+                    .ok_or_else(|| {
+                        format!("{what}: {day} is not a day of the week (1 Monday to 7 Sunday)")
+                    })?,
+            ),
+            None => None,
+        };
+        pins.measurement_system = self.measurement_system;
+        pins.temperature_unit = self.temperature_unit;
+        Ok(pins)
+    }
+
+    /// The ones these name, as a test writes them (`{ hourCycle: "h23" }`).
+    pub(crate) fn label(&self) -> String {
+        let named = [
+            self.hour_cycle
+                .map(|c| format!("hourCycle: {:?}", c.name())),
+            self.first_day_of_week
+                .map(|d| format!("firstDayOfWeek: {d}")),
+            self.measurement_system
+                .map(|s| format!("measurementSystem: {:?}", s.name())),
+            self.temperature_unit
+                .map(|u| format!("temperatureUnit: {:?}", u.name())),
+        ];
+        let named: Vec<String> = named.into_iter().flatten().collect();
+        format!("{{ {} }}", named.join(", "))
+    }
 }
 
 /// The embedding app a test plays (`open`'s `host`; `nsh/host`).
@@ -1091,6 +1164,7 @@ pub(crate) struct Launch {
     pub(crate) locale: Option<String>,
     pub(crate) time_zone: Option<String>,
     pub(crate) languages: Option<Vec<String>>,
+    pub(crate) regional: RegionalPreferences,
     pub(crate) reduced_motion: bool,
     pub(crate) platform: Platform,
     /// A manual clock's start.
@@ -1827,6 +1901,18 @@ impl App {
     /// and comes back (`"active"`); `appState()` follows. Headless only.
     pub async fn set_app_state(this: Instance<Self>, state: AppState) -> Result<(), String> {
         step(&this, move |app| app.set_app_state(state.into())).await
+    }
+
+    /// Gives the user the regional preferences `preferences` names
+    /// (`{ hourCycle: "h23", firstDayOfWeek: 1 }`), as the system does when
+    /// the user changes them; `hourCycle()`, `firstDayOfWeek()`,
+    /// `measurementSystem()` and `temperatureUnit()` follow. Headless only.
+    pub async fn set_regional_preferences(
+        this: Instance<Self>,
+        preferences: RegionalPreferences,
+    ) -> Result<(), String> {
+        preferences.pins("setRegionalPreferences")?;
+        step(&this, move |app| app.set_regional_preferences(preferences)).await
     }
 
     /// Gives the user the preferred languages `tags` (BCP 47 tags, most
