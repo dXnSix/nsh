@@ -142,8 +142,9 @@ pub use self::{
     host::{
         CanvasArg, CanvasPaint, CanvasView, Input, InputAccessoryView, IntoUniform, Modal,
         NativeView, Orientation, Overlay, Painter, Screen, Scroll, ShaderView, Stack, Uniform,
-        Video, WebView, canvas, input, input_accessory_view, native, overlay, scroll, shader,
-        video, web_view, web_view_html,
+        Video, WebView, canvas, input, input_accessory_view, native, overlay, screen_effect,
+        screen_transition, scroll, shader, shader_effect, shader_transition, video, web_view,
+        web_view_html,
     },
     js::{JsHost, JsIn, JsKind, JsOwned, JsPrimitive, JsRaw},
     json_host::from_json,
