@@ -199,6 +199,7 @@ shader::ShaderProgress::Number.0                                 # progress, 0..
 shader::builtins(progress)                                       # progress, 0..1
 element::host::ShaderView::progress(progress)                    # progress, 0..1
 ops::Prop::TransitionDuration.0                                  # time (milliseconds, as JS gives it)
+shader::NavShaderSpec.duration                                   # time (milliseconds, as JS gives it)
 shader::builtins(scale)                                          # pixels per point, a ratio
 shader::builtins(time)                                           # time
 shape::SMOOTHING                                                 # a corner smoothing factor
