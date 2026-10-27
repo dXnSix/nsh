@@ -18,7 +18,7 @@ use syn::LitStr;
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "heic"];
 
 /// File types registered as fonts.
-const FONT_EXTENSIONS: &[&str] = &["ttf", "otf"];
+const FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "woff", "woff2"];
 
 /// What a file is, by its extension.
 enum Kind {
@@ -117,9 +117,16 @@ fn check_variant(file: &Path, points: (f64, f64), scale: f32) -> Result<(), Stri
     Ok(())
 }
 
-/// The family name of a font file.
+/// The family name of a font file (a WOFF or WOFF2 font's, of what it
+/// holds).
 fn font_family(data: &[u8]) -> Result<String, String> {
-    let face = ttf_parser::Face::parse(data, 0).map_err(|e| e.to_string())?;
+    let unwrapped = match data.get(..4) {
+        Some(b"wOFF") => wuff::decompress_woff1(data),
+        Some(b"wOF2") => wuff::decompress_woff2(data),
+        _ => Ok(data.to_vec()),
+    }
+    .map_err(|e| format!("the WOFF font does not decompress: {e:?}"))?;
+    let face = ttf_parser::Face::parse(&unwrapped, 0).map_err(|e| e.to_string())?;
     let name = |id| {
         face.names()
             .into_iter()
@@ -507,5 +514,16 @@ mod tests {
         }
         std::fs::write(dir.join("b@1.5x.png"), png(60, 46)).unwrap();
         assert!(expand_or_fail(&dir, "b.png").is_err());
+    }
+
+    #[test]
+    fn a_woff_or_woff2_font_names_the_family_it_holds() {
+        for data in [
+            &include_bytes!("../../nsh-core/tests/fonts/Pacifico-Regular.woff")[..],
+            &include_bytes!("../../nsh-core/tests/fonts/Pacifico-Regular.woff2")[..],
+        ] {
+            assert_eq!(font_family(data).as_deref(), Ok("Pacifico"));
+        }
+        assert!(matches!(kind(Path::new("fonts/Inter.woff2")), Kind::Font));
     }
 }
