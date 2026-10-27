@@ -3569,3 +3569,17 @@ expect BubbleMenu
 covers [props] RichEditor.bubbleMenu
 expect CellA
 expect CellD
+# base-transition-shader
+tap id:case-base-transition-shader
+# Pages and a dialog with a `transitionShader` come and go as without one:
+# the headless runtime presents nothing and renders no pixels.
+expect Page home
+tap text:Push details
+expect Page details
+tap text:Open dialog
+expect Shader dialog
+tap text:Close dialog
+absent Shader dialog
+tap text:Pop
+expect Page home
+absent Page details
