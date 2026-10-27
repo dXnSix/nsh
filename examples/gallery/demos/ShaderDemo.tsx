@@ -10,7 +10,7 @@ import {
   Text,
   View,
 } from "nsh";
-import { createAnimatedValue, Easing } from "nsh/animated";
+import { createAnimatedValue, Easing } from "nsh";
 import { Dialog } from "nsh/base";
 import logo from "../logo@2x.png";
 import { Button, Caption, Card, colors, DemoPage, Legend, Segmented } from "../ui";

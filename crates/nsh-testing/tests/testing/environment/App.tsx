@@ -1,5 +1,5 @@
 import { mount, signal, Text, View } from "nsh";
-import { reduceMotion } from "nsh/accessibility";
+import { reduceMotion } from "nsh";
 import {
   appState,
   colorScheme,
@@ -12,7 +12,7 @@ import {
   temperatureUnit,
   timeZone,
   windowSize,
-} from "nsh/device";
+} from "nsh";
 
 function App() {
   const result = signal("none");

@@ -16,8 +16,8 @@ use nsh_core::{
     ImageSource, InputConfig, Keyframes, LayoutCurve, LayoutTransition, MountItem, NativeProps,
     ObjectPosition, Points, ResizeMode, ScreenAnimation, ScrollBehavior, Transform, TransformKind,
     TransitionProps, ViewKind, ViewProps, ViewStyle, WebSource,
+    element::PropEnum,
     geometry::{DefiniteLength, REM_SIZE, Radians, Size, relative},
-    ui::PropEnum,
 };
 use rustc_hash::FxHashMap;
 
@@ -880,11 +880,12 @@ fn props_json(p: &ViewProps) -> String {
     if let Some(t) = &p.test_id {
         let _ = write!(s, ",\"testID\":{}", json_str(t));
     }
-    if p.focusable == Some(false) {
-        s.push_str(",\"focusable\":false");
+    // Unset leaves it to the presses (`ViewProps::focus_stop`).
+    if let Some(focusable) = p.focusable {
+        let _ = write!(s, ",\"focusable\":{focusable}");
     }
-    if p.selection_area {
-        s.push_str(",\"selectionArea\":true");
+    if p.selectable_view {
+        s.push_str(",\"selectableView\":true");
     }
     s.push('}');
     s
@@ -1463,14 +1464,6 @@ fn encode_command(out: &mut Out, id: u32, command: &Command) {
                 None => out.raw("null").raw("null"),
             };
             out.bool(*animated).end();
-        }
-        Command::Toast { text, long } => {
-            out.item("cmd")
-                .num(id)
-                .str("toast")
-                .str(text)
-                .bool(*long)
-                .end();
         }
         Command::SetClipboard(text) => out.item("cmd").num(id).str("setClipboard").str(text).end(),
         Command::OpenUrl { id: request, url } => out

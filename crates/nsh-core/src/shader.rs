@@ -32,10 +32,10 @@ pub use nsh_shader::{GlslBlock, GlslProgram, GlslVersion};
 use crate::{
     ImageSource,
     animation::{AnimationValue, NodeId as AnimationNode},
+    element::TsTypes,
     geometry::{Bounds, DevicePixels, Percentage, Point, Points, Size},
     js::host::{HostCx, HostInput, HostValue},
     style::Color,
-    ui::TsTypes,
 };
 
 /// A checked shader an app made (`createShader(source)`, a `.wgsl`
@@ -296,7 +296,7 @@ impl From<ImageSource> for UniformValue {
 
 /// The value as it moves, written on the UI thread; the app keeps the
 /// value while the shader reads it.
-impl<A: crate::ui::Animated> From<&A> for UniformValue {
+impl<A: crate::element::Animated> From<&A> for UniformValue {
     fn from(a: &A) -> Self {
         UniformValue::Animated(a.animated_node().id())
     }
@@ -417,7 +417,7 @@ impl From<f32> for ShaderNumber {
 
 /// The value as it moves, written on the UI thread; the app keeps the
 /// value while the shader reads it.
-impl<A: crate::ui::Animated> From<&A> for ShaderNumber {
+impl<A: crate::element::Animated> From<&A> for ShaderNumber {
     fn from(a: &A) -> Self {
         ShaderNumber::Animated(a.animated_node().id())
     }
@@ -546,7 +546,7 @@ impl HostValue for ShaderAnimation {
 }
 
 /// What a shader transition runs without a shader of its own (`fallback`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, crate::ui::PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, crate::element::PropEnum)]
 pub enum TransitionFallback {
     /// A cross-fade.
     #[default]

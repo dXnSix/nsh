@@ -88,7 +88,7 @@ arrays element by element (constant arrays as local arrays).
 
 ## The element
 
-`<Shader src uniforms>` (TSX, from `nsh`) and `shader(source).uniforms(..)` (Rust, `nsh_core::ui`) are a host element,
+`<Shader src uniforms>` (TSX, from `nsh`) and `shader(source).uniforms(..)` (Rust, `nsh_core::element`) are a host element,
 `Tag::Shader` / `ViewKind::Shader`: a view the shader fills under its children, with every style of a view.
 `<ShaderEffect src uniforms progress maxSampleOffset>` and `shader_effect(source)` are another, `Tag::ShaderEffect` /
 `ViewKind::ShaderEffect`: a view whose children draw through the shader. They are its content input

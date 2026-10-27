@@ -20,7 +20,7 @@ import {
   Text,
   View,
 } from "nsh";
-import { createAnimatedValue } from "nsh/animated";
+import { createAnimatedValue } from "nsh";
 import glow from "./glow.wgsl";
 
 const plain = createShader("fn main(p: vec2f) -> vec4f { return vec4f(p / nsh.size, 0.5, 1.0); }");

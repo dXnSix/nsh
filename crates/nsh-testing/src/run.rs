@@ -21,9 +21,10 @@ use std::{
 use crossbeam_channel::{Receiver, Sender};
 use nsh_core::{
     ApproxTextEngine, MountBatch,
+    element::{Callback, Registry, Root},
     geometry::{Points, Size},
     platform::{Idiom, Languages, Locale, Os, RegionalPreferences, TimeZone},
-    ui::{Callback, Registry, Root, prelude::timer},
+    prelude::timer,
 };
 use nsh_engine::{
     AppError, AppErrorKind, Bundle, Edges, Engine, EngineConfig, Environment, MountSink,
@@ -736,7 +737,7 @@ impl Session {
     /// may be an app a `beforeAll` opened).
     async fn close_apps_since(self: &Arc<Self>, mark: usize) -> Option<Vec<String>> {
         let session = self.clone();
-        nsh_core::ui::prelude::blocking(move || session.close_apps(mark))
+        nsh_core::prelude::blocking(move || session.close_apps(mark))
             .await
             .ok()
             .flatten()

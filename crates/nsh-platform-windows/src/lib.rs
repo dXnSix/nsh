@@ -46,7 +46,7 @@ mod navigation;
 mod picker;
 mod render;
 mod scroll;
-mod selection_area;
+mod selectable_view;
 mod shader;
 mod surface;
 #[cfg(feature = "dev")]

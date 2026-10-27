@@ -51,7 +51,7 @@ use std::{
 };
 
 use anyhow::{Context as _, bail};
-use nsh_core::ui::description::{Description, SetDescription};
+use nsh_core::element::description::{Description, SetDescription};
 
 use crate::{runtime::Platform, ui};
 
@@ -1050,7 +1050,7 @@ opt-level = 3
                 "//! Describes the app's UI sets for `nsh`: one JSON document on standard\n\
                  //! output (nsh-core `ui::description`).\n\n\
                  fn main() {{\n    let sets = vec![{}];\n    \
-                 println!(\"{{}}\", nsh_core::ui::description::Description::of(&sets).to_json());\n}}\n{}",
+                 println!(\"{{}}\", nsh_core::element::description::Description::of(&sets).to_json());\n}}\n{}",
                 calls.join(", "),
                 self.app_sets("")
             ),
@@ -1942,7 +1942,7 @@ impl RustApp {
         for krate in &self.crates {
             code.push_str(&format!(
                 "\n/// The UI set of the crate {}: the entry `#[native_module(\"…\")]` makes in it.\n\
-                 {cfg}fn {}() -> nsh_core::ui::Registry {{\n    \
+                 {cfg}fn {}() -> nsh_core::element::Registry {{\n    \
                  #[allow(unused_imports)]\n    use {}::*;\n    \
                  {ENTRY}() // the crate {} (nsh.json \"rust\")\n}}\n",
                 krate.package,
@@ -1953,7 +1953,7 @@ impl RustApp {
         }
         code.push_str(&format!(
             "\n// Without the entry: nsh's stand-in, which fails the build saying what to add.\n\
-             {cfg}#[allow(unused_imports)]\nuse nsh_core::ui::__private::no_native_module as {ENTRY};\n"
+             {cfg}#[allow(unused_imports)]\nuse nsh_core::element::__private::no_native_module as {ENTRY};\n"
         ));
         code
     }
@@ -1977,7 +1977,10 @@ fn set_fn(krate: &AppCrate) -> String {
 /// `"appearance"`, `"statusBar"`, `"id"`) in the crate the generated code links as `krate`, under
 /// `cfg`.
 fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
-    let mut make = format!("nsh_core::ui::Root::of::<{krate}::{}>()", root.component);
+    let mut make = format!(
+        "nsh_core::element::Root::of::<{krate}::{}>()",
+        root.component
+    );
     if let Some(theme) = &root.theme {
         make.push_str(&format!(
             "\n        .tokens(\n            nsh_base::Theme::from_json(include_str!({:?}))\n                \
@@ -1995,7 +1998,7 @@ fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
             "Light"
         };
         make.push_str(&format!(
-            "\n        .appearance(nsh_core::ui::Appearance::{variant})"
+            "\n        .appearance(nsh_core::element::Appearance::{variant})"
         ));
     }
     if let Some(setting) = root
@@ -2021,7 +2024,7 @@ fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
     format!(
         "\n/// The app's root (`nsh.json` `\"root\"`), with its theme, appearance and\n\
          /// status bar.\n\
-         {cfg}fn app_root() -> nsh_core::ui::Root {{\n    {make}\n}}\n"
+         {cfg}fn app_root() -> nsh_core::element::Root {{\n    {make}\n}}\n"
     )
 }
 
@@ -2278,7 +2281,7 @@ mod tests {
         write_crate(
             &dir.join("native/storage"),
             "storage",
-            "use nsh_core::ui::prelude::*;\n\n#[nsh_core::ui::native_module( \"app/storage\" )]\nfn native(r: &mut Registry) {}\n",
+            "use nsh_core::prelude::*;\n\n#[nsh_core::element::native_module( \"app/storage\" )]\nfn native(r: &mut Registry) {}\n",
             "",
         );
         let json = |text: &str| serde_json::from_str::<serde_json::Value>(text).unwrap();
@@ -2516,10 +2519,10 @@ mod tests {
             },
         );
         for line in [
-            "#[cfg(x)]\nfn app_root() -> nsh_core::ui::Root {",
-            "nsh_core::ui::Root::of::<app_native::App>()",
+            "#[cfg(x)]\nfn app_root() -> nsh_core::element::Root {",
+            "nsh_core::element::Root::of::<app_native::App>()",
             "include_str!(\"/app/theme.json\")",
-            ".appearance(nsh_core::ui::Appearance::Dark)",
+            ".appearance(nsh_core::element::Appearance::Dark)",
             ".app_id(\"com.example.app\")",
             ".status_bar(nsh_core::StatusBarSetting::default().foreground(nsh_core::StatusBarStyle::Light).hidden(false))",
         ] {
@@ -2570,7 +2573,7 @@ mod tests {
                 "{main}"
             );
             assert!(
-                main.contains("nsh_core::ui::Root::of::<app_app_native::App>()"),
+                main.contains("nsh_core::element::Root::of::<app_app_native::App>()"),
                 "{main}"
             );
         }
@@ -2587,7 +2590,7 @@ mod tests {
         let test = read("test/main.rs");
         assert!(test.contains("nsh_testing::runner(vec![nsh_base::registry(), set_app_app_native()], Some(app_root))"), "{test}");
         assert!(
-            test.contains("nsh_core::ui::Root::of::<app_app_native::App>()"),
+            test.contains("nsh_core::element::Root::of::<app_app_native::App>()"),
             "{test}"
         );
         assert!(manifest.contains("\"rust-web\"]"), "{manifest}");
@@ -2609,7 +2612,7 @@ mod tests {
                 "{main}"
             );
             assert!(
-                main.contains("nsh_core::ui::Root::of::<app_app_native::App>()"),
+                main.contains("nsh_core::element::Root::of::<app_app_native::App>()"),
                 "{main}"
             );
         }
@@ -3012,10 +3015,10 @@ opt-level = 3
             for line in [
                 "vec![nsh_base::registry(), set_app_app_native()]".to_owned(),
                 format!(
-                    "{cfg}fn set_app_app_native() -> nsh_core::ui::Registry {{\n    #[allow(unused_imports)]\n    use app_app_native::*;\n    __nsh_native_module() // the crate app-native (nsh.json \"rust\")\n}}"
+                    "{cfg}fn set_app_app_native() -> nsh_core::element::Registry {{\n    #[allow(unused_imports)]\n    use app_app_native::*;\n    __nsh_native_module() // the crate app-native (nsh.json \"rust\")\n}}"
                 ),
                 format!(
-                    "{cfg}#[allow(unused_imports)]\nuse nsh_core::ui::__private::no_native_module as __nsh_native_module;"
+                    "{cfg}#[allow(unused_imports)]\nuse nsh_core::element::__private::no_native_module as __nsh_native_module;"
                 ),
             ] {
                 assert!(code.contains(&line), "{file}: no {line:?} in\n{code}");
@@ -3106,7 +3109,7 @@ opt-level = 3
             // Each crate's entry in its own function; one stand-in.
             for (name, package) in [("app_charts", "charts"), ("app_app_storage", "app-storage")] {
                 let set = format!(
-                    "fn set_{name}() -> nsh_core::ui::Registry {{\n    #[allow(unused_imports)]\n    use {name}::*;\n    __nsh_native_module() // the crate {package} (nsh.json \"rust\")\n}}"
+                    "fn set_{name}() -> nsh_core::element::Registry {{\n    #[allow(unused_imports)]\n    use {name}::*;\n    __nsh_native_module() // the crate {package} (nsh.json \"rust\")\n}}"
                 );
                 assert!(code.contains(&set), "{dir}: no {set:?} in\n{code}");
             }
@@ -3119,7 +3122,7 @@ opt-level = 3
             // The root is a component of the first crate listed.
             if dir.contains("rust-") {
                 assert!(
-                    code.contains("nsh_core::ui::Root::of::<app_charts::shell::Home>()"),
+                    code.contains("nsh_core::element::Root::of::<app_charts::shell::Home>()"),
                     "{dir}: {code}"
                 );
             }
@@ -3149,7 +3152,7 @@ opt-level = 3
 
     #[test]
     fn the_cli_reads_the_description_of_the_app_s_crates() {
-        use nsh_core::ui::description::{Description, SetDescription};
+        use nsh_core::element::description::{Description, SetDescription};
         let crates = |packages: &[&str]| -> Vec<AppCrate> {
             packages
                 .iter()
@@ -3160,7 +3163,7 @@ opt-level = 3
                 .collect()
         };
         let set = |specifier: &'static str| -> SetDescription {
-            nsh_core::ui::Registry::ui_set(specifier).into()
+            nsh_core::element::Registry::ui_set(specifier).into()
         };
         let text = |sets: Vec<SetDescription>| {
             Description {
@@ -3195,7 +3198,7 @@ opt-level = 3
                 .starts_with("the description of the Rust crates: the description is in format 0")
         );
         // A specifier of nsh's own or of another crate.
-        for nsh in ["nsh/base", "nsh", "nsh/image"] {
+        for nsh in ["nsh/base", "nsh", "nsh/mobile"] {
             let error = read(&text(vec![set(nsh)]), &["charts"]).unwrap_err();
             assert!(
                 error.contains(&format!(

@@ -98,7 +98,7 @@ fn f32_at(bytes: &[u8], component: usize) -> f32 {
 }
 
 const APP: &str = r##"import { mount, createShader, Shader, Text } from "nsh";
-import { createAnimatedValue } from "nsh/animated";
+import { createAnimatedValue } from "nsh";
 import glow from "./glow.wgsl";
 
 const plain = createShader("fn main(p: vec2f) -> vec4f { return vec4f(p / nsh.size, 0.5, 1.0); }");
@@ -266,7 +266,7 @@ fn create_shader_checks_its_source_and_shader_support_says_what_draws() {
 }
 
 const EFFECT: &str = r##"import { mount, createShader, ShaderEffect, Shader, signal, Text, View } from "nsh";
-import { createAnimatedValue } from "nsh/animated";
+import { createAnimatedValue } from "nsh";
 
 const wave = createShader("fn main(p: vec2f) -> vec4f { return sample_content(p + vec2f(nsh.progress, 0.0)); }");
 const frost = createShader("fn main(p: vec2f) -> vec4f { return sample_backdrop(p) * 0.5; }");

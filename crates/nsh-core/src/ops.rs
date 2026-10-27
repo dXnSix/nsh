@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use crate::{
     animation::AnimationOp,
+    element::PropEnum,
     geometry::{Bounds, DevicePixels, Percentage, Point, Points, Size},
     js::host::HostProps,
     overlay::{Align, OverlayAnchor, Placement, TooltipContent},
     props::{AccessibilityProp, EdgeInsets, LayoutAnimation, PointerEvents},
     style::{Color, EllipsizeMode, Style, StylePatch},
-    ui::PropEnum,
 };
 
 /// Identifier of a node, assigned by the JS renderer.
@@ -233,7 +233,7 @@ events! {
     BackRequest = "onBackRequest" as "onBackPress": "The user pressed back on a screen (the header's back button, Android back, the desktops' back keys and mouse button, the browser's back), whether or not `popOnBack` let it pop.",
     NativeEvent = "onNativeEvent": "A registered native component emitted an event (payload: [`EventPayload::Native`]).",
     Clipboard = "onClipboard": "A clipboard read finished (root only; payload: `id`, `has`: whether it holds what was asked; for text `text`, unless only `has` was asked; for an image `uri` (a `data:` URI), `width` and `height`, unless only `has` was asked; for files `files`, their `file:` URLs one per line).",
-    KeyCommand = "onKeyCommand": "A key matched a binding of `nsh/keymap` (root only; payload: the binding's id, [`crate::keymap::KeyBinding::id`]).",
+    KeyCommand = "onKeyCommand": "A key matched a binding of `keymap` (`nsh`) (root only; payload: the binding's id, [`crate::keymap::KeyBinding::id`]).",
     Menu = "onMenu": "A menu item was chosen: the application menu's or a context menu's (root only; desktops; payload: `id`), or a context menu closed (`closed`: true, after its item).",
     HoverIn = "onHoverIn": "The mouse came over the view or a view inside it (never on touches).",
     HoverOut = "onHoverOut": "The mouse left the view and the views inside it, or the window.",
@@ -247,7 +247,7 @@ events! {
     Cancel = "onCancel": "Escape or the Android back button was pressed while the overlay was the top one listening to it (raised by the core).",
     Position = "onPosition": "The core placed an overlay (payload: `placement`, the side it went on, `x`, `y`, `width`, `height` in the root view, `availableWidth`, `availableHeight`: the room on that side).",
     MouseMove = "onMouseMove": "The mouse moved inside the view, including with a button down (desktops and web; local coordinates `x`, `y`; at most once per frame).",
-    Host = "onHost": "The embedding host answered a [`Command::HostCall`] or sent an event to `nsh/host`'s listeners (root only; payload: [`EventPayload::Json`], `{ type: \"reply\", id, ok, value?, error? }` or `{ type: \"event\", event, payload }`).",
+    Host = "onHost": "The embedding host answered a [`Command::HostCall`] or sent an event to `host`'s listeners (`nsh`) (root only; payload: [`EventPayload::Json`], `{ type: \"reply\", id, ok, value?, error? }` or `{ type: \"event\", event, payload }`).",
     Pick = "onPick": "A picker closed (root only; payload: [`EventPayload::Picked`], no files when cancelled).",
     LoadMoreAtStart = "onLoadMoreAtStart": "A list was scrolled close to its start after the user or a scroll command moved it (raised by the core).",
     OpenUrl = "onOpenUrl": "A [`Command::OpenUrl`] request finished (root only; payload: `id`, `opened`: whether the platform opened the URL).",
@@ -457,6 +457,10 @@ pub struct TouchEvent {
 pub struct PasteEvent {
     /// The plain text, empty when it held none.
     pub text: String,
+    /// The same content as HTML (`text/html`), empty when the clipboard
+    /// held none: what a browser, an office suite or a rich text editor
+    /// copied, with its formatting.
+    pub html: String,
     /// Files with their bytes: images (a screenshot, an image copied from a
     /// page or an app), in the platform's order.
     pub files: Vec<PastedFile>,
@@ -472,11 +476,15 @@ impl EventPayload {
     pub fn into_paste(self) -> EventPayload {
         match self {
             EventPayload::Map(fields) => {
-                let text = fields.into_iter().find_map(|(k, v)| match (k, v) {
-                    ("text", PayloadValue::Str(text)) => Some(text),
-                    _ => None,
-                });
-                EventPayload::Paste(Box::new(PasteEvent::new(text.unwrap_or_default())))
+                let mut paste = PasteEvent::default();
+                for (key, value) in fields {
+                    match (key, value) {
+                        ("text", PayloadValue::Str(text)) => paste.text = text,
+                        ("html", PayloadValue::Str(html)) => paste.html = html,
+                        _ => {}
+                    }
+                }
+                EventPayload::Paste(Box::new(paste))
             }
             EventPayload::None => EventPayload::Paste(Box::default()),
             payload => payload,
@@ -495,7 +503,10 @@ impl PasteEvent {
 
     /// Whether it holds nothing.
     pub fn is_empty(&self) -> bool {
-        self.text.is_empty() && self.files.is_empty() && self.uris.is_empty()
+        self.text.is_empty()
+            && self.html.is_empty()
+            && self.files.is_empty()
+            && self.uris.is_empty()
     }
 }
 
@@ -1332,7 +1343,7 @@ impl crate::js::host::HostValue for ScreenTransition {
             .map(|a| ScreenTransition::Shader(Arc::new(a)))
     }
 
-    fn ts_type(types: &mut crate::ui::TsTypes) -> String {
+    fn ts_type(types: &mut crate::element::TsTypes) -> String {
         format!(
             "{} | {}",
             <ScreenAnimation as crate::js::host::HostValue>::ts_type(types),
@@ -1603,13 +1614,6 @@ pub enum Command {
         /// End.
         end: u32,
     },
-    /// Show a short message (Android toast; on the root).
-    Toast {
-        /// The message.
-        text: String,
-        /// Show it longer.
-        long: bool,
-    },
     /// Have the screen reader read a message (on the root).
     Announce(String),
     /// Load the image at `uri` (keeping its bytes for views that show it
@@ -1625,7 +1629,7 @@ pub enum Command {
     AccessibilityFocus,
     /// Measure the view with this commit's layout (`ref.measure()`):
     /// answered by the core in its events for promise `call`
-    /// ([`crate::ui::JsEvent::Reply`]: a [`crate::Measurement`], or null
+    /// ([`crate::element::JsEvent::Reply`]: a [`crate::Measurement`], or null
     /// when the view is not laid out); never mounted.
     Measure {
         /// The call to answer.
@@ -1891,9 +1895,9 @@ pub enum Prop {
     /// sent once it is unbound.
     ComponentPropBinding(Arc<str>, Option<crate::animation::NodeId>),
     /// A prop of a Rust component's host, decoded in the JS call into the
-    /// prop's Rust type ([`crate::ui::PropSpec::decode`]); `None` resets it
+    /// prop's Rust type ([`crate::element::PropSpec::decode`]); `None` resets it
     /// to its default.
-    RustProp(&'static str, Option<crate::ui::AnyValue>),
+    RustProp(&'static str, Option<crate::element::AnyValue>),
     /// `src`: a URL, `asset:/path`, or an imported asset.
     #[prop(js = "src", on = IMAGE, shared)]
     Source(Option<ImageSource>),
@@ -2189,8 +2193,7 @@ pub enum Prop {
     /// points on the physical edges; set by components
     /// (`Element::inset_padding`), never by JS.
     InsetPadding(EdgeInsets),
-    /// Margin added to the style's own (`KeyboardAvoidingView`'s
-    /// `height` behavior), in points on the physical edges; set by
+    /// Margin added to the style's own (an inset margin), in points on the physical edges; set by
     /// components.
     InsetMargin(EdgeInsets),
     /// `class`: Tailwind CSS classes (`"flex-row gap-2 p-4 bg-white
@@ -2241,22 +2244,25 @@ pub enum Prop {
     /// `tooltip`: a hint about the view, shown above it on the desktops
     /// while the pointer rests on it (after half a second) until the
     /// pointer leaves or presses it, never on touch screens; it never takes
-    /// the pointer. A string shows in a minimal bubble drawn with the
-    /// theme's `popover` tokens; an element is shown as it is (style it, or
-    /// use `Tooltip` of `nsh/base` for its placement, delay and events).
+    /// the pointer. The element is shown as it is; a `Tooltip` of
+    /// `nsh/base` is the tooltip itself, with its placement, delay and
+    /// events.
     #[prop(js = "tooltip", with = crate::js::host_values::tooltip, reset = Prop::Tooltip(TooltipContent::None), ts = "JSX.Element")]
     Tooltip(TooltipContent),
-    /// `focusable`: whether a view that takes presses is a stop of the
-    /// keyboard focus (Tab, on the platforms that move it between
-    /// pressables); `false` leaves it to the pointer (a backdrop that
-    /// closes a popover). Default true.
+    /// `focusable`: whether the view is a stop of the keyboard focus (Tab,
+    /// on the platforms that move it between views): `true` makes any view
+    /// one, whether or not it takes presses (a chart or a slider in a
+    /// pressable card, which takes its keys while focused); `false` leaves
+    /// a view that takes presses to the pointer (a backdrop that closes a
+    /// popover). Unset, the views that take presses are stops.
     #[prop(js = "focusable")]
     Focusable(Option<bool>),
-    /// The view is a selection area (`SelectionArea` of `nsh/base`): the
-    /// texts in it share one selection ([`crate::selection`]); set by
-    /// components (`Element::selection_area`).
-    #[prop(js = "selectionArea", internal)]
-    SelectionArea(bool),
+    /// `selectable` of a view: the texts in it share one selection, as a
+    /// browser page's do ([`crate::selection`]); texts with
+    /// `selectable={false}` stay out of it, a selectable view inside
+    /// another is part of the outer one.
+    #[prop(js = "selectable", on = VIEW, shared)]
+    SelectableView(bool),
     /// `allowFontScaling`: follow the system text size (default true).
     #[prop(js = "allowFontScaling", default = true, on = TEXT | INPUT)]
     AllowFontScaling(bool),
@@ -2266,7 +2272,7 @@ pub enum Prop {
     /// `selectable`: a long press offers to copy the text; `false` also
     /// keeps it from being selected where text is by default (desktop
     /// browsers), unset leaves it to the platform.
-    #[prop(js = "selectable", on = TEXT)]
+    #[prop(js = "selectable", on = TEXT, shared)]
     Selectable(Option<bool>),
     /// `adjustsFontSizeToFit`: shrink the font until the text fits its lines
     /// (`numberOfLines`) and box.
@@ -2485,7 +2491,7 @@ pub enum Op {
     /// A call JS made into Rust that runs in order with the UI's ops: a
     /// module function with a context, the start of an `async` function or
     /// member, a method of a component's ref, or the place of a JS call
-    /// posted during a synchronous call ([`crate::ui::RustCall`]). Never
+    /// posted during a synchronous call ([`crate::element::RustCall`]). Never
     /// reaches a platform.
-    Rust(crate::ui::RustOp),
+    Rust(crate::element::RustOp),
 }

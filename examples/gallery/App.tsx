@@ -1,10 +1,10 @@
 import { effect, mount, Scroll, signal, Text, untracked, View } from "nsh";
-import { Animated, createAnimatedValue, Easing } from "nsh/animated";
-import { platform, windowSize } from "nsh/device";
+import { Animated, createAnimatedValue, Easing } from "nsh";
+import { platform, windowSize } from "nsh";
 import { isAvailable as hasWindow, Window } from "nsh/desktop";
 import { NavPage, NavStack } from "nsh/base";
-import { keymap } from "nsh/keymap";
-import { Storage } from "nsh/storage";
+import { keymap } from "nsh";
+import { Storage } from "nsh";
 import { Icon } from "./icons";
 import { TitleBar } from "./TitleBar";
 import { Toaster } from "./toast";
@@ -52,7 +52,8 @@ const groups: { title: string; demos: DemoEntry[] }[] = [
       { name: "Text", detail: "Fonts, spans, inline views and images, decorations, truncation, languages", icon: "text", screen: lazy(() => import("./demos/TextDemo").then((m) => m.TextDemo)) },
       { name: "Text View", detail: "Markdown and HTML documents, extensions, streaming replies", icon: "text", screen: lazy(() => import("./demos/TextViewDemo").then((m) => m.TextViewDemo)) },
       { name: "Editor", detail: "Code with highlighting, several carets, folding, find and replace, a language server: diagnostics, hover, definitions, completion", icon: "text", screen: lazy(() => import("./demos/EditorDemo").then((m) => m.EditorDemo)) },
-      { name: "Data table", detail: "A million stocks of sixty columns, their quotes ticking every 33 ms, fixed columns, sorting, selection, resized and moved columns", icon: "lists", screen: lazy(() => import("./demos/DataTableDemo").then((m) => m.DataTableDemo)) },
+      { name: "Rich Editor", detail: "A chat input with mentions and a Markdown editor: a schema, commands, plugins, history, Markdown shortcuts", icon: "text", screen: lazy(() => import("./demos/RichEditorDemo").then((m) => m.RichEditorDemo)) },
+      { name: "DataTable", detail: "A million stocks of sixty columns, their quotes ticking every 33 ms, fixed columns, sorting, selection, resized and moved columns", icon: "lists", screen: lazy(() => import("./demos/DataTableDemo").then((m) => m.DataTableDemo)) },
       { name: "Diff", detail: "Two texts side by side or unified, changes navigated, reverted and kept, a patch", icon: "text", screen: lazy(() => import("./demos/DiffDemo").then((m) => m.DiffDemo)) },
       { name: "Images", detail: "Resize modes, tint, GIF / WebP, placeholders, blur, fade", icon: "image", screen: lazy(() => import("./demos/Images").then((m) => m.Images)) },
     ],
@@ -63,7 +64,7 @@ const groups: { title: string; demos: DemoEntry[] }[] = [
       { name: "Components", detail: "Press feedback, a sheet, layout animation, input accessory, dialog options", icon: "components", screen: lazy(() => import("./demos/Components").then((m) => m.Components)) },
       { name: "Overlays", detail: "Overlay, popovers, tooltips, sheets, toasts", icon: "components", screen: lazy(() => import("./demos/Overlays").then((m) => m.Overlays)) },
       { name: "Menus", detail: "A menu bar, submenus, checkable items, context menus on rows, a scrolling menu", icon: "lists", screen: lazy(() => import("./demos/Menus").then((m) => m.Menus)) },
-      { name: "Controls", detail: "Switches in settings, a filter with select all, a plan picker, tabs, collapsible sections, progress bars", icon: "controls", screen: lazy(() => import("./demos/Controls").then((m) => m.Controls)) },
+      { name: "Controls", detail: "Switches in settings, a filter with select all, a plan picker, tabs, collapsible sections, progress bars, sliders", icon: "controls", screen: lazy(() => import("./demos/Controls").then((m) => m.Controls)) },
       { name: "Web and video", detail: "WKWebView / WebView, AVPlayer / MediaPlayer", icon: "media", screen: lazy(() => import("./demos/Media").then((m) => m.Media)) },
       { name: "System", detail: "Status bar, alerts, action sheets, environment, timers, fetch", icon: "system", screen: lazy(() => import("./demos/System").then((m) => m.System)) },
       { name: "Standard APIs", detail: "Files, processes, TCP, WebSockets, buffers, crypto and utilities", icon: "system", screen: lazy(() => import("./demos/Standard").then((m) => m.StandardDemo)) },
