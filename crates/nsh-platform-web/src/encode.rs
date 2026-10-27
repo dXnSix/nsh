@@ -638,95 +638,10 @@ fn kind_name(kind: ViewKind) -> &'static str {
         ViewKind::HeaderItem => "header",
         ViewKind::InputAccessory => "accessory",
         ViewKind::Canvas => "canvas",
-        ViewKind::Shader => "shader",
-        ViewKind::ShaderEffect => "shadereffect",
-        ViewKind::ShaderTransition => "shadertransition",
-        ViewKind::ScreenEffect => "screeneffect",
-        ViewKind::ScreenTransition => "screentransition",
         ViewKind::WebView => "web",
         ViewKind::Native => "native",
         ViewKind::Video => "video",
     }
-}
-
-/// A shader's program for WebGL 2: `{ vertex, fragment, blocks: [[name,
-/// buffer]], samplers: [[name, input]] }`, or `null` without GLSL.
-fn shader_program(program: &nsh_core::shader::ShaderProgram) -> String {
-    let nsh_core::shader::ProgramCode::Glsl(glsl) = &program.code else {
-        return "null".into();
-    };
-    let mut s = String::from("{\"vertex\":");
-    push_str(&mut s, &glsl.vertex);
-    s.push_str(",\"fragment\":");
-    push_str(&mut s, &glsl.fragment);
-    s.push_str(",\"blocks\":[");
-    for (i, b) in glsl.blocks.iter().enumerate() {
-        if i > 0 {
-            s.push(',');
-        }
-        s.push('[');
-        push_str(&mut s, &b.name);
-        let _ = write!(s, ",{}]", b.buffer);
-    }
-    s.push_str("],\"samplers\":[");
-    for (i, (name, input)) in glsl.samplers.iter().enumerate() {
-        if i > 0 {
-            s.push(',');
-        }
-        s.push('[');
-        push_str(&mut s, name);
-        let _ = write!(s, ",{}]", input.index());
-    }
-    s.push_str("]}");
-    s
-}
-
-/// What a shader view draws: `{ program, time, uniforms: [32-bit words],
-/// images: [[uri, size word]] }`, or `null`.
-/// A finite number for JSON (0 otherwise).
-fn finite(n: f32) -> f32 {
-    if n.is_finite() { n } else { 0.0 }
-}
-
-/// A page's or a dialog's shader transition: its fill (as `shader_fill`)
-/// and its duration in milliseconds, or `null, 0`.
-fn nav_shader(out: &mut Out, shader: Option<&nsh_core::NavShader>) {
-    out.raw(&shader_fill(shader.map(|s| &*s.fill)))
-        .num(shader.map_or(0.0, |s| s.duration.as_secs_f64() * 1000.0));
-}
-
-fn shader_fill(fill: Option<&nsh_core::shader::ShaderFill>) -> String {
-    let Some(fill) = fill else {
-        return "null".into();
-    };
-    let mut s = format!(
-        "{{\"program\":{},\"time\":{},\"inputs\":{},\"progress\":{},\"offset\":{},\"uniforms\":[",
-        fill.program,
-        fill.time,
-        fill.inputs,
-        finite(fill.progress),
-        finite(fill.max_offset.0)
-    );
-    for (i, w) in fill.uniforms.as_chunks::<4>().0.iter().enumerate() {
-        if i > 0 {
-            s.push(',');
-        }
-        let _ = write!(s, "{}", u32::from_le_bytes(*w));
-    }
-    s.push_str("],\"images\":[");
-    for (i, image) in fill.images.iter().enumerate() {
-        if i > 0 {
-            s.push(',');
-        }
-        s.push('[');
-        match &image.source {
-            Some(source) => push_str(&mut s, &source.uri),
-            None => s.push_str("null"),
-        }
-        let _ = write!(s, ",{}]", image.offset / 4);
-    }
-    s.push_str("]}");
-    s
 }
 
 fn image_uri(s: &Option<ImageSource>) -> Option<&str> {
@@ -1246,27 +1161,6 @@ pub(crate) fn encode(out: &mut Out, item: &MountItem) {
                 .raw(&crate::canvas::encode(drawing))
                 .end();
         }
-        MountItem::ShaderProgram { program } => {
-            out.item("sp")
-                .num(program.id)
-                .raw(&shader_program(program))
-                .end();
-        }
-        MountItem::ShaderInput { id } => {
-            out.item("si").num(*id).end();
-        }
-        MountItem::ShaderTransition { id, duration } => {
-            out.item("st")
-                .num(*id)
-                .num(duration.as_secs_f64() * 1000.0)
-                .end();
-        }
-        MountItem::Shader { id, fill } => {
-            out.item("sh")
-                .num(*id)
-                .raw(&shader_fill(fill.as_deref()))
-                .end();
-        }
         MountItem::Gestures { id, values } => {
             out.item("g")
                 .num(*id)
@@ -1323,17 +1217,15 @@ pub(crate) fn encode(out: &mut Out, item: &MountItem) {
                 ScreenAnimation::Default => "default",
                 ScreenAnimation::Fade => "fade",
                 ScreenAnimation::None => "none",
-            });
-            nav_shader(out, config.shader.as_ref());
-            out.end();
+            })
+            .end();
         }
-        MountItem::ModalConfig { id, config, shader } => {
+        MountItem::ModalConfig { id, config } => {
             out.item("mc")
                 .num(*id)
                 .str(enum_name(&config.animation))
-                .bool(config.close_on_escape);
-            nav_shader(out, shader.as_ref());
-            out.end();
+                .bool(config.close_on_escape)
+                .end();
         }
         MountItem::NativeProps { id, props } => match props {
             NativeProps::WebView(w) => {

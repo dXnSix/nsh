@@ -208,9 +208,6 @@ pub struct Environment {
     pub regional: RegionalPreferences,
     /// The device's time zone, as the system names it (`Europe/Berlin`).
     pub time_zone: TimeZone,
-    /// The shaders the platform runs, and their language
-    /// (`shaderSupport()`).
-    pub shaders: crate::shader::ShaderSupport,
     /// The app embedding NSH answers `nsh/host`'s calls
     /// ([`crate::Command::HostCall`]); without it, they reject at once.
     pub host: bool,
@@ -251,7 +248,6 @@ impl Default for Environment {
             languages: Languages::EN_US,
             regional: RegionalPreferences::EN_US,
             time_zone: TimeZone::UTC,
-            shaders: crate::shader::ShaderSupport::default(),
             host: false,
             app_state: AppState::Active,
         }

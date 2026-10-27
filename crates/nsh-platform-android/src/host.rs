@@ -628,7 +628,6 @@ extern "system" fn Java_com_longbridge_nsh_Native_setLimits(
         load_budget: ms(load_ms),
         call_budget: ms(call_ms),
         max_nodes: set(max_nodes),
-        ..Default::default()
     };
     host.set_limits(limits.limits());
 }
@@ -1081,22 +1080,6 @@ extern "system" fn Java_com_longbridge_nsh_Native_environment(
     environment.screen_reader = v[10] != 0.0;
     environment.os = nsh_engine::Os::Android;
     environment.os_version = (v[11] as u16, 0);
-    // Runtime shaders (AGSL), from Android 13: fills, and effects and
-    // backdrops as render effects on the live content (`ShaderBox.java`).
-    environment.shaders = if v[11] as u16 >= 33 {
-        let mut support =
-            nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Agsl);
-        support.effect = nsh_core::shader::Support::Live;
-        support.backdrop = nsh_core::shader::Support::Live;
-        support.transition = nsh_core::shader::Support::Live;
-        // The screen effect on the live views, a screen transition from
-        // pictures of the surface's windows (`Mounter.applyScreen`).
-        support.screen_effect = nsh_core::shader::Support::Live;
-        support.screen_transition = nsh_core::shader::Support::Snapshot;
-        support
-    } else {
-        nsh_core::shader::ShaderSupport::default()
-    };
     environment.idiom = match v[12] as u8 {
         1 => Idiom::Pad,
         3 => Idiom::Tv,

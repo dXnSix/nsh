@@ -49,12 +49,6 @@ pub(crate) struct Mounter {
     pub(crate) layout_animation: Option<LayoutAnimation>,
     /// The surface lays out right to left.
     pub(crate) rtl: bool,
-    /// The screen effect that draws (`<ScreenEffect>`): the root draws
-    /// through its fill, as an effect does.
-    pub(crate) screen_effect: Option<NodeId>,
-    /// The screen transitions (`<ScreenTransition>`) and what they draw.
-    screen_transitions:
-        rustc_hash::FxHashMap<NodeId, Option<std::sync::Arc<nsh_core::shader::ShaderFill>>>,
 }
 
 impl Mounter {
@@ -66,30 +60,7 @@ impl Mounter {
             root,
             layout_animation: None,
             rtl: false,
-            screen_effect: None,
-            screen_transitions: rustc_hash::FxHashMap::default(),
         }
-    }
-
-    /// What screen effect `id` draws: the root draws through it, its
-    /// children (pages, dialogs, overlays, the navigation's layers) its live
-    /// content. The core gives one screen effect a fill at a time.
-    fn screen_effect(
-        &mut self,
-        surface: &Rc<Surface>,
-        id: NodeId,
-        fill: Option<std::sync::Arc<nsh_core::shader::ShaderFill>>,
-    ) {
-        match &fill {
-            Some(_) => self.screen_effect = Some(id),
-            None if self.screen_effect == Some(id) => self.screen_effect = None,
-            None => return,
-        }
-        if self.root.state().shader.is_none() {
-            crate::shader::create(&self.root, true, false);
-        }
-        crate::shader::set(surface, &self.root, fill);
-        self.root.changed();
     }
 
     /// Removes every view but the root.
@@ -141,12 +112,6 @@ impl Mounter {
                 match kind {
                     ViewKind::Input => crate::text_input::create(surface, &view),
                     ViewKind::Canvas => crate::canvas::create(&view),
-                    ViewKind::Shader => crate::shader::create(&view, false, false),
-                    ViewKind::ShaderEffect => crate::shader::create(&view, true, false),
-                    ViewKind::ShaderTransition => crate::shader::create(&view, true, true),
-                    ViewKind::ScreenTransition => {
-                        self.screen_transitions.insert(*id, None);
-                    }
                     ViewKind::Image => crate::image::create(&view),
                     ViewKind::WebView | ViewKind::Video | ViewKind::Native => {
                         crate::native::create(surface, &view)
@@ -348,30 +313,6 @@ impl Mounter {
                     crate::canvas::set(surface, view, drawing.clone());
                 }
             }
-            MountItem::ShaderProgram { program } => crate::shader::program(program),
-            MountItem::Shader { id, fill } => {
-                if let Some(drawn) = self.screen_transitions.get_mut(id) {
-                    drawn.clone_from(fill);
-                } else if self
-                    .get(*id)
-                    .is_some_and(|v| v.kind() == ViewKind::ScreenEffect)
-                {
-                    self.screen_effect(surface, *id, fill.clone());
-                } else if let Some(view) = &self.get(*id) {
-                    crate::shader::set(surface, view, fill.clone());
-                }
-            }
-            // Effects and backdrops draw their inputs with every frame.
-            MountItem::ShaderInput { .. } => {}
-            MountItem::ShaderTransition { id, duration } => {
-                if let Some(drawn) = self.screen_transitions.get(id) {
-                    if let Some(fill) = drawn.clone() {
-                        crate::navigation::screen_transition(surface, fill, *duration);
-                    }
-                } else if let Some(view) = &self.get(*id) {
-                    crate::shader::start_transition(surface, view, *duration);
-                }
-            }
             MountItem::Gestures { id, values } => {
                 if let Some(view) = &self.get(*id) {
                     crate::input::gestures(surface, view, *values);
@@ -404,9 +345,9 @@ impl Mounter {
                     crate::navigation::screen_config(surface, view, config);
                 }
             }
-            MountItem::ModalConfig { id, config, shader } => {
+            MountItem::ModalConfig { id, config } => {
                 if let Some(view) = &self.get(*id) {
-                    crate::navigation::modal_config(surface, view, config, shader);
+                    crate::navigation::modal_config(surface, view, config);
                 }
             }
             MountItem::NativeProps { id, props } => {
@@ -535,9 +476,7 @@ fn redrawn(item: &MountItem) -> Redraw {
         | MountItem::LayoutAnimation(_)
         | MountItem::Animation(_)
         | MountItem::AnimationBindings { .. }
-        | MountItem::ComponentPropSlots { .. }
-        // A program is drawn by the shaders that use it.
-        | MountItem::ShaderProgram { .. } => Redraw::Nothing,
+        | MountItem::ComponentPropSlots { .. } => Redraw::Nothing,
         MountItem::Frame { id, .. }
         | MountItem::ViewStyle { id, .. }
         | MountItem::Text { id, .. }
@@ -561,11 +500,5 @@ fn redrawn(item: &MountItem) -> Redraw {
         | MountItem::ComponentProps { id, .. }
         | MountItem::Command { id, .. } => Redraw::View(*id),
         MountItem::LayoutDirection { .. } | MountItem::Appearance { .. } => Redraw::Window,
-        // A shader can be the screen's (an effect or a transition over the
-        // surface), or read what is behind it: what it changes is not its
-        // view's alone.
-        MountItem::Shader { .. } | MountItem::ShaderInput { .. } | MountItem::ShaderTransition { .. } => {
-            Redraw::Window
-        }
     }
 }

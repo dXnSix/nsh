@@ -408,14 +408,6 @@ names the app quoted kept only when their quotes close them) and line breaking (
 line start and end rules of CJK punctuation, the filling of lines) depend on nothing of the browser and are tested on
 the host (`tests/text`).
 
-## Shader effects and backdrops
-
-Browsers give WebGL no pixels of the page, so `<ShaderEffect>`, `<ShaderTransition>` and `sample_backdrop` read
-pictures NSH paints itself from the elements (`nsh.js` `paintTree`), taken again on the next animation frame after the
-subtree (or, for a backdrop, the surface) changed; [shaders.md](shaders.md) has what the painter draws. A transition's
-`sample_from` is painted when its `["st", id, ms]` item comes, before the rest of the batch; its progress moves on
-animation frames, and its element has `.nsh-fx` only while it runs.
-
 ## Styles as classes
 
 No element has an inline style but its geometry (frames, a field's content box, sticky offsets, a zoomed layer, snap

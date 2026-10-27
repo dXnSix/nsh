@@ -6,17 +6,14 @@
   are removed). None of it is checked in, and nothing in it depends on the app's code: `nsh_js::type_definitions(ui_sets)`
   (the UI sets as data: `nsh_core::element::description::SetDescription`, each with its generated declarations)
   makes the declarations of everything NSH serves (`nsh-js` `declarations.rs`), and `nsh_bundler::type_definitions()`
-  the asset imports, and `nsh_bundler::shader_declarations(app)` the app's `.wgsl` files. The files: `nsh/index.d.ts` (`nsh`), one per module (`nsh/base.d.ts`, `nsh/mobile.d.ts`,
+  the asset imports. The files: `nsh/index.d.ts` (`nsh`), one per module (`nsh/base.d.ts`, `nsh/mobile.d.ts`,
   an app's set's `app/native.d.ts`, ...), `nsh/types.d.ts` (the styles, the elements' props and events, `YNode`, the JSX namespace; `nsh` exports them),
   `nsh/jsx-runtime.d.ts` (where `jsxImportSource` finds `JSX`: no intrinsic elements, so every tag is checked as the
   component it names and generic ones are inferred: `native-pipeline.md`), `nsh/globals.d.ts` (console, timers,
   frames, the web APIs and the control flow components `If` / `Each`), and from the bundler `nsh/assets.d.ts` (what
   image and font imports give) and `nsh/tokens.d.ts` (`nsh_bundler::tokens_declaration`: `interface Tokens` of `nsh`,
   every design token of the app's theme, `nsh.json` `"theme"` over the default, by name with its type, which types
-  `token()`; a theme that does not parse gives the default's names, and the build reports it), and per `.wgsl` file
-  of the app `app/<path>.d.wgsl.ts` (its default export a `ShaderAsset` of its uniforms by name, each with the values
-  its WGSL type takes; TypeScript finds it through `allowArbitraryExtensions` and `rootDirs`, the app's directory and
-  `.nsh/types/app`; a file that does not compile declares a plain `ShaderAsset`, and the build reports the error). Each file declares its own names; the `import type` lines between them are worked out
+  `token()`; a theme that does not parse gives the default's names, and the build reports it). Each file declares its own names; the `import type` lines between them are worked out
   from the names each uses. Next to them nsh writes `.nsh/tsconfig.json` (`nsh_bundler::TSCONFIG_BASE`): the
   compiler options mapping `nsh` and `nsh/*` there (`jsxImportSource: "nsh"`, no DOM library, `ESNext.Disposable`)
   and the globals, assets and tokens files; the `tsconfig.json` `nsh init` writes (`nsh_bundler::TSCONFIG`) only extends it

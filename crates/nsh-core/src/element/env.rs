@@ -50,8 +50,6 @@ pub struct Environment {
     /// conventions ([`crate::keymap::apple_keys`]); the other OSes imply
     /// theirs.
     pub apple_keyboard: bool,
-    /// The shaders the platform runs, and their language.
-    pub shaders: crate::shader::ShaderSupport,
     /// The embedding app answers `nsh/host`'s calls
     /// ([`crate::platform::Environment::host`]).
     pub host: bool,
@@ -82,7 +80,6 @@ impl Default for Environment {
             regional: RegionalPreferences::EN_US,
             time_zone: TimeZone::UTC,
             apple_keyboard: false,
-            shaders: crate::shader::ShaderSupport::default(),
             host: false,
             app_state: AppState::Active,
         }

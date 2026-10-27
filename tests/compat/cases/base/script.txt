@@ -105,7 +105,6 @@ tap id:case-base-dialog
 # headless runtime presents nothing.
 # Open by default, with the defaults.
 expect Plain dialog
-expect Shaded dialog
 prop id:plain animation slide
 prop id:plain presentation fullScreen
 prop id:plain closeOnEscape true

@@ -45,10 +45,6 @@ pub trait HostInput: Sized {
     fn node(&self) -> Option<crate::NodeId> {
         None
     }
-    /// The shader this value is (what `createShader` returned).
-    fn shader(&self) -> Option<crate::shader::ShaderSource> {
-        None
-    }
     /// The native animation node this value is (`AnimatedNode.__av`).
     fn animated_node(&self) -> Option<crate::animation::NodeId> {
         self.field("__av")
@@ -119,11 +115,6 @@ pub fn element_bits(tag: crate::Tag) -> u32 {
             Tag::WebView => on::WEBVIEW,
             Tag::Video => on::VIDEO,
             Tag::InputAccessory => on::INPUT_ACCESSORY,
-            Tag::Shader => on::SHADER,
-            Tag::ShaderEffect => on::SHADER_EFFECT,
-            Tag::ShaderTransition => on::SHADER_TRANSITION,
-            Tag::ScreenEffect => on::SCREEN_EFFECT,
-            Tag::ScreenTransition => on::SCREEN_TRANSITION,
             Tag::View => on::VIEW,
             Tag::Cell | Tag::Stack | Tag::HeaderItem | Tag::Canvas | Tag::Native | Tag::Overlay => {
                 0
@@ -171,16 +162,6 @@ pub mod on {
     pub const OVERLAY: u32 = 1 << 12;
     /// `<view>`.
     pub const VIEW: u32 = 1 << 13;
-    /// `<shader>`.
-    pub const SHADER: u32 = 1 << 14;
-    /// `<shadereffect>`.
-    pub const SHADER_EFFECT: u32 = 1 << 15;
-    /// `<shadertransition>`.
-    pub const SHADER_TRANSITION: u32 = 1 << 16;
-    /// `<screeneffect>`.
-    pub const SCREEN_EFFECT: u32 = 1 << 17;
-    /// `<screentransition>`.
-    pub const SCREEN_TRANSITION: u32 = 1 << 18;
     /// Set by the runtime itself, not part of the elements' types.
     pub const INTERNAL: u32 = 1 << 31;
 }
@@ -914,19 +895,6 @@ const GROUPS: &[(u32, &str, &str)] = &[
     (on::VIDEO, "Video", "videos"),
     (on::INPUT_ACCESSORY, "InputAccessory", "input accessories"),
     (on::OVERLAY, "Overlay", "`<Overlay>`"),
-    (on::SHADER, "Shader", "`<Shader>`"),
-    (on::SHADER_EFFECT, "ShaderEffect", "`<ShaderEffect>`"),
-    (
-        on::SHADER_TRANSITION,
-        "ShaderTransition",
-        "`<ShaderTransition>`",
-    ),
-    (on::SCREEN_EFFECT, "ScreenEffect", "`<ScreenEffect>`"),
-    (
-        on::SCREEN_TRANSITION,
-        "ScreenTransition",
-        "`<ScreenTransition>`",
-    ),
 ];
 
 /// The declarations of the host elements' props: the named types they use

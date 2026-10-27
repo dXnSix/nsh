@@ -910,16 +910,12 @@ pub(crate) fn drawn_area(view: &NshView) -> Option<D2D_RECT_F> {
 /// border and outline.
 pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) {
     let state = view.state();
-    crate::shader::take_backdrop(cx, &state);
     crate::decor::draw_backdrop(cx, &state);
     crate::decor::draw_background(cx, &state);
     let clip = state.clips();
     let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
     // Most views (boxes, rows) have no content of their own: no clip for it.
-    let content = state.text.is_some()
-        || state.image.is_some()
-        || state.canvas.is_some()
-        || crate::shader::fills(&state);
+    let content = state.text.is_some() || state.image.is_some() || state.canvas.is_some();
     if clip {
         cx.push_clip_rounded(crate::geom::rect(0.0, 0.0, w, h), state.radii());
     } else if content {
@@ -928,7 +924,6 @@ pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) {
         cx.push_clip_rect(0.0, 0.0, w, h);
     }
     if content {
-        crate::shader::draw(cx, &state);
         crate::text::draw(cx, &state);
         crate::image::draw(cx, &state);
         crate::canvas::draw(cx, &state);
@@ -937,31 +932,27 @@ pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) {
         cx.pop();
     }
     let natives = state.natives.clone();
-    let effect = crate::shader::effect(&state);
     drop(state);
-    // An effect's children are its shader's content.
-    if !effect || !crate::shader::draw_effect(cx, view, world) {
-        // Inside a clip (a scroll view's content), children out of sight are
-        // left out: drawing them would issue their commands for nothing.
-        let visible = if clip { cx.visible() } else { None };
-        view.with_children(|children| {
-            for child in children {
-                let origin = {
-                    let s = child.state();
-                    view.state().child_origin(s.frame, s.shift)
-                };
-                if let Some(visible) = &visible
-                    && hidden_by_clips(child, world, origin, visible)
-                {
-                    if cx.records {
-                        child.set_painted(None);
-                    }
-                    continue;
+    // Inside a clip (a scroll view's content), children out of sight are
+    // left out: drawing them would issue their commands for nothing.
+    let visible = if clip { cx.visible() } else { None };
+    view.with_children(|children| {
+        for child in children {
+            let origin = {
+                let s = child.state();
+                view.state().child_origin(s.frame, s.shift)
+            };
+            if let Some(visible) = &visible
+                && hidden_by_clips(child, world, origin, visible)
+            {
+                if cx.records {
+                    child.set_painted(None);
                 }
-                draw_view(cx, child, world, origin);
+                continue;
             }
-        });
-    }
+            draw_view(cx, child, world, origin);
+        }
+    });
     cx.set_transform(world);
     for native in &natives {
         let r = native.rect;
@@ -1128,42 +1119,6 @@ fn draw_flat(cx: &mut DrawCx<'_>, view: &mut NshView, base: Mat4) {
     s.anim = saved_anim;
     s.live = saved_live;
     s.fade = saved_fade;
-}
-
-/// Draws with `f` into `target` (a target bitmap of `scale` pixels per
-/// point, cleared first) outside the window's pass: a shader transition's
-/// picture of its children before a batch changes them. False when drawing
-/// failed.
-pub(crate) fn draw_offscreen(
-    surface: &Rc<Surface>,
-    target: &ID2D1Image,
-    scale: f32,
-    f: impl FnOnce(&mut DrawCx<'_>),
-) -> bool {
-    let Ok(gfx) = gfx::get() else { return false };
-    crate::decor::layer::with_context(&gfx, |dc| {
-        // SAFETY: COM calls on a context nobody else draws with; `EndDraw`
-        // follows `BeginDraw`.
-        unsafe {
-            dc.SetTarget(target);
-            dc.SetDpi(96.0 * scale, 96.0 * scale);
-            dc.BeginDraw();
-            dc.SetTransform(&Matrix3x2::identity());
-            dc.Clear(Some(&color_f(Color::TRANSPARENT)));
-        }
-        match DrawCx::with_dc(&gfx, dc, scale, crate::system::dark(surface), surface.now()) {
-            Ok(mut cx) => {
-                // Nothing behind it to read, no window to place items in.
-                cx.offscreen = true;
-                cx.backdrop = false;
-                f(&mut cx);
-            }
-            Err(err) => log::debug!("render: offscreen pass not started: {err}"),
-        }
-        // SAFETY: closes the `BeginDraw` above.
-        unsafe { dc.EndDraw(None, None) }.is_ok()
-    })
-    .unwrap_or(false)
 }
 
 /// Draws the surface's window: the whole tree, then presents it.

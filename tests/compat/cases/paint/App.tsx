@@ -8,7 +8,6 @@ import PaintEffects from "./paint-effects";
 import PaintInlineAlign from "./paint-inline-align";
 import PaintMisc from "./paint-misc";
 import PaintMotion from "./paint-motion";
-import PaintShader from "./paint-shader";
 import PaintObjectPosition from "./paint-object-position";
 import PaintShadows from "./paint-shadows";
 import PaintTailwind from "./paint-tailwind";
@@ -22,7 +21,6 @@ const cases: Record<string, () => JSX.Element> = {
   "paint-effects": PaintEffects,
   "paint-misc": PaintMisc,
   "paint-motion": PaintMotion,
-  "paint-shader": PaintShader,
   "paint-object-position": PaintObjectPosition,
   "paint-shadows": PaintShadows,
   "paint-text": PaintText,

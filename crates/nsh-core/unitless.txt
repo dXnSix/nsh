@@ -139,7 +139,6 @@ ops::EventPayload::PanCancelled.velocity_x                       # points per se
 ops::EventPayload::PanCancelled.velocity_y                       # points per second, the same rate as Pan.velocity_y
 ops::IMAGE_SCALES                                                # pixel densities (device pixels per point)
 ops::ImageProp::FadeDuration.0                                   # time
-ops::Prop::TransitionDuration.0                                  # time
 ops::ImageScales::iter ->                                        # pixel densities (device pixels per point)
 ops::NativeProp::ProgressInterval.0                              # time
 ops::NativeProp::Rate.0                                          # a playback rate multiplier
@@ -189,15 +188,6 @@ scroll::snap_duration(velocity)                                  # a velocity, p
 scroll::spokes ->                                                # an opacity per spoke, 0..1
 scroll::wheel_end(vx)                                            # a velocity, points per second
 scroll::wheel_end(vy)                                            # a velocity, points per second
-shader::ShaderAnimation.duration                                 # time
-shader::ShaderFill.progress                                      # a shader's `nsh.progress` (any number the app gives it)
-shader::ShaderNumber::Number.0                                   # a number a shader reads (any unit the shader gives it)
-shader::ShaderNumber::constant ->                                # a number a shader reads (any unit the shader gives it)
-shader::UniformValue::Number.0                                   # a shader uniform's component (any of its types' units)
-shader::nsh_buffer(scale)                                        # the screen's pixel ratio
-shader::nsh_buffer(time)                                         # time
-shader::premultiplied ->                                         # color components (0 to 1)
-shader::write_args(progress)                                     # a shader's `nsh.progress` (any number the app gives it)
 shape::SMOOTHING                                                 # a corner smoothing factor
 style::Color::to_f64 ->                                          # color components
 style::PatchValue::Number.0                                      # a generic number (a JS value, a recorded slot)

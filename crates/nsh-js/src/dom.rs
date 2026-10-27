@@ -1299,8 +1299,6 @@ fn set_prop(
         "pullValue",
         "stickyHeaderOffset",
         "tooltip",
-        "uniforms",
-        "progress",
     ]
     .iter()
     .find(|k| **k == name)

@@ -239,62 +239,6 @@ const NSH: &[Item] = &[
         ),
     ),
     (
-        "Shader",
-        Export::Value(|cx| dom::host_component(cx, "shader", true)),
-        Ts::function(
-            "A view a shader fills (Metal, Direct2D, OpenGL, WebGL 2, Android's\nruntime shaders), its children drawn over it: `src` is what\n`createShader` returns or a `.wgsl` file imported, `uniforms` the\nvalues of its uniforms (animated values change them on the UI thread).",
-            &["<U = ShaderUniforms>(props: ShaderProps<U>): YNode"],
-        ),
-    ),
-    (
-        "ShaderEffect",
-        Export::Value(|cx| dom::host_component(cx, "shadereffect", true)),
-        Ts::function(
-            "A view whose children draw through a shader: they are what its\n`sample_content(p)` reads, the shader's result is what shows. Without\n`src` the children draw as they are. `progress` is `nsh.progress`,\n`maxSampleOffset` how far beyond a pixel the shader samples them.",
-            &["<U = ShaderUniforms>(props: ShaderEffectProps<U>): YNode"],
-        ),
-    ),
-    (
-        "ShaderTransition",
-        Export::Value(|cx| dom::host_component(cx, "shadertransition", true)),
-        Ts::function(
-            "A view whose children change through a shader: when `value` changes,\na picture of what they drew is what `sample_from(p)` reads and what\nthey draw now what `sample_to(p)` reads, while `nsh.progress` goes from\n0 to 1 over `duration` milliseconds (300 by default). Without `src` it\nruns `fallback`: a cross-fade, or `\"none\"`.",
-            &["<U = ShaderUniforms>(props: ShaderTransitionProps<U>): YNode"],
-        ),
-    ),
-    (
-        "ScreenEffect",
-        Export::Value(|cx| dom::host_component(cx, "screeneffect", true)),
-        Ts::function(
-            "The whole surface drawn through a shader: what it shows (its pages,\ndialogs and overlays, never the app around it) is what `sample_content(p)`\nreads, `p` in points from the surface's top-left, and the shader's result\nis what shows; the views stay where they are for touches and\naccessibility. Declared anywhere, it takes no space; without `src` the\nsurface draws as it is. With several, the last one made draws.",
-            &["<U = ShaderUniforms>(props: ScreenEffectProps<U>): YNode"],
-        ),
-    ),
-    (
-        "ScreenTransition",
-        Export::Value(|cx| dom::host_component(cx, "screentransition", true)),
-        Ts::function(
-            "The whole surface changing through a shader: when `value` changes, a\npicture of what the surface showed is what `sample_from(p)` reads and\nwhat it shows now what `sample_to(p)` reads, while `nsh.progress` goes\nfrom 0 to 1 over `duration` milliseconds (300 by default). Declared\nanywhere, it takes no space; without `src` it runs `fallback`: a\ncross-fade, or `\"none\"`.",
-            &["<U = ShaderUniforms>(props: ScreenTransitionProps<U>): YNode"],
-        ),
-    ),
-    (
-        "createShader",
-        Export::Function(crate::shader::create_shader, 1),
-        Ts::function(
-            "A shader from WGSL source (`docs/dev/shaders.md`): `fn main(p: vec2f) -> vec4f`\nor `fn main(p: vec2f, u: Uniforms) -> vec4f`, `p` in points from the view's\ntop-left, the color premultiplied. Checked against NSH's profile, so it\nruns on every platform; throws a `SyntaxError` naming the line otherwise.\nThe same source is the same shader.",
-            &["<U = ShaderUniforms>(source: string): ShaderAsset<U>"],
-        ),
-    ),
-    (
-        "shaderSupport",
-        Export::Function(crate::shader::shader_support, 0),
-        Ts::function(
-            "How this platform runs shaders of each kind: `\"live\"`, `\"snapshot\"`\n(from a picture of the input, taken again when it changes) or `false` (the\nelement draws its children only).",
-            &["(): ShaderSupport"],
-        ),
-    ),
-    (
         "Overlay",
         Export::Value(|cx| dom::host_component(cx, "overlay", true)),
         Ts::function(

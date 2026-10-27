@@ -29,11 +29,6 @@ const CANVAS_ARG: f32 = 1000.0;
 const COMPONENT_NUMBER: f32 = 70000.0;
 /// The same holding a color (ARGB bits) is `COMPONENT_COLOR + n`.
 const COMPONENT_COLOR: f32 = 140000.0;
-/// A shader's uniform component `n` is `SHADER_NUMBER + n` (a number) or
-/// `SHADER_COLOR + n` (a color as ARGB bits, written premultiplied from
-/// there), past the components' codes.
-const SHADER_NUMBER: f32 = 300_000.0;
-const SHADER_COLOR: f32 = 400_000.0;
 /// A color value as Java's ARGB bits.
 fn argb(value: AnimationValue) -> f32 {
     match value {
@@ -318,15 +313,6 @@ impl UiAnimation {
                             other => other.number(),
                         };
                         out.extend_from_slice(&[v, CANVAS_ARG + k as f32, value]);
-                    }
-                    AnimationProp::ShaderUniform(k) => {
-                        let (code, value) = match self.graph.eval(node) {
-                            AnimationValue::Color(c) => {
-                                (SHADER_COLOR, f32::from_bits(c.rotate_right(8)))
-                            }
-                            other => (SHADER_NUMBER, other.number()),
-                        };
-                        out.extend_from_slice(&[v, code + k as f32, value]);
                     }
                     AnimationProp::Transform(i) => {
                         if let Some(o) = overrides.get_mut(i as usize) {

@@ -540,11 +540,6 @@ impl Session {
                     Platform::Ios | Platform::Android => Idiom::default(),
                     _ => Idiom::Desktop,
                 },
-                // The model keeps what shader views draw, as a platform
-                // that fills them would show it.
-                shaders: nsh_core::shader::ShaderSupport::fills(
-                    nsh_core::shader::ShaderLanguage::None,
-                ),
                 host: page_host.is_some(),
                 ..Default::default()
             },

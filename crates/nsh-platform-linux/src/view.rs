@@ -9,7 +9,7 @@
 //! bounds picking.
 //!
 //! A view draws itself in `snapshot`: shadows and background
-//! ([`crate::decor`]), its content (text, image, canvas, shader), its children
+//! ([`crate::decor`]), its content (text, image, canvas), its children
 //! (clipped to the rounded bounds when `overflow: hidden`), then its
 //! border, as UIKit draws layer borders over the content. Views with text
 //! widen their damage by the pixels glyphs paint outside their nodes
@@ -75,8 +75,6 @@ pub(crate) struct ViewState {
     pub(crate) image: Option<crate::image::ImageState>,
     /// Canvas content.
     pub(crate) canvas: Option<crate::canvas::CanvasState>,
-    /// What a shader view draws.
-    pub(crate) shader: Option<crate::shader::ShaderState>,
     /// Text field (input views).
     pub(crate) input: Option<std::rc::Rc<crate::text_input::InputState>>,
     /// Hosted GTK widgets.
@@ -109,7 +107,6 @@ impl ViewState {
             area_selection: None,
             image: None,
             canvas: None,
-            shader: None,
             input: None,
             natives: Vec::new(),
             overflow: None,
@@ -365,12 +362,8 @@ mod imp {
 
     impl NshView {
         /// Draws the view and its children.
-        pub(super) fn draw(&self, snapshot: &gtk::Snapshot) {
+        fn draw(&self, snapshot: &gtk::Snapshot) {
             let obj = self.obj();
-            // A picture of what is behind a view stops at it.
-            if crate::shader::skipped(&obj) {
-                return;
-            }
             let state = self.state.borrow();
             if state.style.hidden || crate::decor::backface_away(&state) {
                 return;
@@ -385,9 +378,7 @@ mod imp {
             let filters = crate::decor::push_filters(snapshot, &state);
             let (phase, changed) = self.damage.get();
             let phase = phase ^ changed;
-            if !crate::shader::tracing() {
-                self.damage.set((phase, false));
-            }
+            self.damage.set((phase, false));
             state.draw_overhang(snapshot, phase);
             let soft = crate::decor::soft_shadows(obj.upcast_ref(), &state);
             crate::decor::draw_background(snapshot, &state, soft);
@@ -416,28 +407,33 @@ mod imp {
                     .map_or(obj.scale_factor() as f64, |s| s.scale());
                 crate::canvas::draw(snapshot, &obj, &state, scale);
             }
-            crate::shader::draw(snapshot, &state, &obj);
             if !clip {
                 snapshot.pop();
             }
-            let effect = crate::shader::effect(&state);
             drop(state);
-            // An effect's children are its shader's content.
-            if !effect || !crate::shader::draw_effect(snapshot, &obj) {
-                obj.snapshot_children(snapshot);
+            let mut child = obj.first_child();
+            while let Some(widget) = child {
+                child = widget.next_sibling();
+                // A view inserted (or given a size) by a batch applied
+                // since the last layout has no allocation until the next
+                // frame's; snapshots taken in between (images of a screen
+                // the app removed) skip it, as GTK would after warning.
+                if let Some(view) = widget.downcast_ref::<super::NshView>()
+                    && widget.width() == 0
+                    && widget.height() == 0
+                    && view.state().frame.size.width.0 >= 1.0
+                    && view.state().frame.size.height.0 >= 1.0
+                {
+                    continue;
+                }
+                obj.snapshot_child(&widget, snapshot);
             }
             let state = self.state.borrow();
-            // What a picture of what is behind a view leaves out (above it).
-            let above = crate::shader::past();
-            if !above {
-                crate::scroll::draw_indicator(snapshot, &state);
-            }
+            crate::scroll::draw_indicator(snapshot, &state);
             if clip {
                 snapshot.pop();
             }
-            if !above {
-                crate::decor::draw_border(snapshot, &state);
-            }
+            crate::decor::draw_border(snapshot, &state);
             for _ in 0..filters {
                 snapshot.pop();
             }
@@ -586,13 +582,6 @@ impl NshView {
 
     /// Something it draws changed.
     pub(crate) fn changed(&self) {
-        self.redraw();
-        crate::shader::ui_changed();
-    }
-
-    /// Draws again: what it draws changed, and nothing else needs to know
-    /// (a shader's own picture).
-    pub(crate) fn redraw(&self) {
         let damage = &self.imp().damage;
         damage.set((damage.get().0, true));
         self.queue_draw();
@@ -604,51 +593,6 @@ impl NshView {
             parent.queue_allocate();
         }
         self.queue_draw();
-        crate::shader::ui_changed();
-    }
-
-    /// Draws its child widgets into `snapshot`, bottom to top. While a
-    /// picture of what is behind a view is taken ([`crate::shader`]), its
-    /// child views draw anew (GTK's render nodes of the last frame have the
-    /// view in them).
-    pub(crate) fn snapshot_children(&self, snapshot: &gtk::Snapshot) {
-        let tracing = crate::shader::tracing();
-        let mut child = self.first_child();
-        while let Some(widget) = child {
-            child = widget.next_sibling();
-            // A view inserted (or given a size) by a batch applied since
-            // the last layout has no allocation until the next frame's;
-            // snapshots taken in between (images of a screen the app
-            // removed) skip it, as GTK would after warning.
-            if let Some(view) = widget.downcast_ref::<NshView>()
-                && widget.width() == 0
-                && widget.height() == 0
-                && view.state().frame.size.width.0 >= 1.0
-                && view.state().frame.size.height.0 >= 1.0
-            {
-                continue;
-            }
-            match widget.downcast_ref::<NshView>() {
-                Some(view) if tracing => {
-                    if !widget.is_drawable() {
-                        continue;
-                    }
-                    snapshot.save();
-                    if let Some(m) = widget.compute_transform(self) {
-                        snapshot.transform_matrix(&m);
-                    }
-                    view.draw(snapshot);
-                    snapshot.restore();
-                }
-                _ => self.snapshot_child(&widget, snapshot),
-            }
-        }
-    }
-
-    /// Draws itself and its subtree into `snapshot` anew, in its own
-    /// coordinates (not GTK's render nodes of the last frame).
-    pub(crate) fn draw(&self, snapshot: &gtk::Snapshot) {
-        self.imp().draw(snapshot);
     }
 
     /// The view's parent view, if it is attached to one.

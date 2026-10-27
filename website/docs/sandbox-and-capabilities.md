@@ -41,8 +41,6 @@ An embedded app has these limits:
 | Nodes kept | 200 000 | The VM stops. |
 | Changes at once (queued operations) | 8 000 000 values | The VM stops. |
 | Operations in one canvas drawing | 1 000 000 | The VM stops. |
-| Shaders made (`.wgsl` imports, `createShader`) | 64 | Making another throws a `RangeError`. |
-| Texture samples a pixel of a shader takes | 128 | Making the shader throws a `SyntaxError` that names its samples. |
 
 **Time is budgeted per call, not per app.** A "call" is one thing the runtime asks JS to do: handle one event
 (including the rendering it causes), bind one list row, run one timer, run one frame's `requestAnimationFrame`

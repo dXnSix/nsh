@@ -62,11 +62,6 @@ final class Mounter {
     private static final int ACCESSIBILITY_LABEL = 32;
     private static final int APPEARANCE = 33;
     private static final int COMPONENT_PROP_SLOTS = 34;
-    private static final int SHADER_PROGRAM = 35;
-    private static final int SHADER = 36;
-    private static final int SHADER_TRANSITION = 37;
-    /** Shader programs by id (`encode.rs` `shader_program`); null for one in no language. */
-    private final java.util.HashMap<Integer, ShaderBox.Program> shaderPrograms = new java.util.HashMap<>();
     /** The surface lays out right to left: native widgets mirror. */
     boolean rtl;
     /** The app's appearance (`nsh_core::platform::Appearance`): 0 the system's, 1 light, 2 dark. */
@@ -88,21 +83,6 @@ final class Mounter {
         boolean shown = true, transparent, backVisible = true, gesture = true, preventBack;
         int tint, background, titleColor, animation, left = -1, right = -1, titleView = -1;
         float headerHeight;
-        /** Its push / pop transition through a shader, if any. */
-        ShaderBox.Nav nav;
-    }
-
-    /** `encode.rs` `nav_shader`: a page's or a dialog's transition through a shader. */
-    private ShaderBox.Nav nav(ByteBuffer b) {
-        int program = b.getInt();
-        if (program < 0) return null;
-        ShaderBox.Nav n = new ShaderBox.Nav();
-        n.program = shaderPrograms.get(program);
-        n.inputs = b.getInt();
-        n.uniforms = new int[b.getInt()];
-        for (int k = 0; k < n.uniforms.length; k++) n.uniforms[k] = b.getInt();
-        n.ms = b.getFloat();
-        return n.program != null ? n : null;
     }
 
     /** Properties that animations can override, as last set by a style. */
@@ -197,7 +177,7 @@ final class Mounter {
     /** Modals by id (their root views are in `views`). */
     private final SparseArray<ModalHost> modals = new SparseArray<>();
     /** Screens' options, applied once the batch's stacks are settled. */
-    final SparseArray<ScreenOptions> screenOptions = new SparseArray<>();
+    private final SparseArray<ScreenOptions> screenOptions = new SparseArray<>();
     /** Parents of screens, header items and modals (not their superviews). */
     private final android.util.SparseIntArray hosts = new android.util.SparseIntArray();
     private final java.util.LinkedHashSet<Integer> dirtyStacks = new java.util.LinkedHashSet<>();
@@ -376,70 +356,6 @@ final class Mounter {
                     trackStates(id, states);
                     break;
                 }
-                case SHADER_PROGRAM: {
-                    int id = b.getInt();
-                    if (b.getInt() == 0) {
-                        shaderPrograms.put(id, null);
-                        break;
-                    }
-                    ShaderBox.Program p = new ShaderBox.Program();
-                    p.source = (String) objects[b.getInt()];
-                    int n = b.getInt();
-                    p.uniforms = new String[n];
-                    p.buffers = new int[n];
-                    p.ints = new boolean[n];
-                    p.words = new int[n][];
-                    for (int i = 0; i < n; i++) {
-                        p.uniforms[i] = (String) objects[b.getInt()];
-                        p.buffers[i] = b.getInt();
-                        p.ints[i] = b.getInt() != 0;
-                        p.words[i] = new int[b.getInt()];
-                        for (int k = 0; k < p.words[i].length; k++) p.words[i][k] = b.getInt();
-                    }
-                    int s = b.getInt();
-                    p.shaders = new String[s];
-                    p.inputs = new int[s];
-                    for (int i = 0; i < s; i++) {
-                        p.shaders[i] = (String) objects[b.getInt()];
-                        p.inputs[i] = b.getInt();
-                    }
-                    shaderPrograms.put(id, p);
-                    break;
-                }
-                case SHADER: {
-                    View v = views.get(b.getInt());
-                    int program = b.getInt();
-                    if (program < 0) {
-                        if (v instanceof ShaderBox) ((ShaderBox) v).setFill(null, false, 0, 0, 0, new int[0], new String[0], new int[0]);
-                        if (v == screenEffect) screenEffect = null;
-                        break;
-                    }
-                    boolean time = b.getInt() != 0;
-                    int inputs = b.getInt();
-                    float progress = b.getFloat(), maxOffset = b.getFloat();
-                    int[] uniforms = new int[b.getInt()];
-                    for (int k = 0; k < uniforms.length; k++) uniforms[k] = b.getInt();
-                    int n = b.getInt();
-                    String[] uris = new String[n];
-                    int[] sizes = new int[n];
-                    for (int i = 0; i < n; i++) {
-                        int s = b.getInt();
-                        uris[i] = s >= 0 ? (String) objects[s] : null;
-                        sizes[i] = b.getInt();
-                    }
-                    if (v instanceof ShaderBox) {
-                        shader((ShaderBox) v, shaderPrograms.get(program), time, inputs, progress, maxOffset, uniforms, uris, sizes);
-                        if (((ShaderBox) v).screen == 1) screenEffect = (ShaderBox) v;
-                    }
-                    break;
-                }
-                case SHADER_TRANSITION: {
-                    View v = views.get(b.getInt());
-                    float ms = b.getFloat();
-                    if (v instanceof ShaderBox && ((ShaderBox) v).screen == 2) screenTransition((ShaderBox) v, ms);
-                    else if (v instanceof ShaderBox) ((ShaderBox) v).startTransition(ms);
-                    break;
-                }
                 case CANVAS: {
                     int id = b.getInt(), words = b.getInt();
                     int[] code = new int[words];
@@ -568,9 +484,7 @@ final class Mounter {
                     b.getInt(); // presentation: Android modals cover the window
                     boolean translucent = b.getInt() != 0;
                     boolean closeOnEscape = b.getInt() != 0;
-                    ShaderBox.Nav nav = nav(b);
                     if (modal != null) {
-                        modal.nav = nav;
                         modal.animation = animation;
                         modal.closeOnEscape = closeOnEscape;
                         modal.setStatusBarTranslucent(translucent);
@@ -633,128 +547,7 @@ final class Mounter {
         }
         created.clear();
         finishNavigation();
-        // What the screen effect covers may have changed (a dialog came).
-        if (screenEffect != null || !screenTargets.isEmpty()) applyScreen();
         outputs(Native.afterBatch(handle(), seq));
-    }
-
-    // Shaders over the whole surface (`<ScreenEffect>`, `<ScreenTransition>`).
-
-    /** The screen effect that draws, if any (the core gives one a fill at a time). */
-    private ShaderBox screenEffect;
-    /** The views it covers now: the root, the dialogs' views, the overlays. */
-    private final java.util.ArrayList<View> screenTargets = new java.util.ArrayList<>();
-    /** Shader overlays of transitions over the surface's windows (screen transitions, dialogs'), which it covers too. */
-    final java.util.ArrayList<View> screenOverlays = new java.util.ArrayList<>();
-    private boolean screenQueued;
-    /** The screen transition that runs. */
-    private ValueAnimator screenRunning;
-
-    /** The screen effect draws again on the next frame (its uniforms, or what it covers, changed). */
-    void screenDirty() {
-        if (screenQueued) return;
-        screenQueued = true;
-        host.postOnAnimation(() -> {
-            screenQueued = false;
-            applyScreen();
-        });
-    }
-
-    /**
-     * The screen effect's shader as the render effect of the surface's root
-     * and of each dialog's view (and the transitions' overlays), each one's
-     * live content, in points from the surface's top-left; none where it
-     * does not draw.
-     */
-    void applyScreen() {
-        ShaderBox s = screenEffect;
-        boolean runs = s != null && s.screenRuns() && host.getWidth() > 0 && host.getHeight() > 0;
-        java.util.ArrayList<View> targets = new java.util.ArrayList<>();
-        if (runs) {
-            targets.add(root);
-            for (ModalHost m : shownModals) targets.add(m.view());
-            targets.addAll(screenOverlays);
-        }
-        for (View v : screenTargets) if (!targets.contains(v)) v.setRenderEffect(null);
-        screenTargets.clear();
-        screenTargets.addAll(targets);
-        if (!runs) return;
-        float d = density;
-        float width = host.getWidth() / d, height = host.getHeight() / d;
-        int[] base = new int[2], at = new int[2];
-        host.getLocationOnScreen(base);
-        for (View v : targets) {
-            if (v.getWidth() <= 0 || v.getHeight() <= 0) continue;
-            v.getLocationOnScreen(at);
-            v.setRenderEffect(s.screenEffect((at[0] - base[0]) / d, (at[1] - base[1]) / d,
-                    v.getWidth() / d, v.getHeight() / d, v.getWidth(), v.getHeight(), width, height));
-        }
-        if (s.readsTime() && host.isShown()) screenDirty();
-    }
-
-    /** The surface's views, bottom to top: the app's view and each dialog's. */
-    private View[] surfaceViews() {
-        View[] views = new View[1 + shownModals.size()];
-        views[0] = host;
-        for (int i = 0; i < shownModals.size(); i++) views[i + 1] = shownModals.get(i).view();
-        return views;
-    }
-
-    /**
-     * A screen transition starts, before the rest of its batch: the surface
-     * (the app's view and its dialogs' windows) pictured now is its
-     * `sample_from`, pictured again before the next frame draws its
-     * `sample_to`, through an overlay of its shader on the topmost window
-     * over the surface, while `nsh.progress` goes from 0 to 1 over `ms`.
-     */
-    private void screenTransition(ShaderBox s, float ms) {
-        if (android.os.Build.VERSION.SDK_INT < 33 || !s.screenRuns() || host.getWidth() <= 0) return;
-        if (screenRunning != null) screenRunning.end();
-        android.graphics.Bitmap before = ShaderBox.picture(surfaceViews());
-        if (before == null) return;
-        ShaderBox o = s.overlay();
-        o.setSides(before, null);
-        ModalHost top = shownModals.isEmpty() ? null : shownModals.get(shownModals.size() - 1);
-        ViewGroup parent = top != null && top.decor() != null ? top.decor() : host;
-        android.widget.FrameLayout.LayoutParams lp =
-                new android.widget.FrameLayout.LayoutParams(host.getWidth(), host.getHeight());
-        if (parent != host) {
-            int[] a = new int[2], p = new int[2];
-            host.getLocationOnScreen(a);
-            parent.getLocationOnScreen(p);
-            lp.leftMargin = a[0] - p[0];
-            lp.topMargin = a[1] - p[1];
-        }
-        parent.addView(o, lp);
-        screenOverlays.add(o);
-        screenDirty();
-        // After the batch: once the surface is laid out, before it draws.
-        host.getViewTreeObserver().addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
-            @Override
-            public boolean onPreDraw() {
-                host.getViewTreeObserver().removeOnPreDrawListener(this);
-                o.setVisibility(View.INVISIBLE);
-                android.graphics.Bitmap after = ShaderBox.picture(surfaceViews());
-                o.setVisibility(View.VISIBLE);
-                o.setSides(before, after);
-                return true;
-            }
-        });
-        ValueAnimator a = ValueAnimator.ofFloat(0, 1);
-        a.setDuration(Math.max(1, Math.round(ms)));
-        a.setInterpolator(null);
-        a.addUpdateListener(x -> o.setNumber(0xffff, (float) x.getAnimatedValue()));
-        a.addListener(new AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                if (o.getParent() instanceof ViewGroup) ((ViewGroup) o.getParent()).removeView(o);
-                screenOverlays.remove(o);
-                if (screenRunning == animation) screenRunning = null;
-                screenDirty();
-            }
-        });
-        screenRunning = a;
-        a.start();
     }
 
     // --- The keyboard's motion --------------------------------------------------
@@ -850,21 +643,6 @@ final class Mounter {
             case 13: v = new VideoBox(context, this, host, id); break;
             case 14: v = new CanvasBox(context, this, id); break;
             case 15: v = new ComponentBox(context, this, id); break;
-            case 16: v = new ShaderBox(context, this, id, false, false); break;
-            case 17: v = new ShaderBox(context, this, id, true, false); break;
-            case 18: v = new ShaderBox(context, this, id, true, true); break;
-            case 19: {
-                ShaderBox s = new ShaderBox(context, this, id, true, false);
-                s.screen = 1;
-                v = s;
-                break;
-            }
-            case 20: {
-                ShaderBox s = new ShaderBox(context, this, id, false, false);
-                s.screen = 2;
-                v = s;
-                break;
-            }
             default: v = new Box(context, this, id);
         }
         views.put(id, v);
@@ -1026,7 +804,6 @@ final class Mounter {
 
     private void delete(int id) {
         removeHosted(id);
-        if (screenEffect != null && views.get(id) == screenEffect) screenEffect = null;
         ModalHost modal = modals.get(id);
         if (modal != null) {
             modal.dismiss();
@@ -1686,28 +1463,6 @@ final class Mounter {
         }
     }
 
-    /** What a shader box draws; loads its images (bitmaps, at their natural size). */
-    private void shader(ShaderBox box, ShaderBox.Program program, boolean time, int inputs, float progress,
-            float maxOffset, int[] uniforms, String[] uris, int[] sizes) {
-        String[] before = box.uris;
-        box.setFill(program, time, inputs, progress, maxOffset, uniforms, uris, sizes);
-        for (int slot = 0; slot < uris.length && slot < box.images.length; slot++) {
-            String uri = uris[slot];
-            if (uri == null || (slot < before.length && uri.equals(before[slot]) && box.images[slot] != null)) continue;
-            final int at = slot;
-            Images.Image cached = images.request(uri, 0, 0, (image, error) -> {
-                if (image != null && !image.vector && image.content instanceof android.graphics.Bitmap) {
-                    box.setImage(at, uri, (android.graphics.Bitmap) image.content, image.width, image.height);
-                } else {
-                    android.util.Log.w("nsh", "<Shader> image failed: " + (image != null ? notABitmap(uri) : error));
-                }
-            });
-            if (cached != null && !cached.vector && cached.content instanceof android.graphics.Bitmap) {
-                box.setImage(at, uri, (android.graphics.Bitmap) cached.content, cached.width, cached.height);
-            }
-        }
-    }
-
     private static String notABitmap(String uri) {
         return uri + " is an SVG image: canvases draw bitmaps (PNG, JPEG, ...)";
     }
@@ -1716,8 +1471,6 @@ final class Mounter {
     private static final int CANVAS_ARG = 1000;
     /** A native component's animated prop slot `n`: a number as `COMPONENT_NUMBER + n`, a color (ARGB bits) as `COMPONENT_COLOR + n` (`animation.rs`). */
     private static final int COMPONENT_NUMBER = 70000, COMPONENT_COLOR = 140000;
-    /** A shader's uniform component `n` arrives as `SHADER_NUMBER + n` or, a color, `SHADER_COLOR + n` (past the components' codes). */
-    private static final int SHADER_NUMBER = 300_000, SHADER_COLOR = 400_000;
 
     /** How much further each sticky cell sticks (px; an animated `StickyCell::offset`). */
     private final java.util.HashMap<Integer, Float> stickyOffsets = new java.util.HashMap<>();
@@ -1742,13 +1495,6 @@ final class Mounter {
             if (v == null) continue;
             float value = out[i + 2];
             int prop = (int) out[i + 1];
-            if (prop >= SHADER_NUMBER) {
-                if (v instanceof ShaderBox) {
-                    if (prop >= SHADER_COLOR) ((ShaderBox) v).setColor(prop - SHADER_COLOR, Float.floatToRawIntBits(value));
-                    else ((ShaderBox) v).setNumber(prop - SHADER_NUMBER, value);
-                }
-                continue;
-            }
             if (prop >= COMPONENT_NUMBER) {
                 if (v instanceof ComponentBox) {
                     boolean color = prop >= COMPONENT_COLOR;
@@ -1901,7 +1647,6 @@ final class Mounter {
         o.titleView = b.getInt();
         o.headerHeight = b.getFloat();
         o.backTitle = string(objects, b.getInt());
-        o.nav = nav(b);
         screenOptions.put(id, o);
         dirtyScreens.add(id);
         int stack = hosts.get(id, -1);

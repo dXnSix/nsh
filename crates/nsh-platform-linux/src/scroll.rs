@@ -75,7 +75,6 @@ impl ScrollHost for Host<'_> {
     fn moved(&self, offset: Point<Points>) {
         self.view.queue_allocate();
         self.view.queue_draw();
-        crate::shader::ui_changed();
         pin_sticky(self.surface, self.view);
         let scrolled =
             self.surface

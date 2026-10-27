@@ -56,7 +56,6 @@ mod rust_renderers;
 mod rust_scrolling;
 mod rust_styles;
 mod rust_touch;
-mod shader;
 mod shutdown;
 mod split;
 mod storage;

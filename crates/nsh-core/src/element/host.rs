@@ -210,37 +210,6 @@ host_element! {
 }
 
 host_element! {
-    /// A view a shader fills (`<shader>`), made by [`shader`]: its children
-    /// are drawn over it.
-    ShaderView
-}
-
-host_element! {
-    /// A view whose children draw through a shader (`<shadereffect>`),
-    /// made by [`shader_effect`].
-    ShaderEffectView
-}
-
-host_element! {
-    /// A view whose children change through a shader
-    /// (`<shadertransition>`), made by [`shader_transition`].
-    ShaderTransitionView
-}
-
-host_element! {
-    /// The whole surface drawn through a shader (`<screeneffect>`), made by
-    /// [`screen_effect`]: it takes no space and has no children.
-    ScreenEffectView
-}
-
-host_element! {
-    /// The whole surface changing through a shader (`<screentransition>`),
-    /// made by [`screen_transition`]: it takes no space and has no
-    /// children.
-    ScreenTransitionView
-}
-
-host_element! {
     /// A web page (`<webview>`), made by [`web_view`].
     WebView
 }
@@ -265,9 +234,6 @@ host_element! {
 }
 
 impl ParentElement for Overlay {}
-impl ParentElement for ShaderView {}
-impl ParentElement for ShaderEffectView {}
-impl ParentElement for ShaderTransitionView {}
 impl ParentElement for Scroll {}
 impl ParentElement for Stack {}
 impl ParentElement for Screen {}
@@ -381,166 +347,6 @@ pub fn canvas(painter: impl IntoReactive<Painter>) -> CanvasView {
 }
 
 crate::static_reactive!(Painter: Painter, Drawing);
-
-/// A view `source` fills (a bound one draws the new one when it changes),
-/// its children drawn over it; [`ShaderView::uniforms`] gives the values
-/// of its uniforms. Made with [`crate::shader::ShaderSource::new`].
-pub fn shader(source: impl IntoReactive<crate::shader::ShaderSource>) -> ShaderView {
-    ShaderView(ElNode::new(Tag::Shader)).bind_prop(source, |s| Prop::ShaderSource(Some(s)))
-}
-
-crate::static_reactive!(crate::shader::ShaderSource: crate::shader::ShaderSource);
-crate::static_reactive!(crate::shader::Uniforms: crate::shader::Uniforms);
-
-impl ShaderView {
-    /// The values of the shader's uniforms, by name (a bound set changes
-    /// them when it changes): numbers, lists of them, colors and images
-    /// ([`crate::shader::UniformValue`]).
-    pub fn uniforms(self, uniforms: impl IntoReactive<crate::shader::Uniforms>) -> Self {
-        self.bind_prop(uniforms, Prop::Uniforms)
-    }
-
-    /// What the shader reads as `nsh.progress`: a number, or an animated
-    /// value the UI thread writes.
-    pub fn progress(self, progress: impl Into<crate::shader::ShaderNumber>) -> Self {
-        self.set(Prop::ShaderProgress(progress.into()))
-    }
-}
-
-/// A view whose children draw through `source` (a bound one draws the new
-/// one when it changes; `None` draws them as they are): they are what the
-/// shader's `sample_content` reads. Made with
-/// [`crate::shader::ShaderSource::new`].
-pub fn shader_effect(
-    source: impl IntoReactive<Option<crate::shader::ShaderSource>>,
-) -> ShaderEffectView {
-    ShaderEffectView(ElNode::new(Tag::ShaderEffect)).bind_prop(source, Prop::ShaderSource)
-}
-
-impl ShaderEffectView {
-    /// The values of the shader's uniforms, by name (as
-    /// [`ShaderView::uniforms`]).
-    pub fn uniforms(self, uniforms: impl IntoReactive<crate::shader::Uniforms>) -> Self {
-        self.bind_prop(uniforms, Prop::Uniforms)
-    }
-
-    /// What the shader reads as `nsh.progress` (as
-    /// [`ShaderView::progress`]).
-    pub fn progress(self, progress: impl Into<crate::shader::ShaderNumber>) -> Self {
-        self.set(Prop::ShaderProgress(progress.into()))
-    }
-
-    /// How far outside a pixel the shader samples its content: the
-    /// children are drawn that much beyond the view for it.
-    pub fn max_sample_offset(self, offset: Points) -> Self {
-        self.set(Prop::MaxSampleOffset(offset))
-    }
-}
-
-/// A view whose children change through `source` when its
-/// [`ShaderTransitionView::value`] changes: a picture of what they drew is
-/// the shader's `sample_from`, what they draw then its `sample_to`, and
-/// `nsh.progress` goes from 0 to 1 over the duration. `None` runs the
-/// fallback ([`ShaderTransitionView::fallback`], a cross-fade by default).
-pub fn shader_transition(
-    source: impl IntoReactive<Option<crate::shader::ShaderSource>>,
-) -> ShaderTransitionView {
-    ShaderTransitionView(ElNode::new(Tag::ShaderTransition)).bind_prop(source, Prop::ShaderSource)
-}
-
-impl ShaderTransitionView {
-    /// What its children show: when it changes, they change through the
-    /// shader.
-    pub fn value(self, value: impl IntoReactive<crate::shader::TransitionKey>) -> Self {
-        self.bind_prop(value, Prop::TransitionValue)
-    }
-
-    /// The values of the shader's uniforms, by name (as
-    /// [`ShaderView::uniforms`]).
-    pub fn uniforms(self, uniforms: impl IntoReactive<crate::shader::Uniforms>) -> Self {
-        self.bind_prop(uniforms, Prop::Uniforms)
-    }
-
-    /// How long a transition runs (300 ms by default).
-    pub fn duration(self, duration: std::time::Duration) -> Self {
-        self.set(Prop::TransitionDuration(Some(
-            duration.as_secs_f32() * 1000.0,
-        )))
-    }
-
-    /// What it runs without a shader of its own.
-    pub fn fallback(self, fallback: crate::shader::TransitionFallback) -> Self {
-        self.set(Prop::TransitionFallback(fallback))
-    }
-
-    /// How far outside a pixel the shader samples its two sides.
-    pub fn max_sample_offset(self, offset: Points) -> Self {
-        self.set(Prop::MaxSampleOffset(offset))
-    }
-}
-
-/// The whole surface drawn through `source` (a bound one draws the new one
-/// when it changes; `None` leaves the surface as it is): what it shows (its
-/// pages, dialogs and overlays) is what the shader's `sample_content`
-/// reads, in points from the surface's top-left. With several, the last
-/// one made draws.
-pub fn screen_effect(
-    source: impl IntoReactive<Option<crate::shader::ShaderSource>>,
-) -> ScreenEffectView {
-    ScreenEffectView(ElNode::new(Tag::ScreenEffect)).bind_prop(source, Prop::ShaderSource)
-}
-
-impl ScreenEffectView {
-    /// The values of the shader's uniforms, by name (as
-    /// [`ShaderView::uniforms`]).
-    pub fn uniforms(self, uniforms: impl IntoReactive<crate::shader::Uniforms>) -> Self {
-        self.bind_prop(uniforms, Prop::Uniforms)
-    }
-
-    /// What the shader reads as `nsh.progress` (as
-    /// [`ShaderView::progress`]).
-    pub fn progress(self, progress: impl Into<crate::shader::ShaderNumber>) -> Self {
-        self.set(Prop::ShaderProgress(progress.into()))
-    }
-}
-
-/// The whole surface changing through `source` when its
-/// [`ScreenTransitionView::value`] changes: a picture of what the surface
-/// showed is the shader's `sample_from`, what it shows then its
-/// `sample_to`, and `nsh.progress` goes from 0 to 1 over the duration.
-/// `None` runs the fallback ([`ScreenTransitionView::fallback`], a
-/// cross-fade by default).
-pub fn screen_transition(
-    source: impl IntoReactive<Option<crate::shader::ShaderSource>>,
-) -> ScreenTransitionView {
-    ScreenTransitionView(ElNode::new(Tag::ScreenTransition)).bind_prop(source, Prop::ShaderSource)
-}
-
-impl ScreenTransitionView {
-    /// What the surface shows: when it changes, the surface changes through
-    /// the shader.
-    pub fn value(self, value: impl IntoReactive<crate::shader::TransitionKey>) -> Self {
-        self.bind_prop(value, Prop::TransitionValue)
-    }
-
-    /// The values of the shader's uniforms, by name (as
-    /// [`ShaderView::uniforms`]).
-    pub fn uniforms(self, uniforms: impl IntoReactive<crate::shader::Uniforms>) -> Self {
-        self.bind_prop(uniforms, Prop::Uniforms)
-    }
-
-    /// How long a transition runs (300 ms by default).
-    pub fn duration(self, duration: std::time::Duration) -> Self {
-        self.set(Prop::TransitionDuration(Some(
-            duration.as_secs_f32() * 1000.0,
-        )))
-    }
-
-    /// What it runs without a shader of its own.
-    pub fn fallback(self, fallback: crate::shader::TransitionFallback) -> Self {
-        self.set(Prop::TransitionFallback(fallback))
-    }
-}
 
 /// A web view loading `url` (a bound one loads again when it changes).
 pub fn web_view(url: impl IntoReactive<String>) -> WebView {
@@ -927,17 +733,7 @@ impl Screen {
 
     /// How the screen enters and leaves.
     pub fn animation(self, animation: impl IntoReactive<ScreenAnimation>) -> Self {
-        self.bind_prop(animation, |a: ScreenAnimation| {
-            Prop::Screen(ScreenProp::Animation(a.into()))
-        })
-    }
-
-    /// The screen enters and leaves through a shader: the screen below is
-    /// its `sample_from`, this one its `sample_to`
-    /// ([`crate::shader::ShaderAnimation`]); where the platform draws no
-    /// shader transitions, through its own.
-    pub fn shader_animation(self, animation: crate::shader::ShaderAnimation) -> Self {
-        self.set(Prop::Screen(ScreenProp::Animation(animation.into())))
+        self.bind_prop(animation, |a| Prop::Screen(ScreenProp::Animation(a)))
     }
 
     /// What the status bar shows while the screen is up (iOS and Android;
@@ -1117,14 +913,6 @@ impl Modal {
         self.bind_prop(animation, |animation: ModalAnimation| {
             Prop::Modal(ModalProp::Animation(animation))
         })
-    }
-
-    /// It comes in and goes through a shader: what is behind it is its
-    /// `sample_from`, the dialog its `sample_to`
-    /// ([`crate::shader::ShaderAnimation`]); where the platform draws no
-    /// shader transitions, it fades.
-    pub fn shader_animation(self, animation: crate::shader::ShaderAnimation) -> Self {
-        self.set(Prop::Screen(ScreenProp::Animation(animation.into())))
     }
 
     /// Full screen, or a sheet (iOS).

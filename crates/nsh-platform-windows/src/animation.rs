@@ -77,22 +77,8 @@ impl UiAnimation {
                 if moved.is_some() {
                     crate::text_input::animated(view);
                 }
-                if matches!(
-                    view.kind(),
-                    nsh_core::ViewKind::Shader
-                        | nsh_core::ViewKind::ShaderEffect
-                        | nsh_core::ViewKind::ShaderTransition
-                ) {
-                    crate::shader::set_args(view, canvas);
-                } else if view.kind() == nsh_core::ViewKind::ScreenEffect {
-                    // The root draws the screen effect.
-                    if mounter.screen_effect == Some(view.id()) {
-                        crate::shader::set_args(&mounter.root, canvas);
-                    }
-                } else {
-                    for &(k, value) in canvas {
-                        crate::canvas::set_arg(view, k, value);
-                    }
+                for &(k, value) in canvas {
+                    crate::canvas::set_arg(view, k, value);
                 }
             },
         );

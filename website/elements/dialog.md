@@ -106,7 +106,7 @@ and the explicit import takes its place. For the system's alert or action sheet,
 | Prop | Rust | Type | Default | Description |
 |---|---|---|---|---|
 | `open` | in the view while open (`when(open, ..)`) | `boolean` | `true` | Shown while true. |
-| `animation` | `.animation(ModalAnimation::Fade)`, `.shader_animation(ShaderAnimation)` | `"slide" \| "fade" \| "none" \| ShaderAnimation` | `"slide"` | How it comes in and goes: a preset, or through a shader (`{ shader, uniforms, duration }`: what is behind it is the shader's `sample_from`, the dialog its `sample_to`, `nsh.progress` how much of it shows; [Shader](./shader.md#pages-and-dialogs-through-a-shader)). |
+| `animation` | `.animation(ModalAnimation::Fade)` | `"slide" \| "fade" \| "none"` | `"slide"` | How it comes in and goes. |
 | `presentation` | `.presentation(ModalPresentation::PageSheet)` | `"fullScreen" \| "pageSheet" \| "formSheet"` | `"fullScreen"` | Its form on iOS: `fullScreen` covers the screen with a clear background; `pageSheet` and `formSheet` are system sheets that keep what is behind visible (`formSheet` is a smaller centered sheet on large screens). |
 | `closeOnEscape` | `.close_on_escape(..)` | `boolean` | `true` | Escape and the Android back button close it natively. |
 | `closeOnBackdropPress` | `.close_on_backdrop_press(..)` | `boolean` | `true` | A press on the backdrop closes it. |

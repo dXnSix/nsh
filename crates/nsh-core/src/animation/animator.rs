@@ -300,10 +300,7 @@ impl Animator {
                             *t = Some(value.number());
                         }
                     }
-                    // A view is a canvas or a shader: its slots are one's or the other's.
-                    AnimationProp::CanvasArg(k) | AnimationProp::ShaderUniform(k) => {
-                        canvas.push((k, value))
-                    }
+                    AnimationProp::CanvasArg(k) => canvas.push((k, value)),
                     // The scroll view's (`sticky_views`), never bound.
                     AnimationProp::StickyTop | AnimationProp::StickyLeft => {}
                     // The component's (`write_components`).

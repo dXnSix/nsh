@@ -2589,7 +2589,6 @@ fn ui_environment(env: &Environment, window: Size<Points>) -> nsh_core::element:
         regional: env.regional,
         time_zone: env.time_zone,
         apple_keyboard: env.apple_keyboard,
-        shaders: env.shaders,
         host: env.host,
         app_state: env.app_state,
     }

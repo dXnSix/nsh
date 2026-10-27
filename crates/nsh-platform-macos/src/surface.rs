@@ -182,8 +182,6 @@ pub(crate) struct Surface {
     pub(crate) anim: RefCell<UiAnimation>,
     /// Stacks, screens and modals.
     pub(crate) nav: RefCell<crate::navigation::Nav>,
-    /// The shaders over the whole surface.
-    pub(crate) screen: RefCell<crate::screen::Screen>,
     /// Pointer input state ([`crate::input`]).
     pub(crate) input: crate::input::Input,
     /// The text selection ([`crate::text::Selected`]).
@@ -254,19 +252,7 @@ pub(crate) type FrameCallback = Box<dyn FnMut(&Rc<Surface>, f64) -> bool>;
 
 impl Surface {
     /// A surface with no app yet.
-    pub(crate) fn new(mtm: MainThreadMarker, mut environment: Environment) -> Rc<Surface> {
-        // Shaders fill views with Metal (`crate::shader`).
-        // Effects and backdrops from pictures taken again when they change.
-        environment.shaders = {
-            let mut support =
-                nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Msl);
-            support.effect = nsh_core::shader::Support::Snapshot;
-            support.backdrop = nsh_core::shader::Support::Snapshot;
-            support.transition = nsh_core::shader::Support::Snapshot;
-            support.screen_transition = nsh_core::shader::Support::Snapshot;
-            support.screen_effect = nsh_core::shader::Support::Snapshot;
-            support
-        };
+    pub(crate) fn new(mtm: MainThreadMarker, environment: Environment) -> Rc<Surface> {
         let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
         let root = NshView::new(mtm, ROOT_ID, nsh_core::ViewKind::View);
         let surface = Rc::new(Surface {
@@ -276,7 +262,6 @@ impl Surface {
             mounter: RefCell::new(Mounter::new(root.clone())),
             anim: RefCell::new(UiAnimation::default()),
             nav: RefCell::default(),
-            screen: RefCell::default(),
             input: Default::default(),
             selection: Default::default(),
             engine: RefCell::new(None),
@@ -451,7 +436,6 @@ impl Surface {
             c.set_environment(env);
         });
         crate::navigation::surface_resized(self, width, height);
-        crate::screen::resized(self);
         // Full screen and the window's size change the title bar's area.
         crate::chrome::update_area(self);
         self.await_layout(Size::new(Points(width), Points(height)));
@@ -713,11 +697,9 @@ impl Surface {
     /// a JS frame request): while it does, a bounds commit mid-scroll
     /// lands on a live frame.
     pub(crate) fn wants_frames(&self) -> bool {
-        // An animation writing its values (they may ask for a frame: a
-        // shader's pictures) is animating.
         self.js_frame.get()
             || !self.queued.borrow().is_empty()
-            || self.anim.try_borrow().map_or(true, |a| a.animating())
+            || self.anim.borrow().animating()
             || !self.frame_callbacks.borrow().is_empty()
     }
 

@@ -333,18 +333,6 @@ fn environment(width: f32, height: f32, dark: bool, pixel_ratio: f32) -> Environ
 fn page() -> Environment {
     PAGE.with(Cell::get).unwrap_or(Environment {
         os: Os::Web,
-        // Shaders fill views with WebGL 2; effects and backdrops read a
-        // picture NSH paints of their input (`web/nsh.js`).
-        shaders: {
-            let mut support =
-                nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::GlslEs300);
-            support.effect = nsh_core::shader::Support::Snapshot;
-            support.backdrop = nsh_core::shader::Support::Snapshot;
-            support.transition = nsh_core::shader::Support::Snapshot;
-            support.screen_effect = nsh_core::shader::Support::Snapshot;
-            support.screen_transition = nsh_core::shader::Support::Snapshot;
-            support
-        },
         ..Environment::default()
     })
 }

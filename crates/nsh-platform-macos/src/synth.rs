@@ -244,16 +244,6 @@ pub(crate) fn shot(window: &NSWindow) -> Result<Vec<u8>, String> {
     use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRepPropertyKey};
     use objc2_foundation::NSDictionary;
     let view = window.contentView().ok_or("the window has no content")?;
-    // A `CAMetalLayer` is not drawn in process: shaders show as pictures
-    // for the shot.
-    let pictures: Vec<_> = crate::surface::quiet(|| {
-        crate::shader::shader_views()
-            .iter()
-            .filter(|v| v.ns().window().as_deref() == Some(window))
-            .filter_map(crate::shader::picture_layer)
-            .collect::<Vec<_>>()
-    });
-    let overlays = crate::surface::quiet(|| crate::shader::overlay_pictures(window));
     if let Some(layer) = view.layer() {
         crate::surface::quiet(|| order_by_z(&layer));
     }
@@ -261,15 +251,7 @@ pub(crate) fn shot(window: &NSWindow) -> Result<Vec<u8>, String> {
     let rep = view
         .bitmapImageRepForCachingDisplayInRect(bounds)
         .ok_or("cannot make a bitmap of the window")?;
-    // An in-process picture draws masked layers whole: the children of
-    // effects (shown through their shader's picture) stay out of it.
-    let hidden = crate::shader::hide_effect_children(window);
     view.cacheDisplayInRect_toBitmapImageRep(bounds, &rep);
-    for container in hidden {
-        container.setHidden(false);
-    }
-    crate::surface::quiet(|| pictures.iter().for_each(|l| l.removeFromSuperlayer()));
-    crate::surface::quiet(|| overlays.iter().for_each(|v| v.removeFromSuperview()));
     let properties = NSDictionary::<NSBitmapImageRepPropertyKey, objc2::runtime::AnyObject>::new();
     // SAFETY: an empty property dictionary is valid for PNG.
     let data =

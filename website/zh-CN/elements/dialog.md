@@ -97,7 +97,7 @@ function Example() {
 | 属性 | Rust | 类型 | 默认值 | 说明 |
 |---|---|---|---|---|
 | `open` | 打开期间位于视图中（`when(open, ..)`） | `boolean` | `true` | 为 true 时显示。 |
-| `animation` | `.animation(ModalAnimation::Fade)`、`.shader_animation(ShaderAnimation)` | `"slide" \| "fade" \| "none" \| ShaderAnimation` | `"slide"` | 出现和离开的方式：预设，或经过着色器（`{ shader, uniforms, duration }`：对话框背后的内容是着色器的 `sample_from`，对话框是 `sample_to`，`nsh.progress` 是对话框显示的程度；[Shader](./shader.md#经过着色器的页面和对话框)）。 |
+| `animation` | `.animation(ModalAnimation::Fade)` | `"slide" \| "fade" \| "none"` | `"slide"` | 出现和离开的方式。 |
 | `presentation` | `.presentation(ModalPresentation::PageSheet)` | `"fullScreen" \| "pageSheet" \| "formSheet"` | `"fullScreen"` | 在 iOS 上的形式：`fullScreen` 以透明背景覆盖整个屏幕；`pageSheet` 和 `formSheet` 是系统 sheet，下面的内容保持可见（在大屏上 `formSheet` 是一个更小的居中 sheet）。 |
 | `closeOnEscape` | `.close_on_escape(..)` | `boolean` | `true` | Escape 和 Android 返回键在原生侧关闭它。 |
 | `closeOnBackdropPress` | `.close_on_backdrop_press(..)` | `boolean` | `true` | 按下背景层时关闭它。 |

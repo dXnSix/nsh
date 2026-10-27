@@ -350,19 +350,6 @@ impl RootView {
             time_zone: time_zone(),
             // Only read for the web: iOS keys are always Apple's.
             apple_keyboard: true,
-            // Shaders fill views with Metal (`crate::shader`).
-            // Effects and backdrops from pictures taken again when they
-            // change (`crate::shader`).
-            shaders: {
-                let mut support =
-                    nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Msl);
-                support.effect = nsh_core::shader::Support::Snapshot;
-                support.backdrop = nsh_core::shader::Support::Snapshot;
-                support.transition = nsh_core::shader::Support::Snapshot;
-                support.screen_effect = nsh_core::shader::Support::Snapshot;
-                support.screen_transition = nsh_core::shader::Support::Snapshot;
-                support
-            },
             // No host answers `nsh/host` here: an embedding app talks to its
             // apps through its own UI sets (`nsh/native`).
             host: false,

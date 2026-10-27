@@ -51,29 +51,6 @@ pub enum Tag {
     InputAccessory,
     /// A 2D drawing (`<canvas>`, filled by [`Op::Draw`]).
     Canvas,
-    /// A view a shader fills (`<shader>`, TS: `Shader` of `nsh`), its
-    /// children drawn over it ([`crate::shader`]).
-    Shader,
-    /// A view whose children draw through a shader (`<shadereffect>`, TS:
-    /// `ShaderEffect` of `nsh`): what they draw is the shader's
-    /// `sample_content` ([`crate::shader`]).
-    ShaderEffect,
-    /// A view whose children change through a shader (`<shadertransition>`,
-    /// TS: `ShaderTransition` of `nsh`): when its `value` changes, a
-    /// picture of what they drew is the shader's `sample_from` and what
-    /// they draw now its `sample_to` ([`crate::shader`]).
-    ShaderTransition,
-    /// The whole surface drawn through a shader (`<screeneffect>`, TS:
-    /// `ScreenEffect` of `nsh`): what the surface shows (its pages,
-    /// dialogs and overlays) is the shader's `sample_content`. It takes no
-    /// space and has no children ([`crate::shader`]).
-    ScreenEffect,
-    /// The whole surface changing through a shader (`<screentransition>`,
-    /// TS: `ScreenTransition` of `nsh`): when its `value` changes, a
-    /// picture of what the surface showed is the shader's `sample_from` and
-    /// what it shows now its `sample_to`. It takes no space and has no
-    /// children ([`crate::shader`]).
-    ScreenTransition,
     /// A web page (`<webview>`).
     WebView,
     /// A video player (`<video>`).
@@ -105,11 +82,6 @@ impl Tag {
             "headeritem" => Tag::HeaderItem,
             "inputaccessory" => Tag::InputAccessory,
             "canvas" => Tag::Canvas,
-            "shader" => Tag::Shader,
-            "shadereffect" => Tag::ShaderEffect,
-            "shadertransition" => Tag::ShaderTransition,
-            "screeneffect" => Tag::ScreenEffect,
-            "screentransition" => Tag::ScreenTransition,
             "webview" => Tag::WebView,
             "video" => Tag::Video,
             "native" => Tag::Native,
@@ -1302,56 +1274,6 @@ pub enum HeaderSlot {
     Header,
 }
 
-/// How a screen enters and leaves (`animation`): a preset, or a shader.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ScreenTransition {
-    /// The platform's transition, a cross-fade, or none.
-    Preset(ScreenAnimation),
-    /// Through a shader ([`crate::shader::ShaderAnimation`]); where the
-    /// platform draws no shader transitions, its own.
-    Shader(Arc<crate::shader::ShaderAnimation>),
-}
-
-impl Default for ScreenTransition {
-    fn default() -> Self {
-        ScreenTransition::Preset(ScreenAnimation::Default)
-    }
-}
-
-impl From<ScreenAnimation> for ScreenTransition {
-    fn from(a: ScreenAnimation) -> Self {
-        ScreenTransition::Preset(a)
-    }
-}
-
-impl From<crate::shader::ShaderAnimation> for ScreenTransition {
-    fn from(a: crate::shader::ShaderAnimation) -> Self {
-        ScreenTransition::Shader(Arc::new(a))
-    }
-}
-
-impl crate::js::host::HostValue for ScreenTransition {
-    fn decode<I: crate::js::host::HostInput>(
-        input: &I,
-        cx: &mut crate::js::host::HostCx,
-    ) -> Option<Self> {
-        if input.as_string().is_some() {
-            return <ScreenAnimation as crate::js::host::HostValue>::decode(input, cx)
-                .map(ScreenTransition::Preset);
-        }
-        <crate::shader::ShaderAnimation as crate::js::host::HostValue>::decode(input, cx)
-            .map(|a| ScreenTransition::Shader(Arc::new(a)))
-    }
-
-    fn ts_type(types: &mut crate::element::TsTypes) -> String {
-        format!(
-            "{} | {}",
-            <ScreenAnimation as crate::js::host::HostValue>::ts_type(types),
-            <crate::shader::ShaderAnimation as crate::js::host::HostValue>::ts_type(types)
-        )
-    }
-}
-
 /// How a screen enters and leaves (`animation`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
 pub enum ScreenAnimation {
@@ -1412,9 +1334,9 @@ pub enum ScreenProp {
     /// so set it before the user acts.
     #[prop(js = "popOnBack", default = true, on = SCREEN)]
     PopOnBack(bool),
-    /// `animation`: how the page enters and leaves: a preset, or a shader.
+    /// `animation`: how the page enters and leaves.
     #[prop(js = "animation", on = SCREEN)]
-    Animation(ScreenTransition),
+    Animation(ScreenAnimation),
     /// `statusBar`: what the status bar shows while the page or dialog is
     /// up (iOS and Android; ignored on the desktops and the web), as a view
     /// controller's `preferredStatusBarStyle` decides it on iOS. The most
@@ -1901,36 +1823,6 @@ pub enum Prop {
     /// `src`: a URL, `asset:/path`, or an imported asset.
     #[prop(js = "src", on = IMAGE, shared)]
     Source(Option<ImageSource>),
-    /// `src` of a shader view, effect or transition: the shader it draws
-    /// (`createShader`, a `.wgsl` import); an effect without one draws its
-    /// children as they are, a transition without one runs its `fallback`.
-    #[prop(js = "src", on = SHADER | SHADER_EFFECT | SHADER_TRANSITION | SCREEN_EFFECT | SCREEN_TRANSITION, shared)]
-    ShaderSource(Option<crate::shader::ShaderSource>),
-    /// `uniforms`: the values of the shader's uniforms, by name; animated
-    /// values change them on the UI thread.
-    #[prop(js = "uniforms", on = SHADER | SHADER_EFFECT | SHADER_TRANSITION | SCREEN_EFFECT | SCREEN_TRANSITION)]
-    Uniforms(crate::shader::Uniforms),
-    /// `progress`: what the shader reads as `nsh.progress` (0 to 1 by
-    /// convention): a number, or an animated value the UI thread writes.
-    #[prop(js = "progress", on = SHADER | SHADER_EFFECT | SCREEN_EFFECT)]
-    ShaderProgress(crate::shader::ShaderNumber),
-    /// `maxSampleOffset`: how far outside a pixel a shader effect samples
-    /// its content, in points (a blur's radius, a ripple's reach): the
-    /// content is drawn that much beyond the view's bounds for it.
-    #[prop(js = "maxSampleOffset", on = SHADER_EFFECT | SHADER_TRANSITION)]
-    MaxSampleOffset(Points),
-    /// `value`: what a shader transition's children show; when it changes,
-    /// they change through the shader.
-    #[prop(js = "value", on = SHADER_TRANSITION | SCREEN_TRANSITION, shared)]
-    TransitionValue(crate::shader::TransitionKey),
-    /// `duration`: how long a shader transition runs, in milliseconds
-    /// (default 300); `nsh.progress` goes from 0 to 1 over it.
-    #[prop(js = "duration", min = 0, on = SHADER_TRANSITION | SCREEN_TRANSITION)]
-    TransitionDuration(Option<f32>),
-    /// `fallback`: what a shader transition runs without a shader of its
-    /// own (no `src`, or one the platform could not translate).
-    #[prop(js = "fallback", on = SHADER_TRANSITION | SCREEN_TRANSITION)]
-    TransitionFallback(crate::shader::TransitionFallback),
     /// `resizeMode`: how an image (or a video) fits its box.
     #[prop(js = "resizeMode", on = IMAGE | VIDEO)]
     ResizeMode(ResizeMode),

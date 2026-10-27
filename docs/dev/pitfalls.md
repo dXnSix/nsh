@@ -491,10 +491,6 @@ Things that were found the hard way. Read the section of the area you change bef
   Safari: the wasm twice in 4 of 11 cold loads on Wi-Fi, each time the runtime asked before the preload was done;
   Chromium hands it over). The published page starts its downloads with `fetch` in a head script instead
   (`web::page`, `fetches`).
-- **A `bitmaprenderer` canvas goes on showing its last bitmap after `canvas.width = 0`** (Chrome and Edge): a
-  shader transition that ended left its last frame over its children (a reveal short of the edges, a card with the
-  previous photo), and at an effect's z-index over the dialogs above it. `clearShader` hands the context `null`
-  first, and `.nsh-fx` isolates its canvas's z-index to the effect.
 - **A scroll view's smooth wheel and key scrolling is nsh's glide, which no browser call cancels**: `wheel` and the
   scroll keys are prevented and `scrollSmoothly` moves the view on animation frames, so an instant `scrollTo` lasted
   one frame and the glide's next one put its offset back (Chromium 141: a 900 px wheel notch, `scrollTo(0)` 50 ms

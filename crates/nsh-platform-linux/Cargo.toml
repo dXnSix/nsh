@@ -27,13 +27,10 @@ log.workspace = true
 
 # Empty off Linux (like the other platform crates off their targets).
 [target.'cfg(target_os = "linux")'.dependencies]
-nsh-core = { workspace = true, features = ["svg", "shader-glsl"] }
+nsh-core = { workspace = true, features = ["svg"] }
 nsh-engine = { workspace = true, features = ["net"] }
 nsh-base = { workspace = true, features = ["highlight"] }
 gtk4.workspace = true
-# Shaders: OpenGL ES 3 through libepoxy (`src/shader.rs`).
-glow.workspace = true
-libc.workspace = true
 # GIF and WebP (first frame), which GDK cannot decode without gdk-pixbuf loaders.
 image = { workspace = true, features = ["gif", "webp"] }
 pango.workspace = true

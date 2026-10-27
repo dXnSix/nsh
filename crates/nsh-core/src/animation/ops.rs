@@ -28,11 +28,6 @@ pub enum AnimationProp {
     /// Animated value slot `n` of a canvas drawing: the canvas draws again
     /// with it (a number or a color).
     CanvasArg(u16),
-    /// Component `n` (an `f32` index) of a shader view's uniforms: a
-    /// number there, a color's premultiplied components from there
-    /// ([`crate::shader::write_animated`]); the shader draws again.
-    /// [`crate::shader::PROGRESS`] is its `nsh.progress` instead.
-    ShaderUniform(u16),
     /// `top` of a `position: sticky` view: how far from the viewport's
     /// start of a vertical scroll view it sticks. The core hands it to the
     /// scroll view's sticky cells (`StickyCell::offset`), never to the

@@ -6,14 +6,11 @@
 // attempts (`onCancel` every time; `onOpenChange(false, reason)` and the
 // dialog closing when the `closeOn*` flag of what they did lets it).
 // Closed by the user while the app keeps `open` true, it stays closed until
-// `open` goes from false to true. Its `animation` may be a shader (`{
-// shader, uniforms, duration }`). Dialogs carry a `testID` (spread, as
+// `open` goes from false to true. Dialogs carry a `testID` (spread, as
 // `Dialog` declares none) for the script to find them. Its script checks
 // each.
-import { createShader, Text, View, signal } from "nsh";
+import { Text, View, signal } from "nsh";
 import { Button, Dialog } from "nsh/base";
-
-const blend = createShader("fn main(p: vec2f) -> vec4f { return mix(sample_from(p), sample_to(p), nsh.progress); }");
 
 function Control(props: { label: string; onPress: () => void }) {
   return (
@@ -45,9 +42,6 @@ function App() {
       <Control label="Clear log" onPress={() => log.set([])} />
       <Dialog {...{ testID: "plain" }}>
         <Text>Plain dialog</Text>
-      </Dialog>
-      <Dialog {...{ testID: "shaded" }} animation={{ shader: blend, duration: 400 }}>
-        <Text>Shaded dialog</Text>
       </Dialog>
       <Dialog
         {...{ testID: "synced" }}

@@ -287,24 +287,6 @@ covers [styles] animationDuration
 covers [styles] animationDelay
 covers [styles] animationTimingFunction
 covers [styles] animationIterationCount
-# paint-shader
-tap id:case-paint-shader
-expect Shaders
-expect glow: color, radius, center
-expect plain: 0 uniforms
-expect invalid: SyntaxError: names it
-expect fill false, backdrop false, effect false
-expect Over the shader
-expect Through the shader
-expect No shader, as it is
-expect Page 1
-expect Faded 1
-tap id:next-page
-expect Page 2
-expect Faded 2
-expect screen effect false, screen transition false
-covers [nsh] createShader
-covers [nsh] shaderSupport
 # paint-shadows
 tap id:case-paint-shadows
 expect Shadows

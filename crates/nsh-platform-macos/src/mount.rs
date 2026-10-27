@@ -124,8 +124,6 @@ impl Mounter {
                 match kind {
                     ViewKind::Input => crate::text_input::create(surface, &view),
                     ViewKind::Canvas => crate::canvas::create(&view),
-                    // Its layer is made with its first fill.
-                    ViewKind::Shader => {}
                     ViewKind::Image => crate::image::create(&view),
                     ViewKind::WebView | ViewKind::Video | ViewKind::Native => {
                         crate::native::create(surface, &view)
@@ -328,34 +326,6 @@ impl Mounter {
                     self.draw_when_shown(view, Damage::All);
                 }
             }
-            MountItem::ShaderProgram { program } => crate::shader::program(program),
-            MountItem::Shader { id, fill } => {
-                if let Some(view) = self.get(*id) {
-                    if is_screen(view) {
-                        crate::screen::set(surface, view, fill.clone());
-                    } else {
-                        crate::shader::set(surface, view, fill.clone());
-                    }
-                }
-            }
-            MountItem::ShaderInput { id } => {
-                if let Some(view) = self.get(*id) {
-                    if is_screen(view) {
-                        crate::screen::input_changed(surface, view);
-                    } else {
-                        crate::shader::input_changed(surface, view);
-                    }
-                }
-            }
-            MountItem::ShaderTransition { id, duration } => {
-                if let Some(view) = self.get(*id) {
-                    if is_screen(view) {
-                        crate::screen::start_transition(surface, view, *duration);
-                    } else {
-                        crate::shader::start_transition(surface, view, *duration);
-                    }
-                }
-            }
             MountItem::Gestures { id, values } => {
                 if let Some(view) = self.get(*id) {
                     crate::input::gestures(surface, view, *values);
@@ -388,9 +358,9 @@ impl Mounter {
                     crate::navigation::screen_config(surface, view, config);
                 }
             }
-            MountItem::ModalConfig { id, config, shader } => {
+            MountItem::ModalConfig { id, config } => {
                 if let Some(view) = self.get(*id) {
-                    crate::navigation::modal_config(surface, view, config, shader);
+                    crate::navigation::modal_config(surface, view, config);
                 }
             }
             MountItem::NativeProps { id, props } => {
@@ -481,12 +451,4 @@ impl Mounter {
             other => crate::system::command(surface, id, other),
         }
     }
-}
-
-/// A screen effect or transition: a shader over the whole surface.
-fn is_screen(view: &NshView) -> bool {
-    matches!(
-        view.kind(),
-        nsh_core::ViewKind::ScreenEffect | nsh_core::ViewKind::ScreenTransition
-    )
 }

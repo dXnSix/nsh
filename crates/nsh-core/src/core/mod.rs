@@ -34,7 +34,7 @@ use crate::{
     ops::{
         CellSlot, Command, EventKind, EventMask, EventPayload, HeaderSlot, ImageProp, ImageSource,
         KeyboardDismissMode, ModalAnimation, ModalProp, NativeProp, NodeId, Op, PayloadValue, Prop,
-        ROOT_ID, ResizeMode, ScreenAnimation, ScreenProp, ScreenTransition, ScrollProp, Tag,
+        ROOT_ID, ResizeMode, ScreenAnimation, ScreenProp, ScrollProp, Tag,
     },
     props::{AccessibilityProp, EdgeInsets, GestureValues, LayoutAnimation, ViewProps},
     style::{Color, EllipsizeMode, PaintStyle, Style, StylePatch, TextAlign, TextStyle, ViewStyle},
@@ -91,8 +91,6 @@ mod dirty {
     /// Emit [`crate::MountItem::AccessibilityLabel`] (unless
     /// [`VIEW_PROPS`] sends everything).
     pub(super) const LABEL: u32 = 1 << 18;
-    /// Emit [`crate::MountItem::Shader`] (and its program, the first time).
-    pub(super) const SHADER: u32 = 1 << 19;
 }
 
 /// A layout root other than the surface's: screens, modals and header
@@ -113,13 +111,6 @@ struct RootState {
     screen: ScreenConfig,
     /// Modal options (modals).
     modal: ModalConfig,
-    /// A page's or a dialog's transition through a shader (`animation`),
-    /// made into [`ScreenConfig::shader`] / `modal_shader` when they are
-    /// sent ([`Core::nav_shader`]).
-    shader_animation: Option<Arc<crate::shader::ShaderAnimation>>,
-    /// A dialog's transition through a shader, sent with its options
-    /// ([`MountItem::ModalConfig`]).
-    modal_shader: Option<crate::NavShader>,
     /// Where a header item goes (header items).
     slot: HeaderSlot,
     /// `nativeID` (input accessories).
@@ -202,11 +193,6 @@ enum Kind {
     HeaderItem,
     InputAccessory,
     Canvas,
-    Shader,
-    ShaderEffect,
-    ShaderTransition,
-    ScreenEffect,
-    ScreenTransition,
     WebView,
     Video,
     Native,
@@ -228,9 +214,6 @@ impl Kind {
                 | Kind::HeaderItem
                 | Kind::InputAccessory
                 | Kind::Overlay
-                | Kind::Shader
-                | Kind::ShaderEffect
-                | Kind::ShaderTransition
         )
     }
 
@@ -254,11 +237,6 @@ impl Kind {
             Kind::HeaderItem => ViewKind::HeaderItem,
             Kind::InputAccessory => ViewKind::InputAccessory,
             Kind::Canvas => ViewKind::Canvas,
-            Kind::Shader => ViewKind::Shader,
-            Kind::ShaderEffect => ViewKind::ShaderEffect,
-            Kind::ShaderTransition => ViewKind::ShaderTransition,
-            Kind::ScreenEffect => ViewKind::ScreenEffect,
-            Kind::ScreenTransition => ViewKind::ScreenTransition,
             Kind::WebView => ViewKind::WebView,
             Kind::Video => ViewKind::Video,
             Kind::Native => ViewKind::Native,
@@ -283,11 +261,6 @@ impl Kind {
             Tag::HeaderItem => Kind::HeaderItem,
             Tag::InputAccessory => Kind::InputAccessory,
             Tag::Canvas => Kind::Canvas,
-            Tag::Shader => Kind::Shader,
-            Tag::ShaderEffect => Kind::ShaderEffect,
-            Tag::ShaderTransition => Kind::ShaderTransition,
-            Tag::ScreenEffect => Kind::ScreenEffect,
-            Tag::ScreenTransition => Kind::ScreenTransition,
             Tag::WebView => Kind::WebView,
             Tag::Video => Kind::Video,
             Tag::Native => Kind::Native,
@@ -305,56 +278,7 @@ impl Kind {
                 | Kind::Screen
                 | Kind::Modal
                 | Kind::Overlay
-                | Kind::ScreenEffect
-                | Kind::ScreenTransition
         )
-    }
-}
-
-/// How long a shader transition runs without a `duration`.
-const DEFAULT_TRANSITION_MS: f32 = 300.0;
-
-/// How long a page's or a dialog's shader transition runs without a
-/// `duration`: as long as the desktops' slide.
-const DEFAULT_NAV_SHADER_MS: f32 = 350.0;
-
-/// A shader view's (or effect's) source, uniforms and progress, and what
-/// was made of them.
-#[derive(Debug, Default)]
-struct ShaderState {
-    source: Option<crate::shader::ShaderSource>,
-    uniforms: crate::shader::Uniforms,
-    progress: crate::shader::ShaderNumber,
-    /// An effect's `maxSampleOffset`.
-    max_offset: Points,
-    /// A transition's `value`, `duration` (milliseconds) and `fallback`.
-    key: crate::shader::TransitionKey,
-    duration: Option<f32>,
-    fallback: crate::shader::TransitionFallback,
-    /// The `value` its children showed as of the last commit (`None`
-    /// before the first): a commit that changes it starts the transition.
-    shown: Option<crate::shader::TransitionKey>,
-    /// The uniforms packed for the source's program.
-    packed: crate::shader::Packed,
-    /// What the view was last sent.
-    sent: Option<Arc<crate::shader::ShaderFill>>,
-}
-
-impl ShaderState {
-    /// Packs the uniforms for the source again: whether the animated
-    /// values it binds changed.
-    fn repack(&mut self, id: NodeId) -> bool {
-        let packed = match &self.source {
-            Some(source) => crate::shader::pack(
-                source.shader.reflection(),
-                &self.uniforms,
-                &mut |w| log::warn!(target: "js", "<Shader> (node {id}): {w}"),
-            ),
-            None => crate::shader::Packed::default(),
-        };
-        let rebound = packed.bindings != self.packed.bindings;
-        self.packed = packed;
-        rebound
     }
 }
 
@@ -500,8 +424,6 @@ struct Node {
     animated: Vec<(AnimationProp, crate::animation::NodeId)>,
     /// What a canvas draws.
     drawing: Option<Arc<crate::canvas::Drawing>>,
-    /// What a shader view draws.
-    shader: Option<Box<ShaderState>>,
     /// The `style` prop as written, applied over the class styles.
     inline_style: StylePatch,
     /// `class` / `classList` as set.
@@ -724,15 +646,6 @@ impl Node {
             paint: None,
             animated: Vec::new(),
             drawing: None,
-            shader: matches!(
-                kind,
-                Kind::Shader
-                    | Kind::ShaderEffect
-                    | Kind::ShaderTransition
-                    | Kind::ScreenEffect
-                    | Kind::ScreenTransition
-            )
-            .then(Box::default),
             inline_style: StylePatch::default(),
             class_names: None,
             classes: None,
@@ -1044,21 +957,6 @@ pub struct Core<M: TextEngine> {
     overlays: Vec<Key>,
     /// What the shown overlays listen to.
     overlay_state: overlay::Overlays,
-    /// The shaders' programs sent to the platform (`true`) or that failed
-    /// to translate (`false`), by id.
-    shader_programs: rustc_hash::FxHashMap<u32, bool>,
-    /// The shader views and effects that sample their content or what is
-    /// behind them ([`Core::mark_shader_inputs`]); removed views drop out
-    /// as their ids no longer resolve.
-    shader_inputs: rustc_hash::FxHashSet<NodeId>,
-    /// Shader transitions this commit starts
-    /// ([`MountItem::ShaderTransition`]), first in its batch.
-    transition_starts: Vec<MountItem>,
-    /// The screen effects, as they were made: the last one with a shader
-    /// draws, the others are sent none ([`ViewKind::ScreenEffect`]).
-    screen_effects: Vec<Key>,
-    /// One was made or released since the last commit.
-    screen_effects_changed: bool,
 }
 
 impl<M: TextEngine + 'static> Core<M> {
@@ -1149,11 +1047,6 @@ impl<M: TextEngine> Core<M> {
             system_dark: false,
             overlays: Vec::new(),
             overlay_state: overlay::Overlays::default(),
-            shader_programs: Default::default(),
-            shader_inputs: Default::default(),
-            transition_starts: Vec::new(),
-            screen_effects: Vec::new(),
-            screen_effects_changed: false,
         }
     }
 
@@ -1266,221 +1159,6 @@ impl<M: TextEngine> Core<M> {
             .collect();
         for key in images {
             self.mark(key, dirty::IMAGE);
-        }
-        let shaders: Vec<Key> = self
-            .nodes
-            .iter()
-            .filter(|(_, n)| {
-                n.shader
-                    .as_ref()
-                    .is_some_and(|s| s.packed.images.iter().any(|i| changes(&i.source)))
-            })
-            .map(|(k, _)| k as Key)
-            .collect();
-        for key in shaders {
-            self.mark(key, dirty::SHADER);
-        }
-    }
-
-    /// Which screen effect draws changed (one was made or released, or a
-    /// shader of one changed): each is flushed again, the last with a
-    /// shader sends it and the others none.
-    fn sync_screen_effects(&mut self) {
-        let changed = std::mem::take(&mut self.screen_effects_changed)
-            || self
-                .screen_effects
-                .iter()
-                .any(|&k| self.nodes[k as usize].dirty & dirty::SHADER != 0);
-        if changed {
-            for key in self.screen_effects.clone() {
-                self.mark(key, dirty::SHADER);
-            }
-        }
-    }
-
-    /// The screen effect that draws: the last one made with a shader.
-    fn drawn_screen_effect(&self) -> Option<Key> {
-        self.screen_effects.iter().rev().copied().find(|&k| {
-            self.nodes[k as usize]
-                .shader
-                .as_ref()
-                .is_some_and(|s| s.source.is_some())
-        })
-    }
-
-    /// Tells the platform which shaders' inputs this commit changed
-    /// ([`MountItem::ShaderInput`]): the effects with a changed view in
-    /// their subtree (themselves included), and every shader that samples
-    /// what is behind it once anything changed.
-    fn mark_shader_inputs(&mut self) {
-        if self.shader_inputs.is_empty() || self.mount.is_empty() {
-            return;
-        }
-        use crate::shader::ShaderInput as I;
-        let gone: Vec<NodeId> = self
-            .shader_inputs
-            .iter()
-            .copied()
-            .filter(|&id| self.key(id).is_err())
-            .collect();
-        for id in gone {
-            self.shader_inputs.remove(&id);
-        }
-        let samples = |node: &Node, input: I| {
-            node.shader
-                .as_ref()
-                .and_then(|s| s.sent.as_ref())
-                .is_some_and(|f| f.samples(input))
-        };
-        let mut marked: Vec<NodeId> = Vec::new();
-        for &id in &self.shader_inputs {
-            let Ok(key) = self.key(id) else { continue };
-            let node = &self.nodes[key as usize];
-            // What is behind a view, and the whole surface for a screen
-            // effect or transition, changes with anything in it.
-            if samples(node, I::Backdrop)
-                || node.kind == Kind::ScreenEffect && samples(node, I::Content)
-                || node.kind == Kind::ScreenTransition && samples(node, I::To)
-            {
-                marked.push(id);
-            }
-        }
-        let mut seen = rustc_hash::FxHashSet::default();
-        for item in &self.mount {
-            let Some(id) = item.view() else { continue };
-            if !seen.insert(id) {
-                continue;
-            }
-            let Ok(mut key) = self.key(id) else { continue };
-            loop {
-                let node = &self.nodes[key as usize];
-                if (node.kind == Kind::ShaderEffect && samples(node, I::Content)
-                    || node.kind == Kind::ShaderTransition && samples(node, I::To))
-                    && !marked.contains(&node.id)
-                {
-                    marked.push(node.id);
-                }
-                if node.parent == NO_KEY {
-                    break;
-                }
-                key = node.parent;
-            }
-        }
-        for id in marked {
-            self.mount.push(MountItem::ShaderInput { id });
-        }
-    }
-
-    /// Sends what shader view `key` draws, if it changed, and its program
-    /// first, the first time a view draws it: translated into the
-    /// platform's language here, on the engine thread.
-    fn flush_shader(&mut self, key: Key) {
-        let ratio = self.components.environment.pixel_ratio;
-        let language = self.components.environment.shaders.language;
-        let node = &self.nodes[key as usize];
-        let id = node.id;
-        let kind = node.kind;
-        let transition = matches!(kind, Kind::ShaderTransition | Kind::ScreenTransition);
-        // One screen effect draws: the others are sent none.
-        let silent = kind == Kind::ScreenEffect && self.drawn_screen_effect() != Some(key);
-        let Some(shader) = node.shader.as_ref().filter(|_| !silent) else {
-            if silent {
-                self.send_fill(key, None);
-            }
-            return;
-        };
-        // A transition without a shader of its own runs its fallback.
-        let fallback = (transition
-            && shader.source.is_none()
-            && shader.fallback == crate::shader::TransitionFallback::Fade)
-            .then(crate::shader::crossfade);
-        let fill = match shader.source.as_ref().or(fallback.as_ref()) {
-            Some(source) => {
-                let ready = *self.shader_programs.entry(source.id).or_insert_with(|| {
-                    match crate::shader::ShaderProgram::translate(source, language) {
-                        Ok(program) => {
-                            self.mount.push(MountItem::ShaderProgram {
-                                program: Arc::new(program),
-                            });
-                            true
-                        }
-                        Err(e) => {
-                            log::error!(target: "js", "<Shader>: {e}");
-                            false
-                        }
-                    }
-                });
-                ready.then(|| {
-                    Arc::new(crate::shader::ShaderFill {
-                        program: source.id,
-                        uniforms: shader.packed.bytes.as_slice().into(),
-                        images: shader
-                            .packed
-                            .images
-                            .iter()
-                            .map(|i| crate::shader::ShaderImage {
-                                source: i.source.as_ref().map(|s| s.resolved(ratio)),
-                                offset: i.offset,
-                            })
-                            .collect(),
-                        time: source.shader.reflection().time,
-                        inputs: source
-                            .shader
-                            .reflection()
-                            .inputs
-                            .iter()
-                            .fold(0, |bits, input| bits | 1 << input.index()),
-                        progress: shader.progress.constant(),
-                        max_offset: shader.max_offset,
-                    })
-                })
-            }
-            None => None,
-        };
-        self.send_fill(key, fill);
-        if transition {
-            let support = &self.components.environment.shaders;
-            let drawn = if kind == Kind::ScreenTransition {
-                support.screen_transition
-            } else {
-                support.transition
-            } != crate::shader::Support::No;
-            let shader = self.nodes[key as usize]
-                .shader
-                .as_mut()
-                .expect("a shader view");
-            let before = shader.shown.replace(shader.key.clone());
-            let ms = shader.duration.unwrap_or(DEFAULT_TRANSITION_MS).max(0.0);
-            if before.is_some_and(|b| b != shader.key) && drawn && shader.sent.is_some() && ms > 0.0
-            {
-                self.transition_starts.push(MountItem::ShaderTransition {
-                    id,
-                    duration: std::time::Duration::from_micros((ms as f64 * 1000.0).round() as u64),
-                });
-            }
-        }
-    }
-
-    /// Sends shader view `key` what it draws, if that changed.
-    fn send_fill(&mut self, key: Key, fill: Option<Arc<crate::shader::ShaderFill>>) {
-        let id = self.nodes[key as usize].id;
-        let Some(shader) = self.nodes[key as usize].shader.as_mut() else {
-            return;
-        };
-        if shader.sent == fill {
-            return;
-        }
-        let inputs = fill.as_ref().is_some_and(|f| {
-            f.samples(crate::shader::ShaderInput::Content)
-                || f.samples(crate::shader::ShaderInput::Backdrop)
-                || f.samples(crate::shader::ShaderInput::To)
-        });
-        shader.sent = fill.clone();
-        self.mount.push(MountItem::Shader { id, fill });
-        if inputs {
-            self.shader_inputs.insert(id);
-        } else {
-            self.shader_inputs.remove(&id);
         }
     }
 
@@ -1989,13 +1667,6 @@ impl<M: TextEngine> Core<M> {
         if !self.outer_asked.is_empty() {
             self.send_outer_scrolls();
         }
-        self.mark_shader_inputs();
-        if !self.transition_starts.is_empty() {
-            // Before the changes they are about: the platform pictures the
-            // children as they were.
-            let starts = std::mem::take(&mut self.transition_starts);
-            self.mount.splice(0..0, starts);
-        }
         if self.mount.is_empty() || matches!(self.mount[..], [MountItem::LayoutAnimation(_)]) {
             self.mount.clear();
             None
@@ -2018,7 +1689,6 @@ impl<M: TextEngine> Core<M> {
         self.sync_overlays();
         self.sync_back();
         self.sync_keys();
-        self.sync_screen_effects();
         // Platforms animate the frames, insertions and removals that follow
         // in the batch; ops may already have queued some.
         self.sync_env();
@@ -2320,10 +1990,6 @@ impl<M: TextEngine> Core<M> {
         {
             self.overlay_made(key, layout);
         }
-        if kind == Kind::ScreenEffect {
-            self.screen_effects.push(key);
-            self.screen_effects_changed = true;
-        }
         self.sync_layout_style(key);
     }
 
@@ -2474,8 +2140,6 @@ impl<M: TextEngine> Core<M> {
                     style.overflow.y = Overflow::Scroll;
                 }
             }
-            // A shader over the whole surface takes no space where it is.
-            Kind::ScreenEffect | Kind::ScreenTransition => style.display = taffy::Display::None,
             Kind::List => {
                 style.overflow = taffy::Point {
                     x: Overflow::Hidden,
@@ -3071,72 +2735,6 @@ impl<M: TextEngine> Core<M> {
                     }
                 }
             }
-            Prop::ShaderSource(source) => {
-                let id = node.id;
-                if let Some(shader) = node.shader.as_mut()
-                    && shader.source != source
-                {
-                    shader.source = source;
-                    flags |= dirty::SHADER;
-                    if shader.repack(id) {
-                        flags |= dirty::ANIMATION;
-                    }
-                }
-            }
-            Prop::Uniforms(uniforms) => {
-                let id = node.id;
-                if let Some(shader) = node.shader.as_mut()
-                    && shader.uniforms != uniforms
-                {
-                    shader.uniforms = uniforms;
-                    flags |= dirty::SHADER;
-                    if shader.repack(id) {
-                        flags |= dirty::ANIMATION;
-                    }
-                }
-            }
-            Prop::ShaderProgress(progress) => {
-                if let Some(shader) = node.shader.as_mut()
-                    && shader.progress != progress
-                {
-                    let rebound = matches!(progress, crate::shader::ShaderNumber::Animated(_))
-                        || matches!(shader.progress, crate::shader::ShaderNumber::Animated(_));
-                    shader.progress = progress;
-                    flags |= dirty::SHADER;
-                    if rebound {
-                        flags |= dirty::ANIMATION;
-                    }
-                }
-            }
-            Prop::TransitionValue(key) => {
-                if let Some(shader) = node.shader.as_mut()
-                    && shader.key != key
-                {
-                    shader.key = key;
-                    flags |= dirty::SHADER;
-                }
-            }
-            Prop::TransitionDuration(ms) => {
-                if let Some(shader) = node.shader.as_mut() {
-                    shader.duration = ms;
-                }
-            }
-            Prop::TransitionFallback(fallback) => {
-                if let Some(shader) = node.shader.as_mut()
-                    && shader.fallback != fallback
-                {
-                    shader.fallback = fallback;
-                    flags |= dirty::SHADER;
-                }
-            }
-            Prop::MaxSampleOffset(offset) => {
-                if let Some(shader) = node.shader.as_mut()
-                    && shader.max_offset != offset
-                {
-                    shader.max_offset = offset;
-                    flags |= dirty::SHADER;
-                }
-            }
             Prop::Image(option) => {
                 if let Some(image) = node.image.as_mut() {
                     match option {
@@ -3687,21 +3285,11 @@ impl<M: TextEngine> Core<M> {
             // `animation` on a dialog: the value pages and dialogs share.
             Prop::Screen(ScreenProp::Animation(a)) if node.kind == Kind::Modal => {
                 if let Some(root) = node.root.as_mut() {
-                    let (animation, shader) = match a {
-                        ScreenTransition::Preset(ScreenAnimation::Default) => {
-                            (ModalAnimation::Slide, None)
-                        }
-                        ScreenTransition::Preset(ScreenAnimation::Fade) => {
-                            (ModalAnimation::Fade, None)
-                        }
-                        ScreenTransition::Preset(ScreenAnimation::None) => {
-                            (ModalAnimation::None, None)
-                        }
-                        // Where shaders draw no transitions, it fades.
-                        ScreenTransition::Shader(s) => (ModalAnimation::Fade, Some(s)),
+                    root.modal.animation = match a {
+                        ScreenAnimation::Default => ModalAnimation::Slide,
+                        ScreenAnimation::Fade => ModalAnimation::Fade,
+                        ScreenAnimation::None => ModalAnimation::None,
                     };
-                    root.modal.animation = animation;
-                    root.shader_animation = shader;
                     flags |= dirty::MODAL;
                 }
             }
@@ -3718,15 +3306,7 @@ impl<M: TextEngine> Core<M> {
                         ScreenProp::HeaderRightSystemItem(v) => c.right_system_item = v,
                         ScreenProp::PopOnSwipe(v) => c.gesture_enabled = v,
                         ScreenProp::PopOnBack(v) => c.prevent_back = !v,
-                        ScreenProp::Animation(ScreenTransition::Preset(v)) => {
-                            c.animation = v;
-                            root.shader_animation = None;
-                        }
-                        // Where shaders draw no transitions, the platform's own.
-                        ScreenProp::Animation(ScreenTransition::Shader(s)) => {
-                            c.animation = ScreenAnimation::Default;
-                            root.shader_animation = Some(s);
-                        }
+                        ScreenProp::Animation(v) => c.animation = v,
                         // Taken by `set_prop`.
                         ScreenProp::StatusBar(_) => {}
                     }
@@ -4317,10 +3897,6 @@ impl<M: TextEngine> Core<M> {
         if node.kind == Kind::Text {
             self.attachment_blocks.retain(|&k| k != key);
         }
-        if node.kind == Kind::ScreenEffect {
-            self.screen_effects.retain(|&k| k != key);
-            self.screen_effects_changed = true;
-        }
         if node.is_layout_root() {
             self.roots.retain(|&k| k != key);
         }
@@ -4585,18 +4161,6 @@ impl<M: TextEngine> Core<M> {
         if node.drawing.is_some() {
             flags |= dirty::CANVAS;
         }
-        if let Some(shader) = node.shader.as_mut() {
-            // The new view has drawn nothing.
-            shader.sent = None;
-            if shader.source.is_some() {
-                flags |= dirty::SHADER;
-            }
-            if !shader.packed.bindings.is_empty()
-                || matches!(shader.progress, crate::shader::ShaderNumber::Animated(_))
-            {
-                flags |= dirty::ANIMATION;
-            }
-        }
         if !node.gestures.is_empty() {
             flags |= dirty::PAN;
         }
@@ -4786,18 +4350,6 @@ impl<M: TextEngine> Core<M> {
                             .map(|(i, &n)| (AnimationProp::CanvasArg(i as u16), n)),
                     );
                 }
-                if let Some(shader) = &node.shader {
-                    bindings.extend(
-                        shader
-                            .packed
-                            .bindings
-                            .iter()
-                            .map(|&(k, n)| (AnimationProp::ShaderUniform(k), n)),
-                    );
-                    if let crate::shader::ShaderNumber::Animated(n) = shader.progress {
-                        bindings.push((AnimationProp::ShaderUniform(crate::shader::PROGRESS), n));
-                    }
-                }
                 if let Some(component) = &node.component {
                     bindings.extend(
                         component
@@ -4851,9 +4403,6 @@ impl<M: TextEngine> Core<M> {
                     .and_then(|p| p.accessibility.label.clone());
                 self.mount.push(MountItem::AccessibilityLabel { id, label });
             }
-            if flags & (dirty::SCREEN | dirty::MODAL) != 0 {
-                self.nav_shader(key);
-            }
             if flags & dirty::SCREEN != 0
                 && let Some(config) = self.screen_config(key)
             {
@@ -4890,9 +4439,6 @@ impl<M: TextEngine> Core<M> {
                     self.mount.push(MountItem::ComponentProps { id, props });
                 }
             }
-            if flags & dirty::SHADER != 0 {
-                self.flush_shader(key);
-            }
             let node = &self.nodes[key as usize];
             if flags & dirty::NATIVE != 0
                 && let Some(control) = &node.control
@@ -4905,11 +4451,8 @@ impl<M: TextEngine> Core<M> {
             if flags & dirty::MODAL != 0
                 && let Some(root) = &node.root
             {
-                self.mount.push(MountItem::ModalConfig {
-                    id,
-                    config: root.modal,
-                    shader: root.modal_shader.clone(),
-                });
+                let config = root.modal;
+                self.mount.push(MountItem::ModalConfig { id, config });
             }
             if let Some(input) = &node.input {
                 if flags & dirty::INPUT != 0 {
@@ -5725,77 +5268,6 @@ impl<M: TextEngine> Core<M> {
                     config: Box::new(config),
                 });
             }
-        }
-    }
-
-    /// Makes page or dialog `key`'s `animation` through a shader into what
-    /// the platform draws ([`crate::NavShader`]): its program sent first,
-    /// its uniforms packed.
-    fn nav_shader(&mut self, key: Key) {
-        let Some(spec) = self.nodes[key as usize]
-            .root
-            .as_ref()
-            .and_then(|r| r.shader_animation.clone())
-        else {
-            if let Some(root) = self.nodes[key as usize].root.as_mut() {
-                root.screen.shader = None;
-                root.modal_shader = None;
-            }
-            return;
-        };
-        let language = self.components.environment.shaders.language;
-        let ratio = self.components.environment.pixel_ratio;
-        let source = &spec.source;
-        let ready = *self.shader_programs.entry(source.id).or_insert_with(|| {
-            match crate::shader::ShaderProgram::translate(source, language) {
-                Ok(program) => {
-                    self.mount.push(MountItem::ShaderProgram {
-                        program: Arc::new(program),
-                    });
-                    true
-                }
-                Err(e) => {
-                    log::error!(target: "js", "animation: {e}");
-                    false
-                }
-            }
-        });
-        let shader = ready.then(|| {
-            let id = self.nodes[key as usize].id;
-            let packed = crate::shader::pack(
-                source.shader.reflection(),
-                &spec.uniforms,
-                &mut |w| log::warn!(target: "js", "animation (node {id}): {w}"),
-            );
-            let fill = crate::shader::ShaderFill {
-                program: source.id,
-                uniforms: packed.bytes.as_slice().into(),
-                images: packed
-                    .images
-                    .iter()
-                    .map(|i| crate::shader::ShaderImage {
-                        source: i.source.as_ref().map(|s| s.resolved(ratio)),
-                        offset: i.offset,
-                    })
-                    .collect(),
-                time: source.shader.reflection().time,
-                inputs: source
-                    .shader
-                    .reflection()
-                    .inputs
-                    .iter()
-                    .fold(0, |bits, input| bits | 1 << input.index()),
-                ..Default::default()
-            };
-            let ms = spec.duration.unwrap_or(DEFAULT_NAV_SHADER_MS);
-            crate::NavShader {
-                fill: Arc::new(fill),
-                duration: std::time::Duration::from_micros((ms as f64 * 1000.0).round() as u64),
-            }
-        });
-        if let Some(root) = self.nodes[key as usize].root.as_mut() {
-            root.screen.shader = shader.clone();
-            root.modal_shader = shader;
         }
     }
 

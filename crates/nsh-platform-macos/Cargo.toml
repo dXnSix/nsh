@@ -27,7 +27,6 @@ log.workspace = true
 nsh-core = { workspace = true, features = ["svg"] }
 nsh-engine.workspace = true
 nsh-base = { workspace = true, features = ["highlight"] }
-nsh-metal.workspace = true
 block2.workspace = true
 crossbeam-channel.workspace = true
 dispatch2.workspace = true

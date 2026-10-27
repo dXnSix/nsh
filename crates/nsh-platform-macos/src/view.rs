@@ -130,8 +130,6 @@ pub(crate) struct ViewState {
     pub(crate) image: Option<crate::image::ImageState>,
     /// Canvas content.
     pub(crate) canvas: Option<crate::canvas::CanvasState>,
-    /// What a shader view draws.
-    pub(crate) shader: Option<crate::shader::ShaderState>,
     /// Text field (input views).
     pub(crate) input: Option<std::rc::Rc<crate::text_input::InputState>>,
     /// Hosted AppKit views.
@@ -165,7 +163,6 @@ impl ViewState {
             text: None,
             image: None,
             canvas: None,
-            shader: None,
             input: None,
             natives: Vec::new(),
             overflow: None,
@@ -1062,11 +1059,6 @@ impl NshView {
         self.ivars().state.borrow_mut()
     }
 
-    /// Its state, to change, unless it is in use.
-    pub(crate) fn try_state_mut(&self) -> Option<RefMut<'_, ViewState>> {
-        self.ivars().state.try_borrow_mut().ok()
-    }
-
     /// Node id.
     pub(crate) fn id(&self) -> NodeId {
         self.state().id
@@ -1123,7 +1115,7 @@ impl NshView {
     }
 
     /// Sizes the container to the view's bounds.
-    pub(crate) fn size_container(&self) {
+    fn size_container(&self) {
         if let Some(c) = &*self.ivars().container.borrow() {
             let f = self.state().frame;
             let origin = crate::scroll::bounds_origin(self);
@@ -1174,7 +1166,6 @@ impl NshView {
         if let Some(layer) = c.layer() {
             layer.setSublayerTransform(IDENTITY);
         }
-        crate::shader::ui_changed(self);
     }
 
     /// Something it draws changed: content (text, canvas) is drawn again
@@ -1182,8 +1173,6 @@ impl NshView {
     pub(crate) fn changed(&self) {
         self.restyle();
         self.redraw();
-        // Shader effects around it and backdrops show it in a picture.
-        crate::shader::ui_changed(self);
     }
 
     /// Its style changed: the decoration is applied again (the content is
@@ -1211,9 +1200,6 @@ impl NshView {
         if let Some(layer) = self.content_layer() {
             layer.setNeedsDisplay();
         }
-        // An effect's picture of it is taken again (it may have been put
-        // off while out of sight, `Mounter::draw_when_shown`).
-        crate::shader::ui_changed(self);
     }
 
     /// The layer its content is drawn in (made on first use).
@@ -1250,24 +1236,13 @@ impl NshView {
     }
 
     /// The scale of its window's backing (2 before it has one).
-    pub(crate) fn backing_scale(&self) -> CGFloat {
+    fn backing_scale(&self) -> CGFloat {
         self.ns().window().map_or(2.0, |w| w.backingScaleFactor())
-    }
-
-    /// A weak reference to it.
-    pub(crate) fn downgrade(&self) -> objc2::rc::Weak<ViewObj> {
-        objc2::rc::Weak::from_retained(&self.0)
-    }
-
-    /// The view of a weak reference, while it lives.
-    pub(crate) fn upgrade(weak: &objc2::rc::Weak<ViewObj>) -> Option<NshView> {
-        weak.load().map(NshView)
     }
 
     /// Its window or screen changed: the content layer draws at the new
     /// scale.
     fn rescale(&self) {
-        crate::shader::resized(self);
         if let Some((layer, _)) = &*self.ivars().content.borrow() {
             let scale = self.backing_scale();
             if layer.contentsScale() != scale {
@@ -1332,7 +1307,6 @@ impl NshView {
     pub(crate) fn moved(&self) {
         self.place();
         crate::decor::apply(self);
-        crate::shader::ui_changed(self);
     }
 
     /// Places the view at its frame (with its parent's mirroring and its
@@ -1367,7 +1341,6 @@ impl NshView {
                 // A new size draws it again (`needsDisplayOnBoundsChange`).
                 layer.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), rect.size));
             }
-            crate::shader::resized(self);
         }
         self.set_layer_geometry();
     }
@@ -1423,15 +1396,6 @@ impl NshView {
             sup = superview(&sup)?;
         }
         NshView::from_ns(&sup)
-    }
-
-    /// The surface of the root view it is in, if it is in one.
-    pub(crate) fn surface(&self) -> Option<std::rc::Rc<Surface>> {
-        let mut view = self.clone();
-        while let Some(parent) = view.parent_view() {
-            view = parent;
-        }
-        view.ivars().surface.borrow().upgrade()
     }
 
     /// Whether it is in a parent view.

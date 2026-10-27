@@ -109,18 +109,6 @@ pub(crate) fn frame_link(target: &EventTarget) -> Retained<CADisplayLink> {
     link
 }
 
-/// A paused display link calling `shaderFrame:` on `target`, unpaused
-/// while a shader that reads `nsh.time` shows.
-pub(crate) fn shader_link(target: &EventTarget) -> Retained<CADisplayLink> {
-    // SAFETY: `shaderFrame:` is implemented by `EventTarget`, which outlives
-    // the link (the mounter invalidates it when dropped).
-    let link = unsafe { CADisplayLink::displayLinkWithTarget_selector(target, sel!(shaderFrame:)) };
-    link.setPaused(true);
-    // SAFETY: the main run loop and standard modes.
-    unsafe { link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSRunLoopCommonModes) };
-    link
-}
-
 /// Has `link` fire at the screen's `maximumFramesPerSecond` (120 Hz on
 /// ProMotion), at least 80 there: animations, scroll-driven values and JS
 /// frames move at the rate the system's own scrolling does.

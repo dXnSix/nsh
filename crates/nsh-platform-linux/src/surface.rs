@@ -144,22 +144,7 @@ pub(crate) struct Surface {
 
 impl Surface {
     /// A surface with no app yet.
-    pub(crate) fn new(mut environment: Environment) -> Rc<Surface> {
-        // Shaders fill views with OpenGL ES 3 (`crate::shader`); an
-        // effect's children are rendered with each of its frames, what is
-        // behind a view is a picture taken again when it changes.
-        environment.shaders = {
-            let mut support =
-                nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::GlslEs300);
-            support.effect = nsh_core::shader::Support::Live;
-            support.backdrop = nsh_core::shader::Support::Snapshot;
-            support.transition = nsh_core::shader::Support::Live;
-            // The root draws through the screen effect, its children drawn
-            // whenever it is; a screen transition draws pictures of the root.
-            support.screen_effect = nsh_core::shader::Support::Live;
-            support.screen_transition = nsh_core::shader::Support::Snapshot;
-            support
-        };
+    pub(crate) fn new(environment: Environment) -> Rc<Surface> {
         let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
         let root = NshView::new(ROOT_ID, nsh_core::ViewKind::View);
         root.set_hexpand(true);

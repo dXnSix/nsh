@@ -77,12 +77,6 @@ crates/
                        (`declarations.rs`, from the declaration next to each export and spec)
   nsh-engine/          Engine thread: drives nsh-js + nsh-core and hands one MountBatch per frame to the platform
   nsh-package/         Signed packages (`.nshpkg`): Ed25519 keys, release-key certificates, revocation lists, the trust store
-  nsh-shader/          Shaders: WGSL in NSH's profile (what AGSL can say too), checked on naga's IR (`profile.rs`: counted
-                       loops, indexes proven in bounds, the sample budget), reflected (uniforms, inputs, time / progress) and
-                       written per platform, a feature each: MSL, HLSL (Direct2D / Direct3D 11), GLSL (ES 3.00 / 3.30),
-                       AGSL (NSH's own writer, `agsl.rs`); NSH's prelude and entry points as WGSL (`glue.rs`) (docs/dev/shaders.md)
-  nsh-metal/           Metal on Apple platforms (loaded with `dlopen`): shader programs compiled off the main thread, a shader
-                       view's `CAMetalLayer` (`ShaderLayer`), drawn under its children; iOS and macOS share it (docs/dev/shaders.md)
   nsh-bundler/         Bundler: rolldown + Oxc (TS stripping) + NSH's JSX compiler (`jsx.rs`, docs/dev/native-pipeline.md) + source maps;
                        imports of the native modules stay imports (`plugin.rs`), so a bundle holds only the app's code;
                        the app's themes (nsh.json `tailwind` / `theme`, checked, handed to the renderer by the entry) and the
@@ -181,8 +175,7 @@ Dependency direction: `nsh-core` ← `nsh-js` ← `nsh-engine` (also ← `nsh-pa
 imports against the names native modules export); `nsh-base` depends on `nsh-core` only and is used by the bundler
 (declarations), the platforms and the CLI (registry). An app's own crates (its UI sets) depend on `nsh-core` only and
 are never linked into the CLI: it reads their UI sets as data (`nsh_core::element::description`); the hosts and runners
-`rust_app.rs` generates link them. `nsh-metal` depends on `nsh-core` only and is used by `nsh-platform-ios` and
-`nsh-platform-macos`. `nsh-core` must not depend on any platform or JS crate.
+`rust_app.rs` generates link them. `nsh-core` must not depend on any platform or JS crate.
 
 ## Documentation
 
@@ -197,7 +190,6 @@ are never linked into the CLI: it reads their UI sets as data (`nsh_core::elemen
 | units and geometry (`Points`, `Length`, `Bounds`, ...) | `docs/dev/geometry.md` |
 | scroll views, zooming, `List` | `docs/dev/scrolling-and-lists.md` |
 | animation, canvas, images | `docs/dev/animation.md`, `canvas.md`, `images.md` |
-| shaders: the profile, the prelude, the writers | `docs/dev/shaders.md` |
 | VM limits, capabilities, signed packages | `docs/dev/sandbox.md`, `signed-packages.md` |
 | packaging, the iOS / Android SDKs, native components | `docs/dev/embedding.md` |
 | `.nsh/types`, the dev server, hot reload | `docs/dev/tooling.md` |
@@ -414,7 +406,7 @@ repository's `target/`; dependencies only it uses are declared in `crates/gpui/C
   (legacy, to migrate) does not list (`docs/dev/geometry.md`).
 - TSX tags are PascalCase, everywhere (examples, docs, tests): every tag names a binding in scope, only `<If>` and
   `<Each>` are globals that need no import. Imports mirror the Rust crates' layers: every primitive comes from `nsh`
-  (`View`, `Text`, `Scroll`, `Overlay`, `Image`, `List`, `Canvas` and its classes, `Shader`, `ShaderEffect`, `ShaderTransition`, `WebView`, `Video`), as `nsh_core::element` holds them, every base
+  (`View`, `Text`, `Scroll`, `Overlay`, `Image`, `List`, `Canvas` and its classes, `WebView`, `Video`), as `nsh_core::element` holds them, every base
   component from `nsh/base` (`Input`, `Dialog`, `Button`, `NavStack`, ...), and
   `InputAccessoryView` from `nsh/mobile`; the compiler makes their tags in place (`jsx::PRIMITIVES`). Lowercase tags are compile errors: TypeScript checks a lowercase tag
   against one global type per name, so generic components (`List`, `Each`) and local ones would lose their types.

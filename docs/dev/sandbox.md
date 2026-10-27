@@ -9,7 +9,7 @@ trusted: every limit and check is enforced in Rust, never in JS.
   without `--limits`) is its developer's code, as a native app's is, and runs with `Limits::standalone()`: no heap
   limit (0), no time budget (`Duration::MAX`: no deadline), no quota (`usize::MAX`), only the interpreter stack's
   4 MB, which turns deep recursion into a `RangeError` instead of a crash of the process (it is also the most an
-  embedder may set: the engine thread's stack is 8 MB). `nsh run` / `nsh dev --limits [memory=..,stack=..,load=..,call=..,nodes=..,samples=..]`
+  embedder may set: the engine thread's stack is 8 MB). `nsh run` / `nsh dev --limits [memory=..,stack=..,load=..,call=..,nodes=..]`
   run the app as an embedding app setting those would (alone: the embedding defaults): the dev server sends the spec in
   its bundle message (`limits`) and the dev hosts start the app with `Limits::development(spec)`. On the web the page
   decides (`run(code, { limits })`, `nsh_bundle_limits`); the website's playground runs its visitors' code with the
@@ -19,10 +19,7 @@ trusted: every limit and check is enforced in Rust, never in JS.
   rendering it causes, one list bind, one timer, one frame's callbacks, the microtask drain; nested calls share the
   outermost budget), and quotas for what the heap limit does not cover: changes at once (the op queue,
   `max_op_values`: ops are Rust memory), ops per canvas drawing, nodes in the core (`Core::set_max_nodes`; each may hold a native view) and dense
-  node ids (an id far past the ids in use would grow the id table: `ApplyError::IdOutOfRange`); shaders a VM makes
-  (`max_shaders`, 64: `createShader` throws a `RangeError`) and the texture samples a pixel of one takes
-  (`max_shader_samples`, 128, `samples=`: the shader is refused with a `SyntaxError`), both checked in Rust when a
-  shader is made (`nsh-js` `shader.rs`, [shaders.md](shaders.md)).
+  node ids (an id far past the ids in use would grow the id table: `ApplyError::IdOutOfRange`).
 - An overrun call is cut off by the interrupt handler with an exception no `catch` swallows, reported with the budget it
   exceeded; the VM goes on. Running out of memory or going over a quota **stops the VM** (`Host::fatal`), also when the
   app catches the error: the heap's allocator (`HeapAllocator`) enforces the limit and records reaching it, since QuickJS

@@ -45,28 +45,6 @@ pub enum ViewKind {
     InputAccessory,
     /// A canvas ([`MountItem::Canvas`]).
     Canvas,
-    /// A view a shader fills ([`MountItem::Shader`]), under its children.
-    Shader,
-    /// A view whose children draw through a shader ([`MountItem::Shader`]):
-    /// they are the shader's content input.
-    ShaderEffect,
-    /// A view whose children change through a shader
-    /// ([`MountItem::Shader`], [`MountItem::ShaderTransition`]): its
-    /// children are the shader's `sample_to`, a picture of what they drew
-    /// before its `sample_from`.
-    ShaderTransition,
-    /// The whole surface drawn through a shader ([`MountItem::Shader`]):
-    /// what the surface shows (its root view, its dialogs and overlays,
-    /// never anything of the app around it) is the shader's content input,
-    /// and the shader's result is what shows over all of it. The view
-    /// itself has no size and no children. A surface has one at most with
-    /// a fill: the core sends `None` to the others.
-    ScreenEffect,
-    /// The whole surface changing through a shader ([`MountItem::Shader`],
-    /// [`MountItem::ShaderTransition`]): what the surface shows is the
-    /// shader's `sample_to`, a picture of what it showed before its
-    /// `sample_from`. The view itself has no size and no children.
-    ScreenTransition,
     /// A web view.
     WebView,
     /// The container of a registered native component: the platform
@@ -432,10 +410,6 @@ pub struct ScreenConfig {
     pub prevent_back: bool,
     /// Push / pop transition.
     pub animation: ScreenAnimation,
-    /// The push / pop transition through a shader, where the platform
-    /// draws shader transitions ([`crate::shader::Support`]); otherwise
-    /// [`Self::animation`].
-    pub shader: Option<NavShader>,
     /// Leading header item view.
     pub left: Option<NodeId>,
     /// Trailing header item view.
@@ -471,7 +445,6 @@ impl Default for ScreenConfig {
             gesture_enabled: true,
             prevent_back: false,
             animation: ScreenAnimation::Default,
-            shader: None,
             left: None,
             right: None,
             right_system_item: None,
@@ -480,22 +453,6 @@ impl Default for ScreenConfig {
             header_height: Points::ZERO,
         }
     }
-}
-
-/// A page's or a dialog's transition through a shader
-/// ([`crate::shader::ShaderAnimation`]): `sample_from` is the lower side
-/// (the page below, what is behind the dialog), `sample_to` the upper one,
-/// and `nsh.progress` how much of the upper side shows: 0 to 1 over
-/// `duration` as it comes (a push, a dialog that opens), 1 to 0 as it goes
-/// (a pop, a dialog that closes), and as a back gesture moves.
-#[derive(Debug, Clone, PartialEq, Default)]
-#[non_exhaustive]
-pub struct NavShader {
-    /// What the shader draws: its program (sent before as
-    /// [`MountItem::ShaderProgram`]) and uniforms.
-    pub fill: Arc<crate::shader::ShaderFill>,
-    /// How long it runs.
-    pub duration: std::time::Duration,
 }
 
 /// Options of a modal (`Dialog`).
@@ -855,46 +812,6 @@ pub enum MountItem {
         /// The drawing.
         drawing: Arc<crate::canvas::Drawing>,
     },
-    /// A shader's program in the platform's language, before the first
-    /// [`MountItem::Shader`] that draws it (once per program and engine;
-    /// the platform keeps it by [`crate::shader::ShaderProgram::id`]).
-    ShaderProgram {
-        /// The program.
-        program: Arc<crate::shader::ShaderProgram>,
-    },
-    /// What a shader view draws (`None`: nothing, its children only). Its
-    /// animated uniforms come as
-    /// [`crate::animation::AnimationProp::ShaderUniform`] bindings.
-    Shader {
-        /// The shader view.
-        id: NodeId,
-        /// What it draws.
-        fill: Option<Arc<crate::shader::ShaderFill>>,
-    },
-    /// What a shader reads changed, as far as the core knows: the views
-    /// in a shader effect (its content), or anything in the surface for a
-    /// shader that samples what is behind it and for a screen effect or
-    /// transition. Platforms that draw shaders
-    /// from a picture of their input take it again; those drawing the
-    /// live input ignore it. Animations, scrolling and loads on the UI
-    /// thread change the input too: the platform notices those itself.
-    ShaderInput {
-        /// The shader view or effect.
-        id: NodeId,
-    },
-    /// A shader transition starts: what its children draw now, before the
-    /// items after this one in the batch, is its `sample_from`; what they
-    /// draw from then on its `sample_to`, while `nsh.progress` goes from 0
-    /// to 1 over `duration` (linearly). It comes first in its batch. A
-    /// transition that starts while one runs starts from what shows.
-    ShaderTransition {
-        /// The transition view ([`ViewKind::ShaderTransition`]), or a
-        /// [`ViewKind::ScreenTransition`]: then it is the whole surface
-        /// that changes.
-        id: NodeId,
-        /// How long it runs.
-        duration: std::time::Duration,
-    },
     /// Bind visual properties to native animation nodes.
     AnimationBindings {
         /// View.
@@ -975,9 +892,6 @@ pub enum MountItem {
         id: NodeId,
         /// The options.
         config: ModalConfig,
-        /// How it appears and goes through a shader, where the platform
-        /// draws shader transitions; otherwise `config.animation`.
-        shader: Option<NavShader>,
     },
     /// Create the registered component `name` in a [`ViewKind::Native`]
     /// container (right after its `Create`). Unknown names leave the
@@ -1013,57 +927,6 @@ pub enum MountItem {
         /// The call.
         command: Command,
     },
-}
-
-impl MountItem {
-    /// The view whose look or content the item changes (a parent for its
-    /// children's insertions and removals), if it is about one.
-    pub fn view(&self) -> Option<NodeId> {
-        use MountItem as M;
-        match self {
-            M::Create { id, .. }
-            | M::TrackStates { id, .. }
-            | M::Remove { id }
-            | M::Delete { id }
-            | M::Frame { id, .. }
-            | M::Overflow { id, .. }
-            | M::ViewStyle { id, .. }
-            | M::Text { id, .. }
-            | M::Events { id, .. }
-            | M::Image { id, .. }
-            | M::ScrollConfig { id, .. }
-            | M::ScrollContent { id, .. }
-            | M::ScrollBy { id, .. }
-            | M::StickyCells { id, .. }
-            | M::ScrollBehavior { id, .. }
-            | M::Refreshing { id, .. }
-            | M::Canvas { id, .. }
-            | M::Shader { id, .. }
-            | M::AnimationBindings { id, .. }
-            | M::Gestures { id, .. }
-            | M::ViewProps { id, .. }
-            | M::AccessibilityLabel { id, .. }
-            | M::Input { id, .. }
-            | M::InputValue { id, .. }
-            | M::InputContent { id, .. }
-            | M::ScreenConfig { id, .. }
-            | M::NativeProps { id, .. }
-            | M::ModalConfig { id, .. }
-            | M::Component { id, .. }
-            | M::ComponentProps { id, .. }
-            | M::ComponentPropSlots { id, .. }
-            | M::Command { id, .. } => Some(*id),
-            M::Insert { parent, .. } => Some(*parent),
-            M::ShaderProgram { .. }
-            | M::ShaderInput { .. }
-            | M::ShaderTransition { .. }
-            | M::LayoutDirection { .. }
-            | M::Appearance { .. }
-            | M::Keymap(_)
-            | M::LayoutAnimation(_)
-            | M::Animation(_) => None,
-        }
-    }
 }
 
 /// All mount items produced by one commit.
