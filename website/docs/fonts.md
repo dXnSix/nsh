@@ -1,6 +1,6 @@
 ---
 title: Fonts
-description: The system font and generic families, shipping .ttf, .otf, .woff and .woff2 files from a Rust crate's assets or TSX imports, families with several weights and italics, and fonts in typed styles and Tailwind classes.
+description: The system font and generic families, shipping .ttf, .otf, .woff and .woff2 files from a Rust crate's assets or TSX imports, registering fonts while the app runs, families with several weights and italics, and fonts in typed styles and Tailwind classes.
 order: 37
 group: ui
 ---
@@ -52,6 +52,34 @@ The files ship with the app like any other [asset](./images-and-assets.md). Font
 
 > [!WARNING]
 > In TSX, an import whose value is never used is removed by TypeScript's import elision, and with it the font. If you only refer to a family by its name (for example in the Tailwind theme), import the file for its side effect: `import "./fonts/Inter-Bold.ttf";`. A Rust crate ships every file of `assets/` through `assets!()`.
+
+## Registering a font while the app runs
+
+A font that is not known when the app ships (one a user picks from a catalog, one a server sends with a document, one the app makes) is registered while the app runs: `register_font(data)` in Rust, `registerFont(source)` in TSX. It takes TrueType, OpenType, WOFF or WOFF2 data (in TSX a `Uint8Array`, or the URL of the file: one of the app's, `asset:/...`, or one on the network, read as `fetch` reads it, so the `network` capability applies) and resolves to the font's family name. Text that names the family is laid out with it from then on, and text shown before the font arrived is laid out again:
+
+```rust tabs
+use nsh_core::prelude::*;
+
+let family = signal(String::new());
+spawn(async move {
+    let Ok(response) = fetch("https://fonts.example.com/Brand.woff2").await else { return };
+    if let Ok(name) = register_font(response.body).await {
+        family.set(name);
+    }
+});
+text("Branded").font_family(move || family.get())
+```
+
+```tsx tabs
+import { registerFont, signal, Text } from "nsh";
+
+const family = signal("");
+registerFont("https://fonts.example.com/Brand.woff2").then((name) => family.set(name));
+
+<Text style={{ fontFamily: family() }}>Branded</Text>
+```
+
+`registerFont` rejects with an `Error` when the URL does not load or the data is no font; Rust's `register_font` resolves to the reason. Registering the same font again is harmless. Like an imported font, a registered one is the app's alone and is not installed on the device.
 
 ## Weights and italics
 

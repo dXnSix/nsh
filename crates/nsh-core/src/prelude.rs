@@ -233,7 +233,7 @@ pub use crate::element::{
         first_day_of_week, font_scale, global, hour_cycle, idiom, image_size, is_desktop,
         key_label, keyboard_duration, keyboard_height, languages, locale, measure_text,
         measurement_system, motion, next_frame, on_back_press, on_key, on_key_with, open_url, os,
-        os_version, pick_images, pixel_ratio, prefetch_image, reduce_motion,
+        os_version, pick_images, pixel_ratio, prefetch_image, reduce_motion, register_font,
         request_animation_frame, round_to_nearest_pixel, safe_area, screen_reader, set_clipboard,
         set_clipboard_image, set_color_scheme, set_interval, set_timeout, spawn, temperature_unit,
         text_metrics, time_zone, timer, timer_until, tokens, try_global, window,

@@ -464,6 +464,28 @@ fn components_follow_the_regional_preferences() {
     }
 }
 
+/// Registers a font it was given while the app runs and shows its family,
+/// as an app that downloads its fonts does.
+#[component]
+fn Downloaded() -> impl IntoElement {
+    let family = signal(String::from("none"));
+    spawn(async move {
+        let data = include_bytes!("../../../nsh-core/tests/fonts/Pacifico-Regular.woff2");
+        let shown = match register_font(data.to_vec()).await {
+            Ok(name) => name,
+            Err(e) => format!("failed: {e}"),
+        };
+        family.set(shown);
+    });
+    view().child(text(move || format!("Family: {}", family.get())))
+}
+
+#[test]
+fn a_component_registers_a_font_while_the_app_runs() {
+    let (_engine, rx, _) = start::<Downloaded>(Environment::default());
+    until(&rx, "Family: Pacifico");
+}
+
 /// Shows the time zone and counts its effect's runs, as a clock that
 /// shows times in it does.
 #[component]

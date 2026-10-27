@@ -5240,6 +5240,7 @@ dependencies = [
  "taffy 0.15.0",
  "tokio",
  "tokio-tungstenite",
+ "ttf-parser",
  "unicode-linebreak",
  "url",
  "windows-sys 0.61.2",

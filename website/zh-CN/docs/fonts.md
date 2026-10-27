@@ -1,6 +1,6 @@
 ---
 title: 字体
-description: 系统字体与通用字体族、从 Rust crate 的资源或 TSX 导入发布 .ttf、.otf、.woff 和 .woff2 文件、含多个字重和斜体的字体族，以及在类型化样式和 Tailwind 类中使用字体。
+description: 系统字体与通用字体族、从 Rust crate 的资源或 TSX 导入发布 .ttf、.otf、.woff 和 .woff2 文件、在应用运行时注册字体、含多个字重和斜体的字体族，以及在类型化样式和 Tailwind 类中使用字体。
 order: 37
 group: ui
 ---
@@ -52,6 +52,34 @@ import Pacifico from "./fonts/Pacifico-Regular.ttf";
 
 > [!WARNING]
 > 在 TSX 中，值从未被使用的导入会被 TypeScript 的导入消除（import elision）移除，字体也随之丢失。如果你只通过名称引用某个字体族（例如在 Tailwind 主题中），请以副作用方式导入文件：`import "./fonts/Inter-Bold.ttf";`。Rust crate 通过 `assets!()` 发布 `assets/` 中的每一个文件。
+
+## 在应用运行时注册字体
+
+应用发布时还不知道的字体（用户从字体目录中挑选的、服务器随文档发送的、应用自己生成的）在应用运行时注册：Rust 中为 `register_font(data)`，TSX 中为 `registerFont(source)`。它接受 TrueType、OpenType、WOFF 或 WOFF2 数据（在 TSX 中为 `Uint8Array`，或字体文件的 URL：应用自己的文件 `asset:/...`，或网络上的文件，按 `fetch` 的方式读取，因此适用 `network` 权限），并解析为字体的字体族名。此后，使用该字体族的文字都会用它排版，字体到达之前已显示的文字也会重新排版：
+
+```rust tabs
+use nsh_core::prelude::*;
+
+let family = signal(String::new());
+spawn(async move {
+    let Ok(response) = fetch("https://fonts.example.com/Brand.woff2").await else { return };
+    if let Ok(name) = register_font(response.body).await {
+        family.set(name);
+    }
+});
+text("Branded").font_family(move || family.get())
+```
+
+```tsx tabs
+import { registerFont, signal, Text } from "nsh";
+
+const family = signal("");
+registerFont("https://fonts.example.com/Brand.woff2").then((name) => family.set(name));
+
+<Text style={{ fontFamily: family() }}>Branded</Text>
+```
+
+URL 无法加载或数据不是字体时，`registerFont` 以 `Error` 拒绝；Rust 的 `register_font` 解析为原因。再次注册同一字体没有影响。与导入的字体一样，注册的字体只属于该应用，不会安装到设备上。
 
 ## 字重与斜体
 
