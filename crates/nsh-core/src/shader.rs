@@ -329,6 +329,20 @@ impl From<bool> for TransitionKey {
     }
 }
 
+/// A page's or a dialog's `transitionShader`: the program it comes and
+/// goes through, its uniforms and how long that takes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NavShaderSpec {
+    /// The WGSL defining `shade`, which reads the lower side as
+    /// `sample_from` and the upper as `sample_to`.
+    pub source: Arc<str>,
+    /// Its uniforms.
+    pub uniforms: ShaderUniforms,
+    /// How long it runs in milliseconds (the platform's own duration when
+    /// absent).
+    pub duration: Option<f32>,
+}
+
 /// The word a progress slot writes ([`ShaderLayer::slots`]): not one of the
 /// uniforms, the built-in `nsh.progress`.
 pub const PROGRESS_WORD: u32 = u32::MAX;

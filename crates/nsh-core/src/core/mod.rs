@@ -103,6 +103,8 @@ mod dirty {
     pub(super) const LABEL: u32 = 1 << 18;
     /// Emit [`crate::MountItem::Shader`].
     pub(super) const SHADER: u32 = 1 << 19;
+    /// Emit [`crate::MountItem::NavShader`].
+    pub(super) const NAV_SHADER: u32 = 1 << 20;
 }
 
 /// A layout root other than the surface's: screens, modals and header
@@ -123,6 +125,8 @@ struct RootState {
     screen: ScreenConfig,
     /// Modal options (modals).
     modal: ModalConfig,
+    /// `transitionShader` (screens and modals), as the platform gets it.
+    nav_shader: Option<crate::NavShader>,
     /// Where a header item goes (header items).
     slot: HeaderSlot,
     /// `nativeID` (input accessories).
@@ -455,6 +459,9 @@ struct ShaderNode {
 
 /// How long a shader transition runs by default.
 const DEFAULT_TRANSITION_MS: f32 = 300.0;
+
+/// How long a page's or a dialog's `transitionShader` runs by default.
+const DEFAULT_NAV_SHADER_MS: f32 = 350.0;
 
 /// The role of a shader element's layer.
 fn shader_role(tag: Tag) -> Option<crate::shader::ShaderRole> {
@@ -2919,6 +2926,48 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// A page's or a dialog's `transitionShader`: compiled (once per source)
+    /// into the layer the platform draws its coming and going through.
+    fn set_nav_shader(&mut self, key: Key, spec: Option<crate::shader::NavShaderSpec>) {
+        let id = self.nodes[key as usize].id;
+        let shader = spec.and_then(|spec| {
+            let hash = crate::shader::source_hash(&spec.source);
+            let compiled = match self.shaders.get(&hash) {
+                Some(Ok(shader)) if shader.source() == &*spec.source => Ok(shader.clone()),
+                _ => {
+                    let compiled = crate::shader::Shader::compile(&spec.source);
+                    if self.shaders.len() >= 64 {
+                        self.shaders.clear();
+                    }
+                    self.shaders.insert(hash, compiled.clone());
+                    compiled
+                }
+            };
+            let shader = compiled
+                .map_err(|e| log::warn!(target: "js", "the transitionShader of node {id}: {e}"))
+                .ok()?;
+            let mut warnings = Vec::new();
+            let layer = crate::shader::ShaderLayer::new(shader, &spec.uniforms.0, &mut warnings)
+                .with_role(crate::shader::ShaderRole::Transition);
+            for warning in warnings {
+                log::warn!(target: "js", "the transitionShader of node {id}: {warning}");
+            }
+            let ms = spec.duration.unwrap_or(DEFAULT_NAV_SHADER_MS).max(0.0);
+            Some(crate::NavShader {
+                layer: Arc::new(layer),
+                duration: std::time::Duration::from_micros((f64::from(ms) * 1000.0).round() as u64),
+            })
+        });
+        let Some(root) = self.nodes[key as usize].root.as_mut() else {
+            log::warn!(target: "js", "`transitionShader` is a page's or a dialog's; node {id} is neither");
+            return;
+        };
+        if root.nav_shader != shader {
+            root.nav_shader = shader;
+            self.mark(key, dirty::NAV_SHADER);
+        }
+    }
+
     /// Tells the platform which shaders' pictures this commit changed
     /// ([`MountItem::ShaderInput`]): the effects and transitions with a
     /// changed view in their subtree (themselves included), and every
@@ -3143,6 +3192,10 @@ impl<M: TextEngine> Core<M> {
         | Prop::TransitionFallback(_) = prop
         {
             self.set_shader_prop(key, prop);
+            return Ok(());
+        }
+        if let Prop::TransitionShader(spec) = prop {
+            self.set_nav_shader(key, spec);
             return Ok(());
         }
         if let Prop::Screen(ScreenProp::StatusBar(setting)) = prop {
@@ -4967,6 +5020,12 @@ impl<M: TextEngine> Core<M> {
             {
                 let config = root.modal;
                 self.mount.push(MountItem::ModalConfig { id, config });
+            }
+            if flags & dirty::NAV_SHADER != 0
+                && let Some(root) = &node.root
+            {
+                let shader = root.nav_shader.clone();
+                self.mount.push(MountItem::NavShader { id, shader });
             }
             if let Some(input) = &node.input {
                 if flags & dirty::INPUT != 0 {
