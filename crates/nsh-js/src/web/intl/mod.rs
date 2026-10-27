@@ -617,6 +617,25 @@ fn zone_named(name: &str) -> Option<date::Zone> {
     named_zone(name).map(|zone| date::Zone::Named(zone.0))
 }
 
+/// The user's hour cycle (`hourCycle()`) when the locales asked for are the
+/// device's own (none, or its locale first): `Intl` writes times as the
+/// user reads them by default, as it writes dates in their zone. Another
+/// locale's times keep that locale's cycle.
+fn user_hour_cycle(cx: Ctx, locales: Raw) -> R<Option<date::HourCycle>> {
+    use nsh_core::platform::HourCycle as User;
+    let requested = requested(cx, locales)?;
+    let env = crate::env::current(cx);
+    let own = requested
+        .first()
+        .is_none_or(|tag| nsh_core::platform::Locale::parse(tag) == Some(env.locale));
+    Ok(own.then_some(match env.regional.hour_cycle {
+        User::H11 => date::HourCycle::H11,
+        User::H12 => date::HourCycle::H12,
+        User::H23 => date::HourCycle::H23,
+        User::H24 => date::HourCycle::H24,
+    }))
+}
+
 /// The environment's zone (`timeZone()`), `Intl`'s default: a zone of the
 /// database, UTC, an offset zone as Android names one (`GMT+01:00`), or,
 /// for a name the database does not know, the local offsets of QuickJS's
@@ -913,6 +932,9 @@ native!(
     fn date_time_format_constructor(cx, this, args) {
         let locale = resolve(cx, args.get(0))?;
         let (mut format, zone, styles) = date_format(cx, args.get(1), Defaults::Date)?;
+        if format.hour_cycle.is_none() {
+            format.hour_cycle = user_hour_cycle(cx, args.get(0))?;
+        }
         if let Some(styles) = styles {
             styled(&mut format, styles, &locale);
         }
@@ -1056,6 +1078,9 @@ fn date_to_locale(cx: Ctx, this: Raw, args: js::Args<'_>, defaults: Defaults) ->
     }
     let locale = resolve(cx, args.get(0))?;
     let (mut format, zone, styles) = date_format(cx, args.get(1), defaults)?;
+    if format.hour_cycle.is_none() {
+        format.hour_cycle = user_hour_cycle(cx, args.get(0))?;
+    }
     if let Some(styles) = styles {
         styled(&mut format, styles, &locale);
     }

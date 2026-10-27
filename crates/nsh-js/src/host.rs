@@ -2320,6 +2320,45 @@ const report = (v) => text(String(v));
         );
     }
 
+    /// `Intl` writes times in the user's hour cycle for the device's locale
+    /// (`hourCycle()`), as the user reads them; another locale's times keep
+    /// that locale's cycle, and an option wins.
+    #[test]
+    fn intl_writes_times_in_the_users_hour_cycle() {
+        let host = Host::new().unwrap();
+        let script = format!(
+            r#"{REPORT}
+            const at = Date.UTC(2026, 9, 16, 15, 4, 5);
+            const options = {{ timeZone: "UTC", hour: "numeric", minute: "2-digit" }};
+            globalThis.times = () => [
+              new Date(at).toLocaleTimeString(undefined, options),
+              new Intl.DateTimeFormat(undefined, options).resolvedOptions().hourCycle,
+              new Intl.DateTimeFormat("ja-JP", options).format(at),
+              new Date(at).toLocaleTimeString(undefined, {{ ...options, hourCycle: "h12" }}),
+            ].join(" | ");
+            report(times());
+            "#
+        );
+        host.eval_source(&script).unwrap();
+        // The user switches to 24-hour time, then reads another locale.
+        host.set_environment(&Environment {
+            regional: nsh_core::platform::RegionalPreferences {
+                hour_cycle: nsh_core::platform::HourCycle::H23,
+                ..nsh_core::platform::RegionalPreferences::EN_US
+            },
+            ..Environment::default()
+        });
+        host.eval_source(&format!("{REPORT}\nreport(times());"))
+            .unwrap();
+        assert_eq!(
+            reported(&host),
+            [
+                "3:04 PM | h12 | 15:04 | 3:04 PM",
+                "15:04 | h23 | 15:04 | 3:04 PM",
+            ]
+        );
+    }
+
     /// `Intl` writes times in any zone of the bundled database, with its
     /// daylight saving time, and in the environment's zone by default.
     #[test]
