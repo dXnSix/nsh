@@ -46,6 +46,15 @@ element page and `docs/dev/shaders.md`; `nsh/animated` in the shader demos, test
 server bound it, and on Windows, where freed ports are handed out again at once, another test took it now and then
 (this pull request's Windows check, and #72's and #75's before it). It tries a few fresh ports now.
 
+## And a CI fix
+
+`ci: Leave the controls tests out on Android`: the gallery's Controls page has upstream's new Slider card, and the
+Android emulator's renderer (`-gpu swiftshader_indirect`, which Google no longer maintains) crashes on it, so the
+emulator went away during the controls tests in about half of the Android runs since this sync. Run alone, the file
+took the emulator down in two runs of three; without the Slider card, nine of nine passed, and the other files pass.
+`swangle_indirect` does not crash, but its runs missed scrolls on the runner. `examples.sh` leaves `controls` out on
+Android with that reason, as it does for the files that do not end on a runner; iOS still runs it.
+
 ## Validation
 
 On macOS (Rust 1.99): `cargo fmt --all --check`; clippy `-D warnings` for `nsh-core`, `nsh-engine`, `nsh-js`,
