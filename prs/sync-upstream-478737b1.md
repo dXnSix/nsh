@@ -43,7 +43,18 @@ commit. Branch `sync/upstream-478737b1`; the next fork tag is `fork-0.3.0-2`.
 - Upstream links naga into a web runtime only for apps that use shaders (`nsh_feature_shader`): the bundler counts
   the four elements' tags and a page's `animation: { shader }` as shader use, the built-in cross-fade and page
   shaders compile through the runtime's compiler.
-- The platforms (one commit each) and the gallery's Shaders page: see below.
+- `engine: Let a shader transition run backwards`: `ShaderView::start_transition_backwards`, for pages that leave
+  and dialogs that close.
+- The platforms, one commit each: macOS, iOS, Android (API 29+), web, Windows, Linux draw effects, transitions,
+  screen effects and transitions, backdrops and page/dialog shaders from pictures of the views
+  (`ShaderView::set_input`); GPUI draws fills only (effects show their children, transitions change at once). On
+  every platform a page or dialog shader has the lower side as `from` and the upper as `to`, and runs backwards on
+  pop and dismiss. Screen effects on iOS and Android leave dialogs out (UIKit presents them above the root, Android
+  shows them in windows of their own).
+- `gallery: Show shader effects and transitions on the Shaders page`, with `tests/shaders.test.tsx`.
+- `ci: Run the controls tests on Android again`: the swiftshader crash does not happen on this base (arm64,
+  `-gpu swiftshader_indirect`); five newer controls tests fail on Android for other reasons (presses right after
+  typing, paste, a desktop Tab order test), so `examples.sh` runs the 19 that pass by name.
 - `docs: Describe shader effects, transitions and page shaders`.
 
 ## Validation
