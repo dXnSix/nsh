@@ -3,7 +3,8 @@
 Draft of a pull request for `longbridge/nsh`, posted as [longbridge/nsh#682](https://github.com/longbridge/nsh/pull/682)
 (2026-10-28) with the body below the line.
 
-- Branch: `pr/shaders/01-effects-transitions`, one commit on `upstream/main` `ba289971`.
+- Branch: `pr/shaders/01-effects-transitions`, on `upstream/main` `ba289971`: the commit `5fec8534a` as opened, and
+  three fix commits for the review (upstream squash-merges): `f4409abd3` web, `ab027dda3` inputs, `4baebb737` removal.
   The first of the shader series that replaces the fork's old `pr/shaders/*` (built on the fork's own GPU pipeline,
   removed when the fork took upstream's `Shader` from #517): every part now sits on upstream's `Shader`, its WGSL
   contract and its wgpu renderer.
@@ -22,6 +23,42 @@ Draft of a pull request for `longbridge/nsh`, posted as [longbridge/nsh#682](htt
   batch's front), and the `element` re-exports on `ba289971` (#674's `Svg`, `svg` kept beside the new names).
 
 - Checked locally on `ba289971` (2026-10-28): clippy `-D warnings` of the Core workflow's crates plus `nsh-cli`; `cargo test -p nsh-core -p nsh-js -p nsh-bundler` and `-p nsh-engine --test engine shader`; nightly rustfmt on the changed files; `NSH_COMPAT_APP=core cargo xtask compat` with `nsh-compat`'s `follow-nsh-main` (its `main` does not build against NSH's): passes.
+- Checked again after the review fixes (2026-10-28), on 01 (`4baebb737`) and 02 (`9a7251639`): the same clippy,
+  `cargo test` (1228 passed on each) and `nsh-engine --test engine shader` (4 and 5 passed); nightly rustfmt on the
+  changed `.rs` files; `node --test crates/nsh-platform-web/web/nsh.test.mjs` on 01 and 06-web (27 passed). Compat
+  (`NSH_COMPAT_APP=core`, `follow-nsh-main` `5fc0229`): the core domain is clean; the run still fails 15 `covers`
+  claims of upstream's own base cases (Accordion, OtpInput, NumberInput, Slider, TextView, RichExtension), the same
+  15 on the original `5fec8534a`, so not from this PR (the earlier "passes" above did not hold on rerun). No
+  platform crate's Rust changed, so the platform clippy runs were not repeated.
+
+## Review (2026-10-28)
+
+huacnlee requested changes (review `5688690224`, "Reviewed by ChatGPT on behalf of @huacnlee", static inspection
+only) with three inline comments; all three hold, and each has a fix commit with a regression test. 02–10 restacked
+on the fixes (02's dev docs updated in its docs commit; 06-web's conflict on the built-ins upload resolved to its own
+8-word upload, and the new nsh.test.mjs case adapted to its renderer).
+
+Replies:
+
+1. [P1] web built-ins (`r4405288608`, `shader.rs` vertex shader):
+   > Right: on this PR alone a plain `Shader` on the web uploaded 16 bytes for a 32-byte block, and WebGL refuses the
+   > draw. f4409abd3 uploads all eight words (progress and overflow at 0, as `shader::builtins` lays them out), and
+   > `nsh.test.mjs` gains "a plain Shader uploads the whole built-ins block, progress and overflow at 0", which drives
+   > `renderShader` on a recording GL and fails on the old upload. The web PR of the series later fills progress and
+   > overflow in the same upload.
+
+2. [P2] `sample_*` helpers (`r4405288617`, `reads_inputs`):
+   > Agreed. ab027dda3 drops the name filter and reflects reachable usage instead: `Shader::inputs` is now the
+   > picture textures `nsh_fragment` uses according to naga's `FunctionInfo`, which follows calls, so a helper of any
+   > name counts and one `shade` never calls does not. `inputs_are_the_pictures_shade_reaches` covers a
+   > `sample_custom` helper calling `sample_content`, and the unused-helper case.
+
+3. [P2] removed child (`r4405288622`, `mark_shader_inputs`):
+   > Right, the walk starts from each mount item's view, and a removed child has no parent (or no node) left by then.
+   > 4baebb737 records the old parent in `unlink` while any shader reads pictures (`Core::unlinked_from`, cleared each
+   > commit), and `mark_shader_inputs` walks up from those parents as well.
+   > `an_effect_takes_its_picture_again_when_a_child_leaves` removes and releases an absolute child of a fixed-size
+   > `ShaderEffect` and asserts its `ShaderInput`; it fails without the fix.
 
 The body to paste starts below the line.
 
@@ -43,7 +80,8 @@ draw them in the PRs that follow, so this one changes nothing an app sees yet.
   and `sample_to(uv)` (a transition's two sides). `struct Nsh` gains `progress` (0 to 1: an effect's `progress`, or
   how far a transition is) and `overflow` (`maxSampleOffset`, points the shader may draw beyond its box; `uv` then runs
   past 0 and 1). The pictures are bound at `@binding(2)` (a sampler) to `@binding(6)`; `Shader::inputs` reflects which
-  of the functions a program calls, and a program that calls none keeps today's two bind group layouts.
+  of them the fragment stage reaches (through `shade` and whatever it calls), and a program that reads none keeps
+  today's two bind group layouts.
 - **Elements** (`nsh`, and Rust `nsh_core::element`): `ShaderEffect` / `shader_effect()` draws its children through
   the shader (they keep their presses, focus and accessibility); `ShaderTransition` / `shader_transition()` changes
   them through it when its `value` changes (not its first value), for `duration` ms (300), and without `source` runs
@@ -52,9 +90,12 @@ draw them in the PRs that follow, so this one changes nothing an app sees yet.
 - **Core.** The layer carries its role (`ShaderRole`), overflow and progress; an animated `progress` is one more
   canvas slot. A changed `value` queues `MountItem::ShaderTransition { id, duration }`, put first in its batch so the
   platform pictures `from` before the batch applies; after a commit, `MountItem::ShaderInput { id }` names the effects
-  and transitions whose subtree the batch touched (and backdrop readers and screen layers when anything changed).
+  and transitions whose subtree the batch touched or a view left (and backdrop readers and screen layers when anything
+  changed).
 - **Renderer** (`nsh_engine::shader`): `ShaderView::set_input` uploads a picture, `start_transition` runs the
   progress, frames grow by the overflow.
+- **Web.** The WebGL renderer uploads the whole 32-byte `struct Nsh` for a plain `Shader`, progress and overflow
+  at 0; the web PR fills them in.
 - **Bundler.** The JSX compiler emits the four elements as host elements (`shadereffect`, `shadertransition`,
   `screeneffect`, `screentransition`), as it does `Shader`.
 
@@ -96,8 +137,8 @@ Nothing apps use changes: `Shader`'s props, its WGSL (`shade`, `nsh.size`, `nsh.
 what it draws stay as they are.
 
 For backends: `nsh_core::shader::builtins` takes the progress and the overflow and returns 8 words (the uniform
-buffer of `struct Nsh` is 32 bytes), and `MountItem` has two more variants, which every backend in this repository
-ignores in this PR.
+buffer of `struct Nsh` is 32 bytes; the web renderer here uploads all of it), and `MountItem` has two more variants,
+which every backend in this repository ignores in this PR.
 
 ```diff
 - pub fn builtins(size: Size<Points>, time: f32, scale: f32) -> [u32; 4]
@@ -111,7 +152,10 @@ layers read pictures (`Core::pictured`) and, after a commit, walks up from the b
 
 ## How to Test
 
-- `cargo test -p nsh-core -p nsh-js -p nsh-bundler --features nsh-bundler/bundle`
+- `cargo test -p nsh-core -p nsh-js -p nsh-bundler --features nsh-bundler/bundle`: among them
+  `inputs_are_the_pictures_shade_reaches` (a helper of any name, an unused helper) and
+  `an_effect_takes_its_picture_again_when_a_child_leaves` (a removed child marks its effect).
+- `node --test crates/nsh-platform-web/web/nsh.test.mjs`: a plain `Shader` uploads the 32-byte built-ins block.
 - `cargo test -p nsh-engine --test engine shader`: the effect's layer and its pictures' bind group layout, the
   transition's start first in its batch, its cross-fade fallback, an animated progress through its slot.
 - `NSH_COMPAT_APP=core cargo xtask compat`: the new case `core-shader-effects` (layout, an effect's children keep
