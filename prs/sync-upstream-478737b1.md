@@ -52,7 +52,12 @@ commit. Branch `sync/upstream-478737b1`; the next fork tag is `fork-0.3.0-2`.
   pop and dismiss. Screen effects on iOS and Android leave dialogs out (UIKit presents them above the root, Android
   shows them in windows of their own).
 - `gallery: Show shader effects and transitions on the Shaders page`, with `tests/shaders.test.tsx`;
-  `ci: Run the shader tests on macOS, iOS and the web`.
+  `ci: Run the shader tests on macOS, iOS, Android and the web`.
+- `android: Send test touches to the shown dialog's window`: an older test agent bug the shader test found: a
+  `Dialog` is a window of its own, and every test touch went to the activity's window, so no dialog button took a
+  press in an Android test.
+- Known: on emulators wgpu picks the GL backend, whose readback logs "Fake map" (wgpu-hal `gles`) for every shader
+  frame; harmless.
 - `ci: Run the controls tests on Android again`: the swiftshader crash does not happen on this base (arm64,
   `-gpu swiftshader_indirect`); five newer controls tests fail on Android for other reasons (presses right after
   typing, paste, a desktop Tab order test), so `examples.sh` runs the 19 that pass by name.
@@ -68,8 +73,8 @@ Local (macOS host, Rust 1.99, `CARGO_INCREMENTAL=0`):
   Linux: clippy against their targets passed with stubbed system libraries (no link); CI builds them for real.
 - `cargo +nightly fmt --all --check`: only five upstream files (lines upstream committed) differ; left as upstream's.
 - `examples.sh macos` (every listed gallery test, rust-exports, gallery-rs): pass.
-- `shaders.test.tsx`: macOS, iOS simulator and web (headless Chrome) pass; added to `examples.sh` for them.
-  Android: the page passes, the dialog's dismissal through its shader is being fixed.
+- `shaders.test.tsx`: macOS, iOS simulator, Android emulator (arm64, API 35) and web (headless Chrome) pass;
+  added to `examples.sh` for all four.
 - Screenshots of every kind on each platform that draws them (macOS, iOS simulator, Android emulator, web).
 - No `nsh-macos-host` crash reports after the fix of the views kept in a thread-local (an exit-time abort while
   the port was in progress).
