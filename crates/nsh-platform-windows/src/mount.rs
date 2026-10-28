@@ -496,7 +496,10 @@ fn redrawn(item: &MountItem) -> Redraw {
         | MountItem::LayoutAnimation(_)
         | MountItem::Animation(_)
         | MountItem::AnimationBindings { .. }
-        | MountItem::ComponentPropSlots { .. } => Redraw::Nothing,
+        | MountItem::ComponentPropSlots { .. }
+        // Effects and transitions: this platform does not draw them yet.
+        | MountItem::ShaderTransition { .. }
+        | MountItem::ShaderInput { .. } => Redraw::Nothing,
         MountItem::Frame { id, .. }
         | MountItem::ViewStyle { id, .. }
         | MountItem::Text { id, .. }
