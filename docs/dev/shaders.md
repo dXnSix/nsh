@@ -187,6 +187,15 @@ The fork's elements on top of the same program, layer and renderer (`ShaderRole`
 - **Pages and dialogs.** `transitionShader` (`NavShaderSpec`) compiles into a `Transition` layer sent as
   `MountItem::NavShader { id, shader }` (350 ms by default); the platform draws a push, pop, presentation or dismissal
   through it, the lower side `from` and the upper `to`.
+- **Linux.** Effects and running transitions draw their last frame instead of their children; whenever GTK draws
+  one again, its children's render node is rendered by the window's renderer into a texture of the box and overflow
+  and downloaded, and given to the shader when its pixels changed. A transition's `from` is that picture taken when it
+  starts (or its last frame, if one runs), shown until the first frame. Screen layers are the root's. A backdrop is the
+  surface's views drawn anew up to the view (`skipped`, `past`) after the frame clock paints, again when the core
+  marks it or anything on the UI thread changes (`NshView::changed`; a shader's own frame only `redraw`s). Pages and
+  dialogs: pictures of the host drawn anew without and with the upper side, through a `NavPainter` (the layer with
+  one more slot for `nsh.progress`) in a layer over the stack or the root; the starting side shows until the first
+  frame.
 - **Windows.** Effects and running transitions (screen ones on the root) draw their last frame instead of their
   children, which are drawn into a target bitmap by a context of their own and read back (`render::read_back`) as
   the window draws them, and given to the shader when their pixels changed. A transition's `from` is drawn offscreen
