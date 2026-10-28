@@ -191,6 +191,8 @@ Effects, transitions and page shaders sit on the same program, layer and rendere
 - **Pages and dialogs.** `transitionShader` (`NavShaderSpec`) compiles into a `Transition` layer sent as
   `MountItem::NavShader { id, shader }` (350 ms by default); the platform draws a push, pop, presentation or dismissal
   through it, the lower side `from` and the upper `to`.
+- **GPUI.** Fills only: an effect's or a transition's children show as they are, a screen layer draws nothing, pages
+  and dialogs come and go without their shader.
 
 ## Pitfalls
 
