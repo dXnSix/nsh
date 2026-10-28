@@ -97,3 +97,24 @@ Local (macOS host, Rust 1.99, `CARGO_INCREMENTAL=0`):
 - Screenshots of every kind on each platform that draws them (macOS, iOS simulator, Android emulator, web).
 - No `nsh-macos-host` crash reports after the fix of the views kept in a thread-local (an exit-time abort while
   the port was in progress).
+
+## CI on the fork
+
+The first runs on the merged code (Windows, Linux, macOS and iOS passed as they were):
+
+- `ci: Run form's Input demo and disabled field on Android`: the synced form tests' sign-up form and search field
+  set the viewport, which an emulator keeps at its device's size.
+- `ci: Run the Android emulator without guest Vulkan`: on the x86_64 runner wgpu picked the emulator's SwiftShader
+  Vulkan; the shader tests stalled after a SPIR-V error and the emulator went away. With GLES, as on an emulator on
+  a Mac, they pass.
+- `ci: Leave the tests that move the clock out of the web's list`: on the web `app.wait()` and
+  `app.clock.runFor()` never return (dock's locked layout, form's request and search, timers, toasts);
+  error-boundary's failing binding expects QuickJS's message.
+- `ci: Run only text-view's Text View demo on Android`: a press on the chat's featured cards starts no reply on
+  Android (its chips do).
+
+Known, not fixed here (each its own fork PR next):
+
+- The web's test clock: upstream's own `Rust application` web job fails dock's locked layout test the same way on
+  its main, so that check stays red on this PR.
+- The chat's featured cards take no press on Android.
