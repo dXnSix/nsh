@@ -203,6 +203,8 @@ The fork's elements on top of the same program, layer and renderer (`ShaderRole`
   (partial frames draw the view's whole area, overflow included: `render::drawn_area`). Pages and dialogs: recordings
   (`ID2D1CommandList`) of the host without and with the upper side, drawn into bitmaps and read back once by a
   hosted `NavItem` over the stack or the root.
+- **GPUI.** Fills only: an effect's or a transition's children show as they are, a screen layer draws nothing, pages
+  and dialogs come and go without their shader.
 
 ### On the web
 
