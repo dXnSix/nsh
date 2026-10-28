@@ -176,6 +176,14 @@ const KEYFRAMES = `
 .nsh-fill { position: absolute; left: 0; top: 0; width: 100%; height: 100%; border: 0; }
 img.nsh-fill { pointer-events: none; }
 .nsh-shader { pointer-events: none; border-radius: inherit; }
+/* A shader effect, a running shader transition, the root under a screen effect (op_sh): its children show through its
+   shader's canvas over them; at opacity 0 they keep their pointer events. */
+.nsh-fx > :not(.nsh-fx-out):not(.nsh-nav-shader) { opacity: 0 !important; }
+/* Its canvas is over its children only: never over what comes after it, such as a dialog. */
+.nsh-fx { isolation: isolate; }
+.nsh-fx-out { pointer-events: none; z-index: 2147483000; }
+/* While NSH paints an effect's children (paintInputs): shown at once, without a CSS transition from opacity 0. */
+.nsh-painting, .nsh-painting * { transition: none !important; }
 .nsh-fit-cover { object-fit: cover; }
 .nsh-fit-contain { object-fit: contain; }
 .nsh-fit-fill { object-fit: fill; }
@@ -1806,7 +1814,7 @@ class Player {
     if (!el) return;
     this.views.delete(id);
     this.mouseTracked.delete(id);
-    if (el._shader) this.op_sh([, id, null]);
+    if (el._shader) this.dropShader(el);
     if (el._video) {
       // A removed media element keeps playing until it is collected.
       clearInterval(el._progressTimer);
@@ -2446,41 +2454,66 @@ class Player {
 
   // Shader views. Every shader view draws on one WebGL 2 context (a page
   // gets few contexts): the program renders into its canvas at the view's
-  // size, and the picture moves to the view's own canvas, under its
-  // children and inside its rounded corners. A view renders when what it
-  // reads changed (size, uniforms, animated slots) or, reading the time,
-  // on every animation frame while it is in sight and not paused.
+  // size, and the picture moves to the view's own canvas. A fill's canvas
+  // is under its children, inside its rounded corners; an effect's and a
+  // running transition's is over them (`nsh-fx-out`, the children at
+  // opacity 0 under it, `nsh-fx`, keeping their pointer events), and the
+  // children are its pictures (`paintTree`). A screen effect or transition
+  // does the same for the whole surface (the root), and a page's or a
+  // dialog's `transitionShader` runs over the stack or the root
+  // (`shaderNav`). A view renders when what it reads changed (size,
+  // uniforms, animated slots, pictures) or, reading the time or running a
+  // transition, on every animation frame while it is in sight.
 
   op_sh([, id, layer]) {
     const el = this.view(id);
     if (!el) return;
     if (!layer) {
-      el._shaderCanvas?.remove();
-      el._shaderCanvas = null;
-      el._shaderObserver?.disconnect();
-      el._shader = null;
-      this.shaderViews.delete(el);
+      this.dropShader(el);
       return;
     }
     const old = el._shader;
+    if (old && old.layer.role !== layer.role) this.dropShader(el);
+    const kept0 = el._shader;
     const words = new Uint32Array(layer.words);
+    const same = kept0 && kept0.layer.key === layer.key && JSON.stringify(kept0.layer.slots) === JSON.stringify(layer.slots);
     // Animated slots keep their values while the program and slots stay.
-    if (old && old.layer.key === layer.key && JSON.stringify(old.layer.slots) === JSON.stringify(layer.slots)) {
+    if (same) {
       for (const [word, kind] of layer.slots) {
         const n = kind === 3 ? 3 : kind === 4 ? 4 : 1;
-        for (let i = 0; i < n; i++) words[word + i] = old.words[word + i];
+        for (let i = 0; i < n; i++) if (word + i < words.length) words[word + i] = kept0.words[word + i];
       }
     }
     const now = performance.now();
-    const kept = old ? old.kept + (old.since != null ? now - old.since : 0) : 0;
-    el._shader = { layer, words, kept, since: layer.paused ? null : now, dirty: true };
+    const kept = kept0 ? kept0.kept + (kept0.since != null ? now - kept0.since : 0) : 0;
+    el._shader = {
+      layer,
+      words,
+      kept,
+      since: layer.paused ? null : now,
+      dirty: true,
+      progress: same && kept0.moved ? kept0.progress : layer.progress,
+      moved: same && kept0.moved,
+      running: kept0?.running ?? null,
+      pictures: kept0?.pictures ?? [null, null, null, null],
+      fresh: kept0?.fresh ?? [false, false, false, false],
+      textures: kept0?.textures ?? [null, null, null, null],
+      stale: 0,
+    };
+    // Bits of the pictures it reads: 1 content, 2 backdrop, 4 from, 8 to.
+    el._shader.reads = layer.pictures.reduce((bits, [, input]) => bits | (1 << input), 0);
+    const role = layer.role;
+    const host = role >= 3 ? this.root : el;
+    if (role === 3) this.screenShader = el;
     if (!el._shaderCanvas) {
       const canvas = document.createElement("canvas");
-      canvas.className = "nsh-fill nsh-shader";
-      el.insertBefore(canvas, el.firstChild);
+      canvas.className = role === 0 ? "nsh-fill nsh-shader" : "nsh-fill nsh-fx-out";
+      canvas._shaderOutput = true;
+      if (role === 0) el.insertBefore(canvas, el.firstChild);
+      else host.append(canvas);
       el._shaderCanvas = canvas;
       el._shaderVisible = true;
-      if (typeof IntersectionObserver !== "undefined") {
+      if (typeof IntersectionObserver !== "undefined" && role < 3) {
         el._shaderObserver = new IntersectionObserver((entries) => {
           el._shaderVisible = entries[entries.length - 1].isIntersecting;
           if (el._shaderVisible) this.shaderDirty(el);
@@ -2488,13 +2521,383 @@ class Player {
         el._shaderObserver.observe(el);
       }
     }
+    // An effect, and a screen effect, draws its children through its
+    // shader always; a transition only while one runs.
+    if (role === 1 || role === 3) host.classList.add("nsh-fx");
     this.shaderViews.add(el);
+    this.watchInputs(el);
     this.shaderDirty(el);
   }
 
-  /** Writes an animated value into its slot (`op_a`'s `canvas:N`): a number, or a CSS color. */
+  /** The element a shader view's pictures and output are of: the view, or the root for a screen's. */
+  shaderHost(el) {
+    return el._shader && el._shader.layer.role >= 3 ? this.root : el;
+  }
+
+  /** Takes a shader view's layer, canvas and watchers away. */
+  dropShader(el) {
+    const s = el._shader;
+    if (!s) return;
+    const host = this.shaderHost(el);
+    if (this.screenShader === el) this.screenShader = null;
+    // The root keeps it while a screen effect is on it.
+    if (host !== this.root || !this.screenShader) host.classList.remove("nsh-fx");
+    el._shaderCanvas?.remove();
+    el._shaderCanvas = null;
+    el._shaderObserver?.disconnect();
+    el._shaderObserver = null;
+    el._contentObserver?.disconnect();
+    el._contentObserver = null;
+    if (el._contentMark) {
+      host.removeEventListener("scroll", el._contentMark, true);
+      host.removeEventListener("load", el._contentMark, true);
+      el._contentMark = null;
+    }
+    const gl = this._shaderGl;
+    if (gl) for (const t of s.textures) if (t) gl.deleteTexture(t);
+    el._shader = null;
+    this.shaderViews.delete(el);
+    this.backdrops?.delete(el);
+    this.watchBackdrops();
+  }
+
+  /** The core says what a shader's pictures show changed. */
+  op_shi([, id]) {
+    const el = this.view(id);
+    const s = el?._shader;
+    if (!s) return;
+    s.stale |= s.reads;
+    this.shaderDirty(el);
+  }
+
+  /**
+   * A shader transition starts, before the rest of its batch: what shows
+   * now (its children, or the transition as it is drawn) is its
+   * `sample_from`, its children painted after the batch its `sample_to`,
+   * and `nsh.progress` goes from 0 to 1 over `ms` on animation frames.
+   */
+  op_sht([, id, ms]) {
+    const el = this.view(id);
+    const s = el?._shader;
+    if (!s || (s.layer.role !== 2 && s.layer.role !== 4)) return;
+    const host = this.shaderHost(el);
+    const box = this.shaderBox(el);
+    if (!box) return;
+    const from = this.pictureCanvas(el, 2, box);
+    if (s.running && el._shaderCanvas.width) {
+      // What the running one shows.
+      from.cx.setTransform(1, 0, 0, 1, 0, 0);
+      from.cx.drawImage(el._shaderCanvas, 0, 0, from.canvas.width, from.canvas.height);
+    } else {
+      this.paintHost(from.cx, host, host.getBoundingClientRect(), null, host);
+    }
+    s.fresh[2] = true;
+    s.running = { start: performance.now(), ms: Math.max(1, ms), reverse: false };
+    // Its children after the batch, on the next frame; until then what it
+    // drew before.
+    s.pictures[3] = null;
+    s.fresh[3] = true;
+    s.stale |= 8;
+    host.classList.add("nsh-fx");
+    this.renderShader(el, performance.now());
+    this.shaderDirty(el);
+  }
+
+  /** A page's or a dialog's `transitionShader` (`layer`, `ms`), or none. */
+  op_shn([, id, layer, ms]) {
+    const el = this.view(id);
+    if (!el) return;
+    el._navShader = layer ? { layer, ms } : null;
+  }
+
+  /**
+   * A page's or a dialog's change through its `transitionShader` over
+   * `host` (the stack, the root): `upper` (the page that comes or goes,
+   * the dialog) and what is before it is its `sample_to`, what is before it
+   * alone its `sample_from`, and `nsh.progress` how much of the upper side
+   * shows: 0 to 1, or 1 to 0 when `reverse`. The views are where they end
+   * at once under it. Calls `done` when it ends; false where it cannot run
+   * (no WebGL 2).
+   */
+  shaderNav(host, upper, nav, reverse, done) {
+    const r = host.getBoundingClientRect();
+    if (!r.width || !r.height || !this.shaderGl()) return false;
+    const o = document.createElement("div");
+    o.className = "nsh-nav-shader";
+    Object.assign(o.style, { position: "absolute", left: "0", top: "0", width: `${r.width}px`, height: `${r.height}px`, zIndex: "2147483001", pointerEvents: "none" });
+    const canvas = document.createElement("canvas");
+    canvas.className = "nsh-fill";
+    canvas._shaderOutput = true;
+    o.append(canvas);
+    const layer = { ...nav.layer, role: 2, overflow: 0 };
+    o._frame = [0, 0, r.width, r.height];
+    o._shaderCanvas = canvas;
+    o._shaderVisible = true;
+    o._shader = {
+      layer,
+      words: new Uint32Array(layer.words),
+      kept: 0,
+      since: performance.now(),
+      dirty: true,
+      progress: reverse ? 1 : 0,
+      running: { start: performance.now(), ms: Math.max(1, nav.ms), reverse, done: () => { o.remove(); done?.(); } },
+      pictures: [null, null, null, null],
+      fresh: [false, false, true, true],
+      textures: [null, null, null, null],
+      stale: 0,
+      reads: 0,
+      nav: true,
+    };
+    const from = this.pictureCanvas(o, 2, [r.width, r.height, 0]);
+    this.paintHost(from.cx, host, r, upper, null);
+    const to = this.pictureCanvas(o, 3, [r.width, r.height, 0]);
+    this.paintHost(to.cx, host, r, null, null);
+    host.append(o);
+    this.shaderViews.add(o);
+    this.renderShader(o, performance.now());
+    this.shaderDirty(o);
+    return true;
+  }
+
+  /**
+   * Paints `host`'s children up to `stop` for a picture: an effect's (or
+   * the root with a screen effect) as they show without the effect.
+   */
+  paintHost(cx, host, r, stop, owner) {
+    const lifted = host.classList.contains("nsh-fx");
+    if (lifted) {
+      host.classList.add("nsh-painting");
+      host.classList.remove("nsh-fx");
+    }
+    try {
+      this.paintTree(cx, host, r, 1, stop, owner);
+    } finally {
+      if (lifted) {
+        host.classList.add("nsh-fx");
+        host.classList.remove("nsh-painting");
+      }
+    }
+  }
+
+  /** A shader view's box: its size in points and its overflow, `[w, h, m]`. */
+  shaderBox(el) {
+    const s = el._shader;
+    if (s.layer.role >= 3) return this.size?.[0] > 0 ? [this.size[0], this.size[1], 0] : null;
+    if (!el._frame) return null;
+    return [el._frame[2], el._frame[3], Math.max(0, s.layer.overflow || 0)];
+  }
+
+  /** The canvas of a view's picture `input`, covering its box and the overflow around it; its context in points from the view's top-left. */
+  pictureCanvas(el, input, [w, h, m]) {
+    const s = el._shader;
+    const ratio = devicePixelRatio || 1;
+    const c = (s.pictures[input] ??= document.createElement("canvas"));
+    c.width = Math.max(1, Math.round((w + 2 * m) * ratio));
+    c.height = Math.max(1, Math.round((h + 2 * m) * ratio));
+    const cx = c.getContext("2d");
+    cx.setTransform(ratio, 0, 0, ratio, m * ratio, m * ratio);
+    s.fresh[input] = true;
+    return { canvas: c, cx };
+  }
+
+  /** Watches what a view's shader pictures: its children (or the surface for a screen's) and what is behind it. */
+  watchInputs(el) {
+    const s = el._shader;
+    const role = s.layer.role;
+    const host = this.shaderHost(el);
+    const content = role !== 0 && (s.reads & (role === 2 || role === 4 ? 8 : 1));
+    const backdrop = s.reads & 2;
+    if (content && !el._contentObserver) {
+      const mark = (list) => {
+        if (list && !this.shownChange(list)) return;
+        if (!el._shader) return;
+        el._shader.stale |= el._shader.reads & 9;
+        this.shaderDirty(el);
+      };
+      el._contentObserver = new MutationObserver(mark);
+      el._contentObserver.observe(host, { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true });
+      el._contentMark = () => mark();
+      host.addEventListener("scroll", el._contentMark, true);
+      host.addEventListener("load", el._contentMark, true);
+    }
+    this.backdrops ??= new Set();
+    if (backdrop) this.backdrops.add(el);
+    else this.backdrops.delete(el);
+    this.watchBackdrops();
+    s.stale |= s.reads;
+  }
+
+  /** Whether mutations change what shows: not a shader's own canvas, nor painting's class toggles (`paintHost`). */
+  shownChange(list) {
+    const plain = (c) => (c ?? "").split(" ").filter((n) => n && n !== "nsh-fx" && n !== "nsh-painting").join(" ");
+    return list.some((m) => !(m.target._shaderOutput || m.target.parentElement?._shaderOutput ||
+      (m.type === "attributes" && m.attributeName === "class" && plain(m.oldValue) === plain(m.target.getAttribute("class")))));
+  }
+
+  /** A change anywhere in the surface changes what is behind every backdrop shader. */
+  watchBackdrops() {
+    const backdrops = this.backdrops ?? new Set();
+    for (const el of backdrops) if (!el._shader) backdrops.delete(el);
+    const wanted = backdrops.size > 0;
+    if (wanted && !this._backdropObserver) {
+      const mark = (list) => {
+        if (list && !this.shownChange(list)) return;
+        for (const el of this.backdrops) {
+          if (!el._shader) continue;
+          el._shader.stale |= 2;
+          this.shaderDirty(el);
+        }
+      };
+      this._backdropObserver = new MutationObserver(mark);
+      this._backdropObserver.observe(this.root, { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true });
+      this._backdropMark = () => mark();
+      this.root.addEventListener("scroll", this._backdropMark, true);
+      this.root.addEventListener("load", this._backdropMark, true);
+    } else if (!wanted && this._backdropObserver) {
+      this._backdropObserver.disconnect();
+      this.root.removeEventListener("scroll", this._backdropMark, true);
+      this.root.removeEventListener("load", this._backdropMark, true);
+      this._backdropObserver = this._backdropMark = null;
+    }
+  }
+
+  /** Paints the pictures a view's shader reads that changed: its children (content, or a running transition's `to`) and what is behind it. */
+  paintInputs(el) {
+    const s = el._shader;
+    const stale = s.stale;
+    s.stale = 0;
+    const role = s.layer.role;
+    const box = this.shaderBox(el);
+    if (!stale || !box || s.nav) return;
+    const transition = role === 2 || role === 4;
+    const host = this.shaderHost(el);
+    const base = host.getBoundingClientRect();
+    const children = transition ? (s.running ? stale & 8 : 0) : role !== 0 ? stale & 1 : 0;
+    if (children) {
+      const { cx } = this.pictureCanvas(el, transition ? 3 : 0, box);
+      this.paintHost(cx, host, base, null, host);
+    }
+    if (stale & 2) {
+      const { cx } = this.pictureCanvas(el, 1, box);
+      // The surface up to the view (what draws after it is above it), as
+      // it shows without a screen effect.
+      this.paintHost(cx, this.root, el.getBoundingClientRect(), el, this.root);
+    }
+  }
+
+  /**
+   * Paints `node`'s children into `cx`, in points from `base`'s top-left:
+   * backgrounds, rounded corners, uniform borders, images, canvases (other
+   * shaders' pictures among them), text runs and their clipping, with
+   * their opacities. Stops at `stop` (returns true); skips `owner`'s own
+   * shader canvas. Rotations, gradients and shadows are left out.
+   */
+  paintTree(cx, node, base, opacity, stop, owner) {
+    for (const child of node.children) {
+      if (child === stop) return true;
+      if (child._shaderOutput && (child.parentElement === owner || child.classList.contains("nsh-fx-out") && !child.parentElement.classList.contains("nsh-fx"))) continue;
+      if (child.classList.contains("nsh-nav-shader")) continue;
+      const cs = getComputedStyle(child);
+      if (cs.display === "none") continue;
+      const alpha = opacity * Number(cs.opacity);
+      if (alpha <= 0 || cs.visibility === "hidden") {
+        if (stop && child.contains(stop)) return true;
+        continue;
+      }
+      const r = child.getBoundingClientRect();
+      const x = r.left - base.left, y = r.top - base.top, w = r.width, h = r.height;
+      const radii = [cs.borderTopLeftRadius, cs.borderTopRightRadius, cs.borderBottomRightRadius, cs.borderBottomLeftRadius]
+        .map((v) => Math.min(parseFloat(v) || 0, w / 2, h / 2));
+      const shape = () => {
+        cx.beginPath();
+        cx.roundRect(x, y, w, h, radii);
+      };
+      cx.save();
+      cx.globalAlpha = alpha;
+      const bg = cs.backgroundColor;
+      if (bg && bg !== "transparent" && !/rgba\([^)]*,\s*0\)$/.test(bg)) {
+        cx.fillStyle = bg;
+        shape();
+        cx.fill();
+      }
+      const bw = parseFloat(cs.borderTopWidth) || 0;
+      if (bw > 0 && cs.borderTopStyle !== "none" && cs.borderTopStyle !== "hidden") {
+        cx.strokeStyle = cs.borderTopColor;
+        cx.lineWidth = bw;
+        cx.beginPath();
+        cx.roundRect(x + bw / 2, y + bw / 2, Math.max(0, w - bw), Math.max(0, h - bw), radii.map((v) => Math.max(0, v - bw / 2)));
+        cx.stroke();
+      }
+      if (child.tagName === "IMG") {
+        if (child.complete && child.naturalWidth && this.paintable(child)) this.paintImage(cx, child, cs, x, y, w, h, radii);
+      } else if (child.tagName === "CANVAS") {
+        if (child.width && child.height) {
+          // A fill's canvas inherits its view's rounded corners.
+          cx.save();
+          shape();
+          cx.clip();
+          cx.drawImage(child, x, y, w, h);
+          cx.restore();
+        }
+      } else if (child.classList.contains("nsh-run")) {
+        cx.font = cs.font;
+        cx.fillStyle = cs.color;
+        cx.textBaseline = "alphabetic";
+        const text = child.textContent;
+        const m = cx.measureText(text);
+        cx.fillText(text, x, y + (m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent));
+      }
+      // A view that clips its content (a scroll view among them) clips it here too.
+      if (cs.overflowX !== "visible" || cs.overflowY !== "visible") {
+        shape();
+        cx.clip();
+      }
+      const done = this.paintTree(cx, child, base, alpha, stop, owner);
+      cx.restore();
+      if (done) return true;
+    }
+    return false;
+  }
+
+  /** Whether an image can be painted without tainting the picture (same origin or CORS). */
+  paintable(img) {
+    try {
+      return new URL(img.currentSrc || img.src, location.href).origin === location.origin || img.crossOrigin != null;
+    } catch {
+      return false;
+    }
+  }
+
+  /** An image in its box, fitted as its `object-fit` says. */
+  paintImage(cx, img, cs, x, y, w, h, radii) {
+    const iw = img.naturalWidth, ih = img.naturalHeight;
+    let dw = w, dh = h;
+    const fit = cs.objectFit;
+    if (fit === "contain" || fit === "cover" || fit === "scale-down") {
+      const s = fit === "cover" ? Math.max(w / iw, h / ih) : Math.min(w / iw, h / ih, fit === "scale-down" ? 1 : Infinity);
+      dw = iw * s;
+      dh = ih * s;
+    } else if (fit === "none") {
+      dw = iw;
+      dh = ih;
+    }
+    cx.save();
+    cx.beginPath();
+    cx.roundRect(x, y, w, h, radii);
+    cx.clip();
+    cx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+    cx.restore();
+  }
+
+  /** Writes an animated value into its slot (`op_a`'s `canvas:N`): a number, or a CSS color; the progress slot moves `nsh.progress`. */
   shaderSlot(el, slot, value) {
     const s = el._shader;
+    if (slot === s.layer.progressSlot) {
+      s.progress = Number(value);
+      s.moved = true;
+      this.shaderDirty(el);
+      return;
+    }
     const entry = s.layer.slots[slot];
     if (!entry) return;
     const [word, kind] = entry;
@@ -2520,19 +2923,68 @@ class Player {
   shaderFrame(t) {
     this.shaderFrameQueued = false;
     let again = false;
-    for (const el of this.shaderViews) {
+    const now = performance.now();
+    for (const el of [...this.shaderViews]) {
       const s = el._shader;
-      if (!el.isConnected || !s) continue;
-      const runs = s.layer.animated && s.since != null;
-      if (!el._shaderVisible || !(s.dirty || runs)) continue;
+      if (!s) {
+        this.shaderViews.delete(el);
+        continue;
+      }
+      if (s.layer.role >= 3 && !s.nav) this.screenShown(el);
+      if (!el.isConnected) {
+        // A page's or a dialog's overlay whose host went: it ends.
+        if (s.nav || s.running) this.endTransition(el);
+        continue;
+      }
+      if (s.running && now - s.running.start >= s.running.ms) {
+        this.endTransition(el);
+        continue;
+      }
+      const runs = (s.layer.animated && s.since != null) || Boolean(s.running);
+      if (!el._shaderVisible || !(s.dirty || runs || s.stale)) continue;
       s.dirty = false;
-      this.renderShader(el, t);
+      if (s.stale) this.paintInputs(el);
+      this.renderShader(el, now);
       again ||= runs;
     }
     if (again) {
       this.shaderFrameQueued = true;
       requestAnimationFrame((t) => this.shaderFrame(t));
     }
+  }
+
+  /**
+   * A screen effect's or transition's canvas is on the root, outside its
+   * view: it shows while the view is in the surface (a view removed, such
+   * as with its page, may come back).
+   */
+  screenShown(el) {
+    const shown = el.isConnected;
+    const canvas = el._shaderCanvas;
+    if (!canvas || canvas.hidden === !shown) return;
+    canvas.hidden = !shown;
+    if (el._shader.layer.role !== 3) return;
+    if (shown) this.screenShader = el;
+    else if (this.screenShader === el) this.screenShader = null;
+    this.root.classList.toggle("nsh-fx", Boolean(this.screenShader));
+  }
+
+  /** A transition ended: its children show as they are (a page's or a dialog's overlay goes). */
+  endTransition(el) {
+    const s = el._shader;
+    const run = s.running;
+    s.running = null;
+    if (s.nav) {
+      this.shaderViews.delete(el);
+      run.done?.();
+      return;
+    }
+    const host = this.shaderHost(el);
+    if (host !== this.root || !this.screenShader) host.classList.remove("nsh-fx");
+    s.pictures[2] = s.pictures[3] = null;
+    const canvas = el._shaderCanvas;
+    canvas._bitmap?.transferFromImageBitmap(null);
+    canvas.width = 0;
   }
 
   /** The shared WebGL 2 context; `null` where there is none (said once). */
@@ -2581,37 +3033,77 @@ class Player {
         gl.uniformBlockBinding(program, index, binding);
         return gl.createBuffer();
       };
-      entry = { program, builtins: block(layer.nsh, 0), uniforms: block(layer.u, 1), vao: gl.createVertexArray() };
+      const samplers = (layer.pictures ?? []).map(([name, input]) => [gl.getUniformLocation(program, name), input]);
+      entry = { program, builtins: block(layer.nsh, 0), uniforms: block(layer.u, 1), samplers, vao: gl.createVertexArray() };
     }
     this._shaderPrograms.set(layer.key, entry);
     return entry;
   }
 
+  /** The texture of picture `input` (transparent without one), uploaded again after a paint. */
+  shaderTexture(gl, s, input) {
+    const picture = s.pictures[input];
+    if (!picture) {
+      if (!this._emptyTexture) {
+        this._emptyTexture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, this._emptyTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+      }
+      return this._emptyTexture;
+    }
+    let t = s.textures[input];
+    if (!t) {
+      t = s.textures[input] = gl.createTexture();
+      s.fresh[input] = true;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    if (s.fresh[input]) {
+      s.fresh[input] = false;
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) {
+        gl.texParameteri(gl.TEXTURE_2D, k, v);
+      }
+    }
+    return t;
+  }
+
   renderShader(el, t) {
     const s = el._shader;
     const gl = this.shaderGl();
-    if (!gl || !el._frame) return;
+    if (!gl) return;
+    const box = this.shaderBox(el);
+    if (!box) return;
     const program = this.shaderProgram(gl, s.layer);
     if (!program) return;
-    const [, , w, h] = el._frame;
+    const role = s.layer.role;
+    // A transition draws through its shader only while one runs.
+    if ((role === 2 || role === 4) && !s.running) return;
+    const [w, h, m] = box;
     let ratio = (devicePixelRatio || 1) * Math.min(4, this.zoomOf(el));
-    ratio = Math.min(ratio, 4096 / Math.max(w, h, 1));
-    const pw = Math.max(1, Math.round(w * ratio));
-    const ph = Math.max(1, Math.round(h * ratio));
+    ratio = Math.min(ratio, 4096 / Math.max(w + 2 * m, h + 2 * m, 1));
+    const pw = Math.max(1, Math.round((w + 2 * m) * ratio));
+    const ph = Math.max(1, Math.round((h + 2 * m) * ratio));
     const canvas = gl.canvas;
     if (canvas.width !== pw || canvas.height !== ph) {
       canvas.width = pw;
       canvas.height = ph;
     }
     const time = (s.kept + (s.since != null ? t - s.since : 0)) / 1000;
+    let progress = s.progress;
+    if (s.running) {
+      const p = Math.min(1, Math.max(0, (t - s.running.start) / s.running.ms));
+      progress = s.running.reverse ? 1 - p : p;
+    }
     gl.viewport(0, 0, pw, ph);
     gl.useProgram(program.program);
     gl.bindVertexArray(program.vao);
     if (program.builtins) {
       gl.bindBuffer(gl.UNIFORM_BUFFER, program.builtins);
       // `struct Nsh` (core's `shader::builtins`, 32 bytes): size, time,
-      // scale, then progress and overflow, which a plain Shader leaves at 0.
-      gl.bufferData(gl.UNIFORM_BUFFER, new Float32Array([w, h, Math.max(0, time), pw / Math.max(w, 1e-6), 0, 0, 0, 0]), gl.DYNAMIC_DRAW);
+      // scale, progress and overflow.
+      gl.bufferData(gl.UNIFORM_BUFFER, new Float32Array([w, h, Math.max(0, time), pw / Math.max(w + 2 * m, 1e-6), progress, m, 0, 0]), gl.DYNAMIC_DRAW);
       gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, program.builtins);
     }
     if (program.uniforms) {
@@ -2619,6 +3111,11 @@ class Player {
       gl.bufferData(gl.UNIFORM_BUFFER, s.words, gl.DYNAMIC_DRAW);
       gl.bindBufferBase(gl.UNIFORM_BUFFER, 1, program.uniforms);
     }
+    program.samplers.forEach(([location, input], unit) => {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, this.shaderTexture(gl, s, input));
+      gl.uniform1i(location, unit);
+    });
     gl.disable(gl.BLEND);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -2628,6 +3125,14 @@ class Player {
       target.width = pw;
       target.height = ph;
     }
+    if (role !== 0 && role < 3) {
+      // Over its box and the overflow around it.
+      const st = target.style;
+      const left = `${-m}px`;
+      if (st.left !== left || st.width !== `${w + 2 * m}px` || st.height !== `${h + 2 * m}px`) {
+        [st.left, st.top, st.width, st.height] = [left, left, `${w + 2 * m}px`, `${h + 2 * m}px`];
+      }
+    }
     if (canvas.transferToImageBitmap) {
       target._bitmap ??= target.getContext("bitmaprenderer");
       target._bitmap.transferFromImageBitmap(canvas.transferToImageBitmap());
@@ -2635,6 +3140,12 @@ class Player {
       target._2d ??= target.getContext("2d");
       target._2d.clearRect(0, 0, pw, ph);
       target._2d.drawImage(canvas, 0, 0);
+    }
+    // A screen effect pictures what shaders in the surface drew.
+    const screen = this.screenShader;
+    if (screen && screen !== el && screen._shader && role !== 3 && !s.nav) {
+      screen._shader.stale |= 1;
+      if (!screen._shader.dirty) this.shaderDirty(screen);
     }
   }
 
@@ -3761,6 +4272,14 @@ class Player {
   /** Animates a stack's top screen changing from `old` to `top`:
    * pushed (`pushing`) or popped. Calls `done` when the motion ends. */
   moveScreens(old, top, pushing, done) {
+    // Through the page's `transitionShader`: the page below is its lower
+    // side, the page above its upper one.
+    const upper = pushing ? top : old;
+    const stack = (top ?? old)?.parentNode;
+    if (upper?._navShader && stack) {
+      if (!pushing) old.style.pointerEvents = "none";
+      if (this.shaderNav(stack, upper, upper._navShader, !pushing, done)) return;
+    }
     const motion = this.screenMotion(pushing ? top : old);
     if (!motion) {
       done?.();
@@ -4053,6 +4572,7 @@ class Player {
   present(el) {
     const motion = this.modalMotion(el);
     el._leaving = false;
+    el.style.pointerEvents = "";
     this.dropLeftWith(el);
     el._closed = false;
     el._reported = null;
@@ -4080,6 +4600,15 @@ class Player {
     this.syncHistorySoon();
     requestAnimationFrame(() => requestAnimationFrame(() => {
       el._entering = false;
+      if (el._navShader && !this.viewportDialogs) {
+        // Through its `transitionShader` over the root: it shows at once under it.
+        el.style.transform = "";
+        el.style.opacity = "";
+        if (this.shaderNav(this.root, el, el._navShader, false, () => this.event(el._id, "onShow"))) {
+          requestAnimationFrame(() => { el.style.transition = ""; });
+          return;
+        }
+      }
       el.style.transition = "";
       el.style.transform = "";
       el.style.opacity = "";
@@ -4092,11 +4621,27 @@ class Player {
     if (el._leaving) return;
     el._leaving = true;
     const motion = this.modalMotion(el);
-    this.hideModal(el, motion);
+    // Through its `transitionShader`: pictured as it shows, then gone under it at once.
+    const shader = el._navShader && !this.viewportDialogs && this.shaderNav(this.root, el, el._navShader, true, () => {
+      if (el._leaving) {
+        el.remove();
+        this.releaseFrame(el);
+        this.dropLeftWith(el);
+      }
+      if (!reported) this.event(el._id, "onDismiss");
+    });
+    if (shader) {
+      el.style.transition = "none";
+      el.style.opacity = "0";
+      el.style.pointerEvents = "none";
+    } else {
+      this.hideModal(el, motion);
+    }
     this.scopeFocus();
     this.syncHistorySoon();
     const restore = el._restoreFocus;
     if (restore?.isConnected && !this.topModal()) restore.focus({ preventScroll: true });
+    if (shader) return;
     setTimeout(() => {
       if (el._leaving) {
         el.remove();

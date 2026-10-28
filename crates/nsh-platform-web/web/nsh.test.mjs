@@ -620,12 +620,12 @@ test("a plain Shader uploads the whole built-ins block, progress and overflow at
   );
   Object.assign(player, {
     shaderGl: () => gl,
-    shaderProgram: () => ({ program: {}, builtins: {}, uniforms: null, vao: {} }),
+    shaderProgram: () => ({ program: {}, builtins: {}, uniforms: null, vao: {}, samplers: [] }),
     zoomOf: () => 1,
   });
   const el = {
     _frame: [0, 0, 100, 50],
-    _shader: { layer: {}, words: new Uint32Array(0), kept: 1500, since: null },
+    _shader: { layer: { role: 0, overflow: 0 }, words: new Uint32Array(0), kept: 1500, since: null, progress: 0 },
     _shaderCanvas: { width: 0, height: 0, getContext: () => ({ transferFromImageBitmap() {} }) },
   };
   const saved = globalThis.devicePixelRatio;

@@ -542,6 +542,9 @@ borders) so they never move the content the core placed. Native animation items 
 of the Android animator); bound properties go out as `["a", id, prop, value]` after each batch and each
 `requestAnimationFrame` tick.
 
+Shader views (`["sh", id, layer]`) draw with one WebGL 2 context; effects and transitions (`["sht"]`, `["shi"]`,
+`["shn"]`) take pictures of the DOM with a 2D canvas (`paintTree`): `docs/dev/shaders.md`, "The web".
+
 ## Animation
 
 What moves on the web follows the Linux backend (`nsh-platform-linux` `transition.rs`, `navigation.rs`), which was
