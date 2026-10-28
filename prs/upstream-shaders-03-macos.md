@@ -2,12 +2,13 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/shaders/03-macos`, on `pr/shaders/02-page-dialog-shaders` (pushed to the fork, `dXnSix/nsh`, 2026-10-28). Two commits: the backend and its `docs/dev` notes (`docs/dev/macos.md`, `docs/dev/shaders.md`).
+- Branch: `pr/shaders/03-macos`, on `pr/shaders/02-page-dialog-shaders`. Two commits: the backend and its `docs/dev` notes (`docs/dev/macos.md`, `docs/dev/shaders.md`). Independent of
+  the iOS PR; whichever of the two is merged second resolves the shared table of `docs/dev/shaders.md` (both rows).
 - Source: the fork's `fb5f2e195` and the macOS part of `1d2f5ab68` on `sync/upstream-478737b1`.
 - Open it after the PRs it sits on are merged; rebase onto `upstream/main` then (upstream squash-merges:
   `git rebase --onto upstream/main pr/shaders/02-page-dialog-shaders pr/shaders/03-macos`).
 
-- Checked locally on `7dba85d4`: the macOS clippy run (dev, all targets) and `cargo test -p nsh-platform-macos`; nightly rustfmt; with 10 merged, `nsh test examples/gallery/tests/shaders.test.tsx --target macos`: 2 of 2 pass.
+- Checked locally on `ba289971`: the macOS clippy run (dev, all targets) and `cargo test -p nsh-platform-macos`; nightly rustfmt; with 10 merged, `nsh test examples/gallery/tests/shaders.test.tsx --target macos`: 2 of 2 pass.
 
 The body to paste starts below the line.
 

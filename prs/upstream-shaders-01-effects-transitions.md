@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/shaders/01-effects-transitions`, one commit on `upstream/main` `7dba85d4` (pushed to the fork, `dXnSix/nsh`, 2026-10-28).
+- Branch: `pr/shaders/01-effects-transitions`, one commit on `upstream/main` `ba289971`.
   The first of the shader series that replaces the fork's old `pr/shaders/*` (built on the fork's own GPU pipeline,
   removed when the fork took upstream's `Shader` from #517): every part now sits on upstream's `Shader`, its WGSL
   contract and its wgpu renderer.
@@ -16,11 +16,11 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
   draws as it draws a fill, under the children, with every picture transparent (the GPUI PR, 09, filters those
   layers out, since GPUI keeps drawing fills only). If a reviewer wants 01 to stand alone, the same filter can go
   into each backend here.
-- Before opening: rebase onto the newest `upstream/main` and rerun the checks below. On `7dba85d4` the one conflict
-  was `Core::commit`'s end, where upstream's #669 added `split_scoped_frames`: it runs first, then
-  `mark_shader_inputs` and the transition starts spliced at the batch's front.
+- Rebased onto `upstream/main` `ba289971` before opening. Conflicts on the way: `Core::commit`'s end on `7dba85d4`
+  (upstream's #669 `split_scoped_frames` runs first, then `mark_shader_inputs` and the transition starts spliced at the
+  batch's front), and the `element` re-exports on `ba289971` (#674's `Svg`, `svg` kept beside the new names).
 
-- Checked locally on `7dba85d4` (2026-10-28): clippy `-D warnings` of the Core workflow's crates plus `nsh-cli`; `cargo test -p nsh-core -p nsh-js -p nsh-bundler` and `-p nsh-engine --test engine shader`; nightly rustfmt on the changed files; `NSH_COMPAT_APP=core cargo xtask compat` with `nsh-compat`'s `follow-nsh-main`: the core domain passes, the run fails only on 15 `covers` claims of upstream's own base cases (Accordion, OtpInput, TextView) that branch does not know yet.
+- Checked locally on `ba289971` (2026-10-28): clippy `-D warnings` of the Core workflow's crates plus `nsh-cli`; `cargo test -p nsh-core -p nsh-js -p nsh-bundler` and `-p nsh-engine --test engine shader`; nightly rustfmt on the changed files; `NSH_COMPAT_APP=core cargo xtask compat` with `nsh-compat`'s `follow-nsh-main` (its `main` does not build against NSH's): passes.
 
 The body to paste starts below the line.
 
@@ -53,6 +53,18 @@ draw them in the PRs that follow, so this one changes nothing an app sees yet.
   progress, frames grow by the overflow.
 - **Bundler.** The JSX compiler emits the four elements as host elements (`shadereffect`, `shadertransition`,
   `screeneffect`, `screentransition`), as it does `Shader`.
+
+### The series
+
+This is the first of ten PRs; the others follow as each one they sit on is merged (the fork's branches show them now):
+
+1. this one: the elements, the WGSL inputs and the renderer (`pr/shaders/01-effects-transitions`);
+2. pages' and dialogs' `transitionShader` (`pr/shaders/02-page-dialog-shaders`);
+3. to 9. one per platform, each on 2 and independent of the others: macOS, iOS, Android, web, Windows, Linux, and GPUI
+   keeping fills only (`pr/shaders/03-macos` … `09-gpui`);
+10. the gallery's Shaders page and the website's docs (`pr/shaders/10-gallery-docs`).
+
+Branches: https://github.com/dXnSix/nsh/branches/all?query=pr%2Fshaders
 
 ## Public API
 

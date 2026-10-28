@@ -2,12 +2,12 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/shaders/06-web`, on `pr/shaders/02-page-dialog-shaders` (pushed to the fork, `dXnSix/nsh`, 2026-10-28). One commit (backend, `docs/dev/shaders.md`, `docs/dev/web.md`).
+- Branch: `pr/shaders/06-web`, on `pr/shaders/02-page-dialog-shaders`. One commit (backend, `docs/dev/shaders.md`, `docs/dev/web.md`).
 - Source: the fork's `ab266134a` on `sync/upstream-478737b1`.
 - Open it after the PRs it sits on are merged; rebase onto `upstream/main` then (upstream squash-merges:
   `git rebase --onto upstream/main pr/shaders/02-page-dialog-shaders pr/shaders/06-web`).
 
-- Checked locally on `7dba85d4`: the wasm32 clippy run (`compiler`), `node --test` of `nsh.test.mjs`, `scroll.test.mjs`, `mouse.test.mjs`, `local-time.test.mjs` (43 of 43), nightly rustfmt. Not run in Chromium here; the same code passed `shaders.test.tsx --target web` on the fork's sync branch.
+- Checked locally on `ba289971`: the wasm32 clippy run (`compiler`), `node --test` of `nsh.test.mjs`, `scroll.test.mjs`, `mouse.test.mjs`, `local-time.test.mjs` (43 of 43), nightly rustfmt. Not run in Chromium here; the same code passed `shaders.test.tsx --target web` on the fork's sync branch.
 
 The body to paste starts below the line.
 

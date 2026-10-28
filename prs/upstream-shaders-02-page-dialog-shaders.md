@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/shaders/02-page-dialog-shaders`, on `pr/shaders/01-effects-transitions` (pushed to the fork, `dXnSix/nsh`, 2026-10-28). Four
+- Branch: `pr/shaders/02-page-dialog-shaders`, on `pr/shaders/01-effects-transitions`. Four
   commits: the page and dialog shaders (with a compat case), the web runtime's shader gate, a transition that runs
   backwards, and `docs/dev/shaders.md`. Open it after the 01 PR is merged (rebase onto `upstream/main` then: upstream
   squash-merges, so `git rebase --onto upstream/main pr/shaders/01-effects-transitions pr/shaders/02-page-dialog-shaders`).
@@ -12,7 +12,9 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
   got a runtime without naga; here the bundler counts `transitionShader` (key or string) instead, with a test.
 - Every platform PR of the series sits on this one.
 
-- Checked locally on `7dba85d4`: as 01, plus `cargo test -p nsh-cli web`. The `base-transition-shader` case was run on `59b72a23` (its steps pass; the base domain stops later at a pre-existing Toggle frame step, 887, outside this change); on `7dba85d4` the base run fails on upstream's 15 `covers` claims before it.
+- Checked locally on `ba289971`: as 01, plus `cargo test -p nsh-cli web`; core compat passes. The base domain stops at
+  step 887 (a Toggle frame) on `main` itself; run with `base-transition-shader` moved first, its 11 steps pass and the
+  run stops at the same Toggle step.
 
 The body to paste starts below the line.
 

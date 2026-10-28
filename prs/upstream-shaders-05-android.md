@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/shaders/05-android`, on `pr/shaders/02-page-dialog-shaders` (pushed to the fork, `dXnSix/nsh`, 2026-10-28). Two commits: the backend and its `docs/dev/shaders.md` notes.
+- Branch: `pr/shaders/05-android`, on `pr/shaders/02-page-dialog-shaders`. Two commits: the backend and its `docs/dev/shaders.md` notes.
 - Source: the fork's `74f138df4` and `4ae00db7a` on `sync/upstream-478737b1` (the fork-only CI commit `eab3f8a07` left out).
 - Open it after the PRs it sits on are merged; rebase onto `upstream/main` then (upstream squash-merges:
   `git rebase --onto upstream/main pr/shaders/02-page-dialog-shaders pr/shaders/05-android`).
@@ -10,7 +10,8 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
   [`upstream-android-test-dialog-touches.md`](upstream-android-test-dialog-touches.md)): without it the test agent taps
   the page under a `Dialog`. That fix is independent of shaders and can go first.
 
-- Checked locally on `7dba85d4`: `cargo xtask clippy-android` (both feature sets), `javac` of the Java sources against `android-36`, nightly rustfmt. Not run on the emulator here; the same code (with the dialog-touches fix) passed `shaders.test.tsx` 3 of 3 on the `nsh-multires-35` AVD on the fork's sync branch.
+- Checked locally on `ba289971`: `cargo xtask clippy-android` (both feature sets; with #681, which fixes `main`'s own
+  `Command::Tokens` gap: without it Android does not build on `main`), `javac` of the Java sources against `android-36`, nightly rustfmt. Not run on the emulator here; the same code (with the dialog-touches fix) passed `shaders.test.tsx` 3 of 3 on the `nsh-multires-35` AVD on the fork's sync branch.
 
 The body to paste starts below the line.
 

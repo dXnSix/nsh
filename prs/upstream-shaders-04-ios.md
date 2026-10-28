@@ -2,12 +2,14 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/shaders/04-ios`, on `pr/shaders/03-macos` (pushed to the fork, `dXnSix/nsh`, 2026-10-28). Two commits: the backend and its row of `docs/dev/shaders.md`. It sits on the macOS branch only because both fill the same table of `docs/dev/shaders.md`; the code is independent of it.
+- Branch: `pr/shaders/04-ios`, on `pr/shaders/02-page-dialog-shaders`. Two commits: the backend and its section of
+  `docs/dev/shaders.md`. Independent of the macOS PR; if that one is merged first, this one's table in
+  `docs/dev/shaders.md` conflicts with its (keep both rows, and the paragraph says "Both retake ..." for the two).
 - Source: the fork's `dac91e56b` and the iOS part of `1d2f5ab68` on `sync/upstream-478737b1`.
 - Open it after the PRs it sits on are merged; rebase onto `upstream/main` then (upstream squash-merges:
-  `git rebase --onto upstream/main pr/shaders/03-macos pr/shaders/04-ios`).
+  `git rebase --onto upstream/main pr/shaders/02-page-dialog-shaders pr/shaders/04-ios`).
 
-- Checked locally on `7dba85d4`: the Catalyst clippy run (embed, dev); nightly rustfmt. Not run on the simulator here; the same code passed `shaders.test.tsx` on the iOS simulator on the fork's `sync/upstream-478737b1`.
+- Checked locally on `ba289971`: the Catalyst clippy run (embed, dev); nightly rustfmt. Not run on the simulator here; the same code passed `shaders.test.tsx` on the iOS simulator on the fork's `sync/upstream-478737b1`.
 
 The body to paste starts below the line.
 
