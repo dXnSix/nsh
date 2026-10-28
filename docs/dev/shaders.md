@@ -223,6 +223,16 @@ The fork's elements on top of the same program, layer and renderer (`ShaderRole`
   (partial frames draw the view's whole area, overflow included: `render::drawn_area`). Pages and dialogs: recordings
   (`ID2D1CommandList`) of the host without and with the upper side, drawn into bitmaps and read back once by a
   hosted `NavItem` over the stack or the root.
+- **Android** (API 29 and later; Android 9 shows the children as they are). `Pictures.java` records the children
+  into a `RenderNode`, renders it with a `HardwareRenderer` into an `ImageReader` and hands the rows to
+  `Native.shaderInput`; `libnsh` drops a picture equal to the input's last one. `Box.java` takes the role, overflow
+  and inputs from the `SHADER` opcode: an effect pictures its children when they are invalidated or the core marks
+  them (`SHADER_INPUT`) and draws its frame in `dispatchDraw` instead of them (touches and accessibility still reach
+  them); a backdrop is pictured before every draw (`Backdrop.behind`); a transition pictures `from` before the batch
+  (`SHADER_TRANSITION`) and shows it until the first frame. Screen layers draw over the app's view (`NshView`);
+  dialogs, their own windows, are outside. Pages and dialogs (`NAV_SHADER`): `StackBox` and `ModalHost` run a
+  `NavTransition.java` overlay; `nsh.progress` goes through one more slot of the layer, run by a clock of the
+  platform's, 0 to 1 on push and present, 1 to 0 on pop and dismiss.
 - **GPUI.** Fills only: an effect's or a transition's children show as they are, a screen layer draws nothing, pages
   and dialogs come and go without their shader.
 
