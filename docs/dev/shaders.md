@@ -135,7 +135,7 @@ is. Views out of sight stop rendering until they show again.
 | Android | the UI-thread animator's `Choreographer`, kept ticking by `UiAnimation::outputs` while a view wants a frame | a bitmap of `Box.java`, filled by `NshView.shaderFrame` | — |
 | Windows | the surface's frame ticker (`Surface::on_frame`), at the window's scale | a Direct2D bitmap drawn under the children (made again after a device loss) | `reveal`: hidden, concealed or detached views |
 | GPUI | a frame client of its surface | a GPUI image (BGRA, straight, the view's opacity multiplied in, as canvases' pixmaps), whose replaced image leaves GPUI's atlases | views not drawn in the last frame |
-| Web | `requestAnimationFrame` | a `<canvas>` under the children | `IntersectionObserver` |
+| Web | `requestAnimationFrame` | a `<canvas>` under the children (an effect's and a running transition's over them) | `IntersectionObserver` |
 
 On Android the layer stays in `libnsh`: the encoder sends Java only whether a view shows a shader (opcode `SHADER`,
 35, in `encode.rs` ↔ `Mounter.java`), Java reports the size in pixels (`Native.shaderSize`), and the layer goes to
@@ -191,6 +191,39 @@ Effects, transitions and page shaders sit on the same program, layer and rendere
 - **Pages and dialogs.** `transitionShader` (`NavShaderSpec`) compiles into a `Transition` layer sent as
   `MountItem::NavShader { id, shader }` (350 ms by default); the platform draws a push, pop, presentation or dismissal
   through it, the lower side `from` and the upper `to`.
+
+### On the web
+
+Effects and transitions (`ShaderEffect`, `ShaderTransition`, `ScreenEffect`, `ScreenTransition`, a page's or a
+dialog's `transitionShader`) take their pictures from the DOM. `shader.rs` also encodes the layer's `role` (0 fill,
+1 effect, 2 transition, 3 screen, 4 screen transition), `overflow`, `progress` and `progressSlot`, and `pictures`:
+`[sampler uniform name, input]` pairs (0 content, 1 backdrop, 2 from, 3 to); `MountItem::ShaderTransition`,
+`ShaderInput` and `NavShader` are `["sht", id, ms]`, `["shi", id]` and `["shn", id, layer, ms]`.
+
+- **Pictures.** `paintTree` paints a view's children into a 2D canvas in points (backgrounds, rounded corners,
+  uniform borders, images fitted by `object-fit`, canvases, other shaders' pictures among them, text runs, clipping
+  and opacity; no rotations, gradients or shadows; cross-origin images without CORS are left out so the canvas stays
+  readable). Pictures cover the box plus `overflow` on each side and are uploaded premultiplied
+  (`UNPACK_PREMULTIPLY_ALPHA_WEBGL`), linear and clamped, to the program's sampler uniforms; an input without a
+  picture reads a transparent texture.
+- **Effects.** The output canvas (`nsh-fx-out`) is appended over the children and grows by the overflow; the view
+  has `nsh-fx`, which puts its children at opacity 0 (they keep their pointer events and hit testing under the
+  canvas) and isolates its stacking. While `paintHost` paints them it lifts `nsh-fx` (`nsh-painting` turns CSS
+  transitions off for that moment). A `MutationObserver` with capture `scroll` and `load` listeners marks the
+  content stale, as `["shi"]` does; stale pictures are painted again in `shaderFrame`, at most once per animation
+  frame. `shownChange` ignores the shaders' own canvases and painting's class toggles.
+- **Backdrops.** `sample_backdrop` is the root painted up to the view (`paintTree` stops at it), watched by one
+  observer on the root for every backdrop shader.
+- **Transitions.** `["sht"]` comes first in its batch: the children as they show (or, when one is running, what it
+  draws) become `sample_from` and the shader draws over them at once; the children painted after the batch are
+  `sample_to`, and `nsh.progress` runs from 0 to 1 over the duration on animation frames. At the end the canvas is
+  cleared and the children show as they are. An animated `progress` (an effect's) is written by `shaderSlot`.
+- **Screens.** A `ScreenEffect` or `ScreenTransition` does the same with the root as its host; its canvas is
+  appended to the root. A screen effect pictures the surface again whenever another shader in it draws.
+- **Pages and dialogs.** `["shn"]` keeps the page's or the dialog's `transitionShader`. `shaderNav` runs it on an
+  overlay over the stack (push, pop) or the root (present, dismiss): `sample_from` is the host painted up to the
+  page or dialog, `sample_to` the whole host, and progress goes from 0 to 1, or 1 to 0 when it leaves; the views
+  are where they end under it at once. Dialogs shown in the top layer (`dialogs: "viewport"`) keep their own motion.
 
 ## Pitfalls
 
