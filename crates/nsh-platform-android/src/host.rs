@@ -1590,6 +1590,116 @@ extern "system" fn Java_com_longbridge_nsh_Native_keepRendered(
     }
 }
 
+/// The bytes of a direct `ByteBuffer` (empty when it is not one).
+fn direct_bytes<'a>(env: &JNIEnv<'_>, buffer: &'a JObject<'_>) -> &'a [u8] {
+    if buffer.is_null() {
+        return &[];
+    }
+    let buffer = <&jni::objects::JByteBuffer>::from(buffer);
+    match (
+        env.get_direct_buffer_address(buffer),
+        env.get_direct_buffer_capacity(buffer),
+    ) {
+        // SAFETY: Java keeps the buffer alive and unchanged during the call.
+        (Ok(ptr), Ok(len)) if !ptr.is_null() => unsafe { std::slice::from_raw_parts(ptr, len) },
+        _ => &[],
+    }
+}
+
+/// Shader view `id`'s picture of `input` (0 content, 1 backdrop, 2 from,
+/// 3 to): `height` rows of `width` premultiplied RGBA pixels in `pixels`,
+/// `stride` bytes apart (null: none). Whether frames should come.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+extern "system" fn Java_com_longbridge_nsh_Native_shaderInput(
+    env: JNIEnv<'_>,
+    _: JClass<'_>,
+    handle: jlong,
+    id: jint,
+    input: jint,
+    pixels: JObject<'_>,
+    width: jint,
+    height: jint,
+    stride: jint,
+) -> jboolean {
+    // SAFETY: Java passes its live handle.
+    let host = unsafe { host(handle) };
+    let Some(&input) = nsh_core::shader::ShaderInput::ALL.get(input.max(0) as usize) else {
+        return 0;
+    };
+    let bytes = direct_bytes(&env, &pixels);
+    let (w, h, stride) = (
+        width.max(0) as u32,
+        height.max(0) as u32,
+        stride.max(0) as u32,
+    );
+    let picture = (w > 0 && h > 0 && bytes.len() >= (stride as usize) * (h as usize))
+        .then_some((bytes, w, h, stride));
+    let mut ui = host.ui.lock().expect("ui");
+    ui.shaders.input(id as u32, input, picture);
+    ui.shaders.wants_frame().into()
+}
+
+/// Shader view `id`'s transition starts, `ms` long (its `from` picture came
+/// first). Whether frames should come.
+#[unsafe(no_mangle)]
+extern "system" fn Java_com_longbridge_nsh_Native_shaderTransition(
+    _: JNIEnv<'_>,
+    _: JClass<'_>,
+    handle: jlong,
+    id: jint,
+    ms: jfloat,
+) -> jboolean {
+    // SAFETY: Java passes its live handle.
+    let host = unsafe { host(handle) };
+    let mut ui = host.ui.lock().expect("ui");
+    let duration = std::time::Duration::from_secs_f32(ms.max(0.0) / 1000.0);
+    ui.shaders.start_transition(id as u32, duration);
+    ui.shaders.wants_frame().into()
+}
+
+/// Page or dialog `page` comes or goes (`reverse`) through its
+/// `transitionShader` over view `key` (its stack, or the dialog), `width` ×
+/// `height` pixels: `from` its lower side, `to` its upper side (RGBA rows
+/// `stride` bytes apart). Whether it runs (false: the platform's own
+/// animation); Java then asks for frames.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+extern "system" fn Java_com_longbridge_nsh_Native_navTransition(
+    env: JNIEnv<'_>,
+    _: JClass<'_>,
+    handle: jlong,
+    key: jint,
+    page: jint,
+    width: jint,
+    height: jint,
+    from: JObject<'_>,
+    from_stride: jint,
+    to: JObject<'_>,
+    to_stride: jint,
+    reverse: jboolean,
+) -> jboolean {
+    // SAFETY: Java passes its live handle.
+    let host = unsafe { host(handle) };
+    let (from, to) = (direct_bytes(&env, &from), direct_bytes(&env, &to));
+    let rows = height.max(0) as usize;
+    let (fs, ts) = (from_stride.max(0) as u32, to_stride.max(0) as u32);
+    if rows == 0 || from.len() < fs as usize * rows || to.len() < ts as usize * rows {
+        return 0;
+    }
+    let mut ui = host.ui.lock().expect("ui");
+    let runs = ui.shaders.nav_transition(
+        key as u32,
+        page as u32,
+        (width, height),
+        host.density.get(),
+        (from, fs),
+        (to, ts),
+        reverse != 0,
+    );
+    runs.into()
+}
+
 /// A scroll view moved: the engine (lists) and its scroll value learn the
 /// offset. Returns bound values when a scroll value changed, else null.
 #[unsafe(no_mangle)]

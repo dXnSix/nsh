@@ -111,8 +111,7 @@ final class ModalHost {
         }
         dialog.show();
         matchSystemBars(window);
-        container.setAlpha(animation == 1 ? 0 : 1);
-        container.post(() -> {
+        Runnable animateIn = () -> {
             if (animation == 2) {
                 mounter.event(id, Native.SHOW);
                 return;
@@ -127,7 +126,44 @@ final class ModalHost {
                             mounter.event(id, Native.SHOW);
                         }
                     }).start();
+        };
+        if (shaderIn(dialog, animateIn)) return;
+        container.setAlpha(animation == 1 ? 0 : 1);
+        container.post(animateIn);
+    }
+
+    /** Whether the dialog comes and goes through its `transitionShader`. */
+    private boolean throughShader() {
+        return mounter.navShaders.get(id) && Pictures.supported();
+    }
+
+    /**
+     * The dialog comes through its shader once laid out, from the app to the
+     * app under it (`animateIn` where it cannot); false without one.
+     */
+    private boolean shaderIn(Dialog d, Runnable animateIn) {
+        if (!throughShader()) return false;
+        // Its first frame shows the dialog; until then the app shows alone.
+        container.setAlpha(0);
+        container.getViewTreeObserver().addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
+            @Override
+            public boolean onPreDraw() {
+                container.getViewTreeObserver().removeOnPreDrawListener(this);
+                Window window = d.getWindow();
+                if (dialog != d || closing || window == null) return true;
+                NavTransition t = NavTransition.start(mounter, (ViewGroup) window.getDecorView(), id, id,
+                        new View[] {mounter.host}, new View[] {mounter.host, container}, false, () -> {}, () -> {
+                            container.setAlpha(1);
+                            mounter.event(id, Native.SHOW);
+                        });
+                if (t == null) {
+                    container.setAlpha(animation == 1 ? 0 : 1);
+                    container.post(animateIn);
+                }
+                return true;
+            }
         });
+        return true;
     }
 
     /**
@@ -184,6 +220,12 @@ final class ModalHost {
             closing = false;
             mounter.event(id, Native.DISMISS);
         };
+        Window window = d.getWindow();
+        if (throughShader() && window != null && NavTransition.start(mounter, (ViewGroup) window.getDecorView(),
+                id, id, new View[] {mounter.host}, new View[] {mounter.host, container}, true,
+                () -> container.setAlpha(0), done) != null) {
+            return;
+        }
         if (animation == 2) {
             done.run();
             return;
