@@ -1,6 +1,7 @@
 # Upstream PR: android: Send test touches to the shown dialog's window
 
-Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
+Draft of a pull request for `longbridge/nsh`, posted as [longbridge/nsh#675](https://github.com/longbridge/nsh/pull/675)
+(2026-10-28) with the body below the line.
 
 - Branch: `pr/android/02-test-dialog-touches`, one commit on `upstream/main` `ba289971`.
 - Source: the fork's `88cbf9491` on `sync/upstream-478737b1`, found while running the shader gallery test on Android.
@@ -38,6 +39,8 @@ Touches now go to the topmost shown `Dialog`'s window when there is one (`Mounte
 
 - [x] I have read the [CONTRIBUTING](../CONTRIBUTING.md) document and followed the guidelines.
 - [x] Reviewed the changes in this PR and confirmed AI generated code (if any) is accurate.
-- [x] Passed `javac`; the Android clippy run is clean on `7dba85d4` (on `ba289971` it fails in upstream's own `encode.rs`, see above).
+- [x] Passed `javac` against `android-36`. `cargo xtask clippy-android` on today's `main` stops at `encode.rs`, whose
+  `Command` match lacks `Tokens` (from #674), outside this PR; on `7dba85d4` it passed with this change.
 - [x] Changes to what apps use: none (the test agent only).
-- [ ] Ran the related `examples/gallery` demos on Android (the gallery's shader test on the emulator, on the fork's sync branch).
+- [x] Ran a gallery test that closes a `Dialog` by its button on an API 35 emulator: it passed 3 of 3 with this change;
+  without it the press landed on the page under the dialog.

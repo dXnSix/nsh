@@ -1,6 +1,7 @@
 # Upstream PR: ios: Type each key in tests once the one before it landed
 
-Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
+Draft of a pull request for `longbridge/nsh`, posted as [longbridge/nsh#676](https://github.com/longbridge/nsh/pull/676)
+(2026-10-28) with the body below the line.
 
 - Branch: `pr/ios/01-test-typing`, one commit on `upstream/main` `ba289971`. Independent of the
   other two iOS test fixes (`pr/ios/01-test-typing`, `02-test-caret-settle`, `03-test-scroll`): each applies on its own
@@ -37,4 +38,4 @@ Apps are not affected: only `nsh test`'s iOS agent changes.
 - [x] Reviewed the changes in this PR and confirmed AI generated code (if any) is accurate.
 - [x] Passed `cargo +nightly fmt` on the changed files and clippy (Catalyst run).
 - [x] Changes to what apps use: none (the test agent only).
-- [x] Ran the related `examples/gallery` tests on the iOS simulator (with the fork's sync branch).
+- [x] Ran the related `examples/gallery` tests on the iOS simulator.

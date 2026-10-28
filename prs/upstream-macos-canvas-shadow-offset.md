@@ -1,6 +1,7 @@
 # Upstream PR: macos: Cast a canvas's shadows the way their offsets point
 
-Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
+Draft of a pull request for `longbridge/nsh`, posted as [longbridge/nsh#680](https://github.com/longbridge/nsh/pull/680)
+(2026-10-28) with the body below the line.
 
 - Branch: `pr/macos/02-canvas-shadow-offset`, one commit on `upstream/main` `ba289971` (rebased 2026-10-28 from its
   2026-10-25 base; no conflicts, and no upstream commit since changed the canvas's shadows).
@@ -28,9 +29,9 @@ layer's own space (its pixels, y up). Other platforms already cast shadows the w
 
 ## Screenshot
 
-| Platform | Before | After |
-| -------- | ------ | ----- |
-| macOS    | [a canvas shape with `shadowOffsetY: 4`: the shadow above it] | [the shadow below it] |
+No screenshots: the new test reads the drawn pixels instead. A 10-point square at (10, 10) with a hard shadow offset
+by (20, 15) now has its shadow's middle at (35, 30), in a flipped and an unflipped context alike; before, it was cast
+upward.
 
 ## How to Test
 

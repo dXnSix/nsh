@@ -1,6 +1,7 @@
 # Upstream PR: ios: Scroll in tests with a quicker finger
 
-Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
+Draft of a pull request for `longbridge/nsh`, posted as [longbridge/nsh#678](https://github.com/longbridge/nsh/pull/678)
+(2026-10-28) with the body below the line.
 
 - Branch: `pr/ios/03-test-scroll`, one commit on `upstream/main` `ba289971`. Independent of the
   other two iOS test fixes (`pr/ios/01-test-typing`, `02-test-caret-settle`, `03-test-scroll`): each applies on its own
@@ -29,7 +30,7 @@ Apps are not affected: only `nsh test`'s iOS agent changes.
 
 ## How to Test
 
-- `cargo clippy` as above (Catalyst).
+- `cargo clippy -p nsh-platform-ios -p nsh-ios-host -p nsh-ios-app --target aarch64-apple-ios-macabi --features nsh-platform-ios/embed,nsh-platform-ios/dev -- -D warnings`
 - On a simulator: any gallery test that presses a row far down the index
   (`nsh test examples/gallery/tests/<file> --target ios`): the same rows come into view in the same number of
   gestures, each about 340 ms instead of 550 ms.
@@ -40,4 +41,4 @@ Apps are not affected: only `nsh test`'s iOS agent changes.
 - [x] Reviewed the changes in this PR and confirmed AI generated code (if any) is accurate.
 - [x] Passed `cargo +nightly fmt` on the changed files and clippy (Catalyst run).
 - [x] Changes to what apps use: none (the test agent only).
-- [x] Ran the related `examples/gallery` tests on the iOS simulator (with the fork's sync branch).
+- [x] Ran the related `examples/gallery` tests on the iOS simulator.

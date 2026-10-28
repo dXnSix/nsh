@@ -1,6 +1,7 @@
 # Upstream PR: ios: Let test steps settle while a focused input's caret blinks
 
-Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
+Draft of a pull request for `longbridge/nsh`, posted as [longbridge/nsh#677](https://github.com/longbridge/nsh/pull/677)
+(2026-10-28) with the body below the line.
 
 - Branch: `pr/ios/02-test-caret-settle`, one commit on `upstream/main` `ba289971`. Independent of the
   other two iOS test fixes (`pr/ios/01-test-typing`, `02-test-caret-settle`, `03-test-scroll`): each applies on its own
@@ -30,7 +31,7 @@ Apps are not affected: only `nsh test`'s iOS agent changes.
 
 ## How to Test
 
-- `cargo clippy` as above (Catalyst).
+- `cargo clippy -p nsh-platform-ios -p nsh-ios-host -p nsh-ios-app --target aarch64-apple-ios-macabi --features nsh-platform-ios/embed,nsh-platform-ios/dev -- -D warnings`
 - On a simulator: the iOS list's gallery tests took 570 s instead of 712 s, the list search's 6 s instead of 24 s
   (`nsh test examples/gallery/tests/<file> --target ios`).
 
@@ -40,4 +41,4 @@ Apps are not affected: only `nsh test`'s iOS agent changes.
 - [x] Reviewed the changes in this PR and confirmed AI generated code (if any) is accurate.
 - [x] Passed `cargo +nightly fmt` on the changed files and clippy (Catalyst run).
 - [x] Changes to what apps use: none (the test agent only).
-- [x] Ran the related `examples/gallery` tests on the iOS simulator (with the fork's sync branch).
+- [x] Ran the related `examples/gallery` tests on the iOS simulator.

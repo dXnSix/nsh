@@ -1,6 +1,7 @@
 # Upstream PR: gpui: Show a canvas's latest frame when it changes on every frame
 
-Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
+Draft of a pull request for `longbridge/nsh`, posted as [longbridge/nsh#679](https://github.com/longbridge/nsh/pull/679)
+(2026-10-28) with the body below the line.
 
 - Branch: `pr/gpui/01-canvas-one-job`, one commit on `upstream/main` `ba289971` (rebased 2026-10-28 from its
   2026-10-25 base; it applied without conflicts, as no upstream commit since touched the file).
