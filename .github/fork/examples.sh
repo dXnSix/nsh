@@ -30,7 +30,7 @@ case "$target" in
   # environment's rotation expects an 844 pt tall window.
   macos)
     gallery=(device dock error-boundary form gestures hover links list-search mention navigation
-      photos press resizable shortcuts storage timers)
+      photos press resizable shaders shortcuts storage timers)
     filtered=("environment appearance" "toasts a toast shows" "toasts its action"
       "toasts its close button" "toasts at most three" "toasts a swipe")
     ;;
@@ -40,8 +40,8 @@ case "$target" in
   # (`picks()` runs headless only).
   web)
     gallery=(animations context-menu-press device dock environment error-boundary form gestures
-      hover list-search mention navigation network photos press resizable shortcuts storage timers
-      toasts)
+      hover list-search mention navigation network photos press resizable shaders shortcuts storage
+      timers toasts)
     ;;
   # Left out: context-menu, dock, hover, overlays, resizable, shortcuts,
   # toasts (a mouse, a keyboard or a desktop's windows), picker (the
@@ -56,7 +56,7 @@ case "$target" in
   # request itself is the engine's, run on iOS and the web).
   android)
     gallery=(context-menu-press device error-boundary form gestures links
-      list-search mention menus navigation photos press storage text-view timers)
+      list-search mention menus navigation photos press shaders storage text-view timers)
     filtered=("environment appearance" "controls switch" "controls check" "controls a radio picks"
       "controls choice cards and sized" "controls tabs show" "controls collapsible" "controls accordion"
       "controls progress bar" "controls uploads" "controls stepped setup" "controls slider"
@@ -70,8 +70,8 @@ case "$target" in
   # so only its maxLength test runs.
   ios)
     gallery=(animations context-menu-press controls device error-boundary gestures links
-      list-search mention menus navigation network photos press shortcuts storage text-view
-      timers)
+      list-search mention menus navigation network photos press shaders shortcuts storage
+      text-view timers)
     filtered=("environment appearance" "form maxLength")
     ;;
   *)
