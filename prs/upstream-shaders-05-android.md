@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/shaders/05-android`, on `pr/shaders/02-page-dialog-shaders` (local; not pushed yet). Two commits: the backend and its `docs/dev/shaders.md` notes.
+- Branch: `pr/shaders/05-android`, on `pr/shaders/02-page-dialog-shaders` (pushed to the fork, `dXnSix/nsh`, 2026-10-28). Two commits: the backend and its `docs/dev/shaders.md` notes.
 - Source: the fork's `74f138df4` and `4ae00db7a` on `sync/upstream-478737b1` (the fork-only CI commit `eab3f8a07` left out).
 - Open it after the PRs it sits on are merged; rebase onto `upstream/main` then (upstream squash-merges:
   `git rebase --onto upstream/main pr/shaders/02-page-dialog-shaders pr/shaders/05-android`).

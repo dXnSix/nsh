@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/shaders/01-effects-transitions`, one commit on `upstream/main` `7dba85d4` (local; not pushed yet).
+- Branch: `pr/shaders/01-effects-transitions`, one commit on `upstream/main` `7dba85d4` (pushed to the fork, `dXnSix/nsh`, 2026-10-28).
   The first of the shader series that replaces the fork's old `pr/shaders/*` (built on the fork's own GPU pipeline,
   removed when the fork took upstream's `Shader` from #517): every part now sits on upstream's `Shader`, its WGSL
   contract and its wgpu renderer.

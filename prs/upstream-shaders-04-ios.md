@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/shaders/04-ios`, on `pr/shaders/03-macos` (local; not pushed yet). Two commits: the backend and its row of `docs/dev/shaders.md`. It sits on the macOS branch only because both fill the same table of `docs/dev/shaders.md`; the code is independent of it.
+- Branch: `pr/shaders/04-ios`, on `pr/shaders/03-macos` (pushed to the fork, `dXnSix/nsh`, 2026-10-28). Two commits: the backend and its row of `docs/dev/shaders.md`. It sits on the macOS branch only because both fill the same table of `docs/dev/shaders.md`; the code is independent of it.
 - Source: the fork's `dac91e56b` and the iOS part of `1d2f5ab68` on `sync/upstream-478737b1`.
 - Open it after the PRs it sits on are merged; rebase onto `upstream/main` then (upstream squash-merges:
   `git rebase --onto upstream/main pr/shaders/03-macos pr/shaders/04-ios`).

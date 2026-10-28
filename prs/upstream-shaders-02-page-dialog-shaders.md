@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/shaders/02-page-dialog-shaders`, on `pr/shaders/01-effects-transitions` (local; not pushed yet). Four
+- Branch: `pr/shaders/02-page-dialog-shaders`, on `pr/shaders/01-effects-transitions` (pushed to the fork, `dXnSix/nsh`, 2026-10-28). Four
   commits: the page and dialog shaders (with a compat case), the web runtime's shader gate, a transition that runs
   backwards, and `docs/dev/shaders.md`. Open it after the 01 PR is merged (rebase onto `upstream/main` then: upstream
   squash-merges, so `git rebase --onto upstream/main pr/shaders/01-effects-transitions pr/shaders/02-page-dialog-shaders`).

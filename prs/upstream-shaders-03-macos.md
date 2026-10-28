@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/shaders/03-macos`, on `pr/shaders/02-page-dialog-shaders` (local; not pushed yet). Two commits: the backend and its `docs/dev` notes (`docs/dev/macos.md`, `docs/dev/shaders.md`).
+- Branch: `pr/shaders/03-macos`, on `pr/shaders/02-page-dialog-shaders` (pushed to the fork, `dXnSix/nsh`, 2026-10-28). Two commits: the backend and its `docs/dev` notes (`docs/dev/macos.md`, `docs/dev/shaders.md`).
 - Source: the fork's `fb5f2e195` and the macOS part of `1d2f5ab68` on `sync/upstream-478737b1`.
 - Open it after the PRs it sits on are merged; rebase onto `upstream/main` then (upstream squash-merges:
   `git rebase --onto upstream/main pr/shaders/02-page-dialog-shaders pr/shaders/03-macos`).

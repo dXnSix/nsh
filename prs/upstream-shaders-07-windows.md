@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/shaders/07-windows`, on `pr/shaders/02-page-dialog-shaders` (local; not pushed yet). One commit (backend, `docs/dev/shaders.md`, `docs/dev/windows.md`).
+- Branch: `pr/shaders/07-windows`, on `pr/shaders/02-page-dialog-shaders` (pushed to the fork, `dXnSix/nsh`, 2026-10-28). One commit (backend, `docs/dev/shaders.md`, `docs/dev/windows.md`).
 - Source: the fork's `62193eca1` on `sync/upstream-478737b1`.
 - Open it after the PRs it sits on are merged; rebase onto `upstream/main` then (upstream squash-merges:
   `git rebase --onto upstream/main pr/shaders/02-page-dialog-shaders pr/shaders/07-windows`).

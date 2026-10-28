@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/android/02-test-dialog-touches`, one commit on `upstream/main` `7dba85d4` (local; not pushed yet).
+- Branch: `pr/android/02-test-dialog-touches`, one commit on `upstream/main` `7dba85d4` (pushed to the fork, `dXnSix/nsh`, 2026-10-28).
 - Source: the fork's `88cbf9491` on `sync/upstream-478737b1`, found while running the shader gallery test on Android.
   Independent of the shader series; the Android shader PR's gallery test needs it for its dialog half.
 

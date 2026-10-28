@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/shaders/09-gpui`, on `pr/shaders/02-page-dialog-shaders` (local; not pushed yet). One commit (`mount.rs`, `docs/dev/gpui.md`, `docs/dev/shaders.md`).
+- Branch: `pr/shaders/09-gpui`, on `pr/shaders/02-page-dialog-shaders` (pushed to the fork, `dXnSix/nsh`, 2026-10-28). One commit (`mount.rs`, `docs/dev/gpui.md`, `docs/dev/shaders.md`).
 - Source: the fork's `cd4e3807f` on `sync/upstream-478737b1`.
 - Open it after the PRs it sits on are merged; rebase onto `upstream/main` then (upstream squash-merges:
   `git rebase --onto upstream/main pr/shaders/02-page-dialog-shaders pr/shaders/09-gpui`).
