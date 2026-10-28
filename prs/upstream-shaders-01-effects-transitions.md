@@ -101,18 +101,8 @@ layers read pictures (`Core::pictured`) and, after a commit, walks up from the b
 - `NSH_COMPAT_APP=core cargo xtask compat`: the new case `core-shader-effects` (layout, an effect's children keep
   their presses, transitions' children change with `value`). Run against `nsh-compat`'s `follow-nsh-main`
   (`5fc0229`): its `main` does not build against NSH's current `main` (`nsh_core::ui` and others are gone).
-- The case claims no `covers` yet: `nsh-compat` reads which exports a bundle uses from its own copy of the JSX
-  compiler's primitives (`src/coverage.rs`, `PRIMITIVES`), which lacks the four tags, so a claim fails with "its
-  bundle does not use it". A companion `nsh-compat` change adds them; then the script gets
-  `covers [nsh] ShaderEffect`, `ShaderTransition`, `ScreenEffect`, `ScreenTransition`:
-
-  ```diff
-       ("nsh", "Shader", Some("shader")),
-  +    ("nsh", "ShaderEffect", Some("shadereffect")),
-  +    ("nsh", "ShaderTransition", Some("shadertransition")),
-  +    ("nsh", "ScreenEffect", Some("screeneffect")),
-  +    ("nsh", "ScreenTransition", Some("screentransition")),
-  ```
+- The case claims no `covers`: `nsh-compat` reads which exports a bundle uses from its own list of the JSX
+  compiler's primitives, which lacks the four tags, so such a claim would fail. Its steps check the elements.
 
 ## Checklist
 
