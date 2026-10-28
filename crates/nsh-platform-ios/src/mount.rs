@@ -12,6 +12,7 @@ use nsh_core::{
     ViewKind, ViewProps, ViewStyle,
     animation::{AnimationProp, AnimationValue},
     geometry::{DevicePixels, point, size},
+    shader::ShaderRole,
     time::Instant,
 };
 use nsh_engine::EngineControl;
@@ -608,6 +609,8 @@ pub(crate) struct Mounter {
     shaders: crate::shader::Shaders,
     /// Texts whose color transitions.
     text_colors: crate::interaction::TextColors,
+    /// The `transitionShader`s of pages and dialogs.
+    nav_shaders: rustc_hash::FxHashMap<NodeId, nsh_core::NavShader>,
     mtm: MainThreadMarker,
 }
 
@@ -665,6 +668,7 @@ impl Mounter {
             frame_link: crate::animation::frame_link(&target_for_link),
             shaders: crate::shader::Shaders::new(&target_for_link),
             text_colors: crate::interaction::TextColors::new(&target_for_link),
+            nav_shaders: rustc_hash::FxHashMap::default(),
             hosts: Default::default(),
             dirty_stacks: Vec::new(),
             bottom_bar_dirty: false,
@@ -1020,7 +1024,7 @@ impl Mounter {
                     // A modal deleted while presented (its subtree released
                     // without a remove) goes away too, as on Android.
                     if let Native::Modal(modal) = &mut s.native {
-                        modal.dismiss(|| {});
+                        modal.dismiss(false, || {});
                     }
                     if s.events.contains(EventKind::Touch) {
                         self.touch_listener_changed(false);
@@ -1033,6 +1037,7 @@ impl Mounter {
                     self.animated.retain(|&v| v != id);
                 }
                 self.shaders.remove(id);
+                self.nav_shaders.remove(&id);
             }
             MountItem::Frame { id, frame } => {
                 self.frames_applied = true;
@@ -1353,15 +1358,48 @@ impl Mounter {
             }
             MountItem::Refreshing { id, refreshing } => self.set_refreshing(id, refreshing),
             MountItem::Canvas { id, drawing } => self.set_drawing(id, drawing),
-            // Effects and transitions: this platform does not draw them yet.
-            MountItem::ShaderTransition { .. }
-            | MountItem::ShaderInput { .. }
-            | MountItem::NavShader { .. } => {}
+            MountItem::ShaderTransition { id, duration } => {
+                self.shaders.start_transition(id, duration);
+            }
+            MountItem::ShaderInput { id } => self.shaders.input_changed(id),
+            MountItem::NavShader { id, shader } => match shader {
+                Some(shader) => {
+                    self.nav_shaders.insert(id, shader);
+                }
+                None => {
+                    self.nav_shaders.remove(&id);
+                }
+            },
             MountItem::Shader { id, layer } => {
                 let scale = self.display_scale();
-                if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref) {
+                let role = layer.as_ref().map(|l| l.role);
+                let screen = matches!(
+                    role,
+                    Some(ShaderRole::Screen | ShaderRole::ScreenTransition)
+                );
+                // The children it draws: its own (an effect's or a
+                // transition's), or the root's (a screen's).
+                let own = matches!(role, Some(ShaderRole::Effect | ShaderRole::Transition));
+                let mut children = None;
+                if let Some(s) = self.slot_mut(id) {
+                    let view = s.native.view().retain();
+                    children = s.decor.set_effect(&view, own);
+                }
+                let host = if screen {
+                    let root = self.slot_mut(nsh_core::ROOT_ID);
+                    root.map(|r| {
+                        let view = r.native.view().retain();
+                        children = r.decor.set_effect(&view, true);
+                        view
+                    })
+                } else {
+                    self.slot(id).map(|s| s.native.view().retain())
+                };
+                if let (Some(s), Some(host)) =
+                    (self.views.get(id as usize).and_then(Option::as_ref), host)
+                {
                     self.shaders
-                        .set(id, s.native.view(), &s.style, scale, layer);
+                        .set(id, &host, children, &s.style, scale, layer);
                 }
                 // Bindings that came before it.
                 self.push_shader_args(id);
@@ -2644,6 +2682,11 @@ impl Mounter {
                 }
                 continue;
             }
+            if self.shaders.pictured()
+                && let Some(s) = self.views.get(id as usize).and_then(Option::as_ref)
+            {
+                self.shaders.ui_changed(s.native.view());
+            }
             let Some(s) = self.slot_mut(id) else { continue };
             if s.placeholder_key.as_deref() == Some(key) {
                 s.placeholder_key = None;
@@ -3043,7 +3086,32 @@ impl Mounter {
                     Some(Native::Screen(screen)) => Some(screen.config.animation),
                     _ => None,
                 });
-            stack.reconcile(&screens, leaving);
+            let top = screens.last().map(|s| s.0);
+            let leaving_id = stack
+                .nav
+                .topViewController()
+                .and_then(|c| c.downcast::<crate::navigation::ScreenController>().ok())
+                .map(|c| c.screen_id());
+            let shaders = (
+                top.and_then(|id| self.nav_shaders.get(&id)),
+                leaving_id.and_then(|id| self.nav_shaders.get(&id)),
+            );
+            let scale = self.display_scale();
+            let Some(Slot {
+                native: Native::Stack(stack),
+                ..
+            }) = self.views.get(id as usize).and_then(Option::as_ref)
+            else {
+                continue;
+            };
+            let overlays = &mut self.shaders;
+            // Pictured before the change, which happens at once.
+            stack.reconcile(&screens, leaving, shaders, |view, shader, pops| {
+                if let Some(window) = view.window() {
+                    let rect = view.convertRect_toView(view.bounds(), Some(&window));
+                    overlays.nav_overlay(&window, rect, scale, shader, pops);
+                }
+            });
             // A page whose options arrive while it is already on screen: the
             // stack itself does not change, and the bar still has to follow.
             stack.sync_bottom_bar();
@@ -3094,22 +3162,36 @@ impl Mounter {
         let root = self
             .slot(nsh_core::ROOT_ID)
             .map(|s| s.native.view().retain());
+        let scale = self.display_scale();
         for id in modals {
             let shown = self.hosts.contains_key(&id);
             let control = self.control.clone();
             let Some(Slot {
                 native: Native::Modal(modal),
                 ..
-            }) = self.slot_mut(id)
+            }) = self.views.get_mut(id as usize).and_then(Option::as_mut)
             else {
                 continue;
             };
+            // Through its shader: the window where the surface is, pictured
+            // before it comes or goes at once.
+            let shader = self
+                .nav_shaders
+                .get(&id)
+                .filter(|_| modal.changes(shown))
+                .zip(root.as_ref().and_then(|r| Some((r, r.window()?))));
+            if let Some((shader, (root, window))) = &shader {
+                let rect = root.convertRect_toView(root.bounds(), Some(window));
+                self.shaders
+                    .nav_overlay(window, rect, scale, shader, !shown);
+            }
+            let at_once = shader.is_some();
             if shown {
                 if let Some(root) = &root {
-                    modal.present(root);
+                    modal.present(root, at_once);
                 }
             } else {
-                modal.dismiss(move || {
+                modal.dismiss(at_once, move || {
                     control.dispatch_event(id, EventKind::Dismiss, EventPayload::None)
                 });
             }
@@ -3935,6 +4017,11 @@ impl Mounter {
 
     fn follow_scroll(&mut self, id: NodeId, offset: CGPoint) {
         self.pin_sticky(id);
+        if self.shaders.pictured()
+            && let Some(s) = self.views.get(id as usize).and_then(Option::as_ref)
+        {
+            self.shaders.ui_changed(s.native.view());
+        }
         for (_, area) in &self.areas {
             area.scrolled();
         }
@@ -3993,12 +4080,17 @@ impl Mounter {
                 apply_dynamic(s, animator);
             }
         }
-        // Shaders get their bound uniforms.
+        // Shaders get their bound uniforms; those that picture the views
+        // take them again.
+        let pictured = self.shaders.pictured();
         for &id in &self.animated {
-            if self.shaders.has(id)
-                && let Some(s) = self.views.get(id as usize).and_then(Option::as_ref)
-            {
-                self.shaders.set_args(id, shader_args(s, animator));
+            if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref) {
+                if self.shaders.has(id) {
+                    self.shaders.set_args(id, shader_args(s, animator));
+                }
+                if pictured {
+                    self.shaders.ui_changed(s.native.view());
+                }
             }
         }
         // Components get their bound props' changes (no view borrowed while
