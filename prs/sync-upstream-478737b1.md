@@ -63,6 +63,25 @@ commit. Branch `sync/upstream-478737b1`; the next fork tag is `fork-0.3.0-2`.
   typing, paste, a desktop Tab order test), so `examples.sh` runs the 19 that pass by name.
 - `docs: Describe shader effects, transitions and page shaders`.
 
+## iOS test fixes
+
+The iOS job's timeouts and dropped keys, fixed in the test agent:
+
+- `ios: Type each key in tests once the one before it landed`: keys typed every 80 ms were dropped by a slow
+  simulator's keyboard ("hello" became "HELO"); each key now waits until the focused input's text changed (at most
+  600 ms).
+- `ios: Let test steps settle while a focused input's caret blinks`: UIKit's endless loops repeat `FLT_MAX` times,
+  which the quiet check took for an animation that ends, so every step with a focused input waited the full 2 s;
+  such loops now count as endless (the iOS list's tests: 570 s instead of 712 s).
+- `ios: Scroll in tests with a quicker finger`: a scroll gesture took about 550 ms and ate much of the 30 s of tests
+  that ran out on the runners; the finger now moves at a quick swipe's pace (about 340 ms), still resting before it
+  lifts.
+- `ci: Run form and most of controls in the iOS simulator`: form's typing works again; the synced
+  `controls.test.tsx` has 24 tests, five fail on iOS every time (slider, number input, OTP Clear, PIN Change PIN,
+  Tab order), so `examples.sh` runs the 19 that pass by name, as Android's list does.
+- Known: stalls inside `open` on the runner (timeouts with no screen) have no known cause yet; a few iOS flakes may
+  remain.
+
 ## Validation
 
 Local (macOS host, Rust 1.99, `CARGO_INCREMENTAL=0`):
