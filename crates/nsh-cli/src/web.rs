@@ -251,13 +251,23 @@ fn is_gate(name: &str) -> bool {
         .any(|prefix| name.starts_with(prefix))
 }
 
+/// `nsh`'s elements that draw through a shader.
+const SHADER_ELEMENTS: [&str; 5] = [
+    "Shader",
+    "ShaderEffect",
+    "ShaderTransition",
+    "ScreenEffect",
+    "ScreenTransition",
+];
+
 /// The gates ([`is_gate`]) a runtime linked for an app that uses `uses` of
 /// the native modules keeps: `nsh/base`'s core, the part of each other
 /// name it imports from `nsh/base` (`nsh/base/plot` is the plot part's),
 /// `zlib`'s operations when it imports `zlib`, and shaders when it may
-/// make a shader view (`NativeUse::shader`, or an import of `Shader`). What the bundler cannot
-/// tell apart (no analysis, `import * as`, an `import()` of a computed
-/// specifier) keeps everything, so a runtime never lacks what an app needs.
+/// make a shader view (`NativeUse::shader`, or an import of one of
+/// [`SHADER_ELEMENTS`]). What the bundler cannot tell apart (no analysis,
+/// `import * as`, an `import()` of a computed specifier) keeps everything,
+/// so a runtime never lacks what an app needs.
 pub(crate) fn linked_gates(uses: Option<&nsh_bundler::NativeUse>) -> Vec<String> {
     let all = || {
         let mut gates: Vec<String> = nsh_base::parts::ALL
@@ -284,11 +294,11 @@ pub(crate) fn linked_gates(uses: Option<&nsh_bundler::NativeUse>) -> Vec<String>
     for (module, imported) in &uses.imports {
         match module.as_str() {
             "zlib" => add("nsh_std_zlib".into()),
-            // Shaders are `nsh`'s `Shader` element.
+            // Shaders are `nsh`'s shader elements.
             "nsh" => match imported {
                 nsh_bundler::Imported::All => add("nsh_feature_shader".into()),
                 nsh_bundler::Imported::Names(names) => {
-                    if names.iter().any(|n| n == "Shader") {
+                    if names.iter().any(|n| SHADER_ELEMENTS.contains(&n.as_str())) {
                         add("nsh_feature_shader".into());
                     }
                 }
