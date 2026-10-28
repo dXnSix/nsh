@@ -191,6 +191,16 @@ Effects, transitions and page shaders sit on the same program, layer and rendere
 - **Pages and dialogs.** `transitionShader` (`NavShaderSpec`) compiles into a `Transition` layer sent as
   `MountItem::NavShader { id, shader }` (350 ms by default); the platform draws a push, pop, presentation or dismissal
   through it, the lower side `from` and the upper `to`.
+- **Android** (API 29 and later; Android 9 shows the children as they are). `Pictures.java` records the children
+  into a `RenderNode`, renders it with a `HardwareRenderer` into an `ImageReader` and hands the rows to
+  `Native.shaderInput`; `libnsh` drops a picture equal to the input's last one. `Box.java` takes the role, overflow
+  and inputs from the `SHADER` opcode: an effect pictures its children when they are invalidated or the core marks
+  them (`SHADER_INPUT`) and draws its frame in `dispatchDraw` instead of them (touches and accessibility still reach
+  them); a backdrop is pictured before every draw (`Backdrop.behind`); a transition pictures `from` before the batch
+  (`SHADER_TRANSITION`) and shows it until the first frame. Screen layers draw over the app's view (`NshView`);
+  dialogs, their own windows, are outside. Pages and dialogs (`NAV_SHADER`): `StackBox` and `ModalHost` run a
+  `NavTransition.java` overlay; `nsh.progress` goes through one more slot of the layer, run by a clock of the
+  platform's, 0 to 1 on push and present, 1 to 0 on pop and dismiss.
 
 ## Pitfalls
 
