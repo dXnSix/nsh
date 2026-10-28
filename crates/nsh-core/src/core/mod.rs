@@ -3116,7 +3116,7 @@ impl<M: TextEngine> Core<M> {
             let compiled = match self.shaders.get(&hash) {
                 Some(Ok(shader)) if shader.source() == &*spec.source => Ok(shader.clone()),
                 _ => {
-                    let compiled = crate::shader::Shader::compile(&spec.source);
+                    let compiled = crate::shader::compile_source(&spec.source);
                     if self.shaders.len() >= 64 {
                         self.shaders.clear();
                     }
@@ -3284,6 +3284,7 @@ impl<M: TextEngine> Core<M> {
         let program = state.shader.clone().or_else(|| {
             (transition && state.fallback == crate::TransitionFallback::Fade)
                 .then(crate::shader::crossfade)
+                .flatten()
         });
         let layer = program.map(|shader| {
             let mut warnings = Vec::new();

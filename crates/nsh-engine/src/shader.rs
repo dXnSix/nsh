@@ -1066,8 +1066,12 @@ mod tests {
         };
         let mut view = ShaderView::default();
         view.set_size(size(px(1.0), px(1.0)), 1.0);
-        let fade = ShaderLayer::new(nsh_core::shader::crossfade(), &[], &mut Vec::new())
-            .with_role(ShaderRole::Transition);
+        let fade = ShaderLayer::new(
+            nsh_core::shader::crossfade().expect("compiles"),
+            &[],
+            &mut Vec::new(),
+        )
+        .with_role(ShaderRole::Transition);
         view.set_layer(Some(Arc::new(fade)));
         let start = Instant::now();
         assert!(!view.replaces_children(start), "no transition runs yet");
