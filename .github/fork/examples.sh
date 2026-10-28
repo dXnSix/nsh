@@ -62,11 +62,14 @@ case "$target" in
   # yet) and its Tab order (a desktop's, which the device does not follow).
   # On the runner, animations does not end in 30 s, and network's `fetch()`,
   # far down its page, did not scroll into the emulator's 320 × 640 (the
-  # request itself is the engine's, run on iOS and the web).
+  # request itself is the engine's, run on iOS and the web). Text-view runs
+  # its Text View demo: a press on the chat's featured cards starts no reply
+  # on Android (its chips do), with the test's clock and without.
   android)
     gallery=(context-menu-press device error-boundary gestures links list-search mention menus
-      navigation photos press shaders storage text-view timers)
+      navigation photos press shaders storage timers)
     filtered=("environment appearance" "form the Input demo" "form a disabled field"
+      "text-view the Text View demo"
       "controls switch" "controls check" "controls a radio picks" "controls choice cards and sized"
       "controls tabs show" "controls collapsible" "controls accordion" "controls progress bar"
       "controls uploads" "controls stepped setup" "controls slider" "controls equalizer"
