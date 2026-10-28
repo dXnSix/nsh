@@ -28,6 +28,9 @@ use crate::{
 const TAP: Duration = Duration::from_millis(60);
 /// The time between typed keys.
 const KEY: Duration = Duration::from_millis(80);
+/// How long a typed key may take to land in the input before the next one
+/// is typed anyway.
+const KEY_LANDS: Duration = Duration::from_millis(600);
 /// A finger's moves, a display frame apart.
 const FRAME: Duration = Duration::from_millis(16);
 /// How far a finger moves in one frame at most, in points.
@@ -189,10 +192,28 @@ impl Native for IosNative {
     fn type_text(&self, text: &str) {
         // As the software keyboard types, a character at a time, at a
         // quick typist's pace: a controlled input's value comes back from
-        // the app between keys, as it does on a device.
+        // the app between keys, as it does on a device. Each key waits
+        // for the one before it to land in the input: the simulator's
+        // keyboard drops a key typed while it still handles the previous
+        // one, the second of two equal keys most often ("hello" became
+        // "HELO" in a controlled input on a slow runner).
         for ch in text.chars() {
+            let before = self
+                .on_main(|_, window| synth::focused_text(window))
+                .flatten();
             let s = ch.to_string();
             self.on_main(move |_, window| synth::insert_text(window, &s));
+            let deadline = std::time::Instant::now() + KEY_LANDS;
+            loop {
+                std::thread::sleep(KEY / 4);
+                let now = self
+                    .on_main(|_, window| synth::focused_text(window))
+                    .flatten();
+                // An input that refuses the key (`maxLength`) never changes.
+                if now != before || std::time::Instant::now() >= deadline {
+                    break;
+                }
+            }
             std::thread::sleep(KEY);
         }
     }
