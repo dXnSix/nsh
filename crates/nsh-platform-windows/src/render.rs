@@ -862,7 +862,7 @@ pub(crate) fn drawn_area(view: &NshView) -> Option<D2D_RECT_F> {
     let state = view.state();
     let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
     // A point more for the antialiased edges.
-    let o = crate::decor::outset(&state) + 1.0;
+    let o = crate::decor::outset(&state).max(crate::shader::overflow(&state)) + 1.0;
     let mut area = D2D_RECT_F {
         left: -o,
         top: -o,
@@ -910,6 +910,7 @@ pub(crate) fn drawn_area(view: &NshView) -> Option<D2D_RECT_F> {
 /// bounds, the children, the hosted items, the scroll indicator, the
 /// border and outline.
 pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) {
+    crate::shader::take_backdrop(cx, view);
     let state = view.state();
     crate::decor::draw_backdrop(cx, &state);
     crate::decor::draw_background(cx, &state);
@@ -934,27 +935,31 @@ pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) {
         cx.pop();
     }
     let natives = state.natives.clone();
+    let effect = crate::shader::effect(&state);
     drop(state);
-    // Inside a clip (a scroll view's content), children out of sight are
-    // left out: drawing them would issue their commands for nothing.
-    let visible = if clip { cx.visible() } else { None };
-    view.with_children(|children| {
-        for child in children {
-            let origin = {
-                let s = child.state();
-                view.state().child_origin(s.frame, s.shift)
-            };
-            if let Some(visible) = &visible
-                && hidden_by_clips(child, world, origin, visible)
-            {
-                if cx.records {
-                    child.set_painted(None);
+    // An effect's children are its shader's content.
+    if !effect || !crate::shader::draw_effect(cx, view, world) {
+        // Inside a clip (a scroll view's content), children out of sight
+        // are left out: drawing them would issue their commands for nothing.
+        let visible = if clip { cx.visible() } else { None };
+        view.with_children(|children| {
+            for child in children {
+                let origin = {
+                    let s = child.state();
+                    view.state().child_origin(s.frame, s.shift)
+                };
+                if let Some(visible) = &visible
+                    && hidden_by_clips(child, world, origin, visible)
+                {
+                    if cx.records {
+                        child.set_painted(None);
+                    }
+                    continue;
                 }
-                continue;
+                draw_view(cx, child, world, origin);
             }
-            draw_view(cx, child, world, origin);
-        }
-    });
+        });
+    }
     cx.set_transform(world);
     for native in &natives {
         let r = native.rect;
@@ -1121,6 +1126,111 @@ fn draw_flat(cx: &mut DrawCx<'_>, view: &mut NshView, base: Mat4) {
     s.anim = saved_anim;
     s.live = saved_live;
     s.fade = saved_fade;
+}
+
+/// Draws with `f` into `target` (a target bitmap of `scale` pixels per
+/// point, cleared first) outside the window's pass: a shader transition's
+/// picture of its children before a batch changes them. False when drawing
+/// failed.
+pub(crate) fn draw_offscreen(
+    surface: &Rc<Surface>,
+    target: &ID2D1Image,
+    scale: f32,
+    f: impl FnOnce(&mut DrawCx<'_>),
+) -> bool {
+    let Ok(gfx) = gfx::get() else { return false };
+    crate::decor::layer::with_context(&gfx, |dc| {
+        // SAFETY: COM calls on a context nobody else draws with; `EndDraw`
+        // follows `BeginDraw`.
+        unsafe {
+            dc.SetTarget(target);
+            dc.SetDpi(96.0 * scale, 96.0 * scale);
+            dc.BeginDraw();
+            dc.SetTransform(&Matrix3x2::identity());
+            dc.Clear(Some(&color_f(Color::TRANSPARENT)));
+        }
+        match DrawCx::with_dc(&gfx, dc, scale, crate::system::dark(surface), surface.now()) {
+            Ok(mut cx) => {
+                // Nothing behind it to read, no window to place items in.
+                cx.offscreen = true;
+                cx.backdrop = false;
+                f(&mut cx);
+            }
+            Err(err) => log::debug!("render: offscreen pass not started: {err}"),
+        }
+        // SAFETY: closes the `BeginDraw` above.
+        unsafe { dc.EndDraw(None, None) }.is_ok()
+    })
+    .unwrap_or(false)
+}
+
+/// A bitmap of `size` pixels Direct2D draws into (`scale` pixels per
+/// point).
+pub(crate) fn target_bitmap(
+    dc: &ID2D1DeviceContext,
+    size: (u32, u32),
+    scale: f32,
+) -> windows::core::Result<ID2D1Bitmap1> {
+    bitmap(dc, size, scale, D2D1_BITMAP_OPTIONS_TARGET)
+}
+
+fn bitmap(
+    dc: &ID2D1DeviceContext,
+    (width, height): (u32, u32),
+    scale: f32,
+    options: windows::Win32::Graphics::Direct2D::D2D1_BITMAP_OPTIONS,
+) -> windows::core::Result<ID2D1Bitmap1> {
+    // SAFETY: a COM call on the live context.
+    unsafe {
+        dc.CreateBitmap(
+            D2D_SIZE_U { width, height },
+            None,
+            0,
+            &D2D1_BITMAP_PROPERTIES1 {
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
+                dpiX: 96.0 * scale,
+                dpiY: 96.0 * scale,
+                bitmapOptions: options,
+                colorContext: std::mem::ManuallyDrop::new(None),
+            },
+        )
+    }
+}
+
+/// Reads `rect` of `source` (a bitmap of `dc`'s device) back, its rows
+/// packed: premultiplied BGRA.
+pub(crate) fn read_back(
+    dc: &ID2D1DeviceContext,
+    source: &ID2D1Bitmap1,
+    rect: D2D_RECT_U,
+) -> windows::core::Result<Pixels> {
+    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+    let read = bitmap(
+        dc,
+        (width, height),
+        1.0,
+        D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+    )?;
+    // SAFETY: COM calls on bitmaps of the live device; the mapped memory
+    // is copied before `Unmap`.
+    unsafe {
+        read.CopyFromBitmap(Some(&D2D_POINT_2U { x: 0, y: 0 }), source, Some(&rect))?;
+        let mapped = read.Map(D2D1_MAP_OPTIONS_READ)?;
+        let mut data = Vec::with_capacity((width * height * 4) as usize);
+        for row in 0..height {
+            let start = mapped.bits.add((row * mapped.pitch) as usize);
+            data.extend_from_slice(std::slice::from_raw_parts(start, (width * 4) as usize));
+        }
+        read.Unmap()?;
+        Ok(Pixels {
+            width,
+            height,
+            data,
+        })
+    }
 }
 
 /// Draws the surface's window: the whole tree, then presents it.
@@ -1471,8 +1581,8 @@ fn draw_into(
     })
 }
 
-/// Pixels of a snapshot: BGRA, premultiplied, `width * 4` bytes per row.
-#[cfg_attr(not(feature = "dev"), allow(dead_code))]
+/// Pixels read back (a snapshot, a shader's picture): BGRA,
+/// premultiplied, `width * 4` bytes per row.
 pub(crate) struct Pixels {
     /// Width in pixels.
     pub(crate) width: u32,
@@ -1492,67 +1602,20 @@ pub(crate) fn snapshot(surface: &Rc<Surface>, scale: f32) -> windows::core::Resu
         (w * scale).round().max(1.0) as u32,
         (h * scale).round().max(1.0) as u32,
     );
-    let size = D2D_SIZE_U {
-        width: px.0,
-        height: px.1,
-    };
-    let format = D2D1_PIXEL_FORMAT {
-        format: DXGI_FORMAT_B8G8R8A8_UNORM,
-        alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-    };
-    // SAFETY: COM calls on the live context; the mapped memory is copied
-    // before `Unmap`.
-    unsafe {
-        let target = gfx.dc.CreateBitmap(
-            size,
-            None,
-            0,
-            &D2D1_BITMAP_PROPERTIES1 {
-                pixelFormat: format,
-                dpiX: 96.0 * scale,
-                dpiY: 96.0 * scale,
-                bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET,
-                colorContext: std::mem::ManuallyDrop::new(None),
-            },
-        )?;
-        // Web views are not in it: their pages are composed by the system.
-        let drawn = draw_into(surface, &gfx, &target, scale, true, None, None)?;
-        drop(drawn);
-        let read = gfx.dc.CreateBitmap(
-            size,
-            None,
-            0,
-            &D2D1_BITMAP_PROPERTIES1 {
-                pixelFormat: format,
-                dpiX: 96.0 * scale,
-                dpiY: 96.0 * scale,
-                bitmapOptions: D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-                colorContext: std::mem::ManuallyDrop::new(None),
-            },
-        )?;
-        read.CopyFromBitmap(
-            Some(&D2D_POINT_2U { x: 0, y: 0 }),
-            &target,
-            Some(&D2D_RECT_U {
-                left: 0,
-                top: 0,
-                right: px.0,
-                bottom: px.1,
-            }),
-        )?;
-        let mapped = read.Map(D2D1_MAP_OPTIONS_READ)?;
-        let mut data = Vec::with_capacity((px.0 * px.1 * 4) as usize);
-        for row in 0..px.1 {
-            let start = mapped.bits.add((row * mapped.pitch) as usize);
-            data.extend_from_slice(std::slice::from_raw_parts(start, (px.0 * 4) as usize));
-        }
-        read.Unmap()?;
-        Ok(Pixels {
-            width: px.0,
-            height: px.1,
-            data,
-        })
-    }
+    let target = target_bitmap(&gfx.dc, px, scale)?;
+    // Web views are not in it: their pages are composed by the system.
+    let drawn = draw_into(surface, &gfx, &target, scale, true, None, None)?;
+    drop(drawn);
+    read_back(
+        &gfx.dc,
+        &target,
+        D2D_RECT_U {
+            left: 0,
+            top: 0,
+            right: px.0,
+            bottom: px.1,
+        },
+    )
 }
 
 #[cfg(test)]
