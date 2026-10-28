@@ -37,6 +37,8 @@ final class StackBox extends FrameLayout implements Node {
     /** The screens currently shown, bottom to top. */
     private final List<ScreenBox> shown = new ArrayList<>();
     private Animator transition;
+    /** The page transition through a shader playing, if any. */
+    private NavTransition navTransition;
 
     StackBox(Context context, Mounter mounter, int id) {
         super(context);
@@ -84,16 +86,60 @@ final class StackBox extends FrameLayout implements Node {
         shown.clear();
         shown.addAll(desired);
         if (transition != null) transition.cancel();
+        if (navTransition != null) navTransition.cancel();
+        navTransition = null;
         if (oldTop == newTop || oldTop == null || newTop == null) {
             settle(leaving);
             return;
         }
+        if (shaderAnimate(pushing ? oldTop : newTop, pushing ? newTop : oldTop, pushing, leaving)) return;
         int animation = pushing ? newTop.animation : oldTop.animation;
         if (animation == 2) {
             settle(leaving);
             return;
         }
         animate(pushing ? oldTop : newTop, pushing ? newTop : oldTop, pushing, animation == 1, 0, leaving);
+    }
+
+    /**
+     * `upper` comes over `lower` (`push`) or goes from it through its
+     * `transitionShader`, once the screens are laid out; false where none
+     * runs.
+     */
+    private boolean shaderAnimate(ScreenBox lower, ScreenBox upper, boolean push, List<ScreenBox> leaving) {
+        if (!mounter.navShaders.get(upper.id) || !Pictures.supported()) return false;
+        // What showed stays until the shader's first frame covers it.
+        lower.setVisibility(push ? VISIBLE : INVISIBLE);
+        upper.setVisibility(push ? INVISIBLE : VISIBLE);
+        for (ScreenBox s : new ScreenBox[] {lower, upper}) {
+            s.setTranslationX(0);
+            s.setAlpha(1);
+        }
+        View[] both = {lower, upper}, one = {lower};
+        getViewTreeObserver().addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
+            @Override
+            public boolean onPreDraw() {
+                getViewTreeObserver().removeOnPreDrawListener(this);
+                if (shown.isEmpty() || top() != (push ? upper : lower)) return true;
+                NavTransition t = NavTransition.start(mounter, StackBox.this, id, upper.id, one, both,
+                        !push, () -> {
+                            lower.setVisibility(INVISIBLE);
+                            upper.setVisibility(INVISIBLE);
+                        }, () -> {
+                            navTransition = null;
+                            settle(leaving);
+                        });
+                if (t == null) {
+                    // No picture: the screens change at once.
+                    settle(leaving);
+                    return true;
+                }
+                navTransition = t;
+                return true;
+            }
+        });
+        invalidate();
+        return true;
     }
 
     /** Only the top screen is visible; removed screens leave. */
@@ -232,7 +278,11 @@ final class StackBox extends FrameLayout implements Node {
         popped.add(upper.id);
         List<ScreenBox> leaving = new ArrayList<>();
         leaving.add(upper);
-        if (upper.animation == 2) {
+        if (navTransition != null) navTransition.cancel();
+        navTransition = null;
+        if (progress == 0 && shaderAnimate(lower, upper, false, leaving)) {
+            // Through its shader.
+        } else if (upper.animation == 2) {
             settle(leaving);
         } else {
             animate(lower, upper, false, upper.animation == 1, progress, leaving);
