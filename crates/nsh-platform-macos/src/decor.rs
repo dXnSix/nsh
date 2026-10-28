@@ -537,7 +537,7 @@ impl Decor {
 
         // A shader's frames fill the view's shape, as a background does
         // (clipped even when the children are not).
-        if let Some(shader) = s.shader.as_ref() {
+        if let Some(shader) = s.shader.as_ref().filter(|s| s.fills()) {
             let l = shader.layer();
             l.setFrame(local);
             set_corners(l, r, continuous);
@@ -722,7 +722,7 @@ fn shape_of(s: &ViewState, kind: Kind) -> Shape {
         tint: style.tint_color,
         outline: style.outline,
         effects: style.effects.clone(),
-        shader: s.shader.is_some(),
+        shader: s.shader.as_ref().is_some_and(|s| s.fills()),
     }
 }
 
