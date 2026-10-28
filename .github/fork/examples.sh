@@ -47,7 +47,9 @@ case "$target" in
   # toasts (a mouse, a keyboard or a desktop's windows), picker (the
   # system's photo picker stays open over the tests after it); environment
   # runs its appearance only (its rotation expects a 390 × 844 window).
-  # Controls runs all but five tests: its number input's lock, a code's
+  # Form runs its Input demo and its disabled field: the sign-up form and the
+  # search field set the viewport, which an emulator keeps at its device's
+  # size. Controls runs all but five tests: its number input's lock, a code's
   # Clear and a PIN's Change PIN (presses right after typing, which do not
   # land on the emulator), its pasted codes (Android's tests do not paste
   # yet) and its Tab order (a desktop's, which the device does not follow).
@@ -55,12 +57,13 @@ case "$target" in
   # far down its page, did not scroll into the emulator's 320 × 640 (the
   # request itself is the engine's, run on iOS and the web).
   android)
-    gallery=(context-menu-press device error-boundary form gestures links
-      list-search mention menus navigation photos press shaders storage text-view timers)
-    filtered=("environment appearance" "controls switch" "controls check" "controls a radio picks"
-      "controls choice cards and sized" "controls tabs show" "controls collapsible" "controls accordion"
-      "controls progress bar" "controls uploads" "controls stepped setup" "controls slider"
-      "controls equalizer" "controls cart's quantities" "controls segmented control")
+    gallery=(context-menu-press device error-boundary gestures links list-search mention menus
+      navigation photos press shaders storage text-view timers)
+    filtered=("environment appearance" "form the Input demo" "form a disabled field"
+      "controls switch" "controls check" "controls a radio picks" "controls choice cards and sized"
+      "controls tabs show" "controls collapsible" "controls accordion" "controls progress bar"
+      "controls uploads" "controls stepped setup" "controls slider" "controls equalizer"
+      "controls cart's quantities" "controls segmented control")
     ;;
   # Left out: context-menu, dock, hover, overlays, resizable, toasts (a
   # mouse or a desktop's windows), picker (the system's photo picker);
