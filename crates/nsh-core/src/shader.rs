@@ -586,7 +586,7 @@ impl Shader {
             (Vec::new(), 0)
         };
         let animated = reads_time(&module);
-        let inputs = reads_inputs(&module);
+        let inputs = reads_inputs(&module, &info);
         Ok(Shader(Arc::new(Program {
             source: source.into(),
             hash: source_hash(source),
@@ -864,26 +864,26 @@ fn uniform_type(module: &Module, ty: Handle<naga::Type>) -> Option<UniformType> 
     })
 }
 
-/// The pictures the app's functions read: the `sample_*` functions they
-/// call.
-fn reads_inputs(module: &Module) -> ShaderInputs {
-    let mut inputs = ShaderInputs::default();
-    let ours = |f: &naga::Function| {
-        f.name
-            .as_deref()
-            .is_some_and(|n| n.starts_with("nsh_") || n.starts_with("sample_"))
+/// The pictures the fragment stage reads: the textures `nsh_fragment` uses,
+/// through `shade` and whatever it calls (naga's analysis follows calls).
+fn reads_inputs(module: &Module, info: &ModuleInfo) -> ShaderInputs {
+    let Some(entry) = module
+        .entry_points
+        .iter()
+        .position(|e| e.name == "nsh_fragment")
+    else {
+        return ShaderInputs::default();
     };
-    for (_, function) in module.functions.iter().filter(|(_, f)| !ours(f)) {
-        for (_, expression) in function.expressions.iter() {
-            if let Expression::CallResult(called) = *expression
-                && let Some(name) = module.functions[called].name.as_deref()
-                && let Some(input) = ShaderInput::ALL.into_iter().find(|i| i.function() == name)
-            {
-                inputs = inputs.with(input);
-            }
-        }
-    }
-    inputs
+    let uses = info.get_entry_point(entry);
+    module
+        .global_variables
+        .iter()
+        .filter(|&(handle, _)| !uses[handle].is_empty())
+        .filter_map(|(_, global)| {
+            let name = global.name.as_deref()?;
+            ShaderInput::ALL.into_iter().find(|i| i.texture() == name)
+        })
+        .fold(ShaderInputs::default(), ShaderInputs::with)
 }
 
 /// Whether any function reads `nsh.time`.
@@ -1345,6 +1345,27 @@ fn shade(uv: vec2f) -> vec4f {
         // Comments do not declare uniforms.
         let commented = "// struct Uniforms { a: f32 }\n/* struct Uniforms */ fn shade(uv: vec2f) -> vec4f { return vec4f(1.0); }";
         assert!(Shader::compile(commented).unwrap().uniforms().is_empty());
+    }
+
+    #[test]
+    fn inputs_are_the_pictures_shade_reaches() {
+        let inputs = |source: &str| Shader::compile(source).unwrap().inputs();
+        assert!(inputs("fn shade(uv: vec2f) -> vec4f { return vec4f(1.0); }").is_empty());
+        // Through a helper, whatever its name.
+        let helper = inputs(
+            "fn sample_custom(uv: vec2f) -> vec4f { return sample_content(uv) * 0.5; }\n\
+             fn shade(uv: vec2f) -> vec4f { return sample_custom(uv) + sample_to(uv); }",
+        );
+        assert_eq!(
+            helper.iter().collect::<Vec<_>>(),
+            [ShaderInput::Content, ShaderInput::To]
+        );
+        // A helper `shade` never calls reads nothing.
+        let unused = inputs(
+            "fn unused(uv: vec2f) -> vec4f { return sample_backdrop(uv); }\n\
+             fn shade(uv: vec2f) -> vec4f { return sample_from(uv); }",
+        );
+        assert_eq!(unused.iter().collect::<Vec<_>>(), [ShaderInput::From]);
     }
 
     #[test]
