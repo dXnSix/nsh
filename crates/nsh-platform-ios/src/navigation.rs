@@ -20,7 +20,8 @@ use std::{
 use block2::RcBlock;
 use nsh_core::{
     Color, EdgeInsets, EventKind, EventPayload, HeaderSystemItem, ModalAnimation, ModalConfig,
-    ModalPresentation, NodeId, PayloadValue, Points, ScreenAnimation, ScreenConfig, Size,
+    ModalPresentation, NavShader, NodeId, PayloadValue, Points, ScreenAnimation, ScreenConfig,
+    Size,
 };
 use nsh_engine::EngineControl;
 use objc2::{
@@ -853,10 +854,16 @@ impl StackHost {
 
     /// Shows the app's screens: pushes, pops or replaces as needed.
     /// `leaving` is the transition of the screen on top until now.
+    /// `shaders` are the `transitionShader`s of the screen that comes and of
+    /// the one on top until now: through one, the screens change at once,
+    /// after `before` was given the navigation controller's view, the
+    /// shader and whether it pops.
     pub(crate) fn reconcile(
         &self,
         screens: &[(NodeId, Retained<ScreenController>, ScreenAnimation)],
         leaving: Option<ScreenAnimation>,
+        shaders: (Option<&NavShader>, Option<&NavShader>),
+        before: impl FnOnce(&UIView, &NavShader, bool),
     ) {
         let desired: Vec<Retained<UIViewController>> = screens
             .iter()
@@ -883,8 +890,20 @@ impl StackHost {
             leaving
         }
         .unwrap_or_default();
-        let animated = top_changed && current.count() > 0 && animation == ScreenAnimation::Default;
-        if top_changed && current.count() > 0 && animation == ScreenAnimation::Fade {
+        let shader = if pushing { shaders.0 } else { shaders.1 }
+            .filter(|_| top_changed && current.count() > 0);
+        if let (Some(shader), Some(view)) = (shader, self.nav.view()) {
+            before(&view, shader, !pushing);
+        }
+        let animated = shader.is_none()
+            && top_changed
+            && current.count() > 0
+            && animation == ScreenAnimation::Default;
+        if shader.is_none()
+            && top_changed
+            && current.count() > 0
+            && animation == ScreenAnimation::Fade
+        {
             let fade = CATransition::new();
             fade.setDuration(0.25);
             if let Some(view) = self.nav.view() {
@@ -1260,8 +1279,19 @@ impl ModalHost {
         }
     }
 
-    /// Presents the modal over the controller showing `from`.
-    pub(crate) fn present(&mut self, from: &UIView) {
+    /// Whether presenting it (`shown`) or dismissing it changes what shows.
+    pub(crate) fn changes(&self, shown: bool) -> bool {
+        let closed = self.controller.ivars().closed.get();
+        if shown {
+            !self.presented || closed
+        } else {
+            self.presented && !closed
+        }
+    }
+
+    /// Presents the modal over the controller showing `from` (at once
+    /// when `at_once`: a shader draws its coming).
+    pub(crate) fn present(&mut self, from: &UIView, at_once: bool) {
         if self.presented && !self.controller.ivars().closed.get() {
             return;
         }
@@ -1339,7 +1369,7 @@ impl ModalHost {
         controller.setOverrideUserInterfaceStyle(crate::system::appearance());
         presenter.presentViewController_animated_completion(
             controller,
-            c.animation != ModalAnimation::None,
+            c.animation != ModalAnimation::None && !at_once,
             None,
         );
         self.presented = true;
@@ -1351,8 +1381,9 @@ impl ModalHost {
         self.config = config;
     }
 
-    /// Dismisses the modal; `done` runs when it is gone.
-    pub(crate) fn dismiss(&mut self, done: impl Fn() + 'static) {
+    /// Dismisses the modal (at once when `at_once`: a shader draws its
+    /// going); `done` runs when it is gone.
+    pub(crate) fn dismiss(&mut self, at_once: bool, done: impl Fn() + 'static) {
         if !self.presented {
             return;
         }
@@ -1362,7 +1393,7 @@ impl ModalHost {
             return;
         }
         let block = block2::RcBlock::new(done);
-        let animated = self.config.animation != ModalAnimation::None;
+        let animated = self.config.animation != ModalAnimation::None && !at_once;
         // Through the presenter: a modal that presents another one (a sheet
         // over it) would otherwise only dismiss that one, and stay on
         // screen with its content already gone (closing a sheet and its
