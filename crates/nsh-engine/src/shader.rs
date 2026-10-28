@@ -432,6 +432,8 @@ pub struct ShaderView {
     progress: Option<f32>,
     /// The transition running: since when and for how long.
     transition: Option<(Instant, Duration)>,
+    /// It runs backwards: `nsh.progress` goes from 1 to 0.
+    backwards: bool,
 }
 
 impl ShaderView {
@@ -573,7 +575,16 @@ impl ShaderView {
     /// `duration` from `now` (the platform gives the `from` picture first).
     pub fn start_transition(&mut self, duration: Duration, now: Instant) {
         self.transition = Some((now, duration));
+        self.backwards = false;
         self.dirty = true;
+    }
+
+    /// Starts a transition that runs backwards, `nsh.progress` from 1 to 0
+    /// (a page that leaves, a dialog that closes: the same shader as their
+    /// coming, the other way).
+    pub fn start_transition_backwards(&mut self, duration: Duration, now: Instant) {
+        self.start_transition(duration, now);
+        self.backwards = true;
     }
 
     /// Whether a transition runs at `now`; one that ended lets its `from`
@@ -609,7 +620,8 @@ impl ShaderView {
     fn progress_at(&self, now: Instant) -> f32 {
         if let Some((since, duration)) = self.transition {
             let t = now.saturating_duration_since(since).as_secs_f32();
-            return (t / duration.as_secs_f32().max(f32::MIN_POSITIVE)).clamp(0.0, 1.0);
+            let p = (t / duration.as_secs_f32().max(f32::MIN_POSITIVE)).clamp(0.0, 1.0);
+            return if self.backwards { 1.0 - p } else { p };
         }
         self.progress
             .or_else(|| self.layer.as_ref().map(|l| l.progress.0))
