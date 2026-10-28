@@ -144,11 +144,15 @@ final class TestAgent {
         }
     }
 
-    /** Where touches go: the dialog shown over the app, else the app's window. */
+    /**
+     * Where touches go: the system dialog shown over the app, else the
+     * app's topmost `Dialog` (a window of its own), else the app's window.
+     */
     private static View target(NshView host) {
         Dialog d = shownDialog;
         if (d != null && d.isShowing() && d.getWindow() != null) return d.getWindow().getDecorView();
-        return host.getRootView();
+        View modal = host.mounter().topModalWindow();
+        return modal != null ? modal : host.getRootView();
     }
 
     /** Types `text` into the focused field, key by key where keys type it. */
