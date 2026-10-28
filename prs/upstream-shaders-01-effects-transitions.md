@@ -67,6 +67,7 @@ Replies:
 - 2026-10-28: 01–10 force-pushed (with lease) to the fork; the three replies posted (`r4405581783`, `r4405582099`,
   `r4405582387`); the PR body updated to the one below. Re-requesting huacnlee's review through the API was refused
   (404, no write access to the repository): re-request it from the PR's Reviewers box.
+- 2026-10-28: the Windows fix pushed (owner's OK): 01 `36b23d76a`, 02 `e294b76e2`, 03–10 restacked on it.
 
 The body to paste starts below the line.
 
