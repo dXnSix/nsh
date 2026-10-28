@@ -71,9 +71,11 @@ pub struct NativeUse {
     /// It loads a module whose specifier is computed (`import(name)`),
     /// which may be any native module, whole.
     pub computed_import: bool,
-    /// It may make a shader view: it spells `shader` in a string or a
-    /// template, as the compiled `<Shader>` tags do (they pass it to
-    /// `nsh:rt`'s `element`, and the import of `Shader` is gone).
+    /// It may make a shader view: it spells a shader element's tag
+    /// (`shader`, `shadereffect`, ...) in a string or a template, as the
+    /// compiled `<Shader>` tags do (they pass it to `nsh:rt`'s `element`,
+    /// and the import of `Shader` is gone), or `transitionShader`, a page's
+    /// or a dialog's prop, as a key or a string.
     pub shader: bool,
 }
 
@@ -107,9 +109,16 @@ struct Finder<'u, F> {
 }
 
 impl<F> Finder<'_, F> {
-    /// A string in the code: the tag of a shader view, if it is `shader`.
+    /// A string in the code: the tag of a shader view, if it is one.
     fn quoted(&mut self, value: &str) {
-        if value == "shader" {
+        const TAGS: [&str; 5] = [
+            "shader",
+            "shadereffect",
+            "shadertransition",
+            "screeneffect",
+            "screentransition",
+        ];
+        if TAGS.contains(&value) || value == "transitionShader" {
             self.uses.shader = true;
         }
     }
@@ -194,8 +203,12 @@ impl<'a, F: Fn(&str) -> bool> Visit<'a> for Finder<'_, F> {
 
     // Members (`globalThis.crypto`) and keys (`({ crypto: c } = globalThis)`,
     // `const { CryptoKey } = self`).
+    // A key `transitionShader` is a page's or a dialog's shader.
     fn visit_identifier_name(&mut self, it: &IdentifierName<'a>) {
         self.spelled(it.name.as_str());
+        if it.name == "transitionShader" {
+            self.uses.shader = true;
+        }
     }
 
     fn visit_string_literal(&mut self, it: &StringLiteral<'a>) {
@@ -314,6 +327,10 @@ mod tests {
     fn a_shader_tag_counts_as_a_shader() {
         assert!(uses("_$element(\"shader\");").shader);
         assert!(uses("u(`shader`);").shader);
+        assert!(uses("_$element(\"shadertransition\");").shader);
+        assert!(uses("_$c(NavPage, { transitionShader: wipe });").shader);
+        assert!(uses("_$c(Dialog, { \"transitionShader\": wipe });").shader);
+        assert!(!uses("const options = { shader: wipe };").shader);
         assert!(!uses("const shader = view;").shader);
     }
 
