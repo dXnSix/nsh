@@ -184,7 +184,10 @@ jobs:
           # 1080 × 2400) is seven times the pixels for the software renderer,
           # and the tests ran out of time.
           disk-size: 6G
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          # No guest Vulkan: wgpu would pick it, and the emulator's
+          # SwiftShader Vulkan stalled on the shader tests and took the
+          # emulator down; GLES is what an emulator on a Mac gives wgpu.
+          emulator-options: -no-window -gpu swiftshader_indirect -feature -Vulkan -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: bash .github/fork/examples.sh android
 
