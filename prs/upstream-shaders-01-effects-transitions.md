@@ -9,7 +9,7 @@ Draft of a pull request for `longbridge/nsh`, posted as [longbridge/nsh#682](htt
   removed when the fork took upstream's `Shader` from #517): every part now sits on upstream's `Shader`, its WGSL
   contract and its wgpu renderer.
 - Series: `01-effects-transitions` (this) → `02-page-dialog-shaders` → one branch per platform on 02 (`03-macos`,
-  `04-ios` on 03, `05-android`, `06-web`, `07-windows`, `08-linux`, `09-gpui`) → `10-gallery-docs` on 02. Open them in
+  `04-ios`, `05-android`, `06-web`, `07-windows`, `08-linux`, `09-gpui`) → `10-gallery-docs` on 02. Open them in
   that order; each platform PR is independent of the others.
 - Source: the fork's port on `sync/upstream-478737b1`, commit `bf22a9f47`, with the commit message rewritten for
   upstream and a compat case added.
