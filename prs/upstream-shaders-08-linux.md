@@ -8,7 +8,8 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
   `git rebase --onto upstream/main pr/shaders/02-page-dialog-shaders pr/shaders/08-linux`).
 - Not compiled on the Mac this was prepared on (no GTK): the Linux workflow is its check.
 
-- Checked locally: nightly rustfmt only (no GTK on this Mac); the code applied without conflicts. The Linux workflow compiles and tests it.
+- Checked: nightly rustfmt locally (this Mac cannot build Linux code); the fork's Linux workflow on this branch at
+  `ba289971` passed (clippy and tests): https://github.com/dXnSix/nsh/actions/runs/40755883271
 
 The body to paste starts below the line.
 
@@ -48,7 +49,7 @@ pages' and dialogs' `transitionShader` (#682, #[02 PR]) as `nsh_engine::shader` 
 
 - [x] I have read the [CONTRIBUTING](../CONTRIBUTING.md) document and followed the guidelines.
 - [x] Reviewed the changes in this PR and confirmed AI generated code (if any) is accurate.
-- [ ] Passed `cargo +nightly fmt` on the changed files; clippy and tests run on Linux only (the Linux workflow).
+- [x] Passed `cargo +nightly fmt` on the changed files, and the Linux workflow's clippy and tests (on the fork).
 - [x] Changes to what apps use keep what released versions shipped and come with a case in `tests/compat/`
   (`cargo xtask compat`): no new API here; the elements' cases came with #682 and #[02 PR].
 - [ ] Ran the related `examples/gallery` demos on Linux.
