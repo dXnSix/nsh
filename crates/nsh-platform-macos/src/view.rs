@@ -1042,6 +1042,11 @@ impl NshView {
         self.ivars().state.borrow_mut()
     }
 
+    /// Its state, to change, unless it is borrowed.
+    pub(crate) fn try_state_mut(&self) -> Option<RefMut<'_, ViewState>> {
+        self.ivars().state.try_borrow_mut().ok()
+    }
+
     /// Node id.
     pub(crate) fn id(&self) -> NodeId {
         self.state().id
@@ -1156,6 +1161,7 @@ impl NshView {
     pub(crate) fn changed(&self) {
         self.restyle();
         self.redraw();
+        crate::shader::ui_changed(self);
     }
 
     /// Its style changed: the decoration is applied again (the content is
@@ -1238,6 +1244,7 @@ impl NshView {
     /// Part of what it draws changed (`rect`, in its own coordinates, y
     /// down): only that is drawn again (a canvas's animated values).
     pub(crate) fn redraw_rect(&self, rect: nsh_core::Bounds<nsh_core::Points>) {
+        crate::shader::ui_changed(self);
         let Some(layer) = self.content_layer() else {
             return;
         };
@@ -1290,6 +1297,7 @@ impl NshView {
     pub(crate) fn moved(&self) {
         self.place();
         crate::decor::apply(self);
+        crate::shader::ui_changed(self);
     }
 
     /// Places the view at its frame (with its parent's mirroring and its
