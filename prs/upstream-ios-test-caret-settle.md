@@ -2,13 +2,14 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/ios/02-test-caret-settle`, one commit on `upstream/main` `64c066e5` (pushed to the fork, `dXnSix/nsh`, 2026-10-28). Independent of the
+- Branch: `pr/ios/02-test-caret-settle`, one commit on `upstream/main` `ba289971`. Independent of the
   other two iOS test fixes (`pr/ios/01-test-typing`, `02-test-caret-settle`, `03-test-scroll`): each applies on its own
   and they merge in any order.
 - Source: the fork's `c60c01322` on `sync/upstream-478737b1` (fork PR #91), found while running the gallery's tests on the
   iOS simulator and the fork's iOS CI runner.
-- Checked locally on `64c066e5`: the Catalyst clippy run (`nsh-platform-ios/embed`, `dev`, `-D warnings`) and nightly
+- Checked locally on `ba289971`: the Catalyst clippy run (`nsh-platform-ios/embed`, `dev`, `-D warnings`) and nightly
   rustfmt on the changed files. The simulator runs are the fork's, on the sync branch (below).
+- Open it from `dXnSix:pr/ios/02-test-caret-settle` into `longbridge/nsh:main`, title (upstream squash-merges): `ios: Let test steps settle while a focused input's caret blinks`.
 
 The body to paste starts below the line.
 
