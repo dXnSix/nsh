@@ -323,14 +323,20 @@ impl Mounter {
                     crate::canvas::set(surface, view, drawing.clone());
                 }
             }
-            // Effects and transitions: this platform does not draw them yet.
-            MountItem::ShaderTransition { .. }
-            | MountItem::ShaderInput { .. }
-            | MountItem::NavShader { .. } => {}
             MountItem::Shader { id, layer } => {
                 if let Some(view) = &self.get(*id) {
                     crate::shader::set(surface, view, layer.clone());
                 }
+            }
+            // A shader's pictures are taken as the window draws.
+            MountItem::ShaderInput { .. } => {}
+            MountItem::ShaderTransition { id, duration } => {
+                if let Some(view) = &self.get(*id) {
+                    crate::shader::start_transition(surface, view, *duration);
+                }
+            }
+            MountItem::NavShader { id, shader } => {
+                crate::navigation::nav_shader(surface, *id, shader.clone());
             }
             MountItem::Gestures { id, values } => {
                 if let Some(view) = &self.get(*id) {
@@ -499,9 +505,6 @@ fn redrawn(item: &MountItem) -> Redraw {
         | MountItem::Animation(_)
         | MountItem::AnimationBindings { .. }
         | MountItem::ComponentPropSlots { .. }
-        // Effects and transitions: this platform does not draw them yet.
-        | MountItem::ShaderTransition { .. }
-        | MountItem::ShaderInput { .. }
         | MountItem::NavShader { .. } => Redraw::Nothing,
         MountItem::Frame { id, .. }
         | MountItem::ViewStyle { id, .. }
@@ -516,6 +519,8 @@ fn redrawn(item: &MountItem) -> Redraw {
         | MountItem::Refreshing { id, .. }
         | MountItem::Canvas { id, .. }
         | MountItem::Shader { id, .. }
+        | MountItem::ShaderInput { id }
+        | MountItem::ShaderTransition { id, .. }
         | MountItem::ViewProps { id, .. }
         | MountItem::Input { id, .. }
         | MountItem::InputValue { id, .. }
