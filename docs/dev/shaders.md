@@ -187,6 +187,13 @@ The fork's elements on top of the same program, layer and renderer (`ShaderRole`
 - **Pages and dialogs.** `transitionShader` (`NavShaderSpec`) compiles into a `Transition` layer sent as
   `MountItem::NavShader { id, shader }` (350 ms by default); the platform draws a push, pop, presentation or dismissal
   through it, the lower side `from` and the upper `to`.
+- **Windows.** Effects and running transitions (screen ones on the root) draw their last frame instead of their
+  children, which are drawn into a target bitmap by a context of their own and read back (`render::read_back`) as
+  the window draws them, and given to the shader when their pixels changed. A transition's `from` is drawn offscreen
+  when it starts (`render::draw_offscreen`). A backdrop is read back from the window's target before the view draws
+  (partial frames draw the view's whole area, overflow included: `render::drawn_area`). Pages and dialogs: recordings
+  (`ID2D1CommandList`) of the host without and with the upper side, drawn into bitmaps and read back once by a
+  hosted `NavItem` over the stack or the root.
 
 ### On the web
 
