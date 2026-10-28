@@ -137,6 +137,22 @@ is. Views out of sight stop rendering until they show again.
 | GPUI | a frame client of its surface | a GPUI image (BGRA, straight, the view's opacity multiplied in, as canvases' pixmaps), whose replaced image leaves GPUI's atlases | views not drawn in the last frame |
 | Web | `requestAnimationFrame` | a `<canvas>` under the children | `IntersectionObserver` |
 
+### Effects and transitions
+
+Effects (`ShaderEffect`, `ScreenEffect`), transitions (`ShaderTransition`, `ScreenTransition`) and pages' and
+dialogs' `transitionShader` read pictures the platform takes of views (`ShaderView::set_input`). The table says how
+each platform that draws them does it; the others ignore `MountItem::ShaderTransition`, `ShaderInput` and `NavShader`
+(the children show as they are, pages and dialogs come with their `animation`).
+
+| Platform | Pictures | Hides the children, keeps their input | Over them | Pages and dialogs |
+|---|---|---|---|---|
+| iOS | `renderInContext:` of a view holding the children (`Decor::set_effect`, the view children are added to) without its mask, at the screen's scale; the backdrop: the window with the view's layer at opacity 0 | an empty `mask` on that view's layer (UIKit hit-tests views) | the frames' sublayer at `zPosition` 1e6, `overflow` points beyond the box; a screen's on the root view (dialogs, presented by UIKit above it, are outside) | the screens change and the dialog is presented or dismissed at once, under a layer over the window's part where the surface (the stack) is, from pictures before the change and after it (the first tick); popping and dismissing run backwards |
+
+iOS retakes an effect's pictures on the display frame after the core says they changed (`MountItem::ShaderInput`) or
+the platform changed a view in them (animated values, scrolling, image loads), at most once per frame; a transition
+pictures its children (or its running frame) as its `from` when it starts and keeps taking `to` while it runs.
+`renderInContext:` draws no video or web page, nor backdrop blur or glass.
+
 On Android the layer stays in `libnsh`: the encoder sends Java only whether a view shows a shader (opcode `SHADER`,
 35, in `encode.rs` ↔ `Mounter.java`), Java reports the size in pixels (`Native.shaderSize`), and the layer goes to
 the UI-thread renderer with the animation items. On Windows animated uniforms are written while the animation graph
