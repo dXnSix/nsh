@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
 
-- Branch: `pr/ios/01-test-typing`, one commit on `upstream/main` `64c066e5` (local; not pushed yet). Independent of the
+- Branch: `pr/ios/01-test-typing`, one commit on `upstream/main` `64c066e5` (pushed to the fork, `dXnSix/nsh`, 2026-10-28). Independent of the
   other two iOS test fixes (`pr/ios/01-test-typing`, `02-test-caret-settle`, `03-test-scroll`): each applies on its own
   and they merge in any order.
 - Source: the fork's `15b818dc4` on `sync/upstream-478737b1` (fork PR #91), found while running the gallery's tests on the
