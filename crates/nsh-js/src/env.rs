@@ -485,7 +485,7 @@ pub(crate) const REEXPORTS: &[Item] = &[
         "keyboardFrame",
         Export::Value(|cx| accessor(cx, Part::Keyboard)),
         Ts::value(
-            "Height of the software keyboard over the surface (0 when hidden) and the\nduration of its animation in seconds (reactive).",
+            "Height of the software keyboard over the surface (0 when hidden) and the\nduration of its animation in milliseconds (reactive).",
             "Accessor<{ height: number; duration: number }>",
         ),
     ),
@@ -514,7 +514,7 @@ pub(crate) const ELEMENTS: &[Item] = &[(
     Export::Value(|cx| crate::dom::host_component(cx, "input", true)),
     Ts::function(
         "A native text input (UITextField / UITextView, EditText); `ref` has\n`focus()`, `blur()` and `setSelection(start, end)`.",
-        &["(props: InputProps): YNode"],
+        &["(props: InputProps): JSX.Element"],
     ),
 )];
 

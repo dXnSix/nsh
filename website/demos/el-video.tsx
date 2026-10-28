@@ -1,4 +1,4 @@
-import { mount, signal, Text, Video, View, type YNode } from "nsh";
+import { mount, signal, Text, Video, type VideoRef, View } from "nsh";
 import { windowSize } from "nsh";
 import { button, buttonText, ui } from "./palette";
 
@@ -27,7 +27,7 @@ function App() {
   const ratio = signal(16 / 9);
   const status = signal("loading");
   const ends = signal(0);
-  let video!: YNode;
+  let video!: VideoRef;
 
   const wide = () => windowSize().width >= 700;
 
@@ -44,7 +44,6 @@ function App() {
             repeat={repeat()}
             controls={controls()}
             rate={fast() ? 2 : 1}
-            resizeMode="contain"
             progressUpdateInterval={100}
             style={{ width: "100%", aspectRatio: ratio(), borderRadius: 14, overflow: "hidden", backgroundColor: "#000000" }}
             onLoadStart={() => status.set("onLoadStart")}

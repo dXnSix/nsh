@@ -17,7 +17,7 @@ fn ui_theme() -> crate::element::Tokens {
     crate::element::tokens::sample()
 }
 
-fn cx(states: u8) -> (ClassEnvironment, u8) {
+fn cx(states: u16) -> (ClassEnvironment, u16) {
     (ClassEnvironment::default(), states)
 }
 
@@ -26,7 +26,7 @@ fn styled_with(
     classes: &str,
     env: ClassEnvironment,
     window: (f32, f32),
-    states: u8,
+    states: u16,
 ) -> (Style, ClassProps) {
     let theme = themed();
     let list = parse(&theme, classes);
@@ -47,6 +47,8 @@ fn styled_with(
         group: &group,
     };
     list.apply(&context, &theme, &mut style, &mut props, |_| {});
+    // As the core does: the style's node props.
+    style.node_props(&mut props);
     (style, props)
 }
 
@@ -77,6 +79,13 @@ fn spacing_and_layout() {
     let s = styled("flex-[3_0_50%]");
     assert_eq!((s.layout.flex_grow, s.layout.flex_shrink), (3.0, 0.0));
     assert_eq!(s.layout.flex_basis, taffy::Dimension::percent(0.5));
+    // CSS's shorthand, read as a style's `flex` is.
+    let s = styled("flex-[auto]");
+    assert_eq!((s.layout.flex_grow, s.layout.flex_shrink), (1.0, 1.0));
+    assert_eq!(s.layout.flex_basis, taffy::Dimension::auto());
+    let s = styled("flex-[2_1rem]");
+    assert_eq!((s.layout.flex_grow, s.layout.flex_shrink), (2.0, 1.0));
+    assert_eq!(s.layout.flex_basis, taffy::Dimension::length(16.0));
     let s = styled("p-[13px] m-auto inset-0 absolute size-10 basis-1/3 flex-1");
     assert_eq!(s.layout.padding.left, taffy::LengthPercentage::length(13.0));
     assert_eq!(s.layout.margin.left, taffy::LengthPercentageAuto::auto());
@@ -87,17 +96,23 @@ fn spacing_and_layout() {
     );
     assert_eq!(s.layout.size.height, taffy::Dimension::length(40.0));
     assert_eq!(s.layout.flex_grow, 1.0);
+    // CSS's automatic minimum; unset, a minimum is 0 (Yoga's).
+    let s = styled("min-w-auto min-h-auto");
+    assert_eq!(s.layout.min_size.width, taffy::LengthPercentageAuto::auto());
+    assert_eq!(
+        s.layout.min_size.height,
+        taffy::LengthPercentageAuto::auto()
+    );
 }
 
 #[test]
-fn physical_classes_name_the_other_side_right_to_left() {
-    // The core lays left and right out as start and end right to left
-    // (React Native's rule for inline styles); classes are physical, so
-    // right to left they set the other side, and come out where they say.
+fn physical_classes_keep_their_sides_right_to_left() {
+    // As in CSS, and as style keys do: the core lays left and right out
+    // where they say in either direction, so a class needs no direction.
     let theme = themed();
     let resolve = |classes: &str, rtl: bool| {
         let list = parse(&theme, classes);
-        assert_ne!(list.deps() & deps::RTL, 0, "{classes}");
+        assert_eq!(list.deps() & deps::RTL, 0, "{classes}");
         let group = |_: &str| 0;
         let cx = Context {
             env: ClassEnvironment::default(),
@@ -111,30 +126,32 @@ fn physical_classes_name_the_other_side_right_to_left() {
         list.apply(&cx, &theme, &mut style, &mut ClassProps::default(), |_| {});
         style
     };
-    let s = resolve("pl-4 mr-2 left-1", true);
-    assert_eq!(
-        s.layout.padding.right,
-        taffy::LengthPercentage::length(16.0)
-    );
-    assert_eq!(
-        s.layout.margin.left,
-        taffy::LengthPercentageAuto::length(8.0)
-    );
-    assert_eq!(
-        s.layout.inset.right,
-        taffy::LengthPercentageAuto::length(4.0)
-    );
-    let s = resolve("pl-4", false);
-    assert_eq!(s.layout.padding.left, taffy::LengthPercentage::length(16.0));
+    for rtl in [false, true] {
+        let s = resolve("pl-4 mr-2 left-1", rtl);
+        assert_eq!(s.layout.padding.left, taffy::LengthPercentage::length(16.0));
+        assert_eq!(
+            s.layout.margin.right,
+            taffy::LengthPercentageAuto::length(8.0)
+        );
+        assert_eq!(
+            s.layout.inset.left,
+            taffy::LengthPercentageAuto::length(4.0)
+        );
+    }
     let s = resolve("text-left", true);
     assert_eq!(s.text.text_align, Some(crate::style::TextAlign::Left));
     assert!(s.text.text_align_physical);
-    // Logical classes need nothing: the core places them.
-    let list = parse(
-        &theme,
-        "ps-4 me-2 start-1 rounded-s-lg border-e-2 text-end text-center px-2",
+    // `text-start` and `text-end` follow the direction, as CSS's `start`
+    // and `end`.
+    let s = resolve("text-end", true);
+    assert_eq!(s.text.text_align, Some(crate::style::TextAlign::Right));
+    assert!(!s.text.text_align_physical);
+    let s = resolve(
+        "text-start ps-4 me-2 start-1 rounded-s-lg border-e-2 px-2",
+        true,
     );
-    assert_eq!(list.deps() & deps::RTL, 0);
+    assert_eq!(s.text.text_align, Some(crate::style::TextAlign::Left));
+    assert!(!s.text.text_align_physical);
 }
 
 #[test]
@@ -154,8 +171,9 @@ fn space_gives_the_children_margins() {
         taffy::LengthPercentageAuto::length(0.0)
     );
     let space = props.space.unwrap();
-    assert_eq!(space.x, Some(crate::style::PatchValue::Number(16.0)));
-    assert_eq!(space.y, Some(crate::style::PatchValue::Number(-1.0)));
+    let margin = |n: f32| crate::PropertyValue::Lpa(taffy::LengthPercentageAuto::length(n));
+    assert_eq!(space.x, Some(margin(16.0)));
+    assert_eq!(space.y, Some(margin(-1.0)));
     assert!(!space.reverse_x);
     let (_, props) = styled_with(
         "space-y-reverse space-y-2",
@@ -166,7 +184,7 @@ fn space_gives_the_children_margins() {
     let space = props.space.unwrap();
     assert!(space.reverse_y);
     let mut child = Style::default();
-    space.apply(&mut child, false);
+    space.apply(&mut child, false, false);
     assert_eq!(
         child.layout.margin.top,
         taffy::LengthPercentageAuto::length(8.0)
@@ -1152,6 +1170,143 @@ fn checked_variants() {
 }
 
 #[test]
+fn expanded_variants() {
+    let theme = themed();
+    let list = parse(
+        &theme,
+        "aria-expanded:bg-black group-aria-expanded:rotate-180",
+    );
+    assert!(list.unknown().is_empty(), "{:?}", list.unknown());
+    assert!(list.deps() & deps::STATE != 0 && list.deps() & deps::GROUP != 0);
+    // The core sets it: nothing for the platform to report.
+    assert_eq!(list.tracked_states(), 0);
+    let env = ClassEnvironment::default();
+    let (s, _) = styled_with(
+        "bg-white aria-expanded:bg-black",
+        env,
+        (390.0, 844.0),
+        state::EXPANDED,
+    );
+    assert_eq!(s.view.background_color, Color(0x0000_00ff));
+    // Tailwind's `aria-*` variants come after the pseudo-classes: an open
+    // trigger keeps its look while hovered or pressed.
+    let pressed = state::EXPANDED | state::HOVERED | state::PRESSED;
+    let (s, _) = styled_with(
+        "hover:bg-white active:bg-white aria-expanded:bg-black",
+        env,
+        (390.0, 844.0),
+        pressed,
+    );
+    assert_eq!(s.view.background_color, Color(0x0000_00ff));
+}
+
+/// `aria-pressed:`, `aria-busy:`, `aria-checked:` and `aria-selected:`
+/// as Tailwind v4 has them (`&[aria-pressed="true"]`, ...): the core's
+/// states from the accessibility state, ordered by their names after the
+/// pseudo-classes.
+#[test]
+fn aria_state_variants() {
+    let theme = themed();
+    let list = parse(
+        &theme,
+        "aria-pressed:bg-black aria-busy:opacity-50 aria-checked:p-1 aria-selected:p-2 \
+         group-aria-pressed:rotate-180 group-aria-busy:opacity-0 group-aria-checked:p-3 \
+         group-aria-selected:p-4",
+    );
+    assert!(list.unknown().is_empty(), "{:?}", list.unknown());
+    assert!(list.deps() & deps::STATE != 0 && list.deps() & deps::GROUP != 0);
+    // The core sets them: nothing for the platform to report.
+    assert_eq!(list.tracked_states(), 0);
+    // `aria-current:` and the states NSH does not have are unknown, as
+    // Tailwind has no `aria-current` variant (`aria-[current=page]:` is
+    // an arbitrary one).
+    let unknown = parse(&theme, "aria-current:bg-black aria-readonly:bg-black");
+    assert_eq!(unknown.unknown().len(), 2, "{:?}", unknown.unknown());
+    let env = ClassEnvironment::default();
+    let at = (390.0, 844.0);
+    let (s, _) = styled_with(
+        "bg-white aria-pressed:bg-black",
+        env,
+        at,
+        state::ARIA_PRESSED,
+    );
+    assert_eq!(s.view.background_color, Color(0x0000_00ff));
+    // Not a press in progress: `active:` waits for its own state.
+    let (s, _) = styled_with("bg-white aria-pressed:bg-black", env, at, state::PRESSED);
+    assert_eq!(s.view.background_color, Color(0xffff_ffff));
+    let (s, _) = styled_with(
+        "active:bg-white aria-pressed:bg-black",
+        env,
+        at,
+        state::PRESSED,
+    );
+    assert_eq!(s.view.background_color, Color(0xffff_ffff));
+    // The `aria-*` variants come after the pseudo-classes: a toggle that
+    // is on keeps its look while pressed or hovered.
+    let pressed = state::ARIA_PRESSED | state::HOVERED | state::PRESSED;
+    let (s, _) = styled_with(
+        "hover:bg-white active:bg-white aria-pressed:bg-black",
+        env,
+        at,
+        pressed,
+    );
+    assert_eq!(s.view.background_color, Color(0x0000_00ff));
+    // Among themselves, by their names: busy, checked, expanded, pressed,
+    // selected.
+    let all =
+        state::BUSY | state::CHECKED | state::EXPANDED | state::ARIA_PRESSED | state::SELECTED;
+    let order = [
+        ("aria-busy", Color(0xfb2c_36ff)),
+        ("aria-checked", Color(0x0000_00ff)),
+        ("aria-expanded", Color(0xffff_ffff)),
+        ("aria-pressed", Color(0x00bc_7dff)),
+        ("aria-selected", Color(0x2b7f_ffff)),
+    ];
+    let classes = |order: &[(&str, Color)]| {
+        let names = ["red-500", "black", "white", "emerald-500", "blue-500"];
+        order
+            .iter()
+            .zip(names)
+            .map(|((v, _), c)| format!("{v}:bg-{c}"))
+            .collect::<Vec<_>>()
+    };
+    let mut reversed = classes(&order);
+    reversed.reverse();
+    let (s, _) = styled_with(&reversed.join(" "), env, at, all);
+    assert_eq!(s.view.background_color, order[4].1);
+    for i in 0..4 {
+        let below = order[..=i].iter().fold(0, |states, (v, _)| {
+            states
+                | match *v {
+                    "aria-busy" => state::BUSY,
+                    "aria-checked" => state::CHECKED,
+                    "aria-expanded" => state::EXPANDED,
+                    "aria-pressed" => state::ARIA_PRESSED,
+                    _ => state::SELECTED,
+                }
+        });
+        let (s, _) = styled_with(&reversed.join(" "), env, at, below);
+        assert_eq!(s.view.background_color, order[i].1, "{}", order[i].0);
+    }
+    // `aria-checked:` is checked, after `checked:`; `aria-selected:` is
+    // selected, after `selected:`.
+    let (s, _) = styled_with(
+        "aria-checked:bg-black checked:bg-white",
+        env,
+        at,
+        state::CHECKED,
+    );
+    assert_eq!(s.view.background_color, Color(0x0000_00ff));
+    let (s, _) = styled_with(
+        "aria-selected:bg-black selected:bg-white",
+        env,
+        at,
+        state::SELECTED,
+    );
+    assert_eq!(s.view.background_color, Color(0x0000_00ff));
+}
+
+#[test]
 fn indeterminate_variants() {
     let theme = themed();
     let list = parse(
@@ -1277,7 +1432,7 @@ fn classes_without_a_native_meaning_are_unknown() {
 
 #[test]
 fn placeholder_and_props() {
-    let (_, props) = styled_with(
+    let (style, props) = styled_with(
         "placeholder:text-zinc-400 selection:bg-blue-500 caret-blue-500 line-clamp-2 pointer-events-none object-contain select-none",
         ClassEnvironment::default(),
         (390.0, 844.0),
@@ -1291,13 +1446,17 @@ fn placeholder_and_props() {
         props.pointer_events,
         Some(crate::props::PointerEvents::None)
     );
-    assert_eq!(props.resize_mode, Some(crate::ops::ResizeMode::Contain));
+    assert_eq!(
+        style.pending.object_fit,
+        Some(crate::ops::ResizeMode::Contain)
+    );
     assert_eq!(props.selectable, Some(false));
     // CSS's `object-fit: none` (natural size) and `scale-down`.
     let resize = |c| {
         styled_with(c, ClassEnvironment::default(), (390.0, 844.0), 0)
-            .1
-            .resize_mode
+            .0
+            .pending
+            .object_fit
     };
     assert_eq!(resize("object-none"), Some(crate::ops::ResizeMode::Center));
     assert_eq!(
@@ -1407,6 +1566,41 @@ fn current_colors_follow_the_cascade_and_inherit() {
 }
 
 #[test]
+fn arbitrary_current_colors_are_the_text_color() {
+    let red = Color(0xff00_00ff);
+    let s = styled(
+        "text-[#ff0000] bg-[currentColor] border-2 border-[currentColor]/50 outline-2 outline-[color:currentColor]",
+    );
+    assert_eq!(s.view.background_color, red);
+    assert_eq!(s.view.borders.colors[0].0 >> 8, 0xff_0000);
+    assert!((0x7f..=0x80).contains(&(s.view.borders.colors[0].0 & 0xff)));
+    assert_eq!(s.view.outline.color, red);
+    // `currentColor` inside a value: filled in with the text color.
+    let s = styled(
+        "text-[#ff0000] decoration-[color-mix(in_srgb,currentColor_50%,#0000ff)] bg-[linear-gradient(currentColor,#0000ff)]",
+    );
+    let mix = s.text.decoration_color.unwrap().0;
+    assert_eq!((mix >> 24, (mix >> 8) & 0xff), (0x80, 0x80), "{mix:x}");
+    let stops = &s.view.effects.as_ref().unwrap().background_images[0].stops;
+    assert_eq!(stops[0].color, red);
+    let theme = themed();
+    assert_ne!(
+        parse(
+            &theme,
+            "bg-[color-mix(in_srgb,currentColor_50%,transparent)]"
+        )
+        .deps()
+            & deps::CURRENT_COLOR,
+        0
+    );
+    assert!(
+        !parse(&theme, "bg-[color-mix(in_nope,currentColor,red)]")
+            .unknown()
+            .is_empty()
+    );
+}
+
+#[test]
 fn arbitrary_lengths_require_css_units_and_use_the_configured_rem() {
     let mut theme = themed();
     theme.rem = 20.0;
@@ -1507,14 +1701,17 @@ fn object_positions() {
         at("object-[right_10px_bottom_20%]"),
         ObjectPosition::parse("right 10px bottom 20%").unwrap()
     );
-    // `object-fit` stays a prop beside it.
-    let (style, props) = styled_with(
+    // `object-fit` beside it.
+    let (style, _) = styled_with(
         "object-cover object-top",
         ClassEnvironment::default(),
         (390.0, 844.0),
         0,
     );
-    assert_eq!(props.resize_mode, Some(crate::ops::ResizeMode::Cover));
+    assert_eq!(
+        style.pending.object_fit,
+        Some(crate::ops::ResizeMode::Cover)
+    );
     assert_eq!(style.view.object_position, at("object-top"));
     let list = parse(
         &theme,
@@ -1531,7 +1728,7 @@ fn object_positions() {
 /// variant decides, then its next highest; one more variant comes later.
 #[test]
 fn variants_sort_as_tailwind_sorts_them() {
-    let pad = |classes: &str, dark: bool, width: f32, states: u8| {
+    let pad = |classes: &str, dark: bool, width: f32, states: u16| {
         let env = ClassEnvironment {
             dark,
             ..Default::default()

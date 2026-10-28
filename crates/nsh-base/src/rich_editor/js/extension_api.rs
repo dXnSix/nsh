@@ -734,12 +734,17 @@ extension_classes! {
     Highlight => "highlight", "Highlights (`highlight`, with a `color`): `Mod-Shift-h`, `==text==`; `setHighlight`, `toggleHighlight`, `unsetHighlight`.";
     Subscript => "subscript", "Subscript (`subscript`): `Mod-,`; `setSubscript`, `toggleSubscript`, `unsetSubscript`.";
     Superscript => "superscript", "Superscript (`superscript`): `Mod-.`; `setSuperscript`, `toggleSuperscript`, `unsetSuperscript`.";
-    TextStyle => "textStyle", "Text styles (`textStyle`: `color`, `fontFamily`, `fontSize`, `backgroundColor`); `setTextStyle`, `unsetTextStyle`.";
+    RichTextStyle => "textStyle", "Text styles (`textStyle`, Tiptap's `TextStyle`: `color`, `fontFamily`, `fontSize`, `backgroundColor`); `setTextStyle`, `unsetTextStyle`.";
     TextAlign => "textAlign", "Text alignment (`textAlign`) of the types its `types` option names: `Mod-Shift-l` / `e` / `r` / `j`; `setTextAlign`, `unsetTextAlign`.";
     History => "history", "Undo history (`history`, Tiptap 3's `undoRedo`; options `depth`, `newGroupDelay`): `Mod-z`, `Shift-Mod-z`, `Mod-y`.";
     TrailingNode => "trailingNode", "Keeps a node (the option `node`, the default block by default) at the document's end.";
     Typography => "typography", "Typographic replacements as you type (`--` to an em dash, quotes, arrows, ...), each turned off with `false` or replaced with a string.";
     ListKeymap => "listKeymap", "Tiptap's list keymap: Backspace and Delete at list items' edges join and lift them.";
+    TableKit => "tableKit", "Tiptap's TableKit: tables (`table`), their rows (`tableRow`), header cells (`tableHeader`) and cells (`tableCell`). `TableKit.configure({ table: { resizable: false } })` configures one, `{ tableHeader: false }` leaves one out. Not part of `StarterKit`.";
+    RichTable => "table", "Tables (`table`, Tiptap's `Table`; options `HTMLAttributes`, `resizable`, `cellMinWidth`, `lastColumnResizable`, `allowTableNodeSelection`): Tab and Shift-Tab between cells (Tab in the last cell adds a row), arrows and Shift-arrows across cells, cell selections; `insertTable`, `addColumnBefore`, `addColumnAfter`, `deleteColumn`, `addRowBefore`, `addRowAfter`, `deleteRow`, `deleteTable`, `mergeCells`, `splitCell`, `mergeOrSplit`, `toggleHeaderColumn`, `toggleHeaderRow`, `toggleHeaderCell`, `setCellAttribute`, `goToNextCell`, `goToPreviousCell`, `fixTables`, `setCellSelection`, `moveTableRow`, `moveTableColumn`, `setColumnWidth`, `setRowHeight`.";
+    RichTableRow => "tableRow", "Table rows (`tableRow`, Tiptap's `TableRow`), with a `height`.";
+    RichTableHeader => "tableHeader", "Table header cells (`tableHeader`, Tiptap's `TableHeader`), with `colspan`, `rowspan` and `colwidth`.";
+    RichTableCell => "tableCell", "Table cells (`tableCell`, Tiptap's `TableCell`), with `colspan`, `rowspan` and `colwidth`.";
 }
 
 // --- The functions -------------------------------------------------------------------

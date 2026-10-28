@@ -10,6 +10,7 @@
 use std::{
     any::{Any, TypeId},
     future::Future,
+    path::PathBuf,
     rc::Rc,
     sync::Arc,
     time::Duration,
@@ -21,7 +22,7 @@ use super::{
     AdaptiveColor, Environment, Memo, Owner, Signal, SignalEquals, Tokens, cleanup, computed,
     reactive::with_data,
     signal_with,
-    task::{self, Action, Answer, ClipboardImage, DialogAnswer, Executor, ImageSize},
+    task::{self, Action, Answer, ClipboardImage, DialogAnswer, Executor, FileAnswer, ImageSize},
 };
 use crate::{
     Command, Dialog, EdgeInsets, LayoutAnimation, NodeId, Points, Size,
@@ -80,6 +81,7 @@ struct EnvSignals {
     temperature_unit: Memo<TemperatureUnit>,
     time_zone: Memo<TimeZone>,
     app_state: Memo<AppState>,
+    screen_color: Memo<bool>,
 }
 
 impl EnvSignals {
@@ -111,6 +113,7 @@ impl EnvSignals {
                 temperature_unit: part!(regional.temperature_unit),
                 time_zone: part!(time_zone),
                 app_state: part!(app_state),
+                screen_color: part!(screen_color),
             }
         })
     }
@@ -216,7 +219,7 @@ pub fn keyboard_height() -> Points {
     env(|e| e.keyboard_height)
 }
 
-/// How long the keyboard's show / hide animation takes, in seconds.
+/// How long the keyboard's show / hide animation takes, in milliseconds.
 pub fn keyboard_duration() -> f32 {
     env(|e| e.keyboard_duration)
 }
@@ -321,6 +324,15 @@ pub fn os() -> Os {
         .with_untracked(|e| e.os)
 }
 
+/// [`os`] where an engine runs (its thread, while it runs Rust code),
+/// else `None`: for code that also runs outside an engine (a unit test of
+/// a component's model).
+pub fn try_os() -> Option<Os> {
+    super::reactive::try_with_data(|d| d.ambient.env.as_ref().map(|e| e.env))
+        .flatten()
+        .map(|env| env.with_untracked(|e| e.os))
+}
+
 /// The OS version: major and minor on iOS, the API level and 0 on Android
 /// (TS: `platform.version`).
 pub fn os_version() -> (u16, u16) {
@@ -357,6 +369,17 @@ pub fn tokens() -> Arc<Tokens> {
 /// (TS: a canvas's `measureText(text).width`).
 pub fn measure_text(font: &str, text: &str) -> Points {
     text_metrics(font, text).width
+}
+
+/// Captures the platform text measurer while a component's runtime is entered.
+/// The returned function can also be called by synchronous JS session queries,
+/// where the Rust reactive runtime is not entered.
+pub fn text_measurer() -> impl Fn(&str, &str) -> Points + Clone {
+    let measure = with_data(|d| d.ambient.measure.clone()).expect("the core sets the text engine");
+    move |font, text| {
+        let font = CanvasFont::parse(font).unwrap_or_default();
+        measure(&font, text).width
+    }
 }
 
 /// How `text` sits on one line in `font` (the CSS `font` shorthand; an
@@ -508,6 +531,22 @@ pub fn clipboard_has_image() -> Answer<bool> {
     answer
 }
 
+/// Whether the platform lets the user pick a color on the screen
+/// ([`pick_screen_color`]): macOS and browsers with an `EyeDropper`.
+pub fn can_pick_screen_color() -> bool {
+    env(|e| e.screen_color)
+}
+
+/// The color the user picks anywhere on the screen (the system's color
+/// sampler, a browser's `EyeDropper`), to await in a task: `None` when the
+/// user cancelled or the platform has no sampler
+/// ([`can_pick_screen_color`]).
+pub fn pick_screen_color() -> Answer<Option<crate::Hsla>> {
+    let (answer, action) = super::services::pick_screen_color();
+    act(action);
+    answer
+}
+
 /// The `file:` URLs of the local files on the system clipboard (files
 /// copied in a file manager; TS: `Clipboard.readFiles`), to await in a task.
 pub fn clipboard_files() -> Answer<Vec<String>> {
@@ -523,6 +562,80 @@ pub fn clipboard_files() -> Answer<Vec<String>> {
 /// then on.
 pub fn register_font(data: impl Into<Vec<u8>>) -> Answer<Result<String, String>> {
     let (answer, action) = super::services::register_font(data.into());
+    act(action);
+    answer
+}
+
+/// Shows the system's open dialog and gives the files (or folders,
+/// [`OpenDialog::folders`](crate::file_dialog::OpenDialog::folders)) the
+/// user picked, to await in a task: `None` when cancelled, the error when
+/// the dialog could not show (on Linux without a file chooser portal, or
+/// on a platform without file dialogs: iOS, Android, the web;
+/// [`crate::platform::Environment::file_requests`]). GPUI's
+/// `prompt_for_paths`.
+pub fn pick_paths(
+    dialog: crate::file_dialog::OpenDialog,
+) -> Answer<Result<Option<Vec<PathBuf>>, String>> {
+    file_request(
+        crate::file_dialog::FileRequest::OpenDialog(dialog),
+        FileAnswer::OpenDialog,
+    )
+}
+
+/// Shows the system's save dialog and gives the path the user chose to
+/// save to, to await in a task: `None` when cancelled, the error when the
+/// dialog could not show ([`pick_paths`]). The file is not created. GPUI's
+/// `prompt_for_new_path`.
+pub fn pick_save_path(
+    dialog: crate::file_dialog::SaveDialog,
+) -> Answer<Result<Option<PathBuf>, String>> {
+    file_request(
+        crate::file_dialog::FileRequest::SaveDialog(dialog),
+        FileAnswer::SaveDialog,
+    )
+}
+
+/// Opens the local file or folder at `path` (absolute) in its default app
+/// (GPUI's `open_with_system`), to await in a task or drop: `Ok` once it
+/// opened, the error when it did not (no app for it, a relative path, a
+/// platform that opens no local paths). [`open_url`] opens no `file:`
+/// URLs; this is their way.
+pub fn open_path(path: impl Into<PathBuf>) -> Answer<Result<(), String>> {
+    file_request(
+        crate::file_dialog::FileRequest::OpenPath(path.into()),
+        FileAnswer::Done,
+    )
+}
+
+/// Shows the item at `path` (absolute) selected in the file manager
+/// (Finder, File Explorer, the desktop's file manager; GPUI's
+/// `reveal_path`), to await in a task or drop: `Ok` once it showed, the
+/// error when it did not (it does not exist, a relative path, a platform
+/// without a file manager).
+pub fn reveal_path(path: impl Into<PathBuf>) -> Answer<Result<(), String>> {
+    file_request(
+        crate::file_dialog::FileRequest::RevealPath(path.into()),
+        FileAnswer::Done,
+    )
+}
+
+/// Moves the item at `path` (absolute) to the trash (the Recycle Bin on
+/// Windows), to await in a task: where it went when the platform says
+/// (macOS), else `None`, which is no failure; the error when it could not
+/// (it does not exist, the volume has no trash, the platform has none).
+pub fn move_to_trash(path: impl Into<PathBuf>) -> Answer<Result<Option<PathBuf>, String>> {
+    file_request(
+        crate::file_dialog::FileRequest::MoveToTrash(path.into()),
+        FileAnswer::Trash,
+    )
+}
+
+/// Sends file request `request`, answered through `answer`.
+fn file_request<T>(
+    request: crate::file_dialog::FileRequest,
+    answer: impl FnOnce(super::AnswerSlot<T>) -> FileAnswer,
+) -> Answer<T> {
+    let (answer, action) = super::services::file_request(request, answer);
     act(action);
     answer
 }
@@ -585,6 +698,17 @@ pub fn fetch(request: impl Into<crate::platform::HttpRequest>) -> super::Fetch {
 /// `setColorScheme`).
 pub fn set_color_scheme(appearance: Appearance) {
     act(Action::Appearance(appearance));
+}
+
+/// Draws the bar of every scroll view and list whose `scrollbar` is `true`
+/// with the built-in bar `source` makes of `theme` (the UI set's, which
+/// `source` gets back: [`BuiltInScrollbar::app_theme`](super::BuiltInScrollbar::app_theme)),
+/// or (`None`, the default) with the platform's indicator. A view whose `scrollbar` is a theme shows the bar
+/// of the UI set that makes one
+/// ([`Registry::scrollbars_from`](super::Registry::scrollbars_from)).
+/// `nsh-base`'s `set_scrollbar_theme` calls it.
+pub fn set_builtin_scrollbars(source: super::ScrollbarSource, theme: Option<super::AnyValue>) {
+    act(Action::BuiltInScrollbars(source, theme));
 }
 
 // --- Tasks and timers --------------------------------------------------------
@@ -824,12 +948,20 @@ pub struct KeyOptions {
 }
 
 /// Whether shortcuts follow Apple's conventions here (`mod` is Command):
-/// the OS, or for a browser the platform it runs on.
-fn apple_keys() -> bool {
+/// the OS, or for a browser the platform it runs on
+/// ([`crate::keymap::apple_keys`]).
+pub fn apple_keys() -> bool {
     let (os, apple) = with_data(|d| d.ambient.env.as_ref().map(|e| e.env))
         .expect("the core sets the environment")
         .with_untracked(|e| (e.os, e.apple_keyboard));
     crate::keymap::apple_keys(os, apple)
+}
+
+/// [`apple_keys`] where an engine runs, else `None` (as [`try_os`]).
+pub fn try_apple_keys() -> Option<bool> {
+    super::reactive::try_with_data(|d| d.ambient.env.as_ref().map(|e| e.env))
+        .flatten()
+        .map(|env| env.with_untracked(|e| crate::keymap::apple_keys(e.os, e.apple_keyboard)))
 }
 
 /// Runs `handler` when `keystroke` is pressed while the current owner
@@ -877,6 +1009,55 @@ pub fn on_key_with(keystroke: &str, options: KeyOptions, handler: impl Fn(&str) 
     });
 }
 
+/// Watches the scroll view or list `target` names while the current owner
+/// lives: `handler` hears its offset, content size and viewport (zoomed, as
+/// `on_scroll` reports them) when it is first found and whenever one of
+/// them changes, whether or not anything listens to its `on_scroll`. A
+/// view of the app's own that follows a scroll view it did not make (a
+/// scroll bar) watches it this way.
+///
+/// `target` is asked again in every commit (untracked), so a ref set later
+/// in the same render is found when its element is mounted; while it names
+/// no scroll view, nothing is heard. The handler runs at the end of the
+/// commit round that saw the change, and what it changes goes out in the
+/// same batch.
+pub fn watch_scroll(
+    target: impl Fn() -> Option<NodeId> + 'static,
+    handler: impl Fn(&crate::element::ScrollEvent) + 'static,
+) {
+    let owner = Owner::current();
+    let handler = Rc::new(move |e: &crate::element::ScrollEvent| owner.run(|| handler(e)));
+    add_watch(Rc::new(target), handler);
+}
+
+impl super::NodeRef {
+    /// Scrolls the scroll view (or list, along its axis) to a content
+    /// offset, as [`super::ElementRef::scroll_to`] does: for a view holding
+    /// a node, not a ref (a prop a JS `ref` fills, a watch's target).
+    pub fn scroll_to(&self, offset: crate::geometry::Point<Points>, animated: bool) {
+        act(Action::Command(
+            self.0,
+            Command::ScrollTo {
+                x: offset.x,
+                y: offset.y,
+                animated,
+            },
+        ));
+    }
+}
+
+fn add_watch(target: Rc<dyn Fn() -> Option<NodeId>>, handler: super::watch::ScrollHandler) {
+    let watches = executor().watches.clone();
+    let id = watches.borrow_mut().add(target, handler);
+    let weak = Rc::downgrade(&watches);
+    cleanup(move || {
+        if let Some(watches) = weak.upgrade() {
+            let removed = watches.borrow_mut().remove(id);
+            drop(removed);
+        }
+    });
+}
+
 /// `keystroke` as menus and hints show it here (TS: `keymap.label`):
 /// `"⇧⌘L"` on Apple platforms (and in a browser on one), `"Ctrl+Shift+L"`
 /// elsewhere, for `"mod+shift+l"`.
@@ -893,7 +1074,7 @@ pub fn key_label(keystroke: &str) -> String {
 }
 
 /// Listens to the Android back button while the current owner lives (TS:
-/// `BackHandler.onBackPress(f)`): when no modal is
+/// `BackHandler.on("press", f)`): when no modal is
 /// shown, `f` runs before the stack pops, newest listener first, and returns
 /// true when it handled the press. While one listens, a back gesture does
 /// not preview the pop.
@@ -910,9 +1091,34 @@ pub(crate) fn title_bar() -> crate::geometry::Edges<crate::geometry::Points> {
     env(|e| e.title_bar)
 }
 
+/// The views' menu handlers.
+pub(crate) fn view_menus() -> Rc<std::cell::RefCell<super::menus::ViewMenus>> {
+    executor().menus.clone()
+}
+
 pub(crate) fn desktop_command(command: crate::desktop::DesktopCommand) {
     act(Action::Command(
         crate::ROOT_ID,
         Command::Desktop(Box::new(command)),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{element::Runtime, geometry::px};
+
+    #[test]
+    fn captured_text_measurer_works_without_runtime_entry() {
+        let runtime = Runtime::default();
+        runtime.set_measure(Rc::new(|_, text| crate::canvas::TextMetrics {
+            width: px(text.chars().count() as f32),
+            ..Default::default()
+        }));
+        let measure = {
+            let _entered = runtime.enter();
+            text_measurer()
+        };
+        assert_eq!(measure("16px sans-serif", "选择 text"), px(7.0));
+    }
 }

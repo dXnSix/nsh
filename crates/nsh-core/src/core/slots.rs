@@ -82,7 +82,6 @@ pub(super) fn split(attrs: &Attrs) -> (Attrs, Attrs) {
         class: attrs.class.clone(),
         inset_padding: attrs.inset_padding,
         inset_margin: attrs.inset_margin,
-        number_of_lines: attrs.number_of_lines,
         src: attrs.src.clone(),
         drawing: attrs.drawing.clone(),
         selectable_view: attrs.selectable_view,
@@ -121,6 +120,8 @@ pub(super) fn merged(js: &Attrs, own: &Attrs) -> Attrs {
             checked: own.state.checked.or(js.state.checked),
             busy: own.state.busy || js.state.busy,
             expanded: own.state.expanded.or(js.state.expanded),
+            pressed: own.state.pressed.or(js.state.pressed),
+            current: own.state.current.or(js.state.current),
         },
         value: own.value.clone().or_else(|| js.value.clone()),
         pointer_events: if own.pointer_events == PointerEvents::default() {
@@ -265,10 +266,13 @@ impl<M: TextEngine> Core<M> {
             return EventMask::default();
         }
         self.ensure_slot_target(holder, host, Some(&mut *inst));
-        let Some(target) = self.components.slot_targets.get_mut(&holder) else {
+        let Some(target) = self.components.slot_targets.get(&holder) else {
             return EventMask::default();
         };
         let node = target.node;
+        let old = target.events;
+        let js = target.js_events;
+        self.initialize_layout_listeners(host, node, el, old | js, inst);
         inst.handlers.retain(|(n, _, _)| *n != node && *n != holder);
         inst.responders.retain(|(n, _)| *n != node && *n != holder);
         let mut mask = EventMask::default();
@@ -280,8 +284,11 @@ impl<M: TextEngine> Core<M> {
             mask.set(EventKind::Touch, true);
             inst.responders.push((node, responder.clone()));
         }
-        let old = std::mem::replace(&mut target.events, mask);
-        let js = target.js_events;
+        self.components
+            .slot_targets
+            .get_mut(&holder)
+            .unwrap()
+            .events = mask;
         self.listen_changes(node, old, mask, js);
         mask
     }

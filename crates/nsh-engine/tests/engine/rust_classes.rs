@@ -119,6 +119,9 @@ mod other {
 thread_local! {
     /// What `Tools.mark` recorded (on the engine's thread).
     static MARKS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// `Tools.listen`'s listeners (on the engine's thread).
+    static LISTENERS: std::cell::RefCell<Vec<(u32, Callback<String>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Functions of the three kinds.
@@ -185,6 +188,29 @@ impl Tools {
     /// The words recorded so far, at once.
     pub(crate) fn marks() -> Vec<String> {
         MARKS.with_borrow(Clone::clone)
+    }
+
+    /// Posts every `ping` to `heard` until the returned function is
+    /// called or what called it goes.
+    pub(crate) fn listen(heard: Callback<String>) -> Stop {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        LISTENERS.with_borrow_mut(|l| l.push((id, heard)));
+        Stop::new(move || LISTENERS.with_borrow_mut(|l| l.retain(|(i, _)| *i != id)))
+    }
+
+    /// Posts `word` to every listener.
+    pub(crate) fn ping(word: String) {
+        LISTENERS.with_borrow(|l| {
+            for (_, heard) in l {
+                heard.post(word.clone());
+            }
+        });
+    }
+
+    /// How many listen.
+    pub(crate) fn listeners() -> u32 {
+        LISTENERS.with_borrow(Vec::len) as u32
     }
 
     /// An op that panics.
@@ -842,6 +868,47 @@ fn integers_take_the_same_values_in_every_kind_of_call_and_prop() {
     assert_eq!(rows.len(), 5, "{done}");
 }
 
+const STOPS: &str = r#"import { mount, signal, Text } from "nsh";
+import { Tools } from "test/classes";
+
+const heard: string[] = [];
+const shown = signal("waiting");
+const open = signal(true);
+function Child() {
+  Tools.listen((w) => heard.push(`child ${w}`));
+  return <Text>child</Text>;
+}
+const stop = Tools.listen((w) => heard.push(`top ${w}`));
+setTimeout(() => {
+  Tools.ping("a");
+  setTimeout(() => {
+    const counts = [Tools.listeners()];
+    stop();
+    stop();
+    counts.push(Tools.listeners());
+    open.set(false);
+    counts.push(Tools.listeners());
+    Tools.ping("b");
+    setTimeout(() => shown.set(`done ${typeof stop} ${counts.join(" ")} ${heard.sort().join(",")}`), 10);
+  }, 10);
+}, 0);
+
+mount(() => (
+  <>
+    <Text>{shown()}</Text>
+    <If when={open()}>
+      <Child />
+    </If>
+  </>
+));
+"#;
+
+#[test]
+fn a_stop_function_stops_once_and_goes_with_its_owner() {
+    let (_engine, rx) = start(STOPS, vec![registry()]);
+    assert_eq!(shown(&rx, "done"), "done function 2 1 0 child a,top a");
+}
+
 const FRAGILE: &str = r#"import { mount, signal, Text } from "nsh";
 import { Fragile } from "test/classes";
 
@@ -929,7 +996,7 @@ import { Framed } from "test/classes";
 
 const v = createAnimatedValue(0.25);
 mount(() => (
-  <Framed inner={[{ transform: [{ translateX: 7 }, { scale: 2 }] }, { shadowOffset: { width: 1, height: 2 }, opacity: v }]} />
+  <Framed inner={[{ transform: "translateX(7px) scale(2)" }, { translate: [1, 2], opacity: v }]} />
 ));
 "#;
 
@@ -937,15 +1004,14 @@ mount(() => (
 fn a_style_prop_takes_what_a_host_elements_style_does() {
     let (_engine, rx) = start(FRAMED, vec![registry()]);
     let (_, items) = mounted(&rx, 500);
-    // The transforms and the shadow offset (objects and arrays), and the
-    // animated value bound to the inner view.
+    // The transform's string and the translation's array, in CSS's order,
+    // and the animated value bound to the inner view.
     assert!(
         items.contains(
-            "transform: [TransformOp { kind: TranslateX, value: 7.0 }, TransformOp { kind: Scale, value: 2.0 }]"
+            "transform: [TransformOp { kind: TranslateX, value: 1.0 }, TransformOp { kind: TranslateY, value: 2.0 }, TransformOp { kind: TranslateX, value: 7.0 }, TransformOp { kind: Scale, value: 2.0 }]"
         ),
         "{items}"
     );
-    assert!(items.contains("offset_x: 1pt, offset_y: 2pt"), "{items}");
     assert!(items.contains("bindings: [(Opacity, "), "{items}");
 }
 

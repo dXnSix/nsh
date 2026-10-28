@@ -1,7 +1,7 @@
 ---
 title: WebView
 description: "The WebView element: web pages and inline HTML inside an app, with messaging both ways."
-order: 9
+order: 80
 group: primitives
 demo: el-web-view
 ---
@@ -36,7 +36,7 @@ function Browser() {
   const nav = signal<WebViewNavigation | null>(null);
   return (
     <View style={{ flex: 1 }}>
-      <Text numberOfLines={1}>{nav()?.title ?? "Loading…"}</Text>
+      <Text style={{ numberOfLines: 1 }}>{nav()?.title ?? "Loading…"}</Text>
       <WebView
         src="https://example.com"
         style={{ flex: 1 }}
@@ -131,7 +131,7 @@ fn bridge() -> impl IntoElement {
 ```
 
 ```tsx tabs
-import { signal, Text, View, WebView, type YNode } from "nsh";
+import { signal, Text, View, WebView, type WebViewRef } from "nsh";
 
 const page = `<!doctype html>
 <meta name="viewport" content="width=device-width">
@@ -143,7 +143,7 @@ const page = `<!doctype html>
 
 function Bridge() {
   const message = signal("");
-  let web!: YNode;
+  let web!: WebViewRef;
   return (
     <View style={{ gap: 12 }}>
       <WebView ref={web} html={page} style={{ height: 200 }} onMessage={(e) => message.set(e.data)} />

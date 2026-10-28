@@ -16,7 +16,7 @@
   (`nsh_core::animation::Easing::Curve`), never a JS function: the curves, their parameters and defaults are one table
   (`nsh_core::js::animation`), which decodes them, declares their types (`animation::declarations`) and gives `nsh`'s `Easing` its curves (`animation::tables`). `Animated.timing` / `spring` / `decay` / `sequence` / `parallel` / `stagger` /
   `delay` / `loop` build a `Composite` tree that runs entirely natively (`AnimationOp::StartComposite`): each step starts at the exact end
-  time of the previous one (no frame gaps), `stop()` / `reset()` (back to the values at start) / `start(cb)` report `finished` once
+  time of the previous one (no frame gaps), `stop()` / `reset()` (back to the values at start) / `start(cb)` report `{ finished }` once
   for the whole tree; leaf animations get internal ids (`LEAF_IDS`) that never reach JS. Composites are released when JS
   lets go of them (their finalizers queue `ReleaseComposite`); a run goes on after that. A run does not keep its
   composite (or the values it animates) alive: `nsh-js` remembers live composites by key (`Animations::composites`),
@@ -35,14 +35,13 @@
   `sample_driver` (the drivers' own code, stepped like frames, at most `MAX_SAMPLES`), so drawn curves are what runs;
   Rust components call `element::sample_easing` / `sample_spring` / `sample_decay` / `sample_decay_within`.
   Bindable: `opacity`, `backgroundColor`, `borderColor` (all sides), a text's `color` (the whole text: iOS and Android draw
-  it into a layer and paint over it in the color, `SourceIn` / `SRC_IN`), `shadowColor` / `shadowOpacity` /
-  `shadowRadius`, the translate / scale / rotate parts of `transform`, and where views stick: a sticky view's `top` /
+  it into a layer and paint over it in the color, `SourceIn` / `SRC_IN`), `translate` / `rotate` / `scale` (`[x, y]` per axis) and the steps of a `transform` list (a motion's,
+  `createMotion`: `{ opacity, transform }`), and where views stick: a sticky view's `top` /
   `left` and a list's `stickyHeaderOffset` (`StickyCell::offset`, `docs/dev/scrolling-and-lists.md`), and a registered native
   component's own props (`AnimationProp::ComponentSlot(slot)`, `docs/dev/embedding.md`: the component is handed the value,
-  a number or an ARGB color, on the frames it changes). iOS shapes the decoration with the bound
-  values (and the layers for them even while they are transparent: `bound_style`), then sets the colors and shadow
-  on those layers each frame; Android and web get them as properties (`Mounter.java` codes 11–14; the web composes
-  `box-shadow`, dropping layered `boxShadow`s while bound). Driven on the main thread by `CADisplayLink`,
+  a number or an ARGB color, on the frames it changes). iOS shapes the decoration with a bound
+  border color (and the layers for it even while it is transparent: `bound_style`), then sets the colors on those
+  layers each frame; Android and web get them as properties (`Mounter.java` codes 11 and 12). Driven on the main thread by `CADisplayLink`,
   paused while nothing animates. `scrollValue` writes the scroll offset into an animated value in the same frame; `pan` lets drags drive animated values
   directly, and JS receives the velocity when the drag ends. Animated values referenced by a view's style (or `pan`, `scrollValue`, ...) are kept by its node
   (`nsh-js` `dom.rs`) and derived nodes hold their inputs, so bindings do not break when JS objects are collected. In
@@ -82,10 +81,19 @@
 - **Desktop backends** (Windows, GPUI, Linux, macOS): one platform-free copy of what they animate. `nsh_core::transition`
   holds a view's layout animation, style transition and keyframes (`Live`: curves, springs, interpolation of frames,
   colors, transforms, shadows and corner radii, timing), which each backend steps on its frame clock and applies to its
-  own views; `nsh_core::animation::Animator` holds the graph with its bindings to views, gestures and scroll views
+  own views; a text's color, which lives in its typeset runs rather than its style, transitions as a color the backend
+  draws the whole text in over its runs (`Live::text_color`, `transition::recolor`: when the text is one color before
+  and after), the way it draws an animated `color`, so no frame typesets the text again; `nsh_core::animation::Animator` holds the graph with its bindings to views, gestures and scroll views
   and hands each bound view its `AnimValues`.
+- **Mobile backends**: style transitions are the platform's (Core Animation on iOS, `ValueAnimator`s in
+  `Mounter.java` on Android). A text's color follows the same rules as on the desktops and is drawn the same way,
+  over the laid-out lines in an in-between color, as an animated `color` is: iOS steps a `transition::TextColor` per
+  text (`transition::recolor` decides) on a display link that runs only while one moves (`interaction.rs`
+  `TextColors`); on Android the `TEXT` item carries the text's one color (`uniform_color`) and `TextBox.recolor`
+  runs a `ValueAnimator` on the view's transition (reduced motion: animators off, at once).
 - **Web**: animated values run in Rust as elsewhere; layout animations, transitions, keyframes and screen transitions
-  are Web Animations and CSS made to match the Linux backend (`web.md` "Animation").
+  are Web Animations and CSS made to match the Linux backend (`web.md` "Animation"); a text's color is a CSS
+  transition of its element's `color`, which its runs inherit.
 
 ## Compared with gpui-base's motion
 
@@ -114,19 +122,13 @@ interpolation to numbers, colors and angles, arithmetic and `diffClamp`; `decay`
 (`pan`, `pinch`, `rotation`) and scroll offsets (`scrollValue`) writing values directly; layout animations of a
 commit's frames, insertions and removals; and a library of ready-made motions as data.
 
-## Shaders and generative fills (decision)
+## Shaders
 
-NSH does not take app-written shaders. There is no shading language common to its backends: Metal on iOS and macOS,
-AGSL `RuntimeShader` only on Android 13 and later, HLSL Direct2D effects on Windows, GTK 4's `GskGLShader` deprecated
-since 4.16, no user shaders in GPUI, WebGL / WebGPU on the web. Apps are sandboxed plugins whose limits are enforced
-natively, and an arbitrary GPU program escapes those limits (its cost, hangs of the GPU). And a shader is a look,
-which NSH leaves to apps.
+Apps draw generative fills (mesh gradients, noise, grain, plasma) with shader views: `<Shader source={wgsl}>`, a
+WGSL `fn shade(uv: vec2f) -> vec4f` that the core checks with naga and the platforms render on the GPU (wgpu on the
+native backends, WebGL 2 on the web) under the view's children. Animated values among its `uniforms` are value slots
+bound as `AnimationProp::CanvasArg`, as a canvas drawing's are, so they move it with no JS per frame; a shader reading
+`nsh.time` draws every frame while it is in sight. See [shaders.md](shaders.md).
 
-What apps use today for gradient-art surfaces (getgradients.com's style): layered `linear-gradient` /
-`radial-gradient` / `conic-gradient` backgrounds, `filter: blur()`, `maskImage`, `mixBlendMode`, moved by motions and
-animated values (the gallery's animated aurora background is built that way), and Canvas drawings bound to animated
-values.
-
-A possible direction (a design decision to take, not planned work): parameterized generative fills in the core
-(mesh gradients, noise / grain) that each backend draws, or a constrained shader subset compiled per platform (for
-example WGSL through naga to MSL, HLSL, GLSL and SPIR-V) with a fallback fill where a platform cannot run it.
+Layered CSS gradients, `filter: blur()`, `maskImage` and `mixBlendMode` moved by motions and animated values, and
+Canvas drawings bound to animated values, remain the tools for fills built from shapes.

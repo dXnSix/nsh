@@ -1,4 +1,4 @@
-import { type JSX, signal, Text, View, type YNode } from "nsh";
+import { type InputRef, type JSX, signal, Text, View, type ViewRef } from "nsh";
 import { announce, reduceMotion, screenReaderEnabled, setAccessibilityFocus } from "nsh";
 import { LayoutAnimation } from "nsh";
 import { locale, pixelRatio, platform } from "nsh";
@@ -23,6 +23,7 @@ function Field(props: InputProps) {
       {...props}
       style={{
         placeholderColor: colors.faint,
+        caretColor: colors.accent,
         selectionColor: colors.accent,
         height: 48,
         paddingHorizontal: 14,
@@ -51,7 +52,7 @@ function LinkRow(props: { icon: IconName; title: string; note: string; onPress: 
         <IconTile name={props.icon} size={34} />
         <View style={{ flex: 1, gap: 2 }}>
           <Text style={{ fontSize: 15, fontWeight: "500", color: colors.text }}>{props.title}</Text>
-          <Text numberOfLines={1} style={{ fontSize: 12, color: colors.faint, fontFamily: mono }}>
+          <Text style={{ numberOfLines: 1, fontSize: 12, color: colors.faint, fontFamily: mono }}>
             {props.note}
           </Text>
         </View>
@@ -124,7 +125,7 @@ function PressableSheet() {
       <Caption label="Scales and darkens while pressed" note="active:scale-[0.97]" />
       <Sheet
         open={sheet()}
-        onOpenChange={(open) => sheet.set(open)}
+        onOpenChange={({ open }) => sheet.set(open)}
         backdropStyle={{ backgroundColor: "rgba(0,0,0,0.5)" }}
         popupStyle={{
           gap: 16,
@@ -203,13 +204,13 @@ function PressFeedback() {
 
 function Accessory() {
   const text = signal("");
-  let input: YNode | undefined;
+  let input: InputRef | undefined;
   return (
     <Card icon="text" title="Input accessory" subtitle="A bar over the iOS keyboard" right={<Badge label="nsh/ios" />}>
       <Field
         ref={(node) => (input = node)}
         value={text()}
-        onChange={(v) => text.set(v)}
+        onChange={({ value }) => text.set(value)}
         placeholder="Focus me"
         ios={{ inputAccessoryViewID: "counter" }}
       />
@@ -294,7 +295,7 @@ function ModalOptions() {
         animation="slide"
         android={{ statusBarTranslucent: translucent() }}
         ios={{ supportedOrientations: ["portrait", "landscape"] }}
-        onOpenChange={(open) => visible.set(open)}
+        onOpenChange={({ open }) => visible.set(open)}
         style={{ flex: 1 }}
       >
         <View style={{ flex: 1, backgroundColor: isDark() ? "#16200d" : "#eef5dc" }}>
@@ -339,17 +340,17 @@ function PlatformInfo() {
     ["locale()", locale()],
   ];
   const announced = signal(0);
-  let target: YNode | undefined;
+  let target: ViewRef | undefined;
   return (
     <Card icon="spark" title="Platform" subtitle="platform, pixelRatio, announce" right={<Badge label={platform.os} tone="accent" />}>
       <View>
         <Each of={rows()}>
           {(row, i) => (
             <Row first={i() === 0}>
-              <Text numberOfLines={1} style={{ flex: 1, fontSize: 12, color: colors.muted, fontFamily: mono }}>
+              <Text style={{ numberOfLines: 1, flex: 1, fontSize: 12, color: colors.muted, fontFamily: mono }}>
                 {row()[0]}
               </Text>
-              <Text numberOfLines={1} style={{ fontSize: 14, color: colors.text, fontVariant: ["tabular-nums"] }}>
+              <Text style={{ numberOfLines: 1, fontSize: 14, color: colors.text, fontVariant: ["tabular-nums"] }}>
                 {row()[1]}
               </Text>
             </Row>

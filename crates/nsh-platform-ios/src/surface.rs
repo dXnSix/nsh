@@ -274,7 +274,7 @@ impl RootView {
             options,
             on_error: Arc::new(MainThreadBound::new(RefCell::new(None), mtm)),
             on_hot_failed: Arc::new(MainThreadBound::new(RefCell::new(None), mtm)),
-            keyboard: Cell::new((0.0, 0.25)),
+            keyboard: Cell::new((0.0, 250.0)),
             app_state: Cell::new(app_state(mtm)),
             environment: Cell::new(None),
             host: Cell::default(),
@@ -354,6 +354,11 @@ impl RootView {
             // apps through its own UI sets (`nsh/native`).
             host: false,
             app_state: self.ivars().app_state.get(),
+            // UIKit has no screen color sampler.
+            screen_color: false,
+            // No file dialogs, file manager or trash (Catalyst included):
+            // the default, so the core answers those requests.
+            ..Environment::default()
         };
         // The embedding app's settings over the system's.
         self.ivars().host.get().apply(&mut env);
@@ -569,7 +574,10 @@ impl RootView {
             }
             _ => 0.0,
         };
-        self.ivars().keyboard.set((height as f32, duration as f32));
+        // UIKit gives seconds; the environment holds milliseconds.
+        self.ivars()
+            .keyboard
+            .set((height as f32, (duration * 1000.0) as f32));
         self.publish_environment();
         let Some(mounter) = self
             .ivars()

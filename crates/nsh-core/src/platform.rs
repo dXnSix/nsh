@@ -171,7 +171,7 @@ pub struct Environment {
     pub title_bar: Edges<Points>,
     /// Height of the software keyboard over the surface; 0 when hidden.
     pub keyboard_height: Points,
-    /// Duration of the keyboard's show / hide animation in seconds.
+    /// Duration of the keyboard's show / hide animation in milliseconds.
     pub keyboard_duration: f32,
     /// Light or dark appearance.
     pub color_scheme: ColorScheme,
@@ -215,6 +215,15 @@ pub struct Environment {
     /// focus, or in the background. For an embedded surface, the embedding
     /// app's.
     pub app_state: AppState,
+    /// The platform picks a color from the screen
+    /// ([`crate::Command::PickScreenColor`]); without it, a pick answers
+    /// no color at once.
+    pub screen_color: bool,
+    /// The platform shows the system's open and save dialogs and opens,
+    /// reveals and trashes local paths ([`crate::Command::FileRequest`],
+    /// the desktops); without it, those requests answer at once with an
+    /// error.
+    pub file_requests: bool,
 }
 
 impl Environment {
@@ -233,7 +242,7 @@ impl Default for Environment {
             safe_area: Edges::default(),
             title_bar: Edges::default(),
             keyboard_height: Points(0.0),
-            keyboard_duration: 0.25,
+            keyboard_duration: 250.0,
             color_scheme: ColorScheme::Light,
             font_scale: 1.0,
             rtl: false,
@@ -250,6 +259,8 @@ impl Default for Environment {
             time_zone: TimeZone::UTC,
             host: false,
             app_state: AppState::Active,
+            screen_color: false,
+            file_requests: false,
         }
     }
 }
@@ -942,7 +953,7 @@ impl TemperatureUnit {
 }
 
 /// An HTTP request for the platform's network stack (made by JS `fetch`
-/// and by Rust components' [`crate::element::ambient::fetch`]).
+/// and by Rust components' [`crate::element::fetch`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpRequest {
     /// Upper-case method (`GET`, `POST`, ...).

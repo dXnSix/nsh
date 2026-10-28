@@ -4,6 +4,7 @@
 // the steps after it are that case's.
 import { type JSX, View, mount, signal } from "nsh";
 import PaintBorders from "./paint-borders";
+import PaintCurrentColor from "./paint-current-color";
 import PaintEffects from "./paint-effects";
 import PaintInlineAlign from "./paint-inline-align";
 import PaintMisc from "./paint-misc";
@@ -15,9 +16,12 @@ import PaintText from "./paint-text";
 import StateStyles from "./state-styles";
 import StateChecked from "./state-checked";
 import StateIndeterminate from "./state-indeterminate";
+import StateExpanded from "./state-expanded";
+import StatePressed from "./state-pressed";
 
 const cases: Record<string, () => JSX.Element> = {
   "paint-borders": PaintBorders,
+  "paint-current-color": PaintCurrentColor,
   "paint-effects": PaintEffects,
   "paint-misc": PaintMisc,
   "paint-motion": PaintMotion,
@@ -28,6 +32,8 @@ const cases: Record<string, () => JSX.Element> = {
   "state-styles": StateStyles,
   "state-checked": StateChecked,
   "state-indeterminate": StateIndeterminate,
+  "state-expanded": StateExpanded,
+  "state-pressed": StatePressed,
   "paint-inline-align": PaintInlineAlign,
 };
 const shown = signal("");

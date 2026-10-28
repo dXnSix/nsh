@@ -18,12 +18,12 @@
 
 use jni::objects::GlobalRef;
 use nsh_core::{
-    AccessibilityRole, AudioSession, AutoCapitalize, AutoFill, BorderStyle, Checked, Color,
-    Command, DialogButtonStyle, InputConfig, KeyboardDismissMode, KeyboardTaps, KeyboardType,
-    LayoutCurve, LayoutProperty, LayoutTransition, LiveRegion, ModalAnimation, ModalPresentation,
-    MountBatch, MountItem, NativeProps, PointerEvents, ResizeMode, ReturnKeyType, ScreenAnimation,
-    ScreenConfig, SnapAlignment, StatusBarStyle, SubmitBehavior, TextAlign, ViewKind, ViewProps,
-    ViewStyle, WebSource,
+    AccessibilityCurrent, AccessibilityRole, AudioSession, AutoCapitalize, AutoFill, BorderStyle,
+    Checked, Color, Command, DialogButtonStyle, InputConfig, KeyboardDismissMode, KeyboardTaps,
+    KeyboardType, LayoutCurve, LayoutProperty, LayoutTransition, LiveRegion, ModalAnimation,
+    ModalPresentation, MountBatch, MountItem, NativeProps, PointerEvents, ResizeMode,
+    ReturnKeyType, ScreenAnimation, ScreenConfig, SnapAlignment, StatusBarStyle, SubmitBehavior,
+    TextAlign, ViewKind, ViewProps, ViewStyle, WebSource,
     geometry::{DefiniteLength, REM_SIZE},
 };
 
@@ -67,6 +67,7 @@ const OVERFLOW: i32 = 31;
 const ACCESSIBILITY_LABEL: i32 = 32;
 const APPEARANCE: i32 = 33;
 const COMPONENT_PROP_SLOTS: i32 = 34;
+const SHADER: i32 = 35;
 
 /// An entry of the object table.
 pub(crate) enum Obj {
@@ -223,6 +224,9 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                     None => 2,
                 });
                 opt_color(&mut e, text.selection_color);
+                // The one color all of it is drawn in, if there is one: a
+                // change of it transitions (`transition-colors`, `TextBox`).
+                opt_color(&mut e, text.uniform_color());
             }
             MountItem::Events { id, events } => {
                 e.int(EVENTS);
@@ -267,6 +271,7 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                 id,
                 horizontal,
                 scrollbar_visible,
+                replaced,
                 scroll_value,
                 pull_value,
                 keyboard_dismiss,
@@ -286,6 +291,7 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                     id,
                     horizontal,
                     scrollbar_visible,
+                    replaced,
                     scroll_value,
                     pull_value,
                     keyboard_dismiss,
@@ -323,6 +329,14 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                 e.int(CANVAS);
                 e.int(id as i32);
                 canvas(&mut e, &drawing);
+            }
+            MountItem::Shader { id, layer } => {
+                // Java learns only whether the view shows a shader; the
+                // layer goes to the UI-thread renderer (`crate::shader`).
+                e.int(SHADER);
+                e.int(id as i32);
+                e.bool(layer.is_some());
+                e.animation.push(MountItem::Shader { id, layer });
             }
             MountItem::Overflow { id, extent } => {
                 e.int(OVERFLOW);
@@ -634,7 +648,13 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                     | Command::Desktop(_)
                     // No host answers `nsh/host` here (`Environment::host`):
                     // the core rejects the calls first.
-                    | Command::HostCall { .. } => e.int(-1),
+                    | Command::HostCall { .. }
+                    // No eyedropper (`Environment::screen_color`): the core
+                    // answers no color first.
+                    | Command::PickScreenColor { .. }
+                    // No file dialogs (`Environment::file_requests`): the
+                    // core answers first.
+                    | Command::FileRequest { .. } => e.int(-1),
                 }
             }
         }
@@ -671,16 +691,6 @@ fn view_style(e: &mut Encoded, s: &ViewStyle) {
     });
     e.float(s.opacity);
     e.bool(s.overflow_hidden);
-    let shadow = s.shadow;
-    e.int(argb(shadow.color));
-    e.float(shadow.offset_x.0);
-    e.float(shadow.offset_y.0);
-    e.float(if shadow.is_visible() {
-        shadow.opacity
-    } else {
-        0.0
-    });
-    e.float(shadow.radius.0);
     for v in view_transform(&s.transform, |_| None) {
         e.float(v);
     }
@@ -763,11 +773,13 @@ fn effects(e: &mut Encoded, s: &ViewStyle) {
                 e.float(y.0);
             }
         }
+        // Repeated by `Decor.Gradient.place`, over the box it knows.
+        e.bool(g.repeating);
         if g.has_lengths() {
             // Stops placed in points depend on the box, which `Decor`
             // knows when it draws: they go as written, their count
             // negated, each with its unit (0 spread, 1 fraction, 2
-            // points), and `Decor.Gradient.resolve` places them.
+            // points), and `Decor.Gradient.place` places them.
             e.int(-(g.stops.len() as i32));
             for s in &g.stops {
                 e.int(argb(s.color));
@@ -1036,6 +1048,23 @@ fn view_props(e: &mut Encoded, p: &ViewProps) {
         Some(true) => flags |= 64 | 128,
         None => {}
     }
+    match s.pressed {
+        Some(Checked::False) => flags |= 256,
+        Some(Checked::True) => flags |= 256 | 512,
+        Some(Checked::Mixed) => flags |= 256 | 1024,
+        None => {}
+    }
+    // The current item's kind, in bits 11 to 13 (`A11y.java`
+    // `CURRENT_DESCRIPTIONS`).
+    flags |= match s.current {
+        None => 0,
+        Some(AccessibilityCurrent::True) => 1,
+        Some(AccessibilityCurrent::Page) => 2,
+        Some(AccessibilityCurrent::Step) => 3,
+        Some(AccessibilityCurrent::Location) => 4,
+        Some(AccessibilityCurrent::Date) => 5,
+        Some(AccessibilityCurrent::Time) => 6,
+    } << 11;
     e.int(flags);
     match &a.value {
         Some(v) => {
@@ -1125,6 +1154,13 @@ fn role_index(role: AccessibilityRole) -> i32 {
         RowGroup => 33,
         Listbox => 34,
         Option => 35,
+        Group => 36,
+        Region => 37,
+        Navigation => 38,
+        Tree => 39,
+        TreeItem => 40,
+        MenuItemCheckbox => 41,
+        MenuItemRadio => 42,
     }
 }
 
@@ -1202,6 +1238,8 @@ fn input(e: &mut Encoded, c: &InputConfig) {
     e.bool(c.auto_focus);
     e.bool(c.selection_color.is_some());
     e.int(c.selection_color.map_or(0, argb));
+    e.bool(c.caret_color.is_some());
+    e.int(c.caret_color.map_or(0, argb));
     // What return does: 0 submit, 1 submit and unfocus, 2 a line break.
     e.int(match c.submit() {
         SubmitBehavior::Submit => 0,
@@ -1242,6 +1280,10 @@ fn input(e: &mut Encoded, c: &InputConfig) {
     e.bool(c.caret_hidden);
     // `pasteBehavior`: whether a paste inserts its text.
     e.bool(c.paste_behavior == nsh_core::PasteBehavior::Insert);
+    // A multiline input's own scroll bar shows; a built-in bar replaces it
+    // (the input then reports how far its text scrolled).
+    e.bool(c.scrollbar_visible);
+    e.bool(c.replaced);
 }
 
 // --- Canvas drawings (`CanvasBox.java`) -------------------------------------

@@ -31,7 +31,7 @@ use crate::{
     geometry::{Percentage, Point, Points},
 };
 
-/// An element of a view: made with [`super::ambient::element_ref`], put on
+/// An element of a view: made with [`super::element_ref`], put on
 /// the element ([`super::Element::element_ref`]). Its commands go to
 /// whatever element carries it now, in order with the component's other
 /// changes; they do nothing while no rendered element carries it, and once
@@ -116,12 +116,16 @@ impl ElementRef {
         self.reach(|node, executor| executor.act(Action::Command(node, command)));
     }
 
-    /// Focuses an input (showing the keyboard).
+    /// Focuses an input (showing the keyboard), or gives a view that takes
+    /// presses the keyboard focus where Tab stops at it (macOS, the web),
+    /// as Tab does: `focus:` styles, `on_focus`. A view `focusable(false)`,
+    /// disabled or hidden stays unfocused.
     pub fn focus(&self) {
         self.send(Command::Focus);
     }
 
-    /// Unfocuses an input.
+    /// Unfocuses an input, or takes the keyboard focus off a view that
+    /// takes presses.
     pub fn blur(&self) {
         self.send(Command::Blur);
     }
@@ -249,6 +253,27 @@ impl ElementRef {
     }
 }
 
+impl ElementRef {
+    /// How long the element's transitions run (`transition*`: the
+    /// longest duration plus its delay), with the styles of the commit
+    /// this call goes out with, so a class or style set before it counts;
+    /// zero when it has none or no rendered element carries the ref. The
+    /// platforms run transitions without reporting their end: a component
+    /// that keeps an element through its exit (a popup's ending style)
+    /// waits this long. Await it in a task.
+    pub fn transition_time(&self) -> Answer<std::time::Duration> {
+        let (answer, slot) = Answer::new();
+        let pending = slot.clone();
+        if self
+            .reach(|node, executor| executor.act(Action::TransitionTime(node, pending)))
+            .is_none()
+        {
+            slot.borrow_mut().deliver(std::time::Duration::ZERO);
+        }
+        answer
+    }
+}
+
 impl PartialEq for ElementRef {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
@@ -264,7 +289,7 @@ impl fmt::Debug for ElementRef {
 }
 
 /// A component of a view (TS: a `ref` to a component, its methods): made
-/// with [`super::ambient::component_ref`], put on the component's element
+/// with [`super::component_ref`], put on the component's element
 /// ([`super::ComponentElement::component_ref`]); [`Self::api`] reaches its
 /// methods, with no encoding. A `Copy` handle, as [`ElementRef`] is.
 pub struct ComponentRef<C: Component> {

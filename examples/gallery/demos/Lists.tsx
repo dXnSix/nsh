@@ -1,4 +1,4 @@
-import { cleanup, computed, effect, List, Scroll, signal, Text, View, type YNode } from "nsh";
+import { cleanup, computed, effect, List, type ListRef, Scroll, signal, Text, View } from "nsh";
 import { reduceMotion } from "nsh";
 import { Animated, type AnimatedNode, createAnimatedValue, Easing, LayoutAnimation } from "nsh";
 import { platform } from "nsh";
@@ -40,7 +40,7 @@ function Grid() {
   const items = Array.from({ length: 90 }, (_, i) => ({ id: i, height: 84 + (i % 4) * 22, tone: tones[i % tones.length] }));
   const first = signal(-1);
   const last = signal(-1);
-  let list!: YNode;
+  let list!: ListRef;
   const wide = desktop();
   const grid = (columns: number) => (
     <List
@@ -50,7 +50,7 @@ function Grid() {
       estimatedItemSize={110}
       style={{ flex: 1 }}
       contentStyle={wide ? { padding: 24, gap: 12 } : { padding: 16, gap: 8 }}
-      viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
+      viewabilityConfig={{ itemVisibleThreshold: 0.5 }}
       onViewableItemsChange={({ viewableItems }) => {
         first.set(viewableItems.length ? viewableItems[0].index : -1);
         last.set(viewableItems.length ? viewableItems[viewableItems.length - 1].index : -1);
@@ -196,7 +196,7 @@ function Contacts() {
                   <Text style={{ fontSize: 15, color: colors.text }}>
                     {person().first} <Text style={{ fontWeight: "600" }}>{person().last}</Text>
                   </Text>
-                  <Text numberOfLines={1} style={{ fontSize: 13, color: colors.muted }}>
+                  <Text style={{ numberOfLines: 1, fontSize: 13, color: colors.muted }}>
                     {person().note}
                   </Text>
                 </View>
@@ -315,13 +315,14 @@ function Chat() {
       >
         <Input
           value={draft()}
-          onChange={(v) => draft.set(v)}
+          onChange={({ value }) => draft.set(value)}
           onSubmit={send}
           submitBehavior="submit"
           placeholder="Message"
           returnKeyType="send"
           style={{
             placeholderColor: colors.faint,
+            caretColor: colors.accent,
             selectionColor: colors.accent,
             flex: 1,
             height: 44,
@@ -371,8 +372,7 @@ function CustomIndicator(props: { pull: AnimatedNode; refreshing: boolean }) {
   const pull = props.pull;
   return (
     <View
-      pointerEvents="none"
-      style={{ position: "absolute", top: 0, left: 0, right: 0, height: INDICATOR, alignItems: "center", justifyContent: "center" }}
+      style={{ pointerEvents: "none", position: "absolute", top: 0, left: 0, right: 0, height: INDICATOR, alignItems: "center", justifyContent: "center" }}
     >
       <View
         style={{
@@ -681,7 +681,7 @@ function Page() {
   const weeks = recent.flatMap((row, i) => ("week" in row ? [i] : []));
   const indexOf = (id: number) => recent.findIndex((row) => "id" in row && row.id === id);
   const archive = signal(entries(0, 100));
-  let list!: YNode;
+  let list!: ListRef;
   const loadMore = () => {
     if (archive().length < 500) archive.update((a) => [...a, ...entries(a.length, 100)]);
   };
@@ -752,7 +752,7 @@ function Page() {
           backgroundColor: colors.background,
           borderBottomWidth: 1,
           borderBottomColor: colors.border,
-          transform: [{ translateY: hidden.mul(-1) }],
+          translate: [0, hidden.mul(-1)],
         }}
       >
         <Text style={{ flex: 1, fontSize: 15, fontWeight: "600", color: colors.text }}>Recent and archived</Text>

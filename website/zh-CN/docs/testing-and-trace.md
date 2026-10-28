@@ -303,7 +303,7 @@ expect(app.texts()).toContain("Saved at 09:00:10");
 
 `Date`、`performance.now()` 和 `Intl` 的默认日期都跟随这个时钟。步骤不再等待正在进行的内容：只要应用在请求帧或有原生
 动画在运行，帧就一帧接一帧地立即到来，每帧在时钟上相隔一帧的时间（1/60 s）；300 ms 的转场只需几毫秒，期间到期的
-定时器也会执行。`app.wait(ms)` 和长按会把时钟推进它们各自的时长。更晚到期的定时器只有在测试把时钟推进到那里时才会执行。
+定时器也会执行。无限循环的动画（加载指示器）随时钟运行：测试推进时钟时它跟着转动。`app.wait(ms)` 和长按会把时钟推进它们各自的时长。更晚到期的定时器只有在测试把时钟推进到那里时才会执行。
 `waitFor` 的超时仍按真实时间计算，因为它也在等待来自外部的内容（路由的函数、网络）。gallery 的测试就是这样运行的
 （`examples/gallery/tests`）：其中十二个要等动画的测试用 6 s，而不是 28 s。
 
@@ -335,13 +335,16 @@ expect(app.texts()).toContain("Saved at 09:00:10");
 | `await app.type(selector, text)` | 在输入框（或该视图内的第一个输入框；`text:` 也匹配输入框的内容或占位文字）已有内容的末尾逐键输入：输入框先获得焦点，然后每个字符触发一次 `onKeyPress` 和一次 `onChange`，不超过 `maxLength`。单行输入框中的 `\n` 相当于回车键。 |
 | `await app.submit(selector)` | 在输入框中按回车键，行为由它的 `submitBehavior` 决定：触发 `onSubmit`（单行输入框随后失去焦点），或者在多行输入框中换行。 |
 | `await app.scroll(selector, distance)` | 沿滚动视图或列表（该视图、它外层的滚动视图，或它内部的第一个）的方向拖动 `distance` 点，每帧 10 点，不超出内容范围，前提是用户可以滚动它（`scrollable`）。负数表示往回滚。 |
-| `await app.hover(selector)` | 把鼠标移到视图中央：鼠标离开的视图收到 `onHoverOut`，移入的视图收到 `onHoverIn` 并应用 `hover:` 样式，监听的视图收到带位置的 `onHoverMove`。用于桌面和任意宽度的 web，包括手机形态的浏览器（headless 时使用桌面或 `"web"` `platform`）；iOS 和 Android 手机没有鼠标，在那里会 reject。 |
+| `await app.hover(selector)` | 把鼠标移到视图中央：鼠标离开的视图收到 `onMouseLeave`，移入的视图收到 `onMouseEnter` 并应用 `hover:` 样式，监听的视图收到带位置、没有按下按键的 `onMouseMove`。用于桌面和任意宽度的 web，包括手机形态的浏览器（headless 时使用桌面或 `"web"` `platform`）；iOS 和 Android 手机没有鼠标，在那里会 reject。 |
 | `await app.rightClick(selector)` | 在视图中央按下鼠标右键：该视图或其外层最近的监听视图收到 `onContextMenu`。用于桌面和 web（headless 时使用桌面 `platform`）；手机没有鼠标，在那里会 reject。 |
-| `await app.paste(selector, { text?, html?, files?, uris? })` | 像剪贴板上有这些内容时用户粘贴一样粘贴到输入框：输入框获得焦点并收到 `onPaste`（`html` 是带格式的同一内容，`files` 是文件路径，其字节以 `File` 交给它，`uris` 是 `file:` URL），然后按 `pasteBehavior` 插入文本。支持 headless、macOS 和 iOS；本机剪贴板保持不变。 |
+| `await app.paste(selector, { text?, html?, files?, uris? })` | 像剪贴板上有这些内容时用户粘贴一样粘贴到输入框：输入框获得焦点并收到 `onPaste`（`html` 是带格式的同一内容，`files` 是文件路径，其字节以 `File` 交给它，`uris` 是 `file:` URL），然后按 `pasteBehavior` 插入文本。支持 headless、macOS、iOS 和 web；本机剪贴板保持不变。 |
 | `app.menu()` | 应用显示的上下文菜单（`Menu.popup`）中的操作：`label`（子菜单中的项写在子菜单名之后，如 `"Share > Mail"`）、`disabled`，可勾选项还有 `checked`；没有打开的菜单时为 `null`。 |
 | `await app.chooseMenuItem(label)` | 选择已打开上下文菜单中的操作，如同点击它：应用收到 `onMenu`（其 `onSelect` 运行），然后菜单关闭。该项被禁用或不存在时 reject。 |
 | `await app.closeMenu()` | 关闭已打开的上下文菜单，不选择任何项，如同按下 Escape。 |
 | `await app.keyboard.press(keys)` | 按下一个带修饰键的按键，写法同 `keymap`（`"mod+k"`、`"shift+/"`、`"escape"`；`mod` 是平台的命令键），如同硬件键盘，在所有平台上都可用（手机和平板也可以接硬件键盘）：由应用的对应快捷键接收（`keymap.bind`、`onKeyCommand`），否则在 macOS 和 Web 上由 Tab 和 Shift+Tab 在输入框和可按压的视图之间移动键盘焦点（`onFocus`、`onBlur`、`focus:` 样式），Return 或空格按下焦点所在的视图，否则由获得焦点的输入框接收字符、Backspace 或回车，否则 Escape 执行返回。 |
+| `await app.keyboard.down(keys)` / `up(keys)` | 按住修饰键（`"mod"`、`"shift"`、`"alt"`、`"ctrl"`、`"meta"`，用 `+` 连接）直到 `up`：期间的按压、拖动和悬停都带着这些键，如同 Mod 加点击或 Shift 加拖动。目前在 headless 和 Linux 上可用。 |
+| `await app.dragAndHold(selector, by)` / `app.drop()` | 像 `drag` 一样拖动，但手指一直按着，直到 `drop()` 在当前位置抬起：其间的步骤可以查看拖动中的画面（拖动预览、放置线）。目前在 headless 和 Linux 上可用。 |
+| `await app.dropFiles(selector, uris)` | 把本地文件（`file:` URL，如同从文件管理器拖来）放到视图中央：它或外层最近一个监听的视图收到 `onFileDrop`。桌面平台，目前在 headless 和 Linux 上可用。 |
 | `await app.drag(selector, { x, y })` | 手指落在视图中央，停留 100 ms，再移动 `x`、`y` 点（每帧 10 点）后抬起，由平台的输入系统处理：pan 跟随手指（`pan={{ x, y }}`、`onPanStart`，以及带松手速度的 `onPanEnd`），监听触摸的视图会收到触摸事件（`onTouchStart`、`PanResponder`），滚动视图随手指滚动，拉过顶部足够远时触发刷新（`onRefresh`），手指移开后其下的按压会被取消。在桌面和 web 上由鼠标完成。 |
 | `await app.wait(ms)` | 让应用运行 `ms` 毫秒：定时器、动画、请求。在手动时钟上，把时钟推进 `ms`（`app.clock.runFor`）。 |
 | `await app.waitFor(selector, options?)` | 有视图匹配时 resolve；传 `{ state: "gone" }` 时，等到没有视图匹配才 resolve；`timeout` 毫秒（5000）后 reject。 |
@@ -351,7 +354,7 @@ expect(app.texts()).toContain("Saved at 09:00:10");
 | `app.enabled(selector)` | 视图是否接受输入：它本身和外层视图都没有被禁用，输入框还要求不是 `readonly`。 |
 | `app.texts()` | 当前屏幕上的文字，按顺序排列。 |
 | `app.value(selector)` | 输入框的内容，没有匹配时为 `null`。 |
-| `app.spanStyle(selector)` | 在无界面测试中，返回匹配到的第一个字符的解析样式：`color`、可选的 `backgroundColor`、`fontSize`、`fontWeight`、`italic`、`underline` 和 `lineThrough`。颜色为 `#rrggbbaa`，字号单位为 pt。 |
+| `app.spanStyle(selector)` | 返回匹配到的第一个字符的解析样式（无界面测试和各个 `--target` 都支持）：`color`、可选的 `backgroundColor`、`fontSize`、`fontWeight`、`italic`、`underline` 和 `lineThrough`。颜色为 `#rrggbbaa`，字号单位为 pt。 |
 | `app.storage()` | 应用存储当前保存的内容。 |
 | `await app.back()` | 像用户那样返回（导航栏的返回按钮、下滑关闭弹出页）：最新的模态窗口里（没有模态窗口时就在整个屏幕上）最内层的导航栈弹出栈顶页面（`onDismiss`），栈顶页面设置了 `preventBack` 时改为询问它（`onBackRequest`）；没有可返回的栈时，最新的模态窗口请求关闭（`onRequestClose`）。没有可返回的内容时 reject。 |
 | `app.onDialog(handler)` | 回答应用之后弹出的对话框（`Alert.alert`、操作表）：`handler` 接收对话框（`title`、`message`、`buttons`、`cancelable`、`sheet`），返回要按的按钮文字，返回 `null` 则不按按钮直接关闭。 |
@@ -371,8 +374,9 @@ expect(app.texts()).toContain("Saved at 09:00:10");
 | `await app.setTimeZone(name)` | 把设备移到时区 `name`（IANA 名称，`"Asia/Tokyo"`），就像用户出行或修改设置时那样（`timeZone()`）。仅限 headless 运行。 |
 | `await app.screenshot(path?)` | 应用窗口的 PNG 截图（`Uint8Array`）；给出 `path` 时同时保存到本机的这个路径（相对当前目录）。只有真实平台会绘制应用：见[在真实平台上运行](#在真实平台上运行)。 |
 
-步骤会等到应用连续 100 ms 没有渲染、并且没有正在运行的原生动画（对一直在渲染的应用最多等 2 s；在手动时钟上，同时最多等应用时间的 2 s）后才 resolve，所以下一行
-代码运行时，这一步带来的变化已经在屏幕上；之后才出现的内容（响应、定时器）用 `waitFor` 等待。选择器没有匹配到任何视图
+步骤会等到应用连续 100 ms 没有渲染、并且没有正在运行的、会自行结束的原生动画（对一直在渲染的应用最多等 2 s；在手动时钟上，同时最多等应用时间的 2 s）后才 resolve，所以下一行
+代码运行时，这一步带来的变化已经在屏幕上；之后才出现的内容（响应、定时器）用 `waitFor` 等待。无限循环的动画（比如加载
+指示器）在后台持续运行，步骤和 `waitFor` 照常进行，就像浏览器测试中的无限 CSS 动画一样。选择器没有匹配到任何视图
 （错误信息会列出屏幕上的文字）、应用在此期间抛出了异常，或者应用请求了只有真实平台才能回答的内容时，步骤会 reject，
 测试随之失败。
 
@@ -384,7 +388,7 @@ expect(app.texts()).toContain("Saved at 09:00:10");
 
 无界面运行有真实的运行时，但没有平台。它只扮演 NSH 协议规定的平台角色，不模拟只有真实平台才能做的事：
 
-- **原生动画会运行**，逐帧跑到结束：`start(callback)` 的回调会执行，等待动画结束的逻辑也会继续。
+- **原生动画会运行**，逐帧跑到结束：`start(callback)` 的回调会执行，等待动画结束的逻辑也会继续。没有终点的循环一直运行，直到应用停止它。
 - **返回**会像平台那样弹出页面、关闭模态窗口（`app.back()`）。
 - **对话框会被回答**：由测试的 `onDialog` 回答，否则按它的取消按钮，否则在可以关闭时直接关闭；只能用其他按钮回答的对话框，
   会让弹出它的步骤失败，直到测试指定要按哪个按钮。

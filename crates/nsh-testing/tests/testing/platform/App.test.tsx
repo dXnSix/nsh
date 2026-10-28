@@ -29,11 +29,11 @@ test("back closes a modal", async () => {
 test("a dialog is cancelled unless the test answers it", async () => {
   const app = await open("./App.tsx");
   await app.press("Delete");
-  await app.waitFor("Answer: Cancel");
+  await app.waitFor("Answer: cancel");
   expect(app.dialogs()[0].message).toBe("It is gone after.");
   app.onDialog((dialog) => (dialog.title === "Delete?" ? "Delete" : null));
   await app.press("Delete");
-  await app.waitFor("Answer: Delete");
+  await app.waitFor("Answer: delete");
   // Closing it without a button is the user's choice only when it can be.
   await expect(() => app.press("Update")).rejects.toThrow("cannot be dismissed");
 });
@@ -61,4 +61,20 @@ test("an image's size is answered as a failed load", async () => {
   const app = await open("./App.tsx");
   await app.press("Measure");
   await app.waitFor("Size: not loaded");
+});
+
+test("focus() gives a view that takes presses the keyboard focus where Tab stops at it", async () => {
+  const app = await open("./App.tsx", { platform: "macos" });
+  await app.press("Focus it");
+  await app.waitFor("Key focus: focused");
+  // Return presses the view the focus is on, and its blur() lets it go.
+  await app.keyboard.press("enter");
+  await app.waitFor("Key focus: focused blurred");
+});
+
+test("focus() leaves views that take presses alone where Tab skips them", async () => {
+  const app = await open("./App.tsx");
+  await app.press("Focus it");
+  await app.wait(100);
+  expect(app.texts()).toContain("Key focus: none");
 });

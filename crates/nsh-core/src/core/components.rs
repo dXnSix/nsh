@@ -21,8 +21,8 @@ use crate::{
     Tag, TextEngine,
     element::{
         Action, AnswerSlot, AnyInstance, AnyValue, Attrs, Child, ClipboardRead, ComponentError,
-        ComponentSpec, ElKind, ElNode, Environment, Executor, ImageSize, IntoElement, JsEvent,
-        JsResult, ListConfig, Listener, ModuleCx, ParentElement, PlaceFn, Position, Posts,
+        ComponentSpec, ElKind, ElNode, Environment, Executor, FileAnswer, ImageSize, IntoElement,
+        JsEvent, JsResult, ListConfig, Listener, ModuleCx, ParentElement, PlaceFn, Position, Posts,
         Reactive, Registry, Root, RustCall, RustOp, SharedString, StyleRefinement, Task, Tokens,
         caught,
         responder::ResponderEl,
@@ -123,7 +123,7 @@ pub(super) struct Instance {
     pub(super) class_list: Vec<Box<str>>,
     /// The app's classes, or the styles the view this one is in gives it:
     /// applied after the root's own.
-    pub(super) user: Option<Arc<ClassList>>,
+    pub(super) user: Option<std::rc::Rc<ClassList>>,
     /// Events JS listens to on the host.
     js_events: EventMask,
     /// The view, expanded (its root is the host); a list cell's row as
@@ -161,6 +161,11 @@ pub(super) struct Instance {
     /// In a view: the owner where it places its JS children (a region's),
     /// which the components JS made among them are under.
     children_owner: Option<crate::element::Owner>,
+    /// It joined a host as its children (content a view passed a nested
+    /// component, `tabs().child(tab())`): its view waits, as one JS made
+    /// does, to be in the tree under where that host's view places it, so
+    /// it reads the context there.
+    joined: bool,
     /// The component its view's root is, made on this host (its alias,
     /// [`Core::alias`]): its view makes the host's node.
     rooted: Option<NodeId>,
@@ -182,7 +187,7 @@ pub(super) struct Instance {
 /// and the views that place them ([`Core::root_context`]).
 pub(super) struct RootContext {
     /// Their styles, after the root's (the outer last).
-    pub(super) user: Option<Arc<ClassList>>,
+    pub(super) user: Option<std::rc::Rc<ClassList>>,
     /// Whether `app` is what goes after the root's inline style (else the
     /// component's own app style is).
     pub(super) combined: bool,
@@ -269,6 +274,7 @@ impl Instance {
             row_index: None,
             lazy_wanted: None,
             children_owner: None,
+            joined: false,
             rooted: None,
             above: None,
             fills: Vec::new(),
@@ -306,10 +312,17 @@ pub(super) enum Part {
 
 /// A node's app classes ([`Components::app_classes`]): its own rules, the
 /// classes, and what goes after them.
-pub(super) type AppClass = (Option<Arc<ClassList>>, SharedString, Option<Arc<ClassList>>);
+pub(super) type AppClass = (
+    Option<std::rc::Rc<ClassList>>,
+    SharedString,
+    Option<std::rc::Rc<ClassList>>,
+);
 
 /// The node's classes: its styles lowered, and what was merged after them.
-pub(super) type Classes = (Option<Arc<ClassList>>, Option<Arc<ClassList>>);
+pub(super) type Classes = (
+    Option<std::rc::Rc<ClassList>>,
+    Option<std::rc::Rc<ClassList>>,
+);
 
 /// An element of a view, as it was applied.
 pub(super) struct Expanded {
@@ -452,10 +465,10 @@ pub(super) struct Components {
     pub(super) slot_targets: FxHashMap<NodeId, super::slots::SlotTarget>,
     /// The app's elements a slot's props go to -> their slot node.
     pub(super) adopted: FxHashMap<NodeId, NodeId>,
-    styles: FxHashMap<StyleRefinement, Arc<ClassList>>,
+    styles: FxHashMap<StyleRefinement, std::rc::Rc<ClassList>>,
     /// The styles a component on another's host gets from each above it,
     /// merged (by the lists', which the entry keeps).
-    merges: FxHashMap<(usize, usize), [Arc<ClassList>; 3]>,
+    merges: FxHashMap<(usize, usize), [std::rc::Rc<ClassList>; 3]>,
     /// While a view's slot content is matched: the nested component's host
     /// and the slot (its regions are the slot's).
     pub(super) filling: Option<(NodeId, &'static str)>,
@@ -497,6 +510,13 @@ pub(super) struct Components {
     /// Those not handed to the engine yet ([`Core::take_url_opens`]).
     url_requests: Vec<(u32, String)>,
     next_url_open: u32,
+    /// Colors being picked on the screen, by request id: their answers.
+    screen_colors: FxHashMap<u32, AnswerSlot<Option<crate::Hsla>>>,
+    next_screen_color: u32,
+    /// Requests on local paths (`pick_paths`, `open_path`, ...), by
+    /// request id: their answers.
+    file_requests: FxHashMap<u32, FileAnswer>,
+    next_file_request: u32,
     /// HTTP requests of tasks (`ui::fetch`), by request id: what arrived
     /// so far and the answer.
     fetches: FxHashMap<u32, PendingFetch>,
@@ -509,10 +529,17 @@ pub(super) struct Components {
     /// Elements to measure once this commit is laid out
     /// ([`crate::element::ElementRef::measure`]).
     pub(super) measures: Vec<(NodeId, AnswerSlot<Option<crate::Measurement>>)>,
+    /// Elements whose transitions' time to tell once this commit is
+    /// styled ([`crate::element::ElementRef::transition_time`]).
+    pub(super) transition_times: Vec<(NodeId, AnswerSlot<std::time::Duration>)>,
     /// The components' own lists, by node.
     virtual_lists: FxHashMap<NodeId, VirtualListState>,
     /// Views JS made, waiting to be in the tree to make their view.
     waiting: Vec<NodeId>,
+    /// Calls of components' methods made before their view was (a ref is
+    /// given as its component is made, and the view registers what the
+    /// methods act on): host, promise, call; run once the view is made.
+    parked_methods: Vec<(NodeId, u32, crate::element::MethodCall)>,
     /// The row counts the cells of views' lists read (their positions), by
     /// list, each under a root of its own that goes with the list.
     list_counts: FxHashMap<NodeId, (crate::element::Owner, crate::element::Signal<usize>)>,
@@ -584,6 +611,10 @@ impl Default for Components {
             url_opens: FxHashMap::default(),
             url_requests: Vec::new(),
             next_url_open: 0,
+            screen_colors: FxHashMap::default(),
+            next_screen_color: 1,
+            file_requests: FxHashMap::default(),
+            next_file_request: 1,
             next_clipboard_read: 1,
             picks: FxHashMap::default(),
             next_pick: 1,
@@ -594,9 +625,11 @@ impl Default for Components {
             next_fetch: 1,
             animations: FxHashMap::default(),
             measures: Vec::new(),
+            transition_times: Vec::new(),
             virtual_lists: FxHashMap::default(),
             list_counts: FxHashMap::default(),
             waiting: Vec::new(),
+            parked_methods: Vec::new(),
             list_layouts: FxHashMap::default(),
             insets: FxHashMap::default(),
             js_back: false,
@@ -653,7 +686,7 @@ impl Components {
 
     /// `style` as rules, shared between the elements that have it (its
     /// static declarations: bound parts are applied by bindings).
-    pub(super) fn lowered(&mut self, style: &StyleRefinement) -> Arc<ClassList> {
+    pub(super) fn lowered(&mut self, style: &StyleRefinement) -> std::rc::Rc<ClassList> {
         if style.is_bound() {
             return self.lowered(&style.static_part());
         }
@@ -663,7 +696,7 @@ impl Components {
         if self.styles.len() >= STYLE_CACHE {
             self.styles.clear();
         }
-        let list = Arc::new(style.lower());
+        let list = std::rc::Rc::new(style.lower());
         self.styles.insert(style.clone(), list.clone());
         list
     }
@@ -691,9 +724,9 @@ fn inline_style(
     Op::SetStyle { id, style, patch }
 }
 
-fn same(a: &Option<Arc<ClassList>>, b: &Option<Arc<ClassList>>) -> bool {
+fn same(a: &Option<std::rc::Rc<ClassList>>, b: &Option<std::rc::Rc<ClassList>>) -> bool {
     match (a, b) {
-        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        (Some(a), Some(b)) => std::rc::Rc::ptr_eq(a, b),
         (None, None) => true,
         _ => false,
     }
@@ -790,18 +823,9 @@ impl<M: TextEngine> Core<M> {
             self.components.status_bars.set_base(setting);
         }
         let _entered = self.components.runtime.enter();
-        let mut el = root.element().0;
-        let ElKind::Component(c) = std::mem::replace(&mut el.kind, ElKind::Plain) else {
+        let Some(id) = self.make_component(root.element(), |_, _| {}) else {
             return log::error!("the root is not a component");
         };
-        let id = self.components.alloc();
-        let _ = self.apply_op(Op::Create { id, tag: el.tag });
-        self.create_instance_of(id, c.name, c.make, c.spec);
-        if let Some(inst) = self.components.instances.get_mut(&id)
-            && let Inner::Component(inner) = &mut inst.inner
-        {
-            inner.set_props(c.props.as_any());
-        }
         let _ = self.apply_op(Op::Insert {
             parent: ROOT_ID,
             child: id,
@@ -810,7 +834,36 @@ impl<M: TextEngine> Core<M> {
         self.own_direction();
     }
 
-    /// The environment components read ([`crate::element::ambient::window`]
+    /// Makes the host of component element `el` (`None`: `el` is not a
+    /// component), out of the tree; `made` sees its node first, before it
+    /// renders.
+    pub(super) fn make_component(
+        &mut self,
+        el: crate::element::AnyElement,
+        made: impl FnOnce(&mut Self, NodeId),
+    ) -> Option<NodeId> {
+        let mut el = el.0;
+        let ElKind::Component(c) = std::mem::replace(&mut el.kind, ElKind::Plain) else {
+            return None;
+        };
+        let id = self.components.alloc();
+        let _ = self.apply_op(Op::Create { id, tag: el.tag });
+        made(self, id);
+        self.create_instance_of(id, c.name, c.make, c.spec);
+        if let Some(inst) = self.components.instances.get_mut(&id)
+            && let Inner::Component(inner) = &mut inst.inner
+        {
+            inner.set_props(c.props.as_any());
+        }
+        Some(id)
+    }
+
+    /// How the sets make the views' built-in scroll bars.
+    pub(super) fn scrollbar_source(&self) -> Option<crate::element::ScrollbarSource> {
+        self.components.registry.scrollbar_source()
+    }
+
+    /// The environment components read ([`crate::element::window`]
     /// and the like), as the platform reports it: what read a part that
     /// changed runs again. `dark` is the system's: the app's
     /// appearance wins over it ([`Core::set_appearance`]).
@@ -831,6 +884,8 @@ impl<M: TextEngine> Core<M> {
         if ratio != environment.pixel_ratio {
             self.repick_images(ratio, environment.pixel_ratio);
         }
+        // Frames and text measurements are rounded to device pixels.
+        self.pixel_ratio_changed(environment.pixel_ratio);
         if changed {
             // What reads a part that changed runs again.
             self.components.runtime.set_environment(environment);
@@ -1106,6 +1161,9 @@ impl<M: TextEngine> Core<M> {
                 if was_empty || place == Placement::Each {
                     self.components.mark(parent);
                 }
+                if let Some(joined) = self.components.instances.get_mut(&child) {
+                    joined.joined = true;
+                }
                 match place {
                     // Before its next JS sibling, else before what the
                     // view puts after the children.
@@ -1332,6 +1390,11 @@ impl<M: TextEngine> Core<M> {
                 }
                 Err(message) => self.settle(call, Err(message.into())),
             },
+            RustCall::Method(host, method) if self.view_pending(host) => {
+                // Called from its ref, which the app gets as the component
+                // is made, before its view is (`render_components`).
+                self.components.parked_methods.push((host, call, method));
+            }
             RustCall::Method(host, method) => {
                 let mut failed = None;
                 let result = match self
@@ -1393,7 +1456,7 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// What goes after `host`'s own styles.
-    pub(super) fn set_user(&mut self, host: NodeId, user: Option<Arc<ClassList>>) {
+    pub(super) fn set_user(&mut self, host: NodeId, user: Option<std::rc::Rc<ClassList>>) {
         let inst = self.components.instances.get_mut(&host).expect("host");
         if !same(&inst.user, &user) {
             inst.user = user;
@@ -1511,7 +1574,8 @@ impl<M: TextEngine> Core<M> {
             let rendered = self.render_dirty();
             let failed = self.report_failures();
             let woke = self.wake_waiting();
-            if !changed && !rendered && !failed && !woke {
+            let called = self.run_parked_methods();
+            if !changed && !rendered && !failed && !woke && !called {
                 break;
             }
         }
@@ -1674,7 +1738,9 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// Whether `host` is a component that runs once, made by JS (no owner
-    /// placed it), whose view is not made yet, out of the tree.
+    /// placed it) or passed by a view as a nested component's content
+    /// (`joined`), whose view is not made yet, out of the tree: the view
+    /// that places it gives its context.
     fn waits_for_tree(&self, host: NodeId) -> bool {
         let Some(inst) = self.components.instances.get(&host) else {
             return false;
@@ -1682,7 +1748,9 @@ impl<M: TextEngine> Core<M> {
         let Inner::Component(inner) = &inst.inner else {
             return false;
         };
-        inst.root.is_none() && !inner.failure_owner().is_live() && !self.id_in_tree(host)
+        inst.root.is_none()
+            && (inst.joined || !inner.failure_owner().is_live())
+            && !self.id_in_tree(host)
     }
 
     /// Whether node `id` is in the root's tree.
@@ -1707,6 +1775,36 @@ impl<M: TextEngine> Core<M> {
             }
         }
         woke
+    }
+
+    /// Runs the calls of methods parked for components whose view is now
+    /// made; whether any ran.
+    fn run_parked_methods(&mut self) -> bool {
+        if self.components.parked_methods.is_empty() {
+            return false;
+        }
+        let parked = std::mem::take(&mut self.components.parked_methods);
+        let mut ran = false;
+        for (host, call, method) in parked {
+            if self.view_pending(host) {
+                self.components.parked_methods.push((host, call, method));
+            } else {
+                ran = true;
+                self.run_rust(RustOp {
+                    call,
+                    run: RustCall::Method(host, method),
+                });
+            }
+        }
+        ran
+    }
+
+    /// Whether `host` hosts a component whose view is not made yet.
+    fn view_pending(&self, host: NodeId) -> bool {
+        self.components
+            .instances
+            .get(&host)
+            .is_some_and(|i| matches!(&i.inner, Inner::Component(inner) if inner.owner().is_none()))
     }
 
     /// The owner of the nearest component above `host` in the tree (its
@@ -2093,7 +2191,7 @@ impl<M: TextEngine> Core<M> {
         }
         // The host listens to its component's events and to JS's.
         let js = top_js.unwrap_or(inst.js_events);
-        self.apply_handlers(host, &el, old_events | js, js, inst);
+        self.apply_handlers(host, host, &el, old_events | js, js, inst);
         let mut events = EventMask::default();
         for (kind, _) in &el.handlers {
             events.set(*kind, true);
@@ -2210,6 +2308,12 @@ impl<M: TextEngine> Core<M> {
         if let Some(given) = &inst.given {
             take(&mut cx, given);
         }
+        // The classes the element was given in Rust (`app_class`), as the
+        // app's `class` on its host.
+        if let Some(class) = inst.given.as_ref().and_then(|g| g.class.clone()) {
+            let given = self.app_class_list(&class);
+            cx.user = self.merge_user(cx.user.take(), Some(given));
+        }
         let mut app = inst.app_style.clone();
         let mut at = inst.above;
         while let Some(id) = at {
@@ -2224,6 +2328,10 @@ impl<M: TextEngine> Core<M> {
                 take(&mut cx, given);
             }
             cx.user = self.merge_user(cx.user.take(), outer);
+            if let Some(class) = given.and_then(|g| g.class.clone()) {
+                let given = self.app_class_list(&class);
+                cx.user = self.merge_user(cx.user.take(), Some(given));
+            }
         }
         if let Some(app) = &app {
             decls.extend(app.decls().iter().cloned());
@@ -2265,19 +2373,22 @@ impl<M: TextEngine> Core<M> {
     /// `inner`'s rules, then `outer`'s (one list per pair, kept).
     pub(super) fn merge_user(
         &mut self,
-        inner: Option<Arc<ClassList>>,
-        outer: Option<Arc<ClassList>>,
-    ) -> Option<Arc<ClassList>> {
+        inner: Option<std::rc::Rc<ClassList>>,
+        outer: Option<std::rc::Rc<ClassList>>,
+    ) -> Option<std::rc::Rc<ClassList>> {
         match (inner, outer) {
             (Some(a), Some(b)) => {
-                let key = (Arc::as_ptr(&a) as usize, Arc::as_ptr(&b) as usize);
+                let key = (
+                    std::rc::Rc::as_ptr(&a) as usize,
+                    std::rc::Rc::as_ptr(&b) as usize,
+                );
                 if let Some([_, _, merged]) = self.components.merges.get(&key) {
                     return Some(merged.clone());
                 }
                 if self.components.merges.len() >= STYLE_CACHE {
                     self.components.merges.clear();
                 }
-                let merged = Arc::new(a.merged(&b));
+                let merged = std::rc::Rc::new(a.merged(&b));
                 self.components.merges.insert(key, [a, b, merged.clone()]);
                 Some(merged)
             }
@@ -2308,10 +2419,15 @@ impl<M: TextEngine> Core<M> {
             inst.children_wanted = wanted;
             match self.components.owners.get(&host).copied() {
                 // A view's: what passes them follows (a view that passes
-                // none made no signal).
+                // none made no signal). The run of the view that passed
+                // them may be gone already, in this commit, before what it
+                // made is released: a region of this component and the one
+                // passing its children changed together (a menu and its
+                // submenu ending their exits at once). Nothing reads its
+                // signal then.
                 Some(_) => {
                     if let Some(signal) = inst.lazy_wanted {
-                        signal.set(wanted);
+                        signal.try_set(wanted);
                     }
                 }
                 None => self.events.push(JsEvent::Children { host, wanted }),
@@ -2326,9 +2442,17 @@ impl<M: TextEngine> Core<M> {
         let Some(inst) = self.components.instances.get_mut(&nested) else {
             return crate::element::signal(false);
         };
-        *inst
-            .lazy_wanted
-            .get_or_insert_with(|| crate::element::signal(inst.children_wanted))
+        // Made again under this owner when the one that made it is gone
+        // (the run that passed them before was disposed while the
+        // component stayed).
+        match inst.lazy_wanted {
+            Some(signal) if signal.is_live() => signal,
+            _ => {
+                let signal = crate::element::signal(inst.children_wanted);
+                inst.lazy_wanted = Some(signal);
+                signal
+            }
+        }
     }
 
     /// JS child `child`, placed at `place`, leaves the tree (and the
@@ -2405,7 +2529,7 @@ impl<M: TextEngine> Core<M> {
         style: &StyleRefinement,
         old_style: &StyleRefinement,
         old: Classes,
-        user: Option<Arc<ClassList>>,
+        user: Option<std::rc::Rc<ClassList>>,
     ) -> Classes {
         let own = if style == old_style {
             old.0.clone()
@@ -2416,7 +2540,7 @@ impl<M: TextEngine> Core<M> {
         };
         if !same(&own, &old.0) || !same(&user, &old.1) {
             let list = match (&own, &user) {
-                (Some(a), Some(b)) => Some(Arc::new(a.merged(b))),
+                (Some(a), Some(b)) => Some(std::rc::Rc::new(a.merged(b))),
                 (Some(a), None) => Some(a.clone()),
                 (None, Some(b)) => Some(b.clone()),
                 (None, None) => None,
@@ -2439,7 +2563,7 @@ impl<M: TextEngine> Core<M> {
         old_style: &StyleRefinement,
         old: Classes,
         class: Option<&SharedString>,
-        outer: Option<Arc<ClassList>>,
+        outer: Option<std::rc::Rc<ClassList>>,
     ) -> Classes {
         let Some(class) = class.filter(|c| !c.trim().is_empty()) else {
             if !self.components.app_classes.is_empty() {
@@ -2458,7 +2582,7 @@ impl<M: TextEngine> Core<M> {
 
     /// The rules of the app's classes `class` (the unknown ones warned of
     /// once, as a host's).
-    pub(super) fn app_class_list(&mut self, class: &str) -> Arc<ClassList> {
+    pub(super) fn app_class_list(&mut self, class: &str) -> std::rc::Rc<ClassList> {
         let (list, fresh) = self.tailwind.get(class);
         if fresh && !list.unknown().is_empty() {
             log::warn!(
@@ -2475,8 +2599,13 @@ impl<M: TextEngine> Core<M> {
 
     /// Registers `el`'s handlers for node `id` and listens to their events
     /// (plus `extra`, what JS listens to on a host); returns the mask.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the installed node and its owning view"
+    )]
     fn apply_handlers(
         &mut self,
+        host: NodeId,
         id: NodeId,
         el: &ElNode,
         old: EventMask,
@@ -2484,6 +2613,7 @@ impl<M: TextEngine> Core<M> {
         inst: &mut Instance,
     ) -> EventMask {
         let mut mask = extra;
+        self.initialize_layout_listeners(host, id, el, old, inst);
         // A node made again (its region ran again) hears what this run
         // gives it, not also what the runs before gave it.
         if old.bits() != 0 {
@@ -2511,6 +2641,41 @@ impl<M: TextEngine> Core<M> {
             });
         }
         mask
+    }
+
+    /// Queues the current frame for listeners belonging to a new region run.
+    pub(super) fn initialize_layout_listeners(
+        &mut self,
+        host: NodeId,
+        id: NodeId,
+        el: &ElNode,
+        old: EventMask,
+        inst: &Instance,
+    ) {
+        // Only listeners of a new owner need the kept node's initial
+        // frame. A listener passed in from outside the region stays live.
+        if old.contains(EventKind::Layout)
+            && let Ok(key) = self.key(id)
+        {
+            let frame = self.nodes[key as usize].frame;
+            if !frame.origin.x.0.is_nan() {
+                for (kind, listener) in &el.handlers {
+                    if *kind == EventKind::Layout
+                        && !inst
+                            .handlers
+                            .iter()
+                            .any(|(n, k, old)| *n == id && *k == *kind && old.same_owner(listener))
+                    {
+                        self.events.push(JsEvent::LayoutListener {
+                            host,
+                            id,
+                            listener: listener.clone(),
+                            frame,
+                        });
+                    }
+                }
+            }
+        }
     }
 
     fn reconcile_children(
@@ -2730,7 +2895,10 @@ impl<M: TextEngine> Core<M> {
         cursor: &mut usize,
     ) {
         // A slot a view fills: placed as it is (`Filled`), or in a node of
-        // this view's own when the view styles it.
+        // this view's own when the view gives it anything, which lays its
+        // one node out through while it styles none of its layout (as JS's
+        // holders: `lay_out_through`).
+        let mut wrapper = false;
         if let ElKind::Slot(name) = el.kind
             && inst.fills.iter().any(|f| f.name == name)
         {
@@ -2742,6 +2910,7 @@ impl<M: TextEngine> Core<M> {
                 filled.kind = ElKind::Filled(name);
                 el.children = vec![filled];
                 el.key.get_or_insert_with(|| format!("slot:{name}").into());
+                wrapper = true;
             }
         }
         match std::mem::replace(&mut el.kind, ElKind::Plain) {
@@ -2911,7 +3080,11 @@ impl<M: TextEngine> Core<M> {
                     }
                 };
                 let prev = at.and_then(|j| old[j].take());
-                out.push(self.reconcile_node(prev, el, part, host, inst));
+                let e = self.reconcile_node(prev, el, part, host, inst);
+                if wrapper && let Ok(key) = self.key(e.id) {
+                    self.lay_out_through(key);
+                }
+                out.push(e);
             }
         }
     }
@@ -3642,7 +3815,7 @@ impl<M: TextEngine> Core<M> {
                 text.clone(),
             );
         }
-        let events = self.apply_handlers(id, &el, old_events, EventMask::default(), inst);
+        let events = self.apply_handlers(host, id, &el, old_events, EventMask::default(), inst);
         let new_children = std::mem::take(&mut el.children);
         let children = self.reconcile_children(id, old_children, new_children, host, inst);
         let list = match virtual_list {
@@ -4132,7 +4305,7 @@ impl<M: TextEngine> Core<M> {
 
     /// Frees what a component made (not its host nor its JS children,
     /// which leave its view).
-    fn release_instance(&mut self, host: NodeId) {
+    pub(super) fn release_instance(&mut self, host: NodeId) {
         self.release_component(host, &[]);
     }
 
@@ -4144,6 +4317,24 @@ impl<M: TextEngine> Core<M> {
         let Some(mut inst) = self.components.instances.remove(&host) else {
             return;
         };
+        if self
+            .components
+            .parked_methods
+            .iter()
+            .any(|(h, ..)| *h == host)
+        {
+            let (gone, kept) = std::mem::take(&mut self.components.parked_methods)
+                .into_iter()
+                .partition(|(h, ..)| *h == host);
+            self.components.parked_methods = kept;
+            for (_, call, method) in gone {
+                drop_caught(method);
+                self.settle(
+                    call,
+                    Err(format!("node {host} hosts no Rust component").into()),
+                );
+            }
+        }
         // Its root's (a render or classes of the app's) on the host.
         self.forget_node_extras(host);
         if let Inner::Component(inner) = &mut inst.inner {
@@ -4214,6 +4405,11 @@ impl<M: TextEngine> Core<M> {
     pub fn component_event(&mut self, id: NodeId, kind: EventKind, payload: &EventPayload) -> bool {
         let _entered = self.components.runtime.enter();
         let handled = self.dispatch_event(id, kind, payload);
+        self.flush_component_emits();
+        handled
+    }
+
+    fn flush_component_emits(&mut self) {
         // What views' listeners emitted reaches its listeners (JS hears it
         // in this turn).
         loop {
@@ -4225,7 +4421,29 @@ impl<M: TextEngine> Core<M> {
                 self.route_emit(host, event);
             }
         }
-        handled
+    }
+
+    /// Initializes one newly installed layout listener of a kept node.
+    /// The engine delivers this in event order, without notifying the
+    /// node's retained listeners or its JS handlers.
+    #[doc(hidden)]
+    pub fn component_layout(
+        &mut self,
+        host: NodeId,
+        id: NodeId,
+        listener: &Listener<EventPayload>,
+        frame: crate::Bounds<Points>,
+    ) {
+        let _entered = self.components.runtime.enter();
+        let installed = self.components.instances.get(&host).is_some_and(|inst| {
+            inst.handlers.iter().any(|(n, kind, current)| {
+                *n == id && *kind == EventKind::Layout && current.ptr_eq(listener)
+            })
+        });
+        if installed {
+            self.run_listener(host, listener, &EventPayload::Layout(frame));
+            self.flush_component_emits();
+        }
     }
 
     fn dispatch_event(&mut self, id: NodeId, kind: EventKind, payload: &EventPayload) -> bool {
@@ -4239,7 +4457,7 @@ impl<M: TextEngine> Core<M> {
             return false;
         }
         // Hints follow the pointer on their anchors, whoever else listens.
-        if matches!(kind, EventKind::HoverIn | EventKind::HoverOut) {
+        if matches!(kind, EventKind::MouseEnter | EventKind::MouseLeave) {
             self.overlay_hover(id, kind);
         }
         if self.platform_event(id, kind, payload) {
@@ -4452,7 +4670,13 @@ impl<M: TextEngine> Core<M> {
             Action::Hint(overlay) => self.hint_due(overlay),
             Action::Frame(answer) => self.wait_frame(answer),
             Action::Appearance(appearance) => self.set_appearance(appearance),
+            Action::BuiltInScrollbars(source, theme) => {
+                self.set_builtin_scrollbars(theme.map(|theme| (source, theme)))
+            }
             Action::Measure(id, answer) => self.components.measures.push((id, answer)),
+            Action::TransitionTime(id, answer) => {
+                self.components.transition_times.push((id, answer))
+            }
             Action::ImageInfo(uri, answer) => {
                 let id = self.components.next_image_info;
                 self.components.next_image_info += 1;
@@ -4570,6 +4794,49 @@ impl<M: TextEngine> Core<M> {
                 self.components.next_url_open = id.wrapping_add(1);
                 self.components.url_opens.insert(id, answer);
                 self.components.url_requests.push((id, url));
+            }
+            Action::PickScreenColor(answer) => {
+                if !self.components.environment.screen_color {
+                    answer.borrow_mut().deliver(None);
+                    return;
+                }
+                let id = self.components.next_screen_color;
+                self.components.next_screen_color = id.wrapping_add(1);
+                self.components.screen_colors.insert(id, answer);
+                let _ = self.apply_op(Op::Command {
+                    id: crate::ROOT_ID,
+                    command: Command::PickScreenColor { id },
+                });
+            }
+            Action::FileRequest(request, answer) => {
+                use crate::file_dialog::FileRequest;
+                if !self.components.environment.file_requests {
+                    answer.deliver(
+                        Vec::new(),
+                        Some("this platform has no file dialogs, file manager or trash".into()),
+                    );
+                    return;
+                }
+                if let FileRequest::OpenPath(path)
+                | FileRequest::RevealPath(path)
+                | FileRequest::MoveToTrash(path) = &request
+                    && !path.is_absolute()
+                {
+                    let refused = format!("`{}` is not an absolute path", path.display());
+                    log::warn!("{refused}");
+                    answer.deliver(Vec::new(), Some(refused));
+                    return;
+                }
+                let id = self.components.next_file_request;
+                self.components.next_file_request = id.wrapping_add(1);
+                self.components.file_requests.insert(id, answer);
+                let _ = self.apply_op(Op::Command {
+                    id: crate::ROOT_ID,
+                    command: Command::FileRequest {
+                        id,
+                        request: Box::new(request),
+                    },
+                });
             }
         }
     }
@@ -4767,6 +5034,33 @@ impl<M: TextEngine> Core<M> {
                 }
                 true
             }
+            // A view's menu item runs here; JS's go to JS. A context menu
+            // closing settles the one either side showed, so both hear it.
+            EventKind::Menu if id == crate::ROOT_ID => {
+                let menus = self.components.executor.menus.clone();
+                let closed = matches!(payload, EventPayload::Map(entries)
+                    if entries.iter().any(|(k, v)| *k == "closed" && *v == crate::PayloadValue::Bool(true)));
+                if closed {
+                    menus.borrow_mut().settle_popup();
+                    return false;
+                }
+                let Some(item) = number("id").map(|n| n as u32) else {
+                    return false;
+                };
+                if item < crate::element::menus::FIRST_ID {
+                    return false;
+                }
+                let handler = menus.borrow().handler(item);
+                // An item of a menu replaced since the platform showed it.
+                if let Some(handler) = handler {
+                    let result = caught(|| handler());
+                    self.apply_actions();
+                    if let Err(message) = result {
+                        log::error!(target: "js", "a menu item failed: {message}");
+                    }
+                }
+                true
+            }
             EventKind::BackPress if id == crate::ROOT_ID => {
                 // The top overlay listening takes it first.
                 if self.overlay_cancel() {
@@ -4831,6 +5125,30 @@ impl<M: TextEngine> Core<M> {
                     _ => false,
                 };
                 self.answer_open_url(request as u32, opened);
+                true
+            }
+            EventKind::ScreenColor if id == crate::ROOT_ID => {
+                let Some(request) = number("id") else {
+                    return false;
+                };
+                let color = number("color").map(|packed| crate::Color(packed as u32).into());
+                if let Some(answer) = self.components.screen_colors.remove(&(request as u32)) {
+                    answer.borrow_mut().deliver(color);
+                }
+                true
+            }
+            EventKind::FileRequest if id == crate::ROOT_ID => {
+                let EventPayload::FileRequest {
+                    id: request,
+                    paths,
+                    error,
+                } = payload
+                else {
+                    return false;
+                };
+                if let Some(answer) = self.components.file_requests.remove(request) {
+                    answer.deliver(paths.clone(), error.clone());
+                }
                 true
             }
             EventKind::Clipboard if id == crate::ROOT_ID => {
@@ -5077,7 +5395,7 @@ impl<M: TextEngine> Core<M> {
                 update: Some(LayoutTransition {
                     curve: LayoutCurve::Keyboard,
                     property: LayoutProperty::Opacity,
-                    duration_ms: duration * 1000.0,
+                    duration_ms: duration,
                     delay_ms: 0.0,
                 }),
                 delete: None,

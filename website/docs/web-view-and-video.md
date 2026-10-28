@@ -148,10 +148,10 @@ pub fn browser() -> impl IntoElement {
 ```
 
 ```tsx tabs
-import { mount, signal, Text, View, WebView, type WebViewNavigation, type YNode } from "nsh";
+import { mount, signal, Text, View, WebView, type WebViewNavigation, type WebViewRef } from "nsh";
 
 function Browser() {
-  let web!: YNode;
+  let web!: WebViewRef;
   const nav = signal<WebViewNavigation | null>(null);
   const button = (label: string, enabled: boolean, action: () => void) => (
     <Text onPress={enabled ? action : undefined} style={{ padding: 12, color: enabled ? "#0969da" : "#8c959f" }}>
@@ -160,7 +160,7 @@ function Browser() {
   );
   return (
     <View style={{ flex: 1, paddingTop: 50 }}>
-      <Text numberOfLines={1} style={{ paddingHorizontal: 12, color: "#57606a" }}>
+      <Text style={{ numberOfLines: 1, paddingHorizontal: 12, color: "#57606a" }}>
         {nav()?.loading ? "Loading…" : nav()?.title ?? ""}
       </Text>
       <WebView
@@ -231,7 +231,7 @@ pub fn App() -> impl IntoElement {
 ```
 
 ```tsx tabs
-import { mount, signal, Text, View, WebView, type YNode } from "nsh";
+import { mount, signal, Text, View, WebView, type WebViewRef } from "nsh";
 
 const page = `<!doctype html>
 <html><head><meta name="viewport" content="width=device-width"></head>
@@ -248,7 +248,7 @@ const page = `<!doctype html>
 </body></html>`;
 
 function App() {
-  let web!: YNode;
+  let web!: WebViewRef;
   const last = signal("");
   return (
     <View style={{ flex: 1, paddingTop: 50, gap: 12 }}>
@@ -321,7 +321,7 @@ pub fn player() -> impl IntoElement {
                 .element_ref(&player)
                 .paused(paused)
                 .repeat(true)
-                .resize_mode(ResizeMode::Contain)
+                .object_fit(ResizeMode::Contain)
                 .h(px(220.0))
                 .rounded(px(12.0))
                 .overflow_hidden()
@@ -349,10 +349,10 @@ pub fn player() -> impl IntoElement {
 ```
 
 ```tsx tabs
-import { mount, signal, Text, Video, View, type YNode } from "nsh";
+import { mount, signal, Text, Video, type VideoRef, View } from "nsh";
 
 function Player() {
-  let video!: YNode;
+  let video!: VideoRef;
   const paused = signal(true);
   const time = signal("");
   return (
@@ -362,7 +362,6 @@ function Player() {
         src="https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4"
         paused={paused()}
         repeat
-        resizeMode="contain"
         style={{ height: 220, borderRadius: 12, overflow: "hidden", backgroundColor: "#000000" }}
         onProgress={(e) => time.set(`${e.currentTime.toFixed(1)} / ${e.duration.toFixed(1)} s`)}
         onEnd={() => paused.set(true)}
@@ -385,7 +384,7 @@ mount(Player);
 
 Playback is controlled by props: set `paused`, `muted`, `volume` and `rate` from signals and the player follows. The ref has `seek(seconds)`.
 
-In Rust, `video(url)` makes the player (the URL a value, a signal or a closure) and each prop is a builder method in snake case (`paused`, `repeat(true)`, `resize_mode(ResizeMode::Contain)`, `progress_interval` for `progressUpdateInterval`); `on_load` gets a `VideoInfo` (`duration`, `size`), `on_progress` a `VideoProgress` (`current_time`, `duration`) and `on_buffer` a `bool`.
+In Rust, `video(url)` makes the player (the URL a value, a signal or a closure) and each prop is a builder method in snake case (`paused`, `repeat(true)`, `object_fit(ResizeMode::Contain)` (the `objectFit` style), `progress_interval` for `progressUpdateInterval`); `on_load` gets a `VideoInfo` (`duration`, `size`), `on_progress` a `VideoProgress` (`current_time`, `duration`) and `on_buffer` a `bool`.
 
 | Prop | Type | Default | Description |
 |---|---|---|---|
@@ -395,7 +394,7 @@ In Rust, `video(url)` makes the player (the URL a value, a signal or a closure) 
 | `volume` | `number` | `1` | 0..1. |
 | `rate` | `number` | `1` | The playback speed. |
 | `repeat` | `boolean` | `false` | Plays again from the start at the end. |
-| `resizeMode` | `"cover" \| "contain" \| "stretch" \| "center"` | | How the picture fits the view. |
+| `objectFit` (style), `object-*` classes | `"cover" \| "contain" \| "fill" \| "none" \| "scale-down"` | `"contain"` | How the picture fits the view, as CSS's `object-fit` (`class="object-cover"`). |
 | `controls` | `boolean` | `false` | The platform's playback controls. |
 | `progressUpdateInterval` | `number` | `250` | Milliseconds between `onProgress` events. |
 

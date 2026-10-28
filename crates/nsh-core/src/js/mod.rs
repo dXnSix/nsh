@@ -38,6 +38,12 @@ pub fn is_standard_module(name: &str) -> bool {
     STANDARD_MODULES.contains(&name)
 }
 
+/// The globals the standard module `crypto` defines: Web Crypto's `crypto`
+/// and its classes. A runtime built without `crypto` (`nsh-js`'s feature)
+/// has none of them, so code that names one needs a runtime with it (the
+/// bundler's `NativeUse::global_crypto`).
+pub const CRYPTO_GLOBALS: &[&str] = &["crypto", "Crypto", "SubtleCrypto", "CryptoKey"];
+
 /// The module name of an app's bundle (its entry chunk): stack traces show
 /// `bundle.js:LINE:COL`, and the chunks of a split bundle import it as
 /// `./bundle.js`.
@@ -89,9 +95,11 @@ mod tests {
         let style = super::style::declarations();
         // Every property the core parses has a type, in its interface.
         for (name, ts) in [
-            ("boxShadow", "string"),
+            ("boxShadow", "string | BoxShadowLayer[]"),
+            ("textShadow", "string | TextShadowLayer[]"),
             ("gridTemplateColumns", "string"),
-            ("transform", "TransformStep[]"),
+            ("transform", "string | TransformStep[]"),
+            ("rotate", "string | number | AnimatedNode"),
             ("tintColor", "ColorValue"),
             (
                 "display",
@@ -101,21 +109,32 @@ mod tests {
             assert!(style.contains(&format!("  {name}?: {ts};")), "{name}");
         }
         assert!(!style.contains("backdropMaterial"));
+        // Style keys, not props.
+        for key in [
+            "numberOfLines",
+            "textOverflow",
+            "userSelect",
+            "pointerEvents",
+        ] {
+            assert!(style.contains(&format!("  {key}?: ")), "{key}");
+        }
         let text = style.find("export interface TextStyle").unwrap();
         assert!(style[text..].contains("  textDecorationStyle?:"));
         // Each host prop and event in the interface of the elements it is for.
         let elements = super::host::declarations();
         for (interface, prop) in [
-            ("HostProps", "  pointerEvents?: PointerEvents;"),
-            ("HostProps", "  onPress?: (e?: PressEvent) => void;"),
-            ("HostProps", "  onLongPress?: (e?: PressEvent) => void;"),
-            ("HostProps", "  onPressDown?: (e?: PressEvent) => void;"),
-            ("HostProps", "  onPressUp?: (e?: PressEvent) => void;"),
-            ("HostProps", "  onLayout?: (bounds: Bounds) => void;"),
+            ("HostProps", "  onPress?: (e: PressEvent) => void;"),
+            ("HostProps", "  onLongPress?: (e: PressEvent) => void;"),
+            ("HostProps", "  onPressDown?: (e: PressEvent) => void;"),
+            ("HostProps", "  onPressUp?: (e: PressEvent) => void;"),
+            ("HostProps", "  onLayout?: (e: { bounds: Bounds }) => void;"),
             ("AndroidHostProps", "  elevation?: number;"),
             ("IOSHostProps", "  backdropMaterial?: BackdropMaterial;"),
             ("InputHostProps", "  keyboardType?: KeyboardType;"),
-            ("InputHostProps", "  onChange?: (text: string) => void;"),
+            (
+                "InputHostProps",
+                "  onChange?: (e: { value: string }) => void;",
+            ),
             (
                 "InputHostProps",
                 "  onSubmit?: (e: { text: string }) => void;",
@@ -127,10 +146,13 @@ mod tests {
                 "IOSInputHostProps",
                 "  keyboardAppearance?: KeyboardAppearance;",
             ),
-            ("ImageHostProps", "  onLoad?: (e: Size) => void;"),
+            (
+                "ImageHostProps",
+                "  onLoad?: (e: { size: PixelSize }) => void;",
+            ),
             (
                 "VideoHostProps",
-                "  onLoad?: (e: { duration: number; size: Size }) => void;",
+                "  onLoad?: (e: { duration: number; size: PixelSize }) => void;",
             ),
             ("VideoHostProps", "  audioSession?: AudioSession;"),
             (

@@ -99,10 +99,11 @@ impl Host {
         self.density.get()
     }
 
-    /// Whether the native animation graph animates.
+    /// Whether the native animation graph runs an animation that ends by
+    /// itself (not one looping forever, which no test step waits for).
     #[cfg(feature = "dev")]
     pub(crate) fn animating(&self) -> bool {
-        self.ui.lock().is_ok_and(|ui| ui.animating())
+        self.ui.lock().is_ok_and(|ui| ui.finishing())
     }
 
     fn control(&self) -> Option<EngineControl> {
@@ -164,7 +165,7 @@ impl Host {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        *self.ui.lock().expect("ui") = UiAnimation::default();
+        self.ui.lock().expect("ui").reset();
         let mut cache = self.cache.lock().expect("cache options").clone();
         if cache.location == nsh_engine::CacheLocation::System {
             cache.location = match &self.system_cache_dir {
@@ -1191,14 +1192,16 @@ extern "system" fn Java_com_longbridge_nsh_Native_event(
     }
 }
 
-/// `onHoverMove` of view `id` (see `Native.hover`).
+/// A mouse event of view `id` (see `Native.mouse`): `onMouseEnter`,
+/// `onMouseMove` or `onMouseLeave`.
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
-extern "system" fn Java_com_longbridge_nsh_Native_hover(
+extern "system" fn Java_com_longbridge_nsh_Native_mouse(
     _: JNIEnv<'_>,
     _: JClass<'_>,
     handle: jlong,
     id: jint,
+    kind: jint,
     x: jfloat,
     y: jfloat,
     page_x: jfloat,
@@ -1207,22 +1210,29 @@ extern "system" fn Java_com_longbridge_nsh_Native_hover(
 ) {
     // SAFETY: Java passes its live handle.
     let host = unsafe { host(handle) };
-    let event = nsh_core::HoverEvent {
-        position: point(px(x), px(y)),
-        page_position: point(px(page_x), px(page_y)),
-        modifiers: nsh_core::keymap::Modifiers {
-            ctrl: modifiers & 1 != 0,
-            alt: modifiers & 2 != 0,
-            shift: modifiers & 4 != 0,
-            cmd: modifiers & 8 != 0,
-        },
+    let Some(kind) = encode::kind_from(kind).filter(|k| {
+        matches!(
+            k,
+            EventKind::MouseEnter | EventKind::MouseMove | EventKind::MouseLeave
+        )
+    }) else {
+        return;
     };
+    let modifiers = nsh_core::keymap::Modifiers {
+        ctrl: modifiers & 1 != 0,
+        alt: modifiers & 2 != 0,
+        shift: modifiers & 4 != 0,
+        cmd: modifiers & 8 != 0,
+    };
+    // Android's hover events only come with no button down.
+    let event = nsh_core::MouseEvent::new(
+        point(px(x), px(y)),
+        point(px(page_x), px(page_y)),
+        modifiers,
+        None,
+    );
     if let Some(control) = host.control() {
-        control.dispatch_event(
-            id as NodeId,
-            EventKind::HoverMove,
-            EventPayload::Hover(event),
-        );
+        control.dispatch_event(id as NodeId, kind, EventPayload::Mouse(event));
     }
 }
 
@@ -1556,9 +1566,37 @@ extern "system" fn Java_com_longbridge_nsh_Native_tick(
     // SAFETY: Java passes its live handle.
     let host = unsafe { host(handle) };
     let mut ui = host.ui.lock().expect("ui");
-    ui.tick(host.epoch.elapsed().as_secs_f64());
+    let changed = ui.tick(host.epoch.elapsed().as_secs_f64());
     finish(host, &mut ui);
-    floats(&env, &ui.outputs())
+    // A frame only shader views asked for: no bound value moved.
+    let mut out = if changed || ui.animating() {
+        ui.outputs()
+    } else {
+        vec![0.0]
+    };
+    let shading = ui.shaders.render(host.view.as_obj());
+    out[0] = if ui.animating() || shading { 1.0 } else { 0.0 };
+    floats(&env, &out)
+}
+
+/// Shader view `id` (`Box.java`) is `width` × `height` pixels: its next
+/// frame is rendered at that size. Whether frames should come
+/// (`NshView.requestFrames`).
+#[unsafe(no_mangle)]
+extern "system" fn Java_com_longbridge_nsh_Native_shaderSize(
+    _: JNIEnv<'_>,
+    _: JClass<'_>,
+    handle: jlong,
+    id: jint,
+    width: jint,
+    height: jint,
+) -> jboolean {
+    // SAFETY: Java passes its live handle.
+    let host = unsafe { host(handle) };
+    let mut ui = host.ui.lock().expect("ui");
+    ui.shaders
+        .resized(id as u32, width, height, host.density.get());
+    ui.shaders.wants_frame().into()
 }
 
 /// A scroll view moved: the engine (lists) and its scroll value learn the
@@ -1584,6 +1622,33 @@ extern "system" fn Java_com_longbridge_nsh_Native_scroll(
     }
     finish(host, &mut ui);
     floats(&env, &ui.outputs())
+}
+
+/// A multiline input's text scrolled, or its text or size changed, while a
+/// built-in bar replaces its indicator (`InputConfig::replaced`): the engine
+/// learns the offset, the text's size and the viewport's (points).
+#[unsafe(no_mangle)]
+extern "system" fn Java_com_longbridge_nsh_Native_inputScroll(
+    _: JNIEnv<'_>,
+    _: JClass<'_>,
+    handle: jlong,
+    id: jint,
+    y: jfloat,
+    content_width: jfloat,
+    content_height: jfloat,
+    width: jfloat,
+    height: jfloat,
+) {
+    // SAFETY: Java passes its live handle.
+    let host = unsafe { host(handle) };
+    if let Some(control) = host.control() {
+        control.input_scroll(
+            id as NodeId,
+            point(px(0.0), px(y)),
+            size(px(content_width), px(content_height)),
+            size(px(width), px(height)),
+        );
+    }
 }
 
 /// A vertical scroll view is pulled `distance` (points) past its top: its
@@ -1795,7 +1860,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_states(
     // SAFETY: Java passes its live handle.
     let host = unsafe { host(handle) };
     if let Some(control) = host.control() {
-        control.set_states(id as u32, states as u8);
+        control.set_states(id as u32, states as u16);
     }
 }
 

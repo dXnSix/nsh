@@ -108,7 +108,7 @@ leading `/` or with `*`, `?` or `#`, a method that is not a token. WebSockets (t
 go through `Access::allows_websocket`: a handshake is an HTTP GET, so `ws` / `wss` are checked as GETs over `http` /
 `https` (or under their own scheme, for rules listing `ws` / `wss`), on the parsed URL the handshake then connects
 to, before DNS; redirects are rejected; both APIs share one cap of 32 per VM (the `Quotas` kind `runtime::WEBSOCKETS`). Raw TCP
-`net.connect` requires an exact `network.sockets` entry (`"host:port"`, no patterns, port 1 to 65535): a socket
+`net.connect({ host, port })` requires an exact `network.sockets` entry (`"host:port"`, no patterns, port 1 to 65535): a socket
 bypasses every HTTP rule, so neither `hosts` nor `http` grants imply one, and `Capabilities::all()` (apps without a
 declaration) has none. Sockets are capped at 32 per VM (the call's `System` quotas) and 4 MiB of pending writes each;
 `close()` ends pending reads and writes. `zlib` decompression output is capped at 64 MiB or the heap limit if
@@ -128,6 +128,12 @@ reach the app's own data rather than another app; a web address needs a host) an
 (`Capabilities::open_url`: `true`, every scheme, or `{ "schemes": [...] }`; `Access::allows_open_url`), in the
 module's call (a `TypeError`) and again in the core for Rust callers (`false`, logged once). The embedding app's URL
 handler sees only URLs that passed both (`embedding.md` "The host channel").
+
+The system's file dialogs and file manager for local paths (`nsh_core::file_dialog`: `pick_paths`, `pick_save_path`,
+`open_path`, `reveal_path`, `move_to_trash`) are Rust's only: no runtime module gives them to an app's JS, so their callers are
+native code that reaches the filesystem anyway, and no capability gates them. The dialogs give only what the user
+chose; the core refuses relative paths before the platform sees them. A JS face added later checks a capability in
+its module call, as `openUrl` does.
 
 `nsh`'s native SDK transport (`embedding.md` "The host channel") checks `capabilities.host` for calls and
 posts before invoking embedding code, using the same name rules and grants as the platform transport. Its bounds are checked in Rust (`nsh_core::host_channel`, `nsh-js` `host_channel.rs`): event names of 1 to 256 bytes,

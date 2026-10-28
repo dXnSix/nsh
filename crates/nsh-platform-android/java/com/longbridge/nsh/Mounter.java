@@ -62,6 +62,7 @@ final class Mounter {
     private static final int ACCESSIBILITY_LABEL = 32;
     private static final int APPEARANCE = 33;
     private static final int COMPONENT_PROP_SLOTS = 34;
+    private static final int SHADER = 35;
     /** The surface lays out right to left: native widgets mirror. */
     boolean rtl;
     /** The app's appearance (`nsh_core::platform::Appearance`): 0 the system's, 1 light, 2 dark. */
@@ -89,10 +90,8 @@ final class Mounter {
     private static final class Dynamic {
         float opacity = 1, tx, ty, sx = 1, sy = 1, rotate, rotateX, rotateY, perspective;
         int background;
-        /** Border colors, shadow color (its opacity in the alpha) and radius (px). */
+        /** Border colors. */
         int[] borderColors = new int[4];
-        int shadowColor;
-        float shadowRadius = 0.01f;
     }
 
     /** One part of a layout animation (`encode.rs` `layout_transition`). */
@@ -236,6 +235,17 @@ final class Mounter {
         return Math.round(dp * density);
     }
 
+    /** Keeps pixel-based native state in the new coordinate system. */
+    void setDensity(float next) {
+        float scale = next / density;
+        density = next;
+        for (int i = 0; i < views.size(); i++) {
+            View view = views.valueAt(i);
+            if (view instanceof ScrollBox) ((ScrollBox) view).rescale(scale);
+        }
+        for (int i = 0; i < modals.size(); i++) modals.valueAt(i).densityChanged();
+    }
+
     void apply(byte[] bytes, Object[] objects, long seq) {
         ByteBuffer b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
         while (b.hasRemaining()) {
@@ -271,10 +281,13 @@ final class Mounter {
                     // `selectable`: 1 asked for, 0 refused, 2 unset (`encode.rs`).
                     int selectable = b.getInt();
                     Integer selectionColor = optColor(b);
+                    // The one color all of it is drawn in, if there is one.
+                    Integer uniformColor = optColor(b);
                     if (v instanceof TextBox) {
                         TextBox t = (TextBox) v;
                         t.setSelectable(selectable == 1, selectable == 0, selectionColor);
                         t.setLayout((Layout) layout, x * density, y * density, w * density, h * density);
+                        t.recolor(uniformColor, effects.get(t.id));
                         t.setLinks(linkData, linkEvents);
                         if (links > 0 && t.press == null) t.press = new Pressable(t, this, t.id);
                         t.setClickable(links > 0 || (t.press != null && t.press.ownWanted()));
@@ -517,6 +530,13 @@ final class Mounter {
                 case COMPONENT: {
                     int id = b.getInt();
                     component(id, string(objects, b.getInt()));
+                    break;
+                }
+                case SHADER: {
+                    // The layer stays in libnsh, which renders it (`shader.rs`).
+                    View v = views.get(b.getInt());
+                    boolean on = b.getInt() != 0;
+                    if (v instanceof Box) ((Box) v).setShader(on);
                     break;
                 }
                 case COMPONENT_PROP_SLOTS: {
@@ -921,8 +941,6 @@ final class Mounter {
         int borderStyle = b.getInt();
         float opacity = b.getFloat();
         boolean overflow = b.getInt() != 0;
-        int shadowColor = b.getInt();
-        float sdx = b.getFloat(), sdy = b.getFloat(), sOpacity = b.getFloat(), sRadius = b.getFloat();
         Dynamic d = new Dynamic();
         d.tx = b.getFloat();
         d.ty = b.getFloat();
@@ -944,9 +962,6 @@ final class Mounter {
         d.opacity = opacity;
         d.background = background;
         d.borderColors = borderColors;
-        int shadowAlpha = Math.round(((shadowColor >>> 24) & 0xff) * Math.max(0, Math.min(1, sOpacity)));
-        d.shadowColor = (shadowAlpha << 24) | (shadowColor & 0x00ffffff);
-        d.shadowRadius = Math.max(0.01f, sRadius * density);
         if (v == null) return;
         Dynamic old = statics.get(id);
         statics.put(id, d);
@@ -961,10 +976,6 @@ final class Mounter {
             }
             decor.borderStyle = borderStyle;
             decor.continuous = continuous;
-            decor.shadowColor = d.shadowColor;
-            decor.shadowDx = sdx * density;
-            decor.shadowDy = sdy * density;
-            decor.shadowRadius = d.shadowRadius;
             decor.originX = originXFraction ? originX : originX * density;
             decor.originXFraction = originXFraction;
             decor.originY = originYFraction ? originY : originY * density;
@@ -991,10 +1002,6 @@ final class Mounter {
         v.setElevation(elevation * density);
         if (elevation > 0 && decor != null && !(v instanceof Box || v instanceof TextBox || v instanceof InputBox)) {
             decor.clip(v, false);
-        }
-        if (elevation > 0 && android.os.Build.VERSION.SDK_INT >= 28 && (shadowColor >>> 24) != 0) {
-            v.setOutlineAmbientShadowColor(shadowColor);
-            v.setOutlineSpotShadowColor(shadowColor);
         }
         if (v instanceof Box) {
             ((Box) v).clip = overflow;
@@ -1042,7 +1049,7 @@ final class Mounter {
         }
     }
 
-    private static int lerpColor(int a, int b, float t) {
+    static int lerpColor(int a, int b, float t) {
         int r = 0;
         for (int shift = 0; shift < 32; shift += 8) {
             int ca = (a >>> shift) & 0xff, cb = (b >>> shift) & 0xff;
@@ -1154,42 +1161,50 @@ final class Mounter {
         updateHover(id, v);
     }
 
-    private static final long HOVER_EVENTS =
-            (1L << Native.HOVER_IN) | (1L << Native.HOVER_OUT) | (1L << Native.HOVER_MOVE);
+    private static final long MOUSE_EVENTS =
+            (1L << Native.MOUSE_ENTER) | (1L << Native.MOUSE_LEAVE) | (1L << Native.MOUSE_MOVE);
 
     /**
-     * Mice and styluses hovering `v`: its `hover:` state and its hover events
-     * (moves come with no button down).
+     * Mice and styluses hovering `v`: its `hover:` state and its mouse events
+     * (`onMouseEnter`, `onMouseMove`, `onMouseLeave`; hover events come with no
+     * button down).
      */
     private void updateHover(int id, View v) {
-        if ((trackedStates.get(id) & STATE_HOVERED) == 0 && (events.get(id) & HOVER_EVENTS) == 0) {
+        if ((trackedStates.get(id) & STATE_HOVERED) == 0 && (events.get(id) & MOUSE_EVENTS) == 0) {
             v.setOnHoverListener(null);
             return;
         }
         v.setOnHoverListener((view, e) -> {
             int action = e.getActionMasked();
+            int kind;
             if (action == android.view.MotionEvent.ACTION_HOVER_ENTER) {
                 reportState(id, STATE_HOVERED, true);
-                if (wants(id, Native.HOVER_IN)) event(id, Native.HOVER_IN);
+                kind = Native.MOUSE_ENTER;
             } else if (action == android.view.MotionEvent.ACTION_HOVER_EXIT) {
                 reportState(id, STATE_HOVERED, false);
-                if (wants(id, Native.HOVER_OUT)) event(id, Native.HOVER_OUT);
+                kind = Native.MOUSE_LEAVE;
+            } else if (action == android.view.MotionEvent.ACTION_HOVER_MOVE) {
+                kind = Native.MOUSE_MOVE;
+            } else {
                 return false;
             }
-            if (wants(id, Native.HOVER_MOVE)) hoverMove(id, view, e);
+            if (wants(id, kind)) mouse(id, kind, view, e);
+            // The movement that brings the pointer in is a move too, as on
+            // the desktops and in the DOM.
+            if (kind == Native.MOUSE_ENTER && wants(id, Native.MOUSE_MOVE)) mouse(id, Native.MOUSE_MOVE, view, e);
             return false;
         });
     }
 
-    /** `onHoverMove`: where the pointer is in `v` and in its root view (dp). */
-    private void hoverMove(int id, View v, android.view.MotionEvent e) {
+    /** Mouse event `kind`: where the pointer is in `v` and in its root view (dp). */
+    private void mouse(int id, int kind, View v, android.view.MotionEvent e) {
         // The surface, or the window of the modal the view is in.
         View root = v.getRootView() == host.getRootView() ? host : v.getRootView();
         int[] at = new int[2], rootAt = new int[2];
         v.getLocationOnScreen(at);
         root.getLocationOnScreen(rootAt);
         float d = density;
-        Native.hover(handle(), id, e.getX() / d, e.getY() / d,
+        Native.mouse(handle(), id, kind, e.getX() / d, e.getY() / d,
                 (e.getX() + at[0] - rootAt[0]) / d, (e.getY() + at[1] - rootAt[1]) / d,
                 modifiers(e.getMetaState()));
     }
@@ -1255,11 +1270,8 @@ final class Mounter {
         Decor backface = decor(v);
         if (backface != null) backface.applyBackface(v);
         Decor decor = decor(v);
-        if (decor != null && (decor.fill != d.background || decor.shadowColor != d.shadowColor
-                || decor.shadowRadius != d.shadowRadius || !java.util.Arrays.equals(decor.borderColors, d.borderColors))) {
+        if (decor != null && (decor.fill != d.background || !java.util.Arrays.equals(decor.borderColors, d.borderColors))) {
             decor.fill = d.background;
-            decor.shadowColor = d.shadowColor;
-            decor.shadowRadius = d.shadowRadius;
             System.arraycopy(d.borderColors, 0, decor.borderColors, 0, 4);
             v.invalidate();
         }
@@ -1545,24 +1557,6 @@ final class Mounter {
                 case 12:
                     if (v instanceof TextBox) ((TextBox) v).setColor(true, Float.floatToRawIntBits(value));
                     break;
-                case 13: {
-                    Decor decor = decor(v);
-                    int color = Float.floatToRawIntBits(value);
-                    if (decor != null && decor.shadowColor != color) {
-                        decor.shadowColor = color;
-                        v.invalidate();
-                    }
-                    break;
-                }
-                case 14: {
-                    Decor decor = decor(v);
-                    float radius = Math.max(0.01f, value * density);
-                    if (decor != null && decor.shadowRadius != radius) {
-                        decor.shadowRadius = radius;
-                        v.invalidate();
-                    }
-                    break;
-                }
                 case 15: {
                     // A sticky cell sticks further in: its scroll view pins it again.
                     int id = Float.floatToRawIntBits(out[i]);
@@ -1898,20 +1892,24 @@ final class Mounter {
         int maxLength = b.getInt();
         boolean editable = b.getInt() != 0, autoFocus = b.getInt() != 0, hasSelection = b.getInt() != 0;
         int selection = b.getInt();
+        boolean hasCaret = b.getInt() != 0;
+        int caret = b.getInt();
         int submit = b.getInt();
         String autofill = optString(b, objects);
         boolean inputRtl = b.getInt() != 0;
         boolean caretHidden = b.getInt() != 0;
         boolean pasteInserts = b.getInt() != 0;
+        boolean scrollbarVisible = b.getInt() != 0, replaced = b.getInt() != 0;
         if (!(v instanceof InputBox)) return;
         ((InputBox) v).pasteInserts = pasteInserts;
+        ((InputBox) v).setScrollbar(scrollbarVisible, replaced);
         ((InputBox) v).edit.setCursorVisible(!caretHidden);
         ((InputBox) v).setAutofill(autofill);
         ((InputBox) v).edit.setLayoutDirection(inputRtl ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
         String family = familyIndex >= 0 ? (String) objects[familyIndex] : null;
         ((InputBox) v).configure(size, weight, italic, color, family, spacing, align, placeholder,
                 hasPlaceholderColor, placeholderColor, secure, keyboard, returnKey, capitalize, autoCorrect,
-                multiline, maxLength, editable, autoFocus, hasSelection, selection, submit);
+                multiline, maxLength, editable, autoFocus, hasSelection, selection, hasCaret, caret, submit);
     }
 
     private void command(ByteBuffer b, Object[] objects) {
@@ -1937,6 +1935,7 @@ final class Mounter {
                 float x = b.getFloat(), y = b.getFloat();
                 boolean animated = b.getInt() != 0;
                 if (v instanceof ScrollBox) ((ScrollBox) v).scrollToPx(px(x), px(y), animated);
+                else if (v instanceof InputBox) ((InputBox) v).scrollTextTo(y);
                 break;
             }
             case 3: host.exitApp(); break;
@@ -2320,6 +2319,10 @@ final class Mounter {
 
     void scroll(int id, float x, float y, int applied) {
         outputs(Native.scroll(handle(), id, x, y, applied));
+    }
+
+    void inputScroll(int id, float y, float contentWidth, float contentHeight, float width, float height) {
+        Native.inputScroll(handle(), id, y, contentWidth, contentHeight, width, height);
     }
 
     void pull(int id, float distance) {

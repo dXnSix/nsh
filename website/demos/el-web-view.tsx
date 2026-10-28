@@ -1,4 +1,4 @@
-import { mount, signal, Text, View, WebView, type WebViewNavigation, type YNode } from "nsh";
+import { mount, signal, Text, View, WebView, type WebViewNavigation, type WebViewRef } from "nsh";
 import { platform, windowSize } from "nsh";
 import { button, buttonText, ui } from "./palette";
 
@@ -43,7 +43,7 @@ function App() {
   const nav = signal<WebViewNavigation | null>(null);
   const sent = signal(0);
   let painted = 0;
-  let web!: YNode;
+  let web!: WebViewRef;
   const wide = () => windowSize().width >= 700;
 
   return (
@@ -82,7 +82,7 @@ function App() {
           </View>
           <View style={{ ...ui().card, borderRadius: 12, padding: 12, gap: 4 }}>
             <Text style={{ color: ui().muted, fontSize: 12 }}>onLoad</Text>
-            <Text style={{ color: ui().text, fontFamily: "monospace", fontSize: 13 }} numberOfLines={1}>
+            <Text style={{ numberOfLines: 1, color: ui().text, fontFamily: "monospace", fontSize: 13 }}>
               {nav() ? `title "${nav()!.title}"` : "…"}
             </Text>
             <Text style={{ color: ui().muted, fontSize: 12, marginTop: 6 }}>onMessage, newest first</Text>

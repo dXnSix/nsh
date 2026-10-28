@@ -166,14 +166,14 @@ pub fn pager() -> impl IntoElement {
 ```
 
 ```tsx tabs
-import { mount, Scroll, signal, Text, View } from "nsh";
+import { mount, type Point, Scroll, signal, Text, View } from "nsh";
 
 const colors = ["#0969da", "#8250df", "#bf3989", "#1a7f37"];
 
 function Pager() {
   const width = signal(0);
   const page = signal(0);
-  const settle = (e: { x: number }) => page.set(Math.round(e.x / width()));
+  const settle = ({ offset }: { offset: Point }) => page.set(Math.round(offset.x / width()));
   return (
     <View style={{ gap: 8, padding: 16 }}>
       <Scroll
@@ -181,7 +181,7 @@ function Pager() {
         pagingEnabled
         scrollbar={false}
         style={{ height: 160, borderRadius: 12 }}
-        onLayout={(e) => width.set(e.size.width)}
+        onLayout={({ bounds }) => width.set(bounds.size.width)}
         onScrollEnd={settle}
       >
         <View style={{ flexDirection: "row" }}>
@@ -240,13 +240,13 @@ scroll()
 |---|---|---|---|
 | `onScroll` | `.on_scroll(..)` | `ScrollEvent` | 偏移改变。每帧最多一次；`scrollEventThrottle` 可以进一步拉开间隔。 |
 | `scrollEventThrottle` | `.event_throttle(ms)` | `number` | 两次 `onScroll` 之间的最少毫秒数。 |
-| `onScrollDragStart` | `.on_scroll_drag_start(..)` | `{ x, y }` | 用户开始拖动。 |
-| `onScrollDragEnd` | `.on_scroll_drag_end(..)` | `{ x, y }` | 用户抬起手指。 |
-| `onMomentumStart` | `.on_momentum_start(..)` | `{ x, y }` | 快速滑动后的惯性滑行开始。 |
-| `onMomentumEnd` | `.on_momentum_end(..)` | `{ x, y }` | 惯性滑行结束（被新的拖动打断时也会触发）。 |
-| `onScrollEnd` | `.on_scroll_end(..)` | `{ x, y }` | 用户的滚动停了下来：惯性滑行结束后，或没有惯性的拖动结束时。 |
+| `onScrollDragStart` | `.on_scroll_drag_start(..)` | `{ offset }` | 用户开始拖动。 |
+| `onScrollDragEnd` | `.on_scroll_drag_end(..)` | `{ offset }` | 用户抬起手指。 |
+| `onMomentumStart` | `.on_momentum_start(..)` | `{ offset }` | 快速滑动后的惯性滑行开始。 |
+| `onMomentumEnd` | `.on_momentum_end(..)` | `{ offset }` | 惯性滑行结束（被新的拖动打断时也会触发）。 |
+| `onScrollEnd` | `.on_scroll_end(..)` | `{ offset }` | 用户的滚动停了下来：惯性滑行结束后，或没有惯性的拖动结束时。 |
 
-`ScrollEvent` 包含偏移（`offset`，一个 `Point`；Rust 中同名）、内容尺寸，含缩放（`contentSize`，一个 `Size`；`content_size`）、视口（`size`）以及 `zoomScale`（`zoom_scale`）。其他事件携带偏移（Rust 中为 `Point<Points>`）。
+`ScrollEvent` 包含偏移（`offset`，一个 `Point`；Rust 中同名）、内容尺寸，含缩放（`contentSize`，一个 `Size`；`content_size`）、视口（`size`）以及 `zoomScale`（`zoom_scale`）。其他事件携带偏移：TSX 中为 `{ offset }`，其值是一个 `Point`；Rust 中为 `Point<Points>`。
 
 ```rust tabs
 let at_bottom = signal(false);
@@ -326,7 +326,7 @@ function App() {
             fontSize: 22,
             fontWeight: "700",
             transformOrigin: "left center",
-            transform: [{ scale: offset.interpolate({ inputRange: [0, 80], outputRange: [1, 0.8] }) }],
+            scale: offset.interpolate({ inputRange: [0, 80], outputRange: [1, 0.8] }),
           }}
         >
           Inbox
@@ -362,7 +362,7 @@ const header = offset.diffClamp(0, 56);
   <Scroll style={{ flex: 1 }} scrollValue={offset}>
     <View style={{ paddingTop: 56 }}>…</View>
   </Scroll>
-  <View style={{ position: "absolute", top: 0, left: 0, right: 0, height: 56, transform: [{ translateY: header.mul(-1) }] }}>…</View>
+  <View style={{ position: "absolute", top: 0, left: 0, right: 0, height: 56, translate: [0, header.mul(-1)] }}>…</View>
 </View>
 ```
 
@@ -451,8 +451,8 @@ const pull = createAnimatedValue(0);
     …
   </Scroll>
   <View
-    pointerEvents="none"
     style={{
+      pointerEvents: "none",
       position: "absolute",
       top: 0,
       left: 0,
@@ -507,10 +507,10 @@ pub fn photo() -> impl IntoElement {
 ```
 
 ```tsx tabs
-import { Image, mount, Scroll, signal, type YNode } from "nsh";
+import { Image, mount, Scroll, type ScrollRef, signal } from "nsh";
 
 function Photo() {
-  let scroll!: YNode;
+  let scroll!: ScrollRef;
   const scale = signal(1);
   return (
     <Scroll
@@ -552,7 +552,7 @@ view().on_press(move || scroller.scroll_to(point(px(0.0), px(0.0)), true))
 ```
 
 ```tsx tabs
-let scroll!: YNode;
+let scroll!: ScrollRef;
 
 <Scroll ref={scroll} style={{ flex: 1 }}>…</Scroll>
 <View onPress={() => scroll.scrollTo({ y: 0 })}>…</View>

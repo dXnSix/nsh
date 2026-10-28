@@ -321,7 +321,8 @@ are `nsh test`'s; `Headless` has each of them (`run_for`, `fast_forward`, `set_s
 
 `Date`, `performance.now()` and `Intl`'s default date follow the clock. Steps finish what is running without waiting
 for it: while the app asks for frames or a native animation runs, frames come one after another, each a frame's time
-(1/60 s) later on the clock. A 300 ms transition takes a few milliseconds, and a timer due during it runs. `app.wait(ms)`
+(1/60 s) later on the clock. A 300 ms transition takes a few milliseconds, and a timer due during it runs. An
+animation that loops forever (a spinner) runs along with the clock: it turns as the test moves the clock. `app.wait(ms)`
 and a long press move the clock by their time. A timer that comes due later runs only when the test moves the clock
 there. `waitFor`'s timeout stays real time, as it also waits for what comes from outside (a route's function, the
 network). The gallery's tests run this way (`examples/gallery/tests`): its twelve tests that wait for animations
@@ -356,13 +357,16 @@ one: a selector matching several fails the step, and the error says how to narro
 | `await app.type(selector, text)` | Types into the input (or the first input inside the view; `text:` also matches an input's text or placeholder) at the end of what it holds, key by key: it takes the focus, then each character is an `onKeyPress` and an `onChange`, within `maxLength`. A `\n` in a single-line input is the return key. |
 | `await app.submit(selector)` | The return key in the input, as its `submitBehavior` says: `onSubmit` (and the focus leaves a single-line input), or a line break in a multiline one. |
 | `await app.scroll(selector, distance)` | Drags the scroll view or list (the view, the one around it, or the first inside it) by `distance` points along its axis, 10 points per frame, within its content, as the user may (`scrollable`). Negative scrolls back. |
-| `await app.hover(selector)` | Moves the mouse over the middle of the view: the views under it that it left hear `onHoverOut`, those it came over `onHoverIn` and take their `hover:` styles, and those listening hear `onHoverMove` with where it is. The desktops and the web at any width, a browser in the phone idiom included (headless: a desktop or `"web"` `platform`); an iOS or Android phone has no mouse: there it rejects. |
+| `await app.hover(selector)` | Moves the mouse over the middle of the view: the views under it that it left hear `onMouseLeave`, those it came over `onMouseEnter` and take their `hover:` styles, and those listening hear `onMouseMove` with where it is and no button down. The desktops and the web at any width, a browser in the phone idiom included (headless: a desktop or `"web"` `platform`); an iOS or Android phone has no mouse: there it rejects. |
 | `await app.rightClick(selector)` | The mouse's secondary button over the middle of the view: it, or the nearest view around it listening, hears `onContextMenu`. The desktops and the web (headless: a desktop `platform`); a phone has no mouse: there it rejects. |
-| `await app.paste(selector, { text?, html?, files?, uris? })` | Pastes into the input as the user does with that on the clipboard: it takes the focus and hears `onPaste` (`html` the same content with its formatting, `files` are paths whose bytes it gets as `File`s, `uris` `file:` URLs), then its text goes in as `pasteBehavior` says. Headless, on macOS and on iOS; the machine's clipboard stays as it was. |
+| `await app.paste(selector, { text?, html?, files?, uris? })` | Pastes into the input as the user does with that on the clipboard: it takes the focus and hears `onPaste` (`html` the same content with its formatting, `files` are paths whose bytes it gets as `File`s, `uris` `file:` URLs), then its text goes in as `pasteBehavior` says. Headless, on macOS, on iOS and on the web; the machine's clipboard stays as it was. |
 | `app.menu()` | The actions of the context menu the app shows (`Menu.popup`): `label` (a submenu's after its own, `"Share > Mail"`), `disabled`, and `checked` for a checkable item; `null` when none is open. |
 | `await app.chooseMenuItem(label)` | Chooses the open context menu's action, as a click on it does: the app hears `onMenu` (its `onSelect` runs), then the menu closes. Rejects when the item is disabled or missing. |
 | `await app.closeMenu()` | Closes the open context menu with nothing chosen, as Escape does. |
 | `await app.keyboard.press(keys)` | Presses a key with its modifiers, as `keymap` names it (`"mod+k"`, `"shift+/"`, `"escape"`; `mod` is the platform's command key), on a hardware keyboard, on every platform (phones and tablets have one too): the app's shortcut of it hears it (`keymap.bind`, `onKeyCommand`), else on macOS and the web Tab and Shift+Tab move the keyboard focus between the inputs and the views that take presses (`onFocus`, `onBlur`, `focus:` styles) and Return or Space presses the view it is on, else the focused input takes a character, Backspace or the return key, else Escape goes back. |
+| `await app.keyboard.down(keys)` / `up(keys)` | Holds modifier keys (`"mod"`, `"shift"`, `"alt"`, `"ctrl"`, `"meta"`, joined by `+`) down until `up`: the presses, drags and hovers meanwhile carry them, as a Mod-click or a Shift-drag does. Headless and on Linux for now. |
+| `await app.dragAndHold(selector, by)` / `app.drop()` | Drags as `drag` does and keeps the finger down until `drop()`, which lifts it where it is: the steps between look at the screen mid-drag (a drag preview, a drop line). Headless and on Linux for now. |
+| `await app.dropFiles(selector, uris)` | Drops local files (`file:` URLs, as a file manager drags them) on the middle of the view: it, or the nearest view around it listening, hears `onFileDrop`. Desktops, headless and on Linux for now. |
 | `await app.drag(selector, { x, y })` | A finger lands on the middle of the view, rests for 100 ms, moves by `x`, `y` points, 10 per frame, and lifts, as the platform's input takes it: a pan follows it (`pan={{ x, y }}`, `onPanStart`, `onPanEnd` with the release velocity), the views listening to touches hear it (`onTouchStart`, `PanResponder`), a scroll view scrolls with it and, pulled far enough past its top, refreshes (`onRefresh`), and a press under it is cancelled once it moves away. On the desktops and the web it is the mouse. |
 | `await app.wait(ms)` | Lets the app run for `ms` milliseconds: timers, animations, requests. On a manual clock, moves it by `ms` (`app.clock.runFor`). |
 | `await app.waitFor(selector, options?)` | Resolves once a view matches, or with `{ state: "gone" }` once none does; rejects after `timeout` ms (5000). |
@@ -372,7 +376,7 @@ one: a selector matching several fails the step, and the error says how to narro
 | `app.enabled(selector)` | Whether the view takes input: neither it nor a view around it is disabled, and an input is not `readonly`. |
 | `app.texts()` | The texts on screen now, in order. |
 | `app.value(selector)` | The text of an input, `null` when none matches. |
-| `app.spanStyle(selector)` | In headless tests, the first matched character’s resolved style: `color`, optional `backgroundColor`, `fontSize`, `fontWeight`, `italic`, `underline`, and `lineThrough`. Colors are `#rrggbbaa`; sizes are in points. |
+| `app.spanStyle(selector)` | The first matched character’s resolved style, headless and on every `--target`: `color`, optional `backgroundColor`, `fontSize`, `fontWeight`, `italic`, `underline`, and `lineThrough`. Colors are `#rrggbbaa`; sizes are in points. |
 | `app.storage()` | What the app's storage holds now. |
 | `await app.back()` | Goes back as the user does (a header's back button, swiping a sheet down): the innermost stack of the newest modal, else of the screen, pops its top screen (`onDismiss`), or asks it (`onBackRequest`) when it has `preventBack`; without one, the newest modal asks to close (`onRequestClose`). Rejects when there is nothing to go back from. |
 | `app.onDialog(handler)` | Answers the dialogs the app shows from now on (`Alert.alert`, action sheets): `handler` gets the dialog (`title`, `message`, `buttons`, `cancelable`, `sheet`) and returns the text of the button to press, or `null` to close it without one. |
@@ -392,10 +396,11 @@ one: a selector matching several fails the step, and the error says how to narro
 | `await app.setTimeZone(name)` | Moves the device to the time zone `name` (an IANA name, `"Asia/Tokyo"`), as when the user travels or changes the setting (`timeZone()`). Headless runs only. |
 | `await app.screenshot(path?)` | A picture of the app's window as a PNG (a `Uint8Array`), also saved at `path` on this machine when given (relative to the current directory). Only a real platform draws the app: see [On a real platform](#on-a-real-platform). |
 
-A step resolves once the app rendered nothing for 100 ms and no native animation runs (2 s at most, for apps that
-render all the time; on a manual clock, also 2 s of the app's time), so what it changed is on screen when the next
-line runs; use `waitFor` for what comes later (a
-response, a timer). A step rejects, failing the test, when nothing matches its selector (the error lists the texts on
+A step resolves once the app rendered nothing for 100 ms and no native animation runs that ends by itself (2 s at
+most, for apps that render all the time; on a manual clock, also 2 s of the app's time), so what it changed is on
+screen when the next line runs; use `waitFor` for what comes later (a response, a timer). An animation that loops
+forever, such as a loading spinner, keeps running in the background while steps and `waitFor` go on, as an infinite
+CSS animation does in a browser's tests. A step rejects, failing the test, when nothing matches its selector (the error lists the texts on
 screen), when the app threw an exception meanwhile, and when the app asked for what only a real platform answers.
 
 `app.spanStyle("id:guide")` reads a nested `<Text testID="guide">`; `text:word` reads the first character
@@ -409,7 +414,7 @@ A headless run has the real runtime and no platform. It plays the platform's par
 that only a real platform can do:
 
 - **Native animations run** frame by frame, to their end: `start(callback)` callbacks run, and so does what waits for
-  them.
+  them. Loops without an end run until the app stops them.
 - **Going back** pops screens and closes modals as a platform does (`app.back()`).
 - **Dialogs are answered**: by the test's `onDialog`, else by their cancel button, else they are closed when they can
   be; a dialog that only its other buttons answer fails the step that showed it until the test says which to press.

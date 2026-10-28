@@ -1,5 +1,5 @@
 //! What components read from the environment: the surface, system UI, the
-//! user's settings ([`super::ambient::window`] and the like).
+//! user's settings ([`super::window`] and the like).
 
 use crate::{
     EdgeInsets, Points, Size,
@@ -17,7 +17,7 @@ pub struct Environment {
     pub title_bar: crate::geometry::Edges<crate::geometry::Points>,
     /// The software keyboard's height, 0 when hidden.
     pub keyboard_height: Points,
-    /// How long the keyboard's show / hide animation takes, in seconds.
+    /// How long the keyboard's show / hide animation takes, in milliseconds.
     pub keyboard_duration: f32,
     /// Dark appearance.
     pub dark: bool,
@@ -56,6 +56,12 @@ pub struct Environment {
     /// Whether the app is in use: in the foreground, visible without the
     /// focus, or in the background.
     pub app_state: AppState,
+    /// The platform picks colors from the screen
+    /// ([`crate::platform::Environment::screen_color`]).
+    pub screen_color: bool,
+    /// The platform shows file dialogs and opens, reveals and trashes local
+    /// paths ([`crate::platform::Environment::file_requests`]).
+    pub file_requests: bool,
 }
 
 impl Default for Environment {
@@ -82,6 +88,8 @@ impl Default for Environment {
             apple_keyboard: false,
             host: false,
             app_state: AppState::Active,
+            screen_color: false,
+            file_requests: false,
         }
     }
 }

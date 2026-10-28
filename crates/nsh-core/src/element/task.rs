@@ -102,6 +102,12 @@ pub(crate) enum Action {
     /// [`crate::open_url::check_url`]); whether it opened resolves the
     /// slot.
     OpenUrl(String, AnswerSlot<bool>),
+    /// Lets the user pick a color on the screen; the color (none when
+    /// cancelled or not supported) resolves the slot.
+    PickScreenColor(AnswerSlot<Option<crate::Hsla>>),
+    /// A request on local paths for the platform
+    /// ([`crate::file_dialog`]); its answer resolves the slot.
+    FileRequest(crate::file_dialog::FileRequest, FileAnswer),
     /// An operation on the native animation graph.
     Animation(crate::animation::AnimationOp),
     /// Starts an animation; its end resolves the slot.
@@ -125,9 +131,53 @@ pub(crate) enum Action {
     Frame(AnswerSlot<Instant>),
     /// Sets the app's appearance.
     Appearance(crate::platform::Appearance),
+    /// Draws the scroll views' bars with the built-in bar the source makes
+    /// of the theme, or (no theme) with the platform's indicator.
+    BuiltInScrollbars(super::ScrollbarSource, Option<super::AnyValue>),
     /// Measures the node with the layout of the commit the action goes out
     /// with; the measurement resolves the slot.
     Measure(NodeId, AnswerSlot<Option<crate::Measurement>>),
+    /// How long the node's transitions run with the styles of the commit
+    /// the action goes out with; the time resolves the slot.
+    TransitionTime(NodeId, AnswerSlot<std::time::Duration>),
+}
+
+/// A request on local paths waiting for the platform's answer
+/// ([`Action::FileRequest`]).
+pub(crate) enum FileAnswer {
+    /// The paths picked in the open dialog, none when cancelled.
+    OpenDialog(AnswerSlot<Result<Option<Vec<std::path::PathBuf>>, String>>),
+    /// The path chosen in the save dialog, none when cancelled.
+    SaveDialog(AnswerSlot<Result<Option<std::path::PathBuf>, String>>),
+    /// The path opened or showed in the file manager, or why not.
+    Done(AnswerSlot<Result<(), String>>),
+    /// Where the trashed item went, or why it was not.
+    Trash(AnswerSlot<Result<Option<std::path::PathBuf>, String>>),
+}
+
+impl FileAnswer {
+    /// Answers with the platform's `paths` (none: cancelled), or its
+    /// `error`.
+    pub(crate) fn deliver(self, mut paths: Vec<std::path::PathBuf>, error: Option<String>) {
+        match self {
+            FileAnswer::OpenDialog(slot) => slot.borrow_mut().deliver(match error {
+                Some(error) => Err(error),
+                None => Ok((!paths.is_empty()).then_some(paths)),
+            }),
+            FileAnswer::SaveDialog(slot) => slot.borrow_mut().deliver(match error {
+                Some(error) => Err(error),
+                None => Ok((!paths.is_empty()).then(|| paths.swap_remove(0))),
+            }),
+            FileAnswer::Done(slot) => slot.borrow_mut().deliver(match error {
+                Some(error) => Err(error),
+                None => Ok(()),
+            }),
+            FileAnswer::Trash(slot) => slot.borrow_mut().deliver(match error {
+                Some(error) => Err(error),
+                None => Ok((!paths.is_empty()).then(|| paths.swap_remove(0))),
+            }),
+        }
+    }
 }
 
 /// A clipboard read waiting for the platform's answer.
@@ -154,8 +204,7 @@ pub struct ClipboardImage {
     pub size: Size<DevicePixels>,
 }
 
-/// An image's size in pixels (`Image.getSize`); TS: `ImageSize`, an alias of
-/// `Size`.
+/// An image's size in pixels (`Image.getSize`); TS: `PixelSize`.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ImageSize {
     /// Width.
@@ -177,13 +226,10 @@ impl From<ImageSize> for Size<DevicePixels> {
     }
 }
 
-/// TS: `type ImageSize = Size` (`{ width, height }`, in pixels here).
+/// TS: `PixelSize` (`{ width, height }`).
 impl super::JsValue for ImageSize {
     fn ts_type(types: &mut super::TsTypes) -> String {
-        types.declare("ImageSize", |_| {
-            "/** An image's size in pixels (`Image.getSize`). */\nexport type ImageSize = Size;"
-                .into()
-        })
+        <Size<DevicePixels> as super::JsValue>::ts_type(types)
     }
 
     fn from_js(value: super::JsIn<'_>) -> Result<Self, super::PropError> {
@@ -248,6 +294,10 @@ pub(crate) struct Executor {
     pub(crate) back: Rc<RefCell<super::back::BackListeners>>,
     /// The views' keyboard shortcuts.
     pub(crate) keys: Rc<RefCell<super::keys::ViewKeys>>,
+    /// The views' menus' handlers.
+    pub(crate) menus: Rc<RefCell<super::menus::ViewMenus>>,
+    /// The views' watches of nodes they did not make.
+    pub(crate) watches: Rc<RefCell<super::watch::Watches>>,
     /// The timers tasks wait for ([`super::timer`]), soonest first: the core
     /// fires them as they come due, and the engine's loop wakes for the
     /// soonest, as it does for JS's timers.
@@ -574,7 +624,7 @@ pub(crate) fn act_after(
     let id = executor.spawn(
         host,
         Box::pin(async move {
-            super::ambient::timer_until(at).await;
+            super::timer_until(at).await;
             if let Some(executor) = acting.upgrade() {
                 executor.act(action);
             }

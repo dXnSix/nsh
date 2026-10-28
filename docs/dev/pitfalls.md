@@ -20,9 +20,9 @@ Things that were found the hard way. Read the section of the area you change bef
 - **Nodes are released by GC, not by Remove.** A memo may keep removed nodes and insert them again, so `Remove` only detaches;
   `Release` (queued by the node's finalizer) frees the node and its native view.
 - **`nsh_js::BUNDLE_NAME` (`bundle.js`)** is the module name of every bundle and is how stacks are matched for symbolication; `BYTECODE_VERSION`
-  names the QuickJS-NG release and revision, `BC_VERSION` and the byte order, never the binding. Native and
-  browser targets use `quickjs-jit` (the browser uses its interpreter and pregenerated bindings) and must build
-  the same QuickJS-NG, as the web runtime loads what the native CLI compiles. Tests hold it to the linked release, the bytecode's format byte and the `-sys` versions
+  names the QuickJS-NG release and revision, `BC_VERSION` and the byte order, never the binding. The native
+  targets use `quickjs-jit` and must build the same QuickJS-NG as the CLI that compiles their bytecode (the web
+  runs no QuickJS). Tests hold it to the linked release, the bytecode's format byte and the `-sys` versions
   in `Cargo.lock` (`ENGINES`): update them together when upgrading either.
 - **Encoded operations' codes** (`ANIMATION_*`, `CV_*`) come from `nsh_core::js` (`protocol.rs`, `canvas.rs`): never write a code's value
   by hand in `nsh-js`.
@@ -52,6 +52,19 @@ Things that were found the hard way. Read the section of the area you change bef
   layout could round a node from stale values (a frame one point off from a layout from scratch). The core reaches every node through
   its parent, its containing block (there is no `position: static`), and sums the origins from the root down, in Taffy's order, so the
   `f32` sums and the rounding are Taffy's to the bit (`--trace` output is unchanged).
+- **Layout rounds to device pixels, not whole points** (`round`, `rounded` and `ceil_to_pixel` in `core/mod.rs`, at the
+  environment's `pixelRatio`). Android's densities are not whole numbers (2.625 on a 420 dpi phone), and its views sit on whole
+  pixels, each frame rounded in its parent (`Mounter.frame`): rounded to whole points, a box 4 points down (10.5 pixels) and 30
+  tall was 78 pixels while a child as tall was 79, so a scroll view cut the child's last row of pixels off; and a text measured
+  21⅓ points (56 pixels) laid out at 22 (58), the 2 pixels below its last line. Text measurements are rounded up to a device
+  pixel (`MeasureCache` holds the ratio and drops its sizes when the ratio changes, which lays everything out again); at one
+  pixel per point this is Taffy's rounding, but for a value within a 64th of a half, which rounds up. Android's `lineHeight` is a whole number of pixels, rounded to the
+  nearest as a TextView's dp line height is (`ExactLineHeight`): rounded up, 21 points at 2.625 were 56 pixels, a third of
+  a point per line taller than the design. Sizes and offsets are counted in whole pixels before they become points
+  (`pixel`, `span`): `round(to) - round(from)` in points differs in its last bits with where the edges are, and a 28 point
+  row at 2.625 (73.5 pixels) has every other edge on a half pixel, which an `f32`'s hair rounds either way. As a scroll
+  moved DataTable's body a pixel, every frame in it was sent again (460–1000 mount items a frame on a Pixel 10 Pro instead
+  of 3); a half pixel is snapped first, so it always rounds up.
 - **The core keeps its own layout tree** (`core/layout_tree.rs`: Taffy's algorithms over the core's nodes through Taffy's low-level
   traits, as `TaffyTree` runs them, call for call). `TaffyTree::mark_dirty` stops at the first node whose cache is already empty, taking
   its ancestors for dirty too; nodes of a `display: none` subtree and absolutely positioned ones always have empty caches while the nodes
@@ -116,6 +129,11 @@ Things that were found the hard way. Read the section of the area you change bef
   f64"); integers decode either way. A new float field in a message takes the same attribute.
 
 ## iOS, UIKit and Mac Catalyst
+
+- **Retained navigation tabs hide the stack's container or an ancestor, not the navigation controller's view**:
+  check the entire ancestor chain before a stack updates a shared system tab bar, including from transition
+  callbacks. Visibility changes synchronize the newly visible stack after the batch. `TabBar.hidden` and the
+  visible stack's request are independent reasons: each updates its own state, and either keeps the bar hidden.
 
 - **A standalone `UITabBar` can establish its natural height before its native component host is sized** (verified on
   the iOS 27 simulator). Flexible-height autoresizing then adds the host's height to that initial height. In
@@ -230,6 +248,12 @@ Things that were found the hard way. Read the section of the area you change bef
   recognizer requiring the secondary button recognized every tap, and as a tap recognizer it cancelled the presses inside
   (a `ContextMenu`'s trigger opened its menu instead of pressing). The `onContextMenu` recognizer allows only
   `UITouchTypeIndirectPointer` touches (`mount.rs`).
+- **iOS, VoiceOver's increment / decrement**: VoiceOver calls `accessibilityIncrement` / `accessibilityDecrement`
+  (swipe up / down) only on elements with `UIAccessibilityTraitAdjustable`, so an element with those actions gets the
+  trait on top of its role's (`native_view.rs` `traits`; an image with them is announced as an adjustable image). It
+  reads the element's value as soon as the call returns, while the new value comes from the engine thread in a later
+  batch: a step whose value arrives after VoiceOver read the old one announces the new one (`NshView::late_step_value`),
+  one that arrives before it asked is read by VoiceOver itself.
 
 ## Android
 
@@ -502,6 +526,11 @@ Things that were found the hard way. Read the section of the area you change bef
   to 40.5. A half-pixel stationary tolerance therefore ends the scroll early and duplicates `onScrollEnd`.
   `stopGlide` compares clamped offsets exactly; a quiet-period fallback covers targets rounded back to the
   current offset, for which the browser emits no `scrollend`.
+- **A blocking `wheel` listener holds the page's scrolling only over the box of the element that has it**: a
+  descendant shown in the top layer (a dialog over the window, `dialogs: "viewport"`) outside the root's box got
+  `wheel` events that were not cancelable, and the page scrolled under it although the root's listener prevented
+  them (headless Chrome 156: `cancelable: false`, `scrollY` 300 after a 300 px wheel). The layer has a blocking
+  listener of its own (`raise`).
 
 ## Testing on simulators and emulators
 

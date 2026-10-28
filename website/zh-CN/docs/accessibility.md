@@ -48,11 +48,12 @@ view()
 | `.label(..)` | `accessibilityLabel` | `string` | 屏幕阅读器朗读的内容，代替内部的文字。 |
 | `.hint(..)` | `accessibilityHint` | `string` | 激活元素会发生什么，在停顿后朗读。 |
 | `.role(..)` | `role` | `AccessibilityRole` | 元素是什么。 |
-| `.accessibility_state(..)` | `accessibilityState` | `AccessibilityState` | 它的状态：禁用、选中、勾选、忙碌、展开。`selected` 同时让选中样式生效，`checked` 为 true 时让勾选样式生效，为 `"mixed"` 时让半选样式生效。 |
+| `.accessibility_state(..)` | `accessibilityState` | `AccessibilityState` | 它的状态：禁用、选中、勾选、忙碌、展开、按下、当前项。`selected` 同时让选中样式生效，`checked` 为 true 时让勾选样式生效，为 `"mixed"` 时让半选样式生效，`pressed` 为 true 时让按下样式生效。 |
+| `.accessibility_level(..)` | `accessibilityLevel` | `number` | 标题的级别（1 为最高），树节点的深度（顶层为 1）。 |
 | `.accessibility_value(..)` | `accessibilityValue` | `{ min?, max?, now?, text? }` | 范围类或文本类元素的值。 |
 | | `accessibilityActions` | `{ name, label? }[]` | 提供给辅助技术的操作。 |
 | `.on_accessibility_action(..)` | `onAccessibilityAction` | `(e: { actionName }) => void` | 执行了某个操作（Rust：操作名称）。 |
-| | `accessibilityElementsHidden` | `boolean` | 对辅助技术隐藏该视图及其子树。 |
+| `.accessibility_elements_hidden(..)` | `accessibilityElementsHidden` | `boolean` | 对辅助技术隐藏该视图及其子树。 |
 | | `importantForAccessibility` | `"auto" \| "yes" \| "no" \| "no-hide-descendants"` | 视图（及其子树）是否暴露。 |
 | | `android={{ accessibilityLiveRegion }}` | `"none" \| "polite" \| "assertive"` | Android：视图的变化如何播报给 TalkBack。 |
 | `.test_id(..)` | `testID` | `string` | UI 测试用的标识（iOS 上的 accessibility identifier，Android 上的 resource id）；不会被朗读。 |
@@ -61,14 +62,17 @@ view()
 
 ### 角色
 
-角色（`.role(AccessibilityRole::Header)`、`role="header"`）告诉用户这是哪一类元素、如何操作。在 Rust 中它是 `AccessibilityRole` 的一个变体（`Button`、`Header`、`Switch` 等）；TSX 的取值有 `"none"`、`"button"`、`"link"`、`"search"`、`"image"`、`"imagebutton"`、`"keyboardkey"`、`"text"`、`"adjustable"`、`"header"`、`"summary"`、`"alert"`、`"checkbox"`、`"combobox"`、`"menu"`、`"menubar"`、`"menuitem"`、`"progressbar"`、`"radio"`、`"radiogroup"`、`"scrollbar"`、`"spinbutton"`、`"switch"`、`"tab"`、`"tablist"`、`"timer"`、`"toolbar"`、`"list"`、`"grid"`、`"table"`、`"rowgroup"`、`"row"`、`"columnheader"`、`"cell"`（[`Table`](../elements/table.md) 各部件的角色），以及 `"listbox"` 和 `"option"`（一组可供选择的选项，例如选择框弹出的列表，及其中的选项，选中的那项由 `accessibilityState.selected` 标出）。
+角色（`.role(AccessibilityRole::Header)`、`role="header"`）告诉用户这是哪一类元素、如何操作。在 Rust 中它是 `AccessibilityRole` 的一个变体（`Button`、`Header`、`Switch` 等）；TSX 的取值有 `"none"`、`"button"`、`"link"`、`"search"`、`"image"`、`"imagebutton"`、`"keyboardkey"`、`"text"`、`"adjustable"`、`"header"`、`"summary"`、`"alert"`、`"checkbox"`、`"combobox"`、`"menu"`、`"menubar"`、`"menuitem"`、`"progressbar"`、`"radio"`、`"radiogroup"`、`"scrollbar"`、`"spinbutton"`、`"switch"`、`"tab"`、`"tablist"`、`"timer"`、`"toolbar"`、`"list"`、`"grid"`、`"table"`、`"rowgroup"`、`"row"`、`"columnheader"`、`"cell"`（[`Table`](../elements/table.md) 各部件的角色），以及 `"listbox"` 和 `"option"`（一组可供选择的选项，例如 [`Select`](../elements/select.md) 弹出的列表，及其中的选项，选中的那项由 `accessibilityState.selected` 标出），`"group"`（一组相关的元素），`"region"`（值得单独到达的一块区域，例如折叠面板的内容），`"navigation"`（在应用内跳转的一组链接，例如分页），`"tree"` 和 `"treeitem"`（可展开、收起的节点，各在自己的 `accessibilityLevel`），`"menuitemcheckbox"` 和 `"menuitemradio"`（可勾选的菜单项，单独勾选或在一组中单选）。
 
 最常用的几个：
 
 - `"button"` 用于不是链接的可按压元素；`"link"` 用于跳转到内容。
-- `"header"` 用于分区标题：屏幕阅读器用户会在标题之间跳转来快速浏览页面。
+- `"header"` 用于分区标题：屏幕阅读器用户会在标题之间跳转来快速浏览页面。平台能读出级别时，`accessibilityLevel` 给出它的级别（1 为最高）。
+- `"button"` 配合 `accessibilityState.pressed` 用于切换按钮，即保持开或关的按钮（工具栏里的加粗）。
+- `"navigation"` 包住在页面之间跳转的链接，当前页的链接带 `accessibilityState.current: "page"`。
 - `"switch"`、`"checkbox"`、`"radio"` 配合 `accessibilityState.checked`。
 - `"adjustable"` 用于滑块和步进器，配合 `accessibilityValue` 以及 `increment` / `decrement` 操作（[`Slider`](../elements/slider.md) 的每个滑块都是）。
+- `"spinbutton"` 用于存放一个数字、也能步进的输入框，配合同样的值和操作（[`NumberInput`](../elements/number-input.md) 的输入框）。
 - `"image"` 用于有意义的图片，并加上标签；装饰性图片应当隐藏。
 
 ```rust tabs
@@ -128,7 +132,7 @@ view()
 </View>
 ```
 
-状态在 Rust 中是 `AccessibilityState { disabled, selected, checked: Option<Checked>, busy, expanded }`，在 TSX 中是 `{ disabled?, selected?, checked?: boolean | "mixed", busy?, expanded? }`。禁用视图（`.disabled(..)`、`disabled`）也意味着禁用状态。带 `min`、`max` 和 `now` 的 `accessibilityValue` 以百分比朗读；带 `text` 时按原文朗读（"3 of 10"、"Medium"）。
+状态在 Rust 中是 `AccessibilityState { disabled, selected, checked: Option<Checked>, busy, expanded, pressed: Option<Checked>, current: Option<AccessibilityCurrent> }`，在 TSX 中是 `{ disabled?, selected?, checked?: boolean | "mixed", busy?, expanded?, pressed?: boolean | "mixed", current?: boolean | "page" | "step" | "location" | "date" | "time" }`。`pressed` 让按钮成为切换按钮（ARIA 的 `aria-pressed`）；`current` 标出一组中的当前项（ARIA 的 `aria-current`）：分页的当前页、向导的当前步骤。禁用视图（`.disabled(..)`、`disabled`）也意味着禁用状态。带 `min`、`max` 和 `now` 的 `accessibilityValue` 以百分比朗读；带 `text` 时按原文朗读（"3 of 10"、"Medium"）。
 
 ## 操作
 
@@ -163,11 +167,13 @@ function Quantity() {
 | 名称 | iOS（VoiceOver） | Android（TalkBack） |
 |---|---|---|
 | `activate` | 双击 | 双击（点击） |
-| `increment`、`decrement` | 在可调整元素上向上 / 向下轻扫 | 向前 / 向后滚动 |
+| `increment`、`decrement` | 向上 / 向下轻扫，随后 VoiceOver 读出新值 | 向前 / 向后滚动 |
 | `longpress` | | 双击并按住 |
 | `expand`、`collapse` | | 展开 / 收起 |
 | `magicTap` | 双指双击 | |
 | `escape` | 双指 Z 字形擦除 | |
+
+带有 `increment` 或 `decrement` 的元素，不论角色如何都是可调整的：图表保持 `"image"` 角色，同样能用 VoiceOver 的轻扫和 TalkBack 的滚动逐个切换数据点，每一步之后读出它的 `accessibilityValue`。
 
 其他名称都成为自定义操作，以 `label`（或名称）列在 VoiceOver 的操作转子和 TalkBack 的操作菜单中。自定义操作是滑动删除之类手势的无障碍替代：
 
@@ -247,12 +253,12 @@ fn upload() -> impl IntoElement {
 ```
 
 ```tsx tabs
-import { signal, Text, View, type YNode } from "nsh";
+import { signal, Text, View, type ViewRef } from "nsh";
 import { announce, screenReaderEnabled, setAccessibilityFocus } from "nsh";
 
 function Upload() {
   const done = signal(false);
-  let result!: YNode;
+  let result!: ViewRef;
   const finish = () => {
     done.set(true);
     announce("Upload complete");

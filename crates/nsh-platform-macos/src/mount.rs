@@ -90,6 +90,7 @@ impl Mounter {
             view.set_stale(false);
             if self.alive(&view) {
                 view.redraw();
+                crate::shader::shown(&view);
             }
         }
     }
@@ -221,7 +222,7 @@ impl Mounter {
                 match view.kind() {
                     ViewKind::Stack => crate::navigation::stack_resized(surface, view),
                     ViewKind::Canvas => view.changed(),
-                    _ => {}
+                    _ => crate::shader::resized(surface, view),
                 }
             }
             MountItem::ViewStyle { id, style } => {
@@ -240,7 +241,11 @@ impl Mounter {
                 content,
             } => {
                 if let Some(view) = self.get(*id) {
+                    let old = view.state().text.as_ref().map(|t| t.text.clone());
                     crate::text::set(view, text, layout, *content);
+                    if let Some(old) = old {
+                        crate::transition::text_changed(surface, view, &old, text);
+                    }
                     self.draw_when_shown(view, Damage::All);
                     crate::access::text_changed(view);
                 }
@@ -267,6 +272,7 @@ impl Mounter {
                 id,
                 horizontal,
                 scrollbar_visible,
+                replaced,
                 mirrored,
                 ..
             } => {
@@ -276,6 +282,7 @@ impl Mounter {
                         view,
                         *horizontal,
                         *scrollbar_visible,
+                        *replaced,
                         *mirrored,
                     );
                 }
@@ -324,6 +331,11 @@ impl Mounter {
                 if let Some(view) = self.get(*id) {
                     crate::canvas::set(surface, view, drawing.clone());
                     self.draw_when_shown(view, Damage::All);
+                }
+            }
+            MountItem::Shader { id, layer } => {
+                if let Some(view) = self.get(*id) {
+                    crate::shader::set(surface, view, layer.clone());
                 }
             }
             MountItem::Gestures { id, values } => {
@@ -407,15 +419,30 @@ impl Mounter {
     fn command(&self, surface: &Rc<Surface>, id: NodeId, command: &Command) {
         let view = self.views.get(&id);
         match command {
-            Command::Focus => view.map_or((), crate::text_input::focus),
+            // An input edits; a pressable takes the keyboard focus as Tab
+            // gives it.
+            Command::Focus => match view {
+                Some(view) if view.kind() == ViewKind::Input => crate::text_input::focus(view),
+                Some(view) if id != ROOT_ID => crate::input::focus_control(surface, view),
+                _ => {}
+            },
             Command::Blur => match view {
                 Some(view) if view.kind() == ViewKind::Input => crate::text_input::blur(view),
+                Some(view) if id != ROOT_ID => {
+                    crate::input::blur_control(surface, view);
+                    crate::text_input::blur_all(surface);
+                }
                 _ => crate::text_input::blur_all(surface),
             },
             Command::SetSelection { start, end } => {
                 if let Some(view) = view {
                     crate::text_input::set_selection(view, *start, *end);
                 }
+            }
+            Command::ScrollTo { y, animated, .. }
+                if view.is_some_and(|v| v.kind() == ViewKind::Input) =>
+            {
+                crate::text_input::scroll_to(view.expect("an input"), *y, *animated);
             }
             Command::ScrollTo { .. }
             | Command::ScrollToEnd { .. }

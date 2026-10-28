@@ -403,10 +403,10 @@ impl JsValue for crate::geometry::DevicePixels {
     }
 }
 
-/// A size in pixels: TS's `Size` (`{ width, height }`).
+/// A size in pixels: TS's `PixelSize` (`{ width, height }`).
 impl JsValue for crate::geometry::Size<crate::geometry::DevicePixels> {
     fn ts_type(_types: &mut TsTypes) -> String {
-        "Size".into()
+        "PixelSize".into()
     }
 
     fn from_js(value: JsIn<'_>) -> Result<Self, PropError> {
@@ -434,6 +434,28 @@ impl JsValue for crate::geometry::Size<crate::geometry::DevicePixels> {
 fn field_of<T: JsValue>(value: JsIn<'_>, key: &str) -> Result<T, PropError> {
     let v = value.field(key)?;
     T::from_js(v.get()).map_err(|e| PropError(format!("`{key}`: {e}")))
+}
+
+/// Reads a derived object's field, preserving absence separately from a
+/// nullable value so the caller can apply its declared default.
+#[doc(hidden)]
+#[cfg_attr(target_arch = "wasm32", inline(never))]
+pub fn object_field<T: JsValue>(
+    value: JsIn<'_>,
+    key: &str,
+    nullable: bool,
+) -> Result<Option<T>, PropError> {
+    // Share the host calls and error formatting across fields of one type.
+    // Inlining this into every style part bloats the web runtime.
+    let owned = value.field(key)?;
+    let value = owned.get();
+    if value.kind() == JsKind::Undefined || (!nullable && value.is_nullish()) {
+        Ok(None)
+    } else {
+        T::from_js(value)
+            .map(Some)
+            .map_err(|e| PropError(format!("`{key}`: {e}")))
+    }
 }
 
 /// A position in points: TS's `Point` (`{ x, y }`), as events carry it.
@@ -616,13 +638,13 @@ impl JsValue for Color {
     }
 }
 
-/// A node JS passes (a `YNode`, a `ref`).
+/// A node JS passes (an element, a `ref`: TS `ViewRef`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeRef(pub crate::NodeId);
 
 impl JsValue for NodeRef {
     fn ts_type(_types: &mut TsTypes) -> String {
-        "YNode".into()
+        "ViewRef".into()
     }
 
     fn from_js(value: JsIn<'_>) -> Result<Self, PropError> {
@@ -792,7 +814,135 @@ impl<T: JsValue> JsValue for Vec<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::percent;
+    use super::{JsIn, JsValue, percent};
+    use crate::element::{JsObject, json_host::JsonHost};
+
+    #[derive(Debug, PartialEq, JsObject)]
+    #[prop(exact)]
+    struct ObjectFields {
+        required: String,
+        optional: Option<String>,
+        #[prop(default)]
+        count: u32,
+        #[prop(default = 7)]
+        custom: u32,
+        #[prop(default = Some(9))]
+        nullable: Option<u32>,
+    }
+
+    #[test]
+    fn object_fields_keep_defaults_nulls_and_error_paths() {
+        let host = JsonHost::default();
+        let read = |json| {
+            let raw = host.value(json);
+            ObjectFields::from_js(JsIn::new(&host, raw))
+        };
+        let absent = read(serde_json::json!({ "required": "ok" })).unwrap();
+        assert_eq!(
+            absent,
+            ObjectFields {
+                required: "ok".into(),
+                optional: None,
+                count: 0,
+                custom: 7,
+                nullable: Some(9),
+            }
+        );
+        let nulls = read(serde_json::json!({
+            "required": "ok", "optional": null, "count": null, "custom": null, "nullable": null,
+        }))
+        .unwrap();
+        assert_eq!(
+            nulls,
+            ObjectFields {
+                nullable: None,
+                ..absent
+            }
+        );
+        let values = read(serde_json::json!({
+            "required": "yes", "optional": "there", "count": 2, "custom": 3, "nullable": 4,
+        }))
+        .unwrap();
+        assert_eq!(
+            values,
+            ObjectFields {
+                required: "yes".into(),
+                optional: Some("there".into()),
+                count: 2,
+                custom: 3,
+                nullable: Some(4),
+            }
+        );
+        for json in [
+            serde_json::json!({}),
+            serde_json::json!({ "required": null }),
+        ] {
+            assert_eq!(read(json).unwrap_err().0, "`required` is missing");
+        }
+        assert_eq!(
+            read(serde_json::json!({ "required": "ok", "unknown": true }))
+                .unwrap_err()
+                .0,
+            "unknown field `unknown`",
+        );
+        let error = read(serde_json::json!({ "required": "ok", "count": "bad" }))
+            .unwrap_err()
+            .0;
+        assert!(error.starts_with("`count`: "), "{error}");
+    }
+
+    /// Fields of one `Option` type in a row are read and written in a
+    /// loop: as each would be on its own.
+    #[derive(Debug, Default, PartialEq, JsObject)]
+    struct Runs {
+        first: Option<u32>,
+        a: Option<String>,
+        b: Option<String>,
+        c: Option<String>,
+        d: Option<String>,
+        #[prop(skip_none)]
+        e: Option<u32>,
+        #[prop(skip_none)]
+        f: Option<u32>,
+        #[prop(skip_none)]
+        g: Option<u32>,
+        #[prop(skip_none)]
+        h: Option<u32>,
+        #[prop(default = Some(1))]
+        last: Option<u32>,
+    }
+
+    #[test]
+    fn runs_of_option_fields_read_and_write_as_fields() {
+        let host = JsonHost::default();
+        let read = |json| Runs::from_js(JsIn::new(&host, host.value(json)));
+        let runs = read(serde_json::json!({
+            "first": 1, "a": "a", "c": null, "d": "d", "f": 6, "h": 8,
+        }))
+        .unwrap();
+        assert_eq!(
+            runs,
+            Runs {
+                first: Some(1),
+                a: Some("a".into()),
+                d: Some("d".into()),
+                f: Some(6),
+                h: Some(8),
+                last: Some(1),
+                ..Runs::default()
+            }
+        );
+        assert_eq!(
+            host.read(runs.to_js(&host).unwrap()),
+            Some(serde_json::json!({
+                "first": 1, "a": "a", "b": null, "c": null, "d": "d", "f": 6, "h": 8, "last": 1,
+            }))
+        );
+        let error = read(serde_json::json!({ "a": "a", "c": 3, "g": "bad" }))
+            .unwrap_err()
+            .0;
+        assert!(error.starts_with("`c`: "), "{error}");
+    }
 
     /// A percentage as CSS writes it; anything else is not one.
     #[test]
