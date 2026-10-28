@@ -60,6 +60,10 @@ Replies:
    > `an_effect_takes_its_picture_again_when_a_child_leaves` removes and releases an absolute child of a fixed-size
    > `ShaderEffect` and asserts its `ShaderInput`; it fails without the fix.
 
+- 2026-10-28: 01–10 force-pushed (with lease) to the fork; the three replies posted (`r4405581783`, `r4405582099`,
+  `r4405582387`); the PR body updated to the one below. Re-requesting huacnlee's review through the API was refused
+  (404, no write access to the repository): re-request it from the PR's Reviewers box.
+
 The body to paste starts below the line.
 
 ---
