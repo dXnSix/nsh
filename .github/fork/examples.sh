@@ -65,14 +65,21 @@ case "$target" in
   # Left out: context-menu, dock, hover, overlays, resizable, toasts (a
   # mouse or a desktop's windows), picker (the system's photo picker);
   # environment runs its appearance only (its rotation expects a 390 × 844
-  # window, the newest simulators are bigger). On the runner, form's typing
-  # lost the second of two equal keys ("hello" became "HELO", then "HEO"),
-  # so only its maxLength test runs.
+  # window, the newest simulators are bigger). Form runs its Input demo and
+  # its disabled field: the sign-up form and the search field set the
+  # viewport, which a simulator keeps at its device's size. Controls runs
+  # all but five tests: its slider (the volume's drag past its end leaves
+  # the demo), its number input's typed seats, a code's Clear and a PIN's
+  # Change PIN (the first press after typing only ends the editing), and
+  # its Tab order (a desktop's).
   ios)
-    gallery=(animations context-menu-press controls device error-boundary gestures links
-      list-search mention menus navigation network photos press shaders shortcuts storage
-      text-view timers)
-    filtered=("environment appearance" "form maxLength")
+    gallery=(animations context-menu-press device error-boundary gestures links list-search
+      mention menus navigation network photos press shaders shortcuts storage text-view timers)
+    filtered=("environment appearance" "form the Input demo" "form a disabled field"
+      "controls switch" "controls check" "controls a radio picks" "controls choice cards and sized"
+      "controls tabs show" "controls collapsible" "controls accordion" "controls progress bar"
+      "controls uploads" "controls stepped setup" "controls equalizer" "controls cart's quantities"
+      "controls a sign-in code" "controls segmented control")
     ;;
   *)
     echo "examples.sh: no tests for target $target" >&2
