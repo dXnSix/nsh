@@ -8,8 +8,10 @@ not run: those whose paths the change does not touch. The ones it touched
 already run, and run once. Workflows disabled in the fork (Website,
 Packages) and the fork's own (`fork-*.yml`) are left out.
 
-Usage: dispatch.py <base sha> <head branch>  (in a checkout of the head,
-with `gh` signed in as the workflow's token, `actions: write`).
+Usage: dispatch.py <base sha> <head branch>  (at the root of a checkout of
+the head, with `gh` signed in as the workflow's token, `actions: write`).
+The script itself may come from another checkout: a `pr/*` branch, cut from
+upstream, has no `.github/fork/`.
 """
 
 import fnmatch
@@ -20,7 +22,7 @@ import sys
 
 import yaml
 
-ROOT = pathlib.Path(__file__).resolve().parents[2]
+ROOT = pathlib.Path.cwd()
 
 
 def changed(base):

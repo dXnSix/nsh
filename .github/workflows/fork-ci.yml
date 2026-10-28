@@ -51,13 +51,21 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+      # The dispatcher comes from the pull request's merge with its base, as
+      # this file does: a `pr/*` branch, cut from upstream, has no
+      # `.github/fork/`, and a fork change to the dispatcher runs its own.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: .fork
+          sparse-checkout: .github/fork
       - name: Start the upstream workflows this pull request did not run
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           python3 -c "import yaml" 2>/dev/null || pip install pyyaml
-          python3 .github/fork/dispatch.py "${{ github.event.pull_request.base.sha }}" "${{ github.head_ref }}"
+          python3 .fork/.github/fork/dispatch.py "${{ github.event.pull_request.base.sha }}" "${{ github.head_ref }}"
 
   macos:
     runs-on: macos-15
