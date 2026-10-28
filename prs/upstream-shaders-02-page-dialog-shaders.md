@@ -20,10 +20,13 @@ The body to paste starts below the line.
 
 ---
 
+**Depends on:** #682 (the elements, the WGSL inputs and the renderer this builds on); merge it after #682. The
+platform PRs of the series depend on this one.
+
 ## Description
 
 Pages and dialogs come with the platform's own motion (`animation`). With `ShaderEffect` and `ShaderTransition`
-(#[01 PR]) an app can change a view through a shader; this PR lets a page's push and pop and a dialog's presentation
+(#682) an app can change a view through a shader; this PR lets a page's push and pop and a dialog's presentation
 and dismissal go through one too: a wipe, an iris, a ripple.
 
 - **`transitionShader`** on a `NavPage` (a screen) or a `Dialog` (a modal): `{ source, uniforms?, duration? }`. The
@@ -44,7 +47,7 @@ and dismissal go through one too: a wipe, an iris, a ripple.
 - `nsh-core` (`ops`): `Prop::TransitionShader(Option<NavShaderSpec>)` (`#[prop(js = "transitionShader", on = SCREEN |
   MODAL)]`).
 - `nsh-core` (`shader`): `NavShaderSpec`, `NavShader { layer, duration }`; `crossfade()` returns
-  `Option<Shader>` (it is new in #[01 PR]).
+  `Option<Shader>` (it is new in #682).
 - `nsh-core` (`mount`): `MountItem::NavShader { id, shader: Option<NavShader> }`.
 - `nsh-engine` (`shader`): `ShaderView::start_transition_backwards`.
 

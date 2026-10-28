@@ -15,10 +15,13 @@ The body to paste starts below the line.
 
 ---
 
+**Depends on:** #682 and #[02 PR] (the elements and pages' and dialogs' `transitionShader` it draws); merge it after
+both. Independent of the other platform PRs (the macOS PR shares a table of `docs/dev/shaders.md` with it).
+
 ## Description
 
 Part of the shader series (01 elements, 02 page and dialog shaders, then one PR per platform, 10 gallery and docs): iOS draws `ShaderEffect`, `ShaderTransition`, `ScreenEffect`, `ScreenTransition`
-and pages' and dialogs' `transitionShader` (#[01 PR], #[02 PR]) on `Shader`'s renderer.
+and pages' and dialogs' `transitionShader` (#682, #[02 PR]) on `Shader`'s renderer.
 
 - **Pictures.** `renderInContext:` of a view holding the children (`Decor::set_effect`; the view children are added
   to) without its mask, at the screen's scale; the backdrop is the window with the view's layer at opacity 0. They are
@@ -50,5 +53,5 @@ and pages' and dialogs' `transitionShader` (#[01 PR], #[02 PR]) on `Shader`'s re
 - [x] Reviewed the changes in this PR and confirmed AI generated code (if any) is accurate.
 - [x] Passed `cargo +nightly fmt` on the changed files and clippy (Catalyst) (clean).
 - [x] Changes to what apps use keep what released versions shipped and come with a case in `tests/compat/`
-  (`cargo xtask compat`): no new API here; the elements' cases came with #[01 PR] and #[02 PR].
+  (`cargo xtask compat`): no new API here; the elements' cases came with #682 and #[02 PR].
 - [ ] Ran the related `examples/gallery` demos on iOS (not run on this base; the fork's sync branch ran `shaders.test.tsx` on the iOS simulator).

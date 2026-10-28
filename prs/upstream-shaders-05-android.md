@@ -17,11 +17,15 @@ The body to paste starts below the line.
 
 ---
 
+**Depends on:** #682 and #[02 PR] (the elements and pages' and dialogs' `transitionShader` it draws), and #681
+(without which `nsh-platform-android` does not build on `main`); merge it after those three. Its gallery test's
+dialog half also needs #675.
+
 ## Description
 
 Part of the shader series (01 elements, 02 page and dialog shaders, then one PR per platform, 10 gallery and docs): Android (API 29 and later; Android 9 shows the children as they are) draws
 `ShaderEffect`, `ShaderTransition`, `ScreenEffect`, `ScreenTransition` and pages' and dialogs' `transitionShader`
-(#[01 PR], #[02 PR]) on `Shader`'s renderer.
+(#682, #[02 PR]) on `Shader`'s renderer.
 
 - **Pictures** (`Pictures.java`): a drawing recorded into a `RenderNode`, rendered by a `HardwareRenderer` into an
   `ImageReader` the CPU reads, its RGBA rows handed to `libnsh` (`Native.shaderInput`), which drops one equal to the
@@ -62,5 +66,5 @@ On the GL backend (the emulator's), wgpu-hal logs `Fake map` at error level on e
 - [x] Reviewed the changes in this PR and confirmed AI generated code (if any) is accurate.
 - [x] Passed `cargo +nightly fmt` on the changed files and the Android clippy runs (clean).
 - [x] Changes to what apps use keep what released versions shipped and come with a case in `tests/compat/`
-  (`cargo xtask compat`): no new API here; the elements' cases came with #[01 PR] and #[02 PR].
+  (`cargo xtask compat`): no new API here; the elements' cases came with #682 and #[02 PR].
 - [ ] Ran the related `examples/gallery` demos on Android (not run on this base; the fork's sync branch ran `shaders.test.tsx` 3 of 3 on an API 35 emulator).

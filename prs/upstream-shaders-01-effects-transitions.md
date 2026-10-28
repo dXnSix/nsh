@@ -1,6 +1,7 @@
 # Upstream PR: core: Add ShaderEffect, ShaderTransition, ScreenEffect and ScreenTransition on Shader
 
-Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
+Draft of a pull request for `longbridge/nsh`, posted as [longbridge/nsh#682](https://github.com/longbridge/nsh/pull/682)
+(2026-10-28) with the body below the line.
 
 - Branch: `pr/shaders/01-effects-transitions`, one commit on `upstream/main` `ba289971`.
   The first of the shader series that replaces the fork's old `pr/shaders/*` (built on the fork's own GPU pipeline,
@@ -25,6 +26,9 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 The body to paste starts below the line.
 
 ---
+
+**Depends on:** no other PR; it applies to `main` as it is. The rest of the shader series depends on it (see "The
+series" below), so it goes first.
 
 ## Description
 

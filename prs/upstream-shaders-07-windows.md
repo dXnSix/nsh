@@ -14,10 +14,13 @@ The body to paste starts below the line.
 
 ---
 
+**Depends on:** #682 and #[02 PR] (the elements and pages' and dialogs' `transitionShader` it draws); merge it after
+both. Independent of the other platform PRs.
+
 ## Description
 
 Part of the shader series (01 elements, 02 page and dialog shaders, then one PR per platform, 10 gallery and docs): Windows draws `ShaderEffect`, `ShaderTransition`, `ScreenEffect`, `ScreenTransition`
-and pages' and dialogs' `transitionShader` (#[01 PR], #[02 PR]) as `nsh_engine::shader` frames in Direct2D bitmaps.
+and pages' and dialogs' `transitionShader` (#682, #[02 PR]) as `nsh_engine::shader` frames in Direct2D bitmaps.
 
 - Effects and running transitions (screen ones on the root) draw their last frame instead of their children, which
   are drawn into a target bitmap by a context of their own and read back (`render::read_back`) as the window draws
@@ -46,5 +49,5 @@ and pages' and dialogs' `transitionShader` (#[01 PR], #[02 PR]) as `nsh_engine::
 - [x] Reviewed the changes in this PR and confirmed AI generated code (if any) is accurate.
 - [ ] Passed `cargo +nightly fmt` on the changed files; clippy and tests run on Windows only (the Windows workflow).
 - [x] Changes to what apps use keep what released versions shipped and come with a case in `tests/compat/`
-  (`cargo xtask compat`): no new API here; the elements' cases came with #[01 PR] and #[02 PR].
+  (`cargo xtask compat`): no new API here; the elements' cases came with #682 and #[02 PR].
 - [ ] Ran the related `examples/gallery` demos on Windows.

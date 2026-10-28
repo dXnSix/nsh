@@ -15,9 +15,12 @@ The body to paste starts below the line.
 
 ---
 
+**Depends on:** #682 and #[02 PR] to build; its demo shows the shaders on a platform once that platform's PR is
+merged (#[03 PR] to #[08 PR]), so merge it last.
+
 ## Description
 
-The gallery and the docs for the shader series (#[01 PR] elements, #[02 PR] page and dialog shaders, the platform
+The gallery and the docs for the shader series (#682 elements, #[02 PR] page and dialog shaders, the platform
 PRs):
 
 - **Gallery** (`examples/gallery/demos/Shaders.tsx`): a `ShaderEffect` that pixelates a tile (drag across it, or the

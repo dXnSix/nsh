@@ -14,10 +14,13 @@ The body to paste starts below the line.
 
 ---
 
+**Depends on:** #682 and #[02 PR] (the elements and pages' and dialogs' `transitionShader` it draws); merge it after
+both. Independent of the other platform PRs.
+
 ## Description
 
 Part of the shader series (01 elements, 02 page and dialog shaders, then one PR per platform, 10 gallery and docs): Linux draws `ShaderEffect`, `ShaderTransition`, `ScreenEffect`, `ScreenTransition` and
-pages' and dialogs' `transitionShader` (#[01 PR], #[02 PR]) as `nsh_engine::shader` frames in `GdkMemoryTexture`s.
+pages' and dialogs' `transitionShader` (#682, #[02 PR]) as `nsh_engine::shader` frames in `GdkMemoryTexture`s.
 
 - Effects and running transitions draw their last frame instead of their children; whenever GTK draws one again, its
   children's render node is rendered by the window's renderer into a texture of the box and overflow
@@ -47,5 +50,5 @@ pages' and dialogs' `transitionShader` (#[01 PR], #[02 PR]) as `nsh_engine::shad
 - [x] Reviewed the changes in this PR and confirmed AI generated code (if any) is accurate.
 - [ ] Passed `cargo +nightly fmt` on the changed files; clippy and tests run on Linux only (the Linux workflow).
 - [x] Changes to what apps use keep what released versions shipped and come with a case in `tests/compat/`
-  (`cargo xtask compat`): no new API here; the elements' cases came with #[01 PR] and #[02 PR].
+  (`cargo xtask compat`): no new API here; the elements' cases came with #682 and #[02 PR].
 - [ ] Ran the related `examples/gallery` demos on Linux.

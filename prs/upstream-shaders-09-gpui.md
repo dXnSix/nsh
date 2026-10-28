@@ -13,10 +13,13 @@ The body to paste starts below the line.
 
 ---
 
+**Depends on:** #682 and #[02 PR] (the layer roles and `transitionShader` it leaves out); merge it after both.
+Independent of the other platform PRs.
+
 ## Description
 
 Part of the shader series (01 elements, 02 page and dialog shaders, then one PR per platform, 10 gallery and docs). GPUI keeps drawing `Shader` fills only: the layer of an effect, a transition or a
-screen layer (#[01 PR]) is not drawn as a fill under the children (`ShaderRole::Fill` only). An effect's or a
+screen layer (#682) is not drawn as a fill under the children (`ShaderRole::Fill` only). An effect's or a
 transition's children show as they are and a transition changes them at once, a screen effect or transition draws
 nothing, and pages and dialogs with `transitionShader` (#[02 PR]) come and go as they would without it.
 
@@ -35,5 +38,5 @@ No visible change for apps without the new elements.
 - [x] Reviewed the changes in this PR and confirmed AI generated code (if any) is accurate.
 - [x] Passed `cargo +nightly fmt` on the changed files and the GPUI workspace's clippy (clean).
 - [x] Changes to what apps use keep what released versions shipped and come with a case in `tests/compat/`
-  (`cargo xtask compat`): no new API here; the elements' cases came with #[01 PR] and #[02 PR].
+  (`cargo xtask compat`): no new API here; the elements' cases came with #682 and #[02 PR].
 - [ ] No gallery change on GPUI.
