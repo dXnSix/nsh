@@ -41,7 +41,7 @@ use jni::{
 use nsh_core::{
     NavShader, NodeId,
     animation::AnimationValue,
-    geometry::{Points, size},
+    geometry::{Percentage, Points, size},
     shader::{ShaderInput, ShaderLayer},
 };
 use nsh_engine::shader::{Frame, PixelFormat, Renderer, ShaderView};
@@ -171,7 +171,7 @@ impl Shaders {
         let layer = (*nav.layer)
             .clone()
             .with_overflow(Points::ZERO)
-            .with_progress(0.0, Some(NodeId::MAX));
+            .with_progress(Percentage::ZERO, Some(NodeId::MAX));
         self.renderer();
         let (Some(slot), Some(Some(renderer))) = (layer.progress_slot(), &self.renderer) else {
             return false;
