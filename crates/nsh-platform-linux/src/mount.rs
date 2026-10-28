@@ -294,14 +294,23 @@ impl Mounter {
                     crate::canvas::set(surface, view, drawing.clone());
                 }
             }
-            // Effects and transitions: this platform does not draw them yet.
-            MountItem::ShaderTransition { .. }
-            | MountItem::ShaderInput { .. }
-            | MountItem::NavShader { .. } => {}
             MountItem::Shader { id, layer } => {
                 if let Some(view) = self.get(*id) {
                     crate::shader::set(surface, view, layer.clone());
                 }
+            }
+            MountItem::ShaderInput { id } => {
+                if let Some(view) = self.get(*id) {
+                    crate::shader::input_changed(view);
+                }
+            }
+            MountItem::ShaderTransition { id, duration } => {
+                if let Some(view) = self.get(*id) {
+                    crate::shader::start_transition(surface, view, *duration);
+                }
+            }
+            MountItem::NavShader { id, shader } => {
+                crate::navigation::nav_shader(surface, *id, shader.clone());
             }
             MountItem::Gestures { id, values } => {
                 if let Some(view) = self.get(*id) {
