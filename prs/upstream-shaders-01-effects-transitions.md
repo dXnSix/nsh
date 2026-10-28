@@ -4,7 +4,11 @@ Draft of a pull request for `longbridge/nsh`, posted as [longbridge/nsh#682](htt
 (2026-10-28) with the body below the line.
 
 - Branch: `pr/shaders/01-effects-transitions`, on `upstream/main` `ba289971`: the commit `5fec8534a` as opened, and
-  three fix commits for the review (upstream squash-merges): `f4409abd3` web, `ab027dda3` inputs, `4baebb737` removal.
+  three fix commits for the review (upstream squash-merges): `f4409abd3` web, `ab027dda3` inputs, `4baebb737` removal,
+  and `36b23d76a` for Windows: upstream's `redrawn` in `nsh-platform-windows/src/mount.rs` matches every `MountItem`
+  and lacked the two new variants, so the Windows check failed on #682 from the start (`5fec8534a` too; the fork's
+  Windows run was on 07, which covers them). 02 adds `NavShader` to the same match in its page/dialog commit; 07's
+  `redrawn` is unchanged. Not checkable on macOS (`ring` needs Windows headers): upstream's Windows job decides.
   The first of the shader series that replaces the fork's old `pr/shaders/*` (built on the fork's own GPU pipeline,
   removed when the fork took upstream's `Shader` from #517): every part now sits on upstream's `Shader`, its WGSL
   contract and its wgpu renderer.
