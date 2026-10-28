@@ -37,11 +37,18 @@ case "$target" in
   # Left out: context-menu (the menu is not reported), controls (the
   # segmented control is not a tab list), links, text-view (span positions
   # are not reported), menus (a row's menu), overlays (tooltips), picker
-  # (`picks()` runs headless only).
+  # (`picks()` runs headless only). The test's clock does not move on the
+  # web (`app.wait()` and `app.clock.runFor()` never return; upstream's own
+  # web job fails dock's too): timers and toasts are left out, dock and form run the tests that
+  # do not move it, by name. Error-boundary's failing binding expects
+  # QuickJS's message; the browser words it its own way.
   web)
-    gallery=(animations context-menu-press device dock environment error-boundary form gestures
-      hover list-search mention navigation network photos press resizable shaders shortcuts storage
-      timers toasts)
+    gallery=(animations context-menu-press device environment gestures hover list-search mention
+      navigation network photos press resizable shaders shortcuts storage)
+    filtered=("dock the layout shows" "dock a tab dropped" "dock dragging the handles"
+      "dock a dock opens" "dock the toolbar's option" "dock the toolbar zooms" "dock on a phone"
+      "form the Input demo" "form submitting checks every field" "form the password shows"
+      "form a disabled field" "error-boundary a failing listener")
     ;;
   # Left out: context-menu, dock, hover, overlays, resizable, shortcuts,
   # toasts (a mouse, a keyboard or a desktop's windows), picker (the
