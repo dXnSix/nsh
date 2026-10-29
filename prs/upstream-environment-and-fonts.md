@@ -16,7 +16,7 @@ what it depends on is merged.
 | Branch | Depends on |
 |---|---|
 | `pr/app-state/01-core` | no other PR |
-| `pr/app-state/0N-<platform>` | `pr/app-state/01-core` |
+| `pr/app-state/0N-<platform>` | `pr/app-state/01-core` (`03-android` also `pr/android/04-selection-as-chunks`, to pass clippy) |
 | `pr/time-zone/01-core` | `pr/app-state/01-core` |
 | `pr/time-zone/0N-<platform>` | `pr/time-zone/01-core` and `pr/app-state/0N-<platform>` |
 | `pr/languages/01-core` | `pr/time-zone/01-core` |
@@ -30,10 +30,10 @@ what it depends on is merged.
   reads the system's; the web and headless runs report theirs in the core branch.
 - `pr/regional/01-core` boxes the environment in the engine's messages: with the regional preferences it is the
   largest message by far, which clippy's `large_enum_variant` flags on wasm32.
-- Every `03-android` branch and the shader series' `05-android` build only with upstream's own `selectable_view.rs`
-  lint fixed (Rust 1.99's `chunks_exact_to_as_chunks` fails `cargo xtask clippy-android` on `main` since #703); the
-  fork's sync carries that one-line fix (`android: Read a selection's rectangles six numbers at a time, as clippy
-  asks`), which can go upstream as a PR of its own first.
+- Every `03-android` branch and the shader series' `05-android` pass `cargo xtask clippy-android` only with
+  upstream's own `selectable_view.rs` lint fixed (Rust 1.99's `chunks_exact_to_as_chunks` fails it on `main` since
+  #703): `pr/android/04-selection-as-chunks` ([`upstream-android-selection-as-chunks.md`](upstream-android-selection-as-chunks.md))
+  is that fix, so each `03-android` body names it as a build dependency, and it goes first.
 
 ## Fonts and bundled files
 

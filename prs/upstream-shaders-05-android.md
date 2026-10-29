@@ -16,14 +16,16 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 - 2026-10-29: rebased on the new 02 (`94c78c619`); one conflict, its JNI functions next to upstream's new
   `keepRendered` (both kept). #681 and #675 are merged, so it depends on 01 and 02 only. Checked locally: `cargo xtask
   clippy-android` passes with upstream's own `selectable_view.rs` lint fixed in the working tree (Rust 1.99's
-  `chunks_exact_to_as_chunks` fails `main` itself since #703; the fork fixes it in its sync); nightly rustfmt.
+  `chunks_exact_to_as_chunks` fails `main` itself since #703; `pr/android/04-selection-as-chunks` fixes it); nightly rustfmt.
 
 The body to paste starts below the line.
 
 ---
 
 **Depends on:** #682 and #[02 PR] (the elements and pages' and dialogs' `transitionShader` it draws); merge it after
-both. (#681, Android's build on `main`, and #675, the test touches its gallery test's dialog half needs, are merged.)
+both. `cargo xtask clippy-android` also needs #[Android clippy PR] (`pr/android/04-selection-as-chunks`: Rust 1.99's
+clippy fails `main` itself on #703's `selectable_view.rs`). (#681, Android's build on `main`, and #675, the test
+touches its gallery test's dialog half needs, are merged.)
 
 ## Description
 
