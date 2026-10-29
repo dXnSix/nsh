@@ -173,3 +173,5 @@ Known, not fixed here (its own fork PR next):
   runtime" step that upstream's #603 dropped with `nsh-platform-web`'s `bytecode-only` feature (in the first merge's
   range). #92 (`fork/release`) drops it as upstream did; merged as `0bb55acdc`, then the release ran again by hand on
   the tag (`gh workflow run fork-release.yml -f tag=fork-0.3.0-2`).
+- 2026-10-30: released: https://github.com/dXnSix/nsh/releases/tag/fork-0.3.0-2 (run 40957451829: macos-arm64,
+  linux-x86_64, linux-arm64, windows-x86_64; the optional windows-arm64 fails at `setup-java`, no Temurin 17 there).
