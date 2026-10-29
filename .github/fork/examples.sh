@@ -70,7 +70,9 @@ case "$target" in
       "controls cart's quantities" "controls segmented control")
     ;;
   # Left out: context-menu, dock, hover, overlays, resizable, toasts (a
-  # mouse or a desktop's windows), picker (the system's photo picker);
+  # mouse or a desktop's windows), shortcuts (it opens the gallery as macOS,
+  # a desktop's platform, which `--target ios` refuses), picker (the
+  # system's photo picker);
   # environment runs its appearance only (its rotation expects a 390 × 844
   # window, the newest simulators are bigger). Form runs its Input demo and
   # its disabled field: the sign-up form and the search field set the
@@ -81,7 +83,7 @@ case "$target" in
   # its Tab order (a desktop's).
   ios)
     gallery=(animations context-menu-press device error-boundary gestures links list-search
-      mention menus navigation network photos press shaders shortcuts storage text-view timers)
+      mention menus navigation network photos press shaders storage text-view timers)
     filtered=("environment appearance" "form the Input demo" "form a disabled field"
       "controls switch" "controls check" "controls a radio picks" "controls choice cards and sized"
       "controls tabs show" "controls collapsible" "controls accordion" "controls progress bar"
