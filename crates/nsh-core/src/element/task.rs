@@ -93,7 +93,7 @@ pub(crate) enum Action {
     HostCall {
         name: String,
         args: crate::JsonValue,
-        answer: AnswerSlot<Result<crate::JsonValue, String>>,
+        answer: AnswerSlot<Result<crate::JsonValue, super::JsError>>,
     },
     /// Drops the slots of the host calls whose answers are gone (they
     /// timed out).
@@ -131,6 +131,8 @@ pub(crate) enum Action {
     Frame(AnswerSlot<Instant>),
     /// Sets the app's appearance.
     Appearance(crate::platform::Appearance),
+    /// Sets the app's design tokens.
+    Tokens(super::Tokens),
     /// Draws the scroll views' bars with the built-in bar the source makes
     /// of the theme, or (no theme) with the platform's indicator.
     BuiltInScrollbars(super::ScrollbarSource, Option<super::AnyValue>),
@@ -186,8 +188,12 @@ pub(crate) enum ClipboardRead {
     Text(AnswerSlot<String>),
     /// Whether it holds text.
     Has(AnswerSlot<bool>),
-    /// The image (`None` when it holds none).
+    /// The image (`None` when it holds none, or one over
+    /// [`crate::platform::clipboard::MAX_IMAGE_BYTES`]).
     Image(AnswerSlot<Option<ClipboardImage>>),
+    /// The image for `Clipboard.readImage`: `Err` with the size in encoded
+    /// bytes of one over [`crate::platform::clipboard::MAX_IMAGE_BYTES`].
+    CheckedImage(AnswerSlot<Result<Option<ClipboardImage>, usize>>),
     /// Whether it holds an image.
     HasImage(AnswerSlot<bool>),
     /// The `file:` URLs of the local files on it.
@@ -197,10 +203,10 @@ pub(crate) enum ClipboardRead {
 /// An image read from the system clipboard (`Clipboard.readImage`).
 #[derive(Debug, Clone, Default, PartialEq, super::JsObject)]
 pub struct ClipboardImage {
-    /// The image as a `data:` URL (`data:image/png;base64,…`): an image's
-    /// `src`, and `fetch(url)` gives its bytes.
+    /// A URL of the image that an `Image` shows (its `src`) and `fetch`
+    /// reads the bytes of; `Clipboard.writeImage` takes it back.
     pub url: String,
-    /// Its size in pixels.
+    /// Its size in pixels, as decoded.
     pub size: Size<DevicePixels>,
 }
 

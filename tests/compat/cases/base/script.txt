@@ -40,11 +40,82 @@ expect Alert: pending
 tap text:Sheet
 expect Sheet: pending
 tap text:Empty
-expect Empty: rejected for actions
+expect Empty: rejected TypeError
 wait 300
 expect Alert: pending
 expect Sheet: pending
 covers [nsh/base] AlertDialog
+# base-avatar
+tap id:case-base-avatar
+# Ada's image loads: the initials in the fallback (the app's look, as
+# large as the avatar) and the image over it, transparent, as large too.
+expect Ada: loading
+expect AL
+prop id:ada role image
+prop id:ada accessibilityLabel Ada Lovelace
+frame id:ada 0 20 40 40
+frame parent:text:AL 0 0 40 40
+style parent:text:AL backgroundColor #336699ff
+style parent:text:AL opacity 0.5
+frame below:id:ada-dot 0 0 40 40
+style below:id:ada-dot opacity 0
+style below:id:ada-dot borderRadius 20
+style below:id:ada-dot borderWidth 2
+# The avatar says the name once: the fallback and the image are hidden.
+prop parent:text:AL accessibilityElementsHidden true
+prop below:id:ada-dot accessibilityElementsHidden true
+# Loaded: the fallback goes and the image shows.
+event below:id:ada-dot onLoad width=96 height=96
+expect Ada: loaded
+absent AL
+style below:id:ada-dot opacity 1
+# Failed: the fallback is back.
+event below:id:ada-dot onError message="not found"
+expect Ada: error
+expect AL
+style below:id:ada-dot opacity 0
+# Grace's fallback waits 300 ms while her image loads.
+absent GH
+wait 400
+expect GH
+# Edsger has no image: the app's fallback at once, in place of the
+# initials, and the app's label.
+expect ?
+absent ED
+prop id:edsger role image
+prop id:edsger accessibilityLabel Edsger, away
+# A group of three shows two, then its overflow (30 wide, 60 high).
+prop id:team role group
+prop id:team accessibilityLabel Team
+expect AT
+expect BL
+absent CS
+expect +1
+prop label:1 more person accessibilityLabel 1 more person
+frame id:team 0 152 110 60
+# A group of the first two of four: the overflow stands for the others.
+expect DK
+expect FA
+expect +2
+covers [nsh/base] Avatar
+covers [nsh/base] AvatarGroup
+covers [props] src
+covers [props] Avatar.name
+covers [props] accessibilityLabel
+covers [props] Avatar.fallbackDelay
+covers [props] Avatar.imageClass
+covers [props] Avatar.imageStyle
+covers [props] Avatar.fallbackClass
+covers [props] Avatar.fallbackStyle
+covers [props] Avatar.fallback
+covers [events] Avatar.onStatusChange
+covers [props] AvatarGroup.limit
+covers [props] AvatarGroup.total
+covers [props] AvatarGroup.overflowClass
+covers [props] AvatarGroup.overflowStyle
+covers [props] AvatarGroup.overflow
+covers [props] AvatarGroup.overflowAccessibilityLabel
+
 # base-button
 tap id:case-base-button
 # events the platform reports.
@@ -99,6 +170,46 @@ covers [events] onPressUp
 covers [events] onPress
 covers [props] Button.selected
 covers [props] selectedStyle
+# base-link
+tap id:case-base-link
+# The link role on the link alone, no look of its own: the app's
+# `hoverStyle` while the platform reports it hovered.
+prop id:docs role link
+prop id:docs accessibilityState {}
+listens id:docs onPress
+nostyle id:docs backgroundColor
+state id:docs hovered
+style id:docs opacity 0.5
+state id:docs none
+style id:docs opacity 1
+# A press reports where it goes (`onOpen` with its `href`), then the
+# press.
+tap text:Docs
+expect Log: open https://example.com/docs, press
+# `accessibilityLabel`: what screen readers say, and what a label finds;
+# `openWith="app"` leaves the opening to `onOpen`.
+prop id:order role link
+prop id:order accessibilityLabel Order 42
+tap label:Order 42
+expect Log: open https://example.com/docs, press, route /orders/42
+# `disabled`: screen readers say so, `disabledStyle` applies, presses do
+# nothing (the platform gets no press to report).
+prop id:archived accessibilityState disabled=true
+style id:archived opacity 0.25
+tap id:enable
+prop id:archived accessibilityState {}
+style id:archived opacity 1
+listens id:archived onPress
+tap text:Archived
+expect Log: open https://example.com/docs, press, route /orders/42, route /archive
+covers [nsh/base] Link
+covers [props] Link.href
+covers [props] accessibilityLabel
+covers [props] disabled
+covers [props] disabledStyle
+covers [props] hoverStyle
+covers [events] Link.onOpen
+covers [events] onPress
 # base-dialog
 tap id:case-base-dialog
 # (appearing, going away, Escape / back and swipes) are events here: the
@@ -745,6 +856,62 @@ covers [props] Sheet.backdropClass
 covers [props] Sheet.backdropStyle
 covers [events] Sheet.onOpenChange
 covers [events] Sheet.onCancel
+# base-menu-checked
+tap id:case-base-menu-checked
+expect Sidebar: true
+tap text:ViewTrigger
+expect SidebarItem
+# A checkable item: a menuitemcheckbox for screen readers, checked;
+# `checkedStyle` on the item, `checked:` on its indicator part around the
+# app's mark, half opaque by its `indicatorStyle`.
+prop id:sidebar role menuitemcheckbox
+prop id:sidebar accessibilityState checked=true
+style id:sidebar backgroundColor #00ff00ff
+style parent:parent:id:sidebar-mark backgroundColor #222222ff
+style parent:parent:id:sidebar-mark opacity 0.5
+listens id:sidebar onPress
+# Choosing it reports `onSelect`; the app sets the other value, which the
+# item and its indicator show; `closeOnSelect={false}` keeps the menu.
+tap text:SidebarItem
+expect Selects: 1
+expect Sidebar: false
+expect SidebarItem
+prop id:sidebar accessibilityState checked=false
+style parent:parent:id:sidebar-mark backgroundColor #111111ff
+tap text:SidebarItem
+expect Sidebar: true
+prop id:sidebar accessibilityState checked=true
+style parent:parent:id:sidebar-mark backgroundColor #222222ff
+# Disabled: dimmed for screen readers, `disabled:` on its indicator.
+prop id:minimap role menuitemcheckbox
+prop id:minimap accessibilityState disabled=true checked=false
+style parent:id:minimap-mark backgroundColor #333333ff
+# `role="menuitemradio"`: one choice of a group, the app checks one.
+prop id:sort-name role menuitemradio
+prop id:sort-name accessibilityState checked=true
+prop id:sort-size role menuitemradio
+prop id:sort-size accessibilityState checked=false
+# A plain item stays a menuitem with no checked state.
+prop id:plain role menuitem
+prop id:plain accessibilityState {}
+# Choosing a radio closes the menu (`closeOnSelect` defaults to true).
+tap text:SizeItem
+expect Sort: size
+expect Selects: 3
+absent SizeItem
+tap text:ViewTrigger
+expect SizeItem
+prop id:sort-size accessibilityState checked=true
+prop id:sort-name accessibilityState checked=false
+covers [nsh/base] MenuItem
+covers [props] MenuItem.checked
+covers [props] MenuItem.indicator
+covers [props] MenuItem.indicatorClass
+covers [props] MenuItem.indicatorStyle
+covers [props] MenuItem.closeOnSelect
+covers [props] checkedStyle
+covers [props] role
+covers [events] MenuItem.onSelect
 # base-switch
 tap id:case-base-switch
 # The switch role and its value for screen readers, on the switch alone;
@@ -932,6 +1099,10 @@ listens id:activity onPress
 # The list is one stop of the keyboard focus: the selected tab.
 prop id:overview focusable true
 prop id:activity focusable false
+# The indicator, below the first tab: on the selected one (20 high, at
+# 0), inside its margins of 2 along the column; 3 wide at the left.
+frame below:id:overview 0 2 3 16
+style below:id:overview backgroundColor #ff0000ff
 # A press reports `onPress`; the app selects the tab, deselects the one
 # that was and shows its content.
 tap text:Activity
@@ -942,9 +1113,11 @@ style id:activity backgroundColor #00ff00ff
 frame text:Activity 38 2 62 17
 prop id:overview accessibilityState {}
 frame text:Overview 28 2 62 17
-# The stop follows the selection.
+# The stop follows the selection, and so does the indicator: Activity is
+# 4 below Overview.
 prop id:activity focusable true
 prop id:overview focusable false
+frame below:id:overview 0 26 3 16
 # The selected tab reports its presses too.
 tap id:activity
 expect Presses: 2
@@ -961,9 +1134,12 @@ tap label:Billing section
 expect Presses: 3
 expect Showing: billing
 prop id:billing accessibilityState selected=true
+frame below:id:overview 0 50 3 16
 covers [nsh/base] Tab
 covers [nsh/base] Tabs
 covers [props] Tab.selected
+covers [props] Tabs.indicatorClass
+covers [props] Tabs.indicatorStyle
 covers [props] disabled
 covers [props] accessibilityLabel
 covers [events] onPress
@@ -1034,6 +1210,63 @@ covers [props] disabled
 covers [props] accessibilityLabel
 covers [events] onChange
 
+# base-toolbar
+tap id:case-base-toolbar
+expect Pressed: none
+# A toolbar for screen readers, named; its runs are groups, a toggle group
+# inside it one of them; the separator is no element.
+prop id:bar role toolbar
+prop id:bar accessibilityLabel Formatting
+prop id:history role group
+prop id:history accessibilityLabel History
+prop id:marks role group
+prop id:undo role button
+prop id:help role link
+prop id:sep focusable false
+# A row by default: the group's items side by side, then the separator,
+# the toggle group, the disabled group and the link.
+frame id:undo 0 0 20 20
+frame id:redo 20 0 20 20
+frame id:sep 40 0 2 20
+frame id:marks 42 0 20 20
+frame id:help 82 0 20 20
+# `axis="vertical"`: a column.
+prop id:tools role toolbar
+frame id:pen 0 20 20 20
+# One stop of the keyboard focus: its first enabled item.
+prop id:undo focusable true
+prop id:redo focusable false
+prop id:bold focusable false
+prop id:help focusable false
+prop id:select focusable true
+prop id:pen focusable false
+# Its items take presses; a disabled item and a disabled group's do not.
+prop id:redo accessibilityState disabled=true
+prop id:send accessibilityState disabled=true
+tap id:undo
+expect Pressed: undo
+tap id:bold
+expect Bold: true
+tap id:help
+expect Pressed: help
+# A disabled toolbar disables every item in it: no stop of the focus.
+tap id:lock
+prop id:undo accessibilityState disabled=true
+prop id:bold accessibilityState disabled=true
+prop id:help accessibilityState disabled=true
+prop id:undo focusable false
+tap id:lock
+prop id:undo focusable true
+tap id:select
+expect Pressed: select
+covers [nsh/base] Toolbar
+covers [nsh/base] ToolbarGroup
+covers [nsh/base] ToolbarSeparator
+covers [props] Toolbar.axis
+covers [props] disabled
+covers [props] accessibilityLabel
+covers [events] onPress
+
 # A collapsible: the summary always, the details only while the app's
 # `open` holds. Collapsed, the region is the trigger's 20 points.
 tap id:case-base-collapsible
@@ -1060,6 +1293,119 @@ covers [nsh/base] Collapsible
 covers [props] Collapsible.open
 covers [props] Collapsible.content
 
+# base-collapsible-reveal
+# With `reveal`: the clipping region is there while closed, zero high, so
+# the gap (4) comes before it: the collapsible is 24 high.
+tap id:case-base-collapsible-reveal
+expect Summary
+absent Details
+frame id:region 0 20 390 24
+frame id:after 0 44 390 20
+# Open: the details in the region, the view after it below them (the
+# frames are where the reveal ends; the platform springs them there).
+tap id:trigger
+expect Details
+frame id:region 0 20 390 54
+frame id:details 0 0 390 30
+frame id:after 0 74 390 20
+# Closed: the frames at once, the details out once the region has closed.
+tap id:trigger
+frame id:region 0 20 390 24
+frame id:after 0 44 390 20
+wait 400
+absent Details
+covers [props] Collapsible.reveal
+
+# base-accordion
+tap id:case-base-accordion
+# A group of level-2 headings over buttons, each saying whether its item
+# is expanded. Closed, each item is its trigger's 20 points: the kept and
+# the plain panels are out of the layout, the revealed one zero high.
+expect Open: none
+prop id:faq role group
+prop id:header-a role header
+prop id:trigger-a role button
+prop id:trigger-a accessibilityState expanded=false
+nostyle id:trigger-a backgroundColor
+style id:trigger-a opacity 1
+frame id:faq 0 20 390 60
+frame id:item-b 0 20 390 20
+frame id:item-c 0 40 390 20
+absent Shipping details
+absent Returns details
+listens id:trigger-a onPress
+# A press reports the next value; the app sets it: the panel under its
+# header, a region named by the app, the trigger expanded and styled
+# (`aria-expanded:`, `expandedStyle`).
+tap text:Shipping
+expect Open: a
+expect Changes: 1
+expect Shipping details
+prop id:trigger-a accessibilityState expanded=true
+style id:trigger-a backgroundColor #00ff00ff
+style id:trigger-a opacity 0.5
+prop id:panel-a role region
+prop id:panel-a accessibilityLabel Shipping
+frame id:item-a 0 0 390 50
+frame id:panel-a 0 20 390 30
+frame id:item-b 0 50 390 20
+frame id:faq 0 20 390 90
+# One open at a time: another item replaces it. The revealed panel's
+# frames are where its spring ends.
+tap text:Returns
+expect Open: b
+expect Changes: 2
+expect Returns details
+prop id:trigger-a accessibilityState expanded=false
+prop id:trigger-b accessibilityState expanded=true
+nostyle id:trigger-a backgroundColor
+absent Shipping details
+frame id:item-a 0 0 390 20
+frame id:item-b 0 20 390 50
+frame id:faq 0 20 390 90
+# The open item's trigger closes it; the revealed panel springs shut and
+# its content leaves once it has.
+tap text:Returns
+expect Open: none
+frame id:item-b 0 20 390 20
+frame id:faq 0 20 390 60
+wait 400
+absent Returns details
+# With `multiple`, opening one leaves the others open.
+tap id:multiple
+tap text:Returns
+tap text:Shipping
+expect Open: b,a
+expect Shipping details
+expect Returns details
+frame id:faq 0 20 390 120
+tap text:Returns
+expect Open: a
+absent Returns details
+# A disabled item takes no presses, dimmed for screen readers; it shows
+# what the app's value says.
+prop id:trigger-c accessibilityState disabled=true expanded=false
+tap text:Billing
+expect Changes: 6
+tap id:open-billing
+expect Billing details
+prop id:trigger-c accessibilityState disabled=true expanded=true
+covers [nsh/base] Accordion
+covers [nsh/base] AccordionItem
+covers [nsh/base] AccordionHeader
+covers [nsh/base] AccordionTrigger
+covers [nsh/base] AccordionPanel
+covers [props] Accordion.value
+covers [props] Accordion.multiple
+covers [props] AccordionItem.value
+covers [props] AccordionItem.disabled
+covers [props] AccordionHeader.level
+covers [props] AccordionTrigger.expandedStyle
+covers [props] AccordionPanel.reveal
+covers [props] AccordionPanel.keepMounted
+covers [props] accessibilityLabel
+covers [events] Accordion.onChange
+
 # base-otp-input
 tap id:case-base-otp-input
 # One field over the cells for the keyboard and screen readers: the
@@ -1083,12 +1429,13 @@ type label:Code 12a
 expect Code [12]
 prop label:Code value 12
 # The focus: the caret (50 high, 4 below the cell's top) in the cell that
-# takes the next digit, gone while it blinks off.
+# takes the next digit; it stays while it blinks (its opacity moves
+# natively), so the layout holds still.
 event label:Code onFocus
 expect Focused yes
 frame id:otp 0 20 390 60
 wait 600
-frame id:otp 0 20 390 26
+frame id:otp 0 20 390 60
 # Up to the length: complete, the last cell `focus:`.
 type label:Code 345
 expect Code [1234]
@@ -1124,6 +1471,104 @@ covers [events] OtpInput.onChange
 covers [events] OtpInput.onComplete
 covers [events] OtpInput.onFocus
 covers [events] OtpInput.onBlur
+# base-pagination
+tap id:case-base-pagination
+# A navigation landmark named by `accessibilityLabel`; page 5 of 20 with
+# seven pages shown (`visiblePages`): the first and the last, two on each
+# side of the current one, an ellipsis for each run left out.
+expect Page 5 of 20
+prop id:pager role navigation
+prop id:pager accessibilityLabel Results
+expect 1
+expect 3
+expect 7
+expect 20
+absent 2
+absent 8
+# Each item is as wide as `itemClass` says, in a row with the app's gap:
+# the current page after Previous, 1, the ellipsis, 3 and 4.
+frame parent:text:5 160 0 30 30
+style text:5 fontSize 12
+# The current page is selected for screen readers (`selected:` styles
+# it); every page is a button that takes presses, and so are Previous
+# and Next, named by their accessibility labels.
+prop parent:text:5 role button
+prop parent:text:5 accessibilityState selected=true
+style parent:text:5 backgroundColor #00ff00ff
+prop parent:text:6 role button
+prop parent:text:6 accessibilityState {}
+nostyle parent:text:6 backgroundColor
+listens parent:text:6 onPress
+prop label:Previous role button
+prop label:Next role button
+listens label:Next onPress
+# A press reports the page; the app sets it and the pages move with it.
+tap text:6
+expect Log: 6
+expect Page 6 of 20
+expect 8
+absent 3
+prop parent:text:6 accessibilityState selected=true
+prop parent:text:5 accessibilityState {}
+# Previous and Next report the pages around the current one.
+tap label:Next
+expect Log: 6, 7
+expect Page 7 of 20
+tap label:Previous
+expect Log: 6, 7, 6
+expect Page 6 of 20
+# On the last page Next is disabled (`disabled:` applies): it takes no
+# press.
+tap text:20
+expect Page 20 of 20
+prop label:Next accessibilityState disabled=true
+style label:Next opacity 0.5
+prop label:Previous accessibilityState {}
+tap label:Next
+expect Log: 6, 7, 6, 20
+# `compact`: Previous, the children and Next only.
+tap id:compact
+absent 20
+absent 1
+expect Page 20 of 20
+tap label:Previous
+expect Page 19 of 20
+tap id:compact
+expect 19
+expect 20
+# `disabled`: every item dimmed for screen readers, none takes a press.
+tap id:disable
+prop parent:text:19 accessibilityState disabled=true selected=true
+prop label:Previous accessibilityState disabled=true
+style label:Previous opacity 0.5
+tap id:disable
+prop label:Previous accessibilityState {}
+# `renderItem` draws every item from its state: its kind and page, the
+# current one, what takes no press, the pages an ellipsis leaves out.
+expect previous 1 off
+expect page 1 now
+expect page 3
+expect 4-9999 hidden
+expect page 10000
+expect next 2
+tap text:page 10000
+expect page 10000 now
+expect 2-9997 hidden
+expect next 10000 off
+expect previous 9999
+covers [nsh/base] Pagination
+covers [props] Pagination.page
+covers [props] Pagination.totalPages
+covers [props] Pagination.visiblePages
+covers [props] Pagination.compact
+covers [props] Pagination.previousAccessibilityLabel
+covers [props] Pagination.nextAccessibilityLabel
+covers [props] Pagination.itemClass
+covers [props] Pagination.itemStyle
+covers [props] Pagination.renderItem
+covers [props] accessibilityLabel
+covers [props] disabled
+covers [events] onChange
 # base-progress
 tap id:case-base-progress
 # The progress bar role, its label, range and value for screen readers;
@@ -2285,6 +2730,31 @@ covers [props] Sankey.nodeLabelClass
 covers [props] Sankey.nodeLabelStyle
 covers [props] Sankey.valueLabelClass
 covers [props] Sankey.valueLabelStyle
+# A plot inside a `PlotAppearScope`: it draws in (its line clipped to the
+# appear) the first time it is shown; made again once that finished, it
+# is whole at once. A new `appearGeneration` draws it in again, and so
+# does a new `id` of the scope, which forgets what it saw.
+tap id:scope-toggle
+expect scoped true 1D watch
+drawing id:scoped-line clip...
+wait 300
+nodrawing id:scoped-line clip...
+tap id:scope-toggle
+expect scoped false 1D watch
+tap id:scope-toggle
+expect scoped true 1D watch
+nodrawing id:scoped-line clip...
+tap id:scope-period
+expect scoped true 1W watch
+drawing id:scoped-line clip...
+wait 300
+nodrawing id:scoped-line clip...
+tap id:scope-rename
+expect scoped true 1W hot
+drawing id:scoped-line clip...
+covers [nsh/base/plot] PlotAppearScope
+covers [props] PlotAppearScope.id
+covers [props] Plot.appearGeneration
 
 # The app's design tokens: shadcn's `neutral` with the app's theme over it.
 tap id:case-base-token
@@ -2834,6 +3304,7 @@ expect Items: true true
 expect Takeover: true 1 ba
 expect Empty: true
 expect Page: null null ab
+expect Positions: paragraph true RangeError RangeError RangeError RangeError TypeError TypeError
 expect Error: thrown
 expect Keys: none
 # The `revision` listener hears the changes in JS's next turn.
@@ -2983,7 +3454,7 @@ covers [nsh/base] Highlight
 covers [nsh/base] History
 covers [nsh/base] HorizontalRule
 covers [nsh/base] Italic
-covers [nsh/base] Link
+covers [nsh/base] RichLink
 covers [nsh/base] ListItem
 covers [nsh/base] ListKeymap
 covers [nsh/base] OrderedList

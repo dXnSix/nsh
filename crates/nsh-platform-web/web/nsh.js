@@ -118,8 +118,9 @@ const KEYFRAMES = `
   touch-action: none; }
 .nsh-root * { box-sizing: border-box; }
 .nsh-v { position: absolute; margin: 0; padding: 0; min-width: 0; min-height: 0; }
+/* The keyboard focus shows as the app draws it (focus: styles), as
+   on the desktop backends: no ring of the browser's or the runtime's. */
 .nsh-v:focus { outline: none; }
-.nsh-v:focus-visible { outline: 2px solid var(--nsh-focus-ring, #0a84ff); outline-offset: -2px; }
 .nsh-scroll { overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .nsh-scroll { touch-action: pan-x pan-y; }
 /* In an iframe, swipes the app does not take scroll the embedding page. */
@@ -345,6 +346,11 @@ const CODE_CHARS = {
   Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Backslash: "\\", IntlBackslash: "\\", Semicolon: ";",
   Quote: "'", Comma: ",", Period: ".", Slash: "/", Backquote: "`", Space: " ",
 };
+
+/** The offset of local time at `ms` (since the epoch) in seconds east of UTC. */
+function localOffset(ms) {
+  return 0 - new Date(ms).getTimezoneOffset() * 60;
+}
 
 /** The browser's time zone (`Asia/Shanghai`), Intl's default; "" when unknown. */
 function timeZoneName() {
@@ -887,6 +893,8 @@ class Player {
       nsh: {
         now_ms: () => performance.now(),
         date_now_ms: () => Date.now(),
+        // Today where the app runs (`nsh-base`'s calendars).
+        local_offset: (ms) => localOffset(ms),
         // Intl's default zone.
         time_zone: (p, cap) => {
           const zone = encoder.encode(timeZoneName());
@@ -995,6 +1003,7 @@ class Player {
           if (socket) socket.close(code, this.str(p, l));
         }),
         websocket_buffered: (id) => this.websockets.get(id)?.bufferedAmount ?? 0,
+        websocket_pause: (id, paused) => this.websocketPause(id, paused !== 0),
         websocket_cancel: (id) => this.websocketCancel(id),
         load_data: (p, l) => this.loadData(this.str(p, l)),
         // The app's storage (`nsh/storage`): the entries of `localStorage`
@@ -5312,7 +5321,7 @@ class Player {
       return value;
     };
     const execute = async () => {
-      if (!navigator.storage?.getDirectory) throw error("ENOTSUP", "This browser does not provide Origin Private File System storage");
+      if (!navigator.storage?.getDirectory) throw error("ERR_FEATURE_UNAVAILABLE_ON_PLATFORM", "This browser does not provide Origin Private File System storage");
       const origin = await navigator.storage.getDirectory();
       // Hashing makes arbitrary app IDs safe as a single OPFS directory name.
       const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(request.namespace));
@@ -5474,11 +5483,36 @@ class Player {
         return this.withStrings([value], (p, l) => w.nsh_websocket_event(id, kind, p, l, code, clean ? 1 : 0));
       });
     };
-    socket.onopen = () => report(0, socket.protocol);
-    socket.onmessage = (event) => report(typeof event.data === "string" ? 1 : 2,
+    // The browser's WebSocket has no flow control: while the app's unread
+    // messages fill their queue (`websocket_pause`), the socket's events
+    // wait here, in order, outside the engine's memory.
+    const hold = { paused: false, events: [], report };
+    socket.nshHold = hold;
+    const deliver = (...event) => {
+      if (hold.paused || hold.events.length) hold.events.push(event);
+      else report(...event);
+    };
+    socket.onopen = () => deliver(0, socket.protocol);
+    socket.onmessage = (event) => deliver(typeof event.data === "string" ? 1 : 2,
       typeof event.data === "string" ? event.data : new Uint8Array(event.data));
-    socket.onerror = () => report(3, "Browser WebSocket failed (network, TLS, origin or server handshake error)");
-    socket.onclose = (event) => report(4, event.reason, event.code, event.wasClean);
+    socket.onerror = () => deliver(3, "Browser WebSocket failed (network, TLS, origin or server handshake error)");
+    socket.onclose = (event) => deliver(4, event.reason, event.code, event.wasClean);
+  }
+
+  /** Holds (`paused`) or delivers again the events of socket `id`. */
+  websocketPause(id, paused) {
+    const socket = this.websockets.get(id);
+    const hold = socket?.nshHold;
+    if (!hold) return;
+    hold.paused = paused;
+    if (paused || !hold.events.length) return;
+    // The engine resumes from inside a call: the held events enter it in a
+    // task of their own, one at a time, until it pauses the socket again.
+    setTimeout(() => {
+      while (!hold.paused && hold.events.length && this.websockets.get(id) === socket) {
+        hold.report(...hold.events.shift());
+      }
+    });
   }
 
   websocketCancel(id) {

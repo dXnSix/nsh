@@ -228,7 +228,7 @@ events! {
     ContentSizeChange = "onContentSizeChange": "The size of an input's text changed (payload: `width`, `height`; raised by the core).",
     BackRequest = "onBackRequest" as "onBackPress": "The user pressed back on a screen (the header's back button, Android back, the desktops' back keys and mouse button, the browser's back), whether or not `popOnBack` let it pop.",
     NativeEvent = "onNativeEvent": "A registered native component emitted an event (payload: [`EventPayload::Native`]).",
-    Clipboard = "onClipboard": "A clipboard read finished (root only; payload: `id`, `has`: whether it holds what was asked; for text `text`, unless only `has` was asked; for an image `uri` (a `data:` URI), `width` and `height`, unless only `has` was asked; for files `files`, their `file:` URLs one per line).",
+    Clipboard = "onClipboard": "A clipboard read finished (root only; payload: `id`, `has`: whether it holds what was asked; for text `text`, unless only `has` was asked; for an image `uri` (a `data:` URI), `width` and `height`, unless only `has` was asked, or `tooLarge` (its size in bytes) for one over `platform::clipboard::MAX_IMAGE_BYTES`; for files `files`, their `file:` URLs one per line).",
     KeyCommand = "onKeyCommand": "A key matched a binding of `keymap` (`nsh`) (root only; payload: the binding's id, [`crate::keymap::KeyBinding::id`]).",
     Menu = "onMenu": "A menu item was chosen: the application menu's or a context menu's (root only; desktops; payload: `id`), or a context menu closed (`closed`: true, after its item).",
     MouseEnter = "onMouseEnter": "The mouse came over the view or a view inside it (never on touches; payload: [`EventPayload::Mouse`]).",
@@ -1596,7 +1596,9 @@ pub enum Command {
         /// Animate the change.
         animated: bool,
     },
-    /// Animate the layout changes of the next commit (on the root).
+    /// Animate the layout changes of the next commit. On the root, all of
+    /// them; on a node, with its `update`, only the frames that node's
+    /// change moves (`ElementRef::animate_layout`, `core/layout_scope.rs`).
     LayoutAnimation(LayoutAnimation),
     /// Leave the app (Android back handling; on the root).
     ExitApp,
@@ -1648,6 +1650,11 @@ pub enum Command {
     },
     /// Set the status bar (on the root): what the platform shows.
     StatusBar(StatusBarConfig),
+    /// The design tokens the app is drawn with (on the root), sent when
+    /// they change ([`crate::Core::tokens`]): what the platform's own
+    /// controls (menus) take their colors from, by the tokens' names
+    /// (`popover`, `accent`, `border`, ...).
+    Tokens(std::sync::Arc<crate::element::Tokens>),
     /// Change what functions set for the status bar (on the root): the
     /// core merges it under the settings components render and sends
     /// [`Command::StatusBar`] when the result changes.
@@ -1708,7 +1715,9 @@ pub enum Command {
     /// Read the image on the system clipboard and report it as
     /// [`EventKind::Clipboard`] `id` (on the root): `has` and, unless
     /// `has_only`, the image as a `data:` URI (`uri`) and its size in
-    /// pixels (`width`, `height`).
+    /// pixels (`width`, `height`), or for an image over
+    /// [`crate::platform::clipboard::MAX_IMAGE_BYTES`] its size in bytes
+    /// (`tooLarge`; [`crate::platform::clipboard::image_answer`]).
     ReadClipboardImage {
         /// The request.
         id: u32,
@@ -1987,6 +1996,13 @@ pub enum Prop {
     ShaderSource(Option<Arc<str>>),
     /// A compiled shader, as Rust sets it (TS sets `source`).
     Shader(Option<crate::shader::Shader>),
+    /// The element whose frame the view's follows along its parent's main
+    /// axis, as Rust sets it (`View::follow`, `core/follow.rs`); `None`
+    /// follows nothing.
+    Follow(Option<crate::element::FollowTarget>),
+    /// How a view that follows an element moves when it follows another
+    /// one (`View::follow_transition`); `None` jumps there.
+    FollowTransition(Option<crate::LayoutTransition>),
     /// `uniforms` (shaders): the values of the members of the shader's
     /// `struct Uniforms`, by name: numbers, colors, lists of them (vectors,
     /// arrays of `vec4f`) and animated values, which move it natively.

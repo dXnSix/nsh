@@ -226,7 +226,7 @@ function ErrorBoundary(props: {
 }): JSX.Element;
 ```
 
-Renders its children, or `fallback` once something under them throws: a component's body, a binding, an effect or an event handler. The part that failed is removed and the fallback shows in its place. `fallback(error, reset)` gets the thrown value and `reset`, which renders the children again; a `fallback` that takes no arguments is shown as it is. A failure goes to the nearest boundary above it, and one in a fallback to the boundary above that. Rust components use `catch_error` ([Error boundaries](../docs/reactivity.md#error-boundaries)).
+Renders its children, or `fallback` once something under them throws: a component's body, a binding, an effect or an event handler. The part that failed is removed and the fallback shows in its place. A function `fallback` is called as `fallback(error, reset)` with the thrown value and `reset`, which renders the children again, whatever parameters it declares; a `fallback` element is shown as it is. A failure goes to the nearest boundary above it, and one in a fallback to the boundary above that. Rust components use `catch_error` ([Error boundaries](../docs/reactivity.md#error-boundaries)).
 
 ```tsx
 import { ErrorBoundary, Text, View } from "nsh";
@@ -1015,6 +1015,7 @@ interface Platform {
   readonly os: "ios" | "android" | "macos" | "windows" | "linux" | "web";
   readonly version: string;
   readonly idiom: "phone" | "pad" | "mac" | "tv" | "desktop";
+  readonly desktop: boolean;
   readonly catalyst: boolean;
   select<T>(spec: PlatformSelectSpec<T>): T | undefined;
 }
@@ -1026,8 +1027,9 @@ The platform the app runs on, constant while it runs.
 |---|---|---|
 | `os` | `os() -> Os` (`os().name()` is the TS string) | The operating system. iOS, the iOS simulator and Mac Catalyst report `"ios"`, browsers `"web"`. |
 | `version` | `os_version() -> (u16, u16)` | iOS and desktops: the OS version (`"17.5"`); Android: the API level (`"35"`); the web: `"0.0"`. Rust gives the major and minor version, or the API level and 0 on Android. |
-| `idiom` | `idiom() -> Idiom`; `is_desktop()` for `"desktop"` | The kind of device: `"phone"`, `"pad"` (an iPad, an Android tablet), `"mac"` (Mac Catalyst in the Mac idiom), `"tv"` (Apple TV, Android TV) or `"desktop"`, where desktop behavior applies: macOS, Windows, Linux, and browsers with a mouse and a wide window. |
-| `catalyst` | `idiom() == Idiom::Mac` | Mac Catalyst in the Mac idiom. |
+| `idiom` | `idiom() -> Idiom` | The kind of device: `"desktop"` exactly where `desktop` is `true`; elsewhere `"phone"`, `"pad"` (an iPad, an Android tablet, Mac Catalyst in the iPad idiom), `"mac"` (Mac Catalyst in UIKit's Mac idiom, a mobile idiom) or `"tv"` (Apple TV, Android TV). |
+| `desktop` | `is_desktop() -> bool` | Desktop behavior applies: macOS, Windows, Linux, and browsers with a mouse and a wide window. `desktop={{…}}` props, `select({ desktop })` and `idiom` `"desktop"` all follow it. Mac Catalyst runs the iOS backend, so it is mobile: `ios={{…}}` props apply there. [`nsh/desktop`](./nsh-desktop.md#isavailable)'s `isAvailable` is the narrower check for its window and menu APIs, which macOS, Windows and Linux have. |
+| `catalyst` | `is_catalyst() -> bool` | The app runs under Mac Catalyst, in the Mac or the iPad idiom (`os` is `"ios"`). |
 | `select(spec)` | `match os() { … }` | The value for this platform (see below). |
 
 ```rust tabs
@@ -1035,7 +1037,7 @@ let columns = if is_desktop() { 3 } else { 1 };
 ```
 
 ```tsx tabs
-const columns = platform.idiom === "desktop" ? 3 : 1;
+const columns = platform.desktop ? 3 : 1;
 ```
 
 #### platform.select
@@ -1048,14 +1050,14 @@ interface PlatformSelectSpec<T> {
   windows?: T;
   linux?: T;
   web?: T;
-  mobile?: T;   // iOS, Android, and phone and tablet browsers
-  desktop?: T;  // macOS, Windows, Linux, and desktop browsers
+  mobile?: T;   // platform.desktop false: iOS (Mac Catalyst included), Android, phone and tablet browsers
+  desktop?: T;  // platform.desktop true: macOS, Windows, Linux, desktop browsers
   native?: T;   // every platform but the web
   default?: T;
 }
 ```
 
-Returns the value for the current OS (`ios`, `android`, `web`, ...), else `mobile` / `desktop`, else `native` (every platform but the web), else `default`, else `undefined`. In a browser, `mobile` or `desktop` follows the idiom. Rust code matches on `os()` (and `is_desktop()` for `mobile` / `desktop`).
+Returns the value for the current OS (`ios`, `android`, `web`, ...), else `desktop` or `mobile` (by `platform.desktop`), else `native` (every platform but the web), else `default`, else `undefined`. Rust code matches on `os()` (and `is_desktop()` for `mobile` / `desktop`).
 
 ```rust tabs
 use nsh_core::platform::Os;
@@ -1136,8 +1138,8 @@ button()
 </Button>
 ```
 
-- The URL is absolute (it has a scheme). URLs that would run code or reach the app's own data, `javascript:`, `data:`, `blob:`, `file:`, `about:` and `asset:`, throw a `TypeError`, as do relative addresses.
-- An app that declares capabilities needs `openUrl`: `"openUrl": true` for every scheme, or `"openUrl": { "schemes": ["https", "mailto"] }` for those listed; other URLs throw a `TypeError` (see [Sandbox and capabilities](../docs/sandbox-and-capabilities.md)).
+- The URL is absolute (it has a scheme). URLs that would run code or reach the app's own data, `javascript:`, `data:`, `blob:`, `file:`, `about:` and `asset:`, reject the promise with a `TypeError`, as do relative addresses. `openUrl` never throws: every failure rejects.
+- An app that declares capabilities needs `openUrl`: `"openUrl": true` for every scheme, or `"openUrl": { "schemes": ["https", "mailto"] }` for those listed; other URLs reject with an `Error` whose `code` is `"ERR_ACCESS_DENIED"`, `permission` `"openUrl"` and `resource` the URL (see [Sandbox and capabilities](../docs/sandbox-and-capabilities.md)). In Rust, `open_url` answers `false` for them and logs why.
 - The embedding app sees the URL first and can route it through its own router instead (Swift `NshAppView.onOpenURL`, Java `NshView.setOpenUrlHandler`, Rust `AppView::host().handle_open_url`; see [iOS](../docs/ios.md#links-the-app-opens) and [Android](../docs/android.md#links-the-app-opens)). `opened` is then `true`.
 - Each platform opens it with its own opener: `UIApplication.open` on iOS (the host app's application when embedded), an `ACTION_VIEW` intent on Android, `NSWorkspace` on macOS, `ShellExecuteW` on Windows, `GtkUriLauncher` on Linux, GPUI's `open_url`, a new tab on the web. `nsh test` records the URLs instead of opening them.
 - A [`TextView`](../elements/text-view.md) opens its links this way with `links="open"`.
@@ -1369,8 +1371,8 @@ const Clipboard: {
 };
 
 interface ClipboardImage {
-  url: string; // data:image/png;base64,…
-  size: PixelSize;
+  url: string; // a URL that Image shows and fetch reads
+  size: PixelSize; // in pixels
 }
 ```
 
@@ -1385,6 +1387,10 @@ interface ClipboardImage {
 | `await Clipboard.readFiles()` | `clipboard_files().await -> Vec<String>` |
 
 The Rust reads return answers to await in a task (`spawn`, or an `async` module function); `ClipboardImage` is `nsh_core::element::ClipboardImage`, with `url` and `size` (a `Size<DevicePixels>`).
+
+Images go through the clipboard on iOS, the desktops and the web. On Android the clipboard carries text: `writeImage` and
+`readImage` reject with an `Error` whose `code` is `"ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"`, and `hasImage` resolves
+`false`. In Rust, `set_clipboard_image` leaves the clipboard as it is there and `clipboard_image` answers `None`.
 
 The user can also copy from a [selectable text](../elements/text.md) themselves; the clipboard API is for copying from code, such as a Copy button.
 
@@ -1474,11 +1480,12 @@ readImage(): Promise<ClipboardImage | null>;
 ```
 
 Resolves with the clipboard's image, or `null` when it holds none: a pasted screenshot, or an image copied in a browser
-or an image editor. Rust: `clipboard_image()`, `None` when it holds none. `url` is a `data:` URL of the image (PNG, or
-the clipboard's own JPEG, GIF, WebP or BMP), which an [`Image`](../elements/image.md) shows as its `src`; in TSX,
-`fetch(url)` gives its bytes, for an upload, and in Rust the base64 after the comma decodes to them. `size` (`width` and
-`height`) is its size in pixels. As with `readText`, read it when the user asks to paste. Images of up to 48 MB (encoded) are
-read, so the `data:` URL fits in the app's memory; for a larger one `readImage` resolves `null` and `hasImage` `true`.
+or an image editor. Rust: `clipboard_image()`, `None` when it holds none. `url` is a URL of the image (PNG, or the
+clipboard's own JPEG, GIF, WebP or BMP) that an [`Image`](../elements/image.md) shows as its `src` and `fetch` reads:
+`fetch(url)` gives its bytes, for an upload. `size` (`width` and `height`) is its size in pixels, as decoded. As with
+`readText`, read it when the user asks to paste. Images of up to 48 MB (encoded) are read, so the image fits in the
+app's memory; a larger one rejects with an `Error` whose `code` is `"ERR_NSH_QUOTA_EXCEEDED"` (its message gives the
+image's size and the limit), while `hasImage` resolves `true`. Rust: `clipboard_image()` answers `None` for it.
 
 ```rust tabs
 use base64::Engine as _;
@@ -1571,7 +1578,7 @@ hasImage(): Promise<boolean>;
 ```
 
 Resolves with whether the clipboard holds an image, without reading it: no paste notice on iOS. Rust:
-`clipboard_has_image()`.
+`clipboard_has_image()`. On Android it resolves `false`.
 
 ### Clipboard.writeImage
 
@@ -1579,8 +1586,9 @@ Resolves with whether the clipboard holds an image, without reading it: no paste
 writeImage(src: string): Promise<void>;
 ```
 
-Puts the image of `src`, a base64 `data:` URL such as `readImage` gives, on the clipboard, replacing what it holds. Rust:
-`set_clipboard_image(src)`. On Windows it takes a PNG, the format browsers, Office and the Snipping Tool read.
+Puts the image of `src`, a base64 `data:` URL or the `url` `readImage` gave, on the clipboard, replacing what it holds.
+Rust: `set_clipboard_image(src)`. On Windows it takes a PNG, the format browsers, Office and the Snipping Tool read. On
+Android it rejects with `"ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"`.
 
 ```rust tabs
 set_clipboard_image(image.url.clone());
@@ -1614,7 +1622,16 @@ const names = files.map((url) => decodeURIComponent(new URL(url).pathname.split(
 ```
 
 > [!NOTE]
-> When your app declares `capabilities` in `nsh.json`, the clipboard must be granted with `"clipboard": true`. Without it `writeText` and `writeImage` do nothing, `readText` resolves `""`, `readImage` `null`, `readFiles` `[]` and `hasText` and `hasImage` `false`, from Rust and TSX alike. See [Sandbox and capabilities](../docs/sandbox-and-capabilities.md).
+> When your app declares `capabilities` in `nsh.json`, the clipboard must be granted with `"clipboard": true`. Without it every function of `Clipboard` rejects with an `Error` whose `code` is `"ERR_ACCESS_DENIED"`, `permission` `"clipboard"` and `resource` `""`, and nothing reaches the system clipboard. In Rust, the writes leave the clipboard as it is and the reads answer what an empty clipboard does (`""`, `None`, an empty list, `false`), and the refusal is logged. See [Sandbox and capabilities](../docs/sandbox-and-capabilities.md).
+>
+> ```tsx
+> try {
+>   await Clipboard.writeText(code());
+> } catch (error) {
+>   if (error.code === "ERR_ACCESS_DENIED") showHint("Copying is turned off for this app");
+>   else throw error;
+> }
+> ```
 
 ## Picker
 
@@ -1670,8 +1687,10 @@ pickImages(options?: PickImagesOptions): Promise<PickedImage[]>;
 ```
 
 Shows the picker and resolves with the images the user picked, in the order picked, or `[]` when the user cancels.
-Rust: `pick_images(request)`, an answer to await in a task (`spawn`, or an `async` module function). Options out of
-range (`limit: 0`, a `quality` outside 0 to 1) throw a `RangeError` in the call.
+Rust: `pick_images(request)`, an answer to await in a task (`spawn`, or an `async` module function). `pickImages`
+never throws: options out of range (`limit: 0`, a `quality` outside 0 to 1) reject the promise with a `RangeError`, and a
+pick the app's capabilities do not grant rejects with `ERR_ACCESS_DENIED` (below). A cancel is the user's answer, not a
+failure: it resolves `[]`.
 
 The images come ready to send:
 
@@ -1778,7 +1797,8 @@ and without a handler a pick is cancelled. See [Testing](../docs/testing-and-tra
 
 > [!NOTE]
 > When your app declares `capabilities` in `nsh.json`, the picker must be granted with `"picker": true`. Without it
-> `pickImages` resolves `[]` and shows nothing, from Rust and TSX alike. See
+> `pickImages` shows nothing and rejects with an `Error` whose `code` is `"ERR_ACCESS_DENIED"`, `permission`
+> `"picker"` and `resource` `""`. In Rust, `pick_images` answers no files and the refusal is logged. See
 > [Sandbox and capabilities](../docs/sandbox-and-capabilities.md).
 
 ## Storage
@@ -1850,7 +1870,7 @@ const theme = (await Storage.getItem("theme")) ?? "system";
 setItem(key: string, value: string): Promise<void>;
 ```
 
-Sets `key` to `value`, replacing what it held. Rejects when the storage would grow past 5 MB; the value is not kept then. Rust: `Storage::set_item(key, value)`, which returns `Err(StorageFull)` then. Values are strings: keep structured data as JSON (`serde_json::to_string` in Rust, `JSON.stringify` in TSX) and read it back (`serde_json::from_str`, `JSON.parse`).
+Sets `key` to `value`, replacing what it held. Rejects with an `Error` whose `code` is `"ERR_NSH_QUOTA_EXCEEDED"` when the storage would grow past 5 MB; the value is not kept then. Rust: `Storage::set_item(key, value)`, which returns `Err(StorageFull)` then. Values are strings: keep structured data as JSON (`serde_json::to_string` in Rust, `JSON.stringify` in TSX) and read it back (`serde_json::from_str`, `JSON.parse`).
 
 ```rust tabs
 let draft = serde_json::json!({ "title": title.get(), "body": body.get() });
@@ -1969,13 +1989,26 @@ import { host } from "nsh";
 call(name: string, args?: unknown, options?: { timeout?: number }): Promise<unknown>;
 ```
 
-Calls the host's function `name` with `args` (any JSON value; `null` without one) and resolves with what it returns. The call rejects with the host's error message when the function fails, with `nsh/host: this platform has no host` when `host.available()` is `false`, and when `name` is not in the app's [`host` capability](#capability) or is no valid name (1 to 128 of `A`–`Z`, `a`–`z`, `0`–`9`, `_`, `.`, `:`, `-`, without `..`).
+Calls the host's function `name` with `args` (any JSON value; `null` without one) and resolves with what it returns. `host.call` never throws: every failure rejects the promise, with an `Error` whose `code` says what happened (the message is for people and may change):
 
-A call waits 30 seconds for the host's answer, then rejects with `nsh/host: <name> timed out after 30000 ms`; an answer that comes later is dropped. `options.timeout` sets the wait in milliseconds, `0` for no limit; a timeout so large the clock never gets there (about 1e22 ms) waits without limit too, and a negative, `NaN` or infinite one rejects the call with `nsh/host: invalid timeout <value>`. The time is the app's, as its timers': in `nsh test` with a manual clock it moves with the clock.
+| `code` | When |
+|---|---|
+| `ERR_NSH_HOST_ERROR` | The host's function failed, or the host has no function `name`; the message is the host's |
+| `ERR_ACCESS_DENIED` | `name` is not in the app's [`host` capability](#capability); `permission` is `"host"`, `resource` the name |
+| `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` | The platform has no host: `host.available()` is `false` |
+| `ETIMEDOUT` | The host did not answer in time |
+| `ERR_NSH_QUOTA_EXCEEDED` | 1024 calls already wait for the embedding app's answers |
+
+A name that is no valid name (1 to 128 of `A`–`Z`, `a`–`z`, `0`–`9`, `_`, `.`, `:`, `-`, without `..`) rejects with a `TypeError`.
+
+A call waits 30 seconds for the host's answer, then rejects with `ETIMEDOUT`; an answer that comes later is dropped. `options.timeout` sets the wait in milliseconds, `0` for no limit; a timeout so large the clock never gets there (about 1e22 ms) waits without limit too, and a negative, `NaN` or infinite one rejects the call with a `RangeError`. The time is the app's, as its timers': in `nsh test` with a manual clock it moves with the clock.
 
 ```ts
 const user = (await host.call("getUserInfo")) as { name: string };
-const quote = await host.call("quote.refresh", { symbol: "AAPL" }, { timeout: 5000 });
+const quote = await host.call("quote.refresh", { symbol: "AAPL" }, { timeout: 5000 }).catch((error) => {
+  if (error.code === "ETIMEDOUT" || error.code === "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM") return null;
+  throw error;
+});
 ```
 
 ### host.on
@@ -1994,7 +2027,7 @@ stop();
 
 ### Capability
 
-Every function the app calls must be listed in `nsh.json`'s `capabilities.host`: exact names or prefixes ending in `*`, or `true` for all of them. This holds for every app, also one without other `capabilities`: the host's functions are never granted by default. A call that is not granted rejects and is logged, and building an app that imports `host` from `nsh` without `capabilities.host` warns. Events need no grant. See [Sandbox and capabilities](../docs/sandbox-and-capabilities.md#host).
+Every function the app calls must be listed in `nsh.json`'s `capabilities.host`: exact names or prefixes ending in `*`, or `true` for all of them. This holds for every app, also one without other `capabilities`: the host's functions are never granted by default. A call that is not granted rejects with `ERR_ACCESS_DENIED` and is logged, a `host.post` of such a name to an embedding app throws the same error, and building an app that imports `host` from `nsh` without `capabilities.host` warns. Events need no grant. See [Sandbox and capabilities](../docs/sandbox-and-capabilities.md#host).
 
 ```json
 { "capabilities": { "host": ["getUserInfo", "bridge.*"] } }

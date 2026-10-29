@@ -180,6 +180,7 @@ impl Host {
             trace: self.trace,
             network: Some(crate::net::network()),
             websocket: None,
+            refuse_connections: None,
             filesystem: None,
             assets: Some(Arc::new(ViewAssets(self.clone()))),
             environment: *self.environment.lock().expect("environment"),
@@ -1491,6 +1492,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_eventMap(
                 "canGoForward" => "canGoForward",
                 "data" => "data",
                 "message" => "message",
+                "code" => "code",
                 "duration" => "duration",
                 "width" => "width",
                 "height" => "height",
@@ -1707,6 +1709,27 @@ extern "system" fn Java_com_longbridge_nsh_Native_navTransition(
         reverse != 0,
     );
     runs.into()
+}
+
+/// Keeps the virtual list rows holding nodes `ids` rendered wherever they
+/// scroll (a text selection's ends); none lets go.
+#[unsafe(no_mangle)]
+extern "system" fn Java_com_longbridge_nsh_Native_keepRendered(
+    env: JNIEnv<'_>,
+    _: JClass<'_>,
+    handle: jlong,
+    ids: jni::objects::JIntArray<'_>,
+) {
+    // SAFETY: Java passes its live handle.
+    let host = unsafe { host(handle) };
+    let len = env.get_array_length(&ids).unwrap_or(0).max(0) as usize;
+    let mut nodes = vec![0; len];
+    if env.get_int_array_region(&ids, 0, &mut nodes).is_err() {
+        return;
+    }
+    if let Some(control) = host.control() {
+        control.keep_rendered(nodes.into_iter().map(|id| id as NodeId).collect());
+    }
 }
 
 /// A scroll view moved: the engine (lists) and its scroll value learn the

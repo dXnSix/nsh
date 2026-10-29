@@ -1,7 +1,7 @@
 import type { JSX, ViewStyle } from "nsh";
 import { effect, Text, token, View } from "nsh";
 import { reduceMotion } from "nsh";
-import { type AnimatedValue, createAnimatedValue, LayoutAnimation } from "nsh";
+import { type AnimatedValue, createAnimatedValue } from "nsh";
 import { platform } from "nsh";
 import { keymap } from "nsh";
 import { Button as BaseButton, Sheet as BaseSheet, Switch, Tooltip } from "nsh/base";
@@ -16,6 +16,7 @@ export * from "./popup";
 export * from "./data-table";
 export * from "./slider";
 export * from "./scrollbar-theme";
+export * from "./avatar";
 
 /**
  * The thumb of a resize handle (`handleThumbClass`), as gpui-component
@@ -30,7 +31,7 @@ export const handleThumb =
  * Instructions for the device's input: `touch` on phones and tablets,
  * `pointer` on desktops (a mouse, a touchpad, a keyboard).
  */
-export const hint = (touch: string, pointer: string) => (platform.idiom === "desktop" ? pointer : touch);
+export const hint = (touch: string, pointer: string) => (platform.desktop ? pointer : touch);
 
 /**
  * Desktops' way to refresh what phones pull down (the mouse does not drag
@@ -40,7 +41,7 @@ export const hint = (touch: string, pointer: string) => (platform.idiom === "des
  * key's label for the hint, or null where it is not bound.
  */
 export function bindRefresh(refresh: () => void): string | null {
-  if (platform.idiom !== "desktop" || platform.os === "web") return null;
+  if (!platform.desktop || platform.os === "web") return null;
   keymap.bind("mod+r", refresh);
   return keymap.label("mod+r");
 }
@@ -114,7 +115,9 @@ export function Appear(props: { index?: number; flex?: boolean; children: JSX.El
  * An animated value that springs to `target` each time it changes (a
  * control's state: 1 while on, 0 while off), natively: JS only starts each
  * spring. A change mid-way turns it from where it is, with its velocity;
- * with reduced motion it lands at once.
+ * with reduced motion it lands at once. For discrete changes only: what
+ * the pointer drives (a dragged thumb, a hover's place) is set in the same
+ * frame, never sprung toward the pointer.
  */
 export function follow(target: () => number, spring: { stiffness: number; damping: number } = motion.control): AnimatedValue {
   const v = createAnimatedValue(target());
@@ -153,7 +156,7 @@ export function IconTile(props: { name: IconName; tint?: string; size?: number }
 }
 
 /** A pointer and a keyboard: the compact sizes of desktops. */
-const pointer = platform.idiom === "desktop";
+const pointer = platform.desktop;
 
 /**
  * The page's density: compact with a pointer (desktops), roomier on a touch
@@ -372,7 +375,10 @@ const buttonSizes = pointer
  * fills it with that color instead. Under the pointer a raised button
  * lightens, pressed it sinks (an inner shade, and 3% smaller). `busy`
  * puts a spinner in the icon's place and takes no presses; a new icon or
- * the spinner grows in, and the width the new label needs is animated.
+ * the spinner grows in. Its width follows the label at once: a layout
+ * animation would move every frame of the update, app-wide (a list
+ * refreshing beside it too), so the motion stays on the glyph's own
+ * opacity and scale.
  */
 export function Button(props: {
   label: string;
@@ -396,8 +402,7 @@ export function Button(props: {
   // role); the look below is the gallery's own.
   const scale = createAnimatedValue(1);
   // The leading glyph (the icon, or the spinner while busy) grows in each
-  // time it changes, and the label's new width eases in with it; both at
-  // once with reduced motion.
+  // time it changes; at once with reduced motion.
   const glyph = createAnimatedValue(1);
   let shownGlyph = props.busy ? "busy" : props.icon;
   effect(() => {
@@ -405,7 +410,6 @@ export function Button(props: {
     if (next === shownGlyph) return;
     shownGlyph = next;
     if (reduceMotion()) return;
-    LayoutAnimation.configureNext({ duration: 220, update: { type: "spring", springDamping: 0.85 } });
     glyph.set(0);
     glyph.spring(1, motion.control);
   });

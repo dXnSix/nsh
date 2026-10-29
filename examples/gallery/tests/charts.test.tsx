@@ -7,8 +7,10 @@
 // hole) or the arrow keys and closes into a pie with its shares written
 // outside, sales as bars side by side or stacked, a radar of factor
 // exposure that reads out the factor nearest the pointer and changes its
-// benchmark, and a quarter's income as flows between its accounts, read
-// out under the arrow keys and moving into the next quarter's.
+// benchmark, a quarter's income as flows between its accounts, read out
+// under the arrow keys and moving into the next quarter's, and a
+// watchlist whose sparklines come with their rows as its list scrolls and
+// show each period.
 import { beforeEach, expect, open, test } from "nsh/test";
 import type { App } from "nsh/test";
 
@@ -53,12 +55,12 @@ test("each chart is one image for screen readers", async () => {
 
 test("the live price ticks every second until it is paused", async () => {
   const first = price();
-  await app.clock.runFor(3000);
+  await app.clock!.runFor(3000);
   expect(price()).not.toBe(first);
   await app.press("Pause");
   await app.waitFor("PAUSED");
   const paused = price();
-  await app.clock.runFor(3000);
+  await app.clock!.runFor(3000);
   expect(price()).toBe(paused);
   await app.press("Resume");
   await app.waitFor("LIVE");
@@ -73,7 +75,7 @@ test("the live price writes its window's high over it and tags its last price", 
   // the price the card's figure reads.
   expect(app.texts()).toContain(`High ${after("HIGH")}`);
   expect(app.texts().filter((t) => t === price()).length).toBeGreaterThanOrEqual(2);
-  await app.clock.runFor(3000);
+  await app.clock!.runFor(3000);
   expect(app.texts()).toContain(`High ${after("HIGH")}`);
   expect(app.texts().filter((t) => t === price()).length).toBeGreaterThanOrEqual(2);
 });
@@ -191,7 +193,7 @@ test("the radar reads out the factor nearest the pointer and changes its benchma
 test("a quarter's income flows from its segments to net income, and into the next quarter's", async () => {
   // The flows are one image, named with what they show; each account named beside its node (once they have drawn in), the margins under them.
   expect(app.count("role:image[Income flows, Q3: $85.5B revenue, $19.9B net income, a net margin of 23.3%]")).toBe(1);
-  await app.clock.runFor(1500);
+  await app.clock!.runFor(1500);
   for (const name of ["Products", "Gross profit", "Net income"]) expect(app.texts()).toContain(name);
   expect(app.texts()).toContain("46.4%");
   // The next quarter's flows: the readout and the margins follow.
@@ -213,3 +215,16 @@ test("the flows read out the account the arrow keys step to", async () => {
   await app.wait(100);
   expect(app.texts()).not.toContain("TAX");
 }, 120000);
+
+test("the watchlist's sparklines come with their rows and show each period", async () => {
+  await app.waitFor("label:/^AAPL, 1D: /");
+  // Down to the last symbols and back: the list makes their rows, each
+  // with its sparkline, as they scroll in.
+  await app.scroll("id:watchlist", 52 * 13);
+  await app.waitFor("label:/^SHOP, 1D: /");
+  await app.scroll("id:watchlist", -52 * 13);
+  await app.waitFor("label:/^AAPL, 1D: /");
+  await app.press("role:tab[1W]");
+  await app.waitFor("label:/^AAPL, 1W: /");
+  expect(app.count("label:/^AAPL, 1D: /")).toBe(0);
+});

@@ -649,6 +649,17 @@ pub trait Assets: Send + Sync + 'static {
         let _ = uri;
         None
     }
+
+    /// Where `asset:/` URIs resolve, when it is a directory or a URL the
+    /// image loader can read itself: the core's image loads ([`svg`]s)
+    /// then share the platform's cache entries. `None`: through
+    /// [`Assets::read`].
+    ///
+    /// [`svg`]: nsh_core::element::svg
+    #[cfg(not(target_arch = "wasm32"))]
+    fn base(&self) -> Option<nsh_core::image::loader::AssetBase> {
+        None
+    }
 }
 
 /// Engine settings.
@@ -664,6 +675,11 @@ pub struct EngineConfig {
     pub network: Option<Arc<dyn Network>>,
     /// The host transport for WebSockets, including the browser WebSocket API.
     pub websocket: Option<Arc<dyn nsh_core::websocket::WebSocketTransport>>,
+    /// Refuses the app's connections (`net` sockets and both WebSocket
+    /// APIs) with the error it gives for what they connect to, before they
+    /// reach the network: a test's, which reaches it only when the test
+    /// asks (`nsh test`'s `network: "live"`). `None`: they connect.
+    pub refuse_connections: Option<nsh_core::element::RefuseConnections>,
     /// App-private host filesystem service (for browser storage).
     pub filesystem: Option<Arc<dyn nsh_core::filesystem::FileSystem>>,
     /// Source of bundled files such as fonts; without one, they fail to load.
@@ -828,6 +844,7 @@ impl EngineConfig {
             trace: false,
             network: None,
             websocket: None,
+            refuse_connections: None,
             filesystem: None,
             assets: None,
             environment: Environment::default(),
@@ -911,6 +928,7 @@ const MAX_ADVANCE_ROUNDS: usize = 100_000;
 enum Message {
     Event(NodeId, EventKind, EventPayload),
     Scroll(NodeId, Point<Points>, u32),
+    Kept(Vec<NodeId>),
     InputScroll(NodeId, Point<Points>, Size<Points>, Size<Points>),
     Zoom(NodeId, f32),
     ComponentSize(NodeId, Size<Points>),
@@ -1005,6 +1023,13 @@ impl EngineControl {
     /// engine frame.
     pub fn scroll(&self, id: NodeId, offset: Point<Points>, applied: u32) {
         let _ = self.tx.send(Message::Scroll(id, offset, applied));
+    }
+
+    /// Keeps the virtual list rows holding `nodes` rendered wherever they
+    /// scroll (`Core::set_kept`): the ends of a text selection. Replaces
+    /// the last call's; none releases them.
+    pub fn keep_rendered(&self, nodes: Vec<NodeId>) {
+        let _ = self.tx.send(Message::Kept(nodes));
     }
 
     /// Reports how far a multiline input's text scrolled: its offset, the
@@ -1460,6 +1485,18 @@ impl<M: TextEngine + 'static> Driver<M> {
             core.set_max_nodes(config.limits.max_nodes);
         }
         core.set_access(access.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        core.set_image_context(nsh_core::image::loader::Context {
+            asset_base: config.assets.as_ref().and_then(|a| a.base()),
+            read_asset: config.assets.clone().map(|assets| {
+                Arc::new(move |uri: &str| assets.read(uri)) as nsh_core::image::loader::ReadAsset
+            }),
+            access: access.clone(),
+            // The same cache as the platform's ([`Engine::image_cache`]).
+            disk: config.cache.open_images(config.app.app_id()),
+            // The platform's, if it set one ([`nsh_core::image::loader::set_transport`]).
+            transport: None,
+        });
         core.set_storage(app_storage(&config));
         core.set_clipboard(config.clipboard.clone());
         core.set_picker(config.picker.clone());
@@ -1598,6 +1635,7 @@ impl<M: TextEngine + 'static> Driver<M> {
                     script::SystemConfig {
                         access: (*access).clone(),
                         websocket: config.websocket.clone(),
+                        refuse_connections: config.refuse_connections.clone(),
                         filesystem: config.filesystem.clone(),
                         data_dir: config
                             .data_dir
@@ -2044,7 +2082,7 @@ impl Net {
         let mut tasks = std::mem::take(&mut self.tasks);
         for (id, request) in tasks.drain(..) {
             if let Err(refused) = self.request(Requester::Task(id), request) {
-                core.fetch_event(id, FetchEvent::Failed(refused));
+                core.fetch_event(id, FetchEvent::Failed(refused.message));
             }
         }
         self.tasks = tasks;
@@ -2055,7 +2093,7 @@ impl Net {
             match op {
                 FetchOp::Start(request) => {
                     if let Err(refused) = self.request(who, request) {
-                        script.fetch_event(id, FetchEvent::Failed(refused));
+                        script.fetch_refused(id, &refused.message, &refused.url);
                     }
                 }
                 FetchOp::Send(chunk) => {
@@ -2087,7 +2125,7 @@ impl Net {
 
     /// Makes `who`'s request, if the app may (else why not). Bundled files
     /// are the app's own: their requests need no capability.
-    fn request(&mut self, who: Requester, request: HttpRequest) -> Result<(), String> {
+    fn request(&mut self, who: Requester, request: HttpRequest) -> Result<(), access::Refused> {
         if is_asset(&request.url) {
             self.asset(who, request);
         } else if self.access.is_unrestricted() {
@@ -2224,10 +2262,15 @@ impl Net {
 
     /// An event of hop `hop` of request `id`: what JS is told, if anything
     /// (`None` for events of hops left behind, and redirects the engine
-    /// follows).
-    fn event(&mut self, id: Requester, hop: u64, event: FetchEvent) -> Option<FetchEvent> {
+    /// follows; `Err` for a redirect the app may not follow).
+    fn event(
+        &mut self,
+        id: Requester,
+        hop: u64,
+        event: FetchEvent,
+    ) -> Option<Result<FetchEvent, access::Refused>> {
         if self.network.is_none() {
-            return Some(event);
+            return Some(Ok(event));
         }
         let inflight = self.inflight.get_mut(&id).filter(|i| i.hop == hop)?;
         match event {
@@ -2239,18 +2282,24 @@ impl Net {
                     if let Some(i) = self.inflight.remove(&id) {
                         i.task.cancel();
                     }
-                    return Some(FetchEvent::Failed(missing));
+                    return Some(Ok(FetchEvent::Failed(missing)));
                 }
                 let Some(followed) = &mut inflight.followed else {
-                    return Some(FetchEvent::Head(head));
+                    return Some(Ok(FetchEvent::Head(head)));
                 };
                 match access::next(&self.access, followed, head) {
-                    access::Next::Done(head) => Some(FetchEvent::Head(head)),
+                    access::Next::Done(head) => Some(Ok(FetchEvent::Head(head))),
                     access::Next::Fail(message) => {
                         if let Some(i) = self.inflight.remove(&id) {
                             i.task.cancel();
                         }
-                        Some(FetchEvent::Failed(message))
+                        Some(Ok(FetchEvent::Failed(message)))
+                    }
+                    access::Next::Refused(refused) => {
+                        if let Some(i) = self.inflight.remove(&id) {
+                            i.task.cancel();
+                        }
+                        Some(Err(refused))
                     }
                     access::Next::Hop(request) => {
                         let i = self.inflight.remove(&id)?;
@@ -2263,9 +2312,9 @@ impl Net {
             }
             FetchEvent::End | FetchEvent::Failed(_) => {
                 self.inflight.remove(&id);
-                Some(event)
+                Some(Ok(event))
             }
-            event => Some(event),
+            event => Some(Ok(event)),
         }
     }
 }
@@ -2734,6 +2783,7 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
                 event.pending = true;
             }
         }
+        Message::Kept(nodes) => state.core.set_kept(&nodes),
         Message::InputScroll(id, offset, content, viewport) => {
             state.core.set_input_scroll(id, offset, content, viewport);
         }
@@ -2774,22 +2824,23 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
         Message::States(id, states) => state.core.set_states(id, states),
         Message::FontsChanged => state.core.fonts_changed(),
         Message::Remount => state.core.remount(),
-        Message::Fetch(who, hop, event) => {
-            if let Some(event) = state.net.event(who, hop, event) {
-                match who {
-                    Requester::Js(id) => {
-                        if let Some(script) = script {
-                            script.fetch_event(id, event);
-                        }
-                    }
-                    Requester::Task(id) => {
-                        if !state.core.fetch_event(id, event) {
-                            state.net.cancel(who);
-                        }
+        Message::Fetch(who, hop, event) => match (who, state.net.event(who, hop, event)) {
+            (_, None) => {}
+            (Requester::Js(id), Some(event)) => {
+                if let Some(script) = script {
+                    match event {
+                        Ok(event) => script.fetch_event(id, event),
+                        Err(refused) => script.fetch_refused(id, &refused.message, &refused.url),
                     }
                 }
             }
-        }
+            (Requester::Task(id), Some(event)) => {
+                let event = event.unwrap_or_else(|refused| FetchEvent::Failed(refused.message));
+                if !state.core.fetch_event(id, event) {
+                    state.net.cancel(who);
+                }
+            }
+        },
         Message::AssetRead(who, hop, request, read) => {
             state.net.asset_read(who, hop, request, read)
         }

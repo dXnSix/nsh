@@ -51,6 +51,9 @@ pub(crate) struct Shared {
     pub(crate) host_bridge: RefCell<Option<Rc<dyn nsh_core::host_channel::HostBridge>>>,
     pub(crate) system_websocket:
         RefCell<Option<std::sync::Arc<dyn nsh_core::websocket::WebSocketTransport>>>,
+    /// What the host refuses the app's sockets and WebSockets with (a
+    /// test's network); `None`: they connect.
+    pub(crate) system_refuse_connections: RefCell<Option<nsh_core::element::RefuseConnections>>,
     /// Permissions and host-selected app directory for native system operations.
     pub(crate) system_access: RefCell<nsh_core::access::Access>,
     pub(crate) system_filesystem:
@@ -711,6 +714,13 @@ impl Host {
         *self.shared.system_websocket.borrow_mut() = transport;
     }
 
+    /// Refuses the app's connections (`net` sockets and both WebSocket
+    /// APIs) with what `refuse` gives, before they reach the network: a
+    /// test's (`nsh_core::element::System::refuse_connections`).
+    pub fn set_refuse_connections(&self, refuse: Option<nsh_core::element::RefuseConnections>) {
+        *self.shared.system_refuse_connections.borrow_mut() = refuse;
+    }
+
     /// Connects `nsh/host` to the embedding app: its launch parameters, and
     /// where the app's calls and posts go. Call before evaluating the bundle
     /// (`host.params` is read when the module is first imported).
@@ -1075,6 +1085,22 @@ impl Host {
                 let raw = cx.as_raw().as_ptr();
                 let result =
                     crate::web::fetch_event(raw, id, event).map_err(|_| rquickjs::Error::Exception);
+                self.report(&cx, result);
+            });
+            self.run_jobs();
+        });
+    }
+
+    /// Fails request `id`, which the app's capabilities do not grant:
+    /// `message` says why, `url` is the URL refused (the request's, or a
+    /// redirect's). `fetch` rejects with a `TypeError` whose `code` is
+    /// `ERR_ACCESS_DENIED`, `permission` `"network"` and `resource` `url`.
+    pub fn fetch_refused(&self, id: RequestId, message: &str, url: &str) {
+        self.guarded(Phase::Call, || {
+            self.cx.with(|cx| {
+                let raw = cx.as_raw().as_ptr();
+                let result = crate::web::fetch_refused(raw, id, message, url)
+                    .map_err(|_| rquickjs::Error::Exception);
                 self.report(&cx, result);
             });
             self.run_jobs();

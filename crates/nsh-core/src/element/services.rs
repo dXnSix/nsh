@@ -124,6 +124,16 @@ pub(crate) fn clipboard_image() -> (Answer<Option<ClipboardImage>>, Action) {
     (answer, Action::ReadClipboard(ClipboardRead::Image(slot)))
 }
 
+/// The image on the system clipboard for `Clipboard.readImage` (`None`
+/// when it holds none; `Err` with the size in bytes of one over the limit).
+pub(crate) fn clipboard_checked_image() -> (Answer<Result<Option<ClipboardImage>, usize>>, Action) {
+    let (answer, slot) = Answer::new();
+    (
+        answer,
+        Action::ReadClipboard(ClipboardRead::CheckedImage(slot)),
+    )
+}
+
 /// Whether the system clipboard holds an image (without reading it).
 pub(crate) fn clipboard_has_image() -> (Answer<bool>, Action) {
     let (answer, slot) = Answer::new();
@@ -154,7 +164,7 @@ pub(crate) fn pick_images(
 pub(crate) fn host_call(
     name: String,
     args: crate::JsonValue,
-) -> (Answer<Result<crate::JsonValue, String>>, Action) {
+) -> (Answer<Result<crate::JsonValue, super::JsError>>, Action) {
     let (answer, slot) = Answer::new();
     (
         answer,

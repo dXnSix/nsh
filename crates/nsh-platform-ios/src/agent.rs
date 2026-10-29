@@ -6,7 +6,11 @@
 //! calls from a thread of its own; each call does its work on the main
 //! queue (`exec_sync`) and returns once the input is handed over.
 
-use std::{cell::RefCell, rc::Weak, time::Duration};
+use std::{
+    cell::RefCell,
+    rc::Weak,
+    time::{Duration, Instant},
+};
 
 use dispatch2::DispatchQueue;
 use nsh_core::{
@@ -205,14 +209,16 @@ impl Native for IosNative {
                 .flatten();
             let s = ch.to_string();
             self.on_main(move |_, window| synth::insert_text(window, &s));
-            let deadline = std::time::Instant::now() + KEY_LANDS;
-            loop {
+            // Without a focused text there is nothing to watch: waiting
+            // would only add `KEY_LANDS` to every key.
+            let deadline = Instant::now() + KEY_LANDS;
+            while before.is_some() {
                 std::thread::sleep(KEY / 4);
                 let now = self
                     .on_main(|_, window| synth::focused_text(window))
                     .flatten();
                 // An input that refuses the key (`maxLength`) never changes.
-                if now != before || std::time::Instant::now() >= deadline {
+                if now != before || Instant::now() >= deadline {
                     break;
                 }
             }

@@ -1,4 +1,4 @@
-import { type AnimatedValue, cleanup, computed, createAnimatedValue, createMotion, effect, type JSX, LayoutAnimation, Scroll, signal, Text, token, View } from "nsh";
+import { type AnimatedValue, cleanup, computed, createAnimatedValue, createMotion, Easing, effect, type JSX, LayoutAnimation, Scroll, signal, Text, token, View } from "nsh";
 import { Button as BaseButton, type CalendarItemState, Checkbox, Collapsible, Combobox, type DateMatcher, DatePicker, type DateRangePreset, NumberInput, OtpInput, type OtpInputRef, Progress, Radio, RadioGroup, Select, type SelectGroup, type SelectItemState, Slider, Switch, Tab, Tabs } from "nsh/base";
 import { reduceMotion } from "nsh";
 import { platform, windowSize } from "nsh";
@@ -19,10 +19,10 @@ import { alpha, Badge, Button, Caption, Card, colors, DemoPage, finish, focusRin
  * use: smaller controls, rows and type, whatever the window's width.
  */
 const size =
-  platform.idiom === "desktop"
+  platform.desktop
     ? { row: 40, padding: 6, gap: 10, label: 14, detail: 12, control: 16, corner: 5, check: 12, dot: 6, tabs: 30, line: 32, clear: 16, switch: "small" as const }
     : { row: 56, padding: 8, gap: 12, label: 15, detail: 13, control: 22, corner: 7, check: 16, dot: 8, tabs: 40, line: 44, clear: 20, switch: "regular" as const };
-const pointer = platform.idiom === "desktop";
+const pointer = platform.desktop;
 
 /** A control's row: the control and its label, the whole row pressable. */
 const row = (first: boolean) => ({
@@ -353,46 +353,6 @@ const rail = (height = 6) => ({ height, borderRadius: height / 2, overflow: "hid
 /** A bar's fill: the slider's citrus run, or a tone's color. */
 const fillOf = (height = 6, tone?: Tone) => (tone ? { height, borderRadius: height / 2, backgroundColor: toneColor(tone) } : { height, borderRadius: height / 2, ...sliderFill(0, 1) });
 
-/**
- * Where the selected item of a row (tabs, segments) lies, for an indicator
- * that travels to it as gpui-kit's tab bar's does (`motion.move`): each item
- * reports its place (`measure`, from its `onLayout`), and `left` and `width`
- * spring to the selected one's, from the row's outer edge. They are placed
- * at once on the first layout, as the row is resized and with reduced
- * motion.
- */
-function indicator(index: () => number) {
-  const spans = signal<{ x: number; width: number }[]>([]);
-  const span = () => spans()[index()];
-  const left = createAnimatedValue(0);
-  const width = createAnimatedValue(0);
-  let at = -1;
-  effect(() => {
-    const i = index();
-    const s = span();
-    if (!s) return;
-    const jump = at === -1 || at === i || reduceMotion();
-    at = i;
-    if (jump) {
-      left.set(s.x);
-      width.set(s.width);
-    } else {
-      left.spring(s.x, motion.move);
-      width.spring(s.width, motion.move);
-    }
-  });
-  return {
-    span,
-    left,
-    width,
-    measure(i: number, x: number, w: number) {
-      const next = spans().slice();
-      next[i] = { x, width: w };
-      spans.set(next);
-    },
-  };
-}
-
 /** The room a tab title's icon takes: the icon and the gap after it. */
 const ICON_ROOM = 14 + 6;
 
@@ -437,19 +397,23 @@ function TabTitle(props: { name: string; selected: boolean; count?: number; icon
  * The widths of a row of tab titles without their icons (`TabTitle`'s
  * `onWidth`, `report(i)`), and the row's width (`room`, from its
  * `onLayout`): what a row decides on its icons by. `widths()` is empty until
- * every title has reported.
+ * every title has reported. The widths are kept as reported and notify once
+ * all are in, then on each change: not once per report.
  */
 function titles(count: number) {
-  const bare = signal<number[]>([]);
+  const bare: number[] = [];
+  let reported = 0;
+  const changed = signal(0);
   const room = signal(0);
   return {
     room,
-    widths: () => (bare().filter((w) => w !== undefined).length === count ? bare() : []),
+    widths: () => (changed(), reported === count ? bare : []),
     report: (i: number) => (w: number) => {
-      if (Math.abs((bare()[i] ?? -1) - w) < 0.5) return;
-      const next = bare().slice();
-      next[i] = w;
-      bare.set(next);
+      const was = bare[i];
+      if (was !== undefined && Math.abs(was - w) < 0.5) return;
+      if (was === undefined) reported++;
+      bare[i] = w;
+      if (reported === count) changed.set(changed() + 1);
     },
   };
 }
@@ -1349,10 +1313,6 @@ export function Controls(props: { show: Control }) {
     // The track's padding and border: a tab is a pill inside them.
     const inset = 3;
     const inner = size.tabs - 2 * (inset + 1);
-    // The pill under the selected tab travels to the next one; the tabs
-    // share the track equally, so only its offset moves (placed inside the
-    // track's border).
-    const pill = indicator(() => SECTIONS.findIndex((s) => s.name === section()));
     const rows = settleOn(section);
     // The tabs share the track equally: icons show while every title fits
     // its share with its icon (a tab's border and padding are 14).
@@ -1364,6 +1324,8 @@ export function Controls(props: { show: Control }) {
     };
     return (
       <Card icon="controls" title="Tabs" subtitle="A section switcher: the app shows the selected one">
+        {/* The pill under the selected tab, inside the track's padding: the list's indicator, which the core places
+            on the selected tab and springs to the next one natively (gpui-kit's `spring_move`). */}
         <Tabs
           onLayout={({ bounds }) => sized.room.set(bounds.size.width)}
           style={{
@@ -1377,22 +1339,8 @@ export function Controls(props: { show: Control }) {
             backgroundColor: colors.inset,
             boxShadow: finish.track.boxShadow,
           }}
+          indicatorStyle={{ top: inset, bottom: inset, borderRadius: inner / 2, borderWidth: 1, ...finish.pill }}
         >
-          <View
-            style={{
-              pointerEvents: "none",
-              position: "absolute",
-              top: inset,
-              bottom: inset,
-              left: 0,
-              width: pill.span()?.width ?? 0,
-              opacity: pill.span() ? 1 : 0,
-              borderRadius: inner / 2,
-              borderWidth: 1,
-              ...finish.pill,
-              transform: [{ translateX: pill.left.sub(1) }],
-            }}
-          />
           <Each of={SECTIONS}>
             {(s, i) => (
               <Tab
@@ -1402,7 +1350,6 @@ export function Controls(props: { show: Control }) {
                   section.set(s().name);
                   last.set(`Tab: ${s().name}`);
                 }}
-                onLayout={({ bounds }) => pill.measure(i(), bounds.origin.x, bounds.size.width)}
                 style={{ flex: 1, paddingHorizontal: 6, borderRadius: inner / 2, borderWidth: 1, borderColor: "transparent", alignItems: "center", justifyContent: "center" }}
                 hoverStyle={s().disabled || section() === s().name ? undefined : hovered()}
                 focusStyle={focusRing()}
@@ -1430,12 +1377,7 @@ export function Controls(props: { show: Control }) {
   function Project() {
     const tab = signal("Issues");
     const shown = () => PROJECT.find((t) => t.name === tab())!;
-    const line = indicator(() => PROJECT.findIndex((t) => t.name === tab()));
     const rows = settleOn(tab);
-    // The underline is a bar `BASE` wide, moved to the selected tab's middle
-    // and stretched to its width: its edges travel together, as both values
-    // spring alike.
-    const BASE = 100;
     // Icons show while the whole strip fits the card with them (a tab's
     // border and padding are 18, 2 between tabs); without them it scrolls
     // when it still does not fit.
@@ -1451,21 +1393,12 @@ export function Controls(props: { show: Control }) {
         <View onLayout={({ bounds }) => sized.room.set(bounds.size.width)} style={{ marginHorizontal: -8 }}>
           <View style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 1, backgroundColor: colors.line }} />
           <Scroll horizontal scrollbar={false} style={{ flexGrow: 0 }}>
-            <Tabs style={{ flexDirection: "row", gap: 2, paddingTop: 3 }}>
-              <View
-                style={{
-                  pointerEvents: "none",
-                  position: "absolute",
-                  left: 0,
-                  bottom: 0,
-                  width: BASE,
-                  height: 2,
-                  borderRadius: 1,
-                  backgroundColor: colors.accent,
-                  opacity: line.span() ? 1 : 0,
-                  transform: [{ translateX: line.left.add(line.width.mul(0.5)).sub(BASE / 2) }, { scaleX: line.width.mul(1 / BASE) }],
-                }}
-              />
+            {/* The underline: the list's indicator at its bottom, as wide as the selected tab, which travels and
+                stretches to the next one natively. */}
+            <Tabs
+              style={{ flexDirection: "row", gap: 2, paddingTop: 3 }}
+              indicatorStyle={{ bottom: 0, height: 2, borderRadius: 1, backgroundColor: colors.accent }}
+            >
               <Each of={PROJECT}>
                 {(t, i) => (
                   <Tab
@@ -1475,7 +1408,6 @@ export function Controls(props: { show: Control }) {
                       tab.set(t().name);
                       last.set(`Project: ${t().name}`);
                     }}
-                    onLayout={({ bounds }) => line.measure(i(), bounds.origin.x, bounds.size.width)}
                     style={{ height: size.tabs, paddingHorizontal: 8, marginBottom: 4, borderRadius: radius.control, borderWidth: 1, borderColor: "transparent", justifyContent: "center" }}
                     hoverStyle={t().disabled || tab() === t().name ? undefined : hovered()}
                     activeStyle={pressed}
@@ -2919,13 +2851,17 @@ export function Controls(props: { show: Control }) {
       running.set(false);
     };
     cleanup(stop);
-    // The indeterminate bar's sweep: the app flips its translation, a
-    // transition moves it; it rests in the middle with reduced motion.
-    const end = signal(false);
-    const sweep = setInterval(() => {
-      if (!reduceMotion()) end.set(!end());
-    }, 800);
-    cleanup(() => clearInterval(sweep));
+    // The indeterminate bar's sweep: a third of the track crossing it and
+    // back (`sweep` from 0 to 1, times `travel`: the two thirds it crosses,
+    // from the bar's layout), looped natively, so no JS runs per crossing;
+    // it rests in the middle with reduced motion.
+    const sweep = createAnimatedValue(0);
+    const travel = createAnimatedValue(0);
+    effect(() => {
+      if (reduceMotion()) sweep.set(0.5);
+      else sweep.keyframes([0, 1], { duration: 800, easing: Easing.bezier(0.42, 0, 0.58, 1), iterations: "infinite", direction: "alternate" });
+    });
+    cleanup(() => void sweep.stop());
     const start = () => {
       if (sent() >= 100) sent.set(0);
       running.set(true);
@@ -2944,19 +2880,18 @@ export function Controls(props: { show: Control }) {
         <Progress
           value={props.value}
           indeterminate={props.indeterminate}
+          // The track spans the bar: the sweep crosses two thirds of it.
+          onLayout={props.indeterminate ? ({ bounds }) => travel.set((bounds.size.width * 2) / 3) : undefined}
           // The label row first: the children follow the track.
           style={{ ...row(!!props.first), flexDirection: "column-reverse", alignItems: "stretch", gap: size.padding }}
           // The slider's rail and fill, so a level and a transfer read alike.
           trackStyle={rail()}
           // Determinate, the fill glides to each new value (`glide`).
-          indicatorClass={
-            !props.indeterminate
-              ? glide
-              : reduceMotion()
-                ? "w-1/3 translate-x-full"
-                : `w-1/3 transition-transform duration-700 ease-in-out ${end() ? "translate-x-[200%]" : "translate-x-0"}`
-          }
-          indicatorStyle={{ ...fillOf(), translate: props.indeterminate ? undefined : remaining(props.value) }}
+          indicatorClass={props.indeterminate ? "w-1/3" : glide}
+          indicatorStyle={{
+            ...fillOf(),
+            ...(props.indeterminate ? { transform: [{ translateX: sweep.mul(travel) }] } : { translate: remaining(props.value) }),
+          }}
         >
           <View style={{ flexDirection: "row", alignItems: "center", gap: size.gap }}>
             <Label label={props.label} detail={props.detail} />

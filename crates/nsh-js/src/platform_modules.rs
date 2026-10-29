@@ -1,9 +1,9 @@
 //! The small runtime modules: `nsh/android`
 //! (`isAvailable`, `BackHandler.on("press", …)` over the registry's module),
 //! `nsh/ios` (`isAvailable`, `InputAccessoryView`), `nsh/mobile`
-//! (`isAvailable`, with the registry's `TabBar`), `nsh/webview` and
-//! `nsh/video` (their host elements as components, which the compiler
-//! makes in place for their tags), `nsh/native` (`nativeComponent`: the
+//! (`isAvailable`, with the registry's `TabBar`), `nsh`'s `WebView` and
+//! `Video` (their host elements as components, which the compiler makes
+//! in place for their tags), `nsh/native` (`nativeComponent`: the
 //! JS face of components the embedding app registers natively;
 //! `nativeModule`: the exports of a UI set it registers, reached by name at
 //! run time) and `nsh/host` (`available()` and the host's events over the
@@ -492,7 +492,7 @@ pub(crate) const IOS_TYPES: &str = r#"export interface InputAccessoryViewProps {
 }
 "#;
 
-/// `nsh/webview`.
+/// `nsh`'s `WebView`.
 pub(crate) const WEBVIEW_EXPORTS: &[Item] = &[(
     "WebView",
     Export::Value(|cx| dom::host_component(cx, "webview", false)),
@@ -502,17 +502,23 @@ pub(crate) const WEBVIEW_EXPORTS: &[Item] = &[(
     ),
 )];
 
-/// `nsh/webview`'s types.
+/// `WebView`'s types.
 pub(crate) const WEBVIEW_TYPES: &str = r#"export type { WebViewNavigation };
 
 export interface WebViewProps extends Omit<ViewProps, "children" | "ios" | "desktop" | "ref">, WebViewHostProps {
   ref?: WebViewRef | ((node: WebViewRef) => void);
-  ios?: IOSWebViewHostProps;
-  desktop?: DesktopWebViewHostProps;
+  ios?: IOSWebViewProps;
+  desktop?: DesktopWebViewProps;
 }
+
+/** A web view's iOS-only props: every element's and its own. */
+export interface IOSWebViewProps extends IOSProps, IOSWebViewHostProps {}
+
+/** A web view's desktop-only props: every element's and its own. */
+export interface DesktopWebViewProps extends DesktopProps, DesktopWebViewHostProps {}
 "#;
 
-/// `nsh/video`.
+/// `nsh`'s `Video`.
 pub(crate) const VIDEO_EXPORTS: &[Item] = &[(
     "Video",
     Export::Value(|cx| dom::host_component(cx, "video", false)),
@@ -522,7 +528,7 @@ pub(crate) const VIDEO_EXPORTS: &[Item] = &[(
     ),
 )];
 
-/// `nsh/video`'s types.
+/// `Video`'s types.
 pub(crate) const VIDEO_TYPES: &str = r#"export interface VideoProps extends Omit<ViewProps, "children" | "ref">, VideoHostProps {
   ref?: VideoRef | ((node: VideoRef) => void);
   src: string;

@@ -286,13 +286,16 @@ final class Mounter {
                     // `selectable`: 1 asked for, 0 refused, 2 unset (`encode.rs`).
                     int selectable = b.getInt();
                     Integer selectionColor = optColor(b);
-                    // The one color all of it is drawn in, if there is one.
-                    Integer uniformColor = optColor(b);
+                    // The one color all of it is drawn in, if there is one
+                    // (`opt_color`: a flag, then the color), unboxed: a text
+                    // updating live allocates nothing for it.
+                    boolean uniform = b.getInt() != 0;
+                    int uniformColor = b.getInt();
                     if (v instanceof TextBox) {
                         TextBox t = (TextBox) v;
                         t.setSelectable(selectable == 1, selectable == 0, selectionColor);
                         t.setLayout((Layout) layout, x * density, y * density, w * density, h * density);
-                        t.recolor(uniformColor, effects.get(t.id));
+                        t.recolor(uniform, uniformColor, effects.get(t.id));
                         t.setLinks(linkData, linkEvents);
                         if (links > 0 && t.press == null) t.press = new Pressable(t, this, t.id);
                         t.setClickable(links > 0 || (t.press != null && t.press.ownWanted()));
@@ -915,7 +918,9 @@ final class Mounter {
         }
         Box.Frame f = Box.frame(v);
         Transition t = layoutAnimation != null ? layoutAnimation[1] : null;
-        boolean moves = t != null && !created.contains(id) && f.right > f.left && f.bottom > f.top;
+        // A view never placed has no frame to move from; one placed zero
+        // high (a collapsed reveal) or zero wide grows from it, as on iOS.
+        boolean moves = t != null && !created.contains(id) && (f.right > f.left || f.bottom > f.top);
         int[] from = {f.left, f.top, f.right, f.bottom};
         int[] to = {px(x), px(y), px(x + w), px(y + h)};
         Animator running = layoutAnimators.get(id);
@@ -1474,6 +1479,7 @@ final class Mounter {
             Box box = (Box) v;
             box.pointerEvents = pointerEvents;
         }
+        if (v instanceof InputBox) ((InputBox) v).pointerEvents = pointerEvents;
         if (v instanceof TextBox) ((TextBox) v).a11y = a;
         a11y.put(id, a);
         a.apply(v);

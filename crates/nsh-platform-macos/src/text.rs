@@ -1146,7 +1146,8 @@ pub(crate) fn selectable(state: &crate::view::ViewState) -> bool {
     state.text.as_ref().is_some_and(|t| t.text.is_selectable())
 }
 
-/// Draws a text view's text (in `drawRect:`; the context is y down).
+/// Draws a text view's text (in its content layer's `drawLayer:inContext:`;
+/// the context is y down).
 pub(crate) fn draw(cx: &CGContext, state: &crate::view::ViewState) {
     use objc2_core_foundation::CGAffineTransform;
     let Some(drawn) = &state.text else { return };
@@ -1839,7 +1840,7 @@ pub(crate) fn clear(surface: &crate::surface::Surface) {
         select(&view, None);
     }
     surface.selection.set(None);
-    surface.selection.area.clear();
+    surface.selection.area.clear(surface);
 }
 
 /// The primary button went down: on `view`'s selectable text at `(x, y)`
@@ -1859,7 +1860,7 @@ pub(crate) fn selection_down(
 ) {
     let view = view.filter(|v| selectable(&v.state()));
     // A press outside the area that has the selection.
-    surface.selection.area.clear();
+    surface.selection.area.clear(surface);
     if surface.selection.get().as_ref() != view {
         clear(surface);
     }
@@ -2002,7 +2003,7 @@ pub(crate) fn copy(surface: &crate::surface::Surface) -> bool {
 /// Selects all of the last pressed selectable text or selectable view (the
 /// Edit menu's Select All). False if there is none.
 pub(crate) fn select_all(surface: &crate::surface::Surface) -> bool {
-    if surface.selection.area.select_all() {
+    if surface.selection.area.select_all(surface) {
         return true;
     }
     let Some(view) = surface.selection.get() else {
@@ -2423,7 +2424,10 @@ mod hit_regressions {
             line_height: Points(32.0),
             ..Default::default()
         };
-        text.push("one two three four five six seven eight nine ten", text_style);
+        text.push(
+            "one two three four five six seven eight nine ten",
+            text_style,
+        );
         let prepared = engine.prepare(&text);
         let size = engine.measure(&prepared, Some(Points(80.0)));
         let layout = engine.layout(&prepared, size);
@@ -2459,7 +2463,10 @@ mod hit_regressions {
             line_height: Points(17.0 * 1.7),
             ..Default::default()
         };
-        text.push("\u{8bbe}\u{8ba1}\u{ff09}\u{ff0c}\u{6539}\u{540d}/\u{88c1}\u{526a}\u{5fc5}\u{987b}", style);
+        text.push(
+            "\u{8bbe}\u{8ba1}\u{ff09}\u{ff0c}\u{6539}\u{540d}/\u{88c1}\u{526a}\u{5fc5}\u{987b}",
+            style,
+        );
         let prepared = engine.prepare(&text);
         let size = engine.measure(&prepared, None);
         let layout = engine.layout(&prepared, size);
