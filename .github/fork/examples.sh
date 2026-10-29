@@ -31,7 +31,7 @@ case "$target" in
   macos)
     gallery=(device dock error-boundary form gestures hover links list-search mention navigation
       photos press resizable shaders shortcuts storage timers)
-    filtered=("environment appearance" "toasts a toast shows" "toasts its action"
+    filtered=("environment appearance" "toasts a toast shows" "toasts an undo restores"
       "toasts its close button" "toasts at most three" "toasts a swipe")
     ;;
   # Left out: context-menu (the menu is not reported), controls (the
