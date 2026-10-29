@@ -9,9 +9,10 @@
 //!
 //! What a view looks like is mostly Core Animation: its layer's background,
 //! corners, border and shadow, and sublayers for the rest
-//! ([`crate::decor`]). Text and canvas drawings are drawn into the layer by
-//! `drawRect:` (CoreText / Core Graphics); other views use `updateLayer`
-//! and get no backing store.
+//! ([`crate::decor`]). Every view uses `updateLayer` and gets no backing
+//! store; text and canvas drawings (CoreText / Core Graphics) go into a
+//! content sublayer whose delegate draws them (`drawLayer:inContext:`,
+//! [`NshView::redraw`]).
 //!
 //! Children are subviews of the view, or of its container when it has one:
 //! scroll views always do, and a view that clips its children and casts a
@@ -115,9 +116,9 @@ pub(crate) struct ViewState {
     /// Touch, accessibility and test properties.
     pub(crate) props: Box<ViewProps>,
     /// States to report (`TrackStates`), and the current ones.
-    pub(crate) tracked: u8,
+    pub(crate) tracked: u16,
     /// Current interaction states (pressed, hovered, focused).
-    pub(crate) states: u8,
+    pub(crate) states: u16,
     /// Extra translation (sticky list cells, screen transitions).
     pub(crate) shift: (f32, f32),
     /// Extra opacity (screen and modal transitions).
@@ -130,7 +131,7 @@ pub(crate) struct ViewState {
     pub(crate) image: Option<crate::image::ImageState>,
     /// Canvas content.
     pub(crate) canvas: Option<crate::canvas::CanvasState>,
-    /// What a shader view draws.
+    /// What a shader draws under the children ([`crate::shader`]).
     pub(crate) shader: Option<crate::shader::ShaderState>,
     /// Text field (input views).
     pub(crate) input: Option<std::rc::Rc<crate::text_input::InputState>>,
@@ -191,16 +192,6 @@ impl ViewState {
         self.anim.opacity.unwrap_or(self.style.opacity) * self.fade * live * filters
     }
 
-    /// Its shadow, with animated color, opacity and radius.
-    pub(crate) fn shadow(&self) -> nsh_core::Shadow {
-        let mut s = self.style.shadow;
-        let a = &self.anim;
-        s.color = a.shadow_color.unwrap_or(s.color);
-        s.opacity = a.shadow_opacity.unwrap_or(s.opacity);
-        s.radius = a.shadow_radius.unwrap_or(s.radius);
-        s
-    }
-
     /// Its borders, with an animated color.
     pub(crate) fn borders(&self) -> nsh_core::Borders {
         let mut b = self.style.borders;
@@ -224,7 +215,7 @@ impl ViewState {
             )
     }
 
-    /// True if it draws content with `drawRect:` (text, canvas).
+    /// True if it draws content into its content layer (text, canvas).
     pub(crate) fn draws(&self) -> bool {
         self.text.is_some() || self.canvas.is_some()
     }
@@ -1062,7 +1053,7 @@ impl NshView {
         self.ivars().state.borrow_mut()
     }
 
-    /// Its state, to change, unless it is in use.
+    /// Its state, to change, unless it is borrowed.
     pub(crate) fn try_state_mut(&self) -> Option<RefMut<'_, ViewState>> {
         self.ivars().state.try_borrow_mut().ok()
     }
@@ -1123,7 +1114,7 @@ impl NshView {
     }
 
     /// Sizes the container to the view's bounds.
-    pub(crate) fn size_container(&self) {
+    fn size_container(&self) {
         if let Some(c) = &*self.ivars().container.borrow() {
             let f = self.state().frame;
             let origin = crate::scroll::bounds_origin(self);
@@ -1174,7 +1165,6 @@ impl NshView {
         if let Some(layer) = c.layer() {
             layer.setSublayerTransform(IDENTITY);
         }
-        crate::shader::ui_changed(self);
     }
 
     /// Something it draws changed: content (text, canvas) is drawn again
@@ -1182,7 +1172,6 @@ impl NshView {
     pub(crate) fn changed(&self) {
         self.restyle();
         self.redraw();
-        // Shader effects around it and backdrops show it in a picture.
         crate::shader::ui_changed(self);
     }
 
@@ -1211,9 +1200,6 @@ impl NshView {
         if let Some(layer) = self.content_layer() {
             layer.setNeedsDisplay();
         }
-        // An effect's picture of it is taken again (it may have been put
-        // off while out of sight, `Mounter::draw_when_shown`).
-        crate::shader::ui_changed(self);
     }
 
     /// The layer its content is drawn in (made on first use).
@@ -1250,24 +1236,13 @@ impl NshView {
     }
 
     /// The scale of its window's backing (2 before it has one).
-    pub(crate) fn backing_scale(&self) -> CGFloat {
+    fn backing_scale(&self) -> CGFloat {
         self.ns().window().map_or(2.0, |w| w.backingScaleFactor())
-    }
-
-    /// A weak reference to it.
-    pub(crate) fn downgrade(&self) -> objc2::rc::Weak<ViewObj> {
-        objc2::rc::Weak::from_retained(&self.0)
-    }
-
-    /// The view of a weak reference, while it lives.
-    pub(crate) fn upgrade(weak: &objc2::rc::Weak<ViewObj>) -> Option<NshView> {
-        weak.load().map(NshView)
     }
 
     /// Its window or screen changed: the content layer draws at the new
     /// scale.
     fn rescale(&self) {
-        crate::shader::resized(self);
         if let Some((layer, _)) = &*self.ivars().content.borrow() {
             let scale = self.backing_scale();
             if layer.contentsScale() != scale {
@@ -1280,6 +1255,7 @@ impl NshView {
     /// Part of what it draws changed (`rect`, in its own coordinates, y
     /// down): only that is drawn again (a canvas's animated values).
     pub(crate) fn redraw_rect(&self, rect: nsh_core::Bounds<nsh_core::Points>) {
+        crate::shader::ui_changed(self);
         let Some(layer) = self.content_layer() else {
             return;
         };
@@ -1367,7 +1343,6 @@ impl NshView {
                 // A new size draws it again (`needsDisplayOnBoundsChange`).
                 layer.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), rect.size));
             }
-            crate::shader::resized(self);
         }
         self.set_layer_geometry();
     }
@@ -1423,15 +1398,6 @@ impl NshView {
             sup = superview(&sup)?;
         }
         NshView::from_ns(&sup)
-    }
-
-    /// The surface of the root view it is in, if it is in one.
-    pub(crate) fn surface(&self) -> Option<std::rc::Rc<Surface>> {
-        let mut view = self.clone();
-        while let Some(parent) = view.parent_view() {
-            view = parent;
-        }
-        view.ivars().surface.borrow().upgrade()
     }
 
     /// Whether it is in a parent view.

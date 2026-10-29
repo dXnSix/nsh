@@ -25,6 +25,7 @@ fn config(app: App) -> EngineConfig {
         viewport: Size::new(px(390.0), px(844.0)),
         trace: false,
         network: None,
+        refuse_connections: None,
         websocket: None,
         filesystem: None,
         assets: None,

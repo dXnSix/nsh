@@ -30,6 +30,7 @@ fn hairline() -> f32 {
 fn field(focused: Signal<bool>) -> Input {
     input()
         .placeholder_color(|| color(colors::FAINT))
+        .caret_color(|| color(colors::ACCENT))
         .selection_color(|| color(colors::ACCENT))
         .h(px(48.0))
         .px(px(14.0))
@@ -628,8 +629,8 @@ fn PlatformInfo() -> impl IntoElement {
         ("platform.os", os.name().into_reactive()),
         ("platform.version", version.into_reactive()),
         (
-            "platform.idiom / catalyst",
-            format!("{idiom_name} / {}", idiom == Idiom::Mac).into_reactive(),
+            "platform.idiom / desktop / catalyst",
+            format!("{idiom_name} / {} / {}", is_desktop(), is_catalyst()).into_reactive(),
         ),
         ("platform.select", branch.into_reactive()),
         (

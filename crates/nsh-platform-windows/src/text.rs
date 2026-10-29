@@ -2054,7 +2054,7 @@ pub(crate) struct DrawnText {
     pub(crate) layout: TextLayout,
     /// Where the layout goes inside the view.
     pub(crate) content: Bounds<Points>,
-    /// The selection of `selectable` text, kept across new content.
+    /// The selection of selectable text, kept across new content.
     selection: Option<Rc<Selection>>,
     /// The part of a selectable view's selection in this text (UTF-16,
     /// `start < end`), which [`crate::selectable_view`] sets.
@@ -2472,7 +2472,13 @@ pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
             draw_shadow(cx, &res, drawn, layout, shadow);
         }
     }
-    painter.paint(&drawn.text, layout, ox, oy, state.anim.color);
+    // An animated color, or a transition of the text's color, over the
+    // runs' own.
+    let color = state
+        .anim
+        .color
+        .or_else(|| state.live.as_ref()?.text_color());
+    painter.paint(&drawn.text, layout, ox, oy, color);
 }
 
 /// Draws a blurred text shadow: the glyphs recorded into a command list
@@ -2611,7 +2617,7 @@ enum Unit {
     Paragraph,
 }
 
-/// The range selection of a `selectable` text view, desktop style: a mouse
+/// The range selection of a selectable text view, desktop style: a mouse
 /// drag selects characters, a double click words and a triple click the
 /// paragraph (and drags on by them), Shift+click extends, Ctrl+C copies,
 /// Ctrl+A selects all, Escape or a press anywhere else clears. Offsets are

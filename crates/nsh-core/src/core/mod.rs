@@ -1,11 +1,14 @@
 mod classes;
 mod components;
+mod follow;
+mod layout_scope;
 mod layout_tree;
 mod list;
 mod measure;
 mod overlay;
 mod parent_viewport;
 mod renders;
+mod scrollbars;
 mod services;
 mod slots;
 mod sticky;
@@ -13,6 +16,7 @@ mod sticky;
 mod tests;
 mod touch;
 mod views;
+mod watch;
 
 use std::{rc::Rc, sync::Arc};
 
@@ -34,10 +38,10 @@ use crate::{
     ops::{
         CellSlot, Command, EventKind, EventMask, EventPayload, HeaderSlot, ImageProp, ImageSource,
         KeyboardDismissMode, ModalAnimation, ModalProp, NativeProp, NodeId, Op, PayloadValue, Prop,
-        ROOT_ID, ResizeMode, ScreenAnimation, ScreenProp, ScreenTransition, ScrollProp, Tag,
+        ROOT_ID, ResizeMode, ScreenAnimation, ScreenProp, ScrollProp, Tag,
     },
     props::{AccessibilityProp, EdgeInsets, GestureValues, LayoutAnimation, ViewProps},
-    style::{Color, EllipsizeMode, PaintStyle, Style, StylePatch, TextAlign, TextStyle, ViewStyle},
+    style::{Color, PaintStyle, Style, StylePatch, TextAlign, TextStyle, ViewStyle},
     tailwind::{ClassEnvironment, ClassList, ClassProps, Tailwind},
     text::{AttributedText, MeasureCache, ResolvedTextStyle, TextEngine, TextLayout},
 };
@@ -46,10 +50,18 @@ use crate::{
 /// id -> key indirection on hot paths.
 type Key = u32;
 
+/// A view's built-in scroll bar (`scrollbars.rs`) and the theme of its own
+/// it was made with.
+type Bar = (NodeId, Option<Arc<crate::JsonValue>>);
+
 const NO_KEY: Key = Key::MAX;
 
 /// Rounds of binding the components' own lists per commit, at most.
 const MAX_VIRTUAL_ROUNDS: u32 = 8;
+/// The longest run without a line-break opportunity a multiline input's value is
+/// measured with unbroken (`broken_runs`): longer than a line of any input,
+/// so ordinary text measures as it is shown.
+const MEASURED_RUN: usize = 1024;
 /// Dirty flags, processed once per commit.
 mod dirty {
     /// Emit [`crate::MountItem::ViewStyle`].
@@ -91,8 +103,10 @@ mod dirty {
     /// Emit [`crate::MountItem::AccessibilityLabel`] (unless
     /// [`VIEW_PROPS`] sends everything).
     pub(super) const LABEL: u32 = 1 << 18;
-    /// Emit [`crate::MountItem::Shader`] (and its program, the first time).
+    /// Emit [`crate::MountItem::Shader`].
     pub(super) const SHADER: u32 = 1 << 19;
+    /// Emit [`crate::MountItem::NavShader`].
+    pub(super) const NAV_SHADER: u32 = 1 << 20;
 }
 
 /// A layout root other than the surface's: screens, modals and header
@@ -113,13 +127,8 @@ struct RootState {
     screen: ScreenConfig,
     /// Modal options (modals).
     modal: ModalConfig,
-    /// A page's or a dialog's transition through a shader (`animation`),
-    /// made into [`ScreenConfig::shader`] / `modal_shader` when they are
-    /// sent ([`Core::nav_shader`]).
-    shader_animation: Option<Arc<crate::shader::ShaderAnimation>>,
-    /// A dialog's transition through a shader, sent with its options
-    /// ([`MountItem::ModalConfig`]).
-    modal_shader: Option<crate::NavShader>,
+    /// `transitionShader` (screens and modals), as the platform gets it.
+    nav_shader: Option<crate::NavShader>,
     /// Where a header item goes (header items).
     slot: HeaderSlot,
     /// `nativeID` (input accessories).
@@ -136,18 +145,10 @@ struct RootState {
 /// Paragraph settings of a text block (or input).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Paragraph {
-    /// `numberOfLines`; 0 means no limit.
-    lines: u32,
-    /// `ellipsizeMode`.
-    ellipsize: EllipsizeMode,
     /// `allowFontScaling`.
     allow_font_scaling: bool,
     /// `maxFontSizeMultiplier`; 0 means no limit.
     max_font_multiplier: f32,
-    /// `ellipsizeMode` was set (it then wins over classes).
-    ellipsize_set: bool,
-    /// `selectable` as set (it wins over `select-*` classes).
-    selectable: Option<bool>,
     /// `selectionColor` of selectable text.
     selection_color: Option<crate::Color>,
     /// `adjustsFontSizeToFit`.
@@ -159,12 +160,8 @@ struct Paragraph {
 impl Default for Paragraph {
     fn default() -> Self {
         Self {
-            lines: 0,
-            ellipsize: EllipsizeMode::Tail,
             allow_font_scaling: true,
             max_font_multiplier: 0.0,
-            ellipsize_set: false,
-            selectable: None,
             selection_color: None,
             fit: false,
             min_font_scale: 0.0,
@@ -202,15 +199,11 @@ enum Kind {
     HeaderItem,
     InputAccessory,
     Canvas,
-    Shader,
-    ShaderEffect,
-    ShaderTransition,
-    ScreenEffect,
-    ScreenTransition,
     WebView,
     Video,
     Native,
     Overlay,
+    Shader,
 }
 
 impl Kind {
@@ -229,8 +222,6 @@ impl Kind {
                 | Kind::InputAccessory
                 | Kind::Overlay
                 | Kind::Shader
-                | Kind::ShaderEffect
-                | Kind::ShaderTransition
         )
     }
 
@@ -254,15 +245,14 @@ impl Kind {
             Kind::HeaderItem => ViewKind::HeaderItem,
             Kind::InputAccessory => ViewKind::InputAccessory,
             Kind::Canvas => ViewKind::Canvas,
-            Kind::Shader => ViewKind::Shader,
-            Kind::ShaderEffect => ViewKind::ShaderEffect,
-            Kind::ShaderTransition => ViewKind::ShaderTransition,
-            Kind::ScreenEffect => ViewKind::ScreenEffect,
-            Kind::ScreenTransition => ViewKind::ScreenTransition,
             Kind::WebView => ViewKind::WebView,
             Kind::Video => ViewKind::Video,
             Kind::Native => ViewKind::Native,
-            Kind::View | Kind::Cell | Kind::RawText | Kind::Overlay => ViewKind::View,
+            // A shader's view is a view the platform draws its layer in
+            // (`MountItem::Shader`), under its children.
+            Kind::View | Kind::Cell | Kind::RawText | Kind::Overlay | Kind::Shader => {
+                ViewKind::View
+            }
         }
     }
 
@@ -283,15 +273,15 @@ impl Kind {
             Tag::HeaderItem => Kind::HeaderItem,
             Tag::InputAccessory => Kind::InputAccessory,
             Tag::Canvas => Kind::Canvas,
-            Tag::Shader => Kind::Shader,
-            Tag::ShaderEffect => Kind::ShaderEffect,
-            Tag::ShaderTransition => Kind::ShaderTransition,
-            Tag::ScreenEffect => Kind::ScreenEffect,
-            Tag::ScreenTransition => Kind::ScreenTransition,
             Tag::WebView => Kind::WebView,
             Tag::Video => Kind::Video,
             Tag::Native => Kind::Native,
             Tag::Overlay => Kind::Overlay,
+            Tag::Shader
+            | Tag::ShaderEffect
+            | Tag::ShaderTransition
+            | Tag::ScreenEffect
+            | Tag::ScreenTransition => Kind::Shader,
         }
     }
 
@@ -305,56 +295,7 @@ impl Kind {
                 | Kind::Screen
                 | Kind::Modal
                 | Kind::Overlay
-                | Kind::ScreenEffect
-                | Kind::ScreenTransition
         )
-    }
-}
-
-/// How long a shader transition runs without a `duration`.
-const DEFAULT_TRANSITION_MS: f32 = 300.0;
-
-/// How long a page's or a dialog's shader transition runs without a
-/// `duration`: as long as the desktops' slide.
-const DEFAULT_NAV_SHADER_MS: f32 = 350.0;
-
-/// A shader view's (or effect's) source, uniforms and progress, and what
-/// was made of them.
-#[derive(Debug, Default)]
-struct ShaderState {
-    source: Option<crate::shader::ShaderSource>,
-    uniforms: crate::shader::Uniforms,
-    progress: crate::shader::ShaderNumber,
-    /// An effect's `maxSampleOffset`.
-    max_offset: Points,
-    /// A transition's `value`, `duration` (milliseconds) and `fallback`.
-    key: crate::shader::TransitionKey,
-    duration: Option<f32>,
-    fallback: crate::shader::TransitionFallback,
-    /// The `value` its children showed as of the last commit (`None`
-    /// before the first): a commit that changes it starts the transition.
-    shown: Option<crate::shader::TransitionKey>,
-    /// The uniforms packed for the source's program.
-    packed: crate::shader::Packed,
-    /// What the view was last sent.
-    sent: Option<Arc<crate::shader::ShaderFill>>,
-}
-
-impl ShaderState {
-    /// Packs the uniforms for the source again: whether the animated
-    /// values it binds changed.
-    fn repack(&mut self, id: NodeId) -> bool {
-        let packed = match &self.source {
-            Some(source) => crate::shader::pack(
-                source.shader.reflection(),
-                &self.uniforms,
-                &mut |w| log::warn!(target: "js", "<Shader> (node {id}): {w}"),
-            ),
-            None => crate::shader::Packed::default(),
-        };
-        let rebound = packed.bindings != self.packed.bindings;
-        self.packed = packed;
-        rebound
     }
 }
 
@@ -387,7 +328,9 @@ impl ComponentState {
 #[derive(Debug)]
 struct ScrollState {
     horizontal: bool,
-    scrollbar_visible: bool,
+    scrollbar: crate::ScrollbarSetting,
+    /// Its built-in bar ([`Core::sync_scrollbars`]).
+    bar: Option<Bar>,
     refreshing: bool,
     scroll_value: Option<crate::animation::NodeId>,
     pull_value: Option<crate::animation::NodeId>,
@@ -431,7 +374,8 @@ impl Default for ScrollState {
         Self {
             horizontal: false,
             // React Native shows scroll indicators by default.
-            scrollbar_visible: true,
+            scrollbar: crate::ScrollbarSetting::Shown,
+            bar: None,
             refreshing: false,
             scroll_value: None,
             pull_value: None,
@@ -471,12 +415,72 @@ struct InputState {
     /// by the placeholder text's `layout_hash`: what `onContentSizeChange`
     /// reports for an empty input.
     empty_line: Option<(u64, Size<Points>)>,
+    /// `scrollbar`: a multiline input's bar.
+    scrollbar: crate::ScrollbarSetting,
+    /// Its built-in bar ([`Core::sync_scrollbars`]), beside it.
+    bar: Option<Bar>,
+    /// How far the platform scrolled its text, while it has a built-in
+    /// bar ([`Core::set_input_scroll`]).
+    scroll: Option<InputScroll>,
+}
+
+/// A multiline input's scrolling, as its platform reports it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct InputScroll {
+    offset: Point<Points>,
+    content: Size<Points>,
+    viewport: Size<Points>,
+}
+
+/// A shader node's props and the layer they make.
+#[derive(Debug, Default)]
+struct ShaderNode {
+    /// `source`, as JS set it.
+    source: Option<Arc<str>>,
+    /// The program: `source` compiled, or what Rust set.
+    shader: Option<crate::shader::Shader>,
+    uniforms: crate::shader::ShaderUniforms,
+    paused: bool,
+    /// What the layer draws: the element it is (`Shader`, `ShaderEffect`, ...).
+    role: crate::shader::ShaderRole,
+    /// `progress` (effects).
+    progress: crate::shader::ShaderProgress,
+    /// `maxSampleOffset` (effects and transitions).
+    overflow: Points,
+    /// `value` (transitions), and the one the transition last showed
+    /// (`None` before the first: it starts no transition).
+    value: Option<crate::shader::TransitionKey>,
+    shown: Option<crate::shader::TransitionKey>,
+    /// `duration` in milliseconds (transitions).
+    duration: Option<f32>,
+    /// `fallback` (transitions).
+    fallback: crate::TransitionFallback,
+    /// What the platform shows (`None`: nothing, as a view).
+    layer: Option<Arc<crate::shader::ShaderLayer>>,
+}
+
+/// How long a shader transition runs by default.
+const DEFAULT_TRANSITION_MS: f32 = 300.0;
+
+/// How long a page's or a dialog's `transitionShader` runs by default.
+const DEFAULT_NAV_SHADER_MS: f32 = 350.0;
+
+/// The role of a shader element's layer.
+fn shader_role(tag: Tag) -> Option<crate::shader::ShaderRole> {
+    use crate::shader::ShaderRole as R;
+    Some(match tag {
+        Tag::Shader => R::Fill,
+        Tag::ShaderEffect => R::Effect,
+        Tag::ShaderTransition => R::Transition,
+        Tag::ScreenEffect => R::Screen,
+        Tag::ScreenTransition => R::ScreenTransition,
+        _ => return None,
+    })
 }
 
 #[derive(Debug, Default)]
 struct ImageState {
     source: Option<ImageSource>,
-    resize_mode: ResizeMode,
     options: crate::mount::ImageOptions,
 }
 
@@ -500,23 +504,23 @@ struct Node {
     animated: Vec<(AnimationProp, crate::animation::NodeId)>,
     /// What a canvas draws.
     drawing: Option<Arc<crate::canvas::Drawing>>,
-    /// What a shader view draws.
-    shader: Option<Box<ShaderState>>,
+    /// A shader's program, uniforms and layer.
+    shader: Option<Box<ShaderNode>>,
     /// The `style` prop as written, applied over the class styles.
     inline_style: StylePatch,
     /// `class` / `classList` as set.
     class_names: Option<Box<classes::ClassNames>>,
     /// Their parsed form.
-    classes: Option<Arc<ClassList>>,
+    classes: Option<std::rc::Rc<ClassList>>,
     /// Node props the classes set.
     class_props: Option<Box<ClassProps>>,
     /// Interaction states (`tailwind::state` bits).
-    states: u8,
+    states: u16,
     /// States the platform reports for the view.
-    tracked: u8,
+    tracked: u16,
     /// States it shows as a part of a control (`Prop::ProjectedStates`):
     /// its classes read them with its own, nothing else does.
-    projected: u8,
+    projected: u16,
     /// What only some nodes have: state styles, the styles of a page's
     /// header or a list's content ([`classes::NodeParts`]).
     parts: Option<Box<classes::NodeParts>>,
@@ -541,6 +545,13 @@ struct Node {
     wants_fixed: bool,
     /// A view made an overlay by `position: fixed` (`overlay.rs` `fix_view`).
     fixed_view: bool,
+    /// The built-in bar of the scroll view it is in (`scrollbars.rs`): laid
+    /// out on its own over the viewport, not one of the view's children
+    /// for their classes.
+    decoration: bool,
+    /// The multiline input a built-in bar is beside, at its frame and just
+    /// above it (a bar of a scroll view draws above all of its children).
+    beside: Key,
     /// What its view takes from the `pointer-events-*` classes around it
     /// (`classes.rs` `update_pointer_events`); an explicit prop wins.
     class_pointer: crate::props::PointerEvents,
@@ -550,6 +561,11 @@ struct Node {
     /// `position: sticky`: its insets, where it sticks in the viewport of
     /// the scroll view around it ([`Core::update_sticky_views`]).
     sticky: Option<Box<taffy::Rect<taffy::LengthPercentageAuto>>>,
+    /// The element its frame follows (`View::follow`, `follow.rs`).
+    follow: Option<Box<follow::Following>>,
+    /// `objectFit` (and the `object-*` classes): how its image or video
+    /// fits its box.
+    object_fit: Option<ResizeMode>,
     /// The inset padding and margin components set: added to the style's.
     insets: Option<Box<[EdgeInsets; 2]>>,
     /// Its padding's and margin's `env()` terms and the insets they came
@@ -601,6 +617,17 @@ struct Node {
     text_queued: bool,
     /// A list cell whose subtree was laid out again this commit.
     relaid: bool,
+    /// Where its layout root had the origin of the view around it (its
+    /// containing block), unrounded, and the pixel ratio, when its frame and
+    /// its subtree's were last emitted: while nothing in the subtree is laid
+    /// out anew, a move of that origin by whole device pixels leaves every
+    /// frame in it as it was ([`Core::emit_frames_in`]). `None` until
+    /// emitted, or once they must be emitted again.
+    emitted: Option<(taffy::Point<f32>, f32)>,
+    /// A view in its subtree is placed in a containing block above it (a
+    /// fixed one, or an absolute one in a static parent), so a move of the
+    /// subtree can move it in its parent.
+    escapes: bool,
     /// A list cell without an item, until the list places it again: it
     /// still shows its last row, so it is hidden from sight, touches and
     /// assistive technology ([`Core::set_spare`]).
@@ -623,7 +650,34 @@ impl Node {
     }
 
     fn is_layout_root(&self) -> bool {
-        self.kind.is_root() || self.fixed_view
+        self.kind.is_root() || self.fixed_view || self.decoration
+    }
+
+    /// Its `scrollbar`, for a view that may show a built-in bar.
+    fn scrollbar_setting(&self) -> Option<&crate::ScrollbarSetting> {
+        match (&self.scroll, &self.input) {
+            (Some(scroll), _) => Some(&scroll.scrollbar),
+            (None, Some(input)) => Some(&input.scrollbar),
+            _ => None,
+        }
+    }
+
+    /// Its built-in bar.
+    fn bar(&self) -> Option<&Bar> {
+        match (&self.scroll, &self.input) {
+            (Some(scroll), _) => scroll.bar.as_ref(),
+            (None, Some(input)) => input.bar.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Where its built-in bar is kept, for a view that may show one.
+    fn bar_slot(&mut self) -> Option<&mut Option<Bar>> {
+        match (&mut self.scroll, &mut self.input) {
+            (Some(scroll), _) => Some(&mut scroll.bar),
+            (None, Some(input)) => Some(&mut input.bar),
+            _ => None,
+        }
     }
 
     /// The listeners as platforms take them: a `disabled` view takes no
@@ -646,16 +700,20 @@ impl Node {
         }
         // A disabled view still shows its hint, as the desktops' do.
         if self.overlay_watched & overlay::watch::HINT != 0 {
-            events.set(EventKind::HoverIn, true);
-            events.set(EventKind::HoverOut, true);
+            events.set(EventKind::MouseEnter, true);
+            events.set(EventKind::MouseLeave, true);
         }
         events
     }
 
     /// Where its native view goes among its siblings': by `zIndex`, then a
     /// sticky view above the others (as above a page's in-flow boxes),
-    /// then in order.
+    /// then in order; a built-in scroll bar above all of them (a list's
+    /// sticky headers included), as it draws over the viewport.
     fn stack_rank(&self) -> (i32, bool) {
+        if self.decoration && self.beside == NO_KEY {
+            return (i32::MAX, true);
+        }
         (self.z_index, self.sticky.is_some())
     }
 
@@ -724,15 +782,7 @@ impl Node {
             paint: None,
             animated: Vec::new(),
             drawing: None,
-            shader: matches!(
-                kind,
-                Kind::Shader
-                    | Kind::ShaderEffect
-                    | Kind::ShaderTransition
-                    | Kind::ScreenEffect
-                    | Kind::ScreenTransition
-            )
-            .then(Box::default),
+            shader: matches!(kind, Kind::Shader).then(Box::default),
             inline_style: StylePatch::default(),
             class_names: None,
             classes: None,
@@ -751,9 +801,13 @@ impl Node {
             color_queued: false,
             wants_fixed: false,
             fixed_view: false,
+            decoration: false,
+            beside: NO_KEY,
             class_pointer: crate::props::PointerEvents::Auto,
             pointer_auto_inside: false,
             sticky: None,
+            follow: None,
+            object_fit: None,
             insets: None,
             env: None,
             events: EventMask::default(),
@@ -791,6 +845,8 @@ impl Node {
             queued: false,
             text_queued: false,
             relaid: false,
+            emitted: None,
+            escapes: false,
             spare: false,
         }
     }
@@ -941,14 +997,39 @@ pub struct Core<M: TextEngine> {
     sticky_nodes: Vec<Key>,
     /// The scroll views their ranges were last sent to.
     sticky_scrollers: Vec<Key>,
+    /// What makes the views' bars when the app draws them with the
+    /// built-in one ([`Core::set_builtin_scrollbars`]).
+    builtin_scrollbars: Option<(crate::element::ScrollbarSource, crate::element::AnyValue)>,
+    /// Scroll views and lists whose built-in bar may come or go
+    /// ([`Core::sync_scrollbars`]).
+    scrollbars_pending: Vec<Key>,
+    /// Canvases fitting a view box into their box
+    /// ([`crate::canvas::ViewPaint::Fit`]) to send once this round's
+    /// layout gave them their size ([`Core::send_fitted`]).
+    fitted_pending: Vec<Key>,
+    /// Scroll views and lists that show a built-in bar.
+    decorated: Vec<Key>,
     /// Sticky views came, went or moved: their ranges are worked out
     /// again.
     sticky_changed: bool,
+    /// Views whose frame follows an element's ([`Core::place_followers`]).
+    followers: Vec<Key>,
+    /// What they follow, or frames around them, changed since they were
+    /// placed.
+    follow_changed: bool,
     /// The warning about `bottom` / `right` sticky insets was logged.
     sticky_warned: bool,
     /// The warning about animated insets of views that are not sticky, or
     /// on the axis their scroll view does not scroll, was logged.
     inset_warned: bool,
+    /// Compiled shaders by the hash of their source, with their errors
+    /// (an app setting the same source again compiles it once).
+    shaders: rustc_hash::FxHashMap<u64, Result<crate::shader::Shader, crate::shader::ShaderError>>,
+    /// Shader transitions this commit starts ([`MountItem::ShaderTransition`]),
+    /// put first in its batch.
+    transition_starts: Vec<MountItem>,
+    /// The shader views whose layers read pictures (`sample_content`, ...).
+    pictured: rustc_hash::FxHashSet<NodeId>,
     /// Live screens, modals and header items.
     roots: Vec<Key>,
     /// Attached input accessories by `nativeID`.
@@ -960,6 +1041,8 @@ pub struct Core<M: TextEngine> {
     /// headers under the status bar).
     safe_area: EdgeInsets,
     list_binds: Vec<ListBind>,
+    /// The lists keeping items rendered for [`Core::set_kept`].
+    kept_lists: Vec<Key>,
     /// The runtime's lists with overscan cells waiting to bind
     /// ([`Core::take_paced_list_binds`]), in the order they asked.
     paced_lists: Vec<NodeId>,
@@ -970,6 +1053,9 @@ pub struct Core<M: TextEngine> {
     events: Vec<crate::element::JsEvent>,
     /// Reused buffer of `(item index, cell)` for list updates.
     cells_scratch: Vec<(u32, Key)>,
+    /// The list cells whose content waits for the app's render functions
+    /// this round (sorted; [`Core::cells_awaiting_renders`]): not measured.
+    awaiting_renders: Vec<Key>,
     root: Key,
     viewport: Size<Points>,
     mount: Vec<MountItem>,
@@ -980,6 +1066,11 @@ pub struct Core<M: TextEngine> {
     commands: Vec<(NodeId, Command)>,
     /// Animates the layout changes of the next commit.
     layout_animation: Option<LayoutAnimation>,
+    /// Nodes whose change animates the frames it moves in the next commit,
+    /// or their own frame alone when true (`layout_scope.rs`).
+    scoped_layout: Vec<(NodeId, crate::LayoutTransition, bool)>,
+    /// Nodes that changed size while `scoped_layout` waits.
+    resized: Vec<Key>,
     /// The nodes whose padding or margin uses `env()` (`Node::env`).
     env_styled: rustc_hash::FxHashSet<NodeId>,
     /// Scratch of [`Core::sync_env`].
@@ -1044,21 +1135,6 @@ pub struct Core<M: TextEngine> {
     overlays: Vec<Key>,
     /// What the shown overlays listen to.
     overlay_state: overlay::Overlays,
-    /// The shaders' programs sent to the platform (`true`) or that failed
-    /// to translate (`false`), by id.
-    shader_programs: rustc_hash::FxHashMap<u32, bool>,
-    /// The shader views and effects that sample their content or what is
-    /// behind them ([`Core::mark_shader_inputs`]); removed views drop out
-    /// as their ids no longer resolve.
-    shader_inputs: rustc_hash::FxHashSet<NodeId>,
-    /// Shader transitions this commit starts
-    /// ([`MountItem::ShaderTransition`]), first in its batch.
-    transition_starts: Vec<MountItem>,
-    /// The screen effects, as they were made: the last one with a shader
-    /// draws, the others are sent none ([`ViewKind::ScreenEffect`]).
-    screen_effects: Vec<Key>,
-    /// One was made or released since the last commit.
-    screen_effects_changed: bool,
 }
 
 impl<M: TextEngine + 'static> Core<M> {
@@ -1111,24 +1187,37 @@ impl<M: TextEngine> Core<M> {
             sticky_views: Vec::new(),
             sticky_nodes: Vec::new(),
             sticky_scrollers: Vec::new(),
+            builtin_scrollbars: None,
+            scrollbars_pending: Vec::new(),
+            fitted_pending: Vec::new(),
+            decorated: Vec::new(),
             sticky_changed: false,
+            followers: Vec::new(),
+            follow_changed: false,
             sticky_warned: false,
             inset_warned: false,
+            shaders: Default::default(),
+            transition_starts: Vec::new(),
+            pictured: Default::default(),
             roots: Vec::new(),
             accessories: Default::default(),
             header_heights: (Points(44.0), Points(96.0)),
             safe_area: EdgeInsets::default(),
             list_binds: Vec::new(),
+            kept_lists: Vec::new(),
             paced_lists: Vec::new(),
             paced_scratch: Vec::new(),
             events: Vec::new(),
             cells_scratch: Vec::new(),
+            awaiting_renders: Vec::new(),
             root,
             viewport,
             mount: Vec::new(),
             batches: 0,
             commands: Vec::new(),
             layout_animation: None,
+            scoped_layout: Vec::new(),
+            resized: Vec::new(),
             env_styled: Default::default(),
             env_scratch: Vec::new(),
             status_bar_nodes: Vec::new(),
@@ -1149,11 +1238,6 @@ impl<M: TextEngine> Core<M> {
             system_dark: false,
             overlays: Vec::new(),
             overlay_state: overlay::Overlays::default(),
-            shader_programs: Default::default(),
-            shader_inputs: Default::default(),
-            transition_starts: Vec::new(),
-            screen_effects: Vec::new(),
-            screen_effects_changed: false,
         }
     }
 
@@ -1267,221 +1351,6 @@ impl<M: TextEngine> Core<M> {
         for key in images {
             self.mark(key, dirty::IMAGE);
         }
-        let shaders: Vec<Key> = self
-            .nodes
-            .iter()
-            .filter(|(_, n)| {
-                n.shader
-                    .as_ref()
-                    .is_some_and(|s| s.packed.images.iter().any(|i| changes(&i.source)))
-            })
-            .map(|(k, _)| k as Key)
-            .collect();
-        for key in shaders {
-            self.mark(key, dirty::SHADER);
-        }
-    }
-
-    /// Which screen effect draws changed (one was made or released, or a
-    /// shader of one changed): each is flushed again, the last with a
-    /// shader sends it and the others none.
-    fn sync_screen_effects(&mut self) {
-        let changed = std::mem::take(&mut self.screen_effects_changed)
-            || self
-                .screen_effects
-                .iter()
-                .any(|&k| self.nodes[k as usize].dirty & dirty::SHADER != 0);
-        if changed {
-            for key in self.screen_effects.clone() {
-                self.mark(key, dirty::SHADER);
-            }
-        }
-    }
-
-    /// The screen effect that draws: the last one made with a shader.
-    fn drawn_screen_effect(&self) -> Option<Key> {
-        self.screen_effects.iter().rev().copied().find(|&k| {
-            self.nodes[k as usize]
-                .shader
-                .as_ref()
-                .is_some_and(|s| s.source.is_some())
-        })
-    }
-
-    /// Tells the platform which shaders' inputs this commit changed
-    /// ([`MountItem::ShaderInput`]): the effects with a changed view in
-    /// their subtree (themselves included), and every shader that samples
-    /// what is behind it once anything changed.
-    fn mark_shader_inputs(&mut self) {
-        if self.shader_inputs.is_empty() || self.mount.is_empty() {
-            return;
-        }
-        use crate::shader::ShaderInput as I;
-        let gone: Vec<NodeId> = self
-            .shader_inputs
-            .iter()
-            .copied()
-            .filter(|&id| self.key(id).is_err())
-            .collect();
-        for id in gone {
-            self.shader_inputs.remove(&id);
-        }
-        let samples = |node: &Node, input: I| {
-            node.shader
-                .as_ref()
-                .and_then(|s| s.sent.as_ref())
-                .is_some_and(|f| f.samples(input))
-        };
-        let mut marked: Vec<NodeId> = Vec::new();
-        for &id in &self.shader_inputs {
-            let Ok(key) = self.key(id) else { continue };
-            let node = &self.nodes[key as usize];
-            // What is behind a view, and the whole surface for a screen
-            // effect or transition, changes with anything in it.
-            if samples(node, I::Backdrop)
-                || node.kind == Kind::ScreenEffect && samples(node, I::Content)
-                || node.kind == Kind::ScreenTransition && samples(node, I::To)
-            {
-                marked.push(id);
-            }
-        }
-        let mut seen = rustc_hash::FxHashSet::default();
-        for item in &self.mount {
-            let Some(id) = item.view() else { continue };
-            if !seen.insert(id) {
-                continue;
-            }
-            let Ok(mut key) = self.key(id) else { continue };
-            loop {
-                let node = &self.nodes[key as usize];
-                if (node.kind == Kind::ShaderEffect && samples(node, I::Content)
-                    || node.kind == Kind::ShaderTransition && samples(node, I::To))
-                    && !marked.contains(&node.id)
-                {
-                    marked.push(node.id);
-                }
-                if node.parent == NO_KEY {
-                    break;
-                }
-                key = node.parent;
-            }
-        }
-        for id in marked {
-            self.mount.push(MountItem::ShaderInput { id });
-        }
-    }
-
-    /// Sends what shader view `key` draws, if it changed, and its program
-    /// first, the first time a view draws it: translated into the
-    /// platform's language here, on the engine thread.
-    fn flush_shader(&mut self, key: Key) {
-        let ratio = self.components.environment.pixel_ratio;
-        let language = self.components.environment.shaders.language;
-        let node = &self.nodes[key as usize];
-        let id = node.id;
-        let kind = node.kind;
-        let transition = matches!(kind, Kind::ShaderTransition | Kind::ScreenTransition);
-        // One screen effect draws: the others are sent none.
-        let silent = kind == Kind::ScreenEffect && self.drawn_screen_effect() != Some(key);
-        let Some(shader) = node.shader.as_ref().filter(|_| !silent) else {
-            if silent {
-                self.send_fill(key, None);
-            }
-            return;
-        };
-        // A transition without a shader of its own runs its fallback.
-        let fallback = (transition
-            && shader.source.is_none()
-            && shader.fallback == crate::shader::TransitionFallback::Fade)
-            .then(crate::shader::crossfade);
-        let fill = match shader.source.as_ref().or(fallback.as_ref()) {
-            Some(source) => {
-                let ready = *self.shader_programs.entry(source.id).or_insert_with(|| {
-                    match crate::shader::ShaderProgram::translate(source, language) {
-                        Ok(program) => {
-                            self.mount.push(MountItem::ShaderProgram {
-                                program: Arc::new(program),
-                            });
-                            true
-                        }
-                        Err(e) => {
-                            log::error!(target: "js", "<Shader>: {e}");
-                            false
-                        }
-                    }
-                });
-                ready.then(|| {
-                    Arc::new(crate::shader::ShaderFill {
-                        program: source.id,
-                        uniforms: shader.packed.bytes.as_slice().into(),
-                        images: shader
-                            .packed
-                            .images
-                            .iter()
-                            .map(|i| crate::shader::ShaderImage {
-                                source: i.source.as_ref().map(|s| s.resolved(ratio)),
-                                offset: i.offset,
-                            })
-                            .collect(),
-                        time: source.shader.reflection().time,
-                        inputs: source
-                            .shader
-                            .reflection()
-                            .inputs
-                            .iter()
-                            .fold(0, |bits, input| bits | 1 << input.index()),
-                        progress: shader.progress.constant(),
-                        max_offset: shader.max_offset,
-                    })
-                })
-            }
-            None => None,
-        };
-        self.send_fill(key, fill);
-        if transition {
-            let support = &self.components.environment.shaders;
-            let drawn = if kind == Kind::ScreenTransition {
-                support.screen_transition
-            } else {
-                support.transition
-            } != crate::shader::Support::No;
-            let shader = self.nodes[key as usize]
-                .shader
-                .as_mut()
-                .expect("a shader view");
-            let before = shader.shown.replace(shader.key.clone());
-            let ms = shader.duration.unwrap_or(DEFAULT_TRANSITION_MS).max(0.0);
-            if before.is_some_and(|b| b != shader.key) && drawn && shader.sent.is_some() && ms > 0.0
-            {
-                self.transition_starts.push(MountItem::ShaderTransition {
-                    id,
-                    duration: std::time::Duration::from_micros((ms as f64 * 1000.0).round() as u64),
-                });
-            }
-        }
-    }
-
-    /// Sends shader view `key` what it draws, if that changed.
-    fn send_fill(&mut self, key: Key, fill: Option<Arc<crate::shader::ShaderFill>>) {
-        let id = self.nodes[key as usize].id;
-        let Some(shader) = self.nodes[key as usize].shader.as_mut() else {
-            return;
-        };
-        if shader.sent == fill {
-            return;
-        }
-        let inputs = fill.as_ref().is_some_and(|f| {
-            f.samples(crate::shader::ShaderInput::Content)
-                || f.samples(crate::shader::ShaderInput::Backdrop)
-                || f.samples(crate::shader::ShaderInput::To)
-        });
-        shader.sent = fill.clone();
-        self.mount.push(MountItem::Shader { id, fill });
-        if inputs {
-            self.shader_inputs.insert(id);
-        } else {
-            self.shader_inputs.remove(&id);
-        }
     }
 
     /// Number of live nodes, including the root.
@@ -1493,6 +1362,15 @@ impl<M: TextEngine> Core<M> {
     /// sources, web views and the status bar are checked against it.
     pub fn set_access(&mut self, access: Arc<crate::access::Access>) {
         self.access = access;
+    }
+
+    /// Sets what the core's own image loads (an [`crate::element::svg`]'s
+    /// bytes) go through: the app's bundled files, access policy and disk
+    /// cache. Without it they read inline bytes, files and `asset:/` URIs
+    /// of no base only.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_image_context(&mut self, context: crate::image::loader::Context) {
+        crate::image::loader::set_context(context);
     }
 
     /// Serves the app's clipboard calls from `backend` instead of the
@@ -1562,6 +1440,80 @@ impl<M: TextEngine> Core<M> {
         }
         if dependents {
             self.dependents_dirty(key);
+        }
+    }
+
+    /// Keeps the rows of virtual lists that hold `nodes` rendered, out of
+    /// the render window too, until the next call: the ends of a text
+    /// selection across a list's rows, whose texts must outlive scrolling
+    /// away (a recycled cell would show another row). Replaces the last
+    /// call's; none releases them.
+    pub fn set_kept(&mut self, nodes: &[NodeId]) {
+        let mut kept: Vec<(Key, u32)> = Vec::new();
+        for &id in nodes {
+            let Ok(mut key) = self.key(id) else { continue };
+            // Up to the cell: the ancestor whose parent is a list holding
+            // it in a slot.
+            loop {
+                let parent = self.nodes[key as usize].parent;
+                if parent == NO_KEY {
+                    break;
+                }
+                if let Some(list) = self.nodes[parent as usize].list.as_ref()
+                    && let Some(index) = list
+                        .slots
+                        .iter()
+                        .find(|s| s.cell == key)
+                        .and_then(|s| s.index)
+                {
+                    kept.push((parent, index));
+                    break;
+                }
+                key = parent;
+            }
+        }
+        let mut lists: Vec<Key> = kept.iter().map(|&(list, _)| list).collect();
+        lists.sort_unstable();
+        lists.dedup();
+        for &list in self.kept_lists.iter().filter(|l| !lists.contains(l)) {
+            if let Some(state) = self
+                .nodes
+                .get_mut(list as usize)
+                .and_then(|n| n.list.as_mut())
+            {
+                state.set_kept(Vec::new());
+            }
+        }
+        for &list in &lists {
+            let items = kept
+                .iter()
+                .filter(|&&(l, _)| l == list)
+                .map(|&(_, i)| i)
+                .collect();
+            if let Some(state) = self.nodes[list as usize].list.as_mut() {
+                state.set_kept(items);
+            }
+        }
+        self.kept_lists = lists;
+    }
+
+    /// The platform scrolled the text of multiline input `id` to `offset`,
+    /// its text `content` large in a `viewport` (reported while a built-in
+    /// bar takes the place of its indicator, `InputConfig::replaced`).
+    pub fn set_input_scroll(
+        &mut self,
+        id: NodeId,
+        offset: Point<Points>,
+        content: Size<Points>,
+        viewport: Size<Points>,
+    ) {
+        let Ok(key) = self.key(id) else { return };
+        if let Some(input) = self.nodes[key as usize].input.as_mut() {
+            input.scroll = Some(InputScroll {
+                offset,
+                content,
+                viewport,
+            });
         }
     }
 
@@ -1678,7 +1630,7 @@ impl<M: TextEngine> Core<M> {
     pub fn fonts_changed(&mut self) {
         self.zero_advances.clear();
         self.ch_changed(self.root);
-        self.measure_cache = MeasureCache::default();
+        self.measure_cache.clear();
         let blocks: Vec<Key> = self
             .nodes
             .iter()
@@ -1738,6 +1690,24 @@ impl<M: TextEngine> Core<M> {
             if let Some(layout) = node.layout {
                 // Every frame is sent again.
                 self.layout.mark_dirty(layout);
+            }
+            // Replay pixel-based sticky state without clearing the lists'
+            // bookkeeping (which would restack their existing cells).
+            // If layout changes the logical ranges, its later item wins.
+            let ranges = self.sticky_ranges(key);
+            if !ranges.is_empty() {
+                self.mount.push(MountItem::StickyCells {
+                    id,
+                    cells: ranges
+                        .into_iter()
+                        .map(|r| StickyCell {
+                            cell: r.cell,
+                            start: Points(r.start),
+                            end: Points(r.end),
+                            offset: r.offset,
+                        })
+                        .collect(),
+                });
             }
         }
         self.needs_layout = true;
@@ -1820,17 +1790,10 @@ impl<M: TextEngine> Core<M> {
                 let node = &mut self.nodes[key as usize];
                 let before = node.events;
                 node.events.set(event, enabled);
-                // A listener added after layout still learns the frame.
                 if event == EventKind::Layout && enabled && !before.contains(event) {
-                    let f = node.frame;
-                    if !f.origin.x.0.is_nan() {
-                        self.events.push(crate::element::JsEvent::Event(
-                            id,
-                            event,
-                            EventPayload::Layout(f),
-                        ));
-                    }
+                    self.report_frame(key);
                 }
+                let node = &self.nodes[key as usize];
                 if node.events != before {
                     let relink = node.inline && (pressable(before) || pressable(node.events));
                     self.mark(key, dirty::EVENTS);
@@ -1918,6 +1881,23 @@ impl<M: TextEngine> Core<M> {
                 // the drawing fills with it).
                 let background_moved = node.drawing.as_ref().is_some_and(|d| d.paints_background())
                     != drawing.paints_background();
+                // A drawing fitting a view box lays its canvas out at its
+                // natural size, as an image.
+                let natural = drawing.fit().map(|fit| fit.size);
+                if node
+                    .drawing
+                    .as_ref()
+                    .and_then(|d| d.fit())
+                    .map(|fit| fit.size)
+                    != natural
+                    && let Some(layout) = node.layout
+                {
+                    self.layout
+                        .set_node_context(layout, natural.map(|n| LeafContext::Image(Some(n))));
+                    self.layout.mark_dirty(layout);
+                    self.needs_layout = true;
+                }
+                let node = &mut self.nodes[key as usize];
                 node.drawing = Some(Arc::from(drawing));
                 let flags = dirty::CANVAS
                     | if slots_changed { dirty::ANIMATION } else { 0 }
@@ -1926,10 +1906,21 @@ impl<M: TextEngine> Core<M> {
                 Ok(())
             }
             Op::Command {
+                id: crate::ROOT_ID,
                 command: Command::LayoutAnimation(animation),
-                ..
             } => {
                 self.layout_animation = Some(animation);
+                Ok(())
+            }
+            // Sent to a node: the frames its change moves.
+            Op::Command {
+                id,
+                command: Command::LayoutAnimation(animation),
+            } => {
+                self.key(id)?;
+                if let Some(transition) = animation.update {
+                    self.scope_layout_animation(id, transition);
+                }
                 Ok(())
             }
             Op::Command {
@@ -1980,8 +1971,17 @@ impl<M: TextEngine> Core<M> {
         // here, and lay out again (JS's lists ask JS, through the engine);
         // a list in its parent's viewport that changed length lays the
         // page out again, so it settles in this batch.
+        // Views watching scroll views they did not make hear what this
+        // round moved, and what they change goes out in this batch too.
         for _ in 0..MAX_VIRTUAL_ROUNDS {
-            if !self.bind_virtual_lists() && !std::mem::take(&mut self.extent_changed) {
+            let watched = self.sync_watches();
+            // A built-in bar asked for while this round rendered (the app
+            // set its theme) is made in this batch too.
+            if !self.bind_virtual_lists()
+                && !std::mem::take(&mut self.extent_changed)
+                && !watched
+                && self.scrollbars_pending.is_empty()
+            {
                 break;
             }
             self.commit_round();
@@ -1989,10 +1989,11 @@ impl<M: TextEngine> Core<M> {
         if !self.outer_asked.is_empty() {
             self.send_outer_scrolls();
         }
+        self.split_scoped_frames();
         self.mark_shader_inputs();
         if !self.transition_starts.is_empty() {
-            // Before the changes they are about: the platform pictures the
-            // children as they were.
+            // Before the changes they are about: the platform pictures what
+            // showed before them.
             let starts = std::mem::take(&mut self.transition_starts);
             self.mount.splice(0..0, starts);
         }
@@ -2010,6 +2011,10 @@ impl<M: TextEngine> Core<M> {
     /// One round of a commit: views, layout, lists, commands, into the
     /// mount items.
     fn commit_round(&mut self) {
+        // The built-in scroll bars that come, rendered with the rest.
+        if !self.scrollbars_pending.is_empty() {
+            self.sync_scrollbars();
+        }
         // The views' patches and the views to make first.
         self.render_components();
         self.sync_colors();
@@ -2018,7 +2023,6 @@ impl<M: TextEngine> Core<M> {
         self.sync_overlays();
         self.sync_back();
         self.sync_keys();
-        self.sync_screen_effects();
         // Platforms animate the frames, insertions and removals that follow
         // in the batch; ops may already have queued some.
         self.sync_env();
@@ -2052,8 +2056,16 @@ impl<M: TextEngine> Core<M> {
             }
         }
         self.update_lists(relayout);
+        // After every frame of the round: what followers follow is placed.
+        self.place_followers(relayout);
+        if !self.decorated.is_empty() {
+            self.layout_scrollbars();
+        }
         if !self.overlays.is_empty() {
             self.place_overlays();
+        }
+        if !self.fitted_pending.is_empty() {
+            self.send_fitted();
         }
         self.flush_text();
         // What this turn's status bar settings add up to, once.
@@ -2065,6 +2077,10 @@ impl<M: TextEngine> Core<M> {
         // The components' measurements, with this commit's layout as JS's.
         for (id, answer) in std::mem::take(&mut self.components.measures) {
             answer.borrow_mut().deliver(self.measure(id));
+        }
+        // And their transitions' time, with this commit's styles.
+        for (id, answer) in std::mem::take(&mut self.components.transition_times) {
+            answer.borrow_mut().deliver(self.transition_time(id));
         }
         // On laid out views; dropped for views that were never shown.
         let mut kept = Vec::new();
@@ -2156,20 +2172,15 @@ impl<M: TextEngine> Core<M> {
                 Command::HostCall { id: call, name, .. }
                     if !crate::access::valid_host_name(name) =>
                 {
-                    let message = format!(
-                        "nsh/host: invalid function name {name:?} ({})",
-                        crate::access::HOST_NAME_CHARS
-                    );
-                    self.answer_host(*call, Err(message.clone()));
-                    self.deny(message);
+                    let error = crate::host_channel::invalid_name(name);
+                    self.deny(error.message().to_owned());
+                    self.answer_host(*call, Err(error));
                     continue;
                 }
                 Command::HostCall { id: call, name, .. } if !self.access.allows_host(name) => {
-                    let message = format!(
-                        "nsh/host: `{name}` is not granted: add it to capabilities.host in nsh.json"
-                    );
-                    self.answer_host(*call, Err(message.clone()));
-                    self.deny(message);
+                    let error = crate::host_channel::not_granted(name);
+                    self.deny(error.message().to_owned());
+                    self.answer_host(*call, Err(error));
                     continue;
                 }
                 Command::StatusBar(_) if !self.access.allows_status_bar() => {
@@ -2284,8 +2295,25 @@ impl<M: TextEngine> Core<M> {
     fn create(&mut self, id: NodeId, tag: Tag) -> Result<(), ApplyError> {
         let kind = Kind::of(tag);
         let key = self.alloc(id, kind)?;
-        let mut style = Style::default().layout;
-        crate::style::resolve_normal_alignment(&mut style);
+        let mut style = crate::style::unstyled_layout();
+        if let Some(role) = shader_role(tag) {
+            self.nodes[key as usize]
+                .shader
+                .as_mut()
+                .expect("a shader node")
+                .role = role;
+            if matches!(
+                role,
+                crate::shader::ShaderRole::Screen | crate::shader::ShaderRole::ScreenTransition
+            ) {
+                // A screen's effect takes no space: the surface is its box.
+                style.position = taffy::Position::Absolute;
+                style.size = taffy::Size {
+                    width: taffy::Dimension::length(0.0),
+                    height: taffy::Dimension::length(0.0),
+                };
+            }
+        }
         let layout = match leaf_context(kind) {
             Some(context) => self.layout.new_leaf_with_context(style.clone(), context),
             None => self.layout.new_leaf(style.clone()),
@@ -2309,6 +2337,11 @@ impl<M: TextEngine> Core<M> {
         if kind == Kind::List {
             self.lists.push(key);
         }
+        if matches!(kind, Kind::Scroll | Kind::List | Kind::Input)
+            && self.builtin_scrollbars.is_some()
+        {
+            self.scrollbars_pending.push(key);
+        }
         if kind.is_root() {
             self.roots.push(key);
         }
@@ -2319,10 +2352,6 @@ impl<M: TextEngine> Core<M> {
             && let Some(layout) = self.nodes[key as usize].layout
         {
             self.overlay_made(key, layout);
-        }
-        if kind == Kind::ScreenEffect {
-            self.screen_effects.push(key);
-            self.screen_effects_changed = true;
         }
         self.sync_layout_style(key);
     }
@@ -2431,13 +2460,33 @@ impl<M: TextEngine> Core<M> {
             self.inherited_text_style(key).inherit(&node.text_style),
             node.paragraph.font_multiplier(self.font_scale),
         );
-        text.push(content, style);
+        if multiline {
+            text.push(&broken_runs(content), style);
+        } else {
+            text.push(content, style);
+        }
         // An empty last line still takes space (a trailing line break, or no
         // text at all).
         if content.is_empty() || (multiline && content.ends_with('\n')) {
             text.push("\u{200b}", style);
         }
         text
+    }
+
+    /// `key` holds a slot's content in a Rust component's tree (JS's holder
+    /// of a slot or a render, or the node a view wraps its fill in): while
+    /// nothing styles its layout and it holds one node, that node is laid
+    /// out in its place, as the component's own child (`layout_tree`'s
+    /// "holders laid out through"). A list's holder (an `Items` slot) is a
+    /// list, laid out as one.
+    pub(super) fn lay_out_through(&mut self, key: Key) {
+        let node = &self.nodes[key as usize];
+        if node.kind == Kind::View
+            && let Some(layout) = node.layout
+        {
+            self.layout.set_holder(layout);
+            self.needs_layout = true;
+        }
     }
 
     /// Pushes the effective taffy style of `key`: the JS style, adjusted
@@ -2474,8 +2523,6 @@ impl<M: TextEngine> Core<M> {
                     style.overflow.y = Overflow::Scroll;
                 }
             }
-            // A shader over the whole surface takes no space where it is.
-            Kind::ScreenEffect | Kind::ScreenTransition => style.display = taffy::Display::None,
             Kind::List => {
                 style.overflow = taffy::Point {
                     x: Overflow::Hidden,
@@ -2518,10 +2565,13 @@ impl<M: TextEngine> Core<M> {
         let key = self.key(id)?;
         let node = &mut self.nodes[key as usize];
         node.inline_style = patch;
-        if node.classes.is_some() || node.spaced {
+        if node.classes.is_some() || node.spaced || node.inline_style.reads_current_color() {
             self.restyle(key);
             return Ok(());
         }
+        let mut props = node.class_props.as_deref().cloned().unwrap_or_default();
+        style.node_props(&mut props);
+        self.set_class_props(key, props);
         self.set_style(id, *style)
     }
 
@@ -2582,6 +2632,18 @@ impl<M: TextEngine> Core<M> {
             }
         }
         let node = &mut self.nodes[key as usize];
+        if node.object_fit != pending.object_fit {
+            node.object_fit = pending.object_fit;
+            if node.image.is_some() {
+                self.mark(key, dirty::IMAGE);
+            } else if let Some(control) = node.control.as_mut() {
+                // A video is contained by default.
+                let fit = pending.object_fit.unwrap_or(ResizeMode::Contain);
+                apply_native(control, NativeProp::VideoResizeMode(fit));
+                self.mark(key, dirty::NATIVE);
+            }
+        }
+        let node = &mut self.nodes[key as usize];
         if node.wants_fixed != pending.fixed_position {
             // Made an overlay, or a view again: at once while it is in no
             // parent (classes are set before the node is inserted), else as
@@ -2594,12 +2656,9 @@ impl<M: TextEngine> Core<M> {
                 self.fixed_changed.push((key, id));
             }
         }
-        // `env()`'s terms, on the edges their declarations went to.
-        let env = if rtl {
-            pending.env.swapped()
-        } else {
-            pending.env
-        };
+        // `env()`'s terms, on the edges their declarations name (left and
+        // right are physical, right to left too).
+        let env = pending.env;
         let env = (!env.is_empty()).then(|| (env, self.env_insets(key, &env)));
         let node = &mut self.nodes[key as usize];
         let id = node.id;
@@ -2797,6 +2856,55 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// Canvas `key`'s `drawing` as its platform gets it: its
+    /// [`crate::canvas::Drawing::view_paints`] resolved with its style and
+    /// its box.
+    fn mounted_drawing(
+        &self,
+        key: Key,
+        drawing: &Arc<crate::canvas::Drawing>,
+    ) -> Arc<crate::canvas::Drawing> {
+        if drawing.view_paints.is_empty() {
+            return drawing.clone();
+        }
+        let node = &self.nodes[key as usize];
+        let (paint, current) = self.resolved_paint(key);
+        let style = &node.view_style;
+        let images = style
+            .effects
+            .as_deref()
+            .map_or(&[][..], |e| &e.background_images[..]);
+        let size = if node.frame == Bounds::UNSET {
+            Size::default()
+        } else {
+            node.frame.size
+        };
+        Arc::new(drawing.painted(&paint, current, style.background_color, images, size))
+    }
+
+    /// Sends the canvases fitting a view box that changed or were given
+    /// another size this round, with the size the layout gave them.
+    fn send_fitted(&mut self) {
+        let mut pending = std::mem::take(&mut self.fitted_pending);
+        pending.sort_unstable();
+        pending.dedup();
+        for &key in &pending {
+            let Some(node) = self.nodes.get(key as usize) else {
+                continue;
+            };
+            if !node.created {
+                continue;
+            }
+            let Some(drawing) = &node.drawing else {
+                continue;
+            };
+            let (id, drawing) = (node.id, self.mounted_drawing(key, drawing));
+            self.mount.push(MountItem::Canvas { id, drawing });
+        }
+        pending.clear();
+        self.fitted_pending = pending;
+    }
+
     /// The paint properties canvas `key` paints with (its own over those
     /// of the views around it, as CSS inherits them) and its text color,
     /// for `currentColor`.
@@ -2848,8 +2956,9 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
-    /// Lays `key` out in the other direction: its left and right properties
-    /// trade places (their start / end ones with them).
+    /// Lays `key` out in the other direction. Its left and right properties
+    /// keep their sides, as in CSS; its start / end ones move with the
+    /// direction, so it is styled again when it has some.
     fn flip_direction(&mut self, key: Key, rtl: bool) {
         let direction = if rtl {
             taffy::Direction::Rtl
@@ -2858,23 +2967,24 @@ impl<M: TextEngine> Core<M> {
         };
         let node = &mut self.nodes[key as usize];
         node.rtl = rtl;
-        let mut view = node.view_style.clone();
+        if let Some(list) = node.list.as_mut() {
+            let mirrored = rtl && list.horizontal;
+            list.set_mirrored(mirrored);
+        }
+        // A spaced child's margin is on its end side.
+        let logical = node.logical.is_some() || node.spaced;
         let kind = node.kind;
         if let Some(base) = node.base_layout.as_deref_mut() {
-            crate::style::swap_sides(base, &mut view);
             base.direction = direction;
-            node.view_style = view;
             self.sync_layout_style(key);
         } else if let Some(l) = node.layout {
             let mut layout = self.layout.style(l).clone();
-            crate::style::swap_sides(&mut layout, &mut view);
             layout.direction = direction;
-            self.nodes[key as usize].view_style = view;
             self.layout.set_style(l, layout);
             self.needs_layout = true;
         }
         self.mark(key, dirty::VIEW);
-        if self.reads_direction(key) {
+        if logical || self.reads_direction(key) {
             self.restyle(key);
         }
         let node = &mut self.nodes[key as usize];
@@ -2908,8 +3018,9 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
-    /// `prop` with what the app may not reach removed: a refused image
-    /// fails (`onError`), a refused video or web view source shows nothing.
+    /// `prop` with what the app may not reach removed: a refused image,
+    /// video or web view source shows nothing and fails (`onError` with
+    /// `code` `ERR_ACCESS_DENIED`).
     fn check_prop(&mut self, key: Key, prop: Prop) -> Prop {
         if self.access.is_unrestricted() {
             return prop;
@@ -2918,16 +3029,28 @@ impl<M: TextEngine> Core<M> {
         let (id, kind) = (node.id, node.kind);
         // Always reported: the `onError` listener may be set after the
         // source (JS finds the handler when the event is delivered).
-        let refuse = |core: &mut Self, what: &str, uri: &str, capability: &str| {
-            let message = not_granted(what, uri, capability);
+        let report = |core: &mut Self, message: String| {
             core.events.push(crate::element::JsEvent::Event(
                 id,
                 EventKind::Error,
-                EventPayload::Error {
-                    message: message.clone(),
-                },
+                EventPayload::Map(vec![
+                    ("message", PayloadValue::Str(message.clone())),
+                    (
+                        "code",
+                        PayloadValue::Str(crate::element::codes::ACCESS_DENIED.into()),
+                    ),
+                ]),
             ));
             core.deny(message);
+        };
+        let refuse = |core: &mut Self, what: &str, uri: &str, capability: &str| {
+            report(core, not_granted(what, uri, capability));
+        };
+        let no_webviews = |core: &mut Self| {
+            report(
+                core,
+                "web views are not granted: add `webview` to capabilities in nsh.json".into(),
+            );
         };
         match prop {
             Prop::Source(Some(source)) if !self.access.allows_media(&source.uri) => {
@@ -2955,9 +3078,7 @@ impl<M: TextEngine> Core<M> {
             Prop::Native(NativeProp::Html(Some(_)))
                 if kind == Kind::WebView && !self.access.allows_webviews() =>
             {
-                self.deny(
-                    "web views are not granted: add `webview` to capabilities in nsh.json".into(),
-                );
+                no_webviews(self);
                 Prop::Native(NativeProp::Html(None))
             }
             Prop::Native(NativeProp::Source(crate::WebSource::Uri(uri)))
@@ -2975,13 +3096,239 @@ impl<M: TextEngine> Core<M> {
             Prop::Native(NativeProp::Source(crate::WebSource::Html { .. }))
                 if kind == Kind::WebView && !self.access.allows_webviews() =>
             {
-                self.deny(
-                    "web views are not granted: add `webview` to capabilities in nsh.json".into(),
-                );
+                no_webviews(self);
                 Prop::Native(NativeProp::Source(crate::WebSource::None))
             }
             prop => prop,
         }
+    }
+
+    /// A page's or a dialog's `transitionShader`: compiled (once per source)
+    /// into the layer the platform draws its coming and going through.
+    fn set_nav_shader(&mut self, key: Key, spec: Option<crate::shader::NavShaderSpec>) {
+        let id = self.nodes[key as usize].id;
+        let shader = spec.and_then(|spec| {
+            let hash = crate::shader::source_hash(&spec.source);
+            let compiled = match self.shaders.get(&hash) {
+                Some(Ok(shader)) if shader.source() == &*spec.source => Ok(shader.clone()),
+                _ => {
+                    let compiled = crate::shader::compile_source(&spec.source);
+                    if self.shaders.len() >= 64 {
+                        self.shaders.clear();
+                    }
+                    self.shaders.insert(hash, compiled.clone());
+                    compiled
+                }
+            };
+            let shader = compiled
+                .map_err(|e| log::warn!(target: "js", "the transitionShader of node {id}: {e}"))
+                .ok()?;
+            let mut warnings = Vec::new();
+            let layer = crate::shader::ShaderLayer::new(shader, &spec.uniforms.0, &mut warnings)
+                .with_role(crate::shader::ShaderRole::Transition);
+            for warning in warnings {
+                log::warn!(target: "js", "the transitionShader of node {id}: {warning}");
+            }
+            let ms = spec.duration.unwrap_or(DEFAULT_NAV_SHADER_MS).max(0.0);
+            Some(crate::NavShader {
+                layer: Arc::new(layer),
+                duration: std::time::Duration::from_micros((f64::from(ms) * 1000.0).round() as u64),
+            })
+        });
+        let Some(root) = self.nodes[key as usize].root.as_mut() else {
+            log::warn!(target: "js", "`transitionShader` is a page's or a dialog's; node {id} is neither");
+            return;
+        };
+        if root.nav_shader != shader {
+            root.nav_shader = shader;
+            self.mark(key, dirty::NAV_SHADER);
+        }
+    }
+
+    /// Tells the platform which shaders' pictures this commit changed
+    /// ([`MountItem::ShaderInput`]): the effects and transitions with a
+    /// changed view in their subtree (themselves included), and every
+    /// shader that reads what is behind it, and every screen effect or
+    /// transition, once anything changed.
+    fn mark_shader_inputs(&mut self) {
+        if self.pictured.is_empty() || self.mount.is_empty() {
+            return;
+        }
+        use crate::shader::{ShaderInput as I, ShaderRole as R};
+        let ids: Vec<NodeId> = self.pictured.iter().copied().collect();
+        let mut marked: Vec<NodeId> = Vec::new();
+        let mut subtrees: Vec<(NodeId, Key)> = Vec::new();
+        for id in ids {
+            let Ok(key) = self.key(id) else {
+                self.pictured.remove(&id);
+                continue;
+            };
+            let Some(layer) = self.nodes[key as usize]
+                .shader
+                .as_ref()
+                .and_then(|s| s.layer.as_ref())
+            else {
+                continue;
+            };
+            let inputs = layer.shader.inputs();
+            if inputs.contains(I::Backdrop) || matches!(layer.role, R::Screen | R::ScreenTransition)
+            {
+                marked.push(id);
+            } else if matches!(layer.role, R::Effect | R::Transition) {
+                subtrees.push((id, key));
+            }
+        }
+        if !subtrees.is_empty() {
+            let mut seen = rustc_hash::FxHashSet::default();
+            for item in &self.mount {
+                let Some(view) = item.view() else { continue };
+                if !seen.insert(view) {
+                    continue;
+                }
+                let Ok(mut key) = self.key(view) else {
+                    continue;
+                };
+                loop {
+                    if let Some(&(id, _)) = subtrees.iter().find(|(_, k)| *k == key)
+                        && !marked.contains(&id)
+                    {
+                        marked.push(id);
+                    }
+                    let parent = self.nodes[key as usize].parent;
+                    if parent == NO_KEY {
+                        break;
+                    }
+                    key = parent;
+                }
+            }
+        }
+        for id in marked {
+            self.mount.push(MountItem::ShaderInput { id });
+        }
+    }
+
+    /// A shader's `source`, program, `uniforms` or `paused`, or an effect's
+    /// or transition's props: the layer is made again, and sent when it
+    /// changed; a transition whose `value` changed starts.
+    fn set_shader_prop(&mut self, key: Key, prop: Prop) {
+        let id = self.nodes[key as usize].id;
+        let Some(state) = self.nodes[key as usize].shader.as_mut() else {
+            log::warn!(target: "js", "shader props are a `<Shader>`'s; node {id} is not one");
+            return;
+        };
+        match prop {
+            Prop::ShaderSource(source) => {
+                if state.source == source {
+                    return;
+                }
+                state.source = source;
+                state.shader = None;
+                if let Some(source) = &state.source {
+                    let hash = crate::shader::source_hash(source);
+                    let compiled = self
+                        .shaders
+                        .get(&hash)
+                        .filter(|c| match c {
+                            Ok(shader) => shader.source() == &**source,
+                            Err(_) => true,
+                        })
+                        .cloned();
+                    let compiled = compiled.unwrap_or_else(|| {
+                        let compiled = crate::shader::compile_source(source);
+                        // Bounded: an app making sources on the fly does not
+                        // keep them all.
+                        if self.shaders.len() >= 64 {
+                            self.shaders.clear();
+                        }
+                        self.shaders.insert(hash, compiled.clone());
+                        compiled
+                    });
+                    let state = self.nodes[key as usize]
+                        .shader
+                        .as_mut()
+                        .expect("shader node");
+                    match compiled {
+                        Ok(shader) => state.shader = Some(shader),
+                        Err(error) => log::warn!(target: "js", "the shader of node {id}: {error}"),
+                    }
+                }
+            }
+            Prop::Shader(shader) => {
+                state.source = None;
+                state.shader = shader;
+            }
+            Prop::Uniforms(uniforms) => state.uniforms = uniforms,
+            Prop::ShaderPaused(paused) => state.paused = paused,
+            Prop::ShaderProgress(progress) => state.progress = progress,
+            Prop::MaxSampleOffset(overflow) => state.overflow = overflow.max(Points::ZERO),
+            Prop::TransitionValue(value) => state.value = value,
+            Prop::TransitionDuration(duration) => state.duration = duration,
+            Prop::TransitionFallback(fallback) => state.fallback = fallback,
+            _ => return,
+        }
+        let state = self.nodes[key as usize]
+            .shader
+            .as_mut()
+            .expect("shader node");
+        use crate::shader::ShaderRole as R;
+        let transition = matches!(state.role, R::Transition | R::ScreenTransition);
+        // A transition without a shader of its own runs its fallback.
+        let program = state.shader.clone().or_else(|| {
+            (transition && state.fallback == crate::TransitionFallback::Fade)
+                .then(crate::shader::crossfade)
+                .flatten()
+        });
+        let layer = program.map(|shader| {
+            let mut warnings = Vec::new();
+            let (progress, animated) = match state.progress {
+                crate::shader::ShaderProgress::Number(n) => (n, None),
+                crate::shader::ShaderProgress::Animated(node) => (0.0, Some(node)),
+            };
+            let layer = crate::shader::ShaderLayer::new(shader, &state.uniforms.0, &mut warnings)
+                .with_paused(state.paused)
+                .with_role(state.role)
+                .with_overflow(state.overflow)
+                .with_progress(progress, animated);
+            for warning in warnings {
+                log::warn!(target: "js", "the shader of node {id}: {warning}");
+            }
+            Arc::new(layer)
+        });
+        if transition && state.value != state.shown {
+            let before = std::mem::replace(&mut state.shown, state.value.clone());
+            let ms = state.duration.unwrap_or(DEFAULT_TRANSITION_MS).max(0.0);
+            if before.is_some() && layer.is_some() && ms > 0.0 {
+                self.transition_starts.push(MountItem::ShaderTransition {
+                    id,
+                    duration: std::time::Duration::from_micros(
+                        (f64::from(ms) * 1000.0).round() as u64
+                    ),
+                });
+            }
+        }
+        let state = self.nodes[key as usize]
+            .shader
+            .as_mut()
+            .expect("shader node");
+        if layer.as_ref().is_some_and(|l| {
+            !l.shader.inputs().is_empty() || matches!(l.role, R::Screen | R::ScreenTransition)
+        }) {
+            self.pictured.insert(id);
+        } else {
+            self.pictured.remove(&id);
+        }
+        if layer == state.layer {
+            return;
+        }
+        let nodes_of = |l: &Option<Arc<crate::shader::ShaderLayer>>| {
+            l.as_ref().map_or(&[][..], |l| &l.nodes[..]).to_vec()
+        };
+        let slots_changed = nodes_of(&layer) != nodes_of(&state.layer);
+        state.layer = layer;
+        self.mark(
+            key,
+            dirty::SHADER | if slots_changed { dirty::ANIMATION } else { 0 },
+        );
     }
 
     fn set_prop(&mut self, id: NodeId, prop: Prop) -> Result<(), ApplyError> {
@@ -2995,10 +3342,12 @@ impl<M: TextEngine> Core<M> {
             }
             Prop::ComponentSlot(name) => {
                 self.set_slot_name(id, name);
+                self.lay_out_through(key);
                 return Ok(());
             }
             Prop::ComponentRender(slot) => {
                 self.set_render_holder(id, slot);
+                self.lay_out_through(key);
                 return Ok(());
             }
             Prop::RustProp(name, value) => {
@@ -3007,9 +3356,34 @@ impl<M: TextEngine> Core<M> {
                 }
                 return Ok(());
             }
+            Prop::Follow(target) => {
+                self.set_follow_target(key, target);
+                return Ok(());
+            }
+            Prop::FollowTransition(transition) => {
+                self.set_follow_transition(key, transition);
+                return Ok(());
+            }
             prop => prop,
         };
         let prop = self.check_prop(key, prop);
+        if let Prop::ShaderSource(_)
+        | Prop::Shader(_)
+        | Prop::Uniforms(_)
+        | Prop::ShaderPaused(_)
+        | Prop::ShaderProgress(_)
+        | Prop::MaxSampleOffset(_)
+        | Prop::TransitionValue(_)
+        | Prop::TransitionDuration(_)
+        | Prop::TransitionFallback(_) = prop
+        {
+            self.set_shader_prop(key, prop);
+            return Ok(());
+        }
+        if let Prop::TransitionShader(spec) = prop {
+            self.set_nav_shader(key, spec);
+            return Ok(());
+        }
         if let Prop::Screen(ScreenProp::StatusBar(setting)) = prop {
             self.set_status_bar(key, setting);
             return Ok(());
@@ -3041,7 +3415,9 @@ impl<M: TextEngine> Core<M> {
                     KeyboardDismissMode::OnDrag | KeyboardDismissMode::Interactive,
                 )
                 | Prop::Native(NativeProp::Scrollable(false)) => list::ignored::BEHAVIOR,
-                Prop::Scrollbar(false) => list::ignored::SCROLLBAR,
+                Prop::Scrollbar(
+                    crate::ScrollbarSetting::Hidden | crate::ScrollbarSetting::Themed(_),
+                ) => list::ignored::SCROLLBAR,
                 Prop::Refreshing(true) => list::ignored::REFRESH,
                 Prop::ScrollValue(Some(_)) => list::ignored::SCROLL_VALUE,
                 _ => 0,
@@ -3071,72 +3447,6 @@ impl<M: TextEngine> Core<M> {
                     }
                 }
             }
-            Prop::ShaderSource(source) => {
-                let id = node.id;
-                if let Some(shader) = node.shader.as_mut()
-                    && shader.source != source
-                {
-                    shader.source = source;
-                    flags |= dirty::SHADER;
-                    if shader.repack(id) {
-                        flags |= dirty::ANIMATION;
-                    }
-                }
-            }
-            Prop::Uniforms(uniforms) => {
-                let id = node.id;
-                if let Some(shader) = node.shader.as_mut()
-                    && shader.uniforms != uniforms
-                {
-                    shader.uniforms = uniforms;
-                    flags |= dirty::SHADER;
-                    if shader.repack(id) {
-                        flags |= dirty::ANIMATION;
-                    }
-                }
-            }
-            Prop::ShaderProgress(progress) => {
-                if let Some(shader) = node.shader.as_mut()
-                    && shader.progress != progress
-                {
-                    let rebound = matches!(progress, crate::shader::ShaderNumber::Animated(_))
-                        || matches!(shader.progress, crate::shader::ShaderNumber::Animated(_));
-                    shader.progress = progress;
-                    flags |= dirty::SHADER;
-                    if rebound {
-                        flags |= dirty::ANIMATION;
-                    }
-                }
-            }
-            Prop::TransitionValue(key) => {
-                if let Some(shader) = node.shader.as_mut()
-                    && shader.key != key
-                {
-                    shader.key = key;
-                    flags |= dirty::SHADER;
-                }
-            }
-            Prop::TransitionDuration(ms) => {
-                if let Some(shader) = node.shader.as_mut() {
-                    shader.duration = ms;
-                }
-            }
-            Prop::TransitionFallback(fallback) => {
-                if let Some(shader) = node.shader.as_mut()
-                    && shader.fallback != fallback
-                {
-                    shader.fallback = fallback;
-                    flags |= dirty::SHADER;
-                }
-            }
-            Prop::MaxSampleOffset(offset) => {
-                if let Some(shader) = node.shader.as_mut()
-                    && shader.max_offset != offset
-                {
-                    shader.max_offset = offset;
-                    flags |= dirty::SHADER;
-                }
-            }
             Prop::Image(option) => {
                 if let Some(image) = node.image.as_mut() {
                     match option {
@@ -3149,22 +3459,15 @@ impl<M: TextEngine> Core<M> {
                     flags |= dirty::IMAGE;
                 }
             }
-            Prop::ResizeMode(mode) => {
-                if let Some(image) = node.image.as_mut() {
-                    image.resize_mode = mode;
-                    flags |= dirty::IMAGE;
-                } else if let Some(control) = node.control.as_mut() {
-                    apply_native(control, NativeProp::VideoResizeMode(mode));
-                    flags |= dirty::NATIVE;
-                }
-            }
             Prop::Horizontal(horizontal) => {
                 if let Some(scroll) = node.scroll.as_mut()
                     && scroll.horizontal != horizontal
                 {
                     scroll.horizontal = horizontal;
                     flags |= dirty::SCROLL;
+                    let rtl = node.rtl;
                     if let Some(list) = node.list.as_mut() {
+                        list.set_mirrored(horizontal && rtl);
                         list.set_horizontal(horizontal);
                     }
                     let children = node.children.clone();
@@ -3182,10 +3485,15 @@ impl<M: TextEngine> Core<M> {
                     }
                 }
             }
-            Prop::Scrollbar(shows) => {
+            Prop::Scrollbar(setting) => {
                 if let Some(scroll) = node.scroll.as_mut() {
-                    scroll.scrollbar_visible = shows;
+                    scroll.scrollbar = setting;
                     flags |= dirty::SCROLL;
+                    self.scrollbars_pending.push(key);
+                } else if let Some(input) = node.input.as_mut() {
+                    input.scrollbar = setting;
+                    flags |= dirty::INPUT;
+                    self.scrollbars_pending.push(key);
                 }
             }
             Prop::Scroll(prop) => {
@@ -3388,29 +3696,10 @@ impl<M: TextEngine> Core<M> {
                 node.gestures.rotation = value;
                 flags |= dirty::PAN;
             }
-            Prop::NumberOfLines(lines) => {
-                if node.paragraph.lines != lines {
-                    node.paragraph.lines = lines;
-                    self.mark_text_block(key);
-                }
-            }
-            Prop::EllipsizeMode(mode) => {
-                node.paragraph.ellipsize_set = true;
-                if node.paragraph.ellipsize != mode {
-                    node.paragraph.ellipsize = mode;
-                    self.mark_text_block(key);
-                }
-            }
             Prop::AllowFontScaling(allow) => {
                 if node.paragraph.allow_font_scaling != allow {
                     node.paragraph.allow_font_scaling = allow;
                     self.font_settings_changed(key);
-                }
-            }
-            Prop::Selectable(on) => {
-                if node.paragraph.selectable != on {
-                    node.paragraph.selectable = on;
-                    self.mark_text_block(key);
                 }
             }
             Prop::SelectionColor(color) if node.input.is_none() => {
@@ -3570,6 +3859,14 @@ impl<M: TextEngine> Core<M> {
                 self.set_part_style(key, classes::Part::Indeterminate, patch);
                 return Ok(());
             }
+            Prop::PressedStyle(patch) => {
+                self.set_part_style(key, classes::Part::Pressed, patch);
+                return Ok(());
+            }
+            Prop::ExpandedStyle(patch) => {
+                self.set_part_style(key, classes::Part::Expanded, patch);
+                return Ok(());
+            }
             Prop::ProjectedStates(states) => {
                 self.set_projected_states(key, states);
                 return Ok(());
@@ -3644,17 +3941,10 @@ impl<M: TextEngine> Core<M> {
                     }
                     AccessibilityProp::LiveRegion(v) => a.live_region = v,
                     AccessibilityProp::Actions(v) => a.actions = v,
+                    AccessibilityProp::Level(v) => a.level = v,
                 }
-                let selected =
-                    (a.state.selected != before.state.selected).then_some(a.state.selected);
-                let is_checked =
-                    |s: &crate::AccessibilityState| s.checked == Some(crate::Checked::True);
-                let checked = (is_checked(&a.state) != is_checked(&before.state))
-                    .then(|| is_checked(&a.state));
-                let is_mixed =
-                    |s: &crate::AccessibilityState| s.checked == Some(crate::Checked::Mixed);
-                let indeterminate =
-                    (is_mixed(&a.state) != is_mixed(&before.state)).then(|| is_mixed(&a.state));
+                let states = classes::accessibility_states(&a.state);
+                let states_changed = states != classes::accessibility_states(&before.state);
                 if *a != before {
                     flags |= if label_only {
                         dirty::LABEL
@@ -3662,19 +3952,11 @@ impl<M: TextEngine> Core<M> {
                         dirty::VIEW_PROPS
                     };
                 }
-                if selected.is_some() || checked.is_some() || indeterminate.is_some() {
+                if states_changed {
                     if flags != 0 {
                         self.mark(key, flags);
                     }
-                    if let Some(selected) = selected {
-                        self.set_selected(key, selected);
-                    }
-                    if let Some(checked) = checked {
-                        self.set_checked(key, checked);
-                    }
-                    if let Some(indeterminate) = indeterminate {
-                        self.set_indeterminate(key, indeterminate);
-                    }
+                    self.set_accessibility_states(key, states);
                     return Ok(());
                 }
             }
@@ -3687,21 +3969,11 @@ impl<M: TextEngine> Core<M> {
             // `animation` on a dialog: the value pages and dialogs share.
             Prop::Screen(ScreenProp::Animation(a)) if node.kind == Kind::Modal => {
                 if let Some(root) = node.root.as_mut() {
-                    let (animation, shader) = match a {
-                        ScreenTransition::Preset(ScreenAnimation::Default) => {
-                            (ModalAnimation::Slide, None)
-                        }
-                        ScreenTransition::Preset(ScreenAnimation::Fade) => {
-                            (ModalAnimation::Fade, None)
-                        }
-                        ScreenTransition::Preset(ScreenAnimation::None) => {
-                            (ModalAnimation::None, None)
-                        }
-                        // Where shaders draw no transitions, it fades.
-                        ScreenTransition::Shader(s) => (ModalAnimation::Fade, Some(s)),
+                    root.modal.animation = match a {
+                        ScreenAnimation::Default => ModalAnimation::Slide,
+                        ScreenAnimation::Fade => ModalAnimation::Fade,
+                        ScreenAnimation::None => ModalAnimation::None,
                     };
-                    root.modal.animation = animation;
-                    root.shader_animation = shader;
                     flags |= dirty::MODAL;
                 }
             }
@@ -3713,20 +3985,15 @@ impl<M: TextEngine> Core<M> {
                         ScreenProp::HeaderVisible(v) => c.header_visible = v,
                         ScreenProp::HeaderLargeTitle(v) => c.large_title = v,
                         ScreenProp::HeaderTransparent(v) => c.header_transparent = v,
+                        ScreenProp::HidesBottomBarWhenPushed(v) => {
+                            c.hides_bottom_bar_when_pushed = v
+                        }
                         ScreenProp::HeaderBackTitle(v) => c.back_title = v,
                         ScreenProp::HeaderBackVisible(v) => c.back_visible = v,
                         ScreenProp::HeaderRightSystemItem(v) => c.right_system_item = v,
                         ScreenProp::PopOnSwipe(v) => c.gesture_enabled = v,
                         ScreenProp::PopOnBack(v) => c.prevent_back = !v,
-                        ScreenProp::Animation(ScreenTransition::Preset(v)) => {
-                            c.animation = v;
-                            root.shader_animation = None;
-                        }
-                        // Where shaders draw no transitions, the platform's own.
-                        ScreenProp::Animation(ScreenTransition::Shader(s)) => {
-                            c.animation = ScreenAnimation::Default;
-                            root.shader_animation = Some(s);
-                        }
+                        ScreenProp::Animation(v) => c.animation = v,
                         // Taken by `set_prop`.
                         ScreenProp::StatusBar(_) => {}
                     }
@@ -3919,6 +4186,8 @@ impl<M: TextEngine> Core<M> {
                     }
                     Prop::Multiline(multiline) => {
                         c.multiline = multiline;
+                        // Only a multiline input shows a built-in bar.
+                        self.scrollbars_pending.push(key);
                         true
                     }
                     Prop::PlaceholderColor(color) => {
@@ -3981,6 +4250,10 @@ impl<M: TextEngine> Core<M> {
                         c.selection_color = color;
                         false
                     }
+                    Prop::CaretColor(color) => {
+                        c.caret_color = color;
+                        false
+                    }
                     Prop::AutoFill(fill) => {
                         c.auto_fill = fill;
                         false
@@ -4017,7 +4290,22 @@ impl<M: TextEngine> Core<M> {
     ) -> Result<(), ApplyError> {
         let parent = self.key(parent_id)?;
         let child = self.key(child_id)?;
-        let before = before.map(|b| self.key(b)).transpose()?;
+        if self.nodes[child as usize].parent != NO_KEY {
+            self.input_bar_moves(child);
+            self.components.moved = true;
+        }
+        let mut before = before.map(|b| self.key(b)).transpose()?;
+        // Appended below the built-in bar, which stays on top.
+        if before.is_none()
+            && let Some((bar, _)) = self.nodes[parent as usize]
+                .scroll
+                .as_ref()
+                .and_then(|s| s.bar.as_ref())
+            && let Ok(bar) = self.key(*bar)
+            && bar != child
+        {
+            before = Some(bar);
+        }
         if child == self.root || self.is_ancestor(child, parent) {
             return Err(ApplyError::Cycle(child_id));
         }
@@ -4141,7 +4429,18 @@ impl<M: TextEngine> Core<M> {
 
     /// Detaches `key` from its parent (Remove op).
     fn detach(&mut self, key: Key) {
+        self.input_bar_moves(key);
         self.unlink(key, true);
+    }
+
+    /// A multiline input with a built-in bar beside it leaves its place:
+    /// the bar goes, and is made again beside it where it goes.
+    fn input_bar_moves(&mut self, key: Key) {
+        let node = &self.nodes[key as usize];
+        if node.input.as_ref().is_some_and(|i| i.bar.is_some()) {
+            self.release_scrollbar(key);
+            self.scrollbars_pending.push(key);
+        }
     }
 
     /// Unlinks `key` from its parent's children, layout and (optionally)
@@ -4272,6 +4571,10 @@ impl<M: TextEngine> Core<M> {
         if !self.overlay_state.tooltips.is_empty() {
             self.tooltip_released(id);
         }
+        // So does its built-in bar.
+        if self.nodes[key as usize].bar().is_some() {
+            self.release_scrollbar(key);
+        }
         if self.nodes[key as usize].parent != NO_KEY {
             // Deleting the view also detaches it natively.
             self.unlink(key, false);
@@ -4301,6 +4604,9 @@ impl<M: TextEngine> Core<M> {
             self.sticky_nodes.retain(|&k| k != key);
             self.sticky_changed = true;
         }
+        if node.follow.is_some() {
+            self.release_follower(key);
+        }
         if let Some(scroll) = node.scroll.as_ref() {
             if !scroll.dependents.is_empty() {
                 self.outer_released(&scroll.dependents);
@@ -4316,10 +4622,6 @@ impl<M: TextEngine> Core<M> {
         }
         if node.kind == Kind::Text {
             self.attachment_blocks.retain(|&k| k != key);
-        }
-        if node.kind == Kind::ScreenEffect {
-            self.screen_effects.retain(|&k| k != key);
-            self.screen_effects_changed = true;
         }
         if node.is_layout_root() {
             self.roots.retain(|&k| k != key);
@@ -4547,6 +4849,11 @@ impl<M: TextEngine> Core<M> {
         let node = &mut self.nodes[key as usize];
         let kind = node.kind;
         node.frame = Bounds::UNSET;
+        node.emitted = None;
+        if let Some(layout) = node.layout {
+            self.layout.mark_stale(layout);
+        }
+        let node = &mut self.nodes[key as usize];
         // A list in its parent's viewport is a plain view clipping its
         // cells (`Node::mounted_view_style`), with no scroll view's config.
         let parent_list = node.list.as_ref().is_some_and(|l| l.parent);
@@ -4579,23 +4886,19 @@ impl<M: TextEngine> Core<M> {
         if !node.animated.is_empty()
             || node.drawing.as_ref().is_some_and(|d| !d.slots.is_empty())
             || node.component.as_ref().is_some_and(|c| !c.slots.is_empty())
+            || node
+                .shader
+                .as_ref()
+                .and_then(|s| s.layer.as_ref())
+                .is_some_and(|l| !l.nodes.is_empty())
         {
             flags |= dirty::ANIMATION;
         }
         if node.drawing.is_some() {
             flags |= dirty::CANVAS;
         }
-        if let Some(shader) = node.shader.as_mut() {
-            // The new view has drawn nothing.
-            shader.sent = None;
-            if shader.source.is_some() {
-                flags |= dirty::SHADER;
-            }
-            if !shader.packed.bindings.is_empty()
-                || matches!(shader.progress, crate::shader::ShaderNumber::Animated(_))
-            {
-                flags |= dirty::ANIMATION;
-            }
+        if node.shader.as_ref().is_some_and(|s| s.layer.is_some()) {
+            flags |= dirty::SHADER;
         }
         if !node.gestures.is_empty() {
             flags |= dirty::PAN;
@@ -4700,11 +5003,9 @@ impl<M: TextEngine> Core<M> {
             if flags & dirty::IMAGE != 0
                 && let Some(image) = &node.image
             {
-                // An explicit `resizeMode` wins over `object-*` classes.
-                let resize_mode = match node.class_props.as_ref().and_then(|c| c.resize_mode) {
-                    Some(m) if image.resize_mode == ResizeMode::default() => m,
-                    _ => image.resize_mode,
-                };
+                // The style's `objectFit`; an image covers its box by
+                // default.
+                let resize_mode = node.object_fit.unwrap_or_default();
                 // Bundled assets with variants: the one for the screen.
                 let ratio = self.components.environment.pixel_ratio;
                 self.mount.push(MountItem::Image {
@@ -4730,7 +5031,10 @@ impl<M: TextEngine> Core<M> {
                     self.mount.push(MountItem::ScrollConfig {
                         id,
                         horizontal: scroll.horizontal,
-                        scrollbar_visible: scroll.scrollbar_visible,
+                        // A built-in bar takes the indicator's place.
+                        scrollbar_visible: scroll.scrollbar != crate::ScrollbarSetting::Hidden
+                            && scroll.bar.is_none(),
+                        replaced: scroll.bar.is_some(),
                         scroll_value: scroll.scroll_value,
                         pull_value: scroll.pull_value,
                         keyboard_dismiss: scroll.keyboard_dismiss,
@@ -4786,17 +5090,14 @@ impl<M: TextEngine> Core<M> {
                             .map(|(i, &n)| (AnimationProp::CanvasArg(i as u16), n)),
                     );
                 }
-                if let Some(shader) = &node.shader {
+                if let Some(layer) = node.shader.as_ref().and_then(|s| s.layer.as_ref()) {
                     bindings.extend(
-                        shader
-                            .packed
-                            .bindings
+                        layer
+                            .nodes
                             .iter()
-                            .map(|&(k, n)| (AnimationProp::ShaderUniform(k), n)),
+                            .enumerate()
+                            .map(|(i, &n)| (AnimationProp::CanvasArg(i as u16), n)),
                     );
-                    if let crate::shader::ShaderNumber::Animated(n) = shader.progress {
-                        bindings.push((AnimationProp::ShaderUniform(crate::shader::PROGRESS), n));
-                    }
                 }
                 if let Some(component) = &node.component {
                     bindings.extend(
@@ -4820,18 +5121,21 @@ impl<M: TextEngine> Core<M> {
             if flags & dirty::CANVAS != 0
                 && let Some(drawing) = &node.drawing
             {
-                let drawing = if drawing.view_paints.is_empty() {
-                    drawing.clone()
+                if drawing.fit().is_some() {
+                    // Its size comes with this round's layout.
+                    self.fitted_pending.push(key);
                 } else {
-                    let (paint, current) = self.resolved_paint(key);
-                    let style = &node.view_style;
-                    let images = style
-                        .effects
-                        .as_deref()
-                        .map_or(&[][..], |e| &e.background_images[..]);
-                    Arc::new(drawing.painted(&paint, current, style.background_color, images))
-                };
-                self.mount.push(MountItem::Canvas { id, drawing });
+                    let drawing = self.mounted_drawing(key, drawing);
+                    self.mount.push(MountItem::Canvas { id, drawing });
+                }
+            }
+            if flags & dirty::SHADER != 0
+                && let Some(shader) = &node.shader
+            {
+                self.mount.push(MountItem::Shader {
+                    id,
+                    layer: shader.layer.clone(),
+                });
             }
             if flags & dirty::PAN != 0 {
                 let mut values = node.gestures;
@@ -4850,9 +5154,6 @@ impl<M: TextEngine> Core<M> {
                     .as_ref()
                     .and_then(|p| p.accessibility.label.clone());
                 self.mount.push(MountItem::AccessibilityLabel { id, label });
-            }
-            if flags & (dirty::SCREEN | dirty::MODAL) != 0 {
-                self.nav_shader(key);
             }
             if flags & dirty::SCREEN != 0
                 && let Some(config) = self.screen_config(key)
@@ -4890,9 +5191,6 @@ impl<M: TextEngine> Core<M> {
                     self.mount.push(MountItem::ComponentProps { id, props });
                 }
             }
-            if flags & dirty::SHADER != 0 {
-                self.flush_shader(key);
-            }
             let node = &self.nodes[key as usize];
             if flags & dirty::NATIVE != 0
                 && let Some(control) = &node.control
@@ -4905,11 +5203,14 @@ impl<M: TextEngine> Core<M> {
             if flags & dirty::MODAL != 0
                 && let Some(root) = &node.root
             {
-                self.mount.push(MountItem::ModalConfig {
-                    id,
-                    config: root.modal,
-                    shader: root.modal_shader.clone(),
-                });
+                let config = root.modal;
+                self.mount.push(MountItem::ModalConfig { id, config });
+            }
+            if flags & dirty::NAV_SHADER != 0
+                && let Some(root) = &node.root
+            {
+                let shader = root.nav_shader.clone();
+                self.mount.push(MountItem::NavShader { id, shader });
             }
             if let Some(input) = &node.input {
                 if flags & dirty::INPUT != 0 {
@@ -4930,9 +5231,11 @@ impl<M: TextEngine> Core<M> {
                     if let Some(c) = class {
                         config.placeholder_color = config.placeholder_color.or(c.placeholder_color);
                     }
-                    config.selection_color = config
-                        .selection_color
-                        .or(self.inherited_text_props(key).2)
+                    config.selection_color =
+                        config.selection_color.or(self.inherited_text_props(key).2);
+                    config.caret_color = config
+                        .caret_color
+                        .or(node.text_style.caret_color)
                         .or(class.and_then(|c| c.caret_color));
                     config.style = scaled(
                         self.inherited_text_style(key).inherit(&node.text_style),
@@ -4943,6 +5246,10 @@ impl<M: TextEngine> Core<M> {
                         node.rtl && !node.text_style.text_align_physical,
                     );
                     config.rtl = node.text_style.writing_direction.unwrap_or(node.rtl);
+                    // A built-in bar takes the indicator's place.
+                    config.scrollbar_visible =
+                        input.scrollbar != crate::ScrollbarSetting::Hidden && input.bar.is_none();
+                    config.replaced = input.bar.is_some();
                     self.mount.push(MountItem::Input {
                         id,
                         config: Box::new(config),
@@ -5109,17 +5416,10 @@ impl<M: TextEngine> Core<M> {
     /// color change keeps both and just needs a new final layout.
     fn rebuild_text(&mut self, key: Key) -> bool {
         let node = &self.nodes[key as usize];
+        // Its own style's and classes' (`numberOfLines`, `textOverflow`).
         let class = node.class_props.as_deref();
-        // Explicit props win over classes (`numberOfLines` over
-        // `line-clamp-*`).
-        let max_lines = match (node.paragraph.lines, class.and_then(|c| c.number_of_lines)) {
-            (0, Some(n)) => n,
-            (n, _) => n,
-        };
-        let ellipsize = match class.and_then(|c| c.ellipsize) {
-            Some(m) if !node.paragraph.ellipsize_set => m,
-            _ => node.paragraph.ellipsize,
-        };
+        let max_lines = class.and_then(|c| c.number_of_lines).unwrap_or(0);
+        let ellipsize = class.and_then(|c| c.ellipsize).unwrap_or_default();
         let inherited = self.inherited_text_style(key);
         let (no_wrap, selectable, highlight) = self.inherited_text_props(key);
         let (align, physical) = node
@@ -5138,7 +5438,7 @@ impl<M: TextEngine> Core<M> {
             // must ellipsize at the box (`truncate`).
             no_wrap: max_lines == 0 && no_wrap.unwrap_or(false),
             shadow: node.text_style.shadow(),
-            selectable: node.paragraph.selectable.or(selectable),
+            selectable,
             selection_color: node
                 .paragraph
                 .selection_color
@@ -5192,15 +5492,8 @@ impl<M: TextEngine> Core<M> {
             // final layout, laid out again with the rest.
             let attachments =
                 !cx.alignments.is_empty() || !self.nodes[key as usize].attached.is_empty();
-            let engine = &self.text_engine;
-            let cache = &mut self.measure_cache;
-            if attachments
-                || !self
-                    .layout
-                    .measures_as_before(layout, |input, _, cx, style| {
-                        measure_leaf(engine, cache, input, cx, style)
-                    })
-            {
+            let measure = leaf_measure(&self.text_engine, &mut self.measure_cache);
+            if attachments || !self.layout.measures_as_before(layout, measure) {
                 self.layout.mark_dirty(layout);
                 self.needs_layout = true;
             }
@@ -5429,13 +5722,40 @@ impl<M: TextEngine> Core<M> {
             })
     }
 
-    /// `layout`'s layout, rounded to whole points as Taffy's rounding pass
-    /// does ([`rounded`]).
+    /// `layout`'s layout, rounded to the surface's device pixels as Taffy's
+    /// rounding pass rounds to whole points ([`rounded`]).
     fn rounded_layout(&self, layout: LayoutId) -> taffy::Layout {
         rounded(
             self.layout.unrounded_layout(layout),
             self.layout_origin(layout),
+            self.pixel_ratio(),
         )
+    }
+
+    /// The device pixels per point layouts and text measurements are rounded
+    /// to: the environment's pixel ratio ([`MeasureCache::pixel_ratio`]).
+    fn pixel_ratio(&self) -> f32 {
+        self.measure_cache.pixel_ratio()
+    }
+
+    /// The surface's pixel ratio is now `ratio`: frames are rounded to its
+    /// device pixels and text is measured in them, so a new ratio measures
+    /// text again and sends every frame that moves.
+    fn pixel_ratio_changed(&mut self, ratio: f32) {
+        if !self.measure_cache.set_pixel_ratio(ratio) {
+            return;
+        }
+        self.fonts_changed();
+        let layouts: Vec<LayoutId> = self
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.created)
+            .filter_map(|(_, n)| n.layout)
+            .collect();
+        for layout in layouts {
+            self.layout.mark_dirty(layout);
+        }
+        self.needs_layout = true;
     }
 
     /// Lays out the main tree if it changed. Returns true if it did.
@@ -5728,77 +6048,6 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
-    /// Makes page or dialog `key`'s `animation` through a shader into what
-    /// the platform draws ([`crate::NavShader`]): its program sent first,
-    /// its uniforms packed.
-    fn nav_shader(&mut self, key: Key) {
-        let Some(spec) = self.nodes[key as usize]
-            .root
-            .as_ref()
-            .and_then(|r| r.shader_animation.clone())
-        else {
-            if let Some(root) = self.nodes[key as usize].root.as_mut() {
-                root.screen.shader = None;
-                root.modal_shader = None;
-            }
-            return;
-        };
-        let language = self.components.environment.shaders.language;
-        let ratio = self.components.environment.pixel_ratio;
-        let source = &spec.source;
-        let ready = *self.shader_programs.entry(source.id).or_insert_with(|| {
-            match crate::shader::ShaderProgram::translate(source, language) {
-                Ok(program) => {
-                    self.mount.push(MountItem::ShaderProgram {
-                        program: Arc::new(program),
-                    });
-                    true
-                }
-                Err(e) => {
-                    log::error!(target: "js", "animation: {e}");
-                    false
-                }
-            }
-        });
-        let shader = ready.then(|| {
-            let id = self.nodes[key as usize].id;
-            let packed = crate::shader::pack(
-                source.shader.reflection(),
-                &spec.uniforms,
-                &mut |w| log::warn!(target: "js", "animation (node {id}): {w}"),
-            );
-            let fill = crate::shader::ShaderFill {
-                program: source.id,
-                uniforms: packed.bytes.as_slice().into(),
-                images: packed
-                    .images
-                    .iter()
-                    .map(|i| crate::shader::ShaderImage {
-                        source: i.source.as_ref().map(|s| s.resolved(ratio)),
-                        offset: i.offset,
-                    })
-                    .collect(),
-                time: source.shader.reflection().time,
-                inputs: source
-                    .shader
-                    .reflection()
-                    .inputs
-                    .iter()
-                    .fold(0, |bits, input| bits | 1 << input.index()),
-                ..Default::default()
-            };
-            let ms = spec.duration.unwrap_or(DEFAULT_NAV_SHADER_MS);
-            crate::NavShader {
-                fill: Arc::new(fill),
-                duration: std::time::Duration::from_micros((ms as f64 * 1000.0).round() as u64),
-            }
-        });
-        if let Some(root) = self.nodes[key as usize].root.as_mut() {
-            root.screen.shader = shader.clone();
-            root.modal_shader = shader;
-        }
-    }
-
     /// The options of screen `key`, with its header items.
     fn screen_config(&self, key: Key) -> Option<ScreenConfig> {
         let node = &self.nodes[key as usize];
@@ -5875,7 +6124,8 @@ impl<M: TextEngine> Core<M> {
             let cells = std::mem::take(&mut self.nodes[key as usize].children);
             for &cell in &cells {
                 let node = &self.nodes[cell as usize];
-                let Some(cell_layout) = node.layout else {
+                // Its built-in bar: laid out by `layout_scrollbars`.
+                let (Some(cell_layout), false) = (node.layout, node.decoration) else {
                     continue;
                 };
                 let c = match node.slot {
@@ -5893,23 +6143,17 @@ impl<M: TextEngine> Core<M> {
 
     /// Lays out the tree under `root` within `available`.
     fn layout_root(&mut self, root: LayoutId, available: taffy::Size<AvailableSpace>) {
-        let engine = &self.text_engine;
-        let cache = &mut self.measure_cache;
+        let measure = leaf_measure(&self.text_engine, &mut self.measure_cache);
         self.layout
-            .compute_layout_with_measure(root, available, |input, _, cx, style| {
-                measure_leaf(engine, cache, input, cx, style)
-            });
+            .compute_layout_with_measure(root, available, measure);
     }
 
     /// Lays out the relayout boundaries a change inside made dirty
     /// (`LayoutTree::relayout_boundaries`), returning those laid out on
     /// their own: their subtrees' frames are new.
     fn relayout_boundaries(&mut self) -> Vec<Key> {
-        let engine = &self.text_engine;
-        let cache = &mut self.measure_cache;
-        self.layout.relayout_boundaries(|input, _, cx, style| {
-            measure_leaf(engine, cache, input, cx, style)
-        })
+        let measure = leaf_measure(&self.text_engine, &mut self.measure_cache);
+        self.layout.relayout_boundaries(measure)
     }
 
     /// Whether `key` is out of the layout: `display: none` on it or on a
@@ -6168,6 +6412,11 @@ impl<M: TextEngine> Core<M> {
         }
         let hidden = hidden || self.layout.style(layout).display == taffy::Display::None;
         if hidden {
+            self.layout.emitted(layout);
+            self.nodes[key as usize].emitted = None;
+            if self.nodes[key as usize].follow.is_some() {
+                self.laid_follower(key, None, false, (0.0, 0.0));
+            }
             self.set_frame(key, Bounds::default());
             if self.nodes[key as usize].kind.is_container() {
                 let children = std::mem::take(&mut self.nodes[key as usize].children);
@@ -6181,8 +6430,42 @@ impl<M: TextEngine> Core<M> {
             return;
         }
         let node = &self.nodes[key as usize];
-        let unrounded = self.layout.unrounded_layout(layout);
-        let containing = if self.layout.style(layout).position.is_out_of_flow() {
+        let unrounded = *self.layout.unrounded_layout(layout);
+        // An absolute view in a positioned parent (React Native's default
+        // `relative`) is placed in that parent, whose origin is `origin`,
+        // summed in the same order as `layout_origin` sums it: only one
+        // placed further up walks there (every cell of a table would walk to
+        // the root, each frame the tree is laid out).
+        let position = self.layout.style(layout).position;
+        let escaping = position == Position::Fixed
+            || (position == Position::Absolute
+                && !self
+                    .layout
+                    .parent(layout)
+                    .is_some_and(|p| self.layout.style(p).position.is_positioned()));
+        let ratio = self.pixel_ratio();
+        // Nothing in the subtree was laid out anew and its origin moved by
+        // whole device pixels (or not at all): every frame in it, relative to
+        // its parent, rounds as it did. A scroll that moves a table's rows
+        // walks the rows' origin, not each cell.
+        if !self.layout.stale(layout)
+            && !node.escapes
+            && !node.is_overlay()
+            && node.beside == NO_KEY
+            && !self.nodes.get(node.parent as usize).is_some_and(|p| p.rtl)
+            && node.emitted.is_some_and(|(at, r)| {
+                let moved = |a: f32, b: f32| {
+                    let d = (a - b) * ratio;
+                    d == d.round()
+                };
+                r == ratio && moved(origin.x, at.x) && moved(origin.y, at.y)
+            })
+        {
+            self.nodes[key as usize].emitted = Some((origin, ratio));
+            return;
+        }
+        self.layout.emitted(layout);
+        let containing = if escaping {
             self.layout_origin(layout)
         } else {
             origin
@@ -6191,16 +6474,17 @@ impl<M: TextEngine> Core<M> {
             x: containing.x + unrounded.location.x,
             y: containing.y + unrounded.location.y,
         };
-        let l = rounded(unrounded, containing);
+        let l = rounded(&unrounded, containing, ratio);
         let mut frame = rect(
-            l.location.x + round(containing.x) - round(origin.x),
-            l.location.y + round(containing.y) - round(origin.y),
+            l.location.x + span(origin.x, containing.x, ratio),
+            l.location.y + span(origin.y, containing.y, ratio),
             l.size.width,
             l.size.height,
         );
         // Children of a right-to-left horizontal scroll view: mirrored in
-        // its content.
+        // its content (not its bar, over the viewport).
         if let Some(parent) = self.nodes.get(node.parent as usize)
+            && !node.decoration
             && parent.rtl
             && let Some(ScrollState {
                 horizontal: true,
@@ -6214,7 +6498,32 @@ impl<M: TextEngine> Core<M> {
         if node.is_overlay() {
             frame.origin = self.overlay_origin(key, frame);
         }
-        self.set_frame(key, frame);
+        // A multiline input's bar: over it, laid out on its own.
+        let beside = self.nodes[key as usize].beside;
+        if beside != NO_KEY {
+            frame.origin = self.nodes[beside as usize].frame.origin;
+        }
+        if self.nodes[key as usize].follow.is_some() {
+            // Its frame along the main axis is the element's it follows,
+            // laid out by now or not: placed once every frame is out.
+            let column = self.layout.parent(layout).is_some_and(|p| {
+                let style = self.layout.style(p);
+                style.display == taffy::Display::Flex
+                    && matches!(
+                        style.flex_direction,
+                        taffy::FlexDirection::Column | taffy::FlexDirection::ColumnReverse
+                    )
+            });
+            let m = unrounded.margin;
+            let margins = if column {
+                (round(m.top, ratio), round(m.bottom, ratio))
+            } else {
+                (round(m.left, ratio), round(m.right, ratio))
+            };
+            self.laid_follower(key, Some(frame), column, margins);
+        } else {
+            self.set_frame(key, frame);
+        }
         let kind = self.nodes[key as usize].kind;
         if kind == Kind::Input {
             let content = content_box(&l);
@@ -6246,22 +6555,45 @@ impl<M: TextEngine> Core<M> {
         }
         // List cells are positioned by `update_lists`, roots by
         // `layout_roots`.
+        let mut escapes = escaping;
         if kind.is_container() && kind != Kind::List {
             let children = std::mem::take(&mut self.nodes[key as usize].children);
             for &child in &children {
                 if !self.nodes[child as usize].is_layout_root() {
                     self.emit_frames_in(child, false, inner);
+                    escapes |= self.nodes[child as usize].escapes;
                 }
             }
             self.nodes[key as usize].children = children;
             self.update_overflow(key);
+        }
+        let node = &mut self.nodes[key as usize];
+        node.escapes = escapes;
+        node.emitted = Some((origin, ratio));
+    }
+
+    /// Queues node `key`'s frame for its layout listeners once it was laid
+    /// out: a listener added after layout still learns the frame.
+    fn report_frame(&mut self, key: Key) {
+        let node = &self.nodes[key as usize];
+        if !node.frame.origin.x.0.is_nan() {
+            self.events.push(crate::element::JsEvent::Event(
+                node.id,
+                EventKind::Layout,
+                EventPayload::Layout(node.frame),
+            ));
         }
     }
 
     fn set_frame(&mut self, key: Key, frame: Bounds<Points>) {
         let node = &mut self.nodes[key as usize];
         if node.frame != frame {
+            let resized = node.frame.size != frame.size;
             node.frame = frame;
+            self.note_resized(key, resized);
+            // What views follow may have moved.
+            self.follow_changed |= !self.followers.is_empty();
+            let node = &self.nodes[key as usize];
             let (id, is_text) = (node.id, node.kind == Kind::Text);
             if node.events.contains(EventKind::Layout) {
                 self.events.push(crate::element::JsEvent::Event(
@@ -6288,6 +6620,12 @@ impl<M: TextEngine> Core<M> {
             }
             if is_text {
                 self.queue_text(key);
+            }
+            // A view box fits into the new size.
+            let node = &self.nodes[key as usize];
+            if node.kind == Kind::Canvas && node.drawing.as_ref().is_some_and(|d| d.fit().is_some())
+            {
+                self.fitted_pending.push(key);
             }
         }
     }
@@ -6354,6 +6692,11 @@ impl<M: TextEngine> Core<M> {
     /// Measures rendered cells, keeps the visible content anchored, picks
     /// the items to render and positions the cells of every list.
     fn update_lists(&mut self, relayout: bool) {
+        // A cell measured before JS's render of its content arrives would
+        // record the size of its empty placeholders.
+        let mut awaiting = std::mem::take(&mut self.awaiting_renders);
+        self.cells_awaiting_renders(&mut awaiting);
+        self.awaiting_renders = awaiting;
         for i in 0..self.lists.len() {
             let key = self.lists[i];
             // Lists in their parent's viewport come after, outer ones first.
@@ -6382,7 +6725,10 @@ impl<M: TextEngine> Core<M> {
                 self.update_list(key, relayout, Some(outer));
             }
         }
-        if !self.sticky_nodes.is_empty() || !self.sticky_scrollers.is_empty() {
+        if !self.sticky_nodes.is_empty()
+            || !self.sticky_scrollers.is_empty()
+            || !self.decorated.is_empty()
+        {
             self.update_sticky_views(relayout);
         }
         if !self.sticky_views.is_empty() {
@@ -6463,6 +6809,13 @@ impl<M: TextEngine> Core<M> {
             .loads_at_start = events.contains(EventKind::LoadMoreAtStart);
         let mut anchor = 0.0;
         for &(index, cell) in &ready {
+            // Waiting for JS's render: it keeps its estimate (or the size
+            // measured last) until the holder arrives and lays it out
+            // again. A list in a view sized by its content would otherwise
+            // shrink to nothing and leave no row in its window to render.
+            if self.awaiting_renders.binary_search(&cell).is_ok() {
+                continue;
+            }
             if let Some(cell_layout) = self.nodes.get(cell as usize).and_then(|c| c.layout) {
                 let size = main_of(self.rounded_layout(cell_layout).size);
                 let list = self.nodes[key as usize].list.as_mut().expect("list");
@@ -6473,6 +6826,9 @@ impl<M: TextEngine> Core<M> {
             .into_iter()
             .zip(extras)
         {
+            if self.awaiting_renders.binary_search(&extra.cell).is_ok() {
+                continue;
+            }
             if let Some(cell_layout) = self.nodes.get(extra.cell as usize).and_then(|c| c.layout) {
                 let size = main_of(self.rounded_layout(cell_layout).size);
                 let list = self.nodes[key as usize].list.as_mut().expect("list");
@@ -6859,45 +7215,90 @@ impl<M: TextEngine> Core<M> {
 const HIDDEN: f32 = 1.0e6;
 
 /// The content box (inside padding and border) of a laid-out node.
-/// Taffy's rounding of a coordinate.
-fn round(value: f32) -> f32 {
-    (value + 0.5).floor()
+/// Taffy's rounding of a coordinate, to the nearest device pixel of
+/// `ratio` pixels per point rather than to whole points: on a display whose
+/// ratio is not a whole number (Android's 2.625) whole points fall between
+/// pixels, so the platform rounding each view's frame to pixels in its parent
+/// would make a child a pixel taller than its parent (a scroll view then cuts
+/// its last row of pixels off).
+fn round(value: f32, ratio: f32) -> f32 {
+    (pixel(value, ratio) / f64::from(ratio)) as f32
+}
+
+/// The device pixel [`round`] puts `value` on, counted from the root's
+/// origin. `value` is an `f32` sum of offsets, a hair off the position it
+/// stands for, and `/ ratio` is never exact at a fractional ratio: snapped
+/// to a 64th of a pixel first, an edge on a half pixel (a 28 point row at
+/// 2.625 is 73.5 pixels) always rounds the same way, wherever a scroll put
+/// it, instead of taking one pixel or the next by that hair.
+fn pixel(value: f32, ratio: f32) -> f64 {
+    let p = f64::from(value) * f64::from(ratio);
+    ((p * 64.0).round() / 64.0 + 0.5).floor()
+}
+
+/// The distance in points from `from` to `to`, each rounded to a device
+/// pixel ([`round`]): computed from the whole pixels between them, so the
+/// same pixels give the same `f32` wherever they are. The difference of two
+/// rounded points (`round(to) - round(from)`) would differ in its last bits
+/// as a scroll moves the edges, and every frame in a scrolled region would
+/// be sent again unchanged.
+fn span(from: f32, to: f32, ratio: f32) -> f32 {
+    ((pixel(to, ratio) - pixel(from, ratio)) / f64::from(ratio)) as f32
+}
+
+/// `value` rounded up to a device pixel of `ratio` pixels per point. A
+/// value a hair over a whole pixel (`56.0 / 2.625 * 2.625` is
+/// `56.000004`) stays that pixel.
+fn ceil_to_pixel(value: Points, ratio: f32) -> Points {
+    Points((value.0 * ratio - 1.0e-3).ceil().max(0.0) / ratio)
 }
 
 /// `layout` rounded as Taffy's rounding pass (`taffy::round_layout`) rounds
-/// it, `origin` being the unrounded position of the node around it in its
+/// it, to device pixels of `ratio` pixels per point ([`round`]), `origin` being the unrounded position of the node around it in its
 /// layout root: edges are rounded where they are in the root, so adjacent
 /// views stay adjacent. The core rounds itself: Taffy's pass reaches the
 /// absolutely positioned nodes through their containing block's list,
 /// which it can leave holding removed nodes (a panic) or never fill (a
 /// hidden subtree's), while here every node is reached through its parent,
 /// its logical parent; out-of-flow offsets use their Taffy containing block.
-fn rounded(layout: &taffy::Layout, origin: taffy::Point<f32>) -> taffy::Layout {
+fn rounded(layout: &taffy::Layout, origin: taffy::Point<f32>, ratio: f32) -> taffy::Layout {
     let mut out = *layout;
     let (x, y) = (origin.x + layout.location.x, origin.y + layout.location.y);
-    out.location.x = round(x) - round(origin.x);
-    out.location.y = round(y) - round(origin.y);
-    out.size.width = round(x + layout.size.width) - round(x);
-    out.size.height = round(y + layout.size.height) - round(y);
-    out.scrollbar_size.width = round(layout.scrollbar_size.width);
-    out.scrollbar_size.height = round(layout.scrollbar_size.height);
-    out.border.left = round(x + layout.border.left) - round(x);
-    out.border.right =
-        round(x + layout.size.width) - round(x + layout.size.width - layout.border.right);
-    out.border.top = round(y + layout.border.top) - round(y);
-    out.border.bottom =
-        round(y + layout.size.height) - round(y + layout.size.height - layout.border.bottom);
-    out.padding.left = round(x + layout.padding.left) - round(x);
-    out.padding.right =
-        round(x + layout.size.width) - round(x + layout.size.width - layout.padding.right);
-    out.padding.top = round(y + layout.padding.top) - round(y);
-    out.padding.bottom =
-        round(y + layout.size.height) - round(y + layout.size.height - layout.padding.bottom);
+    out.location.x = span(origin.x, x, ratio);
+    out.location.y = span(origin.y, y, ratio);
+    out.size.width = span(x, x + layout.size.width, ratio);
+    out.size.height = span(y, y + layout.size.height, ratio);
+    out.scrollbar_size.width = round(layout.scrollbar_size.width, ratio);
+    out.scrollbar_size.height = round(layout.scrollbar_size.height, ratio);
+    out.border.left = span(x, x + layout.border.left, ratio);
+    out.border.right = span(
+        x + layout.size.width - layout.border.right,
+        x + layout.size.width,
+        ratio,
+    );
+    out.border.top = span(y, y + layout.border.top, ratio);
+    out.border.bottom = span(
+        y + layout.size.height - layout.border.bottom,
+        y + layout.size.height,
+        ratio,
+    );
+    out.padding.left = span(x, x + layout.padding.left, ratio);
+    out.padding.right = span(
+        x + layout.size.width - layout.padding.right,
+        x + layout.size.width,
+        ratio,
+    );
+    out.padding.top = span(y, y + layout.padding.top, ratio);
+    out.padding.bottom = span(
+        y + layout.size.height - layout.padding.bottom,
+        y + layout.size.height,
+        ratio,
+    );
     let o = layout.scrollable_overflow_rect;
-    out.scrollable_overflow_rect.left = round(x + o.left) - round(x);
-    out.scrollable_overflow_rect.right = round(x + o.right) - round(x);
-    out.scrollable_overflow_rect.top = round(y + o.top) - round(y);
-    out.scrollable_overflow_rect.bottom = round(y + o.bottom) - round(y);
+    out.scrollable_overflow_rect.left = span(x, x + o.left, ratio);
+    out.scrollable_overflow_rect.right = span(x, x + o.right, ratio);
+    out.scrollable_overflow_rect.top = span(y, y + o.top, ratio);
+    out.scrollable_overflow_rect.bottom = span(y, y + o.bottom, ratio);
     out
 }
 
@@ -7069,6 +7470,22 @@ fn min_content_width<M: TextEngine>(
     width
 }
 
+/// What measures the leaves in every layout pass ([`measure_leaf`]): one
+/// closure type for all of them, so Taffy's algorithms, generic over it,
+/// are made once.
+fn leaf_measure<'a, M: TextEngine>(
+    engine: &'a M,
+    cache: &'a mut MeasureCache,
+) -> impl FnMut(
+    taffy::LayoutInput,
+    LayoutId,
+    Option<&mut LeafContext<M::Prepared>>,
+    &taffy::Style,
+) -> taffy::LayoutOutput
++ 'a {
+    move |input, _, cx, style| measure_leaf(engine, cache, input, cx, style)
+}
+
 /// A leaf's layout (`taffy::compute_leaf_layout`): Taffy resolves its
 /// style's sizes, padding, border, minimums, maximums and aspect ratio;
 /// only its content (a text, an image's natural size, a native
@@ -7132,8 +7549,11 @@ fn measure_text<M: TextEngine>(
                 .prepared
                 .get_or_insert_with(|| engine.prepare_aligned(&cx.text, &cx.alignments));
             let size = engine.measure(prepared, typed);
-            // Round up so rendering never truncates the last glyph.
-            let size = size.map(Points::ceil);
+            // Round up so rendering never truncates the last glyph, to a
+            // device pixel: to a whole point the box grows past the text by
+            // up to a point, all of it below the last line.
+            let ratio = cache.pixel_ratio();
+            let size = size.map(|v| ceil_to_pixel(v, ratio));
             cache.insert(cx.layout_hash, typed, size);
             size
         }
@@ -7288,6 +7708,46 @@ fn span_background(style: &ViewStyle, node: NodeId) -> Option<crate::text::TextB
 /// Whether a span with `events` takes presses (a link in its text block).
 fn pressable(events: EventMask) -> bool {
     PRESSES.iter().any(|&e| events.contains(e))
+}
+
+/// `content` with a line break after every [`MEASURED_RUN`] characters of
+/// a run without a line-break opportunity, as a multiline input's value is measured.
+///
+/// Line breakers search back over the whole run for a break opportunity
+/// at the end of every line they lay out (CoreText through ICU), so one
+/// long run (minified JSON, Base64) costs time quadratic in its length:
+/// 13 s to measure a 474 KB minified JSON on an Apple silicon Mac, on the
+/// engine thread, at every edit. Broken into runs of 1024 it takes 47 ms. The
+/// input shows and reports its own text; the measured height can only
+/// grow by a line per break, and text without such runs is measured as is.
+fn broken_runs(content: &str) -> std::borrow::Cow<'_, str> {
+    let mut broken: Option<String> = None;
+    let (mut start, mut from) = (0, 0);
+    for (end, _) in unicode_linebreak::linebreaks(content) {
+        let mut run = 0;
+        for (offset, c) in content[start..end].char_indices() {
+            let i = start + offset;
+            // The final character may itself provide the break (space or
+            // newline). Do not introduce another line immediately before it.
+            if run == MEASURED_RUN && i + c.len_utf8() < end {
+                let broken = broken.get_or_insert_with(|| {
+                    String::with_capacity(content.len() + content.len() / MEASURED_RUN)
+                });
+                broken.push_str(&content[from..i]);
+                broken.push('\n');
+                (run, from) = (0, i);
+            }
+            run += 1;
+        }
+        start = end;
+    }
+    match broken {
+        Some(mut broken) => {
+            broken.push_str(&content[from..]);
+            broken.into()
+        }
+        None => content.into(),
+    }
 }
 
 /// What a leaf of `kind` measures with, if anything: texts and inputs (an

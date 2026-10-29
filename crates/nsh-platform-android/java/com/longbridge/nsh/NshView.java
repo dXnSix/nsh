@@ -78,7 +78,7 @@ public class NshView extends FrameLayout {
          *
          * @param url the URL
          * @return true when the embedding app handled it (routed it through
-         *     its own router; the app's {@code openUrl} resolves true), false
+         *     its own router; the app's {@code openUrl} resolves {@code { opened: true }}), false
          *     for the system to open it ({@code Intent.ACTION_VIEW})
          */
         boolean openUrl(String url);
@@ -95,6 +95,10 @@ public class NshView extends FrameLayout {
     private final Object hostLock = new Object();
     private float density;
     private final Box root;
+    /** The screen effect or transition drawing over the surface, if any. */
+    Box screen;
+    /** The page and dialog transitions through a shader running, by stack or dialog id. */
+    final android.util.SparseArray<ShaderFrames> navFrames = new android.util.SparseArray<>();
     private final Mounter mounter;
     private final TouchTracker touches;
 
@@ -600,6 +604,7 @@ public class NshView extends FrameLayout {
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
+        if (screen != null) screen.shaderSize();
         // The environment follows in onLayout.
         if (handle != 0 && w > 0 && h > 0) Native.resize(handle, w / density, h / density);
     }
@@ -635,7 +640,7 @@ public class NshView extends FrameLayout {
         boolean rescaled = d > 0 && d != density;
         if (rescaled) {
             density = d;
-            mounter.density = d;
+            mounter.setDensity(d);
         }
         publishEnvironment(getRootWindowInsets());
         int w = getWidth(), h = getHeight();
@@ -715,7 +720,7 @@ public class NshView extends FrameLayout {
         java.util.Locale locale = hostLocale != null ? hostLocale : java.util.Locale.getDefault();
         float fontScale = hostFontScale > 0 && !Float.isInfinite(hostFontScale) ? hostFontScale : c.fontScale;
         Native.environment(handle, new float[] {
-            top / density, right / density, bottom / density, left / density, ime / density, keyboardDuration / 1000f, fontScale,
+            top / density, right / density, bottom / density, left / density, ime / density, (float) keyboardDuration, fontScale,
             android.text.TextUtils.getLayoutDirectionFromLocale(java.util.Locale.getDefault()) == LAYOUT_DIRECTION_RTL ? 1 : 0,
             // "Remove animations" sets the animator scale to 0.
             android.provider.Settings.Global.getFloat(getContext().getContentResolver(),
@@ -939,6 +944,39 @@ public class NshView extends FrameLayout {
     private final Choreographer.FrameCallback jsFrame = nanos -> {
         if (handle != 0) Native.frame(handle);
     };
+
+    /** Where a shader's frames show. */
+    interface ShaderFrames {
+        /**
+         * A new frame: {@code pixels} (null for an empty frame) are only valid
+         * during the call; whether it {@code replaces} what it covers, how far
+         * it reaches beyond the box ({@code overflow}, points).
+         */
+        void shaderFrame(java.nio.ByteBuffer pixels, int width, int height, boolean replaces, float overflow);
+    }
+
+    /**
+     * A shader view's new frame, called by libnsh on the UI thread during
+     * {@link Native#tick}.
+     */
+    void shaderFrame(int id, java.nio.ByteBuffer pixels, int width, int height, boolean replaces, float overflow) {
+        ShaderFrames nav = navFrames.get(id);
+        View v = nav == null ? mounter.view(id) : null;
+        if (nav == null && v instanceof ShaderFrames) nav = (ShaderFrames) v;
+        if (nav != null) nav.shaderFrame(pixels, width, height, replaces, overflow);
+    }
+
+    /** A screen shader's frame where it replaces the surface. */
+    @Override
+    protected void dispatchDraw(android.graphics.Canvas canvas) {
+        if (screen != null && screen.drawScreen(canvas)) return;
+        super.dispatchDraw(canvas);
+    }
+
+    /** The surface as it is (a screen shader's picture). */
+    void drawSurface(android.graphics.Canvas canvas) {
+        super.dispatchDraw(canvas);
+    }
 
     /** JS waits for a display frame (`requestAnimationFrame`). */
     void requestJsFrame() {

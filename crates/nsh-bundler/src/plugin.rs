@@ -71,9 +71,6 @@ pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "web
 /// File types imported as fonts.
 pub(crate) const FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "woff", "woff2"];
 
-/// File types imported as shaders.
-pub(crate) const SHADER_EXTENSIONS: &[&str] = &["wgsl"];
-
 fn has_extension(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -395,12 +392,20 @@ impl Plugin for NshPlugin {
                 "{from}`{spec}` is not part of nsh apps: import signal, computed, effect, batch, untracked, cleanup, context and mount from \"nsh\""
             )));
         }
+        if spec.starts_with("nsh/") {
+            // Named as nsh's modules are, and none of them: name the ones
+            // there are.
+            let modules: Vec<String> = self.modules.nsh().map(|m| format!("`{m}`")).collect();
+            return Err(self.refuse(format!(
+                "{from}nsh has no module `{spec}`: nsh's modules are {}",
+                modules.join(", ")
+            )));
+        }
         // Rolldown may otherwise replace unsupported Node builtins with browser
         // shims. These are absent from the reference runtime catalog.
         if ["events", "assert", "util", "string_decoder", "fs"].contains(&spec)
             || spec.starts_with("node:")
             || spec.starts_with("@nsh/llrt-types/")
-            || spec.starts_with("nsh/")
             || spec.starts_with("nsh:")
         {
             return Err(self.refuse(format!("{from}nsh has no module `{spec}`")));
@@ -424,26 +429,6 @@ impl Plugin for NshPlugin {
             let code = format!(
                 "import {{ font }} from \"nsh:rt\";\nexport default font({uri:?}, {family:?});",
                 uri = format!("asset:/{rel}"),
-            );
-            return Ok(Some(HookLoadOutput {
-                code: code.into(),
-                module_type: Some(ModuleType::Js),
-                ..Default::default()
-            }));
-        }
-        if has_extension(path, SHADER_EXTENSIONS) {
-            // A shader import is its shader, checked now (the device checks
-            // it again when it is made: `createShader`).
-            let source =
-                std::fs::read_to_string(path).map_err(|e| self.fail(path, &e.to_string()))?;
-            if let Err(e) =
-                nsh_core::shader::compile(&source, &nsh_core::shader::ShaderLimits::default())
-            {
-                return Err(self.fail(path, e.render(&rel, &source).trim_end()));
-            }
-            let code = format!(
-                "import {{ createShader }} from \"nsh\";\nexport default createShader({});",
-                serde_json::to_string(&source).expect("a string")
             );
             return Ok(Some(HookLoadOutput {
                 code: code.into(),

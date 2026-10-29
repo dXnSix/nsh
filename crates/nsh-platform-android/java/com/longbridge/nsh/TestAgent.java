@@ -49,65 +49,6 @@ final class TestAgent {
         }
     }
 
-    /** Takes window pictures' results (`PixelCopy` calls back on a thread of its own). */
-    private static android.os.HandlerThread copier;
-
-    /** `window`'s picture into `into`; false when it failed. */
-    private static boolean copy(android.view.Window window, Bitmap into) {
-        if (copier == null) {
-            copier = new android.os.HandlerThread("nsh-test-copy");
-            copier.start();
-        }
-        java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
-        int[] result = {-1};
-        try {
-            android.view.PixelCopy.request(window, into, r -> {
-                result[0] = r;
-                done.countDown();
-            }, new Handler(copier.getLooper()));
-            done.await(5, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            return false;
-        }
-        return result[0] == android.view.PixelCopy.SUCCESS;
-    }
-
-    /** The window and the dialog over it as composed, as a PNG; null when either cannot be copied. */
-    private static byte[] copyWindows(NshView host) {
-        Object[] windows = onMain(() -> {
-            if (!(host.getContext() instanceof Activity)) return null;
-            View root = host.getRootView();
-            if (root.getWidth() == 0 || root.getHeight() == 0) return null;
-            Dialog d = shownDialog;
-            android.view.Window dialog = d != null && d.isShowing() ? d.getWindow() : null;
-            int[] at = new int[2];
-            int[] rootAt = new int[2];
-            int dw = 0, dh = 0;
-            if (dialog != null) {
-                View dv = dialog.getDecorView();
-                dv.getLocationOnScreen(at);
-                root.getLocationOnScreen(rootAt);
-                dw = dv.getWidth();
-                dh = dv.getHeight();
-            }
-            return new Object[] {((Activity) host.getContext()).getWindow(), root.getWidth(), root.getHeight(),
-                    dialog, at[0] - rootAt[0], at[1] - rootAt[1], dw, dh};
-        });
-        if (windows == null) return null;
-        Bitmap b = Bitmap.createBitmap((int) windows[1], (int) windows[2], Bitmap.Config.ARGB_8888);
-        if (!copy((android.view.Window) windows[0], b)) return null;
-        if (windows[3] != null && (int) windows[6] > 0 && (int) windows[7] > 0) {
-            Bitmap d = Bitmap.createBitmap((int) windows[6], (int) windows[7], Bitmap.Config.ARGB_8888);
-            if (!copy((android.view.Window) windows[3], d)) return null;
-            new Canvas(b).drawBitmap(d, (int) windows[4], (int) windows[5], null);
-            d.recycle();
-        }
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        b.compress(Bitmap.CompressFormat.PNG, 100, out);
-        b.recycle();
-        return out.toByteArray();
-    }
-
     /** The view of node `id`'s bounds in the window: x, y, width, height; null when it does not show. */
     static float[] bounds(NshView host, int id) {
         return onMain(() -> {
@@ -156,17 +97,23 @@ final class TestAgent {
 
     /** The time the finger went down, for the events of one gesture. */
     private static long downTime;
+    /** The window that received the current finger's down. */
+    private static View touchTarget;
 
     /** One finger's `action` (`MotionEvent.ACTION_*`) at `x`, `y` in the window. */
     static void touch(NshView host, int action, float x, float y) {
         onMain(() -> {
             long now = SystemClock.uptimeMillis();
-            if (action == MotionEvent.ACTION_DOWN) downTime = now;
-            View root = target(host);
+            if (action == MotionEvent.ACTION_DOWN) {
+                downTime = now;
+                touchTarget = target(host);
+            }
+            View root = touchTarget != null ? touchTarget : target(host);
             MotionEvent e = MotionEvent.obtain(downTime, now, action, x, y, 0);
             e.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
             root.dispatchTouchEvent(e);
             e.recycle();
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) touchTarget = null;
             return null;
         });
     }
@@ -181,6 +128,7 @@ final class TestAgent {
         java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
         MAIN.post(() -> {
             long start = SystemClock.uptimeMillis();
+            View window = target(host);
             int last = xs.length - 1;
             for (int i = 0; i <= last; i++) {
                 final int at = i;
@@ -190,7 +138,7 @@ final class TestAgent {
                     long now = SystemClock.uptimeMillis();
                     MotionEvent e = MotionEvent.obtain(start, now, action, xs[at], ys[at], 0);
                     e.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
-                    target(host).dispatchTouchEvent(e);
+                    window.dispatchTouchEvent(e);
                     e.recycle();
                     if (at == last) done.countDown();
                 }, start + (long) at * frameMs);
@@ -203,11 +151,15 @@ final class TestAgent {
         }
     }
 
-    /** Where touches go: the dialog shown over the app, else the app's window. */
+    /**
+     * Where touches go: the system dialog shown over the app, else the
+     * app's topmost `Dialog` (a window of its own), else the app's window.
+     */
     private static View target(NshView host) {
         Dialog d = shownDialog;
         if (d != null && d.isShowing() && d.getWindow() != null) return d.getWindow().getDecorView();
-        return host.getRootView();
+        View modal = host.mounter().topModalWindow();
+        return modal != null ? modal : host.getRootView();
     }
 
     /** Types `text` into the focused field, key by key where keys type it. */
@@ -365,10 +317,6 @@ final class TestAgent {
 
     /** A picture of the window (and the dialog over it), as a PNG. */
     static byte[] screenshot(NshView host) {
-        // What the window shows, as composed: what only the GPU draws
-        // (runtime shaders) too. Drawn into a bitmap where that fails.
-        byte[] copied = copyWindows(host);
-        if (copied != null) return copied;
         return onMain(() -> {
             View root = host.getRootView();
             if (root.getWidth() == 0 || root.getHeight() == 0) return null;

@@ -2,13 +2,13 @@
 
 use nsh_core::{
     SvgPaint,
-    element::{RowAccessor, Rows, Style},
+    element::{RowAccessor, RowText, Rows, Style},
     prelude::*,
 };
 
 use super::{
     PlotContext, STROKE_ROOM, layer, mark_canvas, reach,
-    series::{HoverDot, Series},
+    series::{self, HoverDot, Series},
 };
 
 /// How a [`Line`] or an [`Area`](super::Area) connects its points
@@ -57,6 +57,39 @@ pub(super) fn trace(mut p: Painter, points: &[Point<Points>], curve: Curve) -> P
     p
 }
 
+/// Records the path [`trace`] records through `points`, the other way:
+/// from the last point (already moved or lined to) back to the first, so
+/// the bottom edge of a band follows the same curve as its top edge (d3's
+/// area traces its `y0` line in reverse with the area's curve).
+pub(super) fn trace_back(mut p: Painter, points: &[Point<Points>], curve: Curve) -> Painter {
+    let n = points.len();
+    match curve {
+        Curve::Linear => {
+            for q in points[..n - 1].iter().rev() {
+                p = p.line_to(q.x, q.y);
+            }
+        }
+        Curve::StepAfter => {
+            for w in points.windows(2).rev() {
+                p = p.line_to(w[1].x, w[0].y).line_to(w[0].x, w[0].y);
+            }
+        }
+        // `trace`'s cubics, each from its end to its start: the same
+        // control points, in the other order.
+        Curve::Natural => {
+            for i in (0..n - 1).rev() {
+                let p0 = points[i.saturating_sub(1)];
+                let (p1, p2) = (points[i], points[i + 1]);
+                let p3 = points[(i + 2).min(n - 1)];
+                let c1 = point(p1.x + (p2.x - p0.x) / 6.0, p1.y + (p2.y - p0.y) / 6.0);
+                let c2 = point(p2.x - (p3.x - p1.x) / 6.0, p2.y - (p3.y - p1.y) / 6.0);
+                p = p.bezier_curve_to(c2, c1, p1);
+            }
+        }
+    }
+    p
+}
+
 /// The props of [`Line`].
 #[derive(Debug, Clone, PartialEq, Props)]
 #[props(generic)]
@@ -96,6 +129,15 @@ pub struct LineProps {
     /// `dotStyle` where none is set.
     #[prop(default)]
     pub hover_dot_style: Prop<Style>,
+    /// The category of its rows, which the plot's `colorScale` gives a
+    /// color (d3's `scaleOrdinal` of a field): a field name (its text, a
+    /// number as JS writes it) or a function of the row and its index. A
+    /// line is one series: its first row with a category gives the color,
+    /// so a line of rows of its own (`data`) takes their category's. That
+    /// color is its `stroke` where nothing sets one, in place of
+    /// `currentColor`, so the app's `stroke-*` classes and `stroke` style
+    /// win.
+    pub color: Prop<Option<RowText>>,
 }
 
 /// A series of a [`Plot`](super::Plot) drawn as a line through its points
@@ -104,7 +146,8 @@ pub struct LineProps {
 /// them), a smooth curve unless `curve` says otherwise. It strokes with its
 /// paint properties (`stroke-*` classes, `strokeWidth`, `strokeDasharray`;
 /// inherited from the plot as CSS inherits them), `currentColor` where none
-/// is set, and with `dot` shows a dot the app styles on every point. Its
+/// is set (with `color`, its category's color of the plot's `colorScale`
+/// instead), and with `dot` shows a dot the app styles on every point. Its
 /// values count in the y scale's domain when the plot has none, and it has
 /// a hover dot when it or the plot styles one (`hoverDotClass`, the plot's
 /// `dotClass`). It draws in with the plot's appear.
@@ -117,11 +160,19 @@ pub fn Line(props: LineProps, _cx: Scope<NoEvent>) -> impl IntoElement {
         style: props.hover_dot_style,
     };
     let series = plot.map(|plot| {
-        let series = Series::new(plot, props.data, props.x, props.y);
+        let series = Series::new(plot, props.data, props.x, props.y, || None);
         series.join(plot, || None, hover_dot);
         series
     });
     let (dot, dot_class, dot_style) = (props.dot, props.dot_class, props.dot_style);
+    let (data, color) = (props.data, props.color);
+    let colors = plot.map(|plot| {
+        series::colors(
+            plot,
+            move || data.get().unwrap_or_else(|| plot.rows.get()),
+            color,
+        )
+    });
     layer()
         .child(mark_canvas(
             plot,
@@ -138,7 +189,10 @@ pub fn Line(props: LineProps, _cx: Scope<NoEvent>) -> impl IntoElement {
             },
             move |p, bleed| {
                 let p = p
-                    .stroke_style_from_view(SvgPaint::CurrentColor)
+                    .stroke_style_from_view(series::paint_of(
+                        colors.and_then(series::first_color),
+                        SvgPaint::CurrentColor,
+                    ))
                     .line_width_from_view()
                     .line_dash_from_view();
                 let (Some(plot), Some(series)) = (plot, series) else {
@@ -148,18 +202,32 @@ pub fn Line(props: LineProps, _cx: Scope<NoEvent>) -> impl IntoElement {
                 let Some(first) = points.first() else {
                     return p;
                 };
-                let p = plot.clip(p, bleed).begin_path().move_to(first.x, first.y);
-                trace(p, &points, curve.get()).stroke()
+                let p = plot.clip(p, bleed).begin_path();
+                plot.traced(p, true, true, |p| {
+                    trace(p.move_to(first.x, first.y), &points, curve.get())
+                })
+                .stroke()
             },
         ))
         .child(when(
             move || dot.get() && series.is_some(),
             move || {
-                let points = series.expect("a series").points;
+                let (plot, points) = (plot.expect("a plot"), series.expect("a series").points);
                 each(
                     move || (0..points.get().len()).collect::<Vec<usize>>(),
                     |i| *i,
                     move |i, _| {
+                        // Its point, while the scales' domains move: the
+                        // dot moves with them from where the layout puts it.
+                        let at = point(animated_value(0.0), animated_value(0.0));
+                        effect(move || {
+                            let moving = plot.x_tween.moving.get() || plot.y_tween.moving.get();
+                            let p = points.with(|ps| ps.get(i.get()).copied());
+                            if let Some(p) = p.filter(|_| moving) {
+                                at.x.set(p.x.0);
+                                at.y.set(p.y.0);
+                            }
+                        });
                         view()
                             .absolute()
                             .w(px(0.0))
@@ -171,6 +239,8 @@ pub fn Line(props: LineProps, _cx: Scope<NoEvent>) -> impl IntoElement {
                                 Some(p) => s.left(p.x).top(p.y),
                                 None => s,
                             })
+                            .bind_translate_x(&plot.x_tween.moved(&at.x))
+                            .bind_translate_y(&plot.y_tween.moved(&at.y))
                             .child(
                                 view()
                                     .flex_none()

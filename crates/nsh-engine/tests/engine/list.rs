@@ -115,6 +115,7 @@ fn config(app: &str) -> (EngineConfig, std::path::PathBuf) {
         trace: false,
         network: None,
         websocket: None,
+        refuse_connections: None,
         filesystem: None,
         assets: None,
         environment: Default::default(),
@@ -282,12 +283,10 @@ mount(App);
 /// The props `List` does not use itself reach its scroll view, as they do
 /// a `<Scroll>`'s: the test id and accessibility (UI tests find the list),
 /// classes, touch props and layout events; and they follow their signals.
-/// (Imported from `nsh/list`, where `List` was first: it still is.)
 #[test]
 fn list_passes_host_props_to_its_scroll_view() {
     let app = r#"
-import { mount, signal, Text, View } from "nsh";
-import { List } from "nsh";
+import { List, mount, signal, Text, View } from "nsh";
 const label = signal("Feed");
 const size = signal("none");
 function App() {
@@ -295,8 +294,8 @@ function App() {
     <View style={{ flex: 1 }}>
       <Text>{`size ${size()}`}</Text>
       <List each={[1, 2, 3]} testID="feed" accessibilityLabel={label()} role="list"
-            accessibilityHint="Posts" class="bg-red-500" pointerEvents="box-none" style={{ flex: 1 }}
-            onLayout={(e) => { size.set(`${e.size.width}x${e.size.height}`); label.set("Feed 2"); }}>
+            accessibilityHint="Posts" class="bg-red-500" style={{ pointerEvents: "box-none", flex: 1 }}
+            onLayout={({ bounds: e }) => { size.set(`${e.size.width}x${e.size.height}`); label.set("Feed 2"); }}>
         {(row) => <View style={{ height: 50 }}><Text>{`row ${row()}`}</Text></View>}
       </List>
     </View>

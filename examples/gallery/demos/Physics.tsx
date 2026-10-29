@@ -1,5 +1,5 @@
 import { Canvas, computed, Scroll, signal, Text, View } from "nsh";
-import { createAnimatedValue, type AnimatedValue } from "nsh";
+import { createAnimatedValue, type AnimatedValue, type PanEvent } from "nsh";
 import { windowSize } from "nsh";
 import { Icon } from "../icons";
 import { Appear, Badge, colors, finish, hint, IconTile, mono, radius, Segmented, Stat, tints } from "../ui";
@@ -38,29 +38,33 @@ export function Physics() {
   const settle = (v: AnimatedValue, to: number, velocity: number) => v.spring(to, { velocity, ...feels[feel()] });
   const corners = () => ({ x: Math.max(0, stage().width / 2 - CARD / 2 - 14), y: Math.max(0, stage().height / 2 - CARD / 2 - 14) });
 
-  const release = (e: { velocityX: number; velocityY: number; valueX?: number; valueY?: number }) => {
+  const release = (e: PanEvent) => {
     lift.spring(0, { stiffness: 300, damping: 24 });
     releases.set(releases() + 1);
-    speed.set(Math.round(Math.hypot(e.velocityX, e.velocityY)));
+    speed.set(Math.round(Math.hypot(e.velocity.x, e.velocity.y)));
     switch (mode()) {
       case "spring":
-        settle(x, 0, e.velocityX);
-        settle(y, 0, e.velocityY);
+        settle(x, 0, e.velocity.x);
+        settle(y, 0, e.velocity.y);
         corner.set("—");
         break;
       case "coast":
         // Coast with the release velocity, then spring home unless grabbed again.
-        x.decay({ velocity: e.velocityX, deceleration: 0.992 }).then((done) => done && settle(x, 0, 0));
-        y.decay({ velocity: e.velocityY, deceleration: 0.992 }).then((done) => done && settle(y, 0, 0));
+        x.decay({ velocity: e.velocity.x, deceleration: 0.992 }).then(({ finished }) => {
+          if (finished) settle(x, 0, 0);
+        });
+        y.decay({ velocity: e.velocity.y, deceleration: 0.992 }).then(({ finished }) => {
+          if (finished) settle(y, 0, 0);
+        });
         corner.set("—");
         break;
       case "snap": {
         // Where the fling would carry it, then the nearest corner.
-        const px = (e.valueX ?? 0) + e.velocityX * 0.2;
-        const py = (e.valueY ?? 0) + e.velocityY * 0.2;
+        const px = (e.value?.x ?? 0) + e.velocity.x * 0.2;
+        const py = (e.value?.y ?? 0) + e.velocity.y * 0.2;
         const c = corners();
-        settle(x, px < 0 ? -c.x : c.x, e.velocityX);
-        settle(y, py < 0 ? -c.y : c.y, e.velocityY);
+        settle(x, px < 0 ? -c.x : c.x, e.velocity.x);
+        settle(y, py < 0 ? -c.y : c.y, e.velocity.y);
         corner.set(`${py < 0 ? "top" : "bottom"} ${px < 0 ? "left" : "right"}`);
         break;
       }
@@ -88,7 +92,7 @@ export function Physics() {
           <IconTile name="physics" tint={colors.accent} />
           <View style={{ flex: 1, gap: 2 }}>
             <Text style={{ fontSize: 17, fontWeight: "600", color: colors.text }}>Drag and release</Text>
-            <Text numberOfLines={1} style={{ fontSize: 13, color: colors.muted }}>
+            <Text style={{ numberOfLines: 1, fontSize: 13, color: colors.muted }}>
               {hint("Tap to pulse, long press to reset", "Click to pulse, press and hold to reset")}
             </Text>
           </View>
@@ -96,7 +100,7 @@ export function Physics() {
         </View>
       </Appear>
       <View
-        onLayout={(e) => stage.set({ width: e.size.width, height: e.size.height })}
+        onLayout={({ bounds }) => stage.set({ width: bounds.size.width, height: bounds.size.height })}
         style={{
           flex: short ? undefined : 1,
           height: short ? SHORT_STAGE : undefined,
@@ -112,8 +116,7 @@ export function Physics() {
         }}
       >
         <Canvas
-          pointerEvents="none"
-          style={{ position: "absolute", left: 0, top: 0, right: 0, bottom: 0 }}
+          style={{ pointerEvents: "none", position: "absolute", left: 0, top: 0, right: 0, bottom: 0 }}
           draw={(cx, { width, height }) => {
             const centerX = width / 2;
             const cy = height / 2;
@@ -155,15 +158,16 @@ export function Physics() {
           }}
         />
         <View
-          pointerEvents="none"
           style={{
+            pointerEvents: "none",
             position: "absolute",
             width: CARD,
             height: CARD,
             borderRadius: 30,
             backgroundColor: tints.accent,
             opacity: lift,
-            transform: [...follow, { scale: lift.interpolate({ inputRange: [0, 1], outputRange: [1, 1.32] }) }],
+            translate: [x, y],
+            scale: lift.interpolate({ inputRange: [0, 1], outputRange: [1, 1.32] }),
           }}
         />
         <View

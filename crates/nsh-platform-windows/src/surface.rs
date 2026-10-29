@@ -165,6 +165,9 @@ pub(crate) struct Surface {
     epoch: std::time::Instant,
     on_error: RefCell<Option<ErrorHandler>>,
     on_hot_update_failed: RefCell<Option<Box<dyn Fn()>>>,
+    /// The GPU device shader views render with, opened when the first
+    /// shader is mounted (`None` inside: there is none).
+    shader_renderer: std::cell::OnceCell<Option<Rc<nsh_engine::shader::Renderer>>>,
     /// Where `asset:/` image URIs resolve ([`crate::image::set_asset_base`]).
     pub(crate) asset_base: RefCell<Option<crate::image::AssetBase>>,
     /// The disk cache of downloaded images ([`crate::image::set_disk_cache`]).
@@ -190,21 +193,7 @@ pub(crate) struct Surface {
 
 impl Surface {
     /// A surface with no app and no window yet.
-    pub(crate) fn new(mut environment: Environment) -> Rc<Surface> {
-        // Shaders fill views with Direct3D 11 (`crate::shader`); effects'
-        // and backdrops' inputs are drawn with every frame.
-        environment.shaders = {
-            let mut support =
-                nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Hlsl);
-            support.effect = nsh_core::shader::Support::Live;
-            support.backdrop = nsh_core::shader::Support::Live;
-            support.transition = nsh_core::shader::Support::Live;
-            // The root draws through the screen effect, its children live;
-            // a screen transition draws recordings of the root.
-            support.screen_effect = nsh_core::shader::Support::Live;
-            support.screen_transition = nsh_core::shader::Support::Snapshot;
-            support
-        };
+    pub(crate) fn new(environment: Environment) -> Rc<Surface> {
         let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
         let root = NshView::new(ROOT_ID, nsh_core::ViewKind::View);
         let mounter = Mounter::new(root.clone());
@@ -244,6 +233,7 @@ impl Surface {
             epoch: std::time::Instant::now(),
             on_error: RefCell::new(None),
             on_hot_update_failed: RefCell::new(None),
+            shader_renderer: std::cell::OnceCell::new(),
             asset_base: RefCell::new(None),
             image_cache: RefCell::new(None),
             native: Default::default(),
@@ -263,6 +253,17 @@ impl Surface {
             }
         }));
         surface
+    }
+
+    /// The GPU device shader views render with ([`crate::shader`]), opened
+    /// the first time one asks.
+    pub(crate) fn shader_renderer(&self) -> Option<Rc<nsh_engine::shader::Renderer>> {
+        self.shader_renderer
+            .get_or_init(|| {
+                nsh_engine::shader::Renderer::new(nsh_engine::shader::PixelFormat::Bgra)
+                    .map(Rc::new)
+            })
+            .clone()
     }
 
     /// The surface with `key`, if it is alive.
@@ -693,6 +694,9 @@ impl Surface {
             );
             (std::mem::take(&mut anim.finished), moved)
         };
+        // Shader views whose uniforms moved start rendering now that the
+        // graph is not borrowed.
+        crate::shader::start_pending();
         // No surface state borrowed while the app's components run.
         crate::native::component_animated(self, moved);
         crate::scroll::pin_animated_sticky(self);
@@ -708,11 +712,12 @@ impl Surface {
         self.ensure_ticking();
     }
 
-    /// Whether a native animation runs: the graph's, or the platform's own
+    /// Whether a native animation runs: the graph's (not one looping
+    /// forever, which no test step waits for), or the platform's own
     /// (transitions, scroll glides).
     #[cfg(feature = "dev")]
     pub(crate) fn animating(&self) -> bool {
-        self.anim.borrow().animating() || !self.frame_clients.borrow().is_empty()
+        self.anim.borrow().finishing() || !self.frame_clients.borrow().is_empty()
     }
 
     /// Keeps the model `nsh test --target` steps see of the app

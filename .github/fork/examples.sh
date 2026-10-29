@@ -30,46 +30,65 @@ case "$target" in
   # environment's rotation expects an 844 pt tall window.
   macos)
     gallery=(device dock error-boundary form gestures hover links list-search mention navigation
-      photos press resizable shortcuts storage timers)
-    filtered=("environment appearance" "toasts a toast shows" "toasts its action"
+      photos press resizable shaders shortcuts storage timers)
+    filtered=("environment appearance" "toasts a toast shows" "toasts an undo restores"
       "toasts its close button" "toasts at most three" "toasts a swipe")
     ;;
   # Left out: context-menu (the menu is not reported), controls (the
   # segmented control is not a tab list), links, text-view (span positions
   # are not reported), menus (a row's menu), overlays (tooltips), picker
-  # (`picks()` runs headless only).
+  # (`picks()` runs headless only). Error-boundary's failing binding expects
+  # QuickJS's message; the browser words it its own way.
   web)
-    gallery=(animations context-menu-press device dock environment error-boundary form gestures
-      hover list-search mention navigation network photos press resizable shortcuts storage timers
-      toasts)
+    gallery=(animations context-menu-press device dock environment form gestures hover list-search
+      mention navigation network photos press resizable shaders shortcuts storage timers toasts)
+    filtered=("error-boundary a failing listener")
     ;;
   # Left out: context-menu, dock, hover, overlays, resizable, shortcuts,
   # toasts (a mouse, a keyboard or a desktop's windows), picker (the
   # system's photo picker stays open over the tests after it); environment
   # runs its appearance only (its rotation expects a 390 × 844 window).
-  # On the runner, animations does not end in 30 s, network's `fetch()`,
+  # Form runs its Input demo and its disabled field: the sign-up form and the
+  # search field set the viewport, which an emulator keeps at its device's
+  # size. Controls runs all but five tests: its number input's lock, a code's
+  # Clear and a PIN's Change PIN (presses right after typing, which do not
+  # land on the emulator), its pasted codes (Android's tests do not paste
+  # yet) and its Tab order (a desktop's, which the device does not follow).
+  # On the runner, animations does not end in 30 s, and network's `fetch()`,
   # far down its page, did not scroll into the emulator's 320 × 640 (the
-  # request itself is the engine's, run on iOS and the web), and controls
-  # takes the emulator down: its renderer (`-gpu swiftshader_indirect`,
-  # which Google no longer maintains) crashes on the page's Slider card in
-  # two runs of three (without the card, nine of nine pass); the newer
-  # `swangle_indirect` does not crash, but misses scrolls on the runner.
+  # request itself is the engine's, run on iOS and the web). Text-view runs
+  # its Text View demo: a press on the chat's featured cards starts no reply
+  # on Android (its chips do), with the test's clock and without.
   android)
-    gallery=(context-menu-press device error-boundary form gestures links
-      list-search mention menus navigation photos press storage text-view timers)
-    filtered=("environment appearance")
+    gallery=(context-menu-press device error-boundary gestures links list-search mention menus
+      navigation photos press shaders storage timers)
+    filtered=("environment appearance" "form the Input demo" "form a disabled field"
+      "text-view the Text View demo"
+      "controls switch" "controls check" "controls a radio picks" "controls choice cards and sized"
+      "controls tabs show" "controls collapsible" "controls accordion" "controls progress bar"
+      "controls uploads" "controls stepped setup" "controls slider" "controls equalizer"
+      "controls cart's quantities" "controls segmented control")
     ;;
   # Left out: context-menu, dock, hover, overlays, resizable, toasts (a
-  # mouse or a desktop's windows), picker (the system's photo picker);
+  # mouse or a desktop's windows), shortcuts (it opens the gallery as macOS,
+  # a desktop's platform, which `--target ios` refuses), picker (the
+  # system's photo picker);
   # environment runs its appearance only (its rotation expects a 390 × 844
-  # window, the newest simulators are bigger). On the runner, form's typing
-  # lost the second of two equal keys ("hello" became "HELO", then "HEO"),
-  # so only its maxLength test runs.
+  # window, the newest simulators are bigger). Form runs its Input demo and
+  # its disabled field: the sign-up form and the search field set the
+  # viewport, which a simulator keeps at its device's size. Controls runs
+  # all but five tests: its slider (the volume's drag past its end leaves
+  # the demo), its number input's typed seats, a code's Clear and a PIN's
+  # Change PIN (the first press after typing only ends the editing), and
+  # its Tab order (a desktop's).
   ios)
-    gallery=(animations context-menu-press controls device error-boundary gestures links
-      list-search mention menus navigation network photos press shortcuts storage text-view
-      timers)
-    filtered=("environment appearance" "form maxLength")
+    gallery=(animations context-menu-press device error-boundary gestures links list-search
+      mention menus navigation network photos press shaders storage text-view timers)
+    filtered=("environment appearance" "form the Input demo" "form a disabled field"
+      "controls switch" "controls check" "controls a radio picks" "controls choice cards and sized"
+      "controls tabs show" "controls collapsible" "controls accordion" "controls progress bar"
+      "controls uploads" "controls stepped setup" "controls equalizer" "controls cart's quantities"
+      "controls a sign-in code" "controls segmented control")
     ;;
   *)
     echo "examples.sh: no tests for target $target" >&2

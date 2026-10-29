@@ -57,9 +57,9 @@ pub(crate) struct ViewState {
     /// Touch, accessibility and test properties.
     pub(crate) props: Box<ViewProps>,
     /// States to report (`TrackStates`), and the current ones.
-    pub(crate) tracked: u8,
+    pub(crate) tracked: u16,
     /// Current interaction states (pressed, hovered, focused).
-    pub(crate) states: u8,
+    pub(crate) states: u16,
     /// Extra translation (sticky list cells, screen transitions).
     pub(crate) shift: (f32, f32),
     /// Extra opacity (press feedback, screen and modal transitions).
@@ -75,7 +75,7 @@ pub(crate) struct ViewState {
     pub(crate) image: Option<crate::image::ImageState>,
     /// Canvas content.
     pub(crate) canvas: Option<crate::canvas::CanvasState>,
-    /// What a shader view draws.
+    /// What a shader draws under the children ([`crate::shader`]).
     pub(crate) shader: Option<crate::shader::ShaderState>,
     /// Text field (input views).
     pub(crate) input: Option<std::rc::Rc<crate::text_input::InputState>>,
@@ -122,16 +122,6 @@ impl ViewState {
     pub(crate) fn opacity(&self) -> f32 {
         let live = self.live.as_ref().map_or(1.0, |l| l.opacity());
         self.anim.opacity.unwrap_or(self.style.opacity) * self.fade * live
-    }
-
-    /// Its shadow, with animated color, opacity and radius.
-    pub(crate) fn shadow(&self) -> nsh_core::Shadow {
-        let mut s = self.style.shadow;
-        let a = &self.anim;
-        s.color = a.shadow_color.unwrap_or(s.color);
-        s.opacity = a.shadow_opacity.unwrap_or(s.opacity);
-        s.radius = a.shadow_radius.unwrap_or(s.radius);
-        s
     }
 
     /// Its borders, with an animated color.
@@ -406,6 +396,7 @@ mod imp {
                     state.frame.size.height.0,
                 ));
             }
+            crate::shader::draw(snapshot, &state);
             crate::text::draw(snapshot, &state);
             crate::image::draw(snapshot, &state);
             if state.canvas.is_some() {
@@ -416,7 +407,6 @@ mod imp {
                     .map_or(obj.scale_factor() as f64, |s| s.scale());
                 crate::canvas::draw(snapshot, &obj, &state, scale);
             }
-            crate::shader::draw(snapshot, &state, &obj);
             if !clip {
                 snapshot.pop();
             }

@@ -75,7 +75,6 @@ impl ScrollHost for Host<'_> {
     fn moved(&self, offset: Point<Points>) {
         self.view.queue_allocate();
         self.view.queue_draw();
-        crate::shader::ui_changed();
         pin_sticky(self.surface, self.view);
         let scrolled =
             self.surface
@@ -269,9 +268,16 @@ pub(crate) fn config(
     view: &NshView,
     horizontal: bool,
     indicator: bool,
+    replaced: bool,
     mirrored: bool,
 ) {
-    shared::config(&Host::new(surface, view), horizontal, indicator, mirrored);
+    shared::config(
+        &Host::new(surface, view),
+        horizontal,
+        indicator,
+        replaced,
+        mirrored,
+    );
 }
 
 /// `ScrollContent`.

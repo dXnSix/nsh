@@ -292,7 +292,7 @@ pub struct AttributedText {
     /// The block is laid out right to left: `auto` alignment is the right
     /// side.
     pub rtl: bool,
-    /// A long press copies the text (`selectable` or `select-text`;
+    /// A long press copies the text (`userSelect: "text"` or `select-text`;
     /// drawing only): `Some(false)` when set off, `None` when not set, which
     /// is not selectable except where text is by default (desktop
     /// browsers). [`is_selectable`](Self::is_selectable) is whether it is asked for.
@@ -468,7 +468,7 @@ pub struct SpanTestId {
 }
 
 impl AttributedText {
-    /// Whether the text was made selectable (`selectable`, `select-text`).
+    /// Whether the text was made selectable (`userSelect: "text"`, `select-text`).
     pub fn is_selectable(&self) -> bool {
         self.selectable == Some(true)
     }
@@ -476,6 +476,21 @@ impl AttributedText {
     /// Whether a span has a background ([`TextBackground`]).
     pub fn has_backgrounds(&self) -> bool {
         self.spans.iter().any(|s| s.style.background.is_some())
+    }
+
+    /// The color every character is drawn in, decoration lines included,
+    /// if there is one (`None` for several, or no text): what a transition
+    /// of the text's color animates ([`crate::transition::recolor`]).
+    pub fn uniform_color(&self) -> Option<Color> {
+        let color = self.spans.first()?.style.color;
+        self.spans
+            .iter()
+            .all(|s| {
+                s.style.color == color
+                    && (s.style.decoration.is_none()
+                        || s.style.decoration_color.is_none_or(|c| c == color))
+            })
+            .then_some(color)
     }
 
     /// The span containing the UTF-16 offset `index` (the last one past the
@@ -1127,14 +1142,55 @@ impl ApproxLayout {
 /// promote from the previous one; when the current generation is full it
 /// becomes the previous one. O(1), and never more than `2 * GENERATION`
 /// entries.
-#[derive(Default)]
+///
+/// It also holds the surface's pixel ratio: measurements are rounded up to
+/// its device pixels ([`MeasureCache::pixel_ratio`]), so they are only
+/// valid for one ratio and go when it changes.
 pub(crate) struct MeasureCache {
     current: FxHashMap<(u64, u32), Size<Points>>,
     previous: FxHashMap<(u64, u32), Size<Points>>,
+    pixel_ratio: f32,
+}
+
+impl Default for MeasureCache {
+    fn default() -> Self {
+        Self {
+            current: FxHashMap::default(),
+            previous: FxHashMap::default(),
+            pixel_ratio: 1.0,
+        }
+    }
 }
 
 impl MeasureCache {
     const GENERATION: usize = 512;
+
+    /// The device pixels per point the measurements are rounded to.
+    pub(crate) fn pixel_ratio(&self) -> f32 {
+        self.pixel_ratio
+    }
+
+    /// Measures for `ratio` from now on; returns whether it changed (the
+    /// measurements cached for the previous ratio are dropped).
+    pub(crate) fn set_pixel_ratio(&mut self, ratio: f32) -> bool {
+        let ratio = if ratio.is_finite() && ratio > 0.0 {
+            ratio
+        } else {
+            1.0
+        };
+        if ratio == self.pixel_ratio {
+            return false;
+        }
+        self.pixel_ratio = ratio;
+        self.clear();
+        true
+    }
+
+    /// Drops every measurement (the fonts changed), keeping the ratio.
+    pub(crate) fn clear(&mut self) {
+        self.current.clear();
+        self.previous.clear();
+    }
 
     #[inline]
     fn key(layout_hash: u64, max_width: Option<Points>) -> (u64, u32) {

@@ -10,7 +10,7 @@
 //! the focused input takes the keys that edit it, and Escape goes back.
 
 use nsh_core::{
-    EventKind, EventPayload, NodeId, PayloadValue, ROOT_ID,
+    Command, EventKind, EventPayload, MountBatch, MountItem, NodeId, PayloadValue, ROOT_ID,
     keymap::{Key, KeyMatch, Keystroke},
     platform::Os,
     tailwind::state::FOCUSED,
@@ -19,6 +19,34 @@ use nsh_core::{
 use super::Headless;
 
 impl Headless {
+    /// The steps `keyboard.down(<keys>)` / `keyboard.up(<keys>)`: holds or
+    /// lets go of modifier keys (`"mod"`, `"shift"`, `"alt"`, `"ctrl"`,
+    /// `"meta"`, joined by `+`), which the presses, drags and hovers until
+    /// then carry, as a hand on the keyboard does while the pointer acts.
+    pub fn hold_keys(&mut self, keys: &str, down: bool) -> Result<(), String> {
+        self.step(format!(
+            "keyboard.{}({keys})",
+            if down { "down" } else { "up" }
+        ));
+        let apple = matches!(self.environment.os, Os::MacOs | Os::Ios);
+        for name in keys.split('+') {
+            let flag = match name.trim().to_ascii_lowercase().as_str() {
+                "mod" if apple => &mut self.held.cmd,
+                "mod" | "ctrl" | "control" => &mut self.held.ctrl,
+                "alt" | "option" => &mut self.held.alt,
+                "shift" => &mut self.held.shift,
+                "meta" | "cmd" | "command" => &mut self.held.cmd,
+                other => {
+                    return Err(format!(
+                        "`{other}` is no modifier key: mod, shift, alt, ctrl or meta"
+                    ));
+                }
+            };
+            *flag = down;
+        }
+        self.done()
+    }
+
     /// The step `keyboard.press(<keys>)`: presses `keys`, a keystroke as
     /// `nsh/keymap` names it (`"mod+k"`, `"shift+tab"`, `"escape"`; `mod` is
     /// the app's platform's command key). A binding of the app's keymap
@@ -125,6 +153,58 @@ impl Headless {
             }
             self.set_focused_state(new, true);
             self.send(new, EventKind::Focus, EventPayload::None);
+        }
+    }
+
+    /// The app moved the focus (`focus()`, `blur()`) in `batch`, applied
+    /// with input `focused` focused before it: platforms tell the views as
+    /// when the user moves it. The screen applied the calls on inputs;
+    /// where Tab stops at views that take presses, a call on one of those
+    /// moves the keyboard focus as Tab does (the batch's last call counts).
+    pub(super) fn focus_calls(&mut self, batch: &MountBatch, focused: Option<NodeId>) {
+        let now = self.screen.focused();
+        if now != focused {
+            if let Some(old) = focused {
+                self.send(old, EventKind::Blur, EventPayload::None);
+            }
+            if let Some(new) = now {
+                // The pressable that had the keyboard focus loses it.
+                if let Some(key) = self.screen.key_focus() {
+                    self.screen.set_key_focus(None);
+                    self.set_focused_state(key, false);
+                    self.send(key, EventKind::Blur, EventPayload::None);
+                }
+                self.send(new, EventKind::Focus, EventPayload::None);
+            }
+        }
+        if !self.tabs_to_views() {
+            return;
+        }
+        let mut key = self.screen.key_focus();
+        let mut to = None;
+        for item in &batch.items {
+            let MountItem::Command { id, command } = item else {
+                continue;
+            };
+            let id = *id;
+            match command {
+                Command::Focus if self.screen.input(id).is_some() => {
+                    to = None;
+                    key = None;
+                }
+                Command::Focus if id != ROOT_ID && self.screen.tab_stops().contains(&id) => {
+                    to = Some(Some(id));
+                    key = Some(id);
+                }
+                Command::Blur if id != ROOT_ID && key == Some(id) => {
+                    to = Some(None);
+                    key = None;
+                }
+                _ => {}
+            }
+        }
+        if let Some(to) = to {
+            self.move_focus(to);
         }
     }
 

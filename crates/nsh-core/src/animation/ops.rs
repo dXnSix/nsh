@@ -16,23 +16,13 @@ pub enum AnimationProp {
     BorderColor,
     /// `color` of a text: the whole text takes it.
     Color,
-    /// `shadowColor`.
-    ShadowColor,
-    /// `shadowOpacity`, 0..1.
-    ShadowOpacity,
-    /// `shadowRadius`, in points.
-    ShadowRadius,
     /// The value of entry `n` of the view's `transform` list (translations
     /// in points, rotations and skews in degrees).
     Transform(u8),
-    /// Animated value slot `n` of a canvas drawing: the canvas draws again
-    /// with it (a number or a color).
+    /// Animated value slot `n` of a canvas drawing, or of a shader's layer
+    /// ([`crate::shader::ShaderLayer::slots`]): the canvas or the shader
+    /// draws again with it (a number or a color).
     CanvasArg(u16),
-    /// Component `n` (an `f32` index) of a shader view's uniforms: a
-    /// number there, a color's premultiplied components from there
-    /// ([`crate::shader::write_animated`]); the shader draws again.
-    /// [`crate::shader::PROGRESS`] is its `nsh.progress` instead.
-    ShaderUniform(u16),
     /// `top` of a `position: sticky` view: how far from the viewport's
     /// start of a vertical scroll view it sticks. The core hands it to the
     /// scroll view's sticky cells (`StickyCell::offset`), never to the
@@ -92,9 +82,6 @@ impl AnimationProp {
             "backgroundColor" => AnimationProp::BackgroundColor,
             "borderColor" => AnimationProp::BorderColor,
             "color" => AnimationProp::Color,
-            "shadowColor" => AnimationProp::ShadowColor,
-            "shadowOpacity" => AnimationProp::ShadowOpacity,
-            "shadowRadius" => AnimationProp::ShadowRadius,
             "top" => AnimationProp::StickyTop,
             "left" => AnimationProp::StickyLeft,
             _ => return None,

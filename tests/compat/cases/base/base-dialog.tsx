@@ -3,17 +3,14 @@
 // as the platform receives them (defaults, every one set, the iOS ones),
 // its popup styled by `style` and `class`, and what the platform reports:
 // `onOpen` (it appeared), `onClose` (it went away), and the user's close
-// attempts (`onCancel` every time; `onOpenChange(false, reason)` and the
+// attempts (`onCancel` every time; `onOpenChange({ open: false, reason })` and the
 // dialog closing when the `closeOn*` flag of what they did lets it).
 // Closed by the user while the app keeps `open` true, it stays closed until
-// `open` goes from false to true. Its `animation` may be a shader (`{
-// shader, uniforms, duration }`). Dialogs carry a `testID` (spread, as
+// `open` goes from false to true. Dialogs carry a `testID` (spread, as
 // `Dialog` declares none) for the script to find them. Its script checks
 // each.
-import { createShader, Text, View, signal } from "nsh";
+import { Text, View, signal } from "nsh";
 import { Button, Dialog } from "nsh/base";
-
-const blend = createShader("fn main(p: vec2f) -> vec4f { return mix(sample_from(p), sample_to(p), nsh.progress); }");
 
 function Control(props: { label: string; onPress: () => void }) {
   return (
@@ -46,9 +43,6 @@ function App() {
       <Dialog {...{ testID: "plain" }}>
         <Text>Plain dialog</Text>
       </Dialog>
-      <Dialog {...{ testID: "shaded" }} animation={{ shader: blend, duration: 400 }}>
-        <Text>Shaded dialog</Text>
-      </Dialog>
       <Dialog
         {...{ testID: "synced" }}
         open={synced()}
@@ -58,7 +52,7 @@ function App() {
         onOpen={() => note("synced opened")}
         onClose={() => note("synced closed")}
         onCancel={() => note("synced cancel")}
-        onOpenChange={(open, reason) => {
+        onOpenChange={({ open, reason }) => {
           note(`synced change ${open} ${reason}`);
           synced.set(open);
         }}
@@ -74,7 +68,7 @@ function App() {
         presentation="formSheet"
         class="p-[12px]"
         ios={{ supportedOrientations: ["portrait", "landscape-left"] }}
-        onOpenChange={(open, reason) => note(`stubborn change ${open} ${reason}`)}
+        onOpenChange={({ open, reason }) => note(`stubborn change ${open} ${reason}`)}
       >
         <View {...{ testID: "stubborn-body" }} style={{ height: 30 }}>
           <Text>Stubborn dialog</Text>
@@ -87,7 +81,7 @@ function App() {
         closeOnBackdropPress={false}
         closeOnSwipe={false}
         onCancel={() => note("guarded cancel")}
-        onOpenChange={(open, reason) => note(`guarded change ${open} ${reason}`)}
+        onOpenChange={({ open, reason }) => note(`guarded change ${open} ${reason}`)}
       >
         <Text>Guarded dialog</Text>
         <Control label="Close guarded" onPress={() => guarded.set(false)} />
@@ -96,7 +90,7 @@ function App() {
         {...{ testID: "swipes" }}
         open={swipes()}
         closeOnEscape={false}
-        onOpenChange={(open, reason) => {
+        onOpenChange={({ open, reason }) => {
           note(`swipes change ${open} ${reason}`);
           swipes.set(open);
         }}

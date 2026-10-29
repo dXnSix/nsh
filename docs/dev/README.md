@@ -21,7 +21,6 @@ For people working on NSH itself (`AGENTS.md` at the root is the short version a
 | [scrolling-and-lists.md](scrolling-and-lists.md) | Scroll views, zooming, `List` |
 | [animation.md](animation.md) | Animated values, composites, layout animation |
 | [canvas.md](canvas.md) | `Canvas` |
-| [shaders.md](shaders.md) | Shaders: the WGSL profile, the prelude, reflection, the writers per platform |
 | [images.md](images.md) | Loading, decoding, caching, animated images |
 | [sandbox.md](sandbox.md) | VM limits, hardening, capabilities |
 | [signed-packages.md](signed-packages.md) | Keys, packages, verification, revocation |

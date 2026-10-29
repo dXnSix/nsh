@@ -363,8 +363,6 @@ pub(crate) fn write_types(dir: &Path) {
         "nsh/tokens.d.ts".to_owned(),
         nsh_bundler::tokens_declaration(&tokens),
     ));
-    // Each shader's uniforms, typed from its source.
-    definitions.extend(nsh_bundler::shader_declarations(dir));
     remove_stale(&types, &types, &definitions);
     let files = definitions
         .iter()

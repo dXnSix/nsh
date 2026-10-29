@@ -90,6 +90,7 @@ impl Mounter {
             view.set_stale(false);
             if self.alive(&view) {
                 view.redraw();
+                crate::shader::shown(&view);
             }
         }
     }
@@ -124,8 +125,6 @@ impl Mounter {
                 match kind {
                     ViewKind::Input => crate::text_input::create(surface, &view),
                     ViewKind::Canvas => crate::canvas::create(&view),
-                    // Its layer is made with its first fill.
-                    ViewKind::Shader => {}
                     ViewKind::Image => crate::image::create(&view),
                     ViewKind::WebView | ViewKind::Video | ViewKind::Native => {
                         crate::native::create(surface, &view)
@@ -184,6 +183,7 @@ impl Mounter {
                 crate::file_drop::deleted(surface, *id);
                 if let Some(view) = self.views.remove(id) {
                     crate::native::deleted(surface, &view);
+                    crate::shader::deleted(surface, &view);
                     // A removal animation detaches the view when it ends.
                     if !crate::transition::removing(surface, &view, self.layout_animation.as_ref())
                     {
@@ -223,7 +223,7 @@ impl Mounter {
                 match view.kind() {
                     ViewKind::Stack => crate::navigation::stack_resized(surface, view),
                     ViewKind::Canvas => view.changed(),
-                    _ => {}
+                    _ => crate::shader::resized(surface, view),
                 }
             }
             MountItem::ViewStyle { id, style } => {
@@ -242,7 +242,11 @@ impl Mounter {
                 content,
             } => {
                 if let Some(view) = self.get(*id) {
+                    let old = view.state().text.as_ref().map(|t| t.text.clone());
                     crate::text::set(view, text, layout, *content);
+                    if let Some(old) = old {
+                        crate::transition::text_changed(surface, view, &old, text);
+                    }
                     self.draw_when_shown(view, Damage::All);
                     crate::access::text_changed(view);
                 }
@@ -269,6 +273,7 @@ impl Mounter {
                 id,
                 horizontal,
                 scrollbar_visible,
+                replaced,
                 mirrored,
                 ..
             } => {
@@ -278,6 +283,7 @@ impl Mounter {
                         view,
                         *horizontal,
                         *scrollbar_visible,
+                        *replaced,
                         *mirrored,
                     );
                 }
@@ -328,32 +334,24 @@ impl Mounter {
                     self.draw_when_shown(view, Damage::All);
                 }
             }
-            MountItem::ShaderProgram { program } => crate::shader::program(program),
-            MountItem::Shader { id, fill } => {
+            MountItem::ShaderTransition { id, duration } => {
                 if let Some(view) = self.get(*id) {
-                    if is_screen(view) {
-                        crate::screen::set(surface, view, fill.clone());
-                    } else {
-                        crate::shader::set(surface, view, fill.clone());
-                    }
+                    crate::shader::start_transition(surface, view, *duration);
                 }
             }
             MountItem::ShaderInput { id } => {
                 if let Some(view) = self.get(*id) {
-                    if is_screen(view) {
-                        crate::screen::input_changed(surface, view);
-                    } else {
-                        crate::shader::input_changed(surface, view);
-                    }
+                    crate::shader::input_changed(surface, view);
                 }
             }
-            MountItem::ShaderTransition { id, duration } => {
+            MountItem::NavShader { id, shader } => {
                 if let Some(view) = self.get(*id) {
-                    if is_screen(view) {
-                        crate::screen::start_transition(surface, view, *duration);
-                    } else {
-                        crate::shader::start_transition(surface, view, *duration);
-                    }
+                    crate::navigation::set_shader(surface, view, shader.clone());
+                }
+            }
+            MountItem::Shader { id, layer } => {
+                if let Some(view) = self.get(*id) {
+                    crate::shader::set(surface, view, layer.clone());
                 }
             }
             MountItem::Gestures { id, values } => {
@@ -388,9 +386,9 @@ impl Mounter {
                     crate::navigation::screen_config(surface, view, config);
                 }
             }
-            MountItem::ModalConfig { id, config, shader } => {
+            MountItem::ModalConfig { id, config } => {
                 if let Some(view) = self.get(*id) {
-                    crate::navigation::modal_config(surface, view, config, shader);
+                    crate::navigation::modal_config(surface, view, config);
                 }
             }
             MountItem::NativeProps { id, props } => {
@@ -437,15 +435,30 @@ impl Mounter {
     fn command(&self, surface: &Rc<Surface>, id: NodeId, command: &Command) {
         let view = self.views.get(&id);
         match command {
-            Command::Focus => view.map_or((), crate::text_input::focus),
+            // An input edits; a pressable takes the keyboard focus as Tab
+            // gives it.
+            Command::Focus => match view {
+                Some(view) if view.kind() == ViewKind::Input => crate::text_input::focus(view),
+                Some(view) if id != ROOT_ID => crate::input::focus_control(surface, view),
+                _ => {}
+            },
             Command::Blur => match view {
                 Some(view) if view.kind() == ViewKind::Input => crate::text_input::blur(view),
+                Some(view) if id != ROOT_ID => {
+                    crate::input::blur_control(surface, view);
+                    crate::text_input::blur_all(surface);
+                }
                 _ => crate::text_input::blur_all(surface),
             },
             Command::SetSelection { start, end } => {
                 if let Some(view) = view {
                     crate::text_input::set_selection(view, *start, *end);
                 }
+            }
+            Command::ScrollTo { y, animated, .. }
+                if view.is_some_and(|v| v.kind() == ViewKind::Input) =>
+            {
+                crate::text_input::scroll_to(view.expect("an input"), *y, *animated);
             }
             Command::ScrollTo { .. }
             | Command::ScrollToEnd { .. }
@@ -481,12 +494,4 @@ impl Mounter {
             other => crate::system::command(surface, id, other),
         }
     }
-}
-
-/// A screen effect or transition: a shader over the whole surface.
-fn is_screen(view: &NshView) -> bool {
-    matches!(
-        view.kind(),
-        nsh_core::ViewKind::ScreenEffect | nsh_core::ViewKind::ScreenTransition
-    )
 }

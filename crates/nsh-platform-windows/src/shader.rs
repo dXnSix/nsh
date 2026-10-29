@@ -1,715 +1,619 @@
-//! `<Shader>`: the shader drawn with Direct3D 11 into a texture of the
-//! view's size, which Direct2D draws over its background and under its
-//! children (`docs/dev/shaders.md` "Windows").
+//! Shader views: the layer [`MountItem::Shader`](nsh_core::MountItem)
+//! mounts on a view, rendered by `nsh_engine::shader` and drawn as a bitmap.
 //!
-//! A `<ShaderTransition>` draws as an effect while a transition runs
-//! ([`start_transition`]): its children, drawn with the frame, are its
-//! `sample_to`; before the batch that changes them they are drawn once
-//! into another texture, its `sample_from` (or the running transition's
-//! picture is copied there), and a frame callback moves `nsh.progress`
-//! from 0 to 1.
+//! The surface opens the GPU device the first time a shader is mounted
+//! ([`Surface::shader_renderer`]). Each shader view renders on the
+//! surface's frame ticker ([`Surface::on_frame`]) while it has a frame to
+//! render or collect ([`ShaderView::wants_frame`]: its uniforms, size or
+//! pictures changed, it reads `nsh.time`, or a transition runs), at the
+//! window's scale; a frame that comes back is copied into the view's
+//! Direct2D bitmap when the view is drawn (made again after a device loss)
+//! and the view draws again. A view out of sight (hidden, on a concealed
+//! screen, detached) stops rendering until a frame of its window finds it
+//! in sight again ([`reveal`]).
 //!
-//! The inputs are live, drawn with the frame: a `<ShaderEffect>`'s children
-//! are drawn by Direct2D into a texture (its content) instead of the
-//! window, and what the frame drew behind a view so far is copied into
-//! another (its backdrop) before the pass. Both cover the area the shader
-//! draws: the view and an effect's `maxSampleOffset` beyond it.
+//! What the layer draws decides where its frames show
+//! ([`ShaderRole`]):
 //!
-//! The program is `HlslProgram::d3d11` (`nsh_vertex` / `nsh_fragment`,
-//! shader model 5.0), compiled with `D3DCompile` (`d3dcompiler_47`, part of
-//! Windows) when it arrives, on the device Direct2D draws with: the texture
-//! is a Direct2D bitmap of the same device. A view renders again when what
-//! it draws changes (its fill, an animated uniform, an image, its size,
-//! the device), and on every frame when its shader reads `nsh.time`.
-//! Direct2D's pending drawing is flushed before the Direct3D pass; Direct2D
-//! keeps the state of its own device context apart from the app's.
+//! - A fill draws under the view's content and children, clipped to its
+//!   rounded box as a background is ([`draw`]).
+//! - An effect draws instead of its children ([`draw_effect`]): as the
+//!   window draws it, its children are drawn into a bitmap of the box and
+//!   its overflow by a context of their own and read back; when the pixels
+//!   changed, they are the shader's `sample_content`.
+//! - A transition draws as an effect while one runs ([`start_transition`],
+//!   before the rest of its batch): its children drawn then are its
+//!   `sample_from`, its children as they are drawn its `sample_to`.
+//! - A screen effect or transition is the root's: the root draws through
+//!   it, its children (pages, dialogs, overlays) its content.
+//!
+//! What is behind a view (`sample_backdrop`) is read back from the window's
+//! target before the view draws ([`take_backdrop`]).
+//!
+//! Pages and dialogs that come and go through a shader draw recordings of
+//! their two sides through a [`NavItem`] hosted over the stack (the root
+//! for a dialog), `crate::navigation`'s.
+//!
+//! Animated uniforms are written while the animation graph is borrowed
+//! ([`set_args`]), so the views they start are queued and started once it
+//! is not ([`start_pending`]).
 
-use std::{cell::RefCell, collections::HashMap, ffi::CString, rc::Rc, sync::Arc, time::Instant};
+use std::{
+    cell::RefCell,
+    hash::{Hash, Hasher},
+    rc::{Rc, Weak},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use nsh_core::{
+    NodeId, Points,
     animation::AnimationValue,
-    geometry::{Bounds, DevicePixels, Percentage, Point, Points, Size},
-    shader::{self, ProgramCode, ShaderFill, ShaderInput, ShaderProgram},
+    geometry::{Size, size},
+    shader::{ShaderInput, ShaderLayer, ShaderRole},
 };
+use nsh_engine::shader::{Renderer, ShaderView};
 use windows::{
     Win32::Graphics::{
         Direct2D::{
-            Common::{D2D_POINT_2U, D2D_RECT_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT},
-            D2D1_BITMAP_OPTIONS, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET,
-            D2D1_BITMAP_PROPERTIES1, D2D1_INTERPOLATION_MODE_LINEAR, ID2D1Bitmap1, ID2D1Image,
+            Common::{
+                D2D_RECT_U, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED,
+                D2D1_COMPOSITE_MODE_SOURCE_OVER, D2D1_PIXEL_FORMAT,
+            },
+            D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1, D2D1_INTERPOLATION_MODE_LINEAR,
+            ID2D1Bitmap1, ID2D1DeviceContext, ID2D1Image,
         },
-        Direct3D::{D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, Fxc::D3DCompile, ID3DBlob, ID3DInclude},
-        Direct3D11::{
-            D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
-            D3D11_BUFFER_DESC, D3D11_COMPARISON_NEVER, D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-            D3D11_SAMPLER_DESC, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE_ADDRESS_CLAMP,
-            D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_VIEWPORT, ID3D11Buffer,
-            ID3D11PixelShader, ID3D11RenderTargetView, ID3D11SamplerState,
-            ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader,
-        },
-        Dxgi::{
-            Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC},
-            IDXGISurface,
-        },
+        Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
     },
-    core::{Interface, PCSTR},
+    core::Interface,
 };
+use windows_numerics::Matrix3x2;
 
 use crate::{
     geom::Mat4,
-    gfx::{self, Gfx},
-    render::DrawCx,
+    render::{DrawCx, Pixels, rect_f},
     surface::Surface,
     view::{NshView, ViewState},
 };
 
-/// A program's shaders on the device.
-struct Program {
-    vertex: ID3D11VertexShader,
-    pixel: ID3D11PixelShader,
-    /// The inputs its pixel shader samples, by register.
-    textures: Vec<ShaderInput>,
+/// What a shader view shows.
+#[derive(Default)]
+pub(crate) struct ShaderState {
+    /// The surface whose ticker renders it.
+    surface: Weak<Surface>,
+    renderer: Option<Rc<Renderer>>,
+    view: ShaderView,
+    /// Its frame client runs.
+    ticking: bool,
+    /// Out of sight with a frame to render ([`reveal`]).
+    hidden: bool,
+    /// The bitmap of the last frame (made while drawing, which only sees
+    /// the state).
+    drawn: RefCell<Option<Drawn>>,
+    /// The view that mounted the layer the root draws (a screen effect's or
+    /// transition's).
+    owner: Option<NodeId>,
+    /// It mounts a screen effect or transition: its layer is the root's.
+    screen: bool,
+    /// When the transition that runs ends.
+    until: Option<Instant>,
+    /// What a transition started from, shown until its first frame (with
+    /// the serial of the frame shown when it started).
+    start: Option<(u64, Pixels)>,
+    /// The hashes of the pictures it was last given, by input.
+    given: [Option<u64>; 4],
 }
 
-/// A program's compiled bytecode (kept to make its shaders again after a
-/// device loss) and its shaders on the current device.
-struct Compiled {
-    vertex: Vec<u8>,
-    pixel: Vec<u8>,
-    textures: Vec<ShaderInput>,
-    made: Option<(u64, Rc<Program>)>,
+/// A frame as a Direct2D bitmap.
+struct Drawn {
+    bitmap: ID2D1Bitmap1,
+    /// Its size in pixels.
+    size: (u32, u32),
+    /// The frame it holds ([`nsh_engine::shader::Frame::serial`];
+    /// [`u64::MAX`]: a picture of its own).
+    serial: u64,
+    /// The device generation it was made in.
+    generation: u64,
+}
+
+/// `pixels` (`height` rows `stride` bytes apart) as a bitmap on `dc`'s
+/// device: copied into `drawn`'s when `serial` is new, into a new one on
+/// first use, for a new size and after a device loss.
+fn upload(
+    dc: &ID2D1DeviceContext,
+    drawn: &mut Option<Drawn>,
+    pixels: &[u8],
+    (width, height): (u32, u32),
+    stride: u32,
+    serial: u64,
+) -> Option<ID2D1Bitmap1> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let generation = crate::gfx::generation();
+    if let Some(d) = drawn.as_mut()
+        && d.generation == generation
+        && d.size == (width, height)
+    {
+        if d.serial == serial {
+            return Some(d.bitmap.clone());
+        }
+        // SAFETY: `pixels` holds `height` rows `stride` bytes apart, the
+        // bitmap's size.
+        let copied = unsafe {
+            d.bitmap
+                .CopyFromMemory(None, pixels.as_ptr().cast(), stride)
+        };
+        match copied {
+            Ok(()) => {
+                d.serial = serial;
+                return Some(d.bitmap.clone());
+            }
+            Err(e) => log::warn!("shader: cannot update the bitmap: {e}"),
+        }
+    }
+    *drawn = None;
+    let props = D2D1_BITMAP_PROPERTIES1 {
+        pixelFormat: D2D1_PIXEL_FORMAT {
+            format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+        },
+        dpiX: 96.0,
+        dpiY: 96.0,
+        bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+        colorContext: std::mem::ManuallyDrop::new(None),
+    };
+    // SAFETY: `pixels` holds `height` rows `stride` bytes apart.
+    let made = unsafe {
+        dc.CreateBitmap(
+            D2D_SIZE_U { width, height },
+            Some(pixels.as_ptr().cast()),
+            stride,
+            &props,
+        )
+    };
+    match made {
+        Ok(bitmap) => {
+            *drawn = Some(Drawn {
+                bitmap: bitmap.clone(),
+                size: (width, height),
+                serial,
+                generation,
+            });
+            Some(bitmap)
+        }
+        Err(e) => {
+            log::warn!("shader: cannot create a {width}x{height} bitmap: {e}");
+            None
+        }
+    }
+}
+
+impl ShaderState {
+    /// The bitmap of the last frame on `dc`'s device (what a transition
+    /// started from, until its first frame).
+    fn bitmap(&self, dc: &ID2D1DeviceContext) -> Option<ID2D1Bitmap1> {
+        let frame = self.view.frame();
+        let mut drawn = self.drawn.borrow_mut();
+        match &self.start {
+            Some((serial, from)) if *serial == frame.serial => upload(
+                dc,
+                &mut drawn,
+                &from.data,
+                (from.width, from.height),
+                from.width * 4,
+                u64::MAX,
+            ),
+            _ => upload(
+                dc,
+                &mut drawn,
+                &frame.pixels,
+                (frame.width, frame.height),
+                frame.stride,
+                frame.serial,
+            ),
+        }
+    }
+
+    fn role(&self) -> Option<ShaderRole> {
+        self.view.layer().map(|l| l.role)
+    }
+
+    fn reads(&self, input: ShaderInput) -> bool {
+        self.view
+            .layer()
+            .is_some_and(|l| l.shader.inputs().contains(input))
+    }
+
+    /// Whether it draws instead of its children now.
+    fn replaces(&self) -> bool {
+        match self.role() {
+            Some(ShaderRole::Effect | ShaderRole::Screen) => true,
+            Some(ShaderRole::Transition | ShaderRole::ScreenTransition) => {
+                self.until.is_some_and(|u| Instant::now() < u)
+            }
+            _ => false,
+        }
+    }
+
+    /// The picture its children are: an effect's content, a transition's
+    /// `sample_to`.
+    fn children_input(&self) -> ShaderInput {
+        match self.role() {
+            Some(ShaderRole::Transition | ShaderRole::ScreenTransition) => ShaderInput::To,
+            _ => ShaderInput::Content,
+        }
+    }
 }
 
 thread_local! {
-    static PROGRAMS: RefCell<HashMap<u32, Option<Compiled>>> = RefCell::default();
+    /// Shader views out of sight with a frame to render.
+    static HIDDEN: RefCell<Vec<(Weak<Surface>, NodeId)>> = RefCell::default();
+    /// Shader views whose animated uniforms changed while they were not
+    /// rendering ([`set_args`]).
+    static PENDING: RefCell<Vec<NshView>> = RefCell::default();
 }
 
-/// A program for the views to come: compiled now.
-pub(crate) fn program(program: &ShaderProgram) {
-    let id = program.id;
-    if PROGRAMS.with(|p| p.borrow().contains_key(&id)) {
+fn is_screen(role: Option<ShaderRole>) -> bool {
+    matches!(
+        role,
+        Some(ShaderRole::Screen | ShaderRole::ScreenTransition)
+    )
+}
+
+/// The view a layer mounted on `view` draws on: the root for a screen
+/// effect's or transition's view.
+fn target(view: &NshView) -> NshView {
+    if !view.state().shader.as_ref().is_some_and(|s| s.screen) {
+        return view.clone();
+    }
+    let mut root = view.clone();
+    while let Some(parent) = root.parent_view() {
+        root = parent;
+    }
+    root
+}
+
+/// Mounts `layer` on `view` (`None`: it shows nothing of its own).
+pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, layer: Option<Arc<ShaderLayer>>) {
+    if is_screen(layer.as_ref().map(|l| l.role)) {
+        view.state_mut()
+            .shader
+            .get_or_insert_with(Default::default)
+            .screen = true;
+    }
+    let screen = view.state().shader.as_ref().is_some_and(|s| s.screen);
+    let target = if screen {
+        // One screen effect draws at a time, the latest; the root lets go
+        // of a layer only for the view that gave it.
+        let owner = surface.root.state().shader.as_ref().and_then(|s| s.owner);
+        if layer.is_none() && owner != Some(view.id()) {
+            return;
+        }
+        surface.root.clone()
+    } else {
+        view.clone()
+    };
+    {
+        let mut state = target.state_mut();
+        if layer.is_none() && state.shader.is_none() {
+            return;
+        }
+        let shader = state.shader.get_or_insert_with(Default::default);
+        shader.surface = Rc::downgrade(surface);
+        if layer.is_some() && shader.renderer.is_none() {
+            shader.renderer = surface.shader_renderer();
+        }
+        if layer.is_none() {
+            *shader.drawn.get_mut() = None;
+            shader.until = None;
+            shader.start = None;
+        }
+        shader.owner = (screen && layer.is_some()).then(|| view.id());
+        shader.given = [None; 4];
+        shader.view.set_layer(layer);
+    }
+    target.changed();
+    tick(&target);
+}
+
+/// The values of the layer's animated slots. Called while the animation
+/// graph is borrowed: a view that starts rendering is queued
+/// ([`start_pending`]).
+pub(crate) fn set_args(view: &NshView, values: &[(u16, AnimationValue)]) {
+    let view = target(view);
+    let mut state = view.state_mut();
+    let Some(shader) = state.shader.as_mut() else {
         return;
-    }
-    let compiled = match &program.code {
-        ProgramCode::Hlsl(hlsl) => {
-            let stage = |entry: &str, target: &str| compile(&hlsl.d3d11, entry, target);
-            match (
-                stage(&hlsl.vertex, "vs_5_0"),
-                stage(&hlsl.fragment, "ps_5_0"),
-            ) {
-                (Ok(vertex), Ok(pixel)) => Some(Compiled {
-                    vertex,
-                    pixel,
-                    textures: hlsl.textures.clone(),
-                    made: None,
-                }),
-                (Err(e), _) | (_, Err(e)) => {
-                    log::error!(target: "js", "<Shader>: Direct3D could not compile the shader: {e}");
-                    None
-                }
-            }
-        }
-        _ => None,
     };
-    PROGRAMS.with(|p| p.borrow_mut().insert(id, compiled));
+    for &(slot, value) in values {
+        shader.view.set_slot(slot, value);
+    }
+    if !shader.ticking && !shader.hidden && shader.view.wants_frame() {
+        drop(state);
+        PENDING.with(|p| p.borrow_mut().push(view.clone()));
+    }
 }
 
-/// `source`'s `entry` compiled for `target`, or the compiler's messages.
-fn compile(source: &str, entry: &str, target: &str) -> Result<Vec<u8>, String> {
-    let entry = CString::new(entry).map_err(|e| e.to_string())?;
-    let target = CString::new(target).map_err(|e| e.to_string())?;
-    let mut blob: Option<ID3DBlob> = None;
-    let mut errors: Option<ID3DBlob> = None;
-    // `D3DCOMPILE_OPTIMIZATION_LEVEL3`.
-    const OPTIMIZE: u32 = 1 << 15;
-    // SAFETY: the source, entry point and target outlive the call; the
-    // blobs are out parameters it fills.
-    let result = unsafe {
-        D3DCompile(
-            source.as_ptr().cast(),
-            source.len(),
-            PCSTR::null(),
-            None,
-            None::<&ID3DInclude>,
-            PCSTR(entry.as_ptr().cast()),
-            PCSTR(target.as_ptr().cast()),
-            OPTIMIZE,
-            0,
-            &mut blob,
-            Some(&mut errors),
+/// Starts the views [`set_args`] queued (once the animation graph is
+/// written).
+pub(crate) fn start_pending() {
+    let pending = PENDING.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    for view in pending {
+        tick(&view);
+    }
+}
+
+/// Its size changed: a frame of the new size is rendered.
+pub(crate) fn resized(view: &NshView) {
+    if view.state().shader.is_some() {
+        tick(view);
+    }
+}
+
+/// How far beyond its box a view's shader draws, in points.
+pub(crate) fn overflow(state: &ViewState) -> f32 {
+    state.shader.as_ref().map_or(0.0, |s| s.view.overflow().0)
+}
+
+/// The size in pixels of a picture of `frame` and `o` points around it.
+fn pixels_of(frame: Size<Points>, o: f32, scale: f32) -> Option<(u32, u32)> {
+    let (w, h) = (frame.width.0 + 2.0 * o, frame.height.0 + 2.0 * o);
+    (w > 0.0 && h > 0.0).then(|| {
+        (
+            (w * scale).round().max(1.0) as u32,
+            (h * scale).round().max(1.0) as u32,
         )
-    };
-    let bytes = |b: &ID3DBlob| {
-        // SAFETY: a blob's buffer holds `GetBufferSize` bytes.
-        unsafe {
-            std::slice::from_raw_parts(b.GetBufferPointer().cast::<u8>(), b.GetBufferSize())
-                .to_vec()
-        }
-    };
-    match (result, blob) {
-        (Ok(()), Some(blob)) => Ok(bytes(&blob)),
-        (result, _) => Err(errors
-            .map(|e| String::from_utf8_lossy(&bytes(&e)).into_owned())
-            .unwrap_or_else(|| format!("{result:?}"))),
-    }
-}
-
-/// Program `id`'s shaders on `gfx`'s device (made again after a loss).
-fn shaders(gfx: &Gfx, id: u32) -> Option<Rc<Program>> {
-    let generation = gfx::generation();
-    PROGRAMS.with(|p| {
-        let mut p = p.borrow_mut();
-        let compiled = p.get_mut(&id)?.as_mut()?;
-        if let Some((g, program)) = &compiled.made
-            && *g == generation
-        {
-            return Some(program.clone());
-        }
-        let mut vertex = None;
-        let mut pixel = None;
-        // SAFETY: COM calls on the live device with bytecode D3DCompile made.
-        unsafe {
-            gfx.d3d
-                .CreateVertexShader(&compiled.vertex, None, Some(&mut vertex))
-                .ok()?;
-            gfx.d3d
-                .CreatePixelShader(&compiled.pixel, None, Some(&mut pixel))
-                .ok()?;
-        }
-        let program = Rc::new(Program {
-            vertex: vertex?,
-            pixel: pixel?,
-            textures: compiled.textures.clone(),
-        });
-        compiled.made = Some((generation, program.clone()));
-        Some(program)
     })
 }
 
-/// What a shader view draws.
-#[derive(Default)]
-pub(crate) struct ShaderState {
-    fill: Option<Arc<ShaderFill>>,
-    /// The fill's uniforms with the animated values written in.
-    uniforms: Vec<u8>,
-    /// `nsh.progress`: the fill's, or its animated value.
-    progress: f32,
-    args: Vec<(u16, AnimationValue)>,
-    /// A `<ShaderEffect>` or `<ShaderTransition>`: its children are the
-    /// shader's content (or its `sample_to`).
-    effect: bool,
-    /// A `<ShaderTransition>`; when it runs, its start and duration.
-    transition: bool,
-    running: Option<(Instant, std::time::Duration)>,
-    /// The images, by slot, once loaded.
-    images: Vec<Option<Rc<crate::image::Frame>>>,
-    started: Option<Instant>,
-    /// A frame callback draws it (`nsh.time`).
-    ticking: bool,
-    target: RefCell<Option<Target>>,
-}
-
-/// The texture it renders into, the bitmap Direct2D draws it with, and
-/// the device resources of its last render.
-struct Target {
-    generation: u64,
-    size: (u32, u32),
-    view: ID3D11RenderTargetView,
-    bitmap: ID2D1Bitmap1,
-    /// Rendered with what it shows now.
-    fresh: bool,
-    buffers: [Option<ID3D11Buffer>; 3],
-    images: Vec<Option<(usize, ID3D11ShaderResourceView)>>,
-    sampler: Option<ID3D11SamplerState>,
-    /// The textures of the children (an effect's content, a transition's
-    /// `sample_to`), the backdrop and a transition's `sample_from`, of the
-    /// target's size.
-    inputs: [Option<Input>; 3],
-    /// The backdrop was copied in this frame ([`take_backdrop`]).
-    backdrop: bool,
-}
-
-/// A texture an input is drawn (the content) or copied (the backdrop)
-/// into, and the Direct2D bitmap of it.
-#[derive(Clone)]
-struct Input {
-    view: ID3D11ShaderResourceView,
-    target: ID3D11RenderTargetView,
-    bitmap: ID2D1Bitmap1,
-}
-
-impl Target {
-    /// The texture of input `at` (0: the children, 1: the backdrop, 2: a
-    /// transition's `sample_from`).
-    fn input(&mut self, gfx: &Gfx, at: usize, scale: f32) -> Option<Input> {
-        if self.inputs[at].is_none() {
-            self.inputs[at] = texture(gfx, self.size, scale, D2D1_BITMAP_OPTIONS_TARGET)
-                .map(|(view, target, bitmap)| Input {
-                    view,
-                    target,
-                    bitmap,
-                })
-                .map_err(|e| log::warn!("<Shader>: {e}"))
-                .ok();
-        }
-        self.inputs[at].clone()
-    }
-}
-
-impl ShaderState {
-    fn stale(&mut self) {
-        if let Some(t) = self.target.get_mut() {
-            t.fresh = false;
-        }
-    }
-}
-
-/// Sets up a shader view; `effect`: a `<ShaderEffect>`, `transition`: a
-/// `<ShaderTransition>`.
-pub(crate) fn create(view: &NshView, effect: bool, transition: bool) {
-    view.state_mut().shader = Some(ShaderState {
-        effect: effect || transition,
-        transition,
-        ..ShaderState::default()
-    });
-}
-
-impl ShaderState {
-    /// The input its children are: an effect's content, a transition's
-    /// `sample_to`.
-    fn children(&self) -> ShaderInput {
-        if self.transition {
-            ShaderInput::To
-        } else {
-            ShaderInput::Content
-        }
+fn whole((right, bottom): (u32, u32)) -> D2D_RECT_U {
+    D2D_RECT_U {
+        left: 0,
+        top: 0,
+        right,
+        bottom,
     }
 }
 
 /// A shader transition starts ([`nsh_core::MountItem::ShaderTransition`],
-/// before the rest of its batch): what shows now is drawn into its
-/// `sample_from`, and a frame callback moves `nsh.progress` from 0 to 1
-/// over `duration`.
-pub(crate) fn start_transition(
-    surface: &Rc<Surface>,
-    view: &NshView,
-    duration: std::time::Duration,
-) {
-    let Ok(gfx) = gfx::get() else { return };
-    let scale = surface.scale();
-    let (area, from, running) = {
-        let state = view.state();
-        let Some(shader) = state.shader.as_ref() else {
-            return;
-        };
-        let Some(fill) = shader.fill.as_ref() else {
-            return;
-        };
-        if !shader.transition || shaders(&gfx, fill.program).is_none() {
-            return;
-        }
-        let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
-        if w <= 0.0 || h <= 0.0 {
-            return;
-        }
-        let o = fill.max_offset.0.max(0.0);
-        let area = Bounds::new(
-            Point::new(Points(-o), Points(-o)),
-            Size::new(Points(w + 2.0 * o), Points(h + 2.0 * o)),
-        );
-        let size = (
-            (area.size.width.0 * scale).round().max(1.0) as u32,
-            (area.size.height.0 * scale).round().max(1.0) as u32,
-        );
-        let mut target = shader.target.borrow_mut();
-        let generation = gfx::generation();
-        if target
-            .as_ref()
-            .is_none_or(|t| t.generation != generation || t.size != size)
-        {
-            *target = make_target(&gfx, size, generation)
-                .map_err(|e| log::warn!("<Shader>: {e}"))
-                .ok();
-        }
-        let Some(t) = target.as_mut() else { return };
-        let Some(from) = t.input(&gfx, 2, scale) else {
-            return;
-        };
-        let running = shader.running.is_some();
-        if running {
-            // What shows: the transition as it was last drawn.
-            // SAFETY: COM calls on bitmaps of the live device, of one size.
-            if let Err(e) = unsafe { from.bitmap.CopyFromBitmap(None, &t.bitmap, None) } {
-                log::debug!("<ShaderTransition>: no picture of the transition: {e}");
-            }
-        }
-        (area, from, running)
+/// before the rest of its batch): what shows now becomes its `sample_from`,
+/// and `nsh.progress` goes from 0 to 1 over `duration`.
+pub(crate) fn start_transition(surface: &Rc<Surface>, view: &NshView, duration: Duration) {
+    let view = if view.state().shader.as_ref().is_some_and(|s| s.screen) {
+        surface.root.clone()
+    } else {
+        view.clone()
     };
-    if !running && let Ok(image) = from.bitmap.cast::<ID2D1Image>() {
-        // The children as they are, at the picture's origin.
-        let base = Mat4::new().translate(-area.origin.x.0, -area.origin.y.0);
-        crate::render::draw_offscreen(surface, &image, scale, |cx| {
-            view.with_children(|children| {
-                for child in children {
-                    let origin = {
-                        let s = child.state();
-                        view.state().child_origin(s.frame, s.shift)
-                    };
-                    crate::render::draw_view(cx, child, base, origin);
-                }
-            });
-        });
-    }
+    let scale = surface.scale();
+    let (running, o, frame) = {
+        let s = view.state();
+        let Some(shader) = s.shader.as_ref() else {
+            return;
+        };
+        if !matches!(
+            shader.role(),
+            Some(ShaderRole::Transition | ShaderRole::ScreenTransition)
+        ) {
+            return;
+        }
+        (shader.replaces(), shader.view.overflow().0, s.frame.size)
+    };
+    // A running transition goes on from what it shows; otherwise it starts
+    // from the children as they are.
+    let from = if running {
+        view.state().shader.as_ref().and_then(|s| {
+            let f = s.view.frame();
+            (f.width > 0 && f.height > 0).then(|| Pixels {
+                width: f.width,
+                height: f.height,
+                data: f.tight().into_owned(),
+            })
+        })
+    } else {
+        offscreen_children(surface, &view, o, frame, scale)
+    };
     {
         let mut s = view.state_mut();
         let Some(shader) = s.shader.as_mut() else {
             return;
         };
-        shader.running = Some((Instant::now(), duration));
-        shader.progress = 0.0;
-        shader.stale();
+        let Some(renderer) = shader.renderer.clone() else {
+            return;
+        };
+        if let Some(from) = from {
+            shader.view.set_input(
+                &renderer,
+                ShaderInput::From,
+                Some((&from.data, from.width, from.height, from.width * 4)),
+            );
+            shader.start = Some((shader.view.frame().serial, from));
+        }
+        let now = Instant::now();
+        shader.view.start_transition(duration, now);
+        shader.until = Some(now + duration);
+        shader.given[ShaderInput::To.index()] = None;
     }
     view.changed();
-    if running {
-        // Its frame callback runs on.
-        return;
+    tick(&view);
+}
+
+/// `view`'s children drawn outside the window's pass over its box and `o`
+/// points around it, read back.
+fn offscreen_children(
+    surface: &Rc<Surface>,
+    view: &NshView,
+    o: f32,
+    frame: Size<Points>,
+    scale: f32,
+) -> Option<Pixels> {
+    let px = pixels_of(frame, o, scale)?;
+    let gfx = crate::gfx::get().ok()?;
+    let target = crate::render::target_bitmap(&gfx.dc, px, scale).ok()?;
+    let image: ID2D1Image = target.cast().ok()?;
+    let base = Mat4::new().translate(o, o);
+    let drawn = crate::render::draw_offscreen(surface, &image, scale, |cx| {
+        draw_children(cx, view, base);
+    });
+    if !drawn {
+        return None;
     }
-    let id = view.id();
-    surface.on_frame(move |surface, _| {
-        let Some(view) = surface.view(id) else {
-            return false;
-        };
-        let runs = {
-            let mut s = view.state_mut();
-            let Some(shader) = s.shader.as_mut() else {
-                return false;
+    crate::render::read_back(&gfx.dc, &target, whole(px))
+        .map_err(|e| log::debug!("shader: no picture of the children: {e}"))
+        .ok()
+}
+
+/// Draws `view`'s children at `base` (its coordinates in the target's).
+fn draw_children(cx: &mut DrawCx<'_>, view: &NshView, base: Mat4) {
+    view.with_children(|children| {
+        for child in children {
+            let origin = {
+                let s = child.state();
+                view.state().child_origin(s.frame, s.shift)
             };
-            let Some((start, duration)) = shader.running else {
-                return false;
-            };
-            let t =
-                (start.elapsed().as_secs_f32() / duration.as_secs_f32().max(f32::EPSILON)).min(1.0);
-            shader.progress = t;
-            if t >= 1.0 {
-                // Its children draw as they are again.
-                shader.running = None;
-                if let Some(t) = shader.target.get_mut() {
-                    t.inputs[2] = None;
-                }
-            }
-            shader.stale();
-            t < 1.0
-        };
-        view.changed();
-        runs
+            crate::render::draw_view(cx, child, base, origin);
+        }
     });
 }
 
-/// What `view` draws now (`None`: its children only); loads its images.
-pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, fill: Option<Arc<ShaderFill>>) {
-    let mut load = Vec::new();
-    {
-        let mut s = view.state_mut();
-        let Some(state) = s.shader.as_mut() else {
+/// Starts rendering the view on its surface's frame ticker if it has a
+/// frame to render.
+fn tick(view: &NshView) {
+    let surface = {
+        let mut state = view.state_mut();
+        let Some(shader) = state.shader.as_mut() else {
             return;
         };
-        let old = state.fill.take();
-        if let Some(fill) = &fill {
-            state.uniforms = fill.uniforms.to_vec();
-            state.progress = fill.progress;
-            shader::write_args(&mut state.uniforms, &mut state.progress, &state.args);
-            state.images.resize(fill.images.len(), None);
-            for (slot, image) in fill.images.iter().enumerate() {
-                let before = old
-                    .as_ref()
-                    .and_then(|o| o.images.get(slot))
-                    .and_then(|i| i.source.as_ref());
-                match &image.source {
-                    Some(source) if before.map(|b| &b.uri) != Some(&source.uri) => {
-                        state.images[slot] = None;
-                        load.push((slot, source.uri.clone()));
-                    }
-                    None => state.images[slot] = None,
-                    _ => {}
-                }
-            }
-        }
-        state.fill = fill;
-        state.stale();
-    }
-    let id = view.id();
-    for (slot, uri) in load {
-        let weak = Rc::downgrade(surface);
-        let key = uri.clone();
-        crate::image::load_bitmap(surface, &uri, move |result| {
-            let frame = match result {
-                Ok(frame) => frame,
-                Err(e) => {
-                    log::warn!(target: "js", "<Shader>: {e}");
-                    return;
-                }
-            };
-            let Some(view) = weak.upgrade().and_then(|s| s.view(id)) else {
-                return;
-            };
-            {
-                let mut s = view.state_mut();
-                let Some(state) = s.shader.as_mut() else {
-                    return;
-                };
-                let Some(entry) = state
-                    .fill
-                    .as_ref()
-                    .and_then(|f| f.images.get(slot).cloned())
-                else {
-                    return;
-                };
-                if entry.source.as_ref().map(|s| &s.uri) != Some(&key) {
-                    return;
-                }
-                if entry.source.as_ref().and_then(|s| s.size).is_none() {
-                    let (w, h) = frame.size();
-                    shader::write_image_size(
-                        &mut state.uniforms,
-                        &entry,
-                        Size::new(Points(w as f32), Points(h as f32)),
-                    );
-                }
-                state.images[slot] = Some(frame);
-                state.stale();
-            }
-            view.changed();
-        });
-    }
-    tick(surface, view);
-    view.changed();
-}
-
-/// Animated uniforms' values.
-pub(crate) fn set_args(view: &NshView, values: &[(u16, AnimationValue)]) {
-    {
-        let mut s = view.state_mut();
-        let Some(state) = s.shader.as_mut() else {
-            return;
-        };
-        if state.args == values {
-            return;
-        }
-        state.args.clear();
-        state.args.extend_from_slice(values);
-        if state.fill.is_some() {
-            shader::write_args(&mut state.uniforms, &mut state.progress, values);
-        }
-        state.stale();
-    }
-    view.changed();
-}
-
-/// A shader that reads `nsh.time` renders on every frame while it lives.
-fn tick(surface: &Rc<Surface>, view: &NshView) {
-    {
-        let mut s = view.state_mut();
-        let Some(state) = s.shader.as_mut() else {
-            return;
-        };
-        if state.ticking || !state.fill.as_ref().is_some_and(|f| f.time) {
-            return;
-        }
-        state.ticking = true;
-        state.started.get_or_insert_with(Instant::now);
-    }
-    let id = view.id();
-    surface.on_frame(move |surface, _| {
-        let Some(view) = surface.view(id) else {
-            return false;
-        };
+        if shader.ticking
+            || shader.hidden
+            || shader.renderer.is_none()
+            || !shader.view.wants_frame()
         {
-            let mut s = view.state_mut();
-            let Some(state) = s.shader.as_mut() else {
-                return false;
-            };
-            if !state.fill.as_ref().is_some_and(|f| f.time) {
-                state.ticking = false;
-                return false;
-            }
-            state.stale();
+            return;
         }
-        view.changed();
-        true
+        let Some(surface) = shader.surface.upgrade() else {
+            return;
+        };
+        shader.ticking = true;
+        surface
+    };
+    let id = view.id();
+    surface.on_frame(move |surface, _now| {
+        let Some(view) = surface.view(id) else {
+            return false;
+        };
+        let go_on = frame(surface, &view);
+        if !go_on && let Some(shader) = view.state_mut().shader.as_mut() {
+            shader.ticking = false;
+        }
+        go_on
     });
 }
 
-/// The view's shader is a fill, drawn as its own content (an effect draws
-/// its children instead).
-pub(crate) fn fills(state: &ViewState) -> bool {
-    state.shader.as_ref().is_some_and(|s| !s.effect)
-}
-
-/// True when `state` is an effect drawing its children through its
-/// shader ([`draw_effect`]): they are not drawn into the window.
-pub(crate) fn effect(state: &ViewState) -> bool {
-    state
+/// One frame of the ticker: renders, collects; whether to tick again.
+fn frame(surface: &Rc<Surface>, view: &NshView) -> bool {
+    if !in_sight(view) {
+        let mut state = view.state_mut();
+        let Some(shader) = state.shader.as_mut() else {
+            return false;
+        };
+        if !shader.hidden {
+            shader.hidden = true;
+            let id = state.id;
+            HIDDEN.with(|h| h.borrow_mut().push((Rc::downgrade(surface), id)));
+        }
+        return false;
+    }
+    let scale = surface.scale();
+    let draw = {
+        let mut state = view.state_mut();
+        let frame_size = state.frame.size;
+        let Some(shader) = state.shader.as_mut() else {
+            return false;
+        };
+        let Some(renderer) = shader.renderer.clone() else {
+            return false;
+        };
+        shader.view.set_size(
+            size(Points(frame_size.width.0), Points(frame_size.height.0)),
+            scale,
+        );
+        let now = Instant::now();
+        // A transition that ended: the children show as they are again.
+        let ended = shader.until.is_some_and(|u| now >= u);
+        if ended {
+            shader.until = None;
+            shader.start = None;
+        }
+        shader.view.render(&renderer, now) || ended
+    };
+    if draw {
+        view.changed();
+    }
+    view.state()
         .shader
         .as_ref()
-        .is_some_and(|s| s.effect && s.fill.is_some() && (!s.transition || s.running.is_some()))
+        .is_some_and(|s| s.view.wants_frame() || s.until.is_some())
 }
 
-/// Draws a shader view's picture (rendering it first if it is stale);
-/// an effect draws with its children ([`draw_effect`]).
-pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
-    if state.shader.as_ref().is_none_or(|s| s.effect) {
-        return;
+/// Whether `view` may show: attached to its surface, with neither it nor
+/// an ancestor hidden or concealed (screens below the top one).
+fn in_sight(view: &NshView) -> bool {
+    if !view.attached() {
+        return false;
     }
-    let Some(area) = prepare(cx, state) else {
-        return;
-    };
-    // The fill follows the view's corners, as a background does.
-    let radii = state.radii();
-    let rounded = radii.iter().any(|&r| r > 0.0);
-    if rounded {
-        let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
-        cx.push_clip_rounded(crate::geom::rect(0.0, 0.0, w, h), radii);
+    let mut at = Some(view.clone());
+    while let Some(v) = at {
+        {
+            let s = v.state();
+            if s.style.hidden || s.concealed {
+                return false;
+            }
+        }
+        at = v.parent_view();
     }
-    finish(cx, state, area);
-    if rounded {
-        cx.pop();
-    }
-}
-
-/// Draws an effect: `view`'s children into its content, then the shader
-/// at `world` (set on the context). False when it draws nothing: the
-/// children are then drawn as they are.
-pub(crate) fn draw_effect(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) -> bool {
-    let (area, content) = {
-        let state = view.state();
-        let Some(area) = prepare(cx, &state) else {
-            return false;
-        };
-        let Some(shader) = state.shader.as_ref() else {
-            return false;
-        };
-        let samples = shader
-            .fill
-            .as_ref()
-            .is_some_and(|f| f.samples(shader.children()));
-        let content = match samples {
-            true => shader
-                .target
-                .borrow_mut()
-                .as_mut()
-                .and_then(|t| t.input(cx.gfx, 0, cx.scale)),
-            false => None,
-        };
-        (area, content)
-    };
-    if let Some(content) = content
-        && let Ok(image) = content.bitmap.cast::<ID2D1Image>()
-    {
-        // The children at the content's origin, drawn by another context:
-        // what is pushed on this one stays as it is.
-        let base = Mat4::new().translate(-area.origin.x.0, -area.origin.y.0);
-        let composed = cx.composed.len();
-        crate::decor::layer::draw_into(cx, &image, cx.scale, true, |inner| {
-            view.with_children(|children| {
-                for child in children {
-                    let origin = {
-                        let s = child.state();
-                        view.state().child_origin(s.frame, s.shift)
-                    };
-                    crate::render::draw_view(inner, child, base, origin);
-                }
-            });
-        });
-        // Web views in it were placed in the content's coordinates.
-        cx.composed.truncate(composed);
-    }
-    cx.set_transform(world);
-    finish(cx, &view.state(), area);
     true
 }
 
-/// The area a shader view draws (points from its top-left), once its
-/// program is ready and its target made; `None` when it draws nothing.
-fn prepare(cx: &DrawCx<'_>, state: &ViewState) -> Option<Bounds<Points>> {
-    let shader = state.shader.as_ref()?;
-    let fill = shader.fill.as_ref()?;
-    let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
-    if w <= 0.0 || h <= 0.0 {
-        return None;
+/// Starts the shader views that came into sight (before every frame of a
+/// window is drawn).
+pub(crate) fn reveal() {
+    if HIDDEN.with(|h| h.borrow().is_empty()) {
+        return;
     }
-    shaders(cx.gfx, fill.program)?;
-    let o = if shader.effect {
-        fill.max_offset.0.max(0.0)
-    } else {
-        0.0
-    };
-    let area = Bounds::new(
-        Point::new(Points(-o), Points(-o)),
-        Size::new(Points(w + 2.0 * o), Points(h + 2.0 * o)),
-    );
-    let size = (
-        (area.size.width.0 * cx.scale).round().max(1.0) as u32,
-        (area.size.height.0 * cx.scale).round().max(1.0) as u32,
-    );
-    let mut target = shader.target.borrow_mut();
-    let generation = gfx::generation();
-    if target
-        .as_ref()
-        .is_none_or(|t| t.generation != generation || t.size != size)
-    {
-        *target = make_target(cx.gfx, size, generation)
-            .map_err(|e| log::warn!("<Shader>: {e}"))
-            .ok();
+    let shown: Vec<NshView> = HIDDEN.with(|h| {
+        let mut shown = Vec::new();
+        h.borrow_mut().retain(|(surface, id)| {
+            let Some(view) = surface.upgrade().and_then(|s| s.view(*id)) else {
+                return false;
+            };
+            if !view.state().shader.as_ref().is_some_and(|s| s.hidden) {
+                return false;
+            }
+            if !in_sight(&view) {
+                return true;
+            }
+            shown.push(view);
+            false
+        });
+        shown
+    });
+    for view in shown {
+        if let Some(s) = view.state_mut().shader.as_mut() {
+            s.hidden = false;
+        }
+        tick(&view);
     }
-    target.as_ref().map(|_| area)
 }
 
-/// Renders the shader if its picture is stale (always when it reads an
-/// input) and draws it over `area`.
-fn finish(cx: &mut DrawCx<'_>, state: &ViewState, area: Bounds<Points>) {
-    let Some(shader) = state.shader.as_ref() else {
-        return;
-    };
-    let Some(fill) = &shader.fill else { return };
-    let Some(program) = shaders(cx.gfx, fill.program) else {
-        return;
-    };
-    let mut target = shader.target.borrow_mut();
-    let Some(t) = target.as_mut() else { return };
-    let live = shader.effect || fill.samples(ShaderInput::Backdrop);
-    if !t.fresh || live {
-        let backdrop = match std::mem::take(&mut t.backdrop) {
-            true => t.inputs[1].clone(),
-            false => None,
-        };
-        let children = match fill.samples(shader.children()) && shader.effect {
-            true => t.inputs[0].clone(),
-            false => None,
-        };
-        let from = match shader.running.is_some() && fill.samples(ShaderInput::From) {
-            true => t.inputs[2].clone(),
-            false => None,
-        };
-        let size = state.frame.size;
-        let time = shader.started.map_or(0.0, |s| s.elapsed().as_secs_f32());
-        // By input: the content, the backdrop, `sample_from`, `sample_to`.
-        let inputs = match shader.transition {
-            true => [None, backdrop, from, children],
-            false => [children, backdrop, None, None],
-        };
-        if let Err(e) = render(cx, t, &program, shader, size, area, &inputs, time) {
-            log::warn!("<Shader>: {e}");
-            return;
-        }
-        t.fresh = true;
-    }
-    let (x, y) = (area.origin.x.0, area.origin.y.0);
-    let (w, h) = (area.size.width.0, area.size.height.0);
+/// Draws `bitmap` over the box of `frame` and `o` points around it.
+fn draw_bitmap(cx: &DrawCx<'_>, bitmap: &ID2D1Bitmap1, frame: Size<Points>, o: f32) {
+    let (w, h) = (frame.width.0 + 2.0 * o, frame.height.0 + 2.0 * o);
     // SAFETY: a COM call on the live context with a bitmap of its device.
     unsafe {
         cx.dc.DrawBitmap(
-            &t.bitmap,
-            Some(&crate::render::rect_f(x, y, w, h)),
+            bitmap,
+            Some(&rect_f(-o, -o, w, h)),
             1.0,
             D2D1_INTERPOLATION_MODE_LINEAR,
             None,
@@ -718,486 +622,356 @@ fn finish(cx: &mut DrawCx<'_>, state: &ViewState, area: Bounds<Points>) {
     };
 }
 
-/// Copies what is behind a view whose shader reads it, before the view
-/// draws anything: its own background is not behind it.
-pub(crate) fn take_backdrop(cx: &mut DrawCx<'_>, state: &ViewState) {
+/// Draws a fill's last frame over the view's box, inside its rounded
+/// corners (under its content and children; an effect draws with its
+/// children, [`draw_effect`]).
+pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
     let Some(shader) = state.shader.as_ref() else {
         return;
     };
-    let samples = shader
-        .fill
-        .as_ref()
-        .is_some_and(|f| f.samples(ShaderInput::Backdrop));
-    if !samples {
+    if shader.role() != Some(ShaderRole::Fill) {
         return;
     }
-    let Some(area) = prepare(cx, state) else {
+    let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    let Some(bitmap) = shader.bitmap(cx.dc) else {
         return;
     };
-    let mut target = shader.target.borrow_mut();
-    let Some(t) = target.as_mut() else { return };
-    let Some(input) = t.input(cx.gfx, 1, cx.scale) else {
-        return;
-    };
-    t.backdrop = copy_backdrop(cx, &input, area);
+    cx.push_clip_rounded(crate::geom::rect(0.0, 0.0, w, h), state.radii());
+    draw_bitmap(cx, &bitmap, state.frame.size, shader.view.overflow().0);
+    cx.pop();
 }
 
-/// Copies what the pass drew so far under `area` (the view's points, at
-/// the context's transform) into `input`, transparent where the target
-/// has nothing (beyond the window, a pass drawn offscreen). False when
-/// the copy failed.
-fn copy_backdrop(cx: &mut DrawCx<'_>, input: &Input, area: Bounds<Points>) -> bool {
-    // SAFETY: COM calls on the live device; the texture is not drawn with.
-    unsafe {
-        if let Ok(context) = cx.gfx.d3d.GetImmediateContext() {
-            context.ClearRenderTargetView(&input.target, &[0.0, 0.0, 0.0, 0.0]);
-        }
+/// Whether `state` draws its children through its shader now
+/// ([`draw_effect`]).
+pub(crate) fn effect(state: &ViewState) -> bool {
+    state.shader.as_ref().is_some_and(ShaderState::replaces)
+}
+
+/// Draws an effect at `world` (set on the context): `view`'s children into
+/// its picture, then the shader's last frame over its box and overflow.
+/// False when it has no frame yet: the children are then drawn as they
+/// are.
+pub(crate) fn draw_effect(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) -> bool {
+    let (input, reads, o, frame) = {
+        let s = view.state();
+        let Some(shader) = s.shader.as_ref() else {
+            return false;
+        };
+        let input = shader.children_input();
+        (
+            input,
+            shader.reads(input),
+            shader.view.overflow().0,
+            s.frame.size,
+        )
+    };
+    if reads
+        && let Some(px) = pixels_of(frame, o, cx.scale)
+        && let Some(pixels) = children(cx, view, o, px)
+    {
+        give(view, input, &pixels);
     }
-    if !cx.backdrop {
-        return true;
-    }
-    let Some((x, y, _, _)) = cx.transform.bounds(
-        area.origin.x.0,
-        area.origin.y.0,
-        area.size.width.0,
-        area.size.height.0,
-    ) else {
+    cx.set_transform(world);
+    let state = view.state();
+    let Some(bitmap) = state.shader.as_ref().and_then(|s| s.bitmap(cx.dc)) else {
         return false;
     };
+    draw_bitmap(cx, &bitmap, frame, o);
+    true
+}
+
+/// `view`'s children drawn by another context (what is pushed on `cx`
+/// stays as it is) into a bitmap of `px` pixels, `o` points beyond its box,
+/// read back.
+fn children(cx: &mut DrawCx<'_>, view: &NshView, o: f32, px: (u32, u32)) -> Option<Pixels> {
     let scale = cx.scale;
-    // Layers pushed reach the target when they pop: the copy is made while
-    // they are closed.
-    cx.flatten(|dc| {
-        // SAFETY: COM calls on the live context, its target and the
-        // input's bitmap; the pending drawing is flushed first.
-        unsafe {
-            if dc.Flush(None, None).is_err() {
-                return false;
-            }
-            let Some(target) = dc
-                .GetTarget()
-                .ok()
-                .and_then(|t| t.cast::<ID2D1Bitmap1>().ok())
-            else {
-                return false;
-            };
-            let window = target.GetPixelSize();
-            let px = input.bitmap.GetPixelSize();
-            let (x, y) = ((x * scale).round() as i64, (y * scale).round() as i64);
-            let left = x.clamp(0, window.width as i64);
-            let top = y.clamp(0, window.height as i64);
-            let right = (x + px.width as i64).clamp(0, window.width as i64);
-            let bottom = (y + px.height as i64).clamp(0, window.height as i64);
-            if right <= left || bottom <= top {
-                return true;
-            }
-            input
-                .bitmap
-                .CopyFromBitmap(
-                    Some(&D2D_POINT_2U {
-                        x: (left - x) as u32,
-                        y: (top - y) as u32,
-                    }),
-                    &target,
-                    Some(&D2D_RECT_U {
-                        left: left as u32,
-                        top: top as u32,
-                        right: right as u32,
-                        bottom: bottom as u32,
-                    }),
-                )
-                .map_err(|e| log::debug!("<Shader>: backdrop not copied: {e}"))
-                .is_ok()
-        }
-    })
-}
-
-/// A texture of `size` pixels Direct3D renders into and samples, and a
-/// Direct2D bitmap of it (`scale` pixels per point, with `options`).
-fn texture(
-    gfx: &Gfx,
-    size: (u32, u32),
-    scale: f32,
-    options: D2D1_BITMAP_OPTIONS,
-) -> windows::core::Result<(
-    ID3D11ShaderResourceView,
-    ID3D11RenderTargetView,
-    ID2D1Bitmap1,
-)> {
-    let desc = D3D11_TEXTURE2D_DESC {
-        Width: size.0,
-        Height: size.1,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-        CPUAccessFlags: 0,
-        MiscFlags: 0,
-    };
-    // SAFETY: COM calls on the live devices with valid descriptions.
-    unsafe {
-        let mut texture: Option<ID3D11Texture2D> = None;
-        gfx.d3d.CreateTexture2D(&desc, None, Some(&mut texture))?;
-        let texture = texture.ok_or_else(fail)?;
-        let mut target = None;
-        gfx.d3d
-            .CreateRenderTargetView(&texture, None, Some(&mut target))?;
-        let mut view = None;
-        gfx.d3d
-            .CreateShaderResourceView(&texture, None, Some(&mut view))?;
-        let surface: IDXGISurface = texture.cast()?;
-        let bitmap = gfx.dc.CreateBitmapFromDxgiSurface(
-            &surface,
-            Some(&D2D1_BITMAP_PROPERTIES1 {
-                pixelFormat: D2D1_PIXEL_FORMAT {
-                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-                },
-                dpiX: 96.0 * scale,
-                dpiY: 96.0 * scale,
-                bitmapOptions: options,
-                colorContext: std::mem::ManuallyDrop::new(None),
-            }),
-        )?;
-        Ok((view.ok_or_else(fail)?, target.ok_or_else(fail)?, bitmap))
+    let target = crate::render::target_bitmap(cx.dc, px, scale).ok()?;
+    let image: ID2D1Image = target.cast().ok()?;
+    let base = Mat4::new().translate(o, o);
+    let composed = cx.composed.len();
+    let drawn = crate::decor::layer::draw_into(cx, &image, scale, true, |inner| {
+        draw_children(inner, view, base);
+    });
+    // Web views in it were placed in the picture's coordinates.
+    cx.composed.truncate(composed);
+    if !drawn {
+        return None;
     }
+    crate::render::read_back(cx.dc, &target, whole(px))
+        .map_err(|e| log::debug!("shader: no picture of the children: {e}"))
+        .ok()
 }
 
-fn make_target(gfx: &Gfx, size: (u32, u32), generation: u64) -> windows::core::Result<Target> {
-    // Pixels per DIP as the context draws: the bitmap is drawn over the
-    // area's points.
-    let (_, view, bitmap) = texture(gfx, size, 1.0, D2D1_BITMAP_OPTIONS_NONE)?;
-    Ok(Target {
-        generation,
-        size,
-        view,
-        bitmap,
-        fresh: false,
-        buffers: [None, None, None],
-        images: Vec::new(),
-        sampler: None,
-        inputs: [None, None, None],
-        backdrop: false,
-    })
-}
-
-fn fail() -> windows::core::Error {
-    windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL)
-}
-
-/// A constant buffer holding `data` (a multiple of 16 bytes).
-fn buffer(gfx: &Gfx, data: &[u8]) -> windows::core::Result<ID3D11Buffer> {
-    let desc = D3D11_BUFFER_DESC {
-        ByteWidth: data.len().div_ceil(16) as u32 * 16,
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-        ..Default::default()
-    };
-    let mut padded = data.to_vec();
-    padded.resize(desc.ByteWidth as usize, 0);
-    let init = D3D11_SUBRESOURCE_DATA {
-        pSysMem: padded.as_ptr().cast(),
-        ..Default::default()
-    };
-    let mut out = None;
-    // SAFETY: a COM call on the live device; `padded` outlives it.
-    unsafe { gfx.d3d.CreateBuffer(&desc, Some(&init), Some(&mut out))? };
-    out.ok_or_else(fail)
-}
-
-/// The texture of an image's pixels (premultiplied BGRA).
-fn image_view(
-    gfx: &Gfx,
-    frame: &crate::image::Frame,
-) -> windows::core::Result<ID3D11ShaderResourceView> {
-    let (width, height, data) = frame.pixels();
-    let desc = D3D11_TEXTURE2D_DESC {
-        Width: width,
-        Height: height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-        CPUAccessFlags: 0,
-        MiscFlags: 0,
-    };
-    let init = D3D11_SUBRESOURCE_DATA {
-        pSysMem: data.as_ptr().cast(),
-        SysMemPitch: width * 4,
-        SysMemSlicePitch: 0,
-    };
-    // SAFETY: COM calls on the live device; `data` holds the rows.
-    unsafe {
-        let mut texture: Option<ID3D11Texture2D> = None;
-        gfx.d3d
-            .CreateTexture2D(&desc, Some(&init), Some(&mut texture))?;
-        let mut view = None;
-        gfx.d3d
-            .CreateShaderResourceView(&texture.ok_or_else(fail)?, None, Some(&mut view))?;
-        view.ok_or_else(fail)
-    }
-}
-
-/// Renders the shader over `area` of a view of `size`, with the content's
-/// the backdrop's and a transition's textures (`inputs`, by input index)
-/// where it has them.
-#[allow(clippy::too_many_arguments)]
-fn render(
-    cx: &mut DrawCx<'_>,
-    t: &mut Target,
-    program: &Program,
-    shader: &ShaderState,
-    size: Size<Points>,
-    area: Bounds<Points>,
-    inputs: &[Option<Input>; 4],
-    time: f32,
-) -> windows::core::Result<()> {
-    let gfx = cx.gfx;
-    let nsh = shader::nsh_buffer(size, cx.scale, time, Percentage(shader.progress));
-    let view = Bounds::new(Point::default(), size);
-    let px = Size::new(DevicePixels(t.size.0 as i32), DevicePixels(t.size.1 as i32));
-    let mut rects: Vec<(ShaderInput, Bounds<Points>, Size<DevicePixels>)> = shader
-        .images
-        .iter()
-        .enumerate()
-        .filter_map(|(slot, f)| {
-            let (w, h) = f.as_ref()?.size();
-            Some((
-                ShaderInput::Image(slot as u8),
-                view,
-                Size::new(DevicePixels(w as i32), DevicePixels(h as i32)),
-            ))
-        })
-        .collect();
-    for (input, texture) in [
-        ShaderInput::Content,
-        ShaderInput::Backdrop,
-        ShaderInput::From,
-        ShaderInput::To,
-    ]
-    .into_iter()
-    .zip(inputs)
+/// Gives `pixels` to `view`'s shader as `input` when they changed.
+fn give(view: &NshView, input: ShaderInput, pixels: &Pixels) {
+    let mut hasher = rustc_hash::FxHasher::default();
+    (pixels.width, pixels.height).hash(&mut hasher);
+    pixels.data.hash(&mut hasher);
+    let hash = hasher.finish();
     {
-        if texture.is_some() {
-            rects.push((input, area, px));
+        let mut s = view.state_mut();
+        let Some(shader) = s.shader.as_mut() else {
+            return;
+        };
+        if shader.given[input.index()] == Some(hash) {
+            return;
         }
+        let Some(renderer) = shader.renderer.clone() else {
+            return;
+        };
+        shader.given[input.index()] = Some(hash);
+        shader.view.set_input(
+            &renderer,
+            input,
+            Some((&pixels.data, pixels.width, pixels.height, pixels.width * 4)),
+        );
     }
-    let frame = shader::frame_buffer_of(area, &rects);
-    t.buffers = [Some(buffer(gfx, &nsh)?), Some(buffer(gfx, &frame)?), None];
-    if !shader.uniforms.is_empty() {
-        t.buffers[2] = Some(buffer(gfx, &shader.uniforms)?);
+    tick(view);
+}
+
+/// Reads what the pass drew so far under `view`'s box and overflow (what is
+/// behind it) back for its shader when it reads it, before the view draws
+/// anything: its own background is not behind it. Transparent where the
+/// target has nothing (beyond the window).
+pub(crate) fn take_backdrop(cx: &mut DrawCx<'_>, view: &NshView) {
+    let (o, frame) = {
+        let s = view.state();
+        let Some(shader) = s.shader.as_ref().filter(|s| s.reads(ShaderInput::Backdrop)) else {
+            return;
+        };
+        (shader.view.overflow().0, s.frame.size)
+    };
+    // A pass drawn offscreen holds nothing behind it: the last picture
+    // stays.
+    if !cx.backdrop {
+        return;
     }
-    // Each image's texture, made once per picture.
-    let mut views = Vec::with_capacity(program.textures.len());
-    for input in &program.textures {
-        let slot = match *input {
-            ShaderInput::Image(slot) => slot,
-            input => {
-                views.push(inputs[input.index()].as_ref().map(|i| i.view.clone()));
-                continue;
+    let scale = cx.scale;
+    let Some(px) = pixels_of(frame, o, scale) else {
+        return;
+    };
+    let Some((x, y, _, _)) =
+        cx.transform
+            .bounds(-o, -o, frame.width.0 + 2.0 * o, frame.height.0 + 2.0 * o)
+    else {
+        return;
+    };
+    // Layers pushed reach the target when they pop: it is read while they
+    // are closed.
+    let pixels = cx.flatten(|dc| {
+        // SAFETY: COM calls on the live context and its target; the
+        // pending drawing is flushed first.
+        let target = unsafe {
+            dc.Flush(None, None).ok()?;
+            dc.GetTarget().ok()?.cast::<ID2D1Bitmap1>().ok()?
+        };
+        // SAFETY: a COM call on a live bitmap.
+        let window = unsafe { target.GetPixelSize() };
+        let (x, y) = ((x * scale).round() as i64, (y * scale).round() as i64);
+        let left = x.clamp(0, window.width as i64);
+        let top = y.clamp(0, window.height as i64);
+        let right = (x + px.0 as i64).clamp(0, window.width as i64);
+        let bottom = (y + px.1 as i64).clamp(0, window.height as i64);
+        let mut data = vec![0; (px.0 * px.1 * 4) as usize];
+        if right > left && bottom > top {
+            let read = crate::render::read_back(
+                dc,
+                &target,
+                D2D_RECT_U {
+                    left: left as u32,
+                    top: top as u32,
+                    right: right as u32,
+                    bottom: bottom as u32,
+                },
+            )
+            .map_err(|e| log::debug!("shader: backdrop not read: {e}"))
+            .ok()?;
+            let row = read.width as usize * 4;
+            let (dx, dy) = ((left - x) as usize, (top - y) as usize);
+            for (i, line) in read.data.chunks(row).enumerate() {
+                let at = ((dy + i) * px.0 as usize + dx) * 4;
+                data[at..at + row].copy_from_slice(line);
             }
-        };
-        let slot = slot as usize;
-        let Some(frame) = shader.images.get(slot).cloned().flatten() else {
-            views.push(None);
-            continue;
-        };
-        let key = Rc::as_ptr(&frame) as usize;
-        if t.images.len() <= slot {
-            t.images.resize(slot + 1, None);
         }
-        if t.images[slot].as_ref().is_none_or(|(k, _)| *k != key) {
-            t.images[slot] = Some((key, image_view(gfx, &frame)?));
-        }
-        views.push(t.images[slot].as_ref().map(|(_, v)| v.clone()));
+        Some(Pixels {
+            width: px.0,
+            height: px.1,
+            data,
+        })
+    });
+    if let Some(pixels) = pixels {
+        give(view, ShaderInput::Backdrop, &pixels);
     }
-    if t.sampler.is_none() {
-        let desc = D3D11_SAMPLER_DESC {
-            Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-            AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
-            AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
-            AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
-            ComparisonFunc: D3D11_COMPARISON_NEVER,
-            MaxLOD: f32::MAX,
-            ..Default::default()
-        };
-        let mut sampler = None;
-        // SAFETY: a COM call on the live device with a valid description.
-        unsafe { gfx.d3d.CreateSamplerState(&desc, Some(&mut sampler))? };
-        t.sampler = sampler;
-    }
-    // SAFETY: COM calls on the live devices; Direct2D's pending drawing is
-    // flushed first, and its context keeps its own Direct3D state.
-    unsafe {
-        cx.dc.Flush(None, None)?;
-        let context = gfx.d3d.GetImmediateContext()?;
-        context.OMSetRenderTargets(Some(&[Some(t.view.clone())]), None);
-        context.RSSetViewports(Some(&[D3D11_VIEWPORT {
-            TopLeftX: 0.0,
-            TopLeftY: 0.0,
-            Width: t.size.0 as f32,
-            Height: t.size.1 as f32,
-            MinDepth: 0.0,
-            MaxDepth: 1.0,
-        }]));
-        context.ClearRenderTargetView(&t.view, &[0.0, 0.0, 0.0, 0.0]);
-        context.IASetInputLayout(None);
-        context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-        context.VSSetShader(&program.vertex, None);
-        context.PSSetShader(&program.pixel, None);
-        context.VSSetConstantBuffers(0, Some(&t.buffers));
-        context.PSSetConstantBuffers(0, Some(&t.buffers));
-        if !views.is_empty() {
-            context.PSSetShaderResources(0, Some(&views));
-        }
-        context.PSSetSamplers(0, Some(std::slice::from_ref(&t.sampler)));
-        context.Draw(4, 0);
-        context.OMSetRenderTargets(None, None);
-        if !views.is_empty() {
-            let none: Vec<Option<ID3D11ShaderResourceView>> = vec![None; views.len()];
-            context.PSSetShaderResources(0, Some(&none));
-        }
-    }
-    Ok(())
 }
 
 /// A page's or a dialog's transition through a shader
 /// ([`nsh_core::NavShader`]): an item hosted by a layer view over the
 /// stack (the root for a dialog) that draws recordings of its two sides,
 /// the lower one `sample_from` and the upper one `sample_to`, through the
-/// shader at `nsh.progress`, which navigation moves.
+/// shader at `nsh.progress`, which navigation moves. Frames come back from
+/// the GPU a frame or two after they are asked for; the side it starts
+/// from shows before the first.
 pub(crate) struct NavItem {
-    state: ShaderState,
     lower: ID2D1Image,
-    upper: RefCell<ID2D1Image>,
-    /// Its sides changed: they are drawn into their textures again.
-    redraw: std::cell::Cell<bool>,
-    progress: std::cell::Cell<f32>,
+    upper: ID2D1Image,
+    /// It goes: it starts from its upper side.
+    reverse: bool,
+    paint: RefCell<NavPaint>,
+}
+
+struct NavPaint {
+    renderer: Option<Rc<Renderer>>,
+    view: ShaderView,
+    /// The slot that moves `nsh.progress`.
+    slot: Option<u16>,
+    progress: f32,
+    /// Its sides were read back for the shader.
+    given: bool,
+    drawn: Option<Drawn>,
 }
 
 impl NavItem {
-    /// `fill` over `lower` and `upper` (recordings in the host's points).
-    pub(crate) fn new(fill: Arc<ShaderFill>, lower: ID2D1Image, upper: ID2D1Image) -> Self {
+    /// `layer` over `lower` and `upper` (recordings in the host's points).
+    pub(crate) fn new(
+        surface: &Surface,
+        layer: &ShaderLayer,
+        lower: ID2D1Image,
+        upper: ID2D1Image,
+        reverse: bool,
+    ) -> Self {
+        // The pictures cover the host's box; progress moves as an animated
+        // value (one more slot).
+        let layer = layer
+            .clone()
+            .with_overflow(Points::ZERO)
+            .with_progress(0.0, Some(NodeId::MAX));
+        let slot = layer.progress_slot();
+        let mut view = ShaderView::default();
+        view.set_layer(Some(Arc::new(layer)));
         Self {
-            state: ShaderState {
-                uniforms: fill.uniforms.to_vec(),
-                fill: Some(fill),
-                effect: true,
-                transition: true,
-                ..ShaderState::default()
-            },
             lower,
-            upper: RefCell::new(upper),
-            redraw: std::cell::Cell::new(false),
-            progress: std::cell::Cell::new(0.0),
+            upper,
+            reverse,
+            paint: RefCell::new(NavPaint {
+                renderer: surface.shader_renderer(),
+                view,
+                slot,
+                progress: if reverse { 1.0 } else { 0.0 },
+                given: false,
+                drawn: None,
+            }),
         }
-    }
-
-    /// Its upper side, recorded later (a screen transition's, after its
-    /// batch).
-    pub(crate) fn set_upper(&self, upper: ID2D1Image) {
-        *self.upper.borrow_mut() = upper;
-        self.redraw.set(true);
     }
 
     /// How much of the upper side shows.
     pub(crate) fn set_progress(&self, progress: f32) {
-        self.progress.set(progress);
+        self.paint.borrow_mut().progress = progress;
     }
+}
+
+/// `image` (a recording in points) drawn into a bitmap of `size` points and
+/// read back.
+fn read_image(cx: &DrawCx<'_>, image: &ID2D1Image, (w, h): (f32, f32)) -> Option<Pixels> {
+    let scale = cx.scale;
+    let px = (
+        (w * scale).round().max(1.0) as u32,
+        (h * scale).round().max(1.0) as u32,
+    );
+    let target = crate::render::target_bitmap(cx.dc, px, scale).ok()?;
+    let drawn = crate::decor::layer::with_context(cx.gfx, |dc| {
+        // SAFETY: COM calls on a context nobody else draws with; `EndDraw`
+        // follows `BeginDraw`.
+        unsafe {
+            dc.SetTarget(&target);
+            dc.SetDpi(96.0 * scale, 96.0 * scale);
+            dc.BeginDraw();
+            dc.SetTransform(&Matrix3x2::identity());
+            dc.Clear(None);
+            dc.DrawImage(
+                image,
+                None,
+                None,
+                D2D1_INTERPOLATION_MODE_LINEAR,
+                D2D1_COMPOSITE_MODE_SOURCE_OVER,
+            );
+            dc.EndDraw(None, None).is_ok()
+        }
+    })?;
+    if !drawn {
+        return None;
+    }
+    crate::render::read_back(cx.dc, &target, whole(px))
+        .map_err(|e| log::debug!("shader: no picture of a side: {e}"))
+        .ok()
 }
 
 impl crate::view::Hosted for NavItem {
     fn draw(&self, cx: &mut DrawCx<'_>, (w, h): (f32, f32)) {
-        let Some(fill) = &self.state.fill else { return };
-        let Some(program) = shaders(cx.gfx, fill.program) else {
-            return;
-        };
         if w <= 0.0 || h <= 0.0 {
             return;
         }
-        let area = Bounds::new(Point::default(), Size::new(Points(w), Points(h)));
-        let size = (
-            (w * cx.scale).round().max(1.0) as u32,
-            (h * cx.scale).round().max(1.0) as u32,
-        );
-        let mut target = self.state.target.borrow_mut();
-        let generation = gfx::generation();
-        if target
-            .as_ref()
-            .is_none_or(|t| t.generation != generation || t.size != size)
-        {
-            *target = make_target(cx.gfx, size, generation)
-                .map_err(|e| log::warn!("<Shader>: {e}"))
-                .ok();
-        }
-        let Some(t) = target.as_mut() else { return };
-        // The two sides into their textures (from the recordings, once per
-        // target).
-        let fresh = t.inputs[0].is_none() || t.inputs[2].is_none() || self.redraw.take();
-        let (Some(to), Some(from)) = (t.input(cx.gfx, 0, cx.scale), t.input(cx.gfx, 2, cx.scale))
-        else {
-            return;
-        };
-        if fresh {
-            let upper = self.upper.borrow().clone();
-            for (input, image) in [(&from, &self.lower), (&to, &upper)] {
-                let Ok(bitmap) = input.bitmap.cast::<ID2D1Image>() else {
-                    continue;
-                };
-                let scale = cx.scale;
-                crate::decor::layer::with_context(cx.gfx, |dc| {
-                    // SAFETY: COM calls on a context nobody else draws with;
-                    // `EndDraw` follows `BeginDraw`.
-                    unsafe {
-                        dc.SetTarget(&bitmap);
-                        dc.SetDpi(96.0 * scale, 96.0 * scale);
-                        dc.BeginDraw();
-                        dc.Clear(None);
-                        dc.DrawImage(
-                            image,
-                            None,
-                            None,
-                            D2D1_INTERPOLATION_MODE_LINEAR,
-                            windows::Win32::Graphics::Direct2D::Common::D2D1_COMPOSITE_MODE_SOURCE_OVER,
+        let mut paint = self.paint.borrow_mut();
+        let paint = &mut *paint;
+        let bitmap = match (paint.renderer.clone(), paint.slot) {
+            (Some(renderer), Some(slot)) => {
+                if !paint.given {
+                    paint.given = true;
+                    for (input, image) in [
+                        (ShaderInput::From, &self.lower),
+                        (ShaderInput::To, &self.upper),
+                    ] {
+                        let pixels = read_image(cx, image, (w, h));
+                        paint.view.set_input(
+                            &renderer,
+                            input,
+                            pixels
+                                .as_ref()
+                                .map(|p| (&p.data[..], p.width, p.height, p.width * 4)),
                         );
-                        let _ = dc.EndDraw(None, None);
                     }
-                });
+                }
+                paint.view.set_size(size(Points(w), Points(h)), cx.scale);
+                paint
+                    .view
+                    .set_slot(slot, AnimationValue::Number(paint.progress));
+                paint.view.render(&renderer, Instant::now());
+                let f = paint.view.frame();
+                upload(
+                    cx.dc,
+                    &mut paint.drawn,
+                    &f.pixels,
+                    (f.width, f.height),
+                    f.stride,
+                    f.serial,
+                )
+            }
+            _ => None,
+        };
+        match bitmap {
+            Some(bitmap) => draw_bitmap(cx, &bitmap, size(Points(w), Points(h)), 0.0),
+            // No frame yet (or no GPU): the side it starts from.
+            None => {
+                let image = if self.reverse {
+                    &self.upper
+                } else {
+                    &self.lower
+                };
+                // SAFETY: a COM call on the live context with an image of
+                // its device.
+                unsafe {
+                    cx.dc.DrawImage(
+                        image,
+                        None,
+                        None,
+                        D2D1_INTERPOLATION_MODE_LINEAR,
+                        D2D1_COMPOSITE_MODE_SOURCE_OVER,
+                    )
+                };
             }
         }
-        let mut state = ShaderState {
-            progress: self.progress.get(),
-            ..ShaderState::default()
-        };
-        state.uniforms.clone_from(&self.state.uniforms);
-        state.transition = true;
-        let inputs = [None, None, Some(from), Some(to)];
-        let size = Size::new(Points(w), Points(h));
-        if let Err(e) = render(cx, t, &program, &state, size, area, &inputs, 0.0) {
-            log::warn!("<Shader>: {e}");
-            return;
-        }
-        // SAFETY: a COM call on the live context with a bitmap of its device.
-        unsafe {
-            cx.dc.DrawBitmap(
-                &t.bitmap,
-                Some(&crate::render::rect_f(0.0, 0.0, w, h)),
-                1.0,
-                D2D1_INTERPOLATION_MODE_LINEAR,
-                None,
-                None,
-            )
-        };
     }
 
     fn hit(&self, _x: f32, _y: f32, _size: (f32, f32)) -> bool {

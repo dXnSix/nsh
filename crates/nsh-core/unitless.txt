@@ -2,7 +2,6 @@
 # docs/dev/geometry.md): one item path per line, then the reason.
 
 animation::animator::AnimValues.opacity                          # an opacity factor
-animation::animator::AnimValues.shadow_opacity                   # an opacity factor
 animation::animator::AnimValues.transform                        # transform operands (any of their kinds' units)
 animation::animator::Animator::pan_values ->                     # a generic animated value (any prop: opacity, a color channel, a length)
 animation::animator::Animator::tick(now)                         # time
@@ -64,6 +63,7 @@ canvas::CanvasOp::MiterLimit.0                                   # a ratio of th
 canvas::Num::Const.0                                             # a generic number (a JS value, a recorded slot)
 canvas::Num::get ->                                              # a generic number (a JS value, a recorded slot)
 canvas::Num::get(slot)                                           # a generic number (a JS value, a recorded slot)
+canvas::ViewBoxFit::transform ->                                 # a transform matrix (scales, and offsets in points)
 canvas::damage::DamageScan::damage(value)                        # a generic number (a JS value, a recorded slot)
 canvas::hit::point_in_path(slot)                                 # a generic number (a JS value, a recorded slot)
 canvas::hit::point_in_stroke(slot)                               # a generic number (a JS value, a recorded slot)
@@ -93,6 +93,12 @@ effects::compose_color_matrices ->                               # color compone
 filesystem::FileMetadata.atime_ms                                # time (milliseconds since the epoch)
 filesystem::FileMetadata.birthtime_ms                            # time (milliseconds since the epoch)
 filesystem::FileMetadata.mtime_ms                                # time (milliseconds since the epoch)
+image::decoded::Natural::points(density)                         # a pixel density (device pixels per point)
+image::decoded::Want.scale                                       # a pixel density (device pixels per point)
+image::decoded::Want::longest(density)                           # a pixel density (device pixels per point)
+image::decoded::Want::natural(scale)                             # a pixel density (device pixels per point)
+image::loader::Location::density ->                              # a pixel density (a file name's @2x)
+image::loader::density ->                                        # a pixel density (a file name's @2x)
 input::LONG_PRESS                                                # time (milliseconds)
 input::Pinch::at ->                                              # a scale factor (the rotation is typed)
 input::Press.long_delay                                          # time (milliseconds)
@@ -139,7 +145,6 @@ ops::EventPayload::PanCancelled.velocity_x                       # points per se
 ops::EventPayload::PanCancelled.velocity_y                       # points per second, the same rate as Pan.velocity_y
 ops::IMAGE_SCALES                                                # pixel densities (device pixels per point)
 ops::ImageProp::FadeDuration.0                                   # time
-ops::Prop::TransitionDuration.0                                  # time
 ops::ImageScales::iter ->                                        # pixel densities (device pixels per point)
 ops::NativeProp::ProgressInterval.0                              # time
 ops::NativeProp::Rate.0                                          # a playback rate multiplier
@@ -156,8 +161,6 @@ ops::ScrollProp::MaxZoom.0                                       # a zoom scale 
 ops::ScrollProp::MinZoom.0                                       # a zoom scale factor
 ops::ScrollProp::Zoom.0                                          # a zoom scale factor
 ops::TouchEvent.timestamp                                        # time
-ops::Viewability.item_visible_percent                            # a percent, 0..100, as React Native's viewabilityConfig takes it
-ops::Viewability.view_area_percent                               # a percent, 0..100, as React Native's viewabilityConfig takes it
 platform::Environment.font_scale                                 # a font scale factor
 platform::Environment.keyboard_duration                          # time
 platform::Environment.pixel_ratio                                # device pixels per point
@@ -189,21 +192,32 @@ scroll::snap_duration(velocity)                                  # a velocity, p
 scroll::spokes ->                                                # an opacity per spoke, 0..1
 scroll::wheel_end(vx)                                            # a velocity, points per second
 scroll::wheel_end(vy)                                            # a velocity, points per second
-shader::ShaderAnimation.duration                                 # time
-shader::ShaderFill.progress                                      # a shader's `nsh.progress` (any number the app gives it)
-shader::ShaderNumber::Number.0                                   # a number a shader reads (any unit the shader gives it)
-shader::ShaderNumber::constant ->                                # a number a shader reads (any unit the shader gives it)
-shader::UniformValue::Number.0                                   # a shader uniform's component (any of its types' units)
-shader::nsh_buffer(scale)                                        # the screen's pixel ratio
-shader::nsh_buffer(time)                                         # time
-shader::premultiplied ->                                         # color components (0 to 1)
-shader::write_args(progress)                                     # a shader's `nsh.progress` (any number the app gives it)
+shader::UniformValue::Number.0                                  # a uniform's value, whatever the app's program makes of it
+shader::ShaderLayer.progress                                     # progress, 0..1
+shader::ShaderLayer::with_progress(progress)                     # progress, 0..1
+shader::ShaderProgress::Number.0                                 # progress, 0..1
+shader::builtins(progress)                                       # progress, 0..1
+element::host::ShaderView::progress(progress)                    # progress, 0..1
+ops::Prop::TransitionDuration.0                                  # time (milliseconds, as JS gives it)
+shader::NavShaderSpec.duration                                   # time (milliseconds, as JS gives it)
+shader::builtins(scale)                                          # pixels per point, a ratio
+shader::builtins(time)                                           # time
 shape::SMOOTHING                                                 # a corner smoothing factor
 style::Color::to_f64 ->                                          # color components
-style::PatchValue::Number.0                                      # a generic number (a JS value, a recorded slot)
-style::Shadow.opacity                                            # an opacity, 0..1
-style::Style::push_transform(value)                              # a transform operand (any of its kinds' units)
+style::LineHeight::Em.0                                          # a multiple of the element's font size
+style::LineHeight::Multiple.0                                    # a multiple of the font size
+style::PropertyValue::Easing.0                                   # easing curve coordinates (unit square)
+style::PropertyValue::Flex.0                                     # a flex grow factor
+style::PropertyValue::Flex.1                                     # a flex shrink factor
+style::PropertyValue::LetterSpacing.1                            # ems of the font size
+style::PropertyValue::Ms.0                                       # time
+style::PropertyValue::Number.0                                   # a unitless style number (a flex factor, an opacity, a z-index)
+style::PropertyValue::OptNumber.0                                # an aspect ratio
+style::PropertyValue::Transform.0                                # transform operands (any of their kinds' units)
+style::StyleKey::number_value(n)                                 # a style number as TSX writes it (points or a factor, by property)
 style::StyleDecl::Transform.1                                    # a transform operand (any of its kinds' units)
+style::StyleDecl::SetTransform.1                                 # transform operands (any of their kinds' units)
+style::Style::set_transform(steps)                               # transform operands (any of their kinds' units)
 style::StyleValue::Number.0                                      # a generic number (a JS value, a recorded slot)
 style::TextStyle.letter_spacing_em                               # a multiple of the font size (em)
 style::TextStyle.line_height_multiple                            # a multiple of the font's line height
@@ -222,6 +236,7 @@ transform::TransformOp.value                                     # a transform o
 transition::Extra.scale                                          # a scale factor
 transition::Live::opacity ->                                     # an opacity factor
 transition::Live::step(now)                                      # time
+transition::TextColor::step(now)                                 # time
 element::ambient::animated_value(value)                               # an animated value (any quantity)
 element::ambient::font_scale ->                                       # a font scale factor
 element::ambient::keyboard_duration ->                                # time
@@ -323,9 +338,11 @@ element::js::JsHost::new_number(n)                                    # a generi
 element::js::JsHost::number ->                                        # a generic number (a JS value, a recorded slot)
 element::js::JsIn::as_date ->                                         # time (a JS Date's milliseconds since the epoch)
 element::js::JsIn::as_number ->                                       # a generic number (a JS value, a recorded slot)
+element::js::JsPrimitive::Date.0                                      # time (a JS Date's milliseconds since the epoch)
+element::js::JsPrimitive::Number.0                                    # a generic number (a JS value, a recorded slot)
 element::module::ConstantValue::Number.0                              # a generic number (a module constant's JS value)
-element::responder::PanGesture.vx                                     # a rate or a physical constant of an animation
-element::responder::PanGesture.vy                                     # a rate or a physical constant of an animation
+element::responder::PanGesture.vx                                     # a velocity, points per second
+element::responder::PanGesture.vy                                     # a velocity, points per second
 element::responder::ResponderEvent.timestamp                          # time
 element::scrollable::Scrollable::deceleration(rate)                   # a rate or a physical constant of an animation
 element::scrollable::Scrollable::event_throttle(ms)                   # time
@@ -356,7 +373,6 @@ element::style::Styled::scale(scale)                                  # a scale 
 element::style::Styled::scale_x(scale)                                # a scale factor
 element::style::Styled::scale_y(scale)                                # a scale factor
 element::style::Styled::sepia(amount)                                 # a filter amount (1 leaves the image as it is)
-element::style::Styled::shadow_opacity(opacity)                       # an opacity, 0..1
 element::style::Styled::transform_step(amount)                        # a transform operand (any of its kinds' units)
 element::tokens::Tokens::number ->                                    # a design token: a generic number (a radius, a size, a ratio)
 element::tokens::Tokens::numbers ->                                   # a design token: a generic number (a radius, a size, a ratio)

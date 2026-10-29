@@ -108,7 +108,7 @@ function App() {
               // it all at once.
               appearGeneration={["Region", "Channel", "None"].indexOf(breakdown())}
               motion={{ appear: { duration: 900, easing: "easeOut" }, update: { duration: 450, easing: "easeInOut" }, enter: { duration: 120 }, exit: { duration: 180 }, pointer: { stiffness: 420, damping: 40 } }}
-              onHoverChange={(index) => {
+              onHoverChange={({ index }) => {
                 hovered.set(index);
                 const p = index == null ? undefined : parts()[index];
                 const line = p ? `${index}: ${p.name}, ${money(p.revenue)} (${percent(share(p))})` : "null: off the slices";
@@ -134,8 +134,7 @@ function App() {
                   the hole opening and closing. */}
               <View
                 class="transition-opacity duration-300 motion-reduce:transition-none"
-                pointerEvents="none"
-                style={{ position: "absolute", left: 0, top: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center", gap: 4, opacity: donut() ? 1 : 0 }}
+                style={{ pointerEvents: "none", position: "absolute", left: 0, top: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center", gap: 4, opacity: donut() ? 1 : 0 }}
               >
                 <Text style={{ fontSize: size.detail, color: ui().muted }}>{shown()?.name ?? "Total"}</Text>
                 <Text style={{ fontSize: 22, fontWeight: "600", color: ui().text, ...num, textAlign: "center" }}>
@@ -171,7 +170,7 @@ function App() {
                   }}
                 >
                   <View class={KEYS[i % KEYS.length]} style={{ width: 8, height: 8, borderRadius: 2 }} />
-                  <Text numberOfLines={1} style={{ flex: 1, fontSize: size.label - 1, color: ui().text }}>{p.name}</Text>
+                  <Text style={{ numberOfLines: 1, flex: 1, fontSize: size.label - 1, color: ui().text }}>{p.name}</Text>
                   <Text style={{ fontSize: size.label - 1, color: ui().text, ...num }}>{money(p.revenue)}</Text>
                   <Text style={{ width: 52, fontSize: size.label - 1, color: ui().muted, ...num }}>{percent(share(p))}</Text>
                 </View>

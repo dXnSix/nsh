@@ -4,8 +4,9 @@ Native Shell (NSH for short in prose; crates, the CLI, the JS module and Java pa
 AI-generated, dynamically delivered native UI: native apps embed it (`NshAppView` on iOS, `NshView` on Android,
 `AppView` on macOS, Windows and Linux) and load TSX modules at run time — signed, sandboxed by the host, rendered with
 each platform's own UI. Embedding comes first; plugins for native apps and standalone apps use the same machinery.
-Module code runs in QuickJS on a native runtime (the reactive graph, the renderer and every module apps import are
-Rust); layout uses Taffy; embedding native components such as maps or web views has no layering problems. The
+Module code runs in QuickJS (on the web, the browser's own JavaScript engine) on a native runtime (the reactive graph,
+the renderer and every module apps import are Rust); layout uses Taffy; embedding native components such as maps or
+web views has no layering problems. The
 toolchain is pure Rust and does not need Node.js; app developers get a prebuilt distribution (`cargo xtask dist`) and
 never need Rust either. Every platform has a native backend: iOS with UIKit views (`nsh-platform-ios`), Android with
 Android views (`nsh-platform-android`), macOS with AppKit views (`nsh-platform-macos`), Windows in Win32 windows drawn
@@ -25,8 +26,9 @@ the module docs of the code (`//!`, Javadoc), which are the reference for how a 
 
 ```
 crates/
-  nsh-core/            Platform-independent core: typed units and geometry (`geometry/`, as GPUI's), shadow tree, styles (RN semantics), Taffy layout (flex + grid + block, on the core's own layout tree: `core/layout_tree.rs`), text merging, list virtualization,
+  nsh-core/            Platform-independent core: typed units and geometry (`geometry/`, as GPUI's), shadow tree, styles (CSS semantics, React Native's defaults for what nothing sets), Taffy layout (flex + grid + block, on the core's own layout tree: `core/layout_tree.rs`), text merging, list virtualization,
                        mount items; CSS values (`css.rs`: colors, lengths, shadows, gradients, filters), effects (`effects.rs`), Tailwind (`tailwind/`);
+                       shaders (`shader.rs`: apps' WGSL `shade(uv)` checked with naga, uniforms packed, GLSL ES for the web);
                        CSS environment variables in padding and margin (`env(safe-area-inset-*)`, `env(keyboard-inset-height)`: `Core::sync_env`);
                        what iOS and Android share (`mobile.rs`: `nsh/mobile`'s `TabBar`, a native component the two backends register);
                        the reactive graph both sides run on (`reactive.rs`, Solid's algorithm, generic over the host), the loads of
@@ -47,7 +49,7 @@ crates/
                        the standard modules among them (`runtime/fs.rs`: `fs/promises`, `runtime/process.rs`, `runtime/net.rs`,
                        `runtime/websocket.rs`, `runtime/os.rs`) on the `System` their calls get (capabilities, data directory, quotas, per-VM state)
   nsh-base/            `nsh/base`, NSH's `gpui-base`: unstyled base components (behavior, state, focus, accessibility; the look is the
-                       app's): navigation (`NavStack`, `NavPage`), `Dialog`, `AlertDialog`, `Button`, `Checkbox`, `Radio` / `RadioGroup`, `Switch`, `Tab` / `Tabs`, `Collapsible`, `Progress`, `Slider` (a value or a range along a track: `slider.rs`, numbers' rules in `numeric.rs`, a focused control's keys in `keys.rs`), `Table` and its parts (`table.rs`: a table's roles, the look the app's), the charts' parts in the submodule `nsh/base/plot` (`Plot`, `Line`, `Area`, `Grid`, `Pie`, `Arc`), `Input` (a native text input, made by `nsh-js`), the status
+                       app's): navigation (`NavStack`, `NavPage`), `Dialog`, `AlertDialog`, `Avatar` / `AvatarGroup` (a picture or its fallback, the state from the image's own load events; a row that places its first `limit`: `avatar.rs`), `Button`, `Link`, `Checkbox`, `Radio` / `RadioGroup`, `Switch`, `Tab` / `Tabs`, `Toggle` / `ToggleGroup` (a toggle button and a toolbar of them: `toggle.rs`), `Toolbar` / `ToolbarGroup` / `ToolbarSeparator` (a bar of buttons, toggles and links: `toolbar.rs`; `roving.rs` the roving focus `Tabs`, `RadioGroup`, `ToggleGroup` and `Toolbar` share, its items in tree order through the core's `watch_order`), `Select` and `Combobox` (`select.rs`, `combobox.rs` on `listbox.rs`, the list's state machine they share), `Calendar` (`calendar.rs`: views, disabled dates, the days' keys), `TimeField` (`time_field.rs`: segments over one native text field), `DatePicker` (`date_picker.rs`: a calendar and time field in a popup; `popup.rs`'s `dropdown` is the popup `Select`, `Combobox` and `DatePicker` share), `Collapsible`, `Accordion` and its parts (`accordion.rs`: items open by the app's `value`, one at a time or several, panels revealed as `Collapsible`'s), `Progress`, `Slider` (a value or a range along a track: `slider.rs`, numbers' rules in `numeric.rs`, a focused control's keys in `keys.rs`), `Scrollbar` (a bar of the app's own over a scroll view or list it names: `scrollbar.rs`, on the core's `watch_scroll`), `NumberInput` (a number typed or stepped: `number_input.rs`), `ColorPicker` and its parts `ColorArea`, `ColorSlider`, `ColorField`, `ColorSwatch`, `ColorEyeDropper` (a color in RGB, HSL, HSB or OKLCH: `color_picker/`), `OtpInput`, `Table` and its parts (`table.rs`: a table's roles, the look the app's), the charts' parts in the submodule `nsh/base/plot` (`Plot`, `Line`, `Area`, `Grid`, `Pie`, `Arc`), `Input` (a native text input, made by `nsh-js`), the status
                        bar, `TextView` (Markdown / HTML documents: `text_view/`, docs/dev/text-view.md), `ResizablePanelGroup` / `ResizablePanel` (`resizable/`), `DockArea` (a dockable workspace: splits, tab groups and edge docks whose layout is
                        data, `dock/`, docs/dev/dock.md), `Editor` (a code editor: highlighting, several carets, folds, search, diagnostics;
                        `editor/`, docs/dev/editor.md), `DiffView` (the changes between two texts or of a patch, split or unified: `diff/`,
@@ -75,14 +77,10 @@ crates/
                        the catalog and its loader, LLRT's `buffer` / `crypto` / `path` / `url` / `zlib`, `console`,
                        the globals `WebSocket`, `process` and `nextTick`); the TypeScript declarations of all of it
                        (`declarations.rs`, from the declaration next to each export and spec)
-  nsh-engine/          Engine thread: drives nsh-js + nsh-core and hands one MountBatch per frame to the platform
+  nsh-engine/          Engine thread: drives nsh-js + nsh-core and hands one MountBatch per frame to the platform;
+                       feature `shader`: the native backends' shader renderer (`shader.rs`: shader views' WGSL rendered with
+                       wgpu offscreen, read back asynchronously, never blocking the main thread; docs/dev/shaders.md)
   nsh-package/         Signed packages (`.nshpkg`): Ed25519 keys, release-key certificates, revocation lists, the trust store
-  nsh-shader/          Shaders: WGSL in NSH's profile (what AGSL can say too), checked on naga's IR (`profile.rs`: counted
-                       loops, indexes proven in bounds, the sample budget), reflected (uniforms, inputs, time / progress) and
-                       written per platform, a feature each: MSL, HLSL (Direct2D / Direct3D 11), GLSL (ES 3.00 / 3.30),
-                       AGSL (NSH's own writer, `agsl.rs`); NSH's prelude and entry points as WGSL (`glue.rs`) (docs/dev/shaders.md)
-  nsh-metal/           Metal on Apple platforms (loaded with `dlopen`): shader programs compiled off the main thread, a shader
-                       view's `CAMetalLayer` (`ShaderLayer`), drawn under its children; iOS and macOS share it (docs/dev/shaders.md)
   nsh-bundler/         Bundler: rolldown + Oxc (TS stripping) + NSH's JSX compiler (`jsx.rs`, docs/dev/native-pipeline.md) + source maps;
                        imports of the native modules stay imports (`plugin.rs`), so a bundle holds only the app's code;
                        the app's themes (nsh.json `tailwind` / `theme`, checked, handed to the renderer by the entry) and the
@@ -108,9 +106,10 @@ crates/
   nsh-platform-web/    WebAssembly backend (published web apps, `nsh run --target web`, the website's live demos): the engine on
                        the page's main thread (`LocalEngine`), text laid out with browser font metrics, batches as JSON + CSS
                        for the DOM runtime in `web/nsh.js`, the animator on requestAnimationFrame, fetch over the browser's
-                       (`net.rs`); feature `bytecode-only`: published apps' runtime (`nsh.wasm`, no QuickJS parser), feature
-                       `dev`: the development host's (`nsh-dev.wasm`, source and hot updates, the model `nsh test --target web`
-                       asks about); `web/index.html` is the demo
+                       (`net.rs`); app code runs on the browser's own JavaScript engine (feature `browser`: `src/browser/`
+                       and `web/browser/`, no QuickJS in WebAssembly), feature `dev`: the development host's (`nsh-dev.wasm`,
+                       development bundles with hot updates, `web/browser/hot.js`, the model `nsh test --target web` asks
+                       about); `web/index.html` is the demo
                        player (`cargo xtask web`); feature `compiler`: the playground's TSX compiler (`nsh-playground.wasm`)
                        (docs/dev/web.md)
   nsh-platform-linux/  GTK 4 backend (Linux): one `NshView` widget per node drawn with GSK, Pango text engine (typeset on the engine
@@ -181,8 +180,7 @@ Dependency direction: `nsh-core` ← `nsh-js` ← `nsh-engine` (also ← `nsh-pa
 imports against the names native modules export); `nsh-base` depends on `nsh-core` only and is used by the bundler
 (declarations), the platforms and the CLI (registry). An app's own crates (its UI sets) depend on `nsh-core` only and
 are never linked into the CLI: it reads their UI sets as data (`nsh_core::element::description`); the hosts and runners
-`rust_app.rs` generates link them. `nsh-metal` depends on `nsh-core` only and is used by `nsh-platform-ios` and
-`nsh-platform-macos`. `nsh-core` must not depend on any platform or JS crate.
+`rust_app.rs` generates link them. `nsh-core` must not depend on any platform or JS crate.
 
 ## Documentation
 
@@ -197,7 +195,7 @@ are never linked into the CLI: it reads their UI sets as data (`nsh_core::elemen
 | units and geometry (`Points`, `Length`, `Bounds`, ...) | `docs/dev/geometry.md` |
 | scroll views, zooming, `List` | `docs/dev/scrolling-and-lists.md` |
 | animation, canvas, images | `docs/dev/animation.md`, `canvas.md`, `images.md` |
-| shaders: the profile, the prelude, the writers | `docs/dev/shaders.md` |
+| shaders: WGSL views, the renderer | `docs/dev/shaders.md` |
 | VM limits, capabilities, signed packages | `docs/dev/sandbox.md`, `signed-packages.md` |
 | packaging, the iOS / Android SDKs, native components | `docs/dev/embedding.md` |
 | `.nsh/types`, the dev server, hot reload | `docs/dev/tooling.md` |
@@ -327,10 +325,18 @@ repository's `target/`; dependencies only it uses are declared in `crates/gpui/C
   behavior, state, focus, keyboard and accessibility and leave every visual choice to the app (navigation, dialogs, a
   button, a checkbox, radios, a switch, tabs, popovers, menus, tooltips and sheets, text input and system alerts today, with the status bar a
   prop of pages and dialogs; controls such as toggles, sliders and selects as their behavior is written). Names follow `gpui-base`'s
-  (`docs/dev/api-naming.md`). `gpui-component` ↔ nothing: a styled component library is never part of NSH; apps and
+  (`docs/dev/api-naming.md`), and so do the API and the features: GPUI Kit's components are long proven, so an
+  `nsh-base` component covers every option of its `gpui-base` / `gpui-component` counterpart (as a prop, a part or the
+  app's slot), or `docs/dev/api-naming.md` says why it does not. `gpui-component` ↔ nothing: a styled component library is never part of NSH; apps and
   the community build theirs on `nsh-base`, or style the UI in the app itself. Each export has one home (two
   registries exporting one name panic, `Registry::merged`). Mobile-only APIs (iOS, Android or both) go to `nsh/mobile`, desktop-only ones to `nsh/desktop`,
-  platform-only props into `ios={{…}}` / `android={{…}}` / `desktop={{…}}`. `nsh` has no catch-all re-exports. Beside
+  platform-only props into `ios={{…}}` / `android={{…}}` / `desktop={{…}}` (typed objects: a system feature
+  several platforms have goes in each of theirs under one name; what an element means everywhere is a top-level
+  prop, ignored where it does not apply). Desktop has one definition: a desktop OS (macOS, Windows, Linux) or the
+  web in the desktop idiom (`Environment::desktop()`), which `desktop={{…}}`, `platform.select({ desktop })`,
+  `platform.desktop` and `platform.idiom === "desktop"` all follow; Mac Catalyst is mobile (the iOS backend);
+  `nsh/desktop`'s `isAvailable` alone is narrower, the OSes with its windows and menus (`api-naming.md`). `nsh` has
+  no catch-all re-exports. Beside
   them sits a fixed catalog of eleven standard modules with bare specifiers (`nsh_core::js::STANDARD_MODULES`:
   `buffer`, `console`, `crypto`, `fs/promises`, `net`, `os`, `path`, `process`, `url`, `websocket`, `zlib`):
   Node-shaped subsets compatible with gpui-shell's, built on the same native machinery (typed registries, capability
@@ -342,8 +348,10 @@ repository's `target/`; dependencies only it uses are declared in `crates/gpui/C
   in [`longbridge/nsh-compat`](https://github.com/longbridge/nsh-compat) shipped is never removed or renamed: modules,
   exports and their members, `nsh:rt` (what compiled JSX calls: append-only, signatures and semantics kept), globals,
   props, events and payload keys, style keys and values, Tailwind utilities. A rename or move keeps the old name as a
-  `@deprecated` alias of the same implementation, for good. Types only widen; inputs gain optional members only;
-  behavior and defaults stay (new behavior is opt-in); formats (`.nshpkg`, certificates) are read forever. The record
+  `@deprecated` alias of the same implementation, for good. Types only widen, a union gaining members whichever way it
+  goes (what apps read too: `platform.os`, a state, a reason; apps handle a value they do not know); inputs gain
+  optional members only; behavior and defaults stay (new behavior is opt-in); formats (`.nshpkg`, certificates) are
+  read forever. The record
   and its checks live in that repository, never here: a change to NSH cannot rewrite them, and the only removals are
   security closures in its `closed.txt`. No release is recorded yet, so nothing is frozen: what is on `main` may still
   change until the first release recorded, which is not chosen yet (0.3.0 is not recorded). A new API lands with its test, a case in
@@ -369,11 +377,62 @@ repository's `target/`; dependencies only it uses are declared in `crates/gpui/C
   `active:`), no built-in strings (every label comes from the app); system UI keeps the platform's look (iOS / Android
   headers; `AlertDialog`, drawn in the platform's dialog style where the system has no dialog to show). React Native and
   UIKit are references for which capabilities exist, not APIs to be compatible with.
-- **CSS and Tailwind as in a browser.** CSS values (colors, lengths, gradients, filters, shadows, transforms,
-  alignment keywords, ...) and Tailwind utilities and variants mean exactly what they mean in a browser and in
-  Tailwind CSS (v4); Tailwind's generated CSS is the reference for each utility. What NSH cannot support is
-  unsupported (an unknown class, a rejected value with a warning), never given a different meaning: nothing
-  NSH-specific, so there are no traps (`docs/dev/styles.md`).
+- **Pointer-driven motion follows the pointer in the same frame; transitions and springs are for discrete
+  changes.** A hover's cross line, a dragged thumb, a scroll bar, a resizer, a swipe track the pointer 1:1 and are
+  set, never eased toward it; keyboard steps, snaps on enter / leave, releases, fades and data changes animate
+  (`docs/dev/animation.md` "Pointer-driven motion follows the pointer"), in components and demos alike.
+- **Styles: native first, in the forms people write.** One set of properties written three ways (Rust `Styled`,
+  `style` keys, Tailwind classes) means the same in each; the names are CSS's but for a few common forms. Each key takes the form most used and
+  easiest to write, CSS's by default: where common use and CSS differ, the common form wins (a `lineHeight` number is
+  points) and `docs/dev/styles.md` lists it. React Native is a reference for what is common, not an API to match: no
+  names or aliases for its sake. Tailwind (v4) utilities mean what Tailwind's generated CSS does. What NSH cannot
+  support is unsupported (an unknown class, a rejected value with a warning), never given another meaning. Past
+  that the design serves the native platforms and performance, not compatibility with the web: lengths are points,
+  unset properties take React Native's / Yoga's defaults, values that change take numbers and structured forms (JS
+  builds no strings), and what the platforms do that CSS cannot say is a registered extension key or class, named
+  apart from CSS's. Below TSX, values are typed: Rust's `Styled` and Tailwind classes lower to typed values (a core
+  type of their own where one is needed, as `LineHeight`), never to strings the core parses again; only a TSX
+  `style`'s values are parsed from strings. Frozen with the first recorded release as `docs/dev/styles.md` writes it ("Principles",
+  "Extensions").
+- **API shapes: one form per thing, shapes that can grow** (decided by the user before the freeze; details and
+  examples in `docs/dev/api-naming.md` "Conventions", "Shapes that can grow" and "Units"; the API is being brought to
+  them). Names come from `gpui-base` / GPUI and the DOM; React Native is a reference only.
+  - Units: one per quantity. Lengths are points; an image's or a video's own size is pixels, typed `PixelSize`
+    (never `Size`); times are milliseconds; velocities points per second; shares fractions from 0 to 1 (no `Percent`
+    in names). Only media time is seconds (HTML's `currentTime`) and a deceleration the velocity kept per
+    millisecond (UIKit's 0.998 / 0.99).
+  - Events: every handler gets one object, value changes included (`onChange({ value })`, `onOpenChange({ open,
+    reason })`, `onLayout({ bounds })`), its fields named as the props they report; never positional arguments, a
+    bare value or a shared data type passed as the payload itself. An event with nothing to report passes nothing.
+    Only the responder callbacks keep React Native's `(e, gestureState)`.
+  - Mouse events are the DOM's and GPUI's: `onMouseEnter` / `onMouseMove` / `onMouseLeave`, each with a
+    `MouseEvent { position, pagePosition, modifiers, pressedButton }`; `onMouseMove` fires with or without a button
+    down. State styles keep CSS's names (`hover:`, `hoverStyle`).
+  - Returns: an object, never a bare value that may need a second field (`AlertDialog.show` → `{ action }`,
+    animations → `{ finished }`); yes / no questions (`hasText()`, `canUndo()`) return booleans.
+  - Failures (of what JS calls): a function returning a promise never throws, every failure rejects (arguments,
+    grants, quotas, I/O, as Node's `fs/promises`); a synchronous one throws a `TypeError` / `RangeError` for a wrong
+    use. A failure the app can handle carries a stable `code` (`nsh_core::element::codes`: `ERR_ACCESS_DENIED` with
+    `permission` and `resource` for what the capabilities do not grant, an `Error` (`fetch`'s keeps the web's
+    `TypeError`), `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`, `ERR_NSH_QUOTA_EXCEEDED`, `ETIMEDOUT`, `ERR_NSH_HOST_ERROR`,
+    Node's errno codes for I/O; `nsh/test`'s own `ERR_NSH_TEST_*`); messages are not API. Never a sentinel
+    (`false`, `-1`, `""`, `[]`) or silence for a failure; `null` stays an answer ("nothing there"), a cancel resolves
+    empty. A command that runs at the commit (a component's or ref's method) cannot throw: given an unknown id or
+    index it does nothing and logs a warning.
+  - Methods whose parameters may grow take their options as one object (`net.connect({ host, port })`,
+    `Window.setTitleBar({ style, height })`); parameters the user judged will not grow stay positional
+    (`setSelection(start, end?)`, `seek(seconds)`, `DockArea.addPanel(panel, placement?, size?)`,
+    `DataTable.scrollToRow(row, animated?)`, `Editor.revealPosition(position, center)`, a range's start and end):
+    decided per method by the user (2026-10-28), not changed on reading this rule.
+  - Identifiers an app matches on are the app's and required, never derived from a label (`AlertDialogAction.id`).
+  - Refs: each element has a ref type of its own (`InputRef`, `ScrollRef`, `VideoRef`, ... over a common `ViewRef`),
+    never one type carrying every element's methods.
+  - Listening: the function that registers a listener is `on(event, listener)` in everything TSX calls
+    (`BackHandler.on("press", l)`, `host.on(name, l)`; Rust's own API keeps GPUI's `on_<event>`), never an
+    `on<Event>(l)`, `subscribe` or `addListener`; it returns a function that stops it (`() => void`, a Rust
+    function's `Stop`), never `{ remove() }` or an id for an `off`, and what is registered while a component renders
+    goes with the component. `keymap.bind` keeps `bind` (a shortcut is not an event); the standard modules keep
+    Node's `on`, which returns its object.
 - **Components are Rust.** Rust components live in `crates/nsh-base` or in an app's own crate (its UI set,
   `#[native_module("…")]`), run in the core and render primitives with typed styles (GPUI-style `Styled` methods,
   never class strings); props and events are derived types, their JS face is made from the specs (`nsh-js`
@@ -414,7 +473,7 @@ repository's `target/`; dependencies only it uses are declared in `crates/gpui/C
   (legacy, to migrate) does not list (`docs/dev/geometry.md`).
 - TSX tags are PascalCase, everywhere (examples, docs, tests): every tag names a binding in scope, only `<If>` and
   `<Each>` are globals that need no import. Imports mirror the Rust crates' layers: every primitive comes from `nsh`
-  (`View`, `Text`, `Scroll`, `Overlay`, `Image`, `List`, `Canvas` and its classes, `Shader`, `ShaderEffect`, `ShaderTransition`, `WebView`, `Video`), as `nsh_core::element` holds them, every base
+  (`View`, `Text`, `Scroll`, `Overlay`, `Image`, `List`, `Canvas` and its classes, `WebView`, `Video`), as `nsh_core::element` holds them, every base
   component from `nsh/base` (`Input`, `Dialog`, `Button`, `NavStack`, ...), and
   `InputAccessoryView` from `nsh/mobile`; the compiler makes their tags in place (`jsx::PRIMITIVES`). Lowercase tags are compile errors: TypeScript checks a lowercase tag
   against one global type per name, so generic components (`List`, `Each`) and local ones would lose their types.
@@ -441,6 +500,19 @@ repository's `target/`; dependencies only it uses are declared in `crates/gpui/C
 - Set only the fields needed and leave the rest at their defaults. Within the defining crate, use `..Default::default()`; callers in other crates start with `Type::default()` and assign fields, because non-exhaustive structs cannot be constructed with external struct literals.
 - New fields have sensible defaults so extending a struct does not break downstream construction.
 
+## Public Rust element API
+
+What apps call to build UI in Rust stays stable and strongly typed:
+
+- Element constructors take no content: `shader()`, then builder methods (`.source(program)`, `.uniform(..)`), so a
+  new input is a new method, never a changed signature. Existing constructors that take their content
+  (`canvas(painter)`, `video(url)`) are not a model for new ones.
+- Names NSH defines (style properties, built-in values) are typed; names the app defines in its own code (a
+  shader's uniforms, declared in its WGSL) are plain `&str`, as TSX's keys are, checked where they are defined.
+- Values are typed (`impl Into<UniformValue>`, `Hsla`, `Points`), not strings to parse.
+- No macros to make elements or set their props (declaring components with `#[component]` and its derives stays):
+  plain functions, methods and traits.
+
 ## Commits and pull requests
 
 Details and examples: "Commits and pull requests" in `CONTRIBUTING.md`.
@@ -451,7 +523,8 @@ Details and examples: "Commits and pull requests" in `CONTRIBUTING.md`.
   workflow. A request to release or push changes does not authorize a direct push to `main`.
 
 - Subjects and PR titles are `<area>: <What the change does>`: the area in lower case (a crate without `nsh-`:
-  `core`, `js`, `engine`, `bundler`, `cli`, `base`, ...; one platform: `ios`, `android`, `macos`, `windows`,
+  `core`, `js`, `engine`, `bundler`, `cli`, ...; never `base`: a change to `nsh-base` names its component in snake
+  case, `rich_editor`, `editor`, `input`, `data_table`, ...; one platform: `ios`, `android`, `macos`, `windows`,
   `linux`; `desktop` for macOS, Windows and Linux together, `mobile` for iOS and Android together; `runtime`, a module;
   `tailwind`, `text`, `docs`, `examples`, `gallery`). One area only, never several separated by commas: for a change
   that spans parts, judge it as a whole and name the part it is mostly about (a feature the core adds and the platforms

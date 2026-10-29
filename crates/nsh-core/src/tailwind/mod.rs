@@ -38,36 +38,51 @@ use self::{
 };
 use crate::{
     geometry::{Points, Size},
-    ops::ResizeMode,
     props::PointerEvents,
-    style::{Color, EllipsizeMode, PatchValue, Style, TextShadow},
+    style::{Color, EllipsizeMode, PropertyValue, Style, TextShadow},
 };
 
 /// Interaction states a class can depend on (`active:`, `hover:`, ...).
 pub mod state {
     /// The view is pressed (`active:`).
-    pub const PRESSED: u8 = 1;
+    pub const PRESSED: u16 = 1;
     /// A pointer is over the view (`hover:`).
-    pub const HOVERED: u8 = 2;
+    pub const HOVERED: u16 = 2;
     /// The input has focus (`focus:`).
-    pub const FOCUSED: u8 = 4;
+    pub const FOCUSED: u16 = 4;
     /// The view is disabled (`disabled:`).
-    pub const DISABLED: u8 = 8;
+    pub const DISABLED: u16 = 8;
     /// The view or a descendant has focus (`focus-within:`).
-    pub const FOCUS_WITHIN: u8 = 16;
+    pub const FOCUS_WITHIN: u16 = 16;
     /// The view is selected (`selected:`): its
     /// `accessibilityState.selected`, a `Button`'s `selected`. Set by the
     /// core, never reported by the platform.
-    pub const SELECTED: u8 = 32;
+    pub const SELECTED: u16 = 32;
     /// The view is checked (`checked:`): its `accessibilityState.checked`
     /// (a checkbox, a switch, a radio; not when mixed). Set by the core,
     /// never reported by the platform.
-    pub const CHECKED: u8 = 64;
+    pub const CHECKED: u16 = 64;
     /// The view is indeterminate (`indeterminate:`): its
     /// `accessibilityState.checked` is mixed (a checkbox that is neither
     /// checked nor unchecked, as CSS's `:indeterminate`). Set by the core,
     /// never reported by the platform.
-    pub const INDETERMINATE: u8 = 128;
+    pub const INDETERMINATE: u16 = 128;
+    /// The view's popup, menu or section is open (`aria-expanded:`): its
+    /// `accessibilityState.expanded`, which `Popover` and `Menu` set on
+    /// their trigger. Set by the core, never reported by the platform.
+    pub const EXPANDED: u16 = 256;
+    /// The view is a toggle button that is on (`aria-pressed:`): its
+    /// `accessibilityState.pressed` is `true` (not mixed). Not
+    /// [`PRESSED`], a press in progress (`active:`). Set by the core,
+    /// never reported by the platform.
+    pub const ARIA_PRESSED: u16 = 512;
+    /// The view is busy (`aria-busy:`): its `accessibilityState.busy`.
+    /// Set by the core, never reported by the platform.
+    pub const BUSY: u16 = 1024;
+    /// The states the core sets from the accessibility state, which the
+    /// platforms never report.
+    pub(crate) const ACCESSIBILITY: u16 =
+        SELECTED | CHECKED | INDETERMINATE | EXPANDED | ARIA_PRESSED | BUSY;
 }
 
 /// The view's place among its siblings (`first:`, `odd:`, ...).
@@ -161,12 +176,12 @@ pub struct Context<'a> {
     /// Right-to-left layout.
     pub rtl: bool,
     /// [`state`] bits of the node.
-    pub states: u8,
+    pub states: u16,
     /// [`position`] bits of the node.
     pub position: u8,
     /// [`state`] bits of the nearest ancestor group with this name (`""`
     /// for unnamed groups).
-    pub group: &'a dyn Fn(&str) -> u8,
+    pub group: &'a dyn Fn(&str) -> u16,
 }
 
 /// Conditions of one rule (all must hold).
@@ -180,11 +195,11 @@ pub(crate) struct Condition {
     rtl: Option<bool>,
     reduce_motion: Option<bool>,
     /// Required [`state`] bits.
-    states: u8,
+    states: u16,
     /// [`state`] bits that must be off (`enabled:`).
-    not_states: u8,
+    not_states: u16,
     /// A group name and its required states.
-    group: Option<(Box<str>, u8)>,
+    group: Option<(Box<str>, u16)>,
     /// Allowed [`position`] bits (any of them).
     position: u8,
     /// Applies to an input's placeholder.
@@ -243,7 +258,7 @@ impl Condition {
     /// Applies only while the view (or its group) is pressed, hovered or
     /// focused: press feedback.
     fn interactive(&self) -> bool {
-        const INTERACTION: u8 =
+        const INTERACTION: u16 =
             state::PRESSED | state::HOVERED | state::FOCUSED | state::FOCUS_WITHIN;
         self.states & INTERACTION != 0
             || self
@@ -381,8 +396,15 @@ pub(crate) mod rank {
     pub(crate) const ACTIVE: Key = Key::new(37);
     pub(crate) const ENABLED: Key = Key::new(38);
     pub(crate) const DISABLED: Key = Key::new(39);
-    pub(crate) const MOTION_SAFE: Key = Key::new(40);
-    pub(crate) const MOTION_REDUCE: Key = Key::new(41);
+    /// Tailwind's `aria-*` variants come after the pseudo-classes, in the
+    /// order of their names.
+    pub(crate) const ARIA_BUSY: Key = Key::new(40);
+    pub(crate) const ARIA_CHECKED: Key = Key::new(41);
+    pub(crate) const EXPANDED: Key = Key::new(42);
+    pub(crate) const ARIA_PRESSED: Key = Key::new(43);
+    pub(crate) const ARIA_SELECTED: Key = Key::new(44);
+    pub(crate) const MOTION_SAFE: Key = Key::new(45);
+    pub(crate) const MOTION_REDUCE: Key = Key::new(46);
     /// `max-*` breakpoints, widest first.
     pub(crate) const MAX: u16 = 50;
     /// Breakpoints and `min-*`, narrowest first.
@@ -401,7 +423,7 @@ pub(crate) mod rank {
 impl Rule {
     /// A rule applying `decls` while the node is in all of [`state`]
     /// `states`, ordered by `rank`.
-    pub(crate) fn new(states: u8, rank: impl Into<Rank>, decls: Vec<Decl>) -> Self {
+    pub(crate) fn new(states: u16, rank: impl Into<Rank>, decls: Vec<Decl>) -> Self {
         Self {
             cond: Condition {
                 states,
@@ -418,11 +440,21 @@ impl Rule {
     /// `states` (and, unless `disabled`, not disabled), applied over the
     /// inline style as `!` utilities are, ordered by `rank`.
     pub(crate) fn state_style(
-        states: u8,
+        states: u16,
         rank: impl Into<Rank>,
         decls: Vec<crate::StyleDecl>,
     ) -> Self {
-        let mut rule = Self::new(states, rank, decls.into_iter().map(Decl::Style).collect());
+        // A style's defaults and its `currentColor` are the classes' own
+        // kinds, applied before the rules and read with the text color.
+        let decls = decls
+            .into_iter()
+            .map(|d| match d {
+                crate::StyleDecl::Default(key, value) => Decl::Default(key, value),
+                crate::StyleDecl::CurrentColor(key) => Decl::CurrentColor(key),
+                d => Decl::Style(d),
+            })
+            .collect();
+        let mut rule = Self::new(states, rank, decls);
         if states & state::DISABLED == 0 {
             rule.cond.not_states = state::DISABLED;
         }
@@ -433,8 +465,8 @@ impl Rule {
     /// [`Rule::new`], also requiring the nearest ancestor group `group`
     /// (`""`: unnamed) in its states, and dark appearance when `dark`.
     pub(crate) fn with(
-        states: u8,
-        group: Option<(&str, u8)>,
+        states: u16,
+        group: Option<(&str, u16)>,
         dark: bool,
         rank: Rank,
         decls: Vec<Decl>,
@@ -446,23 +478,24 @@ impl Rule {
     }
 }
 
-/// Node properties classes can set (an explicit prop wins over them).
+/// Node properties classes and styles set: those that are not layout or
+/// drawing (the core takes them from the style, [`crate::Style`]'s
+/// `numberOfLines`, `textOverflow`, `userSelect` and `pointerEvents`, and from
+/// the classes for the rest).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ClassProps {
-    /// `line-clamp-*`, `truncate`; `Some(0)` removes a clamp.
+    /// `numberOfLines` (`line-clamp-*`, `truncate`); `Some(0)` removes a clamp.
     pub number_of_lines: Option<u32>,
-    /// `text-ellipsis`, `text-clip`, `truncate`.
+    /// `textOverflow` (`text-ellipsis`, `text-clip`, `truncate`).
     pub ellipsize: Option<EllipsizeMode>,
     /// `whitespace-nowrap`, `text-nowrap`, `truncate`: lines never wrap.
     /// Inherited, as CSS's `white-space`: a view's reaches the texts in it.
     pub no_wrap: Option<bool>,
-    /// `pointer-events-none` / `-auto`.
+    /// `pointerEvents` (`pointer-events-none` / `-auto`).
     pub pointer_events: Option<PointerEvents>,
-    /// `object-cover` and friends (images).
-    pub resize_mode: Option<ResizeMode>,
-    /// `select-none` / `select-text` (`select-auto`: none). A view's reach
-    /// the texts in it that say none, as CSS's `user-select: auto` takes
-    /// its parent's.
+    /// `userSelect` (`select-none` / `select-text`; `auto`: none). A
+    /// view's reach the texts in it that say none, as CSS's `user-select:
+    /// auto` takes its parent's.
     pub selectable: Option<bool>,
     /// `placeholder:text-*` (inputs).
     pub placeholder_color: Option<Color>,
@@ -485,10 +518,10 @@ pub struct ClassProps {
 pub struct Space {
     /// `space-x-*`: the end margin (`margin-inline-end`; the start one
     /// with `space-x-reverse`).
-    pub x: Option<PatchValue>,
+    pub x: Option<PropertyValue>,
     /// `space-y-*`: the bottom margin (`margin-block-end`; the top one
     /// with `space-y-reverse`).
-    pub y: Option<PatchValue>,
+    pub y: Option<PropertyValue>,
     /// `space-x-reverse`.
     pub reverse_x: bool,
     /// `space-y-reverse`.
@@ -500,25 +533,26 @@ pub struct Space {
 }
 
 impl Space {
-    /// The margins of a child: React Native's `marginRight` is the end
-    /// side in either direction, `marginLeft` the start side.
-    pub(crate) fn apply(&self, style: &mut Style, important: bool) {
+    /// The margins of a child laid out in direction `rtl`: Tailwind's
+    /// `margin-inline-end`, the right side left to right and the left side
+    /// right to left (the start side when reversed).
+    pub(crate) fn apply(&self, style: &mut Style, important: bool, rtl: bool) {
         use crate::style::StyleKey as K;
         if let Some(v) = &self.x
             && self.important_x == important
         {
-            let key = if self.reverse_x {
-                K::MarginLeft
+            let (end, start) = if rtl {
+                (K::MarginLeft, K::MarginRight)
             } else {
-                K::MarginRight
+                (K::MarginRight, K::MarginLeft)
             };
-            let other = if self.reverse_x {
-                K::MarginRight
+            let (key, other) = if self.reverse_x {
+                (start, end)
             } else {
-                K::MarginLeft
+                (end, start)
             };
             let _ = style.set_key(other, crate::style::StyleValue::Number(0.0));
-            let _ = style.set_key(key, v.as_value());
+            let _ = style.apply_value(key, v);
         }
         if let Some(v) = &self.y
             && self.important_y == important
@@ -534,7 +568,7 @@ impl Space {
                 K::MarginTop
             };
             let _ = style.set_key(other, crate::style::StyleValue::Number(0.0));
-            let _ = style.set_key(key, v.as_value());
+            let _ = style.apply_value(key, v);
         }
     }
 }
@@ -546,7 +580,7 @@ pub struct ClassList {
     /// [`deps`] bits.
     deps: u16,
     /// [`state`] bits the platform must report for this view.
-    tracked: u8,
+    tracked: u16,
     /// The view is a `group` (`""`) or named groups (`group/item`).
     groups: Vec<Box<str>>,
     /// Classes that are not known utilities.
@@ -562,7 +596,7 @@ impl ClassList {
 
     /// [`state`] bits whose changes the platform must report.
     #[inline]
-    pub fn tracked_states(&self) -> u8 {
+    pub fn tracked_states(&self) -> u16 {
         self.tracked
     }
 
@@ -621,12 +655,7 @@ impl ClassList {
         parts.ch = ch;
         let mut important = false;
         let current = if self.deps & deps::CURRENT_COLOR != 0 {
-            let [plain, important] = self.text_colors(cx);
-            important
-                .or(current.inline)
-                .or(plain)
-                .or(current.inherited)
-                .unwrap_or(Color::BLACK)
+            self.current_color(cx, current)
         } else {
             Color::BLACK
         };
@@ -638,8 +667,7 @@ impl ClassList {
             for decl in &rule.decls {
                 match decl {
                     Decl::Default(key, value) => {
-                        let (key, value) = utilities::directed(*key, value, cx.rtl);
-                        let _ = style.set_key(key, value.as_value());
+                        let _ = style.apply_value(*key, value);
                     }
                     Decl::CurrentColor(key) => style.set_color(*key, current),
                     _ => {}
@@ -657,14 +685,7 @@ impl ClassList {
             }
             important |= rule.important;
             for decl in &rule.decls {
-                decl.apply(
-                    cx.env.dark,
-                    cx.rtl,
-                    rule.important,
-                    style,
-                    props,
-                    &mut parts,
-                );
+                decl.apply(cx.env.dark, rule.important, style, props, &mut parts);
             }
             let background = rule.decls.iter().any(Decl::sets_background_color);
             if rule.cond.interactive() {
@@ -694,12 +715,17 @@ impl ClassList {
         }
         parts.finish(style, props, theme, cx.window, touched::ALL);
         inline(style);
+        if self.deps & deps::CURRENT_COLOR != 0 {
+            // What the classes set to `currentColor` inside a value.
+            style.apply_current_color(current);
+        }
         if important {
             // `!` utilities win over the inline style too, as in CSS. The
             // parts keep every rule's values (a `!scale-*` still composes
             // with a plain `translate-*`); only the groups the important
             // rules touch are written again.
             parts.touched = 0;
+            parts.transform_parts = 0;
             parts.screen.clear();
             for rule in self
                 .rules
@@ -708,18 +734,14 @@ impl ClassList {
             {
                 if rule.cond.matches(cx) {
                     for decl in &rule.decls {
-                        decl.apply(
-                            cx.env.dark,
-                            cx.rtl,
-                            rule.important,
-                            style,
-                            props,
-                            &mut parts,
-                        );
+                        decl.apply(cx.env.dark, rule.important, style, props, &mut parts);
                     }
                 }
             }
             parts.finish(style, props, theme, cx.window, parts.touched);
+            if self.deps & deps::CURRENT_COLOR != 0 {
+                style.apply_current_color(current);
+            }
         }
         // Unless the inline style replaced the state's color.
         if state_background && !state_image && style.view.background_color == state_color {
@@ -729,6 +751,18 @@ impl ClassList {
 }
 
 impl ClassList {
+    /// CSS's `currentColor` of a node with these classes in `cx`: the text
+    /// color of its `!` classes, its inline style, its classes, else the
+    /// one it inherits, else black.
+    pub(crate) fn current_color(&self, cx: &Context<'_>, current: CurrentColor) -> Color {
+        let [plain, important] = self.text_colors(cx);
+        important
+            .or(current.inline)
+            .or(plain)
+            .or(current.inherited)
+            .unwrap_or(Color::BLACK)
+    }
+
     /// The text colors the rules matching `cx` set: the plain ones' and
     /// the `!` ones' (which win over the inline style).
     fn text_colors(&self, cx: &Context<'_>) -> [Option<Color>; 2] {
@@ -764,8 +798,7 @@ impl ClassList {
 
     fn add(&mut self, rule: Rule) {
         self.deps |= rule.cond.deps();
-        self.tracked |= rule.cond.states
-            & !(state::DISABLED | state::SELECTED | state::CHECKED | state::INDETERMINATE);
+        self.tracked |= rule.cond.states & !(state::DISABLED | state::ACCESSIBILITY);
         if rule.cond.states & state::FOCUS_WITHIN != 0 {
             self.tracked |= state::FOCUS_WITHIN;
         }
@@ -798,7 +831,7 @@ impl ClassList {
 #[derive(Debug, Default)]
 pub struct Tailwind {
     theme: Theme,
-    cache: FxHashMap<Box<str>, Arc<ClassList>>,
+    cache: FxHashMap<Box<str>, std::rc::Rc<ClassList>>,
 }
 
 impl Tailwind {
@@ -842,17 +875,17 @@ impl Tailwind {
     }
 
     /// The parsed form of `classes` (cached by string).
-    pub fn classes(&mut self, classes: &str) -> Arc<ClassList> {
+    pub fn classes(&mut self, classes: &str) -> std::rc::Rc<ClassList> {
         self.get(classes).0
     }
 
     /// Like [`Tailwind::classes`], and whether `classes` was parsed just
     /// now (to report its unknown classes once).
-    pub fn get(&mut self, classes: &str) -> (Arc<ClassList>, bool) {
+    pub fn get(&mut self, classes: &str) -> (std::rc::Rc<ClassList>, bool) {
         if let Some(c) = self.cache.get(classes) {
             return (c.clone(), false);
         }
-        let parsed = Arc::new(parse(&self.theme, classes));
+        let parsed = std::rc::Rc::new(parse(&self.theme, classes));
         // Class strings are static in practice; a bound keeps generated
         // ones (`w-[${n}px]`) from growing the cache forever.
         if self.cache.len() >= 4096 {
@@ -1033,7 +1066,7 @@ fn themed(
 /// Applies variant `v` to `cond`; returns its place in Tailwind's order.
 fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<Key> {
     use state::*;
-    let states = |cond: &mut Condition, s: u8| {
+    let states = |cond: &mut Condition, s: u16| {
         cond.states |= s;
     };
     // Tailwind registers `group-*` first, then the pseudo-elements, then
@@ -1107,6 +1140,26 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<Key> {
             states(cond, DISABLED);
             rank::DISABLED
         }
+        "aria-busy" => {
+            states(cond, BUSY);
+            rank::ARIA_BUSY
+        }
+        "aria-checked" => {
+            states(cond, CHECKED);
+            rank::ARIA_CHECKED
+        }
+        "aria-expanded" => {
+            states(cond, EXPANDED);
+            rank::EXPANDED
+        }
+        "aria-pressed" => {
+            states(cond, ARIA_PRESSED);
+            rank::ARIA_PRESSED
+        }
+        "aria-selected" => {
+            states(cond, SELECTED);
+            rank::ARIA_SELECTED
+        }
         "motion-safe" => {
             cond.reduce_motion = Some(false);
             rank::MOTION_SAFE
@@ -1164,6 +1217,11 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<Key> {
                     "selected" => (SELECTED, rank::SELECTED),
                     "checked" => (CHECKED, rank::CHECKED),
                     "indeterminate" => (INDETERMINATE, rank::INDETERMINATE),
+                    "aria-busy" => (BUSY, rank::ARIA_BUSY),
+                    "aria-checked" => (CHECKED, rank::ARIA_CHECKED),
+                    "aria-expanded" => (EXPANDED, rank::EXPANDED),
+                    "aria-pressed" => (ARIA_PRESSED, rank::ARIA_PRESSED),
+                    "aria-selected" => (SELECTED, rank::ARIA_SELECTED),
                     _ => return None,
                 };
                 let entry = cond.group.get_or_insert_with(|| (name.into(), 0));

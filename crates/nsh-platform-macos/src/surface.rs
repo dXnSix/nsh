@@ -182,8 +182,6 @@ pub(crate) struct Surface {
     pub(crate) anim: RefCell<UiAnimation>,
     /// Stacks, screens and modals.
     pub(crate) nav: RefCell<crate::navigation::Nav>,
-    /// The shaders over the whole surface.
-    pub(crate) screen: RefCell<crate::screen::Screen>,
     /// Pointer input state ([`crate::input`]).
     pub(crate) input: crate::input::Input,
     /// The text selection ([`crate::text::Selected`]).
@@ -215,6 +213,11 @@ pub(crate) struct Surface {
     /// Frame callbacks of the platform's own animations (scroll glides,
     /// transitions): called on every frame while they return true.
     frame_callbacks: RefCell<Vec<FrameCallback>>,
+    /// How many of the frame callbacks have only cosmetic work left (a
+    /// scroll indicator fading out): what [`Surface::animating`] does not
+    /// count.
+    #[cfg(feature = "dev")]
+    cosmetic_frames: Cell<usize>,
     /// The model of a test session's app (`nsh test --target`).
     #[cfg(feature = "dev")]
     test_model: RefCell<Option<std::sync::Arc<nsh_testing::agent::Model>>>,
@@ -246,6 +249,8 @@ pub(crate) struct Surface {
     /// The app's keyboard shortcuts ([`crate::keymap`]).
     pub(crate) keymap: crate::keymap::KeymapState,
     pub(crate) file_drop: crate::file_drop::State,
+    /// The GPU device and the shader views rendering ([`crate::shader`]).
+    pub(crate) shaders: crate::shader::Shaders,
 }
 
 /// A per-frame callback ([`Surface::add_frame_callback`]): gets the frame
@@ -254,19 +259,7 @@ pub(crate) type FrameCallback = Box<dyn FnMut(&Rc<Surface>, f64) -> bool>;
 
 impl Surface {
     /// A surface with no app yet.
-    pub(crate) fn new(mtm: MainThreadMarker, mut environment: Environment) -> Rc<Surface> {
-        // Shaders fill views with Metal (`crate::shader`).
-        // Effects and backdrops from pictures taken again when they change.
-        environment.shaders = {
-            let mut support =
-                nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::Msl);
-            support.effect = nsh_core::shader::Support::Snapshot;
-            support.backdrop = nsh_core::shader::Support::Snapshot;
-            support.transition = nsh_core::shader::Support::Snapshot;
-            support.screen_transition = nsh_core::shader::Support::Snapshot;
-            support.screen_effect = nsh_core::shader::Support::Snapshot;
-            support
-        };
+    pub(crate) fn new(mtm: MainThreadMarker, environment: Environment) -> Rc<Surface> {
         let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
         let root = NshView::new(mtm, ROOT_ID, nsh_core::ViewKind::View);
         let surface = Rc::new(Surface {
@@ -276,7 +269,6 @@ impl Surface {
             mounter: RefCell::new(Mounter::new(root.clone())),
             anim: RefCell::new(UiAnimation::default()),
             nav: RefCell::default(),
-            screen: RefCell::default(),
             input: Default::default(),
             selection: Default::default(),
             engine: RefCell::new(None),
@@ -291,6 +283,8 @@ impl Surface {
             js_frame: Cell::new(false),
             queued: RefCell::default(),
             frame_callbacks: RefCell::default(),
+            #[cfg(feature = "dev")]
+            cosmetic_frames: Cell::new(0),
             #[cfg(feature = "dev")]
             test_model: RefCell::default(),
             link: RefCell::new(None),
@@ -308,6 +302,7 @@ impl Surface {
             keymap: Default::default(),
             file_drop: Default::default(),
             chrome: Default::default(),
+            shaders: Default::default(),
         });
         SURFACES.with(|s| s.borrow_mut().insert(key, Rc::downgrade(&surface)));
         // CoreText's first use loads fonts and caches (tens of
@@ -359,6 +354,8 @@ impl Surface {
                 control.set_tokens(tokens);
             }
         };
+        // Remote images download with NSURLSession.
+        crate::image::install_transport();
         match Engine::start_with(config, CoreTextEngine::default, sink, setup) {
             Ok(engine) => {
                 // The app's downloaded images go through its disk cache.
@@ -395,6 +392,9 @@ impl Surface {
         self.queued.borrow_mut().clear();
         self.resize_late.set(false);
         self.frame_callbacks.borrow_mut().clear();
+        #[cfg(feature = "dev")]
+        self.cosmetic_frames.set(0);
+        crate::shader::clear(self);
     }
 
     /// Calls `f` with the engine's control, if an app runs.
@@ -451,7 +451,6 @@ impl Surface {
             c.set_environment(env);
         });
         crate::navigation::surface_resized(self, width, height);
-        crate::screen::resized(self);
         // Full screen and the window's size change the title bar's area.
         crate::chrome::update_area(self);
         self.await_layout(Size::new(Points(width), Points(height)));
@@ -664,6 +663,8 @@ impl Surface {
             );
             (std::mem::take(&mut anim.finished), moved)
         };
+        // Shaders whose animated uniforms moved render from the next frame.
+        crate::shader::wake(self);
         // No surface state borrowed while the app's components run.
         crate::native::component_animated(self, moved);
         crate::scroll::pin_animated_sticky(self);
@@ -681,12 +682,28 @@ impl Surface {
         self.ensure_ticking();
     }
 
-    /// Whether a native animation runs: the graph's, or the platform's own
-    /// (scroll glides, zooms); or batches wait for the next frame.
+    /// A frame callback's work left became cosmetic (`on`: a scroll
+    /// indicator fading out, which shows nothing the app did) or no longer
+    /// is; it ends with `on` false.
+    pub(crate) fn cosmetic_frame(&self, on: bool) {
+        #[cfg(feature = "dev")]
+        {
+            let n = self.cosmetic_frames.get();
+            self.cosmetic_frames
+                .set(if on { n + 1 } else { n.saturating_sub(1) });
+        }
+        #[cfg(not(feature = "dev"))]
+        let _ = on;
+    }
+
+    /// Whether a native animation runs: the graph's (not one looping
+    /// forever, which no test step waits for), or the platform's own
+    /// (scroll glides, zooms; not a scroll indicator's fade, after which
+    /// nothing changes); or batches wait for the next frame.
     #[cfg(feature = "dev")]
     pub(crate) fn animating(&self) -> bool {
-        self.anim.borrow().animating()
-            || !self.frame_callbacks.borrow().is_empty()
+        self.anim.borrow().finishing()
+            || self.frame_callbacks.borrow().len() > self.cosmetic_frames.get()
             || !self.queued.borrow().is_empty()
     }
 
@@ -713,11 +730,9 @@ impl Surface {
     /// a JS frame request): while it does, a bounds commit mid-scroll
     /// lands on a live frame.
     pub(crate) fn wants_frames(&self) -> bool {
-        // An animation writing its values (they may ask for a frame: a
-        // shader's pictures) is animating.
         self.js_frame.get()
             || !self.queued.borrow().is_empty()
-            || self.anim.try_borrow().map_or(true, |a| a.animating())
+            || self.anim.borrow().animating()
             || !self.frame_callbacks.borrow().is_empty()
     }
 

@@ -1,7 +1,6 @@
 ---
 title: NavStack
 description: 原生导航栈：NavStack、NavPage 与 createNavStack，页面的推入与弹出、标题栏插槽、离开页面，以及各平台如何呈现导航栈。
-order: 22
 group: base
 demo: ui-navigation
 ---
@@ -220,7 +219,7 @@ TSX 的子函数接收路由值本身，以及一个表示它在栈中位置的 
 | `headerClass` | `.header_style_with(\|s\| ..)` | `string` | 无 | 以类表示的同样的颜色：`bg-*`，标题用 `text-*`，按钮用 `tint-*`（Rust 中为 `.bg(..)`、`.text_color(..)`、`.tint_color(..)`，主题颜色随外观切换）。`headerStyle` 优先于它们。 |
 | `popOnBack` | `.pop_on_back(..)` | `boolean` | `true` | 返回按钮和侧滑返回会弹出页面。见[离开页面](#leaving-a-page)。 |
 | `popOnSwipe` | `.pop_on_swipe(..)` | `boolean` | `true` | 交互式返回手势会弹出页面：iOS 的侧滑返回、Android 跟随手指的预测性返回。返回按钮在任何情况下都会弹出页面。 |
-| `animation` | `.animation(..)`、`.shader_animation(ShaderAnimation)` | `"default" \| "slide" \| "fade" \| "none" \| ShaderAnimation` | `"default"` | 页面进入和离开的方式：预设，或经过着色器（`{ shader, uniforms, duration }`：下面的页面是着色器的 `sample_from`，这个页面是 `sample_to`，`nsh.progress` 是它显示的程度，返回手势移动时也是如此；[Shader](./shader.md#经过着色器的页面和对话框)）。 |
+| `animation` | `.animation(..)` | `"default" \| "slide" \| "fade" \| "none"` | `"default"` | 页面进入和离开的方式。 |
 | `statusBar` | `.status_bar(..)` | `{ foreground?, hidden?, animated? }` | 无 | iOS 和 Android：页面位于顶部时的状态栏。见[状态栏](../modules/nsh-base.md#status-bar)。 |
 | `style`、`class` | 样式方法 | | 无 | 页面的样式。 |
 | `children` | `.child(..)` | `JSX.Element` | 无 | 内容。 |
@@ -301,11 +300,11 @@ fn edit_note(routes: Signal<Vec<u32>>) -> Screen {
         spawn(async move {
             let choice = alert_dialog()
                 .title("Discard your changes?")
-                .cancel("Keep editing")
-                .destructive("Discard")
+                .cancel("keep", "Keep editing")
+                .destructive("discard", "Discard")
                 .show()
                 .await;
-            if choice.ok().flatten().as_deref() == Some("Discard") {
+            if choice.is_ok_and(|r| r.action.as_deref() == Some("discard")) {
                 routes.update(|r| {
                     r.pop();
                 });
@@ -336,18 +335,18 @@ import { AlertDialog, NavPage, Input } from "nsh/base";
 function EditNote() {
   const text = signal("");
   const confirm = async () => {
-    const choice = await AlertDialog.show({
+    const { action } = await AlertDialog.show({
       title: "Discard your changes?",
       actions: [
-        { label: "Keep editing", role: "cancel" },
+        { label: "Keep editing", role: "cancel", id: "keep" },
         { label: "Discard", role: "destructive", id: "discard" },
       ],
     });
-    if (choice === "discard") nav.pop();
+    if (action === "discard") nav.pop();
   };
   return (
     <NavPage title="Edit" popOnBack={text().length === 0} onBackPress={() => text().length > 0 && confirm()}>
-      <Input value={text()} onChange={(v) => text.set(v)} placeholder="A note" />
+      <Input value={text()} onChange={({ value }) => text.set(value)} placeholder="A note" />
     </NavPage>
   );
 }

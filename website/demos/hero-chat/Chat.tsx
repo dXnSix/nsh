@@ -1,4 +1,4 @@
-import { batch, computed, effect, List, Scroll, signal, Text, View, type YNode } from "nsh";
+import { batch, computed, effect, List, type ListRef, Scroll, signal, Text, View } from "nsh";
 import { Input } from "nsh/base";
 import { createAnimatedValue, LayoutAnimation } from "nsh";
 import { Clipboard } from "nsh";
@@ -67,7 +67,7 @@ export function Chat(props: { autoplay?: string } = {}) {
   /** Whether the user is at the bottom (the list then follows the stream
    * natively, `maintainVisibleContentPosition`); scrolling up clears it. */
   const following = signal(true);
-  let list: YNode | undefined;
+  let list: ListRef | undefined;
   let dragging = false;
 
   type Run = { id: string; model: Model; script: string; cancelled: boolean; md: string; reason: string; thinkStart: number; thinkSeconds: number | null };
@@ -328,7 +328,7 @@ export function Chat(props: { autoplay?: string } = {}) {
             borderColor: colors.border,
           }}
         >
-          <Text selectable style={{ fontSize: 15, lineHeight: 21, color: colors.text }}>{m().text}</Text>
+          <Text style={{ userSelect: "text", fontSize: 15, lineHeight: 21, color: colors.text }}>{m().text}</Text>
         </View>
       </If>
       <If when={m().waiting}>
@@ -370,7 +370,7 @@ export function Chat(props: { autoplay?: string } = {}) {
             content={
               <View style={{ flexDirection: "row", gap: 12, paddingLeft: 7 }}>
                 <View style={{ width: 2, borderRadius: 1, backgroundColor: colors.border }} />
-                <Text selectable style={{ flex: 1, fontSize: 14, lineHeight: 20, color: colors.muted }}>{reasoning()?.text}</Text>
+                <Text style={{ userSelect: "text", flex: 1, fontSize: 14, lineHeight: 20, color: colors.muted }}>{reasoning()?.text}</Text>
               </View>
             }
           >
@@ -391,7 +391,7 @@ export function Chat(props: { autoplay?: string } = {}) {
                 <Text style={{ fontSize: 14, color: colors.muted, fontVariant: ["tabular-nums"] }}>{thinkingLabel()}</Text>
                 <View
                   style={{
-                    transform: [{ rotate: reasoning()?.open ? "0deg" : "-90deg" }],
+                    transform: reasoning()?.open ? "rotate(0deg)" : "rotate(-90deg)",
                     transitionProperty: "transform",
                     transitionDuration: 220,
                     transitionTimingFunction: "ease-out",
@@ -551,13 +551,13 @@ export function Chat(props: { autoplay?: string } = {}) {
 
           {/* Jump to the latest message: shown while scrolled up. */}
           <View
-            pointerEvents={following() ? "none" : "auto"}
             style={{
+              pointerEvents: following() ? "none" : "auto",
               position: "absolute",
               right: 16,
               bottom: 12,
               opacity: jump,
-              transform: [{ scale: jump.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] }) }],
+              scale: jump.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] }),
             }}
           >
             <RoundButton icon="arrow-down" label="Jump to the latest message" variant="secondary" onPress={jumpToLatest} />
@@ -568,14 +568,14 @@ export function Chat(props: { autoplay?: string } = {}) {
 
           {/* Connection banner. */}
           <View
-            pointerEvents="none"
             style={{
+              pointerEvents: "none",
               position: "absolute",
               top: 8,
               left: 16,
               right: 16,
               opacity: bannerValue,
-              transform: [{ translateY: bannerValue.interpolate({ inputRange: [0, 1], outputRange: [-64, 0] }) }],
+              translate: [0, bannerValue.interpolate({ inputRange: [0, 1], outputRange: [-64, 0] })],
             }}
           >
             <View
@@ -615,22 +615,19 @@ export function Chat(props: { autoplay?: string } = {}) {
 
           {/* The "+" menu: attachments and the scenarios, to replay them. */}
           <View
-            pointerEvents={menu() ? "auto" : "none"}
             onPress={() => menu.set(false)}
-            style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.45)", opacity: menuValue }}
+            style={{ pointerEvents: menu() ? "auto" : "none", position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.45)", opacity: menuValue }}
           />
           <View
-            pointerEvents={menu() ? "auto" : "none"}
             style={{
+              pointerEvents: menu() ? "auto" : "none",
               position: "absolute",
               left: 16,
               right: 16,
               bottom: 8,
               opacity: menuValue,
-              transform: [
-                { translateY: menuValue.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) },
-                { scale: menuValue.interpolate({ inputRange: [0, 1], outputRange: [0.97, 1] }) },
-              ],
+              translate: [0, menuValue.interpolate({ inputRange: [0, 1], outputRange: [24, 0] })],
+              scale: menuValue.interpolate({ inputRange: [0, 1], outputRange: [0.97, 1] }),
             }}
           >
             <View
@@ -721,17 +718,17 @@ export function Chat(props: { autoplay?: string } = {}) {
           >
             <Input
               value={draft()}
-              onChange={(v) => draft.set(v)}
+              onChange={({ value }) => draft.set(value)}
               multiline
               placeholder={`Message ${model()}`}
               onFocus={() => menu.set(false)}
-              onContentSizeChange={(e) => inputHeight.set(Math.min(100, Math.max(20, e.height)))}
+              onContentSizeChange={({ size }) => inputHeight.set(Math.min(100, Math.max(20, size.height)))}
               style={{ height: inputHeight() + 20, fontSize: 15, lineHeight: 20, color: colors.text, placeholderColor: colors.faint, selectionColor: colors.accent, paddingHorizontal: 10, paddingVertical: 10 }}
             />
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <View
                 style={{
-                  transform: [{ rotate: menu() ? "45deg" : "0deg" }],
+                  transform: menu() ? "rotate(45deg)" : "rotate(0deg)",
                   transitionProperty: "transform",
                   transitionDuration: 200,
                   transitionTimingFunction: "ease-out",
@@ -745,7 +742,7 @@ export function Chat(props: { autoplay?: string } = {}) {
               <If
                 when={streaming()}
                 else={
-                  <View style={{ opacity: canSend() ? 1 : 0.35 }} pointerEvents={canSend() ? "auto" : "none"}>
+                  <View style={{ pointerEvents: canSend() ? "auto" : "none", opacity: canSend() ? 1 : 0.35 }}>
                     <RoundButton icon="arrow-up" label="Send" onPress={send} />
                   </View>
                 }

@@ -12,6 +12,7 @@ use nsh_core::{
     ViewKind, ViewProps, ViewStyle,
     animation::{AnimationProp, AnimationValue},
     geometry::{DevicePixels, point, size},
+    shader::ShaderRole,
     time::Instant,
 };
 use nsh_engine::EngineControl;
@@ -44,9 +45,7 @@ use crate::{
 };
 
 /// The mounter of one surface, shared with native callbacks.
-pub(crate) type SharedMounter = Arc<SharedMounterInner>;
-/// What [`SharedMounter`] holds.
-pub(crate) type SharedMounterInner = MainThreadBound<RefCell<Option<Mounter>>>;
+pub(crate) type SharedMounter = Arc<MainThreadBound<RefCell<Option<Mounter>>>>;
 
 enum Native {
     /// The surface root (owned by the platform).
@@ -64,8 +63,6 @@ enum Native {
     /// Shown over the keyboard by the inputs naming it; UIKit places it.
     InputAccessory(Retained<NshView>),
     Canvas(Retained<crate::canvas::CanvasView>),
-    /// A view a shader fills, under its children.
-    Shader(Box<crate::shader::ShaderHost>),
     Web(Box<WebHost>),
     Video(Box<VideoHost>),
     /// A registered native component in its container.
@@ -87,7 +84,6 @@ impl Native {
             Native::Modal(m) => &m.view,
             Native::HeaderItem(v) | Native::InputAccessory(v) => v,
             Native::Canvas(v) => v,
-            Native::Shader(s) => &s.view,
             Native::Web(w) => &w.view,
             Native::Video(v) => &v.view,
             Native::Component(c) => &c.container,
@@ -104,7 +100,6 @@ impl Native {
             | Native::InputAccessory(v) => Some(v),
             Native::Component(c) => Some(&c.container),
             Native::Canvas(v) => Some(v),
-            Native::Shader(s) => Some(&s.view),
             Native::Text(t) => Some(t),
             Native::Stack(s) => Some(&s.container),
             Native::Screen(s) => Some(&s.view),
@@ -126,7 +121,6 @@ impl Native {
             | Native::HeaderItem(_)
             | Native::InputAccessory(_)
             | Native::Canvas(_)
-            | Native::Shader(_)
             | Native::Web(_)
             | Native::Video(_)
             | Native::Component(_) => decor::Kind::View,
@@ -140,7 +134,8 @@ impl Native {
 #[derive(Default)]
 struct Gestures {
     press: Option<Retained<PressRecognizer>>,
-    /// Reports `hover:` and the hover events (pointers).
+    /// Reports `hover:` and the mouse events (pointers): `onMouseEnter`,
+    /// `onMouseMove`, `onMouseLeave`.
     hover: Option<Retained<objc2_ui_kit::UIHoverGestureRecognizer>>,
     /// `onContextMenu`: secondary clicks (iPad pointers, Mac Catalyst's
     /// mouse).
@@ -473,9 +468,9 @@ struct Slot {
     /// The image (not its placeholder) is shown.
     image_shown: bool,
     /// Interaction states the core wants reported (`tailwind::state`).
-    tracked: u8,
+    tracked: u16,
     /// Current interaction states.
-    states: u8,
+    states: u16,
 }
 
 impl Slot {
@@ -563,34 +558,13 @@ pub(crate) struct Mounter {
     disappearing: rustc_hash::FxHashSet<NodeId>,
     /// One-shot display link for `requestAnimationFrame`.
     frame_link: Retained<objc2_quartz_core::CADisplayLink>,
-    /// The display link of the shaders that read `nsh.time`, paused
-    /// without them.
-    shader_link: Retained<objc2_quartz_core::CADisplayLink>,
-    /// Shader views that read `nsh.time`.
-    shader_frames: Vec<NodeId>,
-    /// Shader views and effects that sample an input.
-    sampling: usize,
-    /// Pictures of shaders' inputs are due ([`Mounter::pictures_due`]).
-    pictures: bool,
-    /// The shader transitions that run (the shader display link moves them).
-    transitions: Vec<NodeId>,
-    /// Pages' and dialogs' transitions through a shader that run.
-    nav_overlays: Vec<crate::shader::NavOverlay>,
-    /// The screen transitions (`<ScreenTransition>`) and what they draw.
-    screen_transitions: rustc_hash::FxHashMap<NodeId, Option<Arc<nsh_core::shader::ShaderFill>>>,
-    /// The screen effect that draws (a [`crate::shader::ShaderHost`] whose
-    /// view is over the surface in the window).
-    screen_effect: Option<NodeId>,
-    /// The layers a screen effect masks: the root's and its dialogs'.
-    screen_masks: Vec<Retained<CALayer>>,
-    /// Until when the screen effect pictures the surface on every frame
-    /// (UIKit animates a dialog or a page that comes or goes).
-    screen_busy: Option<std::time::Instant>,
     /// Parents of screens, header items and modals (which are not
     /// subviews of their parent).
     hosts: rustc_hash::FxHashMap<NodeId, NodeId>,
     /// Stacks whose screens changed in the current batch.
     dirty_stacks: Vec<NodeId>,
+    /// A retained tab changed visibility; sync the newly visible stack.
+    bottom_bar_dirty: bool,
     /// Stacks whose screens changed during a push or pop transition: they
     /// catch up when it ends (UIKit breaks transitions that start while
     /// another one is running).
@@ -631,6 +605,12 @@ pub(crate) struct Mounter {
     areas: Vec<(NodeId, Retained<crate::selectable_view::AreaResponder>)>,
     /// The performance monitor, while it measures ([`Mounter::measure`]).
     fps: Option<std::rc::Rc<crate::fps::Fps>>,
+    /// Shader views and the GPU device they render with.
+    shaders: crate::shader::Shaders,
+    /// Texts whose color transitions.
+    text_colors: crate::interaction::TextColors,
+    /// The `transitionShader`s of pages and dialogs.
+    nav_shaders: rustc_hash::FxHashMap<NodeId, nsh_core::NavShader>,
     mtm: MainThreadMarker,
 }
 
@@ -686,18 +666,12 @@ impl Mounter {
             created: Vec::new(),
             disappearing: Default::default(),
             frame_link: crate::animation::frame_link(&target_for_link),
-            shader_link: crate::animation::shader_link(&target_for_link),
-            shader_frames: Vec::new(),
-            sampling: 0,
-            pictures: false,
-            transitions: Vec::new(),
-            nav_overlays: Vec::new(),
-            screen_transitions: rustc_hash::FxHashMap::default(),
-            screen_effect: None,
-            screen_masks: Vec::new(),
-            screen_busy: None,
+            shaders: crate::shader::Shaders::new(&target_for_link),
+            text_colors: crate::interaction::TextColors::new(&target_for_link),
+            nav_shaders: rustc_hash::FxHashMap::default(),
             hosts: Default::default(),
             dirty_stacks: Vec::new(),
+            bottom_bar_dirty: false,
             deferred_stacks: Vec::new(),
             dirty_headers: Vec::new(),
             dirty_modals: Vec::new(),
@@ -895,10 +869,11 @@ impl Mounter {
         true
     }
 
-    /// Whether a native animation runs.
+    /// Whether a native animation runs that ends by itself (not one
+    /// looping forever, which no test step waits for).
     #[cfg(feature = "dev")]
     pub(crate) fn animating(&self) -> bool {
-        self.animator.animating()
+        self.animator.finishing()
     }
 
     #[inline]
@@ -936,25 +911,6 @@ impl Mounter {
                     ViewKind::HeaderItem => Native::HeaderItem(NshView::new(self.mtm)),
                     ViewKind::InputAccessory => Native::InputAccessory(NshView::new(self.mtm)),
                     ViewKind::Canvas => Native::Canvas(crate::canvas::CanvasView::new(self.mtm)),
-                    ViewKind::Shader => Native::Shader(Box::new(crate::shader::ShaderHost::new(
-                        NshView::new(self.mtm),
-                        false,
-                        false,
-                    ))),
-                    ViewKind::ShaderEffect | ViewKind::ShaderTransition => {
-                        Native::Shader(Box::new(crate::shader::ShaderHost::new(
-                            NshView::new(self.mtm),
-                            true,
-                            kind == ViewKind::ShaderTransition,
-                        )))
-                    }
-                    ViewKind::ScreenEffect => Native::Shader(Box::new(
-                        crate::shader::ShaderHost::new_screen(NshView::new(self.mtm)),
-                    )),
-                    ViewKind::ScreenTransition => {
-                        self.screen_transitions.insert(id, None);
-                        Native::View(NshView::new(self.mtm))
-                    }
                     ViewKind::WebView => Native::Web(Box::new(WebHost::new(
                         self.mtm,
                         id,
@@ -999,18 +955,7 @@ impl Mounter {
                         .resize_with((idx + 1).next_power_of_two(), || None);
                 }
                 let modal = matches!(native, Native::Modal(_));
-                let mut slot = Slot::new(native);
-                // An effect's children go into the content view it hides.
-                let effect = matches!(kind, ViewKind::ShaderEffect | ViewKind::ShaderTransition);
-                if effect {
-                    slot.decor.set_effect();
-                }
-                self.views[idx] = Some(slot);
-                if effect {
-                    // Its content view exists before its children come,
-                    // styled or not.
-                    self.decorate(id);
-                }
+                self.views[idx] = Some(Slot::new(native));
                 if modal && self.touch_listeners > 0 {
                     self.add_touch_tracker(id);
                 }
@@ -1024,10 +969,6 @@ impl Mounter {
                 before,
             } => {
                 if self.insert_hosted(parent, child, before) {
-                    return false;
-                }
-                // A shader over the whole surface is nowhere in its views.
-                if self.is_screen(child) {
                     return false;
                 }
                 if self.disappearing.remove(&child)
@@ -1072,19 +1013,6 @@ impl Mounter {
             MountItem::Delete { id } => {
                 self.remove_hosted(id);
                 self.sticky.remove(&id);
-                self.screen_transitions.remove(&id);
-                if let Some(Slot {
-                    native: Native::Shader(host),
-                    ..
-                }) = self.slot(id)
-                    && host.screen
-                {
-                    host.view.removeFromSuperview();
-                }
-                if self.screen_effect == Some(id) {
-                    self.screen_effect = None;
-                    self.sync_screen();
-                }
                 // A removal animation it was running ends with it: its end
                 // must not find the id, which a new view may take.
                 self.disappearing.remove(&id);
@@ -1096,7 +1024,7 @@ impl Mounter {
                     // A modal deleted while presented (its subtree released
                     // without a remove) goes away too, as on Android.
                     if let Native::Modal(modal) = &mut s.native {
-                        modal.dismiss(|| {});
+                        modal.dismiss(false, || {});
                     }
                     if s.events.contains(EventKind::Touch) {
                         self.touch_listener_changed(false);
@@ -1108,6 +1036,8 @@ impl Mounter {
                     }
                     self.animated.retain(|&v| v != id);
                 }
+                self.shaders.remove(id);
+                self.nav_shaders.remove(&id);
             }
             MountItem::Frame { id, frame } => {
                 self.frames_applied = true;
@@ -1177,9 +1107,6 @@ impl Mounter {
                     if let Native::Video(video) = &s.native {
                         video.layout();
                     }
-                    if let Native::Shader(host) = &s.native {
-                        host.layout();
-                    }
                     if s.decor.sized() {
                         self.decorate(id);
                     }
@@ -1206,6 +1133,9 @@ impl Mounter {
                         .layer()
                         .setTransform(dynamic_transform(s, &self.animator));
                 }
+                if self.shaders.has(id) {
+                    self.layout_shader(id);
+                }
             }
             MountItem::TrackStates { id, states } => self.track_states(id, states),
             MountItem::Overflow { id, extent } => {
@@ -1225,14 +1155,21 @@ impl Mounter {
                 layout,
                 content,
             } => {
-                if let Some(Slot {
+                // The views alone: the texts' transitions are borrowed too.
+                if let Some(Some(Slot {
                     native: Native::Text(view),
                     events,
+                    style,
                     ..
-                }) = self.slot(id)
+                })) = self.views.get(id as usize)
                 {
                     let links = !text.links.is_empty() || view.has_links();
                     let events = *events;
+                    if let Some(old) = view.text() {
+                        // Its color moves to the new one over the
+                        // transition, drawn over the new lines.
+                        self.text_colors.text_changed(view, &old, &text, style);
+                    }
                     view.set_layout(text, layout, content);
                     // Pressable spans need the block's press recognizer.
                     if links {
@@ -1266,6 +1203,7 @@ impl Mounter {
                 pull_value,
                 keyboard_dismiss,
                 mirrored,
+                ..
             } => {
                 // A node that stops being vertical drops the width narrowed
                 // while it was: the extent it holds is measured the other way.
@@ -1420,62 +1358,51 @@ impl Mounter {
             }
             MountItem::Refreshing { id, refreshing } => self.set_refreshing(id, refreshing),
             MountItem::Canvas { id, drawing } => self.set_drawing(id, drawing),
-            MountItem::ShaderProgram { program } => {
-                if let Some(gpu) = nsh_metal::gpu() {
-                    crate::shader::watch(&gpu, self.target.mounter());
-                    gpu.add_program(&program);
-                }
-            }
-            MountItem::Shader { id, fill } => {
-                if let Some(drawn) = self.screen_transitions.get_mut(&id) {
-                    *drawn = fill;
-                } else {
-                    let screen = self.is_screen(id);
-                    if screen {
-                        // The core gives one screen effect a fill at a time.
-                        match &fill {
-                            Some(_) => self.screen_effect = Some(id),
-                            None if self.screen_effect == Some(id) => self.screen_effect = None,
-                            None => {}
-                        }
-                    }
-                    self.set_shader(id, fill);
-                    if screen {
-                        self.sync_screen();
-                    }
-                }
-            }
-            MountItem::ShaderInput { id } => {
-                if let Some(Slot {
-                    native: Native::Shader(host),
-                    ..
-                }) = self.slot(id)
-                {
-                    host.mark(crate::shader::CONTENT | crate::shader::BACKDROP);
-                    self.pictures_due();
-                }
-            }
-            MountItem::ShaderTransition { id, duration }
-                if self.screen_transitions.contains_key(&id) =>
-            {
-                self.start_screen_transition(id, duration);
-            }
             MountItem::ShaderTransition { id, duration } => {
-                let started = match self.slot(id) {
-                    Some(Slot {
-                        native: Native::Shader(host),
-                        decor,
-                        ..
-                    }) => host.start(decor.content(), duration),
-                    _ => false,
-                };
-                if started {
-                    self.sync_effect(id);
-                    if !self.transitions.contains(&id) {
-                        self.transitions.push(id);
-                    }
-                    self.pictures_due();
+                self.shaders.start_transition(id, duration);
+            }
+            MountItem::ShaderInput { id } => self.shaders.input_changed(id),
+            MountItem::NavShader { id, shader } => match shader {
+                Some(shader) => {
+                    self.nav_shaders.insert(id, shader);
                 }
+                None => {
+                    self.nav_shaders.remove(&id);
+                }
+            },
+            MountItem::Shader { id, layer } => {
+                let scale = self.display_scale();
+                let role = layer.as_ref().map(|l| l.role);
+                let screen = matches!(
+                    role,
+                    Some(ShaderRole::Screen | ShaderRole::ScreenTransition)
+                );
+                // The children it draws: its own (an effect's or a
+                // transition's), or the root's (a screen's).
+                let own = matches!(role, Some(ShaderRole::Effect | ShaderRole::Transition));
+                let mut children = None;
+                if let Some(s) = self.slot_mut(id) {
+                    let view = s.native.view().retain();
+                    children = s.decor.set_effect(&view, own);
+                }
+                let host = if screen {
+                    let root = self.slot_mut(nsh_core::ROOT_ID);
+                    root.map(|r| {
+                        let view = r.native.view().retain();
+                        children = r.decor.set_effect(&view, true);
+                        view
+                    })
+                } else {
+                    self.slot(id).map(|s| s.native.view().retain())
+                };
+                if let (Some(s), Some(host)) =
+                    (self.views.get(id as usize).and_then(Option::as_ref), host)
+                {
+                    self.shaders
+                        .set(id, &host, children, &s.style, scale, layer);
+                }
+                // Bindings that came before it.
+                self.push_shader_args(id);
             }
             MountItem::AnimationBindings { id, bindings } => {
                 if let Some(s) = self.slot_mut(id) {
@@ -1493,6 +1420,7 @@ impl Mounter {
                     if let Some(s) = self.slot(id) {
                         apply_dynamic(s, &self.animator);
                     }
+                    self.push_shader_args(id);
                     // A component gets what is bound again.
                     if let Some(Some(s)) = self.views.get_mut(id as usize)
                         && let Native::Component(host) = &mut s.native
@@ -1519,7 +1447,11 @@ impl Mounter {
                     ..
                 }) = self.slot_mut(id)
                 {
+                    let hides = config.hides_bottom_bar_when_pushed;
                     screen.config = *config;
+                    // Before the push that shows it: `willShow` reads this the
+                    // moment the screen goes on the stack.
+                    screen.set_hides_bottom_bar(hides);
                     self.dirty_headers.push(id);
                     if let Some(&stack) = self.hosts.get(&id) {
                         self.dirty_stacks.push(stack);
@@ -1527,13 +1459,13 @@ impl Mounter {
                 }
             }
             MountItem::NativeProps { id, props } => self.set_native_props(id, props),
-            MountItem::ModalConfig { id, config, shader } => {
+            MountItem::ModalConfig { id, config } => {
                 if let Some(Slot {
                     native: Native::Modal(modal),
                     ..
                 }) = self.slot_mut(id)
                 {
-                    modal.configure(config, shader);
+                    modal.configure(config);
                 }
             }
             MountItem::Animation(op) => {
@@ -1655,9 +1587,18 @@ impl Mounter {
             (Command::Blur, Native::Input(input)) => {
                 input.editor_view().resignFirstResponder();
             }
-            // On the root: whatever is focused.
+            // On the root: whatever is focused, also in the modals this
+            // surface presents (UIKit hosts them outside the root view). Not
+            // the window's: that is the embedding app's too.
             (Command::Blur, native) if id == nsh_core::ROOT_ID => {
                 native.view().endEditing(true);
+                for slot in self.views.iter().flatten() {
+                    if let Native::Modal(modal) = &slot.native
+                        && modal.presented
+                    {
+                        modal.view.endEditing(true);
+                    }
+                }
             }
             (Command::ScrollTo { x, y, animated }, Native::Scroll(scroll)) => {
                 let inset = scroll.adjustedContentInset();
@@ -1671,6 +1612,9 @@ impl Mounter {
                 );
                 self.target.scroll_applied(id);
                 scroll.setContentOffset_animated(offset, animated);
+            }
+            (Command::ScrollTo { y, animated, .. }, Native::Input(input)) => {
+                input.scroll_to(y, animated);
             }
             (
                 Command::ZoomTo {
@@ -2095,7 +2039,9 @@ impl Mounter {
     }
 
     /// A JS responder took the touches on `id`: with `block`, the scroll
-    /// views around it stop scrolling until it lets go.
+    /// views around it stop scrolling until it lets go, and the presses of
+    /// the views around it end without a press (the finger is the
+    /// responder's: a drag of a selection handle is no tap on the text).
     fn set_js_responder(&mut self, id: NodeId, block: bool) {
         self.clear_js_responder();
         if !block {
@@ -2104,6 +2050,14 @@ impl Mounter {
         let Some(s) = self.slot(id) else { return };
         let mut current = s.native.view().superview();
         while let Some(v) = current {
+            for recognizer in v.gestureRecognizers().iter().flat_map(|r| r.iter()) {
+                if recognizer.downcast_ref::<PressRecognizer>().is_some() && recognizer.isEnabled()
+                {
+                    // Turning a recognizer off cancels its gesture.
+                    recognizer.setEnabled(false);
+                    recognizer.setEnabled(true);
+                }
+            }
             if let Some(scroll) = v.downcast_ref::<UIScrollView>() {
                 let pan = scroll.panGestureRecognizer();
                 if pan.isEnabled() {
@@ -2198,6 +2152,12 @@ impl Mounter {
     fn set_view_style(&mut self, id: NodeId, style: ViewStyle) {
         let mtm = self.mtm;
         let target = self.target.clone();
+        if self
+            .slot(id)
+            .is_some_and(|s| s.style.hidden != style.hidden)
+        {
+            self.bottom_bar_dirty = true;
+        }
         let Some(s) = self.slot_mut(id) else { return };
         let view = s.native.view().retain();
         let layer = view.layer();
@@ -2283,6 +2243,10 @@ impl Mounter {
                 self.pending_images.push(id);
             }
         }
+        // Its corners clip the shader.
+        if self.shaders.has(id) {
+            self.layout_shader(id);
+        }
     }
 
     /// Restyles with Core Animation's implicit animations on.
@@ -2298,8 +2262,7 @@ impl Mounter {
             s.native.view(),
             kind,
             bound.as_ref().unwrap_or(&s.style),
-            background.0,
-            background.1,
+            background,
             mtm,
         );
         if bound.is_some() {
@@ -2308,7 +2271,7 @@ impl Mounter {
     }
 
     /// The core asked for the states of `id` it reads (`active:`, ...).
-    fn track_states(&mut self, id: NodeId, states: u8) {
+    fn track_states(&mut self, id: NodeId, states: u16) {
         let Some(s) = self.slot_mut(id) else { return };
         if s.tracked == states {
             return;
@@ -2319,7 +2282,7 @@ impl Mounter {
     }
 
     /// An interaction state of `id` changed: tells the core if it reads it.
-    fn report_state(&mut self, id: NodeId, bit: u8, on: bool) {
+    fn report_state(&mut self, id: NodeId, bit: u16, on: bool) {
         let Some(s) = self.slot_mut(id) else { return };
         let states = if on { s.states | bit } else { s.states & !bit };
         if states == s.states {
@@ -2333,7 +2296,8 @@ impl Mounter {
     }
 
     /// A pointer (an iPad's, a Mac's mouse) entered (`Began`), moved over
-    /// or left view `id`, at `in_window` (the window's coordinates).
+    /// (`Changed`) or left view `id`, at `in_window` (the window's
+    /// coordinates): `onMouseEnter`, `onMouseMove`, `onMouseLeave`.
     pub(crate) fn hover(
         &mut self,
         id: NodeId,
@@ -2349,30 +2313,30 @@ impl Mounter {
         let Some(events) = self.slot(id).map(|s| s.events) else {
             return;
         };
-        let changed = match state {
-            UIGestureRecognizerState::Began => Some(EventKind::HoverIn),
+        // The movement that brings the pointer in is a move too, as on the
+        // desktops and in the DOM.
+        let kinds: &[EventKind] = match state {
+            UIGestureRecognizerState::Began => &[EventKind::MouseEnter, EventKind::MouseMove],
+            UIGestureRecognizerState::Changed => &[EventKind::MouseMove],
             UIGestureRecognizerState::Ended | UIGestureRecognizerState::Cancelled => {
-                Some(EventKind::HoverOut)
+                &[EventKind::MouseLeave]
             }
-            _ => None,
+            _ => return,
         };
-        if let Some(kind) = changed.filter(|k| events.contains(*k)) {
-            self.control.dispatch_event(id, kind, EventPayload::None);
-        }
-        if !on || !events.contains(EventKind::HoverMove) {
+        if !kinds.iter().any(|&k| events.contains(k)) {
             return;
         }
         let Some(view) = self.slot(id).map(|s| s.native.view().retain()) else {
             return;
         };
         let (position, page_position) = self.pointer_positions(&view, in_window);
-        let event = nsh_core::HoverEvent {
-            position,
-            page_position,
-            modifiers: key_modifiers(modifiers),
-        };
-        self.control
-            .dispatch_event(id, EventKind::HoverMove, EventPayload::Hover(event));
+        // A hover recognizer only reports a pointer with no button down.
+        let event =
+            nsh_core::MouseEvent::new(position, page_position, key_modifiers(modifiers), None);
+        for &kind in kinds.iter().filter(|&&k| events.contains(k)) {
+            self.control
+                .dispatch_event(id, kind, EventPayload::Mouse(event));
+        }
     }
 
     /// A secondary click on view `id`, at `in_window` (the window's
@@ -2440,16 +2404,7 @@ impl Mounter {
         let Some(s) = self.views.get_mut(id as usize).and_then(Option::as_mut) else {
             return;
         };
-        let mut background = s.style.background_color;
-        let mut animated = false;
-        for &(prop, node) in &s.bindings {
-            if prop == AnimationProp::BackgroundColor {
-                animated = true;
-                if let AnimationValue::Color(c) = animator.eval(node) {
-                    background = Color(c);
-                }
-            }
-        }
+        let background = dynamic_background(s, animator);
         let kind = s.native.kind();
         let bound = bound_style(s, animator);
         s.decor.apply(
@@ -2457,14 +2412,11 @@ impl Mounter {
             kind,
             bound.as_ref().unwrap_or(&s.style),
             background,
-            animated,
             mtm,
         );
         if bound.is_some() {
             apply_bound_decor(s, animator);
         }
-        // The content view of an effect is made by the decoration.
-        self.sync_effect(id);
     }
 
     fn set_image(
@@ -2521,7 +2473,9 @@ impl Mounter {
     /// The surface's traits changed: on a screen of another scale (an
     /// external display, Catalyst), images decode again for it.
     pub(crate) fn traits_changed(&mut self) {
-        if self.display_scale() == self.image_scale {
+        let scale = self.display_scale();
+        self.shaders.rescale(scale);
+        if scale == self.image_scale {
             return;
         }
         for (id, slot) in self.views.iter_mut().enumerate() {
@@ -2663,389 +2617,6 @@ impl Mounter {
         }
     }
 
-    /// What shader view `id` draws; loads its images.
-    fn set_shader(&mut self, id: NodeId, fill: Option<Arc<nsh_core::shader::ShaderFill>>) {
-        let Some(Slot {
-            native: Native::Shader(host),
-            ..
-        }) = self.slot(id)
-        else {
-            return;
-        };
-        let scale = host.view.contentScaleFactor();
-        let load = host.set(fill);
-        let every_frame = host.draws_every_frame();
-        for (slot, uri) in load {
-            // At their natural size: the shader stretches them anyway.
-            match self
-                .images
-                .request(id, &uri, None, 0, scale, crate::image::Look::default())
-            {
-                Request::Ready(decoded) if decoded.vector => {
-                    log::warn!(target: "js", "<Shader> image failed: {}", not_a_bitmap(&uri));
-                }
-                Request::Ready(decoded) => self.shader_image(id, Some(slot), &uri, &decoded),
-                Request::Pending => {}
-            }
-        }
-        if every_frame && !self.shader_frames.contains(&id) {
-            self.shader_frames.push(id);
-            self.shader_link.setPaused(false);
-        }
-        // The fill follows the view's corners.
-        // A fill follows the view's corners; an effect reaches beyond them.
-        let (content, effect, sampling) = match self.slot(id) {
-            Some(Slot {
-                native: Native::Shader(host),
-                ..
-            }) => (
-                (!host.effect).then(|| host.content_layer()).flatten(),
-                host.effect,
-                host.inputs() != 0,
-            ),
-            _ => (None, false, false),
-        };
-        if let Some(s) = self.views.get_mut(id as usize).and_then(Option::as_mut)
-            && !effect
-            && s.decor.set_shader_layer(content)
-        {
-            self.decorate(id);
-        }
-        if effect {
-            self.sync_effect(id);
-        }
-        self.sampling = self
-            .views
-            .iter()
-            .flatten()
-            .filter(|s| matches!(&s.native, Native::Shader(h) if h.inputs() != 0))
-            .count();
-        if sampling {
-            self.pictures_due();
-        }
-    }
-
-    /// An effect's children show through its shader only while it draws
-    /// one.
-    fn sync_effect(&self, id: NodeId) {
-        if let Some(Slot {
-            native: Native::Shader(host),
-            decor,
-            ..
-        }) = self.slot(id)
-            && host.effect
-            && !host.screen
-            && let Some(content) = decor.content()
-        {
-            crate::shader::hide_children(content, host.shows());
-        }
-    }
-
-    /// Whether view `id` is a screen effect's or a screen transition's.
-    fn is_screen(&self, id: NodeId) -> bool {
-        self.screen_transitions.contains_key(&id)
-            || matches!(self.slot(id), Some(Slot { native: Native::Shader(h), .. }) if h.screen)
-    }
-
-    /// A screen transition starts, before the rest of its batch: the window
-    /// over the surface pictured now, and again on the next display frame,
-    /// through its shader over it ([`crate::shader::NavOverlay`]).
-    fn start_screen_transition(&mut self, id: NodeId, duration: std::time::Duration) {
-        let Some(Some(fill)) = self.screen_transitions.get(&id).cloned() else {
-            return;
-        };
-        let Some(root) = self
-            .slot(nsh_core::ROOT_ID)
-            .map(|s| s.native.view().retain())
-        else {
-            return;
-        };
-        let mut shader = nsh_core::NavShader::default();
-        shader.fill = fill;
-        shader.duration = duration;
-        let Some(p) = crate::navigation::NavPlan::before(&root, shader, false) else {
-            return;
-        };
-        if let Some(overlay) =
-            crate::shader::NavOverlay::new(&p.host, p.rect, &p.shader, p.before, false)
-        {
-            self.nav_overlays.push(overlay);
-            self.shader_link.setPaused(false);
-        }
-    }
-
-    /// The screen effect's view over the surface in its window, on top; the
-    /// root's and the dialogs' layers masked while it draws (their views
-    /// keep their touches), unmasked when it does not.
-    fn sync_screen(&mut self) {
-        let drawn = self.screen_effect.and_then(|id| match self.slot(id) {
-            Some(Slot {
-                native: Native::Shader(host),
-                ..
-            }) if host.shows() => Some(host.view.retain()),
-            _ => None,
-        });
-        let root = self
-            .slot(nsh_core::ROOT_ID)
-            .map(|s| s.native.view().retain());
-        let mut masked: Vec<Retained<CALayer>> = Vec::new();
-        if let (Some(view), Some(root)) = (&drawn, &root)
-            && let Some(window) = root.window()
-        {
-            let rect = root.convertRect_toView(root.bounds(), Some(&window));
-            if view.frame() != rect {
-                view.setFrame(rect);
-            }
-            let on_top = window
-                .subviews()
-                .lastObject()
-                .is_some_and(|v| std::ptr::eq(&*v, &***view as &UIView));
-            if !on_top {
-                window.addSubview(view);
-            }
-            masked.push(root.layer());
-            for slot in self.views.iter().flatten() {
-                if let Native::Modal(m) = &slot.native
-                    && m.presented
-                {
-                    masked.push(m.view.layer());
-                }
-            }
-        } else if let Some(view) = &drawn {
-            view.removeFromSuperview();
-        }
-        if let Some(id) = self.screen_effect
-            && drawn.is_none()
-            && let Some(Slot {
-                native: Native::Shader(host),
-                ..
-            }) = self.slot(id)
-        {
-            host.view.removeFromSuperview();
-        }
-        crate::decor::quiet(|| {
-            for layer in &self.screen_masks {
-                if !masked.iter().any(|l| std::ptr::eq(&**l, &**layer)) {
-                    // SAFETY: clearing the mask the screen effect set.
-                    unsafe { layer.setMask(None) };
-                }
-            }
-            for layer in &masked {
-                if layer.mask().is_none() {
-                    // SAFETY: a fresh, empty mask layer owned by the layer.
-                    unsafe { layer.setMask(Some(&CALayer::new())) };
-                }
-            }
-        });
-        if let Some(root) = &root {
-            let screen = drawn
-                .clone()
-                .map(|v| (Retained::into_super(v), masked.clone()));
-            crate::shader::set_screen(root, screen);
-        }
-        self.screen_masks = masked;
-        if drawn.is_some() {
-            if let Some(id) = self.screen_effect
-                && let Some(Slot {
-                    native: Native::Shader(host),
-                    ..
-                }) = self.slot(id)
-            {
-                host.layout();
-                host.mark(crate::shader::CONTENT);
-            }
-            self.pictures_due();
-        }
-    }
-
-    /// Pictures of shaders' inputs are due: taken on the shader display
-    /// link's next frame (after UIKit drew what changed).
-    fn pictures_due(&mut self) {
-        self.pictures = true;
-        self.shader_link.setPaused(false);
-    }
-
-    /// The UI thread changed view `id` (an animated value, scrolling, an
-    /// image that loaded): the effects around it and every backdrop take
-    /// their pictures again.
-    fn ui_changed(&mut self, id: NodeId) {
-        if self.sampling == 0 {
-            return;
-        }
-        if let Some(screen) = self.screen_effect
-            && let Some(Slot {
-                native: Native::Shader(host),
-                ..
-            }) = self.slot(screen)
-        {
-            host.mark(crate::shader::CONTENT);
-            self.pictures = true;
-            self.shader_link.setPaused(false);
-        }
-        let mut marked = false;
-        let mut view = self.slot(id).map(|s| s.native.view().retain());
-        while let Some(v) = view {
-            if let Some(Slot {
-                native: Native::Shader(host),
-                ..
-            }) = self.slot(v.tag() as NodeId)
-                && host.effect
-                && std::ptr::eq(&*host.view as &UIView, &*v)
-            {
-                host.mark(crate::shader::CONTENT);
-                marked = true;
-            }
-            view = v.superview();
-        }
-        for slot in self.views.iter().flatten() {
-            if let Native::Shader(host) = &slot.native
-                && host.inputs() & crate::shader::BACKDROP != 0
-            {
-                host.mark(crate::shader::BACKDROP);
-                marked = true;
-            }
-        }
-        if marked {
-            self.pictures_due();
-        }
-    }
-
-    /// Image `uri` of shader view `id` loaded (into `slot`, or each slot
-    /// showing it).
-    fn shader_image(&mut self, id: NodeId, slot: Option<usize>, uri: &str, decoded: &DecodedImage) {
-        let Some(Slot {
-            native: Native::Shader(host),
-            ..
-        }) = self.slot(id)
-        else {
-            return;
-        };
-        // SAFETY: UIImage's documented getters.
-        let (image, size) = unsafe { (decoded.image.CGImage(), decoded.image.size()) };
-        let Some(image) = image else { return };
-        match slot {
-            Some(slot) => host.set_image(slot, uri, &image, (size.width, size.height)),
-            None => {
-                for slot in 0..nsh_core::shader::layout::MAX_IMAGES {
-                    host.set_image(slot, uri, &image, (size.width, size.height));
-                }
-            }
-        }
-    }
-
-    /// Program `program` is ready, or a drawable was shown: the shader
-    /// views waiting for either draw.
-    pub(crate) fn shaders_draw(&mut self, program: Option<u32>) {
-        for slot in self.views.iter().flatten() {
-            if let Native::Shader(host) = &slot.native
-                && host.waits_for(program)
-            {
-                host.draw();
-            }
-        }
-    }
-
-    /// The shader display link fired: the pictures due are taken and the
-    /// shaders that read `nsh.time` draw.
-    pub(crate) fn shader_frame(&mut self) {
-        let busy = self.screen_effect.is_some()
-            && (!self.nav_overlays.is_empty()
-                || !self.transitions.is_empty()
-                || self
-                    .screen_busy
-                    .is_some_and(|t| std::time::Instant::now() < t));
-        if busy {
-            // What UIKit or a transition animates is the screen's content.
-            self.sync_screen();
-        }
-        if std::mem::take(&mut self.pictures) {
-            self.take_screen();
-            let root = self
-                .slot(nsh_core::ROOT_ID)
-                .map(|s| s.native.view().retain());
-            if let Some(root) = root {
-                for slot in self.views.iter().flatten() {
-                    if let Native::Shader(host) = &slot.native
-                        && host.due()
-                        && !host.screen
-                    {
-                        host.take_pictures(slot.decor.content(), &root);
-                    }
-                }
-            }
-        }
-        let ids = std::mem::take(&mut self.shader_frames);
-        let mut keep = Vec::with_capacity(ids.len());
-        for id in ids {
-            let Some(Slot {
-                native: Native::Shader(host),
-                ..
-            }) = self.slot(id)
-            else {
-                continue;
-            };
-            if host.draws_every_frame() {
-                host.draw();
-            }
-            // Kept while the view lives: it may show again.
-            keep.push(id);
-        }
-        let running = std::mem::take(&mut self.transitions);
-        for id in running {
-            let ticks = match self.slot(id) {
-                Some(Slot {
-                    native: Native::Shader(host),
-                    ..
-                }) => host.tick(),
-                _ => continue,
-            };
-            if ticks {
-                self.transitions.push(id);
-            } else {
-                // Ended: its children show again.
-                self.sync_effect(id);
-            }
-        }
-        self.nav_overlays.retain_mut(|o| o.tick());
-        if keep.is_empty()
-            && !self.pictures
-            && !busy
-            && self.transitions.is_empty()
-            && self.nav_overlays.is_empty()
-        {
-            self.shader_link.setPaused(true);
-        }
-        self.shader_frames = keep;
-    }
-
-    /// The screen effect's content, when due: the window over the surface
-    /// with the transitions that run drawn over it.
-    fn take_screen(&mut self) {
-        let Some(id) = self.screen_effect else { return };
-        let Some(root) = self
-            .slot(nsh_core::ROOT_ID)
-            .map(|s| s.native.view().retain())
-        else {
-            return;
-        };
-        let Some(window) = root.window() else { return };
-        let window: Retained<UIView> = Retained::into_super(window);
-        let rect = root.convertRect_toView(root.bounds(), Some(&window));
-        let overlays: Vec<_> = self
-            .nav_overlays
-            .iter_mut()
-            .filter_map(|o| o.picture_in(&window))
-            .collect();
-        if let Some(Slot {
-            native: Native::Shader(host),
-            ..
-        }) = self.slot(id)
-            && host.due()
-        {
-            host.take_screen(&window, rect, &overlays);
-        }
-    }
-
     /// What the image loader reports.
     /// The disk cache the images it loads go through.
     pub(crate) fn set_image_cache(&mut self, cache: Option<nsh_core::image::DiskCache>) {
@@ -3095,24 +2666,6 @@ impl Mounter {
 
     pub(crate) fn image_loaded(&mut self, key: &str, result: Result<DecodedImage, String>) {
         for id in self.images.finish(key, &result) {
-            self.ui_changed(id);
-            if let Some(Slot {
-                native: Native::Shader(_),
-                ..
-            }) = self.slot(id)
-            {
-                match (&result, key.strip_prefix("0@")) {
-                    (Ok(decoded), Some(uri)) if decoded.vector => {
-                        log::warn!(target: "js", "<Shader> image failed: {}", not_a_bitmap(uri));
-                    }
-                    (Ok(decoded), Some(uri)) => self.shader_image(id, None, uri, decoded),
-                    (Err(message), _) => {
-                        log::warn!(target: "js", "<Shader> image failed: {message}")
-                    }
-                    _ => {}
-                }
-                continue;
-            }
             if let Some(Slot {
                 native: Native::Canvas(view),
                 ..
@@ -3128,6 +2681,11 @@ impl Mounter {
                     _ => {}
                 }
                 continue;
+            }
+            if self.shaders.pictured()
+                && let Some(s) = self.views.get(id as usize).and_then(Option::as_ref)
+            {
+                self.shaders.ui_changed(s.native.view());
             }
             let Some(s) = self.slot_mut(id) else { continue };
             if s.placeholder_key.as_deref() == Some(key) {
@@ -3279,10 +2837,7 @@ impl Mounter {
             press.set_own(own_press, handles_press);
             press.set_long_press_delay(slot.long_press_delay);
         }
-        let wants_hover = slot.tracked & nsh_core::tailwind::state::HOVERED != 0
-            || events.contains(EventKind::HoverIn)
-            || events.contains(EventKind::HoverOut)
-            || events.contains(EventKind::HoverMove);
+        let wants_hover = nsh_core::input::hoverable(slot.tracked, events);
         toggle(&mut slot.gestures.hover, wants_hover, view, || {
             // SAFETY: `handleHover:` is implemented by the target, which
             // outlives the recognizer.
@@ -3517,12 +3072,9 @@ impl Mounter {
                 .iter()
                 .filter(|s| !stack.popped.contains(s))
                 .filter_map(|&s| match self.slot(s).map(|s| &s.native) {
-                    Some(Native::Screen(screen)) => Some((
-                        s,
-                        screen.controller.clone(),
-                        screen.config.animation,
-                        screen.config.shader.clone(),
-                    )),
+                    Some(Native::Screen(screen)) => {
+                        Some((s, screen.controller.clone(), screen.config.animation))
+                    }
                     _ => None,
                 })
                 .collect();
@@ -3531,26 +3083,51 @@ impl Mounter {
                 .topViewController()
                 .and_then(|c| c.downcast::<crate::navigation::ScreenController>().ok())
                 .and_then(|c| match self.slot(c.screen_id()).map(|s| &s.native) {
-                    Some(Native::Screen(screen)) => {
-                        Some((screen.config.animation, screen.config.shader.clone()))
-                    }
+                    Some(Native::Screen(screen)) => Some(screen.config.animation),
                     _ => None,
                 });
-            if let Some((shader, before, reverse)) = stack.reconcile(&screens, leaving)
-                && let Some(view) = stack.nav.view()
-                && let Some(host) = view.superview()
-                && let Some(overlay) =
-                    crate::shader::NavOverlay::new(&host, view.frame(), &shader, before, reverse)
-            {
-                self.nav_overlays.push(overlay);
-                self.shader_link.setPaused(false);
-            }
+            let top = screens.last().map(|s| s.0);
+            let leaving_id = stack
+                .nav
+                .topViewController()
+                .and_then(|c| c.downcast::<crate::navigation::ScreenController>().ok())
+                .map(|c| c.screen_id());
+            let shaders = (
+                top.and_then(|id| self.nav_shaders.get(&id)),
+                leaving_id.and_then(|id| self.nav_shaders.get(&id)),
+            );
+            let scale = self.display_scale();
+            let Some(Slot {
+                native: Native::Stack(stack),
+                ..
+            }) = self.views.get(id as usize).and_then(Option::as_ref)
+            else {
+                continue;
+            };
+            let overlays = &mut self.shaders;
+            // Pictured before the change, which happens at once.
+            stack.reconcile(&screens, leaving, shaders, |view, shader, pops| {
+                if let Some(window) = view.window() {
+                    let rect = view.convertRect_toView(view.bounds(), Some(&window));
+                    overlays.nav_overlay(&window, rect, scale, shader, pops);
+                }
+            });
+            // A page whose options arrive while it is already on screen: the
+            // stack itself does not change, and the bar still has to follow.
+            stack.sync_bottom_bar();
             if let Some(Slot {
                 native: Native::Stack(stack),
                 ..
             }) = self.slot_mut(id)
             {
                 stack.contain();
+            }
+        }
+        if std::mem::take(&mut self.bottom_bar_dirty) {
+            for slot in self.views.iter().flatten() {
+                if let Native::Stack(stack) = &slot.native {
+                    stack.sync_bottom_bar();
+                }
             }
         }
         let mut headers = std::mem::take(&mut self.dirty_headers);
@@ -3582,37 +3159,41 @@ impl Mounter {
             }
         }
         let modals = std::mem::take(&mut self.dirty_modals);
-        if !modals.is_empty() && self.screen_effect.is_some() {
-            self.screen_busy =
-                Some(std::time::Instant::now() + std::time::Duration::from_millis(700));
-            self.pictures_due();
-        }
         let root = self
             .slot(nsh_core::ROOT_ID)
             .map(|s| s.native.view().retain());
+        let scale = self.display_scale();
         for id in modals {
             let shown = self.hosts.contains_key(&id);
             let control = self.control.clone();
             let Some(Slot {
                 native: Native::Modal(modal),
                 ..
-            }) = self.slot_mut(id)
+            }) = self.views.get_mut(id as usize).and_then(Option::as_mut)
             else {
                 continue;
             };
-            let plan = if shown {
-                root.as_ref().and_then(|root| modal.present(root))
+            // Through its shader: the window where the surface is, pictured
+            // before it comes or goes at once.
+            let shader = self
+                .nav_shaders
+                .get(&id)
+                .filter(|_| modal.changes(shown))
+                .zip(root.as_ref().and_then(|r| Some((r, r.window()?))));
+            if let Some((shader, (root, window))) = &shader {
+                let rect = root.convertRect_toView(root.bounds(), Some(window));
+                self.shaders
+                    .nav_overlay(window, rect, scale, shader, !shown);
+            }
+            let at_once = shader.is_some();
+            if shown {
+                if let Some(root) = &root {
+                    modal.present(root, at_once);
+                }
             } else {
-                modal.dismiss(move || {
+                modal.dismiss(at_once, move || {
                     control.dispatch_event(id, EventKind::Dismiss, EventPayload::None)
-                })
-            };
-            if let Some(p) = plan
-                && let Some(overlay) =
-                    crate::shader::NavOverlay::new(&p.host, p.rect, &p.shader, p.before, p.reverse)
-            {
-                self.nav_overlays.push(overlay);
-                self.shader_link.setPaused(false);
+                });
             }
         }
     }
@@ -3827,13 +3408,23 @@ impl Mounter {
                     .map(objc2_foundation::NSString::from_str);
                 view.setAccessibilityLabel(label.as_deref(), mtm);
                 view.setAccessibilityElementsHidden(props.accessibility.hidden, mtm);
+                // An input that is no target lets touches through to the
+                // views below it (an editor's hidden input at its caret,
+                // over the selection's handles); it stays able to become
+                // the first responder and take typed text.
+                if matches!(s.native, Native::Input(_)) {
+                    view.setUserInteractionEnabled(!matches!(
+                        props.pointer_events,
+                        nsh_core::PointerEvents::None | nsh_core::PointerEvents::BoxNone
+                    ));
+                }
             }
         }
         // After the props: the texts below read whether they are in an area.
         match (area, was_area) {
             (Some(view), false) => self.areas.push((
                 id,
-                crate::selectable_view::AreaResponder::attach(&view, mtm),
+                crate::selectable_view::AreaResponder::attach(&view, mtm, self.control.clone()),
             )),
             (None, true) => {
                 if let Some(i) = self.areas.iter().position(|(a, _)| *a == id) {
@@ -4201,6 +3792,33 @@ impl Mounter {
         self.control.frame();
     }
 
+    /// The shaders' display link fired.
+    pub(crate) fn shader_frame(&mut self) {
+        self.shaders.frame();
+    }
+
+    /// The display link of texts whose color transitions fired.
+    pub(crate) fn text_color_frame(&mut self) {
+        self.text_colors.frame();
+    }
+
+    /// Shader view `id` follows its frame and corners.
+    fn layout_shader(&mut self, id: NodeId) {
+        let scale = self.display_scale();
+        if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref) {
+            self.shaders.layout(id, &s.style, scale);
+        }
+    }
+
+    /// The bound uniforms of shader view `id` onto its shader.
+    fn push_shader_args(&mut self, id: NodeId) {
+        if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref)
+            && self.shaders.has(id)
+        {
+            self.shaders.set_args(id, shader_args(s, &self.animator));
+        }
+    }
+
     /// Fades or grows in the views a layout animation created.
     fn animate_appearing(&mut self, animation: &LayoutAnimation) {
         let Some(t) = animation.create else { return };
@@ -4399,7 +4017,11 @@ impl Mounter {
 
     fn follow_scroll(&mut self, id: NodeId, offset: CGPoint) {
         self.pin_sticky(id);
-        self.ui_changed(id);
+        if self.shaders.pictured()
+            && let Some(s) = self.views.get(id as usize).and_then(Option::as_ref)
+        {
+            self.shaders.ui_changed(s.native.view());
+        }
         for (_, area) in &self.areas {
             area.scrolled();
         }
@@ -4458,6 +4080,19 @@ impl Mounter {
                 apply_dynamic(s, animator);
             }
         }
+        // Shaders get their bound uniforms; those that picture the views
+        // take them again.
+        let pictured = self.shaders.pictured();
+        for &id in &self.animated {
+            if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref) {
+                if self.shaders.has(id) {
+                    self.shaders.set_args(id, shader_args(s, animator));
+                }
+                if pictured {
+                    self.shaders.ui_changed(s.native.view());
+                }
+            }
+        }
         // Components get their bound props' changes (no view borrowed while
         // they run but their own slot).
         for &id in &self.animated {
@@ -4465,11 +4100,6 @@ impl Mounter {
                 && let Native::Component(host) = &mut s.native
             {
                 host.push(&s.bindings, animator);
-            }
-        }
-        if self.sampling > 0 {
-            for id in self.animated.clone() {
-                self.ui_changed(id);
             }
         }
         // Sticky cells that stick an animated value further in follow it.
@@ -4492,7 +4122,6 @@ impl Drop for Mounter {
     fn drop(&mut self) {
         // The link retains its target; invalidating breaks the cycle.
         self.frame_link.invalidate();
-        self.shader_link.invalidate();
     }
 }
 
@@ -4566,18 +4195,16 @@ fn set_frame(view: &UIView, frame: Bounds<Points>) {
 }
 
 /// The opacity to show: the style's or its animated value.
-fn dynamic_background(slot: &Slot, animator: &Animator) -> (Color, bool) {
+fn dynamic_background(slot: &Slot, animator: &Animator) -> Color {
     let mut background = slot.style.background_color;
-    let mut animated = false;
     for &(prop, node) in &slot.bindings {
-        if prop == AnimationProp::BackgroundColor {
-            animated = true;
-            if let AnimationValue::Color(c) = animator.eval(node) {
-                background = Color(c);
-            }
+        if prop == AnimationProp::BackgroundColor
+            && let AnimationValue::Color(c) = animator.eval(node)
+        {
+            background = Color(c);
         }
     }
-    (background, animated)
+    background
 }
 
 fn dynamic_opacity(slot: &Slot, animator: &Animator) -> f32 {
@@ -4682,83 +4309,42 @@ fn scaled_transform(t: &CATransform3D, f: CGFloat) -> CATransform3D {
     out
 }
 
-/// The style to shape a view's decoration by when its border or shadow is
-/// bound: the bound values in place of the static ones, and the layers for
-/// them made even while they are transparent (they may not stay so).
+/// The style to shape a view's decoration by when its border color is
+/// bound: the bound color in place of the static one, and the layers for it
+/// made even while it is transparent (it may not stay so).
 fn bound_style(slot: &Slot, animator: &Animator) -> Option<ViewStyle> {
-    let decor = |p: &AnimationProp| {
-        matches!(
-            p,
-            AnimationProp::BorderColor
-                | AnimationProp::ShadowColor
-                | AnimationProp::ShadowOpacity
-                | AnimationProp::ShadowRadius
-        )
-    };
-    if !slot.bindings.iter().any(|(p, _)| decor(p)) {
-        return None;
-    }
+    let node = slot
+        .bindings
+        .iter()
+        .find_map(|&(p, node)| (p == AnimationProp::BorderColor).then_some(node))?;
     let mut style = slot.style.clone();
-    let (mut border, mut shadow) = (false, false);
-    for &(prop, node) in &slot.bindings {
-        let value = animator.eval(node);
-        match (prop, value) {
-            (AnimationProp::BorderColor, AnimationValue::Color(c)) => {
-                style.borders.colors = [Color(c); 4];
-                border = true;
-            }
-            (AnimationProp::ShadowColor, AnimationValue::Color(c)) => {
-                style.shadow.color = Color(c);
-                shadow = true;
-            }
-            (AnimationProp::ShadowOpacity, v) => {
-                style.shadow.opacity = v.number().clamp(0.0, 1.0);
-                shadow = true;
-            }
-            (AnimationProp::ShadowRadius, v) => {
-                style.shadow.radius = Points(v.number().max(0.0));
-                shadow = true;
-            }
-            _ => {}
-        }
-    }
-    if border {
-        for c in &mut style.borders.colors {
-            c.0 |= 0xff;
-        }
-    }
-    if shadow {
-        style.shadow.color.0 |= 0xff;
-        style.shadow.opacity = style.shadow.opacity.max(f32::MIN_POSITIVE);
+    if let AnimationValue::Color(c) = animator.eval(node) {
+        style.borders.colors = [Color(c | 0xff); 4];
     }
     Some(style)
 }
 
-/// Bound border colors and shadows onto the layers made for them.
+/// Bound border colors onto the layers made for them.
 fn apply_bound_decor(slot: &Slot, animator: &Animator) {
     let view = slot.native.view();
-    let mut shadow = None;
     for &(prop, node) in &slot.bindings {
-        let value = animator.eval(node);
-        match (prop, value) {
-            (AnimationProp::BorderColor, AnimationValue::Color(c)) => {
-                slot.decor.set_border_color(view, Color(c))
-            }
-            (AnimationProp::ShadowColor, AnimationValue::Color(c)) => {
-                shadow.get_or_insert(slot.style.shadow).color = Color(c)
-            }
-            (AnimationProp::ShadowOpacity, v) => {
-                shadow.get_or_insert(slot.style.shadow).opacity = v.number()
-            }
-            (AnimationProp::ShadowRadius, v) => {
-                shadow.get_or_insert(slot.style.shadow).radius = Points(v.number())
-            }
-            _ => {}
+        if prop == AnimationProp::BorderColor
+            && let AnimationValue::Color(c) = animator.eval(node)
+        {
+            slot.decor.set_border_color(view, Color(c))
         }
     }
-    if let Some(s) = shadow {
-        slot.decor.set_shadow(view, s.color, s.opacity, s.radius.0);
-    }
+}
+
+/// The values of a shader view's animated uniforms (its slots).
+fn shader_args<'a>(
+    slot: &'a Slot,
+    animator: &'a Animator,
+) -> impl Iterator<Item = (u16, AnimationValue)> + 'a {
+    slot.bindings.iter().filter_map(|&(prop, node)| match prop {
+        AnimationProp::CanvasArg(k) => Some((k, animator.eval(node))),
+        _ => None,
+    })
 }
 
 /// Opacity, background color and transform: static values overridden by
@@ -4769,17 +4355,6 @@ fn apply_dynamic(slot: &Slot, animator: &Animator) {
             AnimationProp::CanvasArg(k) => Some((k, animator.eval(node))),
             _ => None,
         }));
-    }
-    if let Native::Shader(host) = &slot.native {
-        let values: Vec<_> = slot
-            .bindings
-            .iter()
-            .filter_map(|&(prop, node)| match prop {
-                AnimationProp::ShaderUniform(k) => Some((k, animator.eval(node))),
-                _ => None,
-            })
-            .collect();
-        host.set_args(&values);
     }
     let view = slot.native.view();
     let mut background = slot.style.background_color;

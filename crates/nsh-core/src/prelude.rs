@@ -2,8 +2,6 @@
 
 // Components that run once: signals, bindings, control flow; what they
 // read of the surface and ask of the platform.
-#[cfg(not(target_arch = "wasm32"))]
-pub use crate::element::ambient::{background, blocking};
 pub use crate::element::{
     AbsoluteLength,
     AccessibilityRole,
@@ -64,7 +62,6 @@ pub use crate::element::{
     FontAsset,
     FontWeight,
     GestureEvent,
-    HoverEvent,
     Hsla,
     // The network.
     HttpRequest,
@@ -108,6 +105,8 @@ pub use crate::element::{
     MotionChannel,
     MotionPreset,
     MotionSpec,
+    MouseButton,
+    MouseEvent,
     NativeEvent,
     NativeView,
     NoEvent,
@@ -143,14 +142,10 @@ pub use crate::element::{
     Rgba,
     Screen,
     ScreenAnimation,
-    ScreenEffectView,
-    ScreenTransitionView,
     Scroll,
     ScrollEvent,
     Scrollable,
     Selection,
-    ShaderEffectView,
-    ShaderTransitionView,
     ShaderView,
     SharedString,
     Size,
@@ -162,11 +157,14 @@ pub use crate::element::{
     StatusBarSetting,
     StatusBarStyle,
     StepPosition,
+    Stop,
     Styled,
     SubmitBehavior,
+    Svg,
     System,
     Task,
     Text,
+    TextShadow,
     Timing,
     Tokens,
     TouchClaim,
@@ -213,6 +211,7 @@ pub use crate::element::{
     shader_effect,
     shader_transition,
     size,
+    svg,
     text,
     transparent_black,
     transparent_white,
@@ -224,21 +223,22 @@ pub use crate::element::{
     white,
 };
 pub use crate::element::{
-    Each, If, IntoElements, IntoReactive, Memo, Owner, Prop, Reactive, ReadSignal, Resource,
-    ResourceInfo, ResourceState, Scope, Signal, SignalEquals, Stored,
-    ambient::{
-        Delay, KeyOptions, Spawned, animate_layout, animated_value, announce_for_accessibility,
-        app_state, clipboard_files, clipboard_has_image, clipboard_has_string, clipboard_image,
-        clipboard_string, color, component_ref, dark, dismiss_keyboard, element_ref, fetch,
-        first_day_of_week, font_scale, global, hour_cycle, idiom, image_size, is_desktop,
-        key_label, keyboard_duration, keyboard_height, languages, locale, measure_text,
-        measurement_system, motion, next_frame, on_back_press, on_key, on_key_with, open_url, os,
-        os_version, pick_images, pixel_ratio, prefetch_image, reduce_motion, register_font,
-        request_animation_frame, round_to_nearest_pixel, safe_area, screen_reader, set_clipboard,
-        set_clipboard_image, set_color_scheme, set_interval, set_timeout, spawn, temperature_unit,
-        text_metrics, time_zone, timer, timer_until, tokens, try_global, window,
-    },
-    batch, catch_error, cleanup, component, computed, dynamic, each, effect, engine_context,
-    provide_context, resource, resource_with_value, signal, signal_with, stored, untracked,
-    use_context, when,
+    Delay, Each, If, IntoElements, IntoReactive, KeyOptions, Memo, Owner, Prop, Reactive,
+    ReadSignal, Resource, ResourceInfo, ResourceState, Scope, Signal, SignalEquals, Spawned,
+    Stored, animate_layout, animated_value, announce_for_accessibility, app_state, apple_keys,
+    batch, can_pick_screen_color, catch_error, cleanup, clipboard_files, clipboard_has_image,
+    clipboard_has_string, clipboard_image, clipboard_string, color, component, component_ref,
+    computed, dark, dismiss_keyboard, dynamic, each, effect, element_ref, engine_context, fetch,
+    first_day_of_week, font_scale, global, hour_cycle, idiom, image_size, is_catalyst, is_desktop,
+    key_label, keyboard_duration, keyboard_height, languages, locale, measure_text,
+    measurement_system, motion, move_to_trash, next_frame, on_back_press, on_key, on_key_with,
+    open_path, open_url, os, os_version, pick_images, pick_paths, pick_save_path,
+    pick_screen_color, pixel_ratio, prefetch_image, provide_context, reduce_motion, register_font,
+    request_animation_frame, resource, resource_with_value, reveal_path, round_to_nearest_pixel,
+    safe_area, screen_reader, set_clipboard, set_clipboard_image, set_color_scheme, set_interval,
+    set_timeout, set_tokens, signal, signal_with, spawn, stored, temperature_unit, text_metrics,
+    time_zone, timer, timer_until, tokens, try_apple_keys, try_global, try_os, untracked,
+    use_context, watch_scroll, when, window,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::element::{background, blocking};

@@ -1,7 +1,6 @@
 ---
 title: NavStack
 description: "Native navigation stacks: NavStack, NavPage and createNavStack, pushing and popping pages, header slots, leaving a page and how each platform shows a stack."
-order: 22
 group: base
 demo: ui-navigation
 ---
@@ -221,6 +220,7 @@ the props' snake-case names.
 | `title` | `.title(..)` | `string` | none | iOS and Android: the system header's title. |
 | `headerVisible` | `.header_visible(..)` | `boolean` | `true` | iOS and Android: the system header shows. |
 | `headerTransparent` | `.header_transparent(..)` | `boolean` | `false` | iOS and Android: the content extends under a transparent system header. |
+| `hidesBottomBarWhenPushed` | `.hides_bottom_bar_when_pushed(..)` | `boolean` | `false` | iOS: the system tab bar leaves while this page is on top, moving in the transition — the same animation as the page, and the bar is never rebuilt; it comes back when the page pops. |
 | `headerLargeTitle` | `.header_large_title(..)` | `boolean` | `false` | iOS: a large title that shrinks into the bar as the content scrolls; the content scrolls under the header. |
 | `headerBackTitle` | `.header_back_title(..)` | `string` | none | iOS and Android: the label of the back button that leads back to this page (on Android, its description for screen readers). |
 | `headerBackVisible` | `.header_back_visible(..)` | `boolean` | `true` | iOS and Android: the back button shows. |
@@ -231,7 +231,7 @@ the props' snake-case names.
 | `headerClass` | `.header_style_with(\|s\| ..)` | `string` | none | The same colors as classes: `bg-*`, `text-*` for the title, `tint-*` for the buttons (in Rust `.bg(..)`, `.text_color(..)`, `.tint_color(..)`, theme colors following the appearance). `headerStyle` wins over them. |
 | `popOnBack` | `.pop_on_back(..)` | `boolean` | `true` | The back buttons and the swipe back pop the page. See [Leaving a page](#leaving-a-page). |
 | `popOnSwipe` | `.pop_on_swipe(..)` | `boolean` | `true` | The interactive back gesture pops the page: iOS swipe back, Android predictive back that follows the finger. The back buttons pop either way. |
-| `animation` | `.animation(..)`, `.shader_animation(ShaderAnimation)` | `"default" \| "slide" \| "fade" \| "none" \| ShaderAnimation` | `"default"` | How the page enters and leaves: a preset, or through a shader (`{ shader, uniforms, duration }`: the page below is the shader's `sample_from`, this page its `sample_to`, `nsh.progress` how much of it shows, also as a back gesture moves; [Shader](./shader.md#pages-and-dialogs-through-a-shader)). |
+| `animation` | `.animation(..)` | `"default" \| "slide" \| "fade" \| "none"` | `"default"` | How the page enters and leaves. |
 | `statusBar` | `.status_bar(..)` | `{ foreground?, hidden?, animated? }` | none | iOS and Android: the status bar while the page is on top. See [Status bar](../modules/nsh-base.md#status-bar). |
 | `style`, `class` | style methods | | none | The page's style. |
 | `children` | `.child(..)` | `JSX.Element` | none | The content. |
@@ -312,11 +312,11 @@ fn edit_note(routes: Signal<Vec<u32>>) -> Screen {
         spawn(async move {
             let choice = alert_dialog()
                 .title("Discard your changes?")
-                .cancel("Keep editing")
-                .destructive("Discard")
+                .cancel("keep", "Keep editing")
+                .destructive("discard", "Discard")
                 .show()
                 .await;
-            if choice.ok().flatten().as_deref() == Some("Discard") {
+            if choice.is_ok_and(|r| r.action.as_deref() == Some("discard")) {
                 routes.update(|r| {
                     r.pop();
                 });
@@ -347,18 +347,18 @@ import { AlertDialog, NavPage, Input } from "nsh/base";
 function EditNote() {
   const text = signal("");
   const confirm = async () => {
-    const choice = await AlertDialog.show({
+    const { action } = await AlertDialog.show({
       title: "Discard your changes?",
       actions: [
-        { label: "Keep editing", role: "cancel" },
+        { label: "Keep editing", role: "cancel", id: "keep" },
         { label: "Discard", role: "destructive", id: "discard" },
       ],
     });
-    if (choice === "discard") nav.pop();
+    if (action === "discard") nav.pop();
   };
   return (
     <NavPage title="Edit" popOnBack={text().length === 0} onBackPress={() => text().length > 0 && confirm()}>
-      <Input value={text()} onChange={(v) => text.set(v)} placeholder="A note" />
+      <Input value={text()} onChange={({ value }) => text.set(value)} placeholder="A note" />
     </NavPage>
   );
 }

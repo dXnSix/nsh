@@ -1,256 +1,110 @@
-import { createShader, mount, Shader, ShaderEffect, ShaderTransition, shaderSupport, signal, Text, View } from "nsh";
-import { createAnimatedValue, Easing } from "nsh";
-import { desktop, Log, Panel, Segmented, size, Split, ui } from "./palette";
+import { cleanup, createAnimatedValue, Easing, mount, Shader, signal, Text, View } from "nsh";
+import { Animated, type CompositeAnimation } from "nsh";
+import { Button, Switch } from "nsh/base";
+import { button, buttonText, desktop, focusRing, hoverFill, Log, Panel, Segmented, size, Split, ui } from "./palette";
 
-// A glow that breathes with `nsh.time`, its size and color animated
-// uniforms: a spring and a timing move them on the UI thread.
-const glow = createShader(`
-struct Uniforms {
-  color: vec4f,
-  radius: f32,
-  rings: f32,
-}
+// A shader's colors come from uniforms; a tap starts a ripple, an animated
+// uniform that runs natively; `paused` stops the shader's clock.
+const SOURCE = /* wgsl */ `
+struct Uniforms { a: vec4f, b: vec4f, c: vec4f, center: vec2f, wave: f32 }
 
-fn main(p: vec2f, u: Uniforms) -> vec4f {
-  let d = length(p - nsh.size * 0.5);
-  let breathe = 1.0 + 0.06 * sin(nsh.time * 2.0);
-  let r = u.radius * breathe;
-  let core = 1.0 - smoothstep(r * 0.55, r, d);
-  let halo = exp(-max(d - r * 0.55, 0.0) / (r * 0.7)) * 0.55;
-  let ring = 0.5 + 0.5 * cos(d / max(r, 1.0) * 6.2832 * u.rings - nsh.time * 3.0);
-  let light = clamp(core + halo * mix(1.0, ring, min(u.rings, 1.0)), 0.0, 1.0);
-  return u.color * light;
-}
-`);
+fn shade(uv: vec2f) -> vec4f {
+  let t = nsh.time * 0.4;
+  let warp = vec2f(sin(uv.y * 4.0 + t * 1.3), cos(uv.x * 3.0 - t)) * 0.08;
+  let q = uv + warp;
+  let ab = mix(uniforms.a.rgb, uniforms.b.rgb, smoothstep(0.0, 1.0, q.x + 0.2 * sin(t)));
+  var color = mix(ab, uniforms.c.rgb, smoothstep(0.2, 1.0, q.y + 0.15 * cos(t * 0.7)));
+  let aspect = nsh.size / max(nsh.size.x, nsh.size.y);
+  let d = distance(uv * aspect, uniforms.center * aspect);
+  let ring = exp(-pow((d - uniforms.wave * 0.9) * 24.0, 2.0)) * (1.0 - uniforms.wave);
+  color += vec3f(ring * 0.8);
+  return vec4f(color, 1.0);
+}`;
 
-// `<ShaderEffect>`: its children are the content, bent by a wave that
-// `nsh.progress` moves along; they keep their presses.
-const wave = createShader(`
-struct Uniforms { amount: f32 }
-
-fn main(p: vec2f, u: Uniforms) -> vec4f {
-  let shift = sin(p.y * 0.09 + nsh.progress * 6.2832) * u.amount * sin(nsh.progress * 3.1416);
-  return sample_content(p + vec2f(shift, 0.0));
-}
-`);
-
-// Frosted glass: what is behind the view, blurred (a Gaussian of 7 points) and lightened.
-const frost = createShader(`
-fn main(p: vec2f) -> vec4f {
-  // Noise per device pixel turns and shifts its samples: an even grain
-  // instead of copies of what is behind.
-  var h = fract(vec3f(floor(p * nsh.scale).xyx) * vec3f(0.1031, 0.1030, 0.0973));
-  h += dot(h, h.yzx + 33.33);
-  let noise = fract((h.xx + h.yz) * h.zy);
-  var c = vec4f(0.0);
-  var total = 0.0;
-  for (var i = 0; i < 96; i++) {
-    let d = sqrt((f32(i) + noise.y) / 96.0) * 17.5;
-    let a = f32(i) * 2.3999632 + noise.x * 6.2831853;
-    let w = exp(-0.5 * d * d / 49.0);
-    c += sample_backdrop(p + vec2f(cos(a), sin(a)) * d) * w;
-    total += w;
-  }
-  return c / total * 0.75 + vec4f(0.25);
-}
-`);
-
-// `<ShaderTransition>`: the new side grows from the middle in a circle.
-const reveal = createShader(`
-fn main(p: vec2f) -> vec4f {
-  let c = nsh.size * 0.5;
-  let r = length(nsh.size) * 0.5 * nsh.progress;
-  let t = smoothstep(r - 3.0, r + 3.0, length(p - c));
-  return mix(sample_to(p), sample_from(p), t);
-}
-`);
-
-const kinds = ["fill", "effect", "backdrop", "transition"] as const;
-const pages = [
-  { name: "One", color: "#7ea8ff" },
-  { name: "Two", color: "#ff6f91" },
-  { name: "Three", color: "#c8f26d" },
-];
-const sizes = ["S", "M", "L"] as const;
-const radii = { S: 36, M: 64, L: 96 };
-const tints = ["lime", "sky", "rose"] as const;
-const colors = { lime: "#c8f26d", sky: "#7ea8ff", rose: "#ff6f91" };
+const PALETTES = {
+  sunset: ["#ff6b6b", "#ffb86b", "#7b5cff"],
+  lagoon: ["#00c2a8", "#2f80ed", "#0b3d91"],
+  citrus: ["#f9f871", "#9be15d", "#ff9671"],
+} as const;
+type Palette = keyof typeof PALETTES;
 
 function App() {
-  const kind = signal<(typeof kinds)[number]>("fill");
-  const progress = createAnimatedValue(0);
-  const presses = signal(0);
-  const page = signal(0);
-  const sized = signal<(typeof sizes)[number]>("M");
-  const tinted = signal<(typeof tints)[number]>("lime");
-  const rings = signal(0);
+  const palette = signal<Palette>("sunset");
+  const paused = signal(false);
   const events = signal<string[]>([]);
-  const radius = createAnimatedValue(radii.M);
-  const hue = createAnimatedValue(0);
-  const color = hue.interpolate({ inputRange: [0, 1, 2], outputRange: [colors.lime, colors.sky, colors.rose] });
-  const log = (line: string) => events.set([line, ...events()].slice(0, 4));
-  const support = shaderSupport();
+  const log = (line: string) => events.set([line, ...events()].slice(0, 5));
+  const wave = createAnimatedValue(1);
+  const cx = createAnimatedValue(0.5);
+  const cy = createAnimatedValue(0.5);
+  let box = { width: 1, height: 1 };
+  let ripple: CompositeAnimation | undefined;
+  cleanup(() => ripple?.stop());
+  const tap = (x: number, y: number) => {
+    ripple?.stop();
+    cx.set(x);
+    cy.set(y);
+    wave.set(0);
+    ripple = Animated.timing(wave, { toValue: 1, duration: 1600, easing: Easing.out(Easing.quad) });
+    ripple.start();
+    log(`Ripple at ${Math.round(x * 100)}%, ${Math.round(y * 100)}%`);
+  };
+  const colors = () => PALETTES[palette()];
   return (
     <View style={{ flex: 1, backgroundColor: ui().page, padding: 20, paddingTop: 24, gap: 14 }}>
       <Text style={{ fontSize: 22, fontWeight: "700", color: ui().text }}>shader</Text>
-      <Text style={{ color: ui().muted }}>
-        {kind() === "fill"
-          ? desktop
-            ? "Click a size or a color: springs move the uniforms"
-            : "Tap a size or a color: springs move the uniforms"
-          : kind() === "effect"
-            ? desktop
-              ? "Click Bend to move the wave; the button inside still takes clicks"
-              : "Tap Bend to move the wave; the button inside still takes taps"
-            : kind() === "backdrop"
-              ? "The glass reads what is behind it"
-              : desktop
-                ? "Click Next: the page changes through the shader"
-                : "Tap Next: the page changes through the shader"}
-      </Text>
+      <Text style={{ color: ui().muted }}>{desktop ? "Click the shader to start a ripple" : "Tap the shader to start a ripple"}</Text>
 
       <Split
-        grow
+        gap={14}
+        width={760}
         inspector={
           <>
             <Segmented
-              label="kind"
-              options={kinds}
-              value={kind()}
-              onChange={(k) => {
-                kind.set(k);
-                log(k === "fill" ? "<Shader>" : k === "effect" ? "<ShaderEffect>" : k === "backdrop" ? "sample_backdrop" : "<ShaderTransition>");
+              label="colors"
+              options={["sunset", "lagoon", "citrus"] as const}
+              value={palette()}
+              onChange={(next) => {
+                palette.set(next);
+                log(`Colors: ${next}`);
               }}
             />
-            <If when={kind() === "fill"}>
-              <Segmented
-                label="radius"
-                options={sizes}
-                value={sized()}
-                onChange={(s) => {
-                  sized.set(s);
-                  radius.spring(radii[s], { stiffness: 120, damping: 12 });
-                  log(`radius.spring(${radii[s]})`);
+            <Panel title="paused · ripple">
+              <Switch
+                checked={paused()}
+                onChange={({ checked }) => {
+                  paused.set(checked);
+                  log(checked ? "Paused: the clock stands still" : "Running");
                 }}
-              />
-              <Segmented
-                label="color"
-                options={tints}
-                value={tinted()}
-                onChange={(t) => {
-                  tinted.set(t);
-                  hue.timing(tints.indexOf(t), { duration: 450, easing: Easing.out(Easing.cubic) });
-                  log(`color → ${colors[t]}`);
-                }}
-              />
-              <Segmented
-                label="rings"
-                options={[0, 2, 4] as const}
-                value={rings()}
-                onChange={(n) => {
-                  rings.set(n);
-                  log(`uniforms.rings = ${n}`);
-                }}
-              />
-            </If>
-            <If when={kind() === "effect"}>
-              <View
-                onPress={() => {
-                  progress.set(0);
-                  progress.timing(1, { duration: 1800, easing: Easing.inOut(Easing.quad) });
-                  log("progress.timing(1)");
-                }}
-                activeStyle={{ opacity: 0.6 }}
-                style={{ alignSelf: "flex-start", height: 32, paddingHorizontal: 14, borderRadius: 8, justifyContent: "center", ...ui().raised }}
+                class={`-mx-2 flex-row-reverse items-center justify-between gap-3 rounded-lg px-2 ${desktop ? "py-1" : "py-2"} active:opacity-70`}
+                hoverStyle={hoverFill()}
+                focusStyle={focusRing()}
+                trackClass={`${desktop ? "w-9" : "w-12"} rounded-full p-0.5 transition-colors motion-reduce:transition-none`}
+                trackStyle={paused() ? ui().accentFill : ui().inset}
+                thumbClass={desktop ? "size-4 rounded-full transition-transform motion-reduce:transition-none checked:translate-x-4" : "size-5.5 rounded-full transition-transform motion-reduce:transition-none checked:translate-x-5"}
+                thumbStyle={paused() ? { backgroundColor: ui().onAccent } : ui().raised}
               >
-                <Text style={{ fontSize: 13, fontWeight: "500", color: ui().text }}>Bend</Text>
-              </View>
-            </If>
-            <If when={kind() === "transition"}>
-              <View
-                onPress={() => {
-                  page.set((page() + 1) % pages.length);
-                  log(`value = ${page()}`);
-                }}
-                activeStyle={{ opacity: 0.6 }}
-                style={{ alignSelf: "flex-start", height: 32, paddingHorizontal: 14, borderRadius: 8, justifyContent: "center", ...ui().raised }}
-              >
-                <Text style={{ fontSize: 13, fontWeight: "500", color: ui().text }}>Next</Text>
-              </View>
-            </If>
-            <Panel title="shaderSupport()">
-              <Text style={{ fontSize: 13, color: ui().text }}>
-                fill {String(support.fill)} · effect {String(support.effect)} · backdrop {String(support.backdrop)} · transition{" "}
-                {String(support.transition)}
-              </Text>
+                <Text style={{ flex: 1, fontSize: size.label, color: ui().text }}>Paused</Text>
+              </Switch>
+              <Button onPress={() => tap(0.5, 0.5)} {...button("secondary", { style: desktop ? { alignSelf: "flex-start" } : {} })}>
+                <Text style={buttonText()}>Ripple</Text>
+              </Button>
             </Panel>
-            <Log title="changes" lines={events()} minHeight={92} />
+            <Log title="events" lines={events()} minHeight={92} />
           </>
         }
       >
-        <If when={kind() === "fill"}>
-          <Shader
-            src={glow}
-            uniforms={{ color, radius, rings: rings() }}
-            style={{
-              flex: 1,
-              minHeight: desktop ? 260 : 240,
-              borderRadius: 16,
-              backgroundColor: "#101113",
-              alignItems: "center",
-              justifyContent: "flex-end",
-              padding: 16,
-            }}
-          >
-            <Text style={{ fontSize: size.detail, color: "rgba(255,255,255,0.7)" }}>Children draw over the shader</Text>
-          </Shader>
-        </If>
-        <If when={kind() === "effect"}>
-          <View style={{ flex: 1, minHeight: desktop ? 260 : 240, justifyContent: "center", padding: 16 }}>
-            <ShaderEffect src={wave} uniforms={{ amount: 12 }} progress={progress} maxSampleOffset={14}>
-              <View style={{ padding: 18, gap: 12, borderRadius: 16, backgroundColor: "#7ea8ff" }}>
-                <Text style={{ fontSize: 22, fontWeight: "700", color: "#101113" }}>Through a shader</Text>
-                <View
-                  onPress={() => {
-                    presses.update((n) => n + 1);
-                    log(`pressed inside (${presses()})`);
-                  }}
-                  style={{ alignSelf: "flex-start", paddingHorizontal: 16, height: 40, justifyContent: "center", borderRadius: 10, backgroundColor: "#101113" }}
-                >
-                  <Text style={{ fontSize: size.detail, color: "#eceef1" }}>{`Pressed ${presses()}×`}</Text>
-                </View>
-              </View>
-            </ShaderEffect>
-          </View>
-        </If>
-        <If when={kind() === "transition"}>
-          <View style={{ flex: 1, minHeight: desktop ? 260 : 240, justifyContent: "center", padding: 16 }}>
-            <ShaderTransition src={reveal} value={page()} duration={700}>
-              <View style={{ height: 180, borderRadius: 16, padding: 18, justifyContent: "flex-end", backgroundColor: pages[page()].color }}>
-                <Text style={{ fontSize: 28, fontWeight: "800", color: "#101113" }}>{`Page ${pages[page()].name}`}</Text>
-              </View>
-            </ShaderTransition>
-          </View>
-        </If>
-        <If when={kind() === "backdrop"}>
-          <View style={{ flex: 1, minHeight: desktop ? 260 : 240, borderRadius: 16, overflow: "hidden" }}>
-            <View style={{ position: "absolute", left: 0, top: 0, right: 0, bottom: 0, flexDirection: "row" }}>
-              <View style={{ flex: 1, backgroundColor: "#ff6f91" }} />
-              <View style={{ flex: 1, backgroundColor: "#ffb547" }} />
-              <View style={{ flex: 1, backgroundColor: "#c8f26d" }} />
-              <View style={{ flex: 1, backgroundColor: "#7ea8ff" }} />
-            </View>
-            <View style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, alignItems: "center", justifyContent: "center" }}>
-              <Text style={{ fontSize: 28, fontWeight: "800", color: "#101113" }}>BEHIND THE GLASS</Text>
-            </View>
-            <Shader
-              src={frost}
-              style={{ position: "absolute", left: 64, top: 32, right: 24, bottom: 32, borderRadius: 20, padding: 14 }}
-            >
-              <Text style={{ fontSize: size.detail, fontWeight: "600", color: "#101113" }}>Frosted glass</Text>
-            </Shader>
-          </View>
-        </If>
+        <Shader
+          testID="shader"
+          source={SOURCE}
+          paused={paused()}
+          uniforms={{ a: colors()[0], b: colors()[1], c: colors()[2], center: [cx, cy], wave }}
+          style={{ height: desktop ? 420 : 280, borderRadius: 16, padding: 18, justifyContent: "flex-end" }}
+          onLayout={({ bounds }) => (box = bounds.size)}
+          onStartShouldSetResponder={() => true}
+          onResponderGrant={(e) => tap(e.locationX / box.width, e.locationY / box.height)}
+        >
+          <Text style={{ color: "#ffffff", fontSize: 15, fontWeight: "600" }}>Drawn by a WGSL shader, under its children</Text>
+        </Shader>
       </Split>
     </View>
   );

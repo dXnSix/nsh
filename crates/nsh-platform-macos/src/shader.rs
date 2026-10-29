@@ -1,633 +1,489 @@
-//! `<Shader>`: the shader's `CAMetalLayer` ([`nsh_metal::ShaderLayer`]) in
-//! the view's layer, above its decoration's fills and below its borders
-//! and children (as a canvas's content layer).
+//! Shader views: the layer [`MountItem::Shader`](nsh_core::MountItem)
+//! mounts on a view, rendered by `nsh_engine::shader` and shown as the contents of
+//! a sublayer under the view's children, clipped to its rounded box as a
+//! background is ([`crate::decor`] shapes it with the view).
 //!
-//! `<ShaderEffect>`: its children live in a container (as a view that
-//! clips them and casts a shadow, [`NshView::ensure_container`]) whose
-//! layer is hidden by an empty mask while the shader draws them: AppKit's
-//! hit testing follows the views, not what shows, so they keep their
-//! clicks. The shader's layer covers the view and `maxSampleOffset` beyond
-//! it, above the container.
+//! The surface opens the GPU device the first time a shader is mounted
+//! ([`Shaders`]). The shader views with a frame to render or collect
+//! ([`ShaderView::wants_frame`]: their uniforms or size changed, or they
+//! read `nsh.time`) render on one frame callback of the surface's display
+//! link, at their window's backing scale; a frame that comes back becomes a
+//! `CGImage`, the layer's contents, stretched over the view's box. A view
+//! out of sight (a list row scrolled away, a screen under another) stops
+//! rendering and starts again once it shows ([`shown`], from
+//! [`crate::mount::Mounter::revisit`]).
 //!
-//! What a shader samples, its content (an effect's children) or what is
-//! behind its view, is a picture: `renderInContext:` into a bitmap,
-//! uploaded as a texture ([`nsh_metal::ShaderLayer::set_input`]), taken
-//! again when it changes: after the core says so
-//! ([`nsh_core::MountItem::ShaderInput`]) and when the UI thread changes
-//! a view in it ([`ui_changed`]: animations, scrolling, images). Pictures
-//! are taken once per display frame, all at once. `renderInContext:`
-//! draws no `CAMetalLayer`, video or web page: shaders, videos and web
-//! views inside an effect or behind a backdrop read as transparent.
+//! Effects and transitions ([`ShaderRole`]) draw their children through
+//! the shader: the children move into a container (as for clipping,
+//! [`NshView::ensure_container`]) whose layer an empty mask hides while the
+//! shader's frames show (AppKit hit-tests views, not what shows, so they
+//! keep their clicks), and the frames' layer goes above the container,
+//! `overflow` points beyond the box. A screen effect or transition does the
+//! same with the surface's root. The pictures a shader reads are the
+//! container rendered with `renderInContext:` (without its mask) and, for
+//! `sample_backdrop`, the root with the view left out, taken again on the
+//! frame after the core says they changed ([`input_changed`]) or the UI
+//! thread changed a view in them ([`ui_changed`]). A transition pictures
+//! the children as they were when it starts ([`start_transition`]).
+//! `renderInContext:` draws no video or web page, nor other shaders'
+//! frames under an effect taken before they arrive.
 //!
-//! `<ShaderTransition>`: as an effect, but only while a transition runs
-//! ([`start_transition`]): its children are pictured as they were when it
-//! starts (`sample_from`) and as they are after the batch (`sample_to`,
-//! taken again as they change), and a frame callback moves `nsh.progress`
-//! from 0 to 1 over the duration; then the children show as they are.
-//!
-//! It draws when what it draws changes (the fill, an animated uniform, an
-//! image that loaded, its size or scale, its program once compiled, a new
-//! picture of an input) and, for a shader that reads `nsh.time`, on every
-//! display frame while its view is in a window.
+//! A page's or a dialog's `transitionShader` runs over the stack or the
+//! surface as a [`NavOverlay`]: pictures of the lower and the upper side,
+//! from and to.
 
 use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
+    cell::{Cell, OnceCell, RefCell},
+    rc::{Rc, Weak},
     sync::Arc,
+    time::Instant,
 };
 
 use nsh_core::{
-    ViewKind,
     animation::AnimationValue,
-    shader::{ShaderFill, ShaderInput, ShaderProgram},
+    canvas::Damage,
+    shader::{ShaderInput, ShaderLayer, ShaderRole},
 };
-use objc2_core_foundation::CGFloat;
+use nsh_engine::shader::{Frame, PixelFormat, Renderer, ShaderView};
+use objc2::rc::Retained;
+use objc2_core_foundation::{CFRetained, CGFloat, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::CGImage;
-use objc2_quartz_core::CALayer;
+use objc2_quartz_core::{CALayer, kCAGravityResize};
 
-use crate::{
-    surface::Surface,
-    view::{NshView, ViewObj},
-};
+use crate::{surface::Surface, view::NshView};
 
-/// What a shader view draws.
-pub(crate) struct ShaderState {
-    layer: nsh_metal::ShaderLayer,
-    /// A frame callback draws it (`nsh.time`).
-    ticking: bool,
-    /// The surface whose frames draw it.
-    surface: std::rc::Weak<Surface>,
-    /// A shader effect or transition (its children are its content or its
-    /// `sample_to`).
-    effect: bool,
-    /// A shader transition; when it runs, its start and duration.
-    transition: bool,
-    running: Option<(std::time::Instant, std::time::Duration)>,
-    /// The inputs it samples ([`ShaderFill::inputs`]).
-    inputs: u32,
-    /// Inputs whose picture is out of date, bit [`ShaderInput::index`].
-    stale: u32,
+/// A surface's shader views: the GPU device, and the views rendering.
+#[derive(Default)]
+pub(crate) struct Shaders {
+    /// Opened the first time a shader is mounted (`None` inside: there is
+    /// no device, and shader views show nothing of their own).
+    renderer: OnceCell<Option<Renderer>>,
+    /// The views with a frame to render or collect.
+    views: RefCell<Vec<NshView>>,
+    /// The views whose shaders read pictures (effects, transitions,
+    /// screens, backdrops): [`ui_changed`] looks among them.
+    pictured: RefCell<Vec<NshView>>,
+    /// Its frame callback runs.
+    running: Cell<bool>,
 }
 
-/// A navigation overlay's layer and the view it covers.
-type OverlayEntry = (
-    std::rc::Weak<RefCell<nsh_metal::ShaderLayer>>,
-    objc2::rc::Weak<objc2_app_kit::NSView>,
-);
+impl Shaders {
+    /// The GPU device, opened the first time one asks.
+    pub(crate) fn renderer(&self) -> Option<&Renderer> {
+        self.renderer
+            .get_or_init(|| Renderer::new(PixelFormat::Rgba))
+            .as_ref()
+    }
+}
+
+/// What a shader view shows.
+pub(crate) struct ShaderState {
+    surface: Weak<Surface>,
+    view: ShaderView,
+    /// Shows the frames: a sublayer of the view's layer, under its
+    /// children.
+    layer: Retained<CALayer>,
+    /// It is in [`Shaders::views`].
+    ticking: bool,
+    /// Out of sight with a frame to render ([`shown`]).
+    hidden: bool,
+    /// What the layer draws ([`ShaderRole::Fill`]: under the children, as
+    /// upstream's; the others over them).
+    role: ShaderRole,
+    /// The children's (the root's, for a screen's) picture is due.
+    stale: bool,
+    /// The backdrop's picture is due.
+    backdrop_stale: bool,
+    /// The children's container is masked: the frames show instead.
+    masked: bool,
+}
+
+impl ShaderState {
+    fn new(surface: &Rc<Surface>) -> Self {
+        let layer = CALayer::new();
+        // Clipped to its rounded corners ([`crate::decor`] sets them).
+        layer.setMasksToBounds(true);
+        // SAFETY: an immutable Core Animation constant.
+        layer.setContentsGravity(unsafe { kCAGravityResize });
+        // Above the background, its gradients and inset shadows, below the
+        // borders behind the children and the children.
+        layer.setZPosition(crate::decor::BEHIND + 0.75);
+        ShaderState {
+            surface: Rc::downgrade(surface),
+            view: ShaderView::default(),
+            layer,
+            ticking: false,
+            hidden: false,
+            role: ShaderRole::Fill,
+            stale: false,
+            backdrop_stale: false,
+            masked: false,
+        }
+    }
+
+    /// The layer the frames show in.
+    pub(crate) fn layer(&self) -> &CALayer {
+        &self.layer
+    }
+
+    /// Whether it draws under the children, shaped as a background
+    /// ([`crate::decor`] places it); the others place themselves.
+    pub(crate) fn fills(&self) -> bool {
+        self.role == ShaderRole::Fill
+    }
+}
+
+/// Above every child (and a canvas's or text's content), as the frames of
+/// an effect show instead of them.
+const OVER: CGFloat = 1.0e6;
 
 thread_local! {
-    /// The navigation overlays that run ([`NavOverlay`]), for screenshots.
-    static OVERLAYS: RefCell<Vec<OverlayEntry>> = const { RefCell::new(Vec::new()) };
-    /// The shader views, to draw again when their program is ready.
-    static VIEWS: RefCell<Vec<objc2::rc::Weak<ViewObj>>> = const { RefCell::new(Vec::new()) };
-    /// Shader views that sample an input: [`ui_changed`] looks for them.
-    static SAMPLING: Cell<usize> = const { Cell::new(0) };
-    /// A frame callback takes the pictures due.
-    static SCHEDULED: Cell<bool> = const { Cell::new(false) };
+    /// The keys of the surfaces with views in [`Shaders::pictured`] (no
+    /// views: those are the surfaces').
+    static PICTURING: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
-const CONTENT: u32 = 1 << 0;
-const BACKDROP: u32 = 1 << 1;
-
-/// A program for the views to come: compiled now, off the main thread.
-pub(crate) fn program(program: &ShaderProgram) {
-    let Some(gpu) = nsh_metal::gpu() else { return };
-    gpu.set_on_ready(ready);
-    gpu.set_on_presented(presented);
-    gpu.add_program(program);
+fn is_screen(role: ShaderRole) -> bool {
+    matches!(role, ShaderRole::Screen | ShaderRole::ScreenTransition)
 }
 
-/// A drawable was shown: the views that skipped a draw draw.
-fn presented() {
-    for view in views() {
-        let stale = view
-            .state()
-            .shader
-            .as_ref()
-            .is_some_and(|s| s.layer.is_stale());
-        if stale {
-            draw(&view);
-        }
-    }
-}
-
-/// Program `id` compiled: the views drawing it draw.
-fn ready(id: u32) {
-    for view in views() {
-        let draws = view.state().shader.as_ref().and_then(|s| s.layer.program()) == Some(id);
-        if draws {
-            draw(&view);
-            show(&view);
-        }
-    }
-}
-
-fn views() -> Vec<NshView> {
-    VIEWS.with(|v| {
-        let mut v = v.borrow_mut();
-        v.retain(|w| w.load().is_some());
-        v.iter().filter_map(NshView::upgrade).collect()
-    })
-}
-
-/// What `view` draws now (`None`: its children only).
-pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, fill: Option<Arc<ShaderFill>>) {
-    let transition = view.kind() == ViewKind::ShaderTransition;
-    let effect = transition || view.kind() == ViewKind::ShaderEffect;
-    set_on(surface, view, fill, transition, effect);
-}
-
-/// The surface's screen effect (`<ScreenEffect>`): its root view draws
-/// through `fill` as an effect does, everything it holds (pages, dialogs,
-/// overlays) its content, the shader's layer above all of it, the page and
-/// dialog transitions' overlays among it ([`take_pictures`]).
-pub(crate) fn set_screen(surface: &Rc<Surface>, fill: Option<Arc<ShaderFill>>) {
-    set_on(surface, &surface.root, fill, false, true);
-}
-
-/// Whether `view` is a surface's root drawn through its screen effect.
-fn is_screen(view: &NshView) -> bool {
-    view.id() == nsh_core::ROOT_ID && view.state().shader.as_ref().is_some_and(|s| s.effect)
-}
-
-fn set_on(
-    surface: &Rc<Surface>,
-    view: &NshView,
-    fill: Option<Arc<ShaderFill>>,
-    transition: bool,
-    effect: bool,
-) {
-    if view.state().shader.is_none() {
-        if fill.is_none() {
-            return;
-        }
-        let Some(layer) = nsh_metal::ShaderLayer::new() else {
-            log::warn!(target: "js", "<Shader>: Metal is not available: the view shows its children only");
-            return;
-        };
-        let ca = content_layer(&layer);
-        if view.id() == nsh_core::ROOT_ID {
-            // Over everything of the surface, the navigation's overlays
-            // among it.
-            ca.setZPosition(2.0e6);
-            view.ensure_container();
-        } else if effect {
-            // Over the children it draws, below the borders in front.
-            ca.setZPosition(crate::decor::EFFECT);
-            view.ensure_container();
-        } else {
-            // Above the decoration behind it (fills, gradients, inset
-            // shadows), below the borders and the children.
-            ca.setZPosition(crate::decor::SHADER);
-        }
-        if let Some(host) = view.ns().layer() {
-            host.addSublayer(ca);
-        }
-        {
-            let mut s = view.state_mut();
-            // A fill follows the view's corners; an effect reaches beyond.
-            if !effect {
-                s.decor.set_shader_layer(objc2::Message::retain(ca));
-            }
-            s.shader = Some(ShaderState {
-                layer,
-                ticking: false,
-                surface: Rc::downgrade(surface),
-                effect,
-                transition,
-                running: None,
-                inputs: 0,
-                stale: 0,
-            });
-        }
-        if !effect {
-            crate::decor::apply(view);
-        }
-        VIEWS.with(|v| v.borrow_mut().push(view.downgrade()));
-        resized(view);
-    }
-    // A transition's children are its `sample_to`.
-    let children = if transition {
-        ShaderInput::To
+/// The view whose children `view`'s shader draws: itself, or the surface's
+/// root for a screen effect or transition.
+fn host(surface: &Surface, view: &NshView, role: ShaderRole) -> NshView {
+    if is_screen(role) {
+        surface.root.clone()
     } else {
-        ShaderInput::Content
-    };
-    let inputs = fill.as_ref().map_or(0, |f| {
-        (f.samples(children) as u32 * CONTENT)
-            | (f.samples(ShaderInput::Backdrop) as u32 * BACKDROP)
-    });
-    let load = {
-        let mut s = view.state_mut();
-        let Some(state) = s.shader.as_mut() else {
-            return;
-        };
-        // An effect's content is its children only.
-        let inputs = if state.effect {
-            inputs
-        } else {
-            inputs & BACKDROP
-        };
-        if (state.inputs != 0) != (inputs != 0) {
-            SAMPLING.with(|n| {
-                n.set(if inputs != 0 {
-                    n.get() + 1
-                } else {
-                    n.get().saturating_sub(1)
-                })
-            });
-        }
-        state.inputs = inputs;
-        state.stale = inputs;
-        if fill.is_none() {
-            state.running = None;
-        }
-        state.layer.set_fill(fill)
-    };
-    show(view);
-    if inputs != 0 {
-        schedule(surface);
-    }
-    for (slot, uri) in load {
-        let weak = view.downgrade();
-        let key = uri.clone();
-        crate::image::load(surface, &uri, move |result| {
-            let image = match result {
-                Ok(image) => image,
-                Err(e) => {
-                    log::warn!(target: "js", "<Shader>: {e}");
-                    return;
-                }
-            };
-            let Some(view) = NshView::upgrade(&weak) else {
-                return;
-            };
-            let points = (
-                CGImage::width(Some(&image)) as f64,
-                CGImage::height(Some(&image)) as f64,
-            );
-            let set = view
-                .state_mut()
-                .shader
-                .as_mut()
-                .is_some_and(|s| s.layer.set_image(slot, &key, &image, points));
-            if set {
-                draw(&view);
-            }
-        });
-    }
-    draw(view);
-    tick(view);
-}
-
-/// Its size or scale changed (or may have): the layer covers it again.
-pub(crate) fn resized(view: &NshView) {
-    let scale = view.backing_scale();
-    let changed = {
-        let mut s = view.state_mut();
-        let size = s.frame.size;
-        s.shader.as_mut().is_some_and(|state| {
-            let changed = state
-                .layer
-                .set_frame(size.width.0 as f64, size.height.0 as f64, scale);
-            if changed {
-                state.stale = state.inputs;
-            }
-            changed
-        })
-    };
-    if changed {
-        draw(view);
-        if let Some(surface) = view
-            .state()
-            .shader
-            .as_ref()
-            .and_then(|s| s.surface.upgrade())
-        {
-            schedule(&surface);
-        }
-    }
-    // In a window again: the frames of a shader that reads `nsh.time` go on.
-    tick(view);
-}
-
-/// Animated uniforms' values (`AnimationProp::ShaderUniform`).
-pub(crate) fn set_args(view: &NshView, values: &[(u16, AnimationValue)]) {
-    let changed = view
-        .state_mut()
-        .shader
-        .as_mut()
-        .is_some_and(|s| s.layer.set_args(values));
-    if changed {
-        draw(view);
+        view.clone()
     }
 }
 
-fn draw(view: &NshView) {
-    if let Some(state) = view.state_mut().shader.as_mut() {
-        state.layer.draw();
-    }
-}
-
-/// The `CAMetalLayer` of `layer`.
-fn content_layer(layer: &nsh_metal::ShaderLayer) -> &CALayer {
-    // SAFETY: a `CAMetalLayer` is a `CALayer`.
-    unsafe { &*(layer.layer() as *const objc2::runtime::AnyObject as *const CALayer) }
-}
-
-/// Shows the shader's layer while it draws, and an effect's children
-/// through it only: a fill always, an effect while it has a shader, a
-/// transition while it runs.
-fn show(view: &NshView) {
-    let (shows, effect) = {
-        let s = view.state();
-        let Some(state) = s.shader.as_ref() else {
-            return;
-        };
-        // An effect hides its children once it draws them: its program
-        // compiled and their first picture taken (a running transition
-        // shows its pictures).
-        let pictured =
-            state.transition || state.inputs & CONTENT == 0 || state.stale & CONTENT == 0;
-        let shows = if state.transition {
-            state.layer.program().is_some() && state.running.is_some()
-        } else {
-            state.layer.ready() && pictured
-        };
-        // At once: Core Animation would fade it in, over children already hidden.
-        crate::surface::quiet(|| content_layer(&state.layer).setHidden(!shows));
-        (shows, state.effect)
-    };
-    if effect {
-        hide_children(view, shows);
-    }
-}
-
-/// A shader transition starts ([`nsh_core::MountItem::ShaderTransition`],
-/// before the rest of its batch): what shows now is its `sample_from`, its
-/// children's next picture its `sample_to`, and a frame callback moves
-/// `nsh.progress` from 0 to 1 over `duration`.
-pub(crate) fn start_transition(
-    surface: &Rc<Surface>,
-    view: &NshView,
-    duration: std::time::Duration,
-) {
-    let (area, running) = {
-        let s = view.state();
-        let Some(state) = s.shader.as_ref() else {
-            return;
-        };
-        if !state.transition || state.layer.program().is_none() {
-            return;
-        }
-        (state.layer.area(), state.running.is_some())
-    };
-    let scale = view.backing_scale();
-    // What shows: the transition as it is drawn, or the children.
-    let from = if running {
-        view.state_mut()
-            .shader
-            .as_mut()
-            .and_then(|s| s.layer.picture())
+/// Hides `host`'s children (their container) while the frames show, or
+/// shows them again.
+fn mask_children(host: &NshView, masked: bool) {
+    let layer = if masked {
+        host.ensure_container().layer()
     } else {
-        view.container_view()
-            .and_then(|c| c.layer())
-            .map(|container| {
-                let (pw, ph) = (
-                    (area.size.width.0 as f64 * scale).round().max(1.0) as usize,
-                    (area.size.height.0 as f64 * scale).round().max(1.0) as usize,
-                );
-                let origin = (area.origin.x.0 as f64, area.origin.y.0 as f64);
-                let rgba = crate::surface::quiet(|| render(&container, origin, pw, ph, scale));
-                (pw, ph, rgba)
-            })
+        host.container_view().and_then(|c| c.layer())
     };
-    {
-        let mut s = view.state_mut();
-        let Some(state) = s.shader.as_mut() else {
-            return;
-        };
-        if let Some((w, h, rgba)) = from {
-            state.layer.set_input(ShaderInput::From, &rgba, w, h, area);
-        }
-        state.layer.clear_input(ShaderInput::To);
-        state.layer.set_progress(0.0);
-        state.running = Some((std::time::Instant::now(), duration));
-        state.stale |= state.inputs;
-    }
-    show(view);
-    draw(view);
-    schedule(surface);
-    if running {
-        // Its frame callback runs on.
-        return;
-    }
-    let weak = view.downgrade();
-    surface.add_frame_callback(move |_, _| {
-        let Some(view) = NshView::upgrade(&weak) else {
-            return false;
-        };
-        let done = {
-            let mut s = view.state_mut();
-            let Some(state) = s.shader.as_mut() else {
-                return false;
-            };
-            let Some((start, duration)) = state.running else {
-                return false;
-            };
-            let t =
-                (start.elapsed().as_secs_f32() / duration.as_secs_f32().max(f32::EPSILON)).min(1.0);
-            state.layer.set_progress(t);
-            if t >= 1.0 {
-                state.running = None;
-                state.layer.clear_input(ShaderInput::From);
-                state.layer.clear_input(ShaderInput::To);
-            }
-            t >= 1.0
-        };
-        if done {
-            show(&view);
-        } else {
-            draw(&view);
-        }
-        !done
-    });
-}
-
-/// An effect's children show through its shader only, while it has one:
-/// their container's layer is masked by an empty layer (nothing shows),
-/// and they keep their clicks.
-fn hide_children(view: &NshView, hidden: bool) {
-    let Some(layer) = view.container_view().and_then(|c| c.layer()) else {
-        return;
-    };
+    let Some(layer) = layer else { return };
     crate::surface::quiet(|| {
-        let mask = hidden.then(CALayer::new);
+        let mask = masked.then(CALayer::new);
         // SAFETY: a fresh, empty mask layer owned by the container's layer.
         unsafe { layer.setMask(mask.as_deref()) };
     });
 }
 
-/// The core says what `view`'s shader samples changed
-/// ([`nsh_core::MountItem::ShaderInput`]).
+/// Mounts `layer` on `view` (`None`: it shows nothing of its own).
+pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, layer: Option<Arc<ShaderLayer>>) {
+    {
+        let mut state = view.state_mut();
+        if layer.is_none() && state.shader.is_none() {
+            return;
+        }
+        if layer.is_some() {
+            surface.shaders.renderer();
+        }
+        let shader = state
+            .shader
+            .get_or_insert_with(|| ShaderState::new(surface));
+        if layer.is_none() {
+            // SAFETY: clearing the contents.
+            unsafe { shader.layer.setContents(None) };
+        }
+        let role = layer.as_ref().map_or(shader.role, |l| l.role);
+        let pictures = layer
+            .as_ref()
+            .is_some_and(|l| !l.shader.inputs().is_empty() || l.role != ShaderRole::Fill);
+        shader.backdrop_stale = layer
+            .as_ref()
+            .is_some_and(|l| l.shader.inputs().contains(ShaderInput::Backdrop));
+        shader.stale = pictures;
+        shader.role = role;
+        shader.view.set_layer(layer.clone());
+        let mut pictured = surface.shaders.pictured.borrow_mut();
+        pictured.retain(|v| v != view);
+        if pictures {
+            pictured.push(view.clone());
+        }
+        let key = surface.key();
+        PICTURING.with(|p| {
+            let mut p = p.borrow_mut();
+            p.retain(|&k| k != key);
+            if !pictured.is_empty() {
+                p.push(key);
+            }
+        });
+    }
+    let (role, on) = {
+        let state = view.state();
+        let shader = state.shader.as_ref().expect("a shader");
+        (shader.role, shader.view.layer().is_some())
+    };
+    if role != ShaderRole::Fill {
+        let host = host(surface, view, role);
+        let state = view.state();
+        let shader = state.shader.as_ref().expect("a shader");
+        if on {
+            if shader.layer.superlayer().is_none()
+                && let Some(parent) = host.ns().layer()
+            {
+                shader.layer.setZPosition(OVER);
+                parent.addSublayer(&shader.layer);
+            }
+        } else {
+            shader.layer.removeFromSuperlayer();
+        }
+        drop(state);
+        if on {
+            // Its pictures are of the children alone.
+            host.ensure_container();
+        }
+        // An effect always shows its frames; a transition while it runs.
+        let masked = on && matches!(role, ShaderRole::Effect | ShaderRole::Screen);
+        mask_children(&host, masked);
+        if let Some(shader) = view.state_mut().shader.as_mut() {
+            shader.masked = masked;
+        }
+    }
+    // The decoration shapes a fill's layer and adds it to the view's.
+    view.restyle();
+    if tick(view) {
+        start(surface);
+    }
+}
+
+/// Hides the children the frames show instead of, in `window`, for an
+/// in-process picture of it ([`crate::synth::shot`]: `cacheDisplayInRect:`
+/// draws masked layers whole); the views to show again after.
+#[cfg(feature = "dev")]
+pub(crate) fn hide_masked(
+    window: &objc2_app_kit::NSWindow,
+) -> Vec<Retained<objc2_app_kit::NSView>> {
+    let keys = PICTURING.with(|p| p.borrow().clone());
+    let views: Vec<NshView> = keys
+        .into_iter()
+        .filter_map(Surface::with_key)
+        .flat_map(|s| s.shaders.pictured.borrow().clone())
+        .collect();
+    let mut hidden = Vec::new();
+    for view in views {
+        let Some(surface) = view
+            .state()
+            .shader
+            .as_ref()
+            .filter(|s| s.masked)
+            .and_then(|s| {
+                let role = s.role;
+                s.surface.upgrade().map(|surface| (surface, role))
+            })
+        else {
+            continue;
+        };
+        let host = host(&surface.0, &view, surface.1);
+        if let Some(c) = host.container_view()
+            && c.window().as_deref() == Some(window)
+            && !c.isHidden()
+        {
+            c.setHidden(true);
+            hidden.push(c);
+        }
+    }
+    hidden
+}
+
+/// The core says what `view`'s shader reads changed
+/// ([`nsh_core::MountItem::ShaderInput`]): its pictures are taken again on
+/// the next display frame.
 pub(crate) fn input_changed(surface: &Rc<Surface>, view: &NshView) {
     let marked = view.state_mut().shader.as_mut().is_some_and(|s| {
-        s.stale = s.inputs;
-        s.inputs != 0
+        let inputs = s
+            .view
+            .layer()
+            .map(|l| l.shader.inputs())
+            .unwrap_or_default();
+        s.stale = s.role != ShaderRole::Fill;
+        s.backdrop_stale = inputs.contains(ShaderInput::Backdrop);
+        s.stale || s.backdrop_stale
     });
-    if marked {
-        schedule(surface);
+    if marked && tick_due(view) {
+        start(surface);
     }
 }
 
-/// The UI thread changed `view` (an animated value, scrolling, an image
-/// that loaded): the effects around it and every backdrop take their
+/// The UI thread changed `view` (an animated value, a scroll, an image
+/// that loaded): the effects around it, and every backdrop, take their
 /// pictures again.
 pub(crate) fn ui_changed(view: &NshView) {
-    if SAMPLING.with(Cell::get) == 0 {
-        return;
-    }
-    let mut surface = None;
-    let mut ancestor = Some(view.clone());
-    // A view whose state is in use (drawing itself again) is not a shader.
-    while let Some(v) = ancestor {
-        if let Some(mut st) = v.try_state_mut()
-            && let Some(s) = st.shader.as_mut()
-            && s.effect
-            && (!s.transition || s.running.is_some())
-            && s.inputs & CONTENT != 0
-        {
-            s.stale |= CONTENT;
-            surface = s.surface.upgrade();
+    let keys = PICTURING.with(|p| p.borrow().clone());
+    for key in keys {
+        if let Some(surface) = Surface::with_key(key) {
+            ui_changed_in(&surface, view);
         }
-        ancestor = v.parent_view();
-    }
-    for v in views() {
-        if let Some(mut st) = v.try_state_mut()
-            && let Some(s) = st.shader.as_mut()
-            && s.inputs & BACKDROP != 0
-        {
-            s.stale |= BACKDROP;
-            surface = surface.or_else(|| s.surface.upgrade());
-        }
-    }
-    if let Some(surface) = surface {
-        schedule(&surface);
     }
 }
 
-/// Takes the pictures due on the next display frame.
-fn schedule(surface: &Rc<Surface>) {
-    if SCHEDULED.with(|s| s.replace(true)) {
+fn ui_changed_in(surface: &Rc<Surface>, view: &NshView) {
+    let views = surface.shaders.pictured.borrow().clone();
+    if views.is_empty() {
         return;
     }
-    surface.add_frame_callback(|_, _| {
-        SCHEDULED.with(|s| s.set(false));
-        for view in views() {
-            take_pictures(&view);
+    let mut marked = false;
+    for v in views {
+        if &v == view {
+            continue;
         }
-        false
-    });
+        let Some(mut state) = v.try_state_mut() else {
+            continue;
+        };
+        let Some(shader) = state.shader.as_mut() else {
+            continue;
+        };
+        let inside = shader.role != ShaderRole::Fill
+            && (is_screen(shader.role) || view.ns().isDescendantOf(v.ns()));
+        let backdrop = shader
+            .view
+            .layer()
+            .is_some_and(|l| l.shader.inputs().contains(ShaderInput::Backdrop));
+        if inside {
+            shader.stale = true;
+        }
+        if backdrop {
+            shader.backdrop_stale = true;
+        }
+        if inside || backdrop {
+            marked = true;
+            drop(state);
+            tick_due(&v);
+        }
+    }
+    // While the animator writes, [`wake`] starts them once it is done.
+    if marked && surface.anim.try_borrow_mut().is_ok() {
+        start(surface);
+    }
 }
 
-/// Takes the pictures `view`'s shader is due, then draws it.
-fn take_pictures(view: &NshView) {
-    let (stale, area, effect, children, surface) = {
-        let s = view.state();
-        let Some(state) = s.shader.as_ref() else {
-            return;
-        };
-        // An idle transition draws nothing: its children show.
-        let stale = if state.transition && state.running.is_none() {
-            0
-        } else {
-            state.stale
-        };
-        let children = if state.transition {
-            ShaderInput::To
-        } else {
-            ShaderInput::Content
-        };
-        (
-            stale,
-            state.layer.area(),
-            state.effect,
-            children,
-            state.surface.upgrade(),
-        )
+/// A transition starts ([`nsh_core::MountItem::ShaderTransition`], before
+/// the rest of its batch): the children as they show now are its `from`.
+pub(crate) fn start_transition(
+    surface: &Rc<Surface>,
+    view: &NshView,
+    duration: std::time::Duration,
+) {
+    let Some(renderer) = surface.shaders.renderer() else {
+        return;
     };
-    if stale == 0 || view.ns().window().is_none() {
-        return;
-    }
-    let scale = view.backing_scale();
-    let (pw, ph) = (
-        (area.size.width.0 as f64 * scale).round().max(1.0) as usize,
-        (area.size.height.0 as f64 * scale).round().max(1.0) as usize,
-    );
-    let origin = (area.origin.x.0 as f64, area.origin.y.0 as f64);
-    let mut pictures = Vec::new();
-    if effect
-        && stale & CONTENT != 0
-        && let Some(container) = view.container_view().and_then(|c| c.layer())
-    {
-        // The children, without the mask that hides them.
-        let rgba = crate::surface::quiet(|| {
-            let mask = container.mask();
-            // SAFETY: clearing and restoring the container's own mask.
-            unsafe { container.setMask(None) };
-            let rgba = render(&container, origin, pw, ph, scale);
-            unsafe { container.setMask(mask.as_deref()) };
-            rgba
-        });
-        let mut rgba = rgba;
-        if view.id() == nsh_core::ROOT_ID {
-            // The page and dialog transitions that run, which no
-            // `renderInContext:` draws.
-            add_overlays(view, &mut rgba, pw, ph, scale);
-        }
-        pictures.push((children, rgba));
-    }
-    if stale & BACKDROP != 0
-        && let Some(surface) = &surface
-        && let (Some(root), Some(layer)) = (surface.root.ns().layer(), view.ns().layer())
-    {
-        // What is behind: the surface without the view (and what it holds).
-        // Where the view is in the layer tree `render` draws: while a scroll
-        // runs, AppKit has moved the views before it moves their layers, and
-        // the views' place would picture what is a scroll step away.
-        let at = layer.convertRect_toLayer(layer.bounds(), Some(&root));
-        let rgba = crate::surface::quiet(|| {
-            let opacity = layer.opacity();
-            layer.setOpacity(0.0);
-            let rgba = render(
-                &root,
-                (at.origin.x + origin.0, at.origin.y + origin.1),
-                pw,
-                ph,
-                scale,
-            );
-            layer.setOpacity(opacity);
-            rgba
-        });
-        pictures.push((ShaderInput::Backdrop, rgba));
-    }
-    {
-        let mut s = view.state_mut();
-        let Some(state) = s.shader.as_mut() else {
+    let (role, overflow) = {
+        let state = view.state();
+        let Some(shader) = state.shader.as_ref() else {
             return;
         };
-        state.stale = 0;
-        for (input, rgba) in pictures {
-            state.layer.set_input(input, &rgba, pw, ph, area);
+        (shader.role, shader.view.overflow())
+    };
+    let host = host(surface, view, role);
+    let scale = host.ns().window().map_or(2.0, |w| w.backingScaleFactor());
+    let size = host.state().frame.size;
+    // From what shows: the running transition's frame, or the children.
+    let from = {
+        let state = view.state();
+        let shader = state.shader.as_ref().expect("a shader");
+        (shader.masked && shader.view.frame().width > 0)
+            .then(|| shader.view.frame().tight().to_vec())
+            .map(|rgba| {
+                (
+                    rgba,
+                    shader.view.frame().width as usize,
+                    shader.view.frame().height as usize,
+                )
+            })
+    };
+    let from = from.or_else(|| children_picture(&host, size, overflow.0, scale, is_screen(role)));
+    {
+        let mut state = view.state_mut();
+        let shader = state.shader.as_mut().expect("a shader");
+        if let Some((rgba, w, h)) = &from {
+            shader.view.set_input(
+                renderer,
+                ShaderInput::From,
+                Some((rgba, *w as u32, *h as u32, *w as u32 * 4)),
+            );
         }
+        shader.view.start_transition(duration, Instant::now());
+        shader.stale = true;
+        shader.masked = true;
     }
-    draw(view);
-    show(view);
+    mask_children(&host, true);
+    if tick_due(view) {
+        start(surface);
+    }
+}
+
+/// `host`'s children (its container, without the mask that hides them),
+/// the box grown by `overflow` points, at `scale`: premultiplied RGBA and
+/// its size in pixels. A screen's (`whole`) is all the root shows (the
+/// dialogs and what navigation hosts are beside the container) but the
+/// frames over it.
+fn children_picture(
+    host: &NshView,
+    size: nsh_core::Size<nsh_core::Points>,
+    overflow: f32,
+    scale: CGFloat,
+    whole: bool,
+) -> Option<(Vec<u8>, usize, usize)> {
+    let container = host.container_view().and_then(|c| c.layer());
+    let layer = match (&container, whole) {
+        (Some(c), false) => c.clone(),
+        _ => host.ns().layer()?,
+    };
+    let size = picture_size(size, overflow, scale)?;
+    let origin = (-overflow as f64, -overflow as f64);
+    let rgba = render_with(&layer, origin, size, |context| {
+        let mask = container.as_ref().and_then(|c| c.mask());
+        if let Some(c) = &container {
+            // SAFETY: clearing (and below restoring) the container's own mask.
+            unsafe { c.setMask(None) };
+        }
+        // SAFETY: a getter; the sublayers are retained while hidden.
+        let over: Vec<Retained<CALayer>> = unsafe { layer.sublayers() }
+            .map(|l| {
+                l.iter()
+                    .filter(|l| l.zPosition() >= OVER && !l.isHidden())
+                    .collect()
+            })
+            .unwrap_or_default();
+        over.iter().for_each(|l| l.setHidden(true));
+        layer.renderInContext(context);
+        over.iter().for_each(|l| l.setHidden(false));
+        if let Some(c) = &container {
+            unsafe { c.setMask(mask.as_deref()) };
+        }
+    });
+    Some((rgba, size.0, size.1))
+}
+
+fn picture_size(
+    size: nsh_core::Size<nsh_core::Points>,
+    overflow: f32,
+    scale: CGFloat,
+) -> Option<(usize, usize, CGFloat)> {
+    let (w, h) = (
+        size.width.0 as f64 + 2.0 * overflow as f64,
+        size.height.0 as f64 + 2.0 * overflow as f64,
+    );
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    // At most as large as the renderer draws.
+    let scale = scale.min(nsh_engine::shader::MAX_SIDE as f64 / w.max(h));
+    Some((
+        (w * scale).round().max(1.0) as usize,
+        (h * scale).round().max(1.0) as usize,
+        scale,
+    ))
 }
 
 /// Draws the layers of `layer`'s tree that are due to draw (text and
 /// canvases, which draw through a delegate): `renderInContext:` takes
-/// their contents as they are, and one marked since Core Animation's last
-/// commit (a text drawn again just now) has its old contents still.
+/// their contents as they are.
 fn display_tree(layer: &CALayer) {
     layer.displayIfNeeded();
     // SAFETY: a getter; the sublayers are retained while they are drawn.
@@ -639,8 +495,16 @@ fn display_tree(layer: &CALayer) {
 }
 
 /// `layer` (its views draw y down) rendered into premultiplied RGBA of
-/// `pw` × `ph` pixels, top row first: its point `origin` at the top-left.
-fn render(layer: &CALayer, origin: (f64, f64), pw: usize, ph: usize, scale: CGFloat) -> Vec<u8> {
+/// `pw` × `ph` pixels at `scale`, top row first: its point `origin` at the
+/// top-left. Its layers that are due to draw draw first; then `draw` renders
+/// into the context (`renderInContext:`), hiding what it leaves out (after
+/// the drawing, which sets the views' layers again).
+fn render_with(
+    layer: &CALayer,
+    origin: (f64, f64),
+    (pw, ph, scale): (usize, usize, CGFloat),
+    draw: impl FnOnce(&objc2_core_graphics::CGContext),
+) -> Vec<u8> {
     use objc2_core_graphics::{
         CGBitmapContextCreate, CGColorSpace, CGContext, CGImageAlphaInfo, CGImageByteOrderInfo,
         kCGColorSpaceSRGB,
@@ -667,418 +531,499 @@ fn render(layer: &CALayer, origin: (f64, f64), pw: usize, ph: usize, scale: CGFl
         CGContext::translate_ctm(Some(&context), 0.0, ph as CGFloat);
         CGContext::scale_ctm(Some(&context), scale, -scale);
         CGContext::translate_ctm(Some(&context), -origin.0, -origin.1);
-        layer.renderInContext(&context);
+        crate::surface::quiet(|| draw(&context));
     }
     out
 }
 
-/// The navigation overlays that run in `root` (a surface's root, of
-/// `pw` × `ph` pixels at `scale`) drawn over `rgba`, at their hosts'
-/// places.
-fn add_overlays(root: &NshView, rgba: &mut [u8], pw: usize, ph: usize, scale: CGFloat) {
-    let entries: Vec<_> = OVERLAYS.with(|o| {
-        o.borrow()
-            .iter()
-            .filter_map(|(l, h)| Some((l.upgrade()?, h.load()?)))
-            .collect()
-    });
-    for (layer, host) in entries {
-        if !host.isDescendantOf(root.ns()) {
-            continue;
-        }
-        let at =
-            host.convertPoint_toView(objc2_foundation::NSPoint::new(0.0, 0.0), Some(root.ns()));
-        let Some((w, h, over)) = layer.borrow_mut().picture() else {
-            continue;
+/// Takes the pictures `view`'s shader is due ([`ShaderState::stale`]).
+fn take_pictures(surface: &Surface, view: &NshView, renderer: &Renderer, now: Instant) {
+    let (role, stale, backdrop, overflow) = {
+        let mut state = view.state_mut();
+        let Some(shader) = state.shader.as_mut() else {
+            return;
         };
-        let (x0, y0) = (
-            (at.x * scale).round() as isize,
-            (at.y * scale).round() as isize,
+        // An idle transition draws nothing: its children show.
+        let running = match shader.role {
+            ShaderRole::Transition | ShaderRole::ScreenTransition => {
+                shader.view.replaces_children(now)
+            }
+            _ => true,
+        };
+        let stale = shader.stale && running && shader.role != ShaderRole::Fill;
+        let backdrop = shader.backdrop_stale;
+        // An idle transition's are taken again when it starts.
+        shader.stale = false;
+        shader.backdrop_stale = false;
+        (shader.role, stale, backdrop, shader.view.overflow().0)
+    };
+    if !stale && !backdrop {
+        return;
+    }
+    let host = host(surface, view, role);
+    let Some(window) = host.ns().window() else {
+        return;
+    };
+    let scale = window.backingScaleFactor();
+    let size = host.state().frame.size;
+    let mut pictures = Vec::new();
+    if stale && let Some(p) = children_picture(&host, size, overflow, scale, is_screen(role)) {
+        let input = match role {
+            ShaderRole::Transition | ShaderRole::ScreenTransition => ShaderInput::To,
+            _ => ShaderInput::Content,
+        };
+        pictures.push((input, p));
+    }
+    if backdrop
+        && let (Some(root), Some(layer)) = (surface.root.ns().layer(), view.ns().layer())
+        && let Some(picture) = picture_size(size, overflow, scale)
+    {
+        // What is behind: the surface without the view (and what it holds),
+        // where the view's layer is.
+        let at = layer.convertRect_toLayer(layer.bounds(), Some(&root));
+        let origin = (at.origin.x - overflow as f64, at.origin.y - overflow as f64);
+        let rgba = render_with(&root, origin, picture, |context| {
+            let hidden = layer.isHidden();
+            layer.setHidden(true);
+            root.renderInContext(context);
+            layer.setHidden(hidden);
+        });
+        pictures.push((ShaderInput::Backdrop, (rgba, picture.0, picture.1)));
+    }
+    let mut state = view.state_mut();
+    let Some(shader) = state.shader.as_mut() else {
+        return;
+    };
+    for (input, (rgba, w, h)) in pictures {
+        shader.view.set_input(
+            renderer,
+            input,
+            Some((&rgba, w as u32, h as u32, w as u32 * 4)),
         );
-        for y in 0..h {
-            let ty = y0 + y as isize;
-            if ty < 0 || ty as usize >= ph {
-                continue;
-            }
-            for x in 0..w {
-                let tx = x0 + x as isize;
-                if tx < 0 || tx as usize >= pw {
-                    continue;
-                }
-                let u = &over[(y * w + x) * 4..(y * w + x) * 4 + 4];
-                let b = &mut rgba[(ty as usize * pw + tx as usize) * 4..][..4];
-                // Premultiplied: over = upper + below × (1 − upper's alpha).
-                let keep = 255 - u[3] as u16;
-                for i in 0..4 {
-                    b[i] = (u[i] as u16 + (b[i] as u16 * keep + 127) / 255).min(255) as u8;
-                }
-            }
-        }
     }
 }
 
-/// A shader that reads `nsh.time` draws on every frame while its view is
-/// in a window.
-fn tick(view: &NshView) {
-    let surface = {
-        let mut s = view.state_mut();
-        let Some(state) = s.shader.as_mut() else {
+/// The values of the layer's animated slots. The animator is borrowed
+/// while it writes them: rendering starts once it is done ([`wake`]).
+pub(crate) fn set_args(view: &NshView, values: &[(u16, AnimationValue)]) {
+    {
+        let mut state = view.state_mut();
+        let Some(shader) = state.shader.as_mut() else {
             return;
         };
-        if state.ticking || !state.layer.draws_every_frame() || view.ns().window().is_none() {
+        for &(slot, value) in values {
+            shader.view.set_slot(slot, value);
+        }
+    }
+    tick(view);
+}
+
+/// It was deleted: no more pictures are taken for it.
+pub(crate) fn deleted(surface: &Surface, view: &NshView) {
+    surface.shaders.pictured.borrow_mut().retain(|v| v != view);
+}
+
+/// Its size changed: a frame of the new size is rendered.
+pub(crate) fn resized(surface: &Rc<Surface>, view: &NshView) {
+    if view.state().shader.is_some() && tick(view) {
+        start(surface);
+    }
+}
+
+/// It can be seen again (after [`crate::mount::Mounter::draw_when_shown`]
+/// put it off): renders what it missed.
+pub(crate) fn shown(view: &NshView) {
+    let surface = {
+        let mut state = view.state_mut();
+        let Some(shader) = state.shader.as_mut() else {
+            return;
+        };
+        if !shader.hidden {
             return;
         }
-        let Some(surface) = state.surface.upgrade() else {
-            return;
+        shader.hidden = false;
+        shader.surface.upgrade()
+    };
+    if tick(view)
+        && let Some(surface) = surface
+    {
+        start(&surface);
+    }
+}
+
+/// Starts rendering the views whose animated slots were written
+/// ([`set_args`]), once the animator is no longer borrowed.
+pub(crate) fn wake(surface: &Surface) {
+    let shaders = &surface.shaders;
+    if shaders.running.get() || shaders.views.borrow().is_empty() {
+        return;
+    }
+    if let Some(surface) = Surface::with_key(surface.key()) {
+        start(&surface);
+    }
+}
+
+/// The app stopped: its views render no more.
+pub(crate) fn clear(surface: &Surface) {
+    surface.shaders.views.borrow_mut().clear();
+    surface.shaders.pictured.borrow_mut().clear();
+    surface.shaders.running.set(false);
+}
+
+/// Adds `view` to the views rendering if it has a frame to render; whether
+/// it was added (the caller then [`start`]s the frame callback).
+fn tick(view: &NshView) -> bool {
+    tick_if(view, false)
+}
+
+/// As [`tick`], also when only pictures are due.
+fn tick_due(view: &NshView) -> bool {
+    tick_if(view, true)
+}
+
+fn tick_if(view: &NshView, pictures_due: bool) -> bool {
+    let surface = {
+        let mut state = view.state_mut();
+        let Some(shader) = state.shader.as_mut() else {
+            return false;
         };
-        state.ticking = true;
+        let due =
+            shader.view.wants_frame() || (pictures_due && (shader.stale || shader.backdrop_stale));
+        if shader.ticking || shader.hidden || !due {
+            return false;
+        }
+        let Some(surface) = shader.surface.upgrade() else {
+            return false;
+        };
+        if surface.shaders.renderer().is_none() {
+            return false;
+        }
+        shader.ticking = true;
         surface
     };
-    let weak = view.downgrade();
-    surface.add_frame_callback(move |_, _| {
-        let Some(view) = NshView::upgrade(&weak) else {
-            return false;
-        };
-        let mut s = view.state_mut();
-        let Some(state) = s.shader.as_mut() else {
-            return false;
-        };
-        if !state.layer.draws_every_frame() || view.ns().window().is_none() {
-            state.ticking = false;
-            return false;
+    surface.shaders.views.borrow_mut().push(view.clone());
+    true
+}
+
+/// Runs the frame callback that renders the views, if it does not run.
+fn start(surface: &Rc<Surface>) {
+    let shaders = &surface.shaders;
+    if shaders.running.get() || shaders.views.borrow().is_empty() {
+        return;
+    }
+    shaders.running.set(true);
+    surface.add_frame_callback(|surface, _| {
+        let more = frame(surface);
+        if !more {
+            surface.shaders.running.set(false);
         }
-        state.layer.draw();
-        true
+        more
     });
 }
 
-/// What it shows, for an in-process picture of the window (screenshots),
-/// which does not draw a `CAMetalLayer`: a sublayer with it as an image,
-/// removed when the returned guard drops.
-#[cfg(feature = "dev")]
-pub(crate) fn picture_layer(view: &NshView) -> Option<objc2::rc::Retained<CALayer>> {
-    let (w, h, rgba) = view.state_mut().shader.as_mut()?.layer.picture()?;
-    let image = crate::image::rgba_pixels_image(w, h, &rgba)?;
-    let layer = CALayer::new();
-    let (area, effect) = {
-        let s = view.state();
-        let state = s.shader.as_ref()?;
-        (state.layer.area(), state.effect)
+/// One display frame: each view renders and collects; whether a view has
+/// more to render.
+fn frame(surface: &Rc<Surface>) -> bool {
+    let shaders = &surface.shaders;
+    let Some(renderer) = shaders.renderer() else {
+        return false;
     };
+    let Ok(mounter) = surface.mounter.try_borrow() else {
+        return true;
+    };
+    let views = std::mem::take(&mut *shaders.views.borrow_mut());
+    let now = Instant::now();
+    let mut kept = Vec::with_capacity(views.len());
+    for view in views {
+        let deleted = mounter.views.get(&view.id()) != Some(&view);
+        let screen = view
+            .state()
+            .shader
+            .as_ref()
+            .is_some_and(|s| is_screen(s.role));
+        let hidden = !deleted && !screen && !view.shown();
+        if !deleted && !hidden {
+            take_pictures(surface, &view, renderer, now);
+        }
+        let more = !deleted && !hidden && render_view(surface, &view, renderer, now);
+        if more {
+            kept.push(view);
+            continue;
+        }
+        if let Some(shader) = view.state_mut().shader.as_mut() {
+            shader.ticking = false;
+            shader.hidden = hidden;
+        }
+        if hidden {
+            // Rendered again once it shows ([`shown`]).
+            mounter.draw_when_shown(&view, Damage::All);
+        }
+    }
+    drop(mounter);
+    let mut views = shaders.views.borrow_mut();
+    kept.append(&mut views);
+    *views = kept;
+    !views.is_empty()
+}
+
+/// Renders and collects `view`'s frame, showing one that came back;
+/// whether it has more to render.
+fn render_view(surface: &Surface, view: &NshView, renderer: &Renderer, now: Instant) -> bool {
+    let role = view
+        .state()
+        .shader
+        .as_ref()
+        .map_or(ShaderRole::Fill, |s| s.role);
+    let host = host(surface, view, role);
+    let scale = host.ns().window().map_or(2.0, |w| w.backingScaleFactor()) as f32;
+    let size = host.state().frame.size;
+    let mut state = view.state_mut();
+    let Some(shader) = state.shader.as_mut() else {
+        return false;
+    };
+    shader.view.set_size(size, scale);
+    if role != ShaderRole::Fill {
+        // Over the box, `overflow` points beyond it.
+        let o = shader.view.overflow().0 as f64;
+        crate::surface::quiet(|| {
+            shader.layer.setFrame(CGRect::new(
+                CGPoint::new(-o, -o),
+                CGSize::new(
+                    size.width.0 as f64 + 2.0 * o,
+                    size.height.0 as f64 + 2.0 * o,
+                ),
+            ));
+        });
+    }
+    if shader.view.render(renderer, now) {
+        let image = frame_image(shader.view.frame());
+        let contents = image.as_deref().map(crate::decor::image_object);
+        // SAFETY: a CGImage is a valid `contents` object (none clears it).
+        crate::surface::quiet(|| unsafe { shader.layer.setContents(contents.as_deref()) });
+    }
+    // A transition that ended: its children show as they are.
+    if matches!(role, ShaderRole::Transition | ShaderRole::ScreenTransition)
+        && shader.masked
+        && !shader.view.replaces_children(now)
     {
-        use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-        layer.setAnchorPoint(CGPoint::new(0.0, 0.0));
-        layer.setFrame(CGRect::new(
-            CGPoint::new(area.origin.x.0 as f64, area.origin.y.0 as f64),
-            CGSize::new(area.size.width.0 as f64, area.size.height.0 as f64),
-        ));
+        shader.masked = false;
+        // SAFETY: clearing the contents.
+        crate::surface::quiet(|| unsafe { shader.layer.setContents(None) });
+        drop(state);
+        mask_children(&host, false);
+        return false;
     }
-    let ptr = &*image as *const CGImage as *mut objc2::runtime::AnyObject;
-    // SAFETY: CF objects are Objective-C objects; a CGImage is a valid
-    // layer content.
-    unsafe { layer.setContents(objc2::rc::Retained::retain(ptr).as_deref()) };
-    layer.setZPosition(if effect {
-        crate::decor::EFFECT
-    } else {
-        crate::decor::SHADER
-    });
-    // Shaped as the shader's layer is (the view's corners).
-    {
-        let s = view.state();
-        // SAFETY: a `CAMetalLayer` is a `CALayer`.
-        let content: &CALayer = unsafe {
-            &*(s.shader.as_ref()?.layer.layer() as *const objc2::runtime::AnyObject
-                as *const CALayer)
-        };
-        layer.setCornerRadius(content.cornerRadius());
-        layer.setCornerCurve(&content.cornerCurve());
-        layer.setMasksToBounds(content.masksToBounds());
-        if let Some(mask) = content
-            .mask()
-            .and_then(|m| m.downcast::<objc2_quartz_core::CAShapeLayer>().ok())
-        {
-            let m = objc2_quartz_core::CAShapeLayer::new();
-            m.setPath(mask.path().as_deref());
-            // SAFETY: a fresh mask layer, owned by the picture layer.
-            unsafe { layer.setMask(Some(&m)) };
-        }
-    }
-    view.ns().layer()?.addSublayer(&layer);
-    Some(layer)
+    shader.view.wants_frame() || shader.stale || shader.backdrop_stale
 }
 
-/// Hides the children of the effects in `window` that draw through their
-/// shader, for an in-process picture (which draws their masked container
-/// whole); the caller shows them again.
-#[cfg(feature = "dev")]
-pub(crate) fn hide_effect_children(
-    window: &objc2_app_kit::NSWindow,
-) -> Vec<objc2::rc::Retained<objc2_app_kit::NSView>> {
-    views()
-        .iter()
-        .filter(|v| v.ns().window().as_deref() == Some(window))
-        .filter(|v| {
-            v.state()
-                .shader
-                .as_ref()
-                .is_some_and(|s| s.effect && !content_layer(&s.layer).isHidden())
-        })
-        .filter_map(|v| v.container_view())
-        .filter(|c| !c.isHidden())
-        .inspect(|c| c.setHidden(true))
-        .collect()
+/// A frame's premultiplied sRGB RGBA pixels as a CGImage (`None` when it is
+/// empty).
+fn frame_image(frame: &Frame) -> Option<CFRetained<CGImage>> {
+    rgba_image(frame.width as usize, frame.height as usize, frame.rows())
 }
 
-/// Pictures of the navigation overlays that run in `window`, added over
-/// the views they cover for an in-process picture (which draws no
-/// `CAMetalLayer`, and a view's sublayers under its subviews): views, the
-/// last subviews of the views they cover; the caller removes them.
-#[cfg(feature = "dev")]
-pub(crate) fn overlay_pictures(
-    window: &objc2_app_kit::NSWindow,
-) -> Vec<objc2::rc::Retained<objc2_app_kit::NSView>> {
-    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-    let entries: Vec<_> = OVERLAYS.with(|o| {
-        o.borrow()
-            .iter()
-            .filter_map(|(l, h)| Some((l.upgrade()?, h.load()?)))
-            .collect()
-    });
-    let mut out = Vec::new();
-    for (layer, host) in entries {
-        if host.window().as_deref() != Some(window) {
-            continue;
-        }
-        let mut layer = layer.borrow_mut();
-        let area = layer.area();
-        let Some((w, h, rgba)) = layer.picture() else {
-            continue;
-        };
-        let Some(image) = crate::image::rgba_pixels_image(w, h, &rgba) else {
-            continue;
-        };
-        let Some(mtm) = objc2::MainThreadMarker::new() else {
-            continue;
-        };
-        let frame = CGRect::new(
-            CGPoint::new(area.origin.x.0 as f64, area.origin.y.0 as f64),
-            CGSize::new(area.size.width.0 as f64, area.size.height.0 as f64),
-        );
-        let picture = objc2_app_kit::NSView::initWithFrame(mtm.alloc(), frame);
-        picture.setWantsLayer(true);
-        if let Some(l) = picture.layer() {
-            let ptr = &*image as *const CGImage as *mut objc2::runtime::AnyObject;
-            // SAFETY: CF objects are Objective-C objects; a CGImage is a
-            // valid layer content.
-            unsafe { l.setContents(objc2::rc::Retained::retain(ptr).as_deref()) };
-        }
-        host.addSubview(&picture);
-        out.push(picture);
-    }
-    out
-}
-
-/// Every shader view of the process (the screenshot keeps those in its
-/// window).
-#[cfg(feature = "dev")]
-pub(crate) fn shader_views() -> Vec<NshView> {
-    views()
-}
-
-/// A page's or a dialog's transition through a shader
-/// ([`nsh_core::NavShader`]): a `CAMetalLayer` over `host` (the stack, or
-/// the surface's root for a dialog) drawing pictures of its two sides, the
-/// lower one `sample_from` and the upper one `sample_to`, while the
-/// navigation's motion runs; removed when it is dropped.
-pub(crate) struct NavOverlay {
-    layer: Rc<RefCell<nsh_metal::ShaderLayer>>,
-    /// The view it covers.
-    host: objc2::rc::Weak<ViewObj>,
-    start: std::time::Instant,
-    duration: std::time::Duration,
-    /// It runs backwards (a pop, a dialog that closes): `nsh.progress`
-    /// goes from 1 to 0.
-    reverse: bool,
-    /// Takes the picture of the upper side on the first display frame:
-    /// AppKit puts a view that came in this batch into the layer tree only
-    /// then.
-    upper: RefCell<Option<TakePicture>>,
-}
-
-/// Takes a picture when it is called ([`NavOverlay`]'s upper side).
-type TakePicture = Box<dyn Fn() -> Option<Picture>>;
-
-/// A picture of a view: premultiplied RGBA, its size in pixels.
-pub(crate) struct Picture {
-    rgba: Vec<u8>,
+/// `height` rows of `width` premultiplied sRGB RGBA pixels as a CGImage
+/// (`None` when it is empty).
+fn rgba_image<'a>(
     width: usize,
     height: usize,
+    rows: impl Iterator<Item = &'a [u8]>,
+) -> Option<CFRetained<CGImage>> {
+    use objc2_core_graphics::{
+        CGBitmapContextCreate, CGBitmapContextCreateImage, CGBitmapContextGetBytesPerRow,
+        CGBitmapContextGetData, CGColorSpace, CGImageAlphaInfo, CGImageByteOrderInfo,
+        kCGColorSpaceSRGB,
+    };
+    if width == 0 || height == 0 {
+        return None;
+    }
+    // SAFETY: a constant of CoreGraphics.
+    let space = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB }))?;
+    // SAFETY: CoreGraphics allocates the pixels (null data) of an RGBA
+    // context of these dimensions; each row is copied within its
+    // `bytes_per_row` bytes of the `bytes_per_row * height` while `context`
+    // lives.
+    unsafe {
+        let context = CGBitmapContextCreate(
+            std::ptr::null_mut(),
+            width,
+            height,
+            8,
+            width * 4,
+            Some(&space),
+            CGImageAlphaInfo::PremultipliedLast.0 | CGImageByteOrderInfo::Order32Big.0,
+        )?;
+        let data = CGBitmapContextGetData(Some(&context)).cast::<u8>();
+        if data.is_null() {
+            return None;
+        }
+        let stride = CGBitmapContextGetBytesPerRow(Some(&context));
+        let pixels = std::slice::from_raw_parts_mut(data, stride * height);
+        for (row, src) in rows.enumerate() {
+            let len = src.len().min(stride);
+            pixels[row * stride..row * stride + len].copy_from_slice(&src[..len]);
+        }
+        CGBitmapContextCreateImage(Some(&context))
+    }
 }
 
-/// `host` drawn as it shows now with `hidden` left out, then `over` (a
-/// view in it) drawn over it from its own layer, at its backing scale; its
-/// `bool`: the layer shows an image as its contents, which comes out
-/// upside down in the flipped drawing.
-/// AppKit puts the layer of a view added since its last display into the
-/// tree only when it displays it: a view that just came draws from its
-/// own layer.
-pub(crate) fn picture_of(
-    host: &NshView,
-    hidden: &[&CALayer],
-    over: Option<(&objc2_app_kit::NSView, bool)>,
-) -> Option<Picture> {
-    let layer = host.ns().layer()?;
-    let size = host.state().frame.size;
-    let scale = host.backing_scale();
-    let (width, height) = (
-        (size.width.0 as f64 * scale).round().max(1.0) as usize,
-        (size.height.0 as f64 * scale).round().max(1.0) as usize,
-    );
-    // A root drawn through its screen effect: the views under it.
-    let masked = is_screen(host)
-        .then(|| host.container_view().and_then(|c| c.layer()))
-        .flatten();
-    let rgba = crate::surface::quiet(|| {
-        let was: Vec<bool> = hidden.iter().map(|l| l.isHidden()).collect();
-        hidden.iter().for_each(|l| l.setHidden(true));
-        let mask = masked.as_ref().and_then(|c| c.mask());
-        if let Some(c) = &masked {
-            // SAFETY: clearing and restoring the container's own mask.
-            unsafe { c.setMask(None) };
-        }
-        let mut rgba = render(&layer, (0.0, 0.0), width, height, scale);
-        if let Some(c) = &masked {
-            // SAFETY: as above.
-            unsafe { c.setMask(mask.as_deref()) };
-        }
-        hidden.iter().zip(was).for_each(|(l, w)| l.setHidden(w));
-        if let Some((view, image)) = over
-            && let Some(top) = view.layer()
-        {
-            let f = view.frame();
-            let was = top.isHidden();
-            top.setHidden(false);
-            let mut upper = render(&top, (-f.origin.x, -f.origin.y), width, height, scale);
-            top.setHidden(was);
-            if image {
-                // Its rows within its frame, the other way up.
-                let row = width * 4;
-                let y0 = ((f.origin.y * scale).round().max(0.0) as usize).min(height);
-                let y1 =
-                    (((f.origin.y + f.size.height) * scale).round().max(0.0) as usize).min(height);
-                let (mut a, mut b) = (y0, y1);
-                while a + 1 < b {
-                    b -= 1;
-                    let (top_rows, rest) = upper.split_at_mut(b * row);
-                    top_rows[a * row..a * row + row].swap_with_slice(&mut rest[..row]);
-                    a += 1;
-                }
-            }
-            // Premultiplied: over = upper + below × (1 − upper's alpha).
-            for (b, u) in rgba.chunks_mut(4).zip(upper.chunks(4)) {
-                let keep = 255 - u[3] as u16;
-                for i in 0..4 {
-                    b[i] = (u[i] as u16 + (b[i] as u16 * keep + 127) / 255).min(255) as u8;
-                }
-            }
-        }
-        rgba
-    });
-    Some(Picture {
-        rgba,
-        width,
-        height,
-    })
+/// A page's or a dialog's coming or going drawn through its
+/// `transitionShader` ([`nsh_core::NavShader`]): a layer over `host` (the
+/// stack, or the root for a dialog) showing the shader's frames, which
+/// read the host without its upper side (what comes, or what leaves) as
+/// `from` and with it as `to`; going away runs backwards. Both are pictured
+/// on the first display frame (a view navigation just showed has no layer
+/// in the tree before AppKit displays the window, and out of it its layers
+/// draw y up), the side that comes again on each (it is laid out and drawn
+/// over the next ones). Navigation keeps the views at rest under it and
+/// ends it with its motion.
+pub(crate) struct NavOverlay {
+    view: RefCell<ShaderView>,
+    layer: Retained<CALayer>,
+    host: NshView,
+    upper: Retained<objc2_app_kit::NSView>,
+    /// What the upper side shows, when it is a picture navigation hosts
+    /// (a page or a dialog that left: its view's layer is out of the tree).
+    image: Option<CFRetained<CGImage>>,
+    backwards: bool,
+    duration: std::time::Duration,
+    picture: (usize, usize, CGFloat),
+    /// The first display frame pictured both sides and started it.
+    started: Cell<bool>,
 }
 
 impl NavOverlay {
-    /// Over `host`, `from` (the lower side) through `shader` to what `to`
-    /// pictures on the first display frame (the upper side); backwards
-    /// when `reverse`. `None` where Metal draws nothing.
+    /// Starts the shader over `host`, whose upper side is `upper` (a view
+    /// in it, showing `image` when it is a picture); `None`: there is no
+    /// GPU device, or nothing to show.
     pub(crate) fn new(
+        surface: &Surface,
         host: &NshView,
+        upper: &objc2_app_kit::NSView,
+        image: Option<CFRetained<CGImage>>,
         shader: &nsh_core::NavShader,
-        from: Picture,
-        to: Box<dyn Fn() -> Option<Picture>>,
-        reverse: bool,
-    ) -> Option<Self> {
-        let mut layer = nsh_metal::ShaderLayer::new()?;
+        backwards: bool,
+    ) -> Option<NavOverlay> {
+        surface.shaders.renderer()?;
+        let layer = host.ns().layer()?;
+        let scale = host.ns().window().map_or(2.0, |w| w.backingScaleFactor());
         let size = host.state().frame.size;
-        layer.set_frame(
-            size.width.0 as f64,
-            size.height.0 as f64,
-            host.backing_scale(),
-        );
-        let _ = layer.set_fill(Some(shader.fill.clone()));
-        let area = layer.area();
-        layer.set_input(ShaderInput::From, &from.rgba, from.width, from.height, area);
-        layer.set_progress(if reverse { 1.0 } else { 0.0 });
-        let ca = content_layer(&layer);
-        // Over the screens and modals it stands for.
-        ca.setZPosition(1.0e6);
-        host.ns().layer()?.addSublayer(ca);
-        layer.draw();
-        let layer = Rc::new(RefCell::new(layer));
-        OVERLAYS.with(|o| {
-            let mut o = o.borrow_mut();
-            o.retain(|(l, _)| l.strong_count() > 0);
-            o.push((Rc::downgrade(&layer), objc2::rc::Weak::from(host.ns())));
-        });
-        Some(Self {
-            layer,
-            host: host.downgrade(),
-            start: std::time::Instant::now(),
+        let picture = picture_size(size, 0.0, scale)?;
+        let mut view = ShaderView::default();
+        view.set_layer(Some(shader.layer.clone()));
+        view.set_size(size, picture.2 as f32);
+        let overlay = NavOverlay {
+            view: RefCell::new(view),
+            layer: CALayer::new(),
+            host: host.clone(),
+            upper: Retained::from(upper),
+            image,
+            backwards,
             duration: shader.duration,
-            reverse,
-            upper: RefCell::new(Some(to)),
+            picture,
+            started: Cell::new(false),
+        };
+        // SAFETY: an immutable Core Animation constant.
+        overlay
+            .layer
+            .setContentsGravity(unsafe { kCAGravityResize });
+        overlay.layer.setZPosition(OVER);
+        // Until its first frame: what showed. Coming, the lower side (the
+        // host as it is, the upper side left out); going, the views at rest
+        // show it (the upper side on top).
+        let first = (!backwards).then(|| overlay.side(false));
+        let (pw, ph, _) = picture;
+        let image = first.and_then(|rgba| rgba_image(pw, ph, rgba.chunks(pw * 4)));
+        let contents = image.as_deref().map(crate::decor::image_object);
+        crate::surface::quiet(|| {
+            overlay.layer.setFrame(CGRect::new(
+                CGPoint::new(0.0, 0.0),
+                CGSize::new(size.width.0 as f64, size.height.0 as f64),
+            ));
+            // SAFETY: a CGImage is a valid `contents` object.
+            unsafe { overlay.layer.setContents(contents.as_deref()) };
+            layer.addSublayer(&overlay.layer);
+        });
+        Some(overlay)
+    }
+
+    /// The host without the upper side (`with_upper`: with it on top, drawn
+    /// on its own where its view is), the overlay left out.
+    fn side(&self, with_upper: bool) -> Vec<u8> {
+        let (Some(host), Some(upper)) = (self.host.ns().layer(), self.upper.layer()) else {
+            return Vec::new();
+        };
+        display_tree(&upper);
+        let at = self.upper.convertPoint_toView(
+            objc2_foundation::NSPoint::new(0.0, 0.0),
+            Some(self.host.ns()),
+        );
+        render_with(&host, (0.0, 0.0), self.picture, |context| {
+            use objc2_core_graphics::CGContext;
+            let hidden = (upper.isHidden(), self.layer.isHidden());
+            upper.setHidden(true);
+            self.layer.setHidden(true);
+            host.renderInContext(context);
+            upper.setHidden(hidden.0);
+            self.layer.setHidden(hidden.1);
+            if with_upper {
+                CGContext::save_g_state(Some(context));
+                CGContext::translate_ctm(Some(context), at.x, at.y);
+                match &self.image {
+                    // Images draw y up.
+                    Some(image) => {
+                        let size = self.upper.frame().size;
+                        CGContext::translate_ctm(Some(context), 0.0, size.height);
+                        CGContext::scale_ctm(Some(context), 1.0, -1.0);
+                        let rect = CGRect::new(CGPoint::new(0.0, 0.0), size);
+                        CGContext::draw_image(Some(context), rect, Some(image));
+                    }
+                    None => upper.renderInContext(context),
+                }
+                CGContext::restore_g_state(Some(context));
+            }
         })
     }
 
-    /// Draws it at its progress now (linear over its duration).
-    pub(crate) fn tick(&self) {
-        let to = self.upper.borrow_mut().take();
-        if let Some(p) = to.and_then(|to| to()) {
-            let mut layer = self.layer.borrow_mut();
-            let area = layer.area();
-            layer.set_input(ShaderInput::To, &p.rgba, p.width, p.height, area);
+    /// One display frame: pictures the sides (the first time both, then the
+    /// one that comes), renders and shows a frame that came back.
+    pub(crate) fn tick(&self, surface: &Surface) {
+        let Some(renderer) = surface.shaders.renderer() else {
+            return;
+        };
+        let first = !self.started.replace(true);
+        let mut sides = Vec::with_capacity(2);
+        if first || self.backwards {
+            sides.push((ShaderInput::From, self.side(false)));
         }
-        let t = (self.start.elapsed().as_secs_f32()
-            / self.duration.as_secs_f32().max(f32::EPSILON))
-        .min(1.0);
-        {
-            let mut layer = self.layer.borrow_mut();
-            layer.set_progress(if self.reverse { 1.0 - t } else { t });
-            layer.draw();
+        if first || !self.backwards {
+            sides.push((ShaderInput::To, self.side(true)));
         }
-        // A screen effect over it draws it from a picture.
-        if let Some(host) = NshView::upgrade(&self.host) {
-            ui_changed(&host);
+        let (pw, ph, _) = self.picture;
+        let mut view = self.view.borrow_mut();
+        for (input, rgba) in &sides {
+            let picture = (&rgba[..], pw as u32, ph as u32, pw as u32 * 4);
+            view.set_input(renderer, *input, Some(picture));
         }
-    }
-
-    /// Its duration.
-    pub(crate) fn duration(&self) -> std::time::Duration {
-        self.duration
-    }
-
-    /// How long it has run.
-    pub(crate) fn elapsed(&self) -> std::time::Duration {
-        self.start.elapsed()
-    }
-
-    /// What it shows now, drawn again into a picture.
-    pub(crate) fn picture(&self) -> Option<Picture> {
-        let (width, height, rgba) = self.layer.borrow_mut().picture()?;
-        Some(Picture {
-            rgba,
-            width,
-            height,
-        })
+        if first {
+            let now = Instant::now();
+            if self.backwards {
+                view.start_transition_backwards(self.duration, now);
+            } else {
+                view.start_transition(self.duration, now);
+            }
+        }
+        if view.render(renderer, Instant::now()) {
+            let image = frame_image(view.frame());
+            let contents = image.as_deref().map(crate::decor::image_object);
+            // SAFETY: a CGImage is a valid `contents` object.
+            crate::surface::quiet(|| unsafe { self.layer.setContents(contents.as_deref()) });
+        }
     }
 }
 
 impl Drop for NavOverlay {
     fn drop(&mut self) {
-        crate::surface::quiet(|| content_layer(&self.layer.borrow()).removeFromSuperlayer());
+        crate::surface::quiet(|| self.layer.removeFromSuperlayer());
     }
 }

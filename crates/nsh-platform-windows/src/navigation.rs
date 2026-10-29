@@ -437,8 +437,6 @@ struct StackNav {
 #[derive(Default)]
 struct ModalNav {
     config: ModalConfig,
-    /// How it appears and goes through a shader.
-    shader: Option<nsh_core::NavShader>,
     /// Its view while it is presented.
     view: Option<NshView>,
     /// The user closed it natively (`closeOnEscape`) and it was reported:
@@ -554,84 +552,6 @@ impl NavRun {
     }
 }
 
-/// A screen transition starts (`<ScreenTransition>`, before the rest of
-/// its batch): the surface's root recorded now (a running one's layer
-/// in it) is its `sample_from`; on the first frame after the batch, the
-/// root recorded again without the transition's layer is its `sample_to`,
-/// drawn through `fill` by a [`crate::shader::NavItem`] in a layer view
-/// over the root, while `nsh.progress` goes from 0 to 1.
-pub(crate) fn screen_transition(
-    surface: &Rc<Surface>,
-    fill: std::sync::Arc<nsh_core::shader::ShaderFill>,
-    duration: Duration,
-) {
-    use windows::core::Interface;
-    let root = surface.root.clone();
-    let Some(lower) = record(surface, &root) else {
-        return;
-    };
-    let Ok(lower) = lower
-        .list
-        .cast::<windows::Win32::Graphics::Direct2D::ID2D1Image>()
-    else {
-        return;
-    };
-    let item = Rc::new(crate::shader::NavItem::new(fill, lower.clone(), lower));
-    item.set_progress(0.0);
-    let frame = root.state().frame;
-    let layer = layer_view();
-    let area = rect(0.0, 0.0, frame.size.width.0, frame.size.height.0);
-    set_frame(&layer, area);
-    let hosted: Rc<dyn Hosted> = item.clone();
-    layer.set_native(&hosted, area);
-    layer.insert_before(&root, None);
-    let run = NavRun {
-        layer: layer.clone(),
-        item: item.clone(),
-        start: std::time::Instant::now(),
-        duration,
-        reverse: false,
-    };
-    // One that ran goes: this one started from what it showed.
-    let ran = surface.nav.borrow_mut().screen.replace(run);
-    drop(ran);
-    let mut upper_due = true;
-    surface.on_frame(move |surface, _| {
-        let runs = surface
-            .nav
-            .borrow()
-            .screen
-            .as_ref()
-            .is_some_and(|r| Rc::ptr_eq(&r.item, &item));
-        if !runs {
-            return false;
-        }
-        if std::mem::take(&mut upper_due) {
-            let root = surface.root.clone();
-            set_concealed(surface, &layer, true);
-            let upper = record(surface, &root).and_then(|p| {
-                p.list
-                    .cast::<windows::Win32::Graphics::Direct2D::ID2D1Image>()
-                    .ok()
-            });
-            set_concealed(surface, &layer, false);
-            if let Some(upper) = upper {
-                item.set_upper(upper);
-            }
-        }
-        let mut nav = surface.nav.borrow_mut();
-        let Some(run) = nav.screen.as_ref() else {
-            return false;
-        };
-        run.tick();
-        if run.start.elapsed() < run.duration {
-            return true;
-        }
-        nav.screen = None;
-        false
-    });
-}
-
 impl Drop for NavRun {
     fn drop(&mut self) {
         self.layer.unparent();
@@ -706,8 +626,13 @@ impl Motion {
         ) else {
             return;
         };
-        let item = Rc::new(crate::shader::NavItem::new(shader.fill.clone(), lower, top));
-        item.set_progress(if reverse { 1.0 } else { 0.0 });
+        let item = Rc::new(crate::shader::NavItem::new(
+            surface,
+            &shader.layer,
+            lower,
+            top,
+            reverse,
+        ));
         let frame = host.state().frame;
         let layer = layer_view();
         set_frame(
@@ -760,8 +685,8 @@ pub(crate) struct Nav {
     /// The images of top screens and modals recorded in this batch, before
     /// their views were torn down.
     images: Vec<(NodeId, Picture)>,
-    /// The screen transition that runs (`<ScreenTransition>`).
-    screen: Option<NavRun>,
+    /// How pages and dialogs come and go through a shader, by node.
+    shaders: FxHashMap<NodeId, nsh_core::NavShader>,
 }
 
 impl Nav {
@@ -1006,9 +931,10 @@ impl Nav {
             Some(old) if Some(old) != new && find(old).is_none() => self.take_image(old),
             _ => None,
         };
-        let leaving_animation = old
-            .and_then(|id| self.screens.get(&id))
-            .map(|s| (s.config.animation, s.config.shader.clone()));
+        let leaving_animation = old.and_then(|id| {
+            let s = self.screens.get(&id)?;
+            Some((s.config.animation, self.shaders.get(&id).cloned()))
+        });
         for id in &prev {
             if find(*id).is_none() {
                 self.screens.remove(id);
@@ -1037,7 +963,7 @@ impl Nav {
         let animation = if pushing {
             self.screens
                 .get(&new)
-                .map(|s| (s.config.animation, s.config.shader.clone()))
+                .map(|s| (s.config.animation, self.shaders.get(&new).cloned()))
         } else {
             leaving_animation
         };
@@ -1129,7 +1055,7 @@ impl Nav {
         let (animation, shader) = self
             .screens
             .get(&top)
-            .map(|s| (s.config.animation, s.config.shader.clone()))
+            .map(|s| (s.config.animation, self.shaders.get(&top).cloned()))
             .unwrap_or_default();
         match (screen_motion(animation, reduce_motion(surface)), find(top)) {
             (Some((duration, fade)), Some(leaving)) => {
@@ -1186,7 +1112,7 @@ impl Nav {
         let Some(view) = m.view.take() else { return };
         let restore = m.restore.take();
         let motion = modal_motion(m.config.animation, reduce_motion(surface));
-        let shader = m.shader.clone();
+        let shader = self.shaders.get(&id).cloned();
         let frame = view.state().frame;
         // Recorded when the batch began tearing it down, or now (the user
         // closed it: it is whole).
@@ -1240,7 +1166,7 @@ impl Nav {
             return;
         };
         let Some(view) = m.view.clone() else { return };
-        let shader = m.shader.clone();
+        let shader = self.shaders.get(&id).cloned();
         match modal_motion(m.config.animation, reduce_motion(surface)) {
             Some((duration, fade)) => {
                 let motion = Motion::ModalIn {
@@ -1497,18 +1423,20 @@ pub(crate) fn screen_config(surface: &Rc<Surface>, view: &NshView, config: &Scre
 }
 
 /// `ModalConfig`.
-pub(crate) fn modal_config(
-    surface: &Rc<Surface>,
-    view: &NshView,
-    config: &ModalConfig,
-    shader: &Option<nsh_core::NavShader>,
-) {
+pub(crate) fn modal_config(surface: &Rc<Surface>, view: &NshView, config: &ModalConfig) {
     let mut nav = surface.nav.borrow_mut();
     let id = view.id();
-    let modal = nav.modals.entry(id).or_default();
-    modal.config = *config;
-    modal.shader = shader.clone();
+    nav.modals.entry(id).or_default().config = *config;
     nav.size_modal(surface, id);
+}
+
+/// `NavShader`: how page or dialog `id` comes and goes through a shader.
+pub(crate) fn nav_shader(surface: &Rc<Surface>, id: NodeId, shader: Option<nsh_core::NavShader>) {
+    let mut nav = surface.nav.borrow_mut();
+    match shader {
+        Some(shader) => nav.shaders.insert(id, shader),
+        None => nav.shaders.remove(&id),
+    };
 }
 
 /// A modal was inserted: present it.

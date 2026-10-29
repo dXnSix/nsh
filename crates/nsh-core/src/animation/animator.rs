@@ -28,12 +28,6 @@ pub struct AnimValues {
     pub border_color: Option<Color>,
     /// Animated text color (a text view's runs, an input's text).
     pub color: Option<Color>,
-    /// Animated shadow color.
-    pub shadow_color: Option<Color>,
-    /// Animated shadow opacity.
-    pub shadow_opacity: Option<f32>,
-    /// Animated shadow blur radius.
-    pub shadow_radius: Option<Points>,
 }
 
 #[derive(Default)]
@@ -171,6 +165,12 @@ impl Animator {
         self.graph.is_animating()
     }
 
+    /// True while an animation that ends by itself runs, not one looping
+    /// forever ([`Graph::is_finishing`]): what a test's step waits for.
+    pub fn finishing(&self) -> bool {
+        self.graph.is_finishing()
+    }
+
     /// A scroll view moved to `offset`: feeds its scroll value. False if no
     /// value is bound to it.
     pub fn scrolled(&mut self, id: u32, offset: Point<Points>) -> bool {
@@ -290,20 +290,12 @@ impl Animator {
                     AnimationProp::BackgroundColor => values.background = Some(color(value)),
                     AnimationProp::BorderColor => values.border_color = Some(color(value)),
                     AnimationProp::Color => values.color = Some(color(value)),
-                    AnimationProp::ShadowColor => values.shadow_color = Some(color(value)),
-                    AnimationProp::ShadowOpacity => values.shadow_opacity = Some(value.number()),
-                    AnimationProp::ShadowRadius => {
-                        values.shadow_radius = Some(Points(value.number()))
-                    }
                     AnimationProp::Transform(i) => {
                         if let Some(t) = values.transform.get_mut(i as usize) {
                             *t = Some(value.number());
                         }
                     }
-                    // A view is a canvas or a shader: its slots are one's or the other's.
-                    AnimationProp::CanvasArg(k) | AnimationProp::ShaderUniform(k) => {
-                        canvas.push((k, value))
-                    }
+                    AnimationProp::CanvasArg(k) => canvas.push((k, value)),
                     // The scroll view's (`sticky_views`), never bound.
                     AnimationProp::StickyTop | AnimationProp::StickyLeft => {}
                     // The component's (`write_components`).
@@ -473,6 +465,7 @@ mod tests {
             id: 4,
             horizontal: false,
             scrollbar_visible: true,
+            replaced: false,
             scroll_value: Some(2),
             pull_value: None,
             keyboard_dismiss: Default::default(),
@@ -506,6 +499,7 @@ mod tests {
             id: 4,
             horizontal: false,
             scrollbar_visible: true,
+            replaced: false,
             scroll_value: Some(2),
             pull_value: None,
             keyboard_dismiss: Default::default(),

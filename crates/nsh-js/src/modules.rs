@@ -99,9 +99,9 @@ pub(crate) type Item = (&'static str, Export, Ts);
 pub(crate) struct NativeModule {
     pub(crate) name: &'static str,
     pub(crate) exports: &'static [Item],
-    /// The modules whose exports this one serves too, the same values (one
-    /// per VM): `nsh` serves the primitives `nsh/image`, `nsh/list`, ...
-    /// exported first.
+    /// The sources whose exports this one serves too (`moved_to`), kept by
+    /// area: `nsh` serves the primitives (`nsh/list`, `nsh/image`, ...), the
+    /// environment (`nsh/device`), ...; no app imports a source.
     pub(crate) also: &'static [&'static str],
     /// The module that serves this one's exports (`nsh`): it is no module
     /// apps import, only the source of those exports and their types.
@@ -208,7 +208,7 @@ const NSH: &[Item] = &[
         "ErrorBoundary",
         Export::Function(dom::error_boundary, 1),
         Ts::function(
-            "Its children, or `fallback` once something under them threw (a component's body, a\nbinding, an effect, a listener): what failed goes, and `fallback(error, reset)` shows the\nthrown value; `reset()` renders the children again. A fallback that takes no arguments\nis shown as is. What throws in the fallback goes to the boundary above.",
+            "Its children, or `fallback` once something under them threw (a component's body, a\nbinding, an effect, a listener): what failed goes, and `fallback(error, reset)` shows the\nthrown value; `reset()` renders the children again. A function fallback is always\ncalled so; an element is shown as is. What throws in the fallback goes to\nthe boundary above.",
             &[
                 "(props: { fallback: JSX.Element | ((error: unknown, reset: () => void) => JSX.Element); children?: JSX.Element }): JSX.Element",
             ],
@@ -219,7 +219,7 @@ const NSH: &[Item] = &[
         Export::Value(|cx| dom::host_component(cx, "view", true)),
         Ts::function(
             "A view: the box layout, styles, touches and accessibility work on\n(UIView / ViewGroup).",
-            &["(props: ViewProps): YNode"],
+            &["(props: ViewProps): JSX.Element"],
         ),
     ),
     (
@@ -227,7 +227,7 @@ const NSH: &[Item] = &[
         Export::Value(|cx| dom::host_component(cx, "text", true)),
         Ts::function(
             "A paragraph of text; a `<Text>` in it is a span of the same paragraph, other\nelements are inline attachments.",
-            &["(props: TextProps): YNode"],
+            &["(props: TextProps): JSX.Element"],
         ),
     ),
     (
@@ -235,63 +235,7 @@ const NSH: &[Item] = &[
         Export::Value(|cx| dom::host_component(cx, "scroll", true)),
         Ts::function(
             "A native scroll view (UIScrollView / ScrollView), zoomable; for long\nlists, `List`.",
-            &["(props: ScrollProps): YNode"],
-        ),
-    ),
-    (
-        "Shader",
-        Export::Value(|cx| dom::host_component(cx, "shader", true)),
-        Ts::function(
-            "A view a shader fills (Metal, Direct2D, OpenGL, WebGL 2, Android's\nruntime shaders), its children drawn over it: `src` is what\n`createShader` returns or a `.wgsl` file imported, `uniforms` the\nvalues of its uniforms (animated values change them on the UI thread).",
-            &["<U = ShaderUniforms>(props: ShaderProps<U>): YNode"],
-        ),
-    ),
-    (
-        "ShaderEffect",
-        Export::Value(|cx| dom::host_component(cx, "shadereffect", true)),
-        Ts::function(
-            "A view whose children draw through a shader: they are what its\n`sample_content(p)` reads, the shader's result is what shows. Without\n`src` the children draw as they are. `progress` is `nsh.progress`,\n`maxSampleOffset` how far beyond a pixel the shader samples them.",
-            &["<U = ShaderUniforms>(props: ShaderEffectProps<U>): YNode"],
-        ),
-    ),
-    (
-        "ShaderTransition",
-        Export::Value(|cx| dom::host_component(cx, "shadertransition", true)),
-        Ts::function(
-            "A view whose children change through a shader: when `value` changes,\na picture of what they drew is what `sample_from(p)` reads and what\nthey draw now what `sample_to(p)` reads, while `nsh.progress` goes from\n0 to 1 over `duration` milliseconds (300 by default). Without `src` it\nruns `fallback`: a cross-fade, or `\"none\"`.",
-            &["<U = ShaderUniforms>(props: ShaderTransitionProps<U>): YNode"],
-        ),
-    ),
-    (
-        "ScreenEffect",
-        Export::Value(|cx| dom::host_component(cx, "screeneffect", true)),
-        Ts::function(
-            "The whole surface drawn through a shader: what it shows (its pages,\ndialogs and overlays, never the app around it) is what `sample_content(p)`\nreads, `p` in points from the surface's top-left, and the shader's result\nis what shows; the views stay where they are for touches and\naccessibility. Declared anywhere, it takes no space; without `src` the\nsurface draws as it is. With several, the last one made draws.",
-            &["<U = ShaderUniforms>(props: ScreenEffectProps<U>): YNode"],
-        ),
-    ),
-    (
-        "ScreenTransition",
-        Export::Value(|cx| dom::host_component(cx, "screentransition", true)),
-        Ts::function(
-            "The whole surface changing through a shader: when `value` changes, a\npicture of what the surface showed is what `sample_from(p)` reads and\nwhat it shows now what `sample_to(p)` reads, while `nsh.progress` goes\nfrom 0 to 1 over `duration` milliseconds (300 by default). Declared\nanywhere, it takes no space; without `src` it runs `fallback`: a\ncross-fade, or `\"none\"`.",
-            &["<U = ShaderUniforms>(props: ScreenTransitionProps<U>): YNode"],
-        ),
-    ),
-    (
-        "createShader",
-        Export::Function(crate::shader::create_shader, 1),
-        Ts::function(
-            "A shader from WGSL source (`docs/dev/shaders.md`): `fn main(p: vec2f) -> vec4f`\nor `fn main(p: vec2f, u: Uniforms) -> vec4f`, `p` in points from the view's\ntop-left, the color premultiplied. Checked against NSH's profile, so it\nruns on every platform; throws a `SyntaxError` naming the line otherwise.\nThe same source is the same shader.",
-            &["<U = ShaderUniforms>(source: string): ShaderAsset<U>"],
-        ),
-    ),
-    (
-        "shaderSupport",
-        Export::Function(crate::shader::shader_support, 0),
-        Ts::function(
-            "How this platform runs shaders of each kind: `\"live\"`, `\"snapshot\"`\n(from a picture of the input, taken again when it changes) or `false` (the\nelement draws its children only).",
-            &["(): ShaderSupport"],
+            &["(props: ScrollProps): JSX.Element"],
         ),
     ),
     (
@@ -299,7 +243,47 @@ const NSH: &[Item] = &[
         Export::Value(|cx| dom::host_component(cx, "overlay", true)),
         Ts::function(
             "Its children on top of the root view it is in (the surface, or the dialog\naround it), outside its parent's layout and clipping, while it stays its\nparent's child for everything else (context, events, lifetime): popovers,\nmenus, tooltips. Without `anchor` it is a `position: fixed` box of that\nroot view; with one it goes on the `placement` side of the anchor, on the\nother when only that one has room, kept inside the safe area, and follows\nthe anchor as it moves. `onPressOutside` and `onCancel` (Escape, Android\nback) report what closes it; closing is the app's.",
-            &["(props: OverlayProps): YNode"],
+            &["(props: OverlayProps): JSX.Element"],
+        ),
+    ),
+    (
+        "Shader",
+        Export::Value(|cx| dom::host_component(cx, "shader", true)),
+        Ts::function(
+            "A view whose box a GPU shader draws, under its children: `source` is WGSL\ndefining `fn shade(uv: vec2f) -> vec4f`, the straight sRGB color of each\npoint (`uv` 0..1 from the top left), which reads `nsh.size` (points),\n`nsh.time` (seconds; reading it animates the shader, unless `paused`),\n`nsh.scale` and the members of its `struct Uniforms` as `uniforms.name`, set by\n`uniforms={{ name: value }}`: numbers, colors, lists and animated values,\nwhich move it natively. It takes every prop of a `View`.",
+            &["(props: ShaderProps): JSX.Element"],
+        ),
+    ),
+    (
+        "ShaderEffect",
+        Export::Value(|cx| dom::host_component(cx, "shadereffect", true)),
+        Ts::function(
+            "A view whose children draw through a GPU shader: its WGSL `shade` reads\nwhat they draw with `sample_content(uv)` (and what is behind the view with\n`sample_backdrop(uv)`), `nsh.progress` from `progress` (a number or an\nanimated value), and draws `maxSampleOffset` points beyond the box. The\nchildren keep their presses. Without `source` they draw as they are.",
+            &["(props: ShaderEffectProps): JSX.Element"],
+        ),
+    ),
+    (
+        "ShaderTransition",
+        Export::Value(|cx| dom::host_component(cx, "shadertransition", true)),
+        Ts::function(
+            "A view whose children change through a GPU shader: when `value` changes\n(not the first one) its WGSL `shade` draws, for `duration` ms (300),\n`sample_from(uv)` (a picture of what they drew) changing into\n`sample_to(uv)` (what they draw now) as `nsh.progress` goes from 0 to 1.\nWithout `source` it runs `fallback`: `\"fade\"` (a cross-fade) or `\"none\"`.",
+            &["(props: ShaderTransitionProps): JSX.Element"],
+        ),
+    ),
+    (
+        "ScreenEffect",
+        Export::Value(|cx| dom::host_component(cx, "screeneffect", false)),
+        Ts::function(
+            "The whole surface (its pages, dialogs and overlays) drawn through a GPU\nshader, which reads it with `sample_content(uv)`. It takes no space and\nhas no children; the last one mounted with a `source` draws.",
+            &["(props: ScreenEffectProps): JSX.Element"],
+        ),
+    ),
+    (
+        "ScreenTransition",
+        Export::Value(|cx| dom::host_component(cx, "screentransition", false)),
+        Ts::function(
+            "The whole surface changing through a GPU shader when `value` changes,\nas `ShaderTransition` does for its children.",
+            &["(props: ScreenTransitionProps): JSX.Element"],
         ),
     ),
 ];
@@ -526,7 +510,7 @@ pub(crate) const MODULES: &[NativeModule] = &[
     },
 ];
 
-/// `nsh/image`: `Image`, the image element as a component carrying the
+/// `nsh`'s `Image`: the image element as a component carrying the
 /// functions of the runtime's module (`getSize`, `prefetch`).
 const IMAGE_EXPORTS: &[Item] = &[(
     "Image",
@@ -537,16 +521,16 @@ const IMAGE_EXPORTS: &[Item] = &[(
     }),
     Ts::value(
         "An image (a URL or `import logo from \"./logo.png\"`), decoded and cached\nnatively; `Image.getSize(src)` and `Image.prefetch(src)` ask about one\nwithout showing it.",
-        "((props: ImageProps) => YNode) & ImageModule",
+        "((props: ImageProps) => JSX.Element) & ImageModule",
     ),
 )];
 
 /// One export of a module, as it is made.
 enum Made {
     Own(Export),
-    /// An export of nsh's module `.0` that another serves too (`nsh`'s
-    /// `Image` is `nsh/image`'s): one value per VM, whichever module is
-    /// imported first making it.
+    /// An export of source `.0` a module serves (`nsh`'s `Image` is the
+    /// source `nsh/image`'s): one value per VM, whichever module serving it
+    /// is imported first making it.
     Shared(&'static str, Export),
     /// A Rust component, with the functions of a module of the same name.
     Component(Arc<ComponentSpec>, Option<Arc<ModuleSpec>>),
@@ -978,7 +962,6 @@ impl rquickjs::loader::Loader for Loader {
 
 /// Resolve an already-canonical native specifier through the same provider
 /// selection used by the runtime loader (also used by type discovery).
-#[cfg(not(feature = "bytecode-only"))]
 pub(crate) fn load_module<'js>(cx: &Ctx<'js>, name: &str) -> rquickjs::Result<Module<'js>> {
     rquickjs::loader::Loader::load(&mut Loader, cx, name, None)
 }
@@ -1242,8 +1225,9 @@ mod tests {
         assert_eq!(names, nsh_core::js::NATIVE_MODULES);
     }
 
-    /// `Image` carries its functions; the areas the primitives come from
-    /// are no modules of their own.
+    /// `Image` carries its functions; the sources the primitives come from
+    /// are no modules apps import (bundles never import them: the bundler
+    /// refuses them).
     #[test]
     fn nsh_serves_the_primitives() {
         let source = r#"

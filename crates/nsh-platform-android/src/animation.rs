@@ -3,7 +3,7 @@
 //! Java as `[animating, (view, prop, value)*]` float arrays.
 
 use nsh_core::{
-    GestureValues, MAX_TRANSFORMS, MountItem, Shadow, Transform,
+    GestureValues, MAX_TRANSFORMS, MountItem, Transform,
     animation::{AnimationProp, AnimationValue, Finished, Graph, NodeId},
 };
 use rustc_hash::FxHashMap;
@@ -15,10 +15,6 @@ const BACKGROUND: f32 = 7.0;
 const BORDER_COLOR: f32 = 11.0;
 /// A text's color (ARGB bits).
 const TEXT_COLOR: f32 = 12.0;
-/// The shadow's color with its opacity in the alpha (ARGB bits).
-const SHADOW_COLOR: f32 = 13.0;
-/// The shadow's radius (points).
-const SHADOW_RADIUS: f32 = 14.0;
 /// How much further a sticky cell sticks (points; `StickyCell::offset`):
 /// `ScrollBox.java` pins it again.
 const STICKY_OFFSET: f32 = 15.0;
@@ -29,11 +25,6 @@ const CANVAS_ARG: f32 = 1000.0;
 const COMPONENT_NUMBER: f32 = 70000.0;
 /// The same holding a color (ARGB bits) is `COMPONENT_COLOR + n`.
 const COMPONENT_COLOR: f32 = 140000.0;
-/// A shader's uniform component `n` is `SHADER_NUMBER + n` (a number) or
-/// `SHADER_COLOR + n` (a color as ARGB bits, written premultiplied from
-/// there), past the components' codes.
-const SHADER_NUMBER: f32 = 300_000.0;
-const SHADER_COLOR: f32 = 400_000.0;
 /// A color value as Java's ARGB bits.
 fn argb(value: AnimationValue) -> f32 {
     match value {
@@ -81,8 +72,8 @@ pub(crate) struct UiAnimation {
     /// View id -> bound properties.
     bindings: FxHashMap<u32, Vec<(AnimationProp, NodeId)>>,
     /// View id -> static transform list, whose animated entries the
-    /// bindings replace, and shadow, whose bound parts they replace.
-    statics: FxHashMap<u32, (Transform, Shadow)>,
+    /// bindings replace.
+    statics: FxHashMap<u32, Transform>,
     gestures: FxHashMap<u32, Gestures>,
     /// Scroll view id -> (value node, horizontal).
     scrolls: FxHashMap<u32, (NodeId, bool)>,
@@ -91,9 +82,22 @@ pub(crate) struct UiAnimation {
     /// Scroll view id -> its sticky cells that stick an animated value
     /// further in, with that value's node.
     sticky: FxHashMap<u32, Vec<(u32, NodeId)>>,
+    /// The shader views, whose animated slots are written here.
+    pub(crate) shaders: crate::shader::Shaders,
 }
 
 impl UiAnimation {
+    /// Forgets the running app's state (a new app runs), keeping the
+    /// shaders' GPU device.
+    pub(crate) fn reset(&mut self) {
+        let mut shaders = std::mem::take(&mut self.shaders);
+        shaders.clear();
+        *self = UiAnimation {
+            shaders,
+            ..UiAnimation::default()
+        };
+    }
+
     pub(crate) fn apply(&mut self, item: MountItem) {
         match item {
             MountItem::Animation(op) => self.graph.apply(op, &mut self.finished),
@@ -105,7 +109,7 @@ impl UiAnimation {
                 }
             }
             MountItem::ViewStyle { id, style } => {
-                self.statics.insert(id, (style.transform, style.shadow));
+                self.statics.insert(id, style.transform);
             }
             MountItem::Gestures { id, values } => {
                 if values.is_empty() {
@@ -149,7 +153,10 @@ impl UiAnimation {
                     self.sticky.insert(id, animated);
                 }
             }
+            MountItem::Shader { id, layer } => self.shaders.set(id, layer),
+            MountItem::NavShader { id, shader } => self.shaders.set_nav(id, shader),
             MountItem::Delete { id } => {
+                self.shaders.delete(id);
                 self.bindings.remove(&id);
                 self.statics.remove(&id);
                 self.gestures.remove(&id);
@@ -167,6 +174,13 @@ impl UiAnimation {
 
     pub(crate) fn animating(&self) -> bool {
         self.graph.is_animating()
+    }
+
+    /// Whether the graph runs an animation that ends by itself (not one
+    /// looping forever, which no test step waits for).
+    #[cfg(feature = "dev")]
+    pub(crate) fn finishing(&self) -> bool {
+        self.graph.is_finishing()
     }
 
     /// Scroll view `id` came to rest: the snapping values that follow its
@@ -268,17 +282,35 @@ impl UiAnimation {
         }
     }
 
-    /// `[animating, (view, prop, value)*]` for every bound property.
-    pub(crate) fn outputs(&self) -> Vec<f32> {
+    /// Writes the shader views' animated slots from the graph.
+    fn write_shader_slots(&mut self) {
+        for (id, view) in self.shaders.views_mut() {
+            let Some(bindings) = self.bindings.get(&id) else {
+                continue;
+            };
+            for &(prop, node) in bindings {
+                if let AnimationProp::CanvasArg(k) = prop {
+                    view.set_slot(k, self.graph.eval(node));
+                }
+            }
+        }
+    }
+
+    /// `[animating, (view, prop, value)*]` for every bound property; the
+    /// shader views' bound values are written into them instead, and keep
+    /// frames coming (`animating`) while one has a frame to render.
+    pub(crate) fn outputs(&mut self) -> Vec<f32> {
+        self.write_shader_slots();
         let mut out = Vec::with_capacity(1 + self.bindings.len() * 12);
-        out.push(if self.animating() { 1.0 } else { 0.0 });
+        out.push(if self.animating() || self.shaders.wants_frame() {
+            1.0
+        } else {
+            0.0
+        });
         for (&view, bindings) in &self.bindings {
             let v = f32::from_bits(view);
             let mut overrides = [None; MAX_TRANSFORMS];
             let mut transformed = false;
-            let mut shadow: Option<Shadow> = None;
-            let statics = self.statics.get(&view).copied();
-            let static_shadow = statics.map_or(Shadow::DEFAULT, |s| s.1);
             for &(prop, node) in bindings {
                 match prop {
                     AnimationProp::BorderColor | AnimationProp::Color => {
@@ -288,19 +320,6 @@ impl UiAnimation {
                             BORDER_COLOR
                         };
                         out.extend_from_slice(&[v, code, argb(self.graph.eval(node))]);
-                    }
-                    AnimationProp::ShadowColor => {
-                        if let AnimationValue::Color(c) = self.graph.eval(node) {
-                            shadow.get_or_insert(static_shadow).color = nsh_core::Color(c);
-                        }
-                    }
-                    AnimationProp::ShadowOpacity => {
-                        shadow.get_or_insert(static_shadow).opacity =
-                            self.graph.eval(node).number();
-                    }
-                    AnimationProp::ShadowRadius => {
-                        let radius = self.graph.eval(node).number().max(0.0);
-                        out.extend_from_slice(&[v, SHADOW_RADIUS, radius]);
                     }
                     AnimationProp::Opacity => {
                         out.extend_from_slice(&[v, OPACITY, self.graph.eval(node).number()]);
@@ -312,21 +331,13 @@ impl UiAnimation {
                         };
                         out.extend_from_slice(&[v, BACKGROUND, value]);
                     }
+                    AnimationProp::CanvasArg(_) if self.shaders.contains(view) => {}
                     AnimationProp::CanvasArg(k) => {
                         let value = match self.graph.eval(node) {
                             AnimationValue::Color(c) => f32::from_bits(c.rotate_right(8)),
                             other => other.number(),
                         };
                         out.extend_from_slice(&[v, CANVAS_ARG + k as f32, value]);
-                    }
-                    AnimationProp::ShaderUniform(k) => {
-                        let (code, value) = match self.graph.eval(node) {
-                            AnimationValue::Color(c) => {
-                                (SHADER_COLOR, f32::from_bits(c.rotate_right(8)))
-                            }
-                            other => (SHADER_NUMBER, other.number()),
-                        };
-                        out.extend_from_slice(&[v, code + k as f32, value]);
                     }
                     AnimationProp::Transform(i) => {
                         if let Some(o) = overrides.get_mut(i as usize) {
@@ -349,16 +360,12 @@ impl UiAnimation {
                     },
                 }
             }
-            if let Some(s) = shadow {
-                // As `Mounter.java` takes a style's shadow: the opacity
-                // scales the color's alpha.
-                let c = s.color.0;
-                let alpha = ((c & 0xff) as f32 * s.opacity.clamp(0.0, 1.0)).round() as u32;
-                let argb = (alpha << 24) | (c >> 8);
-                out.extend_from_slice(&[v, SHADOW_COLOR, f32::from_bits(argb)]);
-            }
             if transformed {
-                let statics = statics.map_or(Transform::IDENTITY, |s| s.0);
+                let statics = self
+                    .statics
+                    .get(&view)
+                    .copied()
+                    .unwrap_or(Transform::IDENTITY);
                 let values = view_transform(&statics, |i| overrides[i]);
                 for (code, value) in TRANSFORM_CODES.iter().zip(values) {
                     out.extend_from_slice(&[v, *code, value]);

@@ -1,7 +1,6 @@
 ---
 title: Dialog
 description: "The Dialog component: a modal surface over everything else, for full-screen flows, sheets and dialogs the app styles."
-order: 21
 group: base
 demo: el-dialog
 ---
@@ -71,7 +70,7 @@ function Example() {
       <Button onPress={() => open.set(true)} class="items-center rounded-lg bg-blue-600 px-4 py-3 active:opacity-70">
         <Text class="font-semibold text-white">Open</Text>
       </Button>
-      <Dialog open={open()} presentation="pageSheet" onOpenChange={(next) => open.set(next)} class="flex-1 bg-white">
+      <Dialog open={open()} presentation="pageSheet" onOpenChange={(e) => open.set(e.open)} class="flex-1 bg-white">
         <View
           style={{
             flex: 1,
@@ -106,7 +105,7 @@ and the explicit import takes its place. For the system's alert or action sheet,
 | Prop | Rust | Type | Default | Description |
 |---|---|---|---|---|
 | `open` | in the view while open (`when(open, ..)`) | `boolean` | `true` | Shown while true. |
-| `animation` | `.animation(ModalAnimation::Fade)`, `.shader_animation(ShaderAnimation)` | `"slide" \| "fade" \| "none" \| ShaderAnimation` | `"slide"` | How it comes in and goes: a preset, or through a shader (`{ shader, uniforms, duration }`: what is behind it is the shader's `sample_from`, the dialog its `sample_to`, `nsh.progress` how much of it shows; [Shader](./shader.md#pages-and-dialogs-through-a-shader)). |
+| `animation` | `.animation(ModalAnimation::Fade)` | `"slide" \| "fade" \| "none"` | `"slide"` | How it comes in and goes. |
 | `presentation` | `.presentation(ModalPresentation::PageSheet)` | `"fullScreen" \| "pageSheet" \| "formSheet"` | `"fullScreen"` | Its form on iOS: `fullScreen` covers the screen with a clear background; `pageSheet` and `formSheet` are system sheets that keep what is behind visible (`formSheet` is a smaller centered sheet on large screens). |
 | `closeOnEscape` | `.close_on_escape(..)` | `boolean` | `true` | Escape and the Android back button close it natively. |
 | `closeOnBackdropPress` | `.close_on_backdrop_press(..)` | `boolean` | `true` | A press on the backdrop closes it. |
@@ -115,7 +114,7 @@ and the explicit import takes its place. For the system's alert or action sheet,
 | `onOpen` | `.on_open(..)` | `() => void` | | It finished appearing. |
 | `onClose` | `.on_close(..)` | `() => void` | | It went away: the user closed it, or the app removed it. |
 | `onCancel` | `.on_cancel(..)` | `() => void` | | The user tried to close it (Escape, back, a backdrop press, a swipe down), whether or not a `closeOn*` flag let it close. |
-| `onOpenChange` | `.on_cancel(..)` | `(open: boolean, reason: "cancel" \| "backdropPress" \| "swipe") => void` | | The user closed it: keep `open` in sync here. In Rust, `on_cancel` removes the dialog from the view. |
+| `onOpenChange` | `.on_cancel(..)` | `(e: { open: boolean; reason: "cancel" \| "backdropPress" \| "swipe" }) => void` | | The user closed it: keep `open` in sync here. In Rust, `on_cancel` removes the dialog from the view. |
 | `class`, `style` | `Styled` methods | `string`, `StyleProp<ViewStyle>` | | The popup: the view holding the children. |
 | `backdropClass`, `backdropStyle` | a child view filling the dialog | `string`, `StyleProp<ViewStyle>` | | A backdrop filling the dialog behind the popup, present when either is set. |
 | `children` | `.child(..)` | `JSX.Element` | | The content. |
@@ -132,7 +131,7 @@ and the explicit import takes its place. For the system's alert or action sheet,
 
 The dialog's state is the app's. When the user closes the dialog (Escape, the Android back button, a press on the
 backdrop, a sheet swiped down), it closes natively and tells the app, which sets its state to match: TSX's
-`onOpenChange(false, reason)`, Rust's `on_cancel`. In TSX, while `open` stays `true` the dialog stays closed, and it
+`onOpenChange({ open: false, reason })`, Rust's `on_cancel`. In TSX, while `open` stays `true` the dialog stays closed, and it
 opens again when `open` goes from `false` to `true`.
 
 Each `closeOn*` flag is read natively when the user acts, since the main thread never waits for the app's code. To
@@ -214,7 +213,7 @@ when(confirm, move || {
 <Dialog
   open={confirm()}
   animation="fade"
-  onOpenChange={(next) => confirm.set(next)}
+  onOpenChange={({ open }) => confirm.set(open)}
   backdropClass="bg-black/40"
   class="m-auto w-80 gap-3 rounded-2xl bg-white p-5"
 >

@@ -104,7 +104,7 @@ pub(crate) fn render(dv: Dv) -> impl IntoElement {
         .text_color(move || theme().foreground)
         .font_family(move || font_a().family)
         .text_size(move || Length::from(font_b().size))
-        .line_height(move || Length::from(font_c().line_height))
+        .line_height(move || nsh_core::LineHeight::from(font_c().line_height))
         .child(
             scroll()
                 .element_ref(&dv.vscroll)
@@ -342,8 +342,8 @@ fn row_place(dv: &Dv, row: usize, column: Column, part: HoverPart) -> View {
         .right_0()
         .top(move || Length::from(top.row_top(row)))
         .h(move || Length::from(height.row_height(row)))
-        .on_hover_in(move || hover_in.hover_in(row, part, column.side()))
-        .on_hover_out(move || hover_out.hover_out(row, part))
+        .on_mouse_enter(move |_: &MouseEvent| hover_in.hover_in(row, part, column.side()))
+        .on_mouse_leave(move |_: &MouseEvent| hover_out.hover_out(row, part))
 }
 
 /// The tint of selected lines over row `row` of `column`, while they are.
@@ -628,7 +628,7 @@ fn line_row(
 /// The highlight of the code's selected text: the lines' selection color.
 fn selection_color() -> Hsla {
     let color = theme().selection();
-    if nsh_core::element::ambient::dark() {
+    if nsh_core::element::dark() {
         color.dark
     } else {
         color.light
@@ -877,8 +877,10 @@ fn add_controls(dv: Dv) -> impl IntoElement {
                 // Only the app's control takes presses: the gutter under
                 // the rest of the box keeps them.
                 .pointer_events(PointerEvents::BoxNone)
-                .on_hover_in(move || keep.hover_in(row, HoverPart::Control, Some(side)))
-                .on_hover_out(move || out.hover_out(row, HoverPart::Control));
+                .on_mouse_enter(move |_: &MouseEvent| {
+                    keep.hover_in(row, HoverPart::Control, Some(side))
+                })
+                .on_mouse_leave(move |_: &MouseEvent| out.hover_out(row, HoverPart::Control));
             el = if split && side == DiffSide::New {
                 el.left(relative(0.5))
             } else {

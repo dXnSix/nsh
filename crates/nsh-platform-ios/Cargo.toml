@@ -25,7 +25,7 @@ embed = ["js"]
 
 [dependencies]
 nsh-core = { workspace = true, features = ["svg"] }
-nsh-engine.workspace = true
+nsh-engine = { workspace = true, features = ["shader"] }
 nsh-base = { workspace = true, features = ["highlight"] }
 serde_json.workspace = true
 log.workspace = true
@@ -35,7 +35,6 @@ nsh-testing = { workspace = true, features = ["agent"], optional = true }
 # UIKit exists on iOS, the iOS simulator and Mac Catalyst (all `target_os = "ios"`).
 [target.'cfg(target_os = "ios")'.dependencies]
 dispatch2.workspace = true
-nsh-metal.workspace = true
 objc2.workspace = true
 objc2-core-foundation.workspace = true
 objc2-core-graphics.workspace = true

@@ -33,7 +33,7 @@ colored with the theme's tokens; the app restyles each part over it.
 - **Each block is made with primitives** (`Cx::block`): a paragraph or heading is one `text` whose children are spans
   (`Inline` → nested texts, inline images, slots), lists are rows of a marker text and a column, code blocks a column
   with floating actions and a horizontal `scroll`, tables one grid in a horizontal `scroll` (below), disclosures a
-  pressable summary and an `If`. With `selectable`, every text carries `selectable` and the root is a selectable view
+  pressable summary and an `If`. With `selectable`, every text carries `userSelect: "text"` (`.select_text()`) and the root is a selectable view
   (`Element::selectable`), so one selection runs across the blocks, and inside a selectable view on into the
   texts around the view ("Selectable views" in `text.md`).
 - **Tables** (`Cx::table`) lay out as gpui-kit's: columns fit their content when there is room, shrink (their cells
@@ -155,6 +155,11 @@ syntaxes takes tens of milliseconds more. So the engine thread parses only what 
   that has a language. A block that goes away before its colors arrive leaves its tokens in the cache.
 - WebAssembly has no threads: there the work is done after the frame that shows the block plain (`next_frame`), so
   the block appears at once but that later frame pays for the parsing.
+- The web runtime gets the syntaxes from its page: `nsh-syntaxes.bin`, two-face's dump, next to `nsh.wasm` (the
+  build that makes the module copies it from the two-face its workspace resolves, so it matches the module's syntect;
+  `nsh package --target web` publishes it as `nsh-syntaxes.<digest>.bin` and names it in the page's `data`). The
+  first block with a language asks for it (`syntax::load_async`, `nsh_core::runtime_data`), the page fetches it once
+  and every block waiting is highlighted when it arrives. A page that cannot serve it keeps code plain (one warning).
 
 `bench_highlight` (ignored: `cargo test --release -p nsh-base bench_highlight -- --ignored --nocapture`) prints these
 numbers.

@@ -1,4 +1,4 @@
-import { effect, type GestureResponderEvent, type JSX, signal, Text, View, type YNode } from "nsh";
+import { effect, type GestureResponderEvent, type JSX, signal, Text, View, type ViewRef } from "nsh";
 import { createAnimatedValue, Easing } from "nsh";
 import { Button, Tab, Tabs } from "nsh/base";
 import { Icon, type IconName } from "./icons";
@@ -17,7 +17,7 @@ export function track(
   end?: () => void,
   accept?: (x: number, y: number) => boolean,
 ) {
-  let node: YNode | undefined;
+  let node: ViewRef | undefined;
   // Touches give page positions; the view's own comes from measuring it
   // when a gesture starts (the page cannot scroll while the view holds the
   // touch). Moves before the answer only update `at`.
@@ -39,7 +39,7 @@ export function track(
   };
   const wants = (e: GestureResponderEvent) => accept?.(e.locationX, e.locationY) ?? true;
   return {
-    ref: (n: YNode) => (node = n),
+    ref: (n: ViewRef) => (node = n),
     onStartShouldSetResponder: wants,
     onMoveShouldSetResponder: wants,
     onResponderGrant: (e: GestureResponderEvent) => {
@@ -83,10 +83,7 @@ export function Panel(props: {
         borderWidth: 1,
         borderColor: color.line,
         padding: 5,
-        shadowColor: "#000",
-        shadowOpacity: 0.35,
-        shadowRadius: 18,
-        shadowOffset: { width: 0, height: 8 },
+        boxShadow: "0px 8px 18px rgb(0 0 0 / 0.35)",
       }}
     >
       <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 11, paddingTop: 11, paddingBottom: 13 }}>
@@ -95,7 +92,7 @@ export function Panel(props: {
         </View>
         <View style={{ flex: 1, gap: 2 }}>
           <Text style={{ color: color.text, fontSize: 17, fontWeight: "600", letterSpacing: -0.2 }}>{props.title}</Text>
-          <Text style={{ color: color.muted, fontSize: 13 }} numberOfLines={1}>
+          <Text style={{ numberOfLines: 1, color: color.muted, fontSize: 13 }}>
             {props.status}
           </Text>
         </View>
@@ -201,7 +198,7 @@ export function Gauge(props: { value: number; warnAbove?: number }) {
           borderRadius: 4,
           backgroundColor: props.value > (props.warnAbove ?? 2) ? color.caution : color.accent,
           transformOrigin: "left",
-          transform: [{ scaleX: fill }],
+          scale: [fill, 1],
         }}
       />
     </View>
@@ -280,7 +277,7 @@ export function Switch(props: { value: boolean; onChange: (v: boolean) => void; 
           borderWidth: 3,
           borderColor: on.interpolate({ inputRange: [0, 1], outputRange: [color.muted, color.ink] }),
           backgroundColor: color.ink,
-          transform: [{ translateX: on.interpolate({ inputRange: [0, 1], outputRange: [0, 18] }) }],
+          translate: [on.interpolate({ inputRange: [0, 1], outputRange: [0, 18] }), 0],
         }}
       />
     </View>
@@ -402,7 +399,7 @@ export function Slider(props: {
   const low = () => props.value < props.floor;
   return (
     <View
-      onLayout={(e) => width.set(e.size.width)}
+      onLayout={(e) => width.set(e.bounds.size.width)}
       {...track((x) => pick(x))}
       role="adjustable"
       accessibilityLabel={props.label}

@@ -83,6 +83,7 @@ function Editor(props: { panel: string }) {
         <Button
           onPress={() => edits.set(edits() + 1)}
           accessibilityLabel={`Edit ${title(props.panel)}`}
+          hoverStyle={{ opacity: 0.94 }}
           class="h-8 flex-row items-center gap-1.5 rounded-lg px-3 transition active:scale-[0.97]"
           style={{ backgroundColor: colors.accentFill, ...finish.accent }}
         >
@@ -159,6 +160,7 @@ function Tool(props: { label: string; name: string; onPress: () => void; on?: bo
       onPress={props.onPress}
       selected={props.on}
       accessibilityLabel={props.label}
+      hoverStyle={finish.hover}
       class="h-8 flex-row items-center gap-2 rounded-lg border border-border px-3 transition active:scale-[0.97]"
       style={{ backgroundColor: colors.raised, ...finish.raised }}
     >
@@ -201,7 +203,7 @@ export function Dock() {
   const wide = untracked(windowSize).width >= 600;
   const shown = signal<Record<string, boolean>>({ left: wide, bottom: wide });
   let area!: DockAreaRef;
-  const pointer = platform.idiom === "desktop";
+  const pointer = platform.desktop;
 
   return (
     <View class="flex-1 bg-background" style={{ padding: desktop() ? 24 : 16, gap: desktop() ? 16 : 12 }}>
@@ -234,16 +236,16 @@ export function Dock() {
             ref={area}
             class="flex-1"
             layout={layout()}
-            onLayoutChange={(next) => layout.set(next)}
-            onPanelRemove={(panel) => last.set(`Closed ${title(panel)}`)}
-            onPanelActiveChange={(panel, active) => {
+            onLayoutChange={({ layout: next }) => layout.set(next)}
+            onPanelRemove={({ panel }) => last.set(`Closed ${title(panel)}`)}
+            onPanelActiveChange={({ panel, active }) => {
               if (!active) return;
               current = panel;
               last.set(`Showing ${title(panel)}`);
             }}
-            onZoomChange={(panel) => zoomed.set(panel)}
+            onZoomChange={({ panel }) => zoomed.set(panel)}
             panels={closing() ? [] : Object.keys(TITLES).map((id) => ({ id, closable: false }))}
-            onDockOpenChange={(placement, open) => shown.set({ ...shown(), [placement]: open })}
+            onDockOpenChange={({ placement, open }) => shown.set({ ...shown(), [placement]: open })}
             locked={locked()}
             groupClass="flex-1 bg-inset"
             tabBarClass="flex-row gap-1 border-b border-line"
@@ -269,7 +271,7 @@ export function Dock() {
               // it; a touch screen keeps it beside the shown tab's title.
               <View testID={`tab-${tab.panel}`} class="h-9 flex-row items-center gap-1 px-3">
                 <Text
-                  numberOfLines={1}
+                  style={{ numberOfLines: 1 }}
                   class={`max-w-40 text-[13px] font-medium transition-colors ${tab.active ? "text-foreground" : "text-muted-foreground group-hover:text-foreground"}`}
                 >
                   {title(tab.panel)}
@@ -288,7 +290,7 @@ export function Dock() {
                   </Button>
                 </If>
                 <If when={tab.active}>
-                  <View pointerEvents="none" class="absolute bottom-0 left-3 right-3 h-0.5 rounded-full bg-brand" />
+                  <View style={{ pointerEvents: "none" }} class="absolute bottom-0 left-3 right-3 h-0.5 rounded-full bg-brand" />
                 </If>
               </View>
               );

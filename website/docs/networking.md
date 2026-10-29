@@ -79,7 +79,7 @@ function App() {
     <Scroll style={{ flex: 1 }}>
       <View style={{ padding: 16, paddingTop: 60, gap: 8 }}>
         <Text style={{ color: "#57606a" }}>{posts.loading() ? "loading…" : String(posts.error() ?? "")}</Text>
-        <Each of={posts() ?? []}>{(post) => <Text numberOfLines={1}>{post().title}</Text>}</Each>
+        <Each of={posts() ?? []}>{(post) => <Text style={{ numberOfLines: 1 }}>{post().title}</Text>}</Each>
       </View>
     </Scroll>
   );
@@ -358,7 +358,16 @@ An app may declare in `nsh.json` which hosts it talks to. Once `"capabilities"` 
 
 The checks are enforced in NSH's runtime, outside your app's code, before a request reaches the network:
 
-- A refused `fetch` fails (in TSX with a `TypeError`) with a message naming the key to add, such as ``Network request failed: fetch GET https://evil.io/ is not granted: add `evil.io` to capabilities.network in nsh.json``.
+- A refused `fetch` fails (in TSX with a `TypeError`, as every failed request) with a message naming the key to add, such as ``Network request failed: fetch GET https://evil.io/ is not granted: add `evil.io` to capabilities.network in nsh.json``. In TSX the error's `code` is `"ERR_ACCESS_DENIED"`, its `permission` `"network"` and its `resource` the URL refused (the request's, or a redirect's), so the app tells a refusal apart from a lost connection:
+
+  ```ts
+  try {
+    await fetch(url);
+  } catch (error) {
+    if (error.code === "ERR_ACCESS_DENIED") console.warn(`not granted: ${error.resource}`);
+    else throw error;
+  }
+  ```
 - **Every redirect is checked again.** NSH follows redirects itself (up to 20) instead of letting the platform do it, so a granted host cannot redirect your app to one that is not.
 - The same `network` grants cover remote images (also in canvases and `Image.getSize` / `prefetch`) and video sources. `asset:` URIs of your own bundle are always allowed.
 - The host is taken after the last `@`, so `https://ok.com@evil.io` counts as `evil.io`.

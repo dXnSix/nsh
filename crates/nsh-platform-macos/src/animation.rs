@@ -76,20 +76,8 @@ impl UiAnimation {
                 if moved.is_some() {
                     crate::text_input::animated(view);
                 }
-                if !canvas.is_empty()
-                    && matches!(
-                        view.kind(),
-                        nsh_core::ViewKind::Shader
-                            | nsh_core::ViewKind::ShaderEffect
-                            | nsh_core::ViewKind::ShaderTransition
-                    )
-                {
+                if !canvas.is_empty() {
                     crate::shader::set_args(view, canvas);
-                } else if !canvas.is_empty() && view.kind() == nsh_core::ViewKind::ScreenEffect {
-                    if let Some(surface) = view.surface() {
-                        crate::screen::set_args(&surface, view, canvas);
-                    }
-                } else if !canvas.is_empty() {
                     let damage = crate::canvas::set_args(view, canvas);
                     if damage != Damage::None {
                         mounter.draw_when_shown(view, damage);

@@ -8,7 +8,8 @@
 //! Views form a tree of reference-counted nodes: a parent holds its
 //! children in drawing order (bottom to top), a child its parent weakly.
 //! A view draws itself in [`crate::render`]: shadows and background
-//! ([`crate::decor`]), its content (text, image, canvas), its children
+//! ([`crate::decor`]), its shader ([`crate::shader`]), its content (text,
+//! image, canvas), its children
 //! (clipped to the rounded bounds when `overflow: hidden`), the items it
 //! hosts ([`ViewState::natives`]: text editors, web views, ...), then its
 //! border, as UIKit draws layer borders over the content.
@@ -152,9 +153,9 @@ pub(crate) struct ViewState {
     /// Touch, accessibility and test properties.
     pub(crate) props: Box<ViewProps>,
     /// States to report (`TrackStates`), and the current ones.
-    pub(crate) tracked: u8,
+    pub(crate) tracked: u16,
     /// Current interaction states (pressed, hovered, focused).
-    pub(crate) states: u8,
+    pub(crate) states: u16,
     /// Extra translation (sticky list cells, screen transitions).
     pub(crate) shift: (f32, f32),
     /// Extra opacity (press feedback, screen and modal transitions).
@@ -169,7 +170,8 @@ pub(crate) struct ViewState {
     pub(crate) image: Option<crate::image::ImageState>,
     /// Canvas content.
     pub(crate) canvas: Option<crate::canvas::CanvasState>,
-    /// What a shader view draws.
+    /// What a shader draws under the content and children
+    /// ([`crate::shader`]).
     pub(crate) shader: Option<crate::shader::ShaderState>,
     /// Text field (input views).
     pub(crate) input: Option<Rc<crate::text_input::InputState>>,
@@ -216,16 +218,6 @@ impl ViewState {
     pub(crate) fn opacity(&self) -> f32 {
         let live = self.live.as_ref().map_or(1.0, |l| l.opacity());
         self.anim.opacity.unwrap_or(self.style.opacity) * self.fade * live
-    }
-
-    /// Its shadow, with animated color, opacity and radius.
-    pub(crate) fn shadow(&self) -> nsh_core::Shadow {
-        let mut s = self.style.shadow;
-        let a = &self.anim;
-        s.color = a.shadow_color.unwrap_or(s.color);
-        s.opacity = a.shadow_opacity.unwrap_or(s.opacity);
-        s.radius = a.shadow_radius.unwrap_or(s.radius);
-        s
     }
 
     /// Its borders, with an animated color.

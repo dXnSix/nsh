@@ -50,6 +50,7 @@ fn config(app: App) -> EngineConfig {
         trace: false,
         network: None,
         websocket: None,
+        refuse_connections: None,
         filesystem: None,
         assets: None,
         environment: Environment::default(),

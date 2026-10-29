@@ -123,6 +123,9 @@ pub(crate) struct Surface {
     /// The model of a test session's app (`nsh test --target linux`).
     #[cfg(feature = "dev")]
     test_model: RefCell<Option<Arc<nsh_testing::agent::Model>>>,
+    /// The GPU device shader views render with, opened when the first
+    /// shader is mounted (`None` inside: there is none).
+    shader_renderer: std::cell::OnceCell<Option<Rc<nsh_engine::shader::Renderer>>>,
     /// Where `asset:/` image URIs resolve ([`crate::image::set_asset_base`]).
     pub(crate) asset_base: RefCell<Option<crate::image::AssetBase>>,
     /// The disk cache of downloaded images ([`crate::image::set_disk_cache`]).
@@ -143,23 +146,19 @@ pub(crate) struct Surface {
 }
 
 impl Surface {
+    /// The GPU device shader views render with ([`crate::shader`]), opened
+    /// the first time one asks.
+    pub(crate) fn shader_renderer(&self) -> Option<Rc<nsh_engine::shader::Renderer>> {
+        self.shader_renderer
+            .get_or_init(|| {
+                nsh_engine::shader::Renderer::new(nsh_engine::shader::PixelFormat::Rgba)
+                    .map(Rc::new)
+            })
+            .clone()
+    }
+
     /// A surface with no app yet.
-    pub(crate) fn new(mut environment: Environment) -> Rc<Surface> {
-        // Shaders fill views with OpenGL ES 3 (`crate::shader`); an
-        // effect's children are rendered with each of its frames, what is
-        // behind a view is a picture taken again when it changes.
-        environment.shaders = {
-            let mut support =
-                nsh_core::shader::ShaderSupport::fills(nsh_core::shader::ShaderLanguage::GlslEs300);
-            support.effect = nsh_core::shader::Support::Live;
-            support.backdrop = nsh_core::shader::Support::Snapshot;
-            support.transition = nsh_core::shader::Support::Live;
-            // The root draws through the screen effect, its children drawn
-            // whenever it is; a screen transition draws pictures of the root.
-            support.screen_effect = nsh_core::shader::Support::Live;
-            support.screen_transition = nsh_core::shader::Support::Snapshot;
-            support
-        };
+    pub(crate) fn new(environment: Environment) -> Rc<Surface> {
         let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
         let root = NshView::new(ROOT_ID, nsh_core::ViewKind::View);
         root.set_hexpand(true);
@@ -186,6 +185,7 @@ impl Surface {
             on_hot_update_failed: RefCell::new(None),
             #[cfg(feature = "dev")]
             test_model: RefCell::default(),
+            shader_renderer: std::cell::OnceCell::new(),
             asset_base: RefCell::new(None),
             image_cache: RefCell::new(None),
             access: RefCell::new(Arc::default()),
@@ -205,7 +205,10 @@ impl Surface {
         // Canvases that came into sight are drawn in the frame that shows them.
         root.connect_realize(|root| {
             if let Some(clock) = root.frame_clock() {
-                clock.connect_layout(|_| crate::canvas::reveal());
+                clock.connect_layout(|_| {
+                    crate::canvas::reveal();
+                    crate::shader::reveal();
+                });
             }
         });
         crate::input::install(&surface);
@@ -237,11 +240,11 @@ impl Surface {
         SURFACES.with(|s| s.borrow().get(&key).and_then(Weak::upgrade))
     }
 
-    /// Whether a native animation runs: the graph's, or a navigation
-    /// transition.
+    /// Whether a native animation runs: the graph's (not one looping
+    /// forever, which no test step waits for), or a navigation transition.
     #[cfg(feature = "dev")]
     pub(crate) fn animating(&self) -> bool {
-        self.anim.borrow().animating()
+        self.anim.borrow().finishing()
             || self
                 .nav
                 .try_borrow()

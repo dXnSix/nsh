@@ -5,7 +5,8 @@
 //! and reads the pixels back (`nsh test`'s screenshots). Both go through
 //! [`draw_view`], which draws one view and its subtree in this order:
 //!
-//! 1. shadows and background ([`crate::decor::draw_background`]),
+//! 1. shadows and background ([`crate::decor::draw_background`]), then
+//!    the shader ([`crate::shader`]) clipped to the rounded bounds,
 //! 2. the content, clipped to the bounds: text, image, canvas,
 //! 3. the children (clipped to the rounded bounds when the view clips),
 //! 4. the hosted items ([`crate::view::Native`]) and the scroll indicator,
@@ -772,12 +773,12 @@ fn paints_one_shape(view: &NshView, state: &ViewState) -> bool {
         && state.text.is_none()
         && state.image.is_none()
         && state.canvas.is_none()
+        && state.shader.is_none()
         && state.input.is_none()
         && state.scroll.is_none()
         && state.natives.is_empty()
         && state.style.effects.is_none()
         && state.style.blend_mode == BlendMode::Normal
-        && !state.shadow().is_visible()
         && !state.borders().is_visible()
         && !state.style.outline.is_visible()
         && view.with_children(<[NshView]>::is_empty)
@@ -861,7 +862,7 @@ pub(crate) fn drawn_area(view: &NshView) -> Option<D2D_RECT_F> {
     let state = view.state();
     let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
     // A point more for the antialiased edges.
-    let o = crate::decor::outset(&state) + 1.0;
+    let o = crate::decor::outset(&state).max(crate::shader::overflow(&state)) + 1.0;
     let mut area = D2D_RECT_F {
         left: -o,
         top: -o,
@@ -909,17 +910,15 @@ pub(crate) fn drawn_area(view: &NshView) -> Option<D2D_RECT_F> {
 /// bounds, the children, the hosted items, the scroll indicator, the
 /// border and outline.
 pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) {
+    crate::shader::take_backdrop(cx, view);
     let state = view.state();
-    crate::shader::take_backdrop(cx, &state);
     crate::decor::draw_backdrop(cx, &state);
     crate::decor::draw_background(cx, &state);
+    crate::shader::draw(cx, &state);
     let clip = state.clips();
     let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
     // Most views (boxes, rows) have no content of their own: no clip for it.
-    let content = state.text.is_some()
-        || state.image.is_some()
-        || state.canvas.is_some()
-        || crate::shader::fills(&state);
+    let content = state.text.is_some() || state.image.is_some() || state.canvas.is_some();
     if clip {
         cx.push_clip_rounded(crate::geom::rect(0.0, 0.0, w, h), state.radii());
     } else if content {
@@ -928,7 +927,6 @@ pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) {
         cx.push_clip_rect(0.0, 0.0, w, h);
     }
     if content {
-        crate::shader::draw(cx, &state);
         crate::text::draw(cx, &state);
         crate::image::draw(cx, &state);
         crate::canvas::draw(cx, &state);
@@ -941,8 +939,8 @@ pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) {
     drop(state);
     // An effect's children are its shader's content.
     if !effect || !crate::shader::draw_effect(cx, view, world) {
-        // Inside a clip (a scroll view's content), children out of sight are
-        // left out: drawing them would issue their commands for nothing.
+        // Inside a clip (a scroll view's content), children out of sight
+        // are left out: drawing them would issue their commands for nothing.
         let visible = if clip { cx.visible() } else { None };
         view.with_children(|children| {
             for child in children {
@@ -1166,8 +1164,79 @@ pub(crate) fn draw_offscreen(
     .unwrap_or(false)
 }
 
+/// A bitmap of `size` pixels Direct2D draws into (`scale` pixels per
+/// point).
+pub(crate) fn target_bitmap(
+    dc: &ID2D1DeviceContext,
+    size: (u32, u32),
+    scale: f32,
+) -> windows::core::Result<ID2D1Bitmap1> {
+    bitmap(dc, size, scale, D2D1_BITMAP_OPTIONS_TARGET)
+}
+
+fn bitmap(
+    dc: &ID2D1DeviceContext,
+    (width, height): (u32, u32),
+    scale: f32,
+    options: windows::Win32::Graphics::Direct2D::D2D1_BITMAP_OPTIONS,
+) -> windows::core::Result<ID2D1Bitmap1> {
+    // SAFETY: a COM call on the live context.
+    unsafe {
+        dc.CreateBitmap(
+            D2D_SIZE_U { width, height },
+            None,
+            0,
+            &D2D1_BITMAP_PROPERTIES1 {
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
+                dpiX: 96.0 * scale,
+                dpiY: 96.0 * scale,
+                bitmapOptions: options,
+                colorContext: std::mem::ManuallyDrop::new(None),
+            },
+        )
+    }
+}
+
+/// Reads `rect` of `source` (a bitmap of `dc`'s device) back, its rows
+/// packed: premultiplied BGRA.
+pub(crate) fn read_back(
+    dc: &ID2D1DeviceContext,
+    source: &ID2D1Bitmap1,
+    rect: D2D_RECT_U,
+) -> windows::core::Result<Pixels> {
+    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+    let read = bitmap(
+        dc,
+        (width, height),
+        1.0,
+        D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+    )?;
+    // SAFETY: COM calls on bitmaps of the live device; the mapped memory
+    // is copied before `Unmap`.
+    unsafe {
+        read.CopyFromBitmap(Some(&D2D_POINT_2U { x: 0, y: 0 }), source, Some(&rect))?;
+        let mapped = read.Map(D2D1_MAP_OPTIONS_READ)?;
+        let mut data = Vec::with_capacity((width * height * 4) as usize);
+        for row in 0..height {
+            let start = mapped.bits.add((row * mapped.pitch) as usize);
+            data.extend_from_slice(std::slice::from_raw_parts(start, (width * 4) as usize));
+        }
+        read.Unmap()?;
+        Ok(Pixels {
+            width,
+            height,
+            data,
+        })
+    }
+}
+
 /// Draws the surface's window: the whole tree, then presents it.
 pub(crate) fn frame(surface: &Rc<Surface>) {
+    // Shader views that came into sight render for the frames after it.
+    crate::shader::reveal();
     let Ok(gfx) = gfx::get() else { return };
     let hwnd = surface.hwnd();
     if hwnd.is_invalid() {
@@ -1512,8 +1581,8 @@ fn draw_into(
     })
 }
 
-/// Pixels of a snapshot: BGRA, premultiplied, `width * 4` bytes per row.
-#[cfg_attr(not(feature = "dev"), allow(dead_code))]
+/// Pixels read back (a snapshot, a shader's picture): BGRA,
+/// premultiplied, `width * 4` bytes per row.
 pub(crate) struct Pixels {
     /// Width in pixels.
     pub(crate) width: u32,
@@ -1533,72 +1602,25 @@ pub(crate) fn snapshot(surface: &Rc<Surface>, scale: f32) -> windows::core::Resu
         (w * scale).round().max(1.0) as u32,
         (h * scale).round().max(1.0) as u32,
     );
-    let size = D2D_SIZE_U {
-        width: px.0,
-        height: px.1,
-    };
-    let format = D2D1_PIXEL_FORMAT {
-        format: DXGI_FORMAT_B8G8R8A8_UNORM,
-        alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-    };
-    // SAFETY: COM calls on the live context; the mapped memory is copied
-    // before `Unmap`.
-    unsafe {
-        let target = gfx.dc.CreateBitmap(
-            size,
-            None,
-            0,
-            &D2D1_BITMAP_PROPERTIES1 {
-                pixelFormat: format,
-                dpiX: 96.0 * scale,
-                dpiY: 96.0 * scale,
-                bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET,
-                colorContext: std::mem::ManuallyDrop::new(None),
-            },
-        )?;
-        // Web views are not in it: their pages are composed by the system.
-        let drawn = draw_into(surface, &gfx, &target, scale, true, None, None)?;
-        drop(drawn);
-        let read = gfx.dc.CreateBitmap(
-            size,
-            None,
-            0,
-            &D2D1_BITMAP_PROPERTIES1 {
-                pixelFormat: format,
-                dpiX: 96.0 * scale,
-                dpiY: 96.0 * scale,
-                bitmapOptions: D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-                colorContext: std::mem::ManuallyDrop::new(None),
-            },
-        )?;
-        read.CopyFromBitmap(
-            Some(&D2D_POINT_2U { x: 0, y: 0 }),
-            &target,
-            Some(&D2D_RECT_U {
-                left: 0,
-                top: 0,
-                right: px.0,
-                bottom: px.1,
-            }),
-        )?;
-        let mapped = read.Map(D2D1_MAP_OPTIONS_READ)?;
-        let mut data = Vec::with_capacity((px.0 * px.1 * 4) as usize);
-        for row in 0..px.1 {
-            let start = mapped.bits.add((row * mapped.pitch) as usize);
-            data.extend_from_slice(std::slice::from_raw_parts(start, (px.0 * 4) as usize));
-        }
-        read.Unmap()?;
-        Ok(Pixels {
-            width: px.0,
-            height: px.1,
-            data,
-        })
-    }
+    let target = target_bitmap(&gfx.dc, px, scale)?;
+    // Web views are not in it: their pages are composed by the system.
+    let drawn = draw_into(surface, &gfx, &target, scale, true, None, None)?;
+    drop(drawn);
+    read_back(
+        &gfx.dc,
+        &target,
+        D2D_RECT_U {
+            left: 0,
+            top: 0,
+            right: px.0,
+            bottom: px.1,
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use nsh_core::{Edges, NodeId, TransformKind};
+    use nsh_core::{BoxShadow, Edges, Effects, NodeId, TransformKind};
 
     use super::*;
     use crate::geom::rect;
@@ -1646,10 +1668,6 @@ mod tests {
         v.state_mut().style.borders.widths = Edges::all(Points(1.0));
         v.state_mut().style.borders.colors = [Color::BLACK; 4];
         // The border overlaps the background: only a layer fades both as one.
-        assert!(!one_shape(&v));
-
-        let v = dot(None, 4);
-        v.state_mut().style.shadow.opacity = 1.0;
         assert!(!one_shape(&v));
 
         let v = dot(None, 6);
@@ -1741,8 +1759,15 @@ mod tests {
         };
         let a = boxed(2, rect(10.0, 10.0, 50.0, 30.0), 0xcc2244ff);
         let b = boxed(4, rect(120.0, 20.0, 40.0, 40.0), 0x2244ccff);
-        b.state_mut().style.shadow.opacity = 0.5;
-        b.state_mut().style.shadow.radius = Points(6.0);
+        let effects = Effects {
+            box_shadows: vec![BoxShadow {
+                blur: Points(12.0),
+                color: Color(0x0000_0080),
+                ..BoxShadow::default()
+            }],
+            ..Effects::default()
+        };
+        b.state_mut().style.effects = Some(std::sync::Arc::new(effects));
         let c = boxed(6, rect(180.0, 90.0, 30.0, 30.0), 0x22cc44ff);
         boxed(8, rect(0.0, 100.0, 240.0, 40.0), 0x88888888);
         let back = target(&gfx, size);
@@ -1813,10 +1838,17 @@ mod tests {
         assert!(hidden(&row, 120.0));
         assert!(hidden(&row, -60.0));
         // Its shadow reaches in.
-        row.state_mut().style.shadow.opacity = 1.0;
-        row.state_mut().style.shadow.radius = Points(30.0);
+        let effects = Effects {
+            box_shadows: vec![BoxShadow {
+                blur: Points(60.0),
+                color: Color::BLACK,
+                ..BoxShadow::default()
+            }],
+            ..Effects::default()
+        };
+        row.state_mut().style.effects = Some(std::sync::Arc::new(effects));
         assert!(!hidden(&row, 120.0));
-        row.state_mut().style.shadow.opacity = 0.0;
+        row.state_mut().style.effects = None;
         // A child sticking out of it reaches in.
         view(Some(&row), 4, ViewKind::View, rect(0.0, -50.0, 10.0, 10.0));
         assert!(!hidden(&row, 120.0));
@@ -1835,8 +1867,18 @@ mod tests {
     fn a_layer_covers_the_bounds_and_the_shadow() {
         let v = dot(None, 2);
         assert_eq!(area(&v), (-1.0, -1.0, 17.0, 17.0));
-        // React Native's shadow: offset (0, -3), radius 3.
-        v.state_mut().style.shadow.opacity = 1.0;
+        // Offset (0, -3), blur 6: 1.5 blurs past the offset.
+        let shadow = BoxShadow {
+            offset_y: Points(-3.0),
+            blur: Points(6.0),
+            color: Color::BLACK,
+            ..BoxShadow::default()
+        };
+        let effects = Effects {
+            box_shadows: vec![shadow],
+            ..Effects::default()
+        };
+        v.state_mut().style.effects = Some(std::sync::Arc::new(effects));
         assert_eq!(area(&v), (-13.0, -13.0, 29.0, 29.0));
     }
 

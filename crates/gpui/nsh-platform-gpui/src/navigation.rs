@@ -1575,11 +1575,7 @@ mod tests {
                     child: 8,
                     before: None,
                 },
-                nsh_core::MountItem::ModalConfig {
-                    id: 8,
-                    config,
-                    shader: None,
-                },
+                nsh_core::MountItem::ModalConfig { id: 8, config },
             ] {
                 surface.mounter.borrow_mut().apply(&surface, &item);
             }

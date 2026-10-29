@@ -3,8 +3,6 @@
 //! on changes: the appearance, the window size, the layout direction, the
 //! node's interaction states, its group's states or its sibling position.
 
-use std::sync::Arc;
-
 use super::{Core, Key, Kind, NO_KEY, dirty, disabling_changes};
 use crate::{
     geometry::{Points, Size},
@@ -23,7 +21,7 @@ use crate::{
 fn inline_color(patch: &StylePatch) -> Option<Color> {
     patch.decls().iter().rev().find_map(|d| match d {
         crate::style::StyleDecl::Set(crate::style::StyleKey::Color, value) => Some(match value {
-            crate::style::PatchValue::Str(s) => Color::parse(s),
+            crate::style::PropertyValue::Color(c) => *c,
             _ => None,
         }),
         _ => None,
@@ -31,7 +29,7 @@ fn inline_color(patch: &StylePatch) -> Option<Color> {
 }
 
 /// The states the platform reports ([`Core::set_states`]).
-const REPORTED: u8 = state::PRESSED | state::HOVERED | state::FOCUSED;
+const REPORTED: u16 = state::PRESSED | state::HOVERED | state::FOCUSED;
 
 /// The `class` and `classList` props as set.
 #[derive(Debug, Default)]
@@ -58,6 +56,10 @@ pub(super) enum Part {
     Checked,
     /// `indeterminateStyle`.
     Indeterminate,
+    /// `expandedStyle`.
+    Expanded,
+    /// `pressedStyle`.
+    Pressed,
     /// A page's `headerStyle` / `headerClass`.
     Header,
     /// A list's `contentClass`.
@@ -66,7 +68,7 @@ pub(super) enum Part {
 
 impl Part {
     /// The state bits and rank of a state style.
-    fn state(self) -> Option<(u8, crate::tailwind::Key)> {
+    fn state(self) -> Option<(u16, crate::tailwind::Key)> {
         Some(match self {
             Part::Active => (state::PRESSED, rank::ACTIVE),
             Part::Hover => (state::HOVERED, rank::HOVER),
@@ -75,6 +77,8 @@ impl Part {
             Part::Selected => (state::SELECTED, rank::SELECTED),
             Part::Checked => (state::CHECKED, rank::CHECKED),
             Part::Indeterminate => (state::INDETERMINATE, rank::INDETERMINATE),
+            Part::Expanded => (state::EXPANDED, rank::EXPANDED),
+            Part::Pressed => (state::ARIA_PRESSED, rank::ARIA_PRESSED),
             _ => return None,
         })
     }
@@ -84,19 +88,45 @@ impl Part {
 #[derive(Debug, Default)]
 pub(super) struct NodeParts {
     /// The classes as set, before the state styles are merged in.
-    base: Option<Arc<ClassList>>,
-    /// The state styles, by [`Part`] (the first seven).
-    states: [Option<Arc<StylePatch>>; 7],
+    base: Option<std::rc::Rc<ClassList>>,
+    /// The state styles, by [`Part`] (the first nine).
+    states: [Option<std::rc::Rc<StylePatch>>; 9],
     /// The state styles as rules (none without any).
-    state_rules: Option<Arc<ClassList>>,
+    state_rules: Option<std::rc::Rc<ClassList>>,
     /// The inline styles of the other parts.
-    styles: Vec<(Part, Arc<StylePatch>)>,
+    styles: Vec<(Part, std::rc::Rc<StylePatch>)>,
     /// The classes of the other parts.
-    classes: Vec<(Part, Arc<ClassList>)>,
+    classes: Vec<(Part, std::rc::Rc<ClassList>)>,
+}
+
+/// The [`state`] bits an element is in by its accessibility state `s`:
+/// selected, checked (true), indeterminate (checked mixed), expanded,
+/// pressed (true: a toggle button that is on) and busy.
+pub(super) fn accessibility_states(s: &crate::AccessibilityState) -> u16 {
+    use crate::Checked;
+    let mut states = 0;
+    if s.selected {
+        states |= state::SELECTED;
+    }
+    match s.checked {
+        Some(Checked::True) => states |= state::CHECKED,
+        Some(Checked::Mixed) => states |= state::INDETERMINATE,
+        _ => {}
+    }
+    if s.expanded == Some(true) {
+        states |= state::EXPANDED;
+    }
+    if s.pressed == Some(Checked::True) {
+        states |= state::ARIA_PRESSED;
+    }
+    if s.busy {
+        states |= state::BUSY;
+    }
+    states
 }
 
 /// The state style parts, by their index in [`NodeParts::states`].
-const STATE_PARTS: [Part; 7] = [
+const STATE_PARTS: [Part; 9] = [
     Part::Active,
     Part::Hover,
     Part::Focus,
@@ -104,6 +134,8 @@ const STATE_PARTS: [Part; 7] = [
     Part::Selected,
     Part::Checked,
     Part::Indeterminate,
+    Part::Expanded,
+    Part::Pressed,
 ];
 
 impl<M: TextEngine> Core<M> {
@@ -126,7 +158,7 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// The appearance the app asks for (`nsh.json` `"appearance"`, TS
-    /// `setColorScheme`, [`crate::element::ambient::set_color_scheme`]): what
+    /// `setColorScheme`, [`crate::element::set_color_scheme`]): what
     /// `dark:` variants and the components' theme follow in place of the
     /// system's; the platform applies it to its own controls
     /// ([`MountItem::Appearance`]).
@@ -162,13 +194,13 @@ impl<M: TextEngine> Core<M> {
     /// The platform reports interaction states of view `id` (`active:`,
     /// `hover:`, `focus:`): state bits for the states it
     /// tracks ([`MountItem::TrackStates`]); see [`crate::tailwind::state`].
-    pub fn set_states(&mut self, id: NodeId, states: u8) {
+    pub fn set_states(&mut self, id: NodeId, states: u16) {
         let Ok(key) = self.key(id) else { return };
         self.set_node_states(key, states);
     }
 
     /// [`Self::set_states`] by key.
-    fn set_node_states(&mut self, key: Key, states: u8) {
+    fn set_node_states(&mut self, key: Key, states: u16) {
         let held = self.held_pressed() == Some(key);
         let node = &mut self.nodes[key as usize];
         let mut new = node.states & !REPORTED | states & REPORTED;
@@ -267,53 +299,21 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
-    /// `selected` of `key`'s accessibility state: the `selected:` variant.
-    pub(super) fn set_selected(&mut self, key: Key, selected: bool) {
+    /// The states `key`'s accessibility state puts it in
+    /// ([`accessibility_states`]): the `selected:`, `checked:`,
+    /// `indeterminate:` and `aria-*:` variants.
+    pub(super) fn set_accessibility_states(&mut self, key: Key, states: u16) {
         let node = &mut self.nodes[key as usize];
-        let before = node.states;
-        if selected {
-            node.states |= state::SELECTED;
-        } else {
-            node.states &= !state::SELECTED;
-        }
-        if node.states != before {
-            self.states_changed(key);
-        }
-    }
-
-    /// `checked` of `key`'s accessibility state (true, not mixed): the
-    /// `checked:` variant.
-    pub(super) fn set_checked(&mut self, key: Key, checked: bool) {
-        let node = &mut self.nodes[key as usize];
-        let before = node.states;
-        if checked {
-            node.states |= state::CHECKED;
-        } else {
-            node.states &= !state::CHECKED;
-        }
-        if node.states != before {
-            self.states_changed(key);
-        }
-    }
-
-    /// `checked` of `key`'s accessibility state is mixed: the
-    /// `indeterminate:` variant.
-    pub(super) fn set_indeterminate(&mut self, key: Key, indeterminate: bool) {
-        let node = &mut self.nodes[key as usize];
-        let before = node.states;
-        if indeterminate {
-            node.states |= state::INDETERMINATE;
-        } else {
-            node.states &= !state::INDETERMINATE;
-        }
-        if node.states != before {
+        let now = (node.states & !state::ACCESSIBILITY) | states;
+        if node.states != now {
+            node.states = now;
             self.states_changed(key);
         }
     }
 
     /// The states `key` shows as a part of a control: its classes and
     /// state styles read them, its events and accessibility do not.
-    pub(super) fn set_projected_states(&mut self, key: Key, states: u8) {
+    pub(super) fn set_projected_states(&mut self, key: Key, states: u16) {
         let node = &mut self.nodes[key as usize];
         if node.projected != states {
             node.projected = states;
@@ -388,7 +388,12 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// Sets the inline style of `key`'s `part` (`None`: removes it).
-    pub(super) fn set_part_style(&mut self, key: Key, part: Part, patch: Option<Arc<StylePatch>>) {
+    pub(super) fn set_part_style(
+        &mut self,
+        key: Key,
+        part: Part,
+        patch: Option<std::rc::Rc<StylePatch>>,
+    ) {
         let node = &mut self.nodes[key as usize];
         let base = node.classes.clone();
         let parts = node.parts.get_or_insert_with(|| {
@@ -415,8 +420,8 @@ impl<M: TextEngine> Core<M> {
                         Some(Rule::state_style(states, rank, p.decls().to_vec()))
                     })
                     .collect();
-                parts.state_rules =
-                    (!rules.is_empty()).then(|| Arc::new(ClassList::from_rules(rules, Vec::new())));
+                parts.state_rules = (!rules.is_empty())
+                    .then(|| std::rc::Rc::new(ClassList::from_rules(rules, Vec::new())));
                 let base = parts.base.clone();
                 self.set_class_list(key, base);
             }
@@ -448,7 +453,7 @@ impl<M: TextEngine> Core<M> {
         &mut self,
         key: Key,
         part: Part,
-        classes: Option<Arc<ClassList>>,
+        classes: Option<std::rc::Rc<ClassList>>,
     ) {
         let node = &mut self.nodes[key as usize];
         let base = node.classes.clone();
@@ -521,9 +526,14 @@ impl<M: TextEngine> Core<M> {
             return None;
         }
         let mut style = Style::default();
+        let current = inline.and_then(|i| inline_color(i)).unwrap_or(Color::BLACK);
+        if let Some(i) = inline {
+            i.apply_defaults(&mut style, current);
+        }
         let apply = |s: &mut Style| {
             if let Some(i) = inline {
                 i.apply(s);
+                s.apply_current_color(current);
             }
         };
         match classes {
@@ -602,14 +612,14 @@ impl<M: TextEngine> Core<M> {
 
     /// Sets the resolved classes of `key` (a Rust component's styles go
     /// straight here).
-    pub(super) fn set_class_list(&mut self, key: Key, classes: Option<Arc<ClassList>>) {
+    pub(super) fn set_class_list(&mut self, key: Key, classes: Option<std::rc::Rc<ClassList>>) {
         let node = &mut self.nodes[key as usize];
         // The state styles go over the classes.
         let classes = match node.parts.as_deref_mut() {
             Some(parts) => {
                 parts.base = classes.clone();
                 match (classes, &parts.state_rules) {
-                    (Some(c), Some(s)) => Some(Arc::new(c.merged(s))),
+                    (Some(c), Some(s)) => Some(std::rc::Rc::new(c.merged(s))),
                     (None, Some(s)) => Some(s.clone()),
                     (c, None) => c,
                 }
@@ -630,6 +640,25 @@ impl<M: TextEngine> Core<M> {
         if had_groups || has_groups {
             self.restyle_subtree(key, deps::GROUP);
         }
+    }
+
+    /// How long the transitions of view `id` run, its delay included, with
+    /// its styles now (a component waiting for its exit,
+    /// [`crate::element::ElementRef::transition_time`]); zero for a view
+    /// with none, or gone.
+    pub(super) fn transition_time(&self, id: NodeId) -> std::time::Duration {
+        let Ok(key) = self.key(id) else {
+            return std::time::Duration::ZERO;
+        };
+        self.nodes[key as usize]
+            .view_style
+            .transition
+            .filter(|t| t.properties.0 != 0)
+            .map_or(std::time::Duration::ZERO, |t| {
+                std::time::Duration::from_secs_f32(
+                    (t.duration.max(0.0) + t.delay.max(0.0)) / 1000.0,
+                )
+            })
     }
 
     /// Replaces the theme: every class is resolved again.
@@ -660,8 +689,9 @@ impl<M: TextEngine> Core<M> {
         let Some(changed) = self.tailwind.set_tokens(&tokens) else {
             return;
         };
-        let reads =
-            |c: &Option<Arc<ClassList>>| c.as_ref().is_some_and(|c| c.deps() & changed != 0);
+        let reads = |c: &Option<std::rc::Rc<ClassList>>| {
+            c.as_ref().is_some_and(|c| c.deps() & changed != 0)
+        };
         let keys: Vec<Key> = self
             .nodes
             .iter()
@@ -695,7 +725,7 @@ impl<M: TextEngine> Core<M> {
             let app = self.app_class_list(&class);
             let user = self.merge_user(Some(app), outer);
             let list = match (own, user) {
-                (Some(a), Some(b)) => Some(Arc::new(a.merged(&b))),
+                (Some(a), Some(b)) => Some(std::rc::Rc::new(a.merged(&b))),
                 (a, b) => a.or(b),
             };
             if let Ok(key) = self.key(id) {
@@ -835,9 +865,7 @@ impl<M: TextEngine> Core<M> {
             .children
             .iter()
             .copied()
-            .filter(|&c| {
-                self.nodes[c as usize].kind != Kind::RawText && !self.is_tooltip_overlay(c)
-            })
+            .filter(|&c| self.is_element_child(c))
             .collect();
         let i = siblings.iter().position(|&c| c == key).unwrap_or(0);
         let n = siblings.len();
@@ -859,7 +887,7 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// The states of the nearest ancestor of `key` that is group `name`.
-    fn group_states(&self, key: Key, name: &str) -> u8 {
+    fn group_states(&self, key: Key, name: &str) -> u16 {
         let mut k = self.nodes[key as usize].parent;
         while k != NO_KEY {
             let node = &self.nodes[k as usize];
@@ -897,9 +925,10 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// A child that counts among its siblings (`:last-child`, `first:`):
-    /// not a raw text, not a tooltip's overlay.
+    /// not a raw text, a tooltip's overlay or a scroll view's built-in bar.
     fn is_element_child(&self, key: Key) -> bool {
-        self.nodes[key as usize].kind != Kind::RawText && !self.is_tooltip_overlay(key)
+        let node = &self.nodes[key as usize];
+        node.kind != Kind::RawText && !node.decoration && !self.is_tooltip_overlay(key)
     }
 
     /// `parent`'s children changed (`moved` joined it, or one left): the
@@ -940,7 +969,7 @@ impl<M: TextEngine> Core<M> {
         // Under its own classes and style, as `:where()` is in CSS.
         let space = self.space_of(key);
         if let Some(space) = space {
-            space.apply(&mut base, false);
+            space.apply(&mut base, false, self.resolved_rtl(key));
         }
         let spaced = space.is_some();
         let node = &mut self.nodes[key as usize];
@@ -993,6 +1022,7 @@ impl<M: TextEngine> Core<M> {
             let id = node.id;
             self.ch_styled.push((key, id));
         }
+        style.node_props(&mut props);
         self.set_class_props(key, props);
         let id = self.nodes[key as usize].id;
         let _ = self.set_style(id, style);
@@ -1111,10 +1141,14 @@ impl<M: TextEngine> Core<M> {
                 inherited: node.inherited_color,
                 inline: inline_color(inline),
             };
+            let text_color = classes.current_color(&cx, current);
+            inline.apply_defaults(style, text_color);
+            let rtl = cx.rtl;
             classes.apply_with(&cx, self.tailwind.theme(), current, ch, style, props, |s| {
                 inline.apply(s);
+                s.apply_current_color(text_color);
                 if let Some(space) = self.space_of(key) {
-                    space.apply(s, true);
+                    space.apply(s, true, rtl);
                 }
             });
             if positional {
@@ -1122,9 +1156,14 @@ impl<M: TextEngine> Core<M> {
                 self.nodes[parent as usize].positional_children = true;
             }
         } else {
+            let current = inline_color(&node.inline_style)
+                .or(node.inherited_color)
+                .unwrap_or(Color::BLACK);
+            node.inline_style.apply_defaults(style, current);
             node.inline_style.apply(style);
+            style.apply_current_color(current);
             if let Some(space) = self.space_of(key) {
-                space.apply(style, true);
+                space.apply(style, true, self.resolved_rtl(key));
             }
         }
     }
@@ -1155,10 +1194,11 @@ impl<M: TextEngine> Core<M> {
             // styled with is not the one it inherits then (a subtree built
             // from the inside out passes through several).
             if !node.color_queued
-                && node
-                    .classes
-                    .as_ref()
-                    .is_some_and(|c| c.deps() & deps::CURRENT_COLOR != 0)
+                && (node.inline_style.reads_current_color()
+                    || node
+                        .classes
+                        .as_ref()
+                        .is_some_and(|c| c.deps() & deps::CURRENT_COLOR != 0))
             {
                 node.color_queued = true;
                 let id = node.id;
@@ -1228,13 +1268,23 @@ impl<M: TextEngine> Core<M> {
             let own = node.class_props.as_ref().and_then(|c| c.pointer_events);
             let effective = own.or(inherited);
             let mounted = match effective {
+                // React Native's: the view's own, natively; what is in it
+                // takes touches (`box-none`) or none (`box-only`).
+                Some(p @ (PointerEvents::BoxNone | PointerEvents::BoxOnly)) if own.is_some() => p,
                 Some(PointerEvents::None) if node.pointer_auto_inside => PointerEvents::BoxNone,
                 // A view above already blocks the subtree.
                 Some(PointerEvents::None) if blocked => PointerEvents::Auto,
                 Some(PointerEvents::None) => PointerEvents::None,
                 _ => PointerEvents::Auto,
             };
-            let blocked = blocked || mounted == PointerEvents::None;
+            let blocked =
+                blocked || matches!(mounted, PointerEvents::None | PointerEvents::BoxOnly);
+            // Neither is inherited: the views in a `box-none` take touches,
+            // and those in a `box-only` are blocked natively.
+            let effective = match effective {
+                Some(PointerEvents::BoxNone | PointerEvents::BoxOnly) => Some(PointerEvents::Auto),
+                e => e,
+            };
             for &c in &node.children {
                 stack.push((c, effective, blocked));
             }
@@ -1253,7 +1303,11 @@ impl<M: TextEngine> Core<M> {
             .class_props
             .as_ref()
             .and_then(|c| c.pointer_events);
-        let effective = own.or(inherited);
+        let effective = match own.or(inherited) {
+            // Not inherited (`update_pointer_events`).
+            Some(PointerEvents::BoxNone | PointerEvents::BoxOnly) => Some(PointerEvents::Auto),
+            e => e,
+        };
         let children = std::mem::take(&mut self.nodes[key as usize].children);
         let mut inside = false;
         for &c in &children {
@@ -1261,11 +1315,14 @@ impl<M: TextEngine> Core<M> {
         }
         self.nodes[key as usize].children = children;
         self.nodes[key as usize].pointer_auto_inside = inside;
-        inside || own == Some(PointerEvents::Auto) && inherited == Some(PointerEvents::None)
+        // Any value of its own but `none` takes some touches under a `none`.
+        inside
+            || own.is_some_and(|o| o != PointerEvents::None)
+                && inherited == Some(PointerEvents::None)
     }
 
-    /// Applies the node props classes set (explicit props win).
-    fn set_class_props(&mut self, key: Key, props: ClassProps) {
+    /// Applies the node props classes and styles set.
+    pub(super) fn set_class_props(&mut self, key: Key, props: ClassProps) {
         let node = &mut self.nodes[key as usize];
         let old = node.class_props.take().map(|b| *b).unwrap_or_default();
         if old == props {
@@ -1284,7 +1341,6 @@ impl<M: TextEngine> Core<M> {
             _ => {}
         }
         let node = &mut self.nodes[key as usize];
-        let image = old.resize_mode != props.resize_mode;
         let space = old.space != props.space;
         let input = old.placeholder_color != props.placeholder_color
             || old.caret_color != props.caret_color
@@ -1305,9 +1361,6 @@ impl<M: TextEngine> Core<M> {
         if pointer {
             let top = self.pointer_region(key).unwrap_or(key);
             self.update_pointer_events(top);
-        }
-        if image {
-            self.mark(key, dirty::IMAGE);
         }
         if selection && kind == Kind::Text {
             self.mark_text_block(key);

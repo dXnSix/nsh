@@ -113,11 +113,6 @@ define_class!(
             self.with_mounter(|m| m.frame());
         }
 
-        #[unsafe(method(shaderFrame:))]
-        fn shader_frame(&self, _link: &CADisplayLink) {
-            self.with_mounter(|m| m.shader_frame());
-        }
-
         #[unsafe(method(handlePan:))]
         fn handle_pan(&self, recognizer: &UIPanGestureRecognizer) {
             let Some(view) = recognizer.view() else { return };
@@ -144,6 +139,16 @@ define_class!(
         #[unsafe(method(tick:))]
         fn tick(&self, _link: &CADisplayLink) {
             self.with_mounter(|m| m.tick());
+        }
+
+        #[unsafe(method(shaderFrame:))]
+        fn shader_frame(&self, _link: &CADisplayLink) {
+            self.with_mounter(|m| m.shader_frame());
+        }
+
+        #[unsafe(method(textColorFrame:))]
+        fn text_color_frame(&self, _link: &CADisplayLink) {
+            self.with_mounter(|m| m.text_color_frame());
         }
 
         #[unsafe(method(handleEditingChanged:))]
@@ -331,9 +336,11 @@ define_class!(
                 .control
                 .scroll(id, point(px(offset.x as f32), px(offset.y as f32)), applied);
             self.with_mounter(move |m| m.scrolled(id, offset));
-            // A text area scrolling moves its caret.
+            // A text area scrolling moves its caret, and a built-in bar's
+            // thumb.
             if scroll.downcast_ref::<input::Area>().is_some() {
                 self.caret_moved(scroll);
+                self.input_scrolled(scroll);
             }
         }
 
@@ -511,6 +518,12 @@ impl EventTarget {
             .borrow_mut()
             .entry(id)
             .or_default() += 1;
+    }
+
+    /// Reports how far text area `view` scrolled, if a built-in bar takes
+    /// the place of its indicator and it changed (`input::report_scroll`).
+    pub(crate) fn input_scrolled(&self, view: &UIView) {
+        input::report_scroll(view, &self.ivars().control);
     }
 
     /// Forgets a deleted scroll view.
@@ -714,11 +727,6 @@ impl EventTarget {
     /// Runs `f` on the mounter. UIKit can call back synchronously while the
     /// mounter applies a batch (e.g. setting `contentOffset`); then the call
     /// is deferred to the next main-queue turn instead of re-entering.
-    /// The mounter it hands events to.
-    pub(crate) fn mounter(&self) -> crate::mount::SharedMounter {
-        self.ivars().mounter.clone()
-    }
-
     fn with_mounter(&self, f: impl FnOnce(&mut crate::mount::Mounter) + Send + 'static) {
         let mtm = self.mtm();
         let shared = &self.ivars().mounter;

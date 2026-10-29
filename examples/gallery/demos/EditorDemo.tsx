@@ -1,4 +1,4 @@
-import { type Bounds, cleanup, computed, List, Overlay, type Point, signal, Text, untracked, View, type YNode } from "nsh";
+import { type Bounds, cleanup, computed, type InputRef, List, Overlay, type Point, signal, Text, untracked, View, type ViewRef } from "nsh";
 import { Button, DockArea, type DockAreaRef, Editor, type EditorDecoration, type EditorDiagnostic, type EditorPosition, type EditorRange, type EditorRef, type EditorSearchResult, type EditorSelection, Menu, MenuItem, MenuSeparator, TextView, Input } from "nsh/base";
 import { isAvailable as hasMenus, Menu as NativeMenu, type MenuItem as NativeMenuItem } from "nsh/desktop";
 import { openUrl, platform, windowSize } from "nsh";
@@ -136,7 +136,7 @@ const same = (a: EditorRange, b: EditorRange) =>
   a.start.line === b.start.line && a.start.column === b.start.column && a.end.line === b.end.line && a.end.column === b.end.column;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 || word === "info" ? "" : "s"}`;
 
-const pointer = platform.idiom === "desktop";
+const pointer = platform.desktop;
 
 /** What the hover card shows. */
 interface HoverCard {
@@ -248,7 +248,7 @@ export function EditorDemo() {
   const texts: Partial<Record<Language, string>> = {};
   let editor: EditorRef | undefined;
   let area: DockAreaRef | undefined;
-  let toolbar: YNode | undefined;
+  let toolbar: ViewRef | undefined;
   // Whether the problems' dock shows (`onDockOpenChange`): open in the
   // full presentation, none at first at compact width, where the area is
   // less than 600 wide (a phone's window).
@@ -392,7 +392,7 @@ export function EditorDemo() {
   // A diagnostic code's page (a lint rule's), in the browser.
   const openRule = async (href: string) => {
     try {
-      if (!(await openUrl(href))) last.set("No app opens links");
+      if (!(await openUrl(href)).opened) last.set("No app opens links");
     } catch (error) {
       last.set(String(error));
     }
@@ -440,9 +440,9 @@ export function EditorDemo() {
         >
           <View class="flex-row items-center gap-0.5">
             <Input
-              ref={(node: YNode) => node.focus()}
+              ref={(node: InputRef) => node.focus()}
               value={query()}
-              onChange={(value) => query.set(value)}
+              onChange={({ value }) => query.set(value)}
               onSubmit={() => editor?.run("findNext")}
               submitBehavior="submit"
               placeholder="Find"
@@ -451,7 +451,7 @@ export function EditorDemo() {
               autoCorrect={false}
               class={field}
             />
-            <Text numberOfLines={1} class="px-1 font-mono text-[11px] tabular-nums text-muted-foreground">
+            <Text style={{ numberOfLines: 1 }} class="px-1 font-mono text-[11px] tabular-nums text-muted-foreground">
               {matches()}
             </Text>
             <Tool label="Match case" name="Aa" on={caseSensitive()} onPress={() => caseSensitive.set(!caseSensitive())} />
@@ -464,7 +464,7 @@ export function EditorDemo() {
           <View class="flex-row items-center gap-0.5">
             <Input
               value={replacement()}
-              onChange={(value) => replacement.set(value)}
+              onChange={({ value }) => replacement.set(value)}
               onSubmit={() => editor?.replace(replacement())}
               submitBehavior="submit"
               placeholder="Replace"
@@ -478,7 +478,7 @@ export function EditorDemo() {
               label="Replace all"
               icon="replace-all"
               onPress={async () => {
-                const n = (await editor?.replaceAll(replacement())) ?? 0;
+                const n = (await editor?.replaceAll(replacement()))?.count ?? 0;
                 last.set(`Replaced ${n}`);
               }}
             />
@@ -511,17 +511,17 @@ export function EditorDemo() {
               completion={lsp}
               completionTriggerCharacters={["."]}
               inlineCompletionDelay={150}
-              onChange={(value) => {
+              onChange={({ value }) => {
                 texts[lang] = value;
                 if (lsp) changed(value);
               }}
-              onSelectionChange={(value) => selections.set(value)}
-              onSearchChange={(value) => result.set(value)}
-              onFindWithSelection={(value) => {
+              onSelectionChange={({ selections: value }) => selections.set(value)}
+              onSearchChange={({ result: value }) => result.set(value)}
+              onFindWithSelection={({ query: value }) => {
                 query.set(value);
                 finding.set(true);
               }}
-              onLineNumberPress={(line) => last.set(`Line ${line + 1} pressed`)}
+              onLineNumberPress={({ line }) => last.set(`Line ${line + 1} pressed`)}
               onContextMenu={(e) => void contextMenu(e.position, e.x, e.y)}
               onHover={async (e) => {
                 clearTimeout(closeTimer);
@@ -586,7 +586,7 @@ export function EditorDemo() {
               class="flex-row gap-2 px-3 py-1 hover:bg-foreground/10 active:bg-foreground/15"
             >
               <Dot severity={p().diagnostic.severity} />
-              <Text numberOfLines={1} class="flex-1 text-xs text-foreground">
+              <Text style={{ numberOfLines: 1 }} class="flex-1 text-xs text-foreground">
                 {p().diagnostic.message}
               </Text>
               <Text class="font-mono text-[11px] tabular-nums text-muted-foreground">{`${p().diagnostic.range.start.line + 1}:${p().diagnostic.range.start.column + 1}`}</Text>
@@ -597,19 +597,22 @@ export function EditorDemo() {
     );
   }
 
+  // The toolbar menu shown: its trigger shows as selected while open.
+  const menuOpen = signal<"language" | "options" | null>(null);
   return (
     <View class="flex-1 bg-background">
-      <View ref={(node: YNode) => (toolbar = node)} class="h-10 flex-row items-center gap-0.5 border-b border-border px-1.5">
+      <View ref={(node: ViewRef) => (toolbar = node)} class="h-10 flex-row items-center gap-0.5 border-b border-border px-1.5">
         <Menu
           offset={4}
           margin={8}
           popupClass={popup}
           backdropClass="bg-black/40"
+          onOpenChange={({ open }) => menuOpen.set(open ? "language" : null)}
           trigger={
             <View
               accessibilityLabel="Language"
               tooltip={<Tip label="Language" />}
-              class="h-7 flex-row items-center gap-1.5 rounded-md px-1.5 hover:bg-foreground/10 active:opacity-70"
+              class={`h-7 flex-row items-center gap-1.5 rounded-md px-1.5 active:opacity-70 ${menuOpen() === "language" ? "bg-accent" : "hover:bg-foreground/10"}`}
             >
               <Icon name="code" size={16} tint={colors.muted} />
               <Text class="text-xs font-medium text-foreground">{LANGUAGES.find((l) => l.value === language())!.label}</Text>
@@ -637,8 +640,13 @@ export function EditorDemo() {
           margin={8}
           popupClass={popup}
           backdropClass="bg-black/40"
+          onOpenChange={({ open }) => menuOpen.set(open ? "options" : null)}
           trigger={
-            <View accessibilityLabel="Editor options" tooltip={<Tip label="Editor options" />} class="size-7 items-center justify-center rounded-md hover:bg-foreground/10 active:opacity-70">
+            <View
+              accessibilityLabel="Editor options"
+              tooltip={<Tip label="Editor options" />}
+              class={`size-7 items-center justify-center rounded-md active:opacity-70 ${menuOpen() === "options" ? "bg-accent" : "hover:bg-foreground/10"}`}
+            >
               <Icon name="sliders" size={16} tint={colors.muted} />
             </View>
           }
@@ -669,7 +677,7 @@ export function EditorDemo() {
             { id: "editor", closable: false },
             { id: "problems", closable: false },
           ]}
-          onDockOpenChange={(placement, open) => placement === "bottom" && problemsShown.set(open)}
+          onDockOpenChange={({ placement, open }) => placement === "bottom" && problemsShown.set(open)}
           groupClass="flex-1 bg-card"
           tabBarClass="flex-row border-b border-border"
           contentClass="flex-1"
@@ -681,11 +689,11 @@ export function EditorDemo() {
           backdropClass="bg-black/40"
           renderTab={(tab) => (
             <View class="h-7 flex-row items-center gap-2 px-3">
-              <Text numberOfLines={1} class={`text-xs font-medium ${tab.active ? "text-foreground" : "text-muted-foreground"}`}>
+              <Text style={{ numberOfLines: 1 }} class={`text-xs font-medium ${tab.active ? "text-foreground" : "text-muted-foreground"}`}>
                 {tab.panel === "editor" ? fileOf(language()) : `Problems ${problems().length}`}
               </Text>
               <If when={tab.active}>
-                <View pointerEvents="none" class="absolute bottom-0 left-3 right-3 h-0.5 rounded-full bg-brand" />
+                <View style={{ pointerEvents: "none" }} class="absolute bottom-0 left-3 right-3 h-0.5 rounded-full bg-brand" />
               </If>
             </View>
           )}
@@ -697,11 +705,11 @@ export function EditorDemo() {
         {(card) => (
           <Overlay anchor={card().anchor} placement="top" align="start" offset={4} margin={8}>
             <View
-              onHoverIn={() => {
+              onMouseEnter={() => {
                 overCard = true;
                 clearTimeout(closeTimer);
               }}
-              onHoverOut={() => {
+              onMouseLeave={() => {
                 overCard = false;
                 closeSoon();
               }}
@@ -787,22 +795,22 @@ export function EditorDemo() {
       </If>
 
       <View class="h-6 flex-row items-center gap-3 overflow-hidden border-t border-border pl-2.5 pr-1">
-        <Text numberOfLines={1} class="font-mono text-[11px] tabular-nums text-foreground">
+        <Text style={{ numberOfLines: 1 }} class="font-mono text-[11px] tabular-nums text-foreground">
           {caret()}
         </Text>
-        <Text numberOfLines={1} class="font-mono text-[11px] text-destructive">
+        <Text style={{ numberOfLines: 1 }} class="font-mono text-[11px] text-destructive">
           {plural(count("error"), "error")}
         </Text>
-        <Text numberOfLines={1} class="font-mono text-[11px] text-warn">
+        <Text style={{ numberOfLines: 1 }} class="font-mono text-[11px] text-warn">
           {plural(count("warning"), "warning")}
         </Text>
-        <Text numberOfLines={1} class="font-mono text-[11px] text-info">
+        <Text style={{ numberOfLines: 1 }} class="font-mono text-[11px] text-info">
           {plural(count("info"), "info")}
         </Text>
-        <Text numberOfLines={1} class="min-w-0 shrink font-mono text-[11px] text-muted-foreground">
+        <Text style={{ numberOfLines: 1 }} class="min-w-0 shrink font-mono text-[11px] text-muted-foreground">
           {last()}
         </Text>
-        <Text numberOfLines={1} class="ml-auto min-w-0 shrink font-mono text-[11px] text-muted-foreground">
+        <Text style={{ numberOfLines: 1 }} class="ml-auto min-w-0 shrink font-mono text-[11px] text-muted-foreground">
           {typescript() && analyzing() ? "Analyzing…" : LANGUAGES.find((l) => l.value === language())!.label}
         </Text>
         <IconTool label="Toggle problems" icon="diagnostics" size="small" on={problemsShown()} onPress={() => area?.toggleDock("bottom")} />

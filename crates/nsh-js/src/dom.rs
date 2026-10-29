@@ -329,19 +329,21 @@ impl Dom {
 
 /// The methods of nodes (`ref` objects): each sends a command to the
 /// node's view, in order with the ops before it. Name, `length`, signature
-/// and documentation (the declaration of `YNode`).
+/// and documentation (declared on the refs of `declarations::REFS`).
 pub(crate) const NODE_METHODS: &[(&str, c_int, &str, &str)] = &[
     (
         "focus",
         0,
         decl!("(): void"),
-        decl!("Focuses an `<Input>` (shows the keyboard)."),
+        decl!(
+            "Focuses an `<Input>` (shows the keyboard), or gives a view that takes presses the keyboard focus where Tab stops at it (macOS, the web), as Tab does: `focus:` styles, `onFocus`. A view `focusable={false}`, disabled or hidden stays unfocused."
+        ),
     ),
     (
         "blur",
         0,
         decl!("(): void"),
-        decl!("Unfocuses an `<Input>`."),
+        decl!("Unfocuses an `<Input>`, or takes the keyboard focus off a view that takes presses."),
     ),
     (
         "setSelection",
@@ -1102,7 +1104,7 @@ fn part_style(
     cx: *mut JsContext,
     name: &str,
     value: JsValue,
-) -> Result<Option<std::sync::Arc<nsh_core::StylePatch>>, JsValue> {
+) -> Result<Option<std::rc::Rc<nsh_core::StylePatch>>, JsValue> {
     // SAFETY: a context reference for the decoder, which reads a dup.
     let js_cx = unsafe { Ctx::from_raw(std::ptr::NonNull::new_unchecked(cx)) };
     let v = unsafe { Value::from_raw(js_cx, qjs::JS_DupValue(cx, value)) };
@@ -1110,7 +1112,7 @@ fn part_style(
     let patch = crate::protocol::style_patch(&v, &mut warnings);
     dom(cx).shared.warnings.borrow_mut().merge(warnings);
     match patch {
-        Ok(patch) => Ok((!patch.is_empty()).then(|| std::sync::Arc::new(patch))),
+        Ok(patch) => Ok((!patch.is_empty()).then(|| std::rc::Rc::new(patch))),
         Err(rquickjs::Error::Exception) => Err(qjs::JS_EXCEPTION),
         Err(e) => Err(throw_type(cx, &format!("nsh: prop `{name}`: {e}"))),
     }
@@ -1245,7 +1247,8 @@ fn set_prop(
             return set_prop(cx, content, name, value, prev);
         }
         "activeStyle" | "hoverStyle" | "focusStyle" | "disabledStyle" | "selectedStyle"
-        | "checkedStyle" | "indeterminateStyle" | "headerStyle" => {
+        | "checkedStyle" | "indeterminateStyle" | "expandedStyle" | "pressedStyle"
+        | "headerStyle" => {
             let patch = part_style(cx, name, value)?;
             let prop = match name {
                 "activeStyle" => nsh_core::Prop::ActiveStyle(patch),
@@ -1255,6 +1258,8 @@ fn set_prop(
                 "selectedStyle" => nsh_core::Prop::SelectedStyle(patch),
                 "checkedStyle" => nsh_core::Prop::CheckedStyle(patch),
                 "indeterminateStyle" => nsh_core::Prop::IndeterminateStyle(patch),
+                "expandedStyle" => nsh_core::Prop::ExpandedStyle(patch),
+                "pressedStyle" => nsh_core::Prop::PressedStyle(patch),
                 _ => nsh_core::Prop::HeaderStyle(patch),
             };
             return dom(cx).push(cx, Op::SetProp { id, prop });
@@ -1288,8 +1293,8 @@ fn set_prop(
     {
         return set_event(cx, p, event, value);
     }
-    // Native animation nodes these props use, and a `tooltip`'s element,
-    // stay alive with the view.
+    // Native animation nodes these props use (a shader's `uniforms`
+    // hold them inside), and a `tooltip`'s element, stay alive with the view.
     if let Some(&key) = [
         "style",
         "pan",
@@ -1298,9 +1303,8 @@ fn set_prop(
         "scrollValue",
         "pullValue",
         "stickyHeaderOffset",
-        "tooltip",
         "uniforms",
-        "progress",
+        "tooltip",
     ]
     .iter()
     .find(|k| **k == name)
@@ -2091,12 +2095,16 @@ fn new_array(cx: *mut JsContext, mut values: Vec<JsValue>) -> JsValue {
     unsafe { qjs::JS_NewArrayFrom(cx, values.len() as c_int, values.as_mut_ptr()) }
 }
 
-/// A run of a dynamic insert of a function: calls it, and the functions it
-/// returns, tracked by this effect. An array holding functions gets an
-/// effect of its own ([`insert_items`]), made again only when this one
-/// runs again: a component's `children` getter makes every node of the
-/// array, and a change in one of its functions (an `<If>`, a ternary)
-/// must run only that one, not the getter.
+/// A run of a dynamic insert of a function: calls it, tracked by this
+/// effect. A function it returns (what a component whose root is an
+/// `<If>` returns) gets a render effect of its own under this one, as
+/// Solid's `insertExpression` does: a change in what that function reads
+/// runs only it, never this one, which would call the expression again
+/// and make the component again. An array holding functions gets an
+/// effect of its own likewise ([`insert_items`]): a component's
+/// `children` getter makes every node of the array, and a change in one
+/// of its functions (an `<If>`, a ternary) must run only that one, not
+/// the getter.
 unsafe extern "C" fn insert_run(
     cx: *mut JsContext,
     _this: JsValue,
@@ -2108,21 +2116,22 @@ unsafe extern "C" fn insert_run(
     // SAFETY: four data values (`insert_effect`).
     let (parent, marker, value, shown) =
         unsafe { (*data, *data.add(1), *data.add(2), *data.add(3)) };
-    // SAFETY: a dup of a live value; each call's result replaces it.
+    // SAFETY: a dup of a live value; the call's result replaces it.
     let mut value = unsafe { qjs::JS_DupValue(cx, value) };
-    let mut depth = 0;
-    while unsafe { qjs::JS_IsFunction(cx, value) } && node_ptr(cx, value).is_null() {
-        if depth > MAX_DEPTH {
-            unsafe { qjs::JS_FreeValue(cx, value) };
-            return throw_type(cx, "nsh: children nested too deeply");
-        }
+    if unsafe { qjs::JS_IsFunction(cx, value) } && node_ptr(cx, value).is_null() {
         let r = unsafe { qjs::JS_Call(cx, value, UNDEFINED, 0, ptr::null_mut()) };
         unsafe { qjs::JS_FreeValue(cx, value) };
         if unsafe { qjs::JS_IsException(r) } {
             return r;
         }
         value = r;
-        depth += 1;
+        if unsafe { qjs::JS_IsFunction(cx, value) } && node_ptr(cx, value).is_null() {
+            // The nested effect shows what the function gives, in this
+            // insert's place; it goes when this effect runs again.
+            let nested = insert_effect(cx, insert_run, [parent, marker, value, shown]);
+            unsafe { qjs::JS_FreeValue(cx, value) };
+            return nested.err().unwrap_or(UNDEFINED);
+        }
     }
     let r = if unsafe { qjs::JS_IsArray(value) } && is_dynamic(cx, value, 0) {
         insert_items(cx, parent, marker, value, shown)
@@ -3120,7 +3129,7 @@ pub(crate) fn handler(cx: *mut JsContext, id: NodeId, event: EventKind) -> Optio
 // --- The primitives as components -----------------------------------------------------
 
 /// A component rendering host element `tag` with its props (children too
-/// when `children`): what `nsh`'s `View`, `nsh/webview`'s `WebView`, ...
+/// when `children`): what `nsh`'s `View`, `WebView`, ...
 /// are as values. Their tags are made in place by the compiler; this is
 /// the path of `<C />` where `C` holds one.
 pub(crate) fn host_component(cx: *mut JsContext, tag: &str, children: bool) -> JsValue {
@@ -3286,9 +3295,10 @@ pub(crate) fn catch_listener_failure(cx: *mut JsContext, id: NodeId) -> bool {
 
 /// `ErrorBoundary({ fallback, children })`: its children, or its fallback
 /// once something under them failed (a component's body, a binding, an
-/// effect, a listener). `fallback(error, reset)` gets the thrown value and
-/// what renders the children again; a fallback that is not a function of
-/// arguments is shown as is. What fails in the fallback goes to the
+/// effect, a listener). A function `fallback` is called with the thrown
+/// value and what renders the children again (`fallback(error, reset)`),
+/// whatever parameters it declares; any other fallback (an element) is
+/// shown as is. What fails in the fallback goes to the
 /// boundary above.
 ///
 /// A memo shows one or the other, reading the boundary's signal (`[error]`
@@ -3350,15 +3360,10 @@ unsafe extern "C" fn boundary_run(
                 qjs::JS_FreeValue(cx, error);
                 return fallback;
             }
-            let mut length = 0i32;
-            let l = qjs::JS_GetPropertyStr(cx, fallback, c"length".as_ptr());
-            qjs::JS_ToInt32(cx, &mut length, l);
-            qjs::JS_FreeValue(cx, l);
-            if length == 0 {
-                // An element to show, as children are.
-                qjs::JS_FreeValue(cx, error);
-                return fallback;
-            }
+            // Every function is called with what failed and the reset,
+            // whatever its parameters say (`(...args) => …` and defaults
+            // count none): one that takes no arguments returns its element
+            // all the same.
             let mut rdata = [failed];
             let reset =
                 qjs::JS_NewCFunctionData(cx, Some(boundary_reset), 0, 0, 1, rdata.as_mut_ptr());
@@ -3796,6 +3801,51 @@ mod tests {
         assert_eq!(texts(&host), ["outer caught body"]);
     }
 
+    /// A function fallback is called with the error and the reset whatever
+    /// parameters it declares (`(...args)` and defaults count none); an
+    /// element is shown as is.
+    #[test]
+    fn a_function_fallback_gets_the_error_whatever_it_declares() {
+        let host = Host::new().unwrap();
+        host.eval_source(
+            r#"
+            import { mount, signal, ErrorBoundary } from "nsh";
+            import { element, insert, text, component } from "nsh:rt";
+            const fail = signal(false);
+            globalThis.fail = fail;
+            const Risky = () => {
+                const t = element("text");
+                insert(t, () => { if (fail()) throw new Error("boom"); return "ok"; });
+                return t;
+            };
+            mount(() => {
+                const v = element("view");
+                insert(v, component(ErrorBoundary, {
+                    fallback: (...args) => text(`rest ${args[0].message} ${typeof args[1]}`),
+                    get children() { return component(Risky, {}); },
+                }));
+                insert(v, component(ErrorBoundary, {
+                    fallback: (error = new Error("none")) => text(`default ${error.message}`),
+                    get children() { return component(Risky, {}); },
+                }));
+                insert(v, component(ErrorBoundary, {
+                    // An element, as compiled JSX passes one: made when read.
+                    get fallback() { return text("element"); },
+                    get children() { return component(Risky, {}); },
+                }));
+                return v;
+            });
+            "#,
+        )
+        .unwrap();
+        assert_eq!(texts(&host), ["ok", "ok", "ok"]);
+        host.eval_script("fail.js", "fail.set(true)").unwrap();
+        assert_eq!(
+            texts(&host),
+            ["rest boom function", "default boom", "element"]
+        );
+    }
+
     /// A failure in a fallback goes to the boundary above; with no
     /// boundary, the failure throws as before.
     #[test]
@@ -3877,6 +3927,43 @@ mod tests {
                 "set text 16 \"c0\"",
                 "set text 8 \"a1\"",
             ]
+        );
+    }
+
+    /// A component whose root is an `<If>`, shown by a dynamic child: the
+    /// condition flipping shows the other branch and leaves the
+    /// component, and the expression that made it, as they are (Solid's
+    /// nested render effect).
+    #[test]
+    fn a_components_root_condition_does_not_make_it_again() {
+        let host = Host::new().unwrap();
+        host.eval_source(&format!(
+            r#"{REPORT}
+            import {{ mount, signal }} from "nsh";
+            import {{ element, insert, cond, component }} from "nsh:rt";
+            const on = signal(false);
+            const made = [];
+            globalThis.toggle = () => on.update((v) => !v);
+            globalThis.count = () => report(made);
+            function Panel() {{
+                made.push("panel");
+                return cond(() => on(), () => text("zoomed"), () => text("inline"));
+            }}
+            mount(() => {{
+                const v = element("view");
+                insert(v, () => {{ made.push("expression"); return component(Panel, {{}}); }});
+                return v;
+            }});
+            "#
+        ))
+        .unwrap();
+        host.eval_script("toggle.js", "toggle(); toggle(); toggle(); count()")
+            .unwrap();
+        let texts = reported(&host);
+        assert_eq!(
+            texts.last().map(String::as_str),
+            Some(r#"["expression","panel"]"#),
+            "{texts:?}"
         );
     }
 
@@ -4192,7 +4279,12 @@ mod tests {
             const i = element("input");
             i.focus();
             i.setSelection(2);
-            globalThis.keep = [s, i];
+            // A view that takes presses: the platforms move the keyboard
+            // focus to it, as Tab does.
+            const v = element("view");
+            v.focus();
+            v.blur();
+            globalThis.keep = [s, i, v];
             "#,
         )
         .unwrap();
@@ -4207,6 +4299,8 @@ mod tests {
                 "Command { id: 2, command: ScrollToIndex { index: 3, animated: true, view_position: 0%, view_offset: 0pt } }",
                 "Command { id: 4, command: Focus }",
                 "Command { id: 4, command: SetSelection { start: 2, end: 2 } }",
+                "Command { id: 6, command: Focus }",
+                "Command { id: 6, command: Blur }",
             ]
         );
     }

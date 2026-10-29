@@ -1,479 +1,319 @@
-//! Shaders (`<Shader>`, `createShader`, `.wgsl` imports): programs apps
-//! write in WGSL, checked and translated by `nsh-shader`
-//! (`docs/dev/shaders.md`).
+//! Shaders: GPU programs apps write in WGSL, which a view draws its box with.
 //!
-//! A [`ShaderSource`] is a checked shader with an id unique in its engine.
-//! A shader view's props are its source and its uniforms' values
-//! ([`UniformValue`], by name); at commit the core packs them into the
-//! uniform buffer the program reads ([`pack`]: WGSL's layout, colors
-//! premultiplied, images by slot) and binds the animated ones to the
-//! buffer's components ([`crate::animation::AnimationProp::ShaderUniform`]),
-//! so animations change them on the UI thread without JS. The program, in
-//! the platform's language ([`ShaderLanguage`]), is translated on the
-//! engine thread the first time a view draws it and sent once
-//! ([`crate::MountItem::ShaderProgram`]); each view then gets what it draws
-//! ([`ShaderFill`], [`crate::MountItem::Shader`]) when that changes.
+//! An app writes one function, `fn shade(uv: vec2f) -> vec4f`, giving the
+//! color of the point `uv` of the view's box (0..1 from its top left
+//! corner, CSS's direction) as straight sRGB with alpha, the way CSS colors
+//! are: no linearization, the alpha not premultiplied. Besides its own
+//! functions and constants it reads the view's built-ins through `nsh`
+//! (`nsh.size`, the box in points; `nsh.time`, seconds since the shader
+//! appeared; `nsh.scale`, pixels per point) and, when it declares
+//! `struct Uniforms { … }`, its values through `uniforms`, which the app
+//! sets by name ([`ShaderLayer::new`]). The core wraps the function into a
+//! module of its own ([`Shader::compile`]): the two entry points the
+//! renderers draw a quad with (`nsh_vertex`, `nsh_fragment`, which
+//! premultiplies), the built-ins at `@group(0) @binding(0)` and the
+//! uniforms at `@binding(1)`.
+//!
+//! What a shader may do is checked here, in Rust, before any platform sees
+//! it: the source is at most [`MAX_SOURCE_BYTES`], it declares no entry
+//! points, bindings or resources of its own (only `var<private>` globals),
+//! its uniforms are numbers, vectors of `f32` and arrays of `vec4f`
+//! ([`UniformType`]) in at most [`MAX_UNIFORM_BYTES`], and the whole module
+//! validates (naga, the WGSL front end wgpu and browsers' WebGPU share).
+//! The platforms draw it at most once per display frame and only while the
+//! view is in sight, and only while something it reads changes: a shader
+//! reading `nsh.time` is [`Shader::animated`] and draws every frame unless
+//! paused, others draw when their size or uniforms change.
+//!
+//! The native backends render the module with wgpu (`nsh_engine::shader`), the web
+//! backend with WebGL 2 from the GLSL ES this module translates it into
+//! ([`Shader::glsl_es`], feature `glsl`).
+//!
+//! Animated values among the uniforms ([`UniformValue::Animated`]) become
+//! the layer's value slots ([`ShaderLayer::slots`]), bound to the view as
+//! [`crate::animation::AnimationProp::CanvasArg`]s: the platform writes
+//! their values into the uniforms ([`ShaderLayer::write_slot`]) and draws
+//! again on its own, without JS.
+//!
+//! # Pictures, effects and transitions
+//!
+//! Besides drawing a view's box under its children ([`ShaderRole::Fill`]),
+//! a shader can draw what other views draw: `sample_content(uv)` (the
+//! children of an effect, [`ShaderRole::Effect`], or the whole surface,
+//! [`ShaderRole::Screen`]), `sample_backdrop(uv)` (what is behind the view)
+//! and `sample_from(uv)` / `sample_to(uv)` (a transition's two sides,
+//! [`ShaderRole::Transition`] and [`ShaderRole::ScreenTransition`], and a
+//! page's or dialog's). Each returns straight sRGB with alpha, like
+//! `shade`, at the point `uv` of the box; outside its picture it is
+//! transparent. `nsh.progress` is an effect's `progress` or how far a
+//! transition is (0 to 1); `nsh.overflow` is how far beyond the box the
+//! shader draws and its pictures reach, in points (`maxSampleOffset`): the
+//! frame then covers `uv` from `-overflow / size` to `1 + overflow / size`.
+//! The platforms take the pictures ([`Shader::inputs`] says which) and the
+//! renderers bind them at `@binding(2)` (a sampler) and `@binding(3)` to
+//! `@binding(6)`; [`crossfade`] is the transitions' default.
 
-use std::sync::Arc;
-
-#[cfg(feature = "shader-hlsl")]
-pub use nsh_shader::HlslProgram;
-#[cfg(feature = "shader-msl")]
-pub use nsh_shader::MslProgram;
-#[cfg(feature = "shader-agsl")]
-pub use nsh_shader::{AgslProgram, AgslUniform, AgslValue};
-pub use nsh_shader::{
-    Error as ShaderError, Input as ShaderInput, Limits as ShaderLimits, Reflection, Shader,
-    Uniform, UniformType, compile, layout,
+use std::{
+    fmt,
+    hash::{Hash, Hasher},
+    sync::Arc,
 };
-#[cfg(feature = "shader-glsl")]
-pub use nsh_shader::{GlslBlock, GlslProgram, GlslVersion};
+
+use naga::{
+    AddressSpace, ArraySize, Expression, Handle, Module, ScalarKind, TypeInner, VectorSize,
+    valid::{Capabilities, ModuleInfo, ValidationFlags, Validator},
+};
 
 use crate::{
-    ImageSource,
-    animation::{AnimationValue, NodeId as AnimationNode},
-    element::TsTypes,
-    geometry::{Bounds, DevicePixels, Percentage, Point, Points, Size},
-    js::host::{HostCx, HostInput, HostValue},
-    style::Color,
+    Color,
+    animation::{AnimationValue, NodeId},
+    geometry::{Points, Size},
 };
 
-/// A checked shader an app made (`createShader(source)`, a `.wgsl`
-/// import), with an id unique in its engine: the same source has the same
-/// id.
-#[derive(Debug, Clone)]
-pub struct ShaderSource {
-    /// Its id.
-    pub id: u32,
-    /// The shader.
-    pub shader: Arc<Shader>,
+/// The longest source a shader may have, in bytes.
+pub const MAX_SOURCE_BYTES: usize = 64 * 1024;
+
+/// The most bytes `struct Uniforms` may take.
+pub const MAX_UNIFORM_BYTES: u32 = 4096;
+
+/// The function an app's source defines.
+const SHADE: &str = "shade";
+
+/// What the core adds to the app's source: the built-ins and the entry
+/// points (WGSL declarations may come in any order, so the app's source
+/// goes first and its lines keep their numbers).
+const BUILTINS: &str = r#"
+struct Nsh {
+    size: vec2f,
+    time: f32,
+    scale: f32,
+    progress: f32,
+    overflow: f32,
 }
 
-impl ShaderSource {
-    /// Checks `source` (WGSL) against NSH's profile and `limits`
-    /// ([`compile`]), with a new id. Rust components make their shaders
-    /// once and keep them: each call compiles again.
-    pub fn new(source: &str, limits: &ShaderLimits) -> Result<Self, ShaderError> {
-        Ok(Self::with_id(
-            Self::next_id(),
-            Arc::new(compile(source, limits)?),
-        ))
-    }
+@group(0) @binding(0) var<uniform> nsh: Nsh;
 
-    /// `shader` with `id` ([`Self::next_id`]).
-    pub fn with_id(id: u32, shader: Arc<Shader>) -> Self {
-        Self { id, shader }
-    }
+@group(0) @binding(2) var nsh_sampler: sampler;
+@group(0) @binding(3) var nsh_content: texture_2d<f32>;
+@group(0) @binding(4) var nsh_backdrop: texture_2d<f32>;
+@group(0) @binding(5) var nsh_from: texture_2d<f32>;
+@group(0) @binding(6) var nsh_to: texture_2d<f32>;
 
-    /// An id no other shader of the process has: programs are kept by id.
-    pub fn next_id() -> u32 {
-        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    }
+// A point of the box in the pictures, which cover it and `overflow` points
+// beyond each side.
+fn nsh_picture(uv: vec2f) -> vec2f {
+    return (uv * nsh.size + nsh.overflow) / max(nsh.size + 2.0 * nsh.overflow, vec2f(1e-6));
 }
 
-impl PartialEq for ShaderSource {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+// A premultiplied texel as straight color; transparent outside the picture.
+fn nsh_straight(c: vec4f, p: vec2f) -> vec4f {
+    if (any(p < vec2f(0.0)) || any(p > vec2f(1.0)) || c.a <= 0.0) {
+        return vec4f(0.0);
     }
+    return vec4f(c.rgb / c.a, c.a);
 }
 
-/// What `createShader` returned.
-impl HostValue for ShaderSource {
-    fn decode<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Self> {
-        input.shader()
+fn sample_content(uv: vec2f) -> vec4f {
+    let p = nsh_picture(uv);
+    return nsh_straight(textureSampleLevel(nsh_content, nsh_sampler, p, 0.0), p);
+}
+
+fn sample_backdrop(uv: vec2f) -> vec4f {
+    let p = nsh_picture(uv);
+    return nsh_straight(textureSampleLevel(nsh_backdrop, nsh_sampler, p, 0.0), p);
+}
+
+fn sample_from(uv: vec2f) -> vec4f {
+    let p = nsh_picture(uv);
+    return nsh_straight(textureSampleLevel(nsh_from, nsh_sampler, p, 0.0), p);
+}
+
+fn sample_to(uv: vec2f) -> vec4f {
+    let p = nsh_picture(uv);
+    return nsh_straight(textureSampleLevel(nsh_to, nsh_sampler, p, 0.0), p);
+}
+"#;
+
+const UNIFORMS: &str = "\n@group(0) @binding(1) var<uniform> uniforms: Uniforms;\n";
+
+const ENTRY_POINTS: &str = r#"
+struct NshVarying {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f,
+}
+
+@vertex
+fn nsh_vertex(@builtin(vertex_index) index: u32) -> NshVarying {
+    // One triangle covering the target: uv 0..1 over the box, y down, and
+    // past it by `overflow` points on each side.
+    let corner = vec2f(f32((index << 1u) & 2u), f32(index & 2u));
+    let grow = nsh.overflow / max(nsh.size, vec2f(1e-6));
+    var out: NshVarying;
+    out.position = vec4f(corner.x * 2.0 - 1.0, 1.0 - corner.y * 2.0, 0.0, 1.0);
+    out.uv = corner * (1.0 + 2.0 * grow) - grow;
+    return out;
+}
+
+@fragment
+fn nsh_fragment(in: NshVarying) -> @location(0) vec4f {
+    let color = clamp(shade(in.uv), vec4f(0.0), vec4f(1.0));
+    return vec4f(color.rgb * color.a, color.a);
+}
+"#;
+
+/// The index of `time` in `struct Nsh`.
+const TIME_MEMBER: u32 = 1;
+
+/// The words of the built-ins (`struct Nsh`): the box's size in points,
+/// the seconds since the shader appeared, the pixels per point, the
+/// progress (0 to 1) and the overflow in points, as the renderers upload
+/// them to `@binding(0)` (32 bytes).
+pub fn builtins(
+    size: Size<Points>,
+    time: f32,
+    scale: f32,
+    progress: f32,
+    overflow: Points,
+) -> [u32; 8] {
+    [
+        size.width.0.to_bits(),
+        size.height.0.to_bits(),
+        time.to_bits(),
+        scale.to_bits(),
+        progress.to_bits(),
+        overflow.0.to_bits(),
+        0,
+        0,
+    ]
+}
+
+/// The pictures a shader can read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShaderInput {
+    /// `sample_content`: an effect's children, a screen effect's surface.
+    Content,
+    /// `sample_backdrop`: what is behind the view.
+    Backdrop,
+    /// `sample_from`: a transition's side it leaves.
+    From,
+    /// `sample_to`: a transition's side it comes to.
+    To,
+}
+
+impl ShaderInput {
+    /// Every input, in their bindings' order (`@binding(3)` to `@binding(6)`).
+    pub const ALL: [ShaderInput; 4] = [
+        ShaderInput::Content,
+        ShaderInput::Backdrop,
+        ShaderInput::From,
+        ShaderInput::To,
+    ];
+
+    /// Its index (0 to 3; the binding is 3 more).
+    pub fn index(self) -> usize {
+        self as usize
     }
 
-    fn ts_type(_: &mut TsTypes) -> String {
-        "ShaderAsset<any>".into()
-    }
-}
-
-/// The language a platform runs shaders in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[non_exhaustive]
-pub enum ShaderLanguage {
-    /// None: shader views draw their children only.
-    #[default]
-    None,
-    /// Metal (iOS, macOS).
-    Msl,
-    /// OpenGL ES 3.00 / WebGL 2 (the web, GTK's GLES contexts).
-    GlslEs300,
-    /// OpenGL 3.30 core (GTK's desktop contexts).
-    Glsl330,
-    /// HLSL for Direct2D and Direct3D 11 (Windows).
-    Hlsl,
-    /// AGSL (Android 13 and later).
-    Agsl,
-}
-
-/// How a platform runs shaders of one kind (`shaderSupport()`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Support {
-    /// It does not: the element draws its children only (a transition
-    /// runs its fallback).
-    #[default]
-    No,
-    /// From a picture of the input, taken again when it changes.
-    Snapshot,
-    /// On the live input, every frame.
-    Live,
-}
-
-impl Support {
-    /// What `shaderSupport()` says: `"live"`, `"snapshot"` or `false`.
-    pub const fn js_name(self) -> Option<&'static str> {
+    /// The function the app calls to read it.
+    pub fn function(self) -> &'static str {
         match self {
-            Support::No => None,
-            Support::Snapshot => Some("snapshot"),
-            Support::Live => Some("live"),
+            ShaderInput::Content => "sample_content",
+            ShaderInput::Backdrop => "sample_backdrop",
+            ShaderInput::From => "sample_from",
+            ShaderInput::To => "sample_to",
+        }
+    }
+
+    /// The texture's global in the module.
+    pub fn texture(self) -> &'static str {
+        match self {
+            ShaderInput::Content => "nsh_content",
+            ShaderInput::Backdrop => "nsh_backdrop",
+            ShaderInput::From => "nsh_from",
+            ShaderInput::To => "nsh_to",
         }
     }
 }
 
-/// What shaders a platform runs, and in which language
-/// ([`crate::platform::Environment::shaders`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[non_exhaustive]
-pub struct ShaderSupport {
-    /// The language its programs are in.
-    pub language: ShaderLanguage,
-    /// `<Shader>` filling a view.
-    pub fill: Support,
-    /// `<Shader>` reading what is behind it (`sample_backdrop`).
-    pub backdrop: Support,
-    /// `<ShaderEffect>`: children drawn through a shader.
-    pub effect: Support,
-    /// Shader transitions.
-    pub transition: Support,
-    /// `<ScreenEffect>`: the whole surface drawn through a shader.
-    pub screen_effect: Support,
-    /// `<ScreenTransition>`: the whole surface changing through a shader.
-    pub screen_transition: Support,
-}
+/// The set of [`ShaderInput`]s a shader reads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct ShaderInputs(u8);
 
-impl ShaderSupport {
-    /// Fills drawn live in `language`.
-    pub const fn fills(language: ShaderLanguage) -> Self {
-        Self {
-            language,
-            fill: Support::Live,
-            backdrop: Support::No,
-            effect: Support::No,
-            transition: Support::No,
-            screen_effect: Support::No,
-            screen_transition: Support::No,
-        }
+impl ShaderInputs {
+    /// Whether it reads `input`.
+    pub fn contains(self, input: ShaderInput) -> bool {
+        self.0 & (1 << input.index()) != 0
+    }
+
+    /// Whether it reads none.
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// It with `input`.
+    pub fn with(self, input: ShaderInput) -> Self {
+        ShaderInputs(self.0 | 1 << input.index())
+    }
+
+    /// The inputs it reads.
+    pub fn iter(self) -> impl Iterator<Item = ShaderInput> {
+        ShaderInput::ALL
+            .into_iter()
+            .filter(move |i| self.contains(*i))
     }
 }
 
-/// A program in a platform's language.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum ProgramCode {
-    /// No language: nothing draws it (a headless engine).
-    None,
-    /// Metal.
-    #[cfg(feature = "shader-msl")]
-    Msl(MslProgram),
-    /// GLSL.
-    #[cfg(feature = "shader-glsl")]
-    Glsl(GlslProgram),
-    /// HLSL.
-    #[cfg(feature = "shader-hlsl")]
-    Hlsl(HlslProgram),
-    /// AGSL.
-    #[cfg(feature = "shader-agsl")]
-    Agsl(AgslProgram),
+/// What a layer draws, which decides where the platform shows it and which
+/// pictures it takes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum ShaderRole {
+    /// A shader view: the box under its children (upstream's `Shader`).
+    #[default]
+    Fill,
+    /// An effect: its children draw through it, their picture is the
+    /// content; the result shows where they are.
+    Effect,
+    /// A transition: while one runs (`MountItem::ShaderTransition`), its
+    /// children change through it, their picture before as `from`, their
+    /// drawing now as `to`; otherwise they show as they are.
+    Transition,
+    /// A screen effect: the whole surface draws through it, its picture the
+    /// content.
+    Screen,
+    /// A screen transition: the whole surface changes through it.
+    ScreenTransition,
 }
 
-/// A shader's program as the platform runs it, sent once per engine
-/// ([`crate::MountItem::ShaderProgram`]); views name it by `id`.
-#[derive(Debug)]
-#[non_exhaustive]
-pub struct ShaderProgram {
-    /// The shader's id ([`ShaderSource::id`]).
-    pub id: u32,
-    /// The code.
-    pub code: ProgramCode,
-    /// What it reads.
-    pub reflection: Reflection,
-}
-
-impl ShaderProgram {
-    /// Translates `source` into `language`. An error is NSH's (the shader
-    /// was checked when it was made) and leaves the views drawing their
-    /// children only.
-    pub fn translate(source: &ShaderSource, language: ShaderLanguage) -> Result<Self, ShaderError> {
-        let shader = &source.shader;
-        let code = match language {
-            #[cfg(feature = "shader-msl")]
-            ShaderLanguage::Msl => ProgramCode::Msl(shader.to_msl()?),
-            #[cfg(feature = "shader-glsl")]
-            ShaderLanguage::GlslEs300 => ProgramCode::Glsl(shader.to_glsl(GlslVersion::Es300)?),
-            #[cfg(feature = "shader-glsl")]
-            ShaderLanguage::Glsl330 => ProgramCode::Glsl(shader.to_glsl(GlslVersion::Core330)?),
-            #[cfg(feature = "shader-hlsl")]
-            ShaderLanguage::Hlsl => ProgramCode::Hlsl(shader.to_hlsl()?),
-            #[cfg(feature = "shader-agsl")]
-            ShaderLanguage::Agsl => ProgramCode::Agsl(shader.to_agsl()?),
-            _ => ProgramCode::None,
-        };
-        Ok(Self {
-            id: source.id,
-            code,
-            reflection: shader.reflection().clone(),
-        })
-    }
-}
-
-/// The value of a uniform as the app gives it: a number, a list of them
-/// (vectors, matrices column by column, arrays), a color, an animated
-/// value, or an image.
-#[derive(Debug, Clone, PartialEq)]
-pub enum UniformValue {
-    /// A number.
-    Number(f32),
-    /// A CSS color: a vector of 4 is its premultiplied RGBA, of 3 its
-    /// premultiplied RGB.
-    Color(Color),
-    /// An animated value (a number or a color), bound to the buffer.
-    Animated(AnimationNode),
-    /// A list: a vector's or matrix's components, an array's elements.
-    List(Vec<UniformValue>),
-    /// An image (an `Image` uniform).
-    Image(ImageSource),
-}
-
-/// The `uniforms` prop: values by name, in the order the app wrote them.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct Uniforms(pub Vec<(Arc<str>, UniformValue)>);
-
-impl Uniforms {
-    /// No values: every uniform is 0.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// `name` set to `value` (a number, a color, an animated value, an
-    /// image, a list of numbers).
-    pub fn set(mut self, name: &str, value: impl Into<UniformValue>) -> Self {
-        self.0.push((Arc::from(name), value.into()));
-        self
-    }
-}
-
-impl From<f32> for UniformValue {
-    fn from(n: f32) -> Self {
-        UniformValue::Number(n)
-    }
-}
-
-impl<const N: usize> From<[f32; N]> for UniformValue {
-    fn from(list: [f32; N]) -> Self {
-        UniformValue::List(list.into_iter().map(UniformValue::Number).collect())
-    }
-}
-
-impl From<crate::color::Hsla> for UniformValue {
-    fn from(color: crate::color::Hsla) -> Self {
-        UniformValue::Color(color.into())
-    }
-}
-
-impl From<crate::color::Rgba> for UniformValue {
-    fn from(color: crate::color::Rgba) -> Self {
-        UniformValue::Color(color.into())
-    }
-}
-
-impl From<ImageSource> for UniformValue {
-    fn from(image: ImageSource) -> Self {
-        UniformValue::Image(image)
-    }
-}
-
-/// The value as it moves, written on the UI thread; the app keeps the
-/// value while the shader reads it.
-impl<A: crate::element::Animated> From<&A> for UniformValue {
-    fn from(a: &A) -> Self {
-        UniformValue::Animated(a.animated_node().id())
-    }
-}
-
-impl UniformValue {
-    fn decode_value<I: HostInput>(input: &I, cx: &mut HostCx) -> Option<Self> {
-        if let Some(n) = input.as_number() {
-            return Some(UniformValue::Number(n as f32));
-        }
-        // A string is a color, else an image's URI (`pack` warns about
-        // one a uniform does not take).
-        if let Some(s) = input.as_string() {
-            return match crate::css::color(&s) {
-                Some(c) => Some(UniformValue::Color(c)),
-                None => ImageSource::decode(input, cx).map(UniformValue::Image),
-            };
-        }
-        if let Some(node) = input.animated_node() {
-            return Some(UniformValue::Animated(node));
-        }
-        if let Some(list) = input.as_list() {
-            use crate::js::host::HostList;
-            let mut out = Vec::with_capacity(list.len());
-            for i in 0..list.len() {
-                out.push(
-                    list.item(i)
-                        .and_then(|v| Self::decode_value(&v, cx))
-                        .unwrap_or(UniformValue::Number(0.0)),
-                );
-            }
-            return Some(UniformValue::List(out));
-        }
-        if !input.is_object() {
-            return None;
-        }
-        // A point or a size is a vector of two.
-        for (a, b) in [("x", "y"), ("width", "height")] {
-            if let (Some(x), Some(y)) = (input.field(a), input.field(b))
-                && !x.is_nullish()
-                && !y.is_nullish()
-            {
-                let x = Self::decode_value(&x, cx).unwrap_or(UniformValue::Number(0.0));
-                let y = Self::decode_value(&y, cx).unwrap_or(UniformValue::Number(0.0));
-                return Some(UniformValue::List(vec![x, y]));
-            }
-        }
-        ImageSource::decode(input, cx).map(UniformValue::Image)
-    }
-}
-
-/// `{ name: value }`.
-impl HostValue for Uniforms {
-    fn decode<I: HostInput>(input: &I, cx: &mut HostCx) -> Option<Self> {
-        if !input.is_object() || input.as_list().is_some() {
-            return None;
-        }
-        let mut out = Vec::new();
-        for (name, value) in input.entries() {
-            if value.is_nullish() {
-                continue;
-            }
-            match UniformValue::decode_value(&value, cx) {
-                Some(v) => out.push((Arc::from(name.as_str()), v)),
-                None => cx.warn(format!(
-                    "uniforms: `{name}` has a value a shader does not take"
-                )),
-            }
-        }
-        Some(Uniforms(out))
-    }
-
-    fn ts_type(types: &mut TsTypes) -> String {
-        types.declare("ShaderUniforms", |_| {
-            "/** The values of a shader's uniforms, by name (`ShaderAsset`'s uniforms, typed per `.wgsl` file). */\n\
-             export type ShaderUniforms = Record<string, ShaderUniformValue>;"
-                .into()
-        });
-        "ShaderUniforms".into()
-    }
-}
-
-/// The component [`crate::animation::AnimationProp::ShaderUniform`]
-/// names for a shader's `nsh.progress` (its `progress` prop, animated).
-pub const PROGRESS: u16 = u16::MAX;
-
-/// A number the shader reads: a constant, or an animated value the UI
-/// thread writes (`progress`).
+/// `progress`: `nsh.progress` as a number, or moved natively by an
+/// animated value.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ShaderNumber {
-    /// A constant.
+pub enum ShaderProgress {
+    /// A number (0 to 1, by convention).
     Number(f32),
-    /// An animated value.
-    Animated(AnimationNode),
+    /// The animated value of this node.
+    Animated(NodeId),
 }
 
-impl Default for ShaderNumber {
+impl Default for ShaderProgress {
     fn default() -> Self {
-        ShaderNumber::Number(0.0)
+        ShaderProgress::Number(0.0)
     }
 }
 
-impl ShaderNumber {
-    /// Its value now: the constant, or 0 until the UI thread writes it.
-    pub fn constant(self) -> f32 {
-        match self {
-            ShaderNumber::Number(n) => n,
-            ShaderNumber::Animated(_) => 0.0,
-        }
-    }
-}
-
-impl From<f32> for ShaderNumber {
-    fn from(n: f32) -> Self {
-        ShaderNumber::Number(n)
-    }
-}
-
-/// The value as it moves, written on the UI thread; the app keeps the
-/// value while the shader reads it.
-impl<A: crate::element::Animated> From<&A> for ShaderNumber {
-    fn from(a: &A) -> Self {
-        ShaderNumber::Animated(a.animated_node().id())
-    }
-}
-
-/// A number or an animated value (TS: `ShaderNumber`).
-impl HostValue for ShaderNumber {
-    fn decode<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Self> {
-        if let Some(n) = input.as_number() {
-            return Some(ShaderNumber::Number(n as f32));
-        }
-        input.animated_node().map(ShaderNumber::Animated)
-    }
-
-    fn ts_type(_: &mut TsTypes) -> String {
-        "ShaderNumber".into()
-    }
-}
-
-/// What a shader transition's children show (`value`): a change runs the
-/// transition.
-#[derive(Debug, Clone, PartialEq, Default)]
+/// A transition's `value`: when it changes, the transition runs.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TransitionKey {
-    /// None given.
-    #[default]
-    Unset,
+    /// A string.
+    String(Arc<str>),
+    /// A number (its bits).
+    Number(u64),
     /// A boolean.
     Bool(bool),
-    /// A number, by its bits (`NaN` equals itself).
-    Number(u64),
-    /// A string.
-    Text(Arc<str>),
 }
 
-impl HostValue for TransitionKey {
-    fn decode<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Self> {
-        if input.is_nullish() {
-            return Some(TransitionKey::Unset);
-        }
-        if let Some(b) = input.as_bool() {
-            return Some(TransitionKey::Bool(b));
-        }
-        if let Some(n) = input.as_number() {
-            return Some(TransitionKey::Number(n.to_bits()));
-        }
-        input.as_string().map(|s| TransitionKey::Text(s.into()))
-    }
-
-    fn ts_type(_: &mut TsTypes) -> String {
-        "string | number | boolean".into()
-    }
-}
-
-impl From<bool> for TransitionKey {
-    fn from(b: bool) -> Self {
-        TransitionKey::Bool(b)
+impl From<&str> for TransitionKey {
+    fn from(s: &str) -> Self {
+        TransitionKey::String(s.into())
     }
 }
 
@@ -483,427 +323,989 @@ impl From<f64> for TransitionKey {
     }
 }
 
-impl From<&str> for TransitionKey {
-    fn from(s: &str) -> Self {
-        TransitionKey::Text(s.into())
+impl From<bool> for TransitionKey {
+    fn from(b: bool) -> Self {
+        TransitionKey::Bool(b)
     }
 }
 
-impl From<String> for TransitionKey {
-    fn from(s: String) -> Self {
-        TransitionKey::Text(s.into())
-    }
-}
-
-/// A page's or a dialog's transition through a shader (`animation: {
-/// shader, uniforms, duration }`): its `sample_from` is the lower side
-/// (the page below, what is behind the dialog), its `sample_to` the upper
-/// one, and `nsh.progress` how much of the upper side shows (0 to 1 as it
-/// comes, 1 to 0 as it goes, a back gesture's as it moves).
+/// A page's or a dialog's `transitionShader`: the program it comes and
+/// goes through, its uniforms and how long that takes.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ShaderAnimation {
-    /// The shader.
-    pub source: ShaderSource,
-    /// Its uniforms' values.
-    pub uniforms: Uniforms,
-    /// How long it runs, in milliseconds (`None`: the platform's own
-    /// transition's length).
+pub struct NavShaderSpec {
+    /// The WGSL defining `shade`, which reads the lower side as
+    /// `sample_from` and the upper as `sample_to`.
+    pub source: Arc<str>,
+    /// Its uniforms.
+    pub uniforms: ShaderUniforms,
+    /// How long it runs in milliseconds (the platform's own duration when
+    /// absent).
     pub duration: Option<f32>,
 }
 
-impl ShaderAnimation {
-    /// `source` with no uniforms, as long as the platform's own transition.
-    pub fn new(source: ShaderSource) -> Self {
-        Self {
-            source,
-            uniforms: Uniforms::default(),
-            duration: None,
+/// The word a progress slot writes ([`ShaderLayer::slots`]): not one of the
+/// uniforms, the built-in `nsh.progress`.
+pub const PROGRESS_WORD: u32 = u32::MAX;
+
+/// The transitions' default program: a cross-fade from `sample_from` to
+/// `sample_to` over `nsh.progress`; `None` in a web runtime linked without
+/// shaders ([`set_compile`]).
+pub fn crossfade() -> Option<Shader> {
+    static CROSSFADE: std::sync::OnceLock<Shader> = std::sync::OnceLock::new();
+    if let Some(shader) = CROSSFADE.get() {
+        return Some(shader.clone());
+    }
+    let shader = compile_source(
+        "fn shade(uv: vec2f) -> vec4f {\n    return mix(sample_from(uv), sample_to(uv), nsh.progress);\n}\n",
+    )
+    .ok()?;
+    Some(CROSSFADE.get_or_init(|| shader).clone())
+}
+
+/// Why a shader did not compile: what is wrong and where in the app's
+/// source (1-based; 0 when the error is not at a place in it).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ShaderError {
+    /// What is wrong.
+    pub message: String,
+    /// The line, from 1 (0: none).
+    pub line: u32,
+    /// The column in bytes, from 1 (0: none).
+    pub column: u32,
+}
+
+impl ShaderError {
+    fn new(message: impl Into<String>) -> Self {
+        ShaderError {
+            message: message.into(),
+            line: 0,
+            column: 0,
+        }
+    }
+
+    fn at(message: impl Into<String>, source: &str, offset: Option<usize>) -> Self {
+        let mut error = ShaderError::new(message);
+        if let Some(offset) = offset.filter(|&o| o <= source.len()) {
+            let prefix = &source[..offset];
+            error.line = prefix.matches('\n').count() as u32 + 1;
+            error.column = (offset - prefix.rfind('\n').map_or(0, |p| p + 1)) as u32 + 1;
+        }
+        error
+    }
+}
+
+impl fmt::Display for ShaderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.line > 0 {
+            write!(f, "{}:{}: {}", self.line, self.column, self.message)
+        } else {
+            f.write_str(&self.message)
         }
     }
 }
 
-impl HostValue for ShaderAnimation {
-    fn decode<I: HostInput>(input: &I, cx: &mut HostCx) -> Option<Self> {
-        let source = input.field("shader")?.shader()?;
-        let uniforms = match input.field("uniforms") {
-            Some(u) if !u.is_nullish() => Uniforms::decode(&u, cx)?,
-            _ => Uniforms::default(),
-        };
-        let duration = input
-            .field("duration")
-            .and_then(|d| d.as_number())
-            .map(|d| d.max(0.0) as f32);
-        Some(Self {
-            source,
-            uniforms,
-            duration,
-        })
-    }
+impl std::error::Error for ShaderError {}
 
-    fn ts_type(_: &mut TsTypes) -> String {
-        "ShaderAnimation<any>".into()
-    }
-}
-
-/// What a shader transition runs without a shader of its own (`fallback`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, crate::element::PropEnum)]
-pub enum TransitionFallback {
-    /// A cross-fade.
+/// The type of a member of `struct Uniforms`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UniformType {
+    /// `f32`.
     #[default]
-    Fade,
-    /// None: the children change at once.
-    None,
+    F32,
+    /// `i32`.
+    I32,
+    /// `u32`.
+    U32,
+    /// `vec2f`.
+    Vec2,
+    /// `vec3f`: three numbers, or a color's red, green and blue.
+    Vec3,
+    /// `vec4f`: four numbers, or a color with its alpha.
+    Vec4,
+    /// `array<vec4f, N>`: up to `N` vectors or colors (a palette, the stops
+    /// of a gradient); those not given are zero.
+    Vec4Array(u32),
 }
 
-/// The cross-fade a transition runs as its `fade` fallback: one program
-/// per process.
-pub fn crossfade() -> ShaderSource {
-    static CROSSFADE: std::sync::OnceLock<ShaderSource> = std::sync::OnceLock::new();
-    CROSSFADE
-        .get_or_init(|| {
-            ShaderSource::new(
-                "fn main(p: vec2f) -> vec4f {\n  return mix(sample_from(p), sample_to(p), nsh.progress);\n}\n",
-                &ShaderLimits::default(),
-            )
-            .expect("the cross-fade compiles")
-        })
-        .clone()
+impl UniformType {
+    /// Its WGSL spelling.
+    pub fn wgsl(self) -> String {
+        match self {
+            UniformType::F32 => "f32".into(),
+            UniformType::I32 => "i32".into(),
+            UniformType::U32 => "u32".into(),
+            UniformType::Vec2 => "vec2f".into(),
+            UniformType::Vec3 => "vec3f".into(),
+            UniformType::Vec4 => "vec4f".into(),
+            UniformType::Vec4Array(n) => format!("array<vec4f, {n}>"),
+        }
+    }
 }
 
-/// An image a shader samples.
-#[derive(Debug, Clone, PartialEq, Default)]
+/// A member of `struct Uniforms`: its name, type and place in the buffer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct ShaderImage {
-    /// What it shows; `None` samples transparent.
-    pub source: Option<ImageSource>,
-    /// Where its `Image` uniform is in the buffer: the platform writes the
-    /// image's size in points there once it loads (and the core already
-    /// did when the source says it).
+pub struct UniformField {
+    /// Its name, which the app sets it by.
+    pub name: Arc<str>,
+    /// Its type.
+    pub ty: UniformType,
+    /// Its offset in bytes (a multiple of 4).
     pub offset: u32,
 }
 
-/// What a shader view draws ([`crate::MountItem::Shader`]).
-#[derive(Debug, Clone, PartialEq, Default)]
+/// The WGSL modules the GLSL ES 3.00 a WebGL 2 context compiles
+/// ([`Shader::glsl_es`]).
+#[cfg(feature = "glsl")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct ShaderFill {
-    /// The program ([`ShaderProgram::id`]).
-    pub program: u32,
-    /// The uniforms' buffer, in WGSL's uniform layout
-    /// ([`Reflection::uniforms`]).
-    pub uniforms: Arc<[u8]>,
-    /// The images, by slot.
-    pub images: Vec<ShaderImage>,
-    /// It reads `nsh.time`: it draws every frame while it shows.
-    pub time: bool,
-    /// The inputs it samples, bit [`ShaderInput::index`] each: its
-    /// content (an effect's children) and what is behind it.
-    pub inputs: u32,
-    /// `nsh.progress`, until an animated value writes it.
-    pub progress: f32,
-    /// How far outside a pixel it samples its content (an effect's
-    /// `maxSampleOffset`): the content is drawn that far beyond the view.
-    pub max_offset: Points,
+pub struct GlslProgram {
+    /// The vertex shader.
+    pub vertex: String,
+    /// The fragment shader.
+    pub fragment: String,
+    /// The name of the uniform block of the built-ins in `fragment`, when
+    /// it reads them (bind it to 0).
+    pub builtins_block: Option<String>,
+    /// The name of the uniform block of `struct Uniforms`, when it reads it
+    /// (bind it to 1).
+    pub uniforms_block: Option<String>,
+    /// The sampler uniforms of the pictures it reads, by input.
+    pub pictures: Vec<(String, ShaderInput)>,
 }
 
-impl ShaderFill {
-    /// It samples input `input`.
-    pub fn samples(&self, input: ShaderInput) -> bool {
-        self.inputs & (1 << input.index()) != 0
+/// A compiled shader: the app's source checked and wrapped into a module
+/// every renderer draws (cheap to clone; equal when their sources are).
+#[derive(Clone)]
+pub struct Shader(Arc<Program>);
+
+struct Program {
+    source: Arc<str>,
+    hash: u64,
+    wgsl: String,
+    // The GLSL writer's input.
+    #[cfg_attr(not(feature = "glsl"), allow(dead_code))]
+    module: Module,
+    #[cfg_attr(not(feature = "glsl"), allow(dead_code))]
+    info: ModuleInfo,
+    uniforms: Vec<UniformField>,
+    uniform_size: u32,
+    animated: bool,
+    inputs: ShaderInputs,
+    #[cfg(feature = "glsl")]
+    glsl: std::sync::OnceLock<Result<GlslProgram, ShaderError>>,
+}
+
+impl fmt::Debug for Shader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Shader")
+            .field("hash", &format_args!("{:016x}", self.0.hash))
+            .field("uniforms", &self.0.uniforms)
+            .field("animated", &self.0.animated)
+            .finish()
     }
 }
 
-/// The uniforms packed for a program: the buffer, the components animated
-/// values write ([`crate::animation::AnimationProp::ShaderUniform`]) and
-/// the images.
-#[derive(Debug, Clone, PartialEq, Default)]
-#[non_exhaustive]
-pub struct Packed {
-    /// The buffer.
-    pub bytes: Vec<u8>,
-    /// Animated values and the component (`f32` index) they write from.
-    pub bindings: Vec<(u16, AnimationNode)>,
-    /// The images, by slot.
-    pub images: Vec<ShaderImage>,
+impl PartialEq for Shader {
+    fn eq(&self, other: &Shader) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+            || (self.0.hash == other.0.hash && self.0.source == other.0.source)
+    }
 }
 
-/// Packs `values` for a shader with `reflection`, warning about names it
-/// does not have and values its uniforms do not take.
-pub fn pack(reflection: &Reflection, values: &Uniforms, warn: &mut dyn FnMut(String)) -> Packed {
-    let mut out = Packed {
-        bytes: vec![0; reflection.uniforms_size as usize],
+impl Eq for Shader {}
+
+/// The hash of a shader's source (what [`Shader::hash`] gives, and what
+/// caches of compiled shaders are keyed by).
+pub fn source_hash(source: &str) -> u64 {
+    let mut hasher = rustc_hash::FxHasher::default();
+    source.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// What compiles the apps' shader sources in this module ([`Shader::compile`],
+/// which links naga).
+pub type Compile = fn(&str) -> Result<Shader, ShaderError>;
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    /// The compiler a web runtime linked: one built for an app that uses no
+    /// shader leaves it out, naga with it ([`set_compile`]).
+    static COMPILE: std::cell::Cell<Option<Compile>> = const { std::cell::Cell::new(None) };
+}
+
+/// Sets the compiler of this WebAssembly module's shader sources: the web
+/// runtime's gate for shaders sets it, so naga is linked only into the
+/// runtimes of apps that use shaders. The native backends always have
+/// [`Shader::compile`].
+#[cfg(target_arch = "wasm32")]
+pub fn set_compile(compile: Compile) {
+    COMPILE.with(|c| c.set(Some(compile)));
+}
+
+/// Compiles `source` with this module's compiler, if it has one.
+pub(crate) fn compile_source(source: &str) -> Result<Shader, ShaderError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        match COMPILE.with(|c| c.get()) {
+            Some(compile) => compile(source),
+            None => Err(ShaderError::new(
+                "this web runtime has no shader compiler (it was linked for an app that \
+                 imports no `Shader`)",
+            )),
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    Shader::compile(source)
+}
+
+impl Shader {
+    /// Checks and compiles the app's WGSL `source`, which defines
+    /// `fn shade(uv: vec2f) -> vec4f` (module docs).
+    pub fn compile(source: &str) -> Result<Shader, ShaderError> {
+        if source.len() > MAX_SOURCE_BYTES {
+            return Err(ShaderError::new(format!(
+                "a shader's source is at most {MAX_SOURCE_BYTES} bytes; this one has {}",
+                source.len()
+            )));
+        }
+        let has_uniforms = declares_uniforms(source);
+        let mut wgsl = String::with_capacity(
+            source.len() + BUILTINS.len() + UNIFORMS.len() + ENTRY_POINTS.len(),
+        );
+        wgsl.push_str(source);
+        wgsl.push_str(BUILTINS);
+        if has_uniforms {
+            wgsl.push_str(UNIFORMS);
+        }
+        // Checked without the entry points first: an error there is in the
+        // app's source, not in what calls `shade`.
+        let module = parse(&wgsl, source)?;
+        check(&module, source, has_uniforms)?;
+        wgsl.push_str(ENTRY_POINTS);
+        let module = parse(&wgsl, source)?;
+        let info = Validator::new(ValidationFlags::all(), Capabilities::empty())
+            .validate(&module)
+            .map_err(|e| {
+                // The innermost place: an expression inside the function.
+                let offset = e
+                    .spans()
+                    .filter_map(|(span, _)| span.to_range())
+                    .map(|r| r.start)
+                    .filter(|&s| s < source.len())
+                    .max();
+                ShaderError::at(error_chain(e.as_inner()), source, offset)
+            })?;
+        let (uniforms, uniform_size) = if has_uniforms {
+            reflect_uniforms(&module, source)?
+        } else {
+            (Vec::new(), 0)
+        };
+        let animated = reads_time(&module);
+        let inputs = reads_inputs(&module);
+        Ok(Shader(Arc::new(Program {
+            source: source.into(),
+            hash: source_hash(source),
+            wgsl,
+            module,
+            info,
+            uniforms,
+            uniform_size,
+            animated,
+            inputs,
+            #[cfg(feature = "glsl")]
+            glsl: std::sync::OnceLock::new(),
+        })))
+    }
+
+    /// The app's source.
+    pub fn source(&self) -> &str {
+        &self.0.source
+    }
+
+    /// The hash of the app's source ([`source_hash`]).
+    pub fn hash(&self) -> u64 {
+        self.0.hash
+    }
+
+    /// The whole WGSL module: the app's source, the built-ins, the
+    /// uniforms' binding and the entry points `nsh_vertex` and
+    /// `nsh_fragment`.
+    pub fn wgsl(&self) -> &str {
+        &self.0.wgsl
+    }
+
+    /// The members of `struct Uniforms`, in order (empty without one).
+    pub fn uniforms(&self) -> &[UniformField] {
+        &self.0.uniforms
+    }
+
+    /// The size of `struct Uniforms` in bytes (a multiple of 16; 0 without
+    /// one).
+    pub fn uniform_size(&self) -> u32 {
+        self.0.uniform_size
+    }
+
+    /// Whether it reads `nsh.time`: it then draws every frame while it is
+    /// in sight and not paused.
+    pub fn animated(&self) -> bool {
+        self.0.animated
+    }
+
+    /// The pictures it reads (`sample_content`, …): the platform takes
+    /// them for it.
+    pub fn inputs(&self) -> ShaderInputs {
+        self.0.inputs
+    }
+
+    /// The program as GLSL ES 3.00 for WebGL 2 (translated once, on first
+    /// use).
+    #[cfg(feature = "glsl")]
+    pub fn glsl_es(&self) -> Result<&GlslProgram, ShaderError> {
+        self.0
+            .glsl
+            .get_or_init(|| glsl_es(&self.0.module, &self.0.info))
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+}
+
+/// Whether `source` declares `struct Uniforms` (outside comments).
+fn declares_uniforms(source: &str) -> bool {
+    let mut rest = source;
+    let mut code = String::with_capacity(source.len());
+    // Comments out: `//` to the end of the line, `/* … */` (nested, as
+    // WGSL's are).
+    while !rest.is_empty() {
+        if let Some(r) = rest.strip_prefix("//") {
+            rest = r.find('\n').map_or("", |n| &r[n..]);
+        } else if rest.starts_with("/*") {
+            let mut depth = 0usize;
+            let mut i = 0;
+            let bytes = rest.as_bytes();
+            while i < bytes.len() {
+                if bytes[i..].starts_with(b"/*") {
+                    depth += 1;
+                    i += 2;
+                } else if bytes[i..].starts_with(b"*/") {
+                    depth -= 1;
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            code.push(' ');
+            rest = &rest[i.min(rest.len())..];
+        } else {
+            let c = rest.chars().next().expect("not empty");
+            code.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    let mut words = code
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty());
+    while let Some(word) = words.next() {
+        if word == "struct" && words.next() == Some("Uniforms") {
+            return true;
+        }
+    }
+    false
+}
+
+/// An error and its causes, innermost last ("Function 'shade' is invalid:
+/// …").
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut cause = error.source();
+    while let Some(e) = cause {
+        message.push_str(": ");
+        message.push_str(&e.to_string());
+        cause = e.source();
+    }
+    message
+}
+
+fn parse(wgsl: &str, source: &str) -> Result<Module, ShaderError> {
+    naga::front::wgsl::parse_str(wgsl).map_err(|e| {
+        let offset = e
+            .location(wgsl)
+            .map(|l| l.offset as usize)
+            .filter(|&o| o < source.len());
+        ShaderError::at(e.message().to_string(), source, offset)
+    })
+}
+
+/// What the app's module may hold: `shade` with its signature, no entry
+/// points, no resources of its own.
+fn check(module: &Module, source: &str, has_uniforms: bool) -> Result<(), ShaderError> {
+    let span_of = |span: naga::Span| span.to_range().map(|r| r.start);
+    if let Some(entry) = module.entry_points.first() {
+        let offset = source.find(&format!("fn {}", entry.name));
+        return Err(ShaderError::at(
+            format!(
+                "a shader declares no entry points (`{}`): NSH calls `fn {SHADE}(uv: vec2f) -> vec4f`",
+                entry.name
+            ),
+            source,
+            offset,
+        ));
+    }
+    for (handle, global) in module.global_variables.iter() {
+        let name = global.name.as_deref().unwrap_or("");
+        let ours = (matches!(name, "nsh" | "uniforms") || name.starts_with("nsh_"))
+            && global.binding.is_some();
+        if ours || global.space == AddressSpace::Private {
+            continue;
+        }
+        return Err(ShaderError::at(
+            format!(
+                "`{name}`: a shader's globals are `var<private>`; its inputs are `nsh` and `uniforms`"
+            ),
+            source,
+            span_of(module.global_variables.get_span(handle)),
+        ));
+    }
+    let shade = module
+        .functions
+        .iter()
+        .find(|(_, f)| f.name.as_deref() == Some(SHADE));
+    let Some((handle, shade)) = shade else {
+        return Err(ShaderError::new(format!(
+            "a shader defines `fn {SHADE}(uv: vec2f) -> vec4f`, the color of each point of its box"
+        )));
+    };
+    let is_vec = |ty: Handle<naga::Type>, size: VectorSize| {
+        matches!(
+            module.types[ty].inner,
+            TypeInner::Vector { size: s, scalar } if s == size && scalar.kind == ScalarKind::Float && scalar.width == 4
+        )
+    };
+    let signature = shade.arguments.len() == 1
+        && is_vec(shade.arguments[0].ty, VectorSize::Bi)
+        && shade
+            .result
+            .as_ref()
+            .is_some_and(|r| is_vec(r.ty, VectorSize::Quad));
+    if !signature {
+        return Err(ShaderError::at(
+            format!("`{SHADE}` takes the point's `uv: vec2f` and returns its color, a `vec4f`"),
+            source,
+            span_of(module.functions.get_span(handle)),
+        ));
+    }
+    if has_uniforms {
+        let declared = module.types.iter().any(|(_, t)| {
+            t.name.as_deref() == Some("Uniforms") && matches!(t.inner, TypeInner::Struct { .. })
+        });
+        if !declared {
+            return Err(ShaderError::new("`Uniforms` is a struct"));
+        }
+    }
+    Ok(())
+}
+
+/// The members of `struct Uniforms` and its size.
+fn reflect_uniforms(
+    module: &Module,
+    source: &str,
+) -> Result<(Vec<UniformField>, u32), ShaderError> {
+    let Some((handle, ty)) = module
+        .types
+        .iter()
+        .find(|(_, t)| t.name.as_deref() == Some("Uniforms"))
+    else {
+        return Ok((Vec::new(), 0));
+    };
+    let TypeInner::Struct { members, span } = &ty.inner else {
+        return Err(ShaderError::new("`Uniforms` is a struct"));
+    };
+    let at = module.types.get_span(handle).to_range().map(|r| r.start);
+    if *span > MAX_UNIFORM_BYTES {
+        return Err(ShaderError::at(
+            format!("`Uniforms` takes {span} bytes; at most {MAX_UNIFORM_BYTES}"),
+            source,
+            at,
+        ));
+    }
+    let mut fields = Vec::with_capacity(members.len());
+    for member in members {
+        let name = member.name.clone().unwrap_or_default();
+        let ty = uniform_type(module, member.ty).ok_or_else(|| {
+            ShaderError::at(
+                format!(
+                    "uniform `{name}`: uniforms are `f32`, `i32`, `u32`, `vec2f`, `vec3f`, `vec4f` or `array<vec4f, N>`"
+                ),
+                source,
+                at,
+            )
+        })?;
+        fields.push(UniformField {
+            name: name.into(),
+            ty,
+            offset: member.offset,
+        });
+    }
+    Ok((fields, span.next_multiple_of(16)))
+}
+
+fn uniform_type(module: &Module, ty: Handle<naga::Type>) -> Option<UniformType> {
+    Some(match module.types[ty].inner {
+        TypeInner::Scalar(s) if s.width == 4 => match s.kind {
+            ScalarKind::Float => UniformType::F32,
+            ScalarKind::Sint => UniformType::I32,
+            ScalarKind::Uint => UniformType::U32,
+            _ => return None,
+        },
+        TypeInner::Vector { size, scalar }
+            if scalar.kind == ScalarKind::Float && scalar.width == 4 =>
+        {
+            match size {
+                VectorSize::Bi => UniformType::Vec2,
+                VectorSize::Tri => UniformType::Vec3,
+                VectorSize::Quad => UniformType::Vec4,
+            }
+        }
+        TypeInner::Array {
+            base,
+            size: ArraySize::Constant(n),
+            stride: 16,
+        } if uniform_type(module, base) == Some(UniformType::Vec4) => {
+            UniformType::Vec4Array(n.get())
+        }
+        _ => return None,
+    })
+}
+
+/// The pictures the app's functions read: the `sample_*` functions they
+/// call.
+fn reads_inputs(module: &Module) -> ShaderInputs {
+    let mut inputs = ShaderInputs::default();
+    let ours = |f: &naga::Function| {
+        f.name
+            .as_deref()
+            .is_some_and(|n| n.starts_with("nsh_") || n.starts_with("sample_"))
+    };
+    for (_, function) in module.functions.iter().filter(|(_, f)| !ours(f)) {
+        for (_, expression) in function.expressions.iter() {
+            if let Expression::CallResult(called) = *expression
+                && let Some(name) = module.functions[called].name.as_deref()
+                && let Some(input) = ShaderInput::ALL.into_iter().find(|i| i.function() == name)
+            {
+                inputs = inputs.with(input);
+            }
+        }
+    }
+    inputs
+}
+
+/// Whether any function reads `nsh.time`.
+fn reads_time(module: &Module) -> bool {
+    let Some(nsh) = module
+        .global_variables
+        .iter()
+        .find(|(_, g)| g.name.as_deref() == Some("nsh"))
+        .map(|(h, _)| h)
+    else {
+        return false;
+    };
+    let reads = |f: &naga::Function| {
+        f.expressions.iter().any(|(_, e)| {
+            matches!(*e, Expression::AccessIndex { base, index }
+                if index == TIME_MEMBER && matches!(f.expressions[base], Expression::GlobalVariable(g) if g == nsh))
+        })
+    };
+    module.functions.iter().any(|(_, f)| reads(f))
+        || module.entry_points.iter().any(|e| reads(&e.function))
+}
+
+#[cfg(feature = "glsl")]
+fn glsl_es(module: &Module, info: &ModuleInfo) -> Result<GlslProgram, ShaderError> {
+    use naga::back::glsl;
+    let options = glsl::Options {
+        version: glsl::Version::Embedded {
+            version: 300,
+            is_webgl: true,
+        },
+        // Drawn straight into the canvas the page shows: clip space keeps
+        // WGSL's +y up, which is GL's too (no flip as for a texture).
+        writer_flags: glsl::WriterFlags::empty(),
         ..Default::default()
     };
-    for (name, _) in &values.0 {
-        if reflection.uniform(name).is_none() {
-            let names: Vec<&str> = reflection
-                .uniforms
-                .iter()
-                .map(|u| u.name.as_str())
-                .collect();
-            warn(format!(
-                "the shader has no uniform `{name}` (it has: {})",
-                names.join(", ")
-            ));
-        }
-    }
-    for uniform in &reflection.uniforms {
-        if let UniformType::Image(slot) = uniform.ty {
-            let slot = slot as usize;
-            if out.images.len() <= slot {
-                out.images.resize(slot + 1, ShaderImage::default());
-            }
-            out.images[slot].offset = uniform.offset;
-            // `Image.slot.x`.
-            write_i32(&mut out.bytes, uniform.offset + 16, slot as i32);
-        }
-        let Some(value) = values
-            .0
-            .iter()
-            .rev()
-            .find(|(n, _)| **n == *uniform.name)
-            .map(|(_, v)| v)
-        else {
-            continue;
+    // Out-of-range indices read in range, as wgpu's checks make them.
+    let policies = naga::proc::BoundsCheckPolicies {
+        index: naga::proc::BoundsCheckPolicy::Restrict,
+        buffer: naga::proc::BoundsCheckPolicy::Restrict,
+        image_load: naga::proc::BoundsCheckPolicy::Restrict,
+        binding_array: naga::proc::BoundsCheckPolicy::Restrict,
+    };
+    let write = |stage: naga::ShaderStage, entry: &str| {
+        let mut out = String::new();
+        let pipeline = glsl::PipelineOptions {
+            shader_stage: stage,
+            entry_point: entry.into(),
+            multiview: None,
         };
-        match uniform.count {
-            None => write_value(
-                &mut out,
-                uniform.ty,
-                uniform.offset,
-                value,
-                &uniform.name,
-                warn,
-            ),
-            Some(count) => {
-                let UniformValue::List(items) = value else {
-                    warn(format!("uniform `{}` is an array of {count}", uniform.name));
-                    continue;
-                };
-                // An array of scalars may come flat: [a, b, ...] for array<vec4f, n> fills elements in turn.
-                let per = uniform.ty.components() as usize;
-                let elements: Vec<UniformValue> = if per > 1
-                    && items
-                        .iter()
-                        .all(|v| matches!(v, UniformValue::Number(_) | UniformValue::Animated(_)))
-                    && items.len() > count as usize
-                {
-                    items
-                        .chunks(per)
-                        .map(|c| UniformValue::List(c.to_vec()))
-                        .collect()
-                } else {
-                    items.clone()
-                };
-                for (i, item) in elements.iter().take(count as usize).enumerate() {
-                    write_value(
-                        &mut out,
-                        uniform.ty,
-                        uniform.offset + uniform.stride * i as u32,
-                        item,
-                        &uniform.name,
-                        warn,
-                    );
-                }
-            }
-        }
-    }
-    out
-}
-
-fn write_value(
-    out: &mut Packed,
-    ty: UniformType,
-    offset: u32,
-    value: &UniformValue,
-    name: &str,
-    warn: &mut dyn FnMut(String),
-) {
-    let wrong =
-        |warn: &mut dyn FnMut(String)| warn(format!("uniform `{name}` is a `{}`", ty.wgsl()));
-    match ty {
-        UniformType::Image(slot) => match value {
-            UniformValue::Image(source) => {
-                if let Some(size) = source.size {
-                    write_f32(&mut out.bytes, offset, size.width.0);
-                    write_f32(&mut out.bytes, offset + 4, size.height.0);
-                }
-                out.images[slot as usize].source = Some(source.clone());
-            }
-            _ => wrong(warn),
-        },
-        UniformType::Mat2 | UniformType::Mat3 | UniformType::Mat4 => {
-            let (columns, stride) = ty.columns().unwrap_or((2, 8));
-            let UniformValue::List(items) = value else {
-                return wrong(warn);
-            };
-            for (i, item) in items.iter().take((columns * columns) as usize).enumerate() {
-                let (c, r) = (i as u32 / columns, i as u32 % columns);
-                write_component(out, offset + c * stride + r * 4, false, item, name, warn);
-            }
-        }
-        _ => {
-            let n = ty.components();
-            let int = ty.is_int();
-            match value {
-                UniformValue::Color(c) if n >= 3 && !int => {
-                    let rgba = premultiplied(*c);
-                    for (i, v) in rgba.iter().take(n as usize).enumerate() {
-                        write_f32(&mut out.bytes, offset + 4 * i as u32, *v);
-                    }
-                }
-                UniformValue::List(items) => {
-                    for (i, item) in items.iter().take(n as usize).enumerate() {
-                        write_component(out, offset + 4 * i as u32, int, item, name, warn);
-                    }
-                }
-                // A number fills a vector (as WGSL's `vec4f(x)`).
-                UniformValue::Number(v) => {
-                    for i in 0..n {
-                        write_number(&mut out.bytes, offset + 4 * i, int, *v);
-                    }
-                }
-                UniformValue::Animated(node) if !int && (n == 1 || n == 4) => {
-                    out.bindings.push(((offset / 4) as u16, *node));
-                }
-                // A string that is no color.
-                UniformValue::Image(source) if n >= 3 && !int => {
-                    warn(format!("uniform `{name}`: `{}` is not a color", source.uri))
-                }
-                _ => wrong(warn),
-            }
-        }
-    }
-}
-
-fn write_component(
-    out: &mut Packed,
-    offset: u32,
-    int: bool,
-    value: &UniformValue,
-    name: &str,
-    warn: &mut dyn FnMut(String),
-) {
-    match value {
-        UniformValue::Number(v) => write_number(&mut out.bytes, offset, int, *v),
-        UniformValue::Animated(node) if !int => out.bindings.push(((offset / 4) as u16, *node)),
-        _ => warn(format!("uniform `{name}`: a component is a number")),
-    }
-}
-
-fn write_number(bytes: &mut [u8], offset: u32, int: bool, v: f32) {
-    if int {
-        write_i32(bytes, offset, v.round() as i32);
-    } else {
-        write_f32(bytes, offset, v);
-    }
-}
-
-fn write_f32(bytes: &mut [u8], offset: u32, v: f32) {
-    if let Some(slot) = bytes.get_mut(offset as usize..offset as usize + 4) {
-        slot.copy_from_slice(&v.to_le_bytes());
-    }
-}
-
-fn write_i32(bytes: &mut [u8], offset: u32, v: i32) {
-    if let Some(slot) = bytes.get_mut(offset as usize..offset as usize + 4) {
-        slot.copy_from_slice(&v.to_le_bytes());
-    }
-}
-
-/// A color as a shader reads it: premultiplied sRGB, `0..=1`.
-pub fn premultiplied(c: Color) -> [f32; 4] {
-    let [r, g, b, a] = c.0.to_be_bytes().map(|v| v as f32 / 255.0);
-    [r * a, g * a, b * a, a]
-}
-
-/// Writes an animated value into a uniforms' buffer at `component` (an
-/// `f32` index; [`Packed::bindings`]): a number there, a color as its
-/// four premultiplied components from there.
-pub fn write_animated(bytes: &mut [u8], component: u16, value: AnimationValue) {
-    let offset = component as u32 * 4;
-    match value {
-        AnimationValue::Number(n) => write_f32(bytes, offset, n),
-        AnimationValue::Color(c) => {
-            for (i, v) in premultiplied(Color(c)).iter().enumerate() {
-                write_f32(bytes, offset + 4 * i as u32, *v);
-            }
-        }
-    }
-}
-
-/// Writes the size of an image into a uniforms' buffer, once the
-/// platform knows it.
-pub fn write_image_size(bytes: &mut [u8], image: &ShaderImage, size: Size<Points>) {
-    write_f32(bytes, image.offset, size.width.0);
-    write_f32(bytes, image.offset + 4, size.height.0);
-}
-
-/// The `nsh` buffer ([`layout`]): the view's size, the screen's pixel
-/// ratio, the time since the shader first drew (in seconds) and the
-/// progress.
-pub fn nsh_buffer(
-    size: Size<Points>,
-    scale: f32,
-    time: f32,
-    progress: Percentage,
-) -> [u8; layout::NSH_SIZE as usize] {
-    let mut out = [0u8; layout::NSH_SIZE as usize];
-    for (offset, v) in [
-        (layout::NSH_VIEW_SIZE, size.width.0),
-        (layout::NSH_VIEW_SIZE + 4, size.height.0),
-        (layout::NSH_SCALE, scale),
-        (layout::NSH_TIME, time),
-        (layout::NSH_PROGRESS, progress.0),
-    ] {
-        write_f32(&mut out, offset, v);
-    }
-    out
-}
-
-/// The frame buffer ([`layout`]) of a fill: it draws over the view
-/// (`size`) and its images, by slot, are stretched over it, each as many
-/// pixels in its own coordinates as it has (AGSL; none elsewhere).
-pub fn frame_buffer(size: Size<Points>, images: &[(usize, Size<DevicePixels>)]) -> Vec<u8> {
-    let view = Bounds::new(Point::default(), size);
-    let inputs: Vec<_> = images
+        let mut writer = glsl::Writer::new(&mut out, module, info, &options, &pipeline, policies)
+            .map_err(|e| ShaderError::new(format!("GLSL ES: {e}")))?;
+        let reflection = writer
+            .write()
+            .map_err(|e| ShaderError::new(format!("GLSL ES: {e}")))?;
+        Ok::<_, ShaderError>((out, reflection))
+    };
+    let (vertex, _) = write(naga::ShaderStage::Vertex, "nsh_vertex")?;
+    let (fragment, reflection) = write(naga::ShaderStage::Fragment, "nsh_fragment")?;
+    let block = |name: &str| {
+        reflection.uniforms.iter().find_map(|(handle, block)| {
+            (module.global_variables[*handle].name.as_deref() == Some(name)).then(|| block.clone())
+        })
+    };
+    let pictures = reflection
+        .texture_mapping
         .iter()
-        .map(|&(slot, px)| (ShaderInput::Image(slot as u8), view, px))
+        .filter_map(|(name, mapping)| {
+            let global = module.global_variables[mapping.texture].name.as_deref()?;
+            let input = ShaderInput::ALL
+                .into_iter()
+                .find(|i| i.texture() == global)?;
+            Some((name.clone(), input))
+        })
         .collect();
-    frame_buffer_of(view, &inputs)
+    Ok(GlslProgram {
+        builtins_block: block("nsh"),
+        uniforms_block: block("uniforms"),
+        pictures,
+        vertex,
+        fragment,
+    })
 }
 
-/// The frame buffer ([`layout`]) of a drawing of `area` (points from the
-/// view's top-left: an effect draws beyond its view) whose inputs lie at
-/// their rects, each as many pixels as it has (AGSL reads them in those).
-pub fn frame_buffer_of(
-    area: Bounds<Points>,
-    inputs: &[(ShaderInput, Bounds<Points>, Size<DevicePixels>)],
-) -> Vec<u8> {
-    let mut out = vec![0u8; layout::FRAME_SIZE as usize];
-    let corners = |b: Bounds<Points>| [b.origin.x.0, b.origin.y.0, b.size.width.0, b.size.height.0];
-    for (i, v) in corners(area).into_iter().enumerate() {
-        write_f32(&mut out, layout::FRAME_AREA + 4 * i as u32, v);
-    }
-    for &(input, rect, px) in inputs {
-        let at = layout::FRAME_INPUTS + layout::INPUT_STRIDE * input.index() as u32;
-        for (i, v) in corners(rect).into_iter().enumerate() {
-            write_f32(&mut out, at + layout::INPUT_RECT + 4 * i as u32, v);
-        }
-        write_f32(&mut out, at + layout::INPUT_PX, px.width.0 as f32);
-        write_f32(&mut out, at + layout::INPUT_PX + 4, px.height.0 as f32);
-    }
-    out
+/// A value an app gives a uniform.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UniformValue {
+    /// A number (`f32`, `i32` and `u32` uniforms; a component of a vector).
+    Number(f32),
+    /// A color: a `vec3f`'s red, green and blue, or a `vec4f` with its
+    /// alpha, in 0..1 (sRGB, as CSS).
+    Color(Color),
+    /// An animated value: a number, or a color for a `vec3f` / `vec4f`.
+    /// The platform writes it on every frame it changes.
+    Animated(NodeId),
+    /// The components of a vector, or the items of an array of `vec4f`.
+    List(Vec<UniformValue>),
 }
 
-/// Writes animated values ([`crate::animation::AnimationProp::ShaderUniform`])
-/// into a uniforms' buffer, or `progress` for [`PROGRESS`].
-pub fn write_args(bytes: &mut [u8], progress: &mut f32, values: &[(u16, AnimationValue)]) {
-    for &(k, value) in values {
-        if k == PROGRESS {
-            *progress = value.number();
-        } else {
-            write_animated(bytes, k, value);
+impl From<f32> for UniformValue {
+    fn from(n: f32) -> Self {
+        UniformValue::Number(n)
+    }
+}
+
+impl From<i32> for UniformValue {
+    fn from(n: i32) -> Self {
+        UniformValue::Number(n as f32)
+    }
+}
+
+impl From<Color> for UniformValue {
+    fn from(c: Color) -> Self {
+        UniformValue::Color(c)
+    }
+}
+
+impl From<crate::color::Hsla> for UniformValue {
+    fn from(c: crate::color::Hsla) -> Self {
+        UniformValue::Color(c.into())
+    }
+}
+
+impl<const N: usize> From<[f32; N]> for UniformValue {
+    fn from(v: [f32; N]) -> Self {
+        UniformValue::List(v.iter().map(|&n| UniformValue::Number(n)).collect())
+    }
+}
+
+impl From<Vec<UniformValue>> for UniformValue {
+    fn from(v: Vec<UniformValue>) -> Self {
+        UniformValue::List(v)
+    }
+}
+
+/// The values of a shader's uniforms, by name (`uniforms`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ShaderUniforms(pub Vec<(Arc<str>, UniformValue)>);
+
+/// How a value slot writes its animated value into the uniforms.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SlotKind {
+    /// One `f32`.
+    #[default]
+    F32,
+    /// One `i32` (the value rounded toward zero).
+    I32,
+    /// One `u32` (the value rounded toward zero, at least 0).
+    U32,
+    /// A color's red, green and blue.
+    Rgb,
+    /// A color's red, green, blue and alpha.
+    Rgba,
+}
+
+/// Where an animated uniform goes: the word it starts at and how it is
+/// written.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UniformSlot {
+    /// The index of its first word (4 bytes) in [`ShaderLayer::uniforms`].
+    pub word: u32,
+    /// How its value is written.
+    pub kind: SlotKind,
+}
+
+/// A shader as a view shows it: the program, the words of its uniforms
+/// as the app set them, and the slots of its animated values.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct ShaderLayer {
+    /// The program.
+    pub shader: Shader,
+    /// The uniform buffer, `shader.uniform_size() / 4` words (bit patterns
+    /// of `f32`, `i32` and `u32`).
+    pub uniforms: Arc<[u32]>,
+    /// The animated values' slots: slot `n` is bound as
+    /// [`crate::animation::AnimationProp::CanvasArg`]`(n)`.
+    pub slots: Vec<UniformSlot>,
+    /// The animation nodes of the slots, in the same order.
+    pub nodes: Vec<NodeId>,
+    /// Its clock stands still (`nsh.time` keeps its value).
+    pub paused: bool,
+    /// What it draws ([`ShaderRole`]).
+    pub role: ShaderRole,
+    /// How far beyond the box it draws and its pictures reach, in points
+    /// (`nsh.overflow`, `maxSampleOffset`).
+    pub overflow: Points,
+    /// `nsh.progress`, unless an animated value moves it (a slot whose
+    /// word is [`PROGRESS_WORD`]) or a transition runs it.
+    pub progress: f32,
+}
+
+impl ShaderLayer {
+    /// The layer of `shader` with the uniforms `values` (by name; those not
+    /// given are zero). What does not fit a uniform is left out, each with
+    /// a warning in `warnings`.
+    pub fn new(
+        shader: Shader,
+        values: &[(Arc<str>, UniformValue)],
+        warnings: &mut Vec<String>,
+    ) -> ShaderLayer {
+        let mut words = vec![0u32; (shader.uniform_size() / 4) as usize];
+        let mut slots = Vec::new();
+        let mut nodes = Vec::new();
+        for (name, value) in values {
+            let Some(field) = shader.uniforms().iter().find(|f| f.name == *name) else {
+                warnings.push(if shader.uniforms().is_empty() {
+                    format!("uniform `{name}`: the shader declares no `struct Uniforms`")
+                } else {
+                    format!("uniform `{name}`: `struct Uniforms` has no such member")
+                });
+                continue;
+            };
+            let mut packer = Packer {
+                words: &mut words,
+                slots: &mut slots,
+                nodes: &mut nodes,
+            };
+            if let Err(expected) = packer.pack(field.ty, field.offset / 4, value) {
+                warnings.push(format!(
+                    "uniform `{name}` is a `{}`: it takes {expected}",
+                    field.ty.wgsl()
+                ));
+            }
         }
+        ShaderLayer {
+            shader,
+            uniforms: words.into(),
+            slots,
+            nodes,
+            paused: false,
+            role: ShaderRole::Fill,
+            overflow: Points::ZERO,
+            progress: 0.0,
+        }
+    }
+
+    /// The same layer drawing as `role`.
+    pub fn with_role(mut self, role: ShaderRole) -> Self {
+        self.role = role;
+        self
+    }
+
+    /// The same layer drawing `overflow` points beyond the box.
+    pub fn with_overflow(mut self, overflow: Points) -> Self {
+        self.overflow = overflow.max(Points::ZERO);
+        self
+    }
+
+    /// The same layer with its clock stopped or running.
+    pub fn with_paused(mut self, paused: bool) -> Self {
+        self.paused = paused;
+        self
+    }
+
+    /// The same layer with `nsh.progress` at `progress`, or moved by the
+    /// animated value of node `animated` (one more slot).
+    pub fn with_progress(mut self, progress: f32, animated: Option<NodeId>) -> Self {
+        self.progress = progress;
+        if let Some(node) = animated {
+            self.slots.push(UniformSlot {
+                word: PROGRESS_WORD,
+                kind: SlotKind::F32,
+            });
+            self.nodes.push(node);
+        }
+        self
+    }
+
+    /// The slot that moves `nsh.progress`, if an animated value does.
+    pub fn progress_slot(&self) -> Option<u16> {
+        self.slots
+            .iter()
+            .position(|s| s.word == PROGRESS_WORD)
+            .map(|i| i as u16)
+    }
+
+    /// Writes slot `slot`'s animated `value` into `words` (a copy of
+    /// [`Self::uniforms`] the platform keeps).
+    pub fn write_slot(&self, words: &mut [u32], slot: u16, value: AnimationValue) {
+        let Some(slot) = self.slots.get(slot as usize) else {
+            return;
+        };
+        let at = slot.word as usize;
+        let number = || value.number();
+        match slot.kind {
+            SlotKind::F32 => set(words, at, number().to_bits()),
+            SlotKind::I32 => set(words, at, (number() as i32) as u32),
+            SlotKind::U32 => set(words, at, number().max(0.0) as u32),
+            SlotKind::Rgb | SlotKind::Rgba => {
+                let color = match value {
+                    AnimationValue::Color(c) => Color(c),
+                    other => Color(other.number() as u32),
+                };
+                let n = if slot.kind == SlotKind::Rgb { 3 } else { 4 };
+                for (i, c) in rgba(color).into_iter().take(n).enumerate() {
+                    set(words, at + i, c.to_bits());
+                }
+            }
+        }
+    }
+}
+
+fn set(words: &mut [u32], at: usize, word: u32) {
+    if let Some(w) = words.get_mut(at) {
+        *w = word;
+    }
+}
+
+/// A color's components in 0..1.
+fn rgba(color: Color) -> [f32; 4] {
+    let c = color.0;
+    [c >> 24, c >> 16, c >> 8, c].map(|b| (b & 0xff) as f32 / 255.0)
+}
+
+struct Packer<'a> {
+    words: &'a mut [u32],
+    slots: &'a mut Vec<UniformSlot>,
+    nodes: &'a mut Vec<NodeId>,
+}
+
+impl Packer<'_> {
+    /// Writes `value` as a `ty` at word `at`; `Err` names what `ty` takes.
+    fn pack(&mut self, ty: UniformType, at: u32, value: &UniformValue) -> Result<(), &'static str> {
+        const SCALAR: &str = "a number or an animated value";
+        match ty {
+            UniformType::F32 | UniformType::I32 | UniformType::U32 => {
+                let kind = match ty {
+                    UniformType::F32 => SlotKind::F32,
+                    UniformType::I32 => SlotKind::I32,
+                    _ => SlotKind::U32,
+                };
+                match *value {
+                    UniformValue::Number(n) => {
+                        let word = match kind {
+                            SlotKind::F32 => n.to_bits(),
+                            SlotKind::I32 => (n as i32) as u32,
+                            _ => n.max(0.0) as u32,
+                        };
+                        set(self.words, at as usize, word);
+                    }
+                    UniformValue::Animated(node) => self.slot(at, kind, node),
+                    _ => return Err(SCALAR),
+                }
+            }
+            UniformType::Vec2 | UniformType::Vec3 | UniformType::Vec4 => {
+                let n = match ty {
+                    UniformType::Vec2 => 2,
+                    UniformType::Vec3 => 3,
+                    _ => 4,
+                };
+                let expected = match ty {
+                    UniformType::Vec2 => "2 numbers",
+                    UniformType::Vec3 => "3 numbers or a color",
+                    _ => "4 numbers or a color",
+                };
+                match value {
+                    UniformValue::Color(c) if n >= 3 => {
+                        for (i, c) in rgba(*c).into_iter().take(n).enumerate() {
+                            set(self.words, at as usize + i, c.to_bits());
+                        }
+                    }
+                    UniformValue::Animated(node) if n >= 3 => {
+                        let kind = if n == 3 {
+                            SlotKind::Rgb
+                        } else {
+                            SlotKind::Rgba
+                        };
+                        self.slot(at, kind, *node);
+                    }
+                    UniformValue::List(items) if items.len() == n => {
+                        for (i, item) in items.iter().enumerate() {
+                            match *item {
+                                UniformValue::Number(v) => {
+                                    set(self.words, at as usize + i, v.to_bits())
+                                }
+                                UniformValue::Animated(node) => {
+                                    self.slot(at + i as u32, SlotKind::F32, node)
+                                }
+                                _ => return Err(expected),
+                            }
+                        }
+                    }
+                    _ => return Err(expected),
+                }
+            }
+            UniformType::Vec4Array(len) => {
+                let UniformValue::List(items) = value else {
+                    return Err("a list of colors or of 4 numbers");
+                };
+                if items.len() > len as usize {
+                    return Err("at most as many items as the array has");
+                }
+                for (i, item) in items.iter().enumerate() {
+                    self.pack(UniformType::Vec4, at + 4 * i as u32, item)
+                        .map_err(|_| "a list of colors or of 4 numbers")?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn slot(&mut self, word: u32, kind: SlotKind, node: NodeId) {
+        self.slots.push(UniformSlot { word, kind });
+        self.nodes.push(node);
     }
 }
 
@@ -911,203 +1313,156 @@ pub fn write_args(bytes: &mut [u8], progress: &mut f32, values: &[(u16, Animatio
 mod tests {
     use super::*;
 
-    fn shader(source: &str) -> Shader {
-        compile(source, &ShaderLimits::default()).unwrap()
-    }
+    const GRADIENT: &str = r#"
+struct Uniforms {
+    start: vec4f,
+    end: vec3f,
+    speed: f32,
+    stops: array<vec4f, 4>,
+    count: i32,
+}
 
-    fn f32_at(bytes: &[u8], component: usize) -> f32 {
-        f32::from_le_bytes(bytes[component * 4..component * 4 + 4].try_into().unwrap())
-    }
-
-    fn values(values: Vec<(&str, UniformValue)>) -> Uniforms {
-        Uniforms(values.into_iter().map(|(n, v)| (Arc::from(n), v)).collect())
-    }
-
-    #[test]
-    fn uniforms_are_packed_in_wgsl_layout() {
-        let s = shader(
-            "struct U { a: f32, b: vec3f, c: vec2i, m: mat2x2f, k: array<vec4f, 2> }
-             fn main(p: vec2f, u: U) -> vec4f { return vec4f(u.a + u.b.x + f32(u.c.x) + u.m[0].x + u.k[1].y); }",
-        );
-        let n = UniformValue::Number;
-        let mut warnings = Vec::new();
-        let packed = pack(
-            s.reflection(),
-            &values(vec![
-                ("a", n(1.0)),
-                // A color fills a vec3f with its premultiplied RGB.
-                ("b", UniformValue::Color(Color(0xff00_0080))),
-                // Integers are rounded.
-                ("c", UniformValue::List(vec![n(2.4), n(-3.6)])),
-                (
-                    "m",
-                    UniformValue::List(vec![n(1.0), n(2.0), n(3.0), n(4.0)]),
-                ),
-                // An array of vectors may come flat.
-                (
-                    "k",
-                    UniformValue::List((1..=8).map(|i| n(i as f32)).collect()),
-                ),
-                ("nope", n(1.0)),
-            ]),
-            &mut |w| warnings.push(w),
-        );
-        // a: 0, b: 16 (vec3f aligns to 16), c: 32, m: 40, k: 64 (arrays
-        // align to 16).
-        let b = &packed.bytes;
-        assert_eq!(f32_at(b, 0), 1.0);
-        let a = 128.0 / 255.0;
-        assert!((f32_at(b, 4) - a).abs() < 1e-6 && f32_at(b, 5) == 0.0 && f32_at(b, 6) == 0.0);
-        assert_eq!(i32::from_le_bytes(b[32..36].try_into().unwrap()), 2);
-        assert_eq!(i32::from_le_bytes(b[36..40].try_into().unwrap()), -4);
-        assert_eq!(
-            [f32_at(b, 10), f32_at(b, 11), f32_at(b, 12), f32_at(b, 13)],
-            [1.0, 2.0, 3.0, 4.0]
-        );
-        assert_eq!(
-            (16..24).map(|i| f32_at(b, i)).collect::<Vec<_>>(),
-            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-        );
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].contains("no uniform `nope`"), "{warnings:?}");
-    }
+fn shade(uv: vec2f) -> vec4f {
+    let t = fract(uv.x + nsh.time * uniforms.speed);
+    return mix(uniforms.start, vec4f(uniforms.end, 1.0), t) + uniforms.stops[uniforms.count];
+}
+"#;
 
     #[test]
-    fn rust_sets_uniforms_by_name() {
-        let s = shader(
-            "struct U { a: f32, b: vec4f, c: vec2f }
-             fn main(p: vec2f, u: U) -> vec4f { return u.b * u.a + vec4f(u.c, 0.0, 0.0); }",
-        );
-        let values = Uniforms::new()
-            .set("a", 0.5)
-            .set("b", crate::color::rgb(0x0000ff))
-            .set("c", [3.0, 4.0]);
-        let packed = pack(s.reflection(), &values, &mut |w| panic!("{w}"));
-        let b = &packed.bytes;
-        assert_eq!(f32_at(b, 0), 0.5);
+    fn compiles_and_reflects() {
+        let shader = Shader::compile(GRADIENT).expect("compiles");
+        assert!(shader.animated());
+        let fields: Vec<_> = shader
+            .uniforms()
+            .iter()
+            .map(|f| (&*f.name, f.ty, f.offset))
+            .collect();
         assert_eq!(
-            [f32_at(b, 4), f32_at(b, 5), f32_at(b, 6), f32_at(b, 7)],
-            [0.0, 0.0, 1.0, 1.0]
-        );
-        assert_eq!([f32_at(b, 8), f32_at(b, 9)], [3.0, 4.0]);
-    }
-
-    #[test]
-    fn animated_values_are_bound_and_wrong_values_warned_about() {
-        let s = shader(
-            "struct U { r: f32, tint: vec4f, flag: i32 }
-             fn main(p: vec2f, u: U) -> vec4f { return u.tint * u.r * f32(u.flag); }",
-        );
-        let node: AnimationNode = 7;
-        let mut warnings = Vec::new();
-        let packed = pack(
-            s.reflection(),
-            &values(vec![
-                ("r", UniformValue::Animated(node)),
-                ("tint", UniformValue::Animated(node)),
-                // An integer is never animated.
-                ("flag", UniformValue::Animated(node)),
-            ]),
-            &mut |w| warnings.push(w),
-        );
-        assert_eq!(packed.bindings, [(0, node), (4, node)]);
-        assert_eq!(warnings, ["uniform `flag` is a `i32`"]);
-        let mut bytes = packed.bytes.clone();
-        write_animated(&mut bytes, 0, AnimationValue::Number(2.5));
-        write_animated(&mut bytes, 4, AnimationValue::Color(0x0000_ffff));
-        assert_eq!(
+            fields,
             [
-                f32_at(&bytes, 0),
-                f32_at(&bytes, 4),
-                f32_at(&bytes, 6),
-                f32_at(&bytes, 7)
-            ],
-            [2.5, 0.0, 1.0, 1.0]
+                ("start", UniformType::Vec4, 0),
+                ("end", UniformType::Vec3, 16),
+                ("speed", UniformType::F32, 28),
+                ("stops", UniformType::Vec4Array(4), 32),
+                ("count", UniformType::I32, 96),
+            ]
+        );
+        assert_eq!(shader.uniform_size(), 112);
+        assert!(shader.wgsl().contains("fn nsh_fragment"));
+        assert_eq!(shader, Shader::compile(GRADIENT).unwrap());
+    }
+
+    #[test]
+    fn still_shaders_do_not_animate() {
+        let shader =
+            Shader::compile("fn shade(uv: vec2f) -> vec4f { return vec4f(uv, nsh.size.x, 1.0); }")
+                .unwrap();
+        assert!(!shader.animated());
+        assert!(shader.uniforms().is_empty());
+        // Comments do not declare uniforms.
+        let commented = "// struct Uniforms { a: f32 }\n/* struct Uniforms */ fn shade(uv: vec2f) -> vec4f { return vec4f(1.0); }";
+        assert!(Shader::compile(commented).unwrap().uniforms().is_empty());
+    }
+
+    #[test]
+    fn errors_point_into_the_source() {
+        let error = Shader::compile("fn shade(uv: vec2f) -> vec4f {\n  return vec4f(uv, 0.0);\n}")
+            .unwrap_err();
+        assert_eq!(error.line, 2, "{error}");
+        let missing =
+            Shader::compile("fn paint(uv: vec2f) -> vec4f { return vec4f(1.0); }").unwrap_err();
+        assert!(missing.message.contains("fn shade"), "{missing}");
+        let signature =
+            Shader::compile("fn shade(uv: vec2f) -> vec3f { return vec3f(1.0); }").unwrap_err();
+        assert!(
+            signature.message.contains("returns its color"),
+            "{signature}"
         );
     }
 
     #[test]
-    fn images_have_slots_and_their_known_sizes() {
-        let s = shader(
-            "struct U { a: Image, b: Image }
-             fn main(p: vec2f, u: U) -> vec4f { return sample_image(u.a, p) + sample_image(u.b, p); }",
-        );
-        let source = ImageSource {
-            uri: "asset:/a.png".into(),
-            size: Some(Size::new(Points(20.0), Points(10.0))),
-            scales: Default::default(),
-            data: None,
-        };
-        let packed = pack(
-            s.reflection(),
-            &values(vec![("a", UniformValue::Image(source.clone()))]),
-            &mut |w| panic!("{w}"),
-        );
-        assert_eq!(packed.images.len(), 2);
-        assert_eq!(packed.images[0].source, Some(source));
-        assert_eq!(packed.images[1].source, None);
-        let (a, b) = (
-            packed.images[0].offset as usize,
-            packed.images[1].offset as usize,
-        );
-        // `Image { size: vec2f, slot: vec4i }`: the size the source knows,
-        // the slot.
-        assert_eq!(
-            [
-                f32_at(&packed.bytes, a / 4),
-                f32_at(&packed.bytes, a / 4 + 1)
-            ],
-            [20.0, 10.0]
-        );
-        assert_eq!(
-            i32::from_le_bytes(packed.bytes[b + 16..b + 20].try_into().unwrap()),
-            1
-        );
-        // A size the platform learns later.
-        let mut bytes = packed.bytes.clone();
-        write_image_size(
-            &mut bytes,
-            &packed.images[1],
-            Size::new(Points(3.0), Points(4.0)),
-        );
-        assert_eq!(
-            [f32_at(&bytes, b / 4), f32_at(&bytes, b / 4 + 1)],
-            [3.0, 4.0]
-        );
+    fn refuses_resources_and_entry_points() {
+        let storage = Shader::compile(
+            "@group(1) @binding(0) var<storage> data: array<f32>;\nfn shade(uv: vec2f) -> vec4f { return vec4f(data[0]); }",
+        )
+        .unwrap_err();
+        assert!(storage.message.contains("`data`"), "{storage}");
+        assert_eq!(storage.line, 1);
+        let entry = Shader::compile(
+            "fn shade(uv: vec2f) -> vec4f { return vec4f(1.0); }\n@fragment fn main() -> @location(0) vec4f { return vec4f(1.0); }",
+        )
+        .unwrap_err();
+        assert!(entry.message.contains("entry points"), "{entry}");
+        let big = Shader::compile(&" ".repeat(MAX_SOURCE_BYTES + 1)).unwrap_err();
+        assert!(big.message.contains("at most"));
+        let mat = Shader::compile(
+            "struct Uniforms { m: mat2x2f }\nfn shade(uv: vec2f) -> vec4f { return vec4f(uniforms.m[0], 0.0, 1.0); }",
+        )
+        .unwrap_err();
+        assert!(mat.message.contains("uniform `m`"), "{mat}");
+        // Private globals are the shader's own.
+        Shader::compile(
+            "var<private> seed: f32 = 0.5;\nfn shade(uv: vec2f) -> vec4f { return vec4f(seed); }",
+        )
+        .unwrap();
     }
 
     #[test]
-    fn the_nsh_and_frame_buffers_hold_the_view_and_its_inputs() {
-        let nsh = nsh_buffer(
-            Size::new(Points(100.0), Points(50.0)),
-            2.0,
-            1.5,
-            Percentage(0.25),
+    fn packs_uniforms() {
+        let shader = Shader::compile(GRADIENT).unwrap();
+        let mut warnings = Vec::new();
+        let layer = ShaderLayer::new(
+            shader,
+            &[
+                ("start".into(), UniformValue::Color(Color(0xff000080))),
+                ("end".into(), UniformValue::Animated(7)),
+                ("speed".into(), UniformValue::Number(0.5)),
+                (
+                    "stops".into(),
+                    UniformValue::List(vec![
+                        [1.0, 2.0, 3.0, 4.0].into(),
+                        UniformValue::Color(Color(0x00ff00ff)),
+                    ]),
+                ),
+                ("count".into(), UniformValue::Number(1.0)),
+                ("nope".into(), UniformValue::Number(1.0)),
+                ("speed".into(), UniformValue::Color(Color(0))),
+            ],
+            &mut warnings,
         );
-        for (offset, v) in [
-            (layout::NSH_VIEW_SIZE, 100.0),
-            (layout::NSH_VIEW_SIZE + 4, 50.0),
-            (layout::NSH_SCALE, 2.0),
-            (layout::NSH_TIME, 1.5),
-            (layout::NSH_PROGRESS, 0.25),
-        ] {
-            assert_eq!(f32_at(&nsh, offset as usize / 4), v);
-        }
-        let frame = frame_buffer(
-            Size::new(Points(100.0), Points(50.0)),
-            &[(1, Size::new(DevicePixels(64), DevicePixels(32)))],
-        );
-        assert_eq!(f32_at(&frame, layout::FRAME_AREA as usize / 4 + 2), 100.0);
-        let input = (layout::FRAME_INPUTS
-            + layout::INPUT_STRIDE * ShaderInput::Image(1).index() as u32)
-            as usize;
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        let f = |w: usize| f32::from_bits(layer.uniforms[w]);
+        assert_eq!([f(0), f(1), f(2)], [1.0, 0.0, 0.0]);
+        assert!((f(3) - 128.0 / 255.0).abs() < 1e-6);
+        assert_eq!(f(7), 0.5);
+        assert_eq!([f(8), f(9), f(10), f(11)], [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!([f(12), f(13), f(14), f(15)], [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(layer.uniforms[24], 1);
         assert_eq!(
-            f32_at(&frame, (input + layout::INPUT_RECT as usize) / 4 + 3),
-            50.0
+            layer.slots,
+            [UniformSlot {
+                word: 4,
+                kind: SlotKind::Rgb
+            }]
         );
-        assert_eq!(
-            f32_at(&frame, (input + layout::INPUT_PX as usize) / 4),
-            64.0
+        assert_eq!(layer.nodes, [7]);
+        let mut words = layer.uniforms.to_vec();
+        layer.write_slot(&mut words, 0, AnimationValue::Color(0x0000ffff));
+        assert_eq!([4, 5, 6].map(|w| f32::from_bits(words[w])), [0.0, 0.0, 1.0]);
+    }
+
+    #[cfg(feature = "glsl")]
+    #[test]
+    fn translates_to_glsl_es() {
+        let shader = Shader::compile(GRADIENT).unwrap();
+        let glsl = shader.glsl_es().expect("translates");
+        assert!(
+            glsl.vertex.starts_with("#version 300 es"),
+            "{}",
+            glsl.vertex
         );
+        assert!(glsl.fragment.contains("uniform"), "{}", glsl.fragment);
+        assert!(glsl.builtins_block.is_some());
+        assert!(glsl.uniforms_block.is_some());
     }
 }

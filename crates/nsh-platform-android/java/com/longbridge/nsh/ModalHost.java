@@ -27,8 +27,6 @@ final class ModalHost {
     private final Container container;
     private Dialog dialog;
     int animation; // 0 slide, 1 fade, 2 none
-    /** Its transition through a shader (over the dialog's window), if any. */
-    ShaderBox.Nav nav;
     /** `closeOnEscape`: the back button (Android's Escape) closes it here, then tells JS. */
     boolean closeOnEscape = true;
     /** The content reaches under the status bar (else it starts below). */
@@ -55,22 +53,27 @@ final class ModalHost {
         container.requestLayout();
     }
 
+    /** A density change changes dp sizes even when the pixels stay put. */
+    void densityChanged() {
+        container.reported = null;
+        // Report after the host has published its new environment, and
+        // request layout even if Android keeps the dialog's pixel bounds.
+        container.requestLayout();
+        container.post(container::report);
+    }
+
     TouchTracker touches() {
         return container.touches;
     }
 
-    /** The dialog's view in its window (a screen effect covers it too). */
-    View view() {
-        return container;
-    }
-
-    /** Its window's decor (the top of its window), while it shows. */
-    ViewGroup decor() {
-        return dialog != null && dialog.getWindow() != null ? (ViewGroup) dialog.getWindow().getDecorView() : null;
-    }
-
     boolean shown() {
         return dialog != null && !closing;
+    }
+
+    /** The shown dialog's window (its decor view), or null. */
+    View window() {
+        Window window = shown() && dialog.isShowing() ? dialog.getWindow() : null;
+        return window == null ? null : window.getDecorView();
     }
 
     void show() {
@@ -108,20 +111,7 @@ final class ModalHost {
         }
         dialog.show();
         matchSystemBars(window);
-        if (nav != null && Build.VERSION.SDK_INT >= 33 && window != null) {
-            container.setAlpha(1);
-            container.getViewTreeObserver().addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
-                @Override
-                public boolean onPreDraw() {
-                    container.getViewTreeObserver().removeOnPreDrawListener(this);
-                    shaderAnimate(window, 0, 1, () -> mounter.event(id, Native.SHOW));
-                    return true;
-                }
-            });
-            return;
-        }
-        container.setAlpha(animation == 1 ? 0 : 1);
-        container.post(() -> {
+        Runnable animateIn = () -> {
             if (animation == 2) {
                 mounter.event(id, Native.SHOW);
                 return;
@@ -136,7 +126,44 @@ final class ModalHost {
                             mounter.event(id, Native.SHOW);
                         }
                     }).start();
+        };
+        if (shaderIn(dialog, animateIn)) return;
+        container.setAlpha(animation == 1 ? 0 : 1);
+        container.post(animateIn);
+    }
+
+    /** Whether the dialog comes and goes through its `transitionShader`. */
+    private boolean throughShader() {
+        return mounter.navShaders.get(id) && Pictures.supported();
+    }
+
+    /**
+     * The dialog comes through its shader once laid out, from the app to the
+     * app under it (`animateIn` where it cannot); false without one.
+     */
+    private boolean shaderIn(Dialog d, Runnable animateIn) {
+        if (!throughShader()) return false;
+        // Its first frame shows the dialog; until then the app shows alone.
+        container.setAlpha(0);
+        container.getViewTreeObserver().addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
+            @Override
+            public boolean onPreDraw() {
+                container.getViewTreeObserver().removeOnPreDrawListener(this);
+                Window window = d.getWindow();
+                if (dialog != d || closing || window == null) return true;
+                NavTransition t = NavTransition.start(mounter, (ViewGroup) window.getDecorView(), id, id,
+                        new View[] {mounter.host}, new View[] {mounter.host, container}, false, () -> {}, () -> {
+                            container.setAlpha(1);
+                            mounter.event(id, Native.SHOW);
+                        });
+                if (t == null) {
+                    container.setAlpha(animation == 1 ? 0 : 1);
+                    container.post(animateIn);
+                }
+                return true;
+            }
         });
+        return true;
     }
 
     /**
@@ -193,12 +220,14 @@ final class ModalHost {
             closing = false;
             mounter.event(id, Native.DISMISS);
         };
-        if (animation == 2) {
-            done.run();
+        Window window = d.getWindow();
+        if (throughShader() && window != null && NavTransition.start(mounter, (ViewGroup) window.getDecorView(),
+                id, id, new View[] {mounter.host}, new View[] {mounter.host, container}, true,
+                () -> container.setAlpha(0), done) != null) {
             return;
         }
-        if (nav != null && Build.VERSION.SDK_INT >= 33 && d.getWindow() != null) {
-            shaderAnimate(d.getWindow(), 1, 0, done);
+        if (animation == 2) {
+            done.run();
             return;
         }
         container.animate()
@@ -212,36 +241,6 @@ final class ModalHost {
                         done.run();
                     }
                 }).start();
-    }
-
-    /**
-     * The dialog comes (`from` 0 to `to` 1) or goes under a shader over its
-     * window: what is behind it (the app's root view) is `sample_from`,
-     * the dialog over it `sample_to`. Runs `done` at the end.
-     */
-    private void shaderAnimate(Window window, float from, float to, Runnable done) {
-        ViewGroup decor = (ViewGroup) window.getDecorView();
-        View behind = mounter.host;
-        ShaderBox o = new ShaderBox(mounter.context, mounter, -1, false, false);
-        o.setFill(nav.program, false, nav.inputs, from, 0, nav.uniforms.clone(), new String[0], new int[0]);
-        o.setSides(ShaderBox.picture(behind), ShaderBox.picture(behind, container));
-        decor.addView(o, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        mounter.screenOverlays.add(o);
-        mounter.screenDirty();
-        android.animation.ValueAnimator a = android.animation.ValueAnimator.ofFloat(from, to);
-        a.setDuration(Math.max(1, Math.round(nav.ms)));
-        a.setInterpolator(null);
-        a.addUpdateListener(x -> o.setNumber(0xffff, (float) x.getAnimatedValue()));
-        a.addListener(new AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                decor.removeView(o);
-                mounter.screenOverlays.remove(o);
-                mounter.screenDirty();
-                done.run();
-            }
-        });
-        a.start();
     }
 
     /** Reports the window's size and insets: the content is laid out at them. */

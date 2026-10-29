@@ -22,6 +22,7 @@ pub mod desktop;
 mod effects;
 pub mod element;
 mod fenwick;
+pub mod file_dialog;
 pub mod filesystem;
 pub mod geometry;
 mod grid;
@@ -43,6 +44,7 @@ mod props;
 pub mod reactive;
 pub mod resource;
 pub mod runtime;
+pub mod runtime_data;
 pub mod scroll;
 pub mod selection;
 pub mod shader;
@@ -84,26 +86,26 @@ pub use crate::{
     ops::{
         AutoCapitalize, AutoFill, CellSlot, Command, ContextMenuEvent, Dialog, DialogButton,
         DialogButtonStyle, EventKind, EventMask, EventPayload, HeaderSlot, HeaderSystemItem,
-        HoverEvent, IMAGE_SCALES, ImageProp, ImageScales, ImageSource, KeyboardAppearance,
-        KeyboardDismissMode, KeyboardTaps, KeyboardType, ListContentStyle, ListViewport,
-        ModalAnimation, ModalPresentation, ModalProp, NativeProp, NodeId, Op, OverlayProp,
+        IMAGE_SCALES, ImageProp, ImageScales, ImageSource, KeyboardAppearance, KeyboardDismissMode,
+        KeyboardTaps, KeyboardType, ListContentStyle, ListViewport, ModalAnimation,
+        ModalPresentation, ModalProp, MouseButton, MouseEvent, NativeProp, NodeId, Op, OverlayProp,
         PasteBehavior, PasteEvent, PastedFile, PayloadValue, PressEvent, Prop, ROOT_ID, ResizeMode,
-        ReturnKeyType, ScreenAnimation, ScreenProp, ScreenTransition, ScrollProp, SnapAlignment,
+        ReturnKeyType, ScreenAnimation, ScreenProp, ScrollProp, ScrollbarSetting, SnapAlignment,
         StatusBarConfig, StatusBarSetting, StatusBarStyle, SubmitBehavior, Tag, TouchEvent,
-        TouchPhase, TouchPoint, Viewability, WebSource,
+        TouchPhase, TouchPoint, TransitionFallback, Viewability, WebSource,
     },
     props::{
-        Accessibility, AccessibilityActionDef, AccessibilityProp, AccessibilityRole,
-        AccessibilityState, AccessibilityValue, Checked, EdgeInsets, GestureValues,
-        LayoutAnimation, LayoutCurve, LayoutProperty, LayoutTransition, LiveRegion, PanActivation,
-        PointerEvents, Ripple, ViewProps,
+        Accessibility, AccessibilityActionDef, AccessibilityCurrent, AccessibilityProp,
+        AccessibilityRole, AccessibilityState, AccessibilityValue, Checked, EdgeInsets,
+        GestureValues, LayoutAnimation, LayoutCurve, LayoutProperty, LayoutTransition, LiveRegion,
+        PanActivation, PointerEvents, Ripple, ViewProps,
     },
     style::{
-        BorderStyle, Borders, Color, CornerRadii, DecorationStyle, EllipsizeMode, FamilyName,
-        FontFamily, FontVariant, ObjectPosition, PaintStyle, PatchValue, PositionAxis, Shadow,
-        Style, StyleDecl, StyleError, StyleKey, StylePatch, StyleValue, SvgPaint, TextAlign,
-        TextDecoration, TextShadow, TextStyle, TextTransform, TransformOrigin, VerticalAlign,
-        ViewStyle, font_families,
+        BorderStyle, Borders, Color, CornerRadii, DecorationStyle, EllipsizeMode, EnvVar,
+        FamilyName, FontFamily, FontVariant, GridTemplateValue, LineHeight, ObjectPosition,
+        PaintStyle, PositionAxis, PropertyValue, Style, StyleDecl, StyleError, StyleKey,
+        StylePatch, StyleValue, SvgPaint, TextAlign, TextDecoration, TextShadow, TextStyle,
+        TextTransform, TransformOrigin, TransformProperty, VerticalAlign, ViewStyle, font_families,
     },
     text::{
         ATTACHMENT_CHAR, Affinity, ApproxTextEngine, AttachmentAlignments, AttributedText,
@@ -111,5 +113,7 @@ pub use crate::{
         TextBackground, TextEngine, TextLayout, TextLine, TextLink, TextPosition, TextSpan,
         font_data, font_family,
     },
-    transform::{Decomposed, MAX_TRANSFORMS, Matrix, Transform, TransformKind, TransformOp},
+    transform::{
+        Decomposed, MAX_TRANSFORMS, Matrix, Transform, TransformKind, TransformOp, translation,
+    },
 };

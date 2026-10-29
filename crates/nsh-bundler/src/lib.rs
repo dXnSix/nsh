@@ -16,6 +16,8 @@ mod jsx;
 #[cfg(feature = "bundle")]
 mod minify;
 #[cfg(feature = "bundle")]
+mod natives;
+#[cfg(feature = "bundle")]
 mod plugin;
 mod props;
 #[cfg(feature = "bundle")]
@@ -28,9 +30,9 @@ pub use bundle::*;
 #[cfg(feature = "bundle")]
 pub use minify::minify_module;
 #[cfg(feature = "bundle")]
-pub use types::{
-    TSCONFIG, TSCONFIG_BASE, shader_declarations, tokens_declaration, type_definitions,
-};
+pub use natives::{Imported, NativeUse};
+#[cfg(feature = "bundle")]
+pub use types::{TSCONFIG, TSCONFIG_BASE, tokens_declaration, type_definitions};
 
 /// Compiles one module (TSX, JSX, TS or JS, as `name`'s extension says) to
 /// the ES module the runtime runs: TypeScript removed, JSX compiled, imports

@@ -1,255 +1,287 @@
 # Shaders
 
-Apps write fragment shaders in WGSL; NSH checks them against a profile every platform runs, reflects them and
-translates them into each platform's language (`crates/nsh-shader`). Nothing NSH ships is a shader of its own (no
-built-in looks: "No styles in NSH"); the corpus in `crates/nsh-shader/tests/shader/corpus/` (fills, effects, a
-glass, transitions) is test material and a reference for apps, not an API.
+A shader view (`Shader` from `nsh`, the `shader` host element; Rust `nsh_core::element::shader()` with `.source(..)`) is a view whose
+box a GPU program the app writes in WGSL draws, over the view's background and under its children. The program is
+checked and wrapped in Rust (`nsh_core::shader`), rendered by wgpu on the native backends (`nsh_engine::shader`, feature `shader`) and by
+WebGL 2 on the web, from GLSL ES the core translates it into. The module docs of `crates/nsh-core/src/shader.rs` and
+`crates/nsh-engine/src/shader.rs` are the reference; this page is the overview.
 
-## The language
+## The contract
 
-A shader is WGSL with one function the app writes:
+An app writes one function and whatever helpers and constants it needs:
 
 ```wgsl
-struct Uniforms { tint: vec4f, radius: f32 }
+struct Uniforms { tint: vec4f, speed: f32 }   // optional
 
-fn main(p: vec2f, u: Uniforms) -> vec4f {
-    let d = length(p - nsh.size * 0.5);
-    return u.tint * (1.0 - smoothstep(u.radius - 1.0, u.radius, d));
+fn shade(uv: vec2f) -> vec4f {
+  let wave = 0.5 + 0.5 * sin(uv.x * 12.0 + nsh.time * uniforms.speed);
+  return vec4f(uniforms.tint.rgb * wave, 1.0);
 }
 ```
 
-- `p` is the pixel's position **in points from the view's top-left**; the result is a **premultiplied sRGB** color.
-  `fn main(p: vec2f) -> vec4f` when the shader takes no uniforms.
-- **Uniforms** are the fields of the struct `main` takes (any name; `Uniforms` by convention): `f32`, `i32`, `vec2/3/4`
-  of them, square `f32` matrices, fixed arrays of those (WGSL's uniform layout: an array's elements 16 bytes apart, so
-  `array<vec4f, N>` rather than `array<f32, N>`), and `Image`. The struct is never a value: `u.field` reads a field
-  where it is (`let v = u;` names it, a helper may take it as a parameter), and the shader neither copies it into a
-  `var` nor makes one.
-- **NSH's prelude**, appended to the source (so naga's spans stay the app's), declares `nsh` (`size`: the view's size in
-  points, `scale`: pixels per point, `time`: seconds since the shader first drew, `progress`: an effect's or a
-  transition's progress, 0 to 1) and the inputs: `sample_content(p)` (what the element draws, under an effect),
-  `sample_backdrop(p)` (what is behind it), `sample_from(p)` / `sample_to(p)` (a transition's two sides) and
-  `sample_image(u.field, p)` for an `Image` uniform, each taking a position in points like `p` (an image is stretched
-  over the view; `u.field.size` is its size in points, for fitting it). Outside an input's bounds a sample is
-  transparent. Names starting with `nsh_` are NSH's.
+- `uv` is the point of the view's box, 0..1 from its top left corner (CSS's direction, y down).
+- The result is straight (not premultiplied) sRGB with alpha, as CSS colors are: no linearization. The core's
+  fragment entry point clamps it to 0..1 and premultiplies.
+- Built-ins, read through `nsh` (`struct Nsh` at `@group(0) @binding(0)`): `nsh.size` (the box in points),
+  `nsh.time` (seconds since the shader appeared, stopped while `paused`), `nsh.scale` (pixels per point of the frame
+  being rendered). `nsh_core::shader::builtins` gives the four words the renderers upload.
+- `struct Uniforms { … }`, when the source declares one (outside comments: `declares_uniforms`), is bound at
+  `@binding(1)` as `uniforms`. Its members are set by name from the `uniforms` prop.
 
-## The profile
+`Shader::compile` builds the module as the app's source first (so its line numbers stay the app's), then
+`BUILTINS`, the uniforms' binding and `ENTRY_POINTS`: `nsh_vertex` (one triangle covering the target, no vertex
+buffers) and `nsh_fragment`. Renderers draw `0..3` vertices with these two entry points.
 
-Android's runtime shaders (AGSL, API 33) are GLSL ES 1.00 with its Appendix A, so the profile is the WGSL that AGSL can
-say too, checked on naga's IR (`profile.rs`), the same on every platform:
+## Validation and limits
 
-- **Loops are counted `for` loops**: `for (var i = start; i < bound; i += step)` with a constant start, bound and step
-  (`<`, `<=`, `>`, `>=`, `!=`; `i++`, `i--`, `+=`, `-=`; `i32` or `f32` counters), a body that leaves the counter
-  alone and reads it only inside the loop. No `while` or `loop`. The checker runs each loop to count its iterations
-  and the counter's range. (naga's IR has only `loop`; `loop_shape` recognizes the `for` in it, also written out as
-  `loop { if !(i < n) { break; } ... continuing { i++; } }`.)
-- **Indexes are constants or loop counters** with `+`, `-`, `*` (`a[i + 1]`, `a[2 * i]`), and the checker proves them
-  in bounds from the counters' ranges (an index out of range is an error at build time; naga's writers still clamp,
-  `BoundsCheckPolicy::Restrict`).
-- **Not in the profile**: derivatives (`dpdx`, `fwidth`), `discard`, `u32` and bit operations, `bitcast`, `override`,
-  pointers as parameters, arrays as results or inside structs (other than the uniforms'), arrays of arrays,
-  non-square matrices, `break` out of a `switch`, the packing and bit functions, and global variables or resources
-  of the shader's own (its inputs are `nsh`, its uniforms and the `sample_*` functions; constants are `const`).
-- **Limits** (`Limits`, enforced in Rust when a shader compiles): `max_samples`, texture samples a pixel takes at most
-  (default 128: a 75-sample glass fits), counting each `sample_*` call, multiplied by the loops around it, the costlier
-  branch of an `if` (a branch that returns does not add what follows it); `max_iterations`, loop iterations a pixel
-  runs (4096); `max_source_len` (64 KiB).
+Everything is checked in Rust before any platform sees the program (`Shader::compile`), with naga, the WGSL front end
+wgpu and browsers' WebGPU share:
 
-Errors carry their place in the app's source (`Error { message, span, line, column, notes }`; `Error::render` prints
-`path:line:column`, the line and a caret), naga's parse and validation errors as well as the profile's.
+- the source is at most `MAX_SOURCE_BYTES` (64 KiB);
+- it defines `fn shade(uv: vec2f) -> vec4f` with exactly that signature;
+- it declares no entry points and no resources: its globals are `var<private>`, its inputs `nsh` and `uniforms`;
+- `struct Uniforms` takes at most `MAX_UNIFORM_BYTES` (4096) and its members are `f32`, `i32`, `u32`, `vec2f`,
+  `vec3f`, `vec4f` or `array<vec4f, N>` (`UniformType`; reflected with their offsets into `UniformField`s, the size
+  rounded up to 16);
+- the whole module validates (`ValidationFlags::all()`, no capabilities).
 
-## Reflection
+The module is parsed twice: without the entry points first, so an error is reported in the app's source rather than
+in what calls `shade`, then with them. Errors (`ShaderError`) carry the 1-based line and column in the app's source
+(0 when the error has no place in it); the validator's innermost span inside the source is the one reported.
+`Shader::animated` is whether any function reads `nsh.time` (an `AccessIndex` of member 1 on the `nsh` global): only
+those draw every frame.
 
-`Shader::reflection()`: the uniforms (name, type, byte offset, array length and stride, in WGSL's uniform layout;
-images with their slot), the size of their buffer, the inputs `main` samples, whether it reads `nsh.time` (the shader
-draws every frame while it is shown; otherwise it draws only when something it reads changes) and `nsh.progress`, and
-its cost (samples, iterations).
+Each frame is at most `nsh_engine::shader::MAX_SIDE` (4096) pixels a side; larger views render at a lower scale. A GPU
+program that never ends is stopped by the operating system's GPU watchdog (the browser's on the web).
 
-## Programs
+## The core: props, the compile cache and the mount item
 
-A program reads three buffers, filled by the platform (`nsh_shader::layout`): `nsh` (size, scale, time, progress),
-the frame (the area it draws, in points; per input its rect in points, flipped by a negative height, and its size in
-its own pixels) and the app's uniforms. Each writer is a feature, so a runtime links only its own:
+`Tag::Shader` is a `Kind::Shader` node whose native view is a plain view (`ViewKind::View`), so it takes every view
+prop and has children. Its own props (`ops.rs`): `ShaderSource` (`source`), `Shader` (a compiled program, Rust's),
+`Uniforms` (`uniforms`, `ShaderUniforms`: names and `UniformValue`s) and `ShaderPaused` (`paused`, shared with
+videos' `paused`). `Core::set_shader_prop` keeps them in the node's `ShaderNode`.
 
-| Feature | Platforms | Writer | Program |
+- **Compile cache.** `Core::shaders` maps `source_hash` to the compiled program or its error, so an app setting the
+  same source again (another view, a list row, a hot reload) compiles once. It is bounded: at 64 entries it is
+  cleared. A source that fails logs a warning (target `js`, `the shader of node N: line:column: message`) and the
+  node shows no layer.
+- **The layer.** Each prop change makes a new `ShaderLayer` (`ShaderLayer::new`): the program, the uniform words as
+  the app set them, the animated slots and their animation nodes, `paused`. A uniform name the struct lacks, or a
+  value that does not fit its type, is left out with a warning. When the layer equals the previous one nothing is
+  sent; otherwise the node is marked `dirty::SHADER`, and `dirty::ANIMATION` too when the slots' nodes changed.
+- **Mount item.** `MountItem::Shader { id, layer }` (`None`: nothing to draw) carries an `Arc<ShaderLayer>`; the
+  platforms keep the `Arc`, nothing is copied per frame.
+
+### Uniform packing and animated slots
+
+`ShaderLayer::new` packs values into `shader.uniform_size() / 4` words (bit patterns of `f32`, `i32`, `u32`) at each
+member's offset (`Packer::pack`):
+
+| WGSL | Values |
+|---|---|
+| `f32`, `i32`, `u32` | a number (`i32` / `u32` rounded toward zero, `u32` at least 0) or an animated value |
+| `vec2f` | a list of 2 numbers or animated values |
+| `vec3f` / `vec4f` | a color (red, green, blue, and alpha for `vec4f`, 0..1 sRGB), an animated color, or a list of 3 / 4 numbers or animated values |
+| `array<vec4f, N>` | a list of at most `N` colors or 4-number lists; the rest stay zero |
+
+An animated value (`UniformValue::Animated`) becomes a value slot: a `UniformSlot { word, kind }` (`SlotKind::F32`,
+`I32`, `U32`, `Rgb`, `Rgba`) and its node in `ShaderLayer::nodes`. Slot `n` is bound to the view as
+`AnimationProp::CanvasArg(n)` in the node's animation bindings, next to a canvas drawing's slots (a view is one or
+the other). The platform's animator hands each slot's value to the shader view, which writes it into its copy of the
+words with `ShaderLayer::write_slot` and renders again: an animated uniform moves with no JS and no engine work per
+frame. A new layer with the same program and slots keeps the values written into the animated slots
+(`nsh_engine::shader::ShaderView::set_layer`, `op_sh` on the web), so a re-render of the app's component does not snap them
+back.
+
+In JS, `uniforms` is decoded natively (`host_values.rs`, `impl HostValue for ShaderUniforms`): numbers, CSS color
+strings, animated nodes and lists of them, two levels deep. `dom.rs` keeps the animation nodes a view's `uniforms`
+holds alive with the view. In Rust, `ShaderView::uniform(name, value)` takes any `IntoUniform`: anything
+`IntoReactive<UniformValue>` (numbers, `Color`, `Hsla`, `[f32; 2..4]`, lists; a bound value sets it again when it
+changes) or an animated value (`&AnimatedValue`, `&AnimatedNode`), whose node it keeps alive with the element.
+
+## The renderer (`nsh_engine::shader`)
+
+`nsh_engine::shader::Renderer` holds a wgpu device and queue, two bind group layouts (built-ins alone; built-ins and
+uniforms) and the render pipelines by source hash (`None` for one the device refused, reported once with a `js`
+warning). A backend opens it the first time a shader is mounted on a surface (Android: on the `NshView`, kept across
+app loads), so an app without shaders opens no device. `Renderer::new` requests a low-power adapter on the primary
+backends and GL (`WGPU_BACKEND` overrides) with WebGL 2's downlevel limits; where no adapter or device is found it is
+`None` and shader views show their background and children. Uncaptured device errors are warnings, never panics.
+
+`nsh_engine::shader::ShaderView` is one view's state on the main thread: the layer, its words with the animated slots
+written in, size and scale, the clock of `nsh.time` (`Clock`: kept while paused), and its frames.
+
+- **Rendering never waits for the GPU.** `render` draws into a texture and copies it into one of two read-back
+  buffers mapped asynchronously; a later call finds a mapped buffer, copies the newest frame into `frame()` and
+  returns `true`. A frame shows one or two display frames after it is rendered. With both buffers in flight the
+  frame is skipped, so a slow GPU drops frames instead of stalling the main thread.
+- **Frame pacing.** `wants_frame` is true while something it reads changed (`dirty`: layer, uniforms, an animated
+  slot, size or scale), while it is animated and not paused, or while a frame is on its way back. Backends call
+  `render` on their frame clock only while it is true, at most once per display frame.
+- **Pixels.** Frames are 8-bit premultiplied, in the `PixelFormat` the backend asked for (`Rgba`: GDK, Core Graphics,
+  Android; `Bgra`: Direct2D, GPUI), rows `stride` bytes apart (`Frame::rows`, `Frame::tight`).
+
+## The platforms
+
+Each backend has a `shader.rs` that takes `MountItem::Shader`, keeps a `ShaderView` per view, ticks it on the
+platform's frame clock and shows the frames under the view's children, clipped to its rounded box as a background
+is. Views out of sight stop rendering until they show again.
+
+| Platform | Ticks on | Shows a frame as | Out of sight |
 |---|---|---|---|
-| `msl` | iOS, macOS | naga's MSL | `nsh_vertex` / `nsh_fragment` over a 4-vertex strip; buffers 0, 1, 2; textures 0...; an inline sampler (linear, clamped to zero) |
-| `hlsl` | Windows | naga's HLSL, shader model 5.0 | a Direct2D effect's pixel shader (`NshD2dMain`, one constant buffer `b0`, each input at Direct2D's texel coordinates); Direct3D 11 shaders as the fallback (`b0`..`b2`, `t0`..., `s0`) |
-| `glsl` | Linux, the web | naga's GLSL, ES 3.00 / 3.30 core | a vertex and a fragment shader; uniform blocks and samplers by name |
-| `agsl` | Android | NSH's own (`agsl.rs`) | a `RuntimeShader` source: each uniform field a `uniform` of its own, each input a `uniform shader` |
+| Linux (GTK 4) | each view's tick callback | a `GdkMemoryTexture` appended in the view's snapshot, after the background, under text, images and children | `reveal` on the frame clock's layout, for views outside a clipping ancestor or the window |
+| macOS (AppKit) | one frame callback of the surface's display link, at the window's backing scale | a `CGImage`, the contents of a sublayer under the children (`decor.rs` shapes it) | `shown`, from `Mounter::revisit` (rows scrolled away, screens under another) |
+| iOS | a `CADisplayLink` of its own, at the screen's scale | a `CGImage` in a sublayer under the children | views outside any window render once back in one |
+| Android | the UI-thread animator's `Choreographer`, kept ticking by `UiAnimation::outputs` while a view wants a frame | a bitmap of `Box.java`, filled by `NshView.shaderFrame` | — |
+| Windows | the surface's frame ticker (`Surface::on_frame`), at the window's scale | a Direct2D bitmap drawn under the children (made again after a device loss) | `reveal`: hidden, concealed or detached views |
+| GPUI | a frame client of its surface | a GPUI image (BGRA, straight, the view's opacity multiplied in, as canvases' pixmaps), whose replaced image leaves GPUI's atlases | views not drawn in the last frame |
+| Web | `requestAnimationFrame` | a `<canvas>` under the children (an effect's and a running transition's over them) | `IntersectionObserver` |
 
-naga's HLSL declares samplers as indexes into a Direct3D 12 sampler heap; `hlsl.rs` replaces that with one sampler at
-`s0` for Direct3D 11 and Direct2D. The AGSL writer maps naga's IR to AGSL as naga's writers map it to theirs (the same
-expressions kept in variables), and writes out what ES 1.00 lacks: counted loops as `for` loops (their counters read
-in place, never through a variable: ES 1.00 indexes with loop indexes and constants only), `switch` as an `if` chain,
-WGSL's integer `/` and `%` (by zero: `x` and 0), its truncating float `%`, `round` (halves to even), `trunc`, the
-hyperbolic functions, integer `abs` / `min` / `max` / `clamp` / `sign` / `dot`, `transpose`, `determinant`, and
-arrays element by element (constant arrays as local arrays).
+### Effects and transitions
 
-## The element
+Effects (`ShaderEffect`, `ScreenEffect`), transitions (`ShaderTransition`, `ScreenTransition`) and pages' and
+dialogs' `transitionShader` read pictures the platform takes of views (`ShaderView::set_input`). The table says how
+each platform that draws them does it; the others ignore `MountItem::ShaderTransition`, `ShaderInput` and `NavShader`
+(the children show as they are, pages and dialogs come with their `animation`).
 
-`<Shader src uniforms>` (TSX, from `nsh`) and `shader(source).uniforms(..)` (Rust, `nsh_core::element`) are a host element,
-`Tag::Shader` / `ViewKind::Shader`: a view the shader fills under its children, with every style of a view.
-`<ShaderEffect src uniforms progress maxSampleOffset>` and `shader_effect(source)` are another, `Tag::ShaderEffect` /
-`ViewKind::ShaderEffect`: a view whose children draw through the shader. They are its content input
-(`sample_content`); its own background and borders draw as any view's, under the shader's result. Without `src` the
-children draw as they are. `maxSampleOffset` (points) is how far beyond a pixel the shader samples its content: the
-children are drawn that much beyond the view's bounds for it (`ShaderFill::max_offset`; the frame's area and the
-content input's rect start that far outside the view). `progress` (both elements) is `nsh.progress`: a number, or an
-animated value bound as `AnimationProp::ShaderUniform(shader::PROGRESS)`, which the platforms write into the `nsh`
-buffer instead of the uniforms. Any shader may sample what is behind its view (`sample_backdrop`): the surface's
-drawing under the view, excluding the view, its subtree and what is above it.
+| Platform | Pictures | Hides the children, keeps their input | Over them | Pages and dialogs |
+|---|---|---|---|---|
+| macOS (AppKit) | `renderInContext:` of the children's container (`NshView::ensure_container`) without its mask, at the window's backing scale (a screen's: all the root shows but the frames over it); the backdrop: the root with the view's layer hidden | an empty `mask` on the container's layer (AppKit hit-tests views) | the frames' sublayer at `zPosition` 1e6, `overflow` points beyond the box; a screen's on the root | the motion drawn through a layer over the stack (the root for a dialog) from pictures of it without and with the upper side (a page or dialog that left: its last image), taken on the first display frame, the coming side again on each; the views at rest under it until it ends (`navigation::Motion::Shader`); popping and dismissing run backwards |
+| iOS | `renderInContext:` of a view holding the children (`Decor::set_effect`, the view children are added to) without its mask, at the screen's scale; the backdrop: the window with the view's layer at opacity 0 | an empty `mask` on that view's layer (UIKit hit-tests views) | the frames' sublayer at `zPosition` 1e6, `overflow` points beyond the box; a screen's on the root view (dialogs, presented by UIKit above it, are outside) | the screens change and the dialog is presented or dismissed at once, under a layer over the window's part where the surface (the stack) is, from pictures before the change and after it (the first tick); popping and dismissing run backwards |
 
-`<ShaderTransition src uniforms value duration fallback maxSampleOffset>` and `shader_transition(source).value(..)`
-are a third, `Tag::ShaderTransition` / `ViewKind::ShaderTransition`: a view whose children change through the shader.
-When a commit changes its `value` (`TransitionKey`: a string, number or boolean; the first value starts nothing), the
-core sends `MountItem::ShaderTransition { id, duration }` first in that batch (`Core::transition_starts`, spliced in at
-the end of `commit`): the platform pictures the children as they are before the batch's other items, its
-`sample_from`, and draws them through the shader from then on, their new drawing its `sample_to` (the content input of
-an effect, kept current the same way), while `nsh.progress` goes linearly from 0 to 1 over `duration` (300 ms by
-default); then the children draw as they are. A transition that starts while one runs starts from what shows. Without
-`src` it runs `fallback`: `"fade"` (the default) is a cross-fade the core supplies (`shader::crossfade`, one program
-per process), `"none"` sends no fill and no start. Where `shaderSupport().transition` is `false` the core starts none,
-so the children change at once.
+Both retake an effect's pictures on the display frame after the core says they changed (`MountItem::ShaderInput`) or
+the platform changed a view in them (macOS: `NshView::changed`, `moved`, `redraw_rect`; iOS: animated values,
+scrolling, image loads), at most once per frame; a transition pictures its children (or its running frame) as its
+`from` when it starts and keeps taking `to` while it runs. `renderInContext:` draws no video or web page, nor
+backdrop blur or glass. The pictures of views AppKit has just shown again (navigation hides the screens under the top
+one) wait for the next display frame: until AppKit displays the window their layers are out of the tree, where they
+draw y up.
 
-- **Making a shader.** `createShader(source)` (`nsh-js` `shader.rs`) compiles in Rust with the VM's limits
-  (`max_shader_samples`) and returns a frozen `{ uniforms: [names], __shader: id }`; a VM keeps its shaders by id and
-  by source, so the same source is the same shader (a component making its shader on each render, a module run again
-  by hot module replacement) and counts once against `max_shaders`. Errors throw a `SyntaxError` with
-  `Error::render`'s text. A `.wgsl` import is a module of the bundler (`plugin.rs`: checked with the default limits at
-  build time, then `export default createShader(source)`); `.nsh/types` declares each file's uniforms
-  (`types.rs` `shader_declarations`, `tooling.md`). Rust makes `ShaderSource::new(source, &limits)` once and keeps it.
-  Ids are unique per process (`ShaderSource::next_id`): the platforms keep programs by id.
-- **Uniforms.** The prop holds values by name (`Uniforms`, `UniformValue`: numbers, lists, colors, animated values,
-  images; strings are colors, else image URIs). At commit the core packs them for the shader's reflection
-  (`shader::pack`): WGSL's uniform layout, colors premultiplied, integers rounded, a number filling a vector, images by
-  slot (their size written when the source knows it, the platform writes it once the image loads), and warns about
-  names the shader lacks and values its types do not take. Animated values become bindings
-  (`AnimationProp::ShaderUniform(component)`, an `f32` index of the buffer), sent with the view's other
-  `AnimationBindings`: the platform's animator writes a number into one component, a color into four, premultiplied
-  (`shader::write_animated`), and the shader draws again; JS runs nothing per frame.
-- **Programs and fills.** The first time a view draws a shader, the core translates it into the platform's language
-  (`ShaderProgram::translate`, `Environment::shaders.language`) on the engine thread and sends it once per engine
-  (`MountItem::ShaderProgram`); each view then gets `MountItem::Shader { fill }` (`ShaderFill`: the program's id, the
-  packed buffer, the images, whether it reads `nsh.time`) when it changes. A translation that fails is logged and the
-  view draws its children only.
-- **Inputs.** `ShaderFill::inputs` says which inputs a shader samples (`ShaderFill::samples`). Platforms that draw
-  from a picture of an input take it again when it changes: the core sends `MountItem::ShaderInput { id }` after a
-  commit that changed a view in an effect's subtree (the effect included) and, once anything changed, for every shader
-  that samples the backdrop (`Core::mark_shader_inputs`, a set of the shaders with inputs, walked only while it is not
-  empty). What changes on the UI thread (animations, scrolling, loads) the platform notices itself.
-- **`shaderSupport()`** reads `Environment::shaders` (`ShaderSupport`: the language and, per kind, `Live`, `Snapshot`
-  or `No`). Each platform sets it on its surface; a headless engine (`nsh test`, `ShaderLanguage::None`) says fills
-  are live, sends programs (with no code) and fills, so tests check what a shader view gets.
+On Android the layer stays in `libnsh`: the encoder sends Java only whether a view shows a shader (opcode `SHADER`,
+35, in `encode.rs` ↔ `Mounter.java`), Java reports the size in pixels (`Native.shaderSize`), and the layer goes to
+the UI-thread renderer with the animation items. On Windows animated uniforms are written while the animation graph
+is borrowed, so the views they start are queued and started after (`set_args`, `start_pending`).
 
-The platforms fill three buffers per draw (`shader::nsh_buffer`, `shader::frame_buffer` with each loaded image's size
-in pixels: an image without one samples transparent, `shader::write_image_size`) and bind each image as the program's
-inputs say.
+## The web
 
-| Platform | Draws with | Where | Draws every frame |
-|---|---|---|---|
-| iOS, Mac Catalyst, macOS | Metal (`nsh-metal`: loaded with `dlopen`, programs compiled off the main thread) | a `CAMetalLayer` in the view's layer (`decor::SHADER`), shaped by the decoration as image content is | the macOS surface's frame callbacks / the iOS mounter's shader display link, while in a window |
-| Android 13+ | `RuntimeShader` (AGSL) in `ShaderBox.onDraw` | the view's canvas, over its background | `postInvalidateOnAnimation` while shown |
-| Windows | Direct3D 11 into a texture Direct2D draws (`HlslProgram::d3d11`, `D3DCompile`) | the view's drawing, before its text and children | each frame the surface draws |
-| Linux | OpenGL ES 3 in a `GdkGLContext` of its own (glow over libepoxy) into a texture, a `GdkGLTexture` with a fence | the view's snapshot, flipped as `GtkGLArea`'s | the widget's tick callback |
-| Web | WebGL 2 on one shared canvas, copied to a bitmap canvas in the view's element | the element, under its children | `requestAnimationFrame` |
-| GPUI | (draws the children) | | |
+The web backend uses WebGL 2. `Shader::glsl_es` (feature `glsl` of `nsh-core`, which `nsh-platform-web` turns on)
+translates the validated module with naga's GLSL back end to GLSL ES 3.00 once per program and keeps it: the vertex
+and fragment shaders and the names of the built-ins' and uniforms' uniform blocks (bound to 0 and 1). Bounds checks
+are `Restrict`, so out-of-range indices read in range as they do under wgpu. `nsh-platform-web/src/shader.rs`
+encodes the layer for `nsh.js`'s `op_sh` as JSON: the program's key (its hash), both shaders, the block names, the
+words, the slots as `[word, kind]`, `animated` and `paused`.
 
-Effects and backdrops, per platform:
+`nsh.js` draws every shader view with one shared WebGL 2 context (`shaderGl`, on an `OffscreenCanvas` where there is
+one), since a page gets few contexts: programs are cached by key (`shaderProgram`), each view renders into the shared
+canvas at its size times the device pixel ratio and zoom (at most 4096 a side), and the picture moves to the view's
+own `<canvas class="nsh-shader">` (`transferToImageBitmap` into a `bitmaprenderer`, or `drawImage`), which is
+inserted first among the view's children and inherits its `border-radius`. `shaderFrame` runs on
+`requestAnimationFrame` for views that are connected, in sight (an `IntersectionObserver`) and dirty or running;
+animated values arrive as `op_a`'s `canvas:N` props and are written by `shaderSlot`.
 
-| Platform | `effect` | `backdrop` | How |
-|---|---|---|---|
-| Android 13+ | live | live | an effect records its children into a `RenderNode` (`maxSampleOffset` beyond the view) whose `RenderEffect` is the runtime shader, its content input that node; a backdrop shader runs as the render effect of a node drawing `Backdrop.java`'s recording. A render effect gives one live input: an effect that samples both reads the backdrop as transparent |
-| macOS | snapshot | snapshot | an effect's children live in a container (`NshView::ensure_container`) whose layer an empty mask hides while the shader draws (AppKit hit-tests views, so they keep their clicks); the shader's `CAMetalLayer` covers the view and `maxSampleOffset` beyond it, above the container (`decor::EFFECT`). The content is the container rendered with `renderInContext:` (without its mask) into a bitmap; the backdrop is the surface's root rendered at the view's place with the view at opacity 0. Pictures are taken on the next display frame after a `ShaderInput` or a UI-thread change (`shader::ui_changed`, from `NshView::changed` / `moved` / `redraw` and scrolling: a text drawn once it scrolls into sight is a change), all at once, and uploaded (`ShaderLayer::set_input`); layers due to draw are drawn first (`displayIfNeeded`). `renderInContext:` draws no Metal layer, video or web page; in-process screenshots hide effects' containers |
-| iOS, Mac Catalyst | snapshot | snapshot | as macOS, with the decoration's content view (`Decor::set_effect`; it neither clips nor takes the decoration's mask for an effect) hidden by an empty mask: UIKit skips views at alpha 0 in hit testing, not masked ones. The backdrop is the surface's root view (never the host app's window). Marks come from `ShaderInput`, animations, scrolling and loaded images (`Mounter::ui_changed`, which finds the effects around a view by the views' tags); pictures are taken on the shader display link's next frame |
-| Web | snapshot | snapshot | NSH paints the input itself from the elements into a 2D canvas (`nsh.js` `paintTree`: backgrounds, rounded corners, uniform borders, images by `object-fit`, canvases (other shaders' pictures), text runs at the positions NSH laid them out, clipping and opacity; no rotations, gradients or shadows; cross-origin images without CORS are left out, they would taint the picture). An effect's children are at `opacity: 0` (`.nsh-fx`; browsers hit-test them still) under its canvas (`.nsh-fx-out`, `maxSampleOffset` beyond the element); the backdrop is the surface painted up to the view (what comes after it is above it). A `MutationObserver` on the effect (on the root for backdrops) and capture-phase `scroll` / `load` listeners mark the pictures stale, taken on the next animation frame |
-| Windows | live | live | drawn with the frame: an effect's children are drawn by Direct2D into a texture of the area (the view and `maxSampleOffset` beyond it; `shader::draw_effect`, another context of the device, so what is pushed on the window's stays), not into the window; a backdrop shader's input is what the frame drew so far under the area, copied into a texture before the view draws its own background (`shader::take_backdrop`; transparent in passes drawn offscreen, for a filtered or 3D-transformed view). Both textures are bound with the images; the window is drawn again whenever anything in it changes, so the inputs are always current (`ShaderInput` needs nothing). Web views inside an effect are not in its content |
-| Linux | live | snapshot | an effect's children are drawn, whenever GTK draws the effect again (it or something in it queued a draw), into a render node of their own (`NshView::snapshot_children`, not into the frame's) that the window's renderer renders over the area (`render_texture`); the texture is downloaded and uploaded into the shaders' context. The backdrop is a picture: after the frame clock's `after-paint` that follows a mark (`ShaderInput`, `shader::ui_changed` from `NshView::changed` / `moved` and scrolling; a shader's own redraws, `NshView::redraw`, mark nothing), the surface's views are drawn anew from its root (`NshView::draw`, not GTK's render nodes of the last frame, which have the view in them) up to the view: `shader::skipped` leaves out the view and whatever draws after it, `shader::past` the borders and scroll indicators of the views around it. GTK's damage phase is left alone in that pass |
-| others | `false` | `false` | an effect draws its children as they are; `sample_backdrop` reads transparent |
+## Effects, transitions and pictures
 
-Transitions, per platform (each draws as its effect does while a transition runs, and its children as they are
-otherwise):
+The fork's elements on top of the same program, layer and renderer (`ShaderRole` on the layer):
 
-| Platform | `transition` | `sample_from` | Progress |
-|---|---|---|---|
-| Android 13+ | live | the children recorded into a `RenderNode` and rendered once by a `HardwareRenderer` into an `ImageReader`'s hardware bitmap (`ShaderBox.startTransition`), an input shader of the runtime shader; `sample_to` is the live render effect input | `dispatchDraw`, from `SystemClock.uptimeMillis` |
-| macOS | snapshot | the container rendered with `renderInContext:` (`shader::start_transition`), or the running transition's picture (`ShaderLayer::picture`) | a frame callback |
-| iOS, Mac Catalyst | snapshot | as macOS, from the decoration's content view (`ShaderHost::start`; effects and transitions are decorated when created, so the content view exists without styles) | the shader display link (`Mounter::transitions`) |
-| Web | snapshot | painted from the elements (`op_st`, `paintTree`), or the running transition's canvas | `requestAnimationFrame` |
-| Windows | live | the children drawn by Direct2D into a third input texture outside the frame (`render::draw_offscreen`), or the target copied (`CopyFromBitmap`) | `Surface::on_frame` |
-| Linux | live | the children rendered to a texture as an effect's content (`shader::start_transition`), or the last picture (flipped from GL's rows) | the view's tick callback |
-| GPUI | `false` | | |
+- **Pictures.** `BUILTINS` declares a sampler at `@binding(2)` and four `texture_2d<f32>` at `@binding(3)` to
+  `@binding(6)` with `sample_content`, `sample_backdrop`, `sample_from` and `sample_to`, which map the box's `uv` into
+  the picture (it covers the box and `nsh.overflow` points beyond each side), unpremultiply, and read transparent
+  outside it. `Shader::inputs` reflects which of them the app's functions call (`Expression::CallResult`); a program
+  that calls none takes upstream's two bind group layouts, one that calls any the two with the pictures
+  (`nsh_engine::shader::layout_index`). The web reads the pictures' sampler uniforms from `GlslProgram::pictures`.
+- **Built-ins.** `struct Nsh` is 32 bytes: `size`, `time`, `scale`, `progress`, `overflow`. The vertex stage maps
+  the target to `uv` from `-overflow / size` to `1 + overflow / size`, so binding 0 is visible to both stages.
+- **Elements.** `ShaderEffect`, `ShaderTransition`, `ScreenEffect` and `ScreenTransition` are `Kind::Shader` nodes
+  whose `ShaderNode::role` comes from their tag; the screen ones are absolutely positioned and 0 × 0. `progress` is a
+  number or an animated value (one more slot whose word is `PROGRESS_WORD`, written into the built-in by
+  `ShaderView::set_slot`), `maxSampleOffset` the layer's `overflow`. A transition without `source` takes
+  `crossfade()` unless `fallback` is `"none"`.
+- **Starts.** When a transition's `value` changes (not its first), `set_shader_prop` queues
+  `MountItem::ShaderTransition { id, duration }` and `commit` puts the queue first in the batch, so the platform takes
+  the `from` picture before applying the batch. `ShaderView::start_transition` runs `nsh.progress` from 0 to 1; once
+  it ends (`transitioning`) the `from` picture goes and the children show as they are (`replaces_children`).
+- **Marks.** `Core::pictured` holds the views whose layers read pictures or cover the screen. After a commit,
+  `mark_shader_inputs` sends `MountItem::ShaderInput` for every effect or transition with a view of the batch in its
+  subtree (`MountItem::view`), and for every backdrop reader and screen layer once anything changed; the platforms
+  take those pictures again, and notice what changes on their UI thread themselves.
+- **Pages and dialogs.** `transitionShader` (`NavShaderSpec`) compiles into a `Transition` layer sent as
+  `MountItem::NavShader { id, shader }` (350 ms by default); the platform draws a push, pop, presentation or dismissal
+  through it, the lower side `from` and the upper `to`.
+- **Linux.** Effects and running transitions draw their last frame instead of their children; whenever GTK draws
+  one again, its children's render node is rendered by the window's renderer into a texture of the box and overflow
+  and downloaded, and given to the shader when its pixels changed. A transition's `from` is that picture taken when it
+  starts (or its last frame, if one runs), shown until the first frame. Screen layers are the root's. A backdrop is the
+  surface's views drawn anew up to the view (`skipped`, `past`) after the frame clock paints, again when the core
+  marks it or anything on the UI thread changes (`NshView::changed`; a shader's own frame only `redraw`s). Pages and
+  dialogs: pictures of the host drawn anew without and with the upper side, through a `NavPainter` (the layer with
+  one more slot for `nsh.progress`) in a layer over the stack or the root; the starting side shows until the first
+  frame.
+- **Windows.** Effects and running transitions (screen ones on the root) draw their last frame instead of their
+  children, which are drawn into a target bitmap by a context of their own and read back (`render::read_back`) as
+  the window draws them, and given to the shader when their pixels changed. A transition's `from` is drawn offscreen
+  when it starts (`render::draw_offscreen`). A backdrop is read back from the window's target before the view draws
+  (partial frames draw the view's whole area, overflow included: `render::drawn_area`). Pages and dialogs: recordings
+  (`ID2D1CommandList`) of the host without and with the upper side, drawn into bitmaps and read back once by a
+  hosted `NavItem` over the stack or the root.
+- **Android** (API 29 and later; Android 9 shows the children as they are). `Pictures.java` records the children
+  into a `RenderNode`, renders it with a `HardwareRenderer` into an `ImageReader` and hands the rows to
+  `Native.shaderInput`; `libnsh` drops a picture equal to the input's last one. `Box.java` takes the role, overflow
+  and inputs from the `SHADER` opcode: an effect pictures its children when they are invalidated or the core marks
+  them (`SHADER_INPUT`) and draws its frame in `dispatchDraw` instead of them (touches and accessibility still reach
+  them); a backdrop is pictured before every draw (`Backdrop.behind`); a transition pictures `from` before the batch
+  (`SHADER_TRANSITION`) and shows it until the first frame. Screen layers draw over the app's view (`NshView`);
+  dialogs, their own windows, are outside. Pages and dialogs (`NAV_SHADER`): `StackBox` and `ModalHost` run a
+  `NavTransition.java` overlay; `nsh.progress` goes through one more slot of the layer, run by a clock of the
+  platform's, 0 to 1 on push and present, 1 to 0 on pop and dismiss.
+- **GPUI.** Fills only: an effect's or a transition's children show as they are, a screen layer draws nothing, pages
+  and dialogs come and go without their shader.
 
-Pages and dialogs take a shader as their `animation` (`ScreenTransition::Shader` /
-`ShaderAnimation { source, uniforms, duration }`; dialogs read the value pages share). The core packs it when it
-sends the config (`Core::nav_shader`: the program sent once, the uniforms packed, 350 ms without a duration) into
-`ScreenConfig::shader` / `MountItem::ModalConfig`'s `shader` (`NavShader { fill, duration }`), keeping the preset for platforms
-that draw no shader transitions (a dialog's is `Fade`). The lower side (the page below, what is behind the dialog)
-is `sample_from`, the upper side `sample_to`, `nsh.progress` how much of the upper side shows: 0 → 1 as it comes,
-1 → 0 as it goes (linear over `duration`), and 1 − the gesture's progress in a back gesture. Every platform draws it
-over the stack (the surface for a dialog) while the views stand where they end under it:
+### On the web
 
-| Platform | Pictures | Progress |
-|---|---|---|
-| macOS | `renderInContext:` of the stack / root with the upper view hidden, and with its own layer drawn over (a view that just came has no layer in the tree until AppKit displays it: the upper side of a push or a dialog that opens is pictured on the first display frame; an image that leaves is drawn upright) (`navigation::Motion::add_overlay`, `shader::NavOverlay`, a `CAMetalLayer` over the host; in-process screenshots add its picture as a topmost subview) | the navigation's frame callback, its own clock |
-| iOS, Mac Catalyst | the navigation controller's view (in its superview, as UIKit reorders the views inside it) or the window over the surface's rectangle for a dialog (the host app's views around it are never an input), before UIKit changes it at once and on the next display frame (`StackHost::reconcile`, `NavPlan`, `shader::NavOverlay`); the system's swipe back stays UIKit's | the shader display link (`Mounter::nav_overlays`) |
-| Android 13+ | each side recorded into a `RenderNode` and rendered by a `HardwareRenderer` (`ShaderBox.picture`); the page that comes once laid out, before it draws; a `ShaderBox` over the stack (in the dialog's window for a dialog) | a `ValueAnimator`; predictive back sets it from the gesture (`backProgressed`), and cancelling runs it back to 1 |
-| Web | painted from the elements (`paintTree`, the upper element as the stop for the lower side) into an element over the stack / root drawn by `drawShader` (`shaderNav`) | `requestAnimationFrame` |
-| Windows | both sides recorded into command lists (`navigation::record`, the upper view concealed for the lower one), drawn into textures by a `shader::NavItem` a layer view over the host hosts | the navigation's frame callback |
-| Linux | both sides drawn anew (`NshView::draw`, the upper view and what follows left out for the lower one) and rendered to textures (`shader::nav_picture`), a `NavPainter`'s node in a layer over the host | the navigation's tick callback |
-| GPUI | the platform's own transition | |
+Effects and transitions (`ShaderEffect`, `ShaderTransition`, `ScreenEffect`, `ScreenTransition`, a page's or a
+dialog's `transitionShader`) take their pictures from the DOM. `shader.rs` also encodes the layer's `role` (0 fill,
+1 effect, 2 transition, 3 screen, 4 screen transition), `overflow`, `progress` and `progressSlot`, and `pictures`:
+`[sampler uniform name, input]` pairs (0 content, 1 backdrop, 2 from, 3 to); `MountItem::ShaderTransition`,
+`ShaderInput` and `NavShader` are `["sht", id, ms]`, `["shi", id]` and `["shn", id, layer, ms]`.
 
-`<ScreenEffect>` and `<ScreenTransition>` (`Tag::ScreenEffect` / `ScreenTransition`, `ViewKind::ScreenEffect` /
-`ScreenTransition`) are shader views of no size (`display: none`, no children) that draw over the whole surface: its
-root view, its dialogs and overlays, never the app around it. The core keeps their shader state as for the other
-kinds and sends the same items: `Shader` (one screen effect at a time has a fill: the last one made with a shader,
-`Core::screen_effects`; the others are sent `None`), `ShaderInput` on every batch that changes anything (the
-surface is their input), `ShaderTransition` first in the batch that changes a screen transition's `value`
-(`shaderSupport().screenTransition` gates it). `nsh.size` is the surface's size and `p` is in points from its
-top-left. The platforms:
+- **Pictures.** `paintTree` paints a view's children into a 2D canvas in points (backgrounds, rounded corners,
+  uniform borders, images fitted by `object-fit`, canvases, other shaders' pictures among them, text runs, clipping
+  and opacity; no rotations, gradients or shadows; cross-origin images without CORS are left out so the canvas stays
+  readable). Pictures cover the box plus `overflow` on each side and are uploaded premultiplied
+  (`UNPACK_PREMULTIPLY_ALPHA_WEBGL`), linear and clamped, to the program's sampler uniforms; an input without a
+  picture reads a transparent texture.
+- **Effects.** The output canvas (`nsh-fx-out`) is appended over the children and grows by the overflow; the view
+  has `nsh-fx`, which puts its children at opacity 0 (they keep their pointer events and hit testing under the
+  canvas) and isolates its stacking. While `paintHost` paints them it lifts `nsh-fx` (`nsh-painting` turns CSS
+  transitions off for that moment). A `MutationObserver` with capture `scroll` and `load` listeners marks the
+  content stale, as `["shi"]` does; stale pictures are painted again in `shaderFrame`, at most once per animation
+  frame. `shownChange` ignores the shaders' own canvases and painting's class toggles.
+- **Backdrops.** `sample_backdrop` is the root painted up to the view (`paintTree` stops at it), watched by one
+  observer on the root for every backdrop shader.
+- **Transitions.** `["sht"]` comes first in its batch: the children as they show (or, when one is running, what it
+  draws) become `sample_from` and the shader draws over them at once; the children painted after the batch are
+  `sample_to`, and `nsh.progress` runs from 0 to 1 over the duration on animation frames. At the end the canvas is
+  cleared and the children show as they are. An animated `progress` (an effect's) is written by `shaderSlot`.
+- **Screens.** A `ScreenEffect` or `ScreenTransition` does the same with the root as its host; its canvas is
+  appended to the root. A screen effect pictures the surface again whenever another shader in it draws.
+- **Pages and dialogs.** `["shn"]` keeps the page's or the dialog's `transitionShader`. `shaderNav` runs it on an
+  overlay over the stack (push, pop) or the root (present, dismiss): `sample_from` is the host painted up to the
+  page or dialog, `sample_to` the whole host, and progress goes from 0 to 1, or 1 to 0 when it leaves; the views
+  are where they end under it at once. Dialogs shown in the top layer (`dialogs: "viewport"`) keep their own motion.
 
-| Platform | `screenEffect` | `screenTransition` |
-|---|---|---|
-| macOS | snapshot: the root becomes an effect (`shader::set_screen`): its children move into a container an empty mask hides, the shader's layer is above everything (z 2e6, over the navigation's overlays), its content the container pictured with the navigation's overlays (`NavOverlay`s, which `renderInContext:` does not draw) drawn over it (`add_overlays`); a navigation overlay that ticks marks it. `picture_of` lifts the root's mask, so the navigation's and the screen's transitions picture the views | a `NavOverlay` over the root (`screen.rs`): the root pictured now, again on the first display frame |
-| iOS, Mac Catalyst | snapshot: a `ShaderHost` (`new_screen`) whose view is out of the tree, over the surface's rectangle on top of the window (`Mounter::sync_screen`), the root's and the presented dialogs' layers masked; its content the window over that rectangle without the effect (`shader::picture` leaves every screen effect out, `set_screen`) with the running `NavOverlay`s drawn over it, taken again on `ShaderInput`, UI-thread changes and every frame while a navigation overlay or UIKit's own presentation runs (`screen_busy`, 700 ms after dialogs change). `render` displays the layers due first (`display_tree`: a text drawn again in this batch) | `NavPlan::before` over the surface's rectangle of the window and a `NavOverlay`, as a dialog's |
-| Android 13+ | live: the screen effect's `ShaderBox` (no size, `screen` 1) prepares its uniforms for each covered view (`screenEffect`, `nsh.size` the surface's, the view's rect in surface points) and its shader becomes the `RenderEffect` of the root, of each shown dialog's view and of the transitions' overlays (`Mounter.applyScreen`, after each batch and on uniform changes, every frame for `nsh.time`) | pictures of the app's view and the dialogs' windows at their screen offsets (`ShaderBox.picture`), the second before the first draw after the batch, through an overlay `ShaderBox` on the topmost window over the surface (`Mounter.screenTransition`) |
-| Web | snapshot: the root element becomes an effect (`screenFill`: its canvas last in it, `.nsh-fx` on it); `drawShader` of any shader in it marks it (`screenDrew`), so the navigation's and the screen's transitions are part of its picture | `shaderNav` over the root with its upper side painted on the first animation frame (`later`), or from the running one's canvas |
-| Windows | live: the root becomes an effect (`Mounter::screen_effect`, `shader::create` on the root): its children, the navigation's layers among them, draw into its content with each frame | `navigation::screen_transition`: the root recorded now and on the first frame (its layer concealed), a `NavItem` (`set_upper`) on a layer view over the root |
-| Linux | live: the root becomes an effect, as on Windows | `navigation::screen_transition`: the root drawn anew now and on the first tick, a `NavPainter` (`set_to`) in a layer over the root |
-| GPUI | `false` | `false` |
+## Pitfalls
 
-`nsh_metal::ShaderLayer` holds pictures of all four inputs (`set_input`, `clear_input`) and takes a transition's
-progress (`set_progress`).
-
-AGSL computes `p` as the pixel's coordinate over the scale plus `nsh_origin`, the frame area's origin, as the other
-writers' vertex stages place `p` over the area: an effect drawn beyond its view starts outside it.
-
-On every platform the fill follows the view's corners and draws above its background, gradients and inset shadows
-and below its borders, as a background does (Android draws the borders itself after the fill, `Decor.bordersAbove`,
-as its image views do).
-
-In-process screenshots on macOS (`nsh test --target macos`) draw each shader again into a texture the CPU reads
-(`ShaderLayer::picture`, shaped as the layer is), since `cacheDisplayInRect` does not draw a `CAMetalLayer`. Android's screenshots use
-`PixelCopy`: a software canvas draws no `RuntimeShader`.
-
-## Verification
-
-`cargo test -p nsh-shader` runs the profile's cases and every corpus shader through all four writers. The platforms'
-own compilers check the programs: `metal_compiles` (ignored by default: it needs Xcode's Metal toolchain) runs `xcrun
-metal` for macOS and iOS; `hlsl_compiles` (Windows) runs `D3DCompile` at `ps_5_0` / `vs_5_0`. `NSH_SHADER_EXPORT=<dir>`
-writes every program to `<dir>` for compilers outside the tests: AGSL through `new RuntimeShader(source)` on a device
-or emulator (a dex run with `app_process`), GLSL ES 3.00 through WebGL 2 in a headless Chrome, GLSL 3.30 through
-macOS's OpenGL; `NSH_SHADER_CORPUS=<dir>` adds a directory of someone else's `.wgsl` files (gl-transitions translated
-from GLSL with naga: 119 of 120 fit the profile, the other declares a global variable; all 119 compile with every
-compiler above).
-
-Size, release with fat LTO, stripped, over an empty binary: the checker (naga's WGSL front end and validator, the
-profile) is 0.94 MB on macOS arm64, 1.04 MB on Android arm64 and 0.79 MB on WebAssembly (`opt-level = "z"`, 0.24 MB
-with brotli); the writers add MSL 0.27 MB, HLSL 0.33 MB, GLSL 0.19 MB (WebAssembly 0.14 MB, 0.04 MB with brotli) and
-AGSL 0.10 MB.
-
-The element: `nsh-core`'s `shader::tests` (packing, bindings, images, the buffers), `nsh-engine`'s `shader` tests (a
-`.wgsl` import and `createShader` end to end: one program per shader, the packed fills, the bindings, errors and
-`shaderSupport()`), the `paint` domain's `paint-shader` case in `tests/compat`, and the gallery's Shaders demo
-(`examples/gallery/demos/ShaderDemo.tsx`: `nsh.time`, animated uniforms, an image). The platforms are checked by
-running them: `nsh test <entry> --target macos|ios|android|web` with `app.screenshot(..)` steps.
+- **The y direction on the web.** The GLSL is written without `WriterFlags::ADJUST_COORDINATE_SPACE`: the shared
+  canvas is shown as it is drawn (its picture moved to the view's canvas, top row first), and WGSL's clip space
+  (+y up) is GL's too. wgpu's GL backend sets the flag because it renders into textures read top-down; here it would
+  turn every shader upside down.
+- **Hashes in app shaders.** The classic `fract(sin(dot(p, k)) * 43758.5453)` hash gives discontinuous value noise:
+  the large multiplier amplifies rounding differences, and two evaluations of one lattice corner (from neighbouring
+  cells) differ once a GPU compiler reorders the arithmetic, so seams show along cell edges and differ between GPUs.
+  Use an integer hash of the cell (`bitcast<vec2u>(vec2i(floor(p)))` mixed with multiplies and xor-shifts), as the
+  gallery's `examples/gallery/demos/Shaders.tsx` does.
+- **Premultiplied alpha.** `shade` returns straight alpha; the core premultiplies and the renderers draw with blending
+  off, so frames are premultiplied (GPUI's images are straight: its backend converts). Do not premultiply again on a
+  platform.
+- **Readback latency.** Native frames arrive one or two display frames after `render`; a backend must keep ticking
+  while `ShaderView::pending()` is true, or the last frame of a change never shows.

@@ -1,447 +1,335 @@
 ---
 title: Shader
-description: "The Shader element: a view filled by a GPU shader written in WGSL, its children drawn over it."
-order: 8.5
+description: "The Shader element: a view whose box a GPU program written in WGSL draws, under its children."
+order: 70
 group: primitives
 demo: el-shader
 ---
 
 # Shader
 
-A shader view is a view the GPU fills: gradients that drift, glows, noise, an image distorted by ripples, any look a
-function of the pixel's position can describe. The app writes the shader in WGSL, the language of WebGPU; NSH checks
-it when the app builds and when it is made, and each platform runs it on its own GPU API: Metal on iOS, Mac Catalyst
-and macOS, AGSL runtime shaders on Android 13 and later, Direct3D 11 on Windows, OpenGL ES 3 on Linux and WebGL 2 on
-the web. The view's children draw over the shader, and its styles (corners, borders, clipping, shadows) apply as on
-any view.
+A shader is a view whose box a GPU program draws: gradients that flow, noise and grain, plasma, aurora, holographic
+foil, ripples that follow a tap. You write one WGSL function, `shade`, that gives the color of each point of the box;
+the platform runs it on the GPU at the screen's resolution, over the view's background and under its children.
+Animated values move it natively, frame by frame, with no work in the app's code. TSX makes one with `<Shader>` from
+`nsh`, Rust with `shader().source(program)`.
 
 ```rust tabs
-use std::sync::LazyLock;
+use nsh_core::{prelude::*, shader::Shader};
 
-use nsh_core::{
-    shader::{ShaderLimits, ShaderSource, Uniforms},
-    prelude::*,
-};
+const GLOW: &str = r#"
+struct Uniforms { tint: vec4f }
 
-/// Made once: each `ShaderSource::new` checks the source again.
-static GLOW: LazyLock<ShaderSource> = LazyLock::new(|| {
-    ShaderSource::new(include_str!("glow.wgsl"), &ShaderLimits::default()).expect("a shader")
-});
+fn shade(uv: vec2f) -> vec4f {
+  let d = distance(uv, vec2f(0.5));
+  let pulse = 0.5 + 0.5 * sin(nsh.time * 2.0);
+  let glow = smoothstep(0.5, 0.0, d) * (0.6 + 0.4 * pulse);
+  return vec4f(uniforms.tint.rgb * glow, 1.0);
+}
+"#;
 
 fn glow() -> impl IntoElement {
-    shader(GLOW.clone())
-        .uniforms(Uniforms::new().set("tint", rgb(0xf59e0b)).set("radius", 64.0))
+    let program = Shader::compile(GLOW).expect("a valid shader");
+    shader()
+        .source(program)
+        .uniform("tint", Hsla::from(rgb(0x38bdf8)))
         .h(px(200.0))
-        .rounded_xl()
-        .items_center()
-        .justify_center()
-        .child(text("Over the shader").text_color(white()))
+        .rounded(px(14.0))
 }
 ```
 
 ```tsx tabs
-import { mount, Shader, Text } from "nsh";
-import glow from "./glow.wgsl";
+import { mount, Shader } from "nsh";
+
+const GLOW = /* wgsl */ `
+struct Uniforms { tint: vec4f }
+
+fn shade(uv: vec2f) -> vec4f {
+  let d = distance(uv, vec2f(0.5));
+  let pulse = 0.5 + 0.5 * sin(nsh.time * 2.0);
+  let glow = smoothstep(0.5, 0.0, d) * (0.6 + 0.4 * pulse);
+  return vec4f(uniforms.tint.rgb * glow, 1.0);
+}`;
 
 function Glow() {
-  return (
-    <Shader
-      src={glow}
-      uniforms={{ tint: "#f59e0b", radius: 64 }}
-      style={{ height: 200, borderRadius: 12, alignItems: "center", justifyContent: "center" }}
-    >
-      <Text style={{ color: "white" }}>Over the shader</Text>
-    </Shader>
-  );
+  return <Shader source={GLOW} uniforms={{ tint: "#38bdf8" }} style={{ height: 200, borderRadius: 14 }} />;
 }
 
-mount(Glow);
+mount(() => <Glow />);
 ```
 
+## The shader
+
+A shader's source is WGSL, the shading language of WebGPU. It defines one function:
+
 ```wgsl
-// glow.wgsl
+fn shade(uv: vec2f) -> vec4f
+```
+
+- `uv` is the point of the view's box, from `(0, 0)` at its top left corner to `(1, 1)` at its bottom right, y
+  growing downwards as in CSS.
+- The result is the point's color: red, green, blue and alpha in 0..1, in sRGB with straight alpha, as CSS colors
+  are. Values outside 0..1 are clamped.
+
+Next to `shade` the source holds whatever helper functions, constants and `var<private>` variables it needs. NSH
+supplies the entry points and reads the shader's inputs from two places.
+
+### Built-ins
+
+| Built-in | Type | Value |
+|---|---|---|
+| `nsh.size` | `vec2f` | The view's size in points. |
+| `nsh.time` | `f32` | Seconds since the shader appeared. A shader that reads it animates: it draws every frame while it is on screen. |
+| `nsh.scale` | `f32` | Pixels per point of the frame being drawn. |
+
+`uv * nsh.size` is the point in points; `nsh.size.x / nsh.size.y` is the aspect ratio, which keeps circles round in
+a box that is not square.
+
+### Uniforms
+
+Values the app sets go in a struct named `Uniforms`, which the shader reads as `uniforms`:
+
+```wgsl
 struct Uniforms {
-  tint: vec4f,
-  radius: f32,
+  colors: array<vec4f, 4>,
+  speed: f32,
+  center: vec2f,
 }
 
-fn main(p: vec2f, u: Uniforms) -> vec4f {
-  let d = length(p - nsh.size * 0.5);
-  return u.tint * (1.0 - smoothstep(u.radius * 0.6, u.radius, d));
+fn shade(uv: vec2f) -> vec4f {
+  let t = nsh.time * uniforms.speed;
+  // …
 }
 ```
 
-## Writing a shader
+The `uniforms` prop sets its members by name. Each type takes these values:
 
-A shader is one function, `main`, that returns the color of a pixel:
-
-- `p` is the pixel's position in points from the view's top-left corner; the result is a premultiplied color (its
-  red, green and blue already multiplied by its alpha), each component from 0 to 1.
-- The uniforms are the fields of the struct `main` takes as its second parameter (`fn main(p: vec2f) -> vec4f` takes
-  none): `f32`, `i32`, vectors of them, square `f32` matrices, fixed arrays of those (`array<vec4f, 8>`: an array's
-  elements are 16 bytes apart) and `Image`.
-- `nsh` holds the view: `nsh.size` (its size in points), `nsh.scale` (pixels per point), `nsh.time` (seconds since
-  the shader first drew) and `nsh.progress` (the element's `progress`).
-- `sample_image(u.field, p)` reads an `Image` uniform at a position in points, the image stretched over the view
-  (`u.field.size` is its size in points, to fit it another way). Outside the image a sample is transparent.
-
-NSH's WGSL is the part of the language every platform runs: loops are counted `for` loops with constant bounds, array
-indexes are constants or loop counters, and a pixel takes at most 128 texture samples. Names starting with `nsh_` are
-NSH's. A shader outside these rules is an error at build time, with its line and column in the `.wgsl` file.
-
-## Making a shader
-
-A `.wgsl` file the app imports is a shader, checked when the app builds. `.nsh/types` declares each file's uniforms,
-so the type checker knows `uniforms`' names and the values each takes:
-
-```tsx
-import ripple from "./ripple.wgsl"; // ShaderAsset<{ center?: …; strength?: … }>
-
-ripple.uniforms; // ["center", "strength"]: the names, in the struct's order
-```
-
-`createShader(source)` makes one from a string at run time (a shader the app downloads or builds). It throws a
-`SyntaxError` naming the line and column of what NSH's WGSL does not take; the same source always gives the same
-shader. In Rust, `ShaderSource::new(source, &limits)` returns the shader or the error.
-
-```tsx
-import { createShader } from "nsh";
-
-const stripes = createShader(`
-fn main(p: vec2f) -> vec4f {
-  let on = step(0.5, fract((p.x + p.y) / 24.0));
-  return vec4f(vec3f(on * 0.15), 1.0);
-}`);
-```
-
-## Uniforms
-
-`uniforms` gives each uniform its value by name; a uniform left out is 0.
-
-| WGSL type | Value |
+| WGSL type | Values |
 |---|---|
-| `f32` | a number, or an [animated value](../modules/nsh-animated.md) |
-| `i32` | a number (rounded) |
-| `vec2f` | `[x, y]`, a point `{ x, y }`, a size `{ width, height }`, or a number for both |
-| `vec3f`, `vec4f` | a list of numbers, or a CSS color (premultiplied RGB / RGBA); `vec4f` also an animated color |
-| `vec2i` … `vec4i` | a list of numbers |
-| `mat2x2f` … `mat4x4f` | a list of numbers, column by column |
-| `array<T, N>` | a list of `T`'s values (a flat list of numbers fills vectors in turn) |
-| `Image` | an image: an imported image, a URI (`https://…`, `asset:/…`) |
+| `f32`, `i32`, `u32` | A number (rounded toward zero for `i32` and `u32`), or an animated value |
+| `vec2f` | `[x, y]`: two numbers or animated values |
+| `vec3f` | A color (its red, green and blue), an animated color, or three numbers |
+| `vec4f` | A color with its alpha, an animated color, or four numbers |
+| `array<vec4f, N>` | A list of up to `N` colors (or of four numbers each): a palette, the stops of a gradient |
 
-Animated values are written into the shader's buffer on the UI thread: a spring or a timing on them redraws the
-shader every frame they move, with no work in the app's code per frame.
-
-```rust tabs
-let radius = animated_value(24.0);
-radius.spring(96.0, Spring::default());
-
-shader(GLOW.clone()).uniforms(Uniforms::new().set("tint", rgb(0x38bdf8)).set("radius", &radius))
-```
-
-```tsx tabs
-import { createAnimatedValue } from "nsh";
-
-const radius = createAnimatedValue(24);
-radius.spring(96);
-
-<Shader src={glow} uniforms={{ tint: "#38bdf8", radius }} style={{ height: 200 }} />;
-```
-
-## When it draws
-
-A shader draws when what it reads changes: its uniforms, an image that loaded, the view's size, an animated value as
-it moves. A shader that reads `nsh.time` draws every frame while it is on screen.
-
-## Effects: children through a shader
-
-`<ShaderEffect>` draws its children through a shader: what they draw is the shader's input, `sample_content(p)`, and
-the shader's result is what shows. The children stay views: they lay out, take touches and clicks, and read to
-screen readers as usual. `maxSampleOffset` is how far beyond a pixel the shader samples them, in points (a ripple's
-reach, a blur's radius): the children are drawn that much beyond the view's bounds for it. Without `src` the
-children draw as they are.
-
-```rust tabs
-static WAVE: LazyLock<ShaderSource> = LazyLock::new(|| {
-    ShaderSource::new(include_str!("wave.wgsl"), &ShaderLimits::default()).expect("a shader")
-});
-
-let progress = animated_value(0.0);
-progress.timing(1.0, 2000.0, Easing::Linear);
-
-shader_effect(Some(WAVE.clone()))
-    .uniforms(Uniforms::new().set("amount", 8.0))
-    .progress(&progress)
-    .max_sample_offset(px(12.0))
-    .child(card())
-```
-
-```tsx tabs
-import { ShaderEffect } from "nsh";
-import { createAnimatedValue, Easing } from "nsh";
-import wave from "./wave.wgsl";
-
-const progress = createAnimatedValue(0);
-progress.timing(1, { duration: 2000, easing: Easing.linear });
-
-<ShaderEffect src={wave} uniforms={{ amount: 8 }} progress={progress} maxSampleOffset={12}>
-  <Card />
-</ShaderEffect>;
-```
-
-```wgsl
-// wave.wgsl
-struct Uniforms { amount: f32 }
-
-fn main(p: vec2f, u: Uniforms) -> vec4f {
-  let shift = sin(p.y * 0.09 + nsh.progress * 6.2832) * u.amount;
-  return sample_content(p + vec2f(shift, 0.0));
-}
-```
-
-`progress` is what the shader reads as `nsh.progress`: a number, or an animated value the UI thread writes. Both
-elements take it.
-
-## What is behind a view
-
-`sample_backdrop(p)` reads what the window draws behind the view: the views under it, without the view itself and
-what it contains. A `<Shader>` that samples it makes frosted glass, tinted panes, lenses:
-
-```wgsl
-fn main(p: vec2f) -> vec4f {
-  // Noise per device pixel turns and shifts its samples: an even grain
-  // instead of copies of what is behind.
-  var h = fract(vec3f(floor(p * nsh.scale).xyx) * vec3f(0.1031, 0.1030, 0.0973));
-  h += dot(h, h.yzx + 33.33);
-  let noise = fract((h.xx + h.yz) * h.zy);
-  var c = vec4f(0.0);
-  var total = 0.0;
-  for (var i = 0; i < 96; i++) {
-    let d = sqrt((f32(i) + noise.y) / 96.0) * 17.5;
-    let a = f32(i) * 2.3999632 + noise.x * 6.2831853;
-    let w = exp(-0.5 * d * d / 49.0);
-    c += sample_backdrop(p + vec2f(cos(a), sin(a)) * d) * w;
-    total += w;
-  }
-  return c / total * 0.8 + vec4f(0.2);
-}
-```
-
-## Transitions: children that change through a shader
-
-`<ShaderTransition>` changes its children through a shader when its `value` changes: a picture of what they drew
-before is the shader's `sample_from(p)`, what they draw now its `sample_to(p)`, and `nsh.progress` goes from 0 to 1
-over `duration` milliseconds (300 by default). Then the children show as they are. The new children are views from
-the start: they lay out, take touches and clicks and update while the transition runs. A transition that starts while
-another runs starts from what shows. Without `src` it runs its `fallback`: a cross-fade (`"fade"`, the default) or
-nothing (`"none"`).
-
-```rust tabs
-static REVEAL: LazyLock<ShaderSource> = LazyLock::new(|| {
-    ShaderSource::new(include_str!("reveal.wgsl"), &ShaderLimits::default()).expect("a shader")
-});
-
-let page = signal(0.0);
-
-shader_transition(Some(REVEAL.clone()))
-    .value(move || TransitionKey::from(page.get()))
-    .duration(Duration::from_millis(500))
-    .child(dynamic(move || card(page.get())))
-```
-
-```tsx tabs
-import { ShaderTransition, signal } from "nsh";
-import reveal from "./reveal.wgsl";
-
-const page = signal(0);
-
-<ShaderTransition src={reveal} value={page()} duration={500}>
-  <Card n={page()} />
-</ShaderTransition>;
-```
-
-```wgsl
-// reveal.wgsl: the new side grows from the middle in a circle.
-fn main(p: vec2f) -> vec4f {
-  let c = nsh.size * 0.5;
-  let r = length(nsh.size) * 0.5 * nsh.progress;
-  let edge = smoothstep(r - 2.0, r + 2.0, length(p - c));
-  return mix(sample_to(p), sample_from(p), edge);
-}
-```
-
-## Pages and dialogs through a shader
-
-A page's and a dialog's `animation` takes a shader as well as a preset: `{ shader, uniforms, duration }`. The lower
-side (the page below, what is behind the dialog) is the shader's `sample_from(p)`, the upper side (the page, the
-dialog) its `sample_to(p)`, and `nsh.progress` is how much of the upper side shows: from 0 to 1 over `duration`
-milliseconds (350 by default) as it comes, from 1 to 0 as it goes, and with the finger in a back gesture. One shader
-serves both ways.
+Colors are any CSS color (`"#38bdf8"`, `"rgb(56 189 248)"`, `"hsl(199 93% 60%)"`) and reach the shader as sRGB
+components in 0..1. Members the app leaves out are zero. Setting `uniforms` again draws the shader again with the new
+values.
 
 ```tsx
-import { NavPage } from "nsh/base";
-import reveal from "./reveal.wgsl";
+const palettes = { Sunset: ["#ff6b6b", "#ffb86b", "#7b5cff", "#ff4fa3"], Lagoon: ["#00c2a8", "#2f80ed", "#a0f0ff", "#0b3d91"] };
+const palette = signal<keyof typeof palettes>("Sunset");
 
-<NavPage title="Details" animation={{ shader: reveal, duration: 500 }}>
-  <Details />
-</NavPage>;
+<Shader source={MESH} uniforms={{ colors: palettes[palette()], speed: 0.5 }} style={{ height: 200 }} />;
 ```
 
-## The whole screen through a shader
+## Animated uniforms
 
-`<ScreenEffect>` draws the whole surface through a shader: what it shows (its pages, dialogs and overlays) is the
-shader's `sample_content(p)`, `p` in points from the surface's top-left, `nsh.size` the surface's size, and the
-shader's result is what shows. The views stay where they are: they lay out, take touches and clicks and stay in the
-accessibility tree. `<ScreenTransition>` changes the whole surface through a shader when its `value` changes, as
-`<ShaderTransition>` does its children: the surface as it showed is `sample_from(p)`, as it shows now `sample_to(p)`,
-and `nsh.progress` goes from 0 to 1 over `duration` milliseconds (300 by default); without `src` it runs its
-`fallback`. Both are declared anywhere, take no space and have no children; a screen effect without `src` leaves the
-surface as it is, and of several screen effects the last one made draws. What they draw is the surface: never the
-app around it.
-
-A theme that changes through a circle growing from where the user pressed:
+A uniform may be a [native animated value](../modules/nsh.md#animation), or a node derived from one
+(`interpolate`, arithmetic). The platform writes its value into the shader on every frame it changes and draws again,
+on the UI thread: the animation runs at full frame rate however busy the app's code is. Numbers animate `f32`, `i32`
+and `u32` members and the components of a `vec2f`; an interpolation to colors animates a `vec3f` or `vec4f`.
 
 ```rust tabs
-static REVEAL: LazyLock<ShaderSource> = LazyLock::new(|| {
-    ShaderSource::new(include_str!("reveal-at.wgsl"), &ShaderLimits::default()).expect("a shader")
-});
+use nsh_core::{prelude::*, shader::Shader};
 
-let dark = signal(false);
-
-v_flex()
-    .child(
-        screen_transition(Some(REVEAL.clone()))
-            .value(move || TransitionKey::from(dark.get()))
-            .uniforms(Uniforms::new().set("center", [40.0, 80.0]))
-            .duration(Duration::from_millis(600)),
-    )
-    .child(settings(dark))
+fn ripple(program: Shader) -> impl IntoElement {
+    let wave = animated_value(0.0);
+    wave.timing(1.0, 2200.0, Easing::Linear);
+    shader()
+        .source(program)
+        .uniform("wave", &wave)
+        .uniform("center", [0.5_f32, 0.5])
+        .h(px(200.0))
+}
 ```
 
 ```tsx tabs
-import { ScreenTransition, signal } from "nsh";
-import reveal from "./reveal-at.wgsl";
+import { Animated, cleanup, createAnimatedValue, Easing, Shader } from "nsh";
 
-const dark = signal(false);
+const RIPPLE = /* wgsl */ `
+struct Uniforms { center: vec2f, wave: f32, tint: vec4f }
+fn shade(uv: vec2f) -> vec4f {
+  let d = distance(uv * nsh.size, uniforms.center * nsh.size) / max(nsh.size.x, nsh.size.y);
+  let ring = exp(-pow((d - uniforms.wave * 0.75) * 28.0, 2.0)) * (1.0 - uniforms.wave);
+  return vec4f(vec3f(0.03, 0.03, 0.06) + uniforms.tint.rgb * ring * 1.6, 1.0);
+}`;
 
-<>
-  <ScreenTransition src={reveal} value={dark()} uniforms={{ center: { x: 40, y: 80 } }} duration={600} />
-  <Settings dark={dark} />
-</>;
-```
-
-```wgsl
-// reveal-at.wgsl: the new side grows in a circle from `center`.
-struct Uniforms { center: vec2f }
-
-fn main(p: vec2f, u: Uniforms) -> vec4f {
-  let r = length(nsh.size) * nsh.progress;
-  let edge = smoothstep(r - 2.0, r + 2.0, length(p - u.center));
-  return mix(sample_to(p), sample_from(p), edge);
+function Ripple() {
+  const wave = createAnimatedValue(0);
+  const tint = wave.interpolate({ inputRange: [0, 1], outputRange: ["#38bdf8", "#c084fc"] });
+  const loop = Animated.loop(Animated.timing(wave, { toValue: 1, duration: 2200, easing: Easing.out(Easing.quad) }));
+  loop.start();
+  cleanup(() => loop.stop());
+  return <Shader source={RIPPLE} uniforms={{ center: [0.5, 0.5], wave, tint }} style={{ height: 200, borderRadius: 14 }} />;
 }
 ```
 
-And the whole surface in grayscale, darker toward its edges:
+## Pausing
+
+`paused` stops the shader's clock: `nsh.time` keeps its value and the shader holds its picture. Setting it back to
+`false` starts the clock from where it stopped. Uniforms and size changes still draw a paused shader.
 
 ```tsx
-import { ScreenEffect } from "nsh";
-import vignette from "./vignette.wgsl";
+const paused = signal(false);
 
-<ScreenEffect src={calm() ? vignette : null} />;
+<Shader source={AURORA} paused={paused()} style={{ height: 200 }} onPress={() => paused.set(!paused())} />;
 ```
 
-```wgsl
-// vignette.wgsl
-fn main(p: vec2f) -> vec4f {
-  let c = sample_content(p);
-  let l = dot(c.rgb, vec3f(0.2126, 0.7152, 0.0722));
-  let v = 1.0 - 0.6 * smoothstep(0.3, 0.9, length(p / nsh.size - 0.5) * 1.4);
-  return vec4f(vec3f(l) * v, c.a);
-}
+A shader that does not read `nsh.time` draws when its size or its uniforms change, and holds its picture in between.
+
+## Children and clipping
+
+A shader is a container: it takes every prop of a [view](./view.md) (styles, padding and layout of its children,
+press and gesture props, `onLayout`, accessibility, `ref`), and its children draw over the shader. The shader fills
+the view's box the way a background does, inside its rounded corners (`borderRadius`), over its `backgroundColor`.
+
+```tsx
+<Shader source={HOLO} uniforms={{ tilt }} style={{ height: 200, borderRadius: 18, padding: 20, justifyContent: "space-between" }}>
+  <Text style={{ color: "#ffffff", fontSize: 13, fontWeight: "600" }}>NATIVE SHELL</Text>
+  <Text style={{ color: "#ffffff", fontSize: 26, fontWeight: "700" }}>4242 0000 1717</Text>
+</Shader>
 ```
+
+Give the shader a size through its styles (width / height, `flex`, an aspect ratio) or let its children size it.
+
+## Effects, transitions and the screen
+
+A shader can also draw what other views draw. Its WGSL then reads pictures through four functions, each taking a
+point `uv` of its box and returning a straight sRGB color with alpha, transparent outside the picture:
+
+| Function | Reads |
+|---|---|
+| `sample_content(uv)` | an effect's children, or the whole surface for a screen effect |
+| `sample_backdrop(uv)` | what is behind the view (any shader may read it) |
+| `sample_from(uv)` | a transition's side it leaves |
+| `sample_to(uv)` | a transition's side it comes to |
+
+`nsh.progress` is an effect's `progress` or how far a transition is (0 to 1), and `nsh.overflow` how far beyond the
+box the shader draws, in points.
+
+**`ShaderEffect`** draws its children through the shader: they keep their presses, focus and accessibility, and what
+shows is the shader's result. `progress` is a number or an animated value, which moves the effect natively.
+`maxSampleOffset` lets the shader draw that many points beyond the box (a glow, a blur's edge); its `uv` then goes
+below 0 and above 1. Without `source` the children draw as they are.
+
+```tsx
+import { createAnimatedValue, ShaderEffect, Text } from "nsh";
+
+const WIPE_OUT = `
+fn shade(uv: vec2f) -> vec4f {
+  let c = sample_content(uv);
+  let edge = smoothstep(nsh.progress - 0.05, nsh.progress + 0.05, uv.x);
+  return vec4f(c.rgb, c.a * edge);
+}`;
+
+const gone = createAnimatedValue(0);
+
+<ShaderEffect source={WIPE_OUT} progress={gone} style={{ padding: 16 }}>
+  <Text>Wiped away as `gone` goes to 1</Text>
+</ShaderEffect>
+```
+
+**`ShaderTransition`** changes its children through the shader when `value` (a string, number or boolean) changes,
+not for its first value: `sample_from` is a picture of what they drew before, `sample_to` what they draw now, and
+`nsh.progress` goes from 0 to 1 over `duration` milliseconds (300). Without `source` it runs `fallback`: `"fade"` (a
+cross-fade, the default) or `"none"`.
+
+```tsx
+<ShaderTransition source={WIPE} value={card()} duration={450}>
+  <Card name={card()} />
+</ShaderTransition>
+```
+
+**`ScreenEffect`** and **`ScreenTransition`** do the same for the whole surface (its pages, dialogs and overlays). They
+take no space and have no children; put them anywhere in the app. The last screen effect mounted with a `source`
+draws.
+
+Pages and dialogs come and go through a shader with **`transitionShader`**: `{ source, uniforms, duration }` on a
+`NavPage` or a `Dialog`. When the page is pushed or popped, or the dialog shown or closed, the lower side is
+`sample_from` and the upper `sample_to`; the platform's own `animation` runs where a shader cannot.
+
+```tsx
+<NavPage title="Details" transitionShader={{ source: RIPPLE, duration: 500 }}>…</NavPage>
+```
+
+The platforms take the pictures when what they show changes, at most once per display frame. A picture is drawn by
+the platform's own renderer, so what it cannot draw into a picture (a video, a web page, another app's view) shows
+transparent in it.
 
 ## Props
 
-A shader view takes the props of a [view](./view.md) (styles, children, press and gesture props, `onLayout`,
-accessibility, `ref`, …) plus:
+A shader takes the props of a [view](./view.md) plus:
 
 | Prop | Rust | Type | Description |
 |---|---|---|---|
-| `src` | `shader(source)` | `ShaderAsset<U>` | The shader: a `.wgsl` import or `createShader`'s result. |
-| `uniforms` | `.uniforms(uniforms)` | `U` (the shader's uniforms) | The values of its uniforms, by name. |
-| `progress` | `.progress(progress)` | `number \| AnimatedNode` | What the shader reads as `nsh.progress`. |
+| `source` | `.source(program)` | `string` | The WGSL source defining `fn shade(uv: vec2f) -> vec4f`. Rust compiles it with `Shader::compile(source)`. |
+| `uniforms` | `.uniform(name, value)` | `Record<string, ShaderUniform>` | The values of the members of `struct Uniforms`, by name: numbers, colors, animated values and lists of them. |
+| `paused` | `.paused(bool)` | `boolean` | Stops the clock of `nsh.time`. Default `false`. |
 
-A shader effect takes the same, with an optional `src` (`shader_effect(Some(source))`, `None` for none), plus:
-
-| Prop | Rust | Type | Description |
-|---|---|---|---|
-| `maxSampleOffset` | `.max_sample_offset(px(…))` | `number` | How far beyond a pixel the shader samples its content, in points. |
-
-A shader transition takes the props of a view, `uniforms` and `maxSampleOffset` as an effect does, an optional `src`
-(`shader_transition(Some(source))`), plus:
+`ShaderEffect` and `ScreenEffect` take those (`source` optional) plus:
 
 | Prop | Rust | Type | Description |
 |---|---|---|---|
-| `value` | `.value(value)` | `string \| number \| boolean` | What its children show: when it changes, they change through the shader. |
-| `duration` | `.duration(Duration)` | `number` | How long a transition runs, in milliseconds (300). |
-| `fallback` | `.fallback(TransitionFallback)` | `"fade" \| "none"` | What it runs without `src`: a cross-fade (the default) or nothing. |
+| `progress` | `.progress(n)`, `.animated_progress(&value)` | `number \| AnimatedNode` | `nsh.progress`. Default 0. |
+| `maxSampleOffset` | `.max_sample_offset(px(n))` | `number` | How far beyond the box, in points, the shader draws and its pictures reach (`ShaderEffect` and `ShaderTransition`). Default 0. |
 
-A screen effect takes an optional `src` (`screen_effect(Some(source))`, `None` for none), `uniforms` and `progress`;
-a screen transition an optional `src` (`screen_transition(Some(source))`), `uniforms`, `value`, `duration` and
-`fallback`, as a shader transition does. Neither takes styles or children.
+`ShaderTransition` and `ScreenTransition` take `source`, `uniforms` and `paused` plus:
 
-## Support
+| Prop | Rust | Type | Description |
+|---|---|---|---|
+| `value` | `.value(key)` | `string \| number \| boolean` | When it changes, the transition runs (not for the first value). |
+| `duration` | `.duration(Duration)` | `number` | How long it runs, in milliseconds. Default 300. |
+| `fallback` | `.fallback(TransitionFallback)` | `"fade" \| "none"` | What runs without a `source`. Default `"fade"`. |
 
-`shaderSupport()` from `nsh` says what the platform draws: `{ fill, backdrop, effect, transition, screenEffect,
-screenTransition }`, each `"live"`,
-`"snapshot"` or `false`. `fill` is `<Shader>`: `"live"` on iOS, Mac Catalyst, macOS, Android 13 and later, Windows,
-Linux and the web. `effect` is `<ShaderEffect>` and `backdrop` a shader that samples what is behind it: `"live"` on
-Android 13 and later and Windows, and `"snapshot"` on iOS, Mac Catalyst, macOS and the web: there the shader reads a picture of its input, taken again when it
-changes. On Linux `effect` is `"live"` and `backdrop` `"snapshot"`. `transition` is `<ShaderTransition>` and the
-pages' and dialogs' shader animations: `"live"` on Android 13 and later, Windows and Linux, `"snapshot"` on iOS, Mac
-Catalyst, macOS and the web; where it is `false`, the children change at once, and pages and dialogs come and go with
-the platform's own transition (a dialog fades). `screenEffect` is `<ScreenEffect>`: `"live"` on Android 13 and later,
-Windows and Linux, `"snapshot"` on iOS, Mac Catalyst, macOS and the web. `screenTransition` is `<ScreenTransition>`:
-`"snapshot"` on iOS, Mac Catalyst, macOS, Android 13 and later, Windows, Linux and the web; where it is `false`, the
-surface changes at once. Where `fill` is `false`, a shader view shows its children and its own styles, so a layout that
-puts content over a shader reads the same everywhere; where `effect` is `false`, an effect shows its children as they
-are, and where `backdrop` is `false`, `sample_backdrop` reads transparent.
+`NavPage` and `Dialog` take `transitionShader`: `{ source: string; uniforms?: Record<string, ShaderUniform>; duration?: number }` (350 ms by default).
 
-```tsx
-import { shaderSupport } from "nsh";
+## Errors
 
-const fancy = shaderSupport().fill !== false;
+NSH checks every shader when its source is set, before it reaches the GPU. A shader that does not compile logs a
+warning with the line and column in its source and what is wrong, for example:
+
+```text
+the shader of node 12: 2:1: `shade` takes the point's `uv: vec2f` and returns its color, a `vec4f`
 ```
 
-## Limits
+The view then shows its background and children. A uniform the struct lacks, or a value its type does not take,
+logs a warning naming the uniform, and the other uniforms apply.
 
-An app embedded in another one makes up to 64 shaders (`createShader` throws a `RangeError` beyond), and a pixel of
-a shader takes up to 128 texture samples, which the host app sets with its
-[limits](../docs/sandbox-and-capabilities.md#limits) (`samples`).
+Each source compiles once: views that share a source, and a source set again, use the compiled shader.
 
-## Platform notes
+## Rules and limits
 
-- iOS, Mac Catalyst and macOS draw with Metal in a `CAMetalLayer` over the view's background; programs compile off the
-  main thread. There an effect and a backdrop read a picture of their input, taken again on the next frame after it
-  changes; shaders, videos and web views inside an effect or behind a backdrop read as transparent there. A
-  transition's two sides are pictures too: the children before the change, and as they are, taken again as they
-  change.
-- Android draws with a `RuntimeShader` (Android 13, API 33, and later) when the view draws. An effect runs it as the
-  render effect of its children's drawing, a backdrop shader as the render effect of what is behind the view: both
-  read their input live. A shader there reads one live input, its content or its backdrop. A transition reads its new
-  children live and a picture of the old ones, taken when it starts.
-- Windows renders with Direct3D 11 into a texture Direct2D draws. An effect's children and what is behind a backdrop
-  are drawn into textures with each frame, so both read their input live, as does a transition's new side; its old
-  side is drawn once when it starts.
-- Linux renders with OpenGL ES 3 into a texture GTK draws. An effect renders its children with each frame it draws,
-  as does a transition its new side (its old side is rendered once when it starts); a backdrop reads a picture of
-  what is behind the view, taken again on the next frame after it changes.
-- The web renders with WebGL 2 into a canvas in the view's element. An effect and a backdrop read a picture NSH paints
-  of the elements (backgrounds, rounded corners, borders, images, canvases and text), taken again on the next frame
-  after they change, and so does a transition of its two sides.
-- A screen effect draws over the surface's root view and its dialogs, which keep their touches: on iOS and Mac
-  Catalyst over the window's area of the surface, with the dialogs UIKit presents and what it draws around them; on
-  Android as the render effect of the app's view and of each dialog's window, read live; on macOS, Windows, Linux and
-  the web the root view holds everything of the surface. A page's, a dialog's or the screen's transition through a
-  shader is part of what a screen effect shows. A screen transition pictures the same area before its change and
-  after it.
+- `shade` has exactly the signature `fn shade(uv: vec2f) -> vec4f`. The source declares its own functions,
+  constants, structs and `var<private>` variables; NSH supplies the entry points and the bindings.
+- The source is at most 64 KiB.
+- `struct Uniforms` takes at most 4096 bytes, with members of the types in the table above.
+- A frame is at most 4096 pixels a side: a larger view draws its shader at a lower scale.
+
+For noise, hash the integer cell a point is in (`bitcast<vec2u>(vec2i(floor(p)))` mixed with multiplies and
+xor-shifts) rather than `fract(sin(…) * 43758.5)`: integer hashes give the same value for a cell everywhere it is
+computed, so value noise stays seamless on every GPU. The gallery's shaders show one.
+
+## Platforms
+
+On iOS, Android, macOS, Windows and Linux, and in GPUI apps, NSH renders shaders on the GPU with wgpu (Metal on Apple
+platforms, Vulkan, Direct3D 12 or OpenGL elsewhere) at the screen's scale, and shows each frame under the view's
+children. Rendering runs alongside the UI: a frame appears one or two display frames after it is drawn, and the UI
+stays responsive while the GPU works. On the web, NSH translates the shader to GLSL and draws it with WebGL 2.
+
+Shaders draw at most once per display frame, and only when what they show changes: a shader with fixed uniforms draws
+once, one that reads `nsh.time` every frame, and one with animated uniforms while they move.
+
+## Rust
+
+`shader()` (from `nsh_core::element`) makes a shader view; `.source(program)` gives it a compiled `Shader`
+(`nsh_core::shader::Shader::compile(source)`, which returns the same errors as above). Compile a program once and
+share it: it is cheap to clone. The program may be bound, `.source(move || …)`, to switch programs.
+
+| Method | Description |
+|---|---|
+| `.uniform(name, value)` | Sets a member of `struct Uniforms`: a number, a `Color` or `Hsla`, `[f32; 2]` / `[f32; 3]` / `[f32; 4]`, or a `Vec<UniformValue>`. A bound value (`move \|\| …`) sets it again when it changes; an animated value (`&wave`: a number, or colors for a `vec3f` / `vec4f`) moves it on every frame, natively. |
+| `.paused(bool)` | Stops the clock of `nsh.time`; bindable. |
+
+Children are added with `.child(..)`, styles with the usual typed methods. `shader_effect()`, `shader_transition()`,
+`screen_effect()` and `screen_transition()` make the other elements, with the methods in the tables above.

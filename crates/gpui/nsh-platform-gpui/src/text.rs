@@ -2146,7 +2146,7 @@ pub(crate) struct DrawnText {
     pub(crate) layout: TextLayout,
     /// Where the layout goes inside the view.
     pub(crate) content: nsh_core::Bounds<Points>,
-    /// The selection of `selectable` text, kept across new content.
+    /// The selection of selectable text, kept across new content.
     selection: Option<Rc<Selection>>,
     /// The part of the selection of the selectable view around it that is
     /// this text's ([`crate::selectable_view`]).
@@ -2334,7 +2334,12 @@ pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
             .get(span_at(&text.spans, index))
             .map_or(&default, |s| &s.style)
     };
-    let animated = state.anim.color;
+    // An animated color, or a transition of the text's color, over the
+    // runs' own.
+    let animated = state
+        .anim
+        .color
+        .or_else(|| state.live.as_ref()?.text_color());
     let mut glyphs = Vec::with_capacity(layout.glyphs.len());
     for g in &layout.glyphs {
         let o = cx.map(ox + g.x, oy + g.y);
@@ -2588,7 +2593,7 @@ enum Unit {
     Paragraph,
 }
 
-/// The range selection of a `selectable` text view, desktop style: a mouse
+/// The range selection of a selectable text view, desktop style: a mouse
 /// drag selects characters, a double click words and a triple click the
 /// paragraph (and drags on by them), Shift+click extends, Ctrl+C (Cmd+C on
 /// macOS) copies, Ctrl+A selects all, Escape or a press anywhere else

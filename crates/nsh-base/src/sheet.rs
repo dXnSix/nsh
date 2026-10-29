@@ -3,7 +3,10 @@
 
 use nsh_core::{element::Style, prelude::*};
 
-use crate::popup::{OpenChangeReason, OpenState, SheetMotion, lifecycle};
+use crate::{
+    popup::{OpenChangeReason, OpenState, SheetMotion, lifecycle},
+    roving::leave_bar,
+};
 
 /// The props of [`Sheet`].
 #[derive(Debug, Clone, PartialEq, Props)]
@@ -76,9 +79,7 @@ pub enum SheetEvent {
 pub fn Sheet(props: SheetProps, cx: Scope<SheetEvent>) -> impl IntoElement {
     let open = OpenState::new(props.open, props.default_open);
     let change = move |next: bool, reason: OpenChangeReason| {
-        if open.request(next) {
-            cx.emit(SheetEvent::OpenChange(next, reason));
-        }
+        open.request(next, || cx.emit(SheetEvent::OpenChange(next, reason)));
     };
     let motion = SheetMotion::new(move || open.get(), move || props.side.get());
     let height = animated_value(1.0);
@@ -116,6 +117,8 @@ pub fn Sheet(props: SheetProps, cx: Scope<SheetEvent>) -> impl IntoElement {
         move || cx.emit(SheetEvent::Close),
     );
     when(motion.shown, move || {
+        // Placed in a toolbar, its content is still no part of it.
+        leave_bar();
         let backdrop = overlay()
             .inset_0()
             .bind_opacity(&dragged_fade)
@@ -178,6 +181,27 @@ pub fn Sheet(props: SheetProps, cx: Scope<SheetEvent>) -> impl IntoElement {
         // These bindings change in place when the permission changes;
         // children and scroll positions keep their state.
         panel = panel.bind_translate_y(&dragged_y);
-        vec![backdrop.into_element(), panel.into_element()]
+        let layers = vec![backdrop.into_element(), panel.into_element()];
+        if nsh_core::element::os() == nsh_core::platform::Os::Web {
+            // A web modal is a separately sized surface. The player's host
+            // can present it over the viewport, including outside an iframe,
+            // while the sheet keeps its own motion and controlled lifetime.
+            vec![
+                nsh_core::element::modal()
+                    .animation(nsh_core::ModalAnimation::None)
+                    .close_on_escape(false)
+                    .close_on_swipe(false)
+                    .on_cancel(move || {
+                        cx.emit(SheetEvent::Cancel);
+                        if props.close_on_escape.get_untracked() {
+                            change(false, OpenChangeReason::Cancel);
+                        }
+                    })
+                    .children(layers)
+                    .into_element(),
+            ]
+        } else {
+            layers
+        }
     })
 }

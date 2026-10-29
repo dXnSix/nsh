@@ -16,13 +16,14 @@ matching the item-count baseline below. Its minimum initial / press times were 3
 These noisy single-frame timings establish stable work counts rather than a speedup.
 
 
-`onMouseMove` (Desktop and web): Linux x86_64, debug CLI, five interleaved runs of
+The first `onMouseMove` (moves with a button down too, desktops and web; since merged with the hover moves into one
+`onMouseMove`): Linux x86_64, debug CLI, five interleaved runs of
 `echo 'await app.press("+1")' | nsh test examples/counter/App.tsx --trace`, against main `fd772aef`.
 The first commit stays at 56 ops / 49 mount items / 21 nodes; the press stays at 10 ops / 7 items / 24 nodes.
 Minimum first-commit times were 277 → 280 µs, press times 180 → 189 µs (medians 189 → 202 µs for the press).
 Cold-start timings varied widely (277–633 µs), so these runs establish unchanged work counts rather than a speedup.
 Without mouse listeners, each backend skips the new mouse hit test. Mouse moves share the existing 8 ms hover
-coalescing interval, with the latest coordinates kept independently per view and event kind.
+coalescing interval, with the latest coordinates kept independently per view and event kind (one kind since the merge).
 
 
 `Editor` and `DiffView` at 200 000 lines (15 MB of Rust, Linux x86_64, release CLI, headless, `--trace`; the apps
@@ -215,6 +216,23 @@ message or a due timer (7, none between pastes).
   `<If>`, a 3-row `<Each>`) on both: bundle 886 B JS / 1.7 KB bytecode vs 14 KB / 19.6 KB, eval ~95µs vs ~390µs, tap
   median ~5µs vs ~14µs in JS, commit ~15µs vs ~22µs. Scrolling a 1000-row `List` (avatar, two texts, a bound color)
   6000 pt: ~77µs vs ~150µs of JS per rebinding frame, commit ~205µs vs ~276µs.
+
+## The browser engine (published web apps)
+
+Headless Chromium over CDP, a published package (`nsh package --target web`), 2026-10-28:
+
+- A call from app code into the runtime (a signal read or set, an element made) outside a Wasm entry costs ~1µs
+  however many values the app holds: the weak tracing runs at most every 100ms after the call
+  (`values.js` `schedule`), not inside it. With a full trace per call it cost ~0.11ms at 1 700 retained values and
+  ~1.2ms at 14 400 (a chat of 165 messages of 20 signals each), and a message pushed every second froze the page.
+- The gallery's DataTable demo, quotes ticking every 33ms and no scroll, 10s: the rows are read a row per call
+  (`JsHost::primitives`, op 49), ~220 000 value calls in 3s instead of ~8.7 million (a cell took five), script
+  ~2.65s instead of ~3.86s, main thread ~4.7s instead of ~5.95s, garbage collection ~52ms instead of ~162ms.
+- The same demo scrolled, the frame rate unlimited (`--disable-frame-rate-limit`): the animator sends every bound
+  value with each batch (the gallery's sidebar: ~69 canvas slots, ~26 transforms, ~7 opacities), and `nsh.js` writes
+  and draws only those that changed, and draws a canvas again when its size changes, not when it moves. The wheel,
+  300 steps of 30pt: main thread ~3.8s instead of ~4.5s, median frame ~9.2ms instead of ~12.2ms; its scroll bar
+  dragged 150 steps: script ~4.3ms per batch instead of ~5.6ms.
 
 ## The performance monitor (`nsh_engine::perf`)
 

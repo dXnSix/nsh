@@ -4,11 +4,11 @@
 // the steps after it are that case's.
 import { type JSX, View, mount, signal } from "nsh";
 import PaintBorders from "./paint-borders";
+import PaintCurrentColor from "./paint-current-color";
 import PaintEffects from "./paint-effects";
 import PaintInlineAlign from "./paint-inline-align";
 import PaintMisc from "./paint-misc";
 import PaintMotion from "./paint-motion";
-import PaintShader from "./paint-shader";
 import PaintObjectPosition from "./paint-object-position";
 import PaintShadows from "./paint-shadows";
 import PaintTailwind from "./paint-tailwind";
@@ -16,13 +16,15 @@ import PaintText from "./paint-text";
 import StateStyles from "./state-styles";
 import StateChecked from "./state-checked";
 import StateIndeterminate from "./state-indeterminate";
+import StateExpanded from "./state-expanded";
+import StatePressed from "./state-pressed";
 
 const cases: Record<string, () => JSX.Element> = {
   "paint-borders": PaintBorders,
+  "paint-current-color": PaintCurrentColor,
   "paint-effects": PaintEffects,
   "paint-misc": PaintMisc,
   "paint-motion": PaintMotion,
-  "paint-shader": PaintShader,
   "paint-object-position": PaintObjectPosition,
   "paint-shadows": PaintShadows,
   "paint-text": PaintText,
@@ -30,6 +32,8 @@ const cases: Record<string, () => JSX.Element> = {
   "state-styles": StateStyles,
   "state-checked": StateChecked,
   "state-indeterminate": StateIndeterminate,
+  "state-expanded": StateExpanded,
+  "state-pressed": StatePressed,
   "paint-inline-align": PaintInlineAlign,
 };
 const shown = signal("");

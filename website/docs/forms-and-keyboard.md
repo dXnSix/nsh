@@ -41,7 +41,7 @@ fn field(label: &'static str, value: Signal<String>, masked: bool) -> impl IntoE
 import { signal, Text, View } from "nsh";
 import { Input } from "nsh/base";
 
-function Field(props: { label: string; value: string; onChange: (text: string) => void; masked?: boolean }) {
+function Field(props: { label: string; value: string; onChange: (e: { value: string }) => void; masked?: boolean }) {
   const focused = signal(false);
   return (
     <View class="gap-1">
@@ -103,7 +103,7 @@ function App() {
     <View style={{ flex: 1, padding: 16, paddingTop: 60, gap: 8 }}>
       <Input
         value={name()}
-        onChange={(text) => name.set(text)}
+        onChange={({ value }) => name.set(value)}
         placeholder="Your name"
         style={{ fontSize: 17, borderWidth: 1, borderColor: "#d0d7de", borderRadius: 10, padding: 12 }}
       />
@@ -115,7 +115,7 @@ function App() {
 mount(App);
 ```
 
-Because you control the value, you can transform what the user types: `.on_change(move |t: &str| tag.set(t.to_uppercase()))` uppercases, `onChange={(t) => code.set(t.replace(/[^0-9]/g, ""))}` keeps digits only.
+Because you control the value, you can transform what the user types: `.on_change(move |t: &str| tag.set(t.to_uppercase()))` uppercases, `onChange={({ value }) => code.set(value.replace(/[^0-9]/g, ""))}` keeps digits only.
 
 ### Input methods
 
@@ -147,9 +147,9 @@ const query = signal("");
 let composing = false;
 <Input
   value={query()}
-  onChange={(text) => {
-    query.set(text);
-    if (!composing) search(text);
+  onChange={({ value }) => {
+    query.set(value);
+    if (!composing) search(value);
   }}
   onCompositionChange={(e) => {
     composing = e.composing;
@@ -196,19 +196,19 @@ Events:
 
 | Event | Payload | When |
 |---|---|---|
-| `onChange` | `text: string` | The text changed. |
+| `onChange` | `{ value }` | The text changed: `value` is the text now. |
 | `onSubmit` | `{ text }` | The return key was pressed in an input that submits (single line, or `submitBehavior` `"submit"` / `"blurAndSubmit"`). |
 | `onFocus` / `onBlur` | | The input gained / lost focus. |
 | `onSelectionChange` | `{ start, end }` | The caret or selection moved (UTF-16 units). |
 | `onPaste` | `{ text, html, files, uris }` | The user pasted: text, its HTML (Linux, web), images as `File`s, local files' URLs ([pasting](#pasting-images-and-files)). |
 | `onCaretMove` | `{ bounds, pageBounds }` | The caret moved: where it is in the input and in the window ([the caret](#the-caret)). |
 | `onKeyPress` | `{ key }` | Before the text changes: `key` is the typed text, `"Backspace"` or `"Enter"`. |
-| `onContentSizeChange` | `{ width, height }` | The text's size changed (at the input's width when multiline), as it is typed; an empty input reports one empty line, whatever its placeholder. |
+| `onContentSizeChange` | `{ size }` | The text's size (`size`) changed (at the input's width when multiline), as it is typed; an empty input reports one empty line, whatever its placeholder. |
 | `onCompositionChange` | `{ composing, text }` | An input method's composition started, changed or ended (see [Input methods](#input-methods)). |
 
 An input is styled like text: `fontSize`, `color`, `fontFamily`, `textAlign`, `letterSpacing` and the rest of [text styles](./text.md), plus borders, padding and backgrounds. The focus style (`.focus(|s| ..)` in Rust, the `focus:` Tailwind variant or `focusStyle` in TSX) applies while the input has focus. The placeholder's color is `.placeholder_color(..)` (the
-`placeholderColor` style key, `placeholder:text-*`), and the caret and selection's color is `.selection_color(..)` (`selectionColor`,
-`selection:text-*`):
+`placeholderColor` style key, `placeholder:text-*`), the caret's is `.caret_color(..)` (`caretColor`, `caret-*`), and the selection highlight's is `.selection_color(..)`
+(`selectionColor`, `selection:text-*`); UIKit tints the caret and the selection with one color, the caret's when set:
 
 ```rust tabs
 input()
@@ -322,18 +322,18 @@ pub fn sign_in() -> impl IntoElement {
 ```
 
 ```tsx tabs
-import { mount, signal, View, type YNode } from "nsh";
+import { type InputRef, mount, signal, View } from "nsh";
 import { Input } from "nsh/base";
 
 function SignIn() {
   const email = signal("");
-  let password!: YNode;
+  let password!: InputRef;
   const submit = () => console.log("sign in", email());
   return (
     <View style={{ flex: 1, padding: 16, paddingTop: 60, gap: 12 }}>
       <Input
         value={email()}
-        onChange={(t) => email.set(t)}
+        onChange={({ value }) => email.set(value)}
         keyboardType="email-address"
         autoCapitalize="none"
         returnKeyType="next"
@@ -362,6 +362,8 @@ An input's ref has:
 | `focus()` | `focus()` | Focuses the input and shows the keyboard. |
 | `blur()` | `blur()` | Unfocuses it. |
 | `set_selection(start, end)` | `setSelection(start, end?)` | Selects `start..end` (UTF-16 units); a caret when they are equal (TSX: without `end`). |
+
+On macOS and the web, `focus()` and `blur()` on the ref of a view that takes presses move the keyboard focus as Tab does ([keyboard focus](../elements/index.md#keyboard-focus)).
 
 `dismiss_keyboard()` in Rust and `Keyboard.dismiss()` from `nsh` in TSX unfocus whichever input has focus:
 
@@ -420,7 +422,7 @@ const selection = signal<{ start: number; end?: number } | undefined>(undefined)
 
 <Input
   value={text()}
-  onChange={(t) => text.set(t)}
+  onChange={({ value }) => text.set(value)}
   selectedRange={selection()}
   onSelectionChange={(r) => range.set(r)}
 />
@@ -484,7 +486,7 @@ const caret = signal<Bounds | null>(null);
   <Input
     multiline
     value={draft()}
-    onChange={(t) => draft.set(t)}
+    onChange={({ value }) => draft.set(value)}
     onSelectionChange={(e) => end.set(e.end)}
     onCaretMove={(e) => {
       // Suggestions while the word before the caret starts with "@".
@@ -579,7 +581,7 @@ const height = signal(0);
 <Input
   multiline
   placeholder="Write a comment"
-  onContentSizeChange={(e) => height.set(Math.min(e.height, 120))}
+  onContentSizeChange={({ size }) => height.set(Math.min(size.height, 120))}
   style={{ fontSize: 16, padding: 10, borderWidth: 1, borderColor: "#d0d7de", borderRadius: 10, height: Math.max(height(), 20) + 20 }}
 />
 ```
@@ -680,7 +682,7 @@ function ChatScreen() {
       >
         <Input
           value={draft()}
-          onChange={(t) => draft.set(t)}
+          onChange={({ value }) => draft.set(value)}
           multiline
           submitBehavior="submit"
           returnKeyType="send"
@@ -700,7 +702,7 @@ The full height suits a view that reaches the bottom of the surface, as a screen
 
 ### The keyboard accessor
 
-`keyboard_height()` and `keyboard_duration()` in Rust, and `keyboardFrame()` from `nsh` in TSX (a `{ height, duration }`), are reactive: how far the keyboard reaches into the surface (0 when hidden; the bottom safe area under it included) and its animation's duration in seconds. Read them for anything custom: hide a floating button while typing, or size a panel. A layout that changes with them moves with the keyboard when it animates on the keyboard's curve: `LayoutAnimation.configureNext({ duration: keyboardFrame().duration * 1000, update: { type: "keyboard" } })` (Rust: `LayoutCurve::Keyboard`), as `env(keyboard-inset-height)` does.
+`keyboard_height()` and `keyboard_duration()` in Rust, and `keyboardFrame()` from `nsh` in TSX (a `{ height, duration }`), are reactive: how far the keyboard reaches into the surface (0 when hidden; the bottom safe area under it included) and its animation's duration in milliseconds. Read them for anything custom: hide a floating button while typing, or size a panel. A layout that changes with them moves with the keyboard when it animates on the keyboard's curve: `LayoutAnimation.configureNext({ duration: keyboardFrame().duration, update: { type: "keyboard" } })` (Rust: `LayoutCurve::Keyboard`), as `env(keyboard-inset-height)` does.
 
 ```rust tabs
 view().child(when(
@@ -760,19 +762,19 @@ pub fn note() -> impl IntoElement {
 ```
 
 ```tsx tabs
-import { signal, Text, View, type YNode } from "nsh";
+import { type InputRef, signal, Text, View } from "nsh";
 import { Input } from "nsh/base";
 import { InputAccessoryView } from "nsh/mobile";
 
 function Note() {
   const text = signal("");
-  let input!: YNode;
+  let input!: InputRef;
   return (
     <View style={{ padding: 16 }}>
       <Input
         ref={input}
         value={text()}
-        onChange={(t) => text.set(t)}
+        onChange={({ value }) => text.set(value)}
         ios={{ inputAccessoryViewID: "note-bar" }}
         placeholder="A note"
       />
