@@ -36,7 +36,9 @@ lands:
   clippy-android`) and wasm32 (`compiler`) clippy pass; `nsh check examples/counter -- --skipLibCheck false` and
   `nsh check` of gallery, gallery-rs and rust-exports pass; `cargo xtask compat`: 19 of 20 pass, and
   `checkout_apps_run` fails in base, macos, gallery and hopper on upstream's own changes (upstream keeps Compat off
-  "until the API is ready to freeze"; none of the four touches the fork's code).
+  "until the API is ready to freeze"; none of the four touches the fork's code); headless `nsh test` of counter (1),
+  gallery (234) and rust-exports (9) passes; `examples.sh macos` (58 tests in macOS windows) passes with no retries;
+  on the web (headless Chrome) dock, form, timers and toasts pass whole.
 
 ## Before the merge
 
@@ -147,8 +149,14 @@ The first runs on the merged code (Windows, Linux, macOS and iOS passed as they 
 - `ci: Run only text-view's Text View demo on Android`: a press on the chat's featured cards starts no reply on
   Android (its chips do).
 
-Known, not fixed here (each its own fork PR next):
+With the second merge:
 
-- The web's test clock: upstream's own `Rust application` web job fails dock's locked layout test the same way on
-  its main, so that check stays red on this PR.
+- `ci: Run the web's tests that move the test clock again`: upstream's manual clock now moves on the web (`app.wait()`
+  and `app.clock.runFor()` return), so dock (11 tests), form (9), timers (2) and toasts (9), which pass whole in
+  headless Chrome here, run on the web again; error-boundary's failing binding still expects QuickJS's message.
+- `ci: Run the toasts' undo test on macOS again`: upstream renamed toasts' action test (#614), so macOS's filter
+  `its action` matched no test and ran none.
+
+Known, not fixed here (its own fork PR next):
+
 - The chat's featured cards take no press on Android.
