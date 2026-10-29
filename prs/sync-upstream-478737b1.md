@@ -169,3 +169,7 @@ Known, not fixed here (its own fork PR next):
 - 2026-10-29: merged as `15fdd2a3f` after every check passed on `bbc3d346b` (Compat skipped, as upstream keeps it
   off); Fork CI, Core, Linux, Windows, GPUI, Examples and Rust application passed on `main`; tagged `fork-0.3.0-2`
   on `15fdd2a3f`, which starts its release.
+- The tag's first release run failed on `windows-x86_64`: `fork-release.yml` still had the "Check the Windows web
+  runtime" step that upstream's #603 dropped with `nsh-platform-web`'s `bytecode-only` feature (in the first merge's
+  range). #92 (`fork/release`) drops it as upstream did; merged as `0bb55acdc`, then the release ran again by hand on
+  the tag (`gh workflow run fork-release.yml -f tag=fork-0.3.0-2`).
