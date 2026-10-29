@@ -156,6 +156,9 @@ With the second merge:
   headless Chrome here, run on the web again; error-boundary's failing binding still expects QuickJS's message.
 - `ci: Run the toasts' undo test on macOS again`: upstream renamed toasts' action test (#614), so macOS's filter
   `its action` matched no test and ran none.
+- `ci: Leave the shortcuts test out of the iOS simulator's list`: it opens the gallery as macOS, a desktop's
+  platform, which upstream's #710 now refuses on `--target ios`; the first run on the second merge failed only on it
+  (and device's safe area test passed on its retry).
 
 Known, not fixed here (its own fork PR next):
 
