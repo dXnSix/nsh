@@ -163,3 +163,9 @@ With the second merge:
 Known, not fixed here (its own fork PR next):
 
 - The chat's featured cards take no press on Android.
+
+## Merged
+
+- 2026-10-29: merged as `15fdd2a3f` after every check passed on `bbc3d346b` (Compat skipped, as upstream keeps it
+  off); Fork CI, Core, Linux, Windows, GPUI, Examples and Rust application passed on `main`; tagged `fork-0.3.0-2`
+  on `15fdd2a3f`, which starts its release.
