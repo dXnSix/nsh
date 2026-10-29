@@ -1,8 +1,42 @@
-# Merge upstream/main 478737b1
+# Merge upstream/main 8d790445
 
-Brings the fork's main up to upstream/main 478737b1 (126 commits) and moves the fork's shader effects and
-transitions onto upstream's new `Shader` (#517), so NSH keeps one GPU pipeline: upstream's. Merge with a merge
-commit. Branch `sync/upstream-478737b1`; the next fork tag is `fork-0.3.0-2`.
+Brings the fork's main up to upstream/main 8d790445 (183 commits: 126 to 478737b1, then 57 more) and moves the
+fork's shader effects and transitions onto upstream's new `Shader` (#517), so NSH keeps one GPU pipeline: upstream's.
+Merge with a merge commit. Branch `sync/upstream-478737b1` (named for its first merge); the next fork tag is
+`fork-0.3.0-2`.
+
+## The second merge: upstream/main 8d790445
+
+The branch waited for review while upstream moved on, so it merges upstream's `main` again (57 commits) before it
+lands:
+
+- What it brings: `Avatar`, `Toolbar`, `Pagination`, `Link`, `Accordion`; images and SVGs through one bounded
+  pipeline (`svg()`); selections across virtual list rows on every platform; `platform.desktop`; nsh/test's manual
+  clock that waits move, sockets kept off the network and Jest's `expect`; the generated declarations type-checked
+  with `skipLibCheck` off (a new step of upstream's `Rust application` workflow); the fork's upstream PRs #675 to
+  #678 and #681 (the Android dialog touches, the three iOS test agent fixes and the Android tokens build fix) as
+  upstream merged them; fixes.
+- Conflicts: the fork's environment accessors and fonts next to upstream's `is_catalyst` / `set_tokens` in the
+  prelude and the platform tests; the fork's `asset:/` requests next to upstream's core image loads
+  (`Assets::base`, `Requester::Task`) and refused-request errors in the engine; WOFF fonts next to SVG assets in
+  nsh-macros; the Android shader JNI next to upstream's `keepRendered`; the iOS test agent is upstream's (its #676
+  to #678 are the fork's own fixes); the test runner's launch options are upstream's optional ones plus the fork's
+  time zone, languages and regional preferences, and the fork's `App.set*` steps return upstream's `JsError`
+  (`RangeError` for a value no zone, language or preference has); docs: both sides' words.
+- `android: Read a selection's rectangles six numbers at a time, as clippy asks`: Rust 1.99's clippy flags upstream's
+  new `chunks_exact(6)` (#703, `chunks_exact_to_as_chunks`), so `cargo xtask clippy-android` failed on upstream's
+  own code.
+- `js: Declare the shader effect and transition elements as JSX elements`: upstream's #593 made every element return
+  `JSX.Element` and dropped `YNode`; the four elements still declared `YNode`, which upstream's new declaration
+  check fails on.
+- Upstream's own `Rust application` web job passes on 8d790445 again (its dock test failed on `main` since
+  f2a92d8c7).
+- Validation on the merge (macOS host, Rust 1.99, `CARGO_INCREMENTAL=0`): `cargo clippy --workspace --all-targets
+  -D warnings` and `cargo test --workspace` pass; Catalyst (`embed,dev`), macOS (`dev`), Android (`cargo xtask
+  clippy-android`) and wasm32 (`compiler`) clippy pass; `nsh check examples/counter -- --skipLibCheck false` and
+  `nsh check` of gallery, gallery-rs and rust-exports pass; `cargo xtask compat`: 19 of 20 pass, and
+  `checkout_apps_run` fails in base, macos, gallery and hopper on upstream's own changes (upstream keeps Compat off
+  "until the API is ready to freeze"; none of the four touches the fork's code).
 
 ## Before the merge
 
