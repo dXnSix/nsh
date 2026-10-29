@@ -9,6 +9,9 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 
 - Checked locally on `ba289971`: the wasm32 clippy run (`compiler`), `node --test` of `nsh.test.mjs`, `scroll.test.mjs`, `mouse.test.mjs`, `local-time.test.mjs` (43 of 43), nightly rustfmt. Not run in Chromium here; the same code passed `shaders.test.tsx --target web` on the fork's sync branch.
 
+- 2026-10-29: rebased on the new 02 (`d6f042595`), no conflicts. Checked locally: the wasm32 clippy run (`compiler`),
+  `node --test` of `nsh.test.mjs`, `scroll`, `mouse`, `local-time` (45 pass), nightly rustfmt.
+
 The body to paste starts below the line.
 
 ---

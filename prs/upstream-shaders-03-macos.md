@@ -10,6 +10,9 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 
 - Checked locally on `ba289971`: the macOS clippy run (dev, all targets) and `cargo test -p nsh-platform-macos`; nightly rustfmt; with 10 merged, `nsh test examples/gallery/tests/shaders.test.tsx --target macos`: 2 of 2 pass.
 
+- 2026-10-29: rebased on the new 02 (`56b736662`), no conflicts. Checked locally: the macOS clippy run (dev, all
+  targets) and `cargo test -p nsh-platform-macos`; nightly rustfmt.
+
 The body to paste starts below the line.
 
 ---

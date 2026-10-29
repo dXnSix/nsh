@@ -9,6 +9,9 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 
 - Checked locally on `ba289971`: the GPUI workspace's clippy (`nsh-platform-gpui/dev`, all targets) and `cargo test` (207 + 2 pass), nightly rustfmt. Both runs rewrite `crates/gpui/Cargo.lock` (`nsh-base` gained `chrono` upstream without the GPUI lock): upstream's, not this PR's; the lock is left as `main` has it.
 
+- 2026-10-29: rebased on the new 02 (`fa00d7818`), no conflicts; nightly rustfmt locally. The fork's GPUI workflow
+  decides.
+
 The body to paste starts below the line.
 
 ---

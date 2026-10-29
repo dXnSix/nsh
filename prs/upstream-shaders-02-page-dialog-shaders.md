@@ -16,6 +16,9 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
   step 887 (a Toggle frame) on `main` itself; run with `base-transition-shader` moved first, its 11 steps pass and the
   run stops at the same Toggle step.
 
+- 2026-10-29: rebased with 01 onto `upstream/main` `8d790445` (`e165e3d35`), no conflicts. Checked locally: as 01,
+  plus `cargo test -p nsh-cli web`.
+
 The body to paste starts below the line.
 
 ---

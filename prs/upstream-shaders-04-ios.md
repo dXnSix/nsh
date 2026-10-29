@@ -11,6 +11,9 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 
 - Checked locally on `ba289971`: the Catalyst clippy run (embed, dev); nightly rustfmt. Not run on the simulator here; the same code passed `shaders.test.tsx` on the iOS simulator on the fork's `sync/upstream-478737b1`.
 
+- 2026-10-29: rebased on the new 02 (`df0f900bf`), no conflicts. Checked locally: the Catalyst clippy run (embed,
+  dev); nightly rustfmt.
+
 The body to paste starts below the line.
 
 ---

@@ -69,6 +69,15 @@ Replies:
   (404, no write access to the repository): re-request it from the PR's Reviewers box.
 - 2026-10-28: the Windows fix pushed (owner's OK): 01 `36b23d76a`, 02 `e294b76e2`, 03–10 restacked on it.
 
+- 2026-10-29: rebased onto `upstream/main` `8d790445` (#682 conflicted with `main`): `fa324f651`, the same five
+  commits; conflicts only where both sides added at the end (`nsh.test.mjs`, `core/tests.rs`: both kept). The four
+  elements' declarations now return `JSX.Element` (folded into the first commit): upstream's #593 dropped `YNode`, and
+  its new `Rust application` step (`nsh check examples/counter -- --skipLibCheck false`, #684) type-checks the
+  declarations. Checked locally: clippy `-D warnings` of the workspace (all targets), `cargo test -p nsh-core -p
+  nsh-js -p nsh-bundler --features nsh-bundler/bundle` and `-p nsh-engine --test engine shader`, wasm32 clippy
+  (`compiler`), `nsh check examples/counter -- --skipLibCheck false`, `node --test` of `nsh.test.mjs`, `scroll`,
+  `mouse`, `local-time` (45 pass), nightly rustfmt on the changed files.
+
 The body to paste starts below the line.
 
 ---

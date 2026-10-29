@@ -11,6 +11,9 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 - Checked: nightly rustfmt locally (this Mac cannot build Linux code); the fork's Linux workflow on this branch at
   `ba289971` passed (clippy and tests): https://github.com/dXnSix/nsh/actions/runs/40755883271
 
+- 2026-10-29: rebased on the new 02 (`b870833b5`), no conflicts; nightly rustfmt locally. The fork's Linux workflow
+  decides.
+
 The body to paste starts below the line.
 
 ---

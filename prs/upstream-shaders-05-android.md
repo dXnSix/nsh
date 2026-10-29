@@ -13,13 +13,17 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 - Checked locally on `ba289971`: `cargo xtask clippy-android` (both feature sets; with #681, which fixes `main`'s own
   `Command::Tokens` gap: without it Android does not build on `main`), `javac` of the Java sources against `android-36`, nightly rustfmt. Not run on the emulator here; the same code (with the dialog-touches fix) passed `shaders.test.tsx` 3 of 3 on the `nsh-multires-35` AVD on the fork's sync branch.
 
+- 2026-10-29: rebased on the new 02 (`94c78c619`); one conflict, its JNI functions next to upstream's new
+  `keepRendered` (both kept). #681 and #675 are merged, so it depends on 01 and 02 only. Checked locally: `cargo xtask
+  clippy-android` passes with upstream's own `selectable_view.rs` lint fixed in the working tree (Rust 1.99's
+  `chunks_exact_to_as_chunks` fails `main` itself since #703; the fork fixes it in its sync); nightly rustfmt.
+
 The body to paste starts below the line.
 
 ---
 
-**Depends on:** #682 and #[02 PR] (the elements and pages' and dialogs' `transitionShader` it draws), and #681
-(without which `nsh-platform-android` does not build on `main`); merge it after those three. Its gallery test's
-dialog half also needs #675.
+**Depends on:** #682 and #[02 PR] (the elements and pages' and dialogs' `transitionShader` it draws); merge it after
+both. (#681, Android's build on `main`, and #675, the test touches its gallery test's dialog half needs, are merged.)
 
 ## Description
 

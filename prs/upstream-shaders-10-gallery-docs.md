@@ -11,6 +11,9 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 
 - Checked locally on `ba289971`: `nsh test examples/gallery/tests/shaders.test.tsx` headless, 2 of 2; on macOS with 03 merged, 2 of 2.
 
+- 2026-10-29: rebased on the new 02 (`4f38ab185`), no conflicts. Checked locally: `nsh test
+  examples/gallery/tests/shaders.test.tsx` headless, 2 of 2.
+
 The body to paste starts below the line.
 
 ---
