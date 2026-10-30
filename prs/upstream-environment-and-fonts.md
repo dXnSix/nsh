@@ -70,7 +70,7 @@ the dropped `05-intl` (`0d34b5133`), which sits on `04-regional`.
 - Lock files: `cargo metadata --locked` passes for the root and GPUI workspaces on every head.
 - Compat (`NSH_COMPAT_APP=<app> cargo xtask compat`, `nsh-compat` `main` `2e83111`, one app at a time with its
   work directory cleared, as the claims of every app built there are checked): `modules` on `05-intl` (the series'
-  cases and claims), `web` on `read-assets`, `layout` on `register-font` (its new case). The case also passes headless
+  cases and claims, all from `01` to `04`: `05-intl` changes nothing under `tests/compat`), `web` on `read-assets`, `layout` on `register-font` (its new case). The case also passes headless
   (`nsh test tests/compat/cases/layout/App.tsx` with its steps).
 - The fork's Windows, Linux and GPUI workflows on `01` to `04`, `05-intl` (run as `pr/intl-hour-cycle/01-js`, the
   same commit) and `register-font` (at `e14007ec4`, before its compat case: the case is TSX the workflows do not
