@@ -1504,6 +1504,7 @@ impl Screen {
     /// that lands on one to scroll may move it instead, or the scroll view
     /// only until the app's answer comes, so a step's scrolling lands
     /// elsewhere. What one holds lands on it, and is not listed.
+    #[cfg(feature = "agent")]
     pub(crate) fn drag_takers(&self, id: NodeId) -> Vec<NodeId> {
         let attached: HashSet<NodeId> = self.attached().into_iter().collect();
         let mut out = Vec::new();
@@ -1934,6 +1935,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "agent")]
     fn a_scroll_views_drag_takers_are_the_views_that_take_touches_or_pan() {
         let mut screen = Screen::default();
         let mut items = vec![create(2, ViewKind::Scroll), insert(1, 2)];
