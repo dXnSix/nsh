@@ -1,6 +1,7 @@
 # Upstream PR: android: Read a selection's rectangles six numbers at a time, as clippy asks
 
-Draft of a pull request for `longbridge/nsh` (not opened: the owner decides and posts), with the body below the line.
+Draft of a pull request for `longbridge/nsh`, posted as [longbridge/nsh#727](https://github.com/longbridge/nsh/pull/727)
+(2026-10-30, owner's go-ahead) with the body below the line.
 
 - Branch: `pr/android/04-selection-as-chunks`, one commit on `upstream/main` `8d790445`: the fork's `56b833b3f` from
   its sync (#91), where `fork-0.3.0-2` carries it.

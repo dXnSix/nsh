@@ -23,7 +23,7 @@ The body to paste starts below the line.
 ---
 
 **Depends on:** #682 and #[02 PR] (the elements and pages' and dialogs' `transitionShader` it draws); merge it after
-both. `cargo xtask clippy-android` also needs #[Android clippy PR] (`pr/android/04-selection-as-chunks`: Rust 1.99's
+both. `cargo xtask clippy-android` also needs #727 (`pr/android/04-selection-as-chunks`: Rust 1.99's
 clippy fails `main` itself on #703's `selectable_view.rs`). (#681, Android's build on `main`, and #675, the test
 touches its gallery test's dialog half needs, are merged.)
 

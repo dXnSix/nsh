@@ -16,7 +16,7 @@ what it depends on is merged.
 | Branch | Depends on |
 |---|---|
 | `pr/app-state/01-core` | no other PR |
-| `pr/app-state/0N-<platform>` | `pr/app-state/01-core` (`03-android` also `pr/android/04-selection-as-chunks`, to pass clippy) |
+| `pr/app-state/0N-<platform>` | `pr/app-state/01-core` (`03-android` also #727, to pass clippy) |
 | `pr/time-zone/01-core` | `pr/app-state/01-core` |
 | `pr/time-zone/0N-<platform>` | `pr/time-zone/01-core` and `pr/app-state/0N-<platform>` |
 | `pr/languages/01-core` | `pr/time-zone/01-core` |
@@ -32,8 +32,8 @@ what it depends on is merged.
   largest message by far, which clippy's `large_enum_variant` flags on wasm32.
 - Every `03-android` branch and the shader series' `05-android` pass `cargo xtask clippy-android` only with
   upstream's own `selectable_view.rs` lint fixed (Rust 1.99's `chunks_exact_to_as_chunks` fails it on `main` since
-  #703): `pr/android/04-selection-as-chunks` ([`upstream-android-selection-as-chunks.md`](upstream-android-selection-as-chunks.md))
-  is that fix, so each `03-android` body names it as a build dependency, and it goes first.
+  #703): #727 (`pr/android/04-selection-as-chunks`, [`upstream-android-selection-as-chunks.md`](upstream-android-selection-as-chunks.md))
+  is that fix, so each `03-android` body names #727 as a build dependency.
 
 ## Fonts and bundled files
 
