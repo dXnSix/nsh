@@ -16,6 +16,36 @@ decision; the body below the line is the one posted.
 - The first of the environment series ([`upstream-environment-and-fonts.md`](upstream-environment-and-fonts.md)).
 - Checked: see "Checked" in the series' index.
 
+## Review (2026-10-31)
+
+huacnlee requested changes (static analysis, "Reviewed by ChatGPT on behalf of @huacnlee"), two inline comments; both
+hold, and each has a fix commit on top:
+
+1. [P2] Observe the embedding host's lifecycle (`r4429678171`, `nsh-platform-windows/src/window.rs`): an embedded
+   surface's window is a child, which gets no `WM_ACTIVATEAPP`, and its `WM_WINDOWPOSCHANGED` handler is top-level
+   only, so `appState` kept its first value. Fixed in `a44cc19a4` (`windows: Give embedded surfaces their root
+   window's app state`): the surface's window subclasses its root window (`SetWindowSubclass`) while it lives and
+   hears the root's `WM_ACTIVATEAPP` and position changes (`WM_NSH_ROOT`); `an_embedded_window_hears_its_root_window`
+   makes a hidden root and child and checks what the child hears before and after it stops observing. Checked on the
+   fork's Windows workflow on the branch (run 41156957774: clippy, tests, the Win32 examples), after three runs that
+   caught a name clash (clippy) and a test that counted the root window's own messages (it shares the recording class),
+   and in dXnSix/nsh#95 on the fork's `main`.
+2. [P2] Resynchronize activity state when reattaching (`r4429678183`, `NshView.java`): each view's own lifecycle
+   callback was unregistered while detached. Fixed in `09ae2292a` (`android: Start a view attached again from its
+   activity's state`): one callback per application, kept for the process, records each activity's last state and
+   tells the attached views; a view attached again starts from it. The Android runtime has no JVM test harness, so no
+   unit test; checked on the arm64 API 35 emulator with an app logging `appState()`: active, inactive, background,
+   inactive, active through Home and back (the reattach itself needs a host that detaches the view), and the gallery's
+   Android emulator tests in dXnSix/nsh#95.
+
+Also on that push: the GPUI Linux job of `ceba797ee` died of "No space left on device" on the runner, and the web
+job's counter test timed out (the fork's `main`, with the same web code, passes it): both rerun with the push.
+Pushed to #747 (fast-forward, `09ae2292a` and `a44cc19a4`) after dXnSix/nsh#95 passed the fork's CI on every
+platform; replied on both threads (`r4430025415`, `r4430025509`); resolving them through the API is refused here.
+02–04 restacked locally on the two commits (their fork branches still hold the old heads); on the way the Windows dev docs' time zone sentence, garbled by an earlier restack
+("loaded at run time; before the first, and for an embedded surface, …"), got its original end back ("`UTC` without
+it), re-read on `WM_TIMECHANGE`").
+
 ---
 
 **Depends on:** #744 (`core: Mark the environments non-exhaustive, so new fields break no code`): the new

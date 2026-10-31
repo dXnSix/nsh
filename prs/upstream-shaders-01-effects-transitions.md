@@ -91,6 +91,9 @@ Replies:
   the app's struct, upstream's contract for a plain `Shader` since #517, not this PR's.
   02–10 restacked on it (previous heads `old-pre-pad/*` locally). The body below says it in "For backends" and "How
   to Test".
+  Pushed to #682 (fast-forward, `de88f19b9`) and the body updated, after dXnSix/nsh#95 (the same commit on the fork's
+  `main`) passed the fork's CI on every platform (the shaders tests on macOS, iOS and the web among them). 02–10 are
+  restacked locally only: their fork branches still hold the old heads (a force-push, the owner's OK first).
 
 The body to paste starts below the line.
 

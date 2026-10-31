@@ -7,6 +7,24 @@ decision; the body below the line is the one posted.
 - Size: 18 files, +562 / −15 (code +204 / −10, tests +297 / −2, docs +61 / −3), one test image (`flag.png`, 73 bytes).
 - Title: `engine: Let fetch read the files the app ships`.
 
+
+## Review (2026-10-31)
+
+huacnlee requested changes (static analysis, "Reviewed by ChatGPT on behalf of @huacnlee"), one inline comment:
+
+1. [P1] Keep asset fetches inside the configured asset root (`r4429677887`, `crates/nsh-engine/src/lib.rs`): on iOS
+   with `AssetBase::Directory`, `asset:////tmp/x` reaches `AssetReader::read`, whose `dir.join(path)` takes the
+   absolute path, and `fetch` returned the bytes. It holds, and not only on iOS: every host follows `..` out of its
+   directory (the core's `resolve` trims leading slashes only).
+   Fixed in `66a31164d` (`engine: Keep fetches of bundled files inside the app's files`): the engine refuses, before
+   any host reads it, a path with an empty, `.` or `..` segment (percent-encoded too) or a backslash, NUL or colon,
+   as the network error a missing file gives; `files_outside_the_assets_are_refused` reads through a reader that joins
+   as iOS's does, beside a file outside its directory, and reads that file twice without the check. Docs: the user
+   page (en, zh-CN) and the `fetch` row of `docs/dev/components.md`. Checked: `cargo test -p nsh-engine --test engine
+   assets` (6), `--lib` (35), clippy `-D warnings` (all targets), nightly rustfmt.
+   Pushed (fast-forward) and replied (`r4429733277`); resolving the thread through the API was refused here, so it
+   is open for the reviewer.
+
 ---
 
 **Depends on:** no other PR; it applies to `main` as it is. The PR that lets apps register fonts while they run
