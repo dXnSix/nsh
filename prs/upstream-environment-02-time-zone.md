@@ -2,16 +2,19 @@
 
 Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
 
-- Branch: `pr/environment/02-time-zone`, on `pr/environment/01-app-state`: seven commits of its own, the core's, then
-  one per platform. It replaces `pr/time-zone/01-core` to `07-gpui`; every file is the same as in those branches.
-- Size of its own commits: 42 files, +718 / −50 (code +582 / −29, tests +58 / −5, docs +78 / −16).
+- Branch: `pr/environment/02-time-zone` (`c64064514`), on `pr/environment/01-app-state`: seven commits of its own, the
+  core's, then one per platform. It replaces `pr/time-zone/01-core` to `07-gpui`; every file is the same as in those
+  branches. The literals that build an environment outside `nsh-core` (iOS's root view, the engine's `ui_environment`
+  and its tests, `nsh-testing`'s) set the new field by assignment, as `pr/environment/00-non-exhaustive` builds them;
+  the branch was rebuilt on it 2026-10-30 (the previous heads are `old-pre-nonexh/02-time-zone` locally).
+- Size of its own commits: 42 files, +717 / −50 (code +582 / −29, tests +57 / −5, docs +78 / −16).
 - Title: `core: Tell apps the device's time zone`. Until the app state PR is merged, GitHub shows both PRs' commits.
 
 ---
 
-**Depends on:** #APP_STATE (`core: Tell apps whether they are in use`): it adds to the environment's fields, the test
-runner's `open` options and the docs that PR adds. Until that one is merged this PR shows its commits too; the time
-zone's own are the last seven.
+**Depends on:** #747 (`core: Tell apps whether they are in use`), which depends on #744: it adds to the
+environment's fields, the test runner's `open` options and the docs that PR adds. Until those are merged this PR shows
+their commits too; the time zone's own are the last seven.
 
 ## Description
 

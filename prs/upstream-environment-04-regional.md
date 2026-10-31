@@ -2,19 +2,23 @@
 
 Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
 
-- Branch: `pr/environment/04-regional`, on `pr/environment/03-languages`: eight commits of its own, GPUI's boxed dev
-  events (which clippy asks for once the test environment grows), the core's, then one per platform. It replaces
-  `pr/regional/01-core` to `07-gpui`; every file is the same as in those branches.
-- Size of its own commits: 42 files, +1703 / −85 (code +1416 / −64, tests +101 / −5, docs +186 / −16). The largest
+- Branch: `pr/environment/04-regional` (`3be233e04`), on `pr/environment/03-languages`: eight commits of its own, GPUI's
+  boxed dev events (which clippy asks for once the test environment grows), the core's, then one per platform. It
+  replaces `pr/regional/01-core` to `07-gpui`; every file is the same as in those branches. The literals that build an
+  environment outside `nsh-core` (iOS's root view, the engine's `ui_environment` and its tests, `nsh-testing`'s) set the
+  new fields by assignment, as `pr/environment/00-non-exhaustive` builds them; the branch was rebuilt on it 2026-10-30
+  (the previous heads are `old-pre-nonexh/04-regional` locally).
+- Size of its own commits: 42 files, +1702 / −85 (code +1416 / −64, tests +100 / −5, docs +186 / −16). The largest
   files: `nsh-core`'s `platform.rs` +478 (the four types, their parsing and docs, CLDR 48's region lists, a test),
   GPUI's `system.rs` +259, Linux's +113.
 - Title: `core: Tell apps the user's regional preferences`.
 
 ---
 
-**Depends on:** #LANGUAGES (`core: Tell apps the user's preferred languages`), which depends on #TIME_ZONE and
-#APP_STATE: each adds to the environment's fields, the test runner's `open` options and the docs the one before it
-adds. Until those are merged this PR shows their commits too; the regional preferences' own are the last eight.
+**Depends on:** #LANGUAGES (`core: Tell apps the user's preferred languages`), which depends on #TIME_ZONE,
+#747 and #744: each adds to the environment's fields, the test runner's `open` options and the docs
+the one before it adds. Until those are merged this PR shows their commits too; the regional preferences' own are
+the last eight.
 
 ## Description
 

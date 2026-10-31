@@ -12,7 +12,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 
 ---
 
-**Depends on:** #WOFF (`text: Read WOFF and WOFF2 fonts`: it registers WOFF and WOFF2 data) and #READ_ASSETS
+**Depends on:** #745 (`text: Read WOFF and WOFF2 fonts`: it registers WOFF and WOFF2 data) and #746
 (`engine: Let fetch read the files the app ships`: it reads `asset:/` URLs as `fetch` does). This branch carries both
 commits; once they are merged it shows only its own, the last.
 

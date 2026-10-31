@@ -1,12 +1,16 @@
 # Upstream PR: core: Tell apps whether they are in use
 
-Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
+Opened 2026-10-31 as [longbridge/nsh#747](https://github.com/longbridge/nsh/pull/747), at the owner's
+decision; the body below the line is the one posted.
 
-- Branch: `pr/environment/01-app-state`, seven commits on `upstream/main` `201d780a`: the core's, then one per
-  platform (iOS, Android, macOS, Windows, Linux, GPUI). It replaces the per-platform branches `pr/app-state/01-core` to
-  `07-gpui`; every file in it is the same as in those branches, except `docs/dev/elements.md`, where the iOS and
-  Android sentences are joined.
-- Size: 38 files, +725 / −62 (code +493 / −38, tests +108 / −10, docs +124 / −14).
+- Branch: `pr/environment/01-app-state` (`ceba797ee`), seven commits on `pr/environment/00-non-exhaustive`: the
+  core's, then one per platform (iOS, Android, macOS, Windows, Linux, GPUI). It replaces the per-platform branches
+  `pr/app-state/01-core` to `07-gpui`; every file in it is the same as in those branches, except
+  `docs/dev/elements.md`, where the iOS and Android sentences are joined.
+  The literals that build an environment outside `nsh-core` (iOS's root view, the engine's `ui_environment` and its
+  tests, `nsh-testing`'s) set the new field by assignment, as `pr/environment/00-non-exhaustive` builds them; the
+  branch was rebuilt on it 2026-10-30 (the previous heads are `old-pre-nonexh/01-app-state` locally).
+- Size of its own commits: 38 files, +723 / −62 (code +493 / −38, tests +106 / −10, docs +124 / −14).
 - Open it from `dXnSix:pr/environment/01-app-state` into `longbridge/nsh:main`, title (upstream squash-merges):
   `core: Tell apps whether they are in use`.
 - The first of the environment series ([`upstream-environment-and-fonts.md`](upstream-environment-and-fonts.md)).
@@ -14,9 +18,10 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 
 ---
 
-**Depends on:** no other PR; it applies to `main` as it is. The rest of the environment series stacks on it: the time
-zone, the preferred languages and the regional preferences, each a PR of the core and every platform, then `Intl`
-writing dates in the user's time zone and hour cycle.
+**Depends on:** #744 (`core: Mark the environments non-exhaustive, so new fields break no code`): the new
+field is set the way that PR builds environments outside `nsh-core`. Until it is merged this PR shows its commit too;
+the app state's own are the last seven. The rest of the environment series stacks on this one: the time zone, the
+preferred languages and the regional preferences, each a PR of the core and every platform.
 
 ## Description
 

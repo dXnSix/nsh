@@ -2,19 +2,22 @@
 
 Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
 
-- Branch: `pr/environment/03-languages`, on `pr/environment/02-time-zone`: seven commits of its own, the core's, then
-  one per platform. It replaces `pr/languages/01-core` to `07-gpui`; every file is the same as in those branches,
-  except `crates/gpui/Cargo.lock`: `pr/languages/07-gpui` added `jiff`'s entries there, which nothing in it uses
-  (they belong to `pr/intl-time-zone/01-js`, which adds them itself), and cargo drops them on any build; this branch
-  leaves them out.
-- Size of its own commits: 40 files, +650 / −52 (code +495 / −31, tests +59 / −5, docs +96 / −16).
+- Branch: `pr/environment/03-languages` (`e8053e214`), on `pr/environment/02-time-zone`: seven commits of its own, the
+  core's, then one per platform. It replaces `pr/languages/01-core` to `07-gpui`; every file is the same as in those
+  branches, except `crates/gpui/Cargo.lock`: `pr/languages/07-gpui` added `jiff`'s entries there, which nothing in it
+  uses (they belong to `pr/intl-time-zone/01-js`, which adds them itself), and cargo drops them on any build; this
+  branch leaves them out. The literals that build an environment outside `nsh-core` (iOS's root view, the engine's
+  `ui_environment` and its tests, `nsh-testing`'s) set the new field by assignment, as
+  `pr/environment/00-non-exhaustive` builds them; the branch was rebuilt on it 2026-10-30 (the previous heads are
+  `old-pre-nonexh/03-languages` locally).
+- Size of its own commits: 40 files, +650 / −52 (code +496 / −31, tests +58 / −5, docs +96 / −16).
 - Title: `core: Tell apps the user's preferred languages`.
 
 ---
 
-**Depends on:** #TIME_ZONE (`core: Tell apps the device's time zone`), which depends on #APP_STATE: each adds to the
-environment's fields, the test runner's `open` options and the docs the one before it adds. Until those are merged
-this PR shows their commits too; the languages' own are the last seven.
+**Depends on:** #TIME_ZONE (`core: Tell apps the device's time zone`), which depends on #747 and #744:
+each adds to the environment's fields, the test runner's `open` options and the docs the one before it adds. Until those
+are merged this PR shows their commits too; the languages' own are the last seven.
 
 ## Description
 

@@ -1,6 +1,7 @@
 # Upstream PR: text: Read WOFF and WOFF2 fonts
 
-Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
+Opened 2026-10-31 as [longbridge/nsh#745](https://github.com/longbridge/nsh/pull/745), at the owner's
+decision; the body below the line is the one posted.
 
 - Branch: `pr/woff/01-core`, one commit on `upstream/main` `201d780a`.
 - Size: 21 files, +175 / −27 (code +101 / −10, docs +9 / −9, lock files +65 / −8: `wuff` and what it uses), two test

@@ -1,6 +1,7 @@
 # Upstream PR: engine: Let fetch read the files the app ships
 
-Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
+Opened 2026-10-31 as [longbridge/nsh#746](https://github.com/longbridge/nsh/pull/746), at the owner's
+decision; the body below the line is the one posted.
 
 - Branch: `pr/read-assets/01-core`, one commit on `upstream/main` `201d780a`.
 - Size: 18 files, +562 / −15 (code +204 / −10, tests +297 / −2, docs +61 / −3), one test image (`flag.png`, 73 bytes).
