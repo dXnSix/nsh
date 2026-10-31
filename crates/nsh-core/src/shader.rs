@@ -83,12 +83,15 @@ const SHADE: &str = "shade";
 /// points (WGSL declarations may come in any order, so the app's source
 /// goes first and its lines keep their numbers).
 const BUILTINS: &str = r#"
+// 32 bytes, as `builtins` writes them: wgpu's GL backend refuses a uniform
+// struct whose size is no multiple of 16 where the device lacks
+// `BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED`, so `overflow` pads it.
 struct Nsh {
     size: vec2f,
     time: f32,
     scale: f32,
     progress: f32,
-    overflow: f32,
+    @size(12) overflow: f32,
 }
 
 @group(0) @binding(0) var<uniform> nsh: Nsh;
@@ -1345,6 +1348,24 @@ fn shade(uv: vec2f) -> vec4f {
         // Comments do not declare uniforms.
         let commented = "// struct Uniforms { a: f32 }\n/* struct Uniforms */ fn shade(uv: vec2f) -> vec4f { return vec4f(1.0); }";
         assert!(Shader::compile(commented).unwrap().uniforms().is_empty());
+    }
+
+    #[test]
+    fn the_built_ins_take_the_bytes_the_renderers_upload() {
+        let shader = Shader::compile(GRADIENT).unwrap();
+        let module = naga::front::wgsl::parse_str(shader.wgsl()).unwrap();
+        let span = module
+            .types
+            .iter()
+            .find_map(|(_, ty)| match ty.inner {
+                TypeInner::Struct { span, .. } if ty.name.as_deref() == Some("Nsh") => Some(span),
+                _ => None,
+            })
+            .expect("struct Nsh");
+        let words = builtins(Size::default(), 0.0, 1.0, 0.0, Points::default());
+        assert_eq!(span as usize, size_of_val(&words));
+        // GLES without `BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED` takes no other.
+        assert_eq!(span % 16, 0);
     }
 
     #[test]
