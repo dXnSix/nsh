@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
 
-- Branch: `pr/environment/04-regional` (`3be233e04`), on `pr/environment/03-languages`: eight commits of its own, GPUI's
+- Branch: `pr/environment/04-regional` (`deffa4c06`, restacked 2026-10-31 on #747's review fixes), on `pr/environment/03-languages`: eight commits of its own, GPUI's
   boxed dev events (which clippy asks for once the test environment grows), the core's, then one per platform. It
   replaces `pr/regional/01-core` to `07-gpui`; every file is the same as in those branches. The literals that build an
   environment outside `nsh-core` (iOS's root view, the engine's `ui_environment` and its tests, `nsh-testing`'s) set the

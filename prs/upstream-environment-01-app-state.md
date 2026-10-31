@@ -42,7 +42,8 @@ Also on that push: the GPUI Linux job of `ceba797ee` died of "No space left on d
 job's counter test timed out (the fork's `main`, with the same web code, passes it): both rerun with the push.
 Pushed to #747 (fast-forward, `09ae2292a` and `a44cc19a4`) after dXnSix/nsh#95 passed the fork's CI on every
 platform; replied on both threads (`r4430025415`, `r4430025509`); resolving them through the API is refused here.
-02–04 restacked locally on the two commits (their fork branches still hold the old heads); on the way the Windows dev docs' time zone sentence, garbled by an earlier restack
+02–04 restacked on the two commits and force-pushed to the fork (the owner's OK: 02 `ca9231b93`, 03 `a1de5ed5f`, 04
+`deffa4c06`); on the way the Windows dev docs' time zone sentence, garbled by an earlier restack
 ("loaded at run time; before the first, and for an embedded surface, …"), got its original end back ("`UTC` without
 it), re-read on `WM_TIMECHANGE`").
 

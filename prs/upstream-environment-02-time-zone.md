@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
 
-- Branch: `pr/environment/02-time-zone` (`c64064514`), on `pr/environment/01-app-state`: seven commits of its own, the
+- Branch: `pr/environment/02-time-zone` (`ca9231b93`, restacked 2026-10-31 on #747's review fixes), on `pr/environment/01-app-state`: seven commits of its own, the
   core's, then one per platform. It replaces `pr/time-zone/01-core` to `07-gpui`; every file is the same as in those
   branches. The literals that build an environment outside `nsh-core` (iOS's root view, the engine's `ui_environment`
   and its tests, `nsh-testing`'s) set the new field by assignment, as `pr/environment/00-non-exhaustive` builds them;

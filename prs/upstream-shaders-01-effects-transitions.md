@@ -92,8 +92,9 @@ Replies:
   02–10 restacked on it (previous heads `old-pre-pad/*` locally). The body below says it in "For backends" and "How
   to Test".
   Pushed to #682 (fast-forward, `de88f19b9`) and the body updated, after dXnSix/nsh#95 (the same commit on the fork's
-  `main`) passed the fork's CI on every platform (the shaders tests on macOS, iOS and the web among them). 02–10 are
-  restacked locally only: their fork branches still hold the old heads (a force-push, the owner's OK first).
+  `main`) passed the fork's CI on every platform (the shaders tests on macOS, iOS and the web among them). 02–10
+  restacked on it and force-pushed to the fork (the owner's OK): 02 `af935b43f`, 03 `b36b53205`, 04 `192c3b012`, 05
+  `1f5f7cee1`, 06 `32dcc856a`, 07 `40a7d2a22`, 08 `da701e0b4`, 09 `4c0b595de`, 10 `8a46fb76d`.
 
 The body to paste starts below the line.
 

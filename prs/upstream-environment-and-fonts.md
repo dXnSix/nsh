@@ -73,7 +73,11 @@ belongs there too, in Rust. The branch stays on the fork for reference, and so d
 ## Checked after the restack on `00-non-exhaustive` (2026-10-30, macOS host, Rust 1.99)
 
 Heads: `00-non-exhaustive` `f7fb6d42b`, `01-app-state` `ceba797ee`, `02-time-zone` `c64064514`, `03-languages`
-`e8053e214`, `04-regional` `3be233e04`.
+`e8053e214`, `04-regional` `3be233e04`. Since 2026-10-31, after #747's review fixes: `01-app-state` `a44cc19a4`,
+`02-time-zone` `ca9231b93`, `03-languages` `a1de5ed5f`, `04-regional` `deffa4c06`; `register-font` `366d830f8`
+(on #746's fix).
+The fork's Windows workflow passed on `04-regional` `deffa4c06` (run 41161895616: clippy, tests, the Win32 examples);
+the rest of 02–04 changed only in Android's `NshView` (compiled with `cargo xtask android`) and docs.
 
 - `00` to `04`: nightly rustfmt on the changed files, `cargo clippy --workspace --all-targets -D warnings`, the
   core/js/testing/engine/macros/bundler tests, wasm32 clippy (`compiler`), Catalyst clippy (`embed,dev`) and

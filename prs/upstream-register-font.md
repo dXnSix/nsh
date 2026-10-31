@@ -13,8 +13,8 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 
 - 2026-10-31: restacked locally on #746's review fix (`366d830f8`: WOFF, asset reading, its fix `eb04bbb04`, then its
   own); one conflict, its `registerFont` row beside the extended `fetch` row in `docs/dev/components.md` (both kept).
-  `cargo test -p nsh-engine --test engine assets` (6) and `font` (3) pass. Not pushed yet: the fork's branch is still
-  `9fabfce60` (a force-push, the owner's OK first).
+  `cargo test -p nsh-engine --test engine assets` (6) and `font` (3) pass. Force-pushed to the fork (the owner's OK),
+  over `9fabfce60`.
 
 ---
 
