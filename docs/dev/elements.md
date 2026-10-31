@@ -304,8 +304,8 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   page's `visibilityState` and focus, iOS from UIApplication's `didBecomeActive` / `willResignActive` /
   `didEnterBackground` / `willEnterForeground` notifications, by the notification: `applicationState` still says
   active during `willResignActive`; Android from `NshView`'s activity: resumed is `active`, paused or started again
-  `inactive`, stopped `background`, through the application's `ActivityLifecycleCallbacks` while the view is
-  attached). `padding-bottom: env(keyboard-inset-height)` pads a view by the keyboard's height, animated with the keyboard
+  `inactive`, stopped `background`, through one `ActivityLifecycleCallbacks` per application, registered by the first
+  view attached and kept, which remembers each activity's last state: a view attached again starts from it). `padding-bottom: env(keyboard-inset-height)` pads a view by the keyboard's height, animated with the keyboard
   natively, for content outside scroll views (message bars). Inputs inside a scroll view are kept clear of the keyboard natively (bottom inset + scroll to the
   focused input), with no JS involved.
   Both move as one with the keyboard: `LayoutCurve::Keyboard` (`type: "keyboard"`) is the system keyboard's own curve,
