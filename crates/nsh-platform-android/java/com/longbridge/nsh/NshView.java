@@ -763,13 +763,39 @@ public class NshView extends FrameLayout {
         }
     };
 
-    /** The view's activity going through its lifecycle: `appState()`. */
-    private final android.app.Application.ActivityLifecycleCallbacks lifecycle =
-            new android.app.Application.ActivityLifecycleCallbacks() {
+    /** The view's activity reported `state` (`appState()`'s values). */
+    private void activityState(Activity activity, int state) {
+        if (activity != activity(getContext()) || state == appState) return;
+        appState = state;
+        publishEnvironment(getRootWindowInsets());
+    }
+
+    /**
+     * The activities going through their lifecycle: `appState()`. One callback per application, registered by the
+     * first view attached and kept for the process, so it knows each activity's last state while views come and go: a
+     * view attached again starts from its activity's state then, whatever the activity did while it was detached.
+     */
+    private static final class Lifecycles implements android.app.Application.ActivityLifecycleCallbacks {
+        private static Lifecycles registered;
+        private final java.util.WeakHashMap<Activity, Integer> states = new java.util.WeakHashMap<>();
+        private final java.util.ArrayList<NshView> views = new java.util.ArrayList<>();
+
+        static Lifecycles of(Activity activity) {
+            if (registered == null) {
+                registered = new Lifecycles();
+                activity.getApplication().registerActivityLifecycleCallbacks(registered);
+            }
+            return registered;
+        }
+
+        /** The last state `activity` reported, or null before it reported one. */
+        Integer state(Activity activity) {
+            return states.get(activity);
+        }
+
         private void state(Activity activity, int state) {
-            if (activity != activity(getContext()) || state == appState) return;
-            appState = state;
-            publishEnvironment(getRootWindowInsets());
+            states.put(activity, state);
+            for (NshView view : new java.util.ArrayList<>(views)) view.activityState(activity, state);
         }
 
         @Override public void onActivityResumed(Activity a) { state(a, 0); }
@@ -778,8 +804,8 @@ public class NshView extends FrameLayout {
         @Override public void onActivityStopped(Activity a) { state(a, 2); }
         @Override public void onActivityCreated(Activity a, android.os.Bundle b) {}
         @Override public void onActivitySaveInstanceState(Activity a, android.os.Bundle b) {}
-        @Override public void onActivityDestroyed(Activity a) {}
-    };
+        @Override public void onActivityDestroyed(Activity a) { states.remove(a); }
+    }
 
     private android.view.accessibility.AccessibilityManager accessibility() {
         return (android.view.accessibility.AccessibilityManager) getContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
@@ -882,7 +908,13 @@ public class NshView extends FrameLayout {
         super.onAttachedToWindow();
         accessibility().addTouchExplorationStateChangeListener(screenReader);
         Activity activity = activity(getContext());
-        if (activity != null) activity.getApplication().registerActivityLifecycleCallbacks(lifecycle);
+        if (activity != null) {
+            Lifecycles lifecycles = Lifecycles.of(activity);
+            lifecycles.views.add(this);
+            // What the activity did while the view was detached.
+            Integer state = lifecycles.state(activity);
+            if (state != null) activityState(activity, state);
+        }
         // The zone may have changed while the view was detached. The
         // broadcasts are the system's alone: no export flag is needed.
         timeZone = java.util.TimeZone.getDefault().getID();
@@ -897,8 +929,7 @@ public class NshView extends FrameLayout {
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
         accessibility().removeTouchExplorationStateChangeListener(screenReader);
-        Activity activity = activity(getContext());
-        if (activity != null) activity.getApplication().unregisterActivityLifecycleCallbacks(lifecycle);
+        if (Lifecycles.registered != null) Lifecycles.registered.views.remove(this);
         getContext().unregisterReceiver(timeChanged);
     }
 
