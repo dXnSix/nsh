@@ -281,6 +281,7 @@ final class ScrollBox extends FrameLayout implements Node {
 
     /** The scroll view's own fling (px/s): snaps instead when snapping. */
     private boolean fling(int velocity) {
+        android.util.Log.i("nsh-diag", "fling " + velocity + " scrollY=" + scroller.getScrollY());
         flung = true;
         if (!snaps()) return false;
         snap(velocity);

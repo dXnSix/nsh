@@ -96,6 +96,22 @@ case "$target" in
     ;;
 esac
 
+if [[ "$target" == android ]]; then
+  # DIAGNOSTIC (scratch branch, never merged): the Input demo's scrolling.
+  for i in $(seq 1 15); do
+    echo "=== form run $i"
+    ./target/debug/nsh test examples/gallery/tests/form.test.tsx --filter "the Input demo" --target android -v 2>&1 \
+      | grep -v "Fake map" | grep -E "SCROLLDBG|✓ ex|✗|did not|not on screen|error" | sed 's/.*SCROLLDBG/SCROLLDBG/' | cut -c1-400
+  done
+  for i in 1 2 3; do
+    echo "=== network run $i"
+    ./target/debug/nsh test examples/gallery/tests/network.test.tsx --target android -v 2>&1 \
+      | grep -v "Fake map" | grep -E "SCROLLDBG|✓ ex|✗|did not|not on screen|error" | sed 's/.*SCROLLDBG/SCROLLDBG/' | cut -c1-400
+  done
+  echo "=== logcat"
+  adb logcat -d -s nsh-diag | tail -n 3000
+  exit 0
+fi
 failed=()
 flaky=()
 run() {

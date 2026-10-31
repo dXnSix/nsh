@@ -1759,8 +1759,26 @@ impl Agent {
             } else {
                 Point::new(Points(0.0), Points(step))
             };
+            let t0 = Instant::now();
             self.native.scroll(middle, delta);
+            let t1 = t0.elapsed();
             self.stopped(id)?;
+            log::info!(
+                "SCROLLDBG {selector} at={:.0},{:.0} scroller={:.0},{:.0} {:.0}x{:.0} along={along:.2} \
+                 from={:.0},{:.0} step={step:.0} gesture={:?} stopped={:?} after={:?} viewport={:?}",
+                at.x.0,
+                at.y.0,
+                scroller.origin.x.0,
+                scroller.origin.y.0,
+                scroller.size.width.0,
+                scroller.size.height.0,
+                middle.x.0,
+                middle.y.0,
+                t1,
+                t0.elapsed() - t1,
+                self.native.bounds(id).map(|b| (b.origin.y.0 as i32, b.size.height.0 as i32)),
+                viewport,
+            );
             before = Some(at);
         }
         Err(format!(
@@ -2102,6 +2120,9 @@ impl Agent {
                 still = 0;
                 last = now;
             }
+        }
+        if still < STILL {
+            log::info!("SCROLLDBG stopped timed out");
         }
         self.check()
     }

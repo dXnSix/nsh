@@ -68,6 +68,7 @@ jobs:
           python3 .fork/.github/fork/dispatch.py "${{ github.event.pull_request.base.sha }}" "${{ github.head_ref }}"
 
   macos:
+    if: false
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -93,6 +94,7 @@ jobs:
           bash .github/fork/examples.sh macos
 
   ios:
+    if: false
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -160,8 +162,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Clippy
-        run: cargo xtask clippy-android
       # The emulator's ABI only, stripped: the development runtime of all
       # three ABIs at debug is larger than an emulator's storage.
       - name: Build the development runtime for the emulator
@@ -192,6 +192,7 @@ jobs:
           script: bash .github/fork/examples.sh android
 
   web:
+    if: false
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

@@ -124,6 +124,8 @@ final class TestAgent {
      * the last; scheduled on the UI thread as the display paces real ones.
      * Returns when it is done.
      */
+    private static long diagLate;
+
     static void drag(NshView host, float[] xs, float[] ys, int frameMs) {
         java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
         MAIN.post(() -> {
@@ -140,6 +142,13 @@ final class TestAgent {
                     e.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
                     window.dispatchTouchEvent(e);
                     e.recycle();
+                    long late = now - (start + (long) at * frameMs);
+                    if (late > diagLate) diagLate = late;
+                    if (at == last) {
+                        android.util.Log.i("nsh-diag", "drag n=" + xs.length + " y0=" + ys[0] + " y1=" + ys[last]
+                                + " maxLate=" + diagLate + "ms span=" + (now - start) + "ms");
+                        diagLate = 0;
+                    }
                     if (at == last) done.countDown();
                 }, start + (long) at * frameMs);
             }
