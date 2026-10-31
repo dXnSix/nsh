@@ -1141,9 +1141,9 @@ mod tests {
     use super::*;
 
     thread_local! {
-        /// What the test's embedded window heard: message, `wparam` and
-        /// `lparam`.
-        static HEARD: RefCell<Vec<(u32, usize, isize)>> = const { RefCell::new(Vec::new()) };
+        /// What the test's windows heard: window, message, `wparam` and
+        /// `lparam` (the root's own procedure records too).
+        static HEARD: RefCell<Vec<(isize, u32, usize, isize)>> = const { RefCell::new(Vec::new()) };
     }
 
     unsafe extern "system" fn recording_proc(
@@ -1153,7 +1153,10 @@ mod tests {
         lparam: LPARAM,
     ) -> LRESULT {
         if matches!(msg, WM_ACTIVATEAPP | WM_NSH_ROOT) {
-            HEARD.with(|h| h.borrow_mut().push((msg, wparam.0, lparam.0)));
+            HEARD.with(|h| {
+                h.borrow_mut()
+                    .push((hwnd.0 as isize, msg, wparam.0, lparam.0))
+            });
         }
         // SAFETY: default handling.
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -1192,17 +1195,21 @@ mod tests {
             let root = make(WS_OVERLAPPEDWINDOW, None);
             let child = make(WS_CHILD, Some(root));
             assert_eq!(observe_root(child), Some(root));
-            // The desktop may send activations of its own: the test's carry
-            // a thread no app has (`WM_ACTIVATEAPP`'s `lparam`).
+            // What the child heard. The desktop may send activations of its
+            // own: the test's carry a thread no app has (`WM_ACTIVATEAPP`'s
+            // `lparam`).
             const MARK: isize = 0x004E_5348;
-            let ours = |heard: &[(u32, usize, isize)]| -> Vec<usize> {
+            let id = child.0 as isize;
+            let ours = |heard: &[(isize, u32, usize, isize)]| -> Vec<usize> {
                 heard
                     .iter()
-                    .filter(|h| h.0 == WM_ACTIVATEAPP && h.2 == MARK)
-                    .map(|h| h.1)
+                    .filter(|h| h.0 == id && h.1 == WM_ACTIVATEAPP && h.3 == MARK)
+                    .map(|h| h.2)
                     .collect()
             };
-            let moved = |heard: &[(u32, usize, isize)]| heard.iter().any(|h| h.0 == WM_NSH_ROOT);
+            let moved = |heard: &[(isize, u32, usize, isize)]| {
+                heard.iter().any(|h| h.0 == id && h.1 == WM_NSH_ROOT)
+            };
             let resize = |width, height| {
                 SetWindowPos(
                     root,
