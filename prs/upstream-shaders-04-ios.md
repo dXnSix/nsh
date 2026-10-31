@@ -13,6 +13,8 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 
 - 2026-10-29: rebased on the new 02 (`df0f900bf`), no conflicts. Checked locally: the Catalyst clippy run (embed,
   dev); nightly rustfmt.
+- 2026-10-31: rebased on the new 02 (`192c3b012`), no conflicts; it differs from the previous head only by 01's
+  padding commit and 02's docs line (previous head kept locally as `old-pre-pad/04-ios`).
 
 The body to paste starts below the line.
 

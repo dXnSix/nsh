@@ -13,6 +13,8 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 
 - 2026-10-29: rebased on the new 02 (`b870833b5`), no conflicts; nightly rustfmt locally. The fork's Linux workflow
   decides.
+- 2026-10-31: rebased on the new 02 (`da701e0b4`), no conflicts; it differs from the previous head only by 01's
+  padding commit and 02's docs line (previous head kept locally as `old-pre-pad/08-linux`).
 
 The body to paste starts below the line.
 

@@ -18,6 +18,9 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 
 - 2026-10-29: rebased with 01 onto `upstream/main` `8d790445` (`e165e3d35`), no conflicts. Checked locally: as 01,
   plus `cargo test -p nsh-cli web`.
+- 2026-10-31: rebased on 01's padding commit (`af935b43f`), no conflicts; its docs commit now says why
+  `struct Nsh` is padded (the "Built-ins" bullet of `docs/dev/shaders.md`). Previous head kept locally as
+  `old-pre-pad/02-page-dialog-shaders`.
 
 The body to paste starts below the line.
 

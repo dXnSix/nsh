@@ -77,6 +77,20 @@ Replies:
   nsh-js -p nsh-bundler --features nsh-bundler/bundle` and `-p nsh-engine --test engine shader`, wasm32 clippy
   (`compiler`), `nsh check examples/counter -- --skipLibCheck false`, `node --test` of `nsh.test.mjs`, `scroll`,
   `mouse`, `local-time` (45 pass), nightly rustfmt on the changed files.
+- 2026-10-31: one more commit, `de88f19b9` (`core: Pad the shader built-ins to 32 bytes, so GLES devices draw
+  them`). `struct Nsh` was 24 bytes in WGSL while `builtins` and the renderers write 32; wgpu refuses a uniform struct
+  whose size is no multiple of 16 where the device lacks `BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED`, so on the arm64
+  Android emulator (swiftshader, GLES) every shader failed: "group 0 binding 0 has a size of 24" (found while fixing
+  the fork's Android shaders test, dXnSix/nsh#94). `@size(12)` on `overflow` pads it, with no member apps could read;
+  `the_built_ins_take_the_bytes_the_renderers_upload` fails on the old struct (24, not 32). The GLSL the web gets is
+  unchanged. Checked locally: `cargo test -p nsh-core --features glsl --lib shader::` (8 pass), `-p nsh-engine
+  --features shader --lib shader::` (5 pass, Metal), clippy `-D warnings` of both with those features, nightly
+  rustfmt. On the arm64 API 35 emulator (`nsh-ci-35`, swiftshader, Vulkan off: wgpu on GLES), 05-android's gallery
+  Shader page: before, all four shaders refused (`binding 0 has a size of 24`) and no frame drawn; after, Glow and
+  Code rain draw, and the two whose own `Uniforms` are 8 and 4 bytes are refused on `binding 1`: the same rule for
+  the app's struct, upstream's contract for a plain `Shader` since #517, not this PR's.
+  02–10 restacked on it (previous heads `old-pre-pad/*` locally). The body below says it in "For backends" and "How
+  to Test".
 
 The body to paste starts below the line.
 
@@ -155,8 +169,9 @@ Nothing apps use changes: `Shader`'s props, its WGSL (`shade`, `nsh.size`, `nsh.
 what it draws stay as they are.
 
 For backends: `nsh_core::shader::builtins` takes the progress and the overflow and returns 8 words (the uniform
-buffer of `struct Nsh` is 32 bytes; the web renderer here uploads all of it), and `MountItem` has two more variants,
-which every backend in this repository ignores in this PR.
+buffer of `struct Nsh` is 32 bytes, its `overflow` padded, as GLES devices without
+`BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED` take only uniform structs of whole 16-byte rows; the web renderer here uploads
+all of it), and `MountItem` has two more variants, which every backend in this repository ignores in this PR.
 
 ```diff
 - pub fn builtins(size: Size<Points>, time: f32, scale: f32) -> [u32; 4]
@@ -171,8 +186,9 @@ layers read pictures (`Core::pictured`) and, after a commit, walks up from the b
 ## How to Test
 
 - `cargo test -p nsh-core -p nsh-js -p nsh-bundler --features nsh-bundler/bundle`: among them
-  `inputs_are_the_pictures_shade_reaches` (a helper of any name, an unused helper) and
-  `an_effect_takes_its_picture_again_when_a_child_leaves` (a removed child marks its effect).
+  `inputs_are_the_pictures_shade_reaches` (a helper of any name, an unused helper),
+  `an_effect_takes_its_picture_again_when_a_child_leaves` (a removed child marks its effect) and
+  `the_built_ins_take_the_bytes_the_renderers_upload` (the WGSL struct and `builtins` agree on 32 bytes).
 - `node --test crates/nsh-platform-web/web/nsh.test.mjs`: a plain `Shader` uploads the 32-byte built-ins block.
 - `cargo test -p nsh-engine --test engine shader`: the effect's layer and its pictures' bind group layout, the
   transition's start first in its batch, its cross-fade fallback, an animated progress through its slot.

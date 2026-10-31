@@ -17,6 +17,8 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
   `keepRendered` (both kept). #681 and #675 are merged, so it depends on 01 and 02 only. Checked locally: `cargo xtask
   clippy-android` passes with upstream's own `selectable_view.rs` lint fixed in the working tree (Rust 1.99's
   `chunks_exact_to_as_chunks` fails `main` itself since #703; `pr/android/04-selection-as-chunks` fixes it); nightly rustfmt.
+- 2026-10-31: rebased on the new 02 (`1f5f7cee1`), no conflicts; it differs from the previous head only by 01's
+  padding commit and 02's docs line (previous head kept locally as `old-pre-pad/05-android`).
 
 The body to paste starts below the line.
 

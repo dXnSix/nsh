@@ -11,6 +11,8 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 
 - 2026-10-29: rebased on the new 02 (`fa00d7818`), no conflicts; nightly rustfmt locally. The fork's GPUI workflow
   decides.
+- 2026-10-31: rebased on the new 02 (`4c0b595de`), no conflicts; it differs from the previous head only by 01's
+  padding commit and 02's docs line (previous head kept locally as `old-pre-pad/09-gpui`).
 
 The body to paste starts below the line.
 

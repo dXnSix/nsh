@@ -13,6 +13,8 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 
 - 2026-10-29: rebased on the new 02 (`4f38ab185`), no conflicts. Checked locally: `nsh test
   examples/gallery/tests/shaders.test.tsx` headless, 2 of 2.
+- 2026-10-31: rebased on the new 02 (`8a46fb76d`), no conflicts; it differs from the previous head only by 01's
+  padding commit and 02's docs line (previous head kept locally as `old-pre-pad/10-gallery-docs`).
 
 The body to paste starts below the line.
 
