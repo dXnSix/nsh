@@ -174,6 +174,77 @@ fn a_host_without_assets_reads_none() {
     assert_eq!(texts.last().map(String::as_str), Some(expected));
 }
 
+/// Reads `asset:/<path>` as `<dir>/<path>`, joined as it comes (as iOS's
+/// reader does: an absolute path replaces the directory), recording each
+/// path it is asked for.
+struct DirectoryAssets(std::path::PathBuf, Arc<Mutex<Vec<String>>>);
+
+impl Assets for DirectoryAssets {
+    fn read(&self, uri: &str) -> Result<Vec<u8>, String> {
+        let path = uri.strip_prefix("asset:/").ok_or("not an asset URI")?;
+        self.1.lock().unwrap().push(path.to_owned());
+        std::fs::read(self.0.join(path)).map_err(|e| e.to_string())
+    }
+}
+
+/// The file beside the assets directory, by its absolute path.
+static OUTSIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Reads a file inside the assets, then tries ways out of them.
+#[component]
+fn ReadOutside() -> impl IntoElement {
+    let text_shown = signal(String::from("reading"));
+    spawn(async move {
+        let mut lines = vec![shown("asset:/inside.txt").await];
+        let escapes = [
+            "asset:/../outside.txt".to_owned(),
+            "asset:/sub/../../outside.txt".to_owned(),
+            "asset:/%2E%2e/outside.txt".to_owned(),
+            "asset:/..%2Foutside.txt".to_owned(),
+            format!("asset://{}", OUTSIDE.get().unwrap()),
+        ];
+        for uri in escapes {
+            lines.push(shown(&uri).await);
+        }
+        text_shown.set(lines.join("; "));
+    });
+    view().child(text(move || text_shown.get()))
+}
+
+#[test]
+fn files_outside_the_assets_are_refused() {
+    let root = crate::temporary_root().join(format!("nsh-assets-outside-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("assets")).unwrap();
+    std::fs::write(root.join("assets/inside.txt"), "inside").unwrap();
+    let outside = root.join("outside.txt");
+    std::fs::write(&outside, "outside").unwrap();
+    OUTSIDE.set(outside.to_string_lossy().into_owned()).unwrap();
+    let read = Arc::new(Mutex::new(Vec::new()));
+    let assets = DirectoryAssets(root.join("assets"), read.clone());
+    let (_engine, rx) = start(
+        App::Rust(Root::of::<ReadOutside>()),
+        Some(Arc::new(assets)),
+        None,
+    );
+    let refused = |uri: &str| {
+        format!("failed: {uri}: bundled files are named by a path inside the app's files")
+    };
+    let expected = [
+        "read inside".to_owned(),
+        refused("asset:/../outside.txt"),
+        refused("asset:/sub/../../outside.txt"),
+        refused("asset:/%2E%2e/outside.txt"),
+        refused("asset:/..%2Foutside.txt"),
+        refused(&format!("asset://{}", outside.display())),
+    ]
+    .join("; ");
+    let texts = until(&rx, &expected);
+    assert_eq!(texts.last(), Some(&expected));
+    // The host never saw a path out of its directory.
+    assert_eq!(*read.lock().unwrap(), ["inside.txt"]);
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// Holds no file, and serves each under `https://assets.test/` (as the web
 /// page does the files it did not preload).
 struct ServedAssets;
