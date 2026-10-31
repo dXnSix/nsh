@@ -34,11 +34,12 @@
 //! - the OS version: `RtlGetVersion`'s major and minor version (10.0 on
 //!   Windows 10 and 11 alike: Windows 11 kept the version number);
 //! - the app's state, followed on `WM_ACTIVATEAPP` and the window's
-//!   `WM_WINDOWPOSCHANGED` ([`app_activated`], [`app_state_changed`]):
-//!   background while the window (an embedded surface's root window) is
-//!   minimized or hidden, active while the app is the active one (its
-//!   windows get `WM_ACTIVATEAPP`; before the first, and for an embedded
-//!   surface, whose host's windows get them: the foreground window is the
+//!   `WM_WINDOWPOSCHANGED` ([`app_activated`], [`app_state_changed`]); an
+//!   embedded surface hears its root window's, whose procedure is
+//!   subclassed to pass them on (`window::observe_root`): background while
+//!   the window (an embedded surface's root window) is minimized or hidden,
+//!   active while the app is the active one (its windows get
+//!   `WM_ACTIVATEAPP`; before the first, the foreground window is the
 //!   process's), inactive otherwise.
 //!
 //! Safe area and keyboard height are zero: desktop windows have neither.
