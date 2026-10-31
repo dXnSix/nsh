@@ -189,8 +189,10 @@ The fork's elements on top of the same program, layer and renderer (`ShaderRole`
   outside it. `Shader::inputs` reflects which of them the app's functions call (`Expression::CallResult`); a program
   that calls none takes upstream's two bind group layouts, one that calls any the two with the pictures
   (`nsh_engine::shader::layout_index`). The web reads the pictures' sampler uniforms from `GlslProgram::pictures`.
-- **Built-ins.** `struct Nsh` is 32 bytes: `size`, `time`, `scale`, `progress`, `overflow`. The vertex stage maps
-  the target to `uv` from `-overflow / size` to `1 + overflow / size`, so binding 0 is visible to both stages.
+- **Built-ins.** `struct Nsh` is 32 bytes: `size`, `time`, `scale`, `progress`, `overflow`, which `@size(12)` pads
+  (wgpu refuses a uniform struct whose size is no multiple of 16 where the device lacks
+  `BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED`, as GLES on an arm64 Android emulator does). The vertex stage maps the target
+  to `uv` from `-overflow / size` to `1 + overflow / size`, so binding 0 is visible to both stages.
 - **Elements.** `ShaderEffect`, `ShaderTransition`, `ScreenEffect` and `ScreenTransition` are `Kind::Shader` nodes
   whose `ShaderNode::role` comes from their tag; the screen ones are absolutely positioned and 0 × 0. `progress` is a
   number or an animated value (one more slot whose word is `PROGRESS_WORD`, written into the built-in by
