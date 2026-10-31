@@ -427,6 +427,12 @@ Things that were found the hard way. Read the section of the area you change bef
 - **A view's motion is not observable as one value**: scroll views fling with a private `OverScroller` and views
   animate with `ViewPropertyAnimator`s, so the agent compares a signature of every shown view's place, offset,
   scroll position and opacity between looks.
+- **A scroll view that takes a gesture from a child scrolls from the move that passed the slop**: when the finger
+  lands on a view that takes the touch (a field, a button), `ScrollView.onInterceptTouchEvent` takes the gesture at
+  the first move past the touch slop, and what the finger moved up to that event is lost; from a bare spot its own
+  `onTouchEvent` loses only the slop. A swipe that eased out jumped a quarter of its length or more in its first
+  frame, all of it lost on a field. The agent's swipes ease in and out, a quarter frame apart as a drag's samples,
+  so their first moves stay within the slop and each loses about the slop wherever it lands.
 
 ## macOS, AppKit
 
