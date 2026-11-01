@@ -2141,6 +2141,43 @@ fn is_inside_assets(url: &str) -> bool {
     })
 }
 
+/// The media type a bundled file's response carries, from its extension:
+/// the dev server's (`nsh-dev`'s `content_type`), so a file read from the
+/// app's files and one downloaded from where a web app serves them answer
+/// with the same type.
+fn asset_type(url: &str) -> &'static str {
+    let name = url.rsplit('/').next().unwrap_or_default();
+    let extension = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    match extension.as_deref() {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js" | "mjs") => "text/javascript; charset=utf-8",
+        Some("json" | "map") => "application/json",
+        Some("webmanifest") => "application/manifest+json",
+        Some("wasm") => "application/wasm",
+        Some("css") => "text/css; charset=utf-8",
+        Some("txt") => "text/plain; charset=utf-8",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("avif") => "image/avif",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        Some("heic") => "image/heic",
+        Some("ttf") => "font/ttf",
+        Some("otf") => "font/otf",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        Some("mp4" | "m4v") => "video/mp4",
+        Some("webm") => "video/webm",
+        Some("mov") => "video/quicktime",
+        Some("mp3") => "audio/mpeg",
+        Some("m4a") => "audio/mp4",
+        Some("wav") => "audio/wav",
+        _ => "application/octet-stream",
+    }
+}
+
 /// A request in flight.
 struct Inflight {
     task: Box<dyn FetchTask>,
@@ -2335,7 +2372,13 @@ impl Net {
                 let head = HttpHead {
                     status: 200,
                     status_text: "OK".to_owned(),
-                    headers: vec![("content-length".to_owned(), bytes.len().to_string())],
+                    headers: vec![
+                        ("content-length".to_owned(), bytes.len().to_string()),
+                        (
+                            "content-type".to_owned(),
+                            asset_type(&request.url).to_owned(),
+                        ),
+                    ],
                     url: request.url.clone(),
                     ..HttpHead::default()
                 };
@@ -2378,7 +2421,7 @@ impl Net {
         }
         let inflight = self.inflight.get_mut(&id).filter(|i| i.hop == hop)?;
         match event {
-            FetchEvent::Head(head) => {
+            FetchEvent::Head(mut head) => {
                 let missing = (inflight.asset.as_ref())
                     .filter(|_| !(200..300).contains(&head.status))
                     .map(|uri| format!("{uri}: HTTP {}", head.status));
@@ -2387,6 +2430,21 @@ impl Net {
                         i.task.cancel();
                     }
                     return Some(Ok(FetchEvent::Failed(missing)));
+                }
+                // A downloaded bundled file answers as one read from the
+                // app's files: its `asset:/` URL, and a type even where the
+                // server gave none.
+                if let Some(uri) = &inflight.asset {
+                    head.url = uri.clone();
+                    head.redirected = false;
+                    if !head
+                        .headers
+                        .iter()
+                        .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                    {
+                        head.headers
+                            .push(("content-type".to_owned(), asset_type(uri).to_owned()));
+                    }
                 }
                 let Some(followed) = &mut inflight.followed else {
                     return Some(Ok(FetchEvent::Head(head)));
