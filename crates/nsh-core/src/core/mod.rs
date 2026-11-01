@@ -3108,7 +3108,14 @@ impl<M: TextEngine> Core<M> {
     /// transition, once anything changed.
     fn mark_shader_inputs(&mut self) {
         let unlinked_from = std::mem::take(&mut self.unlinked_from);
-        if self.pictured.is_empty() || self.mount.is_empty() {
+        // A batch that is only a layout animation is dropped (`commit`):
+        // nothing in it changed what the pictures show.
+        if self.pictured.is_empty()
+            || self
+                .mount
+                .iter()
+                .all(|item| matches!(item, MountItem::LayoutAnimation(_)))
+        {
             return;
         }
         use crate::shader::{ShaderInput as I, ShaderRole as R};
@@ -3240,7 +3247,7 @@ impl<M: TextEngine> Core<M> {
             let mut warnings = Vec::new();
             let (progress, animated) = match state.progress {
                 crate::shader::ShaderProgress::Number(n) => (n, None),
-                crate::shader::ShaderProgress::Animated(node) => (0.0, Some(node)),
+                crate::shader::ShaderProgress::Animated(node) => (Percentage(0.0), Some(node)),
             };
             let layer = crate::shader::ShaderLayer::new(shader, &state.uniforms.0, &mut warnings)
                 .with_paused(state.paused)
@@ -4262,6 +4269,23 @@ impl<M: TextEngine> Core<M> {
         }
         if child == self.root || self.is_ancestor(child, parent) {
             return Err(ApplyError::Cycle(child_id));
+        }
+        if self.nodes[parent as usize]
+            .shader
+            .as_ref()
+            .is_some_and(|s| {
+                matches!(
+                    s.role,
+                    crate::shader::ShaderRole::Screen | crate::shader::ShaderRole::ScreenTransition
+                )
+            })
+        {
+            // It takes no space, so a child lays out in nothing: the
+            // surface is what it draws through.
+            log::warn!(
+                target: "js",
+                "node {child_id} in screen effect {parent_id}: a screen effect or transition has no children"
+            );
         }
         if let Some(b) = before
             && (b == child || self.nodes[b as usize].parent != parent)

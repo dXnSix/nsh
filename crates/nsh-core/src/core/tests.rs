@@ -22803,3 +22803,39 @@ fn an_effect_takes_its_picture_again_when_a_child_leaves() {
         batch.items
     );
 }
+
+#[test]
+fn a_layout_animation_alone_takes_no_screen_picture() {
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::ScreenEffect,
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::ShaderSource(Some(
+                    "fn shade(uv: vec2f) -> vec4f { return sample_content(uv); }".into(),
+                )),
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    c.commit().unwrap();
+    // A layout animation with nothing to animate: the batch is dropped, not
+    // kept alive by the screen effect's picture.
+    apply(
+        &mut c,
+        vec![Op::Command {
+            id: 1,
+            command: Command::LayoutAnimation(crate::LayoutAnimation::EASE_IN_EASE_OUT),
+        }],
+    );
+    assert!(c.commit().is_none());
+}

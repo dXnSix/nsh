@@ -25,7 +25,7 @@ use crate::{
         CanvasFont, CanvasGradient, CanvasImage, CanvasOp, CanvasTextAlign, CanvasTextBaseline,
         Composite, Drawing, FillRule, LineCap, LineJoin, Num, Paint, Path, PathOp, ViewPaint,
     },
-    geometry::{Bounds, Corners, Point, Radians, ScaledPixels},
+    geometry::{Bounds, Corners, Percentage, Point, Radians, ScaledPixels},
     js::host::HostProps,
     overlay::{Align, OverlayAnchor, Placement},
     style::SvgPaint,
@@ -591,9 +591,9 @@ impl ShaderView {
         self.bind_prop(paused, Prop::ShaderPaused)
     }
 
-    /// An effect's `nsh.progress` (a bound one sets it again when it
-    /// changes).
-    pub fn progress(self, progress: impl IntoReactive<f32>) -> Self {
+    /// An effect's `nsh.progress`, a fraction (a bound one sets it again
+    /// when it changes).
+    pub fn progress(self, progress: impl IntoReactive<Percentage>) -> Self {
         self.bind_prop(progress, |p| {
             Prop::ShaderProgress(crate::shader::ShaderProgress::Number(p))
         })
@@ -608,7 +608,7 @@ impl ShaderView {
                 self.0.attrs.bound.push(node);
                 crate::shader::ShaderProgress::Animated(id)
             }
-            None => crate::shader::ShaderProgress::Number(0.0),
+            None => crate::shader::ShaderProgress::Number(Percentage(0.0)),
         };
         self.set(Prop::ShaderProgress(progress))
     }
