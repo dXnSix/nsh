@@ -126,10 +126,11 @@ pub use crate::{
         Editor, EditorApi, EditorBounds, EditorClasses, EditorCommand, EditorContextMenuEvent,
         EditorDecoration, EditorDiagnostic, EditorDiagnosticCodeDescription,
         EditorDiagnosticRelatedInformation, EditorDiagnosticSeverity, EditorDiagnosticTag,
-        EditorElement, EditorEvent, EditorFoldRange, EditorHoverEvent, EditorLocation, EditorPart,
-        EditorPosition, EditorProps, EditorRange, EditorRect, EditorReplaceAll, EditorScrollBeyond,
-        EditorSearch, EditorSearchResult, EditorSelection, EditorStyles, EditorTextPressEvent,
-        EditorToken, editor,
+        EditorElement, EditorEvent, EditorFoldRange, EditorGutterMark, EditorGutterPlacement,
+        EditorHoverEvent, EditorLocation, EditorOverviewRulerLane, EditorOverviewRulerMark,
+        EditorPart, EditorPosition, EditorProps, EditorRange, EditorRect, EditorReplaceAll,
+        EditorScrollBeyond, EditorSearch, EditorSearchResult, EditorSelection, EditorStyles,
+        EditorTextPressEvent, EditorToken, editor,
     },
     link::{Link, LinkElement, LinkEvent, LinkOpenWith, LinkProps, link},
     menu::{
@@ -249,14 +250,14 @@ pub mod parts {
 
     use crate::{
         Accordion, AccordionHeader, AccordionItem, AccordionPanel, AccordionTrigger, AlertDialog,
-        Avatar, AvatarGroup, Button, Calendar, Checkbox, Collapsible, ColorArea, ColorEyeDropper, ColorField,
-        ColorPicker, ColorSlider, ColorSwatch, Combobox, ContextMenu, DataTable, DatePicker,
-        DiffView, DockArea, Editor, Link, Menu, MenuItem, MenuSeparator, NumberInput, OtpInput,
-        Pagination, Popover, Progress, Radio, RadioGroup, ResizablePanel, ResizablePanelGroup,
-        Scrollbar, Select, Sheet, Slider, Submenu, Switch, Tab, Table, TableBody, TableCaption,
-        TableCell, TableFooter, TableHead, TableHeader, TableRow, Tabs, TextView, TimeField, Toast,
-        ToastStack, Toggle, ToggleGroup, Toolbar, ToolbarGroup, ToolbarSeparator, Tooltip, plot,
-        rich_editor, toast,
+        Avatar, AvatarGroup, Button, Calendar, Checkbox, Collapsible, ColorArea, ColorEyeDropper,
+        ColorField, ColorPicker, ColorSlider, ColorSwatch, Combobox, ContextMenu, DataTable,
+        DatePicker, DiffView, DockArea, Editor, Link, Menu, MenuItem, MenuSeparator, NumberInput,
+        OtpInput, Pagination, Popover, Progress, Radio, RadioGroup, ResizablePanel,
+        ResizablePanelGroup, Scrollbar, Select, Sheet, Slider, Submenu, Switch, Tab, Table,
+        TableBody, TableCaption, TableCell, TableFooter, TableHead, TableHeader, TableRow, Tabs,
+        TextView, TimeField, Toast, ToastStack, Toggle, ToggleGroup, Toolbar, ToolbarGroup,
+        ToolbarSeparator, Tooltip, plot, rich_editor, toast,
     };
 
     /// What a part does: registers its components, classes and modules.

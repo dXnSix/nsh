@@ -1601,6 +1601,27 @@ extern "system" fn Java_com_longbridge_nsh_Native_shaderSize(
     ui.shaders.wants_frame().into()
 }
 
+/// Keeps the virtual list rows holding nodes `ids` rendered wherever they
+/// scroll (a text selection's ends); none lets go.
+#[unsafe(no_mangle)]
+extern "system" fn Java_com_longbridge_nsh_Native_keepRendered(
+    env: JNIEnv<'_>,
+    _: JClass<'_>,
+    handle: jlong,
+    ids: jni::objects::JIntArray<'_>,
+) {
+    // SAFETY: Java passes its live handle.
+    let host = unsafe { host(handle) };
+    let len = env.get_array_length(&ids).unwrap_or(0).max(0) as usize;
+    let mut nodes = vec![0; len];
+    if env.get_int_array_region(&ids, 0, &mut nodes).is_err() {
+        return;
+    }
+    if let Some(control) = host.control() {
+        control.keep_rendered(nodes.into_iter().map(|id| id as NodeId).collect());
+    }
+}
+
 /// The bytes of a direct `ByteBuffer` (empty when it is not one).
 fn direct_bytes<'a>(env: &JNIEnv<'_>, buffer: &'a JObject<'_>) -> &'a [u8] {
     if buffer.is_null() {
@@ -1709,27 +1730,6 @@ extern "system" fn Java_com_longbridge_nsh_Native_navTransition(
         reverse != 0,
     );
     runs.into()
-}
-
-/// Keeps the virtual list rows holding nodes `ids` rendered wherever they
-/// scroll (a text selection's ends); none lets go.
-#[unsafe(no_mangle)]
-extern "system" fn Java_com_longbridge_nsh_Native_keepRendered(
-    env: JNIEnv<'_>,
-    _: JClass<'_>,
-    handle: jlong,
-    ids: jni::objects::JIntArray<'_>,
-) {
-    // SAFETY: Java passes its live handle.
-    let host = unsafe { host(handle) };
-    let len = env.get_array_length(&ids).unwrap_or(0).max(0) as usize;
-    let mut nodes = vec![0; len];
-    if env.get_int_array_region(&ids, 0, &mut nodes).is_err() {
-        return;
-    }
-    if let Some(control) = host.control() {
-        control.keep_rendered(nodes.into_iter().map(|id| id as NodeId).collect());
-    }
 }
 
 /// A scroll view moved: the engine (lists) and its scroll value learn the

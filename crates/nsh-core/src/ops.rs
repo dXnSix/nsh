@@ -1400,8 +1400,9 @@ pub enum TransitionFallback {
     /// A cross-fade ([`crate::shader::crossfade`]).
     #[default]
     Fade,
-    /// Nothing: the children change at once.
-    None,
+    /// A cut: the children change at once (`"none"`).
+    #[prop(rename = "none")]
+    Cut,
 }
 
 /// How a screen enters and leaves (`animation`).

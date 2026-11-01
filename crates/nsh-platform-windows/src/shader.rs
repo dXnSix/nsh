@@ -49,7 +49,7 @@ use std::{
 use nsh_core::{
     NodeId, Points,
     animation::AnimationValue,
-    geometry::{Size, size},
+    geometry::{Percentage, Size, size},
     shader::{ShaderInput, ShaderLayer, ShaderRole},
 };
 use nsh_engine::shader::{Renderer, ShaderView};
@@ -847,7 +847,7 @@ impl NavItem {
         let layer = layer
             .clone()
             .with_overflow(Points::ZERO)
-            .with_progress(0.0, Some(NodeId::MAX));
+            .with_progress(Percentage::ZERO, Some(NodeId::MAX));
         let slot = layer.progress_slot();
         let mut view = ShaderView::default();
         view.set_layer(Some(Arc::new(layer)));

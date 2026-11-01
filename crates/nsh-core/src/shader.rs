@@ -67,7 +67,7 @@ use naga::{
 use crate::{
     Color,
     animation::{AnimationValue, NodeId},
-    geometry::{Points, Size},
+    geometry::{Percentage, Points, Size},
 };
 
 /// The longest source a shader may have, in bytes.
@@ -175,7 +175,7 @@ pub fn builtins(
     size: Size<Points>,
     time: f32,
     scale: f32,
-    progress: f32,
+    progress: Percentage,
     overflow: Points,
 ) -> [u32; 8] {
     [
@@ -183,7 +183,7 @@ pub fn builtins(
         size.height.0.to_bits(),
         time.to_bits(),
         scale.to_bits(),
-        progress.to_bits(),
+        progress.0.to_bits(),
         overflow.0.to_bits(),
         0,
         0,
@@ -192,6 +192,7 @@ pub fn builtins(
 
 /// The pictures a shader can read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ShaderInput {
     /// `sample_content`: an effect's children, a screen effect's surface.
     Content,
@@ -269,6 +270,7 @@ impl ShaderInputs {
 /// What a layer draws, which decides where the platform shows it and which
 /// pictures it takes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ShaderRole {
     /// A shader view: the box under its children (upstream's `Shader`).
     #[default]
@@ -291,15 +293,15 @@ pub enum ShaderRole {
 /// animated value.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ShaderProgress {
-    /// A number (0 to 1, by convention).
-    Number(f32),
+    /// A fraction (0 to 1, by convention; a spring may overshoot it).
+    Number(Percentage),
     /// The animated value of this node.
     Animated(NodeId),
 }
 
 impl Default for ShaderProgress {
     fn default() -> Self {
-        ShaderProgress::Number(0.0)
+        ShaderProgress::Number(Percentage(0.0))
     }
 }
 
@@ -308,7 +310,7 @@ impl Default for ShaderProgress {
 pub enum TransitionKey {
     /// A string.
     String(Arc<str>),
-    /// A number (its bits).
+    /// A number (its bits; made by [`TransitionKey::number`]).
     Number(u64),
     /// A boolean.
     Bool(bool),
@@ -320,9 +322,24 @@ impl From<&str> for TransitionKey {
     }
 }
 
+impl TransitionKey {
+    /// A number as a key: equal numbers are equal keys, as JS compares
+    /// them (`0` and `-0` are one key; every NaN is one key).
+    pub fn number(n: f64) -> Self {
+        let n = if n == 0.0 {
+            0.0
+        } else if n.is_nan() {
+            f64::NAN
+        } else {
+            n
+        };
+        TransitionKey::Number(n.to_bits())
+    }
+}
+
 impl From<f64> for TransitionKey {
     fn from(n: f64) -> Self {
-        TransitionKey::Number(n.to_bits())
+        TransitionKey::number(n)
     }
 }
 
@@ -606,7 +623,7 @@ impl Shader {
             (Vec::new(), 0)
         };
         let animated = reads_time(&module);
-        let inputs = reads_inputs(&module);
+        let inputs = reads_inputs(&module, &info);
         Ok(Shader(Arc::new(Program {
             source: source.into(),
             hash: source_hash(source),
@@ -760,7 +777,8 @@ fn check(module: &Module, source: &str, has_uniforms: bool) -> Result<(), Shader
     }
     for (handle, global) in module.global_variables.iter() {
         let name = global.name.as_deref().unwrap_or("");
-        let ours = (matches!(name, "nsh" | "uniforms") || name.starts_with("nsh_"))
+        let ours = (matches!(name, "nsh" | "uniforms" | "nsh_sampler")
+            || ShaderInput::ALL.iter().any(|i| i.texture() == name))
             && global.binding.is_some();
         if ours || global.space == AddressSpace::Private {
             continue;
@@ -884,26 +902,26 @@ fn uniform_type(module: &Module, ty: Handle<naga::Type>) -> Option<UniformType> 
     })
 }
 
-/// The pictures the app's functions read: the `sample_*` functions they
-/// call.
-fn reads_inputs(module: &Module) -> ShaderInputs {
-    let mut inputs = ShaderInputs::default();
-    let ours = |f: &naga::Function| {
-        f.name
-            .as_deref()
-            .is_some_and(|n| n.starts_with("nsh_") || n.starts_with("sample_"))
+/// The pictures the fragment stage reads: the textures `nsh_fragment` uses,
+/// through `shade` and whatever it calls (naga's analysis follows calls).
+fn reads_inputs(module: &Module, info: &ModuleInfo) -> ShaderInputs {
+    let Some(entry) = module
+        .entry_points
+        .iter()
+        .position(|e| e.name == "nsh_fragment")
+    else {
+        return ShaderInputs::default();
     };
-    for (_, function) in module.functions.iter().filter(|(_, f)| !ours(f)) {
-        for (_, expression) in function.expressions.iter() {
-            if let Expression::CallResult(called) = *expression
-                && let Some(name) = module.functions[called].name.as_deref()
-                && let Some(input) = ShaderInput::ALL.into_iter().find(|i| i.function() == name)
-            {
-                inputs = inputs.with(input);
-            }
-        }
-    }
-    inputs
+    let uses = info.get_entry_point(entry);
+    module
+        .global_variables
+        .iter()
+        .filter(|&(handle, _)| !uses[handle].is_empty())
+        .filter_map(|(_, global)| {
+            let name = global.name.as_deref()?;
+            ShaderInput::ALL.into_iter().find(|i| i.texture() == name)
+        })
+        .fold(ShaderInputs::default(), ShaderInputs::with)
 }
 
 /// Whether any function reads `nsh.time`.
@@ -1093,7 +1111,7 @@ pub struct ShaderLayer {
     pub overflow: Points,
     /// `nsh.progress`, unless an animated value moves it (a slot whose
     /// word is [`PROGRESS_WORD`]) or a transition runs it.
-    pub progress: f32,
+    pub progress: Percentage,
 }
 
 impl ShaderLayer {
@@ -1137,7 +1155,7 @@ impl ShaderLayer {
             paused: false,
             role: ShaderRole::Fill,
             overflow: Points::ZERO,
-            progress: 0.0,
+            progress: Percentage(0.0),
         }
     }
 
@@ -1161,7 +1179,7 @@ impl ShaderLayer {
 
     /// The same layer with `nsh.progress` at `progress`, or moved by the
     /// animated value of node `animated` (one more slot).
-    pub fn with_progress(mut self, progress: f32, animated: Option<NodeId>) -> Self {
+    pub fn with_progress(mut self, progress: Percentage, animated: Option<NodeId>) -> Self {
         self.progress = progress;
         if let Some(node) = animated {
             self.slots.push(UniformSlot {
@@ -1379,10 +1397,64 @@ fn shade(uv: vec2f) -> vec4f {
                 _ => None,
             })
             .expect("struct Nsh");
-        let words = builtins(Size::default(), 0.0, 1.0, 0.0, Points::default());
+        let words = builtins(
+            Size::default(),
+            0.0,
+            1.0,
+            Percentage(0.0),
+            Points::default(),
+        );
         assert_eq!(span as usize, size_of_val(&words));
         // GLES without `BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED` takes no other.
         assert_eq!(span % 16, 0);
+    }
+
+    #[test]
+    fn an_app_binds_no_globals_of_its_own_under_nsh_names() {
+        let error = Shader::compile(
+            "@group(0) @binding(7) var nsh_extra: texture_2d<f32>;\n\
+             fn shade(uv: vec2f) -> vec4f { return textureLoad(nsh_extra, vec2i(0), 0); }",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("nsh_extra"), "{error:?}");
+        // The pictures' own globals are NSH's.
+        assert!(
+            Shader::compile(
+                "fn shade(uv: vec2f) -> vec4f { return textureSampleLevel(nsh_content, nsh_sampler, uv, 0.0); }"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn equal_numbers_are_one_transition_key() {
+        assert_eq!(TransitionKey::from(0.0), TransitionKey::from(-0.0));
+        assert_eq!(
+            TransitionKey::from(f64::NAN),
+            TransitionKey::from(-f64::NAN)
+        );
+        assert_ne!(TransitionKey::from(1.0), TransitionKey::from(2.0));
+    }
+
+    #[test]
+    fn inputs_are_the_pictures_shade_reaches() {
+        let inputs = |source: &str| Shader::compile(source).unwrap().inputs();
+        assert!(inputs("fn shade(uv: vec2f) -> vec4f { return vec4f(1.0); }").is_empty());
+        // Through a helper, whatever its name.
+        let helper = inputs(
+            "fn sample_custom(uv: vec2f) -> vec4f { return sample_content(uv) * 0.5; }\n\
+             fn shade(uv: vec2f) -> vec4f { return sample_custom(uv) + sample_to(uv); }",
+        );
+        assert_eq!(
+            helper.iter().collect::<Vec<_>>(),
+            [ShaderInput::Content, ShaderInput::To]
+        );
+        // A helper `shade` never calls reads nothing.
+        let unused = inputs(
+            "fn unused(uv: vec2f) -> vec4f { return sample_backdrop(uv); }\n\
+             fn shade(uv: vec2f) -> vec4f { return sample_from(uv); }",
+        );
+        assert_eq!(unused.iter().collect::<Vec<_>>(), [ShaderInput::From]);
     }
 
     #[test]

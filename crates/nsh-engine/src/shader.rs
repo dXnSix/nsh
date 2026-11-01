@@ -43,7 +43,7 @@ use std::{
 
 use nsh_core::{
     animation::AnimationValue,
-    geometry::{Points, Size},
+    geometry::{Percentage, Points, Size},
     shader::{PROGRESS_WORD, ShaderInput, ShaderLayer, ShaderRole, builtins},
 };
 use rustc_hash::FxHashMap;
@@ -321,6 +321,31 @@ fn picture_descriptor(
     }
 }
 
+/// Why a picture of `len` bytes cannot be uploaded as `height` rows of
+/// `width` pixels `stride` bytes apart: a wrong size would be a GPU
+/// validation error outside any error scope.
+fn picture_fits(
+    renderer: &Renderer,
+    len: usize,
+    width: u32,
+    height: u32,
+    stride: u32,
+) -> Result<(), String> {
+    let max = renderer.device.limits().max_texture_dimension_2d;
+    if width > max || height > max {
+        return Err(format!("larger than the device's {max} pixels a side"));
+    }
+    let row = u64::from(width) * 4;
+    if u64::from(stride) < row {
+        return Err(format!("{stride} bytes a row hold no {width} pixels"));
+    }
+    let needed = u64::from(stride) * u64::from(height - 1) + row;
+    if (len as u64) < needed {
+        return Err(format!("{len} bytes hold no {needed}"));
+    }
+    Ok(())
+}
+
 /// A picture the platform gave, on the GPU.
 struct Picture {
     texture: wgpu::Texture,
@@ -469,15 +494,32 @@ impl ShaderView {
     /// Takes the picture of `input` the platform made: `height` rows of
     /// `width` premultiplied pixels in the renderer's format, `stride`
     /// bytes apart, covering the box and [`Self::overflow`] points beyond
-    /// each side. `None` lets it go (it reads transparent).
+    /// each side. `None` lets it go (it reads transparent), and so does a
+    /// picture whose bytes do not hold its rows or that is larger than the
+    /// device's textures (with a warning).
     pub fn set_input(
         &mut self,
         renderer: &Renderer,
         input: ShaderInput,
         picture: Option<(&[u8], u32, u32, u32)>,
     ) {
+        let picture =
+            picture
+                .filter(|p| p.1 > 0 && p.2 > 0)
+                .filter(|&(pixels, width, height, stride)| {
+                    match picture_fits(renderer, pixels.len(), width, height, stride) {
+                        Ok(()) => true,
+                        Err(why) => {
+                            log::warn!(
+                                "a shader's {} picture, {width} × {height}: {why}",
+                                input.function()
+                            );
+                            false
+                        }
+                    }
+                });
         let slot = &mut self.pictures[input.index()];
-        let Some((pixels, width, height, stride)) = picture.filter(|p| p.1 > 0 && p.2 > 0) else {
+        let Some((pixels, width, height, stride)) = picture else {
             if slot.take().is_some() {
                 self.pictures_changed = true;
                 self.dirty = true;
@@ -582,7 +624,7 @@ impl ShaderView {
             return if self.backwards { 1.0 - p } else { p };
         }
         self.progress
-            .or_else(|| self.layer.as_ref().map(|l| l.progress))
+            .or_else(|| self.layer.as_ref().map(|l| l.progress.0))
             .unwrap_or(0.0)
     }
 
@@ -708,7 +750,13 @@ impl ShaderView {
         renderer.queue.write_buffer(
             &bindings.builtins,
             0,
-            &words_bytes(&builtins(self.size, time, scale, progress, overflow)),
+            &words_bytes(&builtins(
+                self.size,
+                time,
+                scale,
+                Percentage(progress),
+                overflow,
+            )),
         );
         if let Some(buffer) = &bindings.uniforms {
             renderer
@@ -1071,6 +1119,30 @@ mod tests {
     }
 
     #[test]
+    fn a_picture_its_bytes_do_not_hold_is_let_go() {
+        let Some(renderer) = Renderer::new(PixelFormat::Rgba) else {
+            eprintln!("no GPU: skipped");
+            return;
+        };
+        let mut view = ShaderView::default();
+        view.set_input(&renderer, ShaderInput::Content, Some((&[0; 8], 2, 1, 8)));
+        assert!(view.has_input(ShaderInput::Content));
+        // Two rows of two pixels in one row's bytes, a row narrower than its
+        // pixels, a picture wider than the device's textures.
+        view.set_input(&renderer, ShaderInput::Content, Some((&[0; 8], 2, 2, 8)));
+        assert!(!view.has_input(ShaderInput::Content));
+        view.set_input(&renderer, ShaderInput::From, Some((&[0; 16], 2, 2, 4)));
+        assert!(!view.has_input(ShaderInput::From));
+        let max = renderer.device.limits().max_texture_dimension_2d;
+        view.set_input(
+            &renderer,
+            ShaderInput::To,
+            Some((&[0; 4], max + 1, 1, 4 * (max + 1))),
+        );
+        assert!(!view.has_input(ShaderInput::To));
+    }
+
+    #[test]
     fn transitions_run_their_progress() {
         let Some(renderer) = Renderer::new(PixelFormat::Rgba) else {
             eprintln!("no GPU: skipped");
@@ -1128,7 +1200,7 @@ mod tests {
         )
         .with_role(ShaderRole::Effect)
         .with_overflow(px(1.0))
-        .with_progress(0.0, Some(9));
+        .with_progress(Percentage(0.0), Some(9));
         view.set_layer(Some(Arc::new(glow)));
         view.set_slot(0, AnimationValue::Number(1.0));
         let f = frame(&mut view, &renderer);
