@@ -250,9 +250,11 @@ pub(crate) fn package(
     if let Some(glue) = &glue {
         app["glue"] = glue.as_str().into();
     }
+    let base = page_base(config.web.base.as_deref())?;
     let html = page(&PageParts {
         name,
         appearance,
+        base: base.as_deref(),
         icons: &icons,
         runtime: &js,
         wasm: &wasm,
@@ -278,7 +280,7 @@ pub(crate) fn package(
         ui::dim(format!(", {}", ui::bytes(dir_size(&dir))))
     ));
     if options.run {
-        serve(&dir)?;
+        serve(&dir, base.as_deref().unwrap_or("/"))?;
     }
     Ok(())
 }
@@ -307,6 +309,30 @@ pub(crate) fn link(
         });
     }
     split::split(linkable, keep, lazy)
+}
+
+/// `nsh.json` `web.base`: a path from the host's root, ending in `/` (one
+/// is added). It goes into the page's `<base href>` as it is, so it holds
+/// only what a path can (no query, fragment, quotes or `..`).
+fn page_base(base: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(base) = base else { return Ok(None) };
+    let valid = base.starts_with('/')
+        && !base.starts_with("//")
+        && !base.contains(['?', '#', '\\', '"', '\'', '<', '>', '&'])
+        && !base.chars().any(char::is_whitespace)
+        && !base
+            .split('/')
+            .any(|segment| segment == "." || segment == "..");
+    if !valid {
+        bail!(
+            "nsh.json web.base: {base:?} is not a path from the host's root, as \"/apps/counter/\""
+        );
+    }
+    Ok(Some(if base.ends_with('/') {
+        base.to_owned()
+    } else {
+        format!("{base}/")
+    }))
 }
 
 /// Whether `name` is the export of a part of `nsh/base`, of a standard
@@ -583,20 +609,22 @@ fn core_exports() -> &'static BTreeSet<String> {
     })
 }
 
-/// Serves the site `dir` on this machine, as a CDN would (`nsh_dev::SiteServer`),
-/// until stopped; prints its address.
-fn serve(dir: &Path) -> anyhow::Result<()> {
+/// Serves the site `dir` on this machine under `base` (`web.base`), as a
+/// CDN would (`nsh_dev::SiteServer`), until stopped; prints its address.
+fn serve(dir: &Path, base: &str) -> anyhow::Result<()> {
     let mut server = None;
     for port in (PORT..PORT + 10).chain([0]) {
-        if let Ok(s) =
-            nsh_dev::SiteServer::start(SocketAddr::from(([127, 0, 0, 1], port)), dir.into())
-        {
+        if let Ok(s) = nsh_dev::SiteServer::start_at(
+            SocketAddr::from(([127, 0, 0, 1], port)),
+            dir.into(),
+            base,
+        ) {
             server = Some(s);
             break;
         }
     }
     let server = server.context("no free port to serve the site on")?;
-    let url = format!("http://127.0.0.1:{}/", server.local_addr().port());
+    let url = format!("http://127.0.0.1:{}{base}", server.local_addr().port());
     ui::note(format!("serving {} at {url}", ui::path(dir)));
     let _stoppable = ui::Stoppable::new();
     while !ui::stop_requested() {
@@ -1099,6 +1127,8 @@ fn connect_src(
 struct PageParts<'a> {
     name: &'a str,
     appearance: Appearance,
+    /// The page's `<base href>` ([`page_base`]).
+    base: Option<&'a str>,
     icons: &'a Icons,
     /// URL of `nsh.js`.
     runtime: &'a str,
@@ -1118,6 +1148,10 @@ struct PageParts<'a> {
 fn page(parts: &PageParts<'_>) -> String {
     let (light, dark) = parts.appearance.colors();
     let mut head = String::new();
+    // First: every relative URL after it resolves against it.
+    if let Some(base) = parts.base {
+        let _ = writeln!(head, "<base href=\"{base}\">");
+    }
     if let Some(sources) = parts.connect {
         let _ = writeln!(
             head,
@@ -1177,7 +1211,7 @@ fn page(parts: &PageParts<'_>) -> String {
     let urls = serde_json::json!(urls).to_string().replace("</", "<\\/");
     let _ = writeln!(
         head,
-        "<script>const fetches = new Map({urls}.map((url) => {{ const response = fetch(url); response.catch(() => {{}}); return [url, response]; }}));</script>"
+        "<script>const fetches = new Map({urls}.map((path) => {{ const url = new URL(path, document.baseURI).href; const response = fetch(url); response.catch(() => {{}}); return [url, response]; }}));</script>"
     );
     // JSON in a script: `</script>` in a string must not end it.
     let app = parts.app.to_string().replace("</", "<\\/");
@@ -1721,6 +1755,7 @@ mod tests {
         let parts = |glue| PageParts {
             name: "App",
             appearance: Appearance::System,
+            base: None,
             icons: &icons,
             runtime: "nsh.0123456789.js",
             wasm: "nsh.0123456789.wasm",
@@ -1749,11 +1784,53 @@ mod tests {
     }
 
     #[test]
+    fn the_base_is_a_path_from_the_root() {
+        assert_eq!(page_base(None).unwrap(), None);
+        assert_eq!(page_base(Some("/")).unwrap().as_deref(), Some("/"));
+        assert_eq!(
+            page_base(Some("/apps/counter")).unwrap().as_deref(),
+            Some("/apps/counter/")
+        );
+        assert_eq!(
+            page_base(Some("/apps/counter/")).unwrap().as_deref(),
+            Some("/apps/counter/")
+        );
+        for base in [
+            "apps/",
+            "//cdn.example.com/",
+            "https://example.com/",
+            "/a/../b/",
+            "/a b/",
+            "/a?x/",
+            "/a\"><script>/",
+        ] {
+            assert!(page_base(Some(base)).is_err(), "{base}");
+        }
+        let html = page(&PageParts {
+            name: "A",
+            appearance: Appearance::Light,
+            base: Some("/apps/counter/"),
+            icons: &Icons::default(),
+            runtime: "nsh.0123456789.js",
+            wasm: "nsh.0123456789.wasm",
+            glue: None,
+            code: "app.1.js",
+            fonts: &[],
+            app: &serde_json::json!({}),
+            connect: None,
+        });
+        // Before the first relative URL (the manifest's).
+        let base = html.find("<base href=\"/apps/counter/\">").unwrap();
+        assert!(base < html.find("manifest.webmanifest").unwrap());
+    }
+
+    #[test]
     fn the_page_names_the_files_and_cannot_be_broken_out_of() {
         let app = serde_json::json!({ "code": "app.1.js", "x": "</script><b>" });
         let html = page(&PageParts {
             name: "A <b> & \"c\"",
             appearance: Appearance::System,
+            base: None,
             icons: &Icons::default(),
             runtime: "nsh.0123456789.js",
             wasm: "nsh.0123456789.wasm",
