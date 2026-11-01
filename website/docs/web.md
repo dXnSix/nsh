@@ -160,7 +160,19 @@ page and files named after their content.
 
 `<digest>` is the start of the SHA-256 of the file's content: a file's name changes exactly when its content does, so a
 new release changes only `index.html` and the files that really changed. Everything uses relative URLs, so the site
-works from any directory of any host (`https://example.com/apps/counter/`).
+works from any directory of any host (`https://example.com/apps/counter/`). The page resolves them once as it starts,
+so the files still load after the app moves the address to another path.
+
+An app that is opened at its own paths ([links into the app](#links-into-the-app)) names the path its site is served
+under in `nsh.json`:
+
+```json
+{ "web": { "base": "/apps/counter/" } }
+```
+
+The page then has a `<base href="/apps/counter/">`, and loads at `https://example.com/apps/counter/sports/football` as at
+`https://example.com/apps/counter/`. `"base": "/"` is a site at the host's root. `nsh package --target web --run` serves
+the site under that path.
 
 ### Runtime size
 
@@ -189,6 +201,8 @@ Serve `.wasm` as `application/wasm` (browsers then compile it while it downloads
 text and WebAssembly (gzip or brotli). `nsh package --target web --run` serves the site this way on
 `http://127.0.0.1:4173/`.
 
+#### Links into the app
+
 An app whose own paths show in the address bar (`https://example.com/sports/football`) is a single-page app: a link to
 one of those paths, or a reload there, loads `index.html`, and the app shows the page the path names. The host rewrites
 such requests to `index.html`: a `GET` whose path has no file extension in its last segment and whose `Accept` header
@@ -201,6 +215,9 @@ answer. `nsh package --target web --run` and the dev server (`nsh run --target w
 | Netlify | `/*  /index.html  200` in `_redirects` (files that exist are served as they are) |
 | Cloudflare Pages | built in for a site without a top-level `404.html` |
 | GitHub Pages | a copy of `index.html` as `404.html` |
+
+A path with several segments loads the page's files from the site's own path when the page has a base (`web.base`,
+above). The dev server's page has `/`.
 
 An app published for the web runs like a packaged native app: as a release, with the capabilities its `nsh.json` declares
 ([Sandbox and capabilities](./sandbox-and-capabilities.md)), a TSX app on the browser's JavaScript engine. When they restrict `network`, the page also carries a
@@ -401,7 +418,7 @@ The page reports the rest of the environment, and keeps it current:
 
 `fetch` (with streams, `AbortController` and `FormData`) and `<Image>` URLs go through the browser's own network stack, after NSH has checked the app's [capabilities](./sandbox-and-capabilities.md). Since the requests are the browser's, the browser's rules apply:
 
-- **Relative URLs** resolve against the page's URL, as in the browser: a published app reaches its own API with `fetch("/api/items")`, and `<Image src="/photos/a.jpg" />` loads from its own server. (Native platforms have no page, so they need absolute URLs.)
+- **Relative URLs** resolve against the page's URL as the app started (its `<base href>` when it has one), as in the browser: a published app reaches its own API with `fetch("/api/items")`, and `<Image src="/photos/a.jpg" />` loads from its own server. (Native platforms have no page, so they need absolute URLs.)
 - **CORS.** A request to another origin than the page's only succeeds if that server allows the page's origin (`Access-Control-Allow-Origin`); otherwise `fetch` rejects with a network error. Only the response headers the server exposes are visible.
 - **Cookies** (and HTTP authentication) are sent to the page's own origin only (`credentials: "same-origin"`), and headers browsers forbid (`Cookie`, `User-Agent`, `Host`, ...) are dropped.
 - **Redirects** are followed by the browser. A redirected request that must not follow it fails: `redirect: "manual"` and `"error"`, and requests of an app whose capabilities restrict `network` (NSH checks every hop, and browsers do not reveal a redirect before following it).
