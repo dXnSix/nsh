@@ -28,7 +28,9 @@ use objc2_ui_kit::{
     UIDevice, UIFont, UIFontTextStyleBody, UIKeyboardAnimationCurveUserInfoKey,
     UIKeyboardAnimationDurationUserInfoKey, UIKeyboardFrameEndUserInfoKey,
     UIKeyboardWillChangeFrameNotification, UIKeyboardWillHideNotification, UIResponder,
-    UITraitCollection, UITraitEnvironment, UIUserInterfaceIdiom, UIUserInterfaceStyle, UIView,
+    UISceneActivationState, UISceneDidActivateNotification, UISceneDidEnterBackgroundNotification,
+    UISceneWillDeactivateNotification, UISceneWillEnterForegroundNotification, UITraitCollection,
+    UITraitEnvironment, UIUserInterfaceIdiom, UIUserInterfaceStyle, UIView, UIWindowScene,
 };
 
 use crate::{
@@ -123,8 +125,9 @@ pub(crate) struct RootViewIvars {
     on_hot_failed: SharedHandler,
     /// Keyboard height over the view and its animation duration.
     keyboard: Cell<(f32, f32)>,
-    /// Whether the app is in use, as UIApplication's notifications said last
-    /// ([`RootView::observe_app_state`]).
+    /// Whether the app is in use where the surface shows, as the
+    /// notifications of its window's scene said last (the application's
+    /// while it has none: [`RootView::observe_app_state`]).
     app_state: Cell<AppState>,
     /// Last environment sent to the engine.
     environment: Cell<Option<Environment>>,
@@ -190,6 +193,15 @@ define_class!(
             });
             // SAFETY: calling the superclass implementation.
             taken || unsafe { msg_send![super(self), accessibilityPerformEscape] }
+        }
+
+        #[unsafe(method(didMoveToWindow))]
+        fn did_move_to_window(&self) {
+            // SAFETY: calling the superclass implementation.
+            let _: () = unsafe { msg_send![super(self), didMoveToWindow] };
+            // Another window may be another scene, in another state.
+            self.ivars().app_state.set(self.scene_state());
+            self.publish_environment();
         }
 
         #[unsafe(method(safeAreaInsetsDidChange))]
@@ -375,35 +387,64 @@ impl RootView {
         }
     }
 
-    /// Tracks whether the app is in use (`appState()`): UIApplication's
-    /// notifications of the app's state, the embedding app's for an
-    /// embedded surface. The state is the notification's: during
-    /// `willResignActive`, `applicationState` still says active.
+    /// Tracks whether the app is in use where the surface shows
+    /// (`appState()`): the notifications of its window's scene, so that on
+    /// an iPad with several windows, and on Catalyst, a surface follows its
+    /// own window as the desktop backends do; the application's while the
+    /// surface is in no window with a scene. An embedded surface follows
+    /// the embedding app's window. The state is the notification's: during
+    /// `willResignActive` / `willDeactivate`, the app and the scene still
+    /// say active.
     fn observe_app_state(this: &Retained<Self>) {
         let center = NSNotificationCenter::defaultCenter();
         let weak = Weak::from_retained(this);
         let block = RcBlock::new(move |note: NonNull<NSNotification>| {
             let Some(view) = weak.load() else { return };
             // SAFETY: a valid notification for the duration of the call.
-            let name = unsafe { note.as_ref() }.name();
+            let note = unsafe { note.as_ref() };
+            let name = note.name();
             // SAFETY: immutable UIKit constants.
-            let state = unsafe {
-                if *name == *UIApplicationDidBecomeActiveNotification {
-                    AppState::Active
+            let (of_scene, state) = unsafe {
+                if *name == *UISceneDidActivateNotification {
+                    (true, AppState::Active)
+                } else if *name == *UISceneDidEnterBackgroundNotification {
+                    (true, AppState::Background)
+                } else if *name == *UISceneWillDeactivateNotification
+                    || *name == *UISceneWillEnterForegroundNotification
+                {
+                    (true, AppState::Inactive)
+                } else if *name == *UIApplicationDidBecomeActiveNotification {
+                    (false, AppState::Active)
                 } else if *name == *UIApplicationDidEnterBackgroundNotification {
-                    AppState::Background
+                    (false, AppState::Background)
                 } else {
                     // Resigning active, or coming back to the foreground
                     // before it is active again.
-                    AppState::Inactive
+                    (false, AppState::Inactive)
                 }
             };
-            view.ivars().app_state.set(state);
-            view.publish_environment();
+            let scene = view.scene();
+            let ours = match (&scene, note.object()) {
+                (Some(scene), Some(object)) if of_scene => {
+                    std::ptr::addr_eq(Retained::as_ptr(scene), Retained::as_ptr(&object))
+                }
+                // Another scene's, or the application's while the surface
+                // follows a scene.
+                (Some(_), _) => false,
+                (None, _) => !of_scene,
+            };
+            if ours {
+                view.ivars().app_state.set(state);
+                view.publish_environment();
+            }
         });
         // SAFETY: immutable UIKit constants.
         let names = unsafe {
             [
+                UISceneDidActivateNotification,
+                UISceneWillDeactivateNotification,
+                UISceneDidEnterBackgroundNotification,
+                UISceneWillEnterForegroundNotification,
                 UIApplicationDidBecomeActiveNotification,
                 UIApplicationWillResignActiveNotification,
                 UIApplicationDidEnterBackgroundNotification,
@@ -422,6 +463,25 @@ impl RootView {
                     &block,
                 )
             });
+        }
+    }
+
+    /// The scene of the window the surface is in, if any.
+    fn scene(&self) -> Option<Retained<UIWindowScene>> {
+        self.window()?.windowScene()
+    }
+
+    /// The state of the surface's scene now, before its notifications say
+    /// more (the application's without one). An unattached scene shows
+    /// nothing, as one in the background.
+    fn scene_state(&self) -> AppState {
+        let Some(scene) = self.scene() else {
+            return app_state(self.mtm());
+        };
+        match scene.activationState() {
+            UISceneActivationState::ForegroundActive => AppState::Active,
+            UISceneActivationState::ForegroundInactive => AppState::Inactive,
+            _ => AppState::Background,
         }
     }
 
