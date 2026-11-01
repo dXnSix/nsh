@@ -50,26 +50,13 @@ merges with it cleanly. Still to open: 7 (once #745 and #746 are merged), then 2
 release), so #747 was rebased without its commit (`fab837934`); 2 to 4 still sit on the old 01 and are rebuilt
 without 00 when they open.
 
-## Not sent: the Intl PR
-
-`pr/environment/05-intl` (`0d34b5133`, on `04-regional`: the time zone database for NSH's own `Intl`, then its hour
-cycle default) is dropped from the upstream set (2026-10-30, the owner's decision). It changed what NSH's `Intl` writes
-by default (dates in `timeZone()`'s zone, the device's locale's times in `hourCycle()`), which apps already rely on,
-and RayX does not need it: RayX formats in Rust with dXn.Intl through its i18n service, which TSX reaches through
-`I18n.t` (MessageFormat 2's `:number`, `:date`, `:time`, `:datetime`, ...) and which already applies the user's hour
-cycle (`-u-hc-` on its locale, from NSH's `hour_cycle()`). Converting instants between zones, when RayX needs it,
-belongs there too, in Rust. The branch stays on the fork for reference, and so do the fork's own two Intl commits on
-`main` (`feat-intl-time-zone.md`, `feat-intl-hour-cycle.md`) until the owner decides on reverting them.
-
 ## What changed from the per-platform branches
 
-- The per-platform branches (`pr/app-state/01-core` to `pr/regional/07-gpui`, 28 on the fork) and the two Intl
-  branches (`pr/intl-time-zone/01-js`, `pr/intl-hour-cycle/01-js`) are superseded; every file of the stacked
-  branches is the same as in them, except three. `docs/dev/elements.md` joins the iOS and Android
+- The per-platform branches (`pr/app-state/01-core` to `pr/regional/07-gpui`, 28 on the fork) are superseded; every
+  file of the stacked branches is the same as in them, except three. `docs/dev/elements.md` joins the iOS and Android
   sentences of the app state, which two branches each wrote alone. `Cargo.toml` lists the platforms' `windows` and
   `objc2-foundation` features together. `crates/gpui/Cargo.lock` leaves out the `jiff` entries that
-  `pr/languages/07-gpui` added: nothing there uses them (they belong to the Intl time zone commit), and cargo dropped
-  them on every build.
+  `pr/languages/07-gpui` added: nothing there uses them, and cargo dropped them on every build.
 - The register-font commit adds its compatibility case (`tests/compat/cases/layout/core-register-font.tsx`:
   `registerFont` of the app's font by its `asset:/` URL, and of data that is no font), as a new export lands with one.
 - Android needs no workaround any more: #727 fixed `selectable_view.rs`'s lint on `main`.
@@ -96,20 +83,18 @@ the rest of 02–04 changed only in Android's `NshView` (compiled with `cargo xt
 ## Checked on 201d780a (2026-10-30, macOS host, Rust 1.99), before the restack
 
 Heads: `01-app-state` `36731a0f6`, `02-time-zone` `cd9070e2a`, `03-languages` `fd6a695d2`, `04-regional`
-`8dc94566d`, `woff` `71a8e2b01`, `read-assets` `9d5b13973`, `register-font` `9fabfce60`. The runs below also covered
-the dropped `05-intl` (`0d34b5133`), which sits on `04-regional`.
+`8dc94566d`, `woff` `71a8e2b01`, `read-assets` `9d5b13973`, `register-font` `9fabfce60`.
 
 - Every branch: nightly rustfmt on the changed files; `cargo clippy --workspace --all-targets -D warnings`;
   `cargo test -p nsh-core -p nsh-js -p nsh-testing -p nsh-engine -p nsh-macros -p nsh-bundler --features
   nsh-bundler/bundle`; `node --test` of the web runtime's tests; wasm32 clippy (`compiler`).
-- Environment branches 1 to 5: Catalyst clippy (`embed,dev`) and `nsh check examples/counter -- --skipLibCheck
-  false`; 1 to 4 also macOS clippy (`dev`, all targets), `cargo test -p nsh-platform-macos` and
+- Environment branches 1 to 4: Catalyst clippy (`embed,dev`), `nsh check examples/counter -- --skipLibCheck
+  false`, macOS clippy (`dev`, all targets), `cargo test -p nsh-platform-macos` and
   `cargo xtask clippy-android` (no workaround: #727 is on `main`). `register-font`: `nsh check` too.
 - Lock files: `cargo metadata --locked` passes for the root and GPUI workspaces on every head.
 - Compat (`NSH_COMPAT_APP=<app> cargo xtask compat`, `nsh-compat` `main` `2e83111`, one app at a time with its
-  work directory cleared, as the claims of every app built there are checked): `modules` on `05-intl` (the series'
-  cases and claims, all from `01` to `04`: `05-intl` changes nothing under `tests/compat`), `web` on `read-assets`, `layout` on `register-font` (its new case). The case also passes headless
+  work directory cleared, as the claims of every app built there are checked): `modules` on the series' head then (its
+  cases and claims, all from `01` to `04`), `web` on `read-assets`, `layout` on `register-font` (its new case). The case also passes headless
   (`nsh test tests/compat/cases/layout/App.tsx` with its steps).
-- The fork's Windows, Linux and GPUI workflows on `01` to `04`, `05-intl` (run as `pr/intl-hour-cycle/01-js`, the
-  same commit) and `register-font` (at `e14007ec4`, before its compat case: the case is TSX the workflows do not
-  build): all 18 runs pass.
+- The fork's Windows, Linux and GPUI workflows on `01` to `04` and `register-font` (at `e14007ec4`, before its
+  compat case: the case is TSX the workflows do not build): all their runs pass.

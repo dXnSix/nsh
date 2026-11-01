@@ -47,6 +47,5 @@ animation evaluation, #675–#681 test and build fixes, #682 shader effects and 
 
 ## Not going upstream
 
-The fork's own shader pipeline and its demos (removed when the fork took upstream's `Shader`, #517); Intl's time zone
-and hour cycle (the owner's decision); `--strict-port` (upstream's #428 replaces it); the Git source of nsh's crates
+The fork's own shader pipeline and its demos (removed when the fork took upstream's `Shader`, #517); `--strict-port` (upstream's #428 replaces it); the Git source of nsh's crates
 (upstream's #213); the iOS clippy allowance (reverted).

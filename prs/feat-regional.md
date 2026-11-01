@@ -53,7 +53,7 @@ American whose weeks start on Monday.
 - **Compat**: `mod-device` shows them (`h12, week from 7, us, fahrenheit` headless); its script covers the four.
 
 `Intl` still writes times in the locale's own hour cycle; the docs show passing `hourCycle()` as its `hourCycle`
-option. Making it `Intl`'s default, as the time zone is, can follow.
+option.
 
 ## Public API
 

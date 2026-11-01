@@ -35,7 +35,6 @@ says nothing when it changes.
 - **Compat**: `mod-device` shows the time zone (`UTC` headless); its script covers `[nsh/device] timeZone`.
 
 Not changed: `Intl`'s default zone and `Date`'s local times stay what they were (the process's zone, QuickJS's).
-Having `Intl` name the environment's zone is a change of its own.
 
 ## Public API
 

@@ -5,7 +5,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - Branch: `pr/environment/03-languages` (`a1de5ed5f`, restacked 2026-10-31 on #747's review fixes), on `pr/environment/02-time-zone`: seven commits of its own, the
   core's, then one per platform. It replaces `pr/languages/01-core` to `07-gpui`; every file is the same as in those
   branches, except `crates/gpui/Cargo.lock`: `pr/languages/07-gpui` added `jiff`'s entries there, which nothing in it
-  uses (they belong to `pr/intl-time-zone/01-js`, which adds them itself), and cargo drops them on any build; this
+  uses, and cargo drops them on any build; this
   branch leaves them out. The literals that build an environment outside `nsh-core` (iOS's root view, the engine's
   `ui_environment` and its tests, `nsh-testing`'s) set the new field by assignment, as
   `pr/environment/00-non-exhaustive` builds them; the branch was rebuilt on it 2026-10-30 (the previous heads are
