@@ -315,6 +315,50 @@ fn files_the_host_does_not_hold_are_downloaded_from_where_it_serves_them() {
     );
 }
 
+/// Shows the URL and the type a file of the app answers with.
+#[component]
+fn ReadHead() -> impl IntoElement {
+    let text_shown = signal(String::from("reading"));
+    spawn(async move {
+        let line = match fetch("asset:/@app/locales/en.json").await {
+            Ok(response) => format!(
+                "{} {}",
+                response.head.url,
+                response.header("content-type").unwrap_or("none")
+            ),
+            Err(error) => format!("failed: {error}"),
+        };
+        text_shown.set(line);
+    });
+    view().child(text(move || text_shown.get()))
+}
+
+#[test]
+fn a_file_answers_with_its_url_and_type_however_it_arrives() {
+    let expected = "asset:/@app/locales/en.json application/json";
+    // Read from the host's files.
+    let (_engine, rx) = start(
+        App::Rust(Root::of::<ReadHead>()),
+        Some(Arc::new(LocaleAssets(Default::default()))),
+        None,
+    );
+    assert_eq!(
+        until(&rx, expected).last().map(String::as_str),
+        Some(expected)
+    );
+    // Downloaded from where the host serves it, by a server that names no
+    // type: still its `asset:/` URL and its type.
+    let (_engine, rx) = start(
+        App::Rust(Root::of::<ReadHead>()),
+        Some(Arc::new(ServedAssets(Default::default()))),
+        Some(Arc::new(AssetServer(Default::default()))),
+    );
+    assert_eq!(
+        until(&rx, expected).last().map(String::as_str),
+        Some(expected)
+    );
+}
+
 /// Asks a host that serves its files for one outside them and for one by
 /// another method than GET, then for one it serves.
 #[component]
@@ -362,7 +406,8 @@ import { mount, signal, Text } from "nsh";
 const shown = signal("reading");
 const read = (url) =>
   fetch(url).then(
-    async (r) => `${r.status} ${r.headers.get("content-length")} ${await r.text()}`,
+    async (r) =>
+      `${r.status} ${r.headers.get("content-length")} ${r.headers.get("content-type")} ${r.url} ${await r.text()}`,
     (e) => `${e.name}: ${e.message}`,
   );
 Promise.all([read("asset:/@app/locales/en.json"), read("asset:/@app/missing.json")])
@@ -390,7 +435,7 @@ fn js_reads_the_files_the_app_ships_with_fetch() {
     let read = Arc::new(Mutex::new(Vec::new()));
     let (_engine, rx) = start(app, Some(Arc::new(LocaleAssets(read.clone()))), None);
     let expected = concat!(
-        r#"200 17 {"hello":"Hello"}; "#,
+        r#"200 17 application/json asset:/@app/locales/en.json {"hello":"Hello"}; "#,
         "TypeError: Network request failed: asset:/@app/missing.json is not bundled"
     );
     let texts = until(&rx, expected);
