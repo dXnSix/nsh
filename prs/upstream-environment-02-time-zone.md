@@ -10,11 +10,17 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - Size of its own commits: 42 files, +717 / −50 (code +582 / −29, tests +57 / −5, docs +78 / −16).
 - Title: `core: Tell apps the device's time zone`. Until the app state PR is merged, GitHub shows both PRs' commits.
 
+- 2026-11-01: #744 was closed, so this branch is rebuilt on #747's head `fab837934` (rebased on `upstream/main` `e4e464f4` without #744's commit), its seven commits replayed
+  (head `796cfc1b5`). Where #744 had environments built by assignment, the new field goes into the struct
+  literals upstream keeps (the engine's `ui_environment`, iOS's root view, the test runner's `open`); iOS's
+  observers keep their own doc comments, and the Windows Environment row keeps #747's subclass wording. The core commit's test builds its
+  environments as literals (clippy's `field_reassign_with_default`).
+
 ---
 
-**Depends on:** #747 (`core: Tell apps whether they are in use`), which depends on #744: it adds to the
-environment's fields, the test runner's `open` options and the docs that PR adds. Until those are merged this PR shows
-their commits too; the time zone's own are the last seven.
+**Depends on:** #747 (`core: Tell apps whether they are in use`): it adds to the environment's fields, the test
+runner's `open` options and the docs that PR adds. Until #747 is merged this PR shows its commits too; the time zone's
+own are the last seven.
 
 ## Description
 

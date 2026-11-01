@@ -13,11 +13,17 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   GPUI's `system.rs` +259, Linux's +113.
 - Title: `core: Tell apps the user's regional preferences`.
 
+- 2026-11-01: #744 was closed, so this branch is rebuilt on the rebuilt languages branch, its eight commits replayed
+  (head `e81600c3d`). Where #744 had environments built by assignment, the new field goes into the struct
+  literals upstream keeps (the engine's `ui_environment`, iOS's root view, the test runner's `open`); iOS's
+  observers keep their own doc comments, and the Windows Environment row keeps #747's subclass wording. The core commit's test builds its
+  environments as literals (clippy's `field_reassign_with_default`).
+
 ---
 
-**Depends on:** #LANGUAGES (`core: Tell apps the user's preferred languages`), which depends on #TIME_ZONE,
-#747 and #744: each adds to the environment's fields, the test runner's `open` options and the docs
-the one before it adds. Until those are merged this PR shows their commits too; the regional preferences' own are
+**Depends on:** #LANGUAGES (`core: Tell apps the user's preferred languages`), which depends on #TIME_ZONE
+and #747: each adds to the environment's fields, the test runner's `open` options and the docs the one before it
+adds. Until those are merged this PR shows their commits too; the regional preferences' own are
 the last eight.
 
 ## Description

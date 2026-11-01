@@ -13,11 +13,17 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - Size of its own commits: 40 files, +650 / −52 (code +496 / −31, tests +58 / −5, docs +96 / −16).
 - Title: `core: Tell apps the user's preferred languages`.
 
+- 2026-11-01: #744 was closed, so this branch is rebuilt on the rebuilt time zone branch, its seven commits replayed
+  (head `df833de06`). Where #744 had environments built by assignment, the new field goes into the struct
+  literals upstream keeps (the engine's `ui_environment`, iOS's root view, the test runner's `open`); iOS's
+  observers keep their own doc comments, and the Windows Environment row keeps #747's subclass wording. The core commit's test builds its
+  environments as literals (clippy's `field_reassign_with_default`).
+
 ---
 
-**Depends on:** #TIME_ZONE (`core: Tell apps the device's time zone`), which depends on #747 and #744:
-each adds to the environment's fields, the test runner's `open` options and the docs the one before it adds. Until those
-are merged this PR shows their commits too; the languages' own are the last seven.
+**Depends on:** #TIME_ZONE (`core: Tell apps the device's time zone`), which depends on #747: each adds to
+the environment's fields, the test runner's `open` options and the docs the one before it adds. Until those are merged
+this PR shows their commits too; the languages' own are the last seven.
 
 ## Description
 

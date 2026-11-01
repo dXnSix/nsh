@@ -27,11 +27,14 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   here: `NSH_COMPAT_APP=layout cargo xtask compat` passes (`checkout_apps_run`), and so do the `core-register-font`
   case's steps headless (`Registered: Pacifico, true`, `No font: refused, true`).
 
+- 2026-11-01, later: rebuilt on `upstream/main` `4f2502cd` with #745's commit and #746's four (its third review's
+  web fix included), then its own (head `8cfcfba3b`); the `registerFont` row beside the `fetch` row replayed by rerere.
+
 ---
 
 **Depends on:** #745 (`text: Read WOFF and WOFF2 fonts`: it registers WOFF and WOFF2 data) and #746
-(`engine: Let fetch read the files the app ships`: it reads `asset:/` URLs as `fetch` does). This branch carries both
-commits; once they are merged it shows only its own, the last.
+(`engine: Let fetch read the files the app ships`: it reads `asset:/` URLs as `fetch` does). This branch carries
+their commits (#745's one, #746's four); once they are merged it shows only its own, the last.
 
 ## Description
 
