@@ -118,15 +118,33 @@ final class TextLayouts {
         return Typeface.create(Typeface.DEFAULT, clamp(weight), italic);
     }
 
-    /** The families of a `fontFamily` list, trimmed and unquoted, in order. */
+    /**
+     * The families of a `fontFamily` list, trimmed and unquoted, in order: a
+     * quoted name runs to its closing quote, commas and all (`'ACME, Inc'`),
+     * as `nsh_core::font_families` reads it.
+     */
     private static List<String> families(String list) {
         List<String> out = new ArrayList<>();
         if (list == null) return out;
-        for (String part : list.split(",")) {
-            String name = part.trim();
-            if (name.length() >= 2 && (name.charAt(0) == '"' || name.charAt(0) == '\'')) {
-                name = name.substring(1, name.length() - 1).trim();
+        int i = 0, n = list.length();
+        while (i < n) {
+            while (i < n && Character.isWhitespace(list.charAt(i))) i++;
+            if (i >= n) break;
+            char c = list.charAt(i);
+            String name;
+            int comma;
+            if (c == '"' || c == '\'') {
+                // To the closing quote (or the end, unclosed); what follows it
+                // up to the next comma is not part of the name.
+                int end = list.indexOf(c, i + 1);
+                if (end < 0) end = n;
+                name = list.substring(i + 1, end).trim();
+                comma = list.indexOf(',', Math.min(end + 1, n));
+            } else {
+                comma = list.indexOf(',', i);
+                name = list.substring(i, comma < 0 ? n : comma).trim();
             }
+            i = comma < 0 ? n : comma + 1;
             if (!name.isEmpty()) out.add(name);
         }
         return out;

@@ -55,7 +55,7 @@ The files ship with the app like any other [asset](./images-and-assets.md). Font
 
 ## Fallback lists
 
-`fontFamily` takes a list, as CSS does: families separated by commas, most preferred first, a name with spaces quoted or not (`"Brand, 'Noto Sans SC', sans-serif"`). Text is set in the first family the platform has, and a character that family lacks (another script, a symbol) comes from the next family in the list that has it, then from the system's fallback fonts. A list lets a brand font that covers Latin only show Chinese in a matching font, or name a font the app downloads with a system font to show until it arrives:
+`fontFamily` takes a list, as CSS does: families separated by commas, most preferred first, a name with spaces quoted or not (`"Brand, 'Noto Sans SC', sans-serif"`), a quoted name keeping its commas (`'ACME, Inc'`). Text is set in the first family the platform has, and a character that family lacks (another script, a symbol) comes from the next family in the list that has it, then from the system's fallback fonts. A list lets a brand font that covers Latin only show Chinese in a matching font, or name a font the app downloads with a system font to show until it arrives:
 
 ```rust tabs
 text("Brand 品牌").font_family("Brand, 'Noto Sans SC', sans-serif")
