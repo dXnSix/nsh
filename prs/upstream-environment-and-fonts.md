@@ -46,6 +46,10 @@ Opened 2026-10-31, after the fork's `main` took upstream's `201d780a` (dXnSix/ns
 Upstream's `main` was then `7e846de4`, three commits past the branches' base with no file in common; each branch
 merges with it cleanly. Still to open: 7 (once #745 and #746 are merged), then 2 to 4.
 
+2026-11-01: #744 was closed (a project decision: the Rust API may break until the first recorded
+release), so #747 was rebased without its commit (`fab837934`); 2 to 4 still sit on the old 01 and are rebuilt
+without 00 when they open.
+
 ## Not sent: the Intl PR
 
 `pr/environment/05-intl` (`0d34b5133`, on `04-regional`: the time zone database for NSH's own `Intl`, then its hour

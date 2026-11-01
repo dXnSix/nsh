@@ -1,6 +1,7 @@
 # Upstream PR: gallery: Show shader effects and transitions on the Shaders page
 
-Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
+Opened 2026-11-01 as [longbridge/nsh#771](https://github.com/longbridge/nsh/pull/771), at the owner's decision (all nine together, the platform PRs and the gallery's marked as depending on #763); the body
+below the line is the draft it was posted from, with the PR numbers filled in.
 
 - Branch: `pr/shaders/10-gallery-docs`, on `pr/shaders/02-page-dialog-shaders`. Two commits:
   the gallery's Shaders page with its test, and the website's Shader page in English and Chinese.

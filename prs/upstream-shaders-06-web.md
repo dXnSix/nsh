@@ -1,6 +1,7 @@
 # Upstream PR: web: Draw shader effects, transitions and page shaders
 
-Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
+Opened 2026-11-01 as [longbridge/nsh#767](https://github.com/longbridge/nsh/pull/767), at the owner's decision (all nine together, the platform PRs and the gallery's marked as depending on #763); the body
+below the line is the draft it was posted from, with the PR numbers filled in.
 
 - Branch: `pr/shaders/06-web`, on `pr/shaders/02-page-dialog-shaders`. One commit (backend, `docs/dev/shaders.md`, `docs/dev/web.md`).
 - Source: the fork's `ab266134a` on `sync/upstream-478737b1`.

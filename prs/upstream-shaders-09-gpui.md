@@ -1,6 +1,7 @@
 # Upstream PR: gpui: Draw only shader fills: effects show their children, transitions change at once
 
-Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
+Opened 2026-11-01 as [longbridge/nsh#770](https://github.com/longbridge/nsh/pull/770), at the owner's decision (all nine together, the platform PRs and the gallery's marked as depending on #763); the body
+below the line is the draft it was posted from, with the PR numbers filled in.
 
 - Branch: `pr/shaders/09-gpui`, on `pr/shaders/02-page-dialog-shaders`. One commit (`mount.rs`, `docs/dev/gpui.md`, `docs/dev/shaders.md`).
 - Source: the fork's `cd4e3807f` on `sync/upstream-478737b1`.

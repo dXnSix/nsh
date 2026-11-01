@@ -1,6 +1,7 @@
 # Upstream PR: macos: Draw shader effects, transitions and page shaders
 
-Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
+Opened 2026-11-01 as [longbridge/nsh#764](https://github.com/longbridge/nsh/pull/764), at the owner's decision (all nine together, the platform PRs and the gallery's marked as depending on #763); the body
+below the line is the draft it was posted from, with the PR numbers filled in.
 
 - Branch: `pr/shaders/03-macos`, on `pr/shaders/02-page-dialog-shaders`. Two commits: the backend and its `docs/dev` notes (`docs/dev/macos.md`, `docs/dev/shaders.md`). Independent of
   the iOS PR; whichever of the two is merged second resolves the shared table of `docs/dev/shaders.md` (both rows).

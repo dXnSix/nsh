@@ -47,6 +47,31 @@ platform; replied on both threads (`r4430025415`, `r4430025509`); resolving them
 ("loaded at run time; before the first, and for an embedded surface, …"), got its original end back ("`UTC` without
 it), re-read on `WM_TIMECHANGE`").
 
+## Review (2026-11-01)
+
+huacnlee's second pass (review `5728775512`, a summary for sunli829 and the author, no inline thread):
+
+1. #744 was closed (Rust API may still break before the first recorded release), so the base is gone: rebased on
+   `upstream/main` `e4e464f4` without its commit. The field is one more line in `ui_environment`'s literal and iOS's
+   root view (which ends in `..Environment::default()`); the core commit's test builds its environments as literals
+   (clippy's `field_reassign_with_default`); the iOS commit's message no longer says the platform failed to build.
+2. The names are React Native's (`appState`, `active` / `inactive` / `background`): left as they are, the maintainers'
+   call before merge (the reply says why three states).
+3. iOS followed the whole app: `ios: Follow the state of the surface's own scene` follows `UIScene`'s notifications of
+   the view's `window.windowScene`, its `activationState` when the view moves to a window, `UIApplication`'s only
+   without a scene. Checked in the iOS simulator with the scene-based development host (launch, Home and back:
+   inactive → active, inactive → background, inactive → active); two windows of one app not tried (one scene).
+4. `background` may not leave time to save: the docs say to pause with it and to save changes as they are made.
+5. Windows' root subclass: `docs/dev/windows.md` (only on the root's own thread, the root the surface had when made)
+   and the Windows embedding guide (make the view on its window's thread).
+
+Fork first: the rebased branch as `tmp/app-state-rebased` (Core, Rust application, Examples, Windows, Linux, GPUI all
+green), and the iOS and docs commits as dXnSix/nsh#102 on the fork's `main` (Fork CI's iOS, Android, macOS and web
+green); locally clippy (workspace, macOS `dev`, Catalyst, wasm32, Android, GPUI) and the core, js, engine, testing and
+GPUI tests. Force-pushed (the owner's OK, lease on `a44cc19a4`) as `fab837934`, 11 commits; description updated and
+the reply posted as a PR comment (`issuecomment-6560823197`). The rest of the series (02 to 04) still sits on the old
+01 with #744's commit and is rebuilt when it opens.
+
 ---
 
 **Depends on:** #744 (`core: Mark the environments non-exhaustive, so new fields break no code`): the new

@@ -46,6 +46,24 @@ huacnlee's second pass, a reply in the same thread (`r4433885726`, static inspec
    GPUI and Examples.
    Pushed (fast-forward, `66a31164d..a13982b40`) and replied (`r4435859082`); the thread is open for the reviewer.
 
+## Review (2026-11-01, third)
+
+huacnlee's third pass (review `5728691789`), five findings, all held; fixed in `8fb2b803a`
+(`web: Let web apps' fetch read the files they ship, with their type`):
+
+1. TSX on the web used the browser's `fetch`, which knows no `asset:`: the browser runtime sends `asset:/` URLs to the
+   engine's network in every session (`testing.js`), reading the scheme without making a `Request` of the input.
+2. The docs' example is Rust first, as tabs (en, zh-CN).
+3. Local reads carry the `Content-Type` their extension gives (the dev server's table).
+4. A download answers at the requested `asset:/` URL, with the extension's type where the server gives none.
+5. The description is updated.
+
+Tests: `a_file_answers_with_its_url_and_type_however_it_arrives` (fails without), two in `testing.test.mjs`,
+`fetch.assetHead` in the compat `web` case, and "reads the files the app ships" in the gallery's `network.test.tsx`
+(fails in Chrome without the runtime change). Also a packaged web app's realm `fetch` checked by hand. Fork first:
+dXnSix/nsh#101, all green (two native flaky retries, gestures on Android and appearance on iOS). Pushed
+(fast-forward, `a13982b40..8fb2b803a`), description updated, reply posted (`issuecomment-6560830775`).
+
 ---
 
 **Depends on:** no other PR; it applies to `main` as it is. The PR that lets apps register fonts while they run

@@ -1,6 +1,7 @@
 # Upstream PR: android: Draw shader effects, transitions and page shaders
 
-Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
+Opened 2026-11-01 as [longbridge/nsh#766](https://github.com/longbridge/nsh/pull/766), at the owner's decision (all nine together, the platform PRs and the gallery's marked as depending on #763); the body
+below the line is the draft it was posted from, with the PR numbers filled in.
 
 - Branch: `pr/shaders/05-android`, on `pr/shaders/02-page-dialog-shaders`. Two commits: the backend and its `docs/dev/shaders.md` notes.
 - Source: the fork's `74f138df4` and `4ae00db7a` on `sync/upstream-478737b1` (the fork-only CI commit `eab3f8a07` left out).

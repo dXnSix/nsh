@@ -1,6 +1,7 @@
 # Upstream PR: core: Let pages and dialogs come and go through a shader
 
-Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
+Opened 2026-11-01 as [longbridge/nsh#763](https://github.com/longbridge/nsh/pull/763), at the owner's decision (all nine together, the platform PRs and the gallery's marked as depending on #763); the body
+below the line is the draft it was posted from, with the PR numbers filled in.
 
 - Branch: `pr/shaders/02-page-dialog-shaders`, on `pr/shaders/01-effects-transitions`. Four
   commits: the page and dialog shaders (with a compat case), the web runtime's shader gate, a transition that runs
