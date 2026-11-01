@@ -2172,21 +2172,27 @@ impl Net {
                 asset: None,
             },
         );
-        if !is_inside_assets(&request.url) {
-            let refused = Err(format!(
+        // Failed here, before any host reads the file or serves it
+        // ([`Assets::url`]): a request no host may answer reaches none.
+        let refused = if !is_inside_assets(&request.url) {
+            Some(format!(
                 "{}: bundled files are named by a path inside the app's files",
                 request.url
-            ));
-            self.asset_read(who, hop, request, refused);
+            ))
+        } else if !matches!(request.method.as_str(), "GET" | "HEAD") {
+            Some(format!(
+                "{} {}: bundled files are read with GET",
+                request.method, request.url
+            ))
+        } else {
+            None
+        };
+        if let Some(refused) = refused {
+            let _ = self
+                .tx
+                .send(Message::Fetch(who, hop, FetchEvent::Failed(refused)));
             return;
         }
-        let read = |assets: &dyn Assets, request: &HttpRequest| match request.method.as_str() {
-            "GET" | "HEAD" => assets.read(&request.url),
-            method => Err(format!(
-                "{method} {}: bundled files are read with GET",
-                request.url
-            )),
-        };
         let Some(assets) = &self.assets else {
             let failed = Err("this host cannot load assets".to_owned());
             self.asset_read(who, hop, request, failed);
@@ -2198,21 +2204,22 @@ impl Net {
             let tx = self.tx.clone();
             // The read reports itself; nothing awaits its handle.
             drop(self.runtime.spawn_blocking(move || {
-                let bytes = read(&*assets, &request);
+                let bytes = assets.read(&request.url);
                 let _ = tx.send(Message::AssetRead(who, hop, request, bytes));
             }));
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let bytes = read(&**assets, &request);
+            let bytes = assets.read(&request.url);
             self.asset_read(who, hop, request, bytes);
         }
     }
 
     /// Hop `hop` of `who`'s request of a bundled file read it: its response,
     /// or, when the host has no copy but serves the file at a URL
-    /// ([`Assets::url`]), the download of it. Dropped when the request was
-    /// cancelled meanwhile.
+    /// ([`Assets::url`]), the download of it. Only requests [`Net::asset`]
+    /// let through come here. Dropped when the request was cancelled
+    /// meanwhile.
     fn asset_read(
         &mut self,
         who: Requester,

@@ -98,8 +98,8 @@ impl Assets for LocaleAssets {
 }
 
 /// What a request gave, as the apps show it.
-async fn shown(uri: &str) -> String {
-    match fetch(uri).await {
+async fn shown(request: impl Into<HttpRequest>) -> String {
+    match fetch(request).await {
         Ok(response) if response.ok() => format!("read {}", response.text()),
         Ok(response) => format!("HTTP {}", response.status()),
         Err(error) => format!("failed: {error}"),
@@ -204,7 +204,7 @@ fn ReadOutside() -> impl IntoElement {
             format!("asset://{}", OUTSIDE.get().unwrap()),
         ];
         for uri in escapes {
-            lines.push(shown(&uri).await);
+            lines.push(shown(uri).await);
         }
         text_shown.set(lines.join("; "));
     });
@@ -246,8 +246,9 @@ fn files_outside_the_assets_are_refused() {
 }
 
 /// Holds no file, and serves each under `https://assets.test/` (as the web
-/// page does the files it did not preload).
-struct ServedAssets;
+/// page does the files it did not preload), recording the URIs it is asked
+/// where it serves.
+struct ServedAssets(Arc<Mutex<Vec<String>>>);
 
 impl Assets for ServedAssets {
     fn read(&self, uri: &str) -> Result<Vec<u8>, String> {
@@ -255,6 +256,7 @@ impl Assets for ServedAssets {
     }
 
     fn url(&self, uri: &str) -> Option<String> {
+        self.0.lock().unwrap().push(uri.to_owned());
         let path = uri.strip_prefix("asset:/")?;
         Some(format!("https://assets.test/{path}"))
     }
@@ -297,7 +299,7 @@ fn files_the_host_does_not_hold_are_downloaded_from_where_it_serves_them() {
     let urls = Arc::new(Mutex::new(Vec::new()));
     let (_engine, rx) = start(
         rust_app(),
-        Some(Arc::new(ServedAssets)),
+        Some(Arc::new(ServedAssets(Default::default()))),
         Some(Arc::new(AssetServer(urls.clone()))),
     );
     // A file the host serves nowhere fails as a missing one does.
@@ -310,6 +312,48 @@ fn files_the_host_does_not_hold_are_downloaded_from_where_it_serves_them() {
             "https://assets.test/@app/locales/en.json",
             "https://assets.test/@app/missing.json"
         ]
+    );
+}
+
+/// Asks a host that serves its files for one outside them and for one by
+/// another method than GET, then for one it serves.
+#[component]
+fn ReadRefused() -> impl IntoElement {
+    let text_shown = signal(String::from("reading"));
+    spawn(async move {
+        let lines = [
+            shown("asset:/../outside.txt").await,
+            shown(HttpRequest::new("POST", "asset:/@app/locales/en.json")).await,
+            shown("asset:/@app/locales/en.json").await,
+        ];
+        text_shown.set(lines.join("; "));
+    });
+    view().child(text(move || text_shown.get()))
+}
+
+#[test]
+fn refused_files_are_neither_looked_up_nor_downloaded() {
+    let looked_up = Arc::new(Mutex::new(Vec::new()));
+    let urls = Arc::new(Mutex::new(Vec::new()));
+    let (_engine, rx) = start(
+        App::Rust(Root::of::<ReadRefused>()),
+        Some(Arc::new(ServedAssets(looked_up.clone()))),
+        Some(Arc::new(AssetServer(urls.clone()))),
+    );
+    let expected = [
+        "failed: asset:/../outside.txt: bundled files are named by a path inside the app's files",
+        "failed: POST asset:/@app/locales/en.json: bundled files are read with GET",
+        r#"read {"hello":"Hi"}"#,
+    ]
+    .join("; ");
+    let texts = until(&rx, &expected);
+    assert_eq!(texts.last(), Some(&expected));
+    // Only the file it may have: the refused ones never reached the host's
+    // URLs or the network.
+    assert_eq!(*looked_up.lock().unwrap(), ["asset:/@app/locales/en.json"]);
+    assert_eq!(
+        *urls.lock().unwrap(),
+        ["https://assets.test/@app/locales/en.json"]
     );
 }
 
