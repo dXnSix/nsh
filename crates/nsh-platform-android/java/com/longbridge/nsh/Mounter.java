@@ -70,6 +70,11 @@ final class Mounter {
     boolean rtl;
     /** The app's appearance (`nsh_core::platform::Appearance`): 0 the system's, 1 light, 2 dark. */
     int appearance;
+    /**
+     * The app's colors for alerts and action sheets ({@code encode.rs} {@code DIALOG_TOKENS}): the dialog, its title,
+     * its message, its buttons and a destructive action, each light then dark ARGB (0: the system's).
+     */
+    final int[] dialogColors = new int[10];
     /** The status bar the app asked for last (style, hidden), applied again when the appearance changes. */
     private int barStyle = -1;
     private boolean barHidden;
@@ -2081,6 +2086,10 @@ final class Mounter {
                 Picker.show(context, request);
                 break;
             }
+            case 27: {
+                for (int i = 0; i < dialogColors.length; i++) dialogColors[i] = b.getInt();
+                break;
+            }
             case 26: {
                 int request = b.getInt();
                 String url = (String) objects[b.getInt()];
@@ -2305,7 +2314,7 @@ final class Mounter {
     }
 
     void event(int id, int kind) {
-        Native.event(handle(), id, kind, null, 0, 0, 0);
+        event(id, kind, null, 0, 0, 0);
     }
 
     /** A press's touch: where it is now and the modifier keys it began with. */
@@ -2358,11 +2367,20 @@ final class Mounter {
     }
 
     void eventMap(int id, int kind, String[] keys, Object[] values) {
-        Native.eventMap(handle(), id, kind, keys, values);
+        long handle = handle();
+        if (handle == 0) return;
+        Native.eventMap(handle, id, kind, keys, values);
     }
 
+    /**
+     * Sends a node's event. Loads finish on their own time (an image's {@code
+     * onLoad}, a video's, a web view's): once the view is destroyed there is
+     * no app to tell, and the native side takes a live handle only.
+     */
     void event(int id, int kind, String text, int count, float x, float y) {
-        Native.event(handle(), id, kind, text, count, x, y);
+        long handle = handle();
+        if (handle == 0) return;
+        Native.event(handle, id, kind, text, count, x, y);
     }
 
     void zoom(int id, float scale) {

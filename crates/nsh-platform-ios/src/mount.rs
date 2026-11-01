@@ -611,6 +611,9 @@ pub(crate) struct Mounter {
     text_colors: crate::interaction::TextColors,
     /// The `transitionShader`s of pages and dialogs.
     nav_shaders: rustc_hash::FxHashMap<NodeId, nsh_core::NavShader>,
+    /// The tint of this surface's alerts and action sheets, from its
+    /// tokens ([`crate::system::alert_tint`]).
+    alert_tint: Option<nsh_core::element::AdaptiveColor>,
     mtm: MainThreadMarker,
 }
 
@@ -669,6 +672,7 @@ impl Mounter {
             shaders: crate::shader::Shaders::new(&target_for_link),
             text_colors: crate::interaction::TextColors::new(&target_for_link),
             nav_shaders: rustc_hash::FxHashMap::default(),
+            alert_tint: None,
             hosts: Default::default(),
             dirty_stacks: Vec::new(),
             bottom_bar_dirty: false,
@@ -1633,7 +1637,7 @@ impl Mounter {
                 crate::system::set_status_bar(config, native.view());
             }
             (Command::Dialog(dialog), native) if id == nsh_core::ROOT_ID => {
-                crate::system::show_dialog(&dialog, native.view(), &self.control);
+                crate::system::show_dialog(&dialog, self.alert_tint, native.view(), &self.control);
             }
             (
                 Command::PickImages {
@@ -1650,6 +1654,7 @@ impl Mounter {
             }
             (Command::ClearJsResponder, _) => self.clear_js_responder(),
             (Command::Announce(text), _) => crate::system::announce(&text),
+            (Command::Tokens(tokens), _) => self.alert_tint = crate::system::alert_tint(&tokens),
             (Command::ImageInfo { id, uri }, _) => self.images.info(id, &uri),
             (Command::SetClipboard(text), _) => crate::system::set_clipboard(&text),
             (Command::OpenUrl { id, url }, _) => crate::system::open_url(id, &url, &self.control),
