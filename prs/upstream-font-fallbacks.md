@@ -15,6 +15,16 @@ green on `ddc03e232`.
 - No new JS surface: `fontFamily` stays a string, now read as a CSS list; the Rust items are new (`font_families`,
   `FamilyName`).
 
+## Review (2026-11-01)
+
+huacnlee requested changes (one inline comment, `r4437223029`, ChatGPT on his behalf): [P2] `split(',')` broke the valid
+CSS list `'ACME, Inc', serif` into two families, in the core and in Android's own parser. Fixed in `b3434ed2f`
+(`text: Keep commas inside quoted fontFamily names`): both read a quoted name to its closing quote, commas and all, and a
+quoted name is always a family's name, as in CSS. `quoted_family_names_keep_their_commas` fails on the old parser; the
+Fonts page says a quoted name keeps its commas (en, zh-CN). Fork first: `tmp/font-fallbacks-quotes` (Core, Rust
+application, Examples, Windows, Linux, GPUI) and dXnSix/nsh#105 (Fork CI, two iOS flaky retries in unrelated tests), all
+green. Pushed (fast-forward `ddc03e232..b3434ed2f`) and replied (`r4437471313`); the thread is open for the reviewer.
+
 ---
 
 **Depends on:** no other PR; it applies to `main` as it is.
