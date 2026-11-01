@@ -369,7 +369,7 @@ effect(() => {
 });
 ```
 
-An app shown inside a native app follows that app's state. In tests, `app.setAppState("background")` of `nsh/test` moves the app there ([Testing](./testing-and-trace.md#steps)).
+Use `background` to pause work, and save what the user changes as they change it: the system may suspend an app seconds after it moves to the background, before an effect that reads the change has run. An app shown inside a native app follows that app's state, and where an app has several windows (an iPad, a desktop) a view follows the window it is in. In tests, `app.setAppState("background")` of `nsh/test` moves the app there ([Testing](./testing-and-trace.md#steps)).
 
 ## Safe areas
 

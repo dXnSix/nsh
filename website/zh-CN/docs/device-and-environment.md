@@ -368,7 +368,7 @@ effect(() => {
 });
 ```
 
-显示在原生应用中的应用跟随该应用的状态。在测试中，`nsh/test` 的 `app.setAppState("background")` 会把应用移到后台（[测试](./testing-and-trace.md#操作步骤)）。
+用 `background` 暂停工作，并在用户做出更改时就保存它：系统可能在应用进入后台几秒后就将其挂起，早于读取这一变化的副作用运行。显示在原生应用中的应用跟随该应用的状态；应用有多个窗口时（iPad、桌面），视图跟随它所在的窗口。在测试中，`nsh/test` 的 `app.setAppState("background")` 会把应用移到后台（[测试](./testing-and-trace.md#操作步骤)）。
 
 ## 安全区域
 
