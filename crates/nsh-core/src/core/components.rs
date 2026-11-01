@@ -13,7 +13,7 @@
 
 use std::{any::Any, cell::RefCell, rc::Rc, sync::Arc};
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{Core, Kind, NO_KEY, views::Anchor};
 use crate::{
@@ -181,6 +181,26 @@ pub(super) struct Instance {
     given_changed: bool,
     /// The insets its root's node has (its own, or given it).
     pub(super) root_insets_applied: (Option<crate::EdgeInsets>, Option<crate::EdgeInsets>),
+    /// The test id its root's node has (its own, or given it).
+    pub(super) root_test_id_applied: Option<Arc<str>>,
+}
+
+/// The test id among `attrs`' props.
+pub(super) fn test_id_of(attrs: &Attrs) -> Option<Arc<str>> {
+    attrs.props.iter().find_map(|p| match p {
+        Prop::TestId(id) => id.clone(),
+        _ => None,
+    })
+}
+
+/// `attrs` with the test id `id` in place of its own (`None`: none), as its
+/// node has it.
+pub(super) fn with_test_id(mut attrs: Attrs, id: &Option<Arc<str>>) -> Attrs {
+    attrs.props.retain(|p| !matches!(p, Prop::TestId(_)));
+    if let Some(id) = id {
+        attrs.props.push(Prop::TestId(Some(id.clone())));
+    }
+    attrs
 }
 
 /// What a component's root takes from the components above it on its host
@@ -199,6 +219,8 @@ pub(super) struct RootContext {
     /// The insets given it (the outer wins).
     inset_padding: Option<crate::EdgeInsets>,
     inset_margin: Option<crate::EdgeInsets>,
+    /// The test id given it (the outer wins), over the root's own.
+    test_id: Option<Arc<str>>,
     /// Whether any view gives it anything besides styles.
     given: bool,
 }
@@ -211,6 +233,9 @@ impl RootContext {
         }
         if let Some(insets) = self.inset_margin {
             attrs.inset_margin = Some(insets);
+        }
+        if let Some(id) = &self.test_id {
+            crate::element::host::set_in(&mut attrs.props, Prop::TestId(Some(id.clone())));
         }
         attrs
     }
@@ -281,6 +306,7 @@ impl Instance {
             given: None,
             given_changed: false,
             root_insets_applied: (None, None),
+            root_test_id_applied: None,
         }
     }
 }
@@ -390,6 +416,10 @@ pub(super) struct ClipboardAnswer {
     pub(super) text: Option<String>,
     /// The image, for an image read.
     pub(super) image: Option<crate::element::ClipboardImage>,
+    /// The size in encoded bytes of an image over
+    /// [`crate::platform::clipboard::MAX_IMAGE_BYTES`], left out of the
+    /// answer.
+    pub(super) too_large: Option<usize>,
     /// The files' `file:` URLs, for a files read.
     pub(super) files: Vec<String>,
 }
@@ -408,6 +438,9 @@ impl ClipboardAnswer {
                 ("uri", crate::PayloadValue::Str(u)) => uri = Some(u.clone()),
                 ("width", crate::PayloadValue::Number(n)) => width = *n,
                 ("height", crate::PayloadValue::Number(n)) => height = *n,
+                ("tooLarge", crate::PayloadValue::Number(n)) => {
+                    answer.too_large = Some(*n as usize)
+                }
                 ("files", crate::PayloadValue::Str(f)) => {
                     answer.files = f
                         .lines()
@@ -420,12 +453,16 @@ impl ClipboardAnswer {
         }
         // Only an image NSH can show, a `data:` URI, and only one the VM
         // can hold (the web's player encodes its own).
-        answer.image = uri
-            .filter(|u| u.starts_with("data:") && crate::platform::clipboard::uri_within_limit(u))
-            .map(|url| crate::element::ClipboardImage {
+        let uri = uri.filter(|u| u.starts_with("data:"));
+        let bytes = uri.as_deref().map(crate::platform::clipboard::data_uri_len);
+        if let Some(bytes) = bytes.filter(|&b| b > crate::platform::clipboard::MAX_IMAGE_BYTES) {
+            answer.too_large = Some(bytes);
+        } else {
+            answer.image = uri.map(|url| crate::element::ClipboardImage {
                 url,
                 size: crate::geometry::Size::new(pixels(width), pixels(height)),
             });
+        }
         answer
     }
 }
@@ -465,6 +502,10 @@ pub(super) struct Components {
     pub(super) slot_targets: FxHashMap<NodeId, super::slots::SlotTarget>,
     /// The app's elements a slot's props go to -> their slot node.
     pub(super) adopted: FxHashMap<NodeId, NodeId>,
+    /// The nodes views wrap a slot's fill in (the place gives it more than
+    /// itself): slot nodes as JS's are, their props going to the fill's one
+    /// element ([`Core::reconcile_wrapper`]).
+    pub(super) fill_holders: FxHashSet<NodeId>,
     styles: FxHashMap<StyleRefinement, std::rc::Rc<ClassList>>,
     /// The styles a component on another's host gets from each above it,
     /// merged (by the lists', which the entry keeps).
@@ -472,6 +513,9 @@ pub(super) struct Components {
     /// While a view's slot content is matched: the nested component's host
     /// and the slot (its regions are the slot's).
     pub(super) filling: Option<(NodeId, &'static str)>,
+    /// A node moved in the tree since the order watches last looked
+    /// (`core/watch.rs`): an app's keyed reorder of their elements.
+    pub(super) moved: bool,
     /// The lists components place (the glue's, of `Items` props) -> the
     /// row function the component's view gave last, and the number of rows
     /// its wrappers last saw.
@@ -596,9 +640,11 @@ impl Default for Components {
             slot_hosts: FxHashMap::default(),
             slot_targets: FxHashMap::default(),
             adopted: FxHashMap::default(),
+            fill_holders: FxHashSet::default(),
             styles: FxHashMap::default(),
             merges: FxHashMap::default(),
             filling: None,
+            moved: false,
             lists: FxHashMap::default(),
             environment: Environment::default(),
             executor: Rc::new(Executor::default()),
@@ -1739,6 +1785,14 @@ impl<M: TextEngine> Core<M> {
                 });
             }
             inst.root_insets_applied = insets;
+            let test_id = cx.test_id.clone().or_else(|| test_id_of(&attrs));
+            if test_id != inst.root_test_id_applied {
+                let _ = self.apply_op(Op::SetProp {
+                    id: host,
+                    prop: Prop::TestId(test_id.clone()),
+                });
+                inst.root_test_id_applied = test_id;
+            }
         }
     }
 
@@ -2156,8 +2210,10 @@ impl<M: TextEngine> Core<M> {
         // As it was applied: with the insets its node got.
         let mut old_over = old_attrs.clone();
         (old_over.inset_padding, old_over.inset_margin) = inst.root_insets_applied;
+        let old_over = with_test_id(old_over, &inst.root_test_id_applied);
         self.apply_attrs_over(host, &attrs, &old_over, app);
         inst.root_insets_applied = (attrs.inset_padding, attrs.inset_margin);
+        inst.root_test_id_applied = test_id_of(&attrs);
         // Given an inline style or animated values while its own did not
         // change: they go now.
         let given_changed = std::mem::take(&mut inst.given_changed) || first;
@@ -2294,6 +2350,7 @@ impl<M: TextEngine> Core<M> {
             js: None,
             inset_padding: None,
             inset_margin: None,
+            test_id: None,
             given: false,
         };
         if inst.above.is_none() && inst.given.is_none() {
@@ -2309,6 +2366,7 @@ impl<M: TextEngine> Core<M> {
             decls.extend(given.animated.iter().map(|(d, _)| d.clone()));
             cx.inset_padding = given.inset_padding.or(cx.inset_padding);
             cx.inset_margin = given.inset_margin.or(cx.inset_margin);
+            cx.test_id = test_id_of(given).or(cx.test_id.take());
         };
         if let Some(given) = &inst.given {
             take(&mut cx, given);
@@ -2634,8 +2692,10 @@ impl<M: TextEngine> Core<M> {
             mask.set(EventKind::Touch, true);
             inst.responders.push((id, responder.clone()));
         }
-        // Only the events that changed.
-        let mut changed = mask.bits() ^ old.bits();
+        // Only the events that changed (with a slot's own when the node
+        // takes a slot's props: they stay).
+        let own = self.target_events(id, mask);
+        let mut changed = (mask.bits() ^ old.bits()) & !own.bits();
         while changed != 0 {
             let kind = EventKind::ALL[changed.trailing_zeros() as usize];
             changed &= changed - 1;
@@ -3085,10 +3145,11 @@ impl<M: TextEngine> Core<M> {
                     }
                 };
                 let prev = at.and_then(|j| old[j].take());
-                let e = self.reconcile_node(prev, el, part, host, inst);
-                if wrapper && let Ok(key) = self.key(e.id) {
-                    self.lay_out_through(key);
-                }
+                let e = if wrapper {
+                    self.reconcile_wrapper(prev, el, host, inst)
+                } else {
+                    self.reconcile_node(prev, el, part, host, inst)
+                };
                 out.push(e);
             }
         }
@@ -3546,6 +3607,10 @@ impl<M: TextEngine> Core<M> {
                     }
                     before = Some(child);
                 }
+                // In a holder: the slot's props follow its one element.
+                if self.components.fill_holders.contains(&parent) {
+                    self.retarget_slot(parent, None);
+                }
             }
             Placement::Nested(other, anchor) => {
                 let mut before = self.anchor_node(anchor);
@@ -3627,6 +3692,45 @@ impl<M: TextEngine> Core<M> {
             part: Part::Slot,
             children: Vec::new(),
         }
+    }
+
+    /// The node of `host`'s view element `el` wraps a slot's fill in (its
+    /// one child places the fill): a slot node as JS's holders are. Its
+    /// styles are its own, and it lays the fill's one node out through
+    /// while they style none of its layout; the rest of what the place
+    /// gives goes to that node when the fill is one element
+    /// ([`super::slots`]), so its focus, keys and presses reach the
+    /// component's listeners as a JS app's element's do.
+    fn reconcile_wrapper(
+        &mut self,
+        mut prev: Option<Expanded>,
+        mut el: ElNode,
+        host: NodeId,
+        inst: &mut Instance,
+    ) -> Expanded {
+        let (id, old_children) = match &mut prev {
+            Some(p) => (p.id, std::mem::take(&mut p.children)),
+            None => {
+                let id = self.components.alloc();
+                let _ = self.apply_op(Op::Create { id, tag: el.tag });
+                self.components.owners.insert(id, host);
+                (id, Vec::new())
+            }
+        };
+        self.components.fill_holders.insert(id);
+        // The fill first: its one element is where the rest goes.
+        let children = std::mem::take(&mut el.children);
+        let children = self.reconcile_children(id, old_children, children, host, inst);
+        let (tag, key) = (el.tag, el.key.clone());
+        let mut e = self.reconcile_slot(prev, id, el, host, inst);
+        if let Ok(k) = self.key(id) {
+            self.lay_out_through(k);
+        }
+        e.tag = tag;
+        e.key = key;
+        e.part = Part::Node;
+        e.children = children;
+        e
     }
 
     pub(super) fn reconcile_node(
@@ -3800,7 +3904,9 @@ impl<M: TextEngine> Core<M> {
                 children,
             };
         }
-        self.apply_attrs(id, &el.attrs, &old_attrs);
+        if !self.apply_target_attrs(id, &el.attrs, &old_attrs) {
+            self.apply_attrs(id, &el.attrs, &old_attrs);
+        }
         let classes = self.apply_el_styles(
             id,
             &el.style,
@@ -4251,7 +4357,21 @@ impl<M: TextEngine> Core<M> {
             self.unalias(id);
             return;
         }
+        // A fill's node in a holder: the slot's props follow what is left.
+        let holder = if self.components.fill_holders.is_empty() {
+            None
+        } else {
+            self.key(id)
+                .ok()
+                .map(|k| self.nodes[k as usize].parent)
+                .filter(|&p| p != NO_KEY)
+                .map(|p| self.nodes[p as usize].id)
+                .filter(|p| self.components.fill_holders.contains(p))
+        };
         let _ = self.apply_op(Op::Release { id });
+        if let Some(holder) = holder {
+            self.retarget_slot(holder, None);
+        }
     }
 
     /// Frees an expanded element and what it rendered (a slot's node is
@@ -4294,7 +4414,14 @@ impl<M: TextEngine> Core<M> {
                 return;
             }
             Part::VirtualList => self.release_virtual_list(e.id),
-            Part::Node => {}
+            // A fill's holder: its element gets its own props back.
+            Part::Node => {
+                if !self.components.fill_holders.is_empty()
+                    && self.components.fill_holders.remove(&e.id)
+                {
+                    self.drop_slot_target(e.id);
+                }
+            }
         }
         if let Some(r) = &e.attrs.element_ref {
             r.detach(e.id);
@@ -4742,10 +4869,12 @@ impl<M: TextEngine> Core<M> {
                         has_only: false,
                     },
                     ClipboardRead::Has(_) => Command::ReadClipboard { id, has_only: true },
-                    ClipboardRead::Image(_) => Command::ReadClipboardImage {
-                        id,
-                        has_only: false,
-                    },
+                    ClipboardRead::Image(_) | ClipboardRead::CheckedImage(_) => {
+                        Command::ReadClipboardImage {
+                            id,
+                            has_only: false,
+                        }
+                    }
                     ClipboardRead::HasImage(_) => {
                         Command::ReadClipboardImage { id, has_only: true }
                     }
@@ -4958,16 +5087,20 @@ impl<M: TextEngine> Core<M> {
             has,
             text,
             image,
+            too_large,
             files,
         } = answer;
+        let image = image.filter(|i| !i.url.is_empty());
         match self.components.clipboard_reads.remove(&id) {
             Some(ClipboardRead::Text(slot)) => slot.borrow_mut().deliver(text.unwrap_or_default()),
             Some(ClipboardRead::Has(slot) | ClipboardRead::HasImage(slot)) => {
                 slot.borrow_mut().deliver(has)
             }
-            Some(ClipboardRead::Image(slot)) => slot
-                .borrow_mut()
-                .deliver(image.filter(|i| !i.url.is_empty())),
+            Some(ClipboardRead::Image(slot)) => slot.borrow_mut().deliver(image),
+            Some(ClipboardRead::CheckedImage(slot)) => slot.borrow_mut().deliver(match too_large {
+                Some(bytes) => Err(bytes),
+                None => Ok(image),
+            }),
             Some(ClipboardRead::Files(slot)) => slot.borrow_mut().deliver(files),
             None => {}
         }

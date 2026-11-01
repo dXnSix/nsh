@@ -281,13 +281,16 @@ final class Mounter {
                     // `selectable`: 1 asked for, 0 refused, 2 unset (`encode.rs`).
                     int selectable = b.getInt();
                     Integer selectionColor = optColor(b);
-                    // The one color all of it is drawn in, if there is one.
-                    Integer uniformColor = optColor(b);
+                    // The one color all of it is drawn in, if there is one
+                    // (`opt_color`: a flag, then the color), unboxed: a text
+                    // updating live allocates nothing for it.
+                    boolean uniform = b.getInt() != 0;
+                    int uniformColor = b.getInt();
                     if (v instanceof TextBox) {
                         TextBox t = (TextBox) v;
                         t.setSelectable(selectable == 1, selectable == 0, selectionColor);
                         t.setLayout((Layout) layout, x * density, y * density, w * density, h * density);
-                        t.recolor(uniformColor, effects.get(t.id));
+                        t.recolor(uniform, uniformColor, effects.get(t.id));
                         t.setLinks(linkData, linkEvents);
                         if (links > 0 && t.press == null) t.press = new Pressable(t, this, t.id);
                         t.setClickable(links > 0 || (t.press != null && t.press.ownWanted()));
@@ -1280,11 +1283,18 @@ final class Mounter {
         if (v instanceof TextBox) ((TextBox) v).setColor(false, 0);
     }
 
-    /** `perspective` as a camera distance (React Native's normalization). */
+    /**
+     * `perspective` as a camera distance (React Native's normalization), set
+     * only when it moves: `setCameraDistance` invalidates the view on every
+     * call, and animated values and transitions come here each frame with
+     * the distance unchanged.
+     */
     private void setPerspective(View v, float term) {
         if (term == 0) term = 0.00078125f;
-        float distance = -1 / term;
-        v.setCameraDistance(density * density * distance * (float) Math.sqrt(5));
+        float distance = Math.abs(density * density * (-1 / term) * (float) Math.sqrt(5));
+        // The view keeps it divided by the screen's dpi: equal within a hair.
+        if (Math.abs(Math.abs(v.getCameraDistance()) - distance) <= distance * 1e-5f) return;
+        v.setCameraDistance(distance);
     }
 
     /** Press feedback of a view: `delayLongPress`, `android_ripple`. */
@@ -1731,6 +1741,15 @@ final class Mounter {
 
     boolean hasShownModal() {
         return !shownModals.isEmpty();
+    }
+
+    /** The window of the topmost dialog shown, or null. */
+    View topModalWindow() {
+        for (int i = shownModals.size() - 1; i >= 0; i--) {
+            View window = shownModals.get(i).window();
+            if (window != null) return window;
+        }
+        return null;
     }
 
     /** The stack the back button acts on (pops, or asks to leave), if any. */

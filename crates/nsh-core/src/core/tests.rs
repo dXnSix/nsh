@@ -9973,6 +9973,44 @@ mod components {
     }
 
     #[test]
+    fn components_read_images_over_the_limit_as_none() {
+        let mut c = core();
+        c.mount_root(&crate::element::Root::new::<ImagePaster>(|| ()));
+        let batch = c.commit().unwrap();
+        let button = batch
+            .items
+            .iter()
+            .find_map(|i| match i {
+                MountItem::Events { id, events } if events.contains(EventKind::Press) => Some(*id),
+                _ => None,
+            })
+            .expect("the button");
+        assert!(c.component_event(button, EventKind::Press, &EventPayload::None));
+        c.commit().unwrap();
+        use crate::PayloadValue::{Bool, Number, Str};
+        let limit = crate::platform::clipboard::MAX_IMAGE_BYTES;
+        let answers = [
+            vec![("id", Number(1.0)), ("has", Bool(true))],
+            // The size of an image the platform left out.
+            vec![
+                ("id", Number(2.0)),
+                ("has", Bool(true)),
+                ("tooLarge", Number((limit + 1) as f64)),
+            ],
+            vec![
+                ("id", Number(3.0)),
+                ("has", Bool(false)),
+                ("files", Str(String::new())),
+            ],
+        ];
+        for payload in answers {
+            assert!(c.component_event(ROOT_ID, EventKind::Clipboard, &EventPayload::Map(payload)));
+        }
+        let shown = run_until(&mut c, |s| s.iter().any(|t| t.starts_with("pasted t")));
+        assert_eq!(shown.last().unwrap(), "pasted true None ");
+    }
+
+    #[test]
     fn clipboard_images_need_the_capability() {
         let mut c = core();
         c.set_access(std::sync::Arc::new(crate::access::Access {
@@ -13520,6 +13558,169 @@ mod views {
         assert_eq!(background(&batch, plain), Some(crate::Color(0x0000ffff)));
     }
 
+    /// A key a test names: the id goes on the key's root, as TSX's
+    /// `testID` on a component does.
+    #[derive(Default)]
+    struct NamedKey;
+
+    #[derive(Clone, PartialEq, Props)]
+    struct NamedKeyProps {}
+
+    impl Component for NamedKey {
+        type Props = NamedKeyProps;
+        type Event = NoEvent;
+
+        fn view(_: NamedKeyProps, _: Scope<NoEvent>) -> impl IntoElement {
+            view()
+                .flex_row()
+                .child(
+                    Key::element(KeyProps {
+                        selected: false.into(),
+                    })
+                    .test_id("save"),
+                )
+                .child(OwnId::element(OwnIdProps {}).test_id("given"))
+        }
+    }
+
+    /// A component whose root names itself; each press of it changes its
+    /// own label (an update of the root's own attributes).
+    #[derive(Default)]
+    struct OwnId;
+
+    #[derive(Clone, PartialEq, Props)]
+    struct OwnIdProps {}
+
+    impl Component for OwnId {
+        type Props = OwnIdProps;
+        type Event = NoEvent;
+
+        fn view(_: OwnIdProps, _: Scope<NoEvent>) -> impl IntoElement {
+            let presses = signal(0u32);
+            view()
+                .size_10()
+                .test_id("own")
+                .label(move || SharedString::from(format!("pressed {}", presses.get())))
+                .on_press(move || presses.update(|n| *n += 1))
+                .child(view().label(move || SharedString::from(format!("child {}", presses.get()))))
+        }
+    }
+
+    #[test]
+    fn a_nested_components_test_id_is_on_its_root() {
+        let mut c = core();
+        c.mount_root(&Root::new::<NamedKey>(|| NamedKeyProps {}));
+        let batch = c.commit().unwrap();
+        let named: Vec<NodeId> = batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::ViewProps { id, props } if props.test_id.as_deref() == Some("save") => {
+                    Some(*id)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(named.len(), 1, "{:?}", batch.items);
+        // The key's root: the view that hears presses.
+        assert!(c.component_event(named[0], EventKind::Press, &EventPayload::None));
+        // A test id given to a component is over its root's own.
+        let ids: Vec<&str> = batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::ViewProps { props, .. } => props.test_id.as_deref(),
+                _ => None,
+            })
+            .collect();
+        assert!(ids.contains(&"given") && !ids.contains(&"own"), "{ids:?}");
+    }
+
+    /// [`OwnId`] given `"a"`, then `"b"`, then no id: a step per press of
+    /// `next`.
+    #[derive(Default)]
+    struct Renamed;
+
+    #[derive(Clone, PartialEq, Props)]
+    struct RenamedProps {}
+
+    impl Component for Renamed {
+        type Props = RenamedProps;
+        type Event = NoEvent;
+
+        fn view(_: RenamedProps, _: Scope<NoEvent>) -> impl IntoElement {
+            let step = signal(0u8);
+            view()
+                .child(
+                    view()
+                        .size_10()
+                        .test_id("next")
+                        .on_press(move || step.update(|s| *s += 1)),
+                )
+                .child(dynamic(move || {
+                    let own = OwnId::element(OwnIdProps {});
+                    match step.get() {
+                        0 => own.test_id("a"),
+                        1 => own.test_id("b"),
+                        _ => own,
+                    }
+                }))
+        }
+    }
+
+    #[test]
+    fn a_given_test_id_stays_over_the_roots_updates_and_the_own_comes_back() {
+        let ids = |batch: &MountBatch| -> Vec<(NodeId, Option<String>)> {
+            batch
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    MountItem::ViewProps { id, props } => {
+                        Some((*id, props.test_id.as_deref().map(str::to_owned)))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let named = |sent: &[(NodeId, Option<String>)], name: &str| {
+            sent.iter()
+                .find(|(_, t)| t.as_deref() == Some(name))
+                .map(|(id, _)| *id)
+        };
+        let mut c = core();
+        c.mount_root(&Root::new::<Renamed>(|| RenamedProps {}));
+        let first = ids(&c.commit().unwrap());
+        let next = named(&first, "next").unwrap();
+        let root = named(&first, "a").expect("the id given it");
+        assert!(named(&first, "own").is_none(), "{first:?}");
+        // The root's own label changes: the label goes, and the id it was
+        // given neither goes again nor gives way to its own.
+        assert!(c.component_event(root, EventKind::Press, &EventPayload::None));
+        let batch = c.commit().unwrap();
+        assert!(
+            batch
+                .items
+                .iter()
+                .any(|i| matches!(i, MountItem::AccessibilityLabel { id, .. } if *id == root)),
+            "{:?}",
+            batch.items
+        );
+        assert_eq!(ids(&batch), [], "{:?}", batch.items);
+        // A second root update must not resend the given id after the child
+        // changed its own attributes in the previous commit.
+        assert!(c.component_event(root, EventKind::Press, &EventPayload::None));
+        let batch = c.commit().unwrap();
+        assert_eq!(ids(&batch), [], "{:?}", batch.items);
+        // Another id given.
+        assert!(c.component_event(next, EventKind::Press, &EventPayload::None));
+        let sent = ids(&c.commit().unwrap());
+        assert!(named(&sent, "b").is_some(), "{sent:?}");
+        // None given: the root's own.
+        assert!(c.component_event(next, EventKind::Press, &EventPayload::None));
+        let sent = ids(&c.commit().unwrap());
+        assert!(named(&sent, "own").is_some(), "{sent:?}");
+    }
+
     /// A page whose header's colors are typed styles, theme colors among
     /// them.
     #[derive(Default)]
@@ -14146,6 +14347,158 @@ mod views {
                 batch.items
             );
         }
+    }
+
+    #[derive(Clone, PartialEq, Props)]
+    struct FocusCornerProps {
+        corner: crate::element::Prop<Option<Slot>>,
+    }
+
+    /// Counts the focus its corner gets and loses: listeners the place
+    /// gives the slot.
+    #[component]
+    fn FocusCorner(props: FocusCornerProps) -> impl IntoElement {
+        let (focused, blurred) = (signal(0), signal(0));
+        view()
+            .child(text(move || {
+                format!("focus {} blur {}", focused.get(), blurred.get())
+            }))
+            .child(props.corner.place(move |c| {
+                c.on_focus(move || focused.update(|n| *n += 1))
+                    .on_blur(move || blurred.update(|n| *n += 1))
+            }))
+    }
+
+    /// Fills a focus corner with a focusable view it counts the presses
+    /// of, then (pressing "switch") with a focusable text in its place.
+    #[component]
+    fn FocusTop() -> impl IntoElement {
+        let (presses, second) = (signal(0), signal(false));
+        let press = move || presses.update(|n| *n += 1);
+        view()
+            .child(text(move || format!("pressed {}", presses.get())))
+            .child(focus_corner().corner(dynamic(move || {
+                if second.get() {
+                    text("second").focusable(true).into_element()
+                } else {
+                    view()
+                        .focusable(true)
+                        .on_press(press)
+                        .child(text("first"))
+                        .into_element()
+                }
+            })))
+            .child(
+                view()
+                    .on_press(move || second.set(true))
+                    .child(text("switch")),
+            )
+    }
+
+    /// A slot a Rust view fills with one element, whose place gives it
+    /// listeners: they go to that element as to a TSX app's in its holder
+    /// (the node around the fill keeps none), so the focus, which only the
+    /// focused element hears, reaches the component; the element's own
+    /// listeners run too, and an element made in its place takes them.
+    #[test]
+    fn a_fills_one_element_hears_the_listeners_its_place_gives() {
+        let events = |c: &Core<FakeEngine>, id: NodeId| c.nodes[c.key(id).unwrap() as usize].events;
+        let mut c = core();
+        c.mount_root(&Root::new::<FocusTop>(|| ()));
+        let batch = c.commit().unwrap();
+        let switch = native_parent(&c, text_node(&batch, "switch")).expect("placed");
+        let first = native_parent(&c, text_node(&batch, "first")).expect("placed");
+        let holder = native_parent(&c, first).expect("in the node around the fill");
+        assert!(events(&c, first).contains(EventKind::Focus));
+        assert!(events(&c, first).contains(EventKind::Blur));
+        assert!(events(&c, first).contains(EventKind::Press), "its own");
+        assert!(!events(&c, holder).contains(EventKind::Focus));
+        assert!(c.component_event(first, EventKind::Focus, &EventPayload::None));
+        assert!(c.component_event(first, EventKind::Blur, &EventPayload::None));
+        assert!(c.component_event(first, EventKind::Press, &EventPayload::None));
+        let shown = texts(&c.commit().unwrap());
+        assert!(shown.contains(&"focus 1 blur 1".into()), "{shown:?}");
+        assert!(shown.contains(&"pressed 1".into()), "{shown:?}");
+        // Another element in its place: the listeners follow it.
+        assert!(c.component_event(switch, EventKind::Press, &EventPayload::None));
+        let batch = c.commit().unwrap();
+        let second = text_node(&batch, "second");
+        assert!(c.key(first).is_err(), "released");
+        assert_eq!(native_parent(&c, second), Some(holder));
+        assert!(events(&c, second).contains(EventKind::Focus));
+        assert!(!events(&c, holder).contains(EventKind::Focus));
+        assert!(c.component_event(second, EventKind::Focus, &EventPayload::None));
+        let shown = texts(&c.commit().unwrap());
+        assert!(shown.contains(&"focus 2 blur 1".into()), "{shown:?}");
+    }
+
+    #[derive(Clone, PartialEq, Props)]
+    struct AnchoredCornerProps {
+        corner: crate::element::Prop<Option<Slot>>,
+        #[prop(default)]
+        open: crate::element::Prop<bool>,
+    }
+
+    /// Gives its corner a ref and, while `open`, shows a 40 × 20 overlay
+    /// 4 points below what the corner draws, from its start (a popover's).
+    #[component]
+    fn AnchoredCorner(props: AnchoredCornerProps) -> impl IntoElement {
+        let anchor = element_ref();
+        view()
+            .child(props.corner.place(move |c| c.element_ref(&anchor)))
+            .child(when(
+                move || props.open.get(),
+                move || {
+                    overlay()
+                        .anchor_content(&anchor)
+                        .placement(Placement::Bottom)
+                        .align(Align::Start)
+                        .offset(px(4.0))
+                        .w(px(40.0))
+                        .h(px(20.0))
+                        .child(text("pop"))
+                },
+            ))
+    }
+
+    /// Fills an anchored corner, 100 points down, with an 80 × 30 view
+    /// around a 50 × 10 box; a press on the root opens its overlay.
+    #[component]
+    fn AnchoredTop() -> impl IntoElement {
+        let open = signal(false);
+        view().pt(px(100.0)).on_press(move || open.set(true)).child(
+            anchored_corner().open(open).corner(
+                view()
+                    .w(px(80.0))
+                    .h(px(30.0))
+                    .child(view().w(px(50.0)).h(px(10.0)).child(text("box"))),
+            ),
+        )
+    }
+
+    /// The ref a component gives a slot a Rust view fills is the filled
+    /// element's, not its child's, and an overlay placed against what the
+    /// slot draws goes by the element's own box (its size, not its
+    /// content's), as it did while the ref was on the node around it.
+    #[test]
+    fn a_fills_element_takes_the_slots_ref_with_its_own_box() {
+        let mut c = core();
+        c.mount_root(&Root::new::<AnchoredTop>(|| ()));
+        let batch = c.commit().unwrap();
+        let top = root_host(&batch);
+        let inner = native_parent(&c, text_node(&batch, "box")).expect("placed");
+        let element = native_parent(&c, inner).expect("placed");
+        let holder = native_parent(&c, element).expect("in the node around the fill");
+        assert_eq!(
+            c.components.adopted.get(&element),
+            Some(&holder),
+            "the element takes the slot's props"
+        );
+        assert!(c.component_event(top, EventKind::Press, &EventPayload::None));
+        let batch = c.commit().unwrap();
+        let pop = native_parent(&c, text_node(&batch, "pop")).expect("shown");
+        // Below the element (0, 100, 80 × 30), not its 10-point box.
+        assert_eq!(frame_of(&batch, pop), Some(rect(0.0, 134.0, 40.0, 20.0)));
     }
 
     /// Rows of a list, each with a filled corner, a holder of a text and a
@@ -22096,4 +22449,287 @@ fn frames_of_a_subtree_moved_by_whole_points_are_not_walked_again() {
     apply(&mut c, vec![style_op(4, &at(5.0, 10.0, 50.0, 20.0))]);
     let shown = c.commit().unwrap();
     assert_eq!(frame_of(&shown, 6), Some(rect(3.0, 2.0, 12.0, 10.0)));
+}
+
+/// A view that follows another one (`follow.rs`): a row (2: 10 of padding
+/// at the start, 30 high) of tabs 50 (4) and 70 (6) wide, its follower (8)
+/// laid out first, absolute, 2 high at the bottom; then a view (10) after
+/// the row, 10 high.
+fn follow_row(c: &mut Core<FakeEngine>, column: bool) {
+    use StyleValue::{Number, Str};
+    let list: &[(&str, StyleValue<'_>)] = if column {
+        &[("flexDirection", Str("column")), ("width", Number(100.0))]
+    } else {
+        &[
+            ("flexDirection", Str("row")),
+            ("paddingLeft", Number(10.0)),
+            ("height", Number(30.0)),
+        ]
+    };
+    let follower: &[(&str, StyleValue<'_>)] = if column {
+        &[
+            ("position", Str("absolute")),
+            ("left", Number(0.0)),
+            ("width", Number(3.0)),
+            ("marginTop", Number(2.0)),
+            ("marginBottom", Number(2.0)),
+        ]
+    } else {
+        &[
+            ("position", Str("absolute")),
+            ("bottom", Number(0.0)),
+            ("height", Number(2.0)),
+        ]
+    };
+    let tab = |n: f32| -> Vec<(&str, StyleValue<'_>)> {
+        if column {
+            vec![("height", Number(n))]
+        } else {
+            vec![("width", Number(n)), ("height", Number(30.0))]
+        }
+    };
+    let (first, second) = if column { (30.0, 40.0) } else { (50.0, 70.0) };
+    let mut ops = Vec::new();
+    for (id, parent, style) in [
+        (2, 1, list.to_vec()),
+        (8, 2, follower.to_vec()),
+        (4, 2, tab(first)),
+        (6, 2, tab(second)),
+        (10, 1, vec![("height", Number(10.0))]),
+    ] {
+        ops.push(Op::Create { id, tag: Tag::View });
+        ops.push(style_op(id, &style));
+        ops.push(Op::Insert {
+            parent,
+            child: id,
+            before: None,
+        });
+    }
+    ops.push(Op::SetProp {
+        id: 8,
+        prop: Prop::Follow(Some(crate::element::FollowTarget::of_node(6))),
+    });
+    apply(c, ops);
+}
+
+/// The frames of `batch`, each with the layout animation it runs with.
+fn animated_frames(batch: &MountBatch) -> Vec<(NodeId, Option<crate::LayoutTransition>)> {
+    let mut current = None;
+    let mut frames = Vec::new();
+    for item in &batch.items {
+        match item {
+            MountItem::LayoutAnimation(a) => current = a.update,
+            MountItem::Frame { id, .. } => frames.push((*id, current)),
+            _ => {}
+        }
+    }
+    frames
+}
+
+#[test]
+fn a_follower_spans_its_target_along_its_parents_row() {
+    let mut c = core();
+    follow_row(&mut c, false);
+    let batch = c.commit().unwrap();
+    // Across the row, its style: at the bottom, 2 high. Along it, 6: after
+    // the padding and 4.
+    assert_eq!(frame_of(&batch, 8), Some(rect(60.0, 28.0, 70.0, 2.0)));
+    let placed = animated_frames(&batch).iter().filter(|f| f.0 == 8).count();
+    assert_eq!(placed, 1, "one frame, the followed one: {:?}", batch.items);
+}
+
+#[test]
+fn following_another_view_moves_its_frame_alone_with_its_transition() {
+    let mut c = core();
+    follow_row(&mut c, false);
+    c.commit().unwrap();
+    let spring = crate::LayoutTransition::new(crate::LayoutCurve::Spring { damping: 0.85 }, 362.0);
+    apply(
+        &mut c,
+        vec![
+            Op::SetProp {
+                id: 8,
+                prop: Prop::FollowTransition(Some(spring)),
+            },
+            Op::SetProp {
+                id: 8,
+                prop: Prop::Follow(Some(crate::element::FollowTarget::of_node(4))),
+            },
+            // The content after the row changes in the same commit.
+            style_op(10, &[("height", StyleValue::Number(20.0))]),
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(frame_of(&batch, 8), Some(rect(10.0, 28.0, 50.0, 2.0)));
+    let frames = animated_frames(&batch);
+    assert!(frames.contains(&(8, Some(spring))), "{frames:?}");
+    assert!(
+        frames.contains(&(10, None)),
+        "what changes around it changes at once: {frames:?}"
+    );
+    assert_eq!(frames.len(), 2, "no tab moves: {frames:?}");
+}
+
+#[test]
+fn a_follower_moves_at_once_with_the_layout_that_moves_its_target() {
+    let mut c = core();
+    follow_row(&mut c, false);
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: 8,
+            prop: Prop::FollowTransition(Some(crate::LayoutTransition::new(
+                crate::LayoutCurve::EaseOut,
+                160.0,
+            ))),
+        }],
+    );
+    c.commit().unwrap();
+    // The first tab grows: the second moves, and its follower with it, in
+    // the same batch and without the transition.
+    apply(
+        &mut c,
+        vec![style_op(
+            4,
+            &[
+                ("width", StyleValue::Number(60.0)),
+                ("height", StyleValue::Number(30.0)),
+            ],
+        )],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(frame_of(&batch, 6), Some(rect(70.0, 0.0, 70.0, 30.0)));
+    assert_eq!(frame_of(&batch, 8), Some(rect(70.0, 28.0, 70.0, 2.0)));
+    assert!(
+        animated_frames(&batch).iter().all(|f| f.1.is_none()),
+        "{:?}",
+        batch.items
+    );
+}
+
+#[test]
+fn a_follower_in_a_column_follows_vertically_inside_its_margins() {
+    let mut c = core();
+    follow_row(&mut c, true);
+    let batch = c.commit().unwrap();
+    // Under 4 (30), inside margins of 2; at the left, 3 wide.
+    assert_eq!(frame_of(&batch, 8), Some(rect(0.0, 32.0, 3.0, 36.0)));
+}
+
+#[test]
+fn a_follower_follows_a_target_inside_other_views() {
+    let mut c = core();
+    follow_row(&mut c, false);
+    // 12, inside 6 after a padding of 5, 20 wide.
+    apply(
+        &mut c,
+        vec![
+            style_op(
+                6,
+                &[
+                    ("width", StyleValue::Number(70.0)),
+                    ("height", StyleValue::Number(30.0)),
+                    ("paddingLeft", StyleValue::Number(5.0)),
+                ],
+            ),
+            Op::Create {
+                id: 12,
+                tag: Tag::View,
+            },
+            style_op(
+                12,
+                &[
+                    ("width", StyleValue::Number(20.0)),
+                    ("height", StyleValue::Number(10.0)),
+                ],
+            ),
+            Op::Insert {
+                parent: 6,
+                child: 12,
+                before: None,
+            },
+            Op::SetProp {
+                id: 8,
+                prop: Prop::Follow(Some(crate::element::FollowTarget::of_node(12))),
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(frame_of(&batch, 8), Some(rect(65.0, 28.0, 20.0, 2.0)));
+}
+
+#[test]
+fn a_follower_following_nothing_takes_its_own_layout() {
+    let mut c = core();
+    follow_row(&mut c, false);
+    c.commit().unwrap();
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: 8,
+            prop: Prop::Follow(None),
+        }],
+    );
+    let batch = c.commit().unwrap();
+    // Where its style puts it: at the start of the row's content, as wide
+    // as its content (none).
+    assert_eq!(frame_of(&batch, 8), Some(rect(10.0, 28.0, 0.0, 2.0)));
+}
+
+#[test]
+fn nothing_follows_while_no_view_follows_an_element() {
+    // The pass a follower takes (`Core::place_followers`) returns at once
+    // on an empty list, and `set_frame` notes nothing: no work, whatever
+    // the layout does.
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::View,
+            },
+            style_op(2, &[("height", StyleValue::Number(30.0))]),
+            Op::Insert {
+                parent: 1,
+                child: 2,
+                before: None,
+            },
+            // Following nothing makes no follower.
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Follow(None),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::FollowTransition(None),
+            },
+        ],
+    );
+    c.commit().unwrap();
+    c.set_viewport(size_pt(200.0, 300.0));
+    c.commit().unwrap();
+    assert!(c.followers.is_empty());
+    assert!(!c.follow_changed);
+
+    // A follower released is forgotten, and so is the work.
+    let mut c = core();
+    follow_row(&mut c, false);
+    c.commit().unwrap();
+    assert_eq!(c.followers.len(), 1);
+    apply(
+        &mut c,
+        vec![
+            Op::Remove {
+                parent: 2,
+                child: 8,
+            },
+            Op::Release { id: 8 },
+        ],
+    );
+    c.commit().unwrap();
+    assert!(c.followers.is_empty());
+    c.set_viewport(size_pt(320.0, 480.0));
+    c.commit();
+    assert!(!c.follow_changed);
 }
