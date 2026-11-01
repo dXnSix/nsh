@@ -1,5 +1,7 @@
 # image: Load the @1x, @2x or @3x file that fits the screen
 
+> **Upstream (checked 2026-11-01):** opened and merged as longbridge/nsh#229 (2026-10-21).
+
 Branch: `feat/multires-images` on `github.com/dXnSix/nsh`, rebased once on `upstream/main` `87b1cb4` (#186); since then it
 follows upstream by merging `upstream/main` in, never by rebasing (the latest merge is `upstream/main` `a8ff77c`). Opened
 as a pull request into the fork's `main`, Gamify's integration line, and merged there with a merge commit. Three commits:

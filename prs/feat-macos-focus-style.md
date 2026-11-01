@@ -1,5 +1,8 @@
 # macos: Show a border that a state turns visible, as focus:border-white
 
+> **Upstream (checked 2026-11-01):** opened as longbridge/nsh#432, closed 2026-10-26 by the maintainer: upstream
+> already shows such a border.
+
 Branch: `feat/macos-focus-style` on `github.com/dXnSix/nsh`. It follows upstream by merging `upstream/main` in, never by
 rebasing; the latest merge is `upstream/main` `a8ff77c`. Opened as a pull request into the fork's `main`, Gamify's
 integration line, and merged there with a merge commit. One commit, `e93abd8`. Not opened upstream; the owner

@@ -1,5 +1,8 @@
 # cli: Fail instead of moving to another port with --strict-port
 
+> **Upstream (checked 2026-11-01):** the port clash went upstream as longbridge/nsh#428 (merged 2026-10-27),
+> which replaces the previous development session on its port instead of adding `--strict-port`.
+
 Branch: `feat/cli-strict-port` on `github.com/dXnSix/nsh`. It follows upstream by merging `upstream/main` in, never by
 rebasing; the latest merge is `upstream/main` `a8ff77c`. Opened as a pull request into the fork's `main`, Gamify's
 integration line, and merged there with a merge commit. Not opened upstream; the owner

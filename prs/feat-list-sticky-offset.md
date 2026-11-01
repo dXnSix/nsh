@@ -1,5 +1,7 @@
 # list: Let sticky headers stick a distance from the top
 
+> **Upstream (checked 2026-11-01):** opened and merged as longbridge/nsh#285 (2026-10-21).
+
 Branch: `feat/list-sticky-offset` on `github.com/dXnSix/nsh`, cut from `fix/web-sticky-compositor`, whose web tracks it
 builds on; upstream it stacks on that fix. One commit, `7b09c216`; merged into the fork's `main` as fork PR #14 (merge
 commit `df084a10`, in `six-gamify-0.1.1-7`). It follows upstream by merging `upstream/main` in, never by rebasing. Not opened upstream; the owner decides and posts there (upstream squash merges).

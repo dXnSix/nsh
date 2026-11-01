@@ -1,5 +1,7 @@
 # android: Follow display density changes while the app runs
 
+> **Upstream (checked 2026-11-01):** opened and merged as longbridge/nsh#431 (2026-10-27).
+
 Branch: `feat/android-density` on `github.com/dXnSix/nsh`. It follows upstream by merging `upstream/main` in, never by
 rebasing; the latest merge is `upstream/main` `a8ff77c`. Opened as a pull request into the fork's `main`, Gamify's
 integration line, and merged there with a merge commit. One commit, `7cd3c46`: `android: Follow display density

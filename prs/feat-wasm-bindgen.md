@@ -1,5 +1,7 @@
 # web: Let an app's Rust crates use wasm-bindgen in the browser
 
+> **Upstream (checked 2026-11-01):** opened and merged as longbridge/nsh#228 (2026-10-21).
+
 Branch: `feat/wasm-bindgen` on `github.com/dXnSix/nsh`. It follows upstream by merging `upstream/main` in, never by
 rebasing; the latest merge is `upstream/main` `a8ff77c`. Opened as a pull request into the fork's `main`, Gamify's
 integration line, and merged there with a merge commit. Not opened upstream; the owner

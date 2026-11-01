@@ -1,5 +1,7 @@
 # image: Show SVG images, rasterized at the size they are shown
 
+> **Upstream (checked 2026-11-01):** opened and merged as longbridge/nsh#230 (2026-10-21).
+
 Branch: `feat/svg-images` on `github.com/dXnSix/nsh` (the eight commits below end at `141b27b`). It follows upstream by
 merging `upstream/main` in, never by rebasing; the latest merge is `upstream/main` `a8ff77c`. Opened last of the eight feature
 pull requests into the fork's `main`, Gamify's integration line, after the fork's `main` was merged in to settle the overlap
