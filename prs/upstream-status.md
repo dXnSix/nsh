@@ -8,9 +8,9 @@ workflow and its tests of fork-only code are left out: they never go upstream.
 
 | Feature | Records | State |
 |---|---|---|
-| Font fallbacks (`fontFamily` lists: the core and Android, iOS, macOS, Windows, GPUI) | [`upstream-font-fallbacks`](upstream-font-fallbacks.md) | prepared 2026-11-01 (`pr/font-fallbacks/01-core`, on `main`); fork runs going |
-| Register fonts while the app runs | `upstream-register-font` | rebuilt 2026-11-01 on `main` with #745 and #746 (their latest); fork runs going |
-| The device's time zone | `upstream-environment-02-time-zone` | rebuilt 2026-11-01 on #747 without #744; fork runs going |
+| Font fallbacks (`fontFamily` lists: the core and Android, iOS, macOS, Windows, GPUI) | [`upstream-font-fallbacks`](upstream-font-fallbacks.md) | **opened as #773** (2026-11-01) |
+| Register fonts while the app runs | `upstream-register-font` | rebuilt 2026-11-01 on `main` with #745 and #746 (their latest); fork runs green; opens once #745 and #746 merge |
+| The device's time zone | `upstream-environment-02-time-zone` | rebuilt 2026-11-01 on #747 without #744; fork runs green; opens once #747 merges |
 | The user's preferred languages | `upstream-environment-03-languages` | prepared; stacks on the time zone PR |
 | The user's regional preferences | `upstream-environment-04-regional` | prepared; stacks on the languages PR |
 

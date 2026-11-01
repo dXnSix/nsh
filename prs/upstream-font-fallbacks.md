@@ -1,6 +1,8 @@
 # Upstream PR: text: Fall back along fontFamily lists
 
-Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and posts it.
+Opened 2026-11-01 as [longbridge/nsh#773](https://github.com/longbridge/nsh/pull/773), at the owner's decision; the body
+below the line is the one posted. Fork-tested first: Core, Rust application, Examples, Windows, Linux and GPUI all
+green on `ddc03e232`.
 
 - Branch: `pr/font-fallbacks/01-core` (`ddc03e232`), six commits on `upstream/main` `4f2502cd`: the core's, then one per
   platform (iOS, Android, macOS, Windows, GPUI). Linux (Pango) and the web (the browser) already fall back along lists.
