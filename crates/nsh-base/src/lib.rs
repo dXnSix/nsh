@@ -1,7 +1,7 @@
 //! `nsh/base`: the behavior and infrastructure foundation of NSH apps' UI,
 //! written in Rust, with no look of its own (as `gpui-base` is GPUI Kit's):
 //! controls (`Button`, a link (`Link`), `Checkbox`, avatars (`Avatar`, `AvatarGroup`), a carousel (`Carousel` and its parts), a color picker: `ColorPicker` and its parts, `NumberInput`, `Radio` in a
-//! `RadioGroup`, `Slider`, `Switch`, `Toggle` in a `ToggleGroup`, a bar of them and of buttons and links (`Toolbar`, `ToolbarGroup`, `ToolbarSeparator`), a scroll bar of the app's own look (`Scrollbar`), `Tab` in `Tabs`, `Select`, `Combobox`, a one-time code: `OtpInput`), the pages of a set (`Pagination`), a progress bar (`Progress`), disclosure (`Collapsible`, `Accordion` and its parts),
+//! `RadioGroup`, `Slider`, `Switch`, `Toggle` in a `ToggleGroup`, a bar of them and of buttons and links (`Toolbar`, `ToolbarGroup`, `ToolbarSeparator`), a scroll bar of the app's own look (`Scrollbar`), `Tab` in `Tabs`, `Select`, `Combobox`, a one-time code: `OtpInput`), the pages of a set (`Pagination`), items that hold items (`Tree`), a progress bar (`Progress`), disclosure (`Collapsible`, `Accordion` and its parts),
 //! the parts of charts (`plot`: `nsh/base/plot`), navigation (stacks and pages), dialogs, popups on the core's overlays
 //! (`Popover`, `Menu`, `ContextMenu`, `Tooltip`, `Sheet`), a code editor
 //! (`Editor`), the changes between two texts (`DiffView`), tables over any number of rows and columns (`DataTable`) and static tables
@@ -64,6 +64,7 @@ mod toast;
 mod toggle;
 mod toolbar;
 mod tooltip;
+mod tree;
 mod window;
 
 use std::sync::Arc;
@@ -222,6 +223,7 @@ pub use crate::{
         toolbar_group, toolbar_separator,
     },
     tooltip::{Tooltip, TooltipElement, TooltipEvent, TooltipProps, tooltip},
+    tree::{Tree, TreeApi, TreeElement, TreeEntry, TreeEvent, TreeItem, TreeProps, tree},
 };
 
 /// The JS module apps import the foundation as.
@@ -268,7 +270,7 @@ pub mod parts {
         RadioGroup, ResizablePanel, ResizablePanelGroup, Scrollbar, Select, Sheet, Slider, Submenu,
         Switch, Tab, Table, TableBody, TableCaption, TableCell, TableFooter, TableHead,
         TableHeader, TableRow, Tabs, TextView, TimeField, Toast, ToastStack, Toggle, ToggleGroup,
-        Toolbar, ToolbarGroup, ToolbarSeparator, Tooltip, plot, rich_editor, toast,
+        Toolbar, ToolbarGroup, ToolbarSeparator, Tooltip, Tree, plot, rich_editor, toast,
     };
 
     /// What a part does: registers its components, classes and modules.
@@ -289,7 +291,7 @@ pub mod parts {
     ];
 
     /// The controls, popups, toasts and dialogs every app may use: buttons,
-    /// links, carousels, checkboxes, color pickers, radios, switches, toggles, toolbars, sliders, scroll bars, number inputs, one-time code inputs, paginations, selects, comboboxes, tabs, collapsibles, accordions, progress,
+    /// links, carousels, checkboxes, color pickers, radios, switches, toggles, toolbars, sliders, scroll bars, number inputs, one-time code inputs, paginations, selects, comboboxes, trees, tabs, collapsibles, accordions, progress,
     /// menus, popovers, sheets, tooltips, toasts and system alerts.
     pub fn core(registry: &mut Registry) {
         registry
@@ -348,6 +350,7 @@ pub mod parts {
             .register::<ToolbarGroup>()
             .register::<ToolbarSeparator>()
             .register::<TimeField>()
+            .register::<Tree>()
             .register::<Toast>()
             .register::<ToastStack>()
             .class::<toast::ToastManagerClass>()
@@ -499,7 +502,8 @@ mod tests {
                 "Toolbar",
                 "ToolbarGroup",
                 "ToolbarSeparator",
-                "Tooltip"
+                "Tooltip",
+                "Tree"
             ]
         );
         let modules: Vec<_> = registry.module_specs().iter().map(|m| m.name).collect();
