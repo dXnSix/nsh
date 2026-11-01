@@ -92,6 +92,9 @@ fn encode(layer: Option<&ShaderLayer>) -> String {
             ShaderRole::Transition => 2,
             ShaderRole::Screen => 3,
             ShaderRole::ScreenTransition => 4,
+            // A role this runtime does not know draws as a fill, under the
+            // children, as on a platform that draws no effects.
+            _ => 0,
         },
         "overflow": layer.overflow.0,
         "progress": layer.progress,

@@ -732,7 +732,9 @@ impl HostValue for crate::shader::NavShaderSpec {
 impl HostValue for crate::shader::ShaderProgress {
     fn decode<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Self> {
         if let Some(n) = input.as_number() {
-            return Some(crate::shader::ShaderProgress::Number(n as f32));
+            return Some(crate::shader::ShaderProgress::Number(
+                crate::geometry::Percentage(n as f32),
+            ));
         }
         input
             .animated_node()
@@ -751,7 +753,7 @@ impl HostValue for crate::shader::TransitionKey {
             return Some(crate::shader::TransitionKey::Bool(b));
         }
         if let Some(n) = input.as_number() {
-            return Some(crate::shader::TransitionKey::Number(n.to_bits()));
+            return Some(crate::shader::TransitionKey::number(n));
         }
         input
             .as_string()

@@ -1030,6 +1030,10 @@ pub struct Core<M: TextEngine> {
     transition_starts: Vec<MountItem>,
     /// The shader views whose layers read pictures (`sample_content`, ...).
     pictured: rustc_hash::FxHashSet<NodeId>,
+    /// The parents views left this commit, while any shader reads
+    /// pictures: what is above them changed though their mount items no
+    /// longer lead there ([`Core::mark_shader_inputs`]).
+    unlinked_from: Vec<NodeId>,
     /// Live screens, modals and header items.
     roots: Vec<Key>,
     /// Attached input accessories by `nativeID`.
@@ -1199,6 +1203,7 @@ impl<M: TextEngine> Core<M> {
             shaders: Default::default(),
             transition_starts: Vec::new(),
             pictured: Default::default(),
+            unlinked_from: Vec::new(),
             roots: Vec::new(),
             accessories: Default::default(),
             header_heights: (Points(44.0), Points(96.0)),
@@ -3147,11 +3152,20 @@ impl<M: TextEngine> Core<M> {
 
     /// Tells the platform which shaders' pictures this commit changed
     /// ([`MountItem::ShaderInput`]): the effects and transitions with a
-    /// changed view in their subtree (themselves included), and every
+    /// changed view in their subtree (themselves included) or one that left
+    /// it, and every
     /// shader that reads what is behind it, and every screen effect or
     /// transition, once anything changed.
     fn mark_shader_inputs(&mut self) {
-        if self.pictured.is_empty() || self.mount.is_empty() {
+        let unlinked_from = std::mem::take(&mut self.unlinked_from);
+        // A batch that is only a layout animation is dropped (`commit`):
+        // nothing in it changed what the pictures show.
+        if self.pictured.is_empty()
+            || self
+                .mount
+                .iter()
+                .all(|item| matches!(item, MountItem::LayoutAnimation(_)))
+        {
             return;
         }
         use crate::shader::{ShaderInput as I, ShaderRole as R};
@@ -3180,8 +3194,10 @@ impl<M: TextEngine> Core<M> {
         }
         if !subtrees.is_empty() {
             let mut seen = rustc_hash::FxHashSet::default();
-            for item in &self.mount {
-                let Some(view) = item.view() else { continue };
+            // A view that left (`Remove`, `Delete`) has no parent to walk
+            // up from any more: its old parent stands in for it.
+            let views = self.mount.iter().filter_map(MountItem::view);
+            for view in views.chain(unlinked_from) {
                 if !seen.insert(view) {
                     continue;
                 }
@@ -3282,7 +3298,7 @@ impl<M: TextEngine> Core<M> {
             let mut warnings = Vec::new();
             let (progress, animated) = match state.progress {
                 crate::shader::ShaderProgress::Number(n) => (n, None),
-                crate::shader::ShaderProgress::Animated(node) => (0.0, Some(node)),
+                crate::shader::ShaderProgress::Animated(node) => (Percentage(0.0), Some(node)),
             };
             let layer = crate::shader::ShaderLayer::new(shader, &state.uniforms.0, &mut warnings)
                 .with_paused(state.paused)
@@ -4309,6 +4325,23 @@ impl<M: TextEngine> Core<M> {
         if child == self.root || self.is_ancestor(child, parent) {
             return Err(ApplyError::Cycle(child_id));
         }
+        if self.nodes[parent as usize]
+            .shader
+            .as_ref()
+            .is_some_and(|s| {
+                matches!(
+                    s.role,
+                    crate::shader::ShaderRole::Screen | crate::shader::ShaderRole::ScreenTransition
+                )
+            })
+        {
+            // It takes no space, so a child lays out in nothing: the
+            // surface is what it draws through.
+            log::warn!(
+                target: "js",
+                "node {child_id} in screen effect {parent_id}: a screen effect or transition has no children"
+            );
+        }
         if let Some(b) = before
             && (b == child || self.nodes[b as usize].parent != parent)
         {
@@ -4474,6 +4507,9 @@ impl<M: TextEngine> Core<M> {
         self.status_bars_moved |= !self.status_bar_nodes.is_empty();
         self.outer_moved |= !self.parent_lists.is_empty() && self.may_hold_page_list(key);
         self.sticky_changed |= !self.sticky_nodes.is_empty();
+        if !self.pictured.is_empty() {
+            self.unlinked_from.push(self.nodes[parent as usize].id);
+        }
         let node = &self.nodes[key as usize];
         let (inline, layout, created, id) = (node.inline, node.layout, node.created, node.id);
         if inline {
@@ -7247,10 +7283,14 @@ fn span(from: f32, to: f32, ratio: f32) -> f32 {
 }
 
 /// `value` rounded up to a device pixel of `ratio` pixels per point. A
-/// value a hair over a whole pixel (`56.0 / 2.625 * 2.625` is
-/// `56.000004`) stays that pixel.
+/// value that is a whole pixel but for `f32` (`56.0 / 2.625 * 2.625` is
+/// `56.000004`) stays that pixel; a value really over one gets the next
+/// pixel even when it is over by less than the tolerance: a text measured
+/// `78.000_49` points wide (a PingFang glyph's 1020 / 1028 em beside SF's
+/// 1/128 point advances) wraps in a box of 78.
 fn ceil_to_pixel(value: Points, ratio: f32) -> Points {
-    Points((value.0 * ratio - 1.0e-3).ceil().max(0.0) / ratio)
+    let up = (value.0 * ratio - 1.0e-3).ceil().max(0.0) / ratio;
+    Points(if up < value.0 { up + 1.0 / ratio } else { up })
 }
 
 /// `layout` rounded as Taffy's rounding pass (`taffy::round_layout`) rounds

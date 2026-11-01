@@ -4,6 +4,7 @@
 mod accordion;
 mod avatar;
 mod calendar;
+mod carousel;
 mod collapsible;
 mod color_picker;
 mod combobox;

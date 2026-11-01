@@ -49,7 +49,7 @@ use gtk4::{self as gtk, gdk, glib, graphene, gsk, prelude::*};
 use nsh_core::{
     NodeId,
     animation::AnimationValue,
-    geometry::{Points, Size, size},
+    geometry::{Percentage, Points, Size, size},
     shader::{ShaderInput, ShaderLayer, ShaderRole},
 };
 use nsh_engine::shader::{Frame, Renderer, ShaderView};
@@ -790,7 +790,7 @@ impl NavPainter {
         let layer = layer
             .clone()
             .with_overflow(Points::ZERO)
-            .with_progress(0.0, Some(NodeId::MAX));
+            .with_progress(Percentage::ZERO, Some(NodeId::MAX));
         let slot = layer.progress_slot()?;
         let mut view = ShaderView::default();
         view.set_layer(Some(Arc::new(layer)));

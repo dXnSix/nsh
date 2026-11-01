@@ -74,8 +74,8 @@ pub struct NativeUse {
     /// It may make a shader view: it spells a shader element's tag
     /// (`shader`, `shadereffect`, ...) in a string or a template, as the
     /// compiled `<Shader>` tags do (they pass it to `nsh:rt`'s `element`,
-    /// and the import of `Shader` is gone), or a key `shader`, as a page's
-    /// or a dialog's `animation: { shader }` does.
+    /// and the import of `Shader` is gone), or `transitionShader`, a page's
+    /// or a dialog's prop, as a key or a string.
     pub shader: bool,
 }
 
@@ -118,7 +118,7 @@ impl<F> Finder<'_, F> {
             "screeneffect",
             "screentransition",
         ];
-        if TAGS.contains(&value) {
+        if TAGS.contains(&value) || value == "transitionShader" {
             self.uses.shader = true;
         }
     }
@@ -203,10 +203,10 @@ impl<'a, F: Fn(&str) -> bool> Visit<'a> for Finder<'_, F> {
 
     // Members (`globalThis.crypto`) and keys (`({ crypto: c } = globalThis)`,
     // `const { CryptoKey } = self`).
-    // A key `shader` may be a page's `animation: { shader }`.
+    // A key `transitionShader` is a page's or a dialog's shader.
     fn visit_identifier_name(&mut self, it: &IdentifierName<'a>) {
         self.spelled(it.name.as_str());
-        if it.name == "shader" {
+        if it.name == "transitionShader" {
             self.uses.shader = true;
         }
     }
@@ -328,7 +328,9 @@ mod tests {
         assert!(uses("_$element(\"shader\");").shader);
         assert!(uses("u(`shader`);").shader);
         assert!(uses("_$element(\"shadertransition\");").shader);
-        assert!(uses("push(Page, { animation: { shader: wipe } });").shader);
+        assert!(uses("_$c(NavPage, { transitionShader: wipe });").shader);
+        assert!(uses("_$c(Dialog, { \"transitionShader\": wipe });").shader);
+        assert!(!uses("const options = { shader: wipe };").shader);
         assert!(!uses("const shader = view;").shader);
     }
 
