@@ -1,5 +1,7 @@
 # js: Write Intl's times in the user's hour cycle by default
 
+> **Upstream (checked 2026-11-01):** not sent (the owner's decision, 2026-10-30).
+
 Branch: `feat/intl-hour-cycle` on `github.com/dXnSix/nsh`, cut from the upstream sync (`sync/upstream-8c65c8d0`, #78).
 One commit, `0bf34b89`. Opened as a pull request into the fork's `main`; once #78 merges, it is its own commit only.
 Not opened upstream: the owner decides and posts there.

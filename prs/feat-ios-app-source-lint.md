@@ -1,5 +1,7 @@
 # ios: Keep the Catalyst clippy run clean over AppSource's variant sizes
 
+> **Upstream (checked 2026-11-01):** reverted on the fork (`e05571986`); upstream keeps `AppSource` as it is with an `allow` of its own.
+
 Branch: `feat/ios-app-source-lint` on `github.com/dXnSix/nsh`, cut from the fork's `main` `7d4d7fc` (upstream
 `a8ff77c` plus the fork's merged branches), merged into the fork's `main` as fork PR #9 (`83ad831`). Its commit
 `fed40c67` named #169 as the cause; fork PR #10 (`feat/ios-app-source-lint-message`, merged as `2a068a2`) reverted it

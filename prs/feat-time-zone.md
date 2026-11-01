@@ -1,5 +1,7 @@
 # core: Tell apps the device's time zone
 
+> **Upstream (checked 2026-11-01):** prepared as [upstream-environment-02-time-zone](upstream-environment-02-time-zone.md), not opened: stacks on #747.
+
 Branch: `feat/time-zone` on `github.com/dXnSix/nsh`, cut from the fork's `main` at `4faf2cfd`. One commit, `9a325b21`: `core: Tell
 apps the device's time zone`. Opened as a pull request into the fork's `main` and merged there with a merge commit.
 Not opened upstream: the owner decides and posts there.

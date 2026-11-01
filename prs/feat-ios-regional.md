@@ -1,5 +1,7 @@
 # ios: Report the user's regional preferences
 
+> **Upstream (checked 2026-11-01):** in the prepared regional PR (not opened), this platform's commit.
+
 Branch: `feat/ios-regional` on `github.com/dXnSix/nsh`, stacked on `feat/ios-languages` (#64), whose lines it
 touches, with `feat/regional` (`core: Tell apps the user's regional preferences`, #71) merged in. One commit,
 `929168a1`: `ios: Report the user's regional preferences`. Opened as a pull request into the fork's `main`; once #64 and #71 merge, it is its own commit

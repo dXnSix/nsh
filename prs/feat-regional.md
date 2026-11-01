@@ -1,5 +1,7 @@
 # core: Tell apps the user's regional preferences
 
+> **Upstream (checked 2026-11-01):** prepared as [upstream-environment-04-regional](upstream-environment-04-regional.md), not opened: stacks on the languages PR.
+
 Branch: `feat/regional` on `github.com/dXnSix/nsh`, stacked on `feat/languages` (`core: Tell apps the user's
 preferred languages`, #63), which touches the same lines. Two commits: `34ca38b4` `core: Tell apps the user's regional
 preferences`, and `fd1a4f34` `gpui: Box the dev client's events` (the test setup's new fields made GPUI's dev

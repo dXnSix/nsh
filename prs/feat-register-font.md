@@ -1,5 +1,7 @@
 # text: Let apps register fonts while they run
 
+> **Upstream (checked 2026-11-01):** prepared as [upstream-register-font](upstream-register-font.md), not opened: waits on #745 and #746.
+
 Branch: `feat/register-font` on `github.com/dXnSix/nsh`, stacked on `feat/woff` (`text: Read WOFF and WOFF2 fonts`, #80),
 which it uses. One commit, `c26f6133`. Opened as a pull request into the fork's `main`; once the WOFF pull request
 merges, it is its own commit only. Not opened upstream: the owner decides and posts there.

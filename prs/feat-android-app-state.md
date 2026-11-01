@@ -1,5 +1,7 @@
 # android: Report whether the app is in use
 
+> **Upstream (checked 2026-11-01):** in longbridge/nsh#747 (open), this platform's commit.
+
 Branch: `feat/android-app-state` on `github.com/dXnSix/nsh`, stacked on `feat/ios-app-state` (#39: both edit the same
 sentence of `docs/dev/elements.md`); it builds on `core: Tell apps whether they are in use` (#37). Its own commit:
 `713d861f` `android: Report whether the app is in use`. Opened as a pull request into the fork's `main` after #39, and

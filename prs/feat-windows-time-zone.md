@@ -1,5 +1,7 @@
 # windows: Report the device's time zone
 
+> **Upstream (checked 2026-11-01):** in the prepared time zone PR (not opened), this platform's commit.
+
 Branch: `feat/windows-time-zone` on `github.com/dXnSix/nsh`, stacked on `feat/time-zone` (`core: Tell apps the
 device's time zone`, #50). One commit, `20e2ac7e`: `windows: Report the device's time zone`. Opened as a pull request into
 the fork's `main`; once #50 merges, it is its own commit only. Not opened upstream: the owner decides and posts there.

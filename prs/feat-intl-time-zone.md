@@ -1,5 +1,7 @@
 # js: Write Intl's dates in the environment's zone, with a time zone database
 
+> **Upstream (checked 2026-11-01):** not sent (the owner's decision, 2026-10-30).
+
 Branch: `feat/intl-time-zone` on `github.com/dXnSix/nsh`, cut from the fork's `main` at `a30e8fd1`. One commit, `246b6284`: `js:
 Write Intl's dates in the environment's zone, with a time zone database`. Opened as a pull request into the fork's
 `main` and merged there with a merge commit. Not opened upstream: the owner decides and posts there.

@@ -1,5 +1,7 @@
 # text: Read WOFF and WOFF2 fonts
 
+> **Upstream (checked 2026-11-01):** longbridge/nsh#745 (open).
+
 Branch: `feat/woff` on `github.com/dXnSix/nsh`, cut from the upstream sync (`sync/upstream-8c65c8d0`, #78). One
 commit, `5f3150b0`. Opened as a pull request into the fork's `main`; once #78 merges, it is its own commit only. Not
 opened upstream: the owner decides and posts there.

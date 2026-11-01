@@ -1,5 +1,7 @@
 # core: Tell apps whether they are in use
 
+> **Upstream (checked 2026-11-01):** in longbridge/nsh#747 (open), the core's commit.
+
 Branch: `feat/app-state` on `github.com/dXnSix/nsh`, cut from `eb76a17d` (the latest `upstream/main` commit the fork's
 `main` holds). One commit, `8dbbb5e7`: `core: Tell apps whether they are in use`. Opened as a pull request into the
 fork's `main` and merged there with a merge commit. Not opened upstream: the owner decides and posts there (upstream

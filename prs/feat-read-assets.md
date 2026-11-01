@@ -1,5 +1,7 @@
 # engine: Let fetch read the files the app ships
 
+> **Upstream (checked 2026-11-01):** longbridge/nsh#746 (open).
+
 Branch: `feat/read-assets` on `github.com/dXnSix/nsh`, cut from `eb76a17d` (the latest `upstream/main` commit the fork's
 `main` holds). One commit, `c4aa5e54`: `engine: Let fetch read the files the app ships`. Opened as a pull request into
 the fork's `main` and merged there with a merge commit. Not opened upstream: the owner decides and posts there (upstream

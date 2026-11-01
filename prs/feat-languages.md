@@ -1,5 +1,7 @@
 # core: Tell apps the user's preferred languages
 
+> **Upstream (checked 2026-11-01):** prepared as [upstream-environment-03-languages](upstream-environment-03-languages.md), not opened: stacks on the time zone PR.
+
 Branch: `feat/languages` on `github.com/dXnSix/nsh`, cut from the fork's `main` at `33456e82`. One commit, `83e9c1af`: `core: Tell
 apps the user's preferred languages`. Opened as a pull request into the fork's `main` and merged there with a merge
 commit. Not opened upstream: the owner decides and posts there.

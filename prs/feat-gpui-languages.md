@@ -1,5 +1,7 @@
 # gpui: Report the user's preferred languages
 
+> **Upstream (checked 2026-11-01):** in the prepared languages PR (not opened), this platform's commit.
+
 Branch: `feat/gpui-languages` on `github.com/dXnSix/nsh`, stacked on `feat/languages` (`core: Tell apps the user's
 preferred languages`, #63). One commit, `c0f1a649`: `gpui: Report the user's preferred languages`. Opened as a pull
 request into the fork's `main`; once #63 merges, it is its own commit only. Not opened upstream: the owner decides

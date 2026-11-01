@@ -1,5 +1,7 @@
 # ios: Report whether the app is in use
 
+> **Upstream (checked 2026-11-01):** in longbridge/nsh#747 (open), this platform's commit.
+
 Branch: `feat/ios-app-state` on `github.com/dXnSix/nsh`, cut from the fork's `main` at `1def3acc` (it builds on
 `core: Tell apps whether they are in use`, #37). One commit, `78b6b24c`: `ios: Report whether the app is in use`. Opened
 as a pull request into the fork's `main` and merged there with a merge commit. Not opened upstream: the owner decides

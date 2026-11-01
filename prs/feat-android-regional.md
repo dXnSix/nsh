@@ -1,5 +1,7 @@
 # android: Report the user's regional preferences
 
+> **Upstream (checked 2026-11-01):** in the prepared regional PR (not opened), this platform's commit.
+
 Branch: `feat/android-regional` on `github.com/dXnSix/nsh`, stacked on `feat/android-languages` (#65), whose lines it
 touches, with `feat/regional` (`core: Tell apps the user's regional preferences`, #71) merged in. One commit,
 `837ea05d`: `android: Report the user's regional preferences`. Opened as a pull request into the fork's `main`; once #65 and #71 merge, it is its own commit

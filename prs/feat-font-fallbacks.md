@@ -1,5 +1,7 @@
 # text: Name the families of fontFamily lists
 
+> **Upstream (checked 2026-11-01):** not opened; upstream's `fontFamily` takes one family (no lists): the one fork feature with no upstream counterpart.
+
 Branch: `feat/font-fallbacks` on `github.com/dXnSix/nsh`, stacked on `feat/register-font` (#81), whose Fonts docs it
 extends. One commit, `1ca80297`. Opened as a pull request into the fork's `main`; once #78, #80 and #81 merge, it is its
 own commit only. Not opened upstream: the owner decides and posts there.

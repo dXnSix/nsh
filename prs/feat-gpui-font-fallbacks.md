@@ -1,5 +1,7 @@
 # gpui: Fall back along fontFamily lists
 
+> **Upstream (checked 2026-11-01):** not opened, with [feat-font-fallbacks](feat-font-fallbacks.md).
+
 Branch: `feat/gpui-font-fallbacks` on `github.com/dXnSix/nsh`, stacked on `feat/font-fallbacks` (`text: Name the families
 of fontFamily lists`, #82). One commit, `388f7c13`. Opened as a pull request into the fork's `main`; once the stack
 below it merges, it is its own commit only. Not opened upstream: the owner decides and posts there.
