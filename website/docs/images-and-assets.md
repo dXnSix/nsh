@@ -389,7 +389,7 @@ fn Greeting() -> impl IntoElement {
 }
 ```
 
-The engine reads the file from the app's files off its thread (from the dev server during `nsh run`), with no capability needed: they are the app's own. A web app downloads what the page did not preload from where it serves its assets. The response is `200` with the file's bytes and its `Content-Length`; a file the app does not ship rejects as a network error that names it. The URL names the file by its path inside the app's files, so a URL whose path leaves them (`..`, an absolute path) rejects the same way, before anything is read.
+The engine reads the file from the app's files off its thread (from the dev server during `nsh run`), with no capability needed: they are the app's own. A web app downloads what the page did not preload from where it serves its assets. The response is `200` with the file's bytes and its `Content-Length`; a file the app does not ship rejects as a network error that names it. The URL names the file by its path inside the app's files, and the request reads it with `GET` (or `HEAD`): a URL whose path leaves them (`..`, an absolute path) and a request with another method reject the same way, before anything is read or downloaded.
 
 ### A module's own URL
 
