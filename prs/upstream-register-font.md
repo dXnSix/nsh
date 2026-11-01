@@ -2,8 +2,8 @@
 
 Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
 
-- Branch: `pr/register-font/01-core`, on `upstream/main` `201d780a`: copies of the WOFF and the asset-reading commits,
-  then its own.
+- Branch: `pr/register-font/01-core`, on `upstream/main` `201d780a`: copies of the WOFF and the asset-reading commits
+  (#746 with both review fixes), then its own (head `992932b1e`).
 - Size of its own commit: 27 files, +322 / −25 (code +135 / −21, tests +109, docs +77 / −4), one test font
   (`Pacifico-Regular.woff2`, 121 KB).
 - Its compatibility case (`tests/compat/cases/layout/core-register-font.tsx`) was added 2026-10-30, as a new export
@@ -15,6 +15,17 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   own); one conflict, its `registerFont` row beside the extended `fetch` row in `docs/dev/components.md` (both kept).
   `cargo test -p nsh-engine --test engine assets` (6) and `font` (3) pass. Force-pushed to the fork (the owner's OK),
   over `9fabfce60`.
+- 2026-11-01: restacked on #746's second review fix (`992932b1e`: WOFF, asset reading, its fixes `eb04bbb04` and
+  `9d9f7805c`, the latter #746's `a13982b40`, then its own); the same `components.md` conflict, replayed by rerere and
+  checked. Its own commit is unchanged; `registerFont` reads a URL with `fetch`'s `GET`, which the new refusal lets
+  through. Checked: nightly rustfmt on the changed files, clippy `-D warnings` (`nsh-core`, `nsh-engine`,
+  `nsh-bundler`, `nsh-testing` with `bundle`, all targets), `cargo test -p nsh-engine --test engine` (306),
+  `-p nsh-testing --features bundle --test testing fonts`, `-p nsh-core --lib` (925), `-p nsh-bundler --features
+  bundle` (66). Force-pushed to the fork (the owner's OK) over `366d830f8`, then the fork's Core, Rust application,
+  Examples, Windows, Linux and GPUI workflows run on it (41313375092, 41313379536, 41313381664, 41313383726,
+  41313385644, 41313387572; CI paths 41313373173 passed). Compat's job is disabled upstream (`if: false`), so it ran
+  here: `NSH_COMPAT_APP=layout cargo xtask compat` passes (`checkout_apps_run`), and so do the `core-register-font`
+  case's steps headless (`Registered: Pacifico, true`, `No font: refused, true`).
 
 ---
 

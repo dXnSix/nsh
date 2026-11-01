@@ -3,8 +3,10 @@
 Opened 2026-10-31 as [longbridge/nsh#746](https://github.com/longbridge/nsh/pull/746), at the owner's
 decision; the body below the line is the one posted.
 
-- Branch: `pr/read-assets/01-core`, one commit on `upstream/main` `201d780a`.
-- Size: 18 files, +562 / −15 (code +204 / −10, tests +297 / −2, docs +61 / −3), one test image (`flag.png`, 73 bytes).
+- Branch: `pr/read-assets/01-core`, on `upstream/main` `201d780a`: the feature's commit, then the two review fixes
+  (head `a13982b40`).
+- Size: 18 files, +713 / −15 with the review fixes; the feature's commit alone was +562 / −15 (code +204 / −10, tests
+  +297 / −2, docs +61 / −3), with one test image (`flag.png`, 73 bytes).
 - Title: `engine: Let fetch read the files the app ships`.
 
 
@@ -24,6 +26,25 @@ huacnlee requested changes (static analysis, "Reviewed by ChatGPT on behalf of @
    assets` (6), `--lib` (35), clippy `-D warnings` (all targets), nightly rustfmt.
    Pushed (fast-forward) and replied (`r4429733277`); resolving the thread through the API was refused here, so it
    is open for the reviewer.
+
+## Review (2026-11-01)
+
+huacnlee's second pass, a reply in the same thread (`r4433885726`, static inspection):
+
+2. [P2] The refusal still entered `asset_read`, whose error branch resolves `Assets::url` and downloads it, so on a
+   host that serves its files (the web) a refused path reached the network. It held, and a method other than `GET` /
+   `HEAD` took the same path: a `POST` of a bundled file read it through its served URL.
+   Fixed in `a13982b40` (`engine: Fail refused fetches of bundled files before any host serves them`): `Net::asset`
+   fails both at once, as a terminal network error, before any host reads the file or is asked for its URL.
+   `ServedAssets` records every URL it is asked for, and `refused_files_are_neither_looked_up_nor_downloaded` fetches
+   `asset:/../outside.txt`, a `POST` and a `GET` of a bundled file: only the `GET` reaches the resolver and the
+   download (without the fix the refused path is downloaded and the `POST` reads the file). Docs: the `fetch` row of
+   `docs/dev/components.md`, the user page (en, zh-CN). Checked: nightly rustfmt, clippy `-D warnings` of `nsh-engine`
+   (all targets) and of `nsh-platform-web` (wasm32, `compiler`), `cargo test -p nsh-engine` (305 + 35 + 1).
+   Fork first: dXnSix/nsh#99 (`fix/asset-refusals`, the same commit on the fork's `main`) passed every check on its
+   first run: Fork CI's iOS, Android, macOS and web jobs (run 41258620144), Core, Linux, Windows, Rust application,
+   GPUI and Examples.
+   Pushed (fast-forward, `66a31164d..a13982b40`) and replied (`r4435859082`); the thread is open for the reviewer.
 
 ---
 

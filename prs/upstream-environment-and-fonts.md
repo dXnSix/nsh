@@ -26,7 +26,7 @@ series' branches were rebuilt on it from their original commits; their new field
 | 3 | `pr/environment/03-languages` | [03](upstream-environment-03-languages.md) | 2 | 7 | 40 | +650 / −52 |
 | 4 | `pr/environment/04-regional` | [04](upstream-environment-04-regional.md) | 3 | 8 | 42 | +1702 / −85 |
 | 5 | `pr/woff/01-core` | [WOFF](upstream-woff.md) | none | 1 | 21 | +175 / −27 |
-| 6 | `pr/read-assets/01-core` | [assets](upstream-read-assets.md) | none | 1 | 18 | +562 / −15 |
+| 6 | `pr/read-assets/01-core` | [assets](upstream-read-assets.md) | none | 3 | 18 | +713 / −15 |
 | 7 | `pr/register-font/01-core` | [fonts](upstream-register-font.md) | 5 and 6 | 1 | 27 | +322 / −25 |
 
 "Lines (own)" counts a PR's own commits, as GitHub shows it once what it depends on is merged; before that GitHub
@@ -75,7 +75,7 @@ belongs there too, in Rust. The branch stays on the fork for reference, and so d
 Heads: `00-non-exhaustive` `f7fb6d42b`, `01-app-state` `ceba797ee`, `02-time-zone` `c64064514`, `03-languages`
 `e8053e214`, `04-regional` `3be233e04`. Since 2026-10-31, after #747's review fixes: `01-app-state` `a44cc19a4`,
 `02-time-zone` `ca9231b93`, `03-languages` `a1de5ed5f`, `04-regional` `deffa4c06`; `register-font` `366d830f8`
-(on #746's fix).
+(on #746's fix), since 2026-11-01 `992932b1e` (on #746's second fix, `a13982b40`).
 The fork's Windows workflow passed on `04-regional` `deffa4c06` (run 41161895616: clippy, tests, the Win32 examples);
 the rest of 02–04 changed only in Android's `NshView` (compiled with `cargo xtask android`) and docs.
 
