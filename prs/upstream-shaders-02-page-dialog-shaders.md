@@ -34,8 +34,8 @@ The body to paste starts below the line.
 
 ---
 
-**Depends on:** #682 (the elements, the WGSL inputs and the renderer this builds on); merge it after #682. The
-platform PRs of the series depend on this one.
+**Depends on:** no other PR: it builds on #682 (the elements, the WGSL inputs and the renderer), which is merged,
+and applies to `main` as it is. The platform PRs of the series depend on this one.
 
 ## Description
 
