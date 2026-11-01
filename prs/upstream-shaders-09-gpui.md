@@ -17,6 +17,8 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 - 2026-11-01: #682 (01) was merged (squashed, `8274f6b05`), so this branch is rebuilt on `upstream/main`
   `13d87a11` (`git cherry-pick` of its own commits, no conflicts; old head `4c0b595de`, new head `85942ff15`).
 
+- 2026-11-01, later: rebuilt again on `upstream/main` `e4e464f4` (23 commits past `a5036af4`), no conflicts of its own; head `6d4278e5c`.
+
 The body to paste starts below the line.
 
 ---

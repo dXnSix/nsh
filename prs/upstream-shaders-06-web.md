@@ -19,6 +19,8 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
   `#[non_exhaustive]` `ShaderRole`: the layer encoder gives a role it does not know the fill's number, 0 (wasm32
   clippy found it).
 
+- 2026-11-01, later: rebuilt again on `upstream/main` `e4e464f4` (23 commits past `a5036af4`), no conflicts of its own; head `51b5ef9ae`.
+
 The body to paste starts below the line.
 
 ---

@@ -21,6 +21,8 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
   typed `progress`: `with_progress(Percentage::ZERO, …)`, as on Android (found by reading; Windows builds only in
   its workflow).
 
+- 2026-11-01, later: rebuilt again on `upstream/main` `e4e464f4` (23 commits past `a5036af4`), no conflicts of its own; head `d9e60f79c`.
+
 The body to paste starts below the line.
 
 ---

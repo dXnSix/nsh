@@ -28,6 +28,8 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
   `cargo clippy --workspace --all-targets -D warnings` passes on it. The fork's Core, Rust application, Examples,
   Windows, Linux and GPUI workflows run on it.
 
+- 2026-11-01, later: rebuilt again on `upstream/main` `e4e464f4` (23 commits past `a5036af4`), no conflicts of its own; head `1c9c291b6`.
+
 The body to paste starts below the line.
 
 ---

@@ -24,6 +24,8 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
   `13d87a11` (`git cherry-pick` of its own commits, no conflicts; old head `1f5f7cee1`, new head `516283e9d`). Fixed in its backend commit
   for 01's typed `progress`: `with_progress(Percentage::ZERO, …)` (`cargo xtask clippy-android` found it).
 
+- 2026-11-01, later: rebuilt again on `upstream/main` `e4e464f4` (23 commits past `a5036af4`), no conflicts of its own; head `2ef0d3546`.
+
 The body to paste starts below the line.
 
 ---

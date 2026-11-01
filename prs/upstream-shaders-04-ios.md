@@ -19,6 +19,8 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 - 2026-11-01: #682 (01) was merged (squashed, `8274f6b05`), so this branch is rebuilt on `upstream/main`
   `13d87a11` (`git cherry-pick` of its own commits, no conflicts; old head `192c3b012`, new head `e1b61742a`).
 
+- 2026-11-01, later: rebuilt again on `upstream/main` `e4e464f4` (23 commits past `a5036af4`), no conflicts of its own; head `5e3f94418`. One context change: upstream's #742 added `alert_tint` beside the `nav_shaders` field `Mounter` gains here.
+
 The body to paste starts below the line.
 
 ---
