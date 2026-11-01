@@ -22,6 +22,12 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
   `struct Nsh` is padded (the "Built-ins" bullet of `docs/dev/shaders.md`). Previous head kept locally as
   `old-pre-pad/02-page-dialog-shaders`.
 
+- 2026-11-01: #682 (01) was merged (squashed, `8274f6b05`), so this branch is rebuilt on `upstream/main`
+  `13d87a11` (`git cherry-pick` of its own commits, no conflicts; old head `af935b43f`, new head `73b1a5dc3`). Its commits
+  were cut before 01's last review fix (`cb6368d65`, typed `progress`); they need no change for it, and
+  `cargo clippy --workspace --all-targets -D warnings` passes on it. The fork's Core, Rust application, Examples,
+  Windows, Linux and GPUI workflows run on it.
+
 The body to paste starts below the line.
 
 ---

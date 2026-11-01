@@ -16,6 +16,9 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 - 2026-10-31: rebased on the new 02 (`8a46fb76d`), no conflicts; it differs from the previous head only by 01's
   padding commit and 02's docs line (previous head kept locally as `old-pre-pad/10-gallery-docs`).
 
+- 2026-11-01: #682 (01) was merged (squashed, `8274f6b05`), so this branch is rebuilt on `upstream/main`
+  `13d87a11` (`git cherry-pick` of its own commits, no conflicts; old head `8a46fb76d`, new head `133965f7c`).
+
 The body to paste starts below the line.
 
 ---

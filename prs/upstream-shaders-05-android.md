@@ -20,6 +20,10 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 - 2026-10-31: rebased on the new 02 (`1f5f7cee1`), no conflicts; it differs from the previous head only by 01's
   padding commit and 02's docs line (previous head kept locally as `old-pre-pad/05-android`).
 
+- 2026-11-01: #682 (01) was merged (squashed, `8274f6b05`), so this branch is rebuilt on `upstream/main`
+  `13d87a11` (`git cherry-pick` of its own commits, no conflicts; old head `1f5f7cee1`, new head `516283e9d`). Fixed in its backend commit
+  for 01's typed `progress`: `with_progress(Percentage::ZERO, …)` (`cargo xtask clippy-android` found it).
+
 The body to paste starts below the line.
 
 ---

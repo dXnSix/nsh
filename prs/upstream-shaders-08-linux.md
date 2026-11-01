@@ -16,6 +16,11 @@ Draft of a pull request for `longbridge/nsh`. Not opened: the owner decides and 
 - 2026-10-31: rebased on the new 02 (`da701e0b4`), no conflicts; it differs from the previous head only by 01's
   padding commit and 02's docs line (previous head kept locally as `old-pre-pad/08-linux`).
 
+- 2026-11-01: #682 (01) was merged (squashed, `8274f6b05`), so this branch is rebuilt on `upstream/main`
+  `13d87a11` (`git cherry-pick` of its own commits, no conflicts; old head `da701e0b4`, new head `0fc9b1a7a`). Fixed for 01's
+  typed `progress`: `with_progress(Percentage::ZERO, …)`, as on Android (found by reading; Linux builds only in
+  its workflow).
+
 The body to paste starts below the line.
 
 ---
