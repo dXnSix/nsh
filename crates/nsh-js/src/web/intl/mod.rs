@@ -601,105 +601,31 @@ fn parse_offset(zone: &str) -> Option<i32> {
     (hours < 24 && minutes < 60).then_some(sign * (hours * 60 + minutes))
 }
 
-/// The zone `name` names: UTC, an offset (`+08:00`), or a zone of the
-/// database (any case: `asia/tokyo` is `Asia/Tokyo`); `None` for none.
-fn zone_named(name: &str) -> Option<date::Zone> {
+fn zone_option(cx: Ctx, o: &Option<V>) -> R<date::Zone> {
+    let v = get(cx, o, "timeZone")?;
+    if v.is_undefined() {
+        return Ok(date::Zone::Local);
+    }
+    let name = js::to_string(cx, v.raw())?;
     let upper = name.to_ascii_uppercase();
     if matches!(
         upper.as_str(),
         "UTC" | "ETC/UTC" | "GMT" | "ETC/GMT" | "Z" | "ETC/UCT" | "UCT"
     ) {
-        return Some(date::Zone::Utc);
+        return Ok(date::Zone::Utc);
     }
-    if let Some(minutes) = parse_offset(name) {
-        return Some(date::Zone::Offset(minutes));
+    if let Some(minutes) = parse_offset(&name) {
+        return Ok(date::Zone::Offset(minutes));
     }
-    named_zone(name).map(|zone| date::Zone::Named(zone.0))
-}
-
-/// The user's hour cycle (`hourCycle()`) when the locales asked for are the
-/// device's own (none, or its locale first): `Intl` writes times as the
-/// user reads them by default, as it writes dates in their zone. Another
-/// locale's times keep that locale's cycle.
-fn user_hour_cycle(cx: Ctx, locales: Raw) -> R<Option<date::HourCycle>> {
-    use nsh_core::platform::HourCycle as User;
-    let requested = requested(cx, locales)?;
-    let env = crate::env::current(cx);
-    let own = requested
-        .first()
-        .is_none_or(|tag| nsh_core::platform::Locale::parse(tag) == Some(env.locale));
-    Ok(own.then_some(match env.regional.hour_cycle {
-        User::H11 => date::HourCycle::H11,
-        User::H12 => date::HourCycle::H12,
-        User::H23 => date::HourCycle::H23,
-        User::H24 => date::HourCycle::H24,
-    }))
-}
-
-/// The environment's zone (`timeZone()`), `Intl`'s default: a zone of the
-/// database, UTC, an offset zone as Android names one (`GMT+01:00`), or,
-/// for a name the database does not know, the local offsets of QuickJS's
-/// `Date`.
-fn environment_zone(cx: Ctx) -> date::Zone {
-    let zone = crate::env::current(cx).time_zone;
-    let name = zone.as_str();
-    let offset = ["GMT", "UTC"]
-        .iter()
-        .find_map(|prefix| name.strip_prefix(prefix).filter(|rest| !rest.is_empty()))
-        .and_then(parse_offset);
-    match offset {
-        Some(minutes) => date::Zone::Offset(minutes),
-        None => zone_named(name).unwrap_or(date::Zone::Local),
+    if local_zone_name().is_some_and(|local| local.eq_ignore_ascii_case(&name)) {
+        return Ok(date::Zone::Local);
     }
-}
-
-/// The database's zone `name` (canonical, and parsed once per thread).
-fn named_zone(name: &str) -> Option<(nsh_core::platform::TimeZone, jiff::tz::TimeZone)> {
-    thread_local! {
-        static ZONES: std::cell::RefCell<
-            rustc_hash::FxHashMap<String, Option<(nsh_core::platform::TimeZone, jiff::tz::TimeZone)>>,
-        > = Default::default();
-    }
-    let key = name.to_ascii_lowercase();
-    ZONES.with(|zones| {
-        zones
-            .borrow_mut()
-            .entry(key)
-            .or_insert_with(|| {
-                let zone = jiff::tz::db().get(name).ok()?;
-                let canonical = nsh_core::platform::TimeZone::parse(zone.iana_name()?)?;
-                Some((canonical, zone))
-            })
-            .clone()
-    })
-}
-
-/// The offset in minutes east of UTC that the database's zone `zone` has
-/// at `ms`.
-fn named_offset(zone: nsh_core::platform::TimeZone, ms: f64) -> i32 {
-    let Some((_, zone)) = named_zone(zone.as_str()) else {
-        return 0;
-    };
-    match jiff::Timestamp::from_millisecond(ms as i64) {
-        Ok(at) => zone.to_offset(at).seconds().div_euclid(60),
-        Err(_) => 0,
-    }
-}
-
-fn zone_option(cx: Ctx, o: &Option<V>) -> R<date::Zone> {
-    let v = get(cx, o, "timeZone")?;
-    if v.is_undefined() {
-        return Ok(environment_zone(cx));
-    }
-    let name = js::to_string(cx, v.raw())?;
-    zone_named(&name).ok_or_else(|| {
-        js::range_error(
-            cx,
-            &format!(
-                "Invalid time zone specified: {name} (an IANA zone such as Europe/Berlin, UTC, or an offset such as +08:00)"
-            ),
-        )
-    })
+    Err(js::range_error(
+        cx,
+        &format!(
+            "Invalid time zone specified: {name} (nsh knows the device's zone, UTC and offsets such as +08:00)"
+        ),
+    ))
 }
 
 /// `dateStyle` and `timeStyle` (`""`: not set).
@@ -914,7 +840,6 @@ fn format_date(
         date::Zone::Local => local_offset(cx, ms)?,
         date::Zone::Utc => 0,
         date::Zone::Offset(minutes) => minutes,
-        date::Zone::Named(name) => named_offset(name, ms),
     };
     Ok(date::format(ms, offset, zone, f, &locale.dates))
 }
@@ -932,9 +857,6 @@ native!(
     fn date_time_format_constructor(cx, this, args) {
         let locale = resolve(cx, args.get(0))?;
         let (mut format, zone, styles) = date_format(cx, args.get(1), Defaults::Date)?;
-        if format.hour_cycle.is_none() {
-            format.hour_cycle = user_hour_cycle(cx, args.get(0))?;
-        }
         if let Some(styles) = styles {
             styled(&mut format, styles, &locale);
         }
@@ -979,7 +901,6 @@ native!(
         let zone = match zone {
             Zone::Utc => "UTC".to_owned(),
             Zone::Offset(m) => format!("{}{:02}:{:02}", if m < 0 { '-' } else { '+' }, m.abs() / 60, m.abs() % 60),
-            Zone::Named(name) => name.as_str().to_owned(),
             Zone::Local => match local_zone_name() {
                 Some(name) => name,
                 None => {
@@ -1078,9 +999,6 @@ fn date_to_locale(cx: Ctx, this: Raw, args: js::Args<'_>, defaults: Defaults) ->
     }
     let locale = resolve(cx, args.get(0))?;
     let (mut format, zone, styles) = date_format(cx, args.get(1), defaults)?;
-    if format.hour_cycle.is_none() {
-        format.hour_cycle = user_hour_cycle(cx, args.get(0))?;
-    }
     if let Some(styles) = styles {
         styled(&mut format, styles, &locale);
     }
