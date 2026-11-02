@@ -10,7 +10,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 
 ---
 
-**Depends on:** #<spa-fallback> (`dev: Serve the page at the app's own paths, …`): the paths the page is served at, and
+**Depends on:** #<spa-fallback> (fork: dXnSix/nsh#108) (`dev: Serve the page at the app's own paths, …`): the paths the page is served at, and
 the docs section this one extends. **Needed by:** the `web.history` and location PRs.
 
 ## Description

@@ -9,7 +9,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 
 ---
 
-**Depends on:** #<base> (`web: Load the page's files from where it started, …`): the same `WebConfig`, packaged page
+**Depends on:** #<base> (fork: dXnSix/nsh#109) (`web: Load the page's files from where it started, …`): the same `WebConfig`, packaged page
 and `dev.html` lines. **Needed by:** the location PR (`web.history: false` also keeps the app's location out of the
 address bar).
 

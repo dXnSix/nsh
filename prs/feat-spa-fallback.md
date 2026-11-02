@@ -1,5 +1,7 @@
 # dev: Serve the page at the app's own paths, as hosts of single-page apps do
 
+> **Fork:** dXnSix/nsh#108 (opened 2026-11-02, Auto-fix on). **Upstream:** prepared, not opened.
+
 Branch: `feat/spa-fallback` on `github.com/dXnSix/nsh`, on the fork's `main` at `57713c3c` (after #106). One commit:
 `dev: Serve the page at the app's own paths, as hosts of single-page apps do`. Merged into the fork's `main` with a merge
 commit. The upstream branch is `pr/web-urls/01-spa-fallback` (draft: [upstream-web-urls-01-spa-fallback](upstream-web-urls-01-spa-fallback.md)).

@@ -1,5 +1,7 @@
 # core: Tell apps where the user is in them, and let them navigate
 
+> **Fork:** dXnSix/nsh#111 (opened 2026-11-02, Auto-fix on). **Upstream:** prepared, not opened.
+
 Branch: `feat/location` on `github.com/dXnSix/nsh`, on `feat/web-history`. One commit of its own:
 `core: Tell apps where the user is in them, and let them navigate`. Merged into the fork's `main` with a merge commit.
 Design: [design-location](design-location.md) (approved by the owner on 2026-11-02). The upstream branches are

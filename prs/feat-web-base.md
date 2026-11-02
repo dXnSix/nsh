@@ -1,5 +1,7 @@
 # web: Load the page's files from where it started, and let nsh.json set its base
 
+> **Fork:** dXnSix/nsh#109 (opened 2026-11-02, Auto-fix on). **Upstream:** prepared, not opened.
+
 Branch: `feat/web-base` on `github.com/dXnSix/nsh`, on `feat/spa-fallback`. One commit of its own:
 `web: Load the page's files from where it started, and let nsh.json set its base`. Merged into the fork's `main` with a
 merge commit. The upstream branch is `pr/web-urls/02-base` (draft: [upstream-web-urls-02-base](upstream-web-urls-02-base.md)).

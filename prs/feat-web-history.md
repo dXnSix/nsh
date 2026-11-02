@@ -1,5 +1,7 @@
 # cli: Let nsh.json say whether a web app's pages are browser history entries
 
+> **Fork:** dXnSix/nsh#110 (opened 2026-11-02, Auto-fix on). **Upstream:** prepared, not opened.
+
 Branch: `feat/web-history` on `github.com/dXnSix/nsh`, on `feat/web-base`. One commit of its own:
 `cli: Let nsh.json say whether a web app's pages are browser history entries`. Merged into the fork's `main` with a
 merge commit. The upstream branch is `pr/web-urls/03-history` (draft: [upstream-web-urls-03-history](upstream-web-urls-03-history.md)).

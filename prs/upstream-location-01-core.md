@@ -16,8 +16,8 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 
 ---
 
-**Depends on:** #<history> (`cli: Let nsh.json say whether a web app's pages are browser history entries`), and through
-it #<base> and #<spa-fallback>: the location is the page's address after `web.base`, a link into the app reaches the
+**Depends on:** #<history> (fork: dXnSix/nsh#110) (`cli: Let nsh.json say whether a web app's pages are browser history entries`), and through
+it #<base> (fork: dXnSix/nsh#109) and #<spa-fallback> (fork: dXnSix/nsh#108): the location is the page's address after `web.base`, a link into the app reaches the
 page through the SPA fallback, and `web.history: false` keeps the address bar the page's. **Needed by:** the iOS and
 Android PRs of the location.
 
