@@ -879,6 +879,7 @@ pub const INTERNAL_EVENTS: &[EventKind] = &[
     EventKind::OpenUrl,
     EventKind::ScreenColor,
     EventKind::FileRequest,
+    EventKind::Speech,
     EventKind::Location,
     EventKind::KeyCommand,
     EventKind::Menu,

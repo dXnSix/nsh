@@ -6,7 +6,7 @@ order: 2
 
 # nsh
 
-`nsh` is the core module: the reactive API (signals, computed values, effects, context), `mount`, `token`, the host elements `View`, `Text`, `Scroll` and `Overlay`, [selectable views](#selectable-views), [the safe area and the keyboard](#safe-area-and-keyboard), [animation](#animation), [the device and its environment](#device), [`PanResponder`](#panresponder), the [clipboard](#clipboard), the [photo picker](#picker), [storage](#storage), the [host channel](#host), [keyboard shortcuts](#keymap), [native components and modules](#nativecomponent-and-nativemodule), [accessibility](#accessibility), and the TypeScript types of elements, styles and events. The reactive graph itself runs natively in Rust; reading a signal is a call into the runtime that costs a few nanoseconds, and only your own closures run in the JavaScript interpreter.
+`nsh` is the core module: the reactive API (signals, computed values, effects, context), `mount`, `token`, the host elements `View`, `Text`, `Scroll` and `Overlay`, [selectable views](#selectable-views), [the safe area and the keyboard](#safe-area-and-keyboard), [animation](#animation), [the device and its environment](#device), [`PanResponder`](#panresponder), the [clipboard](#clipboard), the [photo picker](#picker), [speech recognition](#speech), [storage](#storage), the [host channel](#host), [keyboard shortcuts](#keymap), [native components and modules](#nativecomponent-and-nativemodule), [accessibility](#accessibility), and the TypeScript types of elements, styles and events. The reactive graph itself runs natively in Rust; reading a signal is a call into the runtime that costs a few nanoseconds, and only your own closures run in the JavaScript interpreter.
 
 ```ts
 import { batch, cleanup, computed, context, effect, ErrorBoundary, mount, Overlay, Scroll, signal, split, Text, token, untracked, View } from "nsh";
@@ -854,17 +854,17 @@ const toggle = () => {
 
 ## Device
 
-The device API tells the app about the device and its environment. Rust code calls the functions of `nsh_core::prelude` (`window()`, `dark()`, `font_scale()`, `locale()`, `languages()`, `hour_cycle()`, `first_day_of_week()`, `measurement_system()`, `temperature_unit()`, `time_zone()`, `app_state()`, `os()`, `idiom()`, `pixel_ratio()`, `set_color_scheme()`, ...); TSX imports them from `nsh`. The window size, the color scheme, the font scale, the pixel ratio, the locale, the preferred languages, the regional preferences, the time zone and the app state are reactive: read them in a binding (a closure passed to an element in Rust, JSX in TSX), `computed` or `effect`, and what reads them updates when the platform reports a change (rotation, a window resize, switching to dark mode, changing the text size, the language or the region's settings, moving to another time zone, moving to a screen of another density, leaving the app and coming back).
+The device API tells the app about the device and its environment. Rust code calls the functions of `nsh_core::prelude` (`window()`, `dark()`, `font_scale()`, `locale()`, `languages()`, `hour_cycle()`, `first_day_of_week()`, `measurement_system()`, `temperature_unit()`, `time_zone()`, `lifecycle()`, `os()`, `idiom()`, `pixel_ratio()`, `set_color_scheme()`, ...); TSX imports them from `nsh`. The window size, the color scheme, the font scale, the pixel ratio, the locale, the preferred languages, the regional preferences, the time zone and the app state are reactive: read them in a binding (a closure passed to an element in Rust, JSX in TSX), `computed` or `effect`, and what reads them updates when the platform reports a change (rotation, a window resize, switching to dark mode, changing the text size, the language or the region's settings, moving to another time zone, moving to a screen of another density, leaving the app and coming back).
 
 ```rust tabs
 use nsh_core::{
-    platform::{AppState, Appearance, HourCycle, Idiom, MeasurementSystem, Os, TemperatureUnit, TimeZone, Weekday},
-    prelude::*, // window, dark, font_scale, locale, languages, hour_cycle, first_day_of_week, measurement_system, temperature_unit, time_zone, app_state, os, idiom, pixel_ratio, set_color_scheme, ...
+    platform::{Appearance, HourCycle, Idiom, Lifecycle, MeasurementSystem, Os, TemperatureUnit, TimeZone, Weekday},
+    prelude::*, // window, dark, font_scale, locale, languages, hour_cycle, first_day_of_week, measurement_system, temperature_unit, time_zone, lifecycle, os, idiom, pixel_ratio, set_color_scheme, ...
 };
 ```
 
 ```tsx tabs
-import { appState, colorScheme, firstDayOfWeek, fontScale, hourCycle, languages, locale, measurementSystem, openUrl, pixelRatio, platform, setColorScheme, temperatureUnit, timeZone, windowSize } from "nsh";
+import { colorScheme, firstDayOfWeek, fontScale, hourCycle, languages, lifecycle, locale, measurementSystem, openUrl, pixelRatio, platform, setColorScheme, temperatureUnit, timeZone, windowSize } from "nsh";
 ```
 
 See [Device and environment](../docs/device-and-environment.md) for the guide.
@@ -971,19 +971,19 @@ const timeZone: Accessor<string>;
 
 The device's time zone as the system names it: an IANA name (`"Europe/Berlin"`, `"America/New_York"`), `"UTC"`, or an offset zone where the system has one (`"GMT+01:00"` on Android). Reactive: it changes with the system's setting, as when the user travels. Rust: `time_zone() -> TimeZone` (`time_zone().as_str()` is the name). `Date`'s local times follow the system's zone; read the name to show it, to store it with a date or to give it to a time zone library ([Device and environment](../docs/device-and-environment.md#time-zone)). Headless tests are in `"UTC"` unless `open` sets `timeZone`.
 
-### appState
+### lifecycle
 
 ```ts
-const appState: Accessor<"active" | "inactive" | "background">;
+const lifecycle: Accessor<"active" | "inactive" | "background">;
 ```
 
-Whether the app is in use, in React Native's `AppState` terms: `"active"` in the foreground and taking input, `"inactive"` while visible without the focus (another app or window has it, or the system shows something over it, such as the app switcher or an incoming call), `"background"` while not visible (in the background, minimized, a hidden browser tab). An app shown inside a native app follows that app's. Reactive. Rust: `app_state() -> AppState` (`AppState::Active`, `Inactive`, `Background`).
+Whether the app is in use, in React Native's `AppState` terms: `"active"` in the foreground and taking input, `"inactive"` while visible without the focus (another app or window has it, or the system shows something over it, such as the app switcher or an incoming call), `"background"` while not visible (in the background, minimized, a hidden browser tab). An app shown inside a native app follows that app's. Reactive. Rust: `lifecycle() -> Lifecycle` (`Lifecycle::Active`, `Inactive`, `Background`).
 
 Read it in an effect to pause work nobody sees and resume it when the app comes back:
 
 ```rust tabs
 effect(move || {
-    if app_state() == AppState::Background {
+    if lifecycle() == Lifecycle::Background {
         feed.pause();
     } else {
         feed.resume();
@@ -993,7 +993,7 @@ effect(move || {
 
 ```tsx tabs
 effect(() => {
-  if (appState() === "background") feed.pause();
+  if (lifecycle() === "background") feed.pause();
   else feed.resume();
 });
 ```
@@ -1840,6 +1840,150 @@ and without a handler a pick is cancelled. See [Testing](../docs/testing-and-tra
 > When your app declares `capabilities` in `nsh.json`, the picker must be granted with `"picker": true`. Without it
 > `pickImages` shows nothing and rejects with an `Error` whose `code` is `"ERR_ACCESS_DENIED"`, `permission`
 > `"picker"` and `resource` `""`. In Rust, `pick_images` answers no files and the refusal is logged. See
+> [Sandbox and capabilities](../docs/sandbox-and-capabilities.md).
+
+## Speech
+
+The speech API turns what the user says into text (dictation): the app starts a session, the platform listens to the
+microphone, and the transcript arrives as it grows. macOS and iOS recognize with the system's Speech framework; the
+system asks the user for the microphone and for speech recognition once. On other platforms a session ends at once
+with the error `"unavailable"`, so check `Speech.available()` before showing a microphone button. Rust code calls
+`recognize_speech` of `nsh_core::prelude`; TSX imports `Speech` from `nsh`.
+
+```rust tabs
+use nsh_core::speech::{SpeechEvent, SpeechRequest};
+```
+
+```tsx tabs
+import { Speech, type SpeechSession } from "nsh";
+```
+
+```ts
+const Speech: {
+  available(): Promise<boolean>;
+  start(options?: SpeechOptions): SpeechSession;
+};
+
+interface SpeechOptions {
+  /** The language spoken, a BCP 47 tag ("en-US", "zh-CN"); the user's when left out. */
+  lang?: string;
+  /** Results while the user speaks (true, the default), or only the final one. */
+  interim?: boolean;
+}
+
+interface SpeechSession {
+  on(event: "start", listener: () => void): () => void;
+  on(event: "result", listener: (result: SpeechResult) => void): () => void;
+  on(event: "end", listener: (end: SpeechEnd) => void): () => void;
+  /** The whole transcript so far. */
+  readonly text: string;
+  readonly ended: boolean;
+  stop(): void;
+  abort(): void;
+}
+
+interface SpeechResult { text: string; isFinal: boolean }
+interface SpeechEnd { text: string; error?: SpeechErrorCode }
+
+type SpeechErrorCode =
+  | "not-allowed" | "no-speech" | "audio-capture" | "network"
+  | "language-not-supported" | "unavailable" | "failed";
+```
+
+| TSX | Rust |
+|---|---|
+| `await Speech.available()` | `speech_available().await -> bool` |
+| `Speech.start(options)` | `recognize_speech(request) -> SpeechRecognition` |
+| `session.on("result", ...)` | `recognition.next().await -> Option<SpeechEvent>` |
+| `session.stop()` / `abort()` | `recognition.stop()` / `abort()` (dropping it aborts) |
+
+### Speech.start
+
+Starts a session and returns it at once. A session reports, in this order: `start` when the microphone is on and the
+recognizer listens, `result` each time the transcript changes (`text` is always the whole transcript so far, so the
+app shows it as it is), and one `end`, after which nothing comes. `stop()` stops listening and lets the recognizer
+finish what it heard: a last result with `isFinal: true`, then `end`. `abort()` ends the session at once, without an
+error, and drops what was not reported. One session runs at a time: starting another aborts the one running.
+
+`end` carries the last transcript and, when the session failed, `error`, named as in the Web Speech API:
+
+| `error` | When |
+|---|---|
+| `"not-allowed"` | The user or the system does not allow the microphone or speech recognition. |
+| `"no-speech"` | Nothing was said. |
+| `"audio-capture"` | The microphone could not be used. |
+| `"network"` | The recognizer needs the network and could not reach it. |
+| `"language-not-supported"` | The recognizer does not know `lang`. |
+| `"unavailable"` | This platform recognizes no speech, or not now. |
+| `"failed"` | The recognizer failed for another reason. |
+
+`start` throws a `TypeError` for options of the wrong types and a `RangeError` for a `lang` that is no language tag.
+
+```tsx
+import { signal, Speech, type SpeechSession } from "nsh";
+
+const transcript = signal("");
+let session: SpeechSession | null = null;
+
+function toggle() {
+  if (session && !session.ended) {
+    session.stop();
+    return;
+  }
+  session = Speech.start({ lang: "en-US" });
+  session.on("result", ({ text }) => transcript.set(text));
+  session.on("end", ({ text, error }) => {
+    if (error) console.warn("dictation ended:", error);
+    else transcript.set(text);
+  });
+}
+```
+
+```rust
+use nsh_core::prelude::*;
+use nsh_core::speech::{SpeechEvent, SpeechRequest};
+
+async fn dictate() -> String {
+    let mut recognition = recognize_speech(SpeechRequest::default());
+    let mut text = String::new();
+    while let Some(event) = recognition.next().await {
+        match event {
+            SpeechEvent::Result { text: heard, .. } => text = heard,
+            SpeechEvent::End { .. } => break,
+            _ => {}
+        }
+    }
+    text
+}
+```
+
+### Speech.available
+
+Resolves `true` where a session can run: on macOS and iOS, and wherever the embedding app recognizes speech itself.
+
+### Info.plist
+
+On macOS and iOS the system shows why the app wants the microphone and speech recognition. `nsh package` and
+`nsh run` write `NSMicrophoneUsageDescription` and `NSSpeechRecognitionUsageDescription` into the app's Info.plist
+when the app may use speech (its `capabilities` grant `speech`, or it declares none).
+
+### Embedding apps
+
+An app that embeds NSH and recognizes speech its own way (its own engine or service) answers the sessions itself: in
+Rust, a `SpeechBackend` (`nsh_core::speech`) given to the engine (`EngineConfig::speech`) receives every session's
+`SpeechRequest` and a `SpeechSink` it reports to from any thread, and returns the `SpeechControl` the core stops and
+aborts the session with. The platform's recognizer is not used then.
+
+### Tests
+
+`nsh test` runs sessions on a fake recognizer in headless runs: a session starts at once, `app.hear(text)` reports
+`text` as the transcript so far, `app.endSpeech(error?)` ends it, and `app.speechRequests()` lists the sessions the
+app started. See [Testing](../docs/testing-and-trace.md).
+
+> [!NOTE]
+> When your app declares `capabilities` in `nsh.json`, speech must be granted with `"speech": true`. Without it
+> `Speech.start` throws an `Error` whose `code` is `"ERR_ACCESS_DENIED"`, `permission` `"speech"` and `resource` `""`.
+> In Rust, the session ends with `not-allowed` and the refusal is logged. See
 > [Sandbox and capabilities](../docs/sandbox-and-capabilities.md).
 
 ## Storage

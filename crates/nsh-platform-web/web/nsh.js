@@ -1141,6 +1141,9 @@ class Player {
    * `{type: "trace", items}`).
    */
   testSetup(storage, trace, environment) {
+    // The idiom the test asks for (`open`'s desktop `platform`), in place
+    // of the measured one, for the apps started from now on.
+    this.testIdiom = environment?.idiom;
     if (!this.wasm.nsh_test_setup) return;
     // Where the test opens the app: the page's address there, as a link
     // into the app would open it.
@@ -1401,7 +1404,7 @@ class Player {
 
   /** Starts the app with `start(environment)`, which returns the pump delay. */
   begin(width, start, deferEvents = false) {
-    this.idiom = this.options.idiom ?? this.measureIdiom(width);
+    this.idiom = this.options.idiom ?? this.testIdiom ?? this.measureIdiom(width);
     const environment = (this.reported = JSON.stringify(this.environment()));
     this.updateRootClasses();
     // Host events wait for this app's top-level `host.on` listeners, not
@@ -1609,7 +1612,7 @@ class Player {
     resolution();
     addEventListener("languagechange", changed);
     addEventListener("resize", changed);
-    // `appState()`: hidden (another tab, a minimized window) or without
+    // `lifecycle()`: hidden (another tab, a minimized window) or without
     // the focus. `timeZone()` is read again then too: browsers tell no
     // change of the system's zone, which the user makes away from the page.
     document.addEventListener("visibilitychange", changed);
@@ -1671,7 +1674,7 @@ class Player {
       keyboard: this.keyboardHeight(),
       appleKeyboard: APPLE,
       host: Boolean(this.options.host),
-      appState: document.visibilityState === "hidden"
+      lifecycle: document.visibilityState === "hidden"
         ? "background"
         : document.hasFocus() ? "active" : "inactive",
       timeZone: timeZoneName(),

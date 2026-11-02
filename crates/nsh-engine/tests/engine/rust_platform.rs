@@ -21,7 +21,7 @@ use nsh_core::{
     Points, ROOT_ID, Size, StatusBarSetting, StatusBarStyle, TextEngine, TextLayout,
     element::{AssetFile, AssetKind, Registry, Root},
     platform::{
-        AppState, Idiom, Languages, Locale, Os, RegionalPreferences, TemperatureUnit, TimeZone,
+        Idiom, Languages, Lifecycle, Locale, Os, RegionalPreferences, TemperatureUnit, TimeZone,
     },
     prelude::*,
 };
@@ -67,6 +67,7 @@ fn config(app: App) -> EngineConfig {
         clipboard: None,
         host: Default::default(),
         picker: None,
+        speech: None,
     }
 }
 
@@ -331,11 +332,11 @@ fn components_read_the_pixel_ratio_the_device_and_the_locale() {
 fn InUse() -> impl IntoElement {
     let runs = signal(0);
     effect(move || {
-        let _ = app_state();
+        let _ = lifecycle();
         runs.update(|r| *r += 1);
     });
     view().child(text(move || {
-        format!("{} after {} runs", app_state().name(), runs.get())
+        format!("{} after {} runs", lifecycle().name(), runs.get())
     }))
 }
 
@@ -344,19 +345,19 @@ fn components_follow_whether_the_app_is_in_use() {
     let (engine, rx, _) = start::<InUse>(Environment::default());
     until(&rx, "active after 1 runs");
     for (state, shown) in [
-        (AppState::Inactive, "inactive after 2 runs"),
-        (AppState::Background, "background after 3 runs"),
-        (AppState::Active, "active after 4 runs"),
+        (Lifecycle::Inactive, "inactive after 2 runs"),
+        (Lifecycle::Background, "background after 3 runs"),
+        (Lifecycle::Active, "active after 4 runs"),
     ] {
         engine.control().set_environment(Environment {
-            app_state: state,
+            lifecycle: state,
             ..Environment::default()
         });
         let (texts, ..) = until(&rx, shown);
         assert_eq!(texts.last().map(|t| t.as_ref()), Some(shown));
     }
     // Another part of the environment changing runs nothing that read only
-    // the app state.
+    // the lifecycle.
     engine.control().set_environment(Environment {
         font_scale: 1.5,
         ..Environment::default()

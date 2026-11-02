@@ -157,10 +157,10 @@ impl Idiom {
     }
 }
 
-/// Whether the app is in use (`appState()`), in React Native's `AppState`
+/// Whether the app is in use (`lifecycle()`), in React Native's `AppState`
 /// terms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AppState {
+pub enum Lifecycle {
     /// In the foreground and taking input.
     #[default]
     Active,
@@ -173,13 +173,13 @@ pub enum AppState {
     Background,
 }
 
-impl AppState {
-    /// Its `appState()` name: `"active"`, `"inactive"` or `"background"`.
+impl Lifecycle {
+    /// Its `lifecycle()` name: `"active"`, `"inactive"` or `"background"`.
     pub fn name(self) -> &'static str {
         match self {
-            AppState::Active => "active",
-            AppState::Inactive => "inactive",
-            AppState::Background => "background",
+            Lifecycle::Active => "active",
+            Lifecycle::Inactive => "inactive",
+            Lifecycle::Background => "background",
         }
     }
 }
@@ -242,7 +242,7 @@ pub struct Environment {
     /// Whether the app is in use: in the foreground, visible without the
     /// focus, or in the background. For an embedded surface, the embedding
     /// app's.
-    pub app_state: AppState,
+    pub lifecycle: Lifecycle,
     /// The platform picks a color from the screen
     /// ([`crate::Command::PickScreenColor`]); without it, a pick answers
     /// no color at once.
@@ -252,6 +252,10 @@ pub struct Environment {
     /// the desktops); without it, those requests answer at once with an
     /// error.
     pub file_requests: bool,
+    /// The platform recognizes speech ([`crate::Command::Speech`],
+    /// [`crate::speech`]); without it, a session ends at once
+    /// (`unavailable`) unless the core has a [`crate::speech::SpeechBackend`].
+    pub speech: bool,
 }
 
 impl Environment {
@@ -292,9 +296,10 @@ impl Default for Environment {
             regional: RegionalPreferences::EN_US,
             time_zone: TimeZone::UTC,
             host: false,
-            app_state: AppState::Active,
+            lifecycle: Lifecycle::Active,
             screen_color: false,
             file_requests: false,
+            speech: false,
         }
     }
 }

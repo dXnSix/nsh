@@ -16,6 +16,7 @@ import ModKeymap from "./mod-keymap";
 import ModLocation from "./mod-location";
 import ModMobile from "./mod-mobile";
 import ModPicker from "./mod-picker";
+import ModSpeech from "./mod-speech";
 import ModStorage from "./mod-storage";
 
 const cases: Record<string, () => JSX.Element> = {
@@ -32,6 +33,7 @@ const cases: Record<string, () => JSX.Element> = {
   "mod-location": ModLocation,
   "mod-mobile": ModMobile,
   "mod-picker": ModPicker,
+  "mod-speech": ModSpeech,
   "mod-storage": ModStorage,
 };
 const shown = signal("");
