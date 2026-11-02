@@ -3957,7 +3957,8 @@ mod tests {
         // A `fontFamily` list sets text in its first family the system has
         // (a registered one here: registering is process-wide, so this is
         // the test that registers), the others it has first among the
-        // fallbacks.
+        // fallbacks: the second installed one, the monospace font, before
+        // the platform's.
         let listed = ResolvedTextStyle {
             font_family: Some(nsh_core::FontFamily::new(
                 "No Such Family, Pacifico, 'Pacifico', monospace",
@@ -3966,10 +3967,15 @@ mod tests {
         };
         let font = engine.font(&listed);
         assert_eq!(&*font.family, "Pacifico");
+        let installed = system().all_font_names();
+        let monospace = MONOSPACE
+            .iter()
+            .find_map(|m| installed.iter().find(|i| i.eq_ignore_ascii_case(m)))
+            .expect("an installed monospace font");
         let fallbacks = font.fallbacks.expect("fallbacks");
         let list = fallbacks.fallback_list();
+        assert_eq!(list.first(), Some(monospace), "{list:?}");
         assert!(!list.iter().any(|f| f == "Pacifico"), "{list:?}");
-        assert!(!list.is_empty());
     }
 
     #[test]
