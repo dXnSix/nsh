@@ -1,6 +1,6 @@
 # Design: the app's location (`location()` / `navigate()`)
 
-Status: proposal for the owner's OK (2026-11-02). Feature 4 of the web and navigation series; stacks on
+Status: approved by the owner (2026-11-02); built on `feat/location`. Feature 4 of the web and navigation series; stacks on
 `feat/web-history` (3), `feat/web-base` (2) and `feat/spa-fallback` (1). Nothing is written yet.
 
 ## What it is
@@ -145,17 +145,23 @@ counter becomes one pending traversal).
 
 On an entry of this load (`nsh.session` is ours), from entry `from` to entry `to`:
 
-1. When `to.depth < from.depth`: going back closes dialogs first, then pops pages, one `back()` per level, as now (the
-   user's decision: browser back closes an open dialog before it goes back through routes).
-2. When `to.url` differs from the location: `onLocation` with `to.url` (after the back steps, so a URL-driven app such
-   as RayX's finds its pages already popped and only checks its journal).
+1. When `to.depth < from.depth` (back through dialogs and pages): one `back()` per level, as now — a dialog closes
+   first, then pages pop (the user's decision). The app answers before the location moves: the player waits until the
+   popped pages' `onDismiss` reached the app (they come after the page's slide; 1.5 s at most). If the app moved its
+   location itself meanwhile (a page that navigates to its parent, RayX's pattern), the entry takes the app's
+   location; otherwise the app goes to the entry's location (`onLocation`).
+2. Otherwise (same depth, or forward): `onLocation` with `to.url` at once when it differs from the location.
 3. At the end of the turn, the invariant again:
-   - the URL changed: the app has rebuilt what the URL names; the entry takes the app's depth (`replaceState`). Forward
-     therefore works for URL entries: the app pushes its page again for the URL, and that page is this entry's.
+   - the location moved (by the app or to the entry's): the app has shown what the URL names; the entry takes the
+     app's depth and location (`replaceState`). Forward therefore works for URL entries: the app pushes its page again
+     for the URL, and that page is this entry's.
    - same URL, the app is deeper (it kept the user: `popOnBack={false}`, a dialog that does not close): the levels get
      their entries again (as now).
    - same URL, the app is shallower (forward to a dialog or page that is gone and that no URL brings back): back to
      where the app is (as now).
+
+(Implementation note, found on a real browser: a decision taken right after `back()` saw the location before the app's
+`onDismiss` answer, because that answer follows the page's motion.)
 
 On an earlier load's entry (a reload keeps the browser's entries): the entry the page reloads on tells the old session
 and index, so that session's entries are adopted at their offset (their `url` is honoured as in 2, their depth is the
