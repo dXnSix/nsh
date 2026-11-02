@@ -160,6 +160,19 @@ expect Bound: not bound
 tap id:bind
 expect Bound: function function
 covers [nsh] keymap
+# mod-location
+tap id:case-mod-location
+expect Location: /
+expect Parts: / - -
+tap id:teams
+expect Location: /teams/7
+tap id:table
+expect Location: /news?page=2#top
+expect Parts: /news ?page=2 #top
+tap id:other
+expect Refused: TypeError
+covers [nsh] location
+covers [nsh] navigate
 # mod-mobile
 tap id:case-mod-mobile
 expect Mobile: true

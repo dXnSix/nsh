@@ -710,3 +710,320 @@ test("a plain Shader uploads the whole built-ins block, progress and overflow at
   // time, scale, progress, overflow and padding.
   assert.deepEqual(uploads, [["uniform", [100, 50, 1.5, 2, 0, 0, 0, 0]]]);
 });
+
+// History ---------------------------------------------------------------
+
+/**
+ * A browser's session history for one document at `url`, with `entries`
+ * before it (an earlier load's): `go` lands a turn later and fires
+ * `popstate`, as browsers do.
+ */
+function fakeBrowser(url, entries = [{ state: null, url }]) {
+  let index = entries.length - 1;
+  let listener = null;
+  const at = (href) => (href ? new URL(href, entries[index].url).href : entries[index].url);
+  const browser = {
+    entries,
+    get index() { return index; },
+    history: {
+      get state() { return entries[index].state; },
+      pushState(state, _title, href) {
+        const url = at(href);
+        entries.splice(index + 1);
+        entries.push({ state: structuredClone(state), url });
+        index += 1;
+      },
+      replaceState(state, _title, href) {
+        entries[index] = { state: structuredClone(state), url: at(href) };
+      },
+      go(delta) {
+        const to = Math.max(0, Math.min(entries.length - 1, index + delta));
+        if (to === index) return;
+        setTimeout(() => {
+          index = to;
+          listener?.({ state: entries[index].state });
+        }, 0);
+      },
+      back() { this.go(-1); },
+      forward() { this.go(1); },
+    },
+    location: { get href() { return entries[index].url; } },
+    window: { top: null, addEventListener: (name, f) => { if (name === "popstate") listener = f; } },
+    /** The app-relative URLs of the entries, `*` at the current one. */
+    urls: () => entries.map((e, i) => `${i === index ? "*" : ""}${new URL(e.url).pathname.replace("/app", "")}`),
+  };
+  browser.window.top = browser.window;
+  return browser;
+}
+
+/** A player with the history on `browser`, whose back depth the test sets
+ * (`app.depth`) and whose `back()` closes a level (`app.refuse`: none). */
+function historyPlayer(browser, options = {}) {
+  const saved = { history: globalThis.history, location: globalThis.location, window: globalThis.window };
+  Object.assign(globalThis, { history: browser.history, location: browser.location, window: browser.window });
+  const { player, sent } = fakePlayer(options);
+  const app = { depth: 0, refuse: false, backs: 0 };
+  Object.assign(player, {
+    history: true,
+    location: "/",
+    backDepth: () => app.depth,
+    back() {
+      app.backs += 1;
+      if (app.refuse || app.depth === 0) return false;
+      app.depth -= 1;
+      return true;
+    },
+  });
+  player.location = player.pageLocation();
+  player.installHistory();
+  const locations = () => sent.filter(([name]) => name === "onLocation").map(([, p]) => p.location);
+  const restore = () => Object.assign(globalThis, saved);
+  return { player, app, locations, restore };
+}
+
+/** Lets the timers of a turn and a `history.go` run. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+test("a page shown and a navigation in one turn are one entry", async () => {
+  const browser = fakeBrowser("https://example.test/app/");
+  const { player, app, restore } = historyPlayer(browser);
+  try {
+    app.depth = 1;
+    player.navigated("/sports", false);
+    player.syncHistorySoon();
+    await settle();
+    assert.deepEqual(browser.urls(), ["/", "*/sports"]);
+    assert.deepEqual(browser.history.state.nsh, { session: player.historySession, index: 1, depth: 1, url: "/sports" });
+    // A navigation alone is an entry too; a replace changes the current one.
+    player.navigated("/sports/football?tab=live", false);
+    await settle();
+    player.navigated("/sports/football?tab=table", true);
+    await settle();
+    assert.deepEqual(browser.urls(), ["/", "/sports", "*/sports/football"]);
+    assert.equal(new URL(browser.location.href).search, "?tab=table");
+  } finally {
+    restore();
+  }
+});
+
+test("back closes a dialog first, then goes back through the locations", async () => {
+  const browser = fakeBrowser("https://example.test/app/");
+  const { player, app, locations, restore } = historyPlayer(browser);
+  try {
+    player.navigated("/a", false);
+    await settle();
+    app.depth = 1; // a dialog opens
+    player.syncHistorySoon();
+    await settle();
+    assert.deepEqual(browser.urls(), ["/", "/a", "*/a"]);
+    browser.history.back();
+    await settle();
+    assert.equal(app.depth, 0);
+    assert.deepEqual(locations(), []);
+    browser.history.back();
+    await settle();
+    assert.deepEqual(locations(), ["/"]);
+    assert.equal(player.location, "/");
+    assert.deepEqual(browser.urls(), ["*/", "/a", "/a"]);
+  } finally {
+    restore();
+  }
+});
+
+test("forward moves the app to the entry's location, whose page it shows again", async () => {
+  const browser = fakeBrowser("https://example.test/app/");
+  const { player, app, locations, restore } = historyPlayer(browser);
+  try {
+    app.depth = 1;
+    player.navigated("/teams", false);
+    await settle();
+    browser.history.back();
+    await settle();
+    assert.equal(app.depth, 0);
+    assert.deepEqual(locations(), ["/"]);
+    browser.history.forward();
+    // The app answers the location with its page in the same turn.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    app.depth = 1;
+    await settle();
+    assert.deepEqual(locations(), ["/", "/teams"]);
+    assert.deepEqual(browser.urls(), ["/", "*/teams"]);
+    assert.equal(browser.history.state.nsh.depth, 1);
+  } finally {
+    restore();
+  }
+});
+
+test("forward to a dialog that is gone goes back where the app is", async () => {
+  const browser = fakeBrowser("https://example.test/app/");
+  const { app, player, locations, restore } = historyPlayer(browser);
+  try {
+    app.depth = 1;
+    player.syncHistorySoon();
+    await settle();
+    browser.history.back();
+    await settle();
+    assert.equal(app.depth, 0);
+    browser.history.forward();
+    await settle();
+    await settle();
+    assert.deepEqual(browser.urls(), ["*/", "/"]);
+    assert.deepEqual(locations(), []);
+  } finally {
+    restore();
+  }
+});
+
+test("pages the app pops itself are gone back over, and the app that keeps the user keeps its entry", async () => {
+  const browser = fakeBrowser("https://example.test/app/");
+  const { player, app, restore } = historyPlayer(browser);
+  try {
+    app.depth = 2;
+    player.navigated("/a/b", false);
+    await settle();
+    assert.deepEqual(browser.urls(), ["/", "/a/b", "*/a/b"]);
+    // The app's own back button pops both pages and replaces its location.
+    app.depth = 0;
+    player.navigated("/a", true);
+    await settle();
+    await settle();
+    assert.deepEqual(browser.urls(), ["*/a", "/a/b", "/a/b"]);
+    // `popOnBack={false}`: a back that the app does not take.
+    app.depth = 1;
+    player.syncHistorySoon();
+    await settle();
+    app.refuse = true;
+    browser.history.back();
+    await settle();
+    assert.equal(app.depth, 1);
+    assert.deepEqual(browser.urls(), ["/a", "*/a"]);
+  } finally {
+    restore();
+  }
+});
+
+test("an app that navigates as it goes back keeps its location", async () => {
+  // A deep link: the app starts three pages deep, an entry per level.
+  const browser = fakeBrowser("https://example.test/app/teams/7");
+  const { player, app, locations, restore } = historyPlayer(browser);
+  try {
+    app.depth = 2;
+    player.syncHistorySoon();
+    await settle();
+    assert.deepEqual(browser.urls(), ["/teams/7", "/teams/7", "*/teams/7"]);
+    // Each page that pops navigates to its parent (`onDismiss`).
+    const parents = ["/", "/teams"];
+    player.back = () => {
+      app.depth -= 1;
+      player.navigated(parents[app.depth], true);
+      return true;
+    };
+    browser.history.back();
+    await settle();
+    assert.equal(player.location, "/teams");
+    assert.deepEqual(locations(), []);
+    assert.deepEqual(browser.urls(), ["/teams/7", "*/teams", "/teams/7"]);
+    browser.history.back();
+    await settle();
+    assert.equal(player.location, "/");
+    assert.deepEqual(browser.urls(), ["*/", "/teams", "/teams/7"]);
+    // Forward: the location the entry has now.
+    browser.history.forward();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    app.depth = 1;
+    await settle();
+    assert.deepEqual(locations(), ["/teams"]);
+  } finally {
+    restore();
+  }
+});
+
+test("a page that goes back answers after its motion, before the location moves", async () => {
+  const browser = fakeBrowser("https://example.test/app/");
+  const { player, app, locations, restore } = historyPlayer(browser);
+  try {
+    app.depth = 1;
+    player.navigated("/teams", false);
+    await settle();
+    // The page slides away; its `onDismiss` reaches the app after it,
+    // and the app navigates to the page's parent.
+    player.back = () => {
+      app.depth -= 1;
+      player.dismissing = 1;
+      setTimeout(() => {
+        player.dismissing = 0;
+        player.navigated("/", true);
+        player.syncHistorySoon();
+      }, 30);
+      return true;
+    };
+    browser.history.back();
+    await settle();
+    assert.deepEqual(locations(), []);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(player.location, "/");
+    assert.deepEqual(locations(), []);
+    assert.deepEqual(browser.urls(), ["*/", "/teams"]);
+    // An app that does not answer goes to the entry's location.
+    app.depth = 1;
+    player.navigated("/news", false);
+    await settle();
+    player.back = () => {
+      app.depth -= 1;
+      player.dismissing = 1;
+      setTimeout(() => {
+        player.dismissing = 0;
+        player.syncHistorySoon();
+      }, 30);
+      return true;
+    };
+    browser.history.back();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.deepEqual(locations(), ["/"]);
+  } finally {
+    restore();
+  }
+});
+
+test("a reloaded page adopts the earlier load's entries", async () => {
+  const earlier = (index, url) => ({ state: { nsh: { session: "earlier", index, depth: index, url } }, url: `https://example.test/app${url}` });
+  const browser = fakeBrowser("https://example.test/app/b", [earlier(0, "/"), earlier(1, "/a"), earlier(2, "/b")]);
+  const { player, locations, restore } = historyPlayer(browser);
+  try {
+    assert.equal(player.location, "/b");
+    browser.history.back();
+    await settle();
+    assert.deepEqual(locations(), ["/a"]);
+    assert.equal(browser.history.state.nsh.session, player.historySession);
+    assert.equal(browser.history.state.nsh.index, -1);
+  } finally {
+    restore();
+  }
+});
+
+test("the page moves the app with setLocation; without the history, the app's location is its own", async () => {
+  const browser = fakeBrowser("https://example.test/app/news?page=2");
+  const navigations = [];
+  const { player, locations, restore } = historyPlayer(browser, { onNavigate: (n) => navigations.push(n) });
+  try {
+    assert.equal(player.location, "/news?page=2");
+    player.setLocation("?page=3");
+    await settle();
+    assert.deepEqual(locations(), ["/news?page=3"]);
+    assert.deepEqual(browser.urls(), ["/news", "*/news"]);
+    // The page's moves are not the app's navigations.
+    assert.deepEqual(navigations, []);
+    player.navigated("/teams", true);
+    assert.deepEqual(navigations, [{ location: "/teams", history: "replace" }]);
+    assert.throws(() => player.setLocation("https://other.test/"), TypeError);
+    player.history = false;
+    const length = browser.entries.length;
+    player.navigated("/x", false);
+    player.syncHistorySoon();
+    await settle();
+    assert.equal(browser.entries.length, length);
+    assert.equal(player.location, "/x");
+  } finally {
+    restore();
+  }
+});

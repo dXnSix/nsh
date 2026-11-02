@@ -250,6 +250,7 @@ events! {
     Paste = "onPaste": "The user pasted into an input (payload: [`EventPayload::Paste`]: the text, files with their bytes such as a screenshot, local files' URLs), before the `onChangeText` of the text it inserts.",
     ScreenColor = "onScreenColor": "A [`Command::PickScreenColor`] request finished (root only; payload: `id`, `color`: the color picked, packed `0xRRGGBBAA`, absent when cancelled).",
     FileRequest = "onFileRequest": "A [`Command::FileRequest`] finished (root only; payload: [`EventPayload::FileRequest`]).",
+    Location = "onLocation": "The platform moved the app to another location: the browser's back or forward, the embedding app (root only; payload: `location`, a path from the app's base, [`crate::location::Location`]).",
 
 }
 
@@ -1754,6 +1755,12 @@ pub enum Command {
         /// The URL ([`crate::open_url::check_url`] passed it).
         url: String,
     },
+    /// The app went to another location (on the root;
+    /// [`crate::element::navigate`], TS `navigate`): the web's player
+    /// writes it into the browser's history and address bar; the engine
+    /// tells the embedding app ([`crate::Core::take_navigations`]). Nothing
+    /// to report.
+    Navigate(crate::location::Navigation),
     /// Let the user pick a color anywhere on the screen (on the root; a
     /// color picker's eyedropper, [`crate::element::ambient::pick_screen_color`]):
     /// the system's color sampler or the browser's `EyeDropper`. Report it

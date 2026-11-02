@@ -31,7 +31,15 @@
 // pointer and the viewport suggest), `dialogs` ("viewport": `Dialog`,
 // `Sheet` and `AlertDialog` cover the whole window, in the browser's top layer, rather
 // than the container, which they cover by default and in browsers without
-// popovers), `overlay` (false: no error box), `onError`, `onLog`, `host`
+// popovers), `history` (pushed pages, open dialogs and the app's
+// `navigate` as browser history entries, and the app's location in the
+// address bar; by default only when the app is the page, not in an
+// iframe), `location` (where the app starts, a path from the page's base;
+// by default the page's address there), `onNavigate({ location, history })`
+// (the app's `navigate`, with or without `history`: a page that keeps the
+// address itself follows it; `player.setLocation(url, { history })` moves
+// the app, and `player.location` is where it is), `overlay` (false: no
+// error box), `onError`, `onLog`, `host`
 // (the functions `nsh/host`'s `host.call(name, args)` reaches: an object
 // whose `call(name, args)` returns the result or a promise of it; a throw
 // or a rejection rejects the app's call; without it `host.available()` is
@@ -870,6 +878,10 @@ class Player {
     // default only when the app is the page (in an iframe each push would
     // be an entry of the embedding page's history too).
     this.history = options.history ?? window.top === window;
+    // The app's location (`location()`): a path from the base, the page's
+    // address unless the page says another (`location`).
+    this.location = "/";
+    this.location = options.location != null ? this.joinLocation(String(options.location)) : this.pageLocation();
     // `Dialog` and `AlertDialog` over the whole window rather than over the
     // container: popovers in the top layer, which every browser engine has
     // had since 2024 (Firefox 125).
@@ -1130,6 +1142,12 @@ class Player {
    */
   testSetup(storage, trace, environment) {
     if (!this.wasm.nsh_test_setup) return;
+    // Where the test opens the app: the page's address there, as a link
+    // into the app would open it.
+    if (environment?.location != null) {
+      this.location = this.joinLocation(String(environment.location));
+      if (this.history) this.replaceEntry(this.backDepth(), this.location);
+    }
     const setup = JSON.stringify({ storage: storage ?? [], trace: !!trace, environment: environment ?? {} });
     this.withStrings([setup], (p, l) => this.wasm.nsh_test_setup(p, l));
   }
@@ -1658,6 +1676,8 @@ class Player {
         : document.hasFocus() ? "active" : "inactive",
       timeZone: timeZoneName(),
       screenColor: typeof window.EyeDropper === "function",
+      // Where the app starts (`location()`); later moves are `onLocation`.
+      location: this.location,
     };
   }
 
@@ -4331,8 +4351,14 @@ class Player {
     }
     stack._top = below ?? null;
     screen._popping = true;
-    // The screen goes, then the app is told (and removes it).
-    const dismissed = () => this.event(screen._id, "onDismiss");
+    // The screen goes, then the app is told (and removes it); the history
+    // waits for the app's answer (`syncHistory`).
+    this.dismissing = (this.dismissing ?? 0) + 1;
+    const dismissed = () => {
+      this.dismissing -= 1;
+      this.event(screen._id, "onDismiss");
+      this.syncHistorySoon();
+    };
     if (this.screenMotion(screen)) {
       this.moveScreens(screen, below, false, dismissed);
     } else {
@@ -4485,31 +4511,101 @@ class Player {
     return false;
   }
 
-  // History: one entry per screen over the bottom one of each shown stack
-  // and per presented modal, so that the browser's back button goes back
-  // in the app. Entries the app takes away itself are gone back over
-  // (`history.go`), their `popstate` ignored.
+  // History. Every entry NSH makes has `history.state.nsh = { session,
+  // index, depth, url }`: this page load's id, the entry's place among the
+  // load's entries (0: the one the page loaded with), the back depth at it
+  // (`backDepth`: presented modals and the screens over the bottom one of
+  // each shown stack) and the app's location at it. A pushed page or
+  // dialog and the app's `navigate` are entries alike; in one engine turn,
+  // one entry. After each turn the current entry describes the app as it
+  // is (`syncHistory`). The browser's back goes back a dialog, then a page,
+  // at a time, and moves the app to the entry's location; forward moves it
+  // to the location, and the app shows what it names.
 
   installHistory() {
-    this.historyDepth = 0;
-    this.ignoredPops = 0;
-    // Entries are this page load's: those of an earlier load (a reload
-    // keeps them, with their depths) are foreign, below this one's.
+    // Entries are this page load's; an earlier load's (a reload keeps
+    // them) are adopted where the entry the page reloaded on says.
     this.historySession = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
-    history.replaceState(this.historyState(0), "");
+    const earlier = history.state?.nsh;
+    this.adopted = earlier?.session && Number.isInteger(earlier.index)
+      ? { session: earlier.session, offset: -earlier.index } : null;
+    // index -> { depth, url }: the entries this load knows.
+    this.entries = new Map([[0, { depth: 0, url: this.location }]]);
+    this.historyIndex = 0;
+    // The navigation of the turn (`{ push }`), the user's move the app is
+    // answering (`{ from, moved }`), and NSH's own `history.go` in flight.
+    this.pendingNavigation = null;
+    this.popped = null;
+    this.traveling = null;
+    history.replaceState(this.historyState(0), "", this.options.location != null ? this.pageURL(this.location) : undefined);
     window.addEventListener("popstate", (e) => this.popState(e));
   }
 
-  historyState(depth) {
-    return { ...(history.state ?? {}), nsh: depth, nshSession: this.historySession };
+  historyState(index) {
+    const { depth, url } = this.entries.get(index);
+    return { ...(history.state ?? {}), nsh: { session: this.historySession, index, depth, url } };
   }
 
-  /** A new run starts at the app's first entry. */
+  /** Where the page's address is in the app: its URL from the base's
+   * directory (`baseURL`), `/` for the base and its `index.html`. */
+  pageLocation() {
+    const base = new URL(".", this.baseURL);
+    const here = new URL(location.href);
+    if (here.origin !== base.origin || !here.pathname.startsWith(base.pathname)) return "/";
+    const path = here.pathname.slice(base.pathname.length);
+    return `/${path === "index.html" ? "" : path}${here.search}${here.hash}`;
+  }
+
+  /** The page's address of location `url`. */
+  pageURL(url) {
+    return new URL(`./${url.slice(1)}`, new URL(".", this.baseURL)).href;
+  }
+
+  /** `url` resolved against the location, as the core resolves it
+   * (`Location::join`): both are the WHATWG URL parser's. */
+  joinLocation(url) {
+    const joined = new URL(url, `http://nsh.invalid${this.location}`);
+    if (joined.origin !== "http://nsh.invalid") throw new TypeError(`${url} is another site's URL`);
+    return `${joined.pathname}${joined.search}${joined.hash}`;
+  }
+
+  /**
+   * Moves the app to `url` (a path from the base, or relative to the
+   * location), as a link into the app or the embedding page would: the
+   * app's `location()` changes (`onLocation`); with the history, as a new
+   * entry (`history: "replace"`: the current one).
+   */
+  setLocation(url, { history: behavior = "push" } = {}) {
+    const next = this.joinLocation(String(url));
+    if (next === this.location) return;
+    this.location = next;
+    this.event(ROOT_ID, "onLocation", { location: next });
+    if (this.history) {
+      this.pendingNavigation = { push: behavior !== "replace" || !!this.pendingNavigation?.push };
+      this.syncHistorySoon();
+    }
+  }
+
+  /** The app went to `url` (`navigate`, `Command::Navigate`). */
+  navigated(url, replace) {
+    this.location = url;
+    if (this.history) {
+      // A push in the turn wins over a replace.
+      this.pendingNavigation = { push: !replace || !!this.pendingNavigation?.push };
+      this.syncHistorySoon();
+    }
+    this.options.onNavigate?.({ location: url, history: replace ? "replace" : "push" });
+  }
+
+  /** A new run starts at the first entry, where the app is. */
   resetHistory() {
-    if (!this.history || !this.historyDepth) return;
-    this.ignoredPops++;
-    history.go(-this.historyDepth);
-    this.historyDepth = 0;
+    if (!this.history || !this.entries) return;
+    this.pendingNavigation = this.popped = null;
+    const first = Math.min(this.historyIndex, 0);
+    const url = (this.entries.get(first) ?? this.entries.get(this.historyIndex)).url;
+    for (const index of [...this.entries.keys()]) if (index > first) this.entries.delete(index);
+    this.entries.set(first, { depth: 0, url });
+    this.travel(first);
   }
 
   backDepth() {
@@ -4530,44 +4626,167 @@ class Player {
     }, 0);
   }
 
+  /** Makes the current entry describe the app as it is, after a turn. */
   syncHistory() {
-    const depth = this.backDepth();
-    const have = this.historyDepth;
-    for (let i = have + 1; i <= depth; i++) history.pushState(this.historyState(i), "");
-    if (depth < have) {
-      this.ignoredPops++;
-      history.go(depth - have);
+    if (this.traveling) return;
+    const popped = this.popped;
+    if (popped?.settling) {
+      // The pages going back still move: their `onDismiss` has not
+      // reached the app.
+      if (this.dismissing > 0 && !popped.expired) return;
+      clearTimeout(popped.timer);
+      popped.settling = false;
+      // An app that moved its location as it went back (a page that
+      // navigates to its parent) has answered; otherwise it goes to the
+      // entry's location.
+      if (this.location !== popped.before) popped.moved = true;
+      else this.moveTo(popped.url, popped);
     }
-    this.historyDepth = depth;
+    const depth = this.backDepth(), url = this.location;
+    const navigation = this.pendingNavigation;
+    this.pendingNavigation = this.popped = null;
+    const entry = this.entries.get(this.historyIndex);
+    if (popped && !navigation?.push) {
+      // The app's answer to the user's move to this entry.
+      if (popped.moved || depth === entry.depth) {
+        // It shows what the entry's location names: the entry is that.
+        if (depth !== entry.depth || url !== entry.url) this.replaceEntry(depth, url);
+        return;
+      }
+      if (depth < entry.depth) {
+        // Forward to a dialog or a page that is gone and that no location
+        // brings back: back where the app is.
+        this.travel(popped.from);
+        return;
+      }
+      // Deeper: the app kept the user (`popOnBack={false}`, a dialog
+      // that stays open), and the levels get their entries again.
+    }
+    if (depth < entry.depth) {
+      // The app went back itself: back over the entries above it (a
+      // navigation of the turn applies there).
+      let to = null;
+      for (const [index, known] of this.entries) {
+        if (index < this.historyIndex && known.depth <= depth && (to === null || index > to)) to = index;
+      }
+      if (to !== null) {
+        this.pendingNavigation = navigation;
+        this.travel(to);
+      } else {
+        this.replaceEntry(depth, url);
+      }
+      return;
+    }
+    if (depth > entry.depth) {
+      // One entry per level, the turn's location in each; a replace
+      // takes the location before away.
+      if (navigation && !navigation.push && url !== entry.url) this.replaceEntry(entry.depth, url);
+      for (let level = entry.depth + 1; level <= depth; level++) this.pushEntry(level, url);
+      return;
+    }
+    if (url === entry.url) return;
+    if (navigation?.push) this.pushEntry(depth, url);
+    else this.replaceEntry(depth, url);
+  }
+
+  pushEntry(depth, url) {
+    const previous = this.entries.get(this.historyIndex).url;
+    const index = this.historyIndex + 1;
+    // A push drops the browser's entries after the current one.
+    for (const known of [...this.entries.keys()]) if (known >= index) this.entries.delete(known);
+    this.entries.set(index, { depth, url });
+    this.historyIndex = index;
+    history.pushState(this.historyState(index), "", url === previous ? undefined : this.pageURL(url));
+  }
+
+  replaceEntry(depth, url) {
+    const previous = this.entries.get(this.historyIndex).url;
+    this.entries.set(this.historyIndex, { depth, url });
+    history.replaceState(this.historyState(this.historyIndex), "", url === previous ? undefined : this.pageURL(url));
+  }
+
+  /** Goes to entry `to` with `history.go`: its `popstate` is NSH's, and
+   * the turns in between are synced once it lands. */
+  travel(to) {
+    const delta = to - this.historyIndex;
+    if (!delta) {
+      this.syncHistorySoon();
+      return;
+    }
+    // A browser that never lands (a go it refuses) does not hold the
+    // history back for good.
+    const traveling = (this.traveling = { to, timer: setTimeout(() => this.landed(traveling, to), 1000) });
+    history.go(delta);
+  }
+
+  landed(traveling, index) {
+    if (this.traveling !== traveling) return;
+    clearTimeout(traveling.timer);
+    this.traveling = null;
+    this.historyIndex = index;
+    this.syncHistorySoon();
   }
 
   popState(e) {
-    if (this.ignoredPops > 0) {
-      this.ignoredPops--;
+    const state = e.state?.nsh;
+    if (this.traveling) {
+      this.landed(this.traveling, state?.session === this.historySession ? state.index : this.traveling.to);
       return;
     }
-    const have = this.historyDepth;
-    if (e.state?.nshSession !== this.historySession) {
+    const from = this.historyIndex;
+    const current = this.entries.get(from);
+    let to, target;
+    if (state?.session === this.historySession) {
+      to = state.index;
+      target = { depth: state.depth, url: state.url };
+    } else if (state && this.adopted && state.session === this.adopted.session && Number.isInteger(state.index)) {
+      // An earlier load's entry: its location, as an entry of this load's
+      // (its pages and dialogs went with that load).
+      to = state.index + this.adopted.offset;
+      target = { depth: current.depth, url: typeof state.url === "string" ? state.url : this.pageLocation() };
+    } else if (!state && this.pageLocation() !== this.location) {
+      // An address of the app's the user typed (a fragment): a new entry
+      // after this one.
+      to = from + 1;
+      target = { depth: current.depth, url: this.pageLocation() };
+      for (const known of [...this.entries.keys()]) if (known >= to) this.entries.delete(known);
+    } else {
       // Back past the app's first entry: the app goes back to its start.
-      // An earlier load's entries (a reload keeps them) are passed over,
-      // as if the page had been left from its first screen.
-      this.historyDepth = 0;
-      for (let i = 0; i < have; i++) if (!this.back()) break;
-      if (e.state?.nsh != null) history.back();
+      // Older loads' entries are passed over, as if the page had been left
+      // from its first screen.
+      for (let level = current.depth; level > 0; level--) if (!this.back()) break;
+      if (state != null) history.back();
       return;
     }
-    const at = e.state.nsh ?? 0;
-    if (at < have) {
-      // Back (several entries from the back button's menu): what the app
-      // does not let go back gets its entry again.
-      this.historyDepth = at;
-      for (let i = at; i < have; i++) if (!this.back()) break;
-      this.syncHistorySoon();
-    } else if (at > have) {
-      // Forward to a screen that is gone: back where the app is.
-      this.ignoredPops++;
-      history.go(have - at);
+    this.historyIndex = to;
+    this.entries.set(to, target);
+    history.replaceState(this.historyState(to), "");
+    // What the entry is once the app answered (`syncHistory`).
+    const popped = (this.popped = { from, before: this.location, url: target.url, moved: false, settling: false });
+    if (target.depth < current.depth) {
+      // Back closes dialogs first, then pops pages, a level at a time;
+      // the app answers before the location moves (`syncHistory`), so a
+      // page that navigates to its parent as it goes keeps its location,
+      // and a URL-driven app finds its pages popped.
+      for (let level = current.depth; level > target.depth; level--) if (!this.back()) break;
+      popped.settling = true;
+      popped.timer = setTimeout(() => {
+        popped.expired = true;
+        this.syncHistorySoon();
+      }, 1500);
+    } else {
+      this.moveTo(target.url, popped);
     }
+    this.syncHistorySoon();
+  }
+
+  /** The app goes to the entry's location `url` (`onLocation`), unless it
+   * is there. */
+  moveTo(url, popped) {
+    if (url === this.location) return;
+    this.location = url;
+    popped.moved = true;
+    this.event(ROOT_ID, "onLocation", { location: url });
   }
 
   stackChanged(stack, added) {
@@ -5105,6 +5324,7 @@ class Player {
       case "hostCall": this.hostCall(args[0], args[1], args[2]); break;
       case "imageInfo": this.imageInfo(args[0], args[1]); break;
       case "back": this.defaultBack(); break;
+      case "navigate": this.navigated(args[0], args[1]); break;
       case "exitApp": {
         const app = this.app;
         // Finish the current engine call before releasing its surface.

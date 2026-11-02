@@ -86,6 +86,9 @@ thread_local! {
     /// What the page reported last ([`nsh_environment`]), kept for the
     /// next start ([`nsh_start_rust`], `nsh_browser_start`).
     static PAGE: Cell<Option<Environment>> = const { Cell::new(None) };
+    /// Where the page says the app is ([`nsh_environment`]'s `location`),
+    /// for the next start: later moves come as `onLocation` events.
+    static LOCATION: RefCell<Option<nsh_core::location::Location>> = const { RefCell::new(None) };
     /// The app's keyboard shortcuts (`MountItem::Keymap`), matched in
     /// [`nsh_key`] while a key event is being handled. Apart from [`APP`]
     /// so that matching never needs the engine.
@@ -363,8 +366,10 @@ fn page() -> Environment {
 /// bottom, left]`), `keyboard` (the height the on-screen keyboard
 /// covers), `appleKeyboard` (the browser runs on an Apple platform: its
 /// shortcuts are Apple's), `host` (the page answers `nsh/host` calls:
-/// `createPlayer`'s `host`) and `screenColor` (the browser has an
-/// `EyeDropper`); missing keys keep their value. Called before the app starts
+/// `createPlayer`'s `host`), `screenColor` (the browser has an
+/// `EyeDropper`) and `location` (where the app starts: a path from the
+/// app's base; later moves are `onLocation` events); missing keys keep
+/// their value. Called before the app starts
 /// and on every change; the idiom and `host` are the ones at start, as on every
 /// platform. Returns the pump delay.
 ///
@@ -466,6 +471,12 @@ pub unsafe extern "C" fn nsh_environment(ptr: *const u8, len: usize) -> f64 {
         None => env.app_state,
     };
     env.screen_color = flag("screenColor").unwrap_or(env.screen_color);
+    if let Some(location) = value.get("location").and_then(|v| v.as_str()) {
+        match nsh_core::location::Location::parse(location) {
+            Ok(location) => LOCATION.with(|l| *l.borrow_mut() = Some(location)),
+            Err(refused) => log::warn!("the page's location: {refused}"),
+        }
+    }
     PAGE.with(|p| p.set(Some(env)));
     send(|app| {
         let e = &mut app.environment;
@@ -579,6 +590,10 @@ fn run(app: App, width: f32, height: f32, environment: Environment, limits: Limi
         host: Default::default(),
         picker: None,
     };
+    // Where the page is in the app as it starts.
+    if let Some(location) = LOCATION.with(|l| l.borrow().clone()) {
+        let _ = config.host.set_location(location.as_str());
+    }
     // A test session's app: the test's storage, network and trace.
     #[cfg(feature = "dev")]
     TEST_MODEL.with(|m| {
@@ -1081,6 +1096,7 @@ pub unsafe extern "C" fn nsh_event(
                             "loaded" => "loaded",
                             "total" => "total",
                             "color" => "color",
+                            "location" => "location",
                             _ => return None,
                         };
                         let v = match v {

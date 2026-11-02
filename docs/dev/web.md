@@ -782,13 +782,30 @@ browsers' touches into what phones report:
   itself crosses another origin needs that outer embedder's cooperation; it cannot bypass that boundary.
   `Sheet` uses a web modal root around its existing overlays, with its own animation and close lifecycle.
   The documentation player enables viewport dialogs, so the website's iframe demos use this path.
-- **History**: when the app is the page (`window.top === window`, or `createPlayer`'s `history` option) every page
-  above a stack's first and every dialog is a history entry (`pushState`, state `{ nsh: depth }`), so the browser's
-  back button and the mouse's go back in the app; entries the app takes away itself are gone back over with
-  `history.go`, whose `popstate` is ignored, and a back the app refuses gets its entry again; a new `run` goes back
-  to the first entry. Entries carry the page load's id (`nshSession`): a reload keeps the earlier load's entries,
-  which going back passes over (`history.back()` again) as if the app had been left from its first page. In an
-  iframe (the website's demos) the app pushes nothing: each entry would be one of the embedding page's history.
+- **History and the location**: the player keeps the app's location (`player.location`, `nsh_core::location`): the
+  page's address after the base's directory (`pageLocation`, `<base>index.html` reading as `/`) or `createPlayer`'s
+  `location`, sent as the environment's `location` at the start (`nsh_environment` keeps it for `run`'s host
+  channel), then moved by `Command::Navigate` (`["cmd", 1, "navigate", location, replace]`, `navigated`, which also
+  calls `onNavigate`) and by the platform (`popstate`, `player.setLocation`), which report `onLocation`. When the
+  app is the page (`window.top === window`, or `createPlayer`'s `history` option) every page above a stack's first,
+  every dialog and every navigation is a history entry with `history.state.nsh = { session, index, depth, url }`:
+  the load's id, the entry's place among the load's entries (0 the one it loaded with), the back depth
+  (`backDepth`) and the location. The player mirrors them (`entries`, `historyIndex`) and, after each turn
+  (`syncHistorySoon`, so a stack change and a `navigate` of one batch make one entry), makes the current entry the
+  app as it is (`syncHistory`): a deeper app pushes an entry per level (a replace in the turn rewrites the current
+  entry's location first), a navigation alone pushes or replaces, and a shallower one (the app popped itself) goes
+  back with `history.go` to the newest earlier entry at most as deep (`travel`; its `popstate` lands it, a 1 s timer
+  if none comes, and the syncs in between wait). On `popstate` to an entry of the load's: one `back()` per level it is
+  shallower (a dialog closes first, then pages pop), then `onLocation` with its location when it differs; once the
+  app answered, an entry reached with another location takes the app's depth (forward: the app shows the URL's page
+  again), one of the same location gets its levels again when the app kept the user, or is gone back from when it
+  is deeper than the app can be (forward to a closed dialog). A reload's entry tells the earlier load's session and
+  index (`adopted`), so its entries are taken in at that offset with their locations; a fragment typed in the
+  address bar (an entry without state) is a new entry after the current one; other foreign entries are passed over
+  (`history.back()`) as before, the app back at its start. A new `run` goes back to the first entry and writes the
+  location into it, so the app restarts where it was. Without the history (an iframe, `history: false`) the player
+  touches neither the history nor the address bar: the location moves with the app's navigations and
+  `setLocation`, and `onNavigate` lets the page follow.
 - **Text selection**: text is selectable when `selectable` is true (`userSelect: "text"`; `nsh-selectable`), and with the desktop idiom also
   when it is unset (`null` in the `t` item: `nsh-autoselect`, selectable under `.nsh-desktop`) unless a view around it,
   or the text itself, takes presses, touches, pans or pinches (`nsh-press`, set in `updateTouchAction`), as on a web
