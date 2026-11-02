@@ -926,7 +926,7 @@ const languages: Accessor<readonly string[]>;
 const hourCycle: Accessor<"h11" | "h12" | "h23" | "h24">;
 ```
 
-用户使用 12 小时制还是 24 小时制，用 `Intl` 对小时周期的命名：`"h12"`（`12:30 PM`）、`"h23"`（`00:30`），以及较少见的 `"h11"`（`0:30 PM`）和 `"h24"`（`24:30`）。是系统的设置，否则是所在地区的。响应式。Rust：`hour_cycle() -> HourCycle`（`twelve_hour()` 表示有上午和下午）。`Intl` 默认按它书写设备区域设置的时间（`new Date().toLocaleTimeString()`）；其他区域设置的时间保持该区域设置自己的周期（[设备与环境](../docs/device-and-environment.md#地区偏好)）。除非 `open` 设置了 `hourCycle`，headless 测试中它是区域设置所在地区的。
+用户使用 12 小时制还是 24 小时制，用 `Intl` 对小时周期的命名：`"h12"`（`12:30 PM`）、`"h23"`（`00:30`），以及较少见的 `"h11"`（`0:30 PM`）和 `"h24"`（`24:30`）。是系统的设置，否则是所在地区的。响应式。Rust：`hour_cycle() -> HourCycle`（`twelve_hour()` 表示有上午和下午）。`Intl` 按区域设置自己的小时周期书写时间：把 `hourCycle()` 作为它的 `hourCycle` 选项传入，就能按用户的习惯书写（[设备与环境](../docs/device-and-environment.md#地区偏好)）。除非 `open` 设置了 `hourCycle`，headless 测试中它是区域设置所在地区的。
 
 ### firstDayOfWeek
 
@@ -958,7 +958,7 @@ const temperatureUnit: Accessor<"celsius" | "fahrenheit">;
 const timeZone: Accessor<string>;
 ```
 
-设备的时区，即系统给它的名称：IANA 名称（`"Europe/Berlin"`、`"America/New_York"`）、`"UTC"`，或系统使用偏移量时区时的名称（Android 上的 `"GMT+01:00"`）。响应式：随系统设置变化，例如用户出行时。Rust：`time_zone() -> TimeZone`（`time_zone().as_str()` 即名称）。`Intl` 默认按它书写日期，`Date` 的本地时间跟随系统时区；读取这个名称来显示它，或和日期一起保存（[设备与环境](../docs/device-and-environment.md#时区)）。除非 `open` 设置了 `timeZone`，headless 测试中它是 `"UTC"`。
+设备的时区，即系统给它的名称：IANA 名称（`"Europe/Berlin"`、`"America/New_York"`）、`"UTC"`，或系统使用偏移量时区时的名称（Android 上的 `"GMT+01:00"`）。响应式：随系统设置变化，例如用户出行时。Rust：`time_zone() -> TimeZone`（`time_zone().as_str()` 即名称）。`Date` 的本地时间跟随系统时区；读取这个名称来显示它、和日期一起保存，或交给时区库（[设备与环境](../docs/device-and-environment.md#时区)）。除非 `open` 设置了 `timeZone`，headless 测试中它是 `"UTC"`。
 
 ### appState
 

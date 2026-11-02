@@ -676,7 +676,7 @@ pub(crate) const DEVICE_EXPORTS: &[Item] = &[
         "hourCycle",
         Export::Value(|cx| accessor(cx, Part::HourCycle)),
         Ts::value(
-            "Whether the user has 12- or 24-hour time (reactive), as `Intl` names its\nhour cycles: `\"h12\"` (`12:30 PM`), `\"h23\"` (`00:30`), and the rarer\n`\"h11\"` (`0:30 PM`) and `\"h24\"` (`24:30`). The system's setting, else the\nregion's; `Intl` writes the device's locale's times in it by default,\nanother locale's in that locale's own. The locale's region's in headless tests unless `open`\nsets `hourCycle`.",
+            "Whether the user has 12- or 24-hour time (reactive), as `Intl` names its\nhour cycles: `\"h12\"` (`12:30 PM`), `\"h23\"` (`00:30`), and the rarer\n`\"h11\"` (`0:30 PM`) and `\"h24\"` (`24:30`). The system's setting, else the\nregion's; pass it as `Intl.DateTimeFormat`'s `hourCycle` to write times as\nthe user reads them. The locale's region's in headless tests unless `open`\nsets `hourCycle`.",
             "Accessor<\"h11\" | \"h12\" | \"h23\" | \"h24\">",
         ),
     ),
@@ -708,7 +708,7 @@ pub(crate) const DEVICE_EXPORTS: &[Item] = &[
         "timeZone",
         Export::Value(|cx| accessor(cx, Part::TimeZone)),
         Ts::value(
-            "The device's time zone as the system names it (reactive): an IANA name\n(`\"Europe/Berlin\"`, `\"America/New_York\"`), `\"UTC\"`, or an offset zone\nwhere the system has one (`\"GMT+01:00\"` on Android). It changes with the\nsystem's setting, as the user travels, and `Intl` writes dates in it by\ndefault. `\"UTC\"` in headless tests unless `open` sets one.",
+            "The device's time zone as the system names it (reactive): an IANA name\n(`\"Europe/Berlin\"`, `\"America/New_York\"`), `\"UTC\"`, or an offset zone\nwhere the system has one (`\"GMT+01:00\"` on Android). It changes with the\nsystem's setting, as the user travels. `\"UTC\"` in headless tests unless\n`open` sets one.",
             "Accessor<string>",
         ),
     ),

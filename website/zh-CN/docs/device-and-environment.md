@@ -310,10 +310,8 @@ fn week_columns() -> [u8; 7] {
 ```tsx tabs
 import { firstDayOfWeek, hourCycle, temperatureUnit } from "nsh";
 
-// 按用户的小时周期：`Intl` 对设备区域设置的默认值。
-const time = (date: Date) => date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-
-const twelveHour = () => hourCycle() === "h11" || hourCycle() === "h12";
+const time = (date: Date) =>
+  date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", hourCycle: hourCycle() });
 
 const temperature = (celsius: number) =>
   temperatureUnit() === "fahrenheit" ? `${Math.round((celsius * 9) / 5 + 32)} °F` : `${Math.round(celsius)} °C`;
@@ -322,7 +320,7 @@ const temperature = (celsius: number) =>
 const weekColumns = () => Array.from({ length: 7 }, (_, i) => ((firstDayOfWeek() - 1 + i) % 7) + 1);
 ```
 
-`Intl` 默认按用户的小时周期书写设备区域设置的时间，就像它按用户的时区书写日期：不带区域设置（或带设备的区域设置）的 `toLocaleTimeString()` 和 `Intl.DateTimeFormat()` 跟随 `hourCycle()`；其他区域设置的时间保持该区域设置自己的周期，`hourCycle` 或 `hour12` 选项优先。在 Web 上，浏览器不提供这些用户设置：小时周期和每周的第一天是浏览器按其语言给出的，单位是其地区的。测试中，`open` 的 `hourCycle`、`firstDayOfWeek`、`measurementSystem` 和 `temperatureUnit` 设置它们（否则是区域设置所在地区的），`app.setRegionalPreferences({ hourCycle: "h23" })` 修改它们（[测试](./testing-and-trace.md#操作步骤)）。
+`Intl` 按区域设置自己的小时周期书写时间：像上面那样把 `hourCycle()` 作为它的 `hourCycle` 选项传入，就能按用户的习惯书写。在 Web 上，浏览器不提供这些用户设置：小时周期和每周的第一天是浏览器按其语言给出的，单位是其地区的。测试中，`open` 的 `hourCycle`、`firstDayOfWeek`、`measurementSystem` 和 `temperatureUnit` 设置它们（否则是区域设置所在地区的），`app.setRegionalPreferences({ hourCycle: "h23" })` 修改它们（[测试](./testing-and-trace.md#操作步骤)）。
 
 ## 时区
 
@@ -341,7 +339,7 @@ import { timeZone } from "nsh";
 <Text>{`Times in ${timeZone()}`}</Text>
 ```
 
-在 TSX 中，`Intl` 默认按它书写日期：`new Date().toLocaleTimeString()` 显示设备时区的时间，`timeZone` 也接受任意其他 IANA 时区（`{ timeZone: "Asia/Tokyo" }`），使用 NSH 自带的时区数据库的规则，各平台相同。`Date` 自身的本地时间（`getHours()`、`toString()`）一如既往地跟随系统时区。测试中，`open` 的 `timeZone` 设置时区（否则是 `UTC`），`app.setTimeZone("Asia/Tokyo")` 把设备移到另一个时区（[测试](./testing-and-trace.md#操作步骤)）：`Intl` 随之变化，而 `Date` 自身的本地时间仍是这台机器的。
+`Date` 的本地时间一如既往地跟随系统时区：`time_zone()` 给出它的名称。测试中，`open` 的 `timeZone` 设置这个名称（否则是 `UTC`），`app.setTimeZone("Asia/Tokyo")` 把设备移到另一个时区（[测试](./testing-and-trace.md#操作步骤)）；`Date` 的本地时间仍是这台机器的。
 
 ## 在嵌入它的应用中
 
