@@ -527,6 +527,8 @@ pub(crate) fn command(surface: &Rc<Surface>, _id: NodeId, command: &Command) {
         // The status bar is a phone's; layout animations arrive as mount
         // items.
         Command::StatusBar(_) | Command::SetStatusBar(_) | Command::LayoutAnimation(_) => {}
+        // The engine tells the embedding app (`HostChannel::handle_navigate`).
+        Command::Navigate(_) => {}
         other => log::debug!("macos: command {other:?} is not supported"),
     }
 }

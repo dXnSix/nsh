@@ -58,7 +58,7 @@ frame.src = "https://apps.example.com/player.html"; // 播放器设置 dialogs: 
 
 - **滚轮和触控板**滚动沿其方向、还能继续滚动的最内层滚动视图（没有可滚动的纵向视图时，纵向滚轮也会滚动横向列表），并且直到这次滚动结束都停留在这个视图上；滚轮的每一格平滑滑动，分页和吸附的视图每次滚动移动一页。Ctrl + 滚轮和触控板捏合会捏合带原生捏合值的视图，而不是缩放页面。和桌面平台一样，用鼠标拖动不会滚动：鼠标拖动交给拖拽手势、响应者系统和文字选择。滚动视图像桌面平台一样上报 `onScrollDragStart` / `onScrollDragEnd`、`onMomentumStart` / `End` 和 `onScrollEnd`。
 - **键盘**：Tab 和 Shift+Tab 在可按压的视图和输入框之间移动（应用的 `focus:` 样式标出键盘焦点）；回车按下获得焦点的视图，空格在松开时按下；方向键、Page Up / Page Down、空格、Home 和 End 滚动焦点所在或鼠标下方的滚动视图；Escape 先离开输入框、关闭对话框，再返回。`keymap` 的快捷键在浏览器里同样有效，当场匹配（Mac 上的 Safari 和 Chrome 里 `mod` 是 Command，其他地方是 Control）。
-- **返回**：Escape、Alt+左方向键（Mac 上是 Cmd+[）和鼠标的后退键会关闭最上层的对话框或弹出最内层的栈，和 Android 返回键一样；`popOnBack` 和 `onBackPress` 也照常生效。应用占据整个页面时，每个压入的页面和打开的对话框都是一条浏览器历史记录，浏览器的后退按钮会在应用内返回。
+- **返回**：Escape、Alt+左方向键（Mac 上是 Cmd+[）和鼠标的后退键会关闭最上层的对话框或弹出最内层的栈，和 Android 返回键一样；`popOnBack` 和 `onBackPress` 也照常生效。应用占据整个页面时，每个压入的页面、打开的对话框和 [`navigate`](../modules/nsh.md#navigate) 都是一条浏览器历史记录，应用的[位置](./navigation.md#位置)显示在地址栏中，浏览器的后退和前进按钮会在应用内后退和前进：后退先关闭最上层的对话框，再返回上一页并回到该记录的位置。`nsh.json` 的 `web.history` 为打包的页面和开发服务器的页面决定这一点：`false` 让浏览器历史和地址栏只属于页面自己，`true` 在 iframe 里也加入应用的记录。没有历史时，应用的位置属于它自己：从页面的地址开始，随应用的导航移动。
 - **触摸**：只有滚动视图可以平移；应用下面的页面本身不会滚动、缩放或下拉刷新，点按没有延迟。嵌在 iframe 里时，应用不处理的滑动会滚动外层页面。在带原生平移、捏合的视图和响应者系统上的拖动都交给应用处理。
 - **无障碍**：`role`、`accessibilityLabel`、`accessibilityHint`、`accessibilityState`、`accessibilityValue`、`accessibilityLiveRegion` 和 `accessibilityElementsHidden` 会转成 ARIA；`announce` 通过实时区域朗读，`setAccessibilityFocus` 移动焦点。对话框或提示框下面的视图不可交互。
 - **选择和菜单**：在桌面浏览器中，文字默认可以选择，和网页一样，但交互元素里的文字（带按压或触摸处理的视图：按钮、可按压的列表行、标签栏）以及设置了 `userSelect: "none"` 或 `select-none` 的文字除外；在上面拖动鼠标会选择文字，Ctrl/Cmd+C 按行复制，Ctrl/Cmd+A 全选选区所在的这段文字。在手机和平板浏览器中，只有设置了 `userSelect: "text"` 的文字可以选择，和原生应用一样。浏览器的右键菜单只在可选文字和输入框里出现。
@@ -167,7 +167,15 @@ nsh package App.tsx --target web --run
 | `assets/<path>.<digest>.<ext>` | 应用导入的每个资源，用到时才从其 URL 加载（字体在注册它们的代码运行前加载，因为文本要用它们测量：在应用启动前，或随导入它们的分块一起加载） |
 | `icons/<size>.<digest>.png` | `nsh.json` 中的图标，尺寸为 32（favicon）、180（`apple-touch-icon`）、192 和 512 像素 |
 
-`<digest>` 是文件内容 SHA-256 的前几位：文件名只在内容变化时才变化，所以新版本只会改动 `index.html` 和真正变化了的文件。所有 URL 都是相对的，站点放在任何主机的任何目录下都能运行（`https://example.com/apps/counter/`）。
+`<digest>` 是文件内容 SHA-256 的前几位：文件名只在内容变化时才变化，所以新版本只会改动 `index.html` 和真正变化了的文件。所有 URL 都是相对的，站点放在任何主机的任何目录下都能运行（`https://example.com/apps/counter/`）。页面在启动时把它们解析一次，所以应用把地址改到其他路径后，文件仍能加载。
+
+在自己的路径上打开的应用（[进入应用的链接](#进入应用的链接)）在 `nsh.json` 中写明站点所在的路径：
+
+```json
+{ "web": { "base": "/apps/counter/" } }
+```
+
+页面随之带上 `<base href="/apps/counter/">`，在 `https://example.com/apps/counter/sports/football` 和在 `https://example.com/apps/counter/` 一样能加载。`"base": "/"` 表示站点位于主机的根路径。`nsh package --target web --run` 在这个路径下提供站点。
 
 ### 运行时大小
 
@@ -190,6 +198,19 @@ nsh package App.tsx --target web --run
 | 其余所有文件 | `public, max-age=31536000, immutable` |
 
 以 `application/wasm` 类型提供 `.wasm`（浏览器会边下载边编译），并让托管服务或 CDN 压缩文本和 WebAssembly（gzip 或 brotli）。`nsh package --target web --run` 就按这种方式在 `http://127.0.0.1:4173/` 上提供站点。
+
+#### 进入应用的链接
+
+把自己的路径显示在地址栏里的应用（`https://example.com/sports/football`）是单页应用：打开指向这类路径的链接，或在这里刷新，都会加载 `index.html`，再由应用显示路径对应的页面。托管服务把这类请求改写为 `index.html`：最后一段路径没有文件扩展名、`Accept` 头要求 `text/html` 的 `GET` 请求。文件仍用各自的 URL，应用自己的请求（`fetch` 接受 `*/*`）得到托管服务本来的应答。`nsh package --target web --run` 和开发服务器（`nsh run --target web`）都遵循这条规则；在托管服务上：
+
+| 托管服务 | 改写方式 |
+|---|---|
+| nginx | `location / { try_files $uri /index.html; }` |
+| Netlify | 在 `_redirects` 中写 `/*  /index.html  200`（已存在的文件照常提供） |
+| Cloudflare Pages | 站点顶层没有 `404.html` 时自带 |
+| GitHub Pages | 把 `index.html` 复制一份为 `404.html` |
+
+页面有 base（上文的 `web.base`）时，多段的路径也从站点自己的路径加载页面的文件。开发服务器的页面的 base 是 `/`。
 
 发布到 Web 的应用与打包的原生应用运行方式相同：以发布模式运行，具有其 `nsh.json` 声明的能力（[沙箱与能力](./sandbox-and-capabilities.md)），TSX 应用由浏览器的 JavaScript 引擎执行。当能力限制了 `network` 时，页面还会带上 Content-Security-Policy `connect-src`，其中列出声明的主机（以及页面自身的源），由浏览器自己拒绝发往其他主机的请求和重定向。导致应用无法启动的错误会显示在页面上；之后的错误输出到浏览器控制台。
 
@@ -253,7 +274,9 @@ const player = await createPlayer(document.querySelector("#phone"), {
   assetBase: "./assets/",   // `asset:/…` URI（导入的图片）从这里加载
   // dark: true,            // 强制外观；不设置时跟随系统
   // idiom: "phone",        // 强制 "phone"、"pad" 或 "desktop"；不设置时由指针和尺寸决定
-  // history: false,        // 页面和对话框是否作为浏览器历史记录；默认只在应用占据整个页面时开启，iframe 里不开启
+  // history: false,        // 页面、对话框和导航是否作为浏览器历史记录、位置是否显示在地址栏；默认只在应用占据整个页面时开启，iframe 里不开启
+  // location: "/start",    // 应用开始的位置，从页面 base 起的路径；默认是页面在那里的地址
+  // onNavigate: ({ location, history }) => {}, // 应用的每次导航（"push" 或 "replace"）
   // dialogs: "viewport",   // Dialog 和 AlertDialog 覆盖整个浏览器窗口；默认覆盖容器
 });
 await player.runModule(new URL("./bundle.js", location.href).href);
@@ -262,6 +285,8 @@ await player.runModule(new URL("./bundle.js", location.href).href);
 `assets`（从 `asset:/` 路径到 URL 的映射）可代替 `assetBase`，`readAsset(uri)` 返回引擎需要立即读取的资源（字体）的字节，或 `null`，`data` 把运行时第一次需要时才下载的文件映射到 URL（`syntaxes`：`nsh-syntaxes.<digest>.bin`；默认是 `nsh.js` 旁边的 `nsh-<name>.bin`），`glue` 是 crate [在 Rust 中调用浏览器 API](#在-rust-中使用浏览器-api) 的运行时的 wasm-bindgen 胶水代码的 URL（`nsh-bindgen.<digest>.js`），播放器会随运行时一起加载它；`player.runModule(url, { capabilities, appId })` 在应用声明的能力（它的 `capabilities.json`）下运行应用，并把它的存储保存在 `nsh.json` 的 id 之下（没有 id 时保存在页面路径之下）。`nsh package --target web` 写出的页面都用到了。
 
 `runModule(url, { chunks })` 还可以指定[拆分 bundle](#拆分-bundle) 的 chunk 所在位置。
+
+`player.location` 是应用所在的位置，`player.setLocation(url, { history })` 像进入应用的链接一样把它移到那里（相对其位置；`history: "replace"` 改写当前记录）。不使用浏览器历史运行播放器的页面可以用 `onNavigate` 让自己的地址保持一致。
 
 `player.runSource(code, { name, sourceMap, capabilities, appId })` 运行以源码文本给出的 ES 模块，选项相同。使用 `nsh-playground.wasm` 时，`player.compileAndRun(tsx, name, options)` 会先编译 TSX，再用 `runSource` 的选项运行，结果是编译错误或 `null`；`player.compile(tsx)` 返回 `{ code }` 或 `{ error }`。
 
@@ -357,7 +382,7 @@ export async function createHost(player) {
 
 `fetch`（包括流、`AbortController` 和 `FormData`）以及 `<Image>` 的 URL 都走浏览器自己的网络栈，在此之前 NSH 已按应用的[能力声明](./sandbox-and-capabilities.md)做过检查。请求是浏览器发出的，所以遵循浏览器的规则：
 
-- **相对 URL** 与浏览器里一样，相对于页面的 URL 解析：发布出去的应用用 `fetch("/api/items")` 就能访问自己的接口，`<Image src="/photos/a.jpg" />` 从自己的服务器加载。（原生平台没有页面，仍需使用绝对 URL。）
+- **相对 URL** 与浏览器里一样，相对于应用启动时页面的 URL（页面有 `<base href>` 时为它）解析：发布出去的应用用 `fetch("/api/items")` 就能访问自己的接口，`<Image src="/photos/a.jpg" />` 从自己的服务器加载。（原生平台没有页面，仍需使用绝对 URL。）
 - **CORS。** 发往页面所在源以外的请求，只有对方服务器允许页面的源（`Access-Control-Allow-Origin`）才会成功，否则 `fetch` 以网络错误拒绝。只能读到服务器公开的响应头。
 - **Cookie**（以及 HTTP 认证信息）只发送给页面自己的源（`credentials: "same-origin"`），浏览器禁止的请求头（`Cookie`、`User-Agent`、`Host` 等）会被丢弃。
 - **重定向**由浏览器跟随。不应跟随重定向的请求遇到重定向时会失败：`redirect: "manual"` 和 `"error"`，以及能力声明限制了 `network` 的应用发出的请求（NSH 要逐跳检查，而浏览器在跟随之前不会透露重定向的目标）。

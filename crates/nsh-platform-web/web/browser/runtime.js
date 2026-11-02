@@ -85,7 +85,8 @@ export function createBrowserHost(player) {
         }
         if (frame) {
           const baseElement = doc.createElement("base");
-          baseElement.href = document.baseURI;
+          // The page's URL as the player started (`player.baseURL`).
+          baseElement.href = player.baseURL;
           doc.head.append(baseElement);
         }
         // Construct the facade in the app realm, so Error, Promise, Buffer,
@@ -134,6 +135,7 @@ export function createBrowserHost(player) {
             case "render": components.render(...args); break;
             case "unrender": components.unrender(...args); break;
             case "environment": env.update(args[0]); break;
+            case "location": env.setLocation(args[0]); break;
             case "tokens": env.changedTokens(); break;
             case "animationsFinished": animation?.finished(args[0]); break;
             default: throw new Error(`browser host event is not implemented: ${name}`);
@@ -188,12 +190,12 @@ export function createBrowserHost(player) {
         namespaces.set("nsh/animated", animation.api);
         namespaces.set("nsh/gesture", { PanResponder: gestures.PanResponder });
         const map = { ...moduleMap };
-        const entryURL = new URL(entry, document.baseURI);
+        const entryURL = new URL(entry, player.baseURL);
         // Chunks are named relative to the entry; one given as source (a
         // blob) has them relative to the page.
-        const chunkBase = entryURL.protocol === "blob:" ? new URL(document.baseURI) : entryURL;
+        const chunkBase = entryURL.protocol === "blob:" ? new URL(player.baseURL) : entryURL;
         if (chunkBase === entryURL) map[new URL("bundle.js", entryURL).href] = entryURL.href;
-        for (const [id, url] of Object.entries(chunks)) map[new URL(id, chunkBase).href] = new URL(url, document.baseURI).href;
+        for (const [id, url] of Object.entries(chunks)) map[new URL(id, chunkBase).href] = new URL(url, player.baseURL).href;
         for (const [specifier, namespace] of namespaces) {
           const declarations = Object.keys(namespace).map((name, index) => {
             if (name === "default") return `export default host.get(${JSON.stringify(specifier)})["default"];`;

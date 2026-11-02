@@ -571,7 +571,13 @@ impl Session {
             },
             ui_sets: self.run.ui_sets.clone(),
             clock,
-            host: launch.host,
+            host: {
+                // Where the app starts: the embedding app's location.
+                if let Some(location) = &launch.location {
+                    let _ = launch.host.set_location(location.as_str());
+                }
+                launch.host
+            },
             ..default
         };
         regional.apply(&mut config.environment);
@@ -644,6 +650,7 @@ impl Session {
         environment.clipboard = launch.clipboard.clone();
         environment.locale = launch.locale.clone();
         environment.time_zone = launch.time_zone.clone();
+        environment.location = launch.location.as_ref().map(|l| l.as_str().to_owned());
         environment.languages = launch.languages.clone();
         environment.hour_cycle = regional.hour_cycle.map(|c| c.name().to_owned());
         environment.first_day_of_week = regional.first_day_of_week.map(|d| d.number());
@@ -1160,6 +1167,7 @@ mod tests {
             color_scheme: None,
             locale: None,
             time_zone: None,
+            location: None,
             languages: None,
             regional: Default::default(),
             reduced_motion: None,

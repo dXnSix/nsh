@@ -44,6 +44,9 @@ pub(crate) struct Java {
     pub(crate) view_app_stopped: JMethodID,
     pub(crate) view_host_message: JMethodID,
     pub(crate) view_open_url_message: JMethodID,
+    /// `navigateMessage(String, boolean)`: a navigation of the app (engine
+    /// thread; it hops to the UI thread).
+    pub(crate) view_navigate_message: JMethodID,
     #[cfg_attr(not(feature = "dev"), allow(dead_code))]
     pub(crate) view_dev_status: JMethodID,
     #[cfg_attr(not(feature = "dev"), allow(dead_code))]
@@ -140,6 +143,11 @@ pub(crate) fn init(vm: JavaVM) -> jni::errors::Result<()> {
             view_class,
             "openUrlMessage",
             "(Ljava/lang/String;J)V",
+        )?,
+        view_navigate_message: env.get_method_id(
+            view_class,
+            "navigateMessage",
+            "(Ljava/lang/String;Z)V",
         )?,
         view_dev_status: env.get_method_id(view_class, "devStatus", "(Ljava/lang/String;)V")?,
         view_dev_error: env.get_method_id(
