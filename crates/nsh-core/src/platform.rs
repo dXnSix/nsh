@@ -516,6 +516,48 @@ pub struct HttpHead {
     pub headers: Vec<(String, String)>,
 }
 
+/// The media type of the file at `path` (a path or an `asset:/` URL), by
+/// its extension: what the dev server serves files with and what the
+/// engine answers requests of the app's files with, so a file has one type
+/// however it arrives. Browsers need it to load scripts, WebAssembly
+/// (compiled while it streams only as `application/wasm`), images, fonts
+/// and media.
+pub fn content_type(path: &str) -> &'static str {
+    match std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js" | "mjs") => "text/javascript; charset=utf-8",
+        Some("json" | "map") => "application/json",
+        Some("webmanifest") => "application/manifest+json",
+        Some("wasm") => "application/wasm",
+        Some("css") => "text/css; charset=utf-8",
+        Some("txt") => "text/plain; charset=utf-8",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("avif") => "image/avif",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        Some("heic") => "image/heic",
+        Some("ttf") => "font/ttf",
+        Some("otf") => "font/otf",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        Some("mp4" | "m4v") => "video/mp4",
+        Some("webm") => "video/webm",
+        Some("mov") => "video/quicktime",
+        Some("mp3") => "audio/mpeg",
+        Some("m4a") => "audio/mp4",
+        Some("wav") => "audio/wav",
+        _ => "application/octet-stream",
+    }
+}
+
 /// What happens to a request, in order: (for a streamed body) any number
 /// of `BodyWanted`; then `Head`, `Data`… and `End` — or `Failed` at any
 /// point.
@@ -553,7 +595,7 @@ pub enum FetchOp {
 
 #[cfg(test)]
 mod tests {
-    use super::{Environment, HostEnvironment, Idiom, Locale, Os};
+    use super::{Environment, HostEnvironment, Idiom, Locale, Os, content_type};
 
     #[test]
     fn desktop_is_a_desktop_os_or_a_desktop_browser() {
@@ -630,5 +672,27 @@ mod tests {
         assert_eq!(tag("en-US-u-hc-h23").as_deref(), Some("en-US"));
         assert_eq!(tag("C"), None);
         assert_eq!(Locale::default().as_str(), "en-US");
+    }
+
+    #[test]
+    fn content_types_follow_the_extension_of_paths_and_asset_urls() {
+        assert_eq!(
+            content_type("dist/app.js"),
+            "text/javascript; charset=utf-8"
+        );
+        assert_eq!(content_type("nsh.WASM"), "application/wasm");
+        assert_eq!(
+            content_type("asset:/@app/locales/en.json"),
+            "application/json"
+        );
+        assert_eq!(content_type("asset:/images/flag@2x.png"), "image/png");
+        assert_eq!(content_type("asset:/fonts/Inter.woff2"), "font/woff2");
+        for unknown in ["asset:/data.bin", "asset:/README", "asset:/.png"] {
+            assert_eq!(
+                content_type(unknown),
+                "application/octet-stream",
+                "{unknown}"
+            );
+        }
     }
 }

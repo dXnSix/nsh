@@ -67,10 +67,11 @@ async fn file(State(root): State<Arc<PathBuf>>, uri: Uri) -> Response {
     } else {
         "no-cache"
     };
+    let content_type = nsh_core::platform::content_type(&file.to_string_lossy());
     match tokio::fs::read(&file).await {
         Ok(bytes) => (
             [
-                (header::CONTENT_TYPE, crate::server::content_type(&file)),
+                (header::CONTENT_TYPE, content_type),
                 (header::CACHE_CONTROL, cache),
             ],
             bytes,
