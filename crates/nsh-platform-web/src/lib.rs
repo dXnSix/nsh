@@ -1096,6 +1096,7 @@ pub unsafe extern "C" fn nsh_event(
                             "loaded" => "loaded",
                             "total" => "total",
                             "color" => "color",
+                            "opened" => "opened",
                             "location" => "location",
                             _ => return None,
                         };
