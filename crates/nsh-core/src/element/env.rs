@@ -3,7 +3,7 @@
 
 use crate::{
     EdgeInsets, Points, Size,
-    platform::{AppState, Idiom, Languages, Locale, Os, RegionalPreferences, TimeZone},
+    platform::{Idiom, Languages, Lifecycle, Locale, Os, RegionalPreferences, TimeZone},
 };
 
 /// The environment of a surface, as the platform reports it.
@@ -55,13 +55,16 @@ pub struct Environment {
     pub host: bool,
     /// Whether the app is in use: in the foreground, visible without the
     /// focus, or in the background.
-    pub app_state: AppState,
+    pub lifecycle: Lifecycle,
     /// The platform picks colors from the screen
     /// ([`crate::platform::Environment::screen_color`]).
     pub screen_color: bool,
     /// The platform shows file dialogs and opens, reveals and trashes local
     /// paths ([`crate::platform::Environment::file_requests`]).
     pub file_requests: bool,
+    /// The platform recognizes speech
+    /// ([`crate::platform::Environment::speech`]).
+    pub speech: bool,
 }
 
 impl Default for Environment {
@@ -87,9 +90,10 @@ impl Default for Environment {
             time_zone: TimeZone::UTC,
             apple_keyboard: false,
             host: false,
-            app_state: AppState::Active,
+            lifecycle: Lifecycle::Active,
             screen_color: false,
             file_requests: false,
+            speech: false,
         }
     }
 }

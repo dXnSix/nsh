@@ -1,11 +1,11 @@
 import { mount, signal, Text, View } from "nsh";
 import { reduceMotion } from "nsh";
 import {
-  appState,
   colorScheme,
   firstDayOfWeek,
   hourCycle,
   languages,
+  lifecycle,
   locale,
   measurementSystem,
   platform,
@@ -36,7 +36,7 @@ function App() {
       <Text>{`Motion: ${reduceMotion() ? "reduced" : "full"}`}</Text>
       <Text>{`OS: ${platform.os}`}</Text>
       <Text>{`Size: ${windowSize().width}x${windowSize().height}`}</Text>
-      <Text>{`App: ${appState()}`}</Text>
+      <Text>{`App: ${lifecycle()}`}</Text>
       <Text>{`Zone: ${timeZone()}`}</Text>
       <Text>{`Languages: ${languages().join(",")}`}</Text>
       <Text>

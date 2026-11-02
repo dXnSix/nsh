@@ -26,6 +26,7 @@ use nsh_core::{
     platform::{Idiom, Languages, Locale, Os, RegionalPreferences, TimeZone},
     prelude::timer,
 };
+use nsh_dev::protocol::TestIdiom;
 use nsh_engine::{
     AppError, AppErrorKind, Bundle, Edges, Engine, EngineConfig, Environment, MountSink,
 };
@@ -684,6 +685,7 @@ impl Session {
         };
         // Its sockets and WebSockets reach the host's network only so too.
         environment.live_network = live.then_some(true);
+        environment.idiom = launch_idiom(launch.platform);
         let requests = RecordingNetwork::new(inner);
         let storage: Vec<(String, String)> = launch.storage.0.into_iter().collect();
         let size = match (launch.width, launch.height) {
@@ -838,6 +840,17 @@ fn check_launch(entry: &str, launch: &Launch, target: Option<&HostTarget>) -> Re
         );
     }
     Ok(())
+}
+
+/// The idiom a host that measures its own (the web's page) starts the app
+/// in for `open`'s `platform`: a desktop's asks for a desktop at any size,
+/// as it gets on every other target; none and `"web"` leave the page to
+/// measure, as a real browser does.
+fn launch_idiom(platform: Option<Platform>) -> Option<TestIdiom> {
+    match platform? {
+        Platform::Macos | Platform::Windows | Platform::Linux => Some(TestIdiom::Desktop),
+        Platform::Ios | Platform::Android | Platform::Web => None,
+    }
 }
 
 /// `platform` as `open`'s `platform` names it.
@@ -1239,5 +1252,27 @@ mod tests {
         handlers.host_handlers = true;
         let error = check_launch("./App.tsx", &handlers, None).unwrap_err();
         assert_eq!(code_of(&error), Some(UNSUPPORTED), "{error}");
+    }
+
+    #[test]
+    fn a_desktop_platform_asks_the_page_for_the_desktop_idiom() {
+        for platform in [Platform::Macos, Platform::Windows, Platform::Linux] {
+            assert_eq!(
+                launch_idiom(Some(platform)),
+                Some(TestIdiom::Desktop),
+                "{platform:?}"
+            );
+        }
+        for platform in [Platform::Web, Platform::Ios, Platform::Android] {
+            assert_eq!(launch_idiom(Some(platform)), None, "{platform:?}");
+        }
+        assert_eq!(launch_idiom(None), None);
+        // As the page's `idiom` option names it.
+        let mut environment = nsh_dev::protocol::TestEnvironment::default();
+        environment.idiom = Some(TestIdiom::Desktop);
+        assert_eq!(
+            serde_json::to_value(&environment).unwrap(),
+            serde_json::json!({ "idiom": "desktop" })
+        );
     }
 }

@@ -307,7 +307,7 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   headless unless a test sets them; the web the browser's hour cycle and first day for its language, its likely
   region's units), `timeZone()` (`Environment::time_zone`, `TimeZone`: the zone's name as the system
   gives it, an IANA name or an offset zone, `UTC` headless; the platforms write the system's, the web the browser's,
-  read again when the page shows or gets the focus), `appState()` (`Environment::app_state`, `AppState`: `active` / `inactive` /
+  read again when the page shows or gets the focus), `lifecycle()` (`Environment::lifecycle`, `Lifecycle`: `active` / `inactive` /
   `background`, React Native's states; the platforms write it as the system reports the app's, the web from the
   page's `visibilityState` and focus, iOS from the notifications of the scene of the surface's window
   (`UIScene`'s `didActivate` / `willDeactivate` / `didEnterBackground` / `willEnterForeground`, filtered by the view's
@@ -400,7 +400,11 @@ dialog around it (`Modal`). It is the one mechanism popups are built on (`nsh/ba
   `"center"` (default), `"end"`; start and end follow the direction above and below); `offset` from the anchor; then
   moved along the side to stay inside the root view's safe area less `margin`. Rust's `anchor_beside(row, menu)`
   (`OverlayAnchor::Beside`, a submenu's) lines it up with the row along its side and places it outside the menu
-  around the row across it, so `offset` is a gap from the menu's edge, not from the row inside its padding. The anchor's frame is
+  around the row across it, so `offset` is a gap from the menu's edge, not from the row inside its padding. Rust's
+  `anchor_content(r)` (`OverlayAnchor::Content`, `Popover`'s, `HoverCard`'s and a desktop `Menu`'s) places it against
+  what the view draws: the box around its children with its padding and border, along an axis its style leaves `auto`
+  (a wrapper its parent stretches); the element that takes a component's slot goes by its own box, whether a TSX or a
+  Rust app passed it (`Core::content_anchor`: the slot's holder is that wrapper). The anchor's frame is
   `Core::measure`'s (scroll offsets and zoom applied, transforms not), so the overlay follows it as it scrolls and moves:
   `place_overlays` places anchored overlays again at the end of every commit (after the lists and the scroll offsets
   the platform reported). `onPosition` reports where it went (`placement`, the frame as `bounds`, `available`:

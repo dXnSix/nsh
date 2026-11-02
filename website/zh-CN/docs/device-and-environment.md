@@ -24,7 +24,7 @@ demo: guide-device
 | `languages()` | `languages()`（`nsh`） | 用户的偏好语言，按偏好从高到低排列（`["de-DE", "en-US"]`）（[偏好语言](#偏好语言)）。 |
 | `hour_cycle()`、`first_day_of_week()`、`measurement_system()`、`temperature_unit()` | `hourCycle()`、`firstDayOfWeek()`、`measurementSystem()`、`temperatureUnit()`（`nsh`） | 12 小时制或 24 小时制、每周的第一天、度量单位和温度单位（[地区偏好](#地区偏好)）。 |
 | `time_zone()` | `timeZone()`（`nsh`） | 设备的时区，即系统给它的名称（`"Europe/Berlin"`）（[时区](#时区)）。 |
-| `app_state()` | `appState()`（`nsh`） | 应用是否正在使用：`active`、`inactive`（可见但没有焦点）或 `background`（[在后台](#在后台)）。 |
+| `lifecycle()` | `lifecycle()`（`nsh`） | 应用是否正在使用：`active`、`inactive`（可见但没有焦点）或 `background`（[在后台](#在后台)）。 |
 | `reduce_motion()`、`screen_reader()` | `reduceMotion()`、`screenReaderEnabled()`（`nsh`） | 见[无障碍](./accessibility.md)。 |
 
 ```rust tabs
@@ -347,11 +347,11 @@ import { timeZone } from "nsh";
 
 ## 在后台
 
-`app_state()`（TSX：`appState()`）表示用户是否正在使用应用。应用在前台时为 `active`；仍可见但焦点在另一个应用或窗口上（或系统在它上面显示了内容：应用切换器、来电）时为 `inactive`；不可见时为 `background`：手机上在后台、桌面上已最小化、Web 上是隐藏的标签页。与所有访问器一样，它会更新读取它的地方，因此 effect 可以在后台暂停实时数据、轮询或视频，并在用户回来时恢复：
+`lifecycle()`（TSX 中同名）表示用户是否正在使用应用。应用在前台时为 `active`；仍可见但焦点在另一个应用或窗口上（或系统在它上面显示了内容：应用切换器、来电）时为 `inactive`；不可见时为 `background`：手机上在后台、桌面上已最小化、Web 上是隐藏的标签页。与所有访问器一样，它会更新读取它的地方，因此 effect 可以在后台暂停实时数据、轮询或视频，并在用户回来时恢复：
 
 ```rust tabs
 effect(move || {
-    if app_state() == AppState::Background {
+    if lifecycle() == Lifecycle::Background {
         feed.pause();
     } else {
         feed.resume();
@@ -361,12 +361,12 @@ effect(move || {
 
 ```tsx tabs
 effect(() => {
-  if (appState() === "background") feed.pause();
+  if (lifecycle() === "background") feed.pause();
   else feed.resume();
 });
 ```
 
-用 `background` 暂停工作，并在用户做出更改时就保存它：系统可能在应用进入后台几秒后就将其挂起，早于读取这一变化的副作用运行。显示在原生应用中的应用跟随该应用的状态；应用有多个窗口时（iPad、桌面），视图跟随它所在的窗口。在测试中，`nsh/test` 的 `app.setAppState("background")` 会把应用移到后台（[测试](./testing-and-trace.md#操作步骤)）。
+用 `background` 暂停工作，并在用户做出更改时就保存它：系统可能在应用进入后台几秒后就将其挂起，早于读取这一变化的副作用运行。显示在原生应用中的应用跟随该应用的状态；应用有多个窗口时（iPad、桌面），视图跟随它所在的窗口。在测试中，`nsh/test` 的 `app.setLifecycle("background")` 会把应用移到后台（[测试](./testing-and-trace.md#操作步骤)）。
 
 ## 安全区域
 
