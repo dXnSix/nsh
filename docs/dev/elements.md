@@ -80,11 +80,13 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
 
 ## Interaction and the environment
 
-- **State styles** (native, no JS round trip): `activeStyle`, `hoverStyle`, `focusStyle`, `disabledStyle`,
-  `checkedStyle`, `indeterminateStyle`, `expandedStyle`, `pressedStyle` (and a `Button`'s `selectedStyle`) on any view
-  (declared in `StateStyleProps`), the same as the `active:` / `hover:` / `focus:` / `disabled:` / `selected:` /
-  `checked:` / `indeterminate:` / `aria-expanded:` / `aria-pressed:` classes: the core restyles the view while the
-  platform reports it pressed, hovered or focused, and while its accessibility state is selected, checked, mixed,
+- **State styles** (native, no JS round trip): `activeStyle`, `hoverStyle`, `focusStyle`, `focusWithinStyle`,
+  `disabledStyle`, `checkedStyle`, `indeterminateStyle`, `expandedStyle`, `pressedStyle` (and a `Button`'s
+  `selectedStyle`) on any view (declared in `StateStyleProps`), the same as the `active:` / `hover:` / `focus:` /
+  `focus-within:` / `disabled:` / `selected:` / `checked:` / `indeterminate:` / `aria-expanded:` / `aria-pressed:`
+  classes: the core restyles the view while the platform reports it pressed, hovered or focused, while the focus is on
+  it or a view inside it (the content of an overlay is inside the view the overlay is in; `docs/dev/styles.md`), and
+  while its accessibility state is selected, checked, mixed,
   expanded (a `Popover`'s or `Menu`'s trigger while its popup is open), pressed (a toggle button that is on) or busy; a Rust component's touch responder stays pressed from its grant until its
   touches end, wherever they go (CSS's `:active` until the button is released: a resize handle dragged off its band
   keeps its `group-active:` look; `Core::hold_pressed`); later
@@ -378,7 +380,7 @@ Text, styles, scrolling and lists, animation, canvases and images have their own
 ## Overlays
 
 `<Overlay>` (`nsh`; Rust `overlay()`) shows its children on top of the root view it is in: the surface, or the
-dialog around it (`Modal`). It is the one mechanism popups are built on (`nsh/base`'s `Popover`, `Menu`,
+dialog around it (`Modal`). It is the one mechanism popups are built on (`nsh/base`'s `Popover`, `HoverCard`, `Menu`,
 `ContextMenu`, `Tooltip`, `Sheet`: `components.md`); it draws nothing and closes nothing itself.
 
 - **Where it stays and where it shows** (`core/overlay.rs`): the node stays its parent's child for everything but its
@@ -396,12 +398,20 @@ dialog around it (`Modal`). It is the one mechanism popups are built on (`nsh/ba
   frame (`nsh_core::overlay::place`): `placement` (`"top"`, `"bottom"` (default), `"left"`, `"right"`), on the other
   side when only that one has room, the side with more room when neither has; `align` along it (`"start"`,
   `"center"` (default), `"end"`; start and end follow the direction above and below); `offset` from the anchor; then
-  moved along the side to stay inside the root view's safe area less `margin`. The anchor's frame is
+  moved along the side to stay inside the root view's safe area less `margin`. Rust's `anchor_beside(row, menu)`
+  (`OverlayAnchor::Beside`, a submenu's) lines it up with the row along its side and places it outside the menu
+  around the row across it, so `offset` is a gap from the menu's edge, not from the row inside its padding. The anchor's frame is
   `Core::measure`'s (scroll offsets and zoom applied, transforms not), so the overlay follows it as it scrolls and moves:
   `place_overlays` places anchored overlays again at the end of every commit (after the lists and the scroll offsets
   the platform reported). `onPosition` reports where it went (`placement`, the frame as `bounds`, `available`:
   the room on that side, what a menu may grow to). A view inside an overlay measures in the root
   view's coordinates.
+- **Covering the anchor** (`OverlayConfig::cover`, `OverlayProp::Cover`; Rust `overlay().cover(&element_ref, shown)`;
+  no JS prop): instead of on a side, the overlay starts where the anchor does, with a view inside it centered on the
+  anchor vertically (a select's selected row over its trigger, title on title: shadcn/ui's `item-aligned`), then moved
+  to stay inside the safe area less `margin`. The view's frame in the overlay is kept while the overlay keeps its size
+  and the view its place in its parent (`Core::covering`, `OverlayState::covered`), so the overlay stays put while
+  its rows scroll; without the view (not rendered, nothing selected) the overlay is placed on its side as usual.
 - **Dismissal is reported, never decided**: `onPressOutside` (a finger or button went down outside the overlay, its
   anchor and the overlays inside it: while an overlay listens, the shown overlays, its anchor and root view listen to
   touches, and the core reads each touch's path, `overlay_touches`); `onCancel` (Escape, the Android back button or
