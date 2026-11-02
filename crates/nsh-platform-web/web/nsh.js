@@ -2536,7 +2536,9 @@ class Player {
     el._shader.reads = layer.pictures.reduce((bits, [, input]) => bits | (1 << input), 0);
     const role = layer.role;
     const host = role >= 3 ? this.root : el;
-    if (role === 3) this.screenShader = el;
+    const draws = this.shaderDraws(layer);
+    if (role === 3 && draws) this.screenShader = el;
+    else if (this.screenShader === el) this.screenShader = null;
     if (!el._shaderCanvas) {
       const canvas = document.createElement("canvas");
       canvas.className = role === 0 ? "nsh-fill nsh-shader" : "nsh-fill nsh-fx-out";
@@ -2554,8 +2556,10 @@ class Player {
       }
     }
     // An effect, and a screen effect, draws its children through its
-    // shader always; a transition only while one runs.
-    if (role === 1 || role === 3) host.classList.add("nsh-fx");
+    // shader always; a transition only while one runs. One that cannot
+    // draw shows them as they are, as the native backends do without a GPU.
+    if (!draws) this.endTransition(el);
+    else if (role === 1 || role === 3) host.classList.add("nsh-fx");
     this.shaderViews.add(el);
     this.watchInputs(el);
     this.shaderDirty(el);
@@ -2611,7 +2615,7 @@ class Player {
   op_sht([, id, ms]) {
     const el = this.view(id);
     const s = el?._shader;
-    if (!s || (s.layer.role !== 2 && s.layer.role !== 4)) return;
+    if (!s || (s.layer.role !== 2 && s.layer.role !== 4) || !this.shaderDraws(s.layer)) return;
     const host = this.shaderHost(el);
     const box = this.shaderBox(el);
     if (!box) return;
@@ -2649,11 +2653,11 @@ class Player {
    * alone its `sample_from`, and `nsh.progress` how much of the upper side
    * shows: 0 to 1, or 1 to 0 when `reverse`. The views are where they end
    * at once under it. Calls `done` when it ends; false where it cannot run
-   * (no WebGL 2).
+   * (`shaderDraws`).
    */
   shaderNav(host, upper, nav, reverse, done) {
     const r = host.getBoundingClientRect();
-    if (!r.width || !r.height || !this.shaderGl()) return false;
+    if (!r.width || !r.height || !this.shaderDraws(nav.layer)) return false;
     const o = document.createElement("div");
     o.className = "nsh-nav-shader";
     Object.assign(o.style, { position: "absolute", left: "0", top: "0", width: `${r.width}px`, height: `${r.height}px`, zIndex: "2147483001", pointerEvents: "none" });
@@ -2975,6 +2979,8 @@ class Player {
       const runs = (s.layer.animated && s.since != null) || Boolean(s.running);
       if (!el._shaderVisible || !(s.dirty || runs || s.stale)) continue;
       s.dirty = false;
+      // One that cannot draw paints no pictures and takes no frames.
+      if (!this.shaderDraws(s.layer)) continue;
       if (s.stale) this.paintInputs(el);
       this.renderShader(el, now);
       again ||= runs;
@@ -2996,12 +3002,15 @@ class Player {
     if (!canvas || canvas.hidden === !shown) return;
     canvas.hidden = !shown;
     if (el._shader.layer.role !== 3) return;
-    if (shown) this.screenShader = el;
+    if (shown && this.shaderDraws(el._shader.layer)) this.screenShader = el;
     else if (this.screenShader === el) this.screenShader = null;
     this.root.classList.toggle("nsh-fx", Boolean(this.screenShader));
   }
 
-  /** A transition ended: its children show as they are (a page's or a dialog's overlay goes). */
+  /**
+   * A transition ended, or a view's shader cannot draw: its children show
+   * as they are (a page's or a dialog's overlay goes).
+   */
   endTransition(el) {
     const s = el._shader;
     const run = s.running;
@@ -3028,6 +3037,16 @@ class Player {
     this._shaderGl = gl;
     this._shaderPrograms = new Map();
     return gl;
+  }
+
+  /**
+   * Whether `layer`'s shader draws: there is WebGL 2 and the driver takes
+   * its program. Effects and transitions hide their children under their
+   * canvas only then.
+   */
+  shaderDraws(layer) {
+    const gl = this.shaderGl();
+    return Boolean(gl && this.shaderProgram(gl, layer));
   }
 
   shaderProgram(gl, layer) {

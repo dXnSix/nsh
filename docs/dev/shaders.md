@@ -224,6 +224,11 @@ dialog's `transitionShader`) take their pictures from the DOM. `shader.rs` also 
   overlay over the stack (push, pop) or the root (present, dismiss): `sample_from` is the host painted up to the
   page or dialog, `sample_to` the whole host, and progress goes from 0 to 1, or 1 to 0 when it leaves; the views
   are where they end under it at once. Dialogs shown in the top layer (`dialogs: "viewport"`) keep their own motion.
+- **Shaders that cannot draw.** A view whose shader cannot draw (`shaderDraws`: no WebGL 2, or a program the driver
+  refuses) shows its background and children as they are, as the native backends show them without a device: an
+  effect or a screen effect takes no `nsh-fx` (and its canvas is cleared when its new program is refused), a
+  transition starts no run, a page's or a dialog's `transitionShader` leaves the change to its own motion, and
+  `shaderFrame` paints no pictures and takes no frames for it.
 
 ## Pitfalls
 
