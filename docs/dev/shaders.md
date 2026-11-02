@@ -223,7 +223,9 @@ Effects, transitions and page shaders sit on the same program, layer and rendere
   marks it or anything on the UI thread changes (`NshView::changed`; a shader's own frame only `redraw`s). Pages and
   dialogs: pictures of the host drawn anew without and with the upper side, through a `NavPainter` (the layer with
   one more slot for `nsh.progress`) in a layer over the stack or the root; the starting side shows until the first
-  frame.
+  frame. Without a GPU device an effect draws its children as they are, a transition starts no run and a page or a
+  dialog comes with its own motion. A screen layer leaves the root when the view that mounted it is deleted (unless
+  another screen effect's took its place) or the app stops.
 - **Windows.** Effects and running transitions (screen ones on the root) draw their last frame instead of their
   children, which are drawn into a target bitmap by a context of their own and read back (`render::read_back`) as
   the window draws them, and given to the shader when their pixels changed. A transition's `from` is drawn offscreen
