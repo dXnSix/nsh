@@ -386,53 +386,6 @@ fn foreground_is_ours() -> bool {
     }
 }
 
-/// `WM_ACTIVATEAPP`: this thread's windows became the active app's
-/// (`active`), or another app's window was activated.
-pub(crate) fn app_activated(surface: &Surface, active: bool) {
-    ACTIVE.with(|a| a.set(Some(active)));
-    lifecycle_changed(surface);
-}
-
-/// The app may have changed state: activated, or its window shown, hidden,
-/// minimized or restored (`WM_WINDOWPOSCHANGED`).
-pub(crate) fn lifecycle_changed(surface: &Surface) {
-    let mut env: Environment = surface.environment.get();
-    env.lifecycle = lifecycle(surface, env.lifecycle);
-    surface.set_environment(env);
-}
-
-/// The app's state as `surface` sees it; `current` before its window
-/// exists.
-fn lifecycle(surface: &Surface, current: Lifecycle) -> Lifecycle {
-    let hwnd = surface.hwnd();
-    if hwnd.is_invalid() {
-        return current;
-    }
-    // SAFETY: plain calls on a window handle.
-    let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
-    // SAFETY: as above.
-    let shown = unsafe { IsWindowVisible(root).as_bool() && !IsIconic(root).as_bool() };
-    if !shown {
-        Lifecycle::Background
-    } else if ACTIVE.with(Cell::get).unwrap_or_else(foreground_is_ours) {
-        Lifecycle::Active
-    } else {
-        Lifecycle::Inactive
-    }
-}
-
-/// Whether the foreground window is one of this process's.
-fn foreground_is_ours() -> bool {
-    let mut process = 0u32;
-    // SAFETY: plain calls; `process` is an out value.
-    unsafe {
-        let window = GetForegroundWindow();
-        !window.is_invalid()
-            && GetWindowThreadProcessId(window, Some(&mut process as *mut u32)) != 0
-            && process == GetCurrentProcessId()
-    }
-}
-
 /// The embedding app set its locale or text size
 /// ([`crate::AppView::set_locale`]): the system's settings are read again,
 /// with the host's over them.
