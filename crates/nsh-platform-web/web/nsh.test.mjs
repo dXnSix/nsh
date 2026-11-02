@@ -694,3 +694,86 @@ test("a plain Shader uploads the whole built-ins block, progress and overflow at
   // time, scale, progress, overflow and padding.
   assert.deepEqual(uploads, [["uniform", [100, 50, 1.5, 2, 0, 0, 0, 0]]]);
 });
+
+/** A player whose shaders draw with `gl` and `program(layer)` (`null`: none), and the view they go on. */
+function shaderPlayer({ gl = {}, program = () => ({}) } = {}) {
+  const { player } = fakePlayer();
+  const classes = () => {
+    const names = new Set();
+    return {
+      add: (name) => names.add(name),
+      remove: (name) => names.delete(name),
+      contains: (name) => names.has(name),
+      toggle: (name, on) => (on ? names.add(name) : names.delete(name)),
+    };
+  };
+  const el = { _frame: [0, 0, 100, 50], classList: classes(), append() {}, insertBefore() {}, getBoundingClientRect() {} };
+  Object.assign(player, {
+    root: { classList: classes(), append() {} },
+    shaderViews: new Set(),
+    view: () => el,
+    watchInputs() {},
+    shaderDirty() {},
+    pictureCanvas: () => ({ canvas: {}, cx: {} }),
+    paintHost() {},
+    zoomOf: () => 1,
+    shaderGl: () => gl,
+    shaderProgram: (_gl, layer) => program(layer),
+  });
+  return { player, el };
+}
+
+const shaderLayer = (role, key = 1) => ({ role, key, words: [], slots: [], pictures: [["content", 0]], progress: 0 });
+
+/** Runs `f` with a `document` whose canvases have been drawn on. */
+function withCanvases(f) {
+  const document = globalThis.document;
+  globalThis.document = { createElement: () => ({ width: 300, height: 150 }) };
+  try {
+    return f();
+  } finally {
+    globalThis.document = document;
+  }
+}
+
+test("an effect hides its children under its canvas once its shader draws", () => {
+  const { player, el } = shaderPlayer();
+  withCanvases(() => player.op_sh(["sh", 2, shaderLayer(1)]));
+  assert.ok(el.classList.contains("nsh-fx"));
+});
+
+test("an effect without WebGL 2 shows its children as they are", () => {
+  const { player, el } = shaderPlayer({ gl: null });
+  withCanvases(() => player.op_sh(["sh", 2, shaderLayer(1)]));
+  assert.ok(!el.classList.contains("nsh-fx"));
+});
+
+test("an effect whose program the driver refuses shows its children, without the last picture", () => {
+  const { player, el } = shaderPlayer({ program: (layer) => (layer.key === 1 ? {} : null) });
+  withCanvases(() => player.op_sh(["sh", 2, shaderLayer(1)]));
+  assert.ok(el.classList.contains("nsh-fx"));
+  withCanvases(() => player.op_sh(["sh", 2, shaderLayer(1, 2)]));
+  assert.ok(!el.classList.contains("nsh-fx"));
+  assert.equal(el._shaderCanvas.width, 0);
+});
+
+test("a screen effect that cannot draw leaves the surface showing", () => {
+  const { player } = shaderPlayer({ program: () => null });
+  withCanvases(() => player.op_sh(["sh", 2, shaderLayer(3)]));
+  assert.ok(!player.root.classList.contains("nsh-fx"));
+  assert.equal(player.screenShader ?? null, null);
+});
+
+test("a transition that cannot draw starts no run and hides nothing", () => {
+  const { player, el } = shaderPlayer({ program: () => null });
+  withCanvases(() => player.op_sh(["sh", 2, shaderLayer(2)]));
+  player.op_sht(["sht", 2, 300]);
+  assert.equal(el._shader.running, null);
+  assert.ok(!el.classList.contains("nsh-fx"));
+});
+
+test("a page shader that cannot draw leaves the change to the page's own transition", () => {
+  const { player } = shaderPlayer({ program: () => null });
+  const stack = { getBoundingClientRect: () => ({ width: 390, height: 844 }) };
+  assert.equal(player.shaderNav(stack, {}, { layer: shaderLayer(2), ms: 350 }, false, () => {}), false);
+});
