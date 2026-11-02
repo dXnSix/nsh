@@ -24078,3 +24078,72 @@ fn a_layout_animation_alone_takes_no_screen_picture() {
     );
     assert!(c.commit().is_none());
 }
+
+#[test]
+fn navigations_in_one_turn_move_what_reads_the_location_once() {
+    use crate::{
+        location::{HistoryBehavior, Location, Navigation},
+        prelude::*,
+    };
+    thread_local! {
+        /// The locations `Follows`'s effect saw, in order.
+        static SEEN: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn seen() -> Vec<String> {
+        SEEN.with(|seen| seen.borrow_mut().drain(..).collect())
+    }
+    /// Follows the location, as an app's router does, and goes to `/a`,
+    /// then `/b` on a press.
+    #[component]
+    fn Follows() -> impl IntoElement {
+        effect(|| {
+            let at = location().to_string();
+            SEEN.with(|seen| seen.borrow_mut().push(at));
+        });
+        view().on_press(|_: &()| {
+            navigate("/a", HistoryBehavior::Push).unwrap();
+            navigate("/b", HistoryBehavior::Push).unwrap();
+        })
+    }
+    let mut c = core();
+    c.mount_root(&crate::element::Root::of::<Follows>());
+    let batch = c.commit().unwrap();
+    assert_eq!(seen(), ["/"]);
+    let host = batch
+        .items
+        .iter()
+        .find_map(|item| match item {
+            MountItem::Events { id, events } if events.contains(EventKind::Press) => Some(*id),
+            _ => None,
+        })
+        .unwrap();
+    // Rust's navigations move it at once, and the commit takes it back to
+    // neither.
+    assert!(c.component_event(host, EventKind::Press, &EventPayload::None));
+    c.commit();
+    let mut out = Vec::new();
+    c.take_navigations(&mut out);
+    let to = |at: &str| Navigation::new(Location::parse(at).unwrap(), HistoryBehavior::Push);
+    assert_eq!(out, [to("/a"), to("/b")]);
+    assert_eq!(seen(), ["/a", "/b"]);
+    // JS's navigations (its ops) move it once, to the last.
+    apply(
+        &mut c,
+        ["/c", "/d"]
+            .into_iter()
+            .map(|at| Op::Command {
+                id: ROOT_ID,
+                command: Command::Navigate(to(at)),
+            })
+            .collect(),
+    );
+    c.commit();
+    assert_eq!(seen(), ["/d"]);
+    // The platform moving it where it is runs nothing again.
+    c.set_location(Location::parse("/d").unwrap());
+    c.commit();
+    assert_eq!(seen(), Vec::<String>::new());
+    c.set_location(Location::parse("/e").unwrap());
+    c.commit();
+    assert_eq!(seen(), ["/e"]);
+}

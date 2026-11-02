@@ -558,6 +558,9 @@ pub(super) struct Components {
     /// The app's navigations not handed to the engine yet
     /// ([`Core::take_navigations`]).
     navigations: Vec<crate::location::Navigation>,
+    /// Where the turn's last navigation went: the location once the turn
+    /// commits, however many it made ([`Core::commit`]).
+    pub(super) navigated_to: Option<crate::location::Location>,
     next_url_open: u32,
     /// Colors being picked on the screen, by request id: their answers.
     screen_colors: FxHashMap<u32, AnswerSlot<Option<crate::Hsla>>>,
@@ -662,6 +665,7 @@ impl Default for Components {
             url_opens: FxHashMap::default(),
             url_requests: Vec::new(),
             navigations: Vec::new(),
+            navigated_to: None,
             next_url_open: 0,
             screen_colors: FxHashMap::default(),
             next_screen_color: 1,
@@ -5083,16 +5087,18 @@ impl<M: TextEngine> Core<M> {
     /// into the app): what read the location runs again. Not a navigation
     /// of the app's: nothing is sent back.
     pub fn set_location(&mut self, location: crate::location::Location) {
+        // Later than the app's navigations not committed yet.
+        self.components.navigated_to = None;
         self.components.runtime.set_location(location);
     }
 
     /// The app went to `navigation`'s location ([`Command::Navigate`] on
-    /// the root, from Rust or JS): the location is the new one, the engine
-    /// hears of it, and the platform gets the command.
+    /// the root, from Rust or JS): the location is the new one when the
+    /// turn commits, the engine hears of it, and the platform gets the
+    /// command. Not set here: Rust's `navigate` set it already, and a turn
+    /// that navigates twice would take what read it back to the first.
     pub(super) fn navigated(&mut self, navigation: &crate::location::Navigation) {
-        self.components
-            .runtime
-            .set_location(navigation.location.clone());
+        self.components.navigated_to = Some(navigation.location.clone());
         self.components.navigations.push(navigation.clone());
     }
 

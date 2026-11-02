@@ -177,10 +177,14 @@ impl super::Runtime {
         with_data(|d| d.ambient.inset_hosts())
     }
 
-    /// The app's location now: what read it runs again.
+    /// The app's location now: what read it runs again, unless it is
+    /// where the app is.
     pub(crate) fn set_location(&self, location: Location) {
         let _entered = self.enter();
-        location_signal().set(location);
+        let signal = location_signal();
+        if signal.get_untracked() != location {
+            signal.set(location);
+        }
     }
 
     /// The app's location, untracked.
