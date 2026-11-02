@@ -225,7 +225,8 @@ final class TextLayouts {
     /**
      * `primary` with the registered families of `rest` as its fallbacks,
      * then the system's (the first generic family of `rest`, else
-     * sans-serif); null before Android 10, without such families, or when a
+     * sans-serif); null before Android 10, when that is all the system's
+     * fallback would give anyway (no such families, sans-serif), or when a
      * font file does not load.
      */
     private static Typeface chained(Face primary, List<Family> rest, int weight, boolean italic) {
@@ -240,11 +241,12 @@ final class TextLayouts {
             Face face = registered(family.name, weight, italic);
             if (face != null && face.file != null && face != primary) others.add(face);
         }
-        if (others.isEmpty()) return null;
+        if (system == null) system = "sans-serif";
+        if (others.isEmpty() && system.equals("sans-serif")) return null;
         try {
             Typeface.CustomFallbackBuilder builder = new Typeface.CustomFallbackBuilder(fontFamily(primary));
             for (Face face : others) builder.addCustomFallback(fontFamily(face));
-            builder.setSystemFallback(system == null ? "sans-serif" : system);
+            builder.setSystemFallback(system);
             builder.setStyle(new android.graphics.fonts.FontStyle(clamp(weight),
                     italic ? android.graphics.fonts.FontStyle.FONT_SLANT_ITALIC
                             : android.graphics.fonts.FontStyle.FONT_SLANT_UPRIGHT));

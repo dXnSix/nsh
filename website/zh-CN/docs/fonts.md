@@ -94,7 +94,7 @@ text("Brand 品牌").font_family("Brand, 'Noto Sans SC', sans-serif")
 <Text style={{ fontFamily: "Brand, 'Noto Sans SC', sans-serif" }}>Brand 品牌</Text>
 ```
 
-各平台都用自己的字体机制保持列表的顺序：iOS 和 macOS 上的级联列表、Windows 上的字体回退（每段一个：取段落第一个样式的列表）、Linux 上的 Pango 字体族列表（取不含逗号的名称，Pango 的列表就是这样列出名称的）、Web 上浏览器的列表、GPUI 的回退字体。在 Android 上，文字用它拥有的第一个字体族排版；该字体族是应用注册的字体时，列表中排在它之后的已注册字体是它的回退字体（Android 10 及更高版本）。
+各平台都用自己的字体机制保持列表的顺序：iOS 和 macOS 上的级联列表、Windows 上的字体回退（每段一个：取段落第一个样式的列表）、Linux 上的 Pango 字体族列表（取不含逗号的名称，Pango 的列表就是这样列出名称的）、Web 上浏览器的列表、GPUI 的回退字体。在 Android 上，文字用它拥有的第一个字体族排版；该字体族是应用注册的字体时，列表中排在它之后的已注册字体是它的回退字体，其后是排在它之后的第一个通用字体族（Android 10 及更高版本）。
 
 ## 字重与斜体
 
