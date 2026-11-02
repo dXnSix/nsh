@@ -2357,6 +2357,84 @@ extern "system" fn Java_com_longbridge_nsh_Native_openUrlReply(
     request.answer(handled != 0);
 }
 
+/// Sets where the app is (`location()`; `NshView.setLocation`): a path from
+/// the app's base. False when it is not one. Any thread.
+#[unsafe(no_mangle)]
+extern "system" fn Java_com_longbridge_nsh_Native_setLocation(
+    mut env: JNIEnv<'_>,
+    _: JClass<'_>,
+    handle: jlong,
+    location: JString<'_>,
+) -> jboolean {
+    // SAFETY: Java passes its live handle.
+    let host = unsafe { host(handle) };
+    let Some(location) = optional_string(&mut env, &location) else {
+        return 0;
+    };
+    match host.host.set_location(&location) {
+        Ok(()) => 1,
+        Err(err) => {
+            log::warn!("nsh: the location stays as it was: {err}");
+            0
+        }
+    }
+}
+
+/// Where the app is (`NshView.getLocation`): the latest of the embedding
+/// app's `setLocation` and the app's navigations. Any thread.
+#[unsafe(no_mangle)]
+extern "system" fn Java_com_longbridge_nsh_Native_location<'local>(
+    env: JNIEnv<'local>,
+    _: JClass<'local>,
+    handle: jlong,
+) -> JString<'local> {
+    // SAFETY: Java passes its live handle.
+    let host = unsafe { host(handle) };
+    env.new_string(host.host.location().as_str())
+        .unwrap_or_else(|_| JString::from(JObject::null()))
+}
+
+/// `NshView` hears the app's navigations (`handled`), or no longer does:
+/// the channel hands each to `NshView.navigateMessage` on the engine
+/// thread, which runs the Java handler on the UI thread. Registered only
+/// while Java has a handler, so the engine thread crosses JNI for nothing
+/// otherwise.
+#[unsafe(no_mangle)]
+extern "system" fn Java_com_longbridge_nsh_Native_setNavigateHandler(
+    _: JNIEnv<'_>,
+    _: JClass<'_>,
+    handle: jlong,
+    handled: jboolean,
+) {
+    // SAFETY: Java passes its live handle.
+    let host = unsafe { host(handle) };
+    if handled == 0 {
+        return host.host.remove_navigate_handler();
+    }
+    // The view's reference, not the host's: the channel the host owns keeps
+    // the handler.
+    let view = host.view.clone();
+    host.host.handle_navigate(move |navigation| {
+        let replace = navigation.history == nsh_engine::HistoryBehavior::Replace;
+        with_env(|env| {
+            let location = env.new_string(navigation.location.as_str())?;
+            // SAFETY: matches the signature checked in `java::init`.
+            unsafe {
+                env.call_method_unchecked(
+                    view.as_obj(),
+                    java().view_navigate_message,
+                    ReturnType::Primitive(Primitive::Void),
+                    &[
+                        JValue::Object(&location).as_jni(),
+                        JValue::Bool(replace.into()).as_jni(),
+                    ],
+                )
+            }
+            .map(|_| ())
+        });
+    });
+}
+
 /// Frees a call unanswered: it fails in the app. Any thread.
 #[unsafe(no_mangle)]
 extern "system" fn Java_com_longbridge_nsh_Native_hostCallFree(

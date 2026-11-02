@@ -176,6 +176,9 @@ setContentView(column);
 | `setParams(Object params)` | 之后加载的应用的启动参数（`Map` 或 `JSONObject`）：应用在启动时以 `host.params` 读取（[`host`](../modules/nsh.md#host)）。不是 JSON 对象时返回 `false`。 |
 | `send(String name, Object data)` | 向应用发送一个事件（`host.on(name, …)`）；应用开始监听前会一直保留，没有应用运行时留给下一个应用。可在任意线程调用；`destroy()` 后返回 `false`。 |
 | `handle(String name, HostHandler handler)` | 在 UI 线程处理应用对 `name` 的调用（`host.call`）和投递（`host.post`）；传 `null` 移除处理函数。处理函数通过它的 `NshHostReply` 在任意线程回答一次。 |
+| `setLocation(String location)` | 应用所在的[位置](#应用的位置)：从应用 base 起的路径，即应用启动时所在的位置，或在应用运行时它要前往的位置。可在任意线程调用；不是这样的路径时返回 `false`。 |
+| `getLocation()` | 应用当前所在的位置：`setLocation` 和应用导航中最新的一个，在此之前为 `/`。可在任意线程调用。 |
+| `setNavigateHandler(NavigateHandler handler)` | 在 UI 线程收到应用的每一次 `navigate`，参数是位置以及它是否替换当前历史记录；传 `null` 移除处理函数。 |
 | `connectDevServer(String url)` | 开发用：从 `nsh dev` 服务器加载，每次修改后重新加载。使用 release 版 AAR 时返回 `false`。 |
 | `handleBack()` | 让应用处理返回键（关闭对话框、弹出页面、执行 `BackHandler` 监听器）；返回它是否处理了。 |
 | `destroy()` | 停止应用，并对它的每个原生组件调用 `destroy()`。此后该视图不能再使用。 |
@@ -259,6 +262,30 @@ nsh.setOpenUrlHandler(url -> {
     return false;
 });
 ```
+
+## 应用的位置
+
+应用的[位置](./navigation.md#位置)是用户在应用中所处的地方，以从应用 base 起的路径表示，例如 `/sports/football?tab=live`。`setLocation` 用来设置它：在加载之前调用，就是应用启动时所在的位置；在应用运行时调用，会把应用带到那里，应用中的 [`location()`](../modules/nsh.md#location) 随之改变，宿主应用处理过的 App Link 就这样打开它的页面。`setNavigateHandler` 在 UI 线程按顺序收到应用的每一次 [`navigate`](../modules/nsh.md#navigate)，参数是新的位置和 `replace`（`history: "replace"` 时为 `true`）。
+
+```java
+// 加载之前：应用启动时所在的位置，例如用户上次离开的地方。
+nsh.setLocation(prefs.getString("sports.location", "/"));
+nsh.loadAssetBundle("sports");
+
+// 应用的每一次 `navigate`，在 UI 线程调用。
+nsh.setNavigateHandler((location, replace) -> {
+    prefs.edit().putString("sports.location", location).apply();
+    analytics.screen(location, replace);
+});
+
+// 之后，在 onNewIntent 中：宿主应用处理过的 App Link 在运行中的应用里打开它的页面，
+// https://example.com/sports/football?tab=live 对应 /sports/football?tab=live。
+Uri link = intent.getData();
+String query = link.getEncodedQuery();
+nsh.setLocation(link.getEncodedPath() + (query == null ? "" : "?" + query));
+```
+
+`getLocation()` 返回宿主应用设置的位置和应用导航到的位置中最新的一个，并按 URL 的规则规范化（`/a/../b` 得到 `/b`）；视图之后加载的应用从这里启动。`setLocation` 和 `getLocation` 可在任意线程调用。导航处理函数收到的是应用自己的移动，宿主应用设置的位置只交给应用。值不是从应用 base 起的路径时（`https://…`、缺少开头 `/` 的 `sports`），`setLocation` 返回 `false`，应用停留在原处。
 
 ## 限制
 

@@ -211,6 +211,18 @@ final class Native {
     /** Answers a URL {@code openUrlMessage} got: whether the embedding app took it. Frees it. */
     static native void openUrlReply(long request, boolean handled);
 
+    /**
+     * Where the app is, a path from its base ({@code location()} in TSX); false (and ignored) when it is not one.
+     * Any thread.
+     */
+    static native boolean setLocation(long handle, String location);
+
+    /** Where the app is: the latest of {@link #setLocation} and the app's navigations. Any thread. */
+    static native String location(long handle);
+
+    /** The app's navigations go to {@code NshView.navigateMessage} ({@code handled}), or nowhere. */
+    static native void setNavigateHandler(long handle, boolean handled);
+
     /** Root size in dp. */
     static native void resize(long handle, float width, float height);
 
