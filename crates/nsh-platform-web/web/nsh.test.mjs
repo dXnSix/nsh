@@ -694,3 +694,29 @@ test("a plain Shader uploads the whole built-ins block, progress and overflow at
   // time, scale, progress, overflow and padding.
   assert.deepEqual(uploads, [["uniform", [100, 50, 1.5, 2, 0, 0, 0, 0]]]);
 });
+
+test("openUrl answers whether the browser opened the URL, in keys the engine reads", async () => {
+  const { player, sent } = fakePlayer();
+  player.view = () => null;
+  const saved = globalThis.window;
+  const opened = [];
+  let blocked = false;
+  globalThis.window = { open: (url, target) => (opened.push([url, target]), blocked ? null : {}) };
+  try {
+    player.op_cmd(["cmd", 1, "openUrl", 7, "https://example.test/a"]);
+    // A blocked pop-up: `window.open` returns null.
+    blocked = true;
+    player.op_cmd(["cmd", 1, "openUrl", 8, "mailto:ada@example.test"]);
+  } finally {
+    globalThis.window = saved;
+  }
+  assert.deepEqual(opened, [["https://example.test/a", "_blank"], ["mailto:ada@example.test", "_blank"]]);
+  const answers = sent.filter(([name]) => name === "onOpenUrl").map(([, p]) => p);
+  assert.deepEqual(answers, [{ id: 7, opened: true }, { id: 8, opened: false }]);
+  // `nsh_event` (src/lib.rs) passes on only the payload keys it interns: a
+  // key it drops reaches the core as missing, and `openUrl` as not opened.
+  const lib = await readFile(new URL("../src/lib.rs", import.meta.url), "utf8");
+  const event = lib.slice(lib.indexOf('pub unsafe extern "C" fn nsh_event('));
+  const interned = new Set([...event.slice(0, event.indexOf("\n}\n")).matchAll(/"(\w+)" => "\1"/g)].map((m) => m[1]));
+  for (const key of Object.keys(answers[0])) assert.ok(interned.has(key), `nsh_event drops "${key}"`);
+});

@@ -1046,6 +1046,7 @@ pub unsafe extern "C" fn nsh_event(
                             "loaded" => "loaded",
                             "total" => "total",
                             "color" => "color",
+                            "opened" => "opened",
                             _ => return None,
                         };
                         let v = match v {
