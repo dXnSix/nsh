@@ -6,10 +6,11 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   cherry-picked unchanged.
 - Size: 9 files, +62 / −16.
 - Title: `cli: Let nsh.json say whether a web app's pages are browser history entries`.
+- The fork's PR: dXnSix/nsh#110.
 
 ---
 
-**Depends on:** #<base> (fork: dXnSix/nsh#109) (`web: Load the page's files from where it started, …`): the same `WebConfig`, packaged page
+**Depends on:** #<base> (`web: Load the page's files from where it started, …`): the same `WebConfig`, packaged page
 and `dev.html` lines. **Needed by:** the location PR (`web.history: false` also keeps the app's location out of the
 address bar).
 

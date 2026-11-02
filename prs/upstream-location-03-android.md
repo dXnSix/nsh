@@ -6,6 +6,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   It needs only the core PR; it stacks on the iOS one because both edit the Navigation page's sentence and
   `docs/dev/embedding.md`'s paragraph about the SDKs.
 - Title: `android: Let embedding apps set the app's location and hear its navigations`.
+- The fork's PR: dXnSix/nsh#111 (its Android part).
 
 ---
 

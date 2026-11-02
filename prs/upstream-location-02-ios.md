@@ -4,6 +4,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 
 - Branch: `pr/location/02-ios`, on `pr/location/01-core`: one commit (the fork's iOS part of `feat/location`).
 - Title: `ios: Let embedding apps set the app's location and hear its navigations`.
+- The fork's PR: dXnSix/nsh#111 (its iOS part).
 
 ---
 

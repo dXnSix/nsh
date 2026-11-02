@@ -8,6 +8,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - Title: `dev: Serve the page at the app's own paths, as hosts of single-page apps do`.
 - Before opening: the fork's CI passes on `feat/spa-fallback` (dXnSix/nsh), and the branch's own
   `cargo test -p nsh-dev --features server,client` and clippy pass on upstream's head.
+- The fork's PR: dXnSix/nsh#108.
 
 ---
 
