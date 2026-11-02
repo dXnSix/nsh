@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
 
-- Branch: `pr/web-urls/02-base` (`6771891ea`), on `pr/web-urls/01-spa-fallback`: one commit, the fork's
+- Branch: `pr/web-urls/02-base` (`88c5d5ba7`), on `pr/web-urls/01-spa-fallback`: one commit, the fork's
   `feat/web-base` cherry-picked unchanged.
 - Size: 14 files, +248 / −37.
 - Title: `web: Load the page's files from where it started, and let nsh.json set its base`. Until the SPA fallback PR

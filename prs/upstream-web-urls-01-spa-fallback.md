@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
 
-- Branch: `pr/web-urls/01-spa-fallback` (`45de9f82e`), on `upstream/main` `8450082b`: one commit, the fork's
+- Branch: `pr/web-urls/01-spa-fallback` (`c7aaf02cc`), on `upstream/main` `183b9b7f`: one commit, the fork's
   `feat/spa-fallback` cherry-picked unchanged.
 - Size: 6 files, +174 / −11 (code +56 / −11, tests +93, docs +25).
 - Title: `dev: Serve the page at the app's own paths, as hosts of single-page apps do`.

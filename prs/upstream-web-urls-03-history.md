@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
 
-- Branch: `pr/web-urls/03-history` (`3eefff386`), on `pr/web-urls/02-base`: one commit, the fork's `feat/web-history`
+- Branch: `pr/web-urls/03-history` (`9a701ce3c`), on `pr/web-urls/02-base`: one commit, the fork's `feat/web-history`
   cherry-picked unchanged.
 - Size: 9 files, +62 / −16.
 - Title: `cli: Let nsh.json say whether a web app's pages are browser history entries`.
