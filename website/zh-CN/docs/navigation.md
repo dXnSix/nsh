@@ -1,6 +1,6 @@
 ---
 title: 导航
-description: 用 createNavStack、NavStack 和 NavPage 构建原生导航栈，各平台的标题栏，用 popOnBack 把用户留在当前页面，对话框，以及 Android 返回键。
+description: 用 createNavStack、NavStack 和 NavPage 构建原生导航栈，各平台的标题栏，用 popOnBack 把用户留在当前页面，对话框，Android 返回键，以及应用的位置。
 order: 41
 group: ui
 ---
@@ -582,6 +582,48 @@ function Editor() {
 ```
 
 在 effect 中创建的监听器一直有效，直到 effect 再次运行或它的组件消失；在 TSX 中，调用 `BackHandler.on` 返回的函数也会停止它。在 TSX 中，`BackHandler.exitApp()` 退出应用；在 iOS 上也可以导入 `nsh/mobile`，`BackHandler` 的调用会立即返回，所以同一份代码可以在两个平台上运行。见[平台特定代码](./platform-specific.md)。
+
+## 位置
+
+应用的位置是用户在应用中所处的地方，以从应用 base 起的 URL 表示：`/sports/football?tab=live`。用 `location()` 读取它，用 `navigate(url)` 前往别处；两者都在 `nsh` 和 Rust prelude 中（[参考](../modules/nsh.md#位置)）。路由器让它的路由与位置保持一致：显示 `location()` 对应的页面，并在用户前往应用中的某处时调用 `navigate`。
+
+```rust tabs
+use nsh_core::{location::HistoryBehavior, prelude::*};
+
+#[component]
+fn Sports() -> impl IntoElement {
+    view()
+        .child(text(|| format!("Showing {}", location().path())))
+        .child(text("Live").on_press(|_: &()| {
+            navigate("?tab=live", HistoryBehavior::Replace).unwrap();
+        }))
+        .child(text("Football").on_press(|_: &()| {
+            navigate("/sports/football", HistoryBehavior::Push).unwrap();
+        }))
+}
+```
+
+```tsx tabs
+import { location, navigate, Text, View } from "nsh";
+
+function Sports() {
+  return (
+    <View>
+      <Text>{`Showing ${location().pathname}`}</Text>
+      <View onPress={() => navigate("?tab=live", { history: "replace" })}>
+        <Text>Live</Text>
+      </View>
+      <View onPress={() => navigate("/sports/football")}>
+        <Text>Football</Text>
+      </View>
+    </View>
+  );
+}
+```
+
+- **在 Web 上**，位置就是地址栏中应用 base（`nsh.json` 的 `web.base`）之后的部分，并保存在浏览器历史中。每次 `navigate` 都是一条记录（`history: "replace"` 改写当前记录），每个压入的页面和打开的对话框也是；与 `navigate` 同一轮显示的页面或对话框与它共用一条记录。后退按钮先关闭打开的对话框，再返回上一页并回到该记录的位置：栈中的页面以原生方式弹出（它的 `onDismiss` 先到），然后 `location()` 改变。前进会回到该记录的位置，应用为它显示的页面就成为这条记录的页面。进入应用的链接或刷新会在其位置打开应用（[部署带有自己路径的应用](./web.md#进入应用的链接)）。
+- **在嵌入应用中**，位置由宿主设置，宿主也会得知每一次导航（`AppView::host()` 的 `set_location` 和 `handle_navigate`）。宿主处理了一个深度链接后，也以同样的方式把它的路径交给应用。
+- **其他情况下**，位置从 `/` 开始，随应用的导航移动。原生返回键和手势照常弹出页面、关闭对话框，位置由应用自己维护：页面跟随位置的应用在页面弹出时也导航回去（在页面的 `onDismiss` 中，使用 `history: "replace"`）。
 
 ## 标签页与其他布局
 

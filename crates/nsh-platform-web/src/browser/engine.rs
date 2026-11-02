@@ -56,6 +56,11 @@ impl Host for Runtime {
         *self.wake.borrow_mut() = Some(services.wake);
         self.timers.set_clock(services.clock);
         self.set_environment(&services.environment);
+        *self.location.borrow_mut() = services.location.clone();
+        self.event(
+            "location",
+            Value::string(services.location.as_str()).map(|v| vec![v]),
+        );
         Ok(())
     }
     fn take_ops(&self, out: &mut Vec<Op>) {
@@ -224,6 +229,16 @@ impl Host for Runtime {
             self.bindings
                 .json(&data)
                 .map(|v| vec![Value(v.0[0] as u32)]),
+        );
+    }
+    fn set_location(&self, location: &nsh_core::location::Location) {
+        if *self.location.borrow() == *location {
+            return;
+        }
+        *self.location.borrow_mut() = location.clone();
+        self.event(
+            "location",
+            Value::string(location.as_str()).map(|v| vec![v]),
         );
     }
     fn set_tokens(&self, tokens: Arc<Tokens>) {

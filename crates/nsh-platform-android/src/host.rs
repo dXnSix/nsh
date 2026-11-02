@@ -1494,6 +1494,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_eventMap(
                 "caretY" => "caretY",
                 "caretWidth" => "caretWidth",
                 "caretHeight" => "caretHeight",
+                "location" => "location",
                 _ => continue,
             };
             if let Some(v) = read(&mut env, i) {

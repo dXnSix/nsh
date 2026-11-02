@@ -1464,6 +1464,15 @@ fn encode_command(out: &mut Out, id: u32, command: &Command) {
             .num(*request)
             .str(url)
             .end(),
+        // `["cmd", id, "navigate", location, replace]`: the player writes
+        // it into the browser's history (`nsh.js`).
+        Command::Navigate(navigation) => out
+            .item("cmd")
+            .num(id)
+            .str("navigate")
+            .str(navigation.location.as_str())
+            .bool(navigation.history == nsh_core::location::HistoryBehavior::Replace)
+            .end(),
         Command::PickScreenColor { id: request } => out
             .item("cmd")
             .num(id)

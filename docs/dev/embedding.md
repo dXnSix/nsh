@@ -162,6 +162,17 @@
     root, answered by `EventKind::OpenUrl` `{ id, opened }`). Without a handler the platform opens it at once. The
     SDKs' handlers are synchronous on the main thread (Swift `(URL) -> Bool`, Java `boolean openUrl(String)`), reached
     as the call handlers are.
+  - *The app's location* (`nsh_core::location`; `HostChannel::set_location`, `location`, `handle_navigate`): the
+    channel holds the
+    view's location, from both sides. `set_location` before a load is where the engine starts the app
+    (`Driver::start` reads it once attached); while one runs it sends `Message::Location`, which the core takes as the
+    platform's move (`Core::set_location`, not a navigation). The app's own navigations (`navigate`, Rust or JS)
+    are `Command::Navigate` on the root, which the core notes as it applies the op (`Core::navigated`), so Rust and
+    JS see one location; after each commit round the engine hands them to `handle_navigate`'s handler on the engine
+    thread (`Core::take_navigations`), notes moves that came as `EventKind::Location` (the web's back and forward),
+    and publishes a location that changed outside JS to the VM (`Script::set_location`, as the tokens are). Deep links
+    (URL schemes, universal links / App Links, protocol handlers) enter here: a host maps the URL to a location and
+    calls `set_location`.
 - **The host's data in every app.** Host and apps stay in step through the host: it keeps the shared state (a
   `tokio::sync::watch` or `broadcast` channel in a static the module's functions reach), functions the apps call
   change it, and an `on(event, listener: Callback<State>, cx: CallCx) -> Result<Stop, String>` keeps every app

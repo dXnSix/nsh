@@ -18,6 +18,12 @@
 //! its own router. It is a typed hook of the channel rather than a named
 //! message: it takes only what passed the URL check and the `openUrl`
 //! capability, and no app's `host.call` name can reach it.
+//!
+//! And the app's location ([`nsh_core::location`]), from both sides: the
+//! embedding app sets where the app is ([`HostChannel::set_location`]: where
+//! it starts, or a move while it runs, as a link into the app or a deep
+//! link would make) and hears where the app goes
+//! ([`HostChannel::handle_navigate`]).
 
 use std::{
     collections::HashMap,
@@ -30,6 +36,7 @@ use nsh_core::host_channel::HostBridge;
 use nsh_core::{
     JsonValue,
     host_channel::{HostInbox, check_name},
+    location::{InvalidLocation, Location, Navigation},
 };
 
 use crate::Message;
@@ -39,6 +46,9 @@ type Handler = Arc<dyn Fn(HostCall) + Send + Sync>;
 
 /// The embedding app's handler of the URLs the app opens.
 type UrlHandler = Arc<dyn Fn(OpenUrlRequest) + Send + Sync>;
+
+/// The embedding app's handler of the app's navigations.
+type NavigateHandler = Arc<dyn Fn(Navigation) + Send + Sync>;
 
 /// The embedding app's side of the channel with the apps one of its views
 /// runs: launch parameters, events to the app (`host.on` in TSX), and
@@ -74,6 +84,9 @@ struct Inner {
     configured: bool,
     handlers: HashMap<String, Handler>,
     url_handler: Option<UrlHandler>,
+    /// Where the view's app is, from either side.
+    location: Location,
+    navigate_handler: Option<NavigateHandler>,
     /// The engine running the view's app: its attachment's id and queue.
     engine: Option<(u64, Sender<Message>)>,
     next_engine: u64,
@@ -91,6 +104,8 @@ impl std::fmt::Debug for HostChannel {
             .field("handlers", &handlers)
             .field("configured", &inner.configured)
             .field("url_handler", &inner.url_handler.is_some())
+            .field("location", &inner.location)
+            .field("navigate_handler", &inner.navigate_handler.is_some())
             .field("attached", &inner.engine.is_some())
             .field("pending", &inner.pending.len())
             .finish()
@@ -222,6 +237,73 @@ impl HostChannel {
             log::error!("nsh/device: the embedding app's URL handler panicked");
         }
         Some(())
+    }
+
+    /// Sets where the app is (`location()`; [`nsh_core::location`]): a path
+    /// from the app's base, `/sports/football?tab=live`. Before an app
+    /// starts, where it starts; while one runs, it goes there as the
+    /// platform moved it (its `onLocation`), and the location stays the
+    /// view's for the apps after it. Any thread. `Err` for what is not a
+    /// path ([`Location::parse`]).
+    pub fn set_location(&self, location: &str) -> Result<(), InvalidLocation> {
+        let location = Location::parse(location)?;
+        let mut inner = self.lock();
+        if inner.location == location {
+            return Ok(());
+        }
+        inner.location = location.clone();
+        if let Some((_, tx)) = &inner.engine {
+            let _ = tx.send(Message::Location(location));
+        }
+        Ok(())
+    }
+
+    /// Where the app is: the latest of the embedding app's
+    /// [`HostChannel::set_location`], the app's navigations and the
+    /// platform's moves; `/` until one of them.
+    pub fn location(&self) -> Location {
+        self.lock().location.clone()
+    }
+
+    /// Hears where the app goes (`navigate`), after
+    /// [`HostChannel::location`] is the new location, replacing the
+    /// handler it had: a host shows the location in its own UI, keeps it
+    /// in its own history or deep links, or follows it in its router.
+    /// `handler` runs on the engine thread and must return quickly (move
+    /// the work elsewhere). The platform's own moves (`set_location`, the
+    /// web's back and forward) are not the app's, and do not reach it.
+    pub fn handle_navigate(&self, handler: impl Fn(Navigation) + Send + Sync + 'static) {
+        self.lock().navigate_handler = Some(Arc::new(handler));
+    }
+
+    /// Removes the navigation handler.
+    pub fn remove_navigate_handler(&self) {
+        self.lock().navigate_handler = None;
+    }
+
+    /// The app went to `navigation`'s location (the engine, after the
+    /// commit): noted, and the handler hears it.
+    pub(crate) fn navigated(&self, navigation: Navigation) {
+        let handler = {
+            let mut inner = self.lock();
+            inner.location = navigation.location.clone();
+            inner.navigate_handler.clone()
+        };
+        if let Some(handler) = handler
+            && std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler(navigation)))
+                .is_err()
+        {
+            log::error!("nsh: the embedding app's navigation handler panicked");
+        }
+    }
+
+    /// The platform moved the app to `location` (the engine, after the
+    /// event): noted, nothing sent back.
+    pub(crate) fn moved(&self, location: &Location) {
+        let mut inner = self.lock();
+        if inner.location != *location {
+            inner.location = location.clone();
+        }
     }
 
     /// Attaches the engine whose queue is `tx`: events go to it from now

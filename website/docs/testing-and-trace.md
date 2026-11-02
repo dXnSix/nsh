@@ -170,6 +170,7 @@ options as the test gives them: one the target's platform cannot honor makes `op
 | `clipboard` | empty | The text on the clipboard at the start. |
 | `colorScheme` | `"light"` | The system's appearance: `"light"` or `"dark"` (`colorScheme()`, `dark:` classes). |
 | `locale` | `"en-US"` | The device's locale, a BCP 47 tag (`locale()`, `Intl`'s default). |
+| `location` | `"/"` | Where the app starts (`location()`), a path from the app's base, as a link into the app opens it. |
 | `reducedMotion` | `false` | The user asked for less motion (`reduceMotion()`). |
 | `platform` | `"ios"` | The platform the app runs as headless: `"ios"`, `"android"`, or a desktop's, `"macos"`, `"windows"`, `"linux"`, or `"web"` in the desktop idiom (`platform.os`, `ios={{…}}` / `android={{…}}` / `desktop={{…}}` props, keyboard shortcuts). With `--target`, the app runs as the target's platform: a desktop's `platform` on any desktop and the web, always as a desktop (in the browser in the desktop idiom at any width, `platform.os` staying `"web"`), `"ios"` and `"android"` on their own. |
 | `clock` | the system's | A manual clock, whose time moves only as the test moves it: `{}`, or `{ time }` to start at a `Date` (or milliseconds since the Unix epoch). See [Controlling time](#controlling-time). |
@@ -404,6 +405,9 @@ one: a selector matching several fails the step, and the error says how to narro
 | `await app.host.send(name, data?)` | Sends an event of the host app's to the app (`host.on`), then waits until it is quiet. See [Playing the host app](#playing-the-host-app). |
 | `app.host.calls()`, `app.host.posts()` | The app's calls and posts that `open`'s `host.handlers` got, in order: `name`, `data`. |
 | `app.openedUrls()` | The URLs the app opened (`openUrl`), in order: recorded, never opened. |
+| `app.location` | Where the app is (`location()`), as the platform has it: its own navigations and the platform's moves. |
+| `await app.navigate(url)` | Moves the app to `url` as the platform does (a link into the app, the embedding app, the address bar), relative to where it is; on the web a new history entry. |
+| `await app.forward()` | Goes forward in the browser's history, as its forward button does. With `--target web` only; elsewhere it rejects with `ERR_NSH_TEST_UNSUPPORTED`. |
 | `await app.setViewport(width, height)` | Resizes the viewport, as rotating the device or resizing a window does (`windowSize()`). |
 | `await app.setColorScheme(scheme)` | Switches the system's appearance to `"light"` or `"dark"`, as the user does. |
 | `await app.setLifecycle(state)` | Moves the app to `"background"`, `"inactive"` or `"active"`, as the system does when the user leaves it, switches to another app or window and comes back (`lifecycle()`). Headless runs only. |
@@ -559,7 +563,7 @@ the platform shows moves it a frame (1/60 s), so the app's time passes while it 
 `delay`, take real time. The app's requests come to the test as they do headless: `network` routes answer them,
 a request no route matches fails, and `"live"` lets them through to the host's network; `app.requests()` lists them
 all. Sockets and WebSockets connect on the host's network with `"live"`, and are refused as headless otherwise. `storage` is in the app's storage when it starts, and `app.storage()` reads it from the app. `locale`,
-`reducedMotion` and `safeArea`, when `open` gives them (a default value included), hold whatever the platform reports,
+`reducedMotion` and `safeArea`, when `open` gives them (a default value included), hold whatever the platform reports, a `location` it gives is where the app starts (the embedding app's, or on the web the page's address),
 and a `colorScheme` it gives switches the system's appearance (`"light"` too); what it leaves out is the platform's, and the app's clipboard calls are served from the
 test's own clipboard (`clipboard` is its text at first, `app.clipboard()` reads it), so the machine's clipboard stays
 as it was; a text input's own copy and paste use the system's. `host.params` reaches the app, `app.host.send` sends

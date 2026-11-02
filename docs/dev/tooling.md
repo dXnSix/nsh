@@ -405,6 +405,14 @@ Headless runs play the platform's part NSH's protocol defines, and refuse what o
   device's;
 - URLs the app opens (`Command::OpenUrl`) are recorded (`Screen::opened_urls`), never opened, and answered with
   `onOpenUrl` `{ opened: true }`, as a device with an app for every scheme would (`app.openedUrls()`);
+- the app's location is the embedding app's channel's (`HostChannel::location`): `open`'s `location` is set on it
+  before the engine starts, `app.navigate(url)` moves the app as the embedding app does (`set_location`, resolved
+  against where it is) and `app.location` reads where the app's navigations and the platform's moves took it; there
+  is no browser history, so `app.back()` stays what it is and `app.forward()` rejects (`failure::web_only`,
+  `ERR_NSH_TEST_UNSUPPORTED`). On a real host `open`'s `location` is `TestEnvironment::location`
+  (`Model::set_up_engine`), and `TestStep::Navigate`, `TestStep::Location` and `TestStep::Forward` reach the agent,
+  which moves the app through the platform where it has its own way (`Native::navigate`, `location`, `forward`: the
+  web's player and history, over CDP) and through the channel elsewhere (`Scene::set_location`, `location`);
 - the platform has no eyedropper (`Environment::screen_color` false) until a Rust test calls
   `Headless::on_screen_color(color)`: then `Command::PickScreenColor` is answered with `onScreenColor`, that color (or
   none, a cancel);

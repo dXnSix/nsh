@@ -551,7 +551,13 @@ impl Session {
             },
             ui_sets: self.run.ui_sets.clone(),
             clock,
-            host: launch.host,
+            host: {
+                // Where the app starts: the embedding app's location.
+                if let Some(location) = &launch.location {
+                    let _ = launch.host.set_location(location.as_str());
+                }
+                launch.host
+            },
             ..default
         };
         let mut app = Headless::start(config)
@@ -611,6 +617,7 @@ impl Session {
         environment.host_params = (!params.is_empty()).then_some(params);
         environment.clipboard = launch.clipboard.clone();
         environment.locale = launch.locale.clone();
+        environment.location = launch.location.as_ref().map(|l| l.as_str().to_owned());
         environment.reduced_motion = launch.reduced_motion;
         environment.safe_area = launch.safe_area.map(|safe_area| {
             [
@@ -1133,6 +1140,7 @@ mod tests {
             clipboard: None,
             color_scheme: None,
             locale: None,
+            location: None,
             reduced_motion: None,
             platform: None,
             clock: None,

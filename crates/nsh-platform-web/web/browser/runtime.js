@@ -189,6 +189,7 @@ export function createBrowserHost(player) {
             case "render": components.render(...args); break;
             case "unrender": components.unrender(...args); break;
             case "environment": env.update(args[0]); break;
+            case "location": env.setLocation(args[0]); break;
             case "tokens": env.changedTokens(); break;
             case "animationsFinished": animation?.finished(args[0]); break;
             // A gate ran after the start (`nsh_after_gate`).

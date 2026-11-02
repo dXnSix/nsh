@@ -137,6 +137,10 @@ pub struct TestEnvironment {
     /// The locale, a BCP 47 tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
+    /// Where the app starts (`location()`): a path from the app's base,
+    /// which the test plays the embedding app (or the page's address) with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
     /// Whether the user asked for less motion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reduced_motion: Option<bool>,
@@ -240,9 +244,10 @@ pub enum ServerMessage {
         /// ([`ClientMessage::Trace`]).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         trace: bool,
-        /// What the test fixes of the app's environment, and its clipboard.
+        /// What the test fixes of the app's environment, and its clipboard
+        /// (boxed: the other messages are small).
         #[serde(default)]
-        environment: TestEnvironment,
+        environment: Box<TestEnvironment>,
     },
     /// What the test answers to the app's request `id`
     /// ([`ClientMessage::Fetch`]), a message per event, in order.
@@ -507,6 +512,17 @@ pub enum TestStep {
     },
     /// Goes back as the user does (`app.back`).
     Back,
+    /// Goes forward in the browser's history (`app.forward`): the web's
+    /// alone, the other platforms have no forward.
+    Forward,
+    /// The platform moves the app to `location` (`app.navigate`), as a
+    /// link into the app, the embedding app or the address bar does.
+    Navigate {
+        /// A path from the app's base, or relative to the location.
+        location: String,
+    },
+    /// Where the app is as the platform has it (`app.location`).
+    Location,
     /// Lets the app run (`app.wait`).
     Wait {
         /// Milliseconds.
@@ -1037,11 +1053,11 @@ mod tests {
             ServerMessage::TestSetup {
                 storage: vec![],
                 trace: false,
-                environment: TestEnvironment {
+                environment: Box::new(TestEnvironment {
                     safe_area: Some([47.5, 0.0, 34.25, 0.1]),
                     clock: Some(1_761_475_200_000.5),
                     ..TestEnvironment::default()
-                },
+                }),
             },
             step(TestStep::Scroll {
                 selector: "id:list".into(),
