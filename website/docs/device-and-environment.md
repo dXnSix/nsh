@@ -348,29 +348,6 @@ An app shown inside a native app follows that app's own settings when it sets th
 
 ## In the background
 
-`lifecycle()` (TSX: `lifecycle()`) says whether the user is using the app. It is `active` in the foreground, `inactive` while the app is still visible but another app or window has the focus (or the system shows something over it: the app switcher, an incoming call), and `background` while it is not visible: in the background on a phone, minimized on a desktop, a hidden tab on the web. Like every accessor it updates what read it, so an effect pauses a live feed, polling or a video in the background and resumes them when the user comes back:
-
-```rust tabs
-effect(move || {
-    if lifecycle() == Lifecycle::Background {
-        feed.pause();
-    } else {
-        feed.resume();
-    }
-});
-```
-
-```tsx tabs
-effect(() => {
-  if (lifecycle() === "background") feed.pause();
-  else feed.resume();
-});
-```
-
-Use `background` to pause work, and save what the user changes as they change it: the system may suspend an app seconds after it moves to the background, before an effect that reads the change has run. An app shown inside a native app follows that app's state, and where an app has several windows (an iPad, a desktop) a view follows the window it is in. In tests, `app.setLifecycle("background")` of `nsh/test` moves the app there ([Testing](./testing-and-trace.md#steps)).
-
-## In the background
-
 `lifecycle()` (the same in TSX) says whether the user is using the app. It is `active` in the foreground, `inactive` while the app is still visible but another app or window has the focus (or the system shows something over it: the app switcher, an incoming call), and `background` while it is not visible: in the background on a phone, minimized on a desktop, a hidden tab on the web. Like every accessor it updates what read it, so an effect pauses a live feed, polling or a video in the background and resumes them when the user comes back:
 
 ```rust tabs

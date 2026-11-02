@@ -347,29 +347,6 @@ import { timeZone } from "nsh";
 
 ## 在后台
 
-`lifecycle()`（TSX：`lifecycle()`）表示用户是否正在使用应用。应用在前台时为 `active`；仍可见但焦点在另一个应用或窗口上（或系统在它上面显示了内容：应用切换器、来电）时为 `inactive`；不可见时为 `background`：手机上在后台、桌面上已最小化、Web 上是隐藏的标签页。与所有访问器一样，它会更新读取它的地方，因此 effect 可以在后台暂停实时数据、轮询或视频，并在用户回来时恢复：
-
-```rust tabs
-effect(move || {
-    if lifecycle() == Lifecycle::Background {
-        feed.pause();
-    } else {
-        feed.resume();
-    }
-});
-```
-
-```tsx tabs
-effect(() => {
-  if (lifecycle() === "background") feed.pause();
-  else feed.resume();
-});
-```
-
-用 `background` 暂停工作，并在用户做出更改时就保存它：系统可能在应用进入后台几秒后就将其挂起，早于读取这一变化的副作用运行。显示在原生应用中的应用跟随该应用的状态；应用有多个窗口时（iPad、桌面），视图跟随它所在的窗口。在测试中，`nsh/test` 的 `app.setLifecycle("background")` 会把应用移到后台（[测试](./testing-and-trace.md#操作步骤)）。
-
-## 在后台
-
 `lifecycle()`（TSX 中同名）表示用户是否正在使用应用。应用在前台时为 `active`；仍可见但焦点在另一个应用或窗口上（或系统在它上面显示了内容：应用切换器、来电）时为 `inactive`；不可见时为 `background`：手机上在后台、桌面上已最小化、Web 上是隐藏的标签页。与所有访问器一样，它会更新读取它的地方，因此 effect 可以在后台暂停实时数据、轮询或视频，并在用户回来时恢复：
 
 ```rust tabs
