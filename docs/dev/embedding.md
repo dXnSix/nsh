@@ -172,7 +172,8 @@
     thread (`Core::take_navigations`), notes moves that came as `EventKind::Location` (the web's back and forward),
     and publishes a location that changed outside JS to the VM (`Script::set_location`, as the tokens are). Deep links
     (URL schemes, universal links / App Links, protocol handlers) enter here: a host maps the URL to a location and
-    calls `set_location`.
+    calls `set_location`. iOS: Swift `NshAppView.location`, `onNavigate` (C `nsh_app_set_location`, `nsh_app_location`,
+    `nsh_app_set_navigate_handler`, whose handler hops to the main queue as the call handlers' do).
 - **The host's data in every app.** Host and apps stay in step through the host: it keeps the shared state (a
   `tokio::sync::watch` or `broadcast` channel in a static the module's functions reach), functions the apps call
   change it, and an `on(event, listener: Callback<State>, cx: CallCx) -> Result<Stop, String>` keeps every app

@@ -617,7 +617,7 @@ function Sports() {
 ```
 
 - **On the web**, the location is the address bar's, after the app's base (`nsh.json` `web.base`), and the browser's history holds it. Each `navigate` is an entry (`history: "replace"` changes the current one), as each pushed page and open dialog is; a page or dialog shown in the turn of a `navigate` shares its entry. The back button closes an open dialog first, then goes back a page and to the entry's location: the stack's page pops natively (its `onDismiss` comes first), then `location()` changes. Forward goes to the entry's location, and the page the app shows for it becomes that entry's. A link into the app or a reload opens it at its location ([deploying an app with its own paths](./web.md#links-into-the-app)).
-- **In an embedding app**, the location is the one the host sets, and the host hears each navigation (`AppView::host()`'s `set_location` and `handle_navigate`). A host passes the app the path of a deep link it handled the same way.
+- **In an embedding app**, the location is the one the host sets, and the host hears each navigation ([iOS](./ios.md#the-apps-location); `AppView::host()`'s `set_location` and `handle_navigate` on the desktops). A host passes the app the path of a deep link it handled the same way.
 - **Elsewhere** the location starts at `/` and moves with the app's navigations. The native back button and gestures pop pages and close dialogs as always and leave the location to the app: an app whose pages follow its location navigates back too when one pops (in a page's `onDismiss`, with `history: "replace"`).
 
 ## Tabs and other layouts
