@@ -6,8 +6,9 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   SDK faces (those are `pr/location/02-ios` and `pr/location/03-android`). Android's `Native.LOCATION` constant, its
   JNI event key and the backends' no-op arms for `Command::Navigate` stay here: they keep the platforms in step with
   the core (Android's command encoder matches every command).
-- Rebuilt on upstream's code, which has no time zone, languages, regional preferences or app state: the
-  `TestEnvironment`, `OpenOptions`, `nsh-js` parts and docs tables take `location` beside what upstream has.
+- Rebuilt on upstream's code, which has no time zone, languages or regional preferences: the `TestEnvironment`,
+  `OpenOptions`, `nsh-js` parts and docs tables take `location` beside what upstream has, `lifecycle()` (#747)
+  included (`Part::Location` after `Part::Lifecycle`, 12 parts).
 - Design: [design-location](design-location.md) (the history rules and the embedding API).
 - Title: `core: Tell apps where the user is in them, and let them navigate`. Until the three web PRs are merged, GitHub
   shows their commits too.
