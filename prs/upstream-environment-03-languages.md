@@ -18,12 +18,13 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   literals upstream keeps (the engine's `ui_environment`, iOS's root view, the test runner's `open`); iOS's
   observers keep their own doc comments, and the Windows Environment row keeps #747's subclass wording. The core commit's test builds its
   environments as literals (clippy's `field_reassign_with_default`).
+- 2026-11-02 (after #747 merged as `lifecycle`): rebased onto the new `pr/environment/02-time-zone`, `appState` renamed `lifecycle` in what the commits touch, plus an eighth commit, `web: Give browser apps the user's preferred languages` (the browser runtime's `languages`; the change check counts an array's members). The Linux and GPUI commits' Environment rows had repeated sentences; they now add only the languages' sentence.
 
 ---
 
 **Depends on:** #TIME_ZONE (`core: Tell apps the device's time zone`), which depends on #747: each adds to
 the environment's fields, the test runner's `open` options and the docs the one before it adds. Until those are merged
-this PR shows their commits too; the languages' own are the last seven.
+this PR shows their commits too; the languages' own are the last eight.
 
 ## Description
 
@@ -35,7 +36,7 @@ back along it.
 first: `Environment::languages` (`platform::Languages`, at most 8, never empty, inline so that the environment stays
 `Copy`), which each platform writes as the system reports it. An embedding app's own language comes first.
 
-The PR is the core and every platform, a commit each:
+The PR is the core, every platform and the browser runtime, a commit each:
 
 - **Core**: `platform::Languages`, `Environment::languages`, `languages()`, `languages` in `nsh`. The web reports
   `navigator.languages`. `nsh/test`'s `open({ languages })` sets them (`[locale]` otherwise; pinned on real platforms)
@@ -51,6 +52,8 @@ The PR is the core and every platform, a commit each:
   fallbacks.
 - **GPUI**: as the native backends read it (`GetUserPreferredUILanguages` on Windows,
   `CFLocaleCopyPreferredLanguages` on macOS, gettext's `LANGUAGE` then the messages' locale on Linux).
+- **Web** (the browser runtime, where web apps' code runs): `src/browser/engine.rs` sends `languages` to the app's
+  realm and `browser/environment.js` serves them; a shorter list now counts as a change.
 
 Docs: `languages` in `website/modules/nsh.md`, "Preferred languages" in `website/docs/device-and-environment.md`,
 `open`'s `languages` and `setLanguages` in `website/docs/testing-and-trace.md` (each with its zh-CN page),

@@ -18,13 +18,14 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   literals upstream keeps (the engine's `ui_environment`, iOS's root view, the test runner's `open`); iOS's
   observers keep their own doc comments, and the Windows Environment row keeps #747's subclass wording. The core commit's test builds its
   environments as literals (clippy's `field_reassign_with_default`).
+- 2026-11-02 (after #747 merged as `lifecycle`): rebased onto the new `pr/environment/03-languages`, `appState` renamed `lifecycle` in what the commits touch, plus a ninth commit, `web: Give browser apps the user's regional preferences` (the browser runtime's four accessors). The Linux and GPUI commits' Environment rows had repeated sentences and lost their ends; they now add the regional sentence as the fork's `main` has it, and the macOS row closes its regional parenthesis (`read again with the other settings)`).
 
 ---
 
 **Depends on:** #LANGUAGES (`core: Tell apps the user's preferred languages`), which depends on #TIME_ZONE
 and #747: each adds to the environment's fields, the test runner's `open` options and the docs the one before it
 adds. Until those are merged this PR shows their commits too; the regional preferences' own are
-the last eight.
+the last nine.
 
 ## Description
 
@@ -40,7 +41,7 @@ each: `Environment::regional` (`platform::RegionalPreferences`, with `HourCycle`
 and `RegionalPreferences::parse` reads a platform locale identifier's region and its Unicode extension keywords (`hc`,
 `fw`, `ms`, `mu`, `rg`) in BCP 47's form and ICU's.
 
-The PR is the core and every platform, a commit each:
+The PR is the core, every platform and the browser runtime, a commit each:
 
 - **GPUI** (first): its dev client's events are boxed in its messages; the test environment's regional preferences
   make them larger than clippy's `large_enum_variant` allows on Windows.
@@ -63,6 +64,8 @@ The PR is the core and every platform, a commit each:
 - **Linux**: the POSIX locales' regions (`LC_TIME`'s times and weeks, `LC_MEASUREMENT`'s units); GNOME's
   `clock-format` sets the hour cycle where the region's disagrees, live, where the schema is installed.
 - **GPUI**: as the native backends read them on each desktop.
+- **Web** (the browser runtime, where web apps' code runs): `src/browser/engine.rs` sends the four to the app's
+  realm and `browser/environment.js` serves them, en-US's until the engine reports.
 
 Docs: the four accessors in `website/modules/nsh.md`, "Regional preferences" in
 `website/docs/device-and-environment.md`, `open`'s options and `setRegionalPreferences` in

@@ -15,12 +15,13 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   literals upstream keeps (the engine's `ui_environment`, iOS's root view, the test runner's `open`); iOS's
   observers keep their own doc comments, and the Windows Environment row keeps #747's subclass wording. The core commit's test builds its
   environments as literals (clippy's `field_reassign_with_default`).
+- 2026-11-02 (after #747 merged as `lifecycle`): rebased onto `upstream/main` `bd30b1b4` through `pr/web-lifecycle/01-web` (its own PR, `upstream-web-lifecycle.md`), `appState` renamed `lifecycle` in what the commits touch, plus an eighth commit, `web: Give browser apps the device's time zone` (the browser runtime's `timeZone`, `environment.test.mjs`). The Linux and GPUI commits' `docs/dev` Environment rows had repeated half a sentence; they now add only the time zone's sentence (GPUI's ends as the fork's `main` has it: read again whenever a window becomes the active one). The zh-CN `modules/nsh.md` line keeps the time zone in the reactive list. Previous heads: `old-pre-lifecycle/origin/*` locally.
 
 ---
 
-**Depends on:** #747 (`core: Tell apps whether they are in use`): it adds to the environment's fields, the test
-runner's `open` options and the docs that PR adds. Until #747 is merged this PR shows its commits too; the time zone's
-own are the last seven.
+**Depends on:** #LIFECYCLE_WEB (`web: Give browser apps their lifecycle`), which adds the browser runtime's
+`environment.test.mjs` that this PR's web commit extends. Until it is merged this PR shows its commit too; the time
+zone's own are the last eight.
 
 ## Description
 
@@ -33,7 +34,7 @@ know when it changes.
 `Environment::time_zone` (`platform::TimeZone`, inline so that the environment stays `Copy`), which each platform
 writes as the system reports it. `Intl`'s default zone and `Date`'s local times stay as they are.
 
-The PR is the core and every platform, a commit each:
+The PR is the core, every platform and the browser runtime, a commit each:
 
 - **Core**: `platform::TimeZone` (`UTC`, `parse`, `as_str`), `Environment::time_zone`, `time_zone()`, `timeZone` in
   `nsh`. The web reports the browser's zone, read again when the page shows or gets the focus. `nsh/test`'s
@@ -51,6 +52,8 @@ The PR is the core and every platform, a commit each:
   `/etc/timezone`'s.
 - **GPUI**: as the native backends name it (Windows' setting through ICU, elsewhere `TZ`, `/etc/localtime`,
   `/etc/timezone`), read again whenever a window becomes the active one, as GPUI reports no change of it.
+- **Web** (the browser runtime, where web apps' code runs): `src/browser/engine.rs` sends `timeZone` to the app's
+  realm and `browser/environment.js` serves it, UTC until the engine reports.
 
 Docs: `timeZone` in `website/modules/nsh.md`, "Time zone" in `website/docs/device-and-environment.md`, `open`'s
 `timeZone` and `setTimeZone` in `website/docs/testing-and-trace.md` (each with its zh-CN page), `docs/dev/elements.md`
