@@ -140,8 +140,10 @@ impl std::fmt::Debug for FontFamily {
     }
 }
 
-/// A family of a `fontFamily` list ([`font_families`]).
+/// A family of a `fontFamily` list ([`font_families`]): a family's name or
+/// one of CSS's generic families, which may gain more of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum FamilyName<'a> {
     /// The system font: `system-ui`, `sans-serif`, `ui-sans-serif`,
     /// `-apple-system`, `BlinkMacSystemFont`.
@@ -152,6 +154,10 @@ pub enum FamilyName<'a> {
     Monospace,
     /// The system's rounded font (`ui-rounded`), where it has one.
     Rounded,
+    /// A script-like font (`cursive`), where the platform has one.
+    Cursive,
+    /// A decorative font (`fantasy`), where the platform has one.
+    Fantasy,
     /// A family installed on the device or registered by the app.
     Named(&'a str),
 }
@@ -195,6 +201,8 @@ pub fn font_families(value: &str) -> impl Iterator<Item = FamilyName<'_>> {
                 "serif" | "ui-serif" => FamilyName::Serif,
                 "monospace" | "ui-monospace" => FamilyName::Monospace,
                 "ui-rounded" => FamilyName::Rounded,
+                "cursive" => FamilyName::Cursive,
+                "fantasy" => FamilyName::Fantasy,
                 name => FamilyName::Named(name),
             });
         }
@@ -3872,6 +3880,10 @@ mod tests {
             font_families("ui-rounded").collect::<Vec<_>>(),
             [FamilyName::Rounded]
         );
+        assert_eq!(
+            font_families("cursive, fantasy").collect::<Vec<_>>(),
+            [FamilyName::Cursive, FamilyName::Fantasy]
+        );
         assert_eq!(font_families(" , ").count(), 0);
     }
 
@@ -3891,6 +3903,10 @@ mod tests {
                 FamilyName::Named("monospace"),
                 FamilyName::Monospace,
             ]
+        );
+        assert_eq!(
+            font_families("'cursive', \"fantasy\"").collect::<Vec<_>>(),
+            [FamilyName::Named("cursive"), FamilyName::Named("fantasy")]
         );
         // An unclosed quote runs to the end.
         assert_eq!(

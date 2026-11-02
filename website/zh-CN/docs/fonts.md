@@ -17,6 +17,7 @@ group: ui
 | `"serif"`、`"ui-serif"` | 系统衬线字体（iOS 上是 New York，Android 上是 Noto Serif） |
 | `"monospace"`、`"ui-monospace"` | 系统等宽字体（iOS 上是 SF Mono） |
 | `"ui-rounded"` | 系统圆体（SF Pro Rounded），仅限 iOS |
+| `"cursive"`、`"fantasy"` | 手写体或装饰字体，在拥有这类字体的平台上使用（Windows 上是 Comic Sans MS 和 Impact） |
 
 系统字体支持 100 到 900 的所有字重。Tailwind 的 `font-sans`、`font-serif` 和 `font-mono` 分别对应前三行；主题设置了字体时，`font-sans` 和 `font-mono` 对应主题的字体（[应用的默认字体](#应用的默认字体)）。
 

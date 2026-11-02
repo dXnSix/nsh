@@ -146,7 +146,12 @@ fn listed_fonts(
 ) -> Option<(CFRetained<CTFont>, Vec<CFRetained<CTFont>>)> {
     let mut fonts = nsh_core::font_families(list).filter_map(|family| match family {
         FamilyName::Named(name) => family_font(name, size, weight),
-        generic => Some(generic_font(generic, size, weight)),
+        FamilyName::System | FamilyName::Serif | FamilyName::Monospace | FamilyName::Rounded => {
+            Some(generic_font(family, size, weight))
+        }
+        // The system font has no design for the others (`cursive`,
+        // `fantasy`): the list goes on to its next family.
+        _ => None,
     });
     let Some(first) = fonts.next() else {
         log::warn!("font family `{list}` is not available; using the system font");
@@ -232,7 +237,7 @@ fn generic_font(family: FamilyName<'_>, size: CGFloat, weight: u16) -> CFRetaine
         // SAFETY: immutable UIKit constants.
         FamilyName::Serif => unsafe { UIFontDescriptorSystemDesignSerif },
         FamilyName::Rounded => unsafe { UIFontDescriptorSystemDesignRounded },
-        FamilyName::System | FamilyName::Named(_) => return system_font(size, weight),
+        _ => return system_font(size, weight),
     };
     let base = UIFont::systemFontOfSize_weight(size, font_weight(weight));
     // SAFETY: a plain getter of a valid font.

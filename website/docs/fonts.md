@@ -17,6 +17,7 @@ Text uses the system font (San Francisco on iOS, Roboto on Android) unless a fon
 | `"serif"`, `"ui-serif"` | The system serif (New York on iOS, Noto Serif on Android) |
 | `"monospace"`, `"ui-monospace"` | The system monospace font (SF Mono on iOS) |
 | `"ui-rounded"` | The rounded system font (SF Pro Rounded), iOS only |
+| `"cursive"`, `"fantasy"` | A script or a decorative font, on the platforms that have one (Comic Sans MS and Impact on Windows) |
 
 The system font honors every weight from 100 to 900. Tailwind's `font-sans`, `font-serif` and `font-mono` map to the first three rows, and `font-sans` and `font-mono` to the theme's fonts when it sets them ([A default font for the app](#a-default-font-for-the-app)).
 

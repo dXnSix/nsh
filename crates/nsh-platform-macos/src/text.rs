@@ -146,7 +146,12 @@ fn listed_fonts(
 ) -> Option<(CFRetained<CTFont>, Vec<CFRetained<CTFont>>)> {
     let mut fonts = nsh_core::font_families(list).filter_map(|family| match family {
         FamilyName::Named(name) => family_font(name, size, weight),
-        generic => Some(generic_font(generic, size, weight)),
+        FamilyName::System | FamilyName::Serif | FamilyName::Monospace | FamilyName::Rounded => {
+            Some(generic_font(family, size, weight))
+        }
+        // The system font has no design for the others (`cursive`,
+        // `fantasy`): the list goes on to its next family.
+        _ => None,
     });
     let Some(first) = fonts.next() else {
         log::warn!("font family `{list}` is not available; using the system font");
@@ -232,7 +237,7 @@ fn generic_font(family: FamilyName<'_>, size: CGFloat, weight: u16) -> CFRetaine
         // SAFETY: immutable AppKit constants.
         FamilyName::Serif => unsafe { NSFontDescriptorSystemDesignSerif },
         FamilyName::Rounded => unsafe { NSFontDescriptorSystemDesignRounded },
-        FamilyName::System | FamilyName::Named(_) => return system_font(size, weight),
+        _ => return system_font(size, weight),
     };
     let base = NSFont::systemFontOfSize_weight(size, font_weight(weight));
     let descriptor = base.fontDescriptor();
@@ -2318,6 +2323,10 @@ mod tests {
                     .attribute(super::kCTFontCascadeListAttribute)
                     .is_none()
             );
+            // Generic families the system font has no design for are
+            // passed over, as families it does not have.
+            let passed = super::make_font(&style("cursive, fantasy, Menlo"));
+            assert_eq!(passed.family_name().to_string(), "Menlo");
         }
     }
 
