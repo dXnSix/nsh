@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
 
-- Branch: `pr/web-open-url/01-web`, one commit on `upstream/main` `bd30b1b4`. The fork's own fix is dXnSix/nsh#113
+- Branch: `pr/web-open-url/01-web`, one commit on `upstream/main` `828b1f13` (after #822). The fork's own fix is dXnSix/nsh#113
   (the same commit on the fork's `main`).
 - Checked locally: `node --test crates/nsh-platform-web/web/nsh.test.mjs` fails without the one line in `src/lib.rs`
   and passes with it; the player's and the browser runtime's other JS tests; nightly rustfmt. In a page (on the fork):

@@ -2,7 +2,7 @@
 
 Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
 
-- Branch: `pr/web-lifecycle/01-web`, one commit on `upstream/main` `bd30b1b4` (after #747, which added
+- Branch: `pr/web-lifecycle/01-web`, one commit on `upstream/main` `828b1f13` (after #822; #747 added
   `lifecycle()`). The fork's own fix is dXnSix/nsh#114, still under the name `appState` there.
 - `pr/environment/02-time-zone` to `04-regional` sit on this branch: each adds its part of the browser runtime and of
   `environment.test.mjs`, which this PR adds. Open this one first.

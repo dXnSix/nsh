@@ -16,6 +16,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   observers keep their own doc comments, and the Windows Environment row keeps #747's subclass wording. The core commit's test builds its
   environments as literals (clippy's `field_reassign_with_default`).
 - 2026-11-02 (after #747 merged as `lifecycle`): rebased onto `upstream/main` `bd30b1b4` through `pr/web-lifecycle/01-web` (its own PR, `upstream-web-lifecycle.md`), `appState` renamed `lifecycle` in what the commits touch, plus an eighth commit, `web: Give browser apps the device's time zone` (the browser runtime's `timeZone`, `environment.test.mjs`). The Linux and GPUI commits' `docs/dev` Environment rows had repeated half a sentence; they now add only the time zone's sentence (GPUI's ends as the fork's `main` has it: read again whenever a window becomes the active one). The zh-CN `modules/nsh.md` line keeps the time zone in the reactive list. Previous heads: `old-pre-lifecycle/origin/*` locally.
+- 2026-11-02 (after #822 merged): rebased onto `upstream/main` `828b1f13` without conflicts, patches unchanged (`git range-diff`). Previous heads: `old-pre-822/*` locally.
 
 ---
 
