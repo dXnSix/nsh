@@ -2,8 +2,8 @@
 
 Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
 
-- Branch: `pr/environment/03-languages` (`a1de5ed5f`, restacked 2026-10-31 on #747's review fixes), on `pr/environment/02-time-zone`: seven commits of its own, the
-  core's, then one per platform. It replaces `pr/languages/01-core` to `07-gpui`; every file is the same as in those
+- Branch: `pr/environment/03-languages` (`2a39c7294`), on `pr/environment/02-time-zone`: eight commits of its own, the
+  core's, one per platform, then the web's. It replaces `pr/languages/01-core` to `07-gpui`; every file is the same as in those
   branches, except `crates/gpui/Cargo.lock`: `pr/languages/07-gpui` added `jiff`'s entries there, which nothing in it
   uses, and cargo drops them on any build; this
   branch leaves them out. The literals that build an environment outside `nsh-core` (iOS's root view, the engine's
@@ -23,9 +23,10 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 
 ---
 
-**Depends on:** #TIME_ZONE (`core: Tell apps the device's time zone`), which depends on #747: each adds to
-the environment's fields, the test runner's `open` options and the docs the one before it adds. Until those are merged
-this PR shows their commits too; the languages' own are the last eight.
+**Depends on:** #TIME_ZONE (`core: Tell apps the device's time zone`), which depends on #LIFECYCLE_WEB (`web: Give
+browser apps their lifecycle`): each adds to the environment's fields, the test runner's `open` options, the browser
+runtime's environment and the docs the one before it adds. Until those are merged this PR shows their commits too; the
+languages' own are the last eight.
 
 ## Description
 

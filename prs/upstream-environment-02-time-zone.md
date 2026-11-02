@@ -2,13 +2,13 @@
 
 Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
 
-- Branch: `pr/environment/02-time-zone` (`ca9231b93`, restacked 2026-10-31 on #747's review fixes), on `pr/environment/01-app-state`: seven commits of its own, the
-  core's, then one per platform. It replaces `pr/time-zone/01-core` to `07-gpui`; every file is the same as in those
+- Branch: `pr/environment/02-time-zone` (`61564e75e`), on `pr/web-lifecycle/01-web`: eight commits of its own, the
+  core's, one per platform, then the web's. It replaces `pr/time-zone/01-core` to `07-gpui`; every file is the same as in those
   branches. The literals that build an environment outside `nsh-core` (iOS's root view, the engine's `ui_environment`
   and its tests, `nsh-testing`'s) set the new field by assignment, as `pr/environment/00-non-exhaustive` builds them;
   the branch was rebuilt on it 2026-10-30 (the previous heads are `old-pre-nonexh/02-time-zone` locally).
 - Size of its own commits: 42 files, +717 / −50 (code +582 / −29, tests +57 / −5, docs +78 / −16).
-- Title: `core: Tell apps the device's time zone`. Until the app state PR is merged, GitHub shows both PRs' commits.
+- Title: `core: Tell apps the device's time zone`. Until the web lifecycle PR is merged, GitHub shows both PRs' commits.
 
 - 2026-11-01: #744 was closed, so this branch is rebuilt on #747's head `fab837934` (rebased on `upstream/main` `e4e464f4` without #744's commit), its seven commits replayed
   (head `796cfc1b5`). Where #744 had environments built by assignment, the new field goes into the struct
