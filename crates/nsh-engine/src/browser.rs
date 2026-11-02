@@ -38,6 +38,8 @@ pub struct Services {
     pub posts: Posts,
     /// The initial device environment.
     pub environment: Environment,
+    /// The app's location as it starts.
+    pub location: nsh_core::location::Location,
     /// The initial design tokens.
     pub tokens: Arc<Tokens>,
     /// The initial theme.
@@ -56,6 +58,7 @@ impl Default for Services {
             registries: Vec::new(),
             posts: Default::default(),
             environment: Default::default(),
+            location: Default::default(),
             tokens: Default::default(),
             theme: Default::default(),
             clock: Default::default(),
@@ -97,6 +100,8 @@ pub trait Host {
     fn has_posted(&self) -> bool;
     /// Update the device environment.
     fn set_environment(&self, environment: &Environment);
+    /// Update the app's location (it changed outside JS).
+    fn set_location(&self, location: &nsh_core::location::Location);
     /// Update design tokens.
     fn set_tokens(&self, tokens: Arc<Tokens>);
     /// Update the theme.
@@ -200,6 +205,7 @@ impl Script {
         sets: &[Registry],
         posts: Posts,
         environment: &Environment,
+        location: &nsh_core::location::Location,
         tokens: Arc<Tokens>,
         theme: ThemeTokens,
         _text: Rc<M>,
@@ -232,6 +238,7 @@ impl Script {
                 registries: sets.to_vec(),
                 posts,
                 environment: *environment,
+                location: location.clone(),
                 tokens,
                 theme,
                 // Startup runs on the engine's clock.
@@ -310,6 +317,9 @@ impl Script {
     }
     pub(crate) fn set_environment(&self, value: &Environment) {
         self.0.set_environment(value);
+    }
+    pub(crate) fn set_location(&self, value: &nsh_core::location::Location) {
+        self.0.set_location(value);
     }
     pub(crate) fn set_tokens(&self, value: Arc<Tokens>) {
         self.0.set_tokens(value);

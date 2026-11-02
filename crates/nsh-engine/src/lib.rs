@@ -56,6 +56,7 @@ pub use nsh_core::{
     element::{EngineContext, Root, Tokens},
     geometry::{self, Bounds, Edges, Point, Points, Size},
     js::{HostLimits, Limits},
+    location::{HistoryBehavior, InvalidLocation, Location, Navigation},
     platform::{
         AppState, ColorScheme, Environment, FetchEvent, FetchOp, HostEnvironment, HourCycle,
         HttpBody, HttpHead, HttpRequest, Idiom, Languages, Locale, MeasurementSystem, Os,
@@ -967,6 +968,9 @@ enum Message {
     HostEvent(String, nsh_core::JsonValue),
     /// The embedding app's answer to call `.0` (`host.call`).
     HostReply(u64, Result<nsh_core::JsonValue, String>),
+    /// The embedding app moved the app to this location
+    /// ([`HostChannel::set_location`]).
+    Location(Location),
     /// The embedding app's URL handler answered URL request `id`: it took
     /// the URL, or the platform opens it.
     UrlHandled {
@@ -1594,9 +1598,15 @@ impl<M: TextEngine + 'static> Driver<M> {
             }
         }
         let js_tokens = core.tokens().clone();
+        // Where the app starts: the embedding app's location, set before
+        // (later moves come as `Message::Location`).
+        let js_location = config.host.location();
+        core.set_location(js_location.clone());
         let state = State {
             core,
             js_tokens,
+            host_location: js_location.clone(),
+            js_location,
             frame_requested: false,
             ops: Vec::new(),
             binds: Vec::new(),
@@ -1617,6 +1627,7 @@ impl<M: TextEngine + 'static> Driver<M> {
             pinned: config.pinned,
             host: config.host.clone(),
             url_opens: Vec::new(),
+            navigations: Vec::new(),
             net: Net {
                 network: config.network.clone(),
                 tx,
@@ -1649,6 +1660,14 @@ impl<M: TextEngine + 'static> Driver<M> {
             last_frame: None,
             _host: config.host.attach(host_tx, rx.clone()),
         };
+        // A location the embedding app set while the engine attached (its
+        // later ones come as `Message::Location`).
+        let location = config.host.location();
+        if location != driver.state.js_location {
+            driver.state.core.set_location(location.clone());
+            driver.state.js_location = location.clone();
+            driver.state.host_location = location;
+        }
         let eval_us = match &config.app {
             App::Js(bundle) => {
                 #[cfg(any(feature = "js-core", all(feature = "browser", target_arch = "wasm32")))]
@@ -1680,6 +1699,7 @@ impl<M: TextEngine + 'static> Driver<M> {
                     &config.ui_sets,
                     posts,
                     &environment,
+                    &driver.state.js_location,
                     driver.state.js_tokens.clone(),
                     driver.state.core.theme_tokens(),
                     text_engine,
@@ -2025,6 +2045,11 @@ struct State<M: TextEngine> {
     /// The design tokens JS has (`token()`): the core's when they were
     /// last sent.
     js_tokens: Arc<nsh_core::element::Tokens>,
+    /// The location JS has (`location()`): the core's when it was last
+    /// sent.
+    js_location: Location,
+    /// The core's location when the embedding app's channel last heard it.
+    host_location: Location,
     /// What the environment keeps whatever the platform reports
     /// ([`EngineConfig::pinned`]).
     pinned: EnvironmentPins,
@@ -2047,6 +2072,8 @@ struct State<M: TextEngine> {
     host: HostChannel,
     /// URLs the app asked to open, taken from the core (a reused buffer).
     url_opens: Vec<(u32, String)>,
+    /// The app's navigations, taken from the core (a reused buffer).
+    navigations: Vec<Navigation>,
     net: Net,
     /// Development updates to apply.
     hot: Vec<HotUpdate>,
@@ -2768,6 +2795,27 @@ impl<M: TextEngine> State<M> {
             self.core.take_events(&mut self.events);
             // URLs the platform opens go out in another round.
             let urls = self.open_urls();
+            // The embedding app hears the app's navigations, and the
+            // location reaches what read it in JS (whose ops come in
+            // another round) when it changed outside JS.
+            self.core.take_navigations(&mut self.navigations);
+            for navigation in self.navigations.drain(..) {
+                self.host_location = navigation.location.clone();
+                self.host.navigated(navigation);
+            }
+            let location = self.core.location();
+            if location != self.host_location {
+                self.host.moved(&location);
+                self.host_location = location.clone();
+            }
+            let relocate = match script {
+                Some(script) if location != self.js_location => {
+                    script.set_location(&location);
+                    self.js_location = location;
+                    true
+                }
+                _ => false,
+            };
             // Posts the ops queued (in program order) run in another round.
             let posted = script.is_some_and(Script::has_posted);
             // New tokens (the app's theme, the embedding app's) reach what
@@ -2785,6 +2833,7 @@ impl<M: TextEngine> State<M> {
                 && self.events.is_empty()
                 && !posted
                 && !retheme
+                && !relocate
                 && !more_paced
                 && !urls
             {
@@ -2963,6 +3012,7 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             state.resized = Some(size);
         }
         Message::Wake => {}
+        Message::Location(location) => state.core.set_location(location),
         Message::Environment(mut env) => {
             state.pinned.apply(&mut env);
             state.core.set_font_scale(env.font_scale);

@@ -279,7 +279,7 @@ fn session(
                 }) => on_event(DevEvent::TestSetup {
                     storage,
                     trace,
-                    environment,
+                    environment: *environment,
                 }),
                 Ok(ServerMessage::Fetch { id, reply }) => on_event(DevEvent::Fetch { id, reply }),
                 Ok(ServerMessage::Root) => on_event(DevEvent::Root),

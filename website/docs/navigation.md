@@ -1,6 +1,6 @@
 ---
 title: Navigation
-description: Native navigation stacks with createNavStack, NavStack and NavPage, headers on every platform, keeping the user on a page with popOnBack, dialogs, and the Android back button.
+description: Native navigation stacks with createNavStack, NavStack and NavPage, headers on every platform, keeping the user on a page with popOnBack, dialogs, the Android back button, and the app's location.
 order: 41
 group: ui
 ---
@@ -574,6 +574,48 @@ function Editor() {
 
 A listener made in an effect lasts until the effect runs again or its component goes; in TSX, the function
 `BackHandler.on` returns also stops it. In TSX, `BackHandler.exitApp()` leaves the app; `nsh/mobile` can be imported on iOS too, where `BackHandler`'s calls return at once, so the same code runs on both platforms. See [Platform-specific code](./platform-specific.md).
+
+## Locations
+
+The app's location is where the user is in it, as a URL from the app's base: `/sports/football?tab=live`. Read it with `location()` and go elsewhere with `navigate(url)`; both are in `nsh` and the Rust prelude ([reference](../modules/nsh.md#location)). A router keeps its routes in step with the location: it shows the page `location()` names, and calls `navigate` when the user goes somewhere in the app.
+
+```rust tabs
+use nsh_core::{location::HistoryBehavior, prelude::*};
+
+#[component]
+fn Sports() -> impl IntoElement {
+    view()
+        .child(text(|| format!("Showing {}", location().path())))
+        .child(text("Live").on_press(|_: &()| {
+            navigate("?tab=live", HistoryBehavior::Replace).unwrap();
+        }))
+        .child(text("Football").on_press(|_: &()| {
+            navigate("/sports/football", HistoryBehavior::Push).unwrap();
+        }))
+}
+```
+
+```tsx tabs
+import { location, navigate, Text, View } from "nsh";
+
+function Sports() {
+  return (
+    <View>
+      <Text>{`Showing ${location().pathname}`}</Text>
+      <View onPress={() => navigate("?tab=live", { history: "replace" })}>
+        <Text>Live</Text>
+      </View>
+      <View onPress={() => navigate("/sports/football")}>
+        <Text>Football</Text>
+      </View>
+    </View>
+  );
+}
+```
+
+- **On the web**, the location is the address bar's, after the app's base (`nsh.json` `web.base`), and the browser's history holds it. Each `navigate` is an entry (`history: "replace"` changes the current one), as each pushed page and open dialog is; a page or dialog shown in the turn of a `navigate` shares its entry. The back button closes an open dialog first, then goes back a page and to the entry's location: the stack's page pops natively (its `onDismiss` comes first), then `location()` changes. Forward goes to the entry's location, and the page the app shows for it becomes that entry's. A link into the app or a reload opens it at its location ([deploying an app with its own paths](./web.md#links-into-the-app)).
+- **In an embedding app**, the location is the one the host sets, and the host hears each navigation ([iOS](./ios.md#the-apps-location), [Android](./android.md#the-apps-location); `AppView::host()`'s `set_location` and `handle_navigate` on the desktops). A host passes the app the path of a deep link it handled the same way.
+- **Elsewhere** the location starts at `/` and moves with the app's navigations. The native back button and gestures pop pages and close dialogs as always and leave the location to the app: an app whose pages follow its location navigates back too when one pops (in a page's `onDismiss`, with `history: "replace"`).
 
 ## Tabs and other layouts
 

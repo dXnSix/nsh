@@ -28,6 +28,7 @@ use crate::{
     Command, Dialog, EdgeInsets, LayoutAnimation, NodeId, Points, Size,
     canvas::CanvasFont,
     color::Hsla,
+    location::{InvalidLocation, Location, NavigateOptions, Navigation},
     platform::{
         AppState, Appearance, HourCycle, Idiom, Languages, Locale, MeasurementSystem, Os,
         TemperatureUnit, TimeZone, Weekday,
@@ -50,6 +51,8 @@ pub(crate) struct Ambient {
     measure: Option<MeasureFn>,
     /// The app's key-value storage (`nsh/storage`).
     storage: Option<crate::storage::Store>,
+    /// The app's location ([`location`]), made when first read or set.
+    location: Option<Signal<Location>>,
 }
 
 impl Ambient {
@@ -172,6 +175,18 @@ impl super::Runtime {
         with_data(|d| d.ambient.inset_hosts())
     }
 
+    /// The app's location now: what read it runs again.
+    pub(crate) fn set_location(&self, location: Location) {
+        let _entered = self.enter();
+        location_signal().set(location);
+    }
+
+    /// The app's location, untracked.
+    pub(crate) fn location(&self) -> Location {
+        let _entered = self.enter();
+        location_signal().get_untracked()
+    }
+
     /// The insets of the screen or modal `host` is on.
     pub(crate) fn set_insets(&self, host: NodeId, insets: EdgeInsets) {
         let _entered = self.enter();
@@ -191,6 +206,16 @@ fn env<T: Clone + 'static>(part: impl FnOnce(&EnvSignals) -> Memo<T>) -> T {
     let memo = with_data(|d| d.ambient.env.as_ref().map(part));
     memo.expect("the core sets the environment before components run")
         .get()
+}
+
+/// The location's signal, made at `/` when nothing set it yet.
+fn location_signal() -> Signal<Location> {
+    if let Some(signal) = with_data(|d| d.ambient.location) {
+        return signal;
+    }
+    let signal = Owner::detached().run(|| super::signal(Location::root()));
+    with_data(|d| d.ambient.location = Some(signal));
+    signal
 }
 
 fn executor() -> Rc<Executor> {
@@ -506,6 +531,39 @@ pub fn open_url(url: impl Into<String>) -> Answer<bool> {
     let (answer, action) = super::services::open_url(url.into());
     act(action);
     answer
+}
+
+/// Where the user is in the app (TS: `location()`): a path from the app's
+/// base with its query and fragment (`/sports/football?tab=live`). On the
+/// web it is the address bar's, back and forward included; elsewhere what
+/// the embedding app set (its host channel's `set_location`), else `/`. Reading it subscribes, so what shows the page a location names
+/// follows the user's moves.
+pub fn location() -> Location {
+    location_signal().get()
+}
+
+/// Goes to `url` in the app (TS: `navigate`), resolved against the
+/// location ([`Location::join`]: `/teams`, `football`, `?tab=live`):
+/// [`location`] is the new one at once, the web adds a browser history
+/// entry for it (or changes the current one with
+/// [`crate::location::HistoryBehavior::Replace`]) and the embedding app
+/// hears it. A page or
+/// a dialog the app shows in the same turn shares the entry. Going to the
+/// location the app is at does nothing. Refuses other sites' URLs, which
+/// [`open_url`] opens.
+pub fn navigate(url: &str, options: impl Into<NavigateOptions>) -> Result<(), InvalidLocation> {
+    let signal = location_signal();
+    let current = signal.get_untracked();
+    let next = current.join(url)?;
+    if next == current {
+        return Ok(());
+    }
+    signal.set(next.clone());
+    act(Action::Command(
+        crate::ROOT_ID,
+        Command::Navigate(Navigation::new(next, options.into().history)),
+    ));
+    Ok(())
 }
 
 /// Puts `text` on the system clipboard (TS: `Clipboard.writeText`).

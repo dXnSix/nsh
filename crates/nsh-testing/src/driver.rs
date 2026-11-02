@@ -57,6 +57,16 @@ pub(crate) trait Driver: Send {
     fn choose_menu_item(&mut self, label: &str) -> Result<(), String>;
     fn close_menu(&mut self) -> Result<(), String>;
     fn back(&mut self) -> Result<(), String>;
+    /// Goes forward in the browser's history (`app.forward`): the web's
+    /// alone.
+    fn forward(&mut self) -> Result<(), String> {
+        Err(crate::failure::web_only("forward"))
+    }
+    /// The platform moves the app to `location` (`app.navigate`), as a link
+    /// into the app or the embedding app does.
+    fn navigate(&mut self, location: &str) -> Result<(), String>;
+    /// Where the app is, as the platform has it (`app.location`).
+    fn location(&mut self) -> Result<String, String>;
     fn wait(&mut self, time: Duration) -> Result<(), String>;
     fn wait_for_within(&mut self, selector: &str, timeout: Duration) -> Result<(), String>;
     fn wait_for_gone(&mut self, selector: &str, timeout: Duration) -> Result<(), String>;
@@ -192,6 +202,12 @@ impl Driver for Headless {
     }
     fn back(&mut self) -> Result<(), String> {
         Headless::back(self)
+    }
+    fn navigate(&mut self, location: &str) -> Result<(), String> {
+        Headless::navigate(self, location)
+    }
+    fn location(&mut self) -> Result<String, String> {
+        Ok(Headless::location(self))
     }
     fn wait(&mut self, time: Duration) -> Result<(), String> {
         Headless::wait(self, time)
@@ -423,6 +439,8 @@ fn step_name(step: &TestStep) -> Option<String> {
         TestStep::CloseMenu => "closeMenu".to_owned(),
         TestStep::HostSend { name, .. } => format!("host.send({name})"),
         TestStep::Back => "back".to_owned(),
+        TestStep::Forward => "forward".to_owned(),
+        TestStep::Navigate { location } => format!("navigate({location})"),
         TestStep::Wait { ms } => format!("wait({ms})"),
         TestStep::Clock {
             change: ClockChange::RunFor { ms },
@@ -556,6 +574,17 @@ impl Driver for Remote {
     }
     fn back(&mut self) -> Result<(), String> {
         self.action(TestStep::Back)
+    }
+    fn forward(&mut self) -> Result<(), String> {
+        self.action(TestStep::Forward)
+    }
+    fn navigate(&mut self, location: &str) -> Result<(), String> {
+        self.action(TestStep::Navigate {
+            location: location.into(),
+        })
+    }
+    fn location(&mut self) -> Result<String, String> {
+        self.query(TestStep::Location)
     }
     // On a manual clock the app's time passes too, as headless.
     fn wait(&mut self, time: Duration) -> Result<(), String> {

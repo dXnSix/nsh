@@ -1962,6 +1962,11 @@ impl<M: TextEngine> Core<M> {
             }
             Op::Command { id, command } => {
                 self.key(id)?;
+                if let Command::Navigate(navigation) = &command
+                    && id == crate::ROOT_ID
+                {
+                    self.navigated(navigation);
+                }
                 self.commands.push((id, command));
                 Ok(())
             }
