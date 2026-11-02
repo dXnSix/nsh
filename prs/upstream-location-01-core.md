@@ -33,7 +33,9 @@ the player already owns for its pages and dialogs.
 `/sports/football?tab=live#top`, the same value on every platform. `navigate(url, { history })` resolves a URL against
 it, moves it at once (code after the call reads the new one) and tells the platform with `Command::Navigate` on the
 root; the platform's moves come back as `EventKind::Location` or through the embedding app's channel. It is a signal of
-its own in `Ambient`, so the environment stays `Copy`.
+its own in `Ambient`, so the environment stays `Copy`. A turn that navigates twice moves what reads it to each location
+in turn and never back: the core sets the location to the turn's last navigation once, as the turn commits, and
+setting the location the app is at runs nothing again.
 
 - **Core and engine**: `nsh_core::location` (`Location`, `HistoryBehavior`, `NavigateOptions`, `Navigation`), the
   readers, the root command and event; `HostChannel::set_location`, `location` and `handle_navigate`: the start
