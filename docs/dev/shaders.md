@@ -146,8 +146,8 @@ each platform that draws them does it; the others ignore `MountItem::ShaderTrans
 
 | Platform | Pictures | Hides the children, keeps their input | Over them | Pages and dialogs |
 |---|---|---|---|---|
-| macOS (AppKit) | `renderInContext:` of the children's container (`NshView::ensure_container`) without its mask, at the window's backing scale (a screen's: all the root shows but the frames over it); the backdrop: the root with the view's layer hidden | an empty `mask` on the container's layer (AppKit hit-tests views) | the frames' sublayer at `zPosition` 1e6, `overflow` points beyond the box; a screen's on the root | the motion drawn through a layer over the stack (the root for a dialog) from pictures of it without and with the upper side (a page or dialog that left: its last image), taken on the first display frame, the coming side again on each; the views at rest under it until it ends (`navigation::Motion::Shader`); popping and dismissing run backwards |
-| iOS | `renderInContext:` of a view holding the children (`Decor::set_effect`, the view children are added to) without its mask, at the screen's scale; the backdrop: the window with the view's layer at opacity 0 | an empty `mask` on that view's layer (UIKit hit-tests views) | the frames' sublayer at `zPosition` 1e6, `overflow` points beyond the box; a screen's on the root view (dialogs, presented by UIKit above it, are outside) | the screens change and the dialog is presented or dismissed at once, under a layer over the window's part where the surface (the stack) is, from pictures before the change and after it (the first tick); popping and dismissing run backwards |
+| macOS (AppKit) | `renderInContext:` of the children's container (`NshView::ensure_container`) without its mask, at the window's backing scale (a screen's: all the root shows but the frames over it); the backdrop: the root with the view's layer hidden | an empty `mask` on the container's layer (AppKit hit-tests views), which the decoration's clipping leaves in place until they show again (`decor::hide_children`); the root's while any screen shader hides it | the frames' sublayer at `zPosition` 1e6, `overflow` points beyond the box; a screen's on the root, which it leaves when its view is deleted or the app stops | the motion drawn through a layer over the stack (the root for a dialog) from pictures of it without and with the upper side (a page or dialog that left: its last image), taken on the first display frame, the coming side again on each; the views at rest under it until it ends (`navigation::Motion::Shader`); popping and dismissing run backwards |
+| iOS | `renderInContext:` of a view holding the children (`Decor::set_effect`, the view children are added to) without its mask, at the screen's scale; the backdrop: the window with the view's layer at opacity 0 | an empty `mask` on that view's layer (UIKit hit-tests views); the root view's while any screen shader hides it | the frames' sublayer at `zPosition` 1e6, `overflow` points beyond the box; a screen's on the root view (dialogs, presented by UIKit above it, are outside) | the screens change and the dialog is presented or dismissed at once, under a layer over the window's part where the surface (the stack) is, from pictures before the change and after it (the first tick); popping and dismissing run backwards |
 
 Both retake an effect's pictures on the display frame after the core says they changed (`MountItem::ShaderInput`) or
 the platform changed a view in them (macOS: `NshView::changed`, `moved`, `redraw_rect`; iOS: animated values,
@@ -156,6 +156,10 @@ scrolling, image loads), at most once per frame; a transition pictures its child
 backdrop blur or glass. The pictures of views AppKit has just shown again (navigation hides the screens under the top
 one) wait for the next display frame: until AppKit displays the window their layers are out of the tree, where they
 draw y up.
+
+Where there is no GPU device (`Renderer::new` is `None`) neither masks the children: an effect or a screen effect
+shows them as they are, a transition starts no run, and a page's or a dialog's `transitionShader` leaves the change
+to its own `animation`.
 
 On Android the layer stays in `libnsh`: the encoder sends Java only whether a view shows a shader (opcode `SHADER`,
 35, in `encode.rs` ↔ `Mounter.java`), Java reports the size in pixels (`Native.shaderSize`), and the layer goes to
@@ -219,14 +223,18 @@ Effects, transitions and page shaders sit on the same program, layer and rendere
   marks it or anything on the UI thread changes (`NshView::changed`; a shader's own frame only `redraw`s). Pages and
   dialogs: pictures of the host drawn anew without and with the upper side, through a `NavPainter` (the layer with
   one more slot for `nsh.progress`) in a layer over the stack or the root; the starting side shows until the first
-  frame.
+  frame. Without a GPU device an effect draws its children as they are, a transition starts no run and a page or a
+  dialog comes with its own motion. A screen layer leaves the root when the view that mounted it is deleted (unless
+  another screen effect's took its place) or the app stops.
 - **Windows.** Effects and running transitions (screen ones on the root) draw their last frame instead of their
   children, which are drawn into a target bitmap by a context of their own and read back (`render::read_back`) as
   the window draws them, and given to the shader when their pixels changed. A transition's `from` is drawn offscreen
   when it starts (`render::draw_offscreen`). A backdrop is read back from the window's target before the view draws
   (partial frames draw the view's whole area, overflow included: `render::drawn_area`). Pages and dialogs: recordings
   (`ID2D1CommandList`) of the host without and with the upper side, drawn into bitmaps and read back once by a
-  hosted `NavItem` over the stack or the root.
+  hosted `NavItem` over the stack or the root. Without a GPU device an effect draws its children as they are, a
+  transition starts no run and a page or a dialog comes with its own motion. A screen layer leaves the root when the
+  view that mounted it is deleted (unless another screen effect's took its place) or the app stops.
 - **Android** (API 29 and later; Android 9 shows the children as they are). `Pictures.java` records the children
   into a `RenderNode`, renders it with a `HardwareRenderer` into an `ImageReader` and hands the rows to
   `Native.shaderInput`; `libnsh` drops a picture equal to the input's last one. `Box.java` takes the role, overflow
@@ -236,7 +244,12 @@ Effects, transitions and page shaders sit on the same program, layer and rendere
   (`SHADER_TRANSITION`) and shows it until the first frame. Screen layers draw over the app's view (`NshView`);
   dialogs, their own windows, are outside. Pages and dialogs (`NAV_SHADER`): `StackBox` and `ModalHost` run a
   `NavTransition.java` overlay; `nsh.progress` goes through one more slot of the layer, run by a clock of the
-  platform's, 0 to 1 on push and present, 1 to 0 on pop and dismiss.
+  platform's, 0 to 1 on push and present, 1 to 0 on pop and dismiss; the overlay gets only the frames that came back
+  and, once its clock ends, one that replaces nothing, which settles the change (until the first frame, what it covers
+  shows as it is). A screen layer draws over the surface while its view is in the window: detached, deleted or turned
+  off, it gives the surface back and redraws it, unless another screen layer took its place. Without a GPU device
+  `Native.shaderTransition` starts no run (the children show as they are) and `Native.navTransition` declines, so a
+  page moves with its own animation (`StackBox`) and a dialog with its `animation` (`ModalHost`).
 - **GPUI.** Fills only: an effect's or a transition's children show as they are, a screen layer draws nothing, pages
   and dialogs come and go without their shader.
 
@@ -272,6 +285,11 @@ dialog's `transitionShader`) take their pictures from the DOM. `shader.rs` also 
   overlay over the stack (push, pop) or the root (present, dismiss): `sample_from` is the host painted up to the
   page or dialog, `sample_to` the whole host, and progress goes from 0 to 1, or 1 to 0 when it leaves; the views
   are where they end under it at once. Dialogs shown in the top layer (`dialogs: "viewport"`) keep their own motion.
+- **Shaders that cannot draw.** A view whose shader cannot draw (`shaderDraws`: no WebGL 2, or a program the driver
+  refuses) shows its background and children as they are, as the native backends show them without a device: an
+  effect or a screen effect takes no `nsh-fx` (and its canvas is cleared when its new program is refused), a
+  transition starts no run, a page's or a dialog's `transitionShader` leaves the change to its own motion, and
+  `shaderFrame` paints no pictures and takes no frames for it.
 
 ## Pitfalls
 
@@ -287,5 +305,7 @@ dialog's `transitionShader`) take their pictures from the DOM. `shader.rs` also 
 - **Premultiplied alpha.** `shade` returns straight alpha; the core premultiplies and the renderers draw with blending
   off, so frames are premultiplied (GPUI's images are straight: its backend converts). Do not premultiply again on a
   platform.
+- **A first frame is not an end.** A run's first frame comes back one or two display frames after it starts, and
+  `ShaderView::frame()` is empty until then: a page's or a dialog's run ends on its clock, never on an empty frame.
 - **Readback latency.** Native frames arrive one or two display frames after `render`; a backend must keep ticking
   while `ShaderView::pending()` is true, or the last frame of a change never shows.
