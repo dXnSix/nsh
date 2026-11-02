@@ -230,7 +230,9 @@ Effects, transitions and page shaders sit on the same program, layer and rendere
   when it starts (`render::draw_offscreen`). A backdrop is read back from the window's target before the view draws
   (partial frames draw the view's whole area, overflow included: `render::drawn_area`). Pages and dialogs: recordings
   (`ID2D1CommandList`) of the host without and with the upper side, drawn into bitmaps and read back once by a
-  hosted `NavItem` over the stack or the root.
+  hosted `NavItem` over the stack or the root. Without a GPU device an effect draws its children as they are, a
+  transition starts no run and a page or a dialog comes with its own motion. A screen layer leaves the root when the
+  view that mounted it is deleted (unless another screen effect's took its place) or the app stops.
 - **Android** (API 29 and later; Android 9 shows the children as they are). `Pictures.java` records the children
   into a `RenderNode`, renders it with a `HardwareRenderer` into an `ImageReader` and hands the rows to
   `Native.shaderInput`; `libnsh` drops a picture equal to the input's last one. `Box.java` takes the role, overflow
