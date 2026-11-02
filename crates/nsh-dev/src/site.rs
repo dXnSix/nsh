@@ -69,6 +69,7 @@ async fn file(State(root): State<Arc<PathBuf>>, headers: HeaderMap, uri: Uri) ->
     } else {
         "no-cache"
     };
+    let content_type = nsh_core::platform::content_type(&file.to_string_lossy());
     let accepted = headers
         .get(header::ACCEPT_ENCODING)
         .and_then(|v| v.to_str().ok())
@@ -84,7 +85,7 @@ async fn file(State(root): State<Arc<PathBuf>>, headers: HeaderMap, uri: Uri) ->
         if let Ok(bytes) = tokio::fs::read(&copy).await {
             return (
                 [
-                    (header::CONTENT_TYPE, crate::server::content_type(&file)),
+                    (header::CONTENT_TYPE, content_type),
                     (header::CACHE_CONTROL, cache),
                     (header::CONTENT_ENCODING, encoding),
                     (header::VARY, "Accept-Encoding"),
@@ -97,7 +98,7 @@ async fn file(State(root): State<Arc<PathBuf>>, headers: HeaderMap, uri: Uri) ->
     match tokio::fs::read(&file).await {
         Ok(bytes) => (
             [
-                (header::CONTENT_TYPE, crate::server::content_type(&file)),
+                (header::CONTENT_TYPE, content_type),
                 (header::CACHE_CONTROL, cache),
                 (header::VARY, "Accept-Encoding"),
             ],

@@ -471,7 +471,10 @@ async fn asset(
         }
     };
     match tokio::fs::read(&file).await {
-        Ok(bytes) => ([(header::CONTENT_TYPE, content_type(&file))], bytes).into_response(),
+        Ok(bytes) => {
+            let content_type = nsh_core::platform::content_type(&file.to_string_lossy());
+            ([(header::CONTENT_TYPE, content_type)], bytes).into_response()
+        }
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -486,7 +489,7 @@ async fn web_file(State(shared): State<Arc<Shared>>, uri: axum::http::Uri) -> Re
         Some(bytes) => {
             let content_type = match path {
                 "" => "text/html; charset=utf-8",
-                path => content_type(std::path::Path::new(path)),
+                path => nsh_core::platform::content_type(path),
             };
             (
                 [
@@ -498,45 +501,6 @@ async fn web_file(State(shared): State<Arc<Shared>>, uri: axum::http::Uri) -> Re
                 .into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
-/// The media type of a file, by its extension: what browsers need to
-/// load scripts, WebAssembly (compiled while it streams only as
-/// `application/wasm`), images, fonts and media.
-pub(crate) fn content_type(path: &std::path::Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("html") => "text/html; charset=utf-8",
-        Some("js" | "mjs") => "text/javascript; charset=utf-8",
-        Some("json" | "map") => "application/json",
-        Some("webmanifest") => "application/manifest+json",
-        Some("wasm") => "application/wasm",
-        Some("css") => "text/css; charset=utf-8",
-        Some("txt") => "text/plain; charset=utf-8",
-        Some("png") => "image/png",
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        Some("avif") => "image/avif",
-        Some("svg") => "image/svg+xml",
-        Some("ico") => "image/x-icon",
-        Some("heic") => "image/heic",
-        Some("ttf") => "font/ttf",
-        Some("otf") => "font/otf",
-        Some("woff") => "font/woff",
-        Some("woff2") => "font/woff2",
-        Some("mp4" | "m4v") => "video/mp4",
-        Some("webm") => "video/webm",
-        Some("mov") => "video/quicktime",
-        Some("mp3") => "audio/mpeg",
-        Some("m4a") => "audio/mp4",
-        Some("wav") => "audio/wav",
-        _ => "application/octet-stream",
     }
 }
 
