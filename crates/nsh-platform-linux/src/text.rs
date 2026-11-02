@@ -24,8 +24,8 @@ use std::{
 use gtk4::{self as gtk, glib, glib::translate::ToGlibPtr, graphene, gsk, prelude::*};
 use nsh_core::{
     ATTACHMENT_CHAR, Affinity, AttributedText, Bounds, Color, DecorationStyle, EllipsizeMode,
-    EventKind, Points, ResolvedTextStyle, Size, TextAlign, TextEngine, TextLayout, TextLine,
-    TextPosition, TextSpan,
+    EventKind, FamilyName, Points, ResolvedTextStyle, Size, TextAlign, TextEngine, TextLayout,
+    TextLine, TextPosition, TextSpan,
 };
 use rustc_hash::FxHashMap;
 
@@ -148,20 +148,25 @@ pub(crate) fn main_font_description(style: &ResolvedTextStyle) -> pango::FontDes
     UI_FAMILY.with(|family| font_description(style, family.get_or_init(ui_family)))
 }
 
-/// The Pango family list of a `fontFamily` value: CSS generic and system
-/// names map to fontconfig's, a comma-separated stack stays one (Pango
-/// takes family lists).
+/// The Pango family list of a `fontFamily` value
+/// ([`nsh_core::font_families`]): CSS's generic families as fontconfig's,
+/// the families in the list's order (Pango takes family lists, and falls
+/// back along them). Pango reads its list as names separated by commas, so
+/// a family whose name has one (`'ACME, Inc'`) is passed over rather than
+/// read as two others.
 fn resolve_family(name: &str, ui: &str) -> String {
     let mut out = String::with_capacity(name.len());
-    for family in name.split(',') {
-        let family = family.trim().trim_matches(|c| c == '"' || c == '\'');
+    for family in nsh_core::font_families(name) {
         let family = match family {
-            "" => continue,
-            "system-ui" | "-apple-system" | "BlinkMacSystemFont" | "ui-sans-serif"
-            | "ui-rounded" | "sans-serif" => ui,
-            "ui-monospace" | "monospace" => "monospace",
-            "ui-serif" | "serif" => "serif",
-            f => f,
+            FamilyName::Named(f) if f.contains(',') => continue,
+            FamilyName::Named(f) => f,
+            FamilyName::Monospace => "monospace",
+            FamilyName::Serif => "serif",
+            FamilyName::Cursive => "cursive",
+            FamilyName::Fantasy => "fantasy",
+            // The system font, and its designs fontconfig lacks
+            // (`ui-rounded`).
+            _ => ui,
         };
         if !out.is_empty() {
             out.push(',');
@@ -2302,6 +2307,13 @@ mod tests {
             "Fira Code,monospace,monospace"
         );
         assert_eq!(resolve_family(" , ", "X"), "X");
+        // A quoted name is a family's name, its commas and all: Pango
+        // cannot take one with a comma, so it is passed over.
+        assert_eq!(
+            resolve_family("'ACME, Inc', \"Fira Code\", serif, cursive", "X"),
+            "Fira Code,serif,cursive"
+        );
+        assert_eq!(resolve_family("'ACME, Inc'", "X"), "X");
     }
 
     fn text(parts: &[(&str, ResolvedTextStyle)]) -> AttributedText {

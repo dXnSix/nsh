@@ -84,7 +84,7 @@ registerFont("https://fonts.example.com/Brand.woff2").then((name) => family.set(
 
 ## Fallback lists
 
-`fontFamily` takes a list, as CSS does: families separated by commas, most preferred first, a name with spaces quoted or not (`"Brand, 'Noto Sans SC', sans-serif"`), a quoted name keeping its commas (`'ACME, Inc'`). Text is set in the first family the platform has, and a character that family lacks (another script, a symbol) comes from the next family in the list that has it, then from the system's fallback fonts. A list lets a brand font that covers Latin only show Chinese in a matching font, or name a font the app downloads with a system font to show until it arrives:
+`fontFamily` takes a list, as CSS does: families separated by commas, most preferred first, a name with spaces quoted or not (`"Brand, 'Noto Sans SC', sans-serif"`), a quoted name keeping its commas (`'ACME, Inc'`) and naming a family even when it spells a generic one (`'serif'` is a family called serif). Text is set in the first family the platform has, and a character that family lacks (another script, a symbol) comes from the next family in the list that has it, then from the system's fallback fonts. A list lets a brand font that covers Latin only show Chinese in a matching font, or name a font the app downloads with a system font to show until it arrives:
 
 ```rust tabs
 text("Brand 品牌").font_family("Brand, 'Noto Sans SC', sans-serif")
@@ -94,7 +94,7 @@ text("Brand 品牌").font_family("Brand, 'Noto Sans SC', sans-serif")
 <Text style={{ fontFamily: "Brand, 'Noto Sans SC', sans-serif" }}>Brand 品牌</Text>
 ```
 
-Each platform keeps the list's order with its own font machinery: a cascade list on iOS and macOS, a font fallback on Windows (one per paragraph: its first style's list), a Pango family list on Linux, the browser's on the web, GPUI's fallbacks. On Android, text is set in the first family it has; when that one is a font the app registers, the registered fonts after it in the list are its fallbacks (Android 10 and later).
+Each platform keeps the list's order with its own font machinery: a cascade list on iOS and macOS, a font fallback on Windows (one per paragraph: its first style's list), a Pango family list on Linux (of the names without commas, as Pango lists them), the browser's on the web, GPUI's fallbacks. On Android, text is set in the first family it has; when that one is a font the app registers, the registered fonts after it in the list are its fallbacks (Android 10 and later).
 
 ## Weights and italics
 

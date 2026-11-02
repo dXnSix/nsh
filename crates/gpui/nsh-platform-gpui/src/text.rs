@@ -49,8 +49,8 @@ use gpui::{
 };
 use nsh_core::{
     ATTACHMENT_CHAR, Affinity, AttributedText, Bounds, Color, DecorationStyle, EllipsizeMode,
-    EventKind, FontFamily, Point, Points, ResolvedTextStyle, Size, TextAlign, TextEngine,
-    TextLayout, TextLine, TextPosition, TextSpan,
+    EventKind, FamilyName, FontFamily, Point, Points, ResolvedTextStyle, Size, TextAlign,
+    TextEngine, TextLayout, TextLine, TextPosition, TextSpan,
     geometry::{point, size},
 };
 use rustc_hash::FxHashMap;
@@ -197,22 +197,18 @@ const SANS: &[&str] = &[
 const CURSIVE: &[&str] = &["Comic Sans MS", "Comic Neue", "URW Chancery L"];
 const FANTASY: &[&str] = &["Impact", "Papyrus"];
 
-/// The families a `fontFamily` value names, in order of preference: a
-/// comma-separated stack, CSS generic names and Apple's font names as fonts
-/// this platform has; `""` is the UI font.
+/// The families a `fontFamily` value names, in order of preference
+/// ([`nsh_core::font_families`]): CSS's generic families and Apple's font
+/// names as fonts this platform has; `""` is the UI font.
 fn family_candidates(name: &str) -> Vec<&str> {
     let mut out = Vec::new();
-    for family in name.split(',') {
-        let family = family.trim().trim_matches(|c| c == '"' || c == '\'');
+    for family in nsh_core::font_families(name) {
         match family {
-            "" => {}
-            "system-ui" | "-apple-system" | "BlinkMacSystemFont" | "ui-sans-serif"
-            | "ui-rounded" | "sans-serif" => out.push(""),
-            "ui-monospace" | "monospace" => out.extend_from_slice(MONOSPACE),
-            "ui-serif" | "serif" => out.extend_from_slice(SERIF),
-            "cursive" => out.extend_from_slice(CURSIVE),
-            "fantasy" => out.extend_from_slice(FANTASY),
-            f => {
+            FamilyName::Monospace => out.extend_from_slice(MONOSPACE),
+            FamilyName::Serif => out.extend_from_slice(SERIF),
+            FamilyName::Cursive => out.extend_from_slice(CURSIVE),
+            FamilyName::Fantasy => out.extend_from_slice(FANTASY),
+            FamilyName::Named(f) => {
                 out.push(f);
                 // What apps written for Apple platforms name, as what
                 // this platform has (when it lacks the font itself).
@@ -223,6 +219,8 @@ fn family_candidates(name: &str) -> Vec<&str> {
                     _ => &[],
                 });
             }
+            // The system font, and its designs GPUI lacks (`ui-rounded`).
+            _ => out.push(""),
         }
     }
     if out.is_empty() {
@@ -3171,6 +3169,13 @@ mod tests {
         assert_eq!(stack[0], "Fira Code");
         assert_eq!(&stack[1..], MONOSPACE);
         assert_eq!(&family_candidates("Menlo")[1..], MONOSPACE);
+        // A quoted name keeps its commas and names a family, even one
+        // spelled as a generic family.
+        assert_eq!(
+            family_candidates("'ACME, Inc', 'serif', \"cursive\""),
+            ["ACME, Inc", "serif", "cursive"]
+        );
+        assert_eq!(&family_candidates("fantasy")[..], FANTASY);
     }
 
     #[test]

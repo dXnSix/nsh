@@ -35,8 +35,8 @@ use std::{
 
 use nsh_core::{
     ATTACHMENT_CHAR, Affinity, AttributedText, Bounds, Color, DecorationStyle, EllipsizeMode,
-    EventKind, FontFamily, Points, ResolvedTextStyle, Size, TextAlign, TextEngine, TextLayout,
-    TextLine, TextPosition, TextSpan, geometry::px,
+    EventKind, FamilyName, FontFamily, Points, ResolvedTextStyle, Size, TextAlign, TextEngine,
+    TextLayout, TextLine, TextPosition, TextSpan, geometry::px,
 };
 use rustc_hash::FxHashMap;
 use windows::{
@@ -246,25 +246,23 @@ pub(crate) fn ui_family() -> Arc<str> {
     }
 }
 
-/// The families a `fontFamily` value names, in order: CSS generic and
-/// system names map to Windows' fonts, a comma-separated stack stays a
-/// list (DirectWrite takes one family: the first installed one is used).
+/// The families a `fontFamily` value names, in order
+/// ([`nsh_core::font_families`]), CSS's generic families as Windows' fonts:
+/// text is set in the first one installed, the others are its fallbacks
+/// ([`Face::fallback`]).
 fn family_names(name: &str, ui: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for family in name.split(',') {
-        let family = family.trim().trim_matches(|c| c == '"' || c == '\'');
-        let family = match family {
-            "" => continue,
-            "system-ui" | "-apple-system" | "BlinkMacSystemFont" | "ui-sans-serif"
-            | "ui-rounded" | "sans-serif" => ui,
-            "ui-monospace" | "monospace" => "Consolas",
-            "ui-serif" | "serif" => "Times New Roman",
-            "cursive" => "Comic Sans MS",
-            "fantasy" => "Impact",
-            f => f,
-        };
-        out.push(family.to_owned());
-    }
+    let mut out: Vec<String> = nsh_core::font_families(name)
+        .map(|family| match family {
+            FamilyName::Named(f) => f,
+            FamilyName::Monospace => "Consolas",
+            FamilyName::Serif => "Times New Roman",
+            FamilyName::Cursive => "Comic Sans MS",
+            FamilyName::Fantasy => "Impact",
+            // The system font, and its designs Windows lacks (`ui-rounded`).
+            _ => ui,
+        })
+        .map(str::to_owned)
+        .collect();
     if out.is_empty() {
         out.push(ui.to_owned());
     }
@@ -3302,6 +3300,12 @@ mod tests {
         );
         assert_eq!(family_names(" , ", "X"), ["X"]);
         assert_eq!(alias("Menlo"), Some("Consolas"));
+        // A quoted name keeps its commas and names a family, even one
+        // spelled as a generic family.
+        assert_eq!(
+            family_names("'ACME, Inc', 'serif', serif, \"cursive\", fantasy", "X"),
+            ["ACME, Inc", "serif", "Times New Roman", "cursive", "Impact"]
+        );
     }
 
     #[test]
