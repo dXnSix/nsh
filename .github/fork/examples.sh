@@ -12,7 +12,8 @@
 # listed at the end. A file that fails runs once more before it counts:
 # the runners' small windows and slow frames make tests that pass at a desk
 # miss now and then (scrolling a control into view, a drag); one that passes
-# the second time is reported as flaky (a warning on the run).
+# the second time is reported as flaky (a warning on the run). A listed file
+# the branch does not have is skipped, with a notice.
 set -uo pipefail
 target="$1"
 # "<file> <filter>": tests run one by one, by a part of their name, from a
@@ -97,6 +98,12 @@ esac
 failed=()
 flaky=()
 run() {
+  # The lists follow the fork's main; a pull request cut from upstream
+  # before a gallery test landed there has no file for it yet.
+  if [[ "$1" == *.test.tsx && ! -e "$1" ]]; then
+    echo "::notice title=Test file not on this branch::$1"
+    return
+  fi
   ./target/debug/nsh test "$@" --target "$target" && return
   if ./target/debug/nsh test "$@" --target "$target"; then
     flaky+=("$*")
