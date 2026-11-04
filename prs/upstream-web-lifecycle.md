@@ -11,6 +11,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   (`--features compiler`).
 - Title: `web: Give browser apps their lifecycle`.
 - 2026-11-04: rebased onto `upstream/main` `57b1d7ba` (#899) without conflicts, patch unchanged: head `32e65431`. Upstream's browser runtime still has no `lifecycle`.
+- 2026-11-04 (later): rebased onto `upstream/main` `fe6f54f7` (#911) without conflicts, patch unchanged: head `ca871a22`.
 
 ---
 

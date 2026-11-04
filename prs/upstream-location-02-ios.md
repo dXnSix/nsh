@@ -6,6 +6,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - Title: `ios: Let embedding apps set the app's location and hear its navigations`.
 - The fork's PR: dXnSix/nsh#111 (its iOS part).
 - 2026-11-04: rebased: head `09bc5c9e`, unchanged.
+- 2026-11-04 (later): rebased onto the new core (`fe6f54f7`) without conflicts, patch unchanged: head `fd70a1c3`.
 
 ---
 

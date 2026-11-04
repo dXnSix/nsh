@@ -9,6 +9,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   is merged, GitHub shows its commit too.
 - The fork's PR: dXnSix/nsh#109.
 - 2026-11-04: rebased on the new 01: head `f08b9e99`. Upstream's side modules (#853, `app.sides`) came after this commit, so the packaged page now resolves their URLs too (`for (const name in app.sides) ...`): without it, an app that moved the address to `/deep/path/here` fetched the formula typesetter from `/deep/path/nsh-math.<hash>.wasm` (404); with it from `/nsh-math.<hash>.wasm` (200), checked in the packaged gallery in Chromium.
+- 2026-11-04 (later): rebased onto the new 01 (`fe6f54f7`): head `c15ac2ae`. Upstream #921 (older Safari) moved the import map's construction ahead of the bootstrap in `browser/runtime.js`: `player.baseURL` now goes where the map is built (the same four lines as before); the frame's `<base>` still precedes the early map. Upstream's own unformatted test in `nsh-cli/src/web.rs` (#921) is left as it is.
 
 ---
 

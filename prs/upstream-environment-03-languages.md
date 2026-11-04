@@ -21,6 +21,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - 2026-11-02 (after #747 merged as `lifecycle`): rebased onto the new `pr/environment/02-time-zone`, `appState` renamed `lifecycle` in what the commits touch, plus an eighth commit, `web: Give browser apps the user's preferred languages` (the browser runtime's `languages`; the change check counts an array's members). The Linux and GPUI commits' Environment rows had repeated sentences; they now add only the languages' sentence.
 - 2026-11-02 (after #822 merged): rebased onto `upstream/main` `828b1f13` without conflicts, patches unchanged (`git range-diff`). Previous heads: `old-pre-822/*` locally.
 - 2026-11-04: rebased onto the new `pr/environment/02-time-zone`: head `c27fc5bd`, only context moved.
+- 2026-11-04 (later): rebased onto the new time zone (`fe6f54f7`): head `e9a13c88`. Only the prelude's names moved (upstream's `keystroke_label`); the platform commits unchanged.
 
 ---
 

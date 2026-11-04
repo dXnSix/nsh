@@ -16,6 +16,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   head (Fork CI's Windows / Linux / GPUI workflows dispatched on it).
 - The fork's PR: dXnSix/nsh#111.
 - 2026-11-04: rebased on the new web-urls stack: head `1d4e8c97`. Upstream added `onSpeech` and `onDownload` at the end of `host::EVENTS`, so `onLocation` follows them and Android's `Native.LOCATION` is 72; #892 passes every payload field on the web, so the commit no longer interns `location` in `nsh_event`. `NSH_COMPAT_APP=modules cargo xtask compat` passes (`mod-location`).
+- 2026-11-04 (later): rebased onto the new history (`fe6f54f7`): head `e33581d2`. Only the prelude's names moved; `LOCATION = 72` still follows upstream's last event (upstream's `ops.rs` gained a `Prop`, no event).
 
 ---
 

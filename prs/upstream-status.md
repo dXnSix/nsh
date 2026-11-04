@@ -6,33 +6,28 @@ workflow and its tests of fork-only code are left out: they never go upstream.
 
 ## Not upstream yet
 
-Checked 2026-11-04 against upstream `main` `57b1d7ba` (#899). Every branch below is rebased onto it, pushed to the
-fork and green there (CI paths, Core, Linux, Windows, GPUI, Rust application, and Fork CI's macOS, iOS, Android and
-web jobs on a `tmp/*-fork-ci` twin), except Compat, which stops at upstream main's own `checkout_apps_run` failure
-(the gallery's step 136, "Bars per month"); each branch's own compat case passes locally. Nothing is opened: the
-owner says when.
-
-Checked again 2026-11-04 against upstream `main` `fe6f54f7` (#911), with the fork's `main` at `5544b26c` (#121,
-upstream `9cb48de5`): line by line, everything the fork's `main` adds over upstream is in a branch below (#114's
-browser environment included), but for the fork's own CI. Web lifecycle, the SPA fallback and the #746 follow-ups
-still merge cleanly; the rest conflict with upstream's newer commits and are rebased before they open: the
-environment stack and register-font in `prelude.rs` (and the environment in `website/{,zh-CN/}docs/testing-and-trace.md`)
-with #869 (the terminal backend), web-urls 02 and 03 in `browser/runtime.js` with #921 (older Safari), location in
-both.
+Checked 2026-11-04 against upstream `main` `fe6f54f7` (#911), with the fork's `main` at `5544b26c` (#121, upstream
+`9cb48de5`): line by line, everything the fork's `main` adds over upstream is in a branch below (#114's browser
+environment included), but for the fork's own CI. The environment stack, register-font, the web URLs and location
+are rebased onto `fe6f54f7` (#869's prelude names and testing docs, #921's import map in `browser/runtime.js`) and
+pushed to the fork; the #746 follow-ups stay on `43026fb2` and merge cleanly. Locally at the three tips: clippy over
+the workspace has only upstream's own error (`nsh-platform-web/src/encode/input.rs`, #776), and the web runtime's JS
+tests pass. Fork CI (CI paths, Core, Linux, Windows, GPUI, Rust application, Compat, and Fork CI's macOS, iOS,
+Android and web jobs on the `tmp/*-fork-ci` twins) is running. Nothing is opened: the owner says when.
 
 | Feature | Records | Branch, head | Opens after |
 |---|---|---|---|
-| Web apps' lifecycle | `upstream-web-lifecycle` | `pr/web-lifecycle/01-web` `32e65431` | — |
-| The device's time zone | `upstream-environment-02-time-zone` | `pr/environment/02-time-zone` `f1190540` | web lifecycle |
-| The user's preferred languages | `upstream-environment-03-languages` | `pr/environment/03-languages` `c27fc5bd` | time zone |
-| The user's regional preferences | `upstream-environment-04-regional` | `pr/environment/04-regional` `4a16f25d` | languages |
-| Register fonts while the app runs | `upstream-register-font` | `pr/register-font/01-core` `bd236d4a` | — |
-| The page at the app's own paths | `upstream-web-urls-01-spa-fallback` | `pr/web-urls/01-spa-fallback` `97b90b36` | — |
-| Web pages' base (`web.base`) | `upstream-web-urls-02-base` | `pr/web-urls/02-base` `f08b9e99` | SPA fallback |
-| Pages as history entries (`web.history`) | `upstream-web-urls-03-history` | `pr/web-urls/03-history` `7dc0eda5` | base |
-| The app's location and navigation | `upstream-location-01-core` | `pr/location/01-core` `1d4e8c97` | history |
-| Location on iOS | `upstream-location-02-ios` | `pr/location/02-ios` `09bc5c9e` | location core |
-| Location on Android | `upstream-location-03-android` | `pr/location/03-android` `cadd06f8` | location iOS |
+| Web apps' lifecycle | `upstream-web-lifecycle` | `pr/web-lifecycle/01-web` `ca871a22` | — |
+| The device's time zone | `upstream-environment-02-time-zone` | `pr/environment/02-time-zone` `a861dbee` | web lifecycle |
+| The user's preferred languages | `upstream-environment-03-languages` | `pr/environment/03-languages` `e9a13c88` | time zone |
+| The user's regional preferences | `upstream-environment-04-regional` | `pr/environment/04-regional` `567f4d28` | languages |
+| Register fonts while the app runs | `upstream-register-font` | `pr/register-font/01-core` `c0b7835a` | — |
+| The page at the app's own paths | `upstream-web-urls-01-spa-fallback` | `pr/web-urls/01-spa-fallback` `bd0d2fec` | — |
+| Web pages' base (`web.base`) | `upstream-web-urls-02-base` | `pr/web-urls/02-base` `c15ac2ae` | SPA fallback |
+| Pages as history entries (`web.history`) | `upstream-web-urls-03-history` | `pr/web-urls/03-history` `3e061422` | base |
+| The app's location and navigation | `upstream-location-01-core` | `pr/location/01-core` `e33581d2` | history |
+| Location on iOS | `upstream-location-02-ios` | `pr/location/02-ios` `fd70a1c3` | location core |
+| Location on Android | `upstream-location-03-android` | `pr/location/03-android` `a84ae66e` | location iOS |
 | One media type table (#746 nit 3) | side notes `pr-body-core-media-types.md` | `pr/read-assets-nits/01-core` `dbf55778` | — |
 | Bundled files by path alone (#746 nits 1, 2) | side notes `pr-body-engine-asset-urls.md` | `pr/read-assets-nits/02-engine` `718a8261` | media types |
 | The browser runtime's fetch module (#746 nit 4) | side notes `pr-body-web-fetch-module.md` | `pr/web-fetch-module/01-web` `19908e9d` | — |

@@ -10,6 +10,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   `cargo test -p nsh-dev --features server,client` and clippy pass on upstream's head.
 - The fork's PR: dXnSix/nsh#108.
 - 2026-11-04: rebased onto `upstream/main` `57b1d7ba`: head `97b90b36`. Upstream's precompressed copies (`.br` / `.gz`) reached the same handler: the fallback's `index.html` is served compressed too, and the doc comment names both.
+- 2026-11-04 (later): rebased onto `upstream/main` `fe6f54f7` (#911) without conflicts: head `bd0d2fec`.
 
 ---
 

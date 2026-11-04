@@ -8,6 +8,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - Title: `cli: Let nsh.json say whether a web app's pages are browser history entries`.
 - The fork's PR: dXnSix/nsh#110.
 - 2026-11-04: rebased on the new 02: head `7dc0eda5` (the page's options keep upstream's `sides` beside `history`).
+- 2026-11-04 (later): rebased onto the new 02 (`fe6f54f7`) without conflicts, patch unchanged: head `3e061422`.
 
 ---
 
