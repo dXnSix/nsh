@@ -124,8 +124,14 @@ impl Decor {
                 );
                 let children = parent.subviews();
                 parent.addSubview(&effect);
+                // The backdrop blur is the view's own, below its background,
+                // not a child the shader draws: masked with the children, it
+                // would show nowhere.
+                let backdrop = self.visual.backdrop_view();
                 for child in children.iter() {
-                    effect.addSubview(&child);
+                    if !backdrop.is_some_and(|b| std::ptr::eq(b, &*child)) {
+                        effect.addSubview(&child);
+                    }
                 }
                 self.effect = Some(effect);
             }
@@ -407,7 +413,11 @@ impl Decor {
         // Core Animation's continuous corners differ slightly from the
         // shared outline (`nsh_core::shape`): a stroke drawn along the latter
         // gets its background from the same outline, so none shows outside.
-        let fill = (shared.is_none() || (raw.continuous && stroke)) && kind != Kind::Text;
+        // A backdrop blur is a subview, above the layer's own background:
+        // the background moves to a fill layer above the blur.
+        let fill =
+            (shared.is_none() || (raw.continuous && stroke) || crate::visual::has_backdrop(style))
+                && kind != Kind::Text;
         let mask = shared.is_none() && (style.overflow_hidden || kind == Kind::Text) && !content;
 
         self.sized = kind == Kind::Image
@@ -686,8 +696,13 @@ impl Decor {
                 let content = UIView::new(mtm);
                 let children = view.subviews();
                 view.addSubview(&content);
+                // The backdrop blur is the view's own, below its background:
+                // in the content view it would cover the background.
+                let backdrop = self.visual.backdrop_view();
                 for child in children.iter() {
-                    content.addSubview(&child);
+                    if !backdrop.is_some_and(|b| std::ptr::eq(b, &*child)) {
+                        content.addSubview(&child);
+                    }
                 }
                 self.content = Some(content);
             }

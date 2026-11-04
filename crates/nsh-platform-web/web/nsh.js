@@ -160,7 +160,12 @@ const KEYFRAMES = `
 .nsh-bar { position: sticky; left: 0; top: 0; width: 0; height: 0; z-index: 2147483000; pointer-events: none; }
 .nsh-bar > div { position: absolute; border-radius: 2px; background: rgba(0,0,0,.45); transition: opacity .3s; }
 .nsh-dark .nsh-bar > div { background: rgba(255,255,255,.55); }
-.nsh-run { position: absolute; white-space: pre; }
+/* Underlines unbroken, as the native backends draw them (skipping
+   descenders left a link's "gp" without one), and clear of the text: a
+   browser's auto position touches the baseline. A run's own
+   textUnderlineOffset (its style class) replaces the offset. */
+.nsh-run { position: absolute; white-space: pre; text-decoration-skip-ink: none;
+  text-underline-offset: 0.2em; }
 .nsh-run-bg { position: absolute; pointer-events: none; }
 .nsh-border { position: absolute; inset: 0; pointer-events: none; }
 /* The mounter's own styles: no element has an inline style but its frame
@@ -218,6 +223,7 @@ img.nsh-fill { pointer-events: none; }
   resize: none; font: inherit; color: inherit; -webkit-user-select: text; user-select: text; }
 .nsh-selectable, .nsh-selectable * { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
 .nsh-selectable ::selection { background: var(--nsh-selection, Highlight); }
+.nsh-link { cursor: pointer; }
 /* With the desktop idiom text is selectable as on a web page unless it is
    set off (selectable={false}) or inside something that takes presses
    or touches (nsh-press). */
@@ -510,6 +516,9 @@ function fillRun(run, text, parts, links) {
     const span = document.createElement("span");
     span.textContent = text.slice(from, to);
     span._link = links[link];
+    // A link's pointer over the I-beam of selectable text, as a browser's
+    // `<a>` and the other desktops' link spans.
+    if (PRESS_EVENTS.some((e) => span._link.events.has(e))) span.classList.add("nsh-link");
     run.append(span);
     at = to;
   }
@@ -1095,15 +1104,20 @@ class Player {
     imports.__wbindgen_placeholder__ && (imports.__wbindgen_placeholder__.__wbindgen_describe = () => {});
     const instance = await WebAssembly.instantiate(module, imports);
     this.wasm = this.browserHost ? this.browserHost.bind(instance.exports) : instance.exports;
+    // What side modules import (`main`): the instance's own exports.
+    this.mainExports = instance.exports;
+    this.sideLoads = new Map();
+    // Side modules compiled ahead (`prefetchSides`), by name.
+    this.sideModules = new Map();
     this.trapped = false;
     // The glue's own setup (its view of the memory, wasm-bindgen's tables)
     // before any of the app's code runs.
     glue?.__nsh_finalize(instance, module);
-    // The parts of `nsh/base`, the standard modules and the features
-    // (shaders) this runtime has:
+    // The parts of `nsh/base`, the standard modules, the features
+    // (shaders) and an app's own UI sets this runtime has:
     // one linked for an app (`nsh package`) exports only those it uses.
     for (const name of Object.keys(instance.exports)) {
-      if (/^nsh_(part|std|feature)_/.test(name)) instance.exports[name]();
+      if (/^nsh_(part|std|feature|ui_set)_/.test(name)) instance.exports[name]();
     }
     // An app's own runtime (Rust components: nsh.json "rust") registers
     // its UI sets before anything starts.
@@ -1117,6 +1131,98 @@ class Player {
     });
     this.installEnvironment();
     this.installInput();
+  }
+
+  // Side modules --------------------------------------------------------
+
+  /**
+   * Loads the side modules `names` (as `nsh package --target web` maps
+   * them per chunk: the parts of `nsh/base`, standard modules and features
+   * the main module was published without) in parallel, each after the
+   * side modules it imports from, and calls each gate once. `table` is the
+   * page's `sides`: by name, `{ url, gate?, needs, onDemand? }` (`onDemand`:
+   * only `loadData` asks for it, nothing fetches it ahead). A page awaits it
+   * before a chunk that needs them runs (its `prepareChunk`).
+   */
+  loadSides(names, table) {
+    return Promise.all((names ?? []).map((name) => this.loadSide(name, table)));
+  }
+
+  /**
+   * Downloads and compiles every side module of `table` in the background,
+   * at a low priority, so the main module and the app's first screen come
+   * first. Failures here are left to the load that needs the module,
+   * which tries again. `preloadSides` then instantiates them.
+   */
+  prefetchSides(table) {
+    const names = Object.keys(table ?? {}).filter((name) => !table[name].onDemand);
+    for (const name of names) {
+      if (this.sideModules.has(name) || this.sideLoads.has(name)) continue;
+      const compiled = this.compileSide(table[name].url, { priority: "low" });
+      compiled.catch(() => this.sideModules.delete(name));
+      this.sideModules.set(name, compiled);
+    }
+  }
+
+  /**
+   * Instantiates every side module of `table` once the browser is idle
+   * (call it after the app started), so a screen that needs one finds its
+   * components registered.
+   */
+  preloadSides(table) {
+    const names = Object.keys(table ?? {}).filter((name) => !table[name].onDemand);
+    if (!names.length) return;
+    const idle = globalThis.requestIdleCallback ?? ((f) => setTimeout(f, 200));
+    idle(() => this.loadSides(names, table).catch((err) => console.warn(`[nsh] preloading side modules: ${err?.message ?? err}`)));
+  }
+
+  async compileSide(url, init) {
+    try {
+      return await WebAssembly.compileStreaming(fetch(url, init));
+    } catch (err) {
+      // Served without `application/wasm`: compiled from its bytes.
+      if (!(err instanceof TypeError)) throw err;
+      const response = await fetch(url, init);
+      if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+      return WebAssembly.compile(await response.arrayBuffer());
+    }
+  }
+
+  /** The exports of side module `name`, once it and what it needs loaded. */
+  loadSide(name, table) {
+    if (!this.sideLoads.has(name)) {
+      const side = table?.[name];
+      if (!side) return Promise.reject(new Error(`no side module ${name}`));
+      this.sideLoads.set(name, this.instantiateSide(name, side, table));
+    }
+    return this.sideLoads.get(name);
+  }
+
+  async instantiateSide(name, { url, gate, needs }, table) {
+    const imports = { main: this.mainExports };
+    const from = await Promise.all((needs ?? []).map((need) => this.loadSide(need, table)));
+    (needs ?? []).forEach((need, i) => { imports[need] = from[i]; });
+    // Compiled ahead when it was prefetched; else now, at full priority.
+    const ahead = this.sideModules.get(name);
+    this.sideModules.delete(name);
+    const module = await (ahead?.catch(() => null) ?? null) ?? await this.compileSide(url);
+    const instance = await WebAssembly.instantiate(module, imports);
+    if (gate) {
+      const register = instance.exports[gate];
+      if (typeof register !== "function") throw new Error(`${url} exports no ${gate}`);
+      register();
+      this.afterGate(gate);
+    }
+    return instance.exports;
+  }
+
+  /**
+   * What the runtime does once a gate ran after the app started: makes
+   * what it registered visible to the running engines.
+   */
+  afterGate(gate) {
+    if (typeof this.wasm.nsh_after_gate !== "function") return;
+    this.withStrings([gate], (p, l) => this.wasm.nsh_after_gate(p, l));
   }
 
   // Tests ---------------------------------------------------------------
@@ -1437,12 +1543,16 @@ class Player {
    * Fetches the runtime's data `name` (`nsh-<name>.bin`, or the URL
    * `data[name]` names) and hands it to the engine; a file that is missing
    * or does not load is handed over as none (the code it would highlight
-   * stays plain).
+   * stays plain). The code of the gate `nsh_feature_<name>`, if any, comes
+   * first: a side module, or an export of a module published whole.
    */
   async loadData(name) {
     const url = this.data?.[name] ?? new URL(`nsh-${name}.bin`, import.meta.url);
     let bytes = null;
     try {
+      const gate = `nsh_feature_${name}`;
+      if (this.options.sides?.[gate]) await this.loadSide(gate, this.options.sides);
+      else this.wasm[gate]?.();
       const response = await fetch(url);
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
       bytes = new Uint8Array(await response.arrayBuffer());
@@ -2671,8 +2781,7 @@ class Player {
       host.removeEventListener("load", el._contentMark, true);
       el._contentMark = null;
     }
-    const gl = this._shaderGl;
-    if (gl) for (const t of s.textures) if (t) gl.deleteTexture(t);
+    this.freeTextures(s);
     el._shader = null;
     this.shaderViews.delete(el);
     this.backdrops?.delete(el);
@@ -2697,7 +2806,7 @@ class Player {
   op_sht([, id, ms]) {
     const el = this.view(id);
     const s = el?._shader;
-    if (!s || (s.layer.role !== 2 && s.layer.role !== 4) || !this.shaderDraws(s.layer)) return;
+    if (!s || (s.layer.role !== 2 && s.layer.role !== 4) || s.failed || !this.shaderDraws(s.layer)) return;
     const host = this.shaderHost(el);
     const box = this.shaderBox(el);
     if (!box) return;
@@ -2717,8 +2826,8 @@ class Player {
     s.fresh[3] = true;
     s.stale |= 8;
     host.classList.add("nsh-fx");
-    this.renderShader(el, performance.now());
-    this.shaderDirty(el);
+    if (this.renderShader(el, performance.now())) this.shaderDirty(el);
+    else this.shaderFailed(el);
   }
 
   /** A page's or a dialog's `transitionShader` (`layer`, `ms`), or none. */
@@ -2735,9 +2844,14 @@ class Player {
    * alone its `sample_from`, and `nsh.progress` how much of the upper side
    * shows: 0 to 1, or 1 to 0 when `reverse`. The views are where they end
    * at once under it. Calls `done` when it ends; false where it cannot run
-   * (`shaderDraws`).
+   * (`shaderDraws`, or a first frame the browser refuses) and when the
+   * user asks for less motion: the page's or the dialog's own motion runs
+   * then. One that still runs over `host` ends first (its `done` runs), so
+   * the new one starts from where it ends.
    */
   shaderNav(host, upper, nav, reverse, done) {
+    this.endNavShader(host);
+    if (this.reduceMotion()) return false;
     const r = host.getBoundingClientRect();
     if (!r.width || !r.height || !this.shaderDraws(nav.layer)) return false;
     const o = document.createElement("div");
@@ -2758,7 +2872,16 @@ class Player {
       since: performance.now(),
       dirty: true,
       progress: reverse ? 1 : 0,
-      running: { start: performance.now(), ms: Math.max(1, nav.ms), reverse, done: () => { o.remove(); done?.(); } },
+      running: {
+        start: performance.now(),
+        ms: Math.max(1, nav.ms),
+        reverse,
+        done: () => {
+          o.remove();
+          if (host._navOverlay === o) host._navOverlay = null;
+          done?.();
+        },
+      },
       pictures: [null, null, null, null],
       fresh: [false, false, true, true],
       textures: [null, null, null, null],
@@ -2771,10 +2894,25 @@ class Player {
     const to = this.pictureCanvas(o, 3, [r.width, r.height, 0]);
     this.paintHost(to.cx, host, r, null, null);
     host.append(o);
+    if (!this.renderShader(o, performance.now())) {
+      o.remove();
+      this.freeTextures(o._shader);
+      return false;
+    }
+    host._navOverlay = o;
     this.shaderViews.add(o);
-    this.renderShader(o, performance.now());
     this.shaderDirty(o);
     return true;
+  }
+
+  /**
+   * A page's or a dialog's change through its shader that still runs over
+   * `host` (a stack, the root) ends at once, settled and reported: another
+   * change of it starts from there.
+   */
+  endNavShader(host) {
+    const o = host?._navOverlay;
+    if (o?._shader?.running) this.endTransition(o);
   }
 
   /**
@@ -2782,19 +2920,80 @@ class Player {
    * the root with a screen effect) as they show without the effect.
    */
   paintHost(cx, host, r, stop, owner) {
+    this.watchPaint();
+    // What changed since the last picture: its styles are read again.
+    this.touchAll(this._paintObserver.takeRecords());
+    let touched = 0;
+    for (let n = host; n; n = n.parentElement) touched = Math.max(touched, n._touched ?? 0);
     const lifted = host.classList.contains("nsh-fx");
     if (lifted) {
       host.classList.add("nsh-painting");
       host.classList.remove("nsh-fx");
     }
     try {
-      this.paintTree(cx, host, r, 1, stop, owner);
+      this.paintTree(cx, host, r, 1, stop, owner, touched);
     } finally {
       if (lifted) {
         host.classList.add("nsh-fx");
         host.classList.remove("nsh-painting");
       }
+      // Lifting and putting back the host's class is the picture's own
+      // doing, which changes no style it keeps.
+      this._paintObserver.takeRecords();
     }
+  }
+
+  /**
+   * Notices the changes in the surface that make a kept paint style
+   * (`paintStyle`) stale: each mutation stamps its element (`_touched`),
+   * which stales its own style and its descendants'; a change of the color
+   * scheme stales all.
+   */
+  watchPaint() {
+    if (this._paintObserver) return;
+    this.paintGen = 0;
+    this.paintReset = 0;
+    this._paintObserver = new MutationObserver((list) => this.touchAll(list));
+    this._paintObserver.observe(this.root, { subtree: true, childList: true, attributes: true });
+    this._paintScheme = () => {
+      this.paintReset = ++this.paintGen;
+    };
+    globalThis.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", this._paintScheme);
+  }
+
+  /** Stamps the elements `list`'s mutations changed (`watchPaint`). */
+  touchAll(list) {
+    for (const m of list) if (m.type !== "characterData") m.target._touched = ++this.paintGen;
+  }
+
+  /**
+   * What `el` paints with from its computed style, kept until a change
+   * reaches it: `touched` is the newest stamp of it and its ancestors
+   * (`watchPaint`), so a picture taken again reads the styles of what
+   * changed only.
+   */
+  paintStyle(el, touched) {
+    const kept = el._paintStyle;
+    if (kept && kept.stamp >= touched && kept.stamp >= this.paintReset) return kept;
+    const cs = getComputedStyle(el);
+    const bg = cs.backgroundColor;
+    const bw = parseFloat(cs.borderTopWidth) || 0;
+    const style = {
+      stamp: this.paintGen,
+      shown: cs.display !== "none",
+      opacity: Number(cs.opacity),
+      hidden: cs.visibility === "hidden",
+      radii: [cs.borderTopLeftRadius, cs.borderTopRightRadius, cs.borderBottomRightRadius, cs.borderBottomLeftRadius]
+        .map((v) => parseFloat(v) || 0),
+      background: bg && bg !== "transparent" && !/rgba\([^)]*,\s*0\)$/.test(bg) ? bg : null,
+      border: bw > 0 && cs.borderTopStyle !== "none" && cs.borderTopStyle !== "hidden" ? [bw, cs.borderTopColor] : null,
+      clips: cs.overflowX !== "visible" || cs.overflowY !== "visible",
+      font: cs.font,
+      color: cs.color,
+      objectFit: cs.objectFit,
+    };
+    el._paintStyle = style;
+    return style;
   }
 
   /** A shader view's box: its size in points and its overflow, `[w, h, m]`. */
@@ -2810,9 +3009,18 @@ class Player {
     const s = el._shader;
     const ratio = devicePixelRatio || 1;
     const c = (s.pictures[input] ??= document.createElement("canvas"));
-    c.width = Math.max(1, Math.round((w + 2 * m) * ratio));
-    c.height = Math.max(1, Math.round((h + 2 * m) * ratio));
+    const pw = Math.max(1, Math.round((w + 2 * m) * ratio));
+    const ph = Math.max(1, Math.round((h + 2 * m) * ratio));
     const cx = c.getContext("2d");
+    // Setting a canvas's size reallocates it: only when the size changes,
+    // else the picture is cleared and drawn again in place.
+    if (c.width !== pw || c.height !== ph) {
+      c.width = pw;
+      c.height = ph;
+    } else {
+      cx.setTransform(1, 0, 0, 1, 0, 0);
+      cx.clearRect(0, 0, pw, ph);
+    }
     cx.setTransform(ratio, 0, 0, ratio, m * ratio, m * ratio);
     s.fresh[input] = true;
     return { canvas: c, cx };
@@ -2910,37 +3118,38 @@ class Player {
    * their opacities. Stops at `stop` (returns true); skips `owner`'s own
    * shader canvas. Rotations, gradients and shadows are left out.
    */
-  paintTree(cx, node, base, opacity, stop, owner) {
+  paintTree(cx, node, base, opacity, stop, owner, touched = Infinity) {
     for (const child of node.children) {
       if (child === stop) return true;
       if (child._shaderOutput && (child.parentElement === owner || child.classList.contains("nsh-fx-out") && !child.parentElement.classList.contains("nsh-fx"))) continue;
       if (child.classList.contains("nsh-nav-shader")) continue;
-      const cs = getComputedStyle(child);
-      if (cs.display === "none") continue;
-      const alpha = opacity * Number(cs.opacity);
-      if (alpha <= 0 || cs.visibility === "hidden") {
+      const stamp = Math.max(touched, child._touched ?? 0);
+      const cs = this.paintStyle(child, stamp);
+      if (!cs.shown) continue;
+      const alpha = opacity * cs.opacity;
+      if (alpha <= 0 || cs.hidden) {
         if (stop && child.contains(stop)) return true;
         continue;
       }
+      // Boxes come from the layout the first one reads (painting writes
+      // nothing that would lay it out again).
       const r = child.getBoundingClientRect();
       const x = r.left - base.left, y = r.top - base.top, w = r.width, h = r.height;
-      const radii = [cs.borderTopLeftRadius, cs.borderTopRightRadius, cs.borderBottomRightRadius, cs.borderBottomLeftRadius]
-        .map((v) => Math.min(parseFloat(v) || 0, w / 2, h / 2));
+      const radii = cs.radii.map((v) => Math.min(v, w / 2, h / 2));
       const shape = () => {
         cx.beginPath();
         cx.roundRect(x, y, w, h, radii);
       };
       cx.save();
       cx.globalAlpha = alpha;
-      const bg = cs.backgroundColor;
-      if (bg && bg !== "transparent" && !/rgba\([^)]*,\s*0\)$/.test(bg)) {
-        cx.fillStyle = bg;
+      if (cs.background) {
+        cx.fillStyle = cs.background;
         shape();
         cx.fill();
       }
-      const bw = parseFloat(cs.borderTopWidth) || 0;
-      if (bw > 0 && cs.borderTopStyle !== "none" && cs.borderTopStyle !== "hidden") {
-        cx.strokeStyle = cs.borderTopColor;
+      if (cs.border) {
+        const [bw, color] = cs.border;
+        cx.strokeStyle = color;
         cx.lineWidth = bw;
         cx.beginPath();
         cx.roundRect(x + bw / 2, y + bw / 2, Math.max(0, w - bw), Math.max(0, h - bw), radii.map((v) => Math.max(0, v - bw / 2)));
@@ -2949,7 +3158,9 @@ class Player {
       if (child.tagName === "IMG") {
         if (child.complete && child.naturalWidth && this.paintable(child)) this.paintImage(cx, child, cs, x, y, w, h, radii);
       } else if (child.tagName === "CANVAS") {
-        if (child.width && child.height) {
+        // One a cross-origin image tainted (`draw`) would taint the
+        // picture, which WebGL then refuses to upload.
+        if (child.width && child.height && !child._tainted) {
           // A fill's canvas inherits its view's rounded corners.
           cx.save();
           shape();
@@ -2966,21 +3177,24 @@ class Player {
         cx.fillText(text, x, y + (m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent));
       }
       // A view that clips its content (a scroll view among them) clips it here too.
-      if (cs.overflowX !== "visible" || cs.overflowY !== "visible") {
+      if (cs.clips) {
         shape();
         cx.clip();
       }
-      const done = this.paintTree(cx, child, base, alpha, stop, owner);
+      const done = this.paintTree(cx, child, base, alpha, stop, owner, stamp);
       cx.restore();
       if (done) return true;
     }
     return false;
   }
 
-  /** Whether an image can be painted without tainting the picture (same origin or CORS). */
+  /** Whether an image can be painted without tainting the picture (same origin, `data:` or CORS). */
   paintable(img) {
+    const src = img.currentSrc || img.src;
+    // A `data:` URL's origin reads "null", but its image never taints.
+    if (src.startsWith("data:")) return true;
     try {
-      return new URL(img.currentSrc || img.src, location.href).origin === location.origin || img.crossOrigin != null;
+      return new URL(src, location.href).origin === location.origin || img.crossOrigin != null;
     } catch {
       return false;
     }
@@ -3019,7 +3233,9 @@ class Player {
     const entry = s.layer.slots[slot];
     if (!entry) return;
     const [word, kind] = entry;
-    const f32 = new Float32Array(s.words.buffer);
+    // A view of the words as floats, kept while they are the same words.
+    if (s.f32?.buffer !== s.words.buffer) s.f32 = new Float32Array(s.words.buffer);
+    const f32 = s.f32;
     if (kind >= 3) {
       const c = parseCssColor(value);
       for (let i = 0; i < (kind === 3 ? 3 : 4); i++) f32[word + i] = c[i];
@@ -3040,6 +3256,12 @@ class Player {
 
   shaderFrame(t) {
     this.shaderFrameQueued = false;
+    // A loss or a restore whose event has not come yet (`shaderLost`).
+    const gl = this._shaderGl;
+    if (gl && gl.isContextLost() !== Boolean(this._shaderLost)) {
+      if (this._shaderLost) this.shaderRestored();
+      else this.shaderLost();
+    }
     let again = false;
     const now = performance.now();
     for (const el of [...this.shaderViews]) {
@@ -3062,9 +3284,12 @@ class Player {
       if (!el._shaderVisible || !(s.dirty || runs || s.stale)) continue;
       s.dirty = false;
       // One that cannot draw paints no pictures and takes no frames.
-      if (!this.shaderDraws(s.layer)) continue;
+      if (s.failed || !this.shaderDraws(s.layer)) continue;
       if (s.stale) this.paintInputs(el);
-      this.renderShader(el, now);
+      if (!this.renderShader(el, now)) {
+        this.shaderFailed(el);
+        continue;
+      }
       again ||= runs;
     }
     if (again) {
@@ -3084,9 +3309,20 @@ class Player {
     if (!canvas || canvas.hidden === !shown) return;
     canvas.hidden = !shown;
     if (el._shader.layer.role !== 3) return;
-    if (shown && this.shaderDraws(el._shader.layer)) this.screenShader = el;
+    if (shown && !el._shader.failed && this.shaderDraws(el._shader.layer)) this.screenShader = el;
     else if (this.screenShader === el) this.screenShader = null;
     this.root.classList.toggle("nsh-fx", Boolean(this.screenShader));
+  }
+
+  /**
+   * A view whose frame the browser refused (`renderShader`) shows its
+   * children as they are, as one that cannot draw, until its next layer
+   * (`op_sh`) tries again; a page's or a dialog's change ends at once.
+   */
+  shaderFailed(el) {
+    el._shader.failed = true;
+    if (this.screenShader === el) this.screenShader = null;
+    this.endTransition(el);
   }
 
   /**
@@ -3098,16 +3334,30 @@ class Player {
     const run = s.running;
     s.running = null;
     if (s.nav) {
+      // The overlay goes for good, and its pictures' textures with it:
+      // GPU memory the garbage collector does not see.
+      this.freeTextures(s);
       this.shaderViews.delete(el);
-      run.done?.();
+      run?.done?.();
       return;
     }
     const host = this.shaderHost(el);
     if (host !== this.root || !this.screenShader) host.classList.remove("nsh-fx");
     s.pictures[2] = s.pictures[3] = null;
+    this.freeTextures(s, [2, 3]);
     const canvas = el._shaderCanvas;
     canvas._bitmap?.transferFromImageBitmap(null);
     canvas.width = 0;
+  }
+
+  /** Deletes the textures of a view's pictures `inputs` (all of them by default). */
+  freeTextures(s, inputs = [0, 1, 2, 3]) {
+    const gl = this._shaderGl;
+    for (const input of inputs) {
+      const t = s.textures[input];
+      if (t && gl) gl.deleteTexture(t);
+      s.textures[input] = null;
+    }
   }
 
   /** The shared WebGL 2 context; `null` where there is none (said once). */
@@ -3115,20 +3365,76 @@ class Player {
     if (this._shaderGl !== undefined) return this._shaderGl;
     const canvas = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
     const gl = canvas.getContext("webgl2", { premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: false });
-    if (!gl) console.warn("[nsh] shaders: no WebGL 2; shader views draw nothing");
+    if (!gl) {
+      console.warn("[nsh] shaders: no WebGL 2; shader views draw nothing");
+    } else {
+      // The browser takes the context away on a GPU reset or when it
+      // evicts the tab's; `preventDefault` asks for it back.
+      canvas.addEventListener("webglcontextlost", (e) => {
+        e.preventDefault();
+        this.shaderLost();
+      });
+      canvas.addEventListener("webglcontextrestored", () => this.shaderRestored());
+    }
     this._shaderGl = gl;
     this._shaderPrograms = new Map();
     return gl;
   }
 
   /**
-   * Whether `layer`'s shader draws: there is WebGL 2 and the driver takes
-   * its program. Effects and transitions hide their children under their
-   * canvas only then.
+   * Whether `layer`'s shader draws: there is WebGL 2, its context is not
+   * lost, and the driver takes its program. Effects and transitions hide
+   * their children under their canvas only then.
    */
   shaderDraws(layer) {
     const gl = this.shaderGl();
-    return Boolean(gl && this.shaderProgram(gl, layer));
+    return Boolean(gl && !gl.isContextLost() && this.shaderProgram(gl, layer));
+  }
+
+  /**
+   * The shared context is lost: what was made on it went with it, and
+   * every shader view shows its children as one that cannot draw does (a
+   * running change ends, settled and reported) until it comes back.
+   */
+  shaderLost() {
+    if (this._shaderLost) return;
+    this._shaderLost = true;
+    console.warn("[nsh] shaders: the WebGL context was lost; shader views show their children until it is back");
+    this._shaderPrograms = new Map();
+    this._emptyTexture = null;
+    this.screenShader = null;
+    this.root.classList.remove("nsh-fx");
+    for (const el of [...this.shaderViews]) {
+      const s = el._shader;
+      if (!s) continue;
+      s.textures = [null, null, null, null];
+      this.endTransition(el);
+    }
+  }
+
+  /**
+   * The shared context is back: programs and textures are made again as
+   * the views draw, and effects hide their children under their canvas
+   * again.
+   */
+  shaderRestored() {
+    if (!this._shaderLost) return;
+    this._shaderLost = false;
+    // Programs the driver refused while the context was gone are tried again.
+    this._shaderPrograms = new Map();
+    this._emptyTexture = null;
+    for (const el of this.shaderViews) {
+      const s = el._shader;
+      if (!s) continue;
+      s.textures = [null, null, null, null];
+      s.stale |= s.reads;
+      const role = s.layer.role;
+      if ((role === 1 || role === 3) && !s.failed && el.isConnected && this.shaderDraws(s.layer)) {
+        if (role === 3) this.screenShader = el;
+        this.shaderHost(el).classList.add("nsh-fx");
+      }
+      this.shaderDirty(el);
+    }
   }
 
   shaderProgram(gl, layer) {
@@ -3193,8 +3499,12 @@ class Player {
     if (s.fresh[input]) {
       s.fresh[input] = false;
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture);
-      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      try {
+        // Throws for a tainted picture (`renderShader`).
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture);
+      } finally {
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      }
       for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) {
         gl.texParameteri(gl.TEXTURE_2D, k, v);
       }
@@ -3202,7 +3512,24 @@ class Player {
     return t;
   }
 
+  /**
+   * Draws a view's frame: false when the browser refuses it, as WebGL
+   * refuses to upload a tainted picture (a canvas a cross-origin image
+   * tainted where `paintTree` could not tell). The caller shows the
+   * children then (`shaderFailed`), and the frame, or the batch it was
+   * drawn in, goes on with the other views.
+   */
   renderShader(el, t) {
+    try {
+      this.drawShader(el, t);
+      return true;
+    } catch (err) {
+      console.warn("[nsh] shader:", err);
+      return false;
+    }
+  }
+
+  drawShader(el, t) {
     const s = el._shader;
     const gl = this.shaderGl();
     if (!gl) return;
@@ -3236,7 +3563,9 @@ class Player {
       gl.bindBuffer(gl.UNIFORM_BUFFER, program.builtins);
       // `struct Nsh` (core's `shader::builtins`, 32 bytes): size, time,
       // scale, progress and overflow.
-      gl.bufferData(gl.UNIFORM_BUFFER, new Float32Array([w, h, Math.max(0, time), pw / Math.max(w + 2 * m, 1e-6), progress, m, 0, 0]), gl.DYNAMIC_DRAW);
+      const builtins = (s.builtins ??= new Float32Array(8));
+      builtins.set([w, h, Math.max(0, time), pw / Math.max(w + 2 * m, 1e-6), progress, m, 0, 0]);
+      gl.bufferData(gl.UNIFORM_BUFFER, builtins, gl.DYNAMIC_DRAW);
       gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, program.builtins);
     }
     if (program.uniforms) {
@@ -4025,6 +4354,10 @@ class Player {
         } else if (name === "drawImage") {
           const img = this.canvasImage(args[0], el);
           if (!img) continue;
+          // A cross-origin image without CORS taints the canvas for good
+          // (the browser never clears the flag): shaders' pictures leave
+          // it out (`paintTree`).
+          if (!this.paintable(img)) canvas._tainted = true;
           const dest = args.slice(2).map(v);
           if (args[1]) cx.drawImage(img, ...args[1], ...dest);
           else cx.drawImage(img, ...dest);
@@ -4385,12 +4718,8 @@ class Player {
       this.event(screen._id, "onDismiss");
       this.syncHistorySoon();
     };
-    if (this.screenMotion(screen)) {
-      this.moveScreens(screen, below, false, dismissed);
-    } else {
-      screen.style.visibility = "hidden";
-      dismissed();
-    }
+    // Through its shader, with its own motion, or at once.
+    this.moveScreens(screen, below, false, dismissed);
     this.syncHistorySoon();
   }
 
@@ -4415,12 +4744,15 @@ class Player {
     // side, the page above its upper one.
     const upper = pushing ? top : old;
     const stack = (top ?? old)?.parentNode;
+    this.endNavShader(stack);
     if (upper?._navShader && stack) {
       if (!pushing) old.style.pointerEvents = "none";
       if (this.shaderNav(stack, upper, upper._navShader, !pushing, done)) return;
     }
     const motion = this.screenMotion(pushing ? top : old);
     if (!motion) {
+      // At once: the screen that leaves shows no more.
+      if (!pushing && old) old.style.visibility = "hidden";
       done?.();
       return;
     }
@@ -4902,6 +5234,7 @@ class Player {
   }
 
   present(el) {
+    this.endNavShader(this.root);
     const motion = this.modalMotion(el);
     el._leaving = false;
     el.style.pointerEvents = "";
@@ -4931,6 +5264,9 @@ class Player {
     this.scopeFocus();
     this.syncHistorySoon();
     requestAnimationFrame(() => requestAnimationFrame(() => {
+      // Dismissed before it came in (`endPresentation` reported it shown),
+      // or presented again meanwhile: nothing more to do.
+      if (!el._entering) return;
       el._entering = false;
       if (el._navShader && !this.viewportDialogs) {
         // Through its `transitionShader` over the root: it shows at once under it.
@@ -4944,19 +5280,39 @@ class Player {
       el.style.transition = "";
       el.style.transform = "";
       el.style.opacity = "";
-      setTimeout(() => this.event(el._id, "onShow"), motion === "none" ? 0 : 350);
+      el._showTimer = setTimeout(() => {
+        el._showTimer = 0;
+        this.event(el._id, "onShow");
+      }, motion === "none" ? 0 : 350);
     }));
+  }
+
+  /**
+   * Modal `el`'s presentation, if it is still under way, ends at once,
+   * shown and reported, as a shader's does (`endNavShader`): one dismissed
+   * before it came in, or while its own motion runs, reports `onShow`
+   * before the dismissal, never after it.
+   */
+  endPresentation(el) {
+    if (!el._entering && !el._showTimer) return;
+    el._entering = false;
+    clearTimeout(el._showTimer);
+    el._showTimer = 0;
+    this.event(el._id, "onShow");
   }
 
   /** Takes modal `el` away; `onDismiss` follows unless `reported`. */
   dismiss(el, reported = el._closed) {
     if (el._leaving) return;
+    this.endNavShader(this.root);
+    this.endPresentation(el);
     el._leaving = true;
     const motion = this.modalMotion(el);
     // Through its `transitionShader`: pictured as it shows, then gone under it at once.
     const shader = el._navShader && !this.viewportDialogs && this.shaderNav(this.root, el, el._navShader, true, () => {
       if (el._leaving) {
         el.remove();
+        this.viewportObserver?.unobserve(el);
         this.releaseFrame(el);
         this.dropLeftWith(el);
       }

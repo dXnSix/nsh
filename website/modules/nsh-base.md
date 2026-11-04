@@ -10,7 +10,7 @@ demo: ui-navigation
 `nsh/base` is the base component layer of an app's UI: unstyled components that own behavior, state, focus and
 accessibility, on every platform. It sits between the primitives (`nsh`, `nsh/mobile` and `nsh/desktop`) and the
 app's own component library, as `gpui-base` sits between `gpui` and a styled library in GPUI Kit (see
-[Modules](./index.md#three-layers)). It provides controls (`Button`, `Link`, `Checkbox`, `ColorPicker` with its `ColorArea`, `ColorSlider`, `ColorField`, `ColorSwatch` and `ColorEyeDropper`, `NumberInput`, `Radio` in a `RadioGroup`, `Slider`, `Switch`, `Tab` in `Tabs`, `Toggle` in a `ToggleGroup`, `Select`, `Combobox`, `Calendar`, `TimeField`, `DatePicker`), command palettes (`Command`), bars of controls (`Toolbar` with its `ToolbarGroup` and `ToolbarSeparator`), scroll bars of the app's own look (`Scrollbar`), regions that expand and collapse (`Collapsible`, and `Accordion` with its `AccordionItem`, `AccordionHeader`, `AccordionTrigger` and `AccordionPanel`), a progress bar (`Progress`), one-time codes (`OtpInput`), the pages of a set (`Pagination`), items that hold items (`Tree`), the parts charts are built from (`Plot` with `Line`, `Area`, `Bar`, `Grid`, `Pie` and `Arc`, in `nsh/base/plot`), workspaces the user arranges (`ResizablePanel`s in a
+[Modules](./index.md#three-layers)). It provides controls (`Button`, `Link`, `Checkbox`, `ColorPicker` with its `ColorArea`, `ColorSlider`, `ColorField`, `ColorSwatch` and `ColorEyeDropper`, `NumberInput`, `Radio` in a `RadioGroup`, `Slider`, `Switch`, `Tab` in `Tabs`, `Toggle` in a `ToggleGroup`, `Select`, `Combobox`, `Calendar`, `TimeField`, `DatePicker`), command palettes (`Command`), bars of controls (`Toolbar` with its `ToolbarGroup` and `ToolbarSeparator`), scroll bars of the app's own look (`Scrollbar`), regions that expand and collapse (`Collapsible`, and `Accordion` with its `AccordionItem`, `AccordionHeader`, `AccordionTrigger` and `AccordionPanel`), a progress bar (`Progress`), one-time codes (`OtpInput`), the pages of a set (`Pagination`), items that hold items (`Tree`), the parts charts are built from (`Plot` with `Line`, `Area`, `Bar`, `Rule`, `Dot`, `Cell`, `Grid`, `Pie` and `Arc`, in `nsh/base/plot`), workspaces the user arranges (`ResizablePanel`s in a
 `ResizablePanelGroup`, and `DockArea`'s splits, tab groups and docks), carousels (`Carousel` and its parts), documents of Markdown or HTML (`TextView`), a code editor (`Editor`) the changes between texts (`DiffView`) and tables of rows and columns (`Table` and its parts, `DataTable`), text inputs
 (`Input`), popups shown on top of everything (`Popover`, `Menu` and `ContextMenu` with their `MenuItem`,
 `MenuSeparator` and `Submenu`, `Tooltip`, `Sheet`), toasts (`Toast` in a `ToastStack`, their lifecycle in a `ToastManager`), navigation (a `NavStack` of `NavPage`s driven
@@ -190,9 +190,9 @@ import type {
   RadioGroupProps,
   RadioProps,
   NumberInputProps,
+  SelectEntry,
   SelectGroup,
   SelectItem,
-  SelectItemState,
   SelectProps,
   ComboboxProps,
   CommandEntry,
@@ -372,7 +372,7 @@ groups and separators. See [Toolbar](../elements/toolbar.md).
 One value chosen from a list of items given as data (`items`: a value and a title each, optionally disabled or in a
 section), with no look. The app's trigger opens the list: a popup at the trigger on the desktops, a sheet at the
 bottom on phones and tablets. The select owns the keyboard (Up, Down, Home, End, Page Up and Down, typeahead, Return
-and Escape), search (`searchable`), the highlighted row (`focus:` on `itemClass`, `highlighted` in `renderItem`) and
+and Escape), search (`searchable`), the highlighted row (`focus:` on `itemClass`; `renderItem` gets what an item is, never its state) and
 the combobox, listbox and option roles for screen readers. The app owns the value (`value`, `onChange`) or leaves it
 to the select (`defaultValue`), and styles each part or draws the rows. See [Select](../elements/select.md).
 
@@ -391,7 +391,9 @@ A date, or with `range` a range of dates, picked from months of days, with no lo
 (`numberOfMonths`) show side by side; the header turns them and opens a view of the months or a page of years. The
 value is an ISO date (`"2026-10-28"`) or `[start, end]` the app owns (`value`, `onChange`) or leaves to the calendar
 (`defaultValue`); `disabledMatcher` keeps days from being picked, and the days take the keyboard as one stop of Tab.
-The app styles the parts and draws the items (`renderItem`). See [Calendar](../elements/calendar.md).
+The app styles the parts and draws the items (`renderItem`, given what an item is; its states are its classes, a
+range's days `selected:` with `data-range-start:`, `data-range-middle:` and `data-range-end:`). See
+[Calendar](../elements/calendar.md).
 
 ### TimeField
 
@@ -483,8 +485,8 @@ See [ColorPicker](../elements/color-picker.md).
 A fixed-length numeric one-time code, with no look: one native text field over the cells takes the keyboard, so
 typing, paste, the number pad and the system's code autofill are the platform's, and screen readers find one text
 field. Digits only go in, up to `length`; Backspace removes the last. The app owns `value` (or gives `defaultValue`)
-and hears `onChange` and `onComplete`; it styles the cells (`focus:` on the one that takes the next digit), their
-groups and the caret. See [OtpInput](../elements/otp-input.md).
+and hears `onChange` and `onComplete`; it styles the cells (`focus:` on the one that takes the next digit, `data-filled:`
+on those that hold a digit), their groups and the caret. See [OtpInput](../elements/otp-input.md).
 
 ### Pagination
 
@@ -519,7 +521,7 @@ and draws them (`renderItem`, given each item's `depth`). See [Tree](../elements
 ### Plot (`nsh/base/plot`)
 
 The parts charts are built from, as `gpui-base`'s `plot`, in a module of their own: `import { Plot, Line, Area, Bar,
-Grid, Pie, Arc, Sankey } from "nsh/base/plot"`. A `Plot` holds the app's rows (`data`, generic over their type, so `x` and `y`
+Grid, Pie, Arc, Sankey, Treemap } from "nsh/base/plot"`. A `Plot` holds the app's rows (`data`, generic over their type, so `x` and `y`
 are checked keys or functions of a row), the `point`, `linear` or `band` scales of its axes, the row under the pointer
 (`onHoverChange`) and its motion (`motion`: the appear, the hover's fade and glide); its marks draw natively from the
 rows, with no JS per point, and paint with the SVG paint properties (`stroke-*`, `fill-*`), `currentColor` where none
@@ -531,7 +533,9 @@ natively; axis labels are the app's own elements. A `Pie` splits the turn into a
 `innerRadius`), each painted with its own classes (`sliceClass`, a function of its row), and an `Arc` draws one sector
 between two angles (a gauge's track and value); over a pie the plot reports the slice under the pointer, which lifts
 (`hoverLift`) while the others fade (`hoverDim`). A `Sankey` draws flows between the rows (`links`), laid out as
-d3-sankey lays them out, each node and ribbon painted with its own classes, its nodes labelled, hovered and moving to new flows. See [Plot](../elements/plot.md).
+d3-sankey lays them out, each node and ribbon painted with its own classes, its nodes labelled, hovered and moving to new flows. A `Treemap` tiles the rows as a hierarchy of nested
+rectangles (`id`, `parent`), each leaf's area its `value`, colored by category or along a ramp of the plot's
+`colorScale`, its labels shown where they fit. See [Plot](../elements/plot.md).
 
 ## Workspaces
 

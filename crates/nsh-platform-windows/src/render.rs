@@ -399,6 +399,22 @@ impl<'a> DrawCx<'a> {
         }
     }
 
+    /// Runs `f`, which draws a picture rather than the window (a shader's
+    /// content): the composed items (web views) it reaches are left out.
+    /// Their pages are not in the picture, so they are not placed (hidden,
+    /// [`crate::surface::Surface::composed_placed`]) and what follows
+    /// starts no layer above them.
+    pub(crate) fn uncomposed<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let len = self.composed.len();
+        let pending = self.split.as_ref().map(|s| s.pending);
+        let r = f(self);
+        self.composed.truncate(len);
+        if let (Some(split), Some(pending)) = (&mut self.split, pending) {
+            split.pending = pending;
+        }
+        r
+    }
+
     /// Takes the composed items a nested pass reached (in window
     /// coordinates): what follows them goes above them.
     pub(crate) fn adopt_composed(&mut self, mut composed: Vec<Composed>) {
@@ -785,11 +801,12 @@ fn paints_one_shape(view: &NshView, state: &ViewState) -> bool {
 }
 
 /// Where a view paints itself (not its children), in its coordinates: its
-/// bounds, out by its shadows and outline, and the items it hosts.
+/// bounds, out by its shadows, outline and shader's overflow (an effect's
+/// frames reach beyond its box), and the items it hosts.
 fn own_area(state: &ViewState) -> D2D_RECT_F {
     let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
     // A point more for the antialiased edges.
-    let o = crate::decor::outset(state) + 1.0;
+    let o = crate::decor::outset(state).max(crate::shader::overflow(state)) + 1.0;
     let mut area = D2D_RECT_F {
         left: -o,
         top: -o,
@@ -997,7 +1014,7 @@ pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4) {
         cx.realize();
     }
     cx.set_transform(world);
-    crate::scroll::draw_indicator(cx, &state);
+    crate::scroll::draw_indicator(cx, view, &state);
     if clip {
         cx.pop();
     }
@@ -1207,29 +1224,89 @@ pub(crate) fn read_back(
     source: &ID2D1Bitmap1,
     rect: D2D_RECT_U,
 ) -> windows::core::Result<Pixels> {
-    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
-    let read = bitmap(
-        dc,
-        (width, height),
-        1.0,
-        D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-    )?;
-    // SAFETY: COM calls on bitmaps of the live device; the mapped memory
-    // is copied before `Unmap`.
-    unsafe {
-        read.CopyFromBitmap(Some(&D2D_POINT_2U { x: 0, y: 0 }), source, Some(&rect))?;
-        let mapped = read.Map(D2D1_MAP_OPTIONS_READ)?;
-        let mut data = Vec::with_capacity((width * height * 4) as usize);
-        for row in 0..height {
-            let start = mapped.bits.add((row * mapped.pitch) as usize);
-            data.extend_from_slice(std::slice::from_raw_parts(start, (width * 4) as usize));
+    let mut once = Readback::default();
+    once.read(dc, source, rect)?;
+    Ok(once.pixels)
+}
+
+/// The bitmaps a picture is drawn into and read back through, and the
+/// pixels it is read into: kept while its size, its scale and the device
+/// stay, so a picture taken again makes no bitmap and allocates nothing.
+/// (Direct2D maps a CPU-readable bitmap only once the copy into it is
+/// done: the read waits for the GPU.)
+#[derive(Default)]
+pub(crate) struct Readback {
+    target: Option<(BitmapKey, ID2D1Bitmap1)>,
+    read: Option<(BitmapKey, ID2D1Bitmap1)>,
+    pixels: Pixels,
+}
+
+/// What a kept bitmap was made for: its size in pixels, its scale (an
+/// `f32`'s bits) and the device generation ([`gfx::generation`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct BitmapKey((u32, u32), u32, u64);
+
+impl Readback {
+    /// Its target bitmap: `size` pixels at `scale` pixels per point, made
+    /// again for another size or scale, or after a device loss.
+    pub(crate) fn target(
+        &mut self,
+        dc: &ID2D1DeviceContext,
+        size: (u32, u32),
+        scale: f32,
+    ) -> windows::core::Result<ID2D1Bitmap1> {
+        let key = BitmapKey(size, scale.to_bits(), gfx::generation());
+        if let Some((k, bitmap)) = &self.target
+            && *k == key
+        {
+            return Ok(bitmap.clone());
         }
-        read.Unmap()?;
-        Ok(Pixels {
-            width,
-            height,
-            data,
-        })
+        let bitmap = target_bitmap(dc, size, scale)?;
+        self.target = Some((key, bitmap.clone()));
+        Ok(bitmap)
+    }
+
+    /// `rect` of `source` (a bitmap of `dc`'s device) read back into its
+    /// pixels, rows packed: premultiplied BGRA.
+    pub(crate) fn read(
+        &mut self,
+        dc: &ID2D1DeviceContext,
+        source: &ID2D1Bitmap1,
+        rect: D2D_RECT_U,
+    ) -> windows::core::Result<&Pixels> {
+        let size = (rect.right - rect.left, rect.bottom - rect.top);
+        let key = BitmapKey(size, 1.0f32.to_bits(), gfx::generation());
+        let read = match &self.read {
+            Some((k, bitmap)) if *k == key => bitmap.clone(),
+            _ => {
+                let bitmap = bitmap(
+                    dc,
+                    size,
+                    1.0,
+                    D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+                )?;
+                self.read = Some((key, bitmap.clone()));
+                bitmap
+            }
+        };
+        let (width, height) = size;
+        let data = &mut self.pixels.data;
+        data.clear();
+        // SAFETY: COM calls on bitmaps of the live device; the mapped memory
+        // is copied before `Unmap`.
+        unsafe {
+            read.CopyFromBitmap(Some(&D2D_POINT_2U { x: 0, y: 0 }), source, Some(&rect))?;
+            let mapped = read.Map(D2D1_MAP_OPTIONS_READ)?;
+            data.reserve((width * height * 4) as usize);
+            for row in 0..height {
+                let start = mapped.bits.add((row * mapped.pitch) as usize);
+                data.extend_from_slice(std::slice::from_raw_parts(start, (width * 4) as usize));
+            }
+            read.Unmap()?;
+        }
+        self.pixels.width = width;
+        self.pixels.height = height;
+        Ok(&self.pixels)
     }
 }
 
@@ -1285,10 +1362,20 @@ pub(crate) fn frame(surface: &Rc<Surface>) {
     let damage = surface.take_damage();
     let changed = damage
         .filter(|_| composition.is_none())
-        .map(|rects| merged(pixel_rects(&rects, scale, size)))
-        .filter(|rects| !rects.is_empty());
-    // What the back buffer, two presents old, needs drawn again.
-    let redraw = chain.to_draw(changed.as_deref()).map(merged);
+        .map(|rects| merged(pixel_rects(&rects, scale, size)));
+    // All of it outside the window (an animation scrolled away): the window
+    // already shows this frame, and drawing it whole would cost every frame.
+    if changed.as_ref().is_some_and(Vec::is_empty) && chain.shows_a_frame() {
+        return;
+    }
+    let changed = changed.filter(|rects| !rects.is_empty());
+    // What the back buffer, two presents old, needs drawn again, with
+    // the whole area of each shader reading what is behind it that this
+    // meets: what it reads is then all this frame's.
+    let redraw = chain.to_draw(changed.as_deref()).map(|rects| {
+        let readers = crate::shader::backdrop_areas(surface);
+        with_backdrops(merged(rects), &pixel_rects(&readers, scale, size))
+    });
     let areas: Option<Vec<D2D_RECT_F>> = redraw.as_ref().map(|rects| {
         rects
             .iter()
@@ -1457,7 +1544,34 @@ fn touching(a: &RECT, b: &RECT) -> bool {
     a.left <= b.right && b.left <= a.right && a.top <= b.bottom && b.top <= a.bottom
 }
 
+/// `rects` (what a partial frame draws, in pixels) with every reader's
+/// area (where a shader reads what is behind it) that they meet, merged,
+/// again until they meet no more: outside the rectangles the back buffer
+/// still holds an earlier frame, the reader's own output of it included.
+fn with_backdrops(mut rects: Vec<RECT>, readers: &[RECT]) -> Vec<RECT> {
+    let mut added = vec![false; readers.len()];
+    loop {
+        let mut grew = false;
+        for (reader, done) in readers.iter().zip(added.iter_mut()) {
+            if !*done && rects.iter().any(|r| overlap(r, reader)) {
+                rects.push(*reader);
+                *done = true;
+                grew = true;
+            }
+        }
+        if !grew {
+            return rects;
+        }
+        // A merge draws the box around what it joins, which may meet a
+        // reader none of its parts met.
+        rects = merged(rects);
+    }
+}
+
 fn device_lost(surface: &Rc<Surface>) {
+    // The pages and dialogs changing through a shader drew with the lost
+    // device: they end at once.
+    crate::navigation::device_lost(surface);
     *surface.swap.borrow_mut() = None;
     if let Some(c) = surface.composition() {
         c.device_lost();
@@ -1583,6 +1697,7 @@ fn draw_into(
 
 /// Pixels read back (a snapshot, a shader's picture): BGRA,
 /// premultiplied, `width * 4` bytes per row.
+#[derive(Default)]
 pub(crate) struct Pixels {
     /// Width in pixels.
     pub(crate) width: u32,
@@ -1810,6 +1925,19 @@ mod tests {
         assert!(surface.take_damage().is_none_or(|d| d.is_empty()));
     }
 
+    /// A change wholly outside the window leaves nothing to draw, which
+    /// `frame` tells apart from `None`, the whole window.
+    #[test]
+    fn changes_outside_the_window_leave_no_pixels() {
+        let outside = D2D_RECT_F {
+            left: 10.0,
+            top: 900.0,
+            right: 50.0,
+            bottom: 940.0,
+        };
+        assert!(merged(pixel_rects(&[outside], 1.5, (300, 300))).is_empty());
+    }
+
     #[test]
     fn merged_areas_cost_no_more_than_apart() {
         let r = |l, t, w, h| RECT {
@@ -1825,6 +1953,59 @@ mod tests {
         // Never more than MAX_AREAS.
         let many: Vec<RECT> = (0..20).map(|i| r(i * 50, 0, 10, 10)).collect();
         assert!(merged(many).len() <= MAX_AREAS);
+    }
+
+    #[test]
+    fn a_partial_frame_draws_a_backdrop_reader_whole() {
+        let r = |l, t, w, h| RECT {
+            left: l,
+            top: t,
+            right: l + w,
+            bottom: t + h,
+        };
+        // A spinner behind part of a panel that reads what is behind it,
+        // another reader over the panel's edge, and one far from both.
+        let spinner = r(100, 100, 20, 20);
+        let panel = r(110, 90, 200, 100);
+        let over = r(300, 150, 100, 100);
+        let far = r(600, 600, 50, 50);
+        let drawn = with_backdrops(vec![spinner], &[far, over, panel]);
+        let covered = |a: &RECT| {
+            drawn.iter().any(|d| {
+                d.left <= a.left && d.top <= a.top && d.right >= a.right && d.bottom >= a.bottom
+            })
+        };
+        assert!(
+            covered(&spinner) && covered(&panel) && covered(&over),
+            "{drawn:?}"
+        );
+        assert!(!drawn.iter().any(|d| overlap(d, &far)), "{drawn:?}");
+        // Rectangles that meet no reader stay as they are.
+        let alone = vec![r(0, 0, 10, 10)];
+        assert_eq!(with_backdrops(alone.clone(), &[panel, far]), alone);
+    }
+
+    #[test]
+    fn a_reader_the_merged_areas_meet_is_drawn_whole() {
+        let r = |l, t, w, h| RECT {
+            left: l,
+            top: t,
+            right: l + w,
+            bottom: t + h,
+        };
+        // The strip meets neither the spinner nor the panel, but the box
+        // their merge draws.
+        let spinner = r(0, 0, 10, 10);
+        let panel = r(5, 5, 45, 45);
+        let strip = r(40, 0, 20, 4);
+        assert!(!overlap(&spinner, &strip) && !overlap(&panel, &strip));
+        let drawn = with_backdrops(vec![spinner], &[panel, strip]);
+        let covered = |a: &RECT| {
+            drawn.iter().any(|d| {
+                d.left <= a.left && d.top <= a.top && d.right >= a.right && d.bottom >= a.bottom
+            })
+        };
+        assert!(covered(&panel) && covered(&strip), "{drawn:?}");
     }
 
     #[test]
@@ -1906,6 +2087,30 @@ mod tests {
         a.state_mut().style.hidden = false;
         parent.state_mut().style.overflow_hidden = true;
         assert_eq!(area(&parent), (-1.0, -1.0, 101.0, 101.0));
+    }
+
+    #[test]
+    fn a_shader_effect_paints_its_overflow() {
+        let surface = Surface::new(Default::default());
+        surface.without_shader_renderer();
+        let v = view(
+            Some(&surface.root),
+            2,
+            ViewKind::View,
+            rect(0.0, 0.0, 16.0, 16.0),
+        );
+        let shader = nsh_core::shader::Shader::compile(
+            "fn shade(uv: vec2f) -> vec4f { return sample_content(uv); }",
+        )
+        .expect("a shader");
+        let layer = nsh_core::shader::ShaderLayer::new(shader, &[], &mut Vec::new())
+            .with_role(nsh_core::shader::ShaderRole::Effect)
+            .with_overflow(Points(8.0));
+        crate::shader::set(&surface, &v, Some(std::sync::Arc::new(layer)));
+        // Where it was painted, drawn again when it moves: its frames too.
+        let a = own_area(&v.state());
+        assert_eq!((a.left, a.top, a.right, a.bottom), (-9.0, -9.0, 25.0, 25.0));
+        assert_eq!(area(&v), (-9.0, -9.0, 25.0, 25.0));
     }
 
     #[test]

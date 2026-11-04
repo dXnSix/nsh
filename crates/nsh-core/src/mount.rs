@@ -868,8 +868,10 @@ pub enum MountItem {
     /// (`transitionShader`; `None`: its `animation`): when it is pushed,
     /// popped, presented or dismissed, the platform draws the change through
     /// the layer for `duration`, the lower side's picture as `sample_from`
-    /// and the upper's as `sample_to`, and its own animation where it
-    /// cannot.
+    /// and the upper's as `sample_to`, whatever the page's `animation`; its
+    /// `animation` runs where it cannot and when the user asks for less
+    /// motion, and a change that starts while one runs ends that one first
+    /// (`docs/dev/shaders.md` "Pages and dialogs").
     NavShader {
         /// The page or dialog.
         id: NodeId,
@@ -1037,13 +1039,22 @@ impl MountItem {
 }
 
 /// A page's or a dialog's transition through a shader
-/// ([`MountItem::NavShader`]).
+/// ([`MountItem::NavShader`]). It has no `Default`: a layer holds a
+/// compiled program, which has none; [`NavShader::new`] makes one.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct NavShader {
     /// The program and its uniforms.
     pub layer: Arc<crate::shader::ShaderLayer>,
     /// How long it runs.
     pub duration: std::time::Duration,
+}
+
+impl NavShader {
+    /// `layer` running for `duration`.
+    pub fn new(layer: Arc<crate::shader::ShaderLayer>, duration: std::time::Duration) -> Self {
+        Self { layer, duration }
+    }
 }
 
 /// All mount items produced by one commit.

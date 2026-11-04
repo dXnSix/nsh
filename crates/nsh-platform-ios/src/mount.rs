@@ -360,6 +360,28 @@ impl KeyboardMotion {
     }
 }
 
+/// Moves the content of `view` up by `shift` (through its bounds' origin,
+/// so neither its frame nor a transform the app set changes) along
+/// `motion`, the keyboard's.
+fn set_pan(view: &UIView, shift: CGFloat, motion: KeyboardMotion, mtm: MainThreadMarker) {
+    let target = view.retain();
+    let block = block2::RcBlock::new(move || {
+        let mut bounds = target.bounds();
+        bounds.origin.y = shift;
+        target.setBounds(bounds);
+    });
+    motion.aligned(view, || {
+        UIView::animateWithDuration_delay_options_animations_completion(
+            motion.duration,
+            0.0,
+            motion.options(),
+            &block,
+            None,
+            mtm,
+        )
+    });
+}
+
 /// Sets the bottom inset of `scroll` and scrolls `reveal` (a rectangle in
 /// its content) into view in one animation along `motion`, the keyboard's,
 /// so that the content moves with the keyboard.
@@ -523,6 +545,15 @@ impl Slot {
     }
 }
 
+/// The screen a stack showed when the app removed it
+/// ([`Mounter::remove_hosted`]).
+struct LeavingScreen {
+    id: NodeId,
+    /// Its `transitionShader`, unless less motion is asked for.
+    shader: Option<nsh_core::NavShader>,
+    animation: nsh_core::ScreenAnimation,
+}
+
 /// Applies mount batches to UIKit views. Main thread only.
 pub(crate) struct Mounter {
     /// Indexed by node id (ids are dense).
@@ -550,6 +581,14 @@ pub(crate) struct Mounter {
     keyboard_motion: KeyboardMotion,
     /// The scroll view given a bottom inset to clear the keyboard.
     avoiding: Option<NodeId>,
+    /// The screen, modal or surface root whose content moved up to clear
+    /// the keyboard (the focused input is in no scroll view), and by how
+    /// much.
+    panned: Option<(NodeId, CGFloat)>,
+    /// The keyboard moved and the app's answer to it (a batch laying out
+    /// what reads its height) may still come: the content moves once it
+    /// came ([`Mounter::keyboard_settled`]).
+    keyboard_pending: bool,
     /// Animates the frames, insertions and removals of the current batch.
     layout_animation: Option<LayoutAnimation>,
     /// Views created by the current batch (they appear, not move).
@@ -611,6 +650,10 @@ pub(crate) struct Mounter {
     text_colors: crate::interaction::TextColors,
     /// The `transitionShader`s of pages and dialogs.
     nav_shaders: rustc_hash::FxHashMap<NodeId, nsh_core::NavShader>,
+    /// The screen each stack showed when the app removed it: the app
+    /// releases it in the same batch, before [`Mounter::finish_navigation`]
+    /// changes the stack.
+    leaving_screens: rustc_hash::FxHashMap<NodeId, LeavingScreen>,
     /// The tint of this surface's alerts and action sheets, from its
     /// tokens ([`crate::system::alert_tint`]).
     alert_tint: Option<nsh_core::element::AdaptiveColor>,
@@ -665,6 +708,8 @@ impl Mounter {
                 ..KeyboardMotion::now(0.25)
             },
             avoiding: None,
+            panned: None,
+            keyboard_pending: false,
             layout_animation: None,
             created: Vec::new(),
             disappearing: Default::default(),
@@ -672,6 +717,7 @@ impl Mounter {
             shaders: crate::shader::Shaders::new(&target_for_link),
             text_colors: crate::interaction::TextColors::new(&target_for_link),
             nav_shaders: rustc_hash::FxHashMap::default(),
+            leaving_screens: rustc_hash::FxHashMap::default(),
             alert_tint: None,
             hosts: Default::default(),
             dirty_stacks: Vec::new(),
@@ -731,6 +777,12 @@ impl Mounter {
         }
         self.focused_caret_moved();
         self.settle_content_sizes();
+        // The app moved things: the focused input may be clear of the
+        // keyboard now, or covered again. (Without focus, what moved stays
+        // until the keyboard hides, to move back with it.)
+        if !self.keyboard_pending && self.keyboard > 0.0 && self.focused.is_some() {
+            self.pan_for_keyboard(self.keyboard_motion);
+        }
     }
 
     /// Narrows the content size of a vertical scroll view to its width when
@@ -1025,10 +1077,14 @@ impl Mounter {
                     self.areas.remove(i).1.detach();
                 }
                 if let Some(mut s) = self.views.get_mut(id as usize).and_then(Option::take) {
-                    // A modal deleted while presented (its subtree released
-                    // without a remove) goes away too, as on Android.
+                    // A modal deleted while presented (the app closed it and
+                    // released it, or released its subtree without a
+                    // remove) goes away too, as on Android: through its
+                    // shader (from the picture held when it was removed) or
+                    // with its own motion.
                     if let Native::Modal(modal) = &mut s.native {
-                        modal.dismiss(false, || {});
+                        let at_once = modal.changes(false) && self.dialog_overlay(id, false);
+                        modal.dismiss(at_once, || {});
                     }
                     if s.events.contains(EventKind::Touch) {
                         self.touch_listener_changed(false);
@@ -1040,7 +1096,11 @@ impl Mounter {
                     }
                     self.animated.retain(|&v| v != id);
                 }
+                let was_screen = self.shaders.draws_screen(id);
                 self.shaders.remove(id);
+                if was_screen {
+                    self.release_root_effect();
+                }
                 self.nav_shaders.remove(&id);
             }
             MountItem::Frame { id, frame } => {
@@ -1372,6 +1432,7 @@ impl Mounter {
             },
             MountItem::Shader { id, layer } => {
                 let scale = self.display_scale();
+                let was_screen = self.shaders.draws_screen(id);
                 let role = layer.as_ref().map(|l| l.role);
                 let screen = matches!(
                     role,
@@ -1400,6 +1461,9 @@ impl Mounter {
                 {
                     self.shaders
                         .set(id, &host, children, &s.style, scale, layer);
+                }
+                if was_screen && !screen {
+                    self.release_root_effect();
                 }
                 // Bindings that came before it.
                 self.push_shader_args(id);
@@ -1800,6 +1864,7 @@ impl Mounter {
             // Moving between fields with the keyboard up.
             if self.keyboard > 0.0 {
                 self.avoid_keyboard(KeyboardMotion::now(0.25));
+                self.pan_for_keyboard(KeyboardMotion::now(0.25));
             }
         } else if self.focused == Some(id) {
             self.focused = None;
@@ -1836,6 +1901,106 @@ impl Mounter {
         self.keyboard = height;
         self.keyboard_motion = motion;
         self.avoid_keyboard(motion);
+        if height <= 0.0 {
+            // Hiding: what moved up comes back down with the keyboard.
+            self.pan_for_keyboard(motion);
+        } else {
+            // Showing: the app may make room for the keyboard itself, in
+            // the batch it answers with ([`Mounter::keyboard_settled`]).
+            self.keyboard_pending = true;
+        }
+    }
+
+    /// The engine handled the keyboard's change: the batch the app
+    /// answered with, if any, is applied. If the focused input is in no
+    /// scroll view and still under the keyboard, its content moves up.
+    pub(crate) fn keyboard_settled(&mut self) {
+        if std::mem::take(&mut self.keyboard_pending) {
+            self.pan_for_keyboard(self.keyboard_motion);
+        }
+    }
+
+    /// Where the keyboard's top is, in window coordinates.
+    fn keyboard_top(&self) -> Option<CGFloat> {
+        let root = self.slot(nsh_core::ROOT_ID)?.native.view();
+        // The bottom of the root's bounds: its origin moves when the root
+        // itself is panned.
+        let bounds = root.bounds();
+        let bottom = root.convertPoint_toView(
+            CGPoint::new(0.0, bounds.origin.y + bounds.size.height),
+            None,
+        );
+        Some(bottom.y - self.keyboard as CGFloat)
+    }
+
+    /// The view that moves to keep input `id` clear of the keyboard when
+    /// no scroll view holds it: its screen's or modal's content, else the
+    /// surface's root (as Android's `adjustPan` moves the window).
+    fn pan_container(&self, id: NodeId) -> Option<NodeId> {
+        let mut view = self.slot(id)?.native.view().superview();
+        while let Some(v) = view {
+            if let Some(
+                slot @ Slot {
+                    native: Native::Screen(_) | Native::Modal(_) | Native::Root(_),
+                    ..
+                },
+            ) = self.slot(v.tag() as NodeId)
+                && std::ptr::eq::<UIView>(slot.native.view(), &*v)
+            {
+                return Some(v.tag() as NodeId);
+            }
+            view = v.superview();
+        }
+        Some(nsh_core::ROOT_ID)
+    }
+
+    /// Keeps the focused input clear of the keyboard when no scroll view
+    /// holds it: moves the content of its screen (or modal, or the
+    /// surface) up by what the keyboard still covers of it after the app
+    /// laid out, with a margin, along `motion`; moves it back when the
+    /// keyboard hides, the input loses focus, or the app made room itself.
+    fn pan_for_keyboard(&mut self, motion: KeyboardMotion) {
+        let target = self.focused.filter(|_| self.keyboard > 0.0).and_then(|id| {
+            let Some(Slot {
+                native: Native::Input(input),
+                ..
+            }) = self.slot(id)
+            else {
+                return None;
+            };
+            if self.scroll_around(id).is_some() {
+                return None;
+            }
+            let container = self.pan_container(id)?;
+            let view = self.slot(container)?.native.view();
+            let editor = input.editor_view();
+            let rect = editor.convertRect_toView(editor.bounds(), None);
+            // Where it would be unmoved.
+            let bottom = rect.origin.y + rect.size.height + view.bounds().origin.y;
+            let margin = 12.0;
+            let covered =
+                (bottom + margin - self.keyboard_top()?).clamp(0.0, self.keyboard as CGFloat);
+            Some((container, covered))
+        });
+        if let Some((previous, _)) = self.panned
+            && target.is_none_or(|(id, _)| id != previous)
+        {
+            self.panned = None;
+            if let Some(slot) = self.slot(previous) {
+                set_pan(slot.native.view(), 0.0, motion, self.mtm);
+            }
+        }
+        let Some((container, shift)) = target else {
+            return;
+        };
+        let Some(slot) = self.slot(container) else {
+            return;
+        };
+        let view = slot.native.view();
+        if (view.bounds().origin.y - shift).abs() > 0.5 {
+            set_pan(view, shift, motion, self.mtm);
+        }
+        self.panned = (shift > 0.0).then_some((container, shift));
     }
 
     /// Keeps the focused input visible: gives its scroll view a bottom inset
@@ -1853,22 +2018,21 @@ impl Mounter {
             let base = self.base_inset(previous).bottom;
             set_bottom_inset(view, base, None, motion, self.mtm);
         }
-        let (Some((scroll_id, scroll)), Some(root)) = (scroll, self.slot(nsh_core::ROOT_ID)) else {
+        let Some((scroll_id, scroll)) = scroll else {
             return;
         };
         if self.keyboard <= 0.0 {
             return;
         }
-        let root = root.native.view();
         let Some(parent) = scroll.superview() else {
             return;
         };
         // In window coordinates: the scroll view may be in a modal, which
         // is not inside the surface's root view.
         let frame = parent.convertRect_toView(scroll.frame(), None);
-        let root_bottom =
-            root.convertPoint_toView(CGPoint::new(0.0, root.bounds().size.height), None);
-        let keyboard_top = root_bottom.y - self.keyboard as CGFloat;
+        let Some(keyboard_top) = self.keyboard_top() else {
+            return;
+        };
         let covered = (frame.origin.y + frame.size.height - keyboard_top).max(0.0);
         let base = self.base_inset(scroll_id).bottom;
         let reveal = match self.focused.and_then(|id| self.slot(id)) {
@@ -2477,6 +2641,12 @@ impl Mounter {
         root.window().map_or(2.0, |w| w.screen().scale())
     }
 
+    /// The surface moved to a window (or out of one): the shaders in it
+    /// take the pictures they missed.
+    pub(crate) fn window_changed(&mut self) {
+        self.shaders.revisit();
+    }
+
     /// The surface's traits changed: on a screen of another scale (an
     /// external display, Catalyst), images decode again for it.
     pub(crate) fn traits_changed(&mut self) {
@@ -3020,25 +3190,105 @@ impl Mounter {
             return false;
         };
         match self.slot(id).map(|s| &s.native) {
-            Some(Native::Screen(_)) => {
-                if let Some(Slot {
+            Some(Native::Screen(screen)) => {
+                let animation = screen.config.animation;
+                let shader = self
+                    .nav_shaders
+                    .get(&id)
+                    .filter(|_| !reduce_motion())
+                    .cloned();
+                let Some(Slot {
                     native: Native::Stack(stack),
                     ..
                 }) = self.slot_mut(parent)
+                else {
+                    return true;
+                };
+                let shown = stack
+                    .nav
+                    .topViewController()
+                    .and_then(|c| c.downcast::<crate::navigation::ScreenController>().ok())
+                    .is_some_and(|c| c.screen_id() == id);
+                stack.screens.retain(|&s| s != id);
+                stack.popped.retain(|&s| s != id);
+                let view = stack.nav.view();
+                self.dirty_stacks.push(parent);
+                if !shown {
+                    return true;
+                }
+                // The app may release it in this batch, its views first:
+                // what the stack's change needs of it is kept, and what
+                // showed is pictured now when it leaves through a shader.
+                let through = shader.is_some();
+                self.leaving_screens.insert(
+                    parent,
+                    LeavingScreen {
+                        id,
+                        shader,
+                        animation,
+                    },
+                );
+                if through
+                    && let Some(view) = view
+                    && let Some(window) = view.window()
                 {
-                    stack.screens.retain(|&s| s != id);
-                    stack.popped.retain(|&s| s != id);
-                    self.dirty_stacks.push(parent);
+                    let rect = view.convertRect_toView(view.bounds(), Some(&window));
+                    let scale = self.display_scale();
+                    self.shaders.hold(parent, &window, rect, scale);
                 }
             }
             Some(Native::HeaderItem(view)) => {
                 view.removeFromSuperview();
                 self.dirty_headers.push(parent);
             }
-            Some(Native::Modal(_)) => self.dirty_modals.push(id),
+            Some(Native::Modal(modal)) => {
+                let closes = modal.changes(false);
+                self.dirty_modals.push(id);
+                // Pictured with its content, which the app may release
+                // before it closes.
+                if closes
+                    && !reduce_motion()
+                    && self.nav_shaders.contains_key(&id)
+                    && let Some(root) = self
+                        .slot(nsh_core::ROOT_ID)
+                        .map(|s| s.native.view().retain())
+                    && let Some(window) = root.window()
+                {
+                    let rect = root.convertRect_toView(root.bounds(), Some(&window));
+                    let scale = self.display_scale();
+                    self.shaders.hold(nsh_core::ROOT_ID, &window, rect, scale);
+                }
+            }
             _ => {}
         }
         true
+    }
+
+    /// Starts dialog `id` coming (`shown`) or going through its
+    /// `transitionShader`, over the window's part where the surface is;
+    /// whether it does (the dialog then changes at once). Not where less
+    /// motion is asked for, nor where the shader cannot draw: the dialog
+    /// keeps its own motion.
+    fn dialog_overlay(&mut self, id: NodeId, shown: bool) -> bool {
+        if reduce_motion() {
+            return false;
+        }
+        let Some(root) = self
+            .slot(nsh_core::ROOT_ID)
+            .map(|s| s.native.view().retain())
+        else {
+            return false;
+        };
+        let Some(window) = root.window() else {
+            return false;
+        };
+        let rect = root.convertRect_toView(root.bounds(), Some(&window));
+        let scale = self.display_scale();
+        let Some(shader) = self.nav_shaders.get(&id) else {
+            return false;
+        };
+        self.shaders
+            .nav_overlay(nsh_core::ROOT_ID, &window, rect, scale, shader, !shown)
     }
 
     /// Applies the navigation changes of a batch once all its views exist
@@ -3099,10 +3349,24 @@ impl Mounter {
                 .topViewController()
                 .and_then(|c| c.downcast::<crate::navigation::ScreenController>().ok())
                 .map(|c| c.screen_id());
-            let shaders = (
-                top.and_then(|id| self.nav_shaders.get(&id)),
-                leaving_id.and_then(|id| self.nav_shaders.get(&id)),
-            );
+            // The screen the app removed and released keeps its animation
+            // and shader ([`Mounter::remove_hosted`]).
+            let recorded = self
+                .leaving_screens
+                .remove(&id)
+                .filter(|l| Some(l.id) == leaving_id);
+            let leaving = leaving.or(recorded.as_ref().map(|l| l.animation));
+            // Less motion asked for: UIKit's own (reduced) motion instead.
+            let shaders = if reduce_motion() {
+                (None, None)
+            } else {
+                (
+                    top.and_then(|id| self.nav_shaders.get(&id)),
+                    leaving_id
+                        .and_then(|id| self.nav_shaders.get(&id))
+                        .or(recorded.as_ref().and_then(|l| l.shader.as_ref())),
+                )
+            };
             let scale = self.display_scale();
             let Some(Slot {
                 native: Native::Stack(stack),
@@ -3118,7 +3382,7 @@ impl Mounter {
                     return false;
                 };
                 let rect = view.convertRect_toView(view.bounds(), Some(&window));
-                overlays.nav_overlay(&window, rect, scale, shader, pops)
+                overlays.nav_overlay(id, &window, rect, scale, shader, pops)
             });
             // A page whose options arrive while it is already on screen: the
             // stack itself does not change, and the bar still has to follow.
@@ -3170,9 +3434,15 @@ impl Mounter {
         let root = self
             .slot(nsh_core::ROOT_ID)
             .map(|s| s.native.view().retain());
-        let scale = self.display_scale();
         for id in modals {
             let shown = self.hosts.contains_key(&id);
+            let changes = matches!(
+                self.slot(id).map(|s| &s.native),
+                Some(Native::Modal(modal)) if modal.changes(shown)
+            );
+            // Through its shader, pictured before it comes or goes at once
+            // (where the shader cannot draw, with its own motion).
+            let at_once = changes && self.dialog_overlay(id, shown);
             let control = self.control.clone();
             let Some(Slot {
                 native: Native::Modal(modal),
@@ -3181,19 +3451,6 @@ impl Mounter {
             else {
                 continue;
             };
-            // Through its shader: the window where the surface is, pictured
-            // before it comes or goes at once (where the shader cannot
-            // draw, with its own motion).
-            let shader = self
-                .nav_shaders
-                .get(&id)
-                .filter(|_| modal.changes(shown))
-                .zip(root.as_ref().and_then(|r| Some((r, r.window()?))));
-            let at_once = shader.is_some_and(|(shader, (root, window))| {
-                let rect = root.convertRect_toView(root.bounds(), Some(&window));
-                self.shaders
-                    .nav_overlay(&window, rect, scale, shader, !shown)
-            });
             if shown {
                 if let Some(root) = &root {
                     modal.present(root, at_once);
@@ -3204,6 +3461,12 @@ impl Mounter {
                 });
             }
         }
+        // What no change used goes, but for stacks whose change waits for
+        // UIKit's transition to end.
+        let deferred = &self.deferred_stacks;
+        self.leaving_screens
+            .retain(|stack, _| deferred.contains(stack));
+        self.shaders.release_held(|key| deferred.contains(&key));
     }
 
     /// A stack is about to show a screen: its header options apply.
@@ -3213,6 +3476,9 @@ impl Mounter {
         controller: &objc2_ui_kit::UIViewController,
         animated: bool,
     ) {
+        // A page shown again is back in the window: the shaders in it take
+        // the pictures they missed.
+        self.shaders.revisit();
         let Some(screen) = controller.downcast_ref::<crate::navigation::ScreenController>() else {
             return;
         };
@@ -3231,6 +3497,7 @@ impl Mounter {
     /// A stack finished a transition: screens the user popped (back button,
     /// swipe) are reported so the app removes them.
     pub(crate) fn stack_did_show(&mut self, id: NodeId) {
+        self.shaders.revisit();
         self.report_popped(id);
         if self.deferred_stacks.contains(&id) {
             Self::finish_deferred(&self.shared, id);
@@ -3820,6 +4087,18 @@ impl Mounter {
         let scale = self.display_scale();
         if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref) {
             self.shaders.layout(id, &s.style, scale);
+        }
+    }
+
+    /// The root's children leave the container screen shaders draw them
+    /// from once no screen shader is left.
+    fn release_root_effect(&mut self) {
+        if self.shaders.any_screen() {
+            return;
+        }
+        if let Some(root) = self.slot_mut(nsh_core::ROOT_ID) {
+            let view = root.native.view().retain();
+            root.decor.set_effect(&view, false);
         }
     }
 
@@ -4561,4 +4840,10 @@ mod tests {
             320.0
         );
     }
+}
+
+/// The user asked for less motion: pages and dialogs come and go with
+/// UIKit's own motion, not through their `transitionShader`.
+fn reduce_motion() -> bool {
+    objc2_ui_kit::UIAccessibilityIsReduceMotionEnabled()
 }

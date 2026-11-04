@@ -225,6 +225,8 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
         NshView host = mounter.host;
         if (host.screen == this) return;
         host.screen = this;
+        // The surface changed unseen while another shader (or none) had it.
+        stale = true;
         host.invalidate();
     }
 
@@ -260,6 +262,14 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
     void picturesChanged() {
         stale = true;
         if (watching) shown().invalidate();
+    }
+
+    /**
+     * A screen shader's surface: a view in it draws anew, which brings the
+     * window frame its picture is taken before.
+     */
+    void surfaceChanged() {
+        stale = true;
     }
 
     @Override
@@ -306,10 +316,22 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
             getViewTreeObserver().removeOnPreDrawListener(picturing);
             watching = false;
         }
+        // Each holds a HardwareRenderer and an ImageReader: they go now and
+        // are made again for the first picture once it is back, which is
+        // due then (what it shows may have changed out of the window).
+        if (pictures != null) pictures.release();
+        if (backdropPictures != null) backdropPictures.release();
+        pictures = backdropPictures = null;
+        stale = true;
         super.onDetachedFromWindow();
     }
 
-    /** Before a window frame: the pictures that changed go to libnsh. */
+    /**
+     * Before a window frame: the pictures that changed go to libnsh. The
+     * children (a screen shader's surface: `NshView.onDescendantInvalidated`)
+     * are pictured only after they drew anew; the backdrop before every
+     * frame, libnsh dropping one equal to the last.
+     */
     private void takePictures() {
         long handle = mounter.handle();
         if (handle == 0 || !needsPictures()) {
@@ -317,7 +339,7 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
             return;
         }
         boolean more = false;
-        if (stale || screen()) {
+        if (stale) {
             int input = shaderRole == EFFECT || shaderRole == SCREEN ? CONTENT : TO;
             if (reads(input)) more |= picture(input, false);
             stale = false;
