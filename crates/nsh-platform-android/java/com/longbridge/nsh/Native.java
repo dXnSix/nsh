@@ -80,7 +80,8 @@ final class Native {
     static final int SCREEN_COLOR = 68;
     static final int FILE_REQUEST = 69;
     static final int SPEECH = 70;
-    static final int LOCATION = 71;
+    static final int DOWNLOAD = 71;
+    static final int LOCATION = 72;
 
     /**
      * Draws the SVG {@code bytes} for a view {@code maxPx} pixels on its longer side, with its shorter side that long
@@ -308,6 +309,12 @@ final class Native {
     static native boolean navTransition(long handle, int key, int page, int width, int height,
                                         java.nio.ByteBuffer from, int fromStride, java.nio.ByteBuffer to, int toStride,
                                         boolean reverse);
+
+    /**
+     * The page or dialog transition over {@code key} ends at once (a change
+     * that starts while it runs ended it): no more frames come for it.
+     */
+    static native void navTransitionEnd(long handle, int key);
 
     /**
      * A scroll view's offset, after applying {@code applied} of the scrolls

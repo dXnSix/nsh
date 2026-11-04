@@ -472,7 +472,8 @@ fn components_follow_the_regional_preferences() {
 fn Downloaded() -> impl IntoElement {
     let family = signal(String::from("none"));
     spawn(async move {
-        let data = include_bytes!("../../../nsh-core/tests/fonts/Pacifico-Regular.woff2");
+        let data =
+            include_bytes!("../../../../tests/compat/cases/layout/fonts/Pacifico-Regular.woff2");
         let shown = match register_font(data.to_vec()).await {
             Ok(name) => name,
             Err(e) => format!("failed: {e}"),

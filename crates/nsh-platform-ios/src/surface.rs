@@ -202,6 +202,22 @@ define_class!(
             // Another window may be another scene, in another state.
             self.ivars().lifecycle.set(self.scene_state());
             self.publish_environment();
+            let Some(mounter) = self
+                .ivars()
+                .running
+                .borrow()
+                .as_ref()
+                .map(|r| r.mounter.clone())
+            else {
+                return;
+            };
+            // On the next turn: a batch being applied may hold the mounter.
+            DispatchQueue::main().exec_async(move || {
+                let mtm = MainThreadMarker::new().expect("main queue");
+                if let Some(m) = mounter.get(mtm).borrow_mut().as_mut() {
+                    m.window_changed();
+                }
+            });
         }
 
         #[unsafe(method(safeAreaInsetsDidChange))]
@@ -667,12 +683,32 @@ impl RootView {
             }
             Err(_) => true,
         };
+        let settled = mounter.clone();
         if busy {
             DispatchQueue::main().exec_async(move || {
                 let mtm = MainThreadMarker::new().expect("main queue");
                 if let Some(m) = mounter.get(mtm).borrow_mut().as_mut() {
                     m.keyboard_changed(height, motion);
                 }
+            });
+        }
+        // Once the engine handled the change, and the batch the app
+        // answered with (if any) is applied (batches reach the main queue
+        // first): what the app did not move clear of the keyboard moves.
+        let control = self
+            .ivars()
+            .running
+            .borrow()
+            .as_ref()
+            .map(|r| r.engine.control());
+        if let Some(control) = control {
+            control.flush(move |_| {
+                DispatchQueue::main().exec_async(move || {
+                    let mtm = MainThreadMarker::new().expect("main queue");
+                    if let Some(m) = settled.get(mtm).borrow_mut().as_mut() {
+                        m.keyboard_settled();
+                    }
+                });
             });
         }
     }

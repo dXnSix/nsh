@@ -303,7 +303,7 @@ fn placement(x: f32, y: f32, transform: Option<gsk::Transform>, scale: f32) -> g
 }
 
 /// `v` (points) rounded to the nearest device pixel at `scale` pixels a point.
-fn snap(v: f32, scale: f32) -> f32 {
+pub(crate) fn snap(v: f32, scale: f32) -> f32 {
     if scale <= 0.0 {
         return v.round();
     }
@@ -594,7 +594,7 @@ impl NshView {
     /// Something it draws changed.
     pub(crate) fn changed(&self) {
         self.redraw();
-        crate::shader::ui_changed();
+        crate::shader::ui_changed(self);
     }
 
     /// Draws again: what it draws changed, and nothing else needs to know
@@ -611,13 +611,14 @@ impl NshView {
             parent.queue_allocate();
         }
         self.queue_draw();
-        crate::shader::ui_changed();
+        crate::shader::ui_changed(self);
     }
 
     /// Draws its child widgets into `snapshot`, bottom to top. While a
     /// picture of what is behind a view is taken ([`crate::shader`]), its
     /// child views draw anew (GTK's render nodes of the last frame have the
-    /// view in them).
+    /// view in them), and the widgets it hosts draw GTK's nodes until the
+    /// picture reaches that view ([`crate::shader::past`]).
     pub(crate) fn snapshot_children(&self, snapshot: &gtk::Snapshot) {
         let tracing = crate::shader::tracing();
         let mut child = self.first_child();
@@ -647,6 +648,10 @@ impl NshView {
                     view.draw(snapshot);
                     snapshot.restore();
                 }
+                // A widget it hosts (a text field, navigation's layers)
+                // drawn after the view the picture is behind is above it,
+                // as a view would be ([`crate::shader::skipped`]).
+                _ if tracing && crate::shader::past() => {}
                 _ => self.snapshot_child(&widget, snapshot),
             }
         }

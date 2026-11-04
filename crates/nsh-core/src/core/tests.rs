@@ -6706,6 +6706,94 @@ fn styles_clamp_cut_and_select_texts_and_say_which_views_take_touches() {
 }
 
 #[test]
+fn texts_inside_attachments_take_the_color_of_the_text_around() {
+    // `<Text style={{ color }}>a <Text>b <View><Text>chip</Text></View></Text></Text>`:
+    // the chip's text is the paragraph's color (CSS `color` inherits into
+    // an inline block), its font size its own, and it follows a change.
+    let mut c = core();
+    let raw = |id, text: &str| Op::CreateText {
+        id,
+        text: text.into(),
+    };
+    let insert = |parent, child| Op::Insert {
+        parent,
+        child,
+        before: None,
+    };
+    let text = |id| Op::Create { id, tag: Tag::Text };
+    apply(
+        &mut c,
+        vec![
+            text(2),
+            style_op(
+                2,
+                &[
+                    ("color", StyleValue::Str("#ff0000")),
+                    ("fontSize", StyleValue::Number(20.0)),
+                ],
+            ),
+            raw(3, "a "),
+            text(4),
+            raw(5, "b "),
+            Op::Create {
+                id: 6,
+                tag: Tag::View,
+            },
+            text(7),
+            raw(8, "chip"),
+            // A second chip whose text sets its own color.
+            Op::Create {
+                id: 9,
+                tag: Tag::View,
+            },
+            text(10),
+            style_op(10, &[("color", StyleValue::Str("#0000ff"))]),
+            raw(11, "own"),
+            insert(7, 8),
+            insert(6, 7),
+            insert(10, 11),
+            insert(9, 10),
+            insert(4, 5),
+            insert(4, 6),
+            insert(4, 9),
+            insert(2, 3),
+            insert(2, 4),
+            insert(ROOT_ID, 2),
+        ],
+    );
+    let style_of = |batch: &MountBatch, id| {
+        batch.items.iter().find_map(|i| match i {
+            MountItem::Text { id: i, text, .. } if *i == id => Some(text.spans[0].style),
+            _ => None,
+        })
+    };
+    let (red, green, blue) = (Color(0xff00_00ff), Color(0x00ff_00ff), Color(0x0000_ffff));
+    let batch = c.commit().unwrap();
+    let chip = style_of(&batch, 7).expect("the chip's text");
+    assert_eq!(chip.color, red);
+    assert_eq!(chip.font_size, ResolvedTextStyle::default().font_size);
+    assert_eq!(style_of(&batch, 10).map(|s| s.color), Some(blue));
+    // The paragraph's color changes: the chip's text follows.
+    c.apply(style_op(2, &[("color", StyleValue::Str("#00ff00"))]))
+        .unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(style_of(&batch, 7).map(|s| s.color), Some(green));
+    // A span's color is nearer.
+    c.apply(style_op(4, &[("color", StyleValue::Str("#ffff00"))]))
+        .unwrap();
+    let batch = c.commit().unwrap();
+    assert_eq!(
+        style_of(&batch, 7).map(|s| s.color),
+        Some(Color(0xffff_00ff))
+    );
+    // The one with a color of its own keeps it (and is not sent again).
+    assert_ne!(
+        style_of(&batch, 10).map(|s| s.color),
+        Some(Color(0xffff_00ff))
+    );
+}
+
+#[test]
 fn views_inside_text_are_attachments() {
     let mut c = core();
     let raw = |id, text: &str| Op::CreateText {
@@ -11238,6 +11326,57 @@ mod components {
         assert_eq!(shown.last().unwrap(), "heard end not-allowed");
     }
 
+    /// Shows whether a web view's ref gives trusted input here.
+    #[component]
+    fn WebInputCheck() -> impl IntoElement {
+        let available = signal(String::from("asking"));
+        spawn(async move {
+            available.set(format!("web input {}", web_input_available().await));
+        });
+        text(move || available.get())
+    }
+
+    /// What [`WebInputCheck`] shows on a platform that does (`platform`)
+    /// or does not deliver trusted web input, with the capabilities
+    /// `declared` (`None`: none declared).
+    fn web_input_available_with(platform: bool, declared: Option<serde_json::Value>) -> String {
+        let mut c = core();
+        c.set_environment(crate::element::Environment {
+            web_input: platform,
+            ..Default::default()
+        });
+        if let Some(declared) = declared {
+            c.set_access(std::sync::Arc::new(crate::access::Access {
+                declared: crate::access::Capabilities::from_json(&declared).unwrap(),
+                granted: None,
+            }));
+        }
+        c.mount_root(&crate::element::Root::new::<WebInputCheck>(|| ()));
+        let shown = run_until(&mut c, |s| s.iter().any(|t| t.starts_with("web input")));
+        shown.last().unwrap().clone()
+    }
+
+    #[test]
+    fn web_input_is_available_where_the_platform_delivers_it_and_the_app_holds_the_grant() {
+        let granted = || Some(serde_json::json!({ "webview": { "hosts": [], "input": true } }));
+        assert_eq!(web_input_available_with(true, granted()), "web input true");
+        // The platform does not deliver it.
+        assert_eq!(
+            web_input_available_with(false, granted()),
+            "web input false"
+        );
+        // Web views without `input`, or no declaration at all: not granted.
+        assert_eq!(
+            web_input_available_with(
+                true,
+                Some(serde_json::json!({ "webview": { "hosts": [] } }))
+            ),
+            "web input false"
+        );
+        assert_eq!(web_input_available_with(true, None), "web input false");
+        assert_eq!(web_input_available_with(false, None), "web input false");
+    }
+
     /// Recognizes "a b" as the user speaks; stopping it gives "a b c".
     #[derive(Default)]
     struct TestSpeech {
@@ -11369,14 +11508,11 @@ mod components {
         assert_eq!(requests.len(), 1);
         let (pick, request) = requests.into_iter().next().unwrap();
         assert_eq!(request, FileRequest::OpenDialog(expected));
-        let picked = vec![
-            std::path::PathBuf::from("/notes/a.md"),
-            std::path::PathBuf::from("/notes/b.md"),
-        ];
+        let picked = vec![note_path("a.md"), note_path("b.md")];
         assert!(c.component_event(
             ROOT_ID,
             EventKind::FileRequest,
-            &EventPayload::file_answer(pick, picked)
+            &EventPayload::file_answer(pick, picked.clone())
         ));
         // The task goes on to the trash.
         let mut trash = None;
@@ -11387,7 +11523,7 @@ mod components {
             trash = file_requests(items).into_iter().next();
         }
         let (trash, request) = trash.expect("the trash request");
-        assert_eq!(request, FileRequest::MoveToTrash("/notes/a.md".into()));
+        assert_eq!(request, FileRequest::MoveToTrash(note_path("a.md")));
         assert!(c.component_event(
             ROOT_ID,
             EventKind::FileRequest,
@@ -11397,8 +11533,17 @@ mod components {
         let shown = run_until(&mut c, |s| s.iter().any(|t| t.starts_with("paths O")));
         assert_eq!(
             shown.last().unwrap(),
-            r#"paths Ok(Some(["/notes/a.md", "/notes/b.md"])) Some(Err("no trash on this volume")) Err("`notes.md` is not an absolute path")"#
+            &format!(
+                r#"paths Ok(Some({picked:?})) Some(Err("no trash on this volume")) Err("`notes.md` is not an absolute path")"#
+            )
         );
+    }
+
+    /// A picked note's path, absolute where the tests run: the platform
+    /// refuses a rooted path without a drive on Windows.
+    fn note_path(name: &str) -> std::path::PathBuf {
+        let notes = if cfg!(windows) { r"C:\notes" } else { "/notes" };
+        std::path::Path::new(notes).join(name)
     }
 
     #[test]
@@ -23097,6 +23242,86 @@ fn keyboard_inset_height_pads_and_animates_with_the_keyboard() {
 }
 
 #[test]
+fn styles_that_read_the_keyboard_height_move_with_the_keyboard() {
+    // An app that reads `keyboardFrame()` (not `env()`) restyles in the
+    // commit the keyboard's change starts.
+    let keyboard_curve = |batch: &MountBatch| {
+        matches!(
+            &batch.items[0],
+            MountItem::LayoutAnimation(crate::LayoutAnimation {
+                update: Some(t),
+                ..
+            }) if t.curve == crate::LayoutCurve::Keyboard && t.duration_ms == 250.0
+        )
+    };
+    let mut c = core();
+    c.set_environment(env_with_keyboard(0.0, 250.0));
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::View,
+            },
+            style_op(2, &[("height", StyleValue::Number(100.0))]),
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert!(!keyboard_curve(&batch));
+
+    // The keyboard shows; the app shrinks its view by its height.
+    c.set_environment(env_with_keyboard(40.0, 250.0));
+    apply(
+        &mut c,
+        vec![style_op(2, &[("height", StyleValue::Number(60.0))])],
+    );
+    let batch = c.commit().unwrap();
+    assert!(keyboard_curve(&batch), "{:?}", batch.items);
+
+    // A later change of the app's own does not.
+    apply(
+        &mut c,
+        vec![style_op(2, &[("height", StyleValue::Number(50.0))])],
+    );
+    let batch = c.commit().unwrap();
+    assert!(!keyboard_curve(&batch), "{:?}", batch.items);
+
+    // An animation the app configured for the commit wins.
+    c.set_environment(env_with_keyboard(0.0, 250.0));
+    let spring = crate::LayoutAnimation {
+        create: None,
+        update: Some(crate::LayoutTransition {
+            curve: crate::LayoutCurve::EaseIn,
+            property: crate::LayoutProperty::Opacity,
+            duration_ms: 100.0,
+            delay_ms: 0.0,
+        }),
+        delete: None,
+    };
+    apply(
+        &mut c,
+        vec![
+            Op::Command {
+                id: ROOT_ID,
+                command: Command::LayoutAnimation(spring),
+            },
+            style_op(2, &[("height", StyleValue::Number(100.0))]),
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert!(
+        matches!(&batch.items[0], MountItem::LayoutAnimation(a) if *a == spring),
+        "{:?}",
+        batch.items
+    );
+}
+
+#[test]
 fn calc_adds_a_length_to_the_keyboard_inset() {
     let mut c = core();
     c.set_environment(env_with_keyboard(0.0, 0.0));
@@ -24646,6 +24871,121 @@ fn a_layout_animation_alone_takes_no_screen_picture() {
         }],
     );
     assert!(c.commit().is_none());
+}
+
+#[test]
+fn a_page_shader_and_a_shader_share_one_compiled_source() {
+    use crate::shader::{NavShaderSpec, Shader, TransitionShader};
+    let mut c = core();
+    let source = "struct Uniforms { amount: f32 }\nfn shade(uv: vec2f) -> vec4f { return mix(sample_from(uv), sample_to(uv), nsh.progress * uniforms.amount); }";
+    let rust = TransitionShader::new(Shader::compile(source).expect("compiles"))
+        .uniform("amount", 0.5)
+        .duration(std::time::Duration::from_millis(500));
+    let spec = || NavShaderSpec {
+        source: source.into(),
+        uniforms: Default::default(),
+        duration: None,
+    };
+    apply(
+        &mut c,
+        vec![
+            // Not a page or a dialog: nothing compiles.
+            Op::Create {
+                id: 4,
+                tag: Tag::View,
+            },
+            Op::SetProp {
+                id: 4,
+                prop: Prop::TransitionShader(Some(spec())),
+            },
+        ],
+    );
+    c.commit();
+    assert!(c.shaders.is_empty());
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::Modal,
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::TransitionShader(Some(rust.into())),
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+            Op::Create {
+                id: 6,
+                tag: Tag::Screen,
+            },
+            Op::SetProp {
+                id: 6,
+                prop: Prop::TransitionShader(Some(spec())),
+            },
+            Op::Create {
+                id: 8,
+                tag: Tag::Shader,
+            },
+            Op::SetProp {
+                id: 8,
+                prop: Prop::ShaderSource(Some(source.into())),
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    let shader = batch
+        .items
+        .iter()
+        .find_map(|i| match i {
+            MountItem::NavShader {
+                id: 2,
+                shader: Some(s),
+            } => Some(s.clone()),
+            _ => None,
+        })
+        .expect("the dialog's shader");
+    assert_eq!(shader.duration, std::time::Duration::from_millis(500));
+    assert_eq!(shader.layer.uniforms[0], 0.5f32.to_bits());
+    assert_eq!(
+        c.shaders.len(),
+        1,
+        "one compile for the dialog, the page and the view"
+    );
+}
+
+#[test]
+fn a_bad_page_shader_keeps_its_error() {
+    let mut c = core();
+    let spec = || crate::shader::NavShaderSpec {
+        source: "fn shade() {}".into(),
+        uniforms: Default::default(),
+        duration: None,
+    };
+    for id in [2, 4] {
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id,
+                    tag: Tag::Screen,
+                },
+                Op::SetProp {
+                    id,
+                    prop: Prop::TransitionShader(Some(spec())),
+                },
+            ],
+        );
+    }
+    c.commit();
+    assert!(
+        matches!(c.shaders.values().next(), Some(Err(_))),
+        "its error kept"
+    );
+    assert_eq!(c.shaders.len(), 1);
 }
 
 #[test]
