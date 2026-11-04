@@ -12,6 +12,14 @@ web jobs on a `tmp/*-fork-ci` twin), except Compat, which stops at upstream main
 (the gallery's step 136, "Bars per month"); each branch's own compat case passes locally. Nothing is opened: the
 owner says when.
 
+Checked again 2026-11-04 against upstream `main` `fe6f54f7` (#911), with the fork's `main` at `5544b26c` (#121,
+upstream `9cb48de5`): line by line, everything the fork's `main` adds over upstream is in a branch below (#114's
+browser environment included), but for the fork's own CI. Web lifecycle, the SPA fallback and the #746 follow-ups
+still merge cleanly; the rest conflict with upstream's newer commits and are rebased before they open: the
+environment stack and register-font in `prelude.rs` (and the environment in `website/{,zh-CN/}docs/testing-and-trace.md`)
+with #869 (the terminal backend), web-urls 02 and 03 in `browser/runtime.js` with #921 (older Safari), location in
+both.
+
 | Feature | Records | Branch, head | Opens after |
 |---|---|---|---|
 | Web apps' lifecycle | `upstream-web-lifecycle` | `pr/web-lifecycle/01-web` `32e65431` | — |
