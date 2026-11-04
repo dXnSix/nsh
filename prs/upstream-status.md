@@ -37,16 +37,7 @@ follow-up with location (`nsh-dev/src/server.rs`).
 
 ## Open upstream
 
-| PR | Title |
-|---|---|
-| #745 | text: Read WOFF and WOFF2 fonts |
-| #746 | engine: Let fetch read the files the app ships |
-| #747 | core: Tell apps whether they are in use |
-| #752 | testing: Start scrolling a view into view where nothing takes the drag |
-| #754 | testing: Keep scrolling into view after a gesture that moves nothing |
-| #763 | core: Let pages and dialogs come and go through a shader |
-| #764–#770 | {macos, ios, android, web, windows, linux, gpui}: the shader series' platforms |
-| #771 | gallery: Show shader effects and transitions on the Shaders page |
+None (2026-11-04): #745, #746, #747, #752, #754, #763–#771, #773 and #823 are merged.
 
 ## Merged upstream (fork features among them)
 
