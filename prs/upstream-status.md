@@ -28,7 +28,6 @@ owner says when.
 | One media type table (#746 nit 3) | side notes `pr-body-core-media-types.md` | `pr/read-assets-nits/01-core` `dbf55778` | — |
 | Bundled files by path alone (#746 nits 1, 2) | side notes `pr-body-engine-asset-urls.md` | `pr/read-assets-nits/02-engine` `718a8261` | media types |
 | The browser runtime's fetch module (#746 nit 4) | side notes `pr-body-web-fetch-module.md` | `pr/web-fetch-module/01-web` `19908e9d` | — |
-| The web's screen effects at full speed | side notes `pr-body-web-screen-effect-frames.md` | `fix/web-screen-effect-frames` `f802404f` (on upstream `9cb48de5`) | — |
 
 Superseded: `upstream-web-open-url` (upstream #892 fixed it; the fork's own dXnSix/nsh#113 is closed). Pairs that conflict, so whichever merges second is
 rebased: the environment stack with register-font (`prelude.rs`), with location (the environment's parts) and
@@ -37,7 +36,10 @@ follow-up with location (`nsh-dev/src/server.rs`).
 
 ## Open upstream
 
-None (2026-11-04): #745, #746, #747, #752, #754, #763–#771, #773 and #823 are merged.
+#928 (2026-11-04, opened on the owner's go): the web's screen effects at full speed, `fix/web-screen-effect-frames`
+`f802404f` on upstream `9cb48de5` (records: side notes `pr-body-web-screen-effect-frames.md`).
+
+Merged: #745, #746, #747, #752, #754, #763–#771, #773 and #823.
 
 ## Merged upstream (fork features among them)
 
