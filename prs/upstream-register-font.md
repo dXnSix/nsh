@@ -29,6 +29,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 
 - 2026-11-01, later: rebuilt on `upstream/main` `4f2502cd` with #745's commit and #746's four (its third review's
   web fix included), then its own (head `8cfcfba3b`); the `registerFont` row beside the `fetch` row replayed by rerere.
+- 2026-11-04: rebased onto `upstream/main` `57b1d7ba` as one commit (#745 and #746 are merged): head `bd236d4a`. Upstream #823 moved the test fonts to `tests/compat/cases/layout/fonts/`, so `text.rs`'s and `rust_platform.rs`'s tests read Pacifico there, and `.github/ci/paths.py`'s comment on that folder names nsh-engine's tests too (`core.yml` lists it already). The conflicts were additions beside upstream's (WOFF table sizes, the lifecycle test, the fallback lists' section). `NSH_COMPAT_APP=layout cargo xtask compat` passes (`core-register-font`).
 
 ---
 

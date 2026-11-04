@@ -20,6 +20,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   environments as literals (clippy's `field_reassign_with_default`).
 - 2026-11-02 (after #747 merged as `lifecycle`): rebased onto the new `pr/environment/03-languages`, `appState` renamed `lifecycle` in what the commits touch, plus a ninth commit, `web: Give browser apps the user's regional preferences` (the browser runtime's four accessors). The Linux and GPUI commits' Environment rows had repeated sentences and lost their ends; they now add the regional sentence as the fork's `main` has it, and the macOS row closes its regional parenthesis (`read again with the other settings)`).
 - 2026-11-02 (after #822 merged): rebased onto `upstream/main` `828b1f13` without conflicts, patches unchanged (`git range-diff`). Previous heads: `old-pre-822/*` locally.
+- 2026-11-04: rebased onto the new `pr/environment/03-languages`: head `4a16f25d`, only context moved.
 
 ---
 

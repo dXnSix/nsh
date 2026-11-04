@@ -7,6 +7,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   `docs/dev/embedding.md`'s paragraph about the SDKs.
 - Title: `android: Let embedding apps set the app's location and hear its navigations`.
 - The fork's PR: dXnSix/nsh#111 (its Android part).
+- 2026-11-04: rebased: head `cadd06f8`, unchanged (pushed by SHA: the local branch is checked out in `nsh-wt/up-web`, still at `38b616cb`).
 
 ---
 

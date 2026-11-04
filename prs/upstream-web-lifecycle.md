@@ -10,6 +10,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   and passes with it; the player's and the browser runtime's other JS tests; nightly rustfmt; the wasm clippy
   (`--features compiler`).
 - Title: `web: Give browser apps their lifecycle`.
+- 2026-11-04: rebased onto `upstream/main` `57b1d7ba` (#899) without conflicts, patch unchanged: head `32e65431`. Upstream's browser runtime still has no `lifecycle`.
 
 ---
 

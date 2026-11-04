@@ -8,6 +8,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - Title: `web: Load the page's files from where it started, and let nsh.json set its base`. Until the SPA fallback PR
   is merged, GitHub shows its commit too.
 - The fork's PR: dXnSix/nsh#109.
+- 2026-11-04: rebased on the new 01: head `f08b9e99`. Upstream's side modules (#853, `app.sides`) came after this commit, so the packaged page now resolves their URLs too (`for (const name in app.sides) ...`): without it, an app that moved the address to `/deep/path/here` fetched the formula typesetter from `/deep/path/nsh-math.<hash>.wasm` (404); with it from `/nsh-math.<hash>.wasm` (200), checked in the packaged gallery in Chromium.
 
 ---
 
