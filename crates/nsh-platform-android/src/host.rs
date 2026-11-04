@@ -22,8 +22,8 @@ use nsh_core::{
     geometry::{DevicePixels, point, px, size},
 };
 use nsh_engine::{
-    App, AppState, Assets, Bundle, ColorScheme, Edges, Engine, EngineConfig, EngineControl,
-    Environment, HourCycle, Idiom, Languages, Locale, MountSink, Policy, RegionalPreferences, Root,
+    App, Assets, Bundle, ColorScheme, Edges, Engine, EngineConfig, EngineControl, Environment,
+    HourCycle, Idiom, Languages, Lifecycle, Locale, MountSink, Policy, RegionalPreferences, Root,
     TimeZone,
 };
 
@@ -200,6 +200,7 @@ impl Host {
             clipboard: None,
             host: self.host.clone(),
             picker: None,
+            speech: None,
         };
         let density = self.density.clone();
         let sink = Sink(self.clone());
@@ -1045,7 +1046,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_resize(
 /// `values`: safe area top, right, bottom, left, keyboard height, keyboard
 /// animation duration, font scale, right to left (1), reduce motion (1),
 /// density, screen reader (1), API level, idiom (0 phone, 1 pad, 3 TV),
-/// app state (0 resumed, 1 paused, 2 stopped), 24-hour time (1).
+/// lifecycle (0 resumed, 1 paused, 2 stopped), 24-hour time (1).
 /// `locale`: `Locale.getDefault()`'s language tag; `regional`: the format
 /// locale's, with Android 14's regional preferences as its extension.
 #[unsafe(no_mangle)]
@@ -1088,10 +1089,10 @@ extern "system" fn Java_com_longbridge_nsh_Native_environment(
         _ => Idiom::Phone,
     };
     // `NshView`'s activity: resumed, paused or stopped.
-    environment.app_state = match v[13] as u8 {
-        1 => AppState::Inactive,
-        2 => AppState::Background,
-        _ => AppState::Active,
+    environment.lifecycle = match v[13] as u8 {
+        1 => Lifecycle::Inactive,
+        2 => Lifecycle::Background,
+        _ => Lifecycle::Active,
     };
     if let Ok(tag) = env.get_string(&locale) {
         environment.locale = Locale::parse(&String::from(tag)).unwrap_or_default();

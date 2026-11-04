@@ -58,8 +58,8 @@ pub use nsh_core::{
     js::{HostLimits, Limits},
     location::{HistoryBehavior, InvalidLocation, Location, Navigation},
     platform::{
-        AppState, ColorScheme, Environment, FetchEvent, FetchOp, HostEnvironment, HourCycle,
-        HttpBody, HttpHead, HttpRequest, Idiom, Languages, Locale, MeasurementSystem, Os,
+        ColorScheme, Environment, FetchEvent, FetchOp, HostEnvironment, HourCycle, HttpBody,
+        HttpHead, HttpRequest, Idiom, Languages, Lifecycle, Locale, MeasurementSystem, Os,
         RegionalPreferences, TemperatureUnit, TimeZone, Weekday,
     },
     storage::{StorageBackend, StorageChange},
@@ -738,6 +738,11 @@ pub struct EngineConfig {
     /// platform's picker: the embedding app's own picker, or a test's
     /// files; `None`: the platform's.
     pub picker: Option<Arc<dyn nsh_core::picker::PickerBackend>>,
+    /// Recognizes the app's speech (`Speech.start`) instead of the
+    /// platform's recognizer: the embedding app's own, or a test's fake
+    /// (`nsh_testing`'s). `None` (the default): the platform's, where it
+    /// has one (`Environment::speech`).
+    pub speech: Option<Arc<dyn nsh_core::speech::SpeechBackend>>,
 }
 
 /// Values of the environment an engine keeps whatever its platform reports
@@ -862,6 +867,7 @@ impl EngineConfig {
             clipboard: None,
             host: HostChannel::default(),
             picker: None,
+            speech: None,
         }
     }
 }
@@ -917,6 +923,7 @@ impl std::fmt::Debug for EngineConfig {
             .field("clipboard", &self.clipboard.is_some())
             .field("host", &self.host)
             .field("picker", &self.picker.is_some())
+            .field("speech", &self.speech.is_some())
             .finish()
     }
 }
@@ -1525,6 +1532,7 @@ impl<M: TextEngine + 'static> Driver<M> {
         core.set_storage(app_storage(&config));
         core.set_clipboard(config.clipboard.clone());
         core.set_picker(config.picker.clone());
+        core.set_speech(config.speech.clone());
         core.set_font_scale(config.environment.font_scale);
         core.set_class_environment(class_environment(&config.environment));
         core.set_header_heights(config.header_heights.0, config.header_heights.1);
@@ -2829,6 +2837,10 @@ impl<M: TextEngine> State<M> {
                 _ => false,
             };
             let more_paced = script.is_some() && paced.left() && self.core.has_paced_list_binds();
+            // What waited for the app's answer to the events just taken runs
+            // in the next round, once JS has handled them, and shows in this
+            // batch.
+            let answers = self.core.has_due_answers();
             if self.binds.is_empty()
                 && self.events.is_empty()
                 && !posted
@@ -2836,6 +2848,7 @@ impl<M: TextEngine> State<M> {
                 && !relocate
                 && !more_paced
                 && !urls
+                && !answers
             {
                 break;
             }
@@ -2893,9 +2906,10 @@ fn ui_environment(env: &Environment, window: Size<Points>) -> nsh_core::element:
         time_zone: env.time_zone,
         apple_keyboard: env.apple_keyboard,
         host: env.host,
-        app_state: env.app_state,
+        lifecycle: env.lifecycle,
         screen_color: env.screen_color,
         file_requests: env.file_requests,
+        speech: env.speech,
     }
 }
 

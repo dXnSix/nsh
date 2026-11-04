@@ -94,10 +94,10 @@ struct Shape {
     border_style: BorderStyle,
     /// Whether every side has the same color (one ring layer, or four).
     one_color: bool,
-    /// Which sides draw (a width and a color that is not transparent): a
-    /// border that turns visible or invisible (`focus:border-…` over
-    /// `border-transparent`) needs its layers, not only new colors.
-    visible_sides: [bool; 4],
+    /// Whether a side draws something: [`Decor::shape`] gives the layers a
+    /// border only then, so a transparent border turning visible (a
+    /// `border-transparent` row's `focus:border-*`) shapes them again.
+    border_visible: bool,
     tint: Option<Color>,
     outline: nsh_core::Outline,
     effects: Option<std::sync::Arc<nsh_core::Effects>>,
@@ -755,11 +755,7 @@ fn shape_of(s: &ViewState, kind: Kind) -> Shape {
         widths: borders.widths,
         border_style: borders.style,
         one_color: borders.colors.iter().all(|&c| c == borders.colors[0]),
-        visible_sides: {
-            let w = &borders.widths;
-            let widths = [w.top, w.right, w.bottom, w.left];
-            std::array::from_fn(|i| widths[i].0 > 0.0 && !borders.colors[i].is_transparent())
-        },
+        border_visible: borders.is_visible(),
         tint: style.tint_color,
         outline: style.outline,
         effects: style.effects.clone(),
