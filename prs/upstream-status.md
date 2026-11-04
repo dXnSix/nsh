@@ -28,9 +28,9 @@ owner says when.
 | One media type table (#746 nit 3) | side notes `pr-body-core-media-types.md` | `pr/read-assets-nits/01-core` `dbf55778` | — |
 | Bundled files by path alone (#746 nits 1, 2) | side notes `pr-body-engine-asset-urls.md` | `pr/read-assets-nits/02-engine` `718a8261` | media types |
 | The browser runtime's fetch module (#746 nit 4) | side notes `pr-body-web-fetch-module.md` | `pr/web-fetch-module/01-web` `19908e9d` | — |
-| The web's screen effects at full speed | side notes `pr-body-web-screen-effect-frames.md` | `fix/web-screen-effect-frames` `09d1ea94` | — |
+| The web's screen effects at full speed | side notes `pr-body-web-screen-effect-frames.md` | `fix/web-screen-effect-frames` `f802404f` (on upstream `9cb48de5`) | — |
 
-Superseded: `upstream-web-open-url` (upstream #892 fixed it). Pairs that conflict, so whichever merges second is
+Superseded: `upstream-web-open-url` (upstream #892 fixed it; the fork's own dXnSix/nsh#113 is closed). Pairs that conflict, so whichever merges second is
 rebased: the environment stack with register-font (`prelude.rs`), with location (the environment's parts) and
 with the #746 follow-ups (`platform.rs`); register-font with location and with the engine follow-up; the engine
 follow-up with location (`nsh-dev/src/server.rs`).
