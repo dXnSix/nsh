@@ -13,11 +13,19 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - 2026-11-04 (later): rebased onto `upstream/main` `fe6f54f7` (#911) without conflicts: head `bd0d2fec`.
 - 2026-11-05: rebased onto `upstream/main` `90a7efd3` (#951), patch unchanged: head `dfd39954`. Fork PR dXnSix/nsh#128.
 - 2026-11-05: **opened as longbridge/nsh#981** at `dfd39954` (fork CI dXnSix/nsh#134: green but Fork CI's macOS job, upstream's #907 dropping typed keys), on the owner's go.
+- 2026-11-05: **review fix pushed** for huacnlee's comment (nested routes could not start the app: the pages'
+  relative files resolved under `/sports/`), on the owner's go: head `0f01f245`, one commit on `dfd39954`. The dev
+  page has `<base href="/">`; nsh.json `web.base` (moved in from `pr/web-urls/02-base`'s `c15ac2aef`, as the
+  stack's session decided) gives a packaged page its `<base href>` and `--run` its path; nsh-cli tests load the
+  generated pages at nested URLs and fetch every file they name. Fork CI dXnSix/nsh#139: green but `macos` (#907's
+  typed keys) and `android` (duplicate Mounter case from #931 / #946). Description updated (Public API: `web.base`,
+  `SiteServer::start_at`), title kept; reply: https://github.com/longbridge/nsh/pull/981#issuecomment-6660141720.
+  02 still holds the moved hunks and must drop them.
 
 ---
 
-**Depends on:** no other PR. **Needed by:** the `web.base` PR (its docs extend this section) and, through it, the
-history and location PRs of the same series.
+**Depends on:** no other PR. **Needed by:** the PR that keeps the page's files loading after the app moves the
+address with `history.pushState` (`player.baseURL`) and, through it, the history and location PRs of the same series.
 
 ## Description
 
@@ -28,16 +36,43 @@ Both now answer a browser loading a path that names no file with the page: a `GE
 has no extension and whose `Accept` header asks for `text/html`, the rule static hosts apply to single-page apps. Files
 keep their URLs, and the app's own requests (`fetch` accepts `*/*`) still get their 404.
 
-The Web page's "Deploy it" says the rule and how nginx, Netlify, Cloudflare Pages and GitHub Pages apply it (en and
-zh-CN); `docs/dev/tooling.md` names it.
+The page names its files with relative URLs (`./nsh.js`, `./nsh.<digest>.js`), which at a path with several segments
+resolve under `/sports/`, where nothing is. Both pages now load them from the app's base:
+
+- The dev server's page has `<base href="/">`: the server serves its files at the root.
+- A packaged page is relative to wherever it is deployed, which no path it is answered at tells it, so `nsh.json`
+  `web.base` names the path its site is served under (`/`, `/apps/counter/`). The page gets a `<base href>` first in
+  its head, and `nsh package --target web --run` serves the site under it (`/` redirects there). The page's script
+  resolves the app's URLs against the base as it starts, and the head's requests are keyed the same way. Without
+  `web.base` the page's URLs stay relative, so a site still works from any directory (the website's gallery under
+  `/play/gallery/`).
+
+The Web page's "Deploy it" says the rule, how nginx, Netlify, Cloudflare Pages and GitHub Pages apply it, and
+`web.base`; the `nsh.json` reference lists the key (en and zh-CN). `docs/dev/tooling.md` and `docs/dev/web.md` name
+them.
 
 ## Public API
 
-None: what the two servers answer.
+- `nsh.json` `web.base` (string: a path from the host's root, a `/` added at its end; no query, fragment, quotes or
+  `..`): the packaged page's `<base href>`, and the path `nsh package --target web --run` serves the site under.
+- `nsh_dev::SiteServer::start_at(addr: SocketAddr, dir: PathBuf, base: &str) -> io::Result<SiteServer>`: serves a
+  site under a path; `SiteServer::start` is `start_at` with `/`.
 
 ## How to Test
 
+- `cargo test -p nsh-cli --bin nsh -- web::`: `the_dev_page_loads_its_files_at_the_apps_paths` and
+  `a_packaged_page_loads_its_files_at_the_apps_paths` serve the generated pages over real sockets (the dev server's
+  page with the runtime's own `nsh.js` and browser host, a wasm-bindgen glue and a page host; a packaged site with
+  `web.base` `/` and `/apps/counter/`), load them at `/`, `/football`, `/sports/football` and
+  `/sports/football/?tab=live`, and fetch every file each page names (tags, imports, the head's requests, the app's
+  URLs) and every module those import, resolved as a browser resolves them, `<base>` included: each must answer 200.
+  Without a base, a packaged page at `/sports/football` misses its files. `the_base_is_a_path_from_the_root`:
+  normalizing and refusals of `web.base`, the `<base>` first in the head.
 - `cargo test -p nsh-dev --features server,client`: `server::tests::browsers_loading_the_apps_paths_get_the_page`
-  (the rule), `the_web_host_serves_its_page_at_the_apps_paths` and `a_packaged_site_serves_its_page_at_the_apps_paths`
-  (over real sockets: the page at `/sports/football`, files and the app's requests still missing).
-- By hand: `nsh package examples/counter --target web --run`, then open `http://127.0.0.1:4173/football`.
+  (the rule), `the_web_host_serves_its_page_at_the_apps_paths`, `a_packaged_site_serves_its_page_at_the_apps_paths`
+  and `a_site_deployed_under_a_path_is_served_there` (the page at the app's paths, files and the app's requests still
+  missing, `/` redirecting to the base).
+- By hand, in Chromium: `nsh run examples/gallery --target web` opened at `/sports/football`; the gallery packaged
+  with `"web": { "base": "/" }` and with `"/apps/gallery/"` and served with `--run`, opened at
+  `/sports/football` and `/apps/gallery/sports/football`; and packaged without `web.base`, served under
+  `/play/gallery/`.
