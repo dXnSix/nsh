@@ -22,6 +22,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - 2026-11-05: rebased onto the new web lifecycle (`upstream/main` `ddf4af83`, #907): head `4926ad66`. Upstream's notifications (#931) added `close_notification`, `next_notification_press`, `notification_permission`, `request_notification_permission`, `set_badge` and `show_notification` to the prelude and `notifications` to the player's environment, and #929 changed the desktop pages' Window chrome rows beside the Environment rows: all kept beside the time zone's lines; iOS, Android and web commits unchanged. No new event (Android's `NOTIFICATION = 72` is upstream's).
 - 2026-11-05 (later): rebased onto `upstream/main` `90a7efd3` (#951), patches unchanged: head `995a48f9`. Fork PR dXnSix/nsh#124.
 - 2026-11-05: **opened as longbridge/nsh#976** at `995a48f9` (fork CI dXnSix/nsh#130: green but macOS and Android, both upstream's own: #907's dropped keys, the emulator dying on the Styles demo).
+- 2026-11-05 (review): huacnlee's P2 on #976 (issue comment 6654692710): the Linux and GPUI backends took `TZ` only with a slash or as `UTC`, so `TZ=GMT` fell back on the system's zone. Three commits on top, the rest unchanged: `175db903` `core: Read the zone TZ names as the C library does` (`TimeZone::posix(tz, system)`, the one rule both backends call: zone names with a slash or without, `:` and zoneinfo paths, an empty `TZ` UTC, POSIX rules to the system's zone, the seven database names that read as rules taken as zones; its test `platform::tests::posix_time_zones_follow_the_zone_tz_names` runs on any host), `671b03ee` `linux: ...`, `2481dc20` `gpui: Report the zone TZ names when it has no slash (TZ=GMT)`. Head `2481dc20` (fast-forward from `995a48f9`), pushed with the owner's go; fork CI dXnSix/nsh#138 (twin `tmp/review-976-fork-ci`, d608b635 on top): Linux, Core, GPUI on Ubuntu, Windows and macOS, Compat, web green; Android upstream's duplicate Mounter `case 44`; Windows, iOS, macOS and Rust application still running when pushed. Replied on #976 (issue comment 6655859243); the PR body's Public API lists `TimeZone::posix`. Follow-up: `Intl`'s default zone (`nsh-js` `local_zone_name`, from #335) had the same filter: local branch `fix/intl-posix-time-zone` (`b306a8d5`, on this head), not pushed; opens after #976 merges.
 
 ---
 
@@ -42,7 +43,7 @@ writes as the system reports it. `Intl`'s default zone and `Date`'s local times 
 
 The PR is the core, every platform and the browser runtime, a commit each:
 
-- **Core**: `platform::TimeZone` (`UTC`, `parse`, `as_str`), `Environment::time_zone`, `time_zone()`, `timeZone` in
+- **Core**: `platform::TimeZone` (`UTC`, `parse`, `posix`, `as_str`), `Environment::time_zone`, `time_zone()`, `timeZone` in
   `nsh`. The web reports the browser's zone, read again when the page shows or gets the focus. `nsh/test`'s
   `open({ timeZone })` sets it (pinned on real platforms; an invalid name fails `open`) and `app.setTimeZone(name)`
   moves a headless app to another zone; headless apps are in UTC.
@@ -71,7 +72,8 @@ and the platforms' pages.
 - `nsh/test`: `open`'s `timeZone?: string` (an IANA name; `"UTC"` by default); `App.setTimeZone(name: string):
   Promise<void>` (headless runs).
 - `nsh-core`: `platform::TimeZone` (`TimeZone::UTC`, `parse(identifier: &str) -> Option<TimeZone>`,
-  `as_str(&self) -> &str`; `Default` is UTC; `Display`); `platform::Environment::time_zone` and
+  `posix(tz: Option<&str>, system: impl FnOnce() -> Option<TimeZone>) -> TimeZone`, the zone a POSIX process's
+  `TZ` names as the C library reads it, else the system's, `as_str(&self) -> &str`; `Default` is UTC; `Display`); `platform::Environment::time_zone` and
   `element::Environment::time_zone` (new fields with defaults); `element::time_zone() -> TimeZone` (also in the
   prelude), reactive.
 - `nsh-engine`: `TimeZone` re-exported; `EnvironmentPins::time_zone: Option<TimeZone>`.
