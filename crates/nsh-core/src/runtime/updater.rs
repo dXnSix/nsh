@@ -183,6 +183,10 @@ mod native {
         let Some((bytes, config, available)) = checked else {
             return Ok(None);
         };
+        #[cfg_attr(
+            not(any(target_os = "linux", target_os = "macos", windows)),
+            allow(unused_mut)
+        )]
         let mut update = AppUpdate {
             version: available.version.clone(),
             notes: available.notes.clone(),
