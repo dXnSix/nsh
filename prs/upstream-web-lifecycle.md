@@ -27,6 +27,9 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   `nsh/device`, `nsh/accessibility` (and `nsh/host`, `nsh/native`, `nsh/keymap`, `nsh/animated`, `nsh/gesture`,
   `nsh/ios`, `nsh/android`) and native hosts serve none of them; the web runtime still does, as the five #700
   removed. A possible follow-up.
+- 2026-11-05 (later): fork CI dXnSix/nsh#137 green but Fork CI's macOS job (the same failures as #129, upstream's
+  #907) and android (upstream main's duplicate `Mounter` `case 44`). On the owner's go, pushed `072d45ac` to #975
+  (fast-forward on `4ce3495e`) and replied to the review (issue comment 6660135932).
 
 ---
 
