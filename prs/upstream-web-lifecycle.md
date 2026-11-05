@@ -15,6 +15,18 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - 2026-11-05: rebased onto `upstream/main` `ddf4af83` (#907) without conflicts, patch unchanged: head `c94a7254`.
 - 2026-11-05 (later): rebased onto `upstream/main` `90a7efd3` (#951), patch unchanged: head `4ce3495e`. Fork PR dXnSix/nsh#123 (base `ci/upstream-main`).
 - 2026-11-05: **opened as longbridge/nsh#975** at `4ce3495e` (fork CI dXnSix/nsh#129: all green but Fork CI's macOS job, upstream's #907 dropping typed keys), on the owner's go. The body's last line names #976 and #977.
+- 2026-11-05: review fix (huacnlee, issue comment 6654614953: `runtime.js` built `nsh/device` from a fixed list
+  without `lifecycle`) as a second commit, `072d45ac` `web: Keep the browser's nsh/device namespace to what env.rs
+  declares`: `environment.js` groups its accessors as `env.rs` declares them and `runtime.js` serves those groups as
+  `nsh/device` / `nsh/accessibility`; `environment.test.mjs` checks the namespaces against `env.rs` (fails on
+  `4ce3495e`). Local: that test, the player's JS tests (70), the browser runtime's Wasm tests (76). Fork CI
+  dXnSix/nsh#137 (`tmp/review-975-fork-ci`, replaces #129). Not on #975 yet: waiting for CI and the owner's go.
+  The stacked branches (#976 `timeZone`, #977 `languages`, 04 `hourCycle`, `firstDayOfWeek`, `measurementSystem`,
+  `temperatureUnit`) add `DEVICE_EXPORTS` too: on restack each puts its accessor in `environment.js`'s `device`
+  group (the test fails until it does); `runtime.js` needs nothing. Aside: since #488 the bundler refuses
+  `nsh/device`, `nsh/accessibility` (and `nsh/host`, `nsh/native`, `nsh/keymap`, `nsh/animated`, `nsh/gesture`,
+  `nsh/ios`, `nsh/android`) and native hosts serve none of them; the web runtime still does, as the five #700
+  removed. A possible follow-up.
 
 ---
 
