@@ -437,9 +437,6 @@ Shader views (`["sh", id, layer]`) draw with one WebGL 2 context (`docs/dev/shad
 transitions (`["sht"]`, `["shi"]`, `["shn"]`) take pictures of the DOM with a 2D canvas (`paintTree`), and pages and
 dialogs come and go through their shaders on an overlay (`shaderNav`): `docs/dev/shaders.md`, "On the web".
 
-Shader views (`["sh", id, layer]`) draw with one WebGL 2 context; effects and transitions (`["sht"]`, `["shi"]`,
-`["shn"]`) take pictures of the DOM with a 2D canvas (`paintTree`): `docs/dev/shaders.md`, "The web".
-
 ## Animation
 
 What moves on the web follows the Linux backend (`nsh-platform-linux` `transition.rs`, `navigation.rs`), which was
