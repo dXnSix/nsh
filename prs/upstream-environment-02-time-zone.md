@@ -1,6 +1,6 @@
 # Upstream PR: core: Tell apps the device's time zone
 
-Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
+Opened as longbridge/nsh#976. 2026-11-05: moved forward without a force push (the owner's call): `088b2cc9` (`Intl`'s zone), a merge of `main` `aafa450c` after #975's squash merge (`734ce220`), and review-976's notes (`37aeeb1e`, `ce31a9db`, head `f7759492`); fork CI dXnSix/nsh#130: 12 pass, the 5 failures upstream's. The body below is the one before that; the PR's now opens with a note on the merge.
 
 - Branch: `pr/environment/02-time-zone` (`61564e75e`), on `pr/web-lifecycle/01-web`: eight commits of its own, the
   core's, one per platform, then the web's. It replaces `pr/time-zone/01-core` to `07-gpui`; every file is the same as in those

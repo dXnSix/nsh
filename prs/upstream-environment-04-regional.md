@@ -1,6 +1,6 @@
 # Upstream PR: core: Tell apps the user's regional preferences
 
-Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
+Opened as longbridge/nsh#1013 (2026-11-05) from `pr/environment/04-regional-preferences` (head `cdaf06d8`, its nine commits on #977's head; the old `pr/environment/04-regional` cannot fast-forward there); fork CI dXnSix/nsh#132: 12 pass, the 5 failures upstream's. Its body drops the engine's boxing, now #977's.
 
 - Branch: `pr/environment/04-regional` (`ae855a249`), on `pr/environment/03-languages`: nine commits of its own, GPUI's
   boxed dev events (which clippy asks for once the test environment grows), the core's, one per platform, then the web's. It

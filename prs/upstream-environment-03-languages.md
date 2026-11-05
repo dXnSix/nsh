@@ -1,6 +1,6 @@
 # Upstream PR: core: Tell apps the user's preferred languages
 
-Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
+Opened as longbridge/nsh#977. 2026-11-05: moved forward without a force push: a merge of #976's (`583f5ddb`), `preferring` `pub(crate)` and `CAPACITY` private (`ec9b4e13`, the review's optional point), the engine boxing `Message::Environment` (head `833f8ca3`: clippy's `large_enum_variant` on wasm32); fork CI dXnSix/nsh#131: 12 pass, the 5 failures upstream's; review answered. The body below has the new Public API line; the PR's first paragraph names #976 alone.
 
 - Branch: `pr/environment/03-languages` (`2a39c7294`), on `pr/environment/02-time-zone`: eight commits of its own, the
   core's, one per platform, then the web's. It replaces `pr/languages/01-core` to `07-gpui`; every file is the same as in those
@@ -71,8 +71,8 @@ Docs: `languages` in `website/modules/nsh.md`, "Preferred languages" in `website
 - `nsh`: `languages: Accessor<readonly string[]>`, the preferred languages, most preferred first.
 - `nsh/test`: `open`'s `languages?: string[]` (`[locale]` by default); `App.setLanguages(tags: string[]):
   Promise<void>` (headless runs).
-- `nsh-core`: `platform::Languages` (`CAPACITY`, `EN_US`, `one(locale)`, `parse(identifiers) -> Option<Languages>`,
-  `preferring(&self, locale) -> Languages`, `first`, `as_slice`, `iter`; `Default` is `[en-US]`);
+- `nsh-core`: `platform::Languages` (`EN_US`, `one(locale)` and `parse(identifiers) -> Option<Languages>`, with which
+  the platforms build it; `first`, `as_slice`, `iter`; `Default` is `[en-US]`);
   `platform::Environment::languages` and `element::Environment::languages` (new fields with defaults);
   `element::languages() -> Languages` (also in the prelude), reactive.
 - `nsh-engine`: `Languages` re-exported; `EnvironmentPins::languages: Option<Languages>`.
