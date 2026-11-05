@@ -21,6 +21,14 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   typed keys) and `android` (duplicate Mounter case from #931 / #946). Description updated (Public API: `web.base`,
   `SiteServer::start_at`), title kept; reply: https://github.com/longbridge/nsh/pull/981#issuecomment-6660141720.
   02 still holds the moved hunks and must drop them.
+- 2026-11-05 (later): huacnlee's re-review of `0f01f245`: the nested-routes comment addressed, merge after main is
+  merged and CI is green; asked whether a new nsh.json key fits nsh-compat. **Merged `upstream/main` `f7afd23f`**
+  (a merge, not a rebase: conflicts only in `project-structure.md` en / zh-CN, the `web` row beside main's new
+  `updater` row), pushed on the owner's go: head `09db70a4`. Fork CI dXnSix/nsh#139 on twin `debfa602`: green but
+  `macos` (dock, form's typed keys, gallery-rs storage) and `web` (#978's Shift+F10, fixed by longbridge/nsh#1017).
+  Reply (compat: nsh.json keys are build inputs, nothing for the record to freeze):
+  https://github.com/longbridge/nsh/pull/981#issuecomment-6671027924. The desktop app's conflict merge took the
+  fork's `origin/main` (twice): aborted both. 02 now builds on `09db70a4`.
 
 ---
 
