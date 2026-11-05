@@ -1,7 +1,10 @@
 # Upstream PR: web: Open Chrome's context menus from Shift+F10 as keyboard openings
 
-Opened 2026-11-05 from `fix/context-menu-keyboard-focus` (the owner's go), stacked on the menu PR
-(`upstream-menu-one-item-keyboard-focus.md`). The body is below the line.
+Opened 2026-11-05 from `fix/context-menu-keyboard-focus` (the owner's go) as longbridge/nsh#1018, stacked on the menu
+PR (`upstream-menu-one-item-keyboard-focus.md`). **Closed 2026-11-05** in favor of huacnlee's `1137dd527` (in #1010, also
+#1006, #1009, #1011): `button === -1` needs no state, and Chromium's accessibility "show menu"
+(`AXObject::OnNativeShowContextMenuAction` → `ShowNonLocatedContextMenu`) has it too, which the key note missed. The
+body is below the line.
 
 - Branch: `fix/context-menu-keyboard-focus`, `dbc55fc2` (the menu PR's commit) then its own `4316a476`, on
   `upstream/main` `f7afd23f`. Stacked so its head is the commit Fork CI passed, and its checks run with the one-item

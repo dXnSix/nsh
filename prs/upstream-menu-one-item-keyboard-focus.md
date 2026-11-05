@@ -1,6 +1,13 @@
 # Upstream PR: menu: Focus a one-item menu's item when the keyboard opens it
 
-Opened 2026-11-05 from `fix/menu-one-item-keyboard-focus` (the owner's go). The body is below the line.
+Opened 2026-11-05 from `fix/menu-one-item-keyboard-focus` (the owner's go) as longbridge/nsh#1017. The body is below the line.
+
+- Review (huacnlee, 2026-11-05, commented): the approach is fine; his branches #1006, #1009–#1011 carry another fix for
+  the same bug (`254f6507`: `MenuItem` `on_layout` calls the pick), which conflicts in `menu.rs`; pick one. Answered
+  (issuecomment-6670918788): keep this PR's. Both focus in the same batch as the items (`nsh test --trace`), but
+  `254f6507` never focuses a level whose only entry is a `Submenu` trigger (`right_on_a_submenus_trigger_focuses_its_only_item`
+  fails with its `menu.rs`), and it gives every item a layout listener. The body's Chrome line now names #1010's
+  `1137dd527` instead of #1018 (closed).
 
 - Branch: `fix/menu-one-item-keyboard-focus`, one commit (`dbc55fc2`) on `upstream/main` `f7afd23f` (#1000). Its
   companion, `web: Open Chrome's context menus from Shift+F10 as keyboard openings`
@@ -46,7 +53,7 @@ are in order already: in `toolbar.test.tsx` and `tree.test.tsx`, 38 of their loo
 invalidation tell would cost each of those a handler run and a commit round.
 
 In Chrome the test needs one more change, in the web runtime (Chromium's `contextmenu` for the keys names the mouse
-as its pointer): #1018, stacked on this one.
+as its pointer): #1010's 1137dd527.
 
 ## Public API
 
