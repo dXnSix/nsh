@@ -12,8 +12,10 @@ environment included), but for the fork's own CI. The environment stack, registe
 are rebased onto `fe6f54f7` (#869's prelude names and testing docs, #921's import map in `browser/runtime.js`) and
 pushed to the fork; the #746 follow-ups stay on `43026fb2` and merge cleanly. Locally at the three tips: clippy over
 the workspace has only upstream's own error (`nsh-platform-web/src/encode/input.rs`, #776), and the web runtime's JS
-tests pass. Fork CI (CI paths, Core, Linux, Windows, GPUI, Rust application, Compat, and Fork CI's macOS, iOS,
-Android and web jobs on the `tmp/*-fork-ci` twins) is running. Nothing is opened: the owner says when.
+tests pass. Fork CI passed at every head below (2026-11-05: CI paths, Core, Linux, Windows, GPUI, Rust
+application, Compat, and Fork CI's macOS, iOS, Android and web jobs on the `tmp/*-fork-ci` twins; 81 runs, three
+re-run once for flakes outside the branches' code: an Android emulator that did not boot, two iOS gallery timeouts,
+a GPUI Windows field wait). Nothing is opened: the owner says when.
 
 | Feature | Records | Branch, head | Opens after |
 |---|---|---|---|
