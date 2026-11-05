@@ -23,13 +23,17 @@ mod fs;
 mod host;
 mod image;
 mod net;
+mod notifications;
 mod os;
 mod picker;
 mod process;
 mod speech;
 mod storage;
+mod updater;
 mod websocket;
 mod webview;
+
+pub use updater::{UpdaterHost, UpdaterSink};
 
 /// The [`crate::element::Quotas`] kind WebSockets count under: the `websocket`
 /// module's connections and the global `WebSocket`'s (`nsh-js`) share
@@ -55,6 +59,7 @@ pub fn registries() -> &'static [Registry] {
             .module::<clipboard::Clipboard>()
             .module::<picker::Picker>()
             .module::<speech::Speech>()
+            .module::<notifications::Notifications>()
             .module::<webview::WebView>()
             .module::<storage::Storage>()
             .module::<host::Host>()
@@ -79,7 +84,11 @@ pub fn registries() -> &'static [Registry] {
             websocket.module::<websocket::WebSocket>();
             websocket
         };
-        vec![nsh, desktop, mobile, os, net, process, fs, websocket]
+        let mut updater = Registry::runtime("nsh/updater");
+        updater.module::<updater::Updater>();
+        vec![
+            nsh, desktop, mobile, os, net, process, fs, websocket, updater,
+        ]
     })
 }
 

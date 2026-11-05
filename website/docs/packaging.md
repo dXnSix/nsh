@@ -62,8 +62,9 @@ TSX app adds its entry (`nsh package App.tsx --target …`).
 | `icon` | string | none | A square PNG, ideally 1024×1024, relative to `nsh.json`. |
 
 `nsh.json` also holds `rust` and `root` (the app's crates and its root component, [Building with Rust](./rust.md)),
-`theme` and `appearance`, `tailwind` (see [Tailwind](./tailwind.md)) and `capabilities` (see
-[Sandbox and capabilities](./sandbox-and-capabilities.md)); [Project structure](./project-structure.md#nshjson) lists
+`theme` and `appearance`, `tailwind` (see [Tailwind](./tailwind.md)), `capabilities` (see
+[Sandbox and capabilities](./sandbox-and-capabilities.md)) and `updater`, which makes desktop packages update themselves
+(see [App Updates](./app-updates.md)); [Project structure](./project-structure.md#nshjson) lists
 every key. Unknown keys are an error.
 
 Every key above can be overridden on the command line, which is handy in CI:
@@ -226,6 +227,20 @@ Give one square PNG, ideally 1024×1024, in `nsh.json` (`"icon": "icon.png"`) or
 
 Without an icon, the system shows its default.
 
+## Camera, Bluetooth and other hardware
+
+NSH has no API for the camera, video recording, Bluetooth or location, and `nsh package` cannot make an app that uses
+them: NSH writes the app's `Info.plist` and Android manifest, `nsh.json` has no key that adds to them, and a packaged
+Android app cannot add Java code. Its own [Rust crate](./rust.md) does not change this. iOS ends an app that reaches
+protected hardware without a usage description in `Info.plist`, and the Android manifest of a packaged app declares
+only `INTERNET`.
+
+An app that needs them embeds NSH in its own Xcode or Gradle project ([iOS](./ios.md#embedding-in-an-ios-app),
+[Android](./android.md#embedding-in-an-android-app)). That project owns `Info.plist` and `AndroidManifest.xml`, so it
+declares what it uses there and writes the platform code itself: a camera preview is a
+[native component](./native-components.md), and the app reaches everything else through
+[`host.call`](./ios.md#talking-to-the-app) ([on Android](./android.md#talking-to-the-app)).
+
 ## What is inside
 
 A Rust app's package is its runner, built with your crate and its root mounted, and the assets its crates register
@@ -256,5 +271,7 @@ points the CLI at another directory laid out like the distribution's `runtime/` 
 ## See also
 
 - [CLI](./cli.md): every command
+- [App Updates](./app-updates.md): packaged apps that update themselves
 - [Signed packages](./signed-packages.md): updates apps download
 - [Project structure](./project-structure.md): `nsh.json` and the files of an app
+- [Native components](./native-components.md): views of the host app inside an NSH app

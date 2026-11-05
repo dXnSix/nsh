@@ -1617,6 +1617,7 @@ impl Mounter {
             MountItem::Command { id, command } => self.command(id, command),
             // Hardware keyboards' shortcuts are not matched yet.
             MountItem::Keymap(keymap) => self.target.keymap().set(keymap),
+            MountItem::TreeOrder(_) | MountItem::ProjectStates { .. } => {}
         }
         false
     }
@@ -1707,6 +1708,18 @@ impl Mounter {
                 native,
             ) if id == nsh_core::ROOT_ID => {
                 crate::picker::pick_images(request, asked, native.view(), &self.control);
+            }
+            (Command::Notification(command), _) if id == nsh_core::ROOT_ID => {
+                crate::notifications::command(&self.control, &command);
+            }
+            (
+                Command::PickFiles {
+                    id: request,
+                    request: asked,
+                },
+                native,
+            ) if id == nsh_core::ROOT_ID => {
+                crate::picker::pick_files(request, asked, native.view(), &self.control);
             }
             (Command::Speech(command), _) if id == nsh_core::ROOT_ID => {
                 crate::speech::command(&self.control, &command);
@@ -2517,11 +2530,12 @@ impl Mounter {
             return;
         };
         let (position, page_position) = self.pointer_positions(&view, in_window);
-        let event = nsh_core::ContextMenuEvent {
+        let event = nsh_core::ContextMenuEvent::new(
             position,
             page_position,
-            modifiers: key_modifiers(modifiers),
-        };
+            key_modifiers(modifiers),
+            Some(nsh_core::PointerType::Mouse),
+        );
         self.control
             .dispatch_event(id, EventKind::ContextMenu, EventPayload::ContextMenu(event));
     }

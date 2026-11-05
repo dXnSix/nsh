@@ -161,11 +161,11 @@ go elsewhere under these rules rather than into them.
   `desktop={{…}}`: iOS, macOS, Windows and Linux have the swipes, Android and the web none; decided by the user,
   2026-10-29). Each object is typed (`IOSProps`, `AndroidProps`, `DesktopProps`, an element's own extending them),
   so a key no platform has fails the type check.
-- **One definition of desktop**: desktop is a desktop OS (macOS, Windows, Linux) or the web in the desktop idiom
-  (`Idiom::desktop_on`, `Environment::desktop()`); everything else is mobile, Mac Catalyst included (it runs the iOS
-  backend: `ios={{…}}` applies). `desktop={{…}}` props, `platform.select({ desktop, mobile })`, `platform.desktop`,
-  `platform.idiom === "desktop"` (`Idiom::reported_on`), Rust's `is_desktop()` and `nsh-base`'s per-device
-  presentation all follow it; nothing apps see defines desktop otherwise. `"mac"` stays UIKit's Mac idiom under
+- **One definition of desktop**: desktop is a desktop OS (macOS, Windows, Linux), the web in the desktop idiom or
+  a terminal (`Idiom::desktop_on`, `Environment::desktop()`); everything else is mobile, Mac Catalyst included (it
+  runs the iOS backend: `ios={{…}}` applies). `desktop={{…}}` props, `platform.select({ desktop, mobile })`,
+  `platform.desktop`, `platform.idiom === "desktop"` (`Idiom::reported_on`; a terminal reports `"terminal"`), Rust's
+  `is_desktop()` and `nsh-base`'s per-device presentation all follow it; nothing apps see defines desktop otherwise. `"mac"` stays UIKit's Mac idiom under
   Catalyst (mobile), `platform.catalyst` is Catalyst in either idiom (`Os::is_catalyst`). The one narrower check is
   `nsh/desktop`'s `isAvailable` (`Os::is_desktop`): where its window and menu APIs work, the desktop OSes (decided by
   the user, 2026-10-29).
@@ -268,7 +268,7 @@ them yet (`compatibility.md`). The frozen RN-shaped modules keep their names. A 
 | `onHoverOut: () => void` | `onMouseLeave: (e: MouseEvent) => void` | Begin and end | As above, the DOM's `mouseleave`; `e` is where the mouse was last. Rust `on_mouse_leave` |
 | `onHoverMove(e: HoverEvent)` (no button down) and `onMouseMove(e: Point)` (button down too) | one `onMouseMove(e: MouseEvent)` | Payloads | The DOM's `mousemove`, GPUI's `on_mouse_move`: every move over the view, with or without a button down (`e.pressedButton`), and a modifier key changing while the mouse rests there; one object, as every event. Rust `on_mouse_move` |
 | `HoverEvent` (type) | `MouseEvent` `{ position; pagePosition; modifiers; pressedButton: MouseButton \| null }`, `MouseButton` `"left" \| "right" \| "middle" \| "back" \| "forward"` | Points | GPUI's `MouseMoveEvent` and `MouseButton`; the payload of all three mouse events. `hoverStyle` and `hover:` keep CSS's name |
-| `ContextMenuEvent` (`onContextMenu`), the same fields | the same shape | Points | `Menu.popup(items, e.pagePosition)` |
+| `ContextMenuEvent` (`onContextMenu`), the same fields | the same shape, and `pointerType: PointerType \| null` (`"mouse"`, `"pen"`, `"touch"`) | Points | `Menu.popup(items, e.pagePosition)`; `pointerType` is the DOM's (a keyboard `contextmenu` is a `PointerEvent` with `pointerType` `""`), `null` for no pointer as `pressedButton` is for no button |
 | `onLayout(e: LayoutEvent)` `{ x, y, width, height }` | `onLayout({ bounds }: { bounds: Bounds })` | Geometry | `LayoutEvent` dropped; `onLayout(bounds)` first, one object since 2026-10-27 (Payloads, below) |
 | `ref.measure()` → `{ x, y, width, height, pageX, pageY }` | `{ bounds: Bounds; pagePosition: Point }` | Geometry | |
 | `YNode` (every ref; what primitives return) | `ViewRef` (`focus`, `blur`, `measure`; what an element is, in `JSX.Element`), and per element `InputRef` (`setSelection`), `ScrollRef` (`scrollTo`, `zoomTo`, `scrollToEnd`), `ListRef` (`scrollTo`, `scrollToOffset`, `scrollToIndex`, `scrollToEnd`), `WebViewRef`, `VideoRef` (`seek`), `NativeComponentRef` (`command`) over it; primitives return `JSX.Element` | Shapes that can grow | 2026-10-28: a method added to one element appears on its ref only. `Overlay`'s `anchor`, `setAccessibilityFocus` and a Rust component's ref's `node` take a `ViewRef`; the methods' signatures are unchanged |
@@ -312,7 +312,7 @@ them yet (`compatibility.md`). The frozen RN-shaped modules keep their names. A 
 | `net.connect(host, port)` | `net.connect({ host, port })` (`ConnectOptions`) | Shapes that can grow | 2026-10-28: Node's `net.connect(options)`, so a timeout or TLS can join them |
 | **`nsh`: the environment** | | | |
 | `Platform.OS`, `Platform.Version`, `Platform.constants` | `platform.os`, `platform.version: string` | Environment | A constant object; Android's version is its API level as a string (`"35"`) |
-| `Platform.isPad`, `isTV`, `isDesktop`, `isMacCatalyst`, `constants.interfaceIdiom` | `platform.idiom: "phone" \| "pad" \| "mac" \| "tv" \| "desktop"`, `platform.desktop`, `platform.catalyst` | Environment | `isDesktop` is `platform.desktop` ("One definition of desktop") |
+| `Platform.isPad`, `isTV`, `isDesktop`, `isMacCatalyst`, `constants.interfaceIdiom` | `platform.idiom: "phone" \| "pad" \| "mac" \| "tv" \| "desktop" \| "terminal"`, `platform.desktop`, `platform.catalyst` | Environment | `isDesktop` is `platform.desktop` ("One definition of desktop") |
 | `Platform.select(spec)` | `platform.select(spec)` | Environment | Same spec |
 | `PixelRatio.get()` | `pixelRatio(): number` (accessor, reactive) | Environment | Follows the window to another screen |
 | `PixelRatio.getFontScale()` | `fontScale()` | Environment | Already exists |

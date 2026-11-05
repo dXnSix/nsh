@@ -336,6 +336,7 @@ impl Rv {
                     KeyOptions {
                         when: When::Always,
                         repeat: spec.repeat,
+                        ..Default::default()
                     },
                     move |_| rv.key(&event),
                 );
@@ -599,7 +600,14 @@ impl Rv {
         let (deleted, inserted, composed) = {
             let mut sink = self.sink.borrow_mut();
             let base = match sink.emptied.take() {
-                Some(old) if text.starts_with(old.as_str()) => old,
+                // The platform dropped the empty value: the text still extends
+                // what it held. A text equal to what it held was typed again
+                // into the emptied sink: platforms report each edit, so an
+                // edit to the text the platform kept would show. Linux reports
+                // the edits made before it is idle as one: there, the text
+                // deleted and typed again before the empty value arrives reads
+                // the same, and is inserted a second time.
+                Some(old) if text != old && text.starts_with(old.as_str()) => old,
                 Some(_) => String::new(),
                 None => std::mem::take(&mut sink.text),
             };
@@ -759,6 +767,22 @@ impl Rv {
         }
         if editable && self.delete_by_key(event) {
             self.after_key(event);
+            return;
+        }
+        // Escape no plugin, node view or keymap took collapses a selection
+        // to its head. With nothing to collapse, a terminal's focus leaves
+        // the editor, so it is no trap there (Tab then goes on after it);
+        // the other platforms keep Escape as it was. It stays bound for the
+        // plugins' own Escape (a suggestion's).
+        if plain && event.key == "Escape" {
+            let sel = state.selection();
+            if sel.empty() {
+                if crate::terminal::is_terminal() {
+                    self.blur();
+                }
+            } else if let Ok(p) = state.doc().resolve(sel.head()) {
+                self.set_selection(Selection::near(&p, 1), false);
+            }
             return;
         }
         if let Some(m) = keys::movement(event) {
