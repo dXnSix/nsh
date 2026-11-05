@@ -21,6 +21,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - 2026-11-04 (later): rebased onto the new web lifecycle (`upstream/main` `fe6f54f7`, #911): head `a861dbee`. Upstream's terminal backend (#869) added `keystroke_label` to the prelude and a screenshot row to the testing docs: both kept beside `time_zone` and `setTimeZone`; the platform commits unchanged. The terminal backend reads no system setting (its `Environment` is the default but for its own fields), so `timeZone()` is UTC there, as its `locale()` is the default.
 - 2026-11-05: rebased onto the new web lifecycle (`upstream/main` `ddf4af83`, #907): head `4926ad66`. Upstream's notifications (#931) added `close_notification`, `next_notification_press`, `notification_permission`, `request_notification_permission`, `set_badge` and `show_notification` to the prelude and `notifications` to the player's environment, and #929 changed the desktop pages' Window chrome rows beside the Environment rows: all kept beside the time zone's lines; iOS, Android and web commits unchanged. No new event (Android's `NOTIFICATION = 72` is upstream's).
 - 2026-11-05 (later): rebased onto `upstream/main` `90a7efd3` (#951), patches unchanged: head `995a48f9`. Fork PR dXnSix/nsh#124.
+- 2026-11-05: **opened as longbridge/nsh#976** at `995a48f9` (fork CI dXnSix/nsh#130: green but macOS and Android, both upstream's own: #907's dropped keys, the emulator dying on the Styles demo).
 
 ---
 

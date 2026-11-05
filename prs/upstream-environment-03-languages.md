@@ -24,6 +24,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - 2026-11-04 (later): rebased onto the new time zone (`fe6f54f7`): head `e9a13c88`. Only the prelude's names moved (upstream's `keystroke_label`); the platform commits unchanged.
 - 2026-11-05: rebased onto the new time zone (`upstream/main` `ddf4af83`): head `55b3a899`. Only context moved (upstream's notification names in the prelude, the desktop pages' Window chrome rows); iOS, Android and web commits unchanged.
 - 2026-11-05 (later): rebased onto `upstream/main` `90a7efd3` (#951), patches unchanged: head `0188f306`. Fork PR dXnSix/nsh#125.
+- 2026-11-05: **opened as longbridge/nsh#977** at `0188f306` (fork CI dXnSix/nsh#131: green but upstream's macOS and Android failures).
 
 ---
 

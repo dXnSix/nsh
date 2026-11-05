@@ -24,6 +24,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - 2026-11-04 (later): rebased onto the new languages (`fe6f54f7`): head `567f4d28`. Only the prelude's names moved; the platform commits unchanged. Clippy (workspace, `-D warnings`) has only upstream's own `field_reassign_with_default` in `nsh-platform-web/src/encode/input.rs` (#776), as upstream main does; the web runtime's JS tests pass (player, scroll, browser against wasm).
 - 2026-11-05: rebased onto the new languages (`upstream/main` `ddf4af83`): head `ee435b47`. Only context moved, as in languages.
 - 2026-11-05 (later): rebased onto `upstream/main` `90a7efd3` (#951), patches unchanged: head `e79ece86`. Fork PR dXnSix/nsh#126.
+- 2026-11-05 (later): #946 added `pick_files` to the prelude, so rebased onto `upstream/main` `88987268` with #975–#977's commits: head `53dbbc34` (only prelude context moved; file lists unchanged). Fork CI again on dXnSix/nsh#132; the placeholders are #975, #976, #977.
 
 ---
 

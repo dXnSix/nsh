@@ -32,6 +32,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - 2026-11-04: rebased onto `upstream/main` `57b1d7ba` as one commit (#745 and #746 are merged): head `bd236d4a`. Upstream #823 moved the test fonts to `tests/compat/cases/layout/fonts/`, so `text.rs`'s and `rust_platform.rs`'s tests read Pacifico there, and `.github/ci/paths.py`'s comment on that folder names nsh-engine's tests too (`core.yml` lists it already). The conflicts were additions beside upstream's (WOFF table sizes, the lifecycle test, the fallback lists' section). `NSH_COMPAT_APP=layout cargo xtask compat` passes (`core-register-font`).
 - 2026-11-04 (later): rebased onto `upstream/main` `fe6f54f7` (#911): head `c0b7835a`. Only the prelude's names moved (upstream's `keystroke_label`, #869). The terminal backend's `CellTextEngine::register_font` already exists upstream.
 - 2026-11-05: rebased onto `upstream/main` `90a7efd3` (#951): head `763de9b3`. Only context moved (upstream's notification names in the prelude, `nsh-updater` in `paths.py`); nightly rustfmt had reformatted upstream's unformatted `tailwind/tests.rs` through `tailwind/mod.rs`, so that file is upstream's again. The body's dependency line now says #745 and #746 are merged. Fork PR dXnSix/nsh#127.
+- 2026-11-05 (later): rebased onto `upstream/main` `88987268` (#946's `pick_files` beside `register_font` in the prelude): head `d0d0551b`; `tailwind/tests.rs` restored to upstream's again after rustfmt. Fork CI again on dXnSix/nsh#133.
 
 ---
 

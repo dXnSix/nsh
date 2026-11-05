@@ -14,6 +14,7 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - 2026-11-04 (later): rebased onto `upstream/main` `fe6f54f7` (#911) without conflicts, patch unchanged: head `ca871a22`.
 - 2026-11-05: rebased onto `upstream/main` `ddf4af83` (#907) without conflicts, patch unchanged: head `c94a7254`.
 - 2026-11-05 (later): rebased onto `upstream/main` `90a7efd3` (#951), patch unchanged: head `4ce3495e`. Fork PR dXnSix/nsh#123 (base `ci/upstream-main`).
+- 2026-11-05: **opened as longbridge/nsh#975** at `4ce3495e` (fork CI dXnSix/nsh#129: all green but Fork CI's macOS job, upstream's #907 dropping typed keys), on the owner's go. The body's last line names #976 and #977.
 
 ---
 
