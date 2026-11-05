@@ -29,6 +29,13 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   Reply (compat: nsh.json keys are build inputs, nothing for the record to freeze):
   https://github.com/longbridge/nsh/pull/981#issuecomment-6671027924. The desktop app's conflict merge took the
   fork's `origin/main` (twice): aborted both. 02 now builds on `09db70a4`.
+- 2026-11-06: huacnlee's review of `09db70a4` ([P2]): `web.base` `/apps//counter/` passed `page_base` into
+  `<base href>` while `start_at` collapsed it, so `--run`'s URL answered 404. Fixed in `f7402524` (`page_base`
+  refuses empty segments and runs before the runtime build; `start_at` drops them in one pass), pushed on the
+  owner's "push now" before fork CI finished: dXnSix/nsh#139 on twin `46f9b11d` had Core, Compat, Rust application,
+  Examples, Windows and GPUI green, `macos` / `web` the known failures, `android` an emulator that disconnected
+  (rerun pending), Linux `check`, `ios` and Fork CI `web` still running. Public API lines updated; reply:
+  https://github.com/longbridge/nsh/pull/981#issuecomment-6672676743.
 
 ---
 
