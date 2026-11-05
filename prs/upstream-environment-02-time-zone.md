@@ -23,12 +23,12 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - 2026-11-05 (later): rebased onto `upstream/main` `90a7efd3` (#951), patches unchanged: head `995a48f9`. Fork PR dXnSix/nsh#124.
 - 2026-11-05: **opened as longbridge/nsh#976** at `995a48f9` (fork CI dXnSix/nsh#130: green but macOS and Android, both upstream's own: #907's dropped keys, the emulator dying on the Styles demo).
 - 2026-11-05 (review): huacnlee's P2 on #976 (issue comment 6654692710): the Linux and GPUI backends took `TZ` only with a slash or as `UTC`, so `TZ=GMT` fell back on the system's zone. Three commits on top, the rest unchanged: `175db903` `core: Read the zone TZ names as the C library does` (`TimeZone::posix(tz, system)`, the one rule both backends call: zone names with a slash or without, `:` and zoneinfo paths, an empty `TZ` UTC, POSIX rules to the system's zone, the seven database names that read as rules taken as zones; its test `platform::tests::posix_time_zones_follow_the_zone_tz_names` runs on any host), `671b03ee` `linux: ...`, `2481dc20` `gpui: Report the zone TZ names when it has no slash (TZ=GMT)`. Head `2481dc20` (fast-forward from `995a48f9`), pushed with the owner's go; fork CI dXnSix/nsh#138 (twin `tmp/review-976-fork-ci`, d608b635 on top): Linux, Core, GPUI on Ubuntu, Windows and macOS, Compat, web green; Android upstream's duplicate Mounter `case 44`; Windows, iOS, macOS and Rust application still running when pushed. Replied on #976 (issue comment 6655859243); the PR body's Public API lists `TimeZone::posix`. Follow-up: `Intl`'s default zone (`nsh-js` `local_zone_name`, from #335) had the same filter: local branch `fix/intl-posix-time-zone` (`b306a8d5`, on this head), not pushed; opens after #976 merges.
+- 2026-11-05 (second review, huacnlee's reviewer agent, review 5786907868): wire the zone into the existing `Intl` path instead of a parallel answer, plus two small notes. `088b2cc9` `js: Give Intl the device's time zone, as timeZone() reports it` (`Intl` names local time as `Environment::time_zone` through `env::time_zone(cx)`, as it reads the locale; a VM no platform reported to falls back on `TZ` / `/etc/localtime` via `TimeZone::posix`; this folds in `fix/intl-posix-time-zone`, which no longer opens on its own; tests `host::tests::intl_names_local_time_as_the_devices_zone`, `web::intl::tests::the_systems_zone_is_the_one_tz_names`, nsh-testing's `Intl zone:` lines, compat `expect Intl time zone: UTC`). #975 had been squash-merged (`750141c3`), so #976 conflicted: no force-push, a merge of `upstream/main` `aafa450c1` instead (`734ce220f`, its tree the same as the rebase `4904d4f3a`). Then `37aeeb1e9` `core: Hold any time zone name the tz database allows` (`TimeZone::CAPACITY` 39 → 63: four 14-character parts), `ce31a9db0` `gpui:` and `f77594927` `windows: Look up ICU's zone mapping once per process` (`OnceLock` in place of `thread_local`). Head `f77594927`, a fast-forward from `2481dc20`, pushed by the restack session; mergeable. Fork CI dXnSix/nsh#130 (twin `dd34b5bcc`): 12 jobs pass, Windows and GPUI windows-latest included; the five failures are main's own (#978's Shift+F10 context-menu test on web, Android and iOS; the macOS test host's dropped keys since #907). Replied on #976 (issue comment 6665178700); the `timeZone()` export left to the maintainer. Below the line: the PR's body as posted.
 
 ---
 
-**Depends on:** #LIFECYCLE_WEB (`web: Give browser apps their lifecycle`), which adds the browser runtime's
-`environment.test.mjs` that this PR's web commit extends. Until it is merged this PR shows its commit too; the time
-zone's own are the last eight.
+The branch merges `main` after #975's squash merge (734ce220f), so its history still lists #975's original commits;
+its diff against `main` is the time zone's alone.
 
 ## Description
 
@@ -39,7 +39,9 @@ know when it changes.
 `timeZone()` of `nsh` and Rust's `time_zone()` (the prelude) give it, reactively, as the system names it: an IANA name
 (`Europe/Berlin`), `UTC`, or an offset zone where the system has one (Android's `GMT+01:00`). It is
 `Environment::time_zone` (`platform::TimeZone`, inline so that the environment stays `Copy`), which each platform
-writes as the system reports it. `Intl`'s default zone and `Date`'s local times stay as they are.
+writes as the system reports it. `Intl` names local time as the same zone:
+`Intl.DateTimeFormat().resolvedOptions().timeZone` is `timeZone()` on every platform, and `{ timeZone: timeZone() }`
+formats in local time. `Date`'s local times stay as they are.
 
 The PR is the core, every platform and the browser runtime, a commit each:
 
@@ -47,6 +49,8 @@ The PR is the core, every platform and the browser runtime, a commit each:
   `nsh`. The web reports the browser's zone, read again when the page shows or gets the focus. `nsh/test`'s
   `open({ timeZone })` sets it (pinned on real platforms; an invalid name fails `open`) and `app.setTimeZone(name)`
   moves a headless app to another zone; headless apps are in UTC.
+- **JS** (`Intl`): local time is named as `Environment::time_zone`, read where it is used as the locale is; a VM no
+  platform has reported to yet falls back on `TZ` and `/etc/localtime`, read by `TimeZone::posix`.
 - **iOS** and **macOS**: `NSTimeZone.systemTimeZone`'s IANA name; on `NSSystemTimeZoneDidChangeNotification`
   Foundation's cached zone is reset and the environment published again.
 - **Android**: `java.util.TimeZone`'s default ID, sent with the environment; `ACTION_TIMEZONE_CHANGED` gives the new
@@ -62,13 +66,15 @@ The PR is the core, every platform and the browser runtime, a commit each:
 - **Web** (the browser runtime, where web apps' code runs): `src/browser/engine.rs` sends `timeZone` to the app's
   realm and `browser/environment.js` serves it, UTC until the engine reports.
 
-Docs: `timeZone` in `website/modules/nsh.md`, "Time zone" in `website/docs/device-and-environment.md`, `open`'s
-`timeZone` and `setTimeZone` in `website/docs/testing-and-trace.md` (each with its zh-CN page), `docs/dev/elements.md`
-and the platforms' pages.
+Docs: `timeZone` in `website/modules/nsh.md`, `Intl`'s `timeZone` in `website/modules/globals.md`, "Time zone" in `website/docs/device-and-environment.md`, `open`'s
+`timeZone` and `setTimeZone` in `website/docs/testing-and-trace.md` (each with its zh-CN page), `docs/dev/elements.md`,
+`docs/dev/architecture.md` and the platforms' pages.
 
 ## Public API
 
 - `nsh`: `timeZone: Accessor<string>`, the device's zone as the system names it.
+- `Intl.DateTimeFormat` (behavior): `resolvedOptions().timeZone` names local time as `timeZone()`'s zone, and a
+  `timeZone` option naming that zone is local time.
 - `nsh/test`: `open`'s `timeZone?: string` (an IANA name; `"UTC"` by default); `App.setTimeZone(name: string):
   Promise<void>` (headless runs).
 - `nsh-core`: `platform::TimeZone` (`TimeZone::UTC`, `parse(identifier: &str) -> Option<TimeZone>`,
@@ -81,12 +87,13 @@ and the platforms' pages.
 
 ## How to Test
 
-- `cargo test -p nsh-core platform`: `time_zones_parse_platform_identifiers`.
+- `cargo test -p nsh-core platform`: `time_zones_parse_platform_identifiers`, `posix_time_zones_follow_the_zone_tz_names`.
+- `cargo test -p nsh-js --lib intl`: `intl_names_local_time_as_the_devices_zone`, `the_systems_zone_is_the_one_tz_names`.
 - `cargo test -p nsh-engine --test engine rust_platform`: `components_follow_the_time_zone`.
 - `cargo test -p nsh-testing --features bundle --test testing`: "the time zone follows the system's" and "an invalid
-  time zone fails open".
+  time zone fails open"; `Intl`'s zone beside `timeZone()` in those and the defaults.
 - `node --test crates/nsh-platform-web/web/*.test.mjs`.
-- Compat: `tests/compat/cases/modules` shows `Time zone: UTC` and claims `covers [nsh] timeZone`.
+- Compat: `tests/compat/cases/modules` shows `Time zone: UTC` and `Intl time zone: UTC` and claims `covers [nsh] timeZone`.
 - On a device: `<Text>{timeZone()}</Text>`, then change the system's time zone while the app runs.
 
 ## Checklist
