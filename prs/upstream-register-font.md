@@ -1,6 +1,6 @@
 # Upstream PR: text: Let apps register fonts while they run
 
-Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
+Opened as longbridge/nsh#1001 (2026-11-05, head `d0d0551b` on `88987268`; fork CI dXnSix/nsh#133: green but upstream's macOS and Android failures). The body is below the line.
 
 - Branch: `pr/register-font/01-core`, on `upstream/main` `201d780a`: copies of the WOFF and the asset-reading commits
   (#746 with both review fixes), then its own (head `992932b1e`).

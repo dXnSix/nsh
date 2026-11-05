@@ -1,6 +1,6 @@
 # Upstream PR: web: Give browser apps their lifecycle
 
-Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
+Merged as longbridge/nsh#975 (`750141c3`, 2026-11-05, squashed from head `072d45ac` with its review fix). The body is below the line.
 
 - Branch: `pr/web-lifecycle/01-web`, one commit on `upstream/main` `828b1f13` (after #822; #747 added
   `lifecycle()`). The fork's own fix is dXnSix/nsh#114, still under the name `appState` there.

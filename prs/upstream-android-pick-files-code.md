@@ -1,6 +1,6 @@
 # Upstream PR: android: Give the file picker its own command code
 
-Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
+Not sent: upstream's longbridge/nsh#994 (`e1af8c6c`, 2026-11-05) made the same change (`PickFiles` 45, notifications 44); dXnSix/nsh#136 closed. The draft body is below the line.
 
 - Branch: `fix/android-pick-files-code`, one commit (`e1933795`) on `upstream/main` `88987268` (#946).
 - Found by the fork's CI: Fork CI's Android job failed javac on every pull request based on `88987268`
