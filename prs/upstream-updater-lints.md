@@ -1,6 +1,6 @@
 # Upstream PR: updater: Pass clippy on iOS, Android and the web
 
-Opened as longbridge/nsh#1002 (2026-11-05, head `a7e0d412`; fork CI dXnSix/nsh#135; clippy for the web, Catalyst and Android passes on its merge with `aafa450c`, fails on `aafa450c` alone). The body is below the line.
+Merged as longbridge/nsh#1002 (`3f705bd3`, 2026-11-05); opened from head `a7e0d412`; fork CI dXnSix/nsh#135; clippy for the web, Catalyst and Android passes on its merge with `aafa450c`, fails on `aafa450c` alone). The body is below the line.
 
 - Branch: `fix/updater-lints`, one commit (`a7e0d412`) on `upstream/main` `90a7efd3` (#951).
 - Found by the fork's CI: Fork CI's iOS, Android and web jobs failed clippy on every pull request based on `90a7efd3`.
