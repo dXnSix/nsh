@@ -22,6 +22,8 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - 2026-11-02 (after #822 merged): rebased onto `upstream/main` `828b1f13` without conflicts, patches unchanged (`git range-diff`). Previous heads: `old-pre-822/*` locally.
 - 2026-11-04: rebased onto the new `pr/environment/03-languages`: head `4a16f25d`, only context moved.
 - 2026-11-04 (later): rebased onto the new languages (`fe6f54f7`): head `567f4d28`. Only the prelude's names moved; the platform commits unchanged. Clippy (workspace, `-D warnings`) has only upstream's own `field_reassign_with_default` in `nsh-platform-web/src/encode/input.rs` (#776), as upstream main does; the web runtime's JS tests pass (player, scroll, browser against wasm).
+- 2026-11-05: rebased onto the new languages (`upstream/main` `ddf4af83`): head `ee435b47`. Only context moved, as in languages.
+- 2026-11-05 (later): rebased onto `upstream/main` `90a7efd3` (#951), patches unchanged: head `e79ece86`. Fork PR dXnSix/nsh#126.
 
 ---
 

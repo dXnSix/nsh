@@ -22,6 +22,8 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - 2026-11-02 (after #822 merged): rebased onto `upstream/main` `828b1f13` without conflicts, patches unchanged (`git range-diff`). Previous heads: `old-pre-822/*` locally.
 - 2026-11-04: rebased onto the new `pr/environment/02-time-zone`: head `c27fc5bd`, only context moved.
 - 2026-11-04 (later): rebased onto the new time zone (`fe6f54f7`): head `e9a13c88`. Only the prelude's names moved (upstream's `keystroke_label`); the platform commits unchanged.
+- 2026-11-05: rebased onto the new time zone (`upstream/main` `ddf4af83`): head `55b3a899`. Only context moved (upstream's notification names in the prelude, the desktop pages' Window chrome rows); iOS, Android and web commits unchanged.
+- 2026-11-05 (later): rebased onto `upstream/main` `90a7efd3` (#951), patches unchanged: head `0188f306`. Fork PR dXnSix/nsh#125.
 
 ---
 

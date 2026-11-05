@@ -31,12 +31,12 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   web fix included), then its own (head `8cfcfba3b`); the `registerFont` row beside the `fetch` row replayed by rerere.
 - 2026-11-04: rebased onto `upstream/main` `57b1d7ba` as one commit (#745 and #746 are merged): head `bd236d4a`. Upstream #823 moved the test fonts to `tests/compat/cases/layout/fonts/`, so `text.rs`'s and `rust_platform.rs`'s tests read Pacifico there, and `.github/ci/paths.py`'s comment on that folder names nsh-engine's tests too (`core.yml` lists it already). The conflicts were additions beside upstream's (WOFF table sizes, the lifecycle test, the fallback lists' section). `NSH_COMPAT_APP=layout cargo xtask compat` passes (`core-register-font`).
 - 2026-11-04 (later): rebased onto `upstream/main` `fe6f54f7` (#911): head `c0b7835a`. Only the prelude's names moved (upstream's `keystroke_label`, #869). The terminal backend's `CellTextEngine::register_font` already exists upstream.
+- 2026-11-05: rebased onto `upstream/main` `90a7efd3` (#951): head `763de9b3`. Only context moved (upstream's notification names in the prelude, `nsh-updater` in `paths.py`); nightly rustfmt had reformatted upstream's unformatted `tailwind/tests.rs` through `tailwind/mod.rs`, so that file is upstream's again. The body's dependency line now says #745 and #746 are merged. Fork PR dXnSix/nsh#127.
 
 ---
 
-**Depends on:** #745 (`text: Read WOFF and WOFF2 fonts`: it registers WOFF and WOFF2 data) and #746
-(`engine: Let fetch read the files the app ships`: it reads `asset:/` URLs as `fetch` does). This branch carries
-their commits (#745's one, #746's four); once they are merged it shows only its own, the last.
+Builds on #745 (`text: Read WOFF and WOFF2 fonts`: it registers WOFF and WOFF2 data) and #746
+(`engine: Let fetch read the files the app ships`: it reads `asset:/` URLs as `fetch` does), both merged.
 
 ## Description
 
