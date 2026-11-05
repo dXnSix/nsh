@@ -1027,8 +1027,9 @@ enum Message {
     Resize(Size<Points>),
     /// A component's task was woken: it runs in the loop.
     Wake,
-    /// Boxed: the environment is the largest message by far, and changes
-    /// rarely.
+    /// Boxed: with the languages and the time zone held inline, an
+    /// environment is several times the size of every other message, and
+    /// it changes rarely.
     Environment(Box<Environment>),
     RootSize(NodeId, Size<Points>, EdgeInsets),
     ScreenHeader(NodeId, Option<Points>),
