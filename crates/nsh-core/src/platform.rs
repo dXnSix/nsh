@@ -204,6 +204,11 @@ pub struct Environment {
     /// its ends (`bottom` is 0); all 0 while the system shows its title
     /// bar.
     pub title_bar: Edges<Points>,
+    /// The app's window: its bounds on the screen, its mode and display
+    /// (desktops; `None` elsewhere and where the surface has no window).
+    /// The engine holds back a move or resize until the window stops for
+    /// a moment, so platforms report every change.
+    pub window_state: Option<crate::desktop::WindowState>,
     /// Height of the software keyboard over the surface; 0 when hidden.
     pub keyboard_height: Points,
     /// Duration of the keyboard's show / hide animation in milliseconds.
@@ -240,14 +245,9 @@ pub struct Environment {
     pub ctrl_for_command: bool,
     /// The user's locale (number and date formats: `Intl`'s default).
     pub locale: Locale,
-    /// The user's preferred languages, most preferred first (the system's
-    /// list: the language apps show their text in, then its fallbacks).
-    pub languages: Languages,
-    /// The user's regional preferences: 12- or 24-hour time, the first day
-    /// of the week, the measurement system and the temperature unit.
-    pub regional: RegionalPreferences,
-    /// The device's time zone, as the system names it (`Europe/Berlin`).
-    pub time_zone: TimeZone,
+    /// The user's locale settings: the preferred languages, the time zone
+    /// and the regional preferences.
+    pub locale_settings: LocaleSettings,
     /// The app embedding NSH answers `nsh/host`'s calls
     /// ([`crate::Command::HostCall`]); without it, they reject at once.
     pub host: bool,
@@ -272,6 +272,10 @@ pub struct Environment {
     /// [`crate::notifications`]); without it, the permission is
     /// `unavailable` and nothing shows.
     pub notifications: bool,
+    /// The platform plays sound ([`crate::Command::Audio`],
+    /// [`crate::audio`]); without it, sounds and players fail at once
+    /// (`unavailable`) unless the core has a [`crate::audio::AudioBackend`].
+    pub audio: bool,
     /// The size of one Cell of a grid surface (a terminal, whose content is
     /// whole character Cells), in points; `None` on every other surface.
     /// With it the core lays out with its terminal algorithm, ratatui's
@@ -306,6 +310,7 @@ impl Default for Environment {
             window: Size::default(),
             safe_area: Edges::default(),
             title_bar: Edges::default(),
+            window_state: None,
             keyboard_height: Points(0.0),
             keyboard_duration: 250.0,
             color_scheme: ColorScheme::Light,
@@ -320,15 +325,14 @@ impl Default for Environment {
             apple_keyboard: false,
             ctrl_for_command: false,
             locale: Locale::EN_US,
-            languages: Languages::EN_US,
-            regional: RegionalPreferences::EN_US,
-            time_zone: TimeZone::UTC,
+            locale_settings: LocaleSettings::EN_US,
             host: false,
             lifecycle: Lifecycle::Active,
             screen_color: false,
             file_requests: false,
             speech: false,
             notifications: false,
+            audio: false,
             cell: None,
             web_input: false,
         }
@@ -339,7 +343,7 @@ impl Default for Environment {
 /// system's (`None`: the system's): its own language and text size, for an
 /// app inside a native app that lets its users switch them. The platforms
 /// write them over what they read from the system ([`Self::apply`]), so the
-/// app's `Intl`, `locale()`, `languages()` (its language first),
+/// app's `Intl`, `locale()`, `localeSettings()`'s languages (its language first),
 /// `fontScale()` and text follow them like a system change.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct HostEnvironment {
@@ -355,7 +359,7 @@ impl HostEnvironment {
     pub fn apply(&self, env: &mut Environment) {
         if let Some(locale) = self.locale {
             env.locale = locale;
-            env.languages = env.languages.preferring(locale);
+            env.locale_settings.languages = env.locale_settings.languages.preferring(locale);
         }
         if let Some(scale) = self.font_scale.filter(|s| s.is_finite() && *s > 0.0) {
             env.font_scale = scale;
@@ -465,8 +469,8 @@ impl std::fmt::Display for Locale {
 }
 
 /// The user's preferred languages, most preferred first, as BCP 47 tags
-/// (`languages()`): never empty, at most [`Languages::CAPACITY`], each
-/// once. Held inline so that the environment stays `Copy`.
+/// (`localeSettings()`'s `languages`): never empty, at most eight, each once. Held inline so
+/// that the environment stays `Copy`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Languages {
     tags: [Locale; Languages::CAPACITY],
@@ -476,15 +480,16 @@ pub struct Languages {
 impl Languages {
     /// How many it keeps: systems list a few (iOS and Android up to the
     /// ones the user added, desktops their UI languages).
-    pub const CAPACITY: usize = 8;
+    const CAPACITY: usize = 8;
 
     /// `en-US` alone, the default when a platform reports none.
-    pub const EN_US: Languages = Languages {
+    pub(crate) const EN_US: Languages = Languages {
         tags: [Locale::EN_US; Languages::CAPACITY],
         len: 1,
     };
 
     /// `locale` alone.
+    #[doc(hidden)]
     pub const fn one(locale: Locale) -> Languages {
         Languages {
             tags: [locale; Languages::CAPACITY],
@@ -494,8 +499,9 @@ impl Languages {
 
     /// The languages of platform identifiers, most preferred first
     /// ([`Locale::parse`]'s forms: `en_US`, `zh-Hans-CN`): ones that name
-    /// no language and repeats are left out, the first
-    /// [`Languages::CAPACITY`] kept. `None` when none is a language.
+    /// no language and repeats are left out, the first eight kept. `None`
+    /// when none is a language.
+    #[doc(hidden)]
     pub fn parse<'a>(identifiers: impl IntoIterator<Item = &'a str>) -> Option<Languages> {
         let mut languages = Languages::EN_US;
         languages.len = 0;
@@ -513,8 +519,8 @@ impl Languages {
 
     /// These with `locale` first (an embedding app's own language): it
     /// moves there if it is listed, else comes before them (the last one
-    /// then left out when they are [`Languages::CAPACITY`]).
-    pub fn preferring(&self, locale: Locale) -> Languages {
+    /// then left out when they are eight).
+    pub(crate) fn preferring(&self, locale: Locale) -> Languages {
         let mut languages = Languages::one(locale);
         for &other in self.as_slice() {
             if usize::from(languages.len) == Self::CAPACITY {
@@ -563,15 +569,18 @@ impl std::fmt::Debug for Languages {
 /// zone where the system has one (Android's `GMT+01:00`). Held inline so
 /// that the environment stays `Copy`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct TimeZone {
     bytes: [u8; TimeZone::CAPACITY],
     len: u8,
 }
 
 impl TimeZone {
-    /// Room for the longest IANA name
-    /// (`America/Argentina/ComodRivadavia`, 32 bytes) and then some.
-    const CAPACITY: usize = 39;
+    /// Room for any name the tz database's rules allow: parts of at most 14
+    /// characters, four of them with their slashes in 59 bytes (its longest
+    /// name, `America/Argentina/ComodRivadavia`, has three in 32), and for
+    /// the systems' offset zones (`GMT+05:30`). 64 bytes with the length.
+    const CAPACITY: usize = 63;
 
     /// `UTC`, the default when a platform reports none (and headless).
     pub const UTC: TimeZone = {
@@ -613,11 +622,65 @@ impl TimeZone {
         })
     }
 
+    /// The zone a process's local times follow on a POSIX system (Linux,
+    /// macOS, the BSDs): the one its `TZ` variable (`tz`, `None` when
+    /// unset) names, as the C library reads it, else the system's
+    /// (`system`, asked only then), else UTC.
+    ///
+    /// `TZ` names a zone of the tz database by its name, with a slash or
+    /// without (`Europe/Berlin`, `Etc/GMT+5`, `GMT`, `EST`) and with or
+    /// without its leading `:`, or by a path into the database
+    /// (`/usr/share/zoneinfo/Asia/Tokyo`); empty, it is UTC. A POSIX rule
+    /// (`JST-9`, `<+08>-8`, `CET-1CEST,M3.5.0,M10.5.0/3`) names no zone,
+    /// nor does a path elsewhere (`:/etc/localtime`, the system's): the
+    /// system's zone is reported for them. The database's few names that
+    /// read as rules too (`EST5EDT`, `GMT0`) are its zones, which mean the
+    /// same.
+    #[doc(hidden)]
+    pub fn posix(tz: Option<&str>, system: impl FnOnce() -> Option<TimeZone>) -> TimeZone {
+        let zone = match tz.map(str::trim) {
+            None => None,
+            // glibc and tzcode alike take an empty `TZ` for UTC.
+            Some("") => Some(Self::UTC),
+            Some(tz) => {
+                let name = tz.strip_prefix(':').unwrap_or(tz);
+                if is_posix_rule(name) && !RULE_NAMED_ZONES.contains(&name) {
+                    None
+                } else {
+                    Self::parse(name)
+                }
+            }
+        };
+        zone.or_else(system).unwrap_or_default()
+    }
+
     /// The name (`Europe/Berlin`).
     pub fn as_str(&self) -> &str {
         // ASCII, as parsed.
         std::str::from_utf8(&self.bytes[..usize::from(self.len)]).unwrap_or("UTC")
     }
+}
+
+/// The tz database's names that read as POSIX rules too (`EST5EDT` is
+/// Eastern time with US rules, `GMT0` UTC under either reading): the C
+/// library loads their zones' files.
+const RULE_NAMED_ZONES: [&str; 7] = [
+    "EST5EDT", "CST6CDT", "MST7MDT", "PST8PDT", "GMT0", "GMT+0", "GMT-0",
+];
+
+/// Whether `TZ`'s value `tz` is a POSIX rule: a zone abbreviation, quoted
+/// (`<+08>`) or of three letters or more (`JST`), then its offset from UTC
+/// (`-9`, `5`, `+5:30`). No zone's name but [`RULE_NAMED_ZONES`] has that
+/// shape: the database's other names without a slash have no offset
+/// (`GMT`, `Japan`) or a shorter word before it (`NZ-CHAT`).
+fn is_posix_rule(tz: &str) -> bool {
+    let letters = tz.bytes().take_while(u8::is_ascii_alphabetic).count();
+    tz.starts_with('<')
+        || letters >= 3
+            && tz
+                .as_bytes()
+                .get(letters)
+                .is_some_and(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-'))
 }
 
 impl Default for TimeZone {
@@ -638,13 +701,22 @@ impl std::fmt::Display for TimeZone {
     }
 }
 
-/// How the user has times, weeks and measurements shown: the regional
-/// preferences the systems keep beside the language (Language & Region on
-/// Apple platforms, Android's regional preferences, Windows' region
-/// settings). Where the user set none, they are the region's
-/// ([`RegionalPreferences::of`]).
+/// The user's locale settings beside the locale (`locale_settings()`; TS
+/// `localeSettings()`): the preferred languages, the time zone and the
+/// regional preferences the systems keep beside the language (Language &
+/// Region on Apple platforms, Android's regional preferences, Windows'
+/// region settings). They change together, as the user changes the
+/// system's settings or travels. Where the user set no regional preference,
+/// it is the region's. The names are `Intl`'s and Foundation's, so they
+/// pass into `Intl`'s options as they are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RegionalPreferences {
+#[non_exhaustive]
+pub struct LocaleSettings {
+    /// The preferred languages, most preferred first (the system's list:
+    /// the language apps show their text in, then its fallbacks).
+    pub languages: Languages,
+    /// The device's time zone, as the system names it (`Europe/Berlin`).
+    pub time_zone: TimeZone,
     /// 12- or 24-hour time.
     pub hour_cycle: HourCycle,
     /// The day weeks start on: a calendar's first column.
@@ -655,32 +727,41 @@ pub struct RegionalPreferences {
     pub temperature_unit: TemperatureUnit,
 }
 
-impl RegionalPreferences {
-    /// `en-US`'s (12-hour time, weeks from Sunday, US units, Fahrenheit),
-    /// the default when a platform reports none.
-    pub const EN_US: RegionalPreferences = RegionalPreferences {
+impl LocaleSettings {
+    /// `en-US`'s (`en-US` alone, 12-hour time, weeks from Sunday, US units,
+    /// Fahrenheit) in UTC, the default when a platform reports none.
+    pub(crate) const EN_US: LocaleSettings = LocaleSettings {
+        languages: Languages::EN_US,
+        time_zone: TimeZone::UTC,
         hour_cycle: HourCycle::H12,
         first_day_of_week: Weekday::Sunday,
         measurement_system: MeasurementSystem::Us,
         temperature_unit: TemperatureUnit::Fahrenheit,
     };
 
-    /// The preferences of `locale`'s region, as CLDR (48) gives them. A
-    /// locale without a region has the world's: 24-hour time, weeks from
-    /// Monday, metric units and Celsius.
-    pub fn of(locale: Locale) -> RegionalPreferences {
-        Self::of_region(locale.language(), locale.region().unwrap_or("001"))
+    /// `locale`'s: it alone as the languages, UTC, and its region's
+    /// preferences as CLDR (48) gives them. A locale without a region has
+    /// the world's: 24-hour time, weeks from Monday, metric units and
+    /// Celsius.
+    #[doc(hidden)]
+    pub fn of(locale: Locale) -> LocaleSettings {
+        LocaleSettings {
+            languages: Languages::one(locale),
+            ..Self::of_region(locale.language(), locale.region().unwrap_or("001"))
+        }
     }
 
-    /// The preferences a platform locale identifier names: its region's
-    /// ([`Self::of`]; the `rg` keyword's region in place of its own), with
-    /// what its Unicode extension keywords set: `hc` (the hour cycle), `fw`
-    /// (the first day of the week), `ms` (the measurement system) and `mu`
-    /// (the temperature unit), written as BCP 47 does
-    /// (`en-US-u-fw-mon-mu-celsius`, Android's regional preferences) or as
-    /// ICU does (`en_US@hours=h23;fw=mon;rg=gbzzzz`). Values it does not
-    /// know are left out.
-    pub fn parse(identifier: &str) -> RegionalPreferences {
+    /// The settings a platform locale identifier names: its locale alone
+    /// as the languages (`en-US` where it names none), UTC, and its
+    /// region's preferences ([`Self::of`]; the `rg` keyword's region in
+    /// place of its own), with what its Unicode extension keywords set:
+    /// `hc` (the hour cycle), `fw` (the first day of the week), `ms` (the
+    /// measurement system) and `mu` (the temperature unit), written as BCP
+    /// 47 does (`en-US-u-fw-mon-mu-celsius`, Android's regional
+    /// preferences) or as ICU does (`en_US@hours=h23;fw=mon;rg=gbzzzz`).
+    /// Values it does not know are left out.
+    #[doc(hidden)]
+    pub fn parse(identifier: &str) -> LocaleSettings {
         let identifier = identifier.trim();
         let (tag, icu) = identifier.split_once('@').unwrap_or((identifier, ""));
         let mut keywords = Keywords::default();
@@ -711,20 +792,22 @@ impl RegionalPreferences {
             None => locale.as_ref().and_then(Locale::region).unwrap_or("001"),
         };
         let own = Self::of_region(language, region);
-        RegionalPreferences {
+        LocaleSettings {
+            languages: Languages::one(locale.unwrap_or(Locale::EN_US)),
             hour_cycle: keywords.hour_cycle.unwrap_or(own.hour_cycle),
             first_day_of_week: keywords.first_day_of_week.unwrap_or(own.first_day_of_week),
             measurement_system: keywords
                 .measurement_system
                 .unwrap_or(own.measurement_system),
             temperature_unit: keywords.temperature_unit.unwrap_or(own.temperature_unit),
+            ..own
         }
     }
 
     /// CLDR's preferences of `region` (`001`: the world's), for `language`.
-    fn of_region(language: &str, region: &str) -> RegionalPreferences {
+    fn of_region(language: &str, region: &str) -> LocaleSettings {
         let listed = |regions: &[&str]| regions.binary_search(&region).is_ok();
-        RegionalPreferences {
+        LocaleSettings {
             hour_cycle: match (language, region) {
                 // Where a language's differs from its region's.
                 ("fr", "CA") | ("ku", "SY") => HourCycle::H23,
@@ -750,11 +833,12 @@ impl RegionalPreferences {
                 "BS" | "BZ" | "KY" | "PR" | "PW" | "US" => TemperatureUnit::Fahrenheit,
                 _ => TemperatureUnit::Celsius,
             },
+            ..Self::default()
         }
     }
 }
 
-impl Default for RegionalPreferences {
+impl Default for LocaleSettings {
     fn default() -> Self {
         Self::EN_US
     }
@@ -883,6 +967,7 @@ impl HourCycle {
     /// Unicode's patterns (Apple's and ICU's date formats, Windows' time
     /// formats): `h` (`h:mm a` is `h12`), `H` (`HH:mm` is `h23`), `K` and
     /// `k`. Quoted text (`HH 'Uhr'`) is not read; `None` without an hour.
+    #[doc(hidden)]
     pub fn of_pattern(pattern: &str) -> Option<HourCycle> {
         let mut quoted = false;
         pattern.chars().find_map(|c| match c {
@@ -1166,8 +1251,8 @@ pub enum FetchOp {
 #[cfg(test)]
 mod tests {
     use super::{
-        Environment, HostEnvironment, HourCycle, Idiom, Languages, Locale, MeasurementSystem, Os,
-        RegionalPreferences, TemperatureUnit, TimeZone, Weekday,
+        Environment, HostEnvironment, HourCycle, Idiom, Languages, Locale, LocaleSettings,
+        MeasurementSystem, Os, TemperatureUnit, TimeZone, Weekday,
     };
 
     #[test]
@@ -1263,16 +1348,17 @@ mod tests {
         );
         assert_eq!(tags(Languages::default()), ["en-US"]);
         // An embedding app's language comes first.
-        let mut env = Environment {
-            languages: system,
-            ..Environment::default()
-        };
+        let mut env = Environment::default();
+        env.locale_settings.languages = system;
         HostEnvironment {
             locale: Some(ja),
             font_scale: None,
         }
         .apply(&mut env);
-        assert_eq!(tags(env.languages), ["ja-JP", "de-DE", "en-US", "fr"]);
+        assert_eq!(
+            tags(env.locale_settings.languages),
+            ["ja-JP", "de-DE", "en-US", "fr"]
+        );
     }
 
     #[test]
@@ -1294,18 +1380,38 @@ mod tests {
 
     #[test]
     fn regional_preferences_are_the_regions_unless_the_locale_sets_others() {
-        let of = |tag: &str| RegionalPreferences::of(Locale::parse(tag).unwrap());
-        let world = RegionalPreferences {
-            hour_cycle: HourCycle::H23,
-            first_day_of_week: Weekday::Monday,
-            measurement_system: MeasurementSystem::Metric,
-            temperature_unit: TemperatureUnit::Celsius,
+        // The regional part of the settings: what the locale decides.
+        type Regional = (HourCycle, Weekday, MeasurementSystem, TemperatureUnit);
+        let regional = |s: LocaleSettings| -> Regional {
+            (
+                s.hour_cycle,
+                s.first_day_of_week,
+                s.measurement_system,
+                s.temperature_unit,
+            )
         };
-        assert_eq!(of("en-US"), RegionalPreferences::EN_US);
-        assert_eq!(RegionalPreferences::default(), RegionalPreferences::EN_US);
-        assert_eq!(of("de-DE"), world);
+        let of = |tag: &str| LocaleSettings::of(Locale::parse(tag).unwrap());
+        let us = regional(LocaleSettings::default());
+        let world = (
+            HourCycle::H23,
+            Weekday::Monday,
+            MeasurementSystem::Metric,
+            TemperatureUnit::Celsius,
+        );
+        assert_eq!(regional(of("en-US")), us);
+        assert_eq!(
+            LocaleSettings::default().languages.as_slice(),
+            &[Locale::EN_US]
+        );
+        assert_eq!(LocaleSettings::default().time_zone, TimeZone::UTC);
+        // The locale alone is the languages.
+        assert_eq!(
+            of("de-DE").languages.as_slice(),
+            &[Locale::parse("de-DE").unwrap()]
+        );
+        assert_eq!(regional(of("de-DE")), world);
         // Without a region: the world's.
-        assert_eq!(of("ja"), world);
+        assert_eq!(regional(of("ja")), world);
         assert_eq!(of("en-CA").hour_cycle, HourCycle::H12);
         // Where the language's differs from the region's.
         assert_eq!(of("fr-CA").hour_cycle, HourCycle::H23);
@@ -1320,39 +1426,47 @@ mod tests {
         assert_eq!(of("en-LR").temperature_unit, TemperatureUnit::Celsius);
         assert_eq!(of("es-PR").temperature_unit, TemperatureUnit::Fahrenheit);
 
-        let parse = RegionalPreferences::parse;
+        let parse = |identifier: &str| regional(LocaleSettings::parse(identifier));
         assert_eq!(
             parse("en-US-u-fw-mon-mu-celsius"),
-            RegionalPreferences {
-                first_day_of_week: Weekday::Monday,
-                temperature_unit: TemperatureUnit::Celsius,
-                ..RegionalPreferences::EN_US
-            }
+            (
+                HourCycle::H12,
+                Weekday::Monday,
+                MeasurementSystem::Us,
+                TemperatureUnit::Celsius
+            )
         );
         assert_eq!(
             parse("en_US@hours=h23;measure=metric"),
-            RegionalPreferences {
-                hour_cycle: HourCycle::H23,
-                measurement_system: MeasurementSystem::Metric,
-                ..RegionalPreferences::EN_US
-            }
+            (
+                HourCycle::H23,
+                Weekday::Sunday,
+                MeasurementSystem::Metric,
+                TemperatureUnit::Fahrenheit
+            )
         );
-        assert_eq!(parse("en_US@rg=gbzzzz"), gb);
+        assert_eq!(parse("en_US@rg=gbzzzz"), regional(gb));
         assert_eq!(
             parse("ar-u-ca-islamic-umalqura-hc-h11-rg-uszzzz"),
-            RegionalPreferences {
-                hour_cycle: HourCycle::H11,
-                ..RegionalPreferences::EN_US
-            }
+            (HourCycle::H11, us.1, us.2, us.3)
         );
         assert_eq!(
-            parse("en-GB-u-ms-ussystem-mu-fahrenhe").measurement_system,
+            LocaleSettings::parse("en-GB-u-ms-ussystem-mu-fahrenhe").measurement_system,
             MeasurementSystem::Us
         );
         // What it does not know is left out.
         assert_eq!(parse("de_DE.UTF-8@fw=xyz;hours=h99;rg=1"), world);
-        assert_eq!(parse("en-US-x-hc-h23"), RegionalPreferences::EN_US);
+        assert_eq!(parse("en-US-x-hc-h23"), us);
         assert_eq!(parse("C"), world);
+        // Its locale is the languages, `en-US` where it names none.
+        assert_eq!(
+            LocaleSettings::parse("de_DE.UTF-8").languages.as_slice(),
+            &[Locale::parse("de-DE").unwrap()]
+        );
+        assert_eq!(
+            LocaleSettings::parse("C").languages.as_slice(),
+            &[Locale::EN_US]
+        );
         assert_eq!(Weekday::from_number(7), Some(Weekday::Sunday));
         assert_eq!(Weekday::from_number(0), None);
         assert_eq!(Weekday::Monday.number(), 1);
@@ -1385,8 +1499,59 @@ mod tests {
         assert_eq!(zone("Europe//Berlin"), None);
         assert_eq!(zone("../etc/passwd"), None);
         assert_eq!(zone("Central European Standard Time"), None);
-        assert_eq!(zone(&"A".repeat(40)), None);
+        let parts = ["Abcdefghijklmn"; 4].join("/");
+        assert_eq!(zone(&parts).as_deref(), Some(parts.as_str()));
+        assert_eq!(zone(&"A".repeat(64)), None);
         assert_eq!(TimeZone::default().as_str(), "UTC");
-        assert_eq!(Environment::default().time_zone, TimeZone::UTC);
+        assert_eq!(
+            Environment::default().locale_settings.time_zone,
+            TimeZone::UTC
+        );
+    }
+
+    #[test]
+    fn posix_time_zones_follow_the_zone_tz_names() {
+        // A system zone other than UTC, so that falling back on it shows.
+        let singapore = || TimeZone::parse("Asia/Singapore");
+        let zone = |tz: Option<&str>| TimeZone::posix(tz, singapore).as_str().to_owned();
+        // `TZ=GMT` is the process's zone, eight hours from the system's.
+        assert_eq!(zone(Some("GMT")), "GMT");
+        assert_eq!(
+            TimeZone::posix(Some("GMT"), || unreachable!("TZ names the zone")).as_str(),
+            "GMT"
+        );
+        // The tz database's names, with a slash or without, and with `:`.
+        for name in [
+            "UTC",
+            "EST",
+            "Japan",
+            "NZ-CHAT",
+            "Etc/GMT+5",
+            "Europe/Berlin",
+            "EST5EDT",
+            "GMT0",
+            "GMT-0",
+        ] {
+            assert_eq!(zone(Some(name)), name);
+            assert_eq!(zone(Some(&format!(":{name}"))), name);
+        }
+        assert_eq!(zone(Some(":/usr/share/zoneinfo/Asia/Tokyo")), "Asia/Tokyo");
+        // An empty `TZ` is UTC.
+        assert_eq!(zone(Some("")), "UTC");
+        // POSIX rules and other files name no zone: the system's stands.
+        for tz in [
+            "JST-9",
+            "EST5",
+            "CET-1CEST",
+            "<+08>-8",
+            "CET-1CEST,M3.5.0,M10.5.0/3",
+            "GMT+01:00",
+            ":/etc/localtime",
+            ":",
+        ] {
+            assert_eq!(zone(Some(tz)), "Asia/Singapore", "TZ={tz}");
+        }
+        assert_eq!(zone(None), "Asia/Singapore");
+        assert_eq!(TimeZone::posix(None, || None), TimeZone::UTC);
     }
 }

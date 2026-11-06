@@ -19,15 +19,15 @@
 //! - the locale (`Intl`'s default): the POSIX locale of formats
 //!   (`LC_ALL`, `LC_TIME`, `LC_NUMERIC`, `LC_MESSAGES`, `LANG`, the first
 //!   set), else GLib's language names (`LANGUAGE` too), read once;
-//! - the preferred languages (`languages()`): GLib's language names, most
-//!   preferred first (`LANGUAGE`'s list, else `LC_ALL`, `LC_MESSAGES` and
-//!   `LANG`, each with its fallbacks: `de_DE.UTF-8` gives `de-DE`, then
-//!   `de`), read once, as the locale;
-//! - the regional preferences (`hourCycle()` and the like): the regions of
-//!   the POSIX locales (`LC_TIME`'s for times and weeks, `LC_MEASUREMENT`'s
-//!   for units, as POSIX picks them), read once, as the locale, with
-//!   GNOME's time format over the hour cycle (`org.gnome.desktop.interface`'s
-//!   `clock-format`, where the schema is installed), live;
+//! - the locale settings (`localeSettings()`): the preferred languages,
+//!   GLib's language names, most preferred first (`LANGUAGE`'s list, else
+//!   `LC_ALL`, `LC_MESSAGES` and `LANG`, each with its fallbacks:
+//!   `de_DE.UTF-8` gives `de-DE`, then `de`), read once, as the locale; the
+//!   regional preferences, the regions of the POSIX locales (`LC_TIME`'s
+//!   for times and weeks, `LC_MEASUREMENT`'s for units, as POSIX picks
+//!   them), read once, as the locale, with GNOME's time format over the
+//!   hour cycle (`org.gnome.desktop.interface`'s `clock-format`, where the
+//!   schema is installed), live; the time zone, below;
 //! - the font scale: `gtk-xft-dpi` over 96 dpi;
 //! - reduce motion: `gtk-enable-animations` off;
 //! - the pixel ratio: the root's surface scale (fractional scales too);
@@ -41,11 +41,12 @@
 //!   unmapped, the window minimized, or suspended: on another workspace or
 //!   covered, where the compositor says so), active while one of the
 //!   app's windows has the focus, inactive otherwise;
-//! - the time zone (`timeZone()`): the process's own (`TZ`, when it names
-//!   a zone: its local times follow it), else the system's as systemd's
-//!   `timedated` keeps it (`org.freedesktop.timedate1`'s `Timezone` on the
-//!   system bus, live: a change of the setting comes as a property
-//!   change), else the zone `/etc/localtime` links to, else
+//! - the time zone (`localeSettings()`'s): the process's own (the zone `TZ` names,
+//!   `GMT` or `Europe/Berlin`, as the C library reads it:
+//!   `TimeZone::posix`; its local times follow it), else the system's as
+//!   systemd's `timedated` keeps it (`org.freedesktop.timedate1`'s
+//!   `Timezone` on the system bus, live: a change of the setting comes as
+//!   a property change), else the zone `/etc/localtime` links to, else
 //!   `/etc/timezone`'s.
 //!
 //! Safe area and keyboard height are zero: desktop windows have neither.
@@ -77,7 +78,7 @@ use nsh_core::{
     platform::clipboard,
 };
 use nsh_engine::{
-    ColorScheme, Edges, Environment, HourCycle, Languages, Lifecycle, Locale, RegionalPreferences,
+    ColorScheme, Edges, Environment, HourCycle, Languages, Lifecycle, Locale, LocaleSettings,
     TimeZone,
 };
 
@@ -196,7 +197,7 @@ thread_local! {
             .collect()
     });
     /// The POSIX locales' regional preferences.
-    static REGIONAL: RegionalPreferences = posix_regional(
+    static REGIONAL: LocaleSettings = posix_regional(
         |name| std::env::var(name).ok(),
         LOCALE.with(|l| *l),
     );
@@ -383,8 +384,7 @@ fn update(surface: &Surface, appearance: Appearance) {
     };
     env.color_scheme = surface.appearance.get().resolve(system);
     env.locale = LOCALE.with(|l| *l);
-    env.languages = LANGUAGES.with(|l| *l);
-    env.regional = regional_preferences();
+    env.locale_settings = locale_settings();
     env.font_scale = appearance.font_scale;
     env.reduce_motion = appearance.reduce_motion;
     env.rtl = appearance.rtl;
@@ -394,7 +394,6 @@ fn update(surface: &Surface, appearance: Appearance) {
     env.safe_area = Edges::default();
     env.keyboard_height = px(0.0);
     env.lifecycle = lifecycle(surface);
-    env.time_zone = time_zone();
     surface.set_environment(env);
     // Images decoded for the old scale (a Wayland fractional scale arrives
     // after the first frame) decode again at the new one.
@@ -482,29 +481,33 @@ fn user_locale(
 
 /// The regional preferences of the POSIX locales: `LC_TIME`'s region's
 /// times and weeks, `LC_MEASUREMENT`'s units (each the first set of
-/// `LC_ALL`, its own and `LANG`), `locale`'s where none is set.
-fn posix_regional(var: impl Fn(&str) -> Option<String>, locale: Locale) -> RegionalPreferences {
+/// `LC_ALL`, its own and `LANG`), `locale`'s where none is set. Its
+/// languages and time zone are [`locale_settings`]'s to set.
+fn posix_regional(var: impl Fn(&str) -> Option<String>, locale: Locale) -> LocaleSettings {
     let of = |category: &str| {
         ["LC_ALL", category, "LANG"]
             .iter()
             .find_map(|v| var(v).filter(|s| !s.is_empty()))
             .map_or_else(
-                || RegionalPreferences::of(locale),
-                |name| RegionalPreferences::parse(&name),
+                || LocaleSettings::of(locale),
+                |name| LocaleSettings::parse(&name),
             )
     };
     let units = of("LC_MEASUREMENT");
-    RegionalPreferences {
-        measurement_system: units.measurement_system,
-        temperature_unit: units.temperature_unit,
-        ..of("LC_TIME")
-    }
+    let mut regional = of("LC_TIME");
+    regional.measurement_system = units.measurement_system;
+    regional.temperature_unit = units.temperature_unit;
+    regional
 }
 
-/// The user's regional preferences now: the POSIX locales', with GNOME's
-/// time format (`24h`, `12h`) over the hour cycle where they disagree.
-fn regional_preferences() -> RegionalPreferences {
+/// The user's locale settings now (`localeSettings()`): the preferred
+/// languages, the time zone, and the POSIX locales' regional preferences,
+/// with GNOME's time format (`24h`, `12h`) over the hour cycle where they
+/// disagree.
+fn locale_settings() -> LocaleSettings {
     let mut preferences = REGIONAL.with(|r| *r);
+    preferences.languages = LANGUAGES.with(|l| *l);
+    preferences.time_zone = time_zone();
     let format = SYSTEM.with(|s| {
         let s = s.borrow();
         s.interface.as_ref().map(|i| i.string("clock-format"))
@@ -595,29 +598,23 @@ fn watch_portal() {
     );
 }
 
-/// The time zone (`timeZone()`): the process's own (`TZ`), else the
-/// system's.
+/// The time zone (`localeSettings()`'s): the process's own (the zone `TZ` names),
+/// else the system's.
 fn time_zone() -> TimeZone {
-    // As `Intl` takes `TZ`: a zone's name, not a POSIX rule (`CET-1CEST`).
-    let own = std::env::var("TZ")
-        .ok()
-        .filter(|tz| {
-            let tz = tz.trim_start_matches(':');
-            tz.contains('/') || tz == "UTC"
-        })
-        .and_then(|tz| TimeZone::parse(&tz));
-    own.or_else(|| SYSTEM.with(|s| s.borrow().time_zone))
-        .or_else(|| {
-            std::fs::read_link("/etc/localtime")
-                .ok()
-                .and_then(|target| TimeZone::parse(&target.to_string_lossy()))
-        })
-        .or_else(|| {
-            std::fs::read_to_string("/etc/timezone")
-                .ok()
-                .and_then(|name| TimeZone::parse(name.trim()))
-        })
-        .unwrap_or_default()
+    TimeZone::posix(std::env::var("TZ").ok().as_deref(), || {
+        SYSTEM
+            .with(|s| s.borrow().time_zone)
+            .or_else(|| {
+                std::fs::read_link("/etc/localtime")
+                    .ok()
+                    .and_then(|target| TimeZone::parse(&target.to_string_lossy()))
+            })
+            .or_else(|| {
+                std::fs::read_to_string("/etc/timezone")
+                    .ok()
+                    .and_then(|name| TimeZone::parse(name.trim()))
+            })
+    })
 }
 
 /// Follows the system's time zone as `timedated` keeps it: a change of the
@@ -740,6 +737,10 @@ pub(crate) fn command(surface: &Rc<Surface>, _id: NodeId, command: &Command) {
         Command::FileRequest { id, request } => {
             crate::file_requests::request(surface, *id, request)
         }
+        Command::Audio(command) => surface.control(|c| {
+            let base = surface.asset_base.borrow().clone();
+            crate::audio::command(&surface.audio, c, command, base.as_ref())
+        }),
         Command::Notification(command) => surface.control(|c| {
             let root = surface.root.upcast_ref::<gtk::Widget>();
             crate::notifications::command(c, root, command);
@@ -1651,10 +1652,10 @@ mod tests {
         );
         assert_eq!(
             posix_regional(vars(&[("LC_ALL", "en_US"), ("LC_TIME", "de_DE")]), us),
-            RegionalPreferences::EN_US
+            LocaleSettings::default()
         );
         // Nothing set: the locale's.
-        assert_eq!(posix_regional(vars(&[]), us), RegionalPreferences::EN_US);
+        assert_eq!(posix_regional(vars(&[]), us), LocaleSettings::default());
     }
 
     #[test]

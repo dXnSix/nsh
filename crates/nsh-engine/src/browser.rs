@@ -205,6 +205,8 @@ impl Script {
         sets: &[Registry],
         posts: Posts,
         environment: &Environment,
+        // A browser page has no displays of its own (`displays()` is empty).
+        _displays: &[nsh_core::desktop::Display],
         location: &nsh_core::location::Location,
         tokens: Arc<Tokens>,
         theme: ThemeTokens,
@@ -318,6 +320,8 @@ impl Script {
     pub(crate) fn set_environment(&self, value: &Environment) {
         self.0.set_environment(value);
     }
+    /// A browser page has no displays of its own.
+    pub(crate) fn set_displays(&self, _: &[nsh_core::desktop::Display]) {}
     pub(crate) fn set_location(&self, value: &nsh_core::location::Location) {
         self.0.set_location(value);
     }

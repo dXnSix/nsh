@@ -138,6 +138,8 @@ pub(crate) struct RootViewIvars {
     host_tokens: RefCell<Option<nsh_engine::Tokens>>,
     /// Keyboard notification registrations.
     observers: RefCell<Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>>,
+    /// Links that came before the engine started ([`Surface::url_scheme`]).
+    url_schemes: RefCell<Vec<String>>,
     #[cfg(feature = "dev")]
     test_model: TestModel,
 }
@@ -308,6 +310,7 @@ impl RootView {
             host: Cell::default(),
             host_tokens: RefCell::new(None),
             observers: RefCell::new(Vec::new()),
+            url_schemes: RefCell::new(Vec::new()),
             #[cfg(feature = "dev")]
             test_model: TestModel::default(),
         });
@@ -373,21 +376,21 @@ impl RootView {
                 _ => Idiom::Phone,
             },
             locale: current_locale(),
-            languages: preferred_languages(),
-            regional: regional_preferences(),
-            time_zone: time_zone(),
+            locale_settings: locale_settings(),
+            lifecycle: self.ivars().lifecycle.get(),
             // Only read for the web: iOS keys are always Apple's.
             apple_keyboard: true,
             // No host answers `nsh/host` here: an embedding app talks to its
             // apps through its own UI sets (`nsh/native`).
             host: false,
-            lifecycle: self.ivars().lifecycle.get(),
             // UIKit has no screen color sampler.
             screen_color: false,
             // The Speech framework fed by the microphone.
             speech: true,
             // The notification center.
             notifications: true,
+            // AVAudioEngine and AVPlayer.
+            audio: true,
             // No file dialogs, file manager or trash (Catalyst included):
             // the default, so the core answers those requests.
             ..Environment::default()
@@ -757,6 +760,7 @@ impl RootView {
             host: self.ivars().options.host.clone(),
             picker: None,
             speech: None,
+            audio: None,
         };
         // A test session's app: the test's storage, network and trace.
         #[cfg(feature = "dev")]
@@ -814,6 +818,10 @@ impl RootView {
             installed.measure();
         }
         *mounter.get(mtm).borrow_mut() = Some(installed);
+        let links = std::mem::take(&mut *self.ivars().url_schemes.borrow_mut());
+        for url in links {
+            send_url_scheme(&engine.control(), url);
+        }
         *self.ivars().running.borrow_mut() = Some(Running { engine, mounter });
         self.ivars().environment.set(Some(self.environment()));
     }
@@ -1028,6 +1036,16 @@ impl Surface {
         }
     }
 
+    /// Hands `url`, a link the system opened the app with, to the app's
+    /// engine, whose core keeps it until the app listens (`UrlScheme`);
+    /// kept until the engine starts.
+    pub(crate) fn url_scheme(&self, url: String) {
+        match &*self.view.ivars().running.borrow() {
+            Some(running) => send_url_scheme(&running.engine.control(), url),
+            None => self.view.ivars().url_schemes.borrow_mut().push(url),
+        }
+    }
+
     /// Replaces the running app with `app` (state is reset).
     pub fn reload(&self, app: impl Into<App>) {
         let app = app.into();
@@ -1042,6 +1060,18 @@ impl Surface {
             *self.view.ivars().pending.borrow_mut() = Some(app);
         }
     }
+}
+
+/// Reports `url` as a link the system opened the app with.
+fn send_url_scheme(control: &nsh_engine::EngineControl, url: String) {
+    control.dispatch_event(
+        nsh_core::ROOT_ID,
+        nsh_core::EventKind::UrlScheme,
+        nsh_core::EventPayload::Map(vec![(
+            nsh_core::url_scheme::URL,
+            nsh_core::PayloadValue::Str(url),
+        )]),
+    );
 }
 
 impl Drop for Surface {
@@ -1067,7 +1097,7 @@ fn preferred_language_rtl() -> bool {
         })
 }
 
-/// The user's preferred languages (`languages()`), most preferred first:
+/// The user's preferred languages, most preferred first:
 /// `NSLocale.preferredLanguages`, Settings' list (the app's own language
 /// first when the user chose one for it). iOS restarts apps when the user
 /// changes the list, so it is read as the environment is published.
@@ -1080,20 +1110,21 @@ fn preferred_languages() -> nsh_engine::Languages {
         .unwrap_or_else(|| nsh_engine::Languages::one(current_locale()))
 }
 
-/// The user's regional preferences (`hourCycle()` and the like):
-/// Settings' time format (the hours of `NSDateFormatter`'s format for the
-/// `j` template, which 24-hour time changes), `NSCalendar`'s first weekday,
-/// `NSLocale`'s measurement system and the `AppleTemperatureUnit` default,
-/// over the region's.
-fn regional_preferences() -> nsh_engine::RegionalPreferences {
+/// The user's locale settings (`localeSettings()`): the preferred
+/// languages, the time zone, and Settings' time format (the hours of
+/// `NSDateFormatter`'s format for the `j` template, which 24-hour time
+/// changes), `NSCalendar`'s first weekday, `NSLocale`'s measurement system
+/// and the `AppleTemperatureUnit` default, over the region's.
+fn locale_settings() -> nsh_engine::LocaleSettings {
     use nsh_engine::{HourCycle, MeasurementSystem, TemperatureUnit, Weekday};
     use objc2_foundation::{
         NSCalendar, NSDateFormatter, NSLocale, NSLocaleMeasurementSystem, NSString, NSUserDefaults,
         ns_string,
     };
     let locale = NSLocale::currentLocale();
-    let mut preferences =
-        nsh_engine::RegionalPreferences::parse(&locale.localeIdentifier().to_string());
+    let mut preferences = nsh_engine::LocaleSettings::parse(&locale.localeIdentifier().to_string());
+    preferences.languages = preferred_languages();
+    preferences.time_zone = time_zone();
     // The hours of the user's time format, which 24-hour time changes.
     let hours =
         NSDateFormatter::dateFormatFromTemplate_options_locale(ns_string!("j"), 0, Some(&locale));
@@ -1142,14 +1173,14 @@ fn current_locale() -> nsh_engine::Locale {
     nsh_engine::Locale::parse(&identifier).unwrap_or_default()
 }
 
-/// The app's state as UIApplication reports it now, before its
-/// notifications say more.
-/// The system's time zone (`timeZone()`): its IANA name.
+/// The system's time zone: its IANA name.
 fn time_zone() -> nsh_engine::TimeZone {
     nsh_engine::TimeZone::parse(&NSTimeZone::systemTimeZone().name().to_string())
         .unwrap_or_default()
 }
 
+/// The app's state as UIApplication reports it now, before its
+/// notifications say more.
 fn lifecycle(mtm: MainThreadMarker) -> Lifecycle {
     match UIApplication::sharedApplication(mtm).applicationState() {
         UIApplicationState::Active => Lifecycle::Active,
