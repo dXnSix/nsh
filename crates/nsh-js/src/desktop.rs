@@ -12,13 +12,16 @@ use std::{
 };
 
 use nsh_core::{
-    Command, EventKind, Op, ROOT_ID,
-    desktop::{DesktopCommand, MenuAction, MenuItem, MenuRole, Shortcut},
-    geometry::{Points, point},
+    Command, EventKind, ImageSource, NodeId, Op, ROOT_ID, Tag,
+    desktop::{
+        DesktopCommand, MenuAction, MenuItem, MenuRole, Shortcut, WindowFrameStyle, WindowLevel,
+        WindowOptions,
+    },
+    geometry::{Points, Size, point},
     keymap::When,
     platform::Os,
 };
-use rquickjs::qjs;
+use rquickjs::{Ctx, Value, qjs};
 
 use crate::{
     dom,
@@ -46,6 +49,23 @@ pub(crate) struct Menus {
     /// The root's `onMenu` handler is set.
     listening: Cell<bool>,
     next: Cell<u32>,
+    /// The windows `Window.open` opened, oldest first.
+    windows: RefCell<Vec<AppWindow>>,
+}
+
+/// A window of the app's own (`Window.open`): a dialog root the platform
+/// shows in a window instead of over the main one.
+struct AppWindow {
+    /// The app's id for it (`Window.open`'s `id`).
+    key: String,
+    /// The dialog root's node id.
+    id: NodeId,
+    /// The dialog root (owned).
+    node: JsValue,
+    /// The reactive root its content renders in.
+    owner: u32,
+    /// The handle `Window.open` returns (owned).
+    handle: JsValue,
 }
 
 impl Default for Menus {
@@ -56,6 +76,7 @@ impl Default for Menus {
             closed: Cell::new(UNDEFINED),
             listening: Cell::new(false),
             next: Cell::new(0),
+            windows: RefCell::default(),
         }
     }
 }
@@ -86,6 +107,13 @@ impl Menus {
         {
             // SAFETY: owned values; no JS runs from here on.
             unsafe { qjs::JS_FreeValue(raw, f) };
+        }
+        for w in self.windows.get_mut().drain(..) {
+            // SAFETY: owned values; no JS runs from here on.
+            unsafe {
+                qjs::JS_FreeValue(raw, w.node);
+                qjs::JS_FreeValue(raw, w.handle);
+            }
         }
     }
 }
@@ -163,6 +191,36 @@ fn flag(cx: *mut JsContext, object: JsValue, key: &CStr) -> Option<bool> {
     b
 }
 
+/// The source of item `v`'s `icon`, as `<Image>`'s `src` takes it (a `blob:`
+/// URL's bytes, in this VM, go with it); `None` when it has none. Anything
+/// else throws, as a menu's other wrong values do: a failed load only
+/// warns, on the platform.
+fn icon(cx: *mut JsContext, v: JsValue) -> Result<Option<ImageSource>, String> {
+    let icon = get(cx, v, c"icon");
+    if nullish(icon) {
+        return Ok(None);
+    }
+    // SAFETY: a context reference for the decoder, which reads a live
+    // value it owns (its reference given to `Value`).
+    let value =
+        unsafe { Value::from_raw(Ctx::from_raw(std::ptr::NonNull::new_unchecked(cx)), icon) };
+    let empty = value.as_string().is_some_and(|s| {
+        // A string that cannot be read is no empty one.
+        s.to_string().is_ok_and(|s| s.is_empty())
+    });
+    let Some(mut source) = crate::protocol::image_source(value) else {
+        return match empty {
+            true => Ok(None),
+            false => Err("an item's `icon` is a URL or an imported image".into()),
+        };
+    };
+    if let Some((uri, data)) = crate::web::blob::resolve_image_url(cx, &source.uri) {
+        source.uri = uri;
+        source.data = Some(data);
+    }
+    Ok(Some(source.inline()))
+}
+
 /// Decodes menus, keeping their functions.
 struct Decoder {
     cx: *mut JsContext,
@@ -212,6 +270,7 @@ impl Decoder {
         }
         let label = string(cx, v, c"label");
         let enabled = !flag(cx, v, c"disabled").unwrap_or(false);
+        let icon = icon(cx, v)?;
         let submenu = get(cx, v, c"submenu");
         if !nullish(submenu) {
             let items = self.items(submenu);
@@ -220,6 +279,7 @@ impl Decoder {
                 label: label.ok_or("a submenu needs a label")?,
                 enabled,
                 items: items?,
+                icon,
             }));
         }
         let role = match string(cx, v, c"role") {
@@ -265,6 +325,7 @@ impl Decoder {
             checked: flag(cx, v, c"checked"),
             role,
             when,
+            icon,
         })))
     }
 
@@ -469,6 +530,263 @@ fn menu(cx: *mut JsContext) -> JsValue {
     }
 }
 
+// --- Windows ---------------------------------------------------------------------------
+
+/// The platforms that show windows of the app's own.
+fn opens_windows(os: Os) -> bool {
+    matches!(os, Os::Linux)
+}
+
+/// Number property `key`, if it is a finite number.
+fn number(cx: *mut JsContext, object: JsValue, key: &CStr) -> Option<f32> {
+    let v = get(cx, object, key);
+    // SAFETY: an inline tag check, then a conversion of a number.
+    let n = unsafe { qjs::JS_IsNumber(v) }.then(|| {
+        let mut n = 0f64;
+        unsafe { qjs::JS_ToFloat64(cx, &mut n, v) };
+        n as f32
+    });
+    free(cx, v);
+    n.filter(|n| n.is_finite())
+}
+
+/// `Window.open`'s options (`id` aside).
+fn window_options(cx: *mut JsContext, o: JsValue) -> Result<WindowOptions, String> {
+    let mut options = WindowOptions::default();
+    options.title = string(cx, o, c"title");
+    let size = get(cx, o, c"size");
+    if is_object(size) {
+        let (w, h) = (number(cx, size, c"width"), number(cx, size, c"height"));
+        free(cx, size);
+        match (w, h) {
+            (Some(w), Some(h)) if w > 0.0 && h > 0.0 => {
+                options.size = Some(Size::new(Points(w), Points(h)));
+            }
+            _ => return Err("size takes a positive width and height".into()),
+        }
+    } else {
+        free(cx, size);
+    }
+    let position = get(cx, o, c"position");
+    if is_object(position) {
+        let (x, y) = (number(cx, position, c"x"), number(cx, position, c"y"));
+        free(cx, position);
+        match (x, y) {
+            (Some(x), Some(y)) => options.position = Some(point(Points(x), Points(y))),
+            _ => return Err("position takes a finite x and y".into()),
+        }
+    } else {
+        free(cx, position);
+    }
+    options.level = match string(cx, o, c"level").as_deref() {
+        None | Some("normal") => WindowLevel::Normal,
+        Some("floating") => WindowLevel::Floating,
+        Some("desktopIcon") => WindowLevel::DesktopIcon,
+        Some(other) => return Err(format!("unknown level {other:?}")),
+    };
+    options.frame = match string(cx, o, c"frame").as_deref() {
+        None | Some("default") => WindowFrameStyle::Default,
+        Some("none") => WindowFrameStyle::None,
+        Some(other) => return Err(format!("unknown frame {other:?}")),
+    };
+    Ok(options)
+}
+
+/// A function with `data` (dups kept).
+fn with_data(
+    cx: *mut JsContext,
+    f: unsafe extern "C" fn(
+        *mut JsContext,
+        JsValue,
+        c_int,
+        *mut JsValue,
+        c_int,
+        *mut JsValue,
+    ) -> JsValue,
+    magic: c_int,
+    data: &mut [JsValue],
+) -> JsValue {
+    // SAFETY: the function keeps dups of `data`.
+    unsafe {
+        qjs::JS_NewCFunctionData(
+            cx,
+            Some(f),
+            0,
+            magic,
+            data.len() as c_int,
+            data.as_mut_ptr(),
+        )
+    }
+}
+
+/// `Window.open(Component, { id, title, size, position, level, frame })`:
+/// renders `Component` in a window of its own, with the app's runtime (it
+/// reads and writes the same signals and modules as the main window);
+/// the window of the same `id`, if it is open, otherwise.
+unsafe extern "C" fn open_window(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let (component, o) = (arg(argc, argv, 0), arg(argc, argv, 1));
+    // SAFETY: an inline check.
+    if !unsafe { qjs::JS_IsFunction(cx, component) } {
+        return throw(cx, "Window.open: the first argument is a component");
+    }
+    if !is_object(o) {
+        return throw(cx, "Window.open: options with an id");
+    }
+    let Some(key) = string(cx, o, c"id") else {
+        return throw(cx, "Window.open: options.id is a string");
+    };
+    let os = os(cx);
+    if !opens_windows(os) {
+        return throw(
+            cx,
+            &format!("Window.open: windows of the app's own are not supported on {os:?} yet"),
+        );
+    }
+    if let Some(w) = menus(cx).windows.borrow().iter().find(|w| w.key == key) {
+        // SAFETY: a dup for the caller.
+        return unsafe { qjs::JS_DupValue(cx, w.handle) };
+    }
+    let options = match window_options(cx, o) {
+        Ok(options) => options,
+        Err(e) => return throw(cx, &format!("Window.open: {e}")),
+    };
+    let node = match dom::create_element(cx, Tag::Modal) {
+        Ok(node) => node,
+        Err(e) => return e,
+    };
+    let Some(id) = dom::node_id(cx, node) else {
+        free(cx, node);
+        return throw(cx, "Window.open: no node");
+    };
+    if let Err(e) = dom::push_op(
+        cx,
+        Op::Command {
+            id,
+            command: Command::Desktop(Box::new(DesktopCommand::OpenWindow(Box::new(options)))),
+        },
+    ) {
+        free(cx, node);
+        return e;
+    }
+    let (owner, rendered) = reactive::with_root(cx, || {
+        // SAFETY: a new props object for the call, freed after it.
+        let mut args = [unsafe { qjs::JS_NewObject(cx) }];
+        let out = reactive::untracked_with(cx, || unsafe {
+            qjs::JS_Call(cx, component, UNDEFINED, 1, args.as_mut_ptr())
+        });
+        free(cx, args[0]);
+        // SAFETY: an inline check.
+        if unsafe { qjs::JS_IsException(out) } {
+            return Err(out);
+        }
+        let r = dom::insert_value_at(cx, node, out, None);
+        free(cx, out);
+        r
+    });
+    let inserted = rendered.and_then(|()| dom::insert_node(cx, dom::root_value(cx), node, None));
+    if let Err(e) = inserted {
+        reactive::dispose_owner(cx, owner);
+        free(cx, node);
+        return e;
+    }
+    let mut data = [qjs::JS_NewFloat64(id as f64)];
+    // The user closed the window: it closes as `close()` would.
+    let dismissed = with_data(cx, window_call, 2, &mut data);
+    let r = dom::set_handler(cx, id, EventKind::Dismiss, dismissed);
+    free(cx, dismissed);
+    if let Err(e) = r {
+        return e;
+    }
+    // SAFETY: a new object; it takes the values set on it.
+    let handle = unsafe { qjs::JS_NewObject(cx) };
+    unsafe {
+        let k = qjs::JS_NewStringLen(cx, key.as_ptr().cast(), key.len() as _);
+        qjs::JS_SetPropertyStr(cx, handle, c"id".as_ptr(), k);
+        for (name, magic) in [(c"focus", 0), (c"hide", 1), (c"close", 2)] {
+            let f = with_data(cx, window_call, magic, &mut data);
+            qjs::JS_SetPropertyStr(cx, handle, name.as_ptr(), f);
+        }
+    }
+    menus(cx).windows.borrow_mut().push(AppWindow {
+        key,
+        id,
+        node,
+        owner,
+        // SAFETY: a dup the list owns.
+        handle: unsafe { qjs::JS_DupValue(cx, handle) },
+    });
+    reactive::finish_value(cx, handle)
+}
+
+/// A window handle's `focus()` (0), `hide()` (1) and `close()` (2).
+unsafe extern "C" fn window_call(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+    magic: c_int,
+    data: *mut JsValue,
+) -> JsValue {
+    let mut n = 0f64;
+    // SAFETY: one data value (`open_window`).
+    unsafe { qjs::JS_ToFloat64(cx, &mut n, *data) };
+    let id = n as NodeId;
+    if magic != 2 {
+        if !menus(cx).windows.borrow().iter().any(|w| w.id == id) {
+            return UNDEFINED;
+        }
+        let command = if magic == 0 {
+            DesktopCommand::OrderFront
+        } else {
+            DesktopCommand::Hide
+        };
+        let r = dom::push_op(
+            cx,
+            Op::Command {
+                id,
+                command: Command::Desktop(Box::new(command)),
+            },
+        );
+        return match r {
+            Ok(()) => UNDEFINED,
+            Err(e) => e,
+        };
+    }
+    // Closed already: nothing to do.
+    let w = {
+        let mut windows = menus(cx).windows.borrow_mut();
+        let Some(i) = windows.iter().position(|w| w.id == id) else {
+            return UNDEFINED;
+        };
+        windows.remove(i)
+    };
+    reactive::dispose_owner(cx, w.owner);
+    let r = dom::remove_node(cx, dom::root_value(cx), w.node);
+    free(cx, w.node);
+    free(cx, w.handle);
+    match r {
+        Ok(()) => reactive::finish_value(cx, UNDEFINED),
+        Err(e) => e,
+    }
+}
+
+/// `Window`: the registry's module (`setTitle`, `minimize`, ...) with
+/// `open`.
+fn window_module(cx: *mut JsContext) -> JsValue {
+    let window = crate::components::runtime_module(cx, "nsh/desktop", "Window")
+        // SAFETY: a new object when the runtime has none.
+        .unwrap_or_else(|| unsafe { qjs::JS_NewObject(cx) });
+    let open = reactive::new_function(cx, c"open", open_window, 2);
+    // SAFETY: the object takes the function.
+    unsafe { qjs::JS_SetPropertyStr(cx, window, c"open".as_ptr(), open) };
+    window
+}
+
 /// The hand-written exports of `nsh/desktop` (with the registry's `Window`).
 pub(crate) const EXPORTS: &[Item] = &[
     (
@@ -494,6 +812,14 @@ pub(crate) const EXPORTS: &[Item] = &[
         ),
     ),
     (
+        "Window",
+        Export::Value(window_module),
+        Ts::value(
+            "The window: the registry's functions on the main window (`setTitle`,\n`setFrame`, ...) and `open`, which opens windows of the app's own.",
+            "WindowModule & WindowOpener",
+        ),
+    ),
+    (
         "Menu",
         Export::Value(menu),
         Ts::value(
@@ -504,7 +830,47 @@ pub(crate) const EXPORTS: &[Item] = &[
 ];
 
 /// `nsh/desktop`'s types (with the registry's).
-pub(crate) const TYPES: &str = r#"/** The hidden title bar's area, in points. */
+pub(crate) const TYPES: &str = r#"/** `Window.open`'s options. */
+export interface WindowOpenOptions {
+  /** The window's id: opening the same id again returns the open window. */
+  id: string;
+  /** Its title (the main window's when left out). */
+  title?: string;
+  /** Its content size, in points (480×360 when left out). */
+  size?: { width: number; height: number };
+  /** Its top left corner on the screen, in points (where the system puts
+   * it when left out; GTK always places windows itself). */
+  position?: { x: number; y: number };
+  /** How high it floats (`"normal"` by default; not on Linux). */
+  level?: "normal" | "floating" | "desktopIcon";
+  /** `"none"`: no title bar or border, the app draws everything. */
+  frame?: "default" | "none";
+}
+
+/** A window `Window.open` opened. */
+export interface AppWindow {
+  /** The id it was opened with. */
+  readonly id: string;
+  /** Shows it (again, after `hide`) and brings it to the front. */
+  focus(): void;
+  /** Hides it; `focus` shows it again. */
+  hide(): void;
+  /** Closes it: its content unmounts. Also what happens when the user
+   * closes it. */
+  close(): void;
+}
+
+/** Opening windows of the app's own. */
+export interface WindowOpener {
+  /** Renders `component` in a window of its own and returns it, or returns
+   * the open window of the same `id`. The window runs in the app's one JS
+   * runtime: it reads and writes the same signals, stores and modules as
+   * the main window, so there is nothing to send between windows. Closing
+   * the main window closes it too. Linux for now; elsewhere it throws. */
+  open(component: () => JSX.Element, options: WindowOpenOptions): AppWindow;
+}
+
+/** The hidden title bar's area, in points. */
 export interface TitleBarArea {
   /** Its height. */
   height: number;
@@ -572,6 +938,21 @@ export type MenuItem =
       checked?: boolean;
       /** Called when it is chosen (by a click or its shortcut). */
       onSelect?: () => void;
+      /** The image beside its label, as `<Image>`'s `src` takes it (an
+       * imported file, or a URL such as a `data:` one), so that an app's menus
+       * show its own icon set on every platform. It is fitted in the menu's
+       * icon size (16 points on macOS, the small icon size at the window's
+       * DPI on Windows) and drawn for the screen. An SVG is a template: only
+       * its shape counts, in the color of the menu's text, whatever that is
+       * (dark mode, a selected or disabled item); a bitmap keeps its colors.
+       * It loads off the main thread, so a menu never blocks on it and the
+       * icon shows once it has loaded (a context menu on Windows gives it
+       * up to 100ms before opening); one that fails to load leaves the item
+       * without an icon and logs a warning. The top-level menus of a
+       * menu bar show their titles alone, and so do GPUI's native menus on
+       * macOS. GTK's menus show no icon beside a label: GTK draws a menu
+       * item's icon only when it has no text. A terminal shows no images. */
+      icon?: ImageAsset | string;
       /** Its items: makes it a submenu (`label` is required). */
       submenu?: readonly (MenuItem | null | undefined | false)[];
     };

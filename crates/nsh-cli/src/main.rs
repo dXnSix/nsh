@@ -24,6 +24,7 @@ mod test_host;
 mod test_ios;
 mod test_web;
 mod ui;
+mod updater;
 mod web;
 mod windows;
 
@@ -164,7 +165,8 @@ enum Command {
         junit: Option<PathBuf>,
         /// Run the apps the tests open on this platform's development host
         /// instead of headless: the steps act with the platform's own input
-        /// (macos, linux, windows, gpui, web, ios and android; web runs them
+        /// (macos, linux, windows, gpui, tui, web, ios and android; tui uses
+        /// an in-memory terminal; web runs them
         /// in a headless Chrome, Edge or Chromium, ios in a simulator,
         /// android on the first device adb lists).
         #[arg(long, value_enum)]
@@ -186,6 +188,12 @@ enum Command {
         /// the primary one when there is no other.
         #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
         display: Option<u32>,
+        /// With `--target macos`: lets the apps become the active app, as
+        /// they would run for a user. By default they run in the
+        /// background: their windows show but never take the keyboard from
+        /// the app in use, and the tests' input goes to them directly.
+        #[arg(long)]
+        foreground: bool,
     },
     /// Type check an app with TypeScript's native compiler (TypeScript 7,
     /// downloaded once from the npm registry; no Node needed); an app with
@@ -209,9 +217,11 @@ enum Command {
         /// whose `App.tsx` is the entry.
         #[arg(default_value = ".")]
         entry: PathBuf,
-        /// Dev server port (replaces the previous NSH development session).
-        #[arg(long, default_value_t = nsh_dev::protocol::DEFAULT_PORT)]
-        port: u16,
+        /// Dev server port (replaces the previous NSH development session on
+        /// it). Default: the port this app had last, else the first free one
+        /// from 8790; with --server-only, 8790.
+        #[arg(long)]
+        port: Option<u16>,
         /// Minify and strip debug info.
         #[arg(long)]
         release: bool,
@@ -239,15 +249,17 @@ enum Command {
     Package(Box<PackageArgs>),
     /// Run an app in a development host with hot reload. Defaults to
     /// AppKit on macOS, GTK on Linux and Win32 on Windows; select mobile
-    /// hosts, Mac Catalyst, GPUI or a browser with --target.
+    /// hosts, Mac Catalyst, GPUI, a terminal or a browser with --target.
     Run {
         /// The entry module, or the app's directory (default: the current one),
         /// whose `App.tsx` is the entry.
         #[arg(default_value = ".")]
         entry: PathBuf,
-        /// Dev server port (replaces the previous NSH development session).
-        #[arg(long, default_value_t = nsh_dev::protocol::DEFAULT_PORT)]
-        port: u16,
+        /// Dev server port (replaces the previous NSH development session on
+        /// it). Default: the port this app had last, else the first free one
+        /// from 8790; with --server-only, 8790.
+        #[arg(long)]
+        port: Option<u16>,
         /// Minify and strip debug info.
         #[arg(long)]
         release: bool,
@@ -265,7 +277,8 @@ enum Command {
         /// Show the performance monitor over the app: frame rate, frame and
         /// commit costs, CPU, GPU, memory (`--target macos`, which also logs
         /// its readings once a second; `--target linux`, `windows` and `ios`
-        /// log them).
+        /// log them). On `tui`, show FPS/idle, frame p95, apply/draw/flush
+        /// times, bytes and changed Cells; C-h p toggles the line.
         #[arg(long)]
         fps: bool,
         /// Where to run.
@@ -275,6 +288,9 @@ enum Command {
         /// the newest iPhone.
         #[arg(long)]
         device: Option<String>,
+        /// Points per terminal Cell, overriding nsh.json tui.pointsPerCell (default: 8x16).
+        #[arg(long, value_name = "WIDTHxHEIGHT", value_parser = run::parse_points_per_cell)]
+        points_per_cell: Option<String>,
         /// The app's name in the host (the menu bar, the window title;
         /// `nsh.json`'s name by default; `--target macos` only).
         #[arg(long)]
@@ -295,6 +311,32 @@ enum Command {
     Keygen {
         /// Path and name of the key files, e.g. `keys/root`.
         name: PathBuf,
+    },
+    /// Write an app's update manifest (`latest.json`, signed with `--key`)
+    /// from the archives `nsh package` made for each platform; publish them
+    /// together.
+    UpdateManifest {
+        /// The archives named `<name>-<version>-<os>-<arch>.<ext>`.
+        #[arg(required = true)]
+        archives: Vec<PathBuf>,
+        /// The app's directory or entry, whose `nsh.json` has the id and version.
+        #[arg(long, default_value = ".")]
+        entry: PathBuf,
+        /// The secret key (`nsh keygen`'s `.secret`) of the app's `updater.publicKey`.
+        #[arg(long)]
+        key: Option<PathBuf>,
+        /// A text file with what changed.
+        #[arg(long)]
+        notes: Option<PathBuf>,
+        /// Where iOS or Android users get it: `ios=<url>`, `android=<url>` (repeatable).
+        #[arg(long = "link")]
+        links: Vec<String>,
+        /// Prefix of the archives' URLs (default: next to the manifest).
+        #[arg(long)]
+        base_url: Option<String>,
+        /// The directory the manifest is written to.
+        #[arg(short, long, default_value = ".")]
+        out: PathBuf,
     },
     /// Certify a release key with a root key, for some app ids and a time
     /// window; packages carry the certificate.
@@ -472,6 +514,7 @@ impl Command {
             Command::Package(args) => Some(&mut args.entry),
             Command::Init { .. }
             | Command::Keygen { .. }
+            | Command::UpdateManifest { .. }
             | Command::Certify { .. }
             | Command::Verify { .. }
             | Command::Symbolicate { .. }
@@ -563,8 +606,25 @@ fn run(mut command: Command) -> anyhow::Result<()> {
     }
     // Own the port across builds and restarts, until every host and forwarding
     // rule from this command has been cleaned up.
-    let _port = match &command {
-        Command::Run { port, .. } | Command::Dev { port, .. } => dev_port::Session::acquire(*port)?,
+    let _port = match &mut command {
+        Command::Dev {
+            entry,
+            port,
+            server_only: true,
+            ..
+        } => {
+            // Apps embedding the SDK keep a server's address in their code.
+            let port = port.get_or_insert(nsh_dev::protocol::DEFAULT_PORT);
+            dev_port::Session::acquire(*port, entry)?
+        }
+        Command::Run { entry, port, .. } | Command::Dev { entry, port, .. } => match port {
+            Some(port) => dev_port::Session::acquire(*port, entry)?,
+            None => {
+                let (session, free) = dev_port::Session::acquire_free(entry)?;
+                *port = Some(free);
+                session
+            }
+        },
         _ => None,
     };
     // A Rust app (`nsh.json` "root") has no bundle: it is built, checked,
@@ -682,6 +742,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             browser,
             web_host,
             display,
+            foreground,
         } => test::test(
             &path,
             &entry,
@@ -693,6 +754,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             browser.as_deref(),
             web_host,
             display.map(|n| n as usize),
+            foreground,
         ),
         Command::Dev {
             entry,
@@ -704,19 +766,25 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             server_only,
         } => {
             no_limits_for_rust(&entry, limits)?;
+            // `nsh dev` serves hosts on other machines.
+            let listen = dev::Listen {
+                port: port.unwrap_or_default(),
+                network: true,
+            };
             if server_only {
-                let session = dev::DevSession::start(&entry, port, release, limits)?;
+                let session = dev::DevSession::start(&entry, listen, release, limits)?;
                 session.print_urls();
                 session.watch(|| Ok(false))
             } else {
                 run::run(
                     &entry,
-                    port,
+                    listen,
                     release,
                     run::HostFlags {
                         limits,
                         trace: false,
                         fps: false,
+                        points_per_cell: None,
                     },
                     target,
                     device.as_deref(),
@@ -778,13 +846,27 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             name,
             size,
             display,
+            points_per_cell,
         } => {
             no_limits_for_rust(&entry, limits)?;
             run::run(
                 &entry,
-                port,
+                dev::Listen {
+                    port: port.unwrap_or_default(),
+                    // Phones open the web page; a device's host may be on
+                    // the network. A window here needs only this machine.
+                    network: matches!(
+                        target,
+                        run::Target::Ios | run::Target::Android | run::Target::Web
+                    ),
+                },
                 release,
-                run::HostFlags { limits, trace, fps },
+                run::HostFlags {
+                    limits,
+                    trace,
+                    fps,
+                    points_per_cell,
+                },
                 target,
                 device.as_deref(),
                 run::HostWindow {
@@ -795,6 +877,23 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             )
         }
         Command::Keygen { name } => sign::keygen(&name),
+        Command::UpdateManifest {
+            archives,
+            entry,
+            key,
+            notes,
+            links,
+            base_url,
+            out,
+        } => updater::manifest(updater::ManifestOptions {
+            archives: &archives,
+            entry: &entry,
+            key: key.as_deref(),
+            notes: notes.as_deref(),
+            links: &links,
+            base_url: base_url.as_deref(),
+            out: &out,
+        }),
         Command::Certify {
             root,
             key,
