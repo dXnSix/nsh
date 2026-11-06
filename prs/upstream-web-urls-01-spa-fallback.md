@@ -43,6 +43,11 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   resolution (`url`) and a real socket under `/%E5%BA%94%E7%94%A8/counter/`, checked by hand in Chromium. Pushed on the
   owner's "push now" with fork CI dXnSix/nsh#139 (twin `fd199d36`) just started. Public API line updated; reply:
   https://github.com/longbridge/nsh/pull/981#issuecomment-6673209367.
+- 2026-11-06 (later): huacnlee's source re-review of `7fd017b1`: no new blocker; asked for the cause of the red
+  Core `Test` (nsh-base `date_picker::on_a_phone_with_a_time_...` timed out; Core passed on the same tree in the
+  fork; a flake, rerun asked: this account has pull access only) and `web` (#978's Shift+F10, fixed by #1017), and
+  for exact-head browser checks: dev page, `web.base` `/` and a percent-encoded base, all at nested paths in
+  Chromium. Reply: https://github.com/longbridge/nsh/pull/981#issuecomment-6673897314.
 
 ---
 
