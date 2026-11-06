@@ -48,6 +48,9 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   fork; a flake, rerun asked: this account has pull access only) and `web` (#978's Shift+F10, fixed by #1017), and
   for exact-head browser checks: dev page, `web.base` `/` and a percent-encoded base, all at nested paths in
   Chromium. Reply: https://github.com/longbridge/nsh/pull/981#issuecomment-6673897314.
+- 2026-11-06: **LGTM** from huacnlee at `7fd017b1` (review 5794734092): exact head verified end to end; the red Core
+  (date_picker flake) and `web` (Shift+F10, flaky on main) are outside the PR, a rerun should clear both. Mergeable;
+  nothing left to change.
 
 ---
 
