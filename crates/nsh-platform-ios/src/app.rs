@@ -145,10 +145,9 @@ define_class!(
                 return;
             };
             connect(self.mtm(), scene);
-            // The link that launched the app, if one did.
-            // SAFETY: a documented property, a set of `UIOpenURLContext`.
-            let contexts: Retained<NSSet<AnyObject>> = unsafe { msg_send![options, URLContexts] };
-            url_schemes(&contexts);
+            if let Some(contexts) = launch_url_contexts(options) {
+                url_schemes(&contexts);
+            }
         }
 
         // Links of the schemes the app claims (`CFBundleURLTypes`) while it
@@ -191,6 +190,18 @@ impl RootController {
         // SAFETY: UIViewController's designated initializer.
         unsafe { msg_send![Self::alloc(mtm), init] }
     }
+}
+
+/// The `UIOpenURLContext`s of the link that launched the app, if one did.
+///
+/// Read as optional: UIKit's header and objc2-ui-kit's `URLContexts()`
+/// declare a set that is never nil, but UIKit answers nil when no link
+/// launched the app, and a non-optional `Retained` panics on it, which
+/// aborts the launch inside the scene's callback.
+fn launch_url_contexts(options: &UISceneConnectionOptions) -> Option<Retained<NSSet<AnyObject>>> {
+    // SAFETY: `URLContexts` is a documented property of the connection
+    // options, a set of `UIOpenURLContext` or nil.
+    unsafe { msg_send![options, URLContexts] }
 }
 
 /// Hands the URLs of `contexts` (`UIOpenURLContext`s) to the app.
@@ -294,4 +305,24 @@ pub fn run_app(source: AppSource, options: AppOptions) -> ! {
             .expect("class name is UTF-8"),
     );
     UIApplication::main(None, Some(&delegate), mtm)
+}
+
+#[cfg(test)]
+mod tests {
+    use objc2::{ClassType, msg_send, rc::Retained};
+    use objc2_ui_kit::UISceneConnectionOptions;
+
+    /// An app no link launched (opened from its icon, or a development
+    /// host `nsh run` and `nsh test` start) has no launch link: its
+    /// connection options answer nil for their URL contexts, which reads as
+    /// none instead of aborting the launch.
+    #[test]
+    fn a_launch_without_a_link_has_no_url_contexts() {
+        // SAFETY: `+new` of an `NSObject` subclass: options that no link
+        // came with.
+        let options: Retained<UISceneConnectionOptions> =
+            unsafe { msg_send![UISceneConnectionOptions::class(), new] };
+
+        assert!(super::launch_url_contexts(&options).is_none());
+    }
 }
