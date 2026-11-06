@@ -1209,10 +1209,14 @@ Rust: `navigate(url, HistoryBehavior::Push)` (or `Replace`, or a `NavigateOption
 ## registerFont
 
 ```ts
-function registerFont(source: string | Uint8Array): Promise<string>;
+function registerFont(source: string | Uint8Array): Promise<RegisteredFont>;
+
+interface RegisteredFont {
+  family: string;
+}
 ```
 
-Registers a font while the app runs and resolves to its family name, for `fontFamily`: a font the app downloaded or made, as TrueType, OpenType, WOFF or WOFF2 data, or the URL of one (a file of the app's, `asset:/...`, or one on the network, read as `fetch` reads it: the `network` capability applies). Text that names the family is laid out with it from then on, and text shown before again. Rejects with an `Error` when the URL does not load or the data is no font. Rust: `register_font(data) -> Answer<Result<String, String>>`, awaited in a task. Fonts the app ships are registered before the first frame instead ([Fonts](../docs/fonts.md#registering-a-font-while-the-app-runs)).
+Registers a font while the app runs and resolves with `{ family }`, its family name, for `fontFamily`: a font the app downloaded or made, as TrueType, OpenType, WOFF or WOFF2 data, or the URL of one (a file of the app's, `asset:/...`, or one on the network, read as `fetch` reads it: the `network` capability applies). Text that names the family is laid out with it from then on, and text shown before again. When the `network` capability does not grant the URL, or a URL it redirects to, it rejects with an `Error` whose `code` is `"ERR_ACCESS_DENIED"`, `permission` `"network"` and `resource` the URL refused, as `fetch` does; it rejects with an `Error` when the URL does not load or the data is no font. Rust: `register_font(data) -> Answer<Result<String, String>>`, awaited in a task. Fonts the app ships are registered before the first frame instead ([Fonts](../docs/fonts.md#registering-a-font-while-the-app-runs)).
 
 ## PanResponder
 
@@ -1927,6 +1931,15 @@ Rust code calls `request_notification_permission`, `show_notification`, `close_n
 shows while the app is in front as it does behind it. Showing another with the same `id` replaces it, and
 `Notifications.close(id)` removes it.
 
+`silent: true` shows it without a sound or vibration, as the web's `Notification` does; by default it plays the
+system's sound. Apple platforms show it with no sound, Android in a group that does not alert (no sound, vibration or
+pop-up banner), Windows with a silent toast, Linux with the daemon's `suppress-sound` hint, and the web passes `silent`
+to the browser.
+
+```tsx
+await Notifications.show({ id: "sync", title: "Synced", body: "12 new photos", silent: true });
+```
+
 ### Notifications.on
 
 `press` reports the `id` of the notification the user pressed. A press can start the app: it waits for the first
@@ -2198,7 +2211,8 @@ type AudioErrorCode =
 
 ### Sound.load
 
-Loads a sound from a bundled asset's path (`"sounds/click.wav"`), a `file:` URL, a `data:` URI or an `http(s)` URL
+Loads a sound from an imported audio file (`import click from "./sounds/click.wav"`: the import is the file's
+`asset:/` URL, and the file ships with the app), a `file:` URL, a `data:` URI or an `http(s)` URL
 the app's `network` capability grants, and decodes it into memory. A source the engine loaded already is shared: two
 components loading the same click cost one decode. The sound is freed by `dispose()`, or when what loaded it goes (a
 component unmounts). A sound is at most 8 MB encoded and 5 seconds long, and an app holds at most 64 sounds and 16 MB
@@ -2213,8 +2227,9 @@ that is silence. A value out of range throws a `RangeError`. `stop()` stops ever
 
 ```tsx
 import { Sound, View } from "nsh";
+import tapFile from "./sounds/tap.wav";
 
-const tap = await Sound.load("sounds/tap.wav");
+const tap = await Sound.load(tapFile);
 
 function Key(props: { label: string }) {
   return <View onPress={() => tap.play({ volume: 0.6 })}>{props.label}</View>;

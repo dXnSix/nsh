@@ -93,6 +93,4 @@ windows-sys = { workspace = true, features = [
 nsh-core = { path = ".", features = ["shader"] }
 # The `unit_types` check reads the crate's public API.
 syn = { workspace = true, features = ["visit"] }
-# The fonts `text::font_data` decompresses are checked as fonts.
-ttf-parser.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time"] }
