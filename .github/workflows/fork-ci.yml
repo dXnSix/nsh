@@ -23,6 +23,10 @@ on:
   push:
     branches: [main]
   pull_request:
+    # As upstream's workflows (its AGENTS.md "CI", `.github/ci/paths.py`):
+    # `closed` runs nothing, but it takes the pull request's concurrency group
+    # and so cancels its runs still queued or running once it merges or closes.
+    types: [opened, synchronize, reopened, ready_for_review, closed]
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -41,7 +45,8 @@ env:
 
 jobs:
   upstream:
-    if: github.event_name == 'pull_request'
+    # Nothing for drafts or a pull request being closed.
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -68,6 +73,8 @@ jobs:
           python3 .fork/.github/fork/dispatch.py "${{ github.event.pull_request.base.sha }}" "${{ github.head_ref }}"
 
   macos:
+    # Nothing for drafts or a pull request being closed.
+    if: github.event_name != 'pull_request' || (github.event.action != 'closed' && !github.event.pull_request.draft)
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -93,6 +100,8 @@ jobs:
           bash .github/fork/examples.sh macos
 
   ios:
+    # Nothing for drafts or a pull request being closed.
+    if: github.event_name != 'pull_request' || (github.event.action != 'closed' && !github.event.pull_request.draft)
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -122,6 +131,8 @@ jobs:
           bash .github/fork/examples.sh ios
 
   android:
+    # Nothing for drafts or a pull request being closed.
+    if: github.event_name != 'pull_request' || (github.event.action != 'closed' && !github.event.pull_request.draft)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -193,6 +204,8 @@ jobs:
           script: bash .github/fork/examples.sh android
 
   web:
+    # Nothing for drafts or a pull request being closed.
+    if: github.event_name != 'pull_request' || (github.event.action != 'closed' && !github.event.pull_request.draft)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
