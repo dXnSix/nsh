@@ -939,7 +939,7 @@ interface LocaleSettings {
 ```
 
 The user's locale settings beside the locale: what the systems keep with the language and region and change
-together. Reactive: it changes when any of them does; read one of them in a `memo` to follow it alone. Rust:
+together. Reactive: it changes when any of them does; read one of them in a `computed` to follow it alone. Rust:
 `locale_settings() -> LocaleSettings`, with the same fields in snake case (`languages`, `time_zone`, `hour_cycle`,
 `first_day_of_week`, `measurement_system`, `temperature_unit`). The names and values are `Intl`'s, so they pass into its
 options as they are ([Device and environment](../docs/device-and-environment.md#locale-settings)):

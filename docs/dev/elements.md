@@ -315,7 +315,7 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
 - **Environment** (reactive accessors; `nsh` (`safeArea()`, `safeAreaInsets()`, `keyboardFrame()`)): `windowSize()`, `safeArea()`, `keyboardFrame()` (`{ height, duration }`: how
   far the keyboard reaches into the surface, the bottom safe area under it included, on every platform),
   `colorScheme()`, `fontScale()`, `localeSettings()` (`Environment::locale_settings`, `LocaleSettings`, one value and
-  one signal, as the systems change these together; a `memo` / `computed` of one field reruns only its readers; the
+  one signal, as the systems change these together; a `computed` of one field reruns only its readers; the
   locale's (it alone as the languages, its region's preferences) in UTC headless unless a test sets them): `languages`
   (`Languages`: the system's preferred languages, most preferred first, at most 8, never empty, an embedding app's own
   language first; the web the browser's), `timeZone` (`TimeZone`: the zone's name as the system gives it, an IANA name

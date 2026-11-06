@@ -256,7 +256,7 @@ together (Language & Region on iPhone and Mac, the language and regional prefere
 Windows) and change several at once, so they come as one value, and what reads it updates when any of them changes.
 The names and values are `Intl`'s, so they pass into its options as they are.
 
-To follow one of them alone, read it through a `computed` (TSX: `memo`): what reads that updates only when that one
+To follow one of them alone, read it through a `computed`: what reads that updates only when that one
 changes, not when the user travels to another time zone or adds a language.
 
 ```rust tabs
@@ -269,10 +269,10 @@ text(move || if twelve_hour.get() { "3:00 PM" } else { "15:00" })
 
 ```tsx tabs
 import { Text } from "nsh";
-import { localeSettings, memo } from "nsh";
+import { computed, localeSettings } from "nsh";
 
 // Updates when the user switches between 12- and 24-hour time, and only then.
-const twelveHour = memo(() => ["h11", "h12"].includes(localeSettings().hourCycle));
+const twelveHour = computed(() => ["h11", "h12"].includes(localeSettings().hourCycle));
 
 <Text>{twelveHour() ? "3:00 PM" : "15:00"}</Text>
 ```

@@ -252,7 +252,7 @@ const greetings: Record<string, string> = { en: "Welcome", de: "Willkommen", zh:
 
 `locale_settings()`（TSX：`localeSettings()`）给出用户为语言和地区所做的其他设置：偏好语言、设备的时区，以及用户如何读时间、星期和度量。系统把这些放在一起保存（iPhone 和 Mac 上的“语言与地区”、Android 的语言和地区偏好、Windows 的“时间和语言”），并常常一次改动好几项，所以它们作为一个值给出，其中任何一项变化时，读取它的地方都会更新。它的名称和取值都是 `Intl` 的，可以直接传入 `Intl` 的选项。
 
-只想跟随其中一项时，通过 `computed`（TSX：`memo`）读取它：读取它的地方只在这一项变化时更新，用户去了另一个时区或添加了一种语言时不会更新。
+只想跟随其中一项时，通过 `computed` 读取它：读取它的地方只在这一项变化时更新，用户去了另一个时区或添加了一种语言时不会更新。
 
 ```rust tabs
 use nsh_core::prelude::*;
@@ -264,10 +264,10 @@ text(move || if twelve_hour.get() { "3:00 PM" } else { "15:00" })
 
 ```tsx tabs
 import { Text } from "nsh";
-import { localeSettings, memo } from "nsh";
+import { computed, localeSettings } from "nsh";
 
 // 只在用户切换 12 小时制和 24 小时制时更新。
-const twelveHour = memo(() => ["h11", "h12"].includes(localeSettings().hourCycle));
+const twelveHour = computed(() => ["h11", "h12"].includes(localeSettings().hourCycle));
 
 <Text>{twelveHour() ? "3:00 PM" : "15:00"}</Text>
 ```

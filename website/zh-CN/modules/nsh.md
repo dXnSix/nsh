@@ -927,7 +927,7 @@ interface LocaleSettings {
 }
 ```
 
-用户在区域设置之外的语言与地区设置：系统和语言、地区放在一起保存、一起改动的设置。响应式：其中任何一项变化时它都会变化；只想跟随其中一项时，在 `memo` 中读取它。Rust：`locale_settings() -> LocaleSettings`，字段相同，用蛇形命名（`languages`、`time_zone`、`hour_cycle`、`first_day_of_week`、`measurement_system`、`temperature_unit`）。名称和取值都是 `Intl` 的，可以直接传入它的选项（[设备与环境](../docs/device-and-environment.md#语言与地区设置)）：
+用户在区域设置之外的语言与地区设置：系统和语言、地区放在一起保存、一起改动的设置。响应式：其中任何一项变化时它都会变化；只想跟随其中一项时，在 `computed` 中读取它。Rust：`locale_settings() -> LocaleSettings`，字段相同，用蛇形命名（`languages`、`time_zone`、`hour_cycle`、`first_day_of_week`、`measurement_system`、`temperature_unit`）。名称和取值都是 `Intl` 的，可以直接传入它的选项（[设备与环境](../docs/device-and-environment.md#语言与地区设置)）：
 
 - `languages`：偏好语言，BCP 47 标签，按偏好从高到低排列（`["de-DE", "en-US"]`）：系统的列表；嵌入它的应用设置了自己的语言时，那个语言排在最前。从不为空。用其中第一个有翻译的语言显示应用的文字，其余是它的后备。`locale()` 是区域格式，可以不同（英文文字、德国日期）。Rust：`Languages`（`iter()`、`first()`、`as_slice()`，每项是一个 `Locale`）。
 - `timeZone`：设备的时区，即系统给它的名称：IANA 名称（`"Europe/Berlin"`、`"America/New_York"`）、`"UTC"`，或系统使用偏移量时区时的名称（Android 上的 `"GMT+01:00"`）。随系统设置变化，例如用户出行时。`Date` 的本地时间跟随系统时区，`Intl` 给出的名称与它相同（`Intl.DateTimeFormat().resolvedOptions().timeZone`）；读取这个名称来显示它、和日期一起保存，或交给时区库。Rust：`TimeZone`（`as_str()` 即名称）。

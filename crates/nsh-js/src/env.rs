@@ -731,7 +731,7 @@ pub(crate) const DEVICE_EXPORTS: &[Item] = &[
         "localeSettings",
         Export::Value(|cx| accessor(cx, Part::LocaleSettings)),
         Ts::value(
-            "The user's locale settings beside the locale (reactive): the preferred\nlanguages, the device's time zone and the regional preferences, the\nsystem's settings, which change together. Their names and values are\n`Intl`'s, so they pass into its options as they are\n(`new Intl.DateTimeFormat(locale(), { timeZone, hourCycle })`). Read the\none a view shows in a `memo` to follow only it. In headless tests they\nare the locale's (it alone as the languages, its region's preferences)\nin UTC, unless `open` sets `localeSettings`.",
+            "The user's locale settings beside the locale (reactive): the preferred\nlanguages, the device's time zone and the regional preferences, the\nsystem's settings, which change together. Their names and values are\n`Intl`'s, so they pass into its options as they are\n(`new Intl.DateTimeFormat(locale(), { timeZone, hourCycle })`). Read the\none a view shows in a `computed` to follow only it. In headless tests they\nare the locale's (it alone as the languages, its region's preferences)\nin UTC, unless `open` sets `localeSettings`.",
             "Accessor<LocaleSettings>",
         ),
     ),
