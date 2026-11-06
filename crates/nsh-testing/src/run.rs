@@ -23,7 +23,7 @@ use nsh_core::{
     ApproxTextEngine, MountBatch,
     element::{Callback, Registry, Root},
     geometry::{Points, Size},
-    platform::{Idiom, Languages, Locale, Os, RegionalPreferences, TimeZone},
+    platform::{Idiom, Locale, LocaleSettings, Os},
     prelude::timer,
 };
 use nsh_dev::protocol::TestIdiom;
@@ -499,21 +499,7 @@ impl Session {
             ),
             None => None,
         };
-        let time_zone = match &launch.time_zone {
-            Some(name) => Some(
-                TimeZone::parse(name)
-                    .ok_or_else(|| format!("open({entry:?}): {name:?} is not a time zone"))?,
-            ),
-            None => None,
-        };
-        let languages = match &launch.languages {
-            Some(tags) => Some(
-                Languages::parse(tags.iter().map(String::as_str))
-                    .ok_or_else(|| format!("open({entry:?}): {tags:?} names no language"))?,
-            ),
-            None => None,
-        };
-        let regional = launch.regional.pins(&format!("open({entry:?})"))?;
+        let settings = launch.locale_settings.pins(&format!("open({entry:?})"))?;
         let storage = MemoryStorage::new(launch.storage.0);
         let files = set_files(&self.run.ui_sets);
         let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
@@ -548,12 +534,9 @@ impl Session {
                 },
                 color_scheme: launch.color_scheme.unwrap_or_default().into(),
                 locale: locale.unwrap_or(Locale::EN_US),
-                // The device's language is its locale's unless the test
-                // lists others.
-                languages: languages.unwrap_or(Languages::one(locale.unwrap_or(Locale::EN_US))),
-                // The locale's region's, but for what the test sets.
-                regional: RegionalPreferences::of(locale.unwrap_or(Locale::EN_US)),
-                time_zone: time_zone.unwrap_or(TimeZone::UTC),
+                // The locale's (it alone as the languages, its region's
+                // preferences) in UTC, but for what the test sets.
+                locale_settings: LocaleSettings::of(locale.unwrap_or(Locale::EN_US)),
                 reduce_motion: launch.reduced_motion.unwrap_or(false),
                 os: match platform {
                     Platform::Ios => Os::Ios,
@@ -581,7 +564,7 @@ impl Session {
             },
             ..default
         };
-        regional.apply(&mut config.environment);
+        settings.apply(&mut config.environment);
         let mut app = Headless::start(config)
             .map_err(|e| format!("open({entry:?}): the engine did not start: {e}"))?;
         if let Some(host) = page_host {
@@ -604,6 +587,10 @@ impl Session {
         app.answer_dialogs_myself();
         app.answer_picks_myself();
         app.set_clipboard(launch.clipboard);
+        // The link that launched it, there before the app listens.
+        if let Some(url) = &launch.url_scheme {
+            app.send_url_scheme(url);
+        }
         app.step(format!("open({})", shown.display()));
         app.first_render()?;
         let app: OpenApp = Arc::new(Mutex::new(Some(Box::new(app))));
@@ -631,17 +618,7 @@ impl Session {
         {
             return Err(format!("open({entry:?}): {tag:?} is not a locale"));
         }
-        if let Some(name) = &launch.time_zone
-            && TimeZone::parse(name).is_none()
-        {
-            return Err(format!("open({entry:?}): {name:?} is not a time zone"));
-        }
-        if let Some(tags) = &launch.languages
-            && Languages::parse(tags.iter().map(String::as_str)).is_none()
-        {
-            return Err(format!("open({entry:?}): {tags:?} names no language"));
-        }
-        let regional = launch.regional.pins(&format!("open({entry:?})"))?;
+        let settings = launch.locale_settings.pins(&format!("open({entry:?})"))?;
         check_launch(entry, &launch, self.run.target.as_ref())?;
         // What the test gives is pinned, its defaults included; what it
         // leaves out is the platform's.
@@ -650,13 +627,15 @@ impl Session {
         environment.host_params = (!params.is_empty()).then_some(params);
         environment.clipboard = launch.clipboard.clone();
         environment.locale = launch.locale.clone();
-        environment.time_zone = launch.time_zone.clone();
+        environment.time_zone = settings.time_zone.map(|z| z.as_str().to_owned());
+        environment.languages = settings
+            .languages
+            .map(|l| l.iter().map(|t| t.as_str().to_owned()).collect());
+        environment.hour_cycle = settings.hour_cycle.map(|c| c.name().to_owned());
+        environment.first_day_of_week = settings.first_day_of_week.map(|d| d.number());
+        environment.measurement_system = settings.measurement_system.map(|s| s.name().to_owned());
+        environment.temperature_unit = settings.temperature_unit.map(|u| u.name().to_owned());
         environment.location = launch.location.as_ref().map(|l| l.as_str().to_owned());
-        environment.languages = launch.languages.clone();
-        environment.hour_cycle = regional.hour_cycle.map(|c| c.name().to_owned());
-        environment.first_day_of_week = regional.first_day_of_week.map(|d| d.number());
-        environment.measurement_system = regional.measurement_system.map(|s| s.name().to_owned());
-        environment.temperature_unit = regional.temperature_unit.map(|u| u.name().to_owned());
         environment.reduced_motion = launch.reduced_motion;
         environment.safe_area = launch.safe_area.map(|safe_area| {
             [
@@ -809,6 +788,12 @@ fn check_launch(entry: &str, launch: &Launch, target: Option<&HostTarget>) -> Re
         return unsupported(
             "host.handlers",
             "the test plays the embedding app's handlers in headless runs: run the test without --target",
+        );
+    }
+    if launch.url_scheme.is_some() {
+        return unsupported(
+            "url",
+            "the system hands links to packaged apps: run the test without --target",
         );
     }
     let Some(target) = target else {
@@ -1179,15 +1164,14 @@ mod tests {
             clipboard: None,
             color_scheme: None,
             locale: None,
-            time_zone: None,
+            locale_settings: Default::default(),
             location: None,
-            languages: None,
-            regional: Default::default(),
             reduced_motion: None,
             platform: None,
             clock: None,
             host: nsh_engine::HostChannel::new(),
             host_handlers: false,
+            url_scheme: None,
         }
     }
 
@@ -1214,6 +1198,16 @@ mod tests {
         plain.reduced_motion = Some(true);
         assert_eq!(check(&plain, &ios), Ok(()));
         assert_eq!(check(&plain, &macos), Ok(()));
+
+        // A launching link: only headless runs hand one over.
+        let mut linked = launch();
+        linked.url_scheme = Some("myapp://item/42".into());
+        let error = check(&linked, &macos).unwrap_err();
+        assert!(
+            error.contains("`url` is unsupported on --target macos"),
+            "{error}"
+        );
+        assert_eq!(code_of(&error), Some(UNSUPPORTED));
 
         // A size: a desktop's window takes it, a device's screen does not.
         let mut sized = launch();

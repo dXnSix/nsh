@@ -549,6 +549,30 @@ public class NshView extends FrameLayout {
         Notifications.handleIntent(intent);
     }
 
+    /**
+     * Hands the app a URL the system opened it with, as its {@code onLink} event (a scheme the app registered, nsh.json
+     * {@code schemes}). URLs given before the app listens are kept until it does. UI thread.
+     *
+     * @param url the URL
+     */
+    public void openUrl(String url) {
+        if (url == null || handle == 0) return;
+        mounter.eventMap(1, Native.URL_SCHEME, new String[] {"url"}, new Object[] {url});
+    }
+
+    /**
+     * Hands the app the URL {@code intent} carries, if it is an {@code ACTION_VIEW} intent with one ({@link #openUrl}).
+     * The activity showing this view calls it from {@code onCreate} (with the launch intent, when it is not being
+     * recreated) and {@code onNewIntent}.
+     *
+     * @param intent the activity's intent
+     */
+    public void handleUrlSchemeIntent(android.content.Intent intent) {
+        if (intent == null || !android.content.Intent.ACTION_VIEW.equals(intent.getAction())) return;
+        android.net.Uri data = intent.getData();
+        if (data != null) openUrl(data.toString());
+    }
+
     /** A URL the app opens ({@code request}, answered once); called by libnsh on the engine thread. */
     void openUrlMessage(String url, long request) {
         main.post(() -> {
@@ -850,14 +874,14 @@ public class NshView extends FrameLayout {
                 java.util.Locale.getDefault(java.util.Locale.Category.FORMAT).toLanguageTag());
     }
 
-    /** The system's time zone's ID (`timeZone()`). */
+    /** The system's time zone's ID (`localeSettings()`'s `timeZone`). */
     private String timeZone = java.util.TimeZone.getDefault().getID();
 
     /**
      * The system's time zone changed (the user's setting, or a new zone with
      * automatic time zones): the broadcast names it, before the process's
      * default zone may have caught up. Or the time changed, as when the user
-     * switches 24-hour time (`hourCycle()`).
+     * switches 24-hour time (`localeSettings()`'s `hourCycle`).
      */
     private final android.content.BroadcastReceiver timeChanged = new android.content.BroadcastReceiver() {
         @Override

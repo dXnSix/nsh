@@ -177,7 +177,7 @@ nsh package App.tsx --target web --run
 { "web": { "base": "/apps/counter/" } }
 ```
 
-页面随之带上 `<base href="/apps/counter/">`，在 `https://example.com/apps/counter/sports/football` 和在 `https://example.com/apps/counter/` 一样能加载。`"base": "/"` 表示站点位于主机的根路径。`nsh package --target web --run` 在这个路径下提供站点。
+页面随之带上 `<base href="/apps/counter/">`，在 `https://example.com/apps/counter/sports/football` 和在 `https://example.com/apps/counter/` 一样能加载。`"base": "/"` 表示站点位于主机的根路径。`nsh package --target web --run` 在这个路径下提供站点。路径的各段由 ASCII 字母、数字、`-`、`.`、`_` 和 `~` 组成，其他字符按浏览器发送时的方式做百分号编码（`/应用/` 写作 `/%E5%BA%94%E7%94%A8/`）。
 
 ### 运行时大小
 
@@ -210,7 +210,7 @@ nsh package App.tsx --target web --run
 | Cloudflare Pages | 站点顶层没有 `404.html` 时自带 |
 | GitHub Pages | 把 `index.html` 复制一份为 `404.html` |
 
-页面有 base（上文的 `web.base`）时，多段的路径也从站点自己的路径加载页面的文件。开发服务器的页面的 base 是 `/`。
+在多段的路径上（`/sports/football`），`nsh.json` 写明站点路径时（上文的 `web.base`），页面从站点自己的路径加载它的文件；开发服务器的页面从 `/` 加载。
 
 发布到 Web 的应用与打包的原生应用运行方式相同：以发布模式运行，具有其 `nsh.json` 声明的能力（[沙箱与能力](./sandbox-and-capabilities.md)），TSX 应用由浏览器的 JavaScript 引擎执行。当能力限制了 `network` 时，页面还会带上 Content-Security-Policy `connect-src`，其中列出声明的主机（以及页面自身的源），由浏览器自己拒绝发往其他主机的请求和重定向。导致应用无法启动的错误会显示在页面上；之后的错误输出到浏览器控制台。
 

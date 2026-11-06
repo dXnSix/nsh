@@ -8,14 +8,14 @@ use std::time::Duration;
 use nsh_core::{
     Dialog, ResolvedTextStyle,
     geometry::{Point, Points, Size},
-    platform::{ColorScheme, Languages, Lifecycle, TimeZone},
+    platform::{ColorScheme, Lifecycle},
 };
 use nsh_dev::protocol::{ClockChange, TestStep};
 use serde_json::Value;
 
 use crate::{
     headless::{DialogAnswer, Headless},
-    module::RegionalPreferences,
+    module::LocaleSettingsOptions,
 };
 
 /// An app a test opened, driven by steps and read by queries.
@@ -83,22 +83,16 @@ pub(crate) trait Driver: Send {
         let _ = state;
         Err(headless_only("setLifecycle"))
     }
-    /// The device's time zone, as the system reports it (`timeZone()`).
-    fn set_time_zone(&mut self, zone: TimeZone) -> Result<(), String> {
-        let _ = zone;
-        Err(headless_only("setTimeZone"))
+    /// The user's locale settings that `settings` names, as the system
+    /// reports them (`localeSettings()`).
+    fn set_locale_settings(&mut self, settings: LocaleSettingsOptions) -> Result<(), String> {
+        let _ = settings;
+        Err(headless_only("setLocaleSettings"))
     }
-    /// The user's preferred languages, as the system reports them
-    /// (`languages()`).
-    fn set_languages(&mut self, languages: Languages) -> Result<(), String> {
-        let _ = languages;
-        Err(headless_only("setLanguages"))
-    }
-    /// The user's regional preferences that `preferences` names, as the
-    /// system reports them (`hourCycle()` and the like).
-    fn set_regional_preferences(&mut self, preferences: RegionalPreferences) -> Result<(), String> {
-        let _ = preferences;
-        Err(headless_only("setRegionalPreferences"))
+    /// The system hands the app a link that opens it (`openWithUrl`).
+    fn open_with_url(&mut self, url: &str) -> Result<(), String> {
+        let _ = url;
+        Err(headless_only("openWithUrl"))
     }
     fn run_for(&mut self, time: Duration) -> Result<(), String>;
     fn fast_forward(&mut self, time: Duration) -> Result<(), String>;
@@ -133,6 +127,14 @@ pub(crate) trait Driver: Send {
     fn end_speech(&mut self, error: Option<nsh_core::speech::SpeechError>) -> Result<(), String> {
         let _ = error;
         Err(headless_only("ending a speech session"))
+    }
+    /// What the app asked of the speaker, in order.
+    fn audio_calls(&mut self) -> Result<Vec<crate::headless::AudioCall>, String> {
+        Err(headless_only("`audio()`"))
+    }
+    /// The players playing reach their end.
+    fn end_audio(&mut self) -> Result<(), String> {
+        Err(headless_only("ending a player"))
     }
     fn texts(&mut self) -> Result<Vec<String>, String>;
     fn count(&mut self, selector: &str) -> Result<usize, String>;
@@ -255,20 +257,13 @@ impl Driver for Headless {
             e.lifecycle = state;
         })
     }
-    fn set_time_zone(&mut self, zone: TimeZone) -> Result<(), String> {
-        self.set_environment(&format!("setTimeZone({zone})"), |e| {
-            e.time_zone = zone;
-        })
-    }
-    fn set_languages(&mut self, languages: Languages) -> Result<(), String> {
-        self.set_environment(&format!("setLanguages({languages:?})"), |e| {
-            e.languages = languages;
-        })
-    }
-    fn set_regional_preferences(&mut self, preferences: RegionalPreferences) -> Result<(), String> {
-        let pins = preferences.pins("setRegionalPreferences")?;
-        let what = format!("setRegionalPreferences({})", preferences.label());
+    fn set_locale_settings(&mut self, settings: LocaleSettingsOptions) -> Result<(), String> {
+        let pins = settings.pins("setLocaleSettings")?;
+        let what = format!("setLocaleSettings({})", settings.label());
         self.set_environment(&what, |e| pins.apply(e))
+    }
+    fn open_with_url(&mut self, url: &str) -> Result<(), String> {
+        Headless::open_with_url(self, url)
     }
     fn run_for(&mut self, time: Duration) -> Result<(), String> {
         Headless::run_for(self, time)
@@ -304,6 +299,13 @@ impl Driver for Headless {
     }
     fn end_speech(&mut self, error: Option<nsh_core::speech::SpeechError>) -> Result<(), String> {
         Headless::end_speech(self, error)
+    }
+    fn audio_calls(&mut self) -> Result<Vec<crate::headless::AudioCall>, String> {
+        self.catch_up();
+        Ok(Headless::audio_calls(self))
+    }
+    fn end_audio(&mut self) -> Result<(), String> {
+        Headless::end_audio(self)
     }
     fn texts(&mut self) -> Result<Vec<String>, String> {
         self.catch_up();

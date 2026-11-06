@@ -174,7 +174,8 @@ under in `nsh.json`:
 
 The page then has a `<base href="/apps/counter/">`, and loads at `https://example.com/apps/counter/sports/football` as at
 `https://example.com/apps/counter/`. `"base": "/"` is a site at the host's root. `nsh package --target web --run` serves
-the site under that path.
+the site under that path. The path's segments are ASCII letters, digits, `-`, `.`, `_` and `~`, with other characters
+percent-encoded as browsers send them (`/%E5%BA%94%E7%94%A8/` for `/应用/`).
 
 ### Runtime size
 
@@ -219,8 +220,8 @@ answer. `nsh package --target web --run` and the dev server (`nsh run --target w
 | Cloudflare Pages | built in for a site without a top-level `404.html` |
 | GitHub Pages | a copy of `index.html` as `404.html` |
 
-A path with several segments loads the page's files from the site's own path when the page has a base (`web.base`,
-above). The dev server's page has `/`.
+At a path with several segments (`/sports/football`), the page loads its files from the site's own path when
+`nsh.json` names it (`web.base`, above); the dev server's page loads them from `/`.
 
 An app published for the web runs like a packaged native app: as a release, with the capabilities its `nsh.json` declares
 ([Sandbox and capabilities](./sandbox-and-capabilities.md)), a TSX app on the browser's JavaScript engine. When they restrict `network`, the page also carries a

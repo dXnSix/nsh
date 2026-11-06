@@ -78,6 +78,11 @@ pub struct WebProps {
     pub javascript_enabled: bool,
     /// Swipes go back and forward (iOS).
     pub back_forward_gestures: bool,
+    /// Website data (cookies, storage, the cache) lives only as long as
+    /// the web view, apart from the app's other web views (Android: no
+    /// HTTP cache and no saved form data). Read when the platform makes the
+    /// web view: the core keeps it from changing afterwards.
+    pub incognito: bool,
 }
 
 impl Default for WebProps {
@@ -92,6 +97,7 @@ impl Default for WebProps {
             scrollable: true,
             javascript_enabled: true,
             back_forward_gestures: false,
+            incognito: false,
         }
     }
 }
@@ -776,7 +782,7 @@ pub enum MountItem {
         scrollbar_visible: bool,
         /// A built-in bar of the app's takes the indicator's place (the
         /// core's, over the viewport): the platform shows none on either
-        /// axis, also where a horizontal view keeps its own.
+        /// axis.
         replaced: bool,
         /// Native animation value fed with the main-axis offset.
         scroll_value: Option<crate::animation::NodeId>,

@@ -142,9 +142,11 @@ build to the same file) and takes `nsh.js` from the crate.
   requests are keyed the same way), the `Player` its `assets`, `data` and `assetBase` and the app's relative
   `asset()` URLs against `player.baseURL`, and `browser/runtime.js` the entry, the chunks and the app realm's
   `<base>`, so nothing loads from the directory a `history.pushState` moved the address to. `nsh.json` `web.base`
-  (`web::page_base`: a path from the root, a `/` added at its end) puts a `<base href>` first in the head, so the
-  page loads at any of the app's paths, which `SiteServer::start_at` (`--run`) serves under it; the dev page has
-  `<base href="/">`. `nsh.json` `web.history` reaches `createPlayer`'s `history` on both pages (the packaged page's
+  (`web::page_base`: a path from the root in the form browsers send it, unreserved characters and percent-escapes
+  without dot or empty segments, a `/` added at its end, which `start_at` matches requests against as it is) puts a
+  `<base href>` first in the head, so the page loads its files at any of the app's paths (`/sports/football`), which
+  `SiteServer::start_at` (`--run`) serves under it; the dev page has `<base href="/">` (the dev server serves its
+  files at the root). `nsh.json` `web.history` reaches `createPlayer`'s `history` on both pages (the packaged page's
   `app.history`, the dev page's `HISTORY`, which `with_page_host` fills in); without it the player's default
   (`window.top === window`) holds. The app ships as minified ES modules
   (`app.<digest>.js` and `<chunk>.<digest>.js`). An import map resolves original chunk URLs to hashed files;
@@ -416,8 +418,8 @@ does. Its accessors are grouped as `env.rs` declares them: the exports of `nsh/d
 `environment.test.mjs` checks them against `env.rs`: `nsh` has every one, each namespace exactly those its module
 declares, so a part added to `env.rs` fails there rather than in apps.
 
-The idiom is fixed at start, as `Environment::idiom` is everywhere: `desktop` for a fine, hovering pointer and a
-container at least 600 wide (headless Chromium reports no pointer and measures as a tablet or phone unless launched
+The idiom is fixed at start, as `Environment::idiom` is everywhere: `desktop` for a fine, hovering pointer at
+any width, as a narrow window on a native desktop (headless Chromium reports no pointer and measures as a tablet or phone unless launched
 with a fine, hovering one, as `nsh test --target web` does), `pad` for a screen whose short side is at least 600, else
 `phone`; the player's `idiom` option overrides it, and so does a test's setup (`TestEnvironment::idiom`: `open`'s
 desktop `platform` starts the app in the desktop idiom at any width). `Environment::desktop()`
@@ -629,7 +631,10 @@ browsers' touches into what phones report:
 - **Focus**: the stops `ViewProps::focus_stop` decides are focusable (`tabindex=0`; `updateFocusable`): pressables
   (role `button` unless they have one) unless `focusable={false}`, and `focusable={true}` views whether or not they take
   presses (Return and Space press only pressables), never disabled or hidden ones (a focused one that stops being a
-  stop is blurred), so Tab and Shift+Tab reach them in DOM order; `focus:` states follow the keyboard focus (`:focus-visible`), and
+  stop is blurred), so Tab and Shift+Tab reach them in DOM order, but for a scroll view's content and a list's cells in its parent's viewport (`ViewProps::screen_order`,
+  `screenOrder`): where the browser takes
+  `reading-flow` (Chromium), it is read in the order it is on screen (`orderReading`: `reading-order` on its children,
+  the DOM, which is also their paint order, left alone), as a list's recycled cells are not in their rows' order in it; `focus:` states follow the keyboard focus (`:focus-visible`), and
   they are all that shows it: as the desktop backends, the runtime draws no ring of its own; a popped page gives the focus back to what had it when the page was pushed
   (`screenGone`). A click never moves the focus (`mousedown` is prevented outside fields, selectable
   text, selectable views and hosted pages), as in native apps; it focuses the app's window in an iframe. The views under the newest

@@ -66,6 +66,7 @@ mod storage;
 mod system;
 mod test_ui;
 mod theme;
+mod url_scheme;
 mod websocket;
 
 /// Hands the engine's batches to the test.
