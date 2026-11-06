@@ -36,6 +36,7 @@ mod js_touch;
 mod keymap;
 mod list;
 mod list_bench;
+mod location;
 mod logs;
 mod native;
 mod net;

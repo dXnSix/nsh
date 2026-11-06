@@ -115,6 +115,8 @@ struct Setup {
     engine: Option<nsh_engine::EngineControl>,
     /// The launch parameters the test gave the app (`host.params`).
     host_params: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Where the test starts the app (`open`'s `location`).
+    location: Option<String>,
     /// The embedding app's channel with the app ([`Model::set_up_engine`]),
     /// whose events the test sends.
     host: Option<nsh_engine::HostChannel>,
@@ -233,6 +235,7 @@ impl Model {
                 .map(|ms| nsh_core::time::Clock::manual(unix_time(ms)).with_frames()),
             engine: None,
             host_params: environment.host_params,
+            location: environment.location,
             host: None,
             opened_urls: Arc::default(),
             live_network: environment.live_network == Some(true),
@@ -275,6 +278,11 @@ impl Model {
         if let Some(params) = &setup.host_params {
             config.host.set_params(params.clone());
         }
+        if let Some(location) = &setup.location
+            && let Err(refused) = config.host.set_location(location)
+        {
+            log::warn!("open's location: {refused}");
+        }
         let opened = setup.opened_urls.clone();
         config.host.handle_open_url(move |request| {
             opened
@@ -296,6 +304,33 @@ impl Model {
             .ok_or("the app's engine did not start")?;
         drop(setup);
         host.send(name, data)
+    }
+
+    /// The embedding app moves the app to `location` (`app.navigate`),
+    /// resolved against where it is.
+    pub fn set_location(&self, location: &str) -> Result<(), String> {
+        let setup = self.setup.lock().unwrap_or_else(|e| e.into_inner());
+        let host = setup
+            .as_ref()
+            .and_then(|s| s.host.clone())
+            .ok_or("the app's engine did not start")?;
+        drop(setup);
+        let joined = host
+            .location()
+            .join(location)
+            .map_err(|e| format!("navigate: {e}"))?;
+        host.set_location(joined.as_str())
+            .map_err(|e| format!("navigate: {e}"))
+    }
+
+    /// Where the app is, as the embedding app's channel heard it
+    /// (`app.location`).
+    pub fn location(&self) -> String {
+        let setup = self.setup.lock().unwrap_or_else(|e| e.into_inner());
+        setup.as_ref().and_then(|s| s.host.as_ref()).map_or_else(
+            || "/".to_owned(),
+            |host| host.location().as_str().to_owned(),
+        )
     }
 
     /// The URLs the app opened, in order (`app.openedUrls`).
@@ -505,6 +540,15 @@ pub trait Scene: Send + Sync {
     fn send_host_event(&self, name: &str, data: serde_json::Value) -> Result<(), String>;
     /// The URLs the app opened ([`Model::opened_urls`]).
     fn opened_urls(&self) -> Result<Vec<String>, String>;
+    /// The embedding app moves the app ([`Model::set_location`]).
+    fn set_location(&self, location: &str) -> Result<(), String> {
+        let _ = location;
+        Err("this host moves the app through its platform".into())
+    }
+    /// Where the app is ([`Model::location`]).
+    fn location(&self) -> Result<String, String> {
+        Err("this host has the app's location on its platform".into())
+    }
 }
 
 impl Scene for Model {
@@ -632,6 +676,12 @@ impl Scene for Model {
     }
     fn opened_urls(&self) -> Result<Vec<String>, String> {
         Ok(Model::opened_urls(self))
+    }
+    fn set_location(&self, location: &str) -> Result<(), String> {
+        Model::set_location(self, location)
+    }
+    fn location(&self) -> Result<String, String> {
+        Ok(Model::location(self))
     }
 }
 
@@ -1100,6 +1150,23 @@ pub trait Native: Send + Sync {
     /// Goes back as the user does (a back gesture, the back button,
     /// Escape): an error when the platform has none.
     fn back(&self) -> Result<(), String>;
+    /// Goes forward in the browser's history: the web's; the other
+    /// platforms have no forward.
+    fn forward(&self) -> Result<(), String> {
+        Err(crate::failure::web_only("forward"))
+    }
+    /// Moves the app to `location` as the platform itself does (the web's
+    /// player: a new history entry); `None` where the embedding app's
+    /// channel moves it ([`Scene::set_location`]).
+    fn navigate(&self, location: &str) -> Option<Result<(), String>> {
+        let _ = location;
+        None
+    }
+    /// Where the platform itself has the app (the web's player); `None`
+    /// where the embedding app's channel has it ([`Scene::location`]).
+    fn location(&self) -> Option<Result<String, String>> {
+        None
+    }
     /// Answers the dialog the app shows now (the oldest): presses its
     /// button with the text `button`, or closes it without one.
     fn answer_dialog(&self, button: Option<&str>) -> Result<(), String>;
@@ -1428,6 +1495,18 @@ impl Agent {
                 done(self.native.press_keys(&keys).and_then(|()| self.settled()))
             }
             TestStep::Back => done(self.native.back().and_then(|()| self.settled())),
+            TestStep::Forward => done(self.native.forward().and_then(|()| self.settled())),
+            TestStep::Navigate { location } => done(
+                self.native
+                    .navigate(&location)
+                    .unwrap_or_else(|| self.scene.set_location(&location))
+                    .and_then(|()| self.settled()),
+            ),
+            TestStep::Location => self
+                .native
+                .location()
+                .unwrap_or_else(|| self.scene.location())
+                .map(Value::from),
             TestStep::Wait { ms } => {
                 std::thread::sleep(Duration::from_millis(ms));
                 done(self.check())

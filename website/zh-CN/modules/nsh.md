@@ -1133,6 +1133,47 @@ view().direction(LayoutDirection::Rtl).flex_row().gap_2().child(text("First")).c
 - 安全区域（Rust 的 `safe_area()`；TSX 的 `safeArea()`、`safeAreaInsets()`）和软键盘（Rust 的 `keyboard_height()`；TSX 的 `keyboardFrame()`）见[安全区域与键盘](#safe-area-and-keyboard)。
 - 屏幕阅读器和减弱动态效果的设置在 [`nsh` 的无障碍 API](#accessibility) 中。
 
+## 位置
+
+用户在应用中的位置：从应用的 base 起的 URL，例如 `/sports/football?tab=live#top`。每个平台都有它：在 Web 上它就是地址栏的地址，浏览器的后退和前进也包括在内；嵌入应用设置它，并得知应用去了哪里；其他情况下，在应用导航之前它是 `/`。它是响应式的：显示某个位置对应页面的内容会跟随用户的移动。指南见[导航](../docs/navigation.md#位置)。
+
+```rust tabs
+use nsh_core::prelude::*; // location, navigate, Location, HistoryBehavior, NavigateOptions
+```
+
+```tsx tabs
+import { location, navigate } from "nsh";
+```
+
+### location
+
+```ts
+const location: Accessor<Location>;
+
+interface Location {
+  readonly url: string;      // "/sports/football?tab=live#top"
+  readonly pathname: string; // "/sports/football"
+  readonly search: string;   // "?tab=live"，没有查询时为 ""
+  readonly hash: string;     // "#top"，没有片段时为 ""
+}
+```
+
+应用的位置，各部分沿用 DOM `URL` 的名称。Rust：`location() -> Location`，带有 `as_str()`、`path()`、`query()` 和 `fragment()`（后两者不含 `?` 和 `#`，没有时为 `None`）。在 Web 上它是页面地址中应用 base（`nsh.json` 的 `web.base`）之后的部分：base 为 `/apps/counter/` 时，`https://example.com/apps/counter/sports/football` 的位置是 `/sports/football`。除非 `open` 设置了 `location`，headless 测试从 `/` 开始。
+
+### navigate
+
+```ts
+function navigate(url: string, options?: NavigateOptions): void;
+
+interface NavigateOptions {
+  history?: "push" | "replace"; // 默认 "push"
+}
+```
+
+前往应用中的 `url`，像该位置页面上的链接一样相对当前位置解析：`"/teams"` 从 base 开始，`"football"` 与最后一段并列，`"?tab=live"` 和 `"#top"` 作用于当前路径，`"../news"` 向上一级。`location()` 立即变为新位置，调用之后的代码读到的就是它。Web 为它添加一条浏览器历史记录，后退按钮会从这里返回；`history: "replace"` 则改写当前记录。应用在同一轮中显示的页面或对话框与它共用这条记录。嵌入应用会得知每一次导航。前往应用当前所在的位置什么也不做。
+
+Rust：`navigate(url, HistoryBehavior::Push)`（或 `Replace`，或一个 `NavigateOptions`）在 TSX 抛出 `TypeError` 的情况下返回 `Err(InvalidLocation)`：即其他站点的 URL（`https://…`、`//…`、带协议的地址），这类地址由 [`openUrl`](#openurl) 打开。
+
 ## registerFont
 
 ```ts

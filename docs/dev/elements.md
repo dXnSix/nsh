@@ -312,6 +312,14 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   negative offsets), starting at the right end and keeping their distance from it; horizontal lists are flipped natively
   (`ScrollConfig::mirrored`: the scroll view and each cell get scaleX −1, composed with their transforms), so the list's
   offset logic stays left to right.
+- **Location** (`location()`, `navigate`; `nsh_core::location`): the app's location, a signal of its own in `Ambient`
+  (the environment stays `Copy`), set at once by `navigate` and by the platform's root `EventKind::Location`
+  (`{ location }`) or the engine's `Core::set_location` (the embedding app's); the app's navigations are the root's
+  `Command::Navigate`, which the core notes as it applies the op (`Core::navigated`, whichever of Rust and JS made
+  it) and the engine hands to the embedding app (`embedding.md` "The app's location"); the web's player writes them
+  into the browser's history (`web.md` "History and the location"). The Rust side's location takes a turn's last
+  navigation once, when the turn commits (JS's are only ops to it; Rust's `navigate` set it already), so a turn that
+  navigates twice never takes what read it back to the first; setting the location the app is at runs nothing again.
 - **Environment** (reactive accessors; `nsh` (`safeArea()`, `safeAreaInsets()`, `keyboardFrame()`)): `windowSize()`, `safeArea()`, `keyboardFrame()` (`{ height, duration }`: how
   far the keyboard reaches into the surface, the bottom safe area under it included, on every platform),
   `colorScheme()`, `fontScale()`, `localeSettings()` (`Environment::locale_settings`, `LocaleSettings`, one value and
