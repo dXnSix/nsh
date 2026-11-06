@@ -7,7 +7,8 @@
 //! `nsh/accessibility`; the layout direction, which follows the user's
 //! language; the insets
 //! context screens and modals provide (`safeAreaInsets`); the design
-//! tokens the app is drawn with (`token()` of `nsh`).
+//! tokens the app is drawn with (`token()` of `nsh`); the app's location
+//! (`location()`, `navigate`; [`nsh_core::location`]).
 
 use std::{
     cell::{Cell, RefCell},
@@ -19,6 +20,7 @@ use std::{
 use nsh_core::{
     desktop::Display,
     element::{ThemeTokens, Token, Tokens},
+    location::{HistoryBehavior, Location, Navigation},
     platform::{Appearance, ColorScheme, Environment, Idiom, Os},
 };
 use rquickjs::qjs;
@@ -50,9 +52,12 @@ enum Part {
     LocaleSettings,
     WindowState,
     Displays,
+    /// Not the platform's environment: the app's location
+    /// ([`set_location`]).
+    Location,
 }
 
-const PARTS: usize = 14;
+const PARTS: usize = 15;
 
 /// The environment's part of a context's state.
 pub(crate) struct Env {
@@ -75,6 +80,8 @@ pub(crate) struct Env {
     /// The tokens the app's theme file gives ([`set_theme_tokens`]), taken
     /// in when the entry hands the theme to the renderer ([`take_theme`]).
     theme: RefCell<ThemeTokens>,
+    /// The app's location, as `location()`'s signal has it.
+    location: RefCell<Location>,
 }
 
 impl Default for Env {
@@ -89,6 +96,7 @@ impl Default for Env {
             tokens_signal: Cell::new(UNDEFINED),
             tokens_version: Cell::new(0),
             theme: RefCell::new(ThemeTokens::default()),
+            location: RefCell::new(Location::root()),
         }
     }
 }
@@ -142,6 +150,103 @@ pub(crate) fn init(cx: *mut JsContext) {
     let insets = unsafe { crate::dom::context(cx, UNDEFINED, 1, args.as_mut_ptr()) };
     e.insets.set(insets);
     e.tokens_signal.set(reactive::new_signal(cx, number(0.0)));
+    let root = location_object(cx, &Location::root());
+    reactive::set_signal(cx, e.signals[Part::Location as usize].get(), root);
+}
+
+/// `location()`'s value: `{ url, pathname, search, hash }`, with the
+/// DOM's `?` and `#` (empty when there is none).
+fn location_object(cx: *mut JsContext, location: &Location) -> JsValue {
+    let with = |prefix: &str, part: Option<&str>| match part {
+        Some(part) => format!("{prefix}{part}"),
+        None => String::new(),
+    };
+    object(
+        cx,
+        &[
+            (c"url", string(cx, location.as_str())),
+            (c"pathname", string(cx, location.path())),
+            (c"search", string(cx, &with("?", location.query()))),
+            (c"hash", string(cx, &with("#", location.fragment()))),
+        ],
+    )
+}
+
+/// Takes in where the platform or Rust moved the app: what read
+/// `location()` runs again.
+pub(crate) fn set_location(cx: *mut JsContext, location: &Location) {
+    let e = env(cx);
+    if *e.location.borrow() == *location {
+        return;
+    }
+    e.location.replace(location.clone());
+    let value = location_object(cx, location);
+    reactive::set_signal(cx, e.signals[Part::Location as usize].get(), value);
+}
+
+/// `navigate(url, { history })`: resolves `url` against the location
+/// ([`Location::join`]), makes it `location()` at once and tells the core
+/// (`Command::Navigate` on the root). A `TypeError` for a URL that is no
+/// location of the app's.
+unsafe extern "C" fn navigate(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let url = arg(argc, argv, 0);
+    // SAFETY: a live argument.
+    if !unsafe { qjs::JS_IsString(url) } {
+        // SAFETY: throws on a live context.
+        return unsafe { qjs::JS_ThrowTypeError(cx, c"navigate: expected a URL string".as_ptr()) };
+    }
+    let url = crate::dom::string_arg(cx, url).unwrap_or_default();
+    let options = arg(argc, argv, 1);
+    let mut history = HistoryBehavior::Push;
+    // SAFETY: a live argument; the property read is freed after.
+    if unsafe { qjs::JS_IsObject(options) } {
+        let value = unsafe { qjs::JS_GetPropertyStr(cx, options, c"history".as_ptr()) };
+        let name = (!unsafe { qjs::JS_IsUndefined(value) })
+            .then(|| crate::dom::string_arg(cx, value).unwrap_or_default());
+        // SAFETY: the property read's own value.
+        unsafe { qjs::JS_FreeValue(cx, value) };
+        match name.as_deref() {
+            None | Some("push") => {}
+            Some("replace") => history = HistoryBehavior::Replace,
+            // SAFETY: throws on a live context.
+            Some(_) => unsafe {
+                return qjs::JS_ThrowTypeError(
+                    cx,
+                    c"navigate: history is \"push\" or \"replace\"".as_ptr(),
+                );
+            },
+        }
+    } else if !unsafe { qjs::JS_IsUndefined(options) } {
+        // SAFETY: throws on a live context.
+        return unsafe { qjs::JS_ThrowTypeError(cx, c"navigate: options are an object".as_ptr()) };
+    }
+    let e = env(cx);
+    let next = match e.location.borrow().join(&url) {
+        Ok(next) => next,
+        Err(refused) => {
+            let message =
+                std::ffi::CString::new(format!("navigate: {refused}")).unwrap_or_default();
+            // SAFETY: throws on a live context; `%s` takes the message.
+            return unsafe { qjs::JS_ThrowTypeError(cx, c"%s".as_ptr(), message.as_ptr()) };
+        }
+    };
+    if next == *e.location.borrow() {
+        return UNDEFINED;
+    }
+    set_location(cx, &next);
+    let op = nsh_core::Op::Command {
+        id: nsh_core::ROOT_ID,
+        command: nsh_core::Command::Navigate(Navigation::new(next, history)),
+    };
+    if let Err(err) = crate::dom::push_op(cx, op) {
+        return err;
+    }
+    reactive::finish_value(cx, UNDEFINED)
 }
 
 /// Takes in the design tokens the app is drawn with: what read a token
@@ -736,6 +841,22 @@ pub(crate) const DEVICE_EXPORTS: &[Item] = &[
         ),
     ),
     (
+        "location",
+        Export::Value(|cx| accessor(cx, Part::Location)),
+        Ts::value(
+            "Where the user is in the app (reactive): `url`, a path from the app's\nbase with its query and fragment (`\"/sports/football?tab=live#top\"`),\nand its `pathname`, `search` and `hash` as the DOM names them. On the web\nthe address bar's, the browser's back and forward included; elsewhere\nwhat the embedding app set, else `\"/\"`. `\"/\"` in headless tests unless\n`open` sets `location`.",
+            "Accessor<Location>",
+        ),
+    ),
+    (
+        "navigate",
+        Export::Function(navigate, 2),
+        Ts::function(
+            "Goes to `url` in the app, resolved against `location()` (`\"/teams\"`,\n`\"football\"`, `\"?tab=live\"`, `\"#top\"`, `\"../news\"`): `location()` is the new\none at once, the web adds a browser history entry for it (`history:\n\"replace\"` changes the current one) and the embedding app hears it. A\npage or dialog the app shows in the same turn shares the entry. Going to\nthe location the app is at does nothing. Throws a `TypeError` for\nanother site's URL (`https://…`, which `openUrl` opens).",
+            &["(url: string, options?: NavigateOptions): void"],
+        ),
+    ),
+    (
         "lifecycle",
         Export::Value(|cx| accessor(cx, Part::Lifecycle)),
         Ts::value(
@@ -833,6 +954,24 @@ export interface PlatformInfo {
    * else `desktop` / `mobile` (by `platform.desktop`), else `native` (not
    * on the web), else `default`. */
   select<T>(spec: PlatformSelectSpec<T>): T | undefined;
+}
+/** Where the user is in the app (`location()`). */
+export interface Location {
+  /** A path from the app's base with its query and fragment:
+   * `"/sports/football?tab=live#top"`. */
+  readonly url: string;
+  /** Its path: `"/sports/football"`. */
+  readonly pathname: string;
+  /** Its query with the `?`, `"?tab=live"`; `""` without one. */
+  readonly search: string;
+  /** Its fragment with the `#` (`#top`); `""` without one. */
+  readonly hash: string;
+}
+/** `navigate`'s options. */
+export interface NavigateOptions {
+  /** `"push"` (default): a new browser history entry, so going back
+   * returns to the location before; `"replace"`: the current entry. */
+  history?: "push" | "replace";
 }
 "#;
 

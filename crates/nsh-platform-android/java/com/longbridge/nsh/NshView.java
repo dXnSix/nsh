@@ -83,8 +83,30 @@ public class NshView extends FrameLayout {
         boolean openUrl(String url);
     }
 
+    /**
+     * Hears where the app goes ({@code navigate} of {@code nsh}), on the UI
+     * thread. Register it with {@link #setNavigateHandler}.
+     */
+    public interface NavigateHandler {
+        /**
+         * Called for each navigation of the app, in order, once
+         * {@link #getLocation} returns its location (or a later one). The
+         * embedding app's own moves ({@link #setLocation}) do not reach it.
+         *
+         * @param location where the app went: a path from the app's base,
+         *     {@code /sports/football?tab=live}
+         * @param replace true when the navigation changes the current history
+         *     entry ({@code navigate(url, { history: "replace" })}), false when
+         *     it adds one
+         */
+        void navigate(String location, boolean replace);
+    }
+
     /** The embedding app's URL handler, or null. */
     private volatile OpenUrlHandler openUrlHandler;
+
+    /** The embedding app's navigation handler, or null. */
+    private volatile NavigateHandler navigateHandler;
 
     /** The handlers of the app's calls and posts, by name. */
     private final java.util.Map<String, HostHandler> hostHandlers = new java.util.concurrent.ConcurrentHashMap<>();
@@ -561,6 +583,61 @@ public class NshView extends FrameLayout {
             } finally {
                 Native.openUrlReply(request, handled);
             }
+        });
+    }
+
+    /**
+     * Sets where the app is ({@code location()} of {@code nsh}): a path from
+     * the app's base, {@code /sports/football?tab=live}. Before an app loads,
+     * where it starts; while one runs, the app goes there (its
+     * {@code location()} changes), such as to the path of an App Link the
+     * host app handled. The location stays the view's for the apps loaded
+     * after. Any thread.
+     *
+     * @param location a path from the app's base, with its query and
+     *     fragment if it has them
+     * @return false (and ignored) when it is not such a path
+     *     ({@code https://…}, {@code sports}), or the view was destroyed
+     */
+    public boolean setLocation(String location) {
+        if (location == null) return false;
+        synchronized (hostLock) {
+            return handle != 0 && Native.setLocation(handle, location);
+        }
+    }
+
+    /**
+     * Where the app is: the latest of {@link #setLocation} and the app's
+     * navigations, normalized as URLs are ({@code /a b} is
+     * {@code /a%20b}); {@code /} until one of them. Any thread.
+     *
+     * @return the location, or null when the view was destroyed
+     */
+    public String getLocation() {
+        synchronized (hostLock) {
+            return handle == 0 ? null : Native.location(handle);
+        }
+    }
+
+    /**
+     * Hears where the app goes ({@code navigate} of {@code nsh}), replacing
+     * the handler it had; null removes it. A host app shows the location in
+     * its own UI, keeps it for its back stack or deep links, or follows it
+     * in its router.
+     *
+     * @param handler the handler, or null
+     */
+    public void setNavigateHandler(NavigateHandler handler) {
+        if (handle == 0) return;
+        navigateHandler = handler;
+        Native.setNavigateHandler(handle, handler != null);
+    }
+
+    /** A navigation of the app; called by libnsh on the engine thread. */
+    void navigateMessage(String location, boolean replace) {
+        main.post(() -> {
+            NavigateHandler handler = navigateHandler;
+            if (handler != null) handler.navigate(location, replace);
         });
     }
 
