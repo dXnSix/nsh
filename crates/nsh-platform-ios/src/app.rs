@@ -6,7 +6,7 @@ use objc2::{
     runtime::AnyObject,
 };
 use objc2_core_foundation::CGSize;
-use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{NSObject, NSObjectProtocol, NSSet, NSString, NSURL};
 use objc2_ui_kit::{
     UIApplication, UIApplicationDelegate, UIResponder, UIScene, UISceneConfiguration,
     UISceneConnectionOptions, UISceneDelegate, UISceneSession, UIViewController, UIWindow,
@@ -77,7 +77,7 @@ static LAUNCH: Mutex<Option<(AppSource, AppOptions)>> = Mutex::new(None);
 /// Main-thread state of the standalone app.
 struct AppState {
     _window: Retained<UIWindow>,
-    _view: AppView,
+    view: AppView,
 }
 
 thread_local! {
@@ -135,7 +135,7 @@ define_class!(
             &self,
             scene: &UIScene,
             session: &UISceneSession,
-            _options: &UISceneConnectionOptions,
+            options: &UISceneConnectionOptions,
         ) {
             // SAFETY: reading an immutable UIKit constant.
             if *session.role() != *unsafe { UIWindowSceneSessionRoleApplication } {
@@ -145,6 +145,16 @@ define_class!(
                 return;
             };
             connect(self.mtm(), scene);
+            if let Some(contexts) = launch_url_contexts(options) {
+                url_schemes(&contexts);
+            }
+        }
+
+        // Links of the schemes the app claims (`CFBundleURLTypes`) while it
+        // runs.
+        #[unsafe(method(scene:openURLContexts:))]
+        fn open_url_contexts(&self, _scene: &UIScene, contexts: &NSSet<AnyObject>) {
+            url_schemes(contexts);
         }
     }
 
@@ -179,6 +189,33 @@ impl RootController {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
         // SAFETY: UIViewController's designated initializer.
         unsafe { msg_send![Self::alloc(mtm), init] }
+    }
+}
+
+/// The `UIOpenURLContext`s of the link that launched the app, if one did.
+///
+/// Read as optional: UIKit's header and objc2-ui-kit's `URLContexts()`
+/// declare a set that is never nil, but UIKit answers nil when no link
+/// launched the app, and a non-optional `Retained` panics on it, which
+/// aborts the launch inside the scene's callback.
+fn launch_url_contexts(options: &UISceneConnectionOptions) -> Option<Retained<NSSet<AnyObject>>> {
+    // SAFETY: `URLContexts` is a documented property of the connection
+    // options, a set of `UIOpenURLContext` or nil.
+    unsafe { msg_send![options, URLContexts] }
+}
+
+/// Hands the URLs of `contexts` (`UIOpenURLContext`s) to the app.
+fn url_schemes(contexts: &NSSet<AnyObject>) {
+    for context in contexts.iter() {
+        // SAFETY: `UIOpenURLContext`'s documented `URL` property.
+        let url: Retained<NSURL> = unsafe { msg_send![&*context, URL] };
+        let Some(url) = url.absoluteString() else {
+            continue;
+        };
+        APP.with(|app| match &*app.borrow() {
+            Some(app) => app.view.url_scheme(url.to_string()),
+            None => log::warn!("link dropped: no app runs"),
+        });
     }
 }
 
@@ -227,7 +264,7 @@ fn connect(mtm: MainThreadMarker, scene: &UIWindowScene) {
     APP.with(|app| {
         *app.borrow_mut() = Some(AppState {
             _window: window,
-            _view: view,
+            view,
         })
     });
 }
@@ -268,4 +305,24 @@ pub fn run_app(source: AppSource, options: AppOptions) -> ! {
             .expect("class name is UTF-8"),
     );
     UIApplication::main(None, Some(&delegate), mtm)
+}
+
+#[cfg(test)]
+mod tests {
+    use objc2::{ClassType, msg_send, rc::Retained};
+    use objc2_ui_kit::UISceneConnectionOptions;
+
+    /// An app no link launched (opened from its icon, or a development
+    /// host `nsh run` and `nsh test` start) has no launch link: its
+    /// connection options answer nil for their URL contexts, which reads as
+    /// none instead of aborting the launch.
+    #[test]
+    fn a_launch_without_a_link_has_no_url_contexts() {
+        // SAFETY: `+new` of an `NSObject` subclass: options that no link
+        // came with.
+        let options: Retained<UISceneConnectionOptions> =
+            unsafe { msg_send![UISceneConnectionOptions::class(), new] };
+
+        assert!(super::launch_url_contexts(&options).is_none());
+    }
 }

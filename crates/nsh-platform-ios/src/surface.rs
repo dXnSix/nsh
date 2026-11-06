@@ -18,8 +18,8 @@ use objc2::{
 };
 use objc2_core_foundation::{CGRect, CGSize};
 use objc2_foundation::{
-    NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSOperationQueue,
-    NSSystemTimeZoneDidChangeNotification, NSTimeZone, NSValue,
+    NSCurrentLocaleDidChangeNotification, NSNotification, NSNotificationCenter, NSNumber, NSObject,
+    NSObjectProtocol, NSOperationQueue, NSSystemTimeZoneDidChangeNotification, NSTimeZone, NSValue,
 };
 use objc2_ui_kit::{
     NSValueUIGeometryExtensions, UIApplication, UIApplicationDidBecomeActiveNotification,
@@ -138,6 +138,8 @@ pub(crate) struct RootViewIvars {
     host_tokens: RefCell<Option<nsh_engine::Tokens>>,
     /// Keyboard notification registrations.
     observers: RefCell<Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>>,
+    /// Links that came before the engine started ([`Surface::url_scheme`]).
+    url_schemes: RefCell<Vec<String>>,
     #[cfg(feature = "dev")]
     test_model: TestModel,
 }
@@ -308,6 +310,7 @@ impl RootView {
             host: Cell::default(),
             host_tokens: RefCell::new(None),
             observers: RefCell::new(Vec::new()),
+            url_schemes: RefCell::new(Vec::new()),
             #[cfg(feature = "dev")]
             test_model: TestModel::default(),
         });
@@ -373,7 +376,7 @@ impl RootView {
                 _ => Idiom::Phone,
             },
             locale: current_locale(),
-            time_zone: time_zone(),
+            locale_settings: locale_settings(),
             lifecycle: self.ivars().lifecycle.get(),
             // Only read for the web: iOS keys are always Apple's.
             apple_keyboard: true,
@@ -424,6 +427,28 @@ impl RootView {
         let observer = unsafe {
             center.addObserverForName_object_queue_usingBlock(
                 Some(NSSystemTimeZoneDidChangeNotification),
+                None,
+                Some(&NSOperationQueue::mainQueue()),
+                &block,
+            )
+        };
+        this.ivars().observers.borrow_mut().push(observer);
+    }
+
+    /// The environment follows the region's settings: the region format,
+    /// 24-hour time, the first day of the week, the measurement system and
+    /// the temperature unit, which iOS changes while apps run.
+    fn observe_locale(this: &Retained<Self>) {
+        let center = NSNotificationCenter::defaultCenter();
+        let weak = Weak::from_retained(this);
+        let block = RcBlock::new(move |_: NonNull<NSNotification>| {
+            let Some(view) = weak.load() else { return };
+            view.publish_environment();
+        });
+        // SAFETY: as in `observe_time_zone`.
+        let observer = unsafe {
+            center.addObserverForName_object_queue_usingBlock(
+                Some(NSCurrentLocaleDidChangeNotification),
                 None,
                 Some(&NSOperationQueue::mainQueue()),
                 &block,
@@ -790,6 +815,10 @@ impl RootView {
             installed.measure();
         }
         *mounter.get(mtm).borrow_mut() = Some(installed);
+        let links = std::mem::take(&mut *self.ivars().url_schemes.borrow_mut());
+        for url in links {
+            send_url_scheme(&engine.control(), url);
+        }
         *self.ivars().running.borrow_mut() = Some(Running { engine, mounter });
         self.ivars().environment.set(Some(self.environment()));
     }
@@ -921,6 +950,7 @@ impl Surface {
         RootView::observe_keyboard(&view);
         RootView::observe_lifecycle(&view);
         RootView::observe_time_zone(&view);
+        RootView::observe_locale(&view);
         Ok(Surface { view })
     }
 
@@ -1003,6 +1033,16 @@ impl Surface {
         }
     }
 
+    /// Hands `url`, a link the system opened the app with, to the app's
+    /// engine, whose core keeps it until the app listens (`UrlScheme`);
+    /// kept until the engine starts.
+    pub(crate) fn url_scheme(&self, url: String) {
+        match &*self.view.ivars().running.borrow() {
+            Some(running) => send_url_scheme(&running.engine.control(), url),
+            None => self.view.ivars().url_schemes.borrow_mut().push(url),
+        }
+    }
+
     /// Replaces the running app with `app` (state is reset).
     pub fn reload(&self, app: impl Into<App>) {
         let app = app.into();
@@ -1017,6 +1057,18 @@ impl Surface {
             *self.view.ivars().pending.borrow_mut() = Some(app);
         }
     }
+}
+
+/// Reports `url` as a link the system opened the app with.
+fn send_url_scheme(control: &nsh_engine::EngineControl, url: String) {
+    control.dispatch_event(
+        nsh_core::ROOT_ID,
+        nsh_core::EventKind::UrlScheme,
+        nsh_core::EventPayload::Map(vec![(
+            nsh_core::url_scheme::URL,
+            nsh_core::PayloadValue::Str(url),
+        )]),
+    );
 }
 
 impl Drop for Surface {
@@ -1042,6 +1094,73 @@ fn preferred_language_rtl() -> bool {
         })
 }
 
+/// The user's preferred languages, most preferred first:
+/// `NSLocale.preferredLanguages`, Settings' list (the app's own language
+/// first when the user chose one for it). iOS restarts apps when the user
+/// changes the list, so it is read as the environment is published.
+fn preferred_languages() -> nsh_engine::Languages {
+    let tags: Vec<String> = objc2_foundation::NSLocale::preferredLanguages()
+        .iter()
+        .map(|tag| tag.to_string())
+        .collect();
+    nsh_engine::Languages::parse(tags.iter().map(String::as_str))
+        .unwrap_or_else(|| nsh_engine::Languages::one(current_locale()))
+}
+
+/// The user's locale settings (`localeSettings()`): the preferred
+/// languages, the time zone, and Settings' time format (the hours of
+/// `NSDateFormatter`'s format for the `j` template, which 24-hour time
+/// changes), `NSCalendar`'s first weekday, `NSLocale`'s measurement system
+/// and the `AppleTemperatureUnit` default, over the region's.
+fn locale_settings() -> nsh_engine::LocaleSettings {
+    use nsh_engine::{HourCycle, MeasurementSystem, TemperatureUnit, Weekday};
+    use objc2_foundation::{
+        NSCalendar, NSDateFormatter, NSLocale, NSLocaleMeasurementSystem, NSString, NSUserDefaults,
+        ns_string,
+    };
+    let locale = NSLocale::currentLocale();
+    let mut preferences = nsh_engine::LocaleSettings::parse(&locale.localeIdentifier().to_string());
+    preferences.languages = preferred_languages();
+    preferences.time_zone = time_zone();
+    // The hours of the user's time format, which 24-hour time changes.
+    let hours =
+        NSDateFormatter::dateFormatFromTemplate_options_locale(ns_string!("j"), 0, Some(&locale));
+    if let Some(cycle) = hours.and_then(|format| HourCycle::of_pattern(&format.to_string())) {
+        preferences.hour_cycle = cycle;
+    }
+    // From 1 for Sunday to 7 for Saturday.
+    let first = match NSCalendar::currentCalendar().firstWeekday() {
+        1 => Some(Weekday::Sunday),
+        n => u8::try_from(n)
+            .ok()
+            .and_then(|n| Weekday::from_number(n.wrapping_sub(1))),
+    };
+    if let Some(day) = first {
+        preferences.first_day_of_week = day;
+    }
+    // SAFETY: a key Foundation defines.
+    let system = locale.objectForKey(unsafe { NSLocaleMeasurementSystem });
+    match system
+        .and_then(|s| s.downcast::<NSString>().ok())
+        .map(|s| s.to_string())
+        .as_deref()
+    {
+        Some("Metric") => preferences.measurement_system = MeasurementSystem::Metric,
+        Some("U.S.") => preferences.measurement_system = MeasurementSystem::Us,
+        Some("U.K.") => preferences.measurement_system = MeasurementSystem::Uk,
+        _ => {}
+    }
+    // Set once the user picks one.
+    let unit =
+        NSUserDefaults::standardUserDefaults().stringForKey(ns_string!("AppleTemperatureUnit"));
+    match unit.map(|u| u.to_string()).as_deref() {
+        Some("Celsius") => preferences.temperature_unit = TemperatureUnit::Celsius,
+        Some("Fahrenheit") => preferences.temperature_unit = TemperatureUnit::Fahrenheit,
+        _ => {}
+    }
+    preferences
+}
+
 /// The user's region format (`NSLocale.currentLocale`: language and
 /// region, as Settings sets them), `Intl`'s default.
 fn current_locale() -> nsh_engine::Locale {
@@ -1051,14 +1170,14 @@ fn current_locale() -> nsh_engine::Locale {
     nsh_engine::Locale::parse(&identifier).unwrap_or_default()
 }
 
-/// The app's state as UIApplication reports it now, before its
-/// notifications say more.
-/// The system's time zone (`timeZone()`): its IANA name.
+/// The system's time zone: its IANA name.
 fn time_zone() -> nsh_engine::TimeZone {
     nsh_engine::TimeZone::parse(&NSTimeZone::systemTimeZone().name().to_string())
         .unwrap_or_default()
 }
 
+/// The app's state as UIApplication reports it now, before its
+/// notifications say more.
 fn lifecycle(mtm: MainThreadMarker) -> Lifecycle {
     match UIApplication::sharedApplication(mtm).applicationState() {
         UIApplicationState::Active => Lifecycle::Active,

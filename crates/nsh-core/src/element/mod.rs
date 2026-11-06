@@ -138,8 +138,8 @@ pub use self::{
     env::Environment,
     events::{
         CaretEvent, Composition, FileDropEvent, GestureEvent, HintReason, ImageProgress,
-        NativeEvent, OverlayPosition, PanEvent, ScrollEvent, Selection, VideoInfo, VideoProgress,
-        WebNavigation,
+        NativeEvent, OverlayPosition, PanEvent, ScrollEvent, Selection, TextSelectionEvent,
+        VideoInfo, VideoProgress, WebNavigation,
     },
     flow::{Each, If, IntoElements, Reset, catch_error, dynamic, each, when},
     host::{
@@ -220,7 +220,8 @@ pub use crate::{
     },
     overlay::{Align, Placement},
     platform::{
-        Appearance, HttpBody, HttpHead, HttpRequest, Idiom, Lifecycle, Locale, Os, TimeZone,
+        Appearance, HourCycle, HttpBody, HttpHead, HttpRequest, Idiom, Languages, Lifecycle,
+        Locale, LocaleSettings, MeasurementSystem, Os, TemperatureUnit, TimeZone, Weekday,
     },
     style::Color,
 };

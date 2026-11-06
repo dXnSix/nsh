@@ -160,11 +160,12 @@ describe("the cart", () => {
 | `clipboard` | 空 | 剪贴板初始的文字。 |
 | `colorScheme` | `"light"` | 系统外观：`"light"` 或 `"dark"`（`colorScheme()`、`dark:` 类）。 |
 | `locale` | `"en-US"` | 设备的区域设置，BCP 47 标签（`locale()`、`Intl` 的默认值）。 |
-| `timeZone` | `"UTC"` | 设备的时区，IANA 名称（`timeZone()`）。它只给出时区的名称：`Date` 和 `Intl` 的本地时间仍是这台机器的，`Intl` 给出的时区也是。 |
+| `localeSettings` | 区域设置的，UTC | 用户的语言与地区设置（`localeSettings()`），列出的项覆盖区域设置的：`languages`（BCP 47 标签，按偏好从高到低排列；`[locale]`）、`timeZone`（IANA 名称；`"UTC"`）、`hourCycle`（`"h12"`、`"h23"`、`"h11"` 或 `"h24"`）、`firstDayOfWeek`（1 是星期一，7 是星期日）、`measurementSystem`（`"metric"`、`"us"` 或 `"uk"`）和 `temperatureUnit`（`"celsius"` 或 `"fahrenheit"`），后四项是区域设置所在地区的。时区只给出名称：`Date` 和 `Intl` 的本地时间仍是这台机器的，`Intl` 给出的时区也是。 |
 | `reducedMotion` | `false` | 用户要求减少动态效果（`reduceMotion()`）。 |
 | `platform` | `"ios"` | headless 时应用运行所在的平台：`"ios"`、`"android"`，或桌面平台 `"macos"`、`"windows"`、`"linux"`，以及桌面形态的 `"web"`（`platform.os`、`ios={{…}}` / `android={{…}}` / `desktop={{…}}` 属性、键盘快捷键）。使用 `--target` 时，应用以目标平台运行：桌面平台的 `platform` 可用于任何桌面目标和 web，且总以桌面形态运行（在浏览器中无论宽度都是桌面形态，`platform.os` 仍是 `"web"`），`"ios"` 和 `"android"` 只用于各自的目标。 |
 | `clock` | 系统时钟 | 手动时钟，它的时间只随测试推进：`{}`，或者用 `{ time }` 从某个 `Date`（或自 Unix 纪元起的毫秒数）开始。见[控制时间](#控制时间)。 |
 | `host` | 无 | 由测试扮演的宿主应用：`{ params, handlers }`。见[扮演宿主应用](#扮演宿主应用)。 |
+| `url` | 无 | 启动应用的链接：应用认领了它的 scheme（`nsh.json` 的 `schemes`）时，`UrlScheme.on("open")` 会像从系统那里一样收到它（[UrlScheme](../modules/nsh.md#urlscheme)）。仅限 headless 运行。 |
 
 ### 扮演宿主应用
 
@@ -378,10 +379,11 @@ expect(app.texts()).toContain("Saved at 09:00:10");
 | `await app.host.send(name, data?)` | 以宿主应用的身份向应用发送事件（`host.on`），然后等待它空闲。见[扮演宿主应用](#扮演宿主应用)。 |
 | `app.host.calls()`、`app.host.posts()` | `open` 的 `host.handlers` 收到的应用调用和投递，按顺序排列：`name`、`data`。 |
 | `app.openedUrls()` | 应用打开的 URL（`openUrl`），按顺序排列：只记录，不打开。 |
+| `await app.openWithUrl(url)` | 系统把一个打开应用的链接交给应用，就像用户在应用运行时打开链接一样（`UrlScheme.on("open")`；应用未认领的 scheme 的链接会被丢弃，与设备上一致），然后等待应用安静下来。仅限 headless 运行。 |
 | `await app.setViewport(width, height)` | 改变视口大小，就像旋转设备或调整窗口大小那样（`windowSize()`）。 |
 | `await app.setColorScheme(scheme)` | 像用户那样把系统外观切换为 `"light"` 或 `"dark"`。 |
 | `await app.setLifecycle(state)` | 把应用移到 `"background"`、`"inactive"` 或 `"active"`，就像用户离开应用、切换到另一个应用或窗口、再回来时系统所做的那样（`lifecycle()`）。仅限 headless 运行。 |
-| `await app.setTimeZone(name)` | 把设备移到时区 `name`（IANA 名称，`"Asia/Tokyo"`），就像用户出行或修改设置时那样（`timeZone()`）。仅限 headless 运行。 |
+| `await app.setLocaleSettings(settings)` | 修改 `settings` 中列出的语言与地区设置（`{ hourCycle: "h23", timeZone: "Asia/Tokyo" }`；还有 `languages`、`firstDayOfWeek`、`measurementSystem` 和 `temperatureUnit`，与 `open` 的 `localeSettings` 相同），就像用户修改系统设置或出行时那样；其余不变（`localeSettings()`）。仅限 headless 运行。 |
 | `await app.screenshot(path?)` | 应用截图（`Uint8Array`）：图形平台返回应用窗口的 PNG，`tui` 返回 UTF-8 Cell JSON；给出 `path` 时同时保存到本机的这个路径（相对当前目录）。只有真实平台会绘制应用：见[在真实平台上运行](#在真实平台上运行)。 |
 
 步骤会等到应用连续 100 ms 没有渲染、并且没有正在运行的、会自行结束的原生动画（对一直在渲染的应用最多等 2 s；在手动时钟上，同时最多等应用时间的 2 s）后才 resolve，所以下一行
@@ -401,7 +403,7 @@ expect(app.texts()).toContain("Saved at 09:00:10");
 | `ERR_NSH_TEST_DISABLED` | 选择器指向的视图已禁用（用户不能滚动的滚动视图、已禁用的菜单项）。 |
 | `ETIMEDOUT` | `waitFor` 或 `waitUntil` 超时，或者应用在 `open` 之后没有渲染任何内容。 |
 | `ERR_NSH_TEST_NO_BACK` | `back()` 没有可以返回的地方。 |
-| `ERR_NSH_TEST_UNSUPPORTED` | 使用 `--target` 时，`open` 收到了目标平台无法满足的选项：iOS 和 Android 上的 `width` 或 `height`、桌面或 web 上的手机 `platform`、iOS 或 Android 上的桌面平台或另一种手机的 `platform`、`host.handlers`。消息会指出是哪一个。 |
+| `ERR_NSH_TEST_UNSUPPORTED` | 使用 `--target` 时，`open` 收到了目标平台无法满足的选项：iOS 和 Android 上的 `width` 或 `height`、桌面或 web 上的手机 `platform`、iOS 或 Android 上的桌面平台或另一种手机的 `platform`、`host.handlers`、`url`。消息会指出是哪一个。 |
 
 ```tsx
 await expect(app.press("Pay")).rejects.toMatchObject({ code: "ERR_NSH_TEST_DISABLED" });
@@ -513,11 +515,11 @@ nsh test tests/form.test.tsx --target macos   # 只运行一个文件
 平台每显示一帧，时钟前进一帧（1/60 秒），所以应用在动画时时间照常流逝。平台自身的动画和路由的 `delay` 按真实时间进行。应用的请求和 headless
 时一样交给测试：由 `network` 路由应答，没有路由匹配的请求会失败，`"live"` 则放行到 host 的真实网络；`app.requests()` 列出全部请求。
 使用 `"live"` 时，socket 和 WebSocket 在 host 的网络上连接，否则和 headless 时一样被拒绝。
-`storage` 在应用启动时就已写入应用存储，`app.storage()` 从应用中读取。`open` 给出的 `locale`、`timeZone`、`reducedMotion` 和 `safeArea`（包括取默认值时）不随平台上报的值变化，给出的 `colorScheme` 会切换系统外观（`"light"` 也一样），没有给出的则沿用平台自己的；
+`storage` 在应用启动时就已写入应用存储，`app.storage()` 从应用中读取。`open` 给出的 `locale`、`localeSettings` 列出的语言与地区设置、`reducedMotion` 和 `safeArea`（包括取默认值时）不随平台上报的值变化，给出的 `colorScheme` 会切换系统外观（`"light"` 也一样），没有给出的则沿用平台自己的；
 应用的剪贴板调用由测试自己的剪贴板应答（`clipboard` 是它的初始文本，`app.clipboard()` 读取它），机器的剪贴板保持不变；文本输入框自身的复制和
 粘贴使用系统剪贴板。`host.params` 会传给应用，`app.host.send` 发送事件，应用打开的 URL 被记录下来供 `app.openedUrls()` 读取，而不会真正打开。
 `host.handlers` 在 headless 运行，由测试回答应用的调用。`open` 会按目标检查它的选项：iOS 和 Android 上的 `width` 与
-`height`、属于另一类设备的 `platform`（桌面或 web 上的手机平台，iOS 或 Android 上的桌面平台或另一种手机）以及 `host.handlers` 会以
+`height`、属于另一类设备的 `platform`（桌面或 web 上的手机平台，iOS 或 Android 上的桌面平台或另一种手机）、`host.handlers` 以及 `url` 会以
 `ERR_NSH_TEST_UNSUPPORTED` reject，这样测试要么按写的那样运行，要么说明它需要什么。桌面平台的 `platform`（例如用 `"macos"` 获得桌面的鼠标和按键）
 可以在任何桌面目标和 web 上运行，应用以该目标的平台运行，且总是桌面形态：在浏览器中页面无论宽度都以桌面形态启动；
 不给 `platform`（或给 `"web"`）时，页面像浏览器一样自己判断形态（宽度至少 600 点时为桌面）。带有自己 Rust crate 的应用运行在 NSH 为该平台用这些 crate 构建的开发 host 中；

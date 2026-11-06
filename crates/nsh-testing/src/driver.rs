@@ -8,12 +8,15 @@ use std::time::Duration;
 use nsh_core::{
     Dialog, ResolvedTextStyle,
     geometry::{Point, Points, Size},
-    platform::{ColorScheme, Lifecycle, TimeZone},
+    platform::{ColorScheme, Lifecycle},
 };
 use nsh_dev::protocol::{ClockChange, TestStep};
 use serde_json::Value;
 
-use crate::headless::{DialogAnswer, Headless};
+use crate::{
+    headless::{DialogAnswer, Headless},
+    module::LocaleSettingsOptions,
+};
 
 /// An app a test opened, driven by steps and read by queries.
 pub(crate) trait Driver: Send {
@@ -70,10 +73,16 @@ pub(crate) trait Driver: Send {
         let _ = state;
         Err(headless_only("setLifecycle"))
     }
-    /// The device's time zone, as the system reports it (`timeZone()`).
-    fn set_time_zone(&mut self, zone: TimeZone) -> Result<(), String> {
-        let _ = zone;
-        Err(headless_only("setTimeZone"))
+    /// The user's locale settings that `settings` names, as the system
+    /// reports them (`localeSettings()`).
+    fn set_locale_settings(&mut self, settings: LocaleSettingsOptions) -> Result<(), String> {
+        let _ = settings;
+        Err(headless_only("setLocaleSettings"))
+    }
+    /// The system hands the app a link that opens it (`openWithUrl`).
+    fn open_with_url(&mut self, url: &str) -> Result<(), String> {
+        let _ = url;
+        Err(headless_only("openWithUrl"))
     }
     fn run_for(&mut self, time: Duration) -> Result<(), String>;
     fn fast_forward(&mut self, time: Duration) -> Result<(), String>;
@@ -224,10 +233,13 @@ impl Driver for Headless {
             e.lifecycle = state;
         })
     }
-    fn set_time_zone(&mut self, zone: TimeZone) -> Result<(), String> {
-        self.set_environment(&format!("setTimeZone({zone})"), |e| {
-            e.time_zone = zone;
-        })
+    fn set_locale_settings(&mut self, settings: LocaleSettingsOptions) -> Result<(), String> {
+        let pins = settings.pins("setLocaleSettings")?;
+        let what = format!("setLocaleSettings({})", settings.label());
+        self.set_environment(&what, |e| pins.apply(e))
+    }
+    fn open_with_url(&mut self, url: &str) -> Result<(), String> {
+        Headless::open_with_url(self, url)
     }
     fn run_for(&mut self, time: Duration) -> Result<(), String> {
         Headless::run_for(self, time)

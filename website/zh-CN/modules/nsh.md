@@ -843,17 +843,17 @@ const toggle = () => {
 
 ## Device
 
-设备 API 向应用提供设备及其环境的信息。Rust 代码调用 `nsh_core::prelude` 中的函数（`window()`、`dark()`、`font_scale()`、`locale()`、`time_zone()`、`lifecycle()`、`os()`、`idiom()`、`pixel_ratio()`、`set_color_scheme()` 等）；TSX 从 `nsh` 导入它们。窗口尺寸、配色方案、字体缩放、像素密度、区域设置、时区和应用状态是响应式的：在绑定（Rust 中传给元素的闭包，TSX 中的 JSX）、`computed` 或 `effect` 中读取它们，平台报告变化（旋转、窗口缩放、切换深色模式、修改文字大小或语言、移到另一个时区、移到另一种像素密度的屏幕、离开应用再回来）时，读取它们的地方会随之更新。
+设备 API 向应用提供设备及其环境的信息。Rust 代码调用 `nsh_core::prelude` 中的函数（`window()`、`dark()`、`font_scale()`、`locale()`、`locale_settings()`、`lifecycle()`、`os()`、`idiom()`、`pixel_ratio()`、`set_color_scheme()` 等）；TSX 从 `nsh` 导入它们。窗口尺寸、配色方案、字体缩放、像素密度、区域设置、语言与地区设置和应用状态是响应式的：在绑定（Rust 中传给元素的闭包，TSX 中的 JSX）、`computed` 或 `effect` 中读取它们，平台报告变化（旋转、窗口缩放、切换深色模式、修改文字大小、语言或地区设置、移到另一个时区、移到另一种像素密度的屏幕、离开应用再回来）时，读取它们的地方会随之更新。
 
 ```rust tabs
 use nsh_core::{
-    platform::{Appearance, Idiom, Lifecycle, Os, TimeZone},
-    prelude::*, // window、dark、font_scale、locale、time_zone、lifecycle、os、idiom、pixel_ratio、set_color_scheme……
+    platform::{Appearance, HourCycle, Idiom, Lifecycle, LocaleSettings, MeasurementSystem, Os, TemperatureUnit, TimeZone, Weekday},
+    prelude::*, // window、dark、font_scale、locale、locale_settings、lifecycle、os、idiom、pixel_ratio、set_color_scheme……
 };
 ```
 
 ```tsx tabs
-import { colorScheme, fontScale, lifecycle, locale, openUrl, pixelRatio, platform, setColorScheme, timeZone, windowSize } from "nsh";
+import { colorScheme, fontScale, lifecycle, locale, localeSettings, openUrl, pixelRatio, platform, setColorScheme, windowSize } from "nsh";
 ```
 
 教程见[设备与环境](../docs/device-and-environment.md)。
@@ -912,13 +912,31 @@ const locale: Accessor<string>;
 
 用户的区域设置，BCP 47 标签（`"en-US"`、`"zh-Hans-CN"`），或嵌入它的应用设置的区域设置。响应式。Rust：`locale() -> Locale`（`locale().as_str()` 即标签）。`Intl` 默认按它格式化；读取它来选择你自己的翻译文案（[设备与环境](../docs/device-and-environment.md#语言和地区)）。
 
-### timeZone
+### localeSettings
 
 ```ts
-const timeZone: Accessor<string>;
+const localeSettings: Accessor<LocaleSettings>;
+
+interface LocaleSettings {
+  readonly languages: readonly string[];
+  readonly timeZone: string;
+  readonly hourCycle: "h11" | "h12" | "h23" | "h24";
+  readonly firstDayOfWeek: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  readonly measurementSystem: "metric" | "us" | "uk";
+  readonly temperatureUnit: "celsius" | "fahrenheit";
+}
 ```
 
-设备的时区，即系统给它的名称：IANA 名称（`"Europe/Berlin"`、`"America/New_York"`）、`"UTC"`，或系统使用偏移量时区时的名称（Android 上的 `"GMT+01:00"`）。响应式：随系统设置变化，例如用户出行时。Rust：`time_zone() -> TimeZone`（`time_zone().as_str()` 即名称）。`Date` 的本地时间跟随系统时区，`Intl` 给出的名称与它相同（`Intl.DateTimeFormat().resolvedOptions().timeZone`）；读取这个名称来显示它、和日期一起保存，或交给时区库（[设备与环境](../docs/device-and-environment.md#时区)）。除非 `open` 设置了 `timeZone`，headless 测试中它是 `"UTC"`；测试中的本地时间仍是这台机器的。
+用户在区域设置之外的语言与地区设置：系统和语言、地区放在一起保存、一起改动的设置。响应式：其中任何一项变化时它都会变化；只想跟随其中一项时，在 `memo` 中读取它。Rust：`locale_settings() -> LocaleSettings`，字段相同，用蛇形命名（`languages`、`time_zone`、`hour_cycle`、`first_day_of_week`、`measurement_system`、`temperature_unit`）。名称和取值都是 `Intl` 的，可以直接传入它的选项（[设备与环境](../docs/device-and-environment.md#语言与地区设置)）：
+
+- `languages`：偏好语言，BCP 47 标签，按偏好从高到低排列（`["de-DE", "en-US"]`）：系统的列表；嵌入它的应用设置了自己的语言时，那个语言排在最前。从不为空。用其中第一个有翻译的语言显示应用的文字，其余是它的后备。`locale()` 是区域格式，可以不同（英文文字、德国日期）。Rust：`Languages`（`iter()`、`first()`、`as_slice()`，每项是一个 `Locale`）。
+- `timeZone`：设备的时区，即系统给它的名称：IANA 名称（`"Europe/Berlin"`、`"America/New_York"`）、`"UTC"`，或系统使用偏移量时区时的名称（Android 上的 `"GMT+01:00"`）。随系统设置变化，例如用户出行时。`Date` 的本地时间跟随系统时区，`Intl` 给出的名称与它相同（`Intl.DateTimeFormat().resolvedOptions().timeZone`）；读取这个名称来显示它、和日期一起保存，或交给时区库。Rust：`TimeZone`（`as_str()` 即名称）。
+- `hourCycle`：12 小时制或 24 小时制，用 `Intl` 对小时周期的命名：`"h12"`（`12:30 PM`）、`"h23"`（`00:30`），以及较少见的 `"h11"`（`0:30 PM`）和 `"h24"`（`24:30`）。是系统的设置，否则是所在地区的。`Intl` 按区域设置自己的小时周期书写时间：把它作为 `hourCycle` 选项传入，就能按用户的习惯书写。`TimeField` 和 `DatePicker` 的 `hourCycle` 在 `"h11"` 和 `"h12"` 时用 `"h12"`，其余用 `"h23"`。Rust：`HourCycle`（`twelve_hour()` 表示有上午和下午）。
+- `firstDayOfWeek`：每周从哪一天开始，按 ISO 8601（以及 `Intl.Locale` 的 `firstDay`）给星期编号：1 是星期一，7 是星期日。即日历的第一列。是系统的设置，否则是所在地区的（美国是 7，德国是 1，埃及是 6）。`Calendar` 和 `DatePicker` 的 `firstDayOfWeek` 从 0（星期日）开始计数：传入 `firstDayOfWeek % 7`。Rust：`Weekday`（`number()`）。
+- `measurementSystem`：度量长度、重量和容积所用的单位：`"metric"`（公制）、`"us"`（英尺、英里、磅、加仑）或 `"uk"`（公制，但距离用英里、容量用品脱）。是系统的设置，否则是所在地区的。Rust：`MeasurementSystem`。
+- `temperatureUnit`：温度单位：`"celsius"`（摄氏度）或 `"fahrenheit"`（华氏度）。是系统的设置，否则是所在地区的（美国及少数几个地区是华氏度）。Rust：`TemperatureUnit`。
+
+除非 `open` 设置了 `localeSettings`，headless 测试中它是区域设置的（区域设置本身作为偏好语言、所在地区的偏好），时区是 UTC；测试中的本地时间仍是这台机器的。
 
 ### lifecycle
 
@@ -1793,10 +1811,10 @@ Rust 代码使用 `nsh_core::prelude` 的 `request_notification_permission`、`s
 
 | 平台 | 通知 | 角标 |
 | --- | --- | --- |
-| macOS | 通知中心，需要已签名的应用包；`nsh run` 的非应用包宿主上为 `unavailable` | Dock，无需权限 |
+| macOS | 通知中心，需要已签名的应用包；`nsh run` 的非应用包宿主上，以及未设置 `AppOptions::notifications` 的嵌入应用中为 `unavailable` | Dock，无需权限 |
 | iOS | 通知中心 | 主屏幕，需要权限 |
 | Android | 系统通知，Android 13 需要 `POST_NOTIFICATIONS`（`nsh package` 会为获得 `notifications` 能力的应用声明） | 没有可设置的数字：启动器会标记有通知显示的应用，数字随之后显示的通知一起传递 |
-| Windows | Toast 通知，除非用户在设置里关闭了应用的通知（即 `denied`）。Windows 没有授权弹窗，`requestPermission` 不会询问用户。嵌入其他应用的 surface 为 `unavailable` | 任务栏按钮上的数字，最多显示 `99+`；任务栏使用小按钮时不显示 |
+| Windows | Toast 通知，除非用户在设置里关闭了应用的通知（即 `denied`）。Windows 没有授权弹窗，`requestPermission` 不会询问用户。未设置 `AppOptions::notifications` 的嵌入应用为 `unavailable` | 任务栏按钮上的数字，最多显示 `99+`；任务栏使用小按钮时不显示 |
 | Linux | 桌面的通知守护进程（`org.freedesktop.Notifications`）：运行时为 `granted`，不弹提示，否则为 `unavailable` | Unity launcher API，支持它的 Dock 才显示（Plasma、Ubuntu Dock、Dash to Dock），其他环境不显示 |
 | Web | `Notification`，需要浏览器允许页面直接显示（Android 上不行） | Badging API，仅限已安装的应用 |
 | 终端、GPUI | `unavailable` | 无 |
@@ -1812,6 +1830,48 @@ Rust 代码使用 `nsh_core::prelude` 的 `request_notification_permission`、`s
 ### Notifications.permission
 
 `permission()` 只查询不询问，`requestPermission()` 首次会显示系统提示。两者的结果都是 `"default"`（尚未询问）、`"granted"`、`"denied"`（只能在系统设置里更改）或 `"unavailable"`。
+
+## UrlScheme
+
+`UrlScheme` 报告打开应用的链接：应用在 `nsh.json` 中认领的 scheme 的 URL，例如网页上「在应用中打开」按钮发出的
+`myapp://orders/42`，或完成登录后浏览器跳回应用的链接。应用只需认领一次，`nsh package` 会把这些 scheme 声明给系统：
+
+```json
+{ "schemes": ["myapp"] }
+```
+
+```tsx
+import { UrlScheme } from "nsh";
+
+UrlScheme.on("open", ({ url }) => {
+  const link = new URL(url);
+  if (link.host === "orders") openOrder(link.pathname.slice(1));
+});
+```
+
+`open` 报告系统交给应用的每一个链接，启动时和运行中都会。没有监听者时到达的链接（包括启动应用的那个）会留给下一个监听者
+（最多 16 个，超出时丢弃最早的），所以在应用启动时，或处理链接的界面准备好后再监听都可以。Rust 代码 await
+`nsh_core::prelude` 的 `next_url_scheme_open()`；Rust 应用生成的代码会把 scheme 交给它的根组件（`Root::url_schemes`）。
+
+链接是来自应用外部的输入：任何网页或应用都能用任意路径和参数打开 `myapp://`。在执行链接要求的操作之前，像对待其他输入一样先校验
+（id 确实存在、操作经用户确认）。NSH 只放行应用自己的 scheme、长度不超过 16 KB 的链接，并且从不自行导航：链接打开什么由应用决定。
+
+scheme 以字母开头，后面是字母、数字、`+`、`-` 或 `.`，按小写比较。Web、文件和系统应用的 scheme（`http`、`https`、`file`、
+`mailto`、`tel`、`sms` 等）在构建应用时会被拒绝。
+
+| 平台 | 应用如何认领 scheme |
+| --- | --- |
+| macOS | 应用 `Info.plist` 中的 `CFBundleURLTypes`；系统会打开应用，或把链接交给正在运行的那个 |
+| iOS、Mac Catalyst | 应用 `Info.plist` 中的 `CFBundleURLTypes`；包括启动应用的链接和运行中到达的链接 |
+| Android | `nsh package` 写入清单的 `ACTION_VIEW` intent filter；Activity 以 `singleTask` 运行，链接会交给正在运行的应用 |
+| Windows | 应用每次启动时写入 `HKEY_CURRENT_USER\\Software\\Classes`；第二次启动会把 URL 交给正在运行的应用 |
+| Linux | 应用启动时在 `~/.local/share/applications` 写入带 `x-scheme-handler/<scheme>` 的桌面文件并设为默认处理程序；`nsh run` 以同样方式注册开发宿主。第二次启动会把 URL 交给正在运行的应用 |
+
+`nsh test` 可以把链接交给测试中的应用：`App.open(entry, { url })` 用一个链接启动应用，`app.openWithUrl(url)`
+在运行中打开一个链接，两者都在无头模式下运行。
+
+嵌入 NSH 的应用自己拥有 scheme，把 URL 交给视图：`AppView.open_url`（Linux、iOS）、`NshAppView.openURL`（Swift）、
+`NshView.openUrl` 或 `NshView.handleUrlSchemeIntent`（Android）。
 
 ## Speech
 

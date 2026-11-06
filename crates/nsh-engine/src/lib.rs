@@ -58,8 +58,9 @@ pub use nsh_core::{
     geometry::{self, Bounds, Edges, Point, Points, Size},
     js::{HostLimits, Limits},
     platform::{
-        ColorScheme, Environment, FetchEvent, FetchOp, HostEnvironment, HttpBody, HttpHead,
-        HttpRequest, Idiom, Lifecycle, Locale, Os, TimeZone,
+        ColorScheme, Environment, FetchEvent, FetchOp, HostEnvironment, HourCycle, HttpBody,
+        HttpHead, HttpRequest, Idiom, Languages, Lifecycle, Locale, LocaleSettings,
+        MeasurementSystem, Os, TemperatureUnit, TimeZone, Weekday,
     },
     storage::{StorageBackend, StorageChange},
     time::Clock,
@@ -134,6 +135,15 @@ impl App {
             App::Js(bundle) => bundle.app_id.as_deref(),
         }
     }
+
+    /// The URL schemes the app claims (`nsh.json` `schemes`):
+    /// the links the core lets through (`nsh_core::url_scheme`).
+    pub fn url_schemes(&self) -> &[String] {
+        match self {
+            App::Rust(root) => root.url_schemes_ref(),
+            App::Js(bundle) => &bundle.url_schemes,
+        }
+    }
 }
 
 impl From<Root> for App {
@@ -162,6 +172,11 @@ pub struct Bundle {
     /// The app's id (`nsh.json` `"id"`; a signed package's verified one):
     /// it names where the app keeps its data (`nsh/storage`).
     pub app_id: Option<String>,
+    /// The URL schemes the app claims (`nsh.json` `schemes`, a
+    /// packaged app's `app.json`): the links its engine lets through.
+    /// Read from the app's own resources, never from its code; none for a
+    /// signed package, whose embedding app owns the schemes.
+    pub url_schemes: Vec<String>,
     /// Trusted filesystem anchors selected by the native host, never decoded
     /// from application code, its manifest or a development server message.
     /// Missing anchors deny relative and corresponding placeholder grants.
@@ -291,6 +306,7 @@ impl Bundle {
             base_url: None,
             chunks: Arc::default(),
             app_id: None,
+            url_schemes: Vec::new(),
             system_paths: nsh_core::access::TrustedPaths::default(),
             package: None,
         }
@@ -305,6 +321,7 @@ impl Bundle {
             base_url: None,
             chunks: Arc::default(),
             app_id: None,
+            url_schemes: Vec::new(),
             system_paths: nsh_core::access::TrustedPaths::default(),
             package: None,
         }
@@ -325,6 +342,16 @@ impl Bundle {
     /// gives it.
     pub fn with_app_id(mut self, id: Option<&str>) -> Self {
         self.app_id = id.map(str::to_owned);
+        self
+    }
+
+    /// The URL schemes the app claims ([`Bundle::url_schemes`]), as
+    /// `nsh.json` gives them.
+    pub fn with_url_schemes(
+        mut self,
+        schemes: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.url_schemes = schemes.into_iter().map(Into::into).collect();
         self
     }
 
@@ -353,8 +380,9 @@ impl Bundle {
     }
 
     /// Reads a JS source bundle written by `nsh build` (`bundle.js`), plus
-    /// `bundle.js.map`, the app's `capabilities.json` and its id
-    /// (`app.json` `"id"`) next to it if present. Bytecode (`bundle.nshc`) is refused: files can be replaced, and
+    /// `bundle.js.map`, the app's `capabilities.json`, its id and the
+    /// schemes it claims (`app.json` `"id"` and `"schemes"`) next to it
+    /// if present. Bytecode (`bundle.nshc`) is refused: files can be replaced, and
     /// only [`Bundle::read_trusted`] (the app's own resources) or a verified
     /// package may load bytecode.
     pub fn read(path: &std::path::Path) -> io::Result<Bundle> {
@@ -388,7 +416,14 @@ impl Bundle {
         if let Ok(json) = std::fs::read_to_string(path.with_file_name("capabilities.json")) {
             bundle.policy.declared = Some(parse_capabilities(&json).map_err(io::Error::other)?);
         }
-        bundle.app_id = read_app_id(&path.with_file_name("app.json"));
+        let info = read_app_json(&path.with_file_name("app.json"));
+        bundle.app_id = info
+            .as_ref()
+            .and_then(|info| info.get("id")?.as_str().map(str::to_owned));
+        if let Some(url_schemes) = info.as_ref().and_then(|info| info.get("schemes")) {
+            bundle.url_schemes = nsh_core::url_scheme::schemes_from_json(url_schemes)
+                .map_err(|e| io::Error::other(format!("app.json: {e}")))?;
+        }
         bundle.system_paths.plugin_dir = nsh_core::access::canonicalize(path)?
             .parent()
             .map(std::path::Path::to_path_buf);
@@ -436,11 +471,10 @@ impl Bundle {
     }
 }
 
-/// The `"id"` of an `app.json` (`nsh build`'s, a packaged app's).
-fn read_app_id(path: &std::path::Path) -> Option<String> {
-    let json: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-    json.get("id")?.as_str().map(str::to_owned)
+/// An `app.json` (`nsh build`'s, a packaged app's): the app's id, the
+/// schemes it claims.
+fn read_app_json(path: &std::path::Path) -> Option<serde_json::Value> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
 /// A verified package, unpacked ([`load_package`], [`verify_package`]).
@@ -829,7 +863,17 @@ pub struct EngineConfig {
 pub struct EnvironmentPins {
     /// The locale (`Environment::locale`).
     pub locale: Option<nsh_core::platform::Locale>,
-    /// The time zone (`Environment::time_zone`).
+    /// The preferred languages (`LocaleSettings::languages`).
+    pub languages: Option<nsh_core::platform::Languages>,
+    /// The hour cycle (`LocaleSettings::hour_cycle`).
+    pub hour_cycle: Option<nsh_core::platform::HourCycle>,
+    /// The first day of the week (`LocaleSettings::first_day_of_week`).
+    pub first_day_of_week: Option<nsh_core::platform::Weekday>,
+    /// The measurement system (`LocaleSettings::measurement_system`).
+    pub measurement_system: Option<nsh_core::platform::MeasurementSystem>,
+    /// The temperature unit (`LocaleSettings::temperature_unit`).
+    pub temperature_unit: Option<nsh_core::platform::TemperatureUnit>,
+    /// The time zone (`LocaleSettings::time_zone`).
     pub time_zone: Option<nsh_core::platform::TimeZone>,
     /// Whether the user asked for less motion
     /// (`Environment::reduce_motion`).
@@ -844,8 +888,24 @@ impl EnvironmentPins {
         if let Some(locale) = self.locale {
             environment.locale = locale;
         }
+        let settings = &mut environment.locale_settings;
+        if let Some(languages) = self.languages {
+            settings.languages = languages;
+        }
         if let Some(time_zone) = self.time_zone {
-            environment.time_zone = time_zone;
+            settings.time_zone = time_zone;
+        }
+        if let Some(hour_cycle) = self.hour_cycle {
+            settings.hour_cycle = hour_cycle;
+        }
+        if let Some(day) = self.first_day_of_week {
+            settings.first_day_of_week = day;
+        }
+        if let Some(system) = self.measurement_system {
+            settings.measurement_system = system;
+        }
+        if let Some(unit) = self.temperature_unit {
+            settings.temperature_unit = unit;
         }
         if let Some(reduce_motion) = self.reduce_motion {
             environment.reduce_motion = reduce_motion;
@@ -1000,7 +1060,12 @@ enum Message {
     Resize(Size<Points>),
     /// A component's task was woken: it runs in the loop.
     Wake,
-    Environment(Environment),
+    /// Boxed: with the locale settings held inline, an
+    /// environment is several times the size of every other message, and
+    /// it changes rarely.
+    Environment(Box<Environment>),
+    /// The displays (desktops).
+    Displays(Arc<[nsh_core::desktop::Display]>),
     RootSize(NodeId, Size<Points>, EdgeInsets),
     ScreenHeader(NodeId, Option<Points>),
     Frame,
@@ -1140,7 +1205,14 @@ impl EngineControl {
     /// Reports a change of the surface's environment (safe area, keyboard,
     /// appearance...).
     pub fn set_environment(&self, environment: Environment) {
-        let _ = self.tx.send(Message::Environment(environment));
+        let _ = self.tx.send(Message::Environment(Box::new(environment)));
+    }
+
+    /// Reports the displays (desktops: on start, in
+    /// [`Engine::start_with`]'s setup, so the app reads them as it first
+    /// renders, then whenever they change).
+    pub fn set_displays(&self, displays: Vec<nsh_core::desktop::Display>) {
+        let _ = self.tx.send(Message::Displays(displays.into()));
     }
 
     /// The platform presents root `id` (a modal) at `size`, with `insets`
@@ -1602,6 +1674,7 @@ impl<M: TextEngine + 'static> Driver<M> {
         core.set_clipboard(config.clipboard.clone());
         core.set_picker(config.picker.clone());
         core.set_speech(config.speech.clone());
+        core.set_url_schemes(config.app.url_schemes().iter().cloned());
         core.set_font_scale(config.environment.font_scale);
         core.set_class_environment(class_environment(&config.environment));
         core.set_header_heights(config.header_heights.0, config.header_heights.1);
@@ -1667,10 +1740,16 @@ impl<M: TextEngine + 'static> Driver<M> {
         // The embedding app's tokens sent before the start
         // (`Engine::start_with`) are there as the bundle evaluates, so its
         // first render reads them; the rest comes after it, in order.
+        // So are the displays, which the app reads as it first renders.
         let mut early = Vec::new();
+        let mut displays: Arc<[nsh_core::desktop::Display]> = Arc::from(Vec::new());
         while let Ok(message) = rx.try_recv() {
             match message {
                 Message::Tokens(tokens) => core.set_host_tokens(tokens.map(|t| *t)),
+                Message::Displays(list) => {
+                    core.set_displays(list.clone());
+                    displays = list;
+                }
                 message => early.push(message),
             }
         }
@@ -1694,6 +1773,10 @@ impl<M: TextEngine + 'static> Driver<M> {
             sets_seen: FxHashMap::default(),
             resized: None,
             resize_burst_ends: None,
+            window_state: WindowStateReport {
+                shown: config.environment.window_state,
+                ..WindowStateReport::default()
+            },
             events_handled: 0,
             events_reported: 0,
             pinned: config.pinned,
@@ -1766,6 +1849,7 @@ impl<M: TextEngine + 'static> Driver<M> {
                     &config.ui_sets,
                     posts,
                     &environment,
+                    &displays,
                     driver.state.js_tokens.clone(),
                     driver.state.core.theme_tokens(),
                     text_engine,
@@ -1818,6 +1902,12 @@ impl<M: TextEngine + 'static> Driver<M> {
             }
             sink.submit(batch);
         }
+        // A resize that came while the app started is in the first frame:
+        // reported as a turn reports it, or a platform waiting for the
+        // layout at that size waits until something else wakes the engine.
+        if let Some(size) = state.resized.take() {
+            sink.resized(size);
+        }
         state.report_handled(&**sink);
         state.net.pump(script, &mut state.core);
         state.load_chunks(script, &**sink);
@@ -1854,6 +1944,7 @@ impl<M: TextEngine + 'static> Driver<M> {
             self.state.next_mouse_move(),
             self.state.core.next_task_timer(),
             self.state.resize_burst_ends,
+            self.state.window_state.settles,
         ]
         .into_iter()
         .flatten()
@@ -2019,6 +2110,16 @@ impl<M: TextEngine + 'static> Driver<M> {
             state.resize_burst_ends = None;
             state.core.set_resizing(false);
         }
+        if state
+            .window_state
+            .settles
+            .is_some_and(|due| due <= nsh_core::time::now())
+            && let Some(env) = state.window_state.reported
+        {
+            state.window_state.settles = None;
+            state.window_state.shown = env.window_state;
+            apply_environment(script, state, env);
+        }
         let turn_start = state.trace.then(Instant::now);
         state.dispatch_touch_move(script);
         if state
@@ -2162,6 +2263,9 @@ struct State<M: TextEngine> {
     /// A resize before this time continues a burst of them
     /// ([`RESIZE_BURST_GAP`]).
     resize_burst_ends: Option<Instant>,
+    /// The window's bounds as the app reads them, held back while the
+    /// window moves.
+    window_state: WindowStateReport,
     /// Events received ([`EngineControl::dispatch_event`]), and the count
     /// last reported ([`MountSink::handled`]).
     events_handled: u64,
@@ -2929,6 +3033,7 @@ fn ui_environment(env: &Environment, window: Size<Points>) -> nsh_core::element:
         window,
         safe_area: insets(env),
         title_bar: env.title_bar,
+        window_state: env.window_state,
         keyboard_height: env.keyboard_height,
         keyboard_duration: env.keyboard_duration,
         dark: env.color_scheme == ColorScheme::Dark,
@@ -2941,7 +3046,7 @@ fn ui_environment(env: &Environment, window: Size<Points>) -> nsh_core::element:
         os_version: env.os_version,
         idiom: env.idiom,
         locale: env.locale,
-        time_zone: env.time_zone,
+        locale_settings: env.locale_settings,
         apple_keyboard: env.apple_keyboard,
         ctrl_for_command: env.ctrl_for_command,
         host: env.host,
@@ -2967,6 +3072,80 @@ fn class_environment(env: &Environment) -> nsh_core::tailwind::ClassEnvironment 
             nsh_core::tailwind::Platform::Ios
         },
         reduce_motion: env.reduce_motion,
+    }
+}
+
+/// How long the window stays where it is before a move or a resize
+/// reaches the app ([`WindowStateReport`]).
+const WINDOW_SETTLE: Duration = Duration::from_millis(150);
+
+/// The window's bounds the app reads: a move or a resize reaches it once
+/// the window has stayed for [`WINDOW_SETTLE`] (one report at the end of a
+/// drag, not one per point), a change of mode, display or being minimized
+/// or hidden at once (with the bounds of then).
+#[derive(Default)]
+struct WindowStateReport {
+    /// What the app reads.
+    shown: Option<nsh_core::desktop::WindowState>,
+    /// The platform's latest environment while a move settles.
+    reported: Option<Environment>,
+    /// When it has settled.
+    settles: Option<Instant>,
+}
+
+impl WindowStateReport {
+    /// The environment the app gets of `env`, the platform's at `now`: its
+    /// window state held back while it moves.
+    fn report(&mut self, mut env: Environment, now: Instant) -> Environment {
+        let next = env.window_state;
+        let moving = match (&self.shown, &next) {
+            (Some(shown), Some(next)) => shown != next && moved_only(shown, next),
+            _ => false,
+        };
+        if moving {
+            // The window moved again (not some other part of the
+            // environment): it settles from now.
+            let moved = self.reported.map(|r| r.window_state) != Some(next);
+            if moved || self.settles.is_none() {
+                self.settles = Some(now + WINDOW_SETTLE);
+            }
+            self.reported = Some(env);
+            env.window_state = self.shown;
+        } else {
+            self.reported = None;
+            self.settles = None;
+            self.shown = next;
+        }
+        env
+    }
+}
+
+/// Whether `next` differs from `shown` by where the window is or its size
+/// alone (a move or a resize, which settles before it is reported), not by
+/// its mode, display or being minimized or hidden.
+fn moved_only(
+    shown: &nsh_core::desktop::WindowState,
+    next: &nsh_core::desktop::WindowState,
+) -> bool {
+    std::mem::discriminant(&shown.window_bounds) == std::mem::discriminant(&next.window_bounds)
+        && shown.minimized == next.minimized
+        && shown.hidden == next.hidden
+        && shown.display.map(|d| d.id) == next.display.map(|d| d.id)
+}
+
+/// Gives the core and JS the environment `env`.
+fn apply_environment<M: TextEngine>(
+    script: Option<&Script>,
+    state: &mut State<M>,
+    env: Environment,
+) {
+    state.core.set_font_scale(env.font_scale);
+    state.core.set_class_environment(class_environment(&env));
+    state.core.set_safe_area(insets(&env));
+    let window = env.window;
+    state.core.set_environment(ui_environment(&env, window));
+    if let Some(script) = script {
+        script.set_environment(&env);
     }
 }
 
@@ -3079,13 +3258,13 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
         Message::Wake => {}
         Message::Environment(mut env) => {
             state.pinned.apply(&mut env);
-            state.core.set_font_scale(env.font_scale);
-            state.core.set_class_environment(class_environment(&env));
-            state.core.set_safe_area(insets(&env));
-            let window = env.window;
-            state.core.set_environment(ui_environment(&env, window));
+            let env = state.window_state.report(*env, nsh_core::time::now());
+            apply_environment(script, state, env);
+        }
+        Message::Displays(displays) => {
+            state.core.set_displays(displays.clone());
             if let Some(script) = script {
-                script.set_environment(&env);
+                script.set_displays(&displays);
             }
         }
         Message::RootSize(id, size, insets) => state.core.set_root_size(id, size, insets),
@@ -3242,6 +3421,32 @@ fn sets_whole(item: &nsh_core::MountItem) -> Option<(u8, nsh_core::NodeId)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn moves_settle_and_changes_of_mode_do_not() {
+        use nsh_core::{
+            desktop::{Display, DisplayId, WindowBounds, WindowState},
+            geometry::{Bounds, point, px, size},
+        };
+        let rect = |x: f32| Bounds::new(point(px(x), px(0.0)), size(px(800.0), px(600.0)));
+        let a = WindowState::new(rect(0.0), WindowBounds::Windowed(rect(0.0)));
+        let mut moved = a;
+        moved.bounds = rect(10.0);
+        moved.window_bounds = WindowBounds::Windowed(rect(10.0));
+        assert!(super::moved_only(&a, &moved));
+        let mut maximized = a;
+        maximized.window_bounds = WindowBounds::Maximized(rect(0.0));
+        assert!(!super::moved_only(&a, &maximized));
+        let mut minimized = a;
+        minimized.minimized = true;
+        assert!(!super::moved_only(&a, &minimized));
+        let mut hidden = a;
+        hidden.hidden = true;
+        assert!(!super::moved_only(&a, &hidden));
+        let mut elsewhere = a;
+        elsewhere.display = Some(Display::new(DisplayId(2), rect(0.0), rect(0.0), false));
+        assert!(!super::moved_only(&a, &elsewhere));
+    }
+
     #[test]
     fn pinned_values_hold_whatever_the_platform_reports() {
         let pins = super::EnvironmentPins {

@@ -161,7 +161,7 @@ fn window(surface: &Surface) -> Option<Retained<NSWindow>> {
     surface.root.ns().window()
 }
 
-fn full_screen(window: &NSWindow) -> bool {
+pub(crate) fn full_screen(window: &NSWindow) -> bool {
     window.styleMask().contains(NSWindowStyleMask::FullScreen)
 }
 
@@ -328,6 +328,11 @@ pub(crate) fn command(surface: &Rc<Surface>, command: &DesktopCommand) {
                 set_frame(&window, frame);
             }
         }
+        DesktopCommand::SetBounds(bounds) => {
+            if let Some(window) = window(surface) {
+                crate::window_state::set_bounds(surface, &window, *bounds);
+            }
+        }
         DesktopCommand::SetLevel(level) => {
             if let Some(window) = window(surface) {
                 window.setLevel(match level {
@@ -378,6 +383,10 @@ pub(crate) fn command(surface: &Rc<Surface>, command: &DesktopCommand) {
                 }
             });
         }
+        // As the Quit item: the standalone runner stops and returns, also
+        // with its window kept hidden; an embedding app keeps its own
+        // lifecycle.
+        DesktopCommand::Quit => crate::app::quit_app(),
         DesktopCommand::SetMenu(items) => set_menu(surface, items.as_deref()),
         // The menu bar is the system's.
         DesktopCommand::SetMenuBar(_) => {}

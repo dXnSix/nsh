@@ -378,6 +378,26 @@ function timeZoneName() {
 }
 
 /**
+ * What the browser knows of the regional preferences of `locale`
+ * (`localeSettings()`'s `hourCycle` and the like): its hour cycle and first day of the week,
+ * and the locale with its likely region (`de` is `de-Latn-DE`), which has
+ * the others. Browsers tell no user settings of them.
+ */
+function regional(locale) {
+  const known = { locale };
+  try {
+    const l = new Intl.Locale(locale);
+    known.locale = l.maximize().toString();
+    // `weekInfo` before browsers made it `getWeekInfo()`.
+    known.firstDay = (l.getWeekInfo?.() ?? l.weekInfo)?.firstDay;
+    known.hourCycle = new Intl.DateTimeFormat(locale, { hour: "numeric" }).resolvedOptions().hourCycle;
+  } catch {
+    // A tag the browser does not take: the region's.
+  }
+  return known;
+}
+
+/**
  * The key of a key event as `nsh_key` takes it (-1: none): the character
  * it types without modifiers, or, when Shift or Option change it or the
  * layout types no ASCII there, the US layout's character of the same key
@@ -1483,7 +1503,7 @@ class Player {
 
   /** Starts the app with `start(environment)`, which returns the pump delay. */
   begin(width, start, deferEvents = false) {
-    this.idiom = this.options.idiom ?? this.testIdiom ?? this.measureIdiom(width);
+    this.idiom = this.options.idiom ?? this.testIdiom ?? this.measureIdiom();
     const environment = (this.reported = JSON.stringify(this.environment()));
     this.updateRootClasses();
     // Host events wait for this app's top-level `host.on` listeners, not
@@ -1724,11 +1744,12 @@ class Player {
   /**
    * The kind of device, decided when an app starts (it never changes while
    * it runs, as on every platform): a mouse (a fine pointer that hovers)
-   * and a viewport at least 600 wide make a desktop, a touch screen whose
-   * short side is at least 600 a tablet, the rest a phone.
+   * makes a desktop at any width, as a narrow window does on the native
+   * desktops, a touch screen whose short side is at least 600 a tablet,
+   * the rest a phone.
    */
-  measureIdiom(width) {
-    if (matchMedia("(pointer: fine) and (hover: hover)").matches && width >= 600) return "desktop";
+  measureIdiom() {
+    if (matchMedia("(pointer: fine) and (hover: hover)").matches) return "desktop";
     return Math.min(screen.width, screen.height) >= 600 ? "pad" : "phone";
   }
 
@@ -1749,7 +1770,7 @@ class Player {
     addEventListener("languagechange", changed);
     addEventListener("resize", changed);
     // `lifecycle()`: hidden (another tab, a minimized window) or without
-    // the focus. `timeZone()` is read again then too: browsers tell no
+    // the focus. The time zone (`localeSettings()`) is read again then too: browsers tell no
     // change of the system's zone, which the user makes away from the page.
     document.addEventListener("visibilitychange", changed);
     addEventListener("focus", changed);
@@ -1798,6 +1819,10 @@ class Player {
     return {
       idiom: this.idiom,
       locale,
+      // The browser's preferred languages (`localeSettings()`), the locale's
+      // first; `languagechange` tells their changes.
+      languages: [...new Set([locale, ...languages.filter(Boolean)])],
+      regional: regional(locale),
       rtl: dir === "rtl" || dir === "ltr" ? dir === "rtl" : rightToLeft(locale),
       reduceMotion: this.reducedMotion.matches,
       fontScale: Math.round(fontSize / 16 * 100) / 100,
@@ -6500,6 +6525,8 @@ class Player {
     // and selectable text keep theirs.
     root.addEventListener("contextmenu", (e) => this.contextMenu(e) || this.editable(e.target) || e.preventDefault());
     root.addEventListener("copy", (e) => this.copyText(e));
+    // A selectable view's `onSelectionChange`: what a copy would give.
+    document.addEventListener("selectionchange", () => this.areaSelectionChanged());
     root.addEventListener("wheel", (e) => this.wheel(e), { passive: false });
     // Safari's touchpad pinches (it sends no ctrl+wheel).
     root.addEventListener("gesturestart", (e) => this.gestureZoom(e, 0));
@@ -6733,16 +6760,29 @@ class Player {
    * nothing, and attachments (U+FFFC) are left out, as the native
    * platforms copy. */
   copyText(e) {
-    const sel = getSelection();
     if (e.target.closest?.(".nsh-field")) return;
-    if (!sel?.rangeCount || sel.isCollapsed || !this.root.contains(sel.anchorNode)) return;
-    const range = sel.getRangeAt(0);
+    const out = this.selectedText();
+    if (out === null) return;
+    e.preventDefault();
+    e.clipboardData.setData("text/plain", out);
+  }
+
+  /** The selected text as {@link copyText} copies it, or null when nothing
+   * selectable in this player is selected; within `only` (an element)
+   * when given, of `given` (a range) instead of the selection when given. */
+  selectedText(only = null, given = null) {
+    let range = given;
+    if (!range) {
+      const sel = getSelection();
+      if (!sel?.rangeCount || sel.isCollapsed || !this.root.contains(sel.anchorNode)) return null;
+      range = sel.getRangeAt(0);
+    }
     let out = "";
     let last = null;
     let lastArea = null;
     let lastBox = null;
     let found = false;
-    for (const run of this.root.querySelectorAll(".nsh-run")) {
+    for (const run of (only ?? this.root).querySelectorAll(".nsh-run")) {
       // Text that cannot be selected is not copied, as by the browser.
       if (!range.intersectsNode(run) || !this.selectableText(run)) continue;
       // A link's characters are in a span inside the run.
@@ -6768,17 +6808,58 @@ class Player {
       out += area ? part.replaceAll("\uFFFC", "") : part;
       if (to === text.length && run._after) out += run._after;
     }
-    if (!found) return;
-    e.preventDefault();
-    e.clipboardData.setData("text/plain", out.replace(/\s+$/, ""));
+    if (!found) return null;
+    return given ? out : out.replace(/\s+$/, "");
+  }
+
+  /** Where the selection starts in the copy of all of `area` (UTF-16
+   * units): what maps it back to the document the area shows. */
+  selectionStart(area) {
+    const sel = getSelection();
+    if (!sel?.rangeCount) return 0;
+    const range = sel.getRangeAt(0);
+    if (!area.contains(range.startContainer)) return 0;
+    const before = document.createRange();
+    before.setStart(area, 0);
+    before.setEnd(range.startContainer, range.startOffset);
+    if (before.collapsed) return 0;
+    return (this.selectedText(area, before) ?? "").length;
+  }
+
+  /** The document's selection changed: the selectable view it is in (the
+   * outermost) hears its text (`onSelectionChange`), and one it left hears
+   * "" (nothing selected), each only when its text changed. */
+  areaSelectionChanged() {
+    const sel = getSelection();
+    const anchor = sel?.rangeCount ? sel.anchorNode : null;
+    const inRoot = anchor && this.root.contains(anchor);
+    const area = inRoot ? this.areaOf(anchor.nodeType === 1 ? anchor : anchor.parentElement) : null;
+    const last = this._selectedArea;
+    if (last && last !== area) {
+      this._selectedArea = null;
+      if (last._selectedText && last._events?.has("onSelectionChange") && last.isConnected) {
+        this.event(last._id, "onSelectionChange", { text: "", start: 0 });
+      }
+      last._selectedText = "";
+    }
+    if (!area) return;
+    this._selectedArea = area;
+    if (!area._events?.has("onSelectionChange")) return;
+    const text = this.selectedText(area) ?? "";
+    if (text === (area._selectedText ?? "")) return;
+    area._selectedText = text;
+    this.event(area._id, "onSelectionChange", { text, start: text ? this.selectionStart(area) : 0 });
   }
 
   /** Select all and Escape in selectable text with a selection: within it. */
   selectionKey(e) {
     const sel = getSelection();
     const anchor = sel?.anchorNode;
+    const el = anchor?.nodeType === 1 ? anchor : anchor?.parentElement;
+    // After select all in a selectable view the selection starts at the
+    // view itself, outside its texts.
     const text = sel?.rangeCount && !sel.isCollapsed && anchor && this.root.contains(anchor)
-      ? this.selectableText(anchor.nodeType === 1 ? anchor : anchor.parentElement)
+      ? this.selectableText(el) ?? this.areaOf(el)
       : null;
     if (!text) return false;
     if (e.key === "a" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
