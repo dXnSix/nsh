@@ -20,8 +20,8 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   new branch name, and a twin of its own.
 - History: the first version, `pr/web-urls/03-history` (`3e061422d`, on the first 02), fork PR dXnSix/nsh#110.
 - 2026-11-06: fork CI twin #149 on `34b2e226`: 15 pass (iOS included), the 5 failures known (#148's four and Android's
-  emulator death). PR 7 opened as longbridge/nsh#1155, so the body's first line is filled. Ready to open; waits for the
-  user's go for this PR.
+  emulator death). PR 7 opened as longbridge/nsh#1155, so the body's first line is filled. **Opened as longbridge/nsh#1158**
+  on the user's go (head `1056a626`, mergeable with `main` `7571948e`); the body below is what was posted.
 
 ---
 
