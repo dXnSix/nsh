@@ -78,6 +78,9 @@ const BAR_THICK = 4;
 const BAR_MARGIN = 2;
 const BAR_GRAB = 12;
 const BAR_HOLD = 700;
+/** How long after a context menu key (`menuKey`) a `contextmenu` is the
+ * one it asked for (ms): the browser raises it while handling the key. */
+const MENU_KEY_MS = 500;
 
 /* Keyframe animations (animate-spin, -ping, -pulse, -bounce) run with
    animation-composition: add: their transforms follow the view's own (as the
@@ -6956,6 +6959,10 @@ class Player {
     root.addEventListener("focusin", () => (Player.active = this));
     window.addEventListener("keydown", (e) => this.keyDown(e));
     window.addEventListener("keyup", (e) => this.keyUp(e));
+    // The keys that ask the focused view for its context menu, before
+    // anything handles them (`contextMenu` reads when they were last used).
+    window.addEventListener("keydown", (e) => this.menuKey(e), true);
+    window.addEventListener("keyup", (e) => this.menuKey(e), true);
     // The mouse's back button goes back in the app (with history, as the
     // browser's back button does).
     root.addEventListener("mouseup", (e) => {
@@ -6977,9 +6984,13 @@ class Player {
    * Shift+F10 (on the focused element), and screen readers' "show menu"
    * action. Those come with no pointer (an empty `pointerType` or no button): the
    * event names none (`pointerType: null`) and is placed at the view's
-   * bottom-start corner, where a menu opened below it starts.
+   * bottom-start corner, where a menu opened below it starts. Chromium on
+   * Linux names a mouse and its main button for Shift+F10's, so a menu
+   * asked for while a menu key is used (`menuKey`) has no pointer either.
    */
   contextMenu(e) {
+    const keyed = this.menuKeyAt !== undefined && Math.abs(e.timeStamp - this.menuKeyAt) < MENU_KEY_MS;
+    this.menuKeyAt = undefined;
     const view = this.viewOf(e.target);
     if (!view) return false;
     for (const el of this.ancestors(view)) {
@@ -6987,8 +6998,10 @@ class Player {
         e.preventDefault();
         const r = el.getBoundingClientRect();
         // Chromium can name a mouse for keyboard context menus, but no
-        // button (-1). Older MouseEvents without pointerType are mouse input.
-        const pointerType = e.button === -1 ? null : e.pointerType === undefined ? "mouse" : e.pointerType || null;
+        // button (-1), or on Linux the main one (`keyed`). Older
+        // MouseEvents without pointerType are mouse input.
+        const pointerType =
+          keyed || e.button === -1 ? null : e.pointerType === undefined ? "mouse" : e.pointerType || null;
         let at = e;
         if (pointerType === null) {
           const rtl = getComputedStyle(el).direction === "rtl";
@@ -7006,6 +7019,16 @@ class Player {
       if (el.matches(".nsh-field, .nsh-selectable")) return false;
     }
     return false;
+  }
+
+  /**
+   * Notes when a key that asks the focused view for its context menu is
+   * pressed or released: Shift+F10 alone, or the Menu key (Windows raises
+   * its menu on the release).
+   */
+  menuKey(e) {
+    const shiftF10 = e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
+    if (shiftF10 || e.key === "ContextMenu") this.menuKeyAt = e.timeStamp;
   }
 
   /** Whether the browser handles presses at `target` itself: fields,
