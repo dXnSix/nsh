@@ -7489,6 +7489,62 @@ fn refused_web_view_html_fails() {
     );
 }
 
+#[test]
+fn web_view_incognito_is_read_when_it_is_made() {
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::WebView,
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Native(NativeProp::Incognito(true)),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Native(NativeProp::Html(Some("<b>hi</b>".into()))),
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    let web = |batch: &MountBatch| {
+        batch.items.iter().rev().find_map(|item| match item {
+            MountItem::NativeProps {
+                id: 2,
+                props: crate::NativeProps::WebView(p),
+            } => Some(p.incognito),
+            _ => None,
+        })
+    };
+    // The platform makes the web view with its first props.
+    assert_eq!(web(&c.commit().unwrap()), Some(true));
+    // Made: a change is ignored, and nothing is sent for it.
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: 2,
+            prop: Prop::Native(NativeProp::Incognito(false)),
+        }],
+    );
+    assert_eq!(c.commit().as_ref().and_then(web), None);
+    // Other props still reach it, with the store it was made with.
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: 2,
+            prop: Prop::Native(NativeProp::UserAgent(Some("agent".into()))),
+        }],
+    );
+    assert_eq!(web(&c.commit().unwrap()), Some(true));
+}
+
 mod components {
     use serde_json::json;
 
@@ -17653,7 +17709,7 @@ mod rust_desktop {
         desktop::{DesktopCommand, TitleBarStyle},
         element::{
             Root,
-            desktop::{close_window, set_title_bar, title_bar},
+            desktop::{close_window, quit, set_title_bar, title_bar},
         },
         geometry::{Edges, Points},
         prelude::*,
@@ -17681,6 +17737,7 @@ mod rust_desktop {
                     .window_drag(false)
                     .on_press(|_: &()| close_window()),
             )
+            .child(text("Quit").on_press(|_: &()| quit()))
     }
 
     #[test]
@@ -17716,6 +17773,14 @@ mod rust_desktop {
             })
             .unwrap();
         assert!(batch.items.iter().any(|item| matches!(item, MountItem::ViewProps {id, props} if *id == close && props.window_drag == Some(false))));
+        let quit_button = batch
+            .items
+            .iter()
+            .find_map(|item| match item {
+                MountItem::Text { id, text, .. } if text.text == "Quit" => Some(*id),
+                _ => None,
+            })
+            .unwrap();
         assert!(
             batch
                 .items
@@ -17778,6 +17843,22 @@ mod rust_desktop {
         assert!(c.component_event(close, EventKind::Press, &EventPayload::None));
         let batch = c.commit().unwrap();
         assert!(batch.items.iter().any(|item| matches!(item, MountItem::Command {id:crate::ROOT_ID, command:Command::Desktop(command)} if **command == DesktopCommand::Close)));
+        // Quitting is a command of its own: the platform ends the app's run,
+        // not only its window.
+        assert!(c.component_event(quit_button, EventKind::Press, &EventPayload::None));
+        let batch = c.commit().unwrap();
+        let sent: Vec<_> = batch
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                MountItem::Command {
+                    id: crate::ROOT_ID,
+                    command: Command::Desktop(command),
+                } => Some(&**command),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent, [&DesktopCommand::Quit]);
     }
 }
 
@@ -18233,6 +18314,7 @@ fn context_menus_reach_rust_listeners_with_their_positions() {
     let event = crate::ContextMenuEvent {
         position: point(px(4.0), px(5.0)),
         page_position: point(px(14.0), px(25.0)),
+        pointer_type: Some(crate::PointerType::Mouse),
         ..Default::default()
     };
     assert!(c.component_event(
@@ -21503,6 +21585,58 @@ fn scroll_content(batch: &MountBatch, id: NodeId) -> Option<f32> {
         MountItem::ScrollContent { id: i, size } if *i == id => Some(size.height.0),
         _ => None,
     })
+}
+
+/// A list in its parent's viewport is a plain view: its props tell the
+/// platforms to read its recycled cells in screen order, along its axis.
+/// A list of its own is a scroll view, read so already.
+#[test]
+fn a_list_in_its_parents_viewport_is_read_in_screen_order() {
+    let screen_order = |batch: &MountBatch, id: NodeId| {
+        batch.items.iter().rev().find_map(|i| match i {
+            MountItem::ViewProps { id: i, props } if *i == id => Some(props.screen_order),
+            _ => None,
+        })
+    };
+    let mut c = core();
+    page(&mut c, 100.0, &[100]);
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 20,
+                tag: Tag::List,
+            },
+            Op::SetProp {
+                id: 20,
+                prop: Prop::Count(10),
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 20,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(
+        screen_order(&batch, 4),
+        Some(Some(crate::geometry::Axis::Vertical))
+    );
+    assert_eq!(screen_order(&batch, 20).flatten(), None);
+    // A horizontal one is read along its axis.
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: 4,
+            prop: Prop::Horizontal(true),
+        }],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(
+        screen_order(&batch, 4),
+        Some(Some(crate::geometry::Axis::Horizontal))
+    );
 }
 
 #[test]
@@ -29537,6 +29671,369 @@ fn a_bad_page_shader_keeps_its_error() {
         "its error kept"
     );
     assert_eq!(c.shaders.len(), 1);
+}
+
+mod audio {
+    use std::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    use super::*;
+    use crate::{
+        audio::{AudioBackend, AudioCommand, AudioEvent, AudioSink, MAX_DECODED_BYTES},
+        prelude::*,
+    };
+
+    /// What the fake decodes a sound as.
+    struct Decodes {
+        duration: Duration,
+        bytes: u64,
+        truncated: bool,
+    }
+
+    /// Plays in place of the platform: records what it is asked.
+    struct FakeAudio {
+        log: Mutex<Vec<String>>,
+        decodes: Mutex<Decodes>,
+    }
+
+    impl FakeAudio {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                log: Mutex::default(),
+                decodes: Mutex::new(Decodes {
+                    duration: Duration::from_millis(400),
+                    bytes: 70_000,
+                    truncated: false,
+                }),
+            })
+        }
+
+        fn log(&self) -> Vec<String> {
+            self.log.lock().unwrap().clone()
+        }
+    }
+
+    impl AudioBackend for FakeAudio {
+        fn command(&self, command: AudioCommand, events: &AudioSink) {
+            let line = match &command {
+                AudioCommand::Load { max_duration, .. } => {
+                    assert_eq!(*max_duration, crate::audio::MAX_SOUND_DURATION);
+                    let d = self.decodes.lock().unwrap();
+                    events.send(AudioEvent::Loaded {
+                        duration: d.duration,
+                        bytes: d.bytes,
+                        truncated: d.truncated,
+                    });
+                    "load".to_owned()
+                }
+                AudioCommand::LoadUrl { url, .. } => format!("load {url}"),
+                AudioCommand::Play { volume, rate, .. } => format!("play {volume} {rate}"),
+                AudioCommand::Stop { .. } => "stop".into(),
+                AudioCommand::Unload { .. } => "unload".into(),
+                AudioCommand::Open { src, settings, .. } => {
+                    format!("open {src} {}", settings.looped)
+                }
+                AudioCommand::Resume { .. } => {
+                    events.send(AudioEvent::Load {
+                        duration: Some(Duration::from_secs(10)),
+                    });
+                    events.send(AudioEvent::Playing);
+                    "resume".into()
+                }
+                AudioCommand::Pause { .. } => {
+                    events.send(AudioEvent::Paused);
+                    "pause".into()
+                }
+                AudioCommand::Seek { position, .. } => {
+                    events.send(AudioEvent::Progress {
+                        position: *position,
+                        duration: None,
+                    });
+                    format!("seek {}", position.as_secs_f32())
+                }
+                AudioCommand::Set { settings, .. } => format!("set {}", settings.volume),
+                AudioCommand::Preload { .. } => "preload".into(),
+                AudioCommand::Close { .. } => "close".into(),
+            };
+            self.log.lock().unwrap().push(line);
+        }
+    }
+
+    fn click_uri() -> String {
+        crate::platform::clipboard::data_uri("audio/wav", b"RIFF a click")
+    }
+
+    fn failed(result: Result<Sound, AudioFailure>) -> String {
+        match result {
+            Ok(sound) => format!("loaded {}", sound.duration().as_millis()),
+            Err(failure) => failure.error.as_str().to_owned(),
+        }
+    }
+
+    /// Loads [`click_uri`] twice and plays both, then lets them go.
+    #[component]
+    fn Clicks() -> impl IntoElement {
+        let shown = signal(String::new());
+        spawn(async move {
+            let a = load_sound(&click_uri()).await.unwrap();
+            a.play(0.5, 1.0);
+            let b = load_sound(&click_uri()).await.unwrap();
+            b.play(1.0, 2.0);
+            // Clamped, never refused: a Rust caller's values.
+            b.play(3.0, 0.1);
+            drop(a);
+            b.stop();
+            drop(b);
+            shown.set(format!("done {}", 1));
+        });
+        text(move || shown.get())
+    }
+
+    /// Loads [`click_uri`] once and shows how it went.
+    #[component]
+    fn Click() -> impl IntoElement {
+        let shown = signal(String::new());
+        spawn(async move {
+            shown.set(failed(load_sound(&click_uri()).await));
+        });
+        text(move || shown.get())
+    }
+
+    /// Plays a remote player, seeks it, and closes it.
+    #[component]
+    fn Voice() -> impl IntoElement {
+        let shown = signal(String::new());
+        spawn(async move {
+            let mut player = audio_player(
+                "https://example.com/voice.m4a",
+                crate::audio::PlayerSettings::default(),
+            );
+            player.play();
+            let mut seen = Vec::new();
+            while let Some(event) = player.next().await {
+                let playing = event == AudioEvent::Playing;
+                seen.push(format!("{event:?}"));
+                if playing {
+                    break;
+                }
+            }
+            player.seek(Duration::from_secs(3));
+            seen.push(format!("{:?}", player.next().await));
+            drop(player);
+            shown.set(seen.join("|"));
+        });
+        text(move || shown.get())
+    }
+
+    fn shown_after<C: crate::element::Component>(c: &mut Core<FakeEngine>) -> String
+    where
+        C::Props: Default,
+    {
+        c.mount_root(&crate::element::Root::new::<C>(C::Props::default));
+        let end = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < end {
+            c.run_component_tasks();
+            if let Some(batch) = c.commit() {
+                let texts: Vec<String> = batch
+                    .items
+                    .iter()
+                    .filter_map(|i| match i {
+                        MountItem::Text { text, .. } if !text.text.is_empty() => {
+                            Some(text.text.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if let Some(last) = texts.last() {
+                    return last.clone();
+                }
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        panic!("nothing shown");
+    }
+
+    /// Commits until no command is left, for the ones sent last.
+    fn settle(c: &mut Core<FakeEngine>) {
+        for _ in 0..5 {
+            c.run_component_tasks();
+            let _ = c.commit();
+        }
+    }
+
+    #[test]
+    fn a_source_loads_once_and_plays_overlapping() {
+        let audio = FakeAudio::new();
+        let mut c = core();
+        c.set_audio(Some(audio.clone()));
+        assert_eq!(shown_after::<Clicks>(&mut c), "done 1");
+        settle(&mut c);
+        assert_eq!(
+            audio.log(),
+            [
+                "load",
+                "play 0.5 1",
+                "play 1 2",
+                "play 1 0.5",
+                "stop",
+                "unload"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_sound_longer_than_the_limit_is_refused() {
+        let audio = FakeAudio::new();
+        audio.decodes.lock().unwrap().truncated = true;
+        let mut c = core();
+        c.set_audio(Some(audio.clone()));
+        assert_eq!(shown_after::<Click>(&mut c), "quota-exceeded");
+        settle(&mut c);
+        assert_eq!(audio.log(), ["load", "unload"]);
+    }
+
+    #[test]
+    fn decoded_audio_has_a_budget() {
+        let audio = FakeAudio::new();
+        audio.decodes.lock().unwrap().bytes = MAX_DECODED_BYTES + 1;
+        let mut c = core();
+        c.set_audio(Some(audio.clone()));
+        assert_eq!(shown_after::<Click>(&mut c), "quota-exceeded");
+        settle(&mut c);
+        assert_eq!(audio.log(), ["load", "unload"]);
+    }
+
+    #[test]
+    fn sound_needs_the_capability() {
+        let audio = FakeAudio::new();
+        let mut c = core();
+        c.set_audio(Some(audio.clone()));
+        c.set_access(Arc::new(crate::access::Access {
+            declared: crate::access::Capabilities::from_json(&serde_json::json!({})).unwrap(),
+            granted: None,
+        }));
+        assert_eq!(shown_after::<Click>(&mut c), "not-allowed");
+        assert_eq!(audio.log(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn nothing_plays_where_the_platform_has_no_sound() {
+        let mut c = core();
+        assert_eq!(shown_after::<Click>(&mut c), "unavailable");
+    }
+
+    #[test]
+    fn the_platform_decodes_and_reports_on_the_root() {
+        let mut c = core();
+        c.set_environment(crate::element::Environment {
+            audio: true,
+            ..Default::default()
+        });
+        c.mount_root(&crate::element::Root::new::<Click>(|| ()));
+        let end = std::time::Instant::now() + Duration::from_secs(5);
+        let id = loop {
+            assert!(std::time::Instant::now() < end, "no load");
+            c.run_component_tasks();
+            let load = c.commit().and_then(|b| {
+                b.items.into_iter().find_map(|i| match i {
+                    MountItem::Command {
+                        id: ROOT_ID,
+                        command:
+                            Command::Audio(AudioCommand::Load {
+                                id, bytes, hint, ..
+                            }),
+                    } => {
+                        assert_eq!(&*bytes, b"RIFF a click");
+                        assert!(hint.starts_with("data:audio/wav"));
+                        Some(id)
+                    }
+                    _ => None,
+                })
+            });
+            if let Some(id) = load {
+                break id;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        // Another object's event is dropped.
+        assert!(c.component_event(
+            ROOT_ID,
+            EventKind::Audio,
+            &EventPayload::Audio {
+                id: id + 1000,
+                event: AudioEvent::Ended,
+            }
+        ));
+        assert!(c.component_event(
+            ROOT_ID,
+            EventKind::Audio,
+            &EventPayload::Audio {
+                id,
+                event: AudioEvent::Loaded {
+                    duration: Duration::from_millis(250),
+                    bytes: 44_100,
+                    truncated: false,
+                },
+            }
+        ));
+        let mut shown = None;
+        for _ in 0..50 {
+            c.run_component_tasks();
+            if let Some(batch) = c.commit() {
+                shown = batch.items.iter().find_map(|i| match i {
+                    MountItem::Text { text, .. } if !text.text.is_empty() => {
+                        Some(text.text.clone())
+                    }
+                    _ => None,
+                });
+                if shown.is_some() {
+                    break;
+                }
+            }
+        }
+        assert_eq!(shown.as_deref(), Some("loaded 250"));
+    }
+
+    #[test]
+    fn a_player_streams_and_closes() {
+        let audio = FakeAudio::new();
+        let mut c = core();
+        c.set_audio(Some(audio.clone()));
+        assert_eq!(
+            shown_after::<Voice>(&mut c),
+            "Load { duration: Some(10s) }|Playing|Some(Progress { position: 3s, duration: None })"
+        );
+        settle(&mut c);
+        assert_eq!(
+            audio.log(),
+            [
+                "open https://example.com/voice.m4a false",
+                "resume",
+                "seek 3",
+                "close"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_player_of_a_source_not_granted_fails_at_once() {
+        let audio = FakeAudio::new();
+        let mut c = core();
+        c.set_audio(Some(audio.clone()));
+        c.set_access(Arc::new(crate::access::Access {
+            declared: crate::access::Capabilities::from_json(&serde_json::json!({ "audio": true }))
+                .unwrap(),
+            granted: None,
+        }));
+        assert_eq!(
+            shown_after::<Voice>(&mut c),
+            // Nothing after the failure: the core closed it.
+            "Failed { error: NotAllowed, message: \"the source is not granted\" }|None"
+        );
+        assert_eq!(audio.log(), Vec::<String>::new());
+    }
 }
 
 /// Words of eight points a character that wrap at spaces, each line taking
