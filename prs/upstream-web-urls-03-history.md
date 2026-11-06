@@ -19,10 +19,13 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   (the location PR needs both). To open it on its own instead: `git cherry-pick dff9c0464` onto `upstream/main`, a
   new branch name, and a twin of its own.
 - History: the first version, `pr/web-urls/03-history` (`3e061422d`, on the first 02), fork PR dXnSix/nsh#110.
+- 2026-11-06: fork CI twin #149 on `34b2e226`: 15 pass (iOS included), the 5 failures known (#148's four and Android's
+  emulator death). PR 7 opened as longbridge/nsh#1155, so the body's first line is filled. Ready to open; waits for the
+  user's go for this PR.
 
 ---
 
-**Depends on:** #<PR 7> (`web: Load an app's files and images from where its page started`), for the series' order
+**Depends on:** #1155 (`web: Load an app's files and images from where its page started`), for the series' order
 only: this PR uses none of its code, and its diff applies to `main` without it. **Needed by:** the location PR of this
 series (`web.history: false` also keeps the app's location out of the address bar).
 
@@ -56,3 +59,11 @@ The Web page's "Going back" and the `nsh.json` reference (en and zh-CN) and `doc
     and leaves `history.length` and `history.state` (`null`) as they were.
   - `nsh run <app> --target web` with `"history": false`: the dev page has `const HISTORY = false;` and the push
     leaves the history as it was too.
+- Fork CI on every platform (dXnSix/nsh#149: this branch, so PR 7 too, merged with `main` `e1163cd7`, plus the fork's
+  CI files and drops of `main`'s #1111 and #901 clippy errors): iOS, Core, Compat, Examples, Windows, GPUI, TUI and
+  Rust application's desktop checks pass. What fails is `main`'s own: Linux `check`'s `nsh-platform-linux`
+  `view::tests::a_scroll_views_content_is_read_in_screen_order` (#1122) under xvfb, which fails the same on `main`
+  `05f77b7a` with only #1111's drop ([run](https://github.com/dXnSix/nsh/actions/runs/42253107970)); the web tests that
+  open the gallery's index, which shows nothing on the web on `main`; macOS's `dock.test.tsx` drawer that a press does
+  not dismiss (since #907); and Android's emulator, which stops answering after the gallery's switch test runs past
+  30 s.

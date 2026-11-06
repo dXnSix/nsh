@@ -21,6 +21,10 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   lines. `browser/dom.js`'s `metaUrl` (an app module's `import.meta.url`, new since) reads the realm's
   `document.baseURI`, which the realm's `<base>` (now `player.baseURL`) fixes, so it needed no change. The branch
   is new so nothing is force pushed; `pr/web-urls/02-base` stays as it was.
+- 2026-11-06: fork CI twin #148 on `45b87d51`: 16 pass (iOS, Android included), the 4 failures `main`'s own (Linux
+  `check`'s #1122 test under xvfb, which fails the same on `main` `05f77b7a` with only #1111's drop, dXnSix/nsh run
+  42253107970; the web gallery's empty index twice; macOS's dock drawer press, #907). **Opened as longbridge/nsh#1155**
+  on the user's go (head `122912de`, mergeable with `main` `6edf36a5`); the body below is what was posted.
 
 ---
 
@@ -69,3 +73,11 @@ relative URLs keep resolving against the page, as #997 has them, now as the page
   `network`'s "reads the files the app ships" (the app's assets), `list-search`, `mention`, `input-shrink`,
   `keyboard-taps`, `gallery-ui`, `data-table-columns` and `selection-change` pass in headless Chrome.
   `error-boundary`'s "a failing binding" expects QuickJS's error message and fails the same with `main`'s files.
+- Fork CI on every platform (dXnSix/nsh#148: this branch merged with `main` `e1163cd7`, plus the fork's CI files and
+  drops of two of `main`'s own clippy errors, #1111's and #901's): iOS, Android, Core, Compat, Examples, Windows, GPUI,
+  TUI and Rust application's desktop checks pass. What fails is `main`'s own: Linux `check`'s `nsh-platform-linux`
+  `view::tests::a_scroll_views_content_is_read_in_screen_order` (#1122) under xvfb, which fails the same on `main`
+  `05f77b7a` alone (dXnSix/nsh run 42253107970); the web tests that open the gallery's index, which shows nothing on
+  the web on `main`; and macOS's `dock.test.tsx` drawer that a press does not dismiss (since #907).
+- `cargo +nightly fmt --all`, `cargo clippy --workspace --all-targets` (only `main`'s #1111, #901 and #776
+  warnings) and `cargo clippy -p nsh-platform-web --target wasm32-unknown-unknown --features compiler`.
