@@ -1,52 +1,71 @@
-# Upstream PR: web: Load the page's files from where it started, and let nsh.json set its base
+# Upstream PR: web: Load an app's files and images from where its page started
 
 Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and posts. The body is below the line.
 
-- Branch: `pr/web-urls/02-base` (`88c5d5ba7`), on `pr/web-urls/01-spa-fallback`: one commit, the fork's
-  `feat/web-base` cherry-picked unchanged.
-- Size: 14 files, +248 / −37.
-- Title: `web: Load the page's files from where it started, and let nsh.json set its base`. Until the SPA fallback PR
-  is merged, GitHub shows its commit too.
-- The fork's PR: dXnSix/nsh#109.
-- 2026-11-04: rebased on the new 01: head `f08b9e99`. Upstream's side modules (#853, `app.sides`) came after this commit, so the packaged page now resolves their URLs too (`for (const name in app.sides) ...`): without it, an app that moved the address to `/deep/path/here` fetched the formula typesetter from `/deep/path/nsh-math.<hash>.wasm` (404); with it from `/nsh-math.<hash>.wasm` (200), checked in the packaged gallery in Chromium.
-- 2026-11-04 (later): rebased onto the new 01 (`fe6f54f7`): head `c15ac2ae`. Upstream #921 (older Safari) moved the import map's construction ahead of the bootstrap in `browser/runtime.js`: `player.baseURL` now goes where the map is built (the same four lines as before); the frame's `<base>` still precedes the early map. Upstream's own unformatted test in `nsh-cli/src/web.rs` (#921) is left as it is.
+- Branch: `pr/web-urls/02-base-v2` (`122912ded`): the change `8fcee613f`, cut from `upstream/main` `39784ec2b`
+  (#1131), then a merge of `upstream/main` `e1163cd78` (`122912ded`, conflicts only in the Web page's "Publish an
+  app" paragraph, en and zh-CN, beside #997's new `--asset-url` paragraph: both kept). #997 composes with it: with
+  `--asset-url` the page names its files absolutely, which the player leaves as they are, and the app's own relative
+  URLs keep resolving against the page, now as it started.
+- Size: 6 files, +60 / −22 (code +27 / −11, tests +16, docs +17 / −11).
+- Title: `web: Load an app's files and images from where its page started` (was `web: Load the page's files from where
+  it started, and let nsh.json set its base`: the base and the page's half went upstream with #981).
+- Fork CI twin: dXnSix/nsh#148 (`tmp/web-urls-02-base-v2-fork-ci`: `ad07b51cb`, the change + one fork-only commit
+  with Fork CI's files, dXnSix/nsh#143's GStreamer packages, and drops of main's #1111 / #901 clippy errors; then
+  `45b87d518`, the branch's merge of main merged in).
+- History: the first version, `pr/web-urls/02-base` (`c15ac2aef` on `fe6f54f78` + #981's original commit
+  `bd0d2fec7`, fork PR dXnSix/nsh#109), also carried `nsh.json` `web.base`, the packaged page's `<base href>` and
+  URL resolution, the dev page's `<base href="/">` and `SiteServer::start_at`. #981's review fix moved those in
+  (2026-11-05), and #981 merged as `897fd9c2d` (2026-11-06), so v2 is cut from `upstream/main` with only what #981
+  did not take: the player (`nsh.js`), the browser runtime (`browser/runtime.js`), the node test and their docs
+  lines. `browser/dom.js`'s `metaUrl` (an app module's `import.meta.url`, new since) reads the realm's
+  `document.baseURI`, which the realm's `<base>` (now `player.baseURL`) fixes, so it needed no change. The branch
+  is new so nothing is force pushed; `pr/web-urls/02-base` stays as it was.
 
 ---
 
-**Depends on:** #<spa-fallback> (`dev: Serve the page at the app's own paths, …`): the paths the page is served at, and
-the docs section this one extends. **Needed by:** the `web.history` and location PRs.
+**Depends on:** no open PR (#981, merged, gave the pages their base). **Needed by:** the location PR of this series,
+whose navigations move the address of pages without `web.base`.
 
 ## Description
 
-A web app that moves the address to another directory (`history.pushState` to `/sports/football`) can no longer load
-the fonts of a chunk, its images, the runtime's data or its relative image URLs: each is a relative URL, resolved
-against wherever the address is when it loads. A page opened at such a path (a link into the app, a reload there)
-cannot load at all.
+A page with no `<base href>` (a site packaged without `nsh.json` `web.base`, a page that makes its own player) whose
+address moves to another directory while the app runs (`history.pushState` to `/sports/football`, by the page's
+router or the app) loses the files the player loads after that: the player resolved its URLs each time it used one,
+against the address at that moment. The runtime's data (`data`: the syntax definitions an `Editor` fetches when it
+first highlights), the files under `assetBase` and the app's relative image URLs (`<Image src="photos/a.jpg" />`)
+then load from `/sports/`, and the browser runtime builds the import map and the app realm's `<base>` of an app run
+later there too.
 
-The page now resolves every URL it has once as it starts: the packaged page its `app` URLs (the head's requests are
-keyed the same way), the player its `assets`, `data`, `assetBase` and the app's relative image URLs, the browser
-runtime the entry, the chunks and the app realm's `<base>`, all against `document.baseURI` as the player is made
-(`player.baseURL`).
+The player now takes the page's `document.baseURI` once as it is made (`player.baseURL`) and resolves those against
+it: `assets`, `data` and `assetBase` as it starts, the app's relative image URLs in `asset()`, and in
+`browser/runtime.js` the entry, the chunks and the realm's `<base>`. The engine already got the page's base once for
+relative requests (`nsh_set_base_url`) and now gets the same value. Pages with a `<base href>` (`web.base`, the dev
+server's page) behave as before, and the packaged page already resolves its own `app` URLs as it starts (#981).
+With `--asset-url` (#997) the page names its files absolutely, which the player leaves as they are; the app's own
+relative URLs keep resolving against the page, as #997 has them, now as the page started.
 
-`nsh.json` `web.base` names the path a site is served under (`/`, `/apps/counter/`): the packaged page gets a
-`<base href>` first in its head, so it loads at every path of the app, and `nsh package --target web --run` serves the
-site under it (`/` redirects there). The dev server's page has `<base href="/">`. Without `web.base` the page's URLs
-stay relative to the page, as before, so a site still works from any directory.
+`createPlayer`'s comment, the Web page's "Publish an app", "Embed it in a page" and "Networking" (en and zh-CN), and
+`docs/dev/web.md` say so.
 
 ## Public API
 
-- `nsh.json`: `web.base` (string, a path from the host's root; a `/` is added at its end): the packaged page's
-  `<base href>`, and the path `--run` serves the site under.
-- `nsh_dev::SiteServer::start_at(addr: SocketAddr, dir: PathBuf, base: &str) -> io::Result<SiteServer>`: a site served
-  under a path (`start` is `start_at` with `/`).
-- `createPlayer`: relative URLs of `assets`, `data`, `assetBase` and of the app's images resolve against the page's
-  `document.baseURI` as the player is made (`player.baseURL`).
+- `createPlayer` (`nsh.js`): relative URLs in `assets`, `data` and `assetBase`, and the app's relative image URLs,
+  resolve against the page's `document.baseURI` as the player is made, which `player.baseURL` (string) keeps,
+  rather than against the address when each one loads.
 
 ## How to Test
 
-- `cargo test -p nsh-cli --bin nsh -- web::` (`the_base_is_a_path_from_the_root`: normalizing and refusals, the
-  `<base>` first in the head), `cargo test -p nsh-dev --features server,client`
-  (`a_site_deployed_under_a_path_is_served_there`), `node --test crates/nsh-platform-web/web/nsh.test.mjs`
-  ("relative URLs are the page's as the player started").
-- By hand: the counter packaged with `"web": { "base": "/" }` opened at `/sports/football`, and with
-  `"/apps/counter"` at `/apps/counter/sports/football?tab=live` (`/` redirects to the base).
+- `node --test crates/nsh-platform-web/web/nsh.test.mjs`: "relative URLs are the page's as the player started"
+  (relative, root-relative, absolute, `blob:` and `asset:/` URLs, with and without the page's `assets` map).
+- By hand, in Chromium, with a test app whose button shows `<Image src="pic.png" />` and pushes a page, packaged
+  with `nsh package --target web`:
+  - Without `web.base`, served at `/`: after `history.pushState({}, "", "/deep/path/here")` the image loads from
+    `/pic.png`. The same site with `main`'s `nsh.js` and `browser/runtime.js` asks for `/deep/path/pic.png` (404).
+  - `"web": { "base": "/" }` served with `--run`, opened at `/sports/football` and moved to `/a/b/c/d`; `"base":
+    "/apps/urls/"` opened at `/apps/urls/sports/football?tab=live` and moved to `/apps/urls/x/y/z`: every file the
+    page loads (the runtime, the app, the browser runtime, the image) answers 200 from the base.
+- `nsh test examples/counter --target web` passes; of the gallery's tests that open a fixture rather than the index,
+  `network`'s "reads the files the app ships" (the app's assets), `list-search`, `mention`, `input-shrink`,
+  `keyboard-taps`, `gallery-ui`, `data-table-columns` and `selection-change` pass in headless Chrome.
+  `error-boundary`'s "a failing binding" expects QuickJS's error message and fails the same with `main`'s files.
