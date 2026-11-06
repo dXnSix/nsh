@@ -36,6 +36,13 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   Examples, Windows and GPUI green, `macos` / `web` the known failures, `android` an emulator that disconnected
   (rerun pending), Linux `check`, `ios` and Fork CI `web` still running. Public API lines updated; reply:
   https://github.com/longbridge/nsh/pull/981#issuecomment-6672676743.
+- 2026-11-06 (later): huacnlee's review of `f7402524` ([P2]): `/apps/%2e/counter/` and `/应用/counter/` passed
+  `page_base` while Chromium normalizes / percent-encodes them and `SiteServer` matched the string as written.
+  Fixed in `7fd017b1`: `web.base` takes only the form browsers send as written (unreserved characters and `%XX`
+  escapes, no dot, escaped-dot or empty segments; other characters percent-encoded), tested against WHATWG
+  resolution (`url`) and a real socket under `/%E5%BA%94%E7%94%A8/counter/`, checked by hand in Chromium. Pushed on the
+  owner's "push now" with fork CI dXnSix/nsh#139 (twin `fd199d36`) just started. Public API line updated; reply:
+  https://github.com/longbridge/nsh/pull/981#issuecomment-6673209367.
 
 ---
 
