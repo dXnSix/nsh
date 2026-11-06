@@ -36,10 +36,20 @@
   // with it. A Rust app (`app.rust`) has no code: its runtime mounts its
   // root. The page's host (`app.host`, nsh.json `web.host`) answers the
   // app's `nsh/host` calls: its `createHost(player)` runs once the player
-  // exists, before the app starts, so no call comes earlier.
-  import { createPlayer } from "./{{runtime}}";
+  // exists, before the app starts, so no call comes earlier. Its pages
+  // and dialogs are browser history entries as nsh.json `web.history`
+  // says.
+  import { createPlayer } from "{{runtime}}";
 
   const app = {{app}};
+  // Every URL of the app, resolved once against the page's base (its
+  // `<base href>`, nsh.json `web.base`, else the page's own URL): the app
+  // may move the address to another directory before a chunk's fonts
+  // load. The head's script keyed its requests the same way.
+  const url = (path) => new URL(path, document.baseURI).href;
+  for (const key of ["wasm", "glue", "code", "host"]) if (app[key]) app[key] = url(app[key]);
+  for (const urls of [app.assets, app.data, app.chunks]) for (const key in urls) urls[key] = url(urls[key]);
+  for (const name in app.sides) app.sides[name].url = url(app.sides[name].url);
   const status = document.getElementById("status");
   const fonts = new Map();
   let player;
@@ -88,6 +98,8 @@
         assets: app.assets,
         data: app.data,
         sides: app.sides,
+        // nsh.json `web.history`; without it the player's default.
+        history: app.history,
         readAsset: (uri) => fonts.get(path(uri)) ?? null,
         // The chunk's fonts and the side modules of the runtime it needs.
         prepareChunk: (id) => Promise.all([
@@ -100,7 +112,7 @@
           if (!player || player.views.size <= 1) fail("This app could not start.", message);
         },
       }),
-      app.host ? import(`./${app.host}`) : null,
+      app.host ? import(app.host) : null,
       ...app.fonts.map(loadFont),
       // The fonts of the chunks the entry imports statically.
       ...(app.entryChunks ?? []).flatMap(id => (app.chunkFonts[id] ?? []).map(loadFont)),
