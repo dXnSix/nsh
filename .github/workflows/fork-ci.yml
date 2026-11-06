@@ -133,7 +133,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       # GTK 4: `gallery-rs`'s crate is built for this machine too (GTK's Linux platform).
       - name: Install clang and GTK 4
-        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
       # The Android runtime: `javac` + `d8` (Java 17), the SDK's
       # `platforms;android-35` and an NDK: the image's default
       # (`ANDROID_NDK_HOME`, 27). QuickJS's bindings, generated with the
@@ -198,7 +198,7 @@ jobs:
       # QuickJS's WebAssembly build needs LLVM (clang, llvm-ar); GTK 4:
       # `gallery-rs`'s crate is built for this machine too (GTK's Linux platform).
       - name: Install clang, LLVM and GTK 4
-        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev libgtk-4-dev
+        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
