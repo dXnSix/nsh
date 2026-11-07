@@ -22,6 +22,12 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
 - 2026-11-06: fork CI twin #149 on `34b2e226`: 15 pass (iOS included), the 5 failures known (#148's four and Android's
   emulator death). PR 7 opened as longbridge/nsh#1155, so the body's first line is filled. **Opened as longbridge/nsh#1158**
   on the user's go (head `1056a626`, mergeable with `main` `7571948e`); the body below is what was posted.
+- 2026-11-07: GitHub found it conflicting with `main` `beeb9fc7`; `2512b1702` merges `main` in (pushed, a
+  fast-forward; #1155 stayed mergeable and is unchanged). The one conflict was the `nsh.json` table on the Project
+  structure page, en and zh-CN: this PR's `web` row (`web.history`) beside #1189's `updater` row (OTA `packages`),
+  both kept. The app's Auto-fix had started a merge of the fork's `origin/main` instead, which was aborted. After the
+  merge: `nsh-cli`'s `web::` and `nsh_json` tests (30), the node tests (67), fmt and `nsh-cli` clippy pass; #1190's
+  lenient `nsh.json` reader takes `web.history` as a known key.
 
 ---
 
