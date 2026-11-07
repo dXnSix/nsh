@@ -2,10 +2,10 @@ name: Fork release
 
 # Builds NSH's distribution (`cargo xtask dist`: the CLI with its prebuilt
 # hosts and runtimes) for every platform the fork serves and publishes it as
-# the GitHub release of a `fork-*` tag, so tools that pin a fork tag (rayx)
+# the GitHub release of an `nshx-*` tag, so tools that pin a fork tag (rayx)
 # download it instead of compiling NSH.
 #
-# - Pushing a tag `fork-<workspace version>-<n>` (`scripts/sync-main.sh tag`
+# - Pushing a tag `nshx-<workspace version>-<n>` (`scripts/sync-main.sh tag`
 #   on the fork's `private/fork-docs` branch pushes it) builds and releases it.
 # - Running it by hand builds and releases an existing tag, such as one made
 #   before this workflow existed.
@@ -29,11 +29,11 @@ name: Fork release
 
 on:
   push:
-    tags: ["fork-*"]
+    tags: ["nshx-*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "The fork tag to build and release (e.g. fork-0.2.0-4)"
+        description: "The fork tag to build and release (e.g. nshx-0.2.0-4)"
         required: true
         type: string
 
@@ -62,12 +62,12 @@ jobs:
           ref: ${{ env.TAG }}
           fetch-depth: 0
 
-      # `fork-<workspace version>-<n>` on a commit of the fork's `main`.
+      # `nshx-<workspace version>-<n>` on a commit of the fork's `main`.
       - name: Check the tag
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-          if [[ ! "$TAG" =~ ^fork-${version//./\\.}-[0-9]+$ ]]; then
-            echo "::error::tag $TAG is not fork-$version-<n> (the workspace version is $version)"
+          if [[ ! "$TAG" =~ ^nshx-${version//./\\.}-[0-9]+$ ]]; then
+            echo "::error::tag $TAG is not nshx-$version-<n> (the workspace version is $version)"
             exit 1
           fi
           git fetch --quiet origin main
