@@ -47,11 +47,13 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   them; mergeable. After the merge: `nsh-cli`'s `web::` and `nsh_json` tests (32), `nsh.test.mjs` (67), fmt and
   `nsh-cli` clippy pass; of the other node tests only `text-browser.test.mjs`'s emoji width and link bidi fail, in
   local Chrome, on files identical to `main`'s.
+  On the user's go: the body's first line now says #1155 is merged and the diff is this change alone, and a note on
+  the PR (issuecomment-6707254294) says the same, naming `abd68ac51`.
 
 ---
 
-**Depends on:** #1155 (`web: Load an app's files and images from where its page started`), for the series' order
-only: this PR uses none of its code, and its diff applies to `main` without it.
+**Depends on:** no open PR (#1155, merged as `dd41b7dd`, came before it in the series; `main` is merged in, so the
+diff is this change alone).
 
 ## Description
 
