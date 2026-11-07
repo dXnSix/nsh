@@ -31,6 +31,11 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   build and `web` included, now that main fixed #1111's) but Linux's new `gpui-gallery` (#1169): `form.test.tsx`'s
   "Shift with a key types its shifted character" (`expected "A82" to be "A*@"`), which fails the same on `main`
   `beeb9fc7`'s own push run (longbridge/nsh run 42341039969, job 128308614848).
+- 2026-11-07: huacnlee's review (5810586075, commented, no inline threads): no blocking defects; `web.history`'s name
+  and shape kept (`browserHistory` considered and turned down, the key matches `createPlayer`'s option), the owner to
+  decide on the key. Scope: the branch carries #1155's `8fcee61`, so asks to merge #1155 first or drop that commit.
+  Dropping it without a force push means a new branch (`git cherry-pick dff9c0464` onto `main`) and a new PR; waiting
+  for #1155 and then merging `main` in leaves only the `web.history` change in the diff.
 
 ---
 
