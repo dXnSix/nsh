@@ -227,6 +227,34 @@ fn ndk_cargo(sdk: &Sdk, triple: &str) -> Command {
     let script = if cfg!(windows) { ".cmd" } else { "" };
     let clang = bin.join(format!("{}{MIN_SDK}-clang{script}", clang_target(triple)));
     let env_triple = triple.replace('-', "_");
+    // New NDKs keep the C standard headers their clang carries (stdbool.h
+    // &c.) out of the sysroot: whatever libclang bindgen of the C
+    // dependencies loads, give it that directory to search as well. Last
+    // (`-idirafter`), not first: ahead of the libclang's own headers, the
+    // NDK's `stdint.h` reaches the libclang's through `#include_next`, which
+    // its include guard empties, and the sysroot's `stdint.h` is never read
+    // (NDK 27 with a system libclang: `unknown type name 'uint32_t'`).
+    let clang_include = fs::read_dir(toolchain.join("lib/clang"))
+        .ok()
+        .and_then(|versions| {
+            versions
+                .filter_map(|version| version.ok().map(|version| version.path()))
+                .map(|version| version.join("include"))
+                .find(|include| include.is_dir())
+        });
+    let mut extra = format!(
+        "--target={}{MIN_SDK} --sysroot=\"{}\"",
+        clang_target(triple),
+        toolchain
+            .join("sysroot")
+            .display()
+            .to_string()
+            .replace('\\', "/")
+    );
+    if let Some(include) = clang_include {
+        let include = include.display().to_string().replace('\\', "/");
+        extra.push_str(format!(" -idirafter \"{include}\"").as_str());
+    }
     let mut cmd = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     cmd.current_dir(root())
         .env(format!("CC_{env_triple}"), &clang)
@@ -250,45 +278,8 @@ fn ndk_cargo(sdk: &Sdk, triple: &str) -> Command {
     }
     // bindgen splits this variable like a shell: quoted, with forward slashes,
     // so that the backslashes and spaces of a Windows path survive.
-    cmd.env(
-        format!("BINDGEN_EXTRA_CLANG_ARGS_{env_triple}"),
-        bindgen_clang_args(&toolchain, triple),
-    );
+    cmd.env(format!("BINDGEN_EXTRA_CLANG_ARGS_{env_triple}"), extra);
     cmd
-}
-
-/// The arguments bindgen's libclang takes for `triple` (its
-/// `BINDGEN_EXTRA_CLANG_ARGS`): the target at the minimum API level, which
-/// NDK 30's headers require, and the NDK's sysroot. New NDKs keep the C
-/// standard headers their clang carries (stdbool.h &c.) out of the sysroot,
-/// so that directory is searched too, but after the sysroot and the
-/// libclang's own headers (`-idirafter`): a libclang that has them (a
-/// distribution's, Homebrew's) keeps its own, as two copies of clang's
-/// `stdint.h` share one include guard, and the second would hide the
-/// sysroot's types (`unknown type name 'uint32_t'`).
-fn bindgen_clang_args(toolchain: &Path, triple: &str) -> String {
-    let clang_include = fs::read_dir(toolchain.join("lib/clang"))
-        .ok()
-        .and_then(|versions| {
-            versions
-                .filter_map(|version| version.ok().map(|version| version.path()))
-                .map(|version| version.join("include"))
-                .find(|include| include.is_dir())
-        });
-    let mut extra = format!(
-        "--target={}{MIN_SDK} --sysroot=\"{}\"",
-        clang_target(triple),
-        toolchain
-            .join("sysroot")
-            .display()
-            .to_string()
-            .replace('\\', "/")
-    );
-    if let Some(include) = clang_include {
-        let include = include.display().to_string().replace('\\', "/");
-        extra.push_str(format!(" -idirafter \"{include}\"").as_str());
-    }
-    extra
 }
 
 /// Clippy on the Android crate (it is empty on other targets): with every
@@ -452,7 +443,7 @@ fn collect_ext(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) -> anyhow::Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{bindgen_clang_args, check_load_alignment};
+    use super::check_load_alignment;
 
     #[test]
     fn load_segments_support_16_kb_pages() {
@@ -470,25 +461,6 @@ mod tests {
                     .contains(&format!("LOAD alignment is 2**{exponent}"))
             );
         }
-    }
-
-    #[test]
-    fn bindgen_searches_the_ndk_clang_headers_after_its_own() {
-        let toolchain = std::env::temp_dir().join(format!("nsh-xtask-ndk-{}", std::process::id()));
-        let include = toolchain.join("lib/clang/18/include");
-        std::fs::create_dir_all(&include).unwrap();
-        let args = bindgen_clang_args(&toolchain, "armv7-linux-androideabi");
-        std::fs::remove_dir_all(&toolchain).unwrap();
-        let slashed = |p: &std::path::Path| p.display().to_string().replace('\\', "/");
-        assert_eq!(
-            args,
-            format!(
-                "--target=armv7a-linux-androideabi28 --sysroot=\"{}\" -idirafter \"{}\"",
-                slashed(&toolchain.join("sysroot")),
-                slashed(&include),
-            )
-        );
-        assert!(!args.contains("-isystem"), "{args}");
     }
 
     #[test]

@@ -162,8 +162,8 @@ page and files named after their content.
 
 `<digest>` is the start of the SHA-256 of the file's content: a file's name changes exactly when its content does, so a
 new release changes only `index.html` and the files that really changed. By default everything uses relative URLs,
-so the site works from any directory of any host (`https://example.com/apps/counter/`). The page resolves them once as it
-starts, so the files still load after the app moves the address to another path.
+so the site works from any directory of any host (`https://example.com/apps/counter/`). The page resolves them once
+as it starts, so the files still load after the app moves the address to another path.
 
 To serve the files from a CDN while the page is served at the app's own address, give the CDN's URL with
 `--asset-url`: the page names each of its files under it, and the page's `connect-src` allows its origin; the CDN
@@ -318,7 +318,7 @@ const player = await createPlayer(document.querySelector("#phone"), {
 await player.runModule(new URL("./bundle.js", location.href).href);
 ```
 
-`assets` (a map from `asset:/` paths to URLs) replaces `assetBase`, `readAsset(uri)` returns the bytes of an asset the engine needs at once (a font) or `null`, `data` maps the files the runtime fetches when it first needs them to their URLs (`syntaxes`: `nsh-syntaxes.<digest>.bin`; by default `nsh-<name>.bin` next to `nsh.js`), and `glue` is the URL of the wasm-bindgen glue of a runtime whose crates call [browser APIs from Rust](#browser-apis-from-rust) (`nsh-bindgen.<digest>.js`), which the player loads with the runtime; `player.runModule(url, { capabilities, appId })` runs the app under the capabilities it declares (its `capabilities.json`) and keeps its storage under its `nsh.json` id (without one, under the page's path). The page `nsh package --target web` writes uses all of them.
+`assets` (a map from `asset:/` paths to URLs) replaces `assetBase`, `readAsset(uri)` returns the bytes of an asset the engine needs at once (a font) or `null`, `data` maps the files the runtime fetches when it first needs them to their URLs (`syntaxes`: `nsh-syntaxes.<digest>.bin`; by default `nsh-<name>.bin` next to `nsh.js`), and `glue` is the URL of the wasm-bindgen glue of a runtime whose crates call [browser APIs from Rust](#browser-apis-from-rust) (`nsh-bindgen.<digest>.js`), which the player loads with the runtime; `player.runModule(url, { capabilities, appId })` runs the app under the capabilities it declares (its `capabilities.json`) and keeps its storage under its `nsh.json` id (without one, under the page's path). Relative URLs, in these options and the app's images alike, resolve against the page's URL as the player is made (`player.baseURL`), so they still load after the page moves the address to another directory. The page `nsh package --target web` writes uses all of them.
 
 `runModule(url, { chunks })` also takes where the chunks of a [split bundle](#split-bundles) are.
 
