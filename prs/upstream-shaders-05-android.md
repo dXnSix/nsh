@@ -27,6 +27,15 @@ below the line is the draft it was posted from, with the PR numbers filled in.
 
 - 2026-11-01, later: rebuilt again on `upstream/main` `e4e464f4` (23 commits past `a5036af4`), no conflicts of its own; head `2ef0d3546`.
 
+## Review (2026-11-02)
+
+huacnlee: "[P2] Do not finish navigation while the first GPU frame is pending": held. Fix `6a9e847ed` (fork `f56d66309`):
+page / dialog runs send Java only frames that came back and one `replaces=false` frame when the clock ends; without a
+device pages keep their own animation (`StackBox`) and transitions start no run; screen effects give the surface back
+and redraw it (`Box.giveUpScreen`). Fork CI android green (#107), clippy-android + runtime build on the branch. Pushed
+with the 02 merge (`51c8c7682`); replied `issuecomment-6568087990`. Follow-up not taken: `Shaders::input` skips a
+`from` equal to the previous run's.
+
 The body to paste starts below the line.
 
 ---
@@ -83,3 +92,14 @@ On the GL backend (the emulator's), wgpu-hal logs `Fake map` at error level on e
 - [x] Changes to what apps use keep what released versions shipped and come with a case in `tests/compat/`
   (`cargo xtask compat`): no new API here; the elements' cases came with #682 and #[02 PR].
 - [ ] Ran the related `examples/gallery` demos on Android (not run on this base; the fork's sync branch ran `shaders.test.tsx` 3 of 3 on an API 35 emulator).
+
+## Review 2 (2026-11-02, huacnlee's agents): follow-ups after the series lands
+
+The maintainer's review asked for one contract across the platforms (precedence over `animation: "none"`, reduce
+motion, interruption), a Rust builder and per-platform perf fixes. The user settled the contract (the shader replaces
+`animation`; reduce motion skips the shader; a change that starts while one runs ends that one first). The
+maintainer then pushed its own builder to #763 (`2c5d96585`) and said the rest comes as follow-up PRs after the series
+lands; the user chose that. Nothing was pushed to the `pr/shaders/*` branches. Replied on #763
+(`issuecomment-6582820956`). The fixes are on fork branches, listed with their commits in the shared note
+`side-session-notes/local_3fb0899a-…/shaders-followups.md`; open them as follow-up PRs, core first, once the series is
+merged.

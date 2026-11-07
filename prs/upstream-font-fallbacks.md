@@ -25,6 +25,36 @@ Fonts page says a quoted name keeps its commas (en, zh-CN). Fork first: `tmp/fon
 application, Examples, Windows, Linux, GPUI) and dXnSix/nsh#105 (Fork CI, two iOS flaky retries in unrelated tests), all
 green. Pushed (fast-forward `ddc03e232..b3434ed2f`) and replied (`r4437471313`); the thread is open for the reviewer.
 
+## Review 2 (2026-11-02)
+
+huacnlee requested changes again (Kai, an AI agent for him): (1) Windows `family_names`, Linux `resolve_family` and GPUI
+`family_candidates` still `split(',')`, so quoted names with commas broke there; Android's parser still read a quoted
+`'serif'` as the generic family; (2) `FamilyName` public without `#[non_exhaustive]`; (3) the GPUI list assertion in
+`registered_fonts_lay_out` passed on main; nit: Android `chained()` dropped a trailing generic family with no other
+registered font.
+
+Fixed in four fast-forward commits on `b3434ed2f`: `032fae8ca` (`FamilyName` `#[non_exhaustive]`, plus `Cursive` /
+`Fantasy`, which Windows and GPUI already mapped; iOS / macOS pass them over as before), `6a17d662d` (the three platforms
+read lists with `font_families`; Linux leaves a name with a comma out, since Pango splits its family string at commas;
+Android `Family(name, generic)` marks only unquoted generics), `c670f69d0` (GPUI: the fallbacks start with the list's
+monospace font), `d8adae82e` (Android: chain whenever the first generic family after the font is not sans-serif). Docs:
+Fonts page (en, zh-CN: a cursive / fantasy row, quoted generic names, Linux's names without commas, Android's generic
+fallback), `docs/dev/{gpui,windows,linux}.md`.
+
+Fork first: `tmp/font-fallbacks-review` (Core, Linux, Windows, GPUI, Rust application, Examples, CI paths; Compat is
+`if: false` upstream) and dXnSix/nsh#116 (the same commits on the fork's `main`: Fork CI's macOS, iOS, Android, web).
+Locally: nightly fmt, `nsh-core` list tests, `nsh-platform-macos text::` (7), clippy core + macOS; Catalyst, Android and
+GPUI clippy left to CI (disk at 43 GB free).
+
+**Superseded upstream (2026-11-02 16:12 UTC):** huacnlee merged main into the PR branch (`c05a77ab6`), squash-merged #773
+as `bd30b1b4f` at 16:08 UTC, and opened longbridge/nsh#820 (`agent/font-fallbacks-followup`) with the same five fixes. So
+the commits above were never pushed to the PR branch. What #820 lacks compared with them: docs (the Fonts page still
+promises that a quoted name keeps its commas, which Linux now skips; nothing on quoted generic names or Android's generic
+fallback), and `cursive` / `fantasy` stay `FamilyName::Named`, so a quoted `'cursive'` still maps to Comic Sans MS on
+Windows and GPUI. The user chose to stand down quietly (no comment on #820, no follow-up PR): dXnSix/nsh#116 closed
+unmerged and its runs cancelled; the commits stay on `fix/font-family-review` (fork main) and `tmp/font-fallbacks-review`
+(old PR base) if the docs or `Cursive` / `Fantasy` are ever wanted after #820 lands.
+
 ---
 
 **Depends on:** no other PR; it applies to `main` as it is.

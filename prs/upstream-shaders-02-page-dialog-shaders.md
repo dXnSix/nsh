@@ -31,6 +31,13 @@ below the line is the draft it was posted from, with the PR numbers filled in.
 
 - 2026-11-01, later: rebuilt again on `upstream/main` `e4e464f4` (23 commits past `a5036af4`), no conflicts of its own; head `1c9c291b6`.
 
+## Merge with main (2026-11-02)
+
+#697 (HoverCard) conflicted in `tests/compat/cases/base/script.txt` (both appended a case). Merged `main` into the
+branch (`6d60ccc85`, both cases kept, ours first; each case starts from its own `case-` button). Every platform branch
+then merged the new head (merge-only for 06, 09, 10). Fork: `tmp/shaders-02-merge-main` Core, Examples, CI paths green;
+local compat fails at base step 59 (`absent GH`, Avatar timing) on plain upstream `main` too, so it says nothing here.
+
 The body to paste starts below the line.
 
 ---
@@ -84,3 +91,14 @@ and dismissal go through one too: a wipe, an iris, a ripple.
 - [x] Changes to what apps use keep what released versions shipped and come with a case in `tests/compat/`
   (`cargo xtask compat`).
 - [ ] Ran the related `examples/gallery` demos on iOS and Android: the platform PRs and the gallery PR do.
+
+## Review 2 (2026-11-02, huacnlee's agents): follow-ups after the series lands
+
+The maintainer's review asked for one contract across the platforms (precedence over `animation: "none"`, reduce
+motion, interruption), a Rust builder and per-platform perf fixes. The user settled the contract (the shader replaces
+`animation`; reduce motion skips the shader; a change that starts while one runs ends that one first). The
+maintainer then pushed its own builder to #763 (`2c5d96585`) and said the rest comes as follow-up PRs after the series
+lands; the user chose that. Nothing was pushed to the `pr/shaders/*` branches. Replied on #763
+(`issuecomment-6582820956`). The fixes are on fork branches, listed with their commits in the shared note
+`side-session-notes/local_3fb0899a-…/shaders-followups.md`; open them as follow-up PRs, core first, once the series is
+merged.

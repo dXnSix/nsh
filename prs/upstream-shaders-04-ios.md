@@ -22,6 +22,19 @@ below the line is the draft it was posted from, with the PR numbers filled in.
 
 - 2026-11-01, later: rebuilt again on `upstream/main` `e4e464f4` (23 commits past `a5036af4`), no conflicts of its own; head `5e3f94418`. One context change: upstream's #742 added `alert_tint` beside the `nav_shaders` field `Mounter` gains here.
 
+## Review (2026-11-02)
+
+huacnlee: "[P2] Keep native content visible if renderer initialization fails": held. Fix `2765760a5` (fork
+`8b57bfd01`): children are masked only with a renderer (`hides`), transitions start no run without one;
+`nav_overlay` returns whether it runs, so `reconcile` and dialogs keep UIKit's motion; `sync_mask` keeps the root
+masked while any screen shader still draws it. Fork CI ios green (#107), Catalyst clippy (embed, dev) and the
+gallery's steps in an iOS simulator locally. Pushed after the 02 merge (`92e4dc9db`); replied
+`issuecomment-6572825745`.
+
+Later on 2026-11-02: the upstream web check failed on main's own menu bar hover test (#791, fixed by #795 three
+minutes after the run started). Merged `upstream/main` `ca3dbd60` (no conflicts): fork Rust application, Compat and
+CI paths green on `tmp/shaders-04-ios-review`, Catalyst clippy locally. Pushed, head `372f309f0`.
+
 The body to paste starts below the line.
 
 ---
@@ -66,3 +79,14 @@ and pages' and dialogs' `transitionShader` (#682, #[02 PR]) on `Shader`'s render
 - [x] Changes to what apps use keep what released versions shipped and come with a case in `tests/compat/`
   (`cargo xtask compat`): no new API here; the elements' cases came with #682 and #[02 PR].
 - [ ] Ran the related `examples/gallery` demos on iOS (not run on this base; the fork's sync branch ran `shaders.test.tsx` on the iOS simulator).
+
+## Review 2 (2026-11-02, huacnlee's agents): follow-ups after the series lands
+
+The maintainer's review asked for one contract across the platforms (precedence over `animation: "none"`, reduce
+motion, interruption), a Rust builder and per-platform perf fixes. The user settled the contract (the shader replaces
+`animation`; reduce motion skips the shader; a change that starts while one runs ends that one first). The
+maintainer then pushed its own builder to #763 (`2c5d96585`) and said the rest comes as follow-up PRs after the series
+lands; the user chose that. Nothing was pushed to the `pr/shaders/*` branches. Replied on #763
+(`issuecomment-6582820956`). The fixes are on fork branches, listed with their commits in the shared note
+`side-session-notes/local_3fb0899a-…/shaders-followups.md`; open them as follow-up PRs, core first, once the series is
+merged.

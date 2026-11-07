@@ -21,6 +21,22 @@ below the line is the draft it was posted from, with the PR numbers filled in.
 
 - 2026-11-01, later: rebuilt again on `upstream/main` `e4e464f4` (23 commits past `a5036af4`), no conflicts of its own; head `7f134503e`.
 
+## Review (2026-11-02)
+
+huacnlee, two findings, both held: a `ScreenEffect` / `ScreenTransition` left its layer and the root's mask when its
+view was deleted, and `set` masked children without a renderer. Fix `e3d3b8c01` (fork `31b070bff`): `deleted` takes
+the screen layer off the root and `sync_mask` unmasks it unless another screen shader hides it, `clear` does the same
+when the app stops; `ShaderState::hides` needs a renderer, so without a GPU device nothing is masked, transitions start
+no run and pages / dialogs keep their own `animation` (`Nav::shader`, `Nav::start`). Found on the way: the decoration's
+clipping reset the same container mask on every reshape; the mask now goes through `decor::hide_children`. Fork CI
+macos green (#107), Rust application green on `tmp/shaders-03-macos-review`, macOS clippy (dev) and the backend's tests
+locally. Pushed after the 02 merge (`9ded3bc03`); replied `issuecomment-6572825379`.
+
+Later on 2026-11-02: the upstream web check failed on main's own menu bar hover test (#791, fixed by #795 three
+minutes after the run started) and compat hit nsh-compat's 5 s first-screen flake. Merged `upstream/main` `ca3dbd60`
+(no conflicts; #783's border lines in `decor.rs` sit apart from `hide_children`): fork Rust application, Compat and CI
+paths green on `tmp/shaders-03-macos-review`, macOS clippy (dev) and its tests locally. Pushed, head `45170546f`.
+
 The body to paste starts below the line.
 
 ---
@@ -70,3 +86,14 @@ and pages' and dialogs' `transitionShader` (#682, #[02 PR]) on `Shader`'s render
 - [x] Changes to what apps use keep what released versions shipped and come with a case in `tests/compat/`
   (`cargo xtask compat`): no new API here; the elements' cases came with #682 and #[02 PR].
 - [x] Ran the related `examples/gallery` demos: the Shaders page on macOS (ran: `shaders.test.tsx` on macOS, 2 of 2).
+
+## Review 2 (2026-11-02, huacnlee's agents): follow-ups after the series lands
+
+The maintainer's review asked for one contract across the platforms (precedence over `animation: "none"`, reduce
+motion, interruption), a Rust builder and per-platform perf fixes. The user settled the contract (the shader replaces
+`animation`; reduce motion skips the shader; a change that starts while one runs ends that one first). The
+maintainer then pushed its own builder to #763 (`2c5d96585`) and said the rest comes as follow-up PRs after the series
+lands; the user chose that. Nothing was pushed to the `pr/shaders/*` branches. Replied on #763
+(`issuecomment-6582820956`). The fixes are on fork branches, listed with their commits in the shared note
+`side-session-notes/local_3fb0899a-…/shaders-followups.md`; open them as follow-up PRs, core first, once the series is
+merged.

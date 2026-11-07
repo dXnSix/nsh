@@ -22,6 +22,18 @@ below the line is the draft it was posted from, with the PR numbers filled in.
 
 - 2026-11-01, later: rebuilt again on `upstream/main` `e4e464f4` (23 commits past `a5036af4`), no conflicts of its own; head `51b5ef9ae`.
 
+## Review (2026-11-02)
+
+huacnlee's review (ChatGPT on his behalf, a summary without an inline thread): "[P2] Restore original content when
+WebGL rendering is unavailable": `op_sh` added `nsh-fx` before rendering, and `renderShader` returned without WebGL 2
+or with a refused program, so the children stayed hidden. It held. Fix `4fd07f2ee` on `pr/shaders/06-web`
+(fast-forward, the fork's `2f13b741e` in dXnSix/nsh#107): `shaderDraws(layer)` (WebGL 2 and a program the driver takes)
+gates `nsh-fx` (`op_sh` ends a run and clears the canvas through `endTransition` when it cannot draw), `op_sht`,
+`shaderNav` (returns false: the page's own motion), `screenShown` and `shaderFrame` (no pictures, no frames). Five
+`nsh.test.mjs` tests fail on the old code. Checked: fork CI all green on #107, `tmp/shaders-06-web-fallback` (Rust
+application, CI paths), node tests, and Chromium with WebGL 2 off (effect, transition, screen effect, page, dialog show
+their content) and on. Replied in a PR comment (`issuecomment-6567282492`).
+
 The body to paste starts below the line.
 
 ---
@@ -69,3 +81,14 @@ Part of the shader series (01 elements, 02 page and dialog shaders, then one PR 
 - [x] Changes to what apps use keep what released versions shipped and come with a case in `tests/compat/`
   (`cargo xtask compat`): no new API here; the elements' cases came with #682 and #[02 PR].
 - [ ] Ran the related `examples/gallery` demos on the web (not run on this base; the fork's sync branch ran `shaders.test.tsx` on the web).
+
+## Review 2 (2026-11-02, huacnlee's agents): follow-ups after the series lands
+
+The maintainer's review asked for one contract across the platforms (precedence over `animation: "none"`, reduce
+motion, interruption), a Rust builder and per-platform perf fixes. The user settled the contract (the shader replaces
+`animation`; reduce motion skips the shader; a change that starts while one runs ends that one first). The
+maintainer then pushed its own builder to #763 (`2c5d96585`) and said the rest comes as follow-up PRs after the series
+lands; the user chose that. Nothing was pushed to the `pr/shaders/*` branches. Replied on #763
+(`issuecomment-6582820956`). The fixes are on fork branches, listed with their commits in the shared note
+`side-session-notes/local_3fb0899a-…/shaders-followups.md`; open them as follow-up PRs, core first, once the series is
+merged.

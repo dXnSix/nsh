@@ -72,6 +72,32 @@ GPUI tests. Force-pushed (the owner's OK, lease on `a44cc19a4`) as `fab837934`, 
 the reply posted as a PR comment (`issuecomment-6560823197`). The rest of the series (02 to 04) still sits on the old
 01 with #744's commit and is rebuilt when it opens.
 
+## Merge with `main` (2026-11-02)
+
+Auto-fix reported a conflict after HoverCard and the RTL work landed. Merged `upstream/main` twice (no rebase): `1f986b58`
+(`docs/dev/components.md`: main dropped Rust's `rtl()` for the hidden `layout_rtl()`, the row keeps that and adds
+`appState()` / `app_state()`), then `ca3dbd60` (#798's `after_answer` beside `app_state` in `prelude.rs`). Fork first
+on `tmp/env-01-app-state-merge`: Core, Windows, Linux, GPUI, CI paths green; Compat green on its second attempt (the
+first hit nsh-compat's 5 s first-screen wait, flaky since its parallel starts, #20). Locally clippy (core, engine,
+testing, macOS `dev`, Catalyst), the core env / answer tests and fmt. Pushed as a fast-forward, head `5a505b989`,
+MERGEABLE.
+
+huacnlee's third pass (`issuecomment-6575392574`): no blocking issues, naming is the maintainers' call; asked for a
+changelog line for `Environment`'s new public field. No changelog file exists, so the PR description gained
+`## Breaking Changes` (both `Environment`s gain `app_state`; full literals outside `nsh-core` need it or
+`..Default::default()`). Replied `issuecomment-6575455680` (also why compat is red: nsh-compat's 5 s flake).
+Maintainer decision (huacnlee, same day): the React Native names stay; every review point is resolved on
+`5a505b98`; they re-ran the failed compat job.
+
+Then (same day) the maintainers asked for another name: `appState` reads like an app-wide store. The owner chose
+`Lifecycle`: `lifecycle()` (TS and Rust), `Lifecycle`, `Environment::lifecycle`, `App.setLifecycle`; values unchanged;
+React Native's `AppState` kept once in the docs as the values' source. One commit on top, `e3c31d75c` (39 files):
+fork Core, Windows, Linux, GPUI, Compat, Rust application, Examples, CI paths green on `tmp/env-01-app-state-merge`;
+locally clippy (macOS dev, Catalyst, wasm, Android), core / declarations / engine `rust_platform` / testing environment
+tests, node web tests. Pushed (fast-forward), description updated, replied `issuecomment-6576649738`. To follow: 02–04
+of the series and the fork's own `main` (which has `appState` from `feat/app-state`) take the new name when rebuilt /
+synced.
+
 ---
 
 **Depends on:** #744 (`core: Mark the environments non-exhaustive, so new fields break no code`): the new

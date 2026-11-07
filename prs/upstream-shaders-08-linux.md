@@ -24,6 +24,12 @@ below the line is the draft it was posted from, with the PR numbers filled in.
 
 - 2026-11-01, later: rebuilt again on `upstream/main` `e4e464f4` (23 commits past `a5036af4`), no conflicts of its own; head `e60db59ee`.
 
+## Review (2026-11-02)
+
+huacnlee: same finding as Windows: held. Fix `fa1bb34c3` (fork `713996855`), as on Windows (`add_overlay` declines
+without a device). Fork: Linux + Rust application green on `tmp/shaders-08-linux-review` and #107. Pushed with the 02
+merge (`a0aafdc42`); replied `issuecomment-6568088466`.
+
 The body to paste starts below the line.
 
 ---
@@ -66,3 +72,14 @@ pages' and dialogs' `transitionShader` (#682, #[02 PR]) as `nsh_engine::shader` 
 - [x] Changes to what apps use keep what released versions shipped and come with a case in `tests/compat/`
   (`cargo xtask compat`): no new API here; the elements' cases came with #682 and #[02 PR].
 - [ ] Ran the related `examples/gallery` demos on Linux.
+
+## Review 2 (2026-11-02, huacnlee's agents): follow-ups after the series lands
+
+The maintainer's review asked for one contract across the platforms (precedence over `animation: "none"`, reduce
+motion, interruption), a Rust builder and per-platform perf fixes. The user settled the contract (the shader replaces
+`animation`; reduce motion skips the shader; a change that starts while one runs ends that one first). The
+maintainer then pushed its own builder to #763 (`2c5d96585`) and said the rest comes as follow-up PRs after the series
+lands; the user chose that. Nothing was pushed to the `pr/shaders/*` branches. Replied on #763
+(`issuecomment-6582820956`). The fixes are on fork branches, listed with their commits in the shared note
+`side-session-notes/local_3fb0899a-…/shaders-followups.md`; open them as follow-up PRs, core first, once the series is
+merged.
