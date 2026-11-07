@@ -145,7 +145,8 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   Without a pointer: the keyboard's Menu key and Shift+F10 on the focused view (the web and Linux, `key_focus.rs`, and the headless
   driver's `keyboard.press("shift+f10")` there) and a screen reader's "show menu" action (macOS `AXShowMenu` on a view that
   listens, VoiceOver's VO-Shift-M; Windows UI Automation's `ShowContextMenu`) raise it too, walking out from that
-  view as a click does.
+  view as a click does. On the web the browser raises the keys' `contextmenu`; Chromium on Linux names a mouse and its main
+  button for Shift+F10's, so `nsh.js` takes one raised while a menu key is used (`menuKey`) as the keyboard's too.
   The payload's `pointerType` (`PointerType`: `"mouse"`, `"pen"`, `"touch"`, the DOM's) is `null` then, and the
   positions are the view's bottom-start corner (`nsh_core::input::context_menu_anchor`, by the surface's direction),
   so a menu opened below it starts where the view does; `ContextMenu` puts the keyboard focus on its first enabled
