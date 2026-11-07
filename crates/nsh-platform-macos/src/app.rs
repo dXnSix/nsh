@@ -2,7 +2,7 @@
 //! standalone app ([`run_app`]: one `AppView` filling a window).
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     path::PathBuf,
     rc::Rc,
     sync::{Arc, RwLock},
@@ -24,7 +24,7 @@ use objc2_app_kit::{
     NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
+    NSArray, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSURL,
 };
 
 use crate::{
@@ -186,6 +186,12 @@ pub struct AppOptions {
     /// The apps' storage (`nsh/storage`), overriding the `storage.json` in
     /// their directory of [`data_dir`](Self::data_dir).
     pub storage: Option<Arc<dyn nsh_engine::StorageBackend>>,
+    /// The app this view runs owns the process's notifications: banners
+    /// show while it is in front, presses come to it and the Dock's badge is
+    /// its (`nsh`'s `Notifications`). An embedding app that has a
+    /// notification center delegate of its own keeps it. Without it the
+    /// permission is `unavailable` and nothing shows. [`run_app`] sets it.
+    pub notifications: bool,
     /// The embedding app's channel with the apps the view runs
     /// (`nsh/host`): their launch parameters, events to them and handlers of
     /// their calls and posts ([`AppView::host`]). One for every app the view
@@ -213,6 +219,7 @@ impl Default for AppOptions {
             data_dir: None,
             cache: Default::default(),
             storage: None,
+            notifications: false,
             host: nsh_engine::HostChannel::default(),
         }
     }
@@ -291,6 +298,9 @@ impl AppView {
         container.addSubview(root);
         register_app_components(&options.components);
         surface.native.set_components(options.components.clone());
+        if options.notifications {
+            crate::notifications::enable();
+        }
         let view = Rc::new(AppView {
             surface,
             container,
@@ -364,6 +374,7 @@ impl AppView {
             host: options.host.clone(),
             picker: None,
             speech: None,
+            audio: None,
         };
         crate::image::set_asset_base(&self.surface, options.asset_base.clone());
         *self.surface.chunks.borrow_mut() = options.chunks.clone();
@@ -474,6 +485,7 @@ fn initial_environment() -> Environment {
         file_requests: true,
         speech: true,
         notifications: true,
+        audio: true,
         web_input: true,
         ..Environment::default()
     }
@@ -488,6 +500,37 @@ struct Running {
 
 thread_local! {
     static RUNNING: RefCell<Option<Running>> = const { RefCell::new(None) };
+    /// Links that came before the app's engine started.
+    static URL_SCHEMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The app asked to start again when its run ends
+    /// ([`DesktopCommand::Restart`](nsh_core::desktop::DesktopCommand)).
+    static RESTART: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Hands `url`, a link the system opened the app with, to the running
+/// app's engine, whose core keeps it until the app listens; keeps it until
+/// the engine starts.
+fn url_scheme(url: String) {
+    let mut url = Some(url);
+    RUNNING.with(|running| {
+        if let Some(running) = running.borrow().as_ref() {
+            running.view.surface().control(|control| {
+                if let Some(url) = url.take() {
+                    control.dispatch_event(
+                        nsh_core::ROOT_ID,
+                        nsh_core::EventKind::UrlScheme,
+                        nsh_core::EventPayload::Map(vec![(
+                            nsh_core::url_scheme::URL,
+                            nsh_core::PayloadValue::Str(url),
+                        )]),
+                    );
+                }
+            });
+        }
+    });
+    if let Some(url) = url {
+        URL_SCHEMES.with(|links| links.borrow_mut().push(url));
+    }
 }
 
 define_class!(
@@ -522,7 +565,32 @@ define_class!(
         // Before launching finishes, or a press that starts the app is lost.
         #[unsafe(method(applicationWillFinishLaunching:))]
         fn will_finish_launching(&self, _notification: &NSNotification) {
-            crate::notifications::install();
+            crate::notifications::enable();
+        }
+
+        // The links of the schemes the app claims (`CFBundleURLTypes`), the
+        // one that launched it included.
+        #[unsafe(method(application:openURLs:))]
+        fn open_urls(&self, app: &NSApplication, urls: &NSArray<NSURL>) {
+            for url in urls.iter() {
+                if let Some(url) = url.absoluteString() {
+                    url_scheme(url.to_string());
+                }
+            }
+            // A link opened while the app runs brings it forward.
+            app.activate();
+            let window = RUNNING.with(|running| {
+                running
+                    .borrow()
+                    .as_ref()
+                    .map(|running| running.window.clone())
+            });
+            if let Some(window) = window {
+                if window.isMiniaturized() {
+                    window.deminiaturize(None);
+                }
+                window.makeKeyAndOrderFront(None);
+            }
         }
 
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
@@ -603,6 +671,20 @@ pub fn quit_app() {
     });
 }
 
+/// Quits the standalone runner as [`quit_app`] does, and starts the app
+/// again once this process has exited ([`nsh_core::restart`]). With no
+/// standalone runner this has no effect.
+pub(crate) fn restart_app() {
+    dispatch2::DispatchQueue::main().exec_async(|| {
+        if RUNNING.with(|running| running.borrow().is_some())
+            && let Some(mtm) = MainThreadMarker::new()
+        {
+            RESTART.set(true);
+            finish_running(&NSApplication::sharedApplication(mtm));
+        }
+    });
+}
+
 /// Ends the standalone event loop, returning process ownership to its caller.
 fn finish_running(app: &NSApplication) {
     let window = RUNNING.with(|running| {
@@ -672,8 +754,9 @@ fn name_app(name: &str) {
 /// Runs `source` in a window until it is closed. Must be called on the
 /// main thread. By default closing the window stops the engine and returns;
 /// `keep_alive_on_close` retains the same engine until Quit or [`quit_app`].
-/// The caller can finish cleanup or relaunch after this function returns.
-pub fn run_app(source: AppSource, options: AppOptions) -> std::process::ExitCode {
+/// The caller can finish cleanup or restart after this function returns.
+pub fn run_app(source: AppSource, mut options: AppOptions) -> std::process::ExitCode {
+    options.notifications = true;
     let mtm = MainThreadMarker::new().expect("run_app must be called on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     // A background app is Prohibited: AppKit does not activate it. An
@@ -757,10 +840,24 @@ pub fn run_app(source: AppSource, options: AppOptions) -> std::process::ExitCode
             keep_alive_on_close: options.keep_alive_on_close,
         })
     });
+    for url in URL_SCHEMES.with(|links| std::mem::take(&mut *links.borrow_mut())) {
+        url_scheme(url);
+    }
     app.run();
     stop_running();
     app.setDelegate(None);
     drop(delegate);
+    // The new process waits for this one to exit, so the caller's cleanup
+    // after `run_app` returns still comes first.
+    if RESTART.take() {
+        if cfg!(feature = "dev") {
+            // `nsh run` ends with its host and stops the dev server: a host
+            // started again would be cut off from both, so it only quits.
+            log::warn!("a development host quits on restart; restarting runs in a packaged app");
+        } else if let Err(err) = nsh_core::restart::spawn_after_exit() {
+            log::error!("cannot restart the app: {err}");
+        }
+    }
     std::process::ExitCode::SUCCESS
 }
 

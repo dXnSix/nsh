@@ -29,10 +29,7 @@ use crate::{
     canvas::CanvasFont,
     color::Hsla,
     location::{InvalidLocation, Location, NavigateOptions, Navigation},
-    platform::{
-        Appearance, HourCycle, Idiom, Languages, Lifecycle, Locale, MeasurementSystem, Os,
-        TemperatureUnit, TimeZone, Weekday,
-    },
+    platform::{Appearance, Idiom, Lifecycle, Locale, LocaleSettings, Os},
     time::Instant,
 };
 
@@ -51,6 +48,8 @@ pub(crate) struct Ambient {
     measure: Option<MeasureFn>,
     /// The app's key-value storage (`nsh/storage`).
     storage: Option<crate::storage::Store>,
+    /// The displays (desktops), as the platform reports them.
+    displays: Option<Signal<Arc<[crate::desktop::Display]>>>,
     /// The app's location ([`location`]), made when first read or set.
     location: Option<Signal<Location>>,
 }
@@ -69,6 +68,7 @@ struct EnvSignals {
     window: Memo<Size<Points>>,
     safe_area: Memo<EdgeInsets>,
     title_bar: Memo<crate::geometry::Edges<crate::geometry::Points>>,
+    window_state: Memo<Option<crate::desktop::WindowState>>,
     keyboard_height: Memo<Points>,
     keyboard_duration: Memo<f32>,
     dark: Memo<bool>,
@@ -78,12 +78,7 @@ struct EnvSignals {
     rtl: Memo<bool>,
     pixel_ratio: Memo<f32>,
     locale: Memo<Locale>,
-    languages: Memo<Languages>,
-    hour_cycle: Memo<HourCycle>,
-    first_day_of_week: Memo<Weekday>,
-    measurement_system: Memo<MeasurementSystem>,
-    temperature_unit: Memo<TemperatureUnit>,
-    time_zone: Memo<TimeZone>,
+    locale_settings: Memo<LocaleSettings>,
     lifecycle: Memo<Lifecycle>,
     screen_color: Memo<bool>,
 }
@@ -93,8 +88,8 @@ impl EnvSignals {
         Owner::detached().run(|| {
             let signal = super::signal(env);
             macro_rules! part {
-                ($($field:ident).+) => {
-                    computed(move || signal.with(|e| e.$($field).+))
+                ($field:ident) => {
+                    computed(move || signal.with(|e| e.$field))
                 };
             }
             Self {
@@ -102,6 +97,7 @@ impl EnvSignals {
                 window: part!(window),
                 safe_area: part!(safe_area),
                 title_bar: part!(title_bar),
+                window_state: part!(window_state),
                 keyboard_height: part!(keyboard_height),
                 keyboard_duration: part!(keyboard_duration),
                 dark: part!(dark),
@@ -111,12 +107,7 @@ impl EnvSignals {
                 rtl: part!(rtl),
                 pixel_ratio: part!(pixel_ratio),
                 locale: part!(locale),
-                languages: part!(languages),
-                hour_cycle: part!(regional.hour_cycle),
-                first_day_of_week: part!(regional.first_day_of_week),
-                measurement_system: part!(regional.measurement_system),
-                temperature_unit: part!(regional.temperature_unit),
-                time_zone: part!(time_zone),
+                locale_settings: part!(locale_settings),
                 lifecycle: part!(lifecycle),
                 screen_color: part!(screen_color),
             }
@@ -156,6 +147,25 @@ impl super::Runtime {
                 with_data(|d| d.ambient.env = Some(signals));
             }
         }
+    }
+
+    /// The displays now: what read them runs again.
+    pub(crate) fn set_displays(&self, displays: Arc<[crate::desktop::Display]>) {
+        let _entered = self.enter();
+        let signal = displays_signal();
+        if signal.with_untracked(|d| **d != *displays) {
+            signal.set(displays);
+        }
+    }
+
+    /// `bounds` fitted on the displays now (`set_window_bounds`), without
+    /// subscribing to them.
+    pub(crate) fn fit_window_bounds(
+        &self,
+        bounds: crate::desktop::WindowBounds,
+    ) -> crate::desktop::WindowBounds {
+        let _entered = self.enter();
+        displays_signal().with_untracked(|d| bounds.fit_on_displays(d))
     }
 
     /// The design tokens now: what read them runs again.
@@ -224,7 +234,7 @@ fn location_signal() -> Signal<Location> {
     signal
 }
 
-fn executor() -> Rc<Executor> {
+pub(super) fn executor() -> Rc<Executor> {
     with_data(|d| d.ambient.executor.clone()).expect("the core sets the executor")
 }
 
@@ -313,45 +323,21 @@ pub fn locale() -> Locale {
     env(|e| e.locale)
 }
 
-/// The user's preferred languages, most preferred first (TS:
-/// `languages()`): the language to show the app's text in is the first the
-/// app has, the others its fallbacks. Reading it subscribes, so texts follow
-/// a change of the system's setting (or of an embedding app's language,
-/// which comes first).
-pub fn languages() -> Languages {
-    env(|e| e.languages)
-}
-
-/// Whether the user has 12- or 24-hour time (TS: `hourCycle()`): the
-/// system's setting, else the region's. Reading it subscribes, so times
-/// follow the setting.
-pub fn hour_cycle() -> HourCycle {
-    env(|e| e.hour_cycle)
-}
-
-/// The day the user's weeks start on (TS: `firstDayOfWeek()`): a calendar's
-/// first column. Reading it subscribes, so calendars follow the setting.
-pub fn first_day_of_week() -> Weekday {
-    env(|e| e.first_day_of_week)
-}
-
-/// The units the user measures lengths, weights and volumes in (TS:
-/// `measurementSystem()`). Reading it subscribes.
-pub fn measurement_system() -> MeasurementSystem {
-    env(|e| e.measurement_system)
-}
-
-/// The unit the user reads temperatures in (TS: `temperatureUnit()`).
-/// Reading it subscribes.
-pub fn temperature_unit() -> TemperatureUnit {
-    env(|e| e.temperature_unit)
-}
-
-/// The device's time zone, as the system names it (`Europe/Berlin`; TS:
-/// `timeZone()`). Reading it subscribes, so what shows times in it follows
-/// the user's travels and changes in the system's settings.
-pub fn time_zone() -> TimeZone {
-    env(|e| e.time_zone)
+/// The user's locale settings (TS: `localeSettings()`): the preferred
+/// languages, most preferred first (the app shows its text in the first it
+/// has, the others are its fallbacks; an embedding app's own language comes
+/// first), the device's time zone as the system names it
+/// (`Europe/Berlin`), and the regional preferences: 12- or 24-hour time,
+/// the first day of the week, the measurement system and the temperature
+/// unit, each the system's setting, else the region's. Reading it
+/// subscribes, so what shows them follows the user's settings and travels;
+/// a `computed` of one of them changes only with it. `nsh_base`'s
+/// `TimeField` and `DatePicker` take their `HourCycle::H12` where
+/// [`HourCycle::twelve_hour`](crate::platform::HourCycle::twelve_hour),
+/// else `H23`; its `Calendar` and `DatePicker` count their
+/// `first_day_of_week` from 0 for Sunday: pass `number() % 7`.
+pub fn locale_settings() -> LocaleSettings {
+    env(|e| e.locale_settings)
 }
 
 /// Whether the app is in use: in the foreground, visible without the
@@ -850,6 +836,16 @@ pub fn next_notification_press() -> Answer<String> {
     act(Action::Notification(super::NotificationAction::NextPress(
         slot,
     )));
+    answer
+}
+
+/// The next link that opens the app (TS: `UrlScheme.on("open", ...)`): a
+/// URL of a scheme the app claims (`nsh.json` `schemes`), those
+/// that came before anything listened first, the one that launched the app
+/// included ([`crate::url_scheme`]). To await in a task.
+pub fn next_url_scheme_open() -> Answer<String> {
+    let (answer, slot) = Answer::new();
+    act(Action::NextUrlSchemeOpen(slot));
     answer
 }
 
@@ -1541,6 +1537,25 @@ pub fn on_back_press(f: impl Fn() -> bool + 'static) {
 
 pub(crate) fn title_bar() -> crate::geometry::Edges<crate::geometry::Points> {
     env(|e| e.title_bar)
+}
+
+pub(crate) fn window_state() -> Option<crate::desktop::WindowState> {
+    env(|e| e.window_state)
+}
+
+pub(crate) fn displays() -> Vec<crate::desktop::Display> {
+    displays_signal().with(|d| d.to_vec())
+}
+
+/// The displays' signal, made empty on first use (whatever reads it before
+/// the platform reports displays follows them when it does).
+fn displays_signal() -> Signal<Arc<[crate::desktop::Display]>> {
+    if let Some(signal) = with_data(|d| d.ambient.displays) {
+        return signal;
+    }
+    let signal = Owner::detached().run(|| super::signal(Arc::from(Vec::new())));
+    with_data(|d| d.ambient.displays = Some(signal));
+    signal
 }
 
 /// The views' menu handlers.

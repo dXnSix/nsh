@@ -80,6 +80,7 @@ mod imp {
             ui_sets: &[nsh_core::element::Registry],
             posts: nsh_core::element::Posts,
             environment: &Environment,
+            displays: &[nsh_core::desktop::Display],
             location: &nsh_core::location::Location,
             tokens: Arc<nsh_core::element::Tokens>,
             theme: nsh_core::element::ThemeTokens,
@@ -146,6 +147,7 @@ mod imp {
                 nsh_core::canvas::measure_line(&*text_engine, font, text)
             }));
             host.set_environment(environment);
+            host.set_displays(displays);
             host.set_location(location);
             host.set_tokens(tokens);
             host.set_theme_tokens(theme);
@@ -299,6 +301,10 @@ mod imp {
             self.host.set_environment(environment);
         }
 
+        pub(crate) fn set_displays(&self, displays: &[nsh_core::desktop::Display]) {
+            self.host.set_displays(displays);
+        }
+
         pub(crate) fn set_location(&self, location: &nsh_core::location::Location) {
             self.host.set_location(location);
         }
@@ -374,6 +380,7 @@ mod stub {
             _: &[nsh_core::element::Registry],
             _: nsh_core::element::Posts,
             _: &Environment,
+            _: &[nsh_core::desktop::Display],
             _: &nsh_core::location::Location,
             _: Arc<nsh_core::element::Tokens>,
             _: nsh_core::element::ThemeTokens,
@@ -461,6 +468,10 @@ mod stub {
         }
 
         pub(crate) fn set_environment(&self, _: &Environment) {
+            match *self {}
+        }
+
+        pub(crate) fn set_displays(&self, _: &[nsh_core::desktop::Display]) {
             match *self {}
         }
 

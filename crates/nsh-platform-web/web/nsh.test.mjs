@@ -58,6 +58,43 @@ const failing = () => {
 const events = (sent) =>
   sent.filter(([name, p]) => name === "onHost" && p.type === "event").map(([, p]) => p.event);
 
+test("keyboard context menus have no pointer even when Chromium names a mouse", () => {
+  const { player } = fakePlayer();
+  const el = {
+    _id: 2,
+    _events: new Set(["onContextMenu"]),
+    getBoundingClientRect: () => ({ left: 10, right: 90, top: 20, bottom: 60 }),
+  };
+  player.viewOf = () => el;
+  player.ancestors = () => [el];
+  player.point = (at) => [at.clientX, at.clientY];
+  let payload;
+  player.event = (_, name, value) => { assert.equal(name, "onContextMenu"); payload = value; };
+  const saved = globalThis.getComputedStyle;
+  globalThis.getComputedStyle = () => ({ direction: "ltr" });
+  try {
+    for (const [pointerType, button, keyboard] of [
+      ["mouse", -1, true],
+      ["", -1, true],
+      ["", 0, true],
+      ["mouse", 2, false],
+      [undefined, 2, false],
+      ["mouse", 0, false],
+    ]) {
+      let prevented = false;
+      assert.equal(player.contextMenu({
+        target: el, pointerType, button, clientX: 40, clientY: 30,
+        preventDefault() { prevented = true; },
+      }), true);
+      assert.equal(prevented, true);
+      assert.equal(payload.pointerType, keyboard ? null : "mouse");
+      assert.deepEqual(payload.pagePosition, keyboard ? { x: 10, y: 60 } : { x: 40, y: 30 });
+    }
+  } finally {
+    globalThis.getComputedStyle = saved;
+  }
+});
+
 test("input autofill hints are set, changed and cleared on both field kinds", () => {
   const { player } = fakePlayer();
   const attrs = new Map();
@@ -268,6 +305,40 @@ test("a browser-cancelled pan reports cancellation rather than a release", () =>
     assert.deepEqual(sent, [[12, phase, 0, 100, 0, 400]]);
     assert.equal(player.pointers.size, 0);
   }
+});
+
+test("a face registered while another loads keeps the app hidden until both have loaded", async () => {
+  const { player } = fakePlayer();
+  const classes = new Set();
+  player.root = {
+    classList: {
+      add: (name) => classes.add(name),
+      remove: (name) => classes.delete(name),
+      contains: (name) => classes.has(name),
+    },
+  };
+  player.starting = true;
+  player.metricsCache = new Map();
+  let loaded = 0;
+  player.call = (f) => f({ nsh_fonts_loaded: () => loaded++ });
+  const face = () => {
+    let resolve;
+    const loading = new Promise((r) => (resolve = r));
+    return { loading, resolve };
+  };
+  const first = face();
+  const second = face();
+  player.fontLoading(first.loading);
+  player.fontLoading(second.loading);
+  first.resolve();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(loaded, 0);
+  assert.ok(classes.has("nsh-hidden"));
+  second.resolve();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(loaded, 1);
+  assert.ok(!classes.has("nsh-hidden"));
+  clearTimeout(player.fontTimer);
 });
 
 test("compileAndRun hands the compiled module to runSource, or returns the compile error", async () => {
@@ -1827,5 +1898,24 @@ test("the page moves the app with setLocation; without the history, the app's lo
     assert.equal(player.location, "/x");
   } finally {
     restore();
+  }
+});
+
+test("a mouse makes a desktop at any width, a touch screen a tablet or a phone (#1004)", () => {
+  const saved = { matchMedia: globalThis.matchMedia, screen: globalThis.screen };
+  const measure = (mouse, width, height) => {
+    globalThis.matchMedia = () => ({ matches: mouse });
+    globalThis.screen = { width, height };
+    return Player.prototype.measureIdiom.call({});
+  };
+  try {
+    // A narrow browser window on a desktop still drags to select with the mouse.
+    assert.equal(measure(true, 390, 844), "desktop");
+    assert.equal(measure(true, 1280, 800), "desktop");
+    assert.equal(measure(false, 390, 844), "phone");
+    assert.equal(measure(false, 820, 1180), "pad");
+  } finally {
+    globalThis.matchMedia = saved.matchMedia;
+    globalThis.screen = saved.screen;
   }
 });

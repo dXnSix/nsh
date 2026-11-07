@@ -85,10 +85,11 @@ impl Updater {
         Later::new(native::download(sys, on_progress))
     }
 
-    /// Replaces the installed app with the downloaded update and starts it;
-    /// this run then exits, so the promise settles only on failure. Rejects
-    /// when nothing was downloaded, or when the app cannot be replaced,
-    /// which leaves it as it was.
+    /// Replaces the installed app with the downloaded update and restarts
+    /// it as `Application.restart()` does: this run quits, and the new
+    /// version starts once it has exited, so the promise settles only on
+    /// failure. Rejects when nothing was downloaded, or when the app cannot
+    /// be replaced, which leaves it as it was.
     pub(crate) fn install_and_restart(sys: System) -> Later<()> {
         Later::new(native::install(sys))
     }
@@ -152,8 +153,10 @@ mod native {
     pub(super) async fn check(sys: System) -> Result<Option<AppUpdate>, JsError> {
         let found = sys.locals.get::<Found>();
         let _operation = begin(&found)?;
-        *found.0.borrow_mut() = None;
+        // A failed check keeps what the last one found, and its download: a
+        // network blip must not lose a verified archive waiting for a restart.
         let Some(host) = sys.updater.clone() else {
+            *found.0.borrow_mut() = None;
             return Ok(None);
         };
         let worker = host.clone();
@@ -181,6 +184,7 @@ mod native {
         })
         .await?;
         let Some((bytes, config, available)) = checked else {
+            *found.0.borrow_mut() = None;
             return Ok(None);
         };
         // Only the desktops install an update (`can_install` below).
@@ -202,19 +206,30 @@ mod native {
                     .filter(|installation| installation.can_install()))
             })
             .await?;
+            let mut found = found.0.borrow_mut();
             if let (Some(installation), Some(dir), true) = (
                 installation,
                 sys.data_dir.clone(),
                 available.sha256.is_some(),
             ) {
                 update.can_install = true;
-                *found.0.borrow_mut() = Some(Rc::new(Pending {
-                    host,
-                    available,
-                    dir: dir.join("updates"),
-                    archive: RefCell::new(None),
-                    installation,
-                }));
+                // The same version again keeps its download; a newer one
+                // replaces it, so a restart always installs the latest.
+                let same = found.as_ref().is_some_and(|pending| {
+                    pending.available.version == available.version
+                        && pending.available.sha256 == available.sha256
+                });
+                if !same {
+                    *found = Some(Rc::new(Pending {
+                        host,
+                        available,
+                        dir: dir.join("updates"),
+                        archive: RefCell::new(None),
+                        installation,
+                    }));
+                }
+            } else {
+                *found = None;
             }
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
@@ -320,16 +335,16 @@ mod native {
         })?;
         let installation = pending.installation.clone();
         blocking(move || {
-            // Let the writer settle before the new process reads storage.
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            installation
-                .install_and_launch(&archive)
-                .map_err(|e| e.to_string())?;
+            installation.install(&archive).map_err(|e| e.to_string())?;
             let _ = std::fs::remove_file(&archive);
             Ok(())
         })
         .await?;
-        std::process::exit(0);
+        // As `Application.restart()`: the app quits as the user's quit does
+        // (storage written, windows closed), and the new version starts
+        // once this process has exited (`crate::restart`).
+        crate::element::desktop::restart();
+        std::future::pending().await
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]

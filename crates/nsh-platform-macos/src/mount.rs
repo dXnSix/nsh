@@ -598,6 +598,11 @@ impl Mounter {
                 }
             }
             Command::ImageInfo { .. } => crate::image::command(surface, id, command),
+            // A window of the app's own (`Window.open`) shows dialog root
+            // `id`.
+            Command::Desktop(desktop) if id != ROOT_ID => {
+                crate::window::command(surface, id, view, desktop);
+            }
             Command::SetJsResponder { .. } | Command::ClearJsResponder => {
                 crate::input::command(surface, id, command);
             }
@@ -608,6 +613,7 @@ impl Mounter {
             | Command::InjectJavaScript(_)
             | Command::PostMessage(_)
             | Command::SendInput(_)
+            | Command::Load(_)
             | Command::Seek(_)
             | Command::Native { .. } => {
                 if let Some(view) = view {

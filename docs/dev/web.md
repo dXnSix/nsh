@@ -142,9 +142,11 @@ build to the same file) and takes `nsh.js` from the crate.
   requests are keyed the same way), the `Player` its `assets`, `data` and `assetBase` and the app's relative
   `asset()` URLs against `player.baseURL`, and `browser/runtime.js` the entry, the chunks and the app realm's
   `<base>`, so nothing loads from the directory a `history.pushState` moved the address to. `nsh.json` `web.base`
-  (`web::page_base`: a path from the root, a `/` added at its end) puts a `<base href>` first in the head, so the
-  page loads at any of the app's paths, which `SiteServer::start_at` (`--run`) serves under it; the dev page has
-  `<base href="/">`. `nsh.json` `web.history` reaches `createPlayer`'s `history` on both pages (the packaged page's
+  (`web::page_base`: a path from the root in the form browsers send it, unreserved characters and percent-escapes
+  without dot or empty segments, a `/` added at its end, which `start_at` matches requests against as it is) puts a
+  `<base href>` first in the head, so the page loads its files at any of the app's paths (`/sports/football`), which
+  `SiteServer::start_at` (`--run`) serves under it; the dev page has `<base href="/">` (the dev server serves its
+  files at the root). `nsh.json` `web.history` reaches `createPlayer`'s `history` on both pages (the packaged page's
   `app.history`, the dev page's `HISTORY`, which `with_page_host` fills in); without it the player's default
   (`window.top === window`) holds. The app ships as minified ES modules
   (`app.<digest>.js` and `<chunk>.<digest>.js`). An import map resolves original chunk URLs to hashed files;
@@ -416,8 +418,8 @@ does. Its accessors are grouped as `env.rs` declares them: the exports of `nsh/d
 `environment.test.mjs` checks them against `env.rs`: `nsh` has every one, each namespace exactly those its module
 declares, so a part added to `env.rs` fails there rather than in apps.
 
-The idiom is fixed at start, as `Environment::idiom` is everywhere: `desktop` for a fine, hovering pointer and a
-container at least 600 wide (headless Chromium reports no pointer and measures as a tablet or phone unless launched
+The idiom is fixed at start, as `Environment::idiom` is everywhere: `desktop` for a fine, hovering pointer at
+any width, as a narrow window on a native desktop (headless Chromium reports no pointer and measures as a tablet or phone unless launched
 with a fine, hovering one, as `nsh test --target web` does), `pad` for a screen whose short side is at least 600, else
 `phone`; the player's `idiom` option overrides it, and so does a test's setup (`TestEnvironment::idiom`: `open`'s
 desktop `platform` starts the app in the desktop idiom at any width). `Environment::desktop()`
@@ -455,7 +457,8 @@ measured against it frame by frame (`requestAnimationFrame` samplers of computed
 
 - **Animated values** (`src/animation.rs`): the graph's clock is in seconds (`Graph::tick`), so `nsh_frame` divides the
   `requestAnimationFrame` time (ms) by 1000; passing milliseconds ended every `timing` / `spring` / `decay` on its
-  first frame.
+  first frame. Bound values are inline styles: a property bound no more (its view taken over by an element without
+  the binding) is cleared from them with the next output (`["a", view, prop, ""]`), so the view shows its own style.
 - **Without frames** (a hidden tab, and often an iframe out of view: browsers run no `requestAnimationFrame` there),
   what an animation ends still happens on time, as on macOS (`Surface::keep_deadline`). After each call into the
   engine that asked for a frame, `Player.keepDeadline` asks `nsh_deadline` when the graph next has an animation that
@@ -629,7 +632,10 @@ browsers' touches into what phones report:
 - **Focus**: the stops `ViewProps::focus_stop` decides are focusable (`tabindex=0`; `updateFocusable`): pressables
   (role `button` unless they have one) unless `focusable={false}`, and `focusable={true}` views whether or not they take
   presses (Return and Space press only pressables), never disabled or hidden ones (a focused one that stops being a
-  stop is blurred), so Tab and Shift+Tab reach them in DOM order; `focus:` states follow the keyboard focus (`:focus-visible`), and
+  stop is blurred), so Tab and Shift+Tab reach them in DOM order, but for a scroll view's content and a list's cells in its parent's viewport (`ViewProps::screen_order`,
+  `screenOrder`): where the browser takes
+  `reading-flow` (Chromium), it is read in the order it is on screen (`orderReading`: `reading-order` on its children,
+  the DOM, which is also their paint order, left alone), as a list's recycled cells are not in their rows' order in it; `focus:` states follow the keyboard focus (`:focus-visible`), and
   they are all that shows it: as the desktop backends, the runtime draws no ring of its own; a popped page gives the focus back to what had it when the page was pushed
   (`screenGone`). A click never moves the focus (`mousedown` is prevented outside fields, selectable
   text, selectable views and hosted pages), as in native apps; it focuses the app's window in an iframe. The views under the newest
@@ -700,7 +706,12 @@ browsers' touches into what phones report:
   (`history.back()`) as before, the app back at its start. A new `run` goes back to the first entry and writes the
   location into it, so the app restarts where it was. Without the history (an iframe, `history: false`) the player
   touches neither the history nor the address bar: the location moves with the app's navigations and
-  `setLocation`, and `onNavigate` lets the page follow.
+  `setLocation`, and `onNavigate` lets the page follow. Only shown stacks count, for the entries and for what going
+  back acts on (`stackShown`: in the tree, visible, and laid out with a size, since `display: none`, a tab not
+  selected, is laid out by the core at zero size, which `checkVisibility` does not see: the rule of
+  `nsh_core::navigation::shown_in_layout`, which every backend asks); a stack's frame becoming empty or not (`op_f`)
+  syncs the entries again (a view around a stack of its own size becoming empty does not: the entries follow at the
+  next push, pop or back).
 - **Text selection**: text is selectable when `selectable` is true (`userSelect: "text"`; `nsh-selectable`), and with the desktop idiom also
   when it is unset (`null` in the `t` item: `nsh-autoselect`, selectable under `.nsh-desktop`) unless a view around it,
   or the text itself, takes presses, touches, pans or pinches (`nsh-press`, set in `updateTouchAction`), as on a web
@@ -834,7 +845,7 @@ scroll events postpone it, and the browser's `scrollend` cancels it.
   directory once symbolic links are resolved, as `nsh test` does) as `host.<digest>.js`; the page imports it alongside the
   runtime and runs its `createHost(player)` once the player exists, before `run`, and its `host` option forwards to
   what that returns (no callable `call`: the page's "could not be loaded" error). The host module shares the page's
-  CSP: an app restricting `network` gets a `connect-src` of `'self'`, its `capabilities.network` and `web.connect`
+  CSP: an app restricting `network` gets a `connect-src` of `'self'`, the origin of `--asset-url`, its `capabilities.network` and `web.connect`
   (`package::WebConfig::connect`, host patterns checked as `HostPattern`s, which keeps any CSP syntax out:
   `web::page_connect`). `web.connect` is the page's alone: the core checks the app's requests against its
   capabilities before `fetch` sees them, so only the redirect hops CSP guards widen with it. The module is copied as it

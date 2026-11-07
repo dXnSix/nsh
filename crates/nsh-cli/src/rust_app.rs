@@ -275,7 +275,7 @@ impl Nsh {
 
 /// What a generated crate names of a platform crate's features: all but `js`
 /// and the standard JS modules, which a Rust app does not run.
-pub(crate) const RUST_APP_PLATFORM: &str = ", default-features = false, features = [\"shader\", \"editor\", \"highlight\", \"math\", \"plot\", \"rich-editor\"]";
+pub(crate) const RUST_APP_PLATFORM: &str = ", default-features = false, features = [\"shader\", \"editor\", \"highlight\", \"math\", \"plot\", \"rich-editor\", \"term\"]";
 /// `nsh-base`'s features the hosts and runners name: they show TextView's
 /// code blocks highlighted, whatever `nsh-base`'s defaults are.
 const HIGHLIGHT: &str = ", features = [\"highlight\"]";
@@ -327,6 +327,9 @@ pub(crate) struct RootConfig {
     app_id: Option<String>,
     /// `"statusBar"` (JSON, checked): the status bar's default.
     status_bar: Option<String>,
+    /// `"schemes"`' schemes (checked, lower case): the URL schemes the
+    /// app claims.
+    url_schemes: Vec<String>,
 }
 
 /// Whether `entry` is a Rust app's (`entry::resolve` gives its `nsh.json`
@@ -579,12 +582,18 @@ fn root_config(
             Some(v.to_string())
         }
     };
+    let url_schemes = match config.get("schemes") {
+        None => Vec::new(),
+        Some(v) => nsh_core::url_scheme::schemes_from_json(v)
+            .map_err(|e| anyhow::anyhow!("nsh.json: {e}"))?,
+    };
     Ok(RootConfig {
         component,
         theme,
         appearance,
         app_id: crate::package::app_id(&dir.join("nsh.json")).ok(),
         status_bar,
+        url_schemes,
     })
 }
 
@@ -600,6 +609,7 @@ const NSH_CRATES: &[&str] = &[
     "nsh-testing",
     "nsh-bundler",
     "nsh-dev",
+    "nsh-platform-apple",
     "nsh-platform-ios",
     "nsh-platform-android",
     "nsh-platform-linux",
@@ -1901,12 +1911,7 @@ opt-level = \"s\"
         extra: &[&str],
         what: &str,
     ) -> anyhow::Result<PathBuf> {
-        let suffix = if triple.is_none() {
-            env::consts::EXE_SUFFIX
-        } else {
-            ""
-        };
-        let artifact = format!("{package}{suffix}");
+        let artifact = format!("{package}{}", crate::runtime::exe_suffix(triple));
         let build = Build {
             workspace,
             package,
@@ -1931,6 +1936,7 @@ opt-level = \"s\"
             artifact,
             what,
         } = *build;
+        crate::runtime::cross_build(&mut cmd, triple)?;
         cmd.arg("build")
             .arg("--manifest-path")
             .arg(workspace.join("Cargo.toml"))
@@ -2358,7 +2364,7 @@ fn set_fn(krate: &AppCrate) -> String {
 }
 
 /// `app_root()`, a Rust app's root (`nsh.json` `"root"`, `"theme"`,
-/// `"appearance"`, `"statusBar"`, `"id"`) in the crate the generated code links as `krate`, under
+/// `"appearance"`, `"statusBar"`, `"id"`, `"schemes"`) in the crate the generated code links as `krate`, under
 /// `cfg`.
 fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
     let mut make = format!(
@@ -2374,6 +2380,9 @@ fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
     }
     if let Some(id) = &root.app_id {
         make.push_str(&format!("\n        .app_id({id:?})"));
+    }
+    if !root.url_schemes.is_empty() {
+        make.push_str(&format!("\n        .url_schemes({:?})", root.url_schemes));
     }
     if let Some(appearance) = &root.appearance {
         let variant = if appearance == "dark" {
@@ -2727,6 +2736,7 @@ mod tests {
                 appearance: None,
                 app_id: None,
                 status_bar: None,
+                url_schemes: Vec::new(),
             };
             let app = app(&dir, &[(package, dir.join("native"))], Some(root));
             app.write_workspace().unwrap();
@@ -2991,6 +3001,7 @@ mod tests {
                 appearance: Some("dark".into()),
                 app_id: Some("com.example.app".into()),
                 status_bar: Some(r#"{"foreground":"light","hidden":false}"#.into()),
+                url_schemes: vec!["myapp".into()],
             },
         );
         for line in [
@@ -2999,6 +3010,7 @@ mod tests {
             "include_str!(\"/app/theme.json\")",
             ".appearance(nsh_core::element::Appearance::Dark)",
             ".app_id(\"com.example.app\")",
+            ".url_schemes([\"myapp\"])",
             ".status_bar(nsh_core::StatusBarSetting::default().foreground(nsh_core::StatusBarStyle::Light).hidden(false))",
         ] {
             assert!(code.contains(line), "no {line:?} in\n{code}");
@@ -3018,6 +3030,7 @@ mod tests {
                 appearance: None,
                 app_id: None,
                 status_bar: None,
+                url_schemes: Vec::new(),
             }),
         );
         app.write_workspace().unwrap();
@@ -3629,6 +3642,7 @@ panic = \"abort\"
                 appearance: None,
                 app_id: None,
                 status_bar: None,
+                url_schemes: Vec::new(),
             }),
         );
         app.write_workspace().unwrap();

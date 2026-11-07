@@ -126,7 +126,7 @@ fn headless_runs_play_the_platform_s_part() {
     let results = run_file(&run, &dir.join("App.test.tsx"), &mut |_| {}).unwrap();
     let failed: Vec<_> = results.iter().filter(|r| r.failure.is_some()).collect();
     assert!(failed.is_empty(), "{failed:#?}");
-    assert_eq!(results.len(), 10);
+    assert_eq!(results.len(), 11);
 }
 
 #[test]
@@ -249,6 +249,15 @@ fn a_manual_clock_moves_as_the_test_says() {
     let failed: Vec<_> = results.iter().filter(|r| r.failure.is_some()).collect();
     assert!(failed.is_empty(), "{failed:#?}");
     assert_eq!(results.len(), 10);
+}
+
+#[test]
+fn a_press_fails_on_a_view_another_covers() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/testing/hit");
+    let results = run_file(&test_run(None), &dir.join("App.test.tsx"), &mut |_| {}).unwrap();
+    let failed: Vec<_> = results.iter().filter(|r| r.failure.is_some()).collect();
+    assert!(failed.is_empty(), "{failed:#?}");
+    assert_eq!(results.len(), 3);
 }
 
 #[test]

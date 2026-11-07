@@ -25,6 +25,7 @@ use std::{
     },
 };
 
+use nsh_core::NodeId;
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
@@ -33,6 +34,7 @@ use windows::{
             Gdi::{
                 BeginPaint, EndPaint, GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTONEAREST,
                 MONITORINFO, MonitorFromWindow, PAINTSTRUCT, ScreenToClient, UpdateWindow,
+                ValidateRect,
             },
         },
         System::LibraryLoader::GetModuleHandleW,
@@ -69,6 +71,10 @@ pub(crate) const WM_NSH_MENU: u32 = WM_APP + 4;
 /// The embedding app's root window was shown, hidden, minimized or
 /// restored ([`observe_root`]).
 const WM_NSH_ROOT: u32 = WM_APP + 5;
+/// A window's swap chain has room for a frame again ([`crate::gfx`]): posted
+/// from a pool thread, so it is handled before any `WM_PAINT` (which comes
+/// last in a thread's queue and, with several windows to draw, late).
+pub(crate) const WM_NSH_PAINT: u32 = WM_APP + 7;
 
 /// How often the ticker asks for the compositor again while nothing
 /// composes ([`Ticker`]): frames resume within this once it does.
@@ -99,6 +105,9 @@ struct WindowData {
     /// The embedding app's root window an embedded surface's window
     /// observes ([`observe_root`]); none for a top-level one.
     root: Cell<Option<HWND>>,
+    /// The dialog root a window of the app's own shows
+    /// ([`crate::app_window`]); none for the surface's window.
+    window: Option<NodeId>,
 }
 
 thread_local! {
@@ -109,7 +118,7 @@ thread_local! {
 /// The dispatcher window of the main thread ([`invoke`]).
 static DISPATCHER: AtomicIsize = AtomicIsize::new(0);
 
-fn instance() -> HINSTANCE {
+pub(crate) fn instance() -> HINSTANCE {
     // SAFETY: the module handle of this executable.
     unsafe { GetModuleHandleW(None) }
         .map(|m| HINSTANCE(m.0))
@@ -187,6 +196,7 @@ pub(crate) fn create(
         sys_char: Cell::new(false),
         windowed: Cell::new(None),
         root: Cell::new(None),
+        window: None,
     });
     let title: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
     let (style, ex_style) = match parent {
@@ -248,6 +258,89 @@ pub(crate) fn create(
         }
     }
     sync_size(surface, hwnd);
+    Ok(hwnd)
+}
+
+/// Makes a window of the app's own ([`crate::app_window`]) showing dialog
+/// root `id` of `surface`, hidden: `size` points of content, its top left
+/// corner at `position` (points on the screen) or where the system places
+/// it, with the system's frame or none (`framed`). It is not counted as
+/// one of the app's top-level windows: the surface's window still ends the
+/// app.
+pub(crate) fn create_app_window(
+    surface: &Rc<Surface>,
+    id: NodeId,
+    title: &str,
+    size: (f32, f32),
+    position: Option<(f32, f32)>,
+    framed: bool,
+) -> windows::core::Result<HWND> {
+    register_classes();
+    let data = Box::new(WindowData {
+        surface: Rc::downgrade(surface),
+        top_level: false,
+        tracking: Cell::new(false),
+        buttons: Cell::new(0),
+        last_press: Cell::new((0, (0, 0), 0)),
+        surrogate: Cell::new(0),
+        sys_char: Cell::new(false),
+        windowed: Cell::new(None),
+        root: Cell::new(None),
+        window: Some(id),
+    });
+    let title: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
+    let style = if framed {
+        WS_OVERLAPPEDWINDOW
+    } else {
+        WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX
+    };
+    // SAFETY: the class is registered; `data` is handed to the window
+    // (`WM_NCCREATE` stores it, `WM_NCDESTROY` frees it).
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            CLASS,
+            PCWSTR(title.as_ptr()),
+            style,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            None,
+            None,
+            Some(instance()),
+            Some(Box::into_raw(data) as *const _),
+        )?
+    };
+    // Points at the DPI of the monitor it opens on.
+    let scale = dpi(hwnd) as f32 / 96.0;
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: (size.0 * scale).round() as i32,
+        bottom: (size.1 * scale).round() as i32,
+    };
+    let mut flags = SWP_NOZORDER | SWP_NOACTIVATE;
+    let (x, y) = match position {
+        Some((x, y)) => ((x * scale).round() as i32, (y * scale).round() as i32),
+        None => {
+            flags |= SWP_NOMOVE;
+            (0, 0)
+        }
+    };
+    // SAFETY: plain calls on the window just made.
+    unsafe {
+        let _ = AdjustWindowRectExForDpi(&mut rect, style, false, WINDOW_EX_STYLE(0), dpi(hwnd));
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            flags,
+        );
+    }
     Ok(hwnd)
 }
 
@@ -333,6 +426,76 @@ pub(crate) fn show(hwnd: HWND) {
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = UpdateWindow(hwnd);
+    }
+}
+
+/// True when the executable has an icon of its own (resource 1, which
+/// `nsh package` writes on Windows), which the window class shows.
+pub(crate) fn has_own_icon() -> bool {
+    // SAFETY: a plain lookup of a shared resource icon, never destroyed.
+    unsafe { LoadIconW(Some(instance()), PCWSTR(1 as _)) }.is_ok()
+}
+
+/// Gives the top-level `hwnd` the app's icon from the `.ico` file `path`
+/// (the large one at `SM_CXICON`, the small one at `SM_CXSMICON`, at its
+/// DPI) when the executable has none of its own. The icons are loaded once
+/// per file and size and kept for the process: the windows share them.
+pub(crate) fn set_icon(hwnd: HWND, path: Option<&std::path::Path>) {
+    thread_local! {
+        static LOADED: RefCell<Vec<(std::path::PathBuf, i32, HICON)>> =
+            const { RefCell::new(Vec::new()) };
+    }
+    let Some(path) = path.filter(|_| !has_own_icon()) else {
+        return;
+    };
+    let dpi = dpi(hwnd);
+    let load = |metric: SYSTEM_METRICS_INDEX| {
+        // SAFETY: a plain query.
+        let side = unsafe { windows::Win32::UI::HiDpi::GetSystemMetricsForDpi(metric, dpi) };
+        let cached = LOADED.with(|l| {
+            l.borrow()
+                .iter()
+                .find(|(p, s, _)| p == path && *s == side)
+                .map(|(_, _, icon)| *icon)
+        });
+        if cached.is_some() {
+            return cached;
+        }
+        // SAFETY: a NUL-terminated path; the icon is kept for the process.
+        let icon = unsafe {
+            LoadImageW(
+                None,
+                &windows::core::HSTRING::from(path.as_os_str()),
+                IMAGE_ICON,
+                side,
+                side,
+                LR_LOADFROMFILE,
+            )
+        };
+        match icon {
+            Ok(handle) => {
+                let icon = HICON(handle.0);
+                LOADED.with(|l| l.borrow_mut().push((path.to_owned(), side, icon)));
+                Some(icon)
+            }
+            Err(err) => {
+                log::warn!("the app's icon {}: {err}", path.display());
+                None
+            }
+        }
+    };
+    for (metric, which) in [(SM_CXICON, ICON_BIG), (SM_CXSMICON, ICON_SMALL)] {
+        if let Some(icon) = load(metric) {
+            // SAFETY: a window of this thread and an icon that outlives it.
+            unsafe {
+                SendMessageW(
+                    hwnd,
+                    WM_SETICON,
+                    Some(WPARAM(which as usize)),
+                    Some(LPARAM(icon.0 as isize)),
+                );
+            }
+        }
     }
 }
 
@@ -593,17 +756,41 @@ fn handle(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> Option<LRESULT> {
-    let scale = surface.scale();
+    // A window of the app's own handles its frame itself; its input is
+    // the surface's, in its root view.
+    let _root = match data.window {
+        Some(id) => match crate::app_window::handle(surface, id, hwnd, msg, wparam, lparam) {
+            Some(result) => return result,
+            None => crate::app_window::enter(surface, id),
+        },
+        None => None,
+    };
+    let scale = match data.window {
+        Some(_) => dpi(hwnd) as f32 / 96.0,
+        None => surface.scale(),
+    };
     let point = |l: LPARAM| (lo(l.0) as f32 / scale, hi(l.0) as f32 / scale);
     // Registered, so not a constant to match on.
     if data.top_level && msg == crate::notifications::taskbar_button_created() {
         crate::notifications::button_created(surface);
         return None;
     }
+    if data.top_level && msg == crate::tray::taskbar_created() {
+        crate::tray::readd(hwnd);
+        return None;
+    }
     match msg {
         WM_NSH_WAKE => surface.drain(),
         WM_NSH_TICK => surface.tick(),
         WM_NSH_MENU => crate::chrome::show_popup(surface),
+        crate::tray::WM_NSH_TRAY => {
+            crate::tray::message(surface, hwnd, wparam, lparam);
+            return Some(LRESULT(0));
+        }
+        WM_HOTKEY => {
+            crate::global_shortcut::pressed(hwnd, wparam);
+            return Some(LRESULT(0));
+        }
         WM_NCCALCSIZE => return crate::chrome::nc_calc_size(surface, hwnd, wparam, lparam),
         WM_NCHITTEST if data.top_level => {
             return crate::chrome::nc_hit_test(surface, hwnd, lparam);
@@ -625,6 +812,14 @@ fn handle(
         0x0091 | 0x0092 => return crate::chrome::draw_menu_bar(surface, hwnd, msg, lparam),
         WM_COMMAND if (wparam.0 >> 16) & 0xFFFF == 0 && lparam.0 == 0 => {
             crate::chrome::menu_command(surface, (wparam.0 & 0xFFFF) as u16);
+            return Some(LRESULT(0));
+        }
+        WM_NSH_PAINT => {
+            // Drawn now: a pending `WM_PAINT` of the window would only draw
+            // the same frame again.
+            // SAFETY: a plain call on this window.
+            let _ = unsafe { ValidateRect(Some(hwnd), None) };
+            surface.paint();
             return Some(LRESULT(0));
         }
         WM_PAINT => {
@@ -659,6 +854,7 @@ fn handle(
             };
             sync_size(surface, hwnd);
             crate::chrome::dpi_changed(surface);
+            crate::tray::refresh(hwnd);
         }
         WM_GETMINMAXINFO => {
             // SAFETY: `lparam` is the window's MINMAXINFO.
@@ -681,7 +877,9 @@ fn handle(
                 // SAFETY: a valid structure for this window.
                 let _ = unsafe { TrackMouseEvent(&mut track) };
             }
-            crate::chrome::client_mouse_moved(surface);
+            if data.window.is_none() {
+                crate::chrome::client_mouse_moved(surface);
+            }
             let (x, y) = point(lparam);
             let held = held_buttons(wparam);
             crate::input::pointer(
@@ -821,7 +1019,7 @@ fn handle(
             return Some(LRESULT(0));
         }
         WM_SETCURSOR if lo(lparam.0) == HTCLIENT as i32 => {
-            update_cursor(surface, hwnd);
+            update_cursor(surface, hwnd, scale);
             return Some(LRESULT(1));
         }
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP => {
@@ -867,7 +1065,7 @@ fn handle(
         WM_SETFOCUS => crate::text_input::window_focus(surface, true),
         WM_KILLFOCUS => crate::text_input::window_focus(surface, false),
         WM_GETOBJECT => return crate::access::get_object(surface, hwnd, wparam, lparam),
-        // `WM_TIMECHANGE`: the time zone changed (`timeZone()`).
+        // `WM_TIMECHANGE`: the time zone changed (`localeSettings()`).
         WM_SETTINGCHANGE
         | WM_THEMECHANGED
         | WM_SYSCOLORCHANGE
@@ -882,6 +1080,8 @@ fn handle(
         // An embedded surface's: its root window's ([`observe_root`]).
         WM_NSH_ROOT => crate::system::lifecycle_changed(surface),
         WM_DESTROY => {
+            crate::tray::destroyed(hwnd);
+            crate::global_shortcut::destroyed(hwnd);
             surface.stop();
             surface.set_hwnd(HWND::default());
         }
@@ -1000,14 +1200,13 @@ pub(crate) fn lines_per_notch() -> f32 {
 }
 
 /// Sets the cursor of what is under the mouse in the client area.
-fn update_cursor(surface: &Rc<Surface>, hwnd: HWND) {
+fn update_cursor(surface: &Rc<Surface>, hwnd: HWND, scale: f32) {
     let mut p = POINT::default();
     // SAFETY: plain calls with local out values.
     unsafe {
         let _ = GetCursorPos(&mut p);
         let _ = ScreenToClient(hwnd, &mut p);
     }
-    let scale = surface.scale();
     set_cursor(crate::input::cursor(
         surface,
         p.x as f32 / scale,
@@ -1035,7 +1234,7 @@ pub(crate) fn refresh_cursor(surface: &Rc<Surface>) {
                 == HTCLIENT
     };
     if over {
-        update_cursor(surface, hwnd);
+        update_cursor(surface, hwnd, surface.scale());
     }
 }
 

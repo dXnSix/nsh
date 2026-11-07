@@ -3,7 +3,7 @@
 //! loop).
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     path::PathBuf,
     rc::Rc,
     sync::{Arc, RwLock},
@@ -128,6 +128,12 @@ pub struct AppOptions {
     pub app_id: String,
     /// The window title.
     pub title: String,
+    /// The app's icon, an `.ico` file: the window's (title bar, taskbar,
+    /// Alt+Tab) when the executable has no icon of its own (the
+    /// development host, a runner packaged off Windows), and the one its
+    /// notifications show. The release runner reads `nsh\icon.ico`, which
+    /// `nsh package` writes; the development host takes `--icon`.
+    pub icon: Option<PathBuf>,
     /// The initial window size in points.
     pub size: (i32, i32),
     /// A see-through window (Electron's, Tauri's and winit's
@@ -167,11 +173,24 @@ pub struct AppOptions {
     /// The apps' storage (`nsh/storage`), overriding the `storage.json` in
     /// their directory of [`data_dir`](Self::data_dir).
     pub storage: Option<Arc<dyn nsh_engine::StorageBackend>>,
+    /// The app this view runs owns the process's notifications: the process
+    /// takes [`app_id`](Self::app_id) as its AppUserModelID (also what the
+    /// taskbar groups its windows by), registers it with
+    /// [`title`](Self::title) and [`icon`](Self::icon) for toasts and hears
+    /// their presses (`nsh`'s `Notifications`). Without it the permission is
+    /// `unavailable` and nothing shows. [`run_app`] sets it.
+    pub notifications: bool,
     /// The embedding app's channel with the apps the view runs
     /// (`nsh/host`): their launch parameters, events to them and handlers of
     /// their calls and posts ([`AppView::host`]). One for every app the view
     /// loads; a new one by default.
     pub host: nsh_engine::HostChannel,
+    /// The URL schemes the app opens (nsh.json `schemes`, from the
+    /// package's `nsh\app.json`): [`run_app`] registers them for the
+    /// current user, sends the URL it was started with as `EventKind::UrlScheme`
+    /// and keeps one instance, a later launch with a URL handing it to the
+    /// running one. Empty: none of that.
+    pub schemes: Vec<String>,
 }
 
 impl Default for AppOptions {
@@ -182,6 +201,7 @@ impl Default for AppOptions {
             asset_base: None,
             app_id: "com.longbridge.nsh.host".to_owned(),
             title: "nsh".to_owned(),
+            icon: None,
             size: (1200, 800),
             transparent: false,
             skip_taskbar: false,
@@ -191,6 +211,8 @@ impl Default for AppOptions {
             data_dir: None,
             cache: Default::default(),
             storage: None,
+            schemes: Vec::new(),
+            notifications: false,
             host: nsh_engine::HostChannel::default(),
         }
     }
@@ -237,6 +259,13 @@ impl AppView {
     pub fn new(parent: Option<HWND>, options: AppOptions) -> windows::core::Result<Rc<AppView>> {
         let surface = Surface::new(initial_environment());
         surface.appearance.set(options.appearance);
+        if options.notifications {
+            crate::notifications::start_app(
+                &options.app_id,
+                &options.title,
+                options.icon.as_deref(),
+            );
+        }
         register_app_components(&options.components);
         surface.native.set_components(options.components.clone());
         surface.native.set_app_id(&options.app_id);
@@ -248,6 +277,9 @@ impl AppView {
         }
         if options.skip_taskbar && parent.is_none() {
             surface.chrome.skip_taskbar.set(true);
+        }
+        if parent.is_none() {
+            crate::window::set_icon(hwnd, options.icon.as_deref());
         }
         let view = Rc::new(AppView {
             surface,
@@ -334,6 +366,7 @@ impl AppView {
             host: options.host.clone(),
             picker: None,
             speech: None,
+            audio: None,
         };
         crate::image::set_asset_base(&self.surface, options.asset_base.clone());
         self.surface
@@ -412,6 +445,7 @@ fn initial_environment() -> Environment {
         idiom: Idiom::Desktop,
         file_requests: true,
         notifications: true,
+        audio: true,
         ..Environment::default()
     }
 }
@@ -425,7 +459,9 @@ fn initial_environment() -> Environment {
 /// thread-local destructors instead, they would run inside `ExitProcess`,
 /// after the graphics DLLs and their driver threads are gone, and the
 /// process would end with a stray exit code.
-pub fn run_app(source: AppSource, options: AppOptions) -> std::process::ExitCode {
+pub fn run_app(source: AppSource, mut options: AppOptions) -> std::process::ExitCode {
+    wait_for_replaced_process();
+    options.notifications = true;
     /// The app, moved to the UI thread.
     struct Job(AppSource, AppOptions);
     // SAFETY: the options hold `Rc`s (the native components), so they are
@@ -453,8 +489,53 @@ pub fn run_app(source: AppSource, options: AppOptions) -> std::process::ExitCode
     }
 }
 
+thread_local! {
+    /// The standalone app's UI thread ([`run_app`]): what may restart.
+    static STANDALONE: Cell<bool> = const { Cell::new(false) };
+    /// The app asked to start again when its run ends.
+    static RESTART: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Marks the standalone app ([`run_app`]) to start again once its run has
+/// ended ([`nsh_core::restart`]); the caller then quits it. A view embedded
+/// in another app leaves the app's lifecycle to that app: false there, with
+/// nothing marked.
+pub(crate) fn request_restart() -> bool {
+    STANDALONE.get() && {
+        RESTART.set(true);
+        true
+    }
+}
+
+/// Waits, at most [`nsh_core::restart::WAIT_LIMIT`], for the process this
+/// one replaces when the app restarted ([`nsh_core::restart::WAIT_FOR_ENV`]),
+/// so that the two never run side by side.
+fn wait_for_replaced_process() {
+    use windows::Win32::{
+        Foundation::CloseHandle,
+        System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
+    };
+    let Some(pid) = nsh_core::restart::wait_for_pid() else {
+        return;
+    };
+    // Programs the app starts must not wait for it too.
+    // SAFETY: called at the start of `run_app`, before it starts the UI
+    // thread or anything else that reads the environment.
+    unsafe { std::env::remove_var(nsh_core::restart::WAIT_FOR_ENV) };
+    // SAFETY: plain calls; the handle is closed once waited on. A process
+    // that has exited already cannot be opened, and nothing waits.
+    unsafe {
+        if let Ok(process) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
+            let limit = nsh_core::restart::WAIT_LIMIT.as_millis() as u32;
+            let _ = WaitForSingleObject(process, limit);
+            let _ = CloseHandle(process);
+        }
+    }
+}
+
 /// [`run_app`] on the calling thread.
 fn run_on_this_thread(source: AppSource, options: AppOptions) -> std::process::ExitCode {
+    STANDALONE.set(true);
     // SAFETY: process setup before any window exists: per-monitor DPI
     // (points stay sharp on every monitor) and an OLE apartment for the
     // clipboard, drag and drop and WIC.
@@ -462,8 +543,11 @@ fn run_on_this_thread(source: AppSource, options: AppOptions) -> std::process::E
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = OleInitialize(None);
     }
-    crate::system::set_app_id(&options.app_id);
-    crate::notifications::start(&options.app_id, &options.title);
+    if let crate::linking::Start::Forwarded =
+        crate::linking::start(&options.app_id, &options.title, &options.schemes)
+    {
+        return std::process::ExitCode::SUCCESS;
+    }
     let view = match AppView::new(None, options.clone()) {
         Ok(view) => view,
         Err(err) => {
@@ -478,6 +562,7 @@ fn run_on_this_thread(source: AppSource, options: AppOptions) -> std::process::E
         AppSource::DevServer(url) => crate::dev::start(&view, url),
     }
     crate::system::environment_applied(view.surface());
+    crate::linking::attach(view.surface());
     install_shortcuts(&view);
     view.show();
     let code = crate::window::run_loop();
@@ -486,6 +571,17 @@ fn run_on_this_thread(source: AppSource, options: AppOptions) -> std::process::E
     // SAFETY: pairs the `OleInitialize` above; nothing on this thread uses
     // OLE afterwards.
     unsafe { windows::Win32::System::Ole::OleUninitialize() };
+    STANDALONE.set(false);
+    // The new process waits for this one to exit ([`wait_for_replaced_process`]).
+    if RESTART.take() {
+        if cfg!(feature = "dev") {
+            // `nsh run` ends with its host and stops the dev server: a host
+            // started again would be cut off from both, so it only quits.
+            log::warn!("a development host quits on restart; restarting runs in a packaged app");
+        } else if let Err(err) = nsh_core::restart::spawn_after_exit() {
+            log::error!("cannot restart the app: {err}");
+        }
+    }
     if code == 0 {
         std::process::ExitCode::SUCCESS
     } else {
