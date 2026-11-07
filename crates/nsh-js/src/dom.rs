@@ -450,6 +450,14 @@ pub(crate) const NODE_METHODS: &[(&str, c_int, &str, &str)] = &[
         ),
     ),
     (
+        "load",
+        1,
+        decl!("(options: { src: string; headers?: Record<string, string> }): void"),
+        decl!(
+            "`WebView`: loads `src`, sending `headers` with the page's own request only, not with its images, scripts or other subresources, its later navigations or reloads; e.g. `Authorization` for a signed-in page, without putting the token in the URL. The page then shows as with `src` (a later change of the `src` prop loads that instead). Its host must be one `webview.hosts` allows, else nothing loads. A header whose name is not an HTTP token or whose value holds a line break throws. Header values are not logged. macOS, iOS, Android, Windows, Linux and the GPUI backend send them; the browser backend has no way to and does nothing."
+        ),
+    ),
+    (
         "seek",
         1,
         decl!("(seconds: number): void"),
@@ -1250,7 +1258,7 @@ fn set_prop(
         }
         // SAFETY: live node data.
         "component" | "componentSlot" => unsafe { (*p).places = true },
-        "ios" | "android" | "desktop" | "web" => {
+        "ios" | "android" | "macos" | "desktop" | "web" => {
             return platform_props(cx, node, name, value, prev);
         }
         "contentStyle" | "contentClass" if unsafe { (*p).tag } == Some(Tag::Scroll) => {
@@ -1495,9 +1503,10 @@ pub(crate) fn is_ancestor_of(cx: *mut JsContext, node: NodeId, of: NodeId) -> bo
     is_ancestor(cx, node, of)
 }
 
-/// `ios={{…}}` / `android={{…}}` / `web={{…}}` / `desktop={{…}}`: the
-/// props of this platform only, each set (or cleared) on its own. Desktop
-/// props apply on the desktop OSes and in desktop-class browsers.
+/// `ios={{…}}` / `android={{…}}` / `macos={{…}}` / `web={{…}}` /
+/// `desktop={{…}}`: the props of this platform only, each set (or cleared)
+/// on its own. Desktop props apply on the desktop OSes and in
+/// desktop-class browsers.
 fn platform_props(
     cx: *mut JsContext,
     node: JsValue,
@@ -3101,10 +3110,10 @@ unsafe extern "C" fn setup(
     {
         crate::env::take_theme(cx, &json);
     }
-    // Checked by the bundler; a hand-made bundle's wrong value is ignored.
+    // What this runtime cannot read (a newer NSH's) is left out.
     let status_bar = string_arg(cx, arg(argc, argv, 3))
         .and_then(|json| serde_json::from_str(&json).ok())
-        .and_then(|v| nsh_core::StatusBarSetting::from_json(&v).ok());
+        .map(|v| nsh_core::StatusBarSetting::from_json(&v));
     if let Some(setting) = status_bar
         && let Err(e) = push_op(
             cx,

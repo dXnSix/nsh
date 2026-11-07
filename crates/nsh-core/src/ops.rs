@@ -220,7 +220,7 @@ events! {
     MomentumEnd = "onMomentumEnd": "A scroll view stopped gliding (payload: [`EventPayload::Scroll`]).",
     Dialog = "onDialog": "An alert or action sheet closed (root only; payload: `id`, `index`, -1 when dismissed).",
     Touch = "onTouch": "Touches on the view or inside it, for the JS touch and responder handlers (payload: [`EventPayload::Touch`]).",
-    SelectionChange = "onSelectionChange": "The selection (or caret) of an input moved (payload: `start`, `end` in UTF-16 units).",
+    SelectionChange = "onSelectionChange": "The selection (or caret) of an input moved (payload: `start`, `end` in UTF-16 units), or the selection of a selectable view changed (payload: `text`, the selected text as a copy gives it, empty once nothing is selected; `start`, where it starts in the view's whole text).",
     KeyPress = "onKeyPress": "A key was pressed in an input (payload: `key`: the character, `Backspace` or `Enter`).",
     LoadEnd = "onLoadEnd": "An image finished loading, or failed.",
     ImageInfo = "onImageInfo": "An `Image.getSize` / `Image.prefetch` request finished (root only; payload: `id`, `width` and `height` in pixels, or `error`).",
@@ -253,6 +253,9 @@ events! {
     Speech = "onSpeech": "A speech recognition session reported (root only; payload: [`EventPayload::Speech`]).",
     Download = "onDownload": "A web view's download started, finished or failed (payload: `state`, `id`, `url`, `filename`, `path`; `bytes` once finished, `message` when it failed).",
     Notification = "onNotification": "The platform answered a [`Command::Notification`], or the user pressed a notification (root only; payload: the fields of [`crate::notifications::NotificationEvent`]).",
+    UrlScheme = "onUrlScheme": "The system handed the app a URL that opens it (root only; payload: `url`, [`crate::url_scheme::URL`]); the core keeps those of the schemes the app claims ([`crate::url_scheme`]).",
+    Audio = "onAudio": "A sound or a player reported (root only; payload: [`EventPayload::Audio`]).",
+    Window = "onWindow" as "": "A window of the app's own reported its state, a close press or that it closed (on its root node; desktops; payload: [`EventPayload::Window`]).",
 
 }
 
@@ -859,6 +862,16 @@ pub enum EventPayload {
         /// What it reported.
         event: crate::speech::SpeechEvent,
     },
+    /// What a sound or a player reported ([`EventKind::Audio`],
+    /// [`crate::audio`]).
+    Audio {
+        /// The sound or player ([`crate::audio::AudioCommand::id`]).
+        id: u32,
+        /// What it reported.
+        event: crate::audio::AudioEvent,
+    },
+    /// What a window of the app's own reported ([`EventKind::Window`]).
+    Window(Box<crate::desktop::WindowEvent>),
     /// The answer to a [`Command::FileRequest`] ([`EventKind::FileRequest`],
     /// [`crate::file_dialog`]).
     FileRequest {
@@ -1721,6 +1734,53 @@ pub enum WebInput {
     Key(WebKey),
 }
 
+/// A page a web view loads with headers on its request (`WebView`'s
+/// `load`): the document request carries them; the page's subresources,
+/// its later navigations and reloads do not. Debug output names the
+/// headers but never shows their values (they are credentials, as
+/// `Authorization`).
+#[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WebLoad {
+    /// The URL to load.
+    pub src: String,
+    /// The request's headers, in order: names are HTTP tokens and values
+    /// have no line breaks or NULs ([`WebLoad::new`] checks).
+    pub headers: Vec<(String, String)>,
+}
+
+impl WebLoad {
+    /// A load of `src` with `headers`; `None` when a header's name is not
+    /// an HTTP token (RFC 9110's `tchar`s) or its value holds a CR, LF or
+    /// NUL, which would let it end the header and start another.
+    pub fn new(src: impl Into<String>, headers: Vec<(String, String)>) -> Option<Self> {
+        let token = |name: &str| {
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+        };
+        let value = |value: &str| !value.contains(['\r', '\n', '\0']);
+        headers
+            .iter()
+            .all(|(n, v)| token(n) && value(v))
+            .then(|| Self {
+                src: src.into(),
+                headers,
+            })
+    }
+}
+
+impl std::fmt::Debug for WebLoad {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&str> = self.headers.iter().map(|(n, _)| n.as_str()).collect();
+        f.debug_struct("WebLoad")
+            .field("src", &self.src)
+            .field("headers", &names)
+            .finish()
+    }
+}
+
 /// A key `WebInput::Key` presses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -1788,6 +1848,8 @@ pub enum Command {
     PostMessage(String),
     /// Give a web view's page input as the user's own (trusted events).
     SendInput(WebInput),
+    /// Load a page in a web view with headers on its request.
+    Load(WebLoad),
     /// Seek a video to a time in seconds.
     Seek(f64),
     /// Scroll a list to an item (resolved by the core into `ScrollTo`).
@@ -1850,6 +1912,11 @@ pub enum Command {
     },
     /// Have the screen reader read a message (on the root).
     Announce(String),
+    /// Turn the performance monitor on or off (on the root;
+    /// `setFpsEnabled`): what the platform has of one, the
+    /// macOS panel or the other platforms' `nsh::perf` lines. Platforms
+    /// without a monitor ignore it.
+    PerfMonitor(bool),
     /// Load the image at `uri` (keeping its bytes for views that show it
     /// next) and report its pixel size as [`EventKind::ImageInfo`] `id`
     /// (on the root).
@@ -1960,6 +2027,12 @@ pub enum Command {
     /// [`EventKind::Speech`] ([`EventPayload::Speech`]). Sent only on
     /// platforms whose [`crate::platform::Environment::speech`] is set.
     Speech(crate::speech::SpeechCommand),
+    /// Load, play and free sounds, open and drive players (on the root;
+    /// `Sound` and `AudioPlayer` of `nsh`, [`crate::audio`]) and report
+    /// what happens as [`EventKind::Audio`] ([`EventPayload::Audio`]). Sent
+    /// only on platforms whose [`crate::platform::Environment::audio`] is
+    /// set.
+    Audio(crate::audio::AudioCommand),
     /// Show a notification, ask for the permission, set the app's badge
     /// (on the root; `Notifications` of `nsh`, [`crate::notifications`]).
     Notification(crate::notifications::NotificationCommand),
@@ -2063,37 +2136,42 @@ impl StatusBarSetting {
     }
 
     /// The app's default (`nsh.json` `"statusBar"`): `{ "foreground":
-    /// "auto" | "light" | "dark", "hidden": bool }`, both optional. The
-    /// error says what is wrong, for `nsh.json: statusBar: …`.
-    pub fn from_json(value: &crate::JsonValue) -> Result<Self, String> {
-        let Some(object) = value.as_object() else {
-            return Err(format!(
-                "expected an object ({{ \"foreground\": \"light\", \"hidden\": false }}), got {value}"
-            ));
-        };
+    /// "auto" | "light" | "dark", "hidden": bool }`, both optional. What it
+    /// cannot read, an unknown key or a value of a form it does not know,
+    /// is left out and the rest applies: a bundle made by a newer NSH keeps
+    /// its setting on an older runtime.
+    pub fn from_json(value: &crate::JsonValue) -> Self {
+        Self::from_json_lenient(value).0
+    }
+
+    /// [`StatusBarSetting::from_json`], with what it left out
+    /// (`foreground: "dim" is not "auto", "light" or "dark"`), which the
+    /// toolchain warns of (a newer NSH's, or a typo).
+    pub fn from_json_lenient(value: &crate::JsonValue) -> (Self, Vec<String>) {
         let mut setting = Self::default();
+        let mut ignored = Vec::new();
+        let Some(object) = value.as_object() else {
+            ignored.push(format!(
+                "{value} is not an object ({{ \"foreground\": \"light\", \"hidden\": false }})"
+            ));
+            return (setting, ignored);
+        };
         for (key, v) in object {
             match key.as_str() {
-                "foreground" => {
-                    let style = v.as_str().and_then(StatusBarStyle::from_name);
-                    setting.style = Some(style.ok_or_else(|| {
-                        format!("foreground: {v} is not \"auto\", \"light\" or \"dark\"")
-                    })?);
-                }
-                "hidden" => {
-                    setting.hidden = Some(
-                        v.as_bool()
-                            .ok_or_else(|| format!("hidden: {v} is not true or false"))?,
-                    );
-                }
-                other => {
-                    return Err(format!(
-                        "unknown key {other:?} (\"foreground\" and \"hidden\" are known)"
-                    ));
-                }
+                "foreground" => match v.as_str().and_then(StatusBarStyle::from_name) {
+                    Some(style) => setting.style = Some(style),
+                    None => ignored.push(format!(
+                        "foreground: {v} is not \"auto\", \"light\" or \"dark\""
+                    )),
+                },
+                "hidden" => match v.as_bool() {
+                    Some(hidden) => setting.hidden = Some(hidden),
+                    None => ignored.push(format!("hidden: {v} is not true or false")),
+                },
+                other => ignored.push(format!("unknown key `{other}`")),
             }
         }
-        Ok(setting)
+        (setting, ignored)
     }
 
     /// This setting over `below`.
@@ -2236,8 +2314,7 @@ pub enum Prop {
     Scroll(ScrollProp),
     /// `scrollbar`: the scroll indicator shows (default true), or the
     /// app's built-in bar of a theme (an object, `nsh/base`'s
-    /// `ScrollbarTheme`). On the desktop a horizontal view keeps it: it is
-    /// the mouse's scroll bar. A multiline input's is its text's.
+    /// `ScrollbarTheme`). A multiline input's is its text's.
     #[prop(js = "scrollbar", with = crate::js::host_values::scrollbar, reset = Prop::Scrollbar(ScrollbarSetting::Shown), ts = "boolean | import(\"nsh/base\").ScrollbarTheme", on = SCROLL | LIST | INPUT)]
     Scrollbar(ScrollbarSetting),
     /// `refreshing`: the pull-to-refresh spinner shows.
@@ -2544,6 +2621,10 @@ pub enum Prop {
     /// The system material of a backdrop blur (iOS, default `ultraThin`).
     #[prop(ios = "backdropMaterial")]
     BackdropMaterial(crate::BackdropMaterial),
+    /// `macos={{ backdrop }}`: the `NSVisualEffectView` material on macOS
+    /// (default `popover` / `withinWindow` / `active`; `None`: none).
+    #[prop(macos = "backdrop")]
+    MacOsBackdrop(Option<crate::MacOsBackdrop>),
     /// An accessibility property.
     #[prop(nested)]
     Accessibility(AccessibilityProp),
@@ -2557,6 +2638,16 @@ pub enum Prop {
     /// a draggable view stay clickable without it.
     #[prop(desktop = "windowDrag")]
     WindowDrag(Option<bool>),
+    /// `windowControl` (desktops): the view of a title bar the app draws
+    /// acts as one of the system's window buttons (minimize, maximize,
+    /// close): the platform hit-tests it as that button and carries out its
+    /// press.
+    #[prop(desktop = "windowControl")]
+    WindowControl(Option<crate::desktop::WindowControl>),
+    /// `windowResize` (desktops): pressing the view resizes a frameless
+    /// window by that edge or corner.
+    #[prop(desktop = "windowResize")]
+    WindowResize(Option<crate::desktop::ResizeEdge>),
     /// `tooltip`: a hint about the view, shown above it on the desktops
     /// while the pointer rests on it (after half a second) until the
     /// pointer leaves or presses it, never on touch screens; it never takes
@@ -2682,6 +2773,14 @@ pub enum NativeProp {
         on = WEBVIEW
     )]
     BackForwardGestures(bool),
+    /// `incognito` (web views): the page's website data (cookies, storage,
+    /// the cache) lives only as long as the web view, apart from the app's
+    /// other web views; on Android, where every web view shares the app's
+    /// cookies and storage, it loads without the HTTP cache and saves no
+    /// form data. Read when the web view is made; a later change is ignored
+    /// (with a warning): render a new element to change it.
+    #[prop(js = "incognito", on = WEBVIEW)]
+    Incognito(bool),
     /// `paused` (videos): playback is paused.
     #[prop(js = "paused", on = VIDEO, shared)]
     Paused(bool),

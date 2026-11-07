@@ -1476,6 +1476,14 @@ impl WebView {
         })
     }
 
+    /// Keeps the page's website data (cookies, storage, the cache) only
+    /// as long as the web view, apart from the app's other web views
+    /// (default no; Android: no HTTP cache and no saved form data). Read
+    /// when the web view is made, so it takes a value, not a signal.
+    pub fn incognito(self, incognito: bool) -> Self {
+        self.set(Prop::Native(NativeProp::Incognito(incognito)))
+    }
+
     /// A page started loading.
     pub fn on_load_start<M>(self, listener: impl IntoListener<WebNavigation, M>) -> Self {
         self.listen(
@@ -2391,6 +2399,13 @@ crate::static_reactive!(ScreenAnimation: ScreenAnimation);
 /// A program where an optional one goes (`.transition_shader(wipe)`).
 impl IntoReactive<Option<crate::shader::TransitionShader>> for crate::shader::TransitionShader {
     fn into_reactive(self) -> super::Reactive<Option<crate::shader::TransitionShader>> {
+        super::Reactive::Static(Some(self))
+    }
+}
+
+/// A backdrop where an optional one goes (`.macos_backdrop(backdrop)`).
+impl IntoReactive<Option<crate::MacOsBackdrop>> for crate::MacOsBackdrop {
+    fn into_reactive(self) -> super::Reactive<Option<crate::MacOsBackdrop>> {
         super::Reactive::Static(Some(self))
     }
 }

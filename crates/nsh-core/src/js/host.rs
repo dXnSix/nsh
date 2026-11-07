@@ -229,7 +229,7 @@ pub mod on {
 }
 
 /// The platform a prop is for: everywhere, or inside `ios={{…}}` /
-/// `android={{…}}` / `desktop={{…}}` / `web={{…}}`.
+/// `android={{…}}` / `macos={{…}}` / `desktop={{…}}` / `web={{…}}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
     /// Every platform.
@@ -238,6 +238,8 @@ pub enum Platform {
     Ios,
     /// `android={{…}}`.
     Android,
+    /// `macos={{…}}`.
+    Macos,
     /// `desktop={{…}}` (macOS, Windows, Linux, desktop browsers).
     Desktop,
     /// `web={{…}}`.
@@ -863,6 +865,12 @@ pub const EVENTS: &[(EventKind, u32, &str, &str)] = &[
         "",
     ),
     (
+        EventKind::SelectionChange,
+        on::VIEW,
+        "(e: { text: string; start?: number }) => void",
+        "The selection across the texts of a `selectable` view changed: `text` is what a copy would give, empty once nothing is selected; `start` is where it starts in the view's whole text (UTF-16 units) when the platform knows it. Only the outermost selectable view of an area reports it.",
+    ),
+    (
         EventKind::Paste,
         on::INPUT,
         "(e: PasteEvent) => void",
@@ -938,7 +946,7 @@ pub const EVENTS: &[(EventKind, u32, &str, &str)] = &[
 ];
 
 /// The events no element's props declare: the root's (`BackHandler`,
-/// `nsh/keymap`, dialogs, `Image.getSize`, clipboard reads, menus, `nsh/host`'s replies and events), the runtime's own (touches, insets, native
+/// `nsh/keymap`, dialogs, `Image.getSize`, clipboard reads, menus, `nsh/host`'s replies and events, links), the runtime's own (touches, insets, native
 /// components' events) and those whose payload a module makes
 /// (`List`'s viewable items, with the app's items).
 pub const INTERNAL_EVENTS: &[EventKind] = &[
@@ -956,6 +964,9 @@ pub const INTERNAL_EVENTS: &[EventKind] = &[
     EventKind::FileRequest,
     EventKind::Speech,
     EventKind::Notification,
+    EventKind::UrlScheme,
+    EventKind::Audio,
+    EventKind::Window,
     EventKind::KeyCommand,
     EventKind::Menu,
     EventKind::ViewableItemsChange,
@@ -1012,6 +1023,7 @@ pub fn declarations() -> String {
             (Platform::All, "", ""),
             (Platform::Ios, "IOS", " inside `ios={{…}}`"),
             (Platform::Android, "Android", " inside `android={{…}}`"),
+            (Platform::Macos, "MacOS", " inside `macos={{…}}`"),
             (Platform::Desktop, "Desktop", " inside `desktop={{…}}`"),
             (Platform::Web, "Web", " inside `web={{…}}`"),
         ] {

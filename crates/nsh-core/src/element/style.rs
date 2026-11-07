@@ -474,8 +474,9 @@ pub(crate) enum Declaration {
     /// A keyframe animation (`None`: none).
     Animate(Option<u8>),
     /// A keyframe animation with its own timing: the keyframes' index,
-    /// duration, delay, easing and iterations (`None`: forever).
-    Animation(u8, Bits, Bits, [Bits; 4], Option<u32>),
+    /// duration, delay, easing, iterations (`None`: forever) and the
+    /// highest frame rate it needs (`None`: the screen's highest).
+    Animation(u8, Bits, Bits, [Bits; 4], Option<u32>, Option<Bits>),
     /// `repeat(n, minmax(0, 1fr))` tracks.
     Tracks(StyleKey, u16),
     /// `span n / span n`.
@@ -712,7 +713,7 @@ impl Declaration {
                 }
             }
             Declaration::Animate(k) => part(out, Part::Animate(k.map(|i| KEYFRAMES[i as usize]))),
-            Declaration::Animation(k, duration, delay, easing, iterations) => part(
+            Declaration::Animation(k, duration, delay, easing, iterations, frame_rate) => part(
                 out,
                 Part::Animation(KeyframeAnimation {
                     keyframes: KEYFRAMES[*k as usize],
@@ -720,6 +721,7 @@ impl Declaration {
                     delay: delay.0,
                     easing: easing.map(|b| b.0),
                     iterations: *iterations,
+                    frame_rate: frame_rate.map(|b| b.0),
                 }),
             ),
             Declaration::Tracks(key, n) => out.push(Decl::Set(
@@ -739,6 +741,21 @@ impl Declaration {
 type Entries = Vec<(Variant, Declaration)>;
 
 crate::static_reactive!(AdaptiveColor: AdaptiveColor, Hsla, Rgba, Color);
+
+// Static colors keep the same ergonomics where the native default is also
+// a value. Optional signals and closures use IntoReactive's existing path.
+macro_rules! optional_reactive_colors {
+    ($($source:ty),*) => {$(
+        impl IntoReactive<Option<AdaptiveColor>> for $source {
+            fn into_reactive(self) -> Reactive<Option<AdaptiveColor>> {
+                Reactive::Static(Some(self.into()))
+            }
+        }
+    )*};
+}
+
+optional_reactive_colors!(AdaptiveColor, Hsla, Rgba, Color);
+
 crate::static_reactive!(Length: Length, Points, Rems, AbsoluteLength, DefiniteLength, Percentage);
 crate::static_reactive!(DefiniteLength: Points, Rems, AbsoluteLength, DefiniteLength, Percentage);
 crate::static_reactive!(AbsoluteLength: Points, Rems, AbsoluteLength);
@@ -2923,6 +2940,19 @@ pub trait Styled: Sized {
         self
     }
 
+    /// The tint of the glass material (`glassTintColor`). A color tints the
+    /// native glass; `None` restores its default. Bind an optional adaptive
+    /// color to set and clear the tint; static colors can be passed directly.
+    /// Has no effect without `glassEffect`.
+    fn glass_tint_color(mut self, color: impl IntoReactive<Option<AdaptiveColor>>) -> Self {
+        self.style()
+            .bind_value(color, |s, color: Option<AdaptiveColor>| match color {
+                Some(color) => s.color(&[StyleKey::GlassTintColor], color),
+                None => s.value(StyleKey::GlassTintColor, PropertyValue::Color(None)),
+            });
+        self
+    }
+
     /// The pointer's look over the element (`cursor`; desktops, and iPad
     /// and Android with a mouse).
     fn cursor(mut self, cursor: Cursor) -> Self {
@@ -3053,7 +3083,8 @@ pub trait Styled: Sized {
 
     /// A keyframe animation with its own timing (TS: `animationName`
     /// with `animationDuration`, `animationDelay`,
-    /// `animationTimingFunction`, `animationIterationCount`):
+    /// `animationTimingFunction`, `animationIterationCount`,
+    /// `animationFrameRate`):
     /// `.animation(KeyframeAnimation::new(Keyframes::Spin).duration(800.0))`.
     fn animation(mut self, animation: KeyframeAnimation) -> Self {
         let index = KEYFRAMES
@@ -3066,6 +3097,7 @@ pub trait Styled: Sized {
             Bits(animation.delay),
             animation.easing.map(Bits),
             animation.iterations,
+            crate::style::frame_rate(animation.frame_rate).map(Bits),
         ));
         self
     }
@@ -4636,6 +4668,37 @@ mod tests {
             "animate-none",
             &timed("spin", 800.0, "linear"),
         );
+    }
+
+    #[test]
+    fn keyframe_animations_take_their_frame_rate() {
+        // As TS's `animationFrameRate` with the animation's other keys.
+        let capped = |hz: f32| {
+            move |style: &mut Style| {
+                use crate::StyleValue;
+                for (key, value) in [
+                    (StyleKey::AnimationName, StyleValue::Str("spin")),
+                    (StyleKey::AnimationDuration, StyleValue::Number(800.0)),
+                    (StyleKey::AnimationTimingFunction, StyleValue::Str("linear")),
+                    (StyleKey::AnimationFrameRate, StyleValue::Number(hz)),
+                ] {
+                    style.set_key(key, value).unwrap();
+                }
+            }
+        };
+        same_with(
+            s().animation(
+                KeyframeAnimation::new(Keyframes::Spin)
+                    .duration(800.0)
+                    .frame_rate(30.0),
+            ),
+            "animate-none",
+            &capped(30.0),
+        );
+        let typed = s()
+            .animation(KeyframeAnimation::new(Keyframes::Spin).frame_rate(24.0))
+            .lower();
+        assert!(resolve(&typed, false, 0, 0).contains("frame_rate: Some(24.0)"));
     }
 
     #[test]

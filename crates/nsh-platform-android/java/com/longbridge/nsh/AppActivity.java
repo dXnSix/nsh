@@ -19,8 +19,11 @@ public final class AppActivity extends Activity {
         view.useStandaloneLimits();
         setContentView(view);
         view.handleNotificationIntent(getIntent());
+        // A recreated activity's intent was handed in already.
+        if (state == null) view.handleUrlSchemeIntent(getIntent());
         if (rustApp()) view.runRustApp("nsh");
-        else view.loadAssetBundle("nsh");
+        // A newer signed package of the app's code it downloaded runs instead.
+        else view.loadAssetBundle("nsh", true);
     }
 
     /** A Rust app (`nsh package --rust` sets the manifest's `com.longbridge.nsh.RUST`). */
@@ -40,11 +43,14 @@ public final class AppActivity extends Activity {
         DevActivity.systemBars(this);
     }
 
-    /** A notification pressed while this activity is in its task. */
+    /** A notification pressed, or a URL opened, while this activity is in its task. */
     @Override
     protected void onNewIntent(android.content.Intent intent) {
         super.onNewIntent(intent);
-        if (view != null) view.handleNotificationIntent(intent);
+        if (view != null) {
+            view.handleNotificationIntent(intent);
+            view.handleUrlSchemeIntent(intent);
+        }
     }
 
     /** Android 12 and older: the app gets the back button first. */

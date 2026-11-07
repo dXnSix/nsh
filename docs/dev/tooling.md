@@ -145,6 +145,9 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
 - The web host is a page the dev server serves itself (`DevServer::serve_web`, the fallback route: `/`, `/nsh.js`,
   `/nsh.wasm`, `/nsh.version`, and for a runtime whose crates call JS through wasm-bindgen its glue, `/nsh-bindgen.js`,
   with the snippets it imports, `/snippets/…`) when a web runtime exists; browsers connect to `/ws` on the same port.
+  A browser loading another path that names no file gets the page (`server::wants_page`: a `GET` accepting
+  `text/html` of a path whose last segment has no extension), as a single-page app's host rewrites it; `SiteServer`
+  (`nsh package --target web --run`) answers it with `index.html` the same way.
   `nsh run --target web` builds the runtime in a checkout and prints the page's address (`docs/dev/web.md`, "The CLI's
   web target" and "Crates that call JS through wasm-bindgen").
 - Watching ignores `Access` events: inotify (Linux) reports reads, FSEvents does not, so the build's own reads of the
@@ -259,7 +262,8 @@ looks inside the previous part's matches, `nth=<n>`
 keeps one. A part starting with a lowercase word and a colon (`[a-z][a-z0-9-]*:`) that is no known prefix is a parse
 error, never a bare string, so adding a prefix cannot change what an existing selector matches; such a text is
 written `text:tapped: solo`. `Screen::resolve` lists the matches where a user would look first: the top modal, then the rest in tree
-order below the root, of a stack only its top screen, and only the views that show (`Screen::shown`, as Playwright's
+order below the root (a scroll view's content in the order it is on screen, as the platforms' Tab and
+screen readers take it: a list's recycled cells are not in their rows' order in the tree), of a stack only its top screen, and only the views that show (`Screen::shown`, as Playwright's
 visibility): with an area (a `display: none` view has none), outside `visibility: hidden` (`ViewStyle::hidden`), not
 clipped away by `overflow: hidden`, a scroll view the user cannot scroll (`ScrollBehavior::enabled`) or the window
 (`Screen::set_viewport`: the headless viewport; on a host the platform's, which `Agent::sync_viewport` tells the model
@@ -375,7 +379,8 @@ Headless runs play the platform's part NSH's protocol defines, and refuse what o
   fed the mount items' animation ops and scroll values, its finished animations reported (`animations_finished`); a
   step is quiet only when no animation that ends by itself runs;
 - a back (`Headless::back`, and the app's `Command::Back`) does what `nsh-platform-macos`'s `default_back` does: in the
-  newest modal, else the screen, the innermost stack that can go back pops its top screen (hidden in the model until
+  newest modal, else the screen, the innermost stack that can go back and is laid out with a size
+  (`nsh_core::navigation::shown_in_layout`) pops its top screen (hidden in the model until
   the app removes it, `onDismiss`) or asks it (`preventBack`: `onBackRequest`); else the newest modal gets
   `onRequestClose`, and `onDismiss` when it is `dismissible`;
 - dialogs (`Command::Dialog`) are answered with `onDialog` (`id`, `index`, -1 dismissed): by the test's handler, else
@@ -534,12 +539,20 @@ taller than its screen when it shows it, and a test's window keeps the size the 
 it gets `--background` unless `nsh test --foreground` (`AppOptions::background`): the app's activation policy is
 `Prohibited` (an `Accessory` app is not guaranteed to stay inactive as its window comes up), so the host does not make
 it the active app, which is meant to leave the keyboard with the app the user types in; its window is ordered in
-without becoming key and the agent does not wait for activation (`MacNative::activate`). A window that is not the
+without becoming key and the agent does not wait for activation (`MacNative::activate`; nor with `--foreground` while
+the screen is locked, which never lets the app become active: tests run there as unlocked, `docs/dev/macos.md`
+"Checking a change"). A left button press into a web view of the inactive app goes to the `WKWebView` directly
+(`agent::mouse`), since AppKit gives an inactive window's first click only to views that accept the first mouse. A
+window that is not the
 key window gets keys from the agent directly (`synth::key_event`): the app's key monitors (`nsh/keymap`) first, then,
 for a Command key the window's own key equivalents, and for any key the main menu's item for it (`synth::key_equivalent`:
 Select All, Undo, an app's own item, Control and function-key shortcuts too), sent as the application sends them for its
 key window, which the app has none of: an item with a target (the app's own menu items) to its target, any other down
 the window's responder chain from its first responder; a Command key nothing took goes to the application, as before.
+Presses go to the app's views as in the key window: AppKit gives a left press in a window that is not key only to a
+view that accepts the first mouse, and a hidden title bar's view, over the content's top, does not, so the app's
+windows (`window::pass_title_bar_press`) hand a press the title bar would only take to make the window key to the
+content's view under it, with its drags and release.
 An item is not checked for being enabled (AppKit validates against the key window's responders:
 with none every item reads as disabled): the app's disabled items have an action nothing answers. The macOS host's
 checks of this are `crates/nsh-platform-macos/tests/host`
@@ -575,16 +588,18 @@ menus of its own; the web, whose `Menu.popup` is the app's own UI, has none), th
 `Native::mouse`: macOS hands the move to the surface's input, as AppKit gives posted
 moves to the first responder only), keystrokes (`press_keys`: macOS's posted key events, Windows' and GPUI's key entry points with
 `keymap::Key::virtual_key`, the web's CDP key events (printable keys carry their physical code, modifiers and US-layout
-text, so shortcuts get the key before a field types it), Linux's bindings fired as its shortcut controller would, as GTK
-takes no made-up keys; iOS's IOHID keyboard events (`synth::key`, modifiers down first) that UIKit takes as a
+text, so shortcuts get the key before a field types it), Linux's XTest key events under X11 / Xvfb (GTK shortcut
+controllers, focused widgets and input methods handle them; without XTest the agent uses widget signals and calls
+the bindings directly, `docs/dev/linux.md` "Checking a change"); iOS's IOHID keyboard events (`synth::key`, modifiers down first) that UIKit takes as a
 real keyboard's, Android's `KeyEvent`s handed to the window's root view as its input stage hands them over),
 `back`, dialogs, screenshots, the window's size and appearance),
 then waits until neither a batch came nor a native animation that ends by itself ran for 100 ms (`Native::animating`:
-the graph's `Animator::finishing`, so a spinner looping forever does not hold every step for 2 s; 2 s at most; the web's page counts its own
+the graph's `Animator::finishing`, so a spinner looping forever does not hold every step for 2 s, and on macOS a view's
+transitions but not its keyframes repeating forever, `animate-ping`'s or `animate-spin`'s, which have no `Live::deadline`; 2 s at most; the web's page counts its own
 finite animations too: a screen sliding in; Android counts a scroll view drawing, as its overscroll stretch relaxes
 without moving a view, and a touch then only catches the stretch). `Native`'s calls do their work
 on the platform's main thread and return when the input is posted. Screenshots come back as base64 bytes: PNG
-on graphical targets, versioned UTF-8 Cell JSON on `tui`. The test's side saves them, as the host may run on another machine. `open`'s manual clock reaches the host in the
+on graphical targets, versioned UTF-8 Cell JSON on `tui`. The test's side saves them, as the host may run on another machine. `app.window(id)`'s steps (`TestStep::WindowState`, `PressWindowClose`, `WindowScreenshot`) name a window of the app by its id; the agent finds its root node in the model (`Scene::window_root`) and asks the platform (`Native::window_state`, `press_window_close`, `window_screenshot`), and `Native::target_window` names the window each step on a view acts in. Their defaults serve the main window, so a platform starts with that and adds the app's own windows. `open`'s manual clock reaches the host in the
 test's setup (`TestEnvironment::clock`, its start in Unix milliseconds): `Model::set_up_engine` starts the engine on
 `Clock::manual(start).with_frames()`, and the host hands the started engine back (`Model::engine_started`). The
 test's `clock` steps are `TestStep::Clock` (`ClockChange::RunFor`, `FastForward`, `SetSystemTime`; the web's
@@ -680,11 +695,15 @@ app; the screen keeps its device's size. Android (`nsh-platform-android`, featur
 `nsh-cli/src/test_android.rs`): the CLI installs the host on the first device `adb devices` lists and starts it per
 `open` with the dev server's port forwarded (`adb reverse`) and a data directory of its own in the host's cache
 (`dataDir`, emptied as it starts). The agent's calls go to `TestAgent` (a class looked up in `JNI_OnLoad`), which does
-each on the UI thread: `MotionEvent`s dispatched to the window's views (or the dialog's) as a finger's, with drags
-that rest before they lift as on iOS; typing as a keyboard's `KeyEvent`s (`KeyCharacterMap`; what no key types is
+each on the UI thread: `MotionEvent`s dispatched to the topmost window's views (the system alert's, else the
+topmost `<modal>`'s dialog window, else the activity's) as a finger's, with drags that rest before they lift as on
+iOS; typing as a keyboard's `KeyEvent`s to the view focused in that window (`KeyCharacterMap`; what no key types is
 committed through the field's input connection), Ctrl+A first as a shortcut, as the window's input stage offers it;
 back is the activity's back press; dialogs are answered with a tap on the `AlertDialog`'s button (back to close it);
-screenshots draw the window and the dialog into a bitmap. A step waits for the native animation graph and for anything
+screenshots copy the activity's window and every window over it (each shown `<modal>`'s dialog in order, then the
+system alert) from their surfaces with `PixelCopy` after a frame drawn with the current state, each composited at its
+place over its dim, so they hold what the GPU draws (video, filters, the backdrop's blur), on an emulator without a
+window too; a window without a surface is drawn into the bitmap instead. A step waits for the native animation graph and for anything
 that moves: a signature of every shown view's place, offset, scroll position and opacity, compared between looks. The
 system's appearance is the device's night mode, which the CLI switches (`cmd uimode night`) and restores. All of them
 use `nsh_testing::agent::Tester`, which turns the dev client's
@@ -707,8 +726,7 @@ mouse presses, wheel events of 20 px a frame apart, key events with macOS's edit
 them), `history.back()` for back, `Emulation.*` for the viewport and the color scheme and `Page.captureScreenshot`.
 Headless Chromium finds no input device and reports `pointer: none` / `hover: none`, which `nsh.js`'s `measureIdiom`
 reads as a touch screen; `cdp.rs` launches it with `--blink-settings` giving it a fine, hovering pointer (as
-Playwright does), so the page measures as a browser with a mouse: the desktop idiom at least 600 wide, a phone below
-(`open`'s `width`). A desktop's `platform` (`macos`, `windows`, `linux`) skips the measuring: `run.rs`'s
+Playwright does), so the page measures as a browser with a mouse: the desktop idiom at any width (`open`'s `width`). A desktop's `platform` (`macos`, `windows`, `linux`) skips the measuring: `run.rs`'s
 `launch_idiom` puts `TestIdiom::Desktop` in the setup (`TestEnvironment::idiom`), and the page starts the apps it runs
 in the desktop idiom at any width (`nsh.js`'s `testSetup`, before the `idiom` option's fallback to `measureIdiom`), as
 every other target runs them as desktops; `platform.os` stays `web`. Without a `platform`, or with `web`, the page

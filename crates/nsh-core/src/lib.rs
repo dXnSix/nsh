@@ -12,6 +12,7 @@ mod byte_size;
 pub use byte_size::ByteSize;
 pub mod access;
 pub mod animation;
+pub mod audio;
 pub mod canvas;
 pub mod clipboard;
 pub mod color;
@@ -44,6 +45,8 @@ pub mod prelude;
 mod props;
 pub mod reactive;
 pub mod resource;
+#[doc(hidden)]
+pub mod restart;
 pub mod runtime;
 pub mod runtime_data;
 pub mod scroll;
@@ -61,6 +64,7 @@ pub mod text_edit;
 pub mod time;
 mod transform;
 pub mod transition;
+pub mod url_scheme;
 pub mod websocket;
 
 // The derive macros name `::nsh_core`, also in this crate's own tests.
@@ -75,7 +79,8 @@ pub use crate::{
     core::{ApplyError, Core, ListBind, Measurement},
     effects::{
         BackdropMaterial, BlendMode, BoxShadow, ColorStop, Cursor, Effects, Filter, GlassEffect,
-        Gradient, GradientKind, GradientSize, KeyframeAnimation, Keyframes, Outline, Transition,
+        Gradient, GradientKind, GradientSize, KeyframeAnimation, Keyframes, MacOsBackdrop,
+        MacOsBackdropBlending, MacOsBackdropMaterial, MacOsBackdropState, Outline, Transition,
         TransitionProps, blur_radius, compose_color_matrices,
     },
     geometry::{Bounds, Corners, Edges, Point, Points, Size},
@@ -95,7 +100,7 @@ pub use crate::{
         ROOT_ID, ResizeMode, ReturnKeyType, ScreenAnimation, ScreenProp, ScrollProp,
         ScrollbarSetting, SnapAlignment, StatusBarConfig, StatusBarSetting, StatusBarStyle,
         SubmitBehavior, Tag, TouchEvent, TouchPhase, TouchPoint, TransitionFallback, Viewability,
-        WebInput, WebKey, WebSource,
+        WebInput, WebKey, WebLoad, WebSource,
     },
     props::{
         Accessibility, AccessibilityActionDef, AccessibilityCurrent, AccessibilityProp,
@@ -114,7 +119,7 @@ pub use crate::{
         ATTACHMENT_CHAR, Affinity, ApproxTextEngine, AttachmentAlignments, AttributedText,
         BackgroundBox, FontExtent, LinePiece, ResolvedTextStyle, SpanTestId, TextAttachment,
         TextBackground, TextEngine, TextLayout, TextLine, TextLink, TextPosition, TextSpan,
-        font_data,
+        font_data, font_family,
     },
     transform::{
         Decomposed, MAX_TRANSFORMS, Matrix, Transform, TransformKind, TransformOp, translation,

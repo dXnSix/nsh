@@ -180,6 +180,10 @@ fn start(
     if fps {
         command.arg("--fps");
     }
+    if target == Target::Windows {
+        // The window and its notifications show the app's name and icon.
+        command.args(crate::windows::host_args(&entry, &dir.join(".nsh")));
+    }
     if target == Target::Macos {
         // A window AppKit restored from an earlier run would not be this one.
         command.args(["-ApplePersistenceIgnoreState", "YES"]);
@@ -305,6 +309,7 @@ pub(crate) fn serve(entry: &Path, options: &HostOptions) -> Result<DevServer, St
         AppInfo {
             capabilities,
             id: crate::package::app_id(entry).ok(),
+            window: crate::package::window_json(entry),
         },
         None,
         built.ui_sets,
