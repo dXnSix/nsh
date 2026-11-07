@@ -28,12 +28,15 @@ case "$target" in
   # and toasts' pointer (13.6 s of waits) do not end in 30 s, network's
   # presses on `fetch()`, far down its page, stall in the window (390 × 653;
   # the request itself is the engine's, run on the other platforms), and
-  # environment's rotation expects an 844 pt tall window.
+  # environment's rotation expects an 844 pt tall window. Dock runs all
+  # but its phone drawer: on the runner, the press on the drawer strip's
+  # Hide Files leaves the drawer shown (it passes at a desk).
   macos)
-    gallery=(device dock error-boundary form gestures hover links list-search mention navigation
+    gallery=(device error-boundary form gestures hover links list-search mention navigation
       photos press resizable shaders shortcuts storage timers)
     filtered=("environment appearance" "toasts a toast shows" "toasts an undo restores"
-      "toasts its close button" "toasts at most three" "toasts a swipe")
+      "toasts its close button" "toasts at most three" "toasts a swipe"
+      "dock on a desktop" "dock the center shows one group" "dock a tab dragged along the strip")
     ;;
   # Left out: context-menu (the menu is not reported), controls (the
   # segmented control is not a tab list), links, text-view (span positions
