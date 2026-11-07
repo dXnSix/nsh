@@ -1,0 +1,36 @@
+name: Fork CI
+
+# PROBE (tmp/macos-title-bar-probe, never merged): what AppKit hits for a
+# press under a hidden title bar on the macos-15 runner, upstream's main
+# without the fix.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - name: Build the CLI
+        run: cargo build -p nsh-cli
+      - name: Title bar fixture
+        run: |
+          sw_vers
+          ./target/debug/nsh test crates/nsh-platform-macos/tests/host/TitleBar.test.tsx --target macos -v || echo "::warning::TitleBar.test.tsx failed"
+      - name: Dock phone drawer
+        run: ./target/debug/nsh test examples/gallery/tests/dock.test.tsx --target macos --filter "a dock is a drawer" -v || echo "::warning::dock drawer failed"
