@@ -35,7 +35,9 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   and shape kept (`browserHistory` considered and turned down, the key matches `createPlayer`'s option), the owner to
   decide on the key. Scope: the branch carries #1155's `8fcee61`, so asks to merge #1155 first or drop that commit.
   Dropping it without a force push means a new branch (`git cherry-pick dff9c0464` onto `main`) and a new PR; waiting
-  for #1155 and then merging `main` in leaves only the `web.history` change in the diff.
+  for #1155 and then merging `main` in leaves only the `web.history` change in the diff. The user chose to wait for
+  #1155: once it merges, merge `main` into `pr/web-urls/03-history-v2` (a fast-forward push) and check that the diff
+  is the `web.history` change alone.
 
 ---
 
