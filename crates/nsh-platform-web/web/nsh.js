@@ -20,7 +20,8 @@
 // instance of its own), `assetBase` (where `asset:/<path>` is served) or
 // `assets` (a map from `<path>` to its URL, as `nsh package --target web`
 // writes it; relative URLs, these and the others, resolve against the
-// page's `document.baseURI` as the player is made), `readAsset(uri)` (the bytes of an asset the engine needs at
+// page's `document.baseURI` as the player is made: `player.baseURL`),
+// `readAsset(uri)` (the bytes of an asset the engine needs at
 // once, a font: a `Uint8Array` or null), `data` (the URLs of the files the
 // runtime fetches when it first needs them, by name, as `nsh package
 // --target web` writes them: `{ syntaxes: "nsh-syntaxes.<digest>.bin" }`;
@@ -87,9 +88,6 @@ const BAR_THICK = 4;
 const BAR_MARGIN = 2;
 const BAR_GRAB = 12;
 const BAR_HOLD = 700;
-/** How long after a context menu key (`menuKey`) a `contextmenu` is the
- * one it asked for (ms): the browser raises it while handling the key. */
-const MENU_KEY_MS = 500;
 
 /* Keyframe animations (animate-spin, -ping, -pulse, -bounce) run with
    animation-composition: add: their transforms follow the view's own (as the
@@ -182,6 +180,13 @@ const KEYFRAMES = `
   text-underline-offset: 0.2em; }
 .nsh-run-bg { position: absolute; pointer-events: none; }
 .nsh-border { position: absolute; inset: 0; pointer-events: none; }
+/* A view of no size (\`display: none\` lays it out at none) draws nothing of
+   its own, as on the native backends, which draw inside its bounds: CSS
+   would still draw its border overlay (a border-box is never smaller than
+   its borders, so four 1px borders make a 2px square), its outline and its
+   shadow's spread. Its children stay, a zero-size anchor's included. */
+.nsh-empty > .nsh-border { display: none; }
+.nsh-v.nsh-empty { outline: none; box-shadow: none; }
 /* The mounter's own styles: no element has an inline style but its frame
    and animated values (generated classes, \`op_css\`, come after these). */
 .nsh-page { overscroll-behavior: none; }
@@ -195,6 +200,9 @@ const KEYFRAMES = `
 .nsh-box-none { pointer-events: none; }
 .nsh-inert, .nsh-inert * { pointer-events: none !important; }
 .nsh-clip { overflow: clip; }
+/* Chromium drops the backdrop filters (or their masks) inside a view that clips with \`corner-shape\` corners
+   (placeCorners): such a view with a backdrop-filtered view inside clips with circular corners of the radius. */
+.nsh-curve-clip:has(.nsh-backdrop) { corner-shape: round !important; border-radius: var(--nsh-round) !important; }
 /* A sticky list cell's range of travel (op_sticky): it lifts the cell above the other cells, and with no breadth
    across it takes no pointer events. The cell sticks inside it, at its left in either direction. */
 .nsh-track { position: absolute; z-index: 5; }
@@ -2216,6 +2224,8 @@ class Player {
     // at one again changes whether it shows (`stackShown`).
     const emptied = el._kind === "stack" && el._frame && !(el._frame[2] > 0 && el._frame[3] > 0) !== !(w > 0 && h > 0);
     el._frame = [x, y, w, h];
+    // No size: nothing of its own shows (`.nsh-empty`).
+    el.classList.toggle("nsh-empty", !(w > 0 && h > 0));
     if (emptied) this.syncHistorySoon();
     this.placeFrame(el);
     this.readingChanged(el.parentNode);
@@ -2263,6 +2273,11 @@ class Player {
     const el = this.view(id);
     if (!el) return;
     swapClass(el, "_class", this.styleClass(css));
+    if (CORNER_SHAPE) {
+      // Marks the views a clipping `corner-shape` ancestor must not hide (`.nsh-curve-clip`).
+      const backdrop = CLASSES.rules.get(el._class)?.style.backdropFilter;
+      el.classList.toggle("nsh-backdrop", !!backdrop && backdrop !== "none");
+    }
     if (border) {
       if (!el._border) el._border = document.createElement("div");
       el._border.className = `nsh-border ${this.styleClass(border)}`;
@@ -2288,6 +2303,12 @@ class Player {
    * diagonal, so a radius looks as round as on the native backends. Without
    * room to reach that far they stay circular, so a pill stays a pill, as
    * `nsh-platform-macos`'s; so do browsers without `corner-shape`.
+   *
+   * Chromium (verified in 156) shows no backdrop filter, or one without its
+   * mask, inside a view that clips with `corner-shape` corners. A clipping
+   * view (`nsh-curve-clip`) falls back to circular corners of the radius
+   * (`--nsh-round`) while a backdrop-filtered view (`nsh-backdrop`, `op_s`)
+   * is inside it.
    */
   placeCorners(el) {
     const r = el._corners;
@@ -2295,11 +2316,16 @@ class Player {
     const fits = CORNER_SHAPE && r && f && Math.max(...r) * CONTINUOUS_REACH <= Math.min(f[2], f[3]) / 2;
     const name = fits
       ? cssClass(
-          `border-radius:${r.map((v) => `${v * CONTINUOUS_REACH}px`).join(" ")};corner-shape:superellipse(${CONTINUOUS_SUPERELLIPSE});`,
+          `border-radius:${r.map((v) => `${v * CONTINUOUS_REACH}px`).join(" ")};corner-shape:superellipse(${CONTINUOUS_SUPERELLIPSE});--nsh-round:${r.map((v) => `${v}px`).join(" ")};`,
           3,
         )
       : null;
     swapClass(el, "_cornerClass", name);
+    if (CORNER_SHAPE) {
+      const overflow = fits ? CLASSES.rules.get(el._class)?.style.overflow : "";
+      const clips = fits && ((overflow && overflow !== "visible") || el.classList.contains("nsh-scroll") || el.classList.contains("nsh-clip"));
+      el.classList.toggle("nsh-curve-clip", !!clips);
+    }
     if (el._border) swapClass(el._border, "_cornerClass", name);
   }
 
@@ -2357,7 +2383,7 @@ class Player {
     el.classList.toggle("nsh-noselect", selectable === false);
     // Its `--nsh-selection`.
     swapClass(el, "_selection", this.styleClass(selection));
-    el._textLabel = runs.map((r) => r[2]).join("");
+    el._textLabel = runs.map((r) => r[2] + (r[6] ?? "")).join("").trimEnd();
     if (el._props?.label == null) el.setAttribute("aria-label", el._textLabel);
   }
 
@@ -2394,7 +2420,23 @@ class Player {
       if (after) span._after = after;
       else delete span._after;
     });
+    this.lineBreaks(el);
     return true;
+  }
+
+  /**
+   * The characters a line broke at (`after`: the space a soft break ate,
+   * a hard break's newline) as text between the runs' spans, so the
+   * text's `textContent` reads as it was written ("it now brings", never
+   * "it nowbrings"): what search engines and the page's markup see. They
+   * are whitespace beside absolutely placed spans, which collapses: nothing
+   * shows of them.
+   */
+  lineBreaks(el) {
+    for (const node of [...el.childNodes]) if (node.nodeType === 3) node.remove();
+    for (const span of el.querySelectorAll(":scope > .nsh-run")) {
+      if (span._after) span.after(span._after);
+    }
   }
 
   /** The runs of a text made again: its spans and their backgrounds. */
@@ -2425,6 +2467,7 @@ class Player {
     }
     for (const span of [...el.querySelectorAll(":scope > .nsh-run, :scope > .nsh-run-bg")]) span.remove();
     el.insertBefore(frag, el.firstChild);
+    this.lineBreaks(el);
   }
 
 
@@ -7193,10 +7236,6 @@ class Player {
     root.addEventListener("focusin", () => (Player.active = this));
     window.addEventListener("keydown", (e) => this.keyDown(e));
     window.addEventListener("keyup", (e) => this.keyUp(e));
-    // The keys that ask the focused view for its context menu, before
-    // anything handles them (`contextMenu` reads when they were last used).
-    window.addEventListener("keydown", (e) => this.menuKey(e), true);
-    window.addEventListener("keyup", (e) => this.menuKey(e), true);
     // The mouse's back button goes back in the app (with history, as the
     // browser's back button does).
     root.addEventListener("mouseup", (e) => {
@@ -7214,17 +7253,12 @@ class Player {
    * `onContextMenu` of the nearest view around `e`'s target that listens,
    * unless a field or selectable text is nearer (it keeps the browser's
    * menu); true when a view took it. The browser raises `contextmenu` for
-   * right clicks, Control-clicks on macOS, the keyboard's Menu key and
-   * Shift+F10 (on the focused element), and screen readers' "show menu"
-   * action. Those come with no pointer (an empty `pointerType` or no button): the
-   * event names none (`pointerType: null`) and is placed at the view's
-   * bottom-start corner, where a menu opened below it starts. Chromium on
-   * Linux names a mouse and its main button for Shift+F10's, so a menu
-   * asked for while a menu key is used (`menuKey`) has no pointer either.
+   * pointer gestures and accessibility actions. `keyDown` handles the Menu
+   * key and Shift+F10 too: Chromium on macOS does not raise that event for
+   * them. Keyboard requests name no pointer and start at the view's
+   * bottom-start corner.
    */
-  contextMenu(e) {
-    const keyed = this.menuKeyAt !== undefined && Math.abs(e.timeStamp - this.menuKeyAt) < MENU_KEY_MS;
-    this.menuKeyAt = undefined;
+  contextMenu(e, keyboard = false) {
     const view = this.viewOf(e.target);
     if (!view) return false;
     for (const el of this.ancestors(view)) {
@@ -7232,10 +7266,8 @@ class Player {
         e.preventDefault();
         const r = el.getBoundingClientRect();
         // Chromium can name a mouse for keyboard context menus, but no
-        // button (-1), or on Linux the main one (`keyed`). Older
-        // MouseEvents without pointerType are mouse input.
-        const pointerType =
-          keyed || e.button === -1 ? null : e.pointerType === undefined ? "mouse" : e.pointerType || null;
+        // button (-1). Older MouseEvents without pointerType are mouse input.
+        const pointerType = keyboard || e.button === -1 ? null : e.pointerType === undefined ? "mouse" : e.pointerType || null;
         let at = e;
         if (pointerType === null) {
           const rtl = getComputedStyle(el).direction === "rtl";
@@ -7253,16 +7285,6 @@ class Player {
       if (el.matches(".nsh-field, .nsh-selectable")) return false;
     }
     return false;
-  }
-
-  /**
-   * Notes when a key that asks the focused view for its context menu is
-   * pressed or released: Shift+F10 alone, or the Menu key (Windows raises
-   * its menu on the release).
-   */
-  menuKey(e) {
-    const shiftF10 = e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
-    if (shiftF10 || e.key === "ContextMenu") this.menuKeyAt = e.timeStamp;
   }
 
   /** Whether the browser handles presses at `target` itself: fields,
@@ -7380,6 +7402,11 @@ class Player {
         focus.blur();
       }
       return;
+    }
+    if (inRoot && plain && ((e.key === "F10" && e.shiftKey) || (e.key === "ContextMenu" && !e.shiftKey))) {
+      // Prevent the native default when handled, so browsers that also
+      // generate contextmenu do not open the same menu twice.
+      if (this.contextMenu(e, true)) return;
     }
     if (this.selectionKey(e)) return;
     if (inRoot && focus._pressable && plain && !e.shiftKey && (e.key === "Enter" || e.key === " ")) {

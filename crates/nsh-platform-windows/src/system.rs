@@ -247,8 +247,9 @@ pub(crate) fn settings_changed(surface: &Rc<Surface>) {
 pub(crate) fn environment_applied(surface: &Surface) {
     let hwnd = surface.hwnd();
     if !hwnd.is_invalid() {
-        crate::window::set_dark_title_bar(hwnd, dark(surface));
+        crate::shell::set_color_scheme(surface, hwnd, Appearance::System);
     }
+    crate::app_window::appearance_changed(surface);
     // Menus follow the scheme; the caption buttons are drawn again.
     crate::chrome::appearance_changed(surface);
 }
@@ -758,6 +759,8 @@ pub(crate) fn command(surface: &Rc<Surface>, _id: NodeId, command: &Command) {
             }
         }
         Command::Announce(text) => crate::access::announce(surface, text),
+        Command::PerfMonitor(true) => surface.enable_fps(),
+        Command::PerfMonitor(false) => surface.disable_fps(),
         Command::Notification(command) => crate::notifications::command(surface, command),
         Command::Audio(command) => {
             let base = surface.asset_base.borrow().clone();
@@ -1509,6 +1512,8 @@ struct DialogLayout {
 /// (it takes every pointer event: the dialog is modal).
 struct DialogItem {
     key: u64,
+    /// The UI thread of the surface: the answer is posted back to it.
+    ui: crate::window::UiThread,
     serial: u64,
     id: u32,
     sheet: bool,
@@ -1620,7 +1625,7 @@ impl DialogItem {
             return;
         }
         let (key, serial, id) = (self.key, self.serial, self.id);
-        crate::window::invoke(move || {
+        self.ui.invoke(move || {
             let Some(surface) = Surface::by_key(key) else {
                 return;
             };
@@ -1932,6 +1937,7 @@ fn show_dialog(surface: &Rc<Surface>, dialog: &Dialog) {
     let serial = next_serial();
     let item = Rc::new(DialogItem {
         key: surface.key(),
+        ui: surface.ui_thread(),
         serial,
         id: dialog.id,
         sheet,

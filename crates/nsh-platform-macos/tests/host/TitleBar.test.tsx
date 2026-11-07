@@ -2,7 +2,7 @@
 // with the app in the background (`nsh test crates/nsh-platform-macos/tests/host
 // --target macos`, also with `--foreground`): on macOS 15 the title bar's
 // toolbar view is what AppKit hits there, and it takes no first click in a
-// window that is not key (`app.rs` `TestWindow`). For the macOS host only,
+// window that is not key (`window.rs` `NshWindow`). For the macOS host only,
 // like `App.test.tsx`.
 import { expect, open, test } from "nsh/test";
 

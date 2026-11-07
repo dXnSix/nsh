@@ -171,7 +171,7 @@ fn check(scenario: &str) {
     window.setTitle(&NSString::from_str("NSH held-press regression"));
     let options = platform::AppOptions {
         size: (420, 240),
-        ..platform::AppOptions::default()
+        ..Default::default()
     };
     let surface = platform::AppView::new(mtm, options);
     window.setContentView(Some(&surface.view()));

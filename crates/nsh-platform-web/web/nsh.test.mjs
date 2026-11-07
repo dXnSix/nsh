@@ -95,52 +95,6 @@ test("keyboard context menus have no pointer even when Chromium names a mouse", 
   }
 });
 
-test("a context menu right after Shift+F10 or the Menu key has no pointer, whatever Chromium names", () => {
-  const { player } = fakePlayer();
-  const el = {
-    _id: 2,
-    _events: new Set(["onContextMenu"]),
-    getBoundingClientRect: () => ({ left: 10, right: 90, top: 20, bottom: 60 }),
-  };
-  player.viewOf = () => el;
-  player.ancestors = () => [el];
-  player.point = (at) => [at.clientX, at.clientY];
-  let payload;
-  player.event = (_, name, value) => { assert.equal(name, "onContextMenu"); payload = value; };
-  const key = (key, timeStamp, mods = {}) =>
-    player.menuKey({ key, timeStamp, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false, ...mods });
-  // Linux's Chromium: Shift+F10's menu names a mouse and its main button.
-  const menu = (timeStamp) =>
-    player.contextMenu({
-      target: el, pointerType: "mouse", button: 0, clientX: 40, clientY: 30, timeStamp,
-      preventDefault() {},
-    });
-  const saved = globalThis.getComputedStyle;
-  globalThis.getComputedStyle = () => ({ direction: "ltr" });
-  try {
-    for (const [asked, keyed] of [
-      [() => key("F10", 100, { shiftKey: true }), true],
-      [() => key("ContextMenu", 100), true],
-      [() => key("F10", 100), false],
-      [() => key("F10", 100, { shiftKey: true, ctrlKey: true }), false],
-      [() => key("F10", -1000, { shiftKey: true }), false],
-      [() => {}, false],
-    ]) {
-      asked();
-      menu(101);
-      assert.equal(payload.pointerType, keyed ? null : "mouse");
-      assert.deepEqual(payload.pagePosition, keyed ? { x: 10, y: 60 } : { x: 40, y: 30 });
-    }
-    // The key asks for one menu: a right click after it is the mouse's.
-    key("F10", 100, { shiftKey: true });
-    menu(101);
-    menu(102);
-    assert.equal(payload.pointerType, "mouse");
-  } finally {
-    globalThis.getComputedStyle = saved;
-  }
-});
-
 test("input autofill hints are set, changed and cleared on both field kinds", () => {
   const { player } = fakePlayer();
   const attrs = new Map();
@@ -1999,4 +1953,26 @@ test("a layout animation leaves the views of navigation to navigation", () => {
   }
   assert.equal(player.location, "/a");
   assert.deepEqual(navigations, []);
+});
+
+test("a view laid out at no size draws nothing of its own, its border overlay included", () => {
+  const { player } = fakePlayer();
+  const classes = new Set();
+  const el = {
+    _kind: "view",
+    _animation: {},
+    classList: { toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)) },
+  };
+  Object.assign(player, { view: () => el, placeFrame() {}, readingChanged() {} });
+  // `display: none`: the core lays the view out at no size.
+  player.op_f(["f", 2, 0, 0, 0, 0]);
+  assert.ok(classes.has("nsh-empty"));
+  player.op_f(["f", 2, 8, 8, 40, 32]);
+  assert.ok(!classes.has("nsh-empty"));
+  // One side of no size is no size too.
+  player.op_f(["f", 2, 8, 8, 40, 0]);
+  assert.ok(classes.has("nsh-empty"));
+  // What the class takes away: the border overlay, the outline and the shadow.
+  assert.match(source, /\.nsh-empty > \.nsh-border \{ display: none; \}/);
+  assert.match(source, /\.nsh-v\.nsh-empty \{ outline: none; box-shadow: none; \}/);
 });

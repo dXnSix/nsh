@@ -322,6 +322,10 @@ impl Script {
     }
     /// A browser page has no displays of its own.
     pub(crate) fn set_displays(&self, _: &[nsh_core::desktop::Display]) {}
+    /// A browser page has no performance monitor: `fpsEnabled()` stays
+    /// false.
+    pub(crate) fn set_fps_enabled(&self, _: bool) {}
+
     pub(crate) fn set_location(&self, value: &nsh_core::location::Location) {
         self.0.set_location(value);
     }
