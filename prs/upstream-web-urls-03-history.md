@@ -58,6 +58,12 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   the `web.history` change alone, the same as `dff9c046` but for `main`'s sentence it follows; no new findings; the
   `build` failure is `main`'s stale bootstrap, which longbridge/nsh#1227 (open, regenerates `bootstrap.js`) fixes.
   Still open: `web.history` is a new public `nsh.json` key, the owner's decision. Nothing to change or reply to.
+- 2026-11-07: Linux `gpui-gallery` on `abd68ac5` failed `context-menu.test.tsx` › "a right click shows the menu, and
+  its items are chosen" (its 30 s limit; another PR's run, `testing-clamp-shrunk-content`, failed it the same), which
+  `main`'s #1223 (`7ab29aa9`) fixes by opening the test on the System demo; `main` also got #1227 (`c09de833`, the
+  regenerated browser bootstrap Website `build` failed on). `83d8a47b0` merges `main` `cbc8f4b0` in (no conflicts,
+  pushed, a fast-forward); the diff against `main` stays the 9 files. `nsh-cli`'s `web::` / `nsh_json` tests (32),
+  `nsh.test.mjs` (67) and `nsh-cli` clippy pass; fmt's only diff is `main`'s `nsh-platform-linux/src/tray.rs` (#1209).
 
 ---
 
