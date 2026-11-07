@@ -138,8 +138,46 @@ define_class!(
             // SAFETY: NSWindow's own constraint.
             unsafe { msg_send![super(self), constrainFrameRect: rect, toScreen: screen] }
         }
+
+        #[unsafe(method(sendEvent:))]
+        fn send_event(&self, event: &NSEvent) {
+            probe_press(self, event);
+            // SAFETY: NSWindow's own dispatch of the event.
+            unsafe { msg_send![super(self), sendEvent: event] }
+        }
     }
 );
+
+/// PROBE (never merged): what AppKit hits for a left press.
+fn probe_press(window: &NSWindow, event: &NSEvent) {
+    if event.r#type() != NSEventType::LeftMouseDown {
+        return;
+    }
+    let Some(content) = window.contentView() else {
+        return;
+    };
+    let Some(frame) = crate::view::superview(&content) else {
+        return;
+    };
+    let p = event.locationInWindow();
+    let hit = frame.hitTest(p);
+    let mut chain = Vec::new();
+    let mut v = hit.clone();
+    while let Some(view) = v {
+        chain.push(view.class().name().to_string_lossy().into_owned());
+        v = crate::view::superview(&view);
+    }
+    log::warn!(
+        "probe: press at ({:.0}, {:.0}) key={} background={} hit={:?} first_mouse={:?} in_content={:?}",
+        p.x,
+        p.y,
+        window.isKeyWindow(),
+        in_background(MainThreadMarker::from(window)),
+        chain,
+        hit.as_ref().map(|h| h.acceptsFirstMouse(Some(event))),
+        hit.as_ref().map(|h| h.isDescendantOf(&content)),
+    );
+}
 
 define_class!(
     /// A panel, popup or overlay of NSH's: an `NSPanel`, with its key status
