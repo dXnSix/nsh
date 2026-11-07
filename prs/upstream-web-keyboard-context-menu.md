@@ -7,7 +7,16 @@ the keyboard's. In every Fork CI run on a base with that fix, the gallery's Shif
 without this change. The sync to `7571948ee` passed it too, before this fix existed. So the premise below (Linux's
 Chromium raises Shift+F10's menu with `button: 0`) is not confirmed. `upstream/main` `c015f2c5e` (2026-11-07) has no
 key-based detection, and the change applies to it cleanly (`git apply --check`). Open it only if the test fails on
-upstream's code. Related: `upstream-web-context-menu-keys.md` (longbridge/nsh#1018, the earlier key-based fix, closed
+upstream's code.
+
+An open upstream PR covers it as well: honsunrise's longbridge/nsh#1098 (`web: Handle desktop context-menu keyboard
+requests`, opened 2026-11-06, mergeable, head `bd30b584` on `beeb9fc77`; checked 2026-11-07). Its `keyDown` opens
+the focused view's menu for Shift+F10 and the Menu key itself (`contextMenu(e, true)`: no pointer, at the
+bottom-start corner) and prevents the browser's default. Whatever `button` Chromium gives the `contextmenu`, the
+keyboard's opening then no longer depends on it. It also adds `context-menu-press.test.tsx --filter Shift+F10` to the
+Chrome step of upstream's `Rust application` workflow. If #1098 merges, the fork's #154 conflicts with it in
+`nsh.js` (`contextMenu`'s signature and its `pointerType` line) at the next sync. Take #1098's and drop `menuKey` and
+`MENU_KEY_MS`. Related: `upstream-web-context-menu-keys.md` (longbridge/nsh#1018, the earlier key-based fix, closed
 in favor of `1137dd527`).
 
 - Branch: `fix/web-keyboard-context-menu`, one commit (`8789efedb`) on `upstream/main` `7571948ee` (#1069).

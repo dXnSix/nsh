@@ -38,7 +38,8 @@ Superseded: `upstream-web-open-url` (upstream #892 fixed it; the fork's own dXnS
 `fork-0.4.0-1` sync fixes (dXnSix/nsh#154–#157, checked 2026-11-07 against `c015f2c5e`) are records only:
 `upstream-xtask-android-builtin-headers` (#1189 fixed it), `upstream-web-terminal-part` (#1152),
 `upstream-linux-accessible-order` (#1176), and `upstream-web-keyboard-context-menu`, which upstream does not need
-(#1011's `button === -1` passes the fork's Linux Chrome test without it). Pairs that conflict, so whichever merges second is
+(#1011's `button === -1` passes the fork's Linux Chrome test without it; open #1098 handles the keys in `keyDown`).
+Pairs that conflict, so whichever merges second is
 rebased: the environment stack with register-font (`prelude.rs`), with location (the environment's parts) and
 with the #746 follow-ups (`platform.rs`); register-font with location and with the engine follow-up; the engine
 follow-up with location (`nsh-dev/src/server.rs`).
