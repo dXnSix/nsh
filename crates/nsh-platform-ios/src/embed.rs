@@ -1318,3 +1318,130 @@ pub unsafe extern "C" fn nsh_host_call_free(call: *mut NshHostCall) {
         drop(unsafe { Box::from_raw(call) });
     }
 }
+
+/// Sets where the app is (`location()` of `nsh`; `nsh_core::location`): a
+/// path from the app's base with its query and fragment,
+/// `/sports/football?tab=live`. Before an app runs, where the next app
+/// `app` loads starts; while one runs, it goes there, as a deep link the
+/// embedding app handled would take it (the navigation handler hears the
+/// app's own moves only). Returns false, logging why, for what is not such a path;
+/// the location then stays as it was.
+///
+/// # Safety
+///
+/// `app` must come from [`nsh_app_create`]; `location` must be a
+/// NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nsh_app_set_location(app: *mut NshApp, location: *const c_char) -> bool {
+    // SAFETY: guaranteed by the caller.
+    let (app, location) = unsafe { (&*app, utf8(location, "the location")) };
+    let result = location.and_then(|location| {
+        app.view
+            .host()
+            .set_location(location)
+            .map_err(|refused| refused.to_string())
+    });
+    match result {
+        Ok(()) => true,
+        Err(reason) => {
+            log::warn!("nsh: the location stays as it was: {reason}");
+            false
+        }
+    }
+}
+
+/// Where the app is: the latest of [`nsh_app_set_location`] and the app's
+/// navigations (`navigate`), `/` before either; normalized as URLs are
+/// (`/a/../b` is `/b`). The string is the caller's: free it with
+/// [`nsh_string_free`].
+///
+/// # Safety
+///
+/// `app` must come from [`nsh_app_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nsh_app_location(app: *mut NshApp) -> *mut c_char {
+    // SAFETY: guaranteed by the caller.
+    let location = unsafe { &*app }.view.host().location();
+    // A location has no control characters (`Location::join`), so no NUL.
+    CString::new(location.as_str())
+        .unwrap_or_default()
+        .into_raw()
+}
+
+/// The C function a navigation handler calls: the location the app went
+/// to, and whether it replaced the current history entry.
+type NavigateHandlerFn =
+    unsafe extern "C" fn(context: *mut c_void, location: *const c_char, replace: bool);
+
+/// A navigation handler's C callback and its context; `release` runs when
+/// it is dropped (replaced, removed, or the app destroyed).
+struct CNavigateHandler {
+    handler: NavigateHandlerFn,
+    context: *mut c_void,
+    release: Option<unsafe extern "C" fn(context: *mut c_void)>,
+}
+
+// SAFETY: `handler` runs on the main thread only (the engine thread's
+// handler hops there) and `release` may run on any thread, as
+// `nsh_app_set_navigate_handler`'s contract says.
+unsafe impl Send for CNavigateHandler {}
+// SAFETY: as above; nothing is mutated through a shared reference.
+unsafe impl Sync for CNavigateHandler {}
+
+impl Drop for CNavigateHandler {
+    fn drop(&mut self) {
+        if let Some(release) = self.release {
+            // SAFETY: the contract of `nsh_app_set_navigate_handler`.
+            unsafe { release(self.context) };
+        }
+    }
+}
+
+/// Hears where the app goes (`navigate` of `nsh`), replacing the handler it
+/// had; `handler` `NULL` removes it. `handler` runs on the main thread, in
+/// the order the app made them, with each location the app went to and
+/// `replace`, true when the navigation replaced the current history entry
+/// (`history: "replace"`) rather than adding one. `release` (optional) is
+/// called with `context`, on any thread, when the handler is replaced or
+/// removed or the app destroyed.
+///
+/// # Safety
+///
+/// `app` must come from [`nsh_app_create`]; `handler` must be safe to call
+/// with `context` on the main thread, and `release` on any thread, until
+/// `release` is called (or, without `release`, until `app` is destroyed).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nsh_app_set_navigate_handler(
+    app: *mut NshApp,
+    handler: Option<NavigateHandlerFn>,
+    context: *mut c_void,
+    release: Option<unsafe extern "C" fn(context: *mut c_void)>,
+) {
+    // SAFETY: guaranteed by the caller.
+    let channel = unsafe { &*app }.view.host();
+    let Some(handler) = handler else {
+        channel.remove_navigate_handler();
+        if let Some(release) = release {
+            // SAFETY: guaranteed by the caller.
+            unsafe { release(context) };
+        }
+        return;
+    };
+    let callback = std::sync::Arc::new(CNavigateHandler {
+        handler,
+        context,
+        release,
+    });
+    channel.handle_navigate(move |navigation| {
+        // On the engine thread: the C handler runs on the main thread, whose
+        // queue keeps the navigations in order.
+        let callback = callback.clone();
+        let replace = matches!(navigation.history, nsh_engine::HistoryBehavior::Replace);
+        // A location has no control characters (`Location::join`), so no NUL.
+        let location = CString::new(navigation.location.as_str()).unwrap_or_default();
+        dispatch2::DispatchQueue::main().exec_async(move || {
+            // SAFETY: the contract of `nsh_app_set_navigate_handler`.
+            unsafe { (callback.handler)(callback.context, location.as_ptr(), replace) };
+        });
+    });
+}

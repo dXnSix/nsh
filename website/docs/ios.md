@@ -310,6 +310,34 @@ app.onOpenURL = { url in
 }
 ```
 
+## The app's location
+
+The app's [location](./navigation.md#locations) is where the user is in it, a path from the app's base such as
+`/sports/football?tab=live`. `location` sets and reads it: set before loading, it is where the app starts; set while
+the app runs, it takes the app there and the app's [`location()`](../modules/nsh.md#location) changes, which is how a
+deep link the host app handled opens its page. `onNavigate` hears each [`navigate`](../modules/nsh.md#navigate) of the
+app on the main thread, in order, with the new location and `replace`, `true` for `history: "replace"`.
+
+```swift
+// Before loading: where the app starts, such as where the user left it.
+app.location = UserDefaults.standard.string(forKey: "sports.location") ?? "/"
+try app.loadBundle(at: url)
+
+// Each `navigate` of the app, on the main thread.
+app.onNavigate = { location, replace in
+    UserDefaults.standard.set(location, forKey: "sports.location")
+    analytics.screen(location, replaced: replace)
+}
+
+// Later: a deep link the host app handled opens its page in the running app.
+app.location = "/sports/football?tab=live"
+```
+
+Reading `location` gives the latest of what the host app set and where the app went, normalized as URLs are
+(`/a/../b` reads `/b`); apps the view loads later start there. `onNavigate` hears the moves the app makes itself, and a
+location the host app sets goes to the app alone. A value that is not a path from the app's base (`https://…`, `sports`
+without its `/`) is ignored with a warning in the log, and the app stays where it is.
+
 ## Limits
 
 ```swift

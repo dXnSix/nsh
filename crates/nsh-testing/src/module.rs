@@ -268,6 +268,12 @@ impl Testing {
             .is_some_and(|h| !h.0.is_empty());
         let (host, record) = host_setup(options.host, &mut server);
         let manual_clock = options.clock.is_some();
+        let location = options
+            .location
+            .as_deref()
+            .map(nsh_core::location::Location::parse)
+            .transpose()
+            .map_err(|e| JsError::Type(format!("open({entry:?}): location: {e}")))?;
         let launch = Launch {
             storage: options.storage.unwrap_or_default(),
             network,
@@ -278,6 +284,7 @@ impl Testing {
             color_scheme: options.color_scheme,
             locale: options.locale,
             locale_settings: options.locale_settings.unwrap_or_default(),
+            location,
             reduced_motion: options.reduced_motion,
             platform: options.platform,
             clock: options
@@ -411,6 +418,9 @@ pub struct OpenOptions {
     /// over the locale's (it alone as the languages, its region's
     /// preferences) in UTC.
     pub locale_settings: Option<LocaleSettingsOptions>,
+    /// Where the app starts (`location()`): a path from the app's base
+    /// (`"/"`), as a link into the app or the embedding app opens it.
+    pub location: Option<String>,
     /// The user asked for less motion (false).
     pub reduced_motion: Option<bool>,
     /// The platform the app believes it runs on headless (`"ios"`; a
@@ -1291,6 +1301,8 @@ pub(crate) struct Launch {
     pub(crate) color_scheme: Option<ColorScheme>,
     pub(crate) locale: Option<String>,
     pub(crate) locale_settings: LocaleSettingsOptions,
+    /// Where the app starts, checked.
+    pub(crate) location: Option<nsh_core::location::Location>,
     pub(crate) reduced_motion: Option<bool>,
     /// The platform `open` named (headless: iOS when it named none).
     pub(crate) platform: Option<Platform>,
@@ -1989,6 +2001,29 @@ impl App {
     /// when there is nothing to go back from.
     pub async fn back(this: Instance<Self>) -> Result<(), JsError> {
         step(&this, |app| app.back()).await
+    }
+
+    /// Goes forward in the browser's history, as its forward button does:
+    /// the app goes to the entry's location (`location()`) and shows what it
+    /// names. The web's alone (`--target web`); elsewhere it rejects.
+    pub async fn forward(this: Instance<Self>) -> Result<(), JsError> {
+        step(&this, |app| app.forward()).await
+    }
+
+    /// Moves the app to `location` as the platform does: a link into the
+    /// app, the embedding app, the address bar (a path from the app's
+    /// base, or relative to where it is): `location()` follows. On the web
+    /// it is a new browser history entry.
+    pub async fn navigate(this: Instance<Self>, location: String) -> Result<(), JsError> {
+        step(&this, move |app| app.navigate(&location)).await
+    }
+
+    /// Where the app is, as the platform has it: a path from the app's base
+    /// (`"/sports/football?tab=live"`), where the app's `navigate` and the
+    /// platform's moves took it.
+    #[getter]
+    pub fn location(&self) -> Result<String, JsError> {
+        self.with(|app| app.location())
     }
 
     /// Answers the dialogs the app shows from now on (`AlertDialog.show`, action
