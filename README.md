@@ -52,27 +52,27 @@ change over on `fork/release` (a new tool, a new runner) before the next tag.
 ## Tags
 
 ```bash
-scripts/sync-main.sh tag ../nsh fork-<nsh version>-<n>
+scripts/sync-main.sh tag ../nsh nshx-<nsh version>-<n>
 ```
 
-Tags are `fork-<nsh version>-<n>` on the fork's `main`, never `v*` (the fork's copies of upstream's release
+Tags are `nshx-<nsh version>-<n>` on the fork's `main`, never `v*` (the fork's copies of upstream's release
 workflows run on those) and never named after a consumer; Cargo versions stay upstream's. The older `gamify-*` and
 `six-gamify-*` tags were deleted on 2026-10-21, so Gamify commits that pin them no longer build from a fresh clone.
 
 A pushed tag now produces a release: `.github/workflows/fork-release.yml` (from `fork/release`) checks that the tag is
-`fork-<workspace version>-<n>` on `main`, builds NSH's distribution (`cargo xtask dist`) on `macos-arm64`,
-`linux-x86_64`, `linux-arm64` and `windows-x86_64`, and publishes the GitHub release `fork-<nsh version>-<n>` with
+`nshx-<workspace version>-<n>` on `main`, builds NSH's distribution (`cargo xtask dist`) on `macos-arm64`,
+`linux-x86_64`, `linux-arm64` and `windows-x86_64`, and publishes the GitHub release `nshx-<nsh version>-<n>` with
 `nsh-<platform>.tar.gz` (`.zip` on Windows), a `.sha256` and an attestation for each. It takes about an hour. Those
 four platforms are required; `windows-arm64` is attached when it builds and never holds the release back. An existing
 tag is released by running the workflow by hand with its `tag`
-(`gh workflow run fork-release.yml --repo dXnSix/nsh -f tag=fork-<nsh version>-<n>`).
+(`gh workflow run fork-release.yml --repo dXnSix/nsh -f tag=nshx-<nsh version>-<n>`).
 
 After tagging, move every pin in Gamify: the `[patch.crates-io]` entries of `src/frontend/.cargo/config.toml` and the
 other places `cargo xtask nsh verify` names; Cargo rewrites the NSH entries of `Cargo.lock` on the next build. Until
 Gamify runs NSH through `rayx`, reinstall the CLI that `cargo xtask nsh verify` checks:
 
 ```bash
-cargo install --git https://github.com/dXnSix/nsh --tag fork-<nsh version>-<n> --locked nsh-cli
+cargo install --git https://github.com/dXnSix/nsh --tag nshx-<nsh version>-<n> --locked nsh-cli
 ```
 
 Once it does, run `rayx setup` in `src/frontend` instead: rayx reads the new pin from the lock and installs that tag's

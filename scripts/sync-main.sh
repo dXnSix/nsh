@@ -9,7 +9,7 @@
 #
 #   scripts/sync-main.sh upstream <nsh-checkout> [--pr]
 #   scripts/sync-main.sh branch <nsh-checkout> <feat/topic|fix/topic> [--push]
-#   scripts/sync-main.sh tag <nsh-checkout> fork-<nsh version>-<n>
+#   scripts/sync-main.sh tag <nsh-checkout> nshx-<nsh version>-<n>
 #   scripts/sync-main.sh save-resolutions <nsh-checkout>
 #
 # upstream  Merges the newest `upstream/main` into a new `sync/upstream-<sha>`
@@ -115,9 +115,9 @@ case "$cmd" in
     if [ "$push" = 1 ]; then git -C "$worktree" push --quiet origin "$topic"; fi
     ;;
   tag)
-    [ $# -ge 1 ] || die "tag needs fork-<nsh version>-<n>"
+    [ $# -ge 1 ] || die "tag needs nshx-<nsh version>-<n>"
     tag="$1"
-    case "$tag" in fork-*-*) ;; *) die "tags are fork-<nsh version>-<n>, never $tag" ;; esac
+    case "$tag" in nshx-*-*) ;; *) die "tags are nshx-<nsh version>-<n>, never $tag" ;; esac
     git_ fetch --quiet origin
     git_ tag -a "$tag" -m "Fork integration $tag: the fork's main at $(git_ rev-parse --short origin/main)" origin/main
     git_ push --quiet origin "refs/tags/$tag"
