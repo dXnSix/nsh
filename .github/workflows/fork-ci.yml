@@ -34,8 +34,12 @@ on:
 permissions:
   contents: read
 
+# A pull request's runs are grouped by its number, not by `github.ref`: a
+# `closed` event of a merged pull request runs with the base branch's ref
+# (`refs/heads/main`), so in a group by ref it would cancel the push run the
+# merge started on `main`.
 concurrency:
-  group: fork-ci-${{ github.ref }}
+  group: fork-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
