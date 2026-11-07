@@ -358,9 +358,12 @@ mod imp {
         const NAME: &'static str = "NshView";
         type Type = super::NshView;
         type ParentType = gtk::Widget;
-        // Range roles (sliders, progress bars) expose their value to
-        // assistive technologies through it (`crate::access`).
-        type Interfaces = (gtk::AccessibleRange,);
+        // `gtk::Accessible` again, as GtkWidget implements it: listed, its
+        // `AccessibleImpl` below takes the place of GtkWidget's (a scroll
+        // view's content in screen order). Range roles (sliders, progress
+        // bars) expose their value to assistive technologies through
+        // `gtk::AccessibleRange` (`crate::access`).
+        type Interfaces = (gtk::Accessible, gtk::AccessibleRange);
     }
 
     // Screen readers go through a scroll view's content, and a list's
