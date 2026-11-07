@@ -3,10 +3,10 @@
 // `TitleBar.test.tsx` runs it on the macOS host.
 import { mount, signal, Text, View } from "nsh";
 import { Button } from "nsh/base";
-import { titleBar, Window } from "nsh/desktop";
+import { currentWindow, titleBar } from "nsh/desktop";
 
 function App() {
-  Window.setTitleBar({ style: "hidden", height: 44 });
+  currentWindow().set({ titleBar: { style: "hidden", height: 44 } });
   const presses = signal(0);
   return (
     <View style={{ flex: 1 }}>
