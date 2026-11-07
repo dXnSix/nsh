@@ -34,11 +34,11 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   (relayed by the coordinator), and replied on the PR (issuecomment-6706402387) naming the commit and the red
   checks as `main`'s: `build`'s "every element page names a demo" and "the gallery's components are base pages, by
   name", `web`'s two `device.test.tsx` tests; #1158, with this change merged with `main` `beeb9fc7`, passes both.
+- 2026-11-07: **merged** into `main` as `dd41b7dd0` (12:54 UTC), with `1257aa9c0`.
 
 ---
 
-**Depends on:** no open PR (#981, merged, gave the pages their base). **Needed by:** the location PR of this series,
-whose navigations move the address of pages without `web.base`.
+**Depends on:** no open PR (#981, merged, gave the pages their base).
 
 ## Description
 

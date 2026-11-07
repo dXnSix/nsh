@@ -40,12 +40,18 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   is the `web.history` change alone. Replied on the PR (issuecomment-6705594898) asking to merge #1155 first. #1155
   then got `1257aa9c0` (its review's wording fix); this branch keeps the older wording until that merge of `main`,
   where `docs/dev/web.md`'s fetch paragraph may conflict: take `main`'s.
+- 2026-11-07: #1155 merged (`dd41b7dd0`) and GitHub found this conflicting; `abd68ac51` merges `main` `dd41b7dd`
+  in (pushed, a fast-forward). The one conflict was `docs/dev/web.md`'s fetch paragraph, `main`'s (#1155's
+  reworded) taken. The app's Auto-fix had again started a merge of the fork's `origin/main` (`fb2a3793`), aborted.
+  The diff against `main` is now the `web.history` change alone (the 9 files, +62 / −16), and GitHub lists only
+  them; mergeable. After the merge: `nsh-cli`'s `web::` and `nsh_json` tests (32), `nsh.test.mjs` (67), fmt and
+  `nsh-cli` clippy pass; of the other node tests only `text-browser.test.mjs`'s emoji width and link bidi fail, in
+  local Chrome, on files identical to `main`'s.
 
 ---
 
 **Depends on:** #1155 (`web: Load an app's files and images from where its page started`), for the series' order
-only: this PR uses none of its code, and its diff applies to `main` without it. **Needed by:** the location PR of this
-series (`web.history: false` also keeps the app's location out of the address bar).
+only: this PR uses none of its code, and its diff applies to `main` without it.
 
 ## Description
 
