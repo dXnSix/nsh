@@ -25,6 +25,15 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   `check`'s #1122 test under xvfb, which fails the same on `main` `05f77b7a` with only #1111's drop, dXnSix/nsh run
   42253107970; the web gallery's empty index twice; macOS's dock drawer press, #907). **Opened as longbridge/nsh#1155**
   on the user's go (head `122912de`, mergeable with `main` `6edf36a5`); the body below is what was posted.
+- 2026-11-07: huacnlee's review (5810472887, commented, LGTM, no inline threads) found `docs/dev/web.md`'s "the
+  browser's own `fetch` resolves the app's against the page" ambiguous. `1257aa9c0` (`docs: Say the app's fetch
+  resolves against its realm's base`) says the app realm's `fetch` resolves against its `<base>` (`player.baseURL`)
+  and a `fetch` in the page's own realm (the host module's) against the page's address; the Web pages already said
+  "the page's URL as the app started" and stay. Twin #148 on `24938b83`: iOS, Android and the rest pass, its four
+  failures the same as on `45b87d51` (the web gallery's, #1122, #907). Pushed as a fast-forward on the user's go
+  (relayed by the coordinator), and replied on the PR (issuecomment-6706402387) naming the commit and the red
+  checks as `main`'s: `build`'s "every element page names a demo" and "the gallery's components are base pages, by
+  name", `web`'s two `device.test.tsx` tests; #1158, with this change merged with `main` `beeb9fc7`, passes both.
 
 ---
 

@@ -37,7 +37,9 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   Dropping it without a force push means a new branch (`git cherry-pick dff9c0464` onto `main`) and a new PR; waiting
   for #1155 and then merging `main` in leaves only the `web.history` change in the diff. The user chose to wait for
   #1155: once it merges, merge `main` into `pr/web-urls/03-history-v2` (a fast-forward push) and check that the diff
-  is the `web.history` change alone.
+  is the `web.history` change alone. Replied on the PR (issuecomment-6705594898) asking to merge #1155 first. #1155
+  then got `1257aa9c0` (its review's wording fix); this branch keeps the older wording until that merge of `main`,
+  where `docs/dev/web.md`'s fetch paragraph may conflict: take `main`'s.
 
 ---
 
