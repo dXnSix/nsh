@@ -36,7 +36,7 @@ export function createEnvironment(reactive, invoke, dom) {
     if (options !== undefined && (options === null || typeof options !== "object")) throw new TypeError("navigate: options are an object");
     const history = options?.history;
     if (history !== undefined && history !== "push" && history !== "replace") throw new TypeError('navigate: history is "push" or "replace"');
-    setLocation(invoke(406, [url, history === "replace"]));
+    setLocation(invoke(407, [url, history === "replace"]));
   };
   const insets = reactive.context(() => fields.safeArea());
   const platform = { os: "web", version: "0.0", idiom: "desktop", desktop: true, catalyst: false,

@@ -254,7 +254,7 @@ impl Runtime {
             // `navigate(url, { history })` (`environment.js`): resolved
             // against the location, sent to the core, and the new location
             // returned for the realm's `location()`.
-            406 => {
+            407 => {
                 let url = args.index(0)?.as_string().ok_or_else(|| {
                     nsh_core::element::PropError("navigate: expected a URL string".into())
                 })?;
