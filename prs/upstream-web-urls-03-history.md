@@ -49,6 +49,11 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   local Chrome, on files identical to `main`'s.
   On the user's go: the body's first line now says #1155 is merged and the diff is this change alone, and a note on
   the PR (issuecomment-6707254294) says the same, naming `abd68ac51`.
+- 2026-11-07: upstream CI on `abd68ac5`: Website `build` fails at `browser_bootstrap --check` ("browser bootstrap is
+  stale"), as on `main`'s own pushes `8714a8b3` and `15ad42f0` (longbridge/nsh runs 42370875387, 42373733851);
+  `main`'s run on `dd41b7dd` was cancelled. The bootstrap is `nsh-bundler`'s `examples/browser-bootstrap.js` built
+  into `nsh-platform-web/web/browser/bootstrap.js`, and this branch's `nsh-bundler`, `nsh-platform-web`, `nsh-js` and
+  `nsh-core` are `main`'s, so nothing pushed.
 
 ---
 
