@@ -701,6 +701,9 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                     | Command::ScrollToEnd { .. }
                     // Desktops only.
                     | Command::Desktop(_)
+                    // The engine tells the embedding app
+                    // (`HostChannel::handle_navigate`).
+                    | Command::Navigate(_)
                     // No host answers `nsh/host` here (`Environment::host`):
                     // the core rejects the calls first.
                     | Command::HostCall { .. }

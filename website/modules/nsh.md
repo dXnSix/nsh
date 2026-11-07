@@ -1165,6 +1165,47 @@ view().direction(LayoutDirection::Rtl).flex_row().gap_2().child(text("First")).c
 - Safe area insets (Rust `safe_area()`; TSX `safeArea()`, `safeAreaInsets()`) and the software keyboard (Rust `keyboard_height()`; TSX `keyboardFrame()`) are in [Safe area and keyboard](#safe-area-and-keyboard).
 - Screen reader and reduced motion settings are in [Accessibility](#accessibility).
 
+## Location
+
+Where the user is in the app: a URL from the app's base, `/sports/football?tab=live#top`. Every platform has it: on the web it is the address bar's, the browser's back and forward included; an embedding app sets it and hears where the app goes; elsewhere it is `/` until the app navigates. It is reactive: what shows the page a location names follows the user's moves. The guide is [Navigation](../docs/navigation.md#locations).
+
+```rust tabs
+use nsh_core::prelude::*; // location, navigate, Location, HistoryBehavior, NavigateOptions
+```
+
+```tsx tabs
+import { location, navigate } from "nsh";
+```
+
+### location
+
+```ts
+const location: Accessor<Location>;
+
+interface Location {
+  readonly url: string;      // "/sports/football?tab=live#top"
+  readonly pathname: string; // "/sports/football"
+  readonly search: string;   // "?tab=live", "" without a query
+  readonly hash: string;     // "#top", "" without a fragment
+}
+```
+
+The app's location, its parts named as the DOM's `URL` names them. Rust: `location() -> Location`, with `as_str()`, `path()`, `query()` and `fragment()` (the last two without their `?` and `#`, `None` when there is none). On the web it is the page's address from the app's base (`nsh.json` `web.base`): at `https://example.com/apps/counter/sports/football` with the base `/apps/counter/` it is `/sports/football`. Headless tests start at `/` unless `open` sets `location`.
+
+### navigate
+
+```ts
+function navigate(url: string, options?: NavigateOptions): void;
+
+interface NavigateOptions {
+  history?: "push" | "replace"; // default "push"
+}
+```
+
+Goes to `url` in the app, resolved against the location as a link on a page there is: `"/teams"` from the base, `"football"` next to the last segment, `"?tab=live"` and `"#top"` on this path, `"../news"` up. `location()` is the new one at once, so code after the call reads it. The web adds a browser history entry for it, which the back button returns from; `history: "replace"` changes the current entry instead. A page or a dialog the app shows in the same turn shares the entry. The embedding app hears every navigation. Going to the location the app is at does nothing.
+
+Rust: `navigate(url, HistoryBehavior::Push)` (or `Replace`, or a `NavigateOptions`) returns `Err(InvalidLocation)` where TSX throws a `TypeError`: for another site's URL (`https://…`, `//…`, a scheme), which [`openUrl`](#openurl) opens.
+
 ## registerFont
 
 ```ts

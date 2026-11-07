@@ -255,6 +255,7 @@ events! {
     Notification = "onNotification": "The platform answered a [`Command::Notification`], or the user pressed a notification (root only; payload: the fields of [`crate::notifications::NotificationEvent`]).",
     UrlScheme = "onUrlScheme": "The system handed the app a URL that opens it (root only; payload: `url`, [`crate::url_scheme::URL`]); the core keeps those of the schemes the app claims ([`crate::url_scheme`]).",
     Audio = "onAudio": "A sound or a player reported (root only; payload: [`EventPayload::Audio`]).",
+    Location = "onLocation": "The platform moved the app to another location: the browser's back or forward, the embedding app (root only; payload: `location`, a path from the app's base, [`crate::location::Location`]).",
 
 }
 
@@ -1992,6 +1993,12 @@ pub enum Command {
         /// The URL ([`crate::open_url::check_url`] passed it).
         url: String,
     },
+    /// The app went to another location (on the root;
+    /// [`crate::element::navigate`], TS `navigate`): the web's player
+    /// writes it into the browser's history and address bar; the engine
+    /// tells the embedding app ([`crate::Core::take_navigations`]). Nothing
+    /// to report.
+    Navigate(crate::location::Navigation),
     /// Let the user pick a color anywhere on the screen (on the root; a
     /// color picker's eyedropper, [`crate::element::ambient::pick_screen_color`]):
     /// the system's color sampler or the browser's `EyeDropper`. Report it

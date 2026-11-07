@@ -724,11 +724,13 @@ async fn serve_client(mut socket: WebSocket, shared: Arc<Shared>) -> Result<(), 
         // Before the first bundle: what the app starts with.
         let storage = shared.test_storage.lock().expect("storage lock").clone();
         let trace = shared.test_trace.load(Ordering::Relaxed);
-        let environment = shared
-            .test_environment
-            .lock()
-            .expect("environment lock")
-            .clone();
+        let environment = Box::new(
+            shared
+                .test_environment
+                .lock()
+                .expect("environment lock")
+                .clone(),
+        );
         send(
             &mut socket,
             &ServerMessage::TestSetup {

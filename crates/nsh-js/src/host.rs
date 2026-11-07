@@ -1044,6 +1044,18 @@ impl Host {
         });
     }
 
+    /// Publishes the app's location to JS (`location()` of `nsh`). Call
+    /// before evaluating the bundle, then whenever it changed outside JS
+    /// (the platform moved the app, a Rust component navigated).
+    pub fn set_location(&self, location: &nsh_core::location::Location) {
+        self.guarded(Phase::Call, || {
+            self.cx.with(|cx| {
+                crate::env::set_location(cx.as_raw().as_ptr(), location);
+            });
+            self.run_jobs();
+        });
+    }
+
     /// Publishes the design tokens the app is drawn with to JS (`token()`
     /// of `nsh`). Call before evaluating the bundle, then on every change.
     pub fn set_tokens(&self, tokens: std::sync::Arc<nsh_core::element::Tokens>) {

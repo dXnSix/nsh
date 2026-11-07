@@ -16,6 +16,28 @@ export function createEnvironment(reactive, invoke, dom) {
       measurementSystem: "us", temperatureUnit: "fahrenheit" } };
   const fields = Object.fromEntries(Object.entries(initial).map(([name, value]) => [name, reactive.signal(value)]));
   const tokens = reactive.signal(0);
+  // `location()`: the app's location as `{ url, pathname, search, hash }`
+  // (the engine's `Location`, which resolves and checks it).
+  const locationOf = url => {
+    const hashAt = url.indexOf("#");
+    const beforeHash = hashAt < 0 ? url : url.slice(0, hashAt);
+    const queryAt = beforeHash.indexOf("?");
+    return Object.freeze({
+      url,
+      pathname: queryAt < 0 ? beforeHash : beforeHash.slice(0, queryAt),
+      search: queryAt < 0 ? "" : beforeHash.slice(queryAt),
+      hash: hashAt < 0 ? "" : url.slice(hashAt),
+    });
+  };
+  const location = reactive.signal(locationOf("/"));
+  const setLocation = url => { if (reactive.untracked(location).url !== url) location.set(locationOf(url)); };
+  const navigate = (url, options) => {
+    if (typeof url !== "string") throw new TypeError("navigate: expected a URL string");
+    if (options !== undefined && (options === null || typeof options !== "object")) throw new TypeError("navigate: options are an object");
+    const history = options?.history;
+    if (history !== undefined && history !== "push" && history !== "replace") throw new TypeError('navigate: history is "push" or "replace"');
+    setLocation(invoke(406, [url, history === "replace"]));
+  };
   const insets = reactive.context(() => fields.safeArea());
   const platform = { os: "web", version: "0.0", idiom: "desktop", desktop: true, catalyst: false,
     select(spec) { return "web" in spec ? spec.web : this.desktop ? spec.desktop ?? spec.default : spec.mobile ?? spec.default; } };
@@ -34,7 +56,8 @@ export function createEnvironment(reactive, invoke, dom) {
   const device = {
     windowSize: () => fields.window(), colorScheme: () => fields.colorScheme(), setColorScheme,
     fontScale: () => fields.fontScale(), pixelRatio: () => fields.pixelRatio(), locale: () => fields.locale(),
-    localeSettings: () => fields.localeSettings(), lifecycle: () => fields.lifecycle(), platform,
+    localeSettings: () => fields.localeSettings(), location: () => location(), navigate,
+    lifecycle: () => fields.lifecycle(), platform,
   };
   const accessibility = { reduceMotion: () => fields.reduceMotion(), screenReaderEnabled: () => fields.screenReader() };
   const api = {
@@ -62,6 +85,7 @@ export function createEnvironment(reactive, invoke, dom) {
       dom.rootProp("layoutDirectionRtl", next.rtl);
     },
     changedTokens() { tokens.update(value => value + 1); },
+    setLocation,
     setup(tailwind, theme, scheme, statusBar) {
       if (typeof tailwind === "string") dom.rootProp("tailwindTheme", tailwind);
       if (typeof theme === "string") { dom.rootProp("uiTheme", theme); invoke(403, [theme]); tokens.update(value => value + 1); }
