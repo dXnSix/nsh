@@ -54,6 +54,10 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   `main`'s run on `dd41b7dd` was cancelled. The bootstrap is `nsh-bundler`'s `examples/browser-bootstrap.js` built
   into `nsh-platform-web/web/browser/bootstrap.js`, and this branch's `nsh-bundler`, `nsh-platform-web`, `nsh-js` and
   `nsh-core` are `main`'s, so nothing pushed.
+- 2026-11-07: huacnlee's incremental review of `abd68ac5` (5812422712, commented, no inline threads): the diff is
+  the `web.history` change alone, the same as `dff9c046` but for `main`'s sentence it follows; no new findings; the
+  `build` failure is `main`'s stale bootstrap, which longbridge/nsh#1227 (open, regenerates `bootstrap.js`) fixes.
+  Still open: `web.history` is a new public `nsh.json` key, the owner's decision. Nothing to change or reply to.
 
 ---
 
