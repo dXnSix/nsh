@@ -27,7 +27,10 @@ Draft of a pull request for `longbridge/nsh`, not opened: the owner decides and 
   structure page, en and zh-CN: this PR's `web` row (`web.history`) beside #1189's `updater` row (OTA `packages`),
   both kept. The app's Auto-fix had started a merge of the fork's `origin/main` instead, which was aborted. After the
   merge: `nsh-cli`'s `web::` and `nsh_json` tests (30), the node tests (67), fmt and `nsh-cli` clippy pass; #1190's
-  lenient `nsh.json` reader takes `web.history` as a known key.
+  lenient `nsh.json` reader takes `web.history` as a known key. Upstream CI on `2512b170`: everything passes (Website
+  build and `web` included, now that main fixed #1111's) but Linux's new `gpui-gallery` (#1169): `form.test.tsx`'s
+  "Shift with a key types its shifted character" (`expected "A82" to be "A*@"`), which fails the same on `main`
+  `beeb9fc7`'s own push run (longbridge/nsh run 42341039969, job 128308614848).
 
 ---
 
