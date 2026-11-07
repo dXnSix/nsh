@@ -96,6 +96,10 @@ pub(crate) struct WindowIvars {
     /// AppKit leaves its frame as asked, also taller than its screen
     /// ([`crate::AppOptions::keep_size`]).
     keep_size: Cell<bool>,
+    /// The content's view a left press went to in place of the title bar
+    /// ([`pass_title_bar_press`]): its drags and its release follow it
+    /// there.
+    passed: RefCell<Option<Retained<NSView>>>,
 }
 
 impl WindowIvars {
@@ -104,6 +108,7 @@ impl WindowIvars {
             focusable: Cell::new(focusable),
             main: Cell::new(main),
             keep_size: Cell::new(keep_size),
+            passed: RefCell::new(None),
         }
     }
 }
@@ -138,6 +143,14 @@ define_class!(
             // SAFETY: NSWindow's own constraint.
             unsafe { msg_send![super(self), constrainFrameRect: rect, toScreen: screen] }
         }
+
+        #[unsafe(method(sendEvent:))]
+        fn send_event(&self, event: &NSEvent) {
+            if !pass_title_bar_press(self, self.ivars(), event) {
+                // SAFETY: NSWindow's own dispatch of the event.
+                unsafe { msg_send![super(self), sendEvent: event] }
+            }
+        }
     }
 );
 
@@ -161,6 +174,14 @@ define_class!(
         #[unsafe(method(canBecomeMainWindow))]
         fn can_become_main(&self) -> bool {
             false
+        }
+
+        #[unsafe(method(sendEvent:))]
+        fn send_event(&self, event: &NSEvent) {
+            if !pass_title_bar_press(self, self.ivars(), event) {
+                // SAFETY: NSPanel's own dispatch of the event.
+                unsafe { msg_send![super(self), sendEvent: event] }
+            }
         }
     }
 );
@@ -216,6 +237,66 @@ pub(crate) fn new_window(
         ]
     };
     Retained::into_super(window)
+}
+
+/// In a background app, hands `event` to the content when it is a left
+/// press AppKit would only make the window key with (or the drag or
+/// release of one handed on before): true when it did.
+///
+/// A window that is not key gets a left press only where the view accepts
+/// the first mouse; elsewhere the press only makes the window key. NSH's
+/// views all accept it, but a hidden title bar lies over the content's
+/// top, and where a view of the title bar's is what AppKit hits (macOS 15:
+/// the bar's whole width) it does not, so a press on the app's own views
+/// there would be lost in a window that never becomes key (`nsh test`'s,
+/// [`in_background`]). The key window hands such a press on to the content
+/// under it, so these windows do too, the press still the application's
+/// current event.
+fn pass_title_bar_press(window: &NSWindow, ivars: &WindowIvars, event: &NSEvent) -> bool {
+    let passed = &ivars.passed;
+    match event.r#type() {
+        NSEventType::LeftMouseDown => {
+            let view = title_bar_press_target(window, event);
+            passed.replace(view.clone());
+            let Some(view) = view else {
+                return false;
+            };
+            view.mouseDown(event);
+            true
+        }
+        NSEventType::LeftMouseDragged => {
+            let Some(view) = passed.borrow().clone() else {
+                return false;
+            };
+            view.mouseDragged(event);
+            true
+        }
+        NSEventType::LeftMouseUp => {
+            let Some(view) = passed.take() else {
+                return false;
+            };
+            view.mouseUp(event);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The content's view under left press `event` when, in a background app,
+/// AppKit would give it to a view outside the content that does not
+/// accept the first mouse: a hidden title bar's ([`pass_title_bar_press`]).
+fn title_bar_press_target(window: &NSWindow, event: &NSEvent) -> Option<Retained<NSView>> {
+    if window.isKeyWindow() || !in_background(MainThreadMarker::from(window)) {
+        return None;
+    }
+    let content = window.contentView()?;
+    let frame = crate::view::superview(&content)?;
+    // The frame view has no superview: it takes window points.
+    let hit = frame.hitTest(event.locationInWindow())?;
+    if hit.isDescendantOf(&content) || hit.acceptsFirstMouse(Some(event)) {
+        return None;
+    }
+    content.hitTest(frame.convertPoint_fromView(event.locationInWindow(), None))
 }
 
 /// Sets whether `window` may become key, when it is one of NSH's.
