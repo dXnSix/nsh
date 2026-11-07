@@ -184,6 +184,7 @@ base_parts!(
     dock => nsh_part_dock,
     resizable => nsh_part_resizable,
     plot => nsh_part_plot,
+    term => nsh_part_term,
 );
 
 /// Makes `TextView`'s formulas typeset: no app imports this. A published

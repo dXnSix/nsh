@@ -1390,6 +1390,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_part_of_nsh_base_has_its_gate_in_the_web_runtime() {
+        // The page calls `nsh_part_<name>` for each part an app uses
+        // (`linked_gates_of`), so the runtime must export one per part.
+        let runtime = include_str!("../../nsh-platform-web/src/lib.rs");
+        for (name, _) in nsh_base::parts::ALL {
+            assert!(
+                runtime.contains(&format!("{name} => nsh_part_{name},")),
+                "nsh-platform-web's base_parts! has no `{name} => nsh_part_{name}`"
+            );
+        }
+    }
+
+    #[test]
     fn names_carry_the_digest_of_the_content() {
         let a = hashed_name("assets/img/logo@2x.png", b"one");
         assert!(a.starts_with("assets/img/logo@2x."), "{a}");
