@@ -126,6 +126,11 @@ for entry in ${filtered[@]+"${filtered[@]}"}; do
   read -r file filter <<< "$entry"
   run "examples/gallery/tests/$file.test.tsx" --filter "$filter"
 done
+# The macOS host's own check of a press under a hidden title bar: on the
+# runners' macOS 15 the title bar's toolbar view is what AppKit hits there.
+if [[ "$target" == macos ]]; then
+  run crates/nsh-platform-macos/tests/host/TitleBar.test.tsx
+fi
 # Apps with Rust crates, in hosts built with them: a TSX app and a Rust app
 # (its root).
 run examples/rust-exports

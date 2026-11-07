@@ -52,11 +52,11 @@ mod tests {
     use super::*;
 
     #[test]
+    // InputConfig is non-exhaustive outside nsh-core.
+    #[allow(clippy::field_reassign_with_default)]
     fn only_a_field_without_caret_text_or_placeholder_shows_nothing() {
-        let mut c = InputConfig {
-            caret_hidden: true,
-            ..InputConfig::default()
-        };
+        let mut c = InputConfig::default();
+        c.caret_hidden = true;
         c.style.color = nsh_core::Color(0);
         assert!(shows_nothing(&c));
         c.placeholder = "Message".to_owned();
