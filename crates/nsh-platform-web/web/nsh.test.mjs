@@ -906,15 +906,15 @@ test("a page shown and a navigation in one turn are one entry", async () => {
   const { player, app, restore } = historyPlayer(browser);
   try {
     app.depth = 1;
-    player.navigated("/sports", false);
+    player.appNavigated("/sports", false);
     player.syncHistorySoon();
     await settle();
     assert.deepEqual(browser.urls(), ["/", "*/sports"]);
     assert.deepEqual(browser.history.state.nsh, { session: player.historySession, index: 1, depth: 1, url: "/sports" });
     // A navigation alone is an entry too; a replace changes the current one.
-    player.navigated("/sports/football?tab=live", false);
+    player.appNavigated("/sports/football?tab=live", false);
     await settle();
-    player.navigated("/sports/football?tab=table", true);
+    player.appNavigated("/sports/football?tab=table", true);
     await settle();
     assert.deepEqual(browser.urls(), ["/", "/sports", "*/sports/football"]);
     assert.equal(new URL(browser.location.href).search, "?tab=table");
@@ -1729,7 +1729,7 @@ test("back closes a dialog first, then goes back through the locations", async (
   const browser = fakeBrowser("https://example.test/app/");
   const { player, app, locations, restore } = historyPlayer(browser);
   try {
-    player.navigated("/a", false);
+    player.appNavigated("/a", false);
     await settle();
     app.depth = 1; // a dialog opens
     player.syncHistorySoon();
@@ -1754,7 +1754,7 @@ test("forward moves the app to the entry's location, whose page it shows again",
   const { player, app, locations, restore } = historyPlayer(browser);
   try {
     app.depth = 1;
-    player.navigated("/teams", false);
+    player.appNavigated("/teams", false);
     await settle();
     browser.history.back();
     await settle();
@@ -1798,12 +1798,12 @@ test("pages the app pops itself are gone back over, and the app that keeps the u
   const { player, app, restore } = historyPlayer(browser);
   try {
     app.depth = 2;
-    player.navigated("/a/b", false);
+    player.appNavigated("/a/b", false);
     await settle();
     assert.deepEqual(browser.urls(), ["/", "/a/b", "*/a/b"]);
     // The app's own back button pops both pages and replaces its location.
     app.depth = 0;
-    player.navigated("/a", true);
+    player.appNavigated("/a", true);
     await settle();
     await settle();
     assert.deepEqual(browser.urls(), ["*/a", "/a/b", "/a/b"]);
@@ -1834,7 +1834,7 @@ test("an app that navigates as it goes back keeps its location", async () => {
     const parents = ["/", "/teams"];
     player.back = () => {
       app.depth -= 1;
-      player.navigated(parents[app.depth], true);
+      player.appNavigated(parents[app.depth], true);
       return true;
     };
     browser.history.back();
@@ -1862,7 +1862,7 @@ test("a page that goes back answers after its motion, before the location moves"
   const { player, app, locations, restore } = historyPlayer(browser);
   try {
     app.depth = 1;
-    player.navigated("/teams", false);
+    player.appNavigated("/teams", false);
     await settle();
     // The page slides away; its `onDismiss` reaches the app after it,
     // and the app navigates to the page's parent.
@@ -1871,7 +1871,7 @@ test("a page that goes back answers after its motion, before the location moves"
       player.dismissing = 1;
       setTimeout(() => {
         player.dismissing = 0;
-        player.navigated("/", true);
+        player.appNavigated("/", true);
         player.syncHistorySoon();
       }, 30);
       return true;
@@ -1885,7 +1885,7 @@ test("a page that goes back answers after its motion, before the location moves"
     assert.deepEqual(browser.urls(), ["*/", "/teams"]);
     // An app that does not answer goes to the entry's location.
     app.depth = 1;
-    player.navigated("/news", false);
+    player.appNavigated("/news", false);
     await settle();
     player.back = () => {
       app.depth -= 1;
@@ -1932,12 +1932,12 @@ test("the page moves the app with setLocation; without the history, the app's lo
     assert.deepEqual(browser.urls(), ["/news", "*/news"]);
     // The page's moves are not the app's navigations.
     assert.deepEqual(navigations, []);
-    player.navigated("/teams", true);
+    player.appNavigated("/teams", true);
     assert.deepEqual(navigations, [{ location: "/teams", history: "replace" }]);
     assert.throws(() => player.setLocation("https://other.test/"), TypeError);
     player.history = false;
     const length = browser.entries.length;
-    player.navigated("/x", false);
+    player.appNavigated("/x", false);
     player.syncHistorySoon();
     await settle();
     assert.equal(browser.entries.length, length);
@@ -1964,4 +1964,39 @@ test("a mouse makes a desktop at any width, a touch screen a tablet or a phone (
     globalThis.matchMedia = saved.matchMedia;
     globalThis.screen = saved.screen;
   }
+});
+
+/** A player in a batch with a layout animation, and the navigations it reports. */
+function layoutAnimationPlayer() {
+  const navigations = [];
+  const { player } = fakePlayer({ onNavigate: (n) => navigations.push(n) });
+  const t = { duration: 300, delay: 0, easing: "ease" };
+  Object.assign(player, {
+    location: "/a",
+    layoutAnimation: { create: t, update: t, delete: t },
+    disappearing: [],
+    removals: [],
+  });
+  return { player, navigations };
+}
+
+test("a layout animation of a removed view leaves the app's location alone", () => {
+  const { player, navigations } = layoutAnimationPlayer();
+  const el = { _kind: "view", style: {} };
+  player.detach(el, { _kind: "view" });
+  assert.equal(el._dying, true, "it leaves with the layout animation");
+  assert.equal(player.location, "/a");
+  assert.deepEqual(navigations, []);
+});
+
+test("a layout animation leaves the views of navigation to navigation", () => {
+  const { player, navigations } = layoutAnimationPlayer();
+  for (const kind of ["modal", "header", "accessory"]) {
+    const el = { _kind: kind, style: {} };
+    player.detach(el, { _kind: "view" });
+    assert.ok(!el._dying, `a ${kind} does not take the layout animation`);
+    assert.equal(el._removing, true);
+  }
+  assert.equal(player.location, "/a");
+  assert.deepEqual(navigations, []);
 });

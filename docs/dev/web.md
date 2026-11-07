@@ -686,7 +686,7 @@ browsers' touches into what phones report:
 - **History and the location**: the player keeps the app's location (`player.location`, `nsh_core::location`): the
   page's address after the base's directory (`pageLocation`, `<base>index.html` reading as `/`) or `createPlayer`'s
   `location`, sent as the environment's `location` at the start (`nsh_environment` keeps it for `run`'s host
-  channel), then moved by `Command::Navigate` (`["cmd", 1, "navigate", location, replace]`, `navigated`, which also
+  channel), then moved by `Command::Navigate` (`["cmd", 1, "navigate", location, replace]`, `appNavigated`, which also
   calls `onNavigate`) and by the platform (`popstate`, `player.setLocation`), which report `onLocation`. When the
   app is the page (`window.top === window`, or `createPlayer`'s `history` option) every page above a stack's first,
   every dialog and every navigation is a history entry with `history.state.nsh = { session, index, depth, url }`:

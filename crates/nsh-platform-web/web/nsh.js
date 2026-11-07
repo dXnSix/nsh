@@ -5184,7 +5184,7 @@ class Player {
   }
 
   /** The app went to `url` (`navigate`, `Command::Navigate`). */
-  navigated(url, replace) {
+  appNavigated(url, replace) {
     this.location = url;
     if (this.history) {
       // A push in the turn wins over a replace.
@@ -5968,7 +5968,7 @@ class Player {
       case "hostCall": this.hostCall(args[0], args[1], args[2]); break;
       case "imageInfo": this.imageInfo(args[0], args[1]); break;
       case "back": this.defaultBack(); break;
-      case "navigate": this.navigated(args[0], args[1]); break;
+      case "navigate": this.appNavigated(args[0], args[1]); break;
       case "exitApp": {
         const app = this.app;
         // Finish the current engine call before releasing its surface.
