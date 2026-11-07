@@ -34,7 +34,11 @@ a GPUI Windows field wait). Nothing is opened: the owner says when.
 | Bundled files by path alone (#746 nits 1, 2) | side notes `pr-body-engine-asset-urls.md` | `pr/read-assets-nits/02-engine` `718a8261` | media types |
 | The browser runtime's fetch module (#746 nit 4) | side notes `pr-body-web-fetch-module.md` | `pr/web-fetch-module/01-web` `19908e9d` | — |
 
-Superseded: `upstream-web-open-url` (upstream #892 fixed it; the fork's own dXnSix/nsh#113 is closed). Pairs that conflict, so whichever merges second is
+Superseded: `upstream-web-open-url` (upstream #892 fixed it; the fork's own dXnSix/nsh#113 is closed). The
+`fork-0.4.0-1` sync fixes (dXnSix/nsh#154–#157, checked 2026-11-07 against `c015f2c5e`) are records only:
+`upstream-xtask-android-builtin-headers` (#1189 fixed it), `upstream-web-terminal-part` (#1152),
+`upstream-linux-accessible-order` (#1176), and `upstream-web-keyboard-context-menu`, which upstream does not need
+(#1011's `button === -1` passes the fork's Linux Chrome test without it). Pairs that conflict, so whichever merges second is
 rebased: the environment stack with register-font (`prelude.rs`), with location (the environment's parts) and
 with the #746 follow-ups (`platform.rs`); register-font with location and with the engine follow-up; the engine
 follow-up with location (`nsh-dev/src/server.rs`).
