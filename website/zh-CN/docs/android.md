@@ -260,7 +260,7 @@ nsh.setThemeOverrides("{ \"cssVars\": {"
 nsh.loadAssetBundle("orders");
 ```
 
-在加载之前或之后调用都可以：`bg-primary`、`rounded-(--radius)` 等类名立即更新样式，之后加载的每个应用在第一帧就带有这些覆盖。`setThemeOverrides(null)` 恢复应用自己的主题。
+在加载之前或之后调用都可以：`bg-primary`、`rounded-(--radius)` 等类名立即更新样式，之后加载的每个应用在第一帧就带有这些覆盖。`setThemeOverrides(null)` 恢复应用自己的主题。应用用它自己的主题读取器读取这个文件，所以文件没有设置的 `var(--name)` 取默认主题中该令牌的值。
 
 ## 应用打开的链接
 

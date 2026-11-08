@@ -579,15 +579,12 @@ fn root_config(
             Some(path)
         }
     };
+    // What the theme leaves out is warned of once the app's sets are
+    // described ([`theme_warnings`]): its theme types decide its names.
     if let Some(theme) = &theme {
         let json = fs::read_to_string(theme)?;
-        let (_, ignored) = nsh_base::Theme::from_json_lenient(&json)
+        nsh_core::element::theme_file::check(&json)
             .map_err(|e| anyhow::anyhow!("nsh.json: theme: {e}"))?;
-        for what in ignored {
-            crate::ui::warn(format_args!(
-                "nsh.json: theme: {what}, ignored (one of a newer NSH, or a typo)"
-            ));
-        }
     }
     let appearance = match config.get("appearance").and_then(|a| a.as_str()) {
         None | Some("system") => None,
@@ -1215,7 +1212,15 @@ impl RustApp {
                 text
             }
         };
-        read_description(&text, &self.crates, &what)
+        let sets = read_description(&text, &self.crates, &what)?;
+        if let Some(theme) = self.root.as_ref().and_then(|r| r.theme.as_deref()) {
+            for what in theme_warnings(&fs::read_to_string(theme)?, &sets)? {
+                crate::ui::warn(format_args!(
+                    "nsh.json: theme: {what}, ignored (one of a newer NSH, or a typo)"
+                ));
+            }
+        }
+        Ok(sets)
     }
 
     /// The app's headless runner (`nsh test`), built for this machine.
@@ -2459,8 +2464,7 @@ fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
     );
     if let Some(theme) = &root.theme {
         make.push_str(&format!(
-            "\n        .tokens(\n            nsh_base::Theme::from_json(include_str!({:?}))\n                \
-             .expect(\"nsh.json: theme\")\n                .into_tokens(),\n        )",
+            "\n        .theme(include_str!({:?}))",
             theme.to_string_lossy()
         ));
     }
@@ -2524,6 +2528,23 @@ fn stamp(program: &Path) -> anyhow::Result<String> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     Ok(format!("{}:{}", metadata.len(), modified.as_nanos()))
+}
+
+/// What `nsh.json`'s theme `json` leaves out, which the CLI warns of: read
+/// against the theme types `sets` register (a name no type declares, a
+/// value of another kind), else as `nsh/base` reads it (a value it cannot
+/// read).
+fn theme_warnings(json: &str, sets: &[SetDescription]) -> anyhow::Result<Vec<String>> {
+    let types = nsh_core::element::description::theme_types(sets)
+        .map_err(|e| anyhow::anyhow!("the app's theme types: {e}"))?;
+    let (_, ignored) = match types {
+        Some(types) => types.read(Some(json)),
+        None => nsh_base::Theme::from_json_lenient(json)
+            .map(|(theme, ignored)| (theme.into_tokens(), ignored))
+            .map_err(|e| e.0),
+    }
+    .map_err(|e| anyhow::anyhow!("nsh.json: theme: {e}"))?;
+    Ok(ignored)
 }
 
 /// The sets of `crates` (`what` the steps call them) in `text`, the output
@@ -4047,6 +4068,146 @@ panic = \"abort\"
                 let name = bin_name(&BRIDGES[..count], "describe");
                 assert!(name.starts_with("nsh-app-"), "{name}");
             }
+        }
+    }
+
+    /// A Rust app's theme reaches its root as the theme file
+    /// (`Root::theme`), which the engine reads with the UI set's reader, at
+    /// every place the generated code makes the root.
+    mod root_theme {
+        use super::*;
+
+        fn root(theme: Option<&str>) -> RootConfig {
+            RootConfig {
+                component: "App".into(),
+                theme: theme.map(Into::into),
+                appearance: None,
+                app_id: None,
+                status_bar: None,
+                url_schemes: Vec::new(),
+                window: None,
+                translations: None,
+            }
+        }
+
+        #[test]
+        fn the_root_takes_the_theme_file() {
+            let code = super::super::root_fn("", "app_native", &root(Some("/app/theme.json")));
+            assert!(
+                code.contains(".theme(include_str!(\"/app/theme.json\"))"),
+                "{code}"
+            );
+            assert!(!code.contains(".tokens("), "{code}");
+            assert!(!code.contains("Theme::from_json"), "{code}");
+            let code = super::super::root_fn("", "app_native", &root(None));
+            assert!(!code.contains(".theme("), "{code}");
+        }
+
+        /// Every file the workspace generates that makes the root gives it
+        /// the theme so.
+        #[test]
+        fn every_generated_root_takes_the_theme_file() {
+            let dir = std::env::temp_dir().join(format!("nsh-root-theme-{}", std::process::id()));
+            let theme = dir.join("theme.json");
+            let app = app(
+                &dir,
+                &[("app-native", dir.join("native"))],
+                Some(root(Some(&theme.to_string_lossy()))),
+            );
+            app.write_workspace().unwrap();
+            let mut roots = 0;
+            let mut stack = vec![app.workspace.clone()];
+            while let Some(path) = stack.pop() {
+                for entry in std::fs::read_dir(&path).unwrap().flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if path.extension().is_some_and(|e| e == "rs") {
+                        let code = std::fs::read_to_string(&path).unwrap();
+                        if code.contains("fn app_root()") {
+                            roots += 1;
+                            assert!(code.contains(".theme(include_str!("), "{}", path.display());
+                            assert!(!code.contains("Theme::from_json"), "{}", path.display());
+                        }
+                    }
+                }
+            }
+            assert!(roots > 1, "{roots}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// `cargo run`'s binary gives the root `nsh.json`'s theme.
+        #[test]
+        fn the_cargo_run_template_reads_the_theme() {
+            let main = include_str!("templates/rust/main.rs");
+            assert!(main.contains("root = root.theme(theme);"), "{main}");
+            assert!(main.contains("config.get(\"theme\")"), "{main}");
+        }
+    }
+
+    /// Under the app's theme types, `nsh.json`'s theme is checked against
+    /// them: a name no type declares is warned of.
+    mod typed_theme {
+        use nsh_core::element::{
+            AdaptiveColor, AppTheme, Registry, Role, TokenKind, TokenSpec, Tokens,
+            description::SetDescription,
+        };
+
+        #[derive(Debug, Clone, PartialEq, Default)]
+        struct Ds;
+
+        impl AppTheme for Ds {
+            type Patch = ();
+
+            fn token_specs() -> &'static [TokenSpec] {
+                static SPECS: std::sync::LazyLock<Vec<TokenSpec>> =
+                    std::sync::LazyLock::new(|| {
+                        vec![
+                            TokenSpec::new("surface-overlay", TokenKind::Color).role(Role::Popover),
+                        ]
+                    });
+                &SPECS
+            }
+
+            fn write_tokens(&self, _: &str, out: &mut Tokens) {
+                out.set_color("surface-overlay", AdaptiveColor::rgb(0x111111, 0x111111));
+            }
+
+            fn read_tokens(_: &Tokens, _: &str) -> Self {
+                Ds
+            }
+
+            fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+        }
+
+        /// Under types: names no type declares; a `var()` of a type's
+        /// token is no warning.
+        #[test]
+        fn a_theme_is_checked_against_the_described_types() {
+            let mut registry = Registry::ui_set("ds/native");
+            registry.theme::<Ds>();
+            let sets = [SetDescription::from(&registry)];
+            let json = r##"{ "cssVars": { "light": { "surface-overlay": "#333333", "brand": "#000000", "popover": "var(--surface-overlay)" } } }"##;
+            let warned = super::super::theme_warnings(json, &sets).unwrap();
+            assert_eq!(
+                warned,
+                [
+                    "`brand`: no theme type declares it",
+                    "`popover`: the token its role is mapped onto, `surface-overlay`, is set too"
+                ]
+            );
+        }
+
+        /// Without types, what `nsh/base` leaves out, as before.
+        #[test]
+        fn without_types_nsh_base_reads_it() {
+            let set = SetDescription::from(&Registry::ui_set("app/native"));
+            let warned = super::super::theme_warnings(
+                r##"{ "cssVars": { "light": { "brand": "#zz" } } }"##,
+                &[set],
+            )
+            .unwrap();
+            assert_eq!(warned, ["`brand`: #zz is no color"]);
         }
     }
 }

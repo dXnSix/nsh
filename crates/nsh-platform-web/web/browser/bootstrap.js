@@ -5200,7 +5200,7 @@
 			if (options !== void 0 && (options === null || typeof options !== "object")) throw new TypeError("navigate: options are an object");
 			const history = options?.history;
 			if (history !== void 0 && history !== "push" && history !== "replace") throw new TypeError("navigate: history is \"push\" or \"replace\"");
-			setLocation(invoke(409, [url, history === "replace"]));
+			setLocation(invoke(411, [url, history === "replace"]));
 		};
 		const insets = reactive.context(() => fields.safeArea());
 		const platform = {
@@ -5256,6 +5256,14 @@
 				},
 				setTheme(theme) {
 					invoke(406, [theme]);
+					tokens.update((value) => value + 1);
+				},
+				updateTheme(theme) {
+					invoke(409, [theme]);
+					tokens.update((value) => value + 1);
+				},
+				resetTheme(names) {
+					invoke(410, [names]);
 					tokens.update((value) => value + 1);
 				}
 			},

@@ -58,6 +58,17 @@ pub(crate) struct Ambient {
     main_close_press: Option<Signal<(u64, crate::desktop::CloseReason)>>,
     /// The app's location ([`location`]), made when first read or set.
     location: Option<Signal<Location>>,
+    /// The theme types read of the tokens ([`super::theme_of`]): by type,
+    /// the tokens read and the theme.
+    themes: FxHashMap<TypeId, (Arc<Tokens>, Box<dyn Any>)>,
+}
+
+/// The surface's cache of theme types read ([`super::theme_of`]). `f` runs
+/// with the surface's data borrowed: it runs no app code.
+pub(crate) fn with_theme_cache<R>(
+    f: impl FnOnce(&mut FxHashMap<TypeId, (Arc<Tokens>, Box<dyn Any>)>) -> R,
+) -> R {
+    with_data(|d| f(&mut d.ambient.themes))
 }
 
 impl Ambient {
@@ -447,6 +458,26 @@ pub fn tokens() -> Arc<Tokens> {
 /// `nsh_base::Theme`).
 pub fn set_tokens(tokens: impl Into<Tokens>) {
     act(Action::Tokens(tokens.into()));
+}
+
+/// Changes some of the app's design tokens: each token `tokens` has takes
+/// its value, the others stay as they are ([`set_tokens`] replaces them
+/// all). The change applies in order with the app's other actions, so two
+/// updates in one turn both take, the later over the earlier; what reads
+/// a changed token follows in the same frame. TS: `updateTheme`.
+pub fn update_tokens(tokens: impl Into<Tokens>) {
+    act(Action::UpdateTokens(tokens.into()));
+}
+
+/// Puts the design tokens `names` back to their values in the app's theme
+/// (the UI set's defaults with `nsh.json`'s theme, or the theme last set
+/// whole with [`set_tokens`] or `setTheme`), undoing [`update_tokens`] for
+/// them; a name the theme lacks is removed. The other tokens stay as they
+/// are. TS: `resetTheme`.
+pub fn reset_tokens<S: Into<Box<str>>>(names: impl IntoIterator<Item = S>) {
+    act(Action::ResetTokens(
+        names.into_iter().map(Into::into).collect(),
+    ));
 }
 
 /// The width of `text` on one line in `font` (the CSS `font` shorthand; an

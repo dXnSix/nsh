@@ -36,6 +36,12 @@ NSH 提供无样式的 `nsh-base` crate（TSX 中为 `nsh/base`），对应 [`gp
 `bg-primary/90` 或 `theme().primary.opacity(0.9)` 这样的 token 透明度保留了颜色的语义来源。用户自选颜色、图片像素、
 颜色选择器的选中值等属于数据，外围控件仍使用主题 token。
 
+有自己 token 结构的设计系统（按层级划分的表面、按强调程度划分的操作、自己的圆角和字号刻度）把它定义为[主题类型](./rust.md#主题类型)：
+一个带有 `#[derive(AppTheme)]` 的令牌结构体，由它的 UI 集用 `registry.theme::<T>()` 注册。它的 token 取代 shadcn 的 token 成为应用的主题：主题文件
+按名称设置它们，类名使用它们（`bg-surface-raised`、`rounded-card`），类型把 NSH 的角色（`popover`、`primary`、`border`）映射到自己的
+token 上，使 `nsh/base` 和各平台自己的控件都以它绘制。应用自己的 token 组成设计系统类型旁边的第二个类型。结构与 shadcn 一致的应用保留默认
+主题，并把自己的 token 加入主题文件。
+
 完成前，检查新增外观代码中的原始颜色值与色板类、共享组件的使用情况，并在浅色、深色和目标平台上操作各状态。无法验证的平台
 应明确记录，不能用一张截图代替所有目标的验证。
 
@@ -617,6 +623,10 @@ view()
 
 通过应用的主题文件（`nsh.json` 的 `"theme"`）修改主题，或让嵌入应用提供它自己的主题：主题变化时，引用 token 的类名和读取
 `theme()` 的 Rust 绑定都会原生地重新设置样式，无需运行任何 JavaScript。把 token 的值复制到自己的 signal 中的代码就不再跟随它。
+
+带主题类型的设计系统，其组件在绑定中读取类型的字段，`.bg(move || theme_of::<DsTheme>().surface_raised)`：这次读取是响应式的，
+token 每次变化后只读取一次，所以每个绑定都可以调用它。运行时用 `update_theme::<DsTheme>(patch)` 修改类型的 token，用
+`reset_theme::<DsTheme>()` 恢复；两者都和主题文件一样原生地重新设置样式。
 
 向外绘制的焦点环需要空间，带 `overflow: hidden`（`overflow-hidden`）的祖先会裁掉它。优先让布局留出空间；产品确实需要大量
 裁剪时，在控件内部绘制获得焦点的状态，不能悄悄消除键盘焦点。

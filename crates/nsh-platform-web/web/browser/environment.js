@@ -36,7 +36,7 @@ export function createEnvironment(reactive, invoke, dom) {
     if (options !== undefined && (options === null || typeof options !== "object")) throw new TypeError("navigate: options are an object");
     const history = options?.history;
     if (history !== undefined && history !== "push" && history !== "replace") throw new TypeError('navigate: history is "push" or "replace"');
-    setLocation(invoke(409, [url, history === "replace"]));
+    setLocation(invoke(411, [url, history === "replace"]));
   };
   const insets = reactive.context(() => fields.safeArea());
   const platform = { os: "web", version: "0.0", idiom: "desktop", desktop: true, catalyst: false,
@@ -70,6 +70,9 @@ export function createEnvironment(reactive, invoke, dom) {
     // nsh-js's `setTheme` (`env.rs`): the engine checks and applies it, or
     // throws its `TypeError`; what read a token follows once it took.
     setTheme(theme) { invoke(406, [theme]); tokens.update(value => value + 1); },
+    // `updateTheme` and `resetTheme` (`env.rs`), the same way.
+    updateTheme(theme) { invoke(409, [theme]); tokens.update(value => value + 1); },
+    resetTheme(names) { invoke(410, [names]); tokens.update(value => value + 1); },
   };
   return {
     api, insets, host: () => fields.host(), titleBar: () => fields.titleBar(),

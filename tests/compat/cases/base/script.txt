@@ -3504,6 +3504,99 @@ expect theme radius-card 14
 style id:themed backgroundColor #138a5aff
 covers [nsh] setTheme
 
+# base-update-theme
+# Some of the app's tokens changed while it runs, over nsh.json's theme;
+# `resetTheme` puts them back.
+tap id:case-base-update-theme
+expect update up #138a5aff
+expect update radius-card 14
+style id:updated backgroundColor #138a5aff
+# `token()` reads it at once and classes follow; the tokens it does not
+# set stay nsh.json's (`radius-card`) and the default's (`primary`).
+tap id:update
+expect update result update #2563ebff
+expect update up #2563ebff
+expect update radius-card 14
+expect update primary #171717ff
+style id:updated backgroundColor #2563ebff
+# Its dark value in the dark appearance.
+tap id:dark
+expect update up #93c5fdff
+style id:updated backgroundColor #93c5fdff
+tap id:system
+expect update up #2563ebff
+# Two updates in a row both take.
+tap id:two
+expect update result two
+expect update primary #dc2626ff
+expect update radius-card 20
+expect update up #2563ebff
+# An update with a value NSH cannot read (no color in the dark
+# appearance): a TypeError, and no token changes.
+tap id:bad
+expect update result refused TypeError
+expect update up #2563ebff
+style id:updated backgroundColor #2563ebff
+covers [nsh] updateTheme
+# The tokens named go back to nsh.json's; the others stay.
+tap id:reset
+expect update result reset
+expect update up #138a5aff
+expect update radius-card 14
+expect update primary #dc2626ff
+style id:updated backgroundColor #138a5aff
+# Without names, every token.
+tap id:all
+expect update result all
+expect update primary #171717ff
+covers [nsh] resetTheme
+
+# base-named-classes
+# A number token of a Tailwind namespace is a named class: nsh.json's
+# `radius-card` (14px) is `rounded-card`.
+tap id:case-base-named-classes
+style id:named borderRadius 14
+style id:corner borderTopLeftRadius 14
+# Tailwind's own names keep their meaning.
+style id:tailwind borderRadius 8
+covers [props] class
+
+# base-dark-numbers
+# A number with a dark value: `token()` and the class naming it follow the
+# appearance; a number given once is the same in both.
+tap id:case-base-dark-numbers
+tap id:set
+expect numbers result set
+tap id:light
+expect numbers radius-card 14
+expect numbers gap 4
+style id:card borderRadius 14
+tap id:dark
+expect numbers radius-card 6
+expect numbers gap 4
+style id:card borderRadius 6
+tap id:light
+expect numbers radius-card 14
+style id:card borderRadius 14
+covers [nsh] token
+covers [nsh] setColorScheme
+
+# base-shadow-tokens
+# A shadow token: the class naming it and `token()` follow the appearance.
+tap id:case-base-shadow-tokens
+tap id:set
+expect shadows result set
+tap id:light
+expect shadows raised 0px 2px 4px 0px #0000004d
+style id:raised boxShadow 0 2 4 0 #0000004d
+tap id:dark
+expect shadows raised 0px 4px 8px 0px #ffffff33
+style id:raised boxShadow 0 4 8 0 #ffffff33
+tap id:light
+style id:raised boxShadow 0 2 4 0 #0000004d
+covers [nsh] token
+covers [props] class
+
 # base-resizable
 tap id:case-base-resizable
 # The sidebar starts at its `size`, the main panel takes the rest; the

@@ -271,7 +271,42 @@ import type {
 | [`Toast`、`ToastStack`、`ToastManager`](../elements/toast.md) | `toast()`、`toast_stack()`、`ToastManager` | 无样式的 toast：语义根、层叠的栈、它们的生命周期。 |
 | 页面和对话框的 `statusBar` | `.status_bar(..)` | 页面或对话框显示期间的状态栏。见[状态栏](#status-bar)。 |
 
-在 Rust 中，`theme()` 以设计 token 的形式读取应用的主题（`theme().primary`、`theme().radius`），与 TSX 的[主题类](../docs/tailwind.md#主题-token)使用同样的 token。
+在 Rust 中，`theme()` 以设计 token 的形式读取应用的主题（`theme().primary`、`theme().radius`），与 TSX 的[主题类](../docs/tailwind.md#主题-token)使用同样的 token。它就是 `theme_of::<Theme>()`：`nsh_base::Theme` 是一个
+[主题类型](../docs/rust.md#主题类型)，即由 shadcn 的 31 种颜色、`radius`、`font-sans` 和 `font-mono` 组成的 `AppTheme`，每个 token
+承担与其同名的角色。它保持未注册，因此是默认的 token 来源，应用注册的类型会取代它。shadcn 应用用 `update_theme::<Theme>(tokens)`
+修改部分 token，补丁是按名称组织的 `Tokens`，`reset_theme::<Theme>()` 再把它们恢复。
+
+<a id="theme-roles"></a>
+
+### 主题角色
+
+NSH 自己绘制的部分通过**角色**读取主题：`theme()` 的各个字段、移动端标签栏的强调色、默认字体，以及各平台自己的控件（Linux
+的菜单、iOS 和 Android 的提示框）。角色是所绘制内容的名字，它读取同名的 token，除非主题把它映射到另一个 token：
+
+| 角色 | 由谁绘制 |
+|---|---|
+| `background`、`foreground` | `theme().background` / `foreground`；嵌入在宿主主题中的 GPUI 应用的界面 |
+| `card`、`card-foreground`、`secondary`、`secondary-foreground`、`muted`、`input`、`chart-1` … `chart-5`、`sidebar` … `sidebar-ring` | 同名的 `theme()` 字段 |
+| `popover`、`popover-foreground` | `theme().popover` / `popover_foreground`；Linux 的菜单；Android 的提示框 |
+| `primary`、`primary-foreground` | `theme().primary` / `primary_foreground`；标签栏中选中的标签；iOS 和 Android 提示框的按钮 |
+| `muted-foreground` | `theme().muted_foreground`；Linux 菜单中的快捷键；Android 提示框的消息 |
+| `accent`、`accent-foreground` | `theme().accent` / `accent_foreground`；Linux 菜单中高亮的项 |
+| `destructive` | `theme().destructive`；Android 提示框中的破坏性操作 |
+| `border`、`ring` | `theme().border` / `ring`；Linux 菜单的边框和分隔线（`border`） |
+| `selection` | `theme().selection()`（没有时为 22 % 的 `primary`） |
+| `radius` | `theme().radius` |
+| `font-sans` | 所有文本的默认字体；`theme().font_sans` |
+| `font-mono` | `theme().font_mono` |
+
+角色不是 token，也不是类名：主题有名为 `primary` 的 token 时，`bg-primary` 才是一个类名。在 Rust 中，角色是
+`nsh_core::element::Role`（`Role::Popover.name()` 为 `"popover"`），`Tokens::with_roles` 把角色映射到 token
+（`tokens.with_roles([(Role::Popover, "surface-overlay")])`），之后 `tokens.role_color(Role::Popover)` 读取它。
+没有映射时，每个角色读取同名的 token，所以 shadcn 主题的显示与以往相同。只有应用有自己的主题时（`Tokens::is_themed`，由核心设置），
+各平台的控件才采用主题的颜色；使用默认主题的应用保留系统的提示框颜色。
+
+已注册的[主题类型](../docs/rust.md#主题类型)把角色映射到自己的 token 上（`TokenSpec::role`），`theme()` 的字段随之读取这些 token：
+设计系统把 `Role::Popover` 映射到 `surface-overlay` 时，`theme().popover` 就是 `surface-overlay`，`nsh/base` 的组件、标签栏和各平台的控件
+都以该设计系统绘制。
 
 <a id="controls"></a>
 

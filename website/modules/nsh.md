@@ -6,7 +6,7 @@ order: 2
 
 # nsh
 
-`nsh` is the core module: the reactive API (signals, computed values, effects, context), `mount`, `token`, `setTheme`, the host elements `View`, `Text`, `Scroll` and `Overlay`, [selectable views](#selectable-views), [the safe area and the keyboard](#safe-area-and-keyboard), [animation](#animation), [the device and its environment](#device), [`PanResponder`](#panresponder), the [clipboard](#clipboard), the [photo picker](#picker), [speech recognition](#speech), [sound](#sound), [storage](#storage), the [host channel](#host), [keyboard shortcuts](#keymap), [native components and modules](#nativecomponent-and-nativemodule), [accessibility](#accessibility), and the TypeScript types of elements, styles and events. The reactive graph itself runs natively in Rust; reading a signal is a call into the runtime that costs a few nanoseconds, and only your own closures run in the JavaScript interpreter.
+`nsh` is the core module: the reactive API (signals, computed values, effects, context), `mount`, `token`, `setTheme`, `updateTheme`, `resetTheme`, the host elements `View`, `Text`, `Scroll` and `Overlay`, [selectable views](#selectable-views), [the safe area and the keyboard](#safe-area-and-keyboard), [animation](#animation), [the device and its environment](#device), [`PanResponder`](#panresponder), the [clipboard](#clipboard), the [photo picker](#picker), [speech recognition](#speech), [sound](#sound), [storage](#storage), the [host channel](#host), [keyboard shortcuts](#keymap), [native components and modules](#nativecomponent-and-nativemodule), [accessibility](#accessibility), and the TypeScript types of elements, styles and events. The reactive graph itself runs natively in Rust; reading a signal is a call into the runtime that costs a few nanoseconds, and only your own closures run in the JavaScript interpreter.
 
 ```ts
 import { batch, cleanup, computed, context, effect, ErrorBoundary, mount, Overlay, Scroll, signal, split, Text, token, untracked, View } from "nsh";
@@ -254,7 +254,8 @@ function token<K extends keyof Tokens>(name: K): Tokens[K];
 ```
 
 The design token `name` of the app's theme (`"theme"` in `nsh.json`, over shadcn/ui's tokens) in the appearance shown:
-a color as `#rrggbbaa`, a length as a number of points, a font as its family name. Names are the theme's CSS variables
+a color as `#rrggbbaa`, a length as a number of points, a font as its family name, a shadow as its CSS `box-shadow`
+layers. Names are the theme's CSS variables
 without `--` (`primary`, `muted-foreground`, `radius`, `font-mono`, and the app's own, such as `up`). Reading it is
 reactive: a component, memo or effect that reads a token runs again when the theme or the appearance changes.
 `Tokens` lists the app's tokens with their types; NSH writes it into `.nsh/types/nsh/tokens.d.ts` from the theme. For
@@ -288,8 +289,8 @@ back the theme the app was built with.
 
 The theme is read whole: when a value cannot be read (a color NSH does not know, such as `#zz` or `lab()`, a `var()`
 that names no color, or a value that is no color in one appearance where the other's is), `setTheme` throws a
-`TypeError` that names each one, and the theme shown stays. Values of no kind a token has, such as shadows, are left
-out as they are from `nsh.json`'s. Build the new theme from the app's own, so the tokens its classes name keep a value
+`TypeError` that names each one, and the theme shown stays. Values of no kind a token has, such as a letter spacing in
+`em`, are left out as they are from `nsh.json`'s. Build the new theme from the app's own, so the tokens its classes name keep a value
 (`bg-up` when `up` is in `nsh.json`'s theme), and change what differs. Rust: `set_tokens(theme.into())` of an
 `nsh_base::Theme` ([Theme tokens](../docs/tailwind.md#theme-tokens)).
 
@@ -305,6 +306,33 @@ function brand(color: string) {
 
 brand("#e11d48");
 setTheme(null); // the app's theme again
+```
+
+## updateTheme, resetTheme
+
+```ts
+function updateTheme(theme: Theme): void;
+function resetTheme(names?: (keyof Tokens)[]): void;
+```
+
+`updateTheme` changes the tokens `theme` sets while the app runs and keeps the others, where `setTheme` replaces them
+all. `theme` has the format of `setTheme`'s and is read the same way: whole, or not at all (a value NSH cannot read
+throws a `TypeError` naming it, and no token changes). `token()` reads the new values right after the call, and the
+classes naming the tokens, `nsh/base` and Rust components' `theme()` follow with the next frame. Two updates in a row
+both take, the later over the earlier. A `var(--name)` naming a token the update does not set is that token's value
+shown now, and a value of no kind a token has is left out, so that token keeps its value. An embedding app's
+[theme overrides](../docs/tailwind.md#theme-tokens) still win.
+
+`resetTheme` puts the tokens `names` back to their values in the app's theme, `nsh.json`'s or the one `setTheme` set;
+without names, every token. A name the theme does not have is removed. The tokens it does not name stay as they are.
+Rust: `update_tokens` and `reset_tokens` ([Theme](../docs/rust.md#theme)).
+
+```tsx
+import { resetTheme, updateTheme } from "nsh";
+
+// One brand color, light and dark; the rest of the theme stays.
+updateTheme({ cssVars: { light: { primary: "#e11d48" }, dark: { primary: "#fb7185" } } });
+resetTheme(["primary"]); // the app's primary again
 ```
 
 ## View, Text, Scroll, Overlay

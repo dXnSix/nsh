@@ -134,8 +134,9 @@ pub(crate) struct RootViewIvars {
     /// The embedding app's locale and text size over the system's
     /// ([`Surface::set_host_environment`]).
     host: Cell<nsh_engine::HostEnvironment>,
-    /// The embedding app's theme overrides ([`Surface::set_host_tokens`]).
-    host_tokens: RefCell<Option<nsh_engine::Tokens>>,
+    /// The embedding app's theme overrides ([`Surface::set_host_tokens`],
+    /// [`Surface::set_host_theme`]).
+    host_theme: RefCell<Option<HostTheme>>,
     /// Font files the embedding app registers ([`Surface::add_font`]).
     fonts: RefCell<Vec<Vec<u8>>>,
     /// Keyboard notification registrations.
@@ -310,7 +311,7 @@ impl RootView {
             lifecycle: Cell::new(lifecycle(mtm)),
             environment: Cell::new(None),
             host: Cell::default(),
-            host_tokens: RefCell::new(None),
+            host_theme: RefCell::new(None),
             fonts: RefCell::new(Vec::new()),
             observers: RefCell::new(Vec::new()),
             url_schemes: RefCell::new(Vec::new()),
@@ -785,11 +786,13 @@ impl RootView {
             test_model: self.ivars().test_model.clone(),
         };
         // The embedding app's theme overrides are in the first frame.
-        let tokens = self.ivars().host_tokens.borrow().clone();
+        let theme = self.ivars().host_theme.borrow().clone();
         let fonts = self.ivars().fonts.borrow().clone();
         let engine = match Engine::start_with(config, CoreTextEngine::default, sink, |control| {
-            if tokens.is_some() {
-                control.set_tokens(tokens);
+            match theme {
+                Some(HostTheme::Tokens(tokens)) => control.set_tokens(Some(tokens)),
+                Some(HostTheme::File(json)) => control.set_theme_overrides(json),
+                None => {}
             }
             for font in fonts {
                 control.register_font(font);
@@ -1039,9 +1042,23 @@ impl Surface {
     /// app's own again): sent to the running app at once, and to every app
     /// started later before its first frame.
     pub fn set_host_tokens(&self, tokens: Option<nsh_engine::Tokens>) {
-        *self.view.ivars().host_tokens.borrow_mut() = tokens.clone();
+        *self.view.ivars().host_theme.borrow_mut() = tokens.clone().map(HostTheme::Tokens);
         if let Some(running) = &*self.view.ivars().running.borrow() {
             running.engine.control().set_tokens(tokens);
+        }
+    }
+
+    /// The embedding app's theme overrides as a theme file, which the
+    /// engine reads with the app's UI set against its defaults (`None`: the
+    /// app's own theme again): sent to the running app at once, and to every
+    /// app started later before its first frame.
+    pub fn set_host_theme(&self, json: Option<String>) {
+        *self.view.ivars().host_theme.borrow_mut() = json.clone().map(HostTheme::File);
+        if let Some(running) = &*self.view.ivars().running.borrow() {
+            match json {
+                Some(json) => running.engine.control().set_theme_overrides(json),
+                None => running.engine.control().set_tokens(None),
+            }
         }
     }
 
@@ -1222,4 +1239,13 @@ fn os_version(mtm: MainThreadMarker) -> (u16, u16) {
         let mut parts = version.split('.').map(|p| p.parse().unwrap_or(0));
         (parts.next().unwrap_or(0), parts.next().unwrap_or(0))
     })
+}
+
+/// The embedding app's theme overrides a surface keeps for the apps it
+/// starts: tokens made already ([`Surface::set_host_tokens`]), or a theme
+/// file the engine reads ([`Surface::set_host_theme`]).
+#[derive(Clone)]
+enum HostTheme {
+    Tokens(nsh_engine::Tokens),
+    File(String),
 }

@@ -218,7 +218,7 @@ pub(crate) struct Surface {
     /// The embedding app's theme overrides
     /// ([`crate::AppView::set_theme_overrides`]): sent to every engine the
     /// surface starts, before its first frame.
-    pub(crate) host_tokens: RefCell<Option<nsh_engine::Tokens>>,
+    pub(crate) host_theme: RefCell<Option<String>>,
     /// JS asked for a display frame.
     js_frame: Cell<bool>,
     /// Batches that arrived while animations run, and what came after
@@ -351,7 +351,7 @@ impl Surface {
             appearance: Cell::default(),
             chunks: RefCell::new(None),
             host_environment: Cell::default(),
-            host_tokens: RefCell::new(None),
+            host_theme: RefCell::new(None),
             js_frame: Cell::new(false),
             queued: RefCell::default(),
             frame_callbacks: RefCell::default(),
@@ -431,12 +431,12 @@ impl Surface {
         *self.rx.borrow_mut() = Some(rx);
         *self.pending.borrow_mut() = pending;
         // The embedding app's theme overrides are in the first frame.
-        let tokens = self.host_tokens.borrow().clone();
+        let theme = self.host_theme.borrow().clone();
         // The displays are there as the app first renders.
         let displays = crate::window_state::displays(self.mtm);
         let setup = |control: &EngineControl| {
-            if tokens.is_some() {
-                control.set_tokens(tokens);
+            if let Some(json) = theme {
+                control.set_theme_overrides(json);
             }
             control.set_displays(displays);
         };

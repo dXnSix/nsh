@@ -772,14 +772,15 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                         }
                     }
                     // `SystemUi.dialog` draws alerts and action sheets in
-                    // them: each of `DIALOG_TOKENS`, light then dark (0: the
-                    // system's). An app without a theme of its own (its
-                    // tokens the default theme's) keeps the system's colors.
+                    // them: each of `DIALOG_ROLES`, light then dark (0: the
+                    // system's). An app without a theme of its own (the
+                    // core says so: `Tokens::is_themed`) keeps the system's
+                    // colors.
                     Command::Tokens(tokens) => {
                         e.int(27);
-                        let themed = nsh_base::tokens_of(None).is_ok_and(|d| *tokens != d);
-                        for name in DIALOG_TOKENS {
-                            let color = tokens.color(name).filter(|_| themed);
+                        let themed = tokens.is_themed();
+                        for role in DIALOG_ROLES {
+                            let color = tokens.role_color(role).filter(|_| themed);
                             for c in [color.map(|c| c.light), color.map(|c| c.dark)] {
                                 e.int(c.map_or(0, |c| argb(c.into())));
                             }
@@ -792,15 +793,15 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
     e
 }
 
-/// The tokens alerts and action sheets are drawn in (`SystemUi.java`'s
+/// The roles alerts and action sheets are drawn in (`SystemUi.java`'s
 /// order): the dialog, its title, its message, its buttons and a
 /// destructive action.
-const DIALOG_TOKENS: [&str; 5] = [
-    "popover",
-    "popover-foreground",
-    "muted-foreground",
-    "primary",
-    "destructive",
+const DIALOG_ROLES: [nsh_core::element::Role; 5] = [
+    nsh_core::element::Role::Popover,
+    nsh_core::element::Role::PopoverForeground,
+    nsh_core::element::Role::MutedForeground,
+    nsh_core::element::Role::Primary,
+    nsh_core::element::Role::Destructive,
 ];
 
 /// An audio command after its opcode (47), as `Audio.command` reads it:

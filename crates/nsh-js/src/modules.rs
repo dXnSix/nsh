@@ -115,6 +115,8 @@ pub(crate) struct NativeModule {
 const NSH: &[Item] = &[
     crate::env::TOKEN_EXPORT,
     crate::env::SET_THEME_EXPORT,
+    crate::env::UPDATE_THEME_EXPORT,
+    crate::env::RESET_THEME_EXPORT,
     (
         "signal",
         Export::Function(reactive::signal, 2),

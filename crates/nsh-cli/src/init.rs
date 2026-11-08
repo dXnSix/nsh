@@ -357,11 +357,11 @@ pub(crate) fn write_types(dir: &Path) {
     definitions.extend(nsh_bundler::type_definitions());
     // The theme's errors are the build's to report: its names are the
     // default's meanwhile.
-    let tokens =
-        nsh_bundler::theme_tokens(dir).unwrap_or_else(|_| nsh_base::Theme::default().into_tokens());
+    let tokens = nsh_bundler::theme_tokens_of(dir, &sets)
+        .unwrap_or_else(|_| nsh_base::Theme::default().into_tokens());
     definitions.push((
         "nsh/tokens.d.ts".to_owned(),
-        nsh_bundler::tokens_declaration(&tokens),
+        nsh_bundler::tokens_declaration_of(&tokens, &sets),
     ));
     remove_stale(&types, &types, &definitions);
     let files = definitions

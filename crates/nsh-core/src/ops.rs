@@ -2612,6 +2612,13 @@ pub enum Prop {
     /// root.
     #[prop(js = "uiTheme", with = crate::js::host_values::ui_theme, internal)]
     UiTheme(Box<str>),
+    /// Some of the app's design tokens change: those a theme file (JSON,
+    /// the format of [`Prop::UiTheme`]) sets, on the root (`nsh`'s
+    /// `updateTheme`).
+    UiThemeUpdate(Box<str>),
+    /// The app's design tokens of these names (`None`: every one) go back
+    /// to its theme's, on the root (`nsh`'s `resetTheme`).
+    UiThemeReset(Option<Vec<Box<str>>>),
     /// An image option.
     #[prop(nested)]
     Image(ImageProp),
