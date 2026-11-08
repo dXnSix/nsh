@@ -8,6 +8,7 @@ pub use crate::element::{
     AccessibilityState,
     Accessible,
     AdaptiveColor,
+    AdaptiveShadow,
     Align,
     Animated,
     AnimatedNode,

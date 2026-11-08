@@ -766,7 +766,8 @@ A theme file is shadcn's registry `cssVars`, as shadcn and tweakcn export them: 
 where `dark` leaves them out). Values are CSS: colors (hex, `rgb()`, `hsl()`, `oklch()`, `oklab()`, names,
 `color-mix()`, `var(--x[, fallback])` of the same appearance's tokens, the file's or the default's), lengths (`rem`
 is 16 pt, `px`) and font family lists for `font-*` names (the first family that is not generic, `system-ui` /
-`sans-serif` / ... meaning the system's); values of no kind a token has (shadows, letter spacing) are left out. A
+`sans-serif` / ... meaning the system's); a `shadow-*` value that reads as `box-shadow` layers is a shadow token
+(`Tokens::shadow`, per appearance), and values of no kind a token has (a letter spacing in `em`) are left out. A
 value written as a color that is none (`#zz`, `lab()`, a `var()` that names no color) is left out and reported, and so
 is one that is no color in one appearance where the other's is a color (that color is both's): `nsh build` warns of
 them, the core logs them, `setTheme` refuses the file for them. An

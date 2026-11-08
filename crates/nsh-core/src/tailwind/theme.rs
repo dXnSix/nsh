@@ -86,6 +86,8 @@ pub(crate) struct ClassTokens {
     /// The dark values of the numbers that have one of their own.
     dark_numbers: FxHashMap<Box<str>, f32>,
     fonts: FxHashMap<Box<str>, Arc<str>>,
+    /// Box shadows, per appearance (`shadow-raised`).
+    shadows: FxHashMap<Box<str>, crate::element::AdaptiveShadow>,
 }
 
 static DEFAULT_TOKENS: LazyLock<Arc<ClassTokens>> =
@@ -99,15 +101,20 @@ impl ClassTokens {
             numbers: theme.numbers().map(|(k, n)| (k.into(), n)).collect(),
             dark_numbers: theme.dark_numbers().map(|(k, n)| (k.into(), n)).collect(),
             fonts: theme.fonts().map(|(k, f)| (k.into(), f.clone())).collect(),
+            shadows: theme
+                .shadows()
+                .map(|(k, s)| (k.into(), s.clone()))
+                .collect(),
         }
     }
 
-    /// The names of the colors, the numbers and the fonts.
+    /// The names of the colors, the numbers, the fonts and the shadows.
     pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
         self.colors
             .keys()
             .chain(self.numbers.keys())
             .chain(self.fonts.keys())
+            .chain(self.shadows.keys())
             .map(|n| &**n)
     }
 
@@ -117,6 +124,8 @@ impl ClassTokens {
         self.colors.len() == other.colors.len()
             && self.numbers.len() == other.numbers.len()
             && self.fonts.len() == other.fonts.len()
+            && self.shadows.len() == other.shadows.len()
+            && self.shadows.keys().all(|k| other.shadows.contains_key(k))
             && self.colors.keys().all(|k| other.colors.contains_key(k))
             && self.numbers.keys().all(|k| other.numbers.contains_key(k))
             && self.fonts.keys().all(|k| other.fonts.contains_key(k))
@@ -139,6 +148,13 @@ impl ClassTokens {
         };
         if let Some(family) = self.fonts.get(utility) {
             return Some(format!("font-[family-name:{}]", family.replace(' ', "_")));
+        }
+        // A shadow token is the class of its name (`shadow-raised`), as
+        // Tailwind's `--shadow-*` are: its layers as an arbitrary value.
+        if utility.starts_with("shadow-")
+            && let Some(shadow) = self.shadows.get(utility)
+        {
+            return Some(format!("shadow-[{}]", shadow.css(dark).replace(' ', "_")));
         }
         if utility.contains('(') {
             // `(--name)` and `(hint:--name)`, Tailwind 4's shorthand of
@@ -164,8 +180,12 @@ impl ClassTokens {
                     .get(name)
                     .filter(|_| hint.is_none_or(|h| h == "color"));
                 let font = self.fonts.get(name).filter(|_| hint == Some("family-name"));
+                let shadow = self.shadows.get(name).filter(|_| hint.is_none());
                 match (color, self.number(name, dark)) {
                     (Some(c), _) => hex(&mut out, c),
+                    (None, _) if let Some(s) = shadow => {
+                        out.push_str(&s.css(dark).replace(' ', "_"))
+                    }
                     (None, _) if let Some(f) = font => out.push_str(&f.replace(' ', "_")),
                     (None, Some(n)) if hint == Some("number") => {
                         let _ = write!(out, "{n}");

@@ -175,8 +175,8 @@ pub use self::{
     scrollable::Scrollable,
     services::{Fetch, HttpResponse, Prefetch},
     style::{
-        AdaptiveColor, BorderCurve, FontWeight, LayoutDirection, StyleRefinement, Styled,
-        WritingDirection,
+        AdaptiveColor, AdaptiveShadow, BorderCurve, FontWeight, LayoutDirection, StyleRefinement,
+        Styled, WritingDirection,
     },
     system::{
         CallCx, Cleanup, ErrorClass, ErrorFields, Held, IntoThrown, JsError, Later, Local, Locals,

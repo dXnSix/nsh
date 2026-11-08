@@ -3581,6 +3581,22 @@ style id:card borderRadius 14
 covers [nsh] token
 covers [nsh] setColorScheme
 
+# base-shadow-tokens
+# A shadow token: the class naming it and `token()` follow the appearance.
+tap id:case-base-shadow-tokens
+tap id:set
+expect shadows result set
+tap id:light
+expect shadows raised 0px 2px 4px 0px #0000004d
+style id:raised boxShadow 0 2 4 0 #0000004d
+tap id:dark
+expect shadows raised 0px 4px 8px 0px #ffffff33
+style id:raised boxShadow 0 4 8 0 #ffffff33
+tap id:light
+style id:raised boxShadow 0 2 4 0 #0000004d
+covers [nsh] token
+covers [props] class
+
 # base-resizable
 tap id:case-base-resizable
 # The sidebar starts at its `size`, the main panel takes the rest; the

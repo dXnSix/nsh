@@ -426,6 +426,8 @@ unsafe extern "C" fn token(
         }
         Some(Token::Number(n)) => number(n),
         Some(Token::Font(f)) => string(cx, &f),
+        // Box shadows as CSS writes them, of the appearance shown.
+        Some(Token::Shadow(s)) => string(cx, &s.css(dark)),
         _ => UNDEFINED,
     }
 }

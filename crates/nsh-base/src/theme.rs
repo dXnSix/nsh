@@ -425,8 +425,8 @@ mod tests {
         assert_eq!(theme.number("radius-card"), Some(14.0));
         assert_eq!(theme.font_sans.as_deref(), Some("Inter"));
         assert_eq!(theme.font_mono.as_deref(), Some("JetBrains Mono"));
-        // Of no kind a token has.
-        assert_eq!(theme.tokens().get("shadow-sm"), None);
+        // A box shadow is a shadow token.
+        assert!(theme.tokens().shadow("shadow-sm").is_some());
         // Keys left out keep the default.
         assert_eq!(theme.muted, Theme::default().muted);
         assert!(Theme::from_json("not json").is_err());
@@ -487,7 +487,8 @@ mod tests {
         let brand = theme.color("brand").unwrap();
         assert_eq!((hex(brand.light), hex(brand.dark)), (0xe11d48, 0xe11d48));
         assert_eq!(theme.color("edge"), None);
-        assert_eq!(theme.tokens().get("shadow-sm"), None);
+        // A box shadow is a shadow token.
+        assert!(theme.tokens().shadow("shadow-sm").is_some());
         // A file read whole lists nothing.
         let (_, ignored) = read_tokens(Some(DEFAULT_THEME)).unwrap();
         assert!(ignored.is_empty(), "{ignored:?}");

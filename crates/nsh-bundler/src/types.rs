@@ -62,6 +62,7 @@ pub fn tokens_declaration(tokens: &nsh_core::element::Tokens) -> String {
         .map(|(n, _)| (n, "string"))
         .chain(tokens.numbers().map(|(n, _)| (n, "number")))
         .chain(tokens.fonts().map(|(n, _)| (n, "string")))
+        .chain(tokens.shadows().map(|(n, _)| (n, "string")))
         .collect();
     names.sort_unstable();
     names.dedup_by_key(|(n, _)| *n);
@@ -145,5 +146,25 @@ mod tests {
             );
             assert!(block.contains("import(\"./types\").ImageAsset"), "{block}");
         }
+    }
+}
+
+/// Shadow tokens are typed in `tokens.d.ts` as the CSS `token()` gives.
+#[cfg(test)]
+mod shadow_tokens {
+    #[test]
+    fn shadow_tokens_are_strings() {
+        let mut tokens = nsh_core::element::Tokens::default();
+        tokens.set_shadow("shadow-raised", [nsh_core::BoxShadow::default()]);
+        tokens.set_number("radius", 10.0);
+        let declaration = super::tokens_declaration(&tokens);
+        assert!(
+            declaration.contains("    \"shadow-raised\": string;"),
+            "{declaration}"
+        );
+        assert!(
+            declaration.contains("    \"radius\": number;"),
+            "{declaration}"
+        );
     }
 }

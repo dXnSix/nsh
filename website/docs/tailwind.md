@@ -269,6 +269,13 @@ A token's name is its CSS variable's without `--`, as the theme file writes it: 
   as shadcn's `tracking-normal: 0em` always was. They work under variants and follow the theme as every token class
   does. `text-` is a color utility's too: there a color of the same name stays first; elsewhere the longer utility
   wins (`inset-shadow-card` is the inset shadow's color `card`).
+- **Shadow tokens.** A `shadow-<n>` entry written as CSS `box-shadow` (`"shadow-raised": "0 1px 2px #0000001a"`, a
+  value per appearance in `light` and `dark`) is a shadow token: the class `shadow-raised` and `shadow-(--shadow-raised)`
+  draw its layers, in the appearance shown. Other `shadow-*` names a theme has (shadcn's `shadow-color`,
+  `shadow-opacity`) stay the colors and numbers they are; `shadow-sm`, `shadow-md`, … stay Tailwind's classes, as other
+  Tailwind names do, with no warning (themes exported from tweakcn write them): read such a token with
+  `shadow-(--shadow-sm)`. In Rust, `.adaptive_shadow(move || tokens().shadow("shadow-raised").cloned().unwrap_or_default())`
+  follows the theme and the appearance; `token("shadow-raised")` is its CSS.
 - **Tailwind's names win.** A Tailwind name keeps its meaning when a token's namespaced class would be the same:
   `"radius-lg"` leaves `rounded-lg` Tailwind's, and `"spacing-md"` makes `p-md` the token's while `max-w-md` stays
   Tailwind's width. The build names the classes a token is not (`` `spacing-md` is no class where Tailwind's or a

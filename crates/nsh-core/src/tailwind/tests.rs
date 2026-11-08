@@ -2476,3 +2476,154 @@ mod number_per_appearance {
         assert_ne!(parse(&theme, "rounded-card").deps() & deps::THEME, 0);
     }
 }
+
+/// Shadow design tokens: `Tokens`' shadows, a theme file's `shadow-*`
+/// box shadows per appearance, and the classes naming them.
+mod shadow_tokens {
+    use super::*;
+    use crate::element::{AdaptiveShadow, Token, Tokens, theme_file};
+
+    fn layer(y: f32, rgba: u32) -> crate::BoxShadow {
+        crate::BoxShadow {
+            offset_y: px(y),
+            blur: px(2.0 * y),
+            color: Color(rgba),
+            ..Default::default()
+        }
+    }
+
+    fn raised() -> AdaptiveShadow {
+        AdaptiveShadow::new([layer(1.0, 0x0000_001a)], [layer(2.0, 0xffff_ff33)])
+    }
+
+    /// The box shadows `classes` give with `tokens` in the appearance
+    /// `dark`.
+    fn shadows(tokens: &Tokens, classes: &str, dark: bool) -> Vec<crate::BoxShadow> {
+        let mut theme = Theme::default();
+        theme.set_tokens(tokens);
+        let list = parse(&theme, classes);
+        assert!(list.unknown().is_empty(), "{classes}: {:?}", list.unknown());
+        let mut style = Style::default();
+        let group = |_: &str| 0;
+        let context = Context {
+            env: ClassEnvironment {
+                dark,
+                ..Default::default()
+            },
+            window: crate::geometry::size_pt(390.0, 844.0),
+            rtl: false,
+            states: 0,
+            position: 0,
+            group: &group,
+        };
+        list.apply(
+            &context,
+            &theme,
+            &mut style,
+            &mut ClassProps::default(),
+            |_| {},
+        );
+        style
+            .view
+            .effects
+            .map(|e| e.box_shadows.clone())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn tokens_hold_shadows_by_name() {
+        let mut t = Tokens::default();
+        t.set_shadow("shadow-raised", raised());
+        assert_eq!(t.shadow("shadow-raised"), Some(&raised()));
+        assert_eq!(t.get("shadow-raised"), Some(Token::Shadow(raised())));
+        let mut top = Tokens::default();
+        top.set_shadow("shadow-flat", [layer(0.0, 0)]);
+        let t = top.over(&t);
+        assert!(t.shadow("shadow-raised").is_some() && t.shadow("shadow-flat").is_some());
+        assert!(!t.is_empty());
+        assert_eq!(raised().css(false), "0px 1px 2px 0px #0000001a");
+    }
+
+    #[test]
+    fn a_theme_files_shadows_are_read_per_appearance() {
+        let (t, ignored) = theme_file::parse(
+            r#"{ "cssVars": {
+                "theme": { "shadow-sm": "0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10)",
+                           "shadow-color": "hsl(0 0% 0%)", "shadow-opacity": "0.1", "shadow-offset-x": "0" },
+                "light": { "shadow-raised": "0 1px 2px #0000001a" },
+                "dark": { "shadow-raised": "0 2px 4px #ffffff33" } } }"#,
+            &Tokens::default(),
+        )
+        .unwrap();
+        assert!(ignored.is_empty(), "{ignored:?}");
+        assert_eq!(t.shadow("shadow-raised"), Some(&raised()));
+        assert_eq!(t.shadow("shadow-sm").map(|s| s.light.len()), Some(2));
+        // shadcn's other `shadow-*` names stay what they were.
+        assert!(t.color("shadow-color").is_some());
+        assert_eq!(t.number("shadow-opacity"), Some(0.1));
+        assert_eq!(t.number("shadow-offset-x"), Some(0.0));
+        assert!(t.shadow("shadow-color").is_none());
+    }
+
+    #[test]
+    fn a_shadow_token_is_its_class_and_follows_the_appearance() {
+        let mut t = crate::element::tokens::sample();
+        t.set_shadow("shadow-raised", raised());
+        for classes in ["shadow-raised", "shadow-(--shadow-raised)"] {
+            assert_eq!(
+                shadows(&t, classes, false),
+                [layer(1.0, 0x0000_001a)],
+                "{classes}"
+            );
+            assert_eq!(
+                shadows(&t, classes, true),
+                [layer(2.0, 0xffff_ff33)],
+                "{classes}"
+            );
+        }
+        let mut theme = Theme::default();
+        theme.set_tokens(&t);
+        assert!(parse(&theme, "hover:shadow-raised").unknown().is_empty());
+        assert_ne!(parse(&theme, "shadow-raised").deps() & deps::THEME, 0);
+        // Tailwind's own size keeps its meaning.
+        t.set_shadow("shadow-sm", [layer(9.0, 0xff00_00ff)]);
+        assert_eq!(
+            shadows(&t, "shadow-sm", false),
+            shadows(&Tokens::default(), "shadow-sm", false)
+        );
+        // A theme's `shadow-sm`, which Tailwind's keeps, is read by name.
+        let mut sized = Tokens::default();
+        sized.set_shadow("shadow-sm", [layer(9.0, 0xff00_00ff)]);
+        assert_eq!(
+            shadows(&sized, "shadow-(--shadow-sm)", false),
+            [layer(9.0, 0xff00_00ff)]
+        );
+        // A name no token has stays unknown, and a shadow token named
+        // without the namespace is no class.
+        assert!(!parse(&theme, "shadow-nothing").unknown().is_empty());
+        let mut bare = Tokens::default();
+        bare.set_shadow("card", raised());
+        let mut theme = Theme::default();
+        theme.set_tokens(&bare);
+        assert!(!parse(&theme, "card").unknown().is_empty());
+        // Several layers, negative spread and inset round-trip through the
+        // class.
+        let mut t = Tokens::default();
+        let layers = [
+            crate::BoxShadow {
+                offset_x: px(-1.0),
+                offset_y: px(2.0),
+                blur: px(3.0),
+                spread: px(-1.0),
+                color: Color(0x1122_3344),
+                inset: false,
+            },
+            crate::BoxShadow {
+                inset: true,
+                ..layer(1.0, 0xffff_ff80)
+            },
+        ];
+        t.set_shadow("shadow-deep", layers);
+        assert_eq!(shadows(&t, "shadow-deep", false), layers);
+    }
+}

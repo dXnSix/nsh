@@ -188,7 +188,8 @@ impl Runtime {
                         "#{:08x}",
                         nsh_core::Color::from(if dark { c.dark } else { c.light }).0
                     )),
-                    None => Ok(Value(0)),
+                    Some(Token::Shadow(s)) => Value::string(&s.css(dark)),
+                    _ => Ok(Value(0)),
                 }
             }
             403 => {

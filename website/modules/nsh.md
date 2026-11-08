@@ -254,7 +254,8 @@ function token<K extends keyof Tokens>(name: K): Tokens[K];
 ```
 
 The design token `name` of the app's theme (`"theme"` in `nsh.json`, over shadcn/ui's tokens) in the appearance shown:
-a color as `#rrggbbaa`, a length as a number of points, a font as its family name. Names are the theme's CSS variables
+a color as `#rrggbbaa`, a length as a number of points, a font as its family name, a shadow as its CSS `box-shadow`
+layers. Names are the theme's CSS variables
 without `--` (`primary`, `muted-foreground`, `radius`, `font-mono`, and the app's own, such as `up`). Reading it is
 reactive: a component, memo or effect that reads a token runs again when the theme or the appearance changes.
 `Tokens` lists the app's tokens with their types; NSH writes it into `.nsh/types/nsh/tokens.d.ts` from the theme. For
@@ -288,8 +289,8 @@ back the theme the app was built with.
 
 The theme is read whole: when a value cannot be read (a color NSH does not know, such as `#zz` or `lab()`, a `var()`
 that names no color, or a value that is no color in one appearance where the other's is), `setTheme` throws a
-`TypeError` that names each one, and the theme shown stays. Values of no kind a token has, such as shadows, are left
-out as they are from `nsh.json`'s. Build the new theme from the app's own, so the tokens its classes name keep a value
+`TypeError` that names each one, and the theme shown stays. Values of no kind a token has, such as a letter spacing in
+`em`, are left out as they are from `nsh.json`'s. Build the new theme from the app's own, so the tokens its classes name keep a value
 (`bg-up` when `up` is in `nsh.json`'s theme), and change what differs. Rust: `set_tokens(theme.into())` of an
 `nsh_base::Theme` ([Theme tokens](../docs/tailwind.md#theme-tokens)).
 

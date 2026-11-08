@@ -33417,3 +33417,97 @@ mod theme_roles {
         assert!(sent(&mut c).last().is_some_and(|t| t.is_themed()));
     }
 }
+
+/// `.adaptive_shadow()`: box shadows per appearance, reactive, as `.bg`
+/// is; `.shadow(layers)` stays static.
+mod reactive_shadow {
+    use super::*;
+    use crate::{
+        BoxShadow,
+        element::{AdaptiveShadow, Root, Tokens},
+        prelude::*,
+    };
+
+    fn layer(y: f32, rgba: u32) -> BoxShadow {
+        BoxShadow {
+            offset_y: px(y),
+            blur: px(2.0 * y),
+            color: Color(rgba),
+            ..Default::default()
+        }
+    }
+
+    #[component]
+    fn Raised() -> impl IntoElement {
+        view().size_10().adaptive_shadow(move || {
+            tokens()
+                .shadow("shadow-raised")
+                .cloned()
+                .unwrap_or_default()
+        })
+    }
+
+    #[component]
+    fn Still() -> impl IntoElement {
+        view().size_10().shadow([layer(3.0, 0x0000_ffff)])
+    }
+
+    /// The shadows of the batch's views.
+    fn shadows(batch: &MountBatch) -> Vec<Vec<BoxShadow>> {
+        batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::ViewStyle { style, .. } => {
+                    style.effects.as_ref().map(|e| e.box_shadows.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn themed(light: BoxShadow, dark: BoxShadow) -> Tokens {
+        let mut t = crate::element::tokens::sample();
+        t.set_shadow("shadow-raised", AdaptiveShadow::new([light], [dark]));
+        t
+    }
+
+    #[test]
+    fn an_adaptive_shadow_follows_the_appearance_and_the_theme() {
+        let mut c = core();
+        c.set_tokens(themed(layer(1.0, 0x0000_001a), layer(2.0, 0xffff_ff33)));
+        c.mount_root(&Root::of::<Raised>());
+        let batch = c.commit().unwrap();
+        assert_eq!(shadows(&batch), [vec![layer(1.0, 0x0000_001a)]]);
+        c.set_class_environment(crate::tailwind::ClassEnvironment {
+            dark: true,
+            ..Default::default()
+        });
+        let batch = c.commit().unwrap();
+        assert_eq!(shadows(&batch), [vec![layer(2.0, 0xffff_ff33)]]);
+        // A new theme's shadow reaches the binding that read it.
+        c.set_tokens(themed(layer(4.0, 0x0000_001a), layer(5.0, 0xffff_ff33)));
+        let mut seen = Vec::new();
+        while let Some(batch) = c.commit() {
+            seen.extend(shadows(&batch));
+        }
+        assert_eq!(
+            seen.last(),
+            Some(&vec![layer(5.0, 0xffff_ff33)]),
+            "{seen:?}"
+        );
+    }
+
+    #[test]
+    fn static_layers_stay_the_same_in_both() {
+        let mut c = core();
+        c.mount_root(&Root::of::<Still>());
+        let batch = c.commit().unwrap();
+        assert_eq!(shadows(&batch), [vec![layer(3.0, 0x0000_ffff)]]);
+        c.set_class_environment(crate::tailwind::ClassEnvironment {
+            dark: true,
+            ..Default::default()
+        });
+        assert!(c.commit().is_none_or(|b| shadows(&b).is_empty()));
+    }
+}

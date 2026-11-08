@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
-use super::style::AdaptiveColor;
+use super::style::{AdaptiveColor, AdaptiveShadow};
 
 /// The app's default font family's token: Tailwind's `--font-sans`.
 pub const FONT_SANS: &str = "font-sans";
@@ -41,6 +41,8 @@ pub struct Tokens {
     /// The dark values of the numbers that have one of their own.
     dark_numbers: FxHashMap<Box<str>, f32>,
     fonts: FxHashMap<Box<str>, Arc<str>>,
+    /// Box shadows, per appearance.
+    shadows: FxHashMap<Box<str>, AdaptiveShadow>,
     /// Role -> the name of the token it reads (`None`: each its own name).
     roles: Option<Arc<FxHashMap<Role, Box<str>>>>,
     /// Whether the app has a theme of its own ([`Tokens::is_themed`]): not
@@ -54,6 +56,7 @@ impl PartialEq for Tokens {
             && self.numbers == other.numbers
             && self.dark_numbers == other.dark_numbers
             && self.fonts == other.fonts
+            && self.shadows == other.shadows
             && self.roles == other.roles
     }
 }
@@ -176,6 +179,7 @@ roles! {
 
 /// A token's value.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Token {
     /// A color, per appearance.
     Color(AdaptiveColor),
@@ -183,6 +187,8 @@ pub enum Token {
     Number(f32),
     /// A font family.
     Font(Arc<str>),
+    /// Box shadows, per appearance.
+    Shadow(AdaptiveShadow),
 }
 
 /// Makes the tokens of a theme file's content (`Some`), or the defaults
@@ -342,6 +348,21 @@ impl Tokens {
         self.fonts.insert(name.into(), family.into());
     }
 
+    /// The box shadows named `name` (`shadow-raised`).
+    pub fn shadow(&self, name: &str) -> Option<&AdaptiveShadow> {
+        self.shadows.get(name)
+    }
+
+    /// Sets the box shadows named `name`.
+    pub fn set_shadow(&mut self, name: &str, shadow: impl Into<AdaptiveShadow>) {
+        self.shadows.insert(name.into(), shadow.into());
+    }
+
+    /// Each shadow by name.
+    pub fn shadows(&self) -> impl Iterator<Item = (&str, &AdaptiveShadow)> {
+        self.shadows.iter().map(|(k, s)| (&**k, s))
+    }
+
     /// The token named `name`, of any kind (a color first, as classes take
     /// it).
     pub fn get(&self, name: &str) -> Option<Token> {
@@ -351,7 +372,10 @@ impl Tokens {
         if let Some(n) = self.numbers.get(name) {
             return Some(Token::Number(*n));
         }
-        self.fonts.get(name).cloned().map(Token::Font)
+        if let Some(f) = self.fonts.get(name) {
+            return Some(Token::Font(f.clone()));
+        }
+        self.shadows.get(name).cloned().map(Token::Shadow)
     }
 
     /// These tokens with `roles` mapped onto the tokens named (over the
@@ -424,6 +448,7 @@ impl Tokens {
             && self.numbers.is_empty()
             && self.dark_numbers.is_empty()
             && self.fonts.is_empty()
+            && self.shadows.is_empty()
     }
 
     /// Each color by name.
@@ -467,6 +492,7 @@ impl Tokens {
         copy(&mut self.numbers, &from.numbers, name);
         copy(&mut self.dark_numbers, &from.dark_numbers, name);
         copy(&mut self.fonts, &from.fonts, name);
+        copy(&mut self.shadows, &from.shadows, name);
     }
 
     /// `self` with the tokens of `base` it does not have.
@@ -484,6 +510,8 @@ impl Tokens {
             .extend(self.dark_numbers.iter().map(|(k, n)| (k.clone(), *n)));
         out.fonts
             .extend(self.fonts.iter().map(|(k, f)| (k.clone(), f.clone())));
+        out.shadows
+            .extend(self.shadows.iter().map(|(k, s)| (k.clone(), s.clone())));
         if let Some(roles) = &self.roles {
             out.roles = match out.roles {
                 Some(base) => {

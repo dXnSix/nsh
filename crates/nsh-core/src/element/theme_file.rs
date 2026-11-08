@@ -12,7 +12,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::{AdaptiveColor, Tokens};
+use super::{AdaptiveColor, AdaptiveShadow, Tokens};
 use crate::{Color, JsonValue, color::Hsla};
 
 /// Points per `rem`, as Tailwind's theme has them.
@@ -132,8 +132,9 @@ fn font_family(value: &str) -> Option<&str> {
 /// `light`'s in the light one (and the dark one when `dark` leaves them
 /// out), `dark`'s in the dark one. A color may name another
 /// (`var(--ring)`, in `color-mix()` too) of the same appearance: the
-/// file's or the one under it. Values of no kind a token has (shadows,
-/// lengths in `em`, as shadcn's `tracking-normal: 0em`) are left out, as
+/// file's or the one under it. A `shadow-*` value that reads as CSS
+/// `box-shadow` layers is a shadow. Values of no kind a token has (lengths
+/// in `em`, as shadcn's `tracking-normal: 0em`) are left out, as
 /// NSH draws no utility with them; a `tracking-*` token is a length in
 /// points (`px`, `rem`). A value written as a color that is none is left
 /// out, and one that is no color where the other appearance has a color
@@ -176,6 +177,22 @@ fn apply_css_vars(tokens: &mut Tokens, base: &Tokens, vars: &JsonValue, ignored:
     for name in names {
         let value = dark_vars.get(name).or_else(|| light_vars.get(name));
         let Some(value) = value else { continue };
+        // A box shadow (`shadow-raised`: `0 1px 2px #0000001a`), per
+        // appearance, as Tailwind's `--shadow-*`: a `shadow-*` value that
+        // reads as CSS `box-shadow` layers. Any other (shadcn's
+        // `shadow-color`, `shadow-opacity`) is read as before.
+        if name.starts_with("shadow-")
+            && let Some(dark_layers) = dark_vars.get(name).and_then(|v| crate::css::box_shadows(v))
+        {
+            let light_layers = match light_vars.get(name) {
+                Some(v) => crate::css::box_shadows(v),
+                None => Some(dark_layers.clone()),
+            };
+            if let Some(light_layers) = light_layers {
+                tokens.set_shadow(name, AdaptiveShadow::new(light_layers, dark_layers));
+                continue;
+            }
+        }
         // A weight (`font-weight-strong`: `650`) is a number, as
         // Tailwind's `--font-weight-*`; every other `font-*` a family.
         if name.starts_with("font-weight-")
@@ -399,7 +416,8 @@ mod reads {
         let brand = tokens.color("brand").unwrap();
         assert_eq!((hex(brand.light), hex(brand.dark)), (0xe11d48, 0xe11d48));
         assert_eq!(tokens.color("edge"), None);
-        assert_eq!(tokens.get("shadow-sm"), None);
+        // A box shadow is a shadow token; a letter spacing in `em` is none.
+        assert!(tokens.shadow("shadow-sm").is_some());
         assert_eq!(tokens.get("letter-spacing"), None);
         let (_, ignored) = parse(r#"{ "cssVars": { "dark": "nope" } }"#, &base()).unwrap();
         assert_eq!(ignored, ["cssVars.dark: expected an object"]);

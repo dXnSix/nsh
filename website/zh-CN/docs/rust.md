@@ -520,6 +520,10 @@ fn the_module_formats_money() {
 - 值按 CSS 的写法书写。颜色可以是任意 CSS 颜色（`#7c3aed`、`rgb(…)`、`hsl(…)`、`oklch(…)`、`white`）、
   `color-mix(in oklab, var(--primary) 80%, white)`，或同一外观的另一个令牌 `var(--primary)`（可带后备值：`var(--brand, #7c3aed)`）。
   长度使用 `rem`（16 点）或 `px`（点）。字体是字体族列表：使用其中第一个非通用的字体族，第一个是通用字体族（`system-ui`、`sans-serif`）时使用系统字体。
+- **阴影。** 写成 CSS `box-shadow` 的 `shadow-<n>`（`"shadow-raised": "0 1px 2px #0000001a"`，可在 `light` 和 `dark` 中分别给值）
+  是阴影 token：`tokens().shadow("shadow-raised")` 是一个 `AdaptiveShadow`，`.adaptive_shadow(move ||
+  tokens().shadow("shadow-raised").cloned().unwrap_or_default())` 绘制它，跟随主题变化，并像 `.bg(..)` 一样随外观原生切换。
+  `.shadow(layers)` 接受静态的阴影层，两种外观相同。
 - **按外观区分的数字。** `dark` 中的数字是它的深色值（`"dark": { "radius-card": "6px" }`）：类名和 TSX 的 `token()` 跟随外观，Rust
   用 `tokens().number_in("radius-card", dark())` 读取（`number()` 是浅色值，也是主题只给出一次的数字的唯一值）。`theme().radius` 和
   `theme().number(..)` 也是浅色值：有深色值的数字请用 `number_in` 读取。`Tokens::set_dark_number` 在代码中设置深色值。
