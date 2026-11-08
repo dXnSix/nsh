@@ -641,6 +641,181 @@ reset_tokens(["primary"]); // the app's primary again
 - A synchronous `#[module]` function does the same with `cx.update_tokens(..)` and `cx.reset_tokens(..)` of its
   `ModuleCx`. TSX: [`updateTheme` and `resetTheme`](../modules/nsh.md#updatetheme-resettheme).
 
+### Theme types
+
+A design system with a token structure of its own (surfaces by level, an action color, a card radius) brings its
+tokens as a Rust type, a **theme type**: a struct of its tokens that implements `AppTheme` (`nsh_core::element`, also in
+the prelude). Components read it typed with `theme_of::<T>()`, as they read `theme()`, and the theme file, classes and
+`token()` in TSX name its tokens. A registered theme type is the app's token source in place of nsh-base's shadcn
+theme; an app that registers none keeps the shadcn theme above.
+
+A type lists its tokens in `token_specs()`: each a `TokenSpec` with a name, a `TokenKind` (`Color`, `Number`,
+`Radius`, `Spacing`, `Text`, `Weight`, `Tracking`, `Leading`, `Blur`, `Font`, `Shadow`), a doc comment and the role it
+plays. `write_tokens` and `read_tokens` turn its fields into tokens and back, and `write_patch` writes the fields a
+patch sets; each puts its names after `prefix`, so a type can hold another under a prefix (`surface-` and `raised`:
+`surface-raised`). A derive that writes the impl is planned; the impl is written by hand:
+
+```rust
+use std::sync::LazyLock;
+
+use nsh_core::{
+    element::{TokenKind, TokenSpec},
+    prelude::*,
+};
+
+/// The design system's tokens.
+#[derive(Clone, PartialEq)]
+pub struct DsTheme {
+    pub surface_raised: AdaptiveColor,
+    pub surface_overlay: AdaptiveColor,
+    pub action: AdaptiveColor,
+    pub radius_card: f32,
+}
+
+impl Default for DsTheme {
+    fn default() -> Self {
+        DsTheme {
+            surface_raised: AdaptiveColor::rgb(0xffffff, 0x18181b),
+            surface_overlay: AdaptiveColor::rgb(0xffffff, 0x27272a),
+            action: AdaptiveColor::rgb(0x4f46e5, 0x818cf8),
+            radius_card: 14.0,
+        }
+    }
+}
+
+/// Some fields of a `DsTheme`; `None` keeps a field as it is.
+#[derive(Clone, Default)]
+pub struct DsThemePatch {
+    pub action: Option<AdaptiveColor>,
+    pub radius_card: Option<f32>,
+}
+
+impl AppTheme for DsTheme {
+    type Patch = DsThemePatch;
+
+    fn token_specs() -> &'static [TokenSpec] {
+        static SPECS: LazyLock<Vec<TokenSpec>> = LazyLock::new(|| {
+            vec![
+                TokenSpec::new("surface-raised", TokenKind::Color).doc("Cards and sheets."),
+                TokenSpec::new("surface-overlay", TokenKind::Color)
+                    .doc("Popovers and menus.")
+                    .role(Role::Popover),
+                TokenSpec::new("action", TokenKind::Color)
+                    .doc("The main action.")
+                    .role(Role::Primary),
+                TokenSpec::new("radius-card", TokenKind::Radius).doc("Cards' corners."),
+            ]
+        });
+        &SPECS
+    }
+
+    fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
+        out.set_color(&format!("{prefix}surface-raised"), self.surface_raised);
+        out.set_color(&format!("{prefix}surface-overlay"), self.surface_overlay);
+        out.set_color(&format!("{prefix}action"), self.action);
+        out.set_number(&format!("{prefix}radius-card"), self.radius_card);
+    }
+
+    fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
+        let d = DsTheme::default();
+        let color = |name: &str, or: AdaptiveColor| {
+            tokens.color(&format!("{prefix}{name}")).unwrap_or(or)
+        };
+        DsTheme {
+            surface_raised: color("surface-raised", d.surface_raised),
+            surface_overlay: color("surface-overlay", d.surface_overlay),
+            action: color("action", d.action),
+            radius_card: tokens
+                .number(&format!("{prefix}radius-card"))
+                .unwrap_or(d.radius_card),
+        }
+    }
+
+    fn write_patch(patch: &DsThemePatch, prefix: &str, out: &mut Tokens) {
+        if let Some(c) = patch.action {
+            out.set_color(&format!("{prefix}action"), c);
+        }
+        if let Some(r) = patch.radius_card {
+            out.set_number(&format!("{prefix}radius-card"), r);
+        }
+    }
+}
+```
+
+A token's name says how theme files and classes read it. A color's name is free (`surface-raised`, `action`); a
+number's starts with its Tailwind namespace (`radius-card`, `spacing-gutter`, `text-body`, `font-weight-strong`, or
+`tracking-`, `leading-`, `blur-`); a font's starts with `font-` and a shadow's with `shadow-`.
+
+The UI set registers the type in its `#[native_module]` function, and components read it where they draw:
+
+```rust
+#[native_module("ds/native")]
+fn native(registry: &mut Registry) {
+    registry.theme::<DsTheme>();
+}
+
+view()
+    .bg(move || theme_of::<DsTheme>().surface_raised)
+    .rounded(move || px(theme_of::<DsTheme>().radius_card))
+    .p_4()
+
+update_theme::<DsTheme>(DsThemePatch {
+    action: Some(AdaptiveColor::rgb(0xe11d48, 0xfb7185)),
+    ..Default::default()
+});
+reset_theme::<DsTheme>(); // the app's action again
+```
+
+- `theme_of::<T>()` is an `Arc<T>` read from the surface's tokens. It is reactive as `tokens()` is: a binding that
+  reads it runs again when the tokens change. It is read once per change of the tokens, per surface, so every binding
+  can call it.
+- `set_theme(theme)` draws the app with a whole `T`: its names take its values, and every other token stays.
+  `update_theme::<T>(patch)` changes the fields the patch sets. `reset_theme::<T>()` puts `T`'s names back to the
+  app's theme (`nsh.json`'s over the types' defaults). They apply in order with the app's other actions, as
+  `update_tokens` does; a synchronous `#[module]` function has `cx.set_theme(..)`, `cx.update_theme::<T>(..)` and
+  `cx.reset_theme::<T>()` of its `ModuleCx`.
+
+**Roles.** NSH's own parts draw with roles (`Role`: `popover`, `primary`, `border`, `radius`, `font-sans`, …;
+[Theme roles](../modules/nsh-base.md#theme-roles)). A type maps roles onto its tokens with `TokenSpec::role`, so
+`nsh_base`'s `theme()` fields and components, the tab bar, the platforms' menus and alerts, and the default font draw
+with the type's tokens: above, `theme().popover` is the design system's `surface-overlay` and `theme().primary` its
+`action`.
+
+**Names.** A token's name says what its kind is, as a CSS variable's does: a font's starts with `font-`, a shadow's
+with `shadow-`, a weight's with `font-weight-`, and no other kind's with `font-`. Registering a type whose name and
+kind disagree, or that declares a name or maps a role twice, panics.
+
+**Several types.** A design system's crate and the app's crate each register their own type: the design system's
+tokens, and the app's own beside them (`odds-up` for a betting app). Each reads its own with `theme_of`, and the names
+of every registered type merge into one theme. A token name or a role that two types claim panics when the UI sets
+are merged, naming both types.
+
+**The theme file.** `nsh.json`'s `"theme"` keeps shadcn's `cssVars` format and sets the types' tokens by name, each
+read as its declared kind (a color as a CSS color, a radius as a length). A role's name sets the token the role is
+mapped onto: `"primary"` below sets the design system's `action`. `var(--surface-raised)` names a token the file
+sets, else the types' default. A name that no type declares, or a value of another kind, is a build warning and is
+left out when the app runs. A key that is a role's name, in a section that also sets the token the role is mapped
+onto, gives way to that token. An embedding app's theme overrides and TSX's `setTheme` and `updateTheme` read their
+files the same way: they leave a name no type declares out, and refuse a value they cannot read.
+
+```json
+{
+  "cssVars": {
+    "theme": { "radius-card": "12px" },
+    "light": { "surface-overlay": "#fafafa", "primary": "#e11d48", "odds-up": "#16a34a" },
+    "dark": { "surface-overlay": "#27272a", "primary": "#fb7185", "odds-up": "#4ade80" }
+  }
+}
+```
+
+**The toolchain.** `nsh build` and `nsh dev` learn the types from the app's crates: classes name their tokens
+(`bg-surface-raised`, `rounded-card`), and `.nsh/types/nsh/tokens.d.ts` types `token()` by kind, with the doc comments
+([Theme tokens](./tailwind.md#theme-tokens)).
+
+**nsh-base's theme.** `nsh_base::Theme` is a theme type too, left unregistered so it stays the default source:
+`theme()` is `theme_of::<Theme>()`, and a shadcn app changes some of its tokens with `update_theme::<Theme>(tokens)`,
+a patch of `Tokens` by name.
+
 ## Several crates
 
 An app's Rust code can be split into crates, each imported by its own specifier: `"rust"` takes a list of crate

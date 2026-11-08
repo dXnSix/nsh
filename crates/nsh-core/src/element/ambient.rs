@@ -55,6 +55,17 @@ pub(crate) struct Ambient {
     /// The main window's close presses: how many, and the last one's
     /// reason ([`crate::element::desktop::WindowRef::on_close_press`]).
     main_close_press: Option<Signal<(u64, crate::desktop::CloseReason)>>,
+    /// The theme types read of the tokens ([`super::theme_of`]): by type,
+    /// the tokens read and the theme.
+    themes: FxHashMap<TypeId, (Arc<Tokens>, Box<dyn Any>)>,
+}
+
+/// The surface's cache of theme types read ([`super::theme_of`]). `f` runs
+/// with the surface's data borrowed: it runs no app code.
+pub(crate) fn with_theme_cache<R>(
+    f: impl FnOnce(&mut FxHashMap<TypeId, (Arc<Tokens>, Box<dyn Any>)>) -> R,
+) -> R {
+    with_data(|d| f(&mut d.ambient.themes))
 }
 
 impl Ambient {

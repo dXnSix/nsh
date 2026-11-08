@@ -30,7 +30,10 @@ use std::sync::{Arc, LazyLock};
 #[cfg(test)]
 use nsh_core::{Color, color::Hsla};
 use nsh_core::{
-    element::{AdaptiveColor, Role, SharedString, Tokens, theme_file},
+    element::{
+        AdaptiveColor, AppTheme, Role, SharedString, TokenKind, TokenSpec, Tokens, theme_file,
+        theme_of,
+    },
     geometry::{Points, px},
 };
 
@@ -51,20 +54,12 @@ impl std::fmt::Display for ThemeError {
 
 impl std::error::Error for ThemeError {}
 
-thread_local! {
-    /// The theme of the tokens last read: `theme()` makes one only when
-    /// the tokens change.
-    static CURRENT: std::cell::RefCell<Option<Arc<Theme>>> = const { std::cell::RefCell::new(None) };
-}
-
 /// The theme the app is drawn with (reading it subscribes: a new theme
-/// reaches what read it).
+/// reaches what read it): [`theme_of`]`::<Theme>()`, read once per change of
+/// the tokens, per surface. Under an app's own theme types its fields are
+/// the tokens their roles are mapped onto.
 pub fn theme() -> Arc<Theme> {
-    let tokens = nsh_core::element::tokens();
-    CURRENT.with_borrow_mut(|current| match current {
-        Some(theme) if Arc::ptr_eq(&theme.tokens, &tokens) => theme.clone(),
-        _ => current.insert(Arc::new(Theme::of(tokens))).clone(),
-    })
+    theme_of::<Theme>()
 }
 
 /// The tokens of theme file `json` over the default's (`None`: the
@@ -121,6 +116,65 @@ macro_rules! theme {
             tokens: Arc<Tokens>,
         }
 
+        /// shadcn/ui's tokens as a theme type: its 31 colors, `radius`,
+        /// `font-sans` and `font-mono`, each playing the role of its name.
+        /// It is not registered ([`nsh_core::element::Registry::theme`]):
+        /// `nsh/base` reads themes with [`read_tokens`], so it stays the
+        /// default and an app's own types win. A patch is tokens by name
+        /// (`update_theme::<Theme>(tokens)`).
+        impl AppTheme for Theme {
+            type Patch = Tokens;
+
+            fn token_specs() -> &'static [TokenSpec] {
+                static SPECS: LazyLock<Vec<TokenSpec>> = LazyLock::new(|| {
+                    let mut specs = vec![
+                        $(
+                            TokenSpec::new($key, TokenKind::Color)
+                                .doc(concat!($($doc),*))
+                                .role(Role::$role),
+                        )*
+                    ];
+                    specs.push(TokenSpec::new("radius", TokenKind::Radius).doc("The corner radius.").role(Role::Radius));
+                    specs.push(TokenSpec::new("font-sans", TokenKind::Font).doc("The app's font family.").role(Role::FontSans));
+                    specs.push(TokenSpec::new("font-mono", TokenKind::Font).doc("The monospaced font family.").role(Role::FontMono));
+                    specs
+                });
+                &SPECS
+            }
+
+            fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
+                $( out.set_color(&format!("{prefix}{}", $key), self.$name); )*
+                out.set_number(&format!("{prefix}radius"), self.radius.0);
+                if let Some(f) = &self.font_sans {
+                    out.set_font(&format!("{prefix}font-sans"), f.to_string());
+                }
+                if let Some(f) = &self.font_mono {
+                    out.set_font(&format!("{prefix}font-mono"), f.to_string());
+                }
+            }
+
+            fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
+                if prefix.is_empty() {
+                    return Theme::of(Arc::new(tokens.clone()));
+                }
+                let mut own = Tokens::default();
+                for spec in Self::token_specs() {
+                    rename(tokens, &format!("{prefix}{}", spec.name), &mut own, &spec.name);
+                }
+                Theme::of(Arc::new(own))
+            }
+
+            fn write_patch(patch: &Tokens, prefix: &str, out: &mut Tokens) {
+                if prefix.is_empty() {
+                    *out = patch.over(out);
+                    return;
+                }
+                for spec in Self::token_specs() {
+                    rename(patch, &spec.name, out, &format!("{prefix}{}", spec.name));
+                }
+            }
+        }
+
         impl Theme {
             /// The theme of `tokens`, each field read through its role (the
             /// token a theme maps it onto, else the token of its name):
@@ -146,6 +200,26 @@ macro_rules! theme {
             }
         }
     };
+}
+
+/// Copies token `from_name` of `from`, of whatever kind, as `to_name` in
+/// `to` (a nested theme's names under a prefix).
+fn rename(from: &Tokens, from_name: &str, to: &mut Tokens, to_name: &str) {
+    if let Some(c) = from.color(from_name) {
+        to.set_color(to_name, c);
+    }
+    if let Some(n) = from.number(from_name) {
+        to.set_number(to_name, n);
+        if let Some(dark) = from.number_in(from_name, true).filter(|d| *d != n) {
+            to.set_dark_number(to_name, dark);
+        }
+    }
+    if let Some(f) = from.font(from_name) {
+        to.set_font(to_name, f.clone());
+    }
+    if let Some(shadow) = from.shadow(from_name) {
+        to.set_shadow(to_name, shadow.clone());
+    }
 }
 
 /// The default theme's tokens, which [`Theme::of`] falls back on (the

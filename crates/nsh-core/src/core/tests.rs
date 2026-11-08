@@ -33511,3 +33511,685 @@ mod reactive_shadow {
         assert!(c.commit().is_none_or(|b| shadows(&b).is_empty()));
     }
 }
+
+/// Theme types (`AppTheme`), registered by UI sets: one theme of their
+/// names that replaces the default source, `theme_of`, and the three
+/// setters.
+mod app_theme {
+    use super::*;
+    use crate::{
+        Prop,
+        element::{
+            AdaptiveColor, AppTheme, ModuleCx, Registry, Role, Root, RustCall, RustOp, ToJs,
+            TokenKind, TokenSpec, Tokens,
+        },
+        prelude::*,
+    };
+
+    thread_local! {
+        /// How many times a `Ds` was read from tokens (on this test's
+        /// thread).
+        static DS_READS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// A design system's theme, written by hand.
+    #[derive(Debug, Clone, PartialEq)]
+    pub(super) struct Ds {
+        pub(super) overlay: AdaptiveColor,
+        pub(super) card: f32,
+    }
+
+    impl Default for Ds {
+        fn default() -> Self {
+            Ds {
+                overlay: AdaptiveColor::rgb(0x111111, 0x222222),
+                card: 14.0,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub(super) struct DsPatch {
+        pub(super) overlay: Option<AdaptiveColor>,
+        pub(super) card: Option<f32>,
+    }
+
+    impl AppTheme for Ds {
+        type Patch = DsPatch;
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("surface-overlay", TokenKind::Color)
+                        .doc("Popovers.")
+                        .role(Role::Popover),
+                    TokenSpec::new("radius-card", TokenKind::Radius).doc("Cards."),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
+            out.set_color(&format!("{prefix}surface-overlay"), self.overlay);
+            out.set_number(&format!("{prefix}radius-card"), self.card);
+        }
+
+        fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
+            DS_READS.set(DS_READS.get() + 1);
+            let d = Ds::default();
+            Ds {
+                overlay: tokens
+                    .color(&format!("{prefix}surface-overlay"))
+                    .unwrap_or(d.overlay),
+                card: tokens
+                    .number(&format!("{prefix}radius-card"))
+                    .unwrap_or(d.card),
+            }
+        }
+
+        fn write_patch(patch: &DsPatch, prefix: &str, out: &mut Tokens) {
+            if let Some(c) = patch.overlay {
+                out.set_color(&format!("{prefix}surface-overlay"), c);
+            }
+            if let Some(n) = patch.card {
+                out.set_number(&format!("{prefix}radius-card"), n);
+            }
+        }
+    }
+
+    /// The app's own tokens beside the design system's.
+    #[derive(Debug, Clone, PartialEq)]
+    pub(super) struct Odds {
+        pub(super) up: AdaptiveColor,
+    }
+
+    impl Default for Odds {
+        fn default() -> Self {
+            Odds {
+                up: AdaptiveColor::rgb(0x00aa00, 0x00ff00),
+            }
+        }
+    }
+
+    impl AppTheme for Odds {
+        type Patch = Option<AdaptiveColor>;
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| vec![TokenSpec::new("odds-up", TokenKind::Color)])
+        }
+
+        fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
+            out.set_color(&format!("{prefix}odds-up"), self.up);
+        }
+
+        fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
+            Odds {
+                up: tokens
+                    .color(&format!("{prefix}odds-up"))
+                    .unwrap_or(Odds::default().up),
+            }
+        }
+
+        fn write_patch(patch: &Self::Patch, prefix: &str, out: &mut Tokens) {
+            if let Some(c) = patch {
+                out.set_color(&format!("{prefix}odds-up"), *c);
+            }
+        }
+    }
+
+    /// Another type declaring `surface-overlay`.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Clash;
+
+    impl AppTheme for Clash {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| vec![TokenSpec::new("surface-overlay", TokenKind::Color)])
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Clash
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    /// Another type mapping `popover`.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct RoleClash;
+
+    impl AppTheme for RoleClash {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS
+                .get_or_init(|| vec![TokenSpec::new("panel", TokenKind::Color).role(Role::Popover)])
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            RoleClash
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    /// The design system's set and the app's, merged.
+    pub(in crate::core) fn sets() -> Registry {
+        let mut ds = Registry::new();
+        ds.theme::<Ds>();
+        let mut app = Registry::new();
+        app.theme::<Odds>();
+        Registry::merged(&[ds, app])
+    }
+
+    fn light(c: &Core<FakeEngine>, name: &str) -> Option<Color> {
+        c.tokens().color(name).map(|t| Color::from(t.light))
+    }
+
+    #[test]
+    fn the_types_names_merge_and_win_over_the_default_source() {
+        let mut c = core();
+        let mut registry = sets();
+        registry.tokens_from(test_tokens);
+        c.set_components(registry);
+        // The types' defaults, with the role they map; the source's are gone.
+        assert_eq!(
+            light(&c, "surface-overlay"),
+            Some(Color::from(rgb(0x111111)))
+        );
+        assert_eq!(light(&c, "odds-up"), Some(Color::from(rgb(0x00aa00))));
+        assert_eq!(c.tokens().number("radius-card"), Some(14.0));
+        assert_eq!(c.tokens().role_name(Role::Popover), "surface-overlay");
+        assert_eq!(c.tokens().color("primary"), None);
+    }
+
+    #[test]
+    fn without_a_type_the_source_is_as_before() {
+        let mut registry = Registry::new();
+        registry.tokens_from(test_tokens);
+        let merged = Registry::merged(&[registry.clone(), Registry::new()]);
+        assert_eq!(merged.tokens(None), registry.tokens(None));
+        assert!(merged.theme_specs().is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "declared by both")]
+    fn a_name_declared_twice_panics() {
+        let mut a = Registry::new();
+        a.theme::<Ds>();
+        let mut b = Registry::new();
+        b.theme::<Clash>();
+        let _ = Registry::merged(&[a, b]);
+    }
+
+    #[test]
+    #[should_panic(expected = "mapped by both")]
+    fn a_role_mapped_twice_panics() {
+        let mut a = Registry::new();
+        a.theme::<Ds>();
+        let mut b = Registry::new();
+        b.theme::<RoleClash>();
+        let _ = Registry::merged(&[a, b]);
+    }
+
+    /// Shows the design system's theme as `theme_of` reads it.
+    #[component]
+    fn Reads() -> impl IntoElement {
+        text(move || {
+            let ds = theme_of::<Ds>();
+            let odds = theme_of::<Odds>();
+            format!(
+                "{:08x} {} {:08x}",
+                Color::from(ds.overlay.light).0,
+                ds.card,
+                Color::from(odds.up.light).0
+            )
+        })
+    }
+
+    fn shown(c: &mut Core<FakeEngine>) -> Option<String> {
+        let mut last = None;
+        while let Some(batch) = c.commit() {
+            if let Some(t) = text_item(&batch) {
+                last = Some(t.text.to_string());
+            }
+        }
+        last
+    }
+
+    #[test]
+    fn theme_of_reads_the_tokens_once_per_change_and_the_setters_change_them() {
+        let mut c = core();
+        c.set_components(sets());
+        // The app's theme file over the types' defaults; a role's name sets
+        // the token it is mapped onto.
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(
+                    r##"{ "cssVars": { "light": { "popover": "#333333" }, "theme": { "radius-card": "10px" } } }"##.into(),
+                ),
+            }],
+        );
+        c.mount_root(&Root::of::<Reads>());
+        assert_eq!(shown(&mut c).as_deref(), Some("333333ff 10 00aa00ff"));
+        let reads = DS_READS.get();
+        // Nothing changed: no new read.
+        c.set_viewport(size_pt(321.0, 480.0));
+        let _ = shown(&mut c);
+        assert_eq!(DS_READS.get(), reads);
+        let call = |run: fn(&mut ModuleCx)| {
+            Op::Rust(RustOp {
+                call: 0,
+                run: RustCall::Op(Box::new(move |cx| {
+                    run(cx);
+                    Ok(Box::new(()) as Box<dyn ToJs>)
+                })),
+            })
+        };
+        // `update_theme` changes the fields the patch sets.
+        c.apply(call(|cx| {
+            cx.update_theme::<Ds>(DsPatch {
+                card: Some(20.0),
+                ..Default::default()
+            })
+        }))
+        .unwrap();
+        assert_eq!(shown(&mut c).as_deref(), Some("333333ff 20 00aa00ff"));
+        // `set_theme` replaces only the type's names.
+        c.apply(call(|cx| {
+            cx.set_theme(Ds {
+                overlay: AdaptiveColor::rgb(0x444444, 0x444444),
+                card: 4.0,
+            })
+        }))
+        .unwrap();
+        assert_eq!(shown(&mut c).as_deref(), Some("444444ff 4 00aa00ff"));
+        c.apply(call(|cx| {
+            cx.update_theme::<Odds>(Some(AdaptiveColor::rgb(0xff0000, 0xff0000)))
+        }))
+        .unwrap();
+        assert_eq!(shown(&mut c).as_deref(), Some("444444ff 4 ff0000ff"));
+        // `reset_theme` puts the type's names back to the theme file's.
+        c.apply(call(|cx| cx.reset_theme::<Ds>())).unwrap();
+        assert_eq!(shown(&mut c).as_deref(), Some("333333ff 10 ff0000ff"));
+    }
+
+    /// Two cores (two surfaces) each read their own tokens.
+    #[test]
+    fn two_surfaces_keep_their_own_theme() {
+        let mut a = core();
+        a.set_components(sets());
+        a.mount_root(&Root::of::<Reads>());
+        let mut b = core();
+        b.set_components(sets());
+        let mut tokens = (**b.tokens()).clone();
+        tokens.set_number("radius-card", 3.0);
+        b.set_tokens(tokens);
+        b.mount_root(&Root::of::<Reads>());
+        assert_eq!(shown(&mut a).as_deref(), Some("111111ff 14 00aa00ff"));
+        assert_eq!(shown(&mut b).as_deref(), Some("111111ff 3 00aa00ff"));
+        let mut tokens = (**a.tokens()).clone();
+        tokens.set_number("radius-card", 7.0);
+        a.set_tokens(tokens);
+        assert_eq!(shown(&mut a).as_deref(), Some("111111ff 7 00aa00ff"));
+        b.set_viewport(size_pt(300.0, 400.0));
+        let _ = shown(&mut b);
+        let mut tokens = (**b.tokens()).clone();
+        tokens.set_number("radius-card", 5.0);
+        b.set_tokens(tokens);
+        assert_eq!(shown(&mut b).as_deref(), Some("111111ff 5 00aa00ff"));
+    }
+
+    #[test]
+    fn to_tokens_carries_the_roles() {
+        let tokens = Ds::default().to_tokens();
+        assert_eq!(tokens.role_name(Role::Popover), "surface-overlay");
+        assert_eq!(tokens.number("radius-card"), Some(14.0));
+    }
+
+    /// Reads `Odds` while it is read: `theme_of` runs a type's code with
+    /// the cache let go.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Nested(String);
+
+    impl AppTheme for Nested {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            &[]
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Nested(format!(
+                "{:08x}",
+                Color::from(theme_of::<Odds>().up.light).0
+            ))
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[component]
+    fn ReadsNested() -> impl IntoElement {
+        text(move || theme_of::<Nested>().0.clone())
+    }
+
+    #[test]
+    fn a_type_may_read_another_while_it_is_read() {
+        let mut c = core();
+        c.set_components(sets());
+        c.mount_root(&Root::of::<ReadsNested>());
+        assert_eq!(shown(&mut c).as_deref(), Some("00aa00ff"));
+    }
+
+    /// A font token named as no font is.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Misnamed;
+
+    impl AppTheme for Misnamed {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| vec![TokenSpec::new("body", TokenKind::Font)])
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Misnamed
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    #[should_panic(expected = "is named as no font is")]
+    fn a_token_named_as_no_value_of_its_kind_panics() {
+        Registry::new().theme::<Misnamed>();
+    }
+
+    /// One type declaring a name twice.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Twice;
+
+    impl AppTheme for Twice {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("ink", TokenKind::Color),
+                    TokenSpec::new("ink", TokenKind::Color),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Twice
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    #[should_panic(expected = "twice")]
+    fn a_type_declaring_a_name_twice_panics() {
+        Registry::new().theme::<Twice>();
+    }
+
+    /// A type set while it runs maps no roles again: the registered types'
+    /// stay.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Plain;
+
+    impl AppTheme for Plain {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![TokenSpec::new("popover", TokenKind::Color).role(Role::Popover)]
+            })
+        }
+
+        fn write_tokens(&self, _: &str, out: &mut Tokens) {
+            out.set_color("popover", AdaptiveColor::rgb(0xff0000, 0xff0000));
+        }
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Plain
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    fn set_theme_keeps_the_registered_types_roles_and_the_app_is_themed() {
+        let mut c = core();
+        c.set_components(sets());
+        // A registered type is the app's own theme: alerts take it.
+        assert!(c.tokens().is_themed());
+        c.apply(Op::Rust(RustOp {
+            call: 0,
+            run: RustCall::Op(Box::new(|cx| {
+                cx.set_theme(Plain);
+                Ok(Box::new(()) as Box<dyn ToJs>)
+            })),
+        }))
+        .unwrap();
+        assert_eq!(c.tokens().role_name(Role::Popover), "surface-overlay");
+    }
+}
+
+/// Theme files and embedding overrides read under a theme set: by the
+/// types' names and kinds, a role's name setting the token it is mapped
+/// onto, `var()` against the types' defaults, an undeclared name left out.
+mod theme_set_files {
+    use super::{app_theme::sets, *};
+    use crate::{Prop, color::rgb, element::Role};
+
+    fn light(c: &Core<FakeEngine>, name: &str) -> Option<Color> {
+        c.tokens().color(name).map(|t| Color::from(t.light))
+    }
+
+    fn file(json: &str) -> String {
+        format!(r#"{{ "cssVars": {json} }}"#)
+    }
+
+    #[test]
+    fn a_theme_file_sets_the_types_names_by_kind() {
+        let provider = sets().token_provider().unwrap();
+        let (tokens, mut left_out) = provider
+            .read(Some(&file(
+                r##"{ "light": { "surface-overlay": "#333333", "primary": "#444444", "odds-up": "10px", "brand": "#555555" },
+                      "theme": { "radius-card": "12px", "popover-foreground": "#666666" } }"##,
+            )))
+            .unwrap();
+        left_out.sort();
+        assert_eq!(
+            left_out,
+            [
+                "`brand`: no theme type declares it",
+                "`odds-up`: no color value",
+                "`popover-foreground`: no theme type declares it",
+                "`primary`: no theme type declares it",
+            ]
+        );
+        assert_eq!(
+            tokens
+                .color("surface-overlay")
+                .map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x333333)))
+        );
+        assert_eq!(tokens.number("radius-card"), Some(12.0));
+        // Left out, the type's default stays.
+        assert_eq!(
+            tokens.color("odds-up").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x00aa00)))
+        );
+        assert!(tokens.color("brand").is_none());
+        assert_eq!(tokens.role_name(Role::Popover), "surface-overlay");
+    }
+
+    #[test]
+    fn a_roles_name_sets_the_token_it_is_mapped_onto() {
+        let provider = sets().token_provider().unwrap();
+        let (tokens, left_out) = provider
+            .read(Some(&file(r##"{ "light": { "popover": "#123456" } }"##)))
+            .unwrap();
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert_eq!(
+            tokens
+                .color("surface-overlay")
+                .map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x123456)))
+        );
+        assert!(tokens.color("popover").is_none());
+    }
+
+    #[test]
+    fn var_names_the_types_defaults() {
+        let provider = sets().token_provider().unwrap();
+        let (tokens, left_out) = provider
+            .read(Some(&file(
+                r##"{ "light": { "odds-up": "var(--surface-overlay)" } }"##,
+            )))
+            .unwrap();
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert_eq!(
+            tokens.color("odds-up").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x111111)))
+        );
+    }
+
+    /// The first frame's tokens (JS reads them before the theme reaches the
+    /// core) and the core's agree, the types' defaults under the file.
+    #[test]
+    fn the_core_and_js_read_the_file_alike() {
+        let mut c = core();
+        c.set_components(sets());
+        let json = file(r##"{ "light": { "odds-up": "#00ff00" } }"##);
+        let read = c.theme_tokens().of(&json).unwrap();
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(json.into()),
+            }],
+        );
+        assert_eq!(&read, &**c.tokens());
+        assert_eq!(light(&c, "odds-up"), Some(Color::from(rgb(0x00ff00))));
+        assert_eq!(
+            light(&c, "surface-overlay"),
+            Some(Color::from(rgb(0x111111)))
+        );
+    }
+
+    /// An embedding app's override by a role's name recolors the token the
+    /// role is mapped onto, and only declared names are read.
+    #[test]
+    fn host_overrides_read_under_the_set() {
+        let mut c = core();
+        c.set_components(sets());
+        c.set_host_theme(Some(&file(
+            r##"{ "light": { "popover": "#abcdef", "brand": "#000000" } }"##,
+        )));
+        assert_eq!(
+            light(&c, "surface-overlay"),
+            Some(Color::from(rgb(0xabcdef)))
+        );
+        assert!(light(&c, "brand").is_none());
+        assert_eq!(
+            c.tokens()
+                .role_color(Role::Popover)
+                .map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0xabcdef)))
+        );
+        // `updateTheme` under the set reads the same way.
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiThemeUpdate(
+                    file(r##"{ "light": { "odds-up": "#0000ff", "brand": "#000000" } }"##).into(),
+                ),
+            }],
+        );
+        assert_eq!(light(&c, "odds-up"), Some(Color::from(rgb(0x0000ff))));
+        assert!(light(&c, "brand").is_none());
+    }
+
+    /// `setTheme` (read whole) leaves out a name no type declares rather
+    /// than refusing the file, and refuses a value it cannot read.
+    #[test]
+    fn set_theme_leaves_undeclared_names_out() {
+        let mut c = core();
+        c.set_components(sets());
+        let theme = c.theme_tokens();
+        let read = theme
+            .checked(&file(
+                r##"{ "light": { "odds-up": "#00ff00", "brand": "#000000" } }"##,
+            ))
+            .unwrap()
+            .unwrap();
+        assert!(read.color("brand").is_none());
+        assert!(
+            theme
+                .checked(&file(r##"{ "light": { "odds-up": "#zz" } }"##))
+                .unwrap()
+                .is_err()
+        );
+    }
+
+    /// A section setting a token and the role mapped onto it keeps the
+    /// token's value; a `var()` of a role names its token.
+    #[test]
+    fn a_tokens_own_name_wins_over_its_roles_and_var_follows_roles() {
+        let provider = sets().token_provider().unwrap();
+        let (tokens, left_out) = provider
+            .read(Some(&file(
+                r##"{ "light": { "surface-overlay": "#123456", "popover": "#654321", "odds-up": "var(--popover)" } }"##,
+            )))
+            .unwrap();
+        assert_eq!(
+            left_out,
+            ["`popover`: the token its role is mapped onto, `surface-overlay`, is set too"]
+        );
+        assert_eq!(
+            tokens
+                .color("surface-overlay")
+                .map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x123456)))
+        );
+        assert_eq!(
+            tokens.color("odds-up").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x123456)))
+        );
+    }
+
+    /// A declared name the file sets and leaves unread is listed.
+    #[test]
+    fn a_declared_name_left_unread_is_listed() {
+        let provider = sets().token_provider().unwrap();
+        let (_, left_out) = provider
+            .read(Some(&file(r##"{ "theme": { "radius-card": "auto" } }"##)))
+            .unwrap();
+        assert_eq!(left_out, ["`radius-card`: no radius value"]);
+    }
+}

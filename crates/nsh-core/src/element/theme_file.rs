@@ -38,6 +38,171 @@ pub fn overrides(json: &str, base: &Tokens) -> Result<(Tokens, Vec<String>), Str
     Ok((tokens, ignored))
 }
 
+/// [`parse`] under a theme set: each name the file sets must be a declared
+/// one (a role's name, `primary`, sets the token the role is mapped onto),
+/// and holds a value of its declared kind; any other is left out and listed.
+/// `var()` names `base`'s tokens (the types' defaults).
+pub(crate) fn parse_declared(
+    json: &str,
+    base: &Tokens,
+    set: &super::theme::ThemeSet,
+) -> Result<(Tokens, Vec<String>), String> {
+    let (tokens, left_out) = overrides_declared(json, base, set)?;
+    Ok((tokens.over(base), left_out))
+}
+
+/// What a theme read under types lists for a name no type declares: a
+/// build warning, and left out at run time, but no reason to refuse a file
+/// read whole (`setTheme`), as a newer theme's names are not (#1190).
+pub(crate) const UNDECLARED: &str = "no theme type declares it";
+
+/// Whether `what`, of what a reader left out, is a name no type declares
+/// ([`UNDECLARED`]).
+pub(crate) fn is_undeclared(what: &str) -> bool {
+    what.ends_with(UNDECLARED)
+}
+
+/// [`overrides`] under a theme set, as [`parse_declared`] reads names.
+pub(crate) fn overrides_declared(
+    json: &str,
+    base: &Tokens,
+    set: &super::theme::ThemeSet,
+) -> Result<(Tokens, Vec<String>), String> {
+    let (json, kept, mut left_out) = declared_names(json, set)?;
+    let (read, ignored) = overrides(&json, base)?;
+    left_out.extend(ignored);
+    let mut out = Tokens::default();
+    for (name, _, kind) in set.names() {
+        if kind.holds(&read, name) {
+            out.copy_named(&read, name);
+        } else if kept.iter().any(|k| k == name)
+            && !left_out.iter().any(|w| w.starts_with(&format!("`{name}`")))
+        {
+            // Set, and read as no value of its kind.
+            left_out.push(format!("`{name}`: no {} value", kind.name()));
+        }
+    }
+    Ok((out, left_out))
+}
+
+/// Theme file `json` with its names the set's: a role's name becomes the
+/// token it is mapped onto (and so in `var()`s), a name no type declares
+/// is left out; the names kept and what was left out are listed. A section
+/// that sets a token and the role mapped onto it keeps the token's value.
+fn declared_names(
+    json: &str,
+    set: &super::theme::ThemeSet,
+) -> Result<(String, Vec<String>, Vec<String>), String> {
+    let mut value: JsonValue = serde_json::from_str(json).map_err(|e| format!("not JSON: {e}"))?;
+    let mut left_out = Vec::new();
+    let mut kept = Vec::new();
+    // The roles the types map onto tokens of other names.
+    let renamed: Vec<(&str, &str)> = super::Role::ALL
+        .iter()
+        .filter_map(|role| Some((role.name(), set.target(role.name())?)))
+        .filter(|(role, name)| role != name)
+        .collect();
+    if let Some(vars) = value.get_mut("cssVars").and_then(JsonValue::as_object_mut) {
+        for section in ["theme", "light", "dark"] {
+            let Some(JsonValue::Object(fields)) = vars.get_mut(section) else {
+                continue;
+            };
+            let old = std::mem::take(fields);
+            for (key, v) in &old {
+                match set.target(key) {
+                    Some(name) if name == key => {
+                        fields.insert(key.clone(), v.clone());
+                        kept.push(key.clone());
+                    }
+                    Some(name) => {
+                        if old.contains_key(name) {
+                            left_out.push(format!(
+                                "`{key}`: the token its role is mapped onto, `{name}`, is set too"
+                            ));
+                            continue;
+                        }
+                        fields.insert(name.to_owned(), v.clone());
+                        kept.push(name.to_owned());
+                    }
+                    None => left_out.push(format!("`{key}`: {UNDECLARED}")),
+                }
+            }
+        }
+        // A `var()` naming a role names the token it is mapped onto.
+        if !renamed.is_empty() {
+            for section in ["theme", "light", "dark"] {
+                let Some(JsonValue::Object(fields)) = vars.get_mut(section) else {
+                    continue;
+                };
+                for v in fields.values_mut() {
+                    if let JsonValue::String(text) = v {
+                        for (role, name) in &renamed {
+                            for end in [")", ","] {
+                                *text = text.replace(
+                                    &format!("var(--{role}{end}"),
+                                    &format!("var(--{name}{end}"),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok((value.to_string(), kept, left_out))
+}
+
+/// `tokens` as a theme file [`parse`] reads back: shadcn's `cssVars`, a
+/// value both appearances share in `theme`, the others in `light` and
+/// `dark`; colors as `#rrggbbaa`, numbers as numbers, font families and box
+/// shadows as CSS writes them. Roles are no part of it.
+pub fn write(tokens: &Tokens) -> String {
+    let mut theme = serde_json::Map::new();
+    let mut light = serde_json::Map::new();
+    let mut dark = serde_json::Map::new();
+    let hex = |c: Hsla| JsonValue::from(format!("#{:08x}", Color::from(c).0));
+    let mut put = |name: &str, l: JsonValue, d: JsonValue| {
+        if l == d {
+            theme.insert(name.to_owned(), l);
+        } else {
+            light.insert(name.to_owned(), l);
+            dark.insert(name.to_owned(), d);
+        }
+    };
+    for (name, c) in tokens.colors() {
+        put(name, hex(c.light), hex(c.dark));
+    }
+    for (name, n) in tokens.numbers() {
+        let d = tokens.number_in(name, true).unwrap_or(n);
+        put(
+            name,
+            JsonValue::from(n.to_string()),
+            JsonValue::from(d.to_string()),
+        );
+    }
+    for (name, f) in tokens.fonts() {
+        put(
+            name,
+            JsonValue::from(f.to_string()),
+            JsonValue::from(f.to_string()),
+        );
+    }
+    for (name, s) in tokens.shadows() {
+        put(
+            name,
+            JsonValue::from(s.css(false)),
+            JsonValue::from(s.css(true)),
+        );
+    }
+    let mut vars = serde_json::Map::new();
+    for (key, section) in [("theme", theme), ("light", light), ("dark", dark)] {
+        if !section.is_empty() {
+            vars.insert(key.to_owned(), JsonValue::Object(section));
+        }
+    }
+    serde_json::json!({ "cssVars": vars }).to_string()
+}
+
 /// Whether `json` can be a theme file at all: it is JSON. What a reader
 /// leaves out of one is no error.
 pub fn check(json: &str) -> Result<(), String> {

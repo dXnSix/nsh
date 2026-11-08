@@ -134,6 +134,10 @@ NSH 通过 `nsh` 的原语、`nsh/base` 的无样式基础组件，以及属于�
 - `chart-1` 到 `chart-5`：数据序列；
 - `border`、`input` 和 `ring`：结构与交互。
 
+这些是默认主题的 shadcn 名称。有自己 token 结构的设计系统（按层级划分的表面、按强调程度划分的操作）用自己的词汇命名 token，并把它们定义为
+[主题类型](./rust.md#主题类型)；它把 NSH 的角色（`popover`、`primary`、`border`、`radius`）映射到自己的 token 上，使基础组件和平台控件以它的
+颜色绘制。它的组件用 `theme_of` 读取该类型，类名使用它的 token（`bg-surface-raised`）。下面的指导按角色适用，与 token 的名称无关。
+
 ```rust tabs
 use nsh_base::theme;
 

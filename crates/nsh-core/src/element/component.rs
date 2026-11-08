@@ -805,6 +805,11 @@ pub struct Registry {
     tokens: Option<super::TokenSource>,
     /// Reads the tokens a theme file sets ([`Registry::token_overrides_from`]).
     overrides: Option<super::TokenOverrides>,
+    /// The theme types its sets register ([`Registry::theme`]).
+    themes: Arc<Vec<super::ThemeSpec>>,
+    /// One theme of those types, which replaces [`Self::tokens`] as the
+    /// token source (`None`: no type).
+    theme_set: Option<Arc<super::theme::ThemeSet>>,
     /// Makes the views' built-in scroll bars ([`Registry::scrollbars_from`]).
     scrollbars: Option<ScrollbarSource>,
     /// The UI sets served under paths of this one's specifier
@@ -1022,6 +1027,11 @@ impl Registry {
                 out.tokens = set.tokens;
                 out.overrides = set.overrides;
             }
+            for theme in set.themes.iter() {
+                if !out.themes.iter().any(|t| t.type_id() == theme.type_id()) {
+                    Arc::make_mut(&mut out.themes).push(theme.clone());
+                }
+            }
             out.scrollbars = out.scrollbars.or(set.scrollbars);
             Arc::make_mut(&mut out.setups).extend(set.setups.iter().cloned());
             let types = Arc::make_mut(&mut out.types);
@@ -1031,6 +1041,10 @@ impl Registry {
                 }
             }
         }
+        // The types of every set make one theme; two declaring one name or
+        // mapping one role panic, as two components of one name do.
+        out.theme_set =
+            (!out.themes.is_empty()).then(|| Arc::new(super::theme::ThemeSet::new(&out.themes)));
         out
     }
 
@@ -1184,18 +1198,44 @@ impl Registry {
         &self,
         json: Option<&str>,
     ) -> Option<Result<(super::Tokens, Vec<String>), String>> {
-        self.tokens.map(|source| source(json))
+        self.token_provider().map(|provider| provider.read(json))
     }
 
-    /// How the set reads a theme file ([`Registry::tokens_from`]).
-    pub(crate) fn token_source(&self) -> Option<super::TokenSource> {
-        self.tokens
+    /// How theme files are read: with the registered theme types
+    /// ([`Registry::theme`]), which win, else with the set's functions
+    /// ([`Registry::tokens_from`], [`Registry::token_overrides_from`]).
+    pub(crate) fn token_provider(&self) -> Option<super::theme::TokenProvider> {
+        if let Some(set) = &self.theme_set {
+            return Some(super::theme::TokenProvider::Themes(set.clone()));
+        }
+        self.tokens.map(|read| super::theme::TokenProvider::Source {
+            read,
+            overrides: self.overrides,
+        })
     }
 
-    /// How the set reads the tokens a theme file sets
-    /// ([`Registry::token_overrides_from`]).
-    pub(crate) fn token_overrides(&self) -> Option<super::TokenOverrides> {
-        self.overrides
+    /// Registers theme type `T`: its tokens join the app's theme, which then
+    /// replaces the default source ([`Registry::tokens_from`], `nsh-base`'s
+    /// shadcn theme). Several sets may each register types; a token name
+    /// or a role two types claim panics when the sets are merged.
+    #[track_caller]
+    pub fn theme<T: super::AppTheme>(&mut self) -> &mut Self {
+        let spec = super::ThemeSpec::of::<T>();
+        if !self.themes.iter().any(|t| t.type_id() == spec.type_id()) {
+            Arc::make_mut(&mut self.themes).push(spec);
+        }
+        self.theme_set = Some(Arc::new(super::theme::ThemeSet::new(&self.themes)));
+        self
+    }
+
+    /// Whether its sets register theme types ([`Registry::theme`]).
+    pub(crate) fn has_theme_types(&self) -> bool {
+        self.theme_set.is_some()
+    }
+
+    /// The theme types registered ([`Registry::theme`]), as data.
+    pub fn theme_specs(&self) -> &[super::ThemeSpec] {
+        &self.themes
     }
 
     /// The files [`Registry::assets`] ships.

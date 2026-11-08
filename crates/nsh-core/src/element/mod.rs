@@ -68,6 +68,7 @@ pub(crate) mod status_bar;
 mod style;
 mod system;
 pub(crate) mod task;
+pub mod theme;
 pub mod theme_file;
 pub mod tokens;
 mod value;
@@ -183,6 +184,9 @@ pub use self::{
         Quotas, RefuseConnections, Stop, System, codes, io_code,
     },
     task::{Answer, ClipboardImage, DialogAnswer, ImageSize, Task},
+    theme::{
+        AppTheme, ThemeSpec, TokenKind, TokenSpec, reset_theme, set_theme, theme_of, update_theme,
+    },
     tokens::{FONT_MONO, FONT_SANS, Role, ThemeTokens, Token, TokenOverrides, TokenSource, Tokens},
     value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},
     virtual_list::{ListLayout, ViewableItems, VirtualList, virtual_list},

@@ -214,25 +214,29 @@ pub type TokenOverrides = fn(&str, &Tokens) -> Result<(Tokens, Vec<String>), Str
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct ThemeTokens {
-    /// How the UI sets read a theme file (`None`: none does).
-    source: Option<TokenSource>,
-    /// How they read the tokens a theme file sets (`None`: none does).
-    overrides: Option<TokenOverrides>,
+    /// How theme files are read (`None`: no UI set reads them).
+    provider: Option<super::theme::TokenProvider>,
     /// The embedding app's tokens, which win over the app's.
     host: Option<Arc<Tokens>>,
 }
 
+/// What of `left_out` refuses a file read whole: every value that could not
+/// be read, `; `-separated, but no name only that no theme type declares.
+fn refused(left_out: &[String]) -> Option<String> {
+    let what: Vec<&str> = left_out
+        .iter()
+        .filter(|w| !super::theme_file::is_undeclared(w))
+        .map(String::as_str)
+        .collect();
+    (!what.is_empty()).then(|| what.join("; "))
+}
+
 impl ThemeTokens {
     pub(crate) fn new(
-        source: Option<TokenSource>,
-        overrides: Option<TokenOverrides>,
+        provider: Option<super::theme::TokenProvider>,
         host: Option<Arc<Tokens>>,
     ) -> Self {
-        Self {
-            source,
-            overrides,
-            host,
-        }
+        Self { provider, host }
     }
 
     /// The tokens drawn with when the app's theme file is `json`: its own
@@ -240,17 +244,20 @@ impl ThemeTokens {
     /// reads themes, or `json` is not one (the core reports it when the
     /// theme reaches it).
     pub fn of(&self, json: &str) -> Option<Tokens> {
-        let (app, _) = (self.source?)(Some(json)).ok()?;
+        let (app, _) = self.provider.as_ref()?.read(Some(json)).ok()?;
         Some(self.under_host(app))
     }
 
     /// [`ThemeTokens::of`] for a theme file that must be read whole (`nsh`'s
     /// `setTheme`): `Err` names each value it cannot read, `; `-separated.
-    /// `None`: no UI set reads themes.
+    /// Under theme types a name no type declares is left out, not refused
+    /// (#1190). `None`: no UI set reads themes.
     pub fn checked(&self, json: &str) -> Option<Result<Tokens, String>> {
-        Some(match (self.source?)(Some(json)) {
-            Ok((app, left_out)) if left_out.is_empty() => Ok(self.under_host(app)),
-            Ok((_, left_out)) => Err(left_out.join("; ")),
+        Some(match self.provider.as_ref()?.read(Some(json)) {
+            Ok((app, left_out)) => match refused(&left_out) {
+                None => Ok(self.under_host(app)),
+                Some(what) => Err(what),
+            },
             Err(e) => Err(e),
         })
     }
@@ -261,9 +268,11 @@ impl ThemeTokens {
     /// the embedding app's. Read whole: `Err` as [`ThemeTokens::checked`].
     /// `None`: no UI set reads theme changes.
     pub fn updated(&self, current: &Tokens, json: &str) -> Option<Result<Tokens, String>> {
-        Some(match (self.overrides?)(json, current) {
-            Ok((part, left_out)) if left_out.is_empty() => Ok(self.under_host(part).over(current)),
-            Ok((_, left_out)) => Err(left_out.join("; ")),
+        Some(match self.provider.as_ref()?.overrides(json, current)? {
+            Ok((part, left_out)) => match refused(&left_out) {
+                None => Ok(self.under_host(part).over(current)),
+                Some(what) => Err(what),
+            },
             Err(e) => Err(e),
         })
     }

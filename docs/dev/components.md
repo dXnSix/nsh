@@ -793,7 +793,7 @@ order with the app's other actions so two updates in a turn compose; `ModuleCx` 
 functions) and TS's `updateTheme(theme)` / `resetTheme(names?)` (`env.rs`; the web's ops 409 and 410): the root's
 `Prop::UiThemeUpdate` / `Prop::UiThemeReset` (pushed by the runtime, no JS name), with `token()` reading the result
 at once (`ThemeTokens::updated`, read whole as `checked`; `ThemeTokens::reset`). An update reads only the tokens the
-file sets, with what the UI set brings for it (`Registry::token_overrides_from`: `nsh/base`'s `read_overrides`): a
+file sets, with what the UI set brings for it (`Registry::token_overrides_from`: `nsh/base` gives `theme_file::overrides`): a
 value it cannot read keeps the token's value, and a `var()` naming a token it does not set is the token drawn with
 now. A reset puts names back to the app's theme, its tokens as last set whole (`Core::set_tokens`: the UI set's
 defaults with `nsh.json`'s theme, `setTheme`, `set_tokens`; the core's `file_tokens`), removing a name the theme
@@ -808,6 +808,89 @@ the surface (`element::tokens`): new tokens run again the bindings that read the
 surface its own (`Core::set_host_tokens`, `EngineControl::set_tokens`; sent from `Engine::start_with`'s `setup` they
 are in the first frame and JS's first render): they win over the app's until cleared, and the app's names they lack
 stay, so an embedded app looks like its host (`embedding.md`, "GPUI and GPUI Kit apps").
+
+### Theme types
+
+An app or a design system brings its own tokens as a Rust type (`element/theme.rs`, user docs: `website/docs/rust.md`,
+"Theme types"). `AppTheme` is the type's face: `type Patch` (some fields, each `None` for as it is),
+`token_specs()`, `write_tokens(&self, prefix, out)`, `read_tokens(tokens, prefix)` (a name the tokens lack keeps
+`Default`'s value), `write_patch(patch, prefix, out)` and the provided `to_tokens()`, its tokens with the roles its
+specs map (`Tokens::with_roles`). A `TokenSpec` is a name, a `TokenKind` (`#[non_exhaustive]`: `Color`, `Number`,
+`Radius`, `Spacing`, `Text`, `Weight`, `Tracking`, `Leading`, `Blur`, `Font`, `Shadow`; `name()` / `from_name()` its
+spelling in descriptions, `is_number()` every kind but `Color`, `Font` and `Shadow`), a doc comment and the `Role` it
+plays, built with `TokenSpec::new(name, kind).doc(..).role(..)`. The prefix lets a type hold another under a prefix
+(`surface-` and `raised`). The tokens stay flat and by name, so classes, `token()` and theme files read them as they
+read any theme's; a type is a typed view of its names. The impls are written by hand for now (`core/tests.rs`
+`mod app_theme`, `nsh-engine`'s `tests/engine/app_theme.rs`); a derive that writes them is planned.
+
+`Registry::theme::<T>()` records `ThemeSpec::of::<T>()`: the type's name, its `TypeId`, its specs and its defaults
+(`T::default().to_tokens()`), each behind a function pointer, so the registry stays `Clone` and needs no `T`
+(`Registry::theme_specs`). `Registry::merged` unions the sets' specs by `TypeId` and builds the crate-private
+`ThemeSet` of them: each name with its owner type and kind, the types in registration order, and the union of their
+defaults with the role aliases. `ThemeSet::try_add` returns an error naming both types for a name or a role
+(`role_owner`) another type claims; `ThemeSet::new` panics with it, as two components of one name do.
+`ThemeSet::target(key)` is the name a theme file's key sets: a declared name, else the token a role of that name
+(`primary`) is mapped onto.
+
+`TokenProvider` is how theme files are read: `Source { read, overrides }`, a set's `tokens_from` and
+`token_overrides_from` functions (`nsh/base`'s `read_tokens` and `theme_file::overrides`), or
+`Themes(Arc<ThemeSet>)`.
+`Registry::token_provider` gives `Themes` whenever a set registers a type, so the types win over the default source,
+and `Source` otherwise. Its `read(json)` (`None`: the defaults) backs `Registry::tokens`, which `Core::set_components`
+(the defaults, `default_tokens` and `is_themed`'s baseline) and `Core::set_ui_theme` read; its `overrides(json, base)`
+backs `Core::update_ui_theme` (`updateTheme`) and `Core::set_host_theme` (the embedding app's overrides). `ThemeTokens`
+(`Core::theme_tokens`) carries the same provider beside the host tokens, so `of`, `checked` and `updated` (`token()`
+before the first render, `setTheme`, `updateTheme`) read a file as the core does.
+
+Under a `ThemeSet` a file is read by `theme_file::overrides_declared(json, base, set)`: its `cssVars` sections' keys
+are rewritten through `ThemeSet::target`, a key no type declares is dropped and listed (`` `brand`: no theme type
+declares it ``), the file is read with `theme_file::overrides` (so `var()` names the file's tokens, else `base`'s, the
+types' defaults), and each declared name keeps a value only of its kind (`TokenKind::holds`, `Tokens::copy_named`),
+others listed (`` `odds-up`: no color value ``), as is a declared name the file sets and leaves unread. A role's
+key in a section that also sets its token gives way to it (listed), and a `var()` naming a role names its token.
+`theme_file::parse_declared` lays that over `base`. A name no type declares is listed with `theme_file::UNDECLARED`'s
+words, which `ThemeTokens::checked` / `updated` do not refuse a file for (`setTheme` leaves the name out, #1190).
+`ThemeSet::try_add` also refuses a token named as no value of its kind is read (a font not `font-*`, a shadow not
+`shadow-*`, another kind `font-*` but a weight's `font-weight-*`) and a name or a role a type gives twice. An app with
+a registered type has a theme of its own (`Tokens::is_themed`, `Registry::has_theme_types`).
+`theme_file::write(tokens)` writes tokens back as a theme file (a value both appearances share in `theme`, the others
+in `light` and `dark`; roles none of it), which the descriptions carry as a type's defaults.
+
+`theme_of::<T>()` reads `tokens()` (so it subscribes, as `tokens()` does) and caches per surface in `Ambient`'s `themes`
+(`ambient::with_theme_cache`: by `TypeId`, the `Arc<Tokens>` read and the `Arc<T>` as `Box<dyn Any>`): while the cached
+tokens are pointer-equal to the current ones the cached theme is returned, else `T::read_tokens(&tokens, "")` is cached
+in its place. The type's `read_tokens` runs with the cache let go, so it may read the tokens or another type.
+`set_theme` is `update_tokens` of its tokens without the roles its specs map (`theme::theme_tokens`: the registered
+types' roles stay), `update_theme` `update_tokens` of the patch's tokens (`theme::patch_tokens`), and `reset_theme`
+`reset_tokens` of `T`'s names; `ModuleCx` has the three for synchronous `#[module]` functions (`Action::UpdateTokens`,
+`reset_tokens`).
+
+`nsh_base::Theme` implements `AppTheme` in its `theme!` macro: the 31 shadcn colors, `radius`, `font-sans` and
+`font-mono`, each spec playing the role of its name, and `type Patch = Tokens` (`update_theme::<Theme>(tokens)`; under
+a prefix the names are renamed, `rename`). Its `read_tokens` under no prefix is `Theme::of`, which reads every field
+through its role, so under a registered type its fields are the tokens the type maps their roles onto. It is never
+registered: `nsh_base::registry()` keeps `tokens_from(read_tokens)`, the default any registered type replaces.
+`nsh_base::theme()` is `theme_of::<Theme>()`, in place of the thread-local it kept.
+
+The toolchain never links the app's crates, so the description carries the types (description format 3,
+`element/description.rs`): `SetDescription::themes`, one `ThemeDescription` per type with its type name, its tokens
+(`ThemeTokenDescription`: name, kind, doc, role by name) and its defaults as a theme file (`theme_file::write`).
+A format 2 description is refused, as every other format. `description::theme_types(sets)` merges them as
+`Registry::merged` does (through `ThemeSet::try_add`, an error naming both types in place of the panic) into
+`ThemeTypes`: `read(json)` is the core's `TokenProvider::Themes` read, and `tokens()` lists each declared name with its
+kind and doc, sorted. `Ok(None)` when no set registers a type.
+
+The bundler takes them from `BundleOptions::ui_sets`. `tailwind_setup(dir, ui_sets)` seeds the class theme from the
+types' defaults (`ThemeTypes::read(None)`) in place of `nsh_base::Theme::default()` and reads `nsh.json`'s
+`"theme"` with `ThemeTypes::read(Some(json))`, warning of what it leaves out (`warn_ignored`), so classes are the
+types' names (`bg-surface-raised`, `rounded-card`) and a role's name is no class. `theme_tokens_of(dir, ui_sets)` is
+the app's tokens under the types (`theme_tokens(dir)` without), and `types::tokens_declaration_of(tokens, ui_sets)`
+writes `tokens.d.ts` from the types' specs (each name a `number`, or a `string` for a color, a font and a shadow, by
+`TokenKind::is_number`, with its doc as JSDoc), else `tokens_declaration(tokens)`; `nsh-cli`'s `init.rs`
+`write_types` uses both. After the describe step (`rust_app.rs`, `read_description`), the CLI's `warn_typed_theme`
+reads the root's theme file under `theme_types` and warns (`nsh.json: theme: …, ignored`) of the names no type
+declares and the values of another kind (`typed_theme_warnings`); a value it cannot read at all is `root_config`'s to
+report. With no type registered, every step is what it was.
 
 ## The host node and ids
 

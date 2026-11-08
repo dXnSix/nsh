@@ -20,7 +20,7 @@ use super::Registry;
 
 /// The version of the JSON format of a [`Description`]: bumped whenever
 /// what it holds or means changes.
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
 
 /// The version of nsh-core that writes descriptions: the version of nsh
 /// the app's crates were built with.
@@ -110,6 +110,101 @@ pub struct SetDescription {
     /// The exports TS sees without a doc comment ([`Registry::undocumented`]),
     /// which the toolchain warns of.
     pub undocumented: Vec<String>,
+    /// The theme types it registers ([`Registry::theme`]).
+    pub themes: Vec<ThemeDescription>,
+}
+
+/// A theme type as data ([`Registry::theme`]): what the toolchain reads of
+/// it, as the app's crate is never linked into it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThemeDescription {
+    /// The type's name (`dxn_ds::DsTheme`).
+    pub type_name: String,
+    /// Its tokens.
+    pub tokens: Vec<ThemeTokenDescription>,
+    /// Its default values, as a theme file ([`super::theme_file::write`]).
+    pub defaults: String,
+}
+
+/// One token of a [`ThemeDescription`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThemeTokenDescription {
+    /// Its name (`surface-raised`).
+    pub name: String,
+    /// Its kind ([`super::TokenKind::name`]).
+    pub kind: String,
+    /// Its doc comment.
+    pub doc: String,
+    /// The role it plays ([`super::Role::name`]), if any.
+    pub role: Option<String>,
+}
+
+/// The theme types `sets` describe, merged as [`Registry::merged`] merges
+/// them: `Ok(None)` when they describe none, `Err` naming two types that
+/// claim one token name or one role.
+pub fn theme_types(sets: &[SetDescription]) -> Result<Option<ThemeTypes>, String> {
+    let mut set = super::theme::ThemeSet::empty();
+    let mut tokens = Vec::new();
+    for theme in sets.iter().flat_map(|s| &s.themes) {
+        let mut kinds = Vec::new();
+        for t in &theme.tokens {
+            let kind = super::TokenKind::from_name(&t.kind).ok_or_else(|| {
+                format!(
+                    "{}: `{}`: unknown kind {:?}",
+                    theme.type_name, t.name, t.kind
+                )
+            })?;
+            let role = match &t.role {
+                Some(r) => Some(super::Role::from_name(r).ok_or_else(|| {
+                    format!("{}: `{}`: unknown role {r:?}", theme.type_name, t.name)
+                })?),
+                None => None,
+            };
+            kinds.push((t.name.as_str(), kind, role));
+        }
+        let (defaults, _) = super::theme_file::parse(&theme.defaults, &super::Tokens::default())?;
+        set.try_add(&theme.type_name, kinds.iter().copied(), defaults)?;
+        for (t, (_, kind, _)) in theme.tokens.iter().zip(&kinds) {
+            if !tokens
+                .iter()
+                .any(|(n, ..): &(String, super::TokenKind, String)| *n == t.name)
+            {
+                tokens.push((t.name.clone(), *kind, t.doc.clone()));
+            }
+        }
+    }
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+    tokens.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(Some(ThemeTypes {
+        set: std::sync::Arc::new(set),
+        tokens,
+    }))
+}
+
+/// The theme types an app's sets describe, merged ([`theme_types`]): how
+/// the toolchain reads `nsh.json`'s theme and types `token()`.
+#[derive(Debug, Clone)]
+pub struct ThemeTypes {
+    set: std::sync::Arc<super::theme::ThemeSet>,
+    tokens: Vec<(String, super::TokenKind, String)>,
+}
+
+impl ThemeTypes {
+    /// The tokens of theme file `json` over the types' defaults (`None`:
+    /// the defaults), with what of it was left out (a name no type
+    /// declares, a value of another kind), as the core reads it.
+    pub fn read(&self, json: Option<&str>) -> Result<(super::Tokens, Vec<String>), String> {
+        super::theme::TokenProvider::Themes(self.set.clone()).read(json)
+    }
+
+    /// Each declared token, sorted by name: its name, kind and doc.
+    pub fn tokens(&self) -> impl Iterator<Item = (&str, super::TokenKind, &str)> {
+        self.tokens
+            .iter()
+            .map(|(n, k, d)| (n.as_str(), *k, d.as_str()))
+    }
 }
 
 impl SetDescription {
@@ -168,6 +263,24 @@ impl SetDescription {
                 })
                 .collect(),
             undocumented: registry.undocumented(),
+            themes: registry
+                .theme_specs()
+                .iter()
+                .map(|spec| ThemeDescription {
+                    type_name: spec.type_name().to_owned(),
+                    tokens: spec
+                        .token_specs()
+                        .iter()
+                        .map(|t| ThemeTokenDescription {
+                            name: t.name.to_string(),
+                            kind: t.kind.name().to_owned(),
+                            doc: t.doc.to_owned(),
+                            role: t.role.map(|r| r.name().to_owned()),
+                        })
+                        .collect(),
+                    defaults: super::theme_file::write(&spec.defaults()),
+                })
+                .collect(),
         })
     }
 
@@ -197,6 +310,16 @@ impl SetDescription {
                 "source": a.source,
             })).collect::<Vec<_>>(),
             "undocumented": self.undocumented,
+            "themes": self.themes.iter().map(|t| json!({
+                "type": t.type_name,
+                "tokens": t.tokens.iter().map(|k| json!({
+                    "name": k.name,
+                    "kind": k.kind,
+                    "doc": k.doc,
+                    "role": k.role,
+                })).collect::<Vec<_>>(),
+                "defaults": t.defaults,
+            })).collect::<Vec<_>>(),
         })
     }
 
@@ -247,6 +370,33 @@ impl SetDescription {
             native_values: strings(set, "native_values", &at)?,
             assets,
             undocumented: strings(set, "undocumented", &at)?,
+            themes: array(set, "themes", &at)?
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    let at = format!("{at}.themes[{i}]");
+                    let t = object(t, &at)?;
+                    let tokens = array(t, "tokens", &at)?
+                        .iter()
+                        .enumerate()
+                        .map(|(j, k)| {
+                            let at = format!("{at}.tokens[{j}]");
+                            let k = object(k, &at)?;
+                            Ok(ThemeTokenDescription {
+                                name: string(k, "name", &at)?,
+                                kind: string(k, "kind", &at)?,
+                                doc: string(k, "doc", &at)?,
+                                role: k.get("role").and_then(Value::as_str).map(str::to_owned),
+                            })
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    Ok(ThemeDescription {
+                        type_name: string(t, "type", &at)?,
+                        tokens,
+                        defaults: string(t, "defaults", &at)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?,
         })
     }
 }
@@ -466,5 +616,150 @@ mod tests {
                 .unwrap_err()
                 .contains("no format")
         );
+    }
+}
+
+/// Theme types as data: format 3 carries each set's types, their tokens and
+/// defaults, and the toolchain merges them as the registry does.
+#[cfg(test)]
+mod theme_description {
+    use super::*;
+    use crate::element::{
+        AdaptiveColor, AdaptiveShadow, AppTheme, Role, TokenKind, TokenSpec, Tokens, theme_file,
+    };
+
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Ds;
+
+    impl AppTheme for Ds {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::LazyLock<Vec<TokenSpec>> = std::sync::LazyLock::new(|| {
+                vec![
+                    TokenSpec::new("surface-overlay", TokenKind::Color)
+                        .doc("Popovers.")
+                        .role(Role::Popover),
+                    TokenSpec::new("radius-card", TokenKind::Radius).doc("Cards."),
+                    TokenSpec::new("font-body", TokenKind::Font),
+                    TokenSpec::new("shadow-raised", TokenKind::Shadow),
+                ]
+            });
+            &SPECS
+        }
+
+        fn write_tokens(&self, _: &str, out: &mut Tokens) {
+            out.set_color("surface-overlay", AdaptiveColor::rgb(0x111111, 0x222222));
+            out.set_number("radius-card", 14.0);
+            out.set_dark_number("radius-card", 10.0);
+            out.set_font("font-body", "Inter");
+            out.set_shadow(
+                "shadow-raised",
+                AdaptiveShadow::new(
+                    [crate::BoxShadow {
+                        offset_y: crate::geometry::px(1.0),
+                        ..Default::default()
+                    }],
+                    [],
+                ),
+            );
+        }
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Ds
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    /// Declares `surface-overlay` too.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Clash;
+
+    impl AppTheme for Clash {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::LazyLock<Vec<TokenSpec>> = std::sync::LazyLock::new(|| {
+                vec![TokenSpec::new("surface-overlay", TokenKind::Color)]
+            });
+            &SPECS
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Clash
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    fn set<T: AppTheme>(specifier: &'static str) -> SetDescription {
+        let mut registry = Registry::ui_set(specifier);
+        registry.theme::<T>();
+        SetDescription::from(&registry)
+    }
+
+    #[test]
+    fn a_sets_types_round_trip_in_format_3() {
+        let doc = Description {
+            nsh: VERSION.into(),
+            sets: vec![set::<Ds>("ds/native")],
+        };
+        let text = doc.to_json();
+        assert!(text.contains("\"format\":3"), "{text}");
+        let read = Description::from_json(&text).unwrap();
+        assert_eq!(read, doc);
+        let theme = &read.sets[0].themes[0];
+        assert!(theme.type_name.ends_with("Ds"));
+        assert_eq!(theme.tokens[0].role.as_deref(), Some("popover"));
+        assert_eq!(theme.tokens[1].kind, "radius");
+        // Format 2 is refused, as every other.
+        assert!(Description::from_json(&text.replace("\"format\":3", "\"format\":2")).is_err());
+    }
+
+    #[test]
+    fn defaults_written_as_a_theme_file_read_back() {
+        let tokens = Ds.to_tokens();
+        let (read, ignored) =
+            theme_file::parse(&theme_file::write(&tokens), &Tokens::default()).unwrap();
+        assert!(ignored.is_empty(), "{ignored:?}");
+        assert_eq!(
+            read.color("surface-overlay"),
+            tokens.color("surface-overlay")
+        );
+        assert_eq!(read.number_in("radius-card", true), Some(10.0));
+        assert_eq!(read.number_in("radius-card", false), Some(14.0));
+        assert_eq!(read.font("font-body").map(|f| &**f), Some("Inter"));
+        assert_eq!(read.shadow("shadow-raised"), tokens.shadow("shadow-raised"));
+    }
+
+    #[test]
+    fn the_toolchain_merges_the_types_as_the_registry_does() {
+        let types = theme_types(&[set::<Ds>("ds/native")]).unwrap().unwrap();
+        let (tokens, ignored) = types
+            .read(Some(
+                r##"{ "cssVars": { "light": { "popover": "#333333", "brand": "#000000" } } }"##,
+            ))
+            .unwrap();
+        assert_eq!(ignored, ["`brand`: no theme type declares it"]);
+        assert_eq!(
+            tokens
+                .color("surface-overlay")
+                .map(|c| crate::Color::from(c.light)),
+            Some(crate::Color::from(crate::color::rgb(0x333333)))
+        );
+        assert_eq!(tokens.role_name(Role::Popover), "surface-overlay");
+        let names: Vec<_> = types.tokens().map(|(n, k, _)| (n, k)).collect();
+        assert_eq!(names[0], ("font-body", TokenKind::Font));
+        // No types: none; two declaring one name: an error naming both.
+        assert!(
+            theme_types(&[SetDescription::from(&Registry::ui_set("x/native"))])
+                .unwrap()
+                .is_none()
+        );
+        let err = theme_types(&[set::<Ds>("ds/native"), set::<Clash>("app/native")]).unwrap_err();
+        assert!(err.contains("declared by both"), "{err}");
     }
 }

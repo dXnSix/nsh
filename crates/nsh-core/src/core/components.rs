@@ -866,7 +866,13 @@ impl<M: TextEngine> Core<M> {
             let _entered = self.components.runtime.enter();
             registry.run_setups();
         }
+        let typed = registry.has_theme_types();
         self.components.registry = registry;
+        // The tokens were sent before the registry was in place: an app with
+        // theme types has a theme of its own (`Tokens::is_themed`).
+        if typed {
+            self.tokens_changed();
+        }
     }
 
     /// Replaces the components of a running core with `registry`, a
@@ -939,10 +945,14 @@ impl<M: TextEngine> Core<M> {
     /// ([`Registry::token_overrides_from`]) against the tokens drawn with
     /// now; what it cannot read is left out and keeps its value.
     pub(super) fn update_ui_theme(&mut self, json: &str) {
-        let Some(read) = self.components.registry.token_overrides() else {
+        let provider = self.components.registry.token_provider();
+        let Some(read) = provider
+            .as_ref()
+            .and_then(|p| p.overrides(json, &self.components.tokens))
+        else {
             return log::warn!("theme: no UI set reads theme changes");
         };
-        match read(json, &self.components.tokens) {
+        match read {
             Ok((tokens, left_out)) => {
                 for what in left_out {
                     log::warn!("theme: {what}, ignored");
@@ -986,16 +996,16 @@ impl<M: TextEngine> Core<M> {
         let Some(json) = json else {
             return self.set_host_tokens(None);
         };
-        let read = self
-            .components
-            .registry
-            .token_overrides()
-            .unwrap_or(crate::element::theme_file::overrides);
-        let defaults = match self.components.registry.tokens(None) {
+        let provider = self.components.registry.token_provider();
+        let defaults = match provider.as_ref().map(|p| p.read(None)) {
             Some(Ok((tokens, _))) => tokens,
             _ => Tokens::default(),
         };
-        match read(json, &defaults) {
+        let read = provider
+            .as_ref()
+            .and_then(|p| p.overrides(json, &defaults))
+            .unwrap_or_else(|| crate::element::theme_file::overrides(json, &defaults));
+        match read {
             Ok((tokens, left_out)) => {
                 for what in left_out {
                     log::warn!("theme overrides: {what}, ignored");
@@ -1011,8 +1021,7 @@ impl<M: TextEngine> Core<M> {
     /// them in the turn that sends the theme, before it reaches the core.
     pub fn theme_tokens(&self) -> crate::element::ThemeTokens {
         crate::element::ThemeTokens::new(
-            self.components.registry.token_source(),
-            self.components.registry.token_overrides(),
+            self.components.registry.token_provider(),
             self.components.host_tokens.clone(),
         )
     }
@@ -1033,10 +1042,13 @@ impl<M: TextEngine> Core<M> {
         };
         // Whether the app has a theme of its own, which the platforms'
         // controls take their colors from only then.
-        let themed = match &self.components.default_tokens {
-            Some(default) => *tokens != **default,
-            None => !tokens.is_empty(),
-        };
+        // An app whose sets register theme types has a theme of its own,
+        // its design system's.
+        let themed = self.components.registry.has_theme_types()
+            || match &self.components.default_tokens {
+                Some(default) => *tokens != **default,
+                None => !tokens.is_empty(),
+            };
         if tokens.is_themed() != themed {
             Arc::make_mut(&mut tokens).set_themed(themed);
         }

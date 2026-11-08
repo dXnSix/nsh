@@ -286,7 +286,11 @@ walkthroughs, see the [Navigation guide](../docs/navigation.md) and [Forms and k
 | `statusBar` on pages and dialogs | `.status_bar(..)` | The status bar while a page or dialog is up. See [Status bar](#status-bar). |
 
 In Rust, `theme()` reads the app's theme as design tokens (`theme().primary`, `theme().radius`), the same tokens
-TSX's [theme classes](../docs/tailwind.md#theme-tokens) use.
+TSX's [theme classes](../docs/tailwind.md#theme-tokens) use. It is `theme_of::<Theme>()`: `nsh_base::Theme` is a
+[theme type](../docs/rust.md#theme-types), an `AppTheme` of shadcn's 31 colors, `radius`, `font-sans` and
+`font-mono`, each playing the role of its name. It stays unregistered, so it is the default token source and an app's
+registered types take its place. A shadcn app changes some of its tokens with `update_theme::<Theme>(tokens)`, a patch
+of `Tokens` by name, and `reset_theme::<Theme>()` puts them back.
 
 ### Theme roles
 
@@ -315,6 +319,11 @@ A role is no token and no class: `bg-primary` is a class when the theme has a to
 Without a mapping every role reads the token of its own name, so a shadcn theme draws as it always did. The platforms'
 controls take the theme's colors only when the app has a theme of its own (`Tokens::is_themed`, which the core sets);
 an app on the default theme keeps the system's alert colors.
+
+A registered [theme type](../docs/rust.md#theme-types) maps roles onto its own tokens (`TokenSpec::role`), and
+`theme()`'s fields then read those tokens: with a design system that maps `Role::Popover` onto `surface-overlay`,
+`theme().popover` is `surface-overlay`, and `nsh/base`'s components, the tab bar and the platforms' controls draw in
+the design system.
 
 ## Controls
 

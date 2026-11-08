@@ -578,6 +578,168 @@ reset_tokens(["primary"]); // 恢复应用的 primary
 - 同步的 `#[module]` 函数用其 `ModuleCx` 的 `cx.update_tokens(..)` 和 `cx.reset_tokens(..)` 做同样的事。TSX：
   [`updateTheme` 和 `resetTheme`](../modules/nsh.md#updatetheme-resettheme)。
 
+### 主题类型
+
+有自己令牌结构的设计系统（按层级划分的表面、一种操作色、卡片圆角）把它的令牌写成一个 Rust 类型，即**主题类型**：一个由令牌组成、
+实现 `AppTheme`（`nsh_core::element`，prelude 中也有）的结构体。组件用 `theme_of::<T>()` 以类型化的方式读取它，就像读取 `theme()`
+一样；主题文件、类名和 TSX 中的 `token()` 都按名称使用它的令牌。注册的主题类型取代 nsh-base 的 shadcn 主题，成为应用的令牌来源；
+没有注册主题类型的应用继续使用上面的 shadcn 主题。
+
+类型在 `token_specs()` 中列出它的令牌：每个都是一个 `TokenSpec`，包含名称、`TokenKind`（`Color`、`Number`、`Radius`、`Spacing`、
+`Text`、`Weight`、`Tracking`、`Leading`、`Blur`、`Font`、`Shadow`）、文档注释和它承担的角色。`write_tokens` 和 `read_tokens`
+在字段和令牌之间来回转换，`write_patch` 写入补丁设置的字段；它们都把名称放在 `prefix` 之后，所以一个类型可以在某个前缀下包含另一个类型
+（`surface-` 加 `raised`：`surface-raised`）。生成实现的 derive 已在计划中；目前实现需要手写：
+
+```rust
+use std::sync::LazyLock;
+
+use nsh_core::{
+    element::{TokenKind, TokenSpec},
+    prelude::*,
+};
+
+/// The design system's tokens.
+#[derive(Clone, PartialEq)]
+pub struct DsTheme {
+    pub surface_raised: AdaptiveColor,
+    pub surface_overlay: AdaptiveColor,
+    pub action: AdaptiveColor,
+    pub radius_card: f32,
+}
+
+impl Default for DsTheme {
+    fn default() -> Self {
+        DsTheme {
+            surface_raised: AdaptiveColor::rgb(0xffffff, 0x18181b),
+            surface_overlay: AdaptiveColor::rgb(0xffffff, 0x27272a),
+            action: AdaptiveColor::rgb(0x4f46e5, 0x818cf8),
+            radius_card: 14.0,
+        }
+    }
+}
+
+/// Some fields of a `DsTheme`; `None` keeps a field as it is.
+#[derive(Clone, Default)]
+pub struct DsThemePatch {
+    pub action: Option<AdaptiveColor>,
+    pub radius_card: Option<f32>,
+}
+
+impl AppTheme for DsTheme {
+    type Patch = DsThemePatch;
+
+    fn token_specs() -> &'static [TokenSpec] {
+        static SPECS: LazyLock<Vec<TokenSpec>> = LazyLock::new(|| {
+            vec![
+                TokenSpec::new("surface-raised", TokenKind::Color).doc("Cards and sheets."),
+                TokenSpec::new("surface-overlay", TokenKind::Color)
+                    .doc("Popovers and menus.")
+                    .role(Role::Popover),
+                TokenSpec::new("action", TokenKind::Color)
+                    .doc("The main action.")
+                    .role(Role::Primary),
+                TokenSpec::new("radius-card", TokenKind::Radius).doc("Cards' corners."),
+            ]
+        });
+        &SPECS
+    }
+
+    fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
+        out.set_color(&format!("{prefix}surface-raised"), self.surface_raised);
+        out.set_color(&format!("{prefix}surface-overlay"), self.surface_overlay);
+        out.set_color(&format!("{prefix}action"), self.action);
+        out.set_number(&format!("{prefix}radius-card"), self.radius_card);
+    }
+
+    fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
+        let d = DsTheme::default();
+        let color = |name: &str, or: AdaptiveColor| {
+            tokens.color(&format!("{prefix}{name}")).unwrap_or(or)
+        };
+        DsTheme {
+            surface_raised: color("surface-raised", d.surface_raised),
+            surface_overlay: color("surface-overlay", d.surface_overlay),
+            action: color("action", d.action),
+            radius_card: tokens
+                .number(&format!("{prefix}radius-card"))
+                .unwrap_or(d.radius_card),
+        }
+    }
+
+    fn write_patch(patch: &DsThemePatch, prefix: &str, out: &mut Tokens) {
+        if let Some(c) = patch.action {
+            out.set_color(&format!("{prefix}action"), c);
+        }
+        if let Some(r) = patch.radius_card {
+            out.set_number(&format!("{prefix}radius-card"), r);
+        }
+    }
+}
+```
+
+令牌的名称决定主题文件和类名如何读取它。颜色的名称可以任取（`surface-raised`、`action`）；数值的名称以它的 Tailwind 命名空间开头
+（`radius-card`、`spacing-gutter`、`text-body`、`font-weight-strong`，或 `tracking-`、`leading-`、`blur-`）；字体的名称以 `font-`
+开头，阴影的名称以 `shadow-` 开头。
+
+UI 集在它的 `#[native_module]` 函数中注册这个类型，组件在绘制处读取它：
+
+```rust
+#[native_module("ds/native")]
+fn native(registry: &mut Registry) {
+    registry.theme::<DsTheme>();
+}
+
+view()
+    .bg(move || theme_of::<DsTheme>().surface_raised)
+    .rounded(move || px(theme_of::<DsTheme>().radius_card))
+    .p_4()
+
+update_theme::<DsTheme>(DsThemePatch {
+    action: Some(AdaptiveColor::rgb(0xe11d48, 0xfb7185)),
+    ..Default::default()
+});
+reset_theme::<DsTheme>(); // 恢复应用的 action
+```
+
+- `theme_of::<T>()` 是从界面的令牌中读出的 `Arc<T>`。它和 `tokens()` 一样是响应式的：读取它的绑定会在令牌变化时重新运行。
+  每个界面在令牌每次变化后只读取一次，所以每个绑定都可以调用它。
+- `set_theme(theme)` 用一个完整的 `T` 绘制应用：它的名称取它的值，其他令牌保持不变。`update_theme::<T>(patch)` 修改补丁设置的字段。
+  `reset_theme::<T>()` 把 `T` 的名称恢复为应用主题中的值（叠加在各类型默认值之上的 `nsh.json` 主题）。它们与应用的其他操作按顺序生效，
+  和 `update_tokens` 一样；同步的 `#[module]` 函数使用其 `ModuleCx` 的 `cx.set_theme(..)`、`cx.update_theme::<T>(..)` 和
+  `cx.reset_theme::<T>()`。
+
+**角色。** NSH 自己的部分用角色绘制（`Role`：`popover`、`primary`、`border`、`radius`、`font-sans` 等；
+[主题角色](../modules/nsh-base.md#theme-roles)）。类型用 `TokenSpec::role` 把角色映射到自己的令牌上，于是 `nsh_base` 的 `theme()`
+字段和组件、标签栏、各平台的菜单和提示框，以及默认字体，都用该类型的令牌绘制：上例中 `theme().popover` 是设计系统的
+`surface-overlay`，`theme().primary` 是它的 `action`。
+
+**名称。** 令牌的名称说明它的类型，就像 CSS 变量的名称一样：字体的名称以 `font-` 开头，阴影的以 `shadow-` 开头，字重的以 `font-weight-` 开头，其他类型的名称都不以 `font-` 开头。注册一个名称与类型不符、或重复声明同一名称或重复映射同一角色的类型会 panic。
+
+**多个类型。** 设计系统的 crate 和应用的 crate 各自注册自己的类型：设计系统的令牌，以及应用在其旁边的自有令牌（例如投注应用的
+`odds-up`）。每个类型用 `theme_of` 读取自己的令牌，所有已注册类型的名称合并成一个主题。两个类型声明同一个令牌名称或映射同一个角色时，
+合并 UI 集时会 panic，并指出这两个类型。
+
+**主题文件。** `nsh.json` 的 `"theme"` 保持 shadcn 的 `cssVars` 格式，按名称设置各类型的令牌，每个值按其声明的种类读取（颜色按
+CSS 颜色，圆角按长度）。角色的名称设置该角色所映射的令牌：下例中的 `"primary"` 设置设计系统的 `action`。`var(--surface-raised)`
+指文件设置的令牌，文件没有设置时指类型的默认值。没有类型声明的名称，或种类不符的值，会产生构建警告，并在应用运行时被略去。
+在同时设置了某个角色所映射令牌的部分中，以该角色名称为键的值让位于那个令牌。嵌入应用的主题覆盖以及 TSX 的 `setTheme` 和 `updateTheme` 也以同样的方式读取它们的文件：它们略过没有任何类型声明的名称，并拒绝读不懂的值。
+
+```json
+{
+  "cssVars": {
+    "theme": { "radius-card": "12px" },
+    "light": { "surface-overlay": "#fafafa", "primary": "#e11d48", "odds-up": "#16a34a" },
+    "dark": { "surface-overlay": "#27272a", "primary": "#fb7185", "odds-up": "#4ade80" }
+  }
+}
+```
+
+**工具链。** `nsh build` 和 `nsh dev` 从应用的 crate 获知这些类型：类名使用它们的令牌（`bg-surface-raised`、`rounded-card`），
+`.nsh/types/nsh/tokens.d.ts` 按种类为 `token()` 提供类型，并附带文档注释（[主题 token](./tailwind.md#主题-token)）。
+
+**nsh-base 的主题。** `nsh_base::Theme` 也是一个主题类型，它保持未注册，因此始终是默认来源：`theme()` 就是 `theme_of::<Theme>()`，
+shadcn 应用用 `update_theme::<Theme>(tokens)` 修改它的部分令牌，补丁是按名称组织的 `Tokens`。
+
 ## 多个 crate
 
 应用的 Rust 代码可以拆分成多个 crate，每个 crate 用自己的名称导入：`"rust"` 可以是 crate 路径的列表，列表中的每个 crate

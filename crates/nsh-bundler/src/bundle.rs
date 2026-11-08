@@ -306,6 +306,37 @@ impl ResolveSetup {
     }
 }
 
+/// The design tokens of the app in `dir` whose UI sets are `ui_sets`:
+/// [`theme_tokens`], or, when the sets register theme types, `nsh.json`'s
+/// `"theme"` read against them over their defaults.
+pub fn theme_tokens_of(
+    dir: &std::path::Path,
+    ui_sets: &[nsh_core::element::description::SetDescription],
+) -> Result<nsh_core::element::Tokens, BundleError> {
+    let Some(types) = theme_types(ui_sets)? else {
+        return theme_tokens(dir);
+    };
+    let json = match std::fs::read_to_string(dir.join("nsh.json")) {
+        Ok(text) => {
+            let config: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| BundleError::other(format!("nsh.json: {e}")))?;
+            theme_json(dir, &config)?
+        }
+        Err(_) => None,
+    };
+    let (tokens, _) = types
+        .read(json.as_deref())
+        .map_err(|e| BundleError::other(format!("nsh.json: theme: {e}")))?;
+    Ok(tokens)
+}
+
+/// The theme types `ui_sets` register, merged (`None`: none).
+fn theme_types(
+    ui_sets: &[nsh_core::element::description::SetDescription],
+) -> Result<Option<nsh_core::element::description::ThemeTypes>, BundleError> {
+    nsh_core::element::description::theme_types(ui_sets).map_err(BundleError::other)
+}
+
 /// The design tokens of the app in `dir`: its `nsh.json` `"theme"` over
 /// the default's (`nsh_base::Theme`), or the default's when it has none.
 pub fn theme_tokens(dir: &std::path::Path) -> Result<nsh_core::element::Tokens, BundleError> {
@@ -341,11 +372,25 @@ fn theme_json(
 /// The `"tailwind"`, `"theme"`, `"appearance"` and `"statusBar"` of the
 /// `nsh.json` next to the entry, checked. `"theme"` is shadcn's `cssVars`
 /// ([`theme_json`]).
-fn tailwind_setup(dir: &std::path::Path) -> Result<Arc<plugin::ThemeSetup>, BundleError> {
+fn tailwind_setup(
+    dir: &std::path::Path,
+    ui_sets: &[nsh_core::element::description::SetDescription],
+) -> Result<Arc<plugin::ThemeSetup>, BundleError> {
     let mut setup = plugin::ThemeSetup::default();
-    // The theme's tokens are classes (`bg-primary`): the default's unless
-    // the app sets its own.
-    let mut tokens = nsh_base::Theme::default().into_tokens();
+    // The theme types the sets register replace the default as the source
+    // of tokens (and of the classes naming them).
+    let types = theme_types(ui_sets)?;
+    // The theme's tokens are classes (`bg-primary`): the default's (the
+    // types') unless the app sets its own.
+    let mut tokens = match &types {
+        Some(types) => {
+            types
+                .read(None)
+                .map_err(|e| BundleError::other(format!("theme types: {e}")))?
+                .0
+        }
+        None => nsh_base::Theme::default().into_tokens(),
+    };
     let path = dir.join("nsh.json");
     let Ok(text) = std::fs::read_to_string(&path) else {
         setup.theme.set_tokens(&tokens);
@@ -363,10 +408,17 @@ fn tailwind_setup(dir: &std::path::Path) -> Result<Arc<plugin::ThemeSetup>, Bund
         setup.json = Some(json);
     }
     if let Some(json) = theme_json(dir, &config)? {
-        let (theme, ignored) = nsh_base::Theme::from_json_lenient(&json)
-            .map_err(|e| BundleError::other(format!("nsh.json: theme: {e}")))?;
+        // Under theme types a name no type declares is warned of and left
+        // out, as the runtime leaves it out.
+        let (read, ignored) = match &types {
+            Some(types) => types.read(Some(&json)),
+            None => nsh_base::Theme::from_json_lenient(&json)
+                .map(|(theme, ignored)| (theme.into_tokens(), ignored))
+                .map_err(|e| e.0),
+        }
+        .map_err(|e| BundleError::other(format!("nsh.json: theme: {e}")))?;
         warn_ignored("theme", &ignored);
-        tokens = theme.into_tokens();
+        tokens = read;
         setup.ui = Some(json);
     }
     setup.theme.set_tokens(&tokens);
@@ -484,7 +536,7 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
         .to_path_buf();
     let cwd_for_errors = cwd.clone();
     let cwd_root = cwd.clone();
-    let tailwind = tailwind_setup(&cwd)?;
+    let tailwind = tailwind_setup(&cwd, &options.ui_sets)?;
     let capabilities = capabilities(&cwd)?;
     let url_schemes = url_schemes(&cwd)?;
     let resolve = ResolveSetup::read(&cwd)?;
@@ -881,7 +933,7 @@ pub async fn bundle_hot_async(
     let preloads = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
     let plugin_error = Arc::new(Mutex::new(None));
     let assets = Arc::new(Mutex::new(Vec::new()));
-    let tailwind = tailwind_setup(&cwd)?;
+    let tailwind = tailwind_setup(&cwd, ui_sets)?;
     let capabilities = capabilities(&cwd)?;
     let url_schemes = url_schemes(&cwd)?;
     let resolve = ResolveSetup::read(&cwd)?;
@@ -1460,7 +1512,7 @@ mod tests {
         )
         .unwrap();
         assert!(ResolveSetup::read(&dir).is_ok());
-        let setup = tailwind_setup(&dir).unwrap();
+        let setup = tailwind_setup(&dir, &[]).unwrap();
         assert!(setup.theme.color("brand").is_some());
         assert_ne!(
             theme_tokens(&dir).unwrap().color("primary"),
@@ -1607,7 +1659,7 @@ mod token_namespaces {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("nsh.json"), format!(r#"{{ "theme": {json} }}"#)).unwrap();
-        let setup = super::tailwind_setup(&dir).unwrap();
+        let setup = super::tailwind_setup(&dir, &[]).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         setup.theme.clone()
     }
@@ -1643,6 +1695,120 @@ mod token_namespaces {
                 && warnings[1].contains("`max-w-md`")
                 && !warnings[1].contains("`p-md`"),
             "{warnings:?}"
+        );
+    }
+}
+
+/// An app whose UI sets register theme types: the build seeds its classes
+/// from the types' defaults, reads `nsh.json`'s theme against them (an
+/// undeclared name left out), checks classes by the types' names and types
+/// `token()` by their specs.
+#[cfg(test)]
+mod typed_theme {
+    use nsh_core::element::{
+        AdaptiveColor, AppTheme, Registry, Role, TokenKind, TokenSpec, Tokens,
+        description::SetDescription,
+    };
+    use oxc::span::SourceType;
+
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Ds;
+
+    impl AppTheme for Ds {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::LazyLock<Vec<TokenSpec>> = std::sync::LazyLock::new(|| {
+                vec![
+                    TokenSpec::new("surface-overlay", TokenKind::Color)
+                        .doc("Popovers and menus.")
+                        .role(Role::Popover),
+                    TokenSpec::new("radius-card", TokenKind::Radius).doc("Cards' corners."),
+                ]
+            });
+            &SPECS
+        }
+
+        fn write_tokens(&self, _: &str, out: &mut Tokens) {
+            out.set_color("surface-overlay", AdaptiveColor::rgb(0x111111, 0x222222));
+            out.set_number("radius-card", 14.0);
+        }
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Ds
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    fn sets() -> Vec<SetDescription> {
+        let mut registry = Registry::ui_set("ds/native");
+        registry.theme::<Ds>();
+        vec![SetDescription::from(&registry)]
+    }
+
+    fn app(theme: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "nsh-typed-theme-{}-{}",
+            std::process::id(),
+            theme.len()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("nsh.json"), format!(r#"{{ "theme": {theme} }}"#)).unwrap();
+        dir
+    }
+
+    const THEME: &str =
+        r##"{ "cssVars": { "light": { "surface-overlay": "#333333", "primary": "#444444" } } }"##;
+
+    #[test]
+    fn classes_are_the_types_names() {
+        let dir = app(THEME);
+        let setup = super::tailwind_setup(&dir, &sets()).unwrap();
+        let unknown = crate::classes::check(
+            r#"const a = <View class="bg-surface-overlay rounded-card bg-primary" />;"#,
+            SourceType::tsx(),
+            &setup.theme,
+        );
+        let unknown: Vec<&str> = unknown.iter().map(|u| u.class.as_str()).collect();
+        // `primary` is a role here, no token: `bg-primary` is no class.
+        assert_eq!(unknown, ["bg-primary"]);
+        let tokens = super::theme_tokens_of(&dir, &sets()).unwrap();
+        assert_eq!(
+            tokens
+                .color("surface-overlay")
+                .map(|c| nsh_core::Color::from(c.light)),
+            Some(nsh_core::Color::from(nsh_core::color::rgb(0x333333)))
+        );
+        assert!(tokens.color("primary").is_none());
+        // Without types, the default as before.
+        assert!(
+            super::theme_tokens_of(&dir, &[])
+                .unwrap()
+                .color("primary")
+                .is_some()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tokens_d_ts_lists_the_specs_by_kind_with_their_docs() {
+        let declaration = crate::types::tokens_declaration_of(&Tokens::default(), &sets());
+        assert!(
+            declaration
+                .contains("    /** Popovers and menus. */\n    \"surface-overlay\": string;"),
+            "{declaration}"
+        );
+        assert!(
+            declaration.contains("    \"radius-card\": number;"),
+            "{declaration}"
+        );
+        // Without types: what it was.
+        let mut tokens = Tokens::default();
+        tokens.set_number("radius", 10.0);
+        assert_eq!(
+            crate::types::tokens_declaration_of(&tokens, &[]),
+            crate::types::tokens_declaration(&tokens)
         );
     }
 }

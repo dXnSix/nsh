@@ -267,6 +267,10 @@ token 的名称就是主题文件中 CSS 变量去掉 `--` 后的名称：`muted
 - **主题可以在运行时改变。** 嵌入原生应用的 NSH 应用拿到宿主的主题时，以及主题每次变化时，引用 token 的类、读取 `theme()` 的 Rust 绑定和读取 `token()` 的 TSX 代码都会更新，其中类和绑定在原生侧更新。宿主主题里没有的 token 使用应用自己 `"theme"` 中的值（再没有则用默认主题的值）。只想加上自己品牌的宿主给出主题覆盖，即用同样的文件格式写出其品牌要改的 token（[iOS](./ios.md#主题覆盖)、[Android](./android.md#主题覆盖)，桌面端为 `AppView::set_theme_overrides`）。
 - **应用可以换一个主题。** `nsh` 的 [`setTheme(theme)`](../modules/nsh.md#settheme) 在应用运行时把一个同样格式的主题设为应用的主题，取代它的 `"theme"`，在每个平台和 `nsh test` 里都一样；`setTheme(null)` 恢复应用自己的主题。`token()` 立即读到新的 token。主题要整个读得懂：有读不懂的值时抛出列出该值的 `TypeError`，正在显示的主题保持不变。请从应用自己的主题文件出发构造新主题，这样类名引用的每个 token 都还有值。Rust 应用用 `set_tokens(theme.into())` 设置一个 `nsh_base::Theme` 的 token。
 - **与其他类名一样检查。** 既不是默认主题、也不是应用 `"theme"` 中 token 的名称，在构建时会报告为未知类（`unknown class 'bg-chart-up'`）。要使用只有宿主或运行时设置的主题提供的 token，在应用的 `"theme"` 里也给它一个值：应用单独运行时显示这个值。
+- **主题类型。** 应用的 crate 注册了[主题类型](./rust.md#主题类型)时，各类型的 token 就是主题的 token，以类型的默认值为起点：类名像使用任何 token
+  一样使用它们（`bg-surface-raised`、`text-action/70`，`radius-card` 对应 `rounded-card`，`spacing-gutter` 对应 `p-gutter`），`token()` 读取它们。
+  角色是 NSH 自己的部分绘制时使用的，类名使用的是 token：设计系统把 `primary` 角色映射到 `action` 时，它的类名是 `bg-action`，而只有某个类型声明了
+  `primary`，`bg-primary` 才是已知的类名。
 
 引用 token 的类和其他类一样，每套主题只解析一次：绘制时的开销与调色板颜色相同。
 
@@ -290,7 +294,7 @@ import { Canvas, token } from "nsh";
 />
 ```
 
-名称带有类型：NSH 根据主题把应用的令牌写入 `.nsh/types/nsh/tokens.d.ts`，所以主题中有 `"up"` 后 `token("up")` 的类型是 `string`，主题中没有的名称是类型错误。
+名称带有类型：NSH 根据主题把应用的令牌写入 `.nsh/types/nsh/tokens.d.ts`，所以主题中有 `"up"` 后 `token("up")` 的类型是 `string`，主题中没有的名称是类型错误。使用主题类型时，它列出各类型的 token，每个按其种类标注类型（`number`，颜色、字体和阴影为 `string`），并附带文档注释。
 
 ## 类名检查
 
