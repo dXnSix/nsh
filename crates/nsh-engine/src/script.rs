@@ -352,6 +352,10 @@ mod imp {
             self.host.collect_garbage();
         }
 
+        pub(crate) fn heap_usage(&self) -> (u64, u64) {
+            self.host.heap_usage()
+        }
+
         pub(crate) fn fatal(&self) -> Option<String> {
             self.host.fatal()
         }
@@ -523,6 +527,10 @@ mod stub {
         }
 
         pub(crate) fn collect_garbage(&self) {
+            match *self {}
+        }
+
+        pub(crate) fn heap_usage(&self) -> (u64, u64) {
             match *self {}
         }
 

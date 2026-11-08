@@ -178,6 +178,10 @@ Things that were found the hard way. Read the section of the area you change bef
 - **Styles arrive before frames** (new views have a zero size): a shared radius goes straight to the layer (Core Animation clamps it itself);
   only paths, shadow paths, the content view and the image layer depend on the size, and they are rebuilt on `Frame` while `Decor::sized()`
   is true. Scaling radii by the CSS rule at a zero size once turned every rounded corner square.
+- **A view's first style does not transition**: a mounting tree's views are styled after they are added to the window, so
+  `window().is_some()` alone animates the first style from the defaults (a pill's corners growing out of a square). The
+  mounter only transitions a view it has styled before (`Slot::styled`), as `nsh_core`'s `transition::restyle` and
+  Android's mounter do.
 - **Property changes on standalone `CALayer`s animate implicitly for 0.25s** (a UIView's own layer does not): wrap changes to shape / image
   layers in `CATransaction.setDisableActions(true)`.
 - **Box-shadow geometry needs explicit animations of its own**: iOS transitions animate the view's `cornerRadius`, but the
@@ -573,8 +577,9 @@ Things that were found the hard way. Read the section of the area you change bef
 - In-process screenshots (`cacheDisplayInRect:`, `renderInContext:`) ignore `maskedCorners`, `shadowPath`, Core Image
   filters and cut masks at the mask layer's bounds; they show no backdrop blur, sheets or `AVPlayerLayer` content, and
   `renderInContext:` no `WKWebView` pages either (`cacheDisplayInRect:` shows them: WebKit draws them for it). Pages
-  and dialogs that leave as images take their live web views and videos along (`native::lend`). The test agent's
-  screenshots are the window server's instead (next item).
+  and dialogs that leave as images take their live web views and videos along (`native::lend`). They also draw a
+  layer's own `border` unevenly around rounded corners (the outer edge on the corner curve, the inner one circular),
+  which a window draws evenly. The test agent's screenshots are the window server's instead (next item).
 - `CARenderer` (`rendererWithMTLTexture:options:`) renders only a layer tree in a context of its own: given a window's
   content layer it rendered it offscreen and left the window's content blank on screen (macOS 27), so it cannot take a
   picture of a shown window. It also renders nothing unless the layer is set inside a committed `CATransaction`.
