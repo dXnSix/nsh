@@ -2459,8 +2459,7 @@ fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
     );
     if let Some(theme) = &root.theme {
         make.push_str(&format!(
-            "\n        .tokens(\n            nsh_base::Theme::from_json(include_str!({:?}))\n                \
-             .expect(\"nsh.json: theme\")\n                .into_tokens(),\n        )",
+            "\n        .theme(include_str!({:?}))",
             theme.to_string_lossy()
         ));
     }
@@ -4047,6 +4046,80 @@ panic = \"abort\"
                 let name = bin_name(&BRIDGES[..count], "describe");
                 assert!(name.starts_with("nsh-app-"), "{name}");
             }
+        }
+    }
+
+    /// A Rust app's theme reaches its root as the theme file
+    /// (`Root::theme`), which the engine reads with the UI set's reader, at
+    /// every place the generated code makes the root.
+    mod root_theme {
+        use super::*;
+
+        fn root(theme: Option<&str>) -> RootConfig {
+            RootConfig {
+                component: "App".into(),
+                theme: theme.map(Into::into),
+                appearance: None,
+                app_id: None,
+                status_bar: None,
+                url_schemes: Vec::new(),
+                window: None,
+                translations: None,
+            }
+        }
+
+        #[test]
+        fn the_root_takes_the_theme_file() {
+            let code = super::super::root_fn("", "app_native", &root(Some("/app/theme.json")));
+            assert!(
+                code.contains(".theme(include_str!(\"/app/theme.json\"))"),
+                "{code}"
+            );
+            assert!(!code.contains(".tokens("), "{code}");
+            assert!(!code.contains("Theme::from_json"), "{code}");
+            let code = super::super::root_fn("", "app_native", &root(None));
+            assert!(!code.contains(".theme("), "{code}");
+        }
+
+        /// Every file the workspace generates that makes the root gives it
+        /// the theme so.
+        #[test]
+        fn every_generated_root_takes_the_theme_file() {
+            let dir = std::env::temp_dir().join(format!("nsh-root-theme-{}", std::process::id()));
+            let theme = dir.join("theme.json");
+            let app = app(
+                &dir,
+                &[("app-native", dir.join("native"))],
+                Some(root(Some(&theme.to_string_lossy()))),
+            );
+            app.write_workspace().unwrap();
+            let mut roots = 0;
+            let mut stack = vec![app.workspace.clone()];
+            while let Some(path) = stack.pop() {
+                for entry in std::fs::read_dir(&path).unwrap().flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if path.extension().is_some_and(|e| e == "rs") {
+                        let code = std::fs::read_to_string(&path).unwrap();
+                        if code.contains("fn app_root()") {
+                            roots += 1;
+                            assert!(code.contains(".theme(include_str!("), "{}", path.display());
+                            assert!(!code.contains("Theme::from_json"), "{}", path.display());
+                        }
+                    }
+                }
+            }
+            assert!(roots > 1, "{roots}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// `cargo run`'s binary gives the root `nsh.json`'s theme.
+        #[test]
+        fn the_cargo_run_template_reads_the_theme() {
+            let main = include_str!("templates/rust/main.rs");
+            assert!(main.contains("root = root.theme(theme);"), "{main}");
+            assert!(main.contains("config.get(\"theme\")"), "{main}");
         }
     }
 }

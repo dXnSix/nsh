@@ -27,21 +27,17 @@
 
 use std::sync::{Arc, LazyLock};
 
+#[cfg(test)]
+use nsh_core::{Color, color::Hsla};
 use nsh_core::{
-    Color, JsonValue,
-    color::Hsla,
-    element::{AdaptiveColor, Role, SharedString, Tokens},
+    element::{AdaptiveColor, Role, SharedString, Tokens, theme_file},
     geometry::{Points, px},
 };
-use rustc_hash::{FxHashMap, FxHashSet};
 
 /// The default theme file: shadcn/ui's `neutral` theme.
 pub const DEFAULT_THEME: &str = include_str!("default-theme.json");
 
 static DEFAULT: LazyLock<Theme> = LazyLock::new(|| Theme::of(Arc::new(DEFAULT_TOKENS.clone())));
-
-/// Points per `rem`, as Tailwind's theme has them.
-const REM: f32 = 16.0;
 
 /// A theme file that does not parse.
 #[derive(Debug, Clone, PartialEq)]
@@ -316,74 +312,11 @@ impl From<Theme> for Tokens {
     }
 }
 
-/// A CSS color.
-fn color(value: &str) -> Option<Hsla> {
-    Color::parse(value).map(Hsla::from)
-}
-
-/// Whether `value` is written as a color, which a theme means as one: a hex
-/// color, a CSS color function or a `var()` alone. A value of no kind a
-/// token has (a shadow, a length in `em`) is not.
-fn written_as_color(value: &str) -> bool {
-    let value = value.trim();
-    if value.starts_with('#') {
-        return true;
-    }
-    let Some((function, _)) = value.split_once('(') else {
-        return false;
-    };
-    value.ends_with(')')
-        && matches!(
-            function.trim().to_ascii_lowercase().as_str(),
-            "rgb"
-                | "rgba"
-                | "hsl"
-                | "hsla"
-                | "hwb"
-                | "lab"
-                | "lch"
-                | "oklab"
-                | "oklch"
-                | "color"
-                | "color-mix"
-                | "light-dark"
-                | "var"
-        )
-}
-
-/// A CSS length in points: `0.625rem`, `10px`, `10`.
-fn length(value: &str) -> Option<f32> {
-    let value = value.trim();
-    let (number, scale) = if let Some(n) = value.strip_suffix("rem") {
-        (n, REM)
-    } else if let Some(n) = value.strip_suffix("px") {
-        (n, 1.0)
-    } else {
-        (value, 1.0)
-    };
-    number
-        .trim()
-        .parse::<f32>()
-        .ok()
-        .filter(|n| n.is_finite())
-        .map(|n| n * scale)
-}
-
-/// The family of a CSS `font-family` list that the platform draws with:
-/// its first, unquoted (`None`: a generic family, the system's font).
-fn font_family(value: &str) -> Option<&str> {
-    let first = value.split(',').next()?.trim().trim_matches(['"', '\'']);
-    let generic = matches!(
-        first,
-        "" | "sans-serif"
-            | "serif"
-            | "system-ui"
-            | "ui-sans-serif"
-            | "ui-serif"
-            | "-apple-system"
-            | "BlinkMacSystemFont"
-    );
-    (!generic).then_some(first)
+/// Applies theme file `json` (shadcn's `cssVars`) over `tokens`.
+fn apply(tokens: &mut Tokens, json: &str) -> Result<Vec<String>, ThemeError> {
+    let (out, ignored) = theme_file::parse(json, tokens).map_err(ThemeError)?;
+    *tokens = out;
+    Ok(ignored)
 }
 
 /// The tokens theme file `json` sets, and only those: an embedding app's
@@ -393,199 +326,11 @@ fn font_family(value: &str) -> Option<&str> {
 /// one [`Theme::from_json`] reads, shadcn's `cssVars`; a color it names
 /// (`var(--ring)`) and does not set is the default theme's.
 pub fn theme_overrides(json: &str) -> Result<Tokens, ThemeError> {
-    let mut tokens = Tokens::default();
-    for what in apply_onto(&mut tokens, &DEFAULT_TOKENS, json)? {
+    let (tokens, ignored) = theme_file::overrides(json, &DEFAULT_TOKENS).map_err(ThemeError)?;
+    for what in ignored {
         log::warn!("theme overrides: {what}, ignored");
     }
     Ok(tokens)
-}
-
-/// The tokens theme file `json` sets, and only those, with what of it was
-/// left out; a color it names and does not set is `base`'s (the tokens the
-/// app is drawn with): how the core changes some of the app's tokens
-/// (`nsh`'s `updateTheme`, [`nsh_core::element::Registry::token_overrides_from`]).
-pub(crate) fn read_overrides(json: &str, base: &Tokens) -> Result<(Tokens, Vec<String>), String> {
-    let mut tokens = Tokens::default();
-    let ignored = apply_onto(&mut tokens, base, json).map_err(|e| e.0)?;
-    Ok((tokens, ignored))
-}
-
-/// Applies theme file `json` (shadcn's `cssVars`) over `tokens`.
-fn apply(tokens: &mut Tokens, json: &str) -> Result<Vec<String>, ThemeError> {
-    let base = tokens.clone();
-    apply_onto(tokens, &base, json)
-}
-
-/// Sets the tokens of theme file `json` in `tokens`; a color it names and
-/// does not set is `base`'s. Returns what it left out.
-fn apply_onto(tokens: &mut Tokens, base: &Tokens, json: &str) -> Result<Vec<String>, ThemeError> {
-    let value: JsonValue =
-        serde_json::from_str(json).map_err(|e| ThemeError(format!("not JSON: {e}")))?;
-    let mut ignored = Vec::new();
-    match value.get("cssVars") {
-        Some(vars) => apply_css_vars(tokens, base, vars, &mut ignored),
-        None => ignored.push("no shadcn `{ \"cssVars\": { ... } }`".into()),
-    }
-    Ok(ignored)
-}
-
-/// Applies shadcn's `cssVars`: `theme`'s values in both appearances,
-/// `light`'s in the light one (and the dark one when `dark` leaves them
-/// out), `dark`'s in the dark one. A color may name another
-/// (`var(--ring)`, in `color-mix()` too) of the same appearance: the
-/// file's or the one under it. Values of no kind a token has (shadows,
-/// letter spacing) are left out, as they are of no Tailwind utility NSH
-/// draws with a token. A value written as a color that is none is left
-/// out, and one that is no color where the other appearance has a color
-/// gives way to that color; both are listed in `ignored`.
-fn apply_css_vars(tokens: &mut Tokens, base: &Tokens, vars: &JsonValue, ignored: &mut Vec<String>) {
-    let mut section = |name: &str| -> FxHashMap<String, String> {
-        let Some(v) = vars.get(name) else {
-            return FxHashMap::default();
-        };
-        let JsonValue::Object(fields) = v else {
-            ignored.push(format!("cssVars.{name}: expected an object"));
-            return FxHashMap::default();
-        };
-        let mut out = FxHashMap::default();
-        for (key, value) in fields {
-            match value {
-                JsonValue::Null => {}
-                JsonValue::String(s) => {
-                    out.insert(key.clone(), s.clone());
-                }
-                JsonValue::Number(n) => {
-                    out.insert(key.clone(), n.to_string());
-                }
-                v => ignored.push(format!(
-                    "cssVars.{name}.{key}: expected a CSS value, got {v}"
-                )),
-            }
-        }
-        out
-    };
-    let (both, light, dark) = (section("theme"), section("light"), section("dark"));
-    let mut light_vars = both.clone();
-    light_vars.extend(light.iter().map(|(k, v)| (k.clone(), v.clone())));
-    let mut dark_vars = light_vars.clone();
-    dark_vars.extend(dark.iter().map(|(k, v)| (k.clone(), v.clone())));
-
-    let mut names: Vec<&String> = light_vars.keys().chain(dark.keys()).collect();
-    names.sort();
-    names.dedup();
-    for name in names {
-        let value = dark_vars.get(name).or_else(|| light_vars.get(name));
-        let Some(value) = value else { continue };
-        if name.starts_with("font-") {
-            if let Some(family) = font_family(value) {
-                tokens.set_font(name, family);
-            }
-            continue;
-        }
-        let resolve = |vars: &FxHashMap<String, String>, dark: bool| {
-            resolve_color(name, vars, base, dark, &mut FxHashSet::default())
-        };
-        let (light, dark) = match (resolve(&light_vars, false), resolve(&dark_vars, true)) {
-            (Ok(light), Ok(dark)) => (light, dark),
-            (Err(e), _) | (_, Err(e)) => {
-                ignored.push(e.0);
-                continue;
-            }
-        };
-        match (light, dark) {
-            (Some(l), Some(d)) => tokens.set_color(name, AdaptiveColor { light: l, dark: d }),
-            (Some(c), None) | (None, Some(c)) => {
-                // Set in one appearance only, the color is both's; given in
-                // the other too, that value is no color.
-                let (other, vars) = match light {
-                    Some(_) => ("dark", &dark_vars),
-                    None => ("light", &light_vars),
-                };
-                if let Some(v) = vars.get(name) {
-                    ignored.push(format!(
-                        "`{name}`: {v} is no color in the {other} appearance"
-                    ));
-                }
-                tokens.set_color(name, c.into());
-            }
-            (None, None) => match length(value) {
-                Some(n) => tokens.set_number(name, n),
-                None => {
-                    let mut given: Vec<&String> = [light_vars.get(name), dark_vars.get(name)]
-                        .into_iter()
-                        .flatten()
-                        .collect();
-                    given.dedup();
-                    for v in given.into_iter().filter(|v| written_as_color(v)) {
-                        ignored.push(format!("`{name}`: {v} is no color"));
-                    }
-                }
-            },
-        }
-    }
-}
-
-/// The color `name` is in `vars` (of one appearance), with the colors it
-/// names (`var(--x)`, `var(--x, fallback)`) resolved: the file's, else
-/// `base`'s. `None` when it is no color. A name that names itself is an
-/// error.
-fn resolve_color(
-    name: &str,
-    vars: &FxHashMap<String, String>,
-    base: &Tokens,
-    dark: bool,
-    seen: &mut FxHashSet<String>,
-) -> Result<Option<Hsla>, ThemeError> {
-    let Some(value) = vars.get(name) else {
-        return Ok(base
-            .color(name)
-            .map(|c| if dark { c.dark } else { c.light }));
-    };
-    if !seen.insert(name.to_owned()) {
-        return Err(ThemeError(format!("`{name}` names itself")));
-    }
-    let mut out = String::with_capacity(value.len());
-    let mut rest = value.as_str();
-    while let Some(start) = rest.find("var(") {
-        out.push_str(&rest[..start]);
-        let inner = &rest[start + 4..];
-        let mut depth = 1;
-        let end = inner
-            .char_indices()
-            .find(|&(_, c)| {
-                depth += match c {
-                    '(' => 1,
-                    ')' => -1,
-                    _ => 0,
-                };
-                depth == 0
-            })
-            .map(|(i, _)| i)
-            .ok_or_else(|| ThemeError(format!("`{name}`: unclosed var()")))?;
-        let (var, fallback) = match inner[..end].split_once(',') {
-            Some((v, f)) => (v.trim(), Some(f.trim())),
-            None => (inner[..end].trim(), None),
-        };
-        let Some(var) = var.strip_prefix("--") else {
-            return Err(ThemeError(format!(
-                "`{name}`: var() names no `--` variable"
-            )));
-        };
-        match resolve_color(var, vars, base, dark, seen)? {
-            Some(c) => out.push_str(&format!("#{:08x}", Color::from(c).0)),
-            None => match fallback {
-                Some(f) => out.push_str(f),
-                None => {
-                    seen.remove(name);
-                    return Ok(None);
-                }
-            },
-        }
-        rest = &inner[end + 1..];
-    }
-    out.push_str(rest);
-    seen.remove(name);
-    Ok(color(&out))
 }
 
 #[cfg(test)]

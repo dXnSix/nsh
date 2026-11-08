@@ -535,6 +535,7 @@ pub(crate) trait AnyInstance {
 pub struct Root {
     make: Arc<dyn Fn() -> super::AnyElement + Send + Sync>,
     tokens: Option<Arc<super::Tokens>>,
+    theme: Option<Arc<str>>,
     fonts: Vec<Arc<[u8]>>,
     appearance: Option<crate::platform::Appearance>,
     app_id: Option<String>,
@@ -550,6 +551,7 @@ impl Root {
         Self {
             make: Arc::new(move || super::IntoElement::into_element(C::element(props()))),
             tokens: None,
+            theme: None,
             fonts: Vec::new(),
             appearance: None,
             app_id: None,
@@ -614,6 +616,16 @@ impl Root {
     /// default the UI sets' defaults).
     pub fn tokens(mut self, tokens: super::Tokens) -> Self {
         self.tokens = Some(Arc::new(tokens));
+        self
+    }
+
+    /// Renders with the theme file `json` (`nsh.json`'s `"theme"`, shadcn's
+    /// `cssVars`), read by the UI set that reads themes as a JS app's is,
+    /// over its defaults: in the first frame, and the app's theme from then
+    /// on. It replaces [`Root::tokens`]: the file is read over the UI set's
+    /// defaults, not over those tokens.
+    pub fn theme(mut self, json: impl Into<Arc<str>>) -> Self {
+        self.theme = Some(json.into());
         self
     }
 
@@ -686,6 +698,11 @@ impl Root {
     /// The design tokens it renders with.
     pub fn tokens_ref(&self) -> Option<&super::Tokens> {
         self.tokens.as_deref()
+    }
+
+    /// The theme file it renders with ([`Root::theme`]).
+    pub fn theme_ref(&self) -> Option<&str> {
+        self.theme.as_deref()
     }
 
     /// The font files to register.

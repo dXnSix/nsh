@@ -524,6 +524,10 @@ fn the_module_formats_money() {
   在类名中是 `bg-up` / `text-up/70`，在 TSX 中是 `token("up")`（[主题 token](./tailwind.md#主题-token)）。数值如 `"radius-card": "14px"`
   是 `theme().number("radius-card")` 和 `rounded-(--radius-card)`。
 - 打包器在构建时检查主题：文件缺失、JSON 无效或不是 `cssVars` 格式的主题都会让构建失败，并报告 `nsh.json: theme: …` 错误。
+- `nsh run` 和 `nsh package` 把主题文件交给应用的根组件，即 `Root::theme(json)`，所以它的读取方式与 TSX 应用相同，并且在第一帧就生效；
+  `nsh init` 生成的 `cargo run` 可执行文件也会这样使用 `nsh.json` 的 `"theme"`。自己创建的根组件（例如测试中的
+  `EngineConfig::new(Root::of::<App>())`）可以用 `.theme(include_str!("../brand-theme.json"))` 指定主题；主题由读取主题的 UI 集读取，
+  所以引擎的 `ui_sets` 需要包含 `nsh_base::registry()`（桌面平台的 `run_app` 已经包含）。
 
 令牌及其默认的浅色和深色值（shadcn 的 `neutral`）：
 

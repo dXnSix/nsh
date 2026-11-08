@@ -258,6 +258,10 @@ pub(crate) struct Surface {
     /// The embedding app's theme ([`crate::AppView::set_theme`]): sent to
     /// every engine the surface starts, before its first frame.
     pub(crate) host_theme: RefCell<Option<nsh_base::Theme>>,
+    /// The embedding app's theme overrides, a theme file the engine reads
+    /// ([`crate::AppView::set_theme_overrides`]): sent to every engine the
+    /// surface starts, before its first frame.
+    pub(crate) host_overrides: RefCell<Option<String>>,
     /// The window is see-through where the app draws nothing
     /// ([`crate::AppOptions::transparent`]): no window background.
     pub(crate) transparent: Cell<bool>,
@@ -334,6 +338,7 @@ impl Surface {
             events_handled: Cell::new(0),
             chrome: Default::default(),
             host_theme: RefCell::new(None),
+            host_overrides: RefCell::new(None),
             transparent: Cell::new(false),
             host_dark: Cell::new(None),
             host_environment: Cell::default(),
@@ -426,6 +431,7 @@ impl Surface {
         };
         let family: Arc<str> = Arc::from(&*crate::text::ui_family_for(&text_system));
         let theme = self.host_theme.borrow().clone();
+        let overrides = self.host_overrides.borrow().clone();
         match Engine::start_with(
             config,
             move || GpuiTextEngine::new(text_system, family),
@@ -433,6 +439,8 @@ impl Surface {
             |control| {
                 if let Some(theme) = theme {
                     control.set_tokens(Some(theme.into_tokens()));
+                } else if let Some(json) = overrides {
+                    control.set_theme_overrides(json);
                 }
             },
         ) {

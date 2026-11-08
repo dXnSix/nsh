@@ -66,8 +66,9 @@ pub(crate) struct Host {
     storage: Mutex<Option<std::path::PathBuf>>,
     /// What the running app may reach (web view navigations check it).
     access: Mutex<Arc<nsh_engine::Access>>,
-    /// The embedding app's theme overrides (`NshView.setThemeOverrides`).
-    host_tokens: Mutex<Option<nsh_engine::Tokens>>,
+    /// The embedding app's theme overrides (`NshView.setThemeOverrides`):
+    /// a theme file the engine reads.
+    host_theme: Mutex<Option<String>>,
     /// Font files the embedding app registers (`NshView.registerFont`),
     /// applied to the running app and to every app loaded later.
     fonts: Mutex<Vec<Vec<u8>>>,
@@ -128,10 +129,13 @@ impl Host {
     /// The embedding app's theme overrides (`None`: the app's own theme):
     /// sent to the running app at once, and to every app loaded later
     /// before its first frame.
-    fn set_host_tokens(&self, tokens: Option<nsh_engine::Tokens>) {
-        *self.host_tokens.lock().expect("tokens") = tokens.clone();
+    fn set_host_theme(&self, json: Option<String>) {
+        *self.host_theme.lock().expect("theme") = json.clone();
         if let Some(control) = self.control() {
-            control.set_tokens(tokens);
+            match json {
+                Some(json) => control.set_theme_overrides(json),
+                None => control.set_tokens(None),
+            }
         }
     }
 
@@ -231,11 +235,11 @@ impl Host {
             model.set_up_engine(&mut config);
         }
         // The embedding app's theme overrides are in the first frame.
-        let tokens = self.host_tokens.lock().expect("tokens").clone();
+        let theme = self.host_theme.lock().expect("theme").clone();
         let fonts = self.fonts.lock().expect("fonts").clone();
         let setup = move |control: &EngineControl| {
-            if tokens.is_some() {
-                control.set_tokens(tokens);
+            if let Some(json) = theme {
+                control.set_theme_overrides(json);
             }
             for font in fonts {
                 control.register_font(font);
@@ -597,7 +601,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_create(
         data_dir,
         storage: Mutex::new(None),
         access: Mutex::new(Arc::default()),
-        host_tokens: Mutex::new(None),
+        host_theme: Mutex::new(None),
         fonts: Mutex::new(Vec::new()),
         inline_images: Mutex::default(),
         cache: Mutex::default(),
@@ -868,19 +872,22 @@ extern "system" fn Java_com_longbridge_nsh_Native_setThemeOverrides<'local>(
 ) -> JString<'local> {
     // SAFETY: Java passes its live handle.
     let host = unsafe { host(handle) };
-    let tokens = if json.is_null() {
+    let theme = if json.is_null() {
         Ok(None)
     } else {
         match env.get_string(&json) {
-            Ok(json) => nsh_base::theme_overrides(&String::from(json))
-                .map(Some)
-                .map_err(|err| format!("invalid theme: {err}")),
+            Ok(json) => {
+                let json = String::from(json);
+                nsh_core::element::theme_file::check(&json)
+                    .map(|()| Some(json))
+                    .map_err(|err| format!("invalid theme: {err}"))
+            }
             Err(err) => Err(format!("invalid theme: {err}")),
         }
     };
-    match tokens {
-        Ok(tokens) => {
-            host.set_host_tokens(tokens);
+    match theme {
+        Ok(theme) => {
+            host.set_host_theme(theme);
             JString::from(JObject::null())
         }
         Err(err) => env

@@ -581,6 +581,11 @@ values of the light appearance, `dark` those of the dark one, and `theme` those 
   and `rounded-(--radius-card)`.
 - The bundler checks the theme when it builds: a missing file, invalid JSON or a theme other than `cssVars` fails the
   build with an `nsh.json: theme: …` error.
+- `nsh run` and `nsh package` hand the theme file to the app's root, `Root::theme(json)`, so it is read as a TSX
+  app's is and is in the first frame; the `cargo run` binary that `nsh init` writes does the same with `nsh.json`'s
+  `"theme"`. A root you make yourself (a test's `EngineConfig::new(Root::of::<App>())`) takes one with
+  `.theme(include_str!("../brand-theme.json"))`; the UI set that reads themes reads it, so the engine's `ui_sets`
+  need `nsh_base::registry()` (the desktops' `run_app` has it already).
 
 The tokens, with their default light and dark values (shadcn's `neutral`):
 

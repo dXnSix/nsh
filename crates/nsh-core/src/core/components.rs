@@ -882,11 +882,11 @@ impl<M: TextEngine> Core<M> {
         self.components.registry = registry;
     }
 
-    /// `uiTheme` on the root: the app's theme file (`nsh.json`, `setTheme`),
-    /// which the UI set that reads themes makes tokens of. What it cannot
-    /// read is left out and the rest applies, so a bundle made by a newer
-    /// NSH keeps its theme here.
-    pub(super) fn set_ui_theme(&mut self, json: &str) {
+    /// The app's theme file (`nsh.json`, `setTheme`, a Rust app's
+    /// [`Root::theme`]; `uiTheme` on the root), which the UI set that reads
+    /// themes makes tokens of. What it cannot read is left out and the rest
+    /// applies, so a bundle made by a newer NSH keeps its theme here.
+    pub fn set_ui_theme(&mut self, json: &str) {
         match self.components.registry.tokens(Some(json)) {
             Some(Ok((tokens, left_out))) => {
                 for what in left_out {
@@ -972,6 +972,38 @@ impl<M: TextEngine> Core<M> {
     pub fn set_host_tokens(&mut self, tokens: Option<Tokens>) {
         self.components.host_tokens = tokens.map(Arc::new);
         self.tokens_changed();
+    }
+
+    /// The embedding app's theme overrides (`None`: the app's own theme
+    /// again): a theme file whose tokens win over the app's of the same
+    /// names, read by the UI set that reads themes
+    /// ([`Registry::token_overrides_from`], else the core's
+    /// [`crate::element::theme_file::overrides`]) against the UI set's
+    /// default tokens, so a `var()` it does not set names the default
+    /// theme's token. What it cannot read is left out; text that is no JSON
+    /// changes nothing.
+    pub fn set_host_theme(&mut self, json: Option<&str>) {
+        let Some(json) = json else {
+            return self.set_host_tokens(None);
+        };
+        let read = self
+            .components
+            .registry
+            .token_overrides()
+            .unwrap_or(crate::element::theme_file::overrides);
+        let defaults = match self.components.registry.tokens(None) {
+            Some(Ok((tokens, _))) => tokens,
+            _ => Tokens::default(),
+        };
+        match read(json, &defaults) {
+            Ok((tokens, left_out)) => {
+                for what in left_out {
+                    log::warn!("theme overrides: {what}, ignored");
+                }
+                self.set_host_tokens(Some(tokens));
+            }
+            Err(e) => log::warn!("theme overrides: {e}"),
+        }
     }
 
     /// What [`Core::tokens`] become when the root's `uiTheme` (the app's

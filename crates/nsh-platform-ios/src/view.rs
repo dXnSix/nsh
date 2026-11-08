@@ -37,8 +37,8 @@ struct State {
     options: SurfaceOptions,
     /// The embedding app's locale and text size.
     host: nsh_engine::HostEnvironment,
-    /// The embedding app's theme overrides.
-    host_tokens: Option<nsh_engine::Tokens>,
+    /// The embedding app's theme overrides: a theme file.
+    host_theme: Option<String>,
     /// Font files the embedding app registers.
     fonts: Vec<Vec<u8>>,
     on_error: Option<ErrorHandler>,
@@ -66,7 +66,7 @@ impl AppView {
                     surface: None,
                     options,
                     host: nsh_engine::HostEnvironment::default(),
-                    host_tokens: None,
+                    host_theme: None,
                     fonts: Vec::new(),
                     on_error: None,
                     urls: Vec::new(),
@@ -207,11 +207,13 @@ impl AppView {
     /// app loaded later starts with them. `None` gives the app its own
     /// theme back. Fails, changing nothing, on a file that does not parse.
     pub fn set_theme_overrides(&self, json: Option<&str>) -> Result<(), nsh_base::ThemeError> {
-        let tokens = json.map(nsh_base::theme_overrides).transpose()?;
+        if let Some(json) = json {
+            nsh_core::element::theme_file::check(json).map_err(nsh_base::ThemeError)?;
+        }
         let mut state = self.inner.state.borrow_mut();
-        state.host_tokens = tokens;
+        state.host_theme = json.map(str::to_owned);
         if let Some(surface) = &state.surface {
-            surface.set_host_tokens(state.host_tokens.clone());
+            surface.set_host_theme(state.host_theme.clone());
         }
         Ok(())
     }
@@ -302,7 +304,7 @@ impl Inner {
             UIViewAutoresizing::FlexibleWidth | UIViewAutoresizing::FlexibleHeight,
         );
         surface.set_host_environment(state.host);
-        surface.set_host_tokens(state.host_tokens.clone());
+        surface.set_host_theme(state.host_theme.clone());
         surface.set_host_fonts(state.fonts.clone());
         #[cfg(feature = "dev")]
         surface.set_test_model(state.test_model.clone());
