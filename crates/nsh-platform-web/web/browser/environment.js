@@ -47,6 +47,9 @@ export function createEnvironment(reactive, invoke, dom) {
     // nsh-js's `setTheme` (`env.rs`): the engine checks and applies it, or
     // throws its `TypeError`; what read a token follows once it took.
     setTheme(theme) { invoke(406, [theme]); tokens.update(value => value + 1); },
+    // `updateTheme` and `resetTheme` (`env.rs`), the same way.
+    updateTheme(theme) { invoke(409, [theme]); tokens.update(value => value + 1); },
+    resetTheme(names) { invoke(410, [names]); tokens.update(value => value + 1); },
   };
   return {
     api, insets, host: () => fields.host(), titleBar: () => fields.titleBar(),

@@ -603,6 +603,29 @@ The tokens, with their default light and dark values (shadcn's `neutral`):
 | `font-sans` | `font_sans` | the system font | | The app's font: every text that sets no family of its own |
 | `font-mono` | `font_mono` | the system monospace font | | The monospaced font: `font-mono`, code in `TextView` |
 
+### Changing tokens while the app runs
+
+`set_tokens(theme.into())` makes another theme the app's ([Theme tokens](./tailwind.md#theme-tokens)). To change a
+few tokens and keep the others, pass just those to `update_tokens`; `reset_tokens` puts the tokens it names back to
+the app's theme:
+
+```rust
+use nsh_core::prelude::*;
+
+let mut brand = Tokens::default();
+brand.set_color("primary", AdaptiveColor::rgb(0xe11d48, 0xfb7185));
+update_tokens(brand); // only `primary` changes
+reset_tokens(["primary"]); // the app's primary again
+```
+
+- A change applies in order with the app's other actions: two updates in one turn both take, the later over the
+  earlier. What reads a changed token (`theme()`, a class, `token()` in TSX) follows in the same frame, and the
+  platform's own controls with it.
+- The app's theme is `nsh.json`'s over the default, or the one `set_tokens` or `setTheme` set last. A name
+  `reset_tokens` gives that the theme does not have is removed.
+- A synchronous `#[module]` function does the same with `cx.update_tokens(..)` and `cx.reset_tokens(..)` of its
+  `ModuleCx`. TSX: [`updateTheme` and `resetTheme`](../modules/nsh.md#updatetheme-resettheme).
+
 ## Several crates
 
 An app's Rust code can be split into crates, each imported by its own specifier: `"rust"` takes a list of crate

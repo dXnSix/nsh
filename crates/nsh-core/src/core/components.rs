@@ -533,6 +533,10 @@ pub(super) struct Components {
     /// app's root): drawn with while the embedding app sets none
     /// ([`Core::set_host_tokens`]).
     app_tokens: Arc<Tokens>,
+    /// The app's theme: its tokens as last set whole (a UI set's defaults,
+    /// `nsh.json`'s theme, `setTheme`, `set_tokens`), which
+    /// [`Core::reset_tokens`] puts tokens back to.
+    file_tokens: Arc<Tokens>,
     /// The embedding app's tokens: win over [`Self::app_tokens`].
     host_tokens: Option<Arc<Tokens>>,
     /// Boxed: making a view (or applying its patches) takes its instance
@@ -693,6 +697,7 @@ impl Default for Components {
             specs: FxHashMap::default(),
             tokens: Arc::new(Tokens::default()),
             app_tokens: Arc::new(Tokens::default()),
+            file_tokens: Arc::new(Tokens::default()),
             host_tokens: None,
             instances: FxHashMap::default(),
             owners: FxHashMap::default(),
@@ -890,10 +895,57 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// The app's design tokens; it is drawn with them unless the
-    /// embedding app set its own ([`Core::set_host_tokens`]).
+    /// embedding app set its own ([`Core::set_host_tokens`]). They are its
+    /// theme from now on: what [`Core::reset_tokens`] goes back to.
     pub fn set_tokens(&mut self, tokens: Tokens) {
-        self.components.app_tokens = Arc::new(tokens);
+        let tokens = Arc::new(tokens);
+        self.components.file_tokens = tokens.clone();
+        self.components.app_tokens = tokens;
         self.tokens_changed();
+    }
+
+    /// Changes some of the app's design tokens: those of `tokens` take
+    /// their values, the others stay. Applied in order, so two changes in
+    /// one turn compose.
+    pub(crate) fn update_tokens(&mut self, tokens: Tokens) {
+        self.components.app_tokens = Arc::new(tokens.over(&self.components.app_tokens));
+        self.tokens_changed();
+    }
+
+    /// Puts the app's tokens `names` (`None`: every one) back to its
+    /// theme's ([`Core::set_tokens`]); a name the theme lacks is removed.
+    pub(crate) fn reset_tokens(&mut self, names: Option<&[Box<str>]>) {
+        let file = &self.components.file_tokens;
+        self.components.app_tokens = match names {
+            None => file.clone(),
+            Some(names) => {
+                let mut tokens = (*self.components.app_tokens).clone();
+                for name in names {
+                    tokens.copy_named(file, name);
+                }
+                Arc::new(tokens)
+            }
+        };
+        self.tokens_changed();
+    }
+
+    /// `uiThemeUpdate` on the root (`nsh`'s `updateTheme`): the tokens a
+    /// theme file sets change, read by the UI set
+    /// ([`Registry::token_overrides_from`]) against the tokens drawn with
+    /// now; what it cannot read is left out and keeps its value.
+    pub(super) fn update_ui_theme(&mut self, json: &str) {
+        let Some(read) = self.components.registry.token_overrides() else {
+            return log::warn!("theme: no UI set reads theme changes");
+        };
+        match read(json, &self.components.tokens) {
+            Ok((tokens, left_out)) => {
+                for what in left_out {
+                    log::warn!("theme: {what}, ignored");
+                }
+                self.update_tokens(tokens);
+            }
+            Err(e) => log::warn!("theme: {e}"),
+        }
     }
 
     /// The app's translations ([`crate::i18n`]): what `t!` and TS's `t`
@@ -923,6 +975,7 @@ impl<M: TextEngine> Core<M> {
     pub fn theme_tokens(&self) -> crate::element::ThemeTokens {
         crate::element::ThemeTokens::new(
             self.components.registry.token_source(),
+            self.components.registry.token_overrides(),
             self.components.host_tokens.clone(),
         )
     }
@@ -5350,6 +5403,8 @@ impl<M: TextEngine> Core<M> {
             Action::Frame(answer) => self.wait_frame(answer),
             Action::Appearance(appearance) => self.set_appearance(appearance),
             Action::Tokens(tokens) => self.set_tokens(tokens),
+            Action::UpdateTokens(tokens) => self.update_tokens(tokens),
+            Action::ResetTokens(names) => self.reset_tokens(Some(&names)),
             Action::Translations(translations) => self.set_translations(translations),
             Action::Locale(locale) => self.components.locale_request = Some(locale),
             Action::BuiltInScrollbars(source, theme) => {

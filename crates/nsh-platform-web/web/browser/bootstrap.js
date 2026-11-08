@@ -5233,6 +5233,14 @@
 				setTheme(theme) {
 					invoke(406, [theme]);
 					tokens.update((value) => value + 1);
+				},
+				updateTheme(theme) {
+					invoke(409, [theme]);
+					tokens.update((value) => value + 1);
+				},
+				resetTheme(names) {
+					invoke(410, [names]);
+					tokens.update((value) => value + 1);
 				}
 			},
 			insets,

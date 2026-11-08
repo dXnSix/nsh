@@ -45,6 +45,9 @@ struct Runtime {
     /// The theme file the app was built with (`setup`), which
     /// `setTheme(null)` gives back.
     built_theme: RefCell<Option<String>>,
+    /// The theme file the app's tokens come from now (the built one, or
+    /// `setTheme`'s), which `resetTheme` puts tokens back to.
+    current_theme: RefCell<Option<String>>,
     host: RefCell<Option<Rc<dyn nsh_core::host_channel::HostBridge>>>,
     wake: RefCell<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
     fonts: RefCell<Vec<String>>,
@@ -71,6 +74,7 @@ impl Default for Runtime {
             tokens: RefCell::default(),
             theme: RefCell::default(),
             built_theme: RefCell::default(),
+            current_theme: RefCell::default(),
             host: RefCell::default(),
             wake: RefCell::default(),
             fonts: RefCell::default(),
@@ -192,6 +196,7 @@ impl Runtime {
                 if let Some(tokens) = tokens {
                     *self.tokens.borrow_mut() = Some(std::sync::Arc::new(tokens));
                 }
+                *self.current_theme.borrow_mut() = Some(json.clone());
                 *self.built_theme.borrow_mut() = Some(json);
                 Ok(Value(0))
             }
@@ -220,9 +225,78 @@ impl Runtime {
                     let message = "setTheme: expected a theme ({ cssVars }) or null";
                     return Err(self.throw(JsError::Type(message.into())));
                 };
+                *self.current_theme.borrow_mut() = Some(json.clone());
                 self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
                     id: nsh_core::ROOT_ID,
                     prop: nsh_core::Prop::UiTheme(json.into()),
+                });
+                if let Some(tokens) = tokens {
+                    *self.tokens.borrow_mut() = Some(std::sync::Arc::new(tokens));
+                }
+                Ok(Value(0))
+            }
+            // `updateTheme(theme)`, as nsh-js's (`env.rs`): the tokens the
+            // theme sets change over the others, read whole or a
+            // `TypeError` naming what is not.
+            409 => {
+                use nsh_core::element::JsError;
+                let value = args.index(0)?;
+                if !value.is_object() {
+                    let message = "updateTheme: expected a theme ({ cssVars })";
+                    return Err(self.throw(JsError::Type(message.into())));
+                }
+                let json = protocol::to_json(&compat::Value::new(value))?.to_string();
+                let current = self.tokens.borrow().clone().unwrap_or_default();
+                let updated = self
+                    .theme
+                    .borrow()
+                    .as_ref()
+                    .and_then(|t| t.updated(&current, &json));
+                let tokens = match updated {
+                    Some(Err(what)) => {
+                        return Err(self.throw(JsError::Type(format!("updateTheme: {what}"))));
+                    }
+                    Some(Ok(tokens)) => Some(tokens),
+                    None => None,
+                };
+                self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
+                    id: nsh_core::ROOT_ID,
+                    prop: nsh_core::Prop::UiThemeUpdate(json.into()),
+                });
+                if let Some(tokens) = tokens {
+                    *self.tokens.borrow_mut() = Some(std::sync::Arc::new(tokens));
+                }
+                Ok(Value(0))
+            }
+            // `resetTheme(names?)`, as nsh-js's: the tokens named (none:
+            // every one) go back to the app's theme's.
+            410 => {
+                use nsh_core::element::JsError;
+                let value = args.index(0)?;
+                let names = if value.is_nullish() {
+                    None
+                } else {
+                    let json = protocol::to_json(&compat::Value::new(value))?;
+                    let names: Option<Vec<Box<str>>> = json
+                        .as_array()
+                        .and_then(|list| list.iter().map(|n| n.as_str().map(Into::into)).collect());
+                    let Some(names) = names else {
+                        let message = "resetTheme: expected token names (string[]) or nothing";
+                        return Err(self.throw(JsError::Type(message.into())));
+                    };
+                    Some(names)
+                };
+                let json = self.current_theme.borrow().clone();
+                let json = json.unwrap_or_else(|| r#"{"cssVars":{}}"#.to_owned());
+                let current = self.tokens.borrow().clone().unwrap_or_default();
+                let tokens = self
+                    .theme
+                    .borrow()
+                    .as_ref()
+                    .and_then(|t| t.reset(&current, &json, names.as_deref()));
+                self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
+                    id: nsh_core::ROOT_ID,
+                    prop: nsh_core::Prop::UiThemeReset(names),
                 });
                 if let Some(tokens) = tokens {
                     *self.tokens.borrow_mut() = Some(std::sync::Arc::new(tokens));

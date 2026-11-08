@@ -396,6 +396,16 @@ pub fn theme_overrides(json: &str) -> Result<Tokens, ThemeError> {
     Ok(tokens)
 }
 
+/// The tokens theme file `json` sets, and only those, with what of it was
+/// left out; a color it names and does not set is `base`'s (the tokens the
+/// app is drawn with): how the core changes some of the app's tokens
+/// (`nsh`'s `updateTheme`, [`nsh_core::element::Registry::token_overrides_from`]).
+pub(crate) fn read_overrides(json: &str, base: &Tokens) -> Result<(Tokens, Vec<String>), String> {
+    let mut tokens = Tokens::default();
+    let ignored = apply_onto(&mut tokens, base, json).map_err(|e| e.0)?;
+    Ok((tokens, ignored))
+}
+
 /// Applies theme file `json` (shadcn's `cssVars`) over `tokens`.
 fn apply(tokens: &mut Tokens, json: &str) -> Result<Vec<String>, ThemeError> {
     let base = tokens.clone();

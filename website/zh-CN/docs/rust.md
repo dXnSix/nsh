@@ -546,6 +546,27 @@ fn the_module_formats_money() {
 | `font-sans` | `font_sans` | 系统字体 | | 应用的字体：没有设置自己字体族的文字都使用它 |
 | `font-mono` | `font_mono` | 系统等宽字体 | | 等宽字体：`font-mono`、`TextView` 中的代码 |
 
+### 在应用运行时修改令牌
+
+`set_tokens(theme.into())` 把另一个主题设为应用的主题（[主题 token](./tailwind.md#主题-token)）。只想修改几个令牌、保留其余令牌时，
+把这几个令牌传给 `update_tokens`；`reset_tokens` 把列出的令牌恢复为应用主题中的值：
+
+```rust
+use nsh_core::prelude::*;
+
+let mut brand = Tokens::default();
+brand.set_color("primary", AdaptiveColor::rgb(0xe11d48, 0xfb7185));
+update_tokens(brand); // 只有 `primary` 改变
+reset_tokens(["primary"]); // 恢复应用的 primary
+```
+
+- 修改与应用的其他操作按顺序生效：同一轮中的两次更新都会生效，后一次覆盖前一次。读取被修改令牌的地方（`theme()`、类名、TSX
+  中的 `token()`）在同一帧跟上，平台自己的控件也一样。
+- 应用的主题是叠加在默认主题之上的 `nsh.json` 主题，或者 `set_tokens`、`setTheme` 最近设置的主题。`reset_tokens`
+  给出的名字在主题中不存在时，该令牌会被移除。
+- 同步的 `#[module]` 函数用其 `ModuleCx` 的 `cx.update_tokens(..)` 和 `cx.reset_tokens(..)` 做同样的事。TSX：
+  [`updateTheme` 和 `resetTheme`](../modules/nsh.md#updatetheme-resettheme)。
+
 ## 多个 crate
 
 应用的 Rust 代码可以拆分成多个 crate，每个 crate 用自己的名称导入：`"rust"` 可以是 crate 路径的列表，列表中的每个 crate

@@ -282,7 +282,8 @@ pub fn registry_of(parts: impl IntoIterator<Item = parts::Part>) -> Registry {
         // `env.rs`), declared by hand.
         .native_values(&["NavStack", "NavPage", "Dialog", "createNavStack", "Input"])
         // The theme: the app's over the default, as design tokens.
-        .tokens_from(theme::read_tokens);
+        .tokens_from(theme::read_tokens)
+        .token_overrides_from(theme::read_overrides);
     registry
 }
 

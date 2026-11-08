@@ -4919,6 +4919,14 @@ impl<M: TextEngine> Core<M> {
                 self.set_ui_theme(&json);
                 return Ok(());
             }
+            Prop::UiThemeUpdate(json) => {
+                self.update_ui_theme(&json);
+                return Ok(());
+            }
+            Prop::UiThemeReset(names) => {
+                self.reset_tokens(names.as_deref());
+                return Ok(());
+            }
             Prop::LayoutDirection(rtl) => {
                 // The surface's direction (the root's): the user's language, as
                 // JS or the policy sets it.

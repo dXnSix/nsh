@@ -378,6 +378,20 @@ impl ModuleCx {
         self.actions.push(Action::Appearance(appearance));
     }
 
+    /// Changes some of the app's design tokens, as
+    /// [`crate::element::update_tokens`] does.
+    pub fn update_tokens(&mut self, tokens: impl Into<crate::element::Tokens>) {
+        self.actions.push(Action::UpdateTokens(tokens.into()));
+    }
+
+    /// Puts the design tokens `names` back to the app's theme's values, as
+    /// [`crate::element::reset_tokens`] does.
+    pub fn reset_tokens<S: Into<Box<str>>>(&mut self, names: impl IntoIterator<Item = S>) {
+        self.actions.push(Action::ResetTokens(
+            names.into_iter().map(Into::into).collect(),
+        ));
+    }
+
     /// Shows the app in `locale` whatever the user's language (`None`: the
     /// user's again), as [`crate::i18n::set_locale`] does.
     pub fn set_locale(&mut self, locale: Option<crate::platform::Locale>) {

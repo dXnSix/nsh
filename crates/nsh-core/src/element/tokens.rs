@@ -50,6 +50,15 @@ pub enum Token {
 /// `Err`: the content is no theme file at all.
 pub type TokenSource = fn(Option<&str>) -> Result<(Tokens, Vec<String>), String>;
 
+/// Reads the tokens theme file `json` sets, and only those (a value it
+/// cannot read is left out, so the token keeps the value it has); a color
+/// it names and does not set (`var(--ring)`) is `base`'s, the tokens drawn
+/// with now. Returns them with what of the file it left out: how a UI set
+/// reads a change of some of the app's tokens
+/// ([`super::Registry::token_overrides_from`], `nsh`'s `updateTheme`).
+/// `Err`: the content is no theme file at all.
+pub type TokenOverrides = fn(&str, &Tokens) -> Result<(Tokens, Vec<String>), String>;
+
 /// The tokens a surface is drawn with once the app's theme file reaches its
 /// root ([`crate::Core::theme_tokens`]). The entry hands the theme to the
 /// renderer in the turn of its first render, before the theme's op reaches
@@ -60,13 +69,23 @@ pub type TokenSource = fn(Option<&str>) -> Result<(Tokens, Vec<String>), String>
 pub struct ThemeTokens {
     /// How the UI sets read a theme file (`None`: none does).
     source: Option<TokenSource>,
+    /// How they read the tokens a theme file sets (`None`: none does).
+    overrides: Option<TokenOverrides>,
     /// The embedding app's tokens, which win over the app's.
     host: Option<Arc<Tokens>>,
 }
 
 impl ThemeTokens {
-    pub(crate) fn new(source: Option<TokenSource>, host: Option<Arc<Tokens>>) -> Self {
-        Self { source, host }
+    pub(crate) fn new(
+        source: Option<TokenSource>,
+        overrides: Option<TokenOverrides>,
+        host: Option<Arc<Tokens>>,
+    ) -> Self {
+        Self {
+            source,
+            overrides,
+            host,
+        }
     }
 
     /// The tokens drawn with when the app's theme file is `json`: its own
@@ -87,6 +106,41 @@ impl ThemeTokens {
             Ok((_, left_out)) => Err(left_out.join("; ")),
             Err(e) => Err(e),
         })
+    }
+
+    /// The tokens drawn with once theme file `json` changes some of the
+    /// app's (`nsh`'s `updateTheme`): the values it sets over `current` (the
+    /// tokens drawn with now, which a `var()` it does not set names), under
+    /// the embedding app's. Read whole: `Err` as [`ThemeTokens::checked`].
+    /// `None`: no UI set reads theme changes.
+    pub fn updated(&self, current: &Tokens, json: &str) -> Option<Result<Tokens, String>> {
+        Some(match (self.overrides?)(json, current) {
+            Ok((part, left_out)) if left_out.is_empty() => Ok(self.under_host(part).over(current)),
+            Ok((_, left_out)) => Err(left_out.join("; ")),
+            Err(e) => Err(e),
+        })
+    }
+
+    /// The tokens drawn with once the tokens `names` (`None`: every one)
+    /// go back to their values in the app's theme file `json` (`nsh`'s
+    /// `resetTheme`), the others staying as in `current`: a name the file
+    /// and the defaults lack is gone. `None`: no UI set reads themes, or
+    /// `json` is not one.
+    pub fn reset(
+        &self,
+        current: &Tokens,
+        json: &str,
+        names: Option<&[Box<str>]>,
+    ) -> Option<Tokens> {
+        let theme = self.of(json)?;
+        let Some(names) = names else {
+            return Some(theme);
+        };
+        let mut out = current.clone();
+        for name in names {
+            out.copy_named(&theme, name);
+        }
+        Some(out)
     }
 
     /// `app` under the embedding app's tokens.
@@ -159,6 +213,28 @@ impl Tokens {
     /// Each font family by name.
     pub fn fonts(&self) -> impl Iterator<Item = (&str, &Arc<str>)> {
         self.fonts.iter().map(|(k, f)| (&**k, f))
+    }
+
+    /// Makes token `name` what it is in `from`, of whatever kind, or
+    /// removes it when `from` has none of that name.
+    pub(crate) fn copy_named(&mut self, from: &Tokens, name: &str) {
+        fn copy<V: Clone>(
+            to: &mut FxHashMap<Box<str>, V>,
+            from: &FxHashMap<Box<str>, V>,
+            name: &str,
+        ) {
+            match from.get(name) {
+                Some(value) => {
+                    to.insert(name.into(), value.clone());
+                }
+                None => {
+                    to.remove(name);
+                }
+            }
+        }
+        copy(&mut self.colors, &from.colors, name);
+        copy(&mut self.numbers, &from.numbers, name);
+        copy(&mut self.fonts, &from.fonts, name);
     }
 
     /// `self` with the tokens of `base` it does not have.

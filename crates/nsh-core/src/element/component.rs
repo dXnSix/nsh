@@ -786,6 +786,8 @@ pub struct Registry {
     assets: Arc<Vec<&'static [super::AssetFile]>>,
     /// Makes the design tokens of a theme ([`Registry::tokens_from`]).
     tokens: Option<super::TokenSource>,
+    /// Reads the tokens a theme file sets ([`Registry::token_overrides_from`]).
+    overrides: Option<super::TokenOverrides>,
     /// Makes the views' built-in scroll bars ([`Registry::scrollbars_from`]).
     scrollbars: Option<ScrollbarSource>,
     /// The UI sets served under paths of this one's specifier
@@ -997,7 +999,12 @@ impl Registry {
     pub fn merged(sets: &[Registry]) -> Self {
         let mut out = Self::default();
         for set in sets.iter().flat_map(Registry::sets) {
-            out.tokens = out.tokens.or(set.tokens);
+            // The first set that reads themes reads their changes too: both
+            // readers come from one set, so they read one format.
+            if out.tokens.is_none() && set.tokens.is_some() {
+                out.tokens = set.tokens;
+                out.overrides = set.overrides;
+            }
             out.scrollbars = out.scrollbars.or(set.scrollbars);
             Arc::make_mut(&mut out.setups).extend(set.setups.iter().cloned());
             let types = Arc::make_mut(&mut out.types);
@@ -1094,6 +1101,16 @@ impl Registry {
         self
     }
 
+    /// Reads the tokens a theme file sets, and only those, with `reader`:
+    /// how the core changes some of the app's tokens (`nsh`'s
+    /// `updateTheme`). It pairs with the same set's [`Registry::tokens_from`]:
+    /// of the sets a host serves, the first that reads themes reads their
+    /// changes, and without this reader changes are not read.
+    pub fn token_overrides_from(&mut self, reader: super::TokenOverrides) -> &mut Self {
+        self.overrides = Some(reader);
+        self
+    }
+
     /// Makes the built-in bar of the scroll views and lists that show one
     /// ([`set_builtin_scrollbars`](super::set_builtin_scrollbars), or a
     /// theme as their `scrollbar`) with `source`. Of the sets a host
@@ -1156,6 +1173,12 @@ impl Registry {
     /// How the set reads a theme file ([`Registry::tokens_from`]).
     pub(crate) fn token_source(&self) -> Option<super::TokenSource> {
         self.tokens
+    }
+
+    /// How the set reads the tokens a theme file sets
+    /// ([`Registry::token_overrides_from`]).
+    pub(crate) fn token_overrides(&self) -> Option<super::TokenOverrides> {
+        self.overrides
     }
 
     /// The files [`Registry::assets`] ships.

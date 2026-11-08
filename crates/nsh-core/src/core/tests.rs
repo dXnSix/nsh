@@ -32974,3 +32974,293 @@ fn a_backdrop_follows_the_order_views_draw_in() {
         batch.items
     );
 }
+
+/// Some of the app's tokens changed or put back while it runs
+/// (`update_tokens`, `reset_tokens`, `nsh`'s `updateTheme` and
+/// `resetTheme`), over the tokens the app has as a whole.
+mod token_update {
+    use super::*;
+    use crate::{
+        Prop,
+        element::{Registry, RustCall, RustOp, ToJs, Tokens},
+        prelude::*,
+    };
+
+    /// A theme file's colors (shadcn's `cssVars`, `light` only) over
+    /// `brand` and `accent` (`None`: those).
+    fn source(json: Option<&str>) -> Result<(Tokens, Vec<String>), String> {
+        let mut tokens = tokens_with(&[
+            ("brand", rgb(0x111111).into()),
+            ("accent", rgb(0x222222).into()),
+        ]);
+        let Some(json) = json else {
+            return Ok((tokens, Vec::new()));
+        };
+        let value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        let mut left_out = Vec::new();
+        let light = value.pointer("/cssVars/light").and_then(|v| v.as_object());
+        for (key, value) in light.into_iter().flatten() {
+            match value.as_str().and_then(Color::parse) {
+                Some(color) => tokens.set_color(key, color.into()),
+                None => left_out.push(format!("`{key}`: no color")),
+            }
+        }
+        Ok((tokens, left_out))
+    }
+
+    /// The colors a theme file (as [`source`] reads it) sets, and only
+    /// those; one it cannot read is left out.
+    fn read(json: &str, _base: &Tokens) -> Result<(Tokens, Vec<String>), String> {
+        let value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        let mut tokens = Tokens::default();
+        let mut left_out = Vec::new();
+        let light = value.pointer("/cssVars/light").and_then(|v| v.as_object());
+        for (key, value) in light.into_iter().flatten() {
+            match value.as_str().and_then(Color::parse) {
+                Some(color) => tokens.set_color(key, color.into()),
+                None => left_out.push(format!("`{key}`: no color")),
+            }
+        }
+        Ok((tokens, left_out))
+    }
+
+    /// A theme file setting `colors` in the light appearance.
+    fn file(colors: &[(&str, &str)]) -> String {
+        let fields: Vec<String> = colors
+            .iter()
+            .map(|(k, v)| format!(r#""{k}": "{v}""#))
+            .collect();
+        format!(
+            r#"{{ "cssVars": {{ "light": {{ {} }} }} }}"#,
+            fields.join(", ")
+        )
+    }
+
+    /// A core whose UI set reads [`source`]'s theme files, with the app's
+    /// theme `colors`.
+    fn themed_core(colors: &[(&str, &str)]) -> Core<FakeEngine> {
+        let mut c = core();
+        let mut registry = Registry::new();
+        registry.tokens_from(source).token_overrides_from(read);
+        c.set_components(registry);
+        set_root(&mut c, Prop::UiTheme(file(colors).into()));
+        c
+    }
+
+    fn set_root(c: &mut Core<FakeEngine>, prop: Prop) {
+        apply(c, vec![Op::SetProp { id: ROOT_ID, prop }]);
+    }
+
+    /// The light color of token `name` drawn with now.
+    fn light(c: &Core<FakeEngine>, name: &str) -> Option<Color> {
+        c.tokens().color(name).map(|t| Color::from(t.light))
+    }
+
+    /// The tokens each `Command::Tokens` of the batches committed now sent.
+    fn sent(c: &mut Core<FakeEngine>) -> Vec<Arc<Tokens>> {
+        let mut sent = Vec::new();
+        while let Some(batch) = c.commit() {
+            sent.extend(batch.items.into_iter().filter_map(|i| match i {
+                MountItem::Command {
+                    id: crate::ROOT_ID,
+                    command: Command::Tokens(tokens),
+                } => Some(tokens),
+                _ => None,
+            }));
+        }
+        sent
+    }
+
+    /// Two updates in one turn: the second over the first.
+    #[component]
+    fn TwoUpdates() -> impl IntoElement {
+        update_tokens(tokens_with(&[
+            ("brand", rgb(0x0000ff).into()),
+            ("accent", rgb(0x00ff00).into()),
+        ]));
+        update_tokens(tokens_with(&[("brand", rgb(0xff0000).into())]));
+        view()
+    }
+
+    #[test]
+    fn two_updates_in_one_turn_compose_and_reach_the_platform() {
+        let mut c = themed_core(&[("brand", "#333333")]);
+        c.commit();
+        c.mount_root(&crate::element::Root::new::<TwoUpdates>(|| ()));
+        let sent = sent(&mut c);
+        assert_eq!(sent.last(), Some(c.tokens()), "{sent:?}");
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0xff0000))));
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x00ff00))));
+        // The sample tokens `core()` set before the UI set's stay replaced.
+        assert_eq!(c.tokens().color("primary"), None);
+    }
+
+    #[test]
+    fn an_update_changes_only_its_tokens_and_what_reads_them() {
+        let mut c = themed_core(&[]);
+        view_with_classes(&mut c, 2, "w-10 h-10 bg-brand");
+        view_with_classes(&mut c, 4, "w-10 h-10 bg-accent");
+        c.commit().unwrap();
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(file(&[("brand", "#0000ff")]).into()),
+        );
+        let batch = c.commit().unwrap();
+        assert_eq!(
+            view_style_of(&batch, 2).unwrap().background_color,
+            Color::from(rgb(0x0000ff))
+        );
+        assert!(view_style_of(&batch, 4).is_none());
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x222222))));
+    }
+
+    #[test]
+    fn an_update_sets_a_value_equal_to_the_default() {
+        let mut c = themed_core(&[("brand", "#333333")]);
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(file(&[("brand", "#111111")]).into()),
+        );
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x111111))));
+    }
+
+    #[test]
+    fn a_reset_puts_named_tokens_back_to_the_theme() {
+        let mut c = themed_core(&[("brand", "#333333")]);
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(
+                file(&[
+                    ("brand", "#0000ff"),
+                    ("accent", "#00ff00"),
+                    ("extra", "#ff0000"),
+                ])
+                .into(),
+            ),
+        );
+        set_root(
+            &mut c,
+            Prop::UiThemeReset(Some(vec!["brand".into(), "extra".into()])),
+        );
+        // The theme file's value, not the default's.
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x333333))));
+        // Not in the theme: gone.
+        assert_eq!(light(&c, "extra"), None);
+        // Not named: kept.
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x00ff00))));
+        set_root(&mut c, Prop::UiThemeReset(None));
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x222222))));
+    }
+
+    #[test]
+    fn set_tokens_still_replaces_them_all_and_becomes_the_theme() {
+        let mut c = themed_core(&[("brand", "#333333")]);
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(file(&[("accent", "#00ff00")]).into()),
+        );
+        c.set_tokens(tokens_with(&[("brand", rgb(0x444444).into())]));
+        assert_eq!(light(&c, "accent"), None);
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(file(&[("brand", "#0000ff")]).into()),
+        );
+        set_root(&mut c, Prop::UiThemeReset(Some(vec!["brand".into()])));
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x444444))));
+    }
+
+    /// A value it cannot read keeps the token as it is: the app's, not the
+    /// default's.
+    #[test]
+    fn an_update_leaves_out_what_it_cannot_read() {
+        let mut c = themed_core(&[("accent", "#444444")]);
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(file(&[("brand", "#0000ff"), ("accent", "#zz")]).into()),
+        );
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x0000ff))));
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x444444))));
+    }
+
+    /// The set that reads themes reads their changes: one later in the
+    /// list does not, as it may read another format.
+    #[test]
+    fn the_readers_of_a_theme_and_its_changes_come_from_one_set() {
+        let mut c = core();
+        let mut first = Registry::new();
+        first.tokens_from(source);
+        let mut second = Registry::new();
+        second.tokens_from(source).token_overrides_from(read);
+        c.set_components(Registry::merged(&[first, second]));
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(file(&[("brand", "#0000ff")]).into()),
+        );
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x111111))));
+    }
+
+    /// No UI set reads theme changes: nothing changes.
+    #[test]
+    fn an_update_without_a_reader_changes_nothing() {
+        let mut c = core();
+        let mut registry = Registry::new();
+        registry.tokens_from(source);
+        c.set_components(registry);
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(file(&[("brand", "#0000ff")]).into()),
+        );
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x111111))));
+        assert!(c.theme_tokens().updated(c.tokens(), &file(&[])).is_none());
+    }
+
+    #[test]
+    fn module_functions_update_and_reset_tokens() {
+        let mut c = themed_core(&[("brand", "#333333")]);
+        let call = |run: fn(&mut crate::element::ModuleCx)| {
+            Op::Rust(RustOp {
+                call: 0,
+                run: RustCall::Op(Box::new(move |cx| {
+                    run(cx);
+                    Ok(Box::new(()) as Box<dyn ToJs>)
+                })),
+            })
+        };
+        c.apply(call(|cx| {
+            cx.update_tokens(tokens_with(&[("brand", rgb(0x0000ff).into())]));
+            cx.update_tokens(tokens_with(&[("accent", rgb(0x00ff00).into())]));
+        }))
+        .unwrap();
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x0000ff))));
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x00ff00))));
+        c.apply(call(|cx| cx.reset_tokens(["brand"]))).unwrap();
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x333333))));
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x00ff00))));
+    }
+
+    /// What JS reads at once (`token()`) is what the core then draws with.
+    #[test]
+    fn js_reads_the_tokens_the_core_draws_with() {
+        let mut c = themed_core(&[("brand", "#333333")]);
+        c.set_host_tokens(Some(tokens_with(&[("accent", rgb(0xabcdef).into())])));
+        let theme = c.theme_tokens();
+        let update = file(&[("brand", "#0000ff"), ("accent", "#00ff00")]);
+        let read = theme.updated(c.tokens(), &update).unwrap().unwrap();
+        set_root(&mut c, Prop::UiThemeUpdate(update.into()));
+        assert_eq!(&read, &**c.tokens());
+        // The embedding app's token wins.
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0xabcdef))));
+        let names: Vec<Box<str>> = vec!["brand".into()];
+        let read = theme
+            .reset(c.tokens(), &file(&[("brand", "#333333")]), Some(&names))
+            .unwrap();
+        set_root(&mut c, Prop::UiThemeReset(Some(names)));
+        assert_eq!(&read, &**c.tokens());
+        assert!(
+            theme
+                .updated(c.tokens(), &file(&[("brand", "#zz")]))
+                .unwrap()
+                .is_err()
+        );
+    }
+}

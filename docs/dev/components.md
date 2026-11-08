@@ -777,7 +777,17 @@ them with `element::set_tokens(tokens)` (`set_tokens(theme.into())` of an `nsh_b
 `tokens()` accessor, as `set_color_scheme` is beside `color_scheme()`). A TSX app calls `setTheme(theme)` of `nsh`
 (`nsh-js` `env.rs`; the web's `browser/environment.js` and op 406): `setup`'s way, the root's `uiTheme` and `token()`
 reading the new tokens at once, for a file read whole (`ThemeTokens::checked`, else a `TypeError` naming what it
-cannot read and nothing changed); `null` sends the file the entry gave again. The core sends the tokens drawn with to the
+cannot read and nothing changed); `null` sends the file the entry gave again. Some tokens change, the others staying,
+with `element::update_tokens(tokens)` and `reset_tokens(names)` (`Action::UpdateTokens` / `ResetTokens`, applied in
+order with the app's other actions so two updates in a turn compose; `ModuleCx` has both for synchronous `#[module]`
+functions) and TS's `updateTheme(theme)` / `resetTheme(names?)` (`env.rs`; the web's ops 409 and 410): the root's
+`Prop::UiThemeUpdate` / `Prop::UiThemeReset` (pushed by the runtime, no JS name), with `token()` reading the result
+at once (`ThemeTokens::updated`, read whole as `checked`; `ThemeTokens::reset`). An update reads only the tokens the
+file sets, with what the UI set brings for it (`Registry::token_overrides_from`: `nsh/base`'s `read_overrides`): a
+value it cannot read keeps the token's value, and a `var()` naming a token it does not set is the token drawn with
+now. A reset puts names back to the app's theme, its tokens as last set whole (`Core::set_tokens`: the UI set's
+defaults with `nsh.json`'s theme, `setTheme`, `set_tokens`; the core's `file_tokens`), removing a name the theme
+lacks. The core sends the tokens drawn with to the
 platform when they change (`Command::Tokens` on the root), which colors its own controls with them (Linux's menus:
 `docs/dev/linux.md`; Android's alerts and action sheets: `popover` behind, `popover-foreground` for the title and
 the options, `muted-foreground` for the message, `primary` for the buttons and `destructive` for a destructive action,
