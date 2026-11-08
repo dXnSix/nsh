@@ -237,6 +237,25 @@ nsh package my-app --target web
 
 See [Packaging](./packaging.md).
 
+## nsh update
+
+Updates an installed `nsh` to the latest build of its channel; naming one, as `rustup update nightly`
+does, switches channels ([Installation](./installation.md#updating)).
+
+```sh
+nsh update [stable|nightly]
+```
+
+## nsh component
+
+Adds, removes or lists the runtimes installed next to an installed `nsh`: those of the platforms other than the one it runs on (`android`, `android-symbols`, `ios`, `web`, `gpui`, `tui`). A command that needs one adds it itself the first time ([Installation](./installation.md#components)).
+
+```sh
+nsh component list
+nsh component add <NAME>...
+nsh component remove <NAME>...
+```
+
 ## Signing commands
 
 These commands make and check signed packages (`.nshpkg`): app bundles that apps embedding NSH download and verify before running them. [Signed packages](./signed-packages.md) explains the model (an offline root key certifies release keys for some app ids).

@@ -905,6 +905,10 @@ pub struct EngineConfig {
     pub viewport: Size<Points>,
     /// Log per-commit timings (target `nsh::perf`, level info).
     pub trace: bool,
+    /// Scroll views make the native views of their content only near
+    /// their viewport (the platforms' apps); off, they make all of it
+    /// (tests, which read whole pages). [`EngineConfig::new`]: off.
+    pub content_culling: bool,
     /// The HTTP stack behind `fetch`; without one, requests fail.
     pub network: Option<Arc<dyn Network>>,
     /// The host transport for WebSockets, including the browser WebSocket API.
@@ -1092,6 +1096,7 @@ impl EngineConfig {
             app: app.into(),
             viewport: Size::new(Points(390.0), Points(844.0)),
             trace: false,
+            content_culling: false,
             network: None,
             websocket: None,
             refuse_connections: None,
@@ -1173,6 +1178,7 @@ impl std::fmt::Debug for EngineConfig {
             .field("app", &self.app)
             .field("viewport", &self.viewport)
             .field("trace", &self.trace)
+            .field("content_culling", &self.content_culling)
             .field("network", &self.network.is_some())
             .field("assets", &self.assets.is_some())
             .field("environment", &self.environment)
@@ -1206,6 +1212,7 @@ enum Message {
     Event(NodeId, EventKind, EventPayload),
     Scroll(NodeId, Point<Points>, u32),
     Kept(Vec<NodeId>),
+    ContentCulling(bool),
     InputScroll(NodeId, Point<Points>, Size<Points>, Size<Points>),
     Zoom(NodeId, f32),
     ComponentSize(NodeId, Size<Points>),
@@ -1321,6 +1328,14 @@ impl EngineControl {
     /// the last call's; none releases them.
     pub fn keep_rendered(&self, nodes: Vec<NodeId>) {
         let _ = self.tx.send(Message::Kept(nodes));
+    }
+
+    /// Whether scroll views make the native views of their content as it
+    /// comes near their viewport (the default), or all of it
+    /// (`Core::set_content_culling`): a test driver's, whose steps reach
+    /// every view of a page.
+    pub fn set_content_culling(&self, enabled: bool) {
+        let _ = self.tx.send(Message::ContentCulling(enabled));
     }
 
     /// Reports how far a multiline input's text scrolled: its offset, the
@@ -1844,6 +1859,7 @@ impl<M: TextEngine + 'static> Driver<M> {
             App::Rust(_) => Policy::default().access(),
         });
         let mut core = Core::new(text_engine.clone(), config.viewport);
+        core.set_content_culling(config.content_culling);
         core.set_tree_order_tracking(sink.needs_tree_order());
         core.set_projected_state_mounting(sink.needs_projected_states());
         // The runtime's components (`nsh/mobile`'s `TabBar`) and the UI
@@ -1905,6 +1921,9 @@ impl<M: TextEngine + 'static> Driver<M> {
             }
             if let Some(appearance) = root.appearance_ref() {
                 core.set_appearance(appearance);
+            }
+            if let Some(translations) = root.translations_ref() {
+                core.set_translations(translations.clone());
             }
             for font in root.fonts() {
                 if let Err(err) = core.register_font(font) {
@@ -2002,6 +2021,8 @@ impl<M: TextEngine + 'static> Driver<M> {
             events_handled: 0,
             events_reported: 0,
             pinned: config.pinned,
+            environment: config.environment,
+            app_locale: None,
             host: config.host.clone(),
             url_opens: Vec::new(),
             navigations: Vec::new(),
@@ -2421,6 +2442,17 @@ impl<M: TextEngine + 'static> Driver<M> {
             if let Some(start) = start {
                 log::info!(target: "nsh::perf", "gc: {}µs", start.elapsed().as_micros());
             }
+            // What the app holds, for the performance monitor: read here,
+            // when the heap was just walked and nothing waits.
+            if let Some(monitor) = &self.state.perf {
+                let (js_heap, js_objects) = script.heap_usage();
+                monitor.set_memory(perf::MemorySample {
+                    js_heap,
+                    js_objects,
+                    nodes: self.state.core.node_count() as u64,
+                    node_ids: self.state.core.node_id_room() as u64,
+                });
+            }
             self.last_gc = Instant::now();
             self.state.committed_since_gc = false;
             if let Some(batch) = self.state.commit(Some(script)) {
@@ -2466,6 +2498,10 @@ struct State<M: TextEngine> {
     /// What the environment keeps whatever the platform reports
     /// ([`EngineConfig::pinned`]).
     pinned: EnvironmentPins,
+    /// The environment given last, before the app's language is applied.
+    environment: Environment,
+    /// The language the app shows in whatever the user's (`setLocale`).
+    app_locale: Option<nsh_core::platform::Locale>,
     /// A display frame was requested and has not begun yet.
     frame_requested: bool,
     ops: Vec<Op>,
@@ -3190,6 +3226,7 @@ impl<M: TextEngine> State<M> {
                 }
             }
             drop(ops);
+            release_spare_ops(&mut self.ops);
             if let Some(batch) = self.core.commit() {
                 commits += 1;
                 match &mut merged {
@@ -3234,6 +3271,16 @@ impl<M: TextEngine> State<M> {
                 }
                 _ => false,
             };
+            // A language the app asked for reaches the core and JS, whose
+            // views follow it in another round.
+            let relocale = match self.core.take_locale_request() {
+                Some(locale) => {
+                    self.app_locale = locale;
+                    apply_environment(script, self, self.environment);
+                    true
+                }
+                None => false,
+            };
             let more_paced = script.is_some() && paced.left() && self.core.has_paced_list_binds();
             // What waited for the app's answer to the events just taken runs
             // in the next round, once JS has handled them, and shows in this
@@ -3244,6 +3291,7 @@ impl<M: TextEngine> State<M> {
                 && !posted
                 && !retheme
                 && !relocate
+                && !relocale
                 && !more_paced
                 && !urls
                 && !answers
@@ -3397,6 +3445,14 @@ fn apply_environment<M: TextEngine>(
     state: &mut State<M>,
     env: Environment,
 ) {
+    state.environment = env;
+    let mut env = env;
+    // The app's language (`set_locale`) over the platform's, as an
+    // embedding app's own is.
+    if let Some(locale) = state.app_locale {
+        env.locale = locale;
+        env.locale_settings.languages = env.locale_settings.languages.preferring(locale);
+    }
     state.core.set_font_scale(env.font_scale);
     state.core.set_class_environment(class_environment(&env));
     state.core.set_safe_area(insets(&env));
@@ -3488,6 +3544,7 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             }
         }
         Message::Kept(nodes) => state.core.set_kept(&nodes),
+        Message::ContentCulling(enabled) => state.core.set_content_culling(enabled),
         Message::InputScroll(id, offset, content, viewport) => {
             state.core.set_input_scroll(id, offset, content, viewport);
         }
@@ -3691,8 +3748,33 @@ fn sets_whole(item: &nsh_core::MountItem) -> Option<(u8, nsh_core::NodeId)> {
     })
 }
 
+/// The most ops an emptied op buffer keeps room for.
+const RETAINED_OPS: usize = 16 * 1024;
+
+/// Gives back what a large commit (a screen made at once, a long list
+/// bound) grew the emptied op buffer to: it and the runtime's take turns
+/// ([`Script::take_ops`] swaps them), and each would otherwise hold the
+/// largest commit's capacity for the life of the app.
+fn release_spare_ops(ops: &mut Vec<Op>) {
+    debug_assert!(ops.is_empty());
+    if ops.capacity() > RETAINED_OPS {
+        ops.shrink_to(RETAINED_OPS);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_emptied_op_buffer_gives_back_what_a_large_commit_grew() {
+        let mut ops: Vec<super::Op> = Vec::with_capacity(super::RETAINED_OPS * 8);
+        super::release_spare_ops(&mut ops);
+        assert!(ops.capacity() <= super::RETAINED_OPS);
+        // A buffer of ordinary commits keeps its room.
+        let mut ops: Vec<super::Op> = Vec::with_capacity(1024);
+        super::release_spare_ops(&mut ops);
+        assert_eq!(ops.capacity(), 1024);
+    }
+
     #[test]
     fn moves_settle_and_changes_of_mode_do_not() {
         use nsh_core::{

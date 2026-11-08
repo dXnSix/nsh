@@ -4,6 +4,31 @@ Performance is the project's first priority; the rules are in `AGENTS.md`. Chang
 after `nsh test --trace` timings and item counts (`nsh trace` before it, in the records below). Current baselines
 (Apple Silicon except where noted):
 
+Markdown TeX preprocessing (`text_view/markdown/latex.rs`, 2026-11-08, Linux x86_64,
+release, against `3b4f2abf`): a paragraph of
+``"`a` x ".repeat(k) + "\\(x^2\\)"``, math enabled, streaming off. Eleven alternating
+before / after rounds on one CPU, warmed and batched; medians, input construction excluded:
+
+| Code spans | `latex::inline`, before → after | Complete Markdown parse, before → after |
+|---|---|---|
+| 1,000 | 0.853 → 0.00891 ms | 1.548 → 0.795 ms |
+| 5,000 | 24.366 → 0.0450 ms | 27.794 → 4.444 ms |
+| 10,000 | 96.966 → 0.0914 ms | 100.688 → 8.911 ms |
+
+The ordered code spans are consumed with a cursor instead of searched from the start at
+each byte. With streaming repair enabled, the complete 10,000-span parse takes
+544.17 → 453.83 ms; other scans still contribute. A 35,200-byte control of 200 short
+paragraphs takes 74.45 → 79.69 µs in TeX rewriting (about 5 µs more), while its complete
+parse stays around 5.2 ms. Short Markdown and code spans without TeX delimiters have
+unchanged complete-parse timings. These parser measurements exclude layout and drawing.
+
+Headless `nsh test <entry> --trace` (debug, against `bba76ef7`, three fresh processes per
+version, the same paragraphs in a mounted `TextView`): first-commit medians for 1,000 /
+10,000 spans are 51.121 / 2731.507 → 43.521 / 1905.226 ms. Both versions send 7 ops /
+16 mount items, with 3,007 / 30,007 nodes respectively. The counter control keeps
+56 ops / 50 items / 21 nodes initially and 10 ops / 7 items / 24 nodes after `+1`;
+commit medians 497 / 379 → 500 / 310 µs, noisy samples establishing stable work counts.
+
 Live resize of a real app (Noop, 10 065 nodes, a horizontal corner drag of 6 s, release, `--target macos` package, no
 sampler): window sizes per second 12 → 62-65, gap between sizes p50 86 → 16 ms and p95 about 25 ms, the window's lag
 behind the pointer p50 20 → 3-4 pt. An empty page and TextEdit both do about 87 sizes per second on this machine. Text
@@ -66,6 +91,16 @@ size, release CLI, headless): the commit taking 50 006 diagnostics and 50 002 de
 resolving them (before: 145 ms, 53 and 52 ms, four rope lookups per position; the gutter's severities and the
 diagnostics at a point scanned every mark).
 
+Editor highlighting at 200 000 lines (2026-11-08, Linux x86_64, release; `bench_highlight_200k`, ignored, in
+`crates/nsh-base/src/editor/bench.rs`: the repository's Rust and TSX repeated, the controller's passes played as they
+run): the first screen's colors 25 → 2.4 ms in Rust and 259 → 13 ms in TSX (the language's regexes cold: Oniguruma's
+compile about 20 times faster than fancy-regex's, and the job stops at the last line in view), the parse 21 000 →
+62 000 lines/s in Rust and 4 900 → 20 000 in TSX (a jump to the end shows a guess in 0.8 / 4.8 ms, was 5 / 19 ms; the
+parse from the top reaches it in 3.2 / 9.9 s off the engine thread, was 9.5 / 41 s; 52 MB of tokens and states), a
+typed character's colors 0.6–1.4 ms off the engine thread (0.3 ms on it), typing far past the parse guessed again
+(before: the colors it continued until the parse came). The gallery's Editor demo, debug, headless: its first colors
+505 → 35 ms after it asks for them (the first job now runs while the turn that mounts it goes on).
+
 The gallery's Editor demo at 200 000 lines (its TypeScript sample pasted 3449 times, a macOS window of 1440×900,
 release CLI, `--target macos --trace`): the paste's commit 21 → 13.5 ms; a sample pasted into that file 8.4 → 5.7 ms
 (1832 items: the gutter measured its digit once per row, an element made again per row for each number); the commit
@@ -73,6 +108,13 @@ taking the 6900 problems 12.4 → 7.4 ms (fields read by atom, not through a C s
 collection walks the whole VM, 30–90 ms with the demo's language server holding the file's model: it ran every second
 between the turns of pastes and of the server's slices (21 collections in the run), now only after 0.3 s without a
 message or a due timer (7, none between pastes).
+
+`pointer-events-none` regions (2026-11-08, a mounted TSX `Editor` of 200 000 lines, release CLI, headless,
+`--trace`): the commit that shows the first syntax colors 11.5 → 1.2 ms (75 mount items). Each view inserted under the
+rows' `pointer-events-none` walked the whole region, twice (1600 spans into 2500 views); the core notes the regions a
+round changes and works each out once before its mount items (`classes.rs` `flush_pointer_events`). The first frame
+sends 2631 mount items instead of 2885 (no `ViewProps` set and set back in one commit); a typed character commits in
+0.37 ms, 14 items (was 0.40 ms, 15).
 
 - counter, headless (debug): first frame ~0.5–0.65ms (58 ops / 49 mount items), one tap ~0.15ms (12 ops / 8 items).
 - counter, Catalyst (release): first frame ~1.05–1.15ms (of which ~0.7ms is cold CoreText layout of 10 texts), one tap ~0.12ms.

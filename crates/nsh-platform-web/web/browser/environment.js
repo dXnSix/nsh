@@ -36,7 +36,7 @@ export function createEnvironment(reactive, invoke, dom) {
     if (options !== undefined && (options === null || typeof options !== "object")) throw new TypeError("navigate: options are an object");
     const history = options?.history;
     if (history !== undefined && history !== "push" && history !== "replace") throw new TypeError('navigate: history is "push" or "replace"');
-    setLocation(invoke(407, [url, history === "replace"]));
+    setLocation(invoke(409, [url, history === "replace"]));
   };
   const insets = reactive.context(() => fields.safeArea());
   const platform = { os: "web", version: "0.0", idiom: "desktop", desktop: true, catalyst: false,
@@ -91,6 +91,15 @@ export function createEnvironment(reactive, invoke, dom) {
     },
     changedTokens() { tokens.update(value => value + 1); },
     setLocation,
+    // `setLocale`'s language, shown at once; the engine's next environment
+    // carries it too.
+    showLocale(tag) {
+      reactive.batch(() => {
+        const settings = reactive.untracked(fields.localeSettings);
+        fields.localeSettings.set({ ...settings, languages: [tag, ...settings.languages.filter(l => l !== tag)] });
+        fields.locale.set(tag);
+      });
+    },
     setup(tailwind, theme, scheme, statusBar) {
       if (typeof tailwind === "string") dom.rootProp("tailwindTheme", tailwind);
       if (typeof theme === "string") { dom.rootProp("uiTheme", theme); invoke(403, [theme]); tokens.update(value => value + 1); }
