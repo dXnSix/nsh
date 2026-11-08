@@ -37,7 +37,7 @@ NSH 提供无样式的 `nsh-base` crate（TSX 中为 `nsh/base`），对应 [`gp
 颜色选择器的选中值等属于数据，外围控件仍使用主题 token。
 
 有自己 token 结构的设计系统（按层级划分的表面、按强调程度划分的操作、自己的圆角和字号刻度）把它定义为[主题类型](./rust.md#主题类型)：
-一个实现 `AppTheme` 的 Rust 类型，由它的 UI 集用 `registry.theme::<T>()` 注册。它的 token 取代 shadcn 的 token 成为应用的主题：主题文件
+一个带有 `#[derive(AppTheme)]` 的令牌结构体，由它的 UI 集用 `registry.theme::<T>()` 注册。它的 token 取代 shadcn 的 token 成为应用的主题：主题文件
 按名称设置它们，类名使用它们（`bg-surface-raised`、`rounded-card`），类型把 NSH 的角色（`popover`、`primary`、`border`）映射到自己的
 token 上，使 `nsh/base` 和各平台自己的控件都以它绘制。应用自己的 token 组成设计系统类型旁边的第二个类型。结构与 shadcn 一致的应用保留默认
 主题，并把自己的 token 加入主题文件。

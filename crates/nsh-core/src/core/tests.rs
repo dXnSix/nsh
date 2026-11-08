@@ -33571,7 +33571,10 @@ mod app_theme {
 
         fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
             out.set_color(&format!("{prefix}surface-overlay"), self.overlay);
-            out.set_number(&format!("{prefix}radius-card"), self.card);
+            out.set_number(
+                &TokenKind::Radius.prefixed(prefix, "radius-card"),
+                self.card,
+            );
         }
 
         fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
@@ -33582,7 +33585,7 @@ mod app_theme {
                     .color(&format!("{prefix}surface-overlay"))
                     .unwrap_or(d.overlay),
                 card: tokens
-                    .number(&format!("{prefix}radius-card"))
+                    .number(&TokenKind::Radius.prefixed(prefix, "radius-card"))
                     .unwrap_or(d.card),
             }
         }
@@ -33592,7 +33595,7 @@ mod app_theme {
                 out.set_color(&format!("{prefix}surface-overlay"), c);
             }
             if let Some(n) = patch.card {
-                out.set_number(&format!("{prefix}radius-card"), n);
+                out.set_number(&TokenKind::Radius.prefixed(prefix, "radius-card"), n);
             }
         }
     }

@@ -812,16 +812,24 @@ stay, so an embedded app looks like its host (`embedding.md`, "GPUI and GPUI Kit
 ### Theme types
 
 An app or a design system brings its own tokens as a Rust type (`element/theme.rs`, user docs: `website/docs/rust.md`,
-"Theme types"). `AppTheme` is the type's face: `type Patch` (some fields, each `None` for as it is),
-`token_specs()`, `write_tokens(&self, prefix, out)`, `read_tokens(tokens, prefix)` (a name the tokens lack keeps
-`Default`'s value), `write_patch(patch, prefix, out)` and the provided `to_tokens()`, its tokens with the roles its
-specs map (`Tokens::with_roles`). A `TokenSpec` is a name, a `TokenKind` (`#[non_exhaustive]`: `Color`, `Number`,
-`Radius`, `Spacing`, `Text`, `Weight`, `Tracking`, `Leading`, `Blur`, `Font`, `Shadow`; `name()` / `from_name()` its
-spelling in descriptions, `is_number()` every kind but `Color`, `Font` and `Shadow`), a doc comment and the `Role` it
-plays, built with `TokenSpec::new(name, kind).doc(..).role(..)`. The prefix lets a type hold another under a prefix
-(`surface-` and `raised`). The tokens stay flat and by name, so classes, `token()` and theme files read them as they
-read any theme's; a type is a typed view of its names. The impls are written by hand for now (`core/tests.rs`
-`mod app_theme`, `nsh-engine`'s `tests/engine/app_theme.rs`); a derive that writes them is planned.
+"Theme types"). `AppTheme` is the type's face: `type Patch` (some fields, each `None` for as it is), `token_specs()`,
+`write_tokens(&self, prefix, out)`, `read_tokens(tokens, prefix)` (a name the tokens lack keeps `Default`'s value; a
+nested type's field, the nested type's), `write_patch(patch, prefix, out)` and the provided `to_tokens()`, its tokens
+with the roles its specs map (`Tokens::with_roles`). A `TokenSpec` is a name, a `TokenKind` (`#[non_exhaustive]`:
+`Color`, `Number`, `Radius`, `Spacing`, `Text`, `Weight`, `Tracking`, `Leading`, `Blur`, `Font`, `Shadow`; `name()` /
+`from_name()` its spelling in descriptions, `is_number()` every kind but `Color`, `Font` and `Shadow`, `namespace()` the
+namespace its classes read, `radius-` to `shadow-`, none for `Color` and `Number`), a doc comment and the `Role` it
+plays, built with `TokenSpec::new(name, kind).doc(..).role(..)`. The prefix lets a type hold another:
+`TokenKind::prefixed(prefix, name)` puts it after the name's namespace when it has one, so the classes still find it
+(`radius-card` under `button-`: `radius-button-card`, `rounded-button-card`), else in front (`surface-raised`). The
+tokens stay flat and by name, so classes, `token()` and theme files read them as they read any theme's; a type is a
+typed view of its names. Some impls are written by hand (`nsh-base`'s `Theme`; in the tests, `core/tests.rs` `mod
+app_theme` and `nsh-engine`'s `tests/engine/app_theme.rs`); `#[derive(AppTheme)]` writes them (`nsh-macros`
+`src/theme.rs`: each field's `#[token(kind, name, role)]`, `nested`, `flatten` or `skip`; names in kebab case with the
+kind's namespace, a nested type's through `TokenKind::prefixed`; the impl through `__private::ThemeValue`, which
+`AdaptiveColor`, `f32`, `Points`, `SharedString`, `String` and `AdaptiveShadow` implement; `<Type>Patch` of `Option`s,
+each documented with its token and classes; the compile errors of `AppTheme`'s doctests, which apply
+`ThemeSet::try_add`'s rule of names and kinds and check each role's name, kind and uniqueness).
 
 `Registry::theme::<T>()` records `ThemeSpec::of::<T>()`: the type's name, its `TypeId`, its specs and its defaults
 (`T::default().to_tokens()`), each behind a function pointer, so the registry stays `Clone` and needs no `T`

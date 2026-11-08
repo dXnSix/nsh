@@ -585,26 +585,31 @@ reset_tokens(["primary"]); // 恢复应用的 primary
 一样；主题文件、类名和 TSX 中的 `token()` 都按名称使用它的令牌。注册的主题类型取代 nsh-base 的 shadcn 主题，成为应用的令牌来源；
 没有注册主题类型的应用继续使用上面的 shadcn 主题。
 
-类型在 `token_specs()` 中列出它的令牌：每个都是一个 `TokenSpec`，包含名称、`TokenKind`（`Color`、`Number`、`Radius`、`Spacing`、
-`Text`、`Weight`、`Tracking`、`Leading`、`Blur`、`Font`、`Shadow`）、文档注释和它承担的角色。`write_tokens` 和 `read_tokens`
-在字段和令牌之间来回转换，`write_patch` 写入补丁设置的字段；它们都把名称放在 `prefix` 之后，所以一个类型可以在某个前缀下包含另一个类型
-（`surface-` 加 `raised`：`surface-raised`）。生成实现的 derive 已在计划中；目前实现需要手写：
+类型在 `token_specs()` 中列出它的令牌：每个都是一个 `TokenSpec`，包含名称、`TokenKind`（`Color`、`Number`、`Radius`、
+`Spacing`、`Text`、`Weight`、`Tracking`、`Leading`、`Blur`、`Font`、`Shadow`）、文档注释和它承担的角色。`write_tokens`
+和 `read_tokens` 在字段和令牌之间来回转换，`write_patch` 写入补丁设置的字段；它们都把名称放在 `prefix`
+之下（`TokenKind::prefixed`），所以一个类型可以包含另一个类型：颜色和数值的名称前加前缀（`surface-` 加 `raised`：
+`surface-raised`），带命名空间的名称把前缀放在命名空间之后，类名仍能读取它（`radius-card`：`radius-surface-card`、
+`rounded-surface-card`）。`#[derive(AppTheme)]` 根据结构体的字段生成实现：
 
 ```rust
-use std::sync::LazyLock;
+use nsh_core::prelude::*;
 
-use nsh_core::{
-    element::{TokenKind, TokenSpec},
-    prelude::*,
-};
-
-/// The design system's tokens.
-#[derive(Clone, PartialEq)]
+/// 设计系统的令牌。
+#[derive(Clone, PartialEq, AppTheme)]
 pub struct DsTheme {
+    /// 卡片与面板。
+    #[token(color)]
     pub surface_raised: AdaptiveColor,
+    /// 弹出层与菜单。
+    #[token(color, role = "popover")]
     pub surface_overlay: AdaptiveColor,
+    /// 主操作。
+    #[token(color, role = "primary")]
     pub action: AdaptiveColor,
-    pub radius_card: f32,
+    /// 卡片的圆角。
+    #[token(radius)]
+    pub card: f32,
 }
 
 impl Default for DsTheme {
@@ -613,69 +618,30 @@ impl Default for DsTheme {
             surface_raised: AdaptiveColor::rgb(0xffffff, 0x18181b),
             surface_overlay: AdaptiveColor::rgb(0xffffff, 0x27272a),
             action: AdaptiveColor::rgb(0x4f46e5, 0x818cf8),
-            radius_card: 14.0,
-        }
-    }
-}
-
-/// Some fields of a `DsTheme`; `None` keeps a field as it is.
-#[derive(Clone, Default)]
-pub struct DsThemePatch {
-    pub action: Option<AdaptiveColor>,
-    pub radius_card: Option<f32>,
-}
-
-impl AppTheme for DsTheme {
-    type Patch = DsThemePatch;
-
-    fn token_specs() -> &'static [TokenSpec] {
-        static SPECS: LazyLock<Vec<TokenSpec>> = LazyLock::new(|| {
-            vec![
-                TokenSpec::new("surface-raised", TokenKind::Color).doc("Cards and sheets."),
-                TokenSpec::new("surface-overlay", TokenKind::Color)
-                    .doc("Popovers and menus.")
-                    .role(Role::Popover),
-                TokenSpec::new("action", TokenKind::Color)
-                    .doc("The main action.")
-                    .role(Role::Primary),
-                TokenSpec::new("radius-card", TokenKind::Radius).doc("Cards' corners."),
-            ]
-        });
-        &SPECS
-    }
-
-    fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
-        out.set_color(&format!("{prefix}surface-raised"), self.surface_raised);
-        out.set_color(&format!("{prefix}surface-overlay"), self.surface_overlay);
-        out.set_color(&format!("{prefix}action"), self.action);
-        out.set_number(&format!("{prefix}radius-card"), self.radius_card);
-    }
-
-    fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
-        let d = DsTheme::default();
-        let color = |name: &str, or: AdaptiveColor| {
-            tokens.color(&format!("{prefix}{name}")).unwrap_or(or)
-        };
-        DsTheme {
-            surface_raised: color("surface-raised", d.surface_raised),
-            surface_overlay: color("surface-overlay", d.surface_overlay),
-            action: color("action", d.action),
-            radius_card: tokens
-                .number(&format!("{prefix}radius-card"))
-                .unwrap_or(d.radius_card),
-        }
-    }
-
-    fn write_patch(patch: &DsThemePatch, prefix: &str, out: &mut Tokens) {
-        if let Some(c) = patch.action {
-            out.set_color(&format!("{prefix}action"), c);
-        }
-        if let Some(r) = patch.radius_card {
-            out.set_number(&format!("{prefix}radius-card"), r);
+            card: 14.0,
         }
     }
 }
 ```
+
+- 每个字段是一个令牌，`#[token(<种类>)]`，名称取字段名的 kebab case：`color` 和 `number` 原样使用（`surface-raised`），
+  带命名空间的种类加上其命名空间，与类名的读取方式一致：`radius`（`card`：`radius-card`、`rounded-card`）、
+  `spacing`（`spacing-*`）、`text`（`text-*`）、`weight`（`font-weight-*`）、`tracking`、`leading`、`blur`、
+  `font`（`font-*`）和 `shadow`（`shadow-*`）。颜色是 `AdaptiveColor`，数字是 `f32` 或 `Points`，字体族是 `SharedString`
+  或 `String`，阴影是 `AdaptiveShadow`。`name = "…"` 为令牌命名，`role = "…"` 把一个角色映射到它。
+- `#[token(nested)]` 包含另一个 `AppTheme` 类型，其名称按上面的方式放在 `<字段名>-` 之下（`surface: Surface` 中的
+  `raised`：`surface-raised`；`#[token(shadow)] raised`：`shadow-surface-raised`），读作
+  `theme_of::<DsTheme>().surface.raised`。令牌中缺少的名称取内部类型的 `Default`，而不是外部 `Default` 给该字段的值。
+  `#[token(flatten)]` 相同但不加前缀；`#[token(skip)]` 不是令牌（该字段保留 `Default` 的值）。
+- 字段的文档注释就是其令牌的文档，`.nsh/types/nsh/tokens.d.ts` 会在 `token()` 上显示它。
+- 它生成 `DsThemePatch`，每个字段都是 `Option`（嵌套字段为其类型的补丁），文档写明其令牌和读取它的类名，供
+  `update_theme` 使用。
+- 以下情况会在该属性处产生编译错误：同一名称出现两次、名称为空或不符合其种类的形式（只有字体以 `font-` 开头，字重以
+  `font-weight-` 开头）；种类与字段不符（`AdaptiveColor` 上的 `#[token(radius)]`）、未知的种类、写了两个种类，或种类与
+  `nested`、`flatten`、`skip` 同时出现；不存在的角色名、种类不符或映射两次的角色；在不是令牌的字段上写 `name` 或
+  `role`；第二个 `#[token]`；名为 `font…` 或 `weight…` 的嵌套字段（其名称会被读作另一种类：`font-…` 是字体，
+  `font-weight-…` 是字重），需要换一个名称；以及泛型结构体。类型也可以手写 `AppTheme` 实现：它的四个方法用
+  `TokenKind::prefixed` 把每个名称放在 `prefix` 之下。
 
 令牌的名称决定主题文件和类名如何读取它。颜色的名称可以任取（`surface-raised`、`action`）；数值的名称以它的 Tailwind 命名空间开头
 （`radius-card`、`spacing-gutter`、`text-body`、`font-weight-strong`，或 `tracking-`、`leading-`、`blur-`）；字体的名称以 `font-`
@@ -691,7 +657,7 @@ fn native(registry: &mut Registry) {
 
 view()
     .bg(move || theme_of::<DsTheme>().surface_raised)
-    .rounded(move || px(theme_of::<DsTheme>().radius_card))
+    .rounded(move || px(theme_of::<DsTheme>().card))
     .p_4()
 
 update_theme::<DsTheme>(DsThemePatch {

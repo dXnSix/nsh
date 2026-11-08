@@ -46,8 +46,8 @@ User-authored colors and data values, such as an image's pixels or a color picke
 the surrounding controls still use theme tokens.
 
 A design system with a token structure of its own (surfaces by level, actions by emphasis, its own radii and type
-steps) defines it as a [theme type](./rust.md#theme-types): a Rust type implementing `AppTheme`, registered by its UI
-set with `registry.theme::<T>()`. Its tokens become the app's theme in place of the shadcn tokens: the theme file sets
+steps) defines it as a [theme type](./rust.md#theme-types): a struct of its tokens with `#[derive(AppTheme)]`,
+registered by its UI set with `registry.theme::<T>()`. Its tokens become the app's theme in place of the shadcn tokens: the theme file sets
 them by name, classes name them (`bg-surface-raised`, `rounded-card`), and the type maps NSH's roles (`popover`,
 `primary`, `border`) onto its tokens so `nsh/base` and the platforms' own controls draw in it. The app's own tokens
 form a second type beside the design system's. A shadcn-shaped app keeps the default theme and adds its tokens to the

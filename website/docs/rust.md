@@ -649,27 +649,32 @@ the prelude). Components read it typed with `theme_of::<T>()`, as they read `the
 `token()` in TSX name its tokens. A registered theme type is the app's token source in place of nsh-base's shadcn
 theme; an app that registers none keeps the shadcn theme above.
 
-A type lists its tokens in `token_specs()`: each a `TokenSpec` with a name, a `TokenKind` (`Color`, `Number`,
-`Radius`, `Spacing`, `Text`, `Weight`, `Tracking`, `Leading`, `Blur`, `Font`, `Shadow`), a doc comment and the role it
-plays. `write_tokens` and `read_tokens` turn its fields into tokens and back, and `write_patch` writes the fields a
-patch sets; each puts its names after `prefix`, so a type can hold another under a prefix (`surface-` and `raised`:
-`surface-raised`). A derive that writes the impl is planned; the impl is written by hand:
+A type lists its tokens in `token_specs()`: each a `TokenSpec` with a name, a `TokenKind` (`Color`, `Number`, `Radius`,
+`Spacing`, `Text`, `Weight`, `Tracking`, `Leading`, `Blur`, `Font`, `Shadow`), a doc comment and the role it plays.
+`write_tokens` and `read_tokens` turn its fields into tokens and back, and `write_patch` writes the fields a patch sets;
+each puts its names under `prefix` (`TokenKind::prefixed`), so a type can hold another: in front of a color's or a
+number's name (`surface-` and `raised`: `surface-raised`), after a namespaced name's namespace, so its classes still
+read it (`radius-card`: `radius-surface-card`, `rounded-surface-card`). `#[derive(AppTheme)]` writes the impl of a
+struct's fields:
 
 ```rust
-use std::sync::LazyLock;
-
-use nsh_core::{
-    element::{TokenKind, TokenSpec},
-    prelude::*,
-};
+use nsh_core::prelude::*;
 
 /// The design system's tokens.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, AppTheme)]
 pub struct DsTheme {
+    /// Cards and sheets.
+    #[token(color)]
     pub surface_raised: AdaptiveColor,
+    /// Popovers and menus.
+    #[token(color, role = "popover")]
     pub surface_overlay: AdaptiveColor,
+    /// The main action.
+    #[token(color, role = "primary")]
     pub action: AdaptiveColor,
-    pub radius_card: f32,
+    /// Cards' corners.
+    #[token(radius)]
+    pub card: f32,
 }
 
 impl Default for DsTheme {
@@ -678,69 +683,33 @@ impl Default for DsTheme {
             surface_raised: AdaptiveColor::rgb(0xffffff, 0x18181b),
             surface_overlay: AdaptiveColor::rgb(0xffffff, 0x27272a),
             action: AdaptiveColor::rgb(0x4f46e5, 0x818cf8),
-            radius_card: 14.0,
-        }
-    }
-}
-
-/// Some fields of a `DsTheme`; `None` keeps a field as it is.
-#[derive(Clone, Default)]
-pub struct DsThemePatch {
-    pub action: Option<AdaptiveColor>,
-    pub radius_card: Option<f32>,
-}
-
-impl AppTheme for DsTheme {
-    type Patch = DsThemePatch;
-
-    fn token_specs() -> &'static [TokenSpec] {
-        static SPECS: LazyLock<Vec<TokenSpec>> = LazyLock::new(|| {
-            vec![
-                TokenSpec::new("surface-raised", TokenKind::Color).doc("Cards and sheets."),
-                TokenSpec::new("surface-overlay", TokenKind::Color)
-                    .doc("Popovers and menus.")
-                    .role(Role::Popover),
-                TokenSpec::new("action", TokenKind::Color)
-                    .doc("The main action.")
-                    .role(Role::Primary),
-                TokenSpec::new("radius-card", TokenKind::Radius).doc("Cards' corners."),
-            ]
-        });
-        &SPECS
-    }
-
-    fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
-        out.set_color(&format!("{prefix}surface-raised"), self.surface_raised);
-        out.set_color(&format!("{prefix}surface-overlay"), self.surface_overlay);
-        out.set_color(&format!("{prefix}action"), self.action);
-        out.set_number(&format!("{prefix}radius-card"), self.radius_card);
-    }
-
-    fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
-        let d = DsTheme::default();
-        let color = |name: &str, or: AdaptiveColor| {
-            tokens.color(&format!("{prefix}{name}")).unwrap_or(or)
-        };
-        DsTheme {
-            surface_raised: color("surface-raised", d.surface_raised),
-            surface_overlay: color("surface-overlay", d.surface_overlay),
-            action: color("action", d.action),
-            radius_card: tokens
-                .number(&format!("{prefix}radius-card"))
-                .unwrap_or(d.radius_card),
-        }
-    }
-
-    fn write_patch(patch: &DsThemePatch, prefix: &str, out: &mut Tokens) {
-        if let Some(c) = patch.action {
-            out.set_color(&format!("{prefix}action"), c);
-        }
-        if let Some(r) = patch.radius_card {
-            out.set_number(&format!("{prefix}radius-card"), r);
+            card: 14.0,
         }
     }
 }
 ```
+
+- Each field is one token, `#[token(<kind>)]`, named after the field in kebab case: `color` and `number` as it is
+  (`surface-raised`), a namespaced kind with its namespace, as its classes read it: `radius` (`card`: `radius-card`,
+  `rounded-card`), `spacing` (`spacing-*`), `text` (`text-*`), `weight` (`font-weight-*`), `tracking`, `leading`,
+  `blur`, `font` (`font-*`) and `shadow` (`shadow-*`). A color is an `AdaptiveColor`, a number an `f32` or `Points`, a
+  font family a `SharedString` or `String`, a shadow an `AdaptiveShadow`. `name = "…"` names a token, `role = "…"`
+  maps a role onto it.
+- `#[token(nested)]` holds another `AppTheme` type, its names under `<field>-` as above (`surface: Surface` with
+  `raised`: `surface-raised`, with `#[token(shadow)] raised`: `shadow-surface-raised`), read as
+  `theme_of::<DsTheme>().surface.raised`. A name the tokens lack keeps the inner type's `Default`, not the value the
+  outer `Default` gives the field. `#[token(flatten)]` is the same with no prefix; `#[token(skip)]` is no token (the
+  field keeps `Default`'s value).
+- A field's doc comment is its token's, which `.nsh/types/nsh/tokens.d.ts` shows on `token()`.
+- It makes `DsThemePatch`, each field an `Option` (a nested one its type's patch) documented with its token and the
+  classes that read it, for `update_theme`.
+- These are compile errors at the attribute: a name given twice, empty, or of the wrong form for its kind (only a font
+  is `font-*`, a weight `font-weight-*`); a kind that does not fit the field (`#[token(radius)]` on an `AdaptiveColor`),
+  an unknown kind, two kinds, or a kind with `nested`, `flatten` or `skip`; a role of no name, of another kind of token
+  or mapped twice; `name` or `role` on a field that is no token; a second `#[token]`; a nested field named `font…` or
+  `weight…` (its names would read as another kind's: `font-…` as fonts, `font-weight-…` as weights), which needs another
+  name; and a generic struct. A type can also implement `AppTheme` by hand: its four methods put each name under
+  `prefix` with `TokenKind::prefixed`.
 
 A token's name says how theme files and classes read it. A color's name is free (`surface-raised`, `action`); a
 number's starts with its Tailwind namespace (`radius-card`, `spacing-gutter`, `text-body`, `font-weight-strong`, or
@@ -756,7 +725,7 @@ fn native(registry: &mut Registry) {
 
 view()
     .bg(move || theme_of::<DsTheme>().surface_raised)
-    .rounded(move || px(theme_of::<DsTheme>().radius_card))
+    .rounded(move || px(theme_of::<DsTheme>().card))
     .p_4()
 
 update_theme::<DsTheme>(DsThemePatch {

@@ -6,6 +6,7 @@
 
 use std::cell::RefCell;
 
+mod derive_app_theme;
 mod native_components;
 
 // `#[native_components]` as an app's crate has it: at the crate's root, one

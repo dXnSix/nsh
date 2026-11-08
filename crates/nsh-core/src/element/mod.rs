@@ -98,7 +98,7 @@ macro_rules! decl {
 }
 
 pub use nsh_macros::{
-    Event, JsObject, PropEnum, Props, asset, assets, class, component, methods, module,
+    AppTheme, Event, JsObject, PropEnum, Props, asset, assets, class, component, methods, module,
     native_components, native_module,
 };
 
@@ -240,6 +240,73 @@ pub use crate::{
 #[doc(hidden)]
 pub mod __private {
     pub use serde_json::Map as JsonMap;
+
+    /// A field `#[derive(AppTheme)]` reads and writes as one token: a color
+    /// ([`super::AdaptiveColor`]), a number (`f32`, [`crate::geometry::Points`]),
+    /// a font family ([`super::SharedString`], `String`) or box shadows
+    /// ([`super::AdaptiveShadow`]).
+    pub trait ThemeValue: Sized {
+        /// Writes it as the token `name`.
+        fn write(&self, name: &str, out: &mut super::Tokens);
+        /// The token `name` as this, if `tokens` have it.
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self>;
+    }
+
+    impl ThemeValue for super::AdaptiveColor {
+        fn write(&self, name: &str, out: &mut super::Tokens) {
+            out.set_color(name, *self);
+        }
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
+            tokens.color(name)
+        }
+    }
+
+    impl ThemeValue for f32 {
+        fn write(&self, name: &str, out: &mut super::Tokens) {
+            out.set_number(name, *self);
+        }
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
+            tokens.number(name)
+        }
+    }
+
+    impl ThemeValue for crate::geometry::Points {
+        fn write(&self, name: &str, out: &mut super::Tokens) {
+            out.set_number(name, self.0);
+        }
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
+            tokens.number(name).map(crate::geometry::Points)
+        }
+    }
+
+    impl ThemeValue for super::SharedString {
+        fn write(&self, name: &str, out: &mut super::Tokens) {
+            out.set_font(name, self.to_string());
+        }
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
+            tokens
+                .font(name)
+                .map(|f| super::SharedString::from(f.to_string()))
+        }
+    }
+
+    impl ThemeValue for String {
+        fn write(&self, name: &str, out: &mut super::Tokens) {
+            out.set_font(name, self.clone());
+        }
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
+            tokens.font(name).map(|f| f.to_string())
+        }
+    }
+
+    impl ThemeValue for super::AdaptiveShadow {
+        fn write(&self, name: &str, out: &mut super::Tokens) {
+            out.set_shadow(name, self.clone());
+        }
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
+            tokens.shadow(name).cloned()
+        }
+    }
 
     /// The type of a props struct's field `I` as its setter takes it (the
     /// value of an `Option`): `#[derive(Props)]` implements it where the

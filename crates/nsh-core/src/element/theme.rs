@@ -23,8 +23,243 @@ use super::{Role, Tokens};
 
 /// A theme type: design tokens as the fields of a Rust type. Its token
 /// names are [`AppTheme::token_specs`]'; a field of a nested type is that
-/// type's names under a prefix (`surface-` and `raised`: `surface-raised`).
-/// Written by hand, its four methods agree on the names.
+/// type's names under a prefix, after their kind's namespace
+/// ([`TokenKind::prefixed`]: `surface-` with `raised` is `surface-raised`,
+/// with `shadow-raised` `shadow-surface-raised`).
+/// `#[derive(AppTheme)]` writes it of a struct's fields; written by hand,
+/// its four methods agree on the names.
+///
+/// ```
+/// use nsh_core::{
+///     element::{AdaptiveColor, AppTheme},
+///     geometry::Points,
+/// };
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     /// Popovers and menus.
+///     #[token(color, role = "popover")]
+///     overlay: AdaptiveColor,
+///     #[token(radius)]
+///     card: Points,
+/// }
+///
+/// let names: Vec<_> = Ds::token_specs()
+///     .iter()
+///     .map(|s| s.name.to_string())
+///     .collect();
+/// assert_eq!(names, ["overlay", "radius-card"]);
+/// ```
+///
+/// The derive refuses, at the attribute, a name given twice in one type:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(color)]
+///     ink: AdaptiveColor,
+///     #[token(color, name = "ink")]
+///     other: AdaptiveColor,
+/// }
+/// ```
+///
+/// a kind that does not fit the field's type:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(radius)]
+///     card: AdaptiveColor,
+/// }
+/// ```
+///
+/// a kind there is not:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(colour)]
+///     ink: AdaptiveColor,
+/// }
+/// ```
+///
+/// a role of no name:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(color, role = "surface")]
+///     ink: AdaptiveColor,
+/// }
+/// ```
+///
+/// a role of another kind of token (`radius` is a number):
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(color, role = "radius")]
+///     ink: AdaptiveColor,
+/// }
+/// ```
+///
+/// a role mapped twice:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(color, role = "card")]
+///     ink: AdaptiveColor,
+///     #[token(color, role = "card")]
+///     paper: AdaptiveColor,
+/// }
+/// ```
+///
+/// a name of the wrong form for its kind (only a font is `font-*`):
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(color)]
+///     font_accent: AdaptiveColor,
+/// }
+/// ```
+///
+/// an empty name:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(color, name = "")]
+///     ink: AdaptiveColor,
+/// }
+/// ```
+///
+/// two kinds:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(color, shadow)]
+///     ink: AdaptiveColor,
+/// }
+/// ```
+///
+/// a `name` or `role` on a field that is no token:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(skip, role = "card")]
+///     ink: AdaptiveColor,
+/// }
+/// ```
+///
+/// a kind with `nested`, `flatten` or `skip`:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(skip, color)]
+///     ink: AdaptiveColor,
+/// }
+/// ```
+///
+/// two of `nested`, `flatten` and `skip`:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(nested, skip)]
+///     ink: AdaptiveColor,
+/// }
+/// ```
+///
+/// a second `#[token]`:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(color)]
+///     #[token(color, name = "paper")]
+///     ink: AdaptiveColor,
+/// }
+/// ```
+///
+/// a nested field whose prefix gives its names another kind's form
+/// (`font-…`, `weight-…`):
+///
+/// ```compile_fail
+/// use nsh_core::element::AppTheme;
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Fonts {
+///     #[token(font)]
+///     body: String,
+/// }
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(nested)]
+///     weight: Fonts,
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use nsh_core::element::AppTheme;
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Fonts {
+///     #[token(font)]
+///     body: String,
+/// }
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(nested)]
+///     font: Fonts,
+/// }
+/// ```
+///
+/// and a generic struct:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds<T: Clone + PartialEq + Default + 'static> {
+///     #[token(skip)]
+///     extra: T,
+///     #[token(color)]
+///     ink: AdaptiveColor,
+/// }
+/// ```
 pub trait AppTheme: Clone + PartialEq + Default + 'static {
     /// Some of its fields, each `None` for "as it is" ([`update_theme`]).
     type Patch: Default + Clone + 'static;
@@ -33,14 +268,16 @@ pub trait AppTheme: Clone + PartialEq + Default + 'static {
     /// play, flattened through nested types.
     fn token_specs() -> &'static [TokenSpec];
 
-    /// Writes its tokens into `out`, each name after `prefix`.
+    /// Writes its tokens into `out`, each name under `prefix`
+    /// ([`TokenKind::prefixed`]).
     fn write_tokens(&self, prefix: &str, out: &mut Tokens);
 
-    /// The theme of `tokens`' names after `prefix`; a name they lack keeps
-    /// [`Default`]'s value.
+    /// The theme of `tokens`' names under `prefix`; a name they lack keeps
+    /// [`Default`]'s value (a nested type's field, the nested type's
+    /// `Default`).
     fn read_tokens(tokens: &Tokens, prefix: &str) -> Self;
 
-    /// Writes the fields `patch` sets into `out`, each name after `prefix`.
+    /// Writes the fields `patch` sets into `out`, each name under `prefix`.
     fn write_patch(patch: &Self::Patch, prefix: &str, out: &mut Tokens);
 
     /// Its tokens, with the roles its specs map onto them.
@@ -156,6 +393,35 @@ impl TokenKind {
     /// Whether its value is a number token.
     pub fn is_number(self) -> bool {
         !matches!(self, TokenKind::Color | TokenKind::Font | TokenKind::Shadow)
+    }
+
+    /// The namespace its names take, which its classes read them by
+    /// (`radius-`: `rounded-*`); a color's and a number's is none.
+    pub fn namespace(self) -> &'static str {
+        match self {
+            TokenKind::Color | TokenKind::Number => "",
+            TokenKind::Radius => "radius-",
+            TokenKind::Spacing => "spacing-",
+            TokenKind::Text => "text-",
+            TokenKind::Weight => "font-weight-",
+            TokenKind::Tracking => "tracking-",
+            TokenKind::Leading => "leading-",
+            TokenKind::Blur => "blur-",
+            TokenKind::Font => "font-",
+            TokenKind::Shadow => "shadow-",
+        }
+    }
+
+    /// Its token `name` under `prefix` (an [`AppTheme`] nested in another):
+    /// after the namespace when `name` is in it, so the classes still find
+    /// it (`radius-card` under `button-`: `radius-button-card`, which is
+    /// `rounded-button-card`), else in front (`raised`: `button-raised`).
+    pub fn prefixed(self, prefix: &str, name: &str) -> String {
+        let namespace = self.namespace();
+        match name.strip_prefix(namespace) {
+            Some(rest) if !namespace.is_empty() => format!("{namespace}{prefix}{rest}"),
+            _ => format!("{prefix}{name}"),
+        }
     }
 
     /// Whether `tokens` hold `name` as this kind.

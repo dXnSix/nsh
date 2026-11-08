@@ -144,12 +144,12 @@ macro_rules! theme {
 
             fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
                 $( out.set_color(&format!("{prefix}{}", $key), self.$name); )*
-                out.set_number(&format!("{prefix}radius"), self.radius.0);
+                out.set_number(&TokenKind::Radius.prefixed(prefix, "radius"), self.radius.0);
                 if let Some(f) = &self.font_sans {
-                    out.set_font(&format!("{prefix}font-sans"), f.to_string());
+                    out.set_font(&TokenKind::Font.prefixed(prefix, "font-sans"), f.to_string());
                 }
                 if let Some(f) = &self.font_mono {
-                    out.set_font(&format!("{prefix}font-mono"), f.to_string());
+                    out.set_font(&TokenKind::Font.prefixed(prefix, "font-mono"), f.to_string());
                 }
             }
 
@@ -159,7 +159,7 @@ macro_rules! theme {
                 }
                 let mut own = Tokens::default();
                 for spec in Self::token_specs() {
-                    rename(tokens, &format!("{prefix}{}", spec.name), &mut own, &spec.name);
+                    rename(tokens, &spec.kind.prefixed(prefix, &spec.name), &mut own, &spec.name);
                 }
                 Theme::of(Arc::new(own))
             }
@@ -170,7 +170,7 @@ macro_rules! theme {
                     return;
                 }
                 for spec in Self::token_specs() {
-                    rename(patch, &spec.name, out, &format!("{prefix}{}", spec.name));
+                    rename(patch, &spec.name, out, &spec.kind.prefixed(prefix, &spec.name));
                 }
             }
         }
