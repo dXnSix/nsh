@@ -693,23 +693,27 @@ impl Default for DsTheme {
   (`surface-raised`), a namespaced kind with its namespace, as its classes read it: `radius` (`card`: `radius-card`,
   `rounded-card`), `spacing` (`spacing-*`), `text` (`text-*`), `weight` (`font-weight-*`), `tracking`, `leading`,
   `blur`, `font` (`font-*`) and `shadow` (`shadow-*`). A color is an `AdaptiveColor`, a number an `f32` or `Points`, a
-  font family a `SharedString` or `String`, a shadow an `AdaptiveShadow`. `name = "…"` names a token, `role = "…"`
-  maps a role onto it.
+  font family a `SharedString` or `String`, a shadow an `AdaptiveShadow`. `name = "…"` names a token (a namespaced
+  kind's name keeps its namespace: `#[token(radius, name = "radius-corner")]`), `role = "…"` maps a role onto it.
 - `#[token(nested)]` holds another `AppTheme` type, its names under `<field>-` as above (`surface: Surface` with
   `raised`: `surface-raised`, with `#[token(shadow)] raised`: `shadow-surface-raised`), read as
   `theme_of::<DsTheme>().surface.raised`. A name the tokens lack keeps the inner type's `Default`, not the value the
   outer `Default` gives the field. `#[token(flatten)]` is the same with no prefix; `#[token(skip)]` is no token (the
   field keeps `Default`'s value).
+- A number field is its token's light value, as `number()` is: read a dark value with `tokens().number_in("radius-card",
+  dark())`, or draw with the class (`rounded-card`), which follows the appearance. `set_theme` writes one value per
+  number, so it drops a dark value the theme file gave; `update_theme` changes only the fields its patch sets.
 - A field's doc comment is its token's, which `.nsh/types/nsh/tokens.d.ts` shows on `token()`.
 - It makes `DsThemePatch`, each field an `Option` (a nested one its type's patch) documented with its token and the
   classes that read it, for `update_theme`.
 - These are compile errors at the attribute: a name given twice, empty, or of the wrong form for its kind (only a font
-  is `font-*`, a weight `font-weight-*`); a kind that does not fit the field (`#[token(radius)]` on an `AdaptiveColor`),
-  an unknown kind, two kinds, or a kind with `nested`, `flatten` or `skip`; a role of no name, of another kind of token
-  or mapped twice; `name` or `role` on a field that is no token; a second `#[token]`; a nested field named `font…` or
-  `weight…` (its names would read as another kind's: `font-…` as fonts, `font-weight-…` as weights), which needs another
-  name; and a generic struct. A type can also implement `AppTheme` by hand: its four methods put each name under
-  `prefix` with `TokenKind::prefixed`.
+  is `font-*`, a weight `font-weight-*`, and a namespaced kind's name starts with its namespace); a kind that does not
+  fit the field (`#[token(radius)]` on an `AdaptiveColor`), an unknown kind, two kinds, or a kind with `nested`,
+  `flatten` or `skip`; a role of no name, of another kind of token or mapped twice; `name` or `role` on a field that is
+  no token; a second `#[token]`; a nested field named `font…` or `weight…` (its names would read as another kind's:
+  `font-…` as fonts, `font-weight-…` as weights), which needs another name; and a generic struct. A type can also
+  implement `AppTheme` by hand: its four methods put each name under `prefix` with `TokenKind::prefixed`, and a
+  namespaced kind's names keep to its namespace.
 
 A token's name says how theme files and classes read it. A color's name is free (`surface-raised`, `action`); a
 number's starts with its Tailwind namespace (`radius-card`, `spacing-gutter`, `text-body`, `font-weight-strong`, or

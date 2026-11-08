@@ -33827,6 +33827,55 @@ mod app_theme {
         assert_eq!(shown(&mut c).as_deref(), Some("333333ff 10 ff0000ff"));
     }
 
+    /// A number field is its token's light value: `set_theme` writes one
+    /// value, so a dark one the theme file gave goes; `update_theme` of
+    /// other fields keeps it.
+    #[test]
+    fn a_number_field_is_the_light_value_and_set_theme_drops_the_dark_one() {
+        let mut c = core();
+        c.set_components(sets());
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(
+                    r##"{ "cssVars": { "theme": { "radius-card": "10px" }, "dark": { "radius-card": "6px" } } }"##
+                        .into(),
+                ),
+            }],
+        );
+        c.mount_root(&Root::of::<Reads>());
+        assert_eq!(shown(&mut c).as_deref(), Some("111111ff 10 00aa00ff"));
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(6.0));
+        let call = |run: fn(&mut ModuleCx)| {
+            Op::Rust(RustOp {
+                call: 0,
+                run: RustCall::Op(Box::new(move |cx| {
+                    run(cx);
+                    Ok(Box::new(()) as Box<dyn ToJs>)
+                })),
+            })
+        };
+        c.apply(call(|cx| {
+            cx.update_theme::<Ds>(DsPatch {
+                overlay: Some(AdaptiveColor::rgb(0x444444, 0x444444)),
+                ..Default::default()
+            })
+        }))
+        .unwrap();
+        let _ = shown(&mut c);
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(6.0));
+        c.apply(call(|cx| {
+            cx.set_theme(Ds {
+                overlay: AdaptiveColor::rgb(0x444444, 0x444444),
+                card: 10.0,
+            })
+        }))
+        .unwrap();
+        let _ = shown(&mut c);
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(10.0));
+    }
+
     /// Two cores (two surfaces) each read their own tokens.
     #[test]
     fn two_surfaces_keep_their_own_theme() {

@@ -46,7 +46,8 @@ fn theme_is_shadcns_tokens_each_playing_its_role() {
     }
     assert_eq!(
         specs.iter().find(|s| s.name == "radius").map(|s| s.kind),
-        Some(TokenKind::Radius)
+        // shadcn's base radius, outside the `radius-` namespace: a number.
+        Some(TokenKind::Number)
     );
     // Written and read back, a theme's fields are its own.
     let theme = Theme::default();

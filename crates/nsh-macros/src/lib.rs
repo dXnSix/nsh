@@ -1887,12 +1887,16 @@ fn methods_impl(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 ///   the outer `Default` gives the field.
 /// - `#[token(skip)]`: no token; the field keeps `Default`'s value.
 ///
+/// A number field is its token's light value (`Tokens::number`); a dark
+/// value is read with `Tokens::number_in`, and `set_theme` drops it.
+///
 /// A field's doc comment is its token's doc (TS's `tokens.d.ts`). It makes
 /// `<Type>Patch`, every field an `Option` (a nested one its type's patch),
 /// for `update_theme`, each documented with its token and the classes that
 /// read it. These are compile errors: a name given twice, empty, or of the
 /// wrong form for its kind (only a font is `font-*`, but a weight
-/// `font-weight-*`; a shadow is `shadow-*`); a kind that does not fit the
+/// `font-weight-*`; a shadow is `shadow-*`; a namespaced kind's name, also
+/// one given with `name`, starts with its namespace); a kind that does not fit the
 /// field's type, an unknown kind, two kinds, or a kind with `nested`,
 /// `flatten` or `skip`; a role of no name, of another kind of token, or
 /// mapped twice; `name` or `role` on a field that is no token; a second

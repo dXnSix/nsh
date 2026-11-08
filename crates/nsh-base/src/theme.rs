@@ -134,7 +134,7 @@ macro_rules! theme {
                                 .role(Role::$role),
                         )*
                     ];
-                    specs.push(TokenSpec::new("radius", TokenKind::Radius).doc("The corner radius.").role(Role::Radius));
+                    specs.push(TokenSpec::new("radius", TokenKind::Number).doc("The corner radius.").role(Role::Radius));
                     specs.push(TokenSpec::new("font-sans", TokenKind::Font).doc("The app's font family.").role(Role::FontSans));
                     specs.push(TokenSpec::new("font-mono", TokenKind::Font).doc("The monospaced font family.").role(Role::FontMono));
                     specs
@@ -144,7 +144,7 @@ macro_rules! theme {
 
             fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
                 $( out.set_color(&format!("{prefix}{}", $key), self.$name); )*
-                out.set_number(&TokenKind::Radius.prefixed(prefix, "radius"), self.radius.0);
+                out.set_number(&TokenKind::Number.prefixed(prefix, "radius"), self.radius.0);
                 if let Some(f) = &self.font_sans {
                     out.set_font(&TokenKind::Font.prefixed(prefix, "font-sans"), f.to_string());
                 }

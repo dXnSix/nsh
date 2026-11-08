@@ -386,6 +386,16 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream2> {
                 if name.is_empty() {
                     return Err(syn::Error::new(name_span, "a token's name cannot be empty"));
                 }
+                if !kind.prefix.is_empty() && !name.starts_with(kind.prefix) {
+                    return Err(syn::Error::new(
+                        name_span,
+                        format!(
+                            "a `{}` token's name starts `{}`, as its classes read it and so that a nested \
+                             type's names agree: `{}{name}`",
+                            kind.name, kind.prefix, kind.prefix
+                        ),
+                    ));
+                }
                 if let Some(why) = unreadable(kind, &name) {
                     return Err(syn::Error::new(name_span, why));
                 }

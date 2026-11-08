@@ -628,20 +628,25 @@ impl Default for DsTheme {
   带命名空间的种类加上其命名空间，与类名的读取方式一致：`radius`（`card`：`radius-card`、`rounded-card`）、
   `spacing`（`spacing-*`）、`text`（`text-*`）、`weight`（`font-weight-*`）、`tracking`、`leading`、`blur`、
   `font`（`font-*`）和 `shadow`（`shadow-*`）。颜色是 `AdaptiveColor`，数字是 `f32` 或 `Points`，字体族是 `SharedString`
-  或 `String`，阴影是 `AdaptiveShadow`。`name = "…"` 为令牌命名，`role = "…"` 把一个角色映射到它。
+  或 `String`，阴影是 `AdaptiveShadow`。`name = "…"` 为令牌命名（带命名空间的种类，名称保留其命名空间：
+  `#[token(radius, name = "radius-corner")]`），`role = "…"` 把一个角色映射到它。
 - `#[token(nested)]` 包含另一个 `AppTheme` 类型，其名称按上面的方式放在 `<字段名>-` 之下（`surface: Surface` 中的
   `raised`：`surface-raised`；`#[token(shadow)] raised`：`shadow-surface-raised`），读作
   `theme_of::<DsTheme>().surface.raised`。令牌中缺少的名称取内部类型的 `Default`，而不是外部 `Default` 给该字段的值。
   `#[token(flatten)]` 相同但不加前缀；`#[token(skip)]` 不是令牌（该字段保留 `Default` 的值）。
+- 数值字段是其令牌的浅色值，与 `number()` 相同：用 `tokens().number_in("radius-card", dark())` 读取深色值，
+  或用类名（`rounded-card`）绘制，它会跟随外观。`set_theme` 为每个数值只写一个值，因此会丢掉主题文件给出的深色值；
+  `update_theme` 只改变补丁设置的字段。
 - 字段的文档注释就是其令牌的文档，`.nsh/types/nsh/tokens.d.ts` 会在 `token()` 上显示它。
 - 它生成 `DsThemePatch`，每个字段都是 `Option`（嵌套字段为其类型的补丁），文档写明其令牌和读取它的类名，供
   `update_theme` 使用。
 - 以下情况会在该属性处产生编译错误：同一名称出现两次、名称为空或不符合其种类的形式（只有字体以 `font-` 开头，字重以
-  `font-weight-` 开头）；种类与字段不符（`AdaptiveColor` 上的 `#[token(radius)]`）、未知的种类、写了两个种类，或种类与
-  `nested`、`flatten`、`skip` 同时出现；不存在的角色名、种类不符或映射两次的角色；在不是令牌的字段上写 `name` 或
-  `role`；第二个 `#[token]`；名为 `font…` 或 `weight…` 的嵌套字段（其名称会被读作另一种类：`font-…` 是字体，
-  `font-weight-…` 是字重），需要换一个名称；以及泛型结构体。类型也可以手写 `AppTheme` 实现：它的四个方法用
-  `TokenKind::prefixed` 把每个名称放在 `prefix` 之下。
+  `font-weight-` 开头，带命名空间的种类的名称以其命名空间开头）；种类与字段不符（`AdaptiveColor` 上的
+  `#[token(radius)]`）、未知的种类、写了两个种类，或种类与 `nested`、`flatten`、`skip` 同时出现；不存在的角色名、
+  种类不符或映射两次的角色；在不是令牌的字段上写 `name` 或 `role`；第二个 `#[token]`；名为 `font…` 或 `weight…`
+  的嵌套字段（其名称会被读作另一种类：`font-…` 是字体，`font-weight-…` 是字重），需要换一个名称；以及泛型结构体。
+  类型也可以手写 `AppTheme` 实现：它的四个方法用 `TokenKind::prefixed` 把每个名称放在 `prefix` 之下，
+  带命名空间的种类的名称保留其命名空间。
 
 令牌的名称决定主题文件和类名如何读取它。颜色的名称可以任取（`surface-raised`、`action`）；数值的名称以它的 Tailwind 命名空间开头
 （`radius-card`、`spacing-gutter`、`text-body`、`font-weight-strong`，或 `tracking-`、`leading-`、`blur-`）；字体的名称以 `font-`

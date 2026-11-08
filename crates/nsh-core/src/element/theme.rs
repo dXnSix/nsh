@@ -247,6 +247,18 @@ use super::{Role, Tokens};
 /// }
 /// ```
 ///
+/// a namespaced kind's name outside its namespace:
+///
+/// ```compile_fail
+/// use nsh_core::{element::AppTheme, geometry::Points};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(radius, name = "card")]
+///     card: Points,
+/// }
+/// ```
+///
 /// and a generic struct:
 ///
 /// ```compile_fail
@@ -416,6 +428,9 @@ impl TokenKind {
     /// after the namespace when `name` is in it, so the classes still find
     /// it (`radius-card` under `button-`: `radius-button-card`, which is
     /// `rounded-button-card`), else in front (`raised`: `button-raised`).
+    /// A namespaced kind's names keep to its namespace (the derive refuses
+    /// others), so a name nested twice is the same whether the prefixes
+    /// are applied one at a time or joined.
     pub fn prefixed(self, prefix: &str, name: &str) -> String {
         let namespace = self.namespace();
         match name.strip_prefix(namespace) {

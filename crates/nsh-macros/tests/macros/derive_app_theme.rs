@@ -324,3 +324,42 @@ fn a_nested_fields_missing_names_take_the_inner_default() {
         }
     );
 }
+
+#[derive(Debug, Clone, PartialEq, Default, AppTheme)]
+pub(crate) struct Corner {
+    #[token(radius, name = "radius-c")]
+    pub(crate) c: Points,
+    #[token(color)]
+    pub(crate) ink: AdaptiveColor,
+}
+
+/// A nested field whose prefix starts as a namespace does (`radius-`).
+#[derive(Debug, Clone, PartialEq, Default, AppTheme)]
+pub(crate) struct Mid {
+    #[token(nested)]
+    pub(crate) radius: Corner,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, AppTheme)]
+pub(crate) struct Top {
+    #[token(nested)]
+    pub(crate) button: Mid,
+}
+
+#[test]
+fn twice_nested_specs_name_what_is_written() {
+    let names: Vec<&str> = Top::token_specs().iter().map(|s| &*s.name).collect();
+    assert_eq!(names, ["radius-button-radius-c", "button-radius-ink"]);
+    let tokens = Top::default().to_tokens();
+    for spec in Top::token_specs() {
+        let held = match spec.kind {
+            TokenKind::Color => tokens.color(&spec.name).is_some(),
+            _ => tokens.number(&spec.name).is_some(),
+        };
+        assert!(held, "{} is not written", spec.name);
+    }
+    let mut registry = Registry::new();
+    registry.theme::<Top>();
+    let (read, _) = registry.tokens(None).unwrap().unwrap();
+    assert_eq!(Top::read_tokens(&read, ""), Top::default());
+}
