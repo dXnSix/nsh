@@ -179,9 +179,17 @@ fn apply_css_vars(tokens: &mut Tokens, base: &Tokens, vars: &JsonValue, ignored:
         // A weight (`font-weight-strong`: `650`) is a number, as
         // Tailwind's `--font-weight-*`; every other `font-*` a family.
         if name.starts_with("font-weight-")
-            && let Some(weight) = length(value)
+            && let Some(dark_weight) = length(value)
         {
-            tokens.set_number(name, weight);
+            // Per appearance, as the other numbers (below).
+            let light_weight = light_vars
+                .get(name)
+                .and_then(|v| length(v))
+                .unwrap_or(dark_weight);
+            tokens.set_number(name, light_weight);
+            if dark_weight != light_weight {
+                tokens.set_dark_number(name, dark_weight);
+            }
             continue;
         }
         if name.starts_with("font-") {
@@ -217,7 +225,19 @@ fn apply_css_vars(tokens: &mut Tokens, base: &Tokens, vars: &JsonValue, ignored:
                 tokens.set_color(name, c.into());
             }
             (None, None) => match length(value) {
-                Some(n) => tokens.set_number(name, n),
+                // The dark appearance's value (`dark`'s, else the light
+                // one's), and the light one's: given in one appearance
+                // only, a number is both's, as a color is.
+                Some(dark_n) => {
+                    let light_n = light_vars
+                        .get(name)
+                        .and_then(|v| length(v))
+                        .unwrap_or(dark_n);
+                    tokens.set_number(name, light_n);
+                    if dark_n != light_n {
+                        tokens.set_dark_number(name, dark_n);
+                    }
+                }
                 None => {
                     let mut given: Vec<&String> = [light_vars.get(name), dark_vars.get(name)]
                         .into_iter()

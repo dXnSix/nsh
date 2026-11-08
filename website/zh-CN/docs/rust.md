@@ -520,6 +520,9 @@ fn the_module_formats_money() {
 - 值按 CSS 的写法书写。颜色可以是任意 CSS 颜色（`#7c3aed`、`rgb(…)`、`hsl(…)`、`oklch(…)`、`white`）、
   `color-mix(in oklab, var(--primary) 80%, white)`，或同一外观的另一个令牌 `var(--primary)`（可带后备值：`var(--brand, #7c3aed)`）。
   长度使用 `rem`（16 点）或 `px`（点）。字体是字体族列表：使用其中第一个非通用的字体族，第一个是通用字体族（`system-ui`、`sans-serif`）时使用系统字体。
+- **按外观区分的数字。** `dark` 中的数字是它的深色值（`"dark": { "radius-card": "6px" }`）：类名和 TSX 的 `token()` 跟随外观，Rust
+  用 `tokens().number_in("radius-card", dark())` 读取（`number()` 是浅色值，也是主题只给出一次的数字的唯一值）。`theme().radius` 和
+  `theme().number(..)` 也是浅色值：有深色值的数字请用 `number_in` 读取。`Tokens::set_dark_number` 在代码中设置深色值。
 - **应用自己的令牌。** 其他任何名称都是应用的令牌，就像 Tailwind `@theme` 中的变量：上例的 `"up"` 在 Rust 中是 `theme().color("up")`，
   在类名中是 `bg-up` / `text-up/70`，在 TSX 中是 `token("up")`（[主题 token](./tailwind.md#主题-token)）。数值如 `"radius-card": "14px"`
   是 `theme().number("radius-card")` 和 `rounded-(--radius-card)`。

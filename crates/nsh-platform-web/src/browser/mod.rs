@@ -175,7 +175,12 @@ impl Runtime {
                 use nsh_core::element::Token;
                 let name = args.index(0)?.as_string().unwrap_or_default();
                 let dark = args.index(1)?.truthy();
-                let token = self.tokens.borrow().as_ref().and_then(|t| t.get(&name));
+                let tokens = self.tokens.borrow().clone();
+                // A number in the appearance shown, as nsh-js's `token()`.
+                let token = tokens.as_ref().and_then(|t| match t.get(&name) {
+                    Some(Token::Number(_)) => t.number_in(&name, dark).map(Token::Number),
+                    token => token,
+                });
                 match token {
                     Some(Token::Number(n)) => Ok(Value::number(n.into())),
                     Some(Token::Font(f)) => Value::string(&f),

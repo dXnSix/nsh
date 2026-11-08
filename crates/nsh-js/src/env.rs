@@ -413,7 +413,12 @@ unsafe extern "C" fn token(
         return UNDEFINED;
     };
     let dark = scheme(e, &current(cx)) == "dark";
-    let value = e.tokens.borrow().get(&name);
+    let tokens = e.tokens.borrow().clone();
+    // A number in the appearance shown (its dark value, when it has one).
+    let value = match tokens.get(&name) {
+        Some(Token::Number(_)) => tokens.number_in(&name, dark).map(Token::Number),
+        value => value,
+    };
     match value {
         Some(Token::Color(c)) => {
             let c = nsh_core::Color::from(if dark { c.dark } else { c.light });

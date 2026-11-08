@@ -83,6 +83,8 @@ pub struct Theme {
 pub(crate) struct ClassTokens {
     colors: FxHashMap<Box<str>, AdaptiveColor>,
     numbers: FxHashMap<Box<str>, f32>,
+    /// The dark values of the numbers that have one of their own.
+    dark_numbers: FxHashMap<Box<str>, f32>,
     fonts: FxHashMap<Box<str>, Arc<str>>,
 }
 
@@ -95,6 +97,7 @@ impl ClassTokens {
         ClassTokens {
             colors: theme.colors().map(|(k, c)| (k.into(), c)).collect(),
             numbers: theme.numbers().map(|(k, n)| (k.into(), n)).collect(),
+            dark_numbers: theme.dark_numbers().map(|(k, n)| (k.into(), n)).collect(),
             fonts: theme.fonts().map(|(k, f)| (k.into(), f.clone())).collect(),
         }
     }
@@ -161,7 +164,7 @@ impl ClassTokens {
                     .get(name)
                     .filter(|_| hint.is_none_or(|h| h == "color"));
                 let font = self.fonts.get(name).filter(|_| hint == Some("family-name"));
-                match (color, self.numbers.get(name)) {
+                match (color, self.number(name, dark)) {
                     (Some(c), _) => hex(&mut out, c),
                     (None, _) if let Some(f) = font => out.push_str(&f.replace(' ', "_")),
                     (None, Some(n)) if hint == Some("number") => {
@@ -186,7 +189,7 @@ impl ClassTokens {
         // the same name (`card`) does not hide, as a namespace is what
         // Tailwind looks a utility's value up in. `text-` is a color
         // utility's too, where a color stays first, as it was.
-        let number = self.named_number(utility);
+        let number = self.named_number(utility, dark);
         let color = utility.match_indices('-').find_map(|(i, _)| {
             let rest = &utility[i + 1..];
             let name = rest.split_once('/').map_or(rest, |(n, _)| n);
@@ -213,16 +216,24 @@ impl ClassTokens {
 }
 
 impl ClassTokens {
+    /// The number named `name` in the dark appearance or the light one
+    /// ([`crate::element::Tokens::number_in`]).
+    fn number(&self, name: &str, dark: bool) -> Option<f32> {
+        dark.then(|| self.dark_numbers.get(name).copied())
+            .flatten()
+            .or_else(|| self.numbers.get(name).copied())
+    }
+
     /// A utility naming a number token of its namespace (`rounded-card`:
     /// `radius-card`; `p-gutter`: `spacing-gutter`) with the token's value
     /// as an arbitrary one (`rounded-[14px]`), as Tailwind 4 makes classes
     /// of a theme's `--radius-*`, `--spacing-*`, … variables.
     /// With the length of the utility's prefix (`rounded`: 7).
-    fn named_number(&self, utility: &str) -> Option<(usize, String)> {
+    fn named_number(&self, utility: &str, dark: bool) -> Option<(usize, String)> {
         utility.match_indices('-').find_map(|(i, _)| {
             let (prefix, name) = (&utility[..i], &utility[i + 1..]);
             let (namespace, length) = namespace(prefix.trim_start_matches('-'))?;
-            let value = self.numbers.get(format!("{namespace}-{name}").as_str())?;
+            let value = self.number(&format!("{namespace}-{name}"), dark)?;
             Some((
                 i,
                 match length {

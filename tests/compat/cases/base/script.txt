@@ -3561,6 +3561,26 @@ style id:corner borderTopLeftRadius 14
 style id:tailwind borderRadius 8
 covers [props] class
 
+# base-dark-numbers
+# A number with a dark value: `token()` and the class naming it follow the
+# appearance; a number given once is the same in both.
+tap id:case-base-dark-numbers
+tap id:set
+expect numbers result set
+tap id:light
+expect numbers radius-card 14
+expect numbers gap 4
+style id:card borderRadius 14
+tap id:dark
+expect numbers radius-card 6
+expect numbers gap 4
+style id:card borderRadius 6
+tap id:light
+expect numbers radius-card 14
+style id:card borderRadius 14
+covers [nsh] token
+covers [nsh] setColorScheme
+
 # base-resizable
 tap id:case-base-resizable
 # The sidebar starts at its `size`, the main panel takes the rest; the

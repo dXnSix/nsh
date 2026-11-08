@@ -2316,3 +2316,163 @@ mod token_namespaces {
         assert_eq!(style(&t, "rounded-card", false).view.border_radius, px(4.0));
     }
 }
+
+/// Number tokens with a value per appearance: `Tokens::number_in`, a theme
+/// file's `cssVars.dark` numbers, and the classes naming them in each
+/// appearance; a number with one value is as it was.
+mod number_per_appearance {
+    use super::*;
+    use crate::element::{Tokens, theme_file};
+
+    fn file(json: &str) -> Tokens {
+        let (tokens, ignored) = theme_file::parse(json, &Tokens::default()).unwrap();
+        assert!(ignored.is_empty(), "{ignored:?}");
+        tokens
+    }
+
+    /// The style `classes` give with `tokens` in the appearance `dark`.
+    fn style(tokens: &Tokens, classes: &str, dark: bool) -> Style {
+        let mut theme = Theme::default();
+        theme.set_tokens(tokens);
+        let list = parse(&theme, classes);
+        assert!(list.unknown().is_empty(), "{classes}: {:?}", list.unknown());
+        let mut style = Style::default();
+        let group = |_: &str| 0;
+        let context = Context {
+            env: ClassEnvironment {
+                dark,
+                ..Default::default()
+            },
+            window: crate::geometry::size_pt(390.0, 844.0),
+            rtl: false,
+            states: 0,
+            position: 0,
+            group: &group,
+        };
+        list.apply(
+            &context,
+            &theme,
+            &mut style,
+            &mut ClassProps::default(),
+            |_| {},
+        );
+        style
+    }
+
+    #[test]
+    fn a_number_reads_its_dark_value_in_the_dark_appearance() {
+        let mut t = Tokens::default();
+        t.set_number("radius", 10.0);
+        assert_eq!(
+            (t.number_in("radius", false), t.number_in("radius", true)),
+            (Some(10.0), Some(10.0))
+        );
+        t.set_dark_number("radius", 12.0);
+        assert_eq!(t.number("radius"), Some(10.0));
+        assert_eq!(
+            (t.number_in("radius", false), t.number_in("radius", true)),
+            (Some(10.0), Some(12.0))
+        );
+        // Setting the number sets it in both again.
+        t.set_number("radius", 8.0);
+        assert_eq!(t.number_in("radius", true), Some(8.0));
+        assert_eq!(t.number_in("nothing", true), None);
+    }
+
+    #[test]
+    fn over_carries_dark_values_and_a_number_without_one_takes_both() {
+        let mut base = Tokens::default();
+        base.set_number("radius", 10.0);
+        base.set_dark_number("radius", 12.0);
+        base.set_number("gap", 4.0);
+        base.set_dark_number("gap", 6.0);
+        let mut top = Tokens::default();
+        top.set_number("radius", 20.0);
+        let t = top.over(&base);
+        assert_eq!(
+            (t.number_in("radius", false), t.number_in("radius", true)),
+            (Some(20.0), Some(20.0))
+        );
+        assert_eq!(t.number_in("gap", true), Some(6.0));
+        let mut top = Tokens::default();
+        top.set_number("gap", 5.0);
+        top.set_dark_number("gap", 7.0);
+        let t = top.over(&base);
+        assert_eq!(
+            (t.number_in("gap", false), t.number_in("gap", true)),
+            (Some(5.0), Some(7.0))
+        );
+        // Put back from another set of tokens, the dark value comes too.
+        let mut copy = Tokens::default();
+        copy.copy_named(&base, "gap");
+        assert_eq!(copy.number_in("gap", true), Some(6.0));
+    }
+
+    #[test]
+    fn a_theme_files_dark_number_is_its_dark_value() {
+        let t = file(
+            r#"{ "cssVars": { "theme": { "radius": "10px", "gap": "4px" },
+                "light": { "radius-card": "14px" }, "dark": { "radius": "12px", "radius-card": "6px", "only-dark": "3px" } } }"#,
+        );
+        assert_eq!(
+            (t.number_in("radius", false), t.number_in("radius", true)),
+            (Some(10.0), Some(12.0))
+        );
+        assert_eq!(
+            (
+                t.number_in("radius-card", false),
+                t.number_in("radius-card", true)
+            ),
+            (Some(14.0), Some(6.0))
+        );
+        // One value: no dark value of its own, as before.
+        assert_eq!(t.number_in("gap", true), Some(4.0));
+        assert_eq!(t.dark_numbers().filter(|(n, _)| *n == "gap").count(), 0);
+        // Given in the dark appearance only, it is both's, as a color is.
+        assert_eq!(
+            (
+                t.number_in("only-dark", false),
+                t.number_in("only-dark", true)
+            ),
+            (Some(3.0), Some(3.0))
+        );
+        // A weight too.
+        let t = file(
+            r#"{ "cssVars": { "light": { "font-weight-strong": "500" }, "dark": { "font-weight-strong": "700" } } }"#,
+        );
+        assert_eq!(
+            (
+                t.number_in("font-weight-strong", false),
+                t.number_in("font-weight-strong", true)
+            ),
+            (Some(500.0), Some(700.0))
+        );
+    }
+
+    #[test]
+    fn classes_naming_a_number_follow_the_appearance() {
+        let t = file(
+            r#"{ "cssVars": { "light": { "radius-card": "14px", "gap": "4px" }, "dark": { "radius-card": "6px" } } }"#,
+        );
+        for classes in ["rounded-(--radius-card)", "rounded-card"] {
+            assert_eq!(
+                style(&t, classes, false).view.border_radius,
+                px(14.0),
+                "{classes}"
+            );
+            assert_eq!(
+                style(&t, classes, true).view.border_radius,
+                px(6.0),
+                "{classes}"
+            );
+        }
+        // A number with one value is the same in both.
+        assert_eq!(
+            format!("{:?}", style(&t, "p-(--gap)", true)),
+            format!("{:?}", style(&t, "p-(--gap)", false))
+        );
+        let mut theme = Theme::default();
+        theme.set_tokens(&t);
+        assert_ne!(parse(&theme, "rounded-card").deps() & deps::THEME, 0);
+    }
+}

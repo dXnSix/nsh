@@ -35,7 +35,11 @@ pub const FONT_MONO: &str = "font-mono";
 #[derive(Debug, Clone, Default)]
 pub struct Tokens {
     colors: FxHashMap<Box<str>, AdaptiveColor>,
+    /// The numbers' light values, which the dark appearance has too unless
+    /// [`Self::dark_numbers`] has another.
     numbers: FxHashMap<Box<str>, f32>,
+    /// The dark values of the numbers that have one of their own.
+    dark_numbers: FxHashMap<Box<str>, f32>,
     fonts: FxHashMap<Box<str>, Arc<str>>,
     /// Role -> the name of the token it reads (`None`: each its own name).
     roles: Option<Arc<FxHashMap<Role, Box<str>>>>,
@@ -48,6 +52,7 @@ impl PartialEq for Tokens {
     fn eq(&self, other: &Self) -> bool {
         self.colors == other.colors
             && self.numbers == other.numbers
+            && self.dark_numbers == other.dark_numbers
             && self.fonts == other.fonts
             && self.roles == other.roles
     }
@@ -299,14 +304,32 @@ impl Tokens {
         self.colors.insert(name.into(), color);
     }
 
-    /// The number named `name`.
+    /// The number named `name` (its light value, the only one of most
+    /// numbers).
     pub fn number(&self, name: &str) -> Option<f32> {
         self.numbers.get(name).copied()
     }
 
-    /// Sets the number named `name`.
+    /// The number named `name` in the dark appearance (`dark`) or the
+    /// light one: its dark value when it has one of its own, else the one
+    /// value it has.
+    pub fn number_in(&self, name: &str, dark: bool) -> Option<f32> {
+        dark.then(|| self.dark_numbers.get(name).copied())
+            .flatten()
+            .or_else(|| self.number(name))
+    }
+
+    /// Sets the number named `name`, in both appearances (a dark value it
+    /// had goes).
     pub fn set_number(&mut self, name: &str, value: f32) {
         self.numbers.insert(name.into(), value);
+        self.dark_numbers.remove(name);
+    }
+
+    /// Gives the number named `name` a value of its own in the dark
+    /// appearance (its light one is [`Tokens::set_number`]'s).
+    pub fn set_dark_number(&mut self, name: &str, value: f32) {
+        self.dark_numbers.insert(name.into(), value);
     }
 
     /// The font family named `name` ([`FONT_SANS`], [`FONT_MONO`], ...).
@@ -397,7 +420,10 @@ impl Tokens {
 
     /// Whether it has no token.
     pub fn is_empty(&self) -> bool {
-        self.colors.is_empty() && self.numbers.is_empty() && self.fonts.is_empty()
+        self.colors.is_empty()
+            && self.numbers.is_empty()
+            && self.dark_numbers.is_empty()
+            && self.fonts.is_empty()
     }
 
     /// Each color by name.
@@ -408,6 +434,11 @@ impl Tokens {
     /// Each number by name.
     pub fn numbers(&self) -> impl Iterator<Item = (&str, f32)> {
         self.numbers.iter().map(|(k, n)| (&**k, *n))
+    }
+
+    /// Each number's dark value of its own, by name.
+    pub fn dark_numbers(&self) -> impl Iterator<Item = (&str, f32)> {
+        self.dark_numbers.iter().map(|(k, n)| (&**k, *n))
     }
 
     /// Each font family by name.
@@ -434,6 +465,7 @@ impl Tokens {
         }
         copy(&mut self.colors, &from.colors, name);
         copy(&mut self.numbers, &from.numbers, name);
+        copy(&mut self.dark_numbers, &from.dark_numbers, name);
         copy(&mut self.fonts, &from.fonts, name);
     }
 
@@ -442,8 +474,14 @@ impl Tokens {
         let mut out = base.clone();
         out.colors
             .extend(self.colors.iter().map(|(k, c)| (k.clone(), *c)));
-        out.numbers
-            .extend(self.numbers.iter().map(|(k, n)| (k.clone(), *n)));
+        // A number of `self` is its values: a dark one of `base`'s goes
+        // unless `self` has its own.
+        for (k, n) in &self.numbers {
+            out.numbers.insert(k.clone(), *n);
+            out.dark_numbers.remove(k);
+        }
+        out.dark_numbers
+            .extend(self.dark_numbers.iter().map(|(k, n)| (k.clone(), *n)));
         out.fonts
             .extend(self.fonts.iter().map(|(k, f)| (k.clone(), f.clone())));
         if let Some(roles) = &self.roles {
