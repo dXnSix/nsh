@@ -2087,3 +2087,232 @@ fn env_in_arbitrary_spacing() {
     );
     assert_eq!(list.unknown().len(), 5, "{:?}", list.unknown());
 }
+
+/// Number tokens of Tailwind 4's namespaces are named classes
+/// (`radius-card`: `rounded-card`), resolved by name, which Tailwind's own
+/// names keep winning over.
+mod token_namespaces {
+    use super::*;
+
+    fn tokens() -> crate::element::Tokens {
+        let mut t = crate::element::tokens::sample();
+        for (name, n) in [
+            ("radius-card", 14.0),
+            ("radius-lg", 99.0),
+            ("spacing-gutter", 18.0),
+            ("spacing-4", 99.0),
+            ("text-body", 15.0),
+            ("font-weight-strong", 650.0),
+            ("tracking-label", 0.5),
+            ("leading-body", 1.3),
+            ("blur-soft", 6.0),
+        ] {
+            t.set_number(name, n);
+        }
+        // shadcn's colors have names a namespaced token may have too.
+        t.set_color(
+            "card",
+            crate::element::AdaptiveColor::rgb(0xffffff, 0x000000),
+        );
+        t
+    }
+
+    /// The style `classes` give with `tokens` in the appearance `dark`.
+    fn style(tokens: &crate::element::Tokens, classes: &str, dark: bool) -> Style {
+        let mut theme = Theme::default();
+        theme.set_tokens(tokens);
+        let list = parse(&theme, classes);
+        assert!(list.unknown().is_empty(), "{classes}: {:?}", list.unknown());
+        let mut style = Style::default();
+        let group = |_: &str| 0;
+        let context = Context {
+            env: ClassEnvironment {
+                dark,
+                ..Default::default()
+            },
+            window: crate::geometry::size_pt(390.0, 844.0),
+            rtl: false,
+            states: 0,
+            position: 0,
+            group: &group,
+        };
+        list.apply(
+            &context,
+            &theme,
+            &mut style,
+            &mut ClassProps::default(),
+            |_| {},
+        );
+        style
+    }
+
+    fn same(named: &str, arbitrary: &str) {
+        same_with(&tokens(), named, arbitrary);
+    }
+
+    fn same_with(t: &crate::element::Tokens, named: &str, arbitrary: &str) {
+        assert_eq!(
+            format!("{:?}", style(t, named, false)),
+            format!("{:?}", style(t, arbitrary, false)),
+            "{named} as {arbitrary}"
+        );
+    }
+
+    #[test]
+    fn number_tokens_are_their_namespaces_classes() {
+        same("rounded-card", "rounded-[14px]");
+        same(
+            "rounded-t-card rounded-bl-card",
+            "rounded-t-[14px] rounded-bl-[14px]",
+        );
+        same(
+            "p-gutter px-gutter mt-gutter gap-x-gutter",
+            "p-[18px] px-[18px] mt-[18px] gap-x-[18px]",
+        );
+        same(
+            "w-gutter h-gutter size-gutter inset-x-gutter top-gutter",
+            "w-[18px] h-[18px] size-[18px] inset-x-[18px] top-[18px]",
+        );
+        same("-mt-gutter", "-mt-[18px]");
+        same("text-body", "text-[15px]");
+        same("font-strong", "font-[650]");
+        same("tracking-label", "tracking-[0.5px]");
+        same("leading-body", "leading-[1.3]");
+        same("blur-soft", "blur-[6px]");
+        assert_eq!(
+            style(&tokens(), "rounded-card", false).view.border_radius,
+            px(14.0)
+        );
+        // The color `card` stays its color utilities', and `text-card` the
+        // color as it was, with a size token of that name too.
+        assert_eq!(
+            style(&tokens(), "bg-card", false).view.background_color,
+            Color(0xffff_ffff)
+        );
+        let mut t = tokens();
+        t.set_number("text-card", 30.0);
+        assert_eq!(
+            format!("{:?}", style(&t, "text-card", false)),
+            format!("{:?}", style(&t, "text-[color:#ffffffff]", false))
+        );
+    }
+
+    #[test]
+    fn they_work_under_variants_and_follow_the_appearance_rules() {
+        same(
+            "hover:rounded-card dark:p-gutter",
+            "hover:rounded-[14px] dark:p-[18px]",
+        );
+        let s = style(&tokens(), "dark:rounded-card", true);
+        assert_eq!(s.view.border_radius, px(14.0));
+    }
+
+    #[test]
+    fn tailwinds_own_names_keep_winning() {
+        let t = tokens();
+        // `radius-lg` and `spacing-4` exist, but `rounded-lg` and `p-4` stay
+        // Tailwind's.
+        assert_eq!(
+            format!("{:?}", style(&t, "rounded-lg p-4", false)),
+            format!(
+                "{:?}",
+                style(&crate::element::Tokens::default(), "rounded-lg p-4", false)
+            )
+        );
+        let mut theme = Theme::default();
+        theme.set_tokens(&t);
+        let shadowed = theme.shadowed_tokens();
+        let (_, radius) = shadowed.iter().find(|(t, _)| t == "radius-lg").unwrap();
+        assert!(radius.contains(&"rounded-lg".to_owned()), "{radius:?}");
+        assert!(radius.contains(&"rounded-t-lg".to_owned()), "{radius:?}");
+        let (_, spacing) = shadowed.iter().find(|(t, _)| t == "spacing-4").unwrap();
+        assert!(spacing.contains(&"p-4".to_owned()) && spacing.contains(&"w-4".to_owned()));
+        // Tokens whose classes are all theirs are not listed.
+        assert!(
+            !shadowed
+                .iter()
+                .any(|(t, _)| t == "radius-card" || t == "spacing-gutter")
+        );
+    }
+
+    /// `spacing-md` makes `p-md` the token's, while `max-w-md` stays
+    /// Tailwind's container width: that one is listed.
+    #[test]
+    fn a_partly_shadowed_token_lists_the_classes_that_stay_tailwinds() {
+        let mut t = tokens();
+        t.set_number("spacing-md", 7.0);
+        same_with(&t, "p-md", "p-[7px]");
+        let mut theme = Theme::default();
+        theme.set_tokens(&t);
+        let shadowed = theme.shadowed_tokens();
+        let (_, classes) = shadowed.iter().find(|(t, _)| t == "spacing-md").unwrap();
+        assert!(classes.contains(&"max-w-md".to_owned()), "{classes:?}");
+        assert!(!classes.contains(&"p-md".to_owned()), "{classes:?}");
+    }
+
+    /// A size `text-card` beside the color `card`: `text-card` stays the
+    /// color, and the token is listed.
+    #[test]
+    fn a_text_size_hidden_by_a_color_is_listed() {
+        let mut t = tokens();
+        t.set_number("text-card", 30.0);
+        let mut theme = Theme::default();
+        theme.set_tokens(&t);
+        let shadowed = theme.shadowed_tokens();
+        assert!(
+            shadowed.contains(&("text-card".to_owned(), vec!["text-card".to_owned()])),
+            "{shadowed:?}"
+        );
+    }
+
+    /// The longer utility wins: `inset-shadow-card` is the inset shadow's
+    /// color `card`, whatever `spacing-shadow-card` is.
+    #[test]
+    fn the_longer_utility_wins_over_a_namespace() {
+        let mut t = tokens();
+        t.set_number("spacing-shadow-card", 5.0);
+        same_with(&t, "inset-shadow-card", "inset-shadow-[color:#ffffffff]");
+    }
+
+    /// A weight a theme file sets is a number token, so its class works.
+    #[test]
+    fn a_theme_files_weight_is_a_named_class() {
+        let (t, ignored) = crate::element::theme_file::parse(
+            r#"{ "cssVars": { "theme": { "font-weight-strong": "650", "font-display": "Pacifico", "radius-card": "14px" } } }"#,
+            &crate::element::Tokens::default(),
+        )
+        .unwrap();
+        assert!(ignored.is_empty(), "{ignored:?}");
+        assert_eq!(t.number("font-weight-strong"), Some(650.0));
+        assert_eq!(t.font("font-display").map(|f| &**f), Some("Pacifico"));
+        same_with(&t, "font-strong", "font-[650]");
+    }
+
+    /// Named classes depend on the theme, so the class cache parses them
+    /// again when the tokens change.
+    #[test]
+    fn named_classes_depend_on_the_theme() {
+        let mut theme = Theme::default();
+        theme.set_tokens(&tokens());
+        assert_ne!(
+            parse(&theme, "rounded-card p-gutter text-body").deps() & deps::THEME,
+            0
+        );
+    }
+
+    #[test]
+    fn a_name_no_token_has_stays_unknown() {
+        let mut theme = Theme::default();
+        theme.set_tokens(&tokens());
+        let list = parse(&theme, "rounded-nothing p-card bg-gutter");
+        assert_eq!(list.unknown().len(), 3, "{:?}", list.unknown());
+    }
+
+    /// A new value of the token restyles its class.
+    #[test]
+    fn they_follow_the_tokens_values() {
+        let mut t = tokens();
+        t.set_number("radius-card", 4.0);
+        assert_eq!(style(&t, "rounded-card", false).view.border_radius, px(4.0));
+    }
+}

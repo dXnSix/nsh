@@ -133,8 +133,9 @@ fn font_family(value: &str) -> Option<&str> {
 /// out), `dark`'s in the dark one. A color may name another
 /// (`var(--ring)`, in `color-mix()` too) of the same appearance: the
 /// file's or the one under it. Values of no kind a token has (shadows,
-/// letter spacing) are left out, as they are of no Tailwind utility NSH
-/// draws with a token. A value written as a color that is none is left
+/// lengths in `em`, as shadcn's `tracking-normal: 0em`) are left out, as
+/// NSH draws no utility with them; a `tracking-*` token is a length in
+/// points (`px`, `rem`). A value written as a color that is none is left
 /// out, and one that is no color where the other appearance has a color
 /// gives way to that color; both are listed in `ignored`.
 fn apply_css_vars(tokens: &mut Tokens, base: &Tokens, vars: &JsonValue, ignored: &mut Vec<String>) {
@@ -175,6 +176,14 @@ fn apply_css_vars(tokens: &mut Tokens, base: &Tokens, vars: &JsonValue, ignored:
     for name in names {
         let value = dark_vars.get(name).or_else(|| light_vars.get(name));
         let Some(value) = value else { continue };
+        // A weight (`font-weight-strong`: `650`) is a number, as
+        // Tailwind's `--font-weight-*`; every other `font-*` a family.
+        if name.starts_with("font-weight-")
+            && let Some(weight) = length(value)
+        {
+            tokens.set_number(name, weight);
+            continue;
+        }
         if name.starts_with("font-") {
             if let Some(family) = font_family(value) {
                 tokens.set_font(name, family);

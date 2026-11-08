@@ -3551,6 +3551,16 @@ expect update result all
 expect update primary #171717ff
 covers [nsh] resetTheme
 
+# base-named-classes
+# A number token of a Tailwind namespace is a named class: nsh.json's
+# `radius-card` (14px) is `rounded-card`.
+tap id:case-base-named-classes
+style id:named borderRadius 14
+style id:corner borderTopLeftRadius 14
+# Tailwind's own names keep their meaning.
+style id:tailwind borderRadius 8
+covers [props] class
+
 # base-resizable
 tap id:case-base-resizable
 # The sidebar starts at its `size`, the main panel takes the rest; the

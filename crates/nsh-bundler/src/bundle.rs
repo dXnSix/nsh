@@ -370,6 +370,9 @@ fn tailwind_setup(dir: &std::path::Path) -> Result<Arc<plugin::ThemeSetup>, Bund
         setup.ui = Some(json);
     }
     setup.theme.set_tokens(&tokens);
+    for warning in shadowed_tokens(&setup.theme) {
+        log::warn!(target: "nsh::build", "{warning}");
+    }
     if let Some(appearance) = config.get("appearance") {
         setup.appearance = match appearance.as_str() {
             Some("light") => Some("light"),
@@ -432,6 +435,22 @@ pub fn i18n_json(
         locales.as_deref(),
         |warning| log::warn!(target: "nsh::build", "nsh.json: {warning}"),
     ))
+}
+
+/// A warning for each theme token some of whose namespaced classes keep
+/// another meaning (`radius-lg`: Tailwind's `rounded-lg`), naming them.
+fn shadowed_tokens(theme: &nsh_core::tailwind::Theme) -> Vec<String> {
+    theme
+        .shadowed_tokens()
+        .into_iter()
+        .map(|(token, classes)| {
+            let classes: Vec<String> = classes.iter().map(|c| format!("`{c}`")).collect();
+            format!(
+                "nsh.json: theme: `{token}` is no class where Tailwind's or a color's keeps its meaning: {}",
+                classes.join(", ")
+            )
+        })
+        .collect()
 }
 
 /// Warns of what this NSH left out of `nsh.json`'s `section` (an unknown
@@ -1570,5 +1589,60 @@ mod tests {
         .unwrap();
         bundle_hot(&dir.join("App.tsx"), &ui_sets).unwrap();
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// A theme's namespaced number tokens are classes (`rounded-card`), which
+/// the build's class check knows; one whose class is Tailwind's is warned
+/// of, once.
+#[cfg(test)]
+mod token_namespaces {
+    use oxc::span::SourceType;
+
+    fn theme(json: &str) -> nsh_core::tailwind::Theme {
+        let dir = std::env::temp_dir().join(format!(
+            "nsh-token-namespaces-{}-{}",
+            std::process::id(),
+            json.len()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("nsh.json"), format!(r#"{{ "theme": {json} }}"#)).unwrap();
+        let setup = super::tailwind_setup(&dir).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        setup.theme.clone()
+    }
+
+    const THEME: &str = r#"{ "cssVars": { "theme": { "radius-card": "14px", "spacing-gutter": "18px", "radius-lg": "20px", "text-body": "15px", "font-weight-strong": "650", "spacing-md": "7px" } } }"#;
+
+    #[test]
+    fn the_class_check_knows_named_classes() {
+        let theme = theme(THEME);
+        let unknown = crate::classes::check(
+            r#"const a = <View class="rounded-card p-gutter text-body font-strong p-md rounded-nothing" />;"#,
+            SourceType::tsx(),
+            &theme,
+        );
+        let unknown: Vec<&str> = unknown.iter().map(|u| u.class.as_str()).collect();
+        assert_eq!(unknown, ["rounded-nothing"]);
+    }
+
+    #[test]
+    fn a_shadowed_token_is_warned_of_once() {
+        let theme = theme(THEME);
+        let warnings = super::shadowed_tokens(&theme);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(
+            warnings[0].starts_with(
+                "nsh.json: theme: `radius-lg` is no class where Tailwind's or a color's keeps its meaning: "
+            ) && warnings[0].contains("`rounded-lg`"),
+            "{warnings:?}"
+        );
+        // Partly: `p-md` is the token's, `max-w-md` stays Tailwind's.
+        assert!(
+            warnings[1].starts_with("nsh.json: theme: `spacing-md` ")
+                && warnings[1].contains("`max-w-md`")
+                && !warnings[1].contains("`p-md`"),
+            "{warnings:?}"
+        );
     }
 }

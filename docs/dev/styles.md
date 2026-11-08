@@ -107,7 +107,14 @@
   Tailwind palette has no color of that name (a palette color of the same name wins), and every token is a variable
   (`bg-(--primary)`, `rounded-(--radius)`, `text-(length:--x)`, `font-(family-name:--font-mono)`); the fonts
   `font-sans` / `font-mono`, when the theme sets them, are what the `font-sans` / `font-mono` utilities set
-  (`ClassTokens::replaces`), and `font-sans` is the default font of every text (Tailwind's `--font-sans`, a page's
+  (`ClassTokens::replaces`); a number token of a Tailwind 4 namespace (`radius-`, `spacing-`, `text-`, `font-weight-`,
+  `tracking-`, `leading-`, `blur-`) is a named class of that namespace's utilities (`rounded-card`, `p-gutter`,
+  `font-strong`: `ClassTokens::substitute` → `named_number`, an arbitrary value by name prefix, so cssVars-only TSX
+  apps get them), checked after Tailwind's own names, which keep winning (`Theme::shadowed_tokens` lists each token's
+  classes that stay Tailwind's or, for `text-`, a color's, which the bundler warns of), and before colors at the same
+  utility except for `text-` (the longer utility wins otherwise: `inset-shadow-card`); the theme reader makes
+  `font-weight-*` numbers and leaves `em` lengths out, so `tracking-*` tokens are points; and `font-sans` is the default
+  font of every text (Tailwind's `--font-sans`, a page's
   preflight). Such a utility is parsed with the light and the dark values as arbitrary ones (two rules of its rank
   when they differ, so it follows the appearance with no `dark:`) and depends on `deps::THEME`. When the design
   tokens the app draws with change (`Core::set_tokens`, `set_host_tokens`; a host's keep the app's names they lack,
