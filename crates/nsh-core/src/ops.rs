@@ -1915,7 +1915,7 @@ pub enum Command {
     Announce(String),
     /// Turn the performance monitor on or off (on the root;
     /// `setFpsEnabled`): what the platform has of one, the
-    /// macOS panel or the other platforms' `nsh::perf` lines. Platforms
+    /// macOS panel or the other platforms' `nsh::fps` lines. Platforms
     /// without a monitor ignore it.
     PerfMonitor(bool),
     /// Load the image at `uri` (keeping its bytes for views that show it
@@ -2893,6 +2893,14 @@ pub enum Op {
         child: NodeId,
         /// Sibling to insert before; `None` appends.
         before: Option<NodeId>,
+    },
+    /// Marks detached view `id` the stand-in of an `<Each>` row not
+    /// rendered yet, sized like its rendered siblings: the core asks JS to
+    /// render the row once the view would be made
+    /// ([`crate::element::JsEvent::Rows`]).
+    Placeholder {
+        /// Node id.
+        id: NodeId,
     },
     /// Detaches `child` from `parent`. The child stays alive until released.
     Remove {
