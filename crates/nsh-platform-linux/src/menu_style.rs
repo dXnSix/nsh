@@ -21,17 +21,20 @@
 //! through gdk-pixbuf's loaders, which may not read SVG, so no image is
 //! used.
 
-use nsh_core::{Hsla, Rgba, element::Tokens};
+use nsh_core::{
+    Hsla, Rgba,
+    element::{Role, Tokens},
+};
 
-/// The default theme's colors (`nsh-base`'s, neutral): `(token, light,
+/// The default theme's colors (`nsh-base`'s, neutral): `(role, light,
 /// dark)`.
-const DEFAULTS: [(&str, u32, u32); 6] = [
-    ("popover", 0xffffff, 0x0a0a0a),
-    ("popover-foreground", 0x0a0a0a, 0xfafafa),
-    ("accent", 0xf5f5f5, 0x262626),
-    ("accent-foreground", 0x171717, 0xfafafa),
-    ("muted-foreground", 0x737373, 0xa3a3a3),
-    ("border", 0xe5e5e5, 0x262626),
+const DEFAULTS: [(Role, u32, u32); 6] = [
+    (Role::Popover, 0xffffff, 0x0a0a0a),
+    (Role::PopoverForeground, 0x0a0a0a, 0xfafafa),
+    (Role::Accent, 0xf5f5f5, 0x262626),
+    (Role::AccentForeground, 0x171717, 0xfafafa),
+    (Role::MutedForeground, 0x737373, 0xa3a3a3),
+    (Role::Border, 0xe5e5e5, 0x262626),
 ];
 
 /// The menus' style sheet for `tokens`.
@@ -39,17 +42,17 @@ pub(crate) fn css(tokens: &Tokens) -> String {
     let mut out = String::from(SHAPE);
     for dark in [false, true] {
         let scope = if dark { ".nsh-dark " } else { "" };
-        let color = |name: &str| {
-            let (_, light, night) = DEFAULTS.iter().find(|(n, ..)| *n == name).unwrap();
+        let color = |role: Role| {
+            let (_, light, night) = DEFAULTS.iter().find(|(r, ..)| *r == role).unwrap();
             let fallback = if dark { *night } else { *light };
             tokens
-                .color(name)
+                .role_color(role)
                 .map(|c| css_color(if dark { c.dark } else { c.light }))
                 .unwrap_or_else(|| format!("#{fallback:06x}"))
         };
-        let (popover, foreground) = (color("popover"), color("popover-foreground"));
-        let (accent, accent_foreground) = (color("accent"), color("accent-foreground"));
-        let (muted, border) = (color("muted-foreground"), color("border"));
+        let (popover, foreground) = (color(Role::Popover), color(Role::PopoverForeground));
+        let (accent, accent_foreground) = (color(Role::Accent), color(Role::AccentForeground));
+        let (muted, border) = (color(Role::MutedForeground), color(Role::Border));
         out.push_str(&format!(
             "
 {scope}popover.menu > contents {{ background-color: {popover}; color: {foreground}; border-color: {border}; }}
@@ -114,6 +117,20 @@ mod tests {
     use nsh_core::element::{AdaptiveColor, Tokens};
 
     use super::css;
+
+    /// A theme that maps a role onto a token of its own colors the menus
+    /// with that token.
+    #[test]
+    fn menu_style_reads_the_tokens_roles_map_onto() {
+        let mut tokens = Tokens::default();
+        tokens.set_color("surface-overlay", AdaptiveColor::rgb(0x123456, 0x654321));
+        let tokens = tokens.with_roles([(nsh_core::element::Role::Popover, "surface-overlay")]);
+        let sheet = css(&tokens);
+        assert!(sheet.contains("popover.menu > contents { background-color: rgba(18, 52, 86, 1);"));
+        assert!(sheet.contains(
+            ".nsh-dark popover.menu > contents { background-color: rgba(101, 67, 33, 1);"
+        ));
+    }
 
     /// The style sheet takes the app's colors, the default theme's where
     /// it has none, and GTK reads every rule of it (where a display can be

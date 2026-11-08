@@ -537,6 +537,9 @@ pub(super) struct Components {
     /// `nsh.json`'s theme, `setTheme`, `set_tokens`), which
     /// [`Core::reset_tokens`] puts tokens back to.
     file_tokens: Arc<Tokens>,
+    /// The UI set's default tokens: drawn with others, the app has a theme
+    /// of its own ([`Tokens::is_themed`]); `None`: no set reads themes.
+    default_tokens: Option<Arc<Tokens>>,
     /// The embedding app's tokens: win over [`Self::app_tokens`].
     host_tokens: Option<Arc<Tokens>>,
     /// Boxed: making a view (or applying its patches) takes its instance
@@ -698,6 +701,7 @@ impl Default for Components {
             tokens: Arc::new(Tokens::default()),
             app_tokens: Arc::new(Tokens::default()),
             file_tokens: Arc::new(Tokens::default()),
+            default_tokens: None,
             host_tokens: None,
             instances: FxHashMap::default(),
             owners: FxHashMap::default(),
@@ -855,6 +859,7 @@ impl<M: TextEngine> Core<M> {
     /// sets' setup functions ([`Registry::setup`]).
     pub fn set_components(&mut self, registry: Registry) {
         if let Some(Ok((tokens, _))) = registry.tokens(None) {
+            self.components.default_tokens = Some(Arc::new(tokens.clone()));
             self.set_tokens(tokens);
         }
         {
@@ -989,12 +994,21 @@ impl<M: TextEngine> Core<M> {
     /// The tokens drawn with now: a signal of the surface, so only the
     /// bindings that read them run again, and only when they changed.
     fn tokens_changed(&mut self) {
-        let tokens = match &self.components.host_tokens {
+        let mut tokens = match &self.components.host_tokens {
             // The app's own tokens the host's do not have stay.
             Some(host) => Arc::new(host.over(&self.components.app_tokens)),
             None => self.components.app_tokens.clone(),
         };
-        if *tokens == *self.components.tokens {
+        // Whether the app has a theme of its own, which the platforms'
+        // controls take their colors from only then.
+        let themed = match &self.components.default_tokens {
+            Some(default) => *tokens != **default,
+            None => !tokens.is_empty(),
+        };
+        if tokens.is_themed() != themed {
+            Arc::make_mut(&mut tokens).set_themed(themed);
+        }
+        if *tokens == *self.components.tokens && themed == self.components.tokens.is_themed() {
             self.components.tokens = tokens;
             return;
         }
@@ -1014,7 +1028,7 @@ impl<M: TextEngine> Core<M> {
         let font = self
             .components
             .tokens
-            .font(crate::element::FONT_SANS)
+            .role_font(crate::element::Role::FontSans)
             .map(|f| crate::style::FontFamily::new(f));
         self.set_default_font(font);
         self.class_tokens_changed();

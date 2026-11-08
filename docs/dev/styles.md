@@ -112,7 +112,9 @@
   when they differ, so it follows the appearance with no `dark:`) and depends on `deps::THEME`. When the design
   tokens the app draws with change (`Core::set_tokens`, `set_host_tokens`; a host's keep the app's names they lack,
   `Tokens::over`), `Core::class_tokens_changed` drops the cached strings that name tokens and resolves
-  their nodes (and the app's classes on Rust components) again; when the names change, every class. `nsh build` / `nsh dev` warn about unknown static classes in app code (`file:line:col:
+  their nodes (and the app's classes on Rust components) again; when the names change, every class. Classes name
+  tokens only, never roles (`element::Role`, what NSH's own parts draw with, `components.md` "The theme"): a role
+  mapped onto another token (`Tokens::with_roles`) adds no class. `nsh build` / `nsh dev` warn about unknown static classes in app code (`file:line:col:
   unknown class '...'`, target `nsh::build`); the core logs each unknown class once at run time. Settings
   that are props in React Native are style keys here, as in CSS (`numberOfLines`, `textOverflow`, `userSelect`,
   `pointerEvents`, `objectFit`; `line-clamp-*`, `truncate`, `text-ellipsis`, `select-*`, `pointer-events-*`,

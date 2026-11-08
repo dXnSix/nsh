@@ -273,6 +273,34 @@ import type {
 
 在 Rust 中，`theme()` 以设计 token 的形式读取应用的主题（`theme().primary`、`theme().radius`），与 TSX 的[主题类](../docs/tailwind.md#主题-token)使用同样的 token。
 
+<a id="theme-roles"></a>
+
+### 主题角色
+
+NSH 自己绘制的部分通过**角色**读取主题：`theme()` 的各个字段、移动端标签栏的强调色、默认字体，以及各平台自己的控件（Linux
+的菜单、iOS 和 Android 的提示框）。角色是所绘制内容的名字，它读取同名的 token，除非主题把它映射到另一个 token：
+
+| 角色 | 由谁绘制 |
+|---|---|
+| `background`、`foreground` | `theme().background` / `foreground`；嵌入在宿主主题中的 GPUI 应用的界面 |
+| `card`、`card-foreground`、`secondary`、`secondary-foreground`、`muted`、`input`、`chart-1` … `chart-5`、`sidebar` … `sidebar-ring` | 同名的 `theme()` 字段 |
+| `popover`、`popover-foreground` | `theme().popover` / `popover_foreground`；Linux 的菜单；Android 的提示框 |
+| `primary`、`primary-foreground` | `theme().primary` / `primary_foreground`；标签栏中选中的标签；iOS 和 Android 提示框的按钮 |
+| `muted-foreground` | `theme().muted_foreground`；Linux 菜单中的快捷键；Android 提示框的消息 |
+| `accent`、`accent-foreground` | `theme().accent` / `accent_foreground`；Linux 菜单中高亮的项 |
+| `destructive` | `theme().destructive`；Android 提示框中的破坏性操作 |
+| `border`、`ring` | `theme().border` / `ring`；Linux 菜单的边框和分隔线（`border`） |
+| `selection` | `theme().selection()`（没有时为 22 % 的 `primary`） |
+| `radius` | `theme().radius` |
+| `font-sans` | 所有文本的默认字体；`theme().font_sans` |
+| `font-mono` | `theme().font_mono` |
+
+角色不是 token，也不是类名：主题有名为 `primary` 的 token 时，`bg-primary` 才是一个类名。在 Rust 中，角色是
+`nsh_core::element::Role`（`Role::Popover.name()` 为 `"popover"`），`Tokens::with_roles` 把角色映射到 token
+（`tokens.with_roles([(Role::Popover, "surface-overlay")])`），之后 `tokens.role_color(Role::Popover)` 读取它。
+没有映射时，每个角色读取同名的 token，所以 shadcn 主题的显示与以往相同。只有应用有自己的主题时（`Tokens::is_themed`，由核心设置），
+各平台的控件才采用主题的颜色；使用默认主题的应用保留系统的提示框颜色。
+
 <a id="controls"></a>
 
 ## 控件

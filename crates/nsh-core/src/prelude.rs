@@ -147,6 +147,7 @@ pub use crate::element::{
     ResponderEvent,
     ReturnKeyType,
     Rgba,
+    Role,
     Screen,
     ScreenAnimation,
     Scroll,

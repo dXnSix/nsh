@@ -749,7 +749,16 @@ page's; `font-mono` is the monospaced one) and has none of its own. The theme is
 `-foreground`, `sidebar-border`, `sidebar-ring` and `radius`, one field each (`theme().primary`, `theme().chart_1`,
 `theme().sidebar_ring`, `theme().radius`), plus Tailwind's fonts `font-sans` / `font-mono` (`theme().font_sans`,
 `theme().font_mono`; `None`, the system's fonts). `theme()` returns the theme of the tokens drawn with now, made once
-per change of them; an app's own tokens are read by name (`theme().color("up")`). The defaults are shadcn's `neutral` theme (`default-theme.json`, `radius` 0.625rem = 10 pt); no component of
+per change of them; an app's own tokens are read by name (`theme().color("up")`). Each field is read through its
+**role** (`element::Role`: `background`, `popover`, `primary`, `selection`, `radius`, `font-sans`, …, the names NSH's
+own parts draw with, `name()` shadcn's spelling): `Tokens::role_color` / `role_number` / `role_font` read the token a
+theme maps the role onto (`Tokens::with_roles`, kept by `over`), else the token of the role's name, so without a
+mapping every reader gets what it always did. The core's readers use roles too (the default font,
+`role_font(Role::FontSans)`; the mobile tab bar's tint, `Role::Primary`), and so do the platforms' (Linux's menus,
+iOS's alert tint, Android's `DIALOG_ROLES`; GPUI's host background is the host theme's `background` field, which
+`Theme::of` reads through `Role::Background`). A role is no token and adds no class. The core
+says whether the app has a theme of its own on the tokens it draws with (`Tokens::is_themed`: other than the UI set's
+defaults, `registry.tokens(None)`), which iOS and Android check before taking a theme's colors for their alerts. The defaults are shadcn's `neutral` theme (`default-theme.json`, `radius` 0.625rem = 10 pt); no component of
 `nsh/base` draws with them but `TextView`'s reading typography and the default looks of `Editor` and `DiffView`.
 
 A theme file is shadcn's registry `cssVars`, as shadcn and tweakcn export them: `{ "cssVars": { "theme": {…},
@@ -791,8 +800,9 @@ lacks. The core sends the tokens drawn with to the
 platform when they change (`Command::Tokens` on the root), which colors its own controls with them (Linux's menus:
 `docs/dev/linux.md`; Android's alerts and action sheets: `popover` behind, `popover-foreground` for the title and
 the options, `muted-foreground` for the message, `primary` for the buttons and `destructive` for a destructive action,
-over the system dialog's shape; iOS's alerts take `primary` as their tint, which iOS 17 draws the regular and cancel
-actions in and iOS 26 does not use; an app without a theme of its own keeps the system's colors on both). `nsh_base::theme()` reads the tokens from a signal of
+over the system dialog's shape, each as a role; iOS's alerts take `Role::Primary` as their tint, which iOS 17 draws the
+regular and cancel actions in and iOS 26 does not use; an app without a theme of its own, `!Tokens::is_themed()`,
+keeps the system's colors on both). `nsh_base::theme()` reads the tokens from a signal of
 the surface (`element::tokens`): new tokens run again the bindings that read them. An embedding app can give a
 surface its own (`Core::set_host_tokens`, `EngineControl::set_tokens`; sent from `Engine::start_with`'s `setup` they
 are in the first frame and JS's first render): they win over the app's until cleared, and the app's names they lack

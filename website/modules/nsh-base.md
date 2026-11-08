@@ -288,6 +288,34 @@ walkthroughs, see the [Navigation guide](../docs/navigation.md) and [Forms and k
 In Rust, `theme()` reads the app's theme as design tokens (`theme().primary`, `theme().radius`), the same tokens
 TSX's [theme classes](../docs/tailwind.md#theme-tokens) use.
 
+### Theme roles
+
+What NSH draws itself reads the theme through **roles**: `theme()`'s fields, the mobile tab bar's tint, the default
+font, and the platforms' own controls (Linux's menus, iOS's and Android's alerts). A role is the name of what is drawn,
+and reads the token of that name unless the theme maps it onto another token:
+
+| Role | Drawn by |
+|---|---|
+| `background`, `foreground` | `theme().background` / `foreground`; a GPUI app's surface embedded in its host's theme |
+| `card`, `card-foreground`, `secondary`, `secondary-foreground`, `muted`, `input`, `chart-1` … `chart-5`, `sidebar` … `sidebar-ring` | the `theme()` fields of those names |
+| `popover`, `popover-foreground` | `theme().popover` / `popover_foreground`; Linux's menus; Android's alerts |
+| `primary`, `primary-foreground` | `theme().primary` / `primary_foreground`; the tab bar's selected tab; iOS's and Android's alert buttons |
+| `muted-foreground` | `theme().muted_foreground`; Linux's menu shortcuts; an Android alert's message |
+| `accent`, `accent-foreground` | `theme().accent` / `accent_foreground`; Linux's highlighted menu item |
+| `destructive` | `theme().destructive`; an Android alert's destructive action |
+| `border`, `ring` | `theme().border` / `ring`; Linux's menu borders and separators (`border`) |
+| `selection` | `theme().selection()` (`primary` at 22 % without it) |
+| `radius` | `theme().radius` |
+| `font-sans` | the default font of every text; `theme().font_sans` |
+| `font-mono` | `theme().font_mono` |
+
+A role is no token and no class: `bg-primary` is a class when the theme has a token `primary`. In Rust, a role is
+`nsh_core::element::Role` (`Role::Popover.name()` is `"popover"`), and `Tokens::with_roles` maps roles onto tokens
+(`tokens.with_roles([(Role::Popover, "surface-overlay")])`), which `tokens.role_color(Role::Popover)` then reads.
+Without a mapping every role reads the token of its own name, so a shadcn theme draws as it always did. The platforms'
+controls take the theme's colors only when the app has a theme of its own (`Tokens::is_themed`, which the core sets);
+an app on the default theme keeps the system's alert colors.
+
 ## Controls
 
 ### Button

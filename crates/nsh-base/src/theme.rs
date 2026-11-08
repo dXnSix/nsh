@@ -19,16 +19,18 @@
 //! The core keeps the result as design tokens ([`Tokens`]), which Tailwind
 //! classes name (`bg-primary`, `bg-up/30`, `rounded-(--radius)`) and TS
 //! reads (`token()` of `nsh`); it reads `nsh.json`'s theme with
-//! [`tokens_of`], which `nsh/base`'s registry brings. What draws with them
-//! is the app's: no component of `nsh/base` reads them, but for the
-//! default reading typography of `TextView`.
+//! [`tokens_of`], which `nsh/base`'s registry brings. [`theme()`] reads
+//! each field through its [`Role`] (the token a theme maps it onto, else
+//! the token of its name), and the components that draw a look of their
+//! own read it: `Editor`, `TextView`, `RichEditor`, `DiffView`, `Terminal`,
+//! `Toast`, the scroll bar and the terminal looks of the controls.
 
 use std::sync::{Arc, LazyLock};
 
 use nsh_core::{
     Color, JsonValue,
     color::Hsla,
-    element::{AdaptiveColor, FONT_MONO, FONT_SANS, SharedString, Tokens},
+    element::{AdaptiveColor, Role, SharedString, Tokens},
     geometry::{Points, px},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -93,7 +95,7 @@ pub(crate) fn read_tokens(json: Option<&str>) -> Result<(Tokens, Vec<String>), S
 }
 
 macro_rules! theme {
-    ($( $(#[doc = $doc:literal])* $name:ident = $key:literal ),* $(,)?) => {
+    ($( $(#[doc = $doc:literal])* $name:ident = $key:literal => $role:ident ),* $(,)?) => {
         /// A theme: shadcn/ui's tokens, each a field, and the app's own
         /// ones by name ([`Theme::color`], [`Theme::number`],
         /// [`Theme::font`]).
@@ -124,24 +126,25 @@ macro_rules! theme {
         }
 
         impl Theme {
-            /// The theme of `tokens`: shadcn's tokens they leave out
-            /// (an embedding app's may) are the default's.
+            /// The theme of `tokens`, each field read through its role (the
+            /// token a theme maps it onto, else the token of its name):
+            /// shadcn's tokens they leave out (an embedding app's may) are
+            /// the default's.
             fn of(tokens: Arc<Tokens>) -> Self {
-                let default = |name: &str| DEFAULT_TOKENS.color(name);
-                let color = |name: &str| {
+                let color = |role: Role| {
                     tokens
-                        .color(name)
-                        .or_else(|| default(name))
+                        .role_color(role)
+                        .or_else(|| DEFAULT_TOKENS.color(role.name()))
                         .unwrap_or(AdaptiveColor::TRANSPARENT)
                 };
                 Theme {
-                    $( $name: color($key), )*
+                    $( $name: color(Role::$role), )*
                     radius: px(tokens
-                        .number("radius")
-                        .or_else(|| DEFAULT_TOKENS.number("radius"))
+                        .role_number(Role::Radius)
+                        .or_else(|| DEFAULT_TOKENS.number(Role::Radius.name()))
                         .unwrap_or(0.0)),
-                    font_sans: tokens.font(FONT_SANS).cloned().map(SharedString::from),
-                    font_mono: tokens.font(FONT_MONO).cloned().map(SharedString::from),
+                    font_sans: tokens.role_font(Role::FontSans).cloned().map(SharedString::from),
+                    font_mono: tokens.role_font(Role::FontMono).cloned().map(SharedString::from),
                     tokens,
                 }
             }
@@ -160,67 +163,67 @@ static DEFAULT_TOKENS: LazyLock<Tokens> = LazyLock::new(|| {
 
 theme! {
     /// The app's background.
-    background = "background",
+    background = "background" => Background,
     /// Text and icons on [`Theme::background`].
-    foreground = "foreground",
+    foreground = "foreground" => Foreground,
     /// Cards.
-    card = "card",
+    card = "card" => Card,
     /// Text on [`Theme::card`].
-    card_foreground = "card-foreground",
+    card_foreground = "card-foreground" => CardForeground,
     /// Popovers, menus, tooltips.
-    popover = "popover",
+    popover = "popover" => Popover,
     /// Text on [`Theme::popover`].
-    popover_foreground = "popover-foreground",
+    popover_foreground = "popover-foreground" => PopoverForeground,
     /// The main action.
-    primary = "primary",
+    primary = "primary" => Primary,
     /// Text on [`Theme::primary`].
-    primary_foreground = "primary-foreground",
+    primary_foreground = "primary-foreground" => PrimaryForeground,
     /// Secondary actions.
-    secondary = "secondary",
+    secondary = "secondary" => Secondary,
     /// Text on [`Theme::secondary`].
-    secondary_foreground = "secondary-foreground",
+    secondary_foreground = "secondary-foreground" => SecondaryForeground,
     /// Muted surfaces.
-    muted = "muted",
+    muted = "muted" => Muted,
     /// Secondary text: hints, captions, placeholders.
-    muted_foreground = "muted-foreground",
+    muted_foreground = "muted-foreground" => MutedForeground,
     /// What is hovered or focused: menu items, list rows.
-    accent = "accent",
+    accent = "accent" => Accent,
     /// Text on [`Theme::accent`].
-    accent_foreground = "accent-foreground",
+    accent_foreground = "accent-foreground" => AccentForeground,
     /// Destructive actions and errors.
-    destructive = "destructive",
+    destructive = "destructive" => Destructive,
     /// Borders and dividers.
-    border = "border",
+    border = "border" => Border,
     /// The borders of inputs.
-    input = "input",
+    input = "input" => Input,
     /// Focus rings.
-    ring = "ring",
+    ring = "ring" => Ring,
     /// A chart's first series.
-    chart_1 = "chart-1",
+    chart_1 = "chart-1" => Chart1,
     /// A chart's second series.
-    chart_2 = "chart-2",
+    chart_2 = "chart-2" => Chart2,
     /// A chart's third series.
-    chart_3 = "chart-3",
+    chart_3 = "chart-3" => Chart3,
     /// A chart's fourth series.
-    chart_4 = "chart-4",
+    chart_4 = "chart-4" => Chart4,
     /// A chart's fifth series.
-    chart_5 = "chart-5",
+    chart_5 = "chart-5" => Chart5,
     /// The sidebar.
-    sidebar = "sidebar",
+    sidebar = "sidebar" => Sidebar,
     /// Text on [`Theme::sidebar`].
-    sidebar_foreground = "sidebar-foreground",
+    sidebar_foreground = "sidebar-foreground" => SidebarForeground,
     /// The sidebar's main action.
-    sidebar_primary = "sidebar-primary",
+    sidebar_primary = "sidebar-primary" => SidebarPrimary,
     /// Text on [`Theme::sidebar_primary`].
-    sidebar_primary_foreground = "sidebar-primary-foreground",
+    sidebar_primary_foreground = "sidebar-primary-foreground" => SidebarPrimaryForeground,
     /// What is hovered or focused in the sidebar.
-    sidebar_accent = "sidebar-accent",
+    sidebar_accent = "sidebar-accent" => SidebarAccent,
     /// Text on [`Theme::sidebar_accent`].
-    sidebar_accent_foreground = "sidebar-accent-foreground",
+    sidebar_accent_foreground = "sidebar-accent-foreground" => SidebarAccentForeground,
     /// The sidebar's borders.
-    sidebar_border = "sidebar-border",
+    sidebar_border = "sidebar-border" => SidebarBorder,
     /// Focus rings in the sidebar.
-    sidebar_ring = "sidebar-ring",
+    sidebar_ring = "sidebar-ring" => SidebarRing,
 }
 
 impl Default for Theme {
@@ -257,7 +260,8 @@ impl Theme {
     /// app's `selection` color if the theme sets one, else `primary` at
     /// 22 %.
     pub fn selection(&self) -> AdaptiveColor {
-        self.color("selection")
+        self.tokens
+            .role_color(Role::Selection)
             .unwrap_or_else(|| self.primary.opacity(0.22))
     }
 

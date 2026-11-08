@@ -33264,3 +33264,156 @@ mod token_update {
         );
     }
 }
+
+/// What the core itself draws with reads roles (`Role`): the mobile tab
+/// bar's tint, the default font; and the core says whether the app has a
+/// theme of its own on the tokens it sends the platform.
+mod theme_roles {
+    use super::*;
+    use crate::{
+        Prop,
+        element::{Registry, Role, Root, Tokens},
+        platform::Os,
+        prelude::*,
+    };
+
+    #[component]
+    fn Bar() -> impl IntoElement {
+        crate::mobile::TabBar::element(crate::mobile::TabBarProps {
+            items: vec![crate::mobile::TabBarItem::new("Home")].into(),
+            selected_index: 0.into(),
+            hidden: false.into(),
+        })
+    }
+
+    /// The `tint` the tab bar sent last in the batches committed now.
+    fn tint(c: &mut Core<FakeEngine>) -> Option<serde_json::Value> {
+        let mut last = None;
+        while let Some(batch) = c.commit() {
+            for item in batch.items {
+                if let MountItem::ComponentProps { props, .. } = item {
+                    for (name, value) in props {
+                        if &*name == "tint" {
+                            last = value;
+                        }
+                    }
+                }
+            }
+        }
+        last
+    }
+
+    #[test]
+    fn the_tab_bar_takes_the_color_its_role_maps_onto() {
+        let mut c = core();
+        c.set_environment(crate::element::Environment {
+            os: Os::Ios,
+            ..Default::default()
+        });
+        let mut tokens = crate::element::tokens::sample();
+        tokens.set_color("action", rgb(0x123456).into());
+        c.set_tokens(tokens.with_roles([(Role::Primary, "action")]));
+        c.mount_root(&Root::of::<Bar>());
+        assert_eq!(tint(&mut c), Some(serde_json::json!("#123456")));
+    }
+
+    #[test]
+    fn text_takes_the_font_its_role_maps_onto() {
+        let mut c = core();
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::Text,
+                },
+                Op::CreateText {
+                    id: 3,
+                    text: "hello".into(),
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 3,
+                    before: None,
+                },
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+        c.commit();
+        let mut tokens = crate::element::tokens::sample();
+        tokens.set_font("font-body", "Inter");
+        tokens.set_font(crate::element::FONT_SANS, "Helvetica");
+        c.set_tokens(tokens.with_roles([(Role::FontSans, "font-body")]));
+        let text = text_item(&c.commit().unwrap()).unwrap();
+        assert_eq!(
+            text.spans[0].style.font_family,
+            Some(crate::style::FontFamily::new("Inter"))
+        );
+    }
+
+    /// The tokens of a theme file of the tests' format over the sample's.
+    fn source(json: Option<&str>) -> Result<(Tokens, Vec<String>), String> {
+        test_tokens(json)
+    }
+
+    /// The tokens each `Command::Tokens` committed now sent.
+    fn sent(c: &mut Core<FakeEngine>) -> Vec<Arc<Tokens>> {
+        let mut sent = Vec::new();
+        while let Some(batch) = c.commit() {
+            sent.extend(batch.items.into_iter().filter_map(|i| match i {
+                MountItem::Command {
+                    id: crate::ROOT_ID,
+                    command: Command::Tokens(tokens),
+                } => Some(tokens),
+                _ => None,
+            }));
+        }
+        sent
+    }
+
+    #[test]
+    fn the_core_says_whether_the_app_has_a_theme_of_its_own() {
+        let mut c = Core::new(FakeEngine::default(), size_pt(320.0, 480.0));
+        let mut registry = Registry::new();
+        registry.tokens_from(source);
+        c.set_components(registry);
+        // The UI set's defaults: no theme of its own.
+        assert!(sent(&mut c).last().is_some_and(|t| !t.is_themed()));
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(r##"{ "primary": "#0000ff" }"##.into()),
+            }],
+        );
+        assert!(sent(&mut c).last().is_some_and(|t| t.is_themed()));
+        // An embedding app's theme makes it one too, and clearing it with
+        // the app's own theme back to the defaults gives none.
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme("{}".into()),
+            }],
+        );
+        assert!(sent(&mut c).last().is_some_and(|t| !t.is_themed()));
+        let mut host = Tokens::default();
+        host.set_color("primary", rgb(0x00ff00).into());
+        c.set_host_tokens(Some(host));
+        assert!(sent(&mut c).last().is_some_and(|t| t.is_themed()));
+        c.set_host_tokens(None);
+        assert!(sent(&mut c).last().is_some_and(|t| !t.is_themed()));
+    }
+
+    /// No UI set reads themes: tokens of any kind are the app's theme.
+    #[test]
+    fn without_a_ui_set_any_tokens_are_a_theme() {
+        let mut c = Core::new(FakeEngine::default(), size_pt(320.0, 480.0));
+        c.set_tokens(crate::element::tokens::sample());
+        assert!(sent(&mut c).last().is_some_and(|t| t.is_themed()));
+    }
+}

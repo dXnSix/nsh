@@ -26,11 +26,147 @@ pub const FONT_MONO: &str = "font-mono";
 
 /// Design tokens by name: colors with a value per appearance, numbers and
 /// font families. The default has none.
-#[derive(Debug, Clone, PartialEq, Default)]
+///
+/// They may map [`Role`]s, what NSH's own parts draw with, onto tokens of
+/// other names ([`Tokens::with_roles`]): a theme whose surface for popovers
+/// is `surface-overlay` maps [`Role::Popover`] onto it, and every part that
+/// draws a popover reads that token ([`Tokens::role_color`]). Without a
+/// mapping a role reads the token of its own name (`popover`).
+#[derive(Debug, Clone, Default)]
 pub struct Tokens {
     colors: FxHashMap<Box<str>, AdaptiveColor>,
     numbers: FxHashMap<Box<str>, f32>,
     fonts: FxHashMap<Box<str>, Arc<str>>,
+    /// Role -> the name of the token it reads (`None`: each its own name).
+    roles: Option<Arc<FxHashMap<Role, Box<str>>>>,
+    /// Whether the app has a theme of its own ([`Tokens::is_themed`]): not
+    /// a token, so not compared.
+    themed: bool,
+}
+
+impl PartialEq for Tokens {
+    fn eq(&self, other: &Self) -> bool {
+        self.colors == other.colors
+            && self.numbers == other.numbers
+            && self.fonts == other.fonts
+            && self.roles == other.roles
+    }
+}
+
+macro_rules! roles {
+    ($( $(#[doc = $doc:literal])* $variant:ident = $name:literal ),* $(,)?) => {
+        /// What NSH's own parts draw with: `nsh-base`'s theme
+        /// (`theme().popover`), the platforms' own controls (Linux's menus,
+        /// the mobile tab bar, iOS's and Android's alerts), the default
+        /// font. Each reads the token of its name ([`Role::name`],
+        /// shadcn/ui's), or the token a theme maps it onto
+        /// ([`Tokens::with_roles`]). A role is no token and no class:
+        /// `bg-primary` exists when a theme has a token `primary`.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[non_exhaustive]
+        pub enum Role {
+            $(
+                $(#[doc = $doc])*
+                #[doc = concat!("\n\nName `", $name, "`.")]
+                $variant,
+            )*
+        }
+
+        impl Role {
+            /// Every role.
+            pub const ALL: &'static [Role] = &[$(Role::$variant),*];
+
+            /// Its name: the token it reads unless a theme maps it, as
+            /// shadcn/ui spells it (`popover-foreground`).
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Role::$variant => $name,)*
+                }
+            }
+
+            /// The role of this name (`"popover"`), if any.
+            pub fn from_name(name: &str) -> Option<Role> {
+                match name {
+                    $($name => Some(Role::$variant),)*
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+roles! {
+    /// The app's background.
+    Background = "background",
+    /// Text and icons on the background.
+    Foreground = "foreground",
+    /// Cards.
+    Card = "card",
+    /// Text on cards.
+    CardForeground = "card-foreground",
+    /// Popovers, menus, tooltips, alerts.
+    Popover = "popover",
+    /// Text on popovers.
+    PopoverForeground = "popover-foreground",
+    /// The main action: buttons, the tab bar's and alerts' tint.
+    Primary = "primary",
+    /// Text on the main action.
+    PrimaryForeground = "primary-foreground",
+    /// Secondary actions.
+    Secondary = "secondary",
+    /// Text on secondary actions.
+    SecondaryForeground = "secondary-foreground",
+    /// Muted surfaces.
+    Muted = "muted",
+    /// Secondary text: hints, captions, an alert's message.
+    MutedForeground = "muted-foreground",
+    /// What is hovered or highlighted: menu items, list rows.
+    Accent = "accent",
+    /// Text on what is highlighted.
+    AccentForeground = "accent-foreground",
+    /// Destructive actions and errors.
+    Destructive = "destructive",
+    /// Borders and dividers.
+    Border = "border",
+    /// The borders of inputs.
+    Input = "input",
+    /// Focus rings.
+    Ring = "ring",
+    /// A chart's first series.
+    Chart1 = "chart-1",
+    /// A chart's second series.
+    Chart2 = "chart-2",
+    /// A chart's third series.
+    Chart3 = "chart-3",
+    /// A chart's fourth series.
+    Chart4 = "chart-4",
+    /// A chart's fifth series.
+    Chart5 = "chart-5",
+    /// The sidebar.
+    Sidebar = "sidebar",
+    /// Text on the sidebar.
+    SidebarForeground = "sidebar-foreground",
+    /// The sidebar's main action.
+    SidebarPrimary = "sidebar-primary",
+    /// Text on the sidebar's main action.
+    SidebarPrimaryForeground = "sidebar-primary-foreground",
+    /// What is highlighted in the sidebar.
+    SidebarAccent = "sidebar-accent",
+    /// Text on what is highlighted in the sidebar.
+    SidebarAccentForeground = "sidebar-accent-foreground",
+    /// The sidebar's borders.
+    SidebarBorder = "sidebar-border",
+    /// Focus rings in the sidebar.
+    SidebarRing = "sidebar-ring",
+    /// The highlight of a selection (`nsh-base` draws `primary` at 22 %
+    /// when the theme has none).
+    Selection = "selection",
+    /// The corner radius.
+    Radius = "radius",
+    /// The app's default font family.
+    FontSans = "font-sans",
+    /// The monospaced font family.
+    FontMono = "font-mono",
 }
 
 /// A token's value.
@@ -195,6 +331,70 @@ impl Tokens {
         self.fonts.get(name).cloned().map(Token::Font)
     }
 
+    /// These tokens with `roles` mapped onto the tokens named (over the
+    /// roles they map already): [`Tokens::role_color`] and the others
+    /// read a role's token through them.
+    pub fn with_roles<S: Into<Box<str>>>(
+        mut self,
+        roles: impl IntoIterator<Item = (Role, S)>,
+    ) -> Self {
+        let mut map = self.roles.as_deref().cloned().unwrap_or_default();
+        map.extend(roles.into_iter().map(|(role, name)| (role, name.into())));
+        self.roles = (!map.is_empty()).then(|| Arc::new(map));
+        self
+    }
+
+    /// Each role mapped onto a token of another name, with that name.
+    pub fn roles(&self) -> impl Iterator<Item = (Role, &str)> {
+        self.roles
+            .iter()
+            .flat_map(|r| r.iter())
+            .map(|(role, name)| (*role, &**name))
+    }
+
+    /// The name of the token `role` reads: the one a theme mapped it onto,
+    /// else its own ([`Role::name`]).
+    pub fn role_name(&self, role: Role) -> &str {
+        self.roles
+            .as_ref()
+            .and_then(|r| r.get(&role))
+            .map_or(role.name(), |name| name)
+    }
+
+    /// The color `role` draws with: its token's ([`Tokens::role_name`]),
+    /// else the one of its own name.
+    pub fn role_color(&self, role: Role) -> Option<AdaptiveColor> {
+        self.color(self.role_name(role))
+            .or_else(|| self.color(role.name()))
+    }
+
+    /// The number `role` draws with, as [`Tokens::role_color`].
+    pub fn role_number(&self, role: Role) -> Option<f32> {
+        self.number(self.role_name(role))
+            .or_else(|| self.number(role.name()))
+    }
+
+    /// The font family `role` draws with, as [`Tokens::role_color`].
+    pub fn role_font(&self, role: Role) -> Option<&Arc<str>> {
+        self.font(self.role_name(role))
+            .or_else(|| self.font(role.name()))
+    }
+
+    /// Whether the app is drawn with a theme of its own: tokens other than
+    /// its UI set's defaults (`nsh-base`'s theme), its own or an embedding
+    /// app's. The core says so on the tokens it draws with, which the
+    /// platforms get (`Command::Tokens`): their own controls take the
+    /// theme's colors only then (iOS's and Android's alerts), and keep the
+    /// system's for an app without one. `false` on tokens made elsewhere.
+    pub fn is_themed(&self) -> bool {
+        self.themed
+    }
+
+    /// Says whether the app has a theme of its own ([`Tokens::is_themed`]).
+    pub fn set_themed(&mut self, themed: bool) {
+        self.themed = themed;
+    }
+
     /// Whether it has no token.
     pub fn is_empty(&self) -> bool {
         self.colors.is_empty() && self.numbers.is_empty() && self.fonts.is_empty()
@@ -246,6 +446,16 @@ impl Tokens {
             .extend(self.numbers.iter().map(|(k, n)| (k.clone(), *n)));
         out.fonts
             .extend(self.fonts.iter().map(|(k, f)| (k.clone(), f.clone())));
+        if let Some(roles) = &self.roles {
+            out.roles = match out.roles {
+                Some(base) => {
+                    let mut map = Arc::unwrap_or_clone(base);
+                    map.extend(roles.iter().map(|(r, n)| (*r, n.clone())));
+                    Some(Arc::new(map))
+                }
+                None => Some(roles.clone()),
+            };
+        }
         out
     }
 }
@@ -301,5 +511,81 @@ mod tests {
         assert_eq!(tokens.font(FONT_SANS).map(|f| &**f), Some("Inter"));
         assert_eq!(tokens.font(FONT_MONO).map(|f| &**f), Some("Iosevka"));
         assert!(Tokens::default().is_empty());
+    }
+}
+
+/// Roles: what NSH's own parts draw with, read through a theme's mapping.
+#[cfg(test)]
+mod theme_roles {
+    use super::*;
+    use crate::color::rgb;
+
+    #[test]
+    fn a_role_reads_the_token_of_its_name_without_a_mapping() {
+        let tokens = sample();
+        assert_eq!(tokens.role_color(Role::Popover), tokens.color("popover"));
+        assert_eq!(tokens.role_number(Role::Radius), tokens.number("radius"));
+        assert_eq!(
+            tokens.role_name(Role::PopoverForeground),
+            "popover-foreground"
+        );
+        assert_eq!(tokens.roles().count(), 0);
+    }
+
+    #[test]
+    fn a_role_reads_the_token_a_theme_maps_it_onto() {
+        let mut tokens = Tokens::default();
+        tokens.set_color("surface-overlay", rgb(0x123456).into());
+        tokens.set_color("popover", rgb(0xffffff).into());
+        tokens.set_number("radius-control", 6.0);
+        tokens.set_font("font-body", "Inter");
+        let tokens = tokens.with_roles([
+            (Role::Popover, "surface-overlay"),
+            (Role::Radius, "radius-control"),
+            (Role::FontSans, "font-body"),
+            (Role::Primary, "action"),
+        ]);
+        assert_eq!(tokens.role_color(Role::Popover), Some(rgb(0x123456).into()));
+        assert_eq!(tokens.role_number(Role::Radius), Some(6.0));
+        assert_eq!(
+            tokens.role_font(Role::FontSans).map(|f| &**f),
+            Some("Inter")
+        );
+        // The token it maps onto is missing: the role's own name.
+        assert_eq!(tokens.role_color(Role::Primary), None);
+        // A role is no token.
+        assert_eq!(
+            tokens.get("popover"),
+            Some(Token::Color(rgb(0xffffff).into()))
+        );
+        assert!(tokens.color("primary").is_none());
+    }
+
+    #[test]
+    fn over_keeps_the_roles_of_both_and_the_tops_win() {
+        let base = Tokens::default().with_roles([(Role::Popover, "a"), (Role::Card, "b")]);
+        let top = Tokens::default().with_roles([(Role::Popover, "c")]);
+        let tokens = top.over(&base);
+        assert_eq!(tokens.role_name(Role::Popover), "c");
+        assert_eq!(tokens.role_name(Role::Card), "b");
+        let plain = Tokens::default().over(&base);
+        assert_eq!(plain.role_name(Role::Card), "b");
+    }
+
+    #[test]
+    fn names_are_shadcns_and_read_back() {
+        for role in Role::ALL {
+            assert_eq!(Role::from_name(role.name()), Some(*role));
+        }
+        assert_eq!(Role::Selection.name(), "selection");
+        assert_eq!(Role::from_name("surface"), None);
+    }
+
+    #[test]
+    fn being_themed_is_no_token() {
+        let mut themed = sample();
+        themed.set_themed(true);
+        assert_eq!(themed, sample());
+        assert!(!sample().is_themed());
     }
 }
