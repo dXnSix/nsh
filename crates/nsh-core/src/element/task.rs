@@ -155,6 +155,10 @@ pub(crate) enum Action {
     /// Sets some of the app's design tokens, over its others
     /// ([`super::update_tokens`]).
     UpdateTokens(super::Tokens),
+    /// Sets the tokens a theme type's fields wrote, over the app's others
+    /// ([`super::set_theme`]): a number that keeps its value keeps its
+    /// dark one.
+    SetTheme(super::Tokens),
     /// Puts the app's design tokens of these names back to its theme's
     /// ([`super::reset_tokens`]).
     ResetTokens(Vec<Box<str>>),

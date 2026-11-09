@@ -747,6 +747,11 @@ reset_theme::<DsTheme>(); // the app's action again
   app's theme (`nsh.json`'s over the types' defaults). They apply in order with the app's other actions, as
   `update_tokens` does; a synchronous `#[module]` function has `cx.set_theme(..)`, `cx.update_theme::<T>(..)` and
   `cx.reset_theme::<T>()` of its `ModuleCx`.
+- A number field is its token's light value. `set_theme` leaves the dark value of a number whose value it does not
+  change, so reading a theme, changing one field and setting it changes that field only:
+  `let mut t = (*theme_of::<DsTheme>()).clone(); t.action = red; set_theme(t);`. A number it does change, and one a
+  patch sets, is that value in both appearances; give it a dark value again with `Tokens::set_dark_number` and
+  `update_tokens`.
 
 **Roles.** NSH's own parts draw with roles (`Role`: `popover`, `primary`, `border`, `radius`, `font-sans`, …;
 [Theme roles](../modules/nsh-base.md#theme-roles)). A type maps roles onto its tokens with `TokenSpec::role`, so

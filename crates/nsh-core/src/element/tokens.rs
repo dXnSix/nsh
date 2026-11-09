@@ -506,12 +506,32 @@ impl Tokens {
 
     /// `self` with the tokens of `base` it does not have.
     pub fn over(&self, base: &Tokens) -> Tokens {
+        self.over_with(base, false)
+    }
+
+    /// [`Tokens::over`] for tokens a theme type's fields wrote
+    /// ([`super::set_theme`]). A number field is its token's light value
+    /// and knows no dark one, so a number `self` leaves at the light value
+    /// `base` has keeps the dark value `base` has; one it changes is its
+    /// value in both appearances, as [`Tokens::set_number`] makes it.
+    pub(crate) fn over_as_fields(&self, base: &Tokens) -> Tokens {
+        self.over_with(base, true)
+    }
+
+    /// `self` over `base`; `fields`: as a theme type's fields
+    /// ([`Tokens::over_as_fields`]).
+    fn over_with(&self, base: &Tokens, fields: bool) -> Tokens {
         let mut out = base.clone();
         out.colors
             .extend(self.colors.iter().map(|(k, c)| (k.clone(), *c)));
         // A number of `self` is its values: a dark one of `base`'s goes
         // unless `self` has its own.
         for (k, n) in &self.numbers {
+            let unchanged =
+                fields && !self.dark_numbers.contains_key(k) && base.numbers.get(k) == Some(n);
+            if unchanged {
+                continue;
+            }
             out.numbers.insert(k.clone(), *n);
             out.dark_numbers.remove(k);
         }
@@ -586,6 +606,62 @@ mod tests {
         assert_eq!(tokens.font(FONT_SANS).map(|f| &**f), Some("Inter"));
         assert_eq!(tokens.font(FONT_MONO).map(|f| &**f), Some("Iosevka"));
         assert!(Tokens::default().is_empty());
+    }
+}
+
+/// Tokens a theme type's fields wrote, over the app's
+/// ([`Tokens::over_as_fields`]): a number left at its light value keeps the
+/// dark one.
+#[cfg(test)]
+mod theme_set_numbers {
+    use super::*;
+    use crate::color::rgb;
+
+    fn base() -> Tokens {
+        let mut base = Tokens::default();
+        base.set_number("radius-card", 10.0);
+        base.set_dark_number("radius-card", 6.0);
+        base.set_number("spacing-gutter", 16.0);
+        base.set_color("ink", rgb(0x111111).into());
+        base
+    }
+
+    #[test]
+    fn a_number_at_its_light_value_keeps_the_dark_one() {
+        let mut fields = Tokens::default();
+        fields.set_number("radius-card", 10.0);
+        fields.set_color("ink", rgb(0x222222).into());
+        let tokens = fields.over_as_fields(&base());
+        assert_eq!(tokens.number_in("radius-card", false), Some(10.0));
+        assert_eq!(tokens.number_in("radius-card", true), Some(6.0));
+        assert_eq!(tokens.color("ink"), Some(rgb(0x222222).into()));
+        assert_eq!(tokens.number("spacing-gutter"), Some(16.0));
+        // By name, a number set is both appearances'.
+        assert_eq!(
+            fields.over(&base()).number_in("radius-card", true),
+            Some(10.0)
+        );
+    }
+
+    #[test]
+    fn a_number_that_changes_or_is_new_is_both_appearances() {
+        let mut fields = Tokens::default();
+        fields.set_number("radius-card", 12.0);
+        fields.set_number("radius-chip", 4.0);
+        let tokens = fields.over_as_fields(&base());
+        assert_eq!(tokens.number_in("radius-card", false), Some(12.0));
+        assert_eq!(tokens.number_in("radius-card", true), Some(12.0));
+        assert_eq!(tokens.number_in("radius-chip", true), Some(4.0));
+    }
+
+    #[test]
+    fn a_number_written_with_a_dark_value_takes_it() {
+        let mut fields = Tokens::default();
+        fields.set_number("radius-card", 10.0);
+        fields.set_dark_number("radius-card", 8.0);
+        let tokens = fields.over_as_fields(&base());
+        assert_eq!(tokens.number_in("radius-card", false), Some(10.0));
+        assert_eq!(tokens.number_in("radius-card", true), Some(8.0));
     }
 }
 
