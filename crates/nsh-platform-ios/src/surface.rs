@@ -25,12 +25,14 @@ use objc2_ui_kit::{
     NSValueUIGeometryExtensions, UIApplication, UIApplicationDidBecomeActiveNotification,
     UIApplicationDidEnterBackgroundNotification, UIApplicationState,
     UIApplicationWillEnterForegroundNotification, UIApplicationWillResignActiveNotification,
-    UIDevice, UIFont, UIFontTextStyleBody, UIKeyboardAnimationCurveUserInfoKey,
-    UIKeyboardAnimationDurationUserInfoKey, UIKeyboardFrameEndUserInfoKey,
-    UIKeyboardWillChangeFrameNotification, UIKeyboardWillHideNotification, UIResponder,
-    UISceneActivationState, UISceneDidActivateNotification, UISceneDidEnterBackgroundNotification,
-    UISceneWillDeactivateNotification, UISceneWillEnterForegroundNotification, UITraitCollection,
-    UITraitEnvironment, UIUserInterfaceIdiom, UIUserInterfaceStyle, UIView, UIWindowScene,
+    UIApplicationWillTerminateNotification, UIDevice, UIFont, UIFontTextStyleBody,
+    UIKeyboardAnimationCurveUserInfoKey, UIKeyboardAnimationDurationUserInfoKey,
+    UIKeyboardFrameEndUserInfoKey, UIKeyboardWillChangeFrameNotification,
+    UIKeyboardWillHideNotification, UIResponder, UISceneActivationState,
+    UISceneDidActivateNotification, UISceneDidDisconnectNotification,
+    UISceneDidEnterBackgroundNotification, UISceneWillDeactivateNotification,
+    UISceneWillEnterForegroundNotification, UITraitCollection, UITraitEnvironment,
+    UIUserInterfaceIdiom, UIUserInterfaceStyle, UIView, UIWindowScene,
 };
 
 use crate::{
@@ -541,6 +543,67 @@ impl RootView {
         }
     }
 
+    /// The app's end: the app's terminate listeners run when UIKit
+    /// terminates the application (`willTerminate`, which comes only for
+    /// an app running in the background, not for one it suspended) and
+    /// when the scene of the surface's window disconnects (its window
+    /// closed on an iPad or under Catalyst, or the system releasing it in
+    /// the background), as the surface goes with it. The block runs in the
+    /// post (no queue), on the main thread UIKit posts them on, so UIKit
+    /// waits for the listeners.
+    fn observe_termination(this: &Retained<Self>) {
+        let center = NSNotificationCenter::defaultCenter();
+        let weak = Weak::from_retained(this);
+        let block = RcBlock::new(move |note: NonNull<NSNotification>| {
+            // Posted elsewhere, it is not UIKit's.
+            if MainThreadMarker::new().is_none() {
+                return;
+            }
+            let Some(view) = weak.load() else { return };
+            // SAFETY: a valid notification for the duration of the call.
+            let note = unsafe { note.as_ref() };
+            // SAFETY: an immutable UIKit constant.
+            let of_scene = unsafe { *note.name() == *UISceneDidDisconnectNotification };
+            let ours = !of_scene
+                || match (view.scene(), note.object()) {
+                    (Some(scene), Some(object)) => {
+                        std::ptr::addr_eq(Retained::as_ptr(&scene), Retained::as_ptr(&object))
+                    }
+                    _ => false,
+                };
+            if ours {
+                view.will_terminate();
+            }
+        });
+        // SAFETY: immutable UIKit constants.
+        let names = unsafe {
+            [
+                UIApplicationWillTerminateNotification,
+                UISceneDidDisconnectNotification,
+            ]
+        };
+        let mut observers = this.ivars().observers.borrow_mut();
+        for name in names {
+            // SAFETY: as in `observe_keyboard`; the block only touches the
+            // view on the main thread.
+            observers.push(unsafe {
+                center.addObserverForName_object_queue_usingBlock(Some(name), None, None, &block)
+            });
+        }
+    }
+
+    /// The app is about to terminate: its terminate listeners run while
+    /// the main thread waits, [`nsh_engine::TERMINATE_TIMEOUT`] at most.
+    fn will_terminate(&self) {
+        let running = self.ivars().running.borrow();
+        if let Some(running) = running.as_ref() {
+            running
+                .engine
+                .control()
+                .will_terminate_and_wait(nsh_engine::TERMINATE_TIMEOUT);
+        }
+    }
+
     /// The scene of the window the surface is in, if any.
     fn scene(&self) -> Option<Retained<UIWindowScene>> {
         self.window()?.windowScene()
@@ -961,6 +1024,7 @@ impl Surface {
         let view = RootView::new(mtm, frame, app.into(), options);
         RootView::observe_keyboard(&view);
         RootView::observe_lifecycle(&view);
+        RootView::observe_termination(&view);
         RootView::observe_time_zone(&view);
         RootView::observe_locale(&view);
         Ok(Surface { view })

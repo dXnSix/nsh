@@ -339,7 +339,9 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   `Lifecycle.on("terminate")`) listeners run once when the platform calls `EngineControl::will_terminate` (it waits
   for them, `will_terminate_and_wait`, `TERMINATE_TIMEOUT` at most), on the engine's thread, then the tasks and JS
   calls they started (a flush) and `StorageBackend::flush`; `lifecycle()` keeps its three values, which existing
-  `match`es and comparisons rely on. `padding-bottom: env(keyboard-inset-height)` pads a view by the keyboard's height, animated with the keyboard
+  `match`es and comparisons rely on. iOS calls it on `UIApplicationWillTerminateNotification` (only for an app
+  running in the background: a suspended one is ended without it) and on `UISceneDidDisconnectNotification` of the
+  surface's own scene (`RootView::observe_termination`), which the surface does not outlive. `padding-bottom: env(keyboard-inset-height)` pads a view by the keyboard's height, animated with the keyboard
   natively, for content outside scroll views (message bars). Inputs inside a scroll view are kept clear of the keyboard natively (bottom inset + scroll to the
   focused input), with no JS involved.
   Both move as one with the keyboard: `LayoutCurve::Keyboard` (`type: "keyboard"`) is the system keyboard's own curve,
