@@ -2316,3 +2316,54 @@ mod token_namespaces {
         assert_eq!(style(&t, "rounded-card", false).view.border_radius, px(4.0));
     }
 }
+
+/// A theme whose numbers are in no namespace of Tailwind's (shadcn's, with
+/// `radius` alone) parses its token classes without looking for named
+/// numbers; once a namespaced number is among its tokens, its classes are.
+mod namespaced_numbers_lookup {
+    use super::*;
+    use crate::element::{AdaptiveColor, Tokens};
+
+    /// shadcn's kinds of tokens: colors and `radius`, no namespaced number.
+    fn plain() -> Tokens {
+        let mut t = Tokens::default();
+        t.set_color("primary", AdaptiveColor::rgb(0x171717, 0xfafafa));
+        t.set_color("card", AdaptiveColor::rgb(0xffffff, 0x0a0a0a));
+        t.set_number("radius", 10.0);
+        t
+    }
+
+    fn unknown(tokens: &Tokens, classes: &str) -> usize {
+        let mut theme = Theme::default();
+        theme.set_tokens(tokens);
+        parse(&theme, classes).unknown().len()
+    }
+
+    #[test]
+    fn a_theme_without_namespaced_numbers_has_no_named_classes() {
+        let mut t = plain();
+        t.set_number("card-padding", 18.0);
+        assert_eq!(unknown(&t, "rounded-card p-padding"), 2);
+        // Its colors stay their utilities'.
+        assert_eq!(unknown(&t, "bg-primary text-card border-card/50"), 0);
+    }
+
+    #[test]
+    fn a_namespaced_number_makes_its_classes() {
+        let mut t = plain();
+        assert_eq!(unknown(&t, "rounded-card p-gutter"), 2);
+        t.set_number("radius-card", 14.0);
+        assert_eq!(unknown(&t, "rounded-card p-gutter"), 1);
+        t.set_number("spacing-gutter", 18.0);
+        assert_eq!(unknown(&t, "rounded-card p-gutter"), 0);
+    }
+
+    #[test]
+    fn a_name_that_only_starts_like_a_namespace_is_none() {
+        let mut t = plain();
+        // `radiuscard` and `textbody` are no `radius-*` and `text-*`.
+        t.set_number("radiuscard", 14.0);
+        t.set_number("textbody", 15.0);
+        assert_eq!(unknown(&t, "rounded-card text-body"), 2);
+    }
+}
