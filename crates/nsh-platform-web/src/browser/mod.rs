@@ -52,8 +52,6 @@ struct Runtime {
     wake: RefCell<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
     fonts: RefCell<Vec<String>>,
     options: RefCell<(Option<String>, Option<String>)>,
-    /// The app's location, as the realm's `location()` has it.
-    location: RefCell<nsh_core::location::Location>,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -72,7 +70,6 @@ impl Default for Runtime {
             timers: timers::Timers::default(),
             fetches: fetch::Fetches::default(),
             listener: RefCell::default(),
-            location: RefCell::default(),
             registries: RefCell::default(),
             tokens: RefCell::default(),
             theme: RefCell::default(),
@@ -368,34 +365,6 @@ impl Runtime {
                     });
                 }
                 Ok(Value(0))
-            }
-            // `navigate(url, { history })` (`environment.js`): resolved
-            // against the location, sent to the core, and the new location
-            // returned for the realm's `location()`.
-            411 => {
-                let url = args.index(0)?.as_string().ok_or_else(|| {
-                    nsh_core::element::PropError("navigate: expected a URL string".into())
-                })?;
-                let history = if args.index(1)?.truthy() {
-                    nsh_core::location::HistoryBehavior::Replace
-                } else {
-                    nsh_core::location::HistoryBehavior::Push
-                };
-                let current = self.location.borrow().clone();
-                let next = current
-                    .join(&url)
-                    .map_err(|e| nsh_core::element::PropError(format!("navigate: {e}")))?;
-                if next != current {
-                    *self.location.borrow_mut() = next.clone();
-                    self.bindings.ops.borrow_mut().push(nsh_core::Op::Command {
-                        id: nsh_core::ROOT_ID,
-                        command: nsh_core::Command::Navigate(nsh_core::location::Navigation::new(
-                            next.clone(),
-                            history,
-                        )),
-                    });
-                }
-                Value::string(next.as_str())
             }
             401 => {
                 let id = args.index(0)?.as_string();

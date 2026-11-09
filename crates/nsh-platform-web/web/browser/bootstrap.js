@@ -5180,28 +5180,6 @@
 			}
 		}).map(([name, value]) => [name, reactive.signal(value)]));
 		const tokens = reactive.signal(0);
-		const locationOf = (url) => {
-			const hashAt = url.indexOf("#");
-			const beforeHash = hashAt < 0 ? url : url.slice(0, hashAt);
-			const queryAt = beforeHash.indexOf("?");
-			return Object.freeze({
-				url,
-				pathname: queryAt < 0 ? beforeHash : beforeHash.slice(0, queryAt),
-				search: queryAt < 0 ? "" : beforeHash.slice(queryAt),
-				hash: hashAt < 0 ? "" : url.slice(hashAt)
-			});
-		};
-		const location = reactive.signal(locationOf("/"));
-		const setLocation = (url) => {
-			if (reactive.untracked(location).url !== url) location.set(locationOf(url));
-		};
-		const navigate = (url, options) => {
-			if (typeof url !== "string") throw new TypeError("navigate: expected a URL string");
-			if (options !== void 0 && (options === null || typeof options !== "object")) throw new TypeError("navigate: options are an object");
-			const history = options?.history;
-			if (history !== void 0 && history !== "push" && history !== "replace") throw new TypeError("navigate: history is \"push\" or \"replace\"");
-			setLocation(invoke(411, [url, history === "replace"]));
-		};
 		const insets = reactive.context(() => fields.safeArea());
 		const platform = {
 			os: "web",
@@ -5232,8 +5210,6 @@
 			pixelRatio: () => fields.pixelRatio(),
 			locale: () => fields.locale(),
 			localeSettings: () => fields.localeSettings(),
-			location: () => location(),
-			navigate,
 			lifecycle: () => fields.lifecycle(),
 			platform,
 			fpsEnabled: () => false
@@ -5292,7 +5268,6 @@
 			changedTokens() {
 				tokens.update((value) => value + 1);
 			},
-			setLocation,
 			showLocale(tag) {
 				reactive.batch(() => {
 					const settings = reactive.untracked(fields.localeSettings);

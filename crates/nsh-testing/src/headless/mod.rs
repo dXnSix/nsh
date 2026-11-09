@@ -575,29 +575,6 @@ impl Headless {
         );
     }
 
-    /// The step `navigate(<location>)`: the platform moves the app to
-    /// `location` (resolved against where it is), as a link into the app
-    /// or the embedding app does: `location()` follows.
-    pub fn navigate(&mut self, location: &str) -> Result<(), String> {
-        self.step(format!("navigate({location})"));
-        let joined = self
-            .host
-            .location()
-            .join(location)
-            .map_err(|e| format!("navigate: {e}"))?;
-        self.host
-            .set_location(joined.as_str())
-            .map_err(|e| format!("navigate: {e}"))?;
-        self.done()
-    }
-
-    /// Where the app is: the embedding app's channel hears its moves and
-    /// the platform's.
-    pub fn location(&mut self) -> String {
-        self.catch_up();
-        self.host.location().as_str().to_owned()
-    }
-
     /// The step `setViewport(<w>, <h>)`: the surface becomes `size` (a
     /// rotation, a resized window), as a platform reports it.
     pub fn set_viewport(&mut self, size: Size<Points>) -> Result<(), String> {

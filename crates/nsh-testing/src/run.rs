@@ -555,13 +555,7 @@ impl Session {
             },
             ui_sets: self.run.ui_sets.clone(),
             clock,
-            host: {
-                // Where the app starts: the embedding app's location.
-                if let Some(location) = &launch.location {
-                    let _ = launch.host.set_location(location.as_str());
-                }
-                launch.host
-            },
+            host: launch.host,
             ..default
         };
         settings.apply(&mut config.environment);
@@ -635,7 +629,6 @@ impl Session {
         environment.first_day_of_week = settings.first_day_of_week.map(|d| d.number());
         environment.measurement_system = settings.measurement_system.map(|s| s.name().to_owned());
         environment.temperature_unit = settings.temperature_unit.map(|u| u.name().to_owned());
-        environment.location = launch.location.as_ref().map(|l| l.as_str().to_owned());
         environment.reduced_motion = launch.reduced_motion;
         environment.safe_area = launch.safe_area.map(|safe_area| {
             [
@@ -1165,7 +1158,6 @@ mod tests {
             color_scheme: None,
             locale: None,
             locale_settings: Default::default(),
-            location: None,
             reduced_motion: None,
             platform: None,
             clock: None,

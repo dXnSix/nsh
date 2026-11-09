@@ -87,7 +87,6 @@ mod imp {
             posts: nsh_core::element::Posts,
             environment: &Environment,
             displays: &[nsh_core::desktop::Display],
-            location: &nsh_core::location::Location,
             tokens: Arc<nsh_core::element::Tokens>,
             theme: nsh_core::element::ThemeTokens,
             text_engine: Rc<M>,
@@ -157,7 +156,6 @@ mod imp {
             }));
             host.set_environment(environment);
             host.set_displays(displays);
-            host.set_location(location);
             host.set_tokens(tokens);
             host.set_theme_tokens(theme);
             let script = Script {
@@ -329,10 +327,6 @@ mod imp {
             self.host.set_fps_enabled(enabled);
         }
 
-        pub(crate) fn set_location(&self, location: &nsh_core::location::Location) {
-            self.host.set_location(location);
-        }
-
         pub(crate) fn set_tokens(&self, tokens: Arc<nsh_core::element::Tokens>) {
             self.host.set_tokens(tokens);
         }
@@ -409,7 +403,6 @@ mod stub {
             _: nsh_core::element::Posts,
             _: &Environment,
             _: &[nsh_core::desktop::Display],
-            _: &nsh_core::location::Location,
             _: Arc<nsh_core::element::Tokens>,
             _: nsh_core::element::ThemeTokens,
             _: Rc<M>,
@@ -508,10 +501,6 @@ mod stub {
         }
 
         pub(crate) fn set_fps_enabled(&self, _: bool) {
-            match *self {}
-        }
-
-        pub(crate) fn set_location(&self, _: &nsh_core::location::Location) {
             match *self {}
         }
 

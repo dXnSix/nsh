@@ -34,7 +34,6 @@ pub mod image;
 pub mod input;
 pub mod js;
 pub mod keymap;
-pub mod location;
 pub mod mobile;
 mod mount;
 pub mod navigation;

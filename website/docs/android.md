@@ -201,9 +201,6 @@ again replaces the running app. The complete sample is
 | `setParams(Object params)` | The launch parameters of the apps loaded next (a `Map` or `JSONObject`): the app reads them at start as `host.params` ([`host`](../modules/nsh.md#host)). Returns `false` when they are not a JSON object. |
 | `send(String name, Object data)` | Sends an event to the app (`host.on(name, …)`); kept until it listens, or for the next app while none runs. Any thread; returns `false` after `destroy()`. |
 | `handle(String name, HostHandler handler)` | Handles the app's calls (`host.call`) and posts (`host.post`) of `name` on the UI thread; `null` removes the handler. The handler answers through its `NshHostReply`, once, from any thread. |
-| `setLocation(String location)` | Where the app is ([location](#the-apps-location)): a path from its base, where the app starts or, while it runs, where it goes. Any thread; returns `false` for a URL that is not such a path. |
-| `getLocation()` | Where the app is now: the latest of `setLocation` and the app's navigations, `/` until one of them. Any thread. |
-| `setNavigateHandler(NavigateHandler handler)` | Hears each `navigate` of the app on the UI thread, with the location and whether it replaces the current history entry; `null` removes the handler. |
 | `connectDevServer(String url)` | Development: loads from a `nsh dev` server and reloads on every change. Returns `false` with the release AAR. |
 | `handleBack()` | Lets the app handle a back press (closes dialogs, pops pages, runs `BackHandler` listeners); returns whether it did. |
 | `destroy()` | Stops the app and calls `destroy()` on each of its native components. The view can no longer be used. |
@@ -302,39 +299,6 @@ nsh.setOpenUrlHandler(url -> {
     return false;
 });
 ```
-
-## The app's location
-
-The app's [location](./navigation.md#locations) is where the user is in it, a path from the app's base such as
-`/sports/football?tab=live`. `setLocation` sets it: called before loading, it is where the app starts; called while
-the app runs, it takes the app there and the app's [`location()`](../modules/nsh.md#location) changes, which is how
-an App Link the host app handled opens its page. `setNavigateHandler` hears each
-[`navigate`](../modules/nsh.md#navigate) of the app on the UI thread, in order, with the new location and `replace`,
-`true` for `history: "replace"`.
-
-```java
-// Before loading: where the app starts, such as where the user left it.
-nsh.setLocation(prefs.getString("sports.location", "/"));
-nsh.loadAssetBundle("sports");
-
-// Each `navigate` of the app, on the UI thread.
-nsh.setNavigateHandler((location, replace) -> {
-    prefs.edit().putString("sports.location", location).apply();
-    analytics.screen(location, replace);
-});
-
-// Later, in onNewIntent: an App Link the host app handled opens its page in the running app,
-// https://example.com/sports/football?tab=live at /sports/football?tab=live.
-Uri link = intent.getData();
-String query = link.getEncodedQuery();
-nsh.setLocation(link.getEncodedPath() + (query == null ? "" : "?" + query));
-```
-
-`getLocation()` gives the latest of what the host app set and where the app went, normalized as URLs are
-(`/a/../b` gives `/b`); apps the view loads later start there. `setLocation` and `getLocation` work from any thread.
-The navigation handler hears the moves the app makes itself, and a location the host app sets goes to the app alone.
-`setLocation` returns `false` for a value that is not a path from the app's base (`https://…`, `sports` without its
-`/`), and the app stays where it is.
 
 ## Limits
 

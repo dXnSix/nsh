@@ -617,12 +617,6 @@ pub(super) struct Components {
     url_opens: FxHashMap<u32, AnswerSlot<bool>>,
     /// Those not handed to the engine yet ([`Core::take_url_opens`]).
     url_requests: Vec<(u32, String)>,
-    /// The app's navigations not handed to the engine yet
-    /// ([`Core::take_navigations`]).
-    navigations: Vec<crate::location::Navigation>,
-    /// Where the turn's last navigation went: the location once the turn
-    /// commits, however many it made ([`Core::commit`]).
-    pub(super) navigated_to: Option<crate::location::Location>,
     /// The language the app asked to show in (`Some(None)`: the user's
     /// again), for the engine ([`Core::take_locale_request`]).
     pub(super) locale_request: Option<Option<crate::platform::Locale>>,
@@ -731,8 +725,6 @@ impl Default for Components {
             clipboard_reads: FxHashMap::default(),
             url_opens: FxHashMap::default(),
             url_requests: Vec::new(),
-            navigations: Vec::new(),
-            navigated_to: None,
             locale_request: None,
             next_url_open: 0,
             screen_colors: FxHashMap::default(),
@@ -5755,36 +5747,6 @@ impl<M: TextEngine> Core<M> {
         });
     }
 
-    /// The app's location ([`crate::element::location`]).
-    pub fn location(&self) -> crate::location::Location {
-        self.components.runtime.location()
-    }
-
-    /// The platform moved the app to `location` (the embedding app, a link
-    /// into the app): what read the location runs again. Not a navigation
-    /// of the app's: nothing is sent back.
-    pub fn set_location(&mut self, location: crate::location::Location) {
-        // Later than the app's navigations not committed yet.
-        self.components.navigated_to = None;
-        self.components.runtime.set_location(location);
-    }
-
-    /// The app went to `navigation`'s location ([`Command::Navigate`] on
-    /// the root, from Rust or JS): the location is the new one when the
-    /// turn commits, the engine hears of it, and the platform gets the
-    /// command. Not set here: Rust's `navigate` set it already, and a turn
-    /// that navigates twice would take what read it back to the first.
-    pub(super) fn navigated(&mut self, navigation: &crate::location::Navigation) {
-        self.components.navigated_to = Some(navigation.location.clone());
-        self.components.navigations.push(navigation.clone());
-    }
-
-    /// Moves the app's navigations since the last call to `out`, in order:
-    /// the engine tells the embedding app ([`crate::location`]).
-    pub fn take_navigations(&mut self, out: &mut Vec<crate::location::Navigation>) {
-        out.append(&mut self.components.navigations);
-    }
-
     /// Moves the HTTP requests tasks made (`ui::fetch`) since the last call
     /// to `start`, by request id: the engine makes them with its network
     /// stack and reports what happens with [`Core::fetch_event`]. Requests
@@ -6110,23 +6072,6 @@ impl<M: TextEngine> Core<M> {
                     _ => false,
                 };
                 self.answer_open_url(request as u32, opened);
-                true
-            }
-            EventKind::Location if id == crate::ROOT_ID => {
-                let location = match payload {
-                    EventPayload::Map(entries) => entries.iter().find_map(|(k, v)| match v {
-                        crate::PayloadValue::Str(location) if *k == "location" => {
-                            Some(location.clone())
-                        }
-                        _ => None,
-                    }),
-                    _ => None,
-                };
-                match location.as_deref().map(crate::location::Location::parse) {
-                    Some(Ok(location)) => self.set_location(location),
-                    Some(Err(refused)) => log::warn!("onLocation: {refused}"),
-                    None => log::warn!("onLocation without a location"),
-                }
                 true
             }
             EventKind::ScreenColor if id == crate::ROOT_ID => {

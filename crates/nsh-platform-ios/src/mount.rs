@@ -1791,8 +1791,6 @@ impl Mounter {
             (Command::AccessibilityFocus, native) => {
                 crate::system::accessibility_focus(native.view())
             }
-            // The engine tells the embedding app (`HostChannel::handle_navigate`).
-            (Command::Navigate(_), _) => {}
             (command, _) => log::warn!("{command:?} does not apply to view {id}"),
         }
     }

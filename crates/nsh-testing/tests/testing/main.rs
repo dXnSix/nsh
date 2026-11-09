@@ -158,15 +158,6 @@ fn open_sets_the_environment_and_routes_answer_requests() {
 }
 
 #[test]
-fn open_and_navigate_set_where_the_app_is() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/testing/location");
-    let results = run_file(&test_run(None), &dir.join("App.test.tsx"), &mut |_| {}).unwrap();
-    let failed: Vec<_> = results.iter().filter(|r| r.failure.is_some()).collect();
-    assert!(failed.is_empty(), "{failed:#?}");
-    assert_eq!(results.len(), 5);
-}
-
-#[test]
 fn fonts_registered_while_the_app_runs_name_their_family() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/testing/fonts");
     let results = run_file(&test_run(None), &dir.join("App.test.tsx"), &mut |_| {}).unwrap();

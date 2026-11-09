@@ -228,7 +228,6 @@ pub use crate::{
         ColorParseError, Hsla, Rgba, black, blue, green, hsl, hsla, opaque_grey, red, rgb, rgba,
         transparent_black, transparent_white, white, yellow,
     },
-    location::{HistoryBehavior, InvalidLocation, Location, NavigateOptions},
     overlay::{Align, Placement},
     platform::{
         Appearance, HourCycle, HttpBody, HttpHead, HttpRequest, Idiom, Languages, Lifecycle,

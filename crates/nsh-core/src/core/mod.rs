@@ -2412,11 +2412,6 @@ impl<M: TextEngine> Core<M> {
             }
             Op::Command { id, command } => {
                 self.key(id)?;
-                if let Command::Navigate(navigation) = &command
-                    && id == crate::ROOT_ID
-                {
-                    self.navigated(navigation);
-                }
                 self.commands.push((id, command));
                 Ok(())
             }
@@ -2645,10 +2640,6 @@ impl<M: TextEngine> Core<M> {
     /// Finishes a turn: rebuilds text, runs layout, updates lists and
     /// returns the mount items, or `None` when nothing changed.
     pub fn commit(&mut self) -> Option<MountBatch> {
-        // The turn's navigations move the location once, to the last.
-        if let Some(location) = self.components.navigated_to.take() {
-            self.components.runtime.set_location(location);
-        }
         // JS has handled the events taken before this commit and its ops
         // are applied: what waited for that sees the app's props, and what
         // it changes renders with them.
