@@ -439,8 +439,18 @@ impl TokenProvider {
     /// The tokens of theme file `json` over the defaults (`None`: the
     /// defaults), with what of it was left out.
     pub(crate) fn read(&self, json: Option<&str>) -> Result<(Tokens, Vec<String>), String> {
+        let (tokens, left_out) = self.read_left_out(json)?;
+        Ok((tokens, super::theme_file::sentences(left_out)))
+    }
+
+    /// [`TokenProvider::read`], each thing left out with what the core
+    /// asks of it (whether it is only a name no type declares).
+    pub(crate) fn read_left_out(
+        &self,
+        json: Option<&str>,
+    ) -> Result<(Tokens, Vec<super::theme_file::LeftOut>), String> {
         match self {
-            TokenProvider::Source { read, .. } => read(json),
+            TokenProvider::Source { read, .. } => read(json).map(said),
             TokenProvider::Themes(set) => match json {
                 None => Ok((set.defaults.clone(), Vec::new())),
                 Some(json) => super::theme_file::parse_declared(json, &set.defaults, set),
@@ -455,13 +465,34 @@ impl TokenProvider {
         json: &str,
         base: &Tokens,
     ) -> Option<Result<(Tokens, Vec<String>), String>> {
+        Some(
+            self.overrides_left_out(json, base)?
+                .map(|(tokens, left_out)| (tokens, super::theme_file::sentences(left_out))),
+        )
+    }
+
+    /// [`TokenProvider::overrides`], as [`TokenProvider::read_left_out`].
+    pub(crate) fn overrides_left_out(
+        &self,
+        json: &str,
+        base: &Tokens,
+    ) -> Option<Result<(Tokens, Vec<super::theme_file::LeftOut>), String>> {
         match self {
-            TokenProvider::Source { overrides, .. } => Some((*overrides)?(json, base)),
+            TokenProvider::Source { overrides, .. } => Some((*overrides)?(json, base).map(said)),
             TokenProvider::Themes(set) => {
                 Some(super::theme_file::overrides_declared(json, base, set))
             }
         }
     }
+}
+
+/// A UI set's own reader says what it left out in sentences alone.
+fn said((tokens, left_out): (Tokens, Vec<String>)) -> (Tokens, Vec<super::theme_file::LeftOut>) {
+    let left_out = left_out
+        .into_iter()
+        .map(super::theme_file::LeftOut::said)
+        .collect();
+    (tokens, left_out)
 }
 
 /// The theme of type `T` the surface is drawn with now: its names in the
