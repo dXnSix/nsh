@@ -68,6 +68,7 @@ pub(crate) mod status_bar;
 mod style;
 mod system;
 pub(crate) mod task;
+pub(crate) mod terminate;
 pub mod tokens;
 mod value;
 pub(crate) mod virtual_list;

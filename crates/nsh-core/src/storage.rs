@@ -37,6 +37,11 @@ pub trait StorageBackend: Send + Sync {
     /// Keeps `change`. Called on the engine thread: a backend that blocks
     /// writes elsewhere, in order.
     fn write(&self, change: StorageChange);
+    /// Returns once the changes handed to [`StorageBackend::write`] so far
+    /// are kept: the engine calls it on its thread as the app terminates,
+    /// after the app's listeners ran. A backend that keeps them as it is
+    /// handed them has nothing to do (the default).
+    fn flush(&self) {}
 }
 
 /// Names the backend only, so that platforms' options holding one can

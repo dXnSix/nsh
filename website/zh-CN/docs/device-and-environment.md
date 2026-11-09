@@ -23,6 +23,7 @@ demo: guide-device
 | `locale()` | `locale()`（`nsh`） | 用户的区域设置，BCP 47 标签（`"en-US"`、`"zh-Hans-CN"`）：`Intl` 默认按它格式化。 |
 | `locale_settings()` | `localeSettings()`（`nsh`） | 用户的语言与地区设置：偏好语言、时区、12 小时制或 24 小时制、每周的第一天、度量单位和温度单位（[语言与地区设置](#语言与地区设置)）。 |
 | `lifecycle()` | `lifecycle()`（`nsh`） | 应用是否正在使用：`active`、`inactive`（可见但没有焦点）或 `background`（[在后台](#在后台)）。 |
+| `on_terminate(f)` | `Lifecycle.on("terminate", f)`（`nsh`） | 应用即将终止时运行一次 `f`（[应用终止时](#应用终止时)）。 |
 | `reduce_motion()`、`screen_reader()` | `reduceMotion()`、`screenReaderEnabled()`（`nsh`） | 见[无障碍](./accessibility.md)。 |
 
 ```rust tabs
@@ -366,6 +367,37 @@ effect(() => {
 ```
 
 用 `background` 暂停工作，并在用户做出更改时就保存它：系统可能在应用进入后台几秒后就将其挂起，早于读取这一变化的副作用运行。显示在原生应用中的应用跟随该应用的状态；应用有多个窗口时（iPad、桌面），视图跟随它所在的窗口。在测试中，`nsh/test` 的 `app.setLifecycle("background")` 会把应用移到后台（[测试](./testing-and-trace.md#操作步骤)）。
+
+### 应用终止时
+
+`on_terminate(f)`（TSX：`nsh` 的 `Lifecycle.on("terminate", f)`）在应用即将终止时运行 `f`，只运行一次：这是写下用户尚未保存内容的最后机会。监听器在引擎线程上按添加顺序运行，然后运行它们启动的工作（它们的任务、立即完成的 Promise），再把应用的存储写入设备，平台在此期间等待，最多两秒：
+
+```rust tabs
+on_terminate(move || {
+    let _ = Storage::set_item("draft", draft.get_untracked());
+});
+```
+
+```tsx tabs
+Lifecycle.on("terminate", () => {
+  Storage.setItem("draft", draft());
+});
+```
+
+系统或用户结束应用时，各平台会发出它：
+
+| 平台 | `terminate` 何时到来 |
+|---|---|
+| macOS | 应用退出（退出菜单项、`Application.quit()`、用户注销或关机）或其窗口关闭时。显示在原生应用中的应用在该应用结束时收到（`NSApplicationWillTerminateNotification`）。 |
+| iOS、Mac Catalyst | 系统终止在后台运行的应用时（`UIApplication.willTerminateNotification`），或应用窗口所在的场景断开连接时：在 iPad 或 Catalyst 上关闭了它的窗口，或系统释放了该场景。 |
+| Android | 显示应用的 Activity 结束时：用户在最后一个页面按返回键离开，或应用或系统结束它（Activity 在 `isFinishing()` 时暂停、停止或销毁）。 |
+| Windows | 应用所在的窗口关闭时（最后一个窗口关闭后应用退出），或 Windows 结束会话时：用户注销、Windows 关机或重启（`WM_ENDSESSION`，原生应用中的应用通过该应用的窗口收到）。 |
+| Linux | 应用的窗口关闭、应用退出（Ctrl+Q、`Application.quit()`），或其 `GApplication` 关闭时：原生应用中的应用对应嵌入它的应用的 `GApplication`。 |
+| Web | 页面永久离开时：标签页关闭，或被另一个页面或重新加载替换（`pagehide`，浏览器把页面保留在往返缓存中时除外）。 |
+| GPUI | GPUI 应用退出时（`on_app_quit`），或应用视图所拥有的窗口关闭时。 |
+| 终端 | 应用退出时：Ctrl+C、`Application.quit()`、终端关闭或 `SIGTERM`。 |
+
+`terminate` 是最后一次保存，而不是唯一一次。系统结束它在后台挂起的应用时会连同进程一起结束（iOS 和 Android 为释放内存会这样做，手机浏览器会丢弃隐藏的标签页），这种结束不会事先通知。请在用户做出更改时保存，或在 `lifecycle()` 变为 `background` 时保存，用 `terminate` 保存剩下的内容。引擎的 Rust 测试用 `EngineControl::will_terminate`（或 `LocalEngine::will_terminate`）模拟系统结束应用。
 
 ## 安全区域
 

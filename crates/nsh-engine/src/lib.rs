@@ -1209,6 +1209,12 @@ const MAX_ADVANCE_ROUNDS: usize = 100_000;
 /// once): a task that keeps waking itself leaves the engine busy.
 const MAX_FLUSH_ROUNDS: usize = 64;
 
+/// How long NSH's platforms wait for an app to finish its terminate
+/// listeners ([`EngineControl::will_terminate_and_wait`]) before the
+/// process ends: within what iOS and Windows leave an ending app, short
+/// enough that quitting does not seem to hang.
+pub const TERMINATE_TIMEOUT: Duration = Duration::from_secs(2);
+
 enum Message {
     Event(NodeId, EventKind, EventPayload),
     Scroll(NodeId, Point<Points>, u32),
@@ -1267,6 +1273,9 @@ enum Message {
     /// Runs what is queued and due now, then calls back with whether the
     /// engine is idle ([`EngineControl::flush`]).
     Flush(Box<dyn FnOnce(bool) + Send>),
+    /// The app is about to terminate: its listeners run, then the call
+    /// back ([`EngineControl::will_terminate`]).
+    WillTerminate(Box<dyn FnOnce() + Send>),
     /// Sent by a dropped [`Engine`] (there is none in WebAssembly).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Shutdown,
@@ -1444,6 +1453,41 @@ impl EngineControl {
     /// it, instead of waiting for the batches to stop for a while.
     pub fn flush(&self, done: impl FnOnce(bool) + Send + 'static) {
         let _ = self.tx.send(Message::Flush(Box::new(done)));
+    }
+
+    /// The app is about to terminate (the system said so, the app quit,
+    /// or the window it runs in closed): the engine runs its terminate
+    /// listeners
+    /// ([`nsh_core::element::on_terminate`], `Lifecycle.on("terminate")`)
+    /// once, then what they started (their tasks, the JS calls they post),
+    /// then writes the app's storage out ([`StorageBackend::flush`]), and
+    /// calls `done`. The engine runs on afterwards; told again, it only
+    /// calls `done`.
+    pub fn will_terminate(&self, done: impl FnOnce() + Send + 'static) {
+        if let Err(crossbeam_channel::SendError(Message::WillTerminate(done))) =
+            self.tx.send(Message::WillTerminate(Box::new(done)))
+        {
+            // The engine stopped: nothing is left to run.
+            done();
+        }
+    }
+
+    /// [`EngineControl::will_terminate`], waiting for it at most `timeout`
+    /// (what the system leaves an ending app; NSH's platforms wait
+    /// [`TERMINATE_TIMEOUT`]): whether the app finished in time. For the
+    /// platform's thread, as the process is about to end. Never call it on
+    /// the engine's thread, which would wait for itself.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn will_terminate_and_wait(&self, timeout: Duration) -> bool {
+        let (done, finished) = crossbeam_channel::bounded(1);
+        self.will_terminate(move || {
+            let _ = done.send(());
+        });
+        let finished = finished.recv_timeout(timeout).is_ok();
+        if !finished {
+            log::warn!("the app's terminate listeners took more than {timeout:?}");
+        }
+        finished
     }
 
     /// Reports the interaction states of view `id` that the core asked to
@@ -1796,6 +1840,16 @@ impl<M: TextEngine + 'static> LocalEngine<M> {
         }
         self.driver.deadline()
     }
+
+    /// The app is about to terminate ([`EngineControl::will_terminate`]),
+    /// handled now, with the input sent before it: its listeners and what
+    /// they started have run, and its storage is written out, when this
+    /// returns. The web page calls it as the page goes; a test, to play
+    /// the system's end.
+    pub fn will_terminate(&mut self) {
+        self.control.will_terminate(|| {});
+        self.pump();
+    }
 }
 
 impl<M: TextEngine + 'static> Drop for LocalEngine<M> {
@@ -1841,6 +1895,10 @@ struct Driver<M: TextEngine + 'static> {
     /// that way; WebAssembly has no such stop.
     #[cfg(not(target_arch = "wasm32"))]
     trial: Option<Arc<dyn Trial>>,
+    /// The app's storage, written out as it terminates.
+    storage: Option<Arc<dyn StorageBackend>>,
+    /// The app's terminate listeners ran ([`Message::WillTerminate`]).
+    terminated: bool,
 }
 
 impl<M: TextEngine + 'static> Driver<M> {
@@ -1903,7 +1961,8 @@ impl<M: TextEngine + 'static> Driver<M> {
             // The platform's, if it set one ([`nsh_core::image::loader::set_transport`]).
             transport: None,
         });
-        core.set_storage(app_storage(&config));
+        let storage = app_storage(&config);
+        core.set_storage(storage.clone());
         core.set_clipboard(config.clipboard.clone());
         core.set_picker(config.picker.clone());
         core.set_speech(config.speech.clone());
@@ -2071,6 +2130,8 @@ impl<M: TextEngine + 'static> Driver<M> {
             _host: config.host.attach(host_tx, rx.clone()),
             #[cfg(not(target_arch = "wasm32"))]
             trial: trial.clone(),
+            storage,
+            terminated: false,
         };
         let eval_us = match &config.app {
             App::Js(bundle) => {
@@ -2141,7 +2202,8 @@ impl<M: TextEngine + 'static> Driver<M> {
             .into_iter()
             .chain(std::iter::from_fn(|| rx.try_recv().ok()));
         for message in pending {
-            if let Message::Advance(..) | Message::Flush(..) = message {
+            if let Message::Advance(..) | Message::Flush(..) | Message::WillTerminate(..) = message
+            {
                 moves.push(message);
             } else if !handle(script, state, message) {
                 return None;
@@ -2227,6 +2289,11 @@ impl<M: TextEngine + 'static> Driver<M> {
             Message::Flush(done) => {
                 let running = self.flush(rx);
                 done(running && self.idle(rx));
+                running
+            }
+            Message::WillTerminate(done) => {
+                let running = self.will_terminate(rx);
+                done();
                 running
             }
             // A test's clock on a real platform: the display's frame moves it
@@ -2315,6 +2382,23 @@ impl<M: TextEngine + 'static> Driver<M> {
             }
         }
         true
+    }
+
+    /// The app is about to terminate ([`EngineControl::will_terminate`]):
+    /// its listeners run, once, then what they started, as a flush runs it
+    /// (their tasks, the JS calls they post and their promises' reactions,
+    /// in rounds while that queues more), then its storage is written out.
+    /// False on shutdown.
+    fn will_terminate(&mut self, rx: &Receiver<Message>) -> bool {
+        if std::mem::replace(&mut self.terminated, true) {
+            return true;
+        }
+        self.state.core.will_terminate();
+        let running = self.flush(rx);
+        if let Some(storage) = &self.storage {
+            storage.flush();
+        }
+        running
     }
 
     /// Whether nothing is left to run: no message queued, nothing due at
@@ -3644,7 +3728,9 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
         }
         // The driver handles it ([`Driver::handle`]), and keeps the ones
         // sent before it started for after the first frame.
-        Message::Advance(..) | Message::Flush(..) => unreachable!("the driver moves the clock"),
+        Message::Advance(..) | Message::Flush(..) | Message::WillTerminate(..) => {
+            unreachable!("the driver moves the clock")
+        }
         Message::Shutdown => return false,
     }
     true
