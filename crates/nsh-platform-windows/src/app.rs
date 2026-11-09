@@ -119,7 +119,7 @@ pub struct AppOptions {
     /// Log per-commit timings.
     pub trace: bool,
     /// Logs the performance monitor's readings once a second (target
-    /// `nsh::perf`): frame rate, frame phases, commits, CPU, memory.
+    /// `nsh::fps`): frame rate, frame phases, commits, CPU, memory.
     pub fps: bool,
     /// Where bundled assets are (for [`AppSource::Bundle`]); dev servers
     /// serve them themselves.
@@ -510,9 +510,16 @@ impl AppView {
     /// later starts with them. `None` gives the app its own theme back.
     /// Fails, changing nothing, on a file that does not parse.
     pub fn set_theme_overrides(&self, json: Option<&str>) -> Result<(), nsh_base::ThemeError> {
-        let tokens = json.map(nsh_base::theme_overrides).transpose()?;
-        *self.surface.host_tokens.borrow_mut() = tokens.clone();
-        self.surface.control(|c| c.set_tokens(tokens));
+        if let Some(json) = json {
+            nsh_core::element::theme_file::check(json).map_err(nsh_base::ThemeError)?;
+        }
+        *self.surface.host_theme.borrow_mut() = json.map(str::to_owned);
+        // The engine reads the file with the app's UI set, against its
+        // defaults.
+        self.surface.control(|c| match json {
+            Some(json) => c.set_theme_overrides(json),
+            None => c.set_tokens(None),
+        });
         Ok(())
     }
 

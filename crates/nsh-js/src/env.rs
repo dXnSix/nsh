@@ -84,6 +84,9 @@ pub(crate) struct Env {
     /// The theme file the app was built with (`nsh.json`), which
     /// `setTheme(null)` gives back (`None`: it has none).
     built_theme: RefCell<Option<String>>,
+    /// The theme file the app's tokens come from now (the built one, or
+    /// `setTheme`'s): what `resetTheme` puts tokens back to.
+    current_theme: RefCell<Option<String>>,
     /// The displays the platform reported last.
     displays: RefCell<Vec<Display>>,
     /// The app's location, as `location()`'s signal has it.
@@ -103,6 +106,7 @@ impl Default for Env {
             tokens_version: Cell::new(0),
             theme: RefCell::new(ThemeTokens::default()),
             built_theme: RefCell::default(),
+            current_theme: RefCell::default(),
             displays: RefCell::default(),
             location: RefCell::new(Location::root()),
         }
@@ -286,6 +290,7 @@ pub(crate) fn set_theme_tokens(cx: *mut JsContext, theme: ThemeTokens) {
 pub(crate) fn take_theme(cx: *mut JsContext, json: &str) {
     let e = env(cx);
     e.built_theme.replace(Some(json.to_owned()));
+    e.current_theme.replace(Some(json.to_owned()));
     let tokens = e.theme.borrow().of(json);
     if let Some(tokens) = tokens {
         set_tokens(cx, Arc::new(tokens));
@@ -338,9 +343,107 @@ unsafe extern "C" fn set_theme(
     } else {
         return type_error(cx, "setTheme: expected a theme ({ cssVars }) or null");
     };
+    e.current_theme.replace(Some(json.clone()));
     let op = nsh_core::Op::SetProp {
         id: nsh_core::ROOT_ID,
         prop: nsh_core::Prop::UiTheme(json.into()),
+    };
+    if let Err(err) = crate::dom::push_op(cx, op) {
+        return err;
+    }
+    if let Some(tokens) = tokens {
+        set_tokens(cx, Arc::new(tokens));
+    }
+    reactive::finish_value(cx, UNDEFINED)
+}
+
+/// `v` as JSON (a theme, a list of names); `Err`: the exception thrown.
+fn to_json(cx: *mut JsContext, v: JsValue) -> Result<serde_json::Value, JsValue> {
+    // SAFETY: a context reference and a dup for the converter.
+    let value = unsafe {
+        let rcx = rquickjs::Ctx::from_raw(ptr::NonNull::new_unchecked(cx));
+        rquickjs::Value::from_raw(rcx, qjs::JS_DupValue(cx, v))
+    };
+    crate::protocol::to_json(&value).map_err(|_| qjs::JS_EXCEPTION)
+}
+
+/// `updateTheme(theme)`: the tokens `theme` sets change, the others stay
+/// (`setTheme` replaces them all); read whole or not at all, as
+/// `setTheme`'s. `token()` reads the new tokens at once; the core has them
+/// when this turn's ops reach it, in order, so two updates compose.
+unsafe extern "C" fn update_theme(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let e = env(cx);
+    let v = arg(argc, argv, 0);
+    // SAFETY: an inline tag check.
+    if !unsafe { qjs::JS_IsObject(v) } {
+        return type_error(cx, "updateTheme: expected a theme ({ cssVars })");
+    }
+    let json = match to_json(cx, v) {
+        Ok(json) => json.to_string(),
+        Err(exception) => return exception,
+    };
+    let current = e.tokens.borrow().clone();
+    let updated = e.theme.borrow().updated(&current, &json);
+    let tokens = match updated {
+        Some(Err(what)) => return type_error(cx, &format!("updateTheme: {what}")),
+        Some(Ok(tokens)) => Some(tokens),
+        // No UI set reads themes: the core says so.
+        None => None,
+    };
+    let op = nsh_core::Op::SetProp {
+        id: nsh_core::ROOT_ID,
+        prop: nsh_core::Prop::UiThemeUpdate(json.into()),
+    };
+    if let Err(err) = crate::dom::push_op(cx, op) {
+        return err;
+    }
+    if let Some(tokens) = tokens {
+        set_tokens(cx, Arc::new(tokens));
+    }
+    reactive::finish_value(cx, UNDEFINED)
+}
+
+/// `resetTheme(names?)`: the tokens `names` (none given: every one) go
+/// back to the app's theme's, `nsh.json`'s or `setTheme`'s.
+unsafe extern "C" fn reset_theme(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    const EXPECTED: &str = "resetTheme: expected token names (string[]) or nothing";
+    let e = env(cx);
+    let v = arg(argc, argv, 0);
+    // SAFETY: inline tag checks.
+    let names = if unsafe { qjs::JS_IsNull(v) || qjs::JS_IsUndefined(v) } {
+        None
+    } else {
+        let json = match to_json(cx, v) {
+            Ok(json) => json,
+            Err(exception) => return exception,
+        };
+        let Some(list) = json.as_array() else {
+            return type_error(cx, EXPECTED);
+        };
+        let names: Option<Vec<Box<str>>> =
+            list.iter().map(|n| n.as_str().map(Into::into)).collect();
+        match names {
+            Some(names) => Some(names),
+            None => return type_error(cx, EXPECTED),
+        }
+    };
+    let json = e.current_theme.borrow().clone();
+    let json = json.unwrap_or_else(|| NO_THEME.to_owned());
+    let current = e.tokens.borrow().clone();
+    let tokens = e.theme.borrow().reset(&current, &json, names.as_deref());
+    let op = nsh_core::Op::SetProp {
+        id: nsh_core::ROOT_ID,
+        prop: nsh_core::Prop::UiThemeReset(names),
     };
     if let Err(err) = crate::dom::push_op(cx, op) {
         return err;
@@ -365,6 +468,26 @@ pub(crate) const SET_THEME_EXPORT: crate::modules::Item = (
     Ts::function(
         "Makes `theme` the app's theme while it runs, in place of `nsh.json`'s\n`\"theme\"` and over shadcn/ui's tokens as that one is: `token()` reads it\nat once, and classes naming tokens, `nsh/base` and Rust components'\n`theme()` follow with the next frame. An embedding app's theme overrides\nstill win. `null` gives back the theme the app was built with. The theme\nis read whole: a value NSH cannot read (a color it does not know, a value\nthat is no color in one appearance where the other's is) throws a\n`TypeError` naming it, and the theme shown stays.",
         &["(theme: Theme | null): void"],
+    ),
+);
+
+/// `updateTheme` of `nsh`.
+pub(crate) const UPDATE_THEME_EXPORT: crate::modules::Item = (
+    "updateTheme",
+    Export::Function(update_theme, 1),
+    Ts::function(
+        "Changes the tokens `theme` sets while the app runs, keeping the others\n(`setTheme` replaces them all): `token()` reads them at once, and classes\nnaming tokens, `nsh/base` and Rust components' `theme()` follow with the\nnext frame. Two updates in a row both take, the later over the earlier. An\nembedding app's theme overrides still win. The theme is read whole, as\n`setTheme`'s: a value NSH cannot read throws a `TypeError` naming it, and\nno token changes.",
+        &["(theme: Theme): void"],
+    ),
+);
+
+/// `resetTheme` of `nsh`.
+pub(crate) const RESET_THEME_EXPORT: crate::modules::Item = (
+    "resetTheme",
+    Export::Function(reset_theme, 1),
+    Ts::function(
+        "Puts the tokens `names` back to their values in the app's theme\n(`nsh.json`'s `\"theme\"`, or the one `setTheme` set), undoing `updateTheme`\nfor them; without names, every token. A name the theme does not have is\nremoved. The other tokens stay as they are.",
+        &["(names?: (keyof Tokens)[]): void"],
     ),
 );
 
@@ -395,7 +518,12 @@ unsafe extern "C" fn token(
         return UNDEFINED;
     };
     let dark = scheme(e, &current(cx)) == "dark";
-    let value = e.tokens.borrow().get(&name);
+    let tokens = e.tokens.borrow().clone();
+    // A number in the appearance shown (its dark value, when it has one).
+    let value = match tokens.get(&name) {
+        Some(Token::Number(_)) => tokens.number_in(&name, dark).map(Token::Number),
+        value => value,
+    };
     match value {
         Some(Token::Color(c)) => {
             let c = nsh_core::Color::from(if dark { c.dark } else { c.light });
@@ -403,6 +531,8 @@ unsafe extern "C" fn token(
         }
         Some(Token::Number(n)) => number(n),
         Some(Token::Font(f)) => string(cx, &f),
+        // Box shadows as CSS writes them, of the appearance shown.
+        Some(Token::Shadow(s)) => string(cx, &s.css(dark)),
         _ => UNDEFINED,
     }
 }

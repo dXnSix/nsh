@@ -429,7 +429,7 @@ impl AppView {
     /// Shows (or hides) the performance monitor: a panel at the top right
     /// with the frame rate, what frames cost the main thread, what commits
     /// cost the engine thread (JS, layout), and the process' CPU, GPU and
-    /// memory, also logged once a second (target `nsh::perf`). Measuring
+    /// memory, also logged once a second (target `nsh::fps`). Measuring
     /// starts with it and stops when it hides; it survives reloads.
     pub fn set_fps_monitor(&self, show: bool) {
         let mut hud = self.fps.borrow_mut();
@@ -481,9 +481,16 @@ impl AppView {
     /// later starts with them. `None` gives the app its own theme back.
     /// Fails, changing nothing, on a file that does not parse.
     pub fn set_theme_overrides(&self, json: Option<&str>) -> Result<(), nsh_base::ThemeError> {
-        let tokens = json.map(nsh_base::theme_overrides).transpose()?;
-        *self.surface.host_tokens.borrow_mut() = tokens.clone();
-        self.surface.control(|c| c.set_tokens(tokens));
+        if let Some(json) = json {
+            nsh_core::element::theme_file::check(json).map_err(nsh_base::ThemeError)?;
+        }
+        *self.surface.host_theme.borrow_mut() = json.map(str::to_owned);
+        // The engine reads the file with the app's UI set, against its
+        // defaults.
+        self.surface.control(|c| match json {
+            Some(json) => c.set_theme_overrides(json),
+            None => c.set_tokens(None),
+        });
         Ok(())
     }
 

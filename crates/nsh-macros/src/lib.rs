@@ -39,6 +39,7 @@ mod host_props;
 mod js_ops;
 mod native_components;
 mod native_module;
+mod theme;
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -1864,6 +1865,48 @@ fn methods_impl(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             const METHODS: &'static [#ui::Method] = &[#(#entries),*];
         }
     })
+}
+
+/// `#[derive(AppTheme)]` on a struct: a theme type of its fields
+/// (`nsh_core::element::AppTheme`), each one token or an inner theme type.
+///
+/// - `#[token(color | number | radius | spacing | text | weight | tracking |
+///   leading | blur | font | shadow)]`: a token of that kind, named after
+///   the field in kebab case, a namespaced kind with its namespace
+///   (`#[token(radius)] card` is `radius-card`, `weight` `font-weight-*`,
+///   `font` `font-*`, `shadow` `shadow-*`); a color (`AdaptiveColor`), a
+///   number (`f32`, `Points`), a font family (`SharedString`, `String`) or
+///   box shadows (`AdaptiveShadow`). `name = "…"` names it, `role = "…"`
+///   maps a role onto it (`role = "popover"`).
+/// - `#[token(nested)]`: a field of another `AppTheme` type, its names under
+///   `<field>-`: in front of a color's or a number's name (`surface-raised`),
+///   after a namespaced kind's namespace, so its classes still read it
+///   (`radius-surface-card`, `rounded-surface-card`; `shadow-surface-raised`;
+///   `TokenKind::prefixed`). `#[token(flatten)]` is the same with no prefix.
+///   A name the tokens lack keeps the inner type's `Default`, not the value
+///   the outer `Default` gives the field.
+/// - `#[token(skip)]`: no token; the field keeps `Default`'s value.
+///
+/// A number field is its token's light value (`Tokens::number`); a dark
+/// value is read with `Tokens::number_in`, and `set_theme` drops it.
+///
+/// A field's doc comment is its token's doc (TS's `tokens.d.ts`). It makes
+/// `<Type>Patch`, every field an `Option` (a nested one its type's patch),
+/// for `update_theme`, each documented with its token and the classes that
+/// read it. These are compile errors: a name given twice, empty, or of the
+/// wrong form for its kind (only a font is `font-*`, but a weight
+/// `font-weight-*`; a shadow is `shadow-*`; a namespaced kind's name, also
+/// one given with `name`, starts with its namespace); a kind that does not fit the
+/// field's type, an unknown kind, two kinds, or a kind with `nested`,
+/// `flatten` or `skip`; a role of no name, of another kind of token, or
+/// mapped twice; `name` or `role` on a field that is no token; a second
+/// `#[token]`; a nested field named `font…` or `weight…`; and a generic struct.
+#[proc_macro_derive(AppTheme, attributes(token))]
+pub fn derive_app_theme(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    theme::derive(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
 /// `#[derive(JsObject)]` on a struct with named fields: a plain object in

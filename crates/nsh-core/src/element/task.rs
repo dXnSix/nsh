@@ -152,6 +152,12 @@ pub(crate) enum Action {
     Appearance(crate::platform::Appearance),
     /// Sets the app's design tokens.
     Tokens(super::Tokens),
+    /// Sets some of the app's design tokens, over its others
+    /// ([`super::update_tokens`]).
+    UpdateTokens(super::Tokens),
+    /// Puts the app's design tokens of these names back to its theme's
+    /// ([`super::reset_tokens`]).
+    ResetTokens(Vec<Box<str>>),
     /// Sets the app's translations ([`crate::i18n`]).
     Translations(crate::i18n::Translations),
     /// Shows the app in a language whatever the user's (`None`: the

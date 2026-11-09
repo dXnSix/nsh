@@ -19,27 +19,28 @@
 //! The core keeps the result as design tokens ([`Tokens`]), which Tailwind
 //! classes name (`bg-primary`, `bg-up/30`, `rounded-(--radius)`) and TS
 //! reads (`token()` of `nsh`); it reads `nsh.json`'s theme with
-//! [`tokens_of`], which `nsh/base`'s registry brings. What draws with them
-//! is the app's: no component of `nsh/base` reads them, but for the
-//! default reading typography of `TextView`.
+//! [`tokens_of`], which `nsh/base`'s registry brings. [`theme()`] reads
+//! each field through its [`Role`] (the token a theme maps it onto, else
+//! the token of its name), and the components that draw a look of their
+//! own read it: `Editor`, `TextView`, `RichEditor`, `DiffView`, `Terminal`,
+//! `Toast`, the scroll bar and the terminal looks of the controls.
 
 use std::sync::{Arc, LazyLock};
 
+#[cfg(test)]
+use nsh_core::{Color, color::Hsla};
 use nsh_core::{
-    Color, JsonValue,
-    color::Hsla,
-    element::{AdaptiveColor, FONT_MONO, FONT_SANS, SharedString, Tokens},
+    element::{
+        AdaptiveColor, AppTheme, Role, SharedString, TokenKind, TokenSpec, Tokens, theme_file,
+        theme_of,
+    },
     geometry::{Points, px},
 };
-use rustc_hash::{FxHashMap, FxHashSet};
 
 /// The default theme file: shadcn/ui's `neutral` theme.
 pub const DEFAULT_THEME: &str = include_str!("default-theme.json");
 
 static DEFAULT: LazyLock<Theme> = LazyLock::new(|| Theme::of(Arc::new(DEFAULT_TOKENS.clone())));
-
-/// Points per `rem`, as Tailwind's theme has them.
-const REM: f32 = 16.0;
 
 /// A theme file that does not parse.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,20 +54,12 @@ impl std::fmt::Display for ThemeError {
 
 impl std::error::Error for ThemeError {}
 
-thread_local! {
-    /// The theme of the tokens last read: `theme()` makes one only when
-    /// the tokens change.
-    static CURRENT: std::cell::RefCell<Option<Arc<Theme>>> = const { std::cell::RefCell::new(None) };
-}
-
 /// The theme the app is drawn with (reading it subscribes: a new theme
-/// reaches what read it).
+/// reaches what read it): [`theme_of`]`::<Theme>()`, read once per change of
+/// the tokens, per surface. Under an app's own theme types its fields are
+/// the tokens their roles are mapped onto.
 pub fn theme() -> Arc<Theme> {
-    let tokens = nsh_core::element::tokens();
-    CURRENT.with_borrow_mut(|current| match current {
-        Some(theme) if Arc::ptr_eq(&theme.tokens, &tokens) => theme.clone(),
-        _ => current.insert(Arc::new(Theme::of(tokens))).clone(),
-    })
+    theme_of::<Theme>()
 }
 
 /// The tokens of theme file `json` over the default's (`None`: the
@@ -93,7 +86,7 @@ pub(crate) fn read_tokens(json: Option<&str>) -> Result<(Tokens, Vec<String>), S
 }
 
 macro_rules! theme {
-    ($( $(#[doc = $doc:literal])* $name:ident = $key:literal ),* $(,)?) => {
+    ($( $(#[doc = $doc:literal])* $name:ident = $key:literal => $role:ident ),* $(,)?) => {
         /// A theme: shadcn/ui's tokens, each a field, and the app's own
         /// ones by name ([`Theme::color`], [`Theme::number`],
         /// [`Theme::font`]).
@@ -123,30 +116,110 @@ macro_rules! theme {
             tokens: Arc<Tokens>,
         }
 
+        /// shadcn/ui's tokens as a theme type: its 31 colors, `radius`,
+        /// `font-sans` and `font-mono`, each playing the role of its name.
+        /// It is not registered ([`nsh_core::element::Registry::theme`]):
+        /// `nsh/base` reads themes with [`read_tokens`], so it stays the
+        /// default and an app's own types win. A patch is tokens by name
+        /// (`update_theme::<Theme>(tokens)`).
+        impl AppTheme for Theme {
+            type Patch = Tokens;
+
+            fn token_specs() -> &'static [TokenSpec] {
+                static SPECS: LazyLock<Vec<TokenSpec>> = LazyLock::new(|| {
+                    let mut specs = vec![
+                        $(
+                            TokenSpec::new($key, TokenKind::Color)
+                                .doc(concat!($($doc),*))
+                                .role(Role::$role),
+                        )*
+                    ];
+                    specs.push(TokenSpec::new("radius", TokenKind::Number).doc("The corner radius.").role(Role::Radius));
+                    specs.push(TokenSpec::new("font-sans", TokenKind::Font).doc("The app's font family.").role(Role::FontSans));
+                    specs.push(TokenSpec::new("font-mono", TokenKind::Font).doc("The monospaced font family.").role(Role::FontMono));
+                    specs
+                });
+                &SPECS
+            }
+
+            fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
+                $( out.set_color(&format!("{prefix}{}", $key), self.$name); )*
+                out.set_number(&TokenKind::Number.prefixed(prefix, "radius"), self.radius.0);
+                if let Some(f) = &self.font_sans {
+                    out.set_font(&TokenKind::Font.prefixed(prefix, "font-sans"), f.to_string());
+                }
+                if let Some(f) = &self.font_mono {
+                    out.set_font(&TokenKind::Font.prefixed(prefix, "font-mono"), f.to_string());
+                }
+            }
+
+            fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
+                if prefix.is_empty() {
+                    return Theme::of(Arc::new(tokens.clone()));
+                }
+                let mut own = Tokens::default();
+                for spec in Self::token_specs() {
+                    rename(tokens, &spec.kind.prefixed(prefix, &spec.name), &mut own, &spec.name);
+                }
+                Theme::of(Arc::new(own))
+            }
+
+            fn write_patch(patch: &Tokens, prefix: &str, out: &mut Tokens) {
+                if prefix.is_empty() {
+                    *out = patch.over(out);
+                    return;
+                }
+                for spec in Self::token_specs() {
+                    rename(patch, &spec.name, out, &spec.kind.prefixed(prefix, &spec.name));
+                }
+            }
+        }
+
         impl Theme {
-            /// The theme of `tokens`: shadcn's tokens they leave out
-            /// (an embedding app's may) are the default's.
+            /// The theme of `tokens`, each field read through its role (the
+            /// token a theme maps it onto, else the token of its name):
+            /// shadcn's tokens they leave out (an embedding app's may) are
+            /// the default's.
             fn of(tokens: Arc<Tokens>) -> Self {
-                let default = |name: &str| DEFAULT_TOKENS.color(name);
-                let color = |name: &str| {
+                let color = |role: Role| {
                     tokens
-                        .color(name)
-                        .or_else(|| default(name))
+                        .role_color(role)
+                        .or_else(|| DEFAULT_TOKENS.color(role.name()))
                         .unwrap_or(AdaptiveColor::TRANSPARENT)
                 };
                 Theme {
-                    $( $name: color($key), )*
+                    $( $name: color(Role::$role), )*
                     radius: px(tokens
-                        .number("radius")
-                        .or_else(|| DEFAULT_TOKENS.number("radius"))
+                        .role_number(Role::Radius)
+                        .or_else(|| DEFAULT_TOKENS.number(Role::Radius.name()))
                         .unwrap_or(0.0)),
-                    font_sans: tokens.font(FONT_SANS).cloned().map(SharedString::from),
-                    font_mono: tokens.font(FONT_MONO).cloned().map(SharedString::from),
+                    font_sans: tokens.role_font(Role::FontSans).cloned().map(SharedString::from),
+                    font_mono: tokens.role_font(Role::FontMono).cloned().map(SharedString::from),
                     tokens,
                 }
             }
         }
     };
+}
+
+/// Copies token `from_name` of `from`, of whatever kind, as `to_name` in
+/// `to` (a nested theme's names under a prefix).
+fn rename(from: &Tokens, from_name: &str, to: &mut Tokens, to_name: &str) {
+    if let Some(c) = from.color(from_name) {
+        to.set_color(to_name, c);
+    }
+    if let Some(n) = from.number(from_name) {
+        to.set_number(to_name, n);
+        if let Some(dark) = from.number_in(from_name, true).filter(|d| *d != n) {
+            to.set_dark_number(to_name, dark);
+        }
+    }
+    if let Some(f) = from.font(from_name) {
+        to.set_font(to_name, f.clone());
+    }
+    if let Some(shadow) = from.shadow(from_name) {
+        to.set_shadow(to_name, shadow.clone());
+    }
 }
 
 /// The default theme's tokens, which [`Theme::of`] falls back on (the
@@ -160,67 +233,67 @@ static DEFAULT_TOKENS: LazyLock<Tokens> = LazyLock::new(|| {
 
 theme! {
     /// The app's background.
-    background = "background",
+    background = "background" => Background,
     /// Text and icons on [`Theme::background`].
-    foreground = "foreground",
+    foreground = "foreground" => Foreground,
     /// Cards.
-    card = "card",
+    card = "card" => Card,
     /// Text on [`Theme::card`].
-    card_foreground = "card-foreground",
+    card_foreground = "card-foreground" => CardForeground,
     /// Popovers, menus, tooltips.
-    popover = "popover",
+    popover = "popover" => Popover,
     /// Text on [`Theme::popover`].
-    popover_foreground = "popover-foreground",
+    popover_foreground = "popover-foreground" => PopoverForeground,
     /// The main action.
-    primary = "primary",
+    primary = "primary" => Primary,
     /// Text on [`Theme::primary`].
-    primary_foreground = "primary-foreground",
+    primary_foreground = "primary-foreground" => PrimaryForeground,
     /// Secondary actions.
-    secondary = "secondary",
+    secondary = "secondary" => Secondary,
     /// Text on [`Theme::secondary`].
-    secondary_foreground = "secondary-foreground",
+    secondary_foreground = "secondary-foreground" => SecondaryForeground,
     /// Muted surfaces.
-    muted = "muted",
+    muted = "muted" => Muted,
     /// Secondary text: hints, captions, placeholders.
-    muted_foreground = "muted-foreground",
+    muted_foreground = "muted-foreground" => MutedForeground,
     /// What is hovered or focused: menu items, list rows.
-    accent = "accent",
+    accent = "accent" => Accent,
     /// Text on [`Theme::accent`].
-    accent_foreground = "accent-foreground",
+    accent_foreground = "accent-foreground" => AccentForeground,
     /// Destructive actions and errors.
-    destructive = "destructive",
+    destructive = "destructive" => Destructive,
     /// Borders and dividers.
-    border = "border",
+    border = "border" => Border,
     /// The borders of inputs.
-    input = "input",
+    input = "input" => Input,
     /// Focus rings.
-    ring = "ring",
+    ring = "ring" => Ring,
     /// A chart's first series.
-    chart_1 = "chart-1",
+    chart_1 = "chart-1" => Chart1,
     /// A chart's second series.
-    chart_2 = "chart-2",
+    chart_2 = "chart-2" => Chart2,
     /// A chart's third series.
-    chart_3 = "chart-3",
+    chart_3 = "chart-3" => Chart3,
     /// A chart's fourth series.
-    chart_4 = "chart-4",
+    chart_4 = "chart-4" => Chart4,
     /// A chart's fifth series.
-    chart_5 = "chart-5",
+    chart_5 = "chart-5" => Chart5,
     /// The sidebar.
-    sidebar = "sidebar",
+    sidebar = "sidebar" => Sidebar,
     /// Text on [`Theme::sidebar`].
-    sidebar_foreground = "sidebar-foreground",
+    sidebar_foreground = "sidebar-foreground" => SidebarForeground,
     /// The sidebar's main action.
-    sidebar_primary = "sidebar-primary",
+    sidebar_primary = "sidebar-primary" => SidebarPrimary,
     /// Text on [`Theme::sidebar_primary`].
-    sidebar_primary_foreground = "sidebar-primary-foreground",
+    sidebar_primary_foreground = "sidebar-primary-foreground" => SidebarPrimaryForeground,
     /// What is hovered or focused in the sidebar.
-    sidebar_accent = "sidebar-accent",
+    sidebar_accent = "sidebar-accent" => SidebarAccent,
     /// Text on [`Theme::sidebar_accent`].
-    sidebar_accent_foreground = "sidebar-accent-foreground",
+    sidebar_accent_foreground = "sidebar-accent-foreground" => SidebarAccentForeground,
     /// The sidebar's borders.
-    sidebar_border = "sidebar-border",
+    sidebar_border = "sidebar-border" => SidebarBorder,
     /// Focus rings in the sidebar.
-    sidebar_ring = "sidebar-ring",
+    sidebar_ring = "sidebar-ring" => SidebarRing,
 }
 
 impl Default for Theme {
@@ -257,7 +330,8 @@ impl Theme {
     /// app's `selection` color if the theme sets one, else `primary` at
     /// 22 %.
     pub fn selection(&self) -> AdaptiveColor {
-        self.color("selection")
+        self.tokens
+            .role_color(Role::Selection)
             .unwrap_or_else(|| self.primary.opacity(0.22))
     }
 
@@ -312,74 +386,11 @@ impl From<Theme> for Tokens {
     }
 }
 
-/// A CSS color.
-fn color(value: &str) -> Option<Hsla> {
-    Color::parse(value).map(Hsla::from)
-}
-
-/// Whether `value` is written as a color, which a theme means as one: a hex
-/// color, a CSS color function or a `var()` alone. A value of no kind a
-/// token has (a shadow, a length in `em`) is not.
-fn written_as_color(value: &str) -> bool {
-    let value = value.trim();
-    if value.starts_with('#') {
-        return true;
-    }
-    let Some((function, _)) = value.split_once('(') else {
-        return false;
-    };
-    value.ends_with(')')
-        && matches!(
-            function.trim().to_ascii_lowercase().as_str(),
-            "rgb"
-                | "rgba"
-                | "hsl"
-                | "hsla"
-                | "hwb"
-                | "lab"
-                | "lch"
-                | "oklab"
-                | "oklch"
-                | "color"
-                | "color-mix"
-                | "light-dark"
-                | "var"
-        )
-}
-
-/// A CSS length in points: `0.625rem`, `10px`, `10`.
-fn length(value: &str) -> Option<f32> {
-    let value = value.trim();
-    let (number, scale) = if let Some(n) = value.strip_suffix("rem") {
-        (n, REM)
-    } else if let Some(n) = value.strip_suffix("px") {
-        (n, 1.0)
-    } else {
-        (value, 1.0)
-    };
-    number
-        .trim()
-        .parse::<f32>()
-        .ok()
-        .filter(|n| n.is_finite())
-        .map(|n| n * scale)
-}
-
-/// The family of a CSS `font-family` list that the platform draws with:
-/// its first, unquoted (`None`: a generic family, the system's font).
-fn font_family(value: &str) -> Option<&str> {
-    let first = value.split(',').next()?.trim().trim_matches(['"', '\'']);
-    let generic = matches!(
-        first,
-        "" | "sans-serif"
-            | "serif"
-            | "system-ui"
-            | "ui-sans-serif"
-            | "ui-serif"
-            | "-apple-system"
-            | "BlinkMacSystemFont"
-    );
-    (!generic).then_some(first)
+/// Applies theme file `json` (shadcn's `cssVars`) over `tokens`.
+fn apply(tokens: &mut Tokens, json: &str) -> Result<Vec<String>, ThemeError> {
+    let (out, ignored) = theme_file::parse(json, tokens).map_err(ThemeError)?;
+    *tokens = out;
+    Ok(ignored)
 }
 
 /// The tokens theme file `json` sets, and only those: an embedding app's
@@ -389,189 +400,11 @@ fn font_family(value: &str) -> Option<&str> {
 /// one [`Theme::from_json`] reads, shadcn's `cssVars`; a color it names
 /// (`var(--ring)`) and does not set is the default theme's.
 pub fn theme_overrides(json: &str) -> Result<Tokens, ThemeError> {
-    let mut tokens = Tokens::default();
-    for what in apply_onto(&mut tokens, &DEFAULT_TOKENS, json)? {
+    let (tokens, ignored) = theme_file::overrides(json, &DEFAULT_TOKENS).map_err(ThemeError)?;
+    for what in ignored {
         log::warn!("theme overrides: {what}, ignored");
     }
     Ok(tokens)
-}
-
-/// Applies theme file `json` (shadcn's `cssVars`) over `tokens`.
-fn apply(tokens: &mut Tokens, json: &str) -> Result<Vec<String>, ThemeError> {
-    let base = tokens.clone();
-    apply_onto(tokens, &base, json)
-}
-
-/// Sets the tokens of theme file `json` in `tokens`; a color it names and
-/// does not set is `base`'s. Returns what it left out.
-fn apply_onto(tokens: &mut Tokens, base: &Tokens, json: &str) -> Result<Vec<String>, ThemeError> {
-    let value: JsonValue =
-        serde_json::from_str(json).map_err(|e| ThemeError(format!("not JSON: {e}")))?;
-    let mut ignored = Vec::new();
-    match value.get("cssVars") {
-        Some(vars) => apply_css_vars(tokens, base, vars, &mut ignored),
-        None => ignored.push("no shadcn `{ \"cssVars\": { ... } }`".into()),
-    }
-    Ok(ignored)
-}
-
-/// Applies shadcn's `cssVars`: `theme`'s values in both appearances,
-/// `light`'s in the light one (and the dark one when `dark` leaves them
-/// out), `dark`'s in the dark one. A color may name another
-/// (`var(--ring)`, in `color-mix()` too) of the same appearance: the
-/// file's or the one under it. Values of no kind a token has (shadows,
-/// letter spacing) are left out, as they are of no Tailwind utility NSH
-/// draws with a token. A value written as a color that is none is left
-/// out, and one that is no color where the other appearance has a color
-/// gives way to that color; both are listed in `ignored`.
-fn apply_css_vars(tokens: &mut Tokens, base: &Tokens, vars: &JsonValue, ignored: &mut Vec<String>) {
-    let mut section = |name: &str| -> FxHashMap<String, String> {
-        let Some(v) = vars.get(name) else {
-            return FxHashMap::default();
-        };
-        let JsonValue::Object(fields) = v else {
-            ignored.push(format!("cssVars.{name}: expected an object"));
-            return FxHashMap::default();
-        };
-        let mut out = FxHashMap::default();
-        for (key, value) in fields {
-            match value {
-                JsonValue::Null => {}
-                JsonValue::String(s) => {
-                    out.insert(key.clone(), s.clone());
-                }
-                JsonValue::Number(n) => {
-                    out.insert(key.clone(), n.to_string());
-                }
-                v => ignored.push(format!(
-                    "cssVars.{name}.{key}: expected a CSS value, got {v}"
-                )),
-            }
-        }
-        out
-    };
-    let (both, light, dark) = (section("theme"), section("light"), section("dark"));
-    let mut light_vars = both.clone();
-    light_vars.extend(light.iter().map(|(k, v)| (k.clone(), v.clone())));
-    let mut dark_vars = light_vars.clone();
-    dark_vars.extend(dark.iter().map(|(k, v)| (k.clone(), v.clone())));
-
-    let mut names: Vec<&String> = light_vars.keys().chain(dark.keys()).collect();
-    names.sort();
-    names.dedup();
-    for name in names {
-        let value = dark_vars.get(name).or_else(|| light_vars.get(name));
-        let Some(value) = value else { continue };
-        if name.starts_with("font-") {
-            if let Some(family) = font_family(value) {
-                tokens.set_font(name, family);
-            }
-            continue;
-        }
-        let resolve = |vars: &FxHashMap<String, String>, dark: bool| {
-            resolve_color(name, vars, base, dark, &mut FxHashSet::default())
-        };
-        let (light, dark) = match (resolve(&light_vars, false), resolve(&dark_vars, true)) {
-            (Ok(light), Ok(dark)) => (light, dark),
-            (Err(e), _) | (_, Err(e)) => {
-                ignored.push(e.0);
-                continue;
-            }
-        };
-        match (light, dark) {
-            (Some(l), Some(d)) => tokens.set_color(name, AdaptiveColor { light: l, dark: d }),
-            (Some(c), None) | (None, Some(c)) => {
-                // Set in one appearance only, the color is both's; given in
-                // the other too, that value is no color.
-                let (other, vars) = match light {
-                    Some(_) => ("dark", &dark_vars),
-                    None => ("light", &light_vars),
-                };
-                if let Some(v) = vars.get(name) {
-                    ignored.push(format!(
-                        "`{name}`: {v} is no color in the {other} appearance"
-                    ));
-                }
-                tokens.set_color(name, c.into());
-            }
-            (None, None) => match length(value) {
-                Some(n) => tokens.set_number(name, n),
-                None => {
-                    let mut given: Vec<&String> = [light_vars.get(name), dark_vars.get(name)]
-                        .into_iter()
-                        .flatten()
-                        .collect();
-                    given.dedup();
-                    for v in given.into_iter().filter(|v| written_as_color(v)) {
-                        ignored.push(format!("`{name}`: {v} is no color"));
-                    }
-                }
-            },
-        }
-    }
-}
-
-/// The color `name` is in `vars` (of one appearance), with the colors it
-/// names (`var(--x)`, `var(--x, fallback)`) resolved: the file's, else
-/// `base`'s. `None` when it is no color. A name that names itself is an
-/// error.
-fn resolve_color(
-    name: &str,
-    vars: &FxHashMap<String, String>,
-    base: &Tokens,
-    dark: bool,
-    seen: &mut FxHashSet<String>,
-) -> Result<Option<Hsla>, ThemeError> {
-    let Some(value) = vars.get(name) else {
-        return Ok(base
-            .color(name)
-            .map(|c| if dark { c.dark } else { c.light }));
-    };
-    if !seen.insert(name.to_owned()) {
-        return Err(ThemeError(format!("`{name}` names itself")));
-    }
-    let mut out = String::with_capacity(value.len());
-    let mut rest = value.as_str();
-    while let Some(start) = rest.find("var(") {
-        out.push_str(&rest[..start]);
-        let inner = &rest[start + 4..];
-        let mut depth = 1;
-        let end = inner
-            .char_indices()
-            .find(|&(_, c)| {
-                depth += match c {
-                    '(' => 1,
-                    ')' => -1,
-                    _ => 0,
-                };
-                depth == 0
-            })
-            .map(|(i, _)| i)
-            .ok_or_else(|| ThemeError(format!("`{name}`: unclosed var()")))?;
-        let (var, fallback) = match inner[..end].split_once(',') {
-            Some((v, f)) => (v.trim(), Some(f.trim())),
-            None => (inner[..end].trim(), None),
-        };
-        let Some(var) = var.strip_prefix("--") else {
-            return Err(ThemeError(format!(
-                "`{name}`: var() names no `--` variable"
-            )));
-        };
-        match resolve_color(var, vars, base, dark, seen)? {
-            Some(c) => out.push_str(&format!("#{:08x}", Color::from(c).0)),
-            None => match fallback {
-                Some(f) => out.push_str(f),
-                None => {
-                    seen.remove(name);
-                    return Ok(None);
-                }
-            },
-        }
-        rest = &inner[end + 1..];
-    }
-    out.push_str(rest);
-    seen.remove(name);
-    Ok(color(&out))
 }
 
 #[cfg(test)]
@@ -666,8 +499,8 @@ mod tests {
         assert_eq!(theme.number("radius-card"), Some(14.0));
         assert_eq!(theme.font_sans.as_deref(), Some("Inter"));
         assert_eq!(theme.font_mono.as_deref(), Some("JetBrains Mono"));
-        // Of no kind a token has.
-        assert_eq!(theme.tokens().get("shadow-sm"), None);
+        // A box shadow is a shadow token.
+        assert!(theme.tokens().shadow("shadow-sm").is_some());
         // Keys left out keep the default.
         assert_eq!(theme.muted, Theme::default().muted);
         assert!(Theme::from_json("not json").is_err());
@@ -728,7 +561,8 @@ mod tests {
         let brand = theme.color("brand").unwrap();
         assert_eq!((hex(brand.light), hex(brand.dark)), (0xe11d48, 0xe11d48));
         assert_eq!(theme.color("edge"), None);
-        assert_eq!(theme.tokens().get("shadow-sm"), None);
+        // A box shadow is a shadow token.
+        assert!(theme.tokens().shadow("shadow-sm").is_some());
         // A file read whole lists nothing.
         let (_, ignored) = read_tokens(Some(DEFAULT_THEME)).unwrap();
         assert!(ignored.is_empty(), "{ignored:?}");

@@ -789,7 +789,7 @@ impl Element for SurfaceElement {
         let surface = self.surface.clone();
         let dark = crate::system::dark(&surface);
         // Embedded with a theme, the surface is drawn on the host's
-        // background.
+        // background (`Theme::of` reads it through `Role::Background`).
         let background = match &*surface.host_theme.borrow() {
             Some(theme) if dark => theme.background.dark.into(),
             Some(theme) => theme.background.light.into(),

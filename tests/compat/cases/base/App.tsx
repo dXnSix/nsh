@@ -56,6 +56,10 @@ import BaseToolbar from "./base-toolbar";
 import BaseTree from "./base-tree";
 import BaseToken from "./base-token";
 import BaseSetTheme from "./base-set-theme";
+import BaseUpdateTheme from "./base-update-theme";
+import BaseNamedClasses from "./base-named-classes";
+import BaseDarkNumbers from "./base-dark-numbers";
+import BaseShadowTokens from "./base-shadow-tokens";
 import BaseTransitionShader from "./base-transition-shader";
 
 const cases: Record<string, () => JSX.Element> = {
@@ -112,6 +116,10 @@ const cases: Record<string, () => JSX.Element> = {
   "base-toast": BaseToast,
   "base-token": BaseToken,
   "base-set-theme": BaseSetTheme,
+  "base-update-theme": BaseUpdateTheme,
+  "base-named-classes": BaseNamedClasses,
+  "base-dark-numbers": BaseDarkNumbers,
+  "base-shadow-tokens": BaseShadowTokens,
   "base-transition-shader": BaseTransitionShader,
 };
 const shown = signal("");

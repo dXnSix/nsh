@@ -292,6 +292,8 @@ try app.loadBundle(at: url)
 
 Call it before or after loading: classes such as `bg-primary` and `rounded-(--radius)` restyle at once, and every app
 loaded later starts with the overrides in its first frame. `setThemeOverrides(nil)` gives the app its own theme back.
+The app reads the file with its own theme's reader, so a `var(--name)` the file does not set is the default theme's
+value of that token.
 
 ## Links the app opens
 

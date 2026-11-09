@@ -255,14 +255,41 @@ A token's name is its CSS variable's without `--`, as the theme file writes it: 
 | `(--name)`, Tailwind 4's variable shorthand | A theme color or number | `bg-(--primary)`, `rounded-(--radius)`, `p-(--gap-card)` |
 | `(color:--name)`, `(length:--name)`, `(number:--name)`, `(family-name:--name)` | The same, typed where a utility takes several kinds | `text-(color:--up)`, `text-(length:--text-title)`, `font-(family-name:--font-mono)` |
 | `font-sans`, `font-mono` | The theme's fonts, when it sets them | `font-mono` |
+| A number token's name in its namespace's utilities | A number token of a Tailwind 4 namespace, by the rest of its name | `rounded-card` (`radius-card`), `p-gutter`, `gap-x-gutter` (`spacing-gutter`), `text-body` (`text-body`), `font-strong` (`font-weight-strong`), `tracking-label`, `leading-body`, `blur-soft` |
 
 - **Your own tokens.** Every name in the theme file is a token, as every variable of a CSS `@theme` is: `"up": "#16a34a"` makes `bg-up`, `text-up` and `bg-up/30`; `"radius-card": "14px"` makes `rounded-(--radius-card)`; `"font-display": "Pacifico"` makes `font-(family-name:--font-display)`. Lengths are in points; `(number:--name)` passes the plain number.
 - **Fonts.** `font-sans` is the app's font: every text that sets no family of its own is drawn with it, as a page is with Tailwind's `--font-sans`. `font-mono` is the font of `font-mono` and of code in `TextView`. Unset, both are the system's fonts.
-- **Both appearances.** A token has the light and the dark value of the theme: `bg-primary`, `theme().primary` and `token("primary")` switch with the appearance by themselves, with no `dark:` class. A color the theme sets in one appearance only is used in both.
+- **Both appearances.** A token has the light and the dark value of the theme: `bg-primary`, `theme().primary` and `token("primary")` switch with the appearance by themselves, with no `dark:` class. A color the theme sets in one appearance only is used in both. Numbers have a dark value too: `"dark": { "radius-card": "6px" }` beside a light `14px` makes `rounded-card` and `rounded-(--radius-card)` 14 points in the light appearance and 6 in the dark one, and `token("radius-card")` the value of the one shown; a number the theme gives once is the same in both.
+- **Named number classes.** A number token whose name starts with one of Tailwind 4's namespaces is a class of that
+  namespace's utilities, named by the rest of its name, as `--radius-card` makes `rounded-card` in Tailwind:
+  `radius-` the radius utilities (`rounded-card`, `rounded-t-card`, `rounded-bl-card`); `spacing-` padding, margin,
+  gap, sizes, insets and translation (`p-gutter`, `-mt-gutter`, `gap-x-gutter`, `w-gutter`, `inset-x-gutter`); `text-`
+  the font size; `font-weight-` the weight (`"font-weight-strong": "650"` makes `font-strong`); `tracking-`, `leading-`
+  and `blur-` their utilities. A `tracking-` token is a length in points (`px` or `rem`); a value in `em` is left out,
+  as shadcn's `tracking-normal: 0em` always was. They work under variants and follow the theme as every token class
+  does. `text-` is a color utility's too: there a color of the same name stays first; elsewhere the longer utility
+  wins (`inset-shadow-card` is the inset shadow's color `card`).
+- **Shadow tokens.** A `shadow-<n>` entry written as CSS `box-shadow` (`"shadow-raised": "0 1px 2px #0000001a"`, a
+  value per appearance in `light` and `dark`) is a shadow token: the class `shadow-raised` and `shadow-(--shadow-raised)`
+  draw its layers, in the appearance shown. Other `shadow-*` names a theme has (shadcn's `shadow-color`,
+  `shadow-opacity`) stay the colors and numbers they are; `shadow-sm`, `shadow-md`, … stay Tailwind's classes, as other
+  Tailwind names do, with no warning (themes exported from tweakcn write them): read such a token with
+  `shadow-(--shadow-sm)`. In Rust, `.adaptive_shadow(move || tokens().shadow("shadow-raised").cloned().unwrap_or_default())`
+  follows the theme and the appearance; `token("shadow-raised")` is its CSS.
+- **Tailwind's names win.** A Tailwind name keeps its meaning when a token's namespaced class would be the same:
+  `"radius-lg"` leaves `rounded-lg` Tailwind's, and `"spacing-md"` makes `p-md` the token's while `max-w-md` stays
+  Tailwind's width. The build names the classes a token is not (`` `spacing-md` is no class where Tailwind's or a
+  color's keeps its meaning: `max-w-md`, … ``), and so for a size `text-card` beside the color `card`; read such a
+  token with `rounded-(--radius-lg)`.
 - **Your Tailwind colors win.** A name in `"tailwind"` `colors` or Tailwind's palette is that color, so `bg-primary` is a theme token when the Tailwind theme has no color `primary`.
 - **The theme can change while the app runs.** When an app embedded in a native app is given that app's theme, and whenever the theme changes, the classes naming tokens, the Rust bindings reading `theme()` and the TSX code reading `token()` are updated, the classes and bindings natively. Tokens the embedding app's theme does not have keep the values of the app's own `"theme"` (then the default theme's). A host that only adds its brand gives theme overrides, the tokens its brand changes in the same file format ([iOS](./ios.md#theme-overrides), [Android](./android.md#theme-overrides), `AppView::set_theme_overrides` on the desktops).
 - **The app can set another theme.** [`setTheme(theme)`](../modules/nsh.md#settheme) from `nsh` makes a theme in the same format the app's in place of its `"theme"`, while it runs, on every platform and in `nsh test`; `setTheme(null)` gives the app's own back. `token()` reads the new tokens at once. The theme is read whole: a value NSH cannot read throws a `TypeError` naming it, and the theme shown stays. Build it from the app's own theme file so every token the classes name keeps a value. A Rust app sets the tokens of an `nsh_base::Theme` with `set_tokens(theme.into())`.
 - **Checked like other classes.** A name that is no token of the default theme or of the app's `"theme"` is an unknown class when building (`unknown class 'bg-chart-up'`). To use a token only the embedding app or a theme set while the app runs provides, give it a value in the app's `"theme"` too: that value shows when the app runs on its own.
+- **Theme types.** When the app's crates register [theme types](./rust.md#theme-types), the types' tokens are the
+  theme's, seeded from the types' defaults: classes name them as they name any token (`bg-surface-raised`,
+  `text-action/70`, `rounded-card` for `radius-card`, `p-gutter` for `spacing-gutter`), and `token()` reads them.
+  Roles are what NSH's own parts draw with, and classes name tokens: where the design system maps the `primary` role
+  onto `action`, `bg-action` is its class, and `bg-primary` is an unknown class unless a type declares `primary`.
 
 Classes naming tokens are resolved once per theme, like any other class: drawing them costs what a palette color does.
 
@@ -286,7 +313,7 @@ import { Canvas, token } from "nsh";
 />
 ```
 
-The names are typed: NSH writes the app's tokens into `.nsh/types/nsh/tokens.d.ts` from its theme, so `token("up")` is a `string` once `"up"` is in the theme, and a name the theme lacks is a type error.
+The names are typed: NSH writes the app's tokens into `.nsh/types/nsh/tokens.d.ts` from its theme, so `token("up")` is a `string` once `"up"` is in the theme, and a name the theme lacks is a type error. Under theme types it lists the types' tokens, each typed by its kind (a `number`, or a `string` for a color, a font and a shadow) with its doc comment.
 
 ## The class check
 

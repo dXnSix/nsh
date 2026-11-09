@@ -533,6 +533,13 @@ pub(super) struct Components {
     /// app's root): drawn with while the embedding app sets none
     /// ([`Core::set_host_tokens`]).
     app_tokens: Arc<Tokens>,
+    /// The app's theme: its tokens as last set whole (a UI set's defaults,
+    /// `nsh.json`'s theme, `setTheme`, `set_tokens`), which
+    /// [`Core::reset_tokens`] puts tokens back to.
+    file_tokens: Arc<Tokens>,
+    /// The UI set's default tokens: drawn with others, the app has a theme
+    /// of its own ([`Tokens::is_themed`]); `None`: no set reads themes.
+    default_tokens: Option<Arc<Tokens>>,
     /// The embedding app's tokens: win over [`Self::app_tokens`].
     host_tokens: Option<Arc<Tokens>>,
     /// Boxed: making a view (or applying its patches) takes its instance
@@ -699,6 +706,8 @@ impl Default for Components {
             specs: FxHashMap::default(),
             tokens: Arc::new(Tokens::default()),
             app_tokens: Arc::new(Tokens::default()),
+            file_tokens: Arc::new(Tokens::default()),
+            default_tokens: None,
             host_tokens: None,
             instances: FxHashMap::default(),
             owners: FxHashMap::default(),
@@ -858,13 +867,20 @@ impl<M: TextEngine> Core<M> {
     /// sets' setup functions ([`Registry::setup`]).
     pub fn set_components(&mut self, registry: Registry) {
         if let Some(Ok((tokens, _))) = registry.tokens(None) {
+            self.components.default_tokens = Some(Arc::new(tokens.clone()));
             self.set_tokens(tokens);
         }
         {
             let _entered = self.components.runtime.enter();
             registry.run_setups();
         }
+        let typed = registry.has_theme_types();
         self.components.registry = registry;
+        // The tokens were sent before the registry was in place: an app with
+        // theme types has a theme of its own (`Tokens::is_themed`).
+        if typed {
+            self.tokens_changed();
+        }
     }
 
     /// Replaces the components of a running core with `registry`, a
@@ -880,11 +896,11 @@ impl<M: TextEngine> Core<M> {
         self.components.registry = registry;
     }
 
-    /// `uiTheme` on the root: the app's theme file (`nsh.json`, `setTheme`),
-    /// which the UI set that reads themes makes tokens of. What it cannot
-    /// read is left out and the rest applies, so a bundle made by a newer
-    /// NSH keeps its theme here.
-    pub(super) fn set_ui_theme(&mut self, json: &str) {
+    /// The app's theme file (`nsh.json`, `setTheme`, a Rust app's
+    /// [`Root::theme`]; `uiTheme` on the root), which the UI set that reads
+    /// themes makes tokens of. What it cannot read is left out and the rest
+    /// applies, so a bundle made by a newer NSH keeps its theme here.
+    pub fn set_ui_theme(&mut self, json: &str) {
         match self.components.registry.tokens(Some(json)) {
             Some(Ok((tokens, left_out))) => {
                 for what in left_out {
@@ -898,10 +914,61 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// The app's design tokens; it is drawn with them unless the
-    /// embedding app set its own ([`Core::set_host_tokens`]).
+    /// embedding app set its own ([`Core::set_host_tokens`]). They are its
+    /// theme from now on: what [`Core::reset_tokens`] goes back to.
     pub fn set_tokens(&mut self, tokens: Tokens) {
-        self.components.app_tokens = Arc::new(tokens);
+        let tokens = Arc::new(tokens);
+        self.components.file_tokens = tokens.clone();
+        self.components.app_tokens = tokens;
         self.tokens_changed();
+    }
+
+    /// Changes some of the app's design tokens: those of `tokens` take
+    /// their values, the others stay. Applied in order, so two changes in
+    /// one turn compose.
+    pub(crate) fn update_tokens(&mut self, tokens: Tokens) {
+        self.components.app_tokens = Arc::new(tokens.over(&self.components.app_tokens));
+        self.tokens_changed();
+    }
+
+    /// Puts the app's tokens `names` (`None`: every one) back to its
+    /// theme's ([`Core::set_tokens`]); a name the theme lacks is removed.
+    pub(crate) fn reset_tokens(&mut self, names: Option<&[Box<str>]>) {
+        let file = &self.components.file_tokens;
+        self.components.app_tokens = match names {
+            None => file.clone(),
+            Some(names) => {
+                let mut tokens = (*self.components.app_tokens).clone();
+                for name in names {
+                    tokens.copy_named(file, name);
+                }
+                Arc::new(tokens)
+            }
+        };
+        self.tokens_changed();
+    }
+
+    /// `uiThemeUpdate` on the root (`nsh`'s `updateTheme`): the tokens a
+    /// theme file sets change, read by the UI set
+    /// ([`Registry::token_overrides_from`]) against the tokens drawn with
+    /// now; what it cannot read is left out and keeps its value.
+    pub(super) fn update_ui_theme(&mut self, json: &str) {
+        let provider = self.components.registry.token_provider();
+        let Some(read) = provider
+            .as_ref()
+            .and_then(|p| p.overrides(json, &self.components.tokens))
+        else {
+            return log::warn!("theme: no UI set reads theme changes");
+        };
+        match read {
+            Ok((tokens, left_out)) => {
+                for what in left_out {
+                    log::warn!("theme: {what}, ignored");
+                }
+                self.update_tokens(tokens);
+            }
+            Err(e) => log::warn!("theme: {e}"),
+        }
     }
 
     /// The app's translations ([`crate::i18n`]): what `t!` and TS's `t`
@@ -925,12 +992,44 @@ impl<M: TextEngine> Core<M> {
         self.tokens_changed();
     }
 
+    /// The embedding app's theme overrides (`None`: the app's own theme
+    /// again): a theme file whose tokens win over the app's of the same
+    /// names, read by the UI set that reads themes
+    /// ([`Registry::token_overrides_from`], else the core's
+    /// [`crate::element::theme_file::overrides`]) against the UI set's
+    /// default tokens, so a `var()` it does not set names the default
+    /// theme's token. What it cannot read is left out; text that is no JSON
+    /// changes nothing.
+    pub fn set_host_theme(&mut self, json: Option<&str>) {
+        let Some(json) = json else {
+            return self.set_host_tokens(None);
+        };
+        let provider = self.components.registry.token_provider();
+        let defaults = match provider.as_ref().map(|p| p.read(None)) {
+            Some(Ok((tokens, _))) => tokens,
+            _ => Tokens::default(),
+        };
+        let read = provider
+            .as_ref()
+            .and_then(|p| p.overrides(json, &defaults))
+            .unwrap_or_else(|| crate::element::theme_file::overrides(json, &defaults));
+        match read {
+            Ok((tokens, left_out)) => {
+                for what in left_out {
+                    log::warn!("theme overrides: {what}, ignored");
+                }
+                self.set_host_tokens(Some(tokens));
+            }
+            Err(e) => log::warn!("theme overrides: {e}"),
+        }
+    }
+
     /// What [`Core::tokens`] become when the root's `uiTheme` (the app's
     /// theme file) is set, with the embedding app's tokens of now: JS reads
     /// them in the turn that sends the theme, before it reaches the core.
     pub fn theme_tokens(&self) -> crate::element::ThemeTokens {
         crate::element::ThemeTokens::new(
-            self.components.registry.token_source(),
+            self.components.registry.token_provider(),
             self.components.host_tokens.clone(),
         )
     }
@@ -944,12 +1043,24 @@ impl<M: TextEngine> Core<M> {
     /// The tokens drawn with now: a signal of the surface, so only the
     /// bindings that read them run again, and only when they changed.
     fn tokens_changed(&mut self) {
-        let tokens = match &self.components.host_tokens {
+        let mut tokens = match &self.components.host_tokens {
             // The app's own tokens the host's do not have stay.
             Some(host) => Arc::new(host.over(&self.components.app_tokens)),
             None => self.components.app_tokens.clone(),
         };
-        if *tokens == *self.components.tokens {
+        // Whether the app has a theme of its own, which the platforms'
+        // controls take their colors from only then.
+        // An app whose sets register theme types has a theme of its own,
+        // its design system's.
+        let themed = self.components.registry.has_theme_types()
+            || match &self.components.default_tokens {
+                Some(default) => *tokens != **default,
+                None => !tokens.is_empty(),
+            };
+        if tokens.is_themed() != themed {
+            Arc::make_mut(&mut tokens).set_themed(themed);
+        }
+        if *tokens == *self.components.tokens && themed == self.components.tokens.is_themed() {
             self.components.tokens = tokens;
             return;
         }
@@ -969,7 +1080,7 @@ impl<M: TextEngine> Core<M> {
         let font = self
             .components
             .tokens
-            .font(crate::element::FONT_SANS)
+            .role_font(crate::element::Role::FontSans)
             .map(|f| crate::style::FontFamily::new(f));
         self.set_default_font(font);
         self.class_tokens_changed();
@@ -5358,6 +5469,8 @@ impl<M: TextEngine> Core<M> {
             Action::Frame(answer) => self.wait_frame(answer),
             Action::Appearance(appearance) => self.set_appearance(appearance),
             Action::Tokens(tokens) => self.set_tokens(tokens),
+            Action::UpdateTokens(tokens) => self.update_tokens(tokens),
+            Action::ResetTokens(names) => self.reset_tokens(Some(&names)),
             Action::Translations(translations) => self.set_translations(translations),
             Action::Locale(locale) => self.components.locale_request = Some(locale),
             Action::BuiltInScrollbars(source, theme) => {
