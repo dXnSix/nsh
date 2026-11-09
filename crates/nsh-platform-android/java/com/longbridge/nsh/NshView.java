@@ -817,6 +817,8 @@ public class NshView extends FrameLayout {
             lifecycle,
             // 24-hour time: the user's setting, else the locale's.
             android.text.format.DateFormat.is24HourFormat(getContext()) ? 1 : 0,
+            // High contrast text: `highContrast()`.
+            android.provider.Settings.Secure.getInt(getContext().getContentResolver(), HIGH_TEXT_CONTRAST, 0) != 0 ? 1 : 0,
         }, dark, locale.toLanguageTag(), timeZone,
                 // The user's list (an app's own language first, Android 13's
                 // per-app language included), after the embedding app's own.
@@ -898,6 +900,21 @@ public class NshView extends FrameLayout {
     /** TalkBack turning on or off: `screenReaderEnabled()`. */
     private final android.view.accessibility.AccessibilityManager.TouchExplorationStateChangeListener screenReader =
             enabled -> publishEnvironment(getRootWindowInsets());
+
+    /**
+     * Settings > Accessibility > High contrast text (`highContrast()`): a secure setting apps may read, without a
+     * constant in the SDK.
+     */
+    private static final String HIGH_TEXT_CONTRAST = "high_text_contrast_enabled";
+
+    /** High contrast text turning on or off: the setting's URI changes. */
+    private final android.database.ContentObserver highContrast =
+            new android.database.ContentObserver(new android.os.Handler(android.os.Looper.getMainLooper())) {
+                @Override
+                public void onChange(boolean selfChange) {
+                    publishEnvironment(getRootWindowInsets());
+                }
+            };
 
     /** The safe-area insets last published (dp: top, right, bottom, left). */
     private float[] safe = new float[4];
@@ -991,6 +1008,8 @@ public class NshView extends FrameLayout {
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         accessibility().addTouchExplorationStateChangeListener(screenReader);
+        getContext().getContentResolver().registerContentObserver(
+                android.provider.Settings.Secure.getUriFor(HIGH_TEXT_CONTRAST), false, highContrast);
         Activity activity = activity(getContext());
         if (activity != null) {
             Lifecycles lifecycles = Lifecycles.of(activity);
@@ -1013,6 +1032,7 @@ public class NshView extends FrameLayout {
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
         accessibility().removeTouchExplorationStateChangeListener(screenReader);
+        getContext().getContentResolver().unregisterContentObserver(highContrast);
         if (Lifecycles.registered != null) Lifecycles.registered.views.remove(this);
         getContext().unregisterReceiver(timeChanged);
     }

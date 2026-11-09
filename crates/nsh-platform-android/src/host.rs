@@ -1124,7 +1124,8 @@ extern "system" fn Java_com_longbridge_nsh_Native_resize(
 /// `values`: safe area top, right, bottom, left, keyboard height, keyboard
 /// animation duration, font scale, right to left (1), reduce motion (1),
 /// density, screen reader (1), API level, idiom (0 phone, 1 pad, 3 TV),
-/// app state (0 resumed, 1 paused, 2 stopped), 24-hour time (1).
+/// app state (0 resumed, 1 paused, 2 stopped), 24-hour time (1), high
+/// contrast text (1).
 /// `locale`: `Locale.getDefault()`'s language tag; `regional`: the format
 /// locale's, with Android 14's regional preferences as its extension.
 #[unsafe(no_mangle)]
@@ -1141,7 +1142,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_environment(
 ) {
     // SAFETY: Java passes its live handle.
     let host = unsafe { host(handle) };
-    let mut v = [0f32; 15];
+    let mut v = [0f32; 16];
     if env.get_float_array_region(&values, 0, &mut v).is_err() {
         return;
     }
@@ -1159,6 +1160,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_environment(
     environment.reduce_motion = v[8] != 0.0;
     environment.pixel_ratio = v[9];
     environment.screen_reader = v[10] != 0.0;
+    environment.high_contrast = v[15] != 0.0;
     environment.os = nsh_engine::Os::Android;
     environment.notifications = true;
     environment.audio = true;
