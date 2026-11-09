@@ -296,11 +296,11 @@ pub struct ThemeTokens {
 
 /// What of `left_out` refuses a file read whole: every value that could not
 /// be read, `; `-separated, but no name only that no theme type declares.
-fn refused(left_out: &[String]) -> Option<String> {
-    let what: Vec<&str> = left_out
+fn refused(left_out: &[super::theme_file::LeftOut]) -> Option<String> {
+    let what: Vec<String> = left_out
         .iter()
-        .filter(|w| !super::theme_file::is_undeclared(w))
-        .map(String::as_str)
+        .filter(|l| !l.is_undeclared())
+        .map(ToString::to_string)
         .collect();
     (!what.is_empty()).then(|| what.join("; "))
 }
@@ -327,7 +327,7 @@ impl ThemeTokens {
     /// Under theme types a name no type declares is left out, not refused
     /// (#1190). `None`: no UI set reads themes.
     pub fn checked(&self, json: &str) -> Option<Result<Tokens, String>> {
-        Some(match self.provider.as_ref()?.read(Some(json)) {
+        Some(match self.provider.as_ref()?.read_left_out(Some(json)) {
             Ok((app, left_out)) => match refused(&left_out) {
                 None => Ok(self.under_host(app)),
                 Some(what) => Err(what),
@@ -342,13 +342,15 @@ impl ThemeTokens {
     /// the embedding app's. Read whole: `Err` as [`ThemeTokens::checked`].
     /// `None`: no UI set reads theme changes.
     pub fn updated(&self, current: &Tokens, json: &str) -> Option<Result<Tokens, String>> {
-        Some(match self.provider.as_ref()?.overrides(json, current)? {
-            Ok((part, left_out)) => match refused(&left_out) {
-                None => Ok(self.under_host(part).over(current)),
-                Some(what) => Err(what),
+        Some(
+            match self.provider.as_ref()?.overrides_left_out(json, current)? {
+                Ok((part, left_out)) => match refused(&left_out) {
+                    None => Ok(self.under_host(part).over(current)),
+                    Some(what) => Err(what),
+                },
+                Err(e) => Err(e),
             },
-            Err(e) => Err(e),
-        })
+        )
     }
 
     /// The tokens drawn with once the tokens `names` (`None`: every one)
