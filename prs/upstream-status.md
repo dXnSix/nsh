@@ -36,6 +36,7 @@ a GPUI Windows field wait). Nothing is opened: the owner says when.
 | Rust code's app id and its data and cache directories (2026-11-09, local, not pushed) | `upstream-app-paths`, `feat-app-paths` | `pr/app-paths/01-core` `57d4d988` on `d96fc35c` | — |
 | Apps told they are about to terminate (2026-11-09, local, not pushed) | `upstream-will-terminate`, `feat-will-terminate` | `pr/will-terminate/01-core` `9c161b64` on `27fecbbe` | — |
 | The layout direction of the language `setLocale` sets (2026-11-09, local, not pushed) | `upstream-locale-direction`, `feat-locale-direction` | `pr/locale-direction/01-core` `17939c72` on `87c7e8da` | — |
+| Whether the user asked for more contrast (2026-11-09, local, not pushed) | `upstream-high-contrast`, `feat-high-contrast` | `pr/high-contrast/01-core` `5ba39998` on `84b2cf91` | — |
 
 Superseded: `upstream-web-open-url` (upstream #892 fixed it; the fork's own dXnSix/nsh#113 is closed). The
 `fork-0.4.0-1` sync fixes (dXnSix/nsh#154–#157, checked 2026-11-07 against `c015f2c5e`) are records only:
