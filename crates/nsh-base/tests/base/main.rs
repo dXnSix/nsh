@@ -14,6 +14,7 @@ mod command;
 mod data_table;
 mod date_picker;
 mod diff;
+mod diff_roles;
 mod dock;
 mod editor;
 mod editor_completion;

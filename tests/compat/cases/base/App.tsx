@@ -58,6 +58,7 @@ import BaseToken from "./base-token";
 import BaseSetTheme from "./base-set-theme";
 import BaseUpdateTheme from "./base-update-theme";
 import BaseStatusRoles from "./base-status-roles";
+import BaseDiffRoles from "./base-diff-roles";
 import BaseTransitionShader from "./base-transition-shader";
 
 const cases: Record<string, () => JSX.Element> = {
@@ -116,6 +117,7 @@ const cases: Record<string, () => JSX.Element> = {
   "base-set-theme": BaseSetTheme,
   "base-update-theme": BaseUpdateTheme,
   "base-status-roles": BaseStatusRoles,
+  "base-diff-roles": BaseDiffRoles,
   "base-transition-shader": BaseTransitionShader,
 };
 const shown = signal("");

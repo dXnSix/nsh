@@ -309,13 +309,14 @@ and reads the token of that name unless the theme maps it onto another token:
 | `warning` | an `Editor`'s warning diagnostics; a `TextView`'s warning alert (their own ambers without it) |
 | `info` | an `Editor`'s info diagnostics; a `TextView`'s note alert (their own blues without it) |
 | `highlight` | an `Editor`'s search matches; a `TextView`'s marked text (their own yellows without it) |
+| `diff-added`, `diff-deleted` | a `DiffView`'s added and deleted lines: their tints, indicators, changed words and the file list's counts (its own green and red without them) |
 | `radius` | `theme().radius` |
 | `font-sans` | the default font of every text; `theme().font_sans` |
 | `font-mono` | `theme().font_mono` |
 
-`selection`, `success`, `warning`, `info` and `highlight` have no token in the default theme: each part draws its
-own color until the theme has a token of that name (`"warning": "#b45309"` in its `cssVars`) or maps the role onto one
-of its own. The parts draw `highlight` translucent; the token is the solid color.
+`selection`, `success`, `warning`, `info`, `highlight`, `diff-added` and `diff-deleted` have no token in the default
+theme: each part draws its own color until the theme has a token of that name (`"warning": "#b45309"` in its `cssVars`) or maps the role onto one
+of its own. The parts draw `highlight` and a diff's tints translucent; the token is the solid color.
 
 A role is no token and no class: `bg-primary` is a class when the theme has a token `primary`. In Rust, a role is a
 constant, an `nsh_core::element::Role`: the ones above are in `nsh_base::role` (`role::POPOVER.name()` is

@@ -3569,6 +3569,24 @@ style text:"✓" color #1a7f37ff
 style text:"!" color #9a6700ff
 covers [nsh] setTheme
 
+# base-diff-roles
+# The diff roles of nsh/base: a DiffView's signs in the view's own green
+# and red while the theme has no `diff-added` and `diff-deleted`.
+tap id:case-base-diff-roles
+expect new line
+expect old line
+style text:"+" color #16a34aff
+style text:"−" color #dc2626ff
+# In the theme's once it has them.
+tap id:diff
+style text:"+" color #0f766eff
+style text:"−" color #be123cff
+# Their own again with nsh.json's theme.
+tap id:built
+style text:"+" color #16a34aff
+style text:"−" color #dc2626ff
+covers [nsh] setTheme
+
 # base-resizable
 tap id:case-base-resizable
 # The sidebar starts at its `size`, the main panel takes the rest; the

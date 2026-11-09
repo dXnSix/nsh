@@ -157,6 +157,19 @@ macro_rules! theme {
             ///
             /// Name `highlight`.
             pub const HIGHLIGHT: Role = Role::new("highlight");
+            /// A diff's added lines: a `DiffView`'s row tint, indicators,
+            /// changed words and file counts. No token of the default
+            /// theme: the view draws its own green when the theme has
+            /// none. The view draws the tints translucent; the token is
+            /// the solid color.
+            ///
+            /// Name `diff-added`.
+            pub const DIFF_ADDED: Role = Role::new("diff-added");
+            /// A diff's deleted lines, as [`DIFF_ADDED`] its added ones:
+            /// the view draws its own red when the theme has none.
+            ///
+            /// Name `diff-deleted`.
+            pub const DIFF_DELETED: Role = Role::new("diff-deleted");
         }
 
         /// A theme: shadcn/ui's tokens, each a field, and the app's own
