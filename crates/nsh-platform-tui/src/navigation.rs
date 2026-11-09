@@ -22,13 +22,9 @@ pub(crate) struct Modal {
     pub(crate) shown: bool,
 }
 
+/// The newest modal that shows, or the surface (`nsh_core::focus::focus_scope`).
 pub(crate) fn focus_scope(tree: &Mounter) -> NodeId {
-    tree.modals
-        .iter()
-        .rev()
-        .copied()
-        .find(|&id| modal_visible(tree, id))
-        .unwrap_or(ROOT_ID)
+    nsh_core::focus::focus_scope(&tree.modals, |id| modal_visible(tree, id))
 }
 
 pub(crate) fn modal_visible(tree: &Mounter, id: NodeId) -> bool {
