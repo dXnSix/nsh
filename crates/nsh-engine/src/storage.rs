@@ -24,7 +24,14 @@ pub struct FileStorage {
     /// The file could not be read: changes stay in memory, never replacing
     /// what it holds.
     in_memory: std::sync::atomic::AtomicBool,
-    writer: Mutex<Option<(Sender<StorageChange>, JoinHandle<()>)>>,
+    writer: Mutex<Option<(Sender<Job>, JoinHandle<()>)>>,
+}
+
+/// What the writer thread is handed: a change to keep, or a flush to
+/// answer once what came before it is written.
+enum Job {
+    Change(StorageChange),
+    Flush(Sender<()>),
 }
 
 impl FileStorage {
@@ -165,16 +172,27 @@ fn apply(entries: &mut BTreeMap<String, String>, change: StorageChange) {
     }
 }
 
-/// Applies the changes as they come, writing the file once per burst.
-fn run_writer(path: PathBuf, changes: Receiver<StorageChange>) {
+/// Applies the changes as they come, writing the file once per burst, and
+/// answers the flushes of a burst after its write.
+fn run_writer(path: PathBuf, jobs: Receiver<Job>) {
     let mut entries = read(&path).unwrap_or_default();
-    while let Ok(change) = changes.recv() {
-        apply(&mut entries, change);
-        changes
-            .try_iter()
-            .for_each(|change| apply(&mut entries, change));
-        if let Err(e) = write(&path, &entries) {
+    while let Ok(job) = jobs.recv() {
+        let mut changed = false;
+        let mut flushes = Vec::new();
+        for job in std::iter::once(job).chain(jobs.try_iter()) {
+            match job {
+                Job::Change(change) => {
+                    apply(&mut entries, change);
+                    changed = true;
+                }
+                Job::Flush(done) => flushes.push(done),
+            }
+        }
+        if changed && let Err(e) = write(&path, &entries) {
             log::error!(target: "js", "the app's storage could not be written to {}: {e}", path.display());
+        }
+        for done in flushes {
+            let _ = done.send(());
         }
     }
 }
@@ -219,7 +237,21 @@ impl StorageBackend for FileStorage {
             (tx, thread)
         });
         // The writer only stops when this is dropped.
-        let _ = changes.send(change);
+        let _ = changes.send(Job::Change(change));
+    }
+
+    /// Waits for the writer to write the changes handed to it so far.
+    fn flush(&self) {
+        let (done, written) = crossbeam_channel::bounded(1);
+        {
+            let writer = self.writer.lock().unwrap_or_else(|e| e.into_inner());
+            // Nothing was written yet, or nothing is written at all.
+            let Some((jobs, _)) = &*writer else { return };
+            if jobs.send(Job::Flush(done)).is_err() {
+                return;
+            }
+        }
+        let _ = written.recv();
     }
 }
 
@@ -272,6 +304,27 @@ mod tests {
         again.write(StorageChange::Clear);
         drop(again);
         assert!(FileStorage::open(&dir).load().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_flush_returns_once_the_changes_handed_over_are_in_the_file() {
+        let dir = scratch("flush");
+        let storage = FileStorage::open(&dir);
+        // Nothing handed over yet: nothing to wait for.
+        storage.flush();
+        assert!(!storage.path().exists());
+        for i in 0..100 {
+            storage.write(StorageChange::Set(format!("k{i}"), i.to_string()));
+        }
+        storage.write(StorageChange::Remove("k0".into()));
+        storage.flush();
+        // Read from the file while the storage is still open: its drop,
+        // which also waits for the writer, has not run.
+        let written = read(storage.path()).unwrap();
+        assert_eq!(written.len(), 99);
+        assert_eq!(written.get("k99").map(String::as_str), Some("99"));
+        drop(storage);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

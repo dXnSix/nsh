@@ -63,6 +63,7 @@ mod split;
 mod storage;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod system;
+mod terminate;
 mod test_ui;
 mod theme;
 mod url_scheme;

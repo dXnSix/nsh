@@ -1,7 +1,7 @@
 //! The runtime's modules written in Rust: `nsh/android`'s `BackHandler`,
 //! `nsh/accessibility`'s commands, `nsh/device`'s `openUrl`, `nsh`'s
 //! `Image` and `WebView` functions, all of `nsh/clipboard`, `nsh/picker`, `nsh`'s
-//! `Speech`, `UrlScheme`, `setFpsEnabled` and `nsh/storage`,
+//! `Speech`, `UrlScheme`, `Lifecycle`, `setFpsEnabled` and `nsh/storage`,
 //! `nsh/desktop`'s `Application`, the surface-independent `os` metadata,
 //! `net`'s sockets, `websocket`'s connections, `fs/promises`' files and
 //! `nsh/host`'s calls. Their JS face is made
@@ -24,6 +24,7 @@ mod fps;
 mod fs;
 mod host;
 mod image;
+mod lifecycle;
 mod net;
 mod notifications;
 mod os;
@@ -66,6 +67,7 @@ pub fn registries() -> &'static [Registry] {
             .class::<audio::AudioPlayer>()
             .module::<notifications::Notifications>()
             .module::<url_scheme::UrlScheme>()
+            .module::<lifecycle::Lifecycle>()
             .module::<webview::WebView>()
             .module::<storage::Storage>()
             .module::<host::Host>()

@@ -1124,6 +1124,24 @@ impl<M: TextEngine> Core<M> {
         self.components.executor.next_timer()
     }
 
+    /// The app is about to terminate, the platform says: runs the listeners
+    /// of [`crate::element::on_terminate`] in the order they were added,
+    /// each under its owner, and wakes the tasks waiting for it (JS's
+    /// listeners), once; later calls do nothing. What they start (tasks,
+    /// JS calls) runs as the engine runs on.
+    pub fn will_terminate(&mut self) {
+        let _entered = self.components.runtime.enter();
+        let listeners = self.components.executor.terminate.borrow_mut().take();
+        for (owner, listener) in listeners {
+            let result = caught(|| owner.run(listener));
+            self.apply_actions();
+            if let Err(message) = result {
+                log::error!(target: "js", "a terminate listener failed: {message}");
+            }
+        }
+        self.flush_component_emits();
+    }
+
     /// Runs the components' woken tasks, with the state changes they ask
     /// for, until they all wait.
     pub fn run_component_tasks(&mut self) {

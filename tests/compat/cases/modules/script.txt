@@ -135,6 +135,14 @@ expect Listener: listening
 tap id:stop-links
 expect Listener: stopped
 covers [nsh] UrlScheme
+# mod-lifecycle
+tap id:case-mod-lifecycle
+# the app runs on: no terminate came, and the listener stops.
+expect Terminated: no
+expect Terminate listener: listening
+tap id:stop-terminate
+expect Terminate listener: stopped
+covers [nsh] Lifecycle
 # mod-updater
 tap id:case-mod-updater
 # no packaged app: no package runs, none is offered, there is nothing to

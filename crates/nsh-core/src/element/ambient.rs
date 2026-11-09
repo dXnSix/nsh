@@ -343,6 +343,29 @@ pub fn lifecycle() -> Lifecycle {
     env(|e| e.lifecycle)
 }
 
+/// Runs `f` once when the app is about to terminate, while the current
+/// owner lives (TS: `Lifecycle.on("terminate", f)`): the last chance to
+/// save what the user has not saved, synchronously (`Storage`, a file
+/// written with `std::fs`). The listeners run on the engine's thread in
+/// the order they were added, the app's tasks and JS calls they start run
+/// after them, then the app's storage is written out, while the platform
+/// waits a few seconds at most before the process ends. The system does not
+/// always say it ends an app (one suspended in the background is ended
+/// without a word), so save on [`Lifecycle::Background`] as well. Where
+/// each platform says it: `website/docs/device-and-environment.md`.
+pub fn on_terminate(f: impl FnOnce() + 'static) {
+    let owner = Owner::current();
+    let listeners = executor().terminate.clone();
+    let id = listeners.borrow_mut().add(owner, Box::new(f));
+    let weak = Rc::downgrade(&listeners);
+    cleanup(move || {
+        if let Some(listeners) = weak.upgrade() {
+            let removed = listeners.borrow_mut().remove(id);
+            drop(removed);
+        }
+    });
+}
+
 /// The operating system (TS: `platform.os`); it does not change.
 pub fn os() -> Os {
     with_data(|d| d.ambient.env.as_ref().map(|e| e.env))

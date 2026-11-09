@@ -335,7 +335,11 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   `inactive`, stopped `background`, through one `ActivityLifecycleCallbacks` per application, registered by the first
   view attached and kept, which remembers each activity's last state: a view attached again starts from it). The change reaches JS through the engine's thread, and iOS may suspend the
   process seconds after `didEnterBackground` (Android's `onStop` is looser): `background` is for pausing work, and
-  the user-facing docs say to save as changes are made. `padding-bottom: env(keyboard-inset-height)` pads a view by the keyboard's height, animated with the keyboard
+  the user-facing docs say to save as changes are made. The app's end is no state: `on_terminate` (TS
+  `Lifecycle.on("terminate")`) listeners run once when the platform calls `EngineControl::will_terminate` (it waits
+  for them, `will_terminate_and_wait`, `TERMINATE_TIMEOUT` at most), on the engine's thread, then the tasks and JS
+  calls they started (a flush) and `StorageBackend::flush`; `lifecycle()` keeps its three values, which existing
+  `match`es and comparisons rely on. `padding-bottom: env(keyboard-inset-height)` pads a view by the keyboard's height, animated with the keyboard
   natively, for content outside scroll views (message bars). Inputs inside a scroll view are kept clear of the keyboard natively (bottom inset + scroll to the
   focused input), with no JS involved.
   Both move as one with the keyboard: `LayoutCurve::Keyboard` (`type: "keyboard"`) is the system keyboard's own curve,

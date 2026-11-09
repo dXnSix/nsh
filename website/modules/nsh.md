@@ -1038,6 +1038,30 @@ effect(() => {
 });
 ```
 
+### Lifecycle.on
+
+```ts
+const Lifecycle: {
+  on(event: "terminate", listener: () => void): () => void;
+};
+```
+
+`terminate` comes once, as the app is about to terminate: the last chance to save what the user has not saved yet. The listeners run synchronously, in the order they were added, while the platform waits for them (two seconds at most) before the process ends. What they start and settles at once runs before the app ends too, `Storage`'s calls included, which reach the device first. `on` returns a function that stops listening; a listener added while a component renders stops with it. Rust: `on_terminate(f)`, a closure that runs once, under the owner that added it.
+
+```rust tabs
+on_terminate(move || {
+    let _ = Storage::set_item("draft", draft.get_untracked());
+});
+```
+
+```tsx tabs
+Lifecycle.on("terminate", () => {
+  Storage.setItem("draft", draft());
+});
+```
+
+`terminate` is the last save, not the only one: the system ends an app it suspended in the background together with its process, so save as the user changes things, or when `lifecycle()` turns `"background"`. When each platform says it: [When the app terminates](../docs/device-and-environment.md#when-the-app-terminates).
+
 ### setColorScheme
 
 ```ts

@@ -23,6 +23,7 @@ In Rust the accessors are functions of `nsh_core::prelude`; in TSX they come fro
 | `locale()` | `locale()` (`nsh`) | The user's locale as a BCP 47 tag (`"en-US"`, `"zh-Hans-CN"`): what `Intl` formats for by default. |
 | `locale_settings()` | `localeSettings()` (`nsh`) | The user's locale settings: the preferred languages, the time zone, 12- or 24-hour time, the day weeks start on, the units of measurements and of temperatures ([Locale settings](#locale-settings)). |
 | `lifecycle()` | `lifecycle()` (`nsh`) | Whether the app is in use: `active`, `inactive` (visible without the focus) or `background` ([In the background](#in-the-background)). |
+| `on_terminate(f)` | `Lifecycle.on("terminate", f)` (`nsh`) | Runs `f` once as the app is about to terminate ([When the app terminates](#when-the-app-terminates)). |
 | `reduce_motion()`, `screen_reader()` | `reduceMotion()`, `screenReaderEnabled()` (`nsh`) | See [Accessibility](./accessibility.md). |
 
 ```rust tabs
@@ -378,6 +379,37 @@ effect(() => {
 ```
 
 Use `background` to pause work, and save what the user changes as they change it: the system may suspend an app seconds after it moves to the background, before an effect that reads the change has run. An app shown inside a native app follows that app's state, and where an app has several windows (an iPad, a desktop) a view follows the window it is in. In tests, `app.setLifecycle("background")` of `nsh/test` moves the app there ([Testing](./testing-and-trace.md#steps)).
+
+### When the app terminates
+
+`on_terminate(f)` (TSX: `Lifecycle.on("terminate", f)` of `nsh`) runs `f` once, as the app is about to terminate: the last chance to write what the user has not saved yet. The listeners run on the engine's thread in the order they were added, then what they started (their tasks, their promises that settle at once), then the app's storage is written to the device, while the platform waits, two seconds at most:
+
+```rust tabs
+on_terminate(move || {
+    let _ = Storage::set_item("draft", draft.get_untracked());
+});
+```
+
+```tsx tabs
+Lifecycle.on("terminate", () => {
+  Storage.setItem("draft", draft());
+});
+```
+
+Each platform says it when the system or the user ends the app:
+
+| Platform | `terminate` comes when |
+|---|---|
+| macOS | The app quits (Quit, `Application.quit()`, the user logging out or shutting the Mac down) or its window closes. An app shown inside a native app hears that app's end (`NSApplicationWillTerminateNotification`). |
+| iOS, Mac Catalyst | The system terminates the app while it runs in the background (`UIApplication.willTerminateNotification`), or the scene of the app's window disconnects: its window closed on an iPad or under Catalyst, or the scene released by the system. |
+| Android | The activity showing the app finishes: the user leaves its last screen with the back button, or the app or the system finishes it (the activity pausing, stopping or destroyed while `isFinishing()`). |
+| Windows | The window the app runs in closes (the app quits after its last one), or Windows ends the session: the user signs out, Windows shuts down or restarts (`WM_ENDSESSION`, which an app inside a native app hears through that app's window). |
+| Linux | The app's window closes, the app quits (Ctrl+Q, `Application.quit()`), or its `GApplication` shuts down: the embedding app's, for an app inside a native app. |
+| Web | The page goes for good: the tab closes, or another page or a reload replaces it (`pagehide`, unless the browser keeps the page in its back-forward cache). |
+| GPUI | The GPUI app quits (`on_app_quit`), or the window the app's view owns closes. |
+| Terminal | The app exits: Ctrl+C, `Application.quit()`, the terminal closing, or `SIGTERM`. |
+
+`terminate` is the last save, not the only one. The system ends an app it suspended in the background together with its process (iOS and Android do so to free memory, phone browsers discard hidden tabs), and that end comes without a word. Save as the user changes things, or when `lifecycle()` turns `background`, and use `terminate` for what is left. Rust tests of an engine play the system's end with `EngineControl::will_terminate` (or `LocalEngine::will_terminate`).
 
 ## Safe areas
 

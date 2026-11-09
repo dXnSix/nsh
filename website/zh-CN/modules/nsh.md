@@ -1002,6 +1002,30 @@ effect(() => {
 });
 ```
 
+### Lifecycle.on
+
+```ts
+const Lifecycle: {
+  on(event: "terminate", listener: () => void): () => void;
+};
+```
+
+`terminate` 在应用即将终止时到来，只有一次：这是保存用户尚未保存内容的最后机会。监听器按添加顺序同步运行，平台会等待它们（最多两秒）再结束进程。它们启动且立即完成的工作也会在应用结束前运行，包括 `Storage` 的调用，这些调用会先写入设备。`on` 返回一个停止监听的函数；组件渲染时添加的监听器随组件一起停止。Rust：`on_terminate(f)`，一个只运行一次的闭包，在添加它的 owner 下运行。
+
+```rust tabs
+on_terminate(move || {
+    let _ = Storage::set_item("draft", draft.get_untracked());
+});
+```
+
+```tsx tabs
+Lifecycle.on("terminate", () => {
+  Storage.setItem("draft", draft());
+});
+```
+
+`terminate` 是最后一次保存，而不是唯一一次：系统结束它在后台挂起的应用时会连同进程一起结束，因此请在用户做出更改时保存，或在 `lifecycle()` 变为 `"background"` 时保存。各平台何时发出它：[应用终止时](../docs/device-and-environment.md#应用终止时)。
+
 ### setColorScheme
 
 ```ts
