@@ -1,7 +1,7 @@
 //! Keyboard focus uses the same projected geometry as drawing and pointer input.
 //!
-//! The decisions are `nsh_core::focus`'s, over the Cells of the last frame
-//! in points (`points`): the stops of the focus scope, the arrows' moves,
+//! The decisions are `nsh_core::focus`'s, over the Cells of the last frame,
+//! one point each (`points`): the stops of the focus scope, the arrows' moves,
 //! the layers a backdrop takes out of reach, reveal deltas and the focus a
 //! modal or a layer gives back. This module applies them to the mount.
 
@@ -15,9 +15,7 @@ use nsh_core::{
 use nsh_engine::EngineControl;
 use ratatui_core::layout::Position;
 
-use crate::{
-    CellSize, Handled, geometry::CellBounds, key_scheme::Action, mount::Mounter, render::Geometry,
-};
+use crate::{Handled, geometry::CellBounds, key_scheme::Action, mount::Mounter, render::Geometry};
 
 /// A link of a text that is a stop of Tab (`TextLink::focus_stop`): no
 /// view of its own, it stands after its text `view` in the focus order,
@@ -78,44 +76,24 @@ impl std::ops::Deref for Stop<'_> {
     }
 }
 
-/// Cells `bounds` in the surface's points, by the size of a Cell: each
-/// edge is its Cell's, so the frame's right and bottom edges (its origin
-/// plus its size, as the core finds them) are the next Cell's left and
-/// top, and frames touch, overlap and come in order as their Cells do.
-fn points(bounds: CellBounds, cells: CellSize) -> Bounds<Points> {
-    let (x, width) = span(bounds.left, bounds.right, cells.width());
-    let (y, height) = span(bounds.top, bounds.bottom, cells.height());
-    Bounds::new(Point::new(x, y), Size::new(width, height))
-}
-
-/// The start of Cells `start` .. `end`, each `cell` long, and the length
-/// that ends them exactly at `end`'s start.
-fn span(start: i32, end: i32, cell: Points) -> (Points, Points) {
-    let (start, end) = (cell.0 * start as f32, cell.0 * end as f32);
-    let mut len = end - start;
-    // The sum rounds: a length a step longer or shorter ends it there.
-    for _ in 0..4 {
-        let sum = start + len;
-        if sum == end {
-            break;
-        }
-        len = if sum < end {
-            len.next_up()
-        } else {
-            len.next_down()
-        };
-    }
-    (Points(start), Points(len))
+/// Cells `bounds` as the core's frame, each Cell one point: every edge is
+/// exact (up to 2^24 Cells), so frames touch, overlap and come in order as
+/// their Cells do, and nearest means nearest in Cells, as it always has in
+/// the terminal. The core's rules compare edges and distances and take no
+/// length in points, so the Cell's size in points has no part in them.
+fn points(bounds: CellBounds) -> Bounds<Points> {
+    Bounds::new(
+        Point::new(Points(bounds.left as f32), Points(bounds.top as f32)),
+        Size::new(
+            Points((bounds.right - bounds.left) as f32),
+            Points((bounds.bottom - bounds.top) as f32),
+        ),
+    )
 }
 
 /// The core's candidate for `g` when it can be a stop of `scope`: what
 /// takes walks of the tree (its layer, a popup around it) only then.
-fn candidate<'a>(
-    cells: CellSize,
-    tree: &Mounter,
-    g: &'a Geometry,
-    scope: NodeId,
-) -> Option<Stop<'a>> {
+fn candidate<'a>(tree: &Mounter, g: &'a Geometry, scope: NodeId) -> Option<Stop<'a>> {
     let mut node = Candidate::default();
     node.id = g.id;
     if let Some(span) = tree.spans.get(&g.id) {
@@ -137,7 +115,7 @@ fn candidate<'a>(
     if node.scope != scope || !node.stop {
         return None;
     }
-    node.frame = points(g.bounds, cells);
+    node.frame = points(g.bounds);
     node.visible = !g.visible.is_empty();
     node.order = order(tree, g.id);
     node.layer = layer(tree, g.id);
@@ -147,7 +125,7 @@ fn candidate<'a>(
 
 /// The children of `scope`'s view (the surface, or a modal) as the core's
 /// layers, the page first.
-fn layers(cells: CellSize, tree: &Mounter, geometry: &[Geometry], scope: NodeId) -> Vec<Layer> {
+fn layers(tree: &Mounter, geometry: &[Geometry], scope: NodeId) -> Vec<Layer> {
     let Some(root) = tree.get(scope) else {
         return Vec::new();
     };
@@ -159,7 +137,7 @@ fn layers(cells: CellSize, tree: &Mounter, geometry: &[Geometry], scope: NodeId)
             layer.frame = geometry
                 .iter()
                 .find(|g| g.id == id && !g.visible.is_empty())
-                .map(|g| points(g.bounds, cells));
+                .map(|g| points(g.bounds));
             if let Some(view) = tree.get(id) {
                 layer.order = view.tree_order;
                 layer.takes_presses = has_press(view.events)
@@ -174,9 +152,6 @@ fn layers(cells: CellSize, tree: &Mounter, geometry: &[Geometry], scope: NodeId)
 #[derive(Default)]
 pub(crate) struct Keyboard {
     pub(crate) focused: Option<NodeId>,
-    /// The size of a Cell, which the frames given to `nsh_core::focus` are
-    /// in.
-    cells: CellSize,
     /// The text of the last search match outside any control; traversal continues from it.
     pub(crate) search_point: Option<NodeId>,
     /// The control the focus last left for none (Escape out of a field):
@@ -223,30 +198,18 @@ fn layer(tree: &Mounter, id: NodeId) -> Option<NodeId> {
 /// The covering layer (`focus::covering_layer`) over `id`'s layer in its
 /// root view, if any: the root view's child above `id`'s that takes it out
 /// of reach.
-fn covering_root(
-    cells: CellSize,
-    tree: &Mounter,
-    geometry: &[Geometry],
-    id: NodeId,
-) -> Option<NodeId> {
+fn covering_root(tree: &Mounter, geometry: &[Geometry], id: NodeId) -> Option<NodeId> {
     let own = layer(tree, id)?;
     let scope = tree.get(own)?.parent?;
-    focus::covered_by(&layers(cells, tree, geometry, scope), own)
+    focus::covered_by(&layers(tree, geometry, scope), own)
 }
 
 /// The stops of `scope` in focus order (`focus::candidates`).
-fn candidates_in<'a>(
-    cells: CellSize,
-    tree: &Mounter,
-    geometry: &'a [Geometry],
-    scope: NodeId,
-) -> Vec<Stop<'a>> {
+fn candidates_in<'a>(tree: &Mounter, geometry: &'a [Geometry], scope: NodeId) -> Vec<Stop<'a>> {
     focus::candidates(
-        geometry
-            .iter()
-            .filter_map(|g| candidate(cells, tree, g, scope)),
+        geometry.iter().filter_map(|g| candidate(tree, g, scope)),
         scope,
-        &layers(cells, tree, geometry, scope),
+        &layers(tree, geometry, scope),
     )
 }
 
@@ -336,25 +299,12 @@ pub(crate) fn contains(tree: &Mounter, ancestor: NodeId, mut id: NodeId) -> bool
 }
 
 impl Keyboard {
-    /// The keyboard of a surface whose Cells are `cells` big.
-    pub(crate) fn new(cells: CellSize) -> Self {
-        Self {
-            cells,
-            ..Default::default()
-        }
-    }
-
     /// The stops of the focus scope in focus order. A backdrop over the
     /// page (a sheet's, a dialog's) takes what is under it out of reach:
     /// Tab stays in the layers above it, as in a modal, and enters them
     /// first.
     pub(crate) fn candidates<'a>(&self, tree: &Mounter, geometry: &'a [Geometry]) -> Vec<Stop<'a>> {
-        candidates_in(
-            self.cells,
-            tree,
-            geometry,
-            crate::navigation::focus_scope(tree),
-        )
+        candidates_in(tree, geometry, crate::navigation::focus_scope(tree))
     }
 
     pub(crate) fn focus(
@@ -553,19 +503,14 @@ impl Keyboard {
             .copied()
             .filter(|&id| crate::navigation::modal_visible(tree, id))
             .collect();
-        let cells = self.cells;
         let moves = {
             let tree = &*tree;
             self.modals.update(
                 &active,
                 self.focused,
-                |modal| {
-                    candidates_in(cells, tree, geometry, modal)
-                        .first()
-                        .map(|g| g.id)
-                },
+                |modal| candidates_in(tree, geometry, modal).first().map(|g| g.id),
                 |scope, id| {
-                    candidates_in(cells, tree, geometry, scope)
+                    candidates_in(tree, geometry, scope)
                         .iter()
                         .any(|g| g.id == id && !g.visible.is_empty())
                 },
@@ -597,7 +542,7 @@ impl Keyboard {
             // into that layer or Escape closed it first.
             if restored.is_none()
                 && contains(tree, ROOT_ID, focused)
-                && let Some(cover) = covering_root(cells, tree, geometry, focused)
+                && let Some(cover) = covering_root(tree, geometry, focused)
             {
                 self.layers.entered(cover, focused);
             }
@@ -614,9 +559,7 @@ impl Keyboard {
             let tree = &*tree;
             self.modals.first_stop(self.focused, || {
                 let scope = crate::navigation::focus_scope(tree);
-                candidates_in(cells, tree, geometry, scope)
-                    .first()
-                    .map(|g| g.id)
+                candidates_in(tree, geometry, scope).first().map(|g| g.id)
             })
         };
         if let Some(id) = first {
