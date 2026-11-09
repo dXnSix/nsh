@@ -1015,6 +1015,22 @@ extern "system" fn Java_com_longbridge_nsh_Native_destroy(
     drop(host.engine.lock().expect("engine").take());
 }
 
+/// The app is about to terminate (its activity finishes): its terminate
+/// listeners run while the UI thread waits, [`nsh_engine::TERMINATE_TIMEOUT`]
+/// at most.
+#[unsafe(no_mangle)]
+extern "system" fn Java_com_longbridge_nsh_Native_willTerminate(
+    _: JNIEnv<'_>,
+    _: JClass<'_>,
+    handle: jlong,
+) {
+    // SAFETY: Java passes its live handle.
+    let host = unsafe { host(handle) };
+    if let Some(control) = host.control() {
+        control.will_terminate_and_wait(nsh_engine::TERMINATE_TIMEOUT);
+    }
+}
+
 #[unsafe(no_mangle)]
 extern "system" fn Java_com_longbridge_nsh_Native_load(
     mut env: JNIEnv<'_>,
