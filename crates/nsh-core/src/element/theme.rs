@@ -51,7 +51,7 @@ pub trait AppTheme: Clone + PartialEq + Default + 'static {
     }
 }
 
-/// One token of a theme type: its name, kind, doc and the role it plays.
+/// One token of a theme type: its name, kind, doc and the roles it plays.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenSpec {
     /// Its name (`surface-raised`, `radius-card`).
@@ -60,8 +60,10 @@ pub struct TokenSpec {
     pub kind: TokenKind,
     /// Its doc comment (the field's), for the toolchain's declarations.
     pub doc: &'static str,
-    /// The role it plays (`Role::Popover`), if any.
-    pub role: Option<Role>,
+    /// The roles it plays (`Role::Popover`), if any. A design system with
+    /// one surface for cards and popovers has one token play both, so both
+    /// follow every change of it; a role is played by one token.
+    pub roles: Vec<Role>,
 }
 
 impl TokenSpec {
@@ -71,7 +73,7 @@ impl TokenSpec {
             name: name.into(),
             kind,
             doc: "",
-            role: None,
+            roles: Vec::new(),
         }
     }
 
@@ -81,9 +83,11 @@ impl TokenSpec {
         self
     }
 
-    /// Playing `role`.
+    /// Playing `role`, beside the roles it plays already.
     pub fn role(mut self, role: Role) -> Self {
-        self.role = Some(role);
+        if !self.roles.contains(&role) {
+            self.roles.push(role);
+        }
         self
     }
 }
@@ -223,7 +227,7 @@ impl std::fmt::Debug for ThemeSpec {
 fn roles_of(specs: &[TokenSpec]) -> Vec<(Role, Box<str>)> {
     specs
         .iter()
-        .filter_map(|s| Some((s.role?, s.name.as_ref().into())))
+        .flat_map(|s| s.roles.iter().map(|role| (*role, s.name.as_ref().into())))
         .collect()
 }
 
@@ -252,7 +256,7 @@ impl ThemeSet {
             let tokens = spec
                 .token_specs()
                 .iter()
-                .map(|s| (s.name.as_ref(), s.kind, s.role));
+                .map(|s| (s.name.as_ref(), s.kind, s.roles.as_slice()));
             if let Err(e) = set.try_add(spec.type_name(), tokens, spec.defaults()) {
                 panic!("{e}");
             }
@@ -268,13 +272,14 @@ impl ThemeSet {
         }
     }
 
-    /// Adds type `type_name`'s tokens (name, kind, role) and `defaults`
+    /// Adds type `type_name`'s tokens (name, kind, roles) and `defaults`
     /// (whose roles are set from the tokens'). A type already added is
-    /// skipped. `Err`: a name or a role another type claims, naming both.
+    /// skipped. `Err`: a name or a role another type claims, naming both,
+    /// or a role two of its tokens play.
     pub(crate) fn try_add<'a>(
         &mut self,
         type_name: &str,
-        tokens: impl IntoIterator<Item = (&'a str, TokenKind, Option<Role>)>,
+        tokens: impl IntoIterator<Item = (&'a str, TokenKind, &'a [Role])>,
         defaults: Tokens,
     ) -> Result<(), String> {
         if self.types.iter().any(|t| **t == *type_name) {
@@ -282,7 +287,7 @@ impl ThemeSet {
         }
         let tokens: Vec<_> = tokens.into_iter().collect();
         let mut roles = Vec::new();
-        for (i, (name, kind, role)) in tokens.iter().enumerate() {
+        for (i, (name, kind, plays)) in tokens.iter().enumerate() {
             // A theme file's value is read by the name's form: the name
             // says what its kind is, as a CSS variable's does.
             let read_as = |prefix: &str| name.starts_with(prefix);
@@ -305,20 +310,22 @@ impl ThemeSet {
                     "`{type_name}` declares the theme token `{name}` twice"
                 ));
             }
-            if let Some(role) = role
-                && tokens[..i].iter().any(|(_, _, r)| r == &Some(*role))
-            {
-                return Err(format!(
-                    "`{type_name}` maps the role `{}` twice",
-                    role.name()
-                ));
-            }
             if let Some((owner, _)) = self.names.get(*name) {
                 return Err(format!(
                     "the theme token `{name}` is declared by both `{owner}` and `{type_name}`"
                 ));
             }
-            if let Some(role) = role {
+            // A token may play several roles; a role is played by one token.
+            for (j, role) in plays.iter().enumerate() {
+                if plays[..j].contains(role) {
+                    continue;
+                }
+                if tokens[..i].iter().any(|(_, _, r)| r.contains(role)) {
+                    return Err(format!(
+                        "`{type_name}` maps the role `{}` twice",
+                        role.name()
+                    ));
+                }
                 if let Some(owner) = self.role_owner(*role) {
                     return Err(format!(
                         "the role `{}` is mapped by both `{owner}` and `{type_name}`",

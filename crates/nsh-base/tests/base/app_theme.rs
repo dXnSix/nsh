@@ -38,8 +38,8 @@ fn theme_is_shadcns_tokens_each_playing_its_role() {
     assert_eq!(specs.len(), 34);
     for spec in specs {
         assert_eq!(
-            spec.role.map(Role::name),
-            Some(&*spec.name),
+            spec.roles.iter().map(|r| r.name()).collect::<Vec<_>>(),
+            [&*spec.name],
             "{}",
             spec.name
         );

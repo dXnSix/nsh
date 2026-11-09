@@ -714,7 +714,8 @@ reset_theme::<DsTheme>(); // 恢复应用的 action
 **角色。** NSH 自己的部分用角色绘制（`Role`：`popover`、`primary`、`border`、`radius`、`font-sans` 等；
 [主题角色](../modules/nsh-base.md#theme-roles)）。类型用 `TokenSpec::role` 把角色映射到自己的令牌上，于是 `nsh_base` 的 `theme()`
 字段和组件、标签栏、各平台的菜单和提示框，以及默认字体，都用该类型的令牌绘制：上例中 `theme().popover` 是设计系统的
-`surface-overlay`，`theme().primary` 是它的 `action`。
+`surface-overlay`，`theme().primary` 是它的 `action`。一个令牌可以担任多个角色（`.role(Role::Card).role(Role::Popover)`）：
+卡片和弹出层共用一个表面的设计系统把两个角色都映射到它上面，它每次变化两者都会跟随。一个角色只由一个令牌担任。
 
 **名称。** 令牌的名称说明它的类型，就像 CSS 变量的名称一样：字体的名称以 `font-` 开头，阴影的以 `shadow-` 开头，字重的以 `font-weight-` 开头，其他类型的名称都不以 `font-` 开头。注册一个名称与类型不符、或重复声明同一名称或重复映射同一角色的类型会 panic。
 
@@ -725,7 +726,7 @@ reset_theme::<DsTheme>(); // 恢复应用的 action
 **主题文件。** `nsh.json` 的 `"theme"` 保持 shadcn 的 `cssVars` 格式，按名称设置各类型的令牌，每个值按其声明的种类读取（颜色按
 CSS 颜色，圆角按长度）。角色的名称设置该角色所映射的令牌：下例中的 `"primary"` 设置设计系统的 `action`。`var(--surface-raised)`
 指文件设置的令牌，文件没有设置时指类型的默认值。没有类型声明的名称，或种类不符的值，会产生构建警告，并在应用运行时被略去。
-在同时设置了某个角色所映射令牌的部分中，以该角色名称为键的值让位于那个令牌。嵌入应用的主题覆盖以及 TSX 的 `setTheme` 和 `updateTheme` 也以同样的方式读取它们的文件：它们略过没有任何类型声明的名称，并拒绝读不懂的值。
+在同时设置了某个角色所映射令牌的部分中，以该角色名称为键的值让位于那个令牌；两个角色的名称把同一个令牌设为两个不同的值时，第二个同样让位。嵌入应用的主题覆盖以及 TSX 的 `setTheme` 和 `updateTheme` 也以同样的方式读取它们的文件：它们略过没有任何类型声明的名称，并拒绝读不懂的值。
 
 ```json
 {

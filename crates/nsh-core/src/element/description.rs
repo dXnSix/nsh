@@ -135,8 +135,8 @@ pub struct ThemeTokenDescription {
     pub kind: String,
     /// Its doc comment.
     pub doc: String,
-    /// The role it plays ([`super::Role::name`]), if any.
-    pub role: Option<String>,
+    /// The roles it plays ([`super::Role::name`]), if any.
+    pub roles: Vec<String>,
 }
 
 /// The theme types `sets` describe, merged as [`Registry::merged`] merges
@@ -154,16 +154,23 @@ pub fn theme_types(sets: &[SetDescription]) -> Result<Option<ThemeTypes>, String
                     theme.type_name, t.name, t.kind
                 )
             })?;
-            let role = match &t.role {
-                Some(r) => Some(super::Role::from_name(r).ok_or_else(|| {
-                    format!("{}: `{}`: unknown role {r:?}", theme.type_name, t.name)
-                })?),
-                None => None,
-            };
-            kinds.push((t.name.as_str(), kind, role));
+            let roles = t
+                .roles
+                .iter()
+                .map(|r| {
+                    super::Role::from_name(r).ok_or_else(|| {
+                        format!("{}: `{}`: unknown role {r:?}", theme.type_name, t.name)
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            kinds.push((t.name.as_str(), kind, roles));
         }
         let (defaults, _) = super::theme_file::parse(&theme.defaults, &super::Tokens::default())?;
-        set.try_add(&theme.type_name, kinds.iter().copied(), defaults)?;
+        set.try_add(
+            &theme.type_name,
+            kinds.iter().map(|(n, k, r)| (*n, *k, r.as_slice())),
+            defaults,
+        )?;
         for (t, (_, kind, _)) in theme.tokens.iter().zip(&kinds) {
             if !tokens
                 .iter()
@@ -275,7 +282,7 @@ impl SetDescription {
                             name: t.name.to_string(),
                             kind: t.kind.name().to_owned(),
                             doc: t.doc.to_owned(),
-                            role: t.role.map(|r| r.name().to_owned()),
+                            roles: t.roles.iter().map(|r| r.name().to_owned()).collect(),
                         })
                         .collect(),
                     defaults: super::theme_file::write(&spec.defaults()),
@@ -316,7 +323,7 @@ impl SetDescription {
                     "name": k.name,
                     "kind": k.kind,
                     "doc": k.doc,
-                    "role": k.role,
+                    "roles": k.roles,
                 })).collect::<Vec<_>>(),
                 "defaults": t.defaults,
             })).collect::<Vec<_>>(),
@@ -386,7 +393,17 @@ impl SetDescription {
                                 name: string(k, "name", &at)?,
                                 kind: string(k, "kind", &at)?,
                                 doc: string(k, "doc", &at)?,
-                                role: k.get("role").and_then(Value::as_str).map(str::to_owned),
+                                roles: k
+                                    .get("roles")
+                                    .and_then(Value::as_array)
+                                    .map(|roles| {
+                                        roles
+                                            .iter()
+                                            .filter_map(Value::as_str)
+                                            .map(str::to_owned)
+                                            .collect()
+                                    })
+                                    .unwrap_or_default(),
                             })
                         })
                         .collect::<Result<Vec<_>, String>>()?;
@@ -713,7 +730,7 @@ mod theme_description {
         assert_eq!(read, doc);
         let theme = &read.sets[0].themes[0];
         assert!(theme.type_name.ends_with("Ds"));
-        assert_eq!(theme.tokens[0].role.as_deref(), Some("popover"));
+        assert_eq!(theme.tokens[0].roles, ["popover"]);
         assert_eq!(theme.tokens[1].kind, "radius");
         // Format 2 is refused, as every other.
         assert!(Description::from_json(&text.replace("\"format\":3", "\"format\":2")).is_err());
@@ -761,5 +778,115 @@ mod theme_description {
         );
         let err = theme_types(&[set::<Ds>("ds/native"), set::<Clash>("app/native")]).unwrap_err();
         assert!(err.contains("declared by both"), "{err}");
+    }
+}
+
+/// A token playing several roles, as data: the description lists each, the
+/// document carries them, and the toolchain's merge maps every one.
+#[cfg(test)]
+mod token_roles {
+    use super::*;
+    use crate::element::{AdaptiveColor, AppTheme, Role, TokenKind, TokenSpec, Tokens};
+
+    /// One surface for cards and popovers.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Flat;
+
+    impl AppTheme for Flat {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::LazyLock<Vec<TokenSpec>> = std::sync::LazyLock::new(|| {
+                vec![
+                    TokenSpec::new("surface", TokenKind::Color)
+                        .role(Role::Card)
+                        .role(Role::Popover),
+                    TokenSpec::new("ink", TokenKind::Color),
+                ]
+            });
+            &SPECS
+        }
+
+        fn write_tokens(&self, _: &str, out: &mut Tokens) {
+            out.set_color("surface", AdaptiveColor::rgb(0xf5f5f5, 0x171717));
+            out.set_color("ink", AdaptiveColor::rgb(0x111111, 0xeeeeee));
+        }
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Flat
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    /// Plays `popover` too.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Overlay;
+
+    impl AppTheme for Overlay {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::LazyLock<Vec<TokenSpec>> = std::sync::LazyLock::new(|| {
+                vec![TokenSpec::new("overlay", TokenKind::Color).role(Role::Popover)]
+            });
+            &SPECS
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Overlay
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    fn set<T: AppTheme>(specifier: &'static str) -> SetDescription {
+        let mut registry = Registry::ui_set(specifier);
+        registry.theme::<T>();
+        SetDescription::from(&registry)
+    }
+
+    #[test]
+    fn a_tokens_roles_are_listed_and_survive_the_document() {
+        let doc = Description {
+            nsh: VERSION.into(),
+            sets: vec![set::<Flat>("ds/native")],
+        };
+        let tokens = &doc.sets[0].themes[0].tokens;
+        assert_eq!(tokens[0].roles, ["card", "popover"]);
+        assert!(tokens[1].roles.is_empty());
+        let text = doc.to_json();
+        assert!(text.contains(r#""roles":["card","popover"]"#), "{text}");
+        assert_eq!(Description::from_json(&text).unwrap(), doc);
+    }
+
+    #[test]
+    fn the_toolchain_maps_each_role_and_refuses_one_played_twice() {
+        let types = theme_types(&[set::<Flat>("ds/native")]).unwrap().unwrap();
+        let (tokens, left_out) = types
+            .read(Some(
+                r##"{ "cssVars": { "light": { "popover": "#123456" } } }"##,
+            ))
+            .unwrap();
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert_eq!(tokens.role_name(Role::Card), "surface");
+        assert_eq!(tokens.role_name(Role::Popover), "surface");
+        assert_eq!(
+            tokens.color("surface").map(|c| crate::Color::from(c.light)),
+            Some(crate::Color::from(crate::color::rgb(0x123456)))
+        );
+        let err =
+            theme_types(&[set::<Flat>("ds/native"), set::<Overlay>("app/native")]).unwrap_err();
+        assert!(
+            err.contains("the role `popover` is mapped by both"),
+            "{err}"
+        );
+        // A role the document does not know is an error naming it.
+        let mut odd = set::<Flat>("ds/native");
+        odd.themes[0].tokens[0].roles.push("surface-9".into());
+        let err = theme_types(&[odd]).unwrap_err();
+        assert!(err.contains(r#"unknown role "surface-9""#), "{err}");
     }
 }
