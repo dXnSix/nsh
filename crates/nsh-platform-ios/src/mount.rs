@@ -171,13 +171,29 @@ enum Refresh {
 }
 
 /// Lays UIKit's own content of `view` (controls, navigation bars, text
-/// fields) out right to left, or left to right.
+/// fields) out right to left, or left to right: forced so where UIKit's own
+/// direction is right to left ([`uikit_rtl`]), as for an app shown in
+/// English (`setLocale`) inside a host app localized in Arabic.
 pub(crate) fn mirror(view: &UIView, rtl: bool) {
-    view.setSemanticContentAttribute(if rtl {
-        objc2_ui_kit::UISemanticContentAttribute::ForceRightToLeft
-    } else {
-        objc2_ui_kit::UISemanticContentAttribute::Unspecified
+    use objc2_ui_kit::UISemanticContentAttribute as Semantic;
+    view.setSemanticContentAttribute(match rtl {
+        true => Semantic::ForceRightToLeft,
+        false if uikit_rtl(MainThreadMarker::from(view)) => Semantic::ForceLeftToRight,
+        false => Semantic::Unspecified,
     });
+}
+
+/// Whether UIKit lays views out right to left by itself: the language of
+/// the localization the app runs in is written so (whatever NSH's
+/// direction; fixed while the app runs).
+fn uikit_rtl(mtm: MainThreadMarker) -> bool {
+    static RTL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *RTL.get_or_init(|| {
+        UIView::userInterfaceLayoutDirectionForSemanticContentAttribute(
+            objc2_ui_kit::UISemanticContentAttribute::Unspecified,
+            mtm,
+        ) == objc2_ui_kit::UIUserInterfaceLayoutDirection::RightToLeft
+    })
 }
 
 fn mirror_native(native: &Native, rtl: bool) {
@@ -1019,8 +1035,8 @@ impl Mounter {
                     }
                 };
                 native.view().setTag(id as isize);
-                if self.rtl {
-                    mirror_native(&native, true);
+                if self.rtl || uikit_rtl(self.mtm) {
+                    mirror_native(&native, self.rtl);
                 }
                 let idx = id as usize;
                 if idx >= self.views.len() {
