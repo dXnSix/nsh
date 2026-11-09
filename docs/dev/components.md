@@ -750,13 +750,18 @@ page's; `font-mono` is the monospaced one) and has none of its own. The theme is
 `theme().sidebar_ring`, `theme().radius`), plus Tailwind's fonts `font-sans` / `font-mono` (`theme().font_sans`,
 `theme().font_mono`; `None`, the system's fonts). `theme()` returns the theme of the tokens drawn with now, made once
 per change of them; an app's own tokens are read by name (`theme().color("up")`). Each field is read through its
-**role** (`element::Role`: `background`, `popover`, `primary`, `selection`, `radius`, `font-sans`, …, the names NSH's
-own parts draw with, `name()` shadcn's spelling): `Tokens::role_color` / `role_number` / `role_font` read the token a
-theme maps the role onto (`Tokens::with_roles`, kept by `over`), else the token of the role's name, so without a
-mapping every reader gets what it always did. The core's readers use roles too (the default font,
-`role_font(Role::FontSans)`; the mobile tab bar's tint, `Role::Primary`), and so do the platforms' (Linux's menus,
-iOS's alert tint, Android's `DIALOG_ROLES`; GPUI's host background is the host theme's `background` field, which
-`Theme::of` reads through `Role::Background`). A role is no token and adds no class. The core
+**role** (`element::Role<V>`: a name, `name()` shadcn's spelling, and in its type what it reads, `RoleValue`: a color
+by default, `NumberRole` an `f32`, `FontRole` a family). A role is a constant of the crate that draws with it and is
+its name, so two constants of one name are one role: the core's and the platforms' are `element::role` (`POPOVER`,
+`POPOVER_FOREGROUND`, `PRIMARY`, `ACCENT`, `ACCENT_FOREGROUND`, `MUTED_FOREGROUND`, `BORDER`, `DESTRUCTIVE`,
+`FONT_SANS`), nsh-base's `nsh_base::role` (one per field of `Theme`, written by `theme!` from its one list, with
+`RADIUS`, `FONT_MONO` and `SELECTION`), and another UI set declares its own. `Tokens::role(role)` reads the token a
+theme maps the role onto (`Tokens::with_role`, or `with_roles` for a list of `AnyRole`s of several kinds; kept by
+`over`, keyed by the role's name), else the token of the role's name, so without a mapping every reader gets what it
+always did. The core's readers use roles too (the default font, `role(role::FONT_SANS)`; the mobile tab bar's tint,
+`role::PRIMARY`), and so do the platforms' (Linux's menus, iOS's alert tint, Android's `DIALOG_ROLES`; GPUI's host
+background is the host theme's `background` field, which `Theme::of` reads through `role::BACKGROUND`). A role is no
+token and adds no class. The core
 says whether the app has a theme of its own on the tokens it draws with (`Tokens::is_themed`: other than the UI set's
 defaults, `registry.tokens(None)`), which iOS and Android check before taking a theme's colors for their alerts. The defaults are shadcn's `neutral` theme (`default-theme.json`, `radius` 0.625rem = 10 pt); no component of
 `nsh/base` draws with them but `TextView`'s reading typography and the default looks of `Editor` and `DiffView`.
@@ -800,7 +805,7 @@ lacks. The core sends the tokens drawn with to the
 platform when they change (`Command::Tokens` on the root), which colors its own controls with them (Linux's menus:
 `docs/dev/linux.md`; Android's alerts and action sheets: `popover` behind, `popover-foreground` for the title and
 the options, `muted-foreground` for the message, `primary` for the buttons and `destructive` for a destructive action,
-over the system dialog's shape, each as a role; iOS's alerts take `Role::Primary` as their tint, which iOS 17 draws the
+over the system dialog's shape, each as a role; iOS's alerts take `role::PRIMARY` as their tint, which iOS 17 draws the
 regular and cancel actions in and iOS 26 does not use; an app without a theme of its own, `!Tokens::is_themed()`,
 keeps the system's colors on both). `nsh_base::theme()` reads the tokens from a signal of
 the surface (`element::tokens`): new tokens run again the bindings that read them. An embedding app can give a
