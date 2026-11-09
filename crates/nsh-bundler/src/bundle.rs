@@ -1600,8 +1600,12 @@ mod token_namespaces {
     use oxc::span::SourceType;
 
     fn theme(json: &str) -> nsh_core::tailwind::Theme {
+        // A directory of each call's own: the tests run at once, and one
+        // removing a shared directory fails the other.
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "nsh-token-namespaces-{}-{}",
+            "nsh-token-namespaces-{}-{call}-{}",
             std::process::id(),
             json.len()
         ));
