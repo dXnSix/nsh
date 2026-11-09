@@ -226,6 +226,37 @@ fn open_notes() {
 }
 ```
 
+### The app's own files
+
+`data_dir()` and `cache_dir()` (`nsh_core::prelude`) are the directories the app keeps its own files in, and
+`app_id()` is its id, `nsh.json`'s `"id"`: a crate that several apps use tells them apart by it. `data_dir()` is the
+directory TSX's `process.dataDir` names, where NSH keeps the app's `Storage` too: the app's directory, named by its
+id, in Application Support on Apple platforms, `%APPDATA%` on Windows, `$XDG_DATA_HOME` on Linux and the files
+directory on Android, or where an embedding app keeps the apps it runs. `cache_dir()` is the app's directory in the
+system's cache directory, for files the app can make again, which the system may clear to free space. Create a
+directory before writing to it the first time. In browser apps the browser keeps the app's data: both are `None`
+there, and Rust code keeps its data in `Storage`. They are read on the engine's thread (a component, a module
+function, a task) and stay the same while the app runs, so read them before handing work to `blocking` or
+`background`:
+
+```rust
+use nsh_core::prelude::*;
+
+fn save_note(name: String, text: String) {
+    let Some(dir) = data_dir() else { return };
+    let saved = blocking(move || -> std::io::Result<()> {
+        let notes = dir.join("notes");
+        std::fs::create_dir_all(&notes)?;
+        std::fs::write(notes.join(name), text)
+    });
+    spawn(async move {
+        if let Ok(Err(error)) = saved.await {
+            log::warn!("note not saved: {error}");
+        }
+    });
+}
+```
+
 ## Extending a Rust app with TSX
 
 The crate's `#[native_module("app/native")]` function names what TSX may import: components

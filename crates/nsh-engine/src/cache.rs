@@ -73,17 +73,25 @@ pub enum CachePolicy {
 }
 
 impl CacheOptions {
-    /// The directory of the `kind` cache of app `app_id` (`None`: none on
-    /// disk), `System` resolved to [`crate::storage`]'s system cache
+    /// The cache directory of app `app_id`, which its caches are in and its
+    /// Rust code reads (`nsh_core::element::cache_dir`); `None`: none on
+    /// disk. `System` resolved to [`crate::storage`]'s system cache
     /// directory.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn dir(&self, app_id: Option<&str>, kind: &str) -> Option<PathBuf> {
+    pub(crate) fn app_dir(&self, app_id: Option<&str>) -> Option<PathBuf> {
         let root = match &self.location {
             CacheLocation::System => crate::storage::cache_dir()?,
             CacheLocation::Dir(dir) => dir.clone(),
             CacheLocation::Off => return None,
         };
-        Some(root.join(crate::app_dir_name(app_id)).join(kind))
+        Some(root.join(crate::app_dir_name(app_id)))
+    }
+
+    /// The directory of the `kind` cache of app `app_id` (`None`: none on
+    /// disk).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn dir(&self, app_id: Option<&str>, kind: &str) -> Option<PathBuf> {
+        Some(self.app_dir(app_id)?.join(kind))
     }
 
     /// The disk cache of the images app `app_id` downloads, if it keeps one.

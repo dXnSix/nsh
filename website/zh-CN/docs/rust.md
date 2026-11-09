@@ -208,6 +208,35 @@ fn open_notes() {
 }
 ```
 
+### 应用自己的文件
+
+`data_dir()` 和 `cache_dir()`（`nsh_core::prelude`）是应用存放自己文件的目录，`app_id()` 是应用的 id，即
+`nsh.json` 的 `"id"`：多个应用共用的 crate 用它区分这些应用。`data_dir()` 就是 TSX 的 `process.dataDir`
+所指的目录，NSH 也把应用的 `Storage` 存在这里：在 Apple 平台的 Application Support、Windows 的 `%APPDATA%`、
+Linux 的 `$XDG_DATA_HOME` 和 Android 的 files 目录中，以应用 id 命名的应用目录，或嵌入应用为其运行的应用选定的位置。
+`cache_dir()` 是应用在系统缓存目录中的目录，存放应用能重新生成的文件，系统可能为腾出空间而清理它。第一次写入目录前
+先创建它。在浏览器应用中由浏览器保存应用的数据：两者在那里都是 `None`，Rust 代码用 `Storage` 保存数据。
+它们在引擎线程上读取（组件、模块函数、任务中），应用运行期间保持不变，因此在把工作交给 `blocking` 或
+`background` 之前先读取：
+
+```rust
+use nsh_core::prelude::*;
+
+fn save_note(name: String, text: String) {
+    let Some(dir) = data_dir() else { return };
+    let saved = blocking(move || -> std::io::Result<()> {
+        let notes = dir.join("notes");
+        std::fs::create_dir_all(&notes)?;
+        std::fs::write(notes.join(name), text)
+    });
+    spawn(async move {
+        if let Ok(Err(error)) = saved.await {
+            log::warn!("note not saved: {error}");
+        }
+    });
+}
+```
+
 ## 用 TSX 扩展 Rust 应用
 
 crate 的 `#[native_module("app/native")]` 函数声明 TSX 可以导入的内容：组件（`registry.register::<Chart>()`）、函数模块

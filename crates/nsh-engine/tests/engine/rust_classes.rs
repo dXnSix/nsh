@@ -506,6 +506,16 @@ pub(crate) fn start_with(
     ui_sets: Vec<Registry>,
     capabilities: Option<&str>,
 ) -> (Engine, Receiver<MountBatch>) {
+    start_configured(app, ui_sets, capabilities, |_| {})
+}
+
+/// [`start_with`], the engine's config as `configure` leaves it.
+pub(crate) fn start_configured(
+    app: &str,
+    ui_sets: Vec<Registry>,
+    capabilities: Option<&str>,
+    configure: impl FnOnce(&mut EngineConfig),
+) -> (Engine, Receiver<MountBatch>) {
     static APPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
         "nsh-classes-{}-{}",
@@ -525,7 +535,7 @@ pub(crate) fn start_with(
     let described: Vec<_> = ui_sets.iter().map(Into::into).collect();
     let bytecode = nsh_js::compile_bytecode_with(&bundle.code, false, &described).unwrap();
     let (tx, rx) = crossbeam_channel::unbounded();
-    let config = EngineConfig {
+    let mut config = EngineConfig {
         // SAFETY: compiled just now by this runtime.
         app: nsh_engine::App::Js(
             unsafe { Bundle::bytecode(bytecode) }
@@ -558,6 +568,7 @@ pub(crate) fn start_with(
         audio: None,
         windows: None,
     };
+    configure(&mut config);
     (
         Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap(),
         rx,
@@ -1123,4 +1134,59 @@ fn a_prop_that_fails_later_keeps_its_value_and_holds_back_no_other_prop() {
     // The props after it still reach the view, right away.
     assert!(items.contains("zzb") && items.contains("zzc"), "{items}");
     assert!(texts.iter().any(|t| t == "level 1"), "{texts:?}");
+}
+
+/// What a UI set's code reads of the app it runs in.
+#[module]
+pub(crate) struct Place;
+
+#[module]
+impl Place {
+    /// The app's id and its own directories, in the call.
+    pub(crate) fn now() -> String {
+        format!("{:?} {:?} {:?}", app_id(), data_dir(), cache_dir())
+    }
+
+    /// The same, read in a task.
+    pub(crate) async fn later() -> String {
+        timer(Duration::from_millis(1)).await;
+        Self::now()
+    }
+}
+
+const PLACE: &str = r#"import { mount, signal, Text } from "nsh";
+import { Place } from "test/place";
+
+const shown = signal("waiting");
+setTimeout(async () => {
+  shown.set(`done ${Place.now()}|${await Place.later()}|${process.dataDir}`);
+}, 0);
+mount(() => <Text>{shown()}</Text>);
+"#;
+
+#[test]
+fn a_ui_sets_code_reads_the_id_and_the_directories_of_the_app_it_runs_in() {
+    let root = crate::temporary_root().join(format!("nsh-classes-place-{}", std::process::id()));
+    let (data, caches) = (root.join("data"), root.join("caches"));
+    let mut set = Registry::ui_set("test/place");
+    set.module::<Place>();
+    let (engine, rx) = start_configured(PLACE, vec![set], None, |config| {
+        if let nsh_engine::App::Js(bundle) = &mut config.app {
+            bundle.app_id = Some("com.example.notes".to_owned());
+        }
+        config.data_dir = Some(data.clone());
+        config.cache = nsh_engine::CacheOptions::at(nsh_engine::CacheLocation::Dir(caches.clone()));
+    });
+    // The same data directory as JS's `process.dataDir`.
+    let app = data.join("com.example.notes");
+    let place = format!(
+        "Some(\"com.example.notes\") Some({app:?}) Some({:?})",
+        caches.join("com.example.notes")
+    );
+    assert_eq!(
+        shown(&rx, "done"),
+        format!("done {place}|{place}|{}", app.display())
+    );
+    drop(engine);
+    let _ = std::fs::remove_dir_all(&root);
 }
