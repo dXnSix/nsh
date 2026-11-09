@@ -634,7 +634,7 @@ clock that moves with frames (`Clock::moves_with_frames`) is the display's pace 
 platform shows moves it to a frame after the last (`nsh_core::time::FRAME`, 1/60 s) before it runs, and while the
 engine moves it (`Driver::advance` with `frames`) the frames the app waits for run on the way, a frame apart, as a
 headless display's do; the platform's own animations run in real time, as do stubbed responses' delays (the test's
-side holds them, outside the app's clock). `open`'s locale, reduced motion and safe area, when it gives them (a
+side holds them, outside the app's clock). `open`'s locale, reduced motion, high contrast and safe area, when it gives them (a
 default value too: `Launch` keeps them optional, so a test's `reducedMotion: false` or zero insets hold on a device
 set otherwise), reach the
 host in the test's setup (`TestEnvironment`, `DevServer::set_test_environment`) and its engine pins them

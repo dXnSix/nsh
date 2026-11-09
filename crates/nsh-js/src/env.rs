@@ -1,7 +1,7 @@
 //! The surface's environment: one signal per part
 //! (window, safe area, keyboard, color scheme, font scale, screen reader,
-//! reduced motion, pixel ratio, locale, locale settings, lifecycle, the
-//! desktop window's state and the displays)
+//! reduced motion, high contrast, pixel ratio, locale, locale settings,
+//! lifecycle, the desktop window's state and the displays)
 //! written when the platform reports a
 //! change, read through read-only accessors; `nsh/device` (`platform`) and
 //! `nsh/accessibility`; the layout direction, which follows the user's
@@ -43,6 +43,7 @@ enum Part {
     FontScale,
     ScreenReader,
     ReduceMotion,
+    HighContrast,
     PixelRatio,
     TitleBar,
     Locale,
@@ -53,7 +54,7 @@ enum Part {
     Fps,
 }
 
-const PARTS: usize = 15;
+const PARTS: usize = 16;
 
 /// The environment's part of a context's state.
 pub(crate) struct Env {
@@ -509,6 +510,9 @@ pub(crate) fn set_environment(cx: *mut JsContext, next: &Environment) -> Result<
     }
     if changed(&|p| p.reduce_motion == next.reduce_motion) {
         writes.push((Part::ReduceMotion, boolean(next.reduce_motion)));
+    }
+    if changed(&|p| p.high_contrast == next.high_contrast) {
+        writes.push((Part::HighContrast, boolean(next.high_contrast)));
     }
     if changed(&|p| p.pixel_ratio == next.pixel_ratio) {
         writes.push((Part::PixelRatio, number(next.pixel_ratio)));
@@ -1017,6 +1021,14 @@ pub(crate) const ACCESSIBILITY_EXPORTS: &[Item] = &[
         Export::Value(|cx| accessor(cx, Part::ReduceMotion)),
         Ts::value(
             "Whether the user asked for less motion (reactive; also `motion-reduce:`).",
+            "Accessor<boolean>",
+        ),
+    ),
+    (
+        "highContrast",
+        Export::Value(|cx| accessor(cx, Part::HighContrast)),
+        Ts::value(
+            "Whether the user asked for more contrast (reactive; also `contrast-more:`).",
             "Accessor<boolean>",
         ),
     ),

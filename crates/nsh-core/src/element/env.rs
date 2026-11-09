@@ -27,6 +27,8 @@ pub struct Environment {
     pub font_scale: f32,
     /// Less motion asked for.
     pub reduce_motion: bool,
+    /// More contrast asked for.
+    pub high_contrast: bool,
     /// A screen reader runs.
     pub screen_reader: bool,
     /// Right-to-left layout.
@@ -92,6 +94,7 @@ impl Default for Environment {
             dark: false,
             font_scale: 1.0,
             reduce_motion: false,
+            high_contrast: false,
             screen_reader: false,
             rtl: false,
             pixel_ratio: 1.0,

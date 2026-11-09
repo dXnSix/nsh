@@ -101,6 +101,7 @@ Rust components (`nsh/base`'s and those of an app's own crate) accept `class` an
 | `ios:`, `android:`, `web:` | The platform | `.when(os() == Os::Ios, \|v\| ..)` |
 | `rtl:`, `ltr:` | The [layout direction](./layout.md#right-to-left) | `.direction(LayoutDirection::..)` on a view |
 | `motion-safe:`, `motion-reduce:` | The user's reduce motion setting | `reduce_motion()` |
+| `contrast-more:` | The user asked for more contrast | `high_contrast()` |
 
 Variants combine: `dark:active:bg-zinc-700`, `md:landscape:flex-row`. In Rust, an `AdaptiveColor` in an `.active(..)` style is `dark:active:`.
 

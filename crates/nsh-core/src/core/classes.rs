@@ -149,7 +149,8 @@ const STATE_PARTS: [Part; 10] = [
 
 impl<M: TextEngine> Core<M> {
     /// Sets the environment class variants depend on (`dark:`, `ios:`,
-    /// `motion-reduce:`): nodes whose classes depend on it are styled again.
+    /// `motion-reduce:`, `contrast-more:`): nodes whose classes depend on it
+    /// are styled again.
     pub fn set_class_environment(&mut self, mut env: ClassEnvironment) {
         self.system_dark = env.dark;
         env.dark = self.shown_dark();
@@ -192,6 +193,7 @@ impl<M: TextEngine> Core<M> {
         }
         let changed = (if env.dark != self.class_env.dark { deps::DARK } else { 0 })
             | (if env.reduce_motion != self.class_env.reduce_motion { deps::MOTION } else { 0 })
+            | (if env.high_contrast != self.class_env.high_contrast { deps::CONTRAST } else { 0 })
             // `ios:` / `android:` never change at run time, but a new
             // platform must reach classes resolved before it was known.
             | (if env.platform != self.class_env.platform { u16::MAX } else { 0 });

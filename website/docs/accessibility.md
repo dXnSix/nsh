@@ -1,6 +1,6 @@
 ---
 title: Accessibility
-description: Making apps work with VoiceOver and TalkBack - labels, roles, states, values, custom actions, grouping and hiding, announcements and focus, text size, and reduced motion.
+description: Making apps work with VoiceOver and TalkBack - labels, roles, states, values, custom actions, grouping and hiding, announcements and focus, text size, reduced motion, and more contrast.
 order: 48
 group: ui
 ---
@@ -221,12 +221,13 @@ Hide what adds nothing: decorative images, dividers, an icon next to a text that
 
 ## The screen reader and the user's settings
 
-In Rust, the prelude reports the user's settings and talks to the screen reader: `screen_reader()` and `reduce_motion()` are reactive, `announce_for_accessibility(message)` has the screen reader read a message, and an element's `element_ref()` moves the screen reader's focus to it with `set_accessibility_focus()`. In TSX, `nsh`'s accessibility API reports the user's settings and lets you talk to the screen reader.
+In Rust, the prelude reports the user's settings and talks to the screen reader: `screen_reader()`, `reduce_motion()` and `high_contrast()` are reactive, `announce_for_accessibility(message)` has the screen reader read a message, and an element's `element_ref()` moves the screen reader's focus to it with `set_accessibility_focus()`. In TSX, `nsh`'s accessibility API reports the user's settings and lets you talk to the screen reader.
 
 | Member | Description |
 |---|---|
 | `screenReaderEnabled()` | Whether VoiceOver or TalkBack runs (reactive). |
 | `reduceMotion()` | Whether the user asked for less motion (reactive). |
+| `highContrast()` | Whether the user asked for more contrast (reactive). |
 | `announce(message)` | The screen reader reads `message`. |
 | `setAccessibilityFocus(ref)` | Moves the screen reader's focus to a view. |
 
@@ -321,6 +322,34 @@ const toggle = () => {
 
 <View onPress={open} class="transition active:scale-95 motion-reduce:transition-none" />
 <View class="motion-safe:animate-bounce" />
+```
+
+## More contrast
+
+`high_contrast()` (Rust) and `highContrast()` (TSX) are `true` when the user asked for more contrast: Increase Contrast on iOS and macOS, High contrast text on Android, a contrast theme on Windows, High Contrast on Linux, `prefers-contrast: more` in a browser. Your colors are the ones you choose, so use it, or the `contrast-more:` Tailwind variant, to draw borders, dividers and secondary text in stronger colors:
+
+```rust tabs
+use nsh_core::prelude::*;
+
+view()
+    .border_1()
+    .border_color(ZINC.shade(200))
+    .style_when(high_contrast, |s| s.border_color(ZINC.shade(900)))
+    .child(
+        text("Updated just now")
+            .text_color(ZINC.shade(500))
+            .style_when(high_contrast, |s| s.text_color(ZINC.shade(900))),
+    )
+```
+
+```tsx tabs
+import { Text, View } from "nsh";
+import { highContrast } from "nsh";
+
+<View class="border border-zinc-200 contrast-more:border-zinc-900">
+  <Text class="text-zinc-500 contrast-more:text-zinc-900">Updated just now</Text>
+</View>
+<View style={{ height: 1, backgroundColor: highContrast() ? "#18181b" : "#e4e4e7" }} />
 ```
 
 ## Touch targets

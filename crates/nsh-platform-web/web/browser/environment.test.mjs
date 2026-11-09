@@ -35,8 +35,8 @@ const settings = (changes = {}) => ({
 const engine = (changes = {}) => ({
   window: { width: 390, height: 844 }, safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
   titleBar: { height: 0, left: 0, right: 0 }, keyboard: { height: 0, duration: 250 },
-  colorScheme: "light", fontScale: 1, rtl: false, reduceMotion: false, pixelRatio: 2, screenReader: false,
-  locale: "de-AT", host: false, lifecycle: "active", localeSettings: settings(),
+  colorScheme: "light", fontScale: 1, rtl: false, reduceMotion: false, highContrast: false, pixelRatio: 2,
+  screenReader: false, locale: "de-AT", host: false, lifecycle: "active", localeSettings: settings(),
   platform: { os: "web", version: "0.0", idiom: "desktop", desktop: true, appleKeyboard: false },
   ...changes,
 });
@@ -94,6 +94,16 @@ test("the lifecycle is the engine's", () => {
   assert.equal(env.api.lifecycle(), "background");
   env.update(engine({ lifecycle: "inactive" }));
   assert.equal(env.api.lifecycle(), "inactive");
+});
+
+test("the contrast setting is the engine's", () => {
+  const { env } = environment();
+  assert.equal(env.api.highContrast(), false);
+  env.update(engine({ highContrast: true }));
+  assert.equal(env.api.highContrast(), true);
+  assert.equal(env.modules["nsh/accessibility"].highContrast(), true);
+  env.update(engine());
+  assert.equal(env.api.highContrast(), false);
 });
 
 test("the locale settings are the engine's", () => {

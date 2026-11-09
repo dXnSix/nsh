@@ -1,5 +1,5 @@
 import { mount, signal, Text, View } from "nsh";
-import { reduceMotion } from "nsh";
+import { highContrast, reduceMotion } from "nsh";
 import { colorScheme, lifecycle, locale, localeSettings, platform, windowSize } from "nsh";
 
 // Whether `Intl`'s local time is in the zone it names, read again when the
@@ -39,6 +39,7 @@ function App() {
       <Text>{`Scheme: ${colorScheme()}`}</Text>
       <Text>{`Locale: ${locale()}`}</Text>
       <Text>{`Motion: ${reduceMotion() ? "reduced" : "full"}`}</Text>
+      <Text>{`Contrast: ${highContrast() ? "more" : "standard"}`}</Text>
       <Text>{`OS: ${platform.os}`}</Text>
       <Text>{`Size: ${windowSize().width}x${windowSize().height}`}</Text>
       <Text>{`App: ${lifecycle()}`}</Text>

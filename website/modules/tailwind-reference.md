@@ -450,6 +450,7 @@ Variants make a utility conditional: `dark:bg-zinc-900`, `md:flex-row`, `active:
 | `portrait:`, `landscape:` | the window is taller than wide / wider than tall | `.style_when(move \|\| window().height > window().width, …)` |
 | `ltr:`, `rtl:` | the layout direction | `.style_when(rtl, …)` |
 | `motion-safe:`, `motion-reduce:` | the user has not / has asked for reduced motion | `.style_when(reduce_motion, …)` |
+| `contrast-more:` | the user has asked for more contrast | `.style_when(high_contrast, …)` |
 
 ### Breakpoints
 

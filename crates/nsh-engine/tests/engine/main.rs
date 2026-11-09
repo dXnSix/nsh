@@ -26,6 +26,7 @@ mod focus;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod fs;
 mod handle_bench;
+mod high_contrast;
 mod host;
 mod host_channel;
 mod host_modules;

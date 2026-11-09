@@ -1166,7 +1166,7 @@ permit clipboard writes; `nsh test` uses memory and never writes to the machine'
 The trunk applies View/Text geometry, styles, props, text, events, appearance, component registration, core scroll
 positions, top screens and their headers, modal cancellation, terminal navigation, search and editing keys, InputValue/InputContent, field commands and app exit. Other mount operations are reported once per operation kind per loaded app; they are not implemented by
 an empty success path.
-Safe areas are zero, reduced motion is true and `screen_reader` is false.
+Safe areas are zero, reduced motion is true, and high contrast and `screen_reader` are false.
 
 ## Checks
 

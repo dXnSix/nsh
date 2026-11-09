@@ -129,6 +129,8 @@ pub mod deps {
     /// The view's own `data-*` attributes (`data-range-start:`); a group's
     /// are [`GROUP`].
     pub const DATA: u16 = 2048;
+    /// The contrast setting (`contrast-more:`).
+    pub const CONTRAST: u16 = 4096;
 }
 
 /// CSS's `ch` where no font is known ([`ClassList::apply`]): half a `rem`,
@@ -167,12 +169,14 @@ pub struct ClassEnvironment {
     pub platform: Platform,
     /// The user asked for less motion.
     pub reduce_motion: bool,
+    /// The user asked for more contrast.
+    pub high_contrast: bool,
 }
 
 /// What a node's classes are matched against: the core builds it per
 /// node; tools resolve classes outside a tree with one of their own.
 pub struct Context<'a> {
-    /// The appearance, platform and motion setting.
+    /// The appearance, the platform, and the motion and contrast settings.
     pub env: ClassEnvironment,
     /// The window (root view) size.
     pub window: Size<Points>,
@@ -209,6 +213,7 @@ pub(crate) struct Condition {
     platform: Option<Platform>,
     rtl: Option<bool>,
     reduce_motion: Option<bool>,
+    high_contrast: Option<bool>,
     /// Required [`state`] bits.
     states: u16,
     /// [`state`] bits that must be off (`enabled:`).
@@ -236,6 +241,9 @@ impl Condition {
             || self
                 .reduce_motion
                 .is_some_and(|r| r != cx.env.reduce_motion)
+            || self
+                .high_contrast
+                .is_some_and(|c| c != cx.env.high_contrast)
             || self.min_width.is_some_and(|w| cx.window.width.0 < w)
             || self.max_width.is_some_and(|w| cx.window.width.0 >= w)
             || self
@@ -307,6 +315,9 @@ impl Condition {
         }
         if self.reduce_motion.is_some() {
             d |= deps::MOTION;
+        }
+        if self.high_contrast.is_some() {
+            d |= deps::CONTRAST;
         }
         if self.states != 0 || self.not_states != 0 {
             d |= deps::STATE;
@@ -444,6 +455,7 @@ pub(crate) mod rank {
     pub(crate) const DATA: u16 = 45;
     pub(crate) const MOTION_SAFE: Key = Key::new(46);
     pub(crate) const MOTION_REDUCE: Key = Key::new(47);
+    pub(crate) const CONTRAST_MORE: Key = Key::new(48);
     /// `max-*` breakpoints, widest first.
     pub(crate) const MAX: u16 = 50;
     /// Breakpoints and `min-*`, narrowest first.
@@ -1223,6 +1235,10 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<Key> {
         "motion-reduce" => {
             cond.reduce_motion = Some(true);
             rank::MOTION_REDUCE
+        }
+        "contrast-more" => {
+            cond.high_contrast = Some(true);
+            rank::CONTRAST_MORE
         }
         "portrait" => {
             cond.landscape = Some(false);

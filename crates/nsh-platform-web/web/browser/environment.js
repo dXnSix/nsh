@@ -10,7 +10,7 @@ function same(a, b, depth) {
 export function createEnvironment(reactive, invoke, dom) {
   const initial = { window: { width: 0, height: 0 }, safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
     titleBar: { height: 0, left: 0, right: 0 }, keyboard: { height: 0, duration: 0.25 },
-    colorScheme: "light", fontScale: 1, pixelRatio: 1, locale: "en-US", reduceMotion: false, screenReader: false, host: false,
+    colorScheme: "light", fontScale: 1, pixelRatio: 1, locale: "en-US", reduceMotion: false, highContrast: false, screenReader: false, host: false,
     lifecycle: "active",
     localeSettings: { languages: ["en-US"], timeZone: "UTC", hourCycle: "h12", firstDayOfWeek: 7,
       measurementSystem: "us", temperatureUnit: "fahrenheit" } };
@@ -38,7 +38,8 @@ export function createEnvironment(reactive, invoke, dom) {
     // A browser page has no performance monitor (its developer tools measure it).
     fpsEnabled: () => false,
   };
-  const accessibility = { reduceMotion: () => fields.reduceMotion(), screenReaderEnabled: () => fields.screenReader() };
+  const accessibility = { reduceMotion: () => fields.reduceMotion(), highContrast: () => fields.highContrast(),
+    screenReaderEnabled: () => fields.screenReader() };
   const api = {
     ...device, ...accessibility,
     safeArea: () => fields.safeArea(), safeAreaInsets: () => insets(), keyboardFrame: () => fields.keyboard(),

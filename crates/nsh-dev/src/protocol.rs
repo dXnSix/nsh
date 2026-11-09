@@ -158,6 +158,9 @@ pub struct TestEnvironment {
     /// Whether the user asked for less motion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reduced_motion: Option<bool>,
+    /// Whether the user asked for more contrast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub high_contrast: Option<bool>,
     /// The safe area insets in points: top, right, bottom, left.
     #[serde(
         default,

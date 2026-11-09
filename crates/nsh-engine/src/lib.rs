@@ -1016,6 +1016,9 @@ pub struct EnvironmentPins {
     /// Whether the user asked for less motion
     /// (`Environment::reduce_motion`).
     pub reduce_motion: Option<bool>,
+    /// Whether the user asked for more contrast
+    /// (`Environment::high_contrast`).
+    pub high_contrast: Option<bool>,
     /// The safe area insets (`Environment::safe_area`).
     pub safe_area: Option<nsh_core::geometry::Edges<Points>>,
 }
@@ -1047,6 +1050,9 @@ impl EnvironmentPins {
         }
         if let Some(reduce_motion) = self.reduce_motion {
             environment.reduce_motion = reduce_motion;
+        }
+        if let Some(high_contrast) = self.high_contrast {
+            environment.high_contrast = high_contrast;
         }
         if let Some(safe_area) = self.safe_area {
             environment.safe_area = safe_area;
@@ -3317,6 +3323,7 @@ fn ui_environment(env: &Environment, window: Size<Points>) -> nsh_core::element:
         dark: env.color_scheme == ColorScheme::Dark,
         font_scale: env.font_scale,
         reduce_motion: env.reduce_motion,
+        high_contrast: env.high_contrast,
         screen_reader: env.screen_reader,
         rtl: env.rtl,
         pixel_ratio: env.pixel_ratio,
@@ -3351,6 +3358,7 @@ fn class_environment(env: &Environment) -> nsh_core::tailwind::ClassEnvironment 
             nsh_core::tailwind::Platform::Ios
         },
         reduce_motion: env.reduce_motion,
+        high_contrast: env.high_contrast,
     }
 }
 
@@ -3790,6 +3798,7 @@ mod tests {
         let pins = super::EnvironmentPins {
             locale: nsh_core::platform::Locale::parse("de-DE"),
             reduce_motion: Some(true),
+            high_contrast: Some(true),
             ..Default::default()
         };
         let mut reported = super::Environment {
@@ -3800,6 +3809,7 @@ mod tests {
         pins.apply(&mut reported);
         assert_eq!(reported.locale.as_str(), "de-DE");
         assert!(reported.reduce_motion);
+        assert!(reported.high_contrast);
         // What is not pinned stays the platform's.
         assert_eq!(reported.font_scale, 1.5);
         assert_eq!(reported.safe_area, Default::default());
