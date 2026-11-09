@@ -25,7 +25,7 @@ const REM: f32 = 16.0;
 pub fn parse(json: &str, base: &Tokens) -> Result<(Tokens, Vec<String>), String> {
     let mut tokens = base.clone();
     let ignored = apply_onto(&mut tokens, base, json)?;
-    Ok((tokens, ignored))
+    Ok((tokens, sentences(ignored)))
 }
 
 /// The tokens theme file `json` sets, and only those, with what of it was
@@ -35,7 +35,72 @@ pub fn parse(json: &str, base: &Tokens) -> Result<(Tokens, Vec<String>), String>
 pub fn overrides(json: &str, base: &Tokens) -> Result<(Tokens, Vec<String>), String> {
     let mut tokens = Tokens::default();
     let ignored = apply_onto(&mut tokens, base, json)?;
-    Ok((tokens, ignored))
+    Ok((tokens, sentences(ignored)))
+}
+
+/// One thing a reader left out of a theme file: its sentence, as the
+/// readers list it and the logs and the toolchain print it, with what the
+/// core itself asks of it, so that nothing reads the sentence back.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct LeftOut {
+    /// The token the sentence starts with, in backquotes (`None`: it is
+    /// about the file's form, or names a section's key another way).
+    token: Option<Box<str>>,
+    /// Whether it is a name no theme type declares, and nothing else: a
+    /// build warning, and left out at run time, but no reason to refuse a
+    /// file read whole (`setTheme`), as a newer theme's names are not
+    /// (#1190).
+    undeclared: bool,
+    sentence: String,
+}
+
+impl LeftOut {
+    /// `` `token` `` followed by `rest` (`": no color value"`).
+    fn about(token: &str, rest: impl std::fmt::Display) -> Self {
+        Self {
+            token: Some(token.into()),
+            undeclared: false,
+            sentence: format!("`{token}`{rest}"),
+        }
+    }
+
+    /// A sentence about no one token.
+    pub(crate) fn said(sentence: impl Into<String>) -> Self {
+        Self {
+            token: None,
+            undeclared: false,
+            sentence: sentence.into(),
+        }
+    }
+
+    /// `name` is a name no theme type declares.
+    fn undeclared(name: &str) -> Self {
+        Self {
+            undeclared: true,
+            ..Self::about(name, format_args!(": {UNDECLARED}"))
+        }
+    }
+
+    /// Whether it is only a name no theme type declares.
+    pub(crate) fn is_undeclared(&self) -> bool {
+        self.undeclared
+    }
+
+    /// Whether its sentence starts with the token `name`.
+    fn is_about(&self, name: &str) -> bool {
+        self.token.as_deref() == Some(name)
+    }
+}
+
+impl std::fmt::Display for LeftOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.sentence)
+    }
+}
+
+/// What was left out, as the readers list it.
+pub(crate) fn sentences(left_out: Vec<LeftOut>) -> Vec<String> {
+    left_out.into_iter().map(|l| l.sentence).collect()
 }
 
 /// [`parse`] under a theme set: each name the file sets must be a declared
@@ -46,56 +111,52 @@ pub(crate) fn parse_declared(
     json: &str,
     base: &Tokens,
     set: &super::theme::ThemeSet,
-) -> Result<(Tokens, Vec<String>), String> {
+) -> Result<(Tokens, Vec<LeftOut>), String> {
     let (tokens, left_out) = overrides_declared(json, base, set)?;
     Ok((tokens.over(base), left_out))
 }
 
-/// What a theme read under types lists for a name no type declares: a
-/// build warning, and left out at run time, but no reason to refuse a file
-/// read whole (`setTheme`), as a newer theme's names are not (#1190).
-pub(crate) const UNDECLARED: &str = "no theme type declares it";
+/// What a theme read under types says of a name no type declares
+/// ([`LeftOut::is_undeclared`]).
+const UNDECLARED: &str = "no theme type declares it";
 
-/// Whether `what`, of what a reader left out, is a name no type declares
-/// ([`UNDECLARED`]).
-pub(crate) fn is_undeclared(what: &str) -> bool {
-    what.ends_with(UNDECLARED)
-}
-
-/// [`overrides`] under a theme set, as [`parse_declared`] reads names.
+/// [`overrides`] under a theme set, as [`parse_declared`] reads names. The
+/// file is parsed once: its names become the set's in the parsed document,
+/// which is then read as any theme file's is.
 pub(crate) fn overrides_declared(
     json: &str,
     base: &Tokens,
     set: &super::theme::ThemeSet,
-) -> Result<(Tokens, Vec<String>), String> {
-    let (json, kept, mut left_out) = declared_names(json, set)?;
-    let (read, ignored) = overrides(&json, base)?;
-    left_out.extend(ignored);
+) -> Result<(Tokens, Vec<LeftOut>), String> {
+    let mut value: JsonValue = serde_json::from_str(json).map_err(|e| format!("not JSON: {e}"))?;
+    let (kept, mut left_out) = declared_names(&mut value, set);
+    let mut read = Tokens::default();
+    left_out.extend(read_into(&mut read, base, &value));
     let mut out = Tokens::default();
     for (name, _, kind) in set.names() {
         if kind.holds(&read, name) {
             out.copy_named(&read, name);
-        } else if kept.iter().any(|k| k == name)
-            && !left_out.iter().any(|w| w.starts_with(&format!("`{name}`")))
-        {
+        } else if kept.iter().any(|k| k == name) && !left_out.iter().any(|l| l.is_about(name)) {
             // Set, and read as no value of its kind.
-            left_out.push(format!("`{name}`: no {} value", kind.name()));
+            left_out.push(LeftOut::about(
+                name,
+                format_args!(": no {} value", kind.name()),
+            ));
         }
     }
     Ok((out, left_out))
 }
 
-/// Theme file `json` with its names the set's: a role's name becomes the
-/// token it is mapped onto (and so in `var()`s), a name no type declares
-/// is left out; the names kept and what was left out are listed. A section
-/// that sets a token and the role mapped onto it keeps the token's value;
-/// one that sets a token through two of the roles it plays, with two
-/// values, keeps the first's (by name).
+/// Makes the names of theme file `value` the set's: a role's name becomes
+/// the token it is mapped onto (and so in `var()`s), a name no type
+/// declares is left out; returns the names kept and what was left out. A
+/// section that sets a token and the role mapped onto it keeps the token's
+/// value; one that sets a token through two of the roles it plays, with
+/// two values, keeps the first's (by name).
 fn declared_names(
-    json: &str,
+    value: &mut JsonValue,
     set: &super::theme::ThemeSet,
-) -> Result<(String, Vec<String>, Vec<String>), String> {
-    let mut value: JsonValue = serde_json::from_str(json).map_err(|e| format!("not JSON: {e}"))?;
+) -> (Vec<String>, Vec<LeftOut>) {
     let mut left_out = Vec::new();
     let mut kept = Vec::new();
     // The roles the types map onto tokens of other names.
@@ -121,8 +182,11 @@ fn declared_names(
                     }
                     Some(name) => {
                         if old.contains_key(name) {
-                            left_out.push(format!(
-                                "`{key}`: the token its role is mapped onto, `{name}`, is set too"
+                            left_out.push(LeftOut::about(
+                                key,
+                                format_args!(
+                                    ": the token its role is mapped onto, `{name}`, is set too"
+                                ),
                             ));
                             continue;
                         }
@@ -131,8 +195,11 @@ fn declared_names(
                         // out as the token set beside its role is.
                         if let Some((_, first)) = by_role.iter().find(|(token, _)| *token == name) {
                             if fields.get(name) != Some(v) {
-                                left_out.push(format!(
-                                    "`{key}`: `{first}` sets the token its role is mapped onto, `{name}`, too"
+                                left_out.push(LeftOut::about(
+                                    key,
+                                    format_args!(
+                                        ": `{first}` sets the token its role is mapped onto, `{name}`, too"
+                                    ),
                                 ));
                             }
                             continue;
@@ -141,7 +208,7 @@ fn declared_names(
                         fields.insert(name.to_owned(), v.clone());
                         kept.push(name.to_owned());
                     }
-                    None => left_out.push(format!("`{key}`: {UNDECLARED}")),
+                    None => left_out.push(LeftOut::undeclared(key)),
                 }
             }
         }
@@ -152,21 +219,74 @@ fn declared_names(
                     continue;
                 };
                 for v in fields.values_mut() {
-                    if let JsonValue::String(text) = v {
-                        for (role, name) in &renamed {
-                            for end in [")", ","] {
-                                *text = text.replace(
-                                    &format!("var(--{role}{end}"),
-                                    &format!("var(--{name}{end}"),
-                                );
-                            }
-                        }
+                    if let JsonValue::String(text) = v
+                        && text.contains("var(")
+                    {
+                        *text = rename_vars(text, &renamed);
                     }
                 }
             }
         }
     }
-    Ok((value.to_string(), kept, left_out))
+    (kept, left_out)
+}
+
+/// `value` with each `var()` that names one of `renamed`'s roles naming
+/// its token: `var(--popover)`, `var( --popover , #fff)` and one inside a
+/// fallback, as the reader takes them ([`resolve_color`]). Every other
+/// character stays; an unclosed `var(` is left for the reader to list.
+fn rename_vars(value: &str, renamed: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find("var(") {
+        out.push_str(&rest[..start + 4]);
+        let inner = &rest[start + 4..];
+        let mut depth = 1;
+        let end = inner
+            .char_indices()
+            .find(|&(_, c)| {
+                depth += match c {
+                    '(' => 1,
+                    ')' => -1,
+                    _ => 0,
+                };
+                depth == 0
+            })
+            .map(|(i, _)| i);
+        let Some(end) = end else {
+            rest = inner;
+            break;
+        };
+        let (var, fallback) = match inner[..end].split_once(',') {
+            Some((v, f)) => (v, Some(f)),
+            None => (&inner[..end], None),
+        };
+        let token = var
+            .trim()
+            .strip_prefix("--")
+            .and_then(|name| renamed.iter().find(|(role, _)| *role == name))
+            .map(|(_, token)| *token);
+        match token {
+            // The name alone changes; the space around it stays.
+            Some(token) => {
+                let name = var.trim();
+                let at = var.find(name).unwrap_or(0);
+                out.push_str(&var[..at]);
+                out.push_str("--");
+                out.push_str(token);
+                out.push_str(&var[at + name.len()..]);
+            }
+            None => out.push_str(var),
+        }
+        if let Some(fallback) = fallback {
+            out.push(',');
+            out.push_str(&rename_vars(fallback, renamed));
+        }
+        out.push(')');
+        rest = &inner[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `tokens` as a theme file [`parse`] reads back: shadcn's `cssVars`, a
@@ -230,14 +350,19 @@ pub fn check(json: &str) -> Result<(), String> {
 
 /// Sets the tokens of theme file `json` in `tokens`; a color it names and
 /// does not set is `base`'s. Returns what it left out.
-fn apply_onto(tokens: &mut Tokens, base: &Tokens, json: &str) -> Result<Vec<String>, String> {
+fn apply_onto(tokens: &mut Tokens, base: &Tokens, json: &str) -> Result<Vec<LeftOut>, String> {
     let value: JsonValue = serde_json::from_str(json).map_err(|e| format!("not JSON: {e}"))?;
+    Ok(read_into(tokens, base, &value))
+}
+
+/// [`apply_onto`] of a theme file already parsed.
+fn read_into(tokens: &mut Tokens, base: &Tokens, value: &JsonValue) -> Vec<LeftOut> {
     let mut ignored = Vec::new();
     match value.get("cssVars") {
         Some(vars) => apply_css_vars(tokens, base, vars, &mut ignored),
-        None => ignored.push("no shadcn `{ \"cssVars\": { ... } }`".into()),
+        None => ignored.push(LeftOut::said("no shadcn `{ \"cssVars\": { ... } }`")),
     }
-    Ok(ignored)
+    ignored
 }
 
 /// A CSS color.
@@ -321,13 +446,18 @@ fn font_family(value: &str) -> Option<&str> {
 /// points (`px`, `rem`). A value written as a color that is none is left
 /// out, and one that is no color where the other appearance has a color
 /// gives way to that color; both are listed in `ignored`.
-fn apply_css_vars(tokens: &mut Tokens, base: &Tokens, vars: &JsonValue, ignored: &mut Vec<String>) {
+fn apply_css_vars(
+    tokens: &mut Tokens,
+    base: &Tokens,
+    vars: &JsonValue,
+    ignored: &mut Vec<LeftOut>,
+) {
     let mut section = |name: &str| -> FxHashMap<String, String> {
         let Some(v) = vars.get(name) else {
             return FxHashMap::default();
         };
         let JsonValue::Object(fields) = v else {
-            ignored.push(format!("cssVars.{name}: expected an object"));
+            ignored.push(LeftOut::said(format!("cssVars.{name}: expected an object")));
             return FxHashMap::default();
         };
         let mut out = FxHashMap::default();
@@ -340,9 +470,9 @@ fn apply_css_vars(tokens: &mut Tokens, base: &Tokens, vars: &JsonValue, ignored:
                 JsonValue::Number(n) => {
                     out.insert(key.clone(), n.to_string());
                 }
-                v => ignored.push(format!(
+                v => ignored.push(LeftOut::said(format!(
                     "cssVars.{name}.{key}: expected a CSS value, got {v}"
-                )),
+                ))),
             }
         }
         out
@@ -417,8 +547,9 @@ fn apply_css_vars(tokens: &mut Tokens, base: &Tokens, vars: &JsonValue, ignored:
                     None => ("light", &light_vars),
                 };
                 if let Some(v) = vars.get(name) {
-                    ignored.push(format!(
-                        "`{name}`: {v} is no color in the {other} appearance"
+                    ignored.push(LeftOut::about(
+                        name,
+                        format_args!(": {v} is no color in the {other} appearance"),
                     ));
                 }
                 tokens.set_color(name, c.into());
@@ -444,7 +575,7 @@ fn apply_css_vars(tokens: &mut Tokens, base: &Tokens, vars: &JsonValue, ignored:
                         .collect();
                     given.dedup();
                     for v in given.into_iter().filter(|v| written_as_color(v)) {
-                        ignored.push(format!("`{name}`: {v} is no color"));
+                        ignored.push(LeftOut::about(name, format_args!(": {v} is no color")));
                     }
                 }
             },
@@ -462,14 +593,14 @@ fn resolve_color(
     base: &Tokens,
     dark: bool,
     seen: &mut FxHashSet<String>,
-) -> Result<Option<Hsla>, String> {
+) -> Result<Option<Hsla>, LeftOut> {
     let Some(value) = vars.get(name) else {
         return Ok(base
             .color(name)
             .map(|c| if dark { c.dark } else { c.light }));
     };
     if !seen.insert(name.to_owned()) {
-        return Err(format!("`{name}` names itself"));
+        return Err(LeftOut::about(name, " names itself"));
     }
     let mut out = String::with_capacity(value.len());
     let mut rest = value.as_str();
@@ -488,13 +619,13 @@ fn resolve_color(
                 depth == 0
             })
             .map(|(i, _)| i)
-            .ok_or_else(|| format!("`{name}`: unclosed var()"))?;
+            .ok_or_else(|| LeftOut::about(name, ": unclosed var()"))?;
         let (var, fallback) = match inner[..end].split_once(',') {
             Some((v, f)) => (v.trim(), Some(f.trim())),
             None => (inner[..end].trim(), None),
         };
         let Some(var) = var.strip_prefix("--") else {
-            return Err(format!("`{name}`: var() names no `--` variable"));
+            return Err(LeftOut::about(name, ": var() names no `--` variable"));
         };
         match resolve_color(var, vars, base, dark, seen)? {
             Some(c) => out.push_str(&format!("#{:08x}", Color::from(c).0)),
@@ -642,5 +773,183 @@ mod reads {
         assert_eq!(tokens.colors().count(), 3);
         assert_eq!(tokens.color("line"), None);
         assert!(overrides("not json", &base()).is_err());
+    }
+}
+
+/// A theme file under theme types, parsed once: a `var()` naming a role
+/// names its token however it is spaced, and what was left out says which
+/// token it is about and whether it is only a name no type declares, in the
+/// sentences it always had.
+#[cfg(test)]
+mod declared_once {
+    use super::*;
+    use crate::{
+        color::rgb,
+        element::{AnyRole, TokenKind, role, theme::ThemeSet},
+    };
+
+    /// A design system: `surface-overlay` plays `popover`, beside an ink
+    /// and the cards' radius.
+    fn set() -> ThemeSet {
+        let mut defaults = Tokens::default();
+        defaults.set_color("surface-overlay", rgb(0x111111).into());
+        defaults.set_color("ink", rgb(0x222222).into());
+        defaults.set_number("radius-card", 14.0);
+        let popover = [AnyRole::from(role::POPOVER)];
+        let mut set = ThemeSet::empty();
+        set.try_add(
+            "ds::Theme",
+            [
+                ("surface-overlay", TokenKind::Color, &popover[..]),
+                ("ink", TokenKind::Color, &[][..]),
+                ("radius-card", TokenKind::Radius, &[][..]),
+            ],
+            defaults,
+        )
+        .unwrap();
+        set
+    }
+
+    fn file(json: &str) -> String {
+        format!(r#"{{ "cssVars": {json} }}"#)
+    }
+
+    fn light(tokens: &Tokens, name: &str) -> Option<Color> {
+        tokens.color(name).map(|c| Color::from(c.light))
+    }
+
+    #[test]
+    fn a_var_naming_a_role_names_its_token_however_it_is_spaced() {
+        let set = set();
+        for var in [
+            "var(--popover)",
+            "var( --popover )",
+            "var(--popover , #ffffff)",
+            "var(  --popover,#ffffff )",
+            "color-mix(in srgb, var( --popover ) 100%, #000000)",
+        ] {
+            let (tokens, left_out) = parse_declared(
+                &file(&format!(
+                    r##"{{ "light": {{ "surface-overlay": "#123456", "ink": "{var}" }} }}"##
+                )),
+                &Tokens::default(),
+                &set,
+            )
+            .unwrap();
+            assert!(left_out.is_empty(), "{var}: {left_out:?}");
+            assert_eq!(
+                light(&tokens, "ink"),
+                Some(Color::from(rgb(0x123456))),
+                "{var}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_roles_name_changes_in_a_var() {
+        let renamed = [("popover", "surface-overlay"), ("card", "surface")];
+        let renames = |value: &str| rename_vars(value, &renamed);
+        assert_eq!(renames("var(--popover)"), "var(--surface-overlay)");
+        assert_eq!(
+            renames("var( --popover , #fff )"),
+            "var( --surface-overlay , #fff )"
+        );
+        // In a fallback, and in a function's arguments.
+        assert_eq!(
+            renames("var(--ink, var(--card, var( --popover )))"),
+            "var(--ink, var(--surface, var( --surface-overlay )))"
+        );
+        assert_eq!(
+            renames("color-mix(in oklab, var(--popover) 40%, var(--ring))"),
+            "color-mix(in oklab, var(--surface-overlay) 40%, var(--ring))"
+        );
+        // Another name that starts as a role's, no variable, an unclosed
+        // one: as they were, for the reader to take or to list.
+        for same in [
+            "var(--popover-foreground)",
+            "var(popover)",
+            "var(--popover",
+            "#123456",
+            "",
+        ] {
+            assert_eq!(renames(same), same);
+        }
+    }
+
+    #[test]
+    fn what_was_left_out_says_its_token_and_whether_it_is_only_undeclared() {
+        let (tokens, left_out) = overrides_declared(
+            &file(
+                r##"{ "light": { "brand": "#000000", "ink": "#zz", "popover": "#333333", "surface-overlay": "#444444" },
+                      "theme": { "radius-card": "wide" } }"##,
+            ),
+            &Tokens::default(),
+            &set(),
+        )
+        .unwrap();
+        let mut seen: Vec<(String, bool)> = left_out
+            .iter()
+            .map(|l| (l.to_string(), l.is_undeclared()))
+            .collect();
+        seen.sort();
+        assert_eq!(
+            seen,
+            [
+                ("`brand`: no theme type declares it".to_owned(), true),
+                ("`ink`: #zz is no color".to_owned(), false),
+                (
+                    "`popover`: the token its role is mapped onto, `surface-overlay`, is set too"
+                        .to_owned(),
+                    false
+                ),
+                ("`radius-card`: no radius value".to_owned(), false),
+            ]
+        );
+        // `ink` is listed once: the reader's sentence, not "no color value"
+        // too. Each sentence is about the token it starts with.
+        assert_eq!(left_out.iter().filter(|l| l.is_about("ink")).count(), 1);
+        assert!(left_out.iter().all(|l| {
+            l.token
+                .as_deref()
+                .is_some_and(|t| l.sentence.starts_with(&format!("`{t}`")))
+        }));
+        assert_eq!(
+            light(&tokens, "surface-overlay"),
+            Some(Color::from(rgb(0x444444)))
+        );
+        // The strings the readers list are the sentences.
+        let listed = sentences(left_out.clone());
+        assert_eq!(listed.len(), left_out.len());
+        assert!(listed.contains(&"`brand`: no theme type declares it".to_owned()));
+    }
+
+    #[test]
+    fn a_file_of_no_form_is_listed_as_it_was() {
+        let (tokens, left_out) = overrides_declared("{}", &Tokens::default(), &set()).unwrap();
+        assert!(tokens.is_empty());
+        assert_eq!(
+            sentences(left_out),
+            ["no shadcn `{ \"cssVars\": { ... } }`"]
+        );
+        let (_, left_out) = overrides_declared(
+            &file(r##"{ "light": { "ink": true }, "dark": 3 }"##),
+            &Tokens::default(),
+            &set(),
+        )
+        .unwrap();
+        let mut listed = sentences(left_out);
+        listed.sort();
+        assert_eq!(
+            listed,
+            [
+                "`ink`: no color value",
+                "cssVars.dark: expected an object",
+                "cssVars.light.ink: expected a CSS value, got true",
+            ]
+        );
+        assert_eq!(
+            overrides_declared("nope", &Tokens::default(), &set()).unwrap_err()[..9],
+            *"not JSON:"
+        );
     }
 }
