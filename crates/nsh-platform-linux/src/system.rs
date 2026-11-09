@@ -30,6 +30,10 @@
 //!   schema is installed), live; the time zone, below;
 //! - the font scale: `gtk-xft-dpi` over 96 dpi;
 //! - reduce motion: `gtk-enable-animations` off;
+//! - high contrast: the settings portal's `org.freedesktop.appearance
+//!   contrast` (1: higher contrast), else GNOME's
+//!   `org.gnome.desktop.a11y.interface high-contrast`, which GNOME's portal
+//!   serves too (before it had `contrast`), live; off without a portal;
 //! - the pixel ratio: the root's surface scale (fractional scales too);
 //! - right to left: GTK's default text direction (the locale's);
 //! - the screen reader: the AT-SPI bus's `ScreenReaderEnabled`;
@@ -143,6 +147,7 @@ struct Appearance {
     dark: bool,
     font_scale: f32,
     reduce_motion: bool,
+    high_contrast: bool,
     rtl: bool,
     screen_reader: bool,
 }
@@ -177,6 +182,10 @@ struct System {
     portal_dark: Option<bool>,
     /// GTK's scheme before this module set it.
     initial_dark: bool,
+    /// The portal's `contrast`: `None` until it gives one (or without it).
+    portal_contrast: Option<bool>,
+    /// GNOME's `high-contrast`, through the portal: the same.
+    gnome_high_contrast: Option<bool>,
     screen_reader: bool,
     /// `timedated`'s zone: `None` until it gives one (or without it).
     time_zone: Option<TimeZone>,
@@ -302,9 +311,13 @@ pub(crate) fn system_dark() -> bool {
 /// The system's settings now.
 fn appearance() -> Appearance {
     let settings = gtk::Settings::default();
-    let (dark, screen_reader) = SYSTEM.with(|s| {
+    let (dark, high_contrast, screen_reader) = SYSTEM.with(|s| {
         let s = s.borrow();
-        (s.portal_dark.unwrap_or(s.initial_dark), s.screen_reader)
+        (
+            s.portal_dark.unwrap_or(s.initial_dark),
+            s.portal_contrast.or(s.gnome_high_contrast).unwrap_or(false),
+            s.screen_reader,
+        )
     });
     Appearance {
         dark,
@@ -314,6 +327,7 @@ fn appearance() -> Appearance {
         reduce_motion: settings
             .as_ref()
             .is_some_and(|s| !s.is_gtk_enable_animations()),
+        high_contrast,
         rtl: gtk::Widget::default_direction() == gtk::TextDirection::Rtl,
         screen_reader,
     }
@@ -399,6 +413,7 @@ fn update(surface: &Surface, appearance: Appearance) {
     env.locale_settings = locale_settings();
     env.font_scale = appearance.font_scale;
     env.reduce_motion = appearance.reduce_motion;
+    env.high_contrast = appearance.high_contrast;
     env.rtl = appearance.rtl;
     env.screen_reader = appearance.screen_reader;
     env.pixel_ratio = pixel_ratio(&surface.root);
@@ -567,8 +582,16 @@ fn parse_version(release: &str) -> (u16, u16) {
     (parts.next().unwrap_or(0), parts.next().unwrap_or(0))
 }
 
+/// The portal's settings followed: the appearance's `color-scheme` and
+/// `contrast`, and GNOME's high contrast.
+const PORTAL_SETTINGS: [(&str, &str); 3] = [
+    ("org.freedesktop.appearance", "color-scheme"),
+    ("org.freedesktop.appearance", "contrast"),
+    ("org.gnome.desktop.a11y.interface", "high-contrast"),
+];
+
 /// Follows the portal's `color-scheme` (0: no preference, 1: dark, 2:
-/// light).
+/// light) and the user's contrast ([`PORTAL_SETTINGS`]).
 fn watch_portal() {
     gio::DBusProxy::for_bus(
         gio::BusType::Session,
@@ -587,27 +610,27 @@ fn watch_portal() {
                 if signal == "SettingChanged"
                     && let Some((namespace, key, value)) =
                         params.get::<(String, String, glib::Variant)>()
-                    && namespace == "org.freedesktop.appearance"
-                    && key == "color-scheme"
                 {
-                    portal_scheme(&value);
+                    portal_setting(&namespace, &key, &value);
                 }
             });
-            proxy.call(
-                "ReadOne",
-                Some(&("org.freedesktop.appearance", "color-scheme").to_variant()),
-                gio::DBusCallFlags::NONE,
-                1000,
-                gio::Cancellable::NONE,
-                |result| match result {
-                    Ok(reply) => {
-                        if let Some((value,)) = reply.get::<(glib::Variant,)>() {
-                            portal_scheme(&value);
+            for (namespace, key) in PORTAL_SETTINGS {
+                proxy.call(
+                    "ReadOne",
+                    Some(&(namespace, key).to_variant()),
+                    gio::DBusCallFlags::NONE,
+                    1000,
+                    gio::Cancellable::NONE,
+                    move |result| match result {
+                        Ok(reply) => {
+                            if let Some((value,)) = reply.get::<(glib::Variant,)>() {
+                                portal_setting(namespace, key, &value);
+                            }
                         }
-                    }
-                    Err(err) => log::debug!("settings portal: no color-scheme: {err}"),
-                },
-            );
+                        Err(err) => log::debug!("settings portal: no {key}: {err}"),
+                    },
+                );
+            }
             SYSTEM.with(|s| s.borrow_mut().proxies.push(proxy));
         },
     );
@@ -673,21 +696,31 @@ fn timedated_zone(proxy: &gio::DBusProxy) {
     }
 }
 
-/// The portal's `color-scheme` value (a `u`, possibly boxed in a `v`).
-fn portal_scheme(value: &glib::Variant) {
+/// A portal setting's value (possibly boxed in a `v`), if it is one of
+/// [`PORTAL_SETTINGS`].
+fn portal_setting(namespace: &str, key: &str, value: &glib::Variant) {
     let value = if value.is_type(glib::VariantTy::VARIANT) {
         value.as_variant().unwrap_or_else(|| value.clone())
     } else {
         value.clone()
     };
-    let Some(scheme) = value.get::<u32>() else {
-        return;
-    };
-    // No preference (0) is light, as GTK has it.
-    let dark = Some(scheme == 1);
     let changed = SYSTEM.with(|s| {
         let mut s = s.borrow_mut();
-        std::mem::replace(&mut s.portal_dark, dark) != dark
+        let (slot, on) = match (namespace, key) {
+            // No preference (0) is light, as GTK has it.
+            ("org.freedesktop.appearance", "color-scheme") => {
+                (&mut s.portal_dark, value.get::<u32>().map(|v| v == 1))
+            }
+            // 0: no preference, 1: higher contrast.
+            ("org.freedesktop.appearance", "contrast") => {
+                (&mut s.portal_contrast, value.get::<u32>().map(|v| v == 1))
+            }
+            ("org.gnome.desktop.a11y.interface", "high-contrast") => {
+                (&mut s.gnome_high_contrast, value.get::<bool>())
+            }
+            _ => return false,
+        };
+        on.is_some_and(|on| slot.replace(on) != Some(on))
     });
     if changed {
         system_changed();

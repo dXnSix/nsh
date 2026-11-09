@@ -470,8 +470,9 @@ const hapticsSupported = platform.os === "ios" || (platform.os === "android" && 
 
 On [Linux](./linux.md), `platform.os` is `"linux"`, the idiom `"desktop"` and `platform.version` the kernel's major
 and minor version (`"6.12"`): distributions number their releases in ways that cannot be compared. There, the safe
-area and the keyboard height are 0, `colorScheme()` follows the desktop's setting (the XDG settings portal) live,
-`fontScale()` the desktop's text scaling and `pixelRatio()` the display's scale, fractional ones included.
+area and the keyboard height are 0, `colorScheme()` and `highContrast()` follow the desktop's settings (the XDG
+settings portal) live, `fontScale()` the desktop's text scaling and `pixelRatio()` the display's scale, fractional ones
+included.
 
 On [macOS](./macos.md) (the AppKit backend), `platform.os` is `"macos"`, the idiom `"desktop"` and
 `platform.version` the macOS version. The safe area and the keyboard height are 0, `colorScheme()` follows the
