@@ -4,10 +4,10 @@
 
 use std::time::Duration;
 
-use nsh_base::theme;
+use nsh_base::{role, theme};
 use nsh_core::{
     Color, Size,
-    element::{AppTheme, Registry, Role, Root, TokenKind, TokenSpec, Tokens},
+    element::{AppTheme, Registry, Root, TokenKind, TokenSpec, Tokens},
     prelude::*,
 };
 use nsh_engine::EngineConfig;
@@ -34,8 +34,8 @@ impl AppTheme for Flat {
         static SPECS: std::sync::LazyLock<Vec<TokenSpec>> = std::sync::LazyLock::new(|| {
             vec![
                 TokenSpec::new("surface", TokenKind::Color)
-                    .role(Role::Card)
-                    .role(Role::Popover),
+                    .role(role::CARD)
+                    .role(role::POPOVER),
             ]
         });
         &SPECS

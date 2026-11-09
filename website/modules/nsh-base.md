@@ -321,15 +321,18 @@ and reads the token of that name unless the theme maps it onto another token:
 | `font-sans` | the default font of every text; `theme().font_sans` |
 | `font-mono` | `theme().font_mono` |
 
-A role is no token and no class: `bg-primary` is a class when the theme has a token `primary`. In Rust, a role is
-`nsh_core::element::Role` (`Role::Popover.name()` is `"popover"`), and `Tokens::with_roles` maps roles onto tokens
-(`tokens.with_roles([(Role::Popover, "surface-overlay")])`), which `tokens.role_color(Role::Popover)` then reads.
+A role is no token and no class: `bg-primary` is a class when the theme has a token `primary`. In Rust, a role is a
+constant, an `nsh_core::element::Role`: the ones above are in `nsh_base::role` (`role::POPOVER.name()` is
+`"popover"`, `role::RADIUS` reads a number, `role::FONT_SANS` a font family). `Tokens::with_role` maps a role onto a
+token (`tokens.with_role(role::POPOVER, "surface-overlay")`), which `tokens.role(role::POPOVER)` then reads. A crate
+with components of its own declares the roles they draw with the same way
+(`pub const BANNER: Role = Role::new("banner");`): a role is its name, whoever declares it.
 Without a mapping every role reads the token of its own name, so a shadcn theme draws as it always did. The platforms'
 controls take the theme's colors only when the app has a theme of its own (`Tokens::is_themed`, which the core sets);
 an app on the default theme keeps the system's alert colors.
 
 A registered [theme type](../docs/rust.md#theme-types) maps roles onto its own tokens (`TokenSpec::role`), and
-`theme()`'s fields then read those tokens: with a design system that maps `Role::Popover` onto `surface-overlay`,
+`theme()`'s fields then read those tokens: with a design system that maps `role::POPOVER` onto `surface-overlay`,
 `theme().popover` is `surface-overlay`, and `nsh/base`'s components, the tab bar and the platforms' controls draw in
 the design system.
 

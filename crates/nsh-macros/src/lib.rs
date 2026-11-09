@@ -1876,9 +1876,12 @@ fn methods_impl(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 ///   (`#[token(radius)] card` is `radius-card`, `weight` `font-weight-*`,
 ///   `font` `font-*`, `shadow` `shadow-*`); a color (`AdaptiveColor`), a
 ///   number (`f32`, `Points`), a font family (`SharedString`, `String`) or
-///   box shadows (`AdaptiveShadow`). `name = "…"` names it, `role = "…"`
-///   maps a role onto it (`role = "popover"`), once for each role it plays
-///   (`role = "card", role = "popover"`: one surface for both).
+///   box shadows (`AdaptiveShadow`). `name = "…"` names it; `role = <path>`
+///   maps a role onto it, the role's constant by its path
+///   (`role = nsh_base::role::POPOVER`, or a component library's own),
+///   once for each role it plays (`role = role::CARD, role = role::POPOVER`:
+///   one surface for both). The role reads what the token holds: the
+///   compiler refuses a number's role on a color.
 /// - `#[token(nested)]`: a field of another `AppTheme` type, its names under
 ///   `<field>-`: in front of a color's or a number's name (`surface-raised`),
 ///   after a namespaced kind's namespace, so its classes still read it

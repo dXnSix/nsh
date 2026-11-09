@@ -235,7 +235,7 @@ pub use crate::{
         TextViewLinkPressEvent, TextViewLinks, TextViewMath, TextViewPart, TextViewParts,
         TextViewProps, TextViewSelectionEvent, TextViewStyles, text_view,
     },
-    theme::{DEFAULT_THEME, Theme, ThemeError, theme, theme_overrides, tokens_of},
+    theme::{DEFAULT_THEME, Theme, ThemeError, role, theme, theme_overrides, tokens_of},
     time_field::{
         HourCycle, TimeField, TimeFieldElement, TimeFieldEvent, TimeFieldProps,
         TimeFieldSegmentEntry, TimeOfDay, TimePrecision, TimeSegment, time_field,

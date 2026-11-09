@@ -800,7 +800,7 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
                         e.int(27);
                         let themed = tokens.is_themed();
                         for role in DIALOG_ROLES {
-                            let color = tokens.role_color(role).filter(|_| themed);
+                            let color = tokens.role(role).filter(|_| themed);
                             for c in [color.map(|c| c.light), color.map(|c| c.dark)] {
                                 e.int(c.map_or(0, |c| argb(c.into())));
                             }
@@ -817,11 +817,11 @@ pub(crate) fn encode(batch: MountBatch) -> Encoded {
 /// order): the dialog, its title, its message, its buttons and a
 /// destructive action.
 const DIALOG_ROLES: [nsh_core::element::Role; 5] = [
-    nsh_core::element::Role::Popover,
-    nsh_core::element::Role::PopoverForeground,
-    nsh_core::element::Role::MutedForeground,
-    nsh_core::element::Role::Primary,
-    nsh_core::element::Role::Destructive,
+    nsh_core::element::role::POPOVER,
+    nsh_core::element::role::POPOVER_FOREGROUND,
+    nsh_core::element::role::MUTED_FOREGROUND,
+    nsh_core::element::role::PRIMARY,
+    nsh_core::element::role::DESTRUCTIVE,
 ];
 
 /// An audio command after its opcode (47), as `Audio.command` reads it:

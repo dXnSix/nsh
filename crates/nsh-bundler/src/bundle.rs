@@ -1710,8 +1710,8 @@ mod token_namespaces {
 #[cfg(test)]
 mod typed_theme {
     use nsh_core::element::{
-        AdaptiveColor, AppTheme, Registry, Role, TokenKind, TokenSpec, Tokens,
-        description::SetDescription,
+        AdaptiveColor, AppTheme, Registry, TokenKind, TokenSpec, Tokens,
+        description::SetDescription, role,
     };
     use oxc::span::SourceType;
 
@@ -1726,7 +1726,7 @@ mod typed_theme {
                 vec![
                     TokenSpec::new("surface-overlay", TokenKind::Color)
                         .doc("Popovers and menus.")
-                        .role(Role::Popover),
+                        .role(role::POPOVER),
                     TokenSpec::new("radius-card", TokenKind::Radius).doc("Cards' corners."),
                 ]
             });

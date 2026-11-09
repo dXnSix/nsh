@@ -750,13 +750,18 @@ page's; `font-mono` is the monospaced one) and has none of its own. The theme is
 `theme().sidebar_ring`, `theme().radius`), plus Tailwind's fonts `font-sans` / `font-mono` (`theme().font_sans`,
 `theme().font_mono`; `None`, the system's fonts). `theme()` returns the theme of the tokens drawn with now, made once
 per change of them; an app's own tokens are read by name (`theme().color("up")`). Each field is read through its
-**role** (`element::Role`: `background`, `popover`, `primary`, `selection`, `radius`, `font-sans`, …, the names NSH's
-own parts draw with, `name()` shadcn's spelling): `Tokens::role_color` / `role_number` / `role_font` read the token a
-theme maps the role onto (`Tokens::with_roles`, kept by `over`), else the token of the role's name, so without a
-mapping every reader gets what it always did. The core's readers use roles too (the default font,
-`role_font(Role::FontSans)`; the mobile tab bar's tint, `Role::Primary`), and so do the platforms' (Linux's menus,
-iOS's alert tint, Android's `DIALOG_ROLES`; GPUI's host background is the host theme's `background` field, which
-`Theme::of` reads through `Role::Background`). A role is no token and adds no class. The core
+**role** (`element::Role<V>`: a name, `name()` shadcn's spelling, and in its type what it reads, `RoleValue`: a color
+by default, `NumberRole` an `f32`, `FontRole` a family). A role is a constant of the crate that draws with it and is
+its name, so two constants of one name are one role: the core's and the platforms' are `element::role` (`POPOVER`,
+`POPOVER_FOREGROUND`, `PRIMARY`, `ACCENT`, `ACCENT_FOREGROUND`, `MUTED_FOREGROUND`, `BORDER`, `DESTRUCTIVE`,
+`FONT_SANS`), nsh-base's `nsh_base::role` (one per field of `Theme`, written by `theme!` from its one list, with
+`RADIUS`, `FONT_MONO` and `SELECTION`), and another UI set declares its own. `Tokens::role(role)` reads the token a
+theme maps the role onto (`Tokens::with_role`, or `with_roles` for a list of `AnyRole`s of several kinds; kept by
+`over`, keyed by the role's name), else the token of the role's name, so without a mapping every reader gets what it
+always did. The core's readers use roles too (the default font, `role(role::FONT_SANS)`; the mobile tab bar's tint,
+`role::PRIMARY`), and so do the platforms' (Linux's menus, iOS's alert tint, Android's `DIALOG_ROLES`; GPUI's host
+background is the host theme's `background` field, which `Theme::of` reads through `role::BACKGROUND`). A role is no
+token and adds no class. The core
 says whether the app has a theme of its own on the tokens it draws with (`Tokens::is_themed`: other than the UI set's
 defaults, `registry.tokens(None)`), which iOS and Android check before taking a theme's colors for their alerts. The defaults are shadcn's `neutral` theme (`default-theme.json`, `radius` 0.625rem = 10 pt); no component of
 `nsh/base` draws with them but `TextView`'s reading typography and the default looks of `Editor` and `DiffView`.
@@ -801,7 +806,7 @@ lacks. The core sends the tokens drawn with to the
 platform when they change (`Command::Tokens` on the root), which colors its own controls with them (Linux's menus:
 `docs/dev/linux.md`; Android's alerts and action sheets: `popover` behind, `popover-foreground` for the title and
 the options, `muted-foreground` for the message, `primary` for the buttons and `destructive` for a destructive action,
-over the system dialog's shape, each as a role; iOS's alerts take `Role::Primary` as their tint, which iOS 17 draws the
+over the system dialog's shape, each as a role; iOS's alerts take `role::PRIMARY` as their tint, which iOS 17 draws the
 regular and cancel actions in and iOS 26 does not use; an app without a theme of its own, `!Tokens::is_themed()`,
 keeps the system's colors on both). `nsh_base::theme()` reads the tokens from a signal of
 the surface (`element::tokens`): new tokens run again the bindings that read them. An embedding app can give a
@@ -818,8 +823,9 @@ nested type's field, the nested type's), `write_patch(patch, prefix, out)` and t
 with the roles its specs map (`Tokens::with_roles`). A `TokenSpec` is a name, a `TokenKind` (`#[non_exhaustive]`:
 `Color`, `Number`, `Radius`, `Spacing`, `Text`, `Weight`, `Tracking`, `Leading`, `Blur`, `Font`, `Shadow`; `name()` /
 `from_name()` its spelling in descriptions, `is_number()` every kind but `Color`, `Font` and `Shadow`, `namespace()` the
-namespace its classes read, `radius-` to `shadow-`, none for `Color` and `Number`), a doc comment and the `Role` it
-plays, built with `TokenSpec::new(name, kind).doc(..).role(..)`. The prefix lets a type hold another:
+namespace its classes read, `radius-` to `shadow-`, none for `Color` and `Number`), a doc comment and the roles it
+plays (`AnyRole`s: a role's name and what it reads), built with `TokenSpec::new(name, kind).doc(..).role(..)`. The
+prefix lets a type hold another:
 `TokenKind::prefixed(prefix, name)` puts it after the name's namespace when it has one, so the classes still find it
 (`radius-card` under `button-`: `radius-button-card`, `rounded-button-card`), else in front (`surface-raised`). The
 tokens stay flat and by name, so classes, `token()` and theme files read them as they read any theme's; a type is a
@@ -829,18 +835,24 @@ app_theme` and `nsh-engine`'s `tests/engine/app_theme.rs`); `#[derive(AppTheme)]
 kind's namespace, a nested type's through `TokenKind::prefixed`; the impl through `__private::ThemeValue`, which
 `AdaptiveColor`, `f32`, `Points`, `SharedString`, `String` and `AdaptiveShadow` implement; `<Type>Patch` of `Option`s,
 each documented with its token and classes; the compile errors of `AppTheme`'s doctests, which apply
-`ThemeSet::try_add`'s rule of names and kinds and check each role's name, kind and uniqueness).
+`ThemeSet::try_add`'s rule of names and kinds; a role is its constant's path, written into `.role::<V>(path)` with
+`V` what a token of the field's kind holds, so rustc refuses a path that is no role and a role of another kind, and
+the derive only a path written twice and a role on a shadow).
 
 `Registry::theme::<T>()` records `ThemeSpec::of::<T>()`: the type's name, its `TypeId`, its specs and its defaults
 (`T::default().to_tokens()`), each behind a function pointer, so the registry stays `Clone` and needs no `T`
 (`Registry::theme_specs`). `Registry::merged` unions the sets' specs by `TypeId` and builds the crate-private
 `ThemeSet` of them: each name with its owner type and kind, the types in registration order, and the union of their
 defaults with the role aliases. A token's spec lists the roles it plays (`TokenSpec::roles`, one `.role(..)` each):
-several roles may read one token, and one role reads one token. `ThemeSet::try_add` returns an error naming both
-types for a name or a role (`role_owner`) another type claims, and for a role two tokens of one type play;
+several roles may read one token, and one role reads one token. Roles are told apart by name alone, so a UI set's
+own constant maps as the core's do and two constants of one name are one role. `ThemeSet::try_add` returns an error
+naming both types for a name or a role (`role_owner`) another type claims, for a role two tokens of one type play,
+and for a role that reads another kind than its token holds (`TokenKind::role_kind`; no role reads a shadow);
 `ThemeSet::new` panics with it, as two components of one name do.
 `ThemeSet::target(key)` is the name a theme file's key sets: a declared name, else the token a role of that name
-(`primary`) is mapped onto.
+(`primary`, or a UI set's own) is mapped onto (`Tokens::mapped`); `renamed_roles` are the mapped roles a `var()`
+may name. The description carries a role as its name, and the toolchain gives it the kind of the token that plays
+it.
 
 `TokenProvider` is how theme files are read: `Source { read, overrides }`, a set's `tokens_from` and
 `token_overrides_from` functions (`nsh/base`'s `read_tokens` and `theme_file::overrides`), or
