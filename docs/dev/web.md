@@ -452,7 +452,8 @@ when the JSON differs): `idiom`, `locale` (`navigator.languages[0]`), `languages
 first), `regional` (the locale's hour cycle and first day of the week from `Intl`, the rest the region's), `timeZone`
 (`Intl.DateTimeFormat().resolvedOptions().timeZone`), `lifecycle` (`background` while `document.visibilityState` is
 `hidden`, else `active` with the focus and `inactive` without), `rtl` (`<html dir>`, else the locale's script),
-`reduceMotion`, `fontScale` (the root font size / 16), `pixelRatio`, `safeArea` (`env(safe-area-inset-*)` read through a
+`reduceMotion`, `highContrast` (`prefers-contrast: more`), `fontScale` (the root font size / 16), `pixelRatio`,
+`safeArea` (`env(safe-area-inset-*)` read through a
 hidden probe element, clipped to the container) and `keyboard` (the container's part below `visualViewport`). The Rust
 side keeps it (`PAGE`) for the next start; the appearance and the window keep their own calls (`nsh_set_dark`,
 `nsh_resize`). Changes come from media query listeners, `languagechange`, `visibilitychange`, `focus` and `blur` (the

@@ -476,9 +476,9 @@ fn page() -> Environment {
 
 /// What the page knows about the user and the device, as JSON: `idiom`
 /// (`"phone"`, `"pad"`, `"desktop"`), `locale` (a BCP 47 tag), `rtl`,
-/// `reduceMotion`, `fontScale`, `pixelRatio`, `safeArea` (`[top, right,
-/// bottom, left]`), `keyboard` (the height the on-screen keyboard
-/// covers), `appleKeyboard` (the browser runs on an Apple platform: its
+/// `reduceMotion`, `highContrast`, `fontScale`, `pixelRatio`, `safeArea`
+/// (`[top, right, bottom, left]`), `keyboard` (the height the on-screen
+/// keyboard covers), `appleKeyboard` (the browser runs on an Apple platform: its
 /// shortcuts are Apple's), `host` (the page answers `nsh/host` calls:
 /// `createPlayer`'s `host`) and `screenColor` (the browser has an
 /// `EyeDropper`); missing keys keep their value. Called before the app starts
@@ -558,6 +558,7 @@ pub unsafe extern "C" fn nsh_environment(ptr: *const u8, len: usize) -> f64 {
     env.rtl = flag("rtl").unwrap_or(env.rtl);
     env.apple_keyboard = flag("appleKeyboard").unwrap_or(env.apple_keyboard);
     env.reduce_motion = flag("reduceMotion").unwrap_or(env.reduce_motion);
+    env.high_contrast = flag("highContrast").unwrap_or(env.high_contrast);
     if let Some(scale) = num("fontScale").filter(|s| *s > 0.0) {
         env.font_scale = scale;
     }
@@ -597,6 +598,7 @@ pub unsafe extern "C" fn nsh_environment(ptr: *const u8, len: usize) -> f64 {
         e.rtl = env.rtl;
         e.apple_keyboard = env.apple_keyboard;
         e.reduce_motion = env.reduce_motion;
+        e.high_contrast = env.high_contrast;
         e.font_scale = env.font_scale;
         let rescaled = e.pixel_ratio != env.pixel_ratio;
         e.pixel_ratio = env.pixel_ratio;

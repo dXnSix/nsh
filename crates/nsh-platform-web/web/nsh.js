@@ -1795,6 +1795,10 @@ class Player {
     const changed = () => this.environmentChanged();
     this.reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
     this.reducedMotion.addEventListener("change", changed);
+    // `highContrast()`: the system's Increase Contrast or contrast theme, as
+    // the browser reports it.
+    this.moreContrast = matchMedia("(prefers-contrast: more)");
+    this.moreContrast.addEventListener("change", changed);
     // The pixel ratio changes with the page's zoom and the screen: a query
     // for the current one says when it no longer holds.
     const resolution = () => {
@@ -1862,6 +1866,7 @@ class Player {
       regional: regional(locale),
       rtl: dir === "rtl" || dir === "ltr" ? dir === "rtl" : rightToLeft(locale),
       reduceMotion: this.reducedMotion.matches,
+      highContrast: this.moreContrast.matches,
       fontScale: Math.round(fontSize / 16 * 100) / 100,
       pixelRatio: devicePixelRatio || 1,
       safeArea: this.safeArea(),
