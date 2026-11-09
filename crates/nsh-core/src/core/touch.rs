@@ -387,9 +387,9 @@ impl<T: TextEngine> Core<T> {
     pub(super) fn cancel_press(&mut self, id: NodeId) {
         let Ok(outer) = self.key(id) else { return };
         self.components.touch.cancelled = Some(id);
-        // The views there are: a released view's slot is empty, and the
-        // slab's `len` counts the views, not the slots.
-        let pressed: Vec<_> = (self.nodes.iter())
+        // The slab's occupied entries: `len` counts them, and a removed
+        // node leaves its key vacant below the highest one.
+        let pressed: Vec<super::Key> = (self.nodes.iter())
             .filter(|(_, node)| node.states & crate::tailwind::state::PRESSED != 0)
             .map(|(key, _)| key as super::Key)
             .filter(|&key| self.is_within(key, outer))
