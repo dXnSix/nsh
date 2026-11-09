@@ -69,6 +69,7 @@ pub fn run_app<B: Backend>(
             }
         }
     })();
+    view.will_terminate();
     view.stop();
     result
 }

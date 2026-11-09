@@ -16,7 +16,9 @@ profile, and starts it with inherited stdin/stdout. App preparation and host bui
 until the host is ready to launch. While it runs, CLI diagnostics, the host's stderr and the host logger append
 to the app's `.nsh/tui.log`, including verbose tool output. The host alone writes the terminal UI. Ctrl+C copies a selection and otherwise exits;
 Unix stop signals and Windows console breaks ask the host loop to exit so its terminal guard can restore the
-screen and raw mode before the CLI reaps it.
+screen and raw mode before the CLI reaps it. However the loop ends, `run_app` runs the app's terminate listeners
+(`AppView::will_terminate`, `TERMINATE_TIMEOUT` at most) before it stops the engine; an embedder with a loop of its
+own calls it before `stop`.
 
 The host enables [alternate scroll mode (DECSET 1007)](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html)
 with `ESC[?1007h` on entering the alternate screen and disables it with `ESC[?1007l` during normal, error and panic
