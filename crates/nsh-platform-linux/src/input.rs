@@ -64,8 +64,8 @@ use nsh_core::{
     geometry::{Points, point},
     input::{
         self, Candidate, Gate, Grab, GrabOptions, HitArea, Link, PAN_SLOP, PRESS_SLOP, Pinch,
-        SCROLL_PRESS_DELAY, VelocityTracker, ZOOM_IDLE, has_press, laid_out, latch_holds,
-        transforms,
+        SCROLL_PRESS_DELAY, VelocityTracker, ZOOM_IDLE, ZOOM_NOTCH, has_press, laid_out,
+        latch_holds, transforms,
     },
     tailwind::state::{HOVERED, PRESSED},
 };
@@ -877,21 +877,122 @@ fn scroll_event(
         }
     };
     let modifiers = event.modifier_state();
+    let sideways =
+        kind == notches && dx == 0.0 && modifiers.contains(gdk::ModifierType::SHIFT_MASK);
+    // The views listening to `onWheel` hear it first, as the scroll views
+    // take it (Shift + wheel sideways; a notch as `input::ZOOM_NOTCH`
+    // counts it); their `wheelScroll` says how far the scroll views and
+    // Ctrl + wheel's pinch may take it, and keeps it from the widgets
+    // around the app.
+    let (sx, sy) = if sideways { (dy, dx) } else { (dx, dy) };
+    let delta = if kind == notches {
+        (sx * ZOOM_NOTCH.0, sy * ZOOM_NOTCH.0)
+    } else {
+        (sx, sy)
+    };
+    let latched = latched_view(surface, kind, dx, dy, time);
+    let reach = wheel_listeners(
+        surface,
+        (x, y),
+        delta,
+        kind == WheelInput::Touchpad,
+        modifiers,
+        latched,
+    );
     // Mice have no pinch: Ctrl + wheel pinches, as it zooms on desktops.
     if let WheelInput::Step { .. } = kind
         && modifiers.contains(gdk::ModifierType::CONTROL_MASK)
         && dy != 0.0
-        && wheel_zoom(surface, x, y, dy)
+        && wheel_zoom(surface, x, y, dy, reach)
     {
         return glib::Propagation::Stop;
     }
-    if kind == notches && dx == 0.0 && modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
+    if sideways {
         (dx, dy) = (dy, dx);
     }
-    if wheel_input(surface, x, y, dx, dy, time, kind) {
+    if wheel_input(surface, x, y, dx, dy, time, kind, reach) || reach != usize::MAX {
         glib::Propagation::Stop
     } else {
         glib::Propagation::Proceed
+    }
+}
+
+/// Tells the views under `(x, y)` (root coordinates) that listen to
+/// `onWheel` of a wheel by `delta` points, from the inside out, and
+/// returns how many of those views, from the inside out, may scroll or
+/// zoom by it ([`input::wheel_route`]); `latched` is the scroll view a
+/// scroll in progress stays on. A hosted widget that scrolls itself takes
+/// the wheel; without listeners or a `wheelScroll` along the chain it
+/// only walks it.
+fn wheel_listeners(
+    surface: &Surface,
+    (x, y): (f32, f32),
+    delta: (f32, f32),
+    precise: bool,
+    state: gdk::ModifierType,
+    latched: Option<NshView>,
+) -> usize {
+    let Some(hit) = pick(&event_root(surface), x, y) else {
+        return usize::MAX;
+    };
+    if hit.native.as_ref().is_some_and(scrolls_itself) {
+        return usize::MAX;
+    }
+    let views = chain(&hit.view);
+    let links: Vec<_> = views
+        .iter()
+        .map(|v| {
+            let s = v.state();
+            input::WheelLink::new(s.events, s.props.wheel_scroll)
+        })
+        .collect();
+    if links.iter().all(|l| *l == input::WheelLink::default()) {
+        return usize::MAX;
+    }
+    let latched = latched.map(|l| views.iter().position(|v| *v == l).unwrap_or(views.len()));
+    let route = input::wheel_route(&links, latched);
+    if delta != (0.0, 0.0) {
+        for &i in &route.listeners {
+            let view = &views[i];
+            let (location_x, location_y) = local(surface, view, x, y);
+            let wheel = nsh_core::WheelEvent::new(
+                point(Points(location_x), Points(location_y)),
+                point(Points(x), Points(y)),
+                point(Points(delta.0), Points(delta.1)),
+                modifiers(state),
+                precise,
+            );
+            let id = view.state().id;
+            surface.event(id, EventKind::Wheel, EventPayload::Wheel(wheel));
+        }
+    }
+    if route.reach == views.len() {
+        usize::MAX
+    } else {
+        route.reach
+    }
+}
+
+/// The scroll view the scroll in progress stays on, if any: a touchpad
+/// gesture's, or the one wheel notches by `(dx, dy)` at `time` (ms) still
+/// latch to.
+fn latched_view(
+    surface: &Surface,
+    kind: WheelInput,
+    dx: f32,
+    dy: f32,
+    time: f64,
+) -> Option<NshView> {
+    let input = &surface.input;
+    if !matches!(kind, WheelInput::Step { .. }) {
+        return input.wheel.borrow().as_ref().map(|w| w.view.clone());
+    }
+    let horizontal = dx.abs() > dy.abs();
+    match &*input.latch.borrow() {
+        Some((view, h, last)) if latch_holds(*h, *last, horizontal, time) && view.is_mapped() => {
+            Some(view.clone())
+        }
+        _ => None,
     }
 }
 
@@ -973,7 +1074,9 @@ pub(crate) fn simulate(surface: &Rc<Surface>, action: Simulated) {
         }
         Simulated::Wheel(x, y, dx, dy) => {
             let step = WheelInput::Step { notches: false };
-            wheel_input(surface, x, y, dx, dy, time, step);
+            let latched = latched_view(surface, step, dx, dy, time);
+            let reach = wheel_listeners(surface, (x, y), (dx, dy), false, held, latched);
+            wheel_input(surface, x, y, dx, dy, time, step, reach);
         }
         Simulated::Hover(x, y) => {
             surface.input.last_state.set(Some(held));
@@ -2003,7 +2106,7 @@ fn touchpad_pinch(surface: &Rc<Surface>, event: &gdk::TouchpadEvent, x: f32, y: 
 /// A Ctrl + wheel step of `dy` notches (negative: zooms in) at `(x, y)`:
 /// pinches the view under it that pinches, ending once the steps stop.
 /// Returns whether a view took it.
-fn wheel_zoom(surface: &Rc<Surface>, x: f32, y: f32, dy: f32) -> bool {
+fn wheel_zoom(surface: &Rc<Surface>, x: f32, y: f32, dy: f32, reach: usize) -> bool {
     let input = &surface.input;
     let generation = input.next_gen.get();
     input.next_gen.set(generation + 1);
@@ -2014,7 +2117,7 @@ fn wheel_zoom(surface: &Rc<Surface>, x: f32, y: f32, dy: f32) -> bool {
             let Some(hit) = pick(&event_root(surface), x, y) else {
                 return false;
             };
-            let view = chain(&hit.view).into_iter().find(|v| {
+            let view = chain(&hit.view).into_iter().take(reach).find(|v| {
                 let s = v.state();
                 transforms(&gesture_values(surface, v, s.id), s.events).0
             });
@@ -2277,13 +2380,22 @@ fn scrolls_itself(widget: &gtk::Widget) -> bool {
 /// wheel's axis take it: a vertical wheel over a carousel scrolls the page
 /// around it, as in browsers; horizontal views take vertical wheels only
 /// where nothing around scrolls vertically.
-fn scroll_target(surface: &Surface, x: f32, y: f32, dx: f32, dy: f32) -> Option<NshView> {
+fn scroll_target(
+    surface: &Surface,
+    x: f32,
+    y: f32,
+    dx: f32,
+    dy: f32,
+    reach: usize,
+) -> Option<NshView> {
     let hit = pick(&event_root(surface), x, y)?;
     if hit.native.as_ref().is_some_and(scrolls_itself) {
         return None;
     }
+    let mut views = chain(&hit.view);
+    views.truncate(reach);
     input::scroll_target(
-        chain(&hit.view),
+        views,
         Points(dx),
         Points(dy),
         |v| v.state().scroll.as_ref().map(|s| s.horizontal),
@@ -2297,7 +2409,9 @@ fn notch(extent: f32) -> f32 {
     extent.max(1.0).powf(2.0 / 3.0)
 }
 
-/// A scroll event at `(x, y)`; returns whether a scroll view took it.
+/// A scroll event at `(x, y)`, which the first `reach` views under the
+/// pointer may take; returns whether a scroll view took it.
+#[allow(clippy::too_many_arguments)]
 fn wheel_input(
     surface: &Rc<Surface>,
     x: f32,
@@ -2306,6 +2420,7 @@ fn wheel_input(
     dy: f32,
     time: f64,
     kind: WheelInput,
+    reach: usize,
 ) -> bool {
     let input = &surface.input;
     match kind {
@@ -2325,7 +2440,7 @@ fn wheel_input(
                 }
                 _ => None,
             };
-            let Some(view) = latched.or_else(|| scroll_target(surface, x, y, dx, dy)) else {
+            let Some(view) = latched.or_else(|| scroll_target(surface, x, y, dx, dy, reach)) else {
                 input.latch.borrow_mut().take();
                 return false;
             };
@@ -2355,7 +2470,7 @@ fn wheel_input(
                 _ => None,
             };
             if let Some(held) = held {
-                let target = scroll_target(surface, x, y, dx, dy);
+                let target = scroll_target(surface, x, y, dx, dy, reach);
                 if target.as_ref() == Some(&held) {
                     *input.wheel.borrow_mut() = Some(new_wheel(held, time));
                 } else {
@@ -2364,7 +2479,7 @@ fn wheel_input(
                 }
             }
             if input.wheel.borrow().is_none() {
-                let Some(view) = scroll_target(surface, x, y, dx, dy) else {
+                let Some(view) = scroll_target(surface, x, y, dx, dy, reach) else {
                     return false;
                 };
                 *input.wheel.borrow_mut() = Some(new_wheel(view.clone(), time));
