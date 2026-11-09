@@ -457,11 +457,11 @@ pub fn update_tokens(tokens: impl Into<Tokens>) {
     act(Action::UpdateTokens(tokens.into()));
 }
 
-/// Sets the tokens a theme type's fields wrote ([`super::set_theme`]), in
-/// order with the app's other actions as [`update_tokens`]: a number left
-/// at its value keeps its dark one.
-pub(crate) fn set_theme_tokens(tokens: Tokens) {
-    act(Action::SetTheme(tokens));
+/// Asks for a theme type's change ([`super::set_theme`],
+/// [`super::update_theme`], [`super::reset_theme`]), in order with the
+/// app's other actions as [`update_tokens`].
+pub(crate) fn theme_action(action: Action) {
+    act(action);
 }
 
 /// Puts the design tokens `names` back to their values in the app's theme

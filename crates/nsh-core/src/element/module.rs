@@ -399,24 +399,28 @@ impl ModuleCx {
 
     /// Draws the app with theme `theme`, as [`crate::element::set_theme`].
     pub fn set_theme<T: crate::element::AppTheme>(&mut self, theme: T) {
-        self.actions
-            .push(Action::SetTheme(crate::element::theme::theme_tokens(
-                &theme,
-            )));
+        self.actions.push(Action::SetTheme {
+            tokens: crate::element::theme::theme_tokens(&theme),
+            played: crate::element::theme::played::<T>(),
+        });
     }
 
     /// Changes the fields of `T` that `patch` sets, as
     /// [`crate::element::update_theme`].
     pub fn update_theme<T: crate::element::AppTheme>(&mut self, patch: T::Patch) {
-        self.actions.push(Action::UpdateTokens(
-            crate::element::theme::patch_tokens::<T>(&patch),
-        ));
+        self.actions.push(Action::UpdateTheme {
+            tokens: crate::element::theme::patch_tokens::<T>(&patch),
+            played: crate::element::theme::played::<T>(),
+        });
     }
 
     /// Puts `T`'s tokens back to the app's theme's, as
     /// [`crate::element::reset_theme`].
     pub fn reset_theme<T: crate::element::AppTheme>(&mut self) {
-        self.reset_tokens(T::token_specs().iter().map(|s| s.name.as_ref()));
+        self.actions.push(Action::ResetTheme {
+            names: crate::element::theme::names::<T>(),
+            played: crate::element::theme::played::<T>(),
+        });
     }
 
     /// Shows the app in `locale` whatever the user's language (`None`: the

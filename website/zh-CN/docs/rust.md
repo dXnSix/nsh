@@ -719,7 +719,10 @@ CSS 颜色，圆角按长度）。角色的名称设置该角色所映射的令�
 `.nsh/types/nsh/tokens.d.ts` 按种类为 `token()` 提供类型，并附带文档注释（[主题 token](./tailwind.md#主题-token)）。
 
 **nsh-base 的主题。** `nsh_base::Theme` 也是一个主题类型，它保持未注册，因此始终是默认来源：`theme()` 就是 `theme_of::<Theme>()`，
-shadcn 应用用 `update_theme::<Theme>(tokens)` 修改它的部分令牌，补丁是按名称组织的 `Tokens`。
+shadcn 应用用 `update_theme::<Theme>(tokens)` 修改它的部分令牌，补丁是按名称组织的 `Tokens`。在有自己主题类型的应用里，`Theme`
+的设置函数设置的是它的字段所读取的令牌：角色被应用的类型映射的令牌，就是该角色所映射到的令牌（上例中的 `popover` 是设计系统的
+`surface-overlay`），与主题文件中这个名称的含义相同。所以 `let mut t = (*theme()).clone(); t.popover = c; set_theme(t);`
+在任何应用里都会改变弹出层的颜色，并且不会把它读取后未改动的字段变成 shadcn 令牌。
 
 ## 多个 crate
 

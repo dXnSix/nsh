@@ -561,6 +561,35 @@ impl Tokens {
         self.fonts.iter().map(|(k, f)| (&**k, f))
     }
 
+    /// Gives token `to` what token `from` is, of whatever kind, unless
+    /// there is a `to` of that kind already; `from` stays.
+    pub(crate) fn copy_as(&mut self, from: &str, to: &str) {
+        fn copy<V: Clone>(map: &mut FxHashMap<Box<str>, V>, from: &str, to: &str) {
+            if !map.contains_key(to)
+                && let Some(value) = map.get(from).cloned()
+            {
+                map.insert(to.into(), value);
+            }
+        }
+        copy(&mut self.colors, from, to);
+        // A number's dark value goes with its light one, not onto another.
+        if !self.numbers.contains_key(to) && self.numbers.contains_key(from) {
+            copy(&mut self.dark_numbers, from, to);
+        }
+        copy(&mut self.numbers, from, to);
+        copy(&mut self.fonts, from, to);
+        copy(&mut self.shadows, from, to);
+    }
+
+    /// Removes token `name`, of whatever kind.
+    pub(crate) fn remove_named(&mut self, name: &str) {
+        self.colors.remove(name);
+        self.numbers.remove(name);
+        self.dark_numbers.remove(name);
+        self.fonts.remove(name);
+        self.shadows.remove(name);
+    }
+
     /// Makes token `name` what it is in `from`, of whatever kind, or
     /// removes it when `from` has none of that name.
     pub(crate) fn copy_named(&mut self, from: &Tokens, name: &str) {

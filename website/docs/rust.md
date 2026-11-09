@@ -801,7 +801,10 @@ declares out, and refuse a value they cannot read.
 
 **nsh-base's theme.** `nsh_base::Theme` is a theme type too, left unregistered so it stays the default source:
 `theme()` is `theme_of::<Theme>()`, and a shadcn app changes some of its tokens with `update_theme::<Theme>(tokens)`,
-a patch of `Tokens` by name.
+a patch of `Tokens` by name. In an app with a theme type of its own, `Theme`'s setters set what its fields read: a
+token whose role the app's type maps is the token the role is mapped onto (`popover`, above, is the design system's
+`surface-overlay`), as that name is in a theme file. So `let mut t = (*theme()).clone(); t.popover = c; set_theme(t);`
+recolors popovers in any app, and makes no shadcn token of a field it leaves as it read it.
 
 ## Several crates
 
