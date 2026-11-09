@@ -752,9 +752,12 @@ fn finish_running(app: &NSApplication) {
     }
 }
 
-/// Stops the standalone app's engine (its window closes).
+/// Stops the standalone app's engine (its window closes), once its
+/// terminate listeners ran: every way the standalone app ends comes here
+/// (Quit, its window closed, the system's logout or shutdown).
 fn stop_running() {
     if let Some(running) = RUNNING.with(|r| r.borrow_mut().take()) {
+        running.view.surface().will_terminate();
         running.view.stop();
         drop(running.window);
     }
