@@ -1812,6 +1812,7 @@ class Player {
     document.addEventListener("visibilitychange", changed);
     addEventListener("focus", changed);
     addEventListener("blur", changed);
+    addEventListener("pagehide", (event) => this.pageHidden(event));
     visualViewport?.addEventListener("resize", changed);
     visualViewport?.addEventListener("scroll", changed);
     new MutationObserver(changed).observe(document.documentElement, { attributes: true, attributeFilter: ["dir", "lang"] });
@@ -1876,6 +1877,17 @@ class Player {
       notifications: typeof window.Notification === "function",
       audio: typeof (window.AudioContext ?? window.webkitAudioContext) === "function",
     };
+  }
+
+  /**
+   * The page goes (`pagehide`). Unless the browser keeps it in its
+   * back-forward cache (`persisted`), it goes for good: the tab closes, or
+   * another page or a reload replaces it, and the app's terminate
+   * listeners run before the handler returns.
+   */
+  pageHidden(event) {
+    if (event.persisted) return;
+    this.call((w) => w.nsh_will_terminate());
   }
 
   /** Reports the environment if it changed since it was last reported. */

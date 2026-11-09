@@ -459,6 +459,13 @@ side keeps it (`PAGE`) for the next start; the appearance and the window keep th
 time zone is read again then: browsers report no change of it), `visualViewport`, `resize` and a mutation observer on
 `<html dir lang>`.
 
+The app's end (`on_terminate`, `Lifecycle.on("terminate")`) is `pagehide` without `persisted` (`Player.pageHidden`):
+the tab closes, or another page or a reload replaces this one; a page the browser keeps in its back-forward cache may
+come back as it was. `nsh_will_terminate` runs the listeners in place (`LocalEngine::will_terminate`), with what they
+start and the storage, before the handler returns: the browser's own JS engine runs them too, so the app's listeners
+are called synchronously. `beforeunload` is not used: it may be cancelled, and listening to it keeps pages out of the
+back-forward cache. Phone browsers discard hidden tabs without `pagehide`: apps save on `background`.
+
 The app's side, `browser/environment.js`, gets the engine's environment (`Host::set_environment`,
 `src/browser/engine.rs`) and keeps one signal per part, written only when the part changed, as nsh-js's `env.rs`
 does. Its accessors are grouped as `env.rs` declares them: the exports of `nsh/device` and `nsh/accessibility`, which
