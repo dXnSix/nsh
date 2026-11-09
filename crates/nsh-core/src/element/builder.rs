@@ -1470,6 +1470,18 @@ pub trait Interactive: Element {
         )
     }
 
+    /// A mouse button other than the primary one (the secondary, middle,
+    /// back or forward button) was pressed and released over it (GPUI's
+    /// `on_aux_click`, the DOM's `auxclick`): which
+    /// ([`MouseEvent::pressed_button`]) and where. The nearest element that
+    /// listens hears it, unless a text input is nearer.
+    fn on_aux_press<M>(self, listener: impl IntoListener<MouseEvent, M>) -> Self {
+        self.on(
+            EventKind::AuxPress,
+            events::typed(listener.into_listener(), events::mouse),
+        )
+    }
+
     /// The selection across the texts of a selectable view
     /// ([`Self::selectable`]) changed: the selected text, as a copy gives
     /// it, empty once nothing is selected, and where it starts in the

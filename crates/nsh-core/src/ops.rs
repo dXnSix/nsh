@@ -256,6 +256,7 @@ events! {
     UrlScheme = "onUrlScheme": "The system handed the app a URL that opens it (root only; payload: `url`, [`crate::url_scheme::URL`]); the core keeps those of the schemes the app claims ([`crate::url_scheme`]).",
     Audio = "onAudio": "A sound or a player reported (root only; payload: [`EventPayload::Audio`]).",
     Window = "onWindow" as "": "A window of the app's own reported its state, a close press or that it closed (on its root node; desktops; payload: [`EventPayload::Window`]).",
+    AuxPress = "onAuxPress": "A mouse button other than the primary one (the secondary, middle, back or forward button) was pressed and released over the view (payload: [`EventPayload::Mouse`], its `pressed_button` the button): the nearest listener around the view under the pointer hears it, unless a text input is nearer.",
 
 }
 
@@ -395,7 +396,8 @@ pub struct TouchPoint {
 
 /// Where the mouse is over a view ([`EventKind::MouseEnter`],
 /// [`EventKind::MouseMove`], [`EventKind::MouseLeave`]), in points, as
-/// GPUI's `MouseMoveEvent`.
+/// GPUI's `MouseMoveEvent`, and where a button other than the primary one
+/// pressed it ([`EventKind::AuxPress`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 #[non_exhaustive]
 pub struct MouseEvent {
@@ -406,7 +408,8 @@ pub struct MouseEvent {
     pub page_position: Point<Points>,
     /// The modifier keys held.
     pub modifiers: crate::keymap::Modifiers,
-    /// The button held down, if any (a drag).
+    /// The button held down, if any (a drag); for
+    /// [`EventKind::AuxPress`], the button that pressed.
     pub pressed_button: Option<MouseButton>,
 }
 
@@ -429,14 +432,15 @@ impl MouseEvent {
 }
 
 /// A mouse button, as GPUI's `MouseButton` (TS: `"left"`, `"right"`,
-/// `"middle"`, `"back"`, `"forward"`).
+/// `"middle"`, `"back"`, `"forward"`: the DOM's `button` 0, 2, 1, 3 and
+/// 4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MouseButton {
-    /// The primary button.
+    /// The primary button (the DOM's button 0).
     Left,
-    /// The secondary button.
+    /// The secondary button (the DOM's button 2).
     Right,
-    /// The middle button (the wheel).
+    /// The middle button, the wheel (the DOM's button 1).
     Middle,
     /// The back button (the DOM's button 3).
     Back,
@@ -825,7 +829,8 @@ pub enum EventPayload {
     /// Touches (`onTouch`).
     Touch(Box<TouchEvent>),
     /// The mouse over a view (`onMouseEnter`, `onMouseMove`,
-    /// `onMouseLeave`).
+    /// `onMouseLeave`), or a button other than the primary one pressing it
+    /// (`onAuxPress`).
     Mouse(MouseEvent),
     /// A context menu asked for over a view (`onContextMenu`).
     ContextMenu(ContextMenuEvent),

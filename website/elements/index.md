@@ -358,6 +358,41 @@ instead. The platform decides this as the button goes down, from what is mounted
 and nothing has to be cancelled. A `disabled` view leaves the click to the nearest enabled listener around it. On
 touchscreens, a long press opens menus: handle `onLongPress` with the same function.
 
+### Mouse buttons
+
+`onAuxPress` tells a view that a mouse button other than the primary one was pressed and released over it: the
+secondary (`"right"`), middle, back or forward button, as GPUI's `on_aux_click` and the DOM's `auxclick` do. Presses
+(`onPress` and the rest) are the primary button's, a finger's and the keyboard's, so a tab can close on a middle click
+and a canvas can bind the side buttons while its buttons press as before:
+
+```rust tabs
+view()
+    .on_press(move || select(tab))
+    .on_aux_press(move |e: &MouseEvent| {
+        if e.pressed_button == Some(MouseButton::Middle) {
+            close(tab);
+        }
+    })
+    .child(text(title.clone()))
+```
+
+```tsx tabs
+<View onPress={() => select(tab)} onAuxPress={(e) => e.pressedButton === "middle" && close(tab)}>
+  <Text>{title}</Text>
+</View>
+```
+
+| Prop | Rust | Type | Description |
+|---|---|---|---|
+| `onAuxPress` | `.on_aux_press(..)` | `(e: MouseEvent) => void` | A mouse button other than the primary one was pressed and released over the view or a view inside it (the DOM's `auxclick`). |
+
+`e` is a [`MouseEvent`](#hover): `pressedButton` is the button (`"right"`, `"middle"`, `"back"` or `"forward"`, the
+DOM's `button` 2, 1, 3 and 4), `position` and `pagePosition` where it came up, and the `modifiers` held. The nearest
+view that listens, from the one under the pointer outwards, hears it once the button comes up over that view; a text
+input nearer takes the button itself. The buttons keep what they do: the secondary one also asks for a context menu
+(`onContextMenu`, as it goes down) and the back button still goes back. `onAuxPress` comes from mice on macOS, Windows,
+Linux, the GPUI backend and in browsers; a `disabled` view leaves it to the nearest enabled listener around it.
+
 ### Keyboard focus
 
 On macOS and the web, Tab moves the keyboard focus between its stops in tree order: the inputs, the views that take

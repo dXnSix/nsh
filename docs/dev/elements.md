@@ -150,6 +150,22 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   positions are the view's bottom-start corner (`nsh_core::input::context_menu_anchor`, by the surface's direction),
   so a menu opened below it starts where the view does; `ContextMenu` puts the keyboard focus on its first enabled
   item then.
+- **`onAuxPress`** (any element; GPUI's `on_aux_click`, the DOM's `auxclick`): a mouse button other than the primary
+  one was pressed and released over a view: the secondary (`"right"`), middle, back or forward button, which presses
+  never take (`onPress` is the primary button's, a finger's and the keyboard's). The payload is the mouse events'
+  `MouseEvent` (`EventPayload::Mouse`), its `pressedButton` the button and its positions where the button came up;
+  Rust's `.on_aux_press(|e: &MouseEvent| ..)`. The platform decides on the main thread from the mounted event masks
+  (`nsh_core::input::AuxPress`): as the button goes down, walking out from the view under the pointer, the first view
+  that listens takes the press, unless a text input is nearer (it takes its buttons itself: GTK pastes on the middle
+  one); when the same button comes up over that view or a view inside it, the view hears it. `disabled` removes the
+  listener as it does a press's. What the buttons do natively stays: the secondary one also asks for `onContextMenu`
+  as it goes down, and the back button still goes back (`onBackPress`, `popOnBack`). macOS reads
+  `rightMouseDown:` / `otherMouseDown:` and their ups (`buttonNumber` 2, 3 and 4), Windows `WM_RBUTTON*`,
+  `WM_MBUTTON*` and `WM_XBUTTON*` (`XBUTTON1` back, `XBUTTON2` forward), Linux the root's GDK button events (buttons
+  2, 3, 8 and 9), GPUI its `MouseDownEvent` / `MouseUpEvent` buttons (`Navigate(Back | Forward)`), the web the DOM's
+  `mousedown` / `mouseup` `button` (1 middle, 2 secondary, 3 back, 4 forward; `nsh.js` `auxDown` / `auxUp`). iOS,
+  Android and the terminal report no other buttons; `nsh test`'s `press(selector, { button })` presses with one
+  (headless).
 - **Keyboard focus**: on macOS, the web and Linux, Tab (the keyboard focus) moves between stops, in tree order; a click
   presses without focusing, so a stop's `FOCUSED` state (`focus:` classes, `.focus(..)`) is keyboard focus, and
   `focus-visible:` is the same variant. Focus and presses are separate: `ViewProps::focus_stop` decides, from

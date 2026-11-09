@@ -1003,6 +1003,44 @@ fn mime_of(name: &str) -> &'static str {
     }
 }
 
+/// How a press presses ([`App::press`]).
+#[derive(Debug, Default, Clone, Copy, PartialEq, JsObject)]
+pub struct PressOptions {
+    /// The mouse button (`"left"`, a tap's). Another one is a desktop's or
+    /// the web's: the nearest view around what the selector names that
+    /// listens to `onAuxPress` hears it (`"right"` asks for a context menu
+    /// first, as `rightClick` does).
+    pub button: Option<MouseButton>,
+}
+
+/// A mouse button (`nsh`'s `MouseButton`).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PropEnum)]
+pub enum MouseButton {
+    /// The primary button.
+    #[default]
+    Left,
+    /// The secondary button.
+    Right,
+    /// The middle button, the wheel.
+    Middle,
+    /// The back button.
+    Back,
+    /// The forward button.
+    Forward,
+}
+
+impl From<MouseButton> for nsh_core::MouseButton {
+    fn from(button: MouseButton) -> Self {
+        match button {
+            MouseButton::Left => nsh_core::MouseButton::Left,
+            MouseButton::Right => nsh_core::MouseButton::Right,
+            MouseButton::Middle => nsh_core::MouseButton::Middle,
+            MouseButton::Back => nsh_core::MouseButton::Back,
+            MouseButton::Forward => nsh_core::MouseButton::Forward,
+        }
+    }
+}
+
 /// How far a drag moves the finger ([`App::drag`]), in points.
 #[derive(Debug, Default, Clone, Copy, PartialEq, JsObject)]
 pub struct DragBy {
@@ -1762,9 +1800,20 @@ const CLOSED: &str = "the app is closed: the test that opened it ended";
 #[class]
 impl App {
     /// Presses what `selector` names (or the nearest view around it that
-    /// hears presses, as a tap on a button's text does).
-    pub async fn press(this: Instance<Self>, selector: String) -> Result<(), JsError> {
-        step(&this, move |app| app.press(&selector)).await
+    /// hears presses, as a tap on a button's text does). With another
+    /// mouse `button` than the primary one (a desktop's or the web's), the
+    /// nearest view around it listening to `onAuxPress` hears it instead.
+    pub async fn press(
+        this: Instance<Self>,
+        selector: String,
+        options: Option<PressOptions>,
+    ) -> Result<(), JsError> {
+        let button = options.and_then(|o| o.button).unwrap_or_default();
+        step(&this, move |app| match button {
+            MouseButton::Left => app.press(&selector),
+            button => app.aux_press(&selector, button.into()),
+        })
+        .await
     }
 
     /// Types `text` at the end of the input `selector` names (or the first

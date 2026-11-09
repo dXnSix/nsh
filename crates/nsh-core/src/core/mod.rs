@@ -9326,11 +9326,12 @@ const PRESSES: [EventKind; 4] = [
 ];
 
 /// The events a `disabled` view does not mount ([`Node::mounted_events`]).
-const DISABLED_OFF: [EventKind; 8] = [
+const DISABLED_OFF: [EventKind; 9] = [
     EventKind::Press,
     EventKind::LongPress,
     EventKind::PressDown,
     EventKind::PressUp,
+    EventKind::AuxPress,
     EventKind::ContextMenu,
     EventKind::FileDragEnter,
     EventKind::FileDragLeave,

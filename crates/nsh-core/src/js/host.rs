@@ -523,18 +523,18 @@ export interface PressEvent {
   clickCount: number;
 }
 
-/** Where the mouse is over a view: the payload of `onMouseEnter`, `onMouseMove` and `onMouseLeave` (GPUI's `MouseMoveEvent`). */
+/** Where the mouse is over a view: the payload of `onMouseEnter`, `onMouseMove` and `onMouseLeave` (GPUI's `MouseMoveEvent`), and of `onAuxPress`. */
 export interface MouseEvent {
   /** Position in the view (its transforms undone). */
   position: Point;
   /** Position in the root view the view is in (the surface or its modal), as touches' `pageX` / `pageY`. */
   pagePosition: Point;
   modifiers: Modifiers;
-  /** The button held down (a drag), or `null`. */
+  /** The button held down (a drag), or `null`; for `onAuxPress`, the button that pressed. */
   pressedButton: MouseButton | null;
 }
 
-/** A mouse button (GPUI's `MouseButton`). */
+/** A mouse button (GPUI's `MouseButton`; the DOM's `button` 0, 2, 1, 3 and 4). */
 export type MouseButton = "left" | "right" | "middle" | "back" | "forward";
 
 /** The kind of pointer behind an event (the DOM's `pointerType`). */
@@ -668,6 +668,12 @@ pub const EVENTS: &[(EventKind, u32, &str, &str)] = &[
         on::ALL,
         "(e: ContextMenuEvent) => void",
         "The secondary button (a right click, Control-click on Apple platforms) was pressed over the view: open a menu with `Menu.popup(items, e.pagePosition)`. The nearest listener hears it; a text input or selectable text nearer shows its own menu instead.",
+    ),
+    (
+        EventKind::AuxPress,
+        on::ALL,
+        "(e: MouseEvent) => void",
+        "A mouse button other than the primary one was pressed and released over the view (the DOM's `auxclick`): `e.pressedButton` is `\"right\"`, `\"middle\"`, `\"back\"` or `\"forward\"`. The nearest listener hears it; a text input nearer takes the button itself. A right click is also `onContextMenu`, as it goes down; the back button still goes back.",
     ),
     (
         EventKind::FileDragEnter,

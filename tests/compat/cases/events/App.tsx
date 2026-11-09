@@ -3,6 +3,7 @@
 // `id:case-<case>` (a one-point view over the corner, out of the layout);
 // the steps after it are that case's.
 import { type JSX, View, mount, signal } from "nsh";
+import EventsAuxPress from "./events-aux-press";
 import EventsComposition from "./events-composition";
 import EventsContextMenu from "./events-context-menu";
 import EventsGestures from "./events-gestures";
@@ -14,6 +15,7 @@ import EventsScroll from "./events-scroll";
 import EventsTouch from "./events-touch";
 
 const cases: Record<string, () => JSX.Element> = {
+  "events-aux-press": EventsAuxPress,
   "events-composition": EventsComposition,
   "events-context-menu": EventsContextMenu,
   "events-gestures": EventsGestures,

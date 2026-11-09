@@ -308,6 +308,33 @@ import { Menu } from "nsh/desktop";
 
 `ContextMenuEvent` 包含视图中的 `position`、根视图中的 `pagePosition`（`Menu.popup` 放置菜单的位置：`Menu.popup(items, e.pagePosition)`）、`modifiers` 以及 DOM 的 `pointerType`：指针为 `"mouse"`、`"pen"` 或 `"touch"`，键盘或读屏软件为 `null`，此时位置是视图的底部起始角，菜单放在这里就会出现在视图下方；Rust 中为 `position`、`page_position`、`modifiers` 和 `pointer_type`（`Option<PointerType>`）。从指针下方的视图向外，最近的一个监听者收到事件。如果比它更近的是文本输入框，或带有编辑菜单的可选中文本（Windows、GPUI 后端、浏览器），则显示它们自己的菜单。平台在按钮按下时根据已挂载的内容做出决定，因此处理函数在事后得到通知，不需要取消任何东西。`disabled` 的视图把这次点击留给外层最近的、未停用的监听者。在触摸屏上用长按打开菜单：用同一个函数处理 `onLongPress`。
 
+### 鼠标按钮
+
+`onAuxPress` 告诉视图：鼠标的主按钮以外的某个按钮在它上面按下并松开了——辅助按钮（`"right"`）、中键、后退键或前进键，与 GPUI 的 `on_aux_click` 和 DOM 的 `auxclick` 相同。按压（`onPress` 等）属于主按钮、手指和键盘，因此标签页可以在中键单击时关闭，画布可以绑定侧键，而它们的按钮照常按压：
+
+```rust tabs
+view()
+    .on_press(move || select(tab))
+    .on_aux_press(move |e: &MouseEvent| {
+        if e.pressed_button == Some(MouseButton::Middle) {
+            close(tab);
+        }
+    })
+    .child(text(title.clone()))
+```
+
+```tsx tabs
+<View onPress={() => select(tab)} onAuxPress={(e) => e.pressedButton === "middle" && close(tab)}>
+  <Text>{title}</Text>
+</View>
+```
+
+| 属性 | Rust | 类型 | 说明 |
+|---|---|---|---|
+| `onAuxPress` | `.on_aux_press(..)` | `(e: MouseEvent) => void` | 鼠标的主按钮以外的某个按钮在视图或其内部的视图上按下并松开（DOM 的 `auxclick`）。 |
+
+`e` 是一个 [`MouseEvent`](#悬停)：`pressedButton` 是那个按钮（`"right"`、`"middle"`、`"back"` 或 `"forward"`，即 DOM 的 `button` 2、1、3 和 4），`position` 和 `pagePosition` 是它松开的位置，`modifiers` 是按住的修饰键。从指针下方的视图向外，最近的一个监听者在按钮于它上面松开时收到事件；比它更近的文本输入框自己处理按钮。按钮原有的作用保持不变：辅助按钮在按下时同样请求上下文菜单（`onContextMenu`），后退键照常返回。`onAuxPress` 来自 macOS、Windows、Linux、GPUI 后端和浏览器中的鼠标；`disabled` 的视图把它留给外层最近的、未停用的监听者。
+
 ### 键盘焦点
 
 在 macOS 和 Web 上，Tab 按视图树的顺序在停靠点之间移动键盘焦点：输入框、可按压的视图，以及所有设置了 `focusable` 的视图。焦点样式（`focus:`、`.focus(..)`）为获得焦点的视图设置样式；它可按压时，按 Return 或空格会按下它。点击会按下视图但不让它获得焦点，所以焦点样式只在键盘聚焦时生效。

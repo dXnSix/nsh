@@ -2057,6 +2057,14 @@ impl Screen {
             .is_some_and(|v| v.events.contains(event))
     }
 
+    /// The events view `id` reports.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn events(&self, id: NodeId) -> EventMask {
+        self.nodes
+            .get(&id)
+            .map_or_else(EventMask::default, |v| v.events)
+    }
+
     pub(crate) fn input(&self, id: NodeId) -> Option<&Input> {
         self.nodes.get(&id)?.input.as_ref()
     }

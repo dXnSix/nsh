@@ -251,7 +251,7 @@ reasons: `reactive-components.md`.
   pass it content and a slot's setter (`.header(..)`) fills the slot, as JSX children and slot props do: the content is nodes of
   this view, placed where the nested component's view places the app's; regions in it join its children in place).
   Their abilities are traits: `Styled`, `Accessible`, `Interactive` (`active` / `hover` / `focus` styles, `disabled`,
-  `hit_slop`, and the typed events every element has: `on_press` / `on_long_press` / `on_press_down` / `on_press_up` (`move || ..` or `move |e: &PressEvent| ..`: position, modifiers, clicks), `on_layout(Bounds<Points>)`,
+  `hit_slop`, and the typed events every element has: `on_press` / `on_long_press` / `on_press_down` / `on_press_up` (`move || ..` or `move |e: &PressEvent| ..`: position, modifiers, clicks), `on_aux_press` (`MouseEvent`: the mouse's other buttons), `on_layout(Bounds<Points>)`,
   `on_touch(TouchEvent)`, `on_pan_start`, ..., the touch responder: below), `ParentElement`, `FluentBuilder` (`when`,
   `when_some`, `map`: decided once, when the view is made). Each host element has its own props and typed events
   (every option takes a value, a signal or a closure, `impl IntoReactive<T>`, as TSX's props take a value or an
