@@ -309,7 +309,8 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   direction change sets the direction in place and restyles the nodes with logical properties or `rtl:` classes. Text:
   `auto`, `start` and `end` alignment follow the direction, `left` / `right` keep their side, `writingDirection` sets
   the base direction (else the content's). Native widgets mirror (`MountItem::LayoutDirection`:
-  `semanticContentAttribute`, `View.setLayoutDirection`; Android apps need `android:supportsRtl`). Horizontal scroll views
+  `semanticContentAttribute`, forced left to right too where UIKit's own direction, the app's localization's, is right
+  to left; `View.setLayoutDirection`; Android apps need `android:supportsRtl`). Horizontal scroll views
   are laid out left to right and their children mirrored in the content by the core (a right-to-left row would overflow to
   negative offsets), starting at the right end and keeping their distance from it; horizontal lists are flipped natively
   (`ScrollConfig::mirrored`: the scroll view and each cell get scaleX −1, composed with their transforms), so the list's
