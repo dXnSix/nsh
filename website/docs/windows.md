@@ -59,7 +59,7 @@ dist\nsh\runtime\windows\nsh-windows-host --bundle build\bundle.nshc --window-si
 `--fps` (`nsh run App.tsx --target windows --fps`, `nsh test --target windows --fps`, the host's `--fps`,
 `AppOptions { fps: true, .. }` in a Rust app's `run_app`, the environment variable `NSH_FPS=1`, or the app's own
 `setFpsEnabled(true)`) logs the performance monitor's readings once a second
-(target `nsh::perf`): frames shown over the display's rate, the main thread's time per frame and its phases (`tick`,
+(target `nsh::fps`): frames shown over the display's rate, the main thread's time per frame and its phases (`tick`,
 `drain`, `paint`, `present`, `canvas`), the engine's commits, CPU and memory, in the shape the other desktops log
 (milliseconds as mean/p50/p95/max). `nsh test --fps -v` shows them and `examples/gallery/tools/perf.py` reads them
 ([Performance report](./performance-report.md#windows-win32-direct2d)). Measure release builds; the monitor costs
@@ -72,7 +72,7 @@ nsh package --target windows [--run]           # a Rust app, from its directory
 nsh package App.tsx --target windows [--run]   # a TSX app
 ```
 
-Writes a directory and the same as an archive:
+Writes a directory, the same as an archive, and an installer:
 
 ```text
 .nsh\out\<Name>\
@@ -81,10 +81,18 @@ Writes a directory and the same as an archive:
   nsh\assets\…           the assets it imports (a Rust crate's `assets!()` too)
   nsh\app.json           the window title, the app id, the version and the appearance
 .nsh\out\<Name>.zip
+.nsh\out\<Name>.iss        the Inno Setup script for the installer
+.nsh\out\<Name>-setup.exe  the installer, when Inno Setup 6 is installed
 ```
 
 The executable finds `nsh\` next to itself; copy the whole directory (or unpack the `.zip`) wherever the app should
-live: nothing is installed. The icon from `nsh.json` is embedded in the executable (Explorer and the taskbar show it)
+live, or ship the installer. `nsh package` also writes `.nsh\out\<Name>.iss`, an [Inno Setup](https://jrsoftware.org/isinfo.php)
+script, and compiles it to `.nsh\out\<Name>-setup.exe` when Inno Setup 6 is installed (`winget install
+JRSoftware.InnoSetup`). The installer needs no administrator rights: it installs for the current user in
+`%LOCALAPPDATA%\Programs\<Name>`, adds a Start menu shortcut (with the app id, which the taskbar and notifications use)
+and an entry in Installed apps that uninstalls it. Its AppId is the app id, so the installer of a newer version
+upgrades the installed one in place, closing the app first; the app's data is never touched, by upgrades or by the
+uninstaller. The icon from `nsh.json` is embedded in the executable (Explorer and the taskbar show it)
 without any extra tools; packaging on another system keeps the default icon. The app id groups the app's windows in
 the taskbar. `--run` launches the app after packaging it. The executable is not signed: sign it with your own
 certificate (`signtool`) to distribute it.
@@ -152,10 +160,11 @@ cache directory and 256 MiB of images by default).
 text size in place of the system's (`None` follows the system's again): `locale()`, `Intl`, `fontScale()` and text
 follow at once ([Device and environment](./device-and-environment.md#in-an-embedding-app)).
 
-`AppView::set_theme_overrides(Some(json))` puts your app's brand over the app's [theme](./tailwind.md#theme-tokens): a theme file
-in the format of `nsh.json`'s `"theme"`, whose tokens win over the app's of the same names in light and dark mode
-while the app's others stay; classes such as `bg-primary` restyle at once, and apps loaded later start with it
-(`None` gives the app its own theme back; a file that does not parse is an error and changes nothing).
+`AppView::set_theme_overrides(Some(json))` puts your app's brand over the app's [theme](./tailwind.md#theme-tokens): a
+theme file in the format of `nsh.json`'s `"theme"`, whose tokens win over the app's of the same names in light and dark
+mode while the app's others stay; classes such as `bg-primary` restyle at once, and apps loaded later start with it
+(`None` gives the app its own theme back; a file that does not parse is an error and changes nothing). The app reads the
+file with its own theme's reader, so a `var(--name)` the file does not set is the default theme's value of that token.
 
 Native components are registered with `AppView::register_component`; see
 [Native components](./native-components.md#registering-on-windows-rust). `set_ui_sets(sets)` sets the UI sets every

@@ -1,6 +1,6 @@
 ---
 title: nsh/base
-description: "Unstyled base components for an app's UI: buttons, links, avatars, carousels, checkboxes, radios, switches, tabs, toggles, toolbars, trees, selects, comboboxes, command palettes, calendars, date pickers, time fields, resizable panels, dockable workspaces, Markdown and HTML documents, a code editor, diffs, text inputs, navigation stacks and dialogs, system alert dialogs and the status bar of pages and dialogs."
+description: "Unstyled base components for an app's UI: buttons, links, avatars, carousels, checkboxes, radios, switches, tabs, toggles, toolbars, trees, selects, comboboxes, command palettes, emoji pickers, calendars, date pickers, time fields, resizable panels, dockable workspaces, Markdown and HTML documents, a code editor, diffs, text inputs, navigation stacks and dialogs, system alert dialogs and the status bar of pages and dialogs."
 order: 2.5
 demo: ui-navigation
 ---
@@ -10,7 +10,7 @@ demo: ui-navigation
 `nsh/base` is the base component layer of an app's UI: unstyled components that own behavior, state, focus and
 accessibility, on every platform. It sits between the primitives (`nsh`, `nsh/mobile` and `nsh/desktop`) and the
 app's own component library, as `gpui-base` sits between `gpui` and a styled library in GPUI Kit (see
-[Modules](./index.md#three-layers)). It provides controls (`Button`, `Link`, `Checkbox`, `ColorPicker` with its `ColorArea`, `ColorSlider`, `ColorField`, `ColorSwatch` and `ColorEyeDropper`, `NumberInput`, `Radio` in a `RadioGroup`, `Slider`, `Switch`, `Tab` in `Tabs`, `Toggle` in a `ToggleGroup`, `Select`, `Combobox`, `Calendar`, `TimeField`, `DatePicker`), command palettes (`Command`), bars of controls (`Toolbar` with its `ToolbarGroup` and `ToolbarSeparator`), scroll bars of the app's own look (`Scrollbar`), regions that expand and collapse (`Collapsible`, and `Accordion` with its `AccordionItem`, `AccordionHeader`, `AccordionTrigger` and `AccordionPanel`), a progress bar (`Progress`), one-time codes (`OtpInput`), the pages of a set (`Pagination`), items that hold items (`Tree`), the parts charts are built from (`Plot` with `Line`, `Area`, `Bar`, `Rule`, `Dot`, `Cell`, `Grid`, `Pie` and `Arc`, in `nsh/base/plot`), workspaces the user arranges (`ResizablePanel`s in a
+[Modules](./index.md#three-layers)). It provides controls (`Button`, `Link`, `Checkbox`, `ColorPicker` with its `ColorArea`, `ColorSlider`, `ColorField`, `ColorSwatch` and `ColorEyeDropper`, `NumberInput`, `Radio` in a `RadioGroup`, `Slider`, `Switch`, `Tab` in `Tabs`, `Toggle` in a `ToggleGroup`, `Select`, `Combobox`, `Calendar`, `TimeField`, `DatePicker`), command palettes (`Command`), emoji pickers (`EmojiPicker`), bars of controls (`Toolbar` with its `ToolbarGroup` and `ToolbarSeparator`), scroll bars of the app's own look (`Scrollbar`), regions that expand and collapse (`Collapsible`, and `Accordion` with its `AccordionItem`, `AccordionHeader`, `AccordionTrigger` and `AccordionPanel`), a progress bar (`Progress`), one-time codes (`OtpInput`), the pages of a set (`Pagination`), items that hold items (`Tree`), the parts charts are built from (`Plot` with `Line`, `Area`, `Bar`, `Rule`, `Dot`, `Cell`, `Grid`, `Pie` and `Arc`, in `nsh/base/plot`), workspaces the user arranges (`ResizablePanel`s in a
 `ResizablePanelGroup`, and `DockArea`'s splits, tab groups and docks), carousels (`Carousel` and its parts), documents of Markdown or HTML (`TextView`), a code editor (`Editor`) the changes between texts (`DiffView`) and tables of rows and columns (`Table` and its parts, `DataTable`), text inputs
 (`Input`), popups shown on top of everything (`Popover`, `Menu` and `ContextMenu` with their `MenuItem`,
 `MenuSeparator` and `Submenu`, `Tooltip`, `Sheet`), toasts (`Toast` in a `ToastStack`, their lifecycle in a `ToastManager`), navigation (a `NavStack` of `NavPage`s driven
@@ -32,7 +32,7 @@ use nsh_base::{
     alert_dialog, button, carousel, carousel_content, carousel_item, carousel_next,
     carousel_pagination, carousel_pagination_item, carousel_previous, checkbox, color_area, color_field, color_picker,
     color_slider, color_swatch, dialog, diff_view, dock_area, editor, hover_card, link,
-    calendar, combobox, command, date_picker, h_resizable, nav_page, nav_stack, radio, radio_group, resizable_panel, select, switch, tab, tabs, text_view, theme, time_field, toast, toast_stack, toggle, toggle_group, toolbar, toolbar_group, toolbar_separator, tree, v_resizable,
+    calendar, combobox, command, date_picker, emoji_picker, h_resizable, nav_page, nav_stack, radio, radio_group, resizable_panel, select, switch, tab, tabs, text_view, theme, time_field, toast, toast_stack, toggle, toggle_group, toolbar, toolbar_group, toolbar_separator, tree, v_resizable,
 };
 ```
 
@@ -88,6 +88,7 @@ import {
   Select,
   Combobox,
   Command,
+  EmojiPicker,
   Calendar,
   TimeField,
   DatePicker,
@@ -198,6 +199,13 @@ import type {
   CommandEntry,
   CommandGroup,
   CommandItem,
+  EmojiAnnotation,
+  EmojiEntry,
+  EmojiGroup,
+  EmojiGroupId,
+  EmojiGroupLabels,
+  EmojiPickerProps,
+  EmojiSkinTone,
   CommandProps,
   CalendarProps,
   TimeFieldProps,
@@ -286,7 +294,44 @@ walkthroughs, see the [Navigation guide](../docs/navigation.md) and [Forms and k
 | `statusBar` on pages and dialogs | `.status_bar(..)` | The status bar while a page or dialog is up. See [Status bar](#status-bar). |
 
 In Rust, `theme()` reads the app's theme as design tokens (`theme().primary`, `theme().radius`), the same tokens
-TSX's [theme classes](../docs/tailwind.md#theme-tokens) use.
+TSX's [theme classes](../docs/tailwind.md#theme-tokens) use. It is `theme_of::<Theme>()`: `nsh_base::Theme` is a
+[theme type](../docs/rust.md#theme-types), an `AppTheme` of shadcn's 31 colors, `radius`, `font-sans` and
+`font-mono`, each playing the role of its name. It stays unregistered, so it is the default token source and an app's
+registered types take its place. A shadcn app changes some of its tokens with `update_theme::<Theme>(tokens)`, a patch
+of `Tokens` by name, and `reset_theme::<Theme>()` puts them back.
+
+### Theme roles
+
+What NSH draws itself reads the theme through **roles**: `theme()`'s fields, the mobile tab bar's tint, the default
+font, and the platforms' own controls (Linux's menus, iOS's and Android's alerts). A role is the name of what is drawn,
+and reads the token of that name unless the theme maps it onto another token:
+
+| Role | Drawn by |
+|---|---|
+| `background`, `foreground` | `theme().background` / `foreground`; a GPUI app's surface embedded in its host's theme |
+| `card`, `card-foreground`, `secondary`, `secondary-foreground`, `muted`, `input`, `chart-1` … `chart-5`, `sidebar` … `sidebar-ring` | the `theme()` fields of those names |
+| `popover`, `popover-foreground` | `theme().popover` / `popover_foreground`; Linux's menus; Android's alerts |
+| `primary`, `primary-foreground` | `theme().primary` / `primary_foreground`; the tab bar's selected tab; iOS's and Android's alert buttons |
+| `muted-foreground` | `theme().muted_foreground`; Linux's menu shortcuts; an Android alert's message |
+| `accent`, `accent-foreground` | `theme().accent` / `accent_foreground`; Linux's highlighted menu item |
+| `destructive` | `theme().destructive`; an Android alert's destructive action |
+| `border`, `ring` | `theme().border` / `ring`; Linux's menu borders and separators (`border`) |
+| `selection` | `theme().selection()` (`primary` at 22 % without it) |
+| `radius` | `theme().radius` |
+| `font-sans` | the default font of every text; `theme().font_sans` |
+| `font-mono` | `theme().font_mono` |
+
+A role is no token and no class: `bg-primary` is a class when the theme has a token `primary`. In Rust, a role is
+`nsh_core::element::Role` (`Role::Popover.name()` is `"popover"`), and `Tokens::with_roles` maps roles onto tokens
+(`tokens.with_roles([(Role::Popover, "surface-overlay")])`), which `tokens.role_color(Role::Popover)` then reads.
+Without a mapping every role reads the token of its own name, so a shadcn theme draws as it always did. The platforms'
+controls take the theme's colors only when the app has a theme of its own (`Tokens::is_themed`, which the core sets);
+an app on the default theme keeps the system's alert colors.
+
+A registered [theme type](../docs/rust.md#theme-types) maps roles onto its own tokens (`TokenSpec::role`), and
+`theme()`'s fields then read those tokens: with a design system that maps `Role::Popover` onto `surface-overlay`,
+`theme().popover` is `surface-overlay`, and `nsh/base`'s components, the tab bar and the platforms' controls draw in
+the design system.
 
 ## Controls
 

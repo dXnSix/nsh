@@ -23,6 +23,7 @@ import BaseHoverCard from "./base-hover-card";
 import BaseLink from "./base-link";
 import BaseNavPage from "./base-nav-page";
 import BaseNavStack from "./base-nav-stack";
+import BaseNavStackChange from "./base-nav-stack-change";
 import BaseNumberInput from "./base-number-input";
 import BaseOtpInput from "./base-otp-input";
 import BasePagination from "./base-pagination";
@@ -43,6 +44,7 @@ import BaseSafeAreaKeyboard from "./base-safe-area-keyboard";
 import BaseCombobox from "./base-combobox";
 import BaseCommand from "./base-command";
 import BaseDatePicker from "./base-date-picker";
+import BaseEmojiPicker from "./base-emoji-picker";
 import BaseScrollbar from "./base-scrollbar";
 import BaseSelect from "./base-select";
 import BaseSelectableView from "./base-selectable-view";
@@ -56,6 +58,10 @@ import BaseToolbar from "./base-toolbar";
 import BaseTree from "./base-tree";
 import BaseToken from "./base-token";
 import BaseSetTheme from "./base-set-theme";
+import BaseUpdateTheme from "./base-update-theme";
+import BaseNamedClasses from "./base-named-classes";
+import BaseDarkNumbers from "./base-dark-numbers";
+import BaseShadowTokens from "./base-shadow-tokens";
 import BaseTransitionShader from "./base-transition-shader";
 
 const cases: Record<string, () => JSX.Element> = {
@@ -75,6 +81,7 @@ const cases: Record<string, () => JSX.Element> = {
   "base-link": BaseLink,
   "base-nav-page": BaseNavPage,
   "base-nav-stack": BaseNavStack,
+  "base-nav-stack-change": BaseNavStackChange,
   "base-number-input": BaseNumberInput,
   "base-otp-input": BaseOtpInput,
   "base-pagination": BasePagination,
@@ -105,6 +112,7 @@ const cases: Record<string, () => JSX.Element> = {
   "base-combobox": BaseCombobox,
   "base-command": BaseCommand,
   "base-date-picker": BaseDatePicker,
+  "base-emoji-picker": BaseEmojiPicker,
   "base-scrollbar": BaseScrollbar,
   "base-select": BaseSelect,
   "base-slider": BaseSlider,
@@ -112,6 +120,10 @@ const cases: Record<string, () => JSX.Element> = {
   "base-toast": BaseToast,
   "base-token": BaseToken,
   "base-set-theme": BaseSetTheme,
+  "base-update-theme": BaseUpdateTheme,
+  "base-named-classes": BaseNamedClasses,
+  "base-dark-numbers": BaseDarkNumbers,
+  "base-shadow-tokens": BaseShadowTokens,
   "base-transition-shader": BaseTransitionShader,
 };
 const shown = signal("");

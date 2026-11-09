@@ -12,7 +12,7 @@ images whose load state drives their fallback natively, and a row that
 places its first `limit` avatars.
 
 - **`nsh/base`**: unstyled base components of `gpui-base`'s scope, the crate `nsh-base` (`crates/nsh-base`,
-  `nsh_base::registry()`): `Button`, `Link` (a press target that opens its `href`: through the core's `openUrl` flow, or the app's `onOpen` with `openWith="app"`), `Carousel` with `CarouselContent`, `CarouselItem`, `CarouselPrevious`, `CarouselNext`, `CarouselPagination` and `CarouselPaginationItem` (slides on a native scroll view: "Carousels" below), `Checkbox`, `Radio`, `RadioGroup`, `Switch`, `Tab`, `Tabs`, `Toggle`, `ToggleGroup`, `Toolbar`, `ToolbarGroup`, `ToolbarSeparator`, `Select` (one value from a list: "Popups" below), `Combobox` (one value or several from the same list), `Calendar` (a date or a range from months of days), `TimeField` (a time of day by segments), `DatePicker` (a calendar and a time field in a popup: "Popups" below), `Collapsible`, `Accordion` with `AccordionItem`, `AccordionHeader`, `AccordionTrigger` and `AccordionPanel`, `Progress`, `Slider`, `Scrollbar` ("Scroll bars" below), `ColorPicker` with `ColorArea`, `ColorSlider`, `ColorField`, `ColorSwatch` and `ColorEyeDropper` (a color in RGB, HSL, HSB or OKLCH, its parts laid out by the app), `NumberInput`, `OtpInput`, `Pagination` (the pages of a set: Previous, the pages around the current one, ellipses, Next; its places made once, a page change changing what they show), `Tree` (items that hold items, virtualized: the expanded items' rows only, the selection and expansion the app's, one Tab stop whose arrows move the selection), `Command` (a command palette: a search field over the app's commands filtered natively by label and keywords, in a virtualized list under their sections' headers; the highlight projected `focus:` while the field keeps the keyboard focus, `onSelect({ id })`), `Table` with `TableHeader`, `TableBody`, `TableFooter`, `TableRow`, `TableHead`, `TableCell` and `TableCaption` (a table's accessibility roles around the app's rows), `TextView` (`text-view.md`), `ResizablePanelGroup` and `ResizablePanel`, `DockArea`
+  `nsh_base::registry()`): `Button`, `Link` (a press target that opens its `href`: through the core's `openUrl` flow, or the app's `onOpen` with `openWith="app"`), `Carousel` with `CarouselContent`, `CarouselItem`, `CarouselPrevious`, `CarouselNext`, `CarouselPagination` and `CarouselPaginationItem` (slides on a native scroll view: "Carousels" below), `Checkbox`, `Radio`, `RadioGroup`, `Switch`, `Tab`, `Tabs`, `Toggle`, `ToggleGroup`, `Toolbar`, `ToolbarGroup`, `ToolbarSeparator`, `Select` (one value from a list: "Popups" below), `Combobox` (one value or several from the same list), `Calendar` (a date or a range from months of days), `TimeField` (a time of day by segments), `DatePicker` (a calendar and a time field in a popup: "Popups" below), `Collapsible`, `Accordion` with `AccordionItem`, `AccordionHeader`, `AccordionTrigger` and `AccordionPanel`, `Progress`, `Slider`, `Scrollbar` ("Scroll bars" below), `ColorPicker` with `ColorArea`, `ColorSlider`, `ColorField`, `ColorSwatch` and `ColorEyeDropper` (a color in RGB, HSL, HSB or OKLCH, its parts laid out by the app), `NumberInput`, `OtpInput`, `Pagination` (the pages of a set: Previous, the pages around the current one, ellipses, Next; its places made once, a page change changing what they show), `Tree` (items that hold items, virtualized: the expanded items' rows only, the selection and expansion the app's, one Tab stop whose arrows move the selection), `Command` (a command palette: a search field over the app's commands filtered natively by label and keywords, in a virtualized list under their sections' headers; the highlight projected `focus:` while the field keeps the keyboard focus, `onSelect({ id })`), `EmojiPicker` (a search field over every emoji: "Emoji pickers" below), `Table` with `TableHeader`, `TableBody`, `TableFooter`, `TableRow`, `TableHead`, `TableCell` and `TableCaption` (a table's accessibility roles around the app's rows), `TextView` (`text-view.md`), `ResizablePanelGroup` and `ResizablePanel`, `DockArea`
   (`dock.md`), `Editor` (a code editor, `editor.md`), `DiffView` (the changes between two texts, `diff.md`), `DataTable` (a table over any number of rows and columns, `data-table.md`), the popups on the core's overlays (`Popover`,
   `HoverCard`, `Menu` with `MenuItem`, `MenuSeparator` and `Submenu`, `ContextMenu`, `Tooltip`, `Sheet`: "Popups" below), toasts
   (`Toast`, `ToastStack` and the class `ToastManager`: "Toasts" below) and the
@@ -54,8 +54,8 @@ Visual rules are changed in the shared layer; `nsh-base` supplies the components
 | `crates/nsh-core/src/element/` | The API (`nsh_core::element`, `prelude`): `Component`, `Module`, `Class` (`class.rs`, `callback.rs`; direct JS values: `js.rs`), elements, `Styled`, `Theme`, `Registry`, the status bar's layers (`status_bar.rs`), the declarations generator `typescript` |
 | `crates/nsh-macros` | `#[component]`, `#[derive(Props)]`, `#[derive(PropEnum)]`, `#[derive(Event)]`, `#[derive(JsObject)]`; `#[methods]`, `#[module]`, `#[class]`; `#[native_module("…")]` (an app crate's set: `docs/dev/tooling.md`); `#[native_components(<platform>)]` (an app crate's native components on Windows, macOS, Linux or iOS: `docs/dev/tooling.md`); `style_helpers!` (the spacing methods of `Styled`) |
 | `crates/nsh-core/src/core/components.rs` | The core side: instances, children and slots, events; `core/views.rs`: views, their bindings' patches and regions |
-| `crates/nsh-base/` | `nsh/base`'s components and modules, one file each (`accordion.rs`, its parts on `collapsible.rs`'s reveal, `alert_dialog.rs`, `button.rs`, `checkbox.rs`, `number_input.rs`, `radio.rs`, `slider.rs`, `switch.rs`, `tabs.rs`, `select.rs` on `listbox.rs`; `command.rs`, its items indexed once and filtered natively per query, its moves of the highlight `listbox.rs`'s; `tree.rs`, its items flattened natively into the rows the expanded items show; `color_picker/`, `ColorPicker` and its parts over a color as each space's channels hold it (`model.rs`: the conversions, OKLCH's gamut mapping, the CSS forms it reads and writes); `numeric.rs`, the rules of a number in a range with a step that `Slider` follows and of a number typed as text that `NumberInput` follows; `keys.rs`, the keys a focused control binds; `TextView`, `ResizablePanelGroup`, `DockArea`, `Editor` and `DiffView` directories, `text_view/`, `resizable/`, `dock/`, `editor/`, `diff/`; `rich_editor/`, `RichEditor`'s headless kernel, `docs/dev/rich-editor.md`; `syntax.rs`, the syntax highlighting `TextView` and `Editor` share), one `Registry` (`lib.rs`) |
-| `crates/nsh-base/` | `nsh/base`'s components and modules, one file each (`accordion.rs`, its parts on `collapsible.rs`'s reveal, `alert_dialog.rs`, `button.rs`, `carousel.rs`, `avatar.rs`, `checkbox.rs`, `number_input.rs`, `radio.rs`, `slider.rs`, `switch.rs`, `tabs.rs`, `select.rs` on `listbox.rs`; `command.rs`, its items indexed once and filtered natively per query, its moves of the highlight `listbox.rs`'s; `tree.rs`, its items flattened natively into the rows the expanded items show; `color_picker/`, `ColorPicker` and its parts over a color as each space's channels hold it (`model.rs`: the conversions, OKLCH's gamut mapping, the CSS forms it reads and writes); `numeric.rs`, the rules of a number in a range with a step that `Slider` follows and of a number typed as text that `NumberInput` follows; `keys.rs`, the keys a focused control binds; `TextView`, `ResizablePanelGroup`, `DockArea`, `Editor` and `DiffView` directories, `text_view/`, `resizable/`, `dock/`, `editor/`, `diff/`; `rich_editor/`, `RichEditor`'s headless kernel, `docs/dev/rich-editor.md`; `syntax.rs`, the syntax highlighting `TextView` and `Editor` share), one `Registry` (`lib.rs`) |
+| `crates/nsh-base/` | `nsh/base`'s components and modules, one file each (`accordion.rs`, its parts on `collapsible.rs`'s reveal, `alert_dialog.rs`, `button.rs`, `checkbox.rs`, `number_input.rs`, `radio.rs`, `slider.rs`, `switch.rs`, `tabs.rs`, `select.rs` on `listbox.rs`; `command.rs`, its items indexed once and filtered natively per query, its moves of the highlight `listbox.rs`'s; `emoji_picker/`, the emoji's data and the picker on `command.rs`'s model; `tree.rs`, its items flattened natively into the rows the expanded items show; `color_picker/`, `ColorPicker` and its parts over a color as each space's channels hold it (`model.rs`: the conversions, OKLCH's gamut mapping, the CSS forms it reads and writes); `numeric.rs`, the rules of a number in a range with a step that `Slider` follows and of a number typed as text that `NumberInput` follows; `keys.rs`, the keys a focused control binds; `TextView`, `ResizablePanelGroup`, `DockArea`, `Editor` and `DiffView` directories, `text_view/`, `resizable/`, `dock/`, `editor/`, `diff/`; `rich_editor/`, `RichEditor`'s headless kernel, `docs/dev/rich-editor.md`; `syntax.rs`, the syntax highlighting `TextView` and `Editor` share), one `Registry` (`lib.rs`) |
+| `crates/nsh-base/` | `nsh/base`'s components and modules, one file each (`accordion.rs`, its parts on `collapsible.rs`'s reveal, `alert_dialog.rs`, `button.rs`, `carousel.rs`, `avatar.rs`, `checkbox.rs`, `number_input.rs`, `radio.rs`, `slider.rs`, `switch.rs`, `tabs.rs`, `select.rs` on `listbox.rs`; `command.rs`, its items indexed once and filtered natively per query, its moves of the highlight `listbox.rs`'s; `emoji_picker/`, the emoji's data and the picker on `command.rs`'s model; `tree.rs`, its items flattened natively into the rows the expanded items show; `color_picker/`, `ColorPicker` and its parts over a color as each space's channels hold it (`model.rs`: the conversions, OKLCH's gamut mapping, the CSS forms it reads and writes); `numeric.rs`, the rules of a number in a range with a step that `Slider` follows and of a number typed as text that `NumberInput` follows; `keys.rs`, the keys a focused control binds; `TextView`, `ResizablePanelGroup`, `DockArea`, `Editor` and `DiffView` directories, `text_view/`, `resizable/`, `dock/`, `editor/`, `diff/`; `rich_editor/`, `RichEditor`'s headless kernel, `docs/dev/rich-editor.md`; `syntax.rs`, the syntax highlighting `TextView` and `Editor` share), one `Registry` (`lib.rs`) |
 | `crates/nsh-core/src/runtime/` | The runtime's Rust modules (`nsh`'s `Keyboard` and `Image` functions, with its environment, accessibility, clipboard, picker, storage and host modules, `nsh/mobile`, `nsh/desktop`), one `Registry` per JS module (`mod.rs`) |
 | `crates/nsh-js/src/components.rs` | The JS face of components and modules, made from their specs when a bundle imports the module; `classes.rs`: classes' (on the web classes' machinery), synchronous functions', callbacks |
 | `crates/nsh-js/src/declarations.rs` | `nsh/base.d.ts`, `app/native.d.ts`, ...: the declarations generated from each registry (`nsh_core::element::declarations`) with the re-exports and the navigation |
@@ -339,7 +339,7 @@ reasons: `reactive-components.md`.
   | `context(default)` / `<Ctx.Provider value>` / `Ctx()` | `provide_context(value)` in the body; `use_context::<T>()` below it (through the app's elements too: a component JS made among another's JS children is under where that one places them); provide a signal to change what readers see |
   | `createAnimatedValue`, `Animated.spring`, `interpolate` | `animated_value(0.0)` (`Copy`, kept by the current owner); `.bind_translate_y(&v)` / `.bind_opacity(..)` / `.bind_background(..)` / `.bind_border_color(..)` / `.bind_color(..)` / `.bind_scale(..)` / `.bind_rotate(..)`, `.pan_values(..)` (drags move it natively), `.pinch_value(&scale)` / `.rotation_value(&angle)` (TS `pinch={{ scale }}`, `rotation={{ angle }}`), `scroll().scroll_value(&v)`, canvas arguments (`Painter::new().fill_rect(0.0, 0.0, &v, 4.0)`); `v.spring(to, Spring::default())` / `.timing(to, ms, easing)` / `.timing_with(to, Timing { delay_ms, .. })` / `.decay(..)` / `.decay_within(.., (min, max), bounce)` return an `AnimationEnd` to await; `v.value()` (`getValue()`; after `v.stop()`, the `{ value }` of `stop()`'s promise) an `Answer<f32>`; `v.set_offset(..)` / `.flatten_offset()` / `.extract_offset()`; `element::sample_easing` / `sample_spring` / `sample_decay` (`Easing.sample`, `Animated.sampleSpring` / `sampleDecay`) the curves, to draw them; `v.interpolate(..)`, `.interpolate_with(.., Interpolation { extrapolate_left, extrapolate_right, easing })`, `.add(..)`, `.diff_clamp(..)` derive nodes |
   | `Animated.sequence / parallel / stagger / delay / loop`, `.start(cb)` / `.stop()` / `.reset()` | `Animation::sequence([Animation::timing(&v, to, Timing::new(ms, easing)), Animation::delay(ms), Animation::spring(..)])`, `::parallel(..)` (`.stop_together(false)`), `::stagger(ms, ..)`, `.looped(iterations)` (`.reset_before_iteration(false)`); `a.start()` returns an `AnimationEnd`, `a.stop()`, `a.reset()` |
-  | `keymap.bind("mod+k", f, { when, repeat, passThrough })`, `keymap.label("mod+k")` (`nsh`'s `keymap`) | `on_key("mod+k", \|keystroke\| ..)` / `on_key_with(k, KeyOptions { when, repeat, pass_through }, f)`, bound while the current owner lives; `key_label("mod+k")` (`⌘K`, `Ctrl+K`). The core joins the views' bindings to JS's in the root's one table (a view's after JS's: it wins on the same keystroke) and runs a view's handler itself when the root's `KeyCommand` reports it; their ids start at 2^31, above JS's (`element/keys.rs`) |
+  | `keymap.bind("mod+k", f, { when, repeat, passThrough })`, `keymap.label("mod+k")` (`nsh`'s `keymap`) | `on_key("mod+k", \|keystroke\| ..)` / `on_key_with(k, KeyOptions { when, repeat, pass_through }, f)`, bound while the current owner lives and only in the window bound in (`current_window`: a binding fires only for keys pressed in that window, `KeyBinding::window`; JS's belong to no window); `key_label("mod+k")` (`⌘K`, `Ctrl+K`). The core joins the views' bindings to JS's in the root's one table (a view's after JS's: it wins on the same keystroke) and runs a view's handler itself when the root's `KeyCommand` reports it; their ids start at 2^31, above JS's (`element/keys.rs`) |
   | (none: a JS app's scroll view or list is its own; Rust views watch one they did not make) | `watch_scroll(target, \|e: &ScrollEvent\| ..)` (offset, content size and viewport, when first found and on every change, whoever listens to its `on_scroll`), while the current owner lives; `target` (`\|\| r.node()`) is resolved again in every commit, so a ref set later in the render is found; `NodeRef(id).scroll_to(offset, animated)` scrolls a node such a target names. The core runs a scroll watch at the end of the commit round that changed what it reports, and another round sends what it changed; a hover watch has the node listen to the pointer, as a hint's anchor (`element/watch.rs`, `core/watch.rs`; `nsh_base::Scrollbar`) |
   | (none: JS's elements are in the order JS makes them) | `nsh_core::element::watch_order(\|\| refs, \|order: &[usize]\| ..)` (`#[doc(hidden)]`, for `nsh-base`'s roving focus; not in the prelude), while the current owner lives: the order the tree has the elements in, as indices into the list `refs` gives (those no node in the tree carries last), heard only when it differs from the list's; the core looks at the end of the commit round the watch is made in, of one after the returned `OrderWatch` is `invalidate()`d (an item came) and of one that moved a node inside the subtree the elements share (`Core::insert` of a node with a parent notes the parents it left and joined; a watch looks again when its elements' nearest common ancestor at its last look is one of them or above one: an app's keyed reorder of its elements, never a list of rows each with a group of its own reordered), and another round sends what the handler changed. A round that moved nothing there and invalidated nothing costs nothing (`element/watch.rs`, `core/watch.rs`) |
   | `BackHandler.on("press", f)`, the function it returns | `on_back_press(\|\| -> bool)`: registered while the current owner lives (only while a signal holds: inside an `effect`). After modals and before stacks, the views' listeners run newest first, then JS's; when none returns true the core sends `Command::Back`: the top stack pops, else the app exits (`element/back.rs`) |
@@ -749,7 +749,16 @@ page's; `font-mono` is the monospaced one) and has none of its own. The theme is
 `-foreground`, `sidebar-border`, `sidebar-ring` and `radius`, one field each (`theme().primary`, `theme().chart_1`,
 `theme().sidebar_ring`, `theme().radius`), plus Tailwind's fonts `font-sans` / `font-mono` (`theme().font_sans`,
 `theme().font_mono`; `None`, the system's fonts). `theme()` returns the theme of the tokens drawn with now, made once
-per change of them; an app's own tokens are read by name (`theme().color("up")`). The defaults are shadcn's `neutral` theme (`default-theme.json`, `radius` 0.625rem = 10 pt); no component of
+per change of them; an app's own tokens are read by name (`theme().color("up")`). Each field is read through its
+**role** (`element::Role`: `background`, `popover`, `primary`, `selection`, `radius`, `font-sans`, …, the names NSH's
+own parts draw with, `name()` shadcn's spelling): `Tokens::role_color` / `role_number` / `role_font` read the token a
+theme maps the role onto (`Tokens::with_roles`, kept by `over`), else the token of the role's name, so without a
+mapping every reader gets what it always did. The core's readers use roles too (the default font,
+`role_font(Role::FontSans)`; the mobile tab bar's tint, `Role::Primary`), and so do the platforms' (Linux's menus,
+iOS's alert tint, Android's `DIALOG_ROLES`; GPUI's host background is the host theme's `background` field, which
+`Theme::of` reads through `Role::Background`). A role is no token and adds no class. The core
+says whether the app has a theme of its own on the tokens it draws with (`Tokens::is_themed`: other than the UI set's
+defaults, `registry.tokens(None)`), which iOS and Android check before taking a theme's colors for their alerts. The defaults are shadcn's `neutral` theme (`default-theme.json`, `radius` 0.625rem = 10 pt); no component of
 `nsh/base` draws with them but `TextView`'s reading typography and the default looks of `Editor` and `DiffView`.
 
 A theme file is shadcn's registry `cssVars`, as shadcn and tweakcn export them: `{ "cssVars": { "theme": {…},
@@ -757,7 +766,8 @@ A theme file is shadcn's registry `cssVars`, as shadcn and tweakcn export them: 
 where `dark` leaves them out). Values are CSS: colors (hex, `rgb()`, `hsl()`, `oklch()`, `oklab()`, names,
 `color-mix()`, `var(--x[, fallback])` of the same appearance's tokens, the file's or the default's), lengths (`rem`
 is 16 pt, `px`) and font family lists for `font-*` names (the first family that is not generic, `system-ui` /
-`sans-serif` / ... meaning the system's); values of no kind a token has (shadows, letter spacing) are left out. A
+`sans-serif` / ... meaning the system's); a `shadow-*` value that reads as `box-shadow` layers is a shadow token
+(`Tokens::shadow`, per appearance), and values of no kind a token has (a letter spacing in `em`) are left out. A
 value written as a color that is none (`#zz`, `lab()`, a `var()` that names no color) is left out and reported, and so
 is one that is no color in one appearance where the other's is a color (that color is both's): `nsh build` warns of
 them, the core logs them, `setTheme` refuses the file for them. An
@@ -777,16 +787,118 @@ them with `element::set_tokens(tokens)` (`set_tokens(theme.into())` of an `nsh_b
 `tokens()` accessor, as `set_color_scheme` is beside `color_scheme()`). A TSX app calls `setTheme(theme)` of `nsh`
 (`nsh-js` `env.rs`; the web's `browser/environment.js` and op 406): `setup`'s way, the root's `uiTheme` and `token()`
 reading the new tokens at once, for a file read whole (`ThemeTokens::checked`, else a `TypeError` naming what it
-cannot read and nothing changed); `null` sends the file the entry gave again. The core sends the tokens drawn with to the
+cannot read and nothing changed); `null` sends the file the entry gave again. Some tokens change, the others staying,
+with `element::update_tokens(tokens)` and `reset_tokens(names)` (`Action::UpdateTokens` / `ResetTokens`, applied in
+order with the app's other actions so two updates in a turn compose; `ModuleCx` has both for synchronous `#[module]`
+functions) and TS's `updateTheme(theme)` / `resetTheme(names?)` (`env.rs`; the web's ops 409 and 410): the root's
+`Prop::UiThemeUpdate` / `Prop::UiThemeReset` (pushed by the runtime, no JS name), with `token()` reading the result
+at once (`ThemeTokens::updated`, read whole as `checked`; `ThemeTokens::reset`). An update reads only the tokens the
+file sets, with what the UI set brings for it (`Registry::token_overrides_from`: `nsh/base` gives `theme_file::overrides`): a
+value it cannot read keeps the token's value, and a `var()` naming a token it does not set is the token drawn with
+now. A reset puts names back to the app's theme, its tokens as last set whole (`Core::set_tokens`: the UI set's
+defaults with `nsh.json`'s theme, `setTheme`, `set_tokens`; the core's `file_tokens`), removing a name the theme
+lacks. The core sends the tokens drawn with to the
 platform when they change (`Command::Tokens` on the root), which colors its own controls with them (Linux's menus:
 `docs/dev/linux.md`; Android's alerts and action sheets: `popover` behind, `popover-foreground` for the title and
 the options, `muted-foreground` for the message, `primary` for the buttons and `destructive` for a destructive action,
-over the system dialog's shape; iOS's alerts take `primary` as their tint, which iOS 17 draws the regular and cancel
-actions in and iOS 26 does not use; an app without a theme of its own keeps the system's colors on both). `nsh_base::theme()` reads the tokens from a signal of
+over the system dialog's shape, each as a role; iOS's alerts take `Role::Primary` as their tint, which iOS 17 draws the
+regular and cancel actions in and iOS 26 does not use; an app without a theme of its own, `!Tokens::is_themed()`,
+keeps the system's colors on both). `nsh_base::theme()` reads the tokens from a signal of
 the surface (`element::tokens`): new tokens run again the bindings that read them. An embedding app can give a
 surface its own (`Core::set_host_tokens`, `EngineControl::set_tokens`; sent from `Engine::start_with`'s `setup` they
 are in the first frame and JS's first render): they win over the app's until cleared, and the app's names they lack
 stay, so an embedded app looks like its host (`embedding.md`, "GPUI and GPUI Kit apps").
+
+### Theme types
+
+An app or a design system brings its own tokens as a Rust type (`element/theme.rs`, user docs: `website/docs/rust.md`,
+"Theme types"). `AppTheme` is the type's face: `type Patch` (some fields, each `None` for as it is), `token_specs()`,
+`write_tokens(&self, prefix, out)`, `read_tokens(tokens, prefix)` (a name the tokens lack keeps `Default`'s value; a
+nested type's field, the nested type's), `write_patch(patch, prefix, out)` and the provided `to_tokens()`, its tokens
+with the roles its specs map (`Tokens::with_roles`). A `TokenSpec` is a name, a `TokenKind` (`#[non_exhaustive]`:
+`Color`, `Number`, `Radius`, `Spacing`, `Text`, `Weight`, `Tracking`, `Leading`, `Blur`, `Font`, `Shadow`; `name()` /
+`from_name()` its spelling in descriptions, `is_number()` every kind but `Color`, `Font` and `Shadow`, `namespace()` the
+namespace its classes read, `radius-` to `shadow-`, none for `Color` and `Number`), a doc comment and the `Role` it
+plays, built with `TokenSpec::new(name, kind).doc(..).role(..)`. The prefix lets a type hold another:
+`TokenKind::prefixed(prefix, name)` puts it after the name's namespace when it has one, so the classes still find it
+(`radius-card` under `button-`: `radius-button-card`, `rounded-button-card`), else in front (`surface-raised`). The
+tokens stay flat and by name, so classes, `token()` and theme files read them as they read any theme's; a type is a
+typed view of its names. Some impls are written by hand (`nsh-base`'s `Theme`; in the tests, `core/tests.rs` `mod
+app_theme` and `nsh-engine`'s `tests/engine/app_theme.rs`); `#[derive(AppTheme)]` writes them (`nsh-macros`
+`src/theme.rs`: each field's `#[token(kind, name, role)]`, `nested`, `flatten` or `skip`; names in kebab case with the
+kind's namespace, a nested type's through `TokenKind::prefixed`; the impl through `__private::ThemeValue`, which
+`AdaptiveColor`, `f32`, `Points`, `SharedString`, `String` and `AdaptiveShadow` implement; `<Type>Patch` of `Option`s,
+each documented with its token and classes; the compile errors of `AppTheme`'s doctests, which apply
+`ThemeSet::try_add`'s rule of names and kinds and check each role's name, kind and uniqueness).
+
+`Registry::theme::<T>()` records `ThemeSpec::of::<T>()`: the type's name, its `TypeId`, its specs and its defaults
+(`T::default().to_tokens()`), each behind a function pointer, so the registry stays `Clone` and needs no `T`
+(`Registry::theme_specs`). `Registry::merged` unions the sets' specs by `TypeId` and builds the crate-private
+`ThemeSet` of them: each name with its owner type and kind, the types in registration order, and the union of their
+defaults with the role aliases. `ThemeSet::try_add` returns an error naming both types for a name or a role
+(`role_owner`) another type claims; `ThemeSet::new` panics with it, as two components of one name do.
+`ThemeSet::target(key)` is the name a theme file's key sets: a declared name, else the token a role of that name
+(`primary`) is mapped onto.
+
+`TokenProvider` is how theme files are read: `Source { read, overrides }`, a set's `tokens_from` and
+`token_overrides_from` functions (`nsh/base`'s `read_tokens` and `theme_file::overrides`), or
+`Themes(Arc<ThemeSet>)`.
+`Registry::token_provider` gives `Themes` whenever a set registers a type, so the types win over the default source,
+and `Source` otherwise. Its `read(json)` (`None`: the defaults) backs `Registry::tokens`, which `Core::set_components`
+(the defaults, `default_tokens` and `is_themed`'s baseline) and `Core::set_ui_theme` read; its `overrides(json, base)`
+backs `Core::update_ui_theme` (`updateTheme`) and `Core::set_host_theme` (the embedding app's overrides). `ThemeTokens`
+(`Core::theme_tokens`) carries the same provider beside the host tokens, so `of`, `checked` and `updated` (`token()`
+before the first render, `setTheme`, `updateTheme`) read a file as the core does.
+
+Under a `ThemeSet` a file is read by `theme_file::overrides_declared(json, base, set)`: its `cssVars` sections' keys
+are rewritten through `ThemeSet::target`, a key no type declares is dropped and listed (`` `brand`: no theme type
+declares it ``), the file is read with `theme_file::overrides` (so `var()` names the file's tokens, else `base`'s, the
+types' defaults), and each declared name keeps a value only of its kind (`TokenKind::holds`, `Tokens::copy_named`),
+others listed (`` `odds-up`: no color value ``), as is a declared name the file sets and leaves unread. A role's
+key in a section that also sets its token gives way to it (listed), and a `var()` naming a role names its token.
+`theme_file::parse_declared` lays that over `base`. A name no type declares is listed with `theme_file::UNDECLARED`'s
+words, which `ThemeTokens::checked` / `updated` do not refuse a file for (`setTheme` leaves the name out, #1190).
+`ThemeSet::try_add` also refuses a token named as no value of its kind is read (a font not `font-*`, a shadow not
+`shadow-*`, another kind `font-*` but a weight's `font-weight-*`) and a name or a role a type gives twice. An app with
+a registered type has a theme of its own (`Tokens::is_themed`, `Registry::has_theme_types`).
+`theme_file::write(tokens)` writes tokens back as a theme file (a value both appearances share in `theme`, the others
+in `light` and `dark`; roles none of it), which the descriptions carry as a type's defaults.
+
+`theme_of::<T>()` reads `tokens()` (so it subscribes, as `tokens()` does) and caches per surface in `Ambient`'s `themes`
+(`ambient::with_theme_cache`: by `TypeId`, the `Arc<Tokens>` read and the `Arc<T>` as `Box<dyn Any>`): while the cached
+tokens are pointer-equal to the current ones the cached theme is returned, else `T::read_tokens(&tokens, "")` is cached
+in its place. The type's `read_tokens` runs with the cache let go, so it may read the tokens or another type.
+`set_theme` is `update_tokens` of its tokens without the roles its specs map (`theme::theme_tokens`: the registered
+types' roles stay), `update_theme` `update_tokens` of the patch's tokens (`theme::patch_tokens`), and `reset_theme`
+`reset_tokens` of `T`'s names; `ModuleCx` has the three for synchronous `#[module]` functions (`Action::UpdateTokens`,
+`reset_tokens`).
+
+`nsh_base::Theme` implements `AppTheme` in its `theme!` macro: the 31 shadcn colors, `radius`, `font-sans` and
+`font-mono`, each spec playing the role of its name, and `type Patch = Tokens` (`update_theme::<Theme>(tokens)`; under
+a prefix the names are renamed, `rename`). Its `read_tokens` under no prefix is `Theme::of`, which reads every field
+through its role, so under a registered type its fields are the tokens the type maps their roles onto. It is never
+registered: `nsh_base::registry()` keeps `tokens_from(read_tokens)`, the default any registered type replaces.
+`nsh_base::theme()` is `theme_of::<Theme>()`, in place of the thread-local it kept.
+
+The toolchain never links the app's crates, so the description carries the types (description format 3,
+`element/description.rs`): `SetDescription::themes`, one `ThemeDescription` per type with its type name, its tokens
+(`ThemeTokenDescription`: name, kind, doc, role by name) and its defaults as a theme file (`theme_file::write`).
+A format 2 description is refused, as every other format. `description::theme_types(sets)` merges them as
+`Registry::merged` does (through `ThemeSet::try_add`, an error naming both types in place of the panic) into
+`ThemeTypes`: `read(json)` is the core's `TokenProvider::Themes` read, and `tokens()` lists each declared name with its
+kind and doc, sorted. `Ok(None)` when no set registers a type.
+
+The bundler takes them from `BundleOptions::ui_sets`. `tailwind_setup(dir, ui_sets)` seeds the class theme from the
+types' defaults (`ThemeTypes::read(None)`) in place of `nsh_base::Theme::default()` and reads `nsh.json`'s
+`"theme"` with `ThemeTypes::read(Some(json))`, warning of what it leaves out (`warn_ignored`), so classes are the
+types' names (`bg-surface-raised`, `rounded-card`) and a role's name is no class. `theme_tokens_of(dir, ui_sets)` is
+the app's tokens under the types (`theme_tokens(dir)` without), and `types::tokens_declaration_of(tokens, ui_sets)`
+writes `tokens.d.ts` from the types' specs (each name a `number`, or a `string` for a color, a font and a shadow, by
+`TokenKind::is_number`, with its doc as JSDoc), else `tokens_declaration(tokens)`; `nsh-cli`'s `init.rs`
+`write_types` uses both. After the describe step (`rust_app.rs`, `read_description`), the CLI's `warn_typed_theme`
+reads the root's theme file under `theme_types` and warns (`nsh.json: theme: …, ignored`) of the names no type
+declares and the values of another kind (`typed_theme_warnings`); a value it cannot read at all is `root_config`'s to
+report. With no type registered, every step is what it was.
 
 ## The host node and ids
 
@@ -1413,3 +1525,30 @@ stack. A `Toast`'s `accessibilityLabel` is announced once as it mounts (`announc
 announcement). The state classes are the app's look for the status: `startingClass` in the first frame while
 starting (the next display frame, or 50 ms where none comes: Base UI's `data-starting-style`, so the app's
 `transition` classes run the enter motion), `endingClass` while ending, `swipingClass` while swiped.
+
+## Emoji pickers
+
+`EmojiPicker` (`crates/nsh-base/src/emoji_picker/`) is `Command`'s model over data of its own:
+
+- **The data** (`data.rs`, `emoji.tsv`): Unicode's emoji from emojibase-data in its order, a line each (the emoji, its
+  group, the Emoji version that added it, its light skin tone form, its English name and keywords from CLDR), made by
+  `cargo xtask emoji-data <version>` (`crates/xtask/src/emoji.rs`), which checks that every other skin tone is the
+  light one's modifier swapped, so the picker builds no sequence by rules of its own. The native runtimes embed it
+  (`include_str!`); the web runtime fetches it with `runtime_data::load("emoji")` (`nsh-emoji.bin`, which `nsh
+  package` publishes only for an app that links `nsh_part_emoji_picker`), and the picker shows `loading` until then.
+  License: `emoji.LICENSE.txt` (MIT and Unicode License v3).
+- **The feature**: `nsh-base`'s `emoji-picker`, off in `nsh-base` and on in the platform crates' defaults, the runners
+  and the Rust apps' generated workspaces, as `math` is: the component and its data add about 440 kB to a release
+  runner (438 kB on Linux), which an embedding app's own build leaves out with `default-features = false`.
+- **The search** (`mod.rs` `Index`): each emoji's English name, the app's `annotations`' name, then the keywords, in
+  lower case; a query is a substring of one line, matches whose names have a word starting with the query first,
+  then keywords', then the rest, and a longer query searches the last one's matches (as `Command`'s).
+- **The rows** (`grid.rs`, pure): the groups shown cut into rows of `columns` cells under their headers (a group
+  without a heading shows none), each group's first row, keys hashed from what a row shows; the moves (along the
+  cells, down a column to the last cell of a shorter row, a page) are lookups in it.
+- **The list** is a virtual list of its own scroll view, not its parent's: a group's tab scrolls far, and the core
+  follows the target as the rows on the way are measured (`ListState::follow_pin`); a row of cells reports its
+  height, the estimate of the rows not made yet. A short row keeps its places with invisible cells (`invisible`,
+  hidden from screen readers), so a `flex-1` cell keeps the width of the others.
+- The highlight is spread over 128 signals (more than the cells a list shows): a key press notifies the two cells it
+  concerns (`tests/base/emoji_picker.rs` measures it).

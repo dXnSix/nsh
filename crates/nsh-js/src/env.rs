@@ -7,8 +7,7 @@
 //! `nsh/accessibility`; the layout direction, which follows the user's
 //! language; the insets
 //! context screens and modals provide (`safeAreaInsets`); the design
-//! tokens the app is drawn with (`token()` of `nsh`); the app's location
-//! (`location()`, `navigate`; [`nsh_core::location`]).
+//! tokens the app is drawn with (`token()` of `nsh`).
 
 use std::{
     cell::{Cell, RefCell},
@@ -20,7 +19,6 @@ use std::{
 use nsh_core::{
     desktop::Display,
     element::{ThemeTokens, Token, Tokens},
-    location::{HistoryBehavior, Location, Navigation},
     platform::{Appearance, ColorScheme, Environment, Idiom, Os},
 };
 use rquickjs::qjs;
@@ -53,12 +51,9 @@ enum Part {
     WindowState,
     Displays,
     Fps,
-    /// Not the platform's environment: the app's location
-    /// ([`set_location`]).
-    Location,
 }
 
-const PARTS: usize = 16;
+const PARTS: usize = 15;
 
 /// The environment's part of a context's state.
 pub(crate) struct Env {
@@ -84,10 +79,11 @@ pub(crate) struct Env {
     /// The theme file the app was built with (`nsh.json`), which
     /// `setTheme(null)` gives back (`None`: it has none).
     built_theme: RefCell<Option<String>>,
+    /// The theme file the app's tokens come from now (the built one, or
+    /// `setTheme`'s): what `resetTheme` puts tokens back to.
+    current_theme: RefCell<Option<String>>,
     /// The displays the platform reported last.
     displays: RefCell<Vec<Display>>,
-    /// The app's location, as `location()`'s signal has it.
-    location: RefCell<Location>,
 }
 
 impl Default for Env {
@@ -103,8 +99,8 @@ impl Default for Env {
             tokens_version: Cell::new(0),
             theme: RefCell::new(ThemeTokens::default()),
             built_theme: RefCell::default(),
+            current_theme: RefCell::default(),
             displays: RefCell::default(),
-            location: RefCell::new(Location::root()),
         }
     }
 }
@@ -161,103 +157,6 @@ pub(crate) fn init(cx: *mut JsContext) {
     let insets = unsafe { crate::dom::context(cx, UNDEFINED, 1, args.as_mut_ptr()) };
     e.insets.set(insets);
     e.tokens_signal.set(reactive::new_signal(cx, number(0.0)));
-    let root = location_object(cx, &Location::root());
-    reactive::set_signal(cx, e.signals[Part::Location as usize].get(), root);
-}
-
-/// `location()`'s value: `{ url, pathname, search, hash }`, with the
-/// DOM's `?` and `#` (empty when there is none).
-fn location_object(cx: *mut JsContext, location: &Location) -> JsValue {
-    let with = |prefix: &str, part: Option<&str>| match part {
-        Some(part) => format!("{prefix}{part}"),
-        None => String::new(),
-    };
-    object(
-        cx,
-        &[
-            (c"url", string(cx, location.as_str())),
-            (c"pathname", string(cx, location.path())),
-            (c"search", string(cx, &with("?", location.query()))),
-            (c"hash", string(cx, &with("#", location.fragment()))),
-        ],
-    )
-}
-
-/// Takes in where the platform or Rust moved the app: what read
-/// `location()` runs again.
-pub(crate) fn set_location(cx: *mut JsContext, location: &Location) {
-    let e = env(cx);
-    if *e.location.borrow() == *location {
-        return;
-    }
-    e.location.replace(location.clone());
-    let value = location_object(cx, location);
-    reactive::set_signal(cx, e.signals[Part::Location as usize].get(), value);
-}
-
-/// `navigate(url, { history })`: resolves `url` against the location
-/// ([`Location::join`]), makes it `location()` at once and tells the core
-/// (`Command::Navigate` on the root). A `TypeError` for a URL that is no
-/// location of the app's.
-unsafe extern "C" fn navigate(
-    cx: *mut JsContext,
-    _this: JsValue,
-    argc: c_int,
-    argv: *mut JsValue,
-) -> JsValue {
-    let url = arg(argc, argv, 0);
-    // SAFETY: a live argument.
-    if !unsafe { qjs::JS_IsString(url) } {
-        // SAFETY: throws on a live context.
-        return unsafe { qjs::JS_ThrowTypeError(cx, c"navigate: expected a URL string".as_ptr()) };
-    }
-    let url = crate::dom::string_arg(cx, url).unwrap_or_default();
-    let options = arg(argc, argv, 1);
-    let mut history = HistoryBehavior::Push;
-    // SAFETY: a live argument; the property read is freed after.
-    if unsafe { qjs::JS_IsObject(options) } {
-        let value = unsafe { qjs::JS_GetPropertyStr(cx, options, c"history".as_ptr()) };
-        let name = (!unsafe { qjs::JS_IsUndefined(value) })
-            .then(|| crate::dom::string_arg(cx, value).unwrap_or_default());
-        // SAFETY: the property read's own value.
-        unsafe { qjs::JS_FreeValue(cx, value) };
-        match name.as_deref() {
-            None | Some("push") => {}
-            Some("replace") => history = HistoryBehavior::Replace,
-            // SAFETY: throws on a live context.
-            Some(_) => unsafe {
-                return qjs::JS_ThrowTypeError(
-                    cx,
-                    c"navigate: history is \"push\" or \"replace\"".as_ptr(),
-                );
-            },
-        }
-    } else if !unsafe { qjs::JS_IsUndefined(options) } {
-        // SAFETY: throws on a live context.
-        return unsafe { qjs::JS_ThrowTypeError(cx, c"navigate: options are an object".as_ptr()) };
-    }
-    let e = env(cx);
-    let next = match e.location.borrow().join(&url) {
-        Ok(next) => next,
-        Err(refused) => {
-            let message =
-                std::ffi::CString::new(format!("navigate: {refused}")).unwrap_or_default();
-            // SAFETY: throws on a live context; `%s` takes the message.
-            return unsafe { qjs::JS_ThrowTypeError(cx, c"%s".as_ptr(), message.as_ptr()) };
-        }
-    };
-    if next == *e.location.borrow() {
-        return UNDEFINED;
-    }
-    set_location(cx, &next);
-    let op = nsh_core::Op::Command {
-        id: nsh_core::ROOT_ID,
-        command: nsh_core::Command::Navigate(Navigation::new(next, history)),
-    };
-    if let Err(err) = crate::dom::push_op(cx, op) {
-        return err;
-    }
-    reactive::finish_value(cx, UNDEFINED)
 }
 
 /// Takes in the design tokens the app is drawn with: what read a token
@@ -286,6 +185,7 @@ pub(crate) fn set_theme_tokens(cx: *mut JsContext, theme: ThemeTokens) {
 pub(crate) fn take_theme(cx: *mut JsContext, json: &str) {
     let e = env(cx);
     e.built_theme.replace(Some(json.to_owned()));
+    e.current_theme.replace(Some(json.to_owned()));
     let tokens = e.theme.borrow().of(json);
     if let Some(tokens) = tokens {
         set_tokens(cx, Arc::new(tokens));
@@ -338,9 +238,107 @@ unsafe extern "C" fn set_theme(
     } else {
         return type_error(cx, "setTheme: expected a theme ({ cssVars }) or null");
     };
+    e.current_theme.replace(Some(json.clone()));
     let op = nsh_core::Op::SetProp {
         id: nsh_core::ROOT_ID,
         prop: nsh_core::Prop::UiTheme(json.into()),
+    };
+    if let Err(err) = crate::dom::push_op(cx, op) {
+        return err;
+    }
+    if let Some(tokens) = tokens {
+        set_tokens(cx, Arc::new(tokens));
+    }
+    reactive::finish_value(cx, UNDEFINED)
+}
+
+/// `v` as JSON (a theme, a list of names); `Err`: the exception thrown.
+fn to_json(cx: *mut JsContext, v: JsValue) -> Result<serde_json::Value, JsValue> {
+    // SAFETY: a context reference and a dup for the converter.
+    let value = unsafe {
+        let rcx = rquickjs::Ctx::from_raw(ptr::NonNull::new_unchecked(cx));
+        rquickjs::Value::from_raw(rcx, qjs::JS_DupValue(cx, v))
+    };
+    crate::protocol::to_json(&value).map_err(|_| qjs::JS_EXCEPTION)
+}
+
+/// `updateTheme(theme)`: the tokens `theme` sets change, the others stay
+/// (`setTheme` replaces them all); read whole or not at all, as
+/// `setTheme`'s. `token()` reads the new tokens at once; the core has them
+/// when this turn's ops reach it, in order, so two updates compose.
+unsafe extern "C" fn update_theme(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let e = env(cx);
+    let v = arg(argc, argv, 0);
+    // SAFETY: an inline tag check.
+    if !unsafe { qjs::JS_IsObject(v) } {
+        return type_error(cx, "updateTheme: expected a theme ({ cssVars })");
+    }
+    let json = match to_json(cx, v) {
+        Ok(json) => json.to_string(),
+        Err(exception) => return exception,
+    };
+    let current = e.tokens.borrow().clone();
+    let updated = e.theme.borrow().updated(&current, &json);
+    let tokens = match updated {
+        Some(Err(what)) => return type_error(cx, &format!("updateTheme: {what}")),
+        Some(Ok(tokens)) => Some(tokens),
+        // No UI set reads themes: the core says so.
+        None => None,
+    };
+    let op = nsh_core::Op::SetProp {
+        id: nsh_core::ROOT_ID,
+        prop: nsh_core::Prop::UiThemeUpdate(json.into()),
+    };
+    if let Err(err) = crate::dom::push_op(cx, op) {
+        return err;
+    }
+    if let Some(tokens) = tokens {
+        set_tokens(cx, Arc::new(tokens));
+    }
+    reactive::finish_value(cx, UNDEFINED)
+}
+
+/// `resetTheme(names?)`: the tokens `names` (none given: every one) go
+/// back to the app's theme's, `nsh.json`'s or `setTheme`'s.
+unsafe extern "C" fn reset_theme(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    const EXPECTED: &str = "resetTheme: expected token names (string[]) or nothing";
+    let e = env(cx);
+    let v = arg(argc, argv, 0);
+    // SAFETY: inline tag checks.
+    let names = if unsafe { qjs::JS_IsNull(v) || qjs::JS_IsUndefined(v) } {
+        None
+    } else {
+        let json = match to_json(cx, v) {
+            Ok(json) => json,
+            Err(exception) => return exception,
+        };
+        let Some(list) = json.as_array() else {
+            return type_error(cx, EXPECTED);
+        };
+        let names: Option<Vec<Box<str>>> =
+            list.iter().map(|n| n.as_str().map(Into::into)).collect();
+        match names {
+            Some(names) => Some(names),
+            None => return type_error(cx, EXPECTED),
+        }
+    };
+    let json = e.current_theme.borrow().clone();
+    let json = json.unwrap_or_else(|| NO_THEME.to_owned());
+    let current = e.tokens.borrow().clone();
+    let tokens = e.theme.borrow().reset(&current, &json, names.as_deref());
+    let op = nsh_core::Op::SetProp {
+        id: nsh_core::ROOT_ID,
+        prop: nsh_core::Prop::UiThemeReset(names),
     };
     if let Err(err) = crate::dom::push_op(cx, op) {
         return err;
@@ -365,6 +363,26 @@ pub(crate) const SET_THEME_EXPORT: crate::modules::Item = (
     Ts::function(
         "Makes `theme` the app's theme while it runs, in place of `nsh.json`'s\n`\"theme\"` and over shadcn/ui's tokens as that one is: `token()` reads it\nat once, and classes naming tokens, `nsh/base` and Rust components'\n`theme()` follow with the next frame. An embedding app's theme overrides\nstill win. `null` gives back the theme the app was built with. The theme\nis read whole: a value NSH cannot read (a color it does not know, a value\nthat is no color in one appearance where the other's is) throws a\n`TypeError` naming it, and the theme shown stays.",
         &["(theme: Theme | null): void"],
+    ),
+);
+
+/// `updateTheme` of `nsh`.
+pub(crate) const UPDATE_THEME_EXPORT: crate::modules::Item = (
+    "updateTheme",
+    Export::Function(update_theme, 1),
+    Ts::function(
+        "Changes the tokens `theme` sets while the app runs, keeping the others\n(`setTheme` replaces them all): `token()` reads them at once, and classes\nnaming tokens, `nsh/base` and Rust components' `theme()` follow with the\nnext frame. Two updates in a row both take, the later over the earlier. An\nembedding app's theme overrides still win. The theme is read whole, as\n`setTheme`'s: a value NSH cannot read throws a `TypeError` naming it, and\nno token changes.",
+        &["(theme: Theme): void"],
+    ),
+);
+
+/// `resetTheme` of `nsh`.
+pub(crate) const RESET_THEME_EXPORT: crate::modules::Item = (
+    "resetTheme",
+    Export::Function(reset_theme, 1),
+    Ts::function(
+        "Puts the tokens `names` back to their values in the app's theme\n(`nsh.json`'s `\"theme\"`, or the one `setTheme` set), undoing `updateTheme`\nfor them; without names, every token. A name the theme does not have is\nremoved. The other tokens stay as they are.",
+        &["(names?: (keyof Tokens)[]): void"],
     ),
 );
 
@@ -395,7 +413,12 @@ unsafe extern "C" fn token(
         return UNDEFINED;
     };
     let dark = scheme(e, &current(cx)) == "dark";
-    let value = e.tokens.borrow().get(&name);
+    let tokens = e.tokens.borrow().clone();
+    // A number in the appearance shown (its dark value, when it has one).
+    let value = match tokens.get(&name) {
+        Some(Token::Number(_)) => tokens.number_in(&name, dark).map(Token::Number),
+        value => value,
+    };
     match value {
         Some(Token::Color(c)) => {
             let c = nsh_core::Color::from(if dark { c.dark } else { c.light });
@@ -403,6 +426,8 @@ unsafe extern "C" fn token(
         }
         Some(Token::Number(n)) => number(n),
         Some(Token::Font(f)) => string(cx, &f),
+        // Box shadows as CSS writes them, of the appearance shown.
+        Some(Token::Shadow(s)) => string(cx, &s.css(dark)),
         _ => UNDEFINED,
     }
 }
@@ -907,6 +932,7 @@ fn platform(cx: *mut JsContext) -> JsValue {
     object(
         cx,
         &[
+            (c"name", string(cx, e.platform_name())),
             (c"os", string(cx, e.os.name())),
             (c"version", string(cx, &os_version(&e))),
             (c"idiom", string(cx, idiom(&e))),
@@ -1013,22 +1039,6 @@ pub(crate) const DEVICE_EXPORTS: &[Item] = &[
         ),
     ),
     (
-        "location",
-        Export::Value(|cx| accessor(cx, Part::Location)),
-        Ts::value(
-            "Where the user is in the app (reactive): `url`, a path from the app's\nbase with its query and fragment (`\"/sports/football?tab=live#top\"`),\nand its `pathname`, `search` and `hash` as the DOM names them. On the web\nthe address bar's, the browser's back and forward included; elsewhere\nwhat the embedding app set, else `\"/\"`. `\"/\"` in headless tests unless\n`open` sets `location`.",
-            "Accessor<Location>",
-        ),
-    ),
-    (
-        "navigate",
-        Export::Function(navigate, 2),
-        Ts::function(
-            "Goes to `url` in the app, resolved against `location()` (`\"/teams\"`,\n`\"football\"`, `\"?tab=live\"`, `\"#top\"`, `\"../news\"`): `location()` is the new\none at once, the web adds a browser history entry for it (`history:\n\"replace\"` changes the current one) and the embedding app hears it. A\npage or dialog the app shows in the same turn shares the entry. Going to\nthe location the app is at does nothing. Throws a `TypeError` for\nanother site's URL (`https://…`, which `openUrl` opens).",
-            &["(url: string, options?: NavigateOptions): void"],
-        ),
-    ),
-    (
         "lifecycle",
         Export::Value(|cx| accessor(cx, Part::Lifecycle)),
         Ts::value(
@@ -1100,6 +1110,11 @@ export interface LocaleSettings {
 }
 
 export interface PlatformInfo {
+  /** The platform the app runs on: the OS's name on NSH's own platforms
+   * (`"ios"`, `"android"`, `"macos"`, `"windows"`, `"linux"`, `"web"`), or
+   * the name of a platform built outside NSH (`"miniprogram"`), whose OS is
+   * `os`: handle a name you do not know. */
+  readonly name: OS | (string & {});
   /** The operating system (`"ios"`, `"android"`, `"macos"`, `"windows"`,
    * `"linux"`, `"web"`). */
   readonly os: OS;
@@ -1126,24 +1141,6 @@ export interface PlatformInfo {
    * else `desktop` / `mobile` (by `platform.desktop`), else `native` (not
    * on the web), else `default`. */
   select<T>(spec: PlatformSelectSpec<T>): T | undefined;
-}
-/** Where the user is in the app (`location()`). */
-export interface Location {
-  /** A path from the app's base with its query and fragment:
-   * `"/sports/football?tab=live#top"`. */
-  readonly url: string;
-  /** Its path: `"/sports/football"`. */
-  readonly pathname: string;
-  /** Its query with the `?`, `"?tab=live"`; `""` without one. */
-  readonly search: string;
-  /** Its fragment with the `#` (`#top`); `""` without one. */
-  readonly hash: string;
-}
-/** `navigate`'s options. */
-export interface NavigateOptions {
-  /** `"push"` (default): a new browser history entry, so going back
-   * returns to the location before; `"replace"`: the current entry. */
-  history?: "push" | "replace";
 }
 "#;
 

@@ -85,7 +85,7 @@ the panel however the app is opened. Add this key through `nsh.json`'s `macos.in
 | `CPU` / `GPU` / `MEM` | The process: CPU (100% is one core), its GPU share, its memory footprint (Activity Monitor's figure). |
 
 The bars below are the last 120 frames' main-thread time against one refresh (the line): green within half of it, amber
-within it, red over. While the panel shows, the readings are also logged once a second (target `nsh::perf`, in the
+within it, red over. While the panel shows, the readings are also logged once a second (target `nsh::fps`, in the
 Linux backend's shape with macOS's frame phases `tick`, `drain` and `canvas`; milliseconds as mean/p50/p95/max), which
 `nsh test --fps -v` shows and `examples/gallery/tools/perf.py` reads. Measure release builds; the monitor costs nothing
 while it is off.
@@ -192,10 +192,11 @@ cache directory and 256 MiB of images by default).
 text size in place of the system's (`None` follows the system's again): `locale()`, `Intl`, `fontScale()` and text
 follow at once ([Device and environment](./device-and-environment.md#in-an-embedding-app)).
 
-`AppView::set_theme_overrides(Some(json))` puts your app's brand over the app's [theme](./tailwind.md#theme-tokens): a theme file
-in the format of `nsh.json`'s `"theme"`, whose tokens win over the app's of the same names in light and dark mode
-while the app's others stay; classes such as `bg-primary` restyle at once, and apps loaded later start with it
-(`None` gives the app its own theme back; a file that does not parse is an error and changes nothing).
+`AppView::set_theme_overrides(Some(json))` puts your app's brand over the app's [theme](./tailwind.md#theme-tokens): a
+theme file in the format of `nsh.json`'s `"theme"`, whose tokens win over the app's of the same names in light and dark
+mode while the app's others stay; classes such as `bg-primary` restyle at once, and apps loaded later start with it
+(`None` gives the app its own theme back; a file that does not parse is an error and changes nothing). The app reads the
+file with its own theme's reader, so a `var(--name)` the file does not set is the default theme's value of that token.
 
 Native components are registered with `AppView::register_component`; see
 [Native components](./native-components.md#registering-on-macos-rust). `set_ui_sets(sets)` sets the UI sets every

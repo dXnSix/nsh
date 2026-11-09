@@ -66,8 +66,13 @@ pub(crate) struct Host {
     storage: Mutex<Option<std::path::PathBuf>>,
     /// What the running app may reach (web view navigations check it).
     access: Mutex<Arc<nsh_engine::Access>>,
-    /// The embedding app's theme overrides (`NshView.setThemeOverrides`).
-    host_tokens: Mutex<Option<nsh_engine::Tokens>>,
+    /// The embedding app's theme overrides (`NshView.setThemeOverrides`):
+    /// a theme file the engine reads.
+    host_theme: Mutex<Option<String>>,
+    /// Links the system opened the app with (`NshView.openUrl`) before an
+    /// engine started: the next one applies them before the app's code
+    /// first runs (`UrlScheme.url()`).
+    url_schemes: Mutex<Vec<EventPayload>>,
     /// Font files the embedding app registers (`NshView.registerFont`),
     /// applied to the running app and to every app loaded later.
     fonts: Mutex<Vec<Vec<u8>>>,
@@ -128,10 +133,13 @@ impl Host {
     /// The embedding app's theme overrides (`None`: the app's own theme):
     /// sent to the running app at once, and to every app loaded later
     /// before its first frame.
-    fn set_host_tokens(&self, tokens: Option<nsh_engine::Tokens>) {
-        *self.host_tokens.lock().expect("tokens") = tokens.clone();
+    fn set_host_theme(&self, json: Option<String>) {
+        *self.host_theme.lock().expect("theme") = json.clone();
         if let Some(control) = self.control() {
-            control.set_tokens(tokens);
+            match json {
+                Some(json) => control.set_theme_overrides(json),
+                None => control.set_tokens(None),
+            }
         }
     }
 
@@ -230,15 +238,21 @@ impl Host {
         if let Some(model) = &*self.test_model.lock().unwrap_or_else(|e| e.into_inner()) {
             model.set_up_engine(&mut config);
         }
-        // The embedding app's theme overrides are in the first frame.
-        let tokens = self.host_tokens.lock().expect("tokens").clone();
+        // The embedding app's theme overrides are in the first frame, and
+        // the links that came before are the app's address when its code
+        // first runs.
+        let theme = self.host_theme.lock().expect("theme").clone();
+        let links = std::mem::take(&mut *self.url_schemes.lock().expect("links"));
         let fonts = self.fonts.lock().expect("fonts").clone();
         let setup = move |control: &EngineControl| {
-            if tokens.is_some() {
-                control.set_tokens(tokens);
+            if let Some(json) = theme {
+                control.set_theme_overrides(json);
             }
             for font in fonts {
                 control.register_font(font);
+            }
+            for payload in links {
+                control.dispatch_event(nsh_core::ROOT_ID, EventKind::UrlScheme, payload);
             }
         };
         match Engine::start_with(
@@ -597,7 +611,8 @@ extern "system" fn Java_com_longbridge_nsh_Native_create(
         data_dir,
         storage: Mutex::new(None),
         access: Mutex::new(Arc::default()),
-        host_tokens: Mutex::new(None),
+        host_theme: Mutex::new(None),
+        url_schemes: Mutex::default(),
         fonts: Mutex::new(Vec::new()),
         inline_images: Mutex::default(),
         cache: Mutex::default(),
@@ -868,19 +883,22 @@ extern "system" fn Java_com_longbridge_nsh_Native_setThemeOverrides<'local>(
 ) -> JString<'local> {
     // SAFETY: Java passes its live handle.
     let host = unsafe { host(handle) };
-    let tokens = if json.is_null() {
+    let theme = if json.is_null() {
         Ok(None)
     } else {
         match env.get_string(&json) {
-            Ok(json) => nsh_base::theme_overrides(&String::from(json))
-                .map(Some)
-                .map_err(|err| format!("invalid theme: {err}")),
+            Ok(json) => {
+                let json = String::from(json);
+                nsh_core::element::theme_file::check(&json)
+                    .map(|()| Some(json))
+                    .map_err(|err| format!("invalid theme: {err}"))
+            }
             Err(err) => Err(format!("invalid theme: {err}")),
         }
     };
-    match tokens {
-        Ok(tokens) => {
-            host.set_host_tokens(tokens);
+    match theme {
+        Ok(theme) => {
+            host.set_host_theme(theme);
             JString::from(JObject::null())
         }
         Err(err) => env
@@ -1700,7 +1718,6 @@ extern "system" fn Java_com_longbridge_nsh_Native_eventMap(
                 "positionMs" => "positionMs",
                 "truncated" => "truncated",
                 "buffering" => "buffering",
-                "location" => "location",
                 _ => continue,
             };
             if let Some(v) = read(&mut env, i) {
@@ -1720,8 +1737,19 @@ extern "system" fn Java_com_longbridge_nsh_Native_eventMap(
             EventPayload::Map(fields)
         }
     };
-    if let Some(control) = host.control() {
-        control.dispatch_event(id as NodeId, kind, payload);
+    match host.control() {
+        Some(control) => control.dispatch_event(id as NodeId, kind, payload),
+        // A link before the app runs (the launch intent's): the engine
+        // that starts next applies it.
+        None if kind == EventKind::UrlScheme => {
+            let mut links = host.url_schemes.lock().expect("links");
+            // As many as the core keeps for a listener, the oldest dropped.
+            if links.len() == nsh_core::url_scheme::MAX_PENDING {
+                links.remove(0);
+            }
+            links.push(payload);
+        }
+        None => {}
     }
 }
 
@@ -2569,84 +2597,6 @@ extern "system" fn Java_com_longbridge_nsh_Native_openUrlReply(
     // answered once.
     let request = unsafe { Box::from_raw(request as *mut nsh_engine::OpenUrlRequest) };
     request.answer(handled != 0);
-}
-
-/// Sets where the app is (`location()`; `NshView.setLocation`): a path from
-/// the app's base. False when it is not one. Any thread.
-#[unsafe(no_mangle)]
-extern "system" fn Java_com_longbridge_nsh_Native_setLocation(
-    mut env: JNIEnv<'_>,
-    _: JClass<'_>,
-    handle: jlong,
-    location: JString<'_>,
-) -> jboolean {
-    // SAFETY: Java passes its live handle.
-    let host = unsafe { host(handle) };
-    let Some(location) = optional_string(&mut env, &location) else {
-        return 0;
-    };
-    match host.host.set_location(&location) {
-        Ok(()) => 1,
-        Err(err) => {
-            log::warn!("nsh: the location stays as it was: {err}");
-            0
-        }
-    }
-}
-
-/// Where the app is (`NshView.getLocation`): the latest of the embedding
-/// app's `setLocation` and the app's navigations. Any thread.
-#[unsafe(no_mangle)]
-extern "system" fn Java_com_longbridge_nsh_Native_location<'local>(
-    env: JNIEnv<'local>,
-    _: JClass<'local>,
-    handle: jlong,
-) -> JString<'local> {
-    // SAFETY: Java passes its live handle.
-    let host = unsafe { host(handle) };
-    env.new_string(host.host.location().as_str())
-        .unwrap_or_else(|_| JString::from(JObject::null()))
-}
-
-/// `NshView` hears the app's navigations (`handled`), or no longer does:
-/// the channel hands each to `NshView.navigateMessage` on the engine
-/// thread, which runs the Java handler on the UI thread. Registered only
-/// while Java has a handler, so the engine thread crosses JNI for nothing
-/// otherwise.
-#[unsafe(no_mangle)]
-extern "system" fn Java_com_longbridge_nsh_Native_setNavigateHandler(
-    _: JNIEnv<'_>,
-    _: JClass<'_>,
-    handle: jlong,
-    handled: jboolean,
-) {
-    // SAFETY: Java passes its live handle.
-    let host = unsafe { host(handle) };
-    if handled == 0 {
-        return host.host.remove_navigate_handler();
-    }
-    // The view's reference, not the host's: the channel the host owns keeps
-    // the handler.
-    let view = host.view.clone();
-    host.host.handle_navigate(move |navigation| {
-        let replace = navigation.history == nsh_engine::HistoryBehavior::Replace;
-        with_env(|env| {
-            let location = env.new_string(navigation.location.as_str())?;
-            // SAFETY: matches the signature checked in `java::init`.
-            unsafe {
-                env.call_method_unchecked(
-                    view.as_obj(),
-                    java().view_navigate_message,
-                    ReturnType::Primitive(Primitive::Void),
-                    &[
-                        JValue::Object(&location).as_jni(),
-                        JValue::Bool(replace.into()).as_jni(),
-                    ],
-                )
-            }
-            .map(|_| ())
-        });
-    });
 }
 
 /// Frees a call unanswered: it fails in the app. Any thread.

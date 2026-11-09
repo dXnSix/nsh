@@ -16,6 +16,7 @@ mod entry;
 mod init;
 mod logger;
 mod package;
+mod platforms;
 mod play;
 mod publish_ios;
 mod run;
@@ -280,10 +281,11 @@ enum Command {
         #[arg(long)]
         trace: bool,
         /// Show the performance monitor over the app: frame rate, frame and
-        /// commit costs, CPU, GPU, memory (`--target macos`, which also logs
-        /// its readings once a second; `--target linux`, `windows` and `ios`
-        /// log them). On `tui`, show FPS/idle, frame p95, apply/draw/flush
-        /// times, bytes and changed Cells; C-h p toggles the line.
+        /// commit costs, CPU, GPU, memory (`--target macos` and `linux`; on
+        /// `macos`, `linux`, `windows` and `ios` the host also logs its
+        /// readings once a second, shown with `-v`). On `tui`, show FPS/idle,
+        /// frame p95, apply/draw/flush times, bytes and changed Cells; C-h p
+        /// toggles the line.
         #[arg(long)]
         fps: bool,
         /// Where to run.
@@ -621,7 +623,17 @@ impl Command {
 
 /// Runs the command line; errors are printed.
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // `--target` naming a platform outside NSH: its executable runs the
+    // command (`platforms.rs`).
+    let args: Vec<_> = std::env::args_os().collect();
+    if let Some(result) = platforms::dispatch(&args) {
+        return result.unwrap_or_else(|e| {
+            ui::init(false);
+            ui::report(&e);
+            ExitCode::FAILURE
+        });
+    }
+    let cli = Cli::parse_from(args);
     ui::init(cli.verbose);
     logger::init();
     let result = run(cli.command);

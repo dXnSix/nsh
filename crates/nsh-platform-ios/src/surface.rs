@@ -134,8 +134,9 @@ pub(crate) struct RootViewIvars {
     /// The embedding app's locale and text size over the system's
     /// ([`Surface::set_host_environment`]).
     host: Cell<nsh_engine::HostEnvironment>,
-    /// The embedding app's theme overrides ([`Surface::set_host_tokens`]).
-    host_tokens: RefCell<Option<nsh_engine::Tokens>>,
+    /// The embedding app's theme overrides ([`Surface::set_host_tokens`],
+    /// [`Surface::set_host_theme`]).
+    host_theme: RefCell<Option<HostTheme>>,
     /// Font files the embedding app registers ([`Surface::add_font`]).
     fonts: RefCell<Vec<Vec<u8>>>,
     /// Keyboard notification registrations.
@@ -310,7 +311,7 @@ impl RootView {
             lifecycle: Cell::new(lifecycle(mtm)),
             environment: Cell::new(None),
             host: Cell::default(),
-            host_tokens: RefCell::new(None),
+            host_theme: RefCell::new(None),
             fonts: RefCell::new(Vec::new()),
             observers: RefCell::new(Vec::new()),
             url_schemes: RefCell::new(Vec::new()),
@@ -784,15 +785,23 @@ impl RootView {
             #[cfg(feature = "dev")]
             test_model: self.ivars().test_model.clone(),
         };
-        // The embedding app's theme overrides are in the first frame.
-        let tokens = self.ivars().host_tokens.borrow().clone();
+        // The embedding app's theme overrides are in the first frame, and
+        // the links that came before are the app's address when its code
+        // first runs (`UrlScheme.url()`).
+        let theme = self.ivars().host_theme.borrow().clone();
+        let links = std::mem::take(&mut *self.ivars().url_schemes.borrow_mut());
         let fonts = self.ivars().fonts.borrow().clone();
         let engine = match Engine::start_with(config, CoreTextEngine::default, sink, |control| {
-            if tokens.is_some() {
-                control.set_tokens(tokens);
+            match theme {
+                Some(HostTheme::Tokens(tokens)) => control.set_tokens(Some(tokens)),
+                Some(HostTheme::File(json)) => control.set_theme_overrides(json),
+                None => {}
             }
             for font in fonts {
                 control.register_font(font);
+            }
+            for url in links {
+                send_url_scheme(control, url);
             }
         }) {
             Ok(engine) => engine,
@@ -827,10 +836,6 @@ impl RootView {
             installed.measure();
         }
         *mounter.get(mtm).borrow_mut() = Some(installed);
-        let links = std::mem::take(&mut *self.ivars().url_schemes.borrow_mut());
-        for url in links {
-            send_url_scheme(&engine.control(), url);
-        }
         *self.ivars().running.borrow_mut() = Some(Running { engine, mounter });
         self.ivars().environment.set(Some(self.environment()));
     }
@@ -892,7 +897,7 @@ pub struct SurfaceOptions {
     /// every app the surface runs.
     pub host: nsh_engine::HostChannel,
     /// Logs the performance monitor's readings once a second (target
-    /// `nsh::perf`): frame rate, frame and commit costs, CPU, memory.
+    /// `nsh::fps`): frame rate, frame and commit costs, CPU, memory.
     pub fps: bool,
 }
 
@@ -1039,9 +1044,23 @@ impl Surface {
     /// app's own again): sent to the running app at once, and to every app
     /// started later before its first frame.
     pub fn set_host_tokens(&self, tokens: Option<nsh_engine::Tokens>) {
-        *self.view.ivars().host_tokens.borrow_mut() = tokens.clone();
+        *self.view.ivars().host_theme.borrow_mut() = tokens.clone().map(HostTheme::Tokens);
         if let Some(running) = &*self.view.ivars().running.borrow() {
             running.engine.control().set_tokens(tokens);
+        }
+    }
+
+    /// The embedding app's theme overrides as a theme file, which the
+    /// engine reads with the app's UI set against its defaults (`None`: the
+    /// app's own theme again): sent to the running app at once, and to every
+    /// app started later before its first frame.
+    pub fn set_host_theme(&self, json: Option<String>) {
+        *self.view.ivars().host_theme.borrow_mut() = json.clone().map(HostTheme::File);
+        if let Some(running) = &*self.view.ivars().running.borrow() {
+            match json {
+                Some(json) => running.engine.control().set_theme_overrides(json),
+                None => running.engine.control().set_tokens(None),
+            }
         }
     }
 
@@ -1062,7 +1081,8 @@ impl Surface {
 
     /// Hands `url`, a link the system opened the app with, to the app's
     /// engine, whose core keeps it until the app listens (`UrlScheme`);
-    /// kept until the engine starts.
+    /// kept until the engine starts, which applies it before the app's code
+    /// first runs.
     pub(crate) fn url_scheme(&self, url: String) {
         match &*self.view.ivars().running.borrow() {
             Some(running) => send_url_scheme(&running.engine.control(), url),
@@ -1222,4 +1242,13 @@ fn os_version(mtm: MainThreadMarker) -> (u16, u16) {
         let mut parts = version.split('.').map(|p| p.parse().unwrap_or(0));
         (parts.next().unwrap_or(0), parts.next().unwrap_or(0))
     })
+}
+
+/// The embedding app's theme overrides a surface keeps for the apps it
+/// starts: tokens made already ([`Surface::set_host_tokens`]), or a theme
+/// file the engine reads ([`Surface::set_host_theme`]).
+#[derive(Clone)]
+enum HostTheme {
+    Tokens(nsh_engine::Tokens),
+    File(String),
 }

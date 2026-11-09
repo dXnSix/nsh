@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The examples' tests on a real platform (`nsh test --target <target>`), for
 # the platforms upstream's workflows do not cover (macOS, iOS, Android, the
-# web). Usage: examples.sh <target> (in a checkout, after `cargo build -p
+# web, Windows on Arm). Usage: examples.sh <target> (in a checkout, after `cargo build -p
 # nsh-cli`).
 #
 # Each platform runs the gallery's test files it passes, measured by running
@@ -94,6 +94,13 @@ case "$target" in
       "controls tabs show" "controls collapsible" "controls accordion" "controls progress bar"
       "controls uploads" "controls stepped setup" "controls equalizer" "controls cart's quantities"
       "controls a sign-in code" "controls segmented control")
+    ;;
+  # Windows on Arm (the `windows-arm64` job): the files upstream's
+  # `windows.yml` runs on x64.
+  windows)
+    gallery=(context-menu device dock form gestures hover links navigation network photos
+      resizable shortcuts storage timers)
+    filtered=("environment appearance")
     ;;
   *)
     echo "examples.sh: no tests for target $target" >&2

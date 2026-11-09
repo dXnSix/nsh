@@ -180,20 +180,6 @@
     root, answered by `EventKind::OpenUrl` `{ id, opened }`). Without a handler the platform opens it at once. The
     SDKs' handlers are synchronous on the main thread (Swift `(URL) -> Bool`, Java `boolean openUrl(String)`), reached
     as the call handlers are.
-  - *The app's location* (`nsh_core::location`; `HostChannel::set_location`, `location`, `handle_navigate`; the SDKs'
-    faces in [iOS](../../website/docs/ios.md) and [Android](../../website/docs/android.md)): the channel holds the
-    view's location, from both sides. `set_location` before a load is where the engine starts the app
-    (`Driver::start` reads it once attached); while one runs it sends `Message::Location`, which the core takes as the
-    platform's move (`Core::set_location`, not a navigation). The app's own navigations (`navigate`, Rust or JS)
-    are `Command::Navigate` on the root, which the core notes as it applies the op (`Core::navigated`), so Rust and
-    JS see one location; after each commit round the engine hands them to `handle_navigate`'s handler on the engine
-    thread (`Core::take_navigations`), notes moves that came as `EventKind::Location` (the web's back and forward),
-    and publishes a location that changed outside JS to the VM (`Script::set_location`, as the tokens are). Deep links
-    (URL schemes, universal links / App Links, protocol handlers) enter here: a host maps the URL to a location and
-    calls `set_location`. iOS: Swift `NshAppView.location`, `onNavigate` (C `nsh_app_set_location`, `nsh_app_location`,
-    `nsh_app_set_navigate_handler`, whose handler hops to the main queue as the call handlers' do); Android: Java
-    `NshView.setLocation`, `getLocation`, `setNavigateHandler` (`NavigateHandler`; registered natively only while
-    Java has one, its `navigateMessage` called over JNI on the engine thread and posted to the UI thread).
 - **The host's data in every app.** Host and apps stay in step through the host: it keeps the shared state (a
   `tokio::sync::watch` or `broadcast` channel in a static the module's functions reach), functions the apps call
   change it, and an `on(event, listener: Callback<State>, cx: CallCx) -> Result<Stop, String>` keeps every app
@@ -242,18 +228,22 @@
   tokens (brand colors, `radius`, ...) at run time: Rust `AppView::set_theme_overrides(Option<&str>)` (AppKit, GTK,
   Win32; the iOS `AppView`'s too), Swift `NshAppView.setThemeOverrides(_:)` (C `nsh_app_set_theme_overrides`), Java
   `NshView.setThemeOverrides`. The value is a theme file in the format of `nsh.json`'s `"theme"` (shadcn's `cssVars`:
-  `theme`, `light` and `dark` sections, values as CSS writes them; `components.md` "The theme"); it is parsed on the
-  calling thread by `nsh_base::theme_overrides`, which keeps only the tokens the file sets (a `var()` it names and
-  does not set is the default theme's), and a file that does not parse is an error (Swift throws `NshError`, Java an
-  `IllegalArgumentException`, C returns it) that changes nothing. The tokens go to the engine as host tokens
-  (`EngineControl::set_tokens`, `Core::set_host_tokens`): they win over the app's tokens of the same names in both
+  `theme`, `light` and `dark` sections, values as CSS writes them; `components.md` "The theme"). The SDK checks on
+  the calling thread that it is JSON (`nsh_core::element::theme_file::check`): text that is not is an error (Swift
+  throws `NshError`, Java an `IllegalArgumentException`, C returns it) that changes nothing. The file goes to the
+  engine whole (`EngineControl::set_theme_overrides`, `Message::ThemeOverrides`), and the core reads it with the
+  app's UI set (`Core::set_host_theme`: `Registry::token_overrides_from`, `nsh/base`'s being the core's
+  `theme_file::overrides`) against the UI set's default tokens (`nsh/base`'s default theme), keeping only the tokens
+  the file sets (a `var()` it names and does not set is the default theme's token). They become host tokens (`Core::set_host_tokens`;
+  `EngineControl::set_tokens(None)` clears them): they win over the app's tokens of the same names in both
   appearances, the app's others stay (`Tokens::over`), and classes naming the changed tokens (`bg-primary`,
   `rounded-(--radius)`) are resolved again at once, as are Rust components reading `theme()`. Each platform keeps
-  them on its surface and starts every engine with them (`Engine::start_with`), so they are in the first frame of
+  the file on its surface and starts every engine with it (`Engine::start_with`), so they are in the first frame of
   every app loaded later, a development reload included; `None` / `nil` / `null` gives the app its own theme back. A
   token takes both appearances: one the file gives only in `light` (or `theme`) is that color in dark mode too, as
   in a theme file, so an override that differs in dark mode names it in `dark`. GPUI's `AppView::set_theme` /
-  `set_theme_json` (below) give a whole theme instead, the default's where the file is silent.
+  `set_theme_json` (below) give a whole theme instead, the default's where the file is silent; its
+  `set_theme_overrides(json, cx)` takes overrides as the others do.
 - **The iOS SDK** (`crates/xtask/src/ios.rs`): per platform slice (device, simulator, Catalyst) a static
   `NativeShell.framework` whose binary is `nsh-platform-ios` with feature `embed` (built by `cargo rustc --crate-type
   staticlib`, so the hosts never build or export it) merged by `libtool` with the Swift module, compiled with library

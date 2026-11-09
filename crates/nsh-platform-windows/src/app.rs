@@ -119,7 +119,7 @@ pub struct AppOptions {
     /// Log per-commit timings.
     pub trace: bool,
     /// Logs the performance monitor's readings once a second (target
-    /// `nsh::perf`): frame rate, frame phases, commits, CPU, memory.
+    /// `nsh::fps`): frame rate, frame phases, commits, CPU, memory.
     pub fps: bool,
     /// Where bundled assets are (for [`AppSource::Bundle`]); dev servers
     /// serve them themselves.
@@ -188,9 +188,10 @@ pub struct AppOptions {
     pub host: nsh_engine::HostChannel,
     /// The URL schemes the app opens (nsh.json `schemes`, from the
     /// package's `nsh\app.json`): [`run_app`] registers them for the
-    /// current user, sends the URL it was started with as `EventKind::UrlScheme`
-    /// and keeps one instance, a later launch with a URL handing it to the
-    /// running one. Empty: none of that.
+    /// current user, sends the URL it was started with as
+    /// `EventKind::UrlScheme` before the app's code first runs and keeps one
+    /// instance, a later launch with a URL handing it to the running one.
+    /// Empty: none of that.
     pub schemes: Vec<String>,
 }
 
@@ -510,9 +511,16 @@ impl AppView {
     /// later starts with them. `None` gives the app its own theme back.
     /// Fails, changing nothing, on a file that does not parse.
     pub fn set_theme_overrides(&self, json: Option<&str>) -> Result<(), nsh_base::ThemeError> {
-        let tokens = json.map(nsh_base::theme_overrides).transpose()?;
-        *self.surface.host_tokens.borrow_mut() = tokens.clone();
-        self.surface.control(|c| c.set_tokens(tokens));
+        if let Some(json) = json {
+            nsh_core::element::theme_file::check(json).map_err(nsh_base::ThemeError)?;
+        }
+        *self.surface.host_theme.borrow_mut() = json.map(str::to_owned);
+        // The engine reads the file with the app's UI set, against its
+        // defaults.
+        self.surface.control(|c| match json {
+            Some(json) => c.set_theme_overrides(json),
+            None => c.set_tokens(None),
+        });
         Ok(())
     }
 
@@ -679,6 +687,7 @@ fn run_on_this_thread(source: AppSource, options: AppOptions) -> std::process::E
             return std::process::ExitCode::FAILURE;
         }
     };
+    crate::linking::launch(view.surface());
     match source {
         AppSource::Rust(root) => view.load(App::Rust(root)),
         AppSource::Bundle(bundle) => view.load(App::Js(bundle)),

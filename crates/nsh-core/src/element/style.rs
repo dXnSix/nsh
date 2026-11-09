@@ -63,6 +63,70 @@ impl FontWeight {
     pub const BLACK: Self = Self(900);
 }
 
+/// Box shadows (CSS's `box-shadow` layers) for each appearance: the
+/// platform switches between them with nothing running, as it does an
+/// [`AdaptiveColor`]. A theme's shadow tokens are adaptive
+/// ([`super::Tokens::shadow`]); layers given once are the same in both.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AdaptiveShadow {
+    /// In light appearance.
+    pub light: Arc<[BoxShadow]>,
+    /// In dark appearance.
+    pub dark: Arc<[BoxShadow]>,
+}
+
+impl AdaptiveShadow {
+    /// `light` and `dark`.
+    pub fn new(
+        light: impl IntoIterator<Item = BoxShadow>,
+        dark: impl IntoIterator<Item = BoxShadow>,
+    ) -> Self {
+        Self {
+            light: light.into_iter().collect(),
+            dark: dark.into_iter().collect(),
+        }
+    }
+
+    /// The layers of the appearance (`dark` or light).
+    pub fn layers(&self, dark: bool) -> &[BoxShadow] {
+        if dark { &self.dark } else { &self.light }
+    }
+
+    /// The layers of the appearance as CSS writes them (`0px 1px 2px 0px
+    /// #0000001a`, comma-separated; `none` for none).
+    pub fn css(&self, dark: bool) -> String {
+        let layers = self.layers(dark);
+        if layers.is_empty() {
+            return "none".into();
+        }
+        let layer = |l: &BoxShadow| {
+            format!(
+                "{}{}px {}px {}px {}px #{:08x}",
+                if l.inset { "inset " } else { "" },
+                l.offset_x.0,
+                l.offset_y.0,
+                l.blur.0,
+                l.spread.0,
+                l.color.0
+            )
+        };
+        layers.iter().map(layer).collect::<Vec<_>>().join(", ")
+    }
+}
+
+impl<I: IntoIterator<Item = BoxShadow>> From<I> for AdaptiveShadow {
+    /// The same layers in both appearances.
+    fn from(layers: I) -> Self {
+        let layers: Arc<[BoxShadow]> = layers.into_iter().collect();
+        Self {
+            light: layers.clone(),
+            dark: layers,
+        }
+    }
+}
+
+crate::static_reactive!(AdaptiveShadow: AdaptiveShadow);
+
 /// A color for each appearance: the platform switches between them
 /// with nothing running. Theme colors are adaptive; an [`Hsla`] (or anything
 /// that converts to one) is the same in both.
@@ -432,6 +496,8 @@ pub(crate) enum Declaration {
     TextShadow(&'static str),
     /// Box shadows of the element's own.
     Shadows(Layers),
+    /// Layers per appearance, light then dark ([`Styled::adaptive_shadow`]).
+    AdaptiveShadows(Layers, Layers),
     PartColor(ColorPart, AdaptiveColor),
     Ring(Bits),
     RingOffset(Bits),
@@ -596,6 +662,14 @@ impl Declaration {
                 )
             }
             Declaration::Shadows(layers) => part(out, Part::Shadow(layers.0.clone())),
+            Declaration::AdaptiveShadows(light, dark) => out.push(if light.0 == dark.0 {
+                Decl::Part(Part::Shadow(light.0.clone()))
+            } else {
+                Decl::AdaptivePart(Box::new([
+                    Part::Shadow(light.0.clone()),
+                    Part::Shadow(dark.0.clone()),
+                ]))
+            }),
             Declaration::PartColor(which, c) => out.push(if c.light == c.dark {
                 Decl::Part(which.part(c.light))
             } else {
@@ -2636,6 +2710,23 @@ pub trait Styled: Sized {
     fn shadow(mut self, layers: impl IntoIterator<Item = BoxShadow>) -> Self {
         let layers: Arc<[BoxShadow]> = layers.into_iter().collect();
         self.style().push(Declaration::Shadows(Layers(layers)));
+        self
+    }
+
+    /// Box shadows of its own per appearance, and reactive: a closure
+    /// reading a theme's shadow token (`.adaptive_shadow(move ||
+    /// tokens().shadow("shadow-raised").cloned().unwrap_or_default())`)
+    /// follows theme changes, and the platform switches the layers with the
+    /// appearance with nothing running, as [`Styled::bg`] does a color.
+    /// [`Styled::shadow`] takes static layers, the same in both.
+    fn adaptive_shadow(mut self, shadow: impl IntoReactive<AdaptiveShadow>) -> Self {
+        self.style()
+            .bind_value(shadow, |s, shadow: AdaptiveShadow| {
+                s.push(Declaration::AdaptiveShadows(
+                    Layers(shadow.light),
+                    Layers(shadow.dark),
+                ));
+            });
         self
     }
 

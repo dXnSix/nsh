@@ -1,13 +1,13 @@
 ---
 title: nsh/base
-description: 应用界面的无样式基础组件：按钮、链接、头像、轮播、复选框、单选框、开关、标签页、开关按钮、工具栏、树、选择框、组合框、命令面板、日历、日期选择器、时间输入框、可调整大小的面板、可停靠的工作区、Markdown 与 HTML 文档、代码编辑器、diff、文本输入框、导航栈与对话框、系统警告对话框，以及页面和对话框的状态栏。
+description: 应用界面的无样式基础组件：按钮、链接、头像、轮播、复选框、单选框、开关、标签页、开关按钮、工具栏、树、选择框、组合框、命令面板、表情选择面板、日历、日期选择器、时间输入框、可调整大小的面板、可停靠的工作区、Markdown 与 HTML 文档、代码编辑器、diff、文本输入框、导航栈与对话框、系统警告对话框，以及页面和对话框的状态栏。
 order: 2.5
 demo: ui-navigation
 ---
 
 # nsh/base
 
-`nsh/base` 是应用界面的基础组件层：不带样式、负责行为、状态、焦点和无障碍的组件，各平台通用。它位于基础元素（`nsh`、`nsh/mobile` 和 `nsh/desktop`）与应用自己的组件库之间，就像 GPUI Kit 中 `gpui-base` 位于 `gpui` 与带样式的组件库之间（见[模块](./index.md#three-layers)）。它提供控件（`Button`、`Link`、`Checkbox`、带 `ColorArea`、`ColorSlider`、`ColorField`、`ColorSwatch` 和 `ColorEyeDropper` 部件的 `ColorPicker`、`NumberInput`、放在 `RadioGroup` 里的 `Radio`、`Slider`、`Switch`、放在 `Tabs` 里的 `Tab`、放在 `ToggleGroup` 里的 `Toggle`、`Select`、`Combobox`、`Calendar`、`TimeField`、`DatePicker`）、命令面板（`Command`）、控件栏（带 `ToolbarGroup` 和 `ToolbarSeparator` 的 `Toolbar`）、应用自己外观的滚动条（`Scrollbar`）、可展开和收起的区域（`Collapsible`，以及带 `AccordionItem`、`AccordionHeader`、`AccordionTrigger` 和 `AccordionPanel` 部件的 `Accordion`）、进度条（`Progress`）、一次性验证码（`OtpInput`）、一组内容的分页（`Pagination`）、包含子项目的项目（`Tree`）、构建图表的部件（`nsh/base/plot` 中的 `Plot` 及 `Line`、`Area`、`Bar`、`Rule`、`Dot`、`Cell`、`Grid`、`Pie`、`Arc`）、由用户自行安排的工作区（放在 `ResizablePanelGroup` 里的 `ResizablePanel`，以及 `DockArea` 的分栏、标签组和停靠区）、Markdown 或 HTML 文档（`TextView`）、代码编辑器（`Editor`）、文本之间的改动（`DiffView`）、表格（`Table` 及其部件、`DataTable`）、文本输入框（`Input`）、显示在一切之上的弹出层（`Popover`，`Menu` 和 `ContextMenu` 及其 `MenuItem`、`MenuSeparator` 和 `Submenu`，`Tooltip`，`Sheet`）、toast（放在 `ToastStack` 中的 `Toast`，生命周期由 `ToastManager` 管理）、导航（由 `createNavStack` 创建的状态驱动、由多个 `NavPage` 组成的 `NavStack`，以及在所有内容之上展示内容的 `Dialog`）和系统警告对话框（`AlertDialog`）。页面和对话框还决定状态栏（`statusBar`）。
+`nsh/base` 是应用界面的基础组件层：不带样式、负责行为、状态、焦点和无障碍的组件，各平台通用。它位于基础元素（`nsh`、`nsh/mobile` 和 `nsh/desktop`）与应用自己的组件库之间，就像 GPUI Kit 中 `gpui-base` 位于 `gpui` 与带样式的组件库之间（见[模块](./index.md#three-layers)）。它提供控件（`Button`、`Link`、`Checkbox`、带 `ColorArea`、`ColorSlider`、`ColorField`、`ColorSwatch` 和 `ColorEyeDropper` 部件的 `ColorPicker`、`NumberInput`、放在 `RadioGroup` 里的 `Radio`、`Slider`、`Switch`、放在 `Tabs` 里的 `Tab`、放在 `ToggleGroup` 里的 `Toggle`、`Select`、`Combobox`、`Calendar`、`TimeField`、`DatePicker`）、命令面板（`Command`）、表情选择面板（`EmojiPicker`）、控件栏（带 `ToolbarGroup` 和 `ToolbarSeparator` 的 `Toolbar`）、应用自己外观的滚动条（`Scrollbar`）、可展开和收起的区域（`Collapsible`，以及带 `AccordionItem`、`AccordionHeader`、`AccordionTrigger` 和 `AccordionPanel` 部件的 `Accordion`）、进度条（`Progress`）、一次性验证码（`OtpInput`）、一组内容的分页（`Pagination`）、包含子项目的项目（`Tree`）、构建图表的部件（`nsh/base/plot` 中的 `Plot` 及 `Line`、`Area`、`Bar`、`Rule`、`Dot`、`Cell`、`Grid`、`Pie`、`Arc`）、由用户自行安排的工作区（放在 `ResizablePanelGroup` 里的 `ResizablePanel`，以及 `DockArea` 的分栏、标签组和停靠区）、Markdown 或 HTML 文档（`TextView`）、代码编辑器（`Editor`）、文本之间的改动（`DiffView`）、表格（`Table` 及其部件、`DataTable`）、文本输入框（`Input`）、显示在一切之上的弹出层（`Popover`，`Menu` 和 `ContextMenu` 及其 `MenuItem`、`MenuSeparator` 和 `Submenu`，`Tooltip`，`Sheet`）、toast（放在 `ToastStack` 中的 `Toast`，生命周期由 `ToastManager` 管理）、导航（由 `createNavStack` 创建的状态驱动、由多个 `NavPage` 组成的 `NavStack`，以及在所有内容之上展示内容的 `Dialog`）和系统警告对话框（`AlertDialog`）。页面和对话框还决定状态栏（`statusBar`）。
 
 基础组件还包括 `Avatar` 和 `AvatarGroup`（原生管理图片加载状态），以及用于逐页浏览内容的 `Carousel` 和其部件。
 
@@ -19,7 +19,7 @@ use nsh_base::{
     alert_dialog, button, carousel, carousel_content, carousel_item, carousel_next,
     carousel_pagination, carousel_pagination_item, carousel_previous, checkbox, color_area, color_field, color_picker,
     color_slider, color_swatch, dialog, diff_view, dock_area, editor, hover_card, link,
-    calendar, combobox, command, date_picker, h_resizable, nav_page, nav_stack, radio, radio_group, resizable_panel, select, switch, tab, tabs, text_view, theme, time_field, toast, toast_stack, toggle, toggle_group, toolbar, toolbar_group, toolbar_separator, tree, v_resizable,
+    calendar, combobox, command, date_picker, emoji_picker, h_resizable, nav_page, nav_stack, radio, radio_group, resizable_panel, select, switch, tab, tabs, text_view, theme, time_field, toast, toast_stack, toggle, toggle_group, toolbar, toolbar_group, toolbar_separator, tree, v_resizable,
 };
 ```
 
@@ -75,6 +75,7 @@ import {
   Select,
   Combobox,
   Command,
+  EmojiPicker,
   Calendar,
   TimeField,
   DatePicker,
@@ -184,6 +185,13 @@ import type {
   CommandEntry,
   CommandGroup,
   CommandItem,
+  EmojiAnnotation,
+  EmojiEntry,
+  EmojiGroup,
+  EmojiGroupId,
+  EmojiGroupLabels,
+  EmojiPickerProps,
+  EmojiSkinTone,
   CommandProps,
   CalendarProps,
   TimeFieldProps,
@@ -271,7 +279,42 @@ import type {
 | [`Toast`、`ToastStack`、`ToastManager`](../elements/toast.md) | `toast()`、`toast_stack()`、`ToastManager` | 无样式的 toast：语义根、层叠的栈、它们的生命周期。 |
 | 页面和对话框的 `statusBar` | `.status_bar(..)` | 页面或对话框显示期间的状态栏。见[状态栏](#status-bar)。 |
 
-在 Rust 中，`theme()` 以设计 token 的形式读取应用的主题（`theme().primary`、`theme().radius`），与 TSX 的[主题类](../docs/tailwind.md#主题-token)使用同样的 token。
+在 Rust 中，`theme()` 以设计 token 的形式读取应用的主题（`theme().primary`、`theme().radius`），与 TSX 的[主题类](../docs/tailwind.md#主题-token)使用同样的 token。它就是 `theme_of::<Theme>()`：`nsh_base::Theme` 是一个
+[主题类型](../docs/rust.md#主题类型)，即由 shadcn 的 31 种颜色、`radius`、`font-sans` 和 `font-mono` 组成的 `AppTheme`，每个 token
+承担与其同名的角色。它保持未注册，因此是默认的 token 来源，应用注册的类型会取代它。shadcn 应用用 `update_theme::<Theme>(tokens)`
+修改部分 token，补丁是按名称组织的 `Tokens`，`reset_theme::<Theme>()` 再把它们恢复。
+
+<a id="theme-roles"></a>
+
+### 主题角色
+
+NSH 自己绘制的部分通过**角色**读取主题：`theme()` 的各个字段、移动端标签栏的强调色、默认字体，以及各平台自己的控件（Linux
+的菜单、iOS 和 Android 的提示框）。角色是所绘制内容的名字，它读取同名的 token，除非主题把它映射到另一个 token：
+
+| 角色 | 由谁绘制 |
+|---|---|
+| `background`、`foreground` | `theme().background` / `foreground`；嵌入在宿主主题中的 GPUI 应用的界面 |
+| `card`、`card-foreground`、`secondary`、`secondary-foreground`、`muted`、`input`、`chart-1` … `chart-5`、`sidebar` … `sidebar-ring` | 同名的 `theme()` 字段 |
+| `popover`、`popover-foreground` | `theme().popover` / `popover_foreground`；Linux 的菜单；Android 的提示框 |
+| `primary`、`primary-foreground` | `theme().primary` / `primary_foreground`；标签栏中选中的标签；iOS 和 Android 提示框的按钮 |
+| `muted-foreground` | `theme().muted_foreground`；Linux 菜单中的快捷键；Android 提示框的消息 |
+| `accent`、`accent-foreground` | `theme().accent` / `accent_foreground`；Linux 菜单中高亮的项 |
+| `destructive` | `theme().destructive`；Android 提示框中的破坏性操作 |
+| `border`、`ring` | `theme().border` / `ring`；Linux 菜单的边框和分隔线（`border`） |
+| `selection` | `theme().selection()`（没有时为 22 % 的 `primary`） |
+| `radius` | `theme().radius` |
+| `font-sans` | 所有文本的默认字体；`theme().font_sans` |
+| `font-mono` | `theme().font_mono` |
+
+角色不是 token，也不是类名：主题有名为 `primary` 的 token 时，`bg-primary` 才是一个类名。在 Rust 中，角色是
+`nsh_core::element::Role`（`Role::Popover.name()` 为 `"popover"`），`Tokens::with_roles` 把角色映射到 token
+（`tokens.with_roles([(Role::Popover, "surface-overlay")])`），之后 `tokens.role_color(Role::Popover)` 读取它。
+没有映射时，每个角色读取同名的 token，所以 shadcn 主题的显示与以往相同。只有应用有自己的主题时（`Tokens::is_themed`，由核心设置），
+各平台的控件才采用主题的颜色；使用默认主题的应用保留系统的提示框颜色。
+
+已注册的[主题类型](../docs/rust.md#主题类型)把角色映射到自己的 token 上（`TokenSpec::role`），`theme()` 的字段随之读取这些 token：
+设计系统把 `Role::Popover` 映射到 `surface-overlay` 时，`theme().popover` 就是 `surface-overlay`，`nsh/base` 的组件、标签栏和各平台的控件
+都以该设计系统绘制。
 
 <a id="controls"></a>
 

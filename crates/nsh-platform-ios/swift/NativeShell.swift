@@ -117,8 +117,6 @@ public final class NshAppView: UIView {
     private let app: OpaquePointer
     /// What ``onOpenURL`` holds.
     private var openURLHandler: (@MainActor (URL) -> Bool)?
-    /// What ``onNavigate`` holds.
-    private var navigateHandler: (@MainActor (String, Bool) -> Void)?
 
     /// Creates the view. `trace` logs per-commit timings.
     public init(frame: CGRect = .zero, trace: Bool = false) {
@@ -259,27 +257,6 @@ public final class NshAppView: UIView {
                 return print("[nsh] the parameters are not JSON")
             }
             try? check(json.withCString { nsh_app_set_host_params(app, $0) })
-        }
-    }
-
-    /// Where the user is in the app (`location()` of `nsh`): a path from the
-    /// app's base with its query and fragment, `/sports/football?tab=live`.
-    /// Set it before loading for where the app starts, or while it runs to
-    /// take it there, as for a deep link the host app handled; the apps loaded
-    /// later start where the last one was. It reads the latest of what was
-    /// set and the app's own navigations (``onNavigate``), `/` before either,
-    /// normalized as URLs are (`/a/../b` reads `/b`). A value that is not a
-    /// path from the app's base (`https://…`, `sports`) is ignored with a
-    /// warning in the log.
-    public var location: String {
-        get {
-            let location = nsh_app_location(app)
-            defer { nsh_string_free(location) }
-            return String(cString: location)
-        }
-        set {
-            // nsh logs why it refused a location.
-            _ = newValue.withCString { nsh_app_set_location(app, $0) }
         }
     }
 
@@ -699,48 +676,12 @@ extension NshAppView {
             )
         }
     }
-
-    /// Hears where the app goes (`navigate` of `nsh`), on the main thread and
-    /// in the order the app went: the location it went to (what ``location``
-    /// reads from then on) and `replace`, `true` when the navigation replaced
-    /// the current history entry (`history: "replace"`) rather than adding
-    /// one. A host app shows the location in its own UI, keeps it for state
-    /// restoration, or follows it in its own router. It hears the app's own
-    /// moves; setting ``location`` takes the app there directly. `nil` (the
-    /// default): the app navigates on its own.
-    public var onNavigate: (@MainActor (_ location: String, _ replace: Bool) -> Void)? {
-        get { navigateHandler }
-        set {
-            navigateHandler = newValue
-            guard let newValue else {
-                return nsh_app_set_navigate_handler(app, nil, nil, nil)
-            }
-            let box = Unmanaged.passRetained(NavigateHandlerBox(newValue)).toOpaque()
-            nsh_app_set_navigate_handler(
-                app,
-                { context, location, replace in
-                    let box = Unmanaged<NavigateHandlerBox>.fromOpaque(context!).takeUnretainedValue()
-                    let location = String(cString: location)
-                    // nsh calls it on the main thread.
-                    MainActor.assumeIsolated { box.handler(location, replace) }
-                },
-                box,
-                { context in Unmanaged<NavigateHandlerBox>.fromOpaque(context!).release() }
-            )
-        }
-    }
 }
 
 /// Holds a URL handler for the C callback.
 private final class OpenURLHandlerBox {
     let handler: @MainActor (URL) -> Bool
     init(_ handler: @escaping @MainActor (URL) -> Bool) { self.handler = handler }
-}
-
-/// Holds a navigation handler for the C callback.
-private final class NavigateHandlerBox {
-    let handler: @MainActor (String, Bool) -> Void
-    init(_ handler: @escaping @MainActor (String, Bool) -> Void) { self.handler = handler }
 }
 
 extension NshAppView {

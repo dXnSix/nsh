@@ -36,14 +36,17 @@ thread_local! {
 }
 
 /// The tint of a surface's alerts and action sheets for its design tokens
-/// ([`nsh_core::Command::Tokens`]): the theme's `primary` when the app has
-/// a theme of its own (tokens other than the default theme's), else `None`
-/// (the system's).
+/// ([`nsh_core::Command::Tokens`]): the theme's [`Role::Primary`] when the
+/// app has a theme of its own (the core says so: `Tokens::is_themed`), else
+/// `None` (the system's).
+///
+/// [`Role::Primary`]: nsh_core::element::Role::Primary
 pub(crate) fn alert_tint(
     tokens: &nsh_core::element::Tokens,
 ) -> Option<nsh_core::element::AdaptiveColor> {
-    let themed = nsh_base::tokens_of(None).is_ok_and(|d| *tokens != d);
-    tokens.color("primary").filter(|_| themed)
+    tokens
+        .role_color(nsh_core::element::Role::Primary)
+        .filter(|_| tokens.is_themed())
 }
 
 /// The appearance the app asked for (`Unspecified`: the system's).
@@ -580,6 +583,46 @@ pub(crate) fn announce(text: &str) {
     };
 }
 
+/// `Haptics` of `nsh/mobile`: UIKit's feedback generator for `haptic`
+/// plays it (nothing on devices without a Taptic Engine, or with system
+/// haptics off).
+// `initWithStyle:` is deprecated from iOS 17.5 for `feedbackGeneratorForView:`,
+// which iOS 15 lacks.
+#[allow(deprecated)]
+pub(crate) fn haptic(haptic: nsh_core::Haptic) {
+    use nsh_core::{Haptic, HapticImpact, HapticNotification};
+    use objc2_ui_kit::{
+        UIImpactFeedbackGenerator, UIImpactFeedbackStyle, UINotificationFeedbackGenerator,
+        UINotificationFeedbackType, UISelectionFeedbackGenerator,
+    };
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let impact = |style| {
+        UIImpactFeedbackGenerator::initWithStyle(mtm.alloc(), style).impactOccurred();
+    };
+    let notification = |kind| UINotificationFeedbackGenerator::new(mtm).notificationOccurred(kind);
+    match haptic {
+        Haptic::Selection => UISelectionFeedbackGenerator::new(mtm).selectionChanged(),
+        Haptic::Impact(HapticImpact::Light) => impact(UIImpactFeedbackStyle::Light),
+        Haptic::Impact(HapticImpact::Medium) => impact(UIImpactFeedbackStyle::Medium),
+        Haptic::Impact(HapticImpact::Heavy) => impact(UIImpactFeedbackStyle::Heavy),
+        Haptic::Impact(HapticImpact::Soft) => impact(UIImpactFeedbackStyle::Soft),
+        Haptic::Impact(HapticImpact::Rigid) => impact(UIImpactFeedbackStyle::Rigid),
+        Haptic::Notification(HapticNotification::Success) => {
+            notification(UINotificationFeedbackType::Success)
+        }
+        Haptic::Notification(HapticNotification::Warning) => {
+            notification(UINotificationFeedbackType::Warning)
+        }
+        Haptic::Notification(HapticNotification::Error) => {
+            notification(UINotificationFeedbackType::Error)
+        }
+        // `Haptic`, `HapticImpact` and `HapticNotification` are non-exhaustive.
+        _ => {}
+    }
+}
+
 /// `setAccessibilityFocus`: VoiceOver moves to `view`.
 pub(crate) fn accessibility_focus(view: &UIView) {
     // SAFETY: layout changes take the element to focus.
@@ -604,6 +647,8 @@ mod tests {
         let mut themed = plain.clone();
         let ink = plain.color("foreground").unwrap();
         themed.set_color("primary", ink);
+        // The core marks the tokens of an app with a theme of its own.
+        themed.set_themed(true);
 
         let a = alert_tint(&themed);
         let b = alert_tint(&plain);

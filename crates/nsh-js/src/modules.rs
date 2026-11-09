@@ -115,6 +115,8 @@ pub(crate) struct NativeModule {
 const NSH: &[Item] = &[
     crate::env::TOKEN_EXPORT,
     crate::env::SET_THEME_EXPORT,
+    crate::env::UPDATE_THEME_EXPORT,
+    crate::env::RESET_THEME_EXPORT,
     (
         "signal",
         Export::Function(reactive::signal, 2),
@@ -460,6 +462,13 @@ pub(crate) const MODULES: &[NativeModule] = &[
         also: MOBILE_SOURCES,
         moved_to: None,
         types: "",
+    },
+    NativeModule {
+        name: "nsh/web",
+        exports: crate::web_page::EXPORTS,
+        also: &[],
+        moved_to: None,
+        types: decl!(crate::web_page::TYPES),
     },
     NativeModule {
         name: "nsh/webview",

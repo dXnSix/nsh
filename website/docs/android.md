@@ -7,7 +7,7 @@ group: platforms
 
 # Android
 
-NSH apps run on Android with ordinary Android views and `StaticLayout` text, from Android 9 (API 28), on `arm64-v8a`,
+NSH apps run on Android with ordinary Android views and `StaticLayout` text, from Android 8 (API 26), on `arm64-v8a`,
 `armeabi-v7a` and `x86_64`. Whole apps written in Rust and in TSX run and package as on the other platforms, and an existing app
 can embed modules in an `NshView` and load signed packages it downloads, under limits and capabilities it sets. On Android, `os()` is `Os::Android` (`platform.os` is `"android"` in TSX) and TSX's
 `android={{…}}` props apply.
@@ -92,7 +92,7 @@ dist/nsh/embed/android/nsh-dev.aar   also connects to a `nsh dev` server
 
 The AAR holds the Java runtime and `libnsh.so` for `arm64-v8a`, `armeabi-v7a` and `x86_64`, with their symbols: the
 app's Gradle build strips them when it packages the app and keeps the symbols for its crash reports. It declares the
-`INTERNET` permission and needs **API 28** (Android 9) or newer. It carries its R8 rules (`proguard.txt`), which a
+`INTERNET` permission and needs **API 26** (Android 8) or newer. It carries its R8 rules (`proguard.txt`), which a
 minified build applies on its own: the native library finds the runtime's classes by name, so `com.longbridge.nsh`
 stays as it is.
 
@@ -201,9 +201,6 @@ again replaces the running app. The complete sample is
 | `setParams(Object params)` | The launch parameters of the apps loaded next (a `Map` or `JSONObject`): the app reads them at start as `host.params` ([`host`](../modules/nsh.md#host)). Returns `false` when they are not a JSON object. |
 | `send(String name, Object data)` | Sends an event to the app (`host.on(name, …)`); kept until it listens, or for the next app while none runs. Any thread; returns `false` after `destroy()`. |
 | `handle(String name, HostHandler handler)` | Handles the app's calls (`host.call`) and posts (`host.post`) of `name` on the UI thread; `null` removes the handler. The handler answers through its `NshHostReply`, once, from any thread. |
-| `setLocation(String location)` | Where the app is ([location](#the-apps-location)): a path from its base, where the app starts or, while it runs, where it goes. Any thread; returns `false` for a URL that is not such a path. |
-| `getLocation()` | Where the app is now: the latest of `setLocation` and the app's navigations, `/` until one of them. Any thread. |
-| `setNavigateHandler(NavigateHandler handler)` | Hears each `navigate` of the app on the UI thread, with the location and whether it replaces the current history entry; `null` removes the handler. |
 | `connectDevServer(String url)` | Development: loads from a `nsh dev` server and reloads on every change. Returns `false` with the release AAR. |
 | `handleBack()` | Lets the app handle a back press (closes dialogs, pops pages, runs `BackHandler` listeners); returns whether it did. |
 | `destroy()` | Stops the app and calls `destroy()` on each of its native components. The view can no longer be used. |
@@ -281,6 +278,8 @@ nsh.loadAssetBundle("orders");
 
 Call it before or after loading: classes such as `bg-primary` and `rounded-(--radius)` restyle at once, and every app
 loaded later starts with the overrides in its first frame. `setThemeOverrides(null)` gives the app its own theme back.
+The app reads the file with its own theme's reader, so a `var(--name)` the file does not set is the default theme's
+value of that token.
 
 ## Links the app opens
 
@@ -300,39 +299,6 @@ nsh.setOpenUrlHandler(url -> {
     return false;
 });
 ```
-
-## The app's location
-
-The app's [location](./navigation.md#locations) is where the user is in it, a path from the app's base such as
-`/sports/football?tab=live`. `setLocation` sets it: called before loading, it is where the app starts; called while
-the app runs, it takes the app there and the app's [`location()`](../modules/nsh.md#location) changes, which is how
-an App Link the host app handled opens its page. `setNavigateHandler` hears each
-[`navigate`](../modules/nsh.md#navigate) of the app on the UI thread, in order, with the new location and `replace`,
-`true` for `history: "replace"`.
-
-```java
-// Before loading: where the app starts, such as where the user left it.
-nsh.setLocation(prefs.getString("sports.location", "/"));
-nsh.loadAssetBundle("sports");
-
-// Each `navigate` of the app, on the UI thread.
-nsh.setNavigateHandler((location, replace) -> {
-    prefs.edit().putString("sports.location", location).apply();
-    analytics.screen(location, replace);
-});
-
-// Later, in onNewIntent: an App Link the host app handled opens its page in the running app,
-// https://example.com/sports/football?tab=live at /sports/football?tab=live.
-Uri link = intent.getData();
-String query = link.getEncodedQuery();
-nsh.setLocation(link.getEncodedPath() + (query == null ? "" : "?" + query));
-```
-
-`getLocation()` gives the latest of what the host app set and where the app went, normalized as URLs are
-(`/a/../b` gives `/b`); apps the view loads later start there. `setLocation` and `getLocation` work from any thread.
-The navigation handler hears the moves the app makes itself, and a location the host app sets goes to the app alone.
-`setLocation` returns `false` for a value that is not a path from the app's base (`https://…`, `sports` without its
-`/`), and the app stays where it is.
 
 ## Limits
 
@@ -410,10 +376,11 @@ config of the app may override it). The release `nsh.aar` does not.
 
 - **Back button.** `NshView` gets back presses by itself while the app wants them (an open dialog, a pushed page, a
   `BackHandler` listener), and leaves them to the activity otherwise. With `android:enableOnBackInvokedCallback="true"`
-  on Android 13 and newer it registers an `OnBackInvokedCallback`; elsewhere (Android 12 and older, or the attribute
+  on Android 13 and newer it registers an `OnBackInvokedCallback`; elsewhere (Android 9 to 12, or the attribute
   off) it takes the back key before the activity's `onBackPressed`, so before AndroidX's `OnBackPressedDispatcher`
-  and the fragments' callbacks. No forwarding is needed, in an activity or a fragment. A host that already forwards
-  presses to `handleBack()` keeps working: a press goes to the app once.
+  and the fragments' callbacks. No forwarding is needed there, in an activity or a fragment. On Android 8 the activity
+  hands its back presses to the view: `if (!nshView.handleBack()) super.onBackPressed();` in `onBackPressed`. A host
+  that forwards presses to `handleBack()` on every version keeps working: a press goes to the app once.
 
   For predictive back on Android 13+, set `android:enableOnBackInvokedCallback="true"` on the `<application>`, as
   packaged NSH apps do.

@@ -281,30 +281,6 @@ void nsh_app_set_open_url_handler(NshApp *app,
                                   void *_Nullable context,
                                   void (*_Nullable release)(void *_Nullable context));
 
-/// Sets where the app is (`location()` of `nsh`): a path from the app's base
-/// with its query and fragment, `/sports/football?tab=live`. Before an app
-/// runs, where the apps `app` loads start; while one runs, it goes there (the
-/// navigate handler hears the app's own moves only). Returns false, logging
-/// why, for what is not such a path; the location then stays as it was.
-bool nsh_app_set_location(NshApp *app, const char *location);
-
-/// Where the app is: the latest of `nsh_app_set_location` and the app's
-/// navigations, `/` before either. The string is the caller's: free it with
-/// `nsh_string_free`.
-char *nsh_app_location(NshApp *app);
-
-/// Hears where the app goes (`navigate` of `nsh`), replacing the handler it
-/// had; a NULL `handler` removes it. `handler` runs on the main thread, in
-/// order, with each location the app went to and `replace`, true when the
-/// navigation replaced the current history entry rather than adding one.
-/// `release` (optional) is called with `context`, on any thread, when the
-/// handler is replaced or removed or the app destroyed.
-void nsh_app_set_navigate_handler(NshApp *app,
-                                  void (*_Nullable handler)(void *_Nullable context, const char *location,
-                                                            bool replace),
-                                  void *_Nullable context,
-                                  void (*_Nullable release)(void *_Nullable context));
-
 #ifdef __cplusplus
 }
 #endif

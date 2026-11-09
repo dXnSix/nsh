@@ -510,6 +510,10 @@ struct UrlScheme {
     pending: std::collections::VecDeque<String>,
     /// The listener waiting for a link.
     next: Option<AnswerSlot<String>>,
+    /// The app's address: the last link taken, the page's on the web, or
+    /// what the app set (`UrlScheme.setUrl`, `set_app_url`). The one copy,
+    /// which every VM's `System` shares ([`Core::app_url_cell`]).
+    address: crate::url_scheme::AppUrlCell,
 }
 
 /// The speech recognition session running ([`crate::speech`]).
@@ -533,6 +537,13 @@ pub(super) struct Components {
     /// app's root): drawn with while the embedding app sets none
     /// ([`Core::set_host_tokens`]).
     app_tokens: Arc<Tokens>,
+    /// The app's theme: its tokens as last set whole (a UI set's defaults,
+    /// `nsh.json`'s theme, `setTheme`, `set_tokens`), which
+    /// [`Core::reset_tokens`] puts tokens back to.
+    file_tokens: Arc<Tokens>,
+    /// The UI set's default tokens: drawn with others, the app has a theme
+    /// of its own ([`Tokens::is_themed`]); `None`: no set reads themes.
+    default_tokens: Option<Arc<Tokens>>,
     /// The embedding app's tokens: win over [`Self::app_tokens`].
     host_tokens: Option<Arc<Tokens>>,
     /// Boxed: making a view (or applying its patches) takes its instance
@@ -610,12 +621,6 @@ pub(super) struct Components {
     url_opens: FxHashMap<u32, AnswerSlot<bool>>,
     /// Those not handed to the engine yet ([`Core::take_url_opens`]).
     url_requests: Vec<(u32, String)>,
-    /// The app's navigations not handed to the engine yet
-    /// ([`Core::take_navigations`]).
-    navigations: Vec<crate::location::Navigation>,
-    /// Where the turn's last navigation went: the location once the turn
-    /// commits, however many it made ([`Core::commit`]).
-    pub(super) navigated_to: Option<crate::location::Location>,
     /// The language the app asked to show in (`Some(None)`: the user's
     /// again), for the engine ([`Core::take_locale_request`]).
     pub(super) locale_request: Option<Option<crate::platform::Locale>>,
@@ -699,6 +704,8 @@ impl Default for Components {
             specs: FxHashMap::default(),
             tokens: Arc::new(Tokens::default()),
             app_tokens: Arc::new(Tokens::default()),
+            file_tokens: Arc::new(Tokens::default()),
+            default_tokens: None,
             host_tokens: None,
             instances: FxHashMap::default(),
             owners: FxHashMap::default(),
@@ -722,8 +729,6 @@ impl Default for Components {
             clipboard_reads: FxHashMap::default(),
             url_opens: FxHashMap::default(),
             url_requests: Vec::new(),
-            navigations: Vec::new(),
-            navigated_to: None,
             locale_request: None,
             next_url_open: 0,
             screen_colors: FxHashMap::default(),
@@ -783,6 +788,9 @@ impl Components {
         components.environment.window = viewport;
         // What components that run once read of the core.
         components.runtime.set_services(components.executor.clone());
+        components
+            .runtime
+            .set_app_url(components.url_schemes.address.clone());
         components.runtime.set_environment(components.environment);
         components.runtime.set_tokens(components.tokens.clone());
         components
@@ -858,13 +866,20 @@ impl<M: TextEngine> Core<M> {
     /// sets' setup functions ([`Registry::setup`]).
     pub fn set_components(&mut self, registry: Registry) {
         if let Some(Ok((tokens, _))) = registry.tokens(None) {
+            self.components.default_tokens = Some(Arc::new(tokens.clone()));
             self.set_tokens(tokens);
         }
         {
             let _entered = self.components.runtime.enter();
             registry.run_setups();
         }
+        let typed = registry.has_theme_types();
         self.components.registry = registry;
+        // The tokens were sent before the registry was in place: an app with
+        // theme types has a theme of its own (`Tokens::is_themed`).
+        if typed {
+            self.tokens_changed();
+        }
     }
 
     /// Replaces the components of a running core with `registry`, a
@@ -880,11 +895,11 @@ impl<M: TextEngine> Core<M> {
         self.components.registry = registry;
     }
 
-    /// `uiTheme` on the root: the app's theme file (`nsh.json`, `setTheme`),
-    /// which the UI set that reads themes makes tokens of. What it cannot
-    /// read is left out and the rest applies, so a bundle made by a newer
-    /// NSH keeps its theme here.
-    pub(super) fn set_ui_theme(&mut self, json: &str) {
+    /// The app's theme file (`nsh.json`, `setTheme`, a Rust app's
+    /// [`Root::theme`]; `uiTheme` on the root), which the UI set that reads
+    /// themes makes tokens of. What it cannot read is left out and the rest
+    /// applies, so a bundle made by a newer NSH keeps its theme here.
+    pub fn set_ui_theme(&mut self, json: &str) {
         match self.components.registry.tokens(Some(json)) {
             Some(Ok((tokens, left_out))) => {
                 for what in left_out {
@@ -898,10 +913,61 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// The app's design tokens; it is drawn with them unless the
-    /// embedding app set its own ([`Core::set_host_tokens`]).
+    /// embedding app set its own ([`Core::set_host_tokens`]). They are its
+    /// theme from now on: what [`Core::reset_tokens`] goes back to.
     pub fn set_tokens(&mut self, tokens: Tokens) {
-        self.components.app_tokens = Arc::new(tokens);
+        let tokens = Arc::new(tokens);
+        self.components.file_tokens = tokens.clone();
+        self.components.app_tokens = tokens;
         self.tokens_changed();
+    }
+
+    /// Changes some of the app's design tokens: those of `tokens` take
+    /// their values, the others stay. Applied in order, so two changes in
+    /// one turn compose.
+    pub(crate) fn update_tokens(&mut self, tokens: Tokens) {
+        self.components.app_tokens = Arc::new(tokens.over(&self.components.app_tokens));
+        self.tokens_changed();
+    }
+
+    /// Puts the app's tokens `names` (`None`: every one) back to its
+    /// theme's ([`Core::set_tokens`]); a name the theme lacks is removed.
+    pub(crate) fn reset_tokens(&mut self, names: Option<&[Box<str>]>) {
+        let file = &self.components.file_tokens;
+        self.components.app_tokens = match names {
+            None => file.clone(),
+            Some(names) => {
+                let mut tokens = (*self.components.app_tokens).clone();
+                for name in names {
+                    tokens.copy_named(file, name);
+                }
+                Arc::new(tokens)
+            }
+        };
+        self.tokens_changed();
+    }
+
+    /// `uiThemeUpdate` on the root (`nsh`'s `updateTheme`): the tokens a
+    /// theme file sets change, read by the UI set
+    /// ([`Registry::token_overrides_from`]) against the tokens drawn with
+    /// now; what it cannot read is left out and keeps its value.
+    pub(super) fn update_ui_theme(&mut self, json: &str) {
+        let provider = self.components.registry.token_provider();
+        let Some(read) = provider
+            .as_ref()
+            .and_then(|p| p.overrides(json, &self.components.tokens))
+        else {
+            return log::warn!("theme: no UI set reads theme changes");
+        };
+        match read {
+            Ok((tokens, left_out)) => {
+                for what in left_out {
+                    log::warn!("theme: {what}, ignored");
+                }
+                self.update_tokens(tokens);
+            }
+            Err(e) => log::warn!("theme: {e}"),
+        }
     }
 
     /// The app's translations ([`crate::i18n`]): what `t!` and TS's `t`
@@ -925,12 +991,44 @@ impl<M: TextEngine> Core<M> {
         self.tokens_changed();
     }
 
+    /// The embedding app's theme overrides (`None`: the app's own theme
+    /// again): a theme file whose tokens win over the app's of the same
+    /// names, read by the UI set that reads themes
+    /// ([`Registry::token_overrides_from`], else the core's
+    /// [`crate::element::theme_file::overrides`]) against the UI set's
+    /// default tokens, so a `var()` it does not set names the default
+    /// theme's token. What it cannot read is left out; text that is no JSON
+    /// changes nothing.
+    pub fn set_host_theme(&mut self, json: Option<&str>) {
+        let Some(json) = json else {
+            return self.set_host_tokens(None);
+        };
+        let provider = self.components.registry.token_provider();
+        let defaults = match provider.as_ref().map(|p| p.read(None)) {
+            Some(Ok((tokens, _))) => tokens,
+            _ => Tokens::default(),
+        };
+        let read = provider
+            .as_ref()
+            .and_then(|p| p.overrides(json, &defaults))
+            .unwrap_or_else(|| crate::element::theme_file::overrides(json, &defaults));
+        match read {
+            Ok((tokens, left_out)) => {
+                for what in left_out {
+                    log::warn!("theme overrides: {what}, ignored");
+                }
+                self.set_host_tokens(Some(tokens));
+            }
+            Err(e) => log::warn!("theme overrides: {e}"),
+        }
+    }
+
     /// What [`Core::tokens`] become when the root's `uiTheme` (the app's
     /// theme file) is set, with the embedding app's tokens of now: JS reads
     /// them in the turn that sends the theme, before it reaches the core.
     pub fn theme_tokens(&self) -> crate::element::ThemeTokens {
         crate::element::ThemeTokens::new(
-            self.components.registry.token_source(),
+            self.components.registry.token_provider(),
             self.components.host_tokens.clone(),
         )
     }
@@ -944,12 +1042,24 @@ impl<M: TextEngine> Core<M> {
     /// The tokens drawn with now: a signal of the surface, so only the
     /// bindings that read them run again, and only when they changed.
     fn tokens_changed(&mut self) {
-        let tokens = match &self.components.host_tokens {
+        let mut tokens = match &self.components.host_tokens {
             // The app's own tokens the host's do not have stay.
             Some(host) => Arc::new(host.over(&self.components.app_tokens)),
             None => self.components.app_tokens.clone(),
         };
-        if *tokens == *self.components.tokens {
+        // Whether the app has a theme of its own, which the platforms'
+        // controls take their colors from only then.
+        // An app whose sets register theme types has a theme of its own,
+        // its design system's.
+        let themed = self.components.registry.has_theme_types()
+            || match &self.components.default_tokens {
+                Some(default) => *tokens != **default,
+                None => !tokens.is_empty(),
+            };
+        if tokens.is_themed() != themed {
+            Arc::make_mut(&mut tokens).set_themed(themed);
+        }
+        if *tokens == *self.components.tokens && themed == self.components.tokens.is_themed() {
             self.components.tokens = tokens;
             return;
         }
@@ -969,7 +1079,7 @@ impl<M: TextEngine> Core<M> {
         let font = self
             .components
             .tokens
-            .font(crate::element::FONT_SANS)
+            .role_font(crate::element::Role::FontSans)
             .map(|f| crate::style::FontFamily::new(f));
         self.set_default_font(font);
         self.class_tokens_changed();
@@ -4825,7 +4935,11 @@ impl<M: TextEngine> Core<M> {
         }
         // Hints follow the pointer on their anchors, whoever else listens.
         if matches!(kind, EventKind::MouseEnter | EventKind::MouseLeave) {
-            self.overlay_hover(id, kind);
+            let at = match payload {
+                EventPayload::Mouse(mouse) => Some(mouse.page_position),
+                _ => None,
+            };
+            self.overlay_hover(id, kind, at);
         }
         if self.platform_event(id, kind, payload) {
             return true;
@@ -5072,14 +5186,32 @@ impl<M: TextEngine> Core<M> {
         });
     }
 
+    /// The app's address, which the engine shares with every VM's
+    /// `System` (`UrlScheme.url()` reads it there).
+    pub fn app_url_cell(&self) -> crate::url_scheme::AppUrlCell {
+        self.components.url_schemes.address.clone()
+    }
+
     /// Hands `url`, a link the system gave the app, to the listener, or
     /// keeps it for the next; drops it when the app does not claim it.
-    fn url_scheme(&mut self, url: String) {
+    /// `page`: the address of the page the app is (the web), which needs
+    /// no scheme of the app's; `quiet` only takes it as the address.
+    fn url_scheme(&mut self, url: String, page: bool, quiet: bool) {
         let links = &mut self.components.url_schemes;
-        if let Err(dropped) = crate::url_scheme::check_url(&url, &links.schemes) {
+        let checked = if page {
+            crate::url_scheme::check_page_url(&url)
+        } else {
+            crate::url_scheme::check_url(&url, &links.schemes)
+        };
+        if let Err(dropped) = checked {
             log::warn!("link dropped: {dropped}");
             return;
         }
+        self.components.url_schemes.address.set(url.clone());
+        if quiet {
+            return;
+        }
+        let links = &mut self.components.url_schemes;
         if let Some(answer) = links.next.take() {
             answer.borrow_mut().deliver(url);
             return;
@@ -5358,6 +5490,8 @@ impl<M: TextEngine> Core<M> {
             Action::Frame(answer) => self.wait_frame(answer),
             Action::Appearance(appearance) => self.set_appearance(appearance),
             Action::Tokens(tokens) => self.set_tokens(tokens),
+            Action::UpdateTokens(tokens) => self.update_tokens(tokens),
+            Action::ResetTokens(names) => self.reset_tokens(Some(&names)),
             Action::Translations(translations) => self.set_translations(translations),
             Action::Locale(locale) => self.components.locale_request = Some(locale),
             Action::BuiltInScrollbars(source, theme) => {
@@ -5539,6 +5673,33 @@ impl<M: TextEngine> Core<M> {
                     None => links.next = Some(answer),
                 }
             }
+            Action::AppUrl(answer) => {
+                let address = self.components.url_schemes.address.get();
+                answer.borrow_mut().deliver(address);
+            }
+            Action::SetAppUrl(url) => {
+                // Checked where the app called (`set_app_url`, `setUrl`);
+                // where the app is the page, the address stays of its
+                // origin (both refuse others first).
+                let web = self.components.environment.os == crate::platform::Os::Web;
+                let address = self.components.url_schemes.address.clone();
+                if let Some(base) = address.page_base()
+                    && !crate::url_scheme::same_origin(Some(base.as_str()), &url)
+                {
+                    log::warn!("set_app_url: {url} is not of the page's origin");
+                    return;
+                }
+                // Again for `setUrl`, which wrote it as it was called: in
+                // order with the page's address the core took since.
+                address.set(url.clone());
+                // Only the web shows an address (its history entries).
+                if web {
+                    let _ = self.apply_op(Op::Command {
+                        id: crate::ROOT_ID,
+                        command: Command::SetAppUrl(url),
+                    });
+                }
+            }
             Action::WebInputAvailable(answer) => {
                 let available =
                     self.components.environment.web_input && self.access.allows_web_input();
@@ -5640,36 +5801,6 @@ impl<M: TextEngine> Core<M> {
             id: crate::ROOT_ID,
             command: Command::OpenUrl { id, url },
         });
-    }
-
-    /// The app's location ([`crate::element::location`]).
-    pub fn location(&self) -> crate::location::Location {
-        self.components.runtime.location()
-    }
-
-    /// The platform moved the app to `location` (the embedding app, a link
-    /// into the app): what read the location runs again. Not a navigation
-    /// of the app's: nothing is sent back.
-    pub fn set_location(&mut self, location: crate::location::Location) {
-        // Later than the app's navigations not committed yet.
-        self.components.navigated_to = None;
-        self.components.runtime.set_location(location);
-    }
-
-    /// The app went to `navigation`'s location ([`Command::Navigate`] on
-    /// the root, from Rust or JS): the location is the new one when the
-    /// turn commits, the engine hears of it, and the platform gets the
-    /// command. Not set here: Rust's `navigate` set it already, and a turn
-    /// that navigates twice would take what read it back to the first.
-    pub(super) fn navigated(&mut self, navigation: &crate::location::Navigation) {
-        self.components.navigated_to = Some(navigation.location.clone());
-        self.components.navigations.push(navigation.clone());
-    }
-
-    /// Moves the app's navigations since the last call to `out`, in order:
-    /// the engine tells the embedding app ([`crate::location`]).
-    pub fn take_navigations(&mut self, out: &mut Vec<crate::location::Navigation>) {
-        out.append(&mut self.components.navigations);
     }
 
     /// Moves the HTTP requests tasks made (`ui::fetch`) since the last call
@@ -5983,7 +6114,25 @@ impl<M: TextEngine> Core<M> {
                 let Some(url) = url else {
                     return false;
                 };
-                self.url_scheme(url.clone());
+                let flag = |key: &str| {
+                    entries.iter().find_map(|(k, v)| match v {
+                        crate::PayloadValue::Bool(b) if *k == key => Some(*b),
+                        _ => None,
+                    })
+                };
+                let page = flag(crate::url_scheme::PAGE).unwrap_or(false);
+                let quiet = flag(crate::url_scheme::QUIET).unwrap_or(false);
+                // The page's base URL (the web), which Rust's `set_app_url`
+                // resolves against.
+                if let Some(base) = entries.iter().find_map(|(k, v)| match v {
+                    crate::PayloadValue::Str(s) if *k == crate::url_scheme::BASE => {
+                        url::Url::parse(s).ok()
+                    }
+                    _ => None,
+                }) {
+                    self.components.url_schemes.address.set_page_base(base);
+                }
+                self.url_scheme(url.clone(), page, quiet);
                 true
             }
             EventKind::OpenUrl if id == crate::ROOT_ID => {
@@ -5997,23 +6146,6 @@ impl<M: TextEngine> Core<M> {
                     _ => false,
                 };
                 self.answer_open_url(request as u32, opened);
-                true
-            }
-            EventKind::Location if id == crate::ROOT_ID => {
-                let location = match payload {
-                    EventPayload::Map(entries) => entries.iter().find_map(|(k, v)| match v {
-                        crate::PayloadValue::Str(location) if *k == "location" => {
-                            Some(location.clone())
-                        }
-                        _ => None,
-                    }),
-                    _ => None,
-                };
-                match location.as_deref().map(crate::location::Location::parse) {
-                    Some(Ok(location)) => self.set_location(location),
-                    Some(Err(refused)) => log::warn!("onLocation: {refused}"),
-                    None => log::warn!("onLocation without a location"),
-                }
                 true
             }
             EventKind::ScreenColor if id == crate::ROOT_ID => {
@@ -6132,8 +6264,12 @@ impl<M: TextEngine> Core<M> {
     /// the table JS's and theirs make, listened to while either has one.
     pub(super) fn sync_keys(&mut self) {
         let rust = {
+            // The windows' refs read the graph.
+            let _entered = self.components.runtime.enter();
             let mut keys = self.components.executor.keys.borrow_mut();
-            if !std::mem::take(&mut keys.changed) {
+            // A binding of a window that was not mounted yet is placed
+            // once it is.
+            if !std::mem::take(&mut keys.changed) && !keys.unplaced {
                 return;
             }
             !keys.list.is_empty()
@@ -6156,18 +6292,24 @@ impl<M: TextEngine> Core<M> {
     /// The surface's table: JS's bindings, then the views' (the newest that
     /// may fire wins, so a view's wins over JS's of the same keystroke).
     fn keymap(&self) -> Arc<crate::keymap::Keymap> {
-        let keys = self.components.executor.keys.borrow();
+        let mut keys = self.components.executor.keys.borrow_mut();
         let overlay = self.overlay_key_binding();
         if keys.list.is_empty() && overlay.is_none() {
+            keys.unplaced = false;
             return self.components.js_keymap.clone();
         }
+        let views = {
+            let _entered = self.components.runtime.enter();
+            keys.bindings()
+        };
+        drop(keys);
         let bindings = self
             .components
             .js_keymap
             .bindings()
             .iter()
             .copied()
-            .chain(keys.list.iter().map(|k| k.binding))
+            .chain(views)
             .chain(overlay)
             .collect();
         Arc::new(crate::keymap::Keymap::new(bindings))

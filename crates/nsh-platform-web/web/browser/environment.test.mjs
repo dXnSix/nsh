@@ -86,6 +86,22 @@ test("setTheme hands the theme to the engine and reads the tokens again once it 
   assert.deepEqual(writes, [1, 2]);
 });
 
+test("updateTheme and resetTheme hand their values to the engine and read the tokens again once they took", () => {
+  const calls = [];
+  const theme = { cssVars: { light: { brand: "#e11d48" } } };
+  const { env, writes } = environment((op, args) => {
+    calls.push([op, args]);
+    if (op === 409 && args[0]?.cssVars?.light?.brand === "#zz") throw new TypeError("updateTheme: `brand`: #zz is no color");
+  });
+  env.api.updateTheme(theme);
+  env.api.resetTheme(["brand"]);
+  env.api.resetTheme();
+  assert.deepEqual(calls, [[409, [theme]], [410, [["brand"]]], [410, [undefined]]]);
+  assert.deepEqual(writes, [1, 2, 3]);
+  assert.throws(() => env.api.updateTheme({ cssVars: { light: { brand: "#zz" } } }), TypeError);
+  assert.deepEqual(writes, [1, 2, 3]);
+});
+
 test("the lifecycle is the engine's", () => {
   const { env } = environment();
   // Before the engine reports, the native environment's default.

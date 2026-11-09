@@ -162,6 +162,9 @@ pub(crate) struct Surface {
     pub(crate) file_drop: crate::file_drop::State,
     engine: RefCell<Option<Engine>>,
     control: RefCell<Option<EngineControl>>,
+    /// The URL the app was launched with, for the next engine to start
+    /// ([`Surface::set_launch_link`]).
+    launch_link: RefCell<Option<String>>,
     rx: RefCell<Option<Receiver<Message>>>,
     pending: RefCell<Arc<AtomicBool>>,
     /// The window drawn into (shared with the engine's sink).
@@ -195,7 +198,7 @@ pub(crate) struct Surface {
     /// The embedding app's theme overrides
     /// ([`crate::AppView::set_theme_overrides`]): sent to every engine the
     /// surface starts, before its first frame.
-    pub(crate) host_tokens: RefCell<Option<nsh_engine::Tokens>>,
+    pub(crate) host_theme: RefCell<Option<String>>,
     /// JS asked for a display frame.
     js_frame: Cell<bool>,
     /// The performance monitor, while it measures ([`crate::fps`]).
@@ -279,6 +282,7 @@ impl Surface {
             file_drop: Default::default(),
             engine: RefCell::new(None),
             control: RefCell::new(None),
+            launch_link: RefCell::new(None),
             rx: RefCell::new(None),
             pending: RefCell::new(Arc::new(AtomicBool::new(false))),
             hwnd: Arc::new(std::sync::atomic::AtomicIsize::new(0)),
@@ -295,7 +299,7 @@ impl Surface {
             environment: Cell::new(environment),
             appearance: Cell::default(),
             host_environment: Cell::default(),
-            host_tokens: RefCell::new(None),
+            host_theme: RefCell::new(None),
             js_frame: Cell::new(false),
             ticker: RefCell::new(None),
             frame_clients: RefCell::default(),
@@ -405,7 +409,7 @@ impl Surface {
     }
 
     /// Measures the surface's frames and commits from now on; one
-    /// `nsh::perf` line a second ([`crate::fps`]). The ticker then runs on
+    /// `nsh::fps` line a second ([`crate::fps`]). The ticker then runs on
     /// every refresh.
     pub(crate) fn enable_fps(self: &Rc<Self>) {
         if self.fps.borrow().is_some() {
@@ -457,14 +461,20 @@ impl Surface {
         *self.rx.borrow_mut() = Some(rx);
         *self.pending.borrow_mut() = pending;
         let family = crate::text::ui_family();
-        // The embedding app's theme overrides are in the first frame.
-        let tokens = self.host_tokens.borrow().clone();
+        // The embedding app's theme overrides are in the first frame, and
+        // the launch URL is the app's address when its code first runs
+        // (`UrlScheme.url()`).
+        let theme = self.host_theme.borrow().clone();
+        let launch = self.launch_link.take();
         let setup = |control: &EngineControl| {
-            if tokens.is_some() {
-                control.set_tokens(tokens);
+            if let Some(json) = theme {
+                control.set_theme_overrides(json);
             }
             if let Some(displays) = displays {
                 control.set_displays(displays);
+            }
+            if let Some(url) = launch {
+                crate::linking::dispatch(control, url);
             }
         };
         match Engine::start_with(config, move || DWriteTextEngine::new(family), sink, setup) {
@@ -511,6 +521,12 @@ impl Surface {
         if let Some(control) = &*self.control.borrow() {
             f(control);
         }
+    }
+
+    /// Sets the URL the app was launched with (`EventKind::UrlScheme`), which
+    /// the next engine to start applies before the app's code first runs.
+    pub(crate) fn set_launch_link(&self, url: String) {
+        *self.launch_link.borrow_mut() = Some(url);
     }
 
     /// Sends an event to JS.

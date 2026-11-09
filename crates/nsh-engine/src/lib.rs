@@ -25,6 +25,8 @@ mod script;
 #[cfg_attr(not(feature = "shader"), path = "shader_off.rs")]
 pub mod shader;
 mod shader_frame;
+#[cfg(all(feature = "shader", target_vendor = "apple"))]
+mod shader_surfaces;
 #[cfg(not(target_arch = "wasm32"))]
 mod storage;
 #[cfg(feature = "js-core")]
@@ -59,7 +61,6 @@ pub use nsh_core::{
     element::{EngineContext, Root, Tokens},
     geometry::{self, Bounds, Edges, Point, Points, Size},
     js::{HostLimits, Limits},
-    location::{HistoryBehavior, InvalidLocation, Location, Navigation},
     platform::{
         ColorScheme, Environment, FetchEvent, FetchOp, HostEnvironment, HourCycle, HttpBody,
         HttpHead, HttpRequest, Idiom, Languages, Lifecycle, Locale, LocaleSettings,
@@ -1246,6 +1247,8 @@ enum Message {
     Perf(Option<Arc<perf::PerfMonitor>>),
     /// The embedding app's design tokens.
     Tokens(Option<Box<Tokens>>),
+    /// The embedding app's theme overrides, a theme file the core reads.
+    ThemeOverrides(String),
     /// A font file the embedding app registers (TrueType, OpenType, WOFF or
     /// WOFF2), before the first frame and whenever it registers another.
     HostFont(Vec<u8>),
@@ -1254,9 +1257,6 @@ enum Message {
     HostEvent(String, nsh_core::JsonValue),
     /// The embedding app's answer to call `.0` (`host.call`).
     HostReply(u64, Result<nsh_core::JsonValue, String>),
-    /// The embedding app moved the app to this location
-    /// ([`HostChannel::set_location`]).
-    Location(Location),
     /// The embedding app's URL handler answered URL request `id`: it took
     /// the URL, or the platform opens it.
     UrlHandled {
@@ -1484,6 +1484,17 @@ impl EngineControl {
         let _ = self.tx.send(Message::Tokens(tokens.map(Box::new)));
     }
 
+    /// Sets the embedding app's theme overrides: a theme file (shadcn's
+    /// `cssVars`, as `nsh.json`'s `"theme"`) whose tokens win over the app's of
+    /// the same names, read by the core with the app's UI sets against their
+    /// default tokens ([`Core::set_host_theme`]), so a `var()` the file does
+    /// not set names the default theme's token.
+    /// [`EngineControl::set_tokens`]`(None)` gives the app its own theme back.
+    /// Sent from [`Engine::start_with`]'s `setup`, they are in the first frame.
+    pub fn set_theme_overrides(&self, json: impl Into<String>) {
+        let _ = self.tx.send(Message::ThemeOverrides(json.into()));
+    }
+
     /// Registers a font file the embedding app ships (TrueType, OpenType,
     /// WOFF or WOFF2) so every app this engine runs can name its family.
     /// Sent from [`Engine::start_with`]'s `setup`, it is registered before
@@ -1692,9 +1703,22 @@ impl<M: TextEngine + 'static> LocalEngine<M> {
     /// Starts the app (its first frame goes to `sink` before this returns);
     /// `None` if it could not start (reported to `sink`).
     pub fn start<S: MountSink>(config: EngineConfig, text_engine: M, sink: S) -> Option<Self> {
+        Self::start_with(config, text_engine, sink, |_| {})
+    }
+
+    /// [`LocalEngine::start`], with `setup` sending input before the engine
+    /// starts, as [`Engine::start_with`]'s does: the link that launched the
+    /// app is there before its code runs.
+    pub fn start_with<S: MountSink>(
+        config: EngineConfig,
+        text_engine: M,
+        sink: S,
+        setup: impl FnOnce(&EngineControl),
+    ) -> Option<Self> {
         let (tx, rx) = crossbeam_channel::unbounded();
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let control = EngineControl { tx: tx.clone() };
+        setup(&control);
         let _clock = config.clock.enter();
         let _context = config.context.enter();
         let driver = Driver::start(config, text_engine, Rc::new(sink), tx, &rx, stop)?;
@@ -1897,6 +1921,9 @@ impl<M: TextEngine + 'static> Driver<M> {
         core.set_picker(config.picker.clone());
         core.set_speech(config.speech.clone());
         core.set_url_schemes(config.app.url_schemes().iter().cloned());
+        // Every VM reads the core's address where it is (`UrlScheme.url()`).
+        #[cfg(any(feature = "js-core", all(feature = "browser", target_arch = "wasm32")))]
+        let app_url = core.app_url_cell();
         core.set_audio(config.audio.clone());
         core.set_window_backend(config.windows.clone());
         if let Some(window) = config.app.main_window() {
@@ -1918,6 +1945,9 @@ impl<M: TextEngine + 'static> Driver<M> {
         if let App::Rust(root) = &config.app {
             if let Some(tokens) = root.tokens_ref() {
                 core.set_tokens(tokens.clone());
+            }
+            if let Some(json) = root.theme_ref() {
+                core.set_ui_theme(json);
             }
             if let Some(appearance) = root.appearance_ref() {
                 core.set_appearance(appearance);
@@ -1970,12 +2000,15 @@ impl<M: TextEngine + 'static> Driver<M> {
         // The embedding app's tokens sent before the start
         // (`Engine::start_with`) are there as the bundle evaluates, so its
         // first render reads them; the rest comes after it, in order.
-        // So are the displays, which the app reads as it first renders.
+        // So are the displays, which the app reads as it first renders,
+        // and the link that launched the app, which its first `url()` reads
+        // (the core keeps it for the first `open` listener too).
         let mut early = Vec::new();
         let mut displays: Arc<[nsh_core::desktop::Display]> = Arc::from(Vec::new());
         while let Ok(message) = rx.try_recv() {
             match message {
                 Message::Tokens(tokens) => core.set_host_tokens(tokens.map(|t| *t)),
+                Message::ThemeOverrides(json) => core.set_host_theme(Some(&json)),
                 Message::HostFont(data) => {
                     if let Err(err) = core.register_font(&data) {
                         log::error!("font failed: {err}");
@@ -1985,19 +2018,16 @@ impl<M: TextEngine + 'static> Driver<M> {
                     core.set_displays(list.clone());
                     displays = list;
                 }
+                Message::Event(nsh_core::ROOT_ID, EventKind::UrlScheme, payload) => {
+                    core.component_event(nsh_core::ROOT_ID, EventKind::UrlScheme, &payload);
+                }
                 message => early.push(message),
             }
         }
         let js_tokens = core.tokens().clone();
-        // Where the app starts: the embedding app's location, set before
-        // (later moves come as `Message::Location`).
-        let js_location = config.host.location();
-        core.set_location(js_location.clone());
         let state = State {
             core,
             js_tokens,
-            host_location: js_location.clone(),
-            js_location,
             frame_requested: false,
             ops: Vec::new(),
             binds: Vec::new(),
@@ -2025,7 +2055,6 @@ impl<M: TextEngine + 'static> Driver<M> {
             app_locale: None,
             host: config.host.clone(),
             url_opens: Vec::new(),
-            navigations: Vec::new(),
             net: Net {
                 network: config.network.clone(),
                 tx,
@@ -2060,14 +2089,6 @@ impl<M: TextEngine + 'static> Driver<M> {
             #[cfg(not(target_arch = "wasm32"))]
             trial: trial.clone(),
         };
-        // A location the embedding app set while the engine attached (its
-        // later ones come as `Message::Location`).
-        let location = config.host.location();
-        if location != driver.state.js_location {
-            driver.state.core.set_location(location.clone());
-            driver.state.js_location = location.clone();
-            driver.state.host_location = location;
-        }
         let eval_us = match &config.app {
             App::Js(bundle) => {
                 #[cfg(any(feature = "js-core", all(feature = "browser", target_arch = "wasm32")))]
@@ -2082,6 +2103,7 @@ impl<M: TextEngine + 'static> Driver<M> {
                             config.assets.clone(),
                             bundle,
                         ),
+                        app_url: app_url.clone(),
                         data_dir: config
                             .data_dir
                             .as_ref()
@@ -2091,6 +2113,7 @@ impl<M: TextEngine + 'static> Driver<M> {
                             let _ = system_tx.send(Message::Wake);
                         }),
                         host: Rc::new(host_bridge),
+                        lazy_rows: config.content_culling,
                     }
                 };
                 #[cfg(not(any(
@@ -2105,7 +2128,6 @@ impl<M: TextEngine + 'static> Driver<M> {
                     posts,
                     &environment,
                     &displays,
-                    &driver.state.js_location,
                     driver.state.js_tokens.clone(),
                     driver.state.core.theme_tokens(),
                     text_engine,
@@ -2490,11 +2512,6 @@ struct State<M: TextEngine> {
     /// The design tokens JS has (`token()`): the core's when they were
     /// last sent.
     js_tokens: Arc<nsh_core::element::Tokens>,
-    /// The location JS has (`location()`): the core's when it was last
-    /// sent.
-    js_location: Location,
-    /// The core's location when the embedding app's channel last heard it.
-    host_location: Location,
     /// What the environment keeps whatever the platform reports
     /// ([`EngineConfig::pinned`]).
     pinned: EnvironmentPins,
@@ -2521,8 +2538,6 @@ struct State<M: TextEngine> {
     host: HostChannel,
     /// URLs the app asked to open, taken from the core (a reused buffer).
     url_opens: Vec<(u32, String)>,
-    /// The app's navigations, taken from the core (a reused buffer).
-    navigations: Vec<Navigation>,
     net: Net,
     /// Development updates to apply.
     hot: Vec<HotUpdate>,
@@ -3238,27 +3253,6 @@ impl<M: TextEngine> State<M> {
             self.core.take_events(&mut self.events);
             // URLs the platform opens go out in another round.
             let urls = self.open_urls();
-            // The embedding app hears the app's navigations, and the
-            // location reaches what read it in JS (whose ops come in
-            // another round) when it changed outside JS.
-            self.core.take_navigations(&mut self.navigations);
-            for navigation in self.navigations.drain(..) {
-                self.host_location = navigation.location.clone();
-                self.host.navigated(navigation);
-            }
-            let location = self.core.location();
-            if location != self.host_location {
-                self.host.moved(&location);
-                self.host_location = location.clone();
-            }
-            let relocate = match script {
-                Some(script) if location != self.js_location => {
-                    script.set_location(&location);
-                    self.js_location = location;
-                    true
-                }
-                _ => false,
-            };
             // Posts the ops queued (in program order) run in another round.
             let posted = script.is_some_and(Script::has_posted);
             // New tokens (the app's theme, the embedding app's) reach what
@@ -3290,7 +3284,6 @@ impl<M: TextEngine> State<M> {
                 && self.events.is_empty()
                 && !posted
                 && !retheme
-                && !relocate
                 && !relocale
                 && !more_paced
                 && !urls
@@ -3345,6 +3338,7 @@ fn ui_environment(env: &Environment, window: Size<Points>) -> nsh_core::element:
         rtl: env.rtl,
         pixel_ratio: env.pixel_ratio,
         os: env.os,
+        platform: env.platform,
         os_version: env.os_version,
         idiom: env.idiom,
         locale: env.locale,
@@ -3544,7 +3538,12 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             }
         }
         Message::Kept(nodes) => state.core.set_kept(&nodes),
-        Message::ContentCulling(enabled) => state.core.set_content_culling(enabled),
+        Message::ContentCulling(enabled) => {
+            state.core.set_content_culling(enabled);
+            if let Some(script) = script {
+                script.set_lazy_rows(enabled);
+            }
+        }
         Message::InputScroll(id, offset, content, viewport) => {
             state.core.set_input_scroll(id, offset, content, viewport);
         }
@@ -3571,7 +3570,6 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             state.resized = Some(size);
         }
         Message::Wake => {}
-        Message::Location(location) => state.core.set_location(location),
         Message::Environment(mut env) => {
             state.pinned.apply(&mut env);
             let env = state.window_state.report(*env, nsh_core::time::now());
@@ -3635,6 +3633,12 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
         }
         Message::Tokens(tokens) => {
             state.core.set_host_tokens(tokens.map(|t| *t));
+            if let Some(script) = script {
+                script.set_theme_tokens(state.core.theme_tokens());
+            }
+        }
+        Message::ThemeOverrides(json) => {
+            state.core.set_host_theme(Some(&json));
             if let Some(script) = script {
                 script.set_theme_tokens(state.core.theme_tokens());
             }

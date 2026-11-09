@@ -32,15 +32,7 @@
 // pointer and the viewport suggest), `dialogs` ("viewport": `Dialog`,
 // `Sheet` and `AlertDialog` cover the whole window, in the browser's top layer, rather
 // than the container, which they cover by default and in browsers without
-// popovers), `history` (pushed pages, open dialogs and the app's
-// `navigate` as browser history entries, and the app's location in the
-// address bar; by default only when the app is the page, not in an
-// iframe), `location` (where the app starts, a path from the page's base;
-// by default the page's address there), `onNavigate({ location, history })`
-// (the app's `navigate`, with or without `history`: a page that keeps the
-// address itself follows it; `player.setLocation(url, { history })` moves
-// the app, and `player.location` is where it is), `overlay` (false: no
-// error box), `onError`, `onLog`, `host`
+// popovers), `overlay` (false: no error box), `onError`, `onLog`, `host`
 // (the functions `nsh/host`'s `host.call(name, args)` reaches: an object
 // whose `call(name, args)` returns the result or a promise of it; a throw
 // or a rejection rejects the app's call; without it `host.available()` is
@@ -78,6 +70,20 @@ const ARIA_ROLES = {
   none: null, header: "heading", image: "img", imagebutton: "button", keyboardkey: "button", adjustable: "slider",
   search: "searchbox", text: null, summary: "status", togglebutton: "button", dropdownlist: "combobox",
 };
+
+/**
+ * The HTML element a view or text is drawn as, from what its props say it
+ * is: a heading (`role="header"`, `h1` to `h6` by `accessibilityLevel`,
+ * `h2` without one, as ARIA's default), a link (`role="link"` with an
+ * `href`, as `Link` sets), else the element `web={{ element }}` names, else
+ * a `div`.
+ */
+export function elementTag(props) {
+  if (props.element) return props.element;
+  if (props.role === "header") return `h${Math.min(6, Math.max(1, props.level ?? 2))}`;
+  if (props.role === "link" && props.href != null) return "a";
+  return "div";
+}
 
 /** How far a refreshable scroll view is pulled to refresh, and the room its spinner takes while refreshing (as on Linux and macOS), unless the app draws its own indicator (`refreshIndicator`: its height is both). */
 const REFRESH_PULL = 64;
@@ -139,6 +145,11 @@ const KEYFRAMES = `
   touch-action: none; }
 .nsh-root * { box-sizing: border-box; }
 .nsh-v { position: absolute; margin: 0; padding: 0; min-width: 0; min-height: 0; }
+/* Views drawn as document elements (headings, links, \`web={{ element }}\`) look as a view does: none of
+   the browser's margins, fonts, colors, underlines or list markers. */
+:is(h1, h2, h3, h4, h5, h6, p, a, ul, ol, li, strong, em, blockquote, figure, figcaption, time, address, nav, header,
+  footer, main, article, section, aside).nsh-v { display: block; font: inherit; color: inherit; text-decoration: none;
+  list-style: none; }
 /* The keyboard focus shows as the app draws it (focus: styles), as
    on the desktop backends: no ring of the browser's or the runtime's. */
 .nsh-v:focus { outline: none; }
@@ -395,6 +406,11 @@ const CODE_CHARS = {
   Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Backslash: "\\", IntlBackslash: "\\", Semicolon: ";",
   Quote: "'", Comma: ",", Period: ".", Slash: "/", Backquote: "`", Space: " ",
 };
+
+/** A name for the history entries of one load of the page. */
+function newHistorySession() {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+}
 
 /** The offset of local time at `ms` (since the epoch) in seconds east of UTC. */
 function localOffset(ms) {
@@ -932,10 +948,6 @@ class Player {
     // default only when the app is the page (in an iframe each push would
     // be an entry of the embedding page's history too).
     this.history = options.history ?? window.top === window;
-    // The app's location (`location()`): a path from the base, the page's
-    // address unless the page says another (`location`).
-    this.location = "/";
-    this.location = options.location != null ? this.joinLocation(String(options.location)) : this.pageLocation();
     // `Dialog` and `AlertDialog` over the whole window rather than over the
     // container: popovers in the top layer, which every browser engine has
     // had since 2024 (Firefox 125).
@@ -1296,12 +1308,6 @@ class Player {
     // of the measured one, for the apps started from now on.
     this.testIdiom = environment?.idiom;
     if (!this.wasm.nsh_test_setup) return;
-    // Where the test opens the app: the page's address there, as a link
-    // into the app would open it.
-    if (environment?.location != null) {
-      this.location = this.joinLocation(String(environment.location));
-      if (this.history) this.replaceEntry(this.backDepth(), this.location);
-    }
     const setup = JSON.stringify({ storage: storage ?? [], trace: !!trace, environment: environment ?? {} });
     this.withStrings([setup], (p, l) => this.wasm.nsh_test_setup(p, l));
   }
@@ -1567,6 +1573,9 @@ class Player {
     this.hostEvents ??= [];
     // Fonts registered while it starts hold its first frame back (`fontLoading`).
     this.starting = true;
+    // The app's address starts as its first entry's, which the core has
+    // before the app's code runs (`nsh_set_page_url`).
+    if (this.history) this.withStrings([this.firstUrl], (p, l) => this.wasm.nsh_set_page_url?.(p, l));
     try {
       this.call(() => start(environment));
     } catch (err) {
@@ -1893,8 +1902,6 @@ class Player {
       screenColor: typeof window.EyeDropper === "function",
       notifications: typeof window.Notification === "function",
       audio: typeof (window.AudioContext ?? window.webkitAudioContext) === "function",
-      // Where the app starts (`location()`); later moves are `onLocation`.
-      location: this.location,
     };
   }
 
@@ -2475,6 +2482,34 @@ class Player {
     for (const span of [...el.querySelectorAll(":scope > .nsh-run, :scope > .nsh-run-bg")]) span.remove();
     el.insertBefore(frag, el.firstChild);
     this.lineBreaks(el);
+    if (spans.some((l) => l.events.has("onMouseEnter") || l.events.has("onMouseLeave"))) {
+      this.installLinkHover(el);
+    }
+  }
+
+  /**
+   * The mouse over the links of text `el` (the `_link` of the run spans
+   * under it): a link listening hears `onMouseEnter` when the mouse comes
+   * over its characters (on any of its lines) and `onMouseLeave` when it
+   * leaves them, as the other desktops report a link's hover (the core
+   * shows a link's hint, its URL, by them). Installed once per text; the
+   * listeners read the spans the runs have now.
+   */
+  installLinkHover(el) {
+    if (el._linkHover !== undefined) return;
+    el._linkHover = null;
+    const follow = (e) => {
+      if (e.pointerType !== "mouse") return;
+      const link = e.type === "pointerleave" ? null : (e.target?._link ?? null);
+      const old = el._linkHover;
+      if ((old?.node ?? null) === (link?.node ?? null)) return;
+      el._linkHover = link;
+      if (old?.events.has("onMouseLeave")) this.event(old.node, "onMouseLeave", this.mouseEvent(el, e, true));
+      if (link?.events.has("onMouseEnter")) this.event(link.node, "onMouseEnter", this.mouseEvent(el, e, true));
+    };
+    el.addEventListener("pointerover", follow);
+    el.addEventListener("pointermove", follow);
+    el.addEventListener("pointerleave", follow);
   }
 
 
@@ -2562,8 +2597,11 @@ class Player {
   }
 
   op_vp([, id, props]) {
-    const el = this.view(id);
+    let el = this.view(id);
     if (!el) return;
+    el = this.retag(el, elementTag(props));
+    if (props.href != null) el.setAttribute("href", props.href);
+    else el.removeAttribute("href");
     el._props = props;
     // A list in its parent's viewport: its cells are read in screen order.
     if (el._screenOrder !== props.screenOrder) {
@@ -2578,6 +2616,30 @@ class Player {
     el.classList.toggle("nsh-area", !!props.selectableView);
     this.updateFocusable(el);
     this.updateTouchAction(el);
+  }
+
+  /**
+   * The view drawn as the HTML element `elementTag` gives it (`h1`, `a`,
+   * `p`, `nav`, ...), else a `div`: the element is replaced by one of that
+   * tag carrying its attributes, children and fields, so search engines
+   * and the page's markup see the document's structure while the layout,
+   * styles and events stay the view's. Views whose element holds a
+   * control of its own (images, scroll views, canvases, ...) keep theirs.
+   */
+  retag(el, tag) {
+    if (el.localName === tag || (el._kind !== "view" && el._kind !== "text")) return el;
+    const next = document.createElement(tag);
+    for (const { name, value } of el.attributes) next.setAttribute(name, value);
+    for (const key of Object.keys(el)) next[key] = el[key];
+    next.append(...el.childNodes);
+    el.replaceWith(next);
+    this.views.set(el._id, next);
+    if (el._mouseEvents) {
+      next._mouseEvents = false;
+      this.installMouse(next);
+    }
+    if (tag === "a") next.draggable = false;
+    return next;
   }
 
   op_al([, id, label]) {
@@ -4976,14 +5038,8 @@ class Player {
     }
     stack._top = below ?? null;
     screen._popping = true;
-    // The screen goes, then the app is told (and removes it); the history
-    // waits for the app's answer (`syncHistory`).
-    this.dismissing = (this.dismissing ?? 0) + 1;
-    const dismissed = () => {
-      this.dismissing -= 1;
-      this.event(screen._id, "onDismiss");
-      this.syncHistorySoon();
-    };
+    // The screen goes, then the app is told (and removes it).
+    const dismissed = () => this.event(screen._id, "onDismiss");
     // Through its shader, with its own motion, or at once.
     this.moveScreens(screen, below, false, dismissed);
     this.syncHistorySoon();
@@ -5158,101 +5214,59 @@ class Player {
     return false;
   }
 
-  // History. Every entry NSH makes has `history.state.nsh = { session,
-  // index, depth, url }`: this page load's id, the entry's place among the
-  // load's entries (0: the one the page loaded with), the back depth at it
-  // (`backDepth`: presented modals and the screens over the bottom one of
-  // each shown stack) and the app's location at it. A pushed page or
-  // dialog and the app's `navigate` are entries alike; in one engine turn,
-  // one entry. After each turn the current entry describes the app as it
-  // is (`syncHistory`). The browser's back goes back a dialog, then a page,
-  // at a time, and moves the app to the entry's location; forward moves it
-  // to the location, and the app shows what it names.
+  // History: one entry per screen over the bottom one of each shown stack
+  // and per presented modal, so that the browser's back button goes back
+  // in the app. Entries the app takes away itself are gone back over
+  // (`history.go`), their `popstate` ignored.
 
   installHistory() {
-    // Entries are this page load's; an earlier load's (a reload keeps
-    // them) are adopted where the entry the page reloaded on says.
-    this.historySession = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
-    const earlier = history.state?.nsh;
-    this.adopted = earlier?.session && Number.isInteger(earlier.index)
-      ? { session: earlier.session, offset: -earlier.index } : null;
-    // index -> { depth, url }: the entries this load knows.
-    this.entries = new Map([[0, { depth: 0, url: this.location }]]);
-    this.historyIndex = 0;
-    // The navigation of the turn (`{ push }`), the user's move the app is
-    // answering (`{ from, moved }`), and NSH's own `history.go` in flight.
-    this.pendingNavigation = null;
-    this.popped = null;
-    this.traveling = null;
-    history.replaceState(this.historyState(0), "", this.options.location != null ? this.pageURL(this.location) : undefined);
+    this.historyDepth = 0;
+    this.ignoredPops = 0;
+    // Entries are this page load's: those of an earlier load (a reload
+    // keeps them, with their depths) are foreign, below this one's.
+    this.historySession = newHistorySession();
+    history.replaceState(this.historyState(0), "");
+    // The address of the app's first entry, where every run starts, and of
+    // the entry shown (a page the app keeps on a back keeps it).
+    this.firstUrl = this.shownUrl = location.href;
     window.addEventListener("popstate", (e) => this.popState(e));
   }
 
-  historyState(index) {
-    const { depth, url } = this.entries.get(index);
-    return { ...(history.state ?? {}), nsh: { session: this.historySession, index, depth, url } };
+  historyState(depth) {
+    return { ...(history.state ?? {}), nsh: depth, nshSession: this.historySession };
   }
 
-  /** Where the page's address is in the app: its URL from the base's
-   * directory (`baseURL`), `/` for the base and its `index.html`. */
-  pageLocation() {
-    const base = new URL(".", this.baseURL);
-    const here = new URL(location.href);
-    if (here.origin !== base.origin || !here.pathname.startsWith(base.pathname)) return "/";
-    const path = here.pathname.slice(base.pathname.length);
-    return `/${path === "index.html" ? "" : path}${here.search}${here.hash}`;
-  }
-
-  /** The page's address of location `url`. */
-  pageURL(url) {
-    return new URL(`./${url.slice(1)}`, new URL(".", this.baseURL)).href;
-  }
-
-  /** `url` resolved against the location, as the core resolves it
-   * (`Location::join`): both are the WHATWG URL parser's. */
-  joinLocation(url) {
-    const joined = new URL(url, `http://nsh.invalid${this.location}`);
-    if (joined.origin !== "http://nsh.invalid") throw new TypeError(`${url} is another site's URL`);
-    return `${joined.pathname}${joined.search}${joined.hash}`;
-  }
-
-  /**
-   * Moves the app to `url` (a path from the base, or relative to the
-   * location), as a link into the app or the embedding page would: the
-   * app's `location()` changes (`onLocation`); with the history, as a new
-   * entry (`history: "replace"`: the current one).
-   */
-  setLocation(url, { history: behavior = "push" } = {}) {
-    const next = this.joinLocation(String(url));
-    if (next === this.location) return;
-    this.location = next;
-    this.event(ROOT_ID, "onLocation", { location: next });
-    if (this.history) {
-      this.pendingNavigation = { push: behavior !== "replace" || !!this.pendingNavigation?.push };
-      this.syncHistorySoon();
-    }
-  }
-
-  /** The app went to `url` (`navigate`, `Command::Navigate`). */
-  appNavigated(url, replace) {
-    this.location = url;
-    if (this.history) {
-      // A push in the turn wins over a replace.
-      this.pendingNavigation = { push: !replace || !!this.pendingNavigation?.push };
-      this.syncHistorySoon();
-    }
-    this.options.onNavigate?.({ location: url, history: replace ? "replace" : "push" });
-  }
-
-  /** A new run starts at the first entry, where the app is. */
+  /** A new run starts at the app's first entry. */
   resetHistory() {
-    if (!this.history || !this.entries) return;
-    this.pendingNavigation = this.popped = null;
-    const first = Math.min(this.historyIndex, 0);
-    const url = (this.entries.get(first) ?? this.entries.get(this.historyIndex)).url;
-    for (const index of [...this.entries.keys()]) if (index > first) this.entries.delete(index);
-    this.entries.set(first, { depth: 0, url });
-    this.travel(first);
+    if (!this.history) return;
+    this.pageUrl = null;
+    if (!this.historyDepth) return;
+    this.ignoredPops++;
+    history.go(-this.historyDepth);
+    this.historyDepth = 0;
+  }
+
+  /** `UrlScheme.setUrl` / `set_app_url`: the current entry's address, once
+   * the entries of the pages pushed or popped with it exist
+   * (`syncHistory`). Resolved as `replaceState` resolves it (against
+   * `<base href>`); one of another origin is dropped (TS's `setUrl` throws
+   * for it first, in `runtime.js`). */
+  setPageUrl(url) {
+    if (!this.history) return;
+    let resolved;
+    try {
+      resolved = new URL(url, document.baseURI);
+    } catch {
+      console.warn(`[nsh] the app's address is not a URL: ${url}`);
+      return;
+    }
+    if (resolved.origin !== location.origin) {
+      console.warn(`[nsh] the app's address is not of the page's origin: ${resolved.href}`);
+      return;
+    }
+    this.pageUrl = resolved.href;
+    this.pageUrlSets = (this.pageUrlSets ?? 0) + 1;
+    this.syncHistorySoon();
   }
 
   backDepth() {
@@ -5273,167 +5287,101 @@ class Player {
     }, 0);
   }
 
-  /** Makes the current entry describe the app as it is, after a turn. */
   syncHistory() {
-    if (this.traveling) return;
-    const popped = this.popped;
-    if (popped?.settling) {
-      // The pages going back still move: their `onDismiss` has not
-      // reached the app.
-      if (this.dismissing > 0 && !popped.expired) return;
-      clearTimeout(popped.timer);
-      popped.settling = false;
-      // An app that moved its location as it went back (a page that
-      // navigates to its parent) has answered; otherwise it goes to the
-      // entry's location.
-      if (this.location !== popped.before) popped.moved = true;
-      else this.moveTo(popped.url, popped);
+    const depth = this.backDepth();
+    const have = this.historyDepth;
+    for (let i = have + 1; i <= depth; i++) history.pushState(this.historyState(i), "");
+    if (depth < have) {
+      this.ignoredPops++;
+      history.go(depth - have);
     }
-    const depth = this.backDepth(), url = this.location;
-    const navigation = this.pendingNavigation;
-    this.pendingNavigation = this.popped = null;
-    const entry = this.entries.get(this.historyIndex);
-    if (popped && !navigation?.push) {
-      // The app's answer to the user's move to this entry.
-      if (popped.moved || depth === entry.depth) {
-        // It shows what the entry's location names: the entry is that.
-        if (depth !== entry.depth || url !== entry.url) this.replaceEntry(depth, url);
-        return;
+    this.historyDepth = depth;
+    // The address goes to the entry the traversal lands on (its
+    // `popstate` syncs again).
+    if (this.pageUrl != null && !this.ignoredPops) {
+      const url = this.pageUrl;
+      this.pageUrl = null;
+      try {
+        // Resolved as `replaceState` does, against `<base href>` when the
+        // page has one.
+        history.replaceState(history.state, "", url);
+        this.shownUrl = url;
+        if (!this.historyDepth) this.firstUrl = url;
+      } catch (error) {
+        this.showError(`UrlScheme.setUrl(${JSON.stringify(url)}): ${error?.message ?? error}`);
       }
-      if (depth < entry.depth) {
-        // Forward to a dialog or a page that is gone and that no location
-        // brings back: back where the app is.
-        this.travel(popped.from);
-        return;
-      }
-      // Deeper: the app kept the user (`popOnBack={false}`, a dialog
-      // that stays open), and the levels get their entries again.
     }
-    if (depth < entry.depth) {
-      // The app went back itself: back over the entries above it (a
-      // navigation of the turn applies there).
-      let to = null;
-      for (const [index, known] of this.entries) {
-        if (index < this.historyIndex && known.depth <= depth && (to === null || index > to)) to = index;
-      }
-      if (to !== null) {
-        this.pendingNavigation = navigation;
-        this.travel(to);
-      } else {
-        this.replaceEntry(depth, url);
-      }
-      return;
-    }
-    if (depth > entry.depth) {
-      // One entry per level, the turn's location in each; a replace
-      // takes the location before away.
-      if (navigation && !navigation.push && url !== entry.url) this.replaceEntry(entry.depth, url);
-      for (let level = entry.depth + 1; level <= depth; level++) this.pushEntry(level, url);
-      return;
-    }
-    if (url === entry.url) return;
-    if (navigation?.push) this.pushEntry(depth, url);
-    else this.replaceEntry(depth, url);
-  }
-
-  pushEntry(depth, url) {
-    const previous = this.entries.get(this.historyIndex).url;
-    const index = this.historyIndex + 1;
-    // A push drops the browser's entries after the current one.
-    for (const known of [...this.entries.keys()]) if (known >= index) this.entries.delete(known);
-    this.entries.set(index, { depth, url });
-    this.historyIndex = index;
-    history.pushState(this.historyState(index), "", url === previous ? undefined : this.pageURL(url));
-  }
-
-  replaceEntry(depth, url) {
-    const previous = this.entries.get(this.historyIndex).url;
-    this.entries.set(this.historyIndex, { depth, url });
-    history.replaceState(this.historyState(this.historyIndex), "", url === previous ? undefined : this.pageURL(url));
-  }
-
-  /** Goes to entry `to` with `history.go`: its `popstate` is NSH's, and
-   * the turns in between are synced once it lands. */
-  travel(to) {
-    const delta = to - this.historyIndex;
-    if (!delta) {
-      this.syncHistorySoon();
-      return;
-    }
-    // A browser that never lands (a go it refuses) does not hold the
-    // history back for good.
-    const traveling = (this.traveling = { to, timer: setTimeout(() => this.landed(traveling, to), 1000) });
-    history.go(delta);
-  }
-
-  landed(traveling, index) {
-    if (this.traveling !== traveling) return;
-    clearTimeout(traveling.timer);
-    this.traveling = null;
-    this.historyIndex = index;
-    this.syncHistorySoon();
   }
 
   popState(e) {
-    const state = e.state?.nsh;
-    if (this.traveling) {
-      this.landed(this.traveling, state?.session === this.historySession ? state.index : this.traveling.to);
+    if (this.ignoredPops > 0) {
+      if (--this.ignoredPops) return;
+      // A traversal of the player's own landed: the address waiting for it
+      // goes to the entry, or the core takes the entry's (the app did not
+      // set one).
+      if (this.pageUrl != null) this.syncHistorySoon();
+      else this.tellAddress(false);
       return;
     }
-    const from = this.historyIndex;
-    const current = this.entries.get(from);
-    let to, target;
-    if (state?.session === this.historySession) {
-      to = state.index;
-      target = { depth: state.depth, url: state.url };
-    } else if (state && this.adopted && state.session === this.adopted.session && Number.isInteger(state.index)) {
-      // An earlier load's entry: its location, as an entry of this load's
-      // (its pages and dialogs went with that load).
-      to = state.index + this.adopted.offset;
-      target = { depth: current.depth, url: typeof state.url === "string" ? state.url : this.pageLocation() };
-    } else if (!state && this.pageLocation() !== this.location) {
-      // An address of the app's the user typed (a fragment): a new entry
-      // after this one.
-      to = from + 1;
-      target = { depth: current.depth, url: this.pageLocation() };
-      for (const known of [...this.entries.keys()]) if (known >= to) this.entries.delete(known);
-    } else {
+    const have = this.historyDepth;
+    if (e.state?.nshSession !== this.historySession) {
       // Back past the app's first entry: the app goes back to its start.
-      // Older loads' entries are passed over, as if the page had been left
-      // from its first screen.
-      for (let level = current.depth; level > 0; level--) if (!this.back()) break;
-      if (state != null) history.back();
+      // An earlier load's entries (a reload keeps them) are passed over,
+      // as if the page had been left from its first screen.
+      this.historyDepth = 0;
+      for (let i = 0; i < have; i++) if (!this.back()) break;
+      if (e.state?.nsh == null) return;
+      // An earlier load's entry (a reload keeps them): an address the app
+      // is handed from outside, as a link (`open`). The entry becomes the
+      // app's first, in a session of its own, so this load's entries after
+      // it are an earlier load's too.
+      this.historySession = newHistorySession();
+      history.replaceState(this.historyState(0), "");
+      this.firstUrl = location.href;
+      this.tellAddress(true);
       return;
     }
-    this.historyIndex = to;
-    this.entries.set(to, target);
-    history.replaceState(this.historyState(to), "");
-    // What the entry is once the app answered (`syncHistory`).
-    const popped = (this.popped = { from, before: this.location, url: target.url, moved: false, settling: false });
-    if (target.depth < current.depth) {
-      // Back closes dialogs first, then pops pages, a level at a time;
-      // the app answers before the location moves (`syncHistory`), so a
-      // page that navigates to its parent as it goes keeps its location,
-      // and a URL-driven app finds its pages popped.
-      for (let level = current.depth; level > target.depth; level--) if (!this.back()) break;
-      popped.settling = true;
-      popped.timer = setTimeout(() => {
-        popped.expired = true;
-        this.syncHistorySoon();
-      }, 1500);
-    } else {
-      this.moveTo(target.url, popped);
+    const at = e.state.nsh ?? 0;
+    if (at > have) {
+      // Forward to a screen the stack no longer has: an address the app is
+      // handed from outside, as a link (`open`), and its pages' entries go
+      // on from here. An app that shows nothing for it goes back where it
+      // was (`syncHistory`).
+      this.historyDepth = at;
+      this.tellAddress(true);
+      this.syncHistorySoon();
+      return;
     }
-    this.syncHistorySoon();
+    // A pop the app hears at once (no motion, a modal) may give the address
+    // itself from `onChange`, before the entry's below.
+    const sets = this.pageUrlSets;
+    if (at < have) {
+      // Back (several entries from the back button's menu): what the app
+      // does not let go back gets its entry again.
+      this.historyDepth = at;
+      let popped = 0;
+      while (at + popped < have && this.back()) popped++;
+      const kept = at + popped < have;
+      // The app kept its page: its entry keeps the address it showed (an
+      // app's `onChange` sets the address of a page it went back to part of
+      // the way).
+      if (kept && !popped) this.pageUrl ??= this.shownUrl;
+      this.syncHistorySoon();
+      if (kept) return;
+    }
+    // The app went back: the address is the entry's (`UrlScheme.url()`),
+    // with no `open`, as its stack went back already; a `setUrl` from its
+    // `onChange` wins, whether it came during the pops or comes after.
+    if (!at) this.firstUrl = location.href;
+    if (this.pageUrlSets === sets) this.tellAddress(false);
+    else this.shownUrl = location.href;
   }
 
-  /** The app goes to the entry's location `url` (`onLocation`), unless it
-   * is there. */
-  moveTo(url, popped) {
-    if (url === this.location) return;
-    this.location = url;
-    popped.moved = true;
-    this.event(ROOT_ID, "onLocation", { location: url });
+  /** Tells the core the entry's address: with `open` when the app is handed
+   * it from outside, else as the address only (`quiet`). */
+  tellAddress(open) {
+    this.shownUrl = location.href;
+    this.event(ROOT_ID, "onUrlScheme", open ? { url: this.shownUrl, page: true } : { url: this.shownUrl, page: true, quiet: true });
   }
 
   stackChanged(stack, added) {
@@ -6018,7 +5966,7 @@ class Player {
       case "hostCall": this.hostCall(args[0], args[1], args[2]); break;
       case "imageInfo": this.imageInfo(args[0], args[1]); break;
       case "back": this.defaultBack(); break;
-      case "navigate": this.appNavigated(args[0], args[1]); break;
+      case "setAppUrl": this.setPageUrl(args[0]); break;
       case "exitApp": {
         const app = this.app;
         // Finish the current engine call before releasing its surface.
@@ -7205,6 +7153,13 @@ class Player {
   installInput() {
     const root = this.root;
     root.addEventListener("pointerdown", (e) => this.pointerDown(e));
+    // A link (`Link` with an `href`) is the app's to press: a plain click
+    // stays in the app (its `onPress`), a click with a modifier or the
+    // middle button opens its `href` as the browser would.
+    root.addEventListener("click", (e) => {
+      const link = e.target instanceof Element ? e.target.closest("a.nsh-v[href]") : null;
+      if (link && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) e.preventDefault();
+    });
     window.addEventListener("pointermove", (e) => this.pointerMove(e), { passive: false });
     window.addEventListener("pointerup", (e) => this.pointerUp(e, false));
     window.addEventListener("pointercancel", (e) => this.pointerUp(e, true));
@@ -7289,6 +7244,9 @@ class Player {
         });
         return true;
       }
+      // A link (`Link` with an `href`) the app shows no menu for has
+      // the browser's: open in a new tab, copy the link.
+      if (el.localName === "a" && el.hasAttribute("href")) return true;
       if (el.matches(".nsh-field, .nsh-selectable")) return false;
     }
     return false;

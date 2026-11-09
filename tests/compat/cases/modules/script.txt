@@ -132,6 +132,9 @@ tap id:case-mod-url-scheme
 # the domain claims `compat`: no link opened it, and the listener stops.
 expect Links: none
 expect Listener: listening
+expect Address: null
+tap id:set-url
+expect Address: compat://orders/42, wrong TypeError TypeError
 tap id:stop-links
 expect Listener: stopped
 covers [nsh] UrlScheme
@@ -183,6 +186,7 @@ covers [nsh/desktop] Application
 # mod-device
 tap id:case-mod-device
 # iOS phone at 1 pixel per point, in the light scheme.
+expect Platform: ios
 expect OS: ios
 expect Idiom: phone
 expect Desktop: false
@@ -251,19 +255,6 @@ expect Bound: not bound
 tap id:bind
 expect Bound: function function
 covers [nsh] keymap
-# mod-location
-tap id:case-mod-location
-expect Location: /
-expect Parts: / - -
-tap id:teams
-expect Location: /teams/7
-tap id:table
-expect Location: /news?page=2#top
-expect Parts: /news ?page=2 #top
-tap id:other
-expect Refused: TypeError
-covers [nsh] location
-covers [nsh] navigate
 # mod-mobile
 tap id:case-mod-mobile
 expect Mobile: true
@@ -277,6 +268,13 @@ tap id:tab-rename
 frame id:tab-bar 0 784 390 60
 covers [nsh/mobile] isAvailable
 covers [nsh/mobile] TabBar
+# mod-haptics
+tap id:case-mod-haptics
+# every call goes through; a name Haptics does not know throws.
+expect Haptics: not called
+tap id:play
+expect Haptics: done, loud refused: TypeError
+covers [nsh/mobile] Haptics
 # mod-storage
 tap id:case-mod-storage
 # a key set twice keeps its last value, and a missing key reads null.
@@ -307,6 +305,13 @@ event id:heard onHost type=event event=tick payload=2
 wait 50
 expect Host heard: [1]
 covers [nsh] host
+# mod-web
+tap id:case-mod-web
+# No page here: a head renders nothing, before and after its props change.
+expect Title: Notes
+tap id:retitle
+expect Title: Q3 earnings
+covers [nsh/web] Head
 # mod-fps
 tap id:case-mod-fps
 # no performance monitor headless: it reports none, and the calls go through.

@@ -357,6 +357,11 @@ impl ModuleCx {
         self.actions.push(super::services::announce(message.into()));
     }
 
+    /// The device plays `haptic` (TS: `Haptics` of `nsh/mobile`).
+    pub fn haptic(&mut self, haptic: crate::Haptic) {
+        self.actions.push(super::services::haptic(haptic));
+    }
+
     /// Puts `text` on the system clipboard (TS: `Clipboard.writeText`).
     pub fn set_clipboard(&mut self, text: impl Into<String>) {
         self.actions
@@ -376,6 +381,42 @@ impl ModuleCx {
     /// [`crate::platform::Appearance::System`] follows the system again.
     pub fn set_color_scheme(&mut self, appearance: crate::platform::Appearance) {
         self.actions.push(Action::Appearance(appearance));
+    }
+
+    /// Changes some of the app's design tokens, as
+    /// [`crate::element::update_tokens`] does.
+    pub fn update_tokens(&mut self, tokens: impl Into<crate::element::Tokens>) {
+        self.actions.push(Action::UpdateTokens(tokens.into()));
+    }
+
+    /// Puts the design tokens `names` back to the app's theme's values, as
+    /// [`crate::element::reset_tokens`] does.
+    pub fn reset_tokens<S: Into<Box<str>>>(&mut self, names: impl IntoIterator<Item = S>) {
+        self.actions.push(Action::ResetTokens(
+            names.into_iter().map(Into::into).collect(),
+        ));
+    }
+
+    /// Draws the app with theme `theme`, as [`crate::element::set_theme`].
+    pub fn set_theme<T: crate::element::AppTheme>(&mut self, theme: T) {
+        self.actions
+            .push(Action::UpdateTokens(crate::element::theme::theme_tokens(
+                &theme,
+            )));
+    }
+
+    /// Changes the fields of `T` that `patch` sets, as
+    /// [`crate::element::update_theme`].
+    pub fn update_theme<T: crate::element::AppTheme>(&mut self, patch: T::Patch) {
+        self.actions.push(Action::UpdateTokens(
+            crate::element::theme::patch_tokens::<T>(&patch),
+        ));
+    }
+
+    /// Puts `T`'s tokens back to the app's theme's, as
+    /// [`crate::element::reset_theme`].
+    pub fn reset_theme<T: crate::element::AppTheme>(&mut self) {
+        self.reset_tokens(T::token_specs().iter().map(|s| s.name.as_ref()));
     }
 
     /// Shows the app in `locale` whatever the user's language (`None`: the

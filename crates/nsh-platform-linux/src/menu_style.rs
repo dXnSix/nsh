@@ -20,18 +20,27 @@
 //! round box, in the label's color. Images in a GTK style sheet load
 //! through gdk-pixbuf's loaders, which may not read SVG, so no image is
 //! used.
+//!
+//! A menu's items sit in a scrolled window, which is never shorter than its
+//! vertical scrollbar, shown or not. GTK's theme gives the slider 40px (44
+//! with its margins), more than a menu of one item (40), which then had
+//! more room below its item than above; a shorter slider keeps the
+//! scrollbar out of the menu's height.
 
-use nsh_core::{Hsla, Rgba, element::Tokens};
+use nsh_core::{
+    Hsla, Rgba,
+    element::{Role, Tokens},
+};
 
-/// The default theme's colors (`nsh-base`'s, neutral): `(token, light,
+/// The default theme's colors (`nsh-base`'s, neutral): `(role, light,
 /// dark)`.
-const DEFAULTS: [(&str, u32, u32); 6] = [
-    ("popover", 0xffffff, 0x0a0a0a),
-    ("popover-foreground", 0x0a0a0a, 0xfafafa),
-    ("accent", 0xf5f5f5, 0x262626),
-    ("accent-foreground", 0x171717, 0xfafafa),
-    ("muted-foreground", 0x737373, 0xa3a3a3),
-    ("border", 0xe5e5e5, 0x262626),
+const DEFAULTS: [(Role, u32, u32); 6] = [
+    (Role::Popover, 0xffffff, 0x0a0a0a),
+    (Role::PopoverForeground, 0x0a0a0a, 0xfafafa),
+    (Role::Accent, 0xf5f5f5, 0x262626),
+    (Role::AccentForeground, 0x171717, 0xfafafa),
+    (Role::MutedForeground, 0x737373, 0xa3a3a3),
+    (Role::Border, 0xe5e5e5, 0x262626),
 ];
 
 /// The menus' style sheet for `tokens`.
@@ -39,17 +48,17 @@ pub(crate) fn css(tokens: &Tokens) -> String {
     let mut out = String::from(SHAPE);
     for dark in [false, true] {
         let scope = if dark { ".nsh-dark " } else { "" };
-        let color = |name: &str| {
-            let (_, light, night) = DEFAULTS.iter().find(|(n, ..)| *n == name).unwrap();
+        let color = |role: Role| {
+            let (_, light, night) = DEFAULTS.iter().find(|(r, ..)| *r == role).unwrap();
             let fallback = if dark { *night } else { *light };
             tokens
-                .color(name)
+                .role_color(role)
                 .map(|c| css_color(if dark { c.dark } else { c.light }))
                 .unwrap_or_else(|| format!("#{fallback:06x}"))
         };
-        let (popover, foreground) = (color("popover"), color("popover-foreground"));
-        let (accent, accent_foreground) = (color("accent"), color("accent-foreground"));
-        let (muted, border) = (color("muted-foreground"), color("border"));
+        let (popover, foreground) = (color(Role::Popover), color(Role::PopoverForeground));
+        let (accent, accent_foreground) = (color(Role::Accent), color(Role::AccentForeground));
+        let (muted, border) = (color(Role::MutedForeground), color(Role::Border));
         out.push_str(&format!(
             "
 {scope}popover.menu > contents {{ background-color: {popover}; color: {foreground}; border-color: {border}; }}
@@ -78,6 +87,7 @@ popover.menu modelbutton {
 popover.menu modelbutton:disabled { filter: none; opacity: 1; }
 popover.menu modelbutton accelerator { margin-left: 24px; }
 popover.menu separator { min-height: 1px; margin: 4px -4px; }
+popover.menu > contents > scrolledwindow > scrollbar.vertical > range > trough > slider { min-height: 16px; }
 popover.menu modelbutton check, popover.menu modelbutton radio, popover.menu modelbutton arrow {
   -gtk-icon-source: none; background-image: none; background-color: transparent;
   border: 0 solid currentColor; border-radius: 0; box-shadow: none; outline: none;
@@ -110,10 +120,24 @@ fn css_color(color: Hsla) -> String {
 
 #[cfg(test)]
 mod tests {
-    use gtk4 as gtk;
+    use gtk4::{self as gtk, gdk, gio, prelude::*};
     use nsh_core::element::{AdaptiveColor, Tokens};
 
     use super::css;
+
+    /// A theme that maps a role onto a token of its own colors the menus
+    /// with that token.
+    #[test]
+    fn menu_style_reads_the_tokens_roles_map_onto() {
+        let mut tokens = Tokens::default();
+        tokens.set_color("surface-overlay", AdaptiveColor::rgb(0x123456, 0x654321));
+        let tokens = tokens.with_roles([(nsh_core::element::Role::Popover, "surface-overlay")]);
+        let sheet = css(&tokens);
+        assert!(sheet.contains("popover.menu > contents { background-color: rgba(18, 52, 86, 1);"));
+        assert!(sheet.contains(
+            ".nsh-dark popover.menu > contents { background-color: rgba(101, 67, 33, 1);"
+        ));
+    }
 
     /// The style sheet takes the app's colors, the default theme's where
     /// it has none, and GTK reads every rule of it (where a display can be
@@ -141,5 +165,48 @@ mod tests {
             provider.load_from_string(&sheet);
             assert!(errors.borrow().is_empty(), "{:?}", errors.borrow());
         });
+    }
+
+    /// A menu of one item is as tall as the item: the scrolled window
+    /// around the items is not held taller by its vertical scrollbar.
+    #[test]
+    fn one_item_menu_fits_its_item() {
+        crate::gtk_test::run(|| {
+            let display = gdk::Display::default().expect("a display");
+            let provider = gtk::CssProvider::new();
+            provider.load_from_string(&css(&Tokens::default()));
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            let model = gio::Menu::new();
+            model.append(Some("New folder"), Some("app.new-folder"));
+            let menu = gtk::PopoverMenu::from_model(Some(&model));
+            let scrolled = scrolled_window(menu.upcast_ref()).expect("the menu's scrolled window");
+            // The window takes its items' natural height
+            // (`propagate-natural-height`), unless its scrollbar needs more.
+            let (_, window, ..) = scrolled.measure(gtk::Orientation::Vertical, -1);
+            let (_, items, ..) = scrolled
+                .child()
+                .expect("the items")
+                .measure(gtk::Orientation::Vertical, -1);
+            gtk::style_context_remove_provider_for_display(&display, &provider);
+            assert_eq!(window, items);
+        });
+    }
+
+    fn scrolled_window(widget: &gtk::Widget) -> Option<gtk::ScrolledWindow> {
+        if let Some(scrolled) = widget.downcast_ref::<gtk::ScrolledWindow>() {
+            return Some(scrolled.clone());
+        }
+        let mut child = widget.first_child();
+        while let Some(widget) = child {
+            if let Some(found) = scrolled_window(&widget) {
+                return Some(found);
+            }
+            child = widget.next_sibling();
+        }
+        None
     }
 }

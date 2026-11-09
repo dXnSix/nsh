@@ -270,7 +270,7 @@ try app.setThemeOverrides("""
 try app.loadBundle(at: url)
 ```
 
-在加载之前或之后调用都可以：`bg-primary`、`rounded-(--radius)` 等类名立即更新样式，之后加载的每个应用在第一帧就带有这些覆盖。`setThemeOverrides(nil)` 恢复应用自己的主题。
+在加载之前或之后调用都可以：`bg-primary`、`rounded-(--radius)` 等类名立即更新样式，之后加载的每个应用在第一帧就带有这些覆盖。`setThemeOverrides(nil)` 恢复应用自己的主题。应用用它自己的主题读取器读取这个文件，所以文件没有设置的 `var(--name)` 取默认主题中该令牌的值。
 
 ## 应用打开的链接
 
@@ -286,27 +286,6 @@ app.onOpenURL = { url in
     return false
 }
 ```
-
-## 应用的位置
-
-应用的[位置](./navigation.md#位置)是用户在应用中所处的地方，以从应用 base 起的路径表示，例如 `/sports/football?tab=live`。`location` 用来设置和读取它：在加载之前设置，就是应用启动时所在的位置；在应用运行时设置，会把应用带到那里，应用中的 [`location()`](../modules/nsh.md#location) 随之改变，宿主应用处理过的深度链接就这样打开它的页面。`onNavigate` 在主线程按顺序收到应用的每一次 [`navigate`](../modules/nsh.md#navigate)，参数是新的位置和 `replace`（`history: "replace"` 时为 `true`）。
-
-```swift
-// 加载之前：应用启动时所在的位置，例如用户上次离开的地方。
-app.location = UserDefaults.standard.string(forKey: "sports.location") ?? "/"
-try app.loadBundle(at: url)
-
-// 应用的每一次 `navigate`，在主线程调用。
-app.onNavigate = { location, replace in
-    UserDefaults.standard.set(location, forKey: "sports.location")
-    analytics.screen(location, replaced: replace)
-}
-
-// 之后：宿主应用处理过的深度链接在运行中的应用里打开它的页面。
-app.location = "/sports/football?tab=live"
-```
-
-读取 `location` 得到宿主应用设置的位置和应用导航到的位置中最新的一个，并按 URL 的规则规范化（`/a/../b` 读作 `/b`）；视图之后加载的应用从这里启动。`onNavigate` 收到的是应用自己的移动，宿主应用设置的位置只交给应用。不是从应用 base 起的路径的值（`https://…`、缺少开头 `/` 的 `sports`）会被忽略，并在日志中记录一条警告，应用停留在原处。
 
 ## 限制
 

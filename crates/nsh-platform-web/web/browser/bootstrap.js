@@ -4846,7 +4846,7 @@
 //#endregion
 //#region ../nsh-platform-web/web/browser/navigation.js
 	function createNavigation(reactive, dom, environment, animation) {
-		const { signal, computed, untracked, split, batch } = reactive;
+		const { signal, computed, effect, untracked, split, batch } = reactive;
 		const rt = dom.rt, pages = /* @__PURE__ */ new WeakSet(), popped = /* @__PURE__ */ new WeakMap();
 		const except = (props, keys) => split(props, keys)[1];
 		function createNavStack(routes) {
@@ -4953,7 +4953,20 @@
 		}
 		function NavStack(props) {
 			const node = rt.element("stack");
-			rt.spread(node, except(props, ["state", "children"]));
+			rt.spread(node, except(props, [
+				"state",
+				"children",
+				"onChange"
+			]));
+			let started = false;
+			effect(() => {
+				const routes = props.state.routes();
+				if (!started) {
+					started = true;
+					return;
+				}
+				untracked(() => props.onChange?.({ routes }));
+			});
 			const entries = props.state.__nshEntries;
 			const rows = rt.each(entries, (read, index) => {
 				const entry = untracked(read);
@@ -5180,28 +5193,6 @@
 			}
 		}).map(([name, value]) => [name, reactive.signal(value)]));
 		const tokens = reactive.signal(0);
-		const locationOf = (url) => {
-			const hashAt = url.indexOf("#");
-			const beforeHash = hashAt < 0 ? url : url.slice(0, hashAt);
-			const queryAt = beforeHash.indexOf("?");
-			return Object.freeze({
-				url,
-				pathname: queryAt < 0 ? beforeHash : beforeHash.slice(0, queryAt),
-				search: queryAt < 0 ? "" : beforeHash.slice(queryAt),
-				hash: hashAt < 0 ? "" : url.slice(hashAt)
-			});
-		};
-		const location = reactive.signal(locationOf("/"));
-		const setLocation = (url) => {
-			if (reactive.untracked(location).url !== url) location.set(locationOf(url));
-		};
-		const navigate = (url, options) => {
-			if (typeof url !== "string") throw new TypeError("navigate: expected a URL string");
-			if (options !== void 0 && (options === null || typeof options !== "object")) throw new TypeError("navigate: options are an object");
-			const history = options?.history;
-			if (history !== void 0 && history !== "push" && history !== "replace") throw new TypeError("navigate: history is \"push\" or \"replace\"");
-			setLocation(invoke(409, [url, history === "replace"]));
-		};
 		const insets = reactive.context(() => fields.safeArea());
 		const platform = {
 			os: "web",
@@ -5232,8 +5223,6 @@
 			pixelRatio: () => fields.pixelRatio(),
 			locale: () => fields.locale(),
 			localeSettings: () => fields.localeSettings(),
-			location: () => location(),
-			navigate,
 			lifecycle: () => fields.lifecycle(),
 			platform,
 			fpsEnabled: () => false
@@ -5256,6 +5245,14 @@
 				},
 				setTheme(theme) {
 					invoke(406, [theme]);
+					tokens.update((value) => value + 1);
+				},
+				updateTheme(theme) {
+					invoke(409, [theme]);
+					tokens.update((value) => value + 1);
+				},
+				resetTheme(names) {
+					invoke(410, [names]);
 					tokens.update((value) => value + 1);
 				}
 			},
@@ -5284,7 +5281,6 @@
 			changedTokens() {
 				tokens.update((value) => value + 1);
 			},
-			setLocation,
 			showLocale(tag) {
 				reactive.batch(() => {
 					const settings = reactive.untracked(fields.localeSettings);
@@ -6046,10 +6042,39 @@
 	}
 
 //#endregion
+//#region ../nsh-platform-web/web/browser/address.js
+/** `nsh_core::url_scheme::MAX_URL_LEN`, in UTF-8 bytes. */
+	const MAX_ADDRESS_BYTES = 16384;
+	/** What `nsh_core::url_scheme::check_address` refuses: Rust's
+	* `char::is_whitespace` (White_Space) and `char::is_control` (Cc). */
+	const NOT_IN_AN_ADDRESS = /[\p{White_Space}\p{Cc}]/u;
+	/**
+	* Makes `urlScheme`'s `setUrl` (`nsh`'s `UrlScheme`) the page's. `page`:
+	* `base()`, what `history.replaceState` resolves against (the page's
+	* `document.baseURI`); `origin`, the page's. `url()` reads the core's
+	* address as it is, which has the page's from before the app's code runs.
+	*/
+	function configureAddress(urlScheme, page) {
+		const { setUrl } = urlScheme;
+		urlScheme.setUrl = (to) => {
+			if (typeof to !== "string" || NOT_IN_AN_ADDRESS.test(to) || new TextEncoder().encode(to).length > MAX_ADDRESS_BYTES) return setUrl(to);
+			let resolved;
+			try {
+				resolved = new URL(to, page.base());
+			} catch {
+				throw new TypeError(`UrlScheme.setUrl: not a URL: ${to}`);
+			}
+			if (resolved.origin !== page.origin) throw new TypeError(`UrlScheme.setUrl: ${resolved.href} is not of the page's origin`);
+			setUrl(resolved.href);
+		};
+	}
+
+//#endregion
 //#region ../nsh-platform-web/web/browser/scope.js
 	var scope_exports = /* @__PURE__ */ __exportAll({
 		Values: () => Values,
 		configureAPIs: () => configureAPIs,
+		configureAddress: () => configureAddress,
 		createAnimation: () => createAnimation,
 		createCanvas: () => createCanvas,
 		createComponents: () => createComponents,

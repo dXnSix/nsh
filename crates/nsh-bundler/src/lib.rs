@@ -32,7 +32,9 @@ pub use minify::minify_module;
 #[cfg(feature = "bundle")]
 pub use natives::{Imported, NativeUse};
 #[cfg(feature = "bundle")]
-pub use types::{TSCONFIG, TSCONFIG_BASE, tokens_declaration, type_definitions};
+pub use types::{
+    TSCONFIG, TSCONFIG_BASE, tokens_declaration, tokens_declaration_of, type_definitions,
+};
 
 /// Compiles one module (TSX, JSX, TS or JS, as `name`'s extension says) to
 /// the ES module the runtime runs: TypeScript removed, JSX compiled, imports

@@ -555,18 +555,17 @@ impl Session {
             },
             ui_sets: self.run.ui_sets.clone(),
             clock,
-            host: {
-                // Where the app starts: the embedding app's location.
-                if let Some(location) = &launch.location {
-                    let _ = launch.host.set_location(location.as_str());
-                }
-                launch.host
-            },
+            host: launch.host,
             ..default
         };
         settings.apply(&mut config.environment);
-        let mut app = Headless::start(config)
-            .map_err(|e| format!("open({entry:?}): the engine did not start: {e}"))?;
+        // The link that launched it, there before the app's code runs.
+        let started = match &launch.url_scheme {
+            Some(url) => Headless::start_with_link(config, url),
+            None => Headless::start(config),
+        };
+        let mut app =
+            started.map_err(|e| format!("open({entry:?}): the engine did not start: {e}"))?;
         if let Some(host) = page_host {
             host.attach(app.engine().control());
             app.on_host_call(move |id, name, args| host.call(id, name, args));
@@ -587,10 +586,6 @@ impl Session {
         app.answer_dialogs_myself();
         app.answer_picks_myself();
         app.set_clipboard(launch.clipboard);
-        // The link that launched it, there before the app listens.
-        if let Some(url) = &launch.url_scheme {
-            app.send_url_scheme(url);
-        }
         app.step(format!("open({})", shown.display()));
         app.first_render()?;
         let app: OpenApp = Arc::new(Mutex::new(Some(Box::new(app))));
@@ -635,7 +630,6 @@ impl Session {
         environment.first_day_of_week = settings.first_day_of_week.map(|d| d.number());
         environment.measurement_system = settings.measurement_system.map(|s| s.name().to_owned());
         environment.temperature_unit = settings.temperature_unit.map(|u| u.name().to_owned());
-        environment.location = launch.location.as_ref().map(|l| l.as_str().to_owned());
         environment.reduced_motion = launch.reduced_motion;
         environment.safe_area = launch.safe_area.map(|safe_area| {
             [
@@ -1165,7 +1159,6 @@ mod tests {
             color_scheme: None,
             locale: None,
             locale_settings: Default::default(),
-            location: None,
             reduced_motion: None,
             platform: None,
             clock: None,

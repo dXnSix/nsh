@@ -130,7 +130,7 @@ pub struct AppOptions {
     pub components: crate::native::Components,
     /// The app's appearance until it sets one (`nsh.json` `"appearance"`).
     pub appearance: Appearance,
-    /// Log frame statistics once a second (`nsh::perf fps …`): see
+    /// Log frame statistics once a second (`nsh::fps fps …`): see
     /// [`AppView::set_fps_monitor`].
     pub fps: bool,
     /// The VM limits of the apps it runs: [`Limits::default`] (an app
@@ -490,6 +490,7 @@ impl AppView {
     /// at once to what runs and to every app loaded later, from its first
     /// frame on.
     pub fn set_theme(&self, theme: Option<Theme>, cx: &mut GpuiApp) {
+        *self.surface.host_overrides.borrow_mut() = None;
         *self.surface.host_theme.borrow_mut() = theme.clone();
         self.surface
             .control(|c| c.set_tokens(theme.map(Theme::into_tokens)));
@@ -503,6 +504,33 @@ impl AppView {
     pub fn set_theme_json(&self, json: &str, cx: &mut GpuiApp) -> Result<(), ThemeError> {
         let theme = Theme::from_json(json)?;
         self.set_theme(Some(theme), cx);
+        Ok(())
+    }
+
+    /// The embedding app's theme overrides, as the other platforms'
+    /// `AppView`s take them: a theme file of shadcn/ui's whose tokens win
+    /// over the app's of the same names, light and dark, while the app's
+    /// others stay. The engine reads it with the app's UI sets against their
+    /// default tokens (a `var()` it does not set names the default theme's
+    /// token). The surface keeps its own background. `None` gives the app
+    /// its own theme back. Fails, changing nothing, on text that is not
+    /// JSON.
+    pub fn set_theme_overrides(
+        &self,
+        json: Option<&str>,
+        cx: &mut GpuiApp,
+    ) -> Result<(), ThemeError> {
+        if let Some(json) = json {
+            nsh_core::element::theme_file::check(json).map_err(ThemeError)?;
+        }
+        *self.surface.host_theme.borrow_mut() = None;
+        *self.surface.host_overrides.borrow_mut() = json.map(str::to_owned);
+        self.surface.control(|c| match json {
+            Some(json) => c.set_theme_overrides(json),
+            None => c.set_tokens(None),
+        });
+        self.surface.invalidate();
+        crate::rt::flush(cx);
         Ok(())
     }
 
@@ -549,7 +577,7 @@ impl AppView {
         crate::rt::flush(cx);
     }
 
-    /// Logs the surface's frame statistics once a second (`nsh::perf fps
+    /// Logs the surface's frame statistics once a second (`nsh::fps fps
     /// …`: frames drawn, their gaps, the main thread's tick and paint, what
     /// made GPUI draw), or stops.
     pub fn set_fps_monitor(&self, on: bool) {
@@ -587,7 +615,7 @@ impl AppView {
         cx: &mut Context<Self>,
     ) {
         let (x, y) = self.root_point(event.event.position);
-        crate::file_drop::update(&self.surface, x, y);
+        crate::file_drop::update(&self.surface, x, y, event.drag(cx).paths());
         crate::rt::flush(cx);
     }
 

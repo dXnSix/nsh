@@ -7,7 +7,7 @@ group: platforms
 
 # Android
 
-NSH 应用在 Android 上用普通的 Android 视图和 `StaticLayout` 文本运行，要求 Android 9（API 28）及以上，支持 `arm64-v8a`、
+NSH 应用在 Android 上用普通的 Android 视图和 `StaticLayout` 文本运行，要求 Android 8（API 26）及以上，支持 `arm64-v8a`、
 `armeabi-v7a` 和 `x86_64`。用 Rust 和 TSX 编写的完整应用，运行和打包方式与其他平台相同；现有应用也可以在 `NshView` 中嵌入模块，加载它下载的签名包，并按自己设定的限制和能力运行它们。在
 Android 上，`os()` 是 `Os::Android`（TSX 中 `platform.os` 是 `"android"`），TSX 的 `android={{…}}` 属性生效。
 
@@ -84,7 +84,7 @@ dist/nsh/embed/android/nsh-dev.aar   also connects to a `nsh dev` server
 
 AAR 包含 Java 运行时以及适用于 `arm64-v8a`、`armeabi-v7a` 和 `x86_64` 的 `libnsh.so`，库中带有符号：应用的 Gradle
 构建在打包时去除符号，并保留它们用于崩溃报告。它声明了 `INTERNET`
-权限，要求 **API 28**（Android 9）或更高版本。它自带 R8 规则（`proguard.txt`），开启混淆的构建会自动应用：原生库按名字
+权限，要求 **API 26**（Android 8）或更高版本。它自带 R8 规则（`proguard.txt`），开启混淆的构建会自动应用：原生库按名字
 查找运行时的类，因此 `com.longbridge.nsh` 保持原样。
 
 把它加入应用模块，例如从 `libs` 文件夹引入：
@@ -191,9 +191,6 @@ setContentView(column);
 | `setParams(Object params)` | 之后加载的应用的启动参数（`Map` 或 `JSONObject`）：应用在启动时以 `host.params` 读取（[`host`](../modules/nsh.md#host)）。不是 JSON 对象时返回 `false`。 |
 | `send(String name, Object data)` | 向应用发送一个事件（`host.on(name, …)`）；应用开始监听前会一直保留，没有应用运行时留给下一个应用。可在任意线程调用；`destroy()` 后返回 `false`。 |
 | `handle(String name, HostHandler handler)` | 在 UI 线程处理应用对 `name` 的调用（`host.call`）和投递（`host.post`）；传 `null` 移除处理函数。处理函数通过它的 `NshHostReply` 在任意线程回答一次。 |
-| `setLocation(String location)` | 应用所在的[位置](#应用的位置)：从应用 base 起的路径，即应用启动时所在的位置，或在应用运行时它要前往的位置。可在任意线程调用；不是这样的路径时返回 `false`。 |
-| `getLocation()` | 应用当前所在的位置：`setLocation` 和应用导航中最新的一个，在此之前为 `/`。可在任意线程调用。 |
-| `setNavigateHandler(NavigateHandler handler)` | 在 UI 线程收到应用的每一次 `navigate`，参数是位置以及它是否替换当前历史记录；传 `null` 移除处理函数。 |
 | `connectDevServer(String url)` | 开发用：从 `nsh dev` 服务器加载，每次修改后重新加载。使用 release 版 AAR 时返回 `false`。 |
 | `handleBack()` | 让应用处理返回键（关闭对话框、弹出页面、执行 `BackHandler` 监听器）；返回它是否处理了。 |
 | `destroy()` | 停止应用，并对它的每个原生组件调用 `destroy()`。此后该视图不能再使用。 |
@@ -260,7 +257,7 @@ nsh.setThemeOverrides("{ \"cssVars\": {"
 nsh.loadAssetBundle("orders");
 ```
 
-在加载之前或之后调用都可以：`bg-primary`、`rounded-(--radius)` 等类名立即更新样式，之后加载的每个应用在第一帧就带有这些覆盖。`setThemeOverrides(null)` 恢复应用自己的主题。
+在加载之前或之后调用都可以：`bg-primary`、`rounded-(--radius)` 等类名立即更新样式，之后加载的每个应用在第一帧就带有这些覆盖。`setThemeOverrides(null)` 恢复应用自己的主题。应用用它自己的主题读取器读取这个文件，所以文件没有设置的 `var(--name)` 取默认主题中该令牌的值。
 
 ## 应用打开的链接
 
@@ -277,30 +274,6 @@ nsh.setOpenUrlHandler(url -> {
     return false;
 });
 ```
-
-## 应用的位置
-
-应用的[位置](./navigation.md#位置)是用户在应用中所处的地方，以从应用 base 起的路径表示，例如 `/sports/football?tab=live`。`setLocation` 用来设置它：在加载之前调用，就是应用启动时所在的位置；在应用运行时调用，会把应用带到那里，应用中的 [`location()`](../modules/nsh.md#location) 随之改变，宿主应用处理过的 App Link 就这样打开它的页面。`setNavigateHandler` 在 UI 线程按顺序收到应用的每一次 [`navigate`](../modules/nsh.md#navigate)，参数是新的位置和 `replace`（`history: "replace"` 时为 `true`）。
-
-```java
-// 加载之前：应用启动时所在的位置，例如用户上次离开的地方。
-nsh.setLocation(prefs.getString("sports.location", "/"));
-nsh.loadAssetBundle("sports");
-
-// 应用的每一次 `navigate`，在 UI 线程调用。
-nsh.setNavigateHandler((location, replace) -> {
-    prefs.edit().putString("sports.location", location).apply();
-    analytics.screen(location, replace);
-});
-
-// 之后，在 onNewIntent 中：宿主应用处理过的 App Link 在运行中的应用里打开它的页面，
-// https://example.com/sports/football?tab=live 对应 /sports/football?tab=live。
-Uri link = intent.getData();
-String query = link.getEncodedQuery();
-nsh.setLocation(link.getEncodedPath() + (query == null ? "" : "?" + query));
-```
-
-`getLocation()` 返回宿主应用设置的位置和应用导航到的位置中最新的一个，并按 URL 的规则规范化（`/a/../b` 得到 `/b`）；视图之后加载的应用从这里启动。`setLocation` 和 `getLocation` 可在任意线程调用。导航处理函数收到的是应用自己的移动，宿主应用设置的位置只交给应用。值不是从应用 base 起的路径时（`https://…`、缺少开头 `/` 的 `sports`），`setLocation` 返回 `false`，应用停留在原处。
 
 ## 限制
 
@@ -375,9 +348,11 @@ adb reverse tcp:8790 tcp:8790
 
 - **返回键。** 当应用需要处理返回键时（有打开的对话框、有被推入的页面、有 `BackHandler` 监听器），`NshView`
   会自己接收返回键，否则交给 Activity。在 Android 13 及更高版本上设置了 `android:enableOnBackInvokedCallback="true"`
-  时，它注册一个 `OnBackInvokedCallback`；其他情况下（Android 12 及更早版本，或未开启该属性），它在 Activity 的
-  `onBackPressed` 之前接收返回键事件，因此也先于 AndroidX 的 `OnBackPressedDispatcher` 和 Fragment 的回调。无论在
-  Activity 还是 Fragment 中都无需手动转发。已经把返回键转发给 `handleBack()` 的宿主照常工作：一次按键只交给应用一次。
+  时，它注册一个 `OnBackInvokedCallback`；其他情况下（Android 9 到 12，或未开启该属性），它在 Activity 的
+  `onBackPressed` 之前接收返回键事件，因此也先于 AndroidX 的 `OnBackPressedDispatcher` 和 Fragment 的回调。这些版本上
+  无论在 Activity 还是 Fragment 中都无需手动转发。在 Android 8 上，由 Activity 把返回键交给视图：在 `onBackPressed` 中
+  写 `if (!nshView.handleBack()) super.onBackPressed();`。在所有版本上都把返回键转发给 `handleBack()` 的宿主照常工作：
+  一次按键只交给应用一次。
 
   如需在 Android 13+ 上支持预测性返回，请像打包出的 NSH 应用那样，在 `<application>` 上设置
   `android:enableOnBackInvokedCallback="true"`。
