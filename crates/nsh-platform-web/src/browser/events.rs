@@ -111,6 +111,13 @@ pub(super) fn payload(host: &Bindings, payload: &EventPayload) -> Result<Value, 
                 },
             ),
         ])?,
+        EventPayload::Wheel(w) => object([
+            ("position", point(w.position)?),
+            ("pagePosition", point(w.page_position)?),
+            ("delta", point(w.delta)?),
+            ("modifiers", modifiers(&w.modifiers)?),
+            ("precise", boolean(w.precise)),
+        ])?,
         EventPayload::ContextMenu(p) => object([
             ("position", point(p.position)?),
             ("pagePosition", point(p.page_position)?),

@@ -760,6 +760,14 @@ fn props_json(p: &ViewProps) -> String {
             n(a.fail_offset_y.map(|v| v.0))
         );
     }
+    // `nsh.js`'s `wheelListeners` reads it; the default is absent.
+    if p.wheel_scroll != nsh_core::WheelScroll::Auto {
+        let _ = write!(
+            s,
+            ",\"wheelScroll\":{}",
+            json_str(enum_name(&p.wheel_scroll))
+        );
+    }
     if let Some(l) = &a.label {
         let _ = write!(s, ",\"label\":{}", json_str(l));
     }
