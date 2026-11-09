@@ -62,6 +62,8 @@ public final class AppActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        // Finished while stopped, it was not paused finishing.
+        if (isFinishing()) view.willTerminate();
         view.destroy();
         super.onDestroy();
     }

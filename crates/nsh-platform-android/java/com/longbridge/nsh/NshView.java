@@ -847,6 +847,21 @@ public class NshView extends FrameLayout {
         }
     };
 
+    /**
+     * The app is about to terminate (its activity finishes): its terminate listeners run while this waits, two seconds
+     * at most, once; later calls do nothing.
+     */
+    void willTerminate() {
+        synchronized (hostLock) {
+            if (handle != 0) Native.willTerminate(handle);
+        }
+    }
+
+    /** The view's activity is finishing: the app ends with it. */
+    private void activityFinishing(Activity activity) {
+        if (activity == activity(getContext())) willTerminate();
+    }
+
     /** The view's activity reported `state` (`lifecycle()`'s values). */
     private void activityState(Activity activity, int state) {
         if (activity != activity(getContext()) || state == lifecycle) return;
@@ -880,6 +895,11 @@ public class NshView extends FrameLayout {
         private void state(Activity activity, int state) {
             states.put(activity, state);
             for (NshView view : new java.util.ArrayList<>(views)) view.activityState(activity, state);
+            // The earliest the system says the activity ends: it pauses
+            // (or stops) finishing, before its views are destroyed.
+            if (activity.isFinishing()) {
+                for (NshView view : new java.util.ArrayList<>(views)) view.activityFinishing(activity);
+            }
         }
 
         @Override public void onActivityResumed(Activity a) { state(a, 0); }
@@ -888,7 +908,13 @@ public class NshView extends FrameLayout {
         @Override public void onActivityStopped(Activity a) { state(a, 2); }
         @Override public void onActivityCreated(Activity a, android.os.Bundle b) {}
         @Override public void onActivitySaveInstanceState(Activity a, android.os.Bundle b) {}
-        @Override public void onActivityDestroyed(Activity a) { states.remove(a); }
+        @Override public void onActivityDestroyed(Activity a) {
+            // A view the activity destroys after `super.onDestroy()`.
+            if (a.isFinishing()) {
+                for (NshView view : new java.util.ArrayList<>(views)) view.activityFinishing(a);
+            }
+            states.remove(a);
+        }
     }
 
     private android.view.accessibility.AccessibilityManager accessibility() {

@@ -103,6 +103,9 @@ final class Native {
 
     static native void destroy(long handle);
 
+    /** The app is about to terminate: its terminate listeners run while this waits (two seconds at most). */
+    static native void willTerminate(long handle);
+
     /** What loaded apps are granted at most (capabilities JSON; null: no ceiling); false if invalid. */
     static native boolean setGranted(long handle, String capabilities);
 
