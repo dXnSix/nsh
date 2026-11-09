@@ -99,11 +99,7 @@ fn declared_names(
     let mut left_out = Vec::new();
     let mut kept = Vec::new();
     // The roles the types map onto tokens of other names.
-    let renamed: Vec<(&str, &str)> = super::Role::ALL
-        .iter()
-        .filter_map(|role| Some((role.name(), set.target(role.name())?)))
-        .filter(|(role, name)| role != name)
-        .collect();
+    let renamed: Vec<(&str, &str)> = set.renamed_roles().collect();
     if let Some(vars) = value.get_mut("cssVars").and_then(JsonValue::as_object_mut) {
         for section in ["theme", "light", "dark"] {
             let Some(JsonValue::Object(fields)) = vars.get_mut(section) else {

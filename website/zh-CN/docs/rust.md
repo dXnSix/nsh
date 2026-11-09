@@ -683,13 +683,15 @@ reset_theme::<DsTheme>(); // 恢复应用的 action
   `let mut t = (*theme_of::<DsTheme>()).clone(); t.action = red; set_theme(t);`。被它改变的数字，以及补丁设置的数字，
   在两种外观下都是这个值；要再给它一个深色值，使用 `Tokens::set_dark_number` 和 `update_tokens`。
 
-**角色。** NSH 自己的部分用角色绘制（`Role`：`popover`、`primary`、`border`、`radius`、`font-sans` 等；
-[主题角色](../modules/nsh-base.md#theme-roles)）。类型用 `TokenSpec::role` 把角色映射到自己的令牌上，于是 `nsh_base` 的 `theme()`
+**角色。** NSH 自己的部分用角色绘制，角色是用它绘制的 crate 里的常量（`nsh_base::role`：`POPOVER`、`PRIMARY`、`BORDER`、`RADIUS`、
+`FONT_SANS` 等；[主题角色](../modules/nsh-base.md#theme-roles)），有自己组件的 crate 用同样的方式声明自己的角色
+（`pub const BANNER: Role = Role::new("banner");`）。类型用 `TokenSpec::role` 把角色映射到自己的令牌上，颜色令牌担任颜色的角色，
+数字担任数字的，字体担任字体的，于是 `nsh_base` 的 `theme()`
 字段和组件、标签栏、各平台的菜单和提示框，以及默认字体，都用该类型的令牌绘制：上例中 `theme().popover` 是设计系统的
-`surface-overlay`，`theme().primary` 是它的 `action`。一个令牌可以担任多个角色（`.role(Role::Card).role(Role::Popover)`）：
+`surface-overlay`，`theme().primary` 是它的 `action`。一个令牌可以担任多个角色（`.role(role::CARD).role(role::POPOVER)`）：
 卡片和弹出层共用一个表面的设计系统把两个角色都映射到它上面，它每次变化两者都会跟随。一个角色只由一个令牌担任。
 
-**名称。** 令牌的名称说明它的类型，就像 CSS 变量的名称一样：字体的名称以 `font-` 开头，阴影的以 `shadow-` 开头，字重的以 `font-weight-` 开头，其他类型的名称都不以 `font-` 开头。注册一个名称与类型不符、或重复声明同一名称或重复映射同一角色的类型会 panic。
+**名称。** 令牌的名称说明它的类型，就像 CSS 变量的名称一样：字体的名称以 `font-` 开头，阴影的以 `shadow-` 开头，字重的以 `font-weight-` 开头，其他类型的名称都不以 `font-` 开头。注册一个名称与类型不符、重复声明同一名称或重复映射同一角色、或其令牌担任另一种类的角色的类型会 panic。
 
 **多个类型。** 设计系统的 crate 和应用的 crate 各自注册自己的类型：设计系统的令牌，以及应用在其旁边的自有令牌（例如投注应用的
 `odds-up`）。每个类型用 `theme_of` 读取自己的令牌，所有已注册类型的名称合并成一个主题。两个类型声明同一个令牌名称或映射同一个角色时，

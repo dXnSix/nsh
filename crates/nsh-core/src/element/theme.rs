@@ -19,7 +19,7 @@ use std::{
 
 use rustc_hash::FxHashMap;
 
-use super::{Role, Tokens};
+use super::{AnyRole, Role, RoleKind, RoleValue, Tokens};
 
 /// A theme type: design tokens as the fields of a Rust type. Its token
 /// names are [`AppTheme::token_specs`]'; a field of a nested type is that
@@ -336,10 +336,10 @@ pub struct TokenSpec {
     pub kind: TokenKind,
     /// Its doc comment (the field's), for the toolchain's declarations.
     pub doc: &'static str,
-    /// The roles it plays (`Role::Popover`), if any. A design system with
+    /// The roles it plays (`role::POPOVER`), if any. A design system with
     /// one surface for cards and popovers has one token play both, so both
     /// follow every change of it; a role is played by one token.
-    pub roles: Vec<Role>,
+    pub roles: Vec<AnyRole>,
 }
 
 impl TokenSpec {
@@ -359,8 +359,12 @@ impl TokenSpec {
         self
     }
 
-    /// Playing `role`, beside the roles it plays already.
-    pub fn role(mut self, role: Role) -> Self {
+    /// Playing `role`, beside the roles it plays already. The role reads
+    /// what the token holds: a color token plays a [`Role`], a number a
+    /// [`super::NumberRole`], a font a [`super::FontRole`] (registering a
+    /// type whose token plays a role of another kind panics).
+    pub fn role<V: RoleValue>(mut self, role: Role<V>) -> Self {
+        let role = AnyRole::from(role);
         if !self.roles.contains(&role) {
             self.roles.push(role);
         }
@@ -431,6 +435,17 @@ impl TokenKind {
             "shadow" => TokenKind::Shadow,
             _ => return None,
         })
+    }
+
+    /// What a role its token plays reads (`None`: no role reads box
+    /// shadows).
+    pub(crate) fn role_kind(self) -> Option<RoleKind> {
+        match self {
+            TokenKind::Color => Some(RoleKind::Color),
+            TokenKind::Font => Some(RoleKind::Font),
+            TokenKind::Shadow => None,
+            _ => Some(RoleKind::Number),
+        }
     }
 
     /// Whether its value is a number token.
@@ -532,10 +547,14 @@ impl std::fmt::Debug for ThemeSpec {
 }
 
 /// The roles `specs` map, onto their names.
-fn roles_of(specs: &[TokenSpec]) -> Vec<(Role, Box<str>)> {
+fn roles_of(specs: &[TokenSpec]) -> Vec<(AnyRole, Box<str>)> {
     specs
         .iter()
-        .flat_map(|s| s.roles.iter().map(|role| (*role, s.name.as_ref().into())))
+        .flat_map(|s| {
+            s.roles
+                .iter()
+                .map(|role| (role.clone(), s.name.as_ref().into()))
+        })
         .collect()
 }
 
@@ -587,7 +606,7 @@ impl ThemeSet {
     pub(crate) fn try_add<'a>(
         &mut self,
         type_name: &str,
-        tokens: impl IntoIterator<Item = (&'a str, TokenKind, &'a [Role])>,
+        tokens: impl IntoIterator<Item = (&'a str, TokenKind, &'a [AnyRole])>,
         defaults: Tokens,
     ) -> Result<(), String> {
         if self.types.iter().any(|t| **t == *type_name) {
@@ -628,19 +647,34 @@ impl ThemeSet {
                 if plays[..j].contains(role) {
                     continue;
                 }
-                if tokens[..i].iter().any(|(_, _, r)| r.contains(role)) {
+                // A role reads what its token holds.
+                if kind.role_kind() != Some(role.kind()) {
+                    return Err(format!(
+                        "`{type_name}`: the role `{}` reads {}, and `{name}` is a {} token",
+                        role.name(),
+                        match role.kind() {
+                            RoleKind::Color => "a color",
+                            RoleKind::Number => "a number",
+                            RoleKind::Font => "a font family",
+                        },
+                        kind.name()
+                    ));
+                }
+                // By name: a role is its name, whoever declares it.
+                let named = |r: &AnyRole| r.name() == role.name();
+                if tokens[..i].iter().any(|(_, _, r)| r.iter().any(named)) {
                     return Err(format!(
                         "`{type_name}` maps the role `{}` twice",
                         role.name()
                     ));
                 }
-                if let Some(owner) = self.role_owner(*role) {
+                if let Some(owner) = self.role_owner(role.name()) {
                     return Err(format!(
                         "the role `{}` is mapped by both `{owner}` and `{type_name}`",
                         role.name()
                     ));
                 }
-                roles.push((*role, Box::<str>::from(*name)));
+                roles.push((role.clone(), Box::<str>::from(*name)));
             }
         }
         for (name, kind, _) in tokens {
@@ -651,13 +685,20 @@ impl ThemeSet {
         Ok(())
     }
 
-    /// The type mapping `role`, if any.
-    fn role_owner(&self, role: Role) -> Option<&str> {
+    /// The type mapping the role named `role`, if any.
+    fn role_owner(&self, role: &str) -> Option<&str> {
+        self.defaults
+            .mapped(role)
+            .and_then(|name| self.names.get(name))
+            .map(|(owner, _)| &**owner)
+    }
+
+    /// Each role the types map onto a token of another name: the role's
+    /// name and the token's.
+    pub(crate) fn renamed_roles(&self) -> impl Iterator<Item = (&str, &str)> {
         self.defaults
             .roles()
-            .find(|(r, _)| *r == role)
-            .and_then(|(_, name)| self.names.get(name))
-            .map(|(owner, _)| &**owner)
+            .filter(|(role, token)| role != token && self.names.contains_key(*token))
     }
 
     /// Each declared name, with its owner type and kind.
@@ -673,8 +714,9 @@ impl ThemeSet {
         if self.names.contains_key(key) {
             return Some(key);
         }
-        let role = Role::from_name(key)?;
-        Some(self.defaults.role_name(role)).filter(|name| self.names.contains_key(*name))
+        self.defaults
+            .mapped(key)
+            .filter(|name| self.names.contains_key(*name))
     }
 }
 
