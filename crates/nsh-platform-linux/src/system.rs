@@ -187,6 +187,9 @@ struct System {
     overlays: Vec<Overlay>,
     /// The menus' style sheet, in the app's colors ([`crate::menu_style`]).
     menu_style: Option<gtk::CssProvider>,
+    /// The application whose `shutdown` ends the surfaces' apps
+    /// ([`watch_shutdown`]).
+    application: Option<glib::WeakRef<gio::Application>>,
 }
 
 thread_local! {
@@ -245,7 +248,10 @@ pub(crate) fn watch_environment(surface: &Rc<Surface>) {
         if let Some(surface) = weak.upgrade() {
             update(&surface, appearance());
         }
+        // An application made after the surface: its window's.
+        watch_shutdown();
     });
+    watch_shutdown();
     surface.root.connect_map(|_| lifecycle_changed());
     surface.root.connect_unmap(|_| lifecycle_changed());
     update(surface, appearance());
@@ -326,6 +332,36 @@ fn surfaces() -> Vec<Rc<Surface>> {
         s.surfaces.retain(|w| w.strong_count() > 0);
         s.surfaces.iter().filter_map(Weak::upgrade).collect()
     })
+}
+
+/// Ends the surfaces' apps as the thread's application (the standalone
+/// app's, or the embedding app's) shuts down: GApplication's `shutdown`,
+/// whose handlers run before GTK destroys the windows left, as `run`
+/// returns. Once per application.
+fn watch_shutdown() {
+    let Some(app) = gio::Application::default() else {
+        return;
+    };
+    let watched = SYSTEM.with(|s| {
+        s.borrow()
+            .application
+            .as_ref()
+            .and_then(glib::WeakRef::upgrade)
+            .is_some_and(|watched| watched == app)
+    });
+    if watched {
+        return;
+    }
+    app.connect_shutdown(|_| will_terminate());
+    SYSTEM.with(|s| s.borrow_mut().application = Some(app.downgrade()));
+}
+
+/// The app is about to terminate: every surface's app runs its terminate
+/// listeners, each waited for [`nsh_engine::TERMINATE_TIMEOUT`] at most.
+fn will_terminate() {
+    for surface in surfaces() {
+        surface.will_terminate();
+    }
 }
 
 /// A system setting changed: tells every surface.

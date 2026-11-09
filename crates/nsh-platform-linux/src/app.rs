@@ -660,11 +660,13 @@ fn install_shortcuts(app: &gtk::Application, window: &gtk::ApplicationWindow) {
     app.set_accels_for_action("win.fullscreen", &["F11"]);
 }
 
-/// Ties `view` to `window`'s lifetime.
+/// Ties `view` to `window`'s lifetime: the app ends with its main window,
+/// after its terminate listeners ran.
 fn unsafe_keep(window: &gtk::ApplicationWindow, view: Rc<AppView>) {
     let cell = RefCell::new(Some(view));
     window.connect_destroy(move |_| {
         if let Some(view) = cell.borrow_mut().take() {
+            view.surface.will_terminate();
             view.stop();
         }
     });
