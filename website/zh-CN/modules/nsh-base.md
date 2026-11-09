@@ -295,9 +295,11 @@ NSH 自己绘制的部分通过**角色**读取主题：`theme()` 的各个字�
 | `font-sans` | 所有文本的默认字体；`theme().font_sans` |
 | `font-mono` | `theme().font_mono` |
 
-角色不是 token，也不是类名：主题有名为 `primary` 的 token 时，`bg-primary` 才是一个类名。在 Rust 中，角色是
-`nsh_core::element::Role`（`Role::Popover.name()` 为 `"popover"`），`Tokens::with_roles` 把角色映射到 token
-（`tokens.with_roles([(Role::Popover, "surface-overlay")])`），之后 `tokens.role_color(Role::Popover)` 读取它。
+角色不是 token，也不是类名：主题有名为 `primary` 的 token 时，`bg-primary` 才是一个类名。在 Rust 中，角色是一个常量，类型为
+`nsh_core::element::Role`：上表中的角色在 `nsh_base::role` 里（`role::POPOVER.name()` 为 `"popover"`，`role::RADIUS`
+读取数字，`role::FONT_SANS` 读取字体族）。`Tokens::with_role` 把一个角色映射到 token
+（`tokens.with_role(role::POPOVER, "surface-overlay")`），之后 `tokens.role(role::POPOVER)` 读取它。有自己组件的 crate
+用同样的方式声明这些组件所用的角色（`pub const BANNER: Role = Role::new("banner");`）：角色就是它的名字，不论由谁声明。
 没有映射时，每个角色读取同名的 token，所以 shadcn 主题的显示与以往相同。只有应用有自己的主题时（`Tokens::is_themed`，由核心设置），
 各平台的控件才采用主题的颜色；使用默认主题的应用保留系统的提示框颜色。
 

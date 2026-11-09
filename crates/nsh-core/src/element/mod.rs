@@ -182,7 +182,10 @@ pub use self::{
         Quotas, RefuseConnections, Stop, System, codes, io_code,
     },
     task::{Answer, ClipboardImage, DialogAnswer, ImageSize, Task},
-    tokens::{FONT_MONO, FONT_SANS, Role, ThemeTokens, Token, TokenOverrides, TokenSource, Tokens},
+    tokens::{
+        AnyRole, FONT_MONO, FONT_SANS, FontRole, NumberRole, Role, RoleKind, RoleValue,
+        ThemeTokens, Token, TokenOverrides, TokenSource, Tokens, role,
+    },
     value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},
     virtual_list::{ListLayout, ViewableItems, VirtualList, virtual_list},
     watch::OrderWatch,
