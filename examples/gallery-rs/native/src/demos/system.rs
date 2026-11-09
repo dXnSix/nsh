@@ -7,7 +7,7 @@ use std::time::Duration;
 use nsh_base::{AlertDialogAction, AlertDialogOptions, alert_dialog, dialog};
 use nsh_core::{
     animation::{Curve, EaseMode},
-    element::AnyElement,
+    element::{AdaptiveShadow, AnyElement},
     keymap::When,
     prelude::*,
     time::Instant,
@@ -89,10 +89,10 @@ fn safe_area_diagram() -> AnyElement {
         .border_color(colors::BORDER)
         .bg(colors::SURFACE)
         .finish_fill(Finish::Card)
-        .adaptive_shadow(
+        .adaptive_shadow(AdaptiveShadow::new(
             [inset_shadow(1.0, 0.0, rgb(0xffffff))],
             [inset_shadow(1.0, 0.0, rgb_a(0xffffff, 0.06))],
-        )
+        ))
         .overflow_hidden()
         .child(view().h(move || band(safe_area().top.0)).bg(tints::INFO))
         .child(
