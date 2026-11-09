@@ -33827,11 +33827,12 @@ mod app_theme {
         assert_eq!(shown(&mut c).as_deref(), Some("333333ff 10 ff0000ff"));
     }
 
-    /// A number field is its token's light value: `set_theme` writes one
-    /// value, so a dark one the theme file gave goes; `update_theme` of
-    /// other fields keeps it.
+    /// A number field is its token's light value: `update_theme` of other
+    /// fields and `set_theme` with the number at its value keep a dark one
+    /// the theme file gave; `set_theme` with another value is both
+    /// appearances'.
     #[test]
-    fn a_number_field_is_the_light_value_and_set_theme_drops_the_dark_one() {
+    fn a_number_field_is_the_light_value_and_set_theme_keeps_the_dark_one_it_leaves() {
         let mut c = core();
         c.set_components(sets());
         apply(
@@ -33873,7 +33874,16 @@ mod app_theme {
         }))
         .unwrap();
         let _ = shown(&mut c);
-        assert_eq!(c.tokens().number_in("radius-card", true), Some(10.0));
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(6.0));
+        c.apply(call(|cx| {
+            cx.set_theme(Ds {
+                overlay: AdaptiveColor::rgb(0x444444, 0x444444),
+                card: 12.0,
+            })
+        }))
+        .unwrap();
+        let _ = shown(&mut c);
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(12.0));
     }
 
     /// Two cores (two surfaces) each read their own tokens.
