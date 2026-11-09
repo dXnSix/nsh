@@ -138,7 +138,9 @@ pub use self::{
         ScrollbarSource, declarations,
     },
     element_ref::{ComponentRef, ElementRef, FollowTarget},
-    engine_context::{EngineContext, EngineContextGuard, engine_context},
+    engine_context::{
+        EngineContext, EngineContextGuard, app_id, cache_dir, data_dir, engine_context,
+    },
     env::Environment,
     events::{
         CaretEvent, Composition, FileDropEvent, GestureEvent, HintReason, ImageProgress,

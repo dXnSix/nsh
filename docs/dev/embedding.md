@@ -332,7 +332,9 @@ NSH draws (`src/layers.rs`).
   package's id; `Root::app_id` in Rust apps' generated code). Platforms only give the data dir: the system's
   (`nsh_engine::data_dir()`) on the desktops (`AppOptions::data_dir` to change it), `Application Support/nsh` on iOS,
   `filesDir/nsh` on Android. `AppOptions::storage`, `NshAppView.storageDirectory` and `NshView.setStorageDirectory`
-  override one app's place; all from the next load.
+  override one app's place; all from the next load. The app's directory is its code's too: JS's `process.dataDir`,
+  Rust's `data_dir()`, with `app_id()` and `cache_dir()` (`<root>/<app id>` of the caches below), which the engine
+  puts in its `EngineContext` (`components.md`); the Rust ones are `None` on the web.
 - **Notifications.** The process's notifications (`nsh`'s `Notifications`) belong to the embedding app unless it
   hands them to the app it embeds: `AppOptions::notifications` on macOS and Windows (off by default; `run_app` sets
   it). Then the view's app owns them for the whole process: on macOS NSH becomes the notification center's delegate

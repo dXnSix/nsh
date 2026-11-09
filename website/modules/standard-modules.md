@@ -33,8 +33,8 @@ Rust code does the same work with Rust's standard library and crates.io, in the 
 | `zlib` | crates such as `flate2`, `brotli` and `zstd` |
 | `os` | `std::env::consts`, `os()` |
 | `console` | the `log` crate |
-| `fs/promises` | `std::fs` in `blocking(…)`; `Storage` for key-value data |
-| `process` | `std::process::Command` in `blocking(…)` |
+| `fs/promises` | `std::fs` in `blocking(…)`, in the app's `data_dir()` and `cache_dir()` ([The app's own files](../docs/rust.md#the-apps-own-files)); `Storage` for key-value data |
+| `process` | `std::process::Command` in `blocking(…)`; `data_dir()` for `process.dataDir` |
 | `net` | `std::net::TcpStream` in `blocking(…)`, or `tokio::net` in `background(…)` |
 | `websocket` | a crate such as `tokio-tungstenite` in `background(…)` |
 

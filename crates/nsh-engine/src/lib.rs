@@ -939,13 +939,16 @@ pub struct EngineConfig {
     pub runtime: Option<tokio::runtime::Handle>,
     /// Where apps keep their data: each app in `<data_dir>/<app id>`
     /// ([`App::app_id`]; `default` without one), its storage
-    /// (`nsh/storage`) in `storage.json` there. The platform's: the
+    /// (`nsh/storage`) in `storage.json` there; the app's code reads that
+    /// directory (JS's `process.dataDir`, Rust's
+    /// `nsh_core::element::data_dir` off WebAssembly). The platform's: the
     /// system's data directory ([`data_dir`]) for apps of their own,
     /// `…/nsh` in an embedding app's. `None`: nothing is kept.
     pub data_dir: Option<std::path::PathBuf>,
     /// Where the app's caches are kept and how much each keeps: the engine
-    /// opens them in `<root>/<app id>/<kind>` ([`Engine::image_cache`]).
-    /// [`EngineConfig::new`]: none.
+    /// opens them in `<root>/<app id>/<kind>` ([`Engine::image_cache`]), and
+    /// the app's Rust code reads `<root>/<app id>`
+    /// (`nsh_core::element::cache_dir`). [`EngineConfig::new`]: none.
     pub cache: CacheOptions,
     /// The app's storage, overriding the one [`EngineConfig::data_dir`]
     /// names (the browser's `localStorage`, an embedder's own); `None`
@@ -958,7 +961,10 @@ pub struct EngineConfig {
     /// What the host gives this engine's Rust code, which its UI sets'
     /// functions and components read while it runs them
     /// (`nsh_core::element::engine_context`): a host serving several engines
-    /// tells them apart by it.
+    /// tells them apart by it. The engine adds the app's id and its own
+    /// directories, from [`App::app_id`], [`EngineConfig::data_dir`] and
+    /// [`EngineConfig::cache`] (`nsh_core::element::app_id`, `data_dir`,
+    /// `cache_dir`).
     pub context: EngineContext,
     /// Values of the environment kept whatever the platform reports (a
     /// test's locale, reduced motion and safe area: `nsh test --target`).
@@ -1147,11 +1153,37 @@ fn app_storage(config: &EngineConfig) -> Option<Arc<dyn nsh_core::storage::Stora
         return Some(storage.clone());
     }
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(root) = &config.data_dir {
-        let dir = root.join(app_dir_name(config.app.app_id()));
+    if let Some(dir) = app_data_dir(config) {
         return Some(FileStorage::open(dir));
     }
     None
+}
+
+/// Makes `config`'s context the thread's for the engine's run, with what
+/// the app's Rust code reads of the app itself: its id and its own
+/// directories (`nsh_core::element::app_id`, `data_dir`, `cache_dir`).
+/// Rust code in WebAssembly has no files: the web's are the browser's,
+/// which JS's `fs` reaches through [`EngineConfig::filesystem`].
+fn enter_context(config: &mut EngineConfig) -> nsh_core::element::EngineContextGuard {
+    let id = config.app.app_id();
+    #[cfg(not(target_arch = "wasm32"))]
+    let (data_dir, cache_dir) = (app_data_dir(config), config.cache.app_dir(id));
+    #[cfg(target_arch = "wasm32")]
+    let (data_dir, cache_dir) = (None, None);
+    config.context = std::mem::take(&mut config.context)
+        .with_app_id(id.map(str::to_owned))
+        .with_data_dir(data_dir)
+        .with_cache_dir(cache_dir);
+    config.context.enter()
+}
+
+/// The data directory of the app `config` runs: its directory of
+/// [`EngineConfig::data_dir`], which its storage is in and its code reads
+/// (JS's `process.dataDir`, Rust's `nsh_core::element::data_dir`).
+#[cfg(any(not(target_arch = "wasm32"), feature = "js-core", feature = "browser"))]
+fn app_data_dir(config: &EngineConfig) -> Option<std::path::PathBuf> {
+    let root = config.data_dir.as_ref()?;
+    Some(root.join(app_dir_name(config.app.app_id())))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1593,7 +1625,7 @@ const RESIZE_BURST_GAP: Duration = Duration::from_millis(120);
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run<M: TextEngine + 'static, S: MountSink>(
-    config: EngineConfig,
+    mut config: EngineConfig,
     text_engine: M,
     sink: S,
     tx: Sender<Message>,
@@ -1603,7 +1635,7 @@ fn run<M: TextEngine + 'static, S: MountSink>(
     raise_thread_priority();
     // The thread's time is the engine's from its first line of JS on.
     let _clock = config.clock.enter();
-    let _context = config.context.enter();
+    let _context = enter_context(&mut config);
     let Some(mut driver) = Driver::start(config, text_engine, Rc::new(sink), tx, &rx, stop) else {
         return;
     };
@@ -1689,12 +1721,12 @@ pub struct LocalEngine<M: TextEngine + 'static> {
 impl<M: TextEngine + 'static> LocalEngine<M> {
     /// Starts the app (its first frame goes to `sink` before this returns);
     /// `None` if it could not start (reported to `sink`).
-    pub fn start<S: MountSink>(config: EngineConfig, text_engine: M, sink: S) -> Option<Self> {
+    pub fn start<S: MountSink>(mut config: EngineConfig, text_engine: M, sink: S) -> Option<Self> {
         let (tx, rx) = crossbeam_channel::unbounded();
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let control = EngineControl { tx: tx.clone() };
         let _clock = config.clock.enter();
-        let _context = config.context.enter();
+        let _context = enter_context(&mut config);
         let driver = Driver::start(config, text_engine, Rc::new(sink), tx, &rx, stop)?;
         Some(LocalEngine {
             driver: ManuallyDrop::new(driver),
@@ -2065,10 +2097,7 @@ impl<M: TextEngine + 'static> Driver<M> {
                             config.assets.clone(),
                             bundle,
                         ),
-                        data_dir: config
-                            .data_dir
-                            .as_ref()
-                            .map(|root| root.join(app_dir_name(config.app.app_id()))),
+                        data_dir: app_data_dir(&config),
                         paths: bundle_system_paths(bundle),
                         wake: Arc::new(move || {
                             let _ = system_tx.send(Message::Wake);

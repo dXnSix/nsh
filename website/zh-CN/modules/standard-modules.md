@@ -33,8 +33,8 @@ Rust 代码用 Rust 标准库和 crates.io 完成同样的工作，作为应用�
 | `zlib` | `flate2`、`brotli`、`zstd` 等 crate |
 | `os` | `std::env::consts`、`os()` |
 | `console` | `log` crate |
-| `fs/promises` | 在 `blocking(…)` 中使用 `std::fs`；键值数据用 `Storage` |
-| `process` | 在 `blocking(…)` 中使用 `std::process::Command` |
+| `fs/promises` | 在 `blocking(…)` 中使用 `std::fs`，读写应用的 `data_dir()` 和 `cache_dir()`（[应用自己的文件](../docs/rust.md#应用自己的文件)）；键值数据用 `Storage` |
+| `process` | 在 `blocking(…)` 中使用 `std::process::Command`；`process.dataDir` 对应 `data_dir()` |
 | `net` | 在 `blocking(…)` 中使用 `std::net::TcpStream`，或在 `background(…)` 中使用 `tokio::net` |
 | `websocket` | 在 `background(…)` 中使用 `tokio-tungstenite` 等 crate |
 

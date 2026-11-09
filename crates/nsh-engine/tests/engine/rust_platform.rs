@@ -1,10 +1,10 @@
 //! The platform's services for Rust components on the engine: the fonts
 //! the UI sets' crates ship are registered before the first render, tasks
 //! wait for display frames, components set the layout direction and read
-//! the pixel ratio, the device, the locale and whether the app is in use;
-//! they speak, move the screen reader and set the status bar with their
-//! dialogs; they read the desktop window's state, a move once it stops,
-//! and the displays.
+//! the pixel ratio, the device, the locale, whether the app is in use, the
+//! app's id and its own directories; they speak, move the screen reader
+//! and set the status bar with their dialogs; they read the desktop
+//! window's state, a move once it stops, and the displays.
 
 use std::{
     collections::HashMap,
@@ -401,6 +401,80 @@ fn components_follow_whether_the_app_is_in_use() {
         texts.iter().all(|t| t == "active after 4 runs"),
         "{texts:?}"
     );
+}
+
+/// Shows the app's id and its own directories, as a service keeping files
+/// of the app's reads them.
+#[component]
+fn Place() -> impl IntoElement {
+    let shown = format!("place {:?} {:?} {:?}", app_id(), data_dir(), cache_dir());
+    view().child(text(shown))
+}
+
+/// Checks that [`Place`] shows `shown` in an engine of `config`, on a
+/// thread of its own and driven by the test (`LocalEngine`, the web's).
+fn shows_place(config: impl Fn() -> EngineConfig, shown: &str) {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let sink = FrameSink {
+        batches: tx,
+        frames: Arc::default(),
+    };
+    let engine = Engine::start(config(), || ApproxTextEngine, sink).unwrap();
+    let (texts, ..) = until(&rx, shown);
+    assert!(texts.iter().any(|t| t == shown), "{texts:?}");
+    drop(engine);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let sink = FrameSink {
+        batches: tx,
+        frames: Arc::default(),
+    };
+    // Its first frame is in the sink once it started.
+    let engine = nsh_engine::LocalEngine::start(config(), ApproxTextEngine, sink).unwrap();
+    let texts: Vec<String> = rx
+        .try_iter()
+        .flat_map(|batch| batch.items)
+        .filter_map(|item| match item {
+            MountItem::Text { text, .. } => Some(text.text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|t| t == shown), "{texts:?}");
+    drop(engine);
+}
+
+#[test]
+fn components_read_the_apps_id_and_its_own_directories() {
+    let root = crate::temporary_root().join(format!("nsh-app-place-{}", std::process::id()));
+    let (data, caches) = (root.join("data"), root.join("caches"));
+    let of = |id: &str| {
+        let mut config = config(App::Rust(Root::of::<Place>().app_id(id)));
+        config.data_dir = Some(data.clone());
+        config.cache = nsh_engine::CacheOptions::at(nsh_engine::CacheLocation::Dir(caches.clone()));
+        config
+    };
+    // The app's directory in the host's data and cache directories, where
+    // its storage and its image cache are too.
+    let shown = format!(
+        "place Some(\"com.example.notes\") Some({:?}) Some({:?})",
+        data.join("com.example.notes"),
+        caches.join("com.example.notes"),
+    );
+    shows_place(|| of("com.example.notes"), &shown);
+    // An id that names no directory keeps the app in `default`; its id is
+    // as the app gave it.
+    let shown = format!(
+        "place Some(\"a/b\") Some({:?}) Some({:?})",
+        data.join("default"),
+        caches.join("default"),
+    );
+    shows_place(|| of("a/b"), &shown);
+    // A host that keeps nothing of the app's (no data directory, no caches
+    // on disk: `EngineConfig::new`'s), an app without an id.
+    shows_place(
+        || config(App::Rust(Root::of::<Place>())),
+        "place None None None",
+    );
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// Registers a font it was given while the app runs and shows its family,
