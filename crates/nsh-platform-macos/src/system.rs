@@ -81,11 +81,11 @@ use objc2_app_kit::{
     NSApplicationDidBecomeActiveNotification, NSApplicationDidChangeOcclusionStateNotification,
     NSApplicationDidChangeScreenParametersNotification, NSApplicationDidHideNotification,
     NSApplicationDidResignActiveNotification, NSApplicationDidUnhideNotification,
-    NSApplicationOcclusionState, NSAttributedStringAppKitDocumentFormats,
-    NSAttributedStringDocumentFormats, NSBitmapImageFileType, NSBitmapImageRep,
-    NSDocumentTypeDocumentAttribute, NSExcludedElementsDocumentAttribute, NSHTMLTextDocumentType,
-    NSModalResponse, NSPasteboard, NSPasteboardTypeRTF, NSPasteboardTypeRTFD,
-    NSPasteboardTypeString, NSScreen, NSWorkspace,
+    NSApplicationOcclusionState, NSApplicationWillTerminateNotification,
+    NSAttributedStringAppKitDocumentFormats, NSAttributedStringDocumentFormats,
+    NSBitmapImageFileType, NSBitmapImageRep, NSDocumentTypeDocumentAttribute,
+    NSExcludedElementsDocumentAttribute, NSHTMLTextDocumentType, NSModalResponse, NSPasteboard,
+    NSPasteboardTypeRTF, NSPasteboardTypeRTFD, NSPasteboardTypeString, NSScreen, NSWorkspace,
     NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
 };
 use objc2_foundation::{
@@ -255,6 +255,21 @@ fn install(mtm: MainThreadMarker) {
     );
     // The displays: plugged in, unplugged, arranged again.
     let screens = RcBlock::new(|_: NonNull<NSNotification>| screens_changed());
+    // The embedding app terminates: AppKit exits the process once the
+    // observers return (the standalone app's own end is `app.rs`'s). No
+    // queue: the block runs in the post, on the main thread that posts it
+    // (on another thread it finds no surfaces of its own).
+    let terminating = RcBlock::new(|_: NonNull<NSNotification>| will_terminate());
+    // SAFETY: an immutable constant; the observer is kept (and never
+    // removed) while the thread runs.
+    let terminate_observer = unsafe {
+        NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+            Some(NSApplicationWillTerminateNotification),
+            None,
+            None,
+            &terminating,
+        )
+    };
     // SAFETY: as above.
     let observers = observers
         .chain([unsafe {
@@ -265,6 +280,7 @@ fn install(mtm: MainThreadMarker) {
                 &screens,
             )
         }])
+        .chain([terminate_observer])
         .collect();
     // VoiceOver posts no notification: its setting is observed.
     // SAFETY: NSObject's initializer.
@@ -296,6 +312,19 @@ fn system_changed() {
     });
     for surface in surfaces {
         update(&surface);
+    }
+}
+
+/// The app is about to terminate: every surface's app runs its terminate
+/// listeners, each waited for [`nsh_engine::TERMINATE_TIMEOUT`] at most.
+fn will_terminate() {
+    let surfaces: Vec<Rc<Surface>> = SYSTEM.with(|s| {
+        let mut s = s.borrow_mut();
+        s.surfaces.retain(|w| w.strong_count() > 0);
+        s.surfaces.iter().filter_map(Weak::upgrade).collect()
+    });
+    for surface in surfaces {
+        surface.will_terminate();
     }
 }
 

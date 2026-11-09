@@ -502,6 +502,14 @@ impl Surface {
         crate::shader::clear(self);
     }
 
+    /// The app is about to terminate: its terminate listeners run while
+    /// this waits, [`nsh_engine::TERMINATE_TIMEOUT`] at most.
+    pub(crate) fn will_terminate(&self) {
+        self.control(|c| {
+            c.will_terminate_and_wait(nsh_engine::TERMINATE_TIMEOUT);
+        });
+    }
+
     /// Calls `f` with the engine's control, if an app runs.
     pub(crate) fn control(&self, f: impl FnOnce(&EngineControl)) {
         if let Some(control) = &*self.control.borrow() {

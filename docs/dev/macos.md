@@ -384,7 +384,13 @@ event after `stop:` so a dispatch-driven close wakes the event loop.
 
 This lets a Rust host perform final cleanup or execute an installed update after
 `run_app` returns. Embedded `AppView` instances continue to use their host's
-delegate and event loop. This change still needs native close, minimized-close,
+delegate and event loop.
+
+Every way the standalone app ends (Quit, its window closed, `quit_app()`, a restart, the user logging out) stops its
+engine in `stop_running`, which first runs the app's terminate listeners (`Surface::will_terminate`:
+`EngineControl::will_terminate_and_wait`, `TERMINATE_TIMEOUT` at most). An embedded surface's app hears the embedding
+app's `NSApplicationWillTerminateNotification` (`system.rs` `will_terminate`, every surface of the thread), after
+which AppKit exits the process: the observer blocks the main thread until the listeners ran. This change still needs native close, minimized-close,
 Command-Q, a test's quit, process-exit status and restart validation. No tests
 were run for this change at the user's request.
 
