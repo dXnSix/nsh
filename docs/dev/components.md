@@ -892,7 +892,15 @@ stay) as `update_tokens` does, but as a type's fields (`Action::SetTheme`, `Core
 `Tokens::over_as_fields`): a number field is the light value, so a number left at the light value the app's tokens
 have keeps their dark one, and a theme read and set back changes nothing. `update_theme` is `update_tokens` of the
 patch's tokens (`theme::patch_tokens`), and `reset_theme` `reset_tokens` of `T`'s names; `ModuleCx` has the three for
-synchronous `#[module]` functions (`Action::SetTheme`, `Action::UpdateTokens`, `reset_tokens`).
+synchronous `#[module]` functions. Each of the three is an action of its own (`Action::SetTheme`, `UpdateTheme`,
+`ResetTheme`) carrying the roles `T`'s tokens play with their names (`theme::played`), and the core sets through
+them when the action runs (`Core::through_roles`): a token playing a role the app's tokens map onto a token of
+another name is that token (`Tokens::copy_as`, then its own name dropped unless another of its roles is not mapped
+away), and a reset puts the mapped tokens back with `T`'s own names. A registered type's roles are mapped onto its
+own tokens, so this changes nothing for it; it is what makes the setters of a type that is not registered, nsh-base's
+`Theme`, set what its fields read under an app's own type, as a theme file's role key does. `Theme::write_tokens`
+leaves out a field still at the default it fell back on where the theme's tokens had none for its role, so setting a
+theme that was read makes no shadcn token of what the app did not change.
 
 `nsh_base::Theme` implements `AppTheme` in its `theme!` macro: the 31 shadcn colors, `radius`, `font-sans` and
 `font-mono`, each spec playing the role of its name, and `type Patch = Tokens` (`update_theme::<Theme>(tokens)`; under

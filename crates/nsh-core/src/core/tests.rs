@@ -34680,6 +34680,320 @@ mod named_roles {
     }
 }
 
+/// The setters of a theme type that is not registered, in an app whose own
+/// type maps roles: a token playing a mapped role is the token the role is
+/// mapped onto, as the role's name is in a theme file. `nsh-base`'s `Theme`
+/// is such a type.
+mod theme_set_roles {
+    use super::*;
+    use crate::{
+        Prop,
+        element::{
+            AdaptiveColor, AppTheme, ModuleCx, NumberRole, Registry, Role, Root, RustCall, RustOp,
+            ToJs, TokenKind, TokenSpec, Tokens, role,
+        },
+        prelude::*,
+    };
+
+    /// A UI set's roles beside the core's.
+    const CARD: Role = Role::new("card");
+    const RADIUS: NumberRole = Role::new("radius");
+
+    /// The app's design system, registered: its overlay is the popover,
+    /// its cards' radius the radius.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Sys;
+
+    impl AppTheme for Sys {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("surface-overlay", TokenKind::Color).role(role::POPOVER),
+                    TokenSpec::new("radius-card", TokenKind::Radius).role(RADIUS),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, _: &str, out: &mut Tokens) {
+            out.set_color("surface-overlay", AdaptiveColor::rgb(0x111111, 0x111111));
+            out.set_number("radius-card", 14.0);
+        }
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Sys
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    /// A UI set's theme by its own names, not registered: each token
+    /// plays the role of its name.
+    #[derive(Debug, Clone, PartialEq)]
+    struct Shad {
+        popover: AdaptiveColor,
+        primary: AdaptiveColor,
+        radius: f32,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    struct ShadPatch {
+        popover: Option<AdaptiveColor>,
+        primary: Option<AdaptiveColor>,
+    }
+
+    impl Default for Shad {
+        fn default() -> Self {
+            Shad {
+                popover: AdaptiveColor::rgb(0xffffff, 0x000000),
+                primary: AdaptiveColor::rgb(0x171717, 0xfafafa),
+                radius: 10.0,
+            }
+        }
+    }
+
+    impl AppTheme for Shad {
+        type Patch = ShadPatch;
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("popover", TokenKind::Color).role(role::POPOVER),
+                    TokenSpec::new("primary", TokenKind::Color).role(role::PRIMARY),
+                    TokenSpec::new("radius", TokenKind::Number).role(RADIUS),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
+            out.set_color(&format!("{prefix}popover"), self.popover);
+            out.set_color(&format!("{prefix}primary"), self.primary);
+            out.set_number(&format!("{prefix}radius"), self.radius);
+        }
+
+        /// Through the roles, as `nsh-base`'s `Theme` reads.
+        fn read_tokens(tokens: &Tokens, _: &str) -> Self {
+            let d = Shad::default();
+            Shad {
+                popover: tokens.role(role::POPOVER).unwrap_or(d.popover),
+                primary: tokens.role(role::PRIMARY).unwrap_or(d.primary),
+                radius: tokens.role(RADIUS).unwrap_or(d.radius),
+            }
+        }
+
+        fn write_patch(patch: &ShadPatch, prefix: &str, out: &mut Tokens) {
+            if let Some(c) = patch.popover {
+                out.set_color(&format!("{prefix}popover"), c);
+            }
+            if let Some(c) = patch.primary {
+                out.set_color(&format!("{prefix}primary"), c);
+            }
+        }
+    }
+
+    const RED: AdaptiveColor = AdaptiveColor::rgb(0xff0000, 0xff0000);
+    const GREEN: AdaptiveColor = AdaptiveColor::rgb(0x00ff00, 0x00ff00);
+    const FILE: AdaptiveColor = AdaptiveColor::rgb(0x333333, 0x333333);
+
+    /// A core with the design system's type, whose theme file gives the
+    /// overlay a color and the cards' radius a dark value.
+    fn app() -> Core<FakeEngine> {
+        let mut registry = Registry::new();
+        registry.theme::<Sys>();
+        let mut c = core();
+        c.set_components(registry);
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(
+                    r##"{ "cssVars": { "theme": { "surface-overlay": "#333333", "radius-card": "10px" }, "dark": { "radius-card": "6px" } } }"##.into(),
+                ),
+            }],
+        );
+        assert_eq!(c.tokens().color("surface-overlay"), Some(FILE));
+        c
+    }
+
+    fn call(c: &mut Core<FakeEngine>, run: impl FnOnce(&mut ModuleCx) + 'static) {
+        c.apply(Op::Rust(RustOp {
+            call: 0,
+            run: RustCall::Op(Box::new(move |cx| {
+                run(cx);
+                Ok(Box::new(()) as Box<dyn ToJs>)
+            })),
+        }))
+        .unwrap();
+    }
+
+    fn colors(c: &Core<FakeEngine>) -> Vec<String> {
+        let mut names: Vec<String> = c.tokens().colors().map(|(n, _)| n.to_owned()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn set_theme_sets_the_token_a_mapped_role_reads_and_an_unmapped_ones_own() {
+        let mut c = app();
+        let mut theme = Shad::read_tokens(c.tokens(), "");
+        assert_eq!(theme.popover, FILE);
+        theme.popover = RED;
+        theme.primary = GREEN;
+        call(&mut c, move |cx| cx.set_theme(theme));
+        // The popover is the design system's overlay; no token `popover`.
+        assert_eq!(c.tokens().color("surface-overlay"), Some(RED));
+        assert_eq!(c.tokens().role(role::POPOVER), Some(RED));
+        // No type maps `primary`: the token of its name, which the role
+        // reads.
+        assert_eq!(c.tokens().role(role::PRIMARY), Some(GREEN));
+        assert_eq!(colors(&c), ["primary", "surface-overlay"]);
+        // The radius went through its role too, and kept its dark value,
+        // being left at the light one.
+        assert!(c.tokens().number("radius").is_none());
+        assert_eq!(c.tokens().number_in("radius-card", false), Some(10.0));
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(6.0));
+        // The type reads back what it set.
+        let read = Shad::read_tokens(c.tokens(), "");
+        assert_eq!(
+            (read.popover, read.primary, read.radius),
+            (RED, GREEN, 10.0)
+        );
+    }
+
+    #[test]
+    fn update_theme_and_reset_theme_go_through_the_roles_too() {
+        let mut c = app();
+        call(&mut c, |cx| {
+            cx.update_theme::<Shad>(ShadPatch {
+                popover: Some(RED),
+                primary: Some(GREEN),
+            })
+        });
+        assert_eq!(c.tokens().color("surface-overlay"), Some(RED));
+        assert_eq!(colors(&c), ["primary", "surface-overlay"]);
+        // Back to the theme file's: the overlay its color, `primary` gone.
+        call(&mut c, |cx| cx.reset_theme::<Shad>());
+        assert_eq!(c.tokens().color("surface-overlay"), Some(FILE));
+        assert_eq!(colors(&c), ["surface-overlay"]);
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(6.0));
+    }
+
+    /// The functions a component calls take the same path, in order.
+    #[component]
+    fn Sets() -> impl IntoElement {
+        update_theme::<Shad>(ShadPatch {
+            popover: Some(GREEN),
+            primary: Some(GREEN),
+        });
+        reset_theme::<Shad>();
+        set_theme(Shad {
+            popover: RED,
+            ..Shad::default()
+        });
+        view()
+    }
+
+    #[test]
+    fn the_setters_from_a_component_go_through_the_roles_in_order() {
+        let mut c = app();
+        c.mount_root(&Root::new::<Sets>(|| ()));
+        while c.commit().is_some() {}
+        assert_eq!(c.tokens().color("surface-overlay"), Some(RED));
+        // The default `primary` the last one set, as its own name.
+        assert_eq!(c.tokens().color("primary"), Some(Shad::default().primary));
+        assert!(c.tokens().color("popover").is_none());
+    }
+
+    #[test]
+    fn a_registered_type_sets_its_own_tokens_as_before() {
+        // `Sys` writes one overlay and one radius, whatever it is given.
+        let mut c = app();
+        call(&mut c, |cx| cx.set_theme(Sys));
+        assert_eq!(
+            c.tokens().color("surface-overlay"),
+            Some(AdaptiveColor::rgb(0x111111, 0x111111))
+        );
+        assert_eq!(colors(&c), ["surface-overlay"]);
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(14.0));
+        assert_eq!(c.tokens().role_name(role::POPOVER), "surface-overlay");
+    }
+
+    #[test]
+    fn without_a_mapping_the_type_sets_its_own_names() {
+        // No theme type: every role reads the token of its name.
+        let mut c = core();
+        c.set_components(Registry::new());
+        call(&mut c, |cx| {
+            cx.set_theme(Shad {
+                popover: RED,
+                ..Shad::default()
+            })
+        });
+        assert_eq!(c.tokens().color("popover"), Some(RED));
+        assert_eq!(c.tokens().role(role::POPOVER), Some(RED));
+        assert_eq!(c.tokens().number("radius"), Some(10.0));
+        assert!(c.tokens().color("surface-overlay").is_none());
+    }
+
+    /// One token playing two roles, of which the app maps one.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Flat;
+
+    impl AppTheme for Flat {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("surface", TokenKind::Color)
+                        .role(CARD)
+                        .role(role::POPOVER),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, _: &str, out: &mut Tokens) {
+            out.set_color("surface", RED);
+        }
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Flat
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    fn a_token_one_of_whose_roles_is_not_mapped_keeps_its_name_too() {
+        let mut c = app();
+        call(&mut c, |cx| cx.set_theme(Flat));
+        assert_eq!(c.tokens().color("surface-overlay"), Some(RED));
+        assert_eq!(c.tokens().color("surface"), Some(RED));
+    }
+
+    #[test]
+    fn a_value_given_for_the_mapped_token_itself_stays() {
+        // Tokens by name beside the role's: the name wins.
+        let mut tokens = Tokens::default();
+        tokens.set_color("popover", RED);
+        tokens.set_color("surface-overlay", GREEN);
+        tokens.set_number("radius", 20.0);
+        tokens.set_dark_number("radius", 8.0);
+        tokens.copy_as("popover", "surface-overlay");
+        tokens.copy_as("radius", "radius-card");
+        assert_eq!(tokens.color("surface-overlay"), Some(GREEN));
+        // A number goes with its dark value.
+        assert_eq!(tokens.number_in("radius-card", false), Some(20.0));
+        assert_eq!(tokens.number_in("radius-card", true), Some(8.0));
+        tokens.remove_named("radius");
+        assert!(tokens.number("radius").is_none() && tokens.number_in("radius", true).is_none());
+    }
+}
+
 /// Theme files and embedding overrides read under a theme set: by the
 /// types' names and kinds, a role's name setting the token it is mapped
 /// onto, `var()` against the types' defaults, an undeclared name left out.

@@ -158,7 +158,9 @@ macro_rules! theme {
         /// It is not registered ([`nsh_core::element::Registry::theme`]):
         /// `nsh/base` reads themes with [`read_tokens`], so it stays the
         /// default and an app's own types win. A patch is tokens by name
-        /// (`update_theme::<Theme>(tokens)`).
+        /// (`update_theme::<Theme>(tokens)`). Under an app's own type its
+        /// setters set what its fields read: a token playing a role the
+        /// type maps (`popover`) is the token the role is mapped onto.
         impl AppTheme for Theme {
             type Patch = Tokens;
 
@@ -179,9 +181,26 @@ macro_rules! theme {
                 &SPECS
             }
 
+            /// Each field as the token of its name. A field still at the
+            /// default it fell back on, where the tokens the theme was read
+            /// from had no token for its role, is left out: under an app's
+            /// own theme type, a theme read and set makes no shadcn token
+            /// of what the app did not change.
             fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
-                $( out.set_color(&format!("{prefix}{}", $key), self.$name); )*
-                out.set_number(&TokenKind::Number.prefixed(prefix, "radius"), self.radius.0);
+                let fell_back = |role: Role, value: AdaptiveColor| {
+                    self.tokens.role(role).is_none()
+                        && DEFAULT_TOKENS.color(role.name()) == Some(value)
+                };
+                $(
+                    if !fell_back(role::$role, self.$name) {
+                        out.set_color(&format!("{prefix}{}", $key), self.$name);
+                    }
+                )*
+                let radius_fell_back = self.tokens.role(role::RADIUS).is_none()
+                    && DEFAULT_TOKENS.number(role::RADIUS.name()) == Some(self.radius.0);
+                if !radius_fell_back {
+                    out.set_number(&TokenKind::Number.prefixed(prefix, "radius"), self.radius.0);
+                }
                 if let Some(f) = &self.font_sans {
                     out.set_font(&TokenKind::Font.prefixed(prefix, "font-sans"), f.to_string());
                 }
