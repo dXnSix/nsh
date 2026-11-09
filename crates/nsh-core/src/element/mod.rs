@@ -187,7 +187,10 @@ pub use self::{
     theme::{
         AppTheme, ThemeSpec, TokenKind, TokenSpec, reset_theme, set_theme, theme_of, update_theme,
     },
-    tokens::{FONT_MONO, FONT_SANS, Role, ThemeTokens, Token, TokenOverrides, TokenSource, Tokens},
+    tokens::{
+        AnyRole, FONT_MONO, FONT_SANS, FontRole, NumberRole, Role, RoleKind, RoleValue,
+        ThemeTokens, Token, TokenOverrides, TokenSource, Tokens, role,
+    },
     value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},
     virtual_list::{ListLayout, ViewableItems, VirtualList, virtual_list},
     watch::OrderWatch,

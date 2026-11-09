@@ -33272,7 +33272,7 @@ mod theme_roles {
     use super::*;
     use crate::{
         Prop,
-        element::{Registry, Role, Root, Tokens},
+        element::{Registry, Root, Tokens, role},
         platform::Os,
         prelude::*,
     };
@@ -33312,7 +33312,7 @@ mod theme_roles {
         });
         let mut tokens = crate::element::tokens::sample();
         tokens.set_color("action", rgb(0x123456).into());
-        c.set_tokens(tokens.with_roles([(Role::Primary, "action")]));
+        c.set_tokens(tokens.with_role(role::PRIMARY, "action"));
         c.mount_root(&Root::of::<Bar>());
         assert_eq!(tint(&mut c), Some(serde_json::json!("#123456")));
     }
@@ -33347,7 +33347,7 @@ mod theme_roles {
         let mut tokens = crate::element::tokens::sample();
         tokens.set_font("font-body", "Inter");
         tokens.set_font(crate::element::FONT_SANS, "Helvetica");
-        c.set_tokens(tokens.with_roles([(Role::FontSans, "font-body")]));
+        c.set_tokens(tokens.with_role(role::FONT_SANS, "font-body"));
         let text = text_item(&c.commit().unwrap()).unwrap();
         assert_eq!(
             text.spans[0].style.font_family,

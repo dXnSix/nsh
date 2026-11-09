@@ -1082,8 +1082,8 @@ impl<M: TextEngine> Core<M> {
         let font = self
             .components
             .tokens
-            .role_font(crate::element::Role::FontSans)
-            .map(|f| crate::style::FontFamily::new(f));
+            .role(crate::element::role::FONT_SANS)
+            .map(|f| crate::style::FontFamily::new(&f));
         self.set_default_font(font);
         self.class_tokens_changed();
     }
