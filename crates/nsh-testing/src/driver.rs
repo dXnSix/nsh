@@ -51,6 +51,12 @@ pub(crate) trait Driver: Send {
     }
     fn hover(&mut self, selector: &str) -> Result<(), String>;
     fn right_click(&mut self, selector: &str) -> Result<(), String>;
+    /// The mouse wheel (a touchpad, `precise`) by `delta` points over what
+    /// `selector` names.
+    fn wheel(&mut self, selector: &str, delta: Point<Points>, precise: bool) -> Result<(), String> {
+        let _ = (selector, delta, precise);
+        Err(headless_only("`wheel`"))
+    }
     /// Pastes `content` into the input `selector` names, as the user's
     /// paste does with it on the clipboard.
     fn paste(&mut self, selector: &str, content: &nsh_core::PasteEvent) -> Result<(), String>;
@@ -204,6 +210,9 @@ impl Driver for Headless {
     }
     fn right_click(&mut self, selector: &str) -> Result<(), String> {
         Headless::right_click(self, selector)
+    }
+    fn wheel(&mut self, selector: &str, delta: Point<Points>, precise: bool) -> Result<(), String> {
+        Headless::wheel(self, selector, delta, precise)
     }
     fn paste(&mut self, selector: &str, content: &nsh_core::PasteEvent) -> Result<(), String> {
         Headless::paste(self, selector, content)

@@ -510,6 +510,107 @@ impl Headless {
         self.done()
     }
 
+    /// The step `wheel(<selector>, { x, y, precise })`: the mouse wheel (a
+    /// touchpad's two-finger scroll with `precise`) by `delta` points
+    /// (positive `y` down) over the middle of the view `selector` names, as
+    /// on a desktop or the web, with the modifier keys held
+    /// (`keyboard.down`): the views under it listening to `onWheel` hear it
+    /// from the inside out, and the innermost scroll view it reaches that
+    /// can move by it moves, within its content, then hears `onScrollEnd`
+    /// (`input::wheel_route`: a `wheelScroll` of `contain` or `none` keeps
+    /// it in). A phone has no wheel: there it fails.
+    pub fn wheel(
+        &mut self,
+        selector: &str,
+        delta: Point<Points>,
+        precise: bool,
+    ) -> Result<(), String> {
+        let parsed = Selector::parse(selector)?;
+        self.step(format!("wheel({selector}, {}, {})", delta.x.0, delta.y.0));
+        if !self.environment.desktop() && self.environment.os != nsh_core::platform::Os::Web {
+            return Err(
+                "a phone has no wheel: open the app as a desktop or the web (`platform`)".into(),
+            );
+        }
+        let pick = self.screen.view(&parsed);
+        let target = self.picked(pick, selector, "view")?;
+        let at = self
+            .screen
+            .bounds_in_root(target)
+            .ok_or_else(|| format!("`{selector}` is not on screen"))?
+            .center();
+        self.activate_window_of(target);
+        let chain = self.screen.chain(target);
+        let links: Vec<_> = chain.iter().map(|&id| self.screen.wheel_link(id)).collect();
+        let route = input::wheel_route(&links, None);
+        // The scroll view it moves, as the platforms pick it: along its
+        // axis, one that can move that way.
+        let along = |id: &NodeId| self.screen.scroll(*id).map(|s| s.horizontal);
+        let moves = |id: &NodeId| {
+            self.screen.scroll(*id).is_some_and(|s| {
+                let (at, d) = if s.horizontal {
+                    (
+                        s.x,
+                        if delta.x != Points::ZERO {
+                            delta.x
+                        } else {
+                            delta.y
+                        },
+                    )
+                } else {
+                    (s.y, delta.y)
+                };
+                !s.locked
+                    && ((d < Points::ZERO && at > Points::ZERO)
+                        || (d > Points::ZERO && at < self.screen.scroll_end(*id)))
+            })
+        };
+        let scrolled = input::scroll_target(
+            chain[..route.reach].to_vec(),
+            delta.x,
+            delta.y,
+            along,
+            moves,
+        );
+        for &i in &route.listeners {
+            let id = chain[i];
+            let origin = self
+                .screen
+                .bounds_in_root(id)
+                .map_or(Point::default(), |b| b.origin);
+            let event = nsh_core::WheelEvent::new(
+                point(at.x - origin.x, at.y - origin.y),
+                at,
+                delta,
+                self.held,
+                precise,
+            );
+            self.send(id, EventKind::Wheel, EventPayload::Wheel(event));
+        }
+        if let Some(id) = scrolled {
+            let end = self.screen.scroll_end(id);
+            if let Some(scroll) = self.screen.scroll_mut(id) {
+                if scroll.horizontal {
+                    let d = if delta.x != Points::ZERO {
+                        delta.x
+                    } else {
+                        delta.y
+                    };
+                    scroll.x = (scroll.x + d).clamp(Points::ZERO, end);
+                } else {
+                    scroll.y = (scroll.y + delta.y).clamp(Points::ZERO, end);
+                }
+                let (x, y, applied) = (scroll.x, scroll.y, scroll.applied);
+                self.engine.control().scroll(id, point(x, y), applied);
+                self.animator.scrolled(id, point(x, y));
+                self.display_frame();
+                self.animator.scroll_ended(id);
+                self.send(id, EventKind::ScrollEnd, EventPayload::Scroll(point(x, y)));
+            }
+        }
+        self.done()
+    }
+
     /// The mouse at `at` in the root, as view `id` hears it: where it is in
     /// the view, no modifier keys and no button down.
     fn mouse_at(&self, id: NodeId, at: Point<Points>) -> EventPayload {

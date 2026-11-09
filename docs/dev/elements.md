@@ -150,6 +150,34 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   positions are the view's bottom-start corner (`nsh_core::input::context_menu_anchor`, by the surface's direction),
   so a menu opened below it starts where the view does; `ContextMenu` puts the keyboard focus on its first enabled
   item then.
+- **`onWheel`** (any element; GPUI's `on_scroll_wheel`, the DOM's `wheel`): the mouse wheel or a touchpad's two-finger
+  scroll over a view. The payload is `WheelEvent` (`EventPayload::Wheel`, JS `{ position, pagePosition, delta,
+  modifiers, precise }`): where it is in the view and in its root view, `delta` how far it scrolls in points with the
+  DOM's signs (positive `y` towards the content's end), the modifier keys, and `precise` for a touchpad's (or a
+  high-resolution wheel's) deltas rather than notches; notches are converted as the platform's scroll views take
+  them (macOS' accelerated lines of 10 points, Windows' and GPUI's three lines of 16 per notch, Linux's notches as
+  `input::ZOOM_NOTCH`'s 48 points, the web's lines of 40 points and pages of the viewport), Shift + wheel is
+  sideways as macOS reports it. Rust's `.on_wheel(|e: &WheelEvent| ..)`. The platform decides on the main thread from
+  the mounted event masks and `ViewProps::wheel_scroll` (`nsh_core::input::wheel_route`, every backend's): the views
+  under the pointer that listen hear it from the inside out, and **`wheelScroll`** (any element, `WheelScroll`; Rust
+  `.wheel_scroll(..)`) says where the wheel goes besides them: `"auto"` (the default) as without it, `"contain"`
+  keeps it in the view (the view itself, when it scrolls, and the scroll views inside it may take it; the scroll
+  views around it and the listeners around it get nothing), `"none"` takes it from every scroll view, inside the
+  view or around it (only the listeners of the view and inside it hear it). Control + wheel's pinch (a zoomable
+  scroll view or a view with pinch values) is the wheel's too: a view with `contain` keeps the views around it from
+  zooming, one with `none` every view. A scroll going on when the pointer comes over such a view (wheel notches
+  latched within 200 ms, a touchpad gesture and its momentum) goes on: the view came under the pointer during it,
+  so it hears none of it and keeps nothing in (the scroll's target is latched, as in browsers); the `auto`
+  listeners under the pointer hear it as it goes. JS cannot cancel a scroll after the fact (the main thread never
+  waits for JS), so the rule is what is mounted. Hosted views that take the wheel themselves (web views, a native
+  component's `NativeComponent::wheel`) take it first. The engine merges a view's wheels as it
+  merges mouse moves (`State::mouse_moves`): delivered at most once per `MOUSE_MOVE_INTERVAL`, a view's deltas
+  added up while its modifier keys and `precise` stay. macOS reads `scrollWheel:` (its momentum too), Windows
+  `WM_MOUSEWHEEL` / `WM_MOUSEHWHEEL` (a delta that is not a whole notch is precise), Linux GDK's scroll events,
+  which the root's capture-phase `EventControllerLegacy` sees as it sees every pointer event (`ScrollUnit::Surface`
+  deltas are precise), GPUI its `ScrollWheelEvent` (`ScrollDelta::Pixels` is
+  precise), the web the DOM's `wheel` (`nsh.js` `wheelListeners`; pixel deltas are precise). iOS, Android and the
+  terminal report no wheel; `nsh test`'s `wheel(selector, { x, y, precise })` sends one (headless).
 - **Keyboard focus**: on macOS, the web and Linux, Tab (the keyboard focus) moves between stops, in tree order; a click
   presses without focusing, so a stop's `FOCUSED` state (`focus:` classes, `.focus(..)`) is keyboard focus, and
   `focus-visible:` is the same variant. Focus and presses are separate: `ViewProps::focus_stop` decides, from

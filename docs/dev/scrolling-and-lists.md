@@ -22,6 +22,9 @@
   without a horizontal wheel moves a horizontal view with Shift + wheel, with the vertical wheel where nothing
   around it scrolls vertically (`scroll_target`), and with the keys. With a
   mouse alone, pull to refresh needs a touchpad that rubber-bands (macOS): apps offer another way on the desktop.
+  A view's `onWheel` hears the wheel too, and its `wheelScroll` keeps it from the scroll views around it
+  (`contain`) or from every scroll view (`none`): the scroll target is picked among the views
+  `nsh_core::input::wheel_route` leaves it (`docs/dev/elements.md` "`onWheel`").
 - **Scroll bars of the app's own** (`nsh/base`'s `Scrollbar`, `docs/dev/components.md` "Scroll bars"): a view the
   app places that names a scroll view or a list (`scroll={ref}`), with its look (`class`, `thumbClass`) and `mode`;
   the target's own indicator off with `scrollbar={false}`. It follows the target through the core

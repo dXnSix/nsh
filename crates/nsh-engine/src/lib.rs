@@ -2506,8 +2506,9 @@ struct State<M: TextEngine> {
     touch_move: Option<(NodeId, Box<nsh_core::TouchEvent>)>,
     /// Mouse moves not delivered yet: the latest per view, in the order they
     /// came; sent once per [`MOUSE_MOVE_INTERVAL`] at most, and before
-    /// any other event.
-    mouse_moves: Vec<(NodeId, EventPayload)>,
+    /// any other event. Wheels wait with them, a view's deltas added up
+    /// while its modifier keys stay.
+    mouse_moves: Vec<(NodeId, EventKind, EventPayload)>,
     /// When `mouse_moves` were last delivered.
     mouse_moved: Option<Instant>,
     /// [`keep_last_sets`]'s buffer, reused.
@@ -2966,15 +2967,12 @@ impl<M: TextEngine> State<M> {
             return;
         }
         self.mouse_moved = Some(nsh_core::time::now());
-        for (id, payload) in std::mem::take(&mut self.mouse_moves) {
-            if self
-                .core
-                .component_event(id, EventKind::MouseMove, &payload)
-            {
+        for (id, kind, payload) in std::mem::take(&mut self.mouse_moves) {
+            if self.core.component_event(id, kind, &payload) {
                 continue;
             }
             if let Some(script) = script {
-                script.dispatch_event(id, EventKind::MouseMove, &payload);
+                script.dispatch_event(id, kind, &payload);
             }
         }
     }
@@ -3426,9 +3424,32 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             // event comes after the moves before it (a view hears where the
             // mouse went before it hears it leave).
             if event == EventKind::MouseMove {
-                match state.mouse_moves.iter_mut().find(|(v, _)| *v == id) {
-                    Some((_, pending)) => *pending = payload,
-                    None => state.mouse_moves.push((id, payload)),
+                match state
+                    .mouse_moves
+                    .iter_mut()
+                    .find(|(v, k, _)| *v == id && *k == event)
+                {
+                    Some((_, _, pending)) => *pending = payload,
+                    None => state.mouse_moves.push((id, event, payload)),
+                }
+                return true;
+            }
+            // Wheels come as fast as moves (a touchpad, a high-resolution
+            // wheel): they wait with them, one view's added up into one.
+            if let (EventKind::Wheel, EventPayload::Wheel(wheel)) = (event, &payload) {
+                let pending = state
+                    .mouse_moves
+                    .iter_mut()
+                    .rev()
+                    .find(|(v, k, _)| *v == id && *k == event);
+                match pending {
+                    Some((_, _, EventPayload::Wheel(earlier)))
+                        if earlier.modifiers == wheel.modifiers
+                            && earlier.precise == wheel.precise =>
+                    {
+                        *earlier = earlier.merged(*wheel);
+                    }
+                    _ => state.mouse_moves.push((id, event, payload)),
                 }
                 return true;
             }

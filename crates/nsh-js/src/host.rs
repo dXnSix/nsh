@@ -1265,6 +1265,13 @@ fn payload_object<'js>(cx: &Ctx<'js>, payload: &EventPayload) -> rquickjs::Resul
                 None => obj.set("pressedButton", Value::new_null(cx.clone()))?,
             }
         }
+        EventPayload::Wheel(e) => {
+            obj.set("position", point_object(cx, e.position)?)?;
+            obj.set("pagePosition", point_object(cx, e.page_position)?)?;
+            obj.set("delta", point_object(cx, e.delta)?)?;
+            obj.set("modifiers", modifiers_object(cx, &e.modifiers)?)?;
+            obj.set("precise", e.precise)?;
+        }
         EventPayload::ContextMenu(e) => {
             obj.set("position", point_object(cx, e.position)?)?;
             obj.set("pagePosition", point_object(cx, e.page_position)?)?;
@@ -2159,6 +2166,41 @@ const report = (v) => text(String(v));
             let value = payload_object(&cx, &EventPayload::Mouse(none)).unwrap();
             let pressed: Value = value.as_object().unwrap().get("pressedButton").unwrap();
             assert!(pressed.is_null());
+        });
+    }
+
+    #[test]
+    fn wheel_payload_has_the_delta_the_modifiers_and_whether_it_is_precise() {
+        let host = Host::new().unwrap();
+        let event = nsh_core::WheelEvent::new(
+            point(px(3.0), px(4.5)),
+            point(px(30.0), px(40.5)),
+            point(px(-2.0), px(48.0)),
+            nsh_core::keymap::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+            true,
+        );
+        host.cx.with(|cx| {
+            let value = payload_object(&cx, &EventPayload::Wheel(event)).unwrap();
+            let obj = value.as_object().unwrap();
+            let num = |o: &str, k: &str| {
+                let o: rquickjs::Object = obj.get(o).unwrap();
+                o.get::<_, f64>(k).unwrap()
+            };
+            assert_eq!(
+                (
+                    num("position", "x"),
+                    num("pagePosition", "y"),
+                    num("delta", "x"),
+                    num("delta", "y")
+                ),
+                (3.0, 40.5, -2.0, 48.0)
+            );
+            let m: rquickjs::Object = obj.get("modifiers").unwrap();
+            assert!(m.get::<_, bool>("control").unwrap());
+            assert!(obj.get::<_, bool>("precise").unwrap());
         });
     }
 

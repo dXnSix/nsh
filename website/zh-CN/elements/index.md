@@ -308,6 +308,39 @@ import { Menu } from "nsh/desktop";
 
 `ContextMenuEvent` 包含视图中的 `position`、根视图中的 `pagePosition`（`Menu.popup` 放置菜单的位置：`Menu.popup(items, e.pagePosition)`）、`modifiers` 以及 DOM 的 `pointerType`：指针为 `"mouse"`、`"pen"` 或 `"touch"`，键盘或读屏软件为 `null`，此时位置是视图的底部起始角，菜单放在这里就会出现在视图下方；Rust 中为 `position`、`page_position`、`modifiers` 和 `pointer_type`（`Option<PointerType>`）。从指针下方的视图向外，最近的一个监听者收到事件。如果比它更近的是文本输入框，或带有编辑菜单的可选中文本（Windows、GPUI 后端、浏览器），则显示它们自己的菜单。平台在按钮按下时根据已挂载的内容做出决定，因此处理函数在事后得到通知，不需要取消任何东西。`disabled` 的视图把这次点击留给外层最近的、未停用的监听者。在触摸屏上用长按打开菜单：用同一个函数处理 `onLongPress`。
 
+### 滚轮
+
+`onWheel` 告诉视图：鼠标滚轮或触控板的双指滚动在它上面移动了，与 GPUI 的 `on_scroll_wheel` 和 DOM 的 `wheel` 相同：画布按 Ctrl + 滚轮缩放，数值逐步增减，标签栏切换标签。`wheelScroll` 说明滚轮除了视图自己的处理函数之外还去往哪里：
+
+```rust tabs
+view()
+    .wheel_scroll(WheelScroll::None)
+    .on_wheel(move |e: &WheelEvent| {
+        if e.modifiers.ctrl {
+            zoom.update(|z| *z *= 1.0 - e.delta.y.0 / 500.0);
+        } else {
+            pan.update(|p| {
+                p.x += e.delta.x;
+                p.y += e.delta.y;
+            });
+        }
+    })
+```
+
+```tsx tabs
+<Canvas
+  wheelScroll="none"
+  onWheel={(e) => (e.modifiers.control ? zoomBy(1 - e.delta.y / 500) : panBy(e.delta))}
+/>
+```
+
+| 属性 | Rust | 类型 | 说明 |
+|---|---|---|---|
+| `onWheel` | `.on_wheel(..)` | `(e: WheelEvent) => void` | 滚轮或触控板在视图或其内部的视图上滚动（DOM 的 `wheel`）。 |
+| `wheelScroll` | `.wheel_scroll(..)` | `"auto" \| "contain" \| "none"` | 视图上的滚轮除了它的 `onWheel` 之外还去往哪里：照常交给滚动视图（`"auto"`，默认值），只交给视图本身和它内部的滚动视图（`"contain"`），或者不交给任何滚动视图（`"none"`）。 |
+
+`WheelEvent` 包含视图中的 `position`、根视图中的 `pagePosition`、`delta`（以点为单位的滚动量，符号与 DOM 相同：`y` 为正表示朝内容末尾，`x` 为正表示向右；滚轮的刻度按平台的滚动视图的换算方式换算）、`modifiers` 以及 `precise`：触控板或高精度滚轮的增量为 true，刻度为 false；Rust 中为 `position`、`page_position`、`delta`、`modifiers` 和 `precise`。指针下方每个监听的视图都会从内向外收到它，滚动视图照常滚动。`wheelScroll="contain"` 的视图把滚轮留在自己内部：它外层的滚动视图和监听者都收不到，因此表单中的步进器逐步增减时表单不会滚动；`"none"` 让任何滚动视图都收不到滚轮，包括视图内部的，正适合自己平移和缩放的画布。Ctrl + 滚轮会捏合和缩放视图，遵循同样的规则。平台在滚轮转动时根据已挂载的内容做出决定，因此处理函数在事后得到通知，不需要取消任何东西；指针移到这样的视图上时已经在进行的滚动会继续。滚轮事件每帧最多一次，同一视图的增量会累加。`onWheel` 来自 macOS、Windows、Linux、GPUI 后端和浏览器中的鼠标与触控板。
+
 ### 键盘焦点
 
 在 macOS 和 Web 上，Tab 按视图树的顺序在停靠点之间移动键盘焦点：输入框、可按压的视图，以及所有设置了 `focusable` 的视图。焦点样式（`focus:`、`.focus(..)`）为获得焦点的视图设置样式；它可按压时，按 Return 或空格会按下它。点击会按下视图但不让它获得焦点，所以焦点样式只在键盘聚焦时生效。
