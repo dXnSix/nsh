@@ -8,10 +8,21 @@
 //! when a modal or a layer goes ([`Modals`], [`Layers`]).
 //!
 //! The backends describe their views ([`Candidate`], [`Layer`]: ids,
-//! frames in the surface's points, focus stops, scopes and tree order) and
-//! apply what comes back: they move the focus, report `focused` /
-//! `focus-within` and `Focus` / `Blur`, and scroll their views. The
-//! terminal backend uses it, its Cells converted to points.
+//! frames, focus stops, scopes and tree order) and apply what comes back:
+//! they move the focus, report `focused` / `focus-within` and `Focus` /
+//! `Blur`, and scroll their views. The terminal backend uses it, its Cells
+//! one point each.
+//!
+//! Frames are in the unit the backend lays out in, scaled along each axis
+//! on its own: the surface's points, or a terminal's Cells, one point each
+//! (8 × 16 points apiece by default, one scale across and another down).
+//! Every rule compares one axis at a time (edges with edges, a gap with a
+//! gap, a distance across with a distance across) and takes no length of
+//! its own, so frames scaled by one factor across and another down move the
+//! focus as they did; edges that meet must meet exactly in that unit. A new
+//! rule keeps that property, or the terminal backend converts its Cells to
+//! points for it. [`reveal`] is apart: it takes lengths along one axis in
+//! points, the layout's, as [`scroll::reveal_delta`]'s margin is.
 
 use std::cmp::Ordering;
 
@@ -52,7 +63,8 @@ impl Order {
 pub struct Candidate {
     /// Its node (a link's own id).
     pub id: NodeId,
-    /// Its frame in the surface's points.
+    /// Its frame: in the surface's points, or in any unit scaled along
+    /// each axis on its own, as a terminal's Cells (the module's docs).
     pub frame: Bounds<Points>,
     /// Some of it is in sight: neither clipped away nor scrolled out.
     pub visible: bool,
@@ -100,8 +112,9 @@ pub struct Layer {
     pub id: NodeId,
     /// Its place in tree order.
     pub order: usize,
-    /// Its frame in the surface's points, `None` while none of it is in
-    /// sight.
+    /// Its frame, in the unit of the candidates' (the surface's points, or
+    /// any unit scaled along each axis on its own); `None` while none of it
+    /// is in sight.
     pub frame: Option<Bounds<Points>>,
     /// It takes presses: it listens to them, pointer events reach it and
     /// it is not hidden.
@@ -313,8 +326,9 @@ pub enum Align {
 
 /// How far a scroll view moves along its axis to bring a stop that takes
 /// the focus into sight: the span `start` .. `start + len` from the
-/// viewport's start (its offset applied), in a `viewport` that long;
-/// `None` while it shows whole already.
+/// viewport's start (its offset applied), in a `viewport` that long, all
+/// in the layout's points (the margin is points); `None` while it shows
+/// whole already.
 pub fn reveal(start: Points, len: Points, viewport: Points, align: Align) -> Option<Points> {
     if start >= Points::ZERO && start + len <= viewport {
         return None;
