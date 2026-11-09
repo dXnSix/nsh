@@ -44,7 +44,9 @@ function setLocale(locale: string | null): void;
 ```
 
 Shows the app in `locale`, a BCP 47 tag (`"zh-CN"`), whatever the user's language: `t`, `locale()`, the first of
-`localeSettings().languages` and `Intl`'s default locale follow it at once. `null` follows the user's language again.
+`localeSettings().languages` and `Intl`'s default locale follow it at once, and so does the layout direction: right to
+left for a language written so (Arabic, Hebrew, Persian, ...), left to right for the others. A view's `direction`
+style still sets its own subtree's. `null` follows the user's language again, and the device's direction.
 A string that is not a language tag throws a `RangeError`. The choice lasts while the app runs, on its surface only.
 
 ## availableLocales

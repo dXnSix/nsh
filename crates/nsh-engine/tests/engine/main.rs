@@ -37,6 +37,7 @@ mod keymap;
 mod lazy_each;
 mod list;
 mod list_bench;
+mod locale_direction;
 mod logs;
 mod native;
 mod net;

@@ -16,6 +16,7 @@ import ModHaptics from "./mod-haptics";
 import ModHost from "./mod-host";
 import ModHostChannel from "./mod-host-channel";
 import ModI18n from "./mod-i18n";
+import ModI18nDirection from "./mod-i18n-direction";
 import ModIos from "./mod-ios";
 import ModKeymap from "./mod-keymap";
 import ModMobile from "./mod-mobile";
@@ -39,6 +40,7 @@ const cases: Record<string, () => JSX.Element> = {
   "mod-host-channel": ModHostChannel,
   "mod-haptics": ModHaptics,
   "mod-i18n": ModI18n,
+  "mod-i18n-direction": ModI18nDirection,
   "mod-ios": ModIos,
   "mod-keymap": ModKeymap,
   "mod-mobile": ModMobile,

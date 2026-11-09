@@ -299,8 +299,10 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   `presentation: "actionSheet"` is a list dialog on Android; every label is the app's: NSH adds no strings of its
   own, and an iPad / Mac action sheet gets an untitled cancel action). Answers come back as the
   root's `Dialog` event, which the core resolves. Embedding apps forward their controller's status bar to `nsh_status_bar_style()` / `_hidden()` / `_animation()`.
-- **Right to left**: the user's language sets the root's direction (again at once when it changes);
-  `direction` (`inherit` / `ltr` / `rtl`) overrides it per view. The core resolves each node's direction (inherited, also for
+- **Right to left**: the user's language sets the root's direction (again at once when it changes), or the
+  language the app shows in (`setLocale` / `set_locale`: the engine writes its direction, `Locale::rtl`, into the
+  environment it gives the core and JS; CLDR's direction of the tag's script, else of its language's likely script in
+  its region); `direction` (`inherit` / `ltr` / `rtl`) overrides it per view. The core resolves each node's direction (inherited, also for
   subtrees built detached), sets taffy's `direction` (rows run from the right), keeps the left and right properties
   where they say (margins, paddings, insets, borders, corners, in classes and style keys alike, as in a browser) and
   places the logical ones (`marginStart`, `start`, `borderTopEndRadius`, `ms-*`, `start-*`, ...). A

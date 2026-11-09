@@ -265,7 +265,7 @@ pub(crate) const EXPORTS: &[Item] = &[
         "setLocale",
         Export::Function(set_locale, 1),
         Ts::function(
-            "Shows the app in `locale` (a BCP 47 tag, `\"zh-CN\"`) whatever the\nuser's language: `locale()`, `t` and `Intl` follow it; `null` follows\nthe user's again.",
+            "Shows the app in `locale` (a BCP 47 tag, `\"zh-CN\"`) whatever the\nuser's language: `locale()`, `t`, `Intl` and the layout direction\n(right to left for Arabic, Hebrew, ...) follow it; `null` follows the\nuser's again.",
             &["(locale: string | null): void"],
         ),
     ),

@@ -77,6 +77,28 @@ expect Hello: Hello
 covers [nsh/i18n] t
 covers [nsh/i18n] setLocale
 covers [nsh/i18n] availableLocales
+# mod-i18n-direction
+tap id:case-mod-i18n-direction
+# the device's language (en-US) lays rows out from the left; Arabic from the
+# right, English and the device's language from the left again; the row
+# whose direction is ltr stays left to right.
+frame id:first 0 0 100 20
+frame id:second 100 0 50 20
+frame id:pinned 0 0 100 20
+tap id:arabic
+frame id:first 290 0 100 20
+frame id:second 240 0 50 20
+frame id:pinned 0 0 100 20
+tap id:english
+frame id:first 0 0 100 20
+frame id:second 100 0 50 20
+tap id:arabic
+frame id:first 290 0 100 20
+tap id:device
+frame id:first 0 0 100 20
+frame id:second 100 0 50 20
+frame id:pinned 0 0 100 20
+covers [nsh/i18n] setLocale
 # mod-picker
 tap id:case-mod-picker
 # a pick is a promise that never throws: options out of range reject it with

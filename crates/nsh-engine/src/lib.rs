@@ -3424,10 +3424,11 @@ fn apply_environment<M: TextEngine>(
     state.environment = env;
     let mut env = env;
     // The app's language (`set_locale`) over the platform's, as an
-    // embedding app's own is.
+    // embedding app's own is, and the direction it is written in.
     if let Some(locale) = state.app_locale {
         env.locale = locale;
         env.locale_settings.languages = env.locale_settings.languages.preferring(locale);
+        env.rtl = locale.rtl();
     }
     state.core.set_font_scale(env.font_scale);
     state.core.set_class_environment(class_environment(&env));

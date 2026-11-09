@@ -180,7 +180,10 @@ macro_rules! t {
 
 /// Shows the app in `locale` whatever the user's language (TS:
 /// `setLocale`); `None` follows the user's again. [`t!`](crate::t), `Intl`
-/// and [`crate::element::locale`] follow it.
+/// and [`crate::element::locale`] follow it, and so does the layout
+/// direction: right to left for a locale written so (Arabic, Hebrew,
+/// Persian, ...), left to right for the others, the platform's again with
+/// `None`. A view's `direction` style still sets its own subtree's.
 pub fn set_locale(locale: Option<crate::platform::Locale>) {
     crate::element::act_locale(locale);
 }

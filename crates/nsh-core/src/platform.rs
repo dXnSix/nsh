@@ -448,7 +448,52 @@ impl Locale {
         // What follows the language is a script (4 letters) or a region.
         self.as_str().split('-').skip(1).find(|s| s.len() != 4)
     }
+
+    /// Whether the locale is written right to left, as CLDR (48) has it:
+    /// its script's direction (`az-Arab`, `ff-Adlm`), else that of the
+    /// script its language is most likely written in, in its region (`ar`,
+    /// `he`, `pa-PK` in Arabic, `sd-IN` in Devanagari). The layout
+    /// direction of [`crate::i18n::set_locale`]'s locale.
+    #[doc(hidden)]
+    pub fn rtl(&self) -> bool {
+        if let Some(script) = self.as_str().split('-').skip(1).find(|s| s.len() == 4) {
+            return RTL_SCRIPTS.binary_search(&script).is_ok();
+        }
+        let language = self.language();
+        // The regions that write the language in a script of the other
+        // direction (CLDR's likely subtags).
+        let other = matches!(
+            (language, self.region().unwrap_or_default()),
+            ("az", "IQ" | "IR")
+                | ("ha", "CM" | "SD")
+                | ("kk", "AF" | "CN" | "IR" | "MN")
+                | ("ku", "IQ" | "IR" | "LB")
+                | ("ky", "CN")
+                | ("ms", "CC")
+                | ("pa" | "tg", "PK")
+                | ("uz", "AF")
+                | ("sd", "IN")
+                | ("ug", "KZ" | "MN")
+        );
+        RTL_LANGUAGES.binary_search(&language).is_ok() != other
+    }
 }
+
+/// The scripts written right to left (CLDR's script metadata), sorted.
+const RTL_SCRIPTS: &[&str] = &[
+    "Adlm", "Arab", "Armi", "Avst", "Chrs", "Cprt", "Elym", "Gara", "Hatr", "Hebr", "Hung", "Khar",
+    "Lydi", "Mand", "Mani", "Mend", "Merc", "Mero", "Narb", "Nbat", "Nkoo", "Orkh", "Ougr", "Palm",
+    "Phli", "Phlp", "Phnx", "Prti", "Rohg", "Samr", "Sarb", "Sidt", "Sogd", "Sogo", "Syrc", "Thaa",
+    "Yezi",
+];
+
+/// The languages CLDR has locale data for that are most likely written in
+/// a right-to-left script (its likely subtags), sorted; `iw` and `ji` are
+/// Hebrew's and Yiddish's old codes, which Java still reports.
+const RTL_LANGUAGES: &[&str] = &[
+    "ar", "ars", "bal", "ckb", "dv", "fa", "he", "iw", "ji", "ks", "lrc", "mzn", "nqo", "ps", "sd",
+    "sdh", "syr", "ug", "ur", "yi",
+];
 
 impl Default for Locale {
     fn default() -> Self {
@@ -1424,6 +1469,24 @@ mod tests {
         assert_eq!((zh.language(), zh.region()), ("zh", Some("CN")));
         assert_eq!(Locale::parse("zh-Hans").unwrap().region(), None);
         assert_eq!(Locale::parse("es-419").unwrap().region(), Some("419"));
+    }
+
+    #[test]
+    fn a_locale_is_right_to_left_by_its_script_or_its_likely_one() {
+        // The tags among `tags` written right to left.
+        let rtl = |tags: String| {
+            let rtl = |tag: &&str| Locale::parse(tag).unwrap().rtl();
+            tags.split(' ').filter(rtl).collect::<Vec<_>>().join(" ")
+        };
+        // The language's likely script, in its region where that differs.
+        let likely = "ar ar-EG he-IL iw fa_IR ur ckb syr pa-PK uz-AF";
+        let others = "en-US zh-CN pa sd-IN ug-KZ arn-CL";
+        assert_eq!(rtl(format!("{likely} {others}")), likely);
+        // A script the tag names decides.
+        let named = "az-Arab ff-Adlm-GN pa-Arab und-Hebr";
+        let others = "ar-Latn sd-Deva-IN uz-Latn-AF zh-Hant-TW";
+        assert_eq!(rtl(format!("{named} {others}")), named);
+        assert!(super::RTL_SCRIPTS.is_sorted() && super::RTL_LANGUAGES.is_sorted());
     }
 
     #[test]
