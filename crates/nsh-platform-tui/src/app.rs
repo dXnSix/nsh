@@ -566,6 +566,18 @@ impl AppView {
         self.tree.exit
     }
 
+    /// The app is about to terminate: its terminate listeners run while this waits,
+    /// [`nsh_engine::TERMINATE_TIMEOUT`] at most, once. [`crate::run_app`] calls it as its loop
+    /// ends; an embedder running a loop of its own calls it before [`AppView::stop`] when the
+    /// program exits.
+    pub fn will_terminate(&self) {
+        if let Some(engine) = &self.surface.engine {
+            engine
+                .control()
+                .will_terminate_and_wait(nsh_engine::TERMINATE_TIMEOUT);
+        }
+    }
+
     /// Routes input against the last completed render. Unused keys and outside-area events are ignored.
     pub fn handle(&mut self, input: Input) -> Handled {
         // Ctrl+C is never the diagnostics panel's: it copies or quits.
