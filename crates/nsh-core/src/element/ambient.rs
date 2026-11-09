@@ -290,7 +290,8 @@ pub fn screen_reader() -> bool {
 }
 
 /// Whether the surface lays out right to left: the root's direction,
-/// which follows the user's language unless the app sets the root's
+/// which follows the language the app shows in (the user's, or
+/// [`crate::i18n::set_locale`]'s) unless the app sets the root's
 /// `direction` (reading subscribes).
 ///
 /// The core's part of `nsh-base`'s controls, which swap Left and Right by

@@ -2,11 +2,13 @@
 //! ([`crate::element`]'s free functions) beyond commands for the
 //! platform: display frames and the layout direction.
 //!
-//! The surface's direction follows the user's language: its root's
-//! (`Prop::LayoutDirection` on the root, which JS sets from the language),
-//! else the platform's. In a Rust app the core sets the root's direction
-//! from the platform's language from the start, and again whenever the
-//! language changes. A view's `direction` style sets its own subtree's.
+//! The surface's direction follows the language the app shows in: the
+//! user's, or the one the app asked for ([`crate::i18n::set_locale`], whose
+//! direction the engine writes into the environment). It is its root's
+//! (`Prop::LayoutDirection` on the root, which JS sets from the
+//! environment), else the platform's. In a Rust app the core sets the
+//! root's direction from the environment from the start, and again whenever
+//! the language changes. A view's `direction` style sets its own subtree's.
 
 use super::Core;
 use crate::{Op, Prop, ROOT_ID, TextEngine, element::AnswerSlot, time::Instant};

@@ -37,7 +37,7 @@ function t(key: string, options?: { locale?: string; [name: string]: unknown }):
 function setLocale(locale: string | null): void;
 ```
 
-让应用显示 `locale`（BCP 47 标签，`"zh-CN"`），而不管用户的语言：`t`、`locale()`、`localeSettings().languages` 的第一项和 `Intl` 的默认 locale 会立即跟随它。`null` 重新跟随用户的语言。不是语言标签的字符串会抛出 `RangeError`。这个选择在应用运行期间有效，只作用于它所在的 surface。
+让应用显示 `locale`（BCP 47 标签，`"zh-CN"`），而不管用户的语言：`t`、`locale()`、`localeSettings().languages` 的第一项和 `Intl` 的默认 locale 会立即跟随它，布局方向也一样：从右到左书写的语言（阿拉伯语、希伯来语、波斯语等）从右到左布局，其他语言从左到右。视图的 `direction` 样式仍然设置其子树的方向。`null` 重新跟随用户的语言和设备的方向。不是语言标签的字符串会抛出 `RangeError`。这个选择在应用运行期间有效，只作用于它所在的 surface。
 
 ## availableLocales
 

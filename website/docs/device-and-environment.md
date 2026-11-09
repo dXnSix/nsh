@@ -521,7 +521,7 @@ import { pixelRatio } from "nsh";
 
 ## Right to left
 
-When the device language is written right to left (Arabic, Hebrew, Persian, ...), NSH lays the app out right to left: rows run from the right, the logical style properties take their right-to-left sides, text aligns to the right, and native widgets mirror. The layout direction follows the user's language by itself. A view's `direction` style (`"ltr"`, `"rtl"` or `"inherit"`; `.direction(LayoutDirection::..)` in Rust) sets the direction of its subtree; on the root view it sets the app's.
+When the device language is written right to left (Arabic, Hebrew, Persian, ...), NSH lays the app out right to left: rows run from the right, the logical style properties take their right-to-left sides, text aligns to the right, and native widgets mirror. The layout direction follows the user's language by itself, or the language the app shows in with `setLocale` (Rust: `set_locale`, [I18n](./i18n.md)): right to left for one written so, left to right for the others, the device's again once the app follows the user's language. A view's `direction` style (`"ltr"`, `"rtl"` or `"inherit"`; `.direction(LayoutDirection::..)` in Rust) sets the direction of its subtree; on the root view it sets the app's.
 
 Changes apply at once, without restarting the app; the demo on this page toggles the `direction` style.
 
