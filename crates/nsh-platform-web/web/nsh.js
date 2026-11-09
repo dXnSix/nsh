@@ -55,6 +55,8 @@ const PRESS_EVENTS = ["onPress", "onLongPress", "onPressIn", "onPressOut"];
 const MOUSE_EVENTS = ["onMouseEnter", "onMouseLeave", "onMouseMove"];
 /** The DOM's `buttons` bits, in the order a held button is named by. */
 const MOUSE_BUTTONS = [[1, "left"], [2, "right"], [4, "middle"], [8, "back"], [16, "forward"]];
+/** The buttons other than the primary one by the DOM's `button` number. */
+const AUX_BUTTONS = [null, "middle", "right", "back", "forward"];
 /** The keys whose press or release is reported as a mouse move. */
 const MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta"]);
 // What lays out a field's text, copied to the hidden copy that finds its
@@ -7117,6 +7119,11 @@ class Player {
     root.addEventListener("focusin", () => (Player.active = this));
     window.addEventListener("keydown", (e) => this.keyDown(e));
     window.addEventListener("keyup", (e) => this.keyUp(e));
+    // The mouse's other buttons press the nearest view listening to
+    // `onAuxPress` once they come up over it, as the DOM's `auxclick`
+    // (which browsers raise for some of them only).
+    root.addEventListener("mousedown", (e) => this.auxDown(e));
+    window.addEventListener("mouseup", (e) => this.auxUp(e));
     // The mouse's back button goes back in the app (with history, as the
     // browser's back button does).
     root.addEventListener("mouseup", (e) => {
@@ -7128,6 +7135,40 @@ class Player {
     this.live.className = "nsh-live";
     this.live.setAttribute("aria-live", "polite");
     if (this.history) this.installHistory();
+  }
+
+  /**
+   * A mouse button other than the primary one went down (`e.button`, the
+   * DOM's numbers): the nearest view around `e`'s target that listens to
+   * `onAuxPress` hears it if it comes up over that view (`auxUp`), unless
+   * a field is nearer (it takes the button itself).
+   */
+  auxDown(e) {
+    const button = AUX_BUTTONS[e.button];
+    if (!button || this.lastPointer === "touch") return;
+    this.aux = null;
+    const view = this.viewOf(e.target);
+    if (!view) return;
+    for (const el of this.ancestors(view)) {
+      if (el._events?.has("onAuxPress")) {
+        this.aux = { el, button };
+        return;
+      }
+      if (el.matches(".nsh-field")) return;
+    }
+  }
+
+  /** The button `auxDown` saw go down came up: over its view, that view
+   * hears `onAuxPress`, with the button as `pressedButton`. */
+  auxUp(e) {
+    const aux = this.aux;
+    if (!aux || AUX_BUTTONS[e.button] !== aux.button) return;
+    this.aux = null;
+    const view = this.viewOf(e.target);
+    if (!view || !aux.el.isConnected || !this.ancestors(view).includes(aux.el)) return;
+    const payload = this.mouseEvent(aux.el, e, true);
+    payload.pressedButton = aux.button;
+    this.event(aux.el._id, "onAuxPress", payload);
   }
 
   /**

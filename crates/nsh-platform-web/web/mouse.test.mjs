@@ -95,3 +95,54 @@ test('entering and leaving carry the mouse where it is, and a modifier key moves
   delete globalThis.document;
   delete globalThis.getComputedStyle;
 });
+
+test('the other buttons press the nearest onAuxPress listener once they come up over it', () => {
+  const root = { parentNode: null, contains: () => true };
+  const outer = {
+    _id: 2, parentNode: root, isConnected: true, _events: new Set(['onAuxPress']),
+    getBoundingClientRect: () => ({ left: 10, top: 20 }), matches: () => false,
+  };
+  const inner = {
+    _id: 3, parentNode: outer, isConnected: true, _events: new Set(),
+    getBoundingClientRect: () => ({ left: 30, top: 50 }), matches: () => false,
+  };
+  const field = {
+    _id: 5, parentNode: outer, isConnected: true, _events: new Set(),
+    getBoundingClientRect: () => ({ left: 30, top: 80 }), matches: (s) => s === '.nsh-field',
+  };
+  globalThis.getComputedStyle = () => ({ transform: 'none', width: '100px', height: '100px' });
+  const player = Object.create(Player.prototype);
+  player.root = root;
+  player.viewOf = (target) => target;
+  player.point = (e) => [e.clientX, e.clientY];
+  const sent = [];
+  player.event = (...args) => sent.push(args);
+  const at = (target, button, shiftKey = false) => ({ target, button, clientX: 45, clientY: 75, buttons: 0, shiftKey });
+  // The middle button, over the view inside the listener: it hears it as
+  // the button comes up, in its own coordinates.
+  player.auxDown(at(inner, 1));
+  assert.equal(sent.length, 0);
+  player.auxUp(at(inner, 1, true));
+  const modifiers = (shift) => ({ control: false, alt: false, shift, platform: false });
+  assert.deepEqual(sent, [[2, 'onAuxPress', { position: { x: 35, y: 55 }, pagePosition: { x: 45, y: 75 }, modifiers: modifiers(true), pressedButton: 'middle' }]]);
+  sent.length = 0;
+  // The DOM's numbers: 2 the secondary button, 3 back, 4 forward.
+  for (const [button, name] of [[2, 'right'], [3, 'back'], [4, 'forward']]) {
+    player.auxDown(at(outer, button));
+    player.auxUp(at(outer, button));
+    assert.equal(sent.pop()[2].pressedButton, name);
+  }
+  // Another button coming up, or the button coming up elsewhere, presses
+  // nothing; the primary button presses views instead; a field takes the
+  // buttons itself.
+  player.auxDown(at(inner, 1));
+  player.auxUp(at(inner, 3));
+  player.auxDown(at(inner, 1));
+  player.auxUp(at(root, 1));
+  player.auxDown(at(inner, 0));
+  player.auxUp(at(inner, 0));
+  player.auxDown(at(field, 1));
+  player.auxUp(at(field, 1));
+  assert.equal(sent.length, 0);
+  delete globalThis.getComputedStyle;
+});
