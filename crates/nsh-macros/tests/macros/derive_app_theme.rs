@@ -6,22 +6,31 @@
 //! their classes read them.
 
 use nsh_core::{
-    element::{
-        AdaptiveColor, AdaptiveShadow, AppTheme, Registry, Role, SharedString, TokenKind, Tokens,
-    },
+    element::{AdaptiveColor, AdaptiveShadow, AppTheme, Registry, SharedString, TokenKind, Tokens},
     geometry::{Points, px},
 };
+
+/// The roles these themes map: the core's, and a UI set's own as
+/// `nsh-base` declares its.
+mod role {
+    use nsh_core::element::Role;
+    pub(crate) use nsh_core::element::role::*;
+
+    pub(crate) const BACKGROUND: Role = Role::new("background");
+
+    pub(crate) const CARD: Role = Role::new("card");
+}
 
 #[derive(Debug, Clone, PartialEq, AppTheme)]
 pub(crate) struct Surface {
     /// The app's background.
-    #[token(color, role = "background")]
+    #[token(color, role = role::BACKGROUND)]
     pub(crate) canvas: AdaptiveColor,
     /// Cards.
-    #[token(color, role = "card")]
+    #[token(color, role = role::CARD)]
     pub(crate) raised: AdaptiveColor,
     /// Popovers and menus.
-    #[token(color, role = "popover")]
+    #[token(color, role = role::POPOVER)]
     pub(crate) overlay: AdaptiveColor,
 }
 
@@ -56,7 +65,7 @@ pub(crate) struct DsTheme {
     #[token(flatten)]
     pub(crate) odds: Odds,
     /// The main action.
-    #[token(color, role = "primary")]
+    #[token(color, role = role::PRIMARY)]
     pub(crate) action: AdaptiveColor,
     #[token(radius)]
     pub(crate) control: Points,
@@ -68,7 +77,7 @@ pub(crate) struct DsTheme {
     pub(crate) strong: f32,
     #[token(shadow)]
     pub(crate) raised: AdaptiveShadow,
-    #[token(font, role = "font-sans")]
+    #[token(font, role = role::FONT_SANS)]
     pub(crate) body: SharedString,
     #[token(color, name = "brand-ink")]
     pub(crate) ink: AdaptiveColor,
@@ -125,10 +134,18 @@ fn names_are_kebab_case_with_their_namespaces() {
             .unwrap()
             .clone()
     };
-    assert_eq!(spec("surface-overlay").roles, [Role::Popover]);
+    // The names of the roles a token plays.
+    let roles = |name: &str| -> Vec<String> {
+        spec(name)
+            .roles
+            .iter()
+            .map(|r| r.name().to_owned())
+            .collect()
+    };
+    assert_eq!(roles("surface-overlay"), ["popover"]);
     assert_eq!(spec("surface-overlay").doc, "Popovers and menus.");
-    assert_eq!(spec("action").roles, [Role::Primary]);
-    assert_eq!(spec("font-body").roles, [Role::FontSans]);
+    assert_eq!(roles("action"), ["primary"]);
+    assert_eq!(roles("font-body"), ["font-sans"]);
     assert_eq!(spec("radius-card").kind, TokenKind::Radius);
     assert_eq!(spec("font-weight-strong").kind, TokenKind::Weight);
     assert_eq!(spec("shadow-raised").kind, TokenKind::Shadow);
@@ -148,7 +165,7 @@ fn a_round_trip_gives_the_theme_back() {
         ..DsTheme::default()
     };
     let tokens = theme.to_tokens();
-    assert_eq!(tokens.role_name(Role::Popover), "surface-overlay");
+    assert_eq!(tokens.role_name(role::POPOVER), "surface-overlay");
     assert_eq!(tokens.number("radius-card"), Some(20.0));
     assert_eq!(tokens.font("font-body").map(|f| &**f), Some("Inter"));
     let read = DsTheme::read_tokens(&tokens, "");
@@ -191,11 +208,8 @@ fn a_registered_derived_type_is_the_apps_theme() {
         tokens.color("surface-raised"),
         Some(Surface::default().raised)
     );
-    assert_eq!(tokens.role_name(Role::Primary), "action");
-    assert_eq!(
-        tokens.role_font(Role::FontSans).map(|f| &**f),
-        Some("Inter")
-    );
+    assert_eq!(tokens.role_name(role::PRIMARY), "action");
+    assert_eq!(tokens.role(role::FONT_SANS).as_deref(), Some("Inter"));
 }
 
 /// Namespaced kinds, to nest.

@@ -593,6 +593,7 @@ reset_tokens(["primary"]); // 恢复应用的 primary
 `rounded-surface-card`）。`#[derive(AppTheme)]` 根据结构体的字段生成实现：
 
 ```rust
+use nsh_base::role;
 use nsh_core::prelude::*;
 
 /// 设计系统的令牌。
@@ -602,10 +603,10 @@ pub struct DsTheme {
     #[token(color)]
     pub surface_raised: AdaptiveColor,
     /// 弹出层与菜单。
-    #[token(color, role = "popover")]
+    #[token(color, role = role::POPOVER)]
     pub surface_overlay: AdaptiveColor,
     /// 主操作。
-    #[token(color, role = "primary")]
+    #[token(color, role = role::PRIMARY)]
     pub action: AdaptiveColor,
     /// 卡片的圆角。
     #[token(radius)]
@@ -629,8 +630,10 @@ impl Default for DsTheme {
   `spacing`（`spacing-*`）、`text`（`text-*`）、`weight`（`font-weight-*`）、`tracking`、`leading`、`blur`、
   `font`（`font-*`）和 `shadow`（`shadow-*`）。颜色是 `AdaptiveColor`，数字是 `f32` 或 `Points`，字体族是 `SharedString`
   或 `String`，阴影是 `AdaptiveShadow`。`name = "…"` 为令牌命名（带命名空间的种类，名称保留其命名空间：
-  `#[token(radius, name = "radius-corner")]`），`role = "…"` 把一个角色映射到它，它担任的每个角色写一次
-  （`#[token(color, role = "card", role = "popover")]`：两者共用一个表面）。
+  `#[token(radius, name = "radius-corner")]`），`role = <路径>` 把一个角色映射到它，写角色常量的路径
+  （`nsh_base::role::POPOVER`，或组件库自己的角色），它担任的每个角色写一次
+  （`#[token(color, role = role::CARD, role = role::POPOVER)]`：两者共用一个表面）。不是角色的路径，以及读取的种类与令牌不符的角色
+  （把圆角的角色用在颜色上），都会被编译器拒绝。
 - `#[token(nested)]` 包含另一个 `AppTheme` 类型，其名称按上面的方式放在 `<字段名>-` 之下（`surface: Surface` 中的
   `raised`：`surface-raised`；`#[token(shadow)] raised`：`shadow-surface-raised`），读作
   `theme_of::<DsTheme>().surface.raised`。令牌中缺少的名称取内部类型的 `Default`，而不是外部 `Default` 给该字段的值。

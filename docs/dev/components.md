@@ -823,8 +823,9 @@ nested type's field, the nested type's), `write_patch(patch, prefix, out)` and t
 with the roles its specs map (`Tokens::with_roles`). A `TokenSpec` is a name, a `TokenKind` (`#[non_exhaustive]`:
 `Color`, `Number`, `Radius`, `Spacing`, `Text`, `Weight`, `Tracking`, `Leading`, `Blur`, `Font`, `Shadow`; `name()` /
 `from_name()` its spelling in descriptions, `is_number()` every kind but `Color`, `Font` and `Shadow`, `namespace()` the
-namespace its classes read, `radius-` to `shadow-`, none for `Color` and `Number`), a doc comment and the `Role` it
-plays, built with `TokenSpec::new(name, kind).doc(..).role(..)`. The prefix lets a type hold another:
+namespace its classes read, `radius-` to `shadow-`, none for `Color` and `Number`), a doc comment and the roles it
+plays (`AnyRole`s: a role's name and what it reads), built with `TokenSpec::new(name, kind).doc(..).role(..)`. The
+prefix lets a type hold another:
 `TokenKind::prefixed(prefix, name)` puts it after the name's namespace when it has one, so the classes still find it
 (`radius-card` under `button-`: `radius-button-card`, `rounded-button-card`), else in front (`surface-raised`). The
 tokens stay flat and by name, so classes, `token()` and theme files read them as they read any theme's; a type is a
@@ -834,7 +835,9 @@ app_theme` and `nsh-engine`'s `tests/engine/app_theme.rs`); `#[derive(AppTheme)]
 kind's namespace, a nested type's through `TokenKind::prefixed`; the impl through `__private::ThemeValue`, which
 `AdaptiveColor`, `f32`, `Points`, `SharedString`, `String` and `AdaptiveShadow` implement; `<Type>Patch` of `Option`s,
 each documented with its token and classes; the compile errors of `AppTheme`'s doctests, which apply
-`ThemeSet::try_add`'s rule of names and kinds and check each role's name, kind and uniqueness).
+`ThemeSet::try_add`'s rule of names and kinds; a role is its constant's path, written into `.role::<V>(path)` with
+`V` what a token of the field's kind holds, so rustc refuses a path that is no role and a role of another kind, and
+the derive only a path written twice and a role on a shadow).
 
 `Registry::theme::<T>()` records `ThemeSpec::of::<T>()`: the type's name, its `TypeId`, its specs and its defaults
 (`T::default().to_tokens()`), each behind a function pointer, so the registry stays `Clone` and needs no `T`

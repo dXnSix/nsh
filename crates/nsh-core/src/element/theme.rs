@@ -31,14 +31,14 @@ use super::{AnyRole, Role, RoleKind, RoleValue, Tokens};
 ///
 /// ```
 /// use nsh_core::{
-///     element::{AdaptiveColor, AppTheme},
+///     element::{AdaptiveColor, AppTheme, role},
 ///     geometry::Points,
 /// };
 ///
 /// #[derive(Clone, PartialEq, Default, AppTheme)]
 /// struct Ds {
 ///     /// Popovers and menus.
-///     #[token(color, role = "popover")]
+///     #[token(color, role = role::POPOVER)]
 ///     overlay: AdaptiveColor,
 ///     #[token(radius)]
 ///     card: Points,
@@ -51,19 +51,29 @@ use super::{AnyRole, Role, RoleKind, RoleValue, Tokens};
 /// assert_eq!(names, ["overlay", "radius-card"]);
 /// ```
 ///
-/// A token plays several roles with a `role` for each: one surface for
-/// cards and popovers.
+/// A role is a constant of the crate that draws with it, named by its
+/// path: the core's ([`super::role`]), a UI set's (`nsh_base::role`), or a
+/// component library's own. A token plays several roles with a `role` for
+/// each: one surface for cards and popovers.
 ///
 /// ```
-/// use nsh_core::element::{AdaptiveColor, AppTheme, Role};
+/// use nsh_core::element::{AdaptiveColor, AppTheme, Role, role};
+///
+/// /// What a library's cards draw on.
+/// const CARD: Role = Role::new("card");
 ///
 /// #[derive(Clone, PartialEq, Default, AppTheme)]
 /// struct Flat {
-///     #[token(color, role = "card", role = "popover")]
+///     #[token(color, role = CARD, role = role::POPOVER)]
 ///     surface: AdaptiveColor,
 /// }
 ///
-/// assert_eq!(Flat::token_specs()[0].roles, [Role::Card, Role::Popover]);
+/// let roles: Vec<_> = Flat::token_specs()[0]
+///     .roles
+///     .iter()
+///     .map(|r| r.name())
+///     .collect();
+/// assert_eq!(roles, ["card", "popover"]);
 /// ```
 ///
 /// The derive refuses, at the attribute, a name given twice in one type:
@@ -104,40 +114,67 @@ use super::{AnyRole, Role, RoleKind, RoleValue, Tokens};
 /// }
 /// ```
 ///
-/// a role of no name:
+/// a role's name in place of its constant:
 ///
 /// ```compile_fail
 /// use nsh_core::element::{AdaptiveColor, AppTheme};
 ///
 /// #[derive(Clone, PartialEq, Default, AppTheme)]
 /// struct Ds {
-///     #[token(color, role = "surface")]
+///     #[token(color, role = "popover")]
 ///     ink: AdaptiveColor,
 /// }
 /// ```
 ///
-/// a role of another kind of token (`radius` is a number):
+/// and the compiler a role there is not:
 ///
 /// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
+/// use nsh_core::element::{AdaptiveColor, AppTheme, role};
 ///
 /// #[derive(Clone, PartialEq, Default, AppTheme)]
 /// struct Ds {
-///     #[token(color, role = "radius")]
+///     #[token(color, role = role::SURFACE)]
 ///     ink: AdaptiveColor,
+/// }
+/// ```
+///
+/// and a role that reads another kind than the token holds (a radius is a
+/// number):
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme, NumberRole, Role};
+///
+/// const RADIUS: NumberRole = Role::new("radius");
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(color, role = RADIUS)]
+///     ink: AdaptiveColor,
+/// }
+/// ```
+///
+/// The derive refuses a role on a shadow token, which no role reads:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveShadow, AppTheme, role};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(shadow, role = role::POPOVER)]
+///     raised: AdaptiveShadow,
 /// }
 /// ```
 ///
 /// a role mapped twice, onto two tokens:
 ///
 /// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
+/// use nsh_core::element::{AdaptiveColor, AppTheme, role};
 ///
 /// #[derive(Clone, PartialEq, Default, AppTheme)]
 /// struct Ds {
-///     #[token(color, role = "card")]
+///     #[token(color, role = role::POPOVER)]
 ///     ink: AdaptiveColor,
-///     #[token(color, role = "card")]
+///     #[token(color, role = role::POPOVER)]
 ///     paper: AdaptiveColor,
 /// }
 /// ```
@@ -145,11 +182,11 @@ use super::{AnyRole, Role, RoleKind, RoleValue, Tokens};
 /// or twice onto one:
 ///
 /// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
+/// use nsh_core::element::{AdaptiveColor, AppTheme, role};
 ///
 /// #[derive(Clone, PartialEq, Default, AppTheme)]
 /// struct Ds {
-///     #[token(color, role = "card", role = "card")]
+///     #[token(color, role = role::POPOVER, role = role::POPOVER)]
 ///     paper: AdaptiveColor,
 /// }
 /// ```
@@ -193,11 +230,11 @@ use super::{AnyRole, Role, RoleKind, RoleValue, Tokens};
 /// a `name` or `role` on a field that is no token:
 ///
 /// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
+/// use nsh_core::element::{AdaptiveColor, AppTheme, role};
 ///
 /// #[derive(Clone, PartialEq, Default, AppTheme)]
 /// struct Ds {
-///     #[token(skip, role = "card")]
+///     #[token(skip, role = role::POPOVER)]
 ///     ink: AdaptiveColor,
 /// }
 /// ```

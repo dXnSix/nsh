@@ -658,6 +658,7 @@ read it (`radius-card`: `radius-surface-card`, `rounded-surface-card`). `#[deriv
 struct's fields:
 
 ```rust
+use nsh_base::role;
 use nsh_core::prelude::*;
 
 /// The design system's tokens.
@@ -667,10 +668,10 @@ pub struct DsTheme {
     #[token(color)]
     pub surface_raised: AdaptiveColor,
     /// Popovers and menus.
-    #[token(color, role = "popover")]
+    #[token(color, role = role::POPOVER)]
     pub surface_overlay: AdaptiveColor,
     /// The main action.
-    #[token(color, role = "primary")]
+    #[token(color, role = role::PRIMARY)]
     pub action: AdaptiveColor,
     /// Cards' corners.
     #[token(radius)]
@@ -694,8 +695,10 @@ impl Default for DsTheme {
   `rounded-card`), `spacing` (`spacing-*`), `text` (`text-*`), `weight` (`font-weight-*`), `tracking`, `leading`,
   `blur`, `font` (`font-*`) and `shadow` (`shadow-*`). A color is an `AdaptiveColor`, a number an `f32` or `Points`, a
   font family a `SharedString` or `String`, a shadow an `AdaptiveShadow`. `name = "…"` names a token (a namespaced
-  kind's name keeps its namespace: `#[token(radius, name = "radius-corner")]`), `role = "…"` maps a role onto it,
-  once for each role it plays (`#[token(color, role = "card", role = "popover")]`: one surface for both).
+  kind's name keeps its namespace: `#[token(radius, name = "radius-corner")]`), `role = <path>` maps a role onto it,
+  the role's constant by its path (`nsh_base::role::POPOVER`, or a component library's own), once for each role it
+  plays (`#[token(color, role = role::CARD, role = role::POPOVER)]`: one surface for both). The compiler refuses a
+  path that is no role, and a role that reads another kind than the token holds (a radius' role on a color).
 - `#[token(nested)]` holds another `AppTheme` type, its names under `<field>-` as above (`surface: Surface` with
   `raised`: `surface-raised`, with `#[token(shadow)] raised`: `shadow-surface-raised`), read as
   `theme_of::<DsTheme>().surface.raised`. A name the tokens lack keeps the inner type's `Default`, not the value the
