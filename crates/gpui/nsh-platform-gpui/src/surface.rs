@@ -495,6 +495,14 @@ impl Surface {
         }
     }
 
+    /// The app is about to terminate: its terminate listeners run while
+    /// this waits, [`nsh_engine::TERMINATE_TIMEOUT`] at most.
+    pub(crate) fn will_terminate(&self) {
+        self.control(|c| {
+            c.will_terminate_and_wait(nsh_engine::TERMINATE_TIMEOUT);
+        });
+    }
+
     /// Sends an event to JS.
     pub(crate) fn event(&self, id: NodeId, kind: EventKind, payload: EventPayload) {
         self.control(|c| {
