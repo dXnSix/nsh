@@ -44,6 +44,7 @@ mod terminal;
 mod text_view;
 mod theme_roles;
 mod theme_set_numbers;
+mod theme_set_roles;
 mod time_field;
 mod toggle;
 mod token_roles;

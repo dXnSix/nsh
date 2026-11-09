@@ -532,8 +532,35 @@ pub fn theme_of<T: AppTheme>() -> Arc<T> {
 /// ([`theme_of`]), changed in one field and set changes that field only;
 /// one `theme` changes is that value in both appearances, as
 /// [`update_theme`] makes a number it sets.
+///
+/// A type that is not registered and whose tokens play roles
+/// (`nsh_base::Theme`: shadcn's names, each the role of its name) sets, in
+/// an app whose own theme type maps a role onto another token, that token:
+/// `theme().popover` set there is the design system's `surface-overlay`,
+/// as the role's name sets it in a theme file. So do [`update_theme`] and
+/// [`reset_theme`]. A registered type's roles are mapped onto its own
+/// tokens, which it sets as ever.
 pub fn set_theme<T: AppTheme>(theme: T) {
-    super::ambient::set_theme_tokens(theme_tokens(&theme));
+    super::ambient::theme_action(super::task::Action::SetTheme {
+        tokens: theme_tokens(&theme),
+        played: played::<T>(),
+    });
+}
+
+/// The roles a theme type's tokens play, each with its token's name: what
+/// the core needs of the type when one of its setters runs.
+pub(crate) type Played = Vec<(Box<str>, Box<str>)>;
+
+/// The roles `T`'s tokens play ([`Played`]).
+pub(crate) fn played<T: AppTheme>() -> Played {
+    T::token_specs()
+        .iter()
+        .flat_map(|spec| {
+            spec.roles
+                .iter()
+                .map(|role| (role.name().into(), spec.name.as_ref().into()))
+        })
+        .collect()
 }
 
 /// `theme`'s tokens, without the roles its specs map: the roles are the
@@ -546,14 +573,28 @@ pub(crate) fn theme_tokens<T: AppTheme>(theme: &T) -> Tokens {
 
 /// Changes the fields of `T` that `patch` sets, the others staying.
 pub fn update_theme<T: AppTheme>(patch: T::Patch) {
-    super::update_tokens(patch_tokens::<T>(&patch));
+    super::ambient::theme_action(super::task::Action::UpdateTheme {
+        tokens: patch_tokens::<T>(&patch),
+        played: played::<T>(),
+    });
 }
 
 /// Puts `T`'s tokens back to the app's theme's (`nsh.json`'s over the
 /// types' defaults, or the one last set whole), undoing [`set_theme`] and
 /// [`update_theme`].
 pub fn reset_theme<T: AppTheme>() {
-    super::reset_tokens(T::token_specs().iter().map(|s| s.name.as_ref()));
+    super::ambient::theme_action(super::task::Action::ResetTheme {
+        names: names::<T>(),
+        played: played::<T>(),
+    });
+}
+
+/// `T`'s token names.
+pub(crate) fn names<T: AppTheme>() -> Vec<Box<str>> {
+    T::token_specs()
+        .iter()
+        .map(|s| s.name.as_ref().into())
+        .collect()
 }
 
 /// The tokens `patch` sets.
