@@ -38,8 +38,11 @@ pub(crate) fn payload(kind: EventKind, value: serde_json::Value) -> EventPayload
             message: text("message"),
         },
         // `{ position, pagePosition, modifiers, pressedButton }`, as handlers
-        // get it.
-        EventKind::MouseEnter | EventKind::MouseLeave | EventKind::MouseMove => {
+        // get it (`onAuxPress`'s `pressedButton` is the button that pressed).
+        EventKind::MouseEnter
+        | EventKind::MouseLeave
+        | EventKind::MouseMove
+        | EventKind::AuxPress => {
             let (position, page_position, modifiers) = pointer_at(&value);
             let pressed_button = value
                 .get("pressedButton")

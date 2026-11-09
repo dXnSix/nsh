@@ -99,3 +99,22 @@ fn nested_values_are_left_out() {
     );
     assert_eq!(fields.len(), 1);
 }
+
+#[test]
+fn an_aux_press_reaches_the_core_with_its_button() {
+    let kind = EventKind::from_prop("onAuxPress").unwrap();
+    let EventPayload::Mouse(mouse) = payload(
+        kind,
+        json!({
+            "position": { "x": 3, "y": 4 },
+            "pagePosition": { "x": 13, "y": 24 },
+            "modifiers": { "control": false, "alt": false, "shift": true, "platform": false },
+            "pressedButton": "middle",
+        }),
+    ) else {
+        panic!("a mouse payload");
+    };
+    assert_eq!((mouse.position.x.0, mouse.page_position.y.0), (3.0, 24.0));
+    assert_eq!(mouse.pressed_button, Some(nsh_core::MouseButton::Middle));
+    assert!(mouse.modifiers.shift);
+}

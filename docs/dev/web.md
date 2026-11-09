@@ -669,6 +669,10 @@ browsers' touches into what phones report:
   under the pointer and never zooms the page. Scroll events follow the desktop backends: touch drags send
   `onScrollDragStart` / `EndDrag`, glides and snaps `onMomentumStart` / `End`, every scroll ends with one
   `onScrollEnd` (the browser's `scrollend` after a scroll driven here, `drive` / `ownEnd`, is not another).
+- **The mouse's other buttons** (`auxDown` / `auxUp`): `mousedown` and `mouseup` of the DOM's `button` 1 (middle), 2
+  (secondary), 3 (back) and 4 (forward) press the nearest view around the target listening to `onAuxPress` (not past
+  a field) once the same button comes up over it, as the DOM's `auxclick`, which browsers raise for some of the
+  buttons only.
 - **Mouse drags never scroll**, in every idiom, as on the desktop backends: dragging the content is a touchscreen's
   way to scroll, the mouse has the wheel, the keyboard and the scroll bar. Its drags go to pans, the responder system
   and selectable text (`pointerDown` only takes touches and pens in zoomable views, which pan themselves; a press
