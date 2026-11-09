@@ -123,6 +123,9 @@ pub(crate) struct Input {
     control_press: RefCell<Option<(NshView, WindowControl)>>,
     /// The pointers that are down.
     pointers: RefCell<Vec<Pointer>>,
+    /// The press of a mouse button other than the primary one, while it is
+    /// down: the view whose `onAuxPress` hears it if it comes up over it.
+    aux: RefCell<Option<input::AuxPress<NshView>>>,
     /// Two fingers pinching / rotating on the touchscreen.
     two: RefCell<Option<TwoFinger>>,
     /// A touchpad pinch.
@@ -300,6 +303,7 @@ pub(crate) fn reset(surface: &Surface) {
     input.window_press.borrow_mut().take();
     input.control_press.borrow_mut().take();
     input.pointers.borrow_mut().clear();
+    input.aux.borrow_mut().take();
     input.two.borrow_mut().take();
     input.pinch.borrow_mut().take();
     input.zoom.borrow_mut().take();
@@ -672,11 +676,23 @@ fn dispatch(surface: &Rc<Surface>, event: &gdk::Event) -> glib::Propagation {
             *surface.input.control_press.borrow_mut() = window_control(surface, x, y);
             down(surface, Key::Mouse, x, y, time, event.modifier_state())
         }
-        T::ButtonPress
+        // The other buttons: the secondary one asks for a context menu, and
+        // each presses the nearest `onAuxPress` listener once it comes up.
+        // Their native handling goes on (the back button's `GestureClick`).
+        T::ButtonPress if button().is_some_and(|b| b != gdk::BUTTON_PRIMARY) => {
+            if let Some(pressed) = button().and_then(mouse_button) {
+                aux_down(surface, x, y, pressed);
+            }
             if button() == Some(gdk::BUTTON_SECONDARY)
-                && context_menu(surface, x, y, event.modifier_state()) =>
-        {
-            return glib::Propagation::Stop;
+                && context_menu(surface, x, y, event.modifier_state())
+            {
+                return glib::Propagation::Stop;
+            }
+        }
+        T::ButtonRelease if button().is_some_and(|b| b != gdk::BUTTON_PRIMARY) => {
+            if let Some(released) = button().and_then(mouse_button) {
+                aux_up(surface, x, y, released, event.modifier_state());
+            }
         }
         T::ButtonRelease if button() == Some(gdk::BUTTON_PRIMARY) => {
             let pending = surface.input.window_press.borrow_mut().take();
@@ -780,6 +796,50 @@ fn dispatch(surface: &Rc<Surface>, event: &gdk::Event) -> glib::Propagation {
         _ => {}
     }
     glib::Propagation::Proceed
+}
+
+/// A mouse button other than the primary one went down at `(x, y)` (root
+/// coordinates): the nearest view around the one under it that listens to
+/// `onAuxPress` hears it if the button comes up over it
+/// ([`input::AuxPress`]). Hosted widgets (a text field) take their own.
+fn aux_down(surface: &Surface, x: f32, y: f32, button: MouseButton) {
+    let press = pick(&event_root(surface), x, y)
+        .filter(|hit| hit.native.is_none())
+        .and_then(|hit| {
+            let links = chain(&hit.view).into_iter().map(|v| {
+                let (events, field) = {
+                    let s = v.state();
+                    (s.events, s.kind == ViewKind::Input)
+                };
+                (v, events, field)
+            });
+            input::AuxPress::down(button, links)
+        });
+    *surface.input.aux.borrow_mut() = press;
+}
+
+/// `button` came up at `(x, y)`: over the view its press went down on,
+/// that view hears `onAuxPress`.
+fn aux_up(surface: &Surface, x: f32, y: f32, button: MouseButton, state: gdk::ModifierType) {
+    let press = surface.input.aux.borrow_mut().take();
+    let Some(press) = press else { return };
+    let over = pick(&event_root(surface), x, y).map_or_else(Vec::new, |hit| chain(&hit.view));
+    if !press.up(button, over) {
+        // Another button came up while this one is down.
+        if press.button != button {
+            *surface.input.aux.borrow_mut() = Some(press);
+        }
+        return;
+    }
+    let (location_x, location_y) = local(surface, &press.view, x, y);
+    let event = nsh_core::MouseEvent::new(
+        point(Points(location_x), Points(location_y)),
+        point(Points(x), Points(y)),
+        modifiers(state),
+        Some(button),
+    );
+    let id = press.view.state().id;
+    surface.event(id, EventKind::AuxPress, EventPayload::Mouse(event));
 }
 
 /// A secondary click at `(x, y)` (root coordinates): the nearest view
