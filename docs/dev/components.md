@@ -860,10 +860,12 @@ in `light` and `dark`; roles none of it), which the descriptions carry as a type
 (`ambient::with_theme_cache`: by `TypeId`, the `Arc<Tokens>` read and the `Arc<T>` as `Box<dyn Any>`): while the cached
 tokens are pointer-equal to the current ones the cached theme is returned, else `T::read_tokens(&tokens, "")` is cached
 in its place. The type's `read_tokens` runs with the cache let go, so it may read the tokens or another type.
-`set_theme` is `update_tokens` of its tokens without the roles its specs map (`theme::theme_tokens`: the registered
-types' roles stay), `update_theme` `update_tokens` of the patch's tokens (`theme::patch_tokens`), and `reset_theme`
-`reset_tokens` of `T`'s names; `ModuleCx` has the three for synchronous `#[module]` functions (`Action::UpdateTokens`,
-`reset_tokens`).
+`set_theme` takes its tokens without the roles its specs map (`theme::theme_tokens`: the registered types' roles
+stay) as `update_tokens` does, but as a type's fields (`Action::SetTheme`, `Core::set_theme_tokens`,
+`Tokens::over_as_fields`): a number field is the light value, so a number left at the light value the app's tokens
+have keeps their dark one, and a theme read and set back changes nothing. `update_theme` is `update_tokens` of the
+patch's tokens (`theme::patch_tokens`), and `reset_theme` `reset_tokens` of `T`'s names; `ModuleCx` has the three for
+synchronous `#[module]` functions (`Action::SetTheme`, `Action::UpdateTokens`, `reset_tokens`).
 
 `nsh_base::Theme` implements `AppTheme` in its `theme!` macro: the 31 shadcn colors, `radius`, `font-sans` and
 `font-mono`, each spec playing the role of its name, and `type Patch = Tokens` (`update_theme::<Theme>(tokens)`; under

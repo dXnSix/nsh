@@ -446,8 +446,14 @@ pub fn theme_of<T: AppTheme>() -> Arc<T> {
 /// Draws the app with `theme`: its names take its values, every other
 /// token stays (another type's, the app's own). In order with the app's
 /// other actions, as [`super::update_tokens`].
+///
+/// A number field is its token's light value. A number `theme` leaves at
+/// the value it has keeps the dark value it has, so a theme read
+/// ([`theme_of`]), changed in one field and set changes that field only;
+/// one `theme` changes is that value in both appearances, as
+/// [`update_theme`] makes a number it sets.
 pub fn set_theme<T: AppTheme>(theme: T) {
-    super::update_tokens(theme_tokens(&theme));
+    super::ambient::set_theme_tokens(theme_tokens(&theme));
 }
 
 /// `theme`'s tokens, without the roles its specs map: the roles are the

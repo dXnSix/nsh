@@ -33997,6 +33997,190 @@ mod app_theme {
     }
 }
 
+/// `set_theme` and the dark values of a type's numbers: a number field is
+/// the light value, so a theme read and set back keeps what it could not
+/// read, and a number it changes is its value in both appearances.
+mod theme_set_numbers {
+    use super::{
+        app_theme::{Ds, DsPatch, sets},
+        *,
+    };
+    use crate::{
+        Prop,
+        element::{AdaptiveColor, AppTheme, ModuleCx, Root, RustCall, RustOp, ToJs, Tokens},
+        prelude::*,
+    };
+
+    /// A core with the design system's types, whose theme file gives
+    /// `radius-card` 10 points, and 6 in the dark appearance.
+    fn themed_core() -> Core<FakeEngine> {
+        let mut c = core();
+        c.set_components(sets());
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(
+                    r##"{ "cssVars": { "theme": { "radius-card": "10px" }, "dark": { "radius-card": "6px" } } }"##.into(),
+                ),
+            }],
+        );
+        assert_eq!(card(&c), (Some(10.0), Some(6.0)));
+        c
+    }
+
+    /// `radius-card` in the light and in the dark appearance.
+    fn card(c: &Core<FakeEngine>) -> (Option<f32>, Option<f32>) {
+        (
+            c.tokens().number_in("radius-card", false),
+            c.tokens().number_in("radius-card", true),
+        )
+    }
+
+    fn overlay(c: &Core<FakeEngine>) -> Option<AdaptiveColor> {
+        c.tokens().color("surface-overlay")
+    }
+
+    /// Runs `run` as a synchronous module function does.
+    fn call(c: &mut Core<FakeEngine>, run: impl FnOnce(&mut ModuleCx) + 'static) {
+        c.apply(Op::Rust(RustOp {
+            call: 0,
+            run: RustCall::Op(Box::new(move |cx| {
+                run(cx);
+                Ok(Box::new(()) as Box<dyn ToJs>)
+            })),
+        }))
+        .unwrap();
+    }
+
+    /// How many `Command::Tokens` the batches committed now sent.
+    fn sent(c: &mut Core<FakeEngine>) -> usize {
+        let mut sent = 0;
+        while let Some(batch) = c.commit() {
+            sent += batch
+                .items
+                .iter()
+                .filter(|i| {
+                    matches!(
+                        i,
+                        MountItem::Command {
+                            command: Command::Tokens(_),
+                            ..
+                        }
+                    )
+                })
+                .count();
+        }
+        sent
+    }
+
+    #[test]
+    fn a_theme_read_changed_in_one_field_and_set_keeps_a_numbers_dark_value() {
+        let mut c = themed_core();
+        let mut theme = Ds::read_tokens(c.tokens(), "");
+        assert_eq!(theme.card, 10.0);
+        theme.overlay = AdaptiveColor::rgb(0x444444, 0x555555);
+        call(&mut c, move |cx| cx.set_theme(theme));
+        assert_eq!(overlay(&c), Some(AdaptiveColor::rgb(0x444444, 0x555555)));
+        assert_eq!(card(&c), (Some(10.0), Some(6.0)));
+    }
+
+    #[test]
+    fn a_theme_read_and_set_back_changes_nothing() {
+        let mut c = themed_core();
+        let _ = sent(&mut c);
+        let before = c.tokens().clone();
+        let theme = Ds::read_tokens(c.tokens(), "");
+        call(&mut c, move |cx| cx.set_theme(theme));
+        assert_eq!(**c.tokens(), *before);
+        assert_eq!(sent(&mut c), 0);
+    }
+
+    #[test]
+    fn a_number_the_theme_changes_is_its_value_in_both_appearances() {
+        let mut c = themed_core();
+        let mut theme = Ds::read_tokens(c.tokens(), "");
+        theme.card = 20.0;
+        call(&mut c, move |cx| cx.set_theme(theme));
+        assert_eq!(card(&c), (Some(20.0), Some(20.0)));
+    }
+
+    /// A patch names the fields it sets: a number it sets is that value in
+    /// both appearances, the one it has too.
+    #[test]
+    fn update_theme_sets_a_number_in_both_appearances() {
+        let mut c = themed_core();
+        call(&mut c, |cx| {
+            cx.update_theme::<Ds>(DsPatch {
+                card: Some(10.0),
+                ..Default::default()
+            })
+        });
+        assert_eq!(card(&c), (Some(10.0), Some(10.0)));
+    }
+
+    /// Tokens by name are as they were: a number set is both appearances'.
+    #[test]
+    fn update_tokens_sets_a_number_in_both_appearances() {
+        let mut c = themed_core();
+        call(&mut c, |cx| {
+            let mut tokens = Tokens::default();
+            tokens.set_number("radius-card", 10.0);
+            cx.update_tokens(tokens);
+        });
+        assert_eq!(card(&c), (Some(10.0), Some(10.0)));
+    }
+
+    /// Two themes set in one turn, from a component: the second over the
+    /// first, each against the tokens as the one before left them.
+    #[component]
+    fn TwoSets() -> impl IntoElement {
+        // Leaves the number alone, then changes it.
+        set_theme(Ds {
+            overlay: AdaptiveColor::rgb(0x444444, 0x444444),
+            card: 10.0,
+        });
+        set_theme(Ds {
+            overlay: AdaptiveColor::rgb(0x777777, 0x777777),
+            card: 20.0,
+        });
+        // The value the one before set: its dark value went with that set.
+        set_theme(Ds {
+            overlay: AdaptiveColor::rgb(0x888888, 0x888888),
+            card: 20.0,
+        });
+        view()
+    }
+
+    #[test]
+    fn themes_set_in_one_turn_compose() {
+        let mut c = themed_core();
+        c.mount_root(&Root::new::<TwoSets>(|| ()));
+        let _ = sent(&mut c);
+        assert_eq!(overlay(&c), Some(AdaptiveColor::rgb(0x888888, 0x888888)));
+        assert_eq!(card(&c), (Some(20.0), Some(20.0)));
+    }
+
+    #[component]
+    fn SetsBack() -> impl IntoElement {
+        set_theme(Ds {
+            overlay: AdaptiveColor::rgb(0x444444, 0x444444),
+            card: 10.0,
+        });
+        view()
+    }
+
+    /// The function a component calls takes the same path as a module's.
+    #[test]
+    fn set_theme_from_a_component_keeps_a_numbers_dark_value() {
+        let mut c = themed_core();
+        c.mount_root(&Root::new::<SetsBack>(|| ()));
+        let _ = sent(&mut c);
+        assert_eq!(overlay(&c), Some(AdaptiveColor::rgb(0x444444, 0x444444)));
+        assert_eq!(card(&c), (Some(10.0), Some(6.0)));
+    }
+}
+
 /// Theme files and embedding overrides read under a theme set: by the
 /// types' names and kinds, a role's name setting the token it is mapped
 /// onto, `var()` against the types' defaults, an undeclared name left out.
