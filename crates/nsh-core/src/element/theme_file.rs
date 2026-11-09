@@ -112,7 +112,12 @@ fn declared_names(
             let old = std::mem::take(fields);
             // The tokens roles' names set in this section, with the role.
             let mut by_role: Vec<(&str, &str)> = Vec::new();
-            for (key, v) in &old {
+            // By name, whatever order the file has them in (and the map
+            // keeps, with serde_json's `preserve_order`): which of two
+            // roles' names sets their token must not depend on it.
+            let mut keys: Vec<(&String, &JsonValue)> = old.iter().collect();
+            keys.sort_by(|a, b| a.0.cmp(b.0));
+            for (key, v) in keys {
                 match set.target(key) {
                     Some(name) if name == key => {
                         fields.insert(key.clone(), v.clone());
