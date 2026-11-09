@@ -1,6 +1,6 @@
 ---
 title: 无障碍
-description: 让应用配合 VoiceOver 和 TalkBack 使用：标签、角色、状态、值、自定义操作、分组与隐藏、播报与焦点、文字大小以及减少动态效果。
+description: 让应用配合 VoiceOver 和 TalkBack 使用：标签、角色、状态、值、自定义操作、分组与隐藏、播报与焦点、文字大小、减少动态效果以及增强对比度。
 order: 48
 group: ui
 ---
@@ -219,12 +219,13 @@ view()
 
 ## 屏幕阅读器与用户的设置
 
-在 Rust 中，prelude 报告用户的设置并与屏幕阅读器交互：`screen_reader()` 和 `reduce_motion()` 是响应式的，`announce_for_accessibility(message)` 让屏幕阅读器朗读一条消息，元素的 `element_ref()` 用 `set_accessibility_focus()` 把屏幕阅读器的焦点移到它上面。在 TSX 中，`nsh` 的无障碍 API 报告用户的设置，并让你与屏幕阅读器交互。
+在 Rust 中，prelude 报告用户的设置并与屏幕阅读器交互：`screen_reader()`、`reduce_motion()` 和 `high_contrast()` 是响应式的，`announce_for_accessibility(message)` 让屏幕阅读器朗读一条消息，元素的 `element_ref()` 用 `set_accessibility_focus()` 把屏幕阅读器的焦点移到它上面。在 TSX 中，`nsh` 的无障碍 API 报告用户的设置，并让你与屏幕阅读器交互。
 
 | 成员 | 说明 |
 |---|---|
 | `screenReaderEnabled()` | VoiceOver 或 TalkBack 是否在运行（响应式）。 |
 | `reduceMotion()` | 用户是否要求减少动态效果（响应式）。 |
+| `highContrast()` | 用户是否要求增强对比度（响应式）。 |
 | `announce(message)` | 屏幕阅读器朗读 `message`。 |
 | `setAccessibilityFocus(ref)` | 把屏幕阅读器的焦点移到某个视图。 |
 
@@ -319,6 +320,34 @@ const toggle = () => {
 
 <View onPress={open} class="transition active:scale-95 motion-reduce:transition-none" />
 <View class="motion-safe:animate-bounce" />
+```
+
+## 增强对比度
+
+当用户要求增强对比度时，`high_contrast()`（Rust）和 `highContrast()`（TSX）为 `true`：iOS 和 macOS 的"增强对比度"、Android 的"高对比度文字"、Windows 的对比度主题、Linux 的"高对比度"，以及浏览器中的 `prefers-contrast: more`。颜色由你选择，所以用它，或 Tailwind 的 `contrast-more:` 变体，用更深的颜色绘制边框、分隔线和次要文字：
+
+```rust tabs
+use nsh_core::prelude::*;
+
+view()
+    .border_1()
+    .border_color(ZINC.shade(200))
+    .style_when(high_contrast, |s| s.border_color(ZINC.shade(900)))
+    .child(
+        text("Updated just now")
+            .text_color(ZINC.shade(500))
+            .style_when(high_contrast, |s| s.text_color(ZINC.shade(900))),
+    )
+```
+
+```tsx tabs
+import { Text, View } from "nsh";
+import { highContrast } from "nsh";
+
+<View class="border border-zinc-200 contrast-more:border-zinc-900">
+  <Text class="text-zinc-500 contrast-more:text-zinc-900">Updated just now</Text>
+</View>
+<View style={{ height: 1, backgroundColor: highContrast() ? "#18181b" : "#e4e4e7" }} />
 ```
 
 ## 触摸目标

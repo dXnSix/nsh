@@ -222,6 +222,10 @@ pub struct Environment {
     /// The user asked for less motion (iOS Reduce Motion, Android's
     /// animator duration scale at 0).
     pub reduce_motion: bool,
+    /// The user asked for more contrast (Increase Contrast on macOS and
+    /// iOS, high contrast text on Android, a contrast theme on Windows,
+    /// high contrast on Linux, `prefers-contrast: more` in a browser).
+    pub high_contrast: bool,
     /// Device pixels per point.
     pub pixel_ratio: f32,
     /// A screen reader runs (VoiceOver, TalkBack).
@@ -317,6 +321,7 @@ impl Default for Environment {
             font_scale: 1.0,
             rtl: false,
             reduce_motion: false,
+            high_contrast: false,
             pixel_ratio: 1.0,
             screen_reader: false,
             os: Os::default(),

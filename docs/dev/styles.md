@@ -58,7 +58,8 @@
   keep React Native's column; `block` /
   `flow-root` use Taffy's block layout, and so do `inline` / `inline-block`: a browser blockifies inline boxes in flex
   and grid containers, which every NSH parent but a block is (there is no inline formatting context). Variants: `dark:`, `sm:`…`2xl:` / `max-*:` / `min-[..]:`, `portrait:` /
-  `landscape:`, `ios:` / `android:` / `web:`, `rtl:` / `ltr:`, `motion-safe:` / `motion-reduce:`, `active:` / `hover:` /
+  `landscape:`, `ios:` / `android:` / `web:`, `rtl:` / `ltr:`, `motion-safe:` / `motion-reduce:`, `contrast-more:` (the user's contrast setting; `contrast-less:`, which
+  no platform reports, is unknown), `active:` / `hover:` /
   `focus:` / `focus-within:` (text inputs always report their focus, so the views around one read it) / `disabled:` / `enabled:` / `selected:` (`accessibilityState.selected`, a `Button`'s
   `selected`) / `checked:` (`accessibilityState.checked`, not mixed) / `indeterminate:` (`accessibilityState.checked`
   mixed, CSS's `:indeterminate`) / `aria-expanded:` (`accessibilityState.expanded`: a `Popover`'s or `Menu`'s trigger

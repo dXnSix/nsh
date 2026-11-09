@@ -77,6 +77,7 @@ struct EnvSignals {
     dark: Memo<bool>,
     font_scale: Memo<f32>,
     reduce_motion: Memo<bool>,
+    high_contrast: Memo<bool>,
     screen_reader: Memo<bool>,
     rtl: Memo<bool>,
     pixel_ratio: Memo<f32>,
@@ -106,6 +107,7 @@ impl EnvSignals {
                 dark: part!(dark),
                 font_scale: part!(font_scale),
                 reduce_motion: part!(reduce_motion),
+                high_contrast: part!(high_contrast),
                 screen_reader: part!(screen_reader),
                 rtl: part!(rtl),
                 pixel_ratio: part!(pixel_ratio),
@@ -282,6 +284,13 @@ pub fn font_scale() -> f32 {
 /// The user asked for less motion (TS: `reduceMotion()`).
 pub fn reduce_motion() -> bool {
     env(|e| e.reduce_motion)
+}
+
+/// The user asked for more contrast (TS: `highContrast()`): Increase
+/// Contrast, high contrast text, a contrast theme. Read it to draw borders
+/// and text in stronger colors.
+pub fn high_contrast() -> bool {
+    env(|e| e.high_contrast)
 }
 
 /// A screen reader runs (TS: `screenReaderEnabled()`).

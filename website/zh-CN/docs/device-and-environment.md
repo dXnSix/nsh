@@ -23,7 +23,7 @@ demo: guide-device
 | `locale()` | `locale()`（`nsh`） | 用户的区域设置，BCP 47 标签（`"en-US"`、`"zh-Hans-CN"`）：`Intl` 默认按它格式化。 |
 | `locale_settings()` | `localeSettings()`（`nsh`） | 用户的语言与地区设置：偏好语言、时区、12 小时制或 24 小时制、每周的第一天、度量单位和温度单位（[语言与地区设置](#语言与地区设置)）。 |
 | `lifecycle()` | `lifecycle()`（`nsh`） | 应用是否正在使用：`active`、`inactive`（可见但没有焦点）或 `background`（[在后台](#在后台)）。 |
-| `reduce_motion()`、`screen_reader()` | `reduceMotion()`、`screenReaderEnabled()`（`nsh`） | 见[无障碍](./accessibility.md)。 |
+| `reduce_motion()`、`high_contrast()`、`screen_reader()` | `reduceMotion()`、`highContrast()`、`screenReaderEnabled()`（`nsh`） | 见[无障碍](./accessibility.md)。 |
 
 ```rust tabs
 use nsh_core::prelude::*;

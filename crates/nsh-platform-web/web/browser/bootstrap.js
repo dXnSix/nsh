@@ -5167,6 +5167,7 @@
 			pixelRatio: 1,
 			locale: "en-US",
 			reduceMotion: false,
+			highContrast: false,
 			screenReader: false,
 			host: false,
 			lifecycle: "active",
@@ -5216,6 +5217,7 @@
 		};
 		const accessibility = {
 			reduceMotion: () => fields.reduceMotion(),
+			highContrast: () => fields.highContrast(),
 			screenReaderEnabled: () => fields.screenReader()
 		};
 		return {

@@ -279,6 +279,7 @@ impl Testing {
             locale: options.locale,
             locale_settings: options.locale_settings.unwrap_or_default(),
             reduced_motion: options.reduced_motion,
+            high_contrast: options.high_contrast,
             platform: options.platform,
             clock: options
                 .clock
@@ -413,6 +414,8 @@ pub struct OpenOptions {
     pub locale_settings: Option<LocaleSettingsOptions>,
     /// The user asked for less motion (false).
     pub reduced_motion: Option<bool>,
+    /// The user asked for more contrast (false).
+    pub high_contrast: Option<bool>,
     /// The platform the app believes it runs on headless (`"ios"`; a
     /// desktop's: `"macos"`, `"windows"`, `"linux"`, `"web"`). With
     /// `--target`, the app runs on the target's platform: a desktop's runs
@@ -1292,6 +1295,7 @@ pub(crate) struct Launch {
     pub(crate) locale: Option<String>,
     pub(crate) locale_settings: LocaleSettingsOptions,
     pub(crate) reduced_motion: Option<bool>,
+    pub(crate) high_contrast: Option<bool>,
     /// The platform `open` named (headless: iOS when it named none).
     pub(crate) platform: Option<Platform>,
     /// A manual clock's start.

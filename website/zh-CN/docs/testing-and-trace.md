@@ -162,6 +162,7 @@ describe("the cart", () => {
 | `locale` | `"en-US"` | 设备的区域设置，BCP 47 标签（`locale()`、`Intl` 的默认值）。 |
 | `localeSettings` | 区域设置的，UTC | 用户的语言与地区设置（`localeSettings()`），列出的项覆盖区域设置的：`languages`（BCP 47 标签，按偏好从高到低排列；`[locale]`）、`timeZone`（IANA 名称；`"UTC"`）、`hourCycle`（`"h12"`、`"h23"`、`"h11"` 或 `"h24"`）、`firstDayOfWeek`（1 是星期一，7 是星期日）、`measurementSystem`（`"metric"`、`"us"` 或 `"uk"`）和 `temperatureUnit`（`"celsius"` 或 `"fahrenheit"`），后四项是区域设置所在地区的。时区只给出名称：`Date` 和 `Intl` 的本地时间仍是这台机器的，`Intl` 给出的时区也是。 |
 | `reducedMotion` | `false` | 用户要求减少动态效果（`reduceMotion()`）。 |
+| `highContrast` | `false` | 用户要求增强对比度（`highContrast()`、`contrast-more:` 类）。 |
 | `platform` | `"ios"` | headless 时应用运行所在的平台：`"ios"`、`"android"`，或桌面平台 `"macos"`、`"windows"`、`"linux"`，以及桌面形态的 `"web"`（`platform.os`、`ios={{…}}` / `android={{…}}` / `desktop={{…}}` 属性、键盘快捷键）。使用 `--target` 时，应用以目标平台运行：桌面平台的 `platform` 可用于任何桌面目标和 web，且总以桌面形态运行（在浏览器中无论宽度都是桌面形态，`platform.os` 仍是 `"web"`），`"ios"` 和 `"android"` 只用于各自的目标。 |
 | `clock` | 系统时钟 | 手动时钟，它的时间只随测试推进：`{}`，或者用 `{ time }` 从某个 `Date`（或自 Unix 纪元起的毫秒数）开始。见[控制时间](#控制时间)。 |
 | `host` | 无 | 由测试扮演的宿主应用：`{ params, handlers }`。见[扮演宿主应用](#扮演宿主应用)。 |
@@ -524,7 +525,7 @@ nsh test tests/form.test.tsx --target macos   # 只运行一个文件
 平台每显示一帧，时钟前进一帧（1/60 秒），所以应用在动画时时间照常流逝。平台自身的动画和路由的 `delay` 按真实时间进行。应用的请求和 headless
 时一样交给测试：由 `network` 路由应答，没有路由匹配的请求会失败，`"live"` 则放行到 host 的真实网络；`app.requests()` 列出全部请求。
 使用 `"live"` 时，socket 和 WebSocket 在 host 的网络上连接，否则和 headless 时一样被拒绝。
-`storage` 在应用启动时就已写入应用存储，`app.storage()` 从应用中读取。`open` 给出的 `locale`、`localeSettings` 列出的语言与地区设置、`reducedMotion` 和 `safeArea`（包括取默认值时）不随平台上报的值变化，给出的 `colorScheme` 会切换系统外观（`"light"` 也一样），没有给出的则沿用平台自己的；
+`storage` 在应用启动时就已写入应用存储，`app.storage()` 从应用中读取。`open` 给出的 `locale`、`localeSettings` 列出的语言与地区设置、`reducedMotion`、`highContrast` 和 `safeArea`（包括取默认值时）不随平台上报的值变化，给出的 `colorScheme` 会切换系统外观（`"light"` 也一样），没有给出的则沿用平台自己的；
 应用的剪贴板调用由测试自己的剪贴板应答（`clipboard` 是它的初始文本，`app.clipboard()` 读取它），机器的剪贴板保持不变；文本输入框自身的复制和
 粘贴使用系统剪贴板。`host.params` 会传给应用，`app.host.send` 发送事件，应用打开的 URL 被记录下来供 `app.openedUrls()` 读取，而不会真正打开。
 `host.handlers` 在 headless 运行，由测试回答应用的调用。`open` 会按目标检查它的选项：iOS 和 Android 上的 `width` 与

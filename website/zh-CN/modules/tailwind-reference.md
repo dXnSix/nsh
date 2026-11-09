@@ -450,6 +450,7 @@ view()
 | `portrait:`、`landscape:` | 窗口高大于宽 / 宽大于高 | `.style_when(move \|\| window().height > window().width, …)` |
 | `ltr:`、`rtl:` | 布局方向 | `.style_when(rtl, …)` |
 | `motion-safe:`、`motion-reduce:` | 用户未开启 / 开启了减弱动态效果 | `.style_when(reduce_motion, …)` |
+| `contrast-more:` | 用户要求增强对比度 | `.style_when(high_contrast, …)` |
 
 ### 断点
 

@@ -3029,14 +3029,14 @@ nsh_platform_gpui::set_ui_sets(vec![nsh_base::registry(), trading]);
 
 ## Accessibility
 
-The accessibility API reads the user's accessibility settings (is a screen reader running, did they ask for less motion) and talks to the screen reader. Rust code calls `screen_reader()`, `reduce_motion()` and `announce_for_accessibility()` from `nsh_core::prelude` and moves the focus with an `ElementRef`; TSX imports `screenReaderEnabled()`, `reduceMotion()`, `announce()` and `setAccessibilityFocus()` from `nsh`. The settings are reactive: read them in a binding, `computed` or `effect`, and what reads them updates when the user changes them. The accessibility props of elements (`accessibilityLabel`, `role`, ...) are documented under [Elements](../elements/index.md); the guide is [Accessibility](../docs/accessibility.md).
+The accessibility API reads the user's accessibility settings (is a screen reader running, did they ask for less motion or for more contrast) and talks to the screen reader. Rust code calls `screen_reader()`, `reduce_motion()`, `high_contrast()` and `announce_for_accessibility()` from `nsh_core::prelude` and moves the focus with an `ElementRef`; TSX imports `screenReaderEnabled()`, `reduceMotion()`, `highContrast()`, `announce()` and `setAccessibilityFocus()` from `nsh`. The settings are reactive: read them in a binding, `computed` or `effect`, and what reads them updates when the user changes them. The accessibility props of elements (`accessibilityLabel`, `role`, ...) are documented under [Elements](../elements/index.md); the guide is [Accessibility](../docs/accessibility.md).
 
 ```rust tabs
-use nsh_core::prelude::*; // screen_reader, reduce_motion, announce_for_accessibility, element_ref
+use nsh_core::prelude::*; // screen_reader, reduce_motion, high_contrast, announce_for_accessibility, element_ref
 ```
 
 ```tsx tabs
-import { announce, reduceMotion, screenReaderEnabled, setAccessibilityFocus } from "nsh";
+import { announce, highContrast, reduceMotion, screenReaderEnabled, setAccessibilityFocus } from "nsh";
 ```
 
 ### screenReaderEnabled
@@ -3081,6 +3081,26 @@ const open = () => {
   if (reduceMotion()) panel.set(0);
   else panel.spring(0);
 };
+```
+
+### highContrast
+
+```ts
+const highContrast: Accessor<boolean>;
+```
+
+Whether the user asked for more contrast (Increase Contrast on iOS and macOS, High contrast text on Android, a contrast theme on Windows, High Contrast on Linux, `prefers-contrast: more` in a browser). Reactive. Rust: `high_contrast() -> bool`. Tailwind classes follow it too with the `contrast-more:` variant.
+
+```rust tabs
+view()
+    .h(px(1.0))
+    .bg(ZINC.shade(200))
+    .style_when(high_contrast, |s| s.bg(ZINC.shade(900)))
+```
+
+```tsx tabs
+<View style={{ height: 1, backgroundColor: highContrast() ? "#18181b" : "#e4e4e7" }} />
+<View class="h-px bg-zinc-200 contrast-more:bg-zinc-900" />
 ```
 
 ### announce

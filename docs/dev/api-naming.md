@@ -336,6 +336,7 @@ them yet (`compatibility.md`). The frozen RN-shaped modules keep their names. A 
 | `OS` (type) | unchanged | | `platform.os`'s type |
 | **`nsh`: accessibility** | | | |
 | `AccessibilityInfo.isScreenReaderEnabled()`, `isReduceMotionEnabled()`, `addEventListener` | (dropped) | Listening | `screenReaderEnabled()`, `reduceMotion()` |
+| `AccessibilityInfo.isHighTextContrastEnabled()` (Android), `isDarkerSystemColorsEnabled()` (iOS) | `highContrast()` (accessor, reactive); `contrast-more:` | Where names come from | One name for every platform's setting: "high contrast" is Windows', GNOME's, Android's and Flutter's, Apple's Increase Contrast and the web's `prefers-contrast: more` mean the same; a state, as `reduceMotion()` is Apple's Reduce Motion |
 | `AccessibilityInfo.announceForAccessibility(message)` | `announce(message)` | Environment | A function of the module |
 | `AccessibilityInfo.setAccessibilityFocus(node)` | `setAccessibilityFocus(node)` | Environment | A function of the module; `focus()` is the keyboard's |
 | **`nsh/mobile`: `BackHandler`** | | | |

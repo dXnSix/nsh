@@ -1140,6 +1140,7 @@ fn variants() {
         dark: true,
         platform: Platform::Android,
         reduce_motion: false,
+        high_contrast: false,
     };
     let (s, _) = styled_with("bg-white dark:bg-black", dark, (390.0, 844.0), 0);
     assert_eq!(s.view.background_color, Color(0x0000_00ff));
@@ -1341,6 +1342,48 @@ fn data_variants() {
     assert_eq!(s.view.background_color, Color(0x0000_00ff));
     let s = styled_data("motion-safe:bg-white data-a:bg-black", &["a"], &[], 0);
     assert_eq!(s.view.background_color, Color(0xffff_ffff));
+}
+
+/// `contrast-more:` as Tailwind v4 has it (`@media (prefers-contrast:
+/// more)`): while the user asks for more contrast, after `motion-reduce:`
+/// and before the breakpoints.
+#[test]
+fn contrast_more_follows_the_users_contrast_setting() {
+    let theme = themed();
+    let list = parse(&theme, "bg-white contrast-more:bg-black");
+    assert!(list.unknown().is_empty(), "{:?}", list.unknown());
+    assert_ne!(list.deps() & deps::CONTRAST, 0);
+    assert_eq!(
+        parse(&theme, "bg-white motion-reduce:bg-black").deps() & deps::CONTRAST,
+        0
+    );
+    let more = ClassEnvironment {
+        high_contrast: true,
+        ..ClassEnvironment::default()
+    };
+    let background = |classes: &str, env: ClassEnvironment| {
+        styled_with(classes, env, (1024.0, 768.0), 0)
+            .0
+            .view
+            .background_color
+    };
+    let (white, black) = (Color(0xffff_ffff), Color(0x0000_00ff));
+    let classes = "bg-white contrast-more:bg-black";
+    assert_eq!(background(classes, ClassEnvironment::default()), white);
+    assert_eq!(background(classes, more), black);
+    // In Tailwind's order: over `motion-reduce:`, under `md:`.
+    let reduced = ClassEnvironment {
+        reduce_motion: true,
+        ..more
+    };
+    assert_eq!(
+        background("contrast-more:bg-black motion-reduce:bg-white", reduced),
+        black
+    );
+    assert_eq!(
+        background("md:bg-white contrast-more:bg-black", more),
+        white
+    );
 }
 
 /// `aria-pressed:`, `aria-busy:`, `aria-checked:` and `aria-selected:`

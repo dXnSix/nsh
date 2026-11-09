@@ -2924,14 +2924,14 @@ nsh_platform_gpui::set_ui_sets(vec![nsh_base::registry(), trading]);
 
 ## Accessibility
 
-无障碍 API 读取用户的无障碍设置（屏幕阅读器是否在运行、是否要求减弱动态效果），并与屏幕阅读器交互。Rust 代码调用 `nsh_core::prelude` 中的 `screen_reader()`、`reduce_motion()` 和 `announce_for_accessibility()`，用 `ElementRef` 移动焦点；TSX 从 `nsh` 导入 `screenReaderEnabled()`、`reduceMotion()`、`announce()` 和 `setAccessibilityFocus()`。这些设置是响应式的：在绑定、`computed` 或 `effect` 中读取它们，用户修改设置时，读取它们的地方会随之更新。元素的无障碍属性（`accessibilityLabel`、`role` 等）见[元素](../elements/index.md)；教程见[无障碍](../docs/accessibility.md)。
+无障碍 API 读取用户的无障碍设置（屏幕阅读器是否在运行、是否要求减弱动态效果或增强对比度），并与屏幕阅读器交互。Rust 代码调用 `nsh_core::prelude` 中的 `screen_reader()`、`reduce_motion()`、`high_contrast()` 和 `announce_for_accessibility()`，用 `ElementRef` 移动焦点；TSX 从 `nsh` 导入 `screenReaderEnabled()`、`reduceMotion()`、`highContrast()`、`announce()` 和 `setAccessibilityFocus()`。这些设置是响应式的：在绑定、`computed` 或 `effect` 中读取它们，用户修改设置时，读取它们的地方会随之更新。元素的无障碍属性（`accessibilityLabel`、`role` 等）见[元素](../elements/index.md)；教程见[无障碍](../docs/accessibility.md)。
 
 ```rust tabs
-use nsh_core::prelude::*; // screen_reader、reduce_motion、announce_for_accessibility、element_ref
+use nsh_core::prelude::*; // screen_reader、reduce_motion、high_contrast、announce_for_accessibility、element_ref
 ```
 
 ```tsx tabs
-import { announce, reduceMotion, screenReaderEnabled, setAccessibilityFocus } from "nsh";
+import { announce, highContrast, reduceMotion, screenReaderEnabled, setAccessibilityFocus } from "nsh";
 ```
 
 ### screenReaderEnabled
@@ -2976,6 +2976,26 @@ const open = () => {
   if (reduceMotion()) panel.set(0);
   else panel.spring(0);
 };
+```
+
+### highContrast
+
+```ts
+const highContrast: Accessor<boolean>;
+```
+
+用户是否要求增强对比度（iOS 和 macOS 的“增强对比度”，Android 的“高对比度文字”，Windows 的对比度主题，Linux 的“高对比度”，浏览器中的 `prefers-contrast: more`）。响应式。Rust：`high_contrast() -> bool`。Tailwind 的 `contrast-more:` 变体也会跟随它。
+
+```rust tabs
+view()
+    .h(px(1.0))
+    .bg(ZINC.shade(200))
+    .style_when(high_contrast, |s| s.bg(ZINC.shade(900)))
+```
+
+```tsx tabs
+<View style={{ height: 1, backgroundColor: highContrast() ? "#18181b" : "#e4e4e7" }} />
+<View class="h-px bg-zinc-200 contrast-more:bg-zinc-900" />
 ```
 
 ### announce
