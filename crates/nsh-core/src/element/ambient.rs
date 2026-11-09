@@ -58,6 +58,8 @@ pub(crate) struct Ambient {
     /// The theme types read of the tokens ([`super::theme_of`]): by type,
     /// the tokens read and the theme.
     themes: FxHashMap<TypeId, (Arc<Tokens>, Box<dyn Any>)>,
+    /// The app's address (`set_app_url` resolves against its page base).
+    app_url: Option<crate::url_scheme::AppUrlCell>,
 }
 
 /// The surface's cache of theme types read ([`super::theme_of`]). `f` runs
@@ -136,6 +138,12 @@ impl super::Runtime {
     pub(crate) fn set_services(&self, executor: Rc<Executor>) {
         let _entered = self.enter();
         with_data(|d| d.ambient.executor = Some(executor));
+    }
+
+    /// The app's address, the core's (`set_app_url`).
+    pub(crate) fn set_app_url(&self, app_url: crate::url_scheme::AppUrlCell) {
+        let _entered = self.enter();
+        with_data(|d| d.ambient.app_url = Some(app_url));
     }
 
     /// Where the app's storage is kept.
@@ -361,6 +369,15 @@ pub fn os() -> Os {
         .with_untracked(|e| e.os)
 }
 
+/// The platform's name (TS: `platform.name`): the OS's on NSH's own
+/// platforms (`"ios"`, `"web"`, ...), a platform built outside NSH's own
+/// (`"miniprogram"`), whose OS is [`os`]; it does not change.
+pub fn platform_name() -> &'static str {
+    with_data(|d| d.ambient.env.as_ref().map(|e| e.env))
+        .expect("the core sets the environment")
+        .with_untracked(|e| e.platform_name())
+}
+
 /// [`os`] where an engine runs (its thread, while it runs Rust code),
 /// else `None`: for code that also runs outside an engine (a unit test of
 /// a component's model).
@@ -548,6 +565,12 @@ pub fn animate_layout(animation: LayoutAnimation) {
 /// `announce`).
 pub fn announce_for_accessibility(message: impl Into<String>) {
     act(super::services::announce(message.into()));
+}
+
+/// The device plays `haptic` (TS: `Haptics` of `nsh/mobile`): iOS and
+/// Android; elsewhere nothing happens.
+pub fn haptic(haptic: crate::Haptic) {
+    act(super::services::haptic(haptic));
 }
 
 /// Runs `f` with the app's storage (`nsh/storage`, [`crate::storage::Storage`]):
@@ -841,6 +864,41 @@ pub fn next_url_scheme_open() -> Answer<String> {
     let (answer, slot) = Answer::new();
     act(Action::NextUrlSchemeOpen(slot));
     answer
+}
+
+/// The app's address (TS: `UrlScheme.url()`): on the web the page's, on
+/// the native platforms the last link that opened the app; what
+/// [`set_app_url`] set after it; `None` when there is none
+/// ([`crate::url_scheme`]). To await in a task.
+pub fn app_url() -> Answer<Option<String>> {
+    let (answer, slot) = Answer::new();
+    act(Action::AppUrl(slot));
+    answer
+}
+
+/// Sets the app's address (TS: `UrlScheme.setUrl`): on the web it replaces
+/// the current history entry's; the native platforms keep it for
+/// [`app_url`] ([`crate::url_scheme`]). An address longer than
+/// [`crate::url_scheme::MAX_URL_LEN`] or with whitespace is an error, as
+/// TS's `TypeError`; on the web a URL is resolved against the page's base,
+/// as TS's is, and one of another origin than the page's is an error.
+pub fn set_app_url(url: impl Into<String>) -> Result<(), String> {
+    let mut url = url.into();
+    crate::url_scheme::check_address(&url)?;
+    // Where the app is the page (the web), as TS's `setUrl` there.
+    if try_os() == Some(Os::Web)
+        && let Some(base) = with_data(|d| d.ambient.app_url.as_ref().and_then(|a| a.page_base()))
+    {
+        url = crate::url_scheme::resolve_on_page(&url, &base)?;
+    }
+    act(Action::SetAppUrl(url));
+    Ok(())
+}
+
+/// `UrlScheme.setUrl`'s part in the core: the address again, in order with
+/// what came since the VM wrote it, and the web's history entry.
+pub(crate) fn set_app_url_from_js(url: String) {
+    act(Action::SetAppUrl(url));
 }
 
 /// Whether a web view's ref gives its page trusted input here (TS:
@@ -1312,7 +1370,10 @@ pub fn try_apple_keys() -> Option<bool> {
 /// lives (TS: `keymap.bind`): `"mod+k"` (`mod` is Command on Apple
 /// platforms, Control elsewhere), `"shift+mod+l"`, `"escape"`, ... (the
 /// keystrokes of `nsh/keymap`). The handler gets the keystroke as written.
-/// Desktop platforms fire them; elsewhere they are kept but no key does.
+/// It belongs to the window bound in ([`super::desktop::current_window`])
+/// and fires only for keys pressed there; a key it does not take goes on
+/// as usual. Desktop platforms fire them; elsewhere they are kept but no
+/// key does.
 ///
 /// # Panics
 ///
@@ -1338,6 +1399,8 @@ pub fn on_key_with(keystroke: &str, options: KeyOptions, handler: impl Fn(&str) 
     }
     let owner = Owner::current();
     let handler: super::keys::KeyHandler = Rc::new(move |k: &str| owner.run(|| handler(k)));
+    // It belongs to the window whose tree binds it (`current_window`).
+    let window = super::use_context::<super::desktop::WindowRef>().and_then(|w| w.dialog_root());
     let keys = executor().keys.clone();
     let id = keys.borrow_mut().add(
         |id| {
@@ -1346,6 +1409,7 @@ pub fn on_key_with(keystroke: &str, options: KeyOptions, handler: impl Fn(&str) 
         },
         keystroke.into(),
         handler,
+        window,
     );
     let weak = Rc::downgrade(&keys);
     cleanup(move || {
