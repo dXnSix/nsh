@@ -457,6 +457,13 @@ pub fn update_tokens(tokens: impl Into<Tokens>) {
     act(Action::UpdateTokens(tokens.into()));
 }
 
+/// Sets the tokens a theme type's fields wrote ([`super::set_theme`]), in
+/// order with the app's other actions as [`update_tokens`]: a number left
+/// at its value keeps its dark one.
+pub(crate) fn set_theme_tokens(tokens: Tokens) {
+    act(Action::SetTheme(tokens));
+}
+
 /// Puts the design tokens `names` back to their values in the app's theme
 /// (the UI set's defaults with `nsh.json`'s theme, or the theme last set
 /// whole with [`set_tokens`] or `setTheme`), undoing [`update_tokens`] for

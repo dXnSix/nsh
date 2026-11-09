@@ -701,8 +701,9 @@ impl Default for DsTheme {
   outer `Default` gives the field. `#[token(flatten)]` is the same with no prefix; `#[token(skip)]` is no token (the
   field keeps `Default`'s value).
 - A number field is its token's light value, as `number()` is: read a dark value with `tokens().number_in("radius-card",
-  dark())`, or draw with the class (`rounded-card`), which follows the appearance. `set_theme` writes one value per
-  number, so it drops a dark value the theme file gave; `update_theme` changes only the fields its patch sets.
+  dark())`, or draw with the class (`rounded-card`), which follows the appearance. `set_theme` keeps the dark value
+  of a number it leaves at its value, and a number it changes is that value in both appearances; `update_theme`
+  changes only the fields its patch sets.
 - A field's doc comment is its token's, which `.nsh/types/nsh/tokens.d.ts` shows on `token()`.
 - It makes `DsThemePatch`, each field an `Option` (a nested one its type's patch) documented with its token and the
   classes that read it, for `update_theme`.
@@ -747,6 +748,11 @@ reset_theme::<DsTheme>(); // the app's action again
   app's theme (`nsh.json`'s over the types' defaults). They apply in order with the app's other actions, as
   `update_tokens` does; a synchronous `#[module]` function has `cx.set_theme(..)`, `cx.update_theme::<T>(..)` and
   `cx.reset_theme::<T>()` of its `ModuleCx`.
+- A number field is its token's light value. `set_theme` leaves the dark value of a number whose value it does not
+  change, so reading a theme, changing one field and setting it changes that field only:
+  `let mut t = (*theme_of::<DsTheme>()).clone(); t.action = red; set_theme(t);`. A number it does change, and one a
+  patch sets, is that value in both appearances; give it a dark value again with `Tokens::set_dark_number` and
+  `update_tokens`.
 
 **Roles.** NSH's own parts draw with roles (`Role`: `popover`, `primary`, `border`, `radius`, `font-sans`, …;
 [Theme roles](../modules/nsh-base.md#theme-roles)). A type maps roles onto its tokens with `TokenSpec::role`, so

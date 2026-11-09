@@ -635,7 +635,7 @@ impl Default for DsTheme {
   `theme_of::<DsTheme>().surface.raised`。令牌中缺少的名称取内部类型的 `Default`，而不是外部 `Default` 给该字段的值。
   `#[token(flatten)]` 相同但不加前缀；`#[token(skip)]` 不是令牌（该字段保留 `Default` 的值）。
 - 数值字段是其令牌的浅色值，与 `number()` 相同：用 `tokens().number_in("radius-card", dark())` 读取深色值，
-  或用类名（`rounded-card`）绘制，它会跟随外观。`set_theme` 为每个数值只写一个值，因此会丢掉主题文件给出的深色值；
+  或用类名（`rounded-card`）绘制，它会跟随外观。`set_theme` 会保留值未被它改变的数值的深色值，被它改变的数值在两种外观下都是这个值；
   `update_theme` 只改变补丁设置的字段。
 - 字段的文档注释就是其令牌的文档，`.nsh/types/nsh/tokens.d.ts` 会在 `token()` 上显示它。
 - 它生成 `DsThemePatch`，每个字段都是 `Option`（嵌套字段为其类型的补丁），文档写明其令牌和读取它的类名，供
@@ -678,6 +678,9 @@ reset_theme::<DsTheme>(); // 恢复应用的 action
   `reset_theme::<T>()` 把 `T` 的名称恢复为应用主题中的值（叠加在各类型默认值之上的 `nsh.json` 主题）。它们与应用的其他操作按顺序生效，
   和 `update_tokens` 一样；同步的 `#[module]` 函数使用其 `ModuleCx` 的 `cx.set_theme(..)`、`cx.update_theme::<T>(..)` 和
   `cx.reset_theme::<T>()`。
+- 数字字段是其令牌的浅色值。`set_theme` 不会改动值未变化的数字的深色值，所以读取主题、修改一个字段再设置回去，只会改变这一个字段：
+  `let mut t = (*theme_of::<DsTheme>()).clone(); t.action = red; set_theme(t);`。被它改变的数字，以及补丁设置的数字，
+  在两种外观下都是这个值；要再给它一个深色值，使用 `Tokens::set_dark_number` 和 `update_tokens`。
 
 **角色。** NSH 自己的部分用角色绘制（`Role`：`popover`、`primary`、`border`、`radius`、`font-sans` 等；
 [主题角色](../modules/nsh-base.md#theme-roles)）。类型用 `TokenSpec::role` 把角色映射到自己的令牌上，于是 `nsh_base` 的 `theme()`

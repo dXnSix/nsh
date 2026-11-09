@@ -930,6 +930,16 @@ impl<M: TextEngine> Core<M> {
         self.tokens_changed();
     }
 
+    /// Takes the tokens a theme type's fields wrote
+    /// ([`crate::element::set_theme`]), as [`Core::update_tokens`] takes
+    /// tokens, but a number left at its value keeps its dark one: a number
+    /// field is the light value, and setting a theme that was read must
+    /// not change what it could not read. Applied in order, as an update.
+    pub(crate) fn set_theme_tokens(&mut self, tokens: Tokens) {
+        self.components.app_tokens = Arc::new(tokens.over_as_fields(&self.components.app_tokens));
+        self.tokens_changed();
+    }
+
     /// Puts the app's tokens `names` (`None`: every one) back to its
     /// theme's ([`Core::set_tokens`]); a name the theme lacks is removed.
     pub(crate) fn reset_tokens(&mut self, names: Option<&[Box<str>]>) {
@@ -5491,6 +5501,7 @@ impl<M: TextEngine> Core<M> {
             Action::Appearance(appearance) => self.set_appearance(appearance),
             Action::Tokens(tokens) => self.set_tokens(tokens),
             Action::UpdateTokens(tokens) => self.update_tokens(tokens),
+            Action::SetTheme(tokens) => self.set_theme_tokens(tokens),
             Action::ResetTokens(names) => self.reset_tokens(Some(&names)),
             Action::Translations(translations) => self.set_translations(translations),
             Action::Locale(locale) => self.components.locale_request = Some(locale),

@@ -45,6 +45,7 @@ mod tabs;
 mod terminal;
 mod text_view;
 mod theme_roles;
+mod theme_set_numbers;
 mod time_field;
 mod toggle;
 mod toolbar;
