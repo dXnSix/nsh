@@ -333,6 +333,13 @@ impl AppView {
             cx.notify();
         })
         .detach();
+        // The GPUI app quits: the app's terminate listeners run in the
+        // callback itself, before GPUI's shutdown waits for the futures.
+        cx.on_app_quit(|view: &mut AppView, _| {
+            view.surface.will_terminate();
+            async {}
+        })
+        .detach();
         AppView {
             surface,
             focus: cx.focus_handle().tab_stop(true),
@@ -458,9 +465,14 @@ impl AppView {
         // The close button: the app's `closeOnPress` decides, then the
         // embedding app's handler.
         window.on_window_should_close(cx, move |window, cx| {
+            let surface = surface.upgrade();
             let close = surface
-                .upgrade()
-                .is_none_or(|surface| crate::window::main_should_close(&surface, window, cx));
+                .as_ref()
+                .is_none_or(|surface| crate::window::main_should_close(surface, window, cx));
+            // The app ends with the window it owns.
+            if close && let Some(surface) = &surface {
+                surface.will_terminate();
+            }
             crate::rt::flush(cx);
             close
         });
