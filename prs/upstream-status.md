@@ -34,6 +34,7 @@ a GPUI Windows field wait). Nothing is opened: the owner says when.
 | Bundled files by path alone (#746 nits 1, 2) | side notes `pr-body-engine-asset-urls.md` | `pr/read-assets-nits/02-engine` `718a8261` | media types |
 | The browser runtime's fetch module (#746 nit 4) | side notes `pr-body-web-fetch-module.md` | `pr/web-fetch-module/01-web` `19908e9d` | — |
 | Rust code's app id and its data and cache directories (2026-11-09, local, not pushed) | `upstream-app-paths`, `feat-app-paths` | `pr/app-paths/01-core` `57d4d988` on `d96fc35c` | — |
+| Apps told they are about to terminate (2026-11-09, local, not pushed) | `upstream-will-terminate`, `feat-will-terminate` | `pr/will-terminate/01-core` `9c161b64` on `27fecbbe` | — |
 
 Superseded: `upstream-web-open-url` (upstream #892 fixed it; the fork's own dXnSix/nsh#113 is closed). The
 `fork-0.4.0-1` sync fixes (dXnSix/nsh#154–#157, checked 2026-11-07 against `c015f2c5e`) are records only:
