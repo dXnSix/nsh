@@ -1,7 +1,13 @@
 //! Keyboard focus uses the same projected geometry as drawing and pointer input.
+//!
+//! The decisions are `nsh_core::focus`'s, over the Cells of the last frame
+//! in points (`points`): the stops of the focus scope, the arrows' moves,
+//! the layers a backdrop takes out of reach, reveal deltas and the focus a
+//! modal or a layer gives back. This module applies them to the mount.
 
 use nsh_core::{
-    EventKind, EventPayload, NodeId, PayloadValue, Point, ROOT_ID, ViewKind,
+    Bounds, EventKind, EventPayload, NodeId, PayloadValue, Point, Points, ROOT_ID, Size, ViewKind,
+    focus::{self, Align, Candidate, Layer, Order},
     input::{has_press, next_states},
     keymap::{KeyMatch, Keystroke},
     tailwind::state::{FOCUS_WITHIN, FOCUSED},
@@ -9,7 +15,9 @@ use nsh_core::{
 use nsh_engine::EngineControl;
 use ratatui_core::layout::Position;
 
-use crate::{Handled, key_scheme::Action, mount::Mounter, render::Geometry};
+use crate::{
+    CellSize, Handled, geometry::CellBounds, key_scheme::Action, mount::Mounter, render::Geometry,
+};
 
 /// A link of a text that is a stop of Tab (`TextLink::focus_stop`): no
 /// view of its own, it stands after its text `view` in the focus order,
@@ -38,30 +46,148 @@ fn parent(tree: &Mounter, id: NodeId) -> Option<NodeId> {
 
 /// Where stop `id` comes in the focus order: its view's place in the tree,
 /// a link right after its text, in text order.
-fn order(tree: &Mounter, id: NodeId) -> (usize, usize) {
+fn order(tree: &Mounter, id: NodeId) -> Order {
     match tree.spans.get(&id) {
-        Some(span) => (
+        Some(span) => Order::link(
             tree.get(span.view).map_or(usize::MAX, |v| v.tree_order),
-            span.index + 1,
+            span.index,
         ),
-        None => (tree.get(id).map_or(usize::MAX, |v| v.tree_order), 0),
+        None => Order::view(tree.get(id).map_or(usize::MAX, |v| v.tree_order)),
     }
+}
+
+/// A stop of the focus scope: the core's candidate, and the Cells of the
+/// last frame it was made from.
+#[derive(Clone, Copy)]
+pub(crate) struct Stop<'a> {
+    node: Candidate,
+    geometry: &'a Geometry,
+}
+
+impl AsRef<Candidate> for Stop<'_> {
+    fn as_ref(&self) -> &Candidate {
+        &self.node
+    }
+}
+
+impl std::ops::Deref for Stop<'_> {
+    type Target = Geometry;
+
+    fn deref(&self) -> &Geometry {
+        self.geometry
+    }
+}
+
+/// Cells `bounds` in the surface's points, by the size of a Cell: each
+/// edge is its Cell's, so the frame's right and bottom edges (its origin
+/// plus its size, as the core finds them) are the next Cell's left and
+/// top, and frames touch, overlap and come in order as their Cells do.
+fn points(bounds: CellBounds, cells: CellSize) -> Bounds<Points> {
+    let (x, width) = span(bounds.left, bounds.right, cells.width());
+    let (y, height) = span(bounds.top, bounds.bottom, cells.height());
+    Bounds::new(Point::new(x, y), Size::new(width, height))
+}
+
+/// The start of Cells `start` .. `end`, each `cell` long, and the length
+/// that ends them exactly at `end`'s start.
+fn span(start: i32, end: i32, cell: Points) -> (Points, Points) {
+    let (start, end) = (cell.0 * start as f32, cell.0 * end as f32);
+    let mut len = end - start;
+    // The sum rounds: a length a step longer or shorter ends it there.
+    for _ in 0..4 {
+        let sum = start + len;
+        if sum == end {
+            break;
+        }
+        len = if sum < end {
+            len.next_up()
+        } else {
+            len.next_down()
+        };
+    }
+    (Points(start), Points(len))
+}
+
+/// The core's candidate for `g` when it can be a stop of `scope`: what
+/// takes walks of the tree (its layer, a popup around it) only then.
+fn candidate<'a>(
+    cells: CellSize,
+    tree: &Mounter,
+    g: &'a Geometry,
+    scope: NodeId,
+) -> Option<Stop<'a>> {
+    let mut node = Candidate::default();
+    node.id = g.id;
+    if let Some(span) = tree.spans.get(&g.id) {
+        // A text's link: while its text is a part of the scope.
+        node.scope = input_scope(tree, span.view);
+        node.stop = true;
+    } else {
+        let view = tree.get(g.id)?;
+        node.scope = input_scope(tree, g.id);
+        // A field narrower than a Cell (an editor's sink at its caret, 1
+        // pt wide) is laid out without columns, yet takes the typing as on
+        // the other platforms; a control without Cells is not there.
+        node.editable = view.input.as_ref().is_some_and(|config| config.editable);
+        node.stop = !view.props.accessibility.state.disabled
+            && view
+                .props
+                .focus_stop(has_press(view.events) || node.editable);
+    }
+    if node.scope != scope || !node.stop {
+        return None;
+    }
+    node.frame = points(g.bounds, cells);
+    node.visible = !g.visible.is_empty();
+    node.order = order(tree, g.id);
+    node.layer = layer(tree, g.id);
+    node.popup = in_anchored_overlay(tree, g.id);
+    Some(Stop { node, geometry: g })
+}
+
+/// The children of `scope`'s view (the surface, or a modal) as the core's
+/// layers, the page first.
+fn layers(cells: CellSize, tree: &Mounter, geometry: &[Geometry], scope: NodeId) -> Vec<Layer> {
+    let Some(root) = tree.get(scope) else {
+        return Vec::new();
+    };
+    root.children
+        .iter()
+        .map(|&id| {
+            let mut layer = Layer::default();
+            layer.id = id;
+            layer.frame = geometry
+                .iter()
+                .find(|g| g.id == id && !g.visible.is_empty())
+                .map(|g| points(g.bounds, cells));
+            if let Some(view) = tree.get(id) {
+                layer.order = view.tree_order;
+                layer.takes_presses = has_press(view.events)
+                    && view.props.pointer_events != nsh_core::PointerEvents::None
+                    && !view.style.hidden;
+            }
+            layer
+        })
+        .collect()
 }
 
 #[derive(Default)]
 pub(crate) struct Keyboard {
     pub(crate) focused: Option<NodeId>,
+    /// The size of a Cell, which the frames given to `nsh_core::focus` are
+    /// in.
+    cells: CellSize,
     /// The text of the last search match outside any control; traversal continues from it.
     pub(crate) search_point: Option<NodeId>,
     /// The control the focus last left for none (Escape out of a field):
     /// the next Tab continues after it, not from the top.
     left: Option<NodeId>,
-    modals: Vec<ModalFocus>,
+    modals: focus::Modals,
     /// The layers the focus went into (a root view's children: the page,
     /// a sheet's panel, any overlay), each with the stop it came from: a
     /// layer that goes with the focus in it gives it back there, as a
     /// modal does.
-    layers: Vec<LayerFocus>,
+    layers: focus::Layers,
     screens: Vec<NodeId>,
     screen_focus: Vec<(NodeId, Option<NodeId>)>,
     pending_scroll_focus: Option<ScrollFocus>,
@@ -80,20 +206,6 @@ pub(crate) struct Keyboard {
     )>,
 }
 
-#[derive(Clone, Copy)]
-struct ModalFocus {
-    id: NodeId,
-    parent: NodeId,
-    restore: Option<NodeId>,
-    initial: bool,
-}
-
-#[derive(Clone, Copy)]
-struct LayerFocus {
-    layer: NodeId,
-    restore: NodeId,
-}
-
 /// The layer `id` is in: the child of its root view (the surface, or the
 /// modal it is in) around it. An overlay's view is one of these, shown in
 /// its root view whatever its place in the app.
@@ -108,49 +220,34 @@ fn layer(tree: &Mounter, id: NodeId) -> Option<NodeId> {
     }
 }
 
-/// The covering layer (`covering_layer`) over `id`'s layer in its root
-/// view, if any: the root view's child above `id`'s that takes it out of
-/// reach.
-fn covering_root(tree: &Mounter, geometry: &[Geometry], id: NodeId) -> Option<NodeId> {
+/// The covering layer (`focus::covering_layer`) over `id`'s layer in its
+/// root view, if any: the root view's child above `id`'s that takes it out
+/// of reach.
+fn covering_root(
+    cells: CellSize,
+    tree: &Mounter,
+    geometry: &[Geometry],
+    id: NodeId,
+) -> Option<NodeId> {
     let own = layer(tree, id)?;
     let scope = tree.get(own)?.parent?;
-    let cover = covering_layer(tree, geometry, scope)?;
-    let own_order = tree.get(own)?.tree_order;
-    (cover > own_order)
-        .then(|| {
-            tree.get(scope)?
-                .children
-                .iter()
-                .copied()
-                .find(|&child| tree.get(child).is_some_and(|v| v.tree_order == cover))
-        })
-        .flatten()
+    focus::covered_by(&layers(cells, tree, geometry, scope), own)
 }
 
-/// The tree order of the topmost layer of `scope`'s root view that covers
-/// the page under it and takes presses (a sheet's or a dialog's backdrop),
-/// if any: the stops of the layers below it are out of reach.
-fn covering_layer(tree: &Mounter, geometry: &[Geometry], scope: NodeId) -> Option<usize> {
-    let root = tree.get(scope)?;
-    let bounds = |id: NodeId| {
+/// The stops of `scope` in focus order (`focus::candidates`).
+fn candidates_in<'a>(
+    cells: CellSize,
+    tree: &Mounter,
+    geometry: &'a [Geometry],
+    scope: NodeId,
+) -> Vec<Stop<'a>> {
+    focus::candidates(
         geometry
             .iter()
-            .find(|g| g.id == id && !g.visible.is_empty())
-            .map(|g| g.bounds)
-    };
-    let page = root.children.first().and_then(|&id| bounds(id))?;
-    root.children.iter().skip(1).rev().find_map(|&id| {
-        let view = tree.get(id)?;
-        let covers = bounds(id)?;
-        (has_press(view.events)
-            && view.props.pointer_events != nsh_core::PointerEvents::None
-            && !view.style.hidden
-            && covers.left <= page.left
-            && covers.top <= page.top
-            && covers.right >= page.right
-            && covers.bottom >= page.bottom)
-            .then_some(view.tree_order)
-    })
+            .filter_map(|g| candidate(cells, tree, g, scope)),
+        scope,
+        &layers(cells, tree, geometry, scope),
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -213,7 +310,7 @@ fn anchored_overlay(tree: &Mounter, id: NodeId) -> Option<NodeId> {
 
 /// Whether anchored overlay `popup` hangs from a trigger: its anchor is a
 /// focus stop among `candidates`, or holds one.
-fn triggered(tree: &Mounter, popup: NodeId, candidates: &[&Geometry]) -> bool {
+fn triggered(tree: &Mounter, popup: NodeId, candidates: &[Stop<'_>]) -> bool {
     let Some(anchor) = tree
         .get(popup)
         .and_then(|view| view.props.overlay_anchor.as_ref())
@@ -239,57 +336,25 @@ pub(crate) fn contains(tree: &Mounter, ancestor: NodeId, mut id: NodeId) -> bool
 }
 
 impl Keyboard {
-    pub(crate) fn candidates<'a>(
-        &self,
-        tree: &Mounter,
-        geometry: &'a [Geometry],
-    ) -> Vec<&'a Geometry> {
-        self.candidates_in(tree, geometry, crate::navigation::focus_scope(tree))
+    /// The keyboard of a surface whose Cells are `cells` big.
+    pub(crate) fn new(cells: CellSize) -> Self {
+        Self {
+            cells,
+            ..Default::default()
+        }
     }
 
-    fn candidates_in<'a>(
-        &self,
-        tree: &Mounter,
-        geometry: &'a [Geometry],
-        scope: NodeId,
-    ) -> Vec<&'a Geometry> {
-        let mut candidates: Vec<_> = geometry
-            .iter()
-            .filter(|g| {
-                // A text's link: while its text is a part of the scope.
-                if let Some(span) = tree.spans.get(&g.id) {
-                    return input_scope(tree, span.view) == scope
-                        && g.bounds.right > g.bounds.left
-                        && g.bounds.bottom > g.bounds.top;
-                }
-                input_scope(tree, g.id) == scope
-                    && tree.get(g.id).is_some_and(|view| {
-                        let editable = view.input.as_ref().is_some_and(|config| config.editable);
-                        // A field narrower than a Cell (an editor's sink
-                        // at its caret, 1 pt wide) is laid out without
-                        // columns, yet takes the typing as on the other
-                        // platforms; a control without Cells is not there.
-                        !view.props.accessibility.state.disabled
-                            && view.props.focus_stop(has_press(view.events) || editable)
-                            && (editable
-                                || (g.bounds.right > g.bounds.left
-                                    && g.bounds.bottom > g.bounds.top))
-                    })
-            })
-            .collect();
-        candidates.sort_by_key(|g| order(tree, g.id));
-        // A backdrop over the page (a sheet's, a dialog's) takes what is
-        // under it out of reach: Tab stays in the layers above it, as in
-        // a modal, and enters them first.
-        if let Some(cover) = covering_layer(tree, geometry, scope) {
-            let above = |id: NodeId| {
-                layer(tree, id)
-                    .and_then(|l| tree.get(l))
-                    .is_some_and(|l| l.tree_order > cover)
-            };
-            candidates.retain(|g| above(g.id));
-        }
-        candidates
+    /// The stops of the focus scope in focus order. A backdrop over the
+    /// page (a sheet's, a dialog's) takes what is under it out of reach:
+    /// Tab stays in the layers above it, as in a modal, and enters them
+    /// first.
+    pub(crate) fn candidates<'a>(&self, tree: &Mounter, geometry: &'a [Geometry]) -> Vec<Stop<'a>> {
+        candidates_in(
+            self.cells,
+            tree,
+            geometry,
+            crate::navigation::focus_scope(tree),
+        )
     }
 
     pub(crate) fn focus(
@@ -330,11 +395,7 @@ impl Keyboard {
             && let (Some(from), Some(into)) = (layer(tree, old), layer(tree, new))
             && from != into
         {
-            self.layers.retain(|entry| entry.layer != into);
-            self.layers.push(LayerFocus {
-                layer: into,
-                restore: old,
-            });
+            self.layers.entered(into, old);
         }
         if let Some(focused) = id {
             let mut parent = Some(host(tree, focused));
@@ -492,50 +553,31 @@ impl Keyboard {
             .copied()
             .filter(|&id| crate::navigation::modal_visible(tree, id))
             .collect();
-        let modal_changed = !self
-            .modals
-            .iter()
-            .map(|modal| modal.id)
-            .eq(active.iter().copied());
-        if modal_changed {
-            let previous = std::mem::take(&mut self.modals);
-            let mut scope = previous.last().map_or(ROOT_ID, |modal| modal.id);
-            if let Some(last) = previous.last()
-                && !active.contains(&last.id)
-            {
-                let (restore, parent) = restoration(last.restore, last.parent, &previous, &active);
-                scope = parent;
-                let restored = restore.filter(|&id| {
-                    self.candidates_in(tree, geometry, scope)
+        let cells = self.cells;
+        let moves = {
+            let tree = &*tree;
+            self.modals.update(
+                &active,
+                self.focused,
+                |modal| {
+                    candidates_in(cells, tree, geometry, modal)
+                        .first()
+                        .map(|g| g.id)
+                },
+                |scope, id| {
+                    candidates_in(cells, tree, geometry, scope)
                         .iter()
                         .any(|g| g.id == id && !g.visible.is_empty())
-                });
-                self.focus(restored, tree, control);
-            }
-            for &id in &active {
-                if let Some(old) = previous.iter().find(|modal| modal.id == id) {
-                    let (restore, parent) =
-                        restoration(old.restore, old.parent, &previous, &active);
-                    self.modals.push(ModalFocus {
-                        restore,
-                        parent,
-                        ..*old
-                    });
-                } else {
-                    let first = self.candidates_in(tree, geometry, id).first().map(|g| g.id);
-                    let modal = ModalFocus {
-                        id,
-                        parent: scope,
-                        restore: self.focused,
-                        initial: first.is_none(),
-                    };
-                    self.focus(first, tree, control);
-                    if let Some(first) = first {
-                        reveal(tree, geometry, first);
-                    }
-                    self.modals.push(modal);
-                    scope = id;
-                }
+                },
+            )
+        };
+        let modal_changed = moves.is_some();
+        for step in moves.into_iter().flatten() {
+            self.focus(step.focus, tree, control);
+            if step.reveal
+                && let Some(id) = step.focus
+            {
+                reveal(tree, geometry, id);
             }
         }
         if let Some(focused) = self.focused
@@ -555,13 +597,9 @@ impl Keyboard {
             // into that layer or Escape closed it first.
             if restored.is_none()
                 && contains(tree, ROOT_ID, focused)
-                && let Some(cover) = covering_root(tree, geometry, focused)
+                && let Some(cover) = covering_root(cells, tree, geometry, focused)
             {
-                self.layers.retain(|entry| entry.layer != cover);
-                self.layers.push(LayerFocus {
-                    layer: cover,
-                    restore: focused,
-                });
+                self.layers.entered(cover, focused);
             }
             self.focus(restored, tree, control);
         } else if self.focused.is_none()
@@ -571,13 +609,17 @@ impl Keyboard {
             // with none in it): the stop it covered still takes it back.
             self.focus(Some(restored), tree, control);
         }
-        self.layers
-            .retain(|entry| contains(tree, ROOT_ID, entry.layer));
-        if self.focused.is_none()
-            && self.modals.last().is_some_and(|modal| modal.initial)
-            && let Some(id) = self.candidates(tree, geometry).first().map(|g| g.id)
-        {
-            self.modals.last_mut().unwrap().initial = false;
+        self.layers.retain(|layer| contains(tree, ROOT_ID, layer));
+        let first = {
+            let tree = &*tree;
+            self.modals.first_stop(self.focused, || {
+                let scope = crate::navigation::focus_scope(tree);
+                candidates_in(cells, tree, geometry, scope)
+                    .first()
+                    .map(|g| g.id)
+            })
+        };
+        if let Some(id) = first {
             self.focus(Some(id), tree, control);
             reveal(tree, geometry, id);
         }
@@ -637,16 +679,14 @@ impl Keyboard {
     /// walking back while that stop went too.
     fn layer_restore(&self, tree: &Mounter, geometry: &[Geometry]) -> Option<NodeId> {
         let candidates = self.candidates(tree, geometry);
-        self.layers
-            .iter()
-            .rev()
-            .filter(|entry| !contains(tree, ROOT_ID, entry.layer))
-            .map(|entry| entry.restore)
-            .find(|&id| {
+        self.layers.restore(
+            |layer| !contains(tree, ROOT_ID, layer),
+            |id| {
                 candidates
                     .iter()
                     .any(|g| g.id == id && !g.visible.is_empty())
-            })
+            },
+        )
     }
 
     fn queue_scroll_focus(
@@ -938,43 +978,16 @@ impl Keyboard {
                     .filter(|&id| geometry.iter().any(|g| g.id == id))
                     .or(left_id.filter(|_| left.is_none()))
                     .and_then(|id| tree.get(id))
-                    .map(|view| (view.tree_order, 0));
-                let order = |g: &&Geometry| order(tree, g.id);
-                let next = match (action, point) {
-                    (Action::Next, Some(point)) if current.is_none() => {
-                        candidates.iter().position(|g| order(g) > point).or(Some(0))
-                    }
-                    (Action::Previous, Some(point)) if current.is_none() => candidates
-                        .iter()
-                        .rposition(|g| order(g) < point)
-                        .or(Some(candidates.len() - 1)),
-                    (Action::Next | Action::Previous, _) => nsh_core::input::tab_stop(
-                        current.or(left),
-                        candidates.len(),
+                    .map(|view| Order::view(view.tree_order));
+                let next = match action {
+                    Action::Next | Action::Previous => focus::tab(
+                        &candidates,
+                        current,
+                        left,
+                        point,
                         matches!(action, Action::Previous),
-                        true,
                     ),
-                    _ => current
-                        .and_then(|index| {
-                            let from = candidates[index];
-                            candidates
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, to)| {
-                                    to.bounds.top < from.bounds.bottom
-                                        && from.bounds.top < to.bounds.bottom
-                                        && if matches!(action, Action::Right) {
-                                            to.bounds.left > from.bounds.left
-                                        } else {
-                                            to.bounds.left < from.bounds.left
-                                        }
-                                })
-                                .min_by_key(|(_, to)| {
-                                    (to.bounds.left - from.bounds.left).unsigned_abs()
-                                })
-                                .map(|(index, _)| index)
-                        })
-                        .or(current.is_none().then_some(0)),
+                    _ => focus::horizontal(&candidates, current, matches!(action, Action::Right)),
                 };
                 if let Some(index) = next {
                     let id = candidates[index].id;
@@ -1131,54 +1144,10 @@ impl Keyboard {
             Handled::Yes
         };
         let candidates = self.candidates(tree, geometry);
-        let current = candidates
-            .iter()
-            .copied()
-            .find(|g| Some(g.id) == self.focused);
-        let best = match current {
-            Some(from) => candidates
-                .iter()
-                .copied()
-                .filter(|to| {
-                    to.id != from.id
-                        && if down {
-                            to.bounds.top >= from.bounds.bottom
-                        } else {
-                            to.bounds.bottom <= from.bounds.top
-                        }
-                })
-                .min_by_key(|to| {
-                    let gap = if down {
-                        to.bounds.top - from.bounds.bottom
-                    } else {
-                        from.bounds.top - to.bounds.bottom
-                    };
-                    let overlaps =
-                        to.bounds.left < from.bounds.right && from.bounds.left < to.bounds.right;
-                    (
-                        !overlaps,
-                        gap,
-                        (to.bounds.left - from.bounds.left).unsigned_abs(),
-                    )
-                }),
-            None => {
-                // A popup opened by a click (a menu, a select) holds what
-                // the arrows are for: enter it before the page around.
-                let in_popup = |g: &&Geometry| in_anchored_overlay(tree, g.id);
-                let popup = candidates
-                    .iter()
-                    .any(|g| !g.visible.is_empty() && in_popup(g));
-                let visible = candidates
-                    .iter()
-                    .copied()
-                    .filter(|g| !g.visible.is_empty() && (!popup || in_popup(g)));
-                if down {
-                    visible.min_by_key(|g| (g.bounds.top, g.bounds.left))
-                } else {
-                    visible.max_by_key(|g| (g.bounds.bottom, -g.bounds.left))
-                }
-            }
-        };
+        let current = candidates.iter().position(|g| Some(g.id) == self.focused);
+        // With none focused, a popup opened by a click (a menu, a select)
+        // holds what the arrows are for: it is entered before the page.
+        let best = focus::vertical(&candidates, current, down).map(|index| candidates[index]);
         if let Some(to) = best
             && !to.visible.is_empty()
         {
@@ -1326,15 +1295,14 @@ pub(crate) fn reveal_frame(
                 scroll.y,
             )
         };
-        if start < nsh_core::Points::ZERO || start + len > viewport {
-            let delta = if horizontal {
-                nsh_core::scroll::reveal_delta(start, start + len, viewport)
-            } else {
-                let centered_start = (viewport - len) / 2.0;
-                // Oversized spans keep the core's margin and start-first policy.
-                start - centered_start
-                    + nsh_core::scroll::reveal_delta(centered_start, centered_start + len, viewport)
-            };
+        // Centered vertically; oversized spans keep the core's margin and
+        // start-first policy.
+        let align = if horizontal {
+            Align::Nearest
+        } else {
+            Align::Center
+        };
+        if let Some(delta) = focus::reveal(start, len, viewport, align) {
             // The terminal scrolls by whole Cells: the nearest offset that still
             // shows the span when it fits.
             let cells = if horizontal {
@@ -1397,20 +1365,4 @@ pub(crate) fn input_scope(tree: &Mounter, id: NodeId) -> NodeId {
         id = parent;
     }
     ROOT_ID
-}
-
-fn restoration(
-    mut restore: Option<NodeId>,
-    mut parent: NodeId,
-    previous: &[ModalFocus],
-    active: &[NodeId],
-) -> (Option<NodeId>, NodeId) {
-    while parent != ROOT_ID && !active.contains(&parent) {
-        let Some(modal) = previous.iter().find(|modal| modal.id == parent) else {
-            return (None, ROOT_ID);
-        };
-        restore = modal.restore;
-        parent = modal.parent;
-    }
-    (restore, parent)
 }
