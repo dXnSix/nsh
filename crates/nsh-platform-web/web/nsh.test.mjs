@@ -1855,3 +1855,19 @@ test("a key event without `key` falls back to its physical key instead of throwi
   assert.equal(keyCode({}), -1);
   assert.equal(keyCode({ key: "a", code: "KeyA" }), 97);
 });
+
+test("a page that goes for good runs the app's terminate listeners, one kept for later does not", () => {
+  const { player } = fakePlayer();
+  let terminated = 0;
+  player.wasm.nsh_will_terminate = () => {
+    terminated += 1;
+    return -1;
+  };
+  // Kept in the back-forward cache: the page may come back as it was.
+  player.pageHidden({ persisted: true });
+  assert.equal(terminated, 0);
+  // Closed, or replaced by another page or a reload.
+  player.pageHidden({ persisted: false });
+  assert.equal(terminated, 1);
+  assert.match(source, /addEventListener\("pagehide", \(event\) => this\.pageHidden\(event\)\)/);
+});

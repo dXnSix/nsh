@@ -995,6 +995,14 @@ pub extern "C" fn nsh_test_answer_ptr() -> *const u8 {
     TEST_ANSWER.with(|a| a.borrow().as_ptr())
 }
 
+/// The page goes for good (`pagehide` the browser does not keep in its
+/// back-forward cache): the app's terminate listeners run now, with what
+/// they start and the storage written out. Returns the pump delay.
+#[unsafe(no_mangle)]
+pub extern "C" fn nsh_will_terminate() -> f64 {
+    send(|app| app.engine.will_terminate())
+}
+
 /// Stops the app.
 #[unsafe(no_mangle)]
 pub extern "C" fn nsh_stop() {
