@@ -480,7 +480,7 @@ system's appearance live, `fontScale()` is 1 and `pixelRatio()` the display's ba
 On [Windows](./windows.md), `platform.os` is `"windows"`, the idiom `"desktop"` and `platform.version` `"10.0"`, on
 Windows 11 too (Windows kept the version number). The safe area and the keyboard height are 0, `colorScheme()` follows
 Settings > Personalization > Colors live, `fontScale()` the Text size setting (1 to 2.25), `reduceMotion()` the
-animation effects setting, `pixelRatio()` the monitor's scale, and `Intl` formats in the user's regional format.
+animation effects setting, `highContrast()` the contrast themes, `pixelRatio()` the monitor's scale, and `Intl` formats in the user's regional format.
 
 In a browser ([the web runtime](./web.md)), `platform.os` is `"web"` and `platform.version` `"0.0"`. The idiom is
 `"desktop"` with a mouse and a window at least 600 points wide, `"pad"` on a tablet and `"phone"` on a phone, decided

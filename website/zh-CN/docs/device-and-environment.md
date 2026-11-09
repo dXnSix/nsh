@@ -466,7 +466,7 @@ const hapticsSupported = platform.os === "ios" || (platform.os === "android" && 
 
 在 [Windows](./windows.md) 上，`platform.os` 为 `"windows"`，界面风格为 `"desktop"`，`platform.version` 为 `"10.0"`，Windows 11
 上也是如此（Windows 沿用了这个版本号）。安全区域和键盘高度为 0，`colorScheme()` 实时跟随“设置 > 个性化 > 颜色”，`fontScale()`
-跟随“文本大小”设置（1 到 2.25），`reduceMotion()` 跟随“动画效果”设置，`pixelRatio()` 为显示器的缩放比例，`Intl`
+跟随“文本大小”设置（1 到 2.25），`reduceMotion()` 跟随“动画效果”设置，`highContrast()` 跟随对比度主题，`pixelRatio()` 为显示器的缩放比例，`Intl`
 按用户的区域格式进行格式化。
 
 在浏览器中（[Web 运行时](./web.md)），`platform.os` 为 `"web"`，`platform.version` 为 `"0.0"`。有鼠标且窗口宽度至少 600 点时界面风格为

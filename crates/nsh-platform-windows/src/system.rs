@@ -34,6 +34,8 @@
 //!   (`TextScaleFactor`, 100 to 225 percent);
 //! - reduce motion: Settings > Accessibility > Visual effects > Animation
 //!   effects off (`SPI_GETCLIENTAREAANIMATION`);
+//! - high contrast: a contrast theme on (Settings > Accessibility >
+//!   Contrast themes: `SPI_GETHIGHCONTRAST`'s `HCF_HIGHCONTRASTON`);
 //! - right to left: the reading direction of the UI language (what the
 //!   shell's own layout follows);
 //! - the screen reader: `SPI_GETSCREENREADER` (Narrator, NVDA and JAWS set
@@ -112,12 +114,13 @@ use windows::{
             },
         },
         UI::{
+            Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW},
             Shell::{SetCurrentProcessExplicitAppUserModelID, ShellExecuteW},
             WindowsAndMessaging::{
                 GA_ROOT, GetAncestor, GetForegroundWindow, GetWindowThreadProcessId, IsIconic,
-                IsWindowVisible, PostMessageW, SPI_GETCLIENTAREAANIMATION, SPI_GETSCREENREADER,
-                SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_ACTION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-                SystemParametersInfoW, WM_CLOSE,
+                IsWindowVisible, PostMessageW, SPI_GETCLIENTAREAANIMATION, SPI_GETHIGHCONTRAST,
+                SPI_GETSCREENREADER, SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_ACTION,
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW, WM_CLOSE,
             },
         },
     },
@@ -169,6 +172,7 @@ struct Settings {
     dark: bool,
     font_scale: f32,
     reduce_motion: bool,
+    high_contrast: bool,
     rtl: bool,
     screen_reader: bool,
     locale: Locale,
@@ -281,6 +285,7 @@ fn settings() -> Settings {
         )),
         // Animation effects off is Windows' reduce motion.
         reduce_motion: spi_bool(SPI_GETCLIENTAREAANIMATION) == Some(false),
+        high_contrast: high_contrast(),
         rtl: ui_language_rtl(),
         screen_reader: spi_bool(SPI_GETSCREENREADER) == Some(true),
         locale,
@@ -423,6 +428,7 @@ fn update(surface: &Surface, settings: Settings) {
     env.locale_settings.time_zone = time_zone();
     env.font_scale = settings.font_scale;
     env.reduce_motion = settings.reduce_motion;
+    env.high_contrast = settings.high_contrast;
     env.rtl = settings.rtl;
     env.screen_reader = settings.screen_reader;
     if !surface.hwnd().is_invalid() {
@@ -524,6 +530,25 @@ fn spi_bool(action: SYSTEM_PARAMETERS_INFO_ACTION) -> Option<bool> {
     }
     .ok()
     .map(|()| value.as_bool())
+}
+
+/// Whether a contrast theme is on (`SPI_GETHIGHCONTRAST`; Windows sends
+/// `WM_SETTINGCHANGE` when it changes).
+fn high_contrast() -> bool {
+    let mut value = HIGHCONTRASTW {
+        cbSize: size_of::<HIGHCONTRASTW>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: a HIGHCONTRASTW with its size set, as the action takes.
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETHIGHCONTRAST,
+            value.cbSize,
+            Some(&mut value as *mut HIGHCONTRASTW as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .is_ok_and(|()| value.dwFlags.contains(HCF_HIGHCONTRASTON))
 }
 
 /// The text scale of `TextScaleFactor` (percent; unset means 100). Values

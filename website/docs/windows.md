@@ -167,7 +167,7 @@ makes), so the TSX a view loads imports your Rust components and modules too.
 The environment is a desktop's: the safe area and the keyboard height are 0, `idiom()` is the desktop
 (`platform.idiom` is `"desktop"`) and `os_version()` (`platform.version`) is `"10.0"` (on Windows 11 too: Windows kept the version number). Dark mode
 follows Settings > Personalization > Colors live, `fontScale()` the Text size setting, reduce motion the animation
-effects setting and the locale the user's regional format. See [Device and environment](./device-and-environment.md).
+effects setting, `highContrast()` the contrast themes and the locale the user's regional format. See [Device and environment](./device-and-environment.md).
 
 The `cursor` style follows updates while the mouse rests over a view. When a batch changes the cursor,
 Windows applies the new shape or `"none"` after the whole batch, using the view under the pointer.
