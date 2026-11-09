@@ -37,6 +37,8 @@ a GPUI Windows field wait). Nothing is opened: the owner says when.
 | Apps told they are about to terminate (2026-11-09, local, not pushed) | `upstream-will-terminate`, `feat-will-terminate` | `pr/will-terminate/01-core` `9c161b64` on `27fecbbe` | — |
 | The layout direction of the language `setLocale` sets (2026-11-09, local, not pushed) | `upstream-locale-direction`, `feat-locale-direction` | `pr/locale-direction/01-core` `17939c72` on `87c7e8da` | — |
 | Whether the user asked for more contrast (2026-11-09, local, not pushed) | `upstream-high-contrast`, `feat-high-contrast` | `pr/high-contrast/01-core` `5ba39998` on `84b2cf91` | — |
+| The mouse's other buttons, `onAuxPress` (2026-11-09, local, not pushed) | `upstream-mouse-buttons`, `feat-mouse-buttons` | `pr/mouse-buttons/01-core` `90966dae` on `02a9e978` | — |
+| The wheel over any view, `onWheel` and `wheelScroll` (2026-11-09, local, not pushed) | `upstream-wheel-events`, `feat-wheel-events` | `pr/wheel-events/01-core` `c31fb3a8` on `02a9e978` | — (conflicts with mouse buttons) |
 
 Superseded: `upstream-web-open-url` (upstream #892 fixed it; the fork's own dXnSix/nsh#113 is closed). The
 `fork-0.4.0-1` sync fixes (dXnSix/nsh#154–#157, checked 2026-11-07 against `c015f2c5e`) are records only:
