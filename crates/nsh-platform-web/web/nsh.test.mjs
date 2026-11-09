@@ -1855,3 +1855,48 @@ test("a key event without `key` falls back to its physical key instead of throwi
   assert.equal(keyCode({}), -1);
   assert.equal(keyCode({ key: "a", code: "KeyA" }), 97);
 });
+
+test("the page reports whether the user asked for more contrast, and its changes", () => {
+  const names = ["matchMedia", "addEventListener", "document", "visualViewport", "MutationObserver", "devicePixelRatio"];
+  const saved = Object.fromEntries(names.map((name) => [name, globalThis[name]]));
+  const queries = new Map();
+  Object.assign(globalThis, {
+    matchMedia: (query) => {
+      const list = { matches: query === "(prefers-contrast: more)", listeners: [] };
+      list.addEventListener = (type, listener) => list.listeners.push([type, listener]);
+      queries.set(query, list);
+      return list;
+    },
+    addEventListener() {},
+    document: {
+      addEventListener() {},
+      documentElement: {},
+      body: { append() {} },
+      createElement: () => ({}),
+    },
+    visualViewport: undefined,
+    MutationObserver: class {
+      observe() {}
+    },
+    devicePixelRatio: 2,
+  });
+  try {
+    let reports = 0;
+    const player = Object.create(Player.prototype);
+    player.environmentChanged = () => (reports += 1);
+    player.installEnvironment();
+    // What `environment()` reports as `highContrast`.
+    assert.equal(player.moreContrast.matches, true);
+    assert.match(source, /highContrast: this\.moreContrast\.matches/);
+    // The user turns it off: the environment is reported again.
+    const contrast = queries.get("(prefers-contrast: more)");
+    assert.deepEqual(contrast.listeners.map(([type]) => type), ["change"]);
+    contrast.listeners[0][1]();
+    assert.equal(reports, 1);
+  } finally {
+    for (const name of names) {
+      if (saved[name] === undefined) delete globalThis[name];
+      else globalThis[name] = saved[name];
+    }
+  }
+});

@@ -471,7 +471,7 @@ const hapticsSupported = platform.os === "ios" || (platform.os === "android" && 
 
 在浏览器中（[Web 运行时](./web.md)），`platform.os` 为 `"web"`，`platform.version` 为 `"0.0"`。有鼠标且窗口宽度至少 600 点时界面风格为
 `"desktop"`，平板上为 `"pad"`，手机上为 `"phone"`，在应用启动时确定。区域设置、`localeSettings()`（浏览器的首选语言、浏览器按其语言给出的地区偏好和它的时区）、`lifecycle()`（标签页隐藏时为
-`"background"`，失去焦点时为 `"inactive"`）、`reduceMotion()`、`fontScale()`（浏览器的文字大小）、`pixelRatio()`、
+`"background"`，失去焦点时为 `"inactive"`）、`reduceMotion()`、`highContrast()`、`fontScale()`（浏览器的文字大小）、`pixelRatio()`、
 安全区域和键盘高度都来自浏览器，并实时跟随。
 
 在终端中（[终端后端](./tui.md)），`platform.idiom` 为 `"terminal"`，`platform.desktop` 为 `true`，`platform.os` 是本机自己的系统。
