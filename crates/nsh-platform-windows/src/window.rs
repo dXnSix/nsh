@@ -877,6 +877,10 @@ unsafe extern "system" fn root_proc(
             WM_WINDOWPOSCHANGED => {
                 SendMessageW(child, WM_NSH_ROOT, None, None);
             }
+            // The session ends: only top-level windows hear it.
+            WM_ENDSESSION => {
+                SendMessageW(child, WM_ENDSESSION, Some(wparam), Some(lparam));
+            }
             WM_NCDESTROY => {
                 let _ = RemoveWindowSubclass(hwnd, Some(root_proc), id);
             }
@@ -1280,7 +1284,15 @@ fn handle(
         }
         // An embedded surface's: its root window's ([`observe_root`]).
         WM_NSH_ROOT => crate::system::lifecycle_changed(surface),
+        // The session ends (the user signs out, Windows shuts down or
+        // restarts): Windows may end the process once this returns.
+        WM_ENDSESSION if wparam.0 != 0 => surface.will_terminate(),
         WM_DESTROY => {
+            // The surface's own window: its app ends with it (the message
+            // loop ends after the last one, `window_proc`).
+            if data.top_level {
+                surface.will_terminate();
+            }
             crate::window_close::destroyed(surface);
             crate::tray::destroyed(hwnd);
             crate::global_shortcut::destroyed(hwnd);

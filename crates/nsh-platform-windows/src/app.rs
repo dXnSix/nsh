@@ -691,6 +691,9 @@ fn run_on_this_thread(source: AppSource, options: AppOptions) -> std::process::E
     view.place_main_window(&launch, kept);
     view.show();
     let code = crate::window::run_loop();
+    // The loop ended without the window closing (its engine stops when it
+    // does, after its terminate listeners ran).
+    view.surface().will_terminate();
     view.stop();
     drop(view);
     // SAFETY: pairs the `OleInitialize` above; nothing on this thread uses
