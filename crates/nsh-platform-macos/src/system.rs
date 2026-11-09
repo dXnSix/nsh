@@ -23,8 +23,9 @@
 //!   (`NSSystemTimeZoneDidChangeNotification`, after which Foundation's
 //!   cached zone is reset);
 //! - right to left: the user's first preferred language;
-//! - reduce motion and VoiceOver: `NSWorkspace`'s accessibility settings,
-//!   live;
+//! - reduce motion, Increase Contrast (`high_contrast`) and VoiceOver:
+//!   `NSWorkspace`'s accessibility settings, live (its display options
+//!   notification);
 //! - whether the app is in use (`lifecycle()`): `background` while none of
 //!   it shows (hidden, or `NSApplication.occlusionState` without
 //!   `visible`: its windows minimized or covered), `active` while it is the
@@ -339,6 +340,7 @@ fn update(surface: &Surface) {
     env.locale_settings = locale_settings(env.locale);
     env.font_scale = 1.0;
     env.reduce_motion = workspace.accessibilityDisplayShouldReduceMotion();
+    env.high_contrast = workspace.accessibilityDisplayShouldIncreaseContrast();
     env.screen_reader = workspace.isVoiceOverEnabled();
     env.rtl = preferred_language_rtl();
     env.pixel_ratio = pixel_ratio(surface);
