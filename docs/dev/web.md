@@ -668,7 +668,10 @@ browsers' touches into what phones report:
   notches glide, touchpads follow the fingers; snapping views move one snap point per scroll. Nothing to scroll: the
   event goes on to the page around (an embedding page scrolls), unless it is over a dialog or an alert covering the
   window (`dialogs: "viewport"`). Ctrl + wheel (a touchpad's pinch) pinches the view
-  under the pointer and never zooms the page. Scroll events follow the desktop backends: touch drags send
+  under the pointer and never zooms the page. The views listening to `onWheel` hear it first (`wheelListeners`:
+  pixel deltas are `precise`), and their `wheelScroll` (`ViewProps` JSON's `wheelScroll`, absent for `auto`) bounds
+  the scroll views and the pinch it reaches, as `nsh_core::input::wheel_route` does, and keeps it from the page
+  around (`preventDefault`). Scroll events follow the desktop backends: touch drags send
   `onScrollDragStart` / `EndDrag`, glides and snaps `onMomentumStart` / `End`, every scroll ends with one
   `onScrollEnd` (the browser's `scrollend` after a scroll driven here, `drive` / `ownEnd`, is not another).
 - **Mouse drags never scroll**, in every idiom, as on the desktop backends: dragging the content is a touchscreen's

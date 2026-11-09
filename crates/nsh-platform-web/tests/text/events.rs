@@ -99,3 +99,23 @@ fn nested_values_are_left_out() {
     );
     assert_eq!(fields.len(), 1);
 }
+
+#[test]
+fn a_wheel_reaches_the_core_with_its_delta() {
+    let kind = EventKind::from_prop("onWheel").unwrap();
+    let EventPayload::Wheel(wheel) = payload(
+        kind,
+        json!({
+            "position": { "x": 3, "y": 4 },
+            "pagePosition": { "x": 13, "y": 24 },
+            "delta": { "x": -2, "y": 120 },
+            "modifiers": { "control": true, "alt": false, "shift": false, "platform": false },
+            "precise": false,
+        }),
+    ) else {
+        panic!("a wheel payload");
+    };
+    assert_eq!((wheel.position.x.0, wheel.page_position.y.0), (3.0, 24.0));
+    assert_eq!((wheel.delta.x.0, wheel.delta.y.0), (-2.0, 120.0));
+    assert!(wheel.modifiers.ctrl && !wheel.precise);
+}

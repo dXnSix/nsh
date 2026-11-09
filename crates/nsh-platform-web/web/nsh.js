@@ -4352,8 +4352,8 @@ class Player {
   }
 
   /** Ctrl+wheel (and touchpad pinches, which browsers send as one) zooms the zoomable scroll view under the pointer; whether there was one. */
-  wheelZoom(e) {
-    const el = this.ancestors(this.viewOf(e.target)).find((v) => this.zooms(v) && v._behavior.pinch);
+  wheelZoom(e, reach = null) {
+    const el = this.ancestors(this.viewOf(e.target)).find((v) => (!reach || reach.has(v)) && this.zooms(v) && v._behavior.pinch);
     if (!el) return false;
     const r = el.getBoundingClientRect();
     const fx = e.clientX - r.left;
@@ -7489,23 +7489,27 @@ class Player {
    * axis that can move that way (a vertical wheel scrolls a horizontal view
    * when no vertical one can), and stays on it until the scroll ends
    * (events 200 ms apart). Notches glide; Ctrl + wheel (a touchpad's pinch)
-   * pinches the view under the pointer and never zooms the page.
+   * pinches the view under the pointer and never zooms the page. The views
+   * listening to `onWheel` hear it first, and their `wheelScroll` says
+   * which scroll views may take it (`wheelListeners`).
    */
   wheel(e) {
-    if (e.ctrlKey) {
-      e.preventDefault();
-      // Over a zoomable scroll view it zooms that, else it pinches.
-      if (!this.wheelZoom(e)) this.wheelPinch(e);
-      return;
-    }
     const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? this.size[1] : 1;
     let dx = e.deltaX * unit;
     let dy = e.deltaY * unit;
     if (e.shiftKey && !dx) [dx, dy] = [dy, 0];
     const now = performance.now();
     let lock = this.wheelLock;
-    if (!lock || now - lock.t > 200 || !lock.el.isConnected) {
-      const chain = this.scrollChain(e.target);
+    const latched = lock && now - lock.t <= 200 && lock.el.isConnected ? lock.el : null;
+    const reach = this.wheelListeners(e, dx, dy, latched);
+    if (e.ctrlKey) {
+      e.preventDefault();
+      // Over a zoomable scroll view it zooms that, else it pinches.
+      if (!this.wheelZoom(e, reach)) this.wheelPinch(e, reach);
+      return;
+    }
+    if (!latched) {
+      const chain = this.scrollChain(e.target).filter((v) => !reach || reach.has(v));
       const horizontal = Math.abs(dx) > Math.abs(dy);
       const can = (v, d) => {
         const h = !!v._horizontal;
@@ -7519,7 +7523,9 @@ class Player {
       // alert covers it.
       this.wheelLock = lock = el ? { el, total: 0, snapped: false } : null;
       if (!lock) {
-        if (this.viewportDialogs && e.target.closest?.(".nsh-viewport")) e.preventDefault();
+        // A view whose `wheelScroll` keeps the wheel in keeps it from the
+        // page around too.
+        if (reach || (this.viewportDialogs && e.target.closest?.(".nsh-viewport"))) e.preventDefault();
         return;
       }
     }
@@ -7541,6 +7547,46 @@ class Player {
     // deltas. Its magnitude cannot distinguish a notch from a finger.
     const smooth = e.deltaMode !== 0;
     this.scrollSmoothly(el, el._horizontal ? d : 0, el._horizontal ? 0 : d, smooth);
+  }
+
+  /**
+   * The views around `e`'s target that listen to `onWheel` hear the wheel
+   * by (`dx`, `dy`) points, from the inside out, up to the first whose
+   * `wheelScroll` keeps it in (`contain`, `none`), as
+   * `nsh_core::input::wheel_route` decides: `latched` is the scroll view a
+   * scroll in progress stays on, and a view nearer the pointer that keeps
+   * wheels in came under it during that scroll, so it hears none of it and
+   * keeps nothing in. Returns the views that may scroll or zoom by it, or
+   * null for all. Pixel deltas are `precise` (browsers report a mouse's
+   * notches in pixels too, but in lines or pages never a touchpad's).
+   */
+  wheelListeners(e, dx, dy, latched) {
+    const view = this.viewOf(e.target);
+    if (!view) return null;
+    const chain = this.ancestors(view);
+    let at = latched ? chain.indexOf(latched) : -1;
+    if (latched && at < 0) at = chain.length;
+    let reach = chain.length;
+    for (let i = 0; i < chain.length; i++) {
+      const el = chain[i];
+      const keeps = el._props?.wheelScroll;
+      if (keeps && i < at) continue;
+      if ((dx || dy) && el._events?.has("onWheel")) {
+        const mouse = this.mouseEvent(el, e, true);
+        this.event(el._id, "onWheel", {
+          position: mouse.position,
+          pagePosition: mouse.pagePosition,
+          delta: { x: dx, y: dy },
+          modifiers: mouse.modifiers,
+          precise: e.deltaMode === 0,
+        });
+      }
+      if (keeps) {
+        reach = keeps === "none" ? 0 : i + 1;
+        break;
+      }
+    }
+    return reach === chain.length ? null : new Set(chain.slice(0, reach));
   }
 
   /** Moves `el` by (`dx`, `dy`), gliding there when `smooth`; once it
@@ -7675,11 +7721,11 @@ class Player {
 
   /** Ctrl + wheel pinches the view under the pointer (animated values),
    * ending when the wheel stops for 150 ms. */
-  wheelPinch(e) {
+  wheelPinch(e, reach = null) {
     let t = this.wheelPinchState;
     if (!t) {
       const view = this.viewOf(e.target);
-      const el = view && this.ancestors(view).find((v) => v._gestures?.pinch);
+      const el = view && this.ancestors(view).find((v) => (!reach || reach.has(v)) && v._gestures?.pinch);
       if (!el) return;
       t = this.wheelPinchState = { el, scale: 1, timer: 0 };
       this.call((w) => w.nsh_transform_gesture(el._id, 0, 0, 1));

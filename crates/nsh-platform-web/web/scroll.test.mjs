@@ -406,3 +406,54 @@ test('pixel-mode inertia crosses 40 without starting or cancelling a glide', (t)
   t.mock.timers.tick(200);
   assert.equal(el._driven, 0);
 });
+
+test('a wheel reaches the onWheel listeners, and wheelScroll keeps it from the scroll views around', (t) => {
+  t.mock.method(performance, 'now', () => clock);
+  globalThis.getComputedStyle = () => ({ transform: 'none', width: '100px', height: '100px' });
+  try {
+    const { p, el } = scroller();
+    const canvas = {
+      _id: 2, _events: new Set(['onWheel']), parentNode: el, isConnected: true,
+      getBoundingClientRect: () => ({ left: 10, top: 20 }),
+    };
+    el._events.add('onWheel');
+    el.getBoundingClientRect = () => ({ left: 0, top: 0 });
+    el.isConnected = true;
+    p.views.set(2, canvas);
+    p.viewOf = (target) => target;
+    p.point = (e) => [e.clientX, e.clientY];
+    const sent = [];
+    p.event = (id, name, payload) => sent.push([id, name, payload]);
+    const at = (target, deltaY, extra = {}) => ({ ...wheel(target, deltaY), clientX: 40, clientY: 50, ...extra });
+    // Every listener hears it, from the inside out; the page scrolls.
+    p.wheel(at(canvas, 30));
+    assert.deepEqual(sent.map(([id, name]) => [id, name]), [[2, 'onWheel'], [1, 'onWheel']]);
+    const [, , first] = sent[0];
+    assert.deepEqual(first.delta, { x: 0, y: 30 });
+    assert.deepEqual(first.position, { x: 30, y: 30 });
+    assert.equal(first.precise, true);
+    runFrames();
+    assert.equal(el.scrollTop, 30);
+    // `none`: the canvas hears it alone, nothing scrolls, the page around
+    // keeps still.
+    sent.length = 0;
+    p.wheelLock = null;
+    canvas._props = { wheelScroll: 'none' };
+    let prevented = false;
+    p.wheel(at(canvas, 3, { deltaMode: 1, preventDefault() { prevented = true; } }));
+    runFrames();
+    assert.deepEqual(sent.map(([id, , e]) => [id, e.delta.y, e.precise]), [[2, 120, false]]);
+    assert.equal(el.scrollTop, 30);
+    assert.equal(prevented, true);
+    // A scroll latched to the page goes on over it: the canvas came under
+    // the pointer during it, so it hears nothing and keeps nothing in.
+    sent.length = 0;
+    p.wheel(at(el, 10));
+    p.wheel(at(canvas, 10));
+    runFrames();
+    assert.deepEqual(sent.map(([id]) => id), [1, 1]);
+    assert.equal(el.scrollTop, 50);
+  } finally {
+    delete globalThis.getComputedStyle;
+  }
+});

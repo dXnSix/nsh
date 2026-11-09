@@ -83,6 +83,28 @@ pub(crate) fn payload(kind: EventKind, value: serde_json::Value) -> EventPayload
                 ))
             }
         }
+        // `{ position, pagePosition, delta, modifiers, precise }`, as
+        // handlers get it.
+        EventKind::Wheel => {
+            let (position, page_position, modifiers) = pointer_at(&value);
+            let delta = |c: &str| {
+                value
+                    .get("delta")
+                    .and_then(|d| d.get(c))
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32
+            };
+            EventPayload::Wheel(nsh_core::WheelEvent::new(
+                position,
+                page_position,
+                point(Points(delta("x")), Points(delta("y"))),
+                modifiers,
+                value
+                    .get("precise")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            ))
+        }
         EventKind::ChangeText | EventKind::SubmitEditing => EventPayload::Text {
             text: text("text"),
             count: num("count") as u32,
