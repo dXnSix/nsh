@@ -192,9 +192,9 @@ build to the same file) and takes `nsh.js` from the crate.
   in the form browsers send it, unreserved characters and percent-escapes without dot or empty segments, a `/`
   added at its end, which `start_at` matches requests against as it is) puts a `<base href>` first in the head, so the page loads its files at any of the app's paths
   (`/sports/football`), which `SiteServer::start_at` (`--run`) serves under it; the dev page has `<base href="/">`
-  (the dev server serves its files at the root). `nsh.json` `web.history` reaches `createPlayer`'s `history` on both pages (the packaged page's
-  `app.history`, the dev page's `HISTORY`, which `with_page_host` fills in); without it the player's default
-  (`window.top === window`) holds. The app ships as minified ES modules
+  (the dev server serves its files at the root). `nsh.json` `web.history` reaches `createPlayer`'s `history` on
+  both pages (the packaged page's `app.history`, the dev page's `HISTORY`, which `with_page_host` fills in); without
+  it the player's default (`window.top === window`) holds. The app ships as minified ES modules
   (`app.<digest>.js` and `<chunk>.<digest>.js`). An import map resolves original chunk URLs to hashed files;
   transitive entry fonts load before startup and dynamic imports prepare the requested chunk's font dependencies.
   The browser loads static dependencies, module cycles and dynamic chunks itself. No bytecode or hardening
@@ -793,6 +793,20 @@ browsers' touches into what phones report:
   again, and when no page went the top one gets the address it showed (`shownUrl`). `page` events are checked as
   `http(s)` URLs (`check_page_url`) instead of against the app's schemes, and every address the app sets by
   `check_address` (length, no whitespace), where it calls.
+- **Address moves the app did not make** (`UrlScheme.on("change")`): each entry's state also has its place among this
+  load's entries (`nshIndex`), and the player mirrors each entry's depth (`historyIndex`, `historyDepths`), so a back
+  of the app's own goes to the newest earlier entry at most as deep (`entryAtDepth`) and a `popstate` knows which way
+  the user went. The root's `onUrlScheme` event with `change: "back" | "forward" | "address"` (`url_scheme::CHANGE`,
+  `AppUrlChangeCause`; another cause is the address alone, quietly) sets the address and queues an `AppUrlChange` for
+  `next_app_url_change()`, at most 16, and only once something listened (`hears_changes`: before it the address has
+  them); the TS module posts each to the listeners there are and keeps none. The player sends it for a traversal
+  between entries of one depth (`tellAddress(cause)`), for a `#fragment` the user typed (a state-less entry of the
+  page whose address is not the one shown: it gets this session's state at the depth shown and the next index, and the
+  app's pages stay; before, it sent the app back to its start), and for a back that popped pages when the entry's
+  address is not the one the app showed and the app set none as it answered: the player waits until the pages it
+  popped are dismissed (`dismissing`, `goBack`) and the app had a turn after their `onDismiss`, at most
+  `POP_ANSWER_MS` (1.5 s; a page's `onDismiss` follows its slide, `settlePop`). A forward to a depth the stack lost
+  stays `open`.
 - **Text selection**: text is selectable when `selectable` is true (`userSelect: "text"`; `nsh-selectable`), and with the desktop idiom also
   when it is unset (`null` in the `t` item: `nsh-autoselect`, selectable under `.nsh-desktop`) unless a view around it,
   or the text itself, takes presses, touches, pans or pinches (`nsh-press`, set in `updateTouchAction`), as on a web

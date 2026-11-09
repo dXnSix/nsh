@@ -1953,6 +1953,12 @@ pub enum Command {
     },
     /// The JS responder let go (on the root).
     ClearJsResponder,
+    /// The press going on in this view (or a view inside it) ends without
+    /// its release: no `onPressUp` or `onPress` follow, and its `active:`
+    /// styles reset at once (a context menu opened by a held finger). The
+    /// core handles it; platforms never see it.
+    #[doc(hidden)]
+    CancelPress,
     /// Select a range of an input (UTF-16 units; equal for a caret).
     SetSelection {
         /// Start.
@@ -2572,8 +2578,9 @@ pub enum Prop {
     /// (`nsh/ios`) shown over the keyboard while the input has focus.
     #[prop(ios = "inputAccessoryViewID", on = INPUT)]
     InputAccessoryViewId(Option<Box<str>>),
-    /// `nativeID`: names the view for others (an input accessory's for
-    /// `inputAccessoryViewID`).
+    /// `nativeID`: names the view for others: an input accessory's for
+    /// `inputAccessoryViewID`, a scroll view's for the embedding app's
+    /// `watchScroll`.
     #[prop(js = "nativeID")]
     NativeId(Option<Box<str>>),
     /// The highlight of an input's or a selectable text's selection (Rust
