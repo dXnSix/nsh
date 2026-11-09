@@ -131,6 +131,32 @@ macro_rules! theme {
             ///
             /// Name `selection`.
             pub const SELECTION: Role = Role::new("selection");
+            /// What succeeded: a `[!TIP]` alert in a `TextView`. No token
+            /// of the default theme: the component draws its own green
+            /// when the theme has none.
+            ///
+            /// Name `success`.
+            pub const SUCCESS: Role = Role::new("success");
+            /// What to watch out for: an `Editor`'s warning diagnostics, a
+            /// `[!WARNING]` alert in a `TextView`. No token of the default
+            /// theme: each draws its own amber when the theme has none.
+            ///
+            /// Name `warning`.
+            pub const WARNING: Role = Role::new("warning");
+            /// What is worth knowing: an `Editor`'s info diagnostics, a
+            /// `[!NOTE]` alert in a `TextView`. No token of the default
+            /// theme: each draws its own blue when the theme has none.
+            ///
+            /// Name `info`.
+            pub const INFO: Role = Role::new("info");
+            /// What is marked: an `Editor`'s search matches, marked text
+            /// (`<mark>`) in a `TextView`. No token of the
+            /// default theme: each draws its own yellow when the theme has
+            /// none. The components draw it translucent; the token is the
+            /// solid color.
+            ///
+            /// Name `highlight`.
+            pub const HIGHLIGHT: Role = Role::new("highlight");
         }
 
         /// A theme: shadcn/ui's tokens, each a field, and the app's own

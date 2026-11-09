@@ -609,15 +609,15 @@ let editor!: EditorRef;
 | `selection` | 所选文本的背后 | `primary` 的浅色 |
 | `caret` | 光标 | 2pt 宽，`foreground`，闪烁 |
 | `composition` | 输入法正在组合的文本 | 下划线 |
-| `searchMatch` | `search` 的匹配项 | 半透明的琥珀色 |
-| `currentSearchMatch` | 选区所在的匹配项，在 `searchMatch` 之后应用 | 更深的琥珀色 |
+| `searchMatch` | `search` 的匹配项 | 半透明的主题 `highlight`；没有时为琥珀色 |
+| `currentSearchMatch` | 选区所在的匹配项，在 `searchMatch` 之后应用 | 同上，更深 |
 | `matchingBracket` | 光标处的括号和与它配对的括号 | 1pt 边框 |
 | `indentGuide` | 每级缩进一条参考线 | 一条 1pt 的 `border` 线 |
 | `foldPlaceholder` | 折叠行在其文本之后显示的内容 | ` ⋯ `，`muted-foreground` |
 | `placeholder` | 文本为空时显示 | `muted-foreground` |
 | `diagnosticError` | 错误下方的线 | `destructive` |
-| `diagnosticWarning` | 警告下方的线 | 琥珀色 |
-| `diagnosticInfo` | 信息下方的线 | 蓝色 |
+| `diagnosticWarning` | 警告下方的线 | 主题的 `warning`；没有时为琥珀色 |
+| `diagnosticInfo` | 信息下方的线 | 主题的 `info`；没有时为蓝色 |
 | `diagnosticHint` | 提示下方的线 | `muted-foreground` |
 | `unnecessaryText` | `unnecessary` 诊断的文本 | `muted-foreground` |
 | `deprecatedText` | `deprecated` 诊断的文本 | 删除线 |

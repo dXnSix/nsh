@@ -714,15 +714,15 @@ is set with `fontFamily`, `fontSize` and `lineHeight`, which the editor measures
 | `selection` | Behind selected text | A tint of `primary` |
 | `caret` | The carets | 2pt wide, `foreground`, blinking |
 | `composition` | The text an input method is composing | Underlined |
-| `searchMatch` | The matches of `search` | Translucent amber |
-| `currentSearchMatch` | The match the selection is on, after `searchMatch` | Stronger amber |
+| `searchMatch` | The matches of `search` | The theme's `highlight`, translucent; amber without it |
+| `currentSearchMatch` | The match the selection is on, after `searchMatch` | The same, stronger |
 | `matchingBracket` | The bracket at the caret and its partner | A 1pt border |
 | `indentGuide` | A guide per indentation level | A 1pt line of `border` |
 | `foldPlaceholder` | What a folded line shows after its text | ` ⋯ `, `muted-foreground` |
 | `placeholder` | Shown while the text is empty | `muted-foreground` |
 | `diagnosticError` | The line under an error | `destructive` |
-| `diagnosticWarning` | The line under a warning | Amber |
-| `diagnosticInfo` | The line under an information | Blue |
+| `diagnosticWarning` | The line under a warning | The theme's `warning`; amber without it |
+| `diagnosticInfo` | The line under an information | The theme's `info`; blue without it |
 | `diagnosticHint` | The line under a hint | `muted-foreground` |
 | `unnecessaryText` | The text of an `unnecessary` diagnostic | `muted-foreground` |
 | `deprecatedText` | The text of a `deprecated` diagnostic | Struck through |

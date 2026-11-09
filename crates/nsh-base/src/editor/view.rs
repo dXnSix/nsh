@@ -15,19 +15,41 @@ use super::{
     controller::Ed,
     state::{GutterMark, GutterPlace, RowContent, RulerMark, SpanTags},
 };
-use crate::{input, theme};
+use crate::{input, role, theme};
 
 /// The width of a caret.
 pub(crate) const CARET_WIDTH: f32 = 2.0;
 /// The thickness of a diagnostic's underline, as GPUI Kit draws it.
 const MARK_HEIGHT: f32 = 1.0;
 
-/// Search matches' background (amber), and the current match's.
+/// Search matches' background (amber), and the current match's, where the
+/// theme has no `highlight` ([`match_color`]).
 const MATCH: AdaptiveColor = AdaptiveColor::rgb(0xfbbf24, 0xd97706);
-/// A warning's mark (amber).
+/// A warning's mark (amber), where the theme has no `warning`
+/// ([`warning_color`]).
 const WARNING: AdaptiveColor = AdaptiveColor::rgb(0xd97706, 0xfbbf24);
-/// An information's mark (blue).
+/// An information's mark (blue), where the theme has no `info`
+/// ([`info_color`]).
 const INFO: AdaptiveColor = AdaptiveColor::rgb(0x2563eb, 0x60a5fa);
+
+/// The search matches' color: the theme's `highlight` ([`role::HIGHLIGHT`]:
+/// the token the app's theme maps it onto, else the one of that name), else
+/// the editor's own amber.
+fn match_color() -> AdaptiveColor {
+    theme().tokens().role(role::HIGHLIGHT).unwrap_or(MATCH)
+}
+
+/// A warning's color: the theme's `warning` ([`role::WARNING`]), else the
+/// editor's own amber.
+fn warning_color() -> AdaptiveColor {
+    theme().tokens().role(role::WARNING).unwrap_or(WARNING)
+}
+
+/// An information's color: the theme's `info` ([`role::INFO`]), else the
+/// editor's own blue.
+fn info_color() -> AdaptiveColor {
+    theme().tokens().role(role::INFO).unwrap_or(INFO)
+}
 
 /// `el` with part `part`'s classes and style, which follow the props.
 pub(crate) fn part<E: Element>(el: E, props: EditorProps, part: EditorPart) -> E {
@@ -1062,7 +1084,8 @@ fn match_rects(ed: Ed) -> impl IntoElement {
         rects
             .into_iter()
             .map(|(b, current)| {
-                let el = rect(b).bg(move || MATCH.opacity(if current { 0.55 } else { 0.25 }));
+                let el =
+                    rect(b).bg(move || match_color().opacity(if current { 0.55 } else { 0.25 }));
                 if current {
                     parts(
                         el,
@@ -1346,8 +1369,8 @@ fn tagged(
 fn severity_look(severity: EditorDiagnosticSeverity) -> (fn() -> AdaptiveColor, EditorPart) {
     match severity {
         EditorDiagnosticSeverity::Error => (|| theme().destructive, EditorPart::DiagnosticError),
-        EditorDiagnosticSeverity::Warning => (|| WARNING, EditorPart::DiagnosticWarning),
-        EditorDiagnosticSeverity::Info => (|| INFO, EditorPart::DiagnosticInfo),
+        EditorDiagnosticSeverity::Warning => (warning_color, EditorPart::DiagnosticWarning),
+        EditorDiagnosticSeverity::Info => (info_color, EditorPart::DiagnosticInfo),
         EditorDiagnosticSeverity::Hint => (|| theme().muted_foreground, EditorPart::DiagnosticHint),
     }
 }
