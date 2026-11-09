@@ -51,6 +51,21 @@ use super::{Role, Tokens};
 /// assert_eq!(names, ["overlay", "radius-card"]);
 /// ```
 ///
+/// A token plays several roles with a `role` for each: one surface for
+/// cards and popovers.
+///
+/// ```
+/// use nsh_core::element::{AdaptiveColor, AppTheme, Role};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Flat {
+///     #[token(color, role = "card", role = "popover")]
+///     surface: AdaptiveColor,
+/// }
+///
+/// assert_eq!(Flat::token_specs()[0].roles, [Role::Card, Role::Popover]);
+/// ```
+///
 /// The derive refuses, at the attribute, a name given twice in one type:
 ///
 /// ```compile_fail
@@ -113,7 +128,7 @@ use super::{Role, Tokens};
 /// }
 /// ```
 ///
-/// a role mapped twice:
+/// a role mapped twice, onto two tokens:
 ///
 /// ```compile_fail
 /// use nsh_core::element::{AdaptiveColor, AppTheme};
@@ -123,6 +138,18 @@ use super::{Role, Tokens};
 ///     #[token(color, role = "card")]
 ///     ink: AdaptiveColor,
 ///     #[token(color, role = "card")]
+///     paper: AdaptiveColor,
+/// }
+/// ```
+///
+/// or twice onto one:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(color, role = "card", role = "card")]
 ///     paper: AdaptiveColor,
 /// }
 /// ```

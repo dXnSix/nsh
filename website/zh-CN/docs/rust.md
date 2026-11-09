@@ -629,7 +629,8 @@ impl Default for DsTheme {
   `spacing`（`spacing-*`）、`text`（`text-*`）、`weight`（`font-weight-*`）、`tracking`、`leading`、`blur`、
   `font`（`font-*`）和 `shadow`（`shadow-*`）。颜色是 `AdaptiveColor`，数字是 `f32` 或 `Points`，字体族是 `SharedString`
   或 `String`，阴影是 `AdaptiveShadow`。`name = "…"` 为令牌命名（带命名空间的种类，名称保留其命名空间：
-  `#[token(radius, name = "radius-corner")]`），`role = "…"` 把一个角色映射到它。
+  `#[token(radius, name = "radius-corner")]`），`role = "…"` 把一个角色映射到它，它担任的每个角色写一次
+  （`#[token(color, role = "card", role = "popover")]`：两者共用一个表面）。
 - `#[token(nested)]` 包含另一个 `AppTheme` 类型，其名称按上面的方式放在 `<字段名>-` 之下（`surface: Surface` 中的
   `raised`：`surface-raised`；`#[token(shadow)] raised`：`shadow-surface-raised`），读作
   `theme_of::<DsTheme>().surface.raised`。令牌中缺少的名称取内部类型的 `Default`，而不是外部 `Default` 给该字段的值。

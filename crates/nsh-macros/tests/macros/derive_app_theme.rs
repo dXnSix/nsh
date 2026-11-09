@@ -125,10 +125,10 @@ fn names_are_kebab_case_with_their_namespaces() {
             .unwrap()
             .clone()
     };
-    assert_eq!(spec("surface-overlay").role, Some(Role::Popover));
+    assert_eq!(spec("surface-overlay").roles, [Role::Popover]);
     assert_eq!(spec("surface-overlay").doc, "Popovers and menus.");
-    assert_eq!(spec("action").role, Some(Role::Primary));
-    assert_eq!(spec("font-body").role, Some(Role::FontSans));
+    assert_eq!(spec("action").roles, [Role::Primary]);
+    assert_eq!(spec("font-body").roles, [Role::FontSans]);
     assert_eq!(spec("radius-card").kind, TokenKind::Radius);
     assert_eq!(spec("font-weight-strong").kind, TokenKind::Weight);
     assert_eq!(spec("shadow-raised").kind, TokenKind::Shadow);

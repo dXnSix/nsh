@@ -694,7 +694,8 @@ impl Default for DsTheme {
   `rounded-card`), `spacing` (`spacing-*`), `text` (`text-*`), `weight` (`font-weight-*`), `tracking`, `leading`,
   `blur`, `font` (`font-*`) and `shadow` (`shadow-*`). A color is an `AdaptiveColor`, a number an `f32` or `Points`, a
   font family a `SharedString` or `String`, a shadow an `AdaptiveShadow`. `name = "…"` names a token (a namespaced
-  kind's name keeps its namespace: `#[token(radius, name = "radius-corner")]`), `role = "…"` maps a role onto it.
+  kind's name keeps its namespace: `#[token(radius, name = "radius-corner")]`), `role = "…"` maps a role onto it,
+  once for each role it plays (`#[token(color, role = "card", role = "popover")]`: one surface for both).
 - `#[token(nested)]` holds another `AppTheme` type, its names under `<field>-` as above (`surface: Surface` with
   `raised`: `surface-raised`, with `#[token(shadow)] raised`: `shadow-surface-raised`), read as
   `theme_of::<DsTheme>().surface.raised`. A name the tokens lack keeps the inner type's `Default`, not the value the
