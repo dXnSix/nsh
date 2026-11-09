@@ -88,7 +88,9 @@ pub(crate) fn overrides_declared(
 /// Theme file `json` with its names the set's: a role's name becomes the
 /// token it is mapped onto (and so in `var()`s), a name no type declares
 /// is left out; the names kept and what was left out are listed. A section
-/// that sets a token and the role mapped onto it keeps the token's value.
+/// that sets a token and the role mapped onto it keeps the token's value;
+/// one that sets a token through two of the roles it plays, with two
+/// values, keeps the first's (by name).
 fn declared_names(
     json: &str,
     set: &super::theme::ThemeSet,
@@ -108,6 +110,8 @@ fn declared_names(
                 continue;
             };
             let old = std::mem::take(fields);
+            // The tokens roles' names set in this section, with the role.
+            let mut by_role: Vec<(&str, &str)> = Vec::new();
             for (key, v) in &old {
                 match set.target(key) {
                     Some(name) if name == key => {
@@ -121,6 +125,18 @@ fn declared_names(
                             ));
                             continue;
                         }
+                        // Another role the token plays set it here: the
+                        // same value twice is one value, another is left
+                        // out as the token set beside its role is.
+                        if let Some((_, first)) = by_role.iter().find(|(token, _)| *token == name) {
+                            if fields.get(name) != Some(v) {
+                                left_out.push(format!(
+                                    "`{key}`: `{first}` sets the token its role is mapped onto, `{name}`, too"
+                                ));
+                            }
+                            continue;
+                        }
+                        by_role.push((name, key));
                         fields.insert(name.to_owned(), v.clone());
                         kept.push(name.to_owned());
                     }
