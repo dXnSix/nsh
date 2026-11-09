@@ -496,7 +496,7 @@ impl Tokens {
 
     /// The name of the token the role named `role` is mapped onto, if a
     /// theme mapped it.
-    fn mapped(&self, role: &str) -> Option<&str> {
+    pub(crate) fn mapped(&self, role: &str) -> Option<&str> {
         self.roles.as_ref()?.get(role).map(|token| &**token)
     }
 

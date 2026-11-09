@@ -9,7 +9,7 @@ use std::time::Duration;
 use crossbeam_channel::Receiver;
 use nsh_core::{
     ApproxTextEngine, Color, MountBatch, MountItem, Size,
-    element::{AdaptiveColor, AppTheme, Registry, Role, Root, TokenKind, TokenSpec, Tokens},
+    element::{AdaptiveColor, AppTheme, Registry, Root, TokenKind, TokenSpec, Tokens, role},
     prelude::*,
 };
 use nsh_engine::{App, Engine, EngineConfig, Environment};
@@ -42,8 +42,8 @@ impl AppTheme for Ds {
     fn token_specs() -> &'static [TokenSpec] {
         static SPECS: std::sync::LazyLock<Vec<TokenSpec>> = std::sync::LazyLock::new(|| {
             vec![
-                TokenSpec::new("surface-overlay", TokenKind::Color).role(Role::Popover),
-                TokenSpec::new("action", TokenKind::Color).role(Role::Primary),
+                TokenSpec::new("surface-overlay", TokenKind::Color).role(role::POPOVER),
+                TokenSpec::new("action", TokenKind::Color).role(role::PRIMARY),
             ]
         });
         &SPECS

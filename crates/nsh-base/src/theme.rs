@@ -168,12 +168,12 @@ macro_rules! theme {
                         $(
                             TokenSpec::new($key, TokenKind::Color)
                                 .doc(concat!($($doc),*))
-                                .role(Role::$role),
+                                .role(role::$role),
                         )*
                     ];
-                    specs.push(TokenSpec::new("radius", TokenKind::Radius).doc("The corner radius.").role(Role::Radius));
-                    specs.push(TokenSpec::new("font-sans", TokenKind::Font).doc("The app's font family.").role(Role::FontSans));
-                    specs.push(TokenSpec::new("font-mono", TokenKind::Font).doc("The monospaced font family.").role(Role::FontMono));
+                    specs.push(TokenSpec::new("radius", TokenKind::Radius).doc("The corner radius.").role(role::RADIUS));
+                    specs.push(TokenSpec::new("font-sans", TokenKind::Font).doc("The app's font family.").role(role::FONT_SANS));
+                    specs.push(TokenSpec::new("font-mono", TokenKind::Font).doc("The monospaced font family.").role(role::FONT_MONO));
                     specs
                 });
                 &SPECS

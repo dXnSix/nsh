@@ -324,7 +324,7 @@ controls take the theme's colors only when the app has a theme of its own (`Toke
 an app on the default theme keeps the system's alert colors.
 
 A registered [theme type](../docs/rust.md#theme-types) maps roles onto its own tokens (`TokenSpec::role`), and
-`theme()`'s fields then read those tokens: with a design system that maps `Role::Popover` onto `surface-overlay`,
+`theme()`'s fields then read those tokens: with a design system that maps `role::POPOVER` onto `surface-overlay`,
 `theme().popover` is `surface-overlay`, and `nsh/base`'s components, the tab bar and the platforms' controls draw in
 the design system.
 

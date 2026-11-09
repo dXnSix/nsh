@@ -154,15 +154,22 @@ pub fn theme_types(sets: &[SetDescription]) -> Result<Option<ThemeTypes>, String
                     theme.type_name, t.name, t.kind
                 )
             })?;
-            let roles = t
-                .roles
-                .iter()
-                .map(|r| {
-                    super::Role::from_name(r).ok_or_else(|| {
-                        format!("{}: `{}`: unknown role {r:?}", theme.type_name, t.name)
-                    })
-                })
-                .collect::<Result<Vec<_>, String>>()?;
+            // A role is its name; it reads what the token playing it
+            // holds.
+            let roles = match kind.role_kind() {
+                Some(reads) => t
+                    .roles
+                    .iter()
+                    .map(|r| super::AnyRole::new(r.clone(), reads))
+                    .collect::<Vec<_>>(),
+                None if t.roles.is_empty() => Vec::new(),
+                None => {
+                    return Err(format!(
+                        "{}: `{}`: a {} token plays no role",
+                        theme.type_name, t.name, t.kind
+                    ));
+                }
+            };
             kinds.push((t.name.as_str(), kind, roles));
         }
         let (defaults, _) = super::theme_file::parse(&theme.defaults, &super::Tokens::default())?;
@@ -642,7 +649,7 @@ mod tests {
 mod theme_description {
     use super::*;
     use crate::element::{
-        AdaptiveColor, AdaptiveShadow, AppTheme, Role, TokenKind, TokenSpec, Tokens, theme_file,
+        AdaptiveColor, AdaptiveShadow, AppTheme, TokenKind, TokenSpec, Tokens, role, theme_file,
     };
 
     #[derive(Debug, Clone, PartialEq, Default)]
@@ -656,7 +663,7 @@ mod theme_description {
                 vec![
                     TokenSpec::new("surface-overlay", TokenKind::Color)
                         .doc("Popovers.")
-                        .role(Role::Popover),
+                        .role(role::POPOVER),
                     TokenSpec::new("radius-card", TokenKind::Radius).doc("Cards."),
                     TokenSpec::new("font-body", TokenKind::Font),
                     TokenSpec::new("shadow-raised", TokenKind::Shadow),
@@ -767,7 +774,7 @@ mod theme_description {
                 .map(|c| crate::Color::from(c.light)),
             Some(crate::Color::from(crate::color::rgb(0x333333)))
         );
-        assert_eq!(tokens.role_name(Role::Popover), "surface-overlay");
+        assert_eq!(tokens.role_name(role::POPOVER), "surface-overlay");
         let names: Vec<_> = types.tokens().map(|(n, k, _)| (n, k)).collect();
         assert_eq!(names[0], ("font-body", TokenKind::Font));
         // No types: none; two declaring one name: an error naming both.
@@ -786,7 +793,15 @@ mod theme_description {
 #[cfg(test)]
 mod token_roles {
     use super::*;
-    use crate::element::{AdaptiveColor, AppTheme, Role, TokenKind, TokenSpec, Tokens};
+    use crate::element::{AdaptiveColor, AppTheme, TokenKind, TokenSpec, Tokens};
+
+    /// Roles of a UI set's own, beside the core's.
+    mod role {
+        use crate::element::Role;
+        pub(super) use crate::element::role::*;
+
+        pub(super) const CARD: Role = Role::new("card");
+    }
 
     /// One surface for cards and popovers.
     #[derive(Debug, Clone, PartialEq, Default)]
@@ -799,8 +814,8 @@ mod token_roles {
             static SPECS: std::sync::LazyLock<Vec<TokenSpec>> = std::sync::LazyLock::new(|| {
                 vec![
                     TokenSpec::new("surface", TokenKind::Color)
-                        .role(Role::Card)
-                        .role(Role::Popover),
+                        .role(role::CARD)
+                        .role(role::POPOVER),
                     TokenSpec::new("ink", TokenKind::Color),
                 ]
             });
@@ -828,7 +843,7 @@ mod token_roles {
 
         fn token_specs() -> &'static [TokenSpec] {
             static SPECS: std::sync::LazyLock<Vec<TokenSpec>> = std::sync::LazyLock::new(|| {
-                vec![TokenSpec::new("overlay", TokenKind::Color).role(Role::Popover)]
+                vec![TokenSpec::new("overlay", TokenKind::Color).role(role::POPOVER)]
             });
             &SPECS
         }
@@ -871,8 +886,8 @@ mod token_roles {
             ))
             .unwrap();
         assert!(left_out.is_empty(), "{left_out:?}");
-        assert_eq!(tokens.role_name(Role::Card), "surface");
-        assert_eq!(tokens.role_name(Role::Popover), "surface");
+        assert_eq!(tokens.role_name(role::CARD), "surface");
+        assert_eq!(tokens.role_name(role::POPOVER), "surface");
         assert_eq!(
             tokens.color("surface").map(|c| crate::Color::from(c.light)),
             Some(crate::Color::from(crate::color::rgb(0x123456)))
@@ -883,10 +898,81 @@ mod token_roles {
             err.contains("the role `popover` is mapped by both"),
             "{err}"
         );
-        // A role the document does not know is an error naming it.
-        let mut odd = set::<Flat>("ds/native");
-        odd.themes[0].tokens[0].roles.push("surface-9".into());
-        let err = theme_types(&[odd]).unwrap_err();
-        assert!(err.contains(r#"unknown role "surface-9""#), "{err}");
+        // A role is its name: one only the app's crates declare is mapped
+        // as the core's are.
+        let mut own = set::<Flat>("ds/native");
+        own.themes[0].tokens[0].roles.push("banner".into());
+        let types = theme_types(&[own]).unwrap().unwrap();
+        let (tokens, left_out) = types
+            .read(Some(
+                r##"{ "cssVars": { "light": { "banner": "#654321" } } }"##,
+            ))
+            .unwrap();
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert_eq!(
+            tokens.color("surface").map(|c| crate::Color::from(c.light)),
+            Some(crate::Color::from(crate::color::rgb(0x654321)))
+        );
+    }
+}
+
+/// Roles as data: the toolchain knows a role by its name and by the kind
+/// of the token that plays it, and no role reads box shadows.
+#[cfg(test)]
+mod named_roles {
+    use super::*;
+
+    fn theme(tokens: &[(&str, &str, &[&str])]) -> SetDescription {
+        let mut set = SetDescription::from(&Registry::ui_set("ds/native"));
+        set.themes.push(ThemeDescription {
+            type_name: "ds::Theme".into(),
+            tokens: tokens
+                .iter()
+                .map(|(name, kind, roles)| ThemeTokenDescription {
+                    name: (*name).into(),
+                    kind: (*kind).into(),
+                    doc: String::new(),
+                    roles: roles.iter().map(|r| (*r).into()).collect(),
+                })
+                .collect(),
+            defaults: r##"{ "cssVars": { "theme": { "notice": "#111111", "radius-chip": "4px", "font-title": "Inter", "shadow-raised": "0 1px 2px #0000001a" } } }"##.into(),
+        });
+        set
+    }
+
+    #[test]
+    fn a_role_reads_what_the_token_playing_it_holds() {
+        let types = theme_types(&[theme(&[
+            ("notice", "color", &["banner"]),
+            ("radius-chip", "radius", &["chip-radius"]),
+            ("font-title", "font", &["title-font"]),
+        ])])
+        .unwrap()
+        .unwrap();
+        let (tokens, left_out) = types.read(None).unwrap();
+        assert!(left_out.is_empty(), "{left_out:?}");
+        // Each role reads its token, as its kind.
+        let banner: crate::element::Role = crate::element::Role::new("banner");
+        let chip: crate::element::NumberRole = crate::element::Role::new("chip-radius");
+        let title: crate::element::FontRole = crate::element::Role::new("title-font");
+        assert_eq!(tokens.role(banner), tokens.color("notice"));
+        assert_eq!(tokens.role(chip), Some(4.0));
+        assert_eq!(tokens.role(title).as_deref(), Some("Inter"));
+    }
+
+    #[test]
+    fn a_shadow_token_plays_no_role() {
+        let err =
+            theme_types(&[theme(&[("shadow-raised", "shadow", &["elevation"])])]).unwrap_err();
+        assert!(
+            err.contains("`shadow-raised`: a shadow token plays no role"),
+            "{err}"
+        );
+        // Without one it is described as it was.
+        assert!(
+            theme_types(&[theme(&[("shadow-raised", "shadow", &[])])])
+                .unwrap()
+                .is_some()
+        );
     }
 }

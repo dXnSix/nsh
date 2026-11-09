@@ -822,8 +822,8 @@ An app or a design system brings its own tokens as a Rust type (`element/theme.r
 `Default`'s value), `write_patch(patch, prefix, out)` and the provided `to_tokens()`, its tokens with the roles its
 specs map (`Tokens::with_roles`). A `TokenSpec` is a name, a `TokenKind` (`#[non_exhaustive]`: `Color`, `Number`,
 `Radius`, `Spacing`, `Text`, `Weight`, `Tracking`, `Leading`, `Blur`, `Font`, `Shadow`; `name()` / `from_name()` its
-spelling in descriptions, `is_number()` every kind but `Color`, `Font` and `Shadow`), a doc comment and the `Role` it
-plays, built with `TokenSpec::new(name, kind).doc(..).role(..)`. The prefix lets a type hold another under a prefix
+spelling in descriptions, `is_number()` every kind but `Color`, `Font` and `Shadow`), a doc comment and the roles it
+plays (`AnyRole`s: a role's name and what it reads), built with `TokenSpec::new(name, kind).doc(..).role(..)`. The prefix lets a type hold another under a prefix
 (`surface-` and `raised`). The tokens stay flat and by name, so classes, `token()` and theme files read them as they
 read any theme's; a type is a typed view of its names. The impls are written by hand for now (`core/tests.rs`
 `mod app_theme`, `nsh-engine`'s `tests/engine/app_theme.rs`); a derive that writes them is planned.
@@ -833,11 +833,15 @@ read any theme's; a type is a typed view of its names. The impls are written by 
 (`Registry::theme_specs`). `Registry::merged` unions the sets' specs by `TypeId` and builds the crate-private
 `ThemeSet` of them: each name with its owner type and kind, the types in registration order, and the union of their
 defaults with the role aliases. A token's spec lists the roles it plays (`TokenSpec::roles`, one `.role(..)` each):
-several roles may read one token, and one role reads one token. `ThemeSet::try_add` returns an error naming both
-types for a name or a role (`role_owner`) another type claims, and for a role two tokens of one type play;
+several roles may read one token, and one role reads one token. Roles are told apart by name alone, so a UI set's
+own constant maps as the core's do and two constants of one name are one role. `ThemeSet::try_add` returns an error
+naming both types for a name or a role (`role_owner`) another type claims, for a role two tokens of one type play,
+and for a role that reads another kind than its token holds (`TokenKind::role_kind`; no role reads a shadow);
 `ThemeSet::new` panics with it, as two components of one name do.
 `ThemeSet::target(key)` is the name a theme file's key sets: a declared name, else the token a role of that name
-(`primary`) is mapped onto.
+(`primary`, or a UI set's own) is mapped onto (`Tokens::mapped`); `renamed_roles` are the mapped roles a `var()`
+may name. The description carries a role as its name, and the toolchain gives it the kind of the token that plays
+it.
 
 `TokenProvider` is how theme files are read: `Source { read, overrides }`, a set's `tokens_from` and
 `token_overrides_from` functions (`nsh/base`'s `read_tokens` and `theme_file::overrides`), or

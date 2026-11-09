@@ -307,7 +307,7 @@ NSH 自己绘制的部分通过**角色**读取主题：`theme()` 的各个字�
 各平台的控件才采用主题的颜色；使用默认主题的应用保留系统的提示框颜色。
 
 已注册的[主题类型](../docs/rust.md#主题类型)把角色映射到自己的 token 上（`TokenSpec::role`），`theme()` 的字段随之读取这些 token：
-设计系统把 `Role::Popover` 映射到 `surface-overlay` 时，`theme().popover` 就是 `surface-overlay`，`nsh/base` 的组件、标签栏和各平台的控件
+设计系统把 `role::POPOVER` 映射到 `surface-overlay` 时，`theme().popover` 就是 `surface-overlay`，`nsh/base` 的组件、标签栏和各平台的控件
 都以该设计系统绘制。
 
 <a id="controls"></a>
