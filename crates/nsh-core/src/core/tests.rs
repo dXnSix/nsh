@@ -214,6 +214,43 @@ fn calls_into_rust_settle_their_promises_whatever_happens() {
 }
 
 #[test]
+fn a_call_into_rust_that_is_not_async_spawns_tasks_and_makes_signals() {
+    use std::rc::Rc;
+
+    use crate::element::{RustCall, RustOp, ToJs, signal, spawn};
+    let mut c = core();
+    let done = Rc::new(Cell::new(0));
+    let seen = done.clone();
+    c.apply(Op::Rust(RustOp {
+        call: 1,
+        run: RustCall::Op(Box::new(move |_| {
+            let count = signal(1);
+            spawn(async move {
+                count.update(|n| *n += 1);
+                seen.set(count.get_untracked());
+            });
+            Ok(Box::new(()) as Box<dyn ToJs>)
+        })),
+    }))
+    .unwrap();
+    for _ in 0..10 {
+        if done.get() != 0 {
+            break;
+        }
+        c.run_component_tasks();
+    }
+    assert_eq!(done.get(), 2);
+    let replies: Vec<_> = js_events(&mut c)
+        .into_iter()
+        .map(|(_, _, payload)| match payload {
+            EventPayload::Native { data, .. } => data,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(replies, [serde_json::json!({ "c": 1, "v": null })]);
+}
+
+#[test]
 fn values_of_calls_into_rust_that_panic_as_they_drop_stay_in_the_core() {
     use crate::element::{JsHost, JsOwned, JsValue, PropError, RustCall, RustOp, ToJs, TsTypes};
     /// Panics as it drops.
@@ -5641,6 +5678,47 @@ fn a_cancelled_press_resets_active_and_drops_its_release() {
     assert!(!c.component_event(2, EventKind::PressDown, &EventPayload::None));
     assert!(!c.component_event(2, EventKind::PressUp, &EventPayload::None));
     assert!(!c.component_event(2, EventKind::Press, &EventPayload::None));
+}
+
+#[test]
+fn a_press_is_cancelled_after_other_nodes_were_freed() {
+    let mut c = core();
+    // Nodes made and freed before the pressed one leave vacant keys below
+    // its own.
+    view_with_classes(&mut c, 2, "bg-white");
+    view_with_classes(&mut c, 4, "bg-white");
+    view_with_classes(&mut c, 6, "bg-white active:bg-zinc-200");
+    c.commit().unwrap();
+    apply(
+        &mut c,
+        vec![
+            Op::Remove {
+                parent: ROOT_ID,
+                child: 2,
+            },
+            Op::Release { id: 2 },
+            Op::Remove {
+                parent: ROOT_ID,
+                child: 4,
+            },
+            Op::Release { id: 4 },
+        ],
+    );
+    c.commit();
+    c.set_states(6, crate::tailwind::state::PRESSED);
+    c.commit().unwrap();
+    apply(
+        &mut c,
+        vec![Op::Command {
+            id: 6,
+            command: Command::CancelPress,
+        }],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(
+        view_style_of(&batch, 6).unwrap().background_color,
+        Color(0xffff_ffff)
+    );
 }
 
 #[test]
@@ -14981,6 +15059,123 @@ fn measures_in_root_coordinates() {
     c.commit();
     assert_eq!(c.measure(6), None);
     assert_eq!(c.measure(1000), None);
+}
+
+/// A press passed on into an element (`ElementRef::press_at`) goes to the
+/// innermost view under it that hears presses, in a subtree that takes no
+/// pointer itself, and skips views that take none.
+#[test]
+fn presses_passed_on_reach_the_innermost_pressable_view() {
+    use crate::props::PointerEvents;
+    let mut c = core();
+    let listen = |id| Op::Listen {
+        id,
+        event: EventKind::Press,
+        enabled: true,
+    };
+    let insert = |parent, child| Op::Insert {
+        parent,
+        child,
+        before: None,
+    };
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::View,
+            },
+            Op::Create {
+                id: 4,
+                tag: Tag::View,
+            },
+            Op::Create {
+                id: 6,
+                tag: Tag::View,
+            },
+            Op::Create {
+                id: 8,
+                tag: Tag::View,
+            },
+            style_op(
+                2,
+                &[
+                    ("marginTop", StyleValue::Number(40.0)),
+                    ("height", StyleValue::Number(100.0)),
+                ],
+            ),
+            Op::SetProp {
+                id: 2,
+                prop: Prop::PointerEvents(PointerEvents::None),
+            },
+            style_op(
+                4,
+                &[
+                    ("width", StyleValue::Number(200.0)),
+                    ("height", StyleValue::Number(50.0)),
+                    ("flexDirection", StyleValue::Str("row")),
+                ],
+            ),
+            style_op(
+                6,
+                &[
+                    ("marginLeft", StyleValue::Number(50.0)),
+                    ("width", StyleValue::Number(20.0)),
+                    ("height", StyleValue::Number(20.0)),
+                ],
+            ),
+            style_op(
+                8,
+                &[
+                    ("width", StyleValue::Number(20.0)),
+                    ("height", StyleValue::Number(20.0)),
+                ],
+            ),
+            Op::SetProp {
+                id: 8,
+                prop: Prop::PointerEvents(PointerEvents::None),
+            },
+            listen(4),
+            listen(6),
+            listen(8),
+            insert(4, 6),
+            insert(4, 8),
+            insert(2, 4),
+            insert(ROOT_ID, 2),
+        ],
+    );
+    c.commit().unwrap();
+    // On 6 (at 50..70 in 4, which is at 40 in the root).
+    assert_eq!(
+        c.press_target(2, point(px(55.0), px(45.0))),
+        Some((6, point(px(5.0), px(5.0))))
+    );
+    // On 8, which takes no pointer: 4 under it.
+    assert_eq!(
+        c.press_target(2, point(px(75.0), px(45.0))),
+        Some((4, point(px(75.0), px(5.0))))
+    );
+    // Past every view that hears presses.
+    assert_eq!(c.press_target(2, point(px(10.0), px(120.0))), None);
+    // The commit passes it on as the platforms report a press.
+    c.components.presses.push((
+        2,
+        crate::PressEvent {
+            page_position: point(px(55.0), px(45.0)),
+            clicks: 2,
+            ..Default::default()
+        },
+        crate::element::Answer::<bool>::new().1,
+    ));
+    c.commit();
+    let pressed: Vec<_> = js_events(&mut c)
+        .into_iter()
+        .filter(|(_, kind, _)| *kind == EventKind::Press)
+        .collect();
+    assert!(matches!(
+        &pressed[..],
+        [(6, _, EventPayload::Press(p))] if p.position == point(px(5.0), px(5.0)) && p.clicks == 2
+    ));
 }
 
 /// `desktop={{ windowDrag }}` reaches the platform in the view's props, and
