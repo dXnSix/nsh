@@ -524,4 +524,67 @@ impl Headless {
             None,
         ))
     }
+
+    /// The step `press(<selector>, { button })` with a mouse button other
+    /// than the primary one: it goes down and comes up over the middle of
+    /// the view `selector` names, as on a desktop or the web, and the
+    /// nearest view around it listening to `onAuxPress` hears it, with the
+    /// button and the modifier keys held (`keyboard.down`), unless a text
+    /// input is nearer (`input::AuxPress`). The secondary button asks for a
+    /// context menu first, as `rightClick` does. A phone has no mouse:
+    /// there it fails.
+    pub fn aux_press(
+        &mut self,
+        selector: &str,
+        button: nsh_core::MouseButton,
+    ) -> Result<(), String> {
+        if button == nsh_core::MouseButton::Left {
+            return self.press(selector);
+        }
+        let parsed = Selector::parse(selector)?;
+        self.step(format!("press({selector}, {})", button.name()));
+        if !self.environment.desktop() && self.environment.os != nsh_core::platform::Os::Web {
+            return Err(
+                "a phone has no mouse to press its other buttons with: open the app as a desktop or the web (`platform`)"
+                    .into(),
+            );
+        }
+        let pick = self.screen.view(&parsed);
+        let target = self.picked(pick, selector, "view")?;
+        let at = self
+            .screen
+            .bounds_in_root(target)
+            .ok_or_else(|| format!("`{selector}` is not on screen"))?
+            .center();
+        self.activate_window_of(target);
+        if button == nsh_core::MouseButton::Right
+            && let Some(id) = self.screen.context_menu_target(target)
+        {
+            let origin = self
+                .screen
+                .bounds_in_root(id)
+                .map_or(Point::default(), |b| b.origin);
+            let event = nsh_core::ContextMenuEvent::new(
+                point(at.x - origin.x, at.y - origin.y),
+                at,
+                self.held,
+                Some(nsh_core::PointerType::Mouse),
+            );
+            self.send(id, EventKind::ContextMenu, EventPayload::ContextMenu(event));
+        }
+        let links: Vec<_> = self
+            .screen
+            .chain(target)
+            .into_iter()
+            .map(|id| (id, self.screen.events(id), self.screen.input(id).is_some()))
+            .collect();
+        if let Some(press) = input::AuxPress::down(button, links) {
+            let mut payload = self.mouse_at(press.view, at);
+            if let EventPayload::Mouse(e) = &mut payload {
+                e.pressed_button = Some(button);
+            }
+            self.send(press.view, EventKind::AuxPress, payload);
+        }
+        self.done()
+    }
 }

@@ -81,7 +81,7 @@ view 用 flexbox 布局子元素，默认值为：`flexDirection: "column"`、`f
 
 ## 属性
 
-`View` 有一个自己的属性 `selectable`（Rust 中为 `.selectable(true)`）：视图中的文字作为一个选区一起选择（[文字选择](./text-selection.md)）。其余是[通用属性](./index.md#通用属性)：样式（`style`、`class`、`classList`；Rust 中为 `Styled` 方法）、`disabled`，按压属性（`onPress`、`onLongPress`、`onPressDown`、`onPressUp`、`delayLongPress`、`hitSlop`），状态样式（`activeStyle`、`hoverStyle`、`focusStyle`、`disabledStyle`、`checkedStyle`），`onMouseEnter` / `onMouseMove` / `onMouseLeave`、`onContextMenu`，`onFileDragEnter` / `onFileDragLeave` / `onFileDrop`，`focusable`、`onLayout`、`ref`、`nativeID`、`testID`，手势属性（`pan`、`pinch`、`rotation` 及其事件），触摸与响应者属性，无障碍属性，以及 `ios` / `android` / `desktop`。
+`View` 有一个自己的属性 `selectable`（Rust 中为 `.selectable(true)`）：视图中的文字作为一个选区一起选择（[文字选择](./text-selection.md)）。其余是[通用属性](./index.md#通用属性)：样式（`style`、`class`、`classList`；Rust 中为 `Styled` 方法）、`disabled`，按压属性（`onPress`、`onLongPress`、`onPressDown`、`onPressUp`、`delayLongPress`、`hitSlop`），状态样式（`activeStyle`、`hoverStyle`、`focusStyle`、`disabledStyle`、`checkedStyle`），`onMouseEnter` / `onMouseMove` / `onMouseLeave`、`onContextMenu`、`onAuxPress`，`onFileDragEnter` / `onFileDragLeave` / `onFileDrop`，`focusable`、`onLayout`、`ref`、`nativeID`、`testID`，手势属性（`pan`、`pinch`、`rotation` 及其事件），触摸与响应者属性，无障碍属性，以及 `ios` / `android` / `desktop`。
 
 ## 可选择的视图
 
@@ -152,6 +152,7 @@ view()
 | `onMouseEnter` / `onMouseLeave` | `.on_mouse_enter` / `.on_mouse_leave` | `MouseEvent` | 鼠标移到视图（或其内部的视图）上 / 离开视图或窗口（见[悬停](./index.md#悬停)）；`onMouseLeave` 的位置是鼠标最后所在之处。 |
 | `onMouseMove` | `.on_mouse_move` | `MouseEvent` | 鼠标在视图（或其内部的视图）上移动，无论是否按着按键；或鼠标停在那里、没有按键按下时按下或松开了修饰键：`position`、`pagePosition`（`Point`）、`modifiers` 和 `pressedButton`（`"left"`、`"right"`、`"middle"`、`"back"`、`"forward"` 或 `null`）；每帧最多一次。 |
 | `onContextMenu` | `.on_context_menu` | `ContextMenuEvent` | 在视图上请求了上下文菜单：辅助按钮、浏览器中的键盘，或 macOS 和 Windows 上的读屏软件（见[上下文菜单](./index.md#上下文菜单)）。 |
+| `onAuxPress` | `.on_aux_press` | `MouseEvent` | 鼠标的主按钮以外的某个按钮在视图上按下并松开：`pressedButton` 为 `"right"`、`"middle"`、`"back"` 或 `"forward"`（见[鼠标按钮](./index.md#鼠标按钮)）。 |
 | `onFileDragEnter` / `onFileDragLeave` | `.on_file_drag_enter` / `.on_file_drag_leave` | 无 | 本地文件拖入 / 离开当前桌面拖放目标。 |
 | `onFileDrop` | `.on_file_drop` | `{ uris: string[] }`（`FileDropEvent`） | 本地文件或目录被放到桌面拖放目标。 |
 | `onLayout` | `.on_layout` | `{ bounds }`（`Bounds<Points>`） | 相对父视图的 frame 发生变化。 |

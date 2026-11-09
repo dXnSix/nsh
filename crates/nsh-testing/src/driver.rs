@@ -51,6 +51,13 @@ pub(crate) trait Driver: Send {
     }
     fn hover(&mut self, selector: &str) -> Result<(), String>;
     fn right_click(&mut self, selector: &str) -> Result<(), String>;
+    /// Presses what `selector` names with a mouse button other than the
+    /// primary one: the nearest view around it listening to `onAuxPress`
+    /// hears it.
+    fn aux_press(&mut self, selector: &str, button: nsh_core::MouseButton) -> Result<(), String> {
+        let _ = (selector, button);
+        Err(headless_only("pressing with another mouse button"))
+    }
     /// Pastes `content` into the input `selector` names, as the user's
     /// paste does with it on the clipboard.
     fn paste(&mut self, selector: &str, content: &nsh_core::PasteEvent) -> Result<(), String>;
@@ -204,6 +211,9 @@ impl Driver for Headless {
     }
     fn right_click(&mut self, selector: &str) -> Result<(), String> {
         Headless::right_click(self, selector)
+    }
+    fn aux_press(&mut self, selector: &str, button: nsh_core::MouseButton) -> Result<(), String> {
+        Headless::aux_press(self, selector, button)
     }
     fn paste(&mut self, selector: &str, content: &nsh_core::PasteEvent) -> Result<(), String> {
         Headless::paste(self, selector, content)

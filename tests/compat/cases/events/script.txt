@@ -1,4 +1,15 @@
 # What a user does and sees (compat/apps.rs): each case after its tap.
+# events-aux-press
+tap id:case-events-aux-press
+expect Aux: none
+listens id:tab onAuxPress
+# The middle button over the view, then the back button over the view
+# inside it, which does not listen: the view around it hears both.
+event id:tab onAuxPress pressedButton=middle
+expect Aux: none middle
+event id:label onAuxPress pressedButton=back
+expect Aux: none middle back
+covers [events] onAuxPress
 # events-context-menu
 tap id:case-events-context-menu
 expect Menu: none

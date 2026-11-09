@@ -69,7 +69,10 @@ go elsewhere under these rules rather than into them.
   `onClose` (`DialogTrigger::on_open`, `Dialog::on_close`). A user's attempt is named after the act (`onCancel`,
   `onBackPress`: `Dialog::on_cancel`, `DialogChangeReason::*Press`), never `on<Noun>Request`.
 - **Press, not click**: `onPress`, `onPressDown`, `onPressUp`, `onLongPress` (below, Button). `gpui-base` itself says
-  *press* for pointer-independent activation (`DialogChangeReason::TriggerPress`, `close_on_backdrop_press`).
+  *press* for pointer-independent activation (`DialogChangeReason::TriggerPress`, `close_on_backdrop_press`). A mouse
+  button other than the primary one is `onAuxPress` (GPUI's `on_aux_click`, the DOM's `auxclick`), its payload the
+  mouse events' `MouseEvent` with the button as `pressedButton` (`MouseButton`, GPUI's names for the DOM's `button`
+  numbers).
 - **States**: `disabled` blocks interaction, `readonly` allows selecting but not editing, `selected` is membership /
   the current item, `checked` / `pressed` the value of a checkbox / toggle (*guides*; `Selectable`, `Disableable`,
   `Toggle::pressed`). Booleans are named after the state, positively (`open`, `hidden`), with no `is` prefix and no

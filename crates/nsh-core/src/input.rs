@@ -3,7 +3,8 @@
 //! ([`Grab`]: touch listeners, pans, scroll drags, a pinch, `PRESSED`
 //! views, a `panActivation` [`Gate`]), when a drag starts and which
 //! candidate takes it ([`Candidate`], [`startable`]), a press's events
-//! ([`Press`]), hover changes, hit areas, two-finger pinch / rotation
+//! ([`Press`]), the other mouse buttons' presses ([`AuxPress`]), hover
+//! changes, hit areas, two-finger pinch / rotation
 //! ([`Pinch`]), wheel latching, Ctrl + wheel zoom steps and velocities.
 //!
 //! The backends keep the event flow over their own views and surfaces:
@@ -12,8 +13,8 @@
 //! Windows, GPUI, Linux and macOS backends use it.
 
 use crate::{
-    Bounds, EdgeInsets, EventKind, EventMask, GestureValues, NodeId, PanActivation, Point, Points,
-    ROOT_ID, Size, ViewKind,
+    Bounds, EdgeInsets, EventKind, EventMask, GestureValues, MouseButton, NodeId, PanActivation,
+    Point, Points, ROOT_ID, Size, ViewKind,
     geometry::Radians,
     tailwind::state::{FOCUSED, HOVERED, PRESSED},
 };
@@ -442,6 +443,51 @@ impl<V> Press<V> {
     }
 }
 
+/// A press of a mouse button other than the primary one in progress
+/// ([`EventKind::AuxPress`], GPUI's `on_aux_click`, the DOM's `auxclick`):
+/// the view whose `onAuxPress` hears it when the same button comes up over
+/// it again.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct AuxPress<V> {
+    /// The view that hears it.
+    pub view: V,
+    /// The button that went down.
+    pub button: MouseButton,
+}
+
+impl<V: PartialEq> AuxPress<V> {
+    /// `button` went down over `chain`: the view under the pointer, then
+    /// the views around it, each with the events it listens to and whether
+    /// it is a text input. The nearest view listening to `onAuxPress`
+    /// hears the press, unless a text input is nearer (it takes the button
+    /// itself); the primary button presses views instead (`onPress`).
+    pub fn down(
+        button: MouseButton,
+        chain: impl IntoIterator<Item = (V, EventMask, bool)>,
+    ) -> Option<AuxPress<V>> {
+        if button == MouseButton::Left {
+            return None;
+        }
+        for (view, events, input) in chain {
+            if events.contains(EventKind::AuxPress) {
+                return Some(AuxPress { view, button });
+            }
+            if input {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Whether `button` coming up over `chain` (the view under the pointer
+    /// and those around it) completes the press: the same button, over its
+    /// view or a view inside it.
+    pub fn up(&self, button: MouseButton, chain: impl IntoIterator<Item = V>) -> bool {
+        button == self.button && chain.into_iter().any(|v| v == self.view)
+    }
+}
+
 /// Whether a release at `local` (the pressed view's coordinates) is on a
 /// view of `size`, its hit `slop` and [`PRESS_RETENTION`] around them.
 pub fn released_inside(local: Point<Points>, size: Size<Points>, slop: EdgeInsets) -> bool {
@@ -857,6 +903,29 @@ mod tests {
         press.long = true;
         let out: Vec<_> = press.press_out(true).collect();
         assert_eq!(out, vec![EventKind::PressUp]);
+    }
+
+    #[test]
+    fn aux_presses_go_to_the_nearest_listener() {
+        let mut listens = EventMask::default();
+        listens.set(EventKind::AuxPress, true);
+        let none = EventMask::default();
+        let chain = || vec![(1, none, false), (2, listens, false), (3, listens, false)];
+        let press = AuxPress::down(MouseButton::Middle, chain()).unwrap();
+        assert_eq!(press.view, 2);
+        // The same button, over the view or one inside it.
+        assert!(press.up(MouseButton::Middle, [1, 2, 3]));
+        assert!(!press.up(MouseButton::Back, [1, 2, 3]));
+        assert!(!press.up(MouseButton::Middle, [4, 3]));
+        // The primary button presses instead; a text input nearer takes
+        // the button itself.
+        assert_eq!(AuxPress::down(MouseButton::Left, chain()), None);
+        let field = vec![(1, none, true), (2, listens, false)];
+        assert_eq!(AuxPress::down(MouseButton::Right, field), None);
+        assert_eq!(
+            AuxPress::down(MouseButton::Forward, vec![(1, none, false)]),
+            None
+        );
     }
 
     #[test]
