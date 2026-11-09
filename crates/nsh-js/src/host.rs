@@ -59,6 +59,8 @@ pub(crate) struct Shared {
     pub(crate) system_filesystem:
         RefCell<Option<std::sync::Arc<dyn nsh_core::filesystem::FileSystem>>>,
     pub(crate) system_updater: RefCell<Option<std::sync::Arc<dyn nsh_core::runtime::UpdaterHost>>>,
+    /// The core's address (`UrlScheme.url()`).
+    pub(crate) system_app_url: RefCell<nsh_core::url_scheme::AppUrlCell>,
     pub(crate) system_data_dir: RefCell<Option<std::path::PathBuf>>,
     pub(crate) system_paths: RefCell<nsh_core::access::TrustedPaths>,
     /// The VM's counts of limited resources for Rust modules (`net`'s
@@ -729,6 +731,11 @@ impl Host {
         *self.shared.system_updater.borrow_mut() = updater;
     }
 
+    /// Shares the core's address with the VM's modules (`UrlScheme.url()`).
+    pub fn set_app_url(&self, app_url: nsh_core::url_scheme::AppUrlCell) {
+        *self.shared.system_app_url.borrow_mut() = app_url;
+    }
+
     /// Installs the host WebSocket transport.
     pub fn set_websocket_transport(
         &self,
@@ -1073,18 +1080,6 @@ impl Host {
                     Err(()) => Err(rquickjs::Error::Exception),
                 };
                 self.report(&cx, result);
-            });
-            self.run_jobs();
-        });
-    }
-
-    /// Publishes the app's location to JS (`location()` of `nsh`). Call
-    /// before evaluating the bundle, then whenever it changed outside JS
-    /// (the platform moved the app, a Rust component navigated).
-    pub fn set_location(&self, location: &nsh_core::location::Location) {
-        self.guarded(Phase::Call, || {
-            self.cx.with(|cx| {
-                crate::env::set_location(cx.as_raw().as_ptr(), location);
             });
             self.run_jobs();
         });
@@ -2227,6 +2222,47 @@ const report = (v) => text(String(v));
             let value = payload_object(&cx, &EventPayload::ContextMenu(keyboard)).unwrap();
             let pointer: Value = value.as_object().unwrap().get("pointerType").unwrap();
             assert!(pointer.is_null());
+        });
+    }
+
+    #[test]
+    fn file_drag_entry_delivers_metadata_before_drop_and_keeps_no_argument_handlers() {
+        let host = Host::new().unwrap();
+        host.eval_source(
+            r#"
+            import { element, prop } from "nsh:rt";
+            globalThis.seen = [];
+            const target = element("view");
+            prop(target, "onFileDragEnter", (e) => seen.push("enter " + e.uris.join(";")));
+            prop(target, "onFileDragLeave", () => seen.push("leave"));
+            prop(target, "onFileDrop", (e) => seen.push("drop " + e.uris.join(";")));
+            const old = element("view");
+            prop(old, "onFileDragEnter", () => seen.push("old"));
+        "#,
+        )
+        .unwrap();
+        let first = EventPayload::FileDrop(vec![
+            "file:///tmp/a%20b.png".into(),
+            "file:///tmp/%E4%B8%AD.txt".into(),
+        ]);
+        let next = EventPayload::FileDrop(vec!["file:///tmp/next.png".into()]);
+        host.dispatch_event(2, EventKind::FileDragEnter, &first);
+        host.dispatch_event(2, EventKind::FileDragLeave, &EventPayload::None);
+        host.dispatch_event(2, EventKind::FileDragEnter, &next);
+        host.dispatch_event(2, EventKind::FileDrop, &next);
+        host.dispatch_event(4, EventKind::FileDragEnter, &first);
+        host.cx.with(|cx| {
+            let seen: Vec<String> = cx.globals().get("seen").unwrap();
+            assert_eq!(
+                seen,
+                [
+                    "enter file:///tmp/a%20b.png;file:///tmp/%E4%B8%AD.txt",
+                    "leave",
+                    "enter file:///tmp/next.png",
+                    "drop file:///tmp/next.png",
+                    "old"
+                ]
+            );
         });
     }
 

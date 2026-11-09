@@ -1209,47 +1209,6 @@ view().direction(LayoutDirection::Rtl).flex_row().gap_2().child(text("First")).c
 - 安全区域（Rust 的 `safe_area()`；TSX 的 `safeArea()`、`safeAreaInsets()`）和软键盘（Rust 的 `keyboard_height()`；TSX 的 `keyboardFrame()`）见[安全区域与键盘](#safe-area-and-keyboard)。
 - 屏幕阅读器和减弱动态效果的设置在 [`nsh` 的无障碍 API](#accessibility) 中。
 
-## 位置
-
-用户在应用中的位置：从应用的 base 起的 URL，例如 `/sports/football?tab=live#top`。每个平台都有它：在 Web 上它就是地址栏的地址，浏览器的后退和前进也包括在内；嵌入应用设置它，并得知应用去了哪里；其他情况下，在应用导航之前它是 `/`。它是响应式的：显示某个位置对应页面的内容会跟随用户的移动。指南见[导航](../docs/navigation.md#位置)。
-
-```rust tabs
-use nsh_core::prelude::*; // location, navigate, Location, HistoryBehavior, NavigateOptions
-```
-
-```tsx tabs
-import { location, navigate } from "nsh";
-```
-
-### location
-
-```ts
-const location: Accessor<Location>;
-
-interface Location {
-  readonly url: string;      // "/sports/football?tab=live#top"
-  readonly pathname: string; // "/sports/football"
-  readonly search: string;   // "?tab=live"，没有查询时为 ""
-  readonly hash: string;     // "#top"，没有片段时为 ""
-}
-```
-
-应用的位置，各部分沿用 DOM `URL` 的名称。Rust：`location() -> Location`，带有 `as_str()`、`path()`、`query()` 和 `fragment()`（后两者不含 `?` 和 `#`，没有时为 `None`）。在 Web 上它是页面地址中应用 base（`nsh.json` 的 `web.base`）之后的部分：base 为 `/apps/counter/` 时，`https://example.com/apps/counter/sports/football` 的位置是 `/sports/football`。除非 `open` 设置了 `location`，headless 测试从 `/` 开始。
-
-### navigate
-
-```ts
-function navigate(url: string, options?: NavigateOptions): void;
-
-interface NavigateOptions {
-  history?: "push" | "replace"; // 默认 "push"
-}
-```
-
-前往应用中的 `url`，像该位置页面上的链接一样相对当前位置解析：`"/teams"` 从 base 开始，`"football"` 与最后一段并列，`"?tab=live"` 和 `"#top"` 作用于当前路径，`"../news"` 向上一级。`location()` 立即变为新位置，调用之后的代码读到的就是它。Web 为它添加一条浏览器历史记录，后退按钮会从这里返回；`history: "replace"` 则改写当前记录。应用在同一轮中显示的页面或对话框与它共用这条记录。嵌入应用会得知每一次导航。前往应用当前所在的位置什么也不做。
-
-Rust：`navigate(url, HistoryBehavior::Push)`（或 `Replace`，或一个 `NavigateOptions`）在 TSX 抛出 `TypeError` 的情况下返回 `Err(InvalidLocation)`：即其他站点的 URL（`https://…`、`//…`、带协议的地址），这类地址由 [`openUrl`](#openurl) 打开。
-
 ## registerFont
 
 ```ts
@@ -2007,6 +1966,67 @@ scheme 以字母开头，后面是字母、数字、`+`、`-` 或 `.`，按小�
 
 嵌入 NSH 的应用自己拥有 scheme，把 URL 交给视图：`AppView.open_url`（Linux、iOS）、`NshAppView.openURL`（Swift）、
 `NshView.openUrl` 或 `NshView.handleUrlSchemeIntent`（Android）。
+
+### UrlScheme.url
+
+`url()` 是应用的地址，`setUrl(url)` 设置它，应用借此在每个平台上给自己的页面分配地址：
+
+```ts
+const UrlScheme: {
+  on(event: "open", listener: (event: { url: string }) => void): () => void;
+  /** 应用的地址，没有时为 null。 */
+  url(): string | null;
+  /** 设置当前页面的地址；应用的页面保持不变。 */
+  setUrl(url: string): void;
+};
+```
+
+| 平台 | `url()` | `setUrl(url)` |
+| --- | --- | --- |
+| Web，应用占据整个页面 | 页面的地址：加载时的地址、`setUrl` 设置的地址，或浏览器后退回到的那条记录的地址 | 替换当前历史记录的地址，与 `history.replaceState` 一样解析（相对于页面的 `<base href>`），在同一轮压入或弹出的页面的历史记录之后生效 |
+| 原生平台，以及 iframe 中的 Web | 最后一个打开应用的链接（启动应用的链接同时作为第一个 `open` 到达），或之后 `setUrl` 设置的地址；两者都没有时为 `null` | 为 `url()` 保存这个 URL；把它交给系统（Handoff、App Links）由嵌入应用负责 |
+
+URL 不是字符串、超过 16 KiB 或含有空白字符时抛出 `TypeError`；在 Web 上应用占据整个页面时，不是页面同源 URL 的地址同样抛出 `TypeError`。
+应用只有一个地址，Rust 读的也是它，`url()` 直接读取它：链接、Rust 的 `set_app_url` 和 `setUrl` 的改动都立即可见。在上表的平台上，启动应用的链接在应用的代码运行之前就已到达，所以第一次调用 `url()` 就能读到它，它同时也作为第一个 `open` 到达（在 Web 上，页面的地址从一开始就在）。
+在 Web 上，正在显示的栈里压入的每个页面都有自己的历史记录，浏览器的后退就在应用内后退：栈的页面返回，地址变为那条记录的地址，
+和应用自己弹出页面一样不发 `open`（应用用 `popOnBack={false}` 或 `onBackPress` 留下的页面保留它的历史记录和地址）。前进到栈里已经没有的页面，以及回到页面上一次加载留下的历史记录（刷新会保留它们）时，这条记录的地址像链接一样作为 `open` 到达：应用显示它指向的页面（如下例），不处理它的应用停在原处。应用用 `url()` 构建最初的路由，在栈的
+[`onChange`](../elements/nav-stack.md) 里设置顶层页面的地址，并显示链接指向的页面，它的页面就在所有平台上都有了地址：
+
+```tsx
+import { UrlScheme } from "nsh";
+import { NavStack, createNavStack } from "nsh/base";
+
+// 路由是 ""（收件箱）或一条消息的 id：用字符串，同一个地址得到的路由就等于正在显示的路由。
+type Route = string;
+
+function routesOf(url: string | null): Route[] {
+  const id = url && new URL(url, "https://app.invalid/").searchParams.get("message");
+  return id ? ["", id] : [""];
+}
+
+// "." 是页面自己的路径，不带查询参数。
+const urlOf = (route: Route) => (route ? `?message=${encodeURIComponent(route)}` : ".");
+
+const nav = createNavStack<Route>(routesOf(UrlScheme.url()));
+
+// 链接，以及 Web 上靠后退到不了的前进。
+UrlScheme.on("open", ({ url }) => nav.setRoutes(routesOf(url)));
+
+export function App() {
+  return (
+    <NavStack
+      state={nav}
+      style={{ flex: 1 }}
+      onChange={({ routes }) => UrlScheme.setUrl(urlOf(routes[routes.length - 1]))}
+    >
+      {(route) => (route ? <Message id={route} /> : <Inbox onOpen={(id) => nav.push(id)} />)}
+    </NavStack>
+  );
+}
+```
+
+Rust 代码 await `nsh_core::prelude` 的 `app_url()`，调用 `set_app_url(url)`，与 `next_url_scheme_open()` 并列；它们和 `url()`、
+`setUrl` 是同一个地址，`setUrl` 会抛错的 URL，`set_app_url` 返回错误。在 Web 上它和 `setUrl` 一样按页面的基准地址解析 URL，与页面不同源的地址返回错误。
 
 ## Speech
 

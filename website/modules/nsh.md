@@ -1247,47 +1247,6 @@ view().direction(LayoutDirection::Rtl).flex_row().gap_2().child(text("First")).c
 - Safe area insets (Rust `safe_area()`; TSX `safeArea()`, `safeAreaInsets()`) and the software keyboard (Rust `keyboard_height()`; TSX `keyboardFrame()`) are in [Safe area and keyboard](#safe-area-and-keyboard).
 - Screen reader and reduced motion settings are in [Accessibility](#accessibility).
 
-## Location
-
-Where the user is in the app: a URL from the app's base, `/sports/football?tab=live#top`. Every platform has it: on the web it is the address bar's, the browser's back and forward included; an embedding app sets it and hears where the app goes; elsewhere it is `/` until the app navigates. It is reactive: what shows the page a location names follows the user's moves. The guide is [Navigation](../docs/navigation.md#locations).
-
-```rust tabs
-use nsh_core::prelude::*; // location, navigate, Location, HistoryBehavior, NavigateOptions
-```
-
-```tsx tabs
-import { location, navigate } from "nsh";
-```
-
-### location
-
-```ts
-const location: Accessor<Location>;
-
-interface Location {
-  readonly url: string;      // "/sports/football?tab=live#top"
-  readonly pathname: string; // "/sports/football"
-  readonly search: string;   // "?tab=live", "" without a query
-  readonly hash: string;     // "#top", "" without a fragment
-}
-```
-
-The app's location, its parts named as the DOM's `URL` names them. Rust: `location() -> Location`, with `as_str()`, `path()`, `query()` and `fragment()` (the last two without their `?` and `#`, `None` when there is none). On the web it is the page's address from the app's base (`nsh.json` `web.base`): at `https://example.com/apps/counter/sports/football` with the base `/apps/counter/` it is `/sports/football`. Headless tests start at `/` unless `open` sets `location`.
-
-### navigate
-
-```ts
-function navigate(url: string, options?: NavigateOptions): void;
-
-interface NavigateOptions {
-  history?: "push" | "replace"; // default "push"
-}
-```
-
-Goes to `url` in the app, resolved against the location as a link on a page there is: `"/teams"` from the base, `"football"` next to the last segment, `"?tab=live"` and `"#top"` on this path, `"../news"` up. `location()` is the new one at once, so code after the call reads it. The web adds a browser history entry for it, which the back button returns from; `history: "replace"` changes the current entry instead. A page or a dialog the app shows in the same turn shares the entry. The embedding app hears every navigation. Going to the location the app is at does nothing.
-
-Rust: `navigate(url, HistoryBehavior::Push)` (or `Replace`, or a `NavigateOptions`) returns `Err(InvalidLocation)` where TSX throws a `TypeError`: for another site's URL (`https://…`, `//…`, a scheme), which [`openUrl`](#openurl) opens.
-
 ## registerFont
 
 ```ts
@@ -2080,6 +2039,76 @@ files and the system's apps (`http`, `https`, `file`, `mailto`, `tel`, `sms`, ..
 
 An app that embeds NSH owns its schemes and hands a URL to its view: `AppView.open_url` (Linux, iOS), `NshAppView.openURL`
 (Swift), `NshView.openUrl` or `NshView.handleUrlSchemeIntent` (Android).
+
+### UrlScheme.url
+
+`url()` is the app's address and `setUrl(url)` sets it, so an app gives its pages addresses on every platform:
+
+```ts
+const UrlScheme: {
+  on(event: "open", listener: (event: { url: string }) => void): () => void;
+  /** The app's address, or null when it has none. */
+  url(): string | null;
+  /** Sets the address of the page shown; the app's pages stay as they are. */
+  setUrl(url: string): void;
+};
+```
+
+| Platform | `url()` | `setUrl(url)` |
+| --- | --- | --- |
+| The web, the app the whole page | The page's address: the one it loaded, what `setUrl` set, or the entry's the browser's back went back to | Replaces the current history entry's address, resolved as `history.replaceState` resolves it (against the page's `<base href>`), after the entries of the pages pushed or popped in the same turn |
+| The native platforms, and the web in an iframe | The last link that opened the app (the link that launched it also comes as the first `open`), or what `setUrl` set after it; `null` before either | Keeps the URL for `url()`; giving it to the system (Handoff, App Links) is the embedding app's |
+
+A URL that is not a string, longer than 16 KiB or with whitespace is a `TypeError`, and so on the web, when the app is
+the whole page, is one that is not a URL of the page's origin. The app keeps one address, which Rust reads too, and `url()` reads it as it is: a link,
+Rust's `set_app_url` and `setUrl` show at once. On the platforms
+above, the link that launched the app is there before its code runs, so the first `url()` reads it, and it also comes as the first `open`
+(on the web the page's address is there from the start). Every page pushed
+on a shown stack keeps its own history entry on the web, so the browser's back goes back in the app: the stack's pages
+go back and the address becomes the entry's, with no `open`, as for any page the app pops (a page the app keeps, with
+`popOnBack={false}` or `onBackPress`, keeps its entry and address). A forward to a page the stack no longer has, and
+an entry of an earlier load of the page (a reload keeps them), come as `open` with the entry's address, as a link: the
+app shows the page it names, as below, and an app that shows nothing for it stays where it is. An app that builds its
+first routes from `url()`, sets the top
+page's address in its stack's [`onChange`](../elements/nav-stack.md) and shows the pages a link names has addresses for
+its pages everywhere:
+
+```tsx
+import { UrlScheme } from "nsh";
+import { NavStack, createNavStack } from "nsh/base";
+
+// A route is "" (the inbox) or a message's id: strings, so the routes of an address equal those shown.
+type Route = string;
+
+function routesOf(url: string | null): Route[] {
+  const id = url && new URL(url, "https://app.invalid/").searchParams.get("message");
+  return id ? ["", id] : [""];
+}
+
+// "." is the page's own path, without a query.
+const urlOf = (route: Route) => (route ? `?message=${encodeURIComponent(route)}` : ".");
+
+const nav = createNavStack<Route>(routesOf(UrlScheme.url()));
+
+// A link, and on the web a forward the stack cannot reach by going back.
+UrlScheme.on("open", ({ url }) => nav.setRoutes(routesOf(url)));
+
+export function App() {
+  return (
+    <NavStack
+      state={nav}
+      style={{ flex: 1 }}
+      onChange={({ routes }) => UrlScheme.setUrl(urlOf(routes[routes.length - 1]))}
+    >
+      {(route) => (route ? <Message id={route} /> : <Inbox onOpen={(id) => nav.push(id)} />)}
+    </NavStack>
+  );
+}
+```
+
+Rust code awaits `app_url()` and calls `set_app_url(url)` of `nsh_core::prelude`, beside `next_url_scheme_open()`; the
+same address as `url()` and `setUrl`, and `set_app_url` returns an error for the URLs `setUrl` throws for. On the web it
+resolves a URL against the page's base, as `setUrl` does, and one of another origin than the page's is an error.
 
 ## Speech
 

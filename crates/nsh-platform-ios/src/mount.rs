@@ -1756,6 +1756,7 @@ impl Mounter {
             }
             (Command::ClearJsResponder, _) => self.clear_js_responder(),
             (Command::Announce(text), _) => crate::system::announce(&text),
+            (Command::Haptic(haptic), _) => crate::system::haptic(haptic),
             (Command::PerfMonitor(true), _) => self.measure(),
             (Command::PerfMonitor(false), _) => self.stop_measuring(),
             (Command::Tokens(tokens), _) => self.alert_tint = crate::system::alert_tint(&tokens),
@@ -1791,8 +1792,6 @@ impl Mounter {
             (Command::AccessibilityFocus, native) => {
                 crate::system::accessibility_focus(native.view())
             }
-            // The engine tells the embedding app (`HostChannel::handle_navigate`).
-            (Command::Navigate(_), _) => {}
             (command, _) => log::warn!("{command:?} does not apply to view {id}"),
         }
     }

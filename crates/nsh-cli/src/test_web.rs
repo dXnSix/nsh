@@ -561,52 +561,6 @@ impl Native for WebNative {
             .map(drop)
     }
 
-    fn forward(&self) -> Result<(), String> {
-        // The browser's forward button.
-        self.page
-            .call(
-                "Runtime.evaluate",
-                json!({ "expression": "history.forward()" }),
-            )
-            .map(drop)
-    }
-
-    fn navigate(&self, location: &str) -> Option<Result<(), String>> {
-        // The player moves the app as a link into it does: a new entry
-        // of the page's history.
-        let expression = format!(
-            "window.player.setLocation({})",
-            serde_json::to_string(location).unwrap_or_default()
-        );
-        Some(
-            self.page
-                .call(
-                    "Runtime.evaluate",
-                    json!({ "expression": expression, "returnByValue": true }),
-                )
-                .and_then(|result| match result.get("exceptionDetails") {
-                    Some(error) => Err(format!("navigate: {}", error["exception"]["description"])),
-                    None => Ok(()),
-                }),
-        )
-    }
-
-    fn location(&self) -> Option<Result<String, String>> {
-        Some(
-            self.page
-                .call(
-                    "Runtime.evaluate",
-                    json!({ "expression": "window.player.location", "returnByValue": true }),
-                )
-                .and_then(|result| {
-                    result["result"]["value"]
-                        .as_str()
-                        .map(str::to_owned)
-                        .ok_or_else(|| "the page has no player".to_owned())
-                }),
-        )
-    }
-
     fn answer_dialog(&self, button: Option<&str>) -> Result<(), String> {
         let [x, y] = self.query::<[f32; 2]>(SceneQuery::DialogPoint {
             button: button.map(str::to_owned),

@@ -103,15 +103,6 @@ pub(crate) fn refuse_connections() -> nsh_core::element::RefuseConnections {
 #[cfg(any(feature = "js", not(target_arch = "wasm32")))]
 pub(crate) const NOTHING_TO_GO_BACK_FROM: &str = "nothing to go back from";
 
-/// A step only the browser's history takes (`forward`), on another
-/// platform: `ERR_NSH_TEST_UNSUPPORTED`.
-#[cfg(any(feature = "js", feature = "agent"))]
-pub(crate) fn web_only(what: &str) -> String {
-    format!(
-        "{what} is unsupported here: only the browser's history goes forward; run the test with `--target web`"
-    )
-}
-
 /// The `code` of a step's failure `message`, made by this module's
 /// functions (with what is on screen after them); `None` for any other
 /// failure (the app threw, a selector that does not parse, ...).
@@ -138,9 +129,7 @@ pub(crate) fn code_of(message: &str) -> Option<&'static str> {
         Some(TIMED_OUT)
     } else if message.starts_with(NOTHING_TO_GO_BACK_FROM) {
         Some(NO_BACK)
-    } else if message.starts_with("open(") && message.contains("` is unsupported on --target ")
-        || message.contains(" is unsupported here: only the browser's history goes forward")
-    {
+    } else if message.starts_with("open(") && message.contains("` is unsupported on --target ") {
         Some(UNSUPPORTED)
     } else {
         None

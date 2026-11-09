@@ -83,30 +83,8 @@ public class NshView extends FrameLayout {
         boolean openUrl(String url);
     }
 
-    /**
-     * Hears where the app goes ({@code navigate} of {@code nsh}), on the UI
-     * thread. Register it with {@link #setNavigateHandler}.
-     */
-    public interface NavigateHandler {
-        /**
-         * Called for each navigation of the app, in order, once
-         * {@link #getLocation} returns its location (or a later one). The
-         * embedding app's own moves ({@link #setLocation}) do not reach it.
-         *
-         * @param location where the app went: a path from the app's base,
-         *     {@code /sports/football?tab=live}
-         * @param replace true when the navigation changes the current history
-         *     entry ({@code navigate(url, { history: "replace" })}), false when
-         *     it adds one
-         */
-        void navigate(String location, boolean replace);
-    }
-
     /** The embedding app's URL handler, or null. */
     private volatile OpenUrlHandler openUrlHandler;
-
-    /** The embedding app's navigation handler, or null. */
-    private volatile NavigateHandler navigateHandler;
 
     /** The handlers of the app's calls and posts, by name. */
     private final java.util.Map<String, HostHandler> hostHandlers = new java.util.concurrent.ConcurrentHashMap<>();
@@ -228,7 +206,9 @@ public class NshView extends FrameLayout {
         }
         // The back key where the window has no OnBackInvokedCallback in
         // effect (below Android 13, or `enableOnBackInvokedCallback` off).
-        addOnUnhandledKeyEventListener((v, e) -> onBackKey(e));
+        // Android 8 has no such listener: there the activity's
+        // `onBackPressed` hands the press to `handleBack`.
+        if (Build.VERSION.SDK_INT >= 28) addOnUnhandledKeyEventListener((v, e) -> onBackKey(e));
         // Apps keep their data in <dataDir>/<app id>: nsh in the files
         // directory unless the development host's test session says.
         // ... and the images they download in <cacheDir>/<app id>/images: nsh
@@ -581,7 +561,8 @@ public class NshView extends FrameLayout {
 
     /**
      * Hands the app a URL the system opened it with, as its {@code onLink} event (a scheme the app registered, nsh.json
-     * {@code schemes}). URLs given before the app listens are kept until it does. UI thread.
+     * {@code schemes}). URLs given before the app listens are kept until it does; given before an app loads, they are
+     * the address of the next one loaded when its code first runs ({@code UrlScheme.url()}). UI thread.
      *
      * @param url the URL
      */
@@ -613,61 +594,6 @@ public class NshView extends FrameLayout {
             } finally {
                 Native.openUrlReply(request, handled);
             }
-        });
-    }
-
-    /**
-     * Sets where the app is ({@code location()} of {@code nsh}): a path from
-     * the app's base, {@code /sports/football?tab=live}. Before an app loads,
-     * where it starts; while one runs, the app goes there (its
-     * {@code location()} changes), such as to the path of an App Link the
-     * host app handled. The location stays the view's for the apps loaded
-     * after. Any thread.
-     *
-     * @param location a path from the app's base, with its query and
-     *     fragment if it has them
-     * @return false (and ignored) when it is not such a path
-     *     ({@code https://…}, {@code sports}), or the view was destroyed
-     */
-    public boolean setLocation(String location) {
-        if (location == null) return false;
-        synchronized (hostLock) {
-            return handle != 0 && Native.setLocation(handle, location);
-        }
-    }
-
-    /**
-     * Where the app is: the latest of {@link #setLocation} and the app's
-     * navigations, normalized as URLs are ({@code /a b} is
-     * {@code /a%20b}); {@code /} until one of them. Any thread.
-     *
-     * @return the location, or null when the view was destroyed
-     */
-    public String getLocation() {
-        synchronized (hostLock) {
-            return handle == 0 ? null : Native.location(handle);
-        }
-    }
-
-    /**
-     * Hears where the app goes ({@code navigate} of {@code nsh}), replacing
-     * the handler it had; null removes it. A host app shows the location in
-     * its own UI, keeps it for its back stack or deep links, or follows it
-     * in its router.
-     *
-     * @param handler the handler, or null
-     */
-    public void setNavigateHandler(NavigateHandler handler) {
-        if (handle == 0) return;
-        navigateHandler = handler;
-        Native.setNavigateHandler(handle, handler != null);
-    }
-
-    /** A navigation of the app; called by libnsh on the engine thread. */
-    void navigateMessage(String location, boolean replace) {
-        main.post(() -> {
-            NavigateHandler handler = navigateHandler;
-            if (handler != null) handler.navigate(location, replace);
         });
     }
 

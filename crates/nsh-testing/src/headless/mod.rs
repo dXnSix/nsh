@@ -138,7 +138,7 @@ impl MountSink for ChannelSink {
 /// animations and what waits for a frame run), laying text out with
 /// [`ApproxTextEngine`]: the engine, and the batches it sends.
 pub fn start(config: EngineConfig) -> std::io::Result<(Engine, Receiver<MountBatch>)> {
-    launch(config, Vec::new(), || ApproxTextEngine)
+    launch(config, Vec::new(), || ApproxTextEngine, None)
         .map(|launched| (launched.engine, launched.batches))
 }
 
@@ -151,12 +151,27 @@ struct Launched {
     wanted: Option<Arc<AtomicBool>>,
 }
 
+/// Reports `url` as a link the system handed the app.
+fn send_url_scheme(control: &nsh_engine::EngineControl, url: &str) {
+    control.dispatch_event(
+        ROOT_ID,
+        EventKind::UrlScheme,
+        EventPayload::Map(vec![(
+            nsh_core::url_scheme::URL,
+            PayloadValue::Str(url.to_owned()),
+        )]),
+    );
+}
+
 /// [`start`], the platform reporting `displays` before the app first
-/// renders.
+/// renders, laying text out with the engine `text_engine` makes; `link`:
+/// the link that launched it, there before the app's code runs (as a
+/// platform sends it).
 fn launch<M, F>(
     config: EngineConfig,
     displays: Vec<nsh_core::desktop::Display>,
     text_engine: F,
+    link: Option<&str>,
 ) -> std::io::Result<Launched>
 where
     M: TextEngine + 'static,
@@ -177,6 +192,9 @@ where
         control.set_content_culling(false);
         if !displays.is_empty() {
             control.set_displays(displays);
+        }
+        if let Some(url) = link {
+            send_url_scheme(control, url);
         }
     })?;
     let _ = control.set(engine.control());
@@ -338,15 +356,34 @@ pub struct Headless {
 impl Headless {
     /// Starts `config`'s app ([`start`]).
     pub fn start(config: EngineConfig) -> std::io::Result<Headless> {
-        Self::start_with_text_engine(config, || ApproxTextEngine)
+        Self::launched_with(config, || ApproxTextEngine, None)
+    }
+
+    /// Starts `config`'s app as the link `url` launches it: the app's
+    /// first `UrlScheme.url()` reads it, and its first `open` listener
+    /// gets it.
+    pub fn start_with_link(config: EngineConfig, url: &str) -> std::io::Result<Headless> {
+        Self::launched_with(config, || ApproxTextEngine, Some(url))
     }
 
     /// Starts `config`'s app laying text out with the engine
     /// `text_engine` makes (on the engine's thread) instead of
     /// [`ApproxTextEngine`]: a platform's, for sizes as on screen.
     pub fn start_with_text_engine<M, F>(
+        config: EngineConfig,
+        text_engine: F,
+    ) -> std::io::Result<Headless>
+    where
+        M: TextEngine + 'static,
+        F: FnOnce() -> M + Send + 'static,
+    {
+        Self::launched_with(config, text_engine, None)
+    }
+
+    fn launched_with<M, F>(
         mut config: EngineConfig,
         text_engine: F,
+        link: Option<&str>,
     ) -> std::io::Result<Headless>
     where
         M: TextEngine + 'static,
@@ -379,7 +416,7 @@ impl Headless {
             batches,
             errors,
             wanted,
-        } = launch(config, displays, text_engine)?;
+        } = launch(config, displays, text_engine, link)?;
         let mut screen = Screen::default();
         screen.set_viewport(viewport);
         Ok(Headless {
@@ -565,37 +602,7 @@ impl Headless {
     /// Reports `url` as a link the system handed the app, without a step:
     /// the one that launches it.
     pub fn send_url_scheme(&self, url: &str) {
-        self.engine.control().dispatch_event(
-            ROOT_ID,
-            EventKind::UrlScheme,
-            EventPayload::Map(vec![(
-                nsh_core::url_scheme::URL,
-                PayloadValue::Str(url.to_owned()),
-            )]),
-        );
-    }
-
-    /// The step `navigate(<location>)`: the platform moves the app to
-    /// `location` (resolved against where it is), as a link into the app
-    /// or the embedding app does: `location()` follows.
-    pub fn navigate(&mut self, location: &str) -> Result<(), String> {
-        self.step(format!("navigate({location})"));
-        let joined = self
-            .host
-            .location()
-            .join(location)
-            .map_err(|e| format!("navigate: {e}"))?;
-        self.host
-            .set_location(joined.as_str())
-            .map_err(|e| format!("navigate: {e}"))?;
-        self.done()
-    }
-
-    /// Where the app is: the embedding app's channel hears its moves and
-    /// the platform's.
-    pub fn location(&mut self) -> String {
-        self.catch_up();
-        self.host.location().as_str().to_owned()
+        send_url_scheme(&self.engine.control(), url);
     }
 
     /// The step `setViewport(<w>, <h>)`: the surface becomes `size` (a
@@ -1581,12 +1588,23 @@ impl Headless {
         let pick = self.screen.pressable(&parsed);
         let id = self.picked(pick, selector, "pressable view")?;
         // A real finger lands where the view is drawn: a view drawn over it
-        // there takes the press, so the step fails as the user would.
+        // there takes the press, so the step fails as the user would. The
+        // finger goes on the part of the view that is visible — a view
+        // across a scroll view's fold is pressed on the half left visible,
+        // its laid-out center lying below the fold, on the bar under it; a
+        // view nothing of which is on screen (a target scrolled out of
+        // view) keeps its laid-out center, which a press still reaches as
+        // before.
         if let Some(target) = self.screen.bounds_in_root(id) {
             let point = self
                 .screen
                 .press_point(&parsed, id)
                 .map_or(target.center(), |p| target.origin + p);
+            let point = match self.screen.visible_bounds_in_root(id) {
+                Some(visible) if visible.contains(&point) => point,
+                Some(visible) => visible.center(),
+                None => point,
+            };
             if let Some(cover) = self.screen.covering(id, point) {
                 return Err(format!(
                     "{}; {}",
@@ -3185,5 +3203,51 @@ mod tests {
         app.first_render().unwrap();
         assert!(seen.load(Ordering::Relaxed) > 0);
         assert!(app.shows("Label"));
+    }
+
+    // Escape bound in the main window and in a window of the app's own.
+    #[component]
+    fn WindowKeys() -> impl IntoElement {
+        let main = signal(0);
+        let settings = signal(0);
+        on_key("escape", move |_| main.update(|n| *n += 1));
+        view()
+            .child(
+                text(move || format!("keys {} {}", main.get(), settings.get()))
+                    .test_id("in-main")
+                    .on_press(|_: &()| {}),
+            )
+            .child(
+                nsh_core::element::desktop::window()
+                    .id("settings")
+                    .default_size(size(px(300.0), px(100.0)))
+                    .content(move || {
+                        on_key("escape", move |_| settings.update(|n| *n += 1));
+                        view()
+                            .test_id("in-settings")
+                            .on_press(|_: &()| {})
+                            .w(px(100.0))
+                            .h(px(40.0))
+                    }),
+            )
+    }
+
+    #[test]
+    fn a_key_fires_the_bindings_of_the_focused_window() {
+        let mut config = EngineConfig::new(Root::of::<WindowKeys>());
+        config.environment.os = nsh_core::platform::Os::MacOs;
+        let mut app = Headless::start(config).unwrap();
+        app.first_render().unwrap();
+        app.wait_for("keys 0 0").unwrap();
+        // Settings opened focused: its binding takes the key, main's not.
+        app.press_key("escape").unwrap();
+        app.wait_for("keys 0 1").unwrap();
+        // A press in the main window focuses it, and then its binding.
+        app.press("id:in-main").unwrap();
+        app.press_key("escape").unwrap();
+        app.wait_for("keys 1 1").unwrap();
+        app.press("id:in-settings").unwrap();
+        app.press_key("escape").unwrap();
+        app.wait_for("keys 1 2").unwrap();
     }
 }

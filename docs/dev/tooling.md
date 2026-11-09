@@ -346,8 +346,8 @@ report it:
   pointer (`input::hold`); other real targets refuse.
 - `press_key` (`headless/keyboard.rs`, `app.keyboard.press`): the keystroke as `nsh`'s `keymap` parses it for the
   environment's OS; on every environment (a hardware keyboard: phones and tablets have one too) the root's keymap
-  (`MountItem::Keymap`, `Screen::keymap`) finds the binding that fires where the focus is (`Keymap::find`) and the
-  root hears `KeyCommand`; else, on macOS and the web, Tab / Shift+Tab move the keyboard focus between the stops
+  (`MountItem::Keymap`, `Screen::keymap`) finds the binding that fires where the focus is, among the focused
+  window's and those of no window (`Keymap::find_in`), and the root hears `KeyCommand`; else, on macOS and the web, Tab / Shift+Tab move the keyboard focus between the stops
   (`Screen::tab_stops`: editable inputs and the views `ViewProps::focus_stop` takes, pressables not
   `focusable={false}` and `focusable={true}` views that take no presses, in tree order, around), telling the
   views `Blur` / `Focus` and the view its `FOCUSED` state, and Return or Space presses the view it is on when it takes
@@ -432,14 +432,6 @@ Headless runs play the platform's part NSH's protocol defines, and refuse what o
   device's;
 - URLs the app opens (`Command::OpenUrl`) are recorded (`Screen::opened_urls`), never opened, and answered with
   `onOpenUrl` `{ opened: true }`, as a device with an app for every scheme would (`app.openedUrls()`);
-- the app's location is the embedding app's channel's (`HostChannel::location`): `open`'s `location` is set on it
-  before the engine starts, `app.navigate(url)` moves the app as the embedding app does (`set_location`, resolved
-  against where it is) and `app.location` reads where the app's navigations and the platform's moves took it; there
-  is no browser history, so `app.back()` stays what it is and `app.forward()` rejects (`failure::web_only`,
-  `ERR_NSH_TEST_UNSUPPORTED`). On a real host `open`'s `location` is `TestEnvironment::location`
-  (`Model::set_up_engine`), and `TestStep::Navigate`, `TestStep::Location` and `TestStep::Forward` reach the agent,
-  which moves the app through the platform where it has its own way (`Native::navigate`, `location`, `forward`: the
-  web's player and history, over CDP) and through the channel elsewhere (`Scene::set_location`, `location`);
 - the platform has no eyedropper (`Environment::screen_color` false) until a Rust test calls
   `Headless::on_screen_color(color)`: then `Command::PickScreenColor` is answered with `onScreenColor`, that color (or
   none, a cancel);
@@ -997,13 +989,16 @@ are. App-specific development hosts are generated in `.nsh/rust/tui-host`.
 
 ## Releases
 
-`.github/workflows/release.yml` runs `cargo xtask dist` on macOS (Apple silicon: the iOS, Mac Catalyst and macOS
-runtimes and the iOS SDK), Linux and Windows (x86_64), each with the GPUI development host of its OS and the Android runtime, checks that the packaged CLI
-makes and bundles a new app, and archives `dist/nsh` as one directory `nsh/` in `nsh-<platform>.tar.gz` (`.zip` on
-Windows) with the CLI and that machine's runtime only. The embedding SDKs are archives of their own
-(`nsh-embed-ios.zip`, `nsh-embed-android.zip`), and `nsh component pack` moves every other runtime into its
-component's archive (`nsh-android.tar.gz`, `nsh-android-symbols.tar.gz` and `nsh-web.tar.gz` from Linux's build,
-`nsh-ios-macos-arm64.tar.gz`, `nsh-gpui-<platform>.tar.gz`, `nsh-tui-<platform>.tar.gz`), each with a `.sha256`.
+`.github/workflows/release.yml` runs `cargo xtask dist` on macOS (Apple silicon, with the iOS and Mac Catalyst
+runtimes and the iOS SDK, and Intel), Linux and Windows (x86_64 and arm64), each with the desktop runtime and the GPUI
+and terminal development hosts of its machine. The arm64 Linux and Windows builds set `NSH_DIST_NO_ANDROID` and leave
+the Android runtime out: the `android` component comes from x86_64 Linux, and the NDK has no arm64 Linux
+toolchain. Each run checks that the packaged CLI makes and bundles a new app, and archives `dist/nsh` as one
+directory `nsh/` in `nsh-<platform>.tar.gz` (`.zip` on Windows) with the CLI and that machine's runtime only. The
+embedding SDKs are archives of their own (`nsh-embed-ios.zip`, `nsh-embed-android.zip`), and `nsh component pack`
+moves every other runtime into its component's archive (`nsh-android.tar.gz`, `nsh-android-symbols.tar.gz` and
+`nsh-web.tar.gz` from x86_64 Linux's build, `nsh-ios-macos-arm64.tar.gz`, `nsh-gpui-<platform>.tar.gz`,
+`nsh-tui-<platform>.tar.gz`), each with a `.sha256`.
 `xtask dist` strips the executables it copies (`copy_executable`: about a sixth of each), after the build rather
 than with the profile's `strip`, so the release builds a checkout keeps for profiling stay as they are. Asset
 names carry no version, so `releases/latest/download/<asset>` always resolves; the installers and package managers
