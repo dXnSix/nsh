@@ -255,6 +255,9 @@ enum Key {
 pub(crate) struct Input {
     /// The pointers that are down.
     pointers: RefCell<Vec<Pointer>>,
+    /// The press of a mouse button other than the primary one, while it is
+    /// down: the view whose `onAuxPress` hears it if it comes up over it.
+    aux: RefCell<Option<input::AuxPress<NshView>>>,
     /// Two fingers pinching / rotating on the touchscreen.
     two: RefCell<Option<TwoFinger>>,
     /// A pinch by Ctrl + wheel, with the generation of its end timer.
@@ -477,6 +480,7 @@ fn after_ms(ms: u64, f: impl FnOnce() + 'static) {
 pub(crate) fn reset(surface: &Surface) {
     let input = &surface.input;
     input.pointers.borrow_mut().clear();
+    input.aux.borrow_mut().take();
     input.two.borrow_mut().take();
     input.zoom.borrow_mut().take();
     input.pinch.borrow_mut().take();
@@ -987,6 +991,52 @@ pub(crate) fn show_context_menu(surface: &Rc<Surface>, view: &NshView) -> bool {
     false
 }
 
+/// A mouse button other than the primary one ([`PointerEvent::button`])
+/// went down at `(x, y)` (root coordinates): the nearest view around the
+/// one under it that listens to `onAuxPress` hears it if the button comes
+/// up over it ([`input::AuxPress`]).
+fn aux_down(surface: &Surface, x: f32, y: f32, button: u8) {
+    let press = mouse_button(button).and_then(|button| {
+        let hit = pick(&surface.input_root(), x, y, true)?;
+        let links = chain(&hit.view).into_iter().map(|v| {
+            let (events, field) = {
+                let s = v.state();
+                (s.events, s.kind == ViewKind::Input)
+            };
+            (v, events, field)
+        });
+        input::AuxPress::down(button, links)
+    });
+    *surface.input.aux.borrow_mut() = press;
+}
+
+/// The button came up at `(x, y)`: over the view its press went down on,
+/// that view hears `onAuxPress`.
+fn aux_up(surface: &Surface, x: f32, y: f32, button: u8, modifiers: Modifiers) {
+    let Some(button) = mouse_button(button) else {
+        return;
+    };
+    let press = surface.input.aux.borrow_mut().take();
+    let Some(press) = press else { return };
+    let over =
+        pick(&surface.input_root(), x, y, true).map_or_else(Vec::new, |hit| chain(&hit.view));
+    if !press.up(button, over) {
+        // Another button came up while this one is down.
+        if press.button != button {
+            *surface.input.aux.borrow_mut() = Some(press);
+        }
+        return;
+    }
+    mouse_event(
+        surface,
+        &press.view,
+        EventKind::AuxPress,
+        (x, y),
+        modifiers,
+        Some(button),
+    );
+}
+
 /// A secondary click at `(x, y)` (root coordinates): the nearest view
 /// around the one under it that listens to `onContextMenu` hears it,
 /// unless a text field or selectable text is nearer: that shows its edit
@@ -1079,6 +1129,7 @@ pub(crate) fn pointer(surface: &Rc<Surface>, event: PointerEvent) {
             // Control-click into one).
             if mouse && event.button == 1 {
                 context_menu(surface, x, y, event.modifiers);
+                aux_down(surface, x, y, event.button);
                 return;
             }
             // Any press elsewhere clears a text selection.
@@ -1090,14 +1141,13 @@ pub(crate) fn pointer(surface: &Rc<Surface>, event: PointerEvent) {
                     .input
                     .last_window
                     .set(crate::window::entered(surface));
-                match event.button {
-                    0 => {}
+                if event.button != 0 {
+                    aux_down(surface, x, y, event.button);
                     // The mouse's back button goes back, as in browsers.
-                    3 => {
+                    if event.button == 3 {
                         crate::navigation::go_back(surface);
-                        return;
                     }
-                    _ => return,
+                    return;
                 }
             }
             down(surface, key, x, y, time, event.clicks, event.modifiers);
@@ -1117,6 +1167,7 @@ pub(crate) fn pointer(surface: &Rc<Surface>, event: PointerEvent) {
         }
         PointerKind::Up => {
             if mouse && event.button != 0 {
+                aux_up(surface, x, y, event.button, event.modifiers);
                 return;
             }
             up(surface, key, Some((x, y)), time, false);
