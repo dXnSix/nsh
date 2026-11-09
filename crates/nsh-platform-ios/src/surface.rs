@@ -368,6 +368,8 @@ impl RootView {
             font_scale: (body / 17.0) as f32,
             rtl: preferred_language_rtl(),
             reduce_motion: objc2_ui_kit::UIAccessibilityIsReduceMotionEnabled(),
+            // Increase Contrast (Swift's `isDarkerSystemColorsEnabled`).
+            high_contrast: objc2_ui_kit::UIAccessibilityDarkerSystemColorsEnabled(),
             pixel_ratio: scale as f32,
             screen_reader: objc2_ui_kit::UIAccessibilityIsVoiceOverRunning(),
             os: nsh_engine::Os::Ios,
@@ -579,7 +581,8 @@ impl RootView {
             ]
         };
         let mut observers = this.ivars().observers.borrow_mut();
-        // Accessibility settings that classes (`motion-reduce:`) and JS read.
+        // Accessibility settings that classes (`motion-reduce:`,
+        // `contrast-more:`) and JS read.
         let weak = Weak::from_retained(this);
         let settings = RcBlock::new(move |_: NonNull<NSNotification>| {
             if let Some(view) = weak.load() {
@@ -590,6 +593,7 @@ impl RootView {
         let settings_names = unsafe {
             [
                 objc2_ui_kit::UIAccessibilityReduceMotionStatusDidChangeNotification,
+                objc2_ui_kit::UIAccessibilityDarkerSystemColorsStatusDidChangeNotification,
                 objc2_ui_kit::UIAccessibilityVoiceOverStatusDidChangeNotification,
             ]
         };
