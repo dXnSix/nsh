@@ -250,7 +250,6 @@ impl AppView {
         let fps = options.fps || nsh_engine::perf::enabled_by_env();
         let output = crate::perf::SharedOutput::default();
         output.enabled.set(fps);
-        let keyboard = crate::keyboard::Keyboard::new(options.cells);
         Self {
             perf: fps.then(crate::perf::Monitor::new),
             output,
@@ -285,7 +284,7 @@ impl AppView {
             selection: Default::default(),
             hits: Vec::new(),
             geometry: Vec::new(),
-            keyboard,
+            keyboard: Default::default(),
             minibuffer: Default::default(),
             environment,
             appearance_changed: false,
@@ -1715,7 +1714,7 @@ impl AppView {
         self.tree.clear();
         self.hits.clear();
         self.geometry.clear();
-        self.keyboard = crate::keyboard::Keyboard::new(self.options.cells);
+        self.keyboard = Default::default();
         self.minibuffer = Default::default();
         self.kill.clear();
         self.field_drag = None;

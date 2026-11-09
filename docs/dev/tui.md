@@ -840,10 +840,10 @@ canvas itself included.
 `key_scheme.rs` maps keystrokes to actions; `keyboard.rs` applies focus, activation and scrolling, and
 `navigation.rs` handles back. This keeps a future vim scheme independent of the actions, with one scheme selected
 today and no mode switch. The focus rules below are `nsh_core::focus`'s, over plain data any backend has:
-`keyboard.rs` gives it the stops of the last frame (each one's frame, its Cells times the Cell size in points, with
-its focus stop, input scope, layer and tree order) and the root view's layers, and applies what it decides: the
-stop Tab, the arrows or a modal moves the focus to, the reveal delta of each Scroll around it, and the stop a modal
-or a layer gives the focus back to when it closes. The app's `nsh/keymap` table is matched first, including its editing and repeat policy, and with it the
+`keyboard.rs` gives it the stops of the last frame (each one's Cells, one point each, so every edge is exact and
+frames touch, overlap and sort as their Cells do, with its focus stop, input scope, layer and tree order) and the
+root view's layers, and applies what it decides: the stop Tab, the arrows or a modal moves the focus to, the reveal
+delta of each Scroll around it, and the stop a modal or a layer gives the focus back to when it closes. The app's `nsh/keymap` table is matched first, including its editing and repeat policy, and with it the
 bindings a focused component holds (a slider's or a list's arrows), so a focused component gets its keys before
 the scheme moves focus. Those bindings follow the focus in the app's effects, so a key right after a focus change waits up to 100 ms for the engine to run it (`EngineControl::flush`, then `Message::Focused` behind its batches), applying the batches meanwhile: Escape and Tab sent together leave an editor rather than indent it. Ctrl+C copies a text selection (in a field or selectable text) and otherwise exits. Outside fields, C-h e opens diagnostics; inside fields,
 C-h is Backspace (leave the field with Esc or C-g to open diagnostics). While the diagnostics panel is open,
