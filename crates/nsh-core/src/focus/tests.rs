@@ -365,3 +365,100 @@ fn a_layer_that_goes_gives_the_focus_back_to_the_stop_it_came_from() {
     layers.retain(|layer| layer != 2);
     assert_eq!(layers.restore(|_| true, |id| id != 21), None);
 }
+
+/// Rows, columns, an overlapping column, a popup, a stop out of sight and
+/// two that are no candidates, in units scaled by `across` and `down`. No
+/// two edges meet: edges that meet must meet exactly in the unit given.
+fn scaled_layout(across: f32, down: f32) -> Vec<Candidate> {
+    let at = |id: NodeId, order: usize, x: f32, y: f32, w: f32, h: f32| {
+        let mut node = stop(id, x * across, y * down, w * across, h * down);
+        node.order = Order::view(order);
+        node
+    };
+    let mut popup = at(6, 2, 7.0, 9.0, 4.0, 2.0);
+    popup.popup = true;
+    let mut out_of_sight = at(7, 7, 0.0, 12.0, 4.0, 2.0);
+    out_of_sight.visible = false;
+    let mut elsewhere = at(8, 8, 2.0, 15.0, 4.0, 2.0);
+    elsewhere.scope = 9;
+    vec![
+        at(1, 5, 0.0, 0.0, 4.0, 2.0),
+        at(2, 1, 6.0, 1.0, 4.0, 2.0),
+        at(3, 3, 12.0, 0.0, 4.0, 2.0),
+        at(4, 4, 1.0, 5.0, 4.0, 2.0),
+        at(5, 6, 20.0, 4.0, 4.0, 2.0),
+        popup,
+        out_of_sight,
+        elsewhere,
+        at(10, 0, 3.0, 18.0, 0.0, 2.0),
+    ]
+}
+
+/// Every decision over `nodes`: the candidates, and Tab, Left / Right and
+/// Up / Down from each of them and from none.
+fn decisions(nodes: Vec<Candidate>, layers: &[Layer]) -> Vec<Vec<Option<usize>>> {
+    let candidates = candidates(nodes, ROOT_ID, layers);
+    let mut all = vec![candidates.iter().map(|c| Some(c.id as usize)).collect()];
+    for current in std::iter::once(None).chain((0..candidates.len()).map(Some)) {
+        let mut moves = Vec::new();
+        for back in [false, true] {
+            moves.push(tab(&candidates, current, None, None, back));
+            moves.push(tab(&candidates, None, current, None, back));
+            moves.push(tab(&candidates, current, None, Some(Order::view(4)), back));
+            moves.push(horizontal(&candidates, current, back));
+            moves.push(vertical(&candidates, current, back));
+        }
+        all.push(moves);
+    }
+    all
+}
+
+#[test]
+fn frames_scaled_along_each_axis_on_its_own_move_the_focus_as_they_did() {
+    let layers = |across: f32, down: f32| {
+        let scaled = |x: f32, y: f32, w: f32, h: f32| {
+            Some(frame(x * across, y * down, w * across, h * down))
+        };
+        [
+            layer(1, 1, scaled(0.0, 0.0, 30.0, 20.0), false),
+            layer(2, 20, scaled(-1.0, -1.0, 32.0, 22.0), true),
+            layer(3, 30, scaled(5.0, 5.0, 4.0, 4.0), true),
+        ]
+    };
+    let on_panel = |across, down| {
+        let mut nodes = scaled_layout(across, down);
+        nodes[3].layer = Some(3);
+        nodes[4].layer = Some(3);
+        nodes
+    };
+    let one = decisions(scaled_layout(1.0, 1.0), &[]);
+    let without_popup = |across, down| {
+        let mut nodes = scaled_layout(across, down);
+        nodes.retain(|node| !node.popup);
+        nodes
+    };
+    let one_without_popup = decisions(without_popup(1.0, 1.0), &[]);
+    let one_covered = decisions(on_panel(1.0, 1.0), &layers(1.0, 1.0));
+    // The one without an area and the one of another scope are left out.
+    assert_eq!(one[0], [2, 6, 3, 4, 1, 5, 7].map(Some));
+    assert_eq!(one_covered[0], [Some(4), Some(5)]);
+    for (across, down) in [(8.0, 16.0), (7.3, 15.3), (15.3, 7.3)] {
+        assert_eq!(decisions(scaled_layout(across, down), &[]), one);
+        assert_eq!(
+            decisions(without_popup(across, down), &[]),
+            one_without_popup
+        );
+        assert_eq!(
+            decisions(on_panel(across, down), &layers(across, down)),
+            one_covered
+        );
+    }
+    // `reveal` takes lengths along one axis, in points: a span that fits
+    // moves as far again in a viewport as long again.
+    for k in [0.5, 2.0] {
+        assert_eq!(
+            reveal(px(200.0 * k), px(16.0 * k), px(160.0 * k), Align::Center),
+            Some(px(128.0 * k))
+        );
+    }
+}
