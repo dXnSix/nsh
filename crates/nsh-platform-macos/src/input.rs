@@ -118,6 +118,9 @@ pub(crate) struct Input {
     window_control: RefCell<Option<(NshView, WindowControl)>>,
     /// The mouse, while its left button is down.
     pointer: RefCell<Option<Pointer>>,
+    /// The press of another button, while it is down: the view whose
+    /// `onAuxPress` hears it if it comes up over it.
+    aux: RefCell<Option<input::AuxPress<NshView>>>,
     /// A trackpad pinch.
     pinch: RefCell<Option<Transform>>,
     /// A trackpad rotation.
@@ -258,6 +261,7 @@ pub(crate) fn reset(surface: &Surface) {
     input.window_root.borrow_mut().take();
     input.window_control.borrow_mut().take();
     input.pointer.borrow_mut().take();
+    input.aux.borrow_mut().take();
     input.pinch.borrow_mut().take();
     input.rotation.borrow_mut().take();
     input.zoom.borrow_mut().take();
@@ -681,7 +685,11 @@ pub(crate) fn event(surface: &Rc<Surface>, event: &NSEvent) {
             input.last.set(Some((x, y)));
             context_menu(surface, x, y, event.modifierFlags());
         }
-        NSEventType::RightMouseDown => context_menu(surface, x, y, event.modifierFlags()),
+        NSEventType::RightMouseDown => {
+            context_menu(surface, x, y, event.modifierFlags());
+            aux_down(surface, x, y, MouseButton::Right);
+        }
+        NSEventType::RightMouseUp => aux_up(surface, x, y, MouseButton::Right, event),
         NSEventType::LeftMouseDown => {
             if window_part_press(surface, event, x, y) {
                 return;
@@ -740,14 +748,69 @@ pub(crate) fn event(surface: &Rc<Surface>, event: &NSEvent) {
                 set_hovered(surface, Vec::new(), x, y, Mouse::of(event));
             }
         }
-        NSEventType::OtherMouseDown if event.buttonNumber() == BACK_BUTTON => {
-            crate::navigation::go_back(surface);
+        NSEventType::OtherMouseDown => {
+            if let Some(button) = other_button(event.buttonNumber()) {
+                aux_down(surface, x, y, button);
+            }
+            if event.buttonNumber() == BACK_BUTTON {
+                crate::navigation::go_back(surface);
+            }
+        }
+        NSEventType::OtherMouseUp => {
+            if let Some(button) = other_button(event.buttonNumber()) {
+                aux_up(surface, x, y, button, event);
+            }
         }
         NSEventType::ScrollWheel => scroll_event(surface, event, x, y, time),
         NSEventType::Magnify => magnify(surface, event, x, y),
         NSEventType::Rotate => rotate(surface, event, x, y),
         _ => {}
     }
+}
+
+/// A button other than the primary one went down at `(x, y)` (root
+/// coordinates): the nearest view around the one under it that listens to
+/// `onAuxPress` hears it if the button comes up over it
+/// ([`input::AuxPress`]).
+fn aux_down(surface: &Surface, x: f32, y: f32, button: MouseButton) {
+    let press = pick(&event_root(surface), x, y).and_then(|hit| {
+        let links = chain(&hit.view).into_iter().map(|v| {
+            let (events, field) = {
+                let s = v.state();
+                (s.events, s.kind == ViewKind::Input)
+            };
+            (v, events, field)
+        });
+        input::AuxPress::down(button, links)
+    });
+    *surface.input.aux.borrow_mut() = press;
+}
+
+/// `button` came up at `(x, y)`: over the view its press went down on, that
+/// view hears `onAuxPress`.
+fn aux_up(surface: &Surface, x: f32, y: f32, button: MouseButton, event: &NSEvent) {
+    let press = surface.input.aux.borrow_mut().take();
+    let Some(press) = press else { return };
+    let over = pick(&event_root(surface), x, y).map_or_else(Vec::new, |hit| chain(&hit.view));
+    if !press.up(button, over) {
+        // Another button came up while this one is down.
+        if press.button != button {
+            *surface.input.aux.borrow_mut() = Some(press);
+        }
+        return;
+    }
+    let (lx, ly) = local(surface, &press.view, x, y);
+    let mouse = MouseEvent::new(
+        point(Points(lx), Points(ly)),
+        point(Points(x), Points(y)),
+        modifiers(event.modifierFlags()),
+        Some(button),
+    );
+    surface.event(
+        press.view.id(),
+        EventKind::AuxPress,
+        EventPayload::Mouse(mouse),
+    );
 }
 
 /// A secondary click at `(x, y)` (root coordinates): the nearest view
