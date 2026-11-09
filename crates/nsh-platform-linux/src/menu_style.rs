@@ -23,18 +23,18 @@
 
 use nsh_core::{
     Hsla, Rgba,
-    element::{Role, Tokens},
+    element::{Role, Tokens, role},
 };
 
 /// The default theme's colors (`nsh-base`'s, neutral): `(role, light,
 /// dark)`.
 const DEFAULTS: [(Role, u32, u32); 6] = [
-    (Role::Popover, 0xffffff, 0x0a0a0a),
-    (Role::PopoverForeground, 0x0a0a0a, 0xfafafa),
-    (Role::Accent, 0xf5f5f5, 0x262626),
-    (Role::AccentForeground, 0x171717, 0xfafafa),
-    (Role::MutedForeground, 0x737373, 0xa3a3a3),
-    (Role::Border, 0xe5e5e5, 0x262626),
+    (role::POPOVER, 0xffffff, 0x0a0a0a),
+    (role::POPOVER_FOREGROUND, 0x0a0a0a, 0xfafafa),
+    (role::ACCENT, 0xf5f5f5, 0x262626),
+    (role::ACCENT_FOREGROUND, 0x171717, 0xfafafa),
+    (role::MUTED_FOREGROUND, 0x737373, 0xa3a3a3),
+    (role::BORDER, 0xe5e5e5, 0x262626),
 ];
 
 /// The menus' style sheet for `tokens`.
@@ -46,13 +46,13 @@ pub(crate) fn css(tokens: &Tokens) -> String {
             let (_, light, night) = DEFAULTS.iter().find(|(r, ..)| *r == role).unwrap();
             let fallback = if dark { *night } else { *light };
             tokens
-                .role_color(role)
+                .role(role)
                 .map(|c| css_color(if dark { c.dark } else { c.light }))
                 .unwrap_or_else(|| format!("#{fallback:06x}"))
         };
-        let (popover, foreground) = (color(Role::Popover), color(Role::PopoverForeground));
-        let (accent, accent_foreground) = (color(Role::Accent), color(Role::AccentForeground));
-        let (muted, border) = (color(Role::MutedForeground), color(Role::Border));
+        let (popover, foreground) = (color(role::POPOVER), color(role::POPOVER_FOREGROUND));
+        let (accent, accent_foreground) = (color(role::ACCENT), color(role::ACCENT_FOREGROUND));
+        let (muted, border) = (color(role::MUTED_FOREGROUND), color(role::BORDER));
         out.push_str(&format!(
             "
 {scope}popover.menu > contents {{ background-color: {popover}; color: {foreground}; border-color: {border}; }}
@@ -124,7 +124,7 @@ mod tests {
     fn menu_style_reads_the_tokens_roles_map_onto() {
         let mut tokens = Tokens::default();
         tokens.set_color("surface-overlay", AdaptiveColor::rgb(0x123456, 0x654321));
-        let tokens = tokens.with_roles([(nsh_core::element::Role::Popover, "surface-overlay")]);
+        let tokens = tokens.with_role(nsh_core::element::role::POPOVER, "surface-overlay");
         let sheet = css(&tokens);
         assert!(sheet.contains("popover.menu > contents { background-color: rgba(18, 52, 86, 1);"));
         assert!(sheet.contains(
