@@ -33,6 +33,11 @@
 //! - reduce motion: Windows' animation effects
 //!   (`SPI_GETCLIENTAREAANIMATION`), macOS' universal access
 //!   `reduceMotion`, the portal's `enable-animations` off on Linux;
+//! - high contrast: a contrast theme on Windows (`SPI_GETHIGHCONTRAST`'s
+//!   `HCF_HIGHCONTRASTON`), macOS' universal access `increaseContrast`
+//!   (Increase Contrast), the portal's `org.freedesktop.appearance
+//!   contrast` on Linux, else GNOME's `org.gnome.desktop.a11y.interface
+//!   high-contrast` through it;
 //! - right to left: the reading direction of the UI language on Windows,
 //!   of the locale's language elsewhere;
 //! - the screen reader: `SPI_GETSCREENREADER` on Windows, VoiceOver's
@@ -156,6 +161,7 @@ fn with_watched<R>(key: u64, f: impl FnOnce(&mut Watched) -> R) -> Option<R> {
 struct Settings {
     font_scale: f32,
     reduce_motion: bool,
+    high_contrast: bool,
     rtl: bool,
     screen_reader: bool,
     locale: Locale,
@@ -412,6 +418,7 @@ fn update(surface: &Surface) {
     env.locale_settings = settings.locale_settings;
     env.font_scale = settings.font_scale;
     env.reduce_motion = settings.reduce_motion;
+    env.high_contrast = settings.high_contrast;
     env.rtl = settings.rtl;
     env.screen_reader = settings.screen_reader;
     env.os_version = settings.os_version;
@@ -570,12 +577,18 @@ mod os {
     const PORTAL_SETTINGS: &str = "org.freedesktop.portal.Settings";
     const APPEARANCE: &str = "org.freedesktop.appearance";
     const INTERFACE: &str = "org.gnome.desktop.interface";
+    const A11Y_INTERFACE: &str = "org.gnome.desktop.a11y.interface";
 
     /// What the desktop's services report: the settings portal and AT-SPI.
     #[derive(Debug, Clone, Copy, PartialEq)]
     struct Desktop {
         font_scale: f32,
         reduce_motion: bool,
+        /// The portal's `contrast`: higher (`Some(true)`), none, or not
+        /// reported.
+        contrast: Option<bool>,
+        /// GNOME's `high-contrast`, for a portal without `contrast`.
+        gnome_high_contrast: Option<bool>,
         screen_reader: bool,
         accent: Option<Color>,
         /// GNOME's time format: 12-hour (`Some(true)`), 24-hour, or none.
@@ -588,6 +601,8 @@ mod os {
             Cell::new(Desktop {
                 font_scale: 1.0,
                 reduce_motion: false,
+                contrast: None,
+                gnome_high_contrast: None,
                 screen_reader: false,
                 accent: None,
                 twelve_hour: None,
@@ -601,6 +616,8 @@ mod os {
     enum Change {
         FontScale(f32),
         ReduceMotion(bool),
+        Contrast(bool),
+        GnomeHighContrast(bool),
         ScreenReader(bool),
         Accent(Option<Color>),
         TwelveHour(Option<bool>),
@@ -627,6 +644,10 @@ mod os {
         Settings {
             font_scale: desktop.font_scale,
             reduce_motion: desktop.reduce_motion,
+            high_contrast: desktop
+                .contrast
+                .or(desktop.gnome_high_contrast)
+                .unwrap_or(false),
             rtl: rtl_language(locale.as_str()),
             screen_reader: desktop.screen_reader,
             locale,
@@ -679,6 +700,8 @@ mod os {
                 match change {
                     Change::FontScale(v) => d.font_scale = v,
                     Change::ReduceMotion(v) => d.reduce_motion = v,
+                    Change::Contrast(v) => d.contrast = Some(v),
+                    Change::GnomeHighContrast(v) => d.gnome_high_contrast = Some(v),
                     Change::ScreenReader(v) => d.screen_reader = v,
                     Change::Accent(v) => d.accent = v,
                     Change::TwelveHour(v) => d.twelve_hour = v,
@@ -707,6 +730,8 @@ mod os {
             (INTERFACE, "enable-animations"),
             (INTERFACE, "clock-format"),
             (APPEARANCE, "accent-color"),
+            (APPEARANCE, "contrast"),
+            (A11Y_INTERFACE, "high-contrast"),
         ];
         send(initial.iter().filter_map(|(n, k)| read(n, k)).collect());
         for message in proxy.receive_signal("SettingChanged")? {
@@ -747,6 +772,11 @@ mod os {
                 Some(Change::FontScale(font_scale(*v)))
             }
             (INTERFACE, "enable-animations", Value::Bool(on)) => Some(Change::ReduceMotion(!on)),
+            // 0: no preference, 1: higher contrast.
+            (APPEARANCE, "contrast", Value::U32(v)) => Some(Change::Contrast(*v == 1)),
+            (A11Y_INTERFACE, "high-contrast", Value::Bool(on)) => {
+                Some(Change::GnomeHighContrast(*on))
+            }
             (INTERFACE, "clock-format", Value::Str(format)) => {
                 Some(Change::TwelveHour(match format.as_str() {
                     "12h" => Some(true),
@@ -820,9 +850,19 @@ mod os {
 
     const SPI_GETSCREENREADER: u32 = 0x0046;
     const SPI_GETCLIENTAREAANIMATION: u32 = 0x1042;
+    const SPI_GETHIGHCONTRAST: u32 = 0x0042;
+    const HCF_HIGHCONTRASTON: u32 = 0x0001;
     const RRF_RT_REG_DWORD: u32 = 0x0000_0010;
     /// `HKEY_CURRENT_USER`: a predefined handle, sign-extended.
     const HKEY_CURRENT_USER: isize = 0x8000_0001_u32 as i32 as isize;
+
+    /// `HIGHCONTRASTW`.
+    #[repr(C)]
+    struct HighContrastW {
+        size: u32,
+        flags: u32,
+        default_scheme: *mut u16,
+    }
 
     #[repr(C)]
     struct OsVersionInfoW {
@@ -893,6 +933,7 @@ mod os {
             )),
             // Animation effects off is Windows' reduce motion.
             reduce_motion: spi_bool(SPI_GETCLIENTAREAANIMATION) == Some(false),
+            high_contrast: high_contrast(),
             rtl: ui_language().is_some_and(|l| rtl_language(&l)),
             screen_reader: spi_bool(SPI_GETSCREENREADER) == Some(true),
             locale,
@@ -1082,6 +1123,26 @@ mod os {
         (ok != 0).then_some(value != 0)
     }
 
+    /// Whether a contrast theme is on (Settings > Accessibility > Contrast
+    /// themes), as the Windows backend reads it.
+    fn high_contrast() -> bool {
+        let mut value = HighContrastW {
+            size: size_of::<HighContrastW>() as u32,
+            flags: 0,
+            default_scheme: std::ptr::null_mut(),
+        };
+        // SAFETY: a HIGHCONTRASTW with its size set, as the action takes.
+        let ok = unsafe {
+            SystemParametersInfoW(
+                SPI_GETHIGHCONTRAST,
+                value.size,
+                (&mut value as *mut HighContrastW).cast(),
+                0,
+            )
+        };
+        ok != 0 && value.flags & HCF_HIGHCONTRASTON != 0
+    }
+
     /// The user's regional format (`de-DE`), if the system has one.
     fn user_locale_name() -> Option<String> {
         let mut buf = [0u16; 85];
@@ -1185,8 +1246,9 @@ mod os {
         ) -> i32;
     }
 
-    /// The settings, as the macOS backend reads them (VoiceOver and reduce
-    /// motion from their preferences rather than `NSWorkspace`).
+    /// The settings, as the macOS backend reads them (VoiceOver, reduce
+    /// motion and Increase Contrast from their preferences rather than
+    /// `NSWorkspace`).
     /// Settings are read when needed: nothing to follow.
     pub(super) fn watch() {}
 
@@ -1200,6 +1262,7 @@ mod os {
         Settings {
             font_scale: 1.0,
             reduce_motion: universal_access(c"reduceMotion"),
+            high_contrast: universal_access(c"increaseContrast"),
             rtl: rtl_language(locale.as_str()),
             screen_reader: universal_access(c"voiceOverOnOffKey"),
             locale,
