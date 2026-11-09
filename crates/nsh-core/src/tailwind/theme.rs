@@ -86,6 +86,11 @@ pub(crate) struct ClassTokens {
     /// The dark values of the numbers that have one of their own.
     dark_numbers: FxHashMap<Box<str>, f32>,
     fonts: FxHashMap<Box<str>, Arc<str>>,
+    /// Whether a number's name is in one of Tailwind's namespaces
+    /// (`radius-card`): without one no utility names a number
+    /// ([`ClassTokens::named_number`]), which a theme without such
+    /// tokens then never looks for.
+    namespaced: bool,
 }
 
 static DEFAULT_TOKENS: LazyLock<Arc<ClassTokens>> =
@@ -99,6 +104,10 @@ impl ClassTokens {
             numbers: theme.numbers().map(|(k, n)| (k.into(), n)).collect(),
             dark_numbers: theme.dark_numbers().map(|(k, n)| (k.into(), n)).collect(),
             fonts: theme.fonts().map(|(k, f)| (k.into(), f.clone())).collect(),
+            namespaced: theme
+                .numbers()
+                .chain(theme.dark_numbers())
+                .any(|(k, _)| is_namespaced(k)),
         }
     }
 
@@ -230,6 +239,9 @@ impl ClassTokens {
     /// of a theme's `--radius-*`, `--spacing-*`, … variables.
     /// With the length of the utility's prefix (`rounded`: 7).
     fn named_number(&self, utility: &str, dark: bool) -> Option<(usize, String)> {
+        if !self.namespaced {
+            return None;
+        }
         utility.match_indices('-').find_map(|(i, _)| {
             let (prefix, name) = (&utility[..i], &utility[i + 1..]);
             let (namespace, length) = namespace(prefix.trim_start_matches('-'))?;
@@ -371,6 +383,15 @@ const PREFIXES: &[(&str, &str, bool)] = &[
     ("scroll-pb", "spacing", true),
     ("scroll-pl", "spacing", true),
 ];
+
+/// Whether `name` is a token of one of [`NAMESPACES`] (`radius-card`, not
+/// `radius`), which a utility of that namespace can name.
+fn is_namespaced(name: &str) -> bool {
+    NAMESPACES.iter().any(|ns| {
+        name.strip_prefix(ns)
+            .is_some_and(|rest| rest.starts_with('-'))
+    })
+}
 
 /// The namespace of the tokens a utility of prefix `prefix` names
 /// (`rounded-t`: `radius`; `gap-x`: `spacing`), with whether its value is a
