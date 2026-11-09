@@ -534,6 +534,19 @@ export interface MouseEvent {
   pressedButton: MouseButton | null;
 }
 
+/** The mouse wheel or a touchpad's two-finger scroll over a view: the payload of `onWheel` (GPUI's `ScrollWheelEvent`, the DOM's `WheelEvent`). */
+export interface WheelEvent {
+  /** Position in the view (its transforms undone). */
+  position: Point;
+  /** Position in the root view the view is in (the surface or its modal), as touches' `pageX` / `pageY`. */
+  pagePosition: Point;
+  /** How far it scrolls, in points, as the DOM's `deltaX` / `deltaY`: positive `y` down, positive `x` right. A wheel's notches are converted as the platform's scroll views take them. */
+  delta: Point;
+  modifiers: Modifiers;
+  /** The deltas are precise (a touchpad, a high-resolution wheel), not a wheel's notches. */
+  precise: boolean;
+}
+
 /** A mouse button (GPUI's `MouseButton`). */
 export type MouseButton = "left" | "right" | "middle" | "back" | "forward";
 
@@ -668,6 +681,12 @@ pub const EVENTS: &[(EventKind, u32, &str, &str)] = &[
         on::ALL,
         "(e: ContextMenuEvent) => void",
         "The secondary button (a right click, Control-click on Apple platforms) was pressed over the view: open a menu with `Menu.popup(items, e.pagePosition)`. The nearest listener hears it; a text input or selectable text nearer shows its own menu instead.",
+    ),
+    (
+        EventKind::Wheel,
+        on::ALL,
+        "(e: WheelEvent) => void",
+        "The mouse wheel or a touchpad's two-finger scroll over the view or a view inside it (the DOM's `wheel`): the listeners under the pointer hear it from the inside out, and the scroll views take it as `wheelScroll` says.",
     ),
     (
         EventKind::FileDragEnter,

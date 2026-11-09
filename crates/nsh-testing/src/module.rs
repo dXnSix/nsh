@@ -1003,6 +1003,20 @@ fn mime_of(name: &str) -> &'static str {
     }
 }
 
+/// How far a wheel scrolls ([`App::wheel`]), in points, as the DOM's
+/// `deltaX` / `deltaY`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, JsObject)]
+pub struct WheelBy {
+    /// Rightwards (negative: leftwards).
+    #[prop(default)]
+    pub x: Points,
+    /// Downwards, towards the content's end (negative: upwards).
+    #[prop(default)]
+    pub y: Points,
+    /// A touchpad's precise deltas (false: a wheel's notches).
+    pub precise: Option<bool>,
+}
+
 /// How far a drag moves the finger ([`App::drag`]), in points.
 #[derive(Debug, Default, Clone, Copy, PartialEq, JsObject)]
 pub struct DragBy {
@@ -1834,6 +1848,22 @@ impl App {
     /// Lifts the finger `dragAndHold` left down, where it is.
     pub async fn drop(this: Instance<Self>) -> Result<(), JsError> {
         step(&this, move |app| app.drop_held()).await
+    }
+
+    /// The mouse wheel (`precise`: a touchpad) by `by` points over the
+    /// middle of what `selector` names, with the keys `keyboard.down`
+    /// holds: the views under it listening to `onWheel` hear it from the
+    /// inside out, and the scroll view it reaches moves by it, as
+    /// `wheelScroll` says. Desktops and the web only: a phone has no wheel.
+    pub async fn wheel(this: Instance<Self>, selector: String, by: WheelBy) -> Result<(), JsError> {
+        step(&this, move |app| {
+            app.wheel(
+                &selector,
+                nsh_core::geometry::point(by.x, by.y),
+                by.precise.unwrap_or(false),
+            )
+        })
+        .await
     }
 
     /// The mouse's secondary button over the middle of what `selector`

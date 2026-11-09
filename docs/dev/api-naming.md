@@ -88,7 +88,9 @@ go elsewhere under these rules rather than into them.
   `mousemove`, GPUI's `MouseMoveEvent`; decided by the user, 2026-10-27, replacing React Native's `onHoverIn` /
   `onHoverOut` of 2026-10-21), as a file drag over it is `onFileDragEnter` / `onFileDragLeave` (the DOM's
   `dragenter`). The `hover` state keeps CSS's name (`:hover`, `hoverStyle`, `hover:`): states are CSS's, events the
-  DOM's.
+  DOM's. The wheel over a view is `onWheel` (the DOM's `wheel`, GPUI's `on_scroll_wheel`), its payload `WheelEvent`
+  with the DOM's `delta` signs in points; where the wheel goes besides it is `wheelScroll` (`"auto"`, `"contain"`,
+  `"none"`: CSS's `overscroll-behavior` words for keeping a scroll in, the scroll views being what it reaches).
 - **Geometry**: shapes are GPUI's, the types Rust already has (`nsh_core::geometry`, `geometry.md`), exported by
   `nsh` with the same fields: `Point { x, y }`, `Size { width, height }`, `Bounds { origin: Point, size: Size }`,
   `Edges { top, right, bottom, left }` (decided by the user, 2026-10-21). A position and an extent together are a

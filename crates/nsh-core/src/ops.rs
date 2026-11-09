@@ -256,6 +256,7 @@ events! {
     UrlScheme = "onUrlScheme": "The system handed the app a URL that opens it (root only; payload: `url`, [`crate::url_scheme::URL`]); the core keeps those of the schemes the app claims ([`crate::url_scheme`]).",
     Audio = "onAudio": "A sound or a player reported (root only; payload: [`EventPayload::Audio`]).",
     Window = "onWindow" as "": "A window of the app's own reported its state, a close press or that it closed (on its root node; desktops; payload: [`EventPayload::Window`]).",
+    Wheel = "onWheel": "The mouse wheel or a touchpad's two-finger scroll over the view or a view inside it (payload: [`EventPayload::Wheel`]): the listeners along the views under the pointer hear it from the inside out, up to a view whose `wheelScroll` keeps it in ([`crate::input::wheel_route`]).",
 
 }
 
@@ -424,6 +425,61 @@ impl MouseEvent {
             page_position,
             modifiers,
             pressed_button,
+        }
+    }
+}
+
+/// A wheel or a touchpad's two-finger scroll over a view
+/// ([`EventKind::Wheel`]), in points, as GPUI's `ScrollWheelEvent` and the
+/// DOM's `WheelEvent`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[non_exhaustive]
+pub struct WheelEvent {
+    /// Position in the view, its transforms undone.
+    pub position: Point<Points>,
+    /// Position in the root view the view is in (the surface, or its
+    /// modal), as touches' `page`.
+    pub page_position: Point<Points>,
+    /// How far it scrolls, in points, as the DOM's `deltaX` / `deltaY`:
+    /// positive `y` towards the content's end (down), positive `x` right.
+    /// A notch (a line or a page) is converted as the platform's scroll
+    /// views take it.
+    pub delta: Point<Points>,
+    /// The modifier keys held.
+    pub modifiers: crate::keymap::Modifiers,
+    /// The deltas are precise (a touchpad, a high-resolution wheel: GPUI's
+    /// `ScrollDelta::Pixels`), not a wheel's notches.
+    pub precise: bool,
+}
+
+impl WheelEvent {
+    /// A wheel by `delta` at `position` in the view and `page_position` in
+    /// its root view, with `modifiers` held, `precise` or in notches.
+    pub fn new(
+        position: Point<Points>,
+        page_position: Point<Points>,
+        delta: Point<Points>,
+        modifiers: crate::keymap::Modifiers,
+        precise: bool,
+    ) -> Self {
+        Self {
+            position,
+            page_position,
+            delta,
+            modifiers,
+            precise,
+        }
+    }
+
+    /// This wheel and `later` as one (merged before they reach the app):
+    /// their deltas added, where and how `later` came.
+    pub fn merged(self, later: WheelEvent) -> WheelEvent {
+        WheelEvent {
+            delta: crate::geometry::point(
+                self.delta.x + later.delta.x,
+                self.delta.y + later.delta.y,
+            ),
+            ..later
         }
     }
 }
@@ -829,6 +885,8 @@ pub enum EventPayload {
     Mouse(MouseEvent),
     /// A context menu asked for over a view (`onContextMenu`).
     ContextMenu(ContextMenuEvent),
+    /// The wheel or a touchpad's scroll over a view (`onWheel`).
+    Wheel(WheelEvent),
     /// Where the pointer was at a press (`onPress`, `onLongPress`,
     /// `onPressDown`, `onPressUp`), with the modifier keys and the click
     /// count, on backends that know it.
@@ -2567,6 +2625,11 @@ pub enum Prop {
     /// it keep the touches until then.
     #[prop(js = "panActivation")]
     PanActivation(Option<crate::props::PanActivation>),
+    /// `wheelScroll`: where a wheel over the view goes besides its
+    /// `onWheel`: the scroll views as without it, only those inside it, or
+    /// none ([`crate::props::WheelScroll`]).
+    #[prop(js = "wheelScroll")]
+    WheelScroll(crate::props::WheelScroll),
     /// Whether native pans may start or update their bound values. Rust
     /// components use this to retain gesture state across permission changes.
     PanEnabled(bool),

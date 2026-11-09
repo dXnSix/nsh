@@ -188,6 +188,8 @@ pub use crate::element::{
     VirtualList,
     WebNavigation,
     WebView,
+    WheelEvent,
+    WheelScroll,
     WritingDirection,
     asset,
     assets,

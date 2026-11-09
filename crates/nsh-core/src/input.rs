@@ -4,7 +4,9 @@
 //! views, a `panActivation` [`Gate`]), when a drag starts and which
 //! candidate takes it ([`Candidate`], [`startable`]), a press's events
 //! ([`Press`]), hover changes, hit areas, two-finger pinch / rotation
-//! ([`Pinch`]), wheel latching, Ctrl + wheel zoom steps and velocities.
+//! ([`Pinch`]), wheel latching, where a wheel goes ([`wheel_route`]: the
+//! `onWheel` listeners, how far the scroll views may take it), Ctrl +
+//! wheel zoom steps and velocities.
 //!
 //! The backends keep the event flow over their own views and surfaces:
 //! hit testing through their toolkit's geometry, reporting touches and
@@ -13,7 +15,7 @@
 
 use crate::{
     Bounds, EdgeInsets, EventKind, EventMask, GestureValues, NodeId, PanActivation, Point, Points,
-    ROOT_ID, Size, ViewKind,
+    ROOT_ID, Size, ViewKind, WheelScroll,
     geometry::Radians,
     tailwind::state::{FOCUSED, HOVERED, PRESSED},
 };
@@ -624,6 +626,88 @@ pub fn touchpad_wait(last: Option<f64>, now: f64) -> Option<f64> {
     (idle < TOUCHPAD_IDLE).then(|| (TOUCHPAD_IDLE - idle).max(1.0))
 }
 
+/// One view along the views under a wheel, as [`wheel_route`] reads it.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[non_exhaustive]
+pub struct WheelLink {
+    /// It listens to `onWheel`.
+    pub listens: bool,
+    /// Its `wheelScroll`.
+    pub scroll: WheelScroll,
+}
+
+impl WheelLink {
+    /// A view that listens to `events`, with `wheelScroll` `scroll`.
+    pub fn new(events: EventMask, scroll: WheelScroll) -> WheelLink {
+        WheelLink {
+            listens: events.contains(EventKind::Wheel),
+            scroll,
+        }
+    }
+}
+
+/// Where a wheel over a chain of views goes ([`wheel_route`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WheelRoute {
+    /// The views that hear `onWheel`, by their index in the chain,
+    /// innermost first.
+    pub listeners: Vec<usize>,
+    /// The scroll views and the views Control + wheel zooms that may take
+    /// the wheel are those at an index below this: the chain's length when
+    /// nothing keeps it in, none (0) under a `wheelScroll` of `none`.
+    pub reach: usize,
+}
+
+impl WheelRoute {
+    /// Whether a view at `index` in the chain may scroll or zoom by the
+    /// wheel.
+    pub fn reaches(&self, index: usize) -> bool {
+        index < self.reach
+    }
+}
+
+/// Where a wheel over `chain` (the view under the pointer, then the views
+/// around it) goes besides the scroll views' latching: every view that
+/// listens to `onWheel` hears it, from the inside out, up to the first
+/// view whose `wheelScroll` keeps it in (`contain`, `none`), included;
+/// `contain` keeps the scroll views around that view from taking it,
+/// `none` every scroll view. `latched`: the index in the chain of the
+/// scroll view a scroll in progress stays on (wheel notches within
+/// [`WHEEL_LATCH`], a touchpad gesture and its momentum), the chain's
+/// length when that view is not under the pointer: a view nearer the
+/// pointer that keeps wheels in came under it during that scroll, so it
+/// hears none of it and keeps nothing in, as browsers latch a scroll's
+/// target. Nothing listening and nothing kept in costs a walk of the
+/// chain.
+pub fn wheel_route(chain: &[WheelLink], latched: Option<usize>) -> WheelRoute {
+    let mut route = WheelRoute {
+        listeners: Vec::new(),
+        reach: chain.len(),
+    };
+    for (i, link) in chain.iter().enumerate() {
+        let keeps = link.scroll != WheelScroll::Auto;
+        if keeps && latched.is_some_and(|l| i < l) {
+            continue;
+        }
+        if link.listens {
+            route.listeners.push(i);
+        }
+        match link.scroll {
+            WheelScroll::Auto => {}
+            WheelScroll::Contain => {
+                route.reach = i + 1;
+                break;
+            }
+            WheelScroll::None => {
+                route.reach = 0;
+                break;
+            }
+        }
+    }
+    route
+}
+
 /// The innermost of `views` (innermost first) a wheel by `(dx, dy)`
 /// scrolls: `axis` is a view's scroll axis (horizontal or not; `None` for
 /// views that do not scroll), `takes` whether a scroll view can move by it
@@ -964,6 +1048,43 @@ mod tests {
         assert_eq!(target(5.0, 0.0, &views), Some(1));
         // Only a horizontal view: it takes vertical wheels too.
         assert_eq!(target(0.0, 5.0, &views[..2].to_vec()), Some(1));
+    }
+
+    #[test]
+    fn wheels_reach_the_listeners_and_scroll_views_up_to_a_view_that_keeps_them() {
+        let mut events = EventMask::default();
+        events.set(EventKind::Wheel, true);
+        let quiet = WheelLink::new(EventMask::default(), WheelScroll::Auto);
+        let listens = WheelLink::new(events, WheelScroll::Auto);
+        let contains = WheelLink::new(events, WheelScroll::Contain);
+        let blocks = WheelLink::new(EventMask::default(), WheelScroll::None);
+        // Every listener hears it, from the inside out; every scroll view
+        // may take it.
+        let route = wheel_route(&[listens, quiet, listens], None);
+        assert_eq!(route.listeners, vec![0, 2]);
+        assert_eq!(route.reach, 3);
+        assert!(route.reaches(2) && !route.reaches(3));
+        // `contain` stops it at the view: the listeners and scroll views
+        // around it get nothing, the view itself may scroll.
+        let route = wheel_route(&[listens, contains, listens, quiet], None);
+        assert_eq!(route.listeners, vec![0, 1]);
+        assert_eq!(route.reach, 2);
+        // `none`: no scroll view at all, the listeners inside it hear it.
+        let route = wheel_route(&[listens, quiet, blocks, listens], None);
+        assert_eq!(route.listeners, vec![0]);
+        assert_eq!(route.reach, 0);
+        // A scroll latched to view 2: the views nearer the pointer that
+        // keep wheels in came under it during the scroll and take no part.
+        let route = wheel_route(&[contains, listens, quiet, listens], Some(2));
+        assert_eq!(route.listeners, vec![1, 3]);
+        assert_eq!(route.reach, 4);
+        let route = wheel_route(&[blocks, listens], Some(2));
+        assert_eq!(route.listeners, vec![1]);
+        // Around the latched view, a view that keeps wheels in still does.
+        let route = wheel_route(&[listens, contains, listens], Some(0));
+        assert_eq!(route.listeners, vec![0, 1]);
+        assert_eq!(route.reach, 2);
+        assert_eq!(wheel_route(&[], None), WheelRoute::default());
     }
 
     #[test]

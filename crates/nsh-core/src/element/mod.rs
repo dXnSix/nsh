@@ -214,7 +214,7 @@ pub use crate::{
     PanActivation, PasteBehavior, PasteEvent, PastedFile, PointerEvents, PointerType, PressEvent,
     ResizeMode, ReturnKeyType, ScreenAnimation, SnapAlignment, StatusBarConfig, StatusBarSetting,
     StatusBarStyle, SubmitBehavior, TextShadow, TouchEvent, TransformKind, TransformOrigin,
-    Viewability,
+    Viewability, WheelEvent, WheelScroll,
     animation::{
         Curve, EaseMode, Easing, Extrapolate, Keyframe, KeyframeTiming, MotionChannel, MotionKind,
         MotionPreset, MotionSpec, Output as AnimationOutput, PlaybackDirection, StaggerFrom,

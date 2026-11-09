@@ -4902,6 +4902,13 @@ impl<M: TextEngine> Core<M> {
                     flags |= dirty::VIEW_PROPS;
                 }
             }
+            Prop::WheelScroll(value) => {
+                let props = node.props.get_or_insert_default();
+                if props.wheel_scroll != value {
+                    props.wheel_scroll = value;
+                    flags |= dirty::VIEW_PROPS;
+                }
+            }
             Prop::InsetPadding(insets) | Prop::InsetMargin(insets) => {
                 let slot = usize::from(matches!(prop, Prop::InsetMargin(_)));
                 let mut all = node.insets.as_deref().copied().unwrap_or_default();

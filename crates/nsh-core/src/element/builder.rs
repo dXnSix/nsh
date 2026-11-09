@@ -1470,6 +1470,28 @@ pub trait Interactive: Element {
         )
     }
 
+    /// The mouse wheel or a touchpad's two-finger scroll over it (or an
+    /// element inside it): by how much, in points, where, with the
+    /// modifier keys and whether it is precise (a touchpad) or in notches
+    /// (GPUI's `on_scroll_wheel`, the DOM's `wheel`). The listeners along
+    /// the elements under the pointer hear it from the inside out; the
+    /// scroll views take it too, as [`Self::wheel_scroll`] says.
+    fn on_wheel<M>(self, listener: impl IntoListener<crate::WheelEvent, M>) -> Self {
+        self.on(
+            EventKind::Wheel,
+            events::typed(listener.into_listener(), events::wheel),
+        )
+    }
+
+    /// Where a wheel over it goes besides its [`Self::on_wheel`]: the
+    /// scroll views as without it ([`crate::WheelScroll::Auto`]), only those
+    /// inside it ([`crate::WheelScroll::Contain`], the listeners around it
+    /// not hearing it either), or none ([`crate::WheelScroll::None`]).
+    fn wheel_scroll(mut self, scroll: crate::WheelScroll) -> Self {
+        super::host::set(self.node(), Prop::WheelScroll(scroll));
+        self
+    }
+
     /// The selection across the texts of a selectable view
     /// ([`Self::selectable`]) changed: the selected text, as a copy gives
     /// it, empty once nothing is selected, and where it starts in the

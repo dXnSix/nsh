@@ -68,6 +68,7 @@ mod test_ui;
 mod theme;
 mod url_scheme;
 mod websocket;
+mod wheel;
 
 /// Hands the engine's batches to the test.
 struct ChannelSink(Sender<MountBatch>);

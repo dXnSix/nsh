@@ -312,3 +312,14 @@ expect Committed: 腾
 event id:compose onCompositionChange composing=false text=""
 expect Composition: ended []
 covers [events] onCompositionChange
+# events-wheel
+tap id:case-events-wheel
+expect Wheel: none
+listens id:canvas onWheel
+# A wheel's notches over the view, then a touchpad over the view inside
+# it, which does not listen: the view around it hears both.
+event id:canvas onWheel precise=false
+expect Wheel: none notches
+event id:inner onWheel precise=true
+expect Wheel: none notches touchpad
+covers [events] onWheel

@@ -359,6 +359,52 @@ instead. The platform decides this as the button goes down, from what is mounted
 and nothing has to be cancelled. A `disabled` view leaves the click to the nearest enabled listener around it. On
 touchscreens, a long press opens menus: handle `onLongPress` with the same function.
 
+### Wheel
+
+`onWheel` tells a view that the mouse wheel or a touchpad's two-finger scroll moved over it, as GPUI's
+`on_scroll_wheel` and the DOM's `wheel` do: a canvas zooms on Ctrl + wheel, a value steps, a tab strip switches
+tabs. `wheelScroll` says where the wheel goes besides the view's handler:
+
+```rust tabs
+view()
+    .wheel_scroll(WheelScroll::None)
+    .on_wheel(move |e: &WheelEvent| {
+        if e.modifiers.ctrl {
+            zoom.update(|z| *z *= 1.0 - e.delta.y.0 / 500.0);
+        } else {
+            pan.update(|p| {
+                p.x += e.delta.x;
+                p.y += e.delta.y;
+            });
+        }
+    })
+```
+
+```tsx tabs
+<Canvas
+  wheelScroll="none"
+  onWheel={(e) => (e.modifiers.control ? zoomBy(1 - e.delta.y / 500) : panBy(e.delta))}
+/>
+```
+
+| Prop | Rust | Type | Description |
+|---|---|---|---|
+| `onWheel` | `.on_wheel(..)` | `(e: WheelEvent) => void` | The wheel or a touchpad scrolled over the view or a view inside it (the DOM's `wheel`). |
+| `wheelScroll` | `.wheel_scroll(..)` | `"auto" \| "contain" \| "none"` | Where a wheel over the view goes besides its `onWheel`: the scroll views as usual (`"auto"`, the default), only the view and the scroll views inside it (`"contain"`), or none (`"none"`). |
+
+`WheelEvent` has `position` in the view, `pagePosition` in its root view, `delta`, how far it scrolls in points with
+the DOM's signs (positive `y` towards the content's end, positive `x` to the right; a wheel's notches as the
+platform's scroll views take them), the `modifiers` and `precise`: true for a touchpad's or a high-resolution
+wheel's deltas, false for notches; in Rust `position`, `page_position`, `delta`, `modifiers` and `precise`. Every
+view under the pointer that listens hears it, from the inside out, and the scroll views take it as usual. A view
+with `wheelScroll="contain"` keeps the wheel in: the scroll views and the listeners around it get nothing, so a
+stepper in a form steps without scrolling the form; `"none"` takes it from every scroll view, inside the view too,
+as a canvas that pans and zooms itself wants. Ctrl + wheel, which pinches and zooms views, follows the same rule.
+The platform decides this from what is mounted as the wheel turns, so the handler is told after the fact and nothing
+has to be cancelled; a scroll already going on when the pointer comes over such a view goes on. Wheels come at most
+once a frame, a view's deltas added up. `onWheel` comes from mice and touchpads on macOS, Windows, Linux, the GPUI
+backend and in browsers.
+
 ### Keyboard focus
 
 On macOS and the web, Tab moves the keyboard focus between its stops in tree order: the inputs, the views that take

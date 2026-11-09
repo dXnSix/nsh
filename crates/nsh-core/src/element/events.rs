@@ -549,6 +549,15 @@ pub(crate) fn mouse(p: &EventPayload) -> Option<Cow<'_, MouseEvent>> {
     }
 }
 
+/// `onWheel`'s payload; an event sent without one (an embedder's, a
+/// script's) is none.
+pub(crate) fn wheel(p: &EventPayload) -> Option<Cow<'_, crate::WheelEvent>> {
+    match p {
+        EventPayload::Wheel(e) => Some(Cow::Borrowed(e)),
+        _ => None,
+    }
+}
+
 pub(crate) fn context_menu(p: &EventPayload) -> Option<Cow<'_, ContextMenuEvent>> {
     match p {
         EventPayload::ContextMenu(e) => Some(Cow::Borrowed(e)),

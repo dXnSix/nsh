@@ -12,6 +12,7 @@ import EventsMedia from "./events-media";
 import EventsPointer from "./events-pointer";
 import EventsScroll from "./events-scroll";
 import EventsTouch from "./events-touch";
+import EventsWheel from "./events-wheel";
 
 const cases: Record<string, () => JSX.Element> = {
   "events-composition": EventsComposition,
@@ -23,6 +24,7 @@ const cases: Record<string, () => JSX.Element> = {
   "events-pointer": EventsPointer,
   "events-scroll": EventsScroll,
   "events-touch": EventsTouch,
+  "events-wheel": EventsWheel,
 };
 const shown = signal("");
 

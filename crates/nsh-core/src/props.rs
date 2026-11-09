@@ -28,6 +28,25 @@ pub enum PointerEvents {
     BoxOnly,
 }
 
+/// Where a wheel over a view goes besides its `onWheel` (`wheelScroll`):
+/// which scroll views may scroll, and zoom on Control + wheel, by it
+/// ([`crate::input::wheel_route`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum WheelScroll {
+    /// As without it: the innermost scroll view under the pointer that can
+    /// move takes the wheel (default).
+    #[default]
+    Auto,
+    /// The wheel stays in the view: it, when it scrolls, and the scroll
+    /// views inside it may take it; the scroll views and the `onWheel`
+    /// listeners around it never get it.
+    Contain,
+    /// The wheel over the view scrolls and zooms nothing, inside it or
+    /// around it: only the `onWheel` listeners of the view and of the
+    /// views inside it hear it.
+    None,
+}
+
 /// What an element is, for assistive technologies (`role`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
 pub enum AccessibilityRole {
@@ -350,6 +369,9 @@ pub struct ViewProps {
     /// `panActivation`: the view's touch responder waits for a pan the
     /// platform recognizes.
     pub pan_activation: Option<PanActivation>,
+    /// `wheelScroll`: where a wheel over the view goes besides its
+    /// `onWheel`.
+    pub wheel_scroll: WheelScroll,
     /// A vertical pan cooperates with descendant scroll views on iOS.
     pub pan_scroll_handoff: bool,
     /// `windowDrag` (desktops): pressing the view drags the window; `None`

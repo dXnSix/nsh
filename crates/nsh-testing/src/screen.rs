@@ -216,6 +216,8 @@ struct View {
     gestures: GestureValues,
     /// When a drag on it activates its JS responder (`panActivation`).
     pan_activation: Option<PanActivation>,
+    /// Where a wheel over it goes besides its `onWheel` (`wheelScroll`).
+    wheel_scroll: nsh_core::WheelScroll,
     /// Neither it nor what it holds shows (`visibility: hidden`).
     hidden: bool,
     /// It clips what it holds to its bounds (`overflow: hidden`).
@@ -480,6 +482,7 @@ impl Screen {
                 view.long_press_delay = props.long_press_delay;
                 view.selectable_view = props.selectable_view;
                 view.pan_activation = props.pan_activation;
+                view.wheel_scroll = props.wheel_scroll;
                 view.pointer_events = props.pointer_events;
                 view.screen_order = props.screen_order;
             }
@@ -2082,6 +2085,15 @@ impl Screen {
         self.nodes
             .get(&id)
             .is_some_and(|v| v.events.contains(event))
+    }
+
+    /// View `id` as a wheel over it reads it: whether it listens to
+    /// `onWheel`, and its `wheelScroll`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn wheel_link(&self, id: NodeId) -> nsh_core::input::WheelLink {
+        self.nodes.get(&id).map_or_else(Default::default, |v| {
+            nsh_core::input::WheelLink::new(v.events, v.wheel_scroll)
+        })
     }
 
     pub(crate) fn input(&self, id: NodeId) -> Option<&Input> {

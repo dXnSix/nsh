@@ -104,13 +104,13 @@ pub use crate::{
         ReturnKeyType, ScreenAnimation, ScreenProp, ScrollProp, ScrollbarSetting, SnapAlignment,
         StatusBarConfig, StatusBarSetting, StatusBarStyle, SubmitBehavior, Tag, TouchEvent,
         TouchPhase, TouchPoint, TransitionFallback, Viewability, WebInput, WebKey, WebLoad,
-        WebSource,
+        WebSource, WheelEvent,
     },
     props::{
         Accessibility, AccessibilityActionDef, AccessibilityCurrent, AccessibilityProp,
         AccessibilityRole, AccessibilityState, AccessibilityValue, Checked, EdgeInsets,
         GestureValues, LayoutAnimation, LayoutCurve, LayoutProperty, LayoutTransition, LiveRegion,
-        PanActivation, PointerEvents, Ripple, ViewProps,
+        PanActivation, PointerEvents, Ripple, ViewProps, WheelScroll,
     },
     style::{
         BorderStyle, Borders, Color, CornerRadii, DecorationStyle, EllipsizeMode, EnvVar,
