@@ -1,7 +1,9 @@
 //! The TV's side: `ui_app_main` through `dxn_gpui_tizen::run`, the package
-//! in the app's resources, and the app framework's directories. Compiled
-//! only for `target_vendor = "tizen"`.
+//! in the app's resources, the app framework's directories, and (feature
+//! `dev`) the system's log. Compiled only for `target_vendor = "tizen"`.
 
+#[cfg(feature = "dev")]
+use std::ffi::CString;
 use std::{
     ffi::{CStr, c_char, c_int},
     path::PathBuf,
@@ -16,7 +18,7 @@ use crate::{
 };
 
 /// Runs the app until it exits: the package's bundle, or the Rust app
-/// `root` makes.
+/// `root` makes; with `dev`, the dev server's app.
 ///
 /// # Safety
 ///
@@ -27,6 +29,8 @@ pub(crate) unsafe fn main(
     argv: *mut *mut c_char,
     root: Option<fn() -> Root>,
 ) -> c_int {
+    #[cfg(feature = "dev")]
+    crate::dev::init_logging();
     let options = dxn_gpui_tizen::RunOptions::default();
     // SAFETY: argv as this function's caller guarantees.
     unsafe { dxn_gpui_tizen::run(argc, argv, options, move |cx| launch(root, cx)) }
@@ -47,9 +51,21 @@ fn launch(root: Option<fn() -> Root>, cx: &mut gpui::App) {
     }
 }
 
+/// The development runtime runs the dev server's app (through the TV's
+/// `sdb` ports, `crate::dev`), whatever the package holds; a Rust app's
+/// root is what the dev server runs as the host's root.
+#[cfg(feature = "dev")]
+fn source(root: Option<fn() -> Root>, _: &Package, _: &mut AppOptions) -> Option<Source> {
+    if let Some(root) = root {
+        nsh_platform_gpui::set_root(root);
+    }
+    Some(Source::Dev(crate::dev::URL.to_owned()))
+}
+
 /// The package's bundle (a newer signed package of it when one was
 /// accepted, with its assets), or the Rust app's root; `None` when the
 /// bundle cannot be read.
+#[cfg(not(feature = "dev"))]
 fn source(
     root: Option<fn() -> Root>,
     package: &Package,
@@ -114,5 +130,21 @@ pub(crate) fn malloced(ptr: *mut c_char) -> Option<String> {
         let text = CStr::from_ptr(ptr).to_string_lossy().into_owned();
         libc::free(ptr.cast());
         Some(text)
+    }
+}
+
+/// Writes a line to the system's log (dlog, tag `NSH`): development TVs and
+/// the emulator show it (`sdb dlog NSH`).
+#[cfg(feature = "dev")]
+pub(crate) fn dlog(level: log::Level, target: &str, message: &str) {
+    let priority = match level {
+        log::Level::Error => sys::DLOG_ERROR,
+        log::Level::Warn => sys::DLOG_WARN,
+        log::Level::Info => sys::DLOG_INFO,
+        _ => sys::DLOG_DEBUG,
+    };
+    if let Ok(text) = CString::new(format!("{target}: {message}")) {
+        // SAFETY: a constant format consuming one NUL-terminated string.
+        unsafe { sys::dlog_print(priority, c"NSH".as_ptr(), c"%s".as_ptr(), text.as_ptr()) };
     }
 }

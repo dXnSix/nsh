@@ -33,7 +33,12 @@ use crate::{
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Source {
     /// The packaged app: its bundle (or a Rust app's root).
+    #[cfg_attr(feature = "dev", allow(dead_code))]
     App(nsh_platform_gpui::App),
+    /// The development runtime: the dev server at the URL, connected
+    /// through the TV's port mappings (`crate::dev`).
+    #[cfg(feature = "dev")]
+    Dev(String),
 }
 
 /// Opens the app's full-screen window running `source` (in `ui_app_main`'s
@@ -122,6 +127,8 @@ impl TizenApp {
         .detach();
         match source {
             Source::App(app) => view.read(cx).load(app),
+            #[cfg(feature = "dev")]
+            Source::Dev(url) => view.update(cx, |view, cx| crate::dev::connect(view, url, cx)),
         }
         let focus = view.focus_handle(cx);
         window.focus(&focus, cx);

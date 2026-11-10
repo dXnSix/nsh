@@ -18,6 +18,11 @@ workspace = true
 name = "nsh"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# The development runtime: the dev server's bundles with hot updates, logs
+# forwarded to the developer's terminal (`sdb reverse`, else `sdb forward`).
+dev = ["nsh-platform-gpui/dev", "dep:nsh-dev"]
+
 [dependencies]
 log.workspace = true
 
@@ -33,8 +38,10 @@ gpui.workspace = true
 futures-channel.workspace = true
 futures-util.workspace = true
 serde_json.workspace = true
+nsh-dev = { workspace = true, features = ["client"], optional = true }
 
-# The app framework's directories, through dXn.GpuiTizen's bindings.
+# The app framework's directories and (feature `dev`) the system's log,
+# through dXn.GpuiTizen's bindings.
 [target.'cfg(target_vendor = "tizen")'.dependencies]
 dxn_gpui_tizen_sys.workspace = true
 libc.workspace = true

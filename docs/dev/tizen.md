@@ -16,18 +16,20 @@ library a TPK's C# host calls, exports one symbol, `nsh_tizen_main(argc, argv)`.
 | Module | What it does |
 | --- | --- |
 | `lib.rs` | `nsh_tizen_main`, and for the hosts of apps with Rust crates of their own `main`, `run_rust` and `set_ui_sets` |
-| `tizen.rs` (Tizen only) | `dxn_gpui_tizen::run` with the package's bundle, the app framework's data and cache directories (`app_get_data_path`, `app_get_cache_path`, each with `nsh/` in it) |
+| `tizen.rs` (Tizen only) | `dxn_gpui_tizen::run` with the package's bundle (or the development runtime), the app framework's data and cache directories (`app_get_data_path`, `app_get_cache_path`, each with `nsh/` in it), with `dev` the system's log (dlog, tag `NSH`) |
 | `app.rs` | The full-screen window holding `AppView`, and the exit question over it; the TV's settings and the app's state given to `AppView`; Exit quits GPUI, which ends `ui_app_main` |
 | `settings.rs` | `dxn_gpui_tizen::settings` (locale, time zone, font scale, screen reader, reduce motion) as the values of `AppView`'s setters, and the setters to call again when they change; the appearance is dark (Tizen 8.0 reports no light or dark setting) |
 | `lifecycle.rs` | The platform's window activation (off while the app framework has the app paused) as `Lifecycle::Background` / `Active`, through `AppView::set_lifecycle` |
 | `back.rs` | Samsung's rule for Back: NSH's back navigation first (a modal, a stack, `onBackPress`); when nothing takes it (`AppView::on_unhandled_back`), the app asks whether to leave, staying chosen |
 | `keys.rs` | The remote's key names (dXn.GpuiTizen's `keys::NAMED_KEYS`) as NSH reads them: NSH keys (`nsh_platform_gpui::nsh_key`, `TV-1`'s `ColorRed`, `MediaPlayPause`, `Info`, ...), `back` (navigation), `exit` (the TV's) |
 | `package.rs` | The app in the TPK's resources: `res/nsh/bundle.nshc` (with `capabilities.json` and `bundle.js.map`), `res/nsh/assets/`, `res/nsh/app.json` (name, id, appearance), as Linux's packages hold them |
+| `dev.rs` (feature `dev`) | The development runtime, below |
 
 The logic modules build on the desktops too, and their unit tests run there:
 
 ```sh
-cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib   # keys, settings, back, lifecycle, package
+cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib                 # keys, settings, back, lifecycle, package
+cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --features dev --lib  # and dev's connection policy
 ```
 
 ## The C# host
@@ -36,6 +38,22 @@ Tizen's app model starts a third-party native app as a .NET app: `crates/gpui/ns
 program (`Program.cs`, one P/Invoke into `libnsh.so`'s `nsh_tizen_main`; no TizenFX) and its project on
 `Tizen.NET.Sdk` (`Nsh.Tizen.Host.csproj`), the same as dXn.GpuiTizen's own host. It is built once into the runtime
 files (`dotnet build -c Release`), so packaging an app needs no .NET SDK.
+
+## The development runtime
+
+With `--features dev` the library runs the dev server's app instead of a packaged bundle: its bundles with hot
+updates, the status line and error overlay over the app, and the app's logs in the developer's terminal, as Android's
+development host (`nsh-platform-gpui`'s dev client, `AppView::connect_dev_server_with`). A TV reaches the
+developer's machine through `sdb`, not the network, so the client's connections come from `dev::Connector`
+(`nsh_dev::DevTransport`):
+
+- first `ws://127.0.0.1:8790/ws`, a fixed port on the TV that `nsh run` maps to the dev server with `sdb reverse`;
+- after three refusals in a row it also listens on the TV's port 8791, which `nsh run` maps from the machine with
+  `sdb forward` and connects to, relaying to the dev server; from then on both are tried in turn, the one that
+  worked last first.
+
+Over `sdb forward` the bundles, hot updates and logs work; the app's `asset:/` files come from the dev server over
+HTTP at the reverse-mapped port. Logs go to the dev server while connected and to dlog otherwise.
 
 ## Building
 
@@ -64,20 +82,20 @@ PATCH=<dXn.GpuiTizen>/artifacts-temp/gpui-fast-patch.toml
 LOCK=<dXn.GpuiTizen>/artifacts-temp/locks/nsh-tizen/Cargo.lock    # seeded from crates/gpui/Cargo.lock
 cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib \
   --config "$PATCH" --config "resolver.lockfile-path='$LOCK'"
-cargo clippy --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --all-targets \
+cargo clippy --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --all-targets --features dev \
   --config "$PATCH" --config "resolver.lockfile-path='$LOCK'" -- -D warnings
 ```
 
 TV libraries are cross-built from dXn.GpuiTizen's checkout with its target specs, the Tizen 8.0 rootstrap and the
 SDK's GCC toolchain (its `docs/setup.md`), for `armv7` (32-bit ARM TVs), `x86_64` (the emulator) and `aarch64`.
-`--check-symbols` checks the library: exactly one export, `nsh_tizen_main`, and only documented Tizen symbols and
-glibc imported. `cargo xtask cross` keeps its own
+`--with-dev-variant` builds the `dev` library beside the release one, and `--check-symbols` checks each: exactly one
+export, `nsh_tizen_main`, and only documented Tizen symbols and glibc imported. `cargo xtask cross` keeps its own
 copy of the workspace's lockfile under `artifacts-temp/locks/` and passes `--config` on to Cargo:
 
 ```sh
 cd <dXn.GpuiTizen>
 cargo xtask cross --target armv7 --release --manifest-path <nsh>/crates/gpui/Cargo.toml -p nsh-platform-tizen \
-  --check-symbols --entry nsh_tizen_main --config "$PATCH"
+  --with-dev-variant --check-symbols --entry nsh_tizen_main --config "$PATCH"
 cargo xtask cross --target armv7 --clippy --manifest-path <nsh>/crates/gpui/Cargo.toml -p nsh-platform-tizen \
   --config "$PATCH" -- -D warnings
 ```
@@ -89,5 +107,18 @@ environment above goes.
 
 - The platform turns its window's activation off while the app is paused once it reports pause and resume to GPUI
   (`on_active_status_change`); until then the app's state stays `active`.
+- `cargo xtask cross --check-symbols` looks for a selected package's library by the package's name
+  (`libnsh_platform_tizen.so`), so it finds no `libnsh.so` yet; until it does, each variant is built and checked on
+  its own:
+
+  ```sh
+  cargo xtask cross --target armv7 --release --manifest-path <nsh>/crates/gpui/Cargo.toml -p nsh-platform-tizen \
+    --config "$PATCH"
+  cargo xtask cross --target armv7 --release --manifest-path <nsh>/crates/gpui/Cargo.toml -p nsh-platform-tizen \
+    --features dev --target-dir "$CARGO_TARGET_DIR/dev-variant" --config "$PATCH"
+  cargo xtask check-symbols "$CARGO_TARGET_DIR/armv7-tizen-linux-gnueabi/release/libnsh.so" --entry nsh_tizen_main
+  cargo xtask check-symbols "$CARGO_TARGET_DIR/dev-variant/armv7-tizen-linux-gnueabi/release/libnsh.so" \
+    --entry nsh_tizen_main
+  ```
 - Packaging (`nsh package --target tizen`), `nsh run --target tizen` and the `tizen` component come with the CLI's
   Tizen target.

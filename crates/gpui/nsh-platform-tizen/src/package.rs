@@ -12,6 +12,7 @@ use nsh_platform_gpui::Appearance;
 #[cfg_attr(not(target_vendor = "tizen"), allow(dead_code))]
 pub(crate) const DIR: &str = "nsh";
 /// The bundle in it.
+#[cfg_attr(any(not(target_vendor = "tizen"), feature = "dev"), allow(dead_code))]
 pub(crate) const BUNDLE: &str = "bundle.nshc";
 
 /// The app as its package describes it.
@@ -57,7 +58,7 @@ impl Package {
     }
 
     /// The bundle's file.
-    #[cfg_attr(not(target_vendor = "tizen"), allow(dead_code))]
+    #[cfg_attr(any(not(target_vendor = "tizen"), feature = "dev"), allow(dead_code))]
     pub(crate) fn bundle(&self) -> PathBuf {
         self.dir.join(BUNDLE)
     }

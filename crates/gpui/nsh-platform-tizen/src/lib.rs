@@ -16,6 +16,8 @@
 //! - `package`: the app in the TPK's resources;
 //! - `tizen` (Tizen only): the entry point and the app framework's
 //!   directories and log;
+//! - `dev` (feature `dev`): the development runtime, connected through
+//!   `sdb reverse` or `sdb forward`.
 //!
 //! The logic builds on the desktops too (its tests run there); off the
 //! desktops and Tizen the crate is empty. `docs/dev/tizen.md` has the
@@ -25,6 +27,8 @@
 
 mod app;
 mod back;
+#[cfg(feature = "dev")]
+mod dev;
 mod keys;
 mod lifecycle;
 mod package;
