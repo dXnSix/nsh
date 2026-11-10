@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     css,
@@ -140,6 +140,38 @@ impl ClassTokens {
             && self.fonts.keys().all(|k| other.fonts.contains_key(k))
     }
 
+    /// The tokens whose value differs between `self` and `other`, which
+    /// have the same names ([`ClassTokens::same_names`]): their keys
+    /// ([`token_key`]). A number counts with its dark value, which one of
+    /// the two may lack.
+    pub(crate) fn changed(&self, other: &ClassTokens) -> FxHashSet<u64> {
+        let mut changed = FxHashSet::default();
+        let mut differ = |name: &str, same: bool| {
+            if !same {
+                changed.insert(token_key(name));
+            }
+        };
+        for (name, color) in &self.colors {
+            differ(name, other.colors.get(name) == Some(color));
+        }
+        for (name, number) in &self.numbers {
+            differ(name, other.numbers.get(name) == Some(number));
+        }
+        for name in self.dark_numbers.keys().chain(other.dark_numbers.keys()) {
+            differ(
+                name,
+                self.dark_numbers.get(name) == other.dark_numbers.get(name),
+            );
+        }
+        for (name, font) in &self.fonts {
+            differ(name, other.fonts.get(name) == Some(font));
+        }
+        for (name, shadow) in &self.shadows {
+            differ(name, other.shadows.get(name) == Some(shadow));
+        }
+        changed
+    }
+
     /// Whether `utility` is one of Tailwind's that a token replaces:
     /// `font-sans` and `font-mono` when the theme has those fonts.
     pub(crate) fn replaces(&self, utility: &str) -> bool {
@@ -149,13 +181,20 @@ impl ClassTokens {
     /// `utility` with its tokens replaced by their values in the light or
     /// dark appearance, as arbitrary values: `bg-primary/50` is
     /// `bg-[color:#171717ff]/50`, `rounded-(--radius)` is `rounded-[12px]`.
-    /// `None` when it names none, or one there is not.
-    pub(crate) fn substitute(&self, utility: &str, dark: bool) -> Option<String> {
+    /// `None` when it names none, or one there is not. The tokens it read
+    /// are added to `read` ([`token_key`]).
+    pub(crate) fn substitute(
+        &self,
+        utility: &str,
+        dark: bool,
+        read: &mut Vec<u64>,
+    ) -> Option<String> {
         let hex = |out: &mut String, c: &AdaptiveColor| {
             let c = if dark { c.dark } else { c.light };
             let _ = write!(out, "#{:08x}", Color::from(c).0);
         };
         if let Some(family) = self.fonts.get(utility) {
+            read.push(token_key(utility));
             return Some(format!("font-[family-name:{}]", family.replace(' ', "_")));
         }
         // A shadow token is the class of its name (`shadow-raised`), as
@@ -163,6 +202,7 @@ impl ClassTokens {
         if utility.starts_with("shadow-")
             && let Some(shadow) = self.shadows.get(utility)
         {
+            read.push(token_key(utility));
             return Some(format!("shadow-[{}]", shadow.css(dark).replace(' ', "_")));
         }
         if utility.contains('(') {
@@ -204,6 +244,7 @@ impl ClassTokens {
                     }
                     (None, None) => return None,
                 }
+                read.push(token_key(name));
                 out.push(']');
                 rest = &rest[close + 1..];
             }
@@ -225,15 +266,20 @@ impl ClassTokens {
             (i > 0 && self.colors.contains_key(name)).then_some((i, name))
         });
         let (start, name) = match (number, color) {
-            (Some((_, named)), None) => return Some(named),
-            (Some((at, named)), Some((start, _)))
+            (Some((_, key, named)), None) => {
+                read.push(key);
+                return Some(named);
+            }
+            (Some((at, key, named)), Some((start, _)))
                 if !utility.starts_with("text-") && at >= start =>
             {
+                read.push(key);
                 return Some(named);
             }
             (_, Some(color)) => color,
             (None, None) => return None,
         };
+        read.push(token_key(name));
         let mut out = String::with_capacity(utility.len() + 16);
         out.push_str(&utility[..=start]);
         out.push_str("[color:");
@@ -257,17 +303,20 @@ impl ClassTokens {
     /// `radius-card`; `p-gutter`: `spacing-gutter`) with the token's value
     /// as an arbitrary one (`rounded-[14px]`), as Tailwind 4 makes classes
     /// of a theme's `--radius-*`, `--spacing-*`, … variables.
-    /// With the length of the utility's prefix (`rounded`: 7).
-    fn named_number(&self, utility: &str, dark: bool) -> Option<(usize, String)> {
+    /// With the length of the utility's prefix (`rounded`: 7) and the
+    /// token's key ([`token_key`]).
+    fn named_number(&self, utility: &str, dark: bool) -> Option<(usize, u64, String)> {
         if !self.namespaced {
             return None;
         }
         utility.match_indices('-').find_map(|(i, _)| {
             let (prefix, name) = (&utility[..i], &utility[i + 1..]);
             let (namespace, length) = namespace(prefix.trim_start_matches('-'))?;
-            let value = self.number(&format!("{namespace}-{name}"), dark)?;
+            let token = format!("{namespace}-{name}");
+            let value = self.number(&token, dark)?;
             Some((
                 i,
+                token_key(&token),
                 match length {
                     true => format!("{prefix}-[{value}px]"),
                     false => format!("{prefix}-[{value}]"),
@@ -403,6 +452,16 @@ const PREFIXES: &[(&str, &str, bool)] = &[
     ("scroll-pb", "spacing", true),
     ("scroll-pl", "spacing", true),
 ];
+
+/// What a class list keeps of a token it read, and a change of the tokens
+/// says of one whose value changed: a hash of its name. Two names of one
+/// key only make a class resolve again that did not need to.
+pub(crate) fn token_key(name: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = rustc_hash::FxHasher::default();
+    name.hash(&mut hasher);
+    hasher.finish()
+}
 
 /// Whether `name` is a token of one of [`NAMESPACES`] (`radius-card`, not
 /// `radius`), which a utility of that namespace can name.

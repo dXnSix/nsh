@@ -12,7 +12,8 @@ use crate::{
     props::PointerEvents,
     style::{Color, Style, StylePatch, ViewStyle},
     tailwind::{
-        ClassEnvironment, ClassList, ClassProps, Context, Rule, Theme, deps, position, rank, state,
+        ClassEnvironment, ClassList, ClassProps, Context, Rule, Theme, TokenChange, deps, position,
+        rank, state,
     },
     text::TextEngine,
 };
@@ -794,20 +795,23 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
-    /// The design tokens changed: classes naming them
-    /// (`bg-primary`) are resolved again, on nodes and on Rust components.
+    /// The design tokens changed: the classes reading the ones that did
+    /// (`bg-primary`) are resolved again, on nodes and on Rust components;
+    /// all of them when the tokens' names changed.
     pub(super) fn class_tokens_changed(&mut self) {
         let tokens = self.components.tokens.clone();
         let Some(changed) = self.tailwind.set_tokens(&tokens) else {
             return;
         };
+        let all = changed == TokenChange::All;
         let reads = |c: &Option<std::rc::Rc<ClassList>>| {
-            c.as_ref().is_some_and(|c| c.deps() & changed != 0)
+            c.as_ref()
+                .is_some_and(|c| c.deps() & deps::THEME != 0 && c.reads(&changed))
         };
         let keys: Vec<Key> = self
             .nodes
             .iter()
-            .filter(|(_, n)| n.class_names.is_some() && (changed == u16::MAX || reads(&n.classes)))
+            .filter(|(_, n)| n.class_names.is_some() && (all || reads(&n.classes)))
             .map(|(k, _)| k as Key)
             .collect();
         for key in keys {
@@ -819,18 +823,24 @@ impl<M: TextEngine> Core<M> {
             .iter()
             .filter(|(_, inst)| {
                 (!inst.class.is_empty() || !inst.class_list.is_empty())
-                    && (changed == u16::MAX || reads(&inst.user))
+                    && (all || reads(&inst.user))
             })
             .map(|(host, _)| *host)
             .collect();
         for host in hosts {
             self.update_user_class(host);
         }
-        // The app's classes on the views' elements (`app_class`).
+        // The app's classes on the views' elements (`app_class`): those
+        // whose element's rules, the app's among them, read a changed one.
         let nodes: Vec<_> = self
             .components
             .app_classes
             .iter()
+            .filter(|(id, _)| {
+                all || self
+                    .key(**id)
+                    .is_ok_and(|key| reads(&self.nodes[key as usize].classes))
+            })
             .map(|(&id, entry)| (id, entry.clone()))
             .collect();
         for (id, (own, class, outer)) in nodes {

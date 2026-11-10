@@ -36468,3 +36468,186 @@ mod each_order {
         assert_eq!(MADE.with(Cell::get), 3);
     }
 }
+
+/// A change of some tokens' values resolves again only what reads one of
+/// them (`Tailwind::set_tokens`): the nodes with classes, the Rust
+/// components' hosts and the elements carrying the app's classes
+/// (`app_class`). The others keep the very class lists they had.
+mod token_classes_by_name {
+    use std::rc::Rc;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::{
+        Prop,
+        element::{Props, Registry, Tokens},
+        prelude::*,
+        tailwind::ClassList,
+    };
+
+    fn tokens(brand: u32, accent: u32) -> Tokens {
+        tokens_with(&[("brand", rgb(brand).into()), ("accent", rgb(accent).into())])
+    }
+
+    fn themed_core() -> Core<FakeEngine> {
+        let mut c = core();
+        c.set_tokens(tokens(0x111111, 0x222222));
+        c
+    }
+
+    /// The class list view `id` is styled with.
+    fn classes(c: &Core<FakeEngine>, id: NodeId) -> Rc<ClassList> {
+        let key = c.key(id).unwrap();
+        c.nodes[key as usize].classes.clone().expect("classes")
+    }
+
+    #[test]
+    fn a_token_resolves_again_only_the_nodes_reading_it() {
+        let mut c = themed_core();
+        view_with_classes(&mut c, 2, "w-10 h-10 bg-brand");
+        view_with_classes(&mut c, 4, "w-10 h-10 bg-accent");
+        view_with_classes(&mut c, 6, "w-10 h-10");
+        c.commit().unwrap();
+        let before = [2, 4, 6].map(|id| classes(&c, id));
+        c.update_tokens(tokens_with(&[("brand", rgb(0x0000ff).into())]));
+        let batch = c.commit().unwrap();
+        assert_eq!(
+            view_style_of(&batch, 2).unwrap().background_color,
+            Color::from(rgb(0x0000ff))
+        );
+        assert!(view_style_of(&batch, 4).is_none() && view_style_of(&batch, 6).is_none());
+        let after = [2, 4, 6].map(|id| classes(&c, id));
+        assert!(!Rc::ptr_eq(&before[0], &after[0]));
+        assert!(Rc::ptr_eq(&before[1], &after[1]));
+        assert!(Rc::ptr_eq(&before[2], &after[2]));
+    }
+
+    #[test]
+    fn every_changed_token_reaches_its_readers() {
+        let mut c = themed_core();
+        view_with_classes(&mut c, 2, "w-10 h-10 bg-brand");
+        view_with_classes(&mut c, 4, "w-10 h-10 border-2 border-accent/50");
+        c.commit().unwrap();
+        c.set_tokens(tokens(0x00ff00, 0xff0000));
+        let batch = c.commit().unwrap();
+        assert_eq!(
+            view_style_of(&batch, 2).unwrap().background_color,
+            Color::from(rgb(0x00ff00))
+        );
+        assert!(view_style_of(&batch, 4).is_some());
+    }
+
+    #[test]
+    fn a_new_name_resolves_the_classes_that_were_unknown() {
+        let mut c = themed_core();
+        view_with_classes(&mut c, 2, "w-10 h-10 bg-extra");
+        view_with_classes(&mut c, 4, "w-10 h-10 bg-accent");
+        c.commit().unwrap();
+        let accent = classes(&c, 4);
+        let mut with_extra = tokens(0x111111, 0x222222);
+        with_extra.set_color("extra", rgb(0x0000ff).into());
+        c.set_tokens(with_extra);
+        let batch = c.commit().unwrap();
+        assert_eq!(
+            view_style_of(&batch, 2).unwrap().background_color,
+            Color::from(rgb(0x0000ff))
+        );
+        // Every class was resolved again: the names changed.
+        assert!(!Rc::ptr_eq(&accent, &classes(&c, 4)));
+    }
+
+    /// A view styling a part with the app's classes.
+    #[derive(Clone, PartialEq, Props)]
+    struct CardProps {
+        #[prop(default)]
+        heading_class: crate::element::Prop<Option<SharedString>>,
+    }
+
+    #[component]
+    fn Card(props: CardProps) -> impl IntoElement {
+        view().child(view().border_2().app_class(props.heading_class))
+    }
+
+    /// A `Card` hosted by view 2, with the app's classes `host` on the
+    /// host and `heading` on its heading.
+    fn core_with_card(host: &str, heading: &str) -> Core<FakeEngine> {
+        let mut c = themed_core();
+        let mut registry = Registry::new();
+        registry.register::<Card>();
+        c.set_components(registry);
+        // The registry has no tokens of its own: the app's stay.
+        c.set_tokens(tokens(0x111111, 0x222222));
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::View,
+                },
+                Op::SetProp {
+                    id: 2,
+                    prop: Prop::Component(std::any::type_name::<Card>().into()),
+                },
+                Op::SetProp {
+                    id: 2,
+                    prop: rust_prop::<CardProps>("headingClass", Some(json!(heading))),
+                },
+                class_op(2, host),
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+        c
+    }
+
+    /// The heading's view: the host's only child.
+    fn heading(c: &Core<FakeEngine>) -> NodeId {
+        let key = c.key(2).unwrap();
+        let child = c.nodes[key as usize].children[0];
+        c.nodes[child as usize].id
+    }
+
+    #[test]
+    fn the_apps_classes_on_an_element_follow_the_tokens_they_read() {
+        let mut c = core_with_card("p-2", "bg-brand");
+        c.commit().unwrap();
+        let id = heading(&c);
+        let before = classes(&c, id);
+        // Another token: the element keeps its list.
+        c.update_tokens(tokens_with(&[("accent", rgb(0x00ff00).into())]));
+        if let Some(batch) = c.commit() {
+            assert!(view_style_of(&batch, id).is_none());
+        }
+        assert!(Rc::ptr_eq(&before, &classes(&c, id)));
+        // Its own: resolved again, with its own border still there.
+        c.update_tokens(tokens_with(&[("brand", rgb(0x0000ff).into())]));
+        let batch = c.commit().unwrap();
+        let style = view_style_of(&batch, id).unwrap();
+        assert_eq!(style.background_color, Color::from(rgb(0x0000ff)));
+        assert_eq!(style.borders.widths.to_array().map(|w| w.0), [2.0; 4]);
+    }
+
+    #[test]
+    fn the_apps_classes_on_a_host_follow_the_tokens_they_read() {
+        let mut c = core_with_card("bg-accent", "p-2");
+        c.commit().unwrap();
+        let user = |c: &Core<FakeEngine>| c.components.instances[&2].user.clone().expect("classes");
+        let before = user(&c);
+        c.update_tokens(tokens_with(&[("brand", rgb(0x0000ff).into())]));
+        if let Some(batch) = c.commit() {
+            assert!(view_style_of(&batch, 2).is_none());
+        }
+        assert!(Rc::ptr_eq(&before, &user(&c)));
+        c.update_tokens(tokens_with(&[("accent", rgb(0x00ff00).into())]));
+        let batch = c.commit().unwrap();
+        assert_eq!(
+            view_style_of(&batch, 2).unwrap().background_color,
+            Color::from(rgb(0x00ff00))
+        );
+        assert!(!Rc::ptr_eq(&before, &user(&c)));
+    }
+}
