@@ -194,6 +194,7 @@ window. Closing the main window closes them and ends the app.
 | Shift+Return, Alt+Return | A new line in a multiline input whose return submits (Ctrl+Return submits) |
 | Tab, Shift+Tab | The next / previous text field or pressable view in tree order, within the newest dialog; a field's text is selected, as in Windows' dialogs |
 | Return, Space | Press the focused view with `onPress` |
+| Arrows (outside a field's own) | Move the focus to the nearest pressable, field or `focusable` view in their direction, within the newest dialog, and scroll it into view; with none that way they scroll as below |
 | Escape | Leaves the focused field; else clears a text selection, then closes the newest dialog or goes back |
 | Alt+Left, Browser Back key, mouse back button | Go back (also from a field) |
 | Ctrl+arrows, Home / End, Ctrl+Home / End, with Shift; Ctrl+Backspace / Delete | Move, select and delete by word and line in a field, as in every Windows app |

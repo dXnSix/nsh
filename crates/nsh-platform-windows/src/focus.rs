@@ -1,5 +1,6 @@
 //! Keyboard focus between the views: Tab and Shift+Tab move it between
-//! the stops in tree order, Return and Space press the focused view. The
+//! the stops in tree order, the arrow keys to the nearest stop in their
+//! direction, Return and Space press the focused view. The
 //! decisions are `nsh_core::focus`'s, over the views' frames in the
 //! window's points (as drawn: scroll offsets, shifts and transforms
 //! applied, each frame the box around its corners), as the GPUI backend's
@@ -24,6 +25,18 @@
 //!   the last (`focus::tab`, through `nsh_core::input::tab_stop`); a field
 //!   reached has its text selected, as in Windows' dialogs, any other stop
 //!   takes this module's focus. The stop reached is scrolled into view.
+//! - **Arrows** (no modifier), as on GPUI: Left / Right go to the nearest
+//!   stop on an overlapping row, Up / Down to the nearest below / above,
+//!   one in an overlapping column first (`focus::horizontal`,
+//!   `focus::vertical`); with nothing focused Left / Right take the first
+//!   stop, Up / Down the first / last in sight, in an open popup anchored
+//!   to another view when there is one. While a menu's item has the focus,
+//!   Left and Right stay in its popup. The stop reached is scrolled into
+//!   view; an arrow that moves no focus goes on to the scroll views
+//!   ([`crate::scroll::key`]). What uses the arrows keeps them: the app's
+//!   bindings, the focused field (Left / Right, and Up / Down in a
+//!   multiline one) and selectable text with a selection come first
+//!   ([`crate::input::key`]'s order).
 //! - **Return and Space** press the focused view when it takes presses
 //!   (`PressDown`, `PressUp`, `Press` at its middle); one that takes none
 //!   leaves them to the app's bindings, which come first
@@ -50,6 +63,14 @@ use crate::{geom::Mat4, input::KeyEvent, surface::Surface, view::NshView};
 const VK_RETURN: u16 = 0x0D;
 /// `VK_SPACE`.
 const VK_SPACE: u16 = 0x20;
+/// `VK_LEFT`.
+const VK_LEFT: u16 = 0x25;
+/// `VK_UP`.
+const VK_UP: u16 = 0x26;
+/// `VK_RIGHT`.
+const VK_RIGHT: u16 = 0x27;
+/// `VK_DOWN`.
+const VK_DOWN: u16 = 0x28;
 
 /// A surface's keyboard focus on views that are not fields.
 #[derive(Default)]
@@ -272,6 +293,57 @@ fn layer_of(view: &NshView) -> Option<(NshView, NodeId)> {
     }
 }
 
+/// `ancestor` is `view` or one of its ancestors.
+fn contains(ancestor: &NshView, view: &NshView) -> bool {
+    let mut at = Some(view.clone());
+    while let Some(v) = at {
+        if v == *ancestor {
+            return true;
+        }
+        at = v.parent_view();
+    }
+    false
+}
+
+/// The overlay anchored to another view that `view` is in (a menu's, a
+/// select's or a popover's popup), if any.
+fn anchored_overlay(view: &NshView) -> Option<NshView> {
+    let mut at = Some(view.clone());
+    while let Some(v) = at {
+        if v.state().props.overlay_anchor.is_some() {
+            return Some(v);
+        }
+        at = v.parent_view();
+    }
+    None
+}
+
+/// Anchored overlay `popup` hangs from a trigger: its anchor is one of
+/// `stops`, holds one or is in one.
+fn triggered(surface: &Surface, popup: &NshView, stops: &[Stop]) -> bool {
+    let anchor = popup
+        .state()
+        .props
+        .overlay_anchor
+        .as_ref()
+        .and_then(|anchor| anchor.node);
+    let Some(anchor) = anchor.and_then(|id| surface.view(id)) else {
+        return false;
+    };
+    stops
+        .iter()
+        .any(|stop| contains(&anchor, &stop.view) || contains(&stop.view, &anchor))
+}
+
+/// `view` is a menu's item.
+fn in_menu(view: &NshView) -> bool {
+    use nsh_core::AccessibilityRole::{MenuItemCheckbox, MenuItemRadio, Menuitem};
+    matches!(
+        view.state().props.accessibility.role,
+        Menuitem | MenuItemCheckbox | MenuItemRadio
+    )
+}
+
 /// The view with this module's focus (not a field's). One the app removed
 /// loses it quietly (its node is gone).
 pub(crate) fn focused(surface: &Surface) -> Option<NshView> {
@@ -423,23 +495,67 @@ pub(crate) fn tab(surface: &Rc<Surface>, back: bool) -> bool {
     if view.kind() == ViewKind::Input {
         crate::text_input::tab_to(&view);
     } else {
-        set(surface, Some(&view));
-        crate::scroll::reveal(surface, &view);
+        focus_stop(surface, &view);
     }
     true
 }
 
-/// A key down for the focused view: Return and Space press it. True when
-/// it was taken.
+/// Moves the keyboard focus to stop `view`, revealed in its scroll views:
+/// a field takes the typing, any other view this module's focus.
+fn focus_stop(surface: &Rc<Surface>, view: &NshView) {
+    if view.kind() == ViewKind::Input {
+        crate::text_input::focus(view);
+    } else {
+        set(surface, Some(view));
+        crate::scroll::reveal(surface, view);
+    }
+}
+
+/// A key down for the focus: the arrows move it, Return and Space press
+/// the focused view. True when it was taken.
 pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     let m = event.modifiers;
     if !event.down || m.ctrl || m.alt || m.meta {
         return false;
     }
     match event.vk {
+        VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN if !m.shift => arrow(surface, event.vk),
         VK_RETURN | VK_SPACE => press(surface, event),
         _ => false,
     }
+}
+
+/// An arrow: the focus moves to the stop in that direction, if any.
+fn arrow(surface: &Rc<Surface>, vk: u16) -> bool {
+    let scope = crate::navigation::focus_scope(surface);
+    let mut stops = stops_in(&scope);
+    let current = current(surface);
+    let horizontal = vk == VK_LEFT || vk == VK_RIGHT;
+    // Left and Right on a menu's item its menu does not take (no submenu)
+    // would leave the menu open behind the focus: they stay in it.
+    if horizontal
+        && let Some(popup) = current
+            .as_ref()
+            .filter(|view| in_menu(view))
+            .and_then(anchored_overlay)
+            .filter(|popup| triggered(surface, popup, &stops))
+    {
+        stops.retain(|stop| contains(&popup, &stop.view));
+    }
+    let at = current
+        .as_ref()
+        .and_then(|view| stops.iter().position(|stop| stop.view == *view));
+    let next = if horizontal {
+        focus::horizontal(&stops, at, vk == VK_RIGHT)
+    } else {
+        focus::vertical(&stops, at, vk == VK_DOWN)
+    };
+    let Some(next) = next.filter(|&next| Some(next) != at) else {
+        return false;
+    };
+    let view = stops[next].view.clone();
+    focus_stop(surface, &view);
+    true
 }
 
 /// Return or Space: presses the view with this module's focus when it

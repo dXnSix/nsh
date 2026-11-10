@@ -216,8 +216,9 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   headless driver's Tab at once); a list keeps the rows beside the focused one rendered, so Tab walks all its rows
   ("Kept rows" in `scrolling-and-lists.md`).
   (`focusable={true}` on a view that takes no presses made nothing focusable before 2026-10-26; with no release
-  recorded, it now means what React Native's `focusable` and the web's `tabIndex={0}` mean.) GPUI's Tab moves the
-  focus between fields and native components only so far; iOS and Android move it between inputs.
+  recorded, it now means what React Native's `focusable` and the web's `tabIndex={0}` mean.) Windows' arrows move it to the nearest stop in their
+  direction (`focus.rs`, `nsh_core::focus`, as the terminal's do); GPUI's Tab moves the focus between fields and
+  native components only so far; iOS and Android move it between inputs.
   A shown overlay's content is in the Tab order where the app put the overlay, not where its native view is (at the
   end of its root view), as WAI-ARIA's non-modal popups have it: a popover's content right after its trigger, so
   Shift+Tab from it goes back to the trigger and Tab past its last stop goes on to what follows the popover. A list
