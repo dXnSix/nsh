@@ -81,7 +81,7 @@ content. The views inside it keep their own focus props: `autoFocus`, `preferred
 
 | Prop | Rust | Type | Default | Description |
 |---|---|---|---|---|
-| `destinations` | `.destinations(..)` | `ViewRef[]` | `[]` | The views the arrows enter the group at, in order: the first that is, or holds, a stop the focus can reach takes it. They are found in every commit, so they may be the group's own children; a Rust app passes `FocusTarget::from(&element_ref)`. |
+| `destinations` | `.destinations(..)` | `(ViewRef \| null \| undefined)[]` | `[]` | The views the arrows enter the group at, in order (an entry not set yet names nothing): the first that is, or holds, a stop the focus can reach takes it. They are found in every commit, so they may be the group's own children; a Rust app passes `FocusTarget::from(&element_ref)`. |
 | `trap` | `.trap(..)` | `boolean` | `false` | The arrows never take the focus out of the group: an arrow with no stop that way inside it goes nowhere. |
 | `children` | `.child(..)` | `JSX.Element` | none | The group's stops, and whatever the app lays out among them. |
 | `class`, `style` | style methods | `string`, `StyleProp<ViewStyle>` | none | The group's layout and look. |

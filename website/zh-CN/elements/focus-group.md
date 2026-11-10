@@ -72,7 +72,7 @@ mount(App);
 
 | 属性 | Rust | 类型 | 默认值 | 说明 |
 |---|---|---|---|---|
-| `destinations` | `.destinations(..)` | `ViewRef[]` | `[]` | 方向键进入分组时停在哪些视图，按顺序：第一个本身是、或包含焦点能到达的停靠点的视图获得焦点。它们在每次提交时重新查找，所以可以是分组自己的子元素；Rust 应用传入 `FocusTarget::from(&element_ref)`。 |
+| `destinations` | `.destinations(..)` | `(ViewRef \| null \| undefined)[]` | `[]` | 方向键进入分组时停在哪些视图，按顺序（尚未设置的项不指向任何视图）：第一个本身是、或包含焦点能到达的停靠点的视图获得焦点。它们在每次提交时重新查找，所以可以是分组自己的子元素；Rust 应用传入 `FocusTarget::from(&element_ref)`。 |
 | `trap` | `.trap(..)` | `boolean` | `false` | 方向键永远不会让焦点离开分组：分组内该方向上没有停靠点时，方向键不移动焦点。 |
 | `children` | `.child(..)` | `JSX.Element` | 无 | 分组的停靠点，以及应用放在它们之间的其他内容。 |
 | `class`、`style` | 样式方法 | `string`、`StyleProp<ViewStyle>` | 无 | 分组的布局和外观。 |

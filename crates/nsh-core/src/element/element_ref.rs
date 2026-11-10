@@ -147,9 +147,11 @@ impl From<super::NodeRef> for FocusTarget {
     }
 }
 
+/// TS: a ref, or none yet (a signal its `ref` sets, read before the view
+/// is mounted): it names nothing until it is set.
 impl super::JsValue for FocusTarget {
     fn ts_type(types: &mut super::TsTypes) -> String {
-        super::NodeRef::ts_type(types)
+        format!("{} | null | undefined", super::NodeRef::ts_type(types))
     }
 
     fn from_js(value: super::JsIn<'_>) -> Result<Self, super::PropError> {
