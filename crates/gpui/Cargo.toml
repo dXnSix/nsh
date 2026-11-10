@@ -24,6 +24,8 @@ publish = false
 missing_docs = "warn"
 unreachable_pub = "deny"
 private_interfaces = "deny"
+# As the main workspace's: Tizen's custom targets (`target_vendor = "tizen"`).
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_vendor, values("tizen"))'] }
 
 [workspace.dependencies]
 # nsh's crates, from the main workspace.

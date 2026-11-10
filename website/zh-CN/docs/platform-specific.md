@@ -27,6 +27,8 @@ group: platforms
 
 电视是独立的一类设备，与操作系统无关：Android TV、电视上的浏览器（页面通过 `idiom: "tv"` 告诉 [Web 播放器](./web.md#浏览器作为平台)）、电视平台。应用要判断的是电视，而不是操作系统：在电视上 `platform.tv`（Rust 中的 `is_tv()`）为 `true`，`platform.idiom` 为 `"tv"`，`tv={{…}}` 属性生效，`platform.select` 在该操作系统自己的键之后、`desktop` / `mobile` 之前查找 `tv`。电视不是桌面（`platform.desktop` 为 `false`），所以其余行为都与移动端相同：`nsh/base` 的弹出层像在手机上一样打开。
 
+在三星电视上，原生 Tizen 应用有自己的操作系统：`platform.os` 为 `"tizen"`（Rust 中的 `Os::Tizen`），始终是电视界面风格，从不是桌面，`platform.select({ tizen })` 在 `tv` 之前为它取值。Tizen Web 应用（`.wgt`）运行在电视的浏览器里：那里 `platform.os` 为 `"web"`，`platform.tv` 由页面设为 `true`。判断电视用 `platform.tv`，只有原生应用独有的行为才判断 `"tizen"`。
+
 没有只属于电视的属性，所以 `tv={{…}}` 接受每个元素都接受的属性（类、样式、状态样式、无障碍、焦点、事件处理函数），只在电视上设置它们：不用写第二个组件就能做 10 英尺布局。在 Rust 中，同样的选择写作 `.when(is_tv(), ..)`。
 
 ```rust tabs
@@ -266,7 +268,7 @@ function PhotoViewer() {
 
 ## platform.os 与 platform.select
 
-Rust 中的 `os()` 和 TSX 中 `nsh` 的常量 `platform` 告诉你应用运行在哪里：`Os::Ios`、`Os::Android`、`Os::MacOs`、`Os::Windows`、`Os::Linux` 或 `Os::Web`，`platform.os` 为 `"ios"`、`"android"`、`"macos"`、`"windows"`、`"linux"` 或 `"web"`（Mac Catalyst 为 `"ios"`，无论哪种形态 `platform.catalyst` 都为真；[macOS 后端](./macos.md)为 `"macos"`，[Linux 后端](./linux.md)为 `"linux"`，[Windows 后端](./windows.md)为 `"windows"`，它们的元素会应用 `desktop` 属性；[浏览器](./web.md)为 `"web"`，`platform.desktop` 为 `true` 时也会应用 `desktop` 属性）。Rust 中的 `platform_name()` 和 TSX 中的 `platform.name` 是平台本身的名字：在 NSH 自带的平台上就是系统名，[在 NSH 之外构建的平台](./platform-extensions.md)则是它自己的名字（`"miniprogram"`），此时 `platform.os` 是它所运行设备的系统。版本、界面风格等见[设备与环境](./device-and-environment.md#平台)。
+Rust 中的 `os()` 和 TSX 中 `nsh` 的常量 `platform` 告诉你应用运行在哪里：`Os::Ios`、`Os::Android`、`Os::MacOs`、`Os::Windows`、`Os::Linux`、`Os::Web` 或 `Os::Tizen`，`platform.os` 为 `"ios"`、`"android"`、`"macos"`、`"windows"`、`"linux"`、`"web"` 或 `"tizen"`（电视上的原生 Tizen 应用，见[电视](#电视)）（Mac Catalyst 为 `"ios"`，无论哪种形态 `platform.catalyst` 都为真；[macOS 后端](./macos.md)为 `"macos"`，[Linux 后端](./linux.md)为 `"linux"`，[Windows 后端](./windows.md)为 `"windows"`，它们的元素会应用 `desktop` 属性；[浏览器](./web.md)为 `"web"`，`platform.desktop` 为 `true` 时也会应用 `desktop` 属性）。Rust 中的 `platform_name()` 和 TSX 中的 `platform.name` 是平台本身的名字：在 NSH 自带的平台上就是系统名，[在 NSH 之外构建的平台](./platform-extensions.md)则是它自己的名字（`"miniprogram"`），此时 `platform.os` 是它所运行设备的系统。版本、界面风格等见[设备与环境](./device-and-environment.md#平台)。
 
 ```rust tabs
 use nsh_core::{element::Os, prelude::*};

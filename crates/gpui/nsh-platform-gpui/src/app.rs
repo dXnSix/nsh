@@ -16,7 +16,7 @@ use gpui::{
 use nsh_base::{Theme, ThemeError};
 use nsh_core::platform::{Appearance, Locale};
 use nsh_engine::{
-    App, AppError, Bundle, ColorScheme, EngineConfig, Environment, Idiom, Limits, Os, Root,
+    App, AppError, Bundle, ColorScheme, EngineConfig, Environment, Idiom, Limits, Root,
 };
 
 use crate::{
@@ -914,14 +914,13 @@ fn initial_environment(idiom: Idiom) -> Environment {
     Environment {
         window: nsh_core::Size::default(),
         color_scheme: ColorScheme::Light,
-        os: if cfg!(target_os = "macos") {
-            Os::MacOs
-        } else if cfg!(windows) {
-            Os::Windows
+        os: crate::keymap::OS,
+        // The idiom asked for (`--idiom`), else the OS's own: a desktop's, a TV's on Tizen.
+        idiom: if idiom == Idiom::Desktop {
+            Idiom::default_on(crate::keymap::OS)
         } else {
-            Os::Linux
+            idiom
         },
-        idiom,
         file_requests: true,
         ..Environment::default()
     }

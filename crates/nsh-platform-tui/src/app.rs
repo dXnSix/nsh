@@ -30,6 +30,9 @@ pub(crate) const OS: nsh_core::platform::Os = if cfg!(target_os = "macos") {
     nsh_core::platform::Os::MacOs
 } else if cfg!(target_os = "windows") {
     nsh_core::platform::Os::Windows
+} else if cfg!(target_vendor = "tizen") {
+    // A Tizen target is `target_os = "linux"`: its vendor goes first.
+    nsh_core::platform::Os::Tizen
 } else {
     nsh_core::platform::Os::Linux
 };

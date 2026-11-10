@@ -373,15 +373,8 @@ impl Native for GpuiNative {
     }
 
     fn press_keys(&self, keys: &str) -> Result<(), String> {
-        use nsh_core::platform::Os;
-        let os = if cfg!(target_os = "macos") {
-            Os::MacOs
-        } else if cfg!(windows) {
-            Os::Windows
-        } else {
-            Os::Linux
-        };
-        let stroke = nsh_core::keymap::Keystroke::parse(keys, os).map_err(|e| e.to_string())?;
+        let stroke = nsh_core::keymap::Keystroke::parse(keys, crate::keymap::OS)
+            .map_err(|e| e.to_string())?;
         let vk = crate::keys::virtual_key(stroke.key)
             .ok_or_else(|| format!("{keys:?} has no key on this keyboard"))?;
         let m = stroke.modifiers;

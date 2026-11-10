@@ -437,18 +437,18 @@ On Android, a view embedded below a toolbar gets only the parts of the system ba
 
 | Rust | TSX | Description |
 |---|---|---|
-| `os()` | `platform.os` | `Os::Ios`, `Os::Android`, `Os::MacOs`, `Os::Windows`, `Os::Linux` or `Os::Web` (`os().name()` is TSX's string). Mac Catalyst is iOS. |
+| `os()` | `platform.os` | `Os::Ios`, `Os::Android`, `Os::MacOs`, `Os::Windows`, `Os::Linux`, `Os::Web` or `Os::Tizen` (`os().name()` is TSX's string). Mac Catalyst is iOS; a Tizen web app is the web. |
 | `os_version()` | `platform.version` | Major and minor; on Android the API level and 0. |
 | `idiom()` | `platform.idiom` | `Idiom::Phone`, `Pad`, `Mac`, `Tv`, `Desktop` or `Terminal`; `Terminal` in a terminal, else `Desktop` exactly where `is_desktop()` holds. |
 | `is_desktop()` | `platform.desktop` | macOS, Windows or Linux, a desktop browser or a terminal; never a TV ([Desktop and mobile](./platform-specific.md#desktop-and-mobile)). |
-| `is_tv()` | `platform.tv` | A TV, on any OS: Android TV, a TV's browser ([TVs](./platform-specific.md#tvs)). |
+| `is_tv()` | `platform.tv` | A TV, on any OS: Android TV, Tizen, a TV's browser ([TVs](./platform-specific.md#tvs)). |
 | `is_catalyst()` | `platform.catalyst` | Mac Catalyst, in either of its idioms. |
 
 TSX's `platform` in full:
 
 | Member | Description |
 |---|---|
-| `platform.os` | `"ios"`, `"android"`, `"macos"`, `"windows"`, `"linux"` or `"web"`. Mac Catalyst reports `"ios"`. |
+| `platform.os` | `"ios"`, `"android"`, `"macos"`, `"windows"`, `"linux"`, `"web"` or `"tizen"`. Mac Catalyst reports `"ios"`, a Tizen web app (`.wgt`) `"web"`. |
 | `platform.version` | A string: iOS and desktops: the OS version (`"17.5"`); Android: the API level (`"35"`); the web: `"0.0"`. |
 | `platform.idiom` | `"phone"`, `"pad"`, `"mac"`, `"tv"`, `"desktop"` or `"terminal"`. `"terminal"` in a terminal, else `"desktop"` exactly where `platform.desktop` is `true`. `"mac"` is UIKit's Mac idiom under Mac Catalyst, a mobile idiom. |
 | `platform.desktop` | Desktop behavior applies: macOS, Windows, Linux, desktop browsers and terminals; never a TV. `desktop={{…}}` props and `platform.select({ desktop })` follow it. |
@@ -490,6 +490,10 @@ when the app starts. The locale, `localeSettings()` (the browser's preferred lan
 its language and its time zone), `lifecycle()` (`"background"` in a hidden tab, `"inactive"` without the
 focus), `reduceMotion()`, `fontScale()` (the browser's text size), `pixelRatio()`, the safe area and the keyboard height
 come from the browser and follow it live.
+
+In a native Tizen app on a Samsung TV, `platform.os` is `"tizen"`, the idiom `"tv"` (`platform.tv` is `true`) and
+`platform.desktop` `false`. A Tizen web app (`.wgt`) is a browser: `platform.os` is `"web"`, and its page makes the
+idiom `"tv"` ([TVs](./platform-specific.md#tvs)).
 
 In a terminal ([the terminal backend](./tui.md)), `platform.idiom` is `"terminal"`, `platform.desktop` is `true` and
 `platform.os` is the machine's own system. `colorScheme()` follows the terminal's background, `reduceMotion()` is
