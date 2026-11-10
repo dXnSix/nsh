@@ -181,7 +181,12 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   `FocusGroup`, `Prop::FocusGroup`, internal: its `destinations` are where the arrows enter it, in order, and `trap`
   keeps them inside). The refs are looked up again in every commit round (`core/directional.rs`, as `follow` does:
   a Rust ref may be on an element rendered later, a group's own children), and their nodes reach the platform as
-  `ViewProps::next_focus` and `ViewProps::focus_group`.
+  `ViewProps::next_focus` and `ViewProps::focus_group`. A list's rows past those mounted are not skipped: while the
+  scroll view around the focus can scroll on toward the arrow, a stop outside it is not reached
+  (`focus::Target::Scroll`); the platform scrolls it and calls `EngineControl::focus_past`, and in a list the core
+  scrolls to the next row by index (`Command::ScrollToIndex`, `focus::next_row`: a row of columns along a grid,
+  inverted and right-to-left lists the other way) and sends that row's cell `Command::Focus` once it shows it; the
+  platform focuses the cell's first stop. The row is forgotten when the focus is reported elsewhere first.
   A link in text (a nested `<Text>` that takes presses, `AttributedText::links`) is a stop of its own: the core marks
   each `TextLink` with `focus_stop` (the span's `ViewProps::focus_stop(true)`: unless `focusable={false}` or
   disabled), Tab reaches it after its text view, in text order (nested links inside the one around them), the

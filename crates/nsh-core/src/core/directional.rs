@@ -1,6 +1,7 @@
 //! What the core does for the arrows' focus (`nsh_core::focus`, the TV's
 //! rules): it finds the views focus props name and hands the platforms
-//! their nodes.
+//! their nodes, and it scrolls a list to the row an arrow went to before
+//! that row was mounted, then focuses it.
 //!
 //! - **Named views**: `nextFocusUp` / `Down` / `Left` / `Right` and a
 //!   focus group's destinations name views by ref ([`FocusTarget`]); a
@@ -10,12 +11,21 @@
 //!   up again in every commit round: a change goes out as the view's
 //!   `MountItem::ViewProps` (`ViewProps::next_focus`,
 //!   `ViewProps::focus_group`). Nothing runs while no view names one.
+//! - **List rows past those mounted**: a platform whose arrow found no stop
+//!   to go to inside the list around the focus asks
+//!   ([`Core::focus_past`]); the core finds the row the focus is in, the
+//!   next one along the list ([`crate::focus::next_row`]), scrolls the list
+//!   to it by index (`Command::ScrollToIndex`, the `PinTarget::Index` path)
+//!   and, once that row's cell shows it, sends the cell `Command::Focus`:
+//!   the platform focuses its first stop. The row is forgotten when the
+//!   focus moves elsewhere first.
 
-use super::{Core, Key, dirty};
+use super::{Core, Key, NO_KEY, dirty};
 use crate::{
-    NodeId,
+    Command, NodeId,
     element::{FocusGroupTargets, FocusTarget},
-    focus::{Direction, GroupConfig, NextFocus},
+    focus::{Direction, GroupConfig, NextFocus, PendingRow, Row, next_row},
+    geometry::{Percentage, Points},
     text::TextEngine,
 };
 
@@ -134,5 +144,107 @@ impl<M: TextEngine> Core<M> {
         // here) would come after them.
         refs.append(&mut self.focus_refs);
         self.focus_refs = refs;
+    }
+
+    /// An arrow toward `direction` found no stop to go to inside the list
+    /// around `from` (the stop with the keyboard focus), which can scroll
+    /// on: the list scrolls to the next row along its axis by index
+    /// (`Command::ScrollToIndex`), and that row's cell takes the focus once
+    /// it is mounted (`Command::Focus`; the platform focuses its first
+    /// stop). The innermost list around `from` that has a next row that
+    /// way does; false when none has (a scroll view that is no list, the
+    /// list's end), and nothing happens.
+    pub fn focus_past(&mut self, from: NodeId, direction: Direction) -> bool {
+        let Ok(mut key) = self.key(from) else {
+            return false;
+        };
+        loop {
+            let parent = self.nodes[key as usize].parent;
+            if parent == NO_KEY {
+                return false;
+            }
+            let list_node = &self.nodes[parent as usize];
+            if let Some(list) = list_node.list.as_ref()
+                && let Some(index) = list
+                    .slots
+                    .iter()
+                    .find(|s| s.cell == key)
+                    .and_then(|s| s.ready())
+            {
+                let row = Row {
+                    list: list_node.id,
+                    index,
+                    count: list.count,
+                    columns: list.columns,
+                    horizontal: list.horizontal,
+                };
+                // An inverted list's next item is above (before) it, and
+                // so is a right-to-left one's to the left.
+                let along = direction.horizontal() == list.horizontal;
+                let toward = if along && (list.inverted || list.mirrored()) {
+                    direction.opposite()
+                } else {
+                    direction
+                };
+                if let Some(to) = next_row(&row, toward) {
+                    // It comes in at the edge the arrow goes toward.
+                    let end = if list.inverted {
+                        !toward.forward()
+                    } else {
+                        toward.forward()
+                    };
+                    self.commands.push((
+                        row.list,
+                        Command::ScrollToIndex {
+                            index: to,
+                            animated: true,
+                            view_position: Percentage(if end { 1.0 } else { 0.0 }),
+                            view_offset: Points::ZERO,
+                        },
+                    ));
+                    let pending = PendingRow {
+                        list: row.list,
+                        index: to,
+                        from,
+                    };
+                    self.pending_row = Some((pending, self.focus.map(|(_, id)| id)));
+                    return true;
+                }
+            }
+            key = parent;
+        }
+    }
+
+    /// The row an arrow went to ([`Core::focus_past`]) is mounted: its
+    /// cell takes the focus. Forgotten when the focus moved elsewhere
+    /// first, or the list or the row is gone.
+    pub(super) fn land_pending_row(&mut self) {
+        let Some((pending, seen)) = self.pending_row else {
+            return;
+        };
+        // The platform reported another focus since (the stop the arrow
+        // left need not report its own).
+        let now = self.focus.map(|(_, id)| id);
+        let moved = now != seen && now != Some(pending.from);
+        let list = self
+            .key(pending.list)
+            .ok()
+            .and_then(|key| self.nodes[key as usize].list.as_ref());
+        let Some(list) = list.filter(|l| !moved && pending.index < l.count) else {
+            self.pending_row = None;
+            return;
+        };
+        let Some(cell) = list
+            .slots
+            .iter()
+            .find(|s| s.ready() == Some(pending.index))
+            .map(|s| s.cell)
+            .filter(|&cell| self.nodes[cell as usize].created)
+        else {
+            return;
+        };
+        let id = self.nodes[cell as usize].id;
+        self.commands.push((id, Command::Focus));
+        self.pending_row = None;
     }
 }

@@ -398,6 +398,8 @@ or Space presses it. A remote drives the whole app that way, so these props shap
 - `preferredFocus` picks the stop the focus enters at: a row's current item, a dialog's default action.
 - `nextFocusDown` and its siblings route an arrow past geometry, between rows that do not line up. Name a view
   rendered after this one with a signal its `ref` sets (`nextFocusDown={next()}`).
+- In a long `List`, the arrows go on to rows that are not on screen yet: the list scrolls to the next row and the focus
+  lands on it.
 
 ```rust tabs
 let play = element_ref();
