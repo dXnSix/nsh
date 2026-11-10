@@ -114,6 +114,7 @@ pub(crate) struct NativeModule {
 /// `nsh`: the API apps write against.
 const NSH: &[Item] = &[
     crate::env::TOKEN_EXPORT,
+    crate::env::ROLE_EXPORT,
     crate::env::SET_THEME_EXPORT,
     crate::env::UPDATE_THEME_EXPORT,
     crate::env::RESET_THEME_EXPORT,
@@ -362,6 +363,13 @@ export type Component<P = {}> = (props: P) => JSX.Element;
  * the app's (`.nsh/types/nsh/tokens.d.ts`, from `nsh.json` `"theme"`).
  */
 export interface Tokens {}
+
+/**
+ * The theme roles the app's UI sets draw with by name, and what `role()`
+ * gives for each: a color or a font family as a string, a number. nsh
+ * declares them (`.nsh/types/nsh/roles.d.ts`, from the sets' lists).
+ */
+export interface Roles {}
 
 /**
  * A theme, as `nsh.json`'s `"theme"` writes it: shadcn/ui's `cssVars`, the

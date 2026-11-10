@@ -192,6 +192,7 @@ NSH 不需要 `node_modules`。取而代之的是，每个构建应用的命令�
 | `globals.d.ts` | `If` 和 `Each`；`console`、定时器、`requestAnimationFrame`、`fetch` 及其他[全局 API](../modules/globals.md) |
 | `assets.d.ts` | 导入图片或字体得到的值 |
 | `tokens.d.ts` | `Tokens`：应用的设计令牌，来自它的 `"theme"`，为 [`token()`](../modules/nsh.md#token) 提供类型 |
+| `roles.d.ts` | `Roles`：UI 集合绘制时使用的主题角色，为 [`role()`](../modules/nsh.md#role) 提供类型 |
 | `mobile.d.ts`、`desktop.d.ts` | 每个模块一个文件（`nsh/mobile`、`nsh/desktop`） |
 | `base.d.ts` | `nsh/base` |
 

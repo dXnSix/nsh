@@ -268,6 +268,30 @@ import { effect, token } from "nsh";
 effect(() => console.log("primary is", token("primary"), "radius", token("radius")));
 ```
 
+## role
+
+```ts
+function role<K extends keyof Roles>(name: K): Roles[K] | undefined;
+```
+
+What the theme role `name` draws with in the appearance shown, as [`token()`](#token) gives a token: the token the
+app's theme maps the role onto (a theme type's `role = …`), else the token of the role's name, else `undefined`.
+A role is what a part of the UI is for (`popover`, `border`, `warning`), whatever an app's design system calls the
+token: a component written against roles is themed by any of them. Reading it is reactive, as `token()` is.
+
+`Roles` lists the roles the app's UI sets draw with (`nsh/base`'s: [Theme roles](./nsh-base.md#theme-roles)), each
+with what it reads; NSH writes it into `.nsh/types/nsh/roles.d.ts`. A role the theme has no token for is
+`undefined`, so a component keeps a color of its own for it:
+
+```tsx
+import { role } from "nsh";
+
+// The popover's surface, whatever this app calls it; amber until the theme has a warning color.
+<View style={{ backgroundColor: role("popover"), borderLeftWidth: 3, borderLeftColor: role("warning") ?? "#d97706" }} />
+```
+
+Rust reads a role by its constant: `theme().tokens().role(nsh_base::role::POPOVER)`.
+
 ## setTheme
 
 ```ts

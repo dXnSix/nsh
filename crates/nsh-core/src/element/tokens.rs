@@ -604,9 +604,15 @@ impl Tokens {
     }
 
     /// The name of the token the role named `role` is mapped onto, if a
-    /// theme mapped it.
-    pub(crate) fn mapped(&self, role: &str) -> Option<&str> {
+    /// theme mapped it: for a role known by its name alone, as TS's
+    /// `role()` knows one ([`Tokens::role`] reads a role constant).
+    pub fn mapped(&self, role: &str) -> Option<&str> {
         self.roles.as_ref()?.get(role).map(|token| &**token)
+    }
+
+    /// Whether `other` maps the same roles onto the same tokens.
+    pub fn same_roles(&self, other: &Tokens) -> bool {
+        self.roles == other.roles
     }
 
     /// The name of the token `role` reads: the one a theme mapped it onto,

@@ -720,6 +720,10 @@ it changes, and they are resolved again when the tokens change (`Components::app
   from both (`Core::set_appearance`), and tells the platform (`MountItem::Appearance`: iOS
   `overrideUserInterfaceStyle` on the root view, presented modals and alerts, the status bar's default style; Android
   the status bar's default style and alert themes; native widgets elsewhere keep the system's).
+  TS reads a role with `role(name)` (`nsh-js` `env.rs`, the web's op 414): `Tokens::mapped`, by name, then the
+  token of the role's name, as `Tokens::role`; it tracks both tokens, and a theme that maps roles onto other tokens
+  runs every reader again. The names are typed from the roles the UI sets list (`Registry::roles`,
+  `description::roles`, `roles.d.ts`).
   `ThemeScope` (`element/theme_scope.rs`, exported by `nsh` and the prelude) is a view with an appearance of its
   own for itself and what is in it. Classes and adaptive declarations need nothing from it: the core applies them
   by node (`Core::dark_at`, `styles.md`). What reads the appearance in code reads the nearest scope's: `dark()` and

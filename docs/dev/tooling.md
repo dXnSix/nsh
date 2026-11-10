@@ -14,7 +14,9 @@
   image and font imports give) and `nsh/tokens.d.ts` (`nsh_bundler::tokens_declaration_of`: `interface Tokens` of
   `nsh`, every design token of the app's theme, `nsh.json` `"theme"` over the default, by name with its type, which
   types `token()`; under the app's theme types their names, typed by kind with their docs (`components.md` "Theme
-  types"); a theme that does not parse gives the default's names, and the build reports it). Each file declares its own names; the `import type` lines between them are worked out
+  types"); a theme that does not parse gives the default's names, and the build reports it) and `nsh/roles.d.ts`
+  (`nsh_bundler::roles_declaration`: `interface Roles` of `nsh`, the roles the UI sets list and the core's own,
+  `description::roles`, by name with what each reads and its doc, which types `role()`). Each file declares its own names; the `import type` lines between them are worked out
   from the names each uses. Next to them nsh writes `.nsh/tsconfig.json` (`nsh_bundler::TSCONFIG_BASE`): the
   compiler options mapping `nsh` and `nsh/*` there (`jsxImportSource: "nsh"`, no DOM library, `ESNext.Disposable`)
   and the globals, assets and tokens files; the `tsconfig.json` `nsh init` writes (`nsh_bundler::TSCONFIG`) only extends it
