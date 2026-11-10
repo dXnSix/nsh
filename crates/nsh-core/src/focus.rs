@@ -11,7 +11,8 @@
 //! frames, focus stops, scopes and tree order) and apply what comes back:
 //! they move the focus, report `focused` / `focus-within` and `Focus` /
 //! `Blur`, and scroll their views. The terminal backend uses it, its Cells
-//! one point each.
+//! one point each, and so does the GPUI backend, over its views' frames in
+//! the window's points.
 //!
 //! Frames are in the unit the backend lays out in, scaled along each axis
 //! on its own: the surface's points, or a terminal's Cells, one point each

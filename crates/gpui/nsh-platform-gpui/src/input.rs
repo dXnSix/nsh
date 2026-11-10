@@ -134,7 +134,7 @@ pub(crate) struct Modifiers {
 
 impl Modifiers {
     /// As the core's modifiers (`meta` is its `cmd`).
-    fn core(self) -> nsh_core::keymap::Modifiers {
+    pub(crate) fn core(self) -> nsh_core::keymap::Modifiers {
         nsh_core::keymap::Modifiers {
             ctrl: self.ctrl,
             alt: self.alt,
@@ -1210,6 +1210,7 @@ pub(crate) fn key_now(surface: &Rc<Surface>, event: KeyEvent) -> bool {
         || crate::text::key(surface, &event)
         || crate::selectable_view::key(surface, &event)
         || crate::navigation::key_pressed(surface, &event)
+        || crate::focus::key(surface, &event)
         || {
             let (x, y) = input.last.get().unwrap_or((-1.0, -1.0));
             crate::scroll::key(surface, &event, x, y)
@@ -1245,9 +1246,10 @@ pub(crate) fn component_key(surface: &Rc<Surface>, event: KeyEvent) -> bool {
     handled
 }
 
-/// Tab and Shift + Tab move the keyboard focus between the text fields (and
-/// the native components that take the keyboard), in tree order (GTK's focus chain does this on Linux), within the newest
-/// modal: the views under it never get the focus. The field reached has
+/// Tab and Shift + Tab move the keyboard focus between the focus stops (text
+/// fields, pressables and `focusable` views, and the native components that
+/// take the keyboard), in tree order through [`input::tab_stop`], within the
+/// newest modal: the views under it never get the focus. The field reached has
 /// its text selected, as in Windows' dialogs. Past the last field (the
 /// first with Shift) the key is not taken: the window's focus moves on to
 /// the embedding app's next tab stop, or wraps around when there is none
@@ -1266,7 +1268,7 @@ fn tab(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     if stops.is_empty() {
         return false;
     }
-    let focused = crate::text_input::focused(surface)
+    let focused = crate::focus::current(surface)
         .or_else(|| crate::native::focused_component(surface).and_then(|id| surface.view(id)));
     let current = focused.and_then(|f| stops.iter().position(|v| *v == f));
     // Past the ends the window's focus moves on ([`tab_to_edge`]).
@@ -1298,19 +1300,29 @@ pub(crate) fn tab_to_edge(surface: &Rc<Surface>, shift: bool) -> bool {
     }
 }
 
-/// Moves the keyboard focus to `view`: a text field, or a native component
-/// (focused by [`crate::native::apply_focus`], which has the window).
+/// Moves the keyboard focus to `view`: a text field, a native component
+/// (focused by [`crate::native::apply_focus`], which has the window), or any
+/// other stop, which takes [`crate::focus`]'s focus and is revealed in its
+/// scroll views.
 fn focus_stop(surface: &Rc<Surface>, view: &NshView) {
-    if view.kind() == ViewKind::Native {
-        crate::native::tab_to(surface, view.id());
-    } else {
-        crate::text_input::tab_to(view);
+    match view.kind() {
+        ViewKind::Native => {
+            // The view the arrows focused loses it ([`crate::focus`]).
+            crate::focus::set(surface, None);
+            crate::native::tab_to(surface, view.id());
+        }
+        ViewKind::Input => crate::text_input::tab_to(view),
+        _ => {
+            crate::focus::set(surface, Some(view));
+            crate::scroll::reveal(surface, view);
+        }
     }
 }
 
 /// The Tab stops shown under `view`, in tree order (a scroll view's
-/// content as it is on screen): enabled text fields and
-/// the native components that take the keyboard.
+/// content as it is on screen): enabled text fields, the native components
+/// that take the keyboard, and the enabled views that are focus stops
+/// (`ViewProps::focus_stop`: pressables and `focusable` views).
 fn collect_stops(surface: &Surface, view: &NshView, out: &mut Vec<NshView>) {
     {
         let s = view.state();
@@ -1320,7 +1332,9 @@ fn collect_stops(surface: &Surface, view: &NshView, out: &mut Vec<NshView>) {
         let stop = match s.kind {
             ViewKind::Input => !s.props.accessibility.state.disabled,
             ViewKind::Native => crate::native::focusable(surface, s.id),
-            _ => false,
+            _ => {
+                !s.props.accessibility.state.disabled && s.props.focus_stop(input::has_press(s.events))
+            }
         };
         if stop {
             out.push(view.clone());

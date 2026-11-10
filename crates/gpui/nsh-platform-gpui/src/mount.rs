@@ -85,6 +85,7 @@ impl Mounter {
             self.detach(surface, &view);
         }
         crate::navigation::end_batch(surface);
+        crate::focus::end_batch(surface);
         crate::system::end_batch(surface);
     }
 
