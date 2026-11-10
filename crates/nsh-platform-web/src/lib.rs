@@ -1,7 +1,7 @@
 //! WebAssembly backend for nsh: runs an app in a browser page and renders
 //! it to the DOM: apps published with `nsh package --target web`, the web
 //! development host and the website's live demos. `platform.os` is `"web"`;
-//! the page reports the idiom (phone, tablet or desktop browser), locale
+//! the page reports the idiom (phone, tablet, desktop browser or TV), locale
 //! and the user's settings ([`nsh_environment`]).
 //!
 //! - The app's TSX runs on the browser's own JavaScript engine (feature
@@ -481,7 +481,9 @@ fn page() -> Environment {
 }
 
 /// What the page knows about the user and the device, as JSON: `idiom`
-/// (`"phone"`, `"pad"`, `"desktop"`), `locale` (a BCP 47 tag), `rtl`,
+/// (`"phone"`, `"pad"`, `"desktop"`, or `"tv"`: a page on a TV, a `.wgt`,
+/// says so, as no pointer heuristic can; anything else is a phone),
+/// `locale` (a BCP 47 tag), `rtl`,
 /// `reduceMotion`, `fontScale`, `pixelRatio`, `safeArea` (`[top, right,
 /// bottom, left]`), `keyboard` (the height the on-screen keyboard
 /// covers), `appleKeyboard` (the browser runs on an Apple platform: its
@@ -508,6 +510,7 @@ pub unsafe extern "C" fn nsh_environment(ptr: *const u8, len: usize) -> f64 {
         env.idiom = match idiom {
             "desktop" => Idiom::Desktop,
             "pad" => Idiom::Pad,
+            "tv" => Idiom::Tv,
             _ => Idiom::Phone,
         };
     }

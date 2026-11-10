@@ -1,7 +1,8 @@
 // The TV category in the browser runtime without a browser or nsh.wasm:
 // `node --expose-gc --test crates/nsh-platform-web/web/browser/tv.test.mjs`.
 // `platform.tv` and `select`'s `tv` key (`environment.js`), `tv={{…}}`
-// props (`dom.js`), each held to what nsh-js and the engine do.
+// props (`dom.js`), and the page telling the player it is on a TV (`nsh.js`,
+// `idiom: "tv"`), each held to what nsh-js and the engine do.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -100,5 +101,74 @@ test("tv props set their props on a TV only, and unset the keys a new object no 
     dom.setPlatform(other);
     dom.rt.prop(view, "tv", { style: { padding: 8 } });
     assert.deepEqual(props(), []);
+  }
+});
+
+// nsh.js's player, from its source: `Player` is not exported.
+const source = await readFile(new URL("../nsh.js", import.meta.url), "utf8");
+const { Player } = await import(`data:text/javascript,${encodeURIComponent(`${source}\nexport { Player };`)}`);
+
+/** A player on a fake engine with the page's `options`; `environment()` is
+ * the real one, on a stand-in document. */
+function fakePlayer(options) {
+  const player = Object.create(Player.prototype);
+  Object.assign(player, {
+    options,
+    hostEvents: [],
+    reducedMotion: { matches: false },
+    safeArea: () => [0, 0, 0, 0],
+    keyboardHeight: () => 0,
+    updateRootClasses() {},
+    wasm: {},
+  });
+  return player;
+}
+
+/** Runs `fn` with the globals `environment()` reads standing in. */
+function onPage(fn) {
+  const names = ["document", "window", "getComputedStyle", "matchMedia", "devicePixelRatio"];
+  const saved = Object.fromEntries(names.map(name => [name, globalThis[name]]));
+  Object.assign(globalThis, {
+    devicePixelRatio: 1,
+    document: { documentElement: { getAttribute: () => null }, visibilityState: "visible", hasFocus: () => true },
+    window: globalThis,
+    getComputedStyle: () => ({ fontSize: "16px" }),
+    // A mouse: the pointer heuristic alone would say "desktop".
+    matchMedia: () => ({ matches: true, addEventListener() {} }),
+  });
+  try { return fn(); } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete globalThis[name]; else globalThis[name] = value;
+    }
+  }
+}
+
+test("a page tells the player it is on a TV, and the engine reads the TV idiom", async () => {
+  // The player sends the page's idiom, not the one the pointer suggests.
+  const started = [];
+  const player = fakePlayer({ idiom: "tv" });
+  onPage(() => player.begin(1920, environment => { started.push(JSON.parse(environment)); return -1; }));
+  assert.equal(started.length, 1);
+  assert.equal(started[0].idiom, "tv");
+  assert.equal(player.idiom, "tv");
+  // A TV's system UI (dialogs) is not the desktop's.
+  assert.equal(player.desktopUI, false);
+  // Without it, the pointer decides.
+  const measured = fakePlayer({});
+  onPage(() => measured.begin(1920, () => -1));
+  assert.equal(measured.idiom, "desktop");
+
+  // `nsh_environment` (src/lib.rs) maps it to `Idiom::Tv`; every idiom the
+  // player documents is one it reads.
+  const lib = await readFile(new URL("../../src/lib.rs", import.meta.url), "utf8");
+  const start = lib.indexOf("pub unsafe extern \"C\" fn nsh_environment");
+  assert.ok(start >= 0, "lib.rs has nsh_environment");
+  const body = lib.slice(start, lib.indexOf("\n}\n", start));
+  const arms = Object.fromEntries([...body.matchAll(/"(\w+)" => Idiom::(\w+)/g)].map(m => [m[1], m[2]]));
+  assert.equal(arms.tv, "Tv");
+  const documented = source.match(/`idiom` \(([^)]*)\)/)?.[1] ?? "";
+  for (const idiom of ["phone", "pad", "desktop", "tv"]) {
+    assert.ok(documented.includes(`"${idiom}"`), `nsh.js documents "${idiom}"`);
+    if (idiom !== "phone") assert.ok(idiom in arms, `nsh_environment reads "${idiom}"`);
   }
 });
