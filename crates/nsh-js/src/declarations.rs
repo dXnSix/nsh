@@ -207,8 +207,9 @@ export interface OverlayProps extends CommonProps, OverlayHostProps {
  * tooltip, layout events and the ref (`ref.command(name, args)`). */
 export type ComponentHostProps = { [K in "class" | "classList" | "style" | "activeStyle" | "hoverStyle" | "focusStyle" | "focusWithinStyle" | "disabledStyle" | "testID" | "tooltip" | "onLayout" | "ref"]?: ViewProps[K] };
 
-/** An operating system (`platform.os`). */
-export type OS = "ios" | "android" | "macos" | "windows" | "linux" | "web";
+/** An operating system (`platform.os`). `"tizen"` is a native Tizen app (a
+ * TV); a Tizen web app (`.wgt`) is `"web"`. */
+export type OS = "ios" | "android" | "macos" | "windows" | "linux" | "web" | "tizen";
 
 export declare namespace JSX {
   /** What components return and children accept. */

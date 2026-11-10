@@ -419,13 +419,12 @@ pub fn is_desktop() -> bool {
         .with_untracked(|e| e.idiom.desktop_on(e.os))
 }
 
-/// Whether the app runs on a TV: the TV idiom, on any OS (TS:
-/// `platform.tv`, [`crate::platform::Environment::tv`]). A TV is not a
-/// desktop ([`is_desktop`] is false); it does not change.
+/// Whether the app runs on a TV: the TV idiom ([`idiom`] is
+/// [`Idiom::Tv`]), on any OS (TS: `platform.tv`,
+/// [`crate::platform::Environment::tv`]). A TV is not a desktop
+/// ([`is_desktop`] is false); it does not change.
 pub fn is_tv() -> bool {
-    with_data(|d| d.ambient.env.as_ref().map(|e| e.env))
-        .expect("the core sets the environment")
-        .with_untracked(|e| e.idiom == Idiom::Tv)
+    idiom() == Idiom::Tv
 }
 
 /// The design tokens the app is drawn with (reading them subscribes: new
