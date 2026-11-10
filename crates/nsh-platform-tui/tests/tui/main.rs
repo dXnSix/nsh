@@ -26,6 +26,7 @@ mod palette;
 mod performance;
 mod pointer;
 mod popup;
+mod remote_keys;
 mod scroll;
 mod search;
 mod tooltip;
