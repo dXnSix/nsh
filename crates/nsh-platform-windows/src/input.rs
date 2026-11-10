@@ -140,7 +140,7 @@ pub(crate) struct Modifiers {
 
 impl Modifiers {
     /// As the core's modifiers (`meta` is its `cmd`).
-    fn core(self) -> nsh_core::keymap::Modifiers {
+    pub(crate) fn core(self) -> nsh_core::keymap::Modifiers {
         nsh_core::keymap::Modifiers {
             ctrl: self.ctrl,
             alt: self.alt,
@@ -1279,6 +1279,7 @@ pub(crate) fn key(surface: &Rc<Surface>, event: KeyEvent) -> bool {
         || crate::selectable_view::key(surface, &event)
         || crate::app_window::escape(surface, &event)
         || crate::navigation::key_pressed(surface, &event)
+        || crate::focus::key(surface, &event)
         || {
             let (x, y) = input.last.get().unwrap_or((-1.0, -1.0));
             crate::scroll::key(surface, &event, x, y)
@@ -1290,52 +1291,17 @@ pub(crate) fn key(surface: &Rc<Surface>, event: KeyEvent) -> bool {
     handled
 }
 
-/// Tab and Shift + Tab move the keyboard focus between the text fields, in
-/// tree order (GTK's focus chain does this on Linux), within the newest
-/// modal: the views under it never get the focus. The field reached has
-/// its text selected, as in Windows' dialogs.
+/// Tab and Shift + Tab move the keyboard focus between the stops, the
+/// fields that edit and the views that take presses or are `focusable`,
+/// in tree order (as macOS and Linux do), within the newest modal: the
+/// views under it never get the focus ([`crate::focus::tab`]). A field
+/// reached has its text selected, as in Windows' dialogs.
 fn tab(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     let m = event.modifiers;
     if event.vk != VK_TAB || m.ctrl || m.alt || m.meta {
         return false;
     }
-    let mut fields = Vec::new();
-    collect_fields(&crate::navigation::focus_scope(surface), &mut fields);
-    let current =
-        crate::text_input::focused(surface).and_then(|f| fields.iter().position(|v| *v == f));
-    let Some(next) = input::tab_stop(current, fields.len(), m.shift, true) else {
-        return false;
-    };
-    crate::text_input::tab_to(&fields[next]);
-    true
-}
-
-/// The enabled text fields shown under `view`, in tree order (a scroll
-/// view's content as it is on screen; a shown overlay's content after the
-/// view it follows, [`input::tab_order`]).
-fn collect_fields(view: &NshView, out: &mut Vec<NshView>) {
-    let skipped = |view: &NshView| {
-        let s = view.state();
-        s.style.hidden || s.concealed || s.props.pointer_events == PointerEvents::None
-    };
-    let order = input::tab_order(
-        view.clone(),
-        |view| {
-            if skipped(view) {
-                return Vec::new();
-            }
-            view.with_children_in_reading_order(<[NshView]>::to_vec)
-        },
-        NshView::id,
-        |view| view.state().props.tab_after,
-    );
-    out.extend(order.into_iter().filter(|view| {
-        if skipped(view) {
-            return false;
-        }
-        let s = view.state();
-        s.kind == ViewKind::Input && !s.props.accessibility.state.disabled
-    }));
+    crate::focus::tab(surface, m.shift)
 }
 
 // --- Hit testing --------------------------------------------------------------------

@@ -192,7 +192,8 @@ window. Closing the main window closes them and ends the app.
 |---|---|
 | Return | In an `Input`, what `submitBehavior` says: submit (`onSubmit`), submit and leave the field, or a new line (multiline inputs) |
 | Shift+Return, Alt+Return | A new line in a multiline input whose return submits (Ctrl+Return submits) |
-| Tab, Shift+Tab | The next / previous text field, within the newest dialog; the field's text is selected, as in Windows' dialogs |
+| Tab, Shift+Tab | The next / previous text field or pressable view in tree order, within the newest dialog; a field's text is selected, as in Windows' dialogs |
+| Return, Space | Press the focused view with `onPress` |
 | Escape | Leaves the focused field; else clears a text selection, then closes the newest dialog or goes back |
 | Alt+Left, Browser Back key, mouse back button | Go back (also from a field) |
 | Ctrl+arrows, Home / End, Ctrl+Home / End, with Shift; Ctrl+Backspace / Delete | Move, select and delete by word and line in a field, as in every Windows app |
@@ -219,8 +220,7 @@ Different, or not supported:
   `borderCurve: "continuous"` draws circular corners.
 - **Text**: head and middle ellipses on a single line only (more lines get a tail ellipsis); color emoji from COLR
   fonts only; small caps only where the font has them.
-- **Text inputs**: keyboard types and autofill do not apply (there is no software keyboard); Tab moves between text
-  fields. A right click opens the edit menu (Undo, Cut, Copy, Paste, Delete, Select All), as on selectable text (Copy,
+- **Text inputs**: keyboard types and autofill do not apply (there is no software keyboard). A right click opens the edit menu (Undo, Cut, Copy, Paste, Delete, Select All), as on selectable text (Copy,
   Select All).
 - **Accessibility** (UI Automation): alert dialogs and toasts are not exposed; headings report
   level 1.
