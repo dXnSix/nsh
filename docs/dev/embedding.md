@@ -226,7 +226,10 @@
   in classes included, stay as they are. The layout direction stays the system's language's. GPUI's `AppView` also
   takes `set_reduce_motion(Option<bool>)`, `set_screen_reader(Option<bool>)` and `set_time_zone(Option<TimeZone>)`
   (`host_settings.rs`), written over the system's in the same place: a Tizen TV's host passes the TV's settings on
-  with them, as nothing else in its process reports them.
+  with them, as nothing else in its process reports them. `set_lifecycle(Option<Lifecycle>)` does the same for the
+  app's state (`lifecycle()`), over what the windows' activation and visibility give, and `on_unhandled_back(f)` hands
+  the embedding app the back presses nothing in the app took (no modal, stack or `onBackPress` listener): the TV's
+  host asks there whether to leave the app.
 - **The host's theme overrides**: a host that embeds one app in several branded host apps overrides the app's theme
   tokens (brand colors, `radius`, ...) at run time: Rust `AppView::set_theme_overrides(Option<&str>)` (AppKit, GTK,
   Win32; the iOS `AppView`'s too), Swift `NshAppView.setThemeOverrides(_:)` (C `nsh_app_set_theme_overrides`), Java

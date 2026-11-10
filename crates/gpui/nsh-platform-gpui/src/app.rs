@@ -14,7 +14,7 @@ use gpui::{
     IntoElement, ParentElement, Render, Styled, Window, prelude::FluentBuilder as _,
 };
 use nsh_base::{Theme, ThemeError};
-use nsh_core::platform::{Appearance, Locale, TimeZone};
+use nsh_core::platform::{Appearance, Lifecycle, Locale, TimeZone};
 use nsh_engine::{
     App, AppError, Bundle, ColorScheme, EngineConfig, Environment, Idiom, Limits, Root,
 };
@@ -574,6 +574,26 @@ impl AppView {
     /// follows the system's again.
     pub fn set_time_zone(&self, zone: Option<TimeZone>, cx: &mut GpuiApp) {
         self.set_host_settings(|s| s.time_zone = zone, cx);
+    }
+
+    /// The embedding app's state of the app (`lifecycle()`: `active`,
+    /// `inactive`, `background`), which stands in for the one the
+    /// windows' activation and visibility give: what `lifecycle()` (`nsh`)
+    /// and Rust components' `lifecycle()` read, at once and for every app
+    /// loaded later. A host whose platform tells it more than the window
+    /// does passes it on (the Tizen TV host: `background` while the app
+    /// framework has the app paused). `None` follows the windows again.
+    pub fn set_lifecycle(&self, lifecycle: Option<Lifecycle>, cx: &mut GpuiApp) {
+        self.set_host_settings(|s| s.lifecycle = lifecycle, cx);
+    }
+
+    /// Hands every back press nothing in the app took to `f` (the Back
+    /// key, Escape or Alt+Left with no modal to close, no stack to pop and
+    /// no `onBackPress` listener that kept it), on the main thread with the
+    /// view's window, instead of letting it go: a TV host asks there
+    /// whether to leave the app. Replaces the handler set before.
+    pub fn on_unhandled_back(&self, f: impl Fn(&mut Window, &mut GpuiApp) + 'static) {
+        *self.surface.on_unhandled_back.borrow_mut() = Some(Rc::new(f));
     }
 
     /// Changes the host's settings with `f` and applies them.

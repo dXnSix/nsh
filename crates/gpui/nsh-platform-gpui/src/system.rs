@@ -327,6 +327,11 @@ pub(crate) fn watch_environment(
     update(surface);
 }
 
+/// The window the surface was last drawn in, if it is watched.
+pub(crate) fn window_of(surface: &Surface) -> Option<AnyWindowHandle> {
+    with_watched(surface.key(), |w| w.window).flatten()
+}
+
 /// The surface fills a window of its own (the standalone app): the app's
 /// appearance is given to the window too.
 pub(crate) fn own_window(surface: &Surface) {
@@ -1576,8 +1581,7 @@ pub(crate) fn command(surface: &Rc<Surface>, _id: NodeId, command: &Command) {
             // The window goes after the batch is applied (closing it stops
             // the surface). An embedded surface closes the window it is in,
             // as the app leaving would.
-            let window = with_watched(surface.key(), |w| w.window).flatten();
-            if let Some(window) = window {
+            if let Some(window) = window_of(surface) {
                 crate::rt::on_app(move |cx| {
                     let _ = window.update(cx, |_, window, _| window.remove_window());
                 });

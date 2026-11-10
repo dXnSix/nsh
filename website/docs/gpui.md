@@ -166,6 +166,11 @@ so only load it from your own app's files.
   cx)` do the same for less motion, the screen reader and the time zone (`TimeZone::parse("Asia/Seoul")`):
   `reduceMotion()`, `screenReaderEnabled()` and `localeSettings()`'s `timeZone` follow at once (`Date`'s local times
   stay the process's).
+- `AppView::set_lifecycle(state, cx)` gives the app your app's state (`Lifecycle::Active`, `Inactive`,
+  `Background`) in place of the one its window gives: `lifecycle()` follows at once. `None` follows the window again.
+- `AppView::on_unhandled_back(|window, cx| …)` hears the back presses the app leaves to you: Back, Escape or
+  Alt+Left with no dialog to close, no page to go back from and no `onBackPress` listener that kept it. Use it to
+  leave a screen of your own app, or to ask before leaving the app.
 - `AppView::run_package(&package)` runs a [signed package](./signed-packages.md#loading-packages-in-a-host-app)
   from `verify_package` or `load_package`; `accept_package` records it once your app decided it is healthy.
 - `set_ui_sets(sets)` sets the UI sets every engine serves: NSH's (`nsh_base::registry()`) and your crates'
