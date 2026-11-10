@@ -255,7 +255,7 @@ function token<K extends keyof Tokens>(name: K): Tokens[K];
 
 应用主题（`nsh.json` 的 `"theme"`，叠加在 shadcn/ui 的令牌之上）中名为 `name` 的设计令牌在当前外观下的值：颜色是 `#rrggbbaa`，
 长度是以点为单位的数值，字体是字体族名称，阴影是它的 CSS `box-shadow` 各层。名称是主题中 CSS 变量去掉 `--` 后的名称（`primary`、`muted-foreground`、`radius`、
-`font-mono`，以及应用自己的令牌，如 `up`）。读取它是响应式的：读取令牌的组件、memo 或 effect 会在主题或外观变化时重新运行。
+`font-mono`，以及应用自己的令牌，如 `up`）。读取它是响应式的：读取令牌的组件、memo 或 effect 会在主题或外观变化时重新运行。在 [`ThemeScope`](#themescope) 中，它是该作用域的值和外观。
 `Tokens` 列出应用的令牌及其类型；NSH 根据主题把它写入 `.nsh/types/nsh/tokens.d.ts`。在类名中直接引用令牌（`bg-primary`、
 `rounded-(--radius)`）：见[主题 token](../docs/tailwind.md#主题-token)。
 
@@ -1044,16 +1044,20 @@ const ThemeScope: (props: ThemeScopeProps) => JSX.Element;
 interface ThemeScopeProps {
   /** `"light"` 或 `"dark"`；省略时，作用域按其外层视图的外观显示。 */
   appearance?: "light" | "dark";
+  /** 一个主题文件，它的值叠加在作用域外层的令牌之上；省略时，作用域使用外层的令牌绘制。 */
+  theme?: Theme;
   children?: JSX.Element;
   // 以及视图的 `class`、`classList`、`style`、状态样式、`testID`、`onLayout`
 }
 ```
 
-一个视图，无论应用和系统的外观如何，它自身及其中的一切都以它自己的外观显示：浅色页面旁的深色侧边栏，深色应用中的一张浅色纸。它是视图，所以它的 `class` 和 `style` 负责布局和绘制。
+一个视图，无论应用和系统的外观如何，它自身及其中的一切都以它自己的外观、它自己的设计令牌或两者同时显示：浅色页面旁的深色侧边栏，拥有自己 `primary` 的卡片，应用旁的主题预览。它是视图，所以它的 `class` 和 `style` 负责布局和绘制。
 
 在作用域内，凡是跟随外观的都跟随作用域的外观：`dark:` 类、主题 token 的类（`bg-background`）、组件的主题颜色、[`colorScheme()`](#colorscheme) 和 [`token()`](#token)。在 iOS、macOS 和 Web 上，其中的平台控件也跟随它（文本输入的键盘和菜单、Web 视图、表单控件），桌面后端绘制的滚动指示器同样如此。作用域可以嵌套：由最近的设置了 `appearance` 的作用域决定，没有设置的作用域按其外层视图的外观显示。
 
-与 CSS 一样，视图继承来的颜色保持不变：作用域要设置自己的背景色和文字颜色。平台绘制的菜单、警告框和面板属于应用，即使由作用域内的视图打开也是如此。Rust：`theme_scope().appearance(ColorScheme::Dark).child(…)`；`dark()` 和 `color()` 给出读取它们的绑定所在作用域的外观。
+设置了 `theme`（一个主题文件，与 [`updateTheme`](#updatetheme-resettheme) 接受的相同）时，主题令牌的类、组件的主题和 [`token()`](#token) 在每种外观下对它设置的令牌使用作用域的值，对其余令牌使用应用的值；它自己没有设置的 `var()` 指向作用域外层的令牌。作用域只设置应用主题已有的令牌：主题没有的名称会被略过并给出警告，所以存在的类在各处都相同。嵌套在内的作用域从外层作用域的值开始，应用主题的变化会传到作用域没有设置的每个令牌。
+
+与 CSS 一样，视图继承来的颜色保持不变：作用域要设置自己的背景色和文字颜色。平台绘制的菜单、警告框和面板属于应用，即使由作用域内的视图打开也是如此。Rust：`theme_scope().appearance(ColorScheme::Dark).child(…)` 和 `.theme(Some(ScopeTheme::file(json)))`，或用 `ScopeTheme::from(tokens)` 和 `ScopeTheme::of(&theme)` 传入在 Rust 中构造的令牌和主题类型的值；`dark()`、`color()`、`tokens()` 和 `theme_of()` 给出读取它们的绑定所在作用域的结果。
 
 ```rust tabs
 view().flex_row().flex_1().child(
@@ -1072,6 +1076,15 @@ import { ThemeScope, View } from "nsh";
   </ThemeScope>
   <View class="flex-1 bg-white dark:bg-zinc-900">{/* 页面，使用应用的外观 */}</View>
 </View>
+```
+
+```tsx
+// 使用自己品牌色的套餐卡片：其中的 `bg-primary` 和 `token("primary")` 是作用域的值。
+<ThemeScope theme={{ cssVars: { light: { primary: "#7c3aed" }, dark: { primary: "#a78bfa" } } }}>
+  <View class="rounded-(--radius) bg-primary p-4">
+    <Text class="text-primary-foreground">Upgrade</Text>
+  </View>
+</ThemeScope>
 ```
 
 ### fpsEnabled 和 setFpsEnabled

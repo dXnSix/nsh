@@ -257,7 +257,8 @@ The design token `name` of the app's theme (`"theme"` in `nsh.json`, over shadcn
 a color as `#rrggbbaa`, a length as a number of points, a font as its family name, a shadow as its CSS `box-shadow`
 layers. Names are the theme's CSS variables
 without `--` (`primary`, `muted-foreground`, `radius`, `font-mono`, and the app's own, such as `up`). Reading it is
-reactive: a component, memo or effect that reads a token runs again when the theme or the appearance changes.
+reactive: a component, memo or effect that reads a token runs again when the theme or the appearance changes. In a
+[`ThemeScope`](#themescope) it is the scope's value and appearance.
 `Tokens` lists the app's tokens with their types; NSH writes it into `.nsh/types/nsh/tokens.d.ts` from the theme. For
 classes, name the tokens directly (`bg-primary`, `rounded-(--radius)`): [Theme tokens](../docs/tailwind.md#theme-tokens).
 
@@ -1082,16 +1083,20 @@ const ThemeScope: (props: ThemeScopeProps) => JSX.Element;
 interface ThemeScopeProps {
   /** `"light"` or `"dark"`; left out, the scope is shown as the view around it. */
   appearance?: "light" | "dark";
+  /** A theme file whose values are set over the tokens around the scope; left out, the scope is drawn with those. */
+  theme?: Theme;
   children?: JSX.Element;
   // and a view's `class`, `classList`, `style`, state styles, `testID`, `onLayout`
 }
 ```
 
-A view that shows itself and everything in it in an appearance of its own, whatever the app's and the system's: a dark sidebar beside a light page, a light sheet of paper in a dark app. It is a view, so its `class` and `style` lay it out and draw it.
+A view that shows itself and everything in it in an appearance of its own, with design tokens of its own, or both, whatever the app's and the system's: a dark sidebar beside a light page, a card with its own `primary`, a theme's preview beside the app. It is a view, so its `class` and `style` lay it out and draw it.
 
 In a scope, everything that follows the appearance follows the scope's: `dark:` classes, the classes of theme tokens (`bg-background`), the theme colors of components, [`colorScheme()`](#colorscheme) and [`token()`](#token). The platform's own controls in it follow too on iOS, macOS and the web (a text input's keyboard and menus, web views, form controls), and so do the scroll indicators the desktop backends draw. Scopes nest: the nearest one with an `appearance` decides, and a scope without one is shown as the view around it.
 
-As in CSS, a color a view inherited stays what it was: a scope sets its own background and text color. Menus, alerts and sheets the platform draws are the app's, also when a view in a scope opens them. Rust: `theme_scope().appearance(ColorScheme::Dark).child(…)`; `dark()` and `color()` answer for the scope around the binding that reads them.
+With a `theme` (a theme file, as [`updateTheme`](#updatetheme-resettheme) takes one), the classes of theme tokens, the components' theme and [`token()`](#token) take the scope's values for the tokens it sets, in each appearance, and the app's for the others; a `var()` it does not set itself names the tokens around the scope. A scope sets tokens the app's theme has: a name the theme lacks is left out with a warning, so the classes that exist are the same everywhere. A scope inside another starts from the outer one's values, and a change of the app's theme reaches every token a scope leaves alone.
+
+As in CSS, a color a view inherited stays what it was: a scope sets its own background and text color. Menus, alerts and sheets the platform draws are the app's, also when a view in a scope opens them. Rust: `theme_scope().appearance(ColorScheme::Dark).child(…)` and `.theme(Some(ScopeTheme::file(json)))`, or `ScopeTheme::from(tokens)` and `ScopeTheme::of(&theme)` for tokens and a theme type's value made in Rust; `dark()`, `color()`, `tokens()` and `theme_of()` answer for the scope around the binding that reads them.
 
 ```rust tabs
 view().flex_row().flex_1().child(
@@ -1110,6 +1115,15 @@ import { ThemeScope, View } from "nsh";
   </ThemeScope>
   <View class="flex-1 bg-white dark:bg-zinc-900">{/* the page, in the app's appearance */}</View>
 </View>
+```
+
+```tsx
+// A plan's card in its own brand color: `bg-primary` and `token("primary")` in it are the scope's.
+<ThemeScope theme={{ cssVars: { light: { primary: "#7c3aed" }, dark: { primary: "#a78bfa" } } }}>
+  <View class="rounded-(--radius) bg-primary p-4">
+    <Text class="text-primary-foreground">Upgrade</Text>
+  </View>
+</ThemeScope>
 ```
 
 ### fpsEnabled and setFpsEnabled

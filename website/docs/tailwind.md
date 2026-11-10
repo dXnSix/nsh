@@ -315,6 +315,37 @@ import { Canvas, token } from "nsh";
 
 The names are typed: NSH writes the app's tokens into `.nsh/types/nsh/tokens.d.ts` from its theme, so `token("up")` is a `string` once `"up"` is in the theme, and a name the theme lacks is a type error. Under theme types it lists the types' tokens, each typed by its kind (a `number`, or a `string` for a color, a font and a shadow) with its doc comment.
 
+### Tokens for a part of the app
+
+`ThemeScope` gives a part of the app its own values of the theme's tokens, as a class that sets CSS variables does on the web. Its `theme` is a theme file whose values are set over the tokens around it; token classes, `token()` and the Rust components in it follow, in each appearance:
+
+```rust tabs
+use nsh_base::theme;
+use nsh_core::prelude::*;
+
+let brand = r##"{ "cssVars": { "light": { "primary": "#7c3aed" }, "dark": { "primary": "#a78bfa" } } }"##;
+
+theme_scope().theme(Some(ScopeTheme::file(brand))).child(
+    view()
+        .rounded(move || theme().radius)
+        .bg(move || theme().primary)
+        .p_4()
+        .child(text("Upgrade").text_color(move || theme().primary_foreground)),
+)
+```
+
+```tsx tabs
+import { Text, ThemeScope, View } from "nsh";
+
+<ThemeScope theme={{ cssVars: { light: { primary: "#7c3aed" }, dark: { primary: "#a78bfa" } } }}>
+  <View class="rounded-(--radius) bg-primary p-4">
+    <Text class="text-primary-foreground">Upgrade</Text>
+  </View>
+</ThemeScope>
+```
+
+A scope sets values of tokens the app's theme has: a name the theme lacks is left out with a warning, so every class means a token everywhere. The tokens it leaves alone stay the app's and follow `setTheme` and `updateTheme`; a scope inside another starts from the outer one's values. With `appearance` a scope also shows its content light or dark ([Device and environment](./device-and-environment.md#a-part-of-the-app-in-its-own-appearance)).
+
 ## The class check
 
 `nsh build`, `nsh dev`, `nsh run` and `nsh test` check the static class names in your JSX (string literals in `class` and the keys of `classList`) with the same parser and theme the runtime uses, and warn about classes that do not exist:

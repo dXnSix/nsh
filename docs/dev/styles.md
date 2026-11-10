@@ -99,7 +99,9 @@
   system's; in a view with an appearance of its own (a `ThemeScope`), that view's (`Core::dark_at`: the core keeps
   per node what the nearest such view says, pushed down when a view is inserted or the prop changes, and applies each
   node's classes in it, so a scope restyles only its own nodes whose classes depend on the appearance, and a change
-  of the surface's leaves them alone). The theme is Tailwind 4's
+  of the surface's leaves them alone). A view with design tokens of its own (a `ThemeScope` with a `theme`) has the
+  classes in it resolved with its values: a list that reads a token the scope changes is parsed for the scope, every
+  other list is the surface's (`Core::classes_at`, `components.md` "ThemeScope"). The theme is Tailwind 4's
   extended by `nsh.json` `"tailwind"` (`colors`, `spacing`, `breakpoints`, `fontSize`, `radius`, `shadow`, ...; unknown
   keys are build errors). Rust components do not use classes: their typed styles (`element/style.rs`, every utility group has its
   methods, tested against the classes) lower into the same rules and their
