@@ -8,7 +8,8 @@
 //! <out>/tizen-web/<name>/         the package's files: the web's site, files as they are (no .br / .gz), and
 //!   config.xml                    Tizen's manifest ([`Widget`]: ids, version, privileges, landscape, icon)
 //!   icon.png                      the app's icon, 512×423 (Samsung's size)
-//!   nsh-tizen.<digest>.js         the TV shim (`tizen_web/shim.js`), run before `nsh.js`
+//!   nsh-tizen.<digest>.js         the TV shim (`tizen_web/shim.js`), run before `nsh.js` (after the TV's
+//!                                 `$WEBAPIS/webapis/webapis.js`); `nsh/tizen`'s web half calls it
 //! <out>/tizen-web/<name>.wgt      the files zipped, unsigned
 //! <out>/<name>.wgt                signed with a certificate profile (`--sign`, `nsh.json` `tizen.signing`)
 //! ```
@@ -72,12 +73,17 @@ const PROBE_WASM: &[u8] = &[
 /// `required_version` without `nsh.json` `tizen.apiVersion`: Tizen 8.0,
 /// the TVs of 2024 on, whose engines run the web runtime as built.
 const API_VERSION: &str = "8.0";
-/// What every package asks for: the network, and the remote's keys
-/// (`tizen.tvinputdevice`).
+/// What every package asks for: the network, the remote's keys
+/// (`tizen.tvinputdevice`) and the TV's product information
+/// (`webapis.productinfo`, `nsh/tizen`'s `productInfo`).
 const PRIVILEGES: &[&str] = &[
     "http://tizen.org/privilege/internet",
     "http://tizen.org/privilege/tv.inputdevice",
+    "http://developer.samsung.com/privilege/productinfo",
 ];
+/// Samsung's `webapis` (product information, Smart Hub's preview), which the
+/// TV's web runtime serves to the packages that load it.
+const WEBAPIS: &str = "$WEBAPIS/webapis/webapis.js";
 /// The development package's id, one for every app (it opens whichever
 /// app's dev server it was written for), as the other targets have one
 /// development host.
@@ -335,6 +341,7 @@ pub(crate) fn package(
         built,
         &dir,
         &web::Variant {
+            device_scripts: &[WEBAPIS],
             scripts: &[(SHIM_NAME, SHIM)],
             idiom: Some("tv"),
             history: Some(false),
