@@ -438,6 +438,19 @@ pub(crate) fn blur(surface: &Surface, view: &NshView) {
     }
 }
 
+/// `blur()` on `view`: the field, or the view with this module's focus,
+/// lets go of it; on any other view it blurs the focused field, as before
+/// views took the focus.
+pub(crate) fn blur_command(surface: &Rc<Surface>, view: &NshView) {
+    if view.kind() == ViewKind::Input {
+        crate::text_input::blur(view);
+    } else if focused(surface).as_ref() == Some(view) {
+        blur_view(surface);
+    } else {
+        crate::text_input::blur_all(surface);
+    }
+}
+
 /// Gives the keyboard focus back to `view` (a stop a modal or a layer took
 /// it from), as it had it: a field, or this module's focus.
 pub(crate) fn restore(surface: &Rc<Surface>, view: &NshView) {

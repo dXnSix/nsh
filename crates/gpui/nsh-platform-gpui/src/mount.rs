@@ -423,8 +423,8 @@ impl Mounter {
         match command {
             Command::Focus => view.map_or((), crate::text_input::focus),
             Command::Blur => match view {
-                Some(view) if view.kind() == ViewKind::Input => crate::text_input::blur(view),
-                _ => crate::text_input::blur_all(surface),
+                Some(view) => crate::focus::blur_command(surface, view),
+                None => crate::text_input::blur_all(surface),
             },
             Command::SetSelection { start, end } => {
                 if let Some(view) = view {
