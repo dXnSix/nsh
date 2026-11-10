@@ -658,6 +658,7 @@ read it (`radius-card`: `radius-surface-card`, `rounded-surface-card`). `#[deriv
 struct's fields:
 
 ```rust
+use nsh_base::role;
 use nsh_core::prelude::*;
 
 /// The design system's tokens.
@@ -667,10 +668,10 @@ pub struct DsTheme {
     #[token(color)]
     pub surface_raised: AdaptiveColor,
     /// Popovers and menus.
-    #[token(color, role = "popover")]
+    #[token(color, role = role::POPOVER)]
     pub surface_overlay: AdaptiveColor,
     /// The main action.
-    #[token(color, role = "primary")]
+    #[token(color, role = role::PRIMARY)]
     pub action: AdaptiveColor,
     /// Cards' corners.
     #[token(radius)]
@@ -694,8 +695,10 @@ impl Default for DsTheme {
   `rounded-card`), `spacing` (`spacing-*`), `text` (`text-*`), `weight` (`font-weight-*`), `tracking`, `leading`,
   `blur`, `font` (`font-*`) and `shadow` (`shadow-*`). A color is an `AdaptiveColor`, a number an `f32` or `Points`, a
   font family a `SharedString` or `String`, a shadow an `AdaptiveShadow`. `name = "…"` names a token (a namespaced
-  kind's name keeps its namespace: `#[token(radius, name = "radius-corner")]`), `role = "…"` maps a role onto it,
-  once for each role it plays (`#[token(color, role = "card", role = "popover")]`: one surface for both).
+  kind's name keeps its namespace: `#[token(radius, name = "radius-corner")]`), `role = <path>` maps a role onto it,
+  the role's constant by its path (`nsh_base::role::POPOVER`, or a component library's own), once for each role it
+  plays (`#[token(color, role = role::CARD, role = role::POPOVER)]`: one surface for both). The compiler refuses a
+  path that is no role, and a role that reads another kind than the token holds (a radius' role on a color).
 - `#[token(nested)]` holds another `AppTheme` type, its names under `<field>-` as above (`surface: Surface` with
   `raised`: `surface-raised`, with `#[token(shadow)] raised`: `shadow-surface-raised`), read as
   `theme_of::<DsTheme>().surface.raised`. A name the tokens lack keeps the inner type's `Default`, not the value the
@@ -755,16 +758,18 @@ reset_theme::<DsTheme>(); // the app's action again
   patch sets, is that value in both appearances; give it a dark value again with `Tokens::set_dark_number` and
   `update_tokens`.
 
-**Roles.** NSH's own parts draw with roles (`Role`: `popover`, `primary`, `border`, `radius`, `font-sans`, …;
-[Theme roles](../modules/nsh-base.md#theme-roles)). A type maps roles onto its tokens with `TokenSpec::role`, so
+**Roles.** NSH's own parts draw with roles, constants of the crate that draws with them (`nsh_base::role`: `POPOVER`,
+`PRIMARY`, `BORDER`, `RADIUS`, `FONT_SANS`, …; [Theme roles](../modules/nsh-base.md#theme-roles)), and a crate with
+components of its own declares its roles the same way (`pub const BANNER: Role = Role::new("banner");`). A type maps
+roles onto its tokens with `TokenSpec::role`, a color token a color's role, a number a number's, a font a font's, so
 `nsh_base`'s `theme()` fields and components, the tab bar, the platforms' menus and alerts, and the default font draw
 with the type's tokens: above, `theme().popover` is the design system's `surface-overlay` and `theme().primary` its
-`action`. A token may play several roles (`.role(Role::Card).role(Role::Popover)`): a design system with one surface
+`action`. A token may play several roles (`.role(role::CARD).role(role::POPOVER)`): a design system with one surface
 for cards and popovers maps both onto it, and both follow every change of it. A role is played by one token.
 
 **Names.** A token's name says what its kind is, as a CSS variable's does: a font's starts with `font-`, a shadow's
 with `shadow-`, a weight's with `font-weight-`, and no other kind's with `font-`. Registering a type whose name and
-kind disagree, or that declares a name or maps a role twice, panics.
+kind disagree, that declares a name or maps a role twice, or whose token plays a role of another kind, panics.
 
 **Several types.** A design system's crate and the app's crate each register their own type: the design system's
 tokens, and the app's own beside them (`odds-up` for a betting app). Each reads its own with `theme_of`, and the names

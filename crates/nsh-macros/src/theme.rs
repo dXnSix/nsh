@@ -2,66 +2,8 @@
 //! (`nsh_core::element::AppTheme`).
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 use syn::{Data, DeriveInput, Fields, LitStr, Type, spanned::Spanned};
-
-/// The roles a field may play (`nsh_core::element::Role`'s names), each
-/// with the kind of token it reads.
-const ROLES: &[(&str, RoleKind)] = &[
-    ("background", RoleKind::Color),
-    ("foreground", RoleKind::Color),
-    ("card", RoleKind::Color),
-    ("card-foreground", RoleKind::Color),
-    ("popover", RoleKind::Color),
-    ("popover-foreground", RoleKind::Color),
-    ("primary", RoleKind::Color),
-    ("primary-foreground", RoleKind::Color),
-    ("secondary", RoleKind::Color),
-    ("secondary-foreground", RoleKind::Color),
-    ("muted", RoleKind::Color),
-    ("muted-foreground", RoleKind::Color),
-    ("accent", RoleKind::Color),
-    ("accent-foreground", RoleKind::Color),
-    ("destructive", RoleKind::Color),
-    ("border", RoleKind::Color),
-    ("input", RoleKind::Color),
-    ("ring", RoleKind::Color),
-    ("chart-1", RoleKind::Color),
-    ("chart-2", RoleKind::Color),
-    ("chart-3", RoleKind::Color),
-    ("chart-4", RoleKind::Color),
-    ("chart-5", RoleKind::Color),
-    ("sidebar", RoleKind::Color),
-    ("sidebar-foreground", RoleKind::Color),
-    ("sidebar-primary", RoleKind::Color),
-    ("sidebar-primary-foreground", RoleKind::Color),
-    ("sidebar-accent", RoleKind::Color),
-    ("sidebar-accent-foreground", RoleKind::Color),
-    ("sidebar-border", RoleKind::Color),
-    ("sidebar-ring", RoleKind::Color),
-    ("selection", RoleKind::Color),
-    ("radius", RoleKind::Number),
-    ("font-sans", RoleKind::Font),
-    ("font-mono", RoleKind::Font),
-];
-
-/// What a role reads: a color, a number or a font family.
-#[derive(Clone, Copy)]
-enum RoleKind {
-    Color,
-    Number,
-    Font,
-}
-
-impl RoleKind {
-    fn what(self) -> &'static str {
-        match self {
-            RoleKind::Color => "a color",
-            RoleKind::Number => "a number",
-            RoleKind::Font => "a font family",
-        }
-    }
-}
 
 /// A kind of token: its name, `TokenKind`'s variant, the namespace its
 /// names take, and the field types it fits.
@@ -143,14 +85,25 @@ const KINDS: &[Kind] = &[
     },
 ];
 
+/// What a role a `kind` token plays reads (`nsh_core::element::RoleValue`):
+/// a color, a number or a font family. `None`: no role reads box shadows.
+fn role_value(kind: &Kind) -> Option<TokenStream2> {
+    match kind.name {
+        "color" => Some(quote!(::nsh_core::element::AdaptiveColor)),
+        "font" => Some(quote!(::std::sync::Arc<::core::primitive::str>)),
+        "shadow" => None,
+        _ => Some(quote!(::core::primitive::f32)),
+    }
+}
+
 /// What a field is to the theme.
 enum Role {
     /// One token.
     Token {
         kind: &'static Kind,
         name: String,
-        /// The roles it plays, as written.
-        roles: Vec<String>,
+        /// The roles it plays: each constant's path, as written.
+        roles: Vec<syn::Path>,
     },
     /// An inner theme type, its names under `prefix`.
     Nested { prefix: String },
@@ -172,8 +125,8 @@ struct Attr {
     /// `nested`, `flatten` or `skip`.
     mode: Option<(&'static str, Span)>,
     name: Option<LitStr>,
-    /// Each `role = "…"`: a token may play several.
-    roles: Vec<LitStr>,
+    /// Each `role = path`: a token may play several.
+    roles: Vec<syn::Path>,
 }
 
 fn parse_attr(attr: &syn::Attribute) -> syn::Result<Attr> {
@@ -207,7 +160,22 @@ fn parse_attr(attr: &syn::Attribute) -> syn::Result<Attr> {
                 }
                 out.name = Some(meta.value()?.parse::<LitStr>()?);
             }
-            "role" => out.roles.push(meta.value()?.parse::<LitStr>()?),
+            "role" => {
+                let value = meta.value()?;
+                // A role is a constant of the crate that draws with it,
+                // not a name the macro knows.
+                if value.peek(LitStr) {
+                    let lit = value.parse::<LitStr>()?;
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        format!(
+                            "a role is named by its constant's path, as `role = nsh_base::role::{}`",
+                            lit.value().to_uppercase().replace('-', "_")
+                        ),
+                    ));
+                }
+                out.roles.push(value.parse::<syn::Path>()?);
+            }
             other => match KINDS.iter().find(|k| k.name == other) {
                 Some(k) => {
                     if let Some((first, _)) = out.kind {
@@ -235,9 +203,14 @@ fn parse_attr(attr: &syn::Attribute) -> syn::Result<Attr> {
                 format!("a `{mode}` field has no kind of its own"),
             ));
         }
-        if let Some(lit) = out.name.as_ref().or(out.roles.first()) {
+        let extra = out
+            .name
+            .as_ref()
+            .map(Spanned::span)
+            .or(out.roles.first().map(Spanned::span));
+        if let Some(extra) = extra {
             return Err(syn::Error::new(
-                lit.span(),
+                extra,
                 format!("a `{mode}` field is no token: it takes no `name` or `role`"),
             ));
         }
@@ -407,42 +380,30 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream2> {
                 }
                 seen.push((name.clone(), name_span));
                 let mut plays = Vec::new();
-                for lit in &parsed.roles {
-                    let r = lit.value();
-                    let Some((_, fits)) = ROLES.iter().find(|(n, _)| *n == r) else {
+                for path in &parsed.roles {
+                    // No role reads box shadows.
+                    if role_value(kind).is_none() {
                         return Err(syn::Error::new(
-                            lit.span(),
-                            format!("no role is named `{r}`"),
-                        ));
-                    };
-                    let kind_fits = match fits {
-                        RoleKind::Color => kind.name == "color",
-                        RoleKind::Font => kind.name == "font",
-                        RoleKind::Number => kind.types == NUMBERS,
-                    };
-                    if !kind_fits {
-                        return Err(syn::Error::new(
-                            lit.span(),
-                            format!(
-                                "the role `{r}` is {}, not a `{}` token",
-                                fits.what(),
-                                kind.name
-                            ),
+                            path.span(),
+                            format!("no role reads a `{}` token", kind.name),
                         ));
                     }
                     // A token may play several roles; a role is played by
-                    // one token, and named once.
+                    // one token, and named once. The paths are compared
+                    // as written: the registry tells roles apart by name
+                    // when the type is registered.
+                    let r = quote!(#path).to_string().replace(' ', "");
                     if let Some((_, first)) = roles.iter().find(|(n, _)| *n == r) {
                         let mut err =
-                            syn::Error::new(lit.span(), format!("the role `{r}` is mapped twice"));
+                            syn::Error::new(path.span(), format!("the role `{r}` is mapped twice"));
                         err.combine(syn::Error::new(
                             *first,
                             format!("`{r}` is first mapped here"),
                         ));
                         return Err(err);
                     }
-                    roles.push((r.clone(), lit.span()));
-                    plays.push(r);
+                    roles.push((r, path.span()));
+                    plays.push(path.clone());
                 }
                 Role::Token {
                     kind,
@@ -476,10 +437,13 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream2> {
             Role::Token { kind, name, roles } => {
                 let variant = format_ident!("{}", kind.variant);
                 let doc = &f.doc;
-                let role = roles.iter().map(|r| {
-                    let variant = format_ident!("{}", camel(r));
-                    quote!(.role(#ui::Role::#variant))
-                });
+                // The role's type says what it reads, so rustc refuses a
+                // path that is no role and a role of another kind, at
+                // the path.
+                let value = role_value(kind);
+                let role = roles
+                    .iter()
+                    .map(|path| quote_spanned!(path.span()=> .role::<#value>(#path)));
                 let full = quote!(&#ui::TokenKind::#variant.prefixed(prefix, #name));
                 specs.push(quote! {
                     specs.push(#ui::TokenSpec::new(#name, #ui::TokenKind::#variant).doc(#doc) #(#role)*);
@@ -628,17 +592,4 @@ fn last_segment(ty: &Type) -> String {
 /// `surface_raised` as `surface-raised`.
 fn kebab(name: &str) -> String {
     name.trim_start_matches("r#").replace('_', "-")
-}
-
-/// `popover-foreground` as `PopoverForeground`, `chart-1` as `Chart1`.
-fn camel(name: &str) -> String {
-    name.split('-')
-        .map(|part| {
-            let mut c = part.chars();
-            match c.next() {
-                Some(f) => f.to_uppercase().chain(c).collect::<String>(),
-                None => String::new(),
-            }
-        })
-        .collect()
 }

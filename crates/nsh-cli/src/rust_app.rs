@@ -4288,8 +4288,8 @@ panic = \"abort\"
     /// them: a name no type declares is warned of.
     mod typed_theme {
         use nsh_core::element::{
-            AdaptiveColor, AppTheme, Registry, Role, TokenKind, TokenSpec, Tokens,
-            description::SetDescription,
+            AdaptiveColor, AppTheme, Registry, TokenKind, TokenSpec, Tokens,
+            description::SetDescription, role,
         };
 
         #[derive(Debug, Clone, PartialEq, Default)]
@@ -4302,7 +4302,7 @@ panic = \"abort\"
                 static SPECS: std::sync::LazyLock<Vec<TokenSpec>> =
                     std::sync::LazyLock::new(|| {
                         vec![
-                            TokenSpec::new("surface-overlay", TokenKind::Color).role(Role::Popover),
+                            TokenSpec::new("surface-overlay", TokenKind::Color).role(role::POPOVER),
                         ]
                     });
                 &SPECS

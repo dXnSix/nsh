@@ -36,16 +36,16 @@ thread_local! {
 }
 
 /// The tint of a surface's alerts and action sheets for its design tokens
-/// ([`nsh_core::Command::Tokens`]): the theme's [`Role::Primary`] when the
+/// ([`nsh_core::Command::Tokens`]): the theme's [`role::PRIMARY`] when the
 /// app has a theme of its own (the core says so: `Tokens::is_themed`), else
 /// `None` (the system's).
 ///
-/// [`Role::Primary`]: nsh_core::element::Role::Primary
+/// [`role::PRIMARY`]: nsh_core::element::role::PRIMARY
 pub(crate) fn alert_tint(
     tokens: &nsh_core::element::Tokens,
 ) -> Option<nsh_core::element::AdaptiveColor> {
     tokens
-        .role_color(nsh_core::element::Role::Primary)
+        .role(nsh_core::element::role::PRIMARY)
         .filter(|_| tokens.is_themed())
 }
 
