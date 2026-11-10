@@ -1030,6 +1030,46 @@ declare const text: "export default ignored";
         assert_eq!(values, ["EOL", "arch", "default", "homedir", "platform"]);
     }
 
+    /// `nsh/tizen` (Samsung TVs) is declared from its spec: its functions
+    /// and the type of `productInfo`'s answer.
+    mod tizen {
+        use super::*;
+
+        #[test]
+        fn nsh_tizen_declares_its_functions() {
+            let files = type_definitions(&[]);
+            let (_, tizen) = files
+                .iter()
+                .find(|(path, _)| path == "nsh/tizen.d.ts")
+                .expect("nsh/tizen.d.ts");
+            let mut values = exported_values(tizen);
+            values.sort();
+            assert_eq!(
+                values,
+                [
+                    "exitApp",
+                    "isAvailable",
+                    "productInfo",
+                    "registerKey",
+                    "setPreviewData",
+                    "unregisterKey"
+                ],
+                "{tizen}"
+            );
+            assert!(tizen.contains("isAvailable(): boolean"), "{tizen}");
+            assert!(
+                tizen.contains("productInfo(): Promise<ProductInfo>"),
+                "{tizen}"
+            );
+            assert!(
+                tizen.contains("registerKey(key: string): Promise<void>"),
+                "{tizen}"
+            );
+            assert!(tizen.contains("interface ProductInfo"), "{tizen}");
+            assert!(tizen.contains("platformVersion"), "{tizen}");
+        }
+    }
+
     #[test]
     fn paths_are_relative() {
         assert_eq!(relative("nsh/base.d.ts", "nsh/types.d.ts"), "./types");
