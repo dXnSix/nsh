@@ -37,6 +37,7 @@ mod decor;
 pub mod dev;
 mod events;
 mod file_drop;
+mod focus;
 mod geom;
 mod image;
 mod input;

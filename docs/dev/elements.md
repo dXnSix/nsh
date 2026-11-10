@@ -166,8 +166,10 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   press the focused stop only when it takes presses; a stop that takes none hears its keys through the keymap (`on_key`
   / `on_key_with`, bound while it is focused, as `DataTable`'s controller does), Return and Space included.
   (`focusable={true}` on a view that takes no presses made nothing focusable before 2026-10-26; with no release
-  recorded, it now means what React Native's `focusable` and the web's `tabIndex={0}` mean.) Windows and GPUI
-  move the focus between fields and native components only so far; iOS and Android move it between inputs.
+  recorded, it now means what React Native's `focusable` and the web's `tabIndex={0}` mean.) Windows moves the
+  focus between fields and native components only so far, and so does GPUI's Tab; GPUI's arrows move it between every
+  stop, to the nearest in their direction (`focus.rs`, `nsh_core::focus`, as the terminal's do), and Return and Space
+  press the stop they reach; iOS and Android move it between inputs.
   A link in text (a nested `<Text>` that takes presses, `AttributedText::links`) is a stop of its own: the core marks
   each `TextLink` with `focus_stop` (the span's `ViewProps::focus_stop(true)`: unless `focusable={false}` or
   disabled), Tab reaches it after its text view, in text order (nested links inside the one around them), the

@@ -158,6 +158,8 @@ pub(crate) struct Surface {
     pub(crate) nav: RefCell<crate::navigation::Nav>,
     /// Pointer input state ([`crate::input`]).
     pub(crate) input: crate::input::Input,
+    /// The keyboard focus on views ([`crate::focus`]).
+    pub(crate) focus: crate::focus::Focus,
     /// The destination of a file dragged in from another application.
     pub(crate) file_drop: crate::file_drop::State,
     engine: RefCell<Option<Engine>>,
@@ -255,6 +257,9 @@ pub(crate) struct Surface {
     /// with what they changed applied here.
     events_sent: Cell<u64>,
     events_handled: Cell<u64>,
+    /// The events sent, in order (tests read them without an engine).
+    #[cfg(test)]
+    pub(crate) heard: RefCell<Vec<(NodeId, EventKind)>>,
     /// The embedding app's theme ([`crate::AppView::set_theme`]): sent to
     /// every engine the surface starts, before its first frame.
     pub(crate) host_theme: RefCell<Option<nsh_base::Theme>>,
@@ -289,6 +294,7 @@ impl Surface {
             anim: RefCell::new(UiAnimation::default()),
             nav: RefCell::default(),
             input: Default::default(),
+            focus: Default::default(),
             file_drop: Default::default(),
             engine: RefCell::new(None),
             control: RefCell::new(None),
@@ -332,6 +338,8 @@ impl Surface {
             batches: Cell::new(0),
             events_sent: Cell::new(0),
             events_handled: Cell::new(0),
+            #[cfg(test)]
+            heard: RefCell::default(),
             chrome: Default::default(),
             host_theme: RefCell::new(None),
             transparent: Cell::new(false),
@@ -468,6 +476,7 @@ impl Surface {
         *self.anim.borrow_mut() = UiAnimation::default();
         self.nav.borrow_mut().reset();
         crate::input::reset(self);
+        crate::focus::reset(self);
         crate::keymap::clear(self);
         crate::text_input::surface_stopped(self.key);
         self.js_frame.set(false);
@@ -497,6 +506,8 @@ impl Surface {
 
     /// Sends an event to JS.
     pub(crate) fn event(&self, id: NodeId, kind: EventKind, payload: EventPayload) {
+        #[cfg(test)]
+        self.heard.borrow_mut().push((id, kind));
         self.control(|c| {
             c.dispatch_event(id, kind, payload);
             self.events_sent.set(self.events_sent.get() + 1);
@@ -685,6 +696,12 @@ impl Surface {
             }
         }
         self.ensure_ticking();
+    }
+
+    /// Applies `batch` as if the engine had sent it (tests without one).
+    #[cfg(test)]
+    pub(crate) fn apply_batch(self: &Rc<Self>, batch: &MountBatch) {
+        self.apply(batch);
     }
 
     fn apply(self: &Rc<Self>, batch: &MountBatch) {

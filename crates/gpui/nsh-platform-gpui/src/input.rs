@@ -134,7 +134,7 @@ pub(crate) struct Modifiers {
 
 impl Modifiers {
     /// As the core's modifiers (`meta` is its `cmd`).
-    fn core(self) -> nsh_core::keymap::Modifiers {
+    pub(crate) fn core(self) -> nsh_core::keymap::Modifiers {
         nsh_core::keymap::Modifiers {
             ctrl: self.ctrl,
             alt: self.alt,
@@ -1210,6 +1210,7 @@ pub(crate) fn key_now(surface: &Rc<Surface>, event: KeyEvent) -> bool {
         || crate::text::key(surface, &event)
         || crate::selectable_view::key(surface, &event)
         || crate::navigation::key_pressed(surface, &event)
+        || crate::focus::key(surface, &event)
         || {
             let (x, y) = input.last.get().unwrap_or((-1.0, -1.0));
             crate::scroll::key(surface, &event, x, y)
@@ -1302,6 +1303,8 @@ pub(crate) fn tab_to_edge(surface: &Rc<Surface>, shift: bool) -> bool {
 /// (focused by [`crate::native::apply_focus`], which has the window).
 fn focus_stop(surface: &Rc<Surface>, view: &NshView) {
     if view.kind() == ViewKind::Native {
+        // The view the arrows focused loses it ([`crate::focus`]).
+        crate::focus::set(surface, None);
         crate::native::tab_to(surface, view.id());
     } else {
         crate::text_input::tab_to(view);
