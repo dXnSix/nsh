@@ -396,7 +396,8 @@ fn stops_in(surface: &Surface, scope: &NshView, axis: Option<bool>) -> (Vec<Stop
 /// The stops Tab goes through in `scope` (a modal, or a window's root):
 /// the arrows' ([`stops_in`]), in tree order.
 pub(crate) fn tab_stops(surface: &Surface, scope: &NshView) -> Vec<NshView> {
-    stops_in(surface, scope)
+    stops_in(surface, scope, None)
+        .0
         .into_iter()
         .map(|stop| stop.view)
         .collect()
