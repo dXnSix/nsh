@@ -56,7 +56,7 @@ class Target {
 
 /** A page with the shim on it: `tizen` (none: off a TV) and the app's
  * answer to each key (`takes(key)`: whether it goes back on it). */
-function page({ tizen, webapis, takes = () => false } = {}) {
+function page({ tizen, webapis, preview = null, takes = () => false } = {}) {
   const window = new Target();
   const document = { title: "Counter", activeElement: null };
   class Element extends Target {
@@ -97,7 +97,9 @@ function page({ tizen, webapis, takes = () => false } = {}) {
   });
   const context = vm.createContext(window);
   vm.runInContext("globalThis.globalThis = globalThis;", context);
-  vm.runInContext(SHIM, context, { filename: "shim.js" });
+  // The package's preview, as `nsh package` writes it.
+  const shimSource = SHIM.replace("const PREVIEW = null;", `const PREVIEW = ${JSON.stringify(preview)};`);
+  vm.runInContext(shimSource, context, { filename: "shim.js" });
   /** The remote's key `keyCode` going down and up where the focus is. */
   const press = (keyCode, key = "") => {
     const target = document.activeElement ?? document.body;
@@ -114,7 +116,7 @@ function page({ tizen, webapis, takes = () => false } = {}) {
 function tv({ supported, refused = [] } = {}) {
   const registered = [];
   const exits = [];
-  return {
+  const tizen = {
     registered,
     exits,
     tvinputdevice: {
@@ -133,8 +135,22 @@ function tv({ supported, refused = [] } = {}) {
         throw new Error(`NotSupportedError: ${key}`);
       },
     },
-    application: { getCurrentApplication: () => ({ exit: () => exits.push(true) }) },
+    launched: [],
+    refuseLaunch: null,
+    ApplicationControl: class { constructor(operation, uri, mime, category, data) { Object.assign(this, { operation, data }); } },
+    ApplicationControlData: class { constructor(key, value) { Object.assign(this, { key, value }); } },
+    application: {
+      getCurrentApplication: () => ({ exit: () => exits.push(true) }),
+      launchAppControl(control, id, ok, fail) {
+        // Plain values of this realm (the shim's are its context's).
+        this.owner.launched.push(JSON.parse(JSON.stringify({ id, operation: control.operation, data: [...control.data].map((d) => [d.key, d.value]) })));
+        if (this.owner.refuseLaunch) fail({ message: this.owner.refuseLaunch });
+        else ok();
+      },
+    },
   };
+  tizen.application.owner = tizen;
+  return tizen;
 }
 
 const ALL = [
@@ -236,18 +252,10 @@ test("other keys reach the app as they are", () => {
   assert.deepEqual(heard, ["ColorF0Red", "ArrowUp"]);
 });
 
-test("the web half of nsh/tizen reaches the TV through nshTizen", async () => {
+test("the web half of nsh/tizen reaches the TV through nshTizen", () => {
   const tizen = tv({ supported: ALL });
-  const previews = [];
   const webapis = {
     productinfo: { getRealModel: () => "QN65S95D", getModel: () => "24_PONTUSM_QTV", getFirmware: () => "T-PTMDEUC-1250.0" },
-    preview: {
-      setPreviewData(json, ok, fail) {
-        previews.push(json);
-        if (json === "bad") fail({ message: "invalid preview" });
-        else ok();
-      },
-    },
   };
   const { shim } = page({ tizen, webapis });
   assert.deepEqual({ ...shim.productInfo() }, {
@@ -257,15 +265,32 @@ test("the web half of nsh/tizen reaches the TV through nshTizen", async () => {
   assert.ok(!shim.keys.includes("ColorF0Red") && !tizen.registered.includes("ColorF0Red"));
   shim.registerKey("ColorF0Red");
   assert.ok(shim.keys.includes("ColorF0Red") && tizen.registered.includes("ColorF0Red"));
-  await shim.setPreviewData("{}");
-  await assert.rejects(shim.setPreviewData("bad"), /invalid preview/);
-  assert.deepEqual(previews, ["{}", "bad"]);
 });
 
-test("a TV without webapis.js reports what tizen knows", async () => {
+test("a TV without webapis.js reports what tizen knows", () => {
   const { shim } = page({ tizen: tv({ supported: ALL }) });
   assert.deepEqual({ ...shim.productInfo() }, { model: null, platformVersion: "8.0", build: null, manufacturer: null });
-  await assert.rejects(shim.setPreviewData("{}"), /webapis\.preview/);
+});
+
+test("a personal preview goes to the package's preview service", async () => {
+  const tizen = tv({ supported: ALL });
+  const { shim } = page({ tizen, preview: { service: "AbCdE12345.NshPreview" } });
+  assert.deepEqual({ ...shim.preview }, { service: "AbCdE12345.NshPreview" });
+  await shim.setPreviewData('{"sections":[]}');
+  assert.deepEqual(tizen.launched, [{
+    id: "AbCdE12345.NshPreview",
+    operation: "http://tizen.org/appcontrol/operation/service",
+    data: [["preview", ['{"sections":[]}']]],
+  }]);
+  tizen.refuseLaunch = "NotFoundError";
+  await assert.rejects(shim.setPreviewData("{}"), /NotFoundError/);
+});
+
+test("without a personal preview setPreviewData says why", async () => {
+  const none = page({ tizen: tv({ supported: ALL }) }).shim;
+  await assert.rejects(none.setPreviewData("{}"), /tizen\.smartHubPreview to "service"/);
+  const pub = page({ tizen: tv({ supported: ALL }), preview: { endpoint: "https://example.com/p.json" } }).shim;
+  await assert.rejects(pub.setPreviewData("{}"), /public: the TV reads it from https:\/\/example\.com\/p\.json/);
 });
 
 test("the shim says which Smart Hub preview its package has", () => {

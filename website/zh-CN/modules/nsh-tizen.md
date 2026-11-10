@@ -21,7 +21,7 @@ function isAvailable(): boolean;
 
 在三星电视上运行的应用中为 `true`，无论是原生运行（`--target tizen`）还是作为 Tizen Web 应用（`--target tizen-web`，在电视浏览器引擎中运行的 `.wgt`）；其他地方为 `false`，包括浏览器中的 Web。
 
-在 Tizen Web 应用中，这个模块调用电视的 Web API：`productInfo` 读取 `webapis.productinfo` 和 `tizen.systeminfo`，按键交给 `tizen.tvinputdevice`，`exitApp` 交给 `tizen.application`，`setPreviewData` 交给 `webapis.preview`。`nsh package --target tizen-web` 写出的包会申请它们所需的权限。
+在 Tizen Web 应用中，这个模块调用电视的 Web API：`productInfo` 读取 `webapis.productinfo` 和 `tizen.systeminfo`，按键交给 `tizen.tvinputdevice`，`exitApp` 交给 `tizen.application`，`setPreviewData` 交给包中调用 `webapis.preview` 的 Smart Hub 预览服务。`nsh package --target tizen-web` 写出的包会申请它们所需的权限。
 
 ## productInfo
 
@@ -69,4 +69,4 @@ function exitApp(): Promise<void>;
 function setPreviewData(data: unknown): Promise<void>;
 ```
 
-设置应用的 Smart Hub 预览，即电视在主屏幕上为应用显示的磁贴，格式为三星的预览格式。电视从 Web 应用获取预览：在 Tizen Web 应用中，`data` 以 JSON 形式交给 `webapis.preview.setPreviewData`，电视拒绝时 promise 以 `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` 拒绝。在原生应用中这个调用以 `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` 拒绝。
+设置应用的 Smart Hub 预览，即电视在主屏幕上为应用显示的磁贴，格式为三星的预览格式。电视从 Web 应用获取预览。三星从包中的后台服务设置个人预览，因此 Tizen Web 应用要在 `nsh.json` 中用 `"tizen": { "smartHubPreview": "service" }` 声明它：这样包中会带上 NSH 的预览服务，`setPreviewData` 会以 JSON 形式带着 `data` 启动它，服务把数据交给 `webapis.preview.setPreviewData` 后结束。电视启动服务后 promise 完成；电视没有启动它、包没有声明个人预览，或者预览是公共预览（`smartHubPreview` 中的 URL，电视从你的服务器读取其 JSON，见 [Web](../docs/web.md#三星电视)）时，promise 以 `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` 拒绝。三星每 10 分钟只允许更新一次。这一实现遵循三星的指南，尚未在电视上验证。在原生应用中这个调用以 `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` 拒绝。

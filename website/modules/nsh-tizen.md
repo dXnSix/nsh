@@ -29,7 +29,7 @@ a `.wgt` in the TV's browser engine); `false` elsewhere, the web in a browser in
 
 In a Tizen web app the module calls the TV's web APIs: `productInfo` reads `webapis.productinfo` and
 `tizen.systeminfo`, the keys go to `tizen.tvinputdevice`, `exitApp` to `tizen.application`, and `setPreviewData` to
-`webapis.preview`. The package `nsh package --target tizen-web` writes asks for what they need.
+the package's Smart Hub preview service, which calls `webapis.preview`. The package `nsh package --target tizen-web` writes asks for what they need.
 
 ## productInfo
 
@@ -85,6 +85,11 @@ function setPreviewData(data: unknown): Promise<void>;
 ```
 
 Sets the app's Smart Hub preview, the tiles the TV shows for the app on its home screen, in Samsung's preview format.
-A TV takes the preview from web apps: in a Tizen web app `data` goes to `webapis.preview.setPreviewData` as JSON,
-and the promise rejects with `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` when the TV refuses it. In a native app the call
-rejects with `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`.
+A TV takes the preview from web apps. Samsung sets a personal preview from a background service of the package, so a
+Tizen web app declares one with `nsh.json` `"tizen": { "smartHubPreview": "service" }`: the package then carries
+NSH's preview service, and `setPreviewData` starts it with `data` as JSON; the service hands it to
+`webapis.preview.setPreviewData` and ends. The promise settles when the TV has started the service, and rejects with
+`ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` when it does not, when the package declares no personal preview, or when its
+preview is public (a URL in `smartHubPreview`, whose JSON the TV reads from your server, [Web](../docs/web.md#samsung-tvs)).
+Samsung allows one update every 10 minutes. This follows Samsung's guides and is not yet checked on a TV. In a native
+app the call rejects with `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`.

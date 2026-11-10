@@ -264,7 +264,8 @@ there is no `Os::TizenWeb`.
   `tizen.application.getCurrentApplication().exit()`. It registers the color, media and channel keys the TV has with
   `tizen.tvinputdevice.registerKey`; `nsh.js` reads them by Samsung's key codes in the TV idiom (`TV_KEY_CODES`).
   `globalThis.nshTizen` (`tv`, `keys`, `back()`, `confirmExit()`, `exit()`, `productInfo()`, `registerKey(name)` /
-  `unregisterKey(name)` by Tizen's key names, `setPreviewData(json)`) is the seam the web half of `nsh/tizen` calls;
+  `unregisterKey(name)` by Tizen's key names, `preview`, `setPreviewData(json)`: the package's preview service
+  launched with `tizen.application.launchAppControl`, the data under `preview`) is the seam the web half of `nsh/tizen` calls;
   the page loads the TV's `$WEBAPIS/webapis/webapis.js` before it, and the package asks for
   `http://developer.samsung.com/privilege/productinfo`.
 - **`nsh/tizen` on the web** (`nsh-platform-web`'s `web/browser/tizen.js`, `createTizen`, in place of the runtime's
@@ -273,7 +274,8 @@ there is no `Os::TizenWeb`.
   `tizen.systeminfo`'s platform version and maker, `null` where the TV does not say), `registerKey` /
   `unregisterKey` (`keymap`'s names mapped to Tizen's, checked as natively: a `TypeError` for no key, found with
   `keymap.label`, a `RangeError` for one the TV does not give apps), `exitApp()` (at once, no confirmation),
-  `setPreviewData(data)` (`webapis.preview.setPreviewData` with the data as JSON); the TV's errors reject with
+  `setPreviewData(data)` (the data as JSON to the package's preview service, `tizen.smartHubPreview: "service"`;
+  without one, or with a public preview, the shim rejects and says why); the TV's errors reject with
   `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`. Its promises and errors are the app realm's. Every other page (the web, the
   dev page in a browser here) keeps the runtime's module: `isAvailable()` false, every call rejecting as on the
   platforms that are no TV. `node --test crates/nsh-platform-web/web/browser/tizen.test.mjs` checks it on a fake
