@@ -34,7 +34,8 @@ runtime-shaders = ["gpui_platform?/runtime_shaders"]
 # Nothing on Tizen: web views report that they are unsupported there.
 webview = ["dep:wry", "dep:gtk", "dep:webkit2gtk"]
 # Videos (GStreamer 1.20+ with its base and good plug-ins; libav for most
-# codecs). Nothing on Tizen: GStreamer is not there.
+# codecs). On Tizen videos play through the TV's player, whatever the
+# features.
 video = ["dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video"]
 
 [dependencies]
@@ -97,6 +98,10 @@ objc2-foundation.workspace = true
 [target.'cfg(windows)'.dependencies]
 raw-window-handle.workspace = true
 windows-sys.workspace = true
+
+# Videos on Samsung TVs: the Tizen platform's player (dXn.GpuiTizen).
+[target.'cfg(target_vendor = "tizen")'.dependencies]
+dxn_gpui_tizen.workspace = true
 
 # Tests in windows of GPUI's test platform (feature `shot`) compile
 # their apps.

@@ -197,7 +197,8 @@ What draws or behaves differently from the native desktop backends:
   gradients paint it in one color, `strokeText` fills, its shadows are not blurred, and composite operations and
   `clearRect` do not apply to it.
 - **Scroll views** do not zoom (`zoomTo` and the zoom props are ignored).
-- **Video** plays on Linux (GStreamer); on macOS and Windows a video shows a placeholder and reports `onError`.
+- **Video** plays on Linux (GStreamer) and on Samsung TVs (the TV's player, on its video plane or, inside turning,
+  fading or clipped views, as a texture); on macOS and Windows a video shows a placeholder and reports `onError`.
 - **Web views** are native views above everything NSH draws at their place. On Linux they need X11 (see
   [Requirements](#requirements)); where pages stay black under Xwayland ("Failed to create GBM buffer" in the log),
   run the app with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. On macOS and Windows clipping ancestors do not cut them and
