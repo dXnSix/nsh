@@ -569,27 +569,41 @@ fn key_scroll_view(view: &NshView, horizontal: bool, sign: f32) -> Option<NshVie
     let mut current = Some(view.clone());
     while let Some(v) = current {
         current = v.parent_view();
-        if v.kind() != ViewKind::Scroll {
-            continue;
-        }
-        let (dx, dy) = {
-            let state = v.state();
-            let mirrored = state.scroll.as_ref().is_some_and(|s| s.mirrored);
-            if horizontal {
-                // can_scroll mirrors horizontal deltas; keys are mirrored
-                // in `key`, so undo it here.
-                (if mirrored { -sign } else { sign }, 0.0)
-            } else {
-                (0.0, sign)
-            }
-        };
-        if can_scroll(&v, dx, dy) {
+        if v.kind() == ViewKind::Scroll && key_can_scroll(&v, horizontal, sign) {
             chain.push(v);
         }
     }
     let along = |v: &NshView| v.state().scroll.as_ref().is_some_and(|s| s.horizontal) == horizontal;
     let first = chain.iter().position(along).unwrap_or(0);
     chain.into_iter().nth(first)
+}
+
+/// Scroll view `view` can move as a key moving toward `sign` along an axis
+/// moves it.
+pub(crate) fn key_can_scroll(view: &NshView, horizontal: bool, sign: f32) -> bool {
+    let (dx, dy) = {
+        let state = view.state();
+        let mirrored = state.scroll.as_ref().is_some_and(|s| s.mirrored);
+        if horizontal {
+            // can_scroll mirrors horizontal deltas; keys are mirrored in
+            // `key`, so undo it here.
+            (if mirrored { -sign } else { sign }, 0.0)
+        } else {
+            (0.0, sign)
+        }
+    };
+    can_scroll(view, dx, dy)
+}
+
+/// Keyboard scrolling of scroll view `view` itself, as [`key`] scrolls
+/// the one under the pointer: an arrow that keeps the focus in it
+/// ([`crate::focus`]). True when it was a scrolling key.
+pub(crate) fn key_view(surface: &Rc<Surface>, view: &NshView, event: &KeyEvent) -> bool {
+    let Some((horizontal, m)) = key_move(event) else {
+        return false;
+    };
+    shared::key_scroll(&Host::new(surface, view), m, horizontal);
+    true
 }
 
 /// The innermost view at `(x, y)` (`view`'s coordinates).

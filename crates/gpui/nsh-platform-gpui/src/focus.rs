@@ -41,21 +41,41 @@
 //!   bindings of those keys give way to it ([`on_control`],
 //!   `Keymap::find_at`); one that takes none leaves them to the app's
 //!   bindings.
-//! - **`focus()`** on a stop that shows gives it the focus
-//!   ([`focus_command`]); a pointer going down outside the focused view
-//!   takes it away ([`pointer_down`]), and a focused view that is removed
-//!   loses it at once, without `onBlur` ([`detached`]).
+//! - **What a TV adds** (`focus::directional`): with nothing focused the
+//!   first `preferredFocus` stop in sight takes an arrow; a stop's
+//!   `nextFocus*` route (its own, or that of a view around it that is no
+//!   stop) goes to the view named or the first stop inside it; a
+//!   `FocusGroup`'s view is entered at its first destination in reach (else
+//!   its preferred stop) and with `trap` keeps the arrows; while the
+//!   innermost scroll view along the arrow's axis around the focus can
+//!   scroll on that way, a stop outside it is not reached: the view
+//!   scrolls ([`crate::scroll::key_view`]) and the engine is told
+//!   (`EngineControl::focus_past`), so a list scrolls to its next row and
+//!   the core focuses that row's first stop once it is mounted.
+//! - **`autoFocus` and `focus()`**: after a batch that brought a view with
+//!   `autoFocus`, or a new focus scope (a modal presented), the first such
+//!   stop of the scope not given its chance yet takes the focus
+//!   (`focus::auto_focus`); `Command::Focus` on a stop that is no input (a
+//!   ref's `focus()`, the core's for a list row) moves the focus to it
+//!   after the batch, and the window takes the keyboard; a pointer going
+//!   down outside the focused view takes it away ([`pointer_down`]), and a
+//!   focused view that is removed loses it at once, without `onBlur`
+//!   ([`detached`]).
 //! - **Layers**: focus that went into a root view's child (the page, a
 //!   sheet's panel, an overlay) from a stop of another comes back to that
 //!   stop when the layer goes ([`focus::Layers`]); a stop a backdrop
 //!   covers loses the focus and gets it back when that layer goes. Modals
 //!   give the focus back themselves ([`crate::navigation`]).
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+    rc::Rc,
+};
 
 use nsh_core::{
     Bounds, EventKind, EventPayload, NodeId, PointerEvents, Points, ViewKind,
-    focus::{self, Candidate, Layer, Order},
+    focus::{self, Candidate, Direction, Group, Layer, NextFocus, Order, Target},
     geometry::{point, size},
     input::has_press,
     tailwind::state::FOCUSED,
@@ -77,6 +97,17 @@ pub(crate) struct Focus {
     view: RefCell<Option<NshView>>,
     /// The layers the focus went into, each with the stop it came from.
     layers: RefCell<focus::Layers>,
+    /// A view with `autoFocus` came, or the focus scope changed: the stops
+    /// that take the focus as they appear are looked at after the batch.
+    auto: Cell<bool>,
+    /// The `autoFocus` stops given their chance already, by node.
+    auto_seen: RefCell<HashSet<NodeId>>,
+    /// The focus scope after the last batch.
+    scope: Cell<NodeId>,
+    /// The view a `Command::Focus` of the batch named (`focus()` on a ref,
+    /// the row of a list the arrows reached): it takes the focus after the
+    /// batch, when it is a stop of the scope.
+    asked: RefCell<Option<NshView>>,
 }
 
 /// A stop of the focus scope: the core's candidate, and its view.
@@ -166,20 +197,68 @@ struct Walk<'a> {
     scope: NodeId,
     stops: Vec<Stop>,
     order: usize,
+    /// The axis an arrow moves along (`true`: across), when one does: a
+    /// stop's scroller is the innermost scroll view along it.
+    axis: Option<bool>,
+    /// The focus groups met, their destinations as the views named.
+    groups: Vec<Group>,
+}
+
+const DIRECTIONS: [Direction; 4] = [
+    Direction::Up,
+    Direction::Down,
+    Direction::Left,
+    Direction::Right,
+];
+
+/// What a view hands the stops inside it.
+#[derive(Clone, Copy, Default)]
+struct Around {
+    /// The child of the scope's root view it is in.
+    layer: Option<NodeId>,
+    /// Inside an overlay anchored to another view.
+    popup: bool,
+    /// The innermost focus group.
+    group: Option<NodeId>,
+    /// The innermost scroll view along the arrow's axis.
+    scroller: Option<NodeId>,
+    /// `preferredFocus` of the view or one around it: a row's is its
+    /// items'.
+    preferred: bool,
+    /// `autoFocus` of the view or one around it.
+    auto: bool,
+    /// The `nextFocus*` routes of the view and those around it, the
+    /// nearest's first.
+    next: NextFocus,
 }
 
 impl Walk<'_> {
-    fn view(
-        &mut self,
-        view: &NshView,
-        to_root: Mat4,
-        clip: Edges,
-        layer: Option<NodeId>,
-        popup: bool,
-    ) {
+    fn view(&mut self, view: &NshView, to_root: Mat4, clip: Edges, around: Around) {
         let order = self.order;
         self.order += 1;
-        let popup = popup || view.state().props.overlay_anchor.is_some();
+        let mut around = around;
+        let group = {
+            let s = view.state();
+            let props = &s.props;
+            around.popup |= props.overlay_anchor.is_some();
+            around.preferred |= props.preferred_focus;
+            around.auto |= props.auto_focus;
+            for direction in DIRECTIONS {
+                if let Some(to) = props.next_focus.toward(direction) {
+                    around.next.set(direction, Some(to));
+                }
+            }
+            props.focus_group.clone()
+        };
+        if let Some(config) = group {
+            let mut group = Group::default();
+            group.id = view.id();
+            group.parent = around.group;
+            group.trap = config.trap;
+            group.destinations = config.destinations;
+            self.groups.push(group);
+            around.group = Some(view.id());
+        }
         let own = edges(view, &to_root);
         if is_stop(self.surface, view)
             && let Some(own) = own
@@ -191,9 +270,14 @@ impl Walk<'_> {
             node.stop = true;
             node.editable = editable(view);
             node.scope = self.scope;
-            node.layer = layer;
-            node.popup = popup;
+            node.layer = around.layer;
+            node.popup = around.popup;
             node.order = Order::view(order);
+            node.preferred = around.preferred;
+            node.auto_focus = around.auto;
+            node.next = around.next;
+            node.group = around.group;
+            node.scroller = around.scroller;
             self.stops.push(Stop {
                 node,
                 view: view.clone(),
@@ -203,6 +287,14 @@ impl Walk<'_> {
             Some(own) if view.state().clips() => intersect(own, clip),
             _ => clip,
         };
+        let along = view.kind() == ViewKind::Scroll && {
+            let s = view.state();
+            let horizontal = s.scroll.as_ref().is_some_and(|scroll| scroll.horizontal);
+            self.axis.is_none_or(|axis| axis == horizontal)
+        };
+        if along {
+            around.scroller = Some(view.id());
+        }
         view.with_children_in_reading_order(|children| {
             for child in children {
                 // Another modal is a scope of its own.
@@ -210,10 +302,25 @@ impl Walk<'_> {
                     continue;
                 }
                 let to_root = Mat4::mul(&local(view, child), &to_root);
-                self.view(child, to_root, clip, layer.or(Some(child.id())), popup);
+                let mut inside = around;
+                inside.layer = around.layer.or(Some(child.id()));
+                self.view(child, to_root, clip, inside);
             }
         });
     }
+}
+
+/// The stop a route or a group's destination naming view `id` reaches:
+/// that view when it is one of `stops`, else the first of them inside it.
+fn reached(surface: &Surface, stops: &[Stop], id: NodeId) -> Option<NodeId> {
+    if stops.iter().any(|stop| stop.node.id == id) {
+        return Some(id);
+    }
+    let target = surface.view(id)?;
+    stops
+        .iter()
+        .find(|stop| contains(&target, &stop.view))
+        .map(|stop| stop.node.id)
 }
 
 /// The root of the tree `view` is in (the surface's, or a window's of the
@@ -232,16 +339,21 @@ fn window_edges(view: &NshView) -> Edges {
     (0.0, 0.0, size.width.0, size.height.0)
 }
 
-/// The stops of `scope` in focus order (`focus::candidates`).
-fn stops_in(surface: &Surface, scope: &NshView) -> Vec<Stop> {
+/// The stops of `scope` in focus order (`focus::candidates`), their routes
+/// as stops, with its focus groups, their destinations as stops; `axis`
+/// the arrow's (`true`: across), whose scroll views are the stops'
+/// scrollers.
+fn stops_in(surface: &Surface, scope: &NshView, axis: Option<bool>) -> (Vec<Stop>, Vec<Group>) {
     let Some(to_root) = scope.to_root() else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let mut walk = Walk {
         surface,
         scope: scope.id(),
         stops: Vec::new(),
         order: 0,
+        axis,
+        groups: Vec::new(),
     };
     let clip = window_edges(scope);
     let clip = edges(scope, &to_root).map_or(clip, |own| intersect(own, clip));
@@ -251,10 +363,37 @@ fn stops_in(surface: &Surface, scope: &NshView) -> Vec<Stop> {
                 continue;
             }
             let to_root = Mat4::mul(&local(scope, child), &to_root);
-            walk.view(child, to_root, clip, Some(child.id()), false);
+            let around = Around {
+                layer: Some(child.id()),
+                ..Around::default()
+            };
+            walk.view(child, to_root, clip, around);
         }
     });
-    focus::candidates(walk.stops, scope.id(), &layers(scope))
+    let mut stops = focus::candidates(walk.stops, scope.id(), &layers(scope));
+    // Routes and destinations name views: the stops they reach.
+    let routes: Vec<NextFocus> = stops
+        .iter()
+        .map(|stop| {
+            let mut next = NextFocus::default();
+            for direction in DIRECTIONS {
+                let to = stop.node.next.toward(direction);
+                next.set(direction, to.and_then(|id| reached(surface, &stops, id)));
+            }
+            next
+        })
+        .collect();
+    for (stop, next) in stops.iter_mut().zip(routes) {
+        stop.node.next = next;
+    }
+    let mut groups = walk.groups;
+    for group in &mut groups {
+        group.destinations = std::mem::take(&mut group.destinations)
+            .into_iter()
+            .filter_map(|id| reached(surface, &stops, id))
+            .collect();
+    }
+    (stops, groups)
 }
 
 /// The children of `scope` (a modal, or a window's root) as the core's
@@ -487,34 +626,6 @@ fn focus_stop(surface: &Rc<Surface>, view: &NshView) {
     }
 }
 
-/// `focus()` on a view that is not an input: a stop that is attached and
-/// shown (neither it nor a view around it hidden, concealed or out of the
-/// pointer's reach) takes the keyboard focus, as one the arrows reach
-/// does, and the window takes the keyboard.
-pub(crate) fn focus_command(surface: &Rc<Surface>, view: &NshView) {
-    if !is_stop(surface, view) || !reachable(view) || focused(surface).as_ref() == Some(view) {
-        return;
-    }
-    surface.window_focus_requested.set(true);
-    focus_stop(surface, view);
-}
-
-/// `view` and every view around it take part ([`left_out`]), up to an
-/// attached root.
-fn reachable(view: &NshView) -> bool {
-    let mut at = Some(view.clone());
-    while let Some(v) = at {
-        if left_out(&v) {
-            return false;
-        }
-        at = v.parent_view();
-        if at.is_none() && !v.attached() {
-            return false;
-        }
-    }
-    true
-}
-
 /// The pointer went down on `hit`: the view with this module's focus lets
 /// go of it unless `hit` is inside it.
 pub(crate) fn pointer_down(surface: &Surface, hit: &NshView) {
@@ -554,18 +665,29 @@ pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
         return false;
     }
     match event.vk {
-        VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN if !m.shift => arrow(surface, event.vk),
+        VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN if !m.shift => arrow(surface, event),
         VK_RETURN | VK_SPACE => press(surface, event),
         _ => false,
     }
 }
 
-/// An arrow: the focus moves to the stop in that direction, if any.
-fn arrow(surface: &Rc<Surface>, vk: u16) -> bool {
+/// An arrow: the focus moves to the stop in that direction, if any
+/// (`focus::directional`); while the scroll view around the focus can
+/// scroll on that way and the stop is outside it, the view scrolls
+/// instead, and a list scrolls to its next row
+/// (`EngineControl::focus_past`), whose first stop takes the focus once
+/// mounted.
+fn arrow(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
+    let direction = match event.vk {
+        VK_LEFT => Direction::Left,
+        VK_RIGHT => Direction::Right,
+        VK_UP => Direction::Up,
+        _ => Direction::Down,
+    };
+    let horizontal = direction.horizontal();
     let scope = crate::navigation::focus_scope(surface);
-    let mut stops = stops_in(surface, &scope);
+    let (mut stops, groups) = stops_in(surface, &scope, Some(horizontal));
     let current = current(surface);
-    let horizontal = vk == VK_LEFT || vk == VK_RIGHT;
     // Left and Right on a menu's item its menu does not take (no submenu)
     // would leave the menu open behind the focus: they stay in it.
     if horizontal
@@ -580,17 +702,42 @@ fn arrow(surface: &Rc<Surface>, vk: u16) -> bool {
     let at = current
         .as_ref()
         .and_then(|view| stops.iter().position(|stop| stop.view == *view));
-    let next = if horizontal {
-        focus::horizontal(&stops, at, vk == VK_RIGHT)
-    } else {
-        focus::vertical(&stops, at, vk == VK_DOWN)
-    };
-    let Some(next) = next.filter(|&next| Some(next) != at) else {
-        return false;
-    };
-    let view = stops[next].view.clone();
-    focus_stop(surface, &view);
-    true
+    let sign = if direction.forward() { 1.0 } else { -1.0 };
+    let target = focus::directional(
+        &stops,
+        at,
+        direction,
+        &groups,
+        |scroller| {
+            surface
+                .view(scroller)
+                .is_some_and(|view| crate::scroll::key_can_scroll(&view, horizontal, sign))
+        },
+        |scroller, id| {
+            let stop = stops.iter().find(|stop| stop.node.id == id);
+            match (surface.view(scroller), stop) {
+                (Some(scroller), Some(stop)) => contains(&scroller, &stop.view),
+                _ => false,
+            }
+        },
+    );
+    match target {
+        Target::Stop(next) if Some(next) != at => {
+            let view = stops[next].view.clone();
+            focus_stop(surface, &view);
+            true
+        }
+        Target::Scroll(scroller) => {
+            if let Some(from) = &current {
+                let from = from.id();
+                surface.control(|c| c.focus_past(from, direction));
+            }
+            surface
+                .view(scroller)
+                .is_some_and(|view| crate::scroll::key_view(surface, &view, event))
+        }
+        _ => false,
+    }
 }
 
 /// Enter or Space: presses the view with this module's focus when it takes
@@ -697,6 +844,59 @@ pub(crate) fn end_batch(surface: &Rc<Surface>) {
         .layers
         .borrow_mut()
         .retain(|layer| surface.view(layer).is_some_and(|view| view.attached()));
+    // The stop a `focus()` of the batch named.
+    let asked = surface.focus.asked.borrow_mut().take();
+    if let Some(view) = asked
+        && still_stop(surface, &scope, &view).0
+    {
+        surface.window_focus_requested.set(true);
+        focus_stop(surface, &view);
+    }
+    // A modal that came, or one that went: its `autoFocus` stops appear.
+    if surface.focus.scope.replace(scope.id()) != scope.id() {
+        surface.focus.auto.set(true);
+    }
+    if surface.focus.auto.take() {
+        auto_focus(surface, &scope);
+    }
+}
+
+/// The first stop of `scope` with `autoFocus` that has not had its
+/// chance takes the focus (`focus::auto_focus`); every one there has had
+/// it then.
+fn auto_focus(surface: &Rc<Surface>, scope: &NshView) {
+    let (stops, _) = stops_in(surface, scope, None);
+    let next = {
+        let mut seen = surface.focus.auto_seen.borrow_mut();
+        seen.retain(|&id| surface.view(id).is_some_and(|view| view.attached()));
+        let next = focus::auto_focus(&stops, |id| seen.contains(&id));
+        seen.extend(
+            stops
+                .iter()
+                .filter(|stop| stop.node.auto_focus)
+                .map(|stop| stop.node.id),
+        );
+        next
+    };
+    if let Some(next) = next {
+        let view = stops[next].view.clone();
+        focus_stop(surface, &view);
+    }
+}
+
+/// Props of `view` were applied: one with `autoFocus` has the stops that
+/// take the focus as they appear looked at after the batch.
+pub(crate) fn props_changed(surface: &Surface, view: &NshView) {
+    if view.state().props.auto_focus {
+        surface.focus.auto.set(true);
+    }
+}
+
+/// `Command::Focus` on `view`, a view that is no input (`focus()` on its
+/// ref, a list row's stop the arrows reached): it takes the focus after
+/// the batch, as Tab gives it, when it is a stop of the scope.
+pub(crate) fn asked(surface: &Surface, view: &NshView) {
+    *surface.focus.asked.borrow_mut() = Some(view.clone());
 }
 
 /// Some of `view` is in sight: neither clipped away nor scrolled out.
@@ -724,7 +924,13 @@ fn shows_in_window(view: &NshView) -> bool {
 pub(crate) fn reset(surface: &Surface) {
     surface.focus.view.borrow_mut().take();
     *surface.focus.layers.borrow_mut() = focus::Layers::default();
+    surface.focus.auto.set(false);
+    surface.focus.auto_seen.borrow_mut().clear();
+    surface.focus.scope.set(0);
+    surface.focus.asked.borrow_mut().take();
 }
 
 #[cfg(test)]
 mod directional_focus;
+#[cfg(test)]
+mod tv_focus;
