@@ -184,7 +184,8 @@ TSX 应用用 [`<Window>` 和 `Window.open`](../modules/nsh-desktop.md#windows) 
 |---|---|
 | Return | 在 `Input` 中按 `submitBehavior` 行事：提交（`onSubmit`）、提交并离开输入框，或换行（多行输入框） |
 | Shift+Return、Alt+Return | 在回车即提交的多行输入框中换行（Ctrl+Return 提交） |
-| Tab、Shift+Tab | 按屏幕顺序移到下一个 / 上一个输入框，只在最上层的对话框之内 |
+| Tab、Shift+Tab（加 Ctrl 亦可） | 按视图树的顺序移到下一个 / 上一个输入框或可按压视图，只在最上层的对话框之内 |
+| Return、空格 | 按下获得焦点、带 `onPress` 的视图 |
 | Escape | 离开有焦点的输入框；否则清除文本选区，再关闭最上层的对话框或返回上一页 |
 | Alt+Left、Back 键、鼠标的后退键 | 返回上一页（在输入框中也是） |
 | Ctrl+方向键、Home / End，加 Shift；Ctrl+Backspace / Delete | 在输入框中按词和行移动、选择、删除，与其他 GTK 应用一致 |
