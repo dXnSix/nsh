@@ -225,6 +225,38 @@ build to the same file) and takes `nsh.js` from the crate.
   input's value, where a dialog's button is, where a text's characters are: each run knows its first character's
   offset). The input itself is the browser's trusted input, sent by the CLI.
 
+### Tizen web apps (`--target tizen-web`)
+
+`crates/nsh-cli/src/tizen_web.rs`: Samsung TVs through their browser engine (route A of the Tizen work). A Tizen web
+app is the web's site plus Tizen's manifest and a TV shim; it reports `Os::Web` in the TV idiom (`platform.tv`),
+there is no `Os::TizenWeb`.
+
+- **`nsh package --target tizen-web`** calls `web::write_site` with a `web::Variant`: the shim (`tizen_web/shim.js`)
+  as a classic script in the head, before the module script; `app.idiom = "tv"` (the page passes `createPlayer`
+  `idiom: app.idiom`); `app.history = false` (the remote's Back is the shim's, a `.wgt` keeps no history entries);
+  `installed` (no `web.base`, no `.br` / `.gz` copies). It adds `config.xml` (`Widget`) and `icon.png` (512×423),
+  writes `<out>/tizen-web/<name>/` and zips it into `<out>/tizen-web/<name>.wgt`, unsigned; with a certificate
+  profile (`--sign`, `nsh.json` `tizen.signing`) `tz pack -t wgt -s <profile> -b <unsigned> -o <out>/<name>.wgt`
+  signs it (`tz`'s repackaging), and `--run` installs (`tz install -p`) and launches it (`tz run -p <app id>`).
+  `tz` is found on `PATH` or at `~/tizen-studio/tools/tizen-core/tz`; only those three calls need the SDK.
+- **`config.xml`**: `nsh.json` `tizen` (`packageId`, 10 letters and digits, by default made from the app's `id`;
+  `appId`, by default `<packageId>.<name's letters and digits>`; `version`, Tizen's `x.y.z`, by default the app's;
+  `apiVersion`, `required_version`, by default `8.0`; `privileges`, added to the internet and `tv.inputdevice`
+  ones; `signing`), the `tv-samsung` profile, `<access origin="*">` (the app's `capabilities` and the page's CSP
+  limit its requests), landscape, the icon. The section's keys are named for a native Tizen target to share.
+- **The shim** (`shim.js`, tested by `node --test crates/nsh-cli/src/tizen_web/shim.test.mjs` on fake `tizen`
+  globals): the remote's Back (key code 10009) is sent to the app as a `BrowserBack` key down (`nsh.js` `keyDown`'s
+  back path), then, when nothing took it (`preventDefault`), as an `Escape` (a dialog, a field); when neither went
+  anywhere it shows an exit confirmation (arrows, Enter, Back) and exits with
+  `tizen.application.getCurrentApplication().exit()`. It registers the color, media and channel keys the TV has with
+  `tizen.tvinputdevice.registerKey`; `nsh.js` reads them by Samsung's key codes in the TV idiom (`TV_KEY_CODES`).
+  `globalThis.nshTizen` (`tv`, `keys`, `back()`, `confirmExit()`, `exit()`) is the seam the web half of `nsh/tizen`
+  calls.
+
+`cargo test -p nsh-cli --test cli tizen_web::` packages with a fake runtime (`NSH_RUNTIME`: a linkable module of
+three functions) and a fake `tz`; `cargo test -p nsh-cli --bin nsh tizen_web::` checks the ids, versions and `tz`'s
+command lines. Not verified here: signing with a real profile and installing on a TV.
+
 ### Runtimes linked for each app
 
 A published app's runtime holds only what the app uses, and what only later screens use is downloaded apart

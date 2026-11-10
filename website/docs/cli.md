@@ -201,28 +201,28 @@ It writes:
 ## nsh package
 
 ```sh
-nsh package [ENTRY] --target ios|ios-simulator|android|macos|linux|windows|web [-o <OUT>] [flags]
+nsh package [ENTRY] --target ios|ios-simulator|android|macos|linux|windows|web|tizen-web [-o <OUT>] [flags]
 ```
 
 Builds an installable app in release mode. A Rust app (`nsh.json` `"root"`) is packaged with its own runner, built with Cargo from your crates and NSH's, its root mounted with no QuickJS ([Building with Rust](./rust.md)); a TSX app with the prebuilt runtime. No Xcode project or Gradle build is involved: NSH assembles the app bundle itself and uses Xcode's `actool` and `codesign` (iOS) or the SDK's `aapt2`, `zipalign` and `apksigner` (Android); for macOS it assembles an ad hoc signed `.app` with `codesign` (and `sips` for the icon); for Linux it copies the runner and writes a `.tar.gz` with `tar`; for Windows it copies the runner, embeds the icon and writes a `.zip`, with no tools; for the web it writes a static site, with no tools. Metadata comes from `nsh.json`, overridden by the flags.
 
 | Flag | Description |
 |---|---|
-| `--target <TARGET>` | Required. `ios`: iOS devices, a signed `.ipa` (or an unsigned `.app` without `--sign`). `ios-simulator`: an ad hoc signed `.app`. `android`: a signed `.apk`. `macos`: an ad hoc signed `.app` ([macOS](./macos.md#packaging)). `linux`: a directory `<Name>/` (the executable, `nsh/`, a `.desktop` file) and `<Name>.tar.gz` ([Linux](./linux.md#packaging)). `windows`: a directory `<Name>\` (`<Name>.exe`, `nsh\`), `<Name>.zip`, an Inno Setup script `<Name>.iss` and, with Inno Setup installed, the installer `<Name>-setup.exe` ([Windows](./windows.md#packaging)). `web`: a directory `<Name>/`, a static site (`index.html` and files named by their content) ([Web](./web.md#publish-an-app)). Any other name packages for the platform of that name built outside NSH ([External targets](#external-targets)). |
+| `--target <TARGET>` | Required. `ios`: iOS devices, a signed `.ipa` (or an unsigned `.app` without `--sign`). `ios-simulator`: an ad hoc signed `.app`. `android`: a signed `.apk`. `macos`: an ad hoc signed `.app` ([macOS](./macos.md#packaging)). `linux`: a directory `<Name>/` (the executable, `nsh/`, a `.desktop` file) and `<Name>.tar.gz` ([Linux](./linux.md#packaging)). `windows`: a directory `<Name>\` (`<Name>.exe`, `nsh\`), `<Name>.zip`, an Inno Setup script `<Name>.iss` and, with Inno Setup installed, the installer `<Name>-setup.exe` ([Windows](./windows.md#packaging)). `web`: a directory `<Name>/`, a static site (`index.html` and files named by their content) ([Web](./web.md#publish-an-app)). `tizen-web`: a Samsung TV's Tizen web app, the site with `config.xml` and the TV shim in `tizen-web/<Name>/`, zipped into `tizen-web/<Name>.wgt`, and with a profile `<Name>.wgt`, signed ([Web](./web.md#samsung-tvs)). Any other name packages for the platform of that name built outside NSH ([External targets](#external-targets)). |
 | `-o, --out <OUT>` | Output directory (default `.nsh/out`). |
 | `--name <NAME>` | Display name. |
 | `--id <ID>` | Bundle identifier, e.g. `com.example.app`. |
 | `--app-version <VERSION>` | Version, e.g. `1.2.0`. |
 | `--build <BUILD>` | Build number. |
 | `--icon <ICON>` | App icon: a square PNG, ideally 1024×1024. |
-| `--sign <IDENTITY>` | iOS devices: code signing identity, e.g. `"Apple Development: …"`. |
+| `--sign <IDENTITY>` | iOS devices: code signing identity, e.g. `"Apple Development: …"`. `tizen-web`: the certificate profile the Tizen SDK's `tz` signs with (default: `nsh.json` `tizen.signing`). |
 | `--profile <FILE>` | iOS devices: provisioning profile (`.mobileprovision`). Entitlements come from it. |
 | `--keystore <FILE>` | Android: release keystore. Default: the debug key in `~/.android/debug.keystore` (created if missing). |
 | `--key-alias <ALIAS>` | Android: key alias in the keystore. |
 | `--keystore-password <PASSWORD>` | Android: keystore password. Also read from `NSH_KEYSTORE_PASSWORD`. |
 | `--format <FORMAT>` | Android: `apk` (default) or `aab`, an Android App Bundle for Google Play, signed with `jarsigner`. Not with `--run`. |
 | `--abi <ABI>` | Android: the ABIs of the APK (`arm64-v8a`, `armeabi-v7a`, `x86_64`), repeated or separated by commas. Default: `arm64-v8a` and `armeabi-v7a`, plus the device's with `--run`. |
-| `--run` | Install and launch the app afterwards: in the simulator (`ios-simulator`) or on the connected Android device; `macos`, `linux` and `windows` launch it; `web` serves the site on this machine at the address it prints. |
+| `--run` | Install and launch the app afterwards: in the simulator (`ios-simulator`) or on the connected Android device; `macos`, `linux` and `windows` launch it; `web` serves the site on this machine at the address it prints; `tizen-web` installs the signed package on the TV and launches it. |
 | `--asset-url <URL>` | Web: the http(s) URL the site's files are served from, a CDN, as the page names them; `index.html` and `manifest.webmanifest` stay at the page's address (named relatively, as without the flag), and the CDN answers with `Access-Control-Allow-Origin`. Default: next to the page, named relatively. `--run` serves the site from this machine as it is, so it goes without it. |
 
 ```sh
@@ -233,6 +233,7 @@ nsh package my-app --target macos
 nsh package my-app --target linux
 nsh package my-app --target windows
 nsh package my-app --target web
+nsh package my-app --target tizen-web --sign my-samsung-profile
 ```
 
 See [Packaging](./packaging.md).

@@ -68,7 +68,8 @@ good, whatever the version number says. Between releases, and before the first c
    `from_json_lenient` of `tailwind::Theme`, `nsh_base::Theme` and `StatusBarSetting`,
    `url_scheme::schemes_from_json_lenient`, the bundler's `resolve`, `Capabilities::from_json_lenient` (a capability or `http` grant it cannot read is not granted, so
    nothing left out widens access). Only text that is no JSON object, a file `nsh.json` names that is missing,
-   NSH's own `Info.plist` keys and an Android `targetSdk` below the minimum are errors.
+   NSH's own `Info.plist` keys, an Android `targetSdk` below the minimum and a `tizen` id or version Tizen refuses
+   (a `--target tizen-web` package, `tizen_web.rs`) are errors.
 7. **The only exception is security**: a capability that cannot be kept safe may be closed. A pull request of
    `nsh-compat` adds what it removes to that repository's `closed.txt`, each with its reason (`<entry> -- <reason>`,
    the entry as the checks report the break: `[<module>] <path>`, `<file>: <Name>`, `<file>: <Name>.<member>` or

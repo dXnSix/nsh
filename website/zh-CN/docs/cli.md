@@ -197,28 +197,28 @@ nsh build [ENTRY] [-o <OUT>] [--release] [--split]
 ## nsh package
 
 ```sh
-nsh package [ENTRY] --target ios|ios-simulator|android|macos|linux|windows|web [-o <OUT>] [flags]
+nsh package [ENTRY] --target ios|ios-simulator|android|macos|linux|windows|web|tizen-web [-o <OUT>] [flags]
 ```
 
 以 release 模式构建可安装的应用。Rust 应用（`nsh.json` 中有 `"root"`）用它自己的运行器打包，运行器由 Cargo 用你的 crate 和 NSH 的 crate 构建，挂载根组件，不带 QuickJS（见[用 Rust 开发](./rust.md)）；TSX 应用使用预构建的运行时。整个过程不需要 Xcode 工程或 Gradle 构建：NSH 自己组装应用包，并使用 Xcode 的 `actool` 和 `codesign`（iOS）或 SDK 中的 `aapt2`、`zipalign` 和 `apksigner`（Android）；macOS 则用 `codesign` 组装一个 ad hoc 签名的 `.app`（图标用 `sips` 转换）；Linux 则复制运行器并用 `tar` 生成 `.tar.gz`；Windows 则复制运行器、嵌入图标并生成 `.zip`，不需要任何工具；Web 则写出一个静态站点，同样不需要任何工具。元数据来自 `nsh.json`，可被参数覆盖。
 
 | 参数 | 说明 |
 |---|---|
-| `--target <TARGET>` | 必填。`ios`：iOS 设备，签名的 `.ipa`（不带 `--sign` 时为未签名的 `.app`）。`ios-simulator`：ad hoc 签名的 `.app`。`android`：签名的 `.apk`。`macos`：ad hoc 签名的 `.app`（[macOS](./macos.md#打包)）。`linux`：一个目录 `<Name>/`（可执行文件、`nsh/`、`.desktop` 文件）和 `<Name>.tar.gz`（[Linux](./linux.md#打包)）。`windows`：一个目录 `<Name>\`（`<Name>.exe`、`nsh\`）、`<Name>.zip`、Inno Setup 脚本 `<Name>.iss`，以及装有 Inno Setup 时生成的安装程序 `<Name>-setup.exe`（[Windows](./windows.md#打包)）。`web`：一个目录 `<Name>/`，即静态站点（`index.html` 和以内容命名的文件）（[Web](./web.md#发布应用)）。其他名字为在 NSH 之外构建的同名平台打包（[外部 target](#外部-target)）。 |
+| `--target <TARGET>` | 必填。`ios`：iOS 设备，签名的 `.ipa`（不带 `--sign` 时为未签名的 `.app`）。`ios-simulator`：ad hoc 签名的 `.app`。`android`：签名的 `.apk`。`macos`：ad hoc 签名的 `.app`（[macOS](./macos.md#打包)）。`linux`：一个目录 `<Name>/`（可执行文件、`nsh/`、`.desktop` 文件）和 `<Name>.tar.gz`（[Linux](./linux.md#打包)）。`windows`：一个目录 `<Name>\`（`<Name>.exe`、`nsh\`）、`<Name>.zip`、Inno Setup 脚本 `<Name>.iss`，以及装有 Inno Setup 时生成的安装程序 `<Name>-setup.exe`（[Windows](./windows.md#打包)）。`web`：一个目录 `<Name>/`，即静态站点（`index.html` 和以内容命名的文件）（[Web](./web.md#发布应用)）。`tizen-web`：三星电视的 Tizen Web 应用：站点加上 `config.xml` 和电视 shim，放在 `tizen-web/<Name>/`，打包成 `tizen-web/<Name>.wgt`，有签名配置时还有签名后的 `<Name>.wgt`（[Web](./web.md#三星电视)）。其他名字为在 NSH 之外构建的同名平台打包（[外部 target](#外部-target)）。 |
 | `-o, --out <OUT>` | 输出目录（默认 `.nsh/out`）。 |
 | `--name <NAME>` | 显示名称。 |
 | `--id <ID>` | Bundle identifier，例如 `com.example.app`。 |
 | `--app-version <VERSION>` | 版本号，例如 `1.2.0`。 |
 | `--build <BUILD>` | 构建号。 |
 | `--icon <ICON>` | 应用图标：正方形 PNG，最好是 1024×1024。 |
-| `--sign <IDENTITY>` | iOS 设备：代码签名身份，例如 `"Apple Development: …"`。 |
+| `--sign <IDENTITY>` | iOS 设备：代码签名身份，例如 `"Apple Development: …"`。`tizen-web`：Tizen SDK 的 `tz` 签名所用的证书配置（默认：`nsh.json` 的 `tizen.signing`）。 |
 | `--profile <FILE>` | iOS 设备：描述文件（`.mobileprovision`），entitlements 取自其中。 |
 | `--keystore <FILE>` | Android：release keystore。默认使用 `~/.android/debug.keystore` 中的调试密钥（不存在时创建）。 |
 | `--key-alias <ALIAS>` | Android：keystore 中的密钥别名。 |
 | `--keystore-password <PASSWORD>` | Android：keystore 密码，也可从 `NSH_KEYSTORE_PASSWORD` 读取。 |
 | `--format <FORMAT>` | Android：`apk`（默认）或 `aab`，即用于 Google Play 的 Android App Bundle，使用 `jarsigner` 签名。不能与 `--run` 同时使用。 |
 | `--abi <ABI>` | Android：APK 包含的 ABI（`arm64-v8a`、`armeabi-v7a`、`x86_64`），可重复或用逗号分隔。默认：`arm64-v8a` 和 `armeabi-v7a`，加上 `--run` 时还有设备的 ABI。 |
-| `--run` | 打包完成后安装并启动应用：在模拟器中（`ios-simulator`）或在已连接的 Android 设备上；`macos`、`linux` 和 `windows` 则直接启动它；`web` 在本机提供站点服务，并打印其地址。 |
+| `--run` | 打包完成后安装并启动应用：在模拟器中（`ios-simulator`）或在已连接的 Android 设备上；`macos`、`linux` 和 `windows` 则直接启动它；`web` 在本机提供站点服务，并打印其地址；`tizen-web` 把签名后的包安装到电视上并启动。 |
 | `--asset-url <URL>` | Web：站点文件所在的 http(s) 地址（CDN），页面按它引用这些文件；`index.html` 和 `manifest.webmanifest` 仍在页面自己的地址下（和不带它时一样按相对路径引用），CDN 要返回 `Access-Control-Allow-Origin`。默认：放在页面旁边，用相对路径引用。`--run` 从本机直接提供站点，所以不带它。 |
 
 ```sh
@@ -229,6 +229,7 @@ nsh package my-app --target macos
 nsh package my-app --target linux
 nsh package my-app --target windows
 nsh package my-app --target web
+nsh package my-app --target tizen-web --sign my-samsung-profile
 ```
 
 参见[打包](./packaging.md)。

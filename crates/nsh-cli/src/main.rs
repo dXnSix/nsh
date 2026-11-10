@@ -29,6 +29,7 @@ mod test_android;
 mod test_host;
 mod test_ios;
 mod test_web;
+mod tizen_web;
 mod ui;
 mod updater;
 mod web;
@@ -534,7 +535,9 @@ struct PackageArgs {
     /// App icon: a square PNG, ideally 1024×1024.
     #[arg(long)]
     icon: Option<PathBuf>,
-    /// Code signing identity for devices, e.g. "Apple Development: …".
+    /// Code signing identity for devices, e.g. "Apple Development: …";
+    /// Tizen web: the certificate profile `tz` signs with (default:
+    /// `nsh.json` `tizen.signing`).
     #[arg(long)]
     sign: Option<String>,
     /// Provisioning profile for devices (`.mobileprovision`).
