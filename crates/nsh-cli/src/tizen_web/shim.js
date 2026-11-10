@@ -11,7 +11,11 @@
 //   `tizen.tvinputdevice.registerKey`, so the app hears them: `nsh.js`
 //   reads them by Samsung's key codes in the TV idiom (`TV_KEY_CODES`);
 // - `globalThis.nshTizen` is what the web half of `nsh/tizen` reaches
-//   (`tv`, `keys`, `back()`, `confirmExit()`, `exit()`).
+//   (`nsh-platform-web`'s `browser/tizen.js`): `tv`, `keys`, `back()`,
+//   `confirmExit()`, `exit()`, and the TV's own APIs, `productInfo()`
+//   (`webapis.productinfo`, `tizen.systeminfo`), `registerKey(name)` /
+//   `unregisterKey(name)` (`tizen.tvinputdevice`, by Tizen's key names) and
+//   `setPreviewData(json)` (`webapis.preview`, a promise).
 //
 // Off a TV (`nsh run --target tizen-web` in Chrome, `nsh test --target
 // tizen-web`) there is no `tizen`: keys register nothing and `exit()`
@@ -171,13 +175,64 @@
     }
   }, true);
 
+  /** What `get()` gives, `null` where it throws or gives nothing. */
+  function read(get) {
+    try {
+      const value = get();
+      return value == null || value === "" ? null : String(value);
+    } catch {
+      return null;
+    }
+  }
+
+  /** The TV's model, Tizen version, firmware build and maker. */
+  function productInfo() {
+    const product = global.webapis?.productinfo;
+    const capability = (key) => read(() => tizen.systeminfo.getCapability(key));
+    return {
+      model: read(() => product.getRealModel()) ?? read(() => product.getModel()),
+      platformVersion: capability("http://tizen.org/feature/platform.version"),
+      build: read(() => product.getFirmware()),
+      manufacturer: capability("http://tizen.org/system/manufacturer"),
+    };
+  }
+
+  /** Takes the remote's key `name` (Tizen's: `ColorF0Red`) from the TV;
+   * throws the TV's error. */
+  function registerKey(name) {
+    tizen.tvinputdevice.registerKey(name);
+    if (!keys.includes(name)) keys.push(name);
+  }
+
+  /** Gives key `name` back to the TV; throws the TV's error. */
+  function unregisterKey(name) {
+    tizen.tvinputdevice.unregisterKey(name);
+    const at = keys.indexOf(name);
+    if (at >= 0) keys.splice(at, 1);
+  }
+
+  /** Sets Smart Hub's preview of the app to `json` (Samsung's format, as
+   * text); settles with the TV's answer. */
+  function setPreviewData(json) {
+    return new Promise((resolve, reject) => {
+      const preview = global.webapis?.preview;
+      if (!preview) throw new Error("the TV has no webapis.preview (webapis.js did not load)");
+      preview.setPreviewData(json, () => resolve(), (error) => reject(new Error(error?.message ?? String(error))));
+    });
+  }
+
+  const keys = registerKeys();
   global.nshTizen = {
     /** Whether the page runs on a TV (Tizen's web runtime). */
     tv: !!tizen,
-    /** The remote's keys registered for the app. */
-    keys: registerKeys(),
+    /** The remote's keys registered for the app, by Tizen's names. */
+    keys,
     back,
     confirmExit,
     exit,
+    productInfo,
+    registerKey,
+    unregisterKey,
+    setPreviewData,
   };
 })(globalThis);

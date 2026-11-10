@@ -250,8 +250,21 @@ there is no `Os::TizenWeb`.
   anywhere it shows an exit confirmation (arrows, Enter, Back) and exits with
   `tizen.application.getCurrentApplication().exit()`. It registers the color, media and channel keys the TV has with
   `tizen.tvinputdevice.registerKey`; `nsh.js` reads them by Samsung's key codes in the TV idiom (`TV_KEY_CODES`).
-  `globalThis.nshTizen` (`tv`, `keys`, `back()`, `confirmExit()`, `exit()`) is the seam the web half of `nsh/tizen`
-  calls.
+  `globalThis.nshTizen` (`tv`, `keys`, `back()`, `confirmExit()`, `exit()`, `productInfo()`, `registerKey(name)` /
+  `unregisterKey(name)` by Tizen's key names, `setPreviewData(json)`) is the seam the web half of `nsh/tizen` calls;
+  the page loads the TV's `$WEBAPIS/webapis/webapis.js` before it, and the package asks for
+  `http://developer.samsung.com/privilege/productinfo`.
+- **`nsh/tizen` on the web** (`nsh-platform-web`'s `web/browser/tizen.js`, `createTizen`, in place of the runtime's
+  namespace in `browser/runtime.js`): where the shim says the page is a TV's (`nshTizen.tv`, `tizen` present),
+  `isAvailable()` is true and the calls go to the shim: `productInfo()` (`webapis.productinfo`'s model and firmware,
+  `tizen.systeminfo`'s platform version and maker, `null` where the TV does not say), `registerKey` /
+  `unregisterKey` (`keymap`'s names mapped to Tizen's, checked as natively: a `TypeError` for no key, found with
+  `keymap.label`, a `RangeError` for one the TV does not give apps), `exitApp()` (at once, no confirmation),
+  `setPreviewData(data)` (`webapis.preview.setPreviewData` with the data as JSON); the TV's errors reject with
+  `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`. Its promises and errors are the app realm's. Every other page (the web, the
+  dev page in a browser here) keeps the runtime's module: `isAvailable()` false, every call rejecting as on the
+  platforms that are no TV. `node --test crates/nsh-platform-web/web/browser/tizen.test.mjs` checks it on a fake
+  shim; `shim.test.mjs` the shim's side on fake `tizen` and `webapis`.
 - **`nsh run --target tizen-web`** serves the dev page with the shim (`tizen_web::dev_page`: `{{scripts}}`,
   `{{idiom}}` and `{{history}}` of `web/dev.html`, which `with_page_host` leaves empty for the web) and writes the
   development package `.nsh/tizen-web/dev/` (`NshDevHost.NshDev`, one for every app): a page that opens the dev

@@ -56,7 +56,7 @@ class Target {
 
 /** A page with the shim on it: `tizen` (none: off a TV) and the app's
  * answer to each key (`takes(key)`: whether it goes back on it). */
-function page({ tizen, takes = () => false } = {}) {
+function page({ tizen, webapis, takes = () => false } = {}) {
   const window = new Target();
   const document = { title: "Counter", activeElement: null };
   class Element extends Target {
@@ -88,6 +88,7 @@ function page({ tizen, takes = () => false } = {}) {
   const closed = [];
   Object.assign(window, { document, KeyboardEvent: FakeEvent, close: () => closed.push(true) });
   if (tizen) window.tizen = tizen;
+  if (webapis) window.webapis = webapis;
   const heard = [];
   // `nsh.js`: hears keys at the window, takes the ones it goes back on.
   window.addEventListener("keydown", (e) => {
@@ -121,6 +122,15 @@ function tv({ supported, refused = [] } = {}) {
       registerKey(name) {
         if (refused.includes(name)) throw new Error(`NotSupportedError: ${name}`);
         registered.push(name);
+      },
+      unregisterKey(name) {
+        registered.splice(registered.indexOf(name), 1);
+      },
+    },
+    systeminfo: {
+      getCapability(key) {
+        if (key === "http://tizen.org/feature/platform.version") return "8.0";
+        throw new Error(`NotSupportedError: ${key}`);
       },
     },
     application: { getCurrentApplication: () => ({ exit: () => exits.push(true) }) },
@@ -224,4 +234,36 @@ test("other keys reach the app as they are", () => {
   press(403, "ColorF0Red");
   press(38, "ArrowUp");
   assert.deepEqual(heard, ["ColorF0Red", "ArrowUp"]);
+});
+
+test("the web half of nsh/tizen reaches the TV through nshTizen", async () => {
+  const tizen = tv({ supported: ALL });
+  const previews = [];
+  const webapis = {
+    productinfo: { getRealModel: () => "QN65S95D", getModel: () => "24_PONTUSM_QTV", getFirmware: () => "T-PTMDEUC-1250.0" },
+    preview: {
+      setPreviewData(json, ok, fail) {
+        previews.push(json);
+        if (json === "bad") fail({ message: "invalid preview" });
+        else ok();
+      },
+    },
+  };
+  const { shim } = page({ tizen, webapis });
+  assert.deepEqual({ ...shim.productInfo() }, {
+    model: "QN65S95D", platformVersion: "8.0", build: "T-PTMDEUC-1250.0", manufacturer: null,
+  });
+  shim.unregisterKey("ColorF0Red");
+  assert.ok(!shim.keys.includes("ColorF0Red") && !tizen.registered.includes("ColorF0Red"));
+  shim.registerKey("ColorF0Red");
+  assert.ok(shim.keys.includes("ColorF0Red") && tizen.registered.includes("ColorF0Red"));
+  await shim.setPreviewData("{}");
+  await assert.rejects(shim.setPreviewData("bad"), /invalid preview/);
+  assert.deepEqual(previews, ["{}", "bad"]);
+});
+
+test("a TV without webapis.js reports what tizen knows", async () => {
+  const { shim } = page({ tizen: tv({ supported: ALL }) });
+  assert.deepEqual({ ...shim.productInfo() }, { model: null, platformVersion: "8.0", build: null, manufacturer: null });
+  await assert.rejects(shim.setPreviewData("{}"), /webapis\.preview/);
 });
