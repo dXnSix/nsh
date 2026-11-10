@@ -1049,7 +1049,8 @@ fn main_window_options(
 }
 
 /// Runs `source` in a window until it is closed. Fails when the window
-/// cannot open.
+/// cannot open. Feature `platform` (GPUI's platform runs the event loop).
+#[cfg(feature = "platform")]
 pub fn run_app(source: AppSource, options: AppOptions) -> std::process::ExitCode {
     let ok = Rc::new(std::cell::Cell::new(true));
     let result = ok.clone();

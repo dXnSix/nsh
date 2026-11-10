@@ -130,6 +130,8 @@ so only load it from your own app's files.
 
 - `open_app_window(source, options, cx)` opens a window with one `AppView` in a running GPUI app.
 - `run_app(source, options)` starts GPUI and runs one app in a window until it closes (what the development host does).
+  It comes with the default feature `platform` (GPUI's own platform crate, `gpui_platform`); an app that brings its
+  GPUI platform itself turns default features off and keeps `AppView` and `open_app_window`.
 - `AppView::register_component(name, factory)` registers a native component of yours before loading
   ([Native components](./native-components.md)).
 - `AppOptions::cache` (or `AppView::set_cache`, for the apps loaded next) sets where the apps keep their caches, the

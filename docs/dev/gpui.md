@@ -70,12 +70,13 @@ Features:
 
 | Feature | Does | Host |
 |---|---|---|
+| `platform` (default) | GPUI's platform (`gpui_platform`, GPUI Fast's windows, event loop and text system per OS): `run_app`, the `embed` example, the text tests (they shape with the platform's text system). Without it the crate takes no `gpui-fast-platform` / `gpui-fast-linux` (and so no fontconfig, FreeType or Wayland libraries): `AppView` and `open_app_window` draw in a GPUI app whose platform the host brings, as a Samsung TV's Tizen host does | yes |
 | `js` (default) | JS apps; without it the crate only runs Rust apps and links no QuickJS | yes |
 | `webview` (default) | web views with wry (`native/web.rs`; GTK 3 and WebKitGTK on Linux) | yes |
 | `video` | videos with GStreamer (`native/video.rs`); without it a video is a placeholder that reports `onError` | Linux |
 | `dev` | the dev server client, log forwarding, the error overlay (`dev.rs`) | yes |
 | `shot` | screenshots on macOS and Windows (`nsh test --target gpui`'s) through GPUI's `test-support` (`Window::render_to_image`); the tests in windows of GPUI's test platform (`tests.rs`) | macOS, Windows |
-| `runtime-shaders` | GPUI's Metal shaders compiled when the app starts, not by the build (`gpui_platform/runtime_shaders`): builds on a Mac without the Metal Toolchain; nothing elsewhere | the CLI's, where `xcrun metal` fails; never the distribution's |
+| `runtime-shaders` | GPUI's Metal shaders compiled when the app starts, not by the build (`gpui_platform/runtime_shaders`, with `platform`): builds on a Mac without the Metal Toolchain; nothing elsewhere | the CLI's, where `xcrun metal` fails; never the distribution's |
 
 `shot` turns on GPUI's test support, for the host and the tests; apps that embed the crate leave it off. With it, the
 crate's tests include `tests.rs`: surfaces in windows of GPUI's test platform (`TestAppContext`), drawn and given

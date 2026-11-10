@@ -3013,7 +3013,8 @@ fn unit_at(text: &str, index: u32, unit: Unit) -> (u32, u32) {
     }
 }
 
-#[cfg(test)]
+// The platform's text system shapes them (feature `platform`).
+#[cfg(all(test, feature = "platform"))]
 mod tests {
     use std::sync::OnceLock;
 
