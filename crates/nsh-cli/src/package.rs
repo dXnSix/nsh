@@ -157,8 +157,8 @@ pub(crate) struct AppConfig {
 pub(crate) struct TizenConfig {
     /// The package id: 10 letters and digits, unique on the TV and in
     /// Samsung's store. Default: made from the app's `id`.
-    pub(crate) package_id: Option<String>,
-    /// The application id, `<packageId>.<name>` (the name: letters and
+    pub(crate) package: Option<String>,
+    /// The application id, `<package>.<name>` (the name: letters and
     /// digits). Default: the package id and the app's name.
     pub(crate) app_id: Option<String>,
     /// The package's version, `x.y.z` of numbers (Tizen's form). Default:

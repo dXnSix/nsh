@@ -293,7 +293,7 @@ nsh package --target tizen-web --probe             # a package that shows how th
 
   ```json
   "tizen": {
-    "packageId": "AbCdE12345",
+    "package": "AbCdE12345",
     "appId": "AbCdE12345.Counter",
     "version": "1.2.0",
     "apiVersion": "8.0",
@@ -302,7 +302,7 @@ nsh package --target tizen-web --probe             # a package that shows how th
   }
   ```
 
-  `packageId` is 10 letters and digits (by default made from the app's `id`); `appId` is `<packageId>.<name>` (by
+  `package` is 10 letters and digits (by default made from the app's `id`); `appId` is `<package>.<name>` (by
   default the app's name, letters and digits); `version` is Tizen's `x.y.z` of numbers (by default the app's
   `version`, else `1.0.0`); `apiVersion` is the lowest Tizen that installs the package (`8.0`); `privileges` are
   asked for besides the internet's and the remote's keys'; `signing` is the certificate profile.
