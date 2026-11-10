@@ -170,6 +170,18 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   focus between fields and native components only so far, and so does GPUI's Tab; GPUI's arrows move it between every
   stop, to the nearest in their direction (`focus.rs`, `nsh_core::focus`, as the terminal's do), and Return and Space
   press the stop they reach; iOS and Android move it between inputs.
+  What a TV's remote needs goes on top, in `nsh_core::focus::directional` over the same candidates: `autoFocus` (any
+  element now, `Prop::AutoFocus`; an input's stays its `InputConfig::auto_focus`, any other view's is
+  `ViewProps::auto_focus`: the stop takes the focus when it appears in the focus scope, the first in tree order of
+  those appearing together, `focus::auto_focus`), `preferredFocus` (`ViewProps::preferred_focus`: where the focus
+  enters a `FocusGroup`, or an arrow is pressed with nothing focused, it wins over the nearest stop),
+  `nextFocusUp` / `Down` / `Left` / `Right` (`Prop::NextFocus*`, a ref, the overlay `anchor`'s convention; Rust
+  `.next_focus_down(&element_ref)`; the platform goes to the view named, or the first stop inside it, when it is in
+  reach, and leaves the arrow to geometry otherwise; a route may leave a trapped group) and focus groups (`nsh/base`'s
+  `FocusGroup`, `Prop::FocusGroup`, internal: its `destinations` are where the arrows enter it, in order, and `trap`
+  keeps them inside). The refs are looked up again in every commit round (`core/directional.rs`, as `follow` does:
+  a Rust ref may be on an element rendered later, a group's own children), and their nodes reach the platform as
+  `ViewProps::next_focus` and `ViewProps::focus_group`.
   A link in text (a nested `<Text>` that takes presses, `AttributedText::links`) is a stop of its own: the core marks
   each `TextLink` with `focus_stop` (the span's `ViewProps::focus_stop(true)`: unless `focusable={false}` or
   disabled), Tab reaches it after its text view, in text order (nested links inside the one around them), the

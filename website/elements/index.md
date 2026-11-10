@@ -385,6 +385,50 @@ its ref's `on_focus_in(..)` and `on_focus_out(..)`: moving between views inside 
 | `focusable` | `.focusable(..)` | `boolean` | `true` for views that take presses | Whether the view is a stop of Tab. `true` makes any view one, whether it takes presses or leaves them to the views around it; `false` leaves a pressable to the pointer (a backdrop that closes a popover, rows the arrow keys move between). |
 | `onFocus` | `.on_focus(..)` | `() => void` | | Tab (or `focus()`) gave the view the keyboard focus. |
 | `onBlur` | `.on_blur(..)` | `() => void` | | The keyboard focus left the view. |
+| `autoFocus` | `.auto_focus(..)` | `boolean` | `false` | The view takes the keyboard focus when it appears: mounted, or its screen or modal comes up (the first in tree order of those that appear together). On an input it shows the keyboard. |
+| `preferredFocus` | `.preferred_focus(..)` | `boolean` | `false` | The view takes the focus where the focus enters, over the nearest stop: its `FocusGroup` when the arrows enter it, or its screen when an arrow is pressed with nothing focused. |
+| `nextFocusUp`, `nextFocusDown`, `nextFocusLeft`, `nextFocusRight` | `.next_focus_up(&r)`, `.next_focus_down(&r)`, `.next_focus_left(&r)`, `.next_focus_right(&r)` | `ViewRef \| null` | | Where that arrow takes the focus from this view: the view named, or the first stop inside it. While it names nothing the focus can reach, the arrow goes to the nearest stop. |
+
+#### Arrow keys and TVs
+
+On a TV, and in the GPUI backend, the arrow keys move the focus to the nearest stop in their direction, and Return
+or Space presses it. A remote drives the whole app that way, so these props shape where the focus goes:
+
+- `autoFocus` gives the focus to a view as it appears: the first card of a screen, the main button of a dialog.
+- `preferredFocus` picks the stop the focus enters at: a row's current item, a dialog's default action.
+- `nextFocusDown` and its siblings route an arrow past geometry, between rows that do not line up. Name a view
+  rendered after this one with a signal its `ref` sets (`nextFocusDown={next()}`).
+
+```rust tabs
+let play = element_ref();
+view()
+    .child(
+        view()
+            .auto_focus(true)
+            .next_focus_down(&play)
+            .on_press(resume)
+            .child(text("Resume")),
+    )
+    .child(
+        view()
+            .element_ref(&play)
+            .preferred_focus(true)
+            .on_press(start)
+            .child(text("Play")),
+    )
+```
+
+```tsx tabs
+const play = signal<ViewRef>();
+<View>
+  <View autoFocus nextFocusDown={play()} onPress={resume}>
+    <Text>Resume</Text>
+  </View>
+  <View ref={play} preferredFocus onPress={start}>
+    <Text>Play</Text>
+  </View>
+</View>
+```
 
 ```rust tabs
 view()
