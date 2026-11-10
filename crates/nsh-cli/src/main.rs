@@ -206,6 +206,11 @@ enum Command {
         /// except on a display nobody types on, such as Xvfb).
         #[arg(long)]
         foreground: bool,
+        /// The idiom the apps the tests open run in, over `nsh.json`
+        /// `dev.idiom`, as with `nsh run`: `tv` tests a TV's layouts and
+        /// focus on this machine (`--target gpui` and `web`).
+        #[arg(long, value_enum)]
+        idiom: Option<run::DevIdiom>,
     },
     /// Type check an app with TypeScript's native compiler (TypeScript 7,
     /// downloaded once from the npm registry; no Node needed); an app with
@@ -905,6 +910,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             device,
             display,
             foreground,
+            idiom,
         } => test::test(
             &path,
             &entry,
@@ -918,6 +924,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             device.as_deref(),
             display.map(|n| n as usize),
             foreground,
+            idiom,
         ),
         Command::Dev {
             entry,

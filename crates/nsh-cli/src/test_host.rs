@@ -20,7 +20,11 @@ use nsh_dev::{
 };
 use nsh_testing::{Host, HostOptions, StartHost};
 
-use crate::{build, run::Target, ui};
+use crate::{
+    build,
+    run::{DevIdiom, Target},
+    ui,
+};
 
 /// How long a host may take to start and connect.
 const CONNECT: Duration = Duration::from_secs(60);
@@ -32,7 +36,8 @@ const CONNECT: Duration = Duration::from_secs(60);
 /// macOS and GPUI hosts open their windows on (by default a secondary one
 /// when there is one: [`opens_on_a_display`]); `foreground` lets the apps of the
 /// hosts that run them in the background ([`runs_in_background`]) become the
-/// active app.
+/// active app; `idiom` is the one the GPUI host and the web page start them in
+/// ([`DevIdiom::for_test`]), in place of the host's own.
 pub(crate) fn starter(
     target: Target,
     browser: Option<&Path>,
@@ -41,6 +46,7 @@ pub(crate) fn starter(
     device: Option<&str>,
     display: Option<usize>,
     foreground: bool,
+    idiom: Option<DevIdiom>,
 ) -> anyhow::Result<StartHost> {
     if browser.is_some() && target != Target::Web {
         anyhow::bail!("--browser goes with --target web");
@@ -62,8 +68,11 @@ pub(crate) fn starter(
     if foreground && !runs_in_background(target) {
         anyhow::bail!("{FOREGROUND_TARGETS}");
     }
+    if idiom.is_some() && !matches!(target, Target::Gpui | Target::Web) {
+        anyhow::bail!("--idiom needs --target gpui or web");
+    }
     match target {
-        Target::Web => return crate::test_web::starter(browser),
+        Target::Web => return crate::test_web::starter(browser, idiom),
         Target::Ios => return crate::test_ios::starter(work, fps, device),
         Target::Android => return crate::test_android::starter(work),
         _ => {}
@@ -79,8 +88,10 @@ pub(crate) fn starter(
     // Built (in a checkout) or found once, before the first test.
     let host = crate::runtime::test_host(target.platform())?;
     Ok(Arc::new(move |entry: &Path, options: &HostOptions| {
-        start(target, &host, entry, options, fps, display, foreground)
-            .map(|h| Box::new(h) as Box<dyn Host>)
+        start(
+            target, &host, entry, options, fps, display, foreground, idiom,
+        )
+        .map(|h| Box::new(h) as Box<dyn Host>)
     }))
 }
 
@@ -177,6 +188,10 @@ impl Drop for TestHost {
 }
 
 /// Builds `entry`, serves it in a test session and starts `host` on it.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the host's options of `nsh test`, one each"
+)]
 fn start(
     target: Target,
     host: &Path,
@@ -185,6 +200,7 @@ fn start(
     fps: bool,
     display: Option<usize>,
     foreground: bool,
+    idiom: Option<DevIdiom>,
 ) -> Result<TestHost, String> {
     let server = serve(entry, options)?;
     let entry = resolve(entry)?;
@@ -217,6 +233,12 @@ fn start(
     }
     if fps {
         command.arg("--fps");
+    }
+    // The idiom the app starts in, as `nsh run --target gpui --idiom` gives
+    // it: a TV's on this machine's OS, over the test's (`open`'s desktop
+    // `platform`, which the GPUI host runs as a desktop anyway).
+    if let Some(idiom) = idiom {
+        command.args(["--idiom", idiom.as_str()]);
     }
     if target == Target::Windows {
         // The window and its notifications show the app's name and icon.
@@ -409,7 +431,7 @@ mod tests {
     fn foreground_is_for_the_hosts_that_run_in_the_background() {
         for target in [Target::Tui, Target::Web, Target::Ios, Target::Android] {
             assert!(!runs_in_background(target), "{target:?}");
-            let err = starter(target, None, Path::new("."), false, None, None, true).err();
+            let err = starter(target, None, Path::new("."), false, None, None, true, None).err();
             assert_eq!(
                 err.map(|e| e.to_string()).as_deref(),
                 Some(FOREGROUND_TARGETS),
@@ -434,7 +456,17 @@ mod tests {
             Target::Android,
         ] {
             assert!(!opens_on_a_display(target), "{target:?}");
-            let err = starter(target, None, Path::new("."), false, None, Some(2), false).err();
+            let err = starter(
+                target,
+                None,
+                Path::new("."),
+                false,
+                None,
+                Some(2),
+                false,
+                None,
+            )
+            .err();
             assert_eq!(
                 err.map(|e| e.to_string()).as_deref(),
                 Some(DISPLAY_TARGETS),
@@ -467,6 +499,7 @@ mod tests {
                 Some("iPhone 16"),
                 None,
                 false,
+                None,
             )
             .err();
             assert_eq!(
