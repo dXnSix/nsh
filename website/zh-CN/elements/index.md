@@ -468,6 +468,7 @@ stopPropagation() }`）；`…ShouldSetResponder` 回调还会收到 `gestureSta
 | `android={{…}}` | Android。所有元素都支持 `ripple`、`elevation` 和 `accessibilityLiveRegion`（见下表）。 |
 | `desktop={{…}}` | 桌面平台和桌面浏览器；在移动端被忽略。所有元素都支持 `windowDrag`（见下表）。 |
 | `web={{…}}` | 浏览器；在其他平台被忽略。 |
+| `tv={{…}}` | 电视，与操作系统无关（`platform.tv`）；在其他平台被忽略。没有只属于电视的属性：它接受每个元素都接受的属性、`style` 和状态样式，只在电视上设置（`tv={{ class: "p-8 text-2xl" }}`）。 |
 
 | `android` 键 | Rust | 类型 | 说明 |
 |---|---|---|---|

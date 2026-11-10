@@ -46,6 +46,9 @@ export interface CommonProps<S = ViewStyle, R = ViewRef> extends TouchProps, Hos
   desktop?: DesktopProps;
   /** Web-only props (ignored elsewhere). */
   web?: WebProps;
+  /** TV-only props (where `platform.tv` is true, on any OS; ignored
+   * elsewhere). */
+  tv?: TvProps<S>;
 }
 
 /** Styles while the element is in a state, over its own `style` and
@@ -97,6 +100,15 @@ export interface AndroidProps extends AndroidHostProps {}
 
 /** macOS-only props of every element (`macos={{…}}`); elements add their own. */
 export interface MacOSProps extends MacOSHostProps {}
+
+/** TV-only props of every element (`tv={{…}}`), set where `platform.tv` is
+ * true: no prop is a TV's alone, so these are the props every element
+ * takes (classes, accessibility, focus, handlers), its style and its state
+ * styles, as a TV shows them. A prop set both here and outside is the one
+ * set last. */
+export interface TvProps<S = ViewStyle> extends HostProps, StateStyleProps<S> {
+  style?: StyleProp<S>;
+}
 
 /** `<View>` */
 export interface ViewProps extends CommonProps, ViewHostProps {
