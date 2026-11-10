@@ -964,7 +964,7 @@ const wide = () => windowSize().width >= 600;
 const colorScheme: Accessor<"light" | "dark">;
 ```
 
-The appearance shown: the system's, unless the app set its own (`nsh.json` `"appearance"`, [`setColorScheme`](#setcolorscheme)). Reactive. Rust: `dark() -> bool`; theme colors (`AdaptiveColor`) and the `.dark(…)` style variant follow it without reading it. Tailwind's `dark:` variant follows it too (see [Tailwind](../docs/tailwind.md)).
+The appearance shown: the system's, unless the app set its own (`nsh.json` `"appearance"`, [`setColorScheme`](#setcolorscheme)); in a [`ThemeScope`](#themescope) with an appearance, the scope's. Reactive. Rust: `dark() -> bool`; theme colors (`AdaptiveColor`) and the `.dark(…)` style variant follow it without reading it. Tailwind's `dark:` variant follows it too (see [Tailwind](../docs/tailwind.md)).
 
 ```rust tabs
 view().flex_1().bg(move || if dark() { black() } else { white() })
@@ -1073,6 +1073,44 @@ function setColorScheme(scheme: "light" | "dark" | "system"): void;
 ```
 
 Shows the app in `scheme` whatever the system's appearance, at once: `colorScheme()`, `dark:` classes, the components' theme and the platform's controls (alerts, the status bar's default style) follow it; `"system"` follows the system again. `nsh.json` `"appearance"` sets it from the start. Rust: `set_color_scheme(Appearance::Dark)` (`Appearance::Light`, `Appearance::System`).
+
+### ThemeScope
+
+```ts
+const ThemeScope: (props: ThemeScopeProps) => JSX.Element;
+
+interface ThemeScopeProps {
+  /** `"light"` or `"dark"`; left out, the scope is shown as the view around it. */
+  appearance?: "light" | "dark";
+  children?: JSX.Element;
+  // and a view's `class`, `classList`, `style`, state styles, `testID`, `onLayout`
+}
+```
+
+A view that shows itself and everything in it in an appearance of its own, whatever the app's and the system's: a dark sidebar beside a light page, a light sheet of paper in a dark app. It is a view, so its `class` and `style` lay it out and draw it.
+
+In a scope, everything that follows the appearance follows the scope's: `dark:` classes, the classes of theme tokens (`bg-background`), the theme colors of components, [`colorScheme()`](#colorscheme) and [`token()`](#token). The platform's own controls in it follow too on iOS, macOS and the web (a text input's keyboard and menus, web views, form controls), and so do the scroll indicators the desktop backends draw. Scopes nest: the nearest one with an `appearance` decides, and a scope without one is shown as the view around it.
+
+As in CSS, a color a view inherited stays what it was: a scope sets its own background and text color. Menus, alerts and sheets the platform draws are the app's, also when a view in a scope opens them. Rust: `theme_scope().appearance(ColorScheme::Dark).child(…)`; `dark()` and `color()` answer for the scope around the binding that reads them.
+
+```rust tabs
+view().flex_row().flex_1().child(
+    theme_scope()
+        .appearance(ColorScheme::Dark)
+        .child(view().w(px(240.)).bg(AdaptiveColor::rgb(0xffffff, 0x18181b)).child(sidebar())),
+)
+```
+
+```tsx tabs
+import { ThemeScope, View } from "nsh";
+
+<View class="flex-1 flex-row">
+  <ThemeScope appearance="dark" class="w-60 bg-white dark:bg-zinc-900">
+    <Sidebar />
+  </ThemeScope>
+  <View class="flex-1 bg-white dark:bg-zinc-900">{/* the page, in the app's appearance */}</View>
+</View>
+```
 
 ### fpsEnabled and setFpsEnabled
 

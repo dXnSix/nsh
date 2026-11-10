@@ -947,7 +947,7 @@ const wide = () => windowSize().width >= 600;
 const colorScheme: Accessor<"light" | "dark">;
 ```
 
-显示的外观：系统的外观，除非应用设置了自己的（`nsh.json` 的 `"appearance"`、[`setColorScheme`](#setcolorscheme)）。响应式。Rust：`dark() -> bool`；主题颜色（`AdaptiveColor`）和 `.dark(…)` 样式变体无需读取它就会跟随。Tailwind 的 `dark:` 变体也跟随它（见 [Tailwind](../docs/tailwind.md)）。
+显示的外观：系统的外观，除非应用设置了自己的（`nsh.json` 的 `"appearance"`、[`setColorScheme`](#setcolorscheme)）；在设置了外观的 [`ThemeScope`](#themescope) 中，是该作用域的外观。响应式。Rust：`dark() -> bool`；主题颜色（`AdaptiveColor`）和 `.dark(…)` 样式变体无需读取它就会跟随。Tailwind 的 `dark:` 变体也跟随它（见 [Tailwind](../docs/tailwind.md)）。
 
 ```rust tabs
 view().flex_1().bg(move || if dark() { black() } else { white() })
@@ -1035,6 +1035,44 @@ function setColorScheme(scheme: "light" | "dark" | "system"): void;
 ```
 
 无论系统外观如何，立即以 `scheme` 显示应用：`colorScheme()`、`dark:` 类、组件的主题和平台控件（警告框、状态栏的默认样式）都随之变化；`"system"` 重新跟随系统。`nsh.json` 的 `"appearance"` 从启动时就设置它。Rust：`set_color_scheme(Appearance::Dark)`（`Appearance::Light`、`Appearance::System`）。
+
+### ThemeScope
+
+```ts
+const ThemeScope: (props: ThemeScopeProps) => JSX.Element;
+
+interface ThemeScopeProps {
+  /** `"light"` 或 `"dark"`；省略时，作用域按其外层视图的外观显示。 */
+  appearance?: "light" | "dark";
+  children?: JSX.Element;
+  // 以及视图的 `class`、`classList`、`style`、状态样式、`testID`、`onLayout`
+}
+```
+
+一个视图，无论应用和系统的外观如何，它自身及其中的一切都以它自己的外观显示：浅色页面旁的深色侧边栏，深色应用中的一张浅色纸。它是视图，所以它的 `class` 和 `style` 负责布局和绘制。
+
+在作用域内，凡是跟随外观的都跟随作用域的外观：`dark:` 类、主题 token 的类（`bg-background`）、组件的主题颜色、[`colorScheme()`](#colorscheme) 和 [`token()`](#token)。在 iOS、macOS 和 Web 上，其中的平台控件也跟随它（文本输入的键盘和菜单、Web 视图、表单控件），桌面后端绘制的滚动指示器同样如此。作用域可以嵌套：由最近的设置了 `appearance` 的作用域决定，没有设置的作用域按其外层视图的外观显示。
+
+与 CSS 一样，视图继承来的颜色保持不变：作用域要设置自己的背景色和文字颜色。平台绘制的菜单、警告框和面板属于应用，即使由作用域内的视图打开也是如此。Rust：`theme_scope().appearance(ColorScheme::Dark).child(…)`；`dark()` 和 `color()` 给出读取它们的绑定所在作用域的外观。
+
+```rust tabs
+view().flex_row().flex_1().child(
+    theme_scope()
+        .appearance(ColorScheme::Dark)
+        .child(view().w(px(240.)).bg(AdaptiveColor::rgb(0xffffff, 0x18181b)).child(sidebar())),
+)
+```
+
+```tsx tabs
+import { ThemeScope, View } from "nsh";
+
+<View class="flex-1 flex-row">
+  <ThemeScope appearance="dark" class="w-60 bg-white dark:bg-zinc-900">
+    <Sidebar />
+  </ThemeScope>
+  <View class="flex-1 bg-white dark:bg-zinc-900">{/* 页面，使用应用的外观 */}</View>
+</View>
+```
 
 ### fpsEnabled 和 setFpsEnabled
 

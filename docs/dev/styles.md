@@ -96,7 +96,10 @@
   `ElementRef::on_focus_in` / `on_focus_out` (GPUI's names, a focus handle's), watches the core runs at the end of
   the commit round the focus moved in (`core/watch.rs`). `dark:` follows the appearance
   shown: the app's own when it set one (`nsh.json` `"appearance"`, `setColorScheme`; `Core::set_appearance`), else the
-  system's. The theme is Tailwind 4's
+  system's; in a view with an appearance of its own (a `ThemeScope`), that view's (`Core::dark_at`: the core keeps
+  per node what the nearest such view says, pushed down when a view is inserted or the prop changes, and applies each
+  node's classes in it, so a scope restyles only its own nodes whose classes depend on the appearance, and a change
+  of the surface's leaves them alone). The theme is Tailwind 4's
   extended by `nsh.json` `"tailwind"` (`colors`, `spacing`, `breakpoints`, `fontSize`, `radius`, `shadow`, ...; unknown
   keys are build errors). Rust components do not use classes: their typed styles (`element/style.rs`, every utility group has its
   methods, tested against the classes) lower into the same rules and their
