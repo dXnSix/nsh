@@ -70,6 +70,7 @@ mod system;
 pub(crate) mod task;
 pub mod theme;
 pub mod theme_file;
+mod theme_scope;
 pub mod tokens;
 mod value;
 pub(crate) mod virtual_list;
@@ -105,6 +106,8 @@ pub use nsh_macros::{
 // The core's parts of `nsh_base`'s navigation and dialogs.
 #[doc(hidden)]
 pub use self::host::{modal, screen, stack};
+#[doc(hidden)]
+pub use self::theme_scope::is_theme_scope;
 pub use self::{
     ambient::*,
     animated::{
@@ -187,6 +190,7 @@ pub use self::{
     theme::{
         AppTheme, ThemeSpec, TokenKind, TokenSpec, reset_theme, set_theme, theme_of, update_theme,
     },
+    theme_scope::{ThemeScope, ThemeScopeElement, ThemeScopeProps, theme_scope},
     tokens::{
         AnyRole, FONT_MONO, FONT_SANS, FontRole, NumberRole, Role, RoleKind, RoleValue,
         ThemeTokens, Token, TokenOverrides, TokenSource, Tokens, role,

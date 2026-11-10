@@ -201,6 +201,55 @@ impl<M: TextEngine> Core<M> {
         self.parts_restyled();
     }
 
+    /// Whether `key` is shown dark: as the nearest view with an appearance
+    /// of its own says (a [`crate::element::ThemeScope`]), else as the
+    /// surface is.
+    pub(super) fn dark_at(&self, key: Key) -> bool {
+        self.nodes[key as usize]
+            .scoped_dark
+            .unwrap_or(self.class_env.dark)
+    }
+
+    /// The environment `key`'s class variants resolve in: the surface's,
+    /// with the appearance of the scope it is in.
+    fn class_env_at(&self, key: Key) -> ClassEnvironment {
+        let mut env = self.class_env;
+        if let Some(dark) = self.nodes[key as usize].scoped_dark {
+            env.dark = dark;
+        }
+        env
+    }
+
+    /// Resolves again the appearance `key` is shown in (it set or dropped
+    /// one of its own, or moved under another view) and that of the views
+    /// taking it from `key`: those whose classes depend on the appearance
+    /// are styled again.
+    pub(super) fn update_appearance(&mut self, key: Key) {
+        let node = &self.nodes[key as usize];
+        let scoped = node.appearance.or(match node.parent {
+            NO_KEY => None,
+            parent => self.nodes[parent as usize].scoped_dark,
+        });
+        if node.scoped_dark == scoped {
+            return;
+        }
+        let was = self.dark_at(key);
+        let node = &mut self.nodes[key as usize];
+        node.scoped_dark = scoped;
+        if self.dark_at(key) != was
+            && self.nodes[key as usize]
+                .classes
+                .as_ref()
+                .is_some_and(|c| c.deps() & deps::DARK != 0)
+        {
+            self.restyle(key);
+        }
+        let children = self.nodes[key as usize].children.clone();
+        for child in children {
+            self.update_appearance(child);
+        }
+    }
+
     /// The platform reports interaction states of view `id` (`active:`,
     /// `hover:`, `focus:`): state bits for the states it
     /// tracks ([`MountItem::TrackStates`]), and `FOCUSED` whatever it
@@ -646,7 +695,7 @@ impl<M: TextEngine> Core<M> {
             Some(classes) => {
                 let group = |_: &str| 0;
                 let cx = Context {
-                    env: self.class_env,
+                    env: self.class_env_at(key),
                     window: self.viewport,
                     rtl: node.rtl,
                     states: 0,
@@ -663,7 +712,7 @@ impl<M: TextEngine> Core<M> {
 
     /// The parts whose classes resolve again when the environment changes
     /// (a header's `dark:` colors).
-    fn parts_restyled(&mut self) {
+    pub(super) fn parts_restyled(&mut self) {
         let keys: Vec<(Key, Part)> = self
             .nodes
             .iter()
@@ -906,6 +955,9 @@ impl<M: TextEngine> Core<M> {
             .nodes
             .iter()
             .filter(|(_, n)| n.classes.as_ref().is_some_and(|c| c.deps() & changed != 0))
+            // A view in a scope with an appearance of its own is shown as
+            // before when only the surface's changed.
+            .filter(|(_, n)| changed != deps::DARK || n.scoped_dark.is_none())
             .map(|(k, _)| k as Key)
             .collect();
         for key in keys {
@@ -1277,7 +1329,7 @@ impl<M: TextEngine> Core<M> {
             let positional = pos != 0 && node.parent != NO_KEY;
             let window = self.viewport;
             let cx = Context {
-                env: self.class_env,
+                env: self.class_env_at(key),
                 window,
                 // The direction it lays out in once styled (a node created
                 // detached takes the root's), so its sided classes land

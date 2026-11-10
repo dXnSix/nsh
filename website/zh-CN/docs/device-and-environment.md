@@ -15,7 +15,7 @@ demo: guide-device
 | Rust | TSX | 值 |
 |---|---|---|
 | `window()` | `windowSize()`（`nsh`） | surface 的宽和高，单位为点。 |
-| `dark()` | `colorScheme()`（`nsh`） | 深色或浅色：系统的外观，或应用自己设置的外观（`set_color_scheme`、`setColorScheme`）。 |
+| `dark()` | `colorScheme()`（`nsh`） | 深色或浅色：系统的外观，或应用自己设置的外观（`set_color_scheme`、`setColorScheme`）；在 `ThemeScope` 中，是该作用域的外观。 |
 | `font_scale()` | `fontScale()`（`nsh`） | 用户偏好的文字大小相对于默认值的比例（1 为默认）。 |
 | `safe_area()` | `safeArea()`（`nsh`） | surface 中未被系统 UI 遮挡的 inset：上、右、下、左。 |
 | `cx.insets()` | `safeAreaInsets()`（`nsh`） | 调用组件渲染位置（页面、对话框）的 inset。 |
@@ -193,6 +193,38 @@ import { colorScheme, setColorScheme } from "nsh";
   <Text class="text-neutral-900 dark:text-neutral-50">{colorScheme() === "dark" ? "Light" : "Dark"}</Text>
 </View>
 ```
+
+### 应用的一部分使用自己的外观
+
+`ThemeScope`（Rust：`theme_scope()`）是一个视图，无论应用显示什么外观，它自身及其中的一切都以浅色或深色显示：浅色页面旁的深色侧边栏，深色编辑器中的浅色文档。在其中，`dark()` 和 `colorScheme()`、自适应颜色、`dark:` 类、主题的颜色和 `token()` 都跟随作用域；在 iOS、macOS 和 Web 上，其中的平台控件也跟随它，桌面后端绘制的滚动指示器同样如此：
+
+```rust tabs
+use nsh_core::prelude::*;
+
+view().flex_1().flex_row().child(
+    theme_scope().appearance(ColorScheme::Dark).child(
+        view()
+            .w(px(240.))
+            .p_4()
+            .bg(AdaptiveColor::rgb(0xffffff, 0x18181b))
+            .child(text("Always dark").text_color(AdaptiveColor::rgb(0x18181b, 0xf4f4f5))),
+    ),
+)
+```
+
+```tsx tabs
+import { Text, ThemeScope, View } from "nsh";
+
+<View class="flex-1 flex-row">
+  <ThemeScope appearance="dark" class="w-60 p-4 bg-white dark:bg-zinc-900">
+    <Text class="text-zinc-900 dark:text-zinc-100">Always dark</Text>
+  </ThemeScope>
+</View>
+```
+
+作用域可以嵌套，由最近的设置了 `appearance` 的作用域决定；没有设置的作用域按其外层视图的外观显示，所以 `appearance={pinned() ? "dark" : undefined}` 可以打开和关闭一个作用域。作用域要设置自己的背景色和文字颜色，因为视图从外部继承来的颜色保持不变，与 CSS 一样。平台绘制的菜单、警告框和面板保持应用的外观。
+
+在 Rust 中，在使用外观的地方读取它，即在绑定或样式的闭包中：`dark()` 和 `color()` 给出读取它们的位置所在作用域的外观。
 
 > [!TIP]
 > 开发时两种外观都要测试：`xcrun simctl ui booted appearance dark` 可以切换 iOS 模拟器，Android 的快捷设置里有深色主题开关。变化会立即传到应用中，无需重新加载。

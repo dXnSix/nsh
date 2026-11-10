@@ -18,8 +18,9 @@ pub fn is_reserved_component(name: &str) -> bool {
     name.starts_with("nsh/")
 }
 
-/// The system appearance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// An appearance: light or dark (the system's, the one an app or a
+/// `ThemeScope` shows).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, crate::element::PropEnum)]
 pub enum ColorScheme {
     /// Light mode.
     #[default]

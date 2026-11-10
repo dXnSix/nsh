@@ -26,8 +26,24 @@ pub(crate) fn registry() -> Registry {
         .register::<Stepper>()
         .register::<TextField>()
         .register::<Sheet>()
-        .register::<Shortcut>();
+        .register::<Shortcut>()
+        .register::<Swatch>();
     registry
+}
+
+// --- Swatch: says the appearance it reads ------------------------------------
+
+/// A text saying the appearance it reads (`swatch dark`): a `ThemeScope`
+/// around it decides.
+#[component]
+pub(crate) fn Swatch() -> impl IntoElement {
+    text(|| {
+        if dark() {
+            "swatch dark"
+        } else {
+            "swatch light"
+        }
+    })
 }
 
 // --- Button: a press target with a label, and its event --------------------

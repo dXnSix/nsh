@@ -64,6 +64,10 @@ pub(crate) struct Env {
     signals: [Cell<JsValue>; PARTS],
     /// Read-only accessors of the signals (owned memos).
     accessors: [Cell<JsValue>; PARTS],
+    /// What names a `ThemeScope`'s appearance in the context of what it
+    /// renders ([`provide_scope`]): an object of its own, made with the
+    /// first scope.
+    scope_key: Cell<JsValue>,
     /// The app's appearance (`nsh.json`, `setColorScheme`).
     appearance: Cell<Appearance>,
     /// The insets context (owned): screens and modals provide theirs.
@@ -98,6 +102,7 @@ impl Default for Env {
             current: RefCell::new(None),
             signals: std::array::from_fn(|_| Cell::new(UNDEFINED)),
             accessors: std::array::from_fn(|_| Cell::new(UNDEFINED)),
+            scope_key: Cell::new(UNDEFINED),
             appearance: Cell::new(Appearance::System),
             insets: Cell::new(UNDEFINED),
             tokens: RefCell::new(Arc::default()),
@@ -127,6 +132,7 @@ impl Env {
                 qjs::JS_FreeValue(raw, c.replace(UNDEFINED));
             }
             qjs::JS_FreeValue(raw, self.insets.replace(UNDEFINED));
+            qjs::JS_FreeValue(raw, self.scope_key.replace(UNDEFINED));
             qjs::JS_FreeValue(raw, self.tokens_signal.replace(UNDEFINED));
             for (_, signal) in self.token_signals.get_mut().drain() {
                 qjs::JS_FreeValue(raw, signal);
@@ -459,19 +465,14 @@ unsafe extern "C" fn token(
     if let Some(signal) = name.as_deref().and_then(|name| token_signal(cx, e, name)) {
         reactive::track(cx, signal);
     }
-    // SAFETY: calls an accessor the environment owns.
-    unsafe {
-        let scheme = e.accessors[Part::ColorScheme as usize].get();
-        let read = qjs::JS_Call(cx, scheme, UNDEFINED, 0, ptr::null_mut());
-        if qjs::JS_IsException(read) {
-            return read;
-        }
-        qjs::JS_FreeValue(cx, read);
-    }
+    // The appearance of the scope around what reads it, else the surface's.
+    let dark = match shown_dark(cx) {
+        Ok(dark) => dark,
+        Err(exception) => return exception,
+    };
     let Some(name) = name else {
         return UNDEFINED;
     };
-    let dark = scheme(e, &current(cx)) == "dark";
     let tokens = e.tokens.borrow().clone();
     // A number in the appearance shown (its dark value, when it has one).
     let value = match tokens.get(&name) {
@@ -539,6 +540,110 @@ fn boolean(v: bool) -> JsValue {
 fn string(cx: *mut JsContext, s: &str) -> JsValue {
     // SAFETY: a new string.
     unsafe { qjs::JS_NewStringLen(cx, s.as_ptr().cast(), s.len() as _) }
+}
+
+/// The accessor of the appearance the nearest `ThemeScope` around the
+/// current owner shows (owned), if there is one.
+pub(crate) fn scope_scheme(cx: *mut JsContext) -> Option<JsValue> {
+    let key = env(cx).scope_key.get();
+    // No scope was made yet: nothing to look for.
+    // SAFETY: a value the environment owns.
+    if unsafe { qjs::JS_IsUndefined(key) } {
+        return None;
+    }
+    reactive::lookup(cx, key)
+}
+
+/// What the current owner makes from now on is in a `ThemeScope` showing
+/// what `scheme` (borrowed: an accessor of `"light"` or `"dark"`) says.
+pub(crate) fn provide_scope(cx: *mut JsContext, scheme: JsValue) {
+    let e = env(cx);
+    // SAFETY: a new object the environment keeps, as the scopes' key.
+    unsafe {
+        if qjs::JS_IsUndefined(e.scope_key.get()) {
+            e.scope_key.set(qjs::JS_NewObject(cx));
+        }
+    }
+    reactive::provide(cx, e.scope_key.get(), scheme);
+}
+
+/// The appearance the surface shows (owned: `"light"` or `"dark"`),
+/// whatever scope is around. Reading it tracks it.
+pub(crate) fn surface_scheme(cx: *mut JsContext) -> JsValue {
+    let accessor = env(cx).accessors[Part::ColorScheme as usize].get();
+    // SAFETY: calls an accessor the environment owns.
+    unsafe { qjs::JS_Call(cx, accessor, UNDEFINED, 0, ptr::null_mut()) }
+}
+
+/// The appearance shown where it is read (owned: `"light"` or `"dark"`):
+/// the nearest `ThemeScope`'s, else the surface's. Reading it tracks it.
+fn shown_scheme(cx: *mut JsContext) -> JsValue {
+    match scope_scheme(cx) {
+        // SAFETY: calls the scope's accessor, ours until freed.
+        Some(scope) => unsafe {
+            let shown = qjs::JS_Call(cx, scope, UNDEFINED, 0, ptr::null_mut());
+            qjs::JS_FreeValue(cx, scope);
+            shown
+        },
+        None => surface_scheme(cx),
+    }
+}
+
+/// Whether the appearance shown where it is read is dark ([`shown_scheme`]),
+/// tracked; the exception when reading it throws. Without a scope around,
+/// the surface's is read off the environment, with no string made.
+fn shown_dark(cx: *mut JsContext) -> Result<bool, JsValue> {
+    let shown = match scope_scheme(cx) {
+        // SAFETY: calls the scope's accessor, ours until freed.
+        Some(scope) => unsafe {
+            let shown = qjs::JS_Call(cx, scope, UNDEFINED, 0, ptr::null_mut());
+            qjs::JS_FreeValue(cx, scope);
+            shown
+        },
+        None => {
+            let read = surface_scheme(cx);
+            // SAFETY: a live value, ours.
+            unsafe {
+                if qjs::JS_IsException(read) {
+                    return Err(read);
+                }
+                qjs::JS_FreeValue(cx, read);
+            }
+            return Ok(scheme(env(cx), &current(cx)) == "dark");
+        }
+    };
+    // SAFETY: a live value, ours.
+    if unsafe { qjs::JS_IsException(shown) } {
+        return Err(shown);
+    }
+    let dark = crate::dom::string_arg(cx, shown).as_deref() == Some("dark");
+    unsafe { qjs::JS_FreeValue(cx, shown) };
+    Ok(dark)
+}
+
+/// `colorScheme()`.
+unsafe extern "C" fn color_scheme(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+) -> JsValue {
+    shown_scheme(cx)
+}
+
+/// `colorScheme` itself (owned): a function, called as the accessors are.
+fn color_scheme_export(cx: *mut JsContext) -> JsValue {
+    // SAFETY: a new function.
+    unsafe {
+        qjs::JS_NewCFunction2(
+            cx,
+            Some(color_scheme),
+            c"colorScheme".as_ptr(),
+            0,
+            qjs::JSCFunctionEnum_JS_CFUNC_generic,
+            0,
+        )
+    }
 }
 
 /// The color scheme shown: the app's, else the system's.
@@ -1043,9 +1148,9 @@ pub(crate) const DEVICE_EXPORTS: &[Item] = &[
     ),
     (
         "colorScheme",
-        Export::Value(|cx| accessor(cx, Part::ColorScheme)),
+        Export::Value(color_scheme_export),
         Ts::value(
-            "The appearance shown (reactive): the system's, unless the app set its\nown (`nsh.json` `\"appearance\"`, `setColorScheme`).",
+            "The appearance shown (reactive): the system's, unless the app set its\nown (`nsh.json` `\"appearance\"`, `setColorScheme`). In a `ThemeScope`\nwith an appearance, the scope's.",
             "Accessor<\"light\" | \"dark\">",
         ),
     ),

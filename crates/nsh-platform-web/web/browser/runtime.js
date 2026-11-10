@@ -234,7 +234,7 @@ export function createBrowserHost(player) {
         scope.installFetch(realm, call, { active, wake: requestPump, network });
         lists = createLists(call, values, reactive, dom, active, requestPump);
         dom.rt.list = lists.render;
-        components = createComponents(call, values, reactive, dom);
+        components = createComponents(call, values, reactive, dom, env);
         modules = createModules(call, values, active, requestPump, components.make);
         // A UI set a later gate registers fills this namespace in place.
         for (const specifier of Object.keys(nativeExports)) if (!modules.exports.has(specifier)) modules.exports.set(specifier, Object.create(null));

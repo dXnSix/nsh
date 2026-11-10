@@ -54,15 +54,20 @@ pub(crate) fn appearance() -> UIUserInterfaceStyle {
     APPEARANCE.get()
 }
 
+/// UIKit's style of `appearance` (`Unspecified`: as the view around it).
+pub(crate) fn interface_style(appearance: Appearance) -> UIUserInterfaceStyle {
+    match appearance {
+        Appearance::System => UIUserInterfaceStyle::Unspecified,
+        Appearance::Light => UIUserInterfaceStyle::Light,
+        Appearance::Dark => UIUserInterfaceStyle::Dark,
+    }
+}
+
 /// Applies the app's appearance to the surface `root` and to what is
 /// shown outside of it (the status bar's default style, alerts and modals
 /// shown from now on).
 pub(crate) fn set_appearance(appearance: Appearance, root: &UIView) {
-    let style = match appearance {
-        Appearance::System => UIUserInterfaceStyle::Unspecified,
-        Appearance::Light => UIUserInterfaceStyle::Light,
-        Appearance::Dark => UIUserInterfaceStyle::Dark,
-    };
+    let style = interface_style(appearance);
     APPEARANCE.set(style);
     root.setOverrideUserInterfaceStyle(style);
     if let Some(window) = root.window() {

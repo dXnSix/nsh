@@ -599,6 +599,14 @@ struct Node {
     rtl: bool,
     /// `direction`: `None` inherits.
     direction: Option<bool>,
+    /// The appearance the view sets for itself and the views in it,
+    /// whatever the surface's (`Prop::Appearance` on a view, a
+    /// [`crate::element::ThemeScope`]'s): dark, or light. `None`: none of
+    /// its own.
+    appearance: Option<bool>,
+    /// Dark or light as the nearest view with an appearance says (its own,
+    /// else one around it); `None`: the surface's ([`Core::dark_at`]).
+    scoped_dark: Option<bool>,
     /// Start / end properties, if any.
     logical: Option<Box<crate::style::Logical>>,
     /// Touch, accessibility and test properties; most views have none.
@@ -875,6 +883,8 @@ impl Node {
             vertical_align: crate::style::VerticalAlign::Baseline,
             rtl: false,
             direction: None,
+            appearance: None,
+            scoped_dark: None,
             logical: None,
             props: None,
             text: String::new(),
@@ -4982,6 +4992,22 @@ impl<M: TextEngine> Core<M> {
                 // `setColorScheme`.
                 if key == self.root {
                     self.set_appearance(appearance);
+                    return Ok(());
+                }
+                // A view's: its own and its subtree's, whatever the
+                // surface shows (`ThemeScope`).
+                let own = match appearance {
+                    crate::platform::Appearance::System => None,
+                    crate::platform::Appearance::Light => Some(false),
+                    crate::platform::Appearance::Dark => Some(true),
+                };
+                if node.appearance != own {
+                    node.appearance = own;
+                    let props = node.props.get_or_insert_default();
+                    props.appearance = appearance;
+                    self.mark(key, dirty::VIEW_PROPS);
+                    self.update_appearance(key);
+                    self.parts_restyled();
                 }
                 return Ok(());
             }
@@ -5636,6 +5662,7 @@ impl<M: TextEngine> Core<M> {
         self.outer_moved |= !self.parent_lists.is_empty() && self.may_hold_page_list(child);
         self.sticky_changed |= !self.sticky_nodes.is_empty();
         self.update_direction(child);
+        self.update_appearance(child);
         if self.nodes[parent as usize].child_perspective.is_some() {
             self.mark(child, dirty::VIEW | dirty::ANIMATION);
         }
