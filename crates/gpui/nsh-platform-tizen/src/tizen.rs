@@ -110,6 +110,10 @@ fn options(package: &Package) -> AppOptions {
     if let Some(name) = &package.name {
         options.title = name.clone();
     }
+    // `nsh/tizen`: the TV's product information and the remote's keys.
+    let tv = crate::tv::Tv::new(crate::tv::product());
+    options.context = std::mem::take(&mut options.context)
+        .with(nsh_core::runtime::TizenServices(std::sync::Arc::new(tv)));
     options
 }
 

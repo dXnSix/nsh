@@ -3,8 +3,11 @@
 //! as NSH reads them. `AppView` maps a name to an NSH key itself
 //! ([`nsh_platform_gpui::nsh_key`]: `red` is `ColorRed`, `info` `Info`);
 //! `back` is NSH's back navigation, and `exit` is the TV's own (it closes
-//! the app; no app hears it).
+//! the app; no app hears it). The other way, an NSH key's Tizen name is
+//! what the platform grabs for the app (`XF86Red`, for `nsh/tizen`'s
+//! `registerKey`).
 
+use dxn_gpui_tizen::keys::NAMED_KEYS;
 use nsh_core::keymap::Key;
 
 /// What a key name of the Tizen platform is to NSH.
@@ -34,9 +37,18 @@ pub(crate) fn remote(name: &str) -> Option<Remote> {
     }
 }
 
+/// The Tizen key name of `key` (`XF86Red` for `ColorRed`), for a key the
+/// platform names (`NAMED_KEYS`).
+pub(crate) fn tizen_name(key: Key) -> Option<&'static str> {
+    NAMED_KEYS
+        .iter()
+        .find(|(_, gpui)| remote(gpui) == Some(Remote::Key(key)))
+        .map(|(tizen, _)| *tizen)
+}
+
 #[cfg(test)]
 mod tests {
-    use dxn_gpui_tizen::{keygrab::DEFAULT_GRABS, keys::NAMED_KEYS};
+    use dxn_gpui_tizen::keygrab::DEFAULT_GRABS;
 
     use super::*;
 
@@ -93,5 +105,21 @@ mod tests {
                 "{tizen} is no NSH key"
             );
         }
+    }
+
+    /// The keys the platform grabs have Tizen names that go back and forth
+    /// (`nsh/tizen`'s `registerKey`).
+    #[test]
+    fn nsh_keys_have_their_tizen_names() {
+        for tizen in DEFAULT_GRABS {
+            let (_, gpui) = NAMED_KEYS.iter().find(|(t, _)| t == tizen).unwrap();
+            let Some(Remote::Key(key)) = remote(gpui) else {
+                panic!("{tizen} is no NSH key");
+            };
+            assert_eq!(tizen_name(key), Some(*tizen), "{key:?}");
+        }
+        assert_eq!(tizen_name(Key::Info), Some("XF86Info"));
+        assert_eq!(tizen_name(Key::Enter), Some("Return"));
+        assert_eq!(tizen_name(Key::F(5)), None);
     }
 }

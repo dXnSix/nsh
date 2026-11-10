@@ -22,13 +22,14 @@ library a TPK's C# host calls, exports one symbol, `nsh_tizen_main(argc, argv)`.
 | `lifecycle.rs` | The platform's window activation (off while the app framework has the app paused) as `Lifecycle::Background` / `Active`, through `AppView::set_lifecycle` |
 | `back.rs` | Samsung's rule for Back: NSH's back navigation first (a modal, a stack, `onBackPress`); when nothing takes it (`AppView::on_unhandled_back`), the app asks whether to leave, staying chosen |
 | `keys.rs` | The remote's key names (dXn.GpuiTizen's `keys::NAMED_KEYS`) as NSH reads them: NSH keys (`nsh_platform_gpui::nsh_key`, `TV-1`'s `ColorRed`, `MediaPlayPause`, `Info`, ...), `back` (navigation), `exit` (the TV's) |
+| `tv.rs` | The TV's side of `nsh/tizen` (`nsh_core::runtime::TizenHost`, in the view's engine context as `TizenServices`): `system_info`'s model, platform version, build and maker; the remote's keys, which the platform grabs for the app at start (`keygrab::DEFAULT_GRABS`), so registering one of them succeeds and the others (Info) are refused, as is giving a grabbed key back |
 | `package.rs` | The app in the TPK's resources: `res/nsh/bundle.nshc` (with `capabilities.json` and `bundle.js.map`), `res/nsh/assets/`, `res/nsh/app.json` (name, id, appearance), as Linux's packages hold them |
 | `dev.rs` (feature `dev`) | The development runtime, below |
 
 The logic modules build on the desktops too, and their unit tests run there:
 
 ```sh
-cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib                 # keys, settings, back, lifecycle, package
+cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib                 # keys, settings, back, lifecycle, package, tv
 cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --features dev --lib  # and dev's connection policy
 ```
 
@@ -120,5 +121,7 @@ environment above goes.
   cargo xtask check-symbols "$CARGO_TARGET_DIR/dev-variant/armv7-tizen-linux-gnueabi/release/libnsh.so" \
     --entry nsh_tizen_main
   ```
+- `nsh/tizen`'s `registerKey` takes only the keys the platform grabs at start, and `unregisterKey` gives none back:
+  dXn.GpuiTizen changes no key grab while the app runs.
 - Packaging (`nsh package --target tizen`), `nsh run --target tizen` and the `tizen` component come with the CLI's
   Tizen target.

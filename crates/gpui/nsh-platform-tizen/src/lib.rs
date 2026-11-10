@@ -14,6 +14,8 @@
 //!   nothing takes Back (`back`);
 //! - `keys`: the remote's key names as NSH reads them;
 //! - `package`: the app in the TPK's resources;
+//! - `tv`: the TV's side of `nsh/tizen` (product information, the
+//!   remote's keys);
 //! - `tizen` (Tizen only): the entry point and the app framework's
 //!   directories and log;
 //! - `dev` (feature `dev`): the development runtime, connected through
@@ -35,6 +37,7 @@ mod package;
 mod settings;
 #[cfg(target_vendor = "tizen")]
 mod tizen;
+mod tv;
 
 pub use nsh_platform_gpui::set_ui_sets;
 
