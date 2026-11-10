@@ -196,8 +196,10 @@ What draws or behaves differently from the native desktop backends:
 - **Keyboard focus**: the arrow keys move the focus to the nearest pressable, field or `focusable` view in their
   direction, inside the newest dialog (a menu keeps Left and Right while one of its items has it), and scroll it into
   view; Enter and Space press it, and its `focus:` styles, `onFocus` and `onBlur` follow. A field keeps the arrows it
-  uses (Up and Down leave a single-line one). Tab and Shift+Tab stop at the same
-  pressables, fields, `focusable` views and native components, in tree order.
+  uses (Up and Down leave a single-line one). `autoFocus`, `preferredFocus`, the `nextFocusUp` / `Down` / `Left` /
+  `Right` routes and [`FocusGroup`](../elements/focus-group.md) shape where the arrows go, as on a TV, and in a long
+  list they go on to rows not on screen yet. A ref's `focus()` moves the focus to a pressable or `focusable` view. Tab
+  and Shift+Tab stop at the same pressables, fields, `focusable` views and native components, in tree order.
 
 For comparison, each native backend's own list: [macOS](./macos.md#what-differs-on-macos),
 [Windows](./windows.md#what-differs-on-windows), [Linux](./linux.md#what-differs-on-linux).

@@ -34882,3 +34882,280 @@ mod theme_set_files {
         assert_eq!(left_out, ["`radius-card`: no radius value"]);
     }
 }
+
+/// What the core does for the TV's focus (`directional.rs`): the views
+/// focus props name, found in every commit, and a list scrolled to the row
+/// an arrow went to before that row was mounted.
+mod directional_focus {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::{
+        element::{FocusGroupTargets, FocusTarget},
+        focus::{Direction, GroupConfig, NextFocus},
+    };
+
+    fn view(id: NodeId) -> Vec<Op> {
+        vec![
+            Op::Create { id, tag: Tag::View },
+            style_op(id, &[("height", StyleValue::Number(20.0))]),
+            Op::Insert {
+                parent: ROOT_ID,
+                child: id,
+                before: None,
+            },
+        ]
+    }
+
+    fn props_of(batch: &MountBatch, id: NodeId) -> Option<ViewProps> {
+        batch.items.iter().rev().find_map(|item| match item {
+            MountItem::ViewProps { id: of, props } if *of == id => Some((**props).clone()),
+            _ => None,
+        })
+    }
+
+    fn set(c: &mut Core<FakeEngine>, id: NodeId, prop: Prop) {
+        c.apply(Op::SetProp { id, prop }).unwrap();
+    }
+
+    #[test]
+    fn auto_and_preferred_focus_reach_the_view_s_props() {
+        let mut c = core();
+        apply(&mut c, view(2));
+        c.commit();
+        set(&mut c, 2, Prop::AutoFocus(true));
+        set(&mut c, 2, Prop::PreferredFocus(true));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        assert!(props.auto_focus && props.preferred_focus);
+        // An input's is its config's, as before.
+        let mut c = input_core();
+        c.commit();
+        set(&mut c, 2, Prop::AutoFocus(true));
+        let batch = c.commit().unwrap();
+        assert!(props_of(&batch, 2).is_none_or(|p| !p.auto_focus));
+        assert!(batch.items.iter().any(|item| matches!(
+            item,
+            MountItem::Input { id: 2, config } if config.auto_focus
+        )));
+    }
+
+    #[test]
+    fn a_route_names_its_view_once_it_is_made() {
+        let mut c = core();
+        apply(&mut c, view(2));
+        c.commit();
+        set(&mut c, 2, Prop::NextFocusDown(Some(FocusTarget::Node(4))));
+        set(&mut c, 2, Prop::NextFocusRight(Some(FocusTarget::Node(2))));
+        // Node 4 is not made yet: Down names nothing.
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        let mut expected = NextFocus {
+            right: Some(2),
+            ..NextFocus::default()
+        };
+        assert_eq!(props.next_focus, expected);
+        // Made later, it is found without the route being set again.
+        apply(&mut c, view(4));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent again");
+        expected.down = Some(4);
+        assert_eq!(props.next_focus, expected);
+        // Nothing it names changed: nothing is sent.
+        c.apply(style_op(4, &[("height", StyleValue::Number(30.0))]))
+            .unwrap();
+        assert!(c.commit().is_none_or(|b| props_of(&b, 2).is_none()));
+        // Cleared, it goes.
+        set(&mut c, 2, Prop::NextFocusDown(None));
+        set(&mut c, 2, Prop::NextFocusRight(None));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        assert!(props.next_focus.is_empty());
+        assert!(c.focus_refs.is_empty());
+    }
+
+    #[test]
+    fn a_focus_group_carries_its_trap_and_the_destinations_found() {
+        let mut c = core();
+        apply(&mut c, view(2));
+        apply(&mut c, view(4));
+        c.commit();
+        let group = FocusGroupTargets {
+            trap: true,
+            destinations: vec![FocusTarget::Node(98), FocusTarget::Node(4)],
+        };
+        set(&mut c, 2, Prop::FocusGroup(Some(group)));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        let expected = GroupConfig {
+            trap: true,
+            destinations: vec![4],
+        };
+        assert_eq!(props.focus_group, Some(expected));
+        set(&mut c, 2, Prop::FocusGroup(None));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        assert_eq!(props.focus_group, None);
+    }
+
+    /// The cells take presses: each row is a stop of the keyboard focus.
+    fn pressable(c: &mut Core<FakeEngine>, cells: &[u32]) {
+        for &id in cells {
+            c.apply(Op::Listen {
+                id,
+                event: EventKind::Press,
+                enabled: true,
+            })
+            .unwrap();
+        }
+    }
+
+    /// A list of 1000 rows of 100 points that take presses, its window
+    /// rendered: the cell showing each item.
+    fn rendered_list(c: &mut Core<FakeEngine>) -> (u32, Vec<u32>, HashMap<u32, NodeId>) {
+        thousand_rows(c);
+        c.commit();
+        let (mut next_id, mut cells) = (100, Vec::new());
+        render_binds(c, &mut next_id, &mut cells, 100.0);
+        pressable(c, &cells);
+        c.commit();
+        let shown = shown(c, &cells);
+        (next_id, cells, shown)
+    }
+
+    /// The items the cells show, from the core's own slots.
+    fn shown(c: &Core<FakeEngine>, cells: &[u32]) -> HashMap<u32, NodeId> {
+        let list = c.key(2).unwrap();
+        let state = c.nodes[list as usize].list.as_ref().unwrap();
+        cells
+            .iter()
+            .filter_map(|&id| {
+                let key = c.key(id).ok()?;
+                let index = state.slots.iter().find(|s| s.cell == key)?.ready()?;
+                Some((index, id))
+            })
+            .collect()
+    }
+
+    /// The cell a batch sends `Command::Focus`, if any.
+    fn focus_command(batch: Option<MountBatch>) -> Option<NodeId> {
+        batch?.items.iter().find_map(|item| match item {
+            MountItem::Command {
+                id,
+                command: Command::Focus,
+            } => Some(*id),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn an_arrow_past_the_mounted_rows_scrolls_the_list_and_focuses_the_row() {
+        let mut c = core();
+        let (mut next_id, mut cells, shown_now) = rendered_list(&mut c);
+        let last = *shown_now.keys().max().unwrap();
+        assert!(c.focus_past(shown_now[&last], Direction::Down));
+        let batch = c.commit().unwrap();
+        // The list scrolls to the next row, by index: its end at the
+        // viewport's (400 points tall).
+        let y = (last + 2) as f32 * 100.0 - 400.0;
+        assert!(batch.items.iter().any(|item| matches!(
+            item,
+            MountItem::Command { id: 2, command: Command::ScrollTo { y: to, animated: true, .. } }
+                if to.0 == y
+        )));
+        assert_eq!(focus_command(Some(batch)), None);
+        // Once the row shows in a cell, the cell takes the focus, once.
+        c.set_scroll_offset(2, point(px(0.0), px(y)), u32::MAX);
+        let mut focused = focus_command(c.commit());
+        render_binds(&mut c, &mut next_id, &mut cells, 100.0);
+        pressable(&mut c, &cells);
+        focused = focused.or(focus_command(c.commit()));
+        assert!(focused.is_some());
+        assert_eq!(focused, shown(&c, &cells).get(&(last + 1)).copied());
+        assert!(c.pending_row.is_none());
+        assert_eq!(focus_command(c.commit()), None);
+    }
+
+    #[test]
+    fn the_first_stop_inside_a_row_takes_the_focus() {
+        let mut c = core();
+        apply(&mut c, view(2));
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 4,
+                    tag: Tag::View,
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 4,
+                    before: None,
+                },
+                Op::Create {
+                    id: 6,
+                    tag: Tag::View,
+                },
+                Op::Listen {
+                    id: 6,
+                    event: EventKind::Press,
+                    enabled: true,
+                },
+                Op::Insert {
+                    parent: 4,
+                    child: 6,
+                    before: None,
+                },
+                Op::Create {
+                    id: 8,
+                    tag: Tag::View,
+                },
+                Op::SetProp {
+                    id: 8,
+                    prop: Prop::Focusable(Some(true)),
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 8,
+                    before: Some(4),
+                },
+            ],
+        );
+        c.commit();
+        let key = c.key(2).unwrap();
+        // In tree order: the focusable view before the pressable's parent.
+        assert_eq!(c.first_stop_in(key), c.key(8).ok());
+        c.apply(Op::SetProp {
+            id: 8,
+            prop: Prop::Focusable(Some(false)),
+        })
+        .unwrap();
+        assert_eq!(c.first_stop_in(key), c.key(6).ok());
+        // None at all.
+        assert_eq!(c.first_stop_in(c.key(8).unwrap()), None);
+    }
+
+    #[test]
+    fn an_arrow_that_leaves_the_list_or_its_end_scrolls_nothing() {
+        let mut c = core();
+        let (_, _, shown) = rendered_list(&mut c);
+        // Across a list of one column, and before its first row.
+        assert!(!c.focus_past(shown[&0], Direction::Right));
+        assert!(!c.focus_past(shown[&0], Direction::Up));
+        // A view in no list.
+        apply(&mut c, view(4));
+        c.commit();
+        assert!(!c.focus_past(4, Direction::Down));
+        assert!(!c.focus_past(999, Direction::Down));
+        assert!(c.pending_row.is_none());
+    }
+
+    #[test]
+    fn a_row_waiting_is_forgotten_when_the_focus_moves_elsewhere() {
+        let mut c = core();
+        let (_, _, shown) = rendered_list(&mut c);
+        let last = *shown.keys().max().unwrap();
+        assert!(c.focus_past(shown[&last], Direction::Down));
+        c.commit();
+        assert!(c.pending_row.is_some());
+        // Another view reports the focus.
+        apply(&mut c, view(4));
+        c.set_states(4, crate::tailwind::state::FOCUSED);
+        c.commit();
+        assert!(c.pending_row.is_none());
+    }
+}

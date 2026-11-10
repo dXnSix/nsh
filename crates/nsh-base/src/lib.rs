@@ -1,7 +1,7 @@
 //! `nsh/base`: the behavior and infrastructure foundation of NSH apps' UI,
 //! written in Rust, with no look of its own (as `gpui-base` is GPUI Kit's):
 //! controls (`Button`, a link (`Link`), `Checkbox`, avatars (`Avatar`, `AvatarGroup`), a carousel (`Carousel` and its parts), a color picker: `ColorPicker` and its parts, `NumberInput`, `Radio` in a
-//! `RadioGroup`, `Slider`, `Switch`, `Toggle` in a `ToggleGroup`, a bar of them and of buttons and links (`Toolbar`, `ToolbarGroup`, `ToolbarSeparator`), a scroll bar of the app's own look (`Scrollbar`), `Tab` in `Tabs`, `Select`, `Combobox`, a command palette (`Command`), an emoji picker (`EmojiPicker`), a one-time code: `OtpInput`), the pages of a set (`Pagination`), items that hold items (`Tree`), a progress bar (`Progress`), disclosure (`Collapsible`, `Accordion` and its parts),
+//! `RadioGroup`, `Slider`, `Switch`, `Toggle` in a `ToggleGroup`, a bar of them and of buttons and links (`Toolbar`, `ToolbarGroup`, `ToolbarSeparator`), a region the arrow keys enter at chosen stops and may not leave (`FocusGroup`), a scroll bar of the app's own look (`Scrollbar`), `Tab` in `Tabs`, `Select`, `Combobox`, a command palette (`Command`), an emoji picker (`EmojiPicker`), a one-time code: `OtpInput`), the pages of a set (`Pagination`), items that hold items (`Tree`), a progress bar (`Progress`), disclosure (`Collapsible`, `Accordion` and its parts),
 //! the parts of charts (`plot`: `nsh/base/plot`), navigation (stacks and pages), dialogs, popups on the core's overlays
 //! (`Popover`, `HoverCard`, `Menu`, `ContextMenu`, `Tooltip`, `Sheet`), a code editor
 //! (`Editor`), the changes between two texts (`DiffView`), tables over any number of rows and columns (`DataTable`) and static tables
@@ -38,6 +38,7 @@ pub mod dock;
 pub mod editor;
 #[cfg(feature = "emoji-picker")]
 mod emoji_picker;
+mod focus_group;
 mod hover_card;
 mod keys;
 mod link;
@@ -173,6 +174,7 @@ pub use crate::{
         DateRangePreset, DateTime, PickedDate, date_picker,
     },
     dock::{DockArea, DockAreaElement, DockAreaEvent, DockAreaProps, dock_area},
+    focus_group::{FocusGroup, FocusGroupElement, FocusGroupProps, focus_group},
     hover_card::{HoverCard, HoverCardElement, HoverCardEvent, HoverCardProps, hover_card},
     link::{Link, LinkElement, LinkEvent, LinkOpenWith, LinkProps, link},
     menu::{
@@ -323,10 +325,10 @@ pub mod parts {
         Avatar, AvatarGroup, Button, Calendar, Carousel, CarouselContent, CarouselItem,
         CarouselNext, CarouselPagination, CarouselPaginationItem, CarouselPrevious, Checkbox,
         Collapsible, ColorArea, ColorEyeDropper, ColorField, ColorPicker, ColorSlider, ColorSwatch,
-        Combobox, Command, ContextMenu, DataTable, DatePicker, DockArea, HoverCard, Link, Menu,
-        MenuItem, MenuSeparator, NumberInput, OtpInput, Pagination, Popover, Progress, Radio,
-        RadioGroup, ResizablePanel, ResizablePanelGroup, Scrollbar, Select, Sheet, Slider, Submenu,
-        Switch, Tab, Table, TableBody, TableCaption, TableCell, TableFooter, TableHead,
+        Combobox, Command, ContextMenu, DataTable, DatePicker, DockArea, FocusGroup, HoverCard,
+        Link, Menu, MenuItem, MenuSeparator, NumberInput, OtpInput, Pagination, Popover, Progress,
+        Radio, RadioGroup, ResizablePanel, ResizablePanelGroup, Scrollbar, Select, Sheet, Slider,
+        Submenu, Switch, Tab, Table, TableBody, TableCaption, TableCell, TableFooter, TableHead,
         TableHeader, TableRow, Tabs, TextView, TimeField, Toast, ToastStack, Toggle, ToggleGroup,
         Toolbar, ToolbarGroup, ToolbarSeparator, Tooltip, Tree,
     };
@@ -388,6 +390,7 @@ pub mod parts {
             .register::<Link>()
             .register::<Checkbox>()
             .register::<Collapsible>()
+            .register::<FocusGroup>()
             .register::<Pagination>()
             .register::<Radio>()
             .register::<RadioGroup>()
@@ -621,6 +624,7 @@ mod tests {
                 "DockArea",
                 "Editor",
                 "EmojiPicker",
+                "FocusGroup",
                 "HoverCard",
                 "Link",
                 "Menu",

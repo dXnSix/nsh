@@ -2562,8 +2562,13 @@ pub enum Prop {
     /// either way. Decided natively when the user pastes.
     #[prop(js = "pasteBehavior", on = INPUT)]
     PasteBehavior(PasteBehavior),
-    /// `autoFocus`: focused when it appears.
-    #[prop(js = "autoFocus", on = INPUT)]
+    /// `autoFocus`: focused when it appears. An input is (showing the
+    /// keyboard); any other view that is a stop of the keyboard focus
+    /// takes it when it appears in the scope the focus moves in (mounted,
+    /// or its screen or modal comes up), the first in tree order of those
+    /// that appear together, where the arrows move the focus between
+    /// views (`nsh_core::focus`: GPUI, TVs).
+    #[prop(js = "autoFocus")]
     AutoFocus(bool),
     /// `caret`: the caret is drawn (default true; `false` hides it).
     #[prop(js = "caret", default = true, on = INPUT)]
@@ -2781,6 +2786,35 @@ pub enum Prop {
     /// popover). Unset, the views that take presses are stops.
     #[prop(js = "focusable")]
     Focusable(Option<bool>),
+    /// `preferredFocus`: the stop that takes the keyboard focus where it
+    /// enters, over the nearest one: a `FocusGroup` it is in that the
+    /// arrows enter, or its scope when an arrow is pressed with nothing
+    /// focused (`nsh_core::focus::directional`).
+    #[prop(js = "preferredFocus")]
+    PreferredFocus(bool),
+    /// `nextFocusUp`: the view Up takes the keyboard focus to from this
+    /// one, over the nearest stop above (a ref; the first stop inside it
+    /// when it is none itself). Where it names nothing in reach, the
+    /// nearest stop.
+    #[prop(js = "nextFocusUp", with = crate::js::host_values::next_focus_up, reset = Prop::NextFocusUp(None), ts = "ViewRef | null")]
+    NextFocusUp(Option<crate::element::FocusTarget>),
+    /// `nextFocusDown`: the view Down takes the keyboard focus to from
+    /// this one (as `nextFocusUp`).
+    #[prop(js = "nextFocusDown", with = crate::js::host_values::next_focus_down, reset = Prop::NextFocusDown(None), ts = "ViewRef | null")]
+    NextFocusDown(Option<crate::element::FocusTarget>),
+    /// `nextFocusLeft`: the view Left takes the keyboard focus to from
+    /// this one (as `nextFocusUp`).
+    #[prop(js = "nextFocusLeft", with = crate::js::host_values::next_focus_left, reset = Prop::NextFocusLeft(None), ts = "ViewRef | null")]
+    NextFocusLeft(Option<crate::element::FocusTarget>),
+    /// `nextFocusRight`: the view Right takes the keyboard focus to from
+    /// this one (as `nextFocusUp`).
+    #[prop(js = "nextFocusRight", with = crate::js::host_values::next_focus_right, reset = Prop::NextFocusRight(None), ts = "ViewRef | null")]
+    NextFocusRight(Option<crate::element::FocusTarget>),
+    /// The view is a focus group (`nsh/base`'s `FocusGroup`): the arrows
+    /// enter it at its destinations and may not leave it
+    /// ([`crate::focus::GroupConfig`]); set by components.
+    #[prop(reset = Prop::FocusGroup(None))]
+    FocusGroup(Option<crate::element::FocusGroupTargets>),
     /// `selectable` of a view: the texts in it share one selection, as a
     /// browser page's do ([`crate::selection`]); texts with
     /// `selectable={false}` stay out of it, a selectable view inside
