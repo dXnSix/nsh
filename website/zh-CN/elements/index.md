@@ -325,13 +325,14 @@ ref 的 `focus()` 像 Tab 一样把键盘焦点移到停靠点上（显示它的
 | `focusable` | `.focusable(..)` | `boolean` | 可按压的视图为 `true` | 视图是否是 Tab 的停靠点。`true` 让任何视图成为停靠点，无论它自己接收按压，还是把按压留给外层视图；`false` 把可按压的视图留给指针（关闭浮层的背景层、用方向键切换的列表行）。 |
 | `onFocus` | `.on_focus(..)` | `() => void` | | Tab（或 `focus()`）让视图获得了键盘焦点。 |
 | `onBlur` | `.on_blur(..)` | `() => void` | | 键盘焦点离开了视图。 |
-| `autoFocus` | `.auto_focus(..)` | `boolean` | `false` | 视图出现时获得键盘焦点：挂载时，或它所在的屏幕、模态框出现时（同时出现的多个视图中，视图树顺序的第一个）。在输入框上会弹出键盘。 |
-| `preferredFocus` | `.preferred_focus(..)` | `boolean` | `false` | 焦点进入时由这个视图获得焦点，优先于最近的停靠点：方向键进入它所在的 `FocusGroup` 时，或没有焦点时按下方向键时它所在的屏幕。 |
-| `nextFocusUp`、`nextFocusDown`、`nextFocusLeft`、`nextFocusRight` | `.next_focus_up(&r)`、`.next_focus_down(&r)`、`.next_focus_left(&r)`、`.next_focus_right(&r)` | `ViewRef \| null` | | 从这个视图按下该方向键时焦点去往的位置：指定的视图，或其中的第一个停靠点。指定的视图焦点到达不了时，方向键照常去往最近的停靠点。 |
+| `autoFocus` | `.auto_focus(..)` | `boolean` | `false` | 视图出现时获得键盘焦点：挂载时，或它所在的屏幕、模态框出现时（同时出现的多个视图中，视图树顺序的第一个）。在输入框上会弹出键盘，所有平台都如此；其他停靠点在 GPUI 后端和 Web 上（包括电视）获得焦点。 |
+| `preferredFocus` | `.preferred_focus(..)` | `boolean` | `false` | 焦点进入时由这个视图获得焦点，优先于最近的停靠点：方向键进入它所在的 `FocusGroup` 时，或没有焦点时按下方向键时它所在的屏幕。适用于 GPUI 后端和 Web（包括电视）。 |
+| `nextFocusUp`、`nextFocusDown`、`nextFocusLeft`、`nextFocusRight` | `.next_focus_up(&r)`、`.next_focus_down(&r)`、`.next_focus_left(&r)`、`.next_focus_right(&r)` | `ViewRef \| null` | | 从这个视图按下该方向键时焦点去往的位置：指定的视图，或其中的第一个停靠点。指定的视图焦点到达不了时，方向键照常去往最近的停靠点。适用于 GPUI 后端和 Web（包括电视）。 |
 
 #### 方向键与电视
 
-在电视上以及 GPUI 后端中，方向键把焦点移到该方向上最近的停靠点，Return 或空格按下它。遥控器就是这样操作整个应用的，下面这些属性决定焦点的去向：
+在 macOS、Windows、Linux、Web、GPUI 后端以及电视上，方向键把焦点移到该方向上最近的停靠点，Return 或空格按下它。遥控器就是这样操作整个应用的，
+下面这些属性决定焦点的去向（在 GPUI 后端和 Web 上，包括电视；其他平台仍去往最近的停靠点）：
 
 - `autoFocus` 在视图出现时让它获得焦点：屏幕上的第一张卡片、对话框的主按钮。
 - `preferredFocus` 选定焦点进入时停在哪里：一行中当前的项、对话框的默认操作。

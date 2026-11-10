@@ -188,7 +188,9 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   scroll view around the focus can scroll on toward the arrow, a stop outside it is not reached
   (`focus::Target::Scroll`); the platform scrolls it and calls `EngineControl::focus_past`, and in a list the core
   scrolls to the next row by index (`Command::ScrollToIndex`, `focus::next_row`: a row of columns along a grid,
-  inverted and right-to-left lists the other way) and, once a cell shows that row, sends the first stop in it
+  inverted and right-to-left lists the other way, an inverted right-to-left one as laid out), bringing it in at the edge the
+  arrow goes toward (`viewPosition` 1 for the next items, 0 for the previous ones: an inverted list mirrors it as it
+  mirrors its layout, a right-to-left one's offsets run left to right as laid out) and, once a cell shows that row, sends the first stop in it
   `Command::Focus` (`ViewProps::focus_stop` in tree order), as its ref's `focus()` would. The row is forgotten when the focus is reported elsewhere first.
   A link in text (a nested `<Text>` that takes presses, `AttributedText::links`) is a stop of its own: the core marks
   each `TextLink` with `focus_stop` (the span's `ViewProps::focus_stop(true)`: unless `focusable={false}` or

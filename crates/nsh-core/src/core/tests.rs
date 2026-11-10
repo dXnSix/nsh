@@ -35158,4 +35158,214 @@ mod directional_focus {
         c.commit();
         assert!(c.pending_row.is_none());
     }
+
+    /// A list of 1000 items of 100 points along its axis (vertical: 400
+    /// tall; horizontal: 400 wide) that take presses, with `props` set
+    /// (and the root's with `rtl`), its window rendered: the cell showing
+    /// each item.
+    fn list_with(
+        c: &mut Core<FakeEngine>,
+        props: &[Prop],
+        horizontal: bool,
+        rtl: bool,
+    ) -> (u32, Vec<u32>, HashMap<u32, NodeId>) {
+        let n = StyleValue::Number;
+        let mut ops = Vec::new();
+        if rtl {
+            ops.push(Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::LayoutDirection(true),
+            });
+        }
+        ops.push(Op::Create {
+            id: 2,
+            tag: Tag::List,
+        });
+        ops.push(if horizontal {
+            style_op(2, &[("width", n(400.0)), ("height", n(100.0))])
+        } else {
+            style_op(2, &[("height", n(400.0))])
+        });
+        for prop in [
+            Prop::Horizontal(horizontal),
+            Prop::EstimatedItemSize(px(50.0)),
+            Prop::Count(1000),
+        ]
+        .into_iter()
+        .chain(props.iter().cloned())
+        {
+            ops.push(Op::SetProp { id: 2, prop });
+        }
+        ops.push(Op::Insert {
+            parent: ROOT_ID,
+            child: 2,
+            before: None,
+        });
+        apply(c, ops);
+        c.commit();
+        let (mut next_id, mut cells) = (100, Vec::new());
+        bind_rows(c, &mut next_id, &mut cells, horizontal);
+        pressable(c, &cells);
+        c.commit();
+        let shown = shown(c, &cells);
+        (next_id, cells, shown)
+    }
+
+    /// The list's binds, each cell 100 points along the list's axis.
+    fn bind_rows(
+        c: &mut Core<FakeEngine>,
+        next_id: &mut u32,
+        cells: &mut Vec<u32>,
+        horizontal: bool,
+    ) {
+        let main = if horizontal { "width" } else { "height" };
+        let mut binds = Vec::new();
+        c.take_list_binds(&mut binds);
+        c.take_paced_list_binds(usize::MAX, &mut binds);
+        for bind in binds {
+            for (slot, index) in bind.binds {
+                while cells.len() <= slot as usize {
+                    let id = *next_id;
+                    *next_id += 1;
+                    apply(
+                        c,
+                        vec![
+                            Op::Create { id, tag: Tag::Cell },
+                            Op::SetProp {
+                                id,
+                                prop: Prop::Slot(CellSlot::Item(cells.len() as u32)),
+                            },
+                            Op::Insert {
+                                parent: bind.list,
+                                child: id,
+                                before: None,
+                            },
+                        ],
+                    );
+                    cells.push(id);
+                }
+                let cell = cells[slot as usize];
+                c.apply(style_op(cell, &[(main, StyleValue::Number(100.0))]))
+                    .unwrap();
+                c.apply(Op::SetProp {
+                    id: cell,
+                    prop: Prop::CellIndex(index),
+                })
+                .unwrap();
+            }
+        }
+    }
+
+    /// The list's scroll commands followed (each offset reported back, the
+    /// rows it brings rendered) until it rests: its offset along its axis
+    /// then, and where along it the row of `index` is in the viewport
+    /// (its start and end).
+    fn rest_at(
+        c: &mut Core<FakeEngine>,
+        next_id: &mut u32,
+        cells: &mut Vec<u32>,
+        horizontal: bool,
+        index: u32,
+    ) -> (f32, f32, f32) {
+        let mut frames = HashMap::new();
+        let mut offset = None;
+        for _ in 0..8 {
+            let Some(batch) = c.commit() else { break };
+            let mut moved = false;
+            for item in &batch.items {
+                match item {
+                    MountItem::Frame { id, frame } => {
+                        frames.insert(*id, *frame);
+                    }
+                    MountItem::Command {
+                        id: 2,
+                        command: Command::ScrollTo { x, y, .. },
+                    } => {
+                        c.set_scroll_offset(2, point(*x, *y), u32::MAX);
+                        offset = Some(if horizontal { x.0 } else { y.0 });
+                        moved = true;
+                    }
+                    _ => {}
+                }
+            }
+            bind_rows(c, next_id, cells, horizontal);
+            pressable(c, cells);
+            if !moved && c.pending_row.is_none() {
+                break;
+            }
+        }
+        let offset = offset.expect("the list scrolled");
+        let cell = shown(c, cells)[&index];
+        let frame = frames[&cell];
+        let (start, size) = if horizontal {
+            (frame.origin.x.0, frame.size.width.0)
+        } else {
+            (frame.origin.y.0, frame.size.height.0)
+        };
+        (offset, start - offset, start + size - offset)
+    }
+
+    #[test]
+    fn an_inverted_list_brings_its_next_row_in_at_the_top() {
+        let mut c = core();
+        let (mut next_id, mut cells, shown) =
+            list_with(&mut c, &[Prop::Inverted(true)], false, false);
+        let last = *shown.keys().max().unwrap();
+        // Item 0 is at the bottom: Down from it is past the list's start.
+        assert!(!c.focus_past(shown[&0], Direction::Down));
+        // Up goes on to the next item, above.
+        assert!(c.focus_past(shown[&last], Direction::Up));
+        assert_eq!(c.pending_row.map(|(row, _)| row.index), Some(last + 1));
+        let (_, start, end) = rest_at(&mut c, &mut next_id, &mut cells, false, last + 1);
+        assert_eq!((start, end), (0.0, 100.0), "at the top of the viewport");
+    }
+
+    #[test]
+    fn a_right_to_left_list_brings_its_next_row_in_at_the_left() {
+        let mut c = core();
+        let (mut next_id, mut cells, shown) = list_with(&mut c, &[], true, true);
+        let last = *shown.keys().max().unwrap();
+        // Item 0 is at the right: Right from it is past the list's start.
+        assert!(!c.focus_past(shown[&0], Direction::Right));
+        assert!(c.focus_past(shown[&last], Direction::Left));
+        assert_eq!(c.pending_row.map(|(row, _)| row.index), Some(last + 1));
+        // The list's offsets run left to right as laid out (the platform
+        // mirrors it): the end of its viewport shows at the left.
+        let (_, start, end) = rest_at(&mut c, &mut next_id, &mut cells, true, last + 1);
+        assert_eq!((start, end), (300.0, 400.0), "at the left of the viewport");
+    }
+
+    #[test]
+    fn an_inverted_right_to_left_list_brings_its_next_row_in_at_the_right() {
+        let mut c = core();
+        let (mut next_id, mut cells, shown) =
+            list_with(&mut c, &[Prop::Inverted(true)], true, true);
+        let last = *shown.keys().max().unwrap();
+        // Inverted and mirrored: item 0 at the left, the next ones to its
+        // right.
+        assert!(!c.focus_past(shown[&0], Direction::Left));
+        assert!(c.focus_past(shown[&last], Direction::Right));
+        assert_eq!(c.pending_row.map(|(row, _)| row.index), Some(last + 1));
+        // The start of its viewport as laid out shows at the right.
+        let (_, start, end) = rest_at(&mut c, &mut next_id, &mut cells, true, last + 1);
+        assert_eq!((start, end), (0.0, 100.0), "at the right of the viewport");
+    }
+
+    #[test]
+    fn a_grid_steps_a_row_of_columns_at_a_time() {
+        let mut c = core();
+        let (mut next_id, mut cells, shown) = list_with(&mut c, &[Prop::Columns(4)], false, false);
+        let last = *shown.keys().max().unwrap();
+        let from = last - last % 4;
+        // Across: along the row, not past the list.
+        assert!(!c.focus_past(shown[&from], Direction::Left));
+        assert!(c.focus_past(shown[&from], Direction::Down));
+        assert_eq!(c.pending_row.map(|(row, _)| row.index), Some(from + 4));
+        let (_, start, end) = rest_at(&mut c, &mut next_id, &mut cells, false, from + 4);
+        assert_eq!(
+            (start, end),
+            (300.0, 400.0),
+            "at the bottom of the viewport"
+        );
+    }
 }

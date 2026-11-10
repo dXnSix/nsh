@@ -40,8 +40,11 @@
 //!   does); one that takes none leaves them to the app's bindings.
 //! - **What a TV adds** (`focus::directional`): with nothing focused the
 //!   first `preferredFocus` stop in sight takes an arrow; a stop's
-//!   `nextFocus*` route (its own, or that of a view around it that is no
-//!   stop) goes to the view named or the first stop inside it; a
+//!   `nextFocus*` route goes to the view named or the first stop inside
+//!   it, each direction's its own or else that of the nearest view around
+//!   it that sets one (a stop or not: a button in a pressable card takes
+//!   the card's), and `preferredFocus` and `autoFocus` hold for the stops
+//!   inside a view that sets them as well; a
 //!   `FocusGroup`'s view is entered at its first destination in reach (else
 //!   its preferred stop) and with `trap` keeps the arrows; while the
 //!   innermost scroll view along the arrow's axis around the focus can
@@ -707,10 +710,19 @@ fn arrow(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
             focus_stop(surface, &view);
             true
         }
+        // The view scrolls a key step and the engine hears the arrow: a
+        // list with a next row that way scrolls to it by index. Both, as
+        // neither does the other's part: a list and a scroll view are
+        // both `ViewKind::Scroll` here and the core's answer comes a frame
+        // later, so the step is what scrolls a scroll view and a list
+        // past its last row (a footer, padding); a list's next row this
+        // way is not mounted, so it lies past the rendered screen beyond
+        // the viewport, and the core's `ScrollTo` there (absolute,
+        // animated) takes over the step's animation the same way.
         Target::Scroll(scroller) => {
             if let Some(from) = &current {
                 let from = from.id();
-                surface.control(|c| c.focus_past(from, direction));
+                surface.focus_past(from, direction);
             }
             surface
                 .view(scroller)
