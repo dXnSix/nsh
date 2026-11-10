@@ -133,3 +133,69 @@ fn without_a_mapping_a_role_is_the_token_of_its_name() {
         "{batches:?}"
     );
 }
+
+const FILE_ROLES: &str = r##"import { mount, role, setTheme, signal, Text, updateTheme, View } from "nsh";
+
+const step = signal(0);
+const said = signal("none");
+setTimeout(() => {
+  updateTheme({ cssVars: { light: { surface: "#eeeeee" } } });
+  step.set(1);
+}, 30);
+setTimeout(() => {
+  updateTheme({ cssVars: {}, roles: { warning: "surface" } });
+  step.set(2);
+}, 60);
+setTimeout(() => {
+  try {
+    setTheme({ cssVars: { light: { surface: "#111111" } }, roles: { popover: "surfce" } });
+    said.set("taken");
+  } catch (e) {
+    said.set(`refused ${(e as Error).name}: ${(e as Error).message}`);
+  }
+  step.set(3);
+}, 90);
+
+mount(() => (
+  <View>
+    <Text>{`step ${step()}`}</Text>
+    <Text>{`popover ${role("popover")}`}</Text>
+    <Text>{`warning ${role("warning") ?? "its own"}`}</Text>
+    <Text>{`said ${said()}`}</Text>
+  </View>
+));
+"##;
+
+#[test]
+fn a_theme_file_maps_roles_onto_its_tokens() {
+    let config = r##"{ "theme": {
+        "cssVars": { "light": { "surface": "#fafafa" }, "dark": { "surface": "#171717" } },
+        "roles": { "popover": "surface" } } }"##;
+    let (_engine, rx) = start_with(FILE_ROLES, Environment::default(), None, Some(config));
+    let batches = until(&rx, |b| shows(b, "step 0"));
+    assert!(
+        batches.iter().any(|b| shows(b, "popover #fafafaff")),
+        "{batches:?}"
+    );
+    // The role follows its token: no copy of the color was taken.
+    let batches = until(&rx, |b| shows(b, "step 1"));
+    assert!(
+        batches.iter().any(|b| shows(b, "popover #eeeeeeff")),
+        "{batches:?}"
+    );
+    // `updateTheme` adds to the roles the theme maps.
+    let batches = until(&rx, |b| shows(b, "step 2"));
+    assert!(
+        batches.iter().any(|b| shows(b, "warning #eeeeeeff")),
+        "{batches:?}"
+    );
+    // A role mapped onto no token: `setTheme` refuses the file whole.
+    let batches = until(&rx, |b| shows(b, "step 3"));
+    let refused =
+        "said refused TypeError: setTheme: `roles.popover`: the theme has no token `surfce`";
+    assert!(batches.iter().any(|b| shows(b, refused)), "{batches:?}");
+    assert!(
+        !batches.iter().any(|b| shows(b, "popover #111111ff")),
+        "{batches:?}"
+    );
+}

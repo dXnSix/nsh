@@ -313,7 +313,7 @@ NSH 自己绘制的部分通过**角色**读取主题：`theme()` 的各个字�
 | `font-mono` | `theme().font_mono` |
 
 `selection`、`success`、`warning`、`info`、`highlight`、`diff-added`、`diff-deleted` 和各 `syntax-*` 角色在默认主题中没有 token：在主题拥有同名 token（`cssVars` 中的
-`"warning": "#b45309"`）或把该角色映射到自己的某个 token 之前，各部件绘制自己的颜色。各部件以半透明绘制 `highlight` 和 diff 的底色；token 是不透明的颜色。
+`"warning": "#b45309"`）或把该角色映射到自己的某个 token（主题类型的 `role = …`，或主题文件的 `"roles": { "warning": "caution" }`）之前，各部件绘制自己的颜色。各部件以半透明绘制 `highlight` 和 diff 的底色；token 是不透明的颜色。
 
 角色不是 token，也不是类名：主题有名为 `primary` 的 token 时，`bg-primary` 才是一个类名。TSX 用 `nsh` 的 [`role()`](./nsh.md#role) 读取角色。在 Rust 中，角色是一个常量，类型为
 `nsh_core::element::Role`：上表中的角色在 `nsh_base::role` 里（`role::POPOVER.name()` 为 `"popover"`，`role::RADIUS`

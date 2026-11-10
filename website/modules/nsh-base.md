@@ -329,7 +329,7 @@ and reads the token of that name unless the theme maps it onto another token:
 
 `selection`, `success`, `warning`, `info`, `highlight`, `diff-added`, `diff-deleted` and the `syntax-*` roles have no
 token in the default theme: each part draws its own color until the theme has a token of that name (`"warning": "#b45309"` in its `cssVars`) or maps the role onto one
-of its own. The parts draw `highlight` and a diff's tints translucent; the token is the solid color.
+of its own (a theme type's `role = …`, or a theme file's `"roles": { "warning": "caution" }`). The parts draw `highlight` and a diff's tints translucent; the token is the solid color.
 
 A role is no token and no class: `bg-primary` is a class when the theme has a token `primary`. TSX reads a role with
 [`role()`](./nsh.md#role) from `nsh`. In Rust, a role is a

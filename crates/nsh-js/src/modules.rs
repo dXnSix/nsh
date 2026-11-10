@@ -376,7 +376,9 @@ export interface Roles {}
  * values as CSS writes them (colors, `var(--name)`, `color-mix()`, lengths in
  * `px` or `rem`, font family lists for `font-*`). `theme`'s apply in both
  * appearances, `light`'s in the light one and in the dark one where `dark`
- * leaves them out, `dark`'s in the dark one.
+ * leaves them out, `dark`'s in the dark one. `roles` maps theme roles onto
+ * its tokens by name (`{ popover: "surface" }`): what draws with the role
+ * draws with that token, and follows it.
  */
 export interface Theme {
   cssVars: {
@@ -384,6 +386,7 @@ export interface Theme {
     light?: Record<string, string | number>;
     dark?: Record<string, string | number>;
   };
+  roles?: Record<string, string>;
 }
 "#;
 

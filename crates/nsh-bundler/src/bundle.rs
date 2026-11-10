@@ -330,6 +330,30 @@ pub fn theme_tokens_of(
     Ok(tokens)
 }
 
+/// A warning for each role theme file `json` maps (its `"roles"`) that no
+/// UI set lists and the core does not have: nothing draws with it, so it is
+/// most likely misspelled. `Err`: two sets list one role reading different
+/// kinds.
+fn unknown_roles(
+    json: &str,
+    ui_sets: &[nsh_core::element::description::SetDescription],
+) -> Result<Vec<String>, BundleError> {
+    let Some(mapped) = serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|theme| theme.get("roles")?.as_object().cloned())
+    else {
+        return Ok(Vec::new());
+    };
+    let listed = nsh_core::element::description::roles(ui_sets).map_err(BundleError::other)?;
+    let mut names: Vec<&String> = mapped.keys().collect();
+    names.sort();
+    Ok(names
+        .into_iter()
+        .filter(|name| !listed.iter().any(|role| role.name == **name))
+        .map(|name| format!("nsh.json: theme: `roles.{name}`: no UI set has a role of this name"))
+        .collect())
+}
+
 /// The theme types `ui_sets` register, merged (`None`: none).
 fn theme_types(
     ui_sets: &[nsh_core::element::description::SetDescription],
@@ -418,6 +442,9 @@ fn tailwind_setup(
         }
         .map_err(|e| BundleError::other(format!("nsh.json: theme: {e}")))?;
         warn_ignored("theme", &ignored);
+        for warning in unknown_roles(&json, ui_sets)? {
+            log::warn!(target: "nsh::build", "{warning}");
+        }
         tokens = read;
         setup.ui = Some(json);
     }
@@ -1759,6 +1786,33 @@ mod token_namespaces {
         );
         let unknown: Vec<&str> = unknown.iter().map(|u| u.class.as_str()).collect();
         assert_eq!(unknown, ["rounded-nothing"]);
+    }
+
+    #[test]
+    fn a_role_no_set_lists_is_warned_of() {
+        let file = r##"{ "cssVars": { "light": { "surface": "#fafafa" } },
+            "roles": { "popover": "surface", "popver": "surface", "warning": "surface" } }"##;
+        let base =
+            nsh_core::element::description::SetDescription::of(&nsh_base::registry()).unwrap();
+        // `popover` and `warning` are roles `nsh/base` lists; `popver` is none.
+        assert_eq!(
+            super::unknown_roles(file, std::slice::from_ref(&base)).unwrap(),
+            ["nsh.json: theme: `roles.popver`: no UI set has a role of this name"]
+        );
+        // Without `nsh/base` the core's own are known.
+        assert_eq!(
+            super::unknown_roles(file, &[]).unwrap(),
+            [
+                "nsh.json: theme: `roles.popver`: no UI set has a role of this name",
+                "nsh.json: theme: `roles.warning`: no UI set has a role of this name",
+            ]
+        );
+        // A file without roles has none to warn of.
+        assert!(
+            super::unknown_roles(r##"{ "cssVars": {} }"##, &[base])
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

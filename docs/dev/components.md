@@ -720,6 +720,10 @@ it changes, and they are resolved again when the tokens change (`Components::app
   from both (`Core::set_appearance`), and tells the platform (`MountItem::Appearance`: iOS
   `overrideUserInterfaceStyle` on the root view, presented modals and alerts, the status bar's default style; Android
   the status bar's default style and alert themes; native widgets elsewhere keep the system's).
+  A theme file maps roles too, in a `"roles"` section beside `cssVars` (`theme_file.rs` `apply_roles`: role name
+  to token name, the token one the file sets or the base has; `Tokens::with_roles`, so `updateTheme` adds to them).
+  Under theme types a file may map only the roles no type maps (`overrides_declared`). The build warns of a role's
+  name no set lists (`nsh-bundler` `unknown_roles`).
   TS reads a role with `role(name)` (`nsh-js` `env.rs`, the web's op 414): `Tokens::mapped`, by name, then the
   token of the role's name, as `Tokens::role`; it tracks both tokens, and a theme that maps roles onto other tokens
   runs every reader again. The names are typed from the roles the UI sets list (`Registry::roles`,

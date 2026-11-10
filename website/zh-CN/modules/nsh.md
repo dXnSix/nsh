@@ -298,8 +298,14 @@ interface Theme {
     light?: Record<string, string | number>;
     dark?: Record<string, string | number>;
   };
+  roles?: Record<string, string>;
 }
 ```
+
+`roles` 按名称把主题角色映射到主题的令牌上：`roles: { popover: "surface" }` 让所有用 `popover` 绘制的部分（`nsh/base` 的弹出层、
+[`role("popover")`](#role)）用令牌 `surface` 绘制，并在它变化时跟随；而 `"popover": "var(--surface)"` 只会复制一次它的颜色。没有 Rust 主题类型的
+应用用它按自己的方式命名令牌。把角色映射到主题中不存在的令牌名，或在主题类型下映射某个类型已经映射的角色，会像无法读取的值一样被拒绝；
+没有任何 UI 集合拥有的角色名会产生构建警告。`updateTheme` 会在已映射的角色之上追加。
 
 在应用运行时把 `theme` 设为应用的主题，取代 `nsh.json` 的 `"theme"`：格式与它相同，也和它一样叠加在 shadcn/ui 的令牌之上。
 它立即生效：调用之后 `token()` 马上读到新的令牌，引用令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在下一帧跟上，两种外观都是。

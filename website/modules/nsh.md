@@ -303,6 +303,7 @@ interface Theme {
     light?: Record<string, string | number>;
     dark?: Record<string, string | number>;
   };
+  roles?: Record<string, string>;
 }
 ```
 
@@ -311,6 +312,13 @@ shadcn/ui's tokens as the one in `nsh.json` is. It applies at once: `token()` re
 and the classes naming tokens, `nsh/base` and Rust components' `theme()` follow with the next frame, in both
 appearances. An embedding app's [theme overrides](../docs/tailwind.md#theme-tokens) still win over it. `null` gives
 back the theme the app was built with.
+
+`roles` maps theme roles onto the theme's tokens by name: `roles: { popover: "surface" }` has everything that draws
+with `popover` (`nsh/base`'s popovers, [`role("popover")`](#role)) draw with the token `surface`, and follow it when
+it changes, where `"popover": "var(--surface)"` would copy its color once. It is how an app without a Rust theme type
+names its tokens its own way. A role mapped onto a name that is no token of the theme, and under theme types a role
+a type already maps, is refused as a value that cannot be read is; a role's name no UI set has is a build warning.
+`updateTheme` adds to the roles mapped.
 
 The theme is read whole: when a value cannot be read (a color NSH does not know, such as `#zz` or `lab()`, a `var()`
 that names no color, or a value that is no color in one appearance where the other's is), `setTheme` throws a
