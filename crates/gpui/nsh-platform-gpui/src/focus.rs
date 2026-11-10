@@ -373,6 +373,34 @@ fn stops_in(surface: &Surface, scope: &NshView, axis: Option<bool>) -> (Vec<Stop
             walk.view(child, to_root, clip, around);
         }
     });
+    // Tab's order: a shown overlay's content after the view it follows
+    // (`ViewProps::tab_after`, `nsh_core::input::tab_order`).
+    let order: rustc_hash::FxHashMap<NodeId, usize> = nsh_core::input::tab_order(
+        scope.clone(),
+        |view| {
+            if left_out(view) {
+                return Vec::new();
+            }
+            view.with_children_in_reading_order(|children| {
+                children
+                    .iter()
+                    .filter(|child| child.kind() != ViewKind::Modal)
+                    .cloned()
+                    .collect()
+            })
+        },
+        NshView::id,
+        |view| view.state().props.tab_after,
+    )
+    .into_iter()
+    .enumerate()
+    .map(|(at, view)| (view.id(), at))
+    .collect();
+    for stop in &mut walk.stops {
+        if let Some(&at) = order.get(&stop.node.id) {
+            stop.node.order.tree = at;
+        }
+    }
     let mut stops = focus::candidates(walk.stops, scope.id(), &layers(scope));
     // Routes and destinations name views: the stops they reach.
     let routes: Vec<NextFocus> = stops
@@ -397,6 +425,17 @@ fn stops_in(surface: &Surface, scope: &NshView, axis: Option<bool>) -> (Vec<Stop
             .collect();
     }
     (stops, groups)
+}
+
+/// The stops Tab goes through in `scope` (a modal, or a window's root):
+/// the arrows' ([`stops_in`]), in tree order, a shown overlay's content
+/// after the view it follows.
+pub(crate) fn tab_stops(surface: &Surface, scope: &NshView) -> Vec<NshView> {
+    stops_in(surface, scope, None)
+        .0
+        .into_iter()
+        .map(|stop| stop.view)
+        .collect()
 }
 
 /// The children of `scope` (a modal, or a window's root) as the core's
@@ -598,6 +637,14 @@ pub(crate) fn blur_command(surface: &Rc<Surface>, view: &NshView) {
     } else {
         crate::text_input::blur_all(surface);
     }
+}
+
+/// Takes the keyboard focus off the surface's views: the focused field
+/// and the view with this module's focus let go of it (the focus left the
+/// surface).
+pub(crate) fn blur_all(surface: &Rc<Surface>) {
+    crate::text_input::blur_all(surface);
+    set(surface, None);
 }
 
 /// Gives the keyboard focus back to `view` (a stop a modal or a layer took

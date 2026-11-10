@@ -208,7 +208,7 @@ What draws or behaves differently from the native desktop backends:
   `Right` routes and [`FocusGroup`](../elements/focus-group.md) shape where the arrows go, as on a TV, and in a long
   list they go on to rows not on screen yet. A ref's `focus()` moves the focus to a pressable or `focusable` view, and
   `blur()` takes it off. Tab and Shift+Tab stop at the same pressables, fields, `focusable` views and native
-  components, in tree order.
+  components, in tree order; when Tab moves on out of an embedded view, the one it leaves loses the focus.
 
 For comparison, each native backend's own list: [macOS](./macos.md#what-differs-on-macos),
 [Windows](./windows.md#what-differs-on-windows), [Linux](./linux.md#what-differs-on-linux).
