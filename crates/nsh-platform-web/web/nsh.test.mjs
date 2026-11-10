@@ -1892,3 +1892,22 @@ test("a key event without `key` falls back to its physical key instead of throwi
   assert.equal(keyCode({}), -1);
   assert.equal(keyCode({ key: "a", code: "KeyA" }), 97);
 });
+
+test("media and TV remote keys by their names, and by Samsung TVs' key codes when unidentified", () => {
+  const named = {
+    MediaPlayPause: 270, MediaPlay: 271, MediaPause: 272, MediaStop: 273, MediaRewind: 274, MediaFastForward: 275,
+    MediaTrackNext: 276, MediaTrackPrevious: 277, ColorF0Red: 278, ColorF1Green: 279, ColorF2Yellow: 280,
+    ColorF3Blue: 281, ChannelUp: 282, ChannelDown: 283, Info: 284,
+  };
+  for (const [key, code] of Object.entries(named)) assert.equal(keyCode({ key }), code, key);
+  const tizen = {
+    10252: 270, 415: 271, 19: 272, 413: 273, 412: 274, 417: 275, 10233: 276, 10232: 277, 403: 278, 404: 279,
+    405: 280, 406: 281, 427: 282, 428: 283, 457: 284,
+  };
+  for (const [keyCode_, code] of Object.entries(tizen)) {
+    assert.equal(keyCode({ key: "Unidentified", keyCode: Number(keyCode_) }), code, keyCode_);
+  }
+  // A desktop's Pause key (keyCode 19) is no media key; nor is an unknown unidentified one.
+  assert.equal(keyCode({ key: "Pause", keyCode: 19, code: "Pause" }), -1);
+  assert.equal(keyCode({ key: "Unidentified", keyCode: 10009 }), -1);
+});

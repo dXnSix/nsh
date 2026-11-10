@@ -24,7 +24,7 @@ use nsh_dev::{
 };
 use nsh_testing::{
     Host, HostOptions, StartHost,
-    agent::{Agent, Key, Native, RemoteScene},
+    agent::{Agent, Key, Native, RemoteKey, RemoteScene},
 };
 use serde_json::{Value, json};
 
@@ -191,6 +191,23 @@ fn dom_key(key: nsh_core::keymap::Key, shift: bool) -> Option<(String, String)> 
         Key::PageUp => named("PageUp", "PageUp"),
         Key::PageDown => named("PageDown", "PageDown"),
         Key::F(n) => Some((format!("F{n}"), format!("F{n}"))),
+        // The UI Events' media keys have a `code`; the TV remote's other
+        // keys only a `key`.
+        Key::MediaPlayPause => named("MediaPlayPause", "MediaPlayPause"),
+        Key::MediaStop => named("MediaStop", "MediaStop"),
+        Key::MediaNext => named("MediaTrackNext", "MediaTrackNext"),
+        Key::MediaPrevious => named("MediaTrackPrevious", "MediaTrackPrevious"),
+        Key::MediaPlay => named("MediaPlay", ""),
+        Key::MediaPause => named("MediaPause", ""),
+        Key::MediaRewind => named("MediaRewind", ""),
+        Key::MediaFastForward => named("MediaFastForward", ""),
+        Key::ColorRed => named("ColorF0Red", ""),
+        Key::ColorGreen => named("ColorF1Green", ""),
+        Key::ColorYellow => named("ColorF2Yellow", ""),
+        Key::ColorBlue => named("ColorF3Blue", ""),
+        Key::ChannelUp => named("ChannelUp", ""),
+        Key::ChannelDown => named("ChannelDown", ""),
+        Key::Info => named("Info", ""),
         Key::Char(' ') => named(" ", "Space"),
         Key::Char(c) => {
             let code = match c {
@@ -213,6 +230,31 @@ fn dom_key(key: nsh_core::keymap::Key, shift: bool) -> Option<(String, String)> 
             Some((typed.to_string(), code))
         }
     }
+}
+
+/// Samsung TVs' `keyCode`s of the remote's media and TV keys
+/// (`tizen.tvinputdevice`, as `nsh.js`'s `TV_KEY_CODES` reads them), which a
+/// TV's browser gives the page with the key's `key`.
+fn tv_key_code(key: nsh_core::keymap::Key) -> Option<u32> {
+    use nsh_core::keymap::Key;
+    Some(match key {
+        Key::MediaPlayPause => 10252,
+        Key::MediaPlay => 415,
+        Key::MediaPause => 19,
+        Key::MediaStop => 413,
+        Key::MediaRewind => 412,
+        Key::MediaFastForward => 417,
+        Key::MediaNext => 10233,
+        Key::MediaPrevious => 10232,
+        Key::ColorRed => 403,
+        Key::ColorGreen => 404,
+        Key::ColorYellow => 405,
+        Key::ColorBlue => 406,
+        Key::ChannelUp => 427,
+        Key::ChannelDown => 428,
+        Key::Info => 457,
+        _ => return None,
+    })
 }
 
 impl WebNative {
@@ -499,6 +541,22 @@ impl Native for WebNative {
             unmodified.as_deref().map(|c| (key.as_str(), c)),
         );
         Ok(())
+    }
+
+    fn press_remote_key(&self, key: RemoteKey) -> Result<(), String> {
+        let Some(stroke) = key.keystroke() else {
+            return self.back();
+        };
+        // The media and TV keys as a Samsung TV's browser gives them: the
+        // key's name with the remote's key code. The arrows and OK are a
+        // keyboard's keys there too.
+        match (tv_key_code(stroke.key), dom_key(stroke.key, false)) {
+            (Some(vk), Some((key, code))) => {
+                self.press_key(&key, &code, vk, 0, &[], None);
+                Ok(())
+            }
+            _ => self.press_keys(&stroke.to_string()),
+        }
     }
 
     fn type_text(&self, text: &str) {
