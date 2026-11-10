@@ -390,6 +390,15 @@ fn stops_in(surface: &Surface, scope: &NshView, axis: Option<bool>) -> (Vec<Stop
     (stops, groups)
 }
 
+/// The stops Tab goes through in `scope` (a modal, or a window's root):
+/// the arrows' ([`stops_in`]), in tree order.
+pub(crate) fn tab_stops(surface: &Surface, scope: &NshView) -> Vec<NshView> {
+    stops_in(surface, scope)
+        .into_iter()
+        .map(|stop| stop.view)
+        .collect()
+}
+
 /// The children of `scope` (a modal, or a window's root) as the core's
 /// layers, the page first.
 fn layers(scope: &NshView) -> Vec<Layer> {
@@ -576,6 +585,27 @@ pub(crate) fn blur(surface: &Surface, view: &NshView) {
     } else if focused(surface).as_ref() == Some(view) {
         blur_view(surface);
     }
+}
+
+/// `blur()` on `view`: the field, or the view with this module's focus,
+/// lets go of it; on any other view it blurs the focused field, as before
+/// views took the focus.
+pub(crate) fn blur_command(surface: &Rc<Surface>, view: &NshView) {
+    if view.kind() == ViewKind::Input {
+        crate::text_input::blur(view);
+    } else if focused(surface).as_ref() == Some(view) {
+        blur_view(surface);
+    } else {
+        crate::text_input::blur_all(surface);
+    }
+}
+
+/// Takes the keyboard focus off the surface's views: the focused field
+/// and the view with this module's focus let go of it (the focus left the
+/// surface).
+pub(crate) fn blur_all(surface: &Rc<Surface>) {
+    crate::text_input::blur_all(surface);
+    set(surface, None);
 }
 
 /// Gives the keyboard focus back to `view` (a stop a modal or a layer took

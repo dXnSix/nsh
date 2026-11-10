@@ -637,8 +637,8 @@ impl AppView {
         (f32::from(position.x) - ox, f32::from(position.y) - oy)
     }
 
-    /// Tab: the surface's next text field; past its last one, the window's
-    /// next tab stop (the embedding app's widgets), or the first field again
+    /// Tab: the surface's next focus stop; past its last one, the window's
+    /// next tab stop (the embedding app's widgets), or the first stop again
     /// when there is none.
     fn focus_next(&mut self, _: &FocusNext, window: &mut Window, cx: &mut Context<Self>) {
         self.tab(false, window, cx);
@@ -651,7 +651,7 @@ impl AppView {
 
     /// After every keystroke: when Tab (handled by the host, GPUI Kit's
     /// `Root`) moved the window's focus onto the view, the focus goes on to
-    /// its first text field (its last with Shift), not to the view itself.
+    /// its first focus stop (its last with Shift), not to the view itself.
     fn tab_entered(
         &mut self,
         event: &gpui::KeystrokeEvent,
@@ -690,9 +690,7 @@ impl AppView {
             // Past the last stop (the first with Shift): on to the window's
             // next tab stop outside the view, or around again when there is
             // none (a window of its own).
-            if self.leave(shift, window, cx) || !crate::input::tab_to_edge(&self.surface, shift) {
-                crate::text_input::blur_all(&self.surface);
-            }
+            crate::input::tab_past_ends(&self.surface, shift, || self.leave(shift, window, cx));
         }
         // A component Tab reached takes the window's focus; a field reached
         // from a component gives it back to the view.
