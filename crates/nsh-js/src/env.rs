@@ -466,13 +466,10 @@ unsafe extern "C" fn token(
         reactive::track(cx, signal);
     }
     // The appearance of the scope around what reads it, else the surface's.
-    let shown = shown_scheme(cx);
-    // SAFETY: a live value, ours.
-    if unsafe { qjs::JS_IsException(shown) } {
-        return shown;
-    }
-    let dark = crate::dom::string_arg(cx, shown).as_deref() == Some("dark");
-    unsafe { qjs::JS_FreeValue(cx, shown) };
+    let dark = match shown_dark(cx) {
+        Ok(dark) => dark,
+        Err(exception) => return exception,
+    };
     let Some(name) = name else {
         return UNDEFINED;
     };
@@ -590,6 +587,38 @@ fn shown_scheme(cx: *mut JsContext) -> JsValue {
         },
         None => surface_scheme(cx),
     }
+}
+
+/// Whether the appearance shown where it is read is dark ([`shown_scheme`]),
+/// tracked; the exception when reading it throws. Without a scope around,
+/// the surface's is read off the environment, with no string made.
+fn shown_dark(cx: *mut JsContext) -> Result<bool, JsValue> {
+    let shown = match scope_scheme(cx) {
+        // SAFETY: calls the scope's accessor, ours until freed.
+        Some(scope) => unsafe {
+            let shown = qjs::JS_Call(cx, scope, UNDEFINED, 0, ptr::null_mut());
+            qjs::JS_FreeValue(cx, scope);
+            shown
+        },
+        None => {
+            let read = surface_scheme(cx);
+            // SAFETY: a live value, ours.
+            unsafe {
+                if qjs::JS_IsException(read) {
+                    return Err(read);
+                }
+                qjs::JS_FreeValue(cx, read);
+            }
+            return Ok(scheme(env(cx), &current(cx)) == "dark");
+        }
+    };
+    // SAFETY: a live value, ours.
+    if unsafe { qjs::JS_IsException(shown) } {
+        return Err(shown);
+    }
+    let dark = crate::dom::string_arg(cx, shown).as_deref() == Some("dark");
+    unsafe { qjs::JS_FreeValue(cx, shown) };
+    Ok(dark)
 }
 
 /// `colorScheme()`.
