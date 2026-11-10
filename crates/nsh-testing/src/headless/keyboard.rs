@@ -97,10 +97,10 @@ impl Headless {
         }
         // Shift+F10 asks the focused view for its context menu where views
         // take the keyboard focus and the key is the platform's: the web
-        // and Linux (macOS has no such key; Windows focuses fields only). The
-        // nearest view around it listening hears `onContextMenu`, with no
-        // pointer, at its bottom-start corner; a focused input keeps the
-        // key for its own edit menu.
+        // and Linux (macOS has no such key; Windows does not ask a focused
+        // view for its menu yet). The nearest view around it listening
+        // hears `onContextMenu`, with no pointer, at its bottom-start
+        // corner; a focused input keeps the key for its own edit menu.
         if matches!(self.environment.os, Os::Web | Os::Linux)
             && nsh_core::input::opens_context_menu(false, Some(stroke.key), m)
         {
@@ -168,11 +168,14 @@ impl Headless {
         self.send(id, EventKind::ContextMenu, EventPayload::ContextMenu(event));
     }
 
-    /// Whether Tab stops at views (not only inputs), as on macOS, the web,
-    /// Linux and in a terminal (the other platforms move it between fields only).
+    /// Whether Tab stops at views (not only inputs), as on the desktops
+    /// (macOS, Windows, Linux), the web and in a terminal (iOS and Android
+    /// move it between fields only).
     fn tabs_to_views(&self) -> bool {
-        matches!(self.environment.os, Os::MacOs | Os::Web | Os::Linux)
-            || self.environment.idiom == nsh_core::platform::Idiom::Terminal
+        matches!(
+            self.environment.os,
+            Os::MacOs | Os::Web | Os::Linux | Os::Windows
+        ) || self.environment.idiom == nsh_core::platform::Idiom::Terminal
     }
 
     /// Tab (`back`: Shift+Tab): the keyboard focus moves to the next stop

@@ -86,6 +86,7 @@ impl Mounter {
         self.layout_animation = None;
         crate::selectable_view::end_batch(surface);
         crate::navigation::end_batch(surface);
+        crate::focus::end_batch(surface);
         crate::system::end_batch(surface);
     }
 
@@ -441,10 +442,14 @@ impl Mounter {
         let view = self.views.get(id);
         let view = view.as_ref();
         match command {
-            Command::Focus => view.map_or((), crate::text_input::focus),
+            Command::Focus => {
+                if let Some(view) = view {
+                    crate::focus::focus_view(surface, view);
+                }
+            }
             Command::Blur => match view {
-                Some(view) if view.kind() == ViewKind::Input => crate::text_input::blur(view),
-                _ => crate::text_input::blur_all(surface),
+                Some(view) => crate::focus::blur_command(surface, view),
+                None => crate::text_input::blur_all(surface),
             },
             Command::SetSelection { start, end } => {
                 if let Some(view) = view {

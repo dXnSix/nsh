@@ -150,12 +150,15 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   positions are the view's bottom-start corner (`nsh_core::input::context_menu_anchor`, by the surface's direction),
   so a menu opened below it starts where the view does; `ContextMenu` puts the keyboard focus on its first enabled
   item then.
-- **Keyboard focus**: on macOS, the web and Linux, Tab (the keyboard focus) moves between stops, in tree order; a click
-  presses without focusing, so a stop's `FOCUSED` state (`focus:` classes, `.focus(..)`) is keyboard focus, and
+- **Keyboard focus**: on macOS, Windows, Linux and the web, Tab (the keyboard focus) moves between stops, in tree order
+  (the desktops through `nsh_core::input::tab_stop`; until 2026-11-10 macOS and Linux went by AppKit's key view loop
+  and GTK's focus chain, which order the views by their places on screen, and Windows moved between fields only); a
+  click presses without focusing, so a stop's `FOCUSED` state (`focus:` classes, `.focus(..)`) is keyboard focus, and
   `focus-visible:` is the same variant. Focus and presses are separate: `ViewProps::focus_stop` decides, from
   `focusable` (`Prop::Focusable`, `ViewProps::focusable`; Rust `.focusable(..)`) and whether the view takes presses,
-  and every platform that moves the focus between views asks it (macOS `input::is_key_stop`, the web's
-  `updateFocusable`, the headless driver's `Screen::tab_stops`). Unset, the views that take presses are stops.
+  and every platform that moves the focus between views asks it (macOS `input::is_key_stop`, Windows
+  `focus::is_stop`, Linux `key_focus::is_stop`, the web's `updateFocusable`, the headless driver's
+  `Screen::tab_stops`). Unset, the views that take presses are stops.
   `focusable={true}` makes any view one, whether or not it takes presses: a component that takes keys while focused (a
   chart, a slider, a list that moves its selection) sets it on a view that takes no presses, so a pressable around it
   (a card that opens a page) keeps its presses; it must not listen to `onPress` just to be focusable, which would
@@ -166,8 +169,8 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   press the focused stop only when it takes presses; a stop that takes none hears its keys through the keymap (`on_key`
   / `on_key_with`, bound while it is focused, as `DataTable`'s controller does), Return and Space included.
   (`focusable={true}` on a view that takes no presses made nothing focusable before 2026-10-26; with no release
-  recorded, it now means what React Native's `focusable` and the web's `tabIndex={0}` mean.) Windows and GPUI
-  move the focus between fields and native components only so far; iOS and Android move it between inputs.
+  recorded, it now means what React Native's `focusable` and the web's `tabIndex={0}` mean.) GPUI's Tab moves the
+  focus between fields and native components only so far; iOS and Android move it between inputs.
   A link in text (a nested `<Text>` that takes presses, `AttributedText::links`) is a stop of its own: the core marks
   each `TextLink` with `focus_stop` (the span's `ViewProps::focus_stop(true)`: unless `focusable={false}` or
   disabled), Tab reaches it after its text view, in text order (nested links inside the one around them), the
@@ -180,8 +183,8 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   the view first responder (`input::focus_control`, past a field that edits), the browser focuses the element with
   `focusVisible` and treats it as keyboard focus whatever its heuristics say after a click (`focusPressable`), the
   headless driver moves its focus (`focus_calls`); on a view that is not a stop it does nothing. Linux grabs the
-  stop's widget (`key_focus::focus`). Windows and
-  GPUI leave `focus()` on views to them; iOS and Android focus inputs only.
+  stop's widget (`key_focus::focus`), Windows gives it its focus as Tab does (`focus::focus_view`). GPUI does not follow
+  `focus()` on views yet; iOS and Android focus inputs only.
 - **`onPanEnd` / `onPanStart`** carry `value` (`{ x?, y? }`, the axes `pan` binds): the bound pan values at that moment (a drag may grab a value mid
   animation), for snapping.
 - **Imperative calls**: nodes have `focus()`, `blur()` (inputs, and views that take presses where they are stops of

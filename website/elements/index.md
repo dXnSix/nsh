@@ -361,7 +361,7 @@ touchscreens, a long press opens menus: handle `onLongPress` with the same funct
 
 ### Keyboard focus
 
-On macOS and the web, Tab moves the keyboard focus between its stops in tree order: the inputs, the views that take
+On macOS, Windows, Linux and the web, Tab moves the keyboard focus between its stops in tree order: the inputs, the views that take
 presses, and every `focusable` view. Focus styles (`focus:`, `.focus(..)`) style the focused view, and Return or Space
 presses it when it takes presses. A click presses a view without focusing it, so focus styles show for keyboard focus
 only.
