@@ -140,7 +140,8 @@ pub use self::{
         ScrollbarSource, declarations,
     },
     element_ref::{
-        ComponentRef, ElementRef, ElementTarget, EvaluateOptions, Evaluation, FollowTarget,
+        ComponentRef, ElementRef, ElementTarget, EvaluateOptions, Evaluation, FocusGroupTargets,
+        FocusTarget, FollowTarget,
     },
     engine_context::{EngineContext, EngineContextGuard, engine_context},
     env::Environment,

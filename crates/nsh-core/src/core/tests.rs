@@ -38686,6 +38686,113 @@ fn a_backdrop_follows_the_order_views_draw_in() {
     );
 }
 
+/// What the core does for the TV's focus (`directional.rs`): the views
+/// focus props name, found in every commit.
+mod directional_focus {
+    use super::*;
+    use crate::{
+        element::{FocusGroupTargets, FocusTarget},
+        focus::{GroupConfig, NextFocus},
+    };
+
+    fn view(id: NodeId) -> Vec<Op> {
+        vec![
+            Op::Create { id, tag: Tag::View },
+            style_op(id, &[("height", StyleValue::Number(20.0))]),
+            Op::Insert {
+                parent: ROOT_ID,
+                child: id,
+                before: None,
+            },
+        ]
+    }
+
+    fn props_of(batch: &MountBatch, id: NodeId) -> Option<ViewProps> {
+        batch.items.iter().rev().find_map(|item| match item {
+            MountItem::ViewProps { id: of, props } if *of == id => Some((**props).clone()),
+            _ => None,
+        })
+    }
+
+    fn set(c: &mut Core<FakeEngine>, id: NodeId, prop: Prop) {
+        c.apply(Op::SetProp { id, prop }).unwrap();
+    }
+
+    #[test]
+    fn auto_and_preferred_focus_reach_the_view_s_props() {
+        let mut c = core();
+        apply(&mut c, view(2));
+        c.commit();
+        set(&mut c, 2, Prop::AutoFocus(true));
+        set(&mut c, 2, Prop::PreferredFocus(true));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        assert!(props.auto_focus && props.preferred_focus);
+        // An input's is its config's, as before.
+        let mut c = input_core();
+        c.commit();
+        set(&mut c, 2, Prop::AutoFocus(true));
+        let batch = c.commit().unwrap();
+        assert!(props_of(&batch, 2).is_none_or(|p| !p.auto_focus));
+        assert!(batch.items.iter().any(|item| matches!(
+            item,
+            MountItem::Input { id: 2, config } if config.auto_focus
+        )));
+    }
+
+    #[test]
+    fn a_route_names_its_view_once_it_is_made() {
+        let mut c = core();
+        apply(&mut c, view(2));
+        c.commit();
+        set(&mut c, 2, Prop::NextFocusDown(Some(FocusTarget::Node(4))));
+        set(&mut c, 2, Prop::NextFocusRight(Some(FocusTarget::Node(2))));
+        // Node 4 is not made yet: Down names nothing.
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        let mut expected = NextFocus {
+            right: Some(2),
+            ..NextFocus::default()
+        };
+        assert_eq!(props.next_focus, expected);
+        // Made later, it is found without the route being set again.
+        apply(&mut c, view(4));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent again");
+        expected.down = Some(4);
+        assert_eq!(props.next_focus, expected);
+        // Nothing it names changed: nothing is sent.
+        c.apply(style_op(4, &[("height", StyleValue::Number(30.0))]))
+            .unwrap();
+        assert!(c.commit().is_none_or(|b| props_of(&b, 2).is_none()));
+        // Cleared, it goes.
+        set(&mut c, 2, Prop::NextFocusDown(None));
+        set(&mut c, 2, Prop::NextFocusRight(None));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        assert!(props.next_focus.is_empty());
+        assert!(c.focus_refs.is_empty());
+    }
+
+    #[test]
+    fn a_focus_group_carries_its_trap_and_the_destinations_found() {
+        let mut c = core();
+        apply(&mut c, view(2));
+        apply(&mut c, view(4));
+        c.commit();
+        let group = FocusGroupTargets {
+            trap: true,
+            destinations: vec![FocusTarget::Node(98), FocusTarget::Node(4)],
+        };
+        set(&mut c, 2, Prop::FocusGroup(Some(group)));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        let expected = GroupConfig {
+            trap: true,
+            destinations: vec![4],
+        };
+        assert_eq!(props.focus_group, Some(expected));
+        set(&mut c, 2, Prop::FocusGroup(None));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        assert_eq!(props.focus_group, None);
+    }
+}
+
 mod each_order {
     use super::*;
     use crate::{

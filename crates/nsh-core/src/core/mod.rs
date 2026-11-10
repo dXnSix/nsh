@@ -1,6 +1,7 @@
 mod classes;
 mod components;
 mod cull;
+mod directional;
 mod follow;
 mod layout_scope;
 mod layout_tree;
@@ -1214,6 +1215,10 @@ pub struct Core<M: TextEngine> {
     /// What they follow, or frames around them, changed since they were
     /// placed.
     follow_changed: bool,
+    /// The views focus props name other views from (`nextFocus*`, focus
+    /// groups' destinations), found again in every commit round
+    /// (`directional.rs`).
+    focus_refs: Vec<directional::FocusRefs>,
     /// The warning about `bottom` / `right` sticky insets was logged.
     sticky_warned: bool,
     /// The warning about animated insets of views that are not sticky, or
@@ -1528,6 +1533,7 @@ impl<M: TextEngine> Core<M> {
             followers: Vec::new(),
             relators: Vec::new(),
             follow_changed: false,
+            focus_refs: Vec::new(),
             sticky_warned: false,
             inset_warned: false,
             shaders: Default::default(),
@@ -3066,6 +3072,9 @@ impl<M: TextEngine> Core<M> {
             self.mount.insert(0, MountItem::LayoutAnimation(animation));
         }
         self.flush_pointer_events();
+        if !self.focus_refs.is_empty() {
+            self.sync_focus_refs();
+        }
         if !self.relators.is_empty() {
             self.sync_relations();
         }
@@ -4987,6 +4996,26 @@ impl<M: TextEngine> Core<M> {
                 self.set_follow_transition(key, transition);
                 return Ok(());
             }
+            Prop::NextFocusUp(target) => {
+                self.set_next_focus(key, crate::focus::Direction::Up, target);
+                return Ok(());
+            }
+            Prop::NextFocusDown(target) => {
+                self.set_next_focus(key, crate::focus::Direction::Down, target);
+                return Ok(());
+            }
+            Prop::NextFocusLeft(target) => {
+                self.set_next_focus(key, crate::focus::Direction::Left, target);
+                return Ok(());
+            }
+            Prop::NextFocusRight(target) => {
+                self.set_next_focus(key, crate::focus::Direction::Right, target);
+                return Ok(());
+            }
+            Prop::FocusGroup(group) => {
+                self.set_focus_group(key, group);
+                return Ok(());
+            }
             Prop::Accessibility(AccessibilityProp::ActiveDescendant(target)) => {
                 self.set_relation(key, relations::Relation::ActiveDescendant, target);
                 return Ok(());
@@ -5602,6 +5631,19 @@ impl<M: TextEngine> Core<M> {
                 let props = node.props.get_or_insert_default();
                 if props.focusable != value {
                     props.focusable = value;
+                    flags |= dirty::VIEW_PROPS;
+                }
+            }
+            // An input's is its config's (below).
+            Prop::AutoFocus(value) if node.input.is_none() => {
+                if node.props.as_ref().is_some_and(|p| p.auto_focus) != value {
+                    node.props.get_or_insert_default().auto_focus = value;
+                    flags |= dirty::VIEW_PROPS;
+                }
+            }
+            Prop::PreferredFocus(value) => {
+                if node.props.as_ref().is_some_and(|p| p.preferred_focus) != value {
+                    node.props.get_or_insert_default().preferred_focus = value;
                     flags |= dirty::VIEW_PROPS;
                 }
             }
