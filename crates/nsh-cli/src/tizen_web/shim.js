@@ -31,6 +31,10 @@
     "MediaPlayPause", "MediaPlay", "MediaPause", "MediaStop", "MediaRewind", "MediaFastForward",
     "MediaTrackNext", "MediaTrackPrevious", "ChannelUp", "ChannelDown", "Info",
   ];
+  /** Smart Hub's preview of the package (`nsh.json` `tizen.smartHubPreview`),
+   * which `nsh package` writes here: `{ service }`, the id of the package's
+   * preview service, `{ endpoint }`, a public preview's URL, or none. */
+  const PREVIEW = null;
   /** Marks the keys the shim sends, which its own listener lets through. */
   const SENT = "nshTizen";
 
@@ -176,6 +180,8 @@
     tv: !!tizen,
     /** The remote's keys registered for the app. */
     keys: registerKeys(),
+    /** The package's Smart Hub preview (`PREVIEW`). */
+    preview: PREVIEW,
     back,
     confirmExit,
     exit,

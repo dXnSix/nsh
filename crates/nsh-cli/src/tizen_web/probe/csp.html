@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- The policy an app's page gets when its `capabilities` limit the network
+     (`web.rs` `connect_src`): its Wasm, fonts and chunks come from `'self'`. -->
+<meta http-equiv="Content-Security-Policy" content="connect-src 'self'">
+<title>NSH loader probe: CSP</title>
+</head>
+<body>
+<script>
+  const done = (ok, detail) => parent.nshProbe.done("csp", ok, detail);
+  fetch("probe.wasm")
+    .then((response) => response.arrayBuffer())
+    .then((bytes) => WebAssembly.instantiate(bytes, {}))
+    .then(({ instance }) => done(instance.exports.answer() === 42, `origin ${location.origin}`))
+    .catch((error) => done(false, error?.message ?? String(error)));
+</script>
+</body>
+</html>
