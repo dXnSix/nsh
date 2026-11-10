@@ -200,6 +200,7 @@ target/tizen/{release,dev}/Nsh.Tizen.Host.dll (+ .deps.json)   the host
 target/tizen/{release,dev}/<arch>/libnsh.so                    armv7l, aarch64, x86_64; stripped
 target/tizen/{release,dev}/symbols/<arch>/libnsh.so            the same with its symbols
 target/tizen/targets/<spec>.json, toolchain                    dXn.GpuiTizen's target specs and its nightly
+target/tizen/targets/symbols.allow                             dXn.GpuiTizen's symbol allowlist (dxn_gpui_tizen_sys)
 ```
 
 dXn.GpuiTizen's checkout is `DXN_GPUI_TIZEN`, else `../dXn.GpuiTizen` next to this checkout. Until the forks are
@@ -280,9 +281,14 @@ with the rootstrap as sysroot, and clang driving the GCC toolchain's GNU ld (dXn
 machine needs that nightly (`rust-src`, `llvm-tools`), clang, the Tizen 8.0 rootstrap (`TIZEN_ROOTSTRAP_<ARCH>`,
 else the SDK's) and the SDK's GCC 9.2 toolchain (`TIZEN_GCC_TOOLCHAIN_<ARCH>`, else the SDK's `tools/`; the hints
 give dXn.GpuiTizen's `docs/setup.md` command, `package-manager-cli.bin install --accept-license <package>`). Each
-architecture's library then goes through dXn.GpuiTizen's symbol check, as the runtime's does
-(`tizen::symbol_check`: `cargo xtask check-symbols <lib> --entry nsh_tizen_main` in its checkout, `DXN_GPUI_TIZEN`,
-else `dXn.GpuiTizen` next to nsh's checkout; without one the build is refused before it starts), and is stripped with
+architecture's library then goes through the symbol check dXn.GpuiTizen runs on the runtime
+(`cargo xtask check-symbols`, its `xtask/src/symcheck/`), made by the CLI itself (`tizen::symbols`, tested by
+`cargo test -p nsh-cli --bin nsh tizen::symbols::tests`): the nightly's `llvm-nm -D --defined-only` /
+`--undefined-only` and `llvm-readobj --needed-libs` must show exactly one defined export, `nsh_tizen_main`, nothing
+weak exported, and imports only of the component's `targets/symbols.allow` (dXn.GpuiTizen's
+`dxn_gpui_tizen_sys/symbols.allow`, which `cargo xtask tizen` copies there; its `# lib<name>.so` headings name the
+Tizen libraries it may need), glibc and `libgcc_s` (versioned `GLIBC_*`, `GCC_*`) and the loader's weak imports, as
+`symcheck` defines them. Apps need no dXn.GpuiTizen checkout. The library is then stripped with
 the nightly's `llvm-strip --strip-unneeded` into `.nsh/rust/tizen-{release,dev}/<arch>/libnsh.so` (`tizen::strip_command`;
 the target directory keeps the symbols). `nsh-platform-tizen` is not published (it ships built, as the `tizen`
 component), so such apps build against a checkout of nsh: `RustApp::tizen` refuses crates that take nsh from

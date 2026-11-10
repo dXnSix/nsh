@@ -496,7 +496,7 @@ mod tests {
         assert_eq!(tizen.asset("macos-arm64"), "nsh-tizen.tar.gz");
         assert_eq!(tizen.asset("linux-x86_64"), "nsh-tizen.tar.gz");
         assert!(tizen.for_host("windows-x86_64"));
-        // Packed and installed whole: both variants, the specs.
+        // Packed and installed whole: both variants, the specs, the allowlist.
         let dir = temp("tizen");
         let from = dir.join("from");
         for file in [
@@ -506,6 +506,7 @@ mod tests {
             "runtime/tizen/dev/armv7l/libnsh.so",
             "runtime/tizen/targets/armv7-tizen-linux-gnueabi.json",
             "runtime/tizen/targets/toolchain",
+            "runtime/tizen/targets/symbols.allow",
         ] {
             fs::create_dir_all(from.join(file).parent().unwrap()).unwrap();
             fs::write(from.join(file), file).unwrap();
@@ -523,6 +524,8 @@ mod tests {
             "runtime/tizen/dev/armv7l/libnsh.so"
         );
         assert!(root.join("runtime/tizen/targets/toolchain").exists());
+        // The symbol allowlist an app's library is checked against.
+        assert!(root.join("runtime/tizen/targets/symbols.allow").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 

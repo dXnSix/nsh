@@ -2392,9 +2392,10 @@ opt-level = \"s\"
     /// app's `libnsh.so` (`<arch>/`) for each of `archs`, built in its Tizen
     /// workspace ([`Self::tizen_workspace`]) with the target specs of the
     /// `tizen` component, the Tizen 8.0 rootstrap and the Tizen SDK's GCC
-    /// toolchain (`tizen::cross_command`), checked by dXn.GpuiTizen's
-    /// symbol check (`tizen::symbol_check`: one export, `nsh_tizen_main`)
-    /// and stripped (`tizen::strip_command`), as the prebuilt runtime is.
+    /// toolchain (`tizen::cross_command`), checked as dXn.GpuiTizen checks
+    /// the prebuilt runtime (`tizen::symbols`: one export, `nsh_tizen_main`,
+    /// and only the imports of the component's `targets/symbols.allow`) and
+    /// stripped (`tizen::strip_command`).
     /// It builds against a checkout of nsh: `nsh-platform-tizen` is not on
     /// crates.io (it ships built, as the `tizen` component).
     pub(crate) fn tizen(
@@ -2410,12 +2411,6 @@ opt-level = \"s\"
                  a checkout by path (`nsh init --template rust --nsh-source <dir>`)"
             );
         }
-        let dxn = crate::tizen::dxn_gpui_tizen(std::env::var_os("DXN_GPUI_TIZEN"), self.nsh.source())
-            .context(
-                "the app's libnsh.so is checked by dXn.GpuiTizen's symbol check (one export, nsh_tizen_main; only \
-                 documented Tizen symbols imported): set DXN_GPUI_TIZEN to its checkout, or put it next to nsh's as \
-                 dXn.GpuiTizen (docs/dev/tizen.md)",
-            )?;
         let ws = self.tizen_workspace()?;
         let targets = crate::runtime::tizen_targets()?;
         let out = self
@@ -2443,10 +2438,14 @@ opt-level = \"s\"
                 what: &format!("libnsh.so of {} for {}", self.packages(), arch.name()),
             };
             let lib = self.build_tizen(cmd, &spec, &build)?;
-            run_checked(
-                crate::tizen::symbol_check(&dxn, &lib),
-                &format!("checking the symbols of {}", build.what),
+            let step = ui::Step::start(format!("checking the symbols of {}", build.what));
+            crate::tizen::symbols::check_library(
+                &rustlib_bin,
+                &lib,
+                &targets.join(crate::tizen::ALLOWLIST),
+                crate::tizen::ENTRY,
             )?;
+            step.done(format!("checked the symbols of {}", build.what));
             let dir = out.join(arch.name());
             fs::create_dir_all(&dir)?;
             // The symbols stay in the target directory's copy.

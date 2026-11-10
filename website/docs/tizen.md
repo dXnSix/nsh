@@ -107,10 +107,11 @@ Tizen target specs the `tizen` component ships. That needs, besides the Tizen SD
   or set `TIZEN_ROOTSTRAP_ARMV7`, `TIZEN_ROOTSTRAP_AARCH64`, `TIZEN_ROOTSTRAP_X86_64`);
 - the SDK's GCC 9.2 toolchain
   (`~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license NativeToolchain-Gcc-9.2`; or set
-  `TIZEN_GCC_TOOLCHAIN_<ARCH>`);
-- a checkout of [dXn.GpuiTizen](https://github.com/dXnSix/dXn.GpuiTizen), whose symbol check every TV library passes
-  (it exports `nsh_tizen_main` alone and calls only Tizen's documented APIs): `DXN_GPUI_TIZEN`, else
-  `dXn.GpuiTizen` next to the checkout of NSH.
+  `TIZEN_GCC_TOOLCHAIN_<ARCH>`).
+
+`nsh` checks the library it builds as it checks its own runtime: it must export `nsh_tizen_main` alone and import
+only Tizen's documented APIs (the list the `tizen` component ships), glibc and `libgcc_s`; otherwise the build stops
+and names the symbols.
 
 NSH's Tizen crate is not published on crates.io (the runtime ships built, as the `tizen` component), so such apps build
 against a checkout of NSH (`nsh init --template rust --nsh-source <dir>`); with crates that take NSH from crates.io,
