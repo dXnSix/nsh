@@ -254,6 +254,11 @@ enum Command {
         /// Serve hot reload to hosts you start yourself.
         #[arg(long, conflicts_with_all = ["target", "device"])]
         server_only: bool,
+        /// The idiom to run the app in, over `nsh.json` `dev.idiom`: `tv`
+        /// builds a TV's layouts and focus on this machine (`--target gpui`
+        /// and `web`, and the page `--server-only` serves to browsers).
+        #[arg(long, value_enum)]
+        idiom: Option<run::DevIdiom>,
     },
     /// Package an installable app from the prebuilt runtime (no Rust
     /// needed). Metadata comes from `nsh.json` next to the entry, overridden
@@ -318,6 +323,11 @@ enum Command {
         /// main one when there is no such display (`--target macos` only).
         #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
         display: Option<u32>,
+        /// The idiom to run the app in, over `nsh.json` `dev.idiom`: `tv`
+        /// builds a TV's layouts and focus on this machine (`--target gpui`
+        /// and `web`).
+        #[arg(long, value_enum)]
+        idiom: Option<run::DevIdiom>,
     },
     /// Create a signing key: `<name>.secret` (keep it offline for a root)
     /// and `<name>.pub` (what apps trust, for a root).
@@ -917,6 +927,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             target,
             device,
             server_only,
+            idiom,
         } => {
             no_limits_for_rust(&entry, limits)?;
             // `--server-only` serves hosts started elsewhere, on other
@@ -927,7 +938,10 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 network: server_only || target.uses_network(),
             };
             if server_only {
-                let session = dev::DevSession::start(&entry, listen, release, limits)?;
+                // The page it serves takes the idiom; hosts started
+                // separately take theirs on their command line.
+                let idiom = run::DevIdiom::resolve(idiom, &entry, None)?;
+                let session = dev::DevSession::start(&entry, listen, release, limits, idiom)?;
                 session.print_urls();
                 session.watch(|| Ok(false))
             } else {
@@ -940,6 +954,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                         trace: false,
                         fps: false,
                         points_per_cell: None,
+                        idiom,
                     },
                     target,
                     device.as_deref(),
@@ -1008,6 +1023,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             size,
             display,
             points_per_cell,
+            idiom,
         } => {
             no_limits_for_rust(&entry, limits)?;
             run::run(
@@ -1022,6 +1038,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                     trace,
                     fps,
                     points_per_cell,
+                    idiom,
                 },
                 target,
                 device.as_deref(),

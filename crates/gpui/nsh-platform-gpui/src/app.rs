@@ -130,6 +130,12 @@ pub struct AppOptions {
     pub components: crate::native::Components,
     /// The app's appearance until it sets one (`nsh.json` `"appearance"`).
     pub appearance: Appearance,
+    /// The kind of device the apps run on (`platform.idiom`):
+    /// [`Idiom::Desktop`] by default; [`Idiom::Tv`] runs them as on a TV
+    /// (`platform.tv`, `tv={{…}}` props, mobile behavior), which the
+    /// development host does for `nsh run --target gpui --idiom tv`. The
+    /// OS stays this machine's.
+    pub idiom: Idiom,
     /// Log frame statistics once a second (`nsh::fps fps …`): see
     /// [`AppView::set_fps_monitor`].
     pub fps: bool,
@@ -219,6 +225,7 @@ impl std::fmt::Debug for AppOptions {
             .field("size", &self.size)
             .field("components", &self.components)
             .field("appearance", &self.appearance)
+            .field("idiom", &self.idiom)
             .field("fps", &self.fps)
             .field("limits", &self.limits)
             .field("data_dir", &self.data_dir)
@@ -245,6 +252,7 @@ impl Default for AppOptions {
             size: (1200, 800),
             components: Default::default(),
             appearance: Appearance::System,
+            idiom: Idiom::Desktop,
             fps: false,
             limits: Limits::default(),
             data_dir: None,
@@ -351,7 +359,7 @@ impl AppView {
         cx.observe_window_activation(window, |_, _, cx| cx.notify())
             .detach();
         bind_keys(cx);
-        let surface = Surface::new(initial_environment());
+        let surface = Surface::new(initial_environment(options.idiom));
         surface.appearance.set(options.appearance);
         surface.transparent.set(options.transparent);
         if options.fps || nsh_engine::perf::enabled_by_env() {
@@ -941,7 +949,8 @@ impl Render for AppView {
     }
 }
 
-fn initial_environment() -> Environment {
+/// The environment a surface starts with, in `idiom` ([`AppOptions::idiom`]).
+fn initial_environment(idiom: Idiom) -> Environment {
     Environment {
         window: nsh_core::Size::default(),
         color_scheme: ColorScheme::Light,
@@ -952,7 +961,7 @@ fn initial_environment() -> Environment {
         } else {
             Os::Linux
         },
-        idiom: Idiom::Desktop,
+        idiom,
         file_requests: true,
         // wry, in builds with it.
         web_views: cfg!(feature = "webview"),
@@ -1214,5 +1223,24 @@ pub fn run_app(source: AppSource, options: AppOptions) -> std::process::ExitCode
         std::process::ExitCode::SUCCESS
     } else {
         std::process::ExitCode::FAILURE
+    }
+}
+
+#[cfg(test)]
+mod idiom_tests {
+    use super::*;
+
+    #[test]
+    fn a_view_runs_its_apps_in_the_idiom_its_options_give() {
+        // The desktop by default, as every desktop backend.
+        assert_eq!(AppOptions::default().idiom, Idiom::Desktop);
+        let desktop = initial_environment(AppOptions::default().idiom);
+        assert!(desktop.desktop() && !desktop.tv());
+        // A TV's on this machine's OS (`nsh run --target gpui --idiom tv`):
+        // `platform.tv`, and mobile behavior rather than the desktop's.
+        let tv = initial_environment(Idiom::Tv);
+        assert_eq!(tv.idiom, Idiom::Tv);
+        assert_eq!(tv.os, desktop.os);
+        assert!(tv.tv() && !tv.desktop());
     }
 }

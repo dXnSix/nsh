@@ -6,6 +6,10 @@
 //! - `nsh-gpui-host --bundle <path> [--trace]` runs a built bundle (`.nshc`
 //!   is QuickJS bytecode, anything else JS source).
 //! - `--window-size 1200x800` sets the window size.
+//! - `--idiom tv` runs the app as on a TV (`platform.tv`, `tv={{…}}`
+//!   props, mobile behavior; `AppOptions::idiom`), in a window of the same
+//!   size; `--idiom desktop` is the default. `nsh run --target gpui --idiom
+//!   tv` (or `nsh.json` `dev.idiom`) passes it.
 //! - `--fps` logs frame statistics once a second (`nsh::fps fps …`).
 //! - `--app-id <id>` sets the application id (`com.example.app`); `nsh run`
 //!   passes the app's (`nsh.json` `"id"`). The app's data (`Storage` of `nsh`)
@@ -37,7 +41,7 @@ pub fn main() -> std::process::ExitCode {
     use std::{env, path::PathBuf};
 
     use nsh_platform_gpui::{
-        AppOptions, AppSource, AssetBase, Bundle, Limits, WindowDisplay, dev, run_app,
+        AppOptions, AppSource, AssetBase, Bundle, Idiom, Limits, WindowDisplay, dev, run_app,
     };
 
     dev::init_logging();
@@ -98,6 +102,11 @@ pub fn main() -> std::process::ExitCode {
                     ));
                 }
             }
+            "--idiom" => match args.next().as_deref() {
+                Some("tv") => options.idiom = Idiom::Tv,
+                Some("desktop") => options.idiom = Idiom::Desktop,
+                other => log::warn!("unknown idiom {other:?} (tv or desktop)"),
+            },
             "--window-size" => {
                 if let Some((w, h)) = args.next().as_deref().and_then(|s| s.split_once('x')) {
                     options.size = (w.parse().unwrap_or(1200), h.parse().unwrap_or(800));

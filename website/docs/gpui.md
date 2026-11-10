@@ -73,7 +73,7 @@ nsh build my-app --release -o build
 dist/nsh/runtime/gpui/nsh-gpui-host --bundle build/bundle.nshc --window-size 390x844   # in a checkout: target/debug/nsh-gpui-host
 ```
 
-`--window-size` is the window's size in points (`<width>x<height>`).
+`--window-size` is the window's size in points (`<width>x<height>`). `--idiom tv` runs the app as on a TV (`platform.tv`, `tv={{…}}` props), in a window of the same size; `nsh run --target gpui --idiom tv` and `nsh.json` `dev.idiom` pass it ([TVs](./platform-specific.md#tv-layouts-on-the-desktop)).
 
 ## Packaging
 

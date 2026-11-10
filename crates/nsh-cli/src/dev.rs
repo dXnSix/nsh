@@ -57,12 +57,15 @@ pub(crate) struct Listen {
 impl DevSession {
     /// Starts the server and publishes the first build (or its error).
     /// Hosts run the app with `limits` as an embedding app that sets them
-    /// would (`--limits`), or with none, as an app on its own.
+    /// would (`--limits`), or with none, as an app on its own; the web page
+    /// it serves runs it in `idiom` (`--idiom`, `nsh.json` `dev.idiom`), or
+    /// in the one the browser measures.
     pub(crate) fn start(
         entry: &Path,
         listen: Listen,
         release: bool,
         limits: Option<nsh_core::js::HostLimits>,
+        idiom: Option<crate::run::DevIdiom>,
     ) -> anyhow::Result<DevSession> {
         let entry = dunce::canonicalize(entry)
             .with_context(|| format!("entry not found: {}", entry.display()))?;
@@ -79,8 +82,11 @@ impl DevSession {
         // --target web` builds it in a checkout).
         let rust_root = crate::rust_app::is_root(&entry);
         if let Ok(Some(runtime)) = crate::runtime::web(crate::runtime::WebKind::Dev, false) {
-            let (page, files) =
-                crate::web::with_page_host(crate::web::dev_host(&runtime, rust_root)?, &entry)?;
+            let (page, files) = crate::web::with_page_host(
+                crate::web::dev_host(&runtime, rust_root)?,
+                &entry,
+                idiom,
+            )?;
             server.serve_web(page, files);
         }
         let session = DevSession {
