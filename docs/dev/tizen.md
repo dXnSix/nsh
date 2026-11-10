@@ -43,10 +43,11 @@ library a TPK's C# host calls, exports one symbol, `nsh_tizen_main(argc, argv)`.
 | --- | --- |
 | `lib.rs` | `nsh_tizen_main`, and for the hosts of apps with Rust crates of their own `main`, `run_rust` and `set_ui_sets` |
 | `tizen.rs` (Tizen only) | `dxn_gpui_tizen::run` with the package's bundle (or the development runtime), the app framework's data and cache directories (`app_get_data_path`, `app_get_cache_path`, each with `nsh/` in it), with `dev` the system's log (dlog, tag `NSH`) |
-| `app.rs` | The full-screen window holding `AppView`, and the exit question over it; the TV's settings and the app's state given to `AppView`; Exit quits GPUI, which ends `ui_app_main` |
+| `app.rs` | The full-screen window holding `AppView`, and the exit question over it; the TV's settings and the app's state given to `AppView` before the app loads (its engine starts with them), the settings again as they change; Exit quits GPUI, which ends `ui_app_main` |
 | `settings.rs` | `dxn_gpui_tizen::settings` (locale, time zone, font scale, screen reader, reduce motion) as the values of `AppView`'s setters, and the setters to call again when they change; the appearance is dark (Tizen 8.0 reports no light or dark setting) |
 | `lifecycle.rs` | The platform's window activation (off while the app framework has the app paused, which the platform reports to GPUI with the window hidden) as `Lifecycle::Background` / `Active`, through `AppView::set_lifecycle` |
 | `back.rs` | Samsung's rule for Back: NSH's back navigation first (a modal, a stack, `onBackPress`); when nothing takes it (`AppView::on_unhandled_back`), the app asks whether to leave, staying chosen |
+| `prompt.rs` | How that question reads: its words in the TV's language (English, Chinese in its script, Korean, Japanese, Spanish, French, German, Portuguese, Russian; English for the others), its sizes at the TV's font scale, and for assistive technologies an alert dialog named by the question with its answers as buttons, the chosen one the focused node, so Voice Guide reads them |
 | `keys.rs` | The remote's key names (dXn.GpuiTizen's `keys::NAMED_KEYS`) as NSH reads them: NSH keys (`nsh_platform_gpui::nsh_key`, `TV-1`'s `ColorRed`, `MediaPlayPause`, `Info`, ...), `back` (navigation), `exit` (the TV's) |
 | `tv.rs` | The TV's side of `nsh/tizen` (`nsh_core::runtime::TizenHost`, in the view's engine context as `TizenServices`): `dxn_gpui_tizen::system_info::product_info`'s model, platform version, build and maker; the remote's keys by their Tizen names, checked on the engine's thread (`keygrab::validate`) and grabbed or released on the main thread (`keygrab::grab`, `release`, from a task `tv::serve` runs): the color, media and channel keys are grabbed from the start, Info on request |
 | `package.rs` | The app in the TPK's resources: `res/nsh/bundle.nshc` (with `capabilities.json` and `bundle.js.map`), `res/nsh/assets/`, `res/nsh/app.json` (name, id, appearance), as Linux's packages hold them |
@@ -55,7 +56,7 @@ library a TPK's C# host calls, exports one symbol, `nsh_tizen_main(argc, argv)`.
 The logic modules build on the desktops too, and their unit tests run there:
 
 ```sh
-cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib                 # keys, settings, back, lifecycle, package, tv
+cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib                 # app, keys, settings, back, prompt, lifecycle, package, host, tv
 cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --features dev --lib  # and dev's connection policy
 ```
 
@@ -64,7 +65,15 @@ cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --featur
 Tizen's app model starts a third-party native app as a .NET app: `crates/gpui/nsh-platform-tizen/host/` is the
 program (`Program.cs`, one P/Invoke into `libnsh.so`'s `nsh_tizen_main`; no TizenFX) and its project on
 `Tizen.NET.Sdk` (`Nsh.Tizen.Host.csproj`), the same as dXn.GpuiTizen's own host. It is built once into the runtime
-files (`dotnet build -c Release`, by `cargo xtask tizen`), so packaging an app needs no .NET SDK.
+files (`dotnet build -c Release`, by `cargo xtask tizen`), so packaging an app needs no .NET SDK. Without a .NET SDK
+that has Tizen's workload, the crate's `host::tests` check what MSBuild would refuse first: the project must be
+well-formed XML (no `--` in its comments: MSB4025), on `Tizen.NET.Sdk`, building the `Nsh.Tizen.Host` executable the
+runtime files ship, and the program must keep its one P/Invoke (`$PATCH` and `$LOCK` as in [Building](#building)):
+
+```sh
+cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib host::tests \
+  --config "$PATCH" --config "resolver.lockfile-path='$LOCK'"
+```
 
 `nsh_tizen_main` first looks up `nsh_app_ui_sets` and `nsh_app_root` in its own library (`dladdr` on itself, then
 `dlopen(RTLD_NOLOAD)` and `dlsym`: the host loads it `RTLD_LOCAL`, out of the global scope): an app's library with Rust
@@ -80,7 +89,8 @@ developer's machine through `sdb`, not the network, so the client's connections 
 (`nsh_dev::DevTransport`):
 
 - first `ws://127.0.0.1:8790/ws`, a fixed port on the TV that `nsh run` maps to the dev server with `sdb reverse`;
-- after three refusals in a row it also listens on the TV's port 8791, which `nsh run` maps from the machine with
+- after three refusals in a row it also listens on port 8791 of the TV's loopback (`sdbd` delivers the connections
+  of `sdb forward` there; no other host on the TV's network reaches it), which `nsh run` maps from the machine with
   `sdb forward` and connects to, relaying to the dev server; from then on both are tried in turn, the one that
   worked last first.
 
@@ -96,6 +106,14 @@ crates.io. Its TV builds take gpui-fast and wgpu from their forks: `[patch.crate
 crates and the wgpu crates (`wgpu-hal` among them), the same set as dXn.GpuiTizen's. Until the forks are published
 that patch is a local Cargo config, never committed: dXn.GpuiTizen's `cargo xtask gpui-fast-release --verify` writes
 it to `artifacts-temp/gpui-fast-patch.toml` (paths into the gpui-fast fork's release workspace and `../wgpu`).
+
+Publishing: `nsh-platform-tizen` is not published (`publish = false`); it ships built, as the CLI's `tizen` component.
+`cargo publish` takes a git dependency from crates.io by its `version`, so the workspace entries of dXn.GpuiTizen's
+crates carry one beside `git` and `rev` (`0.1.0`, theirs). A crate that `release-crate.yml` publishes and that
+depends on them needs `dxn_gpui_tizen` (and `dxn_gpui_tizen_sys`) on crates.io at that version before the NSH
+release that includes it; until then the GPUI workspace's publish step fails on it. `nsh-platform-gpui` is one: it
+depends on `dxn_gpui_tizen` on Tizen (`cfg(target_vendor = "tizen")`, its videos), and `cargo publish` checks
+target-specific dependencies too, so dXn.GpuiTizen goes to crates.io before the first NSH release with Tizen videos.
 
 Before dXn.GpuiTizen is pushed, Git reaches it in the local checkout (Cargo cannot patch an unreachable git
 source), so every Cargo command runs with:
