@@ -575,6 +575,12 @@ values of the light appearance, `dark` those of the dark one, and `theme` those 
   fallback: `var(--brand, #7c3aed)`). Lengths are `rem` (16 points) or `px` (points). Fonts are font family lists:
   the first family that is not a generic one is used, and a generic first family (`system-ui`, `sans-serif`) is the
   system font.
+- **Gradients.** A `background-image-<n>` written as CSS gradients (`"background-image-hero": "linear-gradient(135deg,
+  #7c3aed, #db2777)"`, per appearance in `light` and `dark`) is a gradient token:
+  `tokens().gradient("background-image-hero")` is an `AdaptiveGradient`, and
+  `.adaptive_gradient(move || tokens().gradient("background-image-hero").cloned().unwrap_or_default())` draws it as
+  the background, following theme changes and switching with the appearance natively as `.bg(..)` does.
+  `AdaptiveGradient::parse("linear-gradient(…)")` reads gradients of the app's own, the same in both.
 - **Shadows.** A `shadow-<n>` written as CSS `box-shadow` (`"shadow-raised": "0 1px 2px #0000001a"`, per appearance in
   `light` and `dark`) is a shadow token: `tokens().shadow("shadow-raised")` is an `AdaptiveShadow`, and
   `.adaptive_shadow(move || tokens().shadow("shadow-raised").cloned().unwrap_or_default())` draws it, following theme

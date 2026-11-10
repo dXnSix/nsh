@@ -805,7 +805,10 @@ where `dark` leaves them out). Values are CSS: colors (hex, `rgb()`, `hsl()`, `o
 `color-mix()`, `var(--x[, fallback])` of the same appearance's tokens, the file's or the default's), lengths (`rem`
 is 16 pt, `px`) and font family lists for `font-*` names (the first family that is not generic, `system-ui` /
 `sans-serif` / ... meaning the system's); a `shadow-*` value that reads as `box-shadow` layers is a shadow token
-(`Tokens::shadow`, per appearance), and values of no kind a token has (a letter spacing in `em`) are left out. A
+(`Tokens::shadow`, per appearance), a `background-image-*` value that reads as CSS gradients a gradient token
+(`Tokens::gradient`, per appearance, a `var()` in a stop read as the theme's color in each; its class is `bg-<n>`
+through the arbitrary `bg-[…]`, after a utility or a color of that name, `ClassTokens::substitute`; written back
+by `Gradient::css`, which `css::gradient` reads as the same gradient), and values of no kind a token has (a letter spacing in `em`) are left out. A
 value written as a color that is none (`#zz`, `lab()`, a `var()` that names no color) is left out and reported, and so
 is one that is no color in one appearance where the other's is a color (that color is both's): `nsh build` warns of
 them, the core logs them, `setTheme` refuses the file for them. An

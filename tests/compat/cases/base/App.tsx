@@ -63,6 +63,7 @@ import BaseUpdateTheme from "./base-update-theme";
 import BaseNamedClasses from "./base-named-classes";
 import BaseDarkNumbers from "./base-dark-numbers";
 import BaseShadowTokens from "./base-shadow-tokens";
+import BaseGradientTokens from "./base-gradient-tokens";
 import BaseStatusRoles from "./base-status-roles";
 import BaseDiffRoles from "./base-diff-roles";
 import BaseTransitionShader from "./base-transition-shader";
@@ -128,6 +129,7 @@ const cases: Record<string, () => JSX.Element> = {
   "base-named-classes": BaseNamedClasses,
   "base-dark-numbers": BaseDarkNumbers,
   "base-shadow-tokens": BaseShadowTokens,
+  "base-gradient-tokens": BaseGradientTokens,
   "base-status-roles": BaseStatusRoles,
   "base-diff-roles": BaseDiffRoles,
   "base-transition-shader": BaseTransitionShader,

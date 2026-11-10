@@ -254,7 +254,7 @@ function token<K extends keyof Tokens>(name: K): Tokens[K];
 ```
 
 应用主题（`nsh.json` 的 `"theme"`，叠加在 shadcn/ui 的令牌之上）中名为 `name` 的设计令牌在当前外观下的值：颜色是 `#rrggbbaa`，
-长度是以点为单位的数值，字体是字体族名称，阴影是它的 CSS `box-shadow` 各层。名称是主题中 CSS 变量去掉 `--` 后的名称（`primary`、`muted-foreground`、`radius`、
+长度是以点为单位的数值，字体是字体族名称，阴影是它的 CSS `box-shadow` 各层，渐变是它的 CSS `background-image`。名称是主题中 CSS 变量去掉 `--` 后的名称（`primary`、`muted-foreground`、`radius`、
 `font-mono`，以及应用自己的令牌，如 `up`）。读取它是响应式的：读取令牌的组件、memo 或 effect 会在主题或外观变化时重新运行。在 [`ThemeScope`](#themescope) 中，它是该作用域的值和外观。
 `Tokens` 列出应用的令牌及其类型；NSH 根据主题把它写入 `.nsh/types/nsh/tokens.d.ts`。在类名中直接引用令牌（`bg-primary`、
 `rounded-(--radius)`）：见[主题 token](../docs/tailwind.md#主题-token)。
