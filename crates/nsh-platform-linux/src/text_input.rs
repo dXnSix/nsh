@@ -1588,6 +1588,14 @@ pub(crate) fn key_widget(view: &NshView) -> Option<gtk::Widget> {
     Some(widget)
 }
 
+/// Whether input `view` edits (its config's `editable`).
+pub(crate) fn editable(view: &NshView) -> bool {
+    view.state()
+        .input
+        .as_ref()
+        .is_some_and(|input| input.config.borrow().editable)
+}
+
 /// `focus()`.
 pub(crate) fn focus(view: &NshView) {
     let input = view.state().input.clone();
