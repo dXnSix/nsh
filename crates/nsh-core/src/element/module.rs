@@ -400,7 +400,7 @@ impl ModuleCx {
     /// Draws the app with theme `theme`, as [`crate::element::set_theme`].
     pub fn set_theme<T: crate::element::AppTheme>(&mut self, theme: T) {
         self.actions
-            .push(Action::UpdateTokens(crate::element::theme::theme_tokens(
+            .push(Action::SetTheme(crate::element::theme::theme_tokens(
                 &theme,
             )));
     }
