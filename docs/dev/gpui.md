@@ -98,7 +98,8 @@ tables exclude the vendor), whatever the features:
   (`host_settings.rs`, written over the system's in `Surface::set_environment`, as `HostEnvironment` is) and
   `set_appearance`.
 - **Fonts** (`text/tv.rs`): the UI font is the first installed of Samsung's TV family and Tizen's (`SamsungOneUI`,
-  `BreezeSans`, `TizenSans`) that GPUI can set in bold, names matched ignoring case and spaces; its fallbacks are every
+  `BreezeSans`, `TizenSans`) that GPUI can set in bold, names matched ignoring case and spaces (for the preferred
+  family's line metrics too); its fallbacks are every
   installed family of those and of their scripts (`BreezeSansKorean`, ...), in that order, as the set differs between
   TVs. The Linux desktop's UI families and text fallbacks are not tried.
 - **Web views** draw the placeholder and report `onError` for each source (`native/web.rs`).
