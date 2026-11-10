@@ -204,7 +204,8 @@ A fully covering window does not change the gallery capture: `app.screenshot` wh
   menu's shortcuts see what it lets through, as from a text field (`input::component_key`). Positions become root coordinates and go to `input.rs` (hit testing, presses, the responder
   system, gestures) as on Windows. Keys become Windows virtual key codes (`keys.rs`), which the shared input,
   scrolling, keymap and editing code reads. The Tizen platform's TV remote names (`back`, `mediaplaypause`, `red`,
-  `channelup`, `info`, ...: dXn.GpuiTizen's key table) map there too: `back` to `VK_BROWSER_BACK` (going back),
+  `channelup`, `info`, ...: dXn.GpuiTizen's key table; Info is `info` there, and Ecore's own `xf86info`, which
+  earlier versions passed on, stays an alias) map there too: `back` to `VK_BROWSER_BACK` (going back),
   the four media keys Windows has to `VK_MEDIA_*`, the others to the backend's own codes past 0xFF (`TV_KEYS`,
   which `keys::key_of` turns into `nsh_core::keymap::Key`s); `exit` maps to no key. `nsh_key(name)` (public) is that
   mapping from a GPUI key name to an NSH key, for a platform that checks its names against it.

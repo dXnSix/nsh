@@ -75,3 +75,5 @@ windows-sys = { workspace = true, features = [
 syntect.workspace = true
 # Pages loaded at the app's paths resolve their files as browsers do.
 url.workspace = true
+# The icons of packages (`tests/cli/tizen_web.rs`).
+image.workspace = true

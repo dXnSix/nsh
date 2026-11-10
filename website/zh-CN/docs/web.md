@@ -239,6 +239,49 @@ nsh run App.tsx --target web       # TSX 应用
 
 会启动开发服务器，并打印它的页面地址 `http://127.0.0.1:8790/`，在任意浏览器中打开即可。这个页面和其他开发宿主一样：运行应用的每次构建，在应用上方显示构建错误和运行时错误，并把应用的日志发送到终端。修改 Rust 应用的 crate 会重新构建它的运行时，已打开的页面会自动加载；TSX 的修改则就地应用（热更新）。同一网络中的手机打开 `nsh run` 在其下方打印的地址（`on this network: http://192.168.…:8790/`）即可。只要 Web 运行时存在（发行包中总是存在），`nsh dev` 也会提供同一个页面。
 
+## 三星电视
+
+三星电视（2024 年起的机型，Tizen 8）在自己的浏览器引擎里以 Tizen Web 应用（`.wgt`）运行应用。应用就是发布的站点，加上 Tizen
+的清单和一个电视 shim；`platform.os` 是 `"web"`，应用以电视 idiom 运行：`platform.tv` 为 `true`，`platform.select`
+选 `tv`，`tv={{…}}` 属性生效。
+
+```sh
+nsh package --target tizen-web                     # .nsh/out/tizen-web/<Name>/ 和 <Name>.wgt，未签名
+nsh package --target tizen-web --sign my-profile   # .nsh/out/<Name>.wgt，用 Tizen SDK 的 tz 签名
+nsh run --target tizen-web                         # 在电视上（nsh.json 的 tizen.signing）和本机浏览器中
+nsh test --target tizen-web                        # 在 headless Chromium 里用电视的页面运行测试，1920×1080
+nsh package --target tizen-web --probe             # 一个包，显示电视如何加载页面的文件
+```
+
+- **包**是[发布的站点](#发布应用)，加上 `config.xml`（包 id 和应用 id、版本、所需的 Tizen 版本、网络和遥控器按键权限、横屏、
+  512×423 的图标）和电视 shim，页面在运行时之前先运行它。用三星证书管理器的证书配置签名：`--sign <profile>` 或 `nsh.json` 的
+  `tizen.signing`；`nsh package` 为此运行 Tizen SDK 的 `tz pack`，`--run` 用 `tz` 安装并启动签名后的包。
+- **遥控器**：返回键像浏览器的返回键一样在应用里返回（关闭最新的对话框、弹出最内层的导航栈，`onBackPress` 和 `popOnBack`
+  照常生效）；在第一个页面上、没有可返回的内容时，应用会询问是否退出，选择“Exit”后退出，符合三星的规则。方向键、确认键、
+  颜色键、媒体键和频道键以 [`keymap`](../modules/nsh.md#媒体键与电视遥控器按键) 的名字（`red`、`mediaplaypause`、
+  `channelup` 等）送到应用；页面会向电视注册这些按键。
+- **`nsh.json` 的 `tizen`** 为包命名，每个键都有默认值：
+
+  ```json
+  "tizen": {
+    "package": "AbCdE12345",
+    "appId": "AbCdE12345.Counter",
+    "version": "1.2.0",
+    "apiVersion": "8.0",
+    "privileges": ["http://tizen.org/privilege/tv.audio"],
+    "signing": "my-profile"
+  }
+  ```
+
+  `package` 是 10 个字母和数字（默认由应用的 `id` 生成）；`appId` 是 `<package>.<name>`（默认取应用名中的字母和数字）；
+  `version` 是 Tizen 的 `x.y.z` 数字版本（默认是应用的 `version`，否则 `1.0.0`）；`apiVersion` 是能安装这个包的最低
+  Tizen 版本（`8.0`）；`privileges` 是在网络和遥控器按键之外申请的权限；`signing` 是证书配置。
+- **开发**：`nsh run --target tizen-web` 由开发服务器提供电视的页面，所以本机浏览器打开它打印的地址，就能看到电视 idiom
+  下的应用，并且支持热更新。配置了 `nsh.json` 的 `tizen.signing` 时，它还会在电视上签名、安装并启动一个开发包
+  （`--device`：电视的 `sdb` 序列号），开发包的页面会打开本机在局域网中的地址上的开发服务器页面。
+- **加载探针**（`--probe`）是一个独立的包 `NshLdProbe.Probe`：它在电视上逐一尝试应用页面加载文件的各种方式（module
+  脚本、import map、iframe 的 realm、用 CORS 获取的脚本、WebAssembly），并显示每一项的结果和引擎的版本。
+
 ## 构建本站的播放器
 
 ```sh

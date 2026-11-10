@@ -225,6 +225,51 @@ build to the same file) and takes `nsh.js` from the crate.
   input's value, where a dialog's button is, where a text's characters are: each run knows its first character's
   offset). The input itself is the browser's trusted input, sent by the CLI.
 
+### Tizen web apps (`--target tizen-web`)
+
+`crates/nsh-cli/src/tizen_web.rs`: Samsung TVs through their browser engine (route A of the Tizen work). A Tizen web
+app is the web's site plus Tizen's manifest and a TV shim; it reports `Os::Web` in the TV idiom (`platform.tv`),
+there is no `Os::TizenWeb`.
+
+- **`nsh package --target tizen-web`** calls `web::write_site` with a `web::Variant`: the shim (`tizen_web/shim.js`)
+  as a classic script in the head, before the module script; `app.idiom = "tv"` (the page passes `createPlayer`
+  `idiom: app.idiom`); `app.history = false` (the remote's Back is the shim's, a `.wgt` keeps no history entries);
+  `installed` (no `web.base`, no `.br` / `.gz` copies). It adds `config.xml` (`Widget`) and `icon.png` (512×423),
+  writes `<out>/tizen-web/<name>/` and zips it into `<out>/tizen-web/<name>.wgt`, unsigned; with a certificate
+  profile (`--sign`, `nsh.json` `tizen.signing`) `tz pack -t wgt -s <profile> -b <unsigned> -o <out>/<name>.wgt`
+  signs it (`tz`'s repackaging), and `--run` installs (`tz install -p`) and launches it (`tz run -p <app id>`).
+  `tz` is found on `PATH` or at `~/tizen-studio/tools/tizen-core/tz`; only those three calls need the SDK.
+- **`config.xml`**: `nsh.json` `tizen` (`package`, 10 letters and digits, by default made from the app's `id`;
+  `appId`, by default `<package>.<name's letters and digits>`; `version`, Tizen's `x.y.z`, by default the app's;
+  `apiVersion`, `required_version`, by default `8.0`; `privileges`, added to the internet and `tv.inputdevice`
+  ones; `signing`), the `tv-samsung` profile, `<access origin="*">` (the app's `capabilities` and the page's CSP
+  limit its requests), landscape, the icon. The section's keys are named for a native Tizen target to share.
+- **The shim** (`shim.js`, tested by `node --test crates/nsh-cli/src/tizen_web/shim.test.mjs` on fake `tizen`
+  globals): the remote's Back (key code 10009) is sent to the app as a `BrowserBack` key down (`nsh.js` `keyDown`'s
+  back path), then, when nothing took it (`preventDefault`), as an `Escape` (a dialog, a field); when neither went
+  anywhere it shows an exit confirmation (arrows, Enter, Back) and exits with
+  `tizen.application.getCurrentApplication().exit()`. It registers the color, media and channel keys the TV has with
+  `tizen.tvinputdevice.registerKey`; `nsh.js` reads them by Samsung's key codes in the TV idiom (`TV_KEY_CODES`).
+  `globalThis.nshTizen` (`tv`, `keys`, `back()`, `confirmExit()`, `exit()`) is the seam the web half of `nsh/tizen`
+  calls.
+- **`nsh run --target tizen-web`** serves the dev page with the shim (`tizen_web::dev_page`: `{{scripts}}`,
+  `{{idiom}}` and `{{history}}` of `web/dev.html`, which `with_page_host` leaves empty for the web) and writes the
+  development package `.nsh/tizen-web/dev/` (`NshDevHost.NshDev`, one for every app): a page that opens the dev
+  server's at this machine's LAN address once it answers, `<access>` and `<tizen:allow-navigation>` for that origin
+  only. With `nsh.json` `tizen.signing` it is signed, installed and launched (`--device`: the TV's serial); without,
+  the page opens in a browser here, as on the TV.
+- **`nsh test --target tizen-web`** runs `nsh test --target web`'s headless Chromium on the same page
+  (`test_web::starter(browser, true)`), 1920×1080 by default.
+- **`--probe`** writes `<out>/tizen-web/probe/` (`NshLdProbe.Probe`): a page that tries, from package files, a module
+  script, the page's import map (static and `import()`), a same-origin iframe realm, a classic bootstrap fetched with
+  CORS into it, the realm's import map and a blob module, and a Wasm `fetch` (`instantiateStreaming` and
+  `arrayBuffer`), and shows each result, the user agent and the engine's `scrollend`, `popover` and `inert`.
+
+`cargo test -p nsh-cli --test cli tizen_web::` packages with a fake runtime (`NSH_RUNTIME`: a linkable module of
+three functions) and a fake `tz`; `cargo test -p nsh-cli --bin nsh tizen_web::` checks the ids, versions and `tz`'s
+command lines. Not verified here: signing with a real profile, installing on a TV, and whether a remote dev page
+gets `tizen`'s APIs (Back still arrives as key code 10009 there).
+
 ### Runtimes linked for each app
 
 A published app's runtime holds only what the app uses, and what only later screens use is downloaded apart
@@ -478,7 +523,8 @@ with a fine, hovering one, as `nsh test --target web` does), `pad` for a screen 
 `phone`; the player's `idiom` option overrides it, and so does a test's setup (`TestEnvironment::idiom`: `open`'s
 desktop `platform` starts the app in the desktop idiom at any width). A page on a TV (a Tizen `.wgt`) passes
 `idiom: "tv"`, which no pointer heuristic can tell: `nsh_environment` maps it to `Idiom::Tv` (`platform.tv`,
-`tv={{…}}` props, mobile behavior; `tv.test.mjs`). `Environment::desktop()`
+`tv={{…}}` props, mobile behavior; `tv.test.mjs`, which with `NSH_BROWSER_WASM` checks the module's own
+`nsh_environment` and the environment it sends, `nsh_browser_test_environment`). `Environment::desktop()`
 (desktop OS, the web in the desktop idiom, or the terminal idiom) decides `desktop={{…}}` props, `platform.select`'s `desktop` key,
 `platform.desktop` and `platform.idiom` (`Environment::reported_idiom()`), `Environment::tv()` decides `tv={{…}}`
 props, `select`'s `tv` key and `platform.tv` (the page's `browser/environment.js` gets all three from the engine's
@@ -696,7 +742,8 @@ browsers' touches into what phones report:
   the `-1` (unmatched) and `-2` (held repeat) sentinels. Keys are passed as the character they type without
   modifiers, else the US layout's character of their `code`, the media and TV remote keys by their `key`
   (`MediaPlayPause`, `ColorF0Red`, `ChannelUp`, `Info`, ...) or, when it is `Unidentified`, by Samsung TVs' key
-  codes (`TV_KEY_CODES`: `tizen.tvinputdevice`'s); `mod` was resolved by the browser's platform,
+  codes (`TV_KEY_CODES`: `tizen.tvinputdevice`'s); in the TV idiom by those codes whenever the `key` is none of
+  `NAMED_KEYS` (a TV's engine may report no `key`, or `Pause` for keyCode 19, which on a TV is the remote's pause); `mod` was resolved by the browser's platform,
   `appleKeyboard` in the environment JSON); an open dialog (Escape presses its
   cancel button); a focused field (Escape leaves it); a custom context menu (Shift+F10 or the Menu key);
   selectable text with a selection (select all, in a selectable view the whole area; Escape); a focused

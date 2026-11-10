@@ -1,8 +1,15 @@
-// The TV category in the browser runtime without a browser or nsh.wasm:
+// The TV category in the browser runtime without a browser:
 // `node --expose-gc --test crates/nsh-platform-web/web/browser/tv.test.mjs`.
 // `platform.tv` and `select`'s `tv` key (`environment.js`), `tv={{…}}`
 // props (`dom.js`), and the page telling the player it is on a TV (`nsh.js`,
 // `idiom: "tv"`), each held to what nsh-js and the engine do.
+//
+// Without a module the engine is a fake that answers a page's idiom with the
+// environment the engine sends for it. With `NSH_BROWSER_WASM` (a
+// `browser-tests` build of `nsh-platform-web` for wasm32: "Browser-host
+// regression checks" in docs/dev/web.md) the module decides: the page's
+// settings go to its `nsh_environment`, and the environment it sends the
+// runtime at start (`nsh_browser_test_environment`) is the one checked.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -39,6 +46,42 @@ const engine = platform => ({
 
 const TV = { idiom: "tv", desktop: false, tv: true };
 
+const path = process.env.NSH_BROWSER_WASM;
+const module = path ? await WebAssembly.compile(await readFile(path)) : null;
+
+/** The fake engine: the platform it reports for the page's `idiom`, as
+ * `nsh_environment` reads it (anything unknown is a phone). */
+function fakeEngine(settings) {
+  const idiom = ["desktop", "pad", "tv"].includes(settings.idiom) ? settings.idiom : "phone";
+  return engine({ idiom, desktop: idiom === "desktop", tv: idiom === "tv" });
+}
+
+/** The environment the engine sends the runtime of a page that told it
+ * `settings` (`nsh_environment`), on the module or the fake. */
+async function engineEnvironment(settings) {
+  if (!module) return fakeEngine(settings);
+  let bridge;
+  const imports = {};
+  for (const entry of WebAssembly.Module.imports(module)) (imports[entry.module] ??= {})[entry.name] = () => 0;
+  imports.nsh_browser = { value: (...args) => bridge.value(...args) };
+  const raw = (await WebAssembly.instantiate(module, imports)).exports;
+  assert.equal(typeof raw.nsh_browser_test_environment, "function", "a browser-tests build");
+  const values = new Values();
+  bridge = values.imports(() => raw.memory);
+  const wasm = values.bind(raw);
+  wasm.nsh_browser_initialize();
+  try {
+    const bytes = new TextEncoder().encode(JSON.stringify(settings));
+    const ptr = raw.nsh_alloc(bytes.length);
+    new Uint8Array(raw.memory.buffer, ptr, bytes.length).set(bytes);
+    raw.nsh_environment(ptr, bytes.length);
+    return values.result(wasm.nsh_browser_test_environment());
+  } finally {
+    wasm.nsh_browser_dispose();
+    values.dispose();
+  }
+}
+
 test("platform.tv follows the engine, and select looks for tv after the OS's key and before desktop / mobile", () => {
   const env = environment();
   const { platform } = env.api;
@@ -65,10 +108,31 @@ test("platform.tv follows the engine, and select looks for tv after the OS's key
   assert.equal(platform.select({ tv: "tv", desktop: "desktop" }), "desktop");
 });
 
-test("the engine tells the page's runtime whether it is a TV", async () => {
-  // The field `environment.js` reads, from `Environment::tv` (nsh-core).
-  const source = await readFile(new URL("../../src/browser/engine.rs", import.meta.url), "utf8");
-  assert.match(source, /"tv":e\.tv\(\)/);
+test("a page's TV idiom reaches the engine, which tells the runtime it is a TV, and tv props apply", async () => {
+  const data = await engineEnvironment({ idiom: "tv" });
+  assert.equal(data.platform.idiom, "tv");
+  assert.equal(data.platform.tv, true);
+  assert.equal(data.platform.desktop, false);
+  assert.equal(data.window.width, 1920);
+
+  // The runtime takes it as `runtime.js` does: `platform` for the
+  // environment, and the DOM's platform for platform props.
+  const env = environment();
+  env.update(data);
+  assert.equal(env.api.platform.tv, true);
+  assert.equal(env.api.platform.idiom, "tv");
+  const values = new Values();
+  const calls = [];
+  const dom = createDom((op, args) => calls.push([op, args]), values, { getOwner: () => null }, () => true, () => {});
+  dom.setPlatform(env.api.platform);
+  const view = values.makeNode(2);
+  dom.rt.prop(view, "tv", { style: { padding: 24 } });
+  dom.rt.prop(view, "desktop", { cursor: "pointer" });
+  assert.deepEqual(calls.filter(([op]) => op === 303).map(([, [, name, value]]) => [name, value]), [["style", { padding: 24 }]]);
+
+  // A desktop browser's page is no TV.
+  const desktop = await engineEnvironment({ idiom: "desktop" });
+  assert.deepEqual([desktop.platform.idiom, desktop.platform.tv, desktop.platform.desktop], ["desktop", false, true]);
 });
 
 test("tv props set their props on a TV only, and unset the keys a new object no longer has", () => {
@@ -151,6 +215,9 @@ test("a page tells the player it is on a TV, and the engine reads the TV idiom",
   assert.equal(started.length, 1);
   assert.equal(started[0].idiom, "tv");
   assert.equal(player.idiom, "tv");
+  // What the player sends is what the engine reads: a TV.
+  const sent = await engineEnvironment(started[0]);
+  assert.deepEqual([sent.platform.idiom, sent.platform.tv, sent.platform.desktop], ["tv", true, false]);
   // A TV's system UI (dialogs) is not the desktop's.
   assert.equal(player.desktopUI, false);
   // Without it, the pointer decides.
@@ -158,17 +225,13 @@ test("a page tells the player it is on a TV, and the engine reads the TV idiom",
   onPage(() => measured.begin(1920, () => -1));
   assert.equal(measured.idiom, "desktop");
 
-  // `nsh_environment` (src/lib.rs) maps it to `Idiom::Tv`; every idiom the
-  // player documents is one it reads.
-  const lib = await readFile(new URL("../../src/lib.rs", import.meta.url), "utf8");
-  const start = lib.indexOf("pub unsafe extern \"C\" fn nsh_environment");
-  assert.ok(start >= 0, "lib.rs has nsh_environment");
-  const body = lib.slice(start, lib.indexOf("\n}\n", start));
-  const arms = Object.fromEntries([...body.matchAll(/"(\w+)" => Idiom::(\w+)/g)].map(m => [m[1], m[2]]));
-  assert.equal(arms.tv, "Tv");
+  // Every idiom the player documents is one the engine reads and reports
+  // back (`nsh_environment`, `Environment::reported_idiom`); an unknown one
+  // is a phone.
   const documented = source.match(/`idiom` \(([^)]*)\)/)?.[1] ?? "";
   for (const idiom of ["phone", "pad", "desktop", "tv"]) {
     assert.ok(documented.includes(`"${idiom}"`), `nsh.js documents "${idiom}"`);
-    if (idiom !== "phone") assert.ok(idiom in arms, `nsh_environment reads "${idiom}"`);
+    assert.equal((await engineEnvironment({ idiom })).platform.idiom, idiom);
   }
+  assert.equal((await engineEnvironment({ idiom: "watch" })).platform.idiom, "phone");
 });
