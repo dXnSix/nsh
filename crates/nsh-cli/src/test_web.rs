@@ -267,6 +267,15 @@ fn tv_key_code(key: nsh_core::keymap::Key) -> Option<u32> {
     })
 }
 
+/// A media or TV key's event as a Samsung TV's browser gives it to the
+/// page: its `key`, its `code` and the remote's key code (`keyCode`). `None`
+/// for the arrows and OK, which are a keyboard's keys there too.
+fn tv_key_event(key: nsh_core::keymap::Key) -> Option<(String, String, u32)> {
+    let vk = tv_key_code(key)?;
+    let (key, code) = dom_key(key, false)?;
+    Some((key, code, vk))
+}
+
 impl WebNative {
     /// What the page answers of `query`.
     fn query<T: serde::de::DeserializeOwned>(&self, query: SceneQuery) -> Result<T, String> {
@@ -557,15 +566,12 @@ impl Native for WebNative {
         let Some(stroke) = key.keystroke() else {
             return self.back();
         };
-        // The media and TV keys as a Samsung TV's browser gives them: the
-        // key's name with the remote's key code. The arrows and OK are a
-        // keyboard's keys there too.
-        match (tv_key_code(stroke.key), dom_key(stroke.key, false)) {
-            (Some(vk), Some((key, code))) => {
+        match tv_key_event(stroke.key) {
+            Some((key, code, vk)) => {
                 self.press_key(&key, &code, vk, 0, &[], None);
                 Ok(())
             }
-            _ => self.press_keys(&stroke.to_string()),
+            None => self.press_keys(&stroke.to_string()),
         }
     }
 
@@ -684,5 +690,81 @@ impl Native for WebNative {
 
     fn quit(&self) {
         self.page.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// `keyboard.remote` on the web: the media and TV keys as a Samsung
+    /// TV's browser gives them (`WebNative::press_remote_key`).
+    mod remote_keys {
+        use std::collections::HashMap;
+
+        use nsh_core::keymap::Key;
+        use nsh_testing::agent::RemoteKey;
+
+        use super::super::tv_key_event;
+
+        /// The entries `name: number` of the object `nsh.js` declares as
+        /// `const <object> = { ... };`.
+        fn js_table(source: &str, object: &str) -> HashMap<String, u32> {
+            let start = source
+                .find(&format!("const {object} = {{"))
+                .unwrap_or_else(|| panic!("nsh.js has no {object}"));
+            let body = &source[start..];
+            let body = &body[body.find('{').unwrap() + 1..body.find("};").unwrap()];
+            body.lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .flat_map(|l| l.split(','))
+                .filter_map(|entry| {
+                    let (name, value) = entry.split_once(':')?;
+                    Some((name.trim().to_owned(), value.trim().parse().ok()?))
+                })
+                .collect()
+        }
+
+        #[test]
+        fn the_media_and_tv_keys_carry_samsung_s_key_codes() {
+            let red = tv_key_event(Key::ColorRed);
+            assert_eq!(red, Some(("ColorF0Red".into(), String::new(), 403)));
+            let pause = tv_key_event(Key::MediaPause);
+            assert_eq!(pause, Some(("MediaPause".into(), String::new(), 19)));
+            let next = tv_key_event(Key::MediaNext);
+            assert_eq!(
+                next,
+                Some(("MediaTrackNext".into(), "MediaTrackNext".into(), 10233))
+            );
+            // The arrows and OK are a keyboard's keys.
+            for key in [Key::Up, Key::Down, Key::Left, Key::Right, Key::Enter] {
+                assert_eq!(tv_key_event(key), None, "{key:?}");
+            }
+        }
+
+        /// Every remote key the agent presses with a key code is the key
+        /// `nsh.js` reads, by its `key` and by its key code alike.
+        #[test]
+        fn nsh_js_reads_each_as_the_same_key() {
+            let path = concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../nsh-platform-web/web/nsh.js"
+            );
+            let source = std::fs::read_to_string(path).unwrap();
+            let named = js_table(&source, "NAMED_KEYS");
+            let by_code = js_table(&source, "TV_KEY_CODES");
+            let names = RemoteKey::names();
+            let mut pressed = 0;
+            for name in names.split(", ") {
+                let Some(stroke) = RemoteKey::parse(name).unwrap().keystroke() else {
+                    continue;
+                };
+                let Some((key, _, vk)) = tv_key_event(stroke.key) else {
+                    continue;
+                };
+                let code = named[&key];
+                assert_eq!(by_code.get(&vk.to_string()), Some(&code), "{name}");
+                pressed += 1;
+            }
+            assert_eq!(pressed, 15);
+        }
     }
 }
