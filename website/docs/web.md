@@ -310,7 +310,7 @@ const player = await createPlayer(document.querySelector("#phone"), {
   wasm: "./nsh.wasm",
   assetBase: "./assets/",   // where `asset:/…` URIs (image imports) are served from
   // dark: true,            // force an appearance; otherwise it follows the system
-  // idiom: "phone",        // force "phone", "pad" or "desktop"; otherwise the pointer and the size decide
+  // idiom: "phone",        // force "phone", "pad", "desktop" or "tv" (a page on a TV); otherwise the pointer and the size decide
   // history: false,        // pages and dialogs as browser history entries; by default only when the app is the page, not in an iframe
   // dialogs: "viewport",   // Dialog, Sheet and AlertDialog over the whole browser window; by default over the container
 });
@@ -412,6 +412,7 @@ The module is copied as it is, so it imports other code by absolute URL. The app
 
 - `"desktop"`: a mouse (a fine pointer that hovers) and a container at least 600 points wide. `platform.desktop` is `true`, `platform.select` picks `desktop` and `desktop={{…}}` props apply.
 - `"pad"`: a touch screen whose short side is at least 600 points; `"phone"` otherwise. These are mobile: `platform.select` picks `mobile`.
+- `"tv"`: only when the page says so, with the player's `idiom: "tv"` (a TV's browser cannot be told from its pointer: a Tizen `.wgt` page passes it). `platform.tv` is `true`, `platform.select` picks `tv` (then `mobile`) and `tv={{…}}` props apply; a TV is not a desktop.
 
 The idiom is decided when the app starts and stays the same while it runs, as on every platform; a narrow desktop window is still a desktop, laid out for its `windowSize()`. `web={{…}}` props, `platform.select({ web })` and `web:` classes apply in browsers only; `ios={{…}}`, `native` and `ios:` do not apply there.
 

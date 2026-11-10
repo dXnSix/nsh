@@ -128,7 +128,7 @@ The cases are grouped by domain (`base`, `core`, `events`, `layout`, `paint`, `p
 each. The domain's `App.tsx` imports every case and shows one at a time: the script taps `id:case-<case>` (one of the
 one-point views over the top left corner, out of the layout) and checks that case, then the next. What applies to a
 whole app has a domain of its own: the platform (`android`; `macos`, which also declares capabilities; `browser`, a
-desktop browser with the user's text size at 2; `terminal`, the Terminal idiom on Linux) and `nsh.json`'s settings (the `layout` domain's theme spacing, the
+desktop browser with the user's text size at 2; `terminal`, the Terminal idiom on Linux; `tv`, the TV idiom on Android; `tizen`, a native Tizen app) and `nsh.json`'s settings (the `layout` domain's theme spacing, the
 `base` domain's status bar). A case goes where its platform and settings are, and where they change nothing its
 neighbors check. An app whose `nsh.json` declares `capabilities` runs with the `capabilities.json` and `app.json` its
 build wrote and a new, empty data directory, so a script checks what a grant allows and what stays refused (the
@@ -173,7 +173,8 @@ screen, `absent <text>` checks one is gone, `tap id:<testID>` / `label:<label>` 
 nearest pressable ancestor; `span:<text>` the link or pressable span where `<text>` starts; `parent:<selector>` the
 view around the one it names, a component's popup by the app's content in it, and `below:<selector>` its sibling
 below it, a popup's backdrop), `wait <ms>` runs timers, and `viewport <w> <h>` and `platform <os>` (first) size the
-screen and pick the platform whose `ios={{…}}` / `android={{…}}` / `macos={{…}}` / `desktop={{…}}` / `web={{…}}` props apply, and
+screen and pick the platform whose `ios={{…}}` / `android={{…}}` / `macos={{…}}` / `desktop={{…}}` / `web={{…}}` props apply (and
+its idiom: `platform android tv` is a TV, where `tv={{…}}` props apply), and
 `fontscale <scale>` sets the user's text size. What a view looks like is checked as the platform receives it:
 `frame <selector> <x> <y> <width> <height>` (its layout, in points relative to its parent), `prop` / `noprop` (a host
 prop), `style` / `nostyle` (a paint or text style key), `drawing` / `nodrawing` (an operation of a canvas's latest

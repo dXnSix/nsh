@@ -66,8 +66,13 @@ pub enum Os {
     /// Linux.
     Linux,
     /// A web browser (the WebAssembly runtime): phone, tablet or desktop
-    /// by [`Idiom`].
+    /// by [`Idiom`]. A web app on a TV (a Tizen `.wgt`) is this OS too, in
+    /// the TV idiom its page tells the player.
     Web,
+    /// Tizen, Samsung's TV OS, natively (a build for a
+    /// `target_vendor = "tizen"` target, whose `target_os` is `linux`): a
+    /// TV ([`Idiom::Tv`], [`Idiom::default_on`]), never a desktop.
+    Tizen,
 }
 
 impl Os {
@@ -80,6 +85,7 @@ impl Os {
             Os::Windows => "windows",
             Os::Linux => "linux",
             Os::Web => "web",
+            Os::Tizen => "tizen",
         }
     }
 
@@ -103,9 +109,12 @@ impl Os {
 
 impl Default for Os {
     /// The mobile OS of this build (headless runs, `nsh test`, behave as iOS); desktop
-    /// backends set theirs.
+    /// backends set theirs. A Tizen build (`target_vendor = "tizen"`, whose
+    /// `target_os` is `linux`) is Tizen's.
     fn default() -> Self {
-        if cfg!(target_os = "android") {
+        if cfg!(target_vendor = "tizen") {
+            Os::Tizen
+        } else if cfg!(target_os = "android") {
             Os::Android
         } else {
             Os::Ios
@@ -124,7 +133,10 @@ pub enum Idiom {
     /// UIKit's Mac idiom (Mac Catalyst optimized for Mac). Catalyst runs
     /// the iOS backend, so this idiom is mobile, not [`Idiom::Desktop`].
     Mac,
-    /// A TV.
+    /// A TV: a 10-foot screen driven by a remote, on any OS (an Android
+    /// TV, a TV's browser, Tizen, where it is the default). Never desktop
+    /// ([`Idiom::desktop_on`]): apps branch on it with `platform.tv` /
+    /// `tv={{…}}` ([`Environment::tv`]).
     Tv,
     /// Desktop: a desktop backend (macOS, Windows, Linux), or a browser with
     /// a mouse and a wide viewport ([`Idiom::desktop_on`]). Mac Catalyst is
@@ -138,28 +150,49 @@ pub enum Idiom {
 impl Idiom {
     /// Whether desktop behavior applies on `os` in this idiom, NSH's one
     /// definition of desktop: a desktop OS (macOS, Windows, Linux), a
-    /// browser in the desktop idiom, or a terminal. `desktop={{…}}` props,
-    /// `platform.select({ desktop })` and `platform.desktop` all follow it,
-    /// and so does `platform.idiom === "desktop"` outside a terminal
+    /// browser in the desktop idiom, or a terminal; never the TV idiom,
+    /// which is not a desktop on any OS, and never Tizen in any idiom but
+    /// a terminal's. `desktop={{…}}` props, `platform.select({ desktop })`
+    /// and `platform.desktop` all follow it, and so does
+    /// `platform.idiom === "desktop"` outside a terminal
     /// ([`Idiom::reported_on`]).
     pub fn desktop_on(self, os: Os) -> bool {
-        os.is_desktop() || (os == Os::Web && self == Idiom::Desktop) || self == Idiom::Terminal
+        self != Idiom::Tv
+            && (os.is_desktop()
+                || (os == Os::Web && self == Idiom::Desktop)
+                || self == Idiom::Terminal)
     }
 
     /// The idiom apps see on `os` (TS: `platform.idiom`): [`Idiom::Terminal`]
     /// in a terminal, else [`Idiom::Desktop`] exactly where
     /// [`Idiom::desktop_on`] holds, so that `"desktop"` agrees with desktop
     /// behavior whatever a platform (or a test) set. Elsewhere this idiom,
-    /// and [`Idiom::Phone`] for [`Idiom::Desktop`] on a mobile OS.
+    /// and the OS's own ([`Idiom::default_on`]: [`Idiom::Phone`] on a
+    /// mobile OS, [`Idiom::Tv`] on Tizen) for [`Idiom::Desktop`].
     pub fn reported_on(self, os: Os) -> Idiom {
         if self == Idiom::Terminal {
             Idiom::Terminal
         } else if self.desktop_on(os) {
             Idiom::Desktop
         } else if self == Idiom::Desktop {
-            Idiom::Phone
+            Idiom::default_on(os)
         } else {
             self
+        }
+    }
+
+    /// The idiom of `os` where nothing tells another: [`Idiom::Desktop`]
+    /// on the desktop OSes ([`Os::is_desktop`]), [`Idiom::Tv`] on Tizen,
+    /// [`Idiom::Phone`] elsewhere (iOS, Android, a browser until its page
+    /// or the pointer tells). [`Environment::default`] takes this build's
+    /// ([`Os::default`]).
+    pub fn default_on(os: Os) -> Idiom {
+        if os.is_desktop() {
+            Idiom::Desktop
+        } else if os == Os::Tizen {
+            Idiom::Tv
+        } else {
+            Idiom::Phone
         }
     }
 }
@@ -315,6 +348,15 @@ impl Environment {
     pub fn reported_idiom(&self) -> Idiom {
         self.idiom.reported_on(self.os)
     }
+
+    /// The app runs on a TV: the TV idiom ([`Environment::reported_idiom`]
+    /// is [`Idiom::Tv`]: Tizen's in the desktop idiom too), on any OS (TS:
+    /// `platform.tv`, `tv={{…}}` props, `platform.select({ tv })`). A TV is
+    /// not a desktop ([`Environment::desktop`] is false), so what is not
+    /// TV-specific behaves as on mobile.
+    pub fn tv(&self) -> bool {
+        self.reported_idiom() == Idiom::Tv
+    }
 }
 
 impl Default for Environment {
@@ -335,7 +377,7 @@ impl Default for Environment {
             os: Os::default(),
             platform: None,
             os_version: (0, 0),
-            idiom: Idiom::Phone,
+            idiom: Idiom::default_on(Os::default()),
             apple_keyboard: false,
             ctrl_for_command: false,
             locale: Locale::EN_US,
@@ -1328,7 +1370,7 @@ mod tests {
             (Os::MacOs, Idiom::Desktop, true),
             (Os::Windows, Idiom::Desktop, true),
             (Os::Linux, Idiom::Desktop, true),
-            // A desktop OS is desktop whatever idiom it was given.
+            // A desktop OS is desktop whatever idiom it was given, but a TV.
             (Os::Linux, Idiom::Phone, true),
             (Os::Web, Idiom::Desktop, true),
             (Os::Web, Idiom::Pad, false),
@@ -1356,6 +1398,119 @@ mod tests {
         );
         assert!(!Os::MacOs.is_catalyst() && !Os::Web.is_catalyst());
         assert_eq!(Os::Ios.is_catalyst(), cfg!(target_abi = "macabi"));
+    }
+
+    #[test]
+    fn the_tv_idiom_is_a_tv_and_never_a_desktop_on_any_os() {
+        for os in [
+            Os::MacOs,
+            Os::Windows,
+            Os::Linux,
+            Os::Ios,
+            Os::Android,
+            Os::Web,
+        ] {
+            let env = Environment {
+                os,
+                idiom: Idiom::Tv,
+                ..Environment::default()
+            };
+            assert!(env.tv(), "{os:?}");
+            assert!(!env.desktop(), "{os:?}");
+            assert_eq!(env.reported_idiom(), Idiom::Tv, "{os:?}");
+        }
+        for idiom in [Idiom::Phone, Idiom::Pad, Idiom::Desktop, Idiom::Terminal] {
+            let env = Environment {
+                os: Os::Web,
+                idiom,
+                ..Environment::default()
+            };
+            assert!(!env.tv(), "{idiom:?}");
+        }
+    }
+
+    /// Tizen natively: its own OS, `"tizen"`, a TV by default and
+    /// never a desktop; a Tizen web app stays `Os::Web`.
+    mod tizen {
+        use crate::keymap::{Keystroke, apple_keys};
+        use crate::platform::{Environment, Idiom, Os};
+
+        #[test]
+        fn tizen_is_its_own_os_and_not_a_desktop_one() {
+            assert_eq!(Os::Tizen.name(), "tizen");
+            assert!(!Os::Tizen.is_desktop());
+            assert!(!Os::Tizen.is_catalyst());
+            // Keys follow the PC conventions, as on Linux.
+            assert!(!apple_keys(Os::Tizen, false));
+            let stroke = Keystroke::parse("mod+k", Os::Tizen).unwrap();
+            assert_eq!(stroke, Keystroke::parse("ctrl+k", Os::Linux).unwrap());
+        }
+
+        #[test]
+        fn tizen_is_never_a_desktop_in_a_device_idiom() {
+            for idiom in [
+                Idiom::Phone,
+                Idiom::Pad,
+                Idiom::Mac,
+                Idiom::Tv,
+                Idiom::Desktop,
+            ] {
+                let env = Environment {
+                    os: Os::Tizen,
+                    idiom,
+                    ..Environment::default()
+                };
+                assert!(!idiom.desktop_on(Os::Tizen), "{idiom:?}");
+                assert!(!env.desktop(), "{idiom:?}");
+                assert_ne!(env.reported_idiom(), Idiom::Desktop, "{idiom:?}");
+            }
+            // A terminal is a desktop on any OS, the one on a Tizen box too.
+            assert!(Idiom::Terminal.desktop_on(Os::Tizen));
+        }
+
+        #[test]
+        fn tizen_is_a_tv_by_default() {
+            assert_eq!(Idiom::default_on(Os::Tizen), Idiom::Tv);
+            // The desktop idiom a platform set where it does not apply
+            // reads as the OS's own.
+            assert_eq!(Idiom::Desktop.reported_on(Os::Tizen), Idiom::Tv);
+            assert_eq!(Idiom::Desktop.reported_on(Os::Ios), Idiom::Phone);
+            let desktop = Environment {
+                os: Os::Tizen,
+                idiom: Idiom::Desktop,
+                ..Environment::default()
+            };
+            assert!(desktop.tv(), "the idiom it reports, `platform.tv` agrees");
+            let env = Environment {
+                os: Os::Tizen,
+                idiom: Idiom::default_on(Os::Tizen),
+                ..Environment::default()
+            };
+            assert!(env.tv() && !env.desktop());
+            assert_eq!(env.platform_name(), "tizen");
+            for (os, idiom) in [
+                (Os::MacOs, Idiom::Desktop),
+                (Os::Windows, Idiom::Desktop),
+                (Os::Linux, Idiom::Desktop),
+                (Os::Ios, Idiom::Phone),
+                (Os::Android, Idiom::Phone),
+                // A Tizen web app is a browser, a TV by what its page says.
+                (Os::Web, Idiom::Phone),
+            ] {
+                assert_eq!(Idiom::default_on(os), idiom, "{os:?}");
+            }
+        }
+
+        #[test]
+        fn tizen_builds_report_tizen() {
+            // A Tizen target is `target_os = "linux"`: the vendor decides.
+            let tizen = cfg!(target_vendor = "tizen");
+            assert_eq!(Os::default() == Os::Tizen, tizen);
+            let env = Environment::default();
+            assert_eq!(env.os, Os::default());
+            assert_eq!(env.idiom, Idiom::default_on(Os::default()));
+            assert_eq!(env.tv(), tizen);
+        }
     }
 
     #[test]

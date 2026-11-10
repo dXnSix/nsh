@@ -807,14 +807,15 @@ fn platform(cx: *mut JsContext) -> JsValue {
             (c"version", string(cx, &os_version(&e))),
             (c"idiom", string(cx, idiom(&e))),
             (c"desktop", boolean(e.desktop())),
+            (c"tv", boolean(e.tv())),
             (c"catalyst", boolean(e.os.is_catalyst())),
             (c"select", select),
         ],
     )
 }
 
-/// `platform.select(spec)`: this OS's value, else `mobile` / `desktop`,
-/// else `native` (not on the web), else `default`.
+/// `platform.select(spec)`: this OS's value, else `tv` (on a TV), else
+/// `mobile` / `desktop`, else `native` (not on the web), else `default`.
 unsafe extern "C" fn platform_select(
     cx: *mut JsContext,
     _this: JsValue,
@@ -828,10 +829,11 @@ unsafe extern "C" fn platform_select(
     }
     let env = current(cx);
     let kind = if env.desktop() { "desktop" } else { "mobile" };
-    let keys = [env.os.name(), kind, "native", "default"];
+    let keys = [env.os.name(), "tv", kind, "native", "default"];
     for key in keys
         .into_iter()
         .filter(|k| *k != "native" || env.os != Os::Web)
+        .filter(|k| *k != "tv" || env.tv())
     {
         let key = std::ffi::CString::new(key).unwrap_or_default();
         let v = unsafe { qjs::JS_GetPropertyStr(cx, spec, key.as_ptr()) };
@@ -934,8 +936,15 @@ pub(crate) const DEVICE_TYPES: &str = r#"export interface PlatformSelectSpec<T> 
   windows?: T;
   linux?: T;
   web?: T;
+  /** A native Tizen app (`platform.os` is `"tizen"`, a TV); a Tizen web
+   * app (`.wgt`) looks for `web`. */
+  tizen?: T;
+  /** Where `platform.tv` is true: the TV idiom, on any OS (Android TV, a
+   * TV's browser); looked up after the OS's own key, before `mobile`. */
+  tv?: T;
   /** Where `platform.desktop` is false: iOS (Mac Catalyst included),
-   * Android, and browsers in the phone or tablet idiom. */
+   * Android, browsers in the phone or tablet idiom, and TVs (Tizen
+   * included). */
   mobile?: T;
   /** Where `platform.desktop` is true: macOS, Windows, Linux, browsers in
    * the desktop idiom, and terminals. */
@@ -981,12 +990,15 @@ export interface LocaleSettings {
 
 export interface PlatformInfo {
   /** The platform the app runs on: the OS's name on NSH's own platforms
-   * (`"ios"`, `"android"`, `"macos"`, `"windows"`, `"linux"`, `"web"`), or
+   * (`"ios"`, `"android"`, `"macos"`, `"windows"`, `"linux"`, `"web"`,
+   * `"tizen"`), or
    * the name of a platform built outside NSH (`"miniprogram"`), whose OS is
    * `os`: handle a name you do not know. */
   readonly name: OS | (string & {});
   /** The operating system (`"ios"`, `"android"`, `"macos"`, `"windows"`,
-   * `"linux"`, `"web"`). */
+   * `"linux"`, `"web"`, `"tizen"`). A native Tizen app is `"tizen"`, in
+   * the TV idiom; a Tizen web app (`.wgt`) is `"web"`, a TV by what its
+   * page tells the player. */
   readonly os: OS;
   /** iOS and desktops: the OS version (`"17.5"`); Android: the API level
    * (`"35"`); the web: `"0.0"`. */
@@ -994,22 +1006,28 @@ export interface PlatformInfo {
   /** The kind of device. `"terminal"` in a terminal: drawn on a grid of
    * character cells, with desktop behavior (`desktop` true; `os` is still
    * the machine's). Elsewhere `"desktop"` exactly where `desktop` is true,
-   * else the idiom the system reports: `"phone"`, `"pad"`, `"tv"`, and
-   * `"mac"`, UIKit's Mac idiom under Mac Catalyst (a mobile idiom). */
+   * else the idiom the system reports: `"phone"`, `"pad"`, `"tv"` (on any
+   * OS: `tv` is true), and `"mac"`, UIKit's Mac idiom under Mac Catalyst (a
+   * mobile idiom). */
   readonly idiom: "phone" | "pad" | "mac" | "tv" | "desktop" | "terminal";
   /** Desktop behavior applies, NSH's one definition of desktop: macOS,
    * Windows, Linux, browsers in the desktop idiom (a mouse and a wide
-   * viewport), and terminals. `desktop={{…}}` props and `select({ desktop })`
-   * follow it. Mac Catalyst runs the iOS backend and is mobile.
-   * `nsh/desktop`'s `isAvailable` is narrower: its window and menu APIs work
-   * on the desktop OSes, not in browsers. */
+   * viewport), and terminals; never a TV. `desktop={{…}}` props and
+   * `select({ desktop })` follow it. Mac Catalyst runs the iOS backend and
+   * is mobile. `nsh/desktop`'s `isAvailable` is narrower: its window and
+   * menu APIs work on the desktop OSes, not in browsers. */
   readonly desktop: boolean;
+  /** The app runs on a TV: the TV idiom (`idiom` is `"tv"`), on any OS
+   * (Android TV, Tizen, a TV's browser, whose page says so). `tv={{…}}` props and
+   * `select({ tv })` follow it. A TV is not a desktop (`desktop` is false),
+   * so the rest behaves as on mobile. */
+  readonly tv: boolean;
   /** The app runs under Mac Catalyst, in the Mac or the iPad idiom
    * (`os` is `"ios"`, `desktop` false). */
   readonly catalyst: boolean;
-  /** The value for this platform: its OS (`ios`, `macos`, `web`, ...),
-   * else `desktop` / `mobile` (by `platform.desktop`), else `native` (not
-   * on the web), else `default`. */
+  /** The value for this platform: its OS (`ios`, `macos`, `web`, `tizen`,
+   * ...), else `tv` on a TV (`platform.tv`), else `desktop` / `mobile` (by
+   * `platform.desktop`), else `native` (not on the web), else `default`. */
   select<T>(spec: PlatformSelectSpec<T>): T | undefined;
 }
 "#;
@@ -1035,3 +1053,6 @@ pub(crate) const ACCESSIBILITY_EXPORTS: &[Item] = &[
         ),
     ),
 ];
+
+#[cfg(test)]
+mod tests;

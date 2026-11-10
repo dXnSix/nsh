@@ -1,6 +1,6 @@
 ---
 title: 平台特定代码
-description: 为手机、桌面和浏览器编写同一个应用：ios={{}} / android={{}} / macos={{}} / desktop={{}} / web={{}} 中的平台专属属性，nsh/mobile 与 nsh/desktop 模块，platform.os 与 platform.select，以及平台相关的 Tailwind 变体。
+description: 为手机、桌面、电视和浏览器编写同一个应用：ios={{}} / android={{}} / macos={{}} / desktop={{}} / web={{}} / tv={{}} 中的平台专属属性，nsh/mobile 与 nsh/desktop 模块，platform.os、platform.tv 与 platform.select，以及平台相关的 Tailwind 变体。
 order: 17
 group: platforms
 ---
@@ -12,15 +12,44 @@ group: platforms
 | Rust | TSX | 用途 |
 |---|---|---|
 | [构建方法（`.ripple(..)`、`.input_accessory(..)`）](#平台专属属性) | [`ios={{…}}`、`android={{…}}`、`macos={{…}}`、`desktop={{…}}`、`web={{…}}`](#平台专属属性) | 只有一个平台才有的属性。 |
+| [`.when(is_tv(), ..)`](#电视) | [`tv={{…}}`、`platform.tv`](#电视) | 电视上的属性和值，与操作系统无关。 |
 | [`on_back_press`、`nsh_core::element::desktop`](#平台模块) | [`nsh/mobile`、`nsh/desktop`](#平台模块) | 只有移动平台或只有桌面才有的 API。 |
-| [`os()`、`idiom()`、`is_desktop()`](#platformos-与-platformselect) | [`platform.os`、`platform.desktop`、`platform.select`](#platformos-与-platformselect) | 按平台选择值或代码。 |
+| [`os()`、`idiom()`、`is_desktop()`、`is_tv()`](#platformos-与-platformselect) | [`platform.os`、`platform.desktop`、`platform.tv`、`platform.select`](#platformos-与-platformselect) | 按平台选择值或代码。 |
 | [`.when(os() == Os::Ios, ..)`](#tailwind-中的平台变体) | [`ios:` / `android:` / `web:` 类](#tailwind-中的平台变体) | 按平台设置样式。 |
 
 ## 桌面与移动端
 
-每个平台不是桌面就是移动端，判断规则只有一条。桌面是 macOS、Windows、Linux，以及桌面形态的浏览器（有鼠标且窗口较宽，见 [Web](./web.md)）。移动端是 iOS、Android，以及手机或平板形态的浏览器；Mac Catalyst 运行 iOS 后端，因此也属于移动端，适用 `ios={{…}}` 属性。`desktop={{…}}` 属性、`platform.select({ desktop, mobile })`、`platform.desktop` 和 `platform.idiom === "desktop"` 都遵循这条规则，`nsh/base` 的组件（菜单在桌面上是弹出层，在移动端是底部面板）和 Rust 中的 `is_desktop()` 也一样。
+每个平台不是桌面就是移动端，判断规则只有一条。桌面是 macOS、Windows、Linux，以及桌面形态的浏览器（有鼠标且窗口较宽，见 [Web](./web.md)）。移动端是 iOS、Android、手机或平板形态的浏览器，以及[电视](#电视)；Mac Catalyst 运行 iOS 后端，因此也属于移动端，适用 `ios={{…}}` 属性。`desktop={{…}}` 属性、`platform.select({ desktop, mobile })`、`platform.desktop` 和 `platform.idiom === "desktop"` 都遵循这条规则，`nsh/base` 的组件（菜单在桌面上是弹出层，在移动端是底部面板）和 Rust 中的 `is_desktop()` 也一样。
 
 `nsh/desktop` 的 `isAvailable` 回答的是一个更窄的问题：这个模块的窗口和菜单 API 是否可用，它们在 macOS、Windows 和 Linux 上可用。布局、密度和输入方式用 `platform.desktop` 判断，调用 `Window` 和 `Menu` 用 `isAvailable` 判断。
+
+## 电视
+
+电视是独立的一类设备，与操作系统无关：Android TV、电视上的浏览器（页面通过 `idiom: "tv"` 告诉 [Web 播放器](./web.md#浏览器作为平台)）、电视平台。应用要判断的是电视，而不是操作系统：在电视上 `platform.tv`（Rust 中的 `is_tv()`）为 `true`，`platform.idiom` 为 `"tv"`，`tv={{…}}` 属性生效，`platform.select` 在该操作系统自己的键之后、`desktop` / `mobile` 之前查找 `tv`。电视不是桌面（`platform.desktop` 为 `false`），所以其余行为都与移动端相同：`nsh/base` 的弹出层像在手机上一样打开。
+
+在三星电视上，原生 Tizen 应用有自己的操作系统：`platform.os` 为 `"tizen"`（Rust 中的 `Os::Tizen`），始终是电视界面风格，从不是桌面，`platform.select({ tizen })` 在 `tv` 之前为它取值。Tizen Web 应用（`.wgt`）运行在电视的浏览器里：那里 `platform.os` 为 `"web"`，`platform.tv` 由页面设为 `true`。判断电视用 `platform.tv`，只有原生应用独有的行为才判断 `"tizen"`。
+
+没有只属于电视的属性，所以 `tv={{…}}` 接受每个元素都接受的属性（类、样式、状态样式、无障碍、焦点、事件处理函数），只在电视上设置它们：不用写第二个组件就能做 10 英尺布局。在 Rust 中，同样的选择写作 `.when(is_tv(), ..)`。
+
+```rust tabs
+use nsh_core::prelude::*;
+
+view()
+    .p_4()
+    .when(is_tv(), |v| v.p_8())
+    .focusable(true)
+    .child(text(if is_tv() { "Press OK to play" } else { "Tap to play" }))
+```
+
+```tsx tabs
+import { platform, Text, View } from "nsh";
+
+<View class="p-4" tv={{ class: "p-8", focusStyle: { transform: [{ scale: 1.05 }] } }} focusable>
+  <Text>{platform.select({ tv: "Press OK to play", default: "Tap to play" })}</Text>
+</View>
+```
+
+同一个键既写在 `tv={{…}}` 中又写在元素本身上时，以最后设置的为准：每个属性只放在一个地方。
 
 ## 平台专属属性
 
@@ -222,7 +251,7 @@ function PhotoViewer() {
 
 ## platform.os 与 platform.select
 
-Rust 中的 `os()` 和 TSX 中 `nsh` 的常量 `platform` 告诉你应用运行在哪里：`Os::Ios`、`Os::Android`、`Os::MacOs`、`Os::Windows`、`Os::Linux` 或 `Os::Web`，`platform.os` 为 `"ios"`、`"android"`、`"macos"`、`"windows"`、`"linux"` 或 `"web"`（Mac Catalyst 为 `"ios"`，无论哪种形态 `platform.catalyst` 都为真；[macOS 后端](./macos.md)为 `"macos"`，[Linux 后端](./linux.md)为 `"linux"`，[Windows 后端](./windows.md)为 `"windows"`，它们的元素会应用 `desktop` 属性；[浏览器](./web.md)为 `"web"`，`platform.desktop` 为 `true` 时也会应用 `desktop` 属性）。Rust 中的 `platform_name()` 和 TSX 中的 `platform.name` 是平台本身的名字：在 NSH 自带的平台上就是系统名，[在 NSH 之外构建的平台](./platform-extensions.md)则是它自己的名字（`"miniprogram"`），此时 `platform.os` 是它所运行设备的系统。版本、界面风格等见[设备与环境](./device-and-environment.md#平台)。
+Rust 中的 `os()` 和 TSX 中 `nsh` 的常量 `platform` 告诉你应用运行在哪里：`Os::Ios`、`Os::Android`、`Os::MacOs`、`Os::Windows`、`Os::Linux`、`Os::Web` 或 `Os::Tizen`，`platform.os` 为 `"ios"`、`"android"`、`"macos"`、`"windows"`、`"linux"`、`"web"` 或 `"tizen"`（电视上的原生 Tizen 应用，见[电视](#电视)）（Mac Catalyst 为 `"ios"`，无论哪种形态 `platform.catalyst` 都为真；[macOS 后端](./macos.md)为 `"macos"`，[Linux 后端](./linux.md)为 `"linux"`，[Windows 后端](./windows.md)为 `"windows"`，它们的元素会应用 `desktop` 属性；[浏览器](./web.md)为 `"web"`，`platform.desktop` 为 `true` 时也会应用 `desktop` 属性）。Rust 中的 `platform_name()` 和 TSX 中的 `platform.name` 是平台本身的名字：在 NSH 自带的平台上就是系统名，[在 NSH 之外构建的平台](./platform-extensions.md)则是它自己的名字（`"miniprogram"`），此时 `platform.os` 是它所运行设备的系统。版本、界面风格等见[设备与环境](./device-and-environment.md#平台)。
 
 ```rust tabs
 use nsh_core::{element::Os, prelude::*};
@@ -242,7 +271,7 @@ if (platform.os === "android") {
 
 ### platform.select
 
-在 Rust 中用 `match os()` 选择值，桌面用 `is_desktop()`。在 TSX 中，`platform.select(spec)` 返回当前平台对应的值。它依次查找该操作系统自己的键，然后按[上面的规则](#桌面与移动端)（`platform.desktop`）查找 `desktop` 或 `mobile`，再是 `native`（除 Web 外的所有平台），最后是 `default`：
+在 Rust 中用 `match os()` 选择值，桌面用 `is_desktop()`，电视用 `is_tv()`。在 TSX 中，`platform.select(spec)` 返回当前平台对应的值。它依次查找该操作系统自己的键，然后在[电视](#电视)上（`platform.tv`）查找 `tv`，再按[上面的规则](#桌面与移动端)（`platform.desktop`）查找 `desktop` 或 `mobile`，再是 `native`（除 Web 外的所有平台），最后是 `default`：
 
 ```rust tabs
 use nsh_core::{element::Os, prelude::*};
