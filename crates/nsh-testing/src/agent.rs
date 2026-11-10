@@ -1147,7 +1147,9 @@ pub trait Native: Send + Sync {
     /// [`Native::back`] does, and the other keys are the hardware
     /// keyboard's keys of the same name ([`Native::press_keys`]); a platform
     /// whose remote reports them otherwise (GPUI on Tizen, a TV's browser)
-    /// presses them so.
+    /// presses them so. A key the platform's keyboard lacks fails, naming
+    /// the key and the platform (the media and TV keys on macOS and iOS, all
+    /// but Windows' four `VK_MEDIA_*` keys on Windows).
     fn press_remote_key(&self, key: RemoteKey) -> Result<(), String> {
         match key.keystroke() {
             Some(stroke) => self.press_keys(&stroke.to_string()),

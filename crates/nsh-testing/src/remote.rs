@@ -1,6 +1,7 @@
 //! A TV remote's keys, as `nsh/test`'s `app.keyboard.remote(<name>)`
-//! names them ([`RemoteKey`]): the keys a remote has and apps hear, on
-//! every platform's test agent and headless.
+//! names them ([`RemoteKey`]): the keys a remote has and apps hear,
+//! headless and on the platforms' test agents (those whose keyboards lack
+//! a key fail it: `Native::press_remote_key`).
 //!
 //! They are the remote's navigation keys (the arrows, OK, Back) and the
 //! media and TV keys `nsh_core::keymap` names ([`Key::MediaPlayPause`] to
