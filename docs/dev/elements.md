@@ -169,9 +169,12 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   press the focused stop only when it takes presses; a stop that takes none hears its keys through the keymap (`on_key`
   / `on_key_with`, bound while it is focused, as `DataTable`'s controller does), Return and Space included.
   (`focusable={true}` on a view that takes no presses made nothing focusable before 2026-10-26; with no release
-  recorded, it now means what React Native's `focusable` and the web's `tabIndex={0}` mean.) Windows' and GPUI's
-  arrows move it to the nearest stop in their direction (`focus.rs`, `nsh_core::focus`, as the terminal's do), and
-  Return and Space press the stop they reach; GPUI's Tab stops at every stop in tree order too; iOS and Android move
+  recorded, it now means what React Native's `focusable` and the web's `tabIndex={0}` mean.) The arrows of macOS,
+  Windows, Linux and GPUI move it to the nearest stop in their direction (`focus.rs` on macOS, Windows and GPUI,
+  `key_focus::arrow` on Linux, `nsh_core::focus`, as the terminal's do), and Return and Space press the stop they
+  reach; with nothing focused Left / Right take the first stop and Up / Down the first / last in sight, where the
+  desktops used to scroll (until 2026-11-10 on macOS and Linux); `tests/apps/pressable-focus` checks them with
+  `nsh test --target <macos|linux|windows>`. GPUI's Tab stops at every stop in tree order too; iOS and Android move
   it between inputs.
   What a TV's remote needs goes on top, in `nsh_core::focus::directional` over the same candidates: `autoFocus` (any
   element now, `Prop::AutoFocus`; an input's stays its `InputConfig::auto_focus`, any other view's is

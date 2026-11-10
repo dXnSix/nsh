@@ -34,6 +34,7 @@ mod decor;
 pub mod dev;
 mod file_drop;
 mod file_requests;
+mod focus;
 mod fps;
 mod global_shortcut;
 mod gpu;
