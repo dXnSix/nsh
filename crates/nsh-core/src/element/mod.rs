@@ -68,6 +68,7 @@ pub(crate) mod status_bar;
 mod style;
 mod system;
 pub(crate) mod task;
+mod theme_scope;
 pub mod tokens;
 mod value;
 pub(crate) mod virtual_list;
@@ -103,6 +104,8 @@ pub use nsh_macros::{
 // The core's parts of `nsh_base`'s navigation and dialogs.
 #[doc(hidden)]
 pub use self::host::{modal, screen, stack};
+#[doc(hidden)]
+pub use self::theme_scope::is_theme_scope;
 pub use self::{
     ambient::*,
     animated::{
@@ -183,6 +186,7 @@ pub use self::{
         Quotas, RefuseConnections, Stop, System, codes, io_code,
     },
     task::{Answer, ClipboardImage, DialogAnswer, ImageSize, Task},
+    theme_scope::{ThemeScope, ThemeScopeElement, ThemeScopeProps, theme_scope},
     tokens::{FONT_MONO, FONT_SANS, ThemeTokens, Token, TokenSource, Tokens},
     value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},
     virtual_list::{ListLayout, ViewableItems, VirtualList, virtual_list},

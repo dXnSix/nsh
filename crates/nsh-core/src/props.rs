@@ -384,6 +384,11 @@ pub struct ViewProps {
     /// and a double or triple click selects across them
     /// ([`crate::selection::SelectionTexts::continues`]).
     pub continues_text: bool,
+    /// The appearance the view and the views in it are shown in, whatever
+    /// the surface's ([`crate::element::ThemeScope`]): the platform shows
+    /// its own controls in the view (a text input's menus and keyboard,
+    /// system materials) light or dark. `System`: as the view around it.
+    pub appearance: crate::platform::Appearance,
 }
 
 impl ViewProps {

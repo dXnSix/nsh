@@ -103,6 +103,9 @@ impl Modules {
                 component.set("name", &Value::string(spec.name)?)?;
                 component.set("export", &Value::string(&spec.export)?)?;
                 component.set("lazy", &Value(if spec.lazy_children { 3 } else { 2 }))?;
+                // A `ThemeScope` provides its scope to what it renders.
+                let scope = nsh_core::element::is_theme_scope(spec.name);
+                component.set("scope", &Value(if scope { 3 } else { 2 }))?;
                 let mut props = Vec::new();
                 for prop in &spec.props {
                     let value = Value::object()?;

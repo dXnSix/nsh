@@ -66,6 +66,7 @@ mod storage;
 mod system;
 mod test_ui;
 mod theme;
+mod theme_scope;
 mod url_scheme;
 mod websocket;
 

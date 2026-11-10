@@ -71,6 +71,7 @@ pub fn registries() -> &'static [Registry] {
             .module::<storage::Storage>()
             .module::<host::Host>()
             .module::<fps::Fps>()
+            .register::<crate::element::ThemeScope>()
             // The environment's accessors and hooks, made by `nsh-js`.
             .reexport(&["safeArea", "safeAreaInsets", "keyboardFrame"], &[]);
         let mut mobile = Registry::runtime("nsh/mobile");

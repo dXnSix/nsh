@@ -3678,7 +3678,7 @@
 
 //#endregion
 //#region ../nsh-platform-web/web/browser/components.js
-	function createComponents(invoke, values, reactive, dom) {
+	function createComponents(invoke, values, reactive, dom, environment) {
 		const states = /* @__PURE__ */ new WeakMap();
 		const hostProps = [
 			"class",
@@ -3771,7 +3771,8 @@
 				reactive.untracked(() => props.ref(api));
 			}
 			if (spec.props.some((prop) => prop.kind === "children") && "children" in props) {
-				const children = spec.lazy ? rt.cond(state.lazy, () => props.children) : reactive.computed(() => props.children);
+				const read = spec.scope ? () => environment.inScope(props, () => props.children) : () => props.children;
+				const children = spec.lazy ? rt.cond(state.lazy, read) : reactive.computed(read);
 				rt.insert(node, children, anchor);
 			}
 			return node;
@@ -5223,6 +5224,12 @@
 			}
 		};
 		let appearance = "system", systemScheme = "light";
+		const scope = reactive.context(void 0);
+		let scoped = false;
+		const shownScheme = () => {
+			const around = scoped && scope();
+			return around ? around() : fields.colorScheme();
+		};
 		const setColorScheme = (scheme) => {
 			if (![
 				"light",
@@ -5235,7 +5242,7 @@
 		};
 		const device = {
 			windowSize: () => fields.window(),
-			colorScheme: () => fields.colorScheme(),
+			colorScheme: () => shownScheme(),
 			setColorScheme,
 			fontScale: () => fields.fontScale(),
 			pixelRatio: () => fields.pixelRatio(),
@@ -5262,7 +5269,7 @@
 				screenReader: () => fields.screenReader(),
 				token(name) {
 					tokens();
-					return invoke(402, [name, fields.colorScheme() === "dark"]);
+					return invoke(402, [name, shownScheme() === "dark"]);
 				},
 				setTheme(theme) {
 					invoke(406, [theme]);
@@ -5272,6 +5279,20 @@
 			insets,
 			host: () => fields.host(),
 			titleBar: () => fields.titleBar(),
+			inScope(props, children) {
+				const outer = scoped ? scope() : void 0;
+				scoped = true;
+				const shows = reactive.computed(() => {
+					const own = props.appearance;
+					return own === "light" || own === "dark" ? own : outer ? outer() : fields.colorScheme();
+				});
+				return scope.Provider({
+					value: shows,
+					get children() {
+						return children();
+					}
+				});
+			},
 			modules: {
 				"nsh/device": device,
 				"nsh/accessibility": accessibility
