@@ -132,7 +132,8 @@ pub(crate) fn vk_of(key: &str) -> Option<u16> {
         "mediaprevious" => VK_MEDIA_PREV_TRACK,
         "mediastop" => VK_MEDIA_STOP,
         "mediaplaypause" => VK_MEDIA_PLAY_PAUSE,
-        // Ecore's name of Info, which the Tizen platform may pass on.
+        // Ecore's name of Info: the Tizen platform names it `info`, but
+        // passed this name on before it did.
         "xf86info" => virtual_key(Key::Info)?,
         ";" => 0xBA,
         "=" => 0xBB,
