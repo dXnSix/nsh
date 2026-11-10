@@ -3351,12 +3351,14 @@
 			"zoomTo",
 			"scrollToIndex",
 			"scrollToEnd",
+			"reveal",
 			"reload",
 			"goBack",
 			"goForward",
 			"stopLoading",
 			"injectJavaScript",
 			"postMessage",
+			"insertText",
 			"sendInput",
 			"load",
 			"seek"
@@ -3368,6 +3370,14 @@
 				name,
 				argument
 			]);
+		};
+		prototype.evaluate = async function(script, options) {
+			if (typeof script !== "string") throw new TypeError("evaluate expects a script string");
+			if (options !== void 0 && (options === null || typeof options !== "object")) throw new TypeError("evaluate's options must be an object");
+			if (!values.nodeIds.has(this)) throw new TypeError("nsh: not a node");
+			const error = /* @__PURE__ */ new Error("web views evaluate no scripts here");
+			error.code = "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM";
+			throw error;
 		};
 		prototype.setSelection = function(start, end = start) {
 			return call(314, [
@@ -3687,6 +3697,7 @@
 			"hoverStyle",
 			"focusStyle",
 			"focusWithinStyle",
+			"focusVisibleStyle",
 			"disabledStyle",
 			"testID",
 			"tooltip",
@@ -5155,6 +5166,22 @@
 		const keys = Object.keys(a);
 		return keys.length === Object.keys(b).length && keys.every((key) => same(a[key], b[key], depth - 1));
 	}
+	/** `appInfo()`'s object from the build's JSON, its fields typed as
+	* nsh-js's `AppInfo` reads them. */
+	function readAppInfo(json) {
+		let info = {};
+		try {
+			info = JSON.parse(json) ?? {};
+		} catch {}
+		const text = (value) => typeof value === "string" ? value : null;
+		return {
+			id: text(info.id),
+			name: text(info.name),
+			version: text(info.version),
+			build: Number.isFinite(info.build) ? info.build : null,
+			development: info.development === true
+		};
+	}
 	function createEnvironment(reactive, invoke, dom) {
 		const fields = Object.fromEntries(Object.entries({
 			window: {
@@ -5184,6 +5211,7 @@
 			screenReader: false,
 			host: false,
 			lifecycle: "active",
+			shaders: true,
 			localeSettings: {
 				languages: ["en-US"],
 				timeZone: "UTC",
@@ -5241,16 +5269,19 @@
 			localeSettings: () => fields.localeSettings(),
 			lifecycle: () => fields.lifecycle(),
 			platform,
+			shadersAvailable: () => fields.shaders(),
 			fpsEnabled: () => false
 		};
 		const accessibility = {
 			reduceMotion: () => fields.reduceMotion(),
 			screenReaderEnabled: () => fields.screenReader()
 		};
+		let appInfo = readAppInfo("{}");
 		return {
 			api: {
 				...device,
 				...accessibility,
+				appInfo: () => appInfo,
 				safeArea: () => fields.safeArea(),
 				safeAreaInsets: () => insets(),
 				keyboardFrame: () => fields.keyboard(),
@@ -5337,7 +5368,7 @@
 					fields.locale.set(tag);
 				});
 			},
-			setup(tailwind, theme, scheme, statusBar) {
+			setup(tailwind, theme, scheme, statusBar, app) {
 				if (typeof tailwind === "string") dom.rootProp("tailwindTheme", tailwind);
 				if (typeof theme === "string") {
 					dom.rootProp("uiTheme", theme);
@@ -5350,6 +5381,7 @@
 					"system"
 				].includes(scheme)) setColorScheme(scheme);
 				if (typeof statusBar === "string") invoke(405, [statusBar]);
+				if (typeof app === "string") appInfo = readAppInfo(app);
 			}
 		};
 	}

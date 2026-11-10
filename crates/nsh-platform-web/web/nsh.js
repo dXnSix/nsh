@@ -51,12 +51,15 @@ const ROOT_ID = 1;
 const PRESSED = 1;
 const HOVERED = 2;
 const FOCUSED = 4;
+/** `KeyboardEvent.key`s of modifiers: pressed alone, they leave the input
+ * modality as it is (`inputWith`). */
+const MODALITY_KEYS_SKIPPED = new Set(["Shift", "Control", "Alt", "AltGraph", "Meta", "CapsLock", "Fn", "Hyper", "Super", "OS"]);
 const PRESS_EVENTS = ["onPress", "onLongPress", "onPressIn", "onPressOut"];
 const MOUSE_EVENTS = ["onMouseEnter", "onMouseLeave", "onMouseMove"];
 /** The DOM's `buttons` bits, in the order a held button is named by. */
 const MOUSE_BUTTONS = [[1, "left"], [2, "right"], [4, "middle"], [8, "back"], [16, "forward"]];
 /** The keys whose press or release is reported as a mouse move. */
-const MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta"]);
+const MOUSE_MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta"]);
 // What lays out a field's text, copied to the hidden copy that finds its
 // caret (`caretBounds`).
 const CARET_STYLE = [
@@ -414,6 +417,14 @@ const CODE_CHARS = {
 /** A name for the history entries of one load of the page. */
 function newHistorySession() {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+}
+
+/** The current entry's place in the tab's history (the Navigation API's
+ * `navigation.currentEntry.index`), `null` where the browser has no
+ * Navigation API. */
+function navigationIndex() {
+  const index = globalThis.navigation?.currentEntry?.index;
+  return Number.isInteger(index) && index >= 0 ? index : null;
 }
 
 /** The offset of local time at `ms` (since the epoch) in seconds east of UTC. */
@@ -916,6 +927,8 @@ class Player {
     container.append(this.root);
     this.views = new Map();
     this.mouseTracked = new Set();
+    /** Views listening to `onWheel`; wheels look for none without. */
+    this.wheelTracked = new Set();
     // Shader views (`op_sh`), drawn on one WebGL 2 context (`shaderGl`).
     this.shaderViews = new Set();
     // Of the views' own style rules (`op_css`).
@@ -943,6 +956,11 @@ class Player {
     // Browser blob URLs of the in-memory images (`data:` URIs, blobs) the
     // views show, by the source's URI (`image_bytes`).
     this.inlineImages = new Map();
+    // `svg()`s drawn in their text color: the SVG's text by its address
+    // (a promise while it loads), and its blob URL by address and color
+    // (`svgInColor`).
+    this.svgTexts = new Map();
+    this.coloredSvgs = new Map();
     this.pointers = new Map();
     this.requests = new Map();
     this.websockets = new Map();
@@ -1042,12 +1060,18 @@ class Player {
           // The key names the media type (`data:<type>;nsh-key=…`): browsers
           // draw an SVG blob only with its type.
           const type = uri.startsWith("data:") ? uri.slice(5, uri.indexOf(";")) : "";
-          this.inlineImages.set(uri, URL.createObjectURL(new Blob([this.bytes(dp, dl).slice()], { type })));
+          const blob = URL.createObjectURL(new Blob([this.bytes(dp, dl).slice()], { type }));
+          if (old) this.forgetColoredSvgs(old);
+          this.inlineImages.set(uri, blob);
+          if (type === "image/svg+xml") this.svgTexts.set(blob, new TextDecoder().decode(this.bytes(dp, dl)));
         },
         release_image: (p, l) => {
           const uri = this.str(p, l);
           const url = this.inlineImages.get(uri);
-          if (url) URL.revokeObjectURL(url);
+          if (url) {
+            URL.revokeObjectURL(url);
+            this.forgetColoredSvgs(url);
+          }
           this.inlineImages.delete(uri);
         },
         submit: (p, l) => {
@@ -1555,6 +1579,7 @@ class Player {
     root.append(this.live);
     this.views.clear();
     this.mouseTracked.clear();
+    this.wheelTracked.clear();
     root._id = ROOT_ID;
     root._kind = "root";
     root._events = new Set();
@@ -1906,6 +1931,8 @@ class Player {
       screenColor: typeof window.EyeDropper === "function",
       notifications: typeof window.Notification === "function",
       audio: typeof (window.AudioContext ?? window.webkitAudioContext) === "function",
+      // Shader views draw until the first one finds no WebGL 2 (`shaderGl`).
+      shaders: this._shaderGl !== null,
     };
   }
 
@@ -2153,7 +2180,9 @@ class Player {
     child._removing = false;
     child._leftWith = null;
     const host = parent._layer ?? parent;
-    host.insertBefore(child, before && before.parentNode === host ? before : null);
+    // Appended children stay under a border drawn over them.
+    const last = host._borderOver && host._border?.parentNode === host ? host._border : null;
+    host.insertBefore(child, before && before.parentNode === host ? before : last);
     this.readingChanged(host);
     if (parent._kind === "stack") {
       this.changedStacks.add(parent);
@@ -2197,6 +2226,7 @@ class Player {
     if (!el) return;
     this.views.delete(id);
     this.mouseTracked.delete(id);
+    this.wheelTracked.delete(id);
     if (el._shader) this.dropShader(el);
     if (el._video) {
       // A removed media element keeps playing until it is collected.
@@ -2301,7 +2331,18 @@ class Player {
       el._border.className = `nsh-border ${this.styleClass(border)}`;
       el._border._cornerClass = null;
       if (el._animation["border-color"]) el._border.style.borderColor = el._animation["border-color"];
-      el.append(el._border);
+      // As on iOS and macOS: a view that does not clip has its border under
+      // its child views (a label on an outlined field covers it), over its
+      // own fills (a shader, text runs); a clipping one (a rounded card with
+      // a full-bleed image) has it over its children, as a layer border.
+      const overflow = CLASSES.rules.get(el._class)?.style.overflow;
+      el._borderOver = !!(overflow && overflow !== "visible") || el.classList.contains("nsh-scroll") || el.classList.contains("nsh-clip");
+      let next = null;
+      if (!el._borderOver) {
+        next = el.firstChild;
+        while (next && (next === el._border || next._kind === undefined)) next = next.nextSibling;
+      }
+      if (el._border.nextSibling !== next || el._border.parentNode !== el) el.insertBefore(el._border, next);
     } else if (el._border) {
       el._border.remove();
       el._border = null;
@@ -2523,6 +2564,8 @@ class Player {
     el._events = new Set(events);
     if (el._events.has("onMouseMove")) this.mouseTracked.add(id);
     else this.mouseTracked.delete(id);
+    if (el._events.has("onWheel")) this.wheelTracked.add(id);
+    else this.wheelTracked.delete(id);
     const pressable = PRESS_EVENTS.some((e) => el._events.has(e));
     el._pressable = pressable;
     this.updateFocusable(el);
@@ -2588,6 +2631,13 @@ class Player {
       el.addEventListener("pointerenter", (e) => e.pointerType === "mouse" && this.setState(el, HOVERED, true));
       el.addEventListener("pointerleave", () => this.setState(el, HOVERED, false));
     }
+  }
+
+  /** Tells the core the input modality (0 the keyboard, 1 a pointer);
+   * the engine's control passes on only a change. */
+  inputWith(modality) {
+    // Optional: test stand-ins for the engine may lack it.
+    if (this.wasm) this.call((w) => w.nsh_input_modality?.(modality));
   }
 
   setState(el, bit, on) {
@@ -2885,7 +2935,7 @@ class Player {
    * Any URL the browser loads works: `asset:/` and http(s); `data:` URIs and
    * `blob:` URLs arrive as bytes (`image_bytes`) and show as browser blob URLs.
    */
-  op_img([, id, uri, mode, placeholder, blur, fade, position]) {
+  op_img([, id, uri, mode, placeholder, blur, fade, position, color]) {
     const el = this.view(id);
     if (!el?._img) return;
     const img = el._img;
@@ -2912,7 +2962,29 @@ class Player {
         el._ph = null;
       }
     }
-    const src = this.asset(uri ?? "");
+    let src = this.asset(uri ?? "");
+    // An `svg()`: its `currentColor` is `color`, its text color, written
+    // into a copy of it (an SVG an `<img>` draws sees no page CSS), shown
+    // once that copy is made.
+    if (color && src) {
+      const key = `${src}\n${color}`;
+      if (el._srcKey === key) return;
+      el._srcKey = key;
+      const colored = this.svgInColor(src, color);
+      if (typeof colored !== "string") {
+        colored.then(() => {
+          if (el._srcKey !== key || !el._img) return;
+          el._srcKey = null;
+          this.op_img([, id, uri, mode, placeholder, blur, fade, position, color]);
+        });
+        if (el._src) return;
+        src = "";
+      } else {
+        src = colored;
+      }
+    } else {
+      el._srcKey = null;
+    }
     if (el._src === src) return;
     el._src = src;
     el._failed = false;
@@ -2930,6 +3002,43 @@ class Player {
     // Only an image that had to load fades in (the native backends').
     if (img.complete) img.style.opacity = "";
     this.applyTint(el);
+  }
+
+  /** `src`, an SVG, with its `currentColor` painted `color`: its blob URL,
+   * or a promise while its text loads. An SVG without `currentColor`, or
+   * one that does not load as text, is `src` itself. */
+  svgInColor(src, color) {
+    const key = `${src}\n${color}`;
+    const done = this.coloredSvgs.get(key);
+    if (done) return done;
+    let text = this.svgTexts.get(src);
+    if (text === undefined) {
+      text = fetch(src).then((r) => (r.ok ? r.text() : "")).catch(() => "");
+      this.svgTexts.set(src, text);
+    }
+    const make = (text) => {
+      const url = /currentcolor/i.test(text)
+        ? URL.createObjectURL(new Blob([text.replace(/currentcolor/gi, color)], { type: "image/svg+xml" }))
+        : src;
+      this.coloredSvgs.set(key, url);
+      return url;
+    };
+    if (typeof text === "string") return make(text);
+    return text.then((loaded) => {
+      if (this.svgTexts.get(src) === text) this.svgTexts.set(src, loaded);
+      return this.coloredSvgs.get(key) ?? make(loaded);
+    });
+  }
+
+  /** Drops the colored copies of in-memory SVG `blob`, released. */
+  forgetColoredSvgs(blob) {
+    this.svgTexts.delete(blob);
+    const prefix = `${blob}\n`;
+    for (const [key, url] of this.coloredSvgs) {
+      if (!key.startsWith(prefix)) continue;
+      if (url !== blob) URL.revokeObjectURL(url);
+      this.coloredSvgs.delete(key);
+    }
   }
 
   applyTint(el) {
@@ -3679,6 +3788,8 @@ class Player {
     }
     this._shaderGl = gl;
     this._shaderPrograms = new Map();
+    // The app's `shadersAvailable()` turns false.
+    if (!gl) this.environmentChanged();
     return gl;
   }
 
@@ -5248,10 +5359,24 @@ class Player {
     this.historyIndex = 0;
     this.historyDepths = [0];
     history.replaceState(this.historyState(0), "");
+    // The app's first entry's place in the tab's history, where the
+    // browser says (`navigationIndex`): a state-less entry before it is the
+    // page's own, from before the player, not an address the user typed.
+    this.historyBase = navigationIndex();
     // The address of the app's first entry, where every run starts, and of
     // the entry shown (a page the app keeps on a back keeps it).
     this.firstUrl = this.shownUrl = location.href;
     window.addEventListener("popstate", (e) => this.popState(e));
+  }
+
+  /** Whether the entry the user went to is before the app's first: the
+   * page's own (a `#fragment` followed while the app loaded, a `pushState`
+   * of the host page's), which looks to `popstate` like an address the user
+   * typed. Only the Navigation API tells them apart; without it a
+   * state-less entry is taken as typed. */
+  beforeFirstEntry() {
+    const index = navigationIndex();
+    return index != null && this.historyBase != null && index < this.historyBase;
   }
 
   historyState(depth, index = this.historyIndex) {
@@ -5391,7 +5516,7 @@ class Player {
     this.endPopAnswer();
     const have = this.historyDepth;
     if (e.state?.nshSession !== this.historySession) {
-      if (e.state?.nsh == null && location.href !== this.shownUrl) {
+      if (e.state?.nsh == null && location.href !== this.shownUrl && !this.beforeFirstEntry()) {
         // An address the user gave the page (a `#fragment` typed in the
         // address bar): an entry after the current one, at its depth, as
         // if the app had pushed it. The app's pages stay; it shows what
@@ -5418,6 +5543,7 @@ class Player {
       this.historySession = newHistorySession();
       this.historyDepths = [0];
       history.replaceState(this.historyState(0), "");
+      this.historyBase = navigationIndex();
       this.firstUrl = location.href;
       this.tellAddress(true);
       return;
@@ -5425,7 +5551,7 @@ class Player {
     const at = e.state.nsh ?? 0;
     // This load's entries all have their place; which way the user went.
     const index = Number.isInteger(e.state.nshIndex) ? e.state.nshIndex : at;
-    const cause = index < this.historyIndex ? "back" : "forward";
+    const reason = index < this.historyIndex ? "back" : "forward";
     this.historyIndex = index;
     this.historyDepths[index] = at;
     if (at > have) {
@@ -5443,7 +5569,7 @@ class Player {
       // pages are as the entry has them, and it shows what the address
       // names.
       if (!index) this.firstUrl = location.href;
-      this.tellAddress(location.href !== this.shownUrl ? cause : false);
+      this.tellAddress(location.href !== this.shownUrl ? reason : false);
       return;
     }
     // A pop the app hears at once (no motion, a modal) may give the address
@@ -5477,11 +5603,11 @@ class Player {
     // hears an entry's address that differs from the one it had
     // (`change`), once the pages it popped are dismissed: it answers the
     // dismissal after their slide, and an address it sets then wins.
-    if (location.href !== before) this.awaitPopAnswer({ sets, url: location.href, cause });
+    if (location.href !== before) this.awaitPopAnswer({ sets, url: location.href, reason });
   }
 
   /** Waits for the app's answer to a back that popped its pages (`popped`:
-   * `sets`, `url`, `cause`), at most `POP_ANSWER_MS`. */
+   * `sets`, `url`, `reason`), at most `POP_ANSWER_MS`. */
   awaitPopAnswer(popped) {
     this.popAnswer = popped;
     popped.timer = setTimeout(() => {
@@ -5498,7 +5624,7 @@ class Player {
     if (!popped || (this.dismissing > 0 && !popped.expired)) return;
     this.endPopAnswer();
     if (this.pageUrlSets !== popped.sets || location.href !== popped.url) return;
-    this.tellAddress(popped.cause);
+    this.tellAddress(popped.reason);
   }
 
   endPopAnswer() {
@@ -5508,7 +5634,7 @@ class Player {
 
   /** Tells the core the entry's address: with `open` when the app is handed
    * it from outside (`true`), as a move the app did not make when `how` is
-   * its cause (`"back"`, `"forward"`, `"address"`: `change`), else as the
+   * its reason (`"back"`, `"forward"`, `"address"`: `change`), else as the
    * address only (`quiet`). */
   tellAddress(how) {
     this.shownUrl = location.href;
@@ -6022,14 +6148,33 @@ class Player {
     const el = this.view(id);
     switch (name) {
       case "focus":
-        if (el?._field) el._field.focus();
-        else if (el) this.focusPressable(el);
+        if (el?._field) {
+          el._field.focus();
+          this.pressFocus = el._field;
+        } else if (el) this.focusPressable(el);
         break;
       case "blur":
         if (el?._field) el._field.blur();
         else document.activeElement?.blur?.();
         break;
       case "setSelection": el?._field?.setSelectionRange(args[0], args[1]); break;
+      case "insertText": {
+        // As the user's typing: the browser's undo history keeps it and
+        // `input` reports it. `execCommand` edits the focused field only.
+        const field = el?._field;
+        if (!field) break;
+        if (field._composing) {
+          // The input method's text would be committed around it (as on Linux).
+          console.warn("insertText: an input method is composing; nothing inserted");
+          break;
+        }
+        if (document.activeElement !== field) field.focus();
+        if (!document.execCommand("insertText", false, args[0])) {
+          field.setRangeText(args[0], field.selectionStart, field.selectionEnd, "end");
+          field.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        break;
+      }
       case "scrollTo":
         if (!el) break;
         // A textarea's text (a built-in bar's drags).
@@ -6556,13 +6701,51 @@ class Player {
     this.event(ROOT_ID, "onClipboard", payload);
   }
 
-  /** `Clipboard.writeImage`: a `data:` URI's image as a clipboard item (browsers take PNG). */
-  async writeClipboardImage(uri) {
+  /**
+   * `Clipboard.writeImage`: a `data:` URI's image as a clipboard item.
+   * Browsers write images as PNG only, so another format is decoded and
+   * encoded again. The write starts before that, with the PNG to come:
+   * Safari only writes within the user's gesture, which an `await` loses.
+   * The PNG holds a GIF's first frame only, so another format also goes on
+   * as it is, as browsers' own Copy Image does: an `<img>` of it as HTML,
+   * which pastes give the app, and in Chromium a `web ` format, which
+   * `readClipboardImage` prefers.
+   */
+  writeClipboardImage(uri) {
+    // Decoded here: the CSP of a page whose app restricts `network` keeps `fetch` from `data:` URIs.
+    const base64 = /^data:([^;,]*);base64,/.exec(uri);
+    const original = base64
+      ? Promise.resolve().then(() => new Blob([this.audioBytesFromBase64(uri.slice(base64[0].length))], { type: base64[1] }))
+      : fetch(uri).then((response) => response.blob());
+    const png = (async () => {
+      const blob = await original;
+      if (blob.type === "image/png") return blob;
+      const bitmap = await createImageBitmap(blob, { imageOrientation: "from-image" });
+      try {
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        canvas.getContext("2d").drawImage(bitmap, 0, 0);
+        return await canvas.convertToBlob({ type: "image/png" });
+      } finally {
+        bitmap.close();
+      }
+    })();
+    const fail = (err) => console.warn(`[nsh] Clipboard.writeImage: ${err?.message ?? err}`);
+    // Handled by the write; this keeps it from reporting twice when the write never starts.
+    png.catch(() => {});
     try {
-      const blob = await (await fetch(uri)).blob();
-      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-    } catch {
-      // Denied, an insecure context, or a type the browser does not write.
+      const data = { "image/png": png };
+      // The types go in now, before the image has loaded: `data:` URIs say theirs.
+      const type = base64?.[1] ?? "";
+      if (type !== "image/png") {
+        const src = uri.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+        data["text/html"] = new Blob([`<img src="${src}">`], { type: "text/html" });
+        if (type && ClipboardItem.supports?.(`web ${type}`)) data[`web ${type}`] = original;
+      }
+      return navigator.clipboard.write([new ClipboardItem(data)]).catch(fail);
+    } catch (err) {
+      // No clipboard (an insecure context) or no `ClipboardItem`.
+      fail(err);
+      return Promise.resolve();
     }
   }
 
@@ -6693,9 +6876,11 @@ class Player {
     let blob = null;
     try {
       for (const item of (await navigator.clipboard?.read()) ?? []) {
-        const type = item.types.find((t) => t.startsWith("image/"));
+        // The original `writeClipboardImage` kept beside its PNG first.
+        const type = item.types.find((t) => t.startsWith("web image/")) ?? item.types.find((t) => t.startsWith("image/"));
         if (type) {
           blob = await item.getType(type);
+          if (type.startsWith("web ")) blob = new Blob([blob], { type: type.slice(4) });
           break;
         }
       }
@@ -7288,6 +7473,12 @@ class Player {
 
   installInput() {
     const root = this.root;
+    // What the user gives input with, told before it acts (the capture
+    // phase, ahead of the app's handlers and the browser's focus moves):
+    // the core shows the focus by it (`focus-visible:`), as the browser
+    // decides `:focus-visible`. Only a change crosses to the engine.
+    root.addEventListener("pointerdown", () => this.inputWith(1), true);
+    window.addEventListener("keydown", (e) => MODALITY_KEYS_SKIPPED.has(e.key) || this.inputWith(0), true);
     root.addEventListener("pointerdown", (e) => this.pointerDown(e));
     // A link (`Link` with an `href`) is the app's to press: a plain click
     // stays in the app (its `onPress`), a click with a modifier or the
@@ -7301,15 +7492,7 @@ class Player {
     window.addEventListener("pointercancel", (e) => this.pointerUp(e, true));
     // A drag never drags images or text out of the app.
     root.addEventListener("dragstart", (e) => e.preventDefault());
-    // A click leaves the keyboard focus where it is (in a field, too) and
-    // selects nothing, as in native apps; fields, selectable text and
-    // hosted pages and videos take it as usual.
-    root.addEventListener("mousedown", (e) => {
-      if (this.lastPointer === "touch" || this.editable(e.target)) return;
-      e.preventDefault();
-      // Which would also keep the keys from an app in an iframe.
-      if (!document.hasFocus()) window.focus();
-    });
+    root.addEventListener("mousedown", (e) => this.mouseDown(e));
     // No page menu over the app (nor iOS's callout on a long press); fields
     // and selectable text keep theirs.
     root.addEventListener("contextmenu", (e) => this.contextMenu(e) || this.editable(e.target) || e.preventDefault());
@@ -7441,7 +7624,7 @@ class Player {
    * on the next move.
    */
   modifiersChanged(e) {
-    if (!MODIFIER_KEYS.has(e.key) || e.repeat || !this.hover || this.hoverButtons || !this.mouseTracked.size) return;
+    if (!MOUSE_MODIFIER_KEYS.has(e.key) || e.repeat || !this.hover || this.hoverButtons || !this.mouseTracked.size) return;
     const [x, y] = this.hover;
     const target = document.elementFromPoint(x, y);
     if (!target || !this.root.contains(target)) return;
@@ -7553,12 +7736,14 @@ class Player {
    * selectable view, texts on one row (their boxes overlap vertically: a
    * table's cells) are joined by a tab instead, a text that continues the
    * one before it (`continuesText`: a wrapped line's later part) by
-   * nothing, and attachments (U+FFFC) are left out, as the native
-   * platforms copy. */
+   * nothing, and attachments (U+FFFC) and hidden runs are left out, as
+   * the native platforms copy. */
   copyText(e) {
     if (e.target.closest?.(".nsh-field")) return;
     const out = this.selectedText();
-    if (out === null) return;
+    // Nothing selectable selected, or hidden characters only: the
+    // clipboard keeps what it has.
+    if (!out) return;
     e.preventDefault();
     e.clipboardData.setData("text/plain", out);
   }
@@ -7599,6 +7784,12 @@ class Player {
         last = run.parentNode;
         lastArea = area;
         lastBox = box;
+      }
+      // A hidden run (`visibility: hidden` on a span) keeps its place but
+      // is not copied; the line's break after it still is.
+      if (getComputedStyle(run).visibility === "hidden") {
+        if (to === text.length && run._after) out += run._after;
+        continue;
       }
       const part = text.slice(from, to);
       out += area ? part.replaceAll("\uFFFC", "") : part;
@@ -7712,6 +7903,12 @@ class Player {
    * pinches the view under the pointer and never zooms the page.
    */
   wheel(e) {
+    // A view listening to `onWheel` nearer than the scroll views under the
+    // pointer takes the wheel: nothing scrolls, zooms or pinches.
+    if (this.wheelEvent(e)) {
+      e.preventDefault();
+      return;
+    }
     if (e.ctrlKey) {
       e.preventDefault();
       // Over a zoomable scroll view it zooms that, else it pinches.
@@ -7761,6 +7958,37 @@ class Player {
     // deltas. Its magnitude cannot distinguish a notch from a finger.
     const smooth = e.deltaMode !== 0;
     this.scrollSmoothly(el, el._horizontal ? d : 0, el._horizontal ? 0 : d, smooth);
+  }
+
+  /**
+   * `onWheel` of the nearest view around `e`'s target that listens; true
+   * when it takes the wheel: no scroll view is nearer, nor is it one
+   * (`input::wheel_listener`). Deltas are lines for `DOM_DELTA_LINE`,
+   * points otherwise (a page is the viewport's height).
+   */
+  wheelEvent(e) {
+    if (!this.wheelTracked?.size) return false;
+    const view = this.viewOf(e.target);
+    if (!view) return false;
+    let scrollSeen = false;
+    for (const el of this.ancestors(view)) {
+      const scrolls = el._kind === "scroll";
+      if (el._events?.has("onWheel")) {
+        const r = el.getBoundingClientRect();
+        const [pageX, pageY] = this.point(e);
+        const page = e.deltaMode === 2 ? this.size[1] : 1;
+        this.event(el._id, "onWheel", {
+          position: { x: e.clientX - r.left, y: e.clientY - r.top },
+          pagePosition: { x: pageX, y: pageY },
+          delta: { x: e.deltaX * page, y: e.deltaY * page },
+          deltaMode: e.deltaMode === 1 ? "lines" : "points",
+          modifiers: { control: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, platform: e.metaKey },
+        });
+        return !scrollSeen && !scrolls;
+      }
+      scrollSeen ||= scrolls;
+    }
+    return false;
   }
 
   /** Moves `el` by (`dx`, `dy`), gliding there when `smooth`; once it
@@ -7983,6 +8211,7 @@ class Player {
         x: p.x - left,
         y: p.y - top,
         changed: id === changedId,
+        pointerType: p.pointerType,
       });
     }
     if (!points.length) return;
@@ -7990,8 +8219,25 @@ class Player {
     this.call(() => this.withStrings([json], (p, l) => this.wasm.nsh_touch(p, l)));
   }
 
+  /** A click leaves the keyboard focus where it is (in a field, too) and
+   * selects nothing, as in native apps; fields, selectable text and hosted
+   * pages and videos take it as usual. A touch moves the focus as the
+   * browser does (a tap outside a field leaves it, and the keyboard
+   * closes), unless its own press put the focus in a field (an editor's
+   * text): the mouse events the browser makes of the touch would take the
+   * focus to the pressable, and close the keyboard as it opens. */
+  mouseDown(e) {
+    if (this.editable(e.target)) return;
+    if (this.lastPointer === "touch" && !(this.pressFocus && this.pressFocus === document.activeElement)) return;
+    e.preventDefault();
+    // Which would also keep the keys from an app in an iframe.
+    if (!document.hasFocus()) window.focus();
+  }
+
   pointerDown(e) {
     this.lastPointer = e.pointerType;
+    // The field this press makes the app focus, if any (`mouseDown`).
+    this.pressFocus = null;
     // A press without a move still holds a button: a modifier key then
     // fires no hover move (`modifiersChanged`).
     if (e.pointerType === "mouse") this.hoverButtons = e.buttons;
@@ -8021,6 +8267,7 @@ class Player {
     const scrollView = isField ? null : chain.find((v) => v._kind === "scroll") ?? null;
     const p = {
       x, y, layer, startX: x, startY: y, t: performance.now(), vx: 0, vy: 0,
+      pointerType: e.pointerType,
       touchPath: chain.filter((v) => v._events.has("onTouch")).map((v) => v._id),
       press: isField ? null : this.linkPress(e.target, target) ?? chain.find((v) => PRESS_EVENTS.some((n) => v._events.has(n)) && !v._props?.disabled) ?? null,
       // What presses report: the modifier keys at the press and its clicks.

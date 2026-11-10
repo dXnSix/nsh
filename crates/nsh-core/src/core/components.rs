@@ -172,9 +172,10 @@ pub(super) struct Instance {
     /// which the components JS made among them are under.
     children_owner: Option<crate::element::Owner>,
     /// It joined a host as its children (content a view passed a nested
-    /// component, `tabs().child(tab())`): its view waits, as one JS made
-    /// does, to be in the tree under where that host's view places it, so
-    /// it reads the context there.
+    /// component, `tabs().child(tab())`, or inside plain views of that
+    /// content): its view waits, as one JS made does, to be in the tree
+    /// under where that host's view places it, so it reads the context
+    /// there.
     joined: bool,
     /// The component its view's root is, made on this host (its alias,
     /// [`Core::alias`]): its view makes the host's node.
@@ -525,6 +526,16 @@ struct UrlScheme {
     address: crate::url_scheme::AppUrlCell,
 }
 
+/// Later launches of the app ([`crate::single_instance`]).
+#[derive(Default)]
+struct SecondInstances {
+    /// Launches no listener took yet, at most
+    /// [`crate::single_instance::MAX_PENDING`].
+    pending: std::collections::VecDeque<crate::single_instance::SecondInstance>,
+    /// The listener waiting for a launch.
+    next: Option<AnswerSlot<crate::single_instance::SecondInstance>>,
+}
+
 /// The speech recognition session running ([`crate::speech`]).
 struct SpeechSession {
     id: u32,
@@ -536,6 +547,7 @@ struct SpeechSession {
 
 /// The core's component state.
 pub(super) struct Components {
+    pub(super) web_evaluations: super::web_evaluation::Evaluations,
     registry: Registry,
     /// The specs of the components made by type (not by name from the
     /// registry), one per type.
@@ -622,6 +634,7 @@ pub(super) struct Components {
     notifications: Notifications,
     /// The links that open the app ([`crate::url_scheme`]).
     url_schemes: UrlScheme,
+    second_instances: SecondInstances,
     /// Calls of the embedding app's functions (`nsh/host`), by request id:
     /// their answers.
     host_calls: FxHashMap<u64, AnswerSlot<Result<crate::JsonValue, crate::element::JsError>>>,
@@ -633,6 +646,9 @@ pub(super) struct Components {
     /// The language the app asked to show in (`Some(None)`: the user's
     /// again), for the engine ([`Core::take_locale_request`]).
     pub(super) locale_request: Option<Option<crate::platform::Locale>>,
+    /// Functions for the platform's main thread, for the engine
+    /// ([`Core::take_main_thread_tasks`]).
+    main_thread: Vec<crate::main_thread::MainThreadTask>,
     next_url_open: u32,
     /// Colors being picked on the screen, by request id: their answers.
     screen_colors: FxHashMap<u32, AnswerSlot<Option<crate::Hsla>>>,
@@ -742,6 +758,7 @@ impl Default for Components {
             url_opens: FxHashMap::default(),
             url_requests: Vec::new(),
             locale_request: None,
+            main_thread: Vec::new(),
             next_url_open: 0,
             screen_colors: FxHashMap::default(),
             next_screen_color: 1,
@@ -754,8 +771,10 @@ impl Default for Components {
             audio: FxHashMap::default(),
             notifications: Notifications::default(),
             url_schemes: UrlScheme::default(),
+            second_instances: SecondInstances::default(),
             host_calls: FxHashMap::default(),
             next_host_call: 1,
+            web_evaluations: Default::default(),
             fetches: FxHashMap::default(),
             fetch_requests: Vec::new(),
             next_fetch: 1,
@@ -1043,6 +1062,15 @@ impl<M: TextEngine> Core<M> {
         self.components.locale_request.take()
     }
 
+    /// The functions components, tasks and module functions asked to run
+    /// on the platform's main thread since the last call
+    /// ([`crate::element::run_on_main_thread`]), in order: the engine hands
+    /// them to its sink after the commit.
+    #[doc(hidden)]
+    pub fn take_main_thread_tasks(&mut self) -> Vec<crate::main_thread::MainThreadTask> {
+        std::mem::take(&mut self.components.main_thread)
+    }
+
     /// The embedding app's design tokens (`None`: the app's again): an app
     /// embedded in a native app looks like it, whatever the app sets.
     pub fn set_host_tokens(&mut self, tokens: Option<Tokens>) {
@@ -1323,6 +1351,43 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// Whether something runs as the app quits ([`crate::element::desktop::on_app_quit`],
+    /// `Application.on("quit")`): the engine gives it time to.
+    pub fn has_quit_listeners(&self) -> bool {
+        !self.components.executor.quit.borrow().is_empty()
+    }
+
+    /// The app quits: starts each quit listener's work, oldest first, as
+    /// tasks the engine runs ([`Core::run_component_tasks`]) until
+    /// [`Core::quit_pending`] is false or
+    /// [`QUIT_TIMEOUT`](crate::element::desktop::QUIT_TIMEOUT) has passed.
+    /// Whether any started.
+    pub fn start_quit(&mut self) -> bool {
+        let _entered = self.components.runtime.enter();
+        let executor = self.components.executor.clone();
+        let listeners = executor.quit.borrow().all();
+        for listener in listeners {
+            match caught(|| listener()) {
+                Ok(future) => {
+                    let pending = crate::element::quit::Pending::new(&executor.quitting);
+                    // Detached: it runs until it ends or the engine stops.
+                    drop(crate::element::task::spawn_future(&executor, async move {
+                        future.await;
+                        drop(pending);
+                    }));
+                }
+                Err(message) => log::error!(target: "js", "a quit listener failed: {message}"),
+            }
+        }
+        self.apply_actions();
+        self.quit_pending()
+    }
+
+    /// Whether the work quit listeners started is still running.
+    pub fn quit_pending(&self) -> bool {
+        self.components.executor.quitting.get() > 0
+    }
+
     /// Runs the closures that waited for the app's answer to the events
     /// handed to JS before this commit ([`crate::element::after_answer`]),
     /// each under its owner; one whose owner went is dropped unrun.
@@ -1552,9 +1617,7 @@ impl<M: TextEngine> Core<M> {
                 if was_empty || place == Placement::Each {
                     self.components.mark(parent);
                 }
-                if let Some(joined) = self.components.instances.get_mut(&child) {
-                    joined.joined = true;
-                }
+                self.join_content(child);
                 match place {
                     // Before its next JS sibling, else before what the
                     // view puts after the children.
@@ -2140,6 +2203,29 @@ impl<M: TextEngine> Core<M> {
                     prop: Prop::TestId(test_id.clone()),
                 });
                 inst.root_test_id_applied = test_id;
+            }
+        }
+    }
+
+    /// Node `id` joined a host as its children: the components in it, the
+    /// node itself or inside its plain views however deep
+    /// (`tabs().child(view().child(tab()))`), are `joined`, so their views
+    /// wait to be placed and read the context of the host's view as a
+    /// direct child does. A component's own content joins it in turn.
+    fn join_content(&mut self, id: NodeId) {
+        let mut stack = vec![id];
+        while let Some(id) = stack.pop() {
+            if let Some(inst) = self.components.instances.get_mut(&id) {
+                inst.joined = true;
+                continue;
+            }
+            if let Ok(k) = self.key(id) {
+                stack.extend(
+                    self.nodes[k as usize]
+                        .children
+                        .iter()
+                        .map(|&c| self.nodes[c as usize].id),
+                );
             }
         }
     }
@@ -5016,6 +5102,10 @@ impl<M: TextEngine> Core<M> {
             }
             return false;
         }
+        // A secondary click is a press for the overlays it is outside of.
+        if let EventPayload::ContextMenu(event) = payload {
+            self.overlay_context_menu(id, event);
+        }
         // Hints follow the pointer on their anchors, whoever else listens.
         if matches!(kind, EventKind::MouseEnter | EventKind::MouseLeave) {
             let at = match payload {
@@ -5287,7 +5377,7 @@ impl<M: TextEngine> Core<M> {
         url: String,
         page: bool,
         quiet: bool,
-        change: Option<crate::url_scheme::AppUrlChangeCause>,
+        change: Option<crate::url_scheme::AppUrlChangeReason>,
     ) {
         let links = &mut self.components.url_schemes;
         let checked = if page {
@@ -5304,11 +5394,11 @@ impl<M: TextEngine> Core<M> {
             return;
         }
         let links = &mut self.components.url_schemes;
-        if let Some(cause) = change {
+        if let Some(reason) = change {
             if !links.hears_changes {
                 return;
             }
-            let change = crate::url_scheme::AppUrlChange { url, cause };
+            let change = crate::url_scheme::AppUrlChange { url, reason };
             if let Some(answer) = links.next_change.take() {
                 answer.borrow_mut().deliver(change);
                 return;
@@ -5491,7 +5581,7 @@ impl<M: TextEngine> Core<M> {
                 answer.borrow_mut().deliver(available);
                 return;
             }
-            AudioAction::Open { command, sink } => {
+            AudioAction::Open { mut command, sink } => {
                 debug_assert!(matches!(
                     command,
                     AudioCommand::Load { .. }
@@ -5511,16 +5601,33 @@ impl<M: TextEngine> Core<M> {
                     );
                     return;
                 }
+                // A sound loads what the check granted (`Access::media_url`).
                 if let AudioCommand::Open { src, .. } | AudioCommand::LoadUrl { url: src, .. } =
-                    &command
-                    && !self.access.allows_media(src)
+                    &mut command
                 {
-                    sink.send(failed(AudioError::NotAllowed, "the source is not granted"));
-                    sink.close();
-                    self.deny(format!(
-                        "`{src}` is not granted by capabilities.network in nsh.json"
-                    ));
-                    return;
+                    match self.media_source(src) {
+                        Some(granted) => {
+                            if let Some(url) = granted {
+                                *src = url.to_string();
+                            }
+                        }
+                        None => {
+                            let base = self.base_url.as_deref();
+                            let capability = crate::access::media_capability(src, base);
+                            let advice = crate::access::media_grant_advice(src, base);
+                            // Worded without the app's text: the player's
+                            // error names the capability from it.
+                            sink.send(failed(
+                                AudioError::NotAllowed,
+                                &format!("{}{capability}", super::SOURCE_NOT_GRANTED),
+                            ));
+                            sink.close();
+                            self.deny(format!(
+                                "`{src}` is not granted by capabilities.{capability}: {advice}"
+                            ));
+                            return;
+                        }
+                    }
                 }
                 if self.audio.is_none() && !self.components.environment.audio {
                     sink.send(failed(AudioError::Unavailable, "nothing plays sound here"));
@@ -5621,10 +5728,15 @@ impl<M: TextEngine> Core<M> {
             Action::ResetTokens(names) => self.reset_tokens(Some(&names)),
             Action::Translations(translations) => self.set_translations(translations),
             Action::Locale(locale) => self.components.locale_request = Some(locale),
+            Action::MainThread(task) => self.components.main_thread.push(task),
             Action::BuiltInScrollbars(source, theme) => {
                 self.set_builtin_scrollbars(theme.map(|theme| (source, theme)))
             }
             Action::Measure(id, answer) => self.components.measures.push((id, answer)),
+            Action::Evaluate(node, script, timeout, answer) => {
+                self.start_web_evaluation(node, script, timeout, answer)
+            }
+            Action::WebEvaluationTimeout(request) => self.timeout_web_evaluation(request),
             Action::TransitionTime(id, answer) => {
                 self.components.transition_times.push((id, answer))
             }
@@ -5801,6 +5913,13 @@ impl<M: TextEngine> Core<M> {
                     None => links.next = Some(answer),
                 }
             }
+            Action::NextSecondInstance(answer) => {
+                let launches = &mut self.components.second_instances;
+                match launches.pending.pop_front() {
+                    Some(launch) => answer.borrow_mut().deliver(launch),
+                    None => launches.next = Some(answer),
+                }
+            }
             Action::NextAppUrlChange(answer) => {
                 let links = &mut self.components.url_schemes;
                 links.hears_changes = true;
@@ -5843,6 +5962,16 @@ impl<M: TextEngine> Core<M> {
             Action::WebInputAvailable(answer) => {
                 let available =
                     self.components.environment.web_input && self.access.allows_web_input();
+                answer.borrow_mut().deliver(available);
+            }
+            Action::WebEvaluateAvailable(answer) => {
+                let available =
+                    self.components.environment.web_evaluate && self.access.allows_webviews();
+                answer.borrow_mut().deliver(available);
+            }
+            Action::WebViewAvailable(answer) => {
+                let available =
+                    self.components.environment.web_views && self.access.allows_webviews();
                 answer.borrow_mut().deliver(available);
             }
             Action::PickScreenColor(answer) => {
@@ -6145,6 +6274,35 @@ impl<M: TextEngine> Core<M> {
                 if item < crate::element::menus::FIRST_ID {
                     return false;
                 }
+                // The platform's answer to a global shortcut's registration.
+                let registered = match payload {
+                    EventPayload::Map(entries) => entries.iter().find_map(|(k, v)| match v {
+                        crate::PayloadValue::Bool(b) if *k == "registered" => Some(*b),
+                        _ => None,
+                    }),
+                    _ => None,
+                };
+                if let Some(registered) = registered {
+                    menus.borrow_mut().registered(item, registered);
+                    self.apply_actions();
+                    return true;
+                }
+                let click = menus.borrow().tray_click(item);
+                if let Some(click) = click {
+                    let bounds = match payload {
+                        EventPayload::Map(entries) => entries.iter().find_map(|(k, v)| match v {
+                            crate::PayloadValue::Bounds(b) if *k == "bounds" => Some(*b),
+                            _ => None,
+                        }),
+                        _ => None,
+                    };
+                    let result = caught(|| click(bounds));
+                    self.apply_actions();
+                    if let Err(message) = result {
+                        log::error!(target: "js", "the tray's click failed: {message}");
+                    }
+                    return true;
+                }
                 let handler = menus.borrow().handler(item);
                 // An item of a menu replaced since the platform showed it.
                 if let Some(handler) = handler {
@@ -6176,6 +6334,10 @@ impl<M: TextEngine> Core<M> {
                     id: crate::ROOT_ID,
                     command: Command::Back,
                 });
+                true
+            }
+            EventKind::WebEvaluation => {
+                self.answer_web_evaluation(id, payload);
                 true
             }
             EventKind::ImageInfo if id == crate::ROOT_ID => {
@@ -6243,6 +6405,22 @@ impl<M: TextEngine> Core<M> {
                 self.notification_event(payload);
                 true
             }
+            EventKind::SecondInstance if id == crate::ROOT_ID => {
+                let Some(launch) = crate::single_instance::SecondInstance::from_payload(payload)
+                else {
+                    return false;
+                };
+                let launches = &mut self.components.second_instances;
+                if let Some(answer) = launches.next.take() {
+                    answer.borrow_mut().deliver(launch);
+                } else {
+                    if launches.pending.len() == crate::single_instance::MAX_PENDING {
+                        launches.pending.pop_front();
+                    }
+                    launches.pending.push_back(launch);
+                }
+                true
+            }
             EventKind::UrlScheme if id == crate::ROOT_ID => {
                 let EventPayload::Map(entries) = payload else {
                     return false;
@@ -6263,17 +6441,17 @@ impl<M: TextEngine> Core<M> {
                 let page = flag(crate::url_scheme::PAGE).unwrap_or(false);
                 let quiet = flag(crate::url_scheme::QUIET).unwrap_or(false);
                 // An address move the app did not make (the web's back or
-                // forward), by its cause; one of a newer platform's causes
+                // forward), by its reason; one of a newer platform's reasons
                 // is still the address, quietly.
                 let change = entries.iter().find_map(|(k, v)| match v {
                     crate::PayloadValue::Str(s) if *k == crate::url_scheme::CHANGE => {
-                        Some(crate::url_scheme::AppUrlChangeCause::parse(s))
+                        Some(crate::url_scheme::AppUrlChangeReason::parse(s))
                     }
                     _ => None,
                 });
                 let (quiet, change) = match change {
                     Some(None) => (true, None),
-                    Some(cause) => (quiet, cause),
+                    Some(reason) => (quiet, reason),
                     None => (quiet, None),
                 };
                 // The page's base URL (the web), which Rust's `set_app_url`

@@ -390,7 +390,8 @@ fn apply_onto(tokens: &mut Tokens, base: &Tokens, json: &str) -> Result<Vec<Left
 fn read_into(tokens: &mut Tokens, base: &Tokens, value: &JsonValue) -> Vec<LeftOut> {
     let mut ignored = Vec::new();
     match value.get("cssVars") {
-        Some(vars) => apply_css_vars(tokens, base, vars, &mut ignored),
+        Some(vars) if vars.is_object() => apply_css_vars(tokens, base, vars, &mut ignored),
+        Some(_) => ignored.push(LeftOut::said("cssVars: expected an object")),
         None => ignored.push(LeftOut::said("no shadcn `{ \"cssVars\": { ... } }`")),
     }
     if let Some(roles) = value.get("roles") {
@@ -461,26 +462,38 @@ fn written_as_color(value: &str) -> bool {
     if value.starts_with('#') {
         return true;
     }
-    let Some((function, _)) = value.split_once('(') else {
+    let Some((function, rest)) = value.split_once('(') else {
         return false;
     };
+    if !matches!(
+        function.trim().to_ascii_lowercase().as_str(),
+        "rgb"
+            | "rgba"
+            | "hsl"
+            | "hsla"
+            | "hwb"
+            | "lab"
+            | "lch"
+            | "oklab"
+            | "oklch"
+            | "color"
+            | "color-mix"
+            | "light-dark"
+            | "var"
+    ) {
+        return false;
+    }
+    // A shadow may start with a complete color function and end in lengths.
+    let mut depth = 1;
     value.ends_with(')')
-        && matches!(
-            function.trim().to_ascii_lowercase().as_str(),
-            "rgb"
-                | "rgba"
-                | "hsl"
-                | "hsla"
-                | "hwb"
-                | "lab"
-                | "lch"
-                | "oklab"
-                | "oklch"
-                | "color"
-                | "color-mix"
-                | "light-dark"
-                | "var"
-        )
+        || !rest.chars().any(|c| {
+            depth += match c {
+                '(' => 1,
+                ')' => -1,
+                _ => 0,
+            };
+            depth == 0
+        })
 }
 
 /// A CSS length in points: `0.625rem`, `10px`, `10`.
@@ -663,11 +676,11 @@ fn apply_css_vars(
                 }
                 tokens.set_color(name, c.into());
             }
-            (None, None) => match length(value) {
+            (None, None) => {
                 // The dark appearance's value (`dark`'s, else the light
                 // one's), and the light one's: given in one appearance
                 // only, a number is both's, as a color is.
-                Some(dark_n) => {
+                if let Some(dark_n) = length(value) {
                     let light_n = light_vars
                         .get(name)
                         .and_then(|v| length(v))
@@ -677,17 +690,15 @@ fn apply_css_vars(
                         tokens.set_dark_number(name, dark_n);
                     }
                 }
-                None => {
-                    let mut given: Vec<&String> = [light_vars.get(name), dark_vars.get(name)]
-                        .into_iter()
-                        .flatten()
-                        .collect();
-                    given.dedup();
-                    for v in given.into_iter().filter(|v| written_as_color(v)) {
-                        ignored.push(LeftOut::about(name, format_args!(": {v} is no color")));
-                    }
+                let mut given: Vec<&String> = [light_vars.get(name), dark_vars.get(name)]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                given.dedup();
+                for v in given.into_iter().filter(|v| written_as_color(v)) {
+                    ignored.push(LeftOut::about(name, format_args!(": {v} is no color")));
                 }
-            },
+            }
         }
     }
 }

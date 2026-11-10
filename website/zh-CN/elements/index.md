@@ -175,6 +175,7 @@ TSX 从 `nsh/base` 导入，Rust 从 `nsh_base` crate 导入。它们负责行�
 | `activeStyle` | `.active(\|s\| ..)` | `active:` | 被按下时。 |
 | `hoverStyle` | `.hover(\|s\| ..)` | `hover:` | 指针悬停在视图上时。 |
 | `focusStyle` | `.focus(\|s\| ..)` | `focus:` | 视图获得焦点时。 |
+| `focusVisibleStyle` | `.focus_visible(\|s\| ..)` | `focus-visible:` | 视图获得焦点并显示焦点时：键盘把焦点移到了这里，或应用在按键之后移动了焦点；文本输入框获得焦点时总是显示。按压或轻点给出的焦点不显示。 |
 | `focusWithinStyle` | `.focus_within(\|s\| ..)` | `focus-within:` | 视图自身或其内部的视图获得焦点时（`Overlay` 的内容算在它所在的视图内部）。 |
 | `disabledStyle` | `.disabled_style(\|s\| ..)` | `disabled:` | `disabled` 时。 |
 | `checkedStyle` | `.checked(\|s\| ..)`、`.checked_style(style)` | `checked:` | `accessibilityState.checked` 为 `true` 时（复选框、开关、单选框；`"mixed"` 不算勾选）。 |
@@ -243,6 +244,48 @@ const at = signal<number | null>(null);
     <View style={{ position: "absolute", left: at()!, top: 0, bottom: 0, width: 1, backgroundColor: "#888" }} />
   </If>
 </View>
+```
+
+### 滚轮
+
+`onWheel` 在鼠标滚轮或触控板在视图上滚动时触发：macOS、Windows、Linux、GPUI 后端和 Web 都支持（DOM 的 `wheel`、GPUI 的 `ScrollWheelEvent`）。指针下方视图及其外层中，最近的监听者收到它。若该视图比指针下方所有滚动视图都更近，它就接管这次滚轮：系统不再滚动、缩放或捏合，因此页面里的画布可以在 Control + 滚轮时缩放、其他时候平移。监听的滚动视图，或包着滚动视图的外层视图，只是旁观：滚动视图照常滚动。JS 无法事后取消原生滚动（主线程不等待 JS），所以是否接管由挂载的内容决定，与 `onContextMenu` 相同。
+
+| 属性 | Rust | 类型 | 说明 |
+|---|---|---|---|
+| `onWheel` | `.on_wheel(..)` | `(e: WheelEvent) => void` | 鼠标滚轮或触控板在视图或其内部的视图上滚动。 |
+
+`WheelEvent` 与 `MouseEvent` 一样带有 `position` 和 `pagePosition`，以及按住的 `modifiers`、`delta`（一个 `Point`：`y` 为正向下、朝末尾滚动，`x` 为正向右，与 DOM 的 `deltaX` / `deltaY` 相同）和 `deltaMode`：鼠标滚轮的刻度为 `"lines"`，精确设备（触控板、妙控鼠标；AppKit 的 `hasPreciseScrollingDeltas`、DOM 的 `DOM_DELTA_PIXEL`）为 `"points"`。Rust 中 `delta` 是 `WheelDelta`：`Lines(Point<f32>)` 或 `Points(Point<Points>)`，与 GPUI 的 `ScrollDelta` 相同；`delta.points(line_height)` 总是给出点数。
+
+```rust tabs
+// 画布：Control + 滚轮缩放，滚轮平移。
+let zoom = signal(1.0_f32);
+let offset = signal(Point::<Points>::default());
+
+view()
+    .size_full()
+    .on_wheel(move |e: &WheelEvent| {
+        let d = e.delta.points(px(16.0));
+        if e.modifiers.ctrl {
+            zoom.update(|z| *z *= (1.0 - d.y.0 / 200.0).clamp(0.5, 2.0));
+        } else {
+            offset.update(|o| *o = point(o.x - d.x, o.y - d.y));
+        }
+    })
+```
+
+```tsx tabs
+// 画布：Control + 滚轮缩放，滚轮平移。
+const zoom = signal(1);
+const offset = signal({ x: 0, y: 0 });
+
+<View
+  style={{ flex: 1 }}
+  onWheel={(e) => {
+    const unit = e.deltaMode === "lines" ? 16 : 1;
+    if (e.modifiers.control) zoom.update((z) => z * Math.min(2, Math.max(0.5, 1 - (e.delta.y * unit) / 200)));
+    else offset.update((o) => ({ x: o.x - e.delta.x * unit, y: o.y - e.delta.y * unit }));
+  }}
+/>
 ```
 
 <a id="tooltips"></a>
@@ -510,7 +553,9 @@ view()
 |---|---|---|---|
 | `focus()` / `blur()` | `focus()` / `blur()` | `ViewRef` | 让 `<Input>` 获取焦点（弹出键盘），或让可按下的视图获得键盘焦点 / 失去焦点。 |
 | `measure()` | `measure()` | `ViewRef` | [视图的位置](../docs/touch-and-gestures.md)。 |
+| `reveal({ vertical?, horizontal?, animated? })` | `reveal(options)` | `ViewRef` | [滚动视图外围的滚动视图](../docs/scrolling.md#把视图滚到可见处)，让它显示出来。 |
 | `setSelection(start, end?)` | `set_selection(start, end)` | `InputRef` | 选中 `start..end`（UTF-16 单位）；省略 `end` 时为光标。 |
+| `insertText(text)` | `insert_text(text)` | `InputRef` | 以用户编辑的方式用 `text` 替换选区，是撤销历史中的一步（Linux、Web、无头测试）。 |
 | `scrollTo({ x?, y?, animated? })` | `scroll_to(point, animated)` | `ScrollRef`、`ListRef` | 滚动到某个偏移量。 |
 | `zoomTo({ scale, x?, y?, animated? })` | `zoom_to(scale, center, animated)` | `ScrollRef`（可缩放的 `<Scroll>`） | 围绕内容中的某点缩放到 `scale`。 |
 | `scrollToOffset({ offset, animated? })` | `scroll_to_offset(offset, animated)` | `ListRef` | 沿列表方向滚动到某个偏移量。 |

@@ -1140,6 +1140,7 @@ fn variants() {
         dark: true,
         platform: Platform::Android,
         reduce_motion: false,
+        ..ClassEnvironment::default()
     };
     let (s, _) = styled_with("bg-white dark:bg-black", dark, (390.0, 844.0), 0);
     assert_eq!(s.view.background_color, Color(0x0000_00ff));
@@ -1175,6 +1176,71 @@ fn variants() {
     );
     assert_eq!(s.layout.size.width, taffy::Dimension::length(390.0));
     assert_eq!(s.layout.size.height, taffy::Dimension::length(844.0));
+}
+
+#[test]
+fn pointer_and_terminal_variants_follow_the_device() {
+    // Tailwind's `pointer-fine:` / `pointer-coarse:` and NSH's `terminal:`,
+    // which comes after them: a terminal is a fine pointer too.
+    let theme = themed();
+    let list = parse(
+        &theme,
+        "h-10 pointer-coarse:h-9 pointer-fine:h-7 terminal:h-1",
+    );
+    assert!(list.unknown().is_empty(), "{:?}", list.unknown());
+    assert_eq!(list.deps(), deps::DEVICE);
+    let height = |pointer: Pointer, terminal: bool| {
+        let env = ClassEnvironment {
+            pointer,
+            terminal,
+            ..ClassEnvironment::default()
+        };
+        let (s, _) = styled_with(
+            "h-10 pointer-coarse:h-9 pointer-fine:h-7 terminal:h-1",
+            env,
+            (390.0, 844.0),
+            0,
+        );
+        s.layout.size.height
+    };
+    assert_eq!(
+        height(Pointer::Coarse, false),
+        taffy::Dimension::length(36.0)
+    );
+    assert_eq!(height(Pointer::Fine, false), taffy::Dimension::length(28.0));
+    assert_eq!(height(Pointer::Fine, true), taffy::Dimension::length(4.0));
+    // A hover look that only a pointer gets.
+    let list = parse(&theme, "pointer-fine:hover:bg-white");
+    assert!(list.unknown().is_empty(), "{:?}", list.unknown());
+}
+
+#[test]
+fn focus_visible_is_the_shown_focus_not_any_focus() {
+    // `focus:` holds while the view has the focus, `focus-visible:` only
+    // while the core shows it (the keyboard moved it there).
+    let theme = themed();
+    let list = parse(&theme, "focus-visible:p-2 group-focus-visible:m-2");
+    assert!(list.unknown().is_empty(), "{:?}", list.unknown());
+    // The platform reports `FOCUSED` alone: nothing more to track.
+    assert_eq!(list.tracked_states() & !state::FOCUS_VISIBLE, 0);
+    let pad = |states: u16| {
+        let (env, states) = cx(states);
+        styled_with(
+            "p-1 focus:p-3 focus-visible:p-5",
+            env,
+            (390.0, 844.0),
+            states,
+        )
+        .0
+        .layout
+        .padding
+        .top
+    };
+    let p = |n: f32| taffy::LengthPercentage::length(n);
+    assert_eq!(pad(0), p(4.0));
+    assert_eq!(pad(state::FOCUSED), p(12.0));
+    // After `focus:` in Tailwind's order: it wins while both hold.
+    assert_eq!(pad(state::FOCUSED | state::FOCUS_VISIBLE), p(20.0));
 }
 
 #[test]

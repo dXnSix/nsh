@@ -37,8 +37,8 @@ use taffy::NodeId as LayoutId;
 
 use super::{Core, Key, Kind, NO_KEY, definite};
 use crate::{
-    EventKind, EventPayload, NodeId, PayloadValue, Prop, ROOT_ID, Tag, TextEngine, TouchEvent,
-    TouchPhase,
+    ContextMenuEvent, EventKind, EventPayload, NodeId, PayloadValue, PointerType, Prop, ROOT_ID,
+    Tag, TextEngine, TouchEvent, TouchPhase,
     element::{
         HintReason,
         task::{Action, Task, act_after},
@@ -49,6 +49,7 @@ use crate::{
     ops::{Op, OverlayProp},
     overlay::{
         HINT_DELAY, OverlayAnchor, OverlayConfig, Placed, Placement, TooltipContent, inset, place,
+        place_fitted,
     },
     props::PointerEvents,
 };
@@ -118,6 +119,17 @@ pub(super) struct OverlayState {
     /// Its `cover` view's frame in it, once that was laid out, with the
     /// overlay's size and the view's frame in its parent then.
     pub(super) covered: Option<(Bounds<Points>, Size<Points>, Bounds<Points>)>,
+    /// The room `onPosition` last told it (`available`), kept while it is
+    /// hidden: an overlay whose max size along its side is still that room
+    /// when shown again follows it ([`Core::natural_extent`]).
+    pub(super) told: Option<Size<Points>>,
+    /// Its extent along its side without the room it was told, measured
+    /// once per layout while that room holds it ([`Core::natural_extent`]).
+    pub(super) natural: Option<Points>,
+    /// The max size it was last found held to, along its side: still that
+    /// room's while the app has yet to take the newer one `told` carries
+    /// (the core flipped it, and told it so, in the same commit).
+    pub(super) held: Option<Points>,
 }
 
 impl OverlayState {
@@ -177,6 +189,9 @@ impl<M: TextEngine> Core<M> {
                 focus_shown: false,
                 pointer: None,
                 covered: None,
+                told: None,
+                natural: None,
+                held: None,
             }));
         }
         self.overlays.push(key);
@@ -1114,33 +1129,61 @@ impl<M: TextEngine> Core<M> {
             return;
         }
         for point in touch.points.iter().filter(|p| p.changed) {
-            for i in 0..self.overlays.len() {
-                let key = self.overlays[i];
-                let node = &self.nodes[key as usize];
-                let Some(state) = self.overlay(key) else {
-                    continue;
-                };
-                if state.host.is_none() || !node.events.contains(EventKind::PressOutside) {
-                    continue;
-                }
-                let id = node.id;
-                let anchor = anchor_node(state);
-                let inside = point.path.iter().any(|&p| {
-                    p == id
-                        || Some(p) == anchor
-                        || self.key(p).is_ok_and(|k| {
-                            self.nodes[k as usize].is_overlay() && self.is_ancestor(key, k)
-                        })
-                });
-                if inside {
-                    continue;
-                }
-                self.events.push(crate::element::JsEvent::Event(
-                    id,
-                    EventKind::PressOutside,
-                    EventPayload::Map(vec![("pagePosition", PayloadValue::Point(point.page))]),
-                ));
+            self.press_outside(point.page, &point.path);
+        }
+    }
+
+    /// A context menu asked for on `id`: a secondary click goes down as a
+    /// press does, so the shown overlays it is outside of hear
+    /// `onPressOutside` (a menu open elsewhere closes as a new one opens).
+    /// The platforms send no touch for a secondary click; a menu asked for
+    /// by the keyboard or an assistive technology is no press, nor is a
+    /// long press, whose touch went down already.
+    pub(super) fn overlay_context_menu(&mut self, id: NodeId, event: &ContextMenuEvent) {
+        if event.pointer_type != Some(PointerType::Mouse) || self.overlay_state.watched.is_empty() {
+            return;
+        }
+        let Ok(mut key) = self.key(id) else {
+            return;
+        };
+        let mut path = Vec::new();
+        while key != NO_KEY {
+            path.push(self.nodes[key as usize].id);
+            key = self.nodes[key as usize].parent;
+        }
+        self.press_outside(event.page_position, &path);
+    }
+
+    /// A press at `page` on the views of `path` (the one pressed first):
+    /// `onPressOutside` of the shown overlays watching presses that it is
+    /// outside of, their anchors and the overlays inside them.
+    fn press_outside(&mut self, page: Point<Points>, path: &[NodeId]) {
+        for i in 0..self.overlays.len() {
+            let key = self.overlays[i];
+            let node = &self.nodes[key as usize];
+            let Some(state) = self.overlay(key) else {
+                continue;
+            };
+            if state.host.is_none() || !node.events.contains(EventKind::PressOutside) {
+                continue;
             }
+            let id = node.id;
+            let anchor = anchor_node(state);
+            let inside = path.iter().any(|&p| {
+                p == id
+                    || Some(p) == anchor
+                    || self.key(p).is_ok_and(|k| {
+                        self.nodes[k as usize].is_overlay() && self.is_ancestor(key, k)
+                    })
+            });
+            if inside {
+                continue;
+            }
+            self.events.push(crate::element::JsEvent::Event(
+                id,
+                EventKind::PressOutside,
+                EventPayload::Map(vec![("pagePosition", PayloadValue::Point(page))]),
+            ));
         }
     }
 
@@ -1190,6 +1233,10 @@ impl<M: TextEngine> Core<M> {
             .as_mut()
             .expect("root state")
             .laid_out = Some((size, 0.0));
+        // Its content may have changed: measured again when needed.
+        if let Some(state) = self.overlay_mut(key) {
+            state.natural = None;
+        }
         self.layout_root(wrapper, definite(size));
         self.emit_frames(key);
     }
@@ -1338,7 +1385,26 @@ impl<M: TextEngine> Core<M> {
                     },
                     None => config,
                 };
-                place(anchor, framed, area, &config, self.nodes[key as usize].rtl)
+                let rtl = self.nodes[key as usize].rtl;
+                let horizontal = config.placement.is_horizontal();
+                match self.natural_extent(key, horizontal, frame.size, area, ring) {
+                    // Its size follows the room it is told: the side is
+                    // chosen at its natural size.
+                    Some(natural) => {
+                        let natural = match horizontal {
+                            true => Size {
+                                width: natural + ring.width * 2.0,
+                                ..framed
+                            },
+                            false => Size {
+                                height: natural + ring.height * 2.0,
+                                ..framed
+                            },
+                        };
+                        place_fitted(anchor, natural, area, &config, rtl)
+                    }
+                    None => place(anchor, framed, area, &config, rtl),
+                }
             }
         };
         // On the device pixel grid, as every other frame is (`round`): an
@@ -1367,6 +1433,7 @@ impl<M: TextEngine> Core<M> {
         if state.placed != Some((placed, bounds)) {
             state.placed = Some((placed, bounds));
             if listens {
+                state.told = Some(placed.available);
                 self.events.push(crate::element::JsEvent::Event(
                     id,
                     EventKind::Position,
@@ -1393,6 +1460,68 @@ impl<M: TextEngine> Core<M> {
             }),
         );
         placed.origin
+    }
+
+    /// The extent of overlay `key` (laid out at `size`) along its side's
+    /// axis (`horizontal`: its width) when its size follows the room it
+    /// was told: its max size that way is the `available` it last heard
+    /// (a select's list, an app's popup that scrolls past it). That room
+    /// may be the other side's, or the side's before its content grew, so
+    /// while it holds the overlay to it the core measures the overlay
+    /// without it (up to `area`, as large as either side's room can be,
+    /// less the terminal's frame `ring`): once per layout, only then.
+    /// `None` for any other overlay: its size is its own, placed as it is.
+    fn natural_extent(
+        &mut self,
+        key: Key,
+        horizontal: bool,
+        size: Size<Points>,
+        area: Bounds<Points>,
+        ring: Size<Points>,
+    ) -> Option<Points> {
+        let state = self.overlay(key)?;
+        let told = state.told?;
+        let layout = self.nodes[key as usize].layout?;
+        let max = self.layout.style(layout).max_size;
+        let (max, told, extent, room) = match horizontal {
+            true => (
+                max.width,
+                told.width,
+                size.width,
+                area.size.width - ring.width * 2.0,
+            ),
+            false => (
+                max.height,
+                told.height,
+                size.height,
+                area.size.height - ring.height * 2.0,
+            ),
+        };
+        // A max size of the app's own: the overlay's size is its own.
+        let taffy::ExpandedLengthPercentageAuto::Length(max) = max.expand() else {
+            return None;
+        };
+        let follows = |room: Points| (max - room.0).abs() <= 0.5;
+        if !follows(told) && !state.held.is_some_and(follows) {
+            return None;
+        }
+        let state = self.overlay_mut(key)?;
+        state.held = Some(Points(max));
+        let state = self.overlay(key)?;
+        // Short of the max it is held to: its natural size already.
+        if extent.0 < max - 0.5 {
+            return Some(extent);
+        }
+        if let Some(natural) = state.natural {
+            return Some(natural);
+        }
+        let measure = super::leaf_measure(&self.text_engine, &mut self.measure_cache);
+        let measured = self
+            .layout
+            .extent_capped(layout, !horizontal, room.0.max(0.0), measure)?;
+        let natural = Points(measured).max(extent);
+        self.overlay_mut(key)?.natural = Some(natural);
+        Some(natural)
     }
 
     /// Where unanchored overlay `key`, laid out at `frame` in host

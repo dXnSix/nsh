@@ -1473,11 +1473,14 @@ panic = \"abort\"
         )?;
         self.write_rust_app(ws, root)?;
         write(&ws.join("rust-web/build.rs"), WEB_BUILD_RS)?;
+        let sets = self.rust_web_sets();
         write(
             &ws.join("rust-web/lib.rs"),
             &format!(
                 "//! The Rust app's web runtime: its root, which `nsh.js` runs, with the\n\
-                 //! `nsh/base` and the app's components; no QuickJS.\n\n\
+                 //! `nsh/base` and the app's components; no QuickJS. `nsh/base` is its\n\
+                 //! core part: the app makes its components by type, which links\n\
+                 //! only those it uses.\n\n\
                  {wasm}nsh_platform_web::rust_app!({sets}, app_root());\n\n\
                  // Off WebAssembly it is empty, as nsh-platform-web is.\n\
                  #[cfg(not(target_arch = \"wasm32\"))]\nuse nsh_core as _;\n\
@@ -2126,24 +2129,42 @@ opt-level = \"s\"
     }
 
     /// The development host (`runner` false) or release runner of the app,
-    /// built for `platform`.
-    pub(crate) fn runtime(&self, platform: Platform, runner: bool) -> anyhow::Result<PathBuf> {
-        if self.root.is_some() {
-            return self.rust_runner(platform, runner);
+    /// built for `platform`, for `triple` (`None`: this machine), which is
+    /// the platform's own ([`Platform::triple`]) but for a macOS package
+    /// for another processor.
+    pub(crate) fn runtime(
+        &self,
+        platform: Platform,
+        runner: bool,
+        triple: Option<&str>,
+    ) -> anyhow::Result<PathBuf> {
+        if let Some(triple) = triple
+            && Some(triple) != platform.triple()
+        {
+            // Cargo runs in this directory, so rustup picks its toolchain here.
+            crate::runtime::require_target(None, triple)?;
         }
-        self.host(platform, runner)
+        if self.root.is_some() {
+            return self.rust_runner(platform, runner, triple);
+        }
+        self.host(platform, runner, triple)
     }
 
     /// The development host `nsh test --target` runs the app in: a Rust
     /// app's too, built with its root (its runners have no dev server
     /// client), which it runs when the test session says so.
     pub(crate) fn test_host(&self, platform: Platform) -> anyhow::Result<PathBuf> {
-        self.host(platform, false)
+        self.host(platform, false, platform.triple())
     }
 
     /// The development host (`runner` false) or release runner for
-    /// `platform` with the app's crates.
-    fn host(&self, platform: Platform, runner: bool) -> anyhow::Result<PathBuf> {
+    /// `platform` with the app's crates, built for `triple`.
+    fn host(
+        &self,
+        platform: Platform,
+        runner: bool,
+        triple: Option<&str>,
+    ) -> anyhow::Result<PathBuf> {
         let name = match (platform, runner) {
             (Platform::Linux, false) => "linux-host",
             (Platform::Linux, true) => "linux-app",
@@ -2173,30 +2194,29 @@ opt-level = \"s\"
         } else {
             what
         };
-        self.build(
-            &workspace,
-            &package,
-            platform.triple(),
-            release,
-            features,
-            &what,
-        )
+        let what = format!("{what}{}", crate::runtime::other_triple(platform, triple));
+        self.build(&workspace, &package, triple, release, features, &what)
     }
 
     /// A Rust app's runner for `platform` (`rust-<platform>`): a release
     /// build for packages (`release`), a debug one for `nsh run`. Both run
     /// the app's root with no JS runtime.
-    fn rust_runner(&self, platform: Platform, release: bool) -> anyhow::Result<PathBuf> {
+    fn rust_runner(
+        &self,
+        platform: Platform,
+        release: bool,
+        triple: Option<&str>,
+    ) -> anyhow::Result<PathBuf> {
         let dir = match platform {
             Platform::Linux => "rust-linux",
             Platform::MacOs => "rust-macos",
             Platform::Windows => "rust-windows",
-            Platform::Tui => return self.host(platform, false),
+            Platform::Tui => return self.host(platform, false, triple),
             Platform::Gpui => unreachable!("a Rust app does not run on GPUI's host"),
             Platform::IphoneOs | Platform::IphoneSimulator | Platform::MacCatalyst => "rust-ios",
         };
         let what = format!(
-            "the {} runner of {}{}",
+            "the {} runner of {}{}{}",
             match platform {
                 Platform::Linux => "Linux",
                 Platform::MacOs => "macOS",
@@ -2207,16 +2227,10 @@ opt-level = \"s\"
                 Platform::MacCatalyst => "Mac Catalyst",
             },
             self.packages(),
-            if release { "" } else { " (debug)" }
+            if release { "" } else { " (debug)" },
+            crate::runtime::other_triple(platform, triple)
         );
-        self.build(
-            &self.workspace,
-            &self.bin(dir),
-            platform.triple(),
-            release,
-            &[],
-            &what,
-        )
+        self.build(&self.workspace, &self.bin(dir), triple, release, &[], &what)
     }
 
     /// Waits until `stop` returns true (or the user stops the command);
@@ -2403,6 +2417,23 @@ impl RustApp {
     /// crate ([`Self::app_sets`]).
     fn sets(&self) -> String {
         let mut sets = vec!["nsh_base::registry()".to_owned()];
+        sets.extend(self.crates.iter().map(|c| format!("{}()", set_fn(c))));
+        format!("vec![{}]", sets.join(", "))
+    }
+
+    /// The UI sets of a Rust app's web runtime: `nsh/base`'s core part
+    /// only, then the app's ([`Self::sets`]). A Rust app runs no JS, so
+    /// nothing makes a component by its registered name: its code makes
+    /// each of `nsh/base`'s components by type (`nsh_base::button()`),
+    /// which links that component's code where it is used. What the app
+    /// needs of the set itself is the theme's tokens, which every set of
+    /// `nsh/base` has, and the built-in scroll bars, the core part's.
+    /// Registering every part would link every component into the module,
+    /// the ones the app never makes included (`nsh_base::registry_of`).
+    fn rust_web_sets(&self) -> String {
+        let mut sets = vec![
+            "nsh_base::registry_of([nsh_base::parts::core as nsh_base::parts::Part])".to_owned(),
+        ];
         sets.extend(self.crates.iter().map(|c| format!("{}()", set_fn(c))));
         format!("vec![{}]", sets.join(", "))
     }
@@ -3254,7 +3285,10 @@ mod tests {
         assert!(android.contains("nsh::main!(app_root());"), "{android}");
         assert!(read("rust-android/Cargo.toml").contains("default-features = false"));
         let web = read("rust-web/lib.rs");
-        assert!(web.contains("nsh_platform_web::rust_app!(vec![nsh_base::registry(), set_app_app_native()], app_root());"), "{web}");
+        // Only `nsh/base`'s core part: the root makes the components it uses
+        // by type, so the module links those and no others.
+        assert!(web.contains("nsh_platform_web::rust_app!(vec![nsh_base::registry_of([nsh_base::parts::core as nsh_base::parts::Part]), set_app_app_native()], app_root());"), "{web}");
+        assert!(!web.contains("nsh_base::registry()"), "{web}");
         assert!(read("rust-web/Cargo.toml").contains("default-features = false"));
         // Linkable for `nsh package`, as the TSX app's runtime.
         assert!(read("rust-web/Cargo.toml").contains("linkable = [\"nsh-platform-web/linkable\"]"));
@@ -3942,6 +3976,12 @@ panic = \"abort\"
                 "main.rs"
             };
             let code = read(&format!("{dir}/{file}"));
+            // A Rust app's web runtime takes `nsh/base`'s core part only.
+            let sets = if dir == "rust-web" {
+                "vec![nsh_base::registry_of([nsh_base::parts::core as nsh_base::parts::Part]), set_app_charts(), set_app_app_storage()]"
+            } else {
+                sets
+            };
             assert!(code.contains(sets), "{dir}: no {sets:?} in\n{code}");
             // Each crate's entry in its own function; one stand-in.
             for (name, package) in [("app_charts", "charts"), ("app_app_storage", "app-storage")] {

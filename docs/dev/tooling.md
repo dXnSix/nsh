@@ -450,6 +450,14 @@ Headless runs play the platform's part NSH's protocol defines, and refuse what o
   calls go over a channel to `RouteServer`, which `serve` answers on the test file's VM while a step runs, as a route's
   function; each call and post the handlers get is recorded for `app.host.calls()` / `posts()`), and
   `app.host.send` is `Headless::send_host_event`, a step;
+- `open`'s `modules` are stand-ins on the same channel (`HostChannel::fake_module_export`, read by the app's VM
+  through `HostBridge::module_fakes`): when the VM makes a native module's exports (`nsh-js` `modules.rs` `init`,
+  `host_module`), a faked export or member (`Export.member`, and a flat default module's object member) becomes the
+  stand-in (`host_channel.rs` `stand_in`): a value, a function returning it, or a function whose calls cross as
+  `HostBridge::call_module_fake` of `<specifier>#<path>`, its arguments a JSON array, without the `host` capability's
+  check or a time limit, answered by the test's function like a handler's. Their handlers
+  (`HostChannel::handle_module_fake`) are kept apart from the embedding app's: `host.call` never reaches them, and
+  they leave the channel unconfigured, so `host.available()` and a page host (`web.host`) stay as they were;
 - images are not loaded: an image's size (`ImageInfo`) is answered with an error, as a failed load (a `TextView` asks
   for the sizes of its images); an image or files on the clipboard fail the step that asked (`Screen::take_unsupported`).
 
@@ -565,9 +573,11 @@ it gets `--background` unless `nsh test --foreground` (`AppOptions::background`)
 it the active app, which is meant to leave the keyboard with the app the user types in; its window is ordered in
 without becoming key and the agent does not wait for activation (`MacNative::activate`; nor with `--foreground` while
 the screen is locked, which never lets the app become active: tests run there as unlocked, `docs/dev/macos.md`
-"Checking a change"). A left button press into a web view of the inactive app goes to the `WKWebView` directly
-(`agent::mouse`), since AppKit gives an inactive window's first click only to views that accept the first mouse. A
-window that is not the
+"Checking a change"). It gets `--activation-policy` too when nsh.json's `macos.activationPolicy` is not the default
+(`MacosConfig::host_args`, as under `nsh run`): `--background` takes precedence, so the app runs with its policy under
+`--foreground` (`docs/dev/macos.md` "Activation policy"). A left button press into a web view of the inactive app goes
+to the `WKWebView` directly (`agent::mouse`), since AppKit gives an inactive window's first click only to views that
+accept the first mouse. A window that is not the
 key window gets keys from the agent directly (`synth::key_event`): the app's key monitors (`nsh/keymap`) first, then,
 for a Command key the window's own key equivalents, and for any key the main menu's item for it (`synth::key_equivalent`:
 Select All, Undo, an app's own item, Control and function-key shortcuts too), sent as the application sends them for its
@@ -652,13 +662,13 @@ test plays the embedding app there too, through the view's own channel (`Model::
 `open`'s `host.params` arrive in the setup (`TestEnvironment::host_params`), `app.host.send` is
 `TestStep::HostSend` (the model's `send_host_event`, then the agent settles; the web's page answers
 `SceneQuery::HostSend`), and the channel's URL handler records each URL the app opens and takes it, so nothing
-opens (`TestStep::OpenedUrls`, `SceneQuery::OpenedUrls`). `host.handlers` runs headless only: the calls would need
-the test's functions over the dev server. `open` checks its options against the target before it starts a host
+opens (`TestStep::OpenedUrls`, `SceneQuery::OpenedUrls`). `host.handlers` and `modules` run headless only: the calls would
+need the test's functions over the dev server. `open` checks its options against the target before it starts a host
 (`run.rs`'s `check_launch`, against `TestRun::target`, a `HostTarget` the CLI makes: `test_host::host_target`), so
 no option is dropped: `width` / `height` where the app fills a device's screen (iOS, Android: `HostTarget::sized`
 false), a `platform` of another kind of device than the target's (`HostTarget::platform`, GPUI's the machine's
 desktop: a desktop's `platform`, the way a test asks for a mouse and keys headless, runs on every desktop and the web
-as the target's; `ios` and `android` only on their own) and `host.handlers` reject with `ERR_NSH_TEST_UNSUPPORTED`
+as the target's; `ios` and `android` only on their own), `host.handlers` and `modules` reject with `ERR_NSH_TEST_UNSUPPORTED`
 (`failure::unsupported`), naming the option and the target.
 Every other option reaches the host (storage, routes, the environment, the clipboard, a manual clock, `host.params`).
 
@@ -760,7 +770,7 @@ browser's JavaScript engine, its timers, clock and `fetch` through the engine wh
 DOM, in `nsh.js`'s `testPage`). The CLI's agent sees the app through `RemoteScene`, which asks those questions
 through `DevServer::step`, and acts with the browser's trusted input over the DevTools protocol (`Input.dispatch*`:
 mouse presses, wheel events of 20 px a frame apart, key events with macOS's editing commands, as Playwright sends
-them), `history.back()` for back, `Emulation.*` for the viewport and the color scheme and `Page.captureScreenshot`.
+them), `history.back()` for back and `history.forward()` for forward (`app.forward()`), `Emulation.*` for the viewport and the color scheme and `Page.captureScreenshot`.
 Headless Chromium finds no input device and reports `pointer: none` / `hover: none`, which `nsh.js`'s `measureIdiom`
 reads as a touch screen; `cdp.rs` launches it with `--blink-settings` giving it a fine, hovering pointer (as
 Playwright does), so the page measures as a browser with a mouse: the desktop idiom at any width (`open`'s `width`). A desktop's `platform` (`macos`, `windows`, `linux`) skips the measuring: `run.rs`'s
@@ -923,7 +933,10 @@ program that describes them, builds the hosts and runners with them, and does ev
   dev-dependencies: `RustApp::watched`): a change to their `.rs` files, `Cargo.toml` or `assets/` ends the session
   with `rust_app::Restart` (the hosts it started are stopped with it), and the command starts again in the same
   process (`main.rs` `run`): the app is described again, the hosts are built again and start anew; JS and TSX edits
-  stay hot. After a restart a failing build reports the error and waits for the next change (`RustApp::wait_after`).
+  stay hot. A Rust change saved within the watcher's debounce after a TSX one (a checkout, a formatter) restarts too,
+  without building the TSX first: the new session builds it against the sets described anew
+  (`dev::rust_changed_until`). After a restart a failing build reports the error and waits for the next change
+  (`RustApp::wait_after`).
 - **Rust apps.** With `"root": "<path in the crate>"` in `nsh.json` (in the first crate `"rust"` lists), the app's
   directory resolves to its `nsh.json` (`entry::resolve`; a named `App.tsx` stays the TSX entry), and the app runs with
   no JS: `rust_app::RootConfig` (with `"theme"`, `"appearance"`, `"statusBar"` and `"id"`) adds the members `rust-linux`,
@@ -981,7 +994,11 @@ output policy), rather than assuming the main workspace's `target`. On macOS it 
 built for this machine from a copy in `.nsh/hosts/<profile>/` that changes only when the build does
 (`runtime::stable_copy`): cargo links the binary into `target/<profile>` again on every build, even one with nothing
 to do, and macOS checks an executable whose file changed again the first time it runs, a second or more for a debug
-host on every `nsh run`. The web runtimes (`runtime/web/nsh.wasm`
+host on every `nsh run`. `nsh package --target macos --arch` builds the release runner (the checkout's or a Rust app's)
+for each processor it names, with `--target <triple>` for one other than this Mac's (`runtime::file_for`,
+`RustApp::runtime`; programs the CLI runs itself, such as `describe`, stay this Mac's), and `lipo` makes one universal
+executable of `universal`'s two; an installed distribution's runner is its own processor's, so the package checks what
+the runner holds (`package::macos_runners`). The web runtimes (`runtime/web/nsh.wasm`
 for published apps, `nsh-dev.wasm` for the development host, and `nsh.js`: `docs/dev/web.md`) are always built with
 the `web` profile, into `target/wasm32-unknown-unknown/web/`. Every CLI wasm build, including an app's generated Rust runtime outside the checkout, selects `getrandom_backend="custom"` for the browser entropy bridge. `runtime::web_build_flags` appends it to explicit Rust flags or merges a Cargo target-config array, preserving the existing stack and user flags; generated web packages also retain their 8 MiB stack link argument.
 
@@ -1000,14 +1017,16 @@ are. App-specific development hosts are generated in `.nsh/rust/tui/tui-host`.
 
 `.github/workflows/release.yml` runs `cargo xtask dist` on macOS (Apple silicon, with the iOS and Mac Catalyst
 runtimes and the iOS SDK, and Intel), Linux and Windows (x86_64 and arm64), each with the desktop runtime and the GPUI
-and terminal development hosts of its machine. The arm64 Linux and Windows builds set `NSH_DIST_NO_ANDROID` and leave
-the Android runtime out: the `android` component comes from x86_64 Linux, and the NDK has no arm64 Linux
-toolchain. Each run checks that the packaged CLI makes and bundles a new app, and archives `dist/nsh` as one
+and terminal development hosts of its machine. The components the same on every machine,
+`android` and `web`, come from x86_64 Linux's build alone: every other build sets `NSH_DIST_NO_ANDROID` and
+`NSH_DIST_NO_WEB` and leaves them out (the NDK has no arm64 Linux toolchain either). Each run checks that the packaged CLI makes and bundles a new app, and archives `dist/nsh` as one
 directory `nsh/` in `nsh-<platform>.tar.gz` (`.zip` on Windows) with the CLI and that machine's runtime only. The
 embedding SDKs are archives of their own (`nsh-embed-ios.zip`, `nsh-embed-android.zip`), and `nsh component pack`
 moves every other runtime into its component's archive (`nsh-android.tar.gz`, `nsh-android-symbols.tar.gz` and
 `nsh-web.tar.gz` from x86_64 Linux's build, `nsh-ios-macos-arm64.tar.gz`, `nsh-gpui-<platform>.tar.gz`,
 `nsh-tui-<platform>.tar.gz`), each with a `.sha256`.
+The release builds them with thin LTO over 16 codegen units (`CARGO_PROFILE_RELEASE_*` in the workflow) rather than
+the profile's fat LTO over one, which linked each executable single-threaded for up to 25 minutes; `web` keeps fat LTO.
 `xtask dist` strips the executables it copies (`copy_executable`: about a sixth of each), after the build rather
 than with the profile's `strip`, so the release builds a checkout keeps for profiling stay as they are. Asset
 names carry no version, so `releases/latest/download/<asset>` always resolves; the installers and package managers
@@ -1067,6 +1086,35 @@ How users get it (`website/docs/installation.md`):
 - Scoop: the release job fills in `.github/packages/nsh.json` and attaches it as `nsh.json`; Scoop installs from
   `releases/latest/download/nsh.json` and updates from the same URL, so nothing is committed anywhere.
 - mise: its `github:` backend picks the archive by OS and architecture, strips `nsh/` and finds `bin/`.
+
+### Self-hosted runners
+
+The release (its builds, its `Plan`, `Release` and `Nightly` jobs, the crates' publication, the Homebrew formula's
+update) and the Website workflow's build and deployment of the published site run on the organization's self-hosted
+runners, the machines longbridge-pro releases on: `[self-hosted, macOS, ARM64]`, `[self-hosted, Linux, Packager]`
+and `[self-hosted, Windows]`. Their runner groups allow this public repository. They take no pull request: a pull
+request's code is anyone's, so pull requests and merge-queue runs build on GitHub's runners, and only maintainers'
+events (tags, the schedule, manual runs, pushes to `main`, the release's completion) reach these machines.
+
+The checks (Core, Linux, Windows, TUI, Rust application, Examples, Compat) run on pull requests, and on `main` every
+three hours (skipped when `main` has not moved since the last scheduled run, `changed.yml`) and on manual runs, never on every push: a push to `main` is a pull request that already passed
+them. The scheduled runs are on GitHub's runners, so it saves the dependencies' caches the pull requests restore. TUI's
+macOS check runs only in the scheduled runs. So do Rust application's tests in Chrome; the Website workflow builds the site on pull
+requests only when `website/`, the skills, the tasks examples or `nsh-platform-web` change.
+
+`.github/actions/cargo` installs huacnlee/cargo into the runner's tool cache rather than over the machine's
+`~/.cargo/bin/cargo`, and restores no cache there: the fork's build directory stays on the machine, so a run rebuilds
+only what changed. What the workflows install on GitHub's runners is installed on these machines beforehand:
+
+- every one: rustup, `git`, `curl`, `gh`, `jq`, `zip`;
+- macOS: Xcode (the iOS SDKs) and its command line tools;
+- Linux: Ubuntu 24.04 (the Linux runtime's glibc and GTK), the packages of `release.yml`'s "Install clang, GTK 4
+  and GPUI's libraries" step, `envsubst`, Java 17 and an Android SDK with an NDK (`ANDROID_HOME`), Node.js,
+  Python 3 with `venv`, and Playwright's system libraries for Chromium, Firefox and WebKit
+  (`playwright install-deps`), and what the CI workflows' `apt-get` steps install (`xvfb`, `xauth`,
+  `dbus`, `at-spi2-core`, `libxtst6`, GStreamer's good plug-ins, `libvulkan1`, `libasound2-dev`, `libssl-dev`);
+- Windows: the MSVC Build Tools, the Windows SDK, LLVM in `C:\Program Files\LLVM` and Git for Windows, whose
+  `bash` is the first on `PATH`.
 
 ### Homebrew publishing setup and recovery
 

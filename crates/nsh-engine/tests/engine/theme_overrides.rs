@@ -34,6 +34,7 @@ fn start(name: &str, overrides: Option<&str>) -> (Engine, Receiver<MountBatch>) 
         minify: false,
         split: false,
         ui_sets: Vec::new(),
+        ..Default::default()
     })
     .unwrap();
     let _ = std::fs::remove_dir_all(&dir);
