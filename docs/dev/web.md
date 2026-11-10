@@ -738,7 +738,10 @@ browsers' touches into what phones report:
   window (`dialogs: "viewport"`). Ctrl + wheel (a touchpad's pinch) pinches the view
   under the pointer and never zooms the page. Scroll events follow the desktop backends: touch drags send
   `onScrollDragStart` / `EndDrag`, glides and snaps `onMomentumStart` / `End`, every scroll ends with one
-  `onScrollEnd` (the browser's `scrollend` after a scroll driven here, `drive` / `ownEnd`, is not another).
+  `onScrollEnd` (the browser's `scrollend` after a scroll driven here, `drive` / `ownEnd`, is not another). An
+  engine without `scrollend` (Chromium before 114: the Chromium 108 of 2024's Samsung TVs; `SCROLLEND` in `nsh.js`)
+  ends a scroll the browser drives once no scroll event came for 150 ms (`SCROLL_QUIET`, `scrolled`), a glide's with
+  `onMomentumEnd` first and a held scroll bar's at its release (`browser/scrollend.test.mjs`).
 - **Mouse drags never scroll**, in every idiom, as on the desktop backends: dragging the content is a touchscreen's
   way to scroll, the mouse has the wheel, the keyboard and the scroll bar. Its drags go to pans, the responder system
   and selectable text (`pointerDown` only takes touches and pens in zoomable views, which pan themselves; a press
