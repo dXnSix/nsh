@@ -52,9 +52,10 @@ enum Part {
     WindowState,
     Displays,
     Fps,
+    Shaders,
 }
 
-const PARTS: usize = 15;
+const PARTS: usize = 16;
 
 /// The environment's part of a context's state.
 pub(crate) struct Env {
@@ -110,6 +111,19 @@ pub(crate) struct Env {
     current_theme: RefCell<Option<String>>,
     /// The displays the platform reported last.
     displays: RefCell<Vec<Display>>,
+    /// What `appInfo()` reports: the build's ([`set_app_info`]).
+    app: RefCell<AppInfo>,
+}
+
+/// The app as it was built (`appInfo()`), from the JSON the bundler writes.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct AppInfo {
+    id: Option<String>,
+    name: Option<String>,
+    version: Option<String>,
+    build: Option<f64>,
+    development: bool,
 }
 
 impl Default for Env {
@@ -134,9 +148,53 @@ impl Default for Env {
             built_theme: RefCell::default(),
             current_theme: RefCell::default(),
             displays: RefCell::default(),
+            app: RefCell::default(),
         }
     }
 }
+
+/// Takes in the app's information as the build wrote it (`setup`'s fifth
+/// argument); what this runtime cannot read is left out.
+pub(crate) fn set_app_info(cx: *mut JsContext, json: &str) {
+    match serde_json::from_str(json) {
+        Ok(info) => *env(cx).app.borrow_mut() = info,
+        Err(e) => log::warn!("appInfo: {e}, ignored"),
+    }
+}
+
+/// `appInfo()`: the app as it was built.
+unsafe extern "C" fn app_info(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+) -> JsValue {
+    let app = env(cx).app.borrow();
+    let text = |value: &Option<String>| match value {
+        Some(value) => string(cx, value),
+        None => qjs::JS_NULL,
+    };
+    object(
+        cx,
+        &[
+            (c"id", text(&app.id)),
+            (c"name", text(&app.name)),
+            (c"version", text(&app.version)),
+            (c"build", app.build.map_or(qjs::JS_NULL, qjs::JS_NewFloat64)),
+            (c"development", boolean(app.development)),
+        ],
+    )
+}
+
+/// `appInfo` of `nsh`.
+pub(crate) const APP_INFO_EXPORT: crate::modules::Item = (
+    "appInfo",
+    Export::Function(app_info, 0),
+    Ts::function(
+        "The app as it was built: its id, name, version and build number\n(`nsh.json`'s; a package's as `nsh package` and `nsh publish` name and\nversion it, `--id`, `--name`, `--version` and `--build` included, with\nversion `1.0.0` and build `1` where nothing gives them), and whether it\nis a development build (`nsh run`, `nsh dev`, `nsh test`, `nsh build`\nwithout `--release`). `nsh/updater`'s `shellInfo()` reports the\ninstalled app's.",
+        &["(): AppInfo"],
+    ),
+);
 
 fn env<'a>(cx: *mut JsContext) -> &'a Env {
     // SAFETY: a projection of the state's field, reached by shared
@@ -1054,6 +1112,9 @@ pub(crate) fn set_environment(cx: *mut JsContext, next: &Environment) -> Result<
     if changed(&|p| p.lifecycle == next.lifecycle) {
         writes.push((Part::Lifecycle, string(cx, next.lifecycle.name())));
     }
+    if changed(&|p| p.shaders == next.shaders) {
+        writes.push((Part::Shaders, boolean(next.shaders)));
+    }
     if changed(&|p| p.window_state == next.window_state) {
         writes.push((
             Part::WindowState,
@@ -1276,7 +1337,7 @@ pub(crate) const ELEMENTS: &[Item] = &[(
     "Input",
     Export::Value(|cx| crate::dom::host_component(cx, "input", true)),
     Ts::function(
-        "A native text input (UITextField / UITextView, EditText); `ref` has\n`focus()`, `blur()` and `setSelection(start, end)`.",
+        "A native text input (UITextField / UITextView, EditText); `ref` has\n`focus()`, `blur()`, `setSelection(start, end)` and `insertText(text)`.",
         &["(props: InputProps): JSX.Element"],
     ),
 )];
@@ -1460,6 +1521,14 @@ pub(crate) const DEVICE_EXPORTS: &[Item] = &[
         Ts::value(
             "The platform the app runs on, constant while it runs.",
             "PlatformInfo",
+        ),
+    ),
+    (
+        "shadersAvailable",
+        Export::Value(|cx| accessor(cx, Part::Shaders)),
+        Ts::value(
+            "Whether the platform draws shader views (`Shader`, `ShaderEffect`,\n`ShaderTransition`, `ScreenEffect`, `ScreenTransition`) (reactive).\n`false` where the platform was built without a renderer or draws in a\nterminal's cells; elsewhere `true` until the first shader mounts on a\nmachine without a GPU (WebGL 2 in a browser), when it turns `false` for\ngood. Show a shader while it holds and the app's own drawing (a `Canvas`,\nan image) otherwise.",
+            "Accessor<boolean>",
         ),
     ),
 ];

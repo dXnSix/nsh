@@ -79,6 +79,12 @@ pub mod state {
     /// The view is busy (`aria-busy:`): its `accessibilityState.busy`.
     /// Set by the core, never reported by the platform.
     pub const BUSY: u16 = 1024;
+    /// The view has the keyboard focus and shows it (`focus-visible:`):
+    /// the keyboard moved it there, or it is an input that edits, as CSS's
+    /// `:focus-visible`. Set by the core from [`FOCUSED`] and the surface's
+    /// input modality (`Core::set_input_modality`), never reported by the
+    /// platform.
+    pub const FOCUS_VISIBLE: u16 = 2048;
     /// The states the core sets from the accessibility state, which the
     /// platforms never report.
     pub(crate) const ACCESSIBILITY: u16 =
@@ -129,6 +135,9 @@ pub mod deps {
     /// The view's own `data-*` attributes (`data-range-start:`); a group's
     /// are [`GROUP`].
     pub const DATA: u16 = 2048;
+    /// The pointer's precision and the terminal (`pointer-fine:`,
+    /// `pointer-coarse:`, `terminal:`).
+    pub const DEVICE: u16 = 4096;
 }
 
 /// CSS's `ch` where no font is known ([`ClassList::apply`]): half a `rem`,
@@ -158,6 +167,18 @@ pub enum Platform {
     Web,
 }
 
+/// How precise the primary pointer is (`pointer-fine:`, `pointer-coarse:`),
+/// as CSS's `pointer` media feature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Pointer {
+    /// A finger on a touch screen.
+    #[default]
+    Coarse,
+    /// A mouse or a trackpad: desktop behavior (a desktop OS, a desktop
+    /// browser, a terminal).
+    Fine,
+}
+
 /// The environment variants depend on, set by the engine.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ClassEnvironment {
@@ -167,6 +188,10 @@ pub struct ClassEnvironment {
     pub platform: Platform,
     /// The user asked for less motion.
     pub reduce_motion: bool,
+    /// The primary pointer's precision.
+    pub pointer: Pointer,
+    /// Drawn in a terminal (`terminal:`).
+    pub terminal: bool,
 }
 
 /// What a node's classes are matched against: the core builds it per
@@ -209,6 +234,8 @@ pub(crate) struct Condition {
     platform: Option<Platform>,
     rtl: Option<bool>,
     reduce_motion: Option<bool>,
+    pointer: Option<Pointer>,
+    terminal: Option<bool>,
     /// Required [`state`] bits.
     states: u16,
     /// [`state`] bits that must be off (`enabled:`).
@@ -232,6 +259,8 @@ impl Condition {
     fn matches(&self, cx: &Context<'_>, data: Data<'_>) -> bool {
         if self.dark.is_some_and(|d| d != cx.env.dark)
             || self.platform.is_some_and(|p| p != cx.env.platform)
+            || self.pointer.is_some_and(|p| p != cx.env.pointer)
+            || self.terminal.is_some_and(|t| t != cx.env.terminal)
             || self.rtl.is_some_and(|r| r != cx.rtl)
             || self
                 .reduce_motion
@@ -282,8 +311,11 @@ impl Condition {
     /// Applies only while the view (or its group) is pressed, hovered or
     /// focused: press feedback.
     fn interactive(&self) -> bool {
-        const INTERACTION: u16 =
-            state::PRESSED | state::HOVERED | state::FOCUSED | state::FOCUS_WITHIN;
+        const INTERACTION: u16 = state::PRESSED
+            | state::HOVERED
+            | state::FOCUSED
+            | state::FOCUS_WITHIN
+            | state::FOCUS_VISIBLE;
         self.states & INTERACTION != 0
             || self
                 .group
@@ -307,6 +339,9 @@ impl Condition {
         }
         if self.reduce_motion.is_some() {
             d |= deps::MOTION;
+        }
+        if self.pointer.is_some() || self.terminal.is_some() {
+            d |= deps::DEVICE;
         }
         if self.states != 0 || self.not_states != 0 {
             d |= deps::STATE;
@@ -453,10 +488,14 @@ pub(crate) mod rank {
     pub(crate) const LTR: Key = Key::new(62);
     pub(crate) const RTL: Key = Key::new(63);
     pub(crate) const DARK: Key = Key::new(64);
+    /// Tailwind's pointer variants, after `dark:` as it registers them.
+    pub(crate) const POINTER_COARSE: Key = Key::new(65);
+    pub(crate) const POINTER_FINE: Key = Key::new(66);
     /// NSH's platform variants, after Tailwind's.
     pub(crate) const IOS: Key = Key::new(70);
     pub(crate) const ANDROID: Key = Key::new(71);
     pub(crate) const WEB: Key = Key::new(72);
+    pub(crate) const TERMINAL: Key = Key::new(73);
 }
 
 impl Rule {
@@ -1280,7 +1319,7 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<Key> {
             rank::FOCUS
         }
         "focus-visible" => {
-            states(cond, FOCUSED);
+            states(cond, FOCUS_VISIBLE);
             rank::FOCUS_VISIBLE
         }
         "active" => {
@@ -1355,6 +1394,18 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<Key> {
             cond.platform = Some(Platform::Web);
             rank::WEB
         }
+        "pointer-coarse" => {
+            cond.pointer = Some(Pointer::Coarse);
+            rank::POINTER_COARSE
+        }
+        "pointer-fine" => {
+            cond.pointer = Some(Pointer::Fine);
+            rank::POINTER_FINE
+        }
+        "terminal" => {
+            cond.terminal = Some(true);
+            rank::TERMINAL
+        }
         v => {
             // `data-range-start`: Tailwind 4's boolean form, `[data-range-start]`.
             if let Some(name) = v.strip_prefix("data-").filter(|n| data_name(n)) {
@@ -1385,7 +1436,7 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<Key> {
                     "hover" => (HOVERED, rank::HOVER),
                     "active" => (PRESSED, rank::ACTIVE),
                     "focus" => (FOCUSED, rank::FOCUS),
-                    "focus-visible" => (FOCUSED, rank::FOCUS_VISIBLE),
+                    "focus-visible" => (FOCUS_VISIBLE, rank::FOCUS_VISIBLE),
                     "focus-within" => (FOCUS_WITHIN, rank::FOCUS_WITHIN),
                     "disabled" => (DISABLED, rank::DISABLED),
                     "selected" => (SELECTED, rank::SELECTED),

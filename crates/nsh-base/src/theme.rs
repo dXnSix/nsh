@@ -691,6 +691,45 @@ mod tests {
     }
 
     #[test]
+    fn a_non_object_css_vars_is_listed() {
+        for vars in ["null", "[]", "true", "12", r#""light""#] {
+            let json = format!(r#"{{ "cssVars": {vars} }}"#);
+            let (_, ignored) = Theme::from_json_lenient(&json).unwrap();
+            assert_eq!(ignored, ["cssVars: expected an object"], "{json}");
+        }
+        let (_, ignored) = Theme::from_json_lenient(r#"{ "cssVars": {} }"#).unwrap();
+        assert!(ignored.is_empty());
+    }
+
+    #[test]
+    fn an_unclosed_color_function_is_listed() {
+        for value in [
+            "rgb(255 0 0",
+            "oklch(0.7 0.1",
+            "color-mix(in srgb, rgb(255 0 0), #fff",
+        ] {
+            let json = format!(r#"{{ "cssVars": {{ "light": {{ "brand": "{value}" }} }} }}"#);
+            let (_, ignored) = Theme::from_json_lenient(&json).unwrap();
+            assert_eq!(ignored, [format!("`brand`: {value} is no color")]);
+        }
+        let (_, ignored) = Theme::from_json_lenient(
+            r#"{ "cssVars": { "theme": { "shadow-sm": "rgb(0 0 0 / 0.1) 0px 1px 2px" } } }"#,
+        )
+        .unwrap();
+        assert!(ignored.is_empty());
+    }
+
+    #[test]
+    fn a_dark_length_does_not_hide_an_unreadable_light_color() {
+        let (theme, ignored) = Theme::from_json_lenient(
+            r##"{ "cssVars": { "light": { "brand": "#zz" }, "dark": { "brand": "12px" } } }"##,
+        )
+        .unwrap();
+        assert_eq!(ignored, ["`brand`: #zz is no color"]);
+        assert_eq!(theme.number("brand"), Some(12.0));
+    }
+
+    #[test]
     fn a_color_that_is_none_is_listed() {
         let (theme, mut ignored) = Theme::from_json_lenient(
             r##"{ "cssVars": {

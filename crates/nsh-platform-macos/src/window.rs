@@ -469,9 +469,9 @@ pub(crate) fn key_root(surface: &Surface) -> NshView {
         .unwrap_or_else(|| surface.root.clone())
 }
 
-/// The window a sheet (an open or save panel, an alert) the user asked
-/// for slides down from: the app's own window that has the keyboard when
-/// it has a title bar to hang it from, else the main window.
+/// The window a sheet the user asked for (an alert, an open or save panel:
+/// [`panel_window`]) slides down from: the app's own window that has the
+/// keyboard when it has a title bar to hang it from, else the main window.
 pub(crate) fn sheet_window(surface: &Surface) -> Option<Retained<NSWindow>> {
     let own = surface.windows.try_borrow().ok().and_then(|windows| {
         windows
@@ -480,6 +480,62 @@ pub(crate) fn sheet_window(surface: &Surface) -> Option<Retained<NSWindow>> {
             .map(|w| w.window.clone())
     });
     own.or_else(|| surface.root.ns().window())
+}
+
+/// The window an open or save panel slides down from: the
+/// [`sheet_window`] while the user sees it ([`panel_placement`]). A sheet
+/// of a window out of sight (a tray app's hidden main window, a minimized
+/// one, one kept off every screen) stays out of sight with it, so the
+/// panel shows in a window of its own instead (`None`), the app activated
+/// first as `focus()` activates it: a panel of an inactive app opens
+/// behind the front app's windows.
+pub(crate) fn panel_window(surface: &Surface) -> Option<Retained<NSWindow>> {
+    let window = sheet_window(surface);
+    let app = NSApplication::sharedApplication(surface.mtm);
+    let sight = window.as_deref().map(|w| Sight {
+        shown: w.isVisible() && !app.isHidden(),
+        minimized: w.isMiniaturized(),
+        on_screen: w.screen().is_some(),
+    });
+    match panel_placement(sight, app.isActive(), in_background(surface.mtm)) {
+        PanelPlacement::Sheet => window,
+        PanelPlacement::Alone(activation) => {
+            activation.apply(&app);
+            None
+        }
+    }
+}
+
+/// What the user sees of a window.
+#[derive(Debug, Clone, Copy)]
+struct Sight {
+    /// It is ordered in (`isVisible`) and its app is not hidden.
+    shown: bool,
+    /// It is in the Dock (`isMiniaturized`).
+    minimized: bool,
+    /// Some of it is on a screen: `screen` is nil for a window wholly off
+    /// every screen.
+    on_screen: bool,
+}
+
+/// How [`panel_window`] shows a panel.
+#[derive(Debug, PartialEq, Eq)]
+enum PanelPlacement {
+    /// As a sheet of the window.
+    Sheet,
+    /// In a window of its own, the app activated first as it says.
+    Alone(Activation),
+}
+
+/// How a panel shows, given what the user sees of the window it would
+/// slide down from (`None`: the surface is in no window) and whether the
+/// app is active and runs in the background: alone, it takes the keyboard
+/// as `focus()` does, since the user asked for it.
+fn panel_placement(sight: Option<Sight>, active: bool, background: bool) -> PanelPlacement {
+    match sight {
+        Some(s) if s.shown && !s.minimized && s.on_screen => PanelPlacement::Sheet,
+        _ => PanelPlacement::Alone(activation(active, background, true, true)),
+    }
 }
 
 /// The root view window `id` shows (the surface's root for the main
@@ -1031,6 +1087,17 @@ fn request(surface: &Rc<Surface>, id: NodeId, request: &WindowRequest) {
             });
         }
     }
+    if id == ROOT_ID {
+        match request {
+            // A main window hidden at launch shows at last.
+            WindowRequest::Show | WindowRequest::Focus => main_shown(surface),
+            // The app's own mode replaces the one it was to open in.
+            WindowRequest::SetMode(_) | WindowRequest::SetPlacement(_) => {
+                surface.main_open_mode.take();
+            }
+            _ => {}
+        }
+    }
     report(surface, id);
 }
 
@@ -1077,18 +1144,7 @@ fn order_front(surface: &Surface, window: &NSWindow, activate: bool, key: bool, 
     if focus && window.isMiniaturized() {
         window.deminiaturize(None);
     }
-    match activation(app.isActive(), in_background(surface.mtm), activate, focus) {
-        Activation::None => {}
-        Activation::Ask => app.activate(),
-        // `activate()` only asks since macOS 14, and macOS turns it down
-        // after a click on the app's tray icon, even one made in the
-        // click's action: the window would come front with the keyboard
-        // still in the app the user was in.
-        Activation::Take => {
-            #[allow(deprecated)]
-            app.activateIgnoringOtherApps(true);
-        }
-    }
+    activation(app.isActive(), in_background(surface.mtm), activate, focus).apply(&app);
     if key && window.canBecomeKeyWindow() {
         window.makeKeyAndOrderFront(None);
         became_key(surface, window);
@@ -1102,7 +1158,8 @@ fn order_front(surface: &Surface, window: &NSWindow, activate: bool, key: bool, 
     }
 }
 
-/// How [`order_front`] activates the app.
+/// How [`order_front`] activates the app (and [`panel_window`], for an
+/// open or save panel shown alone).
 #[derive(Debug, PartialEq, Eq)]
 enum Activation {
     /// Not at all: it is active, the window does not activate it (a panel),
@@ -1111,9 +1168,27 @@ enum Activation {
     /// It asks macOS, which may turn it down: a window shown (`show()`, a
     /// new window) stays out of the way of the app the user is in.
     Ask,
-    /// It takes the keyboard from the app in front (`focus()`), as other
-    /// toolkits' focus calls do.
+    /// It takes the keyboard from the app in front (`focus()`, an open or
+    /// save panel shown alone), as other toolkits' focus calls do.
     Take,
+}
+
+impl Activation {
+    /// Activates `app` as it says.
+    fn apply(self, app: &NSApplication) {
+        match self {
+            Activation::None => {}
+            Activation::Ask => app.activate(),
+            // `activate()` only asks since macOS 14, and macOS turns it down
+            // after a click on the app's tray icon, even one made in the
+            // click's action: the window would come front with the keyboard
+            // still in the app the user was in.
+            Activation::Take => {
+                #[allow(deprecated)]
+                app.activateIgnoringOtherApps(true);
+            }
+        }
+    }
 }
 
 fn activation(active: bool, background: bool, activates: bool, focus: bool) -> Activation {
@@ -1284,6 +1359,8 @@ fn open_window(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
         window.setAppearance(surface.root.ns().appearance().as_deref());
         crate::window_state::observe(surface, Target::Own(id), &w.watch, Some(&window));
     }
+    // Dialogs of its first render were presented before it was a window.
+    crate::navigation::window_opened(surface, view);
     // A dialog stays above its parent and moves with it.
     if kind == WindowKind::Dialog
         && let Some(parent) = &parent_window
@@ -1464,9 +1541,22 @@ pub(crate) fn launch_main(
     }
 }
 
-/// The standalone app's main window shows: it takes the mode it opens in.
-pub(crate) fn launched_main(surface: &Surface, mode: Option<WindowMode>) {
-    if let Some(mode) = mode.filter(|m| *m != WindowMode::Normal)
+/// The standalone app's main window launched (`shown`: and showed): it
+/// takes the mode it opens in when it first shows. A full screen or zoomed
+/// window would show at once.
+pub(crate) fn launched_main(surface: &Surface, mode: Option<WindowMode>, shown: bool) {
+    surface
+        .main_open_mode
+        .set(mode.filter(|m| *m != WindowMode::Normal));
+    if shown {
+        main_shown(surface);
+    }
+}
+
+/// The standalone app's main window shows: the first time, it takes the
+/// mode it opens in.
+pub(crate) fn main_shown(surface: &Surface) {
+    if let Some(mode) = surface.main_open_mode.take()
         && let Some(window) = surface.root.ns().window()
     {
         crate::window_state::set_mode(&surface.window, &window, mode);
@@ -2138,6 +2228,18 @@ define_class!(
             Bool::new(close_press(&surface, id, window))
         }
 
+        // Before a zoom: the frame it returns to (`crate::window_state`).
+        #[unsafe(method(windowShouldZoom:toFrame:))]
+        fn window_should_zoom(&self, window: &NSWindow, _frame: NSRect) -> Bool {
+            let (key, id) = *self.ivars();
+            if let Some(surface) = Surface::with_key(key) {
+                with_watch(&surface, id, |watch| {
+                    crate::window_state::will_zoom(watch, window);
+                });
+            }
+            Bool::YES
+        }
+
         #[unsafe(method(windowDidResignKey:))]
         fn window_did_resign_key(&self, _notification: &objc2_foundation::NSNotification) {
             let (key, id) = *self.ivars();
@@ -2372,6 +2474,57 @@ mod tests {
             assert_eq!(activation(true, false, true, focus), Activation::None);
             assert_eq!(activation(false, true, true, focus), Activation::None);
             assert_eq!(activation(false, false, false, focus), Activation::None);
+        }
+    }
+
+    #[test]
+    fn panels_are_sheets_of_windows_in_sight_else_shown_alone() {
+        let seen = Sight {
+            shown: true,
+            minimized: false,
+            on_screen: true,
+        };
+        // A window the user sees takes the panel as a sheet, active app or
+        // not, as it always did.
+        for (active, background) in [(true, false), (false, false), (false, true)] {
+            assert_eq!(
+                panel_placement(Some(seen), active, background),
+                PanelPlacement::Sheet
+            );
+        }
+        // Hidden (a tray app's main window), minimized, off every screen
+        // (a placeholder kept out of sight) or no window: a panel of its
+        // own, the inactive app activated as `focus()` activates it; an
+        // active app is in front already, a background one (a test's)
+        // never activates.
+        let out_of_sight = [
+            Some(Sight {
+                shown: false,
+                ..seen
+            }),
+            Some(Sight {
+                minimized: true,
+                ..seen
+            }),
+            Some(Sight {
+                on_screen: false,
+                ..seen
+            }),
+            None,
+        ];
+        for sight in out_of_sight {
+            assert_eq!(
+                panel_placement(sight, false, false),
+                PanelPlacement::Alone(Activation::Take)
+            );
+            assert_eq!(
+                panel_placement(sight, true, false),
+                PanelPlacement::Alone(Activation::None)
+            );
+            assert_eq!(
+                panel_placement(sight, false, true),
+                PanelPlacement::Alone(Activation::None)
+            );
         }
     }
 }
