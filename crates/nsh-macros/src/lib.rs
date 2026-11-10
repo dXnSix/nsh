@@ -1877,7 +1877,8 @@ fn methods_impl(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 ///   `font` `font-*`, `shadow` `shadow-*`); a color (`AdaptiveColor`), a
 ///   number (`f32`, `Points`), a font family (`SharedString`, `String`) or
 ///   box shadows (`AdaptiveShadow`). `name = "…"` names it, `role = "…"`
-///   maps a role onto it (`role = "popover"`).
+///   maps a role onto it (`role = "popover"`), once for each role it plays
+///   (`role = "card", role = "popover"`: one surface for both).
 /// - `#[token(nested)]`: a field of another `AppTheme` type, its names under
 ///   `<field>-`: in front of a color's or a number's name (`surface-raised`),
 ///   after a namespaced kind's namespace, so its classes still read it

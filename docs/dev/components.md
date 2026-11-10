@@ -839,8 +839,10 @@ each documented with its token and classes; the compile errors of `AppTheme`'s d
 (`T::default().to_tokens()`), each behind a function pointer, so the registry stays `Clone` and needs no `T`
 (`Registry::theme_specs`). `Registry::merged` unions the sets' specs by `TypeId` and builds the crate-private
 `ThemeSet` of them: each name with its owner type and kind, the types in registration order, and the union of their
-defaults with the role aliases. `ThemeSet::try_add` returns an error naming both types for a name or a role
-(`role_owner`) another type claims; `ThemeSet::new` panics with it, as two components of one name do.
+defaults with the role aliases. A token's spec lists the roles it plays (`TokenSpec::roles`, one `.role(..)` each):
+several roles may read one token, and one role reads one token. `ThemeSet::try_add` returns an error naming both
+types for a name or a role (`role_owner`) another type claims, and for a role two tokens of one type play;
+`ThemeSet::new` panics with it, as two components of one name do.
 `ThemeSet::target(key)` is the name a theme file's key sets: a declared name, else the token a role of that name
 (`primary`) is mapped onto.
 
@@ -859,7 +861,8 @@ are rewritten through `ThemeSet::target`, a key no type declares is dropped and 
 declares it ``), the file is read with `theme_file::overrides` (so `var()` names the file's tokens, else `base`'s, the
 types' defaults), and each declared name keeps a value only of its kind (`TokenKind::holds`, `Tokens::copy_named`),
 others listed (`` `odds-up`: no color value ``), as is a declared name the file sets and leaves unread. A role's
-key in a section that also sets its token gives way to it (listed), and a `var()` naming a role names its token.
+key in a section that also sets its token gives way to it (listed), as does the second of two roles' keys that set
+one token to two values, and a `var()` naming a role names its token.
 `theme_file::parse_declared` lays that over `base`. A name no type declares is listed with `theme_file::UNDECLARED`'s
 words, which `ThemeTokens::checked` / `updated` do not refuse a file for (`setTheme` leaves the name out, #1190).
 `ThemeSet::try_add` also refuses a token named as no value of its kind is read (a font not `font-*`, a shadow not

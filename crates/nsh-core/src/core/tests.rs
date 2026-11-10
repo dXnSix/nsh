@@ -35157,6 +35157,287 @@ mod theme_set_numbers {
     }
 }
 
+/// A token playing several roles: a design system with one surface for
+/// cards and popovers maps both roles onto it. Each role reads it, both
+/// follow every change of it, each role's name sets it in a theme file,
+/// and a role is still played by one token.
+mod token_roles {
+    use super::*;
+    use crate::{
+        color::rgb,
+        element::{
+            AdaptiveColor, AppTheme, ModuleCx, Registry, Role, RustCall, RustOp, ToJs, TokenKind,
+            TokenSpec, Tokens,
+        },
+    };
+
+    /// One surface for cards and popovers, and one ink on both.
+    #[derive(Debug, Clone, PartialEq)]
+    struct Flat {
+        surface: AdaptiveColor,
+        ink: AdaptiveColor,
+    }
+
+    impl Default for Flat {
+        fn default() -> Self {
+            Flat {
+                surface: AdaptiveColor::rgb(0xf5f5f5, 0x171717),
+                ink: AdaptiveColor::rgb(0x111111, 0xeeeeee),
+            }
+        }
+    }
+
+    impl AppTheme for Flat {
+        type Patch = Option<AdaptiveColor>;
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("surface", TokenKind::Color)
+                        .role(Role::Card)
+                        .role(Role::Popover),
+                    TokenSpec::new("ink", TokenKind::Color)
+                        .role(Role::CardForeground)
+                        .role(Role::PopoverForeground),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
+            out.set_color(&format!("{prefix}surface"), self.surface);
+            out.set_color(&format!("{prefix}ink"), self.ink);
+        }
+
+        fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
+            let d = Flat::default();
+            Flat {
+                surface: tokens
+                    .color(&format!("{prefix}surface"))
+                    .unwrap_or(d.surface),
+                ink: tokens.color(&format!("{prefix}ink")).unwrap_or(d.ink),
+            }
+        }
+
+        /// The patch is the surface.
+        fn write_patch(patch: &Self::Patch, prefix: &str, out: &mut Tokens) {
+            if let Some(c) = patch {
+                out.set_color(&format!("{prefix}surface"), *c);
+            }
+        }
+    }
+
+    fn flat() -> Registry {
+        let mut registry = Registry::new();
+        registry.theme::<Flat>();
+        registry
+    }
+
+    fn file(json: &str) -> String {
+        format!(r#"{{ "cssVars": {json} }}"#)
+    }
+
+    #[test]
+    fn a_token_plays_each_of_its_roles() {
+        let mut c = core();
+        c.set_components(flat());
+        let tokens = c.tokens();
+        for role in [Role::Card, Role::Popover] {
+            assert_eq!(tokens.role_name(role), "surface");
+            assert_eq!(tokens.role_color(role), Some(Flat::default().surface));
+        }
+        for role in [Role::CardForeground, Role::PopoverForeground] {
+            assert_eq!(tokens.role_name(role), "ink");
+        }
+        // A role it does not play reads its own name, as before.
+        assert_eq!(tokens.role_name(Role::Primary), "primary");
+        // The roles are no tokens.
+        assert!(tokens.color("card").is_none() && tokens.color("popover").is_none());
+        // A type's own tokens carry them too.
+        let own = Flat::default().to_tokens();
+        assert_eq!(own.role_name(Role::Card), "surface");
+        assert_eq!(own.role_name(Role::Popover), "surface");
+    }
+
+    #[test]
+    fn both_roles_follow_a_change_of_the_token() {
+        let mut c = core();
+        c.set_components(flat());
+        c.apply(Op::Rust(RustOp {
+            call: 0,
+            run: RustCall::Op(Box::new(|cx: &mut ModuleCx| {
+                cx.update_theme::<Flat>(Some(AdaptiveColor::rgb(0x123456, 0x654321)));
+                Ok(Box::new(()) as Box<dyn ToJs>)
+            })),
+        }))
+        .unwrap();
+        for role in [Role::Card, Role::Popover] {
+            assert_eq!(
+                c.tokens().role_color(role),
+                Some(AdaptiveColor::rgb(0x123456, 0x654321)),
+                "{role:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_roles_name_sets_the_token_in_a_theme_file() {
+        let provider = flat().token_provider().unwrap();
+        for key in ["card", "popover", "surface"] {
+            let (tokens, left_out) = provider
+                .read(Some(&file(&format!(
+                    r##"{{ "light": {{ "{key}": "#123456" }} }}"##
+                ))))
+                .unwrap();
+            assert!(left_out.is_empty(), "{key}: {left_out:?}");
+            assert_eq!(
+                tokens.color("surface").map(|c| Color::from(c.light)),
+                Some(Color::from(rgb(0x123456))),
+                "{key}"
+            );
+            assert!(tokens.color("card").is_none() && tokens.color("popover").is_none());
+        }
+    }
+
+    #[test]
+    fn two_roles_names_with_one_value_set_the_token_once() {
+        let provider = flat().token_provider().unwrap();
+        let (tokens, left_out) = provider
+            .read(Some(&file(
+                r##"{ "light": { "card": "#123456", "popover": "#123456" } }"##,
+            )))
+            .unwrap();
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert_eq!(
+            tokens.color("surface").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x123456)))
+        );
+    }
+
+    #[test]
+    fn the_second_of_two_roles_names_with_two_values_is_left_out() {
+        let provider = flat().token_provider().unwrap();
+        let (tokens, left_out) = provider
+            .read(Some(&file(
+                r##"{ "light": { "popover": "#222222", "card": "#111111" } }"##,
+            )))
+            .unwrap();
+        assert_eq!(
+            left_out,
+            ["`popover`: `card` sets the token its role is mapped onto, `surface`, too"]
+        );
+        assert_eq!(
+            tokens.color("surface").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x111111)))
+        );
+        // Each in a section of its own is each section's value.
+        let (tokens, left_out) = provider
+            .read(Some(&file(
+                r##"{ "light": { "card": "#111111" }, "dark": { "popover": "#222222" } }"##,
+            )))
+            .unwrap();
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert_eq!(
+            tokens.color("surface"),
+            Some(AdaptiveColor::rgb(0x111111, 0x222222))
+        );
+    }
+
+    #[test]
+    fn a_var_naming_either_role_names_the_token() {
+        let provider = flat().token_provider().unwrap();
+        let (tokens, left_out) = provider
+            .read(Some(&file(
+                r##"{ "light": { "surface": "#123456", "ink": "var(--popover)" } }"##,
+            )))
+            .unwrap();
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert_eq!(
+            tokens.color("ink").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x123456)))
+        );
+    }
+
+    #[test]
+    fn a_role_given_twice_to_a_token_is_one() {
+        let spec = TokenSpec::new("surface", TokenKind::Color)
+            .role(Role::Card)
+            .role(Role::Popover)
+            .role(Role::Card);
+        assert_eq!(spec.roles, [Role::Card, Role::Popover]);
+        assert!(TokenSpec::new("ink", TokenKind::Color).roles.is_empty());
+    }
+
+    /// Two tokens of one type playing `card`.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Double;
+
+    impl AppTheme for Double {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("paper", TokenKind::Color)
+                        .role(Role::Background)
+                        .role(Role::Card),
+                    TokenSpec::new("sheet", TokenKind::Color).role(Role::Card),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Double
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    #[should_panic(expected = "maps the role `card` twice")]
+    fn a_role_two_tokens_of_one_type_play_panics() {
+        Registry::new().theme::<Double>();
+    }
+
+    /// Another type's token playing `popover`, one of `Flat`'s `surface`'s.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Overlay;
+
+    impl AppTheme for Overlay {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("overlay", TokenKind::Color)
+                        .role(Role::Accent)
+                        .role(Role::Popover),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Overlay
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    #[should_panic(expected = "the role `popover` is mapped by both")]
+    fn a_role_another_types_token_plays_panics() {
+        let mut other = Registry::new();
+        other.theme::<Overlay>();
+        let _ = Registry::merged(&[flat(), other]);
+    }
+}
+
 /// Theme files and embedding overrides read under a theme set: by the
 /// types' names and kinds, a role's name setting the token it is mapped
 /// onto, `var()` against the types' defaults, an undeclared name left out.

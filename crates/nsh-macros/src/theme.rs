@@ -149,7 +149,8 @@ enum Role {
     Token {
         kind: &'static Kind,
         name: String,
-        role: Option<String>,
+        /// The roles it plays, as written.
+        roles: Vec<String>,
     },
     /// An inner theme type, its names under `prefix`.
     Nested { prefix: String },
@@ -171,7 +172,8 @@ struct Attr {
     /// `nested`, `flatten` or `skip`.
     mode: Option<(&'static str, Span)>,
     name: Option<LitStr>,
-    role: Option<LitStr>,
+    /// Each `role = "…"`: a token may play several.
+    roles: Vec<LitStr>,
 }
 
 fn parse_attr(attr: &syn::Attribute) -> syn::Result<Attr> {
@@ -205,12 +207,7 @@ fn parse_attr(attr: &syn::Attribute) -> syn::Result<Attr> {
                 }
                 out.name = Some(meta.value()?.parse::<LitStr>()?);
             }
-            "role" => {
-                if out.role.is_some() {
-                    return Err(twice("`role`"));
-                }
-                out.role = Some(meta.value()?.parse::<LitStr>()?);
-            }
+            "role" => out.roles.push(meta.value()?.parse::<LitStr>()?),
             other => match KINDS.iter().find(|k| k.name == other) {
                 Some(k) => {
                     if let Some((first, _)) = out.kind {
@@ -238,7 +235,7 @@ fn parse_attr(attr: &syn::Attribute) -> syn::Result<Attr> {
                 format!("a `{mode}` field has no kind of its own"),
             ));
         }
-        if let Some(lit) = out.name.as_ref().or(out.role.as_ref()) {
+        if let Some(lit) = out.name.as_ref().or(out.roles.first()) {
             return Err(syn::Error::new(
                 lit.span(),
                 format!("a `{mode}` field is no token: it takes no `name` or `role`"),
@@ -409,47 +406,49 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream2> {
                     return Err(err);
                 }
                 seen.push((name.clone(), name_span));
-                let role = match &parsed.role {
-                    None => None,
-                    Some(lit) => {
-                        let r = lit.value();
-                        let Some((_, fits)) = ROLES.iter().find(|(n, _)| *n == r) else {
-                            return Err(syn::Error::new(
-                                lit.span(),
-                                format!("no role is named `{r}`"),
-                            ));
-                        };
-                        let kind_fits = match fits {
-                            RoleKind::Color => kind.name == "color",
-                            RoleKind::Font => kind.name == "font",
-                            RoleKind::Number => kind.types == NUMBERS,
-                        };
-                        if !kind_fits {
-                            return Err(syn::Error::new(
-                                lit.span(),
-                                format!(
-                                    "the role `{r}` is {}, not a `{}` token",
-                                    fits.what(),
-                                    kind.name
-                                ),
-                            ));
-                        }
-                        if let Some((_, first)) = roles.iter().find(|(n, _)| *n == r) {
-                            let mut err = syn::Error::new(
-                                lit.span(),
-                                format!("the role `{r}` is mapped twice"),
-                            );
-                            err.combine(syn::Error::new(
-                                *first,
-                                format!("`{r}` is first mapped here"),
-                            ));
-                            return Err(err);
-                        }
-                        roles.push((r.clone(), lit.span()));
-                        Some(r)
+                let mut plays = Vec::new();
+                for lit in &parsed.roles {
+                    let r = lit.value();
+                    let Some((_, fits)) = ROLES.iter().find(|(n, _)| *n == r) else {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            format!("no role is named `{r}`"),
+                        ));
+                    };
+                    let kind_fits = match fits {
+                        RoleKind::Color => kind.name == "color",
+                        RoleKind::Font => kind.name == "font",
+                        RoleKind::Number => kind.types == NUMBERS,
+                    };
+                    if !kind_fits {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            format!(
+                                "the role `{r}` is {}, not a `{}` token",
+                                fits.what(),
+                                kind.name
+                            ),
+                        ));
                     }
-                };
-                Role::Token { kind, name, role }
+                    // A token may play several roles; a role is played by
+                    // one token, and named once.
+                    if let Some((_, first)) = roles.iter().find(|(n, _)| *n == r) {
+                        let mut err =
+                            syn::Error::new(lit.span(), format!("the role `{r}` is mapped twice"));
+                        err.combine(syn::Error::new(
+                            *first,
+                            format!("`{r}` is first mapped here"),
+                        ));
+                        return Err(err);
+                    }
+                    roles.push((r.clone(), lit.span()));
+                    plays.push(r);
+                }
+                Role::Token {
+                    kind,
+                    name,
+                    roles: plays,
+                }
             }
         };
         fields.push(Field {
@@ -474,16 +473,16 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream2> {
         let ident = &f.ident;
         let ty = &f.ty;
         match &f.role {
-            Role::Token { kind, name, role } => {
+            Role::Token { kind, name, roles } => {
                 let variant = format_ident!("{}", kind.variant);
                 let doc = &f.doc;
-                let role = role.as_ref().map(|r| {
+                let role = roles.iter().map(|r| {
                     let variant = format_ident!("{}", camel(r));
                     quote!(.role(#ui::Role::#variant))
                 });
                 let full = quote!(&#ui::TokenKind::#variant.prefixed(prefix, #name));
                 specs.push(quote! {
-                    specs.push(#ui::TokenSpec::new(#name, #ui::TokenKind::#variant).doc(#doc) #role);
+                    specs.push(#ui::TokenSpec::new(#name, #ui::TokenKind::#variant).doc(#doc) #(#role)*);
                 });
                 writes.push(quote! {
                     #private::ThemeValue::write(&self.#ident, #full, out);

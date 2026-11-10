@@ -694,7 +694,8 @@ impl Default for DsTheme {
   `rounded-card`), `spacing` (`spacing-*`), `text` (`text-*`), `weight` (`font-weight-*`), `tracking`, `leading`,
   `blur`, `font` (`font-*`) and `shadow` (`shadow-*`). A color is an `AdaptiveColor`, a number an `f32` or `Points`, a
   font family a `SharedString` or `String`, a shadow an `AdaptiveShadow`. `name = "…"` names a token (a namespaced
-  kind's name keeps its namespace: `#[token(radius, name = "radius-corner")]`), `role = "…"` maps a role onto it.
+  kind's name keeps its namespace: `#[token(radius, name = "radius-corner")]`), `role = "…"` maps a role onto it,
+  once for each role it plays (`#[token(color, role = "card", role = "popover")]`: one surface for both).
 - `#[token(nested)]` holds another `AppTheme` type, its names under `<field>-` as above (`surface: Surface` with
   `raised`: `surface-raised`, with `#[token(shadow)] raised`: `shadow-surface-raised`), read as
   `theme_of::<DsTheme>().surface.raised`. A name the tokens lack keeps the inner type's `Default`, not the value the
@@ -758,7 +759,8 @@ reset_theme::<DsTheme>(); // the app's action again
 [Theme roles](../modules/nsh-base.md#theme-roles)). A type maps roles onto its tokens with `TokenSpec::role`, so
 `nsh_base`'s `theme()` fields and components, the tab bar, the platforms' menus and alerts, and the default font draw
 with the type's tokens: above, `theme().popover` is the design system's `surface-overlay` and `theme().primary` its
-`action`.
+`action`. A token may play several roles (`.role(Role::Card).role(Role::Popover)`): a design system with one surface
+for cards and popovers maps both onto it, and both follow every change of it. A role is played by one token.
 
 **Names.** A token's name says what its kind is, as a CSS variable's does: a font's starts with `font-`, a shadow's
 with `shadow-`, a weight's with `font-weight-`, and no other kind's with `font-`. Registering a type whose name and
@@ -774,8 +776,9 @@ read as its declared kind (a color as a CSS color, a radius as a length). A role
 mapped onto: `"primary"` below sets the design system's `action`. `var(--surface-raised)` names a token the file
 sets, else the types' default. A name that no type declares, or a value of another kind, is a build warning and is
 left out when the app runs. A key that is a role's name, in a section that also sets the token the role is mapped
-onto, gives way to that token. An embedding app's theme overrides and TSX's `setTheme` and `updateTheme` read their
-files the same way: they leave a name no type declares out, and refuse a value they cannot read.
+onto, gives way to that token; so does the second of two roles' names that set one token to two values. An embedding
+app's theme overrides and TSX's `setTheme` and `updateTheme` read their files the same way: they leave a name no type
+declares out, and refuse a value they cannot read.
 
 ```json
 {
