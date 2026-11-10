@@ -70,6 +70,7 @@ mod theme;
 mod theme_overrides;
 mod theme_root;
 mod theme_update;
+mod token_by_name;
 mod url_scheme;
 mod websocket;
 

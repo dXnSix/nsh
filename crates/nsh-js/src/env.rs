@@ -22,6 +22,7 @@ use nsh_core::{
     platform::{Appearance, ColorScheme, Environment, Idiom, Os},
 };
 use rquickjs::qjs;
+use rustc_hash::FxHashMap;
 
 use crate::{
     modules::{Export, Item, Ts},
@@ -69,10 +70,15 @@ pub(crate) struct Env {
     insets: Cell<JsValue>,
     /// The design tokens the app is drawn with ([`set_tokens`]).
     tokens: RefCell<Arc<Tokens>>,
-    /// A signal of their version (owned): `token()` reads it, so what read
-    /// a token follows a new theme.
+    /// A signal of their version (owned), which every `token()` reads:
+    /// set when most of the tokens read changed (a new theme), and for the
+    /// names past [`TOKEN_SIGNALS`].
     tokens_signal: Cell<JsValue>,
     tokens_version: Cell<u32>,
+    /// A signal per token `token()` read (owned), set when that token's
+    /// value changes and few do: what read a token follows that token,
+    /// and a change of another one runs nothing of it.
+    token_signals: RefCell<FxHashMap<Box<str>, JsValue>>,
     /// The tokens the app's theme file gives ([`set_theme_tokens`]), taken
     /// in when the entry hands the theme to the renderer ([`take_theme`]).
     theme: RefCell<ThemeTokens>,
@@ -97,6 +103,7 @@ impl Default for Env {
             tokens: RefCell::new(Arc::default()),
             tokens_signal: Cell::new(UNDEFINED),
             tokens_version: Cell::new(0),
+            token_signals: RefCell::default(),
             theme: RefCell::new(ThemeTokens::default()),
             built_theme: RefCell::default(),
             current_theme: RefCell::default(),
@@ -121,6 +128,9 @@ impl Env {
             }
             qjs::JS_FreeValue(raw, self.insets.replace(UNDEFINED));
             qjs::JS_FreeValue(raw, self.tokens_signal.replace(UNDEFINED));
+            for (_, signal) in self.token_signals.get_mut().drain() {
+                qjs::JS_FreeValue(raw, signal);
+            }
         }
     }
 }
@@ -159,17 +169,64 @@ pub(crate) fn init(cx: *mut JsContext) {
     e.tokens_signal.set(reactive::new_signal(cx, number(0.0)));
 }
 
+/// How many tokens get a signal of their own ([`Env::token_signals`]):
+/// the names `token()` reads are a theme's, a few dozen. Once an app has
+/// read more (names it makes up without end), every change of the tokens
+/// sets the signal of all of them.
+const TOKEN_SIGNALS: usize = 1024;
+
 /// Takes in the design tokens the app is drawn with: what read a token
-/// runs again.
+/// whose value changed runs again, once however many of the tokens it read
+/// changed.
+///
+/// A change of few of the tokens read (`updateTheme` of a color) sets
+/// their own signals. A change of most of them (a new theme) sets the one
+/// signal of all tokens in their place: nearly every reader runs either
+/// way, and one signal runs them in the order they were made, the tree's,
+/// where the names' signals would run them name by name.
 pub(crate) fn set_tokens(cx: *mut JsContext, tokens: Arc<Tokens>) {
     let e = env(cx);
     if **e.tokens.borrow() == *tokens {
         return;
     }
-    e.tokens.replace(tokens);
+    let old = e.tokens.replace(tokens.clone());
     let version = e.tokens_version.get().wrapping_add(1);
     e.tokens_version.set(version);
-    reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
+    // What `token()` reads of a name: its value, and a number's dark one. A
+    // name that came or went differs too.
+    let read = |tokens: &Tokens, name: &str| (tokens.get(name), tokens.number_in(name, true));
+    // Collected first: a binding running again may read a new name.
+    let (changed, names): (Vec<JsValue>, usize) = {
+        let signals = e.token_signals.borrow();
+        let changed = signals
+            .iter()
+            .filter(|(name, _)| read(&old, name) != read(&tokens, name))
+            .map(|(_, signal)| *signal)
+            .collect();
+        (changed, signals.len())
+    };
+    if names >= TOKEN_SIGNALS || 2 * changed.len() > names {
+        return reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
+    }
+    reactive::batch_with(cx, || {
+        for signal in changed {
+            reactive::set_signal(cx, signal, number(version as f32));
+        }
+    });
+}
+
+/// The signal of token `name` (borrowed), made the first time the name is
+/// read; none past [`TOKEN_SIGNALS`] names.
+fn token_signal(cx: *mut JsContext, e: &Env, name: &str) -> Option<JsValue> {
+    if let Some(signal) = e.token_signals.borrow().get(name) {
+        return Some(*signal);
+    }
+    if e.token_signals.borrow().len() >= TOKEN_SIGNALS {
+        return None;
+    }
+    let signal = reactive::new_signal(cx, number(e.tokens_version.get() as f32));
+    e.token_signals.borrow_mut().insert(name.into(), signal);
+    Some(signal)
 }
 
 /// Sets how the app's theme file makes the tokens it is drawn with
@@ -388,7 +445,8 @@ pub(crate) const RESET_THEME_EXPORT: crate::modules::Item = (
 
 /// `token(name)`: the design token `name` in the appearance shown (a
 /// color as `#rrggbbaa`, a number, a font family), `undefined` when there
-/// is none. Reading it tracks the tokens and the appearance.
+/// is none. Reading it tracks that token ([`token_signal`]), the signal
+/// of all tokens and the appearance.
 unsafe extern "C" fn token(
     cx: *mut JsContext,
     _this: JsValue,
@@ -396,20 +454,21 @@ unsafe extern "C" fn token(
     argv: *mut JsValue,
 ) -> JsValue {
     let e = env(cx);
-    for tracked in [
-        e.tokens_signal.get(),
-        e.accessors[Part::ColorScheme as usize].get(),
-    ] {
-        // SAFETY: calls a signal and an accessor the environment owns.
-        unsafe {
-            let read = qjs::JS_Call(cx, tracked, UNDEFINED, 0, ptr::null_mut());
-            if qjs::JS_IsException(read) {
-                return read;
-            }
-            qjs::JS_FreeValue(cx, read);
-        }
+    let name = crate::dom::string_arg(cx, arg(argc, argv, 0));
+    reactive::track(cx, e.tokens_signal.get());
+    if let Some(signal) = name.as_deref().and_then(|name| token_signal(cx, e, name)) {
+        reactive::track(cx, signal);
     }
-    let Some(name) = crate::dom::string_arg(cx, arg(argc, argv, 0)) else {
+    // SAFETY: calls an accessor the environment owns.
+    unsafe {
+        let scheme = e.accessors[Part::ColorScheme as usize].get();
+        let read = qjs::JS_Call(cx, scheme, UNDEFINED, 0, ptr::null_mut());
+        if qjs::JS_IsException(read) {
+            return read;
+        }
+        qjs::JS_FreeValue(cx, read);
+    }
+    let Some(name) = name else {
         return UNDEFINED;
     };
     let dark = scheme(e, &current(cx)) == "dark";
