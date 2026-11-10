@@ -1742,7 +1742,12 @@ impl Keyboard {
     /// (`keymap.bind`), else it acts as `press` does (`"ok"` presses the
     /// view the focus is on); `"back"` goes back as the platform does
     /// (`onBackPress`), and does nothing when there is nothing to go back
-    /// from. An unknown name rejects with the names there are.
+    /// from. An unknown name rejects with the names there are. Every key
+    /// works headless and on the terminal, GPUI (Tizen TVs), the web,
+    /// Android and Linux; on Windows the arrows, OK, Back and the four media
+    /// keys a Windows keyboard has (`"mediaplaypause"`, `"mediastop"`,
+    /// `"medianext"`, `"mediaprevious"`); on macOS and iOS only the arrows,
+    /// OK and Back: elsewhere it rejects, naming the key and the platform.
     pub async fn remote(this: Instance<Self>, key: String) -> Result<(), JsError> {
         let steps = this.with(|k| k.steps.clone());
         steps.run(move |app| app.press_remote_key(&key)).await

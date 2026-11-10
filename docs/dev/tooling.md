@@ -360,9 +360,13 @@ report it:
   `onBackPress` listener first, else what there is to go back from, else nothing, so it never fails as `back()`
   does). An unknown name fails with the names there are. On a real target `TestStep::PressRemoteKey` reaches
   `Native::press_remote_key`, whose default is `press_keys` of the key's name and `back` for Back; GPUI presses
-  Back as the Tizen platform gives it (`VK_BROWSER_BACK`), the web presses the media and TV keys with Samsung
-  TVs' key codes (`test_web.rs`' `tv_key_code`, `nsh.js`'s `TV_KEY_CODES`), and the terminal's agent names them
-  as the keymap does (`red`), which `key_scheme` parses;
+  Back as the Tizen platform gives it (`VK_BROWSER_BACK`, `agent::remote_virtual_key`), the web presses the media
+  and TV keys with Samsung TVs' key codes (`test_web.rs`' `tv_key_event`, `nsh.js`'s `TV_KEY_CODES`), and the
+  terminal's agent names them as the keymap does (`red`), which `key_scheme` parses. Every key works headless and
+  on the terminal, GPUI, the web, Android (`KEYCODE_*`) and Linux (the media and TV keys go to the app's shortcuts,
+  GTK having none); Windows presses the arrows, OK, Back and its four `VK_MEDIA_*` keys (`mediaplaypause`,
+  `mediastop`, `medianext`, `mediaprevious`), macOS and iOS the arrows, OK and Back only (a Mac's media keys go to
+  the system, an iOS keyboard has none). There the other keys fail the step, naming the key and the platform;
 - `wait`, `wait_for` / `wait_for_gone` / `wait_until` (until a selector matches, matches no more, a condition on the
   screen holds), `next_change` (one batch or animation frame: what `nsh/test`'s `waitUntil` waits for between calls
   of its JS condition), `next_frame` (on a manual clock: one frame of the clock, `wait_frame`, then a moment for a
