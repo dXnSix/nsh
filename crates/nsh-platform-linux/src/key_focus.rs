@@ -1,13 +1,17 @@
 //! The keyboard focus on views: Tab moves it between the stops
-//! ([`nsh_core::ViewProps::focus_stop`]) and fields, in GTK's own focus
-//! chain; `focus()` moves it to a stop. A focused stop reports `FOCUSED`,
-//! `onFocus` and `onBlur`, Return and Space press it, and Shift+F10 or the
-//! Menu key ask it for its context menu.
+//! ([`nsh_core::ViewProps::focus_stop`]), fields and the native components
+//! that take it, in tree order ([`tab`], through
+//! [`nsh_core::input::tab_stop`]), as the other desktops do: GTK's own focus
+//! chain would go by the widgets' places on screen. `focus()` moves it to a
+//! stop. A focused stop reports `FOCUSED`, `onFocus` and `onBlur`, Return
+//! and Space press it, and Shift+F10 or the Menu key ask it for its context
+//! menu.
 //!
 //! Views stay unfocusable until Tab or `focus()` picks them: GTK also
 //! hands the focus around by itself (to the first focusable widget as a
-//! window maps, into a parent's children when a focused widget goes), and
-//! a click or a new window must not land on a button.
+//! window maps, into a parent's children when a focused widget goes, and
+//! through a native component's widgets), and a click or a new window must
+//! not land on a button.
 
 use std::{
     cell::{Cell, RefCell},
@@ -115,6 +119,21 @@ pub(crate) fn watch(surface: &Rc<Surface>, window: &gtk::Window) {
         _ => glib::Propagation::Proceed,
     });
     window.add_controller(keys);
+    // Tab after the app's bindings and the focused widget's (a native
+    // component's own): the window's `move-focus` binding.
+    let tabbed = Rc::downgrade(surface);
+    window.connect_move_focus(move |window, direction| {
+        let back = match direction {
+            gtk::DirectionType::TabForward => false,
+            gtk::DirectionType::TabBackward => true,
+            _ => return,
+        };
+        if let Some(surface) = tabbed.upgrade()
+            && tab(&surface, window, back)
+        {
+            window.stop_signal_emission_by_name("move-focus");
+        }
+    });
     let weak = Rc::downgrade(surface);
     let current = RefCell::new(None::<NshView>);
     window.connect_focus_widget_notify(move |window| {
@@ -124,6 +143,135 @@ pub(crate) fn watch(surface: &Rc<Surface>, window: &gtk::Window) {
             moved(&surface, window, &current);
         }
     });
+}
+
+/// A stop of Tab: the widget whose subtree has the focus while the stop
+/// does (an input's view, a native component's widget), and the widget
+/// that takes it.
+struct TabStop {
+    owner: gtk::Widget,
+    target: gtk::Widget,
+}
+
+/// Tab (`back`: Shift+Tab) in `window`: the focus moves to the next stop
+/// of the window's root view, in tree order (a scroll view's content as it
+/// is on screen, [`NshView::reading_children`]), around from the last;
+/// the newest modal keeps it (the views under it cannot take the focus:
+/// `can-focus`). False when there is no stop: GTK moves the focus then.
+fn tab(surface: &Surface, window: &gtk::Window, back: bool) -> bool {
+    let Some(root) = window
+        .surface()
+        .and_then(|s| crate::window::root_at(surface, &s))
+    else {
+        return false;
+    };
+    let stops = tab_stops(&root);
+    // The innermost stop the focus is in.
+    let current = GtkWindowExt::focus(window).and_then(|at| {
+        stops
+            .iter()
+            .rposition(|stop| at == stop.owner || at.is_ancestor(&stop.owner))
+    });
+    let Some(next) = core_input::tab_stop(current, stops.len(), back, true) else {
+        return false;
+    };
+    if Some(next) != current {
+        let target = &stops[next].target;
+        match target.downcast_ref::<NshView>() {
+            Some(view) => focus(view),
+            None => {
+                target.grab_focus();
+            }
+        }
+    }
+    true
+}
+
+/// The stops of Tab under `root`, in tree order.
+fn tab_stops(root: &NshView) -> Vec<TabStop> {
+    let mut stops = Vec::new();
+    for child in children(root) {
+        collect_tab_stops(&child, &mut stops);
+    }
+    stops
+}
+
+/// `view`'s child widgets in the order Tab goes through them.
+fn children(view: &NshView) -> Vec<gtk::Widget> {
+    view.reading_children().unwrap_or_else(|| {
+        let mut out = Vec::new();
+        let mut child = view.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            out.push(widget);
+        }
+        out
+    })
+}
+
+/// Whether `widget` and its subtree may take the focus: shown, sensitive
+/// and not kept out (`can-focus`: the views under the newest modal).
+fn reachable(widget: &gtk::Widget) -> bool {
+    widget.is_visible() && widget.is_child_visible() && widget.is_sensitive() && widget.can_focus()
+}
+
+fn collect_tab_stops(widget: &gtk::Widget, out: &mut Vec<TabStop>) {
+    if !reachable(widget) {
+        return;
+    }
+    let Some(view) = widget.downcast_ref::<NshView>() else {
+        // A native component's widget: one stop, its first focusable one.
+        if let Some(target) = first_focusable(widget, 0) {
+            out.push(TabStop {
+                owner: widget.clone(),
+                target,
+            });
+        }
+        return;
+    };
+    if !view.can_target() {
+        return;
+    }
+    if view.kind() == ViewKind::Input {
+        if let Some(editor) = crate::text_input::key_widget(view)
+            && reachable(&editor)
+            && editor.is_focusable()
+        {
+            out.push(TabStop {
+                owner: widget.clone(),
+                target: editor,
+            });
+        }
+        return;
+    }
+    if is_stop(view) {
+        out.push(TabStop {
+            owner: widget.clone(),
+            target: widget.clone(),
+        });
+    }
+    for child in children(view) {
+        collect_tab_stops(&child, out);
+    }
+}
+
+/// The first focusable widget of a native component's subtree, depth
+/// first from `widget`.
+fn first_focusable(widget: &gtk::Widget, depth: usize) -> Option<gtk::Widget> {
+    if depth > 16 || !reachable(widget) {
+        return None;
+    }
+    if widget.is_focusable() {
+        return Some(widget.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        if let Some(found) = first_focusable(&c, depth + 1) {
+            return Some(found);
+        }
+        child = c.next_sibling();
+    }
+    None
 }
 
 /// The focused stop of `surface`, in whichever of its windows.
@@ -352,6 +500,77 @@ mod tests {
             assert!(first.is_focus());
             assert!(blur(&first));
             assert!(!first.is_focus());
+            window.destroy();
+        });
+    }
+}
+
+/// Tab goes through the stops in tree order, not by their places on
+/// screen: `cargo test -p nsh-platform-linux --lib key_focus::tab_order`.
+#[cfg(test)]
+mod tab_order {
+    use nsh_core::{EventMask, MountItem, ROOT_ID};
+
+    use super::*;
+    use crate::gtk_test::{apply, frame, run, show, surface, view, wait_until};
+
+    /// Stops 2, 3 and 4 in tree order, 3 above 2 on screen, and a plain
+    /// view (5) between them.
+    fn views(surface: &Rc<Surface>) {
+        let mut items = Vec::new();
+        for (id, y) in [(2, 40.0), (5, 80.0), (3, 0.0), (4, 120.0)] {
+            items.push(MountItem::Create {
+                id,
+                kind: ViewKind::View,
+            });
+            items.push(MountItem::Insert {
+                parent: ROOT_ID,
+                child: id,
+                before: None,
+            });
+            items.push(MountItem::Frame {
+                id,
+                frame: frame(0.0, y, 100.0, 30.0),
+            });
+            if id != 5 {
+                let mut events = EventMask::default();
+                events.set(EventKind::Press, true);
+                items.push(MountItem::Events { id, events });
+            }
+        }
+        apply(surface, &items);
+    }
+
+    fn tab(window: &gtk::Window, back: bool) {
+        window.emit_move_focus(if back {
+            gtk::DirectionType::TabBackward
+        } else {
+            gtk::DirectionType::TabForward
+        });
+    }
+
+    #[test]
+    fn tab_goes_through_the_stops_in_tree_order_and_around() {
+        run(|| {
+            let surface = surface();
+            views(&surface);
+            let window = show(&surface);
+            let stops = [view(&surface, 2), view(&surface, 3), view(&surface, 4)];
+            assert!(wait_until(|| stops.iter().all(|v| v.is_mapped())));
+            for stop in &stops {
+                tab(&window, false);
+                assert!(stop.is_focus(), "{} next in tree order", stop.id());
+            }
+            tab(&window, false);
+            assert!(stops[0].is_focus(), "around from the last");
+            tab(&window, true);
+            assert!(stops[2].is_focus(), "Shift+Tab back around");
+            tab(&window, true);
+            assert!(stops[1].is_focus());
+            assert!(
+                !view(&surface, 5).is_focusable(),
+                "the plain view is no stop"
+            );
             window.destroy();
         });
     }

@@ -157,9 +157,13 @@ bubble back up. What NSH adds:
   macOS and Windows. Ctrl+Q, Alt+F4 and F11 cannot be bound; built with `dev`,
   Ctrl+R gets no shortcut (the dev host reloads). GDK does not mark auto-repeats: a binding without `repeat` fires
   once until the window's capture-phase key controller sees a release.
-- **Focus**: Tab / Shift+Tab is GTK's, in screen order (GTK sorts a container's children by position); hidden screens
-  are not child visible, and the views under the newest dialog cannot take the focus. Alerts (`system.rs`) move it
-  between their own buttons.
+- **Focus**: Tab / Shift+Tab (and with Ctrl) move it in tree order (`key_focus::tab`, on the window's `move-focus`
+  binding, after the app's bindings and the focused widget's own keys, through `nsh_core::input::tab_stop`): the stops
+  (`key_focus::is_stop`), the inputs' editors and each native component's first focusable widget, a scroll view's
+  content as it is on screen (`NshView::reading_children`); GTK's own chain, which sorts a container's children by
+  position, is not used for them (before 2026-11-10 it was), only inside a native component. Hidden screens are not
+  child visible, and the views under the newest dialog cannot take the focus (`can-focus`). Alerts (`system.rs`) move
+  it between their own buttons.
 
 `onKeyPress` reports what UIKit's does: the typed text (`"Enter"` for a line break), `"Backspace"` for a deletion (in
 an empty input too), and `"Escape"`, as on macOS. Pasted and undone text, and the deletion of a selection typed over,

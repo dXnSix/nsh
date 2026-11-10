@@ -201,7 +201,8 @@ The environment is a desktop's: the safe area and the keyboard height are 0, `id
 |---|---|
 | Return | In an `Input`, what `submitBehavior` says: submit (`onSubmit`), submit and leave the field, or a new line (multiline inputs) |
 | Shift+Return, Alt+Return | A new line in a multiline input whose return submits (Ctrl+Return submits) |
-| Tab, Shift+Tab | The next / previous field in screen order, within the newest dialog |
+| Tab, Shift+Tab (Ctrl too) | The next / previous field or pressable view in tree order, within the newest dialog |
+| Return, Space | Press the focused view with `onPress` |
 | Escape | Leaves the focused field; else clears a text selection, then closes the newest dialog or goes back |
 | Alt+Left, Back key, mouse back button | Go back (also from a field) |
 | Ctrl+arrows, Home / End, with Shift; Ctrl+Backspace / Delete | Move, select and delete by word and line in a field, as in every GTK app |
