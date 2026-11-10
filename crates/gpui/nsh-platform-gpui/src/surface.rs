@@ -281,6 +281,10 @@ pub(crate) struct Surface {
     /// The embedding app's locale and text size, standing in for the
     /// system's ([`crate::AppView::set_locale`], `set_font_scale`).
     pub(crate) host_environment: Cell<nsh_core::platform::HostEnvironment>,
+    /// The embedding app's reduce motion, screen reader and time zone,
+    /// standing in for the system's ([`crate::AppView::set_reduce_motion`],
+    /// `set_screen_reader`, `set_time_zone`).
+    pub(crate) host_settings: Cell<crate::host_settings::HostSettings>,
     /// The app's windows of its own besides the main one, oldest first
     /// ([`crate::window`]).
     pub(crate) windows: RefCell<Vec<Rc<crate::window::AppWindow>>>,
@@ -357,6 +361,7 @@ impl Surface {
             transparent: Cell::new(false),
             host_dark: Cell::new(None),
             host_environment: Cell::default(),
+            host_settings: Cell::default(),
             windows: RefCell::default(),
             input_root: RefCell::default(),
         });
@@ -575,6 +580,7 @@ impl Surface {
     /// app's settings over the system's.
     pub(crate) fn set_environment(&self, mut environment: Environment) {
         self.host_environment.get().apply(&mut environment);
+        self.host_settings.get().apply(&mut environment);
         if self.environment.replace(environment) != environment {
             self.control(|c| c.set_environment(environment));
             crate::system::environment_applied(self);

@@ -63,7 +63,9 @@
 //! appearance changes (GPUI reports no other setting changes); on Linux
 //! background threads follow the portal's `SettingChanged` and AT-SPI's
 //! property changes over D-Bus, and dialogs take the portal's
-//! `org.freedesktop.appearance accent-color`. Safe area and keyboard height
+//! `org.freedesktop.appearance accent-color`. On Tizen nothing in the
+//! process reports the TV's settings: the TV host passes them on through
+//! `AppView`'s setters (`tv`). Safe area and keyboard height
 //! are zero: desktop windows have neither. The surface's scheme drives the
 //! root's background (white / neutral-950, the default theme's), as the
 //! root view has none of its own.
@@ -189,7 +191,10 @@ pub(crate) fn simulate_system_scheme(dark: bool) {
 
 /// The desktop's settings changed (Linux's services): every surface
 /// follows.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    any(not(target_os = "linux"), target_vendor = "tizen"),
+    allow(dead_code)
+)]
 fn settings_changed() {
     let surfaces: Vec<Rc<Surface>> = WATCHED.with(|w| {
         let mut w = w.borrow_mut();
@@ -531,7 +536,7 @@ fn rtl_language(tag: &str) -> bool {
 
 /// Major and minor version of a dotted version (`6.9.3-arch1-1`,
 /// `14.5`).
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(any(windows, target_vendor = "tizen"), allow(dead_code))]
 fn parse_version(release: &str) -> (u16, u16) {
     let mut parts = release
         .trim()
@@ -549,7 +554,7 @@ fn text_scale(percent: Option<u32>) -> f32 {
         .map_or(1.0, |p| p as f32 / 100.0)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_vendor = "tizen")))]
 mod os {
     use std::cell::Cell;
 
@@ -803,6 +808,80 @@ mod os {
             );
         }
         VERSION.with(|v| *v)
+    }
+}
+
+// Tizen: `target_os = "linux"`, without the desktop's services.
+#[cfg(target_vendor = "tizen")]
+use tv as os;
+
+/// A Tizen TV's settings: no settings portal or AT-SPI runs there, and
+/// `system_settings` is the TV host's to read (it owns the app's main
+/// loop). The host gives the TV's settings through `AppView`'s setters
+/// (`set_locale`, `set_font_scale`, `set_time_zone`, `set_reduce_motion`,
+/// `set_screen_reader`, `set_appearance`), which go over these: the POSIX
+/// locale and time zone of the process, the default text size, motion on,
+/// no screen reader, no accent, and no OS version (the kernel's is not
+/// the TV's).
+#[cfg(any(test, target_vendor = "tizen"))]
+mod tv {
+    use super::{
+        Settings, posix_languages, posix_locale, posix_regional, posix_time_zone, rtl_language,
+    };
+
+    /// The settings of a process whose environment variables `var` reads.
+    pub(super) fn settings_of(var: impl Fn(&str) -> Option<String>) -> Settings {
+        let locale = posix_locale(&var);
+        Settings {
+            font_scale: 1.0,
+            reduce_motion: false,
+            rtl: rtl_language(locale.as_str()),
+            screen_reader: false,
+            locale,
+            locale_settings: super::locale_settings(
+                posix_regional(&var, locale),
+                posix_languages(&var).unwrap_or(nsh_engine::Languages::one(locale)),
+                posix_time_zone(),
+            ),
+            os_version: (0, 0),
+        }
+    }
+
+    /// The settings: the defaults the host's values go over.
+    #[cfg_attr(not(target_vendor = "tizen"), allow(dead_code))]
+    pub(super) fn settings() -> Settings {
+        settings_of(|v| std::env::var(v).ok())
+    }
+
+    /// No accent: dialogs take the theme's.
+    #[cfg_attr(not(target_vendor = "tizen"), allow(dead_code))]
+    pub(super) fn accent() -> Option<nsh_core::Color> {
+        None
+    }
+
+    /// Nothing to follow: the host calls the setters as the TV's settings
+    /// change.
+    #[cfg_attr(not(target_vendor = "tizen"), allow(dead_code))]
+    pub(super) fn watch() {}
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn a_tvs_settings_are_the_defaults_the_hosts_go_over() {
+            let s = settings_of(|v| (v == "LANG").then(|| "ar_EG.UTF-8".to_owned()));
+            assert_eq!(s.locale.as_str(), "ar-EG");
+            assert!(s.rtl);
+            assert_eq!(s.font_scale, 1.0);
+            assert!(!s.reduce_motion && !s.screen_reader);
+            assert_eq!(s.os_version, (0, 0));
+            assert_eq!(accent(), None);
+            // No locale variable: `en-US`, left to right.
+            let s = settings_of(|_| None);
+            assert_eq!(s.locale.as_str(), "en-US");
+            assert!(!s.rtl);
+        }
     }
 }
 
@@ -3063,7 +3142,7 @@ mod tests {
         assert!(dark.0 >> 24 > 0x35);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_vendor = "tizen")))]
     #[test]
     fn desktop_values() {
         assert_eq!(os::font_scale(1.25), 1.25);

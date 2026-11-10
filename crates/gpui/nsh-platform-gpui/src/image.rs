@@ -617,7 +617,7 @@ pub(crate) fn release_dropped(window: &mut gpui::Window, app: &mut gpui::App) {
 
 /// Removes `image` from the atlases with the next frame: for GPUI images
 /// nsh painted that are not [`Texture`]s (video frames).
-#[cfg_attr(not(feature = "video"), allow(dead_code))]
+#[cfg_attr(any(not(feature = "video"), target_vendor = "tizen"), allow(dead_code))]
 pub(crate) fn release_later(image: Arc<RenderImage>) {
     let _ = DROPPED.try_with(|d| d.borrow_mut().push(image));
 }

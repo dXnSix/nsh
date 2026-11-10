@@ -130,6 +130,8 @@ so only load it from your own app's files.
 
 - `open_app_window(source, options, cx)` opens a window with one `AppView` in a running GPUI app.
 - `run_app(source, options)` starts GPUI and runs one app in a window until it closes (what the development host does).
+  It comes with the default feature `platform` (GPUI's own platform crate, `gpui_platform`); an app that brings its
+  GPUI platform itself turns default features off and keeps `AppView` and `open_app_window`.
 - `AppView::register_component(name, factory)` registers a native component of yours before loading
   ([Native components](./native-components.md)).
 - `AppOptions::cache` (or `AppView::set_cache`, for the apps loaded next) sets where the apps keep their caches, the
@@ -160,6 +162,10 @@ so only load it from your own app's files.
 - `AppView::set_locale(locale, cx)` and `AppView::set_font_scale(scale, cx)` give the app your app's language and
   text size in place of the system's (`None` follows the system's again): `locale()`, `Intl`, `fontScale()` and text
   follow at once ([Device and environment](./device-and-environment.md#in-an-embedding-app)).
+- `AppView::set_reduce_motion(reduce, cx)`, `AppView::set_screen_reader(on, cx)` and `AppView::set_time_zone(zone,
+  cx)` do the same for less motion, the screen reader and the time zone (`TimeZone::parse("Asia/Seoul")`):
+  `reduceMotion()`, `screenReaderEnabled()` and `localeSettings()`'s `timeZone` follow at once (`Date`'s local times
+  stay the process's).
 - `AppView::run_package(&package)` runs a [signed package](./signed-packages.md#loading-packages-in-a-host-app)
   from `verify_package` or `load_package`; `accept_package` records it once your app decided it is healthy.
 - `set_ui_sets(sets)` sets the UI sets every engine serves: NSH's (`nsh_base::registry()`) and your crates'

@@ -908,7 +908,7 @@ impl Hosted for ComponentItem {
 
 /// Where a video's source is.
 #[derive(Debug, PartialEq)]
-#[cfg_attr(not(feature = "video"), allow(dead_code))]
+#[cfg_attr(any(not(feature = "video"), target_vendor = "tizen"), allow(dead_code))]
 enum Location {
     /// A URL (`https://`, `file://`, ...).
     Url(String),
@@ -917,7 +917,7 @@ enum Location {
 }
 
 /// Resolves `source` (`asset:/` URIs against `base`).
-#[cfg_attr(not(feature = "video"), allow(dead_code))]
+#[cfg_attr(any(not(feature = "video"), target_vendor = "tizen"), allow(dead_code))]
 fn locate(source: &str, base: Option<&AssetBase>) -> Option<Location> {
     if let Some(path) = source.strip_prefix("asset:/") {
         let path = path.trim_start_matches('/');

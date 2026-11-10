@@ -112,7 +112,7 @@ view.load(App::Js(Bundle::source(code)));
 `Bundle::read_trusted(path)`）加载：QuickJS 字节码是受信任的输入，只应从你自己应用的文件中加载。
 
 - `open_app_window(source, options, cx)` 在运行中的 GPUI 应用里打开一个带 `AppView` 的窗口。
-- `run_app(source, options)` 启动 GPUI，在一个窗口中运行一个应用直到窗口关闭（开发宿主就是这样做的）。
+- `run_app(source, options)` 启动 GPUI，在一个窗口中运行一个应用直到窗口关闭（开发宿主就是这样做的）。它属于默认 feature `platform`（GPUI 自己的平台 crate `gpui_platform`）；自带 GPUI 平台的应用关闭默认 features，仍可使用 `AppView` 和 `open_app_window`。
 - `AppView::register_component(name, factory)` 在加载前注册你自己的原生组件（[原生组件](./native-components.md)）。
 - `AppOptions::cache`（或 `AppView::set_cache`，作用于之后加载的应用）设置应用保存缓存（[下载的图片](./images-and-assets.md#磁盘缓存)）的位置和每种缓存的大小：`CacheOptions { location, images }`，`CacheLocation::System`（默认）、`Dir(path)` 或 `Off`，`CachePolicy::Default`（256 MiB）、`MaxSize(ByteSize::mib(n))` 或 `Off`。
 - `AppView::host()` 是视图与它运行的应用之间的通道（[`host`](../modules/nsh.md#host)），一个可在任意线程使用的 `HostChannel`：加载前用 `set_params(map)` 给应用启动参数（`host.params`），用 `send(name, data)` 发送事件（`host.on`），用 `handle(name, |call| …)` 回答应用的 `host.call(name, data)` 并接收它的 `host.post`（`call.resolve(json)`、`call.reject(message)`，可以立即回答，也可以稍后在任意线程回答）。处理函数在引擎线程运行：把调用交给你的 GPUI entity（例如通过一个由 `cx.spawn` 任务读取的 channel），在那里回答。macOS、Windows 和 Linux 的 `AppView` 也有同样的 `host()`。它的 `handle_open_url(|request| …)` 在系统之前看到应用打开的 URL（[`openUrl`](../modules/nsh.md#openurl)）：你的应用自己处理了这个 URL 时调用 `request.handled()`，调用 `request.decline()`（或直接丢弃 request）则由系统用 GPUI 的 `open_url` 打开。
@@ -121,6 +121,7 @@ view.load(App::Js(Bundle::source(code)));
 - `AppView::connect_dev_server(url, cx)`（feature `dev`）从 `nsh dev` 加载应用，边改边重新加载，错误浮层显示在视图上；`AppView::on_error` 照样收到应用的错误。
 - `AppView::on_app_error(|error| …)` 接收应用的错误：`error.kind`（应用加载失败、未捕获的异常、VM 已停止），`error.is_fatal()` 表示该应用不会再执行任何 JS，`error.message`、`error.stack`，以及 `error.package`（它来自的签名包的 id 和 build 号）。`AppView::on_error` 以文本形式收到同样的错误。
 - `AppView::set_locale(locale, cx)` 和 `AppView::set_font_scale(scale, cx)` 用你的应用的语言和文字大小代替系统的设置（`None` 恢复跟随系统）：`locale()`、`Intl`、`fontScale()` 和文字立即跟随（[设备与环境](./device-and-environment.md#在嵌入它的应用中)）。
+- `AppView::set_reduce_motion(reduce, cx)`、`AppView::set_screen_reader(on, cx)` 和 `AppView::set_time_zone(zone, cx)` 以同样的方式代替系统的减少动态效果、屏幕阅读器和时区设置（`TimeZone::parse("Asia/Seoul")`）：`reduceMotion()`、`screenReaderEnabled()` 和 `localeSettings()` 的 `timeZone` 立即跟随（`Date` 的本地时间仍是进程的）。
 - `AppView::run_package(&package)` 运行来自 `verify_package` 或 `load_package` 的[签名包](./signed-packages.md)；你的应用判定它健康之后，用 `accept_package` 记录它。
 - `set_ui_sets(sets)` 设置每个引擎提供的 UI 套件：NSH 的（`nsh_base::registry()`）和你的 crate 的（`my_app::registry()`，由
   `#[native_module]` 生成；[用 Rust 开发](./rust.md)），也用来提供你的应用自己的套件：应用通过

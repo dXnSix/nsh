@@ -113,7 +113,7 @@ pub(crate) fn init_thread() {
 
 /// UI fonts of Linux desktops, in order of preference: GPUI's own name for
 /// the UI font stands for a font apps rarely have there.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_vendor = "tizen")))]
 const UI_FAMILIES: &[&str] = &[
     "Adwaita Sans",
     "Cantarell",
@@ -122,16 +122,57 @@ const UI_FAMILIES: &[&str] = &[
     "DejaVu Sans",
     "Liberation Sans",
 ];
+/// A Tizen TV's ([`tv`]).
+#[cfg(target_vendor = "tizen")]
+const UI_FAMILIES: &[&str] = tv::FAMILIES;
 #[cfg(not(target_os = "linux"))]
 const UI_FAMILIES: &[&str] = &[];
 
 /// Fonts tried before the system's fallback for characters the font
 /// lacks (Linux): symbols with a text presentation (♥, ✓, ★) take a text
-/// font there, as fontconfig gives Pango, rather than an emoji font.
-#[cfg(target_os = "linux")]
+/// font there, as fontconfig gives Pango, rather than an emoji font. On a
+/// Tizen TV, the TV's families and their scripts' ([`tv::fallbacks`]).
+#[cfg(all(target_os = "linux", not(target_vendor = "tizen")))]
 const TEXT_FALLBACKS: &[&str] = &["DejaVu Sans", "Noto Sans Symbols 2", "Noto Sans Symbols"];
 #[cfg(not(target_os = "linux"))]
 const TEXT_FALLBACKS: &[&str] = &[];
+
+/// The UI fonts of Samsung's Tizen TVs.
+#[cfg(any(test, target_vendor = "tizen"))]
+mod tv;
+
+/// The candidates for the UI font among the `installed` families (by
+/// lowercase name), in order of preference.
+fn ui_candidates(installed: &FxHashMap<String, String>) -> Vec<&String> {
+    #[cfg(target_vendor = "tizen")]
+    {
+        tv::ui_candidates(installed.values())
+    }
+    #[cfg(not(target_vendor = "tizen"))]
+    {
+        UI_FAMILIES
+            .iter()
+            .filter_map(|f| installed.get(&f.to_lowercase()))
+            .collect()
+    }
+}
+
+/// The fonts tried for what UI font `ui` lacks, among the `installed`
+/// families (by lowercase name), before the system's fallback.
+fn text_fallbacks(installed: &FxHashMap<String, String>, ui: &str) -> Vec<String> {
+    #[cfg(target_vendor = "tizen")]
+    {
+        tv::fallbacks(installed.values(), ui)
+    }
+    #[cfg(not(target_vendor = "tizen"))]
+    {
+        let _ = ui;
+        TEXT_FALLBACKS
+            .iter()
+            .filter_map(|f| installed.get(&f.to_lowercase()).cloned())
+            .collect()
+    }
+}
 
 /// Fonts with text glyphs for symbols that are text by default (♥, ✓,
 /// ★) but that a fallback may take from an emoji font, which ignores the
@@ -236,9 +277,8 @@ fn family_candidates(name: &str) -> Vec<&str> {
 /// weight only, so a variable UI font (GNOME's Adwaita Sans) would draw
 /// every weight alike.
 fn ui_font(system: &TextSystem, installed: &FxHashMap<String, String>) -> String {
-    UI_FAMILIES
-        .iter()
-        .filter_map(|f| installed.get(&f.to_lowercase()))
+    ui_candidates(installed)
+        .into_iter()
         .find(|family| {
             let font = gpui::font(family.to_string());
             system.resolve_font(&font) != system.resolve_font(&font.clone().bold())
@@ -424,10 +464,7 @@ impl GpuiTextEngine {
                 .map(|f| SharedString::from(f.clone()))
                 .collect();
             fonts.ui = SharedString::from(ui);
-            let fallbacks: Vec<String> = TEXT_FALLBACKS
-                .iter()
-                .filter_map(|f| installed.get(&f.to_lowercase()).cloned())
-                .collect();
+            let fallbacks = text_fallbacks(&installed, &fonts.ui);
             fonts.fallbacks =
                 (!fallbacks.is_empty()).then(|| gpui::FontFallbacks::from_fonts(fallbacks));
             fonts.installed = installed;
@@ -3013,7 +3050,8 @@ fn unit_at(text: &str, index: u32, unit: Unit) -> (u32, u32) {
     }
 }
 
-#[cfg(test)]
+// The platform's text system shapes them (feature `platform`).
+#[cfg(all(test, feature = "platform"))]
 mod tests {
     use std::sync::OnceLock;
 
