@@ -260,6 +260,11 @@ pub(crate) struct Surface {
     /// The events sent, in order (tests read them without an engine).
     #[cfg(test)]
     pub(crate) heard: RefCell<Vec<(NodeId, EventKind)>>,
+    /// The arrows past a scroll view's stops told to the engine
+    /// ([`Surface::focus_past`]), in order (tests read them without an
+    /// engine).
+    #[cfg(test)]
+    pub(crate) asked_past: RefCell<Vec<(NodeId, nsh_core::focus::Direction)>>,
     /// The embedding app's theme ([`crate::AppView::set_theme`]): sent to
     /// every engine the surface starts, before its first frame.
     pub(crate) host_theme: RefCell<Option<nsh_base::Theme>>,
@@ -340,6 +345,8 @@ impl Surface {
             events_handled: Cell::new(0),
             #[cfg(test)]
             heard: RefCell::default(),
+            #[cfg(test)]
+            asked_past: RefCell::default(),
             chrome: Default::default(),
             host_theme: RefCell::new(None),
             transparent: Cell::new(false),
@@ -502,6 +509,15 @@ impl Surface {
         if let Some(control) = &*self.control.borrow() {
             f(control);
         }
+    }
+
+    /// Tells the engine an arrow from stop `from` toward `direction`
+    /// scrolled the scroll view around it on instead of leaving it: a list
+    /// scrolls to its next row by index (`EngineControl::focus_past`).
+    pub(crate) fn focus_past(&self, from: NodeId, direction: nsh_core::focus::Direction) {
+        #[cfg(test)]
+        self.asked_past.borrow_mut().push((from, direction));
+        self.control(|c| c.focus_past(from, direction));
     }
 
     /// Sends an event to JS.
