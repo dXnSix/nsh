@@ -713,6 +713,11 @@ pub(crate) fn set_accessible_value(surface: &Rc<Surface>, view: &NshView, text: 
     true
 }
 
+/// `view` (an input) edits: it takes typing.
+pub(crate) fn editable(view: &NshView) -> bool {
+    input_of(view).is_some_and(|input| input.config.borrow().editable)
+}
+
 /// The field that has the keyboard focus.
 pub(crate) fn focused(surface: &Surface) -> Option<NshView> {
     let view = FOCUS.with(|f| f.borrow().get(&surface.key()).and_then(|f| f.view.clone()))?;
@@ -788,7 +793,8 @@ fn move_focus(surface: &Rc<Surface>, view: Option<&NshView>, old: Option<&NshVie
     if let Some(view) = view
         && let Some(input) = input_of(view)
     {
-        crate::key_focus::clear(surface);
+        // The view the arrows focused loses it first ([`crate::focus`]).
+        crate::focus::field_focused(surface, view, old);
         FOCUS.with(|f| f.borrow_mut().entry(surface.key()).or_default().view = Some(view.clone()));
         surface.window_focus_requested.set(true);
         input.focused.set(true);
