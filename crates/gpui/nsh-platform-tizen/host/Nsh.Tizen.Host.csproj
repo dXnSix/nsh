@@ -2,7 +2,7 @@
 
   <!--
     The host of NSH's TPKs: built once (`dotnet build -c Release`) into the runtime files, so
-    packaging an app needs no .NET SDK. `nsh package --target tizen` stages the DLL with the app's
+    packaging an app needs no .NET SDK. Packaging an app for Tizen (`nsh package`) stages the DLL with the app's
     `tizen-manifest.xml`, `lib/libnsh.so` (release or dev) and `res/nsh/`, and signs the package
     with the developer's certificate profile (`tz pack`). The SDK's own TPK step stays off.
   -->

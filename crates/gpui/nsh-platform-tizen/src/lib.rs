@@ -11,9 +11,11 @@
 //! - `app`: the window, the TV's settings given to `AppView` as they
 //!   change (`settings`), the app framework's pause and resume as the
 //!   app's state (`lifecycle`), the question whether to leave when
-//!   nothing takes Back (`back`);
+//!   nothing takes Back (`back`), in the TV's language and readable by
+//!   Voice Guide (`prompt`);
 //! - `keys`: the remote's key names as NSH reads them;
 //! - `package`: the app in the TPK's resources;
+//! - `host`: the C# host's project and program, checked (tests only);
 //! - `tizen` (Tizen only): the entry point and the app framework's
 //!   directories and log;
 //! - `dev` (feature `dev`): the development runtime, connected through
@@ -29,9 +31,11 @@ mod app;
 mod back;
 #[cfg(feature = "dev")]
 mod dev;
+mod host;
 mod keys;
 mod lifecycle;
 mod package;
+mod prompt;
 mod settings;
 #[cfg(target_vendor = "tizen")]
 mod tizen;
