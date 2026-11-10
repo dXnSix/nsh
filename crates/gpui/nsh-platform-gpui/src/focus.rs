@@ -250,6 +250,15 @@ fn stops_in(surface: &Surface, scope: &NshView) -> Vec<Stop> {
     focus::candidates(walk.stops, scope.id(), &layers(scope))
 }
 
+/// The stops Tab goes through in `scope` (a modal, or a window's root):
+/// the arrows' ([`stops_in`]), in tree order.
+pub(crate) fn tab_stops(surface: &Surface, scope: &NshView) -> Vec<NshView> {
+    stops_in(surface, scope)
+        .into_iter()
+        .map(|stop| stop.view)
+        .collect()
+}
+
 /// The children of `scope` (a modal, or a window's root) as the core's
 /// layers, the page first.
 fn layers(scope: &NshView) -> Vec<Layer> {
@@ -449,6 +458,14 @@ pub(crate) fn blur_command(surface: &Rc<Surface>, view: &NshView) {
     } else {
         crate::text_input::blur_all(surface);
     }
+}
+
+/// Takes the keyboard focus off the surface's views: the focused field
+/// and the view with this module's focus let go of it (the focus left the
+/// surface).
+pub(crate) fn blur_all(surface: &Rc<Surface>) {
+    crate::text_input::blur_all(surface);
+    set(surface, None);
 }
 
 /// Gives the keyboard focus back to `view` (a stop a modal or a layer took

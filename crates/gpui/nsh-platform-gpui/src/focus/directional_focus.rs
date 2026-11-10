@@ -60,7 +60,12 @@ impl Tree {
 
     /// A view that takes presses and hears its focus, with `focus:`
     /// styles (it tracks `FOCUSED`).
-    pub(super) fn pressable(&mut self, id: NodeId, parent: NodeId, frame: (f32, f32, f32, f32)) -> &mut Self {
+    pub(super) fn pressable(
+        &mut self,
+        id: NodeId,
+        parent: NodeId,
+        frame: (f32, f32, f32, f32),
+    ) -> &mut Self {
         self.view(id, parent, ViewKind::View, frame);
         self.events(
             id,
