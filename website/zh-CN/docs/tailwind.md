@@ -78,7 +78,8 @@ Rust 组件（`nsh/base` 的以及应用自己 crate 中的组件）在 TSX 中�
 |---|---|---|
 | `active:` | 视图被按下 | `.active(\|s\| ..)` |
 | `hover:` | 指针悬停在视图上（iPad 和 Mac 的指针） | `.hover(\|s\| ..)` |
-| `focus:`、`focus-visible:` | 输入框获得焦点 | `.focus(\|s\| ..)` |
+| `focus:` | 元素获得焦点 | `.focus(\|s\| ..)` |
+| `focus-visible:` | 元素获得焦点并显示焦点：键盘把焦点移到了这里 | `.focus_visible(\|s\| ..)` |
 | `focus-within:` | 视图或其后代获得焦点（`Overlay` 的内容是它所在视图的后代） | `.focus_within(..)` |
 | `disabled:`、`enabled:` | 元素的 `disabled` 属性为 true / false | `.disabled_style(\|s\| ..)` |
 | `selected:` | 元素处于选中状态（`Button` 的 `selected`、`accessibilityState.selected`） | `.selected_style(..)` |
@@ -99,6 +100,8 @@ Rust 组件（`nsh/base` 的以及应用自己 crate 中的组件）在 TSX 中�
 | `min-[600px]:`、`max-[600px]:` | 任意断点 | 同上 |
 | `portrait:`、`landscape:` | 窗口方向 | `window().width > window().height` |
 | `ios:`、`android:`、`web:` | 平台 | `.when(os() == Os::Ios, \|v\| ..)` |
+| `terminal:` | 在终端中绘制 | `.when(idiom() == Idiom::Terminal, \|v\| ..)` |
+| `pointer-fine:`、`pointer-coarse:` | 主要指针是鼠标或触控板（桌面、桌面浏览器、终端）/ 手指 | `.when(is_desktop(), \|v\| ..)` |
 | `rtl:`、`ltr:` | [布局方向](./layout.md#从右到左) | 视图的 `.direction(LayoutDirection::..)` |
 | `motion-safe:`、`motion-reduce:` | 用户的“减弱动态效果”设置 | `reduce_motion()` |
 
@@ -161,7 +164,7 @@ view()
 - **每个视图都是独立的盒子。** `overflow-x-hidden` 和 `overflow-y-hidden` 与 `overflow-hidden` 一样裁剪两个方向（滚动由 [scroll](../elements/scroll.md) 元素负责）；`invisible` 隐藏视图及其中的一切；`mix-blend-*` 让视图与其后绘制的一切混合；`block` 盒子的外边距与其子元素的外边距互不合并；`absolute` 视图与 CSS 一样，相对最近的定位祖先放置；`fixed` 让视图在其根视图中布局（其他元素按 `absolute` 定位）。
 - **文本保留空白。** 字符串中的空格和换行按原样绘制，`whitespace-*` 设置换行方式；JSX 编译器会像 JSX 一样合并字面 JSX 文本中的空白。
 - **过渡按属性组生效**：`transition` 对颜色、不透明度、阴影和变换做动画，`transition-all` 还包括圆角和边框宽度；滤镜、背景滤镜、渐变和布局会直接取新值。
-- **`focus-visible:` 即 `focus:`**：元素获得焦点时就会应用。
+- **`focus-visible:` 与浏览器的 `:focus-visible` 一致**：在焦点显示时应用。Tab、组内的方向键和快捷键会显示焦点；按压或轻点不会；应用移动的焦点（`focus()`、日历或对话框打开时）在按键之后显示，在按压之后不显示；文本输入框获得焦点时总是显示。`focus:` 在元素获得焦点时就会应用，因此键盘的焦点环写在 `focus-visible:` 上。组件自己保留焦点时，按键作用的那一行（树的行、列表高亮的选项）在作为这一行时应用 `focus:`，组件的焦点显示时还应用 `focus-visible:`。
 - **状态背景色显示在渐变之上。** 在 CSS 中渐变会盖住 `background-color`，因此 `bg-linear-*` 表面上的 `active:bg-*` 永远看不到；在 NSH 中，来自 `active:`、`hover:`、`focus:` 或 `group-*:` 的背景色会在该状态期间替换渐变（除非该状态设置了自己的渐变，例如 `active:from-*`）。`activeStyle` 等状态样式以及动画背景色也是如此。
 - **文字与触摸的设置都是样式键**：`line-clamp-*` 设置 `numberOfLines`，`text-ellipsis` 和 `text-clip` 设置 `textOverflow`，`truncate` 两者都设置，`select-*` 设置 `userSelect`，`pointer-events-*` 设置 `pointerEvents`，因此它们可以用在状态变体中，并且和所有类一样会被内联 `style` 覆盖；`caret-*`、`placeholder:text-*` 和 `selection:bg-*` 同样设置 `caretColor`、`placeholderColor` 和 `selectionColor` 样式。在 Rust 中它们是 `Styled` 方法（`.number_of_lines(..)`、`.truncate()`、`.text_overflow(..)`、`.select_text()`、`.pointer_events(..)` 等）。`whitespace-nowrap` 以类的形式让文本保持一行。`object-*` 设置图片和视频的 `objectFit` 与 `objectPosition` 样式，样式中的同名键会像其他样式一样替换它们。
 - **支持的范围**：Tailwind 4 中在原生层有意义的工具类和变体。`peer-*` 变体、伪元素（`before:`、`after:`）和任意属性（`[mask-type:luminance]`）会报告为未知类；NSH 在原生层没有对应含义的工具类也都是未知类，因此一个类不会有与浏览器不同的含义。渲染提示类（`antialiased`、`will-change-transform`、`appearance-none`、`box-border` 等）会被接受，但不改变任何东西。
@@ -252,12 +255,13 @@ token 的名称就是主题文件中 CSS 变量去掉 `--` 后的名称：`muted
 | 写法 | 取值 | 示例 |
 |---|---|---|
 | 任意颜色类里的颜色名 | 主题颜色，也可带不透明度 | `bg-primary`、`text-muted-foreground/70`、`bg-up/30`、`border-t-border`、`ring-ring`、`from-accent`、`placeholder:text-muted-foreground` |
-| `(--name)`，Tailwind 4 的变量简写 | 主题颜色或数值 | `bg-(--primary)`、`rounded-(--radius)`、`p-(--gap-card)` |
+| `(--name)`，Tailwind 4 的变量简写 | 主题颜色或数值，或同名主题角色被映射到的 token | `bg-(--primary)`、`rounded-(--radius)`、`p-(--gap-card)`、`bg-(--popover)` |
 | `(color:--name)`、`(length:--name)`、`(number:--name)`、`(family-name:--name)` | 同上，在一个类可以接受多种值时标明类型 | `text-(color:--up)`、`text-(length:--text-title)`、`font-(family-name:--font-mono)` |
 | `font-sans`、`font-mono` | 主题设置的字体 | `font-mono` |
 | 数字 token 名称在其命名空间的工具类中 | Tailwind 4 命名空间中的数字 token，按名称的其余部分 | `rounded-card`（`radius-card`）、`p-gutter`、`gap-x-gutter`（`spacing-gutter`）、`text-body`（`text-body`）、`font-strong`（`font-weight-strong`）、`tracking-label`、`leading-body`、`blur-soft` |
 
 - **应用自己的令牌。** 主题文件中的每个名称都是 token，就像 CSS `@theme` 中的每个变量：`"up": "#16a34a"` 生成 `bg-up`、`text-up` 和 `bg-up/30`；`"radius-card": "14px"` 生成 `rounded-(--radius-card)`；`"font-display": "Pacifico"` 生成 `font-(family-name:--font-display)`。长度的单位是点；`(number:--name)` 传入不带单位的数值。
+- **主题角色。** 变量也可以指名[主题角色](../modules/nsh.md#role)：当主题没有名为 `popover` 的 token，并把角色 `popover` 映射到自己的 token `overlay`（主题类型的 `role = …`，或主题文件的 `"roles": { "popover": "overlay" }`）时，`bg-(--popover)` 在每种外观下都是 `overlay` 的颜色，并随它变化。因此在多个应用之间共享的组件只需写一次 `bg-(--popover) rounded-(--radius)`，就适用于每个设计系统。同名的 token 优先，而不带括号的类（`bg-popover`）只指名 token。构建时会根据主题映射的角色检查该变量。
 - **字体。** `font-sans` 是应用的字体：没有设置自己字体族的文字都用它绘制，就像网页使用 Tailwind 的 `--font-sans`。`font-mono` 是 `font-mono` 类和 `TextView` 中代码的字体。未设置时两者都是系统字体。
 - **两种外观。** token 带有主题的浅色值和深色值：`bg-primary`、`theme().primary` 和 `token("primary")` 都会随外观自动切换，不需要 `dark:` 类。只在一种外观里设置的颜色在两种外观下都使用该值。数字也可以有深色值：在浅色的 `14px` 之外写 `"dark": { "radius-card": "6px" }`，`rounded-card` 和 `rounded-(--radius-card)` 在浅色外观下为 14 点，在深色外观下为 6 点，`token("radius-card")` 取当前显示外观的值；主题只给出一次的数字在两种外观下相同。
 - **具名数字类名。** 名称以 Tailwind 4 某个命名空间开头的数字 token，是该命名空间工具类的一个类名，按名称的其余部分命名，就像 Tailwind 中 `--radius-card` 产生 `rounded-card`：`radius-` 对应圆角工具类（`rounded-card`、`rounded-t-card`、`rounded-bl-card`）；`spacing-` 对应内边距、外边距、间距、尺寸、偏移和平移（`p-gutter`、`-mt-gutter`、`gap-x-gutter`、`w-gutter`、`inset-x-gutter`）；`text-` 对应字号；`font-weight-` 对应字重（`"font-weight-strong": "650"` 产生 `font-strong`）；`tracking-`、`leading-` 和 `blur-` 对应各自的工具类。`tracking-` token 是以点为单位的长度（`px` 或 `rem`）；`em` 单位的值会被略过，shadcn 的 `tracking-normal: 0em` 一直如此。它们可以用在变体下，并像所有 token 类名一样跟随主题。`text-` 也是颜色工具类：同名的颜色在那里仍然优先；其他情况下较长的工具类优先（`inset-shadow-card` 是内阴影的颜色 `card`）。

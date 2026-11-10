@@ -64,6 +64,7 @@ use nsh_core::{
     MountItem, NodeId, PayloadValue, Point, Points, PressEvent, ROOT_ID, Size, SubmitBehavior,
     TextEngine,
     geometry::{point, px},
+    platform::InputModality,
 };
 use nsh_engine::{
     AppError, AppErrorKind, Clock, Engine, EngineConfig, EngineControl, Environment, MountSink,
@@ -398,15 +399,29 @@ impl Headless {
             config.audio = Some(Arc::new(audio.clone()));
         }
         // A desktop's windows: the main one, focused, on one display, and
-        // those the app opens.
-        let windows = (config.environment.os.is_desktop() && config.windows.is_none())
-            .then(|| windows::Windows::new(config.viewport));
+        // those the app opens. The main one starts hidden when the app's
+        // nsh.json `window` says so, as a runner opens it.
+        let main_hidden = config
+            .app
+            .main_window()
+            .is_some_and(|options| !options.visible_at_launch());
+        let windows = (config.environment.os.is_desktop() && config.windows.is_none()).then(|| {
+            let mut windows = windows::Windows::new(config.viewport);
+            if main_hidden {
+                windows.start_hidden();
+            }
+            windows
+        });
         if let Some(windows) = &windows
             && config.environment.window_state.is_none()
         {
             config.environment.window_state = Some(windows.main());
         }
         let displays = windows.as_ref().map(|w| w.displays()).unwrap_or_default();
+        // The window is the viewport the app opens in, as the engine starts
+        // it and as a platform reports it: a later `set_environment` sends
+        // this environment whole, so it must not carry an empty window.
+        config.environment.window = config.viewport;
         let environment = config.environment;
         let viewport = config.viewport;
         let clock = config.clock.clone();
@@ -419,6 +434,9 @@ impl Headless {
         } = launch(config, displays, text_engine, link)?;
         let mut screen = Screen::default();
         screen.set_viewport(viewport);
+        if main_hidden && windows.is_some() {
+            screen.set_window_hidden(ROOT_ID, true);
+        }
         Ok(Headless {
             engine,
             batches,
@@ -840,6 +858,12 @@ impl Headless {
         self.step = name.into();
     }
 
+    /// Tells the engine what the step gives input with, as a platform
+    /// does before acting on it: `focus-visible:` follows it.
+    fn input_with(&self, modality: InputModality) {
+        self.engine.control().set_input_modality(modality);
+    }
+
     /// The batches applied so far.
     pub fn applied(&self) -> u64 {
         self.applied
@@ -860,6 +884,15 @@ impl Headless {
         });
         for item in &batch.items {
             self.animator.apply(item);
+        }
+        for item in &batch.items {
+            if let MountItem::Command {
+                id,
+                command: Command::InsertText(text),
+            } = item
+            {
+                self.insert_text(*id, text);
+            }
         }
         if let Some(windows) = &mut self.windows {
             for item in &batch.items {
@@ -1585,6 +1618,7 @@ impl Headless {
     pub fn press(&mut self, selector: &str) -> Result<(), String> {
         let parsed = Selector::parse(selector)?;
         self.step(format!("press({selector})"));
+        self.input_with(InputModality::Pointer);
         let pick = self.screen.pressable(&parsed);
         let mut id = self.picked(pick, selector, "pressable view")?;
         let mut routed = None;
@@ -1658,6 +1692,7 @@ impl Headless {
     pub fn press_at(&mut self, selector: &str, at: Point<Points>) -> Result<(), String> {
         let parsed = Selector::parse(selector)?;
         self.step(format!("pressAt({selector}, {}, {})", at.x.0, at.y.0));
+        self.input_with(InputModality::Pointer);
         let pick = self.screen.pressable(&parsed);
         let id = self.picked(pick, selector, "pressable view")?;
         // `at` is in the view the selector names, which may be inside the
@@ -1744,6 +1779,7 @@ impl Headless {
     pub fn long_press(&mut self, selector: &str) -> Result<(), String> {
         let parsed = Selector::parse(selector)?;
         self.step(format!("longPress({selector})"));
+        self.input_with(InputModality::Pointer);
         let pick = self.screen.long_pressable(&parsed);
         let id = self.picked(pick, selector, "pressable view")?;
         let delay = self.screen.long_press_delay(id).unwrap_or(500.0).max(0.0);
@@ -1769,6 +1805,7 @@ impl Headless {
     /// an edit to nothing.
     pub fn clear(&mut self, selector: &str) -> Result<(), String> {
         let id = self.input_step(selector, format!("clear({selector})"))?;
+        self.input_with(InputModality::Keyboard);
         self.key_press(id, "Backspace");
         if let Some(input) = self.screen.input_mut(id)
             && !input.text.is_empty()
@@ -1796,6 +1833,7 @@ impl Headless {
     /// character past `maxLength` is dropped.
     pub fn type_text(&mut self, selector: &str, text: &str) -> Result<(), String> {
         let id = self.input_step(selector, format!("type({selector}, {text:?})"))?;
+        self.input_with(InputModality::Keyboard);
         for c in text.chars() {
             let multiline = self.screen.input(id).is_some_and(|i| i.config.multiline);
             if c == '\n' && !multiline {
@@ -1834,7 +1872,21 @@ impl Headless {
         {
             return;
         }
-        let mut text = nsh_core::text_edit::pasted(&content.text, input.config.multiline);
+        self.insert_text(id, &content.text);
+    }
+
+    /// `text` goes into input `id` as the user's edit (a paste, the app's
+    /// `insertText`): at the end, where the caret is here (a single line
+    /// takes line breaks as spaces; within `maxLength`), one `onChange`,
+    /// no keys.
+    pub(crate) fn insert_text(&mut self, id: NodeId, text: &str) {
+        let Some(input) = self.screen.input_mut(id) else {
+            return;
+        };
+        if !input.config.editable {
+            return;
+        }
+        let mut text = nsh_core::text_edit::pasted(text, input.config.multiline);
         if let Some(max) = input.config.max_length {
             let room = (max as usize).saturating_sub(input.text.encode_utf16().count());
             let mut used = 0;
@@ -1867,6 +1919,7 @@ impl Headless {
     /// break in a multiline input.
     pub fn submit(&mut self, selector: &str) -> Result<(), String> {
         let id = self.input_step(selector, format!("submit({selector})"))?;
+        self.input_with(InputModality::Keyboard);
         self.return_key(id);
         self.done()
     }
@@ -1919,6 +1972,7 @@ impl Headless {
                 page: at.unwrap_or_default(),
                 location: location.unwrap_or_default(),
                 changed: true,
+                pointer_type: nsh_core::PointerType::Touch,
             }],
             activated: None,
         };
@@ -2038,6 +2092,7 @@ impl Headless {
     pub fn scroll(&mut self, selector: &str, distance: Points) -> Result<(), String> {
         let parsed = Selector::parse(selector)?;
         self.step(format!("scroll({selector}, {distance})"));
+        self.input_with(InputModality::Pointer);
         let pick = self.screen.scroll_view(&parsed);
         let id = self.picked(pick, selector, "scroll view")?;
         let at = |screen: &Screen| {
@@ -2182,6 +2237,28 @@ mod tests {
                 .map(|b| b.color),
             Some(marked.color)
         );
+    }
+
+    /// A paragraph whose last words hold their place hidden.
+    #[component]
+    fn Partly() -> impl IntoElement {
+        text("Shown ")
+            .child(text("not yet").invisible())
+            .child(" end")
+    }
+
+    #[test]
+    fn hidden_spans_are_not_on_screen() {
+        let mut app = Headless::start(EngineConfig::new(Root::of::<Partly>())).unwrap();
+        app.first_render().unwrap();
+        let screen = app.screen();
+        assert_eq!(screen.texts(), ["Shown  end"]);
+        assert!(!screen.shows("not yet"));
+        let nodes = screen.layout_nodes();
+        let text = nodes.iter().find_map(|n| n.text.as_ref()).unwrap();
+        // The characters are still laid out, in the text the platform gets.
+        assert_eq!(text.text.text, "Shown not yet end");
+        assert!(text.text.spans[1].style.hidden);
     }
 
     #[component]
@@ -3261,5 +3338,51 @@ mod tests {
         app.press("id:in-settings").unwrap();
         app.press_key("escape").unwrap();
         app.wait_for("keys 1 2").unwrap();
+    }
+
+    /// A layout chosen by the window's width, and the color scheme.
+    #[component]
+    fn ByWidth() -> impl IntoElement {
+        text(move || {
+            let width = nsh_core::element::window().width.0;
+            let layout = if width < 600.0 { "narrow" } else { "wide" };
+            let scheme = if nsh_core::element::dark() {
+                "dark"
+            } else {
+                "light"
+            };
+            format!("{layout} {width} {scheme}")
+        })
+    }
+
+    fn open_by_width(os: nsh_core::platform::Os) -> Headless {
+        let mut config = EngineConfig::new(Root::of::<ByWidth>());
+        config.environment.os = os;
+        config.viewport = Size::new(px(800.0), px(600.0));
+        let mut app = Headless::start(config).unwrap();
+        app.first_render().unwrap();
+        app
+    }
+
+    #[test]
+    fn a_changed_environment_keeps_the_window_size() {
+        for os in [nsh_core::platform::Os::Ios, nsh_core::platform::Os::MacOs] {
+            let mut app = open_by_width(os);
+            app.wait_for("wide 800 light").unwrap();
+            // A step that changes only the color scheme keeps the window.
+            app.set_environment("setColorScheme(dark)", |env| {
+                env.color_scheme = nsh_core::platform::ColorScheme::Dark;
+            })
+            .unwrap();
+            app.wait_for("wide 800 dark").unwrap();
+            // A resized window, then another change of the environment.
+            app.set_viewport(Size::new(px(390.0), px(844.0))).unwrap();
+            app.wait_for("narrow 390 dark").unwrap();
+            app.set_environment("setColorScheme(light)", |env| {
+                env.color_scheme = nsh_core::platform::ColorScheme::Light;
+            })
+            .unwrap();
+            app.wait_for("narrow 390 light").unwrap();
+        }
     }
 }

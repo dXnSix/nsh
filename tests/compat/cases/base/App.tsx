@@ -57,6 +57,7 @@ import BaseToggle from "./base-toggle";
 import BaseToolbar from "./base-toolbar";
 import BaseTree from "./base-tree";
 import BaseToken from "./base-token";
+import BaseRole from "./base-role";
 import BaseSetTheme from "./base-set-theme";
 import BaseThemeScope from "./base-theme-scope";
 import BaseUpdateTheme from "./base-update-theme";
@@ -123,6 +124,7 @@ const cases: Record<string, () => JSX.Element> = {
   "base-table": BaseTable,
   "base-toast": BaseToast,
   "base-token": BaseToken,
+  "base-role": BaseRole,
   "base-set-theme": BaseSetTheme,
   "base-theme-scope": BaseThemeScope,
   "base-update-theme": BaseUpdateTheme,

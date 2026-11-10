@@ -52,9 +52,10 @@ enum Part {
     WindowState,
     Displays,
     Fps,
+    Shaders,
 }
 
-const PARTS: usize = 15;
+const PARTS: usize = 16;
 
 /// The environment's part of a context's state.
 pub(crate) struct Env {
@@ -110,6 +111,19 @@ pub(crate) struct Env {
     current_theme: RefCell<Option<String>>,
     /// The displays the platform reported last.
     displays: RefCell<Vec<Display>>,
+    /// What `appInfo()` reports: the build's ([`set_app_info`]).
+    app: RefCell<AppInfo>,
+}
+
+/// The app as it was built (`appInfo()`), from the JSON the bundler writes.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct AppInfo {
+    id: Option<String>,
+    name: Option<String>,
+    version: Option<String>,
+    build: Option<f64>,
+    development: bool,
 }
 
 impl Default for Env {
@@ -134,9 +148,53 @@ impl Default for Env {
             built_theme: RefCell::default(),
             current_theme: RefCell::default(),
             displays: RefCell::default(),
+            app: RefCell::default(),
         }
     }
 }
+
+/// Takes in the app's information as the build wrote it (`setup`'s fifth
+/// argument); what this runtime cannot read is left out.
+pub(crate) fn set_app_info(cx: *mut JsContext, json: &str) {
+    match serde_json::from_str(json) {
+        Ok(info) => *env(cx).app.borrow_mut() = info,
+        Err(e) => log::warn!("appInfo: {e}, ignored"),
+    }
+}
+
+/// `appInfo()`: the app as it was built.
+unsafe extern "C" fn app_info(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+) -> JsValue {
+    let app = env(cx).app.borrow();
+    let text = |value: &Option<String>| match value {
+        Some(value) => string(cx, value),
+        None => qjs::JS_NULL,
+    };
+    object(
+        cx,
+        &[
+            (c"id", text(&app.id)),
+            (c"name", text(&app.name)),
+            (c"version", text(&app.version)),
+            (c"build", app.build.map_or(qjs::JS_NULL, qjs::JS_NewFloat64)),
+            (c"development", boolean(app.development)),
+        ],
+    )
+}
+
+/// `appInfo` of `nsh`.
+pub(crate) const APP_INFO_EXPORT: crate::modules::Item = (
+    "appInfo",
+    Export::Function(app_info, 0),
+    Ts::function(
+        "The app as it was built: its id, name, version and build number\n(`nsh.json`'s; a package's as `nsh package` and `nsh publish` name and\nversion it, `--id`, `--name`, `--version` and `--build` included, with\nversion `1.0.0` and build `1` where nothing gives them), and whether it\nis a development build (`nsh run`, `nsh dev`, `nsh test`, `nsh build`\nwithout `--release`). `nsh/updater`'s `shellInfo()` reports the\ninstalled app's.",
+        &["(): AppInfo"],
+    ),
+);
 
 fn env<'a>(cx: *mut JsContext) -> &'a Env {
     // SAFETY: a projection of the state's field, reached by shared
@@ -238,7 +296,8 @@ pub(crate) fn set_tokens(cx: *mut JsContext, tokens: Arc<Tokens>) {
     let scopes = e.scopes_signal.get();
     // SAFETY: a value the environment owns.
     let scoped = !unsafe { qjs::JS_IsUndefined(scopes) };
-    let whole = names >= TOKEN_SIGNALS || 2 * changed.len() > names;
+    // Roles mapped onto other tokens: what read a role reads another one.
+    let whole = names >= TOKEN_SIGNALS || 2 * changed.len() > names || !old.same_roles(&tokens);
     if whole && !scoped {
         return reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
     }
@@ -494,18 +553,45 @@ unsafe extern "C" fn token(
     argc: c_int,
     argv: *mut JsValue,
 ) -> JsValue {
+    read_token(cx, crate::dom::string_arg(cx, arg(argc, argv, 0)), false)
+}
+
+/// `role(name)`: what the theme role `name` draws with, as `token()` gives
+/// a token: the token a theme maps the role onto, else the token of the
+/// role's name (`Tokens::role`, by name). Reading it tracks both tokens.
+unsafe extern "C" fn role(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    read_token(cx, crate::dom::string_arg(cx, arg(argc, argv, 0)), true)
+}
+
+/// The token `name` (`role`: the one the role `name` reads) in the
+/// appearance shown, tracked.
+fn read_token(cx: *mut JsContext, name: Option<String>, role: bool) -> JsValue {
     let e = env(cx);
-    let name = crate::dom::string_arg(cx, arg(argc, argv, 0));
     // The tokens of the scope around what reads them (tracked as one: a
     // change of any runs it again), else the surface's, by name.
     let scoped = match scope_tokens(cx) {
         Ok(scoped) => scoped,
         Err(exception) => return exception,
     };
-    if scoped.is_none() {
+    let tracked = scoped.is_none();
+    let tokens = scoped.unwrap_or_else(|| e.tokens.borrow().clone());
+    // A role reads the token a theme maps it onto, when that has a value.
+    let mapped = name
+        .as_deref()
+        .filter(|_| role)
+        .and_then(|name| tokens.mapped(name))
+        .map(str::to_owned);
+    if tracked {
         reactive::track(cx, e.tokens_signal.get());
-        if let Some(signal) = name.as_deref().and_then(|name| token_signal(cx, e, name)) {
-            reactive::track(cx, signal);
+        for name in [name.as_deref(), mapped.as_deref()].into_iter().flatten() {
+            if let Some(signal) = token_signal(cx, e, name) {
+                reactive::track(cx, signal);
+            }
         }
     }
     // The appearance of the scope around what reads it, else the surface's.
@@ -516,7 +602,9 @@ unsafe extern "C" fn token(
     let Some(name) = name else {
         return UNDEFINED;
     };
-    let tokens = scoped.unwrap_or_else(|| e.tokens.borrow().clone());
+    let name = mapped
+        .filter(|token| tokens.get(token).is_some())
+        .unwrap_or(name);
     // A number in the appearance shown (its dark value, when it has one).
     let value = match tokens.get(&name) {
         Some(Token::Number(_)) => tokens.number_in(&name, dark).map(Token::Number),
@@ -536,6 +624,16 @@ unsafe extern "C" fn token(
         _ => UNDEFINED,
     }
 }
+
+/// `role` of `nsh`.
+pub(crate) const ROLE_EXPORT: crate::modules::Item = (
+    "role",
+    Export::Function(role, 1),
+    Ts::function(
+        "What the theme role `name` draws with in the appearance shown, reactive,\nas `token()` gives a token: the token the app's theme maps the role onto\n(a theme type's `role = …`), else the token of the role's name, else\n`undefined`. A component written against a role is themed by any design\nsystem: `role(\"popover\")` is `overlay`'s color where the app calls that\nsurface `overlay`. The names are the roles the app's UI sets list.",
+        &["<K extends keyof Roles>(name: K): Roles[K] | undefined"],
+    ),
+);
 
 /// `token` of `nsh`.
 pub(crate) const TOKEN_EXPORT: crate::modules::Item = (
@@ -1014,6 +1112,9 @@ pub(crate) fn set_environment(cx: *mut JsContext, next: &Environment) -> Result<
     if changed(&|p| p.lifecycle == next.lifecycle) {
         writes.push((Part::Lifecycle, string(cx, next.lifecycle.name())));
     }
+    if changed(&|p| p.shaders == next.shaders) {
+        writes.push((Part::Shaders, boolean(next.shaders)));
+    }
     if changed(&|p| p.window_state == next.window_state) {
         writes.push((
             Part::WindowState,
@@ -1236,7 +1337,7 @@ pub(crate) const ELEMENTS: &[Item] = &[(
     "Input",
     Export::Value(|cx| crate::dom::host_component(cx, "input", true)),
     Ts::function(
-        "A native text input (UITextField / UITextView, EditText); `ref` has\n`focus()`, `blur()` and `setSelection(start, end)`.",
+        "A native text input (UITextField / UITextView, EditText); `ref` has\n`focus()`, `blur()`, `setSelection(start, end)` and `insertText(text)`.",
         &["(props: InputProps): JSX.Element"],
     ),
 )];
@@ -1420,6 +1521,14 @@ pub(crate) const DEVICE_EXPORTS: &[Item] = &[
         Ts::value(
             "The platform the app runs on, constant while it runs.",
             "PlatformInfo",
+        ),
+    ),
+    (
+        "shadersAvailable",
+        Export::Value(|cx| accessor(cx, Part::Shaders)),
+        Ts::value(
+            "Whether the platform draws shader views (`Shader`, `ShaderEffect`,\n`ShaderTransition`, `ScreenEffect`, `ScreenTransition`) (reactive).\n`false` where the platform was built without a renderer or draws in a\nterminal's cells; elsewhere `true` until the first shader mounts on a\nmachine without a GPU (WebGL 2 in a browser), when it turns `false` for\ngood. Show a shader while it holds and the app's own drawing (a `Canvas`,\nan image) otherwise.",
+            "Accessor<boolean>",
         ),
     ),
 ];

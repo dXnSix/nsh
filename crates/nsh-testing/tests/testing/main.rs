@@ -252,6 +252,20 @@ fn a_press_fails_on_a_view_another_covers() {
 }
 
 #[test]
+fn a_press_reaches_a_header_button_above_a_large_title_page_s_content() {
+    let run = TestRun {
+        ui_sets: vec![nsh_base::registry()],
+        compile: compiler(vec![nsh_base::registry()]),
+        ..test_run(None)
+    };
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/testing/header-hit");
+    let results = run_file(&run, &dir.join("App.test.tsx"), &mut |_| {}).unwrap();
+    let failed: Vec<_> = results.iter().filter(|r| r.failure.is_some()).collect();
+    assert!(failed.is_empty(), "{failed:#?}");
+    assert_eq!(results.len(), 3);
+}
+
+#[test]
 fn a_press_reaches_a_view_across_a_scroll_view_s_fold() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/testing/scroll-hit");
     let results = run_file(&test_run(None), &dir.join("App.test.tsx"), &mut |_| {}).unwrap();
@@ -291,8 +305,8 @@ fn the_page_s_host_answers_the_apps_tests_open() {
         assert!(failed.is_empty(), "{file}: {failed:#?}");
         results.len()
     };
-    assert_eq!(run(Some("host.js"), "Host.test.tsx"), 7);
-    assert_eq!(run(None, "NoHost.test.tsx"), 1);
+    assert_eq!(run(Some("host.js"), "Host.test.tsx"), 8);
+    assert_eq!(run(None, "NoHost.test.tsx"), 2);
     assert_eq!(run(Some("none.js"), "Broken.test.tsx"), 1);
 }
 
@@ -312,6 +326,24 @@ fn menu_shortcuts_choose_the_application_menu_s_items() {
     let failed: Vec<_> = results.iter().filter(|r| r.failure.is_some()).collect();
     assert!(failed.is_empty(), "{failed:#?}");
     assert_eq!(results.len(), 3);
+}
+
+#[test]
+fn an_app_inserts_the_pastes_it_allows_as_the_user_s_edits() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/testing/paste");
+    let results = run_file(&test_run(None), &dir.join("App.test.tsx"), &mut |_| {}).unwrap();
+    let failed: Vec<_> = results.iter().filter(|r| r.failure.is_some()).collect();
+    assert!(failed.is_empty(), "{failed:#?}");
+    assert_eq!(results.len(), 3);
+}
+
+#[test]
+fn a_main_window_nsh_json_starts_hidden_shows_when_the_app_asks() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/testing/hidden-main");
+    let results = run_file(&test_run(None), &dir.join("App.test.tsx"), &mut |_| {}).unwrap();
+    let failed: Vec<_> = results.iter().filter(|r| r.failure.is_some()).collect();
+    assert!(failed.is_empty(), "{failed:#?}");
+    assert_eq!(results.len(), 2);
 }
 
 #[test]

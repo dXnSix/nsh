@@ -16,12 +16,17 @@ use rolldown_common::{ChunkFilenamesOutputOption, CodeSplittingMode, Output};
 use crate::{compile, compile::strip_ansi, plugin};
 
 /// What to bundle and how.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BundleOptions {
     /// Entry module (usually `App.tsx`).
     pub entry: PathBuf,
     /// Minify the output (release builds).
     pub minify: bool,
+    /// A development build, as `appInfo()` reports it.
+    pub development: bool,
+    /// The app's id, name, version and build number in place of
+    /// `nsh.json`'s, as `appInfo()` reports them.
+    pub app: AppInfo,
     /// Split what `import()` loads into chunks of their own
     /// ([`Bundle::chunks`]), loaded on demand (published web apps);
     /// otherwise the bundle holds the whole app, dynamically imported
@@ -30,6 +35,22 @@ pub struct BundleOptions {
     /// The UI sets the hosts serve, described (`nsh_base::registry()`
     /// and an app's own, as `SetDescription`s): their modules stay imports.
     pub ui_sets: Vec<nsh_core::element::description::SetDescription>,
+}
+
+/// The app's identity a build gives it in place of `nsh.json`'s (what a
+/// package is named and versioned as: `nsh package --id … --version 2.0.0
+/// --build 7`), as `appInfo()` reports it; `None`: `nsh.json`'s.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct AppInfo {
+    /// The id (`nsh.json` `"id"`).
+    pub id: Option<String>,
+    /// The display name (`nsh.json` `"name"`).
+    pub name: Option<String>,
+    /// The version (`nsh.json` `"version"`).
+    pub version: Option<String>,
+    /// The build number (`nsh.json` `"build"`).
+    pub build: Option<u64>,
 }
 
 /// A failed build, formatted for people.
@@ -113,6 +134,11 @@ pub struct Bundle {
     /// The URL schemes the app claims (`nsh.json` `schemes`,
     /// checked, in lower case).
     pub url_schemes: Vec<String>,
+    /// The main window's launch options (`nsh.json` `window`), as
+    /// `app.json` carries them: JSON, `None` without them or when they
+    /// are not valid ([`main_window`]).
+    #[doc(hidden)]
+    pub main_window: Option<String>,
     /// Wall time spent bundling, in milliseconds.
     pub elapsed_ms: f64,
 }
@@ -181,6 +207,23 @@ pub fn url_schemes(dir: &std::path::Path) -> Result<Vec<String>, BundleError> {
         .get("schemes")
         .map(nsh_core::url_scheme::schemes_from_json)
         .unwrap_or_default())
+}
+
+/// The `"window"` of the `nsh.json` in `dir`, the main window's launch
+/// options, as JSON: `None` without it, and when it is not valid
+/// ([`nsh_core::desktop::MainWindowOptions::from_json`]; the CLI's
+/// `read_config` warns of it).
+#[doc(hidden)]
+pub fn main_window(dir: &std::path::Path) -> Result<Option<String>, BundleError> {
+    let Ok(text) = std::fs::read_to_string(dir.join("nsh.json")) else {
+        return Ok(None);
+    };
+    let config: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| BundleError::other(format!("nsh.json: {e}")))?;
+    Ok(config
+        .get("window")
+        .filter(|window| nsh_core::desktop::MainWindowOptions::from_json(window).is_ok())
+        .map(serde_json::Value::to_string))
 }
 
 /// How bare imports resolve: the `"resolve"` of the `nsh.json` next to the
@@ -330,6 +373,30 @@ pub fn theme_tokens_of(
     Ok(tokens)
 }
 
+/// A warning for each role theme file `json` maps (its `"roles"`) that no
+/// UI set lists and the core does not have: nothing draws with it, so it is
+/// most likely misspelled. `Err`: two sets list one role reading different
+/// kinds.
+fn unknown_roles(
+    json: &str,
+    ui_sets: &[nsh_core::element::description::SetDescription],
+) -> Result<Vec<String>, BundleError> {
+    let Some(mapped) = serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|theme| theme.get("roles")?.as_object().cloned())
+    else {
+        return Ok(Vec::new());
+    };
+    let listed = nsh_core::element::description::roles(ui_sets).map_err(BundleError::other)?;
+    let mut names: Vec<&String> = mapped.keys().collect();
+    names.sort();
+    Ok(names
+        .into_iter()
+        .filter(|name| !listed.iter().any(|role| role.name == **name))
+        .map(|name| format!("nsh.json: theme: `roles.{name}`: no UI set has a role of this name"))
+        .collect())
+}
+
 /// The theme types `ui_sets` register, merged (`None`: none).
 fn theme_types(
     ui_sets: &[nsh_core::element::description::SetDescription],
@@ -370,10 +437,13 @@ fn theme_json(
 }
 
 /// The `"tailwind"`, `"theme"`, `"appearance"` and `"statusBar"` of the
-/// `nsh.json` in `dir` (the app's, [`app_dir`]), checked. `"theme"` is
+/// `nsh.json` in the app directory ([`app_dir`]), checked, and the app's information
+/// (`development`: a development build; [`app_json`]). `"theme"` is
 /// shadcn's `cssVars` ([`theme_json`]).
 fn tailwind_setup(
     dir: &std::path::Path,
+    development: bool,
+    info: &AppInfo,
     ui_sets: &[nsh_core::element::description::SetDescription],
 ) -> Result<Arc<plugin::ThemeSetup>, BundleError> {
     let mut setup = plugin::ThemeSetup::default();
@@ -395,10 +465,12 @@ fn tailwind_setup(
     let Ok(text) = std::fs::read_to_string(&path) else {
         setup.theme.set_tokens(&tokens);
         setup.i18n = i18n_json(dir, None)?;
+        setup.app = app_json(&serde_json::Value::Null, development, info);
         return Ok(Arc::new(setup));
     };
     let config: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| BundleError::other(format!("nsh.json: {e}")))?;
+    setup.app = app_json(&config, development, info);
     if let Some(tailwind) = config.get("tailwind") {
         let json = tailwind.to_string();
         let ignored;
@@ -418,6 +490,9 @@ fn tailwind_setup(
         }
         .map_err(|e| BundleError::other(format!("nsh.json: theme: {e}")))?;
         warn_ignored("theme", &ignored);
+        for warning in unknown_roles(&json, ui_sets)? {
+            log::warn!(target: "nsh::build", "{warning}");
+        }
         tokens = read;
         setup.ui = Some(json);
     }
@@ -449,6 +524,21 @@ fn tailwind_setup(
     }
     setup.i18n = i18n_json(dir, Some(&config))?;
     Ok(Arc::new(setup))
+}
+
+/// What `appInfo()` reports, as JSON: `nsh.json`'s `"id"`, `"name"`,
+/// `"version"` and `"build"` (`info`'s where it gives them; `null` where
+/// neither does) and whether this is a development build.
+fn app_json(config: &serde_json::Value, development: bool, info: &AppInfo) -> String {
+    let text = |key: &str| config.get(key).and_then(|v| v.as_str()).map(str::to_owned);
+    serde_json::json!({
+        "id": info.id.clone().or_else(|| text("id")),
+        "name": info.name.clone().or_else(|| text("name")),
+        "version": info.version.clone().or_else(|| text("version")),
+        "build": info.build.or_else(|| config.get("build").and_then(|v| v.as_u64())),
+        "development": development,
+    })
+    .to_string()
 }
 
 /// The app's translations (`locales/`) and the language data of the
@@ -564,9 +654,13 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
     let cwd_for_errors = cwd.clone();
     let cwd_root = cwd.clone();
     let app = app_dir(&cwd);
-    let tailwind = tailwind_setup(&app, &options.ui_sets)?;
+    let tailwind = tailwind_setup(&app, options.development, &options.app, &options.ui_sets)?;
     let capabilities = capabilities(&app)?;
     let url_schemes = url_schemes(&app)?;
+    // Beside the entry, as `app.json`, `nsh run` and `nsh test`'s
+    // real-window hosts read it (the CLI's `read_config`): an app a test
+    // opens below its app's root starts alike headless and in a window.
+    let main_window = main_window(&cwd)?;
     let resolve = ResolveSetup::read(&app)?;
     let plugin_error = Arc::new(Mutex::new(None));
     let assets = Arc::new(Mutex::new(Vec::new()));
@@ -683,6 +777,7 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
         chunk_native_use,
         capabilities,
         url_schemes,
+        main_window,
         elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
     })
 }
@@ -962,7 +1057,7 @@ pub async fn bundle_hot_async(
     let plugin_error = Arc::new(Mutex::new(None));
     let assets = Arc::new(Mutex::new(Vec::new()));
     let app = app_dir(&cwd);
-    let tailwind = tailwind_setup(&app, ui_sets)?;
+    let tailwind = tailwind_setup(&app, true, &AppInfo::default(), ui_sets)?;
     let capabilities = capabilities(&app)?;
     let url_schemes = url_schemes(&app)?;
     let resolve = ResolveSetup::read(&app)?;
@@ -1136,6 +1231,7 @@ mod tests {
             minify: true,
             split,
             ui_sets: Vec::new(),
+            ..Default::default()
         })
         .unwrap()
     }
@@ -1273,6 +1369,7 @@ mod tests {
             minify: false,
             split: false,
             ui_sets: Vec::new(),
+            ..Default::default()
         })
     }
 
@@ -1542,6 +1639,7 @@ mod tests {
             minify: false,
             split: false,
             ui_sets: Vec::new(),
+            ..Default::default()
         })
         .unwrap();
         assert!(bundle.code.contains("#123456"), "{}", bundle.code);
@@ -1550,7 +1648,13 @@ mod tests {
             assert_eq!(app_dir(&dir.join(sub)), dir, "{sub}");
         }
         // ... and the class check knows its tokens: the same setup.
-        let setup = tailwind_setup(&app_dir(&dir.join("tests")), &[]).unwrap();
+        let setup = tailwind_setup(
+            &app_dir(&dir.join("tests")),
+            false,
+            &AppInfo::default(),
+            &[],
+        )
+        .unwrap();
         assert_eq!(
             crate::classes::check(code, oxc::span::SourceType::tsx(), &setup.theme),
             []
@@ -1560,6 +1664,41 @@ mod tests {
         std::fs::create_dir_all(&inner).unwrap();
         std::fs::write(inner.join("App.tsx"), code).unwrap();
         assert_eq!(app_dir(&inner), inner);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The main window's launch options are the `window` beside the entry,
+    /// as `app.json`, `nsh run` and `nsh test`'s real-window hosts read it:
+    /// an app a test opens below its app's root (`tests/MenuApp.tsx`) does
+    /// not start hidden because its app does, headless or in a window.
+    #[test]
+    fn an_entry_takes_the_window_beside_it() {
+        let dir = std::env::temp_dir().join(format!("nsh-window-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::fs::write(
+            dir.join("nsh.json"),
+            r#"{ "window": { "defaultVisible": false } }"#,
+        )
+        .unwrap();
+        let code = "import { mount, View } from \"nsh\";\nmount(() => <View />);\n";
+        std::fs::write(dir.join("App.tsx"), code).unwrap();
+        std::fs::write(dir.join("tests/MenuApp.tsx"), code).unwrap();
+        let build = |entry: &str| {
+            bundle(&BundleOptions {
+                entry: dir.join(entry),
+                minify: false,
+                split: false,
+                ui_sets: Vec::new(),
+                ..Default::default()
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            build("App.tsx").main_window.as_deref(),
+            Some(r#"{"defaultVisible":false}"#)
+        );
+        assert_eq!(build("tests/MenuApp.tsx").main_window, None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1591,7 +1730,7 @@ mod tests {
         )
         .unwrap();
         assert!(ResolveSetup::read(&dir).is_ok());
-        let setup = tailwind_setup(&dir, &[]).unwrap();
+        let setup = tailwind_setup(&dir, false, &AppInfo::default(), &[]).unwrap();
         assert!(setup.theme.color("brand").is_some());
         assert_ne!(
             theme_tokens(&dir).unwrap().color("primary"),
@@ -1623,6 +1762,7 @@ mod tests {
             minify: false,
             split: false,
             ui_sets: Vec::new(),
+            ..Default::default()
         })
     }
 
@@ -1647,6 +1787,7 @@ mod tests {
             minify: true,
             split: true,
             ui_sets: Vec::new(),
+            ..Default::default()
         })
         .unwrap();
         assert!(!bundle.chunks.is_empty());
@@ -1656,6 +1797,36 @@ mod tests {
             Some(&crate::Imported::Names(names.into_iter().collect()))
         );
         assert!(!bundle.native_use.global_crypto && !bundle.native_use.computed_import);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An app that reads an export off a namespace, so that shells without
+    /// it still run it, uses that export only: once bundled and minified.
+    #[test]
+    fn native_use_names_what_a_namespace_is_read_for() {
+        let dir = single(
+            "namespace",
+            "import * as base from \"nsh/base\";\n\
+             import { mount, Text } from \"nsh\";\n\
+             const EmojiPicker = (base as any).EmojiPicker;\n\
+             mount(() => (EmojiPicker ? <EmojiPicker /> : <Text>none</Text>));\n",
+        );
+        let bundle = bundle(&BundleOptions {
+            entry: dir.join("App.tsx"),
+            minify: true,
+            split: false,
+            ui_sets: vec![nsh_base::registry().into()],
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            bundle.native_use.imports.get("nsh/base"),
+            Some(&crate::Imported::Names(
+                ["EmojiPicker".to_owned()].into_iter().collect()
+            )),
+            "{}",
+            bundle.code
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1742,7 +1913,7 @@ mod token_namespaces {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("nsh.json"), format!(r#"{{ "theme": {json} }}"#)).unwrap();
-        let setup = super::tailwind_setup(&dir, &[]).unwrap();
+        let setup = super::tailwind_setup(&dir, false, &super::AppInfo::default(), &[]).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         setup.theme.clone()
     }
@@ -1759,6 +1930,33 @@ mod token_namespaces {
         );
         let unknown: Vec<&str> = unknown.iter().map(|u| u.class.as_str()).collect();
         assert_eq!(unknown, ["rounded-nothing"]);
+    }
+
+    #[test]
+    fn a_role_no_set_lists_is_warned_of() {
+        let file = r##"{ "cssVars": { "light": { "surface": "#fafafa" } },
+            "roles": { "popover": "surface", "popver": "surface", "warning": "surface" } }"##;
+        let base =
+            nsh_core::element::description::SetDescription::of(&nsh_base::registry()).unwrap();
+        // `popover` and `warning` are roles `nsh/base` lists; `popver` is none.
+        assert_eq!(
+            super::unknown_roles(file, std::slice::from_ref(&base)).unwrap(),
+            ["nsh.json: theme: `roles.popver`: no UI set has a role of this name"]
+        );
+        // Without `nsh/base` the core's own are known.
+        assert_eq!(
+            super::unknown_roles(file, &[]).unwrap(),
+            [
+                "nsh.json: theme: `roles.popver`: no UI set has a role of this name",
+                "nsh.json: theme: `roles.warning`: no UI set has a role of this name",
+            ]
+        );
+        // A file without roles has none to warn of.
+        assert!(
+            super::unknown_roles(r##"{ "cssVars": {} }"##, &[base])
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1847,7 +2045,8 @@ mod typed_theme {
     #[test]
     fn classes_are_the_types_names() {
         let dir = app(THEME);
-        let setup = super::tailwind_setup(&dir, &sets()).unwrap();
+        let setup =
+            super::tailwind_setup(&dir, false, &super::AppInfo::default(), &sets()).unwrap();
         let unknown = crate::classes::check(
             r#"const a = <View class="bg-surface-overlay rounded-card bg-primary" />;"#,
             SourceType::tsx(),
@@ -1892,6 +2091,114 @@ mod typed_theme {
         assert_eq!(
             crate::types::tokens_declaration_of(&tokens, &[]),
             crate::types::tokens_declaration(&tokens)
+        );
+    }
+}
+
+/// The class check knows the roles a theme maps: `bg-(--popover)` is a
+/// class where a theme type or `nsh.json`'s `"roles"` maps `popover`.
+#[cfg(test)]
+mod role_classes {
+    use nsh_core::element::{
+        AdaptiveColor, AppTheme, Registry, TokenKind, TokenSpec, Tokens,
+        description::SetDescription, role,
+    };
+    use oxc::span::SourceType;
+
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Ds;
+
+    impl AppTheme for Ds {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::LazyLock<Vec<TokenSpec>> = std::sync::LazyLock::new(|| {
+                vec![
+                    TokenSpec::new("surface-overlay", TokenKind::Color).role(role::POPOVER),
+                    TokenSpec::new("corner", TokenKind::Radius).role(nsh_base::role::RADIUS),
+                    TokenSpec::new("ink", TokenKind::Color),
+                ]
+            });
+            &SPECS
+        }
+
+        fn write_tokens(&self, _: &str, out: &mut Tokens) {
+            out.set_color("surface-overlay", AdaptiveColor::rgb(0x111111, 0x222222));
+            out.set_color("ink", AdaptiveColor::rgb(0x0a0a0a, 0xfafafa));
+            out.set_number("corner", 6.0);
+        }
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Ds
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    fn sets() -> Vec<SetDescription> {
+        let mut registry = Registry::ui_set("ds/native");
+        registry.theme::<Ds>();
+        vec![SetDescription::from(&registry)]
+    }
+
+    /// The classes of `classes` the check does not know, in an app whose
+    /// `nsh.json` is `config` (`None`: it has none) with `sets`.
+    fn unknown(config: Option<&str>, sets: &[SetDescription], classes: &str) -> Vec<String> {
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("nsh-role-classes-{}-{call}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some(config) = config {
+            std::fs::write(dir.join("nsh.json"), config).unwrap();
+        }
+        let setup = super::tailwind_setup(&dir, false, &super::AppInfo::default(), sets).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        crate::classes::check(
+            &format!(r#"const a = <View class="{classes}" />;"#),
+            SourceType::tsx(),
+            &setup.theme,
+        )
+        .into_iter()
+        .map(|u| u.class)
+        .collect()
+    }
+
+    const CLASSES: &str = "bg-(--popover) rounded-(--radius) text-(--warning) bg-popover";
+
+    #[test]
+    fn a_role_a_theme_type_maps_is_a_variable() {
+        // `popover` and `radius` are mapped by the type; `warning` by
+        // nothing, and a bare class names no role.
+        assert_eq!(
+            unknown(None, &sets(), CLASSES),
+            ["text-(--warning)", "bg-popover"]
+        );
+        // A theme file changes values, not what is mapped.
+        let file = r##"{ "theme": { "cssVars": { "light": { "surface-overlay": "#333333" } } } }"##;
+        assert_eq!(
+            unknown(Some(file), &sets(), CLASSES),
+            ["text-(--warning)", "bg-popover"]
+        );
+        // The file maps a role no type maps.
+        let file = r##"{ "theme": { "cssVars": {}, "roles": { "warning": "ink" } } }"##;
+        assert_eq!(unknown(Some(file), &sets(), CLASSES), ["bg-popover"]);
+    }
+
+    #[test]
+    fn a_role_nsh_json_maps_is_a_variable() {
+        // On the default theme `popover` and `radius` are tokens.
+        assert_eq!(unknown(None, &[], CLASSES), ["text-(--warning)"]);
+        let file = r##"{ "theme": { "cssVars": { "light": { "caution": "#b45309", "surface": "#fafafa" } },
+            "roles": { "warning": "caution", "selection": "surface" } } }"##;
+        assert!(unknown(Some(file), &[], CLASSES).is_empty());
+        assert_eq!(
+            unknown(
+                Some(file),
+                &[],
+                "bg-(--selection) bg-(--success) bg-selection"
+            ),
+            ["bg-(--success)", "bg-selection"]
         );
     }
 }

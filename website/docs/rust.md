@@ -140,7 +140,12 @@ Windows, Linux, GPUI and iOS.
 Code for every platform, the web included, uses NSH's services: `fetch` for HTTP
 ([Networking](./networking.md#from-rust-components)), `timer`, `set_timeout` and `set_interval` for waiting,
 `nsh_core::time::Instant` and `nsh_core::time::unix_ms()` for the clock. `background` and `blocking` run work on the
-native targets' threads.
+native targets' threads. `run_on_main_thread(f)` runs `f` on the platform's main thread, for APIs that only work there
+(AppKit's status items, UIKit): after the views of the current turn are mounted, and its result is a future to await
+on the engine thread. A module function that is not `async` calls `cx.run_on_main_thread(f)`. On the web and in
+headless tests `f` runs on the engine thread at the end of the commit, and on the native platforms later, while the
+engine goes on: await the result to know that `f` ran. `f` returns a value, and the code that awaits it writes signals
+and calls NSH's functions with it.
 
 ## Desktop title bars
 
@@ -773,6 +778,10 @@ with the type's tokens: above, `theme().popover` is the design system's `surface
 `action`. A token may play several roles (`.role(role::CARD).role(role::POPOVER)`): a design system with one surface
 for cards and popovers maps both onto it, and both follow every change of it. A role is played by one token.
 
+A set lists the roles its components draw with in its registry, mapped by a theme or not, so the toolchain knows
+them: `registry.roles(role::all())`, where `nsh_core::roles! { /// A banner's surface. pub BANNER: Role = "banner", }`
+writes the constants with `all()` beside them. `nsh/base` lists its own.
+
 **Names.** A token's name says what its kind is, as a CSS variable's does: a font's starts with `font-`, a shadow's
 with `shadow-`, a weight's with `font-weight-`, and no other kind's with `font-`. Registering a type whose name and
 kind disagree, that declares a name or maps a role twice, or whose token plays a role of another kind, panics.
@@ -789,7 +798,9 @@ sets, else the types' default. A name that no type declares, or a value of anoth
 left out when the app runs. A key that is a role's name, in a section that also sets the token the role is mapped
 onto, gives way to that token; so does the second of two roles' names that set one token to two values. An embedding
 app's theme overrides and TSX's `setTheme` and `updateTheme` read their files the same way: they leave a name no type
-declares out, and refuse a value they cannot read.
+declares out, and refuse a value they cannot read. Beside `cssVars`, a file's `"roles"` maps a role no type maps onto
+one of the types' tokens (`"roles": { "warning": "status-caution" }`); a role a type maps is the type's, and the
+file's mapping of it is left out.
 
 ```json
 {

@@ -75,6 +75,10 @@ pub struct Theme {
 /// fonts `font-sans` and `font-mono` are what `font-sans` and `font-mono`
 /// set, as `--font-sans` and `--font-mono` are in Tailwind.
 ///
+/// A variable that is no token's name is the theme role of that name
+/// (`bg-(--popover)` where the theme maps `popover` onto its `overlay`):
+/// the token the role is mapped onto. A bare class names no role.
+///
 /// Classes naming them are parsed with each appearance's values (one rule
 /// per appearance when they differ), so applying them costs what a palette
 /// color does; when the tokens change, only they are parsed again
@@ -95,6 +99,10 @@ pub(crate) struct ClassTokens {
     /// ([`ClassTokens::named_number`]), which a theme without such
     /// tokens then never looks for.
     namespaced: bool,
+    /// The theme roles mapped onto a token of another name, by the role's
+    /// name ([`crate::element::Tokens::with_roles`]): what a variable
+    /// that is no token's name reads.
+    roles: FxHashMap<Box<str>, Box<str>>,
 }
 
 static DEFAULT_TOKENS: LazyLock<Arc<ClassTokens>> =
@@ -120,6 +128,7 @@ impl ClassTokens {
                 .numbers()
                 .chain(theme.dark_numbers())
                 .any(|(k, _)| is_namespaced(k)),
+            roles: theme.roles().map(|(r, t)| (r.into(), t.into())).collect(),
         }
     }
 
@@ -135,10 +144,11 @@ impl ClassTokens {
             .map(|n| &**n)
     }
 
-    /// Whether `self` and `other` have the same names (only their values
-    /// may differ).
+    /// Whether `self` and `other` have the same names and map the same
+    /// roles (only their values may differ).
     pub(crate) fn same_names(&self, other: &ClassTokens) -> bool {
-        self.colors.len() == other.colors.len()
+        self.roles == other.roles
+            && self.colors.len() == other.colors.len()
             && self.numbers.len() == other.numbers.len()
             && self.fonts.len() == other.fonts.len()
             && self.shadows.len() == other.shadows.len()
@@ -234,7 +244,7 @@ impl ClassTokens {
                     Some((h, v)) => (Some(h), v),
                     None => (None, inner),
                 };
-                let name = var.strip_prefix("--")?;
+                let name = self.variable(var.strip_prefix("--")?);
                 out.push('[');
                 // A gradient token by its variable, as Tailwind reads an
                 // image (`bg-(image:--background-image-hero)`): the value
@@ -326,6 +336,23 @@ impl ClassTokens {
 }
 
 impl ClassTokens {
+    /// The token a variable `name` reads: the token of that name, else the
+    /// one the role of that name is mapped onto. The token is first, as a
+    /// variable is a token's name; [`crate::element::Tokens::role`] reads
+    /// the mapping first.
+    fn variable<'a>(&'a self, name: &'a str) -> &'a str {
+        let token = self.colors.contains_key(name)
+            || self.numbers.contains_key(name)
+            || self.dark_numbers.contains_key(name)
+            || self.fonts.contains_key(name)
+            || self.shadows.contains_key(name)
+            || self.gradients.contains_key(name);
+        match self.roles.get(name) {
+            Some(mapped) if !token => mapped,
+            _ => name,
+        }
+    }
+
     /// The number named `name` in the dark appearance or the light one
     /// ([`crate::element::Tokens::number_in`]).
     fn number(&self, name: &str, dark: bool) -> Option<f32> {

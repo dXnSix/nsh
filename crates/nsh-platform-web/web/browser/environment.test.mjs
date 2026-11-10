@@ -37,7 +37,7 @@ const engine = (changes = {}) => ({
   window: { width: 390, height: 844 }, safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
   titleBar: { height: 0, left: 0, right: 0 }, keyboard: { height: 0, duration: 250 },
   colorScheme: "light", fontScale: 1, rtl: false, reduceMotion: false, pixelRatio: 2, screenReader: false,
-  locale: "de-AT", host: false, lifecycle: "active", localeSettings: settings(),
+  locale: "de-AT", host: false, lifecycle: "active", shaders: true, localeSettings: settings(),
   platform: { os: "web", version: "0.0", idiom: "desktop", desktop: true, appleKeyboard: false },
   ...changes,
 });
@@ -113,6 +113,16 @@ test("the lifecycle is the engine's", () => {
   assert.equal(env.api.lifecycle(), "inactive");
 });
 
+test("whether shaders draw is the engine's", () => {
+  const { env } = environment();
+  // Before the engine reports, the native environment's default.
+  assert.equal(env.api.shadersAvailable(), true);
+  env.update(engine());
+  assert.equal(env.api.shadersAvailable(), true);
+  env.update(engine({ shaders: false }));
+  assert.equal(env.api.shadersAvailable(), false);
+});
+
 test("the locale settings are the engine's", () => {
   const { env } = environment();
   // Before the engine reports, the native environment's defaults: en-US's
@@ -151,6 +161,16 @@ test("a part is written only when it changed", () => {
   assert.deepEqual(writes, [fewer]);
 });
 
+test("setup hands over what appInfo reports, as the build wrote it", () => {
+  const { env } = environment();
+  assert.deepEqual(env.api.appInfo(), { id: null, name: null, version: null, build: null, development: false });
+  env.setup(null, null, null, null, JSON.stringify({ id: "com.example.notes", name: "Notes", version: "1.2.0", build: 4, development: true }));
+  assert.deepEqual(env.api.appInfo(), { id: "com.example.notes", name: "Notes", version: "1.2.0", build: 4, development: true });
+  // The entry's own setup, without the fifth argument, keeps it.
+  env.setup(null, null, null, null);
+  assert.equal(env.api.appInfo().version, "1.2.0");
+});
+
 test("what a ThemeScope renders reads the scope's appearance and tokens", () => {
   // A context as the graph's: the value of the nearest provider around
   // what reads it. The engine's part (`src/browser/mod.rs`): a slot per
@@ -185,6 +205,12 @@ test("what a ThemeScope renders reads the scope's appearance and tokens", () => 
   env.update(engine({ colorScheme: "dark" }));
   assert.equal(env.inScope({}, read), "dark");
   assert.equal(env.inScope({ appearance: "light" }, read), "light");
+  // `role()` asks as `token()` does, with its own call.
+  const roles = [];
+  const { env: other } = environment((op, args) => { if (op === 414) roles.push(args); });
+  other.update(engine({ colorScheme: "dark" }));
+  other.api.role("popover");
+  assert.deepEqual(roles, [["popover", true, null]]);
   // `token()` asks for the side the scope shows, of the surface's tokens.
   assert.deepEqual(asked, [["up", false, null], ["up", true, null], ["up", true, null], ["up", true, null], ["up", false, null]]);
   // A scope with a theme: the engine makes its tokens over the surface's,

@@ -78,7 +78,8 @@ Rust components (`nsh/base`'s and those of an app's own crate) accept `class` an
 |---|---|---|
 | `active:` | The view is pressed | `.active(\|s\| ..)` |
 | `hover:` | A pointer is over the view (iPad and Mac pointers) | `.hover(\|s\| ..)` |
-| `focus:`, `focus-visible:` | An input has focus | `.focus(\|s\| ..)` |
+| `focus:` | The element has focus | `.focus(\|s\| ..)` |
+| `focus-visible:` | The element has focus and shows it: the keyboard moved it there | `.focus_visible(\|s\| ..)` |
 | `focus-within:` | The view or a descendant has focus (the content of an `Overlay` is a descendant of the view it is in) | `.focus_within(..)` |
 | `disabled:`, `enabled:` | The element's `disabled` prop is true / false | `.disabled_style(\|s\| ..)` |
 | `selected:` | The element is selected (a `Button`'s `selected`, `accessibilityState.selected`) | `.selected_style(..)` |
@@ -99,6 +100,8 @@ Rust components (`nsh/base`'s and those of an app's own crate) accept `class` an
 | `min-[600px]:`, `max-[600px]:` | Arbitrary breakpoints | The same |
 | `portrait:`, `landscape:` | The window's orientation | `window().width > window().height` |
 | `ios:`, `android:`, `web:` | The platform | `.when(os() == Os::Ios, \|v\| ..)` |
+| `terminal:` | Drawn in a terminal | `.when(idiom() == Idiom::Terminal, \|v\| ..)` |
+| `pointer-fine:`, `pointer-coarse:` | The primary pointer is a mouse or trackpad (the desktops, a desktop browser, a terminal) / a finger | `.when(is_desktop(), \|v\| ..)` |
 | `rtl:`, `ltr:` | The [layout direction](./layout.md#right-to-left) | `.direction(LayoutDirection::..)` on a view |
 | `motion-safe:`, `motion-reduce:` | The user's reduce motion setting | `reduce_motion()` |
 
@@ -161,7 +164,7 @@ Breakpoints compare against the window (the surface NSH renders into), not the d
 - **Every view is a box of its own.** `overflow-x-hidden` and `overflow-y-hidden` clip both axes, as `overflow-hidden` does (scrolling is the [scroll](../elements/scroll.md) element's); `invisible` hides the view and everything in it; `mix-blend-*` blends a view with everything drawn behind it; `block` boxes keep their own margins and their children's apart; an `absolute` view is placed in its nearest positioned ancestor, as in CSS; `fixed` lays a view out in its root view (other elements are placed as `absolute`).
 - **Text keeps its whitespace.** Spaces and line breaks in a string are drawn as written, and `whitespace-*` sets the wrapping; the JSX compiler collapses the whitespace of literal JSX text, as JSX does.
 - **Transitions animate property groups**: `transition` animates colors, opacity, shadows and transforms, `transition-all` also corner radii and border widths; filters, backdrop filters, gradients and layout take their new values at once.
-- **`focus-visible:` is `focus:`**: it applies whenever the element has focus.
+- **`focus-visible:` follows the browsers' `:focus-visible`**: it applies while the focus shows. Tab, the arrow keys of a group and shortcuts show it; a press or a tap does not; a move the app makes (`focus()`, a calendar or a dialog opening) shows it after a key and not after a press; a text input shows it whenever it has focus. `focus:` applies whenever the element has focus, so the keyboard's ring goes on `focus-visible:`. The row the keys act on inside a component that keeps the focus (a tree's row, a list's highlighted option) takes `focus:` while it is that row and `focus-visible:` while the component's focus shows too.
 - **State backgrounds show over gradients.** In CSS a gradient covers `background-color`, so `active:bg-*` on a `bg-linear-*` surface would never be seen; in NSH a background color from `active:`, `hover:`, `focus:` or `group-*:` replaces the gradient while that state holds (unless the state sets a gradient of its own, such as `active:from-*`). So do `activeStyle` and the other state styles, and animated background colors.
 - **Text and touch settings are style keys**: `line-clamp-*` sets `numberOfLines`, `text-ellipsis` and `text-clip` set `textOverflow`, `truncate` both, `select-*` sets `userSelect` and `pointer-events-*` sets `pointerEvents`, so they work in state variants and lose to the inline `style` as every class does; `caret-*`, `placeholder:text-*` and `selection:bg-*` set the `caretColor`, `placeholderColor` and `selectionColor` styles the same way. In Rust these are `Styled` methods (`.number_of_lines(..)`, `.truncate()`, `.text_overflow(..)`, `.select_text()`, `.pointer_events(..)`, ...). `whitespace-nowrap` keeps a text on one line as a class. `object-*` set the `objectFit` and `objectPosition` styles of images and videos, which a style's keys replace as any other.
 - **The supported set**: utilities and variants of Tailwind 4 that have a native meaning. `peer-*` variants, pseudo-elements (`before:`, `after:`) and arbitrary properties (`[mask-type:luminance]`) are reported as unknown classes, and so is every utility NSH has no native meaning for, so a class never means something else than in a browser. Rendering hints (`antialiased`, `will-change-transform`, `appearance-none`, `box-border`, ...) are accepted and change nothing.
@@ -252,12 +255,13 @@ A token's name is its CSS variable's without `--`, as the theme file writes it: 
 | Form | Takes | Example |
 |---|---|---|
 | A color name in any color utility | A theme color, with an opacity too | `bg-primary`, `text-muted-foreground/70`, `bg-up/30`, `border-t-border`, `ring-ring`, `from-accent`, `placeholder:text-muted-foreground` |
-| `(--name)`, Tailwind 4's variable shorthand | A theme color or number | `bg-(--primary)`, `rounded-(--radius)`, `p-(--gap-card)` |
+| `(--name)`, Tailwind 4's variable shorthand | A theme color or number, or the token a theme role of that name is mapped onto | `bg-(--primary)`, `rounded-(--radius)`, `p-(--gap-card)`, `bg-(--popover)` |
 | `(color:--name)`, `(length:--name)`, `(number:--name)`, `(family-name:--name)` | The same, typed where a utility takes several kinds | `text-(color:--up)`, `text-(length:--text-title)`, `font-(family-name:--font-mono)` |
 | `font-sans`, `font-mono` | The theme's fonts, when it sets them | `font-mono` |
 | A number token's name in its namespace's utilities | A number token of a Tailwind 4 namespace, by the rest of its name | `rounded-card` (`radius-card`), `p-gutter`, `gap-x-gutter` (`spacing-gutter`), `text-body` (`text-body`), `font-strong` (`font-weight-strong`), `tracking-label`, `leading-body`, `blur-soft` |
 
 - **Your own tokens.** Every name in the theme file is a token, as every variable of a CSS `@theme` is: `"up": "#16a34a"` makes `bg-up`, `text-up` and `bg-up/30`; `"radius-card": "14px"` makes `rounded-(--radius-card)`; `"font-display": "Pacifico"` makes `font-(family-name:--font-display)`. Lengths are in points; `(number:--name)` passes the plain number.
+- **Theme roles.** A variable names a [theme role](../modules/nsh.md#role) as well: where the theme has no token `popover` and maps the role `popover` onto its token `overlay` (a theme type's `role = …`, or the theme file's `"roles": { "popover": "overlay" }`), `bg-(--popover)` is `overlay`'s color in each appearance and follows it. So a component shared between apps writes `bg-(--popover) rounded-(--radius)` once for every design system. A token of the name comes first, and a bare class (`bg-popover`) names tokens only. The build checks the variable against the roles the theme maps.
 - **Fonts.** `font-sans` is the app's font: every text that sets no family of its own is drawn with it, as a page is with Tailwind's `--font-sans`. `font-mono` is the font of `font-mono` and of code in `TextView`. Unset, both are the system's fonts.
 - **Both appearances.** A token has the light and the dark value of the theme: `bg-primary`, `theme().primary` and `token("primary")` switch with the appearance by themselves, with no `dark:` class. A color the theme sets in one appearance only is used in both. Numbers have a dark value too: `"dark": { "radius-card": "6px" }` beside a light `14px` makes `rounded-card` and `rounded-(--radius-card)` 14 points in the light appearance and 6 in the dark one, and `token("radius-card")` the value of the one shown; a number the theme gives once is the same in both.
 - **Named number classes.** A number token whose name starts with one of Tailwind 4's namespaces is a class of that

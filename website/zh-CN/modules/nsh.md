@@ -265,6 +265,29 @@ import { effect, token } from "nsh";
 effect(() => console.log("primary is", token("primary"), "radius", token("radius")));
 ```
 
+## role
+
+```ts
+function role<K extends keyof Roles>(name: K): Roles[K] | undefined;
+```
+
+主题角色 `name` 在当前外观下用来绘制的值，形式与 [`token()`](#token) 给出令牌的值相同：应用主题把该角色映射到的令牌（主题类型的 `role = …`），
+否则是与角色同名的令牌，否则是 `undefined`。角色说明 UI 的某个部分是做什么用的（`popover`、`border`、`warning`），无论应用的设计系统如何命名
+对应的令牌：按角色编写的组件可以被任何设计系统主题化。读取它是响应式的，与 `token()` 一样。
+
+`Roles` 列出应用的 UI 集合绘制时使用的角色（`nsh/base` 的角色见[主题角色](./nsh-base.md#theme-roles)）以及每个角色读取的内容；NSH 把它写入
+`.nsh/types/nsh/roles.d.ts`。主题没有对应令牌的角色是 `undefined`，所以组件为它保留自己的颜色：
+
+```tsx
+import { role } from "nsh";
+
+// 弹出层的表面，无论这个应用如何称呼它；在主题有警告色之前使用琥珀色。
+<View style={{ backgroundColor: role("popover"), borderLeftWidth: 3, borderLeftColor: role("warning") ?? "#d97706" }} />
+```
+
+类把角色当作变量读取：在主题没有同名令牌时，`bg-(--popover)` 是主题把 `popover` 映射到的令牌（[主题令牌](../docs/tailwind.md#theme-tokens)）。
+Rust 通过角色的常量读取：`theme().tokens().role(nsh_base::role::POPOVER)`。
+
 ## setTheme
 
 ```ts
@@ -276,8 +299,14 @@ interface Theme {
     light?: Record<string, string | number>;
     dark?: Record<string, string | number>;
   };
+  roles?: Record<string, string>;
 }
 ```
+
+`roles` 按名称把主题角色映射到主题的令牌上：`roles: { popover: "surface" }` 让所有用 `popover` 绘制的部分（`nsh/base` 的弹出层、
+[`role("popover")`](#role)）用令牌 `surface` 绘制，并在它变化时跟随；而 `"popover": "var(--surface)"` 只会复制一次它的颜色。没有 Rust 主题类型的
+应用用它按自己的方式命名令牌。把角色映射到主题中不存在的令牌名，或在主题类型下映射某个类型已经映射的角色，会像无法读取的值一样被拒绝；
+没有任何 UI 集合拥有的角色名会产生构建警告。`updateTheme` 会在已映射的角色之上追加。
 
 在应用运行时把 `theme` 设为应用的主题，取代 `nsh.json` 的 `"theme"`：格式与它相同，也和它一样叠加在 shadcn/ui 的令牌之上。
 它立即生效：调用之后 `token()` 马上读到新的令牌，引用令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在下一帧跟上，两种外观都是。
@@ -326,6 +355,36 @@ import { resetTheme, updateTheme } from "nsh";
 // 换一个品牌色，浅色和深色各一个；主题的其余部分不变。
 updateTheme({ cssVars: { light: { primary: "#e11d48" }, dark: { primary: "#fb7185" } } });
 resetTheme(["primary"]); // 恢复应用的 primary
+```
+
+## appInfo
+
+```ts
+function appInfo(): AppInfo;
+
+interface AppInfo {
+  readonly id: string | null;
+  readonly name: string | null;
+  readonly version: string | null;
+  readonly build: number | null;
+  readonly development: boolean;
+}
+```
+
+应用构建时的信息：id、名称、版本号、构建号，以及是否为开发构建。打包产物报告的是 `nsh package`、`nsh publish` 给包的
+名称和版本（包括 `--id`、`--name`、`--version`、`--build`），没有给出时版本为 `1.0.0`、构建号为 `1`；其他构建报告
+`nsh.json` 的 `"id"`、`"name"`、`"version"` 和 `"build"`，没有的项为 `null`。`nsh run`、`nsh dev`、`nsh test` 和不带
+`--release` 的 `nsh build` 是开发构建；`nsh package`、`nsh publish` 和 `nsh build --release` 不是。在任何平台、任何模块中
+都能读取，包括模块顶层的代码：构建会在应用的模块运行之前把这些信息交给运行时。
+
+安装的应用本体的版本见 `nsh/updater` 的 [`shellInfo()`](./nsh-updater.md#shellinfo)。
+
+```tsx
+import { appInfo, Text } from "nsh";
+
+const { version, build, development } = appInfo();
+
+export const About = () => <Text>{`${version} (${build})${development ? " · dev" : ""}`}</Text>;
 ```
 
 ## View、Text、Scroll、Overlay
@@ -1100,6 +1159,20 @@ function setFpsEnabled(enabled: boolean): void;
 <Switch checked={fpsEnabled()} onChange={({ checked }) => setFpsEnabled(checked)} />
 ```
 
+### shadersAvailable
+
+```ts
+const shadersAvailable: Accessor<boolean>;
+```
+
+平台能否绘制 shader 视图（`Shader`、`ShaderEffect`、`ShaderTransition`、`ScreenEffect`、`ScreenTransition`），响应式。在 iOS、Android、macOS、Windows、Linux、GPUI、Web 和无头测试中为 `true`；在终端中、以及关闭 `shader` 特性构建的应用中为 `false`。它从 `true` 开始，当第一个 shader 挂载、而 NSH 打不开这台机器的 GPU 时（例如浏览器没有 WebGL 2）变为 `false`，之后不再变回；所以在它为真时显示 shader，否则显示应用自己的绘制（见 [Shader](../elements/shader.md#shader-能否绘制)）。Rust：`shaders_available() -> bool`。
+
+```tsx
+<If when={shadersAvailable()} else={<Image src={backdrop} style={{ flex: 1 }} />}>
+  <Shader source={BACKDROP} style={{ flex: 1 }} />
+</If>
+```
+
 ### platform
 
 ```ts
@@ -1676,7 +1749,7 @@ hasImage(): Promise<boolean>;
 writeImage(src: string): Promise<void>;
 ```
 
-把 `src`（base64 `data:` URL，或 `readImage` 给的 `url`）的图片放到剪贴板上，替换原有内容。Rust：`set_clipboard_image(src)`。Windows 上接受 PNG，这是浏览器、Office 和截图工具读取的格式。Android 上以 `"ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"` 拒绝。
+把 `src`（base64 `data:` URL，或 `readImage` 给的 `url`）的图片放到剪贴板上，替换原有内容。Rust：`set_clipboard_image(src)`。Windows 上接受 PNG，这是浏览器、Office 和截图工具读取的格式。Web 上图片以 PNG 放到剪贴板，这是浏览器写入的图片格式；其他格式的图片同时原样放上去：作为 HTML（`<img>`，粘贴时在 `html` 里），在 Chromium 系浏览器中还作为原图，`readImage` 读回的就是它，所以 GIF 保留动画。Android 上以 `"ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"` 拒绝。
 
 ```rust tabs
 set_clipboard_image(image.url.clone());
@@ -1902,7 +1975,7 @@ for (const { file } of picked) {
 
 | 平台 | 选择器 | 过滤器 |
 |---|---|---|
-| macOS | `NSOpenPanel` 表单 | 所有扩展名合为一组 |
+| macOS | `NSOpenPanel`：应用窗口上的表单；该窗口不可见时（如托盘应用隐藏的主窗口）在最前面单独显示 | 所有扩展名合为一组 |
 | Windows | `IFileOpenDialog` | 每个过滤器一个选项，显示其名称 |
 | Linux | `GtkFileDialog`（有 portal 时用 portal 的） | 每个过滤器一个选项，显示其名称 |
 | iOS | `UIDocumentPickerViewController`，以副本形式 | 所有扩展名合为一组 |
@@ -2026,7 +2099,7 @@ scheme 以字母开头，后面是字母、数字、`+`、`-` 或 `.`，按小�
 const UrlScheme: {
   on(event: "open", listener: (event: { url: string }) => void): () => void;
   /** 地址不是应用自己改的（Web 上的后退和前进、用户输入的地址）。 */
-  on(event: "change", listener: (event: { url: string; cause: "back" | "forward" | "address" }) => void): () => void;
+  on(event: "change", listener: (event: { url: string; reason: "back" | "forward" | "address" }) => void): () => void;
   /** 应用的地址，没有时为 null。 */
   url(): string | null;
   /** 设置当前页面的地址；应用的页面保持不变。 */
@@ -2107,14 +2180,14 @@ UrlScheme.on("change", ({ url }) => current.set(tabOf(url)));
 UrlScheme.on("change", ({ url }) => tab.set(tabOf(url)));
 ```
 
-| `cause` | 何时（Web 上，应用占满整个页面时） |
+| `reason` | 何时（Web 上，应用占满整个页面时） |
 | --- | --- |
 | `"back"`、`"forward"` | 浏览器的后退或前进到了页面相同、地址不同的条目（用户输入的地址），或者后退弹出了页面，而应用在响应时没有设置地址（没有 `onChange` 设置地址），留下的地址也不是应用设置的 |
 | `"address"` | 用户给页面输入了应用的地址，即在地址栏里输入 `#fragment`：在当前条目之后新建一个条目，应用的页面保持不变 |
 
 栈能说明的情况保持不变：弹出页面的后退归栈处理（`onChange`），前进到栈里已经没有的页面是 `open`，应用自己的 `setUrl`
 不是 `change`。没有监听者时发生的变化不会保留：`url()` 里有它们。原生平台、GPUI 宿主和终端没有地址的历史记录，所以
-`change` 只在 Web 上出现。Rust 代码 await `nsh_core::prelude` 的 `next_app_url_change()`，得到带有 `url` 和 `cause` 的
+`change` 只在 Web 上出现。Rust 代码 await `nsh_core::prelude` 的 `next_app_url_change()`，得到带有 `url` 和 `reason` 的
 `AppUrlChange`。
 
 ## Speech
@@ -2271,7 +2344,7 @@ import { AudioPlayer, Sound } from "nsh";
 ```ts
 declare class Sound {
   static available(): Promise<boolean>;
-  static load(src: string): Promise<Sound>;
+  static load(src: string | Uint8Array): Promise<Sound>;
   play(options?: { volume?: number; rate?: number }): void;
   stop(): void;
   readonly duration: number;
@@ -2315,7 +2388,7 @@ type AudioErrorCode =
 
 ### Sound.load
 
-从导入的音频文件（`import click from "./sounds/click.wav"`：导入得到文件的 `asset:/` URL，文件随应用发布）、`file:` URL、`data:` URI 或应用 `network` capability 授权的 `http(s)` URL 加载音效，并解码进内存。引擎已加载过的源会共享：两个组件加载同一个点击音只解码一次。音效在 `dispose()` 时释放，或在加载它的一方离开时（组件卸载）释放。单个音效编码后最大 8 MB、时长最长 5 秒，一个应用同时最多持有 64 个音效、共 16 MB 解码后音频；超出时 `load` 以 `code` 为 `"ERR_NSH_QUOTA_EXCEEDED"` 拒绝。更长的音频交给 `AudioPlayer`。
+从导入的音频文件（`import click from "./sounds/click.wav"`：导入得到文件的 `asset:/` URL，文件随应用发布）、`file:` URL、`data:` URI 或应用 `network` capability 授权的 `http(s)` URL 加载音效，也可以直接给音频文件的字节（应用生成或下载的 `Uint8Array`；Rust 里还可以是嵌进程序的字节，`load_sound(include_bytes!("tick.wav"))`），并解码进内存。字节的格式（WAV、AAC、MP3 等）从字节本身读出。引擎已加载过的源会共享，相同的字节也一样：两个组件加载同一个点击音只解码一次。音效在 `dispose()` 时释放，或在加载它的一方离开时（组件卸载）释放。单个音效编码后最大 8 MB、时长最长 5 秒，一个应用同时最多持有 64 个音效、共 16 MB 解码后音频；超出时 `load` 以 `code` 为 `"ERR_NSH_QUOTA_EXCEEDED"` 拒绝。更长的音频交给 `AudioPlayer`。
 
 ### Sound.play
 

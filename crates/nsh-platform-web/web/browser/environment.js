@@ -7,11 +7,23 @@ function same(a, b, depth) {
   return keys.length === Object.keys(b).length && keys.every(key => same(a[key], b[key], depth - 1));
 }
 
+/** `appInfo()`'s object from the build's JSON, its fields typed as
+ * nsh-js's `AppInfo` reads them. */
+function readAppInfo(json) {
+  let info = {};
+  try { info = JSON.parse(json) ?? {}; } catch {}
+  const text = value => typeof value === "string" ? value : null;
+  return {
+    id: text(info.id), name: text(info.name), version: text(info.version),
+    build: Number.isFinite(info.build) ? info.build : null, development: info.development === true,
+  };
+}
+
 export function createEnvironment(reactive, invoke, dom) {
   const initial = { window: { width: 0, height: 0 }, safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
     titleBar: { height: 0, left: 0, right: 0 }, keyboard: { height: 0, duration: 0.25 },
     colorScheme: "light", fontScale: 1, pixelRatio: 1, locale: "en-US", reduceMotion: false, screenReader: false, host: false,
-    lifecycle: "active",
+    lifecycle: "active", shaders: true,
     localeSettings: { languages: ["en-US"], timeZone: "UTC", hourCycle: "h12", firstDayOfWeek: 7,
       measurementSystem: "us", temperatureUnit: "fahrenheit" } };
   const fields = Object.fromEntries(Object.entries(initial).map(([name, value]) => [name, reactive.signal(value)]));
@@ -28,6 +40,13 @@ export function createEnvironment(reactive, invoke, dom) {
   const scope = reactive.context(undefined);
   let scoped = false;
   const shownScheme = () => { const around = scoped && scope(); return around ? around.scheme() : fields.colorScheme(); };
+  // `token()` (402) and `role()` (414): of the scope around what reads it,
+  // else the surface's, in the appearance shown there.
+  const readToken = (op, name) => {
+    const around = scoped && scope(), named = around ? around.tokens() : undefined;
+    if (named === undefined) tokens();
+    return invoke(op, [name, shownScheme() === "dark", named ?? null]);
+  };
   const setColorScheme = scheme => {
     if (!["light", "dark", "system"].includes(scheme)) throw new TypeError('setColorScheme: expected "light", "dark" or "system"');
     appearance = scheme;
@@ -42,21 +61,24 @@ export function createEnvironment(reactive, invoke, dom) {
   const device = {
     windowSize: () => fields.window(), colorScheme: () => shownScheme(), setColorScheme,
     fontScale: () => fields.fontScale(), pixelRatio: () => fields.pixelRatio(), locale: () => fields.locale(),
-    localeSettings: () => fields.localeSettings(),
-    lifecycle: () => fields.lifecycle(), platform,
+    localeSettings: () => fields.localeSettings(), lifecycle: () => fields.lifecycle(), platform,
+    shadersAvailable: () => fields.shaders(),
     // A browser page has no performance monitor (its developer tools measure it).
     fpsEnabled: () => false,
   };
   const accessibility = { reduceMotion: () => fields.reduceMotion(), screenReaderEnabled: () => fields.screenReader() };
+  // nsh-js's `appInfo` (`env.rs`): what the build wrote, handed over by
+  // `setup` before the app's modules run.
+  let appInfo = readAppInfo("{}");
   const api = {
     ...device, ...accessibility,
+    appInfo: () => appInfo,
     safeArea: () => fields.safeArea(), safeAreaInsets: () => insets(), keyboardFrame: () => fields.keyboard(),
     screenReader: () => fields.screenReader(),
-    token(name) {
-      const around = scoped && scope(), named = around ? around.tokens() : undefined;
-      if (named === undefined) tokens();
-      return invoke(402, [name, shownScheme() === "dark", named ?? null]);
-    },
+    token: name => readToken(402, name),
+    // nsh-js's `role` (`env.rs`): the token the theme maps the role onto,
+    // else the token of its name.
+    role: name => readToken(414, name),
     // nsh-js's `setTheme` (`env.rs`): the engine checks and applies it, or
     // throws its `TypeError`; what read a token follows once it took.
     setTheme(theme) { invoke(406, [theme]); tokens.update(value => value + 1); },
@@ -114,11 +136,12 @@ export function createEnvironment(reactive, invoke, dom) {
         fields.locale.set(tag);
       });
     },
-    setup(tailwind, theme, scheme, statusBar) {
+    setup(tailwind, theme, scheme, statusBar, app) {
       if (typeof tailwind === "string") dom.rootProp("tailwindTheme", tailwind);
       if (typeof theme === "string") { dom.rootProp("uiTheme", theme); invoke(403, [theme]); tokens.update(value => value + 1); }
       if (["light", "dark", "system"].includes(scheme)) setColorScheme(scheme);
       if (typeof statusBar === "string") invoke(405, [statusBar]);
+      if (typeof app === "string") appInfo = readAppInfo(app);
     },
   };
 }

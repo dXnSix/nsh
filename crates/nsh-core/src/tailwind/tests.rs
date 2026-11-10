@@ -1140,6 +1140,7 @@ fn variants() {
         dark: true,
         platform: Platform::Android,
         reduce_motion: false,
+        ..ClassEnvironment::default()
     };
     let (s, _) = styled_with("bg-white dark:bg-black", dark, (390.0, 844.0), 0);
     assert_eq!(s.view.background_color, Color(0x0000_00ff));
@@ -1175,6 +1176,71 @@ fn variants() {
     );
     assert_eq!(s.layout.size.width, taffy::Dimension::length(390.0));
     assert_eq!(s.layout.size.height, taffy::Dimension::length(844.0));
+}
+
+#[test]
+fn pointer_and_terminal_variants_follow_the_device() {
+    // Tailwind's `pointer-fine:` / `pointer-coarse:` and NSH's `terminal:`,
+    // which comes after them: a terminal is a fine pointer too.
+    let theme = themed();
+    let list = parse(
+        &theme,
+        "h-10 pointer-coarse:h-9 pointer-fine:h-7 terminal:h-1",
+    );
+    assert!(list.unknown().is_empty(), "{:?}", list.unknown());
+    assert_eq!(list.deps(), deps::DEVICE);
+    let height = |pointer: Pointer, terminal: bool| {
+        let env = ClassEnvironment {
+            pointer,
+            terminal,
+            ..ClassEnvironment::default()
+        };
+        let (s, _) = styled_with(
+            "h-10 pointer-coarse:h-9 pointer-fine:h-7 terminal:h-1",
+            env,
+            (390.0, 844.0),
+            0,
+        );
+        s.layout.size.height
+    };
+    assert_eq!(
+        height(Pointer::Coarse, false),
+        taffy::Dimension::length(36.0)
+    );
+    assert_eq!(height(Pointer::Fine, false), taffy::Dimension::length(28.0));
+    assert_eq!(height(Pointer::Fine, true), taffy::Dimension::length(4.0));
+    // A hover look that only a pointer gets.
+    let list = parse(&theme, "pointer-fine:hover:bg-white");
+    assert!(list.unknown().is_empty(), "{:?}", list.unknown());
+}
+
+#[test]
+fn focus_visible_is_the_shown_focus_not_any_focus() {
+    // `focus:` holds while the view has the focus, `focus-visible:` only
+    // while the core shows it (the keyboard moved it there).
+    let theme = themed();
+    let list = parse(&theme, "focus-visible:p-2 group-focus-visible:m-2");
+    assert!(list.unknown().is_empty(), "{:?}", list.unknown());
+    // The platform reports `FOCUSED` alone: nothing more to track.
+    assert_eq!(list.tracked_states() & !state::FOCUS_VISIBLE, 0);
+    let pad = |states: u16| {
+        let (env, states) = cx(states);
+        styled_with(
+            "p-1 focus:p-3 focus-visible:p-5",
+            env,
+            (390.0, 844.0),
+            states,
+        )
+        .0
+        .layout
+        .padding
+        .top
+    };
+    let p = |n: f32| taffy::LengthPercentage::length(n);
+    assert_eq!(pad(0), p(4.0));
+    assert_eq!(pad(state::FOCUSED), p(12.0));
+    // After `focus:` in Tailwind's order: it wins while both hold.
+    assert_eq!(pad(state::FOCUSED | state::FOCUS_VISIBLE), p(20.0));
 }
 
 #[test]
@@ -2828,6 +2894,213 @@ mod tokens_by_name {
         assert!(accent.reads(&changed) && unknown.reads(&changed));
         assert!(tailwind.classes("bg-extra").unknown().is_empty());
         assert!(!Rc::ptr_eq(&accent, &tailwind.classes("p-2 bg-accent")));
+    }
+}
+
+/// A variable in a class names a theme role: `bg-(--popover)` is the token
+/// the theme maps `popover` onto, where no token has that name.
+mod role_variables {
+    use std::rc::Rc;
+
+    use super::*;
+    use crate::element::{AdaptiveColor, FontRole, NumberRole, Role, Tokens};
+
+    const POPOVER: Role = Role::new("popover");
+    const WARNING: Role = Role::new("warning");
+    const RADIUS: NumberRole = NumberRole::new("radius");
+    const FONT: FontRole = FontRole::new("font-mono");
+
+    /// A design system with names of its own, and the roles it plays.
+    fn brand() -> Tokens {
+        let mut t = Tokens::default();
+        t.set_color("overlay", AdaptiveColor::rgb(0xfafafa, 0x262626));
+        t.set_color("caution", AdaptiveColor::rgb(0xb45309, 0xfbbf24));
+        t.set_color("ink", AdaptiveColor::rgb(0x0a0a0a, 0xfafafa));
+        t.set_number("corner", 6.0);
+        t.set_dark_number("corner", 8.0);
+        t.set_font("code", "Berkeley Mono");
+        t.with_roles([(POPOVER, "overlay"), (WARNING, "caution")])
+            .with_roles([(RADIUS, "corner")])
+            .with_roles([(FONT, "code")])
+    }
+
+    fn theme(tokens: &Tokens) -> Theme {
+        let mut theme = Theme::default();
+        theme.set_tokens(tokens);
+        theme
+    }
+
+    /// `classes` with `tokens`, all of them known.
+    fn list(tokens: &Tokens, classes: &str) -> ClassList {
+        let list = parse(&theme(tokens), classes);
+        assert!(list.unknown().is_empty(), "{classes}: {:?}", list.unknown());
+        list
+    }
+
+    /// The style `classes` give with `tokens` in the appearance `dark`, as
+    /// its debug text.
+    fn style(tokens: &Tokens, classes: &str, dark: bool) -> String {
+        let theme = theme(tokens);
+        let list = parse(&theme, classes);
+        assert!(list.unknown().is_empty(), "{classes}: {:?}", list.unknown());
+        let mut style = Style::default();
+        let group = |_: &str| 0;
+        let context = Context {
+            env: ClassEnvironment {
+                dark,
+                ..Default::default()
+            },
+            window: crate::geometry::size_pt(390.0, 844.0),
+            rtl: false,
+            states: 0,
+            position: 0,
+            group: &group,
+        };
+        list.apply(
+            &context,
+            &theme,
+            &mut style,
+            &mut ClassProps::default(),
+            |_| {},
+        );
+        format!("{style:?}")
+    }
+
+    #[test]
+    fn a_variable_reads_the_token_its_role_is_mapped_onto() {
+        let t = brand();
+        for dark in [false, true] {
+            for (role, token) in [
+                ("bg-(--popover)", "bg-overlay"),
+                ("border-(--warning)", "border-caution"),
+                ("text-(color:--warning)", "text-caution"),
+                ("bg-(--popover)/50", "bg-overlay/50"),
+                ("rounded-(--radius)", "rounded-(--corner)"),
+                (
+                    "font-(family-name:--font-mono)",
+                    "font-(family-name:--code)",
+                ),
+                ("hover:bg-(--popover)", "hover:bg-overlay"),
+                ("dark:bg-(--popover)", "dark:bg-overlay"),
+            ] {
+                assert_eq!(
+                    style(&t, role, dark),
+                    style(&t, token, dark),
+                    "{role} dark: {dark}"
+                );
+            }
+        }
+        // Each appearance has the token's value in it.
+        assert_ne!(
+            style(&t, "bg-(--popover)", false),
+            style(&t, "bg-(--popover)", true)
+        );
+        assert_ne!(
+            style(&t, "rounded-(--radius)", false),
+            style(&t, "rounded-(--radius)", true)
+        );
+    }
+
+    #[test]
+    fn a_token_of_the_name_is_read_before_the_role() {
+        // The theme has a token `popover` and maps the role elsewhere: the
+        // variable is the token's name, as it is without roles.
+        let mut t = brand();
+        t.set_color("popover", AdaptiveColor::rgb(0xff0000, 0x00ff00));
+        assert_eq!(
+            style(&t, "bg-(--popover)", false),
+            style(&t, "bg-popover", false)
+        );
+        assert_ne!(
+            style(&t, "bg-(--popover)", false),
+            style(&t, "bg-overlay", false)
+        );
+        assert!(list(&t, "bg-(--popover)").reads_token("popover"));
+        assert!(!list(&t, "bg-(--popover)").reads_token("overlay"));
+    }
+
+    #[test]
+    fn a_gradient_token_of_the_name_is_read_before_the_role() {
+        // A gradient is a token too: its name is the variable's, whatever
+        // a role of that name is mapped onto.
+        let hero = crate::element::AdaptiveGradient::parse("linear-gradient(#000, #fff)").unwrap();
+        let mut t = brand();
+        t.set_gradient("background-image-hero", hero);
+        let t = t.with_roles([(
+            Role::<AdaptiveColor>::new("background-image-hero"),
+            "overlay",
+        )]);
+        let l = list(&t, "bg-(image:--background-image-hero)");
+        assert!(l.reads_token("background-image-hero") && !l.reads_token("overlay"));
+        assert_eq!(
+            style(&t, "bg-(image:--background-image-hero)", false),
+            style(&t, "bg-hero", false)
+        );
+    }
+
+    #[test]
+    fn a_bare_class_names_no_role() {
+        let theme = theme(&brand());
+        for class in ["bg-popover", "text-warning", "rounded-radius"] {
+            assert_eq!(parse(&theme, class).unknown().len(), 1, "{class}");
+        }
+    }
+
+    #[test]
+    fn a_role_nothing_maps_and_one_mapped_onto_no_token_are_unknown() {
+        let t = brand().with_roles([(Role::<AdaptiveColor>::new("accent"), "missing")]);
+        let theme = theme(&t);
+        for class in ["bg-(--success)", "bg-(--accent)", "rounded-(--success)"] {
+            assert_eq!(parse(&theme, class).unknown().len(), 1, "{class}");
+        }
+        // Without roles a variable is what it was.
+        let plain = self::theme(&Tokens::default());
+        assert_eq!(parse(&plain, "bg-(--popover)").unknown().len(), 1);
+    }
+
+    #[test]
+    fn a_class_reading_a_role_follows_its_token() {
+        let t = brand();
+        let l = list(&t, "p-2 bg-(--popover)");
+        assert!(l.reads_token("overlay") && !l.reads_token("popover"));
+        let mut tailwind = Tailwind::new();
+        tailwind.set_tokens(&t);
+        let role = tailwind.classes("bg-(--popover)");
+        let other = tailwind.classes("bg-(--warning)");
+        let mut next = brand();
+        next.set_color("overlay", AdaptiveColor::rgb(0xeeeeee, 0x333333));
+        let changed = tailwind.set_tokens(&next).expect("a change");
+        assert!(matches!(changed, TokenChange::Values(_)));
+        assert!(role.reads(&changed) && !other.reads(&changed));
+        assert!(Rc::ptr_eq(&other, &tailwind.classes("bg-(--warning)")));
+        assert!(!Rc::ptr_eq(&role, &tailwind.classes("bg-(--popover)")));
+    }
+
+    #[test]
+    fn a_change_of_the_roles_mapped_resolves_every_class() {
+        let mut tailwind = Tailwind::new();
+        tailwind.set_tokens(&brand());
+        let role = tailwind.classes("bg-(--popover)");
+        let plain = tailwind.classes("p-2 bg-ink");
+        assert_eq!(tailwind.set_tokens(&brand()), None);
+        // The same tokens, `popover` played by another of them.
+        let next = brand().with_roles([(POPOVER, "ink")]);
+        let changed = tailwind.set_tokens(&next).expect("a change");
+        assert_eq!(changed, TokenChange::All);
+        assert!(role.reads(&changed) && plain.reads(&changed));
+        let now = tailwind.classes("bg-(--popover)");
+        assert!(now.reads_token("ink") && !now.reads_token("overlay"));
+        // A scope with other roles differs in every class, one with the
+        // same roles in what its values change.
+        assert_eq!(
+            tailwind.difference(&ClassTokens::new(&brand())),
+            TokenChange::All
+        );
+        let mut scope = next.clone();
+        scope.set_color("ink", AdaptiveColor::rgb(0x111111, 0xeeeeee));
+        let difference = tailwind.difference(&ClassTokens::new(&scope));
+        assert!(matches!(difference, TokenChange::Values(_)));
+        assert!(now.reads(&difference));
     }
 }
 

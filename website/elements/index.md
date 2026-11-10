@@ -200,6 +200,7 @@ an `<Input>`, an `ImageStyle` on an `<Image>`, a `ViewStyle` elsewhere.
 | `activeStyle` | `.active(\|s\| ..)` | `active:` | While pressed. |
 | `hoverStyle` | `.hover(\|s\| ..)` | `hover:` | While a pointer is over the view. |
 | `focusStyle` | `.focus(\|s\| ..)` | `focus:` | While the view has focus. |
+| `focusVisibleStyle` | `.focus_visible(\|s\| ..)` | `focus-visible:` | While the view has focus and shows it: the keyboard moved it there, or the app moved it after a key; a text input whenever it has focus. A press or a tap focuses without it. |
 | `focusWithinStyle` | `.focus_within(\|s\| ..)` | `focus-within:` | While the view or a view inside it has focus (the content of an `Overlay` counts as inside the view it is in). |
 | `disabledStyle` | `.disabled_style(\|s\| ..)` | `disabled:` | While `disabled`. |
 | `checkedStyle` | `.checked(\|s\| ..)`, `.checked_style(style)` | `checked:` | While `accessibilityState.checked` is `true` (a checkbox, a switch, a radio; `"mixed"` is not checked). |
@@ -280,6 +281,58 @@ const at = signal<number | null>(null);
     <View style={{ position: "absolute", left: at()!, top: 0, bottom: 0, width: 1, backgroundColor: "#888" }} />
   </If>
 </View>
+```
+
+### Wheel
+
+`onWheel` hears a mouse wheel or touchpad scroll over a view, on macOS, Windows, Linux, the GPUI backend and the web
+(the DOM's `wheel`, GPUI's `ScrollWheelEvent`). The nearest view around the one under the pointer that listens hears
+it. When that view is nearer than every scroll view under the pointer, it takes the wheel: nothing scrolls, zooms or
+pinches natively, so a canvas inside a page can zoom on Control + wheel and pan otherwise. A scroll view that listens,
+or a view around one, only observes: the scroll view still scrolls. JS never cancels a native scroll after the fact
+(the main thread does not wait for it), so whether a view takes the wheel is decided by what is mounted, as with
+`onContextMenu`.
+
+| Prop | Rust | Type | Description |
+|---|---|---|---|
+| `onWheel` | `.on_wheel(..)` | `(e: WheelEvent) => void` | A mouse wheel or touchpad scrolled over the view or a view inside it. |
+
+`WheelEvent` has `position` and `pagePosition`, as `MouseEvent`, the `modifiers` held, `delta` (a `Point`: positive
+`y` scrolls down, toward the end, positive `x` right, as the DOM's `deltaX` / `deltaY`) and `deltaMode`: `"lines"` for
+mouse wheel notches, `"points"` for a precise device (a touchpad, a Magic Mouse; AppKit's `hasPreciseScrollingDeltas`,
+the DOM's `DOM_DELTA_PIXEL`). In Rust `delta` is a `WheelDelta`, `Lines(Point<f32>)` or `Points(Point<Points>)`, as
+GPUI's `ScrollDelta`; `delta.points(line_height)` gives points either way.
+
+```rust tabs
+// A canvas: Control + wheel zooms, the wheel pans.
+let zoom = signal(1.0_f32);
+let offset = signal(Point::<Points>::default());
+
+view()
+    .size_full()
+    .on_wheel(move |e: &WheelEvent| {
+        let d = e.delta.points(px(16.0));
+        if e.modifiers.ctrl {
+            zoom.update(|z| *z *= (1.0 - d.y.0 / 200.0).clamp(0.5, 2.0));
+        } else {
+            offset.update(|o| *o = point(o.x - d.x, o.y - d.y));
+        }
+    })
+```
+
+```tsx tabs
+// A canvas: Control + wheel zooms, the wheel pans.
+const zoom = signal(1);
+const offset = signal({ x: 0, y: 0 });
+
+<View
+  style={{ flex: 1 }}
+  onWheel={(e) => {
+    const unit = e.deltaMode === "lines" ? 16 : 1;
+    if (e.modifiers.control) zoom.update((z) => z * Math.min(2, Math.max(0.5, 1 - (e.delta.y * unit) / 200)));
+    else offset.update((o) => ({ x: o.x - e.delta.x * unit, y: o.y - e.delta.y * unit }));
+  }}
+/>
 ```
 
 ### Tooltips
@@ -591,7 +644,9 @@ of its own.
 |---|---|---|---|
 | `focus()` / `blur()` | `focus()` / `blur()` | `ViewRef` | Focuses an `<Input>` (shows the keyboard), or gives a view that takes presses the keyboard focus / unfocuses. |
 | `measure()` | `measure()` | `ViewRef` | [Where the view is](../docs/touch-and-gestures.md#where-a-view-is-measure). |
+| `reveal({ vertical?, horizontal?, animated? })` | `reveal(options)` | `ViewRef` | [Scrolls the scroll views around the view](../docs/scrolling.md#revealing-a-view) so it shows. |
 | `setSelection(start, end?)` | `set_selection(start, end)` | `InputRef` | Selects `start..end` in UTF-16 units; a caret without `end`. |
+| `insertText(text)` | `insert_text(text)` | `InputRef` | Inserts `text` in place of the selection as the user's edit, one step of the undo history (Linux, the web, headless tests). |
 | `scrollTo({ x?, y?, animated? })` | `scroll_to(point, animated)` | `ScrollRef`, `ListRef` | Scrolls to an offset. |
 | `zoomTo({ scale, x?, y?, animated? })` | `zoom_to(scale, center, animated)` | `ScrollRef` (a zoomable `<Scroll>`) | Zooms to `scale` around a content point. |
 | `scrollToOffset({ offset, animated? })` | `scroll_to_offset(offset, animated)` | `ListRef` | Scrolls to an offset along the list's axis. |
