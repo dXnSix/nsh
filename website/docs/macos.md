@@ -232,7 +232,7 @@ press action and their row role, and labels and text children remain available t
 | Return | In an `Input`, what `submitBehavior` says: submit (`onSubmit`), submit and leave the field, or a new line (multiline inputs) |
 | Return, keypad Enter, Space | Activate a focused view with `onPress` once on key-down; auto-repeat is consumed |
 | Shift+Return, Option+Return, Ctrl+Return | A new line in a multiline input whose return submits |
-| Tab, Shift+Tab (Ctrl too) | The next / previous field or pressable view in screen order, within the newest dialog; Option+Tab types a tab in a multiline input |
+| Tab, Shift+Tab (Ctrl too) | The next / previous field or pressable view in tree order, within the newest dialog; Option+Tab types a tab in a multiline input |
 | Escape | Leaves the focused field; else clears a text selection, then closes the newest dialog or goes back |
 | Option+Left, Cmd+[, mouse back button | Go back (not while a field has the focus: there Option+Left moves the caret) |
 | Option / Cmd + arrows, with Shift; Option+Delete, Cmd+Delete; Ctrl+A / E / K | Move, select and delete by word and line in a field, as in every Mac app |

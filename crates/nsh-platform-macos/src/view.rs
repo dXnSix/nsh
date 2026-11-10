@@ -1974,6 +1974,28 @@ impl NshView {
             .collect()
     }
 
+    /// Its child views in the order Tab goes through them: a scroll
+    /// view's, and a list's in its parent's viewport
+    /// (`ViewProps::screen_order`), as they are on screen, along its axis,
+    /// then across it ([`nsh_core::scroll::reading_order`]: a list's
+    /// recycled cells are not in their rows' order); any other view's in
+    /// tree order, bottom to top.
+    pub(crate) fn children_in_reading_order(&self) -> Vec<NshView> {
+        let mut kids = self.child_views();
+        let axis = {
+            let s = self.state();
+            match &s.scroll {
+                Some(scroll) if scroll.horizontal => Some(nsh_core::geometry::Axis::Horizontal),
+                Some(_) => Some(nsh_core::geometry::Axis::Vertical),
+                None => s.props.screen_order,
+            }
+        };
+        if let Some(axis) = axis {
+            nsh_core::scroll::reading_order(axis, &mut kids, |v| v.state().frame.origin);
+        }
+        kids
+    }
+
     /// Inserts it into `parent` below `before` (on top of the other
     /// children without one; hosted native views stay above:
     /// [`first_foreign`]).

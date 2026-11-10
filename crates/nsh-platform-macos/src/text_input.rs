@@ -753,48 +753,35 @@ impl Ctx {
     }
 }
 
-/// Moves the keyboard focus from `from` to the next (or previous) view of
-/// the window's key view loop inside the focus scope
-/// ([`crate::navigation::focus_scope`]): the window's loop holds every
-/// field, those under a modal too. Wraps around; stays when there is no
-/// other.
+/// Moves the keyboard focus from `from` to the next (or previous) stop of
+/// Tab inside the focus scope ([`crate::navigation::focus_scope`]), in tree
+/// order ([`crate::input::tab_stops`], through
+/// [`nsh_core::input::tab_stop`]), as the headless driver, the web and the
+/// other desktops go: not AppKit's key view loop, which goes by the
+/// views' places on screen. Wraps around; stays when there is no other.
 pub(crate) fn tab(surface: &Surface, from: &NSView, backward: bool) -> bool {
     let Some(window) = from.window() else {
         return false;
     };
-    let scope = crate::navigation::focus_scope(surface);
-    // A window that recalculates its loop does so only in its own
-    // `selectNextKeyView:`: the views' links are empty until then.
-    window.recalculateKeyViewLoop();
-    let mut at: Retained<NSView> = Retained::from(from);
-    // Bounded: a loop always comes back, but a broken one must not hang.
-    for _ in 0..512 {
-        // SAFETY: plain getters of the key view loop, on the main thread.
-        let next = unsafe {
-            if backward {
-                at.previousValidKeyView()
-            } else {
-                at.nextValidKeyView()
-            }
-        };
-        let Some(next) = next else {
-            return false;
-        };
-        if &*next == from {
-            return false;
-        }
-        // A text view's clip view comes right before it in the loop and
-        // gives the focus back to it: skip the views around `from`.
-        if next.isDescendantOf(&scope)
-            && (!crate::view::is_ours(&next)
-                || NshView::from_ns(&next).is_some_and(|view| crate::input::is_key_stop(&view)))
-            && !from.isDescendantOf(&next)
-        {
-            return window.makeFirstResponder(Some(&next));
-        }
-        at = next;
+    let stops = crate::input::tab_stops(&crate::navigation::focus_scope(surface));
+    // The innermost stop `from` is in (a field's text view is in its
+    // input's view, a field in a pressable comes after it).
+    let current = stops.iter().rposition(|stop| from.isDescendantOf(stop));
+    let Some(next) = nsh_core::input::tab_stop(current, stops.len(), backward, true) else {
+        return false;
+    };
+    if Some(next) == current {
+        return false;
     }
-    false
+    window.makeFirstResponder(Some(&stops[next]))
+}
+
+/// The view of input `view` that takes the keyboard focus: its field, or
+/// its text view.
+pub(crate) fn key_view(view: &NshView) -> Option<Retained<NSView>> {
+    let input = view.state().input.clone()?;
+    let responder = input.editor.borrow().responder();
+    Some(responder)
 }
 
 /// Defines a field class: `NSTextField` or `NSSecureTextField` that tells
