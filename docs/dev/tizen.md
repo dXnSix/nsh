@@ -38,7 +38,7 @@ cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --featur
 Tizen's app model starts a third-party native app as a .NET app: `crates/gpui/nsh-platform-tizen/host/` is the
 program (`Program.cs`, one P/Invoke into `libnsh.so`'s `nsh_tizen_main`; no TizenFX) and its project on
 `Tizen.NET.Sdk` (`Nsh.Tizen.Host.csproj`), the same as dXn.GpuiTizen's own host. It is built once into the runtime
-files (`dotnet build -c Release`), so packaging an app needs no .NET SDK.
+files (`dotnet build -c Release`, by `cargo xtask tizen`), so packaging an app needs no .NET SDK.
 
 `nsh_tizen_main` first looks up `nsh_app_ui_sets` and `nsh_app_root` in its own library (`dladdr` on itself, then
 `dlopen(RTLD_NOLOAD)` and `dlsym`: the host loads it `RTLD_LOCAL`, out of the global scope): an app's library with Rust
@@ -115,6 +115,39 @@ cargo xtask cross --target armv7 --clippy --manifest-path <nsh>/crates/gpui/Carg
 
 Once the forks and dXn.GpuiTizen are published, `crates/gpui/Cargo.toml` takes the patch as git lines and the
 environment above goes.
+
+## The runtime and the `tizen` component
+
+`cargo xtask tizen` (`crates/xtask/src/tizen.rs`) builds the runtime into `target/tizen/`, as `cargo xtask android`
+builds Android's, through dXn.GpuiTizen's cross driver: for each architecture it runs, in dXn.GpuiTizen's checkout,
+`cargo xtask cross --target <armv7|aarch64|x86_64> --release --manifest-path <nsh>/crates/gpui/Cargo.toml
+-p nsh-platform-tizen --check-symbols --entry nsh_tizen_main` (`--with-dev-variant` for both variants, or the dev one
+alone with `--features dev` into `<target>/dev-variant`), then builds the C# host and strips the libraries with the
+nightly's `llvm-strip` (`--strip-unneeded`: the export stays):
+
+```text
+target/tizen/{release,dev}/Nsh.Tizen.Host.dll (+ .deps.json)   the host
+target/tizen/{release,dev}/<arch>/libnsh.so                    armv7l, aarch64, x86_64; stripped
+target/tizen/{release,dev}/symbols/<arch>/libnsh.so            the same with its symbols
+target/tizen/targets/<spec>.json, toolchain                    dXn.GpuiTizen's target specs and its nightly
+```
+
+dXn.GpuiTizen's checkout is `DXN_GPUI_TIZEN`, else `../dXn.GpuiTizen` next to this checkout. Until the forks are
+published, the patch config goes on every command (`--config`, or `NSH_TIZEN_CARGO_CONFIG`, comma-separated), and
+the environment of "Building" above:
+
+```sh
+DXN_GPUI_TIZEN=<dXn.GpuiTizen> cargo xtask tizen --config "$PATCH"                 # both variants, every arch
+DXN_GPUI_TIZEN=<dXn.GpuiTizen> cargo xtask tizen --variant dev --arch armv7l --config "$PATCH"
+cargo test -p xtask --bin xtask tizen::tests                                          # arguments, layout, dist
+```
+
+The cross builds write to `CARGO_TARGET_DIR` (made absolute), else this checkout's `target/`. An armv7l build of
+both variants takes about 5 minutes on an Apple silicon Mac with a warm target directory (2m 11s release, 2m 31s dev);
+stripping takes armv7l's release library from 59 MB to 41 MB (a TPK of `examples/counter`: 23 MB).
+
+`cargo xtask dist` packs `runtime/tizen/` (both variants' host and stripped libraries for the three architectures,
+and `targets/`) when dXn.GpuiTizen's checkout and the .NET SDK are there (`NSH_DIST_NO_TIZEN` leaves it out).
 
 ## Not yet on Tizen
 
