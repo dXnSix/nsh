@@ -252,10 +252,19 @@ there is no `Os::TizenWeb`.
   `tizen.tvinputdevice.registerKey`; `nsh.js` reads them by Samsung's key codes in the TV idiom (`TV_KEY_CODES`).
   `globalThis.nshTizen` (`tv`, `keys`, `back()`, `confirmExit()`, `exit()`) is the seam the web half of `nsh/tizen`
   calls.
+- **`nsh run --target tizen-web`** serves the dev page with the shim (`tizen_web::dev_page`: `{{scripts}}`,
+  `{{idiom}}` and `{{history}}` of `web/dev.html`, which `with_page_host` leaves empty for the web) and writes the
+  development package `.nsh/tizen-web/dev/` (`NshDevHost.NshDev`, one for every app): a page that opens the dev
+  server's at this machine's LAN address once it answers, `<access>` and `<tizen:allow-navigation>` for that origin
+  only. With `nsh.json` `tizen.signing` it is signed, installed and launched (`--device`: the TV's serial); without,
+  the page opens in a browser here, as on the TV.
+- **`nsh test --target tizen-web`** runs `nsh test --target web`'s headless Chromium on the same page
+  (`test_web::starter(browser, true)`), 1920×1080 by default.
 
 `cargo test -p nsh-cli --test cli tizen_web::` packages with a fake runtime (`NSH_RUNTIME`: a linkable module of
 three functions) and a fake `tz`; `cargo test -p nsh-cli --bin nsh tizen_web::` checks the ids, versions and `tz`'s
-command lines. Not verified here: signing with a real profile and installing on a TV.
+command lines. Not verified here: signing with a real profile, installing on a TV, and whether a remote dev page
+gets `tizen`'s APIs (Back still arrives as key code 10009 there).
 
 ### Runtimes linked for each app
 

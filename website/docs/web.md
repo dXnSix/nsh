@@ -274,6 +274,8 @@ the published site plus Tizen's manifest and a TV shim; `platform.os` is `"web"`
 ```sh
 nsh package --target tizen-web                     # .nsh/out/tizen-web/<Name>/ and <Name>.wgt, unsigned
 nsh package --target tizen-web --sign my-profile   # .nsh/out/<Name>.wgt, signed with the Tizen SDK's tz
+nsh run --target tizen-web                         # on the TV (nsh.json tizen.signing) and in a browser here
+nsh test --target tizen-web                        # the tests in headless Chromium, on the TV's page, 1920×1080
 ```
 
 - **The package** is the [published site](#publish-an-app) with `config.xml` (the package and application ids, the
@@ -303,6 +305,10 @@ nsh package --target tizen-web --sign my-profile   # .nsh/out/<Name>.wgt, signed
   default the app's name, letters and digits); `version` is Tizen's `x.y.z` of numbers (by default the app's
   `version`, else `1.0.0`); `apiVersion` is the lowest Tizen that installs the package (`8.0`); `privileges` are
   asked for besides the internet's and the remote's keys'; `signing` is the certificate profile.
+- **Developing:** `nsh run --target tizen-web` serves the TV's page from the dev server, so a browser here at the
+  address it prints shows the app in the TV idiom, with hot updates. With `nsh.json` `tizen.signing` it also signs,
+  installs and launches a development package on the TV (`--device`: its `sdb` serial), whose page opens the dev
+  server's at this machine's address on the network.
 
 ## Build the website's player
 

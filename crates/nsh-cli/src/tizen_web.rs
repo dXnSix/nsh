@@ -14,7 +14,10 @@
 //! ```
 //!
 //! The page runs the shim, then creates the player with `idiom: "tv"` and
-//! no history entries (the remote's Back is the shim's). Only signing,
+//! no history entries (the remote's Back is the shim's). `nsh run --target
+//! tizen-web` serves the same page from the dev server ([`dev_page`]) and
+//! installs a development package whose page opens it ([`run_dev`]); `nsh
+//! test --target tizen-web` opens it in headless Chromium. Only signing,
 //! installing and launching run the SDK (`tz`); everything else is written
 //! here.
 
@@ -39,6 +42,8 @@ use crate::{
 const SHIM: &str = include_str!("tizen_web/shim.js");
 /// What the shim is named on the page (with its digest in a package).
 const SHIM_NAME: &str = "nsh-tizen.js";
+/// The development package's page, which opens the dev server's.
+const DEV_PAGE: &str = include_str!("tizen_web/dev.html");
 /// `required_version` without `nsh.json` `tizen.apiVersion`: Tizen 8.0,
 /// the TVs of 2024 on, whose engines run the web runtime as built.
 const API_VERSION: &str = "8.0";
@@ -48,6 +53,10 @@ const PRIVILEGES: &[&str] = &[
     "http://tizen.org/privilege/internet",
     "http://tizen.org/privilege/tv.inputdevice",
 ];
+/// The development package's id, one for every app (it opens whichever
+/// app's dev server it was written for), as the other targets have one
+/// development host.
+const DEV_PACKAGE: &str = "NshDevHost";
 
 /// A Tizen web app's manifest, `config.xml` ([`Widget::config_xml`]).
 #[derive(Debug)]
@@ -70,6 +79,9 @@ struct Widget {
     /// The origins the page may reach (`<access>`; `*`: any, the app's
     /// `capabilities` and the page's CSP limiting its requests).
     access: Vec<String>,
+    /// The hosts the page may navigate to (`<tizen:allow-navigation>`):
+    /// the development package's dev server.
+    navigation: Vec<String>,
 }
 
 impl Widget {
@@ -109,6 +121,7 @@ impl Widget {
             icon: config.icon.is_some(),
             privileges,
             access: vec!["*".to_owned()],
+            navigation: Vec::new(),
         })
     }
 
@@ -148,6 +161,13 @@ impl Widget {
                 r#"  <access origin="{}" subdomains="{}"/>"#,
                 escape(origin),
                 origin == "*"
+            );
+        }
+        for host in &self.navigation {
+            let _ = writeln!(
+                xml,
+                "  <tizen:allow-navigation>{}</tizen:allow-navigation>",
+                escape(host)
             );
         }
         let _ = writeln!(
@@ -444,6 +464,85 @@ fn install_and_launch(wgt: &Path, app: &str, serial: Option<&str>) -> anyhow::Re
     Ok(())
 }
 
+/// The dev server's page as a Tizen web app's (`nsh run` and `nsh test
+/// --target tizen-web`): the web host's page and files (`web::dev_host`)
+/// with the TV shim before `nsh.js`, the TV idiom and no history entries;
+/// `web::with_page_host` fills in the rest.
+pub(crate) fn dev_page((page, mut files): (String, web::Files)) -> (String, web::Files) {
+    files.push((SHIM_NAME.to_owned(), SHIM.as_bytes().to_vec()));
+    let page = page
+        .replace(
+            "{{scripts}}",
+            &format!("<script src=\"./{SHIM_NAME}\"></script>"),
+        )
+        .replace("{{idiom}}", "\"tv\"")
+        .replace("{{history}}", "false");
+    (page, files)
+}
+
+/// The development package for the dev server at `url` (`http://<LAN
+/// address>:<port>/`): a page that opens the server's, allowed to reach and
+/// open it, in `dir`.
+fn write_dev_package(dir: &Path, url: &str) -> anyhow::Result<Widget> {
+    let origin = url.trim_end_matches('/');
+    let host = origin
+        .split_once("://")
+        .map_or(origin, |(_, host)| host)
+        .to_owned();
+    let widget = Widget {
+        iri: widget_iri("com.longbridge.nsh.dev"),
+        package: DEV_PACKAGE.to_owned(),
+        app: format!("{DEV_PACKAGE}.NshDev"),
+        name: "NSH Dev".to_owned(),
+        version: "1.0.0".to_owned(),
+        required_version: API_VERSION.to_owned(),
+        icon: false,
+        privileges: PRIVILEGES.iter().map(|p| (*p).to_owned()).collect(),
+        access: vec![origin.to_owned()],
+        navigation: vec![host],
+    };
+    if dir.exists() {
+        fs::remove_dir_all(dir).with_context(|| format!("remove {}", dir.display()))?;
+    }
+    fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    let url_json = serde_json::to_string(url)?.replace("</", "<\\/");
+    fs::write(
+        dir.join("index.html"),
+        DEV_PAGE
+            .replace("{{url_json}}", &url_json)
+            .replace("{{url}}", &escape(url)),
+    )?;
+    fs::write(dir.join("config.xml"), widget.config_xml())?;
+    Ok(widget)
+}
+
+/// `nsh run --target tizen-web`'s package: [`write_dev_package`] in the
+/// app's `.nsh/tizen-web/dev/`, zipped; with a certificate profile
+/// (`nsh.json` `tizen.signing`) signed, installed on the TV (`device`: its
+/// serial) and launched. Without one the page opens in a browser here only.
+pub(crate) fn run_dev(entry: &Path, url: &str, device: Option<&str>) -> anyhow::Result<()> {
+    let entry = dunce::canonicalize(entry)?;
+    let work = entry
+        .parent()
+        .context("entry has no directory")?
+        .join(".nsh/tizen-web");
+    let dir = work.join("dev");
+    let widget = write_dev_package(&dir, url)?;
+    let unsigned = work.join("dev.wgt");
+    zip_dir(&dir, &unsigned)?;
+    let config = crate::package::read_config(&entry)?;
+    let Some(profile) = config.tizen.signing.as_deref() else {
+        ui::warn(format!(
+            "{} is unsigned: set nsh.json tizen.signing (a certificate profile) to install it on a TV",
+            ui::path(&unsigned)
+        ));
+        return Ok(());
+    };
+    let signed = work.join("NshDev.wgt");
+    sign(profile, &unsigned, &signed)?;
+    install_and_launch(&signed, &widget.app, device)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,7 +621,18 @@ mod tests {
     }
 
     #[test]
-    fn names_are_escaped_in_the_manifest() {
+    fn the_dev_page_runs_the_shim_on_a_tv() {
+        let page = "{{scripts}}\nconst HISTORY = {{history}}; const IDIOM = {{idiom}};".to_owned();
+        let (page, files) = dev_page((page, Vec::new()));
+        assert_eq!(
+            page,
+            "<script src=\"./nsh-tizen.js\"></script>\nconst HISTORY = false; const IDIOM = \"tv\";"
+        );
+        assert_eq!(files, [(SHIM_NAME.to_owned(), SHIM.as_bytes().to_vec())]);
+    }
+
+    #[test]
+    fn names_and_urls_are_escaped_in_the_manifest_and_the_dev_page() {
         let mut config = AppConfig::default();
         config.tizen.package_id = Some("AbCdE12345".to_owned());
         let widget = Widget::of(&config, "Tom & \"Jerry\" <TV>", "com.acme.tj").unwrap();
@@ -532,5 +642,17 @@ mod tests {
             xml.contains("<name>Tom &amp; &quot;Jerry&quot; &lt;TV&gt;</name>"),
             "{xml}"
         );
+        let dir = std::env::temp_dir().join(format!("nsh-tizen-dev-{}", std::process::id()));
+        write_dev_package(&dir, "http://10.0.0.2:8790/</script>").unwrap();
+        let page = fs::read_to_string(dir.join("index.html")).unwrap();
+        assert!(
+            page.contains(r#"const URL_ = "http://10.0.0.2:8790/<\/script>";"#),
+            "{page}"
+        );
+        assert!(
+            page.contains("<small>http://10.0.0.2:8790/&lt;/script&gt;</small>"),
+            "{page}"
+        );
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

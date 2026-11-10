@@ -31,6 +31,10 @@ pub(crate) enum Target {
     /// The web development host, in the browser (the dev server serves its
     /// page).
     Web,
+    /// The web development host on a Samsung TV: a Tizen web app that opens
+    /// the dev server's page with the TV shim, in the TV idiom (the same page
+    /// opens in a browser here).
+    TizenWeb,
     /// The GPUI development host, in a window on this machine (macOS,
     /// Windows or Linux): the app as GPUI apps that embed it show it.
     Gpui,
@@ -44,7 +48,10 @@ impl Target {
     /// and a device's host may be on the network; a desktop window, the
     /// terminal and Catalyst connect on this machine.
     pub(crate) fn uses_network(self) -> bool {
-        matches!(self, Target::Ios | Target::Android | Target::Web)
+        matches!(
+            self,
+            Target::Ios | Target::Android | Target::Web | Target::TizenWeb
+        )
     }
 
     /// The default: this system’s native desktop host (AppKit on macOS,
@@ -69,7 +76,7 @@ impl Target {
             Target::Windows => crate::runtime::Platform::Windows,
             Target::Gpui => crate::runtime::Platform::Gpui,
             Target::Tui => crate::runtime::Platform::Tui,
-            Target::Ios | Target::Android | Target::Web => {
+            Target::Ios | Target::Android | Target::Web | Target::TizenWeb => {
                 crate::runtime::Platform::IphoneSimulator
             }
         }
@@ -214,6 +221,9 @@ pub(crate) fn run(
     if target == Target::Web {
         return run_web(entry, listen, release, limits);
     }
+    if target == Target::TizenWeb {
+        return run_tizen_web(entry, listen, release, limits, device);
+    }
     // The host a previous session left running would connect to this one
     // until it is replaced.
     let udid = match target {
@@ -228,6 +238,7 @@ pub(crate) fn run(
         | Target::Macos
         | Target::Windows
         | Target::Web
+        | Target::TizenWeb
         | Target::Gpui
         | Target::Tui => None,
     };
@@ -331,7 +342,9 @@ pub(crate) fn run(
             drop(stoppable);
             result
         }
-        Target::Android | Target::Web | Target::Tui => unreachable!("handled above"),
+        Target::Android | Target::Web | Target::TizenWeb | Target::Tui => {
+            unreachable!("handled above")
+        }
     }
 }
 
@@ -349,6 +362,26 @@ fn run_web(
     // Built first in a checkout: the session serves the runtime it finds.
     crate::runtime::web(crate::runtime::WebKind::Dev, true)?.context("no web runtime")?;
     let session = DevSession::start(entry, listen, release, limits)?;
+    session.print_web_url();
+    session.watch(|| Ok(false))
+}
+
+/// Starts a dev session whose page has the TV shim and the TV idiom
+/// (`tizen_web::dev_page`), and installs and launches on a Samsung TV
+/// (`--device`: its `sdb` serial; by default the one `tz` picks) a
+/// development Tizen web app that opens that page at this machine's LAN
+/// address (`tizen_web::run_dev`). The same page opens in a browser here.
+fn run_tizen_web(
+    entry: &Path,
+    listen: crate::dev::Listen,
+    release: bool,
+    limits: Option<HostLimits>,
+    device: Option<&str>,
+) -> anyhow::Result<()> {
+    crate::runtime::web(crate::runtime::WebKind::Dev, true)?.context("no web runtime")?;
+    let session = DevSession::start(entry, listen, release, limits)?;
+    session.serve_tv_page()?;
+    crate::tizen_web::run_dev(entry, &session.device_web_url(), device)?;
     session.print_web_url();
     session.watch(|| Ok(false))
 }
@@ -504,6 +537,9 @@ fn run_rust_app(
             session.print_web_url();
             session.watch(|| Ok(false))
         }
+        Target::TizenWeb => bail!(
+            "a Rust app (nsh.json \"root\") runs on a TV as a package: nsh package --target tizen-web"
+        ),
         Target::Gpui | Target::Tui => unreachable!("handled before Rust runner selection"),
     }
 }
@@ -1193,6 +1229,7 @@ fn info_plist(target: Target) -> String {
         | Target::Macos
         | Target::Windows
         | Target::Web
+        | Target::TizenWeb
         | Target::Gpui
         | Target::Tui => {
             "<key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>\n    \
@@ -1384,7 +1421,10 @@ mod tests {
             .filter(|target| target.uses_network())
             .copied()
             .collect();
-        assert_eq!(network, [Target::Ios, Target::Android, Target::Web]);
+        assert_eq!(
+            network,
+            [Target::Ios, Target::Android, Target::Web, Target::TizenWeb]
+        );
     }
 
     /// `--window-size` reaches every desktop host; GPUI runs no app of

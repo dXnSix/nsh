@@ -43,7 +43,7 @@ nsh run --target macos             # 或 ios、android、windows、linux、tui�
 nsh package --target macos         # 或 ios、ios-simulator、android、windows、linux、web、tizen-web
 
 # TSX 应用
-nsh run App.tsx --target macos     # 或 ios、android、windows、linux、gpui、tui、web、catalyst
+nsh run App.tsx --target macos     # 或 ios、android、windows、linux、gpui、tui、web、tizen-web、catalyst
 nsh package App.tsx --target macos
 ```
 

@@ -248,6 +248,8 @@ nsh run App.tsx --target web       # TSX 应用
 ```sh
 nsh package --target tizen-web                     # .nsh/out/tizen-web/<Name>/ 和 <Name>.wgt，未签名
 nsh package --target tizen-web --sign my-profile   # .nsh/out/<Name>.wgt，用 Tizen SDK 的 tz 签名
+nsh run --target tizen-web                         # 在电视上（nsh.json 的 tizen.signing）和本机浏览器中
+nsh test --target tizen-web                        # 在 headless Chromium 里用电视的页面运行测试，1920×1080
 ```
 
 - **包**是[发布的站点](#发布应用)，加上 `config.xml`（包 id 和应用 id、版本、所需的 Tizen 版本、网络和遥控器按键权限、横屏、
@@ -273,6 +275,9 @@ nsh package --target tizen-web --sign my-profile   # .nsh/out/<Name>.wgt，用 T
   `packageId` 是 10 个字母和数字（默认由应用的 `id` 生成）；`appId` 是 `<packageId>.<name>`（默认取应用名中的字母和数字）；
   `version` 是 Tizen 的 `x.y.z` 数字版本（默认是应用的 `version`，否则 `1.0.0`）；`apiVersion` 是能安装这个包的最低
   Tizen 版本（`8.0`）；`privileges` 是在网络和遥控器按键之外申请的权限；`signing` 是证书配置。
+- **开发**：`nsh run --target tizen-web` 由开发服务器提供电视的页面，所以本机浏览器打开它打印的地址，就能看到电视 idiom
+  下的应用，并且支持热更新。配置了 `nsh.json` 的 `tizen.signing` 时，它还会在电视上签名、安装并启动一个开发包
+  （`--device`：电视的 `sdb` 序列号），开发包的页面会打开本机在局域网中的地址上的开发服务器页面。
 
 ## 构建本站的播放器
 

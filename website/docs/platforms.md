@@ -43,7 +43,7 @@ nsh run --target macos             # or ios, android, windows, linux, tui, web, 
 nsh package --target macos         # or ios, ios-simulator, android, windows, linux, web, tizen-web
 
 # A TSX app
-nsh run App.tsx --target macos     # or ios, android, windows, linux, gpui, tui, web, catalyst
+nsh run App.tsx --target macos     # or ios, android, windows, linux, gpui, tui, web, tizen-web, catalyst
 nsh package App.tsx --target macos
 ```
 

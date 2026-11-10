@@ -153,7 +153,7 @@ crates/
                        hosts and runners, and the headless runner of `nsh test`; it takes nsh's crates where the app's crates do:
                        crates.io at the CLI's version, or the checkout they depend on by path; docs/dev/tooling.md); web packages and the
                        browser host's pages (`web.rs`, `web/`); Samsung TVs' Tizen web apps (`tizen_web.rs`, `tizen_web/`:
-                       `config.xml`, the TV shim; docs/dev/web.md); `nsh test --target web`'s headless browser (`cdp.rs`, `test_web.rs`);
+                       `config.xml`, the TV shim, the development package; docs/dev/web.md); `nsh test --target web`'s headless browser (`cdp.rs`, `test_web.rs`);
                        what it prints (`ui.rs`:
                        one line per step, tools' output only on failure, `-v` for everything; docs/dev/tooling.md "Output")
   xtask/               Maintainer tasks: `cargo xtask android` (Android runtime), `ios-embed` (the iOS SDK), `dist` (the distribution),

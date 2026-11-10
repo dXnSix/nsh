@@ -77,7 +77,7 @@ nsh init [DIR] [--name <NAME>] [--template <ts|rust|mixed>] [--nsh-source <DIR>]
 ## nsh run
 
 ```sh
-nsh run [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>]
+nsh run [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|tizen-web] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>]
 ```
 
 ```sh
@@ -92,8 +92,8 @@ nsh run my-app/App.tsx --target web
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `--target <TARGET>` | macOS 上为 `macos`，Linux 上为 `linux`，Windows 上为 `windows` | `catalyst`：Mac Catalyst 宿主，一个 iPhone 大小的窗口（390×844）。`ios`：iOS 模拟器中的宿主。`android`：Android 设备或模拟器上的宿主。`macos`：AppKit 宿主，一个 1200×800 的窗口（[macOS](./macos.md)）。`linux`：GTK 宿主，一个 390×844 的窗口（[Linux](./linux.md)）。`windows`：Win32 宿主，一个 1200×800 的窗口（[Windows](./windows.md)）。`gpui`：GPUI 宿主，一个 1200×800 的窗口，可在 macOS、Windows 或 Linux 上运行，以嵌入它的 GPUI 应用的方式显示 TSX 应用（[GPUI](./gpui.md)）。`tui`：当前终端中的宿主（[TUI](./tui.md)）。`web`：开发服务器的页面，地址会打印出来（[Web](./web.md#在浏览器里开发)）。其他名字运行在 NSH 之外构建的同名平台（[外部 target](#外部-target)）。 |
-| `--device <DEVICE>` | | 要使用的 iOS 模拟器，按名称（`"iPhone 16 Pro"`）或 UDID 指定。默认：已启动的模拟器，否则启动最新的 iPhone。 |
+| `--target <TARGET>` | macOS 上为 `macos`，Linux 上为 `linux`，Windows 上为 `windows` | `catalyst`：Mac Catalyst 宿主，一个 iPhone 大小的窗口（390×844）。`ios`：iOS 模拟器中的宿主。`android`：Android 设备或模拟器上的宿主。`macos`：AppKit 宿主，一个 1200×800 的窗口（[macOS](./macos.md)）。`linux`：GTK 宿主，一个 390×844 的窗口（[Linux](./linux.md)）。`windows`：Win32 宿主，一个 1200×800 的窗口（[Windows](./windows.md)）。`gpui`：GPUI 宿主，一个 1200×800 的窗口，可在 macOS、Windows 或 Linux 上运行，以嵌入它的 GPUI 应用的方式显示 TSX 应用（[GPUI](./gpui.md)）。`tui`：当前终端中的宿主（[TUI](./tui.md)）。`web`：开发服务器的页面，地址会打印出来（[Web](./web.md#在浏览器里开发)）。`tizen-web`：同一个页面作为三星电视的页面，以电视 idiom 运行，在本机浏览器中打开；配置了 `nsh.json` 的 `tizen.signing` 时也在电视上运行（[Web](./web.md#三星电视)）。其他名字运行在 NSH 之外构建的同名平台（[外部 target](#外部-target)）。 |
+| `--device <DEVICE>` | | 要使用的 iOS 模拟器，按名称（`"iPhone 16 Pro"`）或 UDID 指定。默认：已启动的模拟器，否则启动最新的 iPhone。使用 `tizen-web` 时：电视的 `sdb` 序列号（`192.168.1.5:26101`）。 |
 | `--port <PORT>` | 此应用上次的端口，否则从 `8790` 起第一个空闲端口 | 开发服务器端口。等待此端口上的旧 NSH 开发会话清理完成后接管。 |
 | `--release` | | 压缩代码并去掉调试信息。release 包没有热模块替换：每次保存都会重新加载应用。 |
 | `--limits [<LIMITS>]` | | 按嵌入在其他应用中的方式运行应用，使用宿主应用设置的限制：`memory` 和 `stack`（单位为 `KB`、`MB` 或 `GB`）、`load` 和 `call`（单位为 `ms` 或 `s`）以及 `nodes`，例如 `--limits memory=128MB,call=500ms`。没写的项保持嵌入时的默认值，只写 `--limits` 就全部使用默认值（[沙箱与能力](./sandbox-and-capabilities.md#限制)）。不带它时，应用像打包后的应用一样独立运行。仅 TSX 入口。 |
@@ -106,7 +106,7 @@ nsh run my-app/App.tsx --target web
 
 使用 `--target android` 时，会选用 `adb devices` 列出的第一台设备；开发服务器的端口通过 `adb reverse` 转发到设备上。参见[快速开始](./getting-started.md)和[开发服务器与调试](./dev-server-and-debugging.md)。
 
-新会话最多等待十秒，让旧会话完成清理。多个应用可同时运行，各用自己的端口，再次运行同一应用会替换它之前的会话。`--port` 指定的端口被其他程序或旧版 NSH CLI 占用时，会报错并指出端口；`--port 0` 由操作系统分配空闲端口。`nsh run` 只服务本机，使用 `--target ios`、`android` 或 `web` 时也服务局域网。
+新会话最多等待十秒，让旧会话完成清理。多个应用可同时运行，各用自己的端口，再次运行同一应用会替换它之前的会话。`--port` 指定的端口被其他程序或旧版 NSH CLI 占用时，会报错并指出端口；`--port 0` 由操作系统分配空闲端口。`nsh run` 只服务本机，使用 `--target ios`、`android`、`web` 或 `tizen-web` 时也服务局域网。
 使用 `--target tui` 时，应用在当前终端中运行，保存源文件时热更新。CLI 和宿主的诊断日志写入应用的 `.nsh/tui.log`；按 `C-h e` 查看日志与错误，按 Escape 或 `C-g` 关闭面板，按 `r` 重新加载。应用错误会自动打开面板，更新后恢复应用画面。每个单元格默认是 8×16 点；`--points-per-cell 10x20` 优先于 `nsh.json` 中的 `"tui": { "pointsPerCell": "10x20" }`，宽高均须是有限正数，重启运行后生效。Rust 应用在为它生成的终端开发宿主中运行根组件，Rust 代码保存后重新构建并重启。
 
 在 Unix 上，终端宿主收到 SIGHUP、SIGTERM、SIGINT 或终端断开时退出，并恢复仍可访问的终端设置。应用空闲时在输入检查之间休眠；交互运行使用有效的终端输入，测试使用 `--headless` 接受重定向输入。
@@ -114,7 +114,7 @@ nsh run my-app/App.tsx --target web
 ## nsh dev
 
 ```sh
-nsh dev [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web] [--device <DEVICE>] [--server-only] [--port <PORT>] [--release] [--limits [<LIMITS>]]
+nsh dev [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|tizen-web] [--device <DEVICE>] [--server-only] [--port <PORT>] [--release] [--limits [<LIMITS>]]
 ```
 
 启动开发服务器并打开当前系统的原生宿主：macOS 使用 AppKit，Linux 使用 GTK，Windows 使用 Win32。开发 iOS 或 Android 应用时显式指定 `--target ios` 或 `--target android`。用 `--server-only` 为自己启动的宿主提供服务。服务器构建应用、监视入口所在目录，并把每次重新构建推送给连接到它的宿主。使用 `--server-only` 时，它会打印本机宿主使用的 URL、每个局域网地址对应的设备 URL，以及在 Web 运行时存在时，浏览器运行应用要打开的页面（[Web](./web.md#在浏览器里开发)）：
@@ -148,8 +148,8 @@ nsh test [PATH] [--filter <NAME>] [--trace] [--fps] [--junit <FILE>] [--target <
 | `--trace` | 打印测试所打开应用的每个挂载批次，标注它所属的步骤（`── press(Add): 7 items`），以及每次 commit 的耗时：首帧、一个步骤或一帧滚动的开销。加上 `--target` 时，是 host 的批次和耗时。 |
 | `--fps` | 配合 `--target linux`、`macos`、`windows` 或 `ios`：host 每秒输出一行性能监视器读数（帧率、帧各阶段、commit、CPU、内存），用 `-v` 显示。 |
 | `--junit <FILE>` | 同时把结果以 JUnit XML 报告写入 `FILE`，CI 服务按这种格式展示测试结果：每个测试文件一个 `testsuite`，每个测试一个 `testcase`。 |
-| `--target <TARGET>` | 在该平台的开发 host 上运行测试打开的应用，而不是 headless（`macos`、`linux`、`windows`、`gpui`、`tui`、`web`、`ios` 和 `android`；`tui` 在内存终端里运行，`web` 在 headless 的 Chrome、Edge 或 Chromium 里运行）：步骤用平台自己的输入执行（[测试](./testing-and-trace.md#在真实平台上运行)），`open` 会按该平台检查它的选项，平台无法满足的选项会被拒绝（`ERR_NSH_TEST_UNSUPPORTED`：iOS 和 Android 上的 `width` 与 `height`、属于另一类设备的 `platform`）。crate 的 Rust 测试在本机运行，属于不带 `--target` 的运行。 |
-| `--browser <PATH>` | `--target web` 运行应用所用的 Chrome、Edge 或 Chromium 可执行文件（默认：本机安装的那个）。 |
+| `--target <TARGET>` | 在该平台的开发 host 上运行测试打开的应用，而不是 headless（`macos`、`linux`、`windows`、`gpui`、`tui`、`web`、`tizen-web`、`ios` 和 `android`；`tui` 在内存终端里运行，`web` 在 headless 的 Chrome、Edge 或 Chromium 里运行，`tizen-web` 也在那里运行，用三星电视的页面和电视 idiom，默认 1920×1080）：步骤用平台自己的输入执行（[测试](./testing-and-trace.md#在真实平台上运行)），`open` 会按该平台检查它的选项，平台无法满足的选项会被拒绝（`ERR_NSH_TEST_UNSUPPORTED`：iOS 和 Android 上的 `width` 与 `height`、属于另一类设备的 `platform`）。crate 的 Rust 测试在本机运行，属于不带 `--target` 的运行。 |
+| `--browser <PATH>` | `--target web` 和 `tizen-web` 运行应用所用的 Chrome、Edge 或 Chromium 可执行文件（默认：本机安装的那个）。 |
 | `--display <N>` | 配合 `--target macos`：应用窗口在哪个显示器上居中打开：`1` 是主显示器（带菜单栏的那个），`2` 是下一个，依此类推；没有这个编号的显示器时在主显示器上打开。默认在副显示器（主显示器之外的第一个，且不是它的镜像）上打开，让测试运行占用一块单独的屏幕；只有一个显示器时在主显示器上打开。测试在每个显示器上的运行结果相同。 |
 | `--foreground` | 配合 `--target macos`：让应用成为当前活跃的应用，和用户使用时一样。默认应用在后台运行：窗口照常显示，键盘留在你正在输入的应用里，测试的点击、按键和快捷键直接发给这些窗口。依赖应用处于活跃状态的测试（`lifecycle()` 随应用是否活跃而变），或 `examples/gallery/tools/perf.py` 这类性能测量（它会传入该选项），应带上它运行。 |
 | `--web-host <JS>` | headless 运行时测试打开的应用所用的 Web 页面宿主模块（默认：`nsh.json` 的 `web.host`；它导出 `createHost(player)`）：它应答应用的 [`host`](../modules/nsh.md#host) 调用，它的 `player.hostEvent` 会送到 `host.on`（[测试](./testing-and-trace.md#页面的宿主)）。只用于 headless 运行；`--target web` 运行 `nsh.json` 的 `web.host`。 |

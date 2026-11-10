@@ -1,13 +1,16 @@
-//! `--target tizen-web`: the packages `nsh package` writes. A fake web runtime
+//! `--target tizen-web`: the packages `nsh package` writes, the development
+//! package and page of `nsh run`. A fake web runtime
 //! (`NSH_RUNTIME`: a linkable module of three functions, the crate's
 //! `nsh.js` and `browser/`) packages without building the real one, and a
 //! fake `tz` on `PATH` stands in for the Tizen SDK.
 use std::{
     fs,
+    io::{Read as _, Write as _},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Child, Command, Output, Stdio},
     sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant},
 };
 
 struct Directory(PathBuf);
@@ -299,6 +302,153 @@ fn a_profile_signs_the_package_with_tz() {
     let output = package(&dir, &[]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(read(dir.0.join("tz.log")).starts_with("pack -t wgt -s from-nsh-json -b "));
+}
+
+/// `nsh run --target tizen-web` until `until` holds of the app's
+/// directory (at most 60 s), then stopped.
+fn run_until(dir: &Directory, until: impl Fn(&Path) -> bool) -> Child {
+    let mut child = nsh(dir)
+        .args(["run", "--target", "tizen-web", "--port", "0"])
+        .arg(dir.0.join("app"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !until(&dir.0.join("app")) {
+        if let Some(status) = child.try_wait().unwrap() {
+            let mut err = String::new();
+            child
+                .stderr
+                .take()
+                .unwrap()
+                .read_to_string(&mut err)
+                .unwrap();
+            panic!("nsh run ended ({status}): {err}");
+        }
+        assert!(
+            Instant::now() < deadline,
+            "nsh run wrote no development package"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    child
+}
+
+/// `GET path` of the server at `origin` (`http://host:port`): the body.
+fn get(origin: &str, path: &str) -> String {
+    let host = origin.trim_start_matches("http://");
+    let port = host.rsplit(':').next().unwrap();
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port.parse().unwrap())).unwrap();
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nAccept: text/html\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body.to_owned())
+        .unwrap_or_default()
+}
+
+#[test]
+fn the_development_package_opens_the_dev_servers_tv_page() {
+    let dir = app(r#"{ "id": "com.acme.counter", "name": "Counter" }"#);
+    let mut child = run_until(&dir, |app| app.join(".nsh/tizen-web/dev.wgt").exists());
+    let package = dir.0.join("app/.nsh/tizen-web/dev");
+    let config = read(package.join("config.xml"));
+    let origin = config
+        .split(r#"<access origin=""#)
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_owned();
+    assert!(origin.starts_with("http://"), "{config}");
+    assert!(!origin.ends_with(":0"), "{config}");
+    let host = origin.trim_start_matches("http://");
+    for part in [
+        r#"<tizen:application id="NshDevHost.NshDev" package="NshDevHost" required_version="8.0"/>"#.to_owned(),
+        format!("<tizen:allow-navigation>{host}</tizen:allow-navigation>"),
+        r#"<tizen:privilege name="http://tizen.org/privilege/internet"/>"#.to_owned(),
+    ] {
+        assert!(config.contains(&part), "{part} in {config}");
+    }
+    assert!(!config.contains(r#"origin="*""#), "{config}");
+    // Its page opens the dev server's.
+    let page = read(package.join("index.html"));
+    assert!(
+        page.contains(&format!("const URL_ = \"{origin}/\";")),
+        "{page}"
+    );
+    assert_eq!(files(&package), ["config.xml", "index.html"]);
+    assert_eq!(
+        entries(&dir.0.join("app/.nsh/tizen-web/dev.wgt")),
+        ["config.xml", "index.html"]
+    );
+
+    // The dev server's page runs the TV shim before the runtime, on a TV,
+    // without history entries.
+    let page = get(&origin, "/");
+    let shim_at = page
+        .find(r#"<script src="./nsh-tizen.js"></script>"#)
+        .unwrap_or_else(|| panic!("{page}"));
+    assert!(shim_at < page.find(r#"<script type="module">"#).unwrap());
+    assert!(page.contains(r#"const IDIOM = "tv";"#), "{page}");
+    assert!(page.contains("const HISTORY = false;"), "{page}");
+    assert_eq!(get(&origin, "/nsh-tizen.js"), shim_source());
+    // Unsigned: nothing to install.
+    assert!(!dir.0.join("tz.log").exists());
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn a_profile_installs_and_launches_the_development_package() {
+    let dir = app(r#"{ "id": "com.acme.counter", "tizen": { "signing": "tv-profile" } }"#);
+    let mut child = nsh(&dir)
+        .args([
+            "run",
+            "--target",
+            "tizen-web",
+            "--port",
+            "0",
+            "--device",
+            "192.168.1.5:26101",
+        ])
+        .arg(dir.0.join("app"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let log = dir.0.join("tz.log");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while fs::read_to_string(&log).map_or(0, |l| l.lines().count()) < 3 {
+        assert!(
+            Instant::now() < deadline,
+            "tz ran {:?}",
+            fs::read_to_string(&log)
+        );
+        assert!(child.try_wait().unwrap().is_none(), "nsh run ended");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let work = fs::canonicalize(dir.0.join("app/.nsh/tizen-web")).unwrap();
+    let signed = work.join("NshDev.wgt");
+    assert_eq!(
+        read(&log).lines().collect::<Vec<_>>(),
+        [
+            format!(
+                "pack -t wgt -s tv-profile -b {} -o {}",
+                work.join("dev.wgt").display(),
+                signed.display()
+            ),
+            format!("install -p {} -e 192.168.1.5:26101", signed.display()),
+            "run -p NshDevHost.NshDev -e 192.168.1.5:26101".to_owned(),
+        ]
+    );
 }
 
 /// A web runtime as wasm-ld writes it with `--emit-relocs`, as small as

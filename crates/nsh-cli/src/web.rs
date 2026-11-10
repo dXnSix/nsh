@@ -1029,7 +1029,8 @@ pub(crate) fn dev_host(runtime: &WebRuntime, rust: bool) -> anyhow::Result<(Stri
 /// The dev host's page and files ([`dev_host`]) for the app at `entry`:
 /// with its page's host module (`nsh.json` `web.host`) as `nsh-host.js`,
 /// read now (a change takes another session), or none, and its
-/// `web.history`.
+/// `web.history`. A Tizen web app's page (`tizen_web::dev_page`) has filled
+/// in its scripts, idiom and history first; a web page has none of them.
 pub(crate) fn with_page_host(
     (page, mut files): (String, Files),
     entry: &Path,
@@ -1055,7 +1056,9 @@ pub(crate) fn with_page_host(
     };
     Ok((
         page.replace("{{host}}", &host)
-            .replace("{{history}}", &history),
+            .replace("{{history}}", &history)
+            .replace("{{scripts}}\n", "")
+            .replace("{{idiom}}", "null"),
         files,
     ))
 }
@@ -1990,11 +1993,14 @@ mod tests {
             page.contains(&format!("const RUNTIME = \"{first}\";")),
             "{page}"
         );
-        // The page's host is the app's (`with_page_host`).
+        // The page's host is the app's (`with_page_host`); its scripts and
+        // idiom a Tizen web app's (`tizen_web::dev_page`).
         assert!(
             !page
                 .replace("{{host}}", "")
                 .replace("{{history}}", "")
+                .replace("{{scripts}}", "")
+                .replace("{{idiom}}", "")
                 .contains("{{"),
             "{page}"
         );

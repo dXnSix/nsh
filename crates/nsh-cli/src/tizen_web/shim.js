@@ -13,7 +13,8 @@
 // - `globalThis.nshTizen` is what the web half of `nsh/tizen` reaches
 //   (`tv`, `keys`, `back()`, `confirmExit()`, `exit()`).
 //
-// Off a TV (a browser on a computer) there is no `tizen`: keys register nothing and `exit()`
+// Off a TV (`nsh run --target tizen-web` in Chrome, `nsh test --target
+// tizen-web`) there is no `tizen`: keys register nothing and `exit()`
 // closes the window. The page creates the player with `idiom: "tv"`.
 (function (global) {
   "use strict";
