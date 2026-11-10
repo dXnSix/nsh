@@ -372,6 +372,27 @@ covers [props] accessibilityValue
 covers [props] accessibilityElementsHidden
 covers [props] importantForAccessibility
 covers [props] accessibilityActions
+# props-view-focus
+tap id:case-props-view-focus
+# Where the arrows take the focus, as the platform receives it: the
+# routes name the views their refs are on, one rendered after the view
+# naming it included.
+prop id:resume autoFocus true
+prop id:play preferredFocus true
+noprop id:plain autoFocus
+noprop id:plain preferredFocus
+prop id:resume nextFocusDown id:play
+prop id:play nextFocusUp id:resume
+prop id:play nextFocusLeft id:resume
+prop id:play nextFocusRight id:resume
+noprop id:resume nextFocusUp
+noprop id:plain nextFocusDown
+covers [props] autoFocus
+covers [props] preferredFocus
+covers [props] nextFocusUp
+covers [props] nextFocusDown
+covers [props] nextFocusLeft
+covers [props] nextFocusRight
 # props-view-styling
 tap id:case-props-view-styling
 # `style`: an object, and a nested list merged left to right.
