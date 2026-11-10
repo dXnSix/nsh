@@ -259,3 +259,52 @@ fn a_scroll_view_that_can_scroll_on_keeps_the_focus(cx: &mut TestAppContext) {
     assert!(key(&surface, "down"));
     assert_eq!(focused(&surface), Some(10));
 }
+
+#[gpui::test]
+fn an_arrow_past_a_list_s_mounted_rows_asks_the_engine_for_the_next(cx: &mut TestAppContext) {
+    const LIST: NodeId = 4;
+    let (surface, _app) = surface(cx);
+    let mut tree = Tree::default();
+    tree.view(LIST, PAGE, ViewKind::Scroll, (0.0, 0.0, 400.0, 200.0));
+    tree.items.push(MountItem::ScrollConfig {
+        id: LIST,
+        horizontal: false,
+        scrollbar_visible: false,
+        replaced: false,
+        scroll_value: None,
+        pull_value: None,
+        keyboard_dismiss: Default::default(),
+        mirrored: false,
+    });
+    tree.items.push(MountItem::ScrollContent {
+        id: LIST,
+        size: nsh_core::Size::new(Points(400.0), Points(10_000.0)),
+    });
+    // The rows mounted: cells with a stop each.
+    tree.view(20, LIST, ViewKind::View, (0.0, 0.0, 400.0, 100.0))
+        .pressable(6, 20, (10.0, 10.0, 200.0, 80.0));
+    tree.view(22, LIST, ViewKind::View, (0.0, 100.0, 400.0, 100.0))
+        .pressable(8, 22, (10.0, 10.0, 200.0, 80.0));
+    tree.apply(&surface);
+    assert!(key(&surface, "down"));
+    assert!(key(&surface, "down"));
+    assert_eq!(focused(&surface), Some(8));
+    assert!(surface.asked_past.borrow().is_empty());
+    // No row below is mounted: the engine hears the arrow from the stop
+    // that keeps the focus.
+    assert!(key(&surface, "down"));
+    assert_eq!(focused(&surface), Some(8));
+    assert_eq!(
+        std::mem::take(&mut *surface.asked_past.borrow_mut()),
+        [(8, nsh_core::focus::Direction::Down)]
+    );
+    // The core mounts the next row and focuses its first stop.
+    tree.view(24, LIST, ViewKind::View, (0.0, 200.0, 400.0, 100.0))
+        .pressable(10, 24, (10.0, 10.0, 200.0, 80.0));
+    tree.items.push(MountItem::Command {
+        id: 10,
+        command: Command::Focus,
+    });
+    tree.apply(&surface);
+    assert_eq!(focused(&surface), Some(10));
+}
