@@ -77,7 +77,9 @@ Publishing: `nsh-platform-tizen` is not published (`publish = false`); it ships 
 `cargo publish` takes a git dependency from crates.io by its `version`, so the workspace entries of dXn.GpuiTizen's
 crates carry one beside `git` and `rev` (`0.1.0`, theirs). A crate that `release-crate.yml` publishes and that
 depends on them needs `dxn_gpui_tizen` (and `dxn_gpui_tizen_sys`) on crates.io at that version before the NSH
-release that includes it; until then the GPUI workspace's publish step fails on it.
+release that includes it; until then the GPUI workspace's publish step fails on it. `nsh-platform-gpui` is one: it
+depends on `dxn_gpui_tizen` on Tizen (`cfg(target_vendor = "tizen")`, its videos), and `cargo publish` checks
+target-specific dependencies too, so dXn.GpuiTizen goes to crates.io before the first NSH release with Tizen videos.
 
 Before dXn.GpuiTizen is pushed, Git reaches it in the local checkout (Cargo cannot patch an unreachable git
 source), so every Cargo command runs with:
