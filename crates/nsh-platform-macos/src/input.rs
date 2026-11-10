@@ -1142,6 +1142,80 @@ pub(crate) fn is_key_stop(view: &NshView) -> bool {
     view.can_target() && !view.ns().isHiddenOrHasHiddenAncestor() && view.seen_by_keys()
 }
 
+/// The stops of Tab under `scope` (the newest modal, or a window's root),
+/// in tree order (a scroll view's content as it is on screen,
+/// [`NshView::children_in_reading_order`]), each as the view that becomes
+/// first responder: the views [`is_key_stop`] takes, the inputs' fields
+/// and text views, and the hosted AppKit views that can be key views (a
+/// web view: the first in each one's subtree). Another modal is a scope of
+/// its own; views the pointer cannot reach take none of their subtree.
+pub(crate) fn tab_stops(scope: &objc2_app_kit::NSView) -> Vec<Retained<objc2_app_kit::NSView>> {
+    let mut stops = Vec::new();
+    if let Some(scope) = NshView::from_ns(scope) {
+        for child in scope.children_in_reading_order() {
+            collect_tab_stops(&child, &mut stops);
+        }
+    }
+    stops
+}
+
+fn collect_tab_stops(view: &NshView, out: &mut Vec<Retained<objc2_app_kit::NSView>>) {
+    if view.kind() == ViewKind::Modal
+        || !view.can_target()
+        || view.ns().isHiddenOrHasHiddenAncestor()
+    {
+        return;
+    }
+    if view.kind() == ViewKind::Input {
+        // A field, as a hosted view below, is a stop only where its view
+        // is seen ([`NshView::seen_by_keys`]: an area, no `visibility:
+        // hidden` around it).
+        if let Some(field) = crate::text_input::key_view(view)
+            && field.canBecomeKeyView()
+            && view.seen_by_keys()
+        {
+            out.push(field);
+        }
+        return;
+    }
+    if is_key_stop(view) {
+        out.push(Retained::from(view.ns()));
+    }
+    let natives: Vec<_> = view
+        .state()
+        .natives
+        .iter()
+        .map(|n| n.view.clone())
+        .collect();
+    if view.seen_by_keys() {
+        out.extend(
+            natives
+                .iter()
+                .filter_map(|native| first_key_view(native, 0)),
+        );
+    }
+    for child in view.children_in_reading_order() {
+        collect_tab_stops(&child, out);
+    }
+}
+
+/// The first view of a hosted AppKit view's subtree, depth first from it,
+/// that can be a key view.
+fn first_key_view(
+    view: &objc2_app_kit::NSView,
+    depth: usize,
+) -> Option<Retained<objc2_app_kit::NSView>> {
+    if view.isHidden() || depth > 16 {
+        return None;
+    }
+    if view.canBecomeKeyView() {
+        return Some(Retained::from(view));
+    }
+    view.subviews()
+        .iter()
+        .find_map(|sub| first_key_view(&sub, depth + 1))
+}
+
 /// A stop that Return and Space press ([`is_key_stop`] taking presses): a
 /// stop that takes none hears its keys through the app's keymap.
 pub(crate) fn is_key_control(view: &NshView) -> bool {

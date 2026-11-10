@@ -247,7 +247,7 @@ VoiceOver 和 UI 自动化工具将 `Table` 和 `Grid` 读取为 `AXTable`，将
 |---|---|
 | Return | 在 `Input` 中按 `submitBehavior` 的设定：提交（`onSubmit`）、提交并离开输入框，或换行（多行输入框） |
 | Shift+Return、Option+Return、Ctrl+Return | 在 Return 用于提交的多行输入框中换行 |
-| Tab、Shift+Tab（加 Ctrl 亦可） | 按屏幕顺序切换到下一个 / 上一个输入框或可按压视图，限于最新的对话框内；Option+Tab 在多行输入框中输入制表符 |
+| Tab、Shift+Tab（加 Ctrl 亦可） | 按视图树的顺序切换到下一个 / 上一个输入框或可按压视图，限于最新的对话框内；Option+Tab 在多行输入框中输入制表符 |
 | Escape | 离开有焦点的输入框；否则清除文本选区，再关闭最新的对话框或返回 |
 | Option+Left、Cmd+[、鼠标后退键 | 返回（输入框有焦点时不会：此时 Option+Left 移动光标） |
 | Option / Cmd + 方向键（可加 Shift）；Option+Delete、Cmd+Delete；Ctrl+A / E / K | 在输入框中按词和按行移动、选择和删除，与所有 Mac 应用一致 |
