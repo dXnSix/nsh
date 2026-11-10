@@ -9,7 +9,8 @@
 # left out for what the platform does not do or does not report yet, or
 # for what does not end within its 30 s on a runner (named below), and
 # comes back once it does. Every listed test runs, and the failures are
-# listed at the end. A file that fails runs once more before it counts:
+# listed at the end (an Android emulator that goes away ends the run at the
+# tests that lost it). A file that fails runs once more before it counts:
 # the runners' small windows and slow frames make tests that pass at a desk
 # miss now and then (scrolling a control into view, a drag); one that passes
 # the second time is reported as flaky (a warning on the run). A listed file
@@ -51,12 +52,18 @@ case "$target" in
   # runs its appearance only (its rotation expects a 390 × 844 window).
   # Form runs its Input demo and its disabled field: the sign-up form and the
   # search field set the viewport, which an emulator keeps at its device's
-  # size. Controls runs all but five tests: its number input's lock, a code's
+  # size. Controls runs all but six tests: its number input's lock, a code's
   # Clear and a PIN's Change PIN (presses right after typing, which do not
   # land on the emulator), its pasted codes (Android's tests do not paste
-  # yet) and its Tab order (a desktop's, which the device does not follow).
-  # On the runner, animations does not end in 30 s. Text-view runs its Text
-  # View demo: a press on the chat's featured cards starts no reply on
+  # yet), its Tab order (a desktop's, which the device does not follow) and
+  # the gallery's toggle (below).
+  # On the runner, animations does not end in 30 s, and about one run in
+  # five neither does the gallery's toggle: it opens the Styles page, whose
+  # progressive blur (five stacked backdrop blurs, since upstream's #930)
+  # the emulator draws in software on the runner's four cores. The emulator
+  # stalls on that page, then goes away, and every test after it fails (a
+  # Mac's emulator, drawing in software too, passes it). Text-view runs its
+  # Text View demo: a press on the chat's featured cards starts no reply on
   # Android (its chips do), with the test's clock and without.
   # Context-menu-press runs its tap and its held finger: its Shift+F10 opens
   # the app as the web, which `--target android` refuses.
@@ -66,10 +73,11 @@ case "$target" in
     filtered=("environment appearance" "form the Input demo" "form a disabled field"
       "text-view the Text View demo"
       "context-menu-press a tap presses" "context-menu-press a held finger"
-      "controls switch" "controls check" "controls a radio picks" "controls choice cards and sized"
-      "controls tabs show" "controls collapsible" "controls accordion" "controls progress bar"
-      "controls uploads" "controls stepped setup" "controls slider" "controls equalizer"
-      "controls cart's quantities" "controls segmented control")
+      "controls a switch turns" "controls a quick setting" "controls check" "controls a radio picks"
+      "controls choice cards and sized" "controls tabs show" "controls collapsible"
+      "controls accordion" "controls progress bar" "controls uploads" "controls stepped setup"
+      "controls slider" "controls equalizer" "controls cart's quantities"
+      "controls segmented control")
     ;;
   # Left out: context-menu, dock, hover, overlays, resizable, toasts (a
   # mouse or a desktop's windows), shortcuts (it opens the gallery as macOS,
@@ -110,7 +118,20 @@ esac
 
 failed=()
 flaky=()
+# The tests that lost the emulator, once it is gone.
+lost=""
+# Whether the Android emulator is gone: `adb devices` lists no device, which
+# is where `nsh test` looks for one.
+emulator_gone() {
+  [[ "$target" == android ]] || return 1
+  local adb="${ANDROID_HOME:+$ANDROID_HOME/platform-tools/}adb"
+  command -v "$adb" > /dev/null || return 1
+  ! "$adb" devices 2> /dev/null | grep -q $'\tdevice$'
+}
 run() {
+  # Without its emulator every test only fails: the run ends at the tests
+  # that lost it, and says so.
+  [[ -n "$lost" ]] && return
   # The lists follow the fork's main; a pull request cut from upstream
   # before a gallery test landed there has no file for it yet.
   if [[ "$1" == *.test.tsx && ! -e "$1" ]]; then
@@ -122,6 +143,10 @@ run() {
     flaky+=("$*")
   else
     failed+=("$*")
+    if emulator_gone; then
+      lost="$*"
+      echo "::error title=The emulator went away::during $lost; the tests after it did not run"
+    fi
   fi
 }
 run examples/counter
