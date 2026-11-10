@@ -868,15 +868,19 @@ backs `Core::update_ui_theme` (`updateTheme`) and `Core::set_host_theme` (the em
 (`Core::theme_tokens`) carries the same provider beside the host tokens, so `of`, `checked` and `updated` (`token()`
 before the first render, `setTheme`, `updateTheme`) read a file as the core does.
 
-Under a `ThemeSet` a file is read by `theme_file::overrides_declared(json, base, set)`: its `cssVars` sections' keys
-are rewritten through `ThemeSet::target`, a key no type declares is dropped and listed (`` `brand`: no theme type
-declares it ``), the file is read with `theme_file::overrides` (so `var()` names the file's tokens, else `base`'s, the
-types' defaults), and each declared name keeps a value only of its kind (`TokenKind::holds`, `Tokens::copy_named`),
-others listed (`` `odds-up`: no color value ``), as is a declared name the file sets and leaves unread. A role's
-key in a section that also sets its token gives way to it (listed), as does the second of two roles' keys that set
-one token to two values, and a `var()` naming a role names its token.
-`theme_file::parse_declared` lays that over `base`. A name no type declares is listed with `theme_file::UNDECLARED`'s
-words, which `ThemeTokens::checked` / `updated` do not refuse a file for (`setTheme` leaves the name out, #1190).
+Under a `ThemeSet` a file is read by `theme_file::overrides_declared(json, base, set)`, which parses it once: in the
+parsed document its keys are rewritten through `ThemeSet::target` (`declared_names`), a key no type declares is
+dropped and listed (`` `brand`: no theme type declares it ``), and a `var()` naming a role names its token
+(`rename_vars`, which takes a `var()` as the reader does, however it is spaced and inside a fallback); the document
+is then read as any theme file is (`read_into`, so `var()` names the file's tokens, else `base`'s, the types'
+defaults), and each declared name keeps a value only of its kind (`TokenKind::holds`, `Tokens::copy_named`), others
+listed (`` `odds-up`: no color value ``), as is a declared name the file sets and leaves unread. A role's key in a
+section that also sets its token gives way to it (listed), as does the second of two roles' keys that set one token
+to two values. `theme_file::parse_declared` lays that over `base`. Inside the core what was left out is a
+`theme_file::LeftOut`: its sentence, the token the sentence starts with (so a declared name is not listed twice), and
+whether it is only a name no type declares, which `ThemeTokens::checked` / `updated` do not refuse a file for
+(`setTheme` leaves the name out, #1190). Nothing reads a sentence back; the public readers and `TokenProvider::read`
+list the sentences (`theme_file::sentences`), `read_left_out` / `overrides_left_out` the `LeftOut`s.
 `ThemeSet::try_add` also refuses a token named as no value of its kind is read (a font not `font-*`, a shadow not
 `shadow-*`, another kind `font-*` but a weight's `font-weight-*`) and a name or a role a type gives twice. An app with
 a registered type has a theme of its own (`Tokens::is_themed`, `Registry::has_theme_types`).
