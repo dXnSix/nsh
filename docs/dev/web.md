@@ -696,7 +696,8 @@ browsers' touches into what phones report:
   the `-1` (unmatched) and `-2` (held repeat) sentinels. Keys are passed as the character they type without
   modifiers, else the US layout's character of their `code`, the media and TV remote keys by their `key`
   (`MediaPlayPause`, `ColorF0Red`, `ChannelUp`, `Info`, ...) or, when it is `Unidentified`, by Samsung TVs' key
-  codes (`TV_KEY_CODES`: `tizen.tvinputdevice`'s); `mod` was resolved by the browser's platform,
+  codes (`TV_KEY_CODES`: `tizen.tvinputdevice`'s); in the TV idiom by those codes whenever the `key` is none of
+  `NAMED_KEYS` (a TV's engine may report no `key`, or `Pause` for keyCode 19, which on a TV is the remote's pause); `mod` was resolved by the browser's platform,
   `appleKeyboard` in the environment JSON); an open dialog (Escape presses its
   cancel button); a focused field (Escape leaves it); a custom context menu (Shift+F10 or the Menu key);
   selectable text with a selection (select all, in a selectable view the whole area; Escape); a focused
