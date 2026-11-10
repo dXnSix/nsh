@@ -32,6 +32,17 @@ fn rank(family: &str) -> Option<Result<usize, usize>> {
     })
 }
 
+/// Whether `family` is one of [`FAMILIES`] itself (not a script family
+/// of one), however it is spelled: `Samsung One UI` is `SamsungOneUI`.
+pub(super) fn is_ui_family(family: &str) -> bool {
+    matches!(rank(family), Some(Ok(_)))
+}
+
+/// Whether two family names are the same family, ignoring case and spaces.
+pub(super) fn same_family(a: &str, b: &str) -> bool {
+    normalized(a) == normalized(b)
+}
+
 /// The installed ones of [`FAMILIES`] themselves (their script families
 /// left out), in its order: the candidates for the UI font.
 pub(super) fn ui_candidates<'a>(
@@ -119,5 +130,29 @@ mod tests {
             names(&["BreezeSans", "BreezeSansKorean"])
         );
         assert!(fallbacks(&names(&["DejaVu Sans"]), "DejaVu Sans").is_empty());
+    }
+
+    /// The UI font's line metrics come from the preferred family whatever
+    /// the TV calls it (`text.rs`'s `ui_lines`): the same matching as the
+    /// candidates'.
+    #[test]
+    fn the_preferred_family_matches_ignoring_case_and_spaces() {
+        let installed = names(&["breezesans", "Samsung One UI", "SamsungOneUIKorean"]);
+        assert_eq!(ui_candidates(&installed).first(), Some(&&installed[1]));
+        for name in [
+            "SamsungOneUI",
+            "Samsung One UI",
+            "samsungoneui",
+            "Breeze Sans",
+            "TizenSans",
+        ] {
+            assert!(is_ui_family(name), "{name}");
+        }
+        for name in ["SamsungOneUIKorean", "Noto Sans", ""] {
+            assert!(!is_ui_family(name), "{name}");
+        }
+        assert!(same_family("Samsung One UI", "SamsungOneUI"));
+        assert!(same_family("BREEZESANS", "Breeze Sans"));
+        assert!(!same_family("BreezeSans", "BreezeSansKorean"));
     }
 }

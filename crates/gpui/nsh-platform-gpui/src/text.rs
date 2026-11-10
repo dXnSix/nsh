@@ -122,8 +122,10 @@ const UI_FAMILIES: &[&str] = &[
     "DejaVu Sans",
     "Liberation Sans",
 ];
-/// A Tizen TV's ([`tv`]).
+/// A Tizen TV's ([`tv`], whose functions match them ignoring case and
+/// spaces in its place).
 #[cfg(target_vendor = "tizen")]
+#[allow(dead_code)]
 const UI_FAMILIES: &[&str] = tv::FAMILIES;
 #[cfg(not(target_os = "linux"))]
 const UI_FAMILIES: &[&str] = &[];
@@ -154,6 +156,46 @@ fn ui_candidates(installed: &FxHashMap<String, String>) -> Vec<&String> {
             .iter()
             .filter_map(|f| installed.get(&f.to_lowercase()))
             .collect()
+    }
+}
+
+/// The preferred UI family that is installed: the first of [`UI_FAMILIES`]
+/// (on a TV, matched ignoring case and spaces, as [`tv`] matches them).
+fn preferred_ui(installed: &FxHashMap<String, String>) -> Option<&String> {
+    #[cfg(target_vendor = "tizen")]
+    {
+        tv::ui_candidates(installed.values()).into_iter().next()
+    }
+    #[cfg(not(target_vendor = "tizen"))]
+    {
+        UI_FAMILIES
+            .iter()
+            .find_map(|f| installed.get(&f.to_lowercase()))
+    }
+}
+
+/// Whether `family` is one of [`UI_FAMILIES`].
+fn is_ui_family(family: &str) -> bool {
+    #[cfg(target_vendor = "tizen")]
+    {
+        tv::is_ui_family(family)
+    }
+    #[cfg(not(target_vendor = "tizen"))]
+    {
+        UI_FAMILIES.iter().any(|f| f.eq_ignore_ascii_case(family))
+    }
+}
+
+/// Whether two family names name the same family (on a TV, ignoring case
+/// and spaces too).
+fn same_family(a: &str, b: &str) -> bool {
+    #[cfg(target_vendor = "tizen")]
+    {
+        tv::same_family(a, b)
+    }
+    #[cfg(not(target_vendor = "tizen"))]
+    {
+        a == b
     }
 }
 
@@ -443,12 +485,10 @@ impl GpuiTextEngine {
             } else {
                 self.ui.to_string()
             };
-            let desktop = UI_FAMILIES
-                .iter()
-                .find_map(|f| installed.get(&f.to_lowercase()));
+            let desktop = preferred_ui(&installed);
             fonts.ui_lines = match desktop {
                 // Only for a UI font this engine chose (one of the list).
-                Some(d) if *d != ui && UI_FAMILIES.iter().any(|f| f.eq_ignore_ascii_case(&ui)) => {
+                Some(d) if !same_family(d, &ui) && is_ui_family(&ui) => {
                     let id = self.system.resolve_font(&gpui::font(d.clone()));
                     let em = px(1.0);
                     Some((

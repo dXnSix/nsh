@@ -70,7 +70,7 @@ Features:
 
 | Feature | Does | Host |
 |---|---|---|
-| `platform` (default) | GPUI's platform (`gpui_platform`, GPUI Fast's windows, event loop and text system per OS): `run_app`, the `embed` example, the text tests (they shape with the platform's text system). Without it the crate takes no `gpui-fast-platform` / `gpui-fast-linux` (and so no fontconfig, FreeType or Wayland libraries): `AppView` and `open_app_window` draw in a GPUI app whose platform the host brings, as a Samsung TV's Tizen host does | yes |
+| `platform` (default) | GPUI's platform (`gpui_platform`, GPUI Fast's windows, event loop and text system per OS): `run_app`, the `embed` example, the text tests (they shape with the platform's text system). Without it the crate takes no `gpui-fast-platform` / `gpui-fast-linux` (and so no fontconfig, FreeType or Wayland libraries): `AppView` and `open_app_window` draw in a GPUI app whose platform the host brings, as a Samsung TV's Tizen host does (and must: a Tizen build with it is a compile error) | yes |
 | `js` (default) | JS apps; without it the crate only runs Rust apps and links no QuickJS | yes |
 | `webview` (default) | web views with wry (`native/web.rs`; GTK 3 and WebKitGTK on Linux); without it, and on Tizen, a web view is a placeholder that reports `onError` | yes |
 | `video` | videos with GStreamer (`native/video.rs`); without it, and on Tizen, a video is a placeholder that reports `onError` | Linux |
@@ -87,7 +87,8 @@ component; CI runs them on Linux.
 
 A Samsung TV's Tizen is `target_os = "linux"` with `target_vendor = "tizen"` (custom target specs); the TV host is a
 GPUI app on a GPUI platform of its own, so the crate is built for it without default features (`--no-default-features
---features js`: no `gpui_platform`, no wry). Under `cfg(target_vendor = "tizen")` the Linux desktop's code is left out,
+--features js`: no `gpui_platform`, no wry); a Tizen build with the feature `platform` stops at a `compile_error!`
+(`lib.rs`) that says so, as `gpui_platform` would pull in gpui-fast-linux, X11, xkbcommon, fontconfig and FreeType. Under `cfg(target_vendor = "tizen")` the Linux desktop's code is left out,
 and so are its dependencies (zbus, x11rb, raw-window-handle, GTK, WebKitGTK, wry, GStreamer: the manifest's target
 tables exclude the vendor), whatever the features:
 
@@ -98,7 +99,8 @@ tables exclude the vendor), whatever the features:
   (`host_settings.rs`, written over the system's in `Surface::set_environment`, as `HostEnvironment` is) and
   `set_appearance`.
 - **Fonts** (`text/tv.rs`): the UI font is the first installed of Samsung's TV family and Tizen's (`SamsungOneUI`,
-  `BreezeSans`, `TizenSans`) that GPUI can set in bold, names matched ignoring case and spaces; its fallbacks are every
+  `BreezeSans`, `TizenSans`) that GPUI can set in bold, names matched ignoring case and spaces (for the preferred
+  family's line metrics too); its fallbacks are every
   installed family of those and of their scripts (`BreezeSansKorean`, ...), in that order, as the set differs between
   TVs. The Linux desktop's UI families and text fallbacks are not tried.
 - **Web views** draw the placeholder and report `onError` for each source (`native/web.rs`).
