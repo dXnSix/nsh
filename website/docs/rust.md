@@ -767,6 +767,10 @@ with the type's tokens: above, `theme().popover` is the design system's `surface
 `action`. A token may play several roles (`.role(role::CARD).role(role::POPOVER)`): a design system with one surface
 for cards and popovers maps both onto it, and both follow every change of it. A role is played by one token.
 
+A set lists the roles its components draw with in its registry, mapped by a theme or not, so the toolchain knows
+them: `registry.roles(role::all())`, where `nsh_core::roles! { /// A banner's surface. pub BANNER: Role = "banner", }`
+writes the constants with `all()` beside them. `nsh/base` lists its own.
+
 **Names.** A token's name says what its kind is, as a CSS variable's does: a font's starts with `font-`, a shadow's
 with `shadow-`, a weight's with `font-weight-`, and no other kind's with `font-`. Registering a type whose name and
 kind disagree, that declares a name or maps a role twice, or whose token plays a role of another kind, panics.

@@ -192,7 +192,7 @@ pub use self::{
     },
     theme_scope::{ScopeTheme, ThemeScope, ThemeScopeElement, ThemeScopeProps, theme_scope},
     tokens::{
-        AnyRole, FONT_MONO, FONT_SANS, FontRole, NumberRole, Role, RoleKind, RoleValue,
+        AnyRole, FONT_MONO, FONT_SANS, FontRole, NumberRole, Role, RoleKind, RoleSpec, RoleValue,
         ThemeTokens, Token, TokenOverrides, TokenSource, Tokens, role,
     },
     value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},

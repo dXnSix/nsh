@@ -187,6 +187,27 @@ pub enum RoleKind {
     Font,
 }
 
+impl RoleKind {
+    /// Its name, as the toolchain writes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            RoleKind::Color => "color",
+            RoleKind::Number => "number",
+            RoleKind::Font => "font",
+        }
+    }
+
+    /// The kind of this name ([`RoleKind::name`]).
+    pub fn from_name(name: &str) -> Option<RoleKind> {
+        Some(match name {
+            "color" => RoleKind::Color,
+            "number" => RoleKind::Number,
+            "font" => RoleKind::Font,
+            _ => return None,
+        })
+    }
+}
+
 /// A role of any kind: its name and what it reads, for lists of roles of
 /// several kinds ([`Tokens::with_roles`]). Every [`Role`] is one
 /// (`role::POPOVER.into()`).
@@ -226,29 +247,91 @@ impl<V: RoleValue> From<Role<V>> for AnyRole {
     }
 }
 
+/// A role as a UI set lists it for the toolchain ([`super::Registry::roles`]):
+/// the role, and what it is for. TS types `role()` from these, whether or
+/// not a theme maps the role.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleSpec {
+    /// The role.
+    pub role: AnyRole,
+    /// Its doc comment, as written (lines as they are).
+    pub doc: &'static str,
+}
+
+impl RoleSpec {
+    /// `role`, documented by `doc`.
+    pub fn new(role: impl Into<AnyRole>, doc: &'static str) -> Self {
+        Self {
+            role: role.into(),
+            doc,
+        }
+    }
+
+    /// Its doc as one text: the lines of each paragraph joined, without
+    /// the paragraph that only names it (``Name `popover`.``).
+    pub fn doc_text(&self) -> String {
+        let mut paragraphs: Vec<String> = Vec::new();
+        let mut current: Vec<&str> = Vec::new();
+        for line in self.doc.lines().chain([""]) {
+            let line = line.trim();
+            if !line.is_empty() {
+                current.push(line);
+            } else if !current.is_empty() {
+                paragraphs.push(current.join(" "));
+                current.clear();
+            }
+        }
+        paragraphs.retain(|p| !p.starts_with("Name `"));
+        paragraphs.join("\n\n")
+    }
+}
+
+/// Declares role constants with their docs, and `all()`, which lists them
+/// as [`RoleSpec`]s for a UI set's registry ([`super::Registry::roles`]):
+/// `pub NAME: Type = "name"`, each under its doc comment.
+#[macro_export]
+macro_rules! roles {
+    ($( $(#[doc = $doc:literal])* $vis:vis $role:ident: $ty:ty = $name:expr ),* $(,)?) => {
+        $(
+            $(#[doc = $doc])*
+            $vis const $role: $ty = <$ty>::new($name);
+        )*
+
+        /// These roles with their docs, for a UI set's registry
+        /// (`Registry::roles`).
+        pub fn all() -> ::std::vec::Vec<$crate::element::RoleSpec> {
+            ::std::vec![
+                $( $crate::element::RoleSpec::new($role, ::core::concat!($($doc, "\n"),*)) ),*
+            ]
+        }
+    };
+}
+
 /// The roles the core and the platforms' own controls draw with. A UI set
 /// has more of its own (`nsh_base::role`).
 pub mod role {
     use super::{FontRole, Role};
 
-    /// Popovers, menus, tooltips, alerts.
-    pub const POPOVER: Role = Role::new("popover");
-    /// Text on popovers.
-    pub const POPOVER_FOREGROUND: Role = Role::new("popover-foreground");
-    /// The main action: buttons, the tab bar's and alerts' tint.
-    pub const PRIMARY: Role = Role::new("primary");
-    /// What is hovered or highlighted: menu items, list rows.
-    pub const ACCENT: Role = Role::new("accent");
-    /// Text on what is highlighted.
-    pub const ACCENT_FOREGROUND: Role = Role::new("accent-foreground");
-    /// Secondary text: hints, captions, an alert's message.
-    pub const MUTED_FOREGROUND: Role = Role::new("muted-foreground");
-    /// Borders and dividers.
-    pub const BORDER: Role = Role::new("border");
-    /// Destructive actions and errors.
-    pub const DESTRUCTIVE: Role = Role::new("destructive");
-    /// The app's default font family.
-    pub const FONT_SANS: FontRole = Role::new(super::FONT_SANS);
+    crate::roles! {
+        /// Popovers, menus, tooltips, alerts.
+        pub POPOVER: Role = "popover",
+        /// Text on popovers.
+        pub POPOVER_FOREGROUND: Role = "popover-foreground",
+        /// The main action: buttons, the tab bar's and alerts' tint.
+        pub PRIMARY: Role = "primary",
+        /// What is hovered or highlighted: menu items, list rows.
+        pub ACCENT: Role = "accent",
+        /// Text on what is highlighted.
+        pub ACCENT_FOREGROUND: Role = "accent-foreground",
+        /// Secondary text: hints, captions, an alert's message.
+        pub MUTED_FOREGROUND: Role = "muted-foreground",
+        /// Borders and dividers.
+        pub BORDER: Role = "border",
+        /// Destructive actions and errors.
+        pub DESTRUCTIVE: Role = "destructive",
+        /// The app's default font family.
+        pub FONT_SANS: FontRole = super::FONT_SANS,
+    }
 }
 
 /// A token's value.

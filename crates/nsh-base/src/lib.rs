@@ -299,7 +299,10 @@ pub fn registry_of(parts: impl IntoIterator<Item = parts::Part>) -> Registry {
         .native_values(&["NavStack", "NavPage", "Dialog", "createNavStack", "Input"])
         // The theme: the app's over the default, as design tokens.
         .tokens_from(theme::read_tokens)
-        .token_overrides_from(nsh_core::element::theme_file::overrides);
+        .token_overrides_from(nsh_core::element::theme_file::overrides)
+        // The roles the theme and the components draw with, for TS's
+        // `role()`.
+        .roles(theme::role::all());
     registry
 }
 

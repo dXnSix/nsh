@@ -694,6 +694,9 @@ reset_theme::<DsTheme>(); // 恢复应用的 action
 `surface-overlay`，`theme().primary` 是它的 `action`。一个令牌可以担任多个角色（`.role(role::CARD).role(role::POPOVER)`）：
 卡片和弹出层共用一个表面的设计系统把两个角色都映射到它上面，它每次变化两者都会跟随。一个角色只由一个令牌担任。
 
+一个 UI 集合在它的注册表中列出其组件绘制时使用的角色，无论主题是否映射了它们，这样工具链就知道这些角色：`registry.roles(role::all())`，其中
+`nsh_core::roles! { /// A banner's surface. pub BANNER: Role = "banner", }` 写出这些常量，并在旁边生成 `all()`。`nsh/base` 列出了它自己的角色。
+
 **名称。** 令牌的名称说明它的类型，就像 CSS 变量的名称一样：字体的名称以 `font-` 开头，阴影的以 `shadow-` 开头，字重的以 `font-weight-` 开头，其他类型的名称都不以 `font-` 开头。注册一个名称与类型不符、重复声明同一名称或重复映射同一角色、或其令牌担任另一种类的角色的类型会 panic。
 
 **多个类型。** 设计系统的 crate 和应用的 crate 各自注册自己的类型：设计系统的令牌，以及应用在其旁边的自有令牌（例如投注应用的

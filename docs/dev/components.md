@@ -942,10 +942,10 @@ through its role, so under a registered type its fields are the tokens the type 
 registered: `nsh_base::registry()` keeps `tokens_from(read_tokens)`, the default any registered type replaces.
 `nsh_base::theme()` is `theme_of::<Theme>()`, in place of the thread-local it kept.
 
-The toolchain never links the app's crates, so the description carries the types (description format 3,
+The toolchain never links the app's crates, so the description carries the types (since description format 3,
 `element/description.rs`): `SetDescription::themes`, one `ThemeDescription` per type with its type name, its tokens
 (`ThemeTokenDescription`: name, kind, doc, role by name) and its defaults as a theme file (`theme_file::write`).
-A format 2 description is refused, as every other format. `description::theme_types(sets)` merges them as
+A description of another format than this `nsh`'s is refused. `description::theme_types(sets)` merges them as
 `Registry::merged` does (through `ThemeSet::try_add`, an error naming both types in place of the panic) into
 `ThemeTypes`: `read(json)` is the core's `TokenProvider::Themes` read, and `tokens()` lists each declared name with its
 kind and doc, sorted. `Ok(None)` when no set registers a type.

@@ -845,7 +845,8 @@ program that describes them, builds the hosts and runners with them, and does ev
     types, the values nsh-js makes for it, the files it ships, the exports TS sees without a doc comment, which
     `nsh` warns of as it writes `.nsh/types`, and the theme types it registers, `themes`: each type's tokens with
     their kinds, docs and roles and its defaults as a theme file, which the bundler and `nsh` read with
-    `description::theme_types`);
+    `description::theme_types`; and the roles it lists, `roles` (`Registry::roles`: name, kind and doc of every role
+    its components draw with, mapped or not), which `description::roles` merges with the core's own);
   - `test` (`nsh-testing` without `bundle`, `nsh/base` and the app's sets, and a Rust app's root): the headless
     runner of `nsh test` (`nsh_testing::runner`);
   - the hosts and runners, passing the sets after `nsh/base`'s (`vec![nsh_base::registry(), set_app_charts(),

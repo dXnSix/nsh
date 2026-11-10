@@ -95,7 +95,7 @@ macro_rules! theme {
         /// ([`nsh_core::element::role`]: `POPOVER`, `PRIMARY`, …) are the
         /// same roles, as a role is its name.
         pub mod role {
-            use nsh_core::element::{FontRole, NumberRole, Role};
+            use nsh_core::element::{FontRole, Role};
 
             #[allow(unused_imports)]
             use super::Theme;
@@ -105,93 +105,120 @@ macro_rules! theme {
                 #[doc = concat!("\n\nName `", $key, "`.")]
                 pub const $role: Role = Role::new($key);
             )*
-            /// The corner radius.
-            ///
-            /// Name `radius`.
-            pub const RADIUS: NumberRole = Role::new("radius");
             /// The app's default font family.
             ///
             /// Name `font-sans`.
             pub const FONT_SANS: FontRole = nsh_core::element::role::FONT_SANS;
-            /// The monospaced font family.
-            ///
-            /// Name `font-mono`.
-            pub const FONT_MONO: FontRole = Role::new("font-mono");
-            /// The highlight of a selection ([`Theme::selection`] draws
-            /// `primary` at 22 % when the theme has none).
-            ///
-            /// Name `selection`.
-            pub const SELECTION: Role = Role::new("selection");
-            /// What succeeded: a `[!TIP]` alert in a `TextView`. No token
-            /// of the default theme: the component draws its own green
-            /// when the theme has none.
-            ///
-            /// Name `success`.
-            pub const SUCCESS: Role = Role::new("success");
-            /// What to watch out for: an `Editor`'s warning diagnostics, a
-            /// `[!WARNING]` alert in a `TextView`. No token of the default
-            /// theme: each draws its own amber when the theme has none.
-            ///
-            /// Name `warning`.
-            pub const WARNING: Role = Role::new("warning");
-            /// What is worth knowing: an `Editor`'s info diagnostics, a
-            /// `[!NOTE]` alert in a `TextView`. No token of the default
-            /// theme: each draws its own blue when the theme has none.
-            ///
-            /// Name `info`.
-            pub const INFO: Role = Role::new("info");
-            /// What is marked: an `Editor`'s search matches, marked text
-            /// (`<mark>`) in a `TextView`. No token of the
-            /// default theme: each draws its own yellow when the theme has
-            /// none. The components draw it translucent; the token is the
-            /// solid color.
-            ///
-            /// Name `highlight`.
-            pub const HIGHLIGHT: Role = Role::new("highlight");
-            /// A diff's added lines: a `DiffView`'s row tint, indicators,
-            /// changed words and file counts. No token of the default
-            /// theme: the view draws its own green when the theme has
-            /// none. The view draws the tints translucent; the token is
-            /// the solid color.
-            ///
-            /// Name `diff-added`.
-            pub const DIFF_ADDED: Role = Role::new("diff-added");
-            /// A diff's deleted lines, as [`DIFF_ADDED`] its added ones:
-            /// the view draws its own red when the theme has none.
-            ///
-            /// Name `diff-deleted`.
-            pub const DIFF_DELETED: Role = Role::new("diff-deleted");
-            /// Comments in highlighted code: an `Editor`'s, a `DiffView`'s
-            /// and a `TextView`'s code blocks'. No token of the default
-            /// theme, as none of the `SYNTAX_*` roles has: the highlighter
-            /// draws its own palette where the theme has none.
-            ///
-            /// Name `syntax-comment`.
-            pub const SYNTAX_COMMENT: Role = Role::new("syntax-comment");
-            /// Keywords, the words of operators, headings.
-            ///
-            /// Name `syntax-keyword`.
-            pub const SYNTAX_KEYWORD: Role = Role::new("syntax-keyword");
-            /// Strings, regular expressions, escapes.
-            ///
-            /// Name `syntax-string`.
-            pub const SYNTAX_STRING: Role = Role::new("syntax-string");
-            /// Numbers, constants and literals.
-            ///
-            /// Name `syntax-number`.
-            pub const SYNTAX_NUMBER: Role = Role::new("syntax-number");
-            /// Names of functions and classes.
-            ///
-            /// Name `syntax-function`.
-            pub const SYNTAX_FUNCTION: Role = Role::new("syntax-function");
-            /// Attributes, parameters, properties and keys.
-            ///
-            /// Name `syntax-property`.
-            pub const SYNTAX_PROPERTY: Role = Role::new("syntax-property");
-            /// Types, built-ins and tags.
-            ///
-            /// Name `syntax-type`.
-            pub const SYNTAX_TYPE: Role = Role::new("syntax-type");
+
+            /// The roles beside the theme's fields.
+            mod more {
+                use nsh_core::element::{FontRole, NumberRole, Role};
+
+                #[allow(unused_imports)]
+                use super::super::Theme;
+
+                nsh_core::roles! {
+                    /// The corner radius.
+                    ///
+                    /// Name `radius`.
+                    pub RADIUS: NumberRole = "radius",
+                    /// The monospaced font family.
+                    ///
+                    /// Name `font-mono`.
+                    pub FONT_MONO: FontRole = "font-mono",
+                    /// The highlight of a selection ([`Theme::selection`] draws
+                    /// `primary` at 22 % when the theme has none).
+                    ///
+                    /// Name `selection`.
+                    pub SELECTION: Role = "selection",
+                    /// What succeeded: a `[!TIP]` alert in a `TextView`. No token
+                    /// of the default theme: the component draws its own green
+                    /// when the theme has none.
+                    ///
+                    /// Name `success`.
+                    pub SUCCESS: Role = "success",
+                    /// What to watch out for: an `Editor`'s warning diagnostics, a
+                    /// `[!WARNING]` alert in a `TextView`. No token of the default
+                    /// theme: each draws its own amber when the theme has none.
+                    ///
+                    /// Name `warning`.
+                    pub WARNING: Role = "warning",
+                    /// What is worth knowing: an `Editor`'s info diagnostics, a
+                    /// `[!NOTE]` alert in a `TextView`. No token of the default
+                    /// theme: each draws its own blue when the theme has none.
+                    ///
+                    /// Name `info`.
+                    pub INFO: Role = "info",
+                    /// What is marked: an `Editor`'s search matches, marked text
+                    /// (`<mark>`) in a `TextView`. No token of the
+                    /// default theme: each draws its own yellow when the theme has
+                    /// none. The components draw it translucent; the token is the
+                    /// solid color.
+                    ///
+                    /// Name `highlight`.
+                    pub HIGHLIGHT: Role = "highlight",
+                    /// A diff's added lines: a `DiffView`'s row tint, indicators,
+                    /// changed words and file counts. No token of the default
+                    /// theme: the view draws its own green when the theme has
+                    /// none. The view draws the tints translucent; the token is
+                    /// the solid color.
+                    ///
+                    /// Name `diff-added`.
+                    pub DIFF_ADDED: Role = "diff-added",
+                    /// A diff's deleted lines, as [`DIFF_ADDED`] its added ones:
+                    /// the view draws its own red when the theme has none.
+                    ///
+                    /// Name `diff-deleted`.
+                    pub DIFF_DELETED: Role = "diff-deleted",
+                    /// Comments in highlighted code: an `Editor`'s, a `DiffView`'s
+                    /// and a `TextView`'s code blocks'. No token of the default
+                    /// theme, as none of the `SYNTAX_*` roles has: the highlighter
+                    /// draws its own palette where the theme has none.
+                    ///
+                    /// Name `syntax-comment`.
+                    pub SYNTAX_COMMENT: Role = "syntax-comment",
+                    /// Keywords, the words of operators, headings.
+                    ///
+                    /// Name `syntax-keyword`.
+                    pub SYNTAX_KEYWORD: Role = "syntax-keyword",
+                    /// Strings, regular expressions, escapes.
+                    ///
+                    /// Name `syntax-string`.
+                    pub SYNTAX_STRING: Role = "syntax-string",
+                    /// Numbers, constants and literals.
+                    ///
+                    /// Name `syntax-number`.
+                    pub SYNTAX_NUMBER: Role = "syntax-number",
+                    /// Names of functions and classes.
+                    ///
+                    /// Name `syntax-function`.
+                    pub SYNTAX_FUNCTION: Role = "syntax-function",
+                    /// Attributes, parameters, properties and keys.
+                    ///
+                    /// Name `syntax-property`.
+                    pub SYNTAX_PROPERTY: Role = "syntax-property",
+                    /// Types, built-ins and tags.
+                    ///
+                    /// Name `syntax-type`.
+                    pub SYNTAX_TYPE: Role = "syntax-type",
+                }
+            }
+            pub use more::{
+                RADIUS, FONT_MONO, SELECTION, SUCCESS, WARNING, INFO, HIGHLIGHT, DIFF_ADDED, DIFF_DELETED, SYNTAX_COMMENT, SYNTAX_KEYWORD, SYNTAX_STRING, SYNTAX_NUMBER, SYNTAX_FUNCTION, SYNTAX_PROPERTY, SYNTAX_TYPE,
+            };
+
+            /// Every role `nsh-base`'s theme and components draw with, with
+            /// its doc: what its registry lists for the toolchain
+            /// (`Registry::roles`), which types TS's `role()` from them.
+            pub fn all() -> Vec<nsh_core::element::RoleSpec> {
+                use nsh_core::element::RoleSpec;
+                let mut all = vec![
+                    $( RoleSpec::new($role, concat!($($doc, "\n"),*)) ),*
+                ];
+                all.push(RoleSpec::new(FONT_SANS, " The app's default font family.\n"));
+                all.extend(more::all());
+                all
+            }
         }
 
         /// A theme: shadcn/ui's tokens, each a field, and the app's own
@@ -730,5 +757,63 @@ mod tests {
         assert_eq!(tokens.color("background"), None);
         assert_eq!(theme_overrides("{}").unwrap().colors().count(), 0);
         assert!(theme_overrides("not json").is_err());
+    }
+}
+
+/// The roles `nsh-base` lists for the toolchain ([`role::all`]): every
+/// constant of [`role`], once, with what it reads and its doc.
+#[cfg(test)]
+mod listed_roles {
+    use nsh_core::element::{RoleKind, description::SetDescription};
+
+    use super::role;
+
+    #[test]
+    fn every_role_is_listed_once_with_its_kind() {
+        let all = role::all();
+        let mut names: Vec<&str> = all.iter().map(|spec| spec.role.name()).collect();
+        // The theme's 31 colors, its radius and two fonts, the selection,
+        // and the 13 roles of its components' own colors.
+        assert_eq!(names.len(), 31 + 3 + 1 + 13);
+        names.sort_unstable();
+        let listed = names.len();
+        names.dedup();
+        assert_eq!(names.len(), listed, "a role is listed twice");
+        let kind = |name: &str| {
+            all.iter()
+                .find(|spec| spec.role.name() == name)
+                .map(|spec| spec.role.kind())
+        };
+        assert_eq!(kind(role::POPOVER.name()), Some(RoleKind::Color));
+        assert_eq!(kind(role::WARNING.name()), Some(RoleKind::Color));
+        assert_eq!(kind(role::SYNTAX_KEYWORD.name()), Some(RoleKind::Color));
+        assert_eq!(kind(role::RADIUS.name()), Some(RoleKind::Number));
+        assert_eq!(kind(role::FONT_SANS.name()), Some(RoleKind::Font));
+        assert_eq!(kind(role::FONT_MONO.name()), Some(RoleKind::Font));
+        // Each says what it is for.
+        assert!(all.iter().all(|spec| !spec.doc_text().is_empty()));
+    }
+
+    #[test]
+    fn the_registry_describes_them() {
+        let described = SetDescription::of(&crate::registry()).unwrap();
+        assert_eq!(described.roles.len(), role::all().len());
+        let popover = described
+            .roles
+            .iter()
+            .find(|r| r.name == "popover")
+            .unwrap();
+        assert_eq!(popover.kind, "color");
+        assert!(!popover.doc.contains("Name `"), "{}", popover.doc);
+        let warning = described
+            .roles
+            .iter()
+            .find(|r| r.name == "warning")
+            .unwrap();
+        assert!(
+            warning.doc.starts_with("What to watch out for"),
+            "{}",
+            warning.doc
+        );
     }
 }
