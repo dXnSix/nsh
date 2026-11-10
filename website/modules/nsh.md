@@ -255,7 +255,7 @@ function token<K extends keyof Tokens>(name: K): Tokens[K];
 
 The design token `name` of the app's theme (`"theme"` in `nsh.json`, over shadcn/ui's tokens) in the appearance shown:
 a color as `#rrggbbaa`, a length as a number of points, a font as its family name, a shadow as its CSS `box-shadow`
-layers. Names are the theme's CSS variables
+layers, a gradient as its CSS `background-image`. Names are the theme's CSS variables
 without `--` (`primary`, `muted-foreground`, `radius`, `font-mono`, and the app's own, such as `up`). Reading it is
 reactive: a component, memo or effect that reads a token runs again when the theme or the appearance changes. In a
 [`ThemeScope`](#themescope) it is the scope's value and appearance.

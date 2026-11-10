@@ -436,6 +436,8 @@ pub enum TokenKind {
     Font,
     /// Box shadows per appearance (`shadow-*`).
     Shadow,
+    /// Gradients per appearance (`background-image-*`: `bg-*`).
+    Gradient,
 }
 
 impl TokenKind {
@@ -453,6 +455,7 @@ impl TokenKind {
             TokenKind::Blur => "blur",
             TokenKind::Font => "font",
             TokenKind::Shadow => "shadow",
+            TokenKind::Gradient => "gradient",
         }
     }
 
@@ -470,24 +473,28 @@ impl TokenKind {
             "blur" => TokenKind::Blur,
             "font" => TokenKind::Font,
             "shadow" => TokenKind::Shadow,
+            "gradient" => TokenKind::Gradient,
             _ => return None,
         })
     }
 
     /// What a role its token plays reads (`None`: no role reads box
-    /// shadows).
+    /// shadows or gradients).
     pub(crate) fn role_kind(self) -> Option<RoleKind> {
         match self {
             TokenKind::Color => Some(RoleKind::Color),
             TokenKind::Font => Some(RoleKind::Font),
-            TokenKind::Shadow => None,
+            TokenKind::Shadow | TokenKind::Gradient => None,
             _ => Some(RoleKind::Number),
         }
     }
 
     /// Whether its value is a number token.
     pub fn is_number(self) -> bool {
-        !matches!(self, TokenKind::Color | TokenKind::Font | TokenKind::Shadow)
+        !matches!(
+            self,
+            TokenKind::Color | TokenKind::Font | TokenKind::Shadow | TokenKind::Gradient
+        )
     }
 
     /// The namespace its names take, which its classes read them by
@@ -504,6 +511,7 @@ impl TokenKind {
             TokenKind::Blur => "blur-",
             TokenKind::Font => "font-",
             TokenKind::Shadow => "shadow-",
+            TokenKind::Gradient => super::theme_file::GRADIENTS,
         }
     }
 
@@ -528,6 +536,7 @@ impl TokenKind {
             TokenKind::Color => tokens.color(name).is_some(),
             TokenKind::Font => tokens.font(name).is_some(),
             TokenKind::Shadow => tokens.shadow(name).is_some(),
+            TokenKind::Gradient => tokens.gradient(name).is_some(),
             _ => tokens.number(name).is_some(),
         }
     }
@@ -658,13 +667,14 @@ impl ThemeSet {
             let readable = match kind {
                 TokenKind::Font => read_as("font-") && !read_as("font-weight-"),
                 TokenKind::Shadow => read_as("shadow-"),
+                TokenKind::Gradient => read_as(super::theme_file::GRADIENTS),
                 TokenKind::Color => !read_as("font-"),
                 _ => !read_as("font-") || read_as("font-weight-"),
             };
             if !readable {
                 return Err(format!(
                     "`{type_name}`: the {} token `{name}` is named as no {} is (a font is `font-*`, a shadow \
-                     `shadow-*`, a weight `font-weight-*`)",
+                     `shadow-*`, a gradient `background-image-*`, a weight `font-weight-*`)",
                     kind.name(),
                     kind.name()
                 ));

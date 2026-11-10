@@ -226,6 +226,7 @@ impl Runtime {
                         nsh_core::Color::from(if dark { c.dark } else { c.light }).0
                     )),
                     Some(Token::Shadow(s)) => Value::string(&s.css(dark)),
+                    Some(Token::Gradient(g)) => Value::string(&g.css(dark)),
                     _ => Ok(Value(0)),
                 }
             }

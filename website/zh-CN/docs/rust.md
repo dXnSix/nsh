@@ -520,6 +520,10 @@ fn the_module_formats_money() {
 - 值按 CSS 的写法书写。颜色可以是任意 CSS 颜色（`#7c3aed`、`rgb(…)`、`hsl(…)`、`oklch(…)`、`white`）、
   `color-mix(in oklab, var(--primary) 80%, white)`，或同一外观的另一个令牌 `var(--primary)`（可带后备值：`var(--brand, #7c3aed)`）。
   长度使用 `rem`（16 点）或 `px`（点）。字体是字体族列表：使用其中第一个非通用的字体族，第一个是通用字体族（`system-ui`、`sans-serif`）时使用系统字体。
+- **渐变。** 写成 CSS 渐变的 `background-image-<n>`（`"background-image-hero": "linear-gradient(135deg, #7c3aed, #db2777)"`，可在 `light` 和 `dark` 中分别给值）
+  是渐变 token：`tokens().gradient("background-image-hero")` 是一个 `AdaptiveGradient`，`.adaptive_gradient(move ||
+  tokens().gradient("background-image-hero").cloned().unwrap_or_default())` 把它绘制为背景，跟随主题变化，并像 `.bg(..)` 一样随外观原生切换。
+  `AdaptiveGradient::parse("linear-gradient(…)")` 读取应用自己的渐变，两种外观相同。
 - **阴影。** 写成 CSS `box-shadow` 的 `shadow-<n>`（`"shadow-raised": "0 1px 2px #0000001a"`，可在 `light` 和 `dark` 中分别给值）
   是阴影 token：`tokens().shadow("shadow-raised")` 是一个 `AdaptiveShadow`，`.adaptive_shadow(move ||
   tokens().shadow("shadow-raised").cloned().unwrap_or_default())` 绘制它，跟随主题变化，并像 `.bg(..)` 一样随外观原生切换。

@@ -64,6 +64,7 @@ pub fn tokens_declaration(tokens: &nsh_core::element::Tokens) -> String {
         .chain(tokens.numbers().map(|(n, _)| (n, "number")))
         .chain(tokens.fonts().map(|(n, _)| (n, "string")))
         .chain(tokens.shadows().map(|(n, _)| (n, "string")))
+        .chain(tokens.gradients().map(|(n, _)| (n, "string")))
         .collect();
     names.sort_unstable();
     names.dedup_by_key(|(n, _)| *n);
@@ -305,6 +306,22 @@ mod role_declarations {
         assert_eq!(
             error,
             "the role `banner` is listed reading number and color"
+        );
+    }
+}
+
+/// Gradient tokens are typed in `tokens.d.ts` as the CSS `token()` gives.
+#[cfg(test)]
+mod gradient_tokens {
+    #[test]
+    fn gradient_tokens_are_strings() {
+        let mut tokens = nsh_core::element::Tokens::default();
+        let hero = nsh_core::element::AdaptiveGradient::parse("linear-gradient(#000, #fff)");
+        tokens.set_gradient("background-image-hero", hero.unwrap());
+        let declaration = super::tokens_declaration(&tokens);
+        assert!(
+            declaration.contains("    \"background-image-hero\": string;"),
+            "{declaration}"
         );
     }
 }

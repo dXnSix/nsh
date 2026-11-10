@@ -3734,6 +3734,22 @@ style id:raised boxShadow 0 2 4 0 #0000004d
 covers [nsh] token
 covers [props] class
 
+# base-gradient-tokens
+# A gradient token: the class naming it and `token()` follow the appearance.
+tap id:case-base-gradient-tokens
+tap id:set
+expect gradients result set
+tap id:light
+expect gradients hero linear-gradient(135deg, #7c3aedff, #db2777ff)
+style id:hero backgroundImage linear-gradient(135deg, #7c3aedff, #db2777ff)
+tap id:dark
+expect gradients hero linear-gradient(135deg, #a78bfaff, #f472b6ff)
+style id:hero backgroundImage linear-gradient(135deg, #a78bfaff, #f472b6ff)
+tap id:light
+style id:hero backgroundImage linear-gradient(135deg, #7c3aedff, #db2777ff)
+covers [nsh] token
+covers [props] class
+
 # base-status-roles
 # The status roles of nsh/base: a TextView's tip and warning alerts in
 # their own colors while the theme has no `success` and `warning`.

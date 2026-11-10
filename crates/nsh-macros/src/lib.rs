@@ -1871,12 +1871,13 @@ fn methods_impl(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 /// (`nsh_core::element::AppTheme`), each one token or an inner theme type.
 ///
 /// - `#[token(color | number | radius | spacing | text | weight | tracking |
-///   leading | blur | font | shadow)]`: a token of that kind, named after
-///   the field in kebab case, a namespaced kind with its namespace
-///   (`#[token(radius)] card` is `radius-card`, `weight` `font-weight-*`,
-///   `font` `font-*`, `shadow` `shadow-*`); a color (`AdaptiveColor`), a
-///   number (`f32`, `Points`), a font family (`SharedString`, `String`) or
-///   box shadows (`AdaptiveShadow`). `name = "…"` names it; `role = <path>`
+///   leading | blur | font | shadow | gradient)]`: a token of that kind,
+///   named after the field in kebab case, a namespaced kind with its
+///   namespace (`#[token(radius)] card` is `radius-card`, `weight`
+///   `font-weight-*`, `font` `font-*`, `shadow` `shadow-*`, `gradient`
+///   `background-image-*`); a color (`AdaptiveColor`), a number (`f32`,
+///   `Points`), a font family (`SharedString`, `String`), box shadows
+///   (`AdaptiveShadow`) or gradients (`AdaptiveGradient`). `name = "…"` names it; `role = <path>`
 ///   maps a role onto it, the role's constant by its path
 ///   (`role = nsh_base::role::POPOVER`, or a component library's own),
 ///   once for each role it plays (`role = role::CARD, role = role::POPOVER`:
