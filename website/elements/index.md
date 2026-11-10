@@ -364,7 +364,8 @@ touchscreens, a long press opens menus: handle `onLongPress` with the same funct
 On macOS, Windows, Linux and the web, Tab moves the keyboard focus between its stops in tree order: the inputs, the views that take
 presses, and every `focusable` view. Focus styles (`focus:`, `.focus(..)`) style the focused view, and Return or Space
 presses it when it takes presses. A click presses a view without focusing it, so focus styles show for keyboard focus
-only.
+only. On macOS and Windows the arrow keys move the focus to the nearest stop in their direction (with nothing focused,
+to the first one), except where the focused input uses them; with no stop that way they scroll.
 
 Focus and presses are separate. A view that takes keys while it has the focus (a chart, a slider, a list that moves
 its selection with the arrow keys) sets `focusable` and binds its keys while focused (`onFocus` / `onBlur` with
