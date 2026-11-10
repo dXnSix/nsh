@@ -218,9 +218,13 @@ impl DevSession {
 pub(crate) fn start(
     this: &AppView,
     url: String,
-    transport: Option<Box<dyn nsh_dev::DevTransport>>,
+    transport: Option<(Box<dyn nsh_dev::DevTransport>, HostPlatform)>,
     cx: &mut Context<AppView>,
 ) {
+    let (transport, platform) = match transport {
+        Some((transport, platform)) => (Some(transport), platform),
+        None => (None, HostPlatform::Gpui),
+    };
     let (tx, mut rx) = unbounded::<Msg>();
     if let Some(base) = asset_base(&url) {
         this.set_asset_base(Some(AssetBase::Http(base)));
@@ -274,7 +278,7 @@ pub(crate) fn start(
 
     let host = HostInfo {
         device: device_name(host_name().as_deref()),
-        platform: HostPlatform::Gpui,
+        platform,
         bytecode_version: BYTECODE_VERSION.to_owned(),
         ui_sets: crate::app::ui_sets()
             .iter()

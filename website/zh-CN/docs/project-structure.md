@@ -142,6 +142,7 @@ mount(App);
 | `ios` | object | `package` | iOS 包添加的内容：`infoPlist` 是应用 `Info.plist` 的键，`entitlements` 在真机构建时对照描述文件检查。NSH 自己的键会被拒绝（[打包](./packaging.md#infoplist-键与-entitlements)）。 |
 | `android` | object | `package` | Android 包的设置：`targetSdk`，应用的目标 API 级别，也是编译所用的级别（默认 35）（[打包](./packaging.md#目标-api-级别)）。 |
 | `macos` | object | `package` | macOS 包添加的内容：`infoPlist` 和 `entitlements`，与 `ios` 的相同（[打包](./packaging.md#infoplist-键与-entitlements)）。 |
+| `tizen` | object | `package`、`run`、`test` | 三星电视的包（`--target tizen` 和 `tizen-web`）设置的内容：`package`（恰好 10 个字母和数字）、`appId`（`<package>.<name>`）、`version`（`x.y.z`）、`apiVersion`（所需的 Tizen 版本，`8.0`）、`privileges` 和 `signing`（`tz` 签名所用的证书配置，`nsh run` 和 `nsh test --target tizen` 也用它为开发包签名），都有默认值（[Tizen](./tizen.md#nshjson)、[Web](./web.md#三星电视)）。 |
 | `root` | string | `run`, `package` | Rust 应用的根组件，即它在 `rust` crate（列表时为第一个）中的路径（`App`、`shell::Gallery`）：对应用目录执行 `nsh run` 和 `nsh package` 时，在所有平台上直接挂载它，不使用 QuickJS；`nsh run App.tsx` 仍然运行 TSX 入口（[用 Rust 开发](./rust.md)）。 |
 
 `nsh package` 和 `nsh publish` 的参数（`--name`、`--id`、`--app-version`、`--build`、`--icon`、`--min-runtime`）会覆盖文件中的值（[CLI](./cli.md)）。

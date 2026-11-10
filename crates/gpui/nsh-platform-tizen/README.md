@@ -9,6 +9,10 @@ hot updates, connected through `sdb reverse` or, failing that, `sdb forward`.
 
 `host/` is the C# host (`Program.cs`, `Nsh.Tizen.Host.csproj`).
 
+An app with Rust crates of its own builds its own `libnsh.so` from this crate (`nsh` generates it in
+`.nsh/rust/tizen`): `nsh::ui_sets!(…)` exports the app's UI sets and `nsh::root!(…)` a Rust app's root, which
+`nsh_tizen_main` finds in its library before it starts, as Android's library does.
+
 ## Building
 
 dXn.GpuiTizen is a git dependency pinned by `rev`; TV builds take gpui-fast and wgpu from their forks through a
@@ -26,4 +30,6 @@ cargo xtask cross --target armv7 --release --manifest-path <nsh>/crates/gpui/Car
   --with-dev-variant --check-symbols --entry nsh_tizen_main --config "$PATCH"
 ```
 
-`--target` is `armv7` (32-bit ARM TVs), `x86_64` (the emulator) or `aarch64`.
+`--target` is `armv7` (32-bit ARM TVs), `x86_64` (the emulator) or `aarch64`. NSH's own runtime (`runtime/tizen`, the
+`tizen` component: both variants, the host, the target specs) is built from this checkout with
+`DXN_GPUI_TIZEN=<dXn.GpuiTizen> cargo xtask tizen --config "$PATCH"`, which runs the same cross builds.

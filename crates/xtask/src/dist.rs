@@ -12,6 +12,9 @@
 //! dist/nsh/runtime/tui/nsh-tui-host[.exe]                     development host (the terminal, `nsh run --target tui`)
 //! dist/nsh/runtime/android/{release,dev}/                      classes.dex, lib/<abi>/libnsh.so (stripped),
 //!                                                              symbols/<abi>/libnsh.so (with symbols)
+//! dist/nsh/runtime/tizen/{release,dev}/                        Nsh.Tizen.Host.dll (+ .deps.json), <arch>/libnsh.so
+//!                                                              (armv7l, aarch64, x86_64; stripped)
+//! dist/nsh/runtime/tizen/targets/                              the Tizen target specs and their nightly
 //! dist/nsh/runtime/web/{nsh-browser.wasm,nsh-dev.wasm,nsh.js,browser/}  the web runtimes (published apps' to link from, the dev host's)
 //! dist/nsh/runtime/web/nsh-syntaxes.bin                       the syntaxes they fetch to highlight code
 //! dist/nsh/embed/ios/{NativeShell,NativeShellDev}.xcframework  embedding in iOS apps
@@ -27,7 +30,8 @@
 //! Windows only (where the CLI is `bin/nsh.exe`). The GPUI and terminal
 //! development hosts are built for this machine on each of the three. The web runtime is built
 //! everywhere: it needs a clang that targets wasm32 and `llvm-ar`
-//! (`docs/dev/web.md`).
+//! (`docs/dev/web.md`). The Tizen runtime is built everywhere dXn.GpuiTizen's
+//! checkout and the .NET SDK are (`docs/dev/tizen.md`), else left out.
 
 use std::{
     env,
@@ -239,6 +243,44 @@ pub(crate) fn dist() -> anyhow::Result<()> {
             "packed {}",
             aar.strip_prefix(&root).unwrap_or(&aar).display()
         ));
+    }
+
+    // The Tizen runtime (Samsung TVs), through dXn.GpuiTizen's cross
+    // driver: without its checkout or the .NET SDK the distribution is made
+    // without it, as without an Android SDK.
+    let skip_tizen = crate::tizen::dist_skip(
+        env::var_os("NSH_DIST_NO_TIZEN").is_some_and(|value| !value.is_empty()),
+        crate::tizen::checkout(&root, env::var_os("DXN_GPUI_TIZEN"))
+            .join("xtask")
+            .is_dir(),
+        || {
+            Command::new("dotnet")
+                .arg("--version")
+                .output()
+                .is_ok_and(|output| output.status.success())
+        },
+    );
+    match skip_tizen {
+        Some(reason) => term::warn(format!("{reason}: the distribution has no Tizen runtime")),
+        None => {
+            let configs: Vec<std::path::PathBuf> = env::var_os("NSH_TIZEN_CARGO_CONFIG")
+                .map(|value| {
+                    value
+                        .to_string_lossy()
+                        .split(',')
+                        .filter(|c| !c.is_empty())
+                        .map(Into::into)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let built =
+                crate::tizen::build(crate::tizen::Variant::Both, &crate::tizen::ARCHS, &configs)?;
+            for (from, to) in
+                crate::tizen::dist_files(&built, &out.join("runtime/tizen"), &crate::tizen::ARCHS)
+            {
+                copy(&from, &to)?;
+            }
+        }
     }
 
     if WITH_IOS {

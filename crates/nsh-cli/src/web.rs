@@ -83,8 +83,50 @@ pub(crate) fn package(
     id: &str,
     built: &Built,
 ) -> anyhow::Result<()> {
+    let dir = options.out.join(name);
+    let base = write_site(options, config, name, id, built, &dir, &Variant::default())?;
+    if options.run {
+        serve(&dir, base.as_deref().unwrap_or("/"))?;
+    }
+    Ok(())
+}
+
+/// What another target's package changes of the site: a Tizen web app's
+/// (`tizen_web.rs`) adds its TV shim and starts the player on a TV.
+#[derive(Default)]
+pub(crate) struct Variant<'a> {
+    /// Classic scripts the page runs before `nsh.js`, `(name, source)`:
+    /// added to the site under names with their digest.
+    pub(crate) scripts: &'a [(&'a str, &'a str)],
+    /// The player's idiom (`createPlayer`'s `idiom`), instead of the one
+    /// the pointer and the viewport suggest.
+    pub(crate) idiom: Option<&'a str>,
+    /// Whether pushed pages and dialogs are history entries, instead of
+    /// `web.history`.
+    pub(crate) history: Option<bool>,
+    /// A package installed on a device, which reads its files where the
+    /// page is: no `web.base`, and no `.br` and `.gz` copies (what static
+    /// hosts send).
+    pub(crate) installed: bool,
+}
+
+/// Writes the site into `dir` (replaced) as `variant` says; returns the
+/// page's base (`web.base`).
+pub(crate) fn write_site(
+    options: &PackageOptions<'_>,
+    config: &AppConfig,
+    name: &str,
+    id: &str,
+    built: &Built,
+    dir: &Path,
+    variant: &Variant<'_>,
+) -> anyhow::Result<Option<String>> {
     // Before the runtime is built and the previous package removed.
-    let base = page_base(config.web.base.as_deref())?;
+    let base = if variant.installed {
+        None
+    } else {
+        page_base(config.web.base.as_deref())?
+    };
     let served = ui_sets();
     let missing: Vec<&str> = built
         .ui_sets
@@ -99,13 +141,12 @@ pub(crate) fn package(
         );
     }
     let runtime = runtime::package_web()?;
-    let dir = options.out.join(name);
-    let step = ui::Step::start(format!("packaging {}", ui::path(&dir)));
+    let step = ui::Step::start(format!("packaging {}", ui::path(dir)));
     if dir.exists() {
-        fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
+        fs::remove_dir_all(dir).with_context(|| format!("remove {}", dir.display()))?;
     }
     let asset_base = options.asset_url.map(asset_url).transpose()?;
-    let site = Site::new(&dir, asset_base.as_ref().map(|base| base.prefix.clone()))?;
+    let site = Site::new(dir, asset_base.as_ref().map(|base| base.prefix.clone()))?;
     let chunk_sides;
     let js = fs::read_to_string(&runtime.js)
         .with_context(|| format!("read {}", runtime.js.display()))?;
@@ -266,9 +307,17 @@ pub(crate) fn package(
     if let Some(glue) = &glue {
         app["glue"] = glue.as_str().into();
     }
-    if let Some(history) = config.web.history {
+    if let Some(history) = variant.history.or(config.web.history) {
         app["history"] = history.into();
     }
+    if let Some(idiom) = variant.idiom {
+        app["idiom"] = idiom.into();
+    }
+    let scripts = variant
+        .scripts
+        .iter()
+        .map(|(name, source)| site.add(name, source.as_bytes()))
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let html = page(&PageParts {
         name,
         appearance,
@@ -283,6 +332,7 @@ pub(crate) fn package(
             .map(|path| assets[path].as_str().unwrap_or_default().to_owned())
             .collect::<Vec<_>>(),
         app: &app,
+        scripts: &scripts,
         connect: connect_src(
             built.capabilities.as_ref(),
             &page_connect(&config.web.connect)?,
@@ -296,16 +346,15 @@ pub(crate) fn package(
     });
     fs::write(dir.join("index.html"), html)?;
     // What static hosts send browsers that accept it (`.br`, `.gz`).
-    compress::precompress(&dir)?;
+    if !variant.installed {
+        compress::precompress(dir)?;
+    }
     step.done(format!(
         "packaged {}{}",
-        ui::path(&dir),
-        ui::dim(format!(", {}", ui::bytes(dir_size(&dir))))
+        ui::path(dir),
+        ui::dim(format!(", {}", ui::bytes(dir_size(dir))))
     ));
-    if options.run {
-        serve(&dir, base.as_deref().unwrap_or("/"))?;
-    }
-    Ok(())
+    Ok(base)
 }
 
 const TEXT_VIEW_GATE: &str = "nsh_part_text_view";
@@ -982,7 +1031,9 @@ pub(crate) fn dev_host(runtime: &WebRuntime, rust: bool) -> anyhow::Result<(Stri
 /// read now (a change takes another session), or none, its
 /// `web.history`, and the idiom the session runs it in (`--idiom`,
 /// `nsh.json` `dev.idiom`: the player's `idiom`; `None`: the one the
-/// browser measures, or a test's).
+/// browser measures, or a test's). A Tizen web app's page
+/// (`tizen_web::dev_page`) has filled in its scripts, idiom and history
+/// first; a web page has none of them.
 pub(crate) fn with_page_host(
     (page, mut files): (String, Files),
     entry: &Path,
@@ -1014,6 +1065,7 @@ pub(crate) fn with_page_host(
     Ok((
         page.replace("{{host}}", &host)
             .replace("{{history}}", &history)
+            .replace("{{scripts}}\n", "")
             .replace("{{idiom}}", &idiom),
         files,
     ))
@@ -1382,6 +1434,9 @@ struct PageParts<'a> {
     fonts: &'a [String],
     /// What the page's script reads.
     app: &'a serde_json::Value,
+    /// URLs of the classic scripts that run before the runtime loads
+    /// ([`Variant::scripts`]).
+    scripts: &'a [String],
     /// The page's `connect-src` ([`connect_src`]).
     connect: Option<&'a str>,
 }
@@ -1434,6 +1489,10 @@ fn page(parts: &PageParts<'_>) -> String {
     }
     if let Some(touch) = &parts.icons.touch {
         let _ = writeln!(head, "<link rel=\"apple-touch-icon\" href=\"{touch}\">");
+    }
+    // Before the module script, which runs after the page is parsed.
+    for script in parts.scripts {
+        let _ = writeln!(head, "<script src=\"{}\"></script>", escape_html(script));
     }
     // The runtime imports the glue as it loads (`nsh.js`' `glue`).
     if let Some(glue) = parts.glue {
@@ -1955,11 +2014,13 @@ mod tests {
             page.contains(&format!("const RUNTIME = \"{first}\";")),
             "{page}"
         );
-        // The page's host is the app's (`with_page_host`).
+        // The page's host is the app's (`with_page_host`); its scripts and
+        // idiom a Tizen web app's (`tizen_web::dev_page`).
         assert!(
             !page
                 .replace("{{host}}", "")
                 .replace("{{history}}", "")
+                .replace("{{scripts}}", "")
                 .replace("{{idiom}}", "")
                 .contains("{{"),
             "{page}"
@@ -2137,6 +2198,7 @@ mod tests {
             code: "app.1.js",
             fonts: &[],
             app: &app,
+            scripts: &[],
             connect: None,
         };
         let with = page(&parts(Some("nsh-bindgen.0123456789.js")));
@@ -2282,6 +2344,7 @@ mod tests {
             code: "app.1.js",
             fonts: &[],
             app: &serde_json::json!({}),
+            scripts: &[],
             connect: None,
         });
         // Before the first relative URL (the manifest's).
@@ -2303,6 +2366,7 @@ mod tests {
             code: "app.1.js",
             fonts: &["assets/f.1.ttf".to_owned()],
             app: &app,
+            scripts: &[],
             connect: Some("'self' api.example.com:*"),
         });
         assert!(html.contains("<title>A &lt;b&gt; &amp; &quot;c&quot;</title>"));
@@ -2731,6 +2795,7 @@ mod tests {
                 code: "app.3333333333.js",
                 fonts: &["assets/fonts/Inter.4444444444.ttf".to_owned()],
                 app: &app,
+                scripts: &[],
                 connect: None,
             });
             fs::write(dir.join("index.html"), page).unwrap();

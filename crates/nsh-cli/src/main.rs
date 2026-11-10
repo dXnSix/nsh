@@ -28,7 +28,10 @@ mod test;
 mod test_android;
 mod test_host;
 mod test_ios;
+mod test_tizen;
 mod test_web;
+mod tizen;
+mod tizen_web;
 mod ui;
 mod updater;
 mod web;
@@ -171,10 +174,11 @@ enum Command {
         junit: Option<PathBuf>,
         /// Run the apps the tests open on this platform's development host
         /// instead of headless: the steps act with the platform's own input
-        /// (macos, linux, windows, gpui, tui, web, ios and android; tui uses
-        /// an in-memory terminal; web runs them
+        /// (macos, linux, windows, gpui, tui, web, tizen-web, ios, android
+        /// and tizen; tui uses an in-memory terminal; web runs them
         /// in a headless Chrome, Edge or Chromium, ios in a simulator,
-        /// android on the first device adb lists).
+        /// android on the first device adb lists, tizen on the TV or
+        /// emulator `sdb devices` lists).
         #[arg(long, value_enum)]
         target: Option<run::Target>,
         /// The Chrome, Edge or Chromium executable `--target web` runs the
@@ -297,7 +301,8 @@ enum Command {
         #[arg(long, value_enum, default_value_t = run::Target::native())]
         target: run::Target,
         /// iOS simulator to use (name or UDID); default: a booted one, else
-        /// the newest iPhone.
+        /// the newest iPhone. Tizen: the TV's or emulator's `sdb` serial
+        /// (default: the only one `sdb devices` lists).
         #[arg(long)]
         device: Option<String>,
         /// Points per terminal Cell, overriding nsh.json tui.pointsPerCell (default: 8x16).
@@ -544,7 +549,9 @@ struct PackageArgs {
     /// App icon: a square PNG, ideally 1024×1024.
     #[arg(long)]
     icon: Option<PathBuf>,
-    /// Code signing identity for devices, e.g. "Apple Development: …".
+    /// Code signing identity for devices, e.g. "Apple Development: …";
+    /// Tizen and Tizen web: the certificate profile `tz` signs with
+    /// (default: `nsh.json` `tizen.signing`).
     #[arg(long)]
     sign: Option<String>,
     /// Provisioning profile for devices (`.mobileprovision`).
@@ -563,12 +570,17 @@ struct PackageArgs {
     /// arm64-v8a and armeabi-v7a; with --run also the device's).
     #[arg(long, value_delimiter = ',', value_parser = crate::android::ABIS)]
     abi: Vec<String>,
+    /// Tizen architectures of the TPKs, repeated or separated by commas
+    /// (default: armv7l, the TVs'; with --run the TV's): one TPK each,
+    /// several also the multi-architecture `.zip` for Seller Office.
+    #[arg(long, value_delimiter = ',', value_enum)]
+    arch: Vec<crate::tizen::Arch>,
     /// Android: what to write, an APK (installed directly) or an Android
     /// App Bundle (`aab`, uploaded to Google Play).
     #[arg(long, value_enum, default_value_t)]
     format: crate::android::Format,
-    /// Install and launch the app in the simulator or on the Android device
-    /// afterwards (Linux, macOS, Windows: launch it; web: serve it on this
+    /// Install and launch the app in the simulator, on the Android device
+    /// or on the TV (Tizen: the only one `sdb devices` lists) afterwards (Linux, macOS, Windows: launch it; web: serve it on this
     /// machine at the address it prints).
     #[arg(long)]
     run: bool,
@@ -578,6 +590,12 @@ struct PackageArgs {
     /// relatively, so the site runs from any directory.
     #[arg(long, value_name = "URL", conflicts_with = "run")]
     asset_url: Option<String>,
+    /// Tizen web: instead of the app, a package that tries on the TV the
+    /// ways the app's page loads its files (module scripts, an import map,
+    /// an iframe's realm, a script fetched with CORS, WebAssembly) and
+    /// shows what each did.
+    #[arg(long)]
+    probe: bool,
 }
 
 /// `nsh component`'s actions.
@@ -617,6 +635,8 @@ impl Command {
             | Command::Dev { entry, .. }
             | Command::Run { entry, .. }
             | Command::Publish { entry, .. } => Some(entry),
+            // The loader probe builds no app ([`probe_entry`]).
+            Command::Package(args) if args.probe => None,
             Command::Package(args) => Some(&mut args.entry),
             Command::Init { .. }
             | Command::Keygen { .. }
@@ -628,6 +648,16 @@ impl Command {
             | Command::Symbolicate { .. }
             | Command::Revoke { .. } => None,
         }
+    }
+}
+
+/// The entry of `nsh package --probe`'s app, which need not exist: the
+/// probe reads only the `nsh.json` beside it (its signing profile).
+fn probe_entry(entry: &std::path::Path) -> PathBuf {
+    if entry.is_dir() {
+        entry.join("App.tsx")
+    } else {
+        entry.to_path_buf()
     }
 }
 
@@ -731,6 +761,11 @@ fn run(mut command: Command) -> anyhow::Result<()> {
     if let Command::Test { path, entry, .. } = &mut command {
         *path = dunce::canonicalize(&*path).with_context(|| format!("{}", path.display()))?;
         *entry = test::app_entry(path)?;
+    }
+    if let Command::Package(args) = &mut command
+        && args.probe
+    {
+        args.entry = probe_entry(&args.entry);
     }
     if let Some(entry) = command.entry_mut() {
         *entry = entry::resolve(entry)?;
@@ -949,9 +984,11 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 key_alias,
                 keystore_password,
                 abi,
+                arch,
                 format,
                 run,
                 asset_url,
+                probe,
             } = *args;
             let mut config = package::read_config(&entry)?;
             config.name = name.or(config.name);
@@ -974,9 +1011,11 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                     )
                 }),
                 abis: &abi,
+                tizen_archs: &arch,
                 format,
                 run,
                 asset_url: asset_url.as_deref(),
+                probe,
             })
         }
         Command::Run {

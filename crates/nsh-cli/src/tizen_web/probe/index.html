@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NSH loader probe</title>
+<!-- Before every module script, as the app's page has it (its chunks). -->
+<script type="importmap">{ "imports": { "nsh-probe-mapped": "./probe/mapped.js", "nsh-probe-chunk": "./probe/chunk.js" } }</script>
+<style>
+  html, body { margin: 0; background: #000; color: #f2f2f7; font: 28px/1.4 system-ui, sans-serif; }
+  main { padding: 48px 64px; }
+  h1 { margin: 0 0 8px; font-size: 40px; }
+  #summary { margin: 0 0 24px; opacity: .8; }
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: 10px 16px; border-top: 1px solid #3a3a3c; vertical-align: top; }
+  td.result { width: 160px; font-weight: 600; }
+  .ok { color: #30d158; } .failed { color: #ff453a; } .waiting { color: #8e8e93; }
+  td.detail { font: 22px/1.4 ui-monospace, Menlo, monospace; word-break: break-all; opacity: .8; }
+  #environment { margin-top: 32px; font: 22px/1.5 ui-monospace, Menlo, monospace; opacity: .7; white-space: pre-wrap; word-break: break-all; }
+</style>
+<script>
+  // Written by `nsh package --target tizen-web --probe`: tries, from the
+  // package's files, each way the app's page loads what it needs (`nsh.js`,
+  // its `browser/` modules, the app's chunks, the realm's bootstrap, the
+  // runtime's Wasm) and shows what each did. Each probe reports once.
+  const PROBES = [
+    ["module", "Module script (package file)"],
+    ["import-map", "Import map: static import"],
+    ["import-map-dynamic", "Import map: import()"],
+    ["iframe", "Same-origin iframe realm"],
+    ["bootstrap", "Classic bootstrap fetched with CORS, in the realm"],
+    ["realm-module", "Import map and module in the realm"],
+    ["blob-module", "Blob URL module in the realm"],
+    ["wasm-streaming", "Wasm fetch: instantiateStreaming"],
+    ["wasm-buffer", "Wasm fetch: arrayBuffer + instantiate"],
+  ];
+  const TIMEOUT = 5000;
+  const results = new Map();
+  window.nshProbe = {
+    results,
+    done(name, ok, detail = "") {
+      if (results.has(name)) return;
+      results.set(name, { ok, detail: String(detail) });
+      console.log(`[nsh probe] ${name}: ${ok ? "ok" : "failed"} ${detail}`);
+      render();
+    },
+  };
+  const failed = (name) => (error) => nshProbe.done(name, false, error?.message ?? error);
+
+  function render() {
+    const body = document.getElementById("results");
+    if (!body) return;
+    body.replaceChildren(...PROBES.map(([name, label]) => {
+      const row = document.createElement("tr");
+      const result = results.get(name);
+      const cells = [label, result ? (result.ok ? "ok" : "failed") : "…", result?.detail ?? ""];
+      cells.forEach((text, i) => {
+        const cell = document.createElement("td");
+        cell.textContent = text;
+        if (i === 1) cell.className = `result ${result ? (result.ok ? "ok" : "failed") : "waiting"}`;
+        if (i === 2) cell.className = "detail";
+        row.append(cell);
+      });
+      return row;
+    }));
+    const passed = [...results.values()].filter((r) => r.ok).length;
+    document.getElementById("summary").textContent =
+      `${passed} of ${PROBES.length} work${results.size < PROBES.length ? ", still trying…" : ""}`;
+  }
+
+  /** The probe's iframe realm, as the runtime makes one for each run:
+   * no address of its own, a `<base>` of the page's. */
+  function realm() {
+    const frame = document.createElement("iframe");
+    frame.hidden = true;
+    document.body.append(frame);
+    const win = frame.contentWindow;
+    const doc = win.document;
+    const base = doc.createElement("base");
+    base.href = document.baseURI;
+    doc.head.append(base);
+    nshProbe.done("iframe", true, `origin ${win.origin}`);
+    return { win, doc };
+  }
+
+  function probeRealm() {
+    let realmed;
+    try {
+      realmed = realm();
+    } catch (error) {
+      for (const name of ["iframe", "bootstrap", "realm-module", "blob-module"]) failed(name)(error);
+      return;
+    }
+    const { win, doc } = realmed;
+    // The runtime's bootstrap: a classic script fetched with CORS.
+    win.__nsh_probe_bootstrap = (value) => nshProbe.done("bootstrap", value === "ran", value);
+    win.addEventListener("error", (e) => nshProbe.done("bootstrap", false, e.message));
+    const bootstrap = doc.createElement("script");
+    bootstrap.crossOrigin = "anonymous";
+    bootstrap.src = new URL("probe/classic.js", document.baseURI).href;
+    bootstrap.onerror = () => nshProbe.done("bootstrap", false, "could not load");
+    bootstrap.onload = () => {
+      // Then the realm's import map and modules, as the app's run has them.
+      const blob = URL.createObjectURL(new Blob(["export const blob = 'blob';"], { type: "text/javascript" }));
+      const map = doc.createElement("script");
+      map.type = "importmap";
+      map.textContent = JSON.stringify({ imports: {
+        "nsh-probe-mapped": new URL("probe/mapped.js", document.baseURI).href,
+        "nsh-probe-blob": blob,
+      } });
+      doc.head.append(map);
+      win.__nsh_probe = nshProbe;
+      const module = doc.createElement("script");
+      module.type = "module";
+      module.textContent = `
+        import { mapped } from "nsh-probe-mapped";
+        __nsh_probe.done("realm-module", mapped === "mapped", "nsh-probe-mapped: " + mapped);
+        import("nsh-probe-blob").then(
+          (m) => __nsh_probe.done("blob-module", m.blob === "blob", "${blob}"),
+          (e) => __nsh_probe.done("blob-module", false, e.message));`;
+      doc.head.append(module);
+    };
+    doc.head.append(bootstrap);
+  }
+
+  async function probeWasm() {
+    const url = new URL("probe/probe.wasm", document.baseURI).href;
+    try {
+      const response = await fetch(url);
+      const { instance } = await WebAssembly.instantiateStreaming(response, {});
+      nshProbe.done("wasm-streaming", instance.exports.answer() === 42, `${response.headers.get("content-type") ?? "no type"}`);
+    } catch (error) {
+      failed("wasm-streaming")(error);
+    }
+    try {
+      const bytes = await (await fetch(url)).arrayBuffer();
+      const { instance } = await WebAssembly.instantiate(bytes, {});
+      nshProbe.done("wasm-buffer", instance.exports.answer() === 42, `${bytes.byteLength} bytes`);
+    } catch (error) {
+      failed("wasm-buffer")(error);
+    }
+  }
+
+  window.addEventListener("DOMContentLoaded", () => {
+    const features = {
+      scrollend: "onscrollend" in window,
+      popover: "popover" in HTMLElement.prototype,
+      inert: "inert" in HTMLElement.prototype,
+      tizen: typeof tizen !== "undefined",
+    };
+    document.getElementById("environment").textContent =
+      `${navigator.userAgent}\n${location.href} (origin ${location.origin})\n${JSON.stringify(features)}`;
+    render();
+    probeRealm();
+    probeWasm();
+    setTimeout(() => {
+      for (const [name] of PROBES) nshProbe.done(name, false, `nothing in ${TIMEOUT / 1000} s`);
+    }, TIMEOUT);
+  });
+  // Back leaves the probe.
+  window.addEventListener("keydown", (e) => {
+    if (e.keyCode === 10009) window.tizen?.application.getCurrentApplication().exit();
+  });
+</script>
+<script type="module" src="probe/module.js"></script>
+</head>
+<body>
+<main>
+  <h1>NSH loader probe</h1>
+  <p id="summary"></p>
+  <table><tbody id="results"></tbody></table>
+  <div id="environment"></div>
+</main>
+</body>
+</html>

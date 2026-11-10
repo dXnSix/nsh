@@ -156,10 +156,14 @@ crates/
                        with a `describe` program, which prints the sets as data for the CLI to bundle, compile and declare with, the
                        hosts and runners, and the headless runner of `nsh test`; it takes nsh's crates where the app's crates do:
                        crates.io at the CLI's version, or the checkout they depend on by path; docs/dev/tooling.md); web packages and the
-                       browser host's pages (`web.rs`, `web/`); `nsh test --target web`'s headless browser (`cdp.rs`, `test_web.rs`);
+                       browser host's pages (`web.rs`, `web/`); Samsung TVs' Tizen web apps (`tizen_web.rs`, `tizen_web/`:
+                       `config.xml`, the TV shim, the development package, the loader probe; docs/dev/web.md); Samsung TVs natively
+                       (`tizen.rs`, `test_tizen.rs`: TPKs signed with `tz`, the development TPK over `sdb`; docs/dev/tizen.md);
+                       `nsh test --target web`'s headless browser (`cdp.rs`, `test_web.rs`);
                        what it prints (`ui.rs`:
                        one line per step, tools' output only on failure, `-v` for everything; docs/dev/tooling.md "Output")
-  xtask/               Maintainer tasks: `cargo xtask android` (Android runtime), `ios-embed` (the iOS SDK), `dist` (the distribution),
+  xtask/               Maintainer tasks: `cargo xtask android` (Android runtime), `tizen` (the Tizen runtime, through
+                       dXn.GpuiTizen's cross driver), `ios-embed` (the iOS SDK), `dist` (the distribution),
                        `web` (the WebAssembly runtime and the website's demos), `emoji-data` (`EmojiPicker`'s emoji from a release of emojibase-data), `compat` (runs `nsh-compat` against this checkout;
                        `compat record <version>`: records a release there)
 tests/compat/         The apps whose scripts check the API apps use (`nsh-compat` builds and runs them): `cases/<domain>/` (one app per
@@ -301,8 +305,12 @@ echo 'await app.screenshot("a.png"); await app.press("label:Navigation"); await 
 ./target/debug/nsh run examples/gallery --target gpui                      # in a GPUI window (macOS, Windows, Linux), as GPUI apps embed it
 ./target/debug/nsh run examples/gallery --target web                       # in the browser (the dev server serves the page)
 ./target/debug/nsh package examples/gallery --target web --run             # a static site (files named by content), served on this machine
+./target/debug/nsh package examples/gallery --target tizen-web --sign <profile>   # a Samsung TV's .wgt, signed with the Tizen SDK's tz
+./target/debug/nsh package examples/gallery --target tizen --sign <profile>       # a Samsung TV's TPK (native), signed with tz
+./target/debug/nsh run examples/gallery --target tizen                     # on the TV `sdb devices` lists (nsh.json tizen.signing; `cargo xtask tizen`)
 ./target/debug/nsh package examples/gallery --target ios-simulator --run   # installable app (.app / .ipa / .apk)
 cargo xtask android [--release] [--dev]                                            # Android runtime into target/android/<profile>[-dev]
+DXN_GPUI_TIZEN=<checkout> cargo xtask tizen [--variant release|dev|both] [--arch armv7l,...] [--config <patch>]   # Tizen runtime into target/tizen
 cargo xtask dist                                                                   # the distribution in dist/nsh
 ./target/debug/nsh dev examples/counter --server-only                      # dev server only (for simulators / devices); prints local and LAN URLs
 ./target/debug/nsh build examples/counter --release                        # writes bundle.js / bundle.nshc

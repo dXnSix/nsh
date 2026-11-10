@@ -21,7 +21,8 @@ On every platform, an app is used the same two ways: packaged as an installable 
 | [Windows](./windows.md) | Win32 windows drawn with Direct2D; DirectWrite | Windows 10 1809+, Windows 11 | `nsh run` (the default on Windows) | a directory, a `.zip` and an installer |
 | [Linux](./linux.md) | GTK 4 widgets; Pango | GTK 4.14+ | `nsh run` (the default on Linux) | a directory and a `.tar.gz` |
 | [GPUI](./gpui.md) | GPUI; GPUI's text system | macOS, Windows, Linux (Vulkan) | in your GPUI app; TSX also with `nsh run --target gpui` | inside the GPUI app that embeds it |
-| [Web](./web.md) | HTML and CSS; the browser's fonts | modern browsers, desktop and phone | `nsh run --target web` | a static site |
+| [Web](./web.md) | HTML and CSS; the browser's fonts | modern browsers, desktop and phone; Samsung TVs (`tizen-web`) | `nsh run --target web` | a static site; a Tizen web app (`.wgt`) |
+| [Tizen](./tizen.md) | GPUI on the TV's GPU; the app's fonts | Samsung TVs (Tizen 8.0 and later), the Tizen emulator | `nsh run --target tizen` | a signed TPK |
 | [TUI](./tui.md) | ratatui on the terminal's Cell grid; the terminal's font | terminals on macOS, Windows and Linux | `nsh run --target tui` | inside the terminal app that embeds it |
 
 - **[GPUI](./gpui.md)** draws apps with [GPUI](https://gpui-kit.com), the framework of the sibling project GPUI Kit, on macOS, Windows and Linux alike: it is the backend for embedding in GPUI and GPUI Kit apps, whose `AppView` they place in their own element tree. Standalone desktop apps run and are packaged with each OS's own backend (AppKit, Win32, GTK 4).
@@ -40,10 +41,10 @@ A Rust app (its `nsh.json` names the `"root"` component) runs and packages from 
 ```sh
 # A Rust app, from its directory
 nsh run --target macos             # or ios, android, windows, linux, tui, web, catalyst
-nsh package --target macos         # or ios, ios-simulator, android, windows, linux, web
+nsh package --target macos         # or ios, ios-simulator, android, windows, linux, web, tizen-web, tizen
 
 # A TSX app
-nsh run App.tsx --target macos     # or ios, android, windows, linux, gpui, tui, web, catalyst
+nsh run App.tsx --target macos     # or ios, android, windows, linux, gpui, tui, web, tizen-web, tizen, catalyst
 nsh package App.tsx --target macos
 ```
 
