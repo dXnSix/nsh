@@ -7,7 +7,8 @@
 //!   again as they change ([`crate::settings`], [`opening`]);
 //! - the window's activation, which the platform turns off while the app
 //!   framework has the app paused, is the app's state ([`crate::lifecycle`]);
-//! - a back press nothing in the app took asks before leaving, and the
+//! - a back press nothing in the app took asks before leaving (in the TV's
+//!   language, at its font scale, an alert dialog: [`crate::prompt`]), and the
 //!   question answered `Exit` (or the app's `exitApp`, which closes the
 //!   window) quits GPUI, which ends `ui_app_main`.
 //!
@@ -18,13 +19,14 @@ use futures_util::StreamExt as _;
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable as _, FontWeight,
     InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Render,
-    SharedString, Styled as _, Window, WindowBounds, WindowOptions, div,
-    prelude::FluentBuilder as _, px, rgb, rgba,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowBounds,
+    WindowOptions, div, prelude::FluentBuilder as _, px, rgb, rgba,
 };
 use nsh_platform_gpui::{AppOptions, AppView};
 
 use crate::{
     back::{Choice, Effect, ExitPrompt},
+    prompt,
     settings::{self, HostValues, Setter},
 };
 
@@ -247,20 +249,30 @@ impl TizenApp {
         cx.notify();
     }
 
-    /// The question: a card over the dimmed app, its two answers in a row.
+    /// The question: a card over the dimmed app, its two answers in a row,
+    /// in the TV's language and at its font scale, an alert dialog for
+    /// assistive technologies ([`crate::prompt`]).
     fn render_prompt(&self, chosen: Choice, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let title = match &self.name {
-            Some(name) => SharedString::from(format!("Exit {name}?")),
-            None => SharedString::new_static("Exit the app?"),
-        };
-        let button = |choice: Choice, label: &'static str, cx: &mut Context<Self>| {
+        let locale = self.applied.as_ref().and_then(|values| values.locale);
+        let font_scale = self.applied.as_ref().and_then(|values| values.font_scale);
+        let size = |pixels: f32| px(prompt::scaled(pixels, font_scale));
+        let words = prompt::words(locale.as_ref(), self.name.as_deref());
+        let (dialog, answers) = prompt::access(&words, chosen);
+        let button = |choice: Choice, node: prompt::Node, cx: &mut Context<Self>| {
             let chosen = choice == chosen;
+            let id = match choice {
+                Choice::Stay => "nsh-exit-stay",
+                Choice::Exit => "nsh-exit-leave",
+            };
             div()
-                .id(label)
-                .px(px(28.0))
-                .py(px(10.0))
-                .rounded(px(10.0))
-                .text_size(px(18.0))
+                .id(id)
+                .role(node.role)
+                .aria_label(node.label.clone())
+                .when(node.focused, |b| b.aria_active_descendant())
+                .px(size(28.0))
+                .py(size(10.0))
+                .rounded(size(10.0))
+                .text_size(size(18.0))
                 .font_weight(FontWeight::MEDIUM)
                 .border_2()
                 .when(chosen, |b| {
@@ -277,8 +289,9 @@ impl TizenApp {
                     MouseButton::Left,
                     cx.listener(move |app, _, window, cx| app.answer(choice, window, cx)),
                 )
-                .child(label)
+                .child(node.label)
         };
+        let [stay, exit] = answers;
         div()
             .absolute()
             .inset_0()
@@ -286,33 +299,38 @@ impl TizenApp {
             .items_center()
             .justify_center()
             .bg(rgba(0x0000_00b3))
-            .track_focus(&self.prompt_focus)
-            .on_key_down(cx.listener(Self::prompt_key))
             .child(
                 div()
+                    .id("nsh-exit-question")
+                    .role(dialog.role)
+                    .aria_label(dialog.label)
+                    // The question has the keys while it is shown: its
+                    // node is the focused one's ancestor.
+                    .track_focus(&self.prompt_focus)
+                    .on_key_down(cx.listener(Self::prompt_key))
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap(px(28.0))
-                    .px(px(48.0))
-                    .py(px(36.0))
-                    .rounded(px(20.0))
+                    .gap(size(28.0))
+                    .px(size(48.0))
+                    .py(size(36.0))
+                    .rounded(size(20.0))
                     .bg(rgb(0x171717))
                     .border_1()
                     .border_color(rgb(0x2e2e2e))
                     .child(
                         div()
-                            .text_size(px(24.0))
+                            .text_size(size(24.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(rgb(0xfafafa))
-                            .child(title),
+                            .child(SharedString::from(words.title)),
                     )
                     .child(
                         div()
                             .flex()
-                            .gap(px(20.0))
-                            .child(button(Choice::Stay, "Stay", cx))
-                            .child(button(Choice::Exit, "Exit", cx)),
+                            .gap(size(20.0))
+                            .child(button(Choice::Stay, stay, cx))
+                            .child(button(Choice::Exit, exit, cx)),
                     ),
             )
     }

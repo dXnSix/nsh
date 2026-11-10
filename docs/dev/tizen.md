@@ -21,6 +21,7 @@ library a TPK's C# host calls, exports one symbol, `nsh_tizen_main(argc, argv)`.
 | `settings.rs` | `dxn_gpui_tizen::settings` (locale, time zone, font scale, screen reader, reduce motion) as the values of `AppView`'s setters, and the setters to call again when they change; the appearance is dark (Tizen 8.0 reports no light or dark setting) |
 | `lifecycle.rs` | The platform's window activation (off while the app framework has the app paused, which the platform reports to GPUI with the window hidden) as `Lifecycle::Background` / `Active`, through `AppView::set_lifecycle` |
 | `back.rs` | Samsung's rule for Back: NSH's back navigation first (a modal, a stack, `onBackPress`); when nothing takes it (`AppView::on_unhandled_back`), the app asks whether to leave, staying chosen |
+| `prompt.rs` | How that question reads: its words in the TV's language (English, Chinese in its script, Korean, Japanese, Spanish, French, German, Portuguese, Russian; English for the others), its sizes at the TV's font scale, and for assistive technologies an alert dialog named by the question with its answers as buttons, the chosen one the focused node, so Voice Guide reads them |
 | `keys.rs` | The remote's key names (dXn.GpuiTizen's `keys::NAMED_KEYS`) as NSH reads them: NSH keys (`nsh_platform_gpui::nsh_key`, `TV-1`'s `ColorRed`, `MediaPlayPause`, `Info`, ...), `back` (navigation), `exit` (the TV's) |
 | `package.rs` | The app in the TPK's resources: `res/nsh/bundle.nshc` (with `capabilities.json` and `bundle.js.map`), `res/nsh/assets/`, `res/nsh/app.json` (name, id, appearance), as Linux's packages hold them |
 | `dev.rs` (feature `dev`) | The development runtime, below |
@@ -28,7 +29,7 @@ library a TPK's C# host calls, exports one symbol, `nsh_tizen_main(argc, argv)`.
 The logic modules build on the desktops too, and their unit tests run there:
 
 ```sh
-cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib                 # app, keys, settings, back, lifecycle, package, host
+cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib                 # app, keys, settings, back, prompt, lifecycle, package, host
 cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --features dev --lib  # and dev's connection policy
 ```
 
