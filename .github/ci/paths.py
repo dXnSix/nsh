@@ -86,6 +86,8 @@ WORKFLOWS = {
 # `Cargo.lock`): what its workflow builds and tests, the same way. It builds
 # the main workspace's crates it uses too, but its workflow runs only on its
 # own changes and daily (`gpui.yml`), so only its own members are needed.
+# The Samsung TV backend is no default member (it builds against the
+# gpui-fast fork), but its manifest is part of the workspace's resolution.
 GPUI_WORKFLOWS = {
     "gpui.yml": {
         "packages": ["nsh-platform-gpui", "nsh-gpui-host", "nsh-platform-tizen"],

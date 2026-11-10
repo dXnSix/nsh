@@ -1,9 +1,10 @@
 //! The app's state (`lifecycle()`) from the app framework's pause and
-//! resume. The Tizen platform deactivates its one window when the app is
-//! paused (another app, the TV's own UI or standby covers it) and activates
-//! it when the app resumes; nothing else deactivates it. Paused, the app is
-//! not seen at all: `background`, not the `inactive` a desktop window that
-//! lost the focus would give.
+//! resume. The Tizen platform reports them to GPUI as its one window's
+//! activation (`on_active_status_change`, `is_active`) and visibility
+//! (hidden while paused): another app, the TV's own UI or standby covers
+//! the app; nothing else deactivates the window. Paused, the app is not
+//! seen at all: `background`, not the `inactive` a desktop window that lost
+//! the focus would give, whatever the order GPUI reports the two in.
 
 use nsh_platform_gpui::Lifecycle;
 
