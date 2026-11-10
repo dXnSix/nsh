@@ -43,8 +43,11 @@
 //!   bindings.
 //! - **What a TV adds** (`focus::directional`): with nothing focused the
 //!   first `preferredFocus` stop in sight takes an arrow; a stop's
-//!   `nextFocus*` route (its own, or that of a view around it that is no
-//!   stop) goes to the view named or the first stop inside it; a
+//!   `nextFocus*` route goes to the view named or the first stop inside
+//!   it, each direction's its own or else that of the nearest view around
+//!   it that sets one (a stop or not: a button in a pressable card takes
+//!   the card's), and `preferredFocus` and `autoFocus` hold for the stops
+//!   inside a view that sets them as well; a
 //!   `FocusGroup`'s view is entered at its first destination in reach (else
 //!   its preferred stop) and with `trap` keeps the arrows; while the
 //!   innermost scroll view along the arrow's axis around the focus can
