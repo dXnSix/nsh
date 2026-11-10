@@ -727,10 +727,19 @@ fn arrow(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
             focus_stop(surface, &view);
             true
         }
+        // The view scrolls a key step and the engine hears the arrow: a
+        // list with a next row that way scrolls to it by index. Both, as
+        // neither does the other's part: a list and a scroll view are
+        // both `ViewKind::Scroll` here and the core's answer comes a frame
+        // later, so the step is what scrolls a scroll view and a list
+        // past its last row (a footer, padding); a list's next row this
+        // way is not mounted, so it lies past the rendered screen beyond
+        // the viewport, and the core's `ScrollTo` there (absolute,
+        // animated) takes over the step's animation the same way.
         Target::Scroll(scroller) => {
             if let Some(from) = &current {
                 let from = from.id();
-                surface.control(|c| c.focus_past(from, direction));
+                surface.focus_past(from, direction);
             }
             surface
                 .view(scroller)
