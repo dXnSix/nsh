@@ -379,7 +379,7 @@ import { TextView } from "nsh/base";
 />
 ```
 
-代码块开箱即有语法高亮：围栏上标明语言（`ts`、`tsx`、`rust`、`python`、`bash`、`json`、`toml`、`yaml`、`diff` 等约两百种）时，代码以 Allsum 的代码配色显示，随外观切换浅色或深色；未标明语言的代码块按原样显示。主题用与角色同名的令牌（`syntax-keyword`、`syntax-string` 等：[主题角色](../modules/nsh-base.md#主题角色)）为某一类代码重新着色。应用想用自己的高亮时，用 `renderCodeBlock` 显示代码，使用它自己的组件或它的 Rust crate 中的组件；Rust 视图通过 [`CodeHighlighter`](#syntax-highlighting) 把高亮器交给 `TextView`。下面用应用自己的高亮显示代码，并让图片占满宽度：
+代码块开箱即有语法高亮：围栏上标明语言（`ts`、`tsx`、`rust`、`python`、`bash`、`json`、`toml`、`yaml`、`diff` 等约两百种）时，代码以 Allsum 的代码配色显示，随外观切换浅色或深色；未标明语言的代码块按原样显示。主题用与角色同名的令牌（`syntax-keyword`、`syntax-string` 等：[主题角色](../modules/nsh-base.md#主题角色)）为某一类代码重新着色；`diff` 代码块中被删除的行使用 `diff-deleted`，与 `DiffView` 的删除行相同。应用想用自己的高亮时，用 `renderCodeBlock` 显示代码，使用它自己的组件或它的 Rust crate 中的组件；Rust 视图通过 [`CodeHighlighter`](#syntax-highlighting) 把高亮器交给 `TextView`。下面用应用自己的高亮显示代码，并让图片占满宽度：
 
 ```rust tabs
 use nsh_base::text_view;
