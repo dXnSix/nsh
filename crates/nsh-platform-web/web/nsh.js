@@ -66,6 +66,10 @@ const MOUSE_BUTTON_NAMES = ["left", "middle", "right", "back", "forward"];
 const MOUSE_BUTTON_BITS = [1, 4, 2, 8, 16];
 /** The keys whose press or release is reported as a mouse move. */
 const MOUSE_MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta"]);
+/** The arrows that move the keyboard focus (`arrowFocus`), as `nsh_focus_move` names them. */
+const ARROW_KEYS = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+/** The roles of a menu's items: the arrows stay in their popup. */
+const MENU_ROLES = new Set(["menuitem", "menuitemcheckbox", "menuitemradio"]);
 // What lays out a field's text, copied to the hidden copy that finds its
 // caret (`caretBounds`).
 const CARET_STYLE = [
@@ -602,6 +606,22 @@ function fillRun(run, text, parts, links) {
     at = to;
   }
   if (at < text.length) run.append(text.slice(at));
+}
+
+/** What rectangles `a` and `b` share (`{ left, top, right, bottom }`), or
+ * null when they share no area. */
+function intersection(a, b) {
+  const left = Math.max(a.left, b.left);
+  const top = Math.max(a.top, b.top);
+  const right = Math.min(a.right, b.right);
+  const bottom = Math.min(a.bottom, b.bottom);
+  return right > left && bottom > top ? { left, top, right, bottom } : null;
+}
+
+/** Whether `el` is rendered and not `visibility: hidden` (a page under the
+ * top one, a view hidden by its style). */
+function shows(el) {
+  return el.checkVisibility?.({ visibilityProperty: true }) ?? true;
 }
 
 /** The text node and offset of character `offset` of a run. */
@@ -2876,7 +2896,7 @@ class Player {
    * focus as Tab gives it, with the ring (`focusVisible`, where browsers
    * take it) and `focus:` whatever the browser's heuristics decide after a
    * click; one a click focused becomes keyboard focused. */
-  focusPressable(el) {
+  focusPressable(el, preventScroll = false) {
     if (el.tabIndex !== 0) return;
     if (document.activeElement === el) {
       if (!el._keyFocus) this.keyFocus(el);
@@ -2884,7 +2904,7 @@ class Player {
     }
     el._focusCall = true;
     try {
-      el.focus({ focusVisible: true });
+      el.focus({ focusVisible: true, preventScroll });
     } finally {
       el._focusCall = false;
     }
@@ -7913,6 +7933,10 @@ class Player {
       if (this.back()) e.preventDefault();
       return;
     }
+    if (plain && !e.shiftKey && this.arrowFocus(e, inRoot ? focus : null)) {
+      e.preventDefault();
+      return;
+    }
     if (plain && this.scrollKey(e, inRoot ? focus : null)) e.preventDefault();
   }
 
@@ -8088,6 +8112,131 @@ class Player {
     if (el._snapPoints) this.snapStep(el, Math.sign(d));
     else this.scrollSmoothly(el, h ? d : 0, h ? 0 : d, true);
     return true;
+  }
+
+  /**
+   * Left / Right / Up / Down move the keyboard focus over the frames of
+   * the stops, as on the terminal and GPUI backends: the page describes
+   * the stops it renders (`focusStops`), `nsh_focus_move` decides with
+   * `nsh_core::focus` (in the newest modal that shows, without the layers
+   * under a backdrop that covers the page), and the stop that takes the
+   * focus comes into sight (`revealFocus`). False when no stop is that
+   * way: the key scrolls (`scrollKey`). A field keeps its arrows, and so
+   * does a component whose keymap binds them: `keyDown` returns before.
+   */
+  arrowFocus(e, focus) {
+    const key = ARROW_KEYS[e.key];
+    if (!key) return false;
+    const { stops, request } = this.focusStops(focus);
+    if (!stops.size) return false;
+    const json = JSON.stringify({ key, ...request });
+    const el = stops.get(this.withStrings([json], (p, l) => this.wasm.nsh_focus_move(p, l)));
+    if (!el) return false;
+    // Revealed here, not by the browser's focus scrolling.
+    if (el._field) el._field.focus({ preventScroll: true });
+    else this.focusPressable(el, true);
+    this.revealFocus(el);
+    return true;
+  }
+
+  /**
+   * The focus stops the page renders as `nsh_focus_move` takes them: each
+   * one's DOM rectangle (`getBoundingClientRect`, CSS pixels), whether some
+   * of it is in sight (inside its root view and the scroll views around
+   * it), its scope (the modal it is in, else the root), its layer (the
+   * child of that root view around it), the anchored overlay around it (a
+   * popup); the root views' layers (`frame`: what of it is in sight, null
+   * for nothing; `presses`: it takes presses, as a backdrop does); and the
+   * modals, oldest first, with whether each shows. `stops` maps ids to the
+   * views. `focus` is the element with the focus, if in the root.
+   */
+  focusStops(focus) {
+    const stops = new Map();
+    const list = [];
+    const layers = [];
+    const modals = [];
+    const roots = [[ROOT_ID, this.root]];
+    for (const child of this.root.children) {
+      if (child._kind !== "modal") continue;
+      roots.push([child._id, child]);
+      modals.push([child._id, !child._leaving && shows(child)]);
+    }
+    for (const [scope, root] of roots) {
+      const bounds = root.getBoundingClientRect();
+      const own = [];
+      for (const layer of root.children) {
+        if (layer._id === undefined || layer._kind === "modal") continue;
+        const seen = intersection(layer.getBoundingClientRect(), bounds);
+        own.push({
+          id: layer._id,
+          frame: seen && [seen.left, seen.top, seen.right - seen.left, seen.bottom - seen.top],
+          presses: !!layer._pressable && !layer.classList.contains("nsh-inert") && shows(layer),
+        });
+        this.collectStops(layer, { scope, layer: layer._id, popup: null, clips: [bounds] }, stops, list);
+      }
+      layers.push([scope, own]);
+    }
+    const current = focus ? this.viewOf(focus) : null;
+    const focused = current && stops.get(current._id) === current ? current._id : null;
+    return { stops, request: { focused, modals, stops: list, layers } };
+  }
+
+  /** The stops in `el` and the views in it, in DOM order (`focusStops`). */
+  collectStops(el, at, stops, list) {
+    if (el._id !== undefined) {
+      if (el._props?.anchored) at = { ...at, popup: el._id };
+      const field = el._field;
+      const rect = field || el.getAttribute("tabindex") === "0" ? el.getBoundingClientRect() : null;
+      // A field takes the focus at any size, but not hidden at none.
+      const stop = rect && (field ? !field.disabled && (rect.width > 0 || rect.height > 0) : true) && shows(el);
+      if (stop) {
+        list.push({
+          id: el._id,
+          frame: [rect.left, rect.top, rect.width, rect.height],
+          visible: at.clips.every((clip) => intersection(rect, clip) !== null),
+          editable: !!field && !field.readOnly,
+          scope: at.scope,
+          layer: at.layer,
+          popup: at.popup,
+          menu: MENU_ROLES.has(el._props?.role),
+        });
+        stops.set(el._id, el);
+      }
+      if (el._kind === "scroll") at = { ...at, clips: [...at.clips, el.getBoundingClientRect()] };
+    }
+    for (const child of el.children) this.collectStops(child, at, stops, list);
+  }
+
+  /**
+   * Brings stop `el`, which an arrow focused, into sight: each scroll view
+   * around it, innermost first, glides by `nsh_focus_reveal`'s delta along
+   * its axis (`focus::reveal`: centered vertically, as little as shows it
+   * horizontally, as on the terminal), and the views further out see the
+   * stop where that puts it.
+   */
+  revealFocus(el) {
+    const rect = el.getBoundingClientRect();
+    let [x, y] = [rect.left, rect.top];
+    for (const view of this.ancestors(el.parentNode)) {
+      if (view._kind !== "scroll") continue;
+      const h = !!view._horizontal;
+      const box = view.getBoundingClientRect();
+      // CSS pixels of its layout per pixel shown (a dialog's scaled layer).
+      const scale = (h ? view.offsetWidth / box.width : view.offsetHeight / box.height) || 1;
+      const start = (h ? x - box.left : y - box.top) * scale - (h ? view.clientLeft : view.clientTop);
+      const len = (h ? rect.width : rect.height) * scale;
+      const delta = this.wasm.nsh_focus_reveal(start, len, h ? view.clientWidth : view.clientHeight, h ? 0 : 1);
+      if (!Number.isFinite(delta)) continue;
+      const shown = h ? view.scrollLeft : view.scrollTop;
+      const max = h ? view.scrollWidth - view.clientWidth : view.scrollHeight - view.clientHeight;
+      const to = Math.min(Math.max(shown + delta, 0), Math.max(max, 0));
+      // A glide in flight goes on from where it was going.
+      const going = view._glide ? (h ? view._glide.x : view._glide.y) : shown;
+      if (to === going) continue;
+      this.scrollSmoothly(view, h ? to - going : 0, h ? 0 : to - going, true);
+      if (h) x -= (to - shown) / scale;
+      else y -= (to - shown) / scale;
+    }
   }
 
   // Wheels and touchpads
