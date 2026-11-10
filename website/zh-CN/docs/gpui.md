@@ -155,7 +155,7 @@ view.load(App::Js(Bundle::source(code)));
   左右方向键留在该菜单中），并把它滚动到可见；Enter 和空格键按下它，它的 `focus:` 样式、`onFocus` 和 `onBlur` 随之生效。
   输入框保留它要用的方向键（单行输入框中的上下方向键会移出它）。`autoFocus`、`preferredFocus`、`nextFocusUp` / `Down` /
   `Left` / `Right` 路线和 [`FocusGroup`](../elements/focus-group.md) 像在电视上一样决定方向键的去向；在很长的列表中，方向键会继续去往
-  还不在屏幕上的行。ref 的 `focus()` 把焦点移到可按压或 `focusable` 的视图上，`blur()` 让它失去焦点。Tab 仍只在输入框和原生组件之间移动。
+  还不在屏幕上的行。ref 的 `focus()` 把焦点移到可按压或 `focusable` 的视图上，`blur()` 让它失去焦点。Tab 和 Shift+Tab 按树的顺序停在同样的可按压视图、输入框、`focusable` 视图和原生组件上。
 
 可对照各原生后端自己的列表：[macOS](./macos.md#macos-上的差异)、[Windows](./windows.md#windows-上的差异)、
 [Linux](./linux.md#linux-上的差异)。

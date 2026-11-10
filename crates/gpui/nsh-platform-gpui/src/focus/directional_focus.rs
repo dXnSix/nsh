@@ -129,11 +129,11 @@ pub(super) fn focused(surface: &Surface) -> Option<NodeId> {
 }
 
 /// The events sent since the last call.
-fn heard(surface: &Surface) -> Vec<(NodeId, EventKind)> {
+pub(super) fn heard(surface: &Surface) -> Vec<(NodeId, EventKind)> {
     std::mem::take(&mut *surface.heard.borrow_mut())
 }
 
-fn has_focused_state(surface: &Surface, id: NodeId) -> bool {
+pub(super) fn has_focused_state(surface: &Surface, id: NodeId) -> bool {
     surface.view(id).unwrap().state().states & FOCUSED != 0
 }
 
