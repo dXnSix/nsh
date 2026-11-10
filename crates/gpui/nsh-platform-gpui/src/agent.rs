@@ -19,7 +19,7 @@ use nsh_core::{
     desktop::WindowState,
     geometry::{Bounds, Point, Points, Size, point},
 };
-use nsh_testing::agent::{Key, Native};
+use nsh_testing::agent::{Key, Native, RemoteKey};
 
 use crate::{
     app::AppView,
@@ -381,6 +381,18 @@ impl Native for GpuiNative {
         };
         self.keystroke(vk, modifiers)
             .ok_or_else(|| "the window is gone".to_owned())
+    }
+
+    fn press_remote_key(&self, key: RemoteKey) -> Result<(), String> {
+        match key.keystroke() {
+            Some(stroke) => self.press_keys(&stroke.to_string()),
+            // The Tizen platform gives GPUI the remote's Back as the key
+            // `back`, the browser's back key (`keys::vk_of`), which goes
+            // back from where the focus is.
+            None => self
+                .keystroke(crate::keys::VK_BROWSER_BACK, Modifiers::default())
+                .ok_or_else(|| "the window is gone".to_owned()),
+        }
     }
 
     fn target_window(&self, window: NodeId) -> Result<(), String> {

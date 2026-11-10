@@ -37,6 +37,7 @@ mod failure;
 #[cfg(not(target_arch = "wasm32"))]
 mod headless;
 pub mod menu;
+pub mod remote;
 #[cfg(feature = "js")]
 mod module;
 #[cfg(feature = "js")]

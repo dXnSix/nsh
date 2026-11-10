@@ -1888,6 +1888,22 @@ impl Keyboard {
         steps.run(move |app| app.press_key(&keys)).await
     }
 
+    /// Presses the TV remote's key `key`: `"up"`, `"down"`, `"left"`,
+    /// `"right"`, `"enter"` (also `"ok"`), `"back"`, and the media and TV
+    /// keys `"mediaplaypause"`, `"mediaplay"`, `"mediapause"`,
+    /// `"mediastop"`, `"mediarewind"`, `"mediafastforward"`,
+    /// `"medianext"`, `"mediaprevious"`, `"red"`, `"green"`, `"yellow"`,
+    /// `"blue"`, `"channelup"`, `"channeldown"`, `"info"` (case does not
+    /// matter). The app's shortcut of the key's name hears it
+    /// (`keymap.bind`), else it acts as `press` does (`"ok"` presses the
+    /// view the focus is on); `"back"` goes back as the platform does
+    /// (`onBackPress`), and does nothing when there is nothing to go back
+    /// from. An unknown name rejects with the names there are.
+    pub async fn remote(this: Instance<Self>, key: String) -> Result<(), JsError> {
+        let steps = this.with(|k| k.steps.clone());
+        steps.run(move |app| app.press_remote_key(&key)).await
+    }
+
     /// Holds modifier keys down (`"mod"`, `"shift"`, `"alt"`, `"ctrl"`,
     /// `"meta"`, joined by `+`) until `up`: the presses, drags and hovers
     /// meanwhile carry them (a Mod-click, a Shift-drag). Headless and on Linux.
