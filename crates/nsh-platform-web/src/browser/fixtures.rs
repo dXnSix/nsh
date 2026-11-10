@@ -128,3 +128,16 @@ pub(crate) extern "C" fn nsh_browser_test_video_load_event() -> u32 {
     .unwrap()
     .into_raw()
 }
+
+/// The environment the engine sends the page's runtime when an app starts
+/// (`Host::set_environment`) in a 1920 × 1080 dark window, from what the
+/// page last told the module (`nsh_environment`: its `idiom`, ...).
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn nsh_browser_test_environment() -> u32 {
+    use nsh_core::element::JsHost;
+
+    use super::{bindings::Bindings, engine};
+    let environment = crate::environment(1920.0, 1080.0, true, 1.0);
+    let data = engine::environment_data(&environment);
+    Bindings::new().json(&data).unwrap().0[0] as u32
+}

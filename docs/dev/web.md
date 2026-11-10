@@ -492,7 +492,8 @@ with a fine, hovering one, as `nsh test --target web` does), `pad` for a screen 
 `phone`; the player's `idiom` option overrides it, and so does a test's setup (`TestEnvironment::idiom`: `open`'s
 desktop `platform` starts the app in the desktop idiom at any width). A page on a TV (a Tizen `.wgt`) passes
 `idiom: "tv"`, which no pointer heuristic can tell: `nsh_environment` maps it to `Idiom::Tv` (`platform.tv`,
-`tv={{…}}` props, mobile behavior; `tv.test.mjs`). `Environment::desktop()`
+`tv={{…}}` props, mobile behavior; `tv.test.mjs`, which with `NSH_BROWSER_WASM` checks the module's own
+`nsh_environment` and the environment it sends, `nsh_browser_test_environment`). `Environment::desktop()`
 (desktop OS, the web in the desktop idiom, or the terminal idiom) decides `desktop={{…}}` props, `platform.select`'s `desktop` key,
 `platform.desktop` and `platform.idiom` (`Environment::reported_idiom()`), `Environment::tv()` decides `tv={{…}}`
 props, `select`'s `tv` key and `platform.tv` (the page's `browser/environment.js` gets all three from the engine's
