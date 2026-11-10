@@ -163,7 +163,10 @@ bubble back up. What NSH adds:
   content as it is on screen (`NshView::reading_children`); GTK's own chain, which sorts a container's children by
   position, is not used for them (before 2026-11-10 it was), only inside a native component. Hidden screens are not
   child visible, and the views under the newest dialog cannot take the focus (`can-focus`). Alerts (`system.rs`) move
-  it between their own buttons.
+  it between their own buttons. A stop (`key_focus::watch`) and an input (`text_input`) follow the window's
+  `notify::focus-widget` and report `onBlur` in its first handlers and `onFocus` in `after` ones, so the view the
+  focus left reports first whichever handler was connected first (before 2026-11-10 a stop's `onFocus` could come
+  before the field's `onBlur`, and a field's `onBlur` handler would then undo it).
 
 `onKeyPress` reports what UIKit's does: the typed text (`"Enter"` for a line break), `"Backspace"` for a deletion (in
 an empty input too), and `"Escape"`, as on macOS. Pasted and undone text, and the deletion of a selection typed over,
