@@ -531,6 +531,8 @@ unsafe extern "C" fn token(
         Some(Token::Font(f)) => string(cx, &f),
         // Box shadows as CSS writes them, of the appearance shown.
         Some(Token::Shadow(s)) => string(cx, &s.css(dark)),
+        // Gradients as CSS writes them, of the appearance shown.
+        Some(Token::Gradient(g)) => string(cx, &g.css(dark)),
         _ => UNDEFINED,
     }
 }
@@ -540,7 +542,7 @@ pub(crate) const TOKEN_EXPORT: crate::modules::Item = (
     "token",
     Export::Function(token, 1),
     Ts::function(
-        "The design token `name` of the app's theme (`nsh.json` `\"theme\"`, over\nshadcn/ui's tokens) in the appearance shown, reactive: a color as\n`#rrggbbaa`, a number (a length in points), a font family. The names are\nthe theme's CSS variables without `--`, which classes name too\n(`bg-primary`, `bg-up/30`, `rounded-(--radius)`).",
+        "The design token `name` of the app's theme (`nsh.json` `\"theme\"`, over\nshadcn/ui's tokens) in the appearance shown, reactive: a color as\n`#rrggbbaa`, a number (a length in points), a font family, box shadows and\ngradients as CSS writes them. The names are\nthe theme's CSS variables without `--`, which classes name too\n(`bg-primary`, `bg-up/30`, `rounded-(--radius)`).",
         &["<K extends keyof Tokens>(name: K): Tokens[K]"],
     ),
 );
