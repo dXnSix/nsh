@@ -9,7 +9,7 @@ demo: el-editor
 
 `Editor` 是一个代码编辑器：五十多种语言的语法高亮、行号、多光标、折叠、软换行、查找与替换、诊断和装饰，以及代码编辑器的按键（移动和复制行、注释、缩进、输入时自动闭合的括号和引号）。它能打开任意长度的文件：只创建视野中的行，高亮随每次编辑逐行更新，所以长文件滚动和输入起来与短文件一样流畅。输入经由平台的输入系统，所以输入法（拼音、假名、死键）和软键盘在其中的表现与任何文本框相同。
 
-编辑器负责行为，并带有一套由主题令牌构成的默认外观：主题的 `font-mono`，13pt 字号、20pt 行高，行号用 `muted-foreground`，有光标的行后面是一条淡淡的 `muted` 底色，选区是 `primary` 的浅色，缩进参考线用 `border`，语法颜色是内置的，与 [`TextView`](./text-view.md) 的代码块相同，分浅色和深色两套。每个部件都在这些默认值之上接受应用的样式（`classes` 和 `styles`）。Rust 用 `nsh_base::editor()` 创建它，TSX 用 `nsh/base` 中的 `<Editor>`。
+编辑器负责行为，并带有一套由主题令牌构成的默认外观：主题的 `font-mono`，13pt 字号、20pt 行高，行号用 `muted-foreground`，有光标的行后面是一条淡淡的 `muted` 底色，选区是 `primary` 的浅色，缩进参考线用 `border`，语法颜色与 [`TextView`](./text-view.md) 的代码块相同：内置一套配色，分浅色和深色，主题可以用与角色同名的令牌（`syntax-keyword`、`syntax-string` 等：[主题角色](../modules/nsh-base.md#主题角色)）为某一类代码重新着色。每个部件都在这些默认值之上接受应用的样式（`classes` 和 `styles`）。Rust 用 `nsh_base::editor()` 创建它，TSX 用 `nsh/base` 中的 `<Editor>`。
 
 ```rust tabs
 use nsh_base::editor;

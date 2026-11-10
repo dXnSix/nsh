@@ -296,11 +296,12 @@ NSH 自己绘制的部分通过**角色**读取主题：`theme()` 的各个字�
 | `info` | `Editor` 的信息诊断；`TextView` 的备注（note）块（没有时用各自的蓝色） |
 | `highlight` | `Editor` 的搜索匹配项；`TextView` 的标记文本（没有时用各自的黄色） |
 | `diff-added`、`diff-deleted` | `DiffView` 的新增行和删除行：底色、指示标记、改动的单词以及文件列表中的计数（没有时用它自己的绿色和红色） |
+| `syntax-comment`、`syntax-keyword`、`syntax-string`、`syntax-number`、`syntax-function`、`syntax-property`、`syntax-type` | `Editor`、`DiffView` 和 `TextView` 代码块中高亮的代码：注释、关键字、字符串、数字与常量、函数与类的名称、属性与参数、类型与内置项（没有时用高亮器自己的配色） |
 | `radius` | `theme().radius` |
 | `font-sans` | 所有文本的默认字体；`theme().font_sans` |
 | `font-mono` | `theme().font_mono` |
 
-`selection`、`success`、`warning`、`info`、`highlight`、`diff-added` 和 `diff-deleted` 在默认主题中没有 token：在主题拥有同名 token（`cssVars` 中的
+`selection`、`success`、`warning`、`info`、`highlight`、`diff-added`、`diff-deleted` 和各 `syntax-*` 角色在默认主题中没有 token：在主题拥有同名 token（`cssVars` 中的
 `"warning": "#b45309"`）或把该角色映射到自己的某个 token 之前，各部件绘制自己的颜色。各部件以半透明绘制 `highlight` 和 diff 的底色；token 是不透明的颜色。
 
 角色不是 token，也不是类名：主题有名为 `primary` 的 token 时，`bg-primary` 才是一个类名。在 Rust 中，角色是一个常量，类型为

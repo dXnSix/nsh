@@ -602,6 +602,9 @@ fn line_row(
         .child(dynamic(move || {
             let (cell, _) = cell.get()?;
             let tint = cell.kind;
+            // Read in the row's own scope: its spans are made again when
+            // the theme changes.
+            let palette = crate::syntax::Palette::of_theme();
             let mut list = vec![DiffViewPart::Line];
             match tint {
                 Tint::Added => list.push(DiffViewPart::LineAdded),
@@ -632,7 +635,7 @@ fn line_row(
             for (index, spans) in lines.into_iter().enumerate() {
                 let spans = spans
                     .into_iter()
-                    .map(|span| span_view(props, span, tint))
+                    .map(|span| span_view(props, span, tint, &palette))
                     .collect::<Vec<_>>();
                 let lh = lh.clone();
                 // The code's lines select across rows in the side's area
@@ -663,10 +666,15 @@ fn line_row(
         .child(tint_el)
 }
 
-fn span_view(props: DiffViewProps, span: Span, tint: Tint) -> AnyElement {
+fn span_view(
+    props: DiffViewProps,
+    span: Span,
+    tint: Tint,
+    palette: &crate::syntax::Palette,
+) -> AnyElement {
     let mut el = text(span.text);
     if let Some(token) = span.token {
-        *el.style() = token.style();
+        *el.style() = token.style(palette);
     }
     if span.changed {
         let (color, which): (fn() -> AdaptiveColor, _) = match tint {

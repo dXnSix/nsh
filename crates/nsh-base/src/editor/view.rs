@@ -1256,12 +1256,15 @@ fn row_view(
 fn spans(ed: Ed, slot: ReadSignal<(usize, usize)>, content: RowContent) -> Vec<AnyElement> {
     let props = ed.props;
     let mut out: Vec<AnyElement> = Vec::with_capacity(content.spans.len() + 1);
+    // Read here, in the row's own scope: the spans are made again when the
+    // theme changes.
+    let palette = crate::syntax::Palette::of_theme();
     {
         let st = ed.st.borrow();
         for span in content.spans {
             let mut el = text(span.text);
             if let Some(token) = span.token {
-                *el.style() = token.style();
+                *el.style() = token.style(&palette);
             }
             let tags = span.tags;
             if tags.unnecessary {

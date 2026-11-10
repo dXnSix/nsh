@@ -16,8 +16,9 @@ they do in any text field.
 
 The editor owns behavior and comes with a look of its own built from the theme's tokens: the theme's `font-mono` at
 13pt in 20pt rows, line numbers in `muted-foreground`, a faint `muted` band behind the lines with a caret, selections
-in a tint of `primary`, indent guides in `border`, and the built-in syntax colors that [`TextView`](./text-view.md)'s
-code blocks use, in light and dark. Each part takes the app's styles over these defaults (`classes` and `styles`).
+in a tint of `primary`, indent guides in `border`, and the syntax colors that [`TextView`](./text-view.md)'s
+code blocks use: a built-in palette in light and dark, each kind of code recolored by a theme token of its role's name
+(`syntax-keyword`, `syntax-string`, …: [Theme roles](../modules/nsh-base.md#theme-roles)). Each part takes the app's styles over these defaults (`classes` and `styles`).
 Rust makes one with `nsh_base::editor()`, TSX with `<Editor>` from `nsh/base`.
 
 ```rust tabs

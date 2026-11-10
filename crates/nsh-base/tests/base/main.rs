@@ -40,6 +40,7 @@ mod slider;
 mod status_roles;
 mod submenu;
 mod switch;
+mod syntax_roles;
 mod tabs;
 mod terminal;
 mod text_view;

@@ -430,7 +430,8 @@ import { TextView } from "nsh/base";
 
 Code blocks are highlighted out of the box: for a language named on the fence (`ts`, `tsx`, `rust`, `python`, `bash`,
 `json`, `toml`, `yaml`, `diff` and about two hundred more), the code shows in Allsum's code palette, light or dark with the
-appearance; a block without a language shows plain. An app with highlighting of its own shows its code with
+appearance; a block without a language shows plain. A theme recolors a kind of code with a token of its role's name
+(`syntax-keyword`, `syntax-string`, …: [Theme roles](../modules/nsh-base.md#theme-roles)). An app with highlighting of its own shows its code with
 `renderCodeBlock`, from its own component or one of its Rust crate; a Rust view gives `TextView` its highlighter with
 [`CodeHighlighter`](#syntax-highlighting). Here code with highlighting of the app's own, and an image that fills the
 width:
