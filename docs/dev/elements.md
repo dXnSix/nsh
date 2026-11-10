@@ -288,6 +288,14 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   view, after the input method) through `Native.keyDown` / `keyUp`, the table kept in Rust (`keymap.rs`), never
   encoded for Java. Both leave a composing input method its keys and consume a taken key's release too. Rust views' bindings (`on_key`) join JS's in that one table, and the core runs
   their handlers (`docs/dev/components.md`).
+  Media and TV remote keys (`Key::MediaPlayPause` … `Key::Info`, named `mediaplaypause`, `mediaplay`, `mediapause`,
+  `mediastop`, `mediarewind`, `mediafastforward`, `medianext`, `mediaprevious`, `red`, `green`, `yellow`, `blue`,
+  `channelup`, `channeldown`, `info` in `keymap.rs`'s `NAMED`) edit no text, so their bindings fire in text inputs;
+  `nsh_core::keymap` maps them from Windows' `VK_MEDIA_*` (`from_virtual_key`), Android's key codes
+  (`from_android_keycode`); the web runtime from `KeyboardEvent.key` and Samsung TVs' key codes (`nsh.js`'s
+  `NAMED_KEYS`, `TV_KEY_CODES`), the GPUI backend from the Tizen platform's key names (`keys.rs`' `TV_KEYS`). HID
+  keyboard usages have none (they are consumer usages), and GTK, AppKit and menu shortcuts (`nsh/desktop`) take
+  none.
 - **System UI**: the status bar follows UIKit, where the topmost view controller's `preferredStatusBarStyle` decides
   and Info.plist holds the default: a page's or dialog's `statusBar` (`{ foreground, hidden, animated }`, a host prop
   of screens and modals, `ScreenProp::StatusBar`, decoded to a `StatusBarSetting`; `Screen::status_bar` /

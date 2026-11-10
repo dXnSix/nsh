@@ -935,6 +935,8 @@ impl AppView {
             K::PageUp => Key::PageUp,
             K::PageDown => Key::PageDown,
             K::F(n) => Key::F(n),
+            // Menu items have no media or TV remote keys.
+            _ => return false,
         };
         let m = stroke.modifiers;
         let pressed = nsh_core::desktop::Shortcut {

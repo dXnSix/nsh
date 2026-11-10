@@ -397,10 +397,22 @@ const APPLE = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform ?? navig
  */
 const consumedShortcut = (found) => found >= 0 || found === -2;
 
-/** `nsh_key`'s codes of the keys that are not characters. */
+/** `nsh_key`'s codes of the keys that are not characters (`KeyboardEvent.key`). */
 const NAMED_KEYS = {
   Enter: 256, Escape: 257, Tab: 258, Backspace: 259, Delete: 260, Insert: 261, ArrowUp: 262, ArrowDown: 263,
   ArrowLeft: 264, ArrowRight: 265, Home: 266, End: 267, PageUp: 268, PageDown: 269,
+  // Media keys and a TV remote's.
+  MediaPlayPause: 270, MediaPlay: 271, MediaPause: 272, MediaStop: 273, MediaRewind: 274, MediaFastForward: 275,
+  MediaTrackNext: 276, MediaTrackPrevious: 277, ColorF0Red: 278, ColorF1Green: 279, ColorF2Yellow: 280,
+  ColorF3Blue: 281, ChannelUp: 282, ChannelDown: 283, Info: 284,
+};
+/**
+ * The remote's keys by Samsung TVs' `keyCode`s (`tizen.tvinputdevice`), for
+ * engines whose events give them no `key` ("Unidentified").
+ */
+const TV_KEY_CODES = {
+  10252: 270, 415: 271, 19: 272, 413: 273, 412: 274, 417: 275, 10233: 276, 10232: 277, 403: 278, 404: 279,
+  405: 280, 406: 281, 427: 282, 428: 283, 457: 284,
 };
 /** The US layout's characters of the punctuation keys (`KeyboardEvent.code`). */
 const CODE_CHARS = {
@@ -454,6 +466,7 @@ function keyCode(e) {
   const k = typeof e.key === "string" ? e.key : "";
   const named = NAMED_KEYS[k];
   if (named) return named;
+  if (k === "Unidentified" && TV_KEY_CODES[e.keyCode]) return TV_KEY_CODES[e.keyCode];
   const f = /^F([0-9]{1,2})$/.exec(k);
   if (f) return Number(f[1]) >= 1 && Number(f[1]) <= 24 ? 512 + Number(f[1]) : -1;
   if (k.length === 1 && !e.shiftKey && !e.altKey && k >= " " && k <= "~") return k.toLowerCase().charCodeAt(0);

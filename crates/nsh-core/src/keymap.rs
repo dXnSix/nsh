@@ -17,6 +17,12 @@
 //! on a layout that types no ASCII there (Cyrillic, Greek, ...) by the US
 //! layout's character of the same key, as menus do, so shortcuts work on
 //! any layout.
+//!
+//! Media keys and a TV remote's keys have names of their own
+//! (`"mediaplaypause"`, `"red"`, `"channelup"`, `"info"`, ...: [`Key`]),
+//! from Windows' virtual keys, Android's key codes, the web's
+//! `KeyboardEvent.key` (and Samsung TVs' key codes) and the GPUI backend's
+//! key names (the Tizen platform's), wherever the platform reports them.
 
 use std::fmt;
 
@@ -71,6 +77,36 @@ pub enum Key {
     PageDown,
     /// A function key, F1 to F24.
     F(u8),
+    /// Play / Pause, one key that toggles (media keyboards, TV remotes).
+    MediaPlayPause,
+    /// Play (TV remotes).
+    MediaPlay,
+    /// Pause (TV remotes).
+    MediaPause,
+    /// Stop.
+    MediaStop,
+    /// Rewind.
+    MediaRewind,
+    /// Fast forward.
+    MediaFastForward,
+    /// Next track.
+    MediaNext,
+    /// Previous track.
+    MediaPrevious,
+    /// The TV remote's red key (the web's `ColorF0Red`).
+    ColorRed,
+    /// The TV remote's green key (`ColorF1Green`).
+    ColorGreen,
+    /// The TV remote's yellow key (`ColorF2Yellow`).
+    ColorYellow,
+    /// The TV remote's blue key (`ColorF3Blue`).
+    ColorBlue,
+    /// Channel up.
+    ChannelUp,
+    /// Channel down.
+    ChannelDown,
+    /// Info (the TV remote's information key).
+    Info,
 }
 
 /// The US layout's punctuation keys' Windows virtual-key codes
@@ -116,6 +152,13 @@ impl Key {
             0x60..=0x69 => Key::Char(char::from(b'0' + (vk - 0x60) as u8)),
             // F1 to F24.
             0x70..=0x87 => Key::F((vk - 0x6F) as u8),
+            // `VK_MEDIA_NEXT_TRACK`, `VK_MEDIA_PREV_TRACK`, `VK_MEDIA_STOP`,
+            // `VK_MEDIA_PLAY_PAUSE`; Windows has no virtual keys for the TV
+            // remote's other keys.
+            0xB0 => Key::MediaNext,
+            0xB1 => Key::MediaPrevious,
+            0xB2 => Key::MediaStop,
+            0xB3 => Key::MediaPlayPause,
             _ => {
                 return OEM_KEYS
                     .iter()
@@ -147,8 +190,23 @@ impl Key {
             Key::Char(c @ '0'..='9') => c as u16,
             Key::Char(c @ 'a'..='z') => c.to_ascii_uppercase() as u16,
             Key::F(n @ 1..=24) => 0x6F + u16::from(n),
+            Key::MediaNext => 0xB0,
+            Key::MediaPrevious => 0xB1,
+            Key::MediaStop => 0xB2,
+            Key::MediaPlayPause => 0xB3,
             Key::Char(c) => return OEM_KEYS.iter().find(|(_, k)| *k == c).map(|&(vk, _)| vk),
-            Key::F(_) => return None,
+            Key::F(_)
+            | Key::MediaPlay
+            | Key::MediaPause
+            | Key::MediaRewind
+            | Key::MediaFastForward
+            | Key::ColorRed
+            | Key::ColorGreen
+            | Key::ColorYellow
+            | Key::ColorBlue
+            | Key::ChannelUp
+            | Key::ChannelDown
+            | Key::Info => return None,
         })
     }
 
@@ -189,7 +247,9 @@ impl Key {
     }
 
     /// The USB HID keyboard usage of this key (the main keyboard's, not
-    /// the keypad's): what a hardware keyboard sends for it.
+    /// the keypad's): what a hardware keyboard sends for it. The media and
+    /// TV keys have none: they are consumer usages (page 12), not keyboard
+    /// ones.
     pub fn hid_usage(self) -> Option<u16> {
         Some(match self {
             Key::Char(c @ 'a'..='z') => 4 + u16::from(c as u8 - b'a'),
@@ -213,12 +273,14 @@ impl Key {
             Key::Down => 81,
             Key::Up => 82,
             Key::Char(c) => return HID_KEYS.iter().find(|(_, k)| *k == c).map(|&(u, _)| u),
-            Key::F(_) => return None,
+            _ => return None,
         })
     }
 
     /// The key of Android key code `code` (`KeyEvent.KEYCODE_*`); the
-    /// keypad's digits and Enter too.
+    /// keypad's digits and Enter too, and the media and TV remote keys
+    /// (`KEYCODE_MEDIA_*`, `KEYCODE_PROG_*`, `KEYCODE_CHANNEL_*`,
+    /// `KEYCODE_INFO`).
     pub fn from_android_keycode(code: i32) -> Option<Key> {
         Some(match code {
             7..=16 => Key::Char(char::from(b'0' + (code - 7) as u8)),
@@ -240,6 +302,21 @@ impl Key {
             124 => Key::Insert,
             131..=142 => Key::F((code - 130) as u8),
             144..=153 => Key::Char(char::from(b'0' + (code - 144) as u8)),
+            85 => Key::MediaPlayPause,
+            86 => Key::MediaStop,
+            87 => Key::MediaNext,
+            88 => Key::MediaPrevious,
+            89 => Key::MediaRewind,
+            90 => Key::MediaFastForward,
+            126 => Key::MediaPlay,
+            127 => Key::MediaPause,
+            165 => Key::Info,
+            166 => Key::ChannelUp,
+            167 => Key::ChannelDown,
+            183 => Key::ColorRed,
+            184 => Key::ColorGreen,
+            185 => Key::ColorYellow,
+            186 => Key::ColorBlue,
             _ => {
                 return ANDROID_KEYS
                     .iter()
@@ -271,9 +348,48 @@ impl Key {
             Key::End => 123,
             Key::Insert => 124,
             Key::F(n @ 1..=12) => 130 + i32::from(n),
+            Key::MediaPlayPause => 85,
+            Key::MediaStop => 86,
+            Key::MediaNext => 87,
+            Key::MediaPrevious => 88,
+            Key::MediaRewind => 89,
+            Key::MediaFastForward => 90,
+            Key::MediaPlay => 126,
+            Key::MediaPause => 127,
+            Key::Info => 165,
+            Key::ChannelUp => 166,
+            Key::ChannelDown => 167,
+            Key::ColorRed => 183,
+            Key::ColorGreen => 184,
+            Key::ColorYellow => 185,
+            Key::ColorBlue => 186,
             Key::Char(c) => return ANDROID_KEYS.iter().find(|(_, k)| *k == c).map(|&(k, _)| k),
             Key::F(_) => return None,
         })
+    }
+
+    /// A media key or a TV remote's key ([`Key::MediaPlayPause`] to
+    /// [`Key::Info`]): keys a keyboard's layout has no part in, which
+    /// edit no text.
+    pub fn is_media_or_remote(self) -> bool {
+        matches!(
+            self,
+            Key::MediaPlayPause
+                | Key::MediaPlay
+                | Key::MediaPause
+                | Key::MediaStop
+                | Key::MediaRewind
+                | Key::MediaFastForward
+                | Key::MediaNext
+                | Key::MediaPrevious
+                | Key::ColorRed
+                | Key::ColorGreen
+                | Key::ColorYellow
+                | Key::ColorBlue
+                | Key::ChannelUp
+                | Key::ChannelDown
+                | Key::Info
+        )
     }
 }
 
@@ -380,6 +496,30 @@ const NAMED: &[(&str, Key)] = &[
     // The plus key is the one typing `=`, as on the US layout.
     ("plus", Key::Char('=')),
     ("minus", Key::Char('-')),
+    // Media keys and the TV remote's: named as the GPUI backend's key
+    // names are, the web's `KeyboardEvent.key` names lowercased beside
+    // them where they differ.
+    ("mediaplaypause", Key::MediaPlayPause),
+    ("mediaplay", Key::MediaPlay),
+    ("mediapause", Key::MediaPause),
+    ("mediastop", Key::MediaStop),
+    ("mediarewind", Key::MediaRewind),
+    ("mediafastforward", Key::MediaFastForward),
+    ("medianext", Key::MediaNext),
+    ("mediatracknext", Key::MediaNext),
+    ("mediaprevious", Key::MediaPrevious),
+    ("mediatrackprevious", Key::MediaPrevious),
+    ("red", Key::ColorRed),
+    ("colorf0red", Key::ColorRed),
+    ("green", Key::ColorGreen),
+    ("colorf1green", Key::ColorGreen),
+    ("yellow", Key::ColorYellow),
+    ("colorf2yellow", Key::ColorYellow),
+    ("blue", Key::ColorBlue),
+    ("colorf3blue", Key::ColorBlue),
+    ("channelup", Key::ChannelUp),
+    ("channeldown", Key::ChannelDown),
+    ("info", Key::Info),
 ];
 
 fn error(text: &str, reason: impl fmt::Display) -> KeystrokeError {
@@ -396,7 +536,10 @@ impl Keystroke {
     /// `/`, `[`, `=`: the plus key is `=`, `shift+=` with Shift), `space`,
     /// `enter`, `escape`, `tab`, `backspace`, `delete`, the arrows `up` /
     /// `down` / `left` / `right`, `home`, `end`, `pageup`, `pagedown`, `f1`
-    /// to `f24`.
+    /// to `f24`; the media and TV remote keys `mediaplaypause`, `mediaplay`,
+    /// `mediapause`, `mediastop`, `mediarewind`, `mediafastforward`,
+    /// `medianext`, `mediaprevious`, `red`, `green`, `yellow`, `blue`,
+    /// `channelup`, `channeldown`, `info`.
     pub fn parse(text: &str, os: Os) -> Result<Keystroke, KeystrokeError> {
         Keystroke::parse_with(text, apple_keys(os, false))
     }
@@ -462,11 +605,13 @@ impl Keystroke {
     /// keystroke itself: keys that type, move the caret or delete, and the
     /// editing shortcuts (select all, cut, copy, paste, undo, redo).
     /// Bindings of these keystrokes do not fire while text is edited,
-    /// unless they ask to ([`When::Always`]).
+    /// unless they ask to ([`When::Always`]). The function, media and TV
+    /// remote keys edit nothing.
     pub fn edits_text(&self) -> bool {
         let m = self.modifiers;
         match self.key {
             Key::F(_) => false,
+            key if key.is_media_or_remote() => false,
             Key::Char(c) => !(m.cmd || m.ctrl) || matches!(c, 'a' | 'c' | 'v' | 'x' | 'y' | 'z'),
             _ => true,
         }
@@ -657,6 +802,21 @@ impl Keystroke {
             Key::End => s.push_str(named("↘", "End")),
             Key::PageUp => s.push_str(named("⇞", "PgUp")),
             Key::PageDown => s.push_str(named("⇟", "PgDn")),
+            Key::MediaPlayPause => s.push_str("Play/Pause"),
+            Key::MediaPlay => s.push_str("Play"),
+            Key::MediaPause => s.push_str("Pause"),
+            Key::MediaStop => s.push_str("Stop"),
+            Key::MediaRewind => s.push_str("Rewind"),
+            Key::MediaFastForward => s.push_str("Fast Forward"),
+            Key::MediaNext => s.push_str("Next Track"),
+            Key::MediaPrevious => s.push_str("Previous Track"),
+            Key::ColorRed => s.push_str("Red"),
+            Key::ColorGreen => s.push_str("Green"),
+            Key::ColorYellow => s.push_str("Yellow"),
+            Key::ColorBlue => s.push_str("Blue"),
+            Key::ChannelUp => s.push_str("Channel Up"),
+            Key::ChannelDown => s.push_str("Channel Down"),
+            Key::Info => s.push_str("Info"),
         }
         s
     }
@@ -1163,5 +1323,139 @@ mod tests {
         assert_eq!(KeyMatch::Fire(3).fired(), Some(3));
         assert!(KeyMatch::Fire(3).consumed() && KeyMatch::Held.consumed());
         assert_eq!(KeyMatch::Held.fired(), None);
+    }
+
+    /// The media and TV remote keys: names, labels and the platforms'
+    /// codes.
+    mod tv {
+        use super::*;
+
+        /// Every TV key with its canonical name.
+        const KEYS: &[(&str, Key)] = &[
+            ("mediaplaypause", Key::MediaPlayPause),
+            ("mediaplay", Key::MediaPlay),
+            ("mediapause", Key::MediaPause),
+            ("mediastop", Key::MediaStop),
+            ("mediarewind", Key::MediaRewind),
+            ("mediafastforward", Key::MediaFastForward),
+            ("medianext", Key::MediaNext),
+            ("mediaprevious", Key::MediaPrevious),
+            ("red", Key::ColorRed),
+            ("green", Key::ColorGreen),
+            ("yellow", Key::ColorYellow),
+            ("blue", Key::ColorBlue),
+            ("channelup", Key::ChannelUp),
+            ("channeldown", Key::ChannelDown),
+            ("info", Key::Info),
+        ];
+
+        #[test]
+        fn names_round_trip() {
+            for &(name, key) in KEYS {
+                let stroke = Keystroke::parse(name, Os::Linux).unwrap();
+                assert_eq!(stroke.key, key, "{name}");
+                assert_eq!(stroke.to_string(), name);
+                assert!(key.is_media_or_remote(), "{name}");
+                // In any case, with modifiers.
+                let upper = Keystroke::parse(&name.to_ascii_uppercase(), Os::Linux).unwrap();
+                assert_eq!(upper.key, key);
+                let shifted = Keystroke::parse(&format!("shift+{name}"), Os::Linux).unwrap();
+                assert_eq!(shifted.to_string(), format!("shift+{name}"));
+            }
+            assert!(!Key::Enter.is_media_or_remote());
+            assert!(!Key::F(5).is_media_or_remote());
+        }
+
+        #[test]
+        fn the_webs_names_are_aliases() {
+            let key = |t| Keystroke::parse(t, Os::Web).unwrap().key;
+            assert_eq!(key("MediaTrackNext"), Key::MediaNext);
+            assert_eq!(key("MediaTrackPrevious"), Key::MediaPrevious);
+            assert_eq!(key("ColorF0Red"), Key::ColorRed);
+            assert_eq!(key("ColorF1Green"), Key::ColorGreen);
+            assert_eq!(key("ColorF2Yellow"), Key::ColorYellow);
+            assert_eq!(key("ColorF3Blue"), Key::ColorBlue);
+            assert_eq!(key("MediaPlayPause"), Key::MediaPlayPause);
+            assert_eq!(key("ChannelUp"), Key::ChannelUp);
+            // The canonical text is the short name.
+            assert_eq!(
+                Keystroke::parse("colorf0red", Os::Web).unwrap().to_string(),
+                "red"
+            );
+        }
+
+        #[test]
+        fn labels() {
+            let label = |t, os, apple| Keystroke::parse_with(t, apple).unwrap().label(os, apple);
+            assert_eq!(label("mediaplaypause", Os::Linux, false), "Play/Pause");
+            assert_eq!(label("mediafastforward", Os::MacOs, true), "Fast Forward");
+            assert_eq!(label("medianext", Os::Windows, false), "Next Track");
+            assert_eq!(label("red", Os::Web, false), "Red");
+            assert_eq!(label("channeldown", Os::Linux, false), "Channel Down");
+            assert_eq!(label("shift+info", Os::MacOs, true), "⇧Info");
+        }
+
+        #[test]
+        fn they_fire_in_text_inputs() {
+            for &(name, _) in KEYS {
+                let stroke = Keystroke::parse(name, Os::Linux).unwrap();
+                assert!(!stroke.edits_text(), "{name}");
+                assert!(KeyBinding::new(1, stroke, When::Auto, false).in_text);
+                assert_eq!(stroke.reserved(Os::Linux), None);
+            }
+        }
+
+        #[test]
+        fn windows_virtual_keys() {
+            assert_eq!(Key::from_virtual_key(0xB0), Some(Key::MediaNext));
+            assert_eq!(Key::from_virtual_key(0xB1), Some(Key::MediaPrevious));
+            assert_eq!(Key::from_virtual_key(0xB2), Some(Key::MediaStop));
+            assert_eq!(Key::from_virtual_key(0xB3), Some(Key::MediaPlayPause));
+            for (vk, key) in [
+                (0xB0, Key::MediaNext),
+                (0xB1, Key::MediaPrevious),
+                (0xB2, Key::MediaStop),
+                (0xB3, Key::MediaPlayPause),
+            ] {
+                assert_eq!(key.virtual_key(), Some(vk));
+            }
+            // Windows has no virtual keys for the remote's other keys.
+            for key in [Key::MediaPlay, Key::ColorRed, Key::ChannelUp, Key::Info] {
+                assert_eq!(key.virtual_key(), None, "{key:?}");
+            }
+        }
+
+        #[test]
+        fn android_key_codes() {
+            let codes = [
+                (85, Key::MediaPlayPause),
+                (86, Key::MediaStop),
+                (87, Key::MediaNext),
+                (88, Key::MediaPrevious),
+                (89, Key::MediaRewind),
+                (90, Key::MediaFastForward),
+                (126, Key::MediaPlay),
+                (127, Key::MediaPause),
+                (165, Key::Info),
+                (166, Key::ChannelUp),
+                (167, Key::ChannelDown),
+                (183, Key::ColorRed),
+                (184, Key::ColorGreen),
+                (185, Key::ColorYellow),
+                (186, Key::ColorBlue),
+            ];
+            for (code, key) in codes {
+                assert_eq!(Key::from_android_keycode(code), Some(key), "{code}");
+                assert_eq!(key.android_keycode(), Some(code), "{key:?}");
+            }
+            assert_eq!(codes.len(), KEYS.len());
+        }
+
+        #[test]
+        fn hid_usages_have_none() {
+            for &(_, key) in KEYS {
+                assert_eq!(key.hid_usage(), None, "{key:?}");
+            }
+        }
     }
 }

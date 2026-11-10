@@ -363,9 +363,7 @@ impl Native for GpuiNative {
     fn press_keys(&self, keys: &str) -> Result<(), String> {
         let stroke = nsh_core::keymap::Keystroke::parse(keys, crate::keymap::OS)
             .map_err(|e| e.to_string())?;
-        let vk = stroke
-            .key
-            .virtual_key()
+        let vk = crate::keys::virtual_key(stroke.key)
             .ok_or_else(|| format!("{keys:?} has no key on this keyboard"))?;
         let m = stroke.modifiers;
         let modifiers = Modifiers {
