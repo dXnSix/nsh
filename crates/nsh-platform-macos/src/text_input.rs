@@ -777,6 +777,25 @@ impl Ctx {
             }
             return true;
         }
+        // Up and Down of a single line (`moveUp:` / `moveDown:`: the arrows,
+        // and Ctrl+P / Ctrl+N, AppKit's bindings for them) move the
+        // keyboard focus to the stop that way, as on GPUI and Windows; with
+        // none there they move the caret to the start / end, as before.
+        if !multiline
+            && !text_view.hasMarkedText()
+            && (command == sel!(moveUp:) || command == sel!(moveDown:))
+            && let Some(surface) = self.surface.upgrade()
+        {
+            let arrow = if command == sel!(moveUp:) {
+                crate::focus::Arrow::Up
+            } else {
+                crate::focus::Arrow::Down
+            };
+            let from: Retained<NSView> = Retained::from(text_view as &NSView);
+            if crate::focus::arrow(&surface, Some(&from), arrow) {
+                return true;
+            }
+        }
         // Backspace in an empty input deletes nothing, so no change
         // reports it.
         if command == sel!(deleteBackward:)
@@ -818,6 +837,14 @@ pub(crate) fn key_view(view: &NshView) -> Option<Retained<NSView>> {
     let input = view.state().input.clone()?;
     let responder = input.editor.borrow().responder();
     Some(responder)
+}
+
+/// Whether input `view` edits (its config's `editable`).
+pub(crate) fn editable(view: &NshView) -> bool {
+    view.state()
+        .input
+        .as_ref()
+        .is_some_and(|input| input.config.borrow().editable)
 }
 
 /// Defines a field class: `NSTextField` or `NSSecureTextField` that tells

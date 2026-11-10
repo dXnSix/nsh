@@ -271,8 +271,10 @@ any layout; the dev host's Cmd+R is a local key monitor (`dev.rs`).
   a single line; `insertLineBreak:` alone would insert U+2028), Option+Tab (a tab character in a multiline input
   only), Tab / Shift+Tab / Ctrl+Tab (`tab`: the next field, pressable view or hosted AppKit view that can be a key view, in
   tree order within the newest dialog: `input::tab_stops` through `nsh_core::input::tab_stop`, not AppKit's key view
-  loop, which goes by the views' places on screen) and Escape (leaves the field). Keys a field uses never reach the
-  root, so Option+Left moves the caret and Cmd+[ does nothing there.
+  loop, which goes by the views' places on screen), Up / Down of a single line (`moveUp:` / `moveDown:`, also
+  Ctrl+P / Ctrl+N: the keyboard focus to the stop that way, `focus::arrow`, else the caret to the start / end) and
+  Escape (leaves the field). Keys a field uses never reach the root, so Option+Left moves the caret and Cmd+[ does
+  nothing there.
 - **Input method compositions** (`text_input.rs` `Ctx::composition_changed`): the editing view's marked text is
   followed after each change, selection change and unmark, and reported as `onCompositionChange` (as it starts and
   changes, and as it ends, after the `onChangeText` of the committed text). Leaving the field commits it, as a browser's
@@ -283,9 +285,10 @@ any layout; the dev host's Cmd+R is a local key monitor (`dev.rs`).
   by then, so the input method's session continues undisturbed.
 - **At the root** (`view.rs` `keyDown:` → `input::key`): the selected text's Cmd+A / Cmd+C / Escape (`text.rs`;
   also the root's `selectAll:` / `copy:` for the menu), going back (`navigation::key_pressed`: Escape, Option+Left,
-  Cmd+[), Tab / Shift+Tab into fields and pressable views (in tree order, as from a field), and scrolling the scroll view around the focused view or under the mouse:
-  arrows by a line, Page Up / Down, Option+Up / Down and Space / Shift+Space by a page, Home / End and Cmd+Up / Down
-  to the edges. The mouse's back button goes back from `input::event`.
+  Cmd+[), Tab / Shift+Tab into fields and pressable views (in tree order, as from a field), the arrows (no modifier)
+  to the nearest stop in their direction (`focus::arrow`, "Keyboard focus for views" below), and scrolling the scroll
+  view around the focused view or under the mouse: arrows that move no focus by a line, Page Up / Down, Option+Up /
+  Down and Space / Shift+Space by a page, Home / End and Cmd+Up / Down to the edges. The mouse's back button goes back from `input::event`.
 - **The app's shortcuts** (`nsh`'s `keymap`, `keymap.rs`): while the surface has bindings, a local key-down monitor
   matches every key of its window against the mounted table (`Keymap::find`) before AppKit dispatches it, so they
   come before menus' key equivalents, the field editor's key bindings and the root's keys (Escape going back,
@@ -527,6 +530,28 @@ newest modal is focused. When a lower modal closes under a newer one, the
 newer one that remembered a view of it remembers the lower one's instead, so
 closing it later returns to the view that opened the stack.
 
+The arrow keys (no modifier) move the keyboard focus to the nearest stop in
+their direction, as on GPUI and Windows (`focus.rs`, through
+`nsh_core::focus::candidates`, `horizontal` and `vertical`; before 2026-11-10
+they only scrolled): the stops Tab goes through in the focus scope, less the
+hosted AppKit views (which keep the keys once focused) and the layers a
+backdrop over the page covers (`focus::covering_layer`), over their frames in
+the window's points as they show: flipped, the scroll views' offsets (their
+scroll state, which the bounds follow only once a scroll settles) and the
+views' transforms applied (`input::to_top`, the box around the four corners;
+AppKit's `convertRect:` would leave the layer transforms out). Left / Right go
+to the nearest on an overlapping row, Up / Down to the nearest below / above,
+an overlapping column first; a menu item's Left / Right stay in its popup.
+With nothing focused (the root has the keyboard) Left / Right take the first
+stop and Up / Down the first / last in sight (an open anchored popup's first),
+where they used to scroll: the desktops and GPUI agree on it. The view reached
+becomes first responder (`input::focus_control`) and is scrolled into view
+(`scroll::reveal`), a field reached takes the typing (`text_input::focus`, the
+caret at the end). The app's bindings (the key monitor), the focused field's
+own arrows (Left / Right, and Up / Down of a multiline input; a single line
+hands Up / Down over from `moveUp:` / `moveDown:`), the selection's keys and
+going back come first; an arrow that moves no focus scrolls as before.
+
 Focused stops update the existing `focus:` interaction state and report
 `onFocus` / `onBlur`. On a stop that takes presses (`input::is_key_control`),
 unmodified Return, keypad Enter and Space emit PressIn/PressOut/Press once on
@@ -543,6 +568,11 @@ Only root views retain a surface reference. A focused child's keyboard callbacks
 resolve its surface through ancestors; pointer and drawing callbacks keep their
 existing root-only lookup. This avoids attaching per-button monitors or changing
 the public event protocol.
+
+`tests/apps/pressable-focus` checks Tab, Shift+Tab, the arrows, a field
+keeping Left / Right, Return and Space on the real host:
+`nsh test tests/apps/pressable-focus --target macos` (with
+`cargo build -p nsh-macos-host` first in a checkout).
 
 Checked with synthesized keys and clicks (Tab, Return, Space, Escape, a
 click): Tab between pressables, Return and Space pressing the focused one, Tab
