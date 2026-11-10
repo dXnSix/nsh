@@ -267,11 +267,14 @@ pub enum CloseRequest {
 /// for the engine, so they take `cx` to redraw at once: call them through
 /// `view.update(cx, |view, cx| …)`.
 ///
+/// In a running GPUI app (`gpui_platform::application().run(|cx| …)` with the
+/// feature `platform`, or the app a platform of the host's own runs):
+///
 /// ```no_run
-/// use gpui::{AppContext, Application, WindowOptions};
+/// use nsh_platform_gpui::gpui::{self, AppContext, WindowOptions};
 /// use nsh_platform_gpui::{App, AppOptions, AppView, Bundle};
 ///
-/// gpui_platform::application().run(|cx| {
+/// fn open(cx: &mut gpui::App) {
 ///     cx.open_window(WindowOptions::default(), |window, cx| {
 ///         cx.new(|cx| {
 ///             let view = AppView::new(AppOptions::default(), window, cx);
@@ -281,7 +284,7 @@ pub enum CloseRequest {
 ///         })
 ///     })
 ///     .unwrap();
-/// });
+/// }
 /// ```
 pub struct AppView {
     surface: Rc<Surface>,
