@@ -276,19 +276,26 @@ pub(crate) fn tizen(dev: bool, archs: &[crate::tizen::Arch]) -> anyhow::Result<P
     }
 }
 
-/// The Tizen target specs and the nightly they build with
-/// (`runtime/tizen/targets`), for an app's Rust crates.
+/// The Tizen target specs, the nightly they build with and the symbol
+/// allowlist a TV library is checked against (`runtime/tizen/targets`),
+/// for an app's Rust crates.
 pub(crate) fn tizen_targets() -> anyhow::Result<PathBuf> {
     let release = prebuilt_tizen(false, &[])?;
     let targets = release
         .parent()
         .context("the Tizen runtime's directory")?
         .join("targets");
-    if !targets.join("toolchain").exists() {
-        bail!(
-            "the Tizen runtime has no target specs at {}\nin a nsh checkout, build it with: cargo xtask tizen",
-            targets.display()
-        );
+    for (file, what) in [
+        ("toolchain", "target specs"),
+        (crate::tizen::ALLOWLIST, "symbol allowlist"),
+    ] {
+        if !targets.join(file).exists() {
+            bail!(
+                "the Tizen runtime has no {what} at {} (an older tizen component: `nsh component remove tizen`, then `nsh component add tizen`)\n\
+                 in a nsh checkout, build it with: cargo xtask tizen",
+                targets.join(file).display()
+            );
+        }
     }
     Ok(targets)
 }

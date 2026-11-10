@@ -7,6 +7,7 @@
 //! runtime/tizen/{release,dev}/Nsh.Tizen.Host.dll   the host (and its .deps.json)
 //! runtime/tizen/{release,dev}/<arch>/libnsh.so     armv7l, aarch64, x86_64
 //! runtime/tizen/targets/<spec>.json, toolchain     the target specs and their nightly (apps' Rust crates)
+//! runtime/tizen/targets/symbols.allow             what an app's library may import ([`symbols`])
 //! ```
 //!
 //! `nsh package --target tizen` writes a TPK ([`package`]):
@@ -56,6 +57,8 @@ use crate::{
     package::{AppConfig, PackageOptions},
     tizen_web, ui,
 };
+
+pub(crate) mod symbols;
 
 /// A TV's architecture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
@@ -1336,43 +1339,13 @@ pub(crate) fn cross_command(
     Ok((command, spec, cross.rustlib_bin))
 }
 
-/// The one symbol a TV library exports: the C# host's P/Invoke.
+/// The one symbol a TV library exports: the C# host's P/Invoke
+/// ([`symbols::check_library`] checks it is the only one).
 pub(crate) const ENTRY: &str = "nsh_tizen_main";
 
-/// dXn.GpuiTizen's checkout, whose symbol check an app's library goes
-/// through: `dxn_gpui_tizen` (`DXN_GPUI_TIZEN`), else `../dXn.GpuiTizen`
-/// next to the checkout of nsh the app builds against (`nsh_source`), as
-/// `cargo xtask tizen` finds it; `None` when that holds no `xtask`.
-pub(crate) fn dxn_gpui_tizen(
-    dxn_gpui_tizen: Option<std::ffi::OsString>,
-    nsh_source: Option<&Path>,
-) -> Option<PathBuf> {
-    let dir = match dxn_gpui_tizen.filter(|dir| !dir.is_empty()) {
-        Some(dir) => PathBuf::from(dir),
-        None => nsh_source?.join("../dXn.GpuiTizen"),
-    };
-    dir.join("xtask").is_dir().then_some(dir)
-}
-
-/// dXn.GpuiTizen's symbol check of the TV library `library`, in its
-/// checkout `dxn` (`cargo xtask check-symbols`, with its pinned nightly's
-/// `llvm-nm` and `llvm-readobj`): exactly one export, [`ENTRY`], nothing
-/// weak, and only documented Tizen symbols (its `symbols.allow`), glibc,
-/// `libgcc_s` and the loader imported, as `cargo xtask tizen` checks the
-/// runtime (`--check-symbols --entry nsh_tizen_main`).
-pub(crate) fn symbol_check(dxn: &Path, library: &Path) -> Command {
-    let mut command = Command::new("cargo");
-    command
-        .current_dir(dxn)
-        .args(["xtask", "check-symbols"])
-        .arg(library)
-        .args(["--entry", ENTRY])
-        // Its `rust-toolchain.toml` picks the toolchain there.
-        .env_remove("RUSTUP_TOOLCHAIN")
-        .env_remove("RUSTC")
-        .env_remove("CARGO");
-    command
-}
+/// The symbol allowlist in the component's `targets/` (dXn.GpuiTizen's
+/// `symbols.allow`, which `cargo xtask tizen` copies there).
+pub(crate) const ALLOWLIST: &str = "symbols.allow";
 
 /// The nightly's `llvm-strip` (in `rustlib_bin`) writing `library` to `to`
 /// without what the loader does not need (`--strip-unneeded`: the export
@@ -1871,34 +1844,7 @@ mod tests {
     }
 
     #[test]
-    fn an_apps_library_is_checked_by_dxn_gpui_tizen_and_stripped() {
-        let check = symbol_check(
-            Path::new("/src/dXn.GpuiTizen"),
-            Path::new("/t/armv7-tizen-linux-gnueabi/release/libapp_tizen_lib.so"),
-        );
-        assert_eq!(check.get_program(), "cargo");
-        assert_eq!(
-            check.get_current_dir(),
-            Some(Path::new("/src/dXn.GpuiTizen"))
-        );
-        assert_eq!(
-            args(&check),
-            [
-                "xtask",
-                "check-symbols",
-                "/t/armv7-tizen-linux-gnueabi/release/libapp_tizen_lib.so",
-                "--entry",
-                "nsh_tizen_main",
-            ]
-        );
-        // dXn.GpuiTizen's `rust-toolchain.toml` picks its nightly.
-        let mut removed: Vec<String> = check
-            .get_envs()
-            .filter(|(_, value)| value.is_none())
-            .map(|(key, _)| key.to_string_lossy().into_owned())
-            .collect();
-        removed.sort();
-        assert_eq!(removed, ["CARGO", "RUSTC", "RUSTUP_TOOLCHAIN"]);
+    fn an_apps_library_is_stripped_as_the_runtime_is() {
         let strip = strip_command(
             Path::new("/rustlib/bin"),
             Path::new("/t/libapp.so"),
@@ -1917,27 +1863,6 @@ mod tests {
                 "/t/libapp.so"
             ]
         );
-        // The checkout: DXN_GPUI_TIZEN, else next to nsh's.
-        let dir = std::env::temp_dir().join(format!("nsh-tizen-dxn-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("nsh")).unwrap();
-        assert_eq!(dxn_gpui_tizen(None, Some(&dir.join("nsh"))), None);
-        assert_eq!(dxn_gpui_tizen(None, None), None);
-        fs::create_dir_all(dir.join("dXn.GpuiTizen/xtask")).unwrap();
-        assert_eq!(
-            dxn_gpui_tizen(None, Some(&dir.join("nsh"))),
-            Some(dir.join("nsh/../dXn.GpuiTizen"))
-        );
-        fs::create_dir_all(dir.join("elsewhere/xtask")).unwrap();
-        assert_eq!(
-            dxn_gpui_tizen(Some(dir.join("elsewhere").into()), Some(&dir.join("nsh"))),
-            Some(dir.join("elsewhere"))
-        );
-        assert_eq!(
-            dxn_gpui_tizen(Some(dir.join("nothing").into()), Some(&dir.join("nsh"))),
-            None
-        );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

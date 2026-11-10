@@ -98,9 +98,10 @@ nsh test --target tizen --device 192.168.1.5:26101   # 有多台设备时选其�
   或设置 `TIZEN_ROOTSTRAP_ARMV7`、`TIZEN_ROOTSTRAP_AARCH64`、`TIZEN_ROOTSTRAP_X86_64`）；
 - SDK 的 GCC 9.2 工具链
   （`~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license NativeToolchain-Gcc-9.2`；
-  或设置 `TIZEN_GCC_TOOLCHAIN_<ARCH>`）；
-- [dXn.GpuiTizen](https://github.com/dXnSix/dXn.GpuiTizen) 的源码检出，每个电视库都要通过它的符号检查（只导出 `nsh_tizen_main`，
-  只调用 Tizen 有文档的 API）：`DXN_GPUI_TIZEN`，否则为 NSH 源码检出旁边的 `dXn.GpuiTizen`。
+  或设置 `TIZEN_GCC_TOOLCHAIN_<ARCH>`）。
+
+`nsh` 像检查自己的运行时一样检查它构建的库：只能导出 `nsh_tizen_main`，只能导入 Tizen 有文档的 API（`tizen` 组件附带的列表）、glibc 和
+`libgcc_s`；否则构建会停下并列出这些符号。
 
 NSH 的 Tizen crate 不发布到 crates.io（运行时以构建好的 `tizen` 组件提供），所以这类应用需要基于 NSH 的源码检出构建
 （`nsh init --template rust --nsh-source <dir>`）；应用的 crate 从 crates.io 获取 NSH 时，`--target tizen` 会停下并说明原因。

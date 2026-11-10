@@ -11,6 +11,8 @@
 //! target/tizen/{release,dev}/symbols/<arch>/libnsh.so  the same with its symbols
 //! target/tizen/targets/<spec>.json, toolchain          the target specs and the nightly they
 //!                                                      build with, for apps' Rust crates
+//! target/tizen/targets/symbols.allow                   dXn.GpuiTizen's symbol allowlist, which
+//!                                                      the CLI checks apps' libraries against
 //! ```
 //!
 //! dXn.GpuiTizen's checkout is `DXN_GPUI_TIZEN`, else `../dXn.GpuiTizen`
@@ -223,6 +225,25 @@ pub(crate) fn layout(
     (copies, strips)
 }
 
+/// The symbol allowlist of TV libraries in dXn.GpuiTizen's checkout, and
+/// its name in the runtime's `targets/` (the CLI's `tizen::ALLOWLIST`).
+const ALLOWLIST: (&str, &str) = ("crates/dxn_gpui_tizen_sys/symbols.allow", "symbols.allow");
+
+/// What the runtime's `targets/` takes from dXn.GpuiTizen's checkout `dxn`
+/// (from, to in `targets`): the target specs and the symbol allowlist an
+/// app's library is checked against (`toolchain` is written beside them).
+pub(crate) fn target_copies(dxn: &Path, targets: &Path) -> Vec<Pair> {
+    let mut copies: Vec<Pair> = ARCHS
+        .iter()
+        .map(|arch| {
+            let spec = format!("{}.json", arch.spec());
+            (dxn.join("targets").join(&spec), targets.join(spec))
+        })
+        .collect();
+    copies.push((dxn.join(ALLOWLIST.0), targets.join(ALLOWLIST.1)));
+    copies
+}
+
 /// The nightly dXn.GpuiTizen builds its TV libraries with (`channel` in
 /// its `rust-toolchain.toml`).
 pub(crate) fn toolchain_channel(rust_toolchain: &str) -> anyhow::Result<String> {
@@ -237,8 +258,8 @@ pub(crate) fn toolchain_channel(rust_toolchain: &str) -> anyhow::Result<String> 
 
 /// The distribution's Tizen runtime (`runtime/tizen` in `out`) from the
 /// build in `built` (`target/tizen`): both variants' host and stripped
-/// libraries for `archs`, and the target specs with their toolchain; the
-/// symbols stay in the build.
+/// libraries for `archs`, and the target specs with their toolchain and the
+/// symbol allowlist; the symbols stay in the build.
 pub(crate) fn dist_files(built: &Path, out: &Path, archs: &[Arch]) -> Vec<(PathBuf, PathBuf)> {
     let mut files = Vec::new();
     for (_, name) in Variant::Both.dirs() {
@@ -253,7 +274,7 @@ pub(crate) fn dist_files(built: &Path, out: &Path, archs: &[Arch]) -> Vec<(PathB
     for file in ARCHS
         .iter()
         .map(|arch| format!("{}.json", arch.spec()))
-        .chain(["toolchain".to_owned()])
+        .chain(["toolchain".to_owned(), ALLOWLIST.1.to_owned()])
     {
         let file = Path::new("targets").join(file);
         files.push((built.join(&file), out.join(&file)));
@@ -349,9 +370,8 @@ pub(crate) fn build(
     }
     let targets = out.join("targets");
     fs::create_dir_all(&targets)?;
-    for arch in ARCHS {
-        let spec = format!("{}.json", arch.spec());
-        crate::dist::copy(&dxn.join("targets").join(&spec), &targets.join(&spec))?;
+    for (from, to) in target_copies(&dxn, &targets) {
+        crate::dist::copy(&from, &to)?;
     }
     fs::write(targets.join("toolchain"), format!("{toolchain}\n"))?;
     term::note(out.strip_prefix(&root).unwrap_or(&out).display());
@@ -571,6 +591,42 @@ mod tests {
     }
 
     #[test]
+    fn the_targets_take_the_specs_and_the_symbol_allowlist() {
+        let copies = target_copies(Path::new("/dxn"), Path::new("/o/targets"));
+        let pairs: Vec<(String, String)> = copies
+            .iter()
+            .map(|(from, to)| {
+                (
+                    from.to_string_lossy().into_owned(),
+                    to.to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+        let pair = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+        assert_eq!(
+            pairs,
+            [
+                pair(
+                    "/dxn/targets/armv7-tizen-linux-gnueabi.json",
+                    "/o/targets/armv7-tizen-linux-gnueabi.json"
+                ),
+                pair(
+                    "/dxn/targets/aarch64-tizen-linux-gnu.json",
+                    "/o/targets/aarch64-tizen-linux-gnu.json"
+                ),
+                pair(
+                    "/dxn/targets/x86_64-tizen-linux-gnu.json",
+                    "/o/targets/x86_64-tizen-linux-gnu.json"
+                ),
+                pair(
+                    "/dxn/crates/dxn_gpui_tizen_sys/symbols.allow",
+                    "/o/targets/symbols.allow"
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn the_distribution_takes_the_stripped_libraries_and_the_specs() {
         let files = dist_files(Path::new("/b"), Path::new("/d"), &[Arch::Armv7l]);
         let to: Vec<String> = files
@@ -590,6 +646,7 @@ mod tests {
                 "/d/targets/aarch64-tizen-linux-gnu.json",
                 "/d/targets/x86_64-tizen-linux-gnu.json",
                 "/d/targets/toolchain",
+                "/d/targets/symbols.allow",
             ]
         );
         assert!(
