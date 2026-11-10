@@ -1564,6 +1564,14 @@ pub(crate) fn accessory(_surface: &Rc<Surface>, _parent: &NshView, child: &NshVi
     log::debug!("input accessory {} is not shown on Linux", child.id());
 }
 
+/// The widget of input `view` that takes the keyboard focus: its text, or
+/// its text view.
+pub(crate) fn key_widget(view: &NshView) -> Option<gtk::Widget> {
+    let input = view.state().input.clone()?;
+    let widget = input.editor.borrow().widget();
+    Some(widget)
+}
+
 /// `focus()`.
 pub(crate) fn focus(view: &NshView) {
     let input = view.state().input.clone();
