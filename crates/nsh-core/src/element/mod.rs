@@ -179,8 +179,8 @@ pub use self::{
     scrollable::Scrollable,
     services::{Fetch, HttpResponse, Prefetch},
     style::{
-        AdaptiveColor, AdaptiveShadow, BorderCurve, FontWeight, LayoutDirection, StyleRefinement,
-        Styled, WritingDirection,
+        AdaptiveColor, AdaptiveGradient, AdaptiveShadow, BorderCurve, FontWeight, LayoutDirection,
+        StyleRefinement, Styled, WritingDirection,
     },
     system::{
         CallCx, Cleanup, ErrorClass, ErrorFields, Held, IntoThrown, JsError, Later, Local, Locals,
@@ -304,6 +304,15 @@ pub mod __private {
         }
         fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
             tokens.font(name).map(|f| f.to_string())
+        }
+    }
+
+    impl ThemeValue for super::AdaptiveGradient {
+        fn write(&self, name: &str, out: &mut super::Tokens) {
+            out.set_gradient(name, self.clone());
+        }
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
+            tokens.gradient(name).cloned()
         }
     }
 

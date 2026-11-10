@@ -2830,3 +2830,235 @@ mod tokens_by_name {
         assert!(!Rc::ptr_eq(&accent, &tailwind.classes("p-2 bg-accent")));
     }
 }
+
+/// Gradient design tokens (`background-image-hero`): held by `Tokens` per
+/// appearance, read from a theme file, the class `bg-hero` and the variable
+/// `bg-(image:--background-image-hero)`.
+mod gradient_tokens {
+    use super::*;
+    use crate::{
+        effects::{Gradient, GradientKind},
+        element::{AdaptiveColor, AdaptiveGradient, Token, Tokens, theme_file},
+    };
+
+    fn css(css: &str) -> Vec<Gradient> {
+        crate::css::gradients(css).unwrap()
+    }
+
+    fn hero() -> AdaptiveGradient {
+        AdaptiveGradient::new(
+            css("linear-gradient(135deg, #7c3aed, #db2777)"),
+            css("linear-gradient(135deg, #a78bfa, #f472b6)"),
+        )
+    }
+
+    fn themed() -> Tokens {
+        let mut t = Tokens::default();
+        t.set_gradient("background-image-hero", hero());
+        t.set_color("primary", AdaptiveColor::rgb(0x171717, 0xfafafa));
+        t
+    }
+
+    /// The gradients `classes` give with `tokens` in the appearance `dark`,
+    /// and the classes that are unknown.
+    fn drawn(tokens: &Tokens, classes: &str, dark: bool) -> (Vec<Gradient>, Vec<String>) {
+        let mut theme = Theme::default();
+        theme.set_tokens(tokens);
+        let list = parse(&theme, classes);
+        let unknown = list.unknown().iter().map(|c| c.to_string()).collect();
+        let mut style = Style::default();
+        let group = |_: &str| 0;
+        let context = Context {
+            env: ClassEnvironment {
+                dark,
+                ..Default::default()
+            },
+            window: crate::geometry::size_pt(390.0, 844.0),
+            rtl: false,
+            states: 0,
+            position: 0,
+            group: &group,
+        };
+        list.apply(
+            &context,
+            &theme,
+            &mut style,
+            &mut ClassProps::default(),
+            |_| {},
+        );
+        let images = style
+            .view
+            .effects
+            .map(|e| e.background_images.clone())
+            .unwrap_or_default();
+        (images, unknown)
+    }
+
+    #[test]
+    fn tokens_hold_gradients_by_name() {
+        let t = themed();
+        assert_eq!(t.gradient("background-image-hero"), Some(&hero()));
+        assert_eq!(
+            t.get("background-image-hero"),
+            Some(Token::Gradient(hero()))
+        );
+        let mut top = Tokens::default();
+        top.set_gradient(
+            "background-image-scrim",
+            css("linear-gradient(#000, #0000)"),
+        );
+        let t = top.over(&t);
+        assert!(t.gradient("background-image-hero").is_some());
+        assert!(t.gradient("background-image-scrim").is_some());
+        assert!(!t.is_empty());
+        assert_eq!(
+            hero().css(false),
+            "linear-gradient(135deg, #7c3aedff, #db2777ff)"
+        );
+        assert_eq!(AdaptiveGradient::default().css(true), "none");
+    }
+
+    #[test]
+    fn a_gradient_is_written_as_css_that_reads_back() {
+        for written in [
+            "linear-gradient(135deg, #7c3aed, #db2777)",
+            "linear-gradient(to right, #ff0000 10%, #00ff0080 50%, #0000ff 20px)",
+            "linear-gradient(to top left, red, blue)",
+            "repeating-linear-gradient(45deg, #000 0%, #fff 10%)",
+            "radial-gradient(circle closest-side at 25% 75%, #fff, #000)",
+            "radial-gradient(#fff, #000)",
+            "conic-gradient(from 90deg at 30% 40%, red, blue 50%, red)",
+            "linear-gradient(in oklch, #7c3aed, #db2777)",
+        ] {
+            let read = css(written);
+            let again = AdaptiveGradient::from(read.clone()).css(false);
+            assert_eq!(css(&again), read, "{written} written as {again}");
+        }
+        // Several, comma-separated.
+        let two = css("linear-gradient(#000, #fff), radial-gradient(#f00, #00f)");
+        let again = AdaptiveGradient::from(two.clone()).css(false);
+        assert_eq!(css(&again), two, "{again}");
+    }
+
+    #[test]
+    fn a_theme_files_gradients_are_read_per_appearance() {
+        let mut base = Tokens::default();
+        base.set_color("accent", AdaptiveColor::rgb(0x0000ff, 0x00ffff));
+        let (t, ignored) = theme_file::parse(
+            r##"{ "cssVars": {
+                "theme": { "primary": "#171717",
+                           "background-image-scrim": "linear-gradient(to top, #000000cc, #00000000)",
+                           "background-image-brand": "linear-gradient(to right, var(--primary), var(--accent))",
+                           "background-image-photo": "url(/hero.jpg)",
+                           "background-image-none": "none" },
+                "light": { "background-image-hero": "linear-gradient(135deg, #7c3aed, #db2777)" },
+                "dark": { "primary": "#fafafa",
+                          "background-image-hero": "linear-gradient(135deg, #a78bfa, #f472b6)" } } }"##,
+            &base,
+        )
+        .unwrap();
+        assert_eq!(ignored, Vec::<String>::new());
+        assert_eq!(t.gradient("background-image-hero"), Some(&hero()));
+        // One value for both appearances.
+        let scrim = t.gradient("background-image-scrim").unwrap();
+        assert_eq!(scrim.light, scrim.dark);
+        // A `var()` in a stop is the theme's color in each appearance: the
+        // file's `primary`, the base's `accent`.
+        let brand = t.gradient("background-image-brand").unwrap();
+        let colors = |g: &[Gradient]| g[0].stops.iter().map(|s| s.color.0).collect::<Vec<_>>();
+        assert_eq!(colors(&brand.light), [0x1717_17ff, 0x0000_ffff]);
+        assert_eq!(colors(&brand.dark), [0xfafa_faff, 0x00ff_ffff]);
+        // What is no gradient is read as before: no token.
+        assert_eq!(t.get("background-image-photo"), None);
+        assert_eq!(t.get("background-image-none"), None);
+        // Written back, it reads as the same tokens.
+        let (again, _) = theme_file::parse(&theme_file::write(&t), &Tokens::default()).unwrap();
+        assert_eq!(
+            again.gradient("background-image-hero"),
+            t.gradient("background-image-hero")
+        );
+    }
+
+    #[test]
+    fn a_gradient_token_is_the_class_of_its_name() {
+        let t = themed();
+        let (light, unknown) = drawn(&t, "bg-hero", false);
+        assert!(unknown.is_empty(), "{unknown:?}");
+        assert_eq!(light, hero().light.to_vec());
+        let (dark, _) = drawn(&t, "bg-hero", true);
+        assert_eq!(dark, hero().dark.to_vec());
+        // By its variable, as an image.
+        let (by_variable, unknown) = drawn(&t, "bg-(image:--background-image-hero)", true);
+        assert!(unknown.is_empty(), "{unknown:?}");
+        assert_eq!(by_variable, hero().dark.to_vec());
+        // Under a variant.
+        let (_, unknown) = drawn(&t, "hover:bg-hero dark:bg-hero", false);
+        assert!(unknown.is_empty(), "{unknown:?}");
+        // No opacity modifier, no bare variable (that is a color's), and no
+        // other utility's value.
+        for class in [
+            "bg-hero/50",
+            "bg-(--background-image-hero)",
+            "text-hero",
+            "bg-nope",
+        ] {
+            let (_, unknown) = drawn(&t, class, false);
+            assert_eq!(unknown, [class], "{class}");
+        }
+    }
+
+    #[test]
+    fn a_color_and_tailwinds_own_classes_come_first() {
+        let mut t = themed();
+        // A color `hero` is what `bg-hero` means; the gradient is hidden.
+        t.set_color("hero", AdaptiveColor::rgb(0xff0000, 0xff0000));
+        // So is one named as a palette color or a utility of Tailwind's.
+        t.set_gradient("background-image-black", hero());
+        t.set_gradient("background-image-none", hero());
+        let (images, unknown) = drawn(&t, "bg-hero bg-black bg-none", false);
+        assert!(unknown.is_empty(), "{unknown:?}");
+        assert_eq!(images, Vec::new());
+        // The build says which tokens are hidden, and by which class.
+        let mut theme = Theme::default();
+        theme.set_tokens(&t);
+        let hidden = theme.tokens().shadowed(&theme);
+        assert_eq!(
+            hidden,
+            [
+                (
+                    "background-image-black".to_owned(),
+                    vec!["bg-black".to_owned()]
+                ),
+                (
+                    "background-image-hero".to_owned(),
+                    vec!["bg-hero".to_owned()]
+                ),
+                (
+                    "background-image-none".to_owned(),
+                    vec!["bg-none".to_owned()]
+                ),
+            ]
+        );
+        // Both are still read by their variable.
+        let (images, _) = drawn(&t, "bg-(image:--background-image-black)", false);
+        assert_eq!(images, hero().light.to_vec());
+    }
+
+    #[test]
+    fn a_class_reads_its_gradient_token_and_follows_only_it() {
+        let mut theme = Theme::default();
+        theme.set_tokens(&themed());
+        let list = parse(&theme, "bg-hero p-2");
+        assert!(list.reads_token("background-image-hero"));
+        assert!(!list.reads_token("primary"));
+        assert_ne!(list.deps() & deps::THEME, 0);
+        // Another gradient is another value of the token.
+        let mut other = themed();
+        other.set_gradient("background-image-hero", css("linear-gradient(#000, #fff)"));
+        let changed = ClassTokens::new(&themed()).changed(&ClassTokens::new(&other));
+        assert_eq!(changed.len(), 1);
+        assert!(list.reads(&TokenChange::Values(changed)));
+        let kind = |g: &[Gradient]| g[0].kind;
+        assert!(matches!(kind(&hero().light), GradientKind::Linear { .. }));
+    }
+}

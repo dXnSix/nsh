@@ -16,7 +16,7 @@ use std::{borrow::Cow, marker::PhantomData, sync::Arc};
 
 use rustc_hash::FxHashMap;
 
-use super::style::{AdaptiveColor, AdaptiveShadow};
+use super::style::{AdaptiveColor, AdaptiveGradient, AdaptiveShadow};
 
 /// The app's default font family's token: Tailwind's `--font-sans`.
 pub const FONT_SANS: &str = "font-sans";
@@ -43,6 +43,8 @@ pub struct Tokens {
     fonts: FxHashMap<Box<str>, Arc<str>>,
     /// Box shadows, per appearance.
     shadows: FxHashMap<Box<str>, AdaptiveShadow>,
+    /// Gradients (a `background-image`'s), per appearance.
+    gradients: FxHashMap<Box<str>, AdaptiveGradient>,
     /// A role's name -> the name of the token it reads (`None`: each its
     /// own name).
     roles: Option<Arc<FxHashMap<Box<str>, Box<str>>>>,
@@ -58,6 +60,7 @@ impl PartialEq for Tokens {
             && self.dark_numbers == other.dark_numbers
             && self.fonts == other.fonts
             && self.shadows == other.shadows
+            && self.gradients == other.gradients
             && self.roles == other.roles
     }
 }
@@ -263,6 +266,8 @@ pub enum Token {
     Font(Arc<str>),
     /// Box shadows, per appearance.
     Shadow(AdaptiveShadow),
+    /// Gradients, per appearance.
+    Gradient(AdaptiveGradient),
 }
 
 /// Makes the tokens of a theme file's content (`Some`), or the defaults
@@ -472,6 +477,21 @@ impl Tokens {
         self.shadows.iter().map(|(k, s)| (&**k, s))
     }
 
+    /// The gradients named `name` (`background-image-hero`).
+    pub fn gradient(&self, name: &str) -> Option<&AdaptiveGradient> {
+        self.gradients.get(name)
+    }
+
+    /// Sets the gradients named `name`.
+    pub fn set_gradient(&mut self, name: &str, gradient: impl Into<AdaptiveGradient>) {
+        self.gradients.insert(name.into(), gradient.into());
+    }
+
+    /// Each gradient token by name.
+    pub fn gradients(&self) -> impl Iterator<Item = (&str, &AdaptiveGradient)> {
+        self.gradients.iter().map(|(k, g)| (&**k, g))
+    }
+
     /// The token named `name`, of any kind (a color first, as classes take
     /// it).
     pub fn get(&self, name: &str) -> Option<Token> {
@@ -484,7 +504,10 @@ impl Tokens {
         if let Some(f) = self.fonts.get(name) {
             return Some(Token::Font(f.clone()));
         }
-        self.shadows.get(name).cloned().map(Token::Shadow)
+        if let Some(s) = self.shadows.get(name) {
+            return Some(Token::Shadow(s.clone()));
+        }
+        self.gradients.get(name).cloned().map(Token::Gradient)
     }
 
     /// These tokens with `role` mapped onto the token named `token` (in
@@ -563,6 +586,7 @@ impl Tokens {
             && self.dark_numbers.is_empty()
             && self.fonts.is_empty()
             && self.shadows.is_empty()
+            && self.gradients.is_empty()
     }
 
     /// Each color by name.
@@ -603,6 +627,7 @@ impl Tokens {
         copy(&mut self.numbers, from, to);
         copy(&mut self.fonts, from, to);
         copy(&mut self.shadows, from, to);
+        copy(&mut self.gradients, from, to);
     }
 
     /// These tokens over `base` as a scope's values are over the tokens
@@ -616,6 +641,7 @@ impl Tokens {
             .chain(self.dark_numbers.keys())
             .chain(self.fonts.keys())
             .chain(self.shadows.keys())
+            .chain(self.gradients.keys())
             .filter(|name| base.get(name).is_none())
             .cloned()
             .collect();
@@ -634,6 +660,7 @@ impl Tokens {
         self.dark_numbers.remove(name);
         self.fonts.remove(name);
         self.shadows.remove(name);
+        self.gradients.remove(name);
     }
 
     /// Makes token `name` what it is in `from`, of whatever kind, or
@@ -658,6 +685,7 @@ impl Tokens {
         copy(&mut self.dark_numbers, &from.dark_numbers, name);
         copy(&mut self.fonts, &from.fonts, name);
         copy(&mut self.shadows, &from.shadows, name);
+        copy(&mut self.gradients, &from.gradients, name);
     }
 
     /// `self` with the tokens of `base` it does not have.
@@ -697,6 +725,8 @@ impl Tokens {
             .extend(self.fonts.iter().map(|(k, f)| (k.clone(), f.clone())));
         out.shadows
             .extend(self.shadows.iter().map(|(k, s)| (k.clone(), s.clone())));
+        out.gradients
+            .extend(self.gradients.iter().map(|(k, g)| (k.clone(), g.clone())));
         if let Some(roles) = &self.roles {
             out.roles = match out.roles {
                 Some(base) => {
