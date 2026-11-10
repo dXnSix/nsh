@@ -301,20 +301,29 @@ nsh package --target tizen-web --probe             # a package that shows how th
     "version": "1.2.0",
     "apiVersion": "8.0",
     "privileges": ["http://tizen.org/privilege/tv.audio"],
-    "signing": "my-profile"
+    "signing": "my-profile",
+    "smartHubPreview": "service"
   }
   ```
 
   `package` is 10 letters and digits (by default made from the app's `id`); `appId` is `<package>.<name>` (by
   default the app's name, letters and digits); `version` is Tizen's `x.y.z` of numbers (by default the app's
   `version`, else `1.0.0`); `apiVersion` is the lowest Tizen that installs the package (`8.0`); `privileges` are
-  asked for besides the internet's and the remote's keys'; `signing` is the certificate profile.
+  asked for besides the internet's and the remote's keys'; `signing` is the certificate profile;
+  `smartHubPreview` is the app's Smart Hub preview (below).
+- **Smart Hub's preview**, the tiles the TV shows for the app on its home screen, is opt-in with
+  `tizen.smartHubPreview`. A URL (`"https://example.com/tv/preview.json"`) is a public preview: the package declares
+  it, and the TV reads that JSON, in Samsung's preview format, from your server. `"service"` is a personal preview the
+  app sets with [`nsh/tizen`](../modules/nsh-tizen.md)'s `setPreviewData`: Samsung takes it from a background
+  service, so the package carries a small one of NSH's that the call starts with the data. Samsung allows one update
+  every 10 minutes, and packages installed from a USB drive show no preview. A tile's `action_data` does not reach the
+  app yet. Both forms follow Samsung's guides and are not yet checked on a TV.
 - **Developing:** `nsh run --target tizen-web` serves the TV's page from the dev server, so a browser here at the
   address it prints shows the app in the TV idiom, with hot updates. With `nsh.json` `tizen.signing` it also signs,
   installs and launches a development package on the TV (`--device`: its `sdb` serial), whose page opens the dev
   server's at this machine's address on the network.
 - **The loader probe** (`--probe`) is a package of its own, `NshLdProbe.Probe`: on the TV it tries each way the app's
-  page loads its files (module scripts, an import map, an iframe's realm, a script fetched with CORS, WebAssembly) and
+  page loads its files (module scripts, an import map, an iframe's realm, a script fetched with CORS, WebAssembly, a fetch under the page's Content-Security-Policy, Samsung's `webapis.js`) and
   shows what each did, with the engine's version.
 
 ## Build the website's player

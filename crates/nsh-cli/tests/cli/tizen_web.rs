@@ -201,6 +201,8 @@ fn a_package_is_the_web_site_with_a_manifest_and_the_tv_shim() {
         assert!(config.contains(part), "{part} in {config}");
     }
     assert!(!config.contains("<icon"), "{config}");
+    // No Smart Hub preview without `tizen.smartHubPreview`.
+    assert!(!config.contains("use.preview"), "{config}");
 
     // The shim runs first, then the runtime starts the player on a TV,
     // without history entries (the remote's Back is the shim's).
@@ -261,6 +263,65 @@ fn the_tizen_section_names_the_package_and_its_privileges() {
 }
 
 #[test]
+fn a_smart_hub_preview_is_declared_as_samsung_asks() {
+    let shim_of = |site: &Path| {
+        let name = files(site)
+            .into_iter()
+            .find(|n| n.starts_with("nsh-tizen.") && n.ends_with(".js"))
+            .unwrap();
+        read(site.join(name))
+    };
+    // A personal preview: the app sets it through the package's service.
+    let dir = app(r#"{ "id": "com.acme.counter", "name": "Counter",
+            "tizen": { "package": "AbCdE12345", "smartHubPreview": "service" } }"#);
+    let output = package(&dir, &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let site = dir.0.join("out/tizen-web/Counter");
+    let config = read(site.join("config.xml"));
+    for part in [
+        r#"<tizen:metadata key="http://samsung.com/tv/metadata/use.preview" value="bg_service"/>"#,
+        r#"<tizen:service id="AbCdE12345.NshPreview" auto-restart="false">"#,
+        r#"<tizen:content src="service/preview.js"/>"#,
+        r#"<tizen:category name="http://tizen.org/category/service"/>"#,
+        r#"<tizen:privilege name="http://tizen.org/privilege/application.launch"/>"#,
+    ] {
+        assert!(config.contains(part), "{part} in {config}");
+    }
+    assert_eq!(
+        read(site.join("service/preview.js")),
+        read(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tizen_web/preview-service.js"))
+    );
+    assert!(
+        entries(&dir.0.join("out/tizen-web/Counter.wgt"))
+            .contains(&"service/preview.js".to_owned())
+    );
+    let shim = shim_of(&site);
+    assert!(
+        shim.contains(r#"const PREVIEW = {"service":"AbCdE12345.NshPreview"};"#),
+        "{shim}"
+    );
+
+    // A public preview: the TV reads its JSON itself.
+    let dir = app(r#"{ "id": "com.acme.counter", "name": "Counter",
+            "tizen": { "smartHubPreview": "https://example.com/tv/preview.json" } }"#);
+    let output = package(&dir, &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let site = dir.0.join("out/tizen-web/Counter");
+    let config = read(site.join("config.xml"));
+    assert!(
+        config.contains(r#"<tizen:metadata key="http://samsung.com/tv/metadata/use.preview" value="endpoint_URL=https://example.com/tv/preview.json"/>"#),
+        "{config}"
+    );
+    assert!(!config.contains("<tizen:service"), "{config}");
+    assert!(!config.contains("application.launch"), "{config}");
+    assert!(!site.join("service").exists());
+    assert!(
+        shim_of(&site)
+            .contains(r#"const PREVIEW = {"endpoint":"https://example.com/tv/preview.json"};"#)
+    );
+}
+
+#[test]
 fn ids_and_versions_tizen_refuses_are_refused() {
     for (config, message) in [
         (
@@ -272,6 +333,10 @@ fn ids_and_versions_tizen_refuses_are_refused() {
             "tizen.appId `Other12345.App`",
         ),
         (r#""version": "1.0.0-beta""#, "version `1.0.0-beta`"),
+        (
+            r#""tizen": { "smartHubPreview": "ftp://example.com/preview.json" }"#,
+            "tizen.smartHubPreview `ftp://example.com/preview.json`",
+        ),
         (
             r#""tizen": { "apiVersion": "eight" }"#,
             "tizen.apiVersion `eight`",
@@ -365,29 +430,32 @@ fn the_development_package_opens_the_dev_servers_tv_page() {
     let mut child = run_until(&dir, |app| app.join(".nsh/tizen-web/dev.wgt").exists());
     let package = dir.0.join("app/.nsh/tizen-web/dev");
     let config = read(package.join("config.xml"));
-    let origin = config
-        .split(r#"<access origin=""#)
+    // Its page opens the dev server's.
+    let page = read(package.join("index.html"));
+    let url = page
+        .split("const URL_ = \"")
         .nth(1)
         .and_then(|rest| rest.split('"').next())
+        .unwrap_or_else(|| panic!("{page}"));
+    let origin = url.trim_end_matches('/').to_owned();
+    assert!(origin.starts_with("http://"), "{page}");
+    assert!(!origin.ends_with(":0"), "{page}");
+    let host = origin
+        .trim_start_matches("http://")
+        .rsplit_once(':')
         .unwrap()
-        .to_owned();
-    assert!(origin.starts_with("http://"), "{config}");
-    assert!(!origin.ends_with(":0"), "{config}");
-    let host = origin.trim_start_matches("http://");
+        .0;
+    // A development package's policy: any origin (the page, its WebSocket at
+    // `ws://`), navigation to the server's host (hosts take no port).
     for part in [
         r#"<tizen:application id="NshDevHost.NshDev" package="NshDevHost" required_version="8.0"/>"#.to_owned(),
         format!("<tizen:allow-navigation>{host}</tizen:allow-navigation>"),
+        r#"<access origin="*" subdomains="true"/>"#.to_owned(),
         r#"<tizen:privilege name="http://tizen.org/privilege/internet"/>"#.to_owned(),
     ] {
         assert!(config.contains(&part), "{part} in {config}");
     }
-    assert!(!config.contains(r#"origin="*""#), "{config}");
-    // Its page opens the dev server's.
-    let page = read(package.join("index.html"));
-    assert!(
-        page.contains(&format!("const URL_ = \"{origin}/\";")),
-        "{page}"
-    );
+    assert_eq!(config.matches("<access ").count(), 1, "{config}");
     assert_eq!(files(&package), ["config.xml", "index.html"]);
     assert_eq!(
         entries(&dir.0.join("app/.nsh/tizen-web/dev.wgt")),
@@ -452,7 +520,8 @@ fn a_profile_installs_and_launches_the_development_package() {
                 signed.display()
             ),
             format!("install -p {} -e 192.168.1.5:26101", signed.display()),
-            "run -p NshDevHost.NshDev -e 192.168.1.5:26101".to_owned(),
+            // `tz run` launches by package id.
+            "run -p NshDevHost -e 192.168.1.5:26101".to_owned(),
         ]
     );
 }
@@ -473,6 +542,7 @@ fn the_probe_tries_how_the_page_loads_its_files() {
             "index.html",
             "probe/chunk.js",
             "probe/classic.js",
+            "probe/csp.html",
             "probe/import-map.js",
             "probe/mapped.js",
             "probe/module.js",
@@ -498,8 +568,22 @@ fn the_probe_tries_how_the_page_loads_its_files() {
         "URL.createObjectURL",
         "WebAssembly.instantiateStreaming",
         "WebAssembly.instantiate(bytes",
+        r#"frame.src = "probe/csp.html""#,
+        r#"<script src="$WEBAPIS/webapis/webapis.js""#,
     ] {
         assert!(page.contains(part), "{part}");
+    }
+    // The app's page's policy when its `capabilities` limit the network.
+    let csp = read(probe.join("probe/csp.html"));
+    assert!(
+        csp.contains(r#"<meta http-equiv="Content-Security-Policy" content="connect-src 'self'">"#),
+        "{csp}"
+    );
+    assert!(csp.contains(r#"fetch("probe.wasm")"#), "{csp}");
+    assert!(csp.contains(r#"parent.nshProbe.done("csp""#), "{csp}");
+    // A row for each of them.
+    for row in [r#"["csp", "#, r#"["webapis", "#] {
+        assert!(page.contains(row), "{row}");
     }
     assert!(read(probe.join("probe/module.js")).contains(r#"import("nsh-probe-chunk")"#));
     assert!(read(probe.join("probe/import-map.js")).contains(r#"from "nsh-probe-mapped""#));
