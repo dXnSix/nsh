@@ -345,7 +345,8 @@ impl ClassTokens {
             || self.numbers.contains_key(name)
             || self.dark_numbers.contains_key(name)
             || self.fonts.contains_key(name)
-            || self.shadows.contains_key(name);
+            || self.shadows.contains_key(name)
+            || self.gradients.contains_key(name);
         match self.roles.get(name) {
             Some(mapped) if !token => mapped,
             _ => name,

@@ -2954,6 +2954,25 @@ mod role_variables {
     }
 
     #[test]
+    fn a_gradient_token_of_the_name_is_read_before_the_role() {
+        // A gradient is a token too: its name is the variable's, whatever
+        // a role of that name is mapped onto.
+        let hero = crate::element::AdaptiveGradient::parse("linear-gradient(#000, #fff)").unwrap();
+        let mut t = brand();
+        t.set_gradient("background-image-hero", hero);
+        let t = t.with_roles([(
+            Role::<AdaptiveColor>::new("background-image-hero"),
+            "overlay",
+        )]);
+        let l = list(&t, "bg-(image:--background-image-hero)");
+        assert!(l.reads_token("background-image-hero") && !l.reads_token("overlay"));
+        assert_eq!(
+            style(&t, "bg-(image:--background-image-hero)", false),
+            style(&t, "bg-hero", false)
+        );
+    }
+
+    #[test]
     fn a_bare_class_names_no_role() {
         let theme = theme(&brand());
         for class in ["bg-popover", "text-warning", "rounded-radius"] {
