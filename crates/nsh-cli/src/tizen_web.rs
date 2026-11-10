@@ -42,6 +42,15 @@ use crate::{
 
 /// The TV shim: a classic script the page runs before `nsh.js`.
 const SHIM: &str = include_str!("tizen_web/shim.js");
+/// The shim's line a package fills with its Smart Hub preview ([`Preview`]).
+const SHIM_PREVIEW: &str = "const PREVIEW = null;";
+/// The background service of a personal Smart Hub preview: it hands the
+/// data the app's page sends it to `webapis.preview.setPreviewData`.
+const PREVIEW_SERVICE: &str = include_str!("tizen_web/preview-service.js");
+/// Where the package carries it.
+const PREVIEW_SERVICE_PATH: &str = "service/preview.js";
+/// The privilege a page needs to start its preview service.
+const LAUNCH: &str = "http://tizen.org/privilege/application.launch";
 /// What the shim is named on the page (with its digest in a package).
 const SHIM_NAME: &str = "nsh-tizen.js";
 /// The development package's page, which opens the dev server's.
@@ -60,6 +69,7 @@ const PROBE_FILES: &[(&str, &str)] = &[
         "probe/classic.js",
         include_str!("tizen_web/probe/classic.js"),
     ),
+    ("probe/csp.html", include_str!("tizen_web/probe/csp.html")),
 ];
 /// The probe's WebAssembly module: `answer()` returns 42.
 const PROBE_WASM: &[u8] = &[
@@ -115,6 +125,45 @@ struct Widget {
     /// The hosts the page may navigate to (`<tizen:allow-navigation>`):
     /// the development package's dev server.
     navigation: Vec<String>,
+    /// Smart Hub's preview of the app.
+    preview: Option<Preview>,
+}
+
+/// Smart Hub's preview of an app (`nsh.json` `tizen.smartHubPreview`), as
+/// Samsung's `use.preview` metadata declares it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Preview {
+    /// A personal preview: the app's `setPreviewData` sends the data to this
+    /// background service of the package (`<package>.NshPreview`), which
+    /// hands it to `webapis.preview` (`bg_service`).
+    Service(String),
+    /// A public preview: the TV reads its JSON from this URL
+    /// (`endpoint_URL`).
+    Endpoint(String),
+}
+
+impl Preview {
+    fn of(value: &str, package: &str) -> anyhow::Result<Preview> {
+        if value == "service" {
+            return Ok(Preview::Service(format!("{package}.NshPreview")));
+        }
+        match url::Url::parse(value) {
+            Ok(url) if matches!(url.scheme(), "http" | "https") && url.host().is_some() => {
+                Ok(Preview::Endpoint(value.to_owned()))
+            }
+            _ => bail!(
+                "nsh.json tizen.smartHubPreview `{value}`: \"service\" (the app sets its preview) or the http(s) URL of the preview's JSON"
+            ),
+        }
+    }
+
+    /// What the shim knows of it (`nshTizen.preview`).
+    fn shim_json(&self) -> serde_json::Value {
+        match self {
+            Preview::Service(id) => serde_json::json!({ "service": id }),
+            Preview::Endpoint(url) => serde_json::json!({ "endpoint": url }),
+        }
+    }
 }
 
 impl Widget {
@@ -138,7 +187,15 @@ impl Widget {
         check_version(version)?;
         let required_version = tizen.api_version.as_deref().unwrap_or(API_VERSION);
         check_api_version(required_version)?;
+        let preview = tizen
+            .smart_hub_preview
+            .as_deref()
+            .map(|value| Preview::of(value, &package))
+            .transpose()?;
         let mut privileges: Vec<String> = PRIVILEGES.iter().map(|p| (*p).to_owned()).collect();
+        if matches!(preview, Some(Preview::Service(_))) {
+            privileges.push(LAUNCH.to_owned());
+        }
         for privilege in &tizen.privileges {
             if !privileges.contains(privilege) {
                 privileges.push(privilege.clone());
@@ -155,6 +212,7 @@ impl Widget {
             privileges,
             access: vec!["*".to_owned()],
             navigation: Vec::new(),
+            preview,
         })
     }
 
@@ -202,6 +260,28 @@ impl Widget {
                 "  <tizen:allow-navigation>{}</tizen:allow-navigation>",
                 escape(host)
             );
+        }
+        match &self.preview {
+            Some(Preview::Service(id)) => {
+                let _ = writeln!(
+                    xml,
+                    r#"  <tizen:metadata key="http://samsung.com/tv/metadata/use.preview" value="bg_service"/>"#
+                );
+                let _ = writeln!(
+                    xml,
+                    "  <tizen:service id=\"{}\" auto-restart=\"false\">\n    <tizen:content src=\"{PREVIEW_SERVICE_PATH}\"/>\n    <tizen:name>{} preview</tizen:name>\n    <tizen:category name=\"http://tizen.org/category/service\"/>\n  </tizen:service>",
+                    escape(id),
+                    escape(&self.name)
+                );
+            }
+            Some(Preview::Endpoint(url)) => {
+                let _ = writeln!(
+                    xml,
+                    r#"  <tizen:metadata key="http://samsung.com/tv/metadata/use.preview" value="endpoint_URL={}"/>"#,
+                    escape(url)
+                );
+            }
+            None => {}
         }
         let _ = writeln!(
             xml,
@@ -342,7 +422,7 @@ pub(crate) fn package(
         &dir,
         &web::Variant {
             device_scripts: &[WEBAPIS],
-            scripts: &[(SHIM_NAME, SHIM)],
+            scripts: &[(SHIM_NAME, &shim(widget.preview.as_ref()))],
             idiom: Some("tv"),
             history: Some(false),
             installed: true,
@@ -350,6 +430,11 @@ pub(crate) fn package(
     )?;
     if let Some(icon) = &config.icon {
         write_icon(icon, &dir.join("icon.png"))?;
+    }
+    if matches!(widget.preview, Some(Preview::Service(_))) {
+        let service = dir.join(PREVIEW_SERVICE_PATH);
+        fs::create_dir_all(service.parent().context("service directory")?)?;
+        fs::write(&service, PREVIEW_SERVICE)?;
     }
     fs::write(dir.join("config.xml"), widget.config_xml())?;
     let unsigned = root.join(format!("{name}.wgt"));
@@ -368,9 +453,21 @@ pub(crate) fn package(
     let signed = options.out.join(format!("{name}.wgt"));
     sign(profile, &unsigned, &signed)?;
     if options.run {
-        install_and_launch(&signed, &widget.app, None)?;
+        install_and_launch(&signed, &widget.package, None)?;
     }
     Ok(())
+}
+
+/// The shim with the package's Smart Hub preview (`nshTizen.preview`).
+fn shim(preview: Option<&Preview>) -> String {
+    match preview {
+        Some(preview) => SHIM.replacen(
+            SHIM_PREVIEW,
+            &format!("const PREVIEW = {};", preview.shim_json()),
+            1,
+        ),
+        None => SHIM.to_owned(),
+    }
 }
 
 /// The app's icon as Tizen TVs show it: 512×423, the square icon centered.
@@ -450,13 +547,14 @@ fn sign_command(tz: &Path, profile: &str, unsigned: &Path, signed: &Path) -> Com
     command
 }
 
-/// `tz`'s commands that install the package at `wgt` and launch
-/// application `app` on the TV `serial` (the one `tz` picks without it).
-fn install_commands(tz: &Path, wgt: &Path, app: &str, serial: Option<&str>) -> [Command; 2] {
+/// `tz`'s commands that install the package at `wgt` and launch it, by its
+/// package id (`tz run -p`, "launch app using package ID"), on the TV
+/// `serial` (the one `tz` picks without it).
+fn install_commands(tz: &Path, wgt: &Path, package: &str, serial: Option<&str>) -> [Command; 2] {
     let mut install = Command::new(tz);
     install.args(["install", "-p"]).arg(wgt);
     let mut launch = Command::new(tz);
-    launch.args(["run", "-p", app]);
+    launch.args(["run", "-p", package]);
     for command in [&mut install, &mut launch] {
         if let Some(serial) = serial {
             command.args(["-e", serial]);
@@ -489,12 +587,12 @@ fn sign(profile: &str, unsigned: &Path, signed: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn install_and_launch(wgt: &Path, app: &str, serial: Option<&str>) -> anyhow::Result<()> {
-    let step = ui::Step::start(format!("installing {app} on the TV"));
-    let [install, launch] = install_commands(&tz()?, wgt, app, serial);
+fn install_and_launch(wgt: &Path, package: &str, serial: Option<&str>) -> anyhow::Result<()> {
+    let step = ui::Step::start(format!("installing {package} on the TV"));
+    let [install, launch] = install_commands(&tz()?, wgt, package, serial);
     run_tz(install, "install the package")?;
     run_tz(launch, "launch the app")?;
-    step.done(format!("launched {app} on the TV"));
+    step.done(format!("launched {package} on the TV"));
     Ok(())
 }
 
@@ -515,14 +613,16 @@ pub(crate) fn dev_page((page, mut files): (String, web::Files)) -> (String, web:
 }
 
 /// The development package for the dev server at `url` (`http://<LAN
-/// address>:<port>/`): a page that opens the server's, allowed to reach and
-/// open it, in `dir`.
+/// address>:<port>/`): a page that opens the server's, in `dir`. Its
+/// policy is a development package's, open: any origin (the dev server's
+/// page, its WebSocket at `ws://`, what the app fetches), and navigation to
+/// the server's host (`<tizen:allow-navigation>` takes hosts, without a
+/// port).
 fn write_dev_package(dir: &Path, url: &str) -> anyhow::Result<Widget> {
-    let origin = url.trim_end_matches('/');
-    let host = origin
-        .split_once("://")
-        .map_or(origin, |(_, host)| host)
-        .to_owned();
+    let host = url::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .with_context(|| format!("the dev server's address {url} has no host"))?;
     let widget = Widget {
         iri: widget_iri("com.longbridge.nsh.dev"),
         package: DEV_PACKAGE.to_owned(),
@@ -532,8 +632,9 @@ fn write_dev_package(dir: &Path, url: &str) -> anyhow::Result<Widget> {
         required_version: API_VERSION.to_owned(),
         icon: false,
         privileges: PRIVILEGES.iter().map(|p| (*p).to_owned()).collect(),
-        access: vec![origin.to_owned()],
+        access: vec!["*".to_owned()],
         navigation: vec![host],
+        preview: None,
     };
     if dir.exists() {
         fs::remove_dir_all(dir).with_context(|| format!("remove {}", dir.display()))?;
@@ -574,7 +675,7 @@ pub(crate) fn run_dev(entry: &Path, url: &str, device: Option<&str>) -> anyhow::
     };
     let signed = work.join("NshDev.wgt");
     sign(profile, &unsigned, &signed)?;
-    install_and_launch(&signed, &widget.app, device)
+    install_and_launch(&signed, &widget.package, device)
 }
 
 /// `nsh package --target tizen-web --probe`: a package with the probe's
@@ -602,7 +703,7 @@ pub(crate) fn probe(options: &PackageOptions<'_>) -> anyhow::Result<()> {
     let signed = options.out.join("NshProbe.wgt");
     sign(profile, &unsigned, &signed)?;
     if options.run {
-        install_and_launch(&signed, &widget.app, None)?;
+        install_and_launch(&signed, &widget.package, None)?;
     }
     Ok(())
 }
@@ -629,6 +730,7 @@ fn write_probe(dir: &Path) -> anyhow::Result<Widget> {
         privileges: PRIVILEGES.iter().map(|p| (*p).to_owned()).collect(),
         access: vec!["*".to_owned()],
         navigation: Vec::new(),
+        preview: None,
     };
     fs::write(dir.join("config.xml"), widget.config_xml())?;
     Ok(widget)
@@ -671,6 +773,26 @@ mod tests {
     }
 
     #[test]
+    fn the_shim_carries_the_packages_preview() {
+        assert!(SHIM.contains(SHIM_PREVIEW));
+        assert_eq!(shim(None), SHIM);
+        let service = shim(Some(&Preview::Service("AbCdE12345.NshPreview".into())));
+        assert!(service.contains(r#"const PREVIEW = {"service":"AbCdE12345.NshPreview"};"#));
+        assert!(!service.contains(SHIM_PREVIEW));
+        assert_eq!(
+            Preview::of("service", "AbCdE12345").unwrap(),
+            Preview::Service("AbCdE12345.NshPreview".into())
+        );
+        assert_eq!(
+            Preview::of("https://example.com/p.json", "AbCdE12345").unwrap(),
+            Preview::Endpoint("https://example.com/p.json".into())
+        );
+        for bad in ["", "services", "ftp://example.com/p.json", "https://"] {
+            assert!(Preview::of(bad, "AbCdE12345").is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn the_widget_iri_is_the_app_ids_domain_and_path() {
         assert_eq!(
             widget_iri("com.example.tv.counter"),
@@ -699,16 +821,13 @@ mod tests {
                 "pack", "-t", "wgt", "-s", "tv", "-b", "a.wgt", "-o", "b.wgt"
             ]
         );
-        let [install, launch] = install_commands(tz, Path::new("b.wgt"), "Pkg0123456.App", None);
+        let [install, launch] = install_commands(tz, Path::new("b.wgt"), "Pkg0123456", None);
         assert_eq!(args(&install), ["install", "-p", "b.wgt"]);
-        assert_eq!(args(&launch), ["run", "-p", "Pkg0123456.App"]);
+        assert_eq!(args(&launch), ["run", "-p", "Pkg0123456"]);
         let [install, launch] =
-            install_commands(tz, Path::new("b.wgt"), "Pkg0123456.App", Some("tv:26101"));
+            install_commands(tz, Path::new("b.wgt"), "Pkg0123456", Some("tv:26101"));
         assert_eq!(args(&install), ["install", "-p", "b.wgt", "-e", "tv:26101"]);
-        assert_eq!(
-            args(&launch),
-            ["run", "-p", "Pkg0123456.App", "-e", "tv:26101"]
-        );
+        assert_eq!(args(&launch), ["run", "-p", "Pkg0123456", "-e", "tv:26101"]);
     }
 
     #[test]

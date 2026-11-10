@@ -182,6 +182,12 @@ pub(crate) struct TizenConfig {
     /// The certificate profile `tz` signs with (Samsung's Certificate
     /// Manager); `--sign` names another. Without one a package is unsigned.
     pub(crate) signing: Option<String>,
+    /// Smart Hub's preview of the app (the tiles the TV shows for it on
+    /// its home screen): `"service"`, a personal preview the app sets with
+    /// `nsh/tizen`'s `setPreviewData` (through a background service the
+    /// package carries), or the http(s) URL of a public preview's JSON,
+    /// which the TV reads itself. Without it the app has no preview.
+    pub(crate) smart_hub_preview: Option<String>,
 }
 
 /// `nsh.json` `"android"`.

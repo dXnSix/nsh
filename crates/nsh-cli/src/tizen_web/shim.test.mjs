@@ -267,3 +267,57 @@ test("a TV without webapis.js reports what tizen knows", async () => {
   assert.deepEqual({ ...shim.productInfo() }, { model: null, platformVersion: "8.0", build: null, manufacturer: null });
   await assert.rejects(shim.setPreviewData("{}"), /webapis\.preview/);
 });
+
+test("the shim says which Smart Hub preview its package has", () => {
+  // `nsh package` writes the package's into `PREVIEW`; the source has none.
+  assert.equal(page({ tizen: tv({ supported: ALL }) }).shim.preview, null);
+});
+
+// The background service of a personal Smart Hub preview (`preview-service.js`).
+const SERVICE = await readFile(new URL("./preview-service.js", import.meta.url), "utf8");
+
+/** The service in a fake service runtime: the request's data and the TV's
+ * `webapis.preview` (`refuse`: its error). */
+function service({ data, webapis = true, refuse = null } = {}) {
+  const events = [];
+  const module = { exports: {} };
+  const preview = {
+    setPreviewData(json, ok, fail) {
+      events.push(["setPreviewData", json]);
+      if (refuse) fail({ message: refuse });
+      else ok();
+    },
+  };
+  const app = {
+    getRequestedAppControl: () => ({ appControl: { data: data === undefined ? [] : [{ key: "preview", value: [data] }] } }),
+    exit: () => events.push(["exit"]),
+  };
+  const context = vm.createContext({
+    module,
+    console: { error: (message) => events.push(["error", message]) },
+    tizen: { application: { getCurrentApplication: () => app } },
+    require: (path) => {
+      events.push(["require", path]);
+      if (!webapis) throw new Error("no module");
+      return { preview };
+    },
+  });
+  vm.runInContext(SERVICE, context, { filename: "preview-service.js" });
+  return { run: () => module.exports.onRequest(), events };
+}
+
+test("the preview service hands the app's data to webapis.preview and ends", () => {
+  const ok = service({ data: '{"sections":[]}' });
+  ok.run();
+  assert.deepEqual(ok.events, [["require", "$WEBAPIS/service/webapis.js"], ["setPreviewData", '{"sections":[]}'], ["exit"]]);
+  // The TV's refusal, no data and no webapis end it too.
+  const refused = service({ data: "{}", refuse: "invalid" });
+  refused.run();
+  assert.deepEqual(refused.events.slice(-2), [["error", "nsh preview: invalid"], ["exit"]]);
+  const empty = service();
+  empty.run();
+  assert.deepEqual(empty.events.slice(-2), [["error", "nsh preview: no preview data"], ["exit"]]);
+  const without = service({ data: "{}", webapis: false });
+  without.run();
+  assert.deepEqual(without.events.slice(-2), [["error", "nsh preview: no webapis.preview"], ["exit"]]);
+});
