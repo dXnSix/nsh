@@ -76,7 +76,10 @@ pub(crate) fn with_theme_cache<R>(f: impl FnOnce(&mut ThemeCache) -> R) -> R {
 /// The theme types read so far ([`super::theme_of`]): by type and by the
 /// tokens read (the surface's, and each [`super::ThemeScope`]'s), the theme.
 #[derive(Default)]
-pub(crate) struct ThemeCache(FxHashMap<(TypeId, usize), (Arc<Tokens>, Box<dyn Any>)>);
+pub(crate) struct ThemeCache(FxHashMap<(TypeId, usize), ReadTheme>);
+
+/// A theme type's value, with the tokens it was read of.
+type ReadTheme = (Arc<Tokens>, Box<dyn Any>);
 
 impl ThemeCache {
     /// Types read of this many tokens are kept; past it the cache starts

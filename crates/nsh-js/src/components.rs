@@ -862,11 +862,67 @@ fn scoped_reader(cx: *mut JsContext, props: JsValue, reader: JsValue) -> JsValue
         let shows = qjs::JS_NewCFunctionData(cx, Some(scope_shows), 0, 0, 2, sdata.as_mut_ptr());
         qjs::JS_FreeValue(cx, sdata[1]);
         let scheme = reactive::memo(cx, shows, false);
-        let mut rdata = [scheme, reader];
-        let f = qjs::JS_NewCFunctionData(cx, Some(read_scoped), 0, 0, 2, rdata.as_mut_ptr());
+        // Its tokens: its `theme` over those around it, in a slot of the
+        // environment's, given back with the component.
+        let slot = qjs::JS_NewFloat64(crate::env::new_scope_slot(cx) as f64);
+        let mut cdata = [slot];
+        let cleanup = qjs::JS_NewCFunctionData(cx, Some(scope_gone), 0, 0, 1, cdata.as_mut_ptr());
+        reactive::add_cleanup(cx, cleanup);
+        let outer = crate::env::scope_tokens_accessor(cx);
+        let mut tdata = [props, outer.unwrap_or(UNDEFINED), slot];
+        let draws = qjs::JS_NewCFunctionData(cx, Some(scope_draws), 0, 0, 3, tdata.as_mut_ptr());
+        qjs::JS_FreeValue(cx, tdata[1]);
+        let tokens = reactive::memo(cx, draws, false);
+        let mut rdata = [scheme, reader, tokens];
+        let f = qjs::JS_NewCFunctionData(cx, Some(read_scoped), 0, 0, 3, rdata.as_mut_ptr());
         qjs::JS_FreeValue(cx, scheme);
+        qjs::JS_FreeValue(cx, tokens);
         f
     }
+}
+
+/// The slot of a `ThemeScope`'s data value.
+fn scope_slot(cx: *mut JsContext, value: JsValue) -> usize {
+    let mut slot = 0f64;
+    // SAFETY: a number (`scoped_reader`).
+    unsafe { qjs::JS_ToFloat64(cx, &mut slot, value) };
+    slot as usize
+}
+
+/// A `ThemeScope` is disposed: its tokens' slot is given back.
+unsafe extern "C" fn scope_gone(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+    _magic: c_int,
+    data: *mut JsValue,
+) -> JsValue {
+    // SAFETY: one data value (`scoped_reader`).
+    crate::env::free_scope_slot(cx, scope_slot(cx, unsafe { *data }));
+    UNDEFINED
+}
+
+/// The tokens a `ThemeScope` draws with: its `theme` over the tokens
+/// around it (`env::make_scope_tokens`).
+unsafe extern "C" fn scope_draws(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+    _magic: c_int,
+    data: *mut JsValue,
+) -> JsValue {
+    // SAFETY: three data values (`scoped_reader`).
+    let (props, outer, slot) = unsafe { (*data, *data.add(1), *data.add(2)) };
+    let theme = get(cx, props, "theme");
+    // SAFETY: a live value, ours.
+    if unsafe { qjs::JS_IsException(theme) } {
+        return theme;
+    }
+    let made = crate::env::make_scope_tokens(cx, scope_slot(cx, slot), theme, outer);
+    unsafe { qjs::JS_FreeValue(cx, theme) };
+    made
 }
 
 /// What a `ThemeScope` shows: its `appearance`, else what the scope around
@@ -908,9 +964,10 @@ unsafe extern "C" fn read_scoped(
     _magic: c_int,
     data: *mut JsValue,
 ) -> JsValue {
-    // SAFETY: two data values (`scoped_reader`).
-    let (scheme, reader) = unsafe { (*data, *data.add(1)) };
+    // SAFETY: three data values (`scoped_reader`).
+    let (scheme, reader, tokens) = unsafe { (*data, *data.add(1), *data.add(2)) };
     crate::env::provide_scope(cx, scheme);
+    crate::env::provide_scope_tokens(cx, tokens);
     // SAFETY: calls the children's reader.
     unsafe { qjs::JS_Call(cx, reader, UNDEFINED, 0, std::ptr::null_mut()) }
 }
