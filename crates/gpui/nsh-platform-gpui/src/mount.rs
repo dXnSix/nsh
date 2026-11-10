@@ -344,6 +344,7 @@ impl Mounter {
                 let Some(view) = &self.get(*id) else { return };
                 view.state_mut().props = props.clone();
                 crate::input::props_changed(surface, view);
+                crate::focus::props_changed(surface, view);
                 crate::access::props_changed(view);
             }
             MountItem::LayoutAnimation(a) => self.layout_animation = Some(*a),
@@ -421,7 +422,11 @@ impl Mounter {
         let view = self.views.get(id);
         let view = view.as_ref();
         match command {
-            Command::Focus => view.map_or((), crate::text_input::focus),
+            Command::Focus => match view {
+                Some(view) if view.kind() == ViewKind::Input => crate::text_input::focus(view),
+                Some(view) => crate::focus::asked(surface, view),
+                None => {}
+            },
             Command::Blur => match view {
                 Some(view) => crate::focus::blur_command(surface, view),
                 None => crate::text_input::blur_all(surface),

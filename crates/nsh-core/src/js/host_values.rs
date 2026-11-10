@@ -493,6 +493,31 @@ pub(crate) fn overlay_anchor<I: HostInput>(input: &I, _: &mut HostCx) -> Option<
     Some(OverlayProp::Anchor(anchor))
 }
 
+/// The view a `nextFocus*` prop names: a host element (a ref), or nothing.
+fn focus_target<I: HostInput>(input: &I) -> Option<crate::element::FocusTarget> {
+    input.node().map(crate::element::FocusTarget::Node)
+}
+
+/// `nextFocusUp`: a host element (a ref), or nothing.
+pub(crate) fn next_focus_up<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Prop> {
+    Some(Prop::NextFocusUp(focus_target(input)))
+}
+
+/// `nextFocusDown`: a host element (a ref), or nothing.
+pub(crate) fn next_focus_down<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Prop> {
+    Some(Prop::NextFocusDown(focus_target(input)))
+}
+
+/// `nextFocusLeft`: a host element (a ref), or nothing.
+pub(crate) fn next_focus_left<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Prop> {
+    Some(Prop::NextFocusLeft(focus_target(input)))
+}
+
+/// `nextFocusRight`: a host element (a ref), or nothing.
+pub(crate) fn next_focus_right<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Prop> {
+    Some(Prop::NextFocusRight(focus_target(input)))
+}
+
 /// `tooltip`: an element (a node JS made), or nothing.
 pub(crate) fn tooltip<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Prop> {
     let content = input
