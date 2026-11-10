@@ -33,6 +33,8 @@
     ["blob-module", "Blob URL module in the realm"],
     ["wasm-streaming", "Wasm fetch: instantiateStreaming"],
     ["wasm-buffer", "Wasm fetch: arrayBuffer + instantiate"],
+    ["csp", "Wasm fetch under CSP connect-src 'self' (a package page in an iframe)"],
+    ["webapis", "Samsung's $WEBAPIS/webapis/webapis.js"],
   ];
   const TIMEOUT = 5000;
   const results = new Map();
@@ -141,6 +143,16 @@
     }
   }
 
+  /** The app's page fetches under `connect-src 'self'` when its
+   * `capabilities` limit the network: does `'self'` match package files? */
+  function probeCsp() {
+    const frame = document.createElement("iframe");
+    frame.hidden = true;
+    frame.src = "probe/csp.html";
+    frame.onerror = () => nshProbe.done("csp", false, "could not load probe/csp.html");
+    document.body.append(frame);
+  }
+
   window.addEventListener("DOMContentLoaded", () => {
     const features = {
       scrollend: "onscrollend" in window,
@@ -153,6 +165,7 @@
     render();
     probeRealm();
     probeWasm();
+    probeCsp();
     setTimeout(() => {
       for (const [name] of PROBES) nshProbe.done(name, false, `nothing in ${TIMEOUT / 1000} s`);
     }, TIMEOUT);
@@ -162,6 +175,10 @@
     if (e.keyCode === 10009) window.tizen?.application.getCurrentApplication().exit();
   });
 </script>
+<!-- What the app's page loads first on a TV (`nsh/tizen` uses it). -->
+<script src="$WEBAPIS/webapis/webapis.js"
+  onload="nshProbe.done('webapis', typeof webapis !== 'undefined', typeof webapis === 'undefined' ? 'loaded, no webapis' : 'webapis ' + Object.keys(webapis).length + ' APIs')"
+  onerror="nshProbe.done('webapis', false, 'could not load $WEBAPIS/webapis/webapis.js')"></script>
 <script type="module" src="probe/module.js"></script>
 </head>
 <body>

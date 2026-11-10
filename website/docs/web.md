@@ -311,7 +311,7 @@ nsh package --target tizen-web --probe             # a package that shows how th
   installs and launches a development package on the TV (`--device`: its `sdb` serial), whose page opens the dev
   server's at this machine's address on the network.
 - **The loader probe** (`--probe`) is a package of its own, `NshLdProbe.Probe`: on the TV it tries each way the app's
-  page loads its files (module scripts, an import map, an iframe's realm, a script fetched with CORS, WebAssembly) and
+  page loads its files (module scripts, an import map, an iframe's realm, a script fetched with CORS, WebAssembly, a fetch under the page's Content-Security-Policy, Samsung's `webapis.js`) and
   shows what each did, with the engine's version.
 
 ## Build the website's player

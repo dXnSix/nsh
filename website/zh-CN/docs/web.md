@@ -280,7 +280,7 @@ nsh package --target tizen-web --probe             # 一个包，显示电视如
   下的应用，并且支持热更新。配置了 `nsh.json` 的 `tizen.signing` 时，它还会在电视上签名、安装并启动一个开发包
   （`--device`：电视的 `sdb` 序列号），开发包的页面会打开本机在局域网中的地址上的开发服务器页面。
 - **加载探针**（`--probe`）是一个独立的包 `NshLdProbe.Probe`：它在电视上逐一尝试应用页面加载文件的各种方式（module
-  脚本、import map、iframe 的 realm、用 CORS 获取的脚本、WebAssembly），并显示每一项的结果和引擎的版本。
+  脚本、import map、iframe 的 realm、用 CORS 获取的脚本、WebAssembly、页面内容安全策略下的 fetch、三星的 `webapis.js`），并显示每一项的结果和引擎的版本。
 
 ## 构建本站的播放器
 

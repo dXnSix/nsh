@@ -471,6 +471,7 @@ fn the_probe_tries_how_the_page_loads_its_files() {
             "index.html",
             "probe/chunk.js",
             "probe/classic.js",
+            "probe/csp.html",
             "probe/import-map.js",
             "probe/mapped.js",
             "probe/module.js",
@@ -496,8 +497,22 @@ fn the_probe_tries_how_the_page_loads_its_files() {
         "URL.createObjectURL",
         "WebAssembly.instantiateStreaming",
         "WebAssembly.instantiate(bytes",
+        r#"frame.src = "probe/csp.html""#,
+        r#"<script src="$WEBAPIS/webapis/webapis.js""#,
     ] {
         assert!(page.contains(part), "{part}");
+    }
+    // The app's page's policy when its `capabilities` limit the network.
+    let csp = read(probe.join("probe/csp.html"));
+    assert!(
+        csp.contains(r#"<meta http-equiv="Content-Security-Policy" content="connect-src 'self'">"#),
+        "{csp}"
+    );
+    assert!(csp.contains(r#"fetch("probe.wasm")"#), "{csp}");
+    assert!(csp.contains(r#"parent.nshProbe.done("csp""#), "{csp}");
+    // A row for each of them.
+    for row in [r#"["csp", "#, r#"["webapis", "#] {
+        assert!(page.contains(row), "{row}");
     }
     assert!(read(probe.join("probe/module.js")).contains(r#"import("nsh-probe-chunk")"#));
     assert!(read(probe.join("probe/import-map.js")).contains(r#"from "nsh-probe-mapped""#));

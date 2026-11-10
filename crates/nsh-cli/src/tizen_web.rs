@@ -59,6 +59,7 @@ const PROBE_FILES: &[(&str, &str)] = &[
         "probe/classic.js",
         include_str!("tizen_web/probe/classic.js"),
     ),
+    ("probe/csp.html", include_str!("tizen_web/probe/csp.html")),
 ];
 /// The probe's WebAssembly module: `answer()` returns 42.
 const PROBE_WASM: &[u8] = &[
