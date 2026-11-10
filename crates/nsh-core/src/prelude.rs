@@ -154,6 +154,7 @@ pub use crate::element::{
     ReturnKeyType,
     Rgba,
     Role,
+    ScopeTheme,
     Screen,
     ScreenAnimation,
     Scroll,

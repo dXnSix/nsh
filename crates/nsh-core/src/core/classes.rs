@@ -3,6 +3,10 @@
 //! on changes: the appearance, the window size, the layout direction, the
 //! node's interaction states, its group's states or its sibling position.
 
+use std::sync::Arc;
+
+use rustc_hash::FxHashMap;
+
 use super::{Core, Key, Kind, NO_KEY, dirty, disabling_changes};
 use crate::{
     geometry::{Points, Size},
@@ -12,8 +16,8 @@ use crate::{
     props::PointerEvents,
     style::{Color, Style, StylePatch, ViewStyle},
     tailwind::{
-        ClassEnvironment, ClassList, ClassProps, Context, Rule, Theme, TokenChange, deps, position,
-        rank, state,
+        ClassEnvironment, ClassList, ClassProps, ClassTokens, Context, Rule, Theme, TokenChange,
+        deps, position, rank, state,
     },
     text::TextEngine,
 };
@@ -147,6 +151,19 @@ const STATE_PARTS: [Part; 10] = [
     Part::Pressed,
     Part::FocusWithin,
 ];
+
+/// The design tokens of a view that has its own (`Prop::ScopeTokens`, a
+/// [`crate::element::ThemeScope`]'s), for the classes in it.
+#[derive(Debug)]
+pub(super) struct TokenScope {
+    /// The tokens, as classes read them.
+    class_tokens: Arc<ClassTokens>,
+    /// The tokens whose values are not the surface's: a class list that
+    /// reads none of them is the surface's, shared.
+    differs: TokenChange,
+    /// The class lists that read one, parsed with the scope's values.
+    cache: FxHashMap<Box<str>, std::rc::Rc<ClassList>>,
+}
 
 impl<M: TextEngine> Core<M> {
     /// Sets the environment class variants depend on (`dark:`, `ios:`,
@@ -748,7 +765,7 @@ impl<M: TextEngine> Core<M> {
         let classes = if combined.trim().is_empty() {
             None
         } else {
-            let (classes, fresh) = self.tailwind.get(&combined);
+            let (classes, fresh) = self.classes_at(Some(key), &combined);
             if fresh && !classes.unknown().is_empty() {
                 log::warn!(
                     "unknown classes: {}",
@@ -853,6 +870,14 @@ impl<M: TextEngine> Core<M> {
             return;
         };
         let all = changed == TokenChange::All;
+        // What the scopes change is told from the surface's values of now;
+        // with other names, a class may be another one in a scope too.
+        for scope in self.token_scopes.values_mut() {
+            scope.differs = self.tailwind.difference(&scope.class_tokens);
+            if all {
+                scope.cache.clear();
+            }
+        }
         let reads = |c: &Option<std::rc::Rc<ClassList>>| {
             c.as_ref()
                 .is_some_and(|c| c.deps() & deps::THEME != 0 && c.reads(&changed))
@@ -892,16 +917,159 @@ impl<M: TextEngine> Core<M> {
             })
             .map(|(&id, entry)| (id, entry.clone()))
             .collect();
-        for (id, (own, class, outer)) in nodes {
-            let app = self.app_class_list(&class);
-            let user = self.merge_user(Some(app), outer);
-            let list = match (own, user) {
-                (Some(a), Some(b)) => Some(std::rc::Rc::new(a.merged(&b))),
-                (a, b) => a.or(b),
-            };
-            if let Ok(key) = self.key(id) {
-                self.set_class_list(key, list);
+        for (id, entry) in nodes {
+            self.set_app_classes(id, entry);
+        }
+    }
+
+    /// Resolves the app's classes on a view's element again
+    /// ([`Self::apply_el_styles`]'s entry of it).
+    fn set_app_classes(
+        &mut self,
+        id: NodeId,
+        (own, class, outer): (
+            Option<std::rc::Rc<ClassList>>,
+            crate::element::SharedString,
+            Option<std::rc::Rc<ClassList>>,
+        ),
+    ) {
+        let app = self.app_class_list(id, &class);
+        let user = self.merge_user(Some(app), outer);
+        let list = match (own, user) {
+            (Some(a), Some(b)) => Some(std::rc::Rc::new(a.merged(&b))),
+            (a, b) => a.or(b),
+        };
+        if let Ok(key) = self.key(id) {
+            self.set_class_list(key, list);
+        }
+    }
+
+    /// The rules of `classes` for view `key`: the surface's, or, in a scope
+    /// with design tokens of its own that changes a token they read, the
+    /// scope's (parsed with its values, once). Whether they were parsed for
+    /// the surface just now, as [`crate::tailwind::Tailwind::get`] says.
+    pub(super) fn classes_at(
+        &mut self,
+        key: Option<Key>,
+        classes: &str,
+    ) -> (std::rc::Rc<ClassList>, bool) {
+        let (list, fresh) = self.tailwind.get(classes);
+        let Some(scope) = key
+            .map(|key| self.nodes[key as usize].token_scope)
+            .filter(|scope| *scope != NO_KEY)
+            .and_then(|scope| self.token_scopes.get_mut(&scope))
+        else {
+            return (list, fresh);
+        };
+        if list.deps() & deps::THEME == 0 || !list.reads(&scope.differs) {
+            return (list, fresh);
+        }
+        if let Some(scoped) = scope.cache.get(classes) {
+            return (scoped.clone(), fresh);
+        }
+        let scoped = std::rc::Rc::new(self.tailwind.parse_with(&scope.class_tokens, classes));
+        // Bounded as the surface's cache is.
+        if scope.cache.len() >= 4096 {
+            scope.cache.clear();
+        }
+        scope.cache.insert(classes.into(), scoped.clone());
+        (scoped, fresh)
+    }
+
+    /// `Prop::ScopeTokens`: view `key` and the views in it are drawn with
+    /// design tokens `tokens` (`None`: with those around it again).
+    pub(super) fn set_scope_tokens(
+        &mut self,
+        key: Key,
+        tokens: Option<Arc<crate::element::Tokens>>,
+    ) {
+        let Some(tokens) = tokens else {
+            if self.token_scopes.remove(&key).is_some() {
+                self.update_token_scope(key);
             }
+            return;
+        };
+        let class_tokens = Arc::new(ClassTokens::new(&tokens));
+        let differs = self.tailwind.difference(&class_tokens);
+        let Some(scope) = self.token_scopes.get_mut(&key) else {
+            self.token_scopes.insert(
+                key,
+                TokenScope {
+                    class_tokens,
+                    differs,
+                    cache: FxHashMap::default(),
+                },
+            );
+            return self.update_token_scope(key);
+        };
+        if *scope.class_tokens == *class_tokens {
+            return;
+        }
+        // Only what read a token whose value changed in the scope.
+        let changed = if scope.class_tokens.same_names(&class_tokens) {
+            TokenChange::Values(scope.class_tokens.changed(&class_tokens))
+        } else {
+            TokenChange::All
+        };
+        scope.cache.retain(|_, list| !list.reads(&changed));
+        scope.class_tokens = class_tokens;
+        scope.differs = differs;
+        let keys: Vec<Key> = self
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.token_scope == key)
+            .map(|(k, _)| k as Key)
+            .collect();
+        for key in keys {
+            self.resolve_classes_again(key, &changed);
+        }
+    }
+
+    /// Resolves again which scope's design tokens `key` is drawn with (it
+    /// got or lost its own, or moved) and the views taking it from `key`:
+    /// those whose classes read a theme token are resolved in it.
+    pub(super) fn update_token_scope(&mut self, key: Key) {
+        let node = &self.nodes[key as usize];
+        let scope = if self.token_scopes.contains_key(&key) {
+            key
+        } else {
+            match node.parent {
+                NO_KEY => NO_KEY,
+                parent => self.nodes[parent as usize].token_scope,
+            }
+        };
+        if node.token_scope == scope {
+            return;
+        }
+        self.nodes[key as usize].token_scope = scope;
+        self.resolve_classes_again(key, &TokenChange::All);
+        let children = self.nodes[key as usize].children.clone();
+        for child in children {
+            self.update_token_scope(child);
+        }
+    }
+
+    /// Resolves the classes of `key` again where they read a token of
+    /// `changed`: its own (`class`), the app's on the component it hosts
+    /// and on its element.
+    fn resolve_classes_again(&mut self, key: Key, changed: &TokenChange) {
+        let reads = |c: &Option<std::rc::Rc<ClassList>>| {
+            c.as_ref()
+                .is_some_and(|c| c.deps() & deps::THEME != 0 && c.reads(changed))
+        };
+        let node = &self.nodes[key as usize];
+        let id = node.id;
+        let own = reads(&node.classes);
+        if node.class_names.is_some() && own {
+            self.set_classes(key, None, None);
+        }
+        if self.components.instances.get(&id).is_some_and(|inst| {
+            (!inst.class.is_empty() || !inst.class_list.is_empty()) && reads(&inst.user)
+        }) {
+            self.update_user_class(id);
+        }
+        if own && let Some(entry) = self.components.app_classes.get(&id).cloned() {
+            self.set_app_classes(id, entry);
         }
     }
 

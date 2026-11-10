@@ -607,6 +607,11 @@ struct Node {
     /// Dark or light as the nearest view with an appearance says (its own,
     /// else one around it); `None`: the surface's ([`Core::dark_at`]).
     scoped_dark: Option<bool>,
+    /// The nearest view with design tokens of its own, itself included
+    /// (`Prop::ScopeTokens`, a [`crate::element::ThemeScope`]'s; an entry
+    /// of [`Core::token_scopes`]): its classes resolve with those values.
+    /// `NO_KEY`: none, the surface's.
+    token_scope: Key,
     /// Start / end properties, if any.
     logical: Option<Box<crate::style::Logical>>,
     /// Touch, accessibility and test properties; most views have none.
@@ -885,6 +890,7 @@ impl Node {
             direction: None,
             appearance: None,
             scoped_dark: None,
+            token_scope: NO_KEY,
             logical: None,
             props: None,
             text: String::new(),
@@ -1296,6 +1302,9 @@ pub struct Core<M: TextEngine> {
     /// What class variants read from the environment (`dark` as shown:
     /// [`Core::set_appearance`]).
     class_env: ClassEnvironment,
+    /// The views with design tokens of their own (`Prop::ScopeTokens`),
+    /// with the class lists that resolve differently in them.
+    token_scopes: rustc_hash::FxHashMap<Key, classes::TokenScope>,
     /// The appearance the app asked for.
     appearance: crate::platform::Appearance,
     /// The platform reports dark appearance.
@@ -1472,6 +1481,7 @@ impl<M: TextEngine> Core<M> {
             needs_layout: true,
             tailwind: Tailwind::new(),
             class_env: ClassEnvironment::default(),
+            token_scopes: rustc_hash::FxHashMap::default(),
             appearance: crate::platform::Appearance::System,
             system_dark: false,
             overlays: Vec::new(),
@@ -5011,6 +5021,10 @@ impl<M: TextEngine> Core<M> {
                 }
                 return Ok(());
             }
+            Prop::ScopeTokens(tokens) => {
+                self.set_scope_tokens(key, tokens);
+                return Ok(());
+            }
             Prop::Keymap(keymap) => {
                 // The surface's shortcuts (the root's): `nsh/keymap`.
                 if key == self.root {
@@ -5663,6 +5677,7 @@ impl<M: TextEngine> Core<M> {
         self.sticky_changed |= !self.sticky_nodes.is_empty();
         self.update_direction(child);
         self.update_appearance(child);
+        self.update_token_scope(child);
         if self.nodes[parent as usize].child_perspective.is_some() {
             self.mark(child, dirty::VIEW | dirty::ANIMATION);
         }
@@ -5760,6 +5775,10 @@ impl<M: TextEngine> Core<M> {
     fn detach(&mut self, key: Key) {
         self.input_bar_moves(key);
         self.unlink(key, true);
+        // Out of the scope it was in: its key may name another view later.
+        if !self.token_scopes.is_empty() {
+            self.update_token_scope(key);
+        }
     }
 
     /// A multiline input with a built-in bar beside it leaves its place:
@@ -5930,6 +5949,9 @@ impl<M: TextEngine> Core<M> {
             self.parent_lists.retain(|&k| k != key);
         }
         let node = self.nodes.remove(key as usize);
+        if !self.token_scopes.is_empty() {
+            self.token_scopes.remove(&key);
+        }
         self.ch_readers -= usize::from(node.reads_ch);
         self.slots.remove(id as usize);
         if node.class_props.as_ref().and_then(|c| c.pointer_events)

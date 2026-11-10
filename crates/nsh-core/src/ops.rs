@@ -2838,6 +2838,11 @@ pub enum Prop {
     /// them ([`crate::selection`]). Set by components
     /// (`Element::continues_text`), never by JS.
     ContinuesText(bool),
+    /// The design tokens the view and the views in it are drawn with, in
+    /// place of the surface's (`None`: those around it): the classes of
+    /// theme tokens in it resolve with these values. Set by
+    /// [`crate::element::ThemeScope`], never by JS.
+    ScopeTokens(Option<std::sync::Arc<crate::element::Tokens>>),
     /// `allowFontScaling`: follow the system text size (default true).
     #[prop(js = "allowFontScaling", default = true, on = TEXT | INPUT)]
     AllowFontScaling(bool),

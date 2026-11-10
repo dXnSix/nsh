@@ -190,7 +190,7 @@ pub use self::{
     theme::{
         AppTheme, ThemeSpec, TokenKind, TokenSpec, reset_theme, set_theme, theme_of, update_theme,
     },
-    theme_scope::{ThemeScope, ThemeScopeElement, ThemeScopeProps, theme_scope},
+    theme_scope::{ScopeTheme, ThemeScope, ThemeScopeElement, ThemeScopeProps, theme_scope},
     tokens::{
         AnyRole, FONT_MONO, FONT_SANS, FontRole, NumberRole, Role, RoleKind, RoleValue,
         ThemeTokens, Token, TokenOverrides, TokenSource, Tokens, role,
