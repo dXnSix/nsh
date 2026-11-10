@@ -15,7 +15,17 @@
 //! - **Props and commands** ([`ops`]): a new source opens a player (it
 //!   prepares at once; `paused: false` starts it when it is ready),
 //!   `paused`, `muted`, `volume` and `repeat` follow, `seek(seconds)` seeks.
-//!   `rate` has no public native API on Tizen 8.0: it stays 1.
+//!   The player seeks only once prepared: a seek before that, and the time
+//!   a video opened again as a texture was at, wait for it, playing after
+//!   them ([`Gate`]). `rate` has no public native API on Tizen 8.0: it
+//!   stays 1.
+//! - **Interruptions** ([`Gate`]): when the system takes the decoder (another
+//!   app, typically around a pause and resume), the player may be left
+//!   unprepared, or paused while the props say play. The app hears
+//!   `onBuffer` with `true`; once the app is active again the player is
+//!   prepared again if it has to be, given its props, sought to where it
+//!   was and played as `paused` says, and the app hears `onBuffer` with
+//!   `false`. When it cannot be prepared again, `onError`.
 //! - **Events** ([`Events`]): `onLoadStart` as a source opens, `onLoad`
 //!   once it is ready (its duration; the picture's size is the player's,
 //!   not reported), `onProgress` every `progressUpdateInterval` while
@@ -56,13 +66,217 @@ pub(crate) enum Notice {
     Failed(String),
     /// Buffering, 0 to 100.
     Buffering(u8),
-    /// The system interrupted it (another app took the decoder); whether
-    /// it plays still.
-    Interrupted {
-        playing: bool,
-    },
+    /// The system interrupted it (another app took the decoder), leaving
+    /// it as [`Left`] says.
+    Interrupted(Left),
     /// A new frame for the texture.
     Frame,
+}
+
+/// What an interruption by the system left the player in (the platform's
+/// `Notice::Interrupted` state).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Left {
+    /// Unprepared (idle): only preparing it again brings it back.
+    Lost,
+    /// Prepared, not playing (paused or stopped).
+    Paused,
+    /// Playing, or still preparing: nothing was lost.
+    Kept,
+}
+
+/// What the item calls on its player, or tells the app.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Call {
+    /// One of the props' calls ([`ops`]; never `Open` or `Close`).
+    Op(Op),
+    /// Seek to the time, in seconds.
+    Seek(f64),
+    /// Prepare the source again (`VideoPlayer::prepare`).
+    Prepare,
+    /// The video stalled (`onBuffer` with `true`) or goes on (`false`).
+    Stalled(bool),
+}
+
+/// How an interrupted player comes back once the app is active.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Recovery {
+    /// Prepare again (the system unprepared it).
+    prepare: bool,
+    /// Where to continue (seconds): the time it was at, or sought since.
+    at: f64,
+    /// A seek was asked for while it was interrupted.
+    sought: bool,
+    /// Whether to play: the props' `paused` (or the control bar) since.
+    play: bool,
+}
+
+/// The calls a player takes as it can. A player prepares as it opens and
+/// seeks only once prepared (`Notice::Ready`): a seek before that waits
+/// for it, the start position of a video opened again as a texture too,
+/// and playing waits behind it, so the video plays from there rather than
+/// from the start. When the system interrupts the player and it lost what
+/// it played (unprepared, or paused while the props say play), the app
+/// hears that the video stalled (`onBuffer`), and once the app is active it
+/// is prepared again if it has to be, given its props again (muted,
+/// volume, looping), sought to where it was and played as the props say;
+/// the app hears that it goes on when it does.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Gate {
+    /// Prepared: seeks reach the player.
+    prepared: bool,
+    /// The seek waiting for it to be prepared.
+    seek: Option<f64>,
+    /// Play (`true`) or not once prepared, after that seek.
+    then: Option<bool>,
+    /// Interrupted: what brings it back.
+    interrupted: Option<Recovery>,
+    /// Prepared again after an interruption: the app hears that the video
+    /// goes on once it is ready.
+    recovering: bool,
+}
+
+impl Gate {
+    /// The props' call `op` (not `Open` or `Close`): now, or (playing and
+    /// pausing) once the player is prepared or back.
+    pub(crate) fn op(&mut self, op: Op) -> Vec<Call> {
+        let play = match op {
+            Op::Play => true,
+            Op::Pause => false,
+            op => return vec![Call::Op(op)],
+        };
+        if let Some(recovery) = &mut self.interrupted {
+            recovery.play = play;
+            return Vec::new();
+        }
+        if !self.prepared {
+            self.then = Some(play);
+            return Vec::new();
+        }
+        vec![Call::Op(op)]
+    }
+
+    /// `seek(seconds)`: now, or once the player is prepared or back.
+    pub(crate) fn seek(&mut self, at: f64) -> Vec<Call> {
+        if let Some(recovery) = &mut self.interrupted {
+            recovery.at = at;
+            recovery.sought = true;
+            return Vec::new();
+        }
+        if !self.prepared {
+            self.seek = Some(at);
+            return Vec::new();
+        }
+        vec![Call::Seek(at)]
+    }
+
+    /// The player is prepared (`Notice::Ready`): what waited for it.
+    pub(crate) fn ready(&mut self) -> Vec<Call> {
+        self.prepared = true;
+        let mut calls = Vec::new();
+        if let Some(recovery) = &mut self.interrupted {
+            // A prepare from before the interruption came through: it
+            // need not prepare again, but it is at the start; the rest
+            // waits for the app.
+            if std::mem::take(&mut recovery.prepare) {
+                recovery.sought = true;
+            }
+            return calls;
+        }
+        calls.extend(self.seek.take().map(Call::Seek));
+        if self.then.take() == Some(true) {
+            calls.push(Call::Op(Op::Play));
+        }
+        if std::mem::take(&mut self.recovering) {
+            calls.push(Call::Stalled(false));
+        }
+        calls
+    }
+
+    /// The system interrupted the player, leaving it as `left` says, at
+    /// time `at`; `play` is whether the props (or the control bar) want it
+    /// playing.
+    pub(crate) fn interrupted(&mut self, left: Left, play: bool, at: f64) -> Vec<Call> {
+        let prepare = left == Left::Lost;
+        if prepare {
+            self.prepared = false;
+        }
+        if let Some(recovery) = &mut self.interrupted {
+            recovery.prepare |= prepare;
+            return Vec::new();
+        }
+        let lost = match left {
+            Left::Lost => true,
+            Left::Paused => play,
+            Left::Kept => false,
+        };
+        if !lost {
+            return Vec::new();
+        }
+        // Where it was is where it goes on: what waited goes with it.
+        let at = self.seek.take().unwrap_or(at);
+        let play = self.then.take().unwrap_or(play);
+        self.recovering = false;
+        self.interrupted = Some(Recovery {
+            prepare,
+            at,
+            sought: false,
+            play,
+        });
+        vec![Call::Stalled(true)]
+    }
+
+    /// The player is replaced by a new one (a video on the plane opened
+    /// again as a texture): what waited goes with the old one (the item
+    /// gives the new one the time and the props), but a stall the app
+    /// heard of ends once the new one is ready. Whether the old one waited
+    /// to come back (the new one plays as the props say, then).
+    pub(crate) fn reopen(&mut self) -> bool {
+        let waited = self.interrupted.is_some();
+        *self = Gate {
+            recovering: waited || self.recovering,
+            ..Gate::default()
+        };
+        waited
+    }
+
+    /// Whether an interrupted player waits for the app to be active.
+    pub(crate) fn waits(&self) -> bool {
+        self.interrupted.is_some()
+    }
+
+    /// The app is active: what brings an interrupted player back, with
+    /// `props` (the video's) given to it again when it is prepared again.
+    pub(crate) fn resume(&mut self, props: Option<&VideoProps>) -> Vec<Call> {
+        let Some(recovery) = self.interrupted.take() else {
+            return Vec::new();
+        };
+        if recovery.prepare {
+            let mut calls = vec![Call::Prepare];
+            calls.extend(
+                props
+                    .map(|p| ops(None, p))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|op| matches!(op, Op::Muted(_) | Op::Volume(_) | Op::Looping(_)))
+                    .map(Call::Op),
+            );
+            self.prepared = false;
+            self.seek = Some(recovery.at);
+            self.then = Some(recovery.play);
+            self.recovering = true;
+            return calls;
+        }
+        let mut calls = Vec::new();
+        if recovery.sought {
+            calls.push(Call::Seek(recovery.at));
+        }
+        if recovery.play {
+            calls.push(Call::Op(Op::Play));
+        }
+        calls.push(Call::Stalled(false));
+        calls
+    }
 }
 
 /// What the view's drawing does to the video where it is drawn.
@@ -252,11 +466,20 @@ impl Events {
                 }
                 vec![Emit::Buffer(buffering)]
             }
-            Notice::Interrupted { playing } => {
-                self.playing = playing;
+            Notice::Interrupted(left) => {
+                self.playing &= left == Left::Kept;
                 vec![Emit::Redraw]
             }
         }
+    }
+
+    /// The video stalled after an interruption, or goes on ([`Gate`]):
+    /// `onBuffer`, unless the app heard it already.
+    pub(crate) fn stalled(&mut self, stalled: bool) -> Vec<Emit> {
+        if std::mem::replace(&mut self.buffering, stalled) == stalled {
+            return Vec::new();
+        }
+        vec![Emit::Buffer(stalled)]
     }
 
     /// `onProgress` is due: playing a source that loaded.
@@ -277,9 +500,13 @@ mod item {
 
     use dxn_gpui_tizen::video::{self as platform, VideoPlayer};
     use gpui::{AppContext as _, Entity, Subscription};
-    use nsh_core::{EventKind, EventPayload, NodeId, PayloadValue, VideoProps};
+    use nsh_core::{
+        EventKind, EventPayload, NodeId, PayloadValue, VideoProps, platform::Lifecycle,
+    };
 
-    use super::{Emit, Events, Notice, Op, Output, Placement, ops, output, reopen};
+    use super::{
+        Call, Emit, Events, Gate, Left, Notice, Op, Output, Placement, ops, output, reopen,
+    };
     use crate::{
         image::AssetBase,
         input::{Cursor, PointerKind},
@@ -316,6 +543,12 @@ mod item {
         pending: RefCell<Vec<Op>>,
         /// Where to seek once it opens (reopened, or sought before).
         seek_to: Cell<Option<f64>>,
+        /// The open player's calls as it takes them (seeks once prepared,
+        /// its way back from an interruption).
+        gate: RefCell<Gate>,
+        /// Waiting for the app to be active to bring an interrupted player
+        /// back.
+        waiting: Cell<bool>,
         events: RefCell<Events>,
         /// The duration, once ready (seconds).
         duration: Cell<f64>,
@@ -336,6 +569,8 @@ mod item {
                 player: RefCell::new(None),
                 pending: RefCell::default(),
                 seek_to: Cell::new(None),
+                gate: RefCell::default(),
+                waiting: Cell::new(false),
                 events: RefCell::default(),
                 duration: Cell::new(0.0),
                 time: Cell::new(0.0),
@@ -378,48 +613,170 @@ mod item {
                 .emit(EventKind::LoadStart, || EventPayload::None);
         }
 
-        /// Tells the player `op`, or keeps it for when it opens.
-        fn apply(&self, op: Op) {
-            let Some(player) = self.player.borrow().as_ref().map(|o| o.player.clone()) else {
-                self.pending.borrow_mut().push(op);
-                return;
+        /// The open player.
+        fn current(&self) -> Option<Entity<VideoPlayer>> {
+            self.player.borrow().as_ref().map(|o| o.player.clone())
+        }
+
+        /// The video `id` of the surface `key`, while it is there.
+        fn find(key: Option<u64>, id: NodeId) -> Option<(Rc<Surface>, Rc<VideoItem>)> {
+            let surface = key.and_then(Surface::by_key)?;
+            let item = match surface.native.hosts.borrow().get(&id) {
+                Some(Host::Video(item)) => item.clone(),
+                _ => return None,
             };
-            let plays = matches!(op, Op::Play);
+            Some((surface, item))
+        }
+
+        /// Makes `calls` on `player` with the app (from where it is not at
+        /// hand), unless the player was replaced by then.
+        fn later(&self, player: Entity<VideoPlayer>, calls: Vec<Call>) {
+            if calls.is_empty() {
+                return;
+            }
+            let key = self.surface.upgrade().map(|s| s.key());
+            let id = self.id;
             crate::rt::on_app(move |cx| {
-                let result = player.update(cx, |p, cx| match op {
-                    Op::Play => p.play(cx),
-                    Op::Pause => p.pause(cx),
-                    Op::Muted(muted) => p.set_muted(muted),
-                    Op::Volume(volume) => p.set_volume(volume),
-                    Op::Looping(looping) => p.set_looping(looping),
-                    Op::Open(_) | Op::Close => Ok(()),
-                });
+                let Some((_, item)) = Self::find(key, id) else {
+                    return;
+                };
+                if item.current().is_some_and(|current| current == player) {
+                    item.call(&player, calls, cx);
+                }
+            });
+        }
+
+        /// Makes `calls` on `player`.
+        fn call(&self, player: &Entity<VideoPlayer>, calls: Vec<Call>, cx: &mut gpui::App) {
+            for call in calls {
+                let result = match call {
+                    Call::Op(op) => {
+                        let plays = matches!(op, Op::Play);
+                        let result = player.update(cx, |p, cx| match op {
+                            Op::Play => p.play(cx),
+                            Op::Pause => p.pause(cx),
+                            Op::Muted(muted) => p.set_muted(muted),
+                            Op::Volume(volume) => p.set_volume(volume),
+                            Op::Looping(looping) => p.set_looping(looping),
+                            Op::Open(_) | Op::Close => Ok(()),
+                        });
+                        if plays {
+                            self.tick();
+                        }
+                        result
+                    }
+                    Call::Seek(at) => {
+                        player.update(cx, |p, cx| p.seek(Duration::from_secs_f64(at), cx))
+                    }
+                    Call::Prepare => {
+                        if let Err(err) = player.update(cx, |p, cx| p.prepare(cx)) {
+                            // Interrupted for good: the app hears it stopped.
+                            *self.gate.borrow_mut() = Gate::default();
+                            self.stalled(false);
+                            let source = self.uri.borrow().clone().unwrap_or_default();
+                            let emits = self.events.borrow_mut().notice(
+                                Notice::Failed(format!("cannot prepare it again: {err}")),
+                                &source,
+                                || 0.0,
+                            );
+                            self.emit(emits);
+                            return;
+                        }
+                        Ok(())
+                    }
+                    Call::Stalled(stalled) => {
+                        self.stalled(stalled);
+                        Ok(())
+                    }
+                };
                 if let Err(err) = result {
                     log::debug!("video: {err}");
                 }
-            });
-            if plays {
-                self.tick();
             }
+        }
+
+        /// `onBuffer` for an interruption, unless the app heard it already.
+        fn stalled(&self, stalled: bool) {
+            let emits = self.events.borrow_mut().stalled(stalled);
+            self.emit(emits);
+        }
+
+        /// The app's events (and redraws) of `emits`.
+        fn emit(&self, emits: Vec<Emit>) {
+            for emit in emits {
+                if let Emit::Load(duration) = emit {
+                    self.duration.set(finite(duration));
+                }
+                match emit.event() {
+                    Some((kind, payload)) => self.emitter.emit(kind, || payload),
+                    None => {
+                        if let Some(surface) = self.surface.upgrade() {
+                            surface.invalidate();
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Tells the player `op`, or keeps it for when it opens.
+        fn apply(&self, op: Op) {
+            let Some(player) = self.current() else {
+                self.pending.borrow_mut().push(op);
+                return;
+            };
+            let calls = self.gate.borrow_mut().op(op);
+            self.later(player, calls);
         }
 
         /// `seek(seconds)`.
         pub(crate) fn seek(&self, seconds: f64) {
             let seconds = finite(seconds).max(0.0);
             self.time.set(seconds);
-            let Some(player) = self.player.borrow().as_ref().map(|o| o.player.clone()) else {
+            let Some(player) = self.current() else {
                 self.seek_to.set(Some(seconds));
                 return;
             };
-            crate::rt::on_app(move |cx| {
-                let at = Duration::from_secs_f64(seconds);
-                if let Err(err) = player.update(cx, |p, cx| p.seek(at, cx)) {
-                    log::debug!("video: seek: {err}");
-                }
-            });
+            let calls = self.gate.borrow_mut().seek(seconds);
+            self.later(player, calls);
             if let Some(surface) = self.surface.upgrade() {
                 surface.invalidate();
             }
+        }
+
+        /// Whether the app is active (an interrupted player comes back only
+        /// then).
+        fn active(surface: &Surface) -> bool {
+            surface.environment.get().lifecycle == Lifecycle::Active
+        }
+
+        /// Brings an interrupted player back once the app is active,
+        /// looking again every half second until it is.
+        fn resume_when_active(&self) {
+            if self.waiting.replace(true) {
+                return;
+            }
+            let key = self.surface.upgrade().map(|s| s.key());
+            let id = self.id;
+            crate::rt::after_ms(500, move || {
+                crate::rt::on_app(move |cx| {
+                    let Some((surface, item)) = Self::find(key, id) else {
+                        return;
+                    };
+                    item.waiting.set(false);
+                    let Some(player) = item.current() else {
+                        return;
+                    };
+                    if !item.gate.borrow().waits() {
+                        return;
+                    }
+                    if !Self::active(&surface) {
+                        item.resume_when_active();
+                        return;
+                    }
+                    let calls = item.gate.borrow_mut().resume(item.props.borrow().as_ref());
+                    item.call(&player, calls, cx);
+                });
+            });
         }
 
         /// The video's view was deleted (or its source went): the player
@@ -429,6 +786,7 @@ mod item {
             self.uri.borrow_mut().take();
             self.pending.borrow_mut().clear();
             self.seek_to.set(None);
+            *self.gate.borrow_mut() = Gate::default();
         }
 
         /// Opens the player for the source at `wanted` (with `cx`'s app),
@@ -444,12 +802,8 @@ mod item {
             let notices =
                 cx.app
                     .subscribe(&player, move |player, notice: &platform::Notice, cx| {
-                        let Some(surface) = key.and_then(Surface::by_key) else {
+                        let Some((surface, item)) = Self::find(key, id) else {
                             return;
-                        };
-                        let item = match surface.native.hosts.borrow().get(&id) {
-                            Some(Host::Video(item)) => item.clone(),
-                            _ => return,
                         };
                         item.notice(&surface, &player, of_platform(*notice), cx);
                     });
@@ -474,28 +828,20 @@ mod item {
                 self.emitter.emit(EventKind::Error, || error(message));
                 return;
             }
-            // What waited for it: audio, looping, playing.
+            // What waited for it: audio and looping now; the seek, then
+            // playing, once it is prepared.
             let waiting = std::mem::take(&mut *self.pending.borrow_mut());
-            let seek = self.seek_to.take();
-            let result = player.update(cx.app, |p, cx| {
+            let mut calls = Vec::new();
+            {
+                let mut gate = self.gate.borrow_mut();
+                if let Some(at) = self.seek_to.take() {
+                    calls.extend(gate.seek(at));
+                }
                 for op in waiting {
-                    let _ = match op {
-                        Op::Play => p.play(cx),
-                        Op::Pause => p.pause(cx),
-                        Op::Muted(muted) => p.set_muted(muted),
-                        Op::Volume(volume) => p.set_volume(volume),
-                        Op::Looping(looping) => p.set_looping(looping),
-                        Op::Open(_) | Op::Close => Ok(()),
-                    };
+                    calls.extend(gate.op(op));
                 }
-                match seek {
-                    Some(at) => p.seek(Duration::from_secs_f64(at), cx),
-                    None => Ok(()),
-                }
-            });
-            if let Err(err) = result {
-                log::debug!("video: {err}");
             }
+            self.call(&player, calls, cx.app);
         }
 
         /// What the player reported.
@@ -506,21 +852,39 @@ mod item {
             notice: Notice,
             cx: &mut gpui::App,
         ) {
+            // What waited for the player (it is prepared), or brings it back
+            // (it was interrupted).
+            let calls = match &notice {
+                Notice::Ready => self.gate.borrow_mut().ready(),
+                Notice::Interrupted(left) => {
+                    if let Ok(time) = player.update(cx, |p, _| p.position()) {
+                        self.time.set(time.as_secs_f64());
+                    }
+                    let play = self.props.borrow().as_ref().is_some_and(|p| !p.paused);
+                    let mut calls =
+                        self.gate
+                            .borrow_mut()
+                            .interrupted(*left, play, self.time.get());
+                    if self.gate.borrow().waits() {
+                        if Self::active(surface) {
+                            let props = self.props.borrow().clone();
+                            calls.extend(self.gate.borrow_mut().resume(props.as_ref()));
+                        } else {
+                            self.resume_when_active();
+                        }
+                    }
+                    calls
+                }
+                _ => Vec::new(),
+            };
             let source = self.uri.borrow().clone().unwrap_or_default();
             let emits = self.events.borrow_mut().notice(notice, &source, || {
                 player
                     .update(cx, |p, _| p.duration())
                     .map_or(0.0, |d| d.as_secs_f64())
             });
-            for emit in emits {
-                if let Emit::Load(duration) = emit {
-                    self.duration.set(finite(duration));
-                }
-                match emit.event() {
-                    Some((kind, payload)) => self.emitter.emit(kind, || payload),
-                    None => surface.invalidate(),
-                }
-            }
+            self.emit(emits);
+            self.call(player, calls, cx);
             if self.events.borrow().progresses() {
                 self.tick();
             }
@@ -544,14 +908,10 @@ mod item {
             let id = self.id;
             crate::rt::after_ms(interval as u64, move || {
                 crate::rt::on_app(move |cx| {
-                    let Some(surface) = key.and_then(Surface::by_key) else {
+                    let Some((surface, item)) = Self::find(key, id) else {
                         return;
                     };
-                    let item = match surface.native.hosts.borrow().get(&id) {
-                        Some(Host::Video(item)) => item.clone(),
-                        _ => return,
-                    };
-                    let player = item.player.borrow().as_ref().map(|o| o.player.clone());
+                    let player = item.current();
                     let (Some(player), true) = (player, item.events.borrow().progresses()) else {
                         item.ticking.set(false);
                         return;
@@ -608,9 +968,13 @@ mod item {
             platform::Notice::Ended => Notice::Ended,
             platform::Notice::Failed(error) => Notice::Failed(format!("{error:?}")),
             platform::Notice::Buffering(percent) => Notice::Buffering(percent),
-            platform::Notice::Interrupted(state) => Notice::Interrupted {
-                playing: state == platform::State::Playing,
-            },
+            platform::Notice::Interrupted(state) => Notice::Interrupted(match state {
+                platform::State::Idle | platform::State::Destroyed => Left::Lost,
+                platform::State::Ready | platform::State::Paused => Left::Paused,
+                // Playing still, or a prepare in flight that will make it
+                // ready.
+                platform::State::Playing | platform::State::Preparing => Left::Kept,
+            }),
             platform::Notice::Frame => Notice::Frame,
         }
     }
@@ -623,7 +987,9 @@ mod item {
             if current.is_some_and(|current| reopen(current, wanted)) {
                 // Its view turned, faded or was clipped: on as a texture,
                 // where it was.
-                let playing = self.events.borrow().playing;
+                let waited = self.gate.borrow_mut().reopen();
+                let playing = self.events.borrow().playing
+                    || (waited && self.props.borrow().as_ref().is_some_and(|p| !p.paused));
                 self.player.borrow_mut().take();
                 self.seek_to.set(Some(self.time.get()));
                 let mut again = self
@@ -865,7 +1231,7 @@ mod tests {
         );
         assert!(events.ended && !events.playing);
         // Interrupted by the system: what it left the player in.
-        events.notice(Notice::Interrupted { playing: false }, "a.mp4", || 0.0);
+        events.notice(Notice::Interrupted(Left::Paused), "a.mp4", || 0.0);
         assert!(!events.playing);
         let failed = events.notice(Notice::Failed("InvalidOperation".into()), "a.mp4", || 0.0);
         assert!(matches!(&failed[0], Emit::Error(m) if m.starts_with("a.mp4: ")));
@@ -874,6 +1240,234 @@ mod tests {
             Vec::new()
         );
         assert!(!events.progresses());
+    }
+
+    /// A seek reaches the player once it is prepared (`Notice::Ready`), and
+    /// playing waits behind it.
+    mod seek_before_ready {
+        use super::*;
+
+        #[test]
+        fn a_seek_before_ready_is_issued_once_on_ready() {
+            let mut gate = Gate::default();
+            assert_eq!(gate.seek(12.0), Vec::new());
+            // The latest one.
+            assert_eq!(gate.seek(30.5), Vec::new());
+            assert_eq!(gate.ready(), vec![Call::Seek(30.5)]);
+            assert_eq!(gate.ready(), Vec::new());
+            // Prepared: at once.
+            assert_eq!(gate.seek(4.0), vec![Call::Seek(4.0)]);
+            assert_eq!(gate.op(Op::Pause), vec![Call::Op(Op::Pause)]);
+            assert_eq!(gate.op(Op::Play), vec![Call::Op(Op::Play)]);
+        }
+
+        /// A video on the plane opened again as a texture: the new player
+        /// is told the props, the time it was at and to play, and it plays
+        /// from there once it is prepared.
+        #[test]
+        fn a_reopened_video_goes_on_where_it_was() {
+            let mut gate = Gate::default();
+            gate.ready();
+            assert!(!gate.reopen());
+            let mut calls = gate.seek(42.0);
+            for op in [
+                Op::Muted(true),
+                Op::Volume(0.5),
+                Op::Looping(false),
+                Op::Play,
+            ] {
+                calls.extend(gate.op(op));
+            }
+            assert_eq!(
+                calls,
+                vec![
+                    Call::Op(Op::Muted(true)),
+                    Call::Op(Op::Volume(0.5)),
+                    Call::Op(Op::Looping(false))
+                ]
+            );
+            assert_eq!(gate.ready(), vec![Call::Seek(42.0), Call::Op(Op::Play)]);
+            assert_eq!(gate.ready(), Vec::new());
+        }
+
+        #[test]
+        fn paused_before_ready_seeks_without_playing() {
+            let mut gate = Gate::default();
+            gate.op(Op::Play);
+            gate.seek(3.0);
+            // `paused` came back before it was ready.
+            assert_eq!(gate.op(Op::Pause), Vec::new());
+            assert_eq!(gate.ready(), vec![Call::Seek(3.0)]);
+            // Nothing waited.
+            let mut gate = Gate::default();
+            assert_eq!(gate.ready(), Vec::new());
+            let mut gate = Gate::default();
+            gate.op(Op::Play);
+            assert_eq!(gate.ready(), vec![Call::Op(Op::Play)]);
+        }
+    }
+
+    /// An interrupted player comes back once the app is active, and the
+    /// app hears it stalled meanwhile.
+    mod interruption {
+        use super::*;
+
+        fn playing_props() -> VideoProps {
+            VideoProps {
+                muted: true,
+                volume: 0.25,
+                repeat: true,
+                ..props(Some("a.mp4"))
+            }
+        }
+
+        fn ready() -> Gate {
+            let mut gate = Gate::default();
+            gate.ready();
+            gate
+        }
+
+        #[test]
+        fn unprepared_it_is_prepared_again_with_its_props_and_time() {
+            let mut gate = ready();
+            assert_eq!(
+                gate.interrupted(Left::Lost, true, 61.5),
+                vec![Call::Stalled(true)]
+            );
+            assert!(gate.waits());
+            // Nothing reaches the player meanwhile.
+            assert_eq!(gate.seek(1.0), Vec::new());
+            assert_eq!(gate.seek(65.0), Vec::new());
+            assert_eq!(gate.op(Op::Muted(false)), vec![Call::Op(Op::Muted(false))]);
+            // The app is active.
+            assert_eq!(
+                gate.resume(Some(&playing_props())),
+                vec![
+                    Call::Prepare,
+                    Call::Op(Op::Muted(true)),
+                    Call::Op(Op::Volume(0.25)),
+                    Call::Op(Op::Looping(true)),
+                ]
+            );
+            assert!(!gate.waits());
+            assert_eq!(gate.seek(66.0), Vec::new());
+            assert_eq!(
+                gate.ready(),
+                vec![Call::Seek(66.0), Call::Op(Op::Play), Call::Stalled(false)]
+            );
+            assert_eq!(gate.resume(Some(&playing_props())), Vec::new());
+        }
+
+        #[test]
+        fn unprepared_while_paused_it_comes_back_paused() {
+            let mut gate = ready();
+            gate.interrupted(Left::Lost, false, 8.0);
+            assert_eq!(gate.resume(None), vec![Call::Prepare]);
+            assert_eq!(gate.ready(), vec![Call::Seek(8.0), Call::Stalled(false)]);
+            // Paused while it waited.
+            let mut gate = ready();
+            gate.interrupted(Left::Lost, true, 8.0);
+            assert_eq!(gate.op(Op::Pause), Vec::new());
+            gate.resume(None);
+            assert_eq!(gate.ready(), vec![Call::Seek(8.0), Call::Stalled(false)]);
+        }
+
+        #[test]
+        fn paused_by_the_system_it_plays_again_as_the_props_say() {
+            let mut gate = ready();
+            assert_eq!(
+                gate.interrupted(Left::Paused, true, 20.0),
+                vec![Call::Stalled(true)]
+            );
+            assert_eq!(
+                gate.resume(Some(&playing_props())),
+                vec![Call::Op(Op::Play), Call::Stalled(false)]
+            );
+            // Sought while it waited.
+            let mut gate = ready();
+            gate.interrupted(Left::Paused, true, 20.0);
+            gate.seek(25.0);
+            assert_eq!(
+                gate.resume(None),
+                vec![Call::Seek(25.0), Call::Op(Op::Play), Call::Stalled(false)]
+            );
+        }
+
+        #[test]
+        fn nothing_lost_nothing_to_do() {
+            let mut gate = ready();
+            // Paused as the props say, or still playing.
+            assert_eq!(gate.interrupted(Left::Paused, false, 3.0), Vec::new());
+            assert_eq!(gate.interrupted(Left::Kept, true, 3.0), Vec::new());
+            assert!(!gate.waits());
+            assert_eq!(gate.resume(None), Vec::new());
+            assert_eq!(gate.seek(4.0), vec![Call::Seek(4.0)]);
+        }
+
+        /// Interrupted while it prepared: the seek and playing that waited
+        /// wait for the app now.
+        #[test]
+        fn what_waited_for_ready_waits_for_the_app() {
+            let mut gate = Gate::default();
+            gate.seek(12.0);
+            gate.op(Op::Play);
+            assert_eq!(
+                gate.interrupted(Left::Lost, false, 0.0),
+                vec![Call::Stalled(true)]
+            );
+            // Interrupted again: once is enough.
+            assert_eq!(gate.interrupted(Left::Lost, false, 0.0), Vec::new());
+            assert_eq!(gate.resume(None), vec![Call::Prepare]);
+            assert_eq!(
+                gate.ready(),
+                vec![Call::Seek(12.0), Call::Op(Op::Play), Call::Stalled(false)]
+            );
+            // A prepare from before came through while it waited: no second
+            // prepare, but back to where it was.
+            let mut gate = ready();
+            gate.interrupted(Left::Lost, true, 30.0);
+            assert_eq!(gate.ready(), Vec::new());
+            assert_eq!(
+                gate.resume(None),
+                vec![Call::Seek(30.0), Call::Op(Op::Play), Call::Stalled(false)]
+            );
+        }
+
+        /// Opened again as a texture while it waited: the new player goes
+        /// on, and the stall ends once it is ready.
+        #[test]
+        fn reopened_while_waiting_the_stall_ends_on_ready() {
+            let mut gate = ready();
+            gate.interrupted(Left::Lost, true, 9.0);
+            assert!(gate.reopen());
+            assert!(!gate.waits());
+            gate.seek(9.0);
+            gate.op(Op::Play);
+            assert_eq!(
+                gate.ready(),
+                vec![Call::Seek(9.0), Call::Op(Op::Play), Call::Stalled(false)]
+            );
+        }
+
+        #[test]
+        fn the_app_hears_the_stall_once_and_playing_stops() {
+            let mut events = Events::default();
+            events.notice(Notice::Ready, "a.mp4", || 10.0);
+            events.notice(Notice::Playing, "a.mp4", || 0.0);
+            assert_eq!(
+                events.notice(Notice::Interrupted(Left::Kept), "a.mp4", || 0.0),
+                vec![Emit::Redraw]
+            );
+            assert!(events.playing);
+            events.notice(Notice::Interrupted(Left::Lost), "a.mp4", || 0.0);
+            assert!(!events.playing && !events.progresses());
+            assert_eq!(events.stalled(true), vec![Emit::Buffer(true)]);
+            assert_eq!(events.stalled(true), Vec::new());
+            // Ready again: no second onLoad.
+            assert_eq!(events.notice(Notice::Ready, "a.mp4", || 10.0), Vec::new());
+            assert_eq!(events.stalled(false), vec![Emit::Buffer(false)]);
+            assert_eq!(events.stalled(false), Vec::new());
+        }
     }
 
     #[test]
