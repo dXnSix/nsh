@@ -15,7 +15,8 @@
 //   `confirmExit()`, `exit()`, and the TV's own APIs, `productInfo()`
 //   (`webapis.productinfo`, `tizen.systeminfo`), `registerKey(name)` /
 //   `unregisterKey(name)` (`tizen.tvinputdevice`, by Tizen's key names) and
-//   `setPreviewData(json)` (`webapis.preview`, a promise).
+//   `setPreviewData(json)` (a promise: the package's preview service, which
+//   calls `webapis.preview`; `preview` says which preview the package has).
 //
 // Off a TV (`nsh run --target tizen-web` in Chrome, `nsh test --target
 // tizen-web`) there is no `tizen`: keys register nothing and `exit()`
@@ -215,13 +216,25 @@
     if (at >= 0) keys.splice(at, 1);
   }
 
-  /** Sets Smart Hub's preview of the app to `json` (Samsung's format, as
-   * text); settles with the TV's answer. */
+  /** Sets Smart Hub's personal preview of the app to `json` (Samsung's
+   * format, as text): starts the package's preview service (`PREVIEW.service`,
+   * `nsh.json` `tizen.smartHubPreview: "service"`) with it, which hands it to
+   * `webapis.preview.setPreviewData`, as Samsung sets personal previews;
+   * settles with the TV's answer to the launch. */
   function setPreviewData(json) {
     return new Promise((resolve, reject) => {
-      const preview = global.webapis?.preview;
-      if (!preview) throw new Error("the TV has no webapis.preview (webapis.js did not load)");
-      preview.setPreviewData(json, () => resolve(), (error) => reject(new Error(error?.message ?? String(error))));
+      if (PREVIEW?.endpoint) {
+        throw new Error(`the package's preview is public: the TV reads it from ${PREVIEW.endpoint} (nsh.json tizen.smartHubPreview)`);
+      }
+      if (!PREVIEW?.service) {
+        throw new Error("the package declares no personal preview: set nsh.json tizen.smartHubPreview to \"service\"");
+      }
+      const control = new tizen.ApplicationControl(
+        "http://tizen.org/appcontrol/operation/service", null, null, null,
+        [new tizen.ApplicationControlData("preview", [json])],
+      );
+      tizen.application.launchAppControl(control, PREVIEW.service, () => resolve(),
+        (error) => reject(new Error(error?.message ?? String(error))));
     });
   }
 
