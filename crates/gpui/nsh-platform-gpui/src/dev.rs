@@ -60,27 +60,37 @@ impl log::Log for DevLogger {
     }
 
     fn log(&self, record: &log::Record<'_>) {
-        if !self.enabled(record.metadata()) {
+        if !self.enabled(record.metadata()) || forward(record) {
             return;
         }
-        let message = record.args().to_string();
-        let client = CLIENT.lock().ok().and_then(|c| c.upgrade());
-        match client {
-            Some(client) if CONNECTED.load(Ordering::Relaxed) => {
-                client.log(record.level().into(), record.target(), &message)
-            }
-            _ => {
-                let _ = writeln!(
-                    std::io::stderr().lock(),
-                    "{:>5} {} {message}",
-                    record.level(),
-                    record.target()
-                );
-            }
-        }
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "{:>5} {} {}",
+            record.level(),
+            record.target(),
+            record.args()
+        );
     }
 
     fn flush(&self) {}
+}
+
+/// Sends `record` to the dev server of the latest session, when it is
+/// connected: whether it went there. For a host with a logger of its own
+/// (the system's log on a TV), which logs what did not go there itself;
+/// [`init_logging`]'s logger prints it to stderr instead.
+pub fn forward(record: &log::Record<'_>) -> bool {
+    if !CONNECTED.load(Ordering::Relaxed) {
+        return false;
+    }
+    match CLIENT.lock().ok().and_then(|c| c.upgrade()) {
+        Some(client) => {
+            let message = record.args().to_string();
+            client.log(record.level().into(), record.target(), &message);
+            true
+        }
+        None => false,
+    }
 }
 
 /// Installs a logger that prints to stderr and forwards every line to the
@@ -203,8 +213,14 @@ impl DevSession {
 }
 
 /// Connects `this` to the dev server at `url` (`ws://host:port/ws`),
-/// replacing its session if it had one.
-pub(crate) fn start(this: &AppView, url: String, cx: &mut Context<AppView>) {
+/// through `transport`'s connections when it has one, replacing its
+/// session if it had one.
+pub(crate) fn start(
+    this: &AppView,
+    url: String,
+    transport: Option<Box<dyn nsh_dev::DevTransport>>,
+    cx: &mut Context<AppView>,
+) {
     let (tx, mut rx) = unbounded::<Msg>();
     if let Some(base) = asset_base(&url) {
         this.set_asset_base(Some(AssetBase::Http(base)));
@@ -277,7 +293,7 @@ pub(crate) fn start(this: &AppView, url: String, cx: &mut Context<AppView>) {
     });
     let tests = tester.clone();
     let events = tx;
-    let started = DevClient::start(url, host, move |event| {
+    let hear = move |event: DevEvent| {
         // Taken here: a step waits for what it does on the main thread.
         let Some(event) = tests.event(event) else {
             return;
@@ -288,7 +304,11 @@ pub(crate) fn start(this: &AppView, url: String, cx: &mut Context<AppView>) {
             _ => {}
         }
         let _ = events.unbounded_send(Msg::Event(Box::new(event)));
-    });
+    };
+    let started = match transport {
+        Some(transport) => DevClient::start_with(url, transport, host, hear),
+        None => DevClient::start(url, host, hear),
+    };
     match started {
         Ok(client) => {
             let client = Arc::new(client);

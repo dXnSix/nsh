@@ -432,7 +432,22 @@ impl AppView {
     /// `view.update(cx, |view, cx| …)`.
     #[cfg(feature = "dev")]
     pub fn connect_dev_server(&self, url: impl Into<String>, cx: &mut Context<Self>) {
-        crate::dev::start(self, url.into(), cx);
+        crate::dev::start(self, url.into(), None, cx);
+    }
+
+    /// [`AppView::connect_dev_server`] over the connections `transport`
+    /// makes, for a device that reaches the developer's machine through a
+    /// tool's port mapping rather than the network (a TV, `sdb`): the
+    /// session speaks to the server at `url` (its host and path, and where
+    /// the app's assets are) over each.
+    #[cfg(feature = "dev")]
+    pub fn connect_dev_server_with(
+        &self,
+        url: impl Into<String>,
+        transport: Box<dyn nsh_dev::DevTransport>,
+        cx: &mut Context<Self>,
+    ) {
+        crate::dev::start(self, url.into(), Some(transport), cx);
     }
 
     /// Registers native component `name` (`nativeComponent(name, ...)` in

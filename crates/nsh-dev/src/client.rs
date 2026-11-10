@@ -123,6 +123,22 @@ pub struct HostInfo {
     pub tests: bool,
 }
 
+/// Where a dev client's connections to the server come from. By default
+/// it connects to the host and port of the server's URL
+/// ([`DevClient::start`]); a host whose device reaches the developer's
+/// machine another way gives its own ([`DevClient::start_with`]): a Tizen
+/// TV, say, connects to a port `sdb reverse` maps to the machine, or
+/// listens on one `sdb forward` maps from it. The client speaks the
+/// WebSocket protocol on what it returns, for the server's URL, exactly as
+/// over its own connection.
+pub trait DevTransport: Send + 'static {
+    /// The next connection to the server (or to what relays it there); an
+    /// error waits the client's backoff and asks again.
+    fn connect(&mut self) -> std::io::Result<TcpStream>;
+}
+
+type Socket = WebSocket<MaybeTlsStream<TcpStream>>;
+
 /// Connects a dev host to a dev server, reconnecting until dropped, and
 /// forwards log lines to it.
 pub struct DevClient {
@@ -141,6 +157,43 @@ impl DevClient {
     pub fn start(
         url: String,
         host: HostInfo,
+        on_event: impl FnMut(DevEvent) + Send + 'static,
+    ) -> std::io::Result<DevClient> {
+        Self::spawn(
+            host,
+            move || {
+                tungstenite::connect(url.as_str())
+                    .ok()
+                    .map(|(socket, _)| socket)
+            },
+            on_event,
+        )
+    }
+
+    /// [`DevClient::start`] with the connections `transport` makes: the
+    /// WebSocket handshake for `url` (`ws://host:port/ws`, the path and
+    /// host the server checks) goes over each.
+    pub fn start_with(
+        url: String,
+        mut transport: Box<dyn DevTransport>,
+        host: HostInfo,
+        on_event: impl FnMut(DevEvent) + Send + 'static,
+    ) -> std::io::Result<DevClient> {
+        Self::spawn(
+            host,
+            move || {
+                let stream = transport.connect().ok()?;
+                tungstenite::client(url.as_str(), MaybeTlsStream::Plain(stream))
+                    .ok()
+                    .map(|(socket, _)| socket)
+            },
+            on_event,
+        )
+    }
+
+    fn spawn(
+        host: HostInfo,
+        mut connect: impl FnMut() -> Option<Socket> + Send + 'static,
         mut on_event: impl FnMut(DevEvent) + Send + 'static,
     ) -> std::io::Result<DevClient> {
         let (logs, log_rx) = mpsc::sync_channel(LOG_QUEUE);
@@ -162,8 +215,8 @@ impl DevClient {
                     if let Err(TryRecvError::Disconnected) = log_rx.try_recv() {
                         return;
                     }
-                    match tungstenite::connect(url.as_str()) {
-                        Ok((socket, _)) => {
+                    match connect() {
+                        Some(socket) => {
                             backoff = Duration::from_millis(100);
                             on_event(DevEvent::Connected);
                             if let Err(SessionEnd::Shutdown) =
@@ -173,7 +226,7 @@ impl DevClient {
                             }
                             on_event(DevEvent::Disconnected);
                         }
-                        Err(_) => backoff = (backoff * 2).min(Duration::from_secs(2)),
+                        None => backoff = (backoff * 2).min(Duration::from_secs(2)),
                     }
                     thread::sleep(backoff);
                 }
@@ -220,7 +273,7 @@ enum SessionEnd {
 }
 
 fn session(
-    mut socket: WebSocket<MaybeTlsStream<TcpStream>>,
+    mut socket: Socket,
     hello: &ClientMessage,
     logs: &Receiver<ClientMessage>,
     replies: &Receiver<ClientMessage>,
@@ -378,10 +431,7 @@ fn session(
     }
 }
 
-fn send(
-    socket: &mut WebSocket<MaybeTlsStream<TcpStream>>,
-    msg: &ClientMessage,
-) -> Result<(), SessionEnd> {
+fn send(socket: &mut Socket, msg: &ClientMessage) -> Result<(), SessionEnd> {
     let text = serde_json::to_string(msg).expect("serializable");
     socket
         .send(Message::Text(text.into()))

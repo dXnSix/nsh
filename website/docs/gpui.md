@@ -155,6 +155,8 @@ so only load it from your own app's files.
   widgets, overlays). False by default.
 - `AppView::connect_dev_server(url, cx)` (feature `dev`) loads the app from `nsh dev` and reloads it as you edit,
   with the error overlay over the view; `AppView::on_error` keeps hearing the app's errors.
+  `AppView::connect_dev_server_with(url, transport, cx)` does the same over the connections your `nsh_dev::DevTransport`
+  makes, for a device that reaches your machine through a port mapping.
 - `AppView::on_app_error(|error| …)` hears the app's errors: `error.kind` (the app failed to load, an uncaught
   exception, the VM stopped), `error.is_fatal()` when no JS of the app runs again, `error.message`, `error.stack`
   and `error.package` (the id and build of the signed package it came from). `AppView::on_error` gets the same
