@@ -16,9 +16,9 @@
 //!   ([`Core::focus_past`]); the core finds the row the focus is in, the
 //!   next one along the list ([`crate::focus::next_row`]), scrolls the list
 //!   to it by index (`Command::ScrollToIndex`, the `PinTarget::Index` path)
-//!   and, once that row's cell shows it, sends the cell `Command::Focus`:
-//!   the platform focuses its first stop. The row is forgotten when the
-//!   focus moves elsewhere first.
+//!   and, once that row's cell shows it, sends the first stop in the cell
+//!   `Command::Focus` (as `focus()` on its ref). The row is forgotten
+//!   when the focus moves elsewhere first.
 
 use super::{Core, Key, NO_KEY, dirty};
 use crate::{
@@ -149,11 +149,11 @@ impl<M: TextEngine> Core<M> {
     /// An arrow toward `direction` found no stop to go to inside the list
     /// around `from` (the stop with the keyboard focus), which can scroll
     /// on: the list scrolls to the next row along its axis by index
-    /// (`Command::ScrollToIndex`), and that row's cell takes the focus once
-    /// it is mounted (`Command::Focus`; the platform focuses its first
-    /// stop). The innermost list around `from` that has a next row that
-    /// way does; false when none has (a scroll view that is no list, the
-    /// list's end), and nothing happens.
+    /// (`Command::ScrollToIndex`), and the first stop in that row's cell
+    /// takes the focus once it is mounted (`Command::Focus`). The innermost
+    /// list around `from` that has a next row that way does; false when
+    /// none has (a scroll view that is no list, the list's end), and
+    /// nothing happens.
     pub fn focus_past(&mut self, from: NodeId, direction: Direction) -> bool {
         let Ok(mut key) = self.key(from) else {
             return false;
@@ -215,9 +215,9 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
-    /// The row an arrow went to ([`Core::focus_past`]) is mounted: its
-    /// cell takes the focus. Forgotten when the focus moved elsewhere
-    /// first, or the list or the row is gone.
+    /// The row an arrow went to ([`Core::focus_past`]) is mounted: the
+    /// first stop in its cell takes the focus. Forgotten when the focus
+    /// moved elsewhere first, or the list or the row is gone.
     pub(super) fn land_pending_row(&mut self) {
         let Some((pending, seen)) = self.pending_row else {
             return;
@@ -243,8 +243,30 @@ impl<M: TextEngine> Core<M> {
         else {
             return;
         };
-        let id = self.nodes[cell as usize].id;
-        self.commands.push((id, Command::Focus));
         self.pending_row = None;
+        if let Some(stop) = self.first_stop_in(cell) {
+            let id = self.nodes[stop as usize].id;
+            self.commands.push((id, Command::Focus));
+        }
+    }
+
+    /// The first stop of the keyboard focus in `key`'s subtree, in tree
+    /// order: an input, or a view `ViewProps::focus_stop` makes one.
+    pub(super) fn first_stop_in(&self, key: Key) -> Option<Key> {
+        let mut pending = vec![key];
+        while let Some(k) = pending.pop() {
+            let node = &self.nodes[k as usize];
+            let presses = crate::input::has_press(node.events);
+            let stop = node.input.is_some()
+                || node
+                    .props
+                    .as_ref()
+                    .map_or(presses, |props| props.focus_stop(presses));
+            if stop && node.created {
+                return Some(k);
+            }
+            pending.extend(node.children.iter().rev());
+        }
+        None
     }
 }

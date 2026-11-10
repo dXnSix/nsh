@@ -232,8 +232,8 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   scroll view around the focus can scroll on toward the arrow, a stop outside it is not reached
   (`focus::Target::Scroll`); the platform scrolls it and calls `EngineControl::focus_past`, and in a list the core
   scrolls to the next row by index (`Command::ScrollToIndex`, `focus::next_row`: a row of columns along a grid,
-  inverted and right-to-left lists the other way) and sends that row's cell `Command::Focus` once it shows it; the
-  platform focuses the cell's first stop. The row is forgotten when the focus is reported elsewhere first.
+  inverted and right-to-left lists the other way) and, once a cell shows that row, sends the first stop in it
+  `Command::Focus` (`ViewProps::focus_stop` in tree order), as its ref's `focus()` would. The row is forgotten when the focus is reported elsewhere first.
   A shown overlay's content is in the Tab order where the app put the overlay, not where its native view is (at the
   end of its root view), as WAI-ARIA's non-modal popups have it: a popover's content right after its trigger, so
   Shift+Tab from it goes back to the trigger and Tab past its last stop goes on to what follows the popover. A list
