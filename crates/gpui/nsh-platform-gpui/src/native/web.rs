@@ -43,23 +43,36 @@
 //! Not supported: `baseUrl` for HTML, `scrollable` and
 //! `allowsBackForwardNavigationGestures`; failed loads report no `onError`
 //! on macOS and Windows.
+//!
+//! Without feature `webview`, and on Tizen (no GTK or WebKitGTK there), a
+//! web view draws a neutral placeholder and reports `onError` for each
+//! source.
 
-#[cfg(feature = "webview")]
+#[cfg(all(feature = "webview", not(target_vendor = "tizen")))]
 pub(crate) use imp::WebItem;
-#[cfg(not(feature = "webview"))]
+#[cfg(any(not(feature = "webview"), target_vendor = "tizen"))]
 pub(crate) use placeholder::WebItem;
 
 /// Lets pages talk to the app: `window.nsh.postMessage(data)`.
-#[cfg_attr(not(feature = "webview"), allow(dead_code))]
+#[cfg_attr(
+    any(not(feature = "webview"), target_vendor = "tizen"),
+    allow(dead_code)
+)]
 const BRIDGE: &str = "window.nsh = window.nsh || { postMessage: function (data) { window.ipc.postMessage(String(data)); } };";
 
 /// The page's navigation state, as a JSON array `[url, title, canGoBack,
 /// canGoForward]`.
-#[cfg_attr(not(feature = "webview"), allow(dead_code))]
+#[cfg_attr(
+    any(not(feature = "webview"), target_vendor = "tizen"),
+    allow(dead_code)
+)]
 const STATE: &str = "[location.href, document.title, !!(window.navigation && navigation.canGoBack), !!(window.navigation && navigation.canGoForward)]";
 
 /// A JS string literal for `s`.
-#[cfg_attr(not(feature = "webview"), allow(dead_code))]
+#[cfg_attr(
+    any(not(feature = "webview"), target_vendor = "tizen"),
+    allow(dead_code)
+)]
 fn js_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -80,7 +93,10 @@ fn js_string(s: &str) -> String {
 }
 
 /// The script `postMessage(data)` runs in the page.
-#[cfg_attr(not(feature = "webview"), allow(dead_code))]
+#[cfg_attr(
+    any(not(feature = "webview"), target_vendor = "tizen"),
+    allow(dead_code)
+)]
 fn post_message(data: &str) -> String {
     format!(
         "window.dispatchEvent(new MessageEvent('message', {{ data: {} }}));",
@@ -89,7 +105,10 @@ fn post_message(data: &str) -> String {
 }
 
 /// `injectedJavaScript`: once the document is parsed.
-#[cfg_attr(not(feature = "webview"), allow(dead_code))]
+#[cfg_attr(
+    any(not(feature = "webview"), target_vendor = "tizen"),
+    allow(dead_code)
+)]
 fn after_content(js: &str) -> String {
     format!(
         "(function () {{ var run = function () {{\n{js}\n}}; \
@@ -100,7 +119,10 @@ fn after_content(js: &str) -> String {
 
 /// The page's navigation state, as `WebViewNavigation`.
 #[derive(Debug, Clone, Default, PartialEq)]
-#[cfg_attr(not(feature = "webview"), allow(dead_code))]
+#[cfg_attr(
+    any(not(feature = "webview"), target_vendor = "tizen"),
+    allow(dead_code)
+)]
 struct Navigation {
     url: String,
     title: String,
@@ -109,7 +131,10 @@ struct Navigation {
     can_go_forward: bool,
 }
 
-#[cfg_attr(not(feature = "webview"), allow(dead_code))]
+#[cfg_attr(
+    any(not(feature = "webview"), target_vendor = "tizen"),
+    allow(dead_code)
+)]
 impl Navigation {
     /// The state [`STATE`] evaluated to (`json`), `loading` or not.
     fn parse(json: &str, loading: bool) -> Option<Navigation> {
@@ -140,33 +165,57 @@ impl Navigation {
 
 /// True for URLs a web view shows whatever the app's access: pages the app
 /// gave as HTML.
-#[cfg_attr(not(feature = "webview"), allow(dead_code))]
+#[cfg_attr(
+    any(not(feature = "webview"), target_vendor = "tizen"),
+    allow(dead_code)
+)]
 fn always_allowed(url: &str) -> bool {
     url.starts_with("data:") || url.starts_with("about:")
 }
 
-#[cfg(not(feature = "webview"))]
+#[cfg(any(not(feature = "webview"), target_vendor = "tizen"))]
 mod placeholder {
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
     use gpui::{App, Window};
-    use nsh_core::{Command, NodeId, WebProps};
+    use nsh_core::{Command, EventKind, NodeId, WebProps, WebSource};
 
     use crate::{
-        native::Geometry,
+        native::{Emitter, Geometry, error},
         render::DrawCx,
         surface::Surface,
         view::{Hosted, NshView},
     };
 
+    /// Why a web view cannot show.
+    const UNSUPPORTED: &str = if cfg!(target_vendor = "tizen") {
+        "web views are not supported on Tizen"
+    } else {
+        "web views are not available in this build"
+    };
+
     /// A web view in a build without them: a placeholder.
-    pub(crate) struct WebItem;
+    pub(crate) struct WebItem {
+        emitter: Emitter,
+        source: RefCell<WebSource>,
+    }
 
     impl WebItem {
-        pub(crate) fn new(_surface: &Rc<Surface>, _id: NodeId) -> Rc<Self> {
-            Rc::new(WebItem)
+        pub(crate) fn new(surface: &Rc<Surface>, id: NodeId) -> Rc<Self> {
+            Rc::new(WebItem {
+                emitter: Emitter::new(surface, id),
+                source: RefCell::new(WebSource::None),
+            })
         }
-        pub(crate) fn set(&self, _surface: &Rc<Surface>, _view: &NshView, _p: &WebProps) {}
+
+        /// New props: each new source reports that it cannot load.
+        pub(crate) fn set(&self, _surface: &Rc<Surface>, _view: &NshView, p: &WebProps) {
+            let old = self.source.replace(p.source.clone());
+            if reports(&old, &p.source) {
+                self.emitter
+                    .emit(EventKind::Error, || error(UNSUPPORTED.to_owned()));
+            }
+        }
         pub(crate) fn command(&self, _command: &Command) {}
         pub(crate) fn prepaint(
             &self,
@@ -189,9 +238,34 @@ mod placeholder {
             false
         }
     }
+
+    /// True when a web view going from `old` to `new` reports `onError`: a
+    /// source that is there and new.
+    fn reports(old: &WebSource, new: &WebSource) -> bool {
+        !matches!(new, WebSource::None) && old != new
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn each_new_source_reports_that_it_cannot_load() {
+            let page = WebSource::Uri("https://example.com".into());
+            assert!(reports(&WebSource::None, &page));
+            assert!(!reports(&page, &page.clone()));
+            let html = WebSource::Html {
+                html: "<p>hi</p>".into(),
+                base_url: None,
+            };
+            assert!(reports(&page, &html));
+            // Nothing to load: no error.
+            assert!(!reports(&page, &WebSource::None));
+        }
+    }
 }
 
-#[cfg(feature = "webview")]
+#[cfg(all(feature = "webview", not(target_vendor = "tizen")))]
 mod imp {
     use std::{
         cell::{Cell, RefCell},

@@ -31,9 +31,10 @@ shot = ["gpui/test-support", "gpui_platform?/test-support"]
 # Toolchain (`xcodebuild -downloadComponent MetalToolchain`); with `platform`.
 runtime-shaders = ["gpui_platform?/runtime_shaders"]
 # Web views (wry; on Linux GTK 3 and WebKitGTK 4.1, on an X11 window).
+# Nothing on Tizen: web views report that they are unsupported there.
 webview = ["dep:wry", "dep:gtk", "dep:webkit2gtk"]
 # Videos (GStreamer 1.20+ with its base and good plug-ins; libav for most
-# codecs).
+# codecs). Nothing on Tizen: GStreamer is not there.
 video = ["dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video"]
 
 [dependencies]
@@ -60,12 +61,18 @@ futures-channel.workspace = true
 futures-util.workspace = true
 nsh-dev = { workspace = true, features = ["client"], optional = true }
 nsh-testing = { workspace = true, features = ["agent"], optional = true }
+
+# Web views and videos on the desktops (Tizen, `target_os = "linux"` with
+# `target_vendor = "tizen"`, has neither GTK nor GStreamer).
+[target.'cfg(all(any(target_os = "linux", target_os = "macos", windows), not(target_vendor = "tizen")))'.dependencies]
 wry = { workspace = true, optional = true }
 gstreamer = { workspace = true, optional = true }
 gstreamer-app = { workspace = true, optional = true }
 gstreamer-video = { workspace = true, optional = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+# Linux desktops; a Tizen TV's settings come from its host instead
+# (`AppView`'s setters).
+[target.'cfg(all(target_os = "linux", not(target_vendor = "tizen")))'.dependencies]
 # The desktop's settings (XDG settings portal, AT-SPI).
 zbus.workspace = true
 # `shot` script steps read the window from the X server.

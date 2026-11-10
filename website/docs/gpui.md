@@ -162,6 +162,10 @@ so only load it from your own app's files.
 - `AppView::set_locale(locale, cx)` and `AppView::set_font_scale(scale, cx)` give the app your app's language and
   text size in place of the system's (`None` follows the system's again): `locale()`, `Intl`, `fontScale()` and text
   follow at once ([Device and environment](./device-and-environment.md#in-an-embedding-app)).
+- `AppView::set_reduce_motion(reduce, cx)`, `AppView::set_screen_reader(on, cx)` and `AppView::set_time_zone(zone,
+  cx)` do the same for less motion, the screen reader and the time zone (`TimeZone::parse("Asia/Seoul")`):
+  `reduceMotion()`, `screenReaderEnabled()` and `localeSettings()`'s `timeZone` follow at once (`Date`'s local times
+  stay the process's).
 - `AppView::run_package(&package)` runs a [signed package](./signed-packages.md#loading-packages-in-a-host-app)
   from `verify_package` or `load_package`; `accept_package` records it once your app decided it is healthy.
 - `set_ui_sets(sets)` sets the UI sets every engine serves: NSH's (`nsh_base::registry()`) and your crates'

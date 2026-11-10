@@ -38,6 +38,7 @@ pub mod dev;
 mod events;
 mod file_drop;
 mod geom;
+mod host_settings;
 mod image;
 mod input;
 mod keymap;
@@ -70,7 +71,7 @@ pub use nsh_base::{Theme, ThemeError};
 pub use nsh_core::{
     desktop::WindowBackend,
     element::{AdaptiveColor, Color, Hsla, Rgba},
-    platform::{Appearance, Locale},
+    platform::{Appearance, Locale, TimeZone},
 };
 pub use nsh_engine::{
     App, AppError, AppErrorKind, Bundle, ByteSize, CacheLocation, CacheOptions, CachePolicy,

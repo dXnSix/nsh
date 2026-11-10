@@ -14,7 +14,7 @@ use gpui::{
     IntoElement, ParentElement, Render, Styled, Window, prelude::FluentBuilder as _,
 };
 use nsh_base::{Theme, ThemeError};
-use nsh_core::platform::{Appearance, Locale};
+use nsh_core::platform::{Appearance, Locale, TimeZone};
 use nsh_engine::{
     App, AppError, Bundle, ColorScheme, EngineConfig, Environment, Idiom, Limits, Os, Root,
 };
@@ -545,6 +545,46 @@ impl AppView {
         let mut host = self.surface.host_environment.get();
         host.font_scale = scale;
         self.surface.host_environment.set(host);
+        crate::system::host_appearance_changed(&self.surface);
+        crate::rt::flush(cx);
+    }
+
+    /// The embedding app's reduce motion, which stands in for the user's:
+    /// what `reduceMotion()` (`nsh`) and Rust components' `reduce_motion()`
+    /// read and native animations follow, at once and for every app loaded
+    /// later. `None` follows the system's again (on Tizen, which reports
+    /// none to the process: motion on).
+    pub fn set_reduce_motion(&self, reduce: Option<bool>, cx: &mut GpuiApp) {
+        self.set_host_settings(|s| s.reduce_motion = reduce, cx);
+    }
+
+    /// The embedding app's screen reader state, which stands in for the
+    /// system's: what `screenReaderEnabled()` (`nsh`) and Rust components'
+    /// `screen_reader()` read, at once and for every app loaded later.
+    /// `None` follows the system's again (on Tizen, which reports none to
+    /// the process: off).
+    pub fn set_screen_reader(&self, on: Option<bool>, cx: &mut GpuiApp) {
+        self.set_host_settings(|s| s.screen_reader = on, cx);
+    }
+
+    /// The embedding app's time zone, which stands in for the system's:
+    /// what `localeSettings()`'s `timeZone` (`nsh`) and Rust components'
+    /// `locale_settings().time_zone` read, at once and for every app loaded
+    /// later (`Date`'s local times stay the process's, its `TZ`). `None`
+    /// follows the system's again.
+    pub fn set_time_zone(&self, zone: Option<TimeZone>, cx: &mut GpuiApp) {
+        self.set_host_settings(|s| s.time_zone = zone, cx);
+    }
+
+    /// Changes the host's settings with `f` and applies them.
+    fn set_host_settings(
+        &self,
+        f: impl FnOnce(&mut crate::host_settings::HostSettings),
+        cx: &mut GpuiApp,
+    ) {
+        let mut host = self.surface.host_settings.get();
+        f(&mut host);
+        self.surface.host_settings.set(host);
         crate::system::host_appearance_changed(&self.surface);
         crate::rt::flush(cx);
     }
