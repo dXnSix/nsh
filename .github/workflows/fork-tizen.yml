@@ -6,8 +6,9 @@ name: Fork Tizen
 #   dXn.GpuiTizen's cross driver (`cargo xtask cross`, its target specs and its symbol check: one export,
 #   `nsh_tizen_main`, and only documented Tizen 8.0 symbols), with the Tizen SDK's 8.0 rootstraps installed
 #   in the job.
-# - `tv-specs`: the TV idiom's specs on the desktop GPUI host (`nsh test --target gpui`) and in headless
-#   Chromium with the TV shim (`nsh test --target tizen-web`).
+# - `tv-specs`: the TV idiom's specs (`tests/apps/tv-idiom`, and `tests/apps/pressable-focus`'s arrows) on
+#   the desktop GPUI host (`nsh test --target gpui --idiom tv`) and in headless Chromium with the TV shim
+#   (`nsh test --target tizen-web`).
 # - `emulator` (manual only): the counter's spec on the Samsung TV emulator (`nsh test --target tizen`) on a
 #   runner with KVM, signed with the profile in the repository's secrets.
 #
@@ -130,12 +131,16 @@ jobs:
           workspaces: |
             . -> target
             crates/gpui -> crates/gpui/target
-      - name: The TV idiom on the GPUI host (arrows and Tab over pressables)
-        run: xvfb-run -a cargo run -p nsh-cli -- test tests/apps/pressable-focus --target gpui
-      - name: The counter as a Tizen web app (TV shim, TV idiom)
+      - name: The TV idiom on the GPUI host (platform.tv, tv props, the arrows)
+        run: |
+          xvfb-run -a cargo run -p nsh-cli -- test tests/apps/tv-idiom --target gpui --idiom tv
+          xvfb-run -a cargo run -p nsh-cli -- test tests/apps/pressable-focus --target gpui --idiom tv --filter arrows
+      - name: The TV idiom as a Tizen web app (TV shim), and the counter
         env:
           AR_wasm32_unknown_unknown: llvm-ar
-        run: cargo run -p nsh-cli -- test examples/counter --target tizen-web
+        run: |
+          cargo run -p nsh-cli -- test tests/apps/tv-idiom --target tizen-web
+          cargo run -p nsh-cli -- test examples/counter --target tizen-web
 
   emulator:
     if: github.event_name == 'workflow_dispatch' && inputs.emulator
