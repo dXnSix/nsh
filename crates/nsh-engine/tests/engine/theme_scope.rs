@@ -32,6 +32,7 @@ mount(() => (
     <Text>{`step ${step()}`}</Text>
     <Reader name="out" />
     <ThemeScope appearance={scheme()} class="p-2">
+      <Text>{`inline ${colorScheme()}`}</Text>
       <Reader name="in" />
       <ThemeScope>
         <Reader name="nested" />
@@ -68,6 +69,7 @@ fn what_a_scope_renders_reads_its_appearance() {
         texts_at(&rx, "step 0"),
         [
             "in dark #004400ff",
+            "inline dark",
             "nested dark #004400ff",
             "out light #00ff00ff"
         ]
@@ -75,14 +77,18 @@ fn what_a_scope_renders_reads_its_appearance() {
     // The scope turns light: only what it holds reads again.
     assert_eq!(
         texts_at(&rx, "step 1"),
-        ["in light #00ff00ff", "nested light #00ff00ff"]
+        [
+            "in light #00ff00ff",
+            "inline light",
+            "nested light #00ff00ff"
+        ]
     );
     // The app turns dark: the scope stays as it says.
     assert_eq!(texts_at(&rx, "step 2"), ["out dark #004400ff"]);
     // Without an appearance of its own it is shown as the app.
     assert_eq!(
         texts_at(&rx, "step 3"),
-        ["in dark #004400ff", "nested dark #004400ff"]
+        ["in dark #004400ff", "inline dark", "nested dark #004400ff"]
     );
 }
 

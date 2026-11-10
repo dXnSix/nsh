@@ -2631,6 +2631,10 @@ class Player {
     el.classList.toggle("nsh-inert", pe === "none");
     el.classList.toggle("nsh-box-none", pe === "box-none");
     el.classList.toggle("nsh-area", !!props.selectableView);
+    // A view shown in an appearance of its own (`ThemeScope`): form
+    // controls and scrollbars in it follow, as the root's follow the app's.
+    el.classList.toggle("nsh-scheme-light", props.appearance === "light");
+    el.classList.toggle("nsh-scheme-dark", props.appearance === "dark");
     this.updateFocusable(el);
     this.updateTouchAction(el);
   }
