@@ -41,6 +41,15 @@ use crate::{
 
 /// The TV shim: a classic script the page runs before `nsh.js`.
 const SHIM: &str = include_str!("tizen_web/shim.js");
+/// The shim's line a package fills with its Smart Hub preview ([`Preview`]).
+const SHIM_PREVIEW: &str = "const PREVIEW = null;";
+/// The background service of a personal Smart Hub preview: it hands the
+/// data the app's page sends it to `webapis.preview.setPreviewData`.
+const PREVIEW_SERVICE: &str = include_str!("tizen_web/preview-service.js");
+/// Where the package carries it.
+const PREVIEW_SERVICE_PATH: &str = "service/preview.js";
+/// The privilege a page needs to start its preview service.
+const LAUNCH: &str = "http://tizen.org/privilege/application.launch";
 /// What the shim is named on the page (with its digest in a package).
 const SHIM_NAME: &str = "nsh-tizen.js";
 /// The development package's page, which opens the dev server's.
@@ -110,6 +119,45 @@ struct Widget {
     /// The hosts the page may navigate to (`<tizen:allow-navigation>`):
     /// the development package's dev server.
     navigation: Vec<String>,
+    /// Smart Hub's preview of the app.
+    preview: Option<Preview>,
+}
+
+/// Smart Hub's preview of an app (`nsh.json` `tizen.smartHubPreview`), as
+/// Samsung's `use.preview` metadata declares it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Preview {
+    /// A personal preview: the app's `setPreviewData` sends the data to this
+    /// background service of the package (`<package>.NshPreview`), which
+    /// hands it to `webapis.preview` (`bg_service`).
+    Service(String),
+    /// A public preview: the TV reads its JSON from this URL
+    /// (`endpoint_URL`).
+    Endpoint(String),
+}
+
+impl Preview {
+    fn of(value: &str, package: &str) -> anyhow::Result<Preview> {
+        if value == "service" {
+            return Ok(Preview::Service(format!("{package}.NshPreview")));
+        }
+        match url::Url::parse(value) {
+            Ok(url) if matches!(url.scheme(), "http" | "https") && url.host().is_some() => {
+                Ok(Preview::Endpoint(value.to_owned()))
+            }
+            _ => bail!(
+                "nsh.json tizen.smartHubPreview `{value}`: \"service\" (the app sets its preview) or the http(s) URL of the preview's JSON"
+            ),
+        }
+    }
+
+    /// What the shim knows of it (`nshTizen.preview`).
+    fn shim_json(&self) -> serde_json::Value {
+        match self {
+            Preview::Service(id) => serde_json::json!({ "service": id }),
+            Preview::Endpoint(url) => serde_json::json!({ "endpoint": url }),
+        }
+    }
 }
 
 impl Widget {
@@ -133,7 +181,15 @@ impl Widget {
         check_version(version)?;
         let required_version = tizen.api_version.as_deref().unwrap_or(API_VERSION);
         check_api_version(required_version)?;
+        let preview = tizen
+            .smart_hub_preview
+            .as_deref()
+            .map(|value| Preview::of(value, &package))
+            .transpose()?;
         let mut privileges: Vec<String> = PRIVILEGES.iter().map(|p| (*p).to_owned()).collect();
+        if matches!(preview, Some(Preview::Service(_))) {
+            privileges.push(LAUNCH.to_owned());
+        }
         for privilege in &tizen.privileges {
             if !privileges.contains(privilege) {
                 privileges.push(privilege.clone());
@@ -150,6 +206,7 @@ impl Widget {
             privileges,
             access: vec!["*".to_owned()],
             navigation: Vec::new(),
+            preview,
         })
     }
 
@@ -197,6 +254,28 @@ impl Widget {
                 "  <tizen:allow-navigation>{}</tizen:allow-navigation>",
                 escape(host)
             );
+        }
+        match &self.preview {
+            Some(Preview::Service(id)) => {
+                let _ = writeln!(
+                    xml,
+                    r#"  <tizen:metadata key="http://samsung.com/tv/metadata/use.preview" value="bg_service"/>"#
+                );
+                let _ = writeln!(
+                    xml,
+                    "  <tizen:service id=\"{}\" auto-restart=\"false\">\n    <tizen:content src=\"{PREVIEW_SERVICE_PATH}\"/>\n    <tizen:name>{} preview</tizen:name>\n    <tizen:category name=\"http://tizen.org/category/service\"/>\n  </tizen:service>",
+                    escape(id),
+                    escape(&self.name)
+                );
+            }
+            Some(Preview::Endpoint(url)) => {
+                let _ = writeln!(
+                    xml,
+                    r#"  <tizen:metadata key="http://samsung.com/tv/metadata/use.preview" value="endpoint_URL={}"/>"#,
+                    escape(url)
+                );
+            }
+            None => {}
         }
         let _ = writeln!(
             xml,
@@ -336,7 +415,7 @@ pub(crate) fn package(
         built,
         &dir,
         &web::Variant {
-            scripts: &[(SHIM_NAME, SHIM)],
+            scripts: &[(SHIM_NAME, &shim(widget.preview.as_ref()))],
             idiom: Some("tv"),
             history: Some(false),
             installed: true,
@@ -344,6 +423,11 @@ pub(crate) fn package(
     )?;
     if let Some(icon) = &config.icon {
         write_icon(icon, &dir.join("icon.png"))?;
+    }
+    if matches!(widget.preview, Some(Preview::Service(_))) {
+        let service = dir.join(PREVIEW_SERVICE_PATH);
+        fs::create_dir_all(service.parent().context("service directory")?)?;
+        fs::write(&service, PREVIEW_SERVICE)?;
     }
     fs::write(dir.join("config.xml"), widget.config_xml())?;
     let unsigned = root.join(format!("{name}.wgt"));
@@ -365,6 +449,18 @@ pub(crate) fn package(
         install_and_launch(&signed, &widget.package, None)?;
     }
     Ok(())
+}
+
+/// The shim with the package's Smart Hub preview (`nshTizen.preview`).
+fn shim(preview: Option<&Preview>) -> String {
+    match preview {
+        Some(preview) => SHIM.replacen(
+            SHIM_PREVIEW,
+            &format!("const PREVIEW = {};", preview.shim_json()),
+            1,
+        ),
+        None => SHIM.to_owned(),
+    }
 }
 
 /// The app's icon as Tizen TVs show it: 512×423, the square icon centered.
@@ -531,6 +627,7 @@ fn write_dev_package(dir: &Path, url: &str) -> anyhow::Result<Widget> {
         privileges: PRIVILEGES.iter().map(|p| (*p).to_owned()).collect(),
         access: vec!["*".to_owned()],
         navigation: vec![host],
+        preview: None,
     };
     if dir.exists() {
         fs::remove_dir_all(dir).with_context(|| format!("remove {}", dir.display()))?;
@@ -626,6 +723,7 @@ fn write_probe(dir: &Path) -> anyhow::Result<Widget> {
         privileges: PRIVILEGES.iter().map(|p| (*p).to_owned()).collect(),
         access: vec!["*".to_owned()],
         navigation: Vec::new(),
+        preview: None,
     };
     fs::write(dir.join("config.xml"), widget.config_xml())?;
     Ok(widget)
@@ -665,6 +763,26 @@ mod tests {
         assert!(check_api_version("8").is_err());
         assert_eq!(app_name("Hello, TV!"), "HelloTV");
         assert_eq!(app_name("计数器"), "App");
+    }
+
+    #[test]
+    fn the_shim_carries_the_packages_preview() {
+        assert!(SHIM.contains(SHIM_PREVIEW));
+        assert_eq!(shim(None), SHIM);
+        let service = shim(Some(&Preview::Service("AbCdE12345.NshPreview".into())));
+        assert!(service.contains(r#"const PREVIEW = {"service":"AbCdE12345.NshPreview"};"#));
+        assert!(!service.contains(SHIM_PREVIEW));
+        assert_eq!(
+            Preview::of("service", "AbCdE12345").unwrap(),
+            Preview::Service("AbCdE12345.NshPreview".into())
+        );
+        assert_eq!(
+            Preview::of("https://example.com/p.json", "AbCdE12345").unwrap(),
+            Preview::Endpoint("https://example.com/p.json".into())
+        );
+        for bad in ["", "services", "ftp://example.com/p.json", "https://"] {
+            assert!(Preview::of(bad, "AbCdE12345").is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -269,13 +269,20 @@ nsh package --target tizen-web --probe             # 一个包，显示电视如
     "version": "1.2.0",
     "apiVersion": "8.0",
     "privileges": ["http://tizen.org/privilege/tv.audio"],
-    "signing": "my-profile"
+    "signing": "my-profile",
+    "smartHubPreview": "service"
   }
   ```
 
   `package` 是 10 个字母和数字（默认由应用的 `id` 生成）；`appId` 是 `<package>.<name>`（默认取应用名中的字母和数字）；
   `version` 是 Tizen 的 `x.y.z` 数字版本（默认是应用的 `version`，否则 `1.0.0`）；`apiVersion` 是能安装这个包的最低
-  Tizen 版本（`8.0`）；`privileges` 是在网络和遥控器按键之外申请的权限；`signing` 是证书配置。
+  Tizen 版本（`8.0`）；`privileges` 是在网络和遥控器按键之外申请的权限；`signing` 是证书配置；
+  `smartHubPreview` 是应用的 Smart Hub 预览（见下）。
+- **Smart Hub 预览**，即电视在主屏幕上为应用显示的磁贴，需要用 `tizen.smartHubPreview` 主动开启。一个 URL
+  （`"https://example.com/tv/preview.json"`）表示公共预览：包中声明它，电视从你的服务器读取这个三星预览格式的 JSON。`"service"`
+  表示个人预览，由应用用 [`nsh/tizen`](../modules/nsh-tizen.md) 的 `setPreviewData` 设置：三星从后台服务获取预览，所以包中带有
+  NSH 的一个小服务，这个调用会带着数据启动它。三星每 10 分钟只允许更新一次，从 U 盘安装的包不显示预览。磁贴的 `action_data`
+  暂时还不会送到应用。两种形式都按三星的指南实现，尚未在电视上验证。
 - **开发**：`nsh run --target tizen-web` 由开发服务器提供电视的页面，所以本机浏览器打开它打印的地址，就能看到电视 idiom
   下的应用，并且支持热更新。配置了 `nsh.json` 的 `tizen.signing` 时，它还会在电视上签名、安装并启动一个开发包
   （`--device`：电视的 `sdb` 序列号），开发包的页面会打开本机在局域网中的地址上的开发服务器页面。

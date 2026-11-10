@@ -243,8 +243,20 @@ there is no `Os::TizenWeb`.
 - **`config.xml`**: `nsh.json` `tizen` (`package`, 10 letters and digits, by default made from the app's `id`;
   `appId`, by default `<package>.<name's letters and digits>`; `version`, Tizen's `x.y.z`, by default the app's;
   `apiVersion`, `required_version`, by default `8.0`; `privileges`, added to the internet and `tv.inputdevice`
-  ones; `signing`), the `tv-samsung` profile, `<access origin="*">` (the app's `capabilities` and the page's CSP
-  limit its requests), landscape, the icon. The section's keys are named for a native Tizen target to share.
+  ones; `signing`; `smartHubPreview`), the `tv-samsung` profile, `<access origin="*">` (the app's `capabilities`
+  and the page's CSP limit its requests), landscape, the icon. The section's keys are named for a native Tizen
+  target to share.
+- **Smart Hub's preview** (`tizen.smartHubPreview`, `Preview`), as Samsung's guides declare one: a URL is a public
+  preview, `<tizen:metadata key="http://samsung.com/tv/metadata/use.preview" value="endpoint_URL=<url>"/>`, whose
+  JSON the TV fetches itself (the app's server serves it; nothing in the package sets it). `"service"` is a personal
+  preview, `use.preview` `bg_service`: Samsung sets it from a background service of the package, so the package
+  carries one, `<tizen:service id="<package>.NshPreview">` with `service/preview.js` (`tizen_web/preview-service.js`,
+  tested in `shim.test.mjs`), and asks for `application.launch`; the shim's `PREVIEW` (`nshTizen.preview`) names
+  the service, and `nsh/tizen`'s `setPreviewData` launches it with the data, which it hands to
+  `webapis.preview.setPreviewData` before it exits (`require("$WEBAPIS/service/webapis.js")` where the service has
+  no `webapis`). The tiles' `action_data` (Samsung's `eden_resume` app control, `getRequestedAppControl`) is not
+  delivered to the app yet. Samsung's own limits hold: one `setPreviewData` per 10 minutes, no preview for packages
+  installed from USB.
 - **The shim** (`shim.js`, tested by `node --test crates/nsh-cli/src/tizen_web/shim.test.mjs` on fake `tizen`
   globals): the remote's Back (key code 10009) is sent to the app as a `BrowserBack` key down (`nsh.js` `keyDown`'s
   back path), then, when nothing took it (`preventDefault`), as an `Escape` (a dialog, a field); when neither went
@@ -272,8 +284,14 @@ there is no `Os::TizenWeb`.
 
 `cargo test -p nsh-cli --test cli tizen_web::` packages with a fake runtime (`NSH_RUNTIME`: a linkable module of
 three functions) and a fake `tz`; `cargo test -p nsh-cli --bin nsh tizen_web::` checks the ids, versions and `tz`'s
-command lines. Not verified here: signing with a real profile, installing on a TV, and whether a remote dev page
-gets `tizen`'s APIs (Back still arrives as key code 10009 there).
+command lines.
+
+On a TV (the owner's device checks, DEV-6), still unverified: signing with a real profile (`tz pack ... -b`);
+installing and launching (`tz install`, `tz run -p <package>`); every row of the probe; that the development package
+navigates to the dev server's page (host-only `allow-navigation`) and that page reaches its `ws://` WebSocket, and
+whether it gets `tizen`'s APIs there (Back still arrives as key code 10009); and Smart Hub's preview: a public
+preview's `endpoint_URL`, and a personal one through `service/preview.js` (whether the TV starts the service from
+`launchAppControl`, and whether a service has `webapis` as a global or from `$WEBAPIS/service/webapis.js`).
 
 ### Runtimes linked for each app
 

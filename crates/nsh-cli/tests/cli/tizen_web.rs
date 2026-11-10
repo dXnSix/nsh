@@ -200,6 +200,8 @@ fn a_package_is_the_web_site_with_a_manifest_and_the_tv_shim() {
         assert!(config.contains(part), "{part} in {config}");
     }
     assert!(!config.contains("<icon"), "{config}");
+    // No Smart Hub preview without `tizen.smartHubPreview`.
+    assert!(!config.contains("use.preview"), "{config}");
 
     // The shim runs first, then the runtime starts the player on a TV,
     // without history entries (the remote's Back is the shim's).
@@ -255,6 +257,65 @@ fn the_tizen_section_names_the_package_and_its_privileges() {
 }
 
 #[test]
+fn a_smart_hub_preview_is_declared_as_samsung_asks() {
+    let shim_of = |site: &Path| {
+        let name = files(site)
+            .into_iter()
+            .find(|n| n.starts_with("nsh-tizen.") && n.ends_with(".js"))
+            .unwrap();
+        read(site.join(name))
+    };
+    // A personal preview: the app sets it through the package's service.
+    let dir = app(r#"{ "id": "com.acme.counter", "name": "Counter",
+            "tizen": { "package": "AbCdE12345", "smartHubPreview": "service" } }"#);
+    let output = package(&dir, &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let site = dir.0.join("out/tizen-web/Counter");
+    let config = read(site.join("config.xml"));
+    for part in [
+        r#"<tizen:metadata key="http://samsung.com/tv/metadata/use.preview" value="bg_service"/>"#,
+        r#"<tizen:service id="AbCdE12345.NshPreview" auto-restart="false">"#,
+        r#"<tizen:content src="service/preview.js"/>"#,
+        r#"<tizen:category name="http://tizen.org/category/service"/>"#,
+        r#"<tizen:privilege name="http://tizen.org/privilege/application.launch"/>"#,
+    ] {
+        assert!(config.contains(part), "{part} in {config}");
+    }
+    assert_eq!(
+        read(site.join("service/preview.js")),
+        read(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tizen_web/preview-service.js"))
+    );
+    assert!(
+        entries(&dir.0.join("out/tizen-web/Counter.wgt"))
+            .contains(&"service/preview.js".to_owned())
+    );
+    let shim = shim_of(&site);
+    assert!(
+        shim.contains(r#"const PREVIEW = {"service":"AbCdE12345.NshPreview"};"#),
+        "{shim}"
+    );
+
+    // A public preview: the TV reads its JSON itself.
+    let dir = app(r#"{ "id": "com.acme.counter", "name": "Counter",
+            "tizen": { "smartHubPreview": "https://example.com/tv/preview.json" } }"#);
+    let output = package(&dir, &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let site = dir.0.join("out/tizen-web/Counter");
+    let config = read(site.join("config.xml"));
+    assert!(
+        config.contains(r#"<tizen:metadata key="http://samsung.com/tv/metadata/use.preview" value="endpoint_URL=https://example.com/tv/preview.json"/>"#),
+        "{config}"
+    );
+    assert!(!config.contains("<tizen:service"), "{config}");
+    assert!(!config.contains("application.launch"), "{config}");
+    assert!(!site.join("service").exists());
+    assert!(
+        shim_of(&site)
+            .contains(r#"const PREVIEW = {"endpoint":"https://example.com/tv/preview.json"};"#)
+    );
+}
+
+#[test]
 fn ids_and_versions_tizen_refuses_are_refused() {
     for (config, message) in [
         (
@@ -266,6 +327,10 @@ fn ids_and_versions_tizen_refuses_are_refused() {
             "tizen.appId `Other12345.App`",
         ),
         (r#""version": "1.0.0-beta""#, "version `1.0.0-beta`"),
+        (
+            r#""tizen": { "smartHubPreview": "ftp://example.com/preview.json" }"#,
+            "tizen.smartHubPreview `ftp://example.com/preview.json`",
+        ),
         (
             r#""tizen": { "apiVersion": "eight" }"#,
             "tizen.apiVersion `eight`",
