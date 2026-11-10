@@ -37,6 +37,7 @@ mod encode;
 mod event;
 mod ffi;
 mod filesystem;
+mod focus;
 mod net;
 mod shader;
 mod storage;
@@ -1500,6 +1501,29 @@ pub extern "C" fn nsh_key(key: u32, modifiers: u32, focus: u32, repeat: u32) -> 
         KeyMatch::Fire(id) => id as f64,
         KeyMatch::Notify(id) => -3.0 - id as f64,
     }
+}
+
+/// Where an arrow key moves the keyboard focus (`web/nsh.js`
+/// `arrowFocus`): the stop that takes it, as `focus::decide` reads the
+/// page's JSON description, or -1 for none (the key goes on). Decided on
+/// the spot by `nsh_core::focus`, without the engine.
+///
+/// # Safety
+///
+/// `ptr..ptr + len` is memory from [`nsh_alloc`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nsh_focus_move(ptr: *const u8, len: usize) -> f64 {
+    // SAFETY: guaranteed by the caller.
+    let json = unsafe { string(ptr, len) };
+    focus::decide(&json).map_or(-1.0, f64::from)
+}
+
+/// How far a scroll view moves along its axis (`vertical` 1, horizontal
+/// 0) to bring the stop an arrow focused into sight (`focus::reveal`, CSS
+/// pixels): NaN while it shows whole already.
+#[unsafe(no_mangle)]
+pub extern "C" fn nsh_focus_reveal(start: f32, len: f32, viewport: f32, vertical: u32) -> f64 {
+    focus::reveal(start, len, viewport, vertical != 0).map_or(f64::NAN, f64::from)
 }
 
 /// Binding `id` of the app's shortcuts fired ([`nsh_key`]): the root's

@@ -850,6 +850,11 @@ fn props_json(p: &ViewProps) -> String {
     if p.selectable_view {
         s.push_str(",\"selectableView\":true");
     }
+    // An overlay anchored to another view (a menu's, a select's or a
+    // popover's popup): what the arrows go into first (`arrowFocus`).
+    if p.overlay_anchor.is_some() {
+        s.push_str(",\"anchored\":true");
+    }
     // A wrapped line's later part: a copy joins it to the part before.
     if p.continues_text {
         s.push_str(",\"continuesText\":true");
