@@ -361,7 +361,7 @@ pub(crate) fn package(
     let signed = options.out.join(format!("{name}.wgt"));
     sign(profile, &unsigned, &signed)?;
     if options.run {
-        install_and_launch(&signed, &widget.app, None)?;
+        install_and_launch(&signed, &widget.package, None)?;
     }
     Ok(())
 }
@@ -443,13 +443,14 @@ fn sign_command(tz: &Path, profile: &str, unsigned: &Path, signed: &Path) -> Com
     command
 }
 
-/// `tz`'s commands that install the package at `wgt` and launch
-/// application `app` on the TV `serial` (the one `tz` picks without it).
-fn install_commands(tz: &Path, wgt: &Path, app: &str, serial: Option<&str>) -> [Command; 2] {
+/// `tz`'s commands that install the package at `wgt` and launch it, by its
+/// package id (`tz run -p`, "launch app using package ID"), on the TV
+/// `serial` (the one `tz` picks without it).
+fn install_commands(tz: &Path, wgt: &Path, package: &str, serial: Option<&str>) -> [Command; 2] {
     let mut install = Command::new(tz);
     install.args(["install", "-p"]).arg(wgt);
     let mut launch = Command::new(tz);
-    launch.args(["run", "-p", app]);
+    launch.args(["run", "-p", package]);
     for command in [&mut install, &mut launch] {
         if let Some(serial) = serial {
             command.args(["-e", serial]);
@@ -482,12 +483,12 @@ fn sign(profile: &str, unsigned: &Path, signed: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn install_and_launch(wgt: &Path, app: &str, serial: Option<&str>) -> anyhow::Result<()> {
-    let step = ui::Step::start(format!("installing {app} on the TV"));
-    let [install, launch] = install_commands(&tz()?, wgt, app, serial);
+fn install_and_launch(wgt: &Path, package: &str, serial: Option<&str>) -> anyhow::Result<()> {
+    let step = ui::Step::start(format!("installing {package} on the TV"));
+    let [install, launch] = install_commands(&tz()?, wgt, package, serial);
     run_tz(install, "install the package")?;
     run_tz(launch, "launch the app")?;
-    step.done(format!("launched {app} on the TV"));
+    step.done(format!("launched {package} on the TV"));
     Ok(())
 }
 
@@ -567,7 +568,7 @@ pub(crate) fn run_dev(entry: &Path, url: &str, device: Option<&str>) -> anyhow::
     };
     let signed = work.join("NshDev.wgt");
     sign(profile, &unsigned, &signed)?;
-    install_and_launch(&signed, &widget.app, device)
+    install_and_launch(&signed, &widget.package, device)
 }
 
 /// `nsh package --target tizen-web --probe`: a package with the probe's
@@ -595,7 +596,7 @@ pub(crate) fn probe(options: &PackageOptions<'_>) -> anyhow::Result<()> {
     let signed = options.out.join("NshProbe.wgt");
     sign(profile, &unsigned, &signed)?;
     if options.run {
-        install_and_launch(&signed, &widget.app, None)?;
+        install_and_launch(&signed, &widget.package, None)?;
     }
     Ok(())
 }
@@ -692,16 +693,13 @@ mod tests {
                 "pack", "-t", "wgt", "-s", "tv", "-b", "a.wgt", "-o", "b.wgt"
             ]
         );
-        let [install, launch] = install_commands(tz, Path::new("b.wgt"), "Pkg0123456.App", None);
+        let [install, launch] = install_commands(tz, Path::new("b.wgt"), "Pkg0123456", None);
         assert_eq!(args(&install), ["install", "-p", "b.wgt"]);
-        assert_eq!(args(&launch), ["run", "-p", "Pkg0123456.App"]);
+        assert_eq!(args(&launch), ["run", "-p", "Pkg0123456"]);
         let [install, launch] =
-            install_commands(tz, Path::new("b.wgt"), "Pkg0123456.App", Some("tv:26101"));
+            install_commands(tz, Path::new("b.wgt"), "Pkg0123456", Some("tv:26101"));
         assert_eq!(args(&install), ["install", "-p", "b.wgt", "-e", "tv:26101"]);
-        assert_eq!(
-            args(&launch),
-            ["run", "-p", "Pkg0123456.App", "-e", "tv:26101"]
-        );
+        assert_eq!(args(&launch), ["run", "-p", "Pkg0123456", "-e", "tv:26101"]);
     }
 
     #[test]

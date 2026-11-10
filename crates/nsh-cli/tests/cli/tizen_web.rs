@@ -446,7 +446,8 @@ fn a_profile_installs_and_launches_the_development_package() {
                 signed.display()
             ),
             format!("install -p {} -e 192.168.1.5:26101", signed.display()),
-            "run -p NshDevHost.NshDev -e 192.168.1.5:26101".to_owned(),
+            // `tz run` launches by package id.
+            "run -p NshDevHost -e 192.168.1.5:26101".to_owned(),
         ]
     );
 }

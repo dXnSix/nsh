@@ -237,7 +237,8 @@ there is no `Os::TizenWeb`.
   `installed` (no `web.base`, no `.br` / `.gz` copies). It adds `config.xml` (`Widget`) and `icon.png` (512×423),
   writes `<out>/tizen-web/<name>/` and zips it into `<out>/tizen-web/<name>.wgt`, unsigned; with a certificate
   profile (`--sign`, `nsh.json` `tizen.signing`) `tz pack -t wgt -s <profile> -b <unsigned> -o <out>/<name>.wgt`
-  signs it (`tz`'s repackaging), and `--run` installs (`tz install -p`) and launches it (`tz run -p <app id>`).
+  signs it (`tz`'s repackaging), and `--run` installs (`tz install -p`) and launches it by its package id
+  (`tz run -p <package>`, which `tz run --help` calls "launch app using package ID").
   `tz` is found on `PATH` or at `~/tizen-studio/tools/tizen-core/tz`; only those three calls need the SDK.
 - **`config.xml`**: `nsh.json` `tizen` (`package`, 10 letters and digits, by default made from the app's `id`;
   `appId`, by default `<package>.<name's letters and digits>`; `version`, Tizen's `x.y.z`, by default the app's;
