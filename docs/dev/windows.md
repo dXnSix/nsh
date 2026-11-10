@@ -196,6 +196,10 @@ server client, log forwarding, the error overlay: `dev.rs`). The host turns on `
   `ViewProps::focus_stop` makes stops (pressables, `focusable`), less those a backdrop covers. Before 2026-11-10 Tab
   moved between text fields only.
 
+`tests/apps/pressable-focus` checks Tab, Shift+Tab, the arrows, a field keeping Left / Right, Return and Space on the
+real host: `nsh test tests/apps/pressable-focus --target windows` (with `cargo build -p nsh-windows-host` first in a
+checkout).
+
 A handled Alt combination swallows its `WM_SYSCHAR` (Alt+Return makes one, which `DefWindowProc` would beep at) and
 the Alt release (which would open the window menu). Shortcuts read virtual keys, which follow the key's US letter
 under non-Latin layouts (Cyrillic, Greek), so Ctrl+C is the same key on all of them.
