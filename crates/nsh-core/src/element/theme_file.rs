@@ -144,6 +144,30 @@ pub(crate) fn overrides_declared(
             ));
         }
     }
+    // The file's `"roles"`: a role no type maps may be mapped by the file;
+    // a type's mapping is the app's code, and stays.
+    let mut roles: Vec<(&str, &str)> = read.roles().collect();
+    roles.sort_unstable();
+    let mut mapped = Vec::new();
+    for (role, token) in roles {
+        if let Some(by_type) = set.target(role).filter(|token| *token != role) {
+            left_out.push(LeftOut::about(
+                &format!("roles.{role}"),
+                format_args!(": a theme type maps it onto `{by_type}`"),
+            ));
+            continue;
+        }
+        let kind = set
+            .names()
+            .find(|(name, ..)| *name == token)
+            .and_then(|(_, _, kind)| kind.role_kind());
+        if let Some(kind) = kind {
+            mapped.push((super::AnyRole::new(role.to_owned(), kind), token.to_owned()));
+        }
+    }
+    if !mapped.is_empty() {
+        out = out.with_roles(mapped);
+    }
     Ok((out, left_out))
 }
 
@@ -369,7 +393,59 @@ fn read_into(tokens: &mut Tokens, base: &Tokens, value: &JsonValue) -> Vec<LeftO
         Some(vars) => apply_css_vars(tokens, base, vars, &mut ignored),
         None => ignored.push(LeftOut::said("no shadcn `{ \"cssVars\": { ... } }`")),
     }
+    if let Some(roles) = value.get("roles") {
+        apply_roles(tokens, base, roles, &mut ignored);
+    }
     ignored
+}
+
+/// The `"roles"` section of a theme file, beside `cssVars`: each role's
+/// name with the name of the token it is mapped onto (`"popover":
+/// "surface"`), as a theme type's `role = …` maps one
+/// ([`Tokens::with_roles`]). The role then reads that token, and follows
+/// it. The token is one the file sets or `base` has; a role mapped onto
+/// anything else is left out.
+fn apply_roles(tokens: &mut Tokens, base: &Tokens, roles: &JsonValue, ignored: &mut Vec<LeftOut>) {
+    use super::{AnyRole, RoleKind, Token};
+    let Some(roles) = roles.as_object() else {
+        return ignored.push(LeftOut::said(
+            "roles: expected an object of role names and the names of their tokens",
+        ));
+    };
+    let mut names: Vec<&String> = roles.keys().collect();
+    names.sort();
+    let mut mapped = Vec::new();
+    for role in names {
+        let key = format!("roles.{role}");
+        let Some(token) = roles[role].as_str() else {
+            ignored.push(LeftOut::about(&key, ": expected the name of a token"));
+            continue;
+        };
+        // A role reads what its token holds.
+        let kind = match tokens.get(token).or_else(|| base.get(token)) {
+            Some(Token::Color(_)) => RoleKind::Color,
+            Some(Token::Number(_)) => RoleKind::Number,
+            Some(Token::Font(_)) => RoleKind::Font,
+            Some(_) => {
+                ignored.push(LeftOut::about(
+                    &key,
+                    format_args!(": no role reads what `{token}` holds"),
+                ));
+                continue;
+            }
+            None => {
+                ignored.push(LeftOut::about(
+                    &key,
+                    format_args!(": the theme has no token `{token}`"),
+                ));
+                continue;
+            }
+        };
+        mapped.push((AnyRole::new(role.clone(), kind), token.to_owned()));
+    }
+    if !mapped.is_empty() {
+        *tokens = std::mem::take(tokens).with_roles(mapped);
+    }
 }
 
 /// A CSS color.
@@ -1004,6 +1080,185 @@ mod declared_once {
         assert_eq!(
             overrides_declared("nope", &Tokens::default(), &set()).unwrap_err()[..9],
             *"not JSON:"
+        );
+    }
+}
+
+/// A theme file's `"roles"` section: roles mapped onto the file's tokens,
+/// as a theme type's `role = …` maps them.
+#[cfg(test)]
+mod file_roles {
+    use super::*;
+    use crate::element::{
+        AppTheme, FontRole, NumberRole, Role, ThemeSpec, TokenKind, TokenSpec, theme::ThemeSet,
+    };
+
+    const POPOVER: Role = Role::new("popover");
+    const WARNING: Role = Role::new("warning");
+    const RADIUS: NumberRole = Role::new("radius");
+    const FONT_SANS: FontRole = Role::new("font-sans");
+
+    fn base() -> Tokens {
+        let mut base = Tokens::default();
+        base.set_color("popover", AdaptiveColor::rgb(0xffffff, 0x000000));
+        base.set_color("line", AdaptiveColor::rgb(0x111111, 0x222222));
+        base.set_number("radius", 10.0);
+        base
+    }
+
+    const FILE: &str = r##"{
+        "cssVars": { "light": { "surface": "#fafafa" }, "dark": { "surface": "#171717" },
+                     "theme": { "corner": "6px", "font-brand": "Inter, sans-serif",
+                                "shadow-raised": "0 1px 2px #0000001a" } },
+        "roles": { "popover": "surface", "warning": "line", "radius": "corner", "font-sans": "font-brand" }
+    }"##;
+
+    #[test]
+    fn a_role_reads_the_token_the_file_maps_it_onto() {
+        let (tokens, left_out) = parse(FILE, &base()).unwrap();
+        assert_eq!(left_out, Vec::<String>::new());
+        // A token the file sets, and one of the base's.
+        assert_eq!(
+            tokens.role(POPOVER),
+            Some(AdaptiveColor::rgb(0xfafafa, 0x171717))
+        );
+        assert_eq!(
+            tokens.role(WARNING),
+            Some(AdaptiveColor::rgb(0x111111, 0x222222))
+        );
+        assert_eq!(tokens.role(RADIUS), Some(6.0));
+        assert_eq!(tokens.role(FONT_SANS).as_deref(), Some("Inter"));
+        assert_eq!(tokens.mapped("popover"), Some("surface"));
+        // The role follows its token: no copy of its value was taken.
+        let mut changed = Tokens::default();
+        changed.set_color("surface", AdaptiveColor::rgb(0xeeeeee, 0x333333));
+        let tokens = changed.over(&tokens);
+        assert_eq!(
+            tokens.role(POPOVER),
+            Some(AdaptiveColor::rgb(0xeeeeee, 0x333333))
+        );
+    }
+
+    #[test]
+    fn a_change_of_the_theme_adds_to_the_roles() {
+        let (tokens, _) = parse(FILE, &base()).unwrap();
+        // `updateTheme`'s reader gives what the file sets, roles among it.
+        let (part, left_out) = overrides(
+            r##"{ "cssVars": {}, "roles": { "warning": "surface" } }"##,
+            &tokens,
+        )
+        .unwrap();
+        assert_eq!(left_out, Vec::<String>::new());
+        let tokens = part.over(&tokens);
+        assert_eq!(tokens.mapped("warning"), Some("surface"));
+        assert_eq!(tokens.mapped("popover"), Some("surface"));
+    }
+
+    #[test]
+    fn what_cannot_be_mapped_is_left_out_and_said() {
+        let (tokens, left_out) = parse(
+            r##"{ "cssVars": { "theme": { "shadow-raised": "0 1px 2px #0000001a" } },
+                  "roles": { "popover": "surfce", "elevation": "shadow-raised", "warning": 3 } }"##,
+            &base(),
+        )
+        .unwrap();
+        assert_eq!(
+            left_out,
+            [
+                "`roles.elevation`: no role reads what `shadow-raised` holds",
+                "`roles.popover`: the theme has no token `surfce`",
+                "`roles.warning`: expected the name of a token",
+            ]
+        );
+        assert_eq!(tokens.mapped("popover"), None);
+        let (_, left_out) = parse(r##"{ "cssVars": {}, "roles": ["popover"] }"##, &base()).unwrap();
+        assert_eq!(
+            left_out,
+            ["roles: expected an object of role names and the names of their tokens"]
+        );
+        // A file without the section reads as before.
+        let (tokens, left_out) = parse(
+            r##"{ "cssVars": { "light": { "line": "#333333" } } }"##,
+            &base(),
+        )
+        .unwrap();
+        assert_eq!(left_out, Vec::<String>::new());
+        assert_eq!(tokens.roles().count(), 0);
+    }
+
+    /// A design system's type: its overlay plays `popover`; nothing plays
+    /// `warning`.
+    #[derive(Debug, Clone, PartialEq)]
+    struct Ds {
+        overlay: AdaptiveColor,
+        caution: AdaptiveColor,
+    }
+
+    impl Default for Ds {
+        fn default() -> Self {
+            Ds {
+                overlay: AdaptiveColor::rgb(0x111111, 0x111111),
+                caution: AdaptiveColor::rgb(0xaa5500, 0xaa5500),
+            }
+        }
+    }
+
+    impl AppTheme for Ds {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::LazyLock<Vec<TokenSpec>> = std::sync::LazyLock::new(|| {
+                vec![
+                    TokenSpec::new("overlay", TokenKind::Color).role(POPOVER),
+                    TokenSpec::new("caution", TokenKind::Color),
+                ]
+            });
+            &SPECS
+        }
+
+        fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
+            out.set_color(&format!("{prefix}overlay"), self.overlay);
+            out.set_color(&format!("{prefix}caution"), self.caution);
+        }
+
+        fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
+            let d = Ds::default();
+            Ds {
+                overlay: tokens
+                    .color(&format!("{prefix}overlay"))
+                    .unwrap_or(d.overlay),
+                caution: tokens
+                    .color(&format!("{prefix}caution"))
+                    .unwrap_or(d.caution),
+            }
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    fn under_theme_types_a_file_maps_the_roles_no_type_maps() {
+        let set = ThemeSet::new(&[ThemeSpec::of::<Ds>()]);
+        let defaults = Ds::default().to_tokens();
+        let (tokens, left_out) = parse_declared(
+            r##"{ "cssVars": {}, "roles": { "warning": "caution", "popover": "caution" } }"##,
+            &defaults,
+            &set,
+        )
+        .unwrap();
+        // The type's own mapping is the app's code: the file's is left out.
+        let said: Vec<String> = left_out.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            said,
+            ["`roles.popover`: a theme type maps it onto `overlay`"]
+        );
+        assert_eq!(
+            tokens.role(WARNING),
+            Some(AdaptiveColor::rgb(0xaa5500, 0xaa5500))
+        );
+        assert_eq!(
+            tokens.role(POPOVER),
+            Some(AdaptiveColor::rgb(0x111111, 0x111111))
         );
     }
 }

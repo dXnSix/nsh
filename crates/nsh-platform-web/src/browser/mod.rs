@@ -193,7 +193,10 @@ impl Runtime {
                     &registries
                 })
             }
-            402 => {
+            // `token(name)` (402) and `role(name)` (414), as nsh-js's
+            // (`env.rs`): a role reads the token a theme maps it onto, when
+            // that has a value, else the token of its name.
+            402 | 414 => {
                 use nsh_core::element::Token;
                 let name = args.index(0)?.as_string().unwrap_or_default();
                 let dark = args.index(1)?.truthy();
@@ -204,6 +207,12 @@ impl Runtime {
                     .as_number()
                     .and_then(|named| self.scope_tokens_named(named));
                 let tokens = scoped.or_else(|| self.tokens.borrow().clone());
+                let name = tokens
+                    .as_ref()
+                    .filter(|_| op == 414)
+                    .and_then(|t| t.mapped(&name).filter(|token| t.get(token).is_some()))
+                    .map(str::to_owned)
+                    .unwrap_or(name);
                 // A number in the appearance shown, as nsh-js's `token()`.
                 let token = tokens.as_ref().and_then(|t| match t.get(&name) {
                     Some(Token::Number(_)) => t.number_in(&name, dark).map(Token::Number),

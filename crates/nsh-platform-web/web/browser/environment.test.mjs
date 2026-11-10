@@ -185,6 +185,12 @@ test("what a ThemeScope renders reads the scope's appearance and tokens", () => 
   env.update(engine({ colorScheme: "dark" }));
   assert.equal(env.inScope({}, read), "dark");
   assert.equal(env.inScope({ appearance: "light" }, read), "light");
+  // `role()` asks as `token()` does, with its own call.
+  const roles = [];
+  const { env: other } = environment((op, args) => { if (op === 414) roles.push(args); });
+  other.update(engine({ colorScheme: "dark" }));
+  other.api.role("popover");
+  assert.deepEqual(roles, [["popover", true, null]]);
   // `token()` asks for the side the scope shows, of the surface's tokens.
   assert.deepEqual(asked, [["up", false, null], ["up", true, null], ["up", true, null], ["up", true, null], ["up", false, null]]);
   // A scope with a theme: the engine makes its tokens over the surface's,

@@ -807,6 +807,8 @@ pub struct Registry {
     overrides: Option<super::TokenOverrides>,
     /// The theme types its sets register ([`Registry::theme`]).
     themes: Arc<Vec<super::ThemeSpec>>,
+    /// The roles its components draw with ([`Registry::roles`]).
+    roles: Arc<Vec<super::RoleSpec>>,
     /// One theme of those types, which replaces [`Self::tokens`] as the
     /// token source (`None`: no type).
     theme_set: Option<Arc<super::theme::ThemeSet>>,
@@ -1032,6 +1034,9 @@ impl Registry {
                     Arc::make_mut(&mut out.themes).push(theme.clone());
                 }
             }
+            for role in set.roles.iter() {
+                out.add_role(role.clone());
+            }
             out.scrollbars = out.scrollbars.or(set.scrollbars);
             Arc::make_mut(&mut out.setups).extend(set.setups.iter().cloned());
             let types = Arc::make_mut(&mut out.types);
@@ -1236,6 +1241,47 @@ impl Registry {
     /// The theme types registered ([`Registry::theme`]), as data.
     pub fn theme_specs(&self) -> &[super::ThemeSpec] {
         &self.themes
+    }
+
+    /// Lists the roles the set's components draw with, mapped by a theme
+    /// or not (`nsh_base::role::all()`, or a design system's own made with
+    /// [`crate::roles!`]): the toolchain types TS's `role()` from them. A
+    /// role is its name, so one two sets list is one role; it reads one
+    /// kind of value.
+    ///
+    /// # Panics
+    ///
+    /// If a role is listed twice reading different kinds (a color and a
+    /// number).
+    #[track_caller]
+    pub fn roles(&mut self, roles: impl IntoIterator<Item = super::RoleSpec>) -> &mut Self {
+        for role in roles {
+            self.add_role(role);
+        }
+        self
+    }
+
+    #[track_caller]
+    fn add_role(&mut self, spec: super::RoleSpec) {
+        match self
+            .roles
+            .iter()
+            .find(|r| r.role.name() == spec.role.name())
+        {
+            Some(listed) if listed.role.kind() != spec.role.kind() => panic!(
+                "the role `{}` is listed reading {} and {}",
+                spec.role.name(),
+                listed.role.kind().name(),
+                spec.role.kind().name()
+            ),
+            Some(_) => {}
+            None => Arc::make_mut(&mut self.roles).push(spec),
+        }
+    }
+
+    /// The roles listed ([`Registry::roles`]), as data.
+    pub fn role_specs(&self) -> &[super::RoleSpec] {
+        &self.roles
     }
 
     /// The files [`Registry::assets`] ships.

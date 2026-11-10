@@ -5212,6 +5212,15 @@
 			const around = scoped && scope();
 			return around ? around.scheme() : fields.colorScheme();
 		};
+		const readToken = (op, name) => {
+			const around = scoped && scope(), named = around ? around.tokens() : void 0;
+			if (named === void 0) tokens();
+			return invoke(op, [
+				name,
+				shownScheme() === "dark",
+				named ?? null
+			]);
+		};
 		const setColorScheme = (scheme) => {
 			if (![
 				"light",
@@ -5246,15 +5255,8 @@
 				safeAreaInsets: () => insets(),
 				keyboardFrame: () => fields.keyboard(),
 				screenReader: () => fields.screenReader(),
-				token(name) {
-					const around = scoped && scope(), named = around ? around.tokens() : void 0;
-					if (named === void 0) tokens();
-					return invoke(402, [
-						name,
-						shownScheme() === "dark",
-						named ?? null
-					]);
-				},
+				token: (name) => readToken(402, name),
+				role: (name) => readToken(414, name),
 				setTheme(theme) {
 					invoke(406, [theme]);
 					tokens.update((value) => value + 1);

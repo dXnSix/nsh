@@ -268,6 +268,32 @@ import { effect, token } from "nsh";
 effect(() => console.log("primary is", token("primary"), "radius", token("radius")));
 ```
 
+## role
+
+```ts
+function role<K extends keyof Roles>(name: K): Roles[K] | undefined;
+```
+
+What the theme role `name` draws with in the appearance shown, as [`token()`](#token) gives a token: the token the
+app's theme maps the role onto (a theme type's `role = …`), else the token of the role's name, else `undefined`.
+A role is what a part of the UI is for (`popover`, `border`, `warning`), whatever an app's design system calls the
+token: a component written against roles is themed by any of them. Reading it is reactive, as `token()` is.
+
+`Roles` lists the roles the app's UI sets draw with (`nsh/base`'s: [Theme roles](./nsh-base.md#theme-roles)), each
+with what it reads; NSH writes it into `.nsh/types/nsh/roles.d.ts`. A role the theme has no token for is
+`undefined`, so a component keeps a color of its own for it:
+
+```tsx
+import { role } from "nsh";
+
+// The popover's surface, whatever this app calls it; amber until the theme has a warning color.
+<View style={{ backgroundColor: role("popover"), borderLeftWidth: 3, borderLeftColor: role("warning") ?? "#d97706" }} />
+```
+
+A class reads a role as a variable: `bg-(--popover)` is the token the theme maps `popover` onto, where the theme has
+no token of that name ([Theme tokens](../docs/tailwind.md#theme-tokens)). Rust reads a role by its constant:
+`theme().tokens().role(nsh_base::role::POPOVER)`.
+
 ## setTheme
 
 ```ts
@@ -279,6 +305,7 @@ interface Theme {
     light?: Record<string, string | number>;
     dark?: Record<string, string | number>;
   };
+  roles?: Record<string, string>;
 }
 ```
 
@@ -287,6 +314,13 @@ shadcn/ui's tokens as the one in `nsh.json` is. It applies at once: `token()` re
 and the classes naming tokens, `nsh/base` and Rust components' `theme()` follow with the next frame, in both
 appearances. An embedding app's [theme overrides](../docs/tailwind.md#theme-tokens) still win over it. `null` gives
 back the theme the app was built with.
+
+`roles` maps theme roles onto the theme's tokens by name: `roles: { popover: "surface" }` has everything that draws
+with `popover` (`nsh/base`'s popovers, [`role("popover")`](#role)) draw with the token `surface`, and follow it when
+it changes, where `"popover": "var(--surface)"` would copy its color once. It is how an app without a Rust theme type
+names its tokens its own way. A role mapped onto a name that is no token of the theme, and under theme types a role
+a type already maps, is refused as a value that cannot be read is; a role's name no UI set has is a build warning.
+`updateTheme` adds to the roles mapped.
 
 The theme is read whole: when a value cannot be read (a color NSH does not know, such as `#zz` or `lab()`, a `var()`
 that names no color, or a value that is no color in one appearance where the other's is), `setTheme` throws a

@@ -20,7 +20,7 @@ use super::Registry;
 
 /// The version of the JSON format of a [`Description`]: bumped whenever
 /// what it holds or means changes.
-pub const FORMAT: u32 = 3;
+pub const FORMAT: u32 = 4;
 
 /// The version of nsh-core that writes descriptions: the version of nsh
 /// the app's crates were built with.
@@ -112,6 +112,47 @@ pub struct SetDescription {
     pub undocumented: Vec<String>,
     /// The theme types it registers ([`Registry::theme`]).
     pub themes: Vec<ThemeDescription>,
+    /// The roles its components draw with ([`Registry::roles`]).
+    pub roles: Vec<RoleDescription>,
+}
+
+/// A role a set lists ([`Registry::roles`]), as data: what the toolchain
+/// types TS's `role()` from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleDescription {
+    /// Its name (`popover`).
+    pub name: String,
+    /// What it reads ([`super::RoleKind::name`]).
+    pub kind: String,
+    /// Its doc comment ([`super::RoleSpec::doc_text`]).
+    pub doc: String,
+}
+
+/// The roles `sets` list and the core's own ([`super::role::all`]), each
+/// once, by name: every role TS's `role()` may name. `Err` names a role
+/// two sets list reading different kinds.
+pub fn roles(sets: &[SetDescription]) -> Result<Vec<RoleDescription>, String> {
+    let core = super::role::all();
+    let own = core.iter().map(|spec| RoleDescription {
+        name: spec.role.name().to_owned(),
+        kind: spec.role.kind().name().to_owned(),
+        doc: spec.doc_text(),
+    });
+    let mut out: Vec<RoleDescription> = Vec::new();
+    for role in own.chain(sets.iter().flat_map(|s| s.roles.iter().cloned())) {
+        match out.iter().find(|r| r.name == role.name) {
+            Some(listed) if listed.kind != role.kind => {
+                return Err(format!(
+                    "the role `{}` is listed reading {} and {}",
+                    role.name, listed.kind, role.kind
+                ));
+            }
+            Some(_) => {}
+            None => out.push(role),
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
 }
 
 /// A theme type as data ([`Registry::theme`]): what the toolchain reads of
@@ -295,6 +336,15 @@ impl SetDescription {
                     defaults: super::theme_file::write(&spec.defaults()),
                 })
                 .collect(),
+            roles: registry
+                .role_specs()
+                .iter()
+                .map(|spec| RoleDescription {
+                    name: spec.role.name().to_owned(),
+                    kind: spec.role.kind().name().to_owned(),
+                    doc: spec.doc_text(),
+                })
+                .collect(),
         })
     }
 
@@ -333,6 +383,11 @@ impl SetDescription {
                     "roles": k.roles,
                 })).collect::<Vec<_>>(),
                 "defaults": t.defaults,
+            })).collect::<Vec<_>>(),
+            "roles": self.roles.iter().map(|r| json!({
+                "name": r.name,
+                "kind": r.kind,
+                "doc": r.doc,
             })).collect::<Vec<_>>(),
         })
     }
@@ -418,6 +473,23 @@ impl SetDescription {
                         type_name: string(t, "type", &at)?,
                         tokens,
                         defaults: string(t, "defaults", &at)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+            roles: array(set, "roles", &at)?
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    let at = format!("{at}.roles[{i}]");
+                    let r = object(r, &at)?;
+                    let kind = string(r, "kind", &at)?;
+                    if super::RoleKind::from_name(&kind).is_none() {
+                        return Err(format!("{at}.kind: unknown kind {kind:?}"));
+                    }
+                    Ok(RoleDescription {
+                        name: string(r, "name", &at)?,
+                        kind,
+                        doc: string(r, "doc", &at)?,
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?,
@@ -643,8 +715,8 @@ mod tests {
     }
 }
 
-/// Theme types as data: format 3 carries each set's types, their tokens and
-/// defaults, and the toolchain merges them as the registry does.
+/// Theme types as data: the description carries each set's types, their
+/// tokens and defaults (since format 3), and the toolchain merges them as the registry does.
 #[cfg(test)]
 mod theme_description {
     use super::*;
@@ -726,21 +798,23 @@ mod theme_description {
     }
 
     #[test]
-    fn a_sets_types_round_trip_in_format_3() {
+    fn a_sets_types_round_trip() {
         let doc = Description {
             nsh: VERSION.into(),
             sets: vec![set::<Ds>("ds/native")],
         };
         let text = doc.to_json();
-        assert!(text.contains("\"format\":3"), "{text}");
+        let format = format!("\"format\":{FORMAT}");
+        assert!(text.contains(&format), "{text}");
         let read = Description::from_json(&text).unwrap();
         assert_eq!(read, doc);
         let theme = &read.sets[0].themes[0];
         assert!(theme.type_name.ends_with("Ds"));
         assert_eq!(theme.tokens[0].roles, ["popover"]);
         assert_eq!(theme.tokens[1].kind, "radius");
-        // Format 2 is refused, as every other.
-        assert!(Description::from_json(&text.replace("\"format\":3", "\"format\":2")).is_err());
+        // The format before is refused, as every other.
+        let before = format!("\"format\":{}", FORMAT - 1);
+        assert!(Description::from_json(&text.replace(&format, &before)).is_err());
     }
 
     #[test]
@@ -974,5 +1048,135 @@ mod named_roles {
                 .unwrap()
                 .is_some()
         );
+    }
+}
+
+/// The roles a UI set lists ([`Registry::roles`]): in its description, read
+/// back from JSON, and merged with the core's for the toolchain.
+#[cfg(test)]
+mod set_roles {
+    use super::*;
+    use crate::element::{NumberRole, Role, RoleSpec, role};
+
+    #[allow(unreachable_pub, reason = "as a UI set's crate writes its roles")]
+    mod kit {
+        use crate::element::{NumberRole, Role};
+
+        crate::roles! {
+            /// A banner's surface,
+            /// whatever the app calls it.
+            ///
+            /// Name `banner`.
+            pub BANNER: Role = "banner",
+            /// How round a chip is.
+            pub CHIP_RADIUS: NumberRole = "chip-radius",
+        }
+    }
+
+    fn set() -> Registry {
+        let mut registry = Registry::ui_set("test/kit");
+        registry.roles(kit::all());
+        registry
+    }
+
+    #[test]
+    fn a_sets_roles_are_in_its_description() {
+        let described = SetDescription::of(&set()).unwrap();
+        assert_eq!(
+            described.roles,
+            [
+                RoleDescription {
+                    name: "banner".into(),
+                    kind: "color".into(),
+                    // The doc's lines joined, without the line naming it.
+                    doc: "A banner's surface, whatever the app calls it.".into(),
+                },
+                RoleDescription {
+                    name: "chip-radius".into(),
+                    kind: "number".into(),
+                    doc: "How round a chip is.".into(),
+                },
+            ]
+        );
+        // The constants are what they were: a role is its name.
+        assert_eq!(kit::BANNER, Role::new("banner"));
+        assert_eq!(kit::CHIP_RADIUS, NumberRole::new("chip-radius"));
+    }
+
+    #[test]
+    fn the_roles_survive_the_json() {
+        let registry = set();
+        let json = Description::of(std::slice::from_ref(&registry)).to_json();
+        let read = Description::from_json(&json).unwrap();
+        assert_eq!(
+            read.sets[0].roles,
+            SetDescription::of(&registry).unwrap().roles
+        );
+        // A kind the reader does not know is refused.
+        let wrong = json.replace("\"kind\":\"number\"", "\"kind\":\"shadow\"");
+        let error = Description::from_json(&wrong).unwrap_err();
+        assert!(error.contains("unknown kind"), "{error}");
+    }
+
+    #[test]
+    fn the_toolchain_has_the_cores_roles_and_every_sets_once() {
+        let mut other = Registry::ui_set("test/other");
+        // A role two sets list is one role.
+        other.roles([
+            RoleSpec::new(kit::BANNER, " Another set's words for it.\n"),
+            RoleSpec::new(role::POPOVER, ""),
+        ]);
+        let sets = [
+            SetDescription::of(&set()).unwrap(),
+            SetDescription::of(&other).unwrap(),
+        ];
+        let all = roles(&sets).unwrap();
+        let names: Vec<&str> = all.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "accent",
+                "accent-foreground",
+                "banner",
+                "border",
+                "chip-radius",
+                "destructive",
+                "font-sans",
+                "muted-foreground",
+                "popover",
+                "popover-foreground",
+                "primary",
+            ]
+        );
+        let of = |name: &str| all.iter().find(|r| r.name == name).unwrap();
+        assert_eq!(of("font-sans").kind, "font");
+        // The first to list a role documents it: the core, then the sets
+        // in order.
+        assert_eq!(of("popover").doc, "Popovers, menus, tooltips, alerts.");
+        assert_eq!(
+            of("banner").doc,
+            "A banner's surface, whatever the app calls it."
+        );
+    }
+
+    #[test]
+    fn a_role_listed_with_two_kinds_is_refused() {
+        let mut other = Registry::ui_set("test/other");
+        other.roles([RoleSpec::new(NumberRole::new("banner"), "")]);
+        let sets = [
+            SetDescription::of(&set()).unwrap(),
+            SetDescription::of(&other).unwrap(),
+        ];
+        let error = roles(&sets).unwrap_err();
+        assert_eq!(
+            error,
+            "the role `banner` is listed reading color and number"
+        );
+        // Merged for a host, the same clash panics, as two types claiming
+        // one token do.
+        let sets = [set(), other];
+        let clash =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Registry::merged(&sets)));
+        assert!(clash.is_err());
     }
 }

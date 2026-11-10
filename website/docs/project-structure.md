@@ -195,6 +195,7 @@ NSH does not need `node_modules`. Instead, every command that builds the app (`i
 | `globals.d.ts` | `If` and `Each`; `console`, timers, `requestAnimationFrame`, `fetch` and the other [global APIs](../modules/globals.md) |
 | `assets.d.ts` | What importing an image or font gives |
 | `tokens.d.ts` | `Tokens`: the app's design tokens, from its `"theme"`, which type [`token()`](../modules/nsh.md#token) |
+| `roles.d.ts` | `Roles`: the theme roles its UI sets draw with, which type [`role()`](../modules/nsh.md#role) |
 | `mobile.d.ts`, `desktop.d.ts` | One file per module (`nsh/mobile`, `nsh/desktop`) |
 | `base.d.ts` | `nsh/base` |
 

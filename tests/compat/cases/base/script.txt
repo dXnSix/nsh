@@ -3560,6 +3560,28 @@ style id:up backgroundColor #138a5aff
 style id:primary backgroundColor #17171780
 covers [nsh] token
 
+# base-role
+# A role without a theme type: the token of its name, in the appearance
+# shown; none until the theme has one.
+tap id:case-base-role
+expect role popover #ffffffff
+expect role radius 10
+expect role warning its own
+style id:themed backgroundColor #d97706ff
+tap id:warn
+expect role warning #b45309ff
+style id:themed backgroundColor #b45309ff
+# A theme's `roles`: the role reads the token it is mapped onto.
+tap id:map
+expect role popover #fafafaff
+style id:classed backgroundColor #fafafaff
+tap id:dark
+expect role warning #fbbf24ff
+expect role popover #262626ff
+style id:classed backgroundColor #262626ff
+style id:themed backgroundColor #fbbf24ff
+covers [nsh] role
+
 # base-set-theme
 # Another theme while the app runs, in place of nsh.json's and over
 # shadcn's `neutral`; `null` gives nsh.json's back.

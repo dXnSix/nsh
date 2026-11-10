@@ -48,6 +48,7 @@ mod package;
 mod parity;
 mod platform;
 mod process;
+mod role;
 mod rust_animation;
 mod rust_app;
 mod rust_classes;

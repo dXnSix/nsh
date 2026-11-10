@@ -265,6 +265,29 @@ import { effect, token } from "nsh";
 effect(() => console.log("primary is", token("primary"), "radius", token("radius")));
 ```
 
+## role
+
+```ts
+function role<K extends keyof Roles>(name: K): Roles[K] | undefined;
+```
+
+主题角色 `name` 在当前外观下用来绘制的值，形式与 [`token()`](#token) 给出令牌的值相同：应用主题把该角色映射到的令牌（主题类型的 `role = …`），
+否则是与角色同名的令牌，否则是 `undefined`。角色说明 UI 的某个部分是做什么用的（`popover`、`border`、`warning`），无论应用的设计系统如何命名
+对应的令牌：按角色编写的组件可以被任何设计系统主题化。读取它是响应式的，与 `token()` 一样。
+
+`Roles` 列出应用的 UI 集合绘制时使用的角色（`nsh/base` 的角色见[主题角色](./nsh-base.md#theme-roles)）以及每个角色读取的内容；NSH 把它写入
+`.nsh/types/nsh/roles.d.ts`。主题没有对应令牌的角色是 `undefined`，所以组件为它保留自己的颜色：
+
+```tsx
+import { role } from "nsh";
+
+// 弹出层的表面，无论这个应用如何称呼它；在主题有警告色之前使用琥珀色。
+<View style={{ backgroundColor: role("popover"), borderLeftWidth: 3, borderLeftColor: role("warning") ?? "#d97706" }} />
+```
+
+类把角色当作变量读取：在主题没有同名令牌时，`bg-(--popover)` 是主题把 `popover` 映射到的令牌（[主题令牌](../docs/tailwind.md#theme-tokens)）。
+Rust 通过角色的常量读取：`theme().tokens().role(nsh_base::role::POPOVER)`。
+
 ## setTheme
 
 ```ts
@@ -276,8 +299,14 @@ interface Theme {
     light?: Record<string, string | number>;
     dark?: Record<string, string | number>;
   };
+  roles?: Record<string, string>;
 }
 ```
+
+`roles` 按名称把主题角色映射到主题的令牌上：`roles: { popover: "surface" }` 让所有用 `popover` 绘制的部分（`nsh/base` 的弹出层、
+[`role("popover")`](#role)）用令牌 `surface` 绘制，并在它变化时跟随；而 `"popover": "var(--surface)"` 只会复制一次它的颜色。没有 Rust 主题类型的
+应用用它按自己的方式命名令牌。把角色映射到主题中不存在的令牌名，或在主题类型下映射某个类型已经映射的角色，会像无法读取的值一样被拒绝；
+没有任何 UI 集合拥有的角色名会产生构建警告。`updateTheme` 会在已映射的角色之上追加。
 
 在应用运行时把 `theme` 设为应用的主题，取代 `nsh.json` 的 `"theme"`：格式与它相同，也和它一样叠加在 shadcn/ui 的令牌之上。
 它立即生效：调用之后 `token()` 马上读到新的令牌，引用令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在下一帧跟上，两种外观都是。

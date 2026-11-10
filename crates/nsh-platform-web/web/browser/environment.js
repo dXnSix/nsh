@@ -28,6 +28,13 @@ export function createEnvironment(reactive, invoke, dom) {
   const scope = reactive.context(undefined);
   let scoped = false;
   const shownScheme = () => { const around = scoped && scope(); return around ? around.scheme() : fields.colorScheme(); };
+  // `token()` (402) and `role()` (414): of the scope around what reads it,
+  // else the surface's, in the appearance shown there.
+  const readToken = (op, name) => {
+    const around = scoped && scope(), named = around ? around.tokens() : undefined;
+    if (named === undefined) tokens();
+    return invoke(op, [name, shownScheme() === "dark", named ?? null]);
+  };
   const setColorScheme = scheme => {
     if (!["light", "dark", "system"].includes(scheme)) throw new TypeError('setColorScheme: expected "light", "dark" or "system"');
     appearance = scheme;
@@ -52,11 +59,10 @@ export function createEnvironment(reactive, invoke, dom) {
     ...device, ...accessibility,
     safeArea: () => fields.safeArea(), safeAreaInsets: () => insets(), keyboardFrame: () => fields.keyboard(),
     screenReader: () => fields.screenReader(),
-    token(name) {
-      const around = scoped && scope(), named = around ? around.tokens() : undefined;
-      if (named === undefined) tokens();
-      return invoke(402, [name, shownScheme() === "dark", named ?? null]);
-    },
+    token: name => readToken(402, name),
+    // nsh-js's `role` (`env.rs`): the token the theme maps the role onto,
+    // else the token of its name.
+    role: name => readToken(414, name),
     // nsh-js's `setTheme` (`env.rs`): the engine checks and applies it, or
     // throws its `TypeError`; what read a token follows once it took.
     setTheme(theme) { invoke(406, [theme]); tokens.update(value => value + 1); },

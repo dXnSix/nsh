@@ -330,6 +330,30 @@ pub fn theme_tokens_of(
     Ok(tokens)
 }
 
+/// A warning for each role theme file `json` maps (its `"roles"`) that no
+/// UI set lists and the core does not have: nothing draws with it, so it is
+/// most likely misspelled. `Err`: two sets list one role reading different
+/// kinds.
+fn unknown_roles(
+    json: &str,
+    ui_sets: &[nsh_core::element::description::SetDescription],
+) -> Result<Vec<String>, BundleError> {
+    let Some(mapped) = serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|theme| theme.get("roles")?.as_object().cloned())
+    else {
+        return Ok(Vec::new());
+    };
+    let listed = nsh_core::element::description::roles(ui_sets).map_err(BundleError::other)?;
+    let mut names: Vec<&String> = mapped.keys().collect();
+    names.sort();
+    Ok(names
+        .into_iter()
+        .filter(|name| !listed.iter().any(|role| role.name == **name))
+        .map(|name| format!("nsh.json: theme: `roles.{name}`: no UI set has a role of this name"))
+        .collect())
+}
+
 /// The theme types `ui_sets` register, merged (`None`: none).
 fn theme_types(
     ui_sets: &[nsh_core::element::description::SetDescription],
@@ -418,6 +442,9 @@ fn tailwind_setup(
         }
         .map_err(|e| BundleError::other(format!("nsh.json: theme: {e}")))?;
         warn_ignored("theme", &ignored);
+        for warning in unknown_roles(&json, ui_sets)? {
+            log::warn!(target: "nsh::build", "{warning}");
+        }
         tokens = read;
         setup.ui = Some(json);
     }
@@ -1762,6 +1789,33 @@ mod token_namespaces {
     }
 
     #[test]
+    fn a_role_no_set_lists_is_warned_of() {
+        let file = r##"{ "cssVars": { "light": { "surface": "#fafafa" } },
+            "roles": { "popover": "surface", "popver": "surface", "warning": "surface" } }"##;
+        let base =
+            nsh_core::element::description::SetDescription::of(&nsh_base::registry()).unwrap();
+        // `popover` and `warning` are roles `nsh/base` lists; `popver` is none.
+        assert_eq!(
+            super::unknown_roles(file, std::slice::from_ref(&base)).unwrap(),
+            ["nsh.json: theme: `roles.popver`: no UI set has a role of this name"]
+        );
+        // Without `nsh/base` the core's own are known.
+        assert_eq!(
+            super::unknown_roles(file, &[]).unwrap(),
+            [
+                "nsh.json: theme: `roles.popver`: no UI set has a role of this name",
+                "nsh.json: theme: `roles.warning`: no UI set has a role of this name",
+            ]
+        );
+        // A file without roles has none to warn of.
+        assert!(
+            super::unknown_roles(r##"{ "cssVars": {} }"##, &[base])
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn a_shadowed_token_is_warned_of_once() {
         let theme = theme(THEME);
         let warnings = super::shadowed_tokens(&theme);
@@ -1892,6 +1946,114 @@ mod typed_theme {
         assert_eq!(
             crate::types::tokens_declaration_of(&tokens, &[]),
             crate::types::tokens_declaration(&tokens)
+        );
+    }
+}
+
+/// The class check knows the roles a theme maps: `bg-(--popover)` is a
+/// class where a theme type or `nsh.json`'s `"roles"` maps `popover`.
+#[cfg(test)]
+mod role_classes {
+    use nsh_core::element::{
+        AdaptiveColor, AppTheme, Registry, TokenKind, TokenSpec, Tokens,
+        description::SetDescription, role,
+    };
+    use oxc::span::SourceType;
+
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Ds;
+
+    impl AppTheme for Ds {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::LazyLock<Vec<TokenSpec>> = std::sync::LazyLock::new(|| {
+                vec![
+                    TokenSpec::new("surface-overlay", TokenKind::Color).role(role::POPOVER),
+                    TokenSpec::new("corner", TokenKind::Radius).role(nsh_base::role::RADIUS),
+                    TokenSpec::new("ink", TokenKind::Color),
+                ]
+            });
+            &SPECS
+        }
+
+        fn write_tokens(&self, _: &str, out: &mut Tokens) {
+            out.set_color("surface-overlay", AdaptiveColor::rgb(0x111111, 0x222222));
+            out.set_color("ink", AdaptiveColor::rgb(0x0a0a0a, 0xfafafa));
+            out.set_number("corner", 6.0);
+        }
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Ds
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    fn sets() -> Vec<SetDescription> {
+        let mut registry = Registry::ui_set("ds/native");
+        registry.theme::<Ds>();
+        vec![SetDescription::from(&registry)]
+    }
+
+    /// The classes of `classes` the check does not know, in an app whose
+    /// `nsh.json` is `config` (`None`: it has none) with `sets`.
+    fn unknown(config: Option<&str>, sets: &[SetDescription], classes: &str) -> Vec<String> {
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("nsh-role-classes-{}-{call}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some(config) = config {
+            std::fs::write(dir.join("nsh.json"), config).unwrap();
+        }
+        let setup = super::tailwind_setup(&dir, sets).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        crate::classes::check(
+            &format!(r#"const a = <View class="{classes}" />;"#),
+            SourceType::tsx(),
+            &setup.theme,
+        )
+        .into_iter()
+        .map(|u| u.class)
+        .collect()
+    }
+
+    const CLASSES: &str = "bg-(--popover) rounded-(--radius) text-(--warning) bg-popover";
+
+    #[test]
+    fn a_role_a_theme_type_maps_is_a_variable() {
+        // `popover` and `radius` are mapped by the type; `warning` by
+        // nothing, and a bare class names no role.
+        assert_eq!(
+            unknown(None, &sets(), CLASSES),
+            ["text-(--warning)", "bg-popover"]
+        );
+        // A theme file changes values, not what is mapped.
+        let file = r##"{ "theme": { "cssVars": { "light": { "surface-overlay": "#333333" } } } }"##;
+        assert_eq!(
+            unknown(Some(file), &sets(), CLASSES),
+            ["text-(--warning)", "bg-popover"]
+        );
+        // The file maps a role no type maps.
+        let file = r##"{ "theme": { "cssVars": {}, "roles": { "warning": "ink" } } }"##;
+        assert_eq!(unknown(Some(file), &sets(), CLASSES), ["bg-popover"]);
+    }
+
+    #[test]
+    fn a_role_nsh_json_maps_is_a_variable() {
+        // On the default theme `popover` and `radius` are tokens.
+        assert_eq!(unknown(None, &[], CLASSES), ["text-(--warning)"]);
+        let file = r##"{ "theme": { "cssVars": { "light": { "caution": "#b45309", "surface": "#fafafa" } },
+            "roles": { "warning": "caution", "selection": "surface" } } }"##;
+        assert!(unknown(Some(file), &[], CLASSES).is_empty());
+        assert_eq!(
+            unknown(
+                Some(file),
+                &[],
+                "bg-(--selection) bg-(--success) bg-selection"
+            ),
+            ["bg-(--success)", "bg-selection"]
         );
     }
 }
