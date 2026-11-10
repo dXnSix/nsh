@@ -834,6 +834,8 @@ fn props_json(p: &ViewProps) -> String {
     if p.selectable_view {
         s.push_str(",\"selectableView\":true");
     }
+    // What the arrows read on a TV (`arrowFocus`, `autoFocus`).
+    crate::focus::write_props(&mut s, p);
     // An overlay anchored to another view (a menu's, a select's or a
     // popover's popup): what the arrows go into first (`arrowFocus`).
     if p.overlay_anchor.is_some() {

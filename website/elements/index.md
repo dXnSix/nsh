@@ -392,8 +392,9 @@ its ref's `on_focus_in(..)` and `on_focus_out(..)`: moving between views inside 
 
 #### Arrow keys and TVs
 
-On a TV, and in the GPUI backend, the arrow keys move the focus to the nearest stop in their direction, and Return
-or Space presses it. A remote drives the whole app that way, so these props shape where the focus goes:
+On a TV, in the GPUI backend and in browsers (a TV's web app among them), the arrow keys move the focus to the
+nearest stop in their direction, and Return or Space presses it. A remote drives the whole app that way, so these
+props shape where the focus goes:
 
 - `autoFocus` gives the focus to a view as it appears: the first card of a screen, the main button of a dialog.
 - `preferredFocus` picks the stop the focus enters at: a row's current item, a dialog's default action.
