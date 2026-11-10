@@ -25,7 +25,7 @@ group: platforms
 
 ## 电视
 
-电视是独立的一类设备，与操作系统无关：Android TV、电视上的浏览器、电视平台。应用要判断的是电视，而不是操作系统：在电视上 `platform.tv`（Rust 中的 `is_tv()`）为 `true`，`platform.idiom` 为 `"tv"`，`tv={{…}}` 属性生效，`platform.select` 在该操作系统自己的键之后、`desktop` / `mobile` 之前查找 `tv`。电视不是桌面（`platform.desktop` 为 `false`），所以其余行为都与移动端相同：`nsh/base` 的弹出层像在手机上一样打开。
+电视是独立的一类设备，与操作系统无关：Android TV、电视上的浏览器（页面通过 `idiom: "tv"` 告诉 [Web 播放器](./web.md#浏览器作为平台)）、电视平台。应用要判断的是电视，而不是操作系统：在电视上 `platform.tv`（Rust 中的 `is_tv()`）为 `true`，`platform.idiom` 为 `"tv"`，`tv={{…}}` 属性生效，`platform.select` 在该操作系统自己的键之后、`desktop` / `mobile` 之前查找 `tv`。电视不是桌面（`platform.desktop` 为 `false`），所以其余行为都与移动端相同：`nsh/base` 的弹出层像在手机上一样打开。
 
 没有只属于电视的属性，所以 `tv={{…}}` 接受每个元素都接受的属性（类、样式、状态样式、无障碍、焦点、事件处理函数），只在电视上设置它们：不用写第二个组件就能做 10 英尺布局。在 Rust 中，同样的选择写作 `.when(is_tv(), ..)`。
 

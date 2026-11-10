@@ -25,7 +25,7 @@ Every platform is desktop or mobile, by one rule. Desktop is macOS, Windows, Lin
 
 ## TVs
 
-A TV is a category of its own, on any OS: Android TV, a TV's browser, a TV platform. What apps branch on is the TV, not the OS: `platform.tv` (Rust's `is_tv()`) is `true` there and `platform.idiom` is `"tv"`, `tv={{…}}` props apply, and `platform.select` looks for `tv` after the OS's own key and before `desktop` / `mobile`. A TV is not a desktop (`platform.desktop` is `false`), so everything else behaves as on mobile: `nsh/base`'s popups open as on phones.
+A TV is a category of its own, on any OS: Android TV, a TV's browser (a page tells the [web player](./web.md#the-browser-as-a-platform) with `idiom: "tv"`), a TV platform. What apps branch on is the TV, not the OS: `platform.tv` (Rust's `is_tv()`) is `true` there and `platform.idiom` is `"tv"`, `tv={{…}}` props apply, and `platform.select` looks for `tv` after the OS's own key and before `desktop` / `mobile`. A TV is not a desktop (`platform.desktop` is `false`), so everything else behaves as on mobile: `nsh/base`'s popups open as on phones.
 
 No prop exists on TVs alone, so `tv={{…}}` takes the props every element takes (classes, style, state styles, accessibility, focus, handlers) and sets them on TVs only: a 10-foot layout without a second component. In Rust, the same choice is a `.when(is_tv(), ..)`.
 

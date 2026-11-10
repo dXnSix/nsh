@@ -490,7 +490,9 @@ The idiom is fixed at start, as `Environment::idiom` is everywhere: `desktop` fo
 any width, as a narrow window on a native desktop (headless Chromium reports no pointer and measures as a tablet or phone unless launched
 with a fine, hovering one, as `nsh test --target web` does), `pad` for a screen whose short side is at least 600, else
 `phone`; the player's `idiom` option overrides it, and so does a test's setup (`TestEnvironment::idiom`: `open`'s
-desktop `platform` starts the app in the desktop idiom at any width). `Environment::desktop()`
+desktop `platform` starts the app in the desktop idiom at any width). A page on a TV (a Tizen `.wgt`) passes
+`idiom: "tv"`, which no pointer heuristic can tell: `nsh_environment` maps it to `Idiom::Tv` (`platform.tv`,
+`tv={{…}}` props, mobile behavior; `tv.test.mjs`). `Environment::desktop()`
 (desktop OS, the web in the desktop idiom, or the terminal idiom) decides `desktop={{…}}` props, `platform.select`'s `desktop` key,
 `platform.desktop` and `platform.idiom` (`Environment::reported_idiom()`), `Environment::tv()` decides `tv={{…}}`
 props, `select`'s `tv` key and `platform.tv` (the page's `browser/environment.js` gets all three from the engine's

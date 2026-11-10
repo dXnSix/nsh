@@ -280,7 +280,7 @@ const player = await createPlayer(document.querySelector("#phone"), {
   wasm: "./nsh.wasm",
   assetBase: "./assets/",   // `asset:/…` URI（导入的图片）从这里加载
   // dark: true,            // 强制外观；不设置时跟随系统
-  // idiom: "phone",        // 强制 "phone"、"pad" 或 "desktop"；不设置时由指针和尺寸决定
+  // idiom: "phone",        // 强制 "phone"、"pad"、"desktop" 或 "tv"（电视上的页面）；不设置时由指针和尺寸决定
   // history: false,        // 页面和对话框是否作为浏览器历史记录；默认只在应用占据整个页面时开启，iframe 里不开启
   // dialogs: "viewport",   // Dialog 和 AlertDialog 覆盖整个浏览器窗口；默认覆盖容器
 });
@@ -365,6 +365,7 @@ export async function createHost(player) {
 
 - `"desktop"`：有鼠标（能悬停的精确指针），且容器宽度至少 600 点。此时 `platform.desktop` 为 `true`，`platform.select` 选 `desktop`，`desktop={{…}}` 属性生效。
 - `"pad"`：短边至少 600 点的触摸屏；其余为 `"phone"`。两者都属于移动端：`platform.select` 选 `mobile`。
+- `"tv"`：只在页面通过播放器的 `idiom: "tv"` 告知时才是（电视上的浏览器无法从指针判断：Tizen 的 `.wgt` 页面会传入它）。此时 `platform.tv` 为 `true`，`platform.select` 选 `tv`（然后是 `mobile`），`tv={{…}}` 属性生效；电视不是桌面。
 
 界面风格在应用启动时确定，运行期间不变，与其他平台一致；变窄的桌面窗口仍是桌面，按自己的 `windowSize()` 布局。`web={{…}}` 属性、`platform.select({ web })` 和 `web:` 类只在浏览器中生效；`ios={{…}}`、`native` 和 `ios:` 在浏览器中不生效。
 

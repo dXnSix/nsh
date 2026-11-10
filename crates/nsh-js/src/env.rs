@@ -1093,7 +1093,7 @@ export interface PlatformInfo {
    * menu APIs work on the desktop OSes, not in browsers. */
   readonly desktop: boolean;
   /** The app runs on a TV: the TV idiom (`idiom` is `"tv"`), on any OS
-   * (Android TV, a TV's browser). `tv={{…}}` props and
+   * (Android TV, a TV's browser, whose page says so). `tv={{…}}` props and
    * `select({ tv })` follow it. A TV is not a desktop (`desktop` is false),
    * so the rest behaves as on mobile. */
   readonly tv: boolean;
