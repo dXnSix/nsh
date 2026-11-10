@@ -74,7 +74,7 @@ pub use nsh_core::{
     platform::{Appearance, Locale},
 };
 pub use nsh_engine::{
-    App, AppError, AppErrorKind, Bundle, ByteSize, CacheLocation, CacheOptions, CachePolicy,
+    App, AppError, AppErrorKind, Bundle, ByteSize, CacheLocation, CacheOptions, CachePolicy, Idiom,
     Limits, PackageInfo, Root,
 };
 /// Signed packages: verifying, unpacking and accepting them

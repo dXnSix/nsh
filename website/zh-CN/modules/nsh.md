@@ -1059,6 +1059,7 @@ interface Platform {
   readonly version: string;
   readonly idiom: "phone" | "pad" | "mac" | "tv" | "desktop" | "terminal";
   readonly desktop: boolean;
+  readonly tv: boolean;
   readonly catalyst: boolean;
   select<T>(spec: PlatformSelectSpec<T>): T | undefined;
 }
@@ -1070,8 +1071,9 @@ interface Platform {
 |---|---|---|
 | `os` | `os() -> Os`（`os().name()` 即 TS 的字符串） | 操作系统。iOS、iOS 模拟器和 Mac Catalyst 都报告 `"ios"`，浏览器报告 `"web"`。 |
 | `version` | `os_version() -> (u16, u16)` | iOS 和桌面系统：系统版本（`"17.5"`）；Android：API 级别（`"35"`）；Web：`"0.0"`。Rust 给出主版本和次版本号，在 Android 上是 API 级别和 0。 |
-| `idiom` | `idiom() -> Idiom` | 设备类型：在终端里（`--target tui`）是 `"terminal"`：画在字符格子上，适用桌面行为（`desktop` 为 `true`；`os` 仍是本机的操作系统）；其他情况下 `desktop` 为 `true` 时恰好是 `"desktop"`，否则是 `"phone"`、`"pad"`（iPad、Android 平板、以 iPad 形态运行的 Mac Catalyst）、`"mac"`（以 UIKit 的 Mac 形态运行的 Mac Catalyst，属于移动端形态）或 `"tv"`（Apple TV、Android TV）。 |
-| `desktop` | `is_desktop() -> bool` | 适用桌面行为：macOS、Windows、Linux、有鼠标且窗口较宽的浏览器，以及终端。`desktop={{…}}` 属性、`select({ desktop })` 和 `idiom` 的 `"desktop"`（终端除外）都以它为准。Mac Catalyst 运行 iOS 后端，属于移动端：那里适用 `ios={{…}}` 属性。[`nsh/desktop`](./nsh-desktop.md#isavailable) 的 `isAvailable` 是更窄的判断，表示它的窗口和菜单 API 可用，即 macOS、Windows 和 Linux。 |
+| `idiom` | `idiom() -> Idiom` | 设备类型：在终端里（`--target tui`）是 `"terminal"`：画在字符格子上，适用桌面行为（`desktop` 为 `true`；`os` 仍是本机的操作系统）；其他情况下 `desktop` 为 `true` 时恰好是 `"desktop"`，否则是 `"phone"`、`"pad"`（iPad、Android 平板、以 iPad 形态运行的 Mac Catalyst）、`"mac"`（以 UIKit 的 Mac 形态运行的 Mac Catalyst，属于移动端形态）或 `"tv"`（Android TV、电视上的浏览器：`tv` 为 `true`，与操作系统无关）。 |
+| `desktop` | `is_desktop() -> bool` | 适用桌面行为：macOS、Windows、Linux、有鼠标且窗口较宽的浏览器，以及终端。`desktop={{…}}` 属性、`select({ desktop })` 和 `idiom` 的 `"desktop"`（终端除外）都以它为准。Mac Catalyst 运行 iOS 后端，属于移动端：那里适用 `ios={{…}}` 属性；电视从不是桌面。[`nsh/desktop`](./nsh-desktop.md#isavailable) 的 `isAvailable` 是更窄的判断，表示它的窗口和菜单 API 可用，即 macOS、Windows 和 Linux。 |
+| `tv` | `is_tv() -> bool` | 应用运行在电视上：电视界面风格，与操作系统无关（Android TV、电视上的浏览器，由页面告知）。`tv={{…}}` 属性和 `select({ tv })` 以它为准；`desktop` 为 `false`，所以其余行为与移动端相同。 |
 | `catalyst` | `is_catalyst() -> bool` | 应用运行在 Mac Catalyst 下，无论是 Mac 形态还是 iPad 形态（`os` 为 `"ios"`）。 |
 | `select(spec)` | `match os() { … }` | 当前平台对应的值（见下文）。 |
 
@@ -1093,14 +1095,15 @@ interface PlatformSelectSpec<T> {
   windows?: T;
   linux?: T;
   web?: T;
-  mobile?: T;   // platform.desktop 为 false：iOS（包括 Mac Catalyst）、Android，以及手机和平板上的浏览器
+  tv?: T;       // platform.tv 为 true：电视，与操作系统无关
+  mobile?: T;   // platform.desktop 为 false：iOS（包括 Mac Catalyst）、Android、手机和平板上的浏览器，以及电视
   desktop?: T;  // platform.desktop 为 true：macOS、Windows、Linux、桌面浏览器，以及终端
   native?: T;   // 除 Web 外的所有平台
   default?: T;
 }
 ```
 
-依次返回当前操作系统（`ios`、`android`、`web` 等）对应的值，否则按 `platform.desktop` 取 `desktop` 或 `mobile`，否则 `native`（除 Web 外的所有平台），否则 `default`，都没有则返回 `undefined`。Rust 代码对 `os()` 做 `match`（`mobile` / `desktop` 用 `is_desktop()`）。
+依次返回当前操作系统（`ios`、`android`、`web` 等）对应的值，否则在电视上（`platform.tv`）取 `tv`，否则按 `platform.desktop` 取 `desktop` 或 `mobile`，否则 `native`（除 Web 外的所有平台），否则 `default`，都没有则返回 `undefined`。Rust 代码对 `os()` 做 `match`（`tv` 用 `is_tv()`，`mobile` / `desktop` 用 `is_desktop()`）。
 
 ```rust tabs
 use nsh_core::platform::Os;

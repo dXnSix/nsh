@@ -11,8 +11,8 @@ use crate::ts_doc;
 struct Name {
     name: String,
     /// `ios = …` / `android = …` / `macos = …` / `desktop = …` /
-    /// `web = …`: inside `ios={{…}}` / `android={{…}}` / `macos={{…}}` /
-    /// `desktop={{…}}` / `web={{…}}`.
+    /// `web = …` / `tv = …`: inside `ios={{…}}` / `android={{…}}` /
+    /// `macos={{…}}` / `desktop={{…}}` / `web={{…}}` / `tv={{…}}`.
     platform: TokenStream2,
 }
 
@@ -41,6 +41,7 @@ fn variant_attrs(attrs: &[syn::Attribute]) -> syn::Result<VariantAttrs> {
         "macos" => quote!(::nsh_core::js::host::Platform::Macos),
         "desktop" => quote!(::nsh_core::js::host::Platform::Desktop),
         "web" => quote!(::nsh_core::js::host::Platform::Web),
+        "tv" => quote!(::nsh_core::js::host::Platform::Tv),
         _ => quote!(::nsh_core::js::host::Platform::All),
     };
     for attr in attrs {
@@ -54,7 +55,7 @@ fn variant_attrs(attrs: &[syn::Attribute]) -> syn::Result<VariantAttrs> {
                 .map(|i| i.to_string())
                 .unwrap_or_default();
             match key.as_str() {
-                "js" | "ios" | "android" | "macos" | "desktop" | "web" => out.names.push(Name {
+                "js" | "ios" | "android" | "macos" | "desktop" | "web" | "tv" => out.names.push(Name {
                     name: meta.value()?.parse::<LitStr>()?.value(),
                     platform: platform(&key),
                 }),
@@ -72,7 +73,7 @@ fn variant_attrs(attrs: &[syn::Attribute]) -> syn::Result<VariantAttrs> {
                 "shared" => out.shared = true,
                 _ => {
                     return Err(meta.error(
-                        "expected `js`, `ios`, `android`, `macos`, `desktop`, `web`, `default`, `min`, `max`, `on`, `ts`, \
+                        "expected `js`, `ios`, `android`, `macos`, `desktop`, `web`, `tv`, `default`, `min`, `max`, `on`, `ts`, \
                          `with`, `reset`, `required`, `nested`, `internal`, `once` or `shared`",
                     ));
                 }

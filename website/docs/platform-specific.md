@@ -1,6 +1,6 @@
 ---
 title: Platform-specific code
-description: Writing one app for phones, desktops and browsers - platform-only props in ios={{}} / android={{}} / macos={{}} / desktop={{}} / web={{}}, the nsh/mobile and nsh/desktop modules, platform.os and platform.select, and platform Tailwind variants.
+description: Writing one app for phones, desktops, TVs and browsers - platform-only props in ios={{}} / android={{}} / macos={{}} / desktop={{}} / web={{}} / tv={{}}, the nsh/mobile and nsh/desktop modules, platform.os, platform.tv and platform.select, and platform Tailwind variants.
 order: 17
 group: platforms
 ---
@@ -12,15 +12,59 @@ One NSH bundle runs on iOS, Android, macOS, Windows and Linux (and in Mac Cataly
 | Rust | TSX | For |
 |---|---|---|
 | [Builder methods (`.ripple(..)`, `.input_accessory(..)`)](#platform-only-props) | [`ios={{…}}`, `android={{…}}`, `macos={{…}}`, `desktop={{…}}`, `web={{…}}`](#platform-only-props) | Props only one platform has. |
+| [`.when(is_tv(), ..)`](#tvs) | [`tv={{…}}`, `platform.tv`](#tvs) | Props and values for TVs, on any OS. |
 | [`on_back_press`, `nsh_core::element::desktop`](#platform-modules) | [`nsh/mobile`, `nsh/desktop`](#platform-modules) | APIs only mobile platforms or only desktops have. |
-| [`os()`, `idiom()`, `is_desktop()`](#platformos-and-platformselect) | [`platform.os`, `platform.desktop`, `platform.select`](#platformos-and-platformselect) | Choosing values or code per platform. |
+| [`os()`, `idiom()`, `is_desktop()`, `is_tv()`](#platformos-and-platformselect) | [`platform.os`, `platform.desktop`, `platform.tv`, `platform.select`](#platformos-and-platformselect) | Choosing values or code per platform. |
 | [`.when(os() == Os::Ios, ..)`](#platform-variants-in-tailwind) | [`ios:` / `android:` / `web:` classes](#platform-variants-in-tailwind) | Styles per platform. |
 
 ## Desktop and mobile
 
-Every platform is desktop or mobile, by one rule. Desktop is macOS, Windows, Linux, and browsers in the desktop idiom (a mouse and a wide window, [the web](./web.md)). Mobile is iOS, Android, and browsers in the phone or tablet idiom; Mac Catalyst runs the iOS backend, so it is mobile too, with `ios={{…}}` props. `desktop={{…}}` props, `platform.select({ desktop, mobile })`, `platform.desktop` and `platform.idiom === "desktop"` all follow this rule, as do `nsh/base`'s components (a menu is a popup on desktops and a sheet on mobile) and, in Rust, `is_desktop()`.
+Every platform is desktop or mobile, by one rule. Desktop is macOS, Windows, Linux, and browsers in the desktop idiom (a mouse and a wide window, [the web](./web.md)). Mobile is iOS, Android, browsers in the phone or tablet idiom, and [TVs](#tvs); Mac Catalyst runs the iOS backend, so it is mobile too, with `ios={{…}}` props. `desktop={{…}}` props, `platform.select({ desktop, mobile })`, `platform.desktop` and `platform.idiom === "desktop"` all follow this rule, as do `nsh/base`'s components (a menu is a popup on desktops and a sheet on mobile) and, in Rust, `is_desktop()`.
 
 `nsh/desktop`'s `isAvailable` answers a narrower question: whether that module's window and menu APIs work, which they do on macOS, Windows and Linux. Gate layout, density and input on `platform.desktop`, and calls of `Window` and `Menu` on `isAvailable`.
+
+## TVs
+
+A TV is a category of its own, on any OS: Android TV, a TV's browser (a page tells the [web player](./web.md#the-browser-as-a-platform) with `idiom: "tv"`), a TV platform. What apps branch on is the TV, not the OS: `platform.tv` (Rust's `is_tv()`) is `true` there and `platform.idiom` is `"tv"`, `tv={{…}}` props apply, and `platform.select` looks for `tv` after the OS's own key and before `desktop` / `mobile`. A TV is not a desktop (`platform.desktop` is `false`), so everything else behaves as on mobile: `nsh/base`'s popups open as on phones.
+
+No prop exists on TVs alone, so `tv={{…}}` takes the props every element takes (classes, style, state styles, accessibility, focus, handlers) and sets them on TVs only: a 10-foot layout without a second component. In Rust, the same choice is a `.when(is_tv(), ..)`.
+
+```rust tabs
+use nsh_core::prelude::*;
+
+view()
+    .p_4()
+    .when(is_tv(), |v| v.p_8())
+    .focusable(true)
+    .child(text(if is_tv() { "Press OK to play" } else { "Tap to play" }))
+```
+
+```tsx tabs
+import { platform, Text, View } from "nsh";
+
+<View class="p-4" tv={{ class: "p-8", focusStyle: { transform: [{ scale: 1.05 }] } }} focusable>
+  <Text>{platform.select({ tv: "Press OK to play", default: "Tap to play" })}</Text>
+</View>
+```
+
+A key set both in `tv={{…}}` and on the element itself is the one set last: keep each prop in one place.
+
+### TV layouts on the desktop
+
+The GPUI host and the web dev page run an app as on a TV, so its 10-foot layouts and focus are built on a Mac (or any desktop) with hot reload:
+
+```sh
+nsh run my-app --target gpui --idiom tv --window-size 1920x1080   # a GPUI window, a TV's screen in points
+nsh run my-app --target web --idiom tv                             # the dev server's page, in any browser
+```
+
+`platform.tv` is `true` there and `tv={{…}}` props apply, with the OS staying the machine's (`macos`, or `web`). An app built mostly for TVs sets it in `nsh.json`, which `--idiom` overrides:
+
+```json
+{ "dev": { "idiom": "tv" } }
+```
+
+The other hosts (`--target macos`, `ios`, `android`, ...) run in their device's own idiom: they refuse `--idiom`, and leave `nsh.json`'s `dev.idiom` out with a warning.
 
 ## Platform-only props
 
@@ -245,7 +289,7 @@ if (platform.os === "android") {
 
 ### platform.select
 
-In Rust a `match os()` chooses the value, with `is_desktop()` for the desktops. In TSX, `platform.select(spec)` returns the value for this platform. It looks for the OS's own key, then `desktop` or `mobile` by [the rule above](#desktop-and-mobile) (`platform.desktop`), then `native` (every platform but the web), then `default`:
+In Rust a `match os()` chooses the value, with `is_desktop()` for the desktops and `is_tv()` for TVs. In TSX, `platform.select(spec)` returns the value for this platform. It looks for the OS's own key, then `tv` on a [TV](#tvs) (`platform.tv`), then `desktop` or `mobile` by [the rule above](#desktop-and-mobile) (`platform.desktop`), then `native` (every platform but the web), then `default`:
 
 ```rust tabs
 use nsh_core::{element::Os, prelude::*};

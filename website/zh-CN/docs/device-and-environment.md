@@ -421,14 +421,15 @@ function BottomBar() {
 
 ## 平台
 
-Rust 中的 `os()`、`os_version()`、`idiom()`、`is_desktop()` 和 `is_catalyst()`，以及 TSX 中 `nsh` 的常量 `platform`，描述应用运行的平台。它们在应用运行期间保持不变。
+Rust 中的 `os()`、`os_version()`、`idiom()`、`is_desktop()`、`is_tv()` 和 `is_catalyst()`，以及 TSX 中 `nsh` 的常量 `platform`，描述应用运行的平台。它们在应用运行期间保持不变。
 
 | Rust | TSX | 说明 |
 |---|---|---|
 | `os()` | `platform.os` | `Os::Ios`、`Os::Android`、`Os::MacOs`、`Os::Windows`、`Os::Linux` 或 `Os::Web`（`os().name()` 即 TSX 的字符串）。Mac Catalyst 为 iOS。 |
 | `os_version()` | `platform.version` | 主版本号和次版本号；Android 上为 API 级别和 0。 |
 | `idiom()` | `platform.idiom` | `Idiom::Phone`、`Pad`、`Mac`、`Tv`、`Desktop` 或 `Terminal`；在终端中为 `Terminal`，否则 `is_desktop()` 成立时恰好是 `Desktop`。 |
-| `is_desktop()` | `platform.desktop` | macOS、Windows 或 Linux、桌面浏览器或终端（[桌面与移动端](./platform-specific.md#桌面与移动端)）。 |
+| `is_desktop()` | `platform.desktop` | macOS、Windows 或 Linux、桌面浏览器或终端；电视从不是桌面（[桌面与移动端](./platform-specific.md#桌面与移动端)）。 |
+| `is_tv()` | `platform.tv` | 电视，与操作系统无关：Android TV、电视上的浏览器（[电视](./platform-specific.md#电视)）。 |
 | `is_catalyst()` | `platform.catalyst` | Mac Catalyst，无论哪种界面风格。 |
 
 TSX 的 `platform` 完整成员：
@@ -438,7 +439,8 @@ TSX 的 `platform` 完整成员：
 | `platform.os` | `"ios"`、`"android"`、`"macos"`、`"windows"`、`"linux"` 或 `"web"`。Mac Catalyst 报告 `"ios"`。 |
 | `platform.version` | 字符串：iOS 和桌面平台为系统版本（`"17.5"`）；Android 为 API 级别（`"35"`）；Web 为 `"0.0"`。 |
 | `platform.idiom` | `"phone"`、`"pad"`、`"mac"`、`"tv"`、`"desktop"` 或 `"terminal"`。在终端中为 `"terminal"`，否则 `platform.desktop` 为 `true` 时恰好是 `"desktop"`。`"mac"` 是 Mac Catalyst 下 UIKit 的 Mac 界面风格，属于移动端界面风格。 |
-| `platform.desktop` | 适用桌面行为：macOS、Windows、Linux、桌面浏览器和终端。`desktop={{…}}` 属性和 `platform.select({ desktop })` 以它为准。 |
+| `platform.desktop` | 适用桌面行为：macOS、Windows、Linux、桌面浏览器和终端；电视从不是桌面。`desktop={{…}}` 属性和 `platform.select({ desktop })` 以它为准。 |
+| `platform.tv` | 应用运行在电视上（`idiom` 为 `"tv"`），与操作系统无关。`tv={{…}}` 属性和 `platform.select({ tv })` 以它为准。 |
 | `platform.catalyst` | 应用运行在 Mac Catalyst 下（`os` 为 `"ios"`），无论是 Mac 还是 iPad 界面风格。 |
 | `platform.select(spec)` | 当前平台对应的值；见[平台特定代码](./platform-specific.md#platformselect)。 |
 

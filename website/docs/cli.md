@@ -78,7 +78,7 @@ Apps whose Rust crates depend on NSH through Git use the checkout Cargo resolves
 ## nsh run
 
 ```sh
-nsh run [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>]
+nsh run [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>] [--idiom tv|desktop]
 ```
 
 ```sh
@@ -104,6 +104,7 @@ On the native window and mobile targets, a Rust app (`nsh.json` `"root"`, [Build
 | `--points-per-cell <WIDTHxHEIGHT>` | `nsh.json` `tui.pointsPerCell`, otherwise `8x16` | Terminal Cell width and height in points (`--target tui`). |
 | `--window-size <WIDTHxHEIGHT>` | Host default | Initial window size in points, such as `800x600` (`--target macos`, `linux`, `windows` and `gpui`, TSX entries). |
 | `--display <N>` | The main display | The display the window opens on, centered: `1` is the primary display (the one with the menu bar), `2` the next, and so on; a number with no display opens it on the main one (`--target macos`, TSX entries). |
+| `--idiom <IDIOM>` | `nsh.json` `dev.idiom`, otherwise the host's own | The kind of device the app runs as: `tv` runs it as on a TV (`platform.tv`, `tv={{…}}` props, mobile behavior), so 10-foot layouts and focus are built on this machine; `desktop` runs the web page in the desktop idiom whatever the browser's pointer and width ([TVs](./platform-specific.md#tv-layouts-on-the-desktop)). `--target gpui` (the window keeps its size: `--window-size 1920x1080` shows a TV's whole screen) and `--target web`; the other hosts run in their device's own idiom and refuse it. |
 
 With `--target android`, the first device `adb devices` lists is used; the dev server's port is forwarded to it with `adb reverse`. See [Getting started](./getting-started.md#run-it) and [Dev server and debugging](./dev-server-and-debugging.md).
 
@@ -115,7 +116,7 @@ On Unix, the terminal host exits on SIGHUP, SIGTERM, SIGINT or terminal disconne
 ## nsh dev
 
 ```sh
-nsh dev [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web] [--device <DEVICE>] [--server-only] [--port <PORT>] [--release] [--limits [<LIMITS>]]
+nsh dev [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web] [--device <DEVICE>] [--server-only] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--idiom tv|desktop]
 ```
 
 Starts the dev server and opens this system’s native host: AppKit on macOS, GTK on Linux, Win32 on Windows. Choose `--target ios` or `--target android` explicitly for mobile development. `--server-only` serves hosts you start yourself. The server builds the app, watches the entry’s directory, and pushes every rebuild to connected hosts. With `--server-only`, it prints the URL for hosts on this machine and one per LAN address for devices, and, when the web runtime is there, the page browsers open to run the app ([Web](./web.md#develop-in-the-browser)):
@@ -128,7 +129,7 @@ Starts the dev server and opens this system’s native host: AppKit on macOS, GT
   browsers on this network: http://192.168.1.20:8790/
 ```
 
-Use `nsh dev --server-only` with an app that embeds the development SDK (`NativeShellDev.xcframework`, `nsh-dev.aar`). `--target`, `--device`, `--port`, `--release` and `--limits` work as for `nsh run`; `--server-only` selects a server without a launched host.
+Use `nsh dev --server-only` with an app that embeds the development SDK (`NativeShellDev.xcframework`, `nsh-dev.aar`). `--target`, `--device`, `--port`, `--release`, `--limits` and `--idiom` work as for `nsh run`; `--server-only` selects a server without a launched host, and with it `--idiom` (or `nsh.json` `dev.idiom`) sets the idiom of the page it serves to browsers (a GPUI host you start yourself takes `--idiom tv` on its own command line).
 
 ## nsh test
 

@@ -28,8 +28,9 @@
 // by default `nsh-<name>.bin` next to this file), `prepareChunk(id)` (a
 // promise for what chunk `id` needs once it
 // runs, such as fonts for `readAsset`; awaited with the chunk's download),
-// `dark`, `idiom` ("phone", "pad" or "desktop" instead of the one the
-// pointer and the viewport suggest), `dialogs` ("viewport": `Dialog`,
+// `dark`, `idiom` ("phone", "pad", "desktop" or "tv" instead of the one the
+// pointer and the viewport suggest; a page on a TV, a `.wgt`, passes "tv":
+// `platform.tv`, `tv={{…}}` props, mobile behavior), `dialogs` ("viewport": `Dialog`,
 // `Sheet` and `AlertDialog` cover the whole window, in the browser's top layer, rather
 // than the container, which they cover by default and in browsers without
 // popovers), `overlay` (false: no error box), `onError`, `onLog`, `host`

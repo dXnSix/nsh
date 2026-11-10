@@ -194,7 +194,9 @@ build to the same file) and takes `nsh.js` from the crate.
   (`/sports/football`), which `SiteServer::start_at` (`--run`) serves under it; the dev page has `<base href="/">`
   (the dev server serves its files at the root). `nsh.json` `web.history` reaches `createPlayer`'s `history` on
   both pages (the packaged page's `app.history`, the dev page's `HISTORY`, which `with_page_host` fills in); without
-  it the player's default (`window.top === window`) holds. The app ships as minified ES modules
+  it the player's default (`window.top === window`) holds. The dev page's `IDIOM` (`with_page_host` too: the session's
+  `--idiom` or `nsh.json` `dev.idiom`, `run::DevIdiom::resolve`; `null` for `nsh test --target web`, whose setup sets
+  the idiom) is the player's `idiom`, so `nsh run --target web --idiom tv` runs the app as on a TV in any browser. The app ships as minified ES modules
   (`app.<digest>.js` and `<chunk>.<digest>.js`). An import map resolves original chunk URLs to hashed files;
   transitive entry fonts load before startup and dynamic imports prepare the requested chunk's font dependencies.
   The browser loads static dependencies, module cycles and dynamic chunks itself. No bytecode or hardening
@@ -476,10 +478,13 @@ The idiom is fixed at start, as `Environment::idiom` is everywhere: `desktop` fo
 any width, as a narrow window on a native desktop (headless Chromium reports no pointer and measures as a tablet or phone unless launched
 with a fine, hovering one, as `nsh test --target web` does), `pad` for a screen whose short side is at least 600, else
 `phone`; the player's `idiom` option overrides it, and so does a test's setup (`TestEnvironment::idiom`: `open`'s
-desktop `platform` starts the app in the desktop idiom at any width). `Environment::desktop()`
+desktop `platform` starts the app in the desktop idiom at any width). A page on a TV (a Tizen `.wgt`) passes
+`idiom: "tv"`, which no pointer heuristic can tell: `nsh_environment` maps it to `Idiom::Tv` (`platform.tv`,
+`tv={{…}}` props, mobile behavior; `tv.test.mjs`). `Environment::desktop()`
 (desktop OS, the web in the desktop idiom, or the terminal idiom) decides `desktop={{…}}` props, `platform.select`'s `desktop` key,
-`platform.desktop` and `platform.idiom` (`Environment::reported_idiom()`; the page's `browser/environment.js`
-gets both from the engine's environment); `Os::is_desktop()` stays the desktop backends' OSes (`nsh/desktop`'s windows and menus). Like the
+`platform.desktop` and `platform.idiom` (`Environment::reported_idiom()`), `Environment::tv()` decides `tv={{…}}`
+props, `select`'s `tv` key and `platform.tv` (the page's `browser/environment.js` gets all three from the engine's
+environment); `Os::is_desktop()` stays the desktop backends' OSes (`nsh/desktop`'s windows and menus). Like the
 desktop backends, the web gives the core no header heights (`NO_NATIVE_HEADER`): a page's `header` slot is all
 there is at its top. The browser's bars are the browser's: the web ignores `Command::StatusBar` (pages' and dialogs' `statusBar`).
 

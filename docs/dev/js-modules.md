@@ -61,7 +61,7 @@ the chunks of a split bundle (`Screen.js`: a name that is no native module, with
   `nsh`'s `platform.os` tell which. `nsh/desktop`'s `isAvailable` (`Os::is_desktop`: macOS, Windows, Linux) says
   its window and menu APIs work; it is narrower than desktop behavior, `platform.desktop` (`Environment::desktop()`,
   which browsers in the desktop idiom and terminals have too: "One definition of desktop" in `api-naming.md`).
-- **Platform-only props** are grouped: `ios={{…}}` / `android={{…}}` / `macos={{…}}` / `web={{…}}` / `desktop={{…}}` (macOS, Windows, Linux, browsers in the desktop idiom, and terminals) on
+- **Platform-only props** are grouped: `ios={{…}}` / `android={{…}}` / `macos={{…}}` / `web={{…}}` / `desktop={{…}}` (macOS, Windows, Linux, browsers in the desktop idiom, and terminals) / `tv={{…}}` (the TV idiom on any OS: `TvProps`, the props every element takes, as no prop is a TV's alone) on
   elements and components (`IOSProps` / `AndroidProps` / `MacOSProps` / `DesktopProps` in `types.d.ts`, each extending its
   generated `IOSHostProps` / `AndroidHostProps` / `MacOSHostProps` / `DesktopHostProps`, and extended per element with its own
   `IOS…HostProps` / `MacOS…HostProps` / `Desktop…HostProps`; a test holds every `…HostProps` to an element's props). The renderers
