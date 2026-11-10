@@ -397,6 +397,7 @@ ref 的 `focus()` 像 Tab 一样把键盘焦点移到停靠点上（显示它的
 - `autoFocus` 在视图出现时让它获得焦点：屏幕上的第一张卡片、对话框的主按钮。
 - `preferredFocus` 选定焦点进入时停在哪里：一行中当前的项、对话框的默认操作。
 - `nextFocusDown` 等属性让方向键绕过几何位置，在没有对齐的行之间跳转。要指向在它之后渲染的视图，用一个由目标的 `ref` 设置的 signal（`nextFocusDown={next()}`）。
+- 在很长的 `List` 中，方向键会继续去往还不在屏幕上的行：列表滚动到下一行，焦点落在那一行上。
 
 ```rust tabs
 let play = element_ref();

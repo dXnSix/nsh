@@ -1235,6 +1235,12 @@ impl ListState {
         }
     }
 
+    /// It shows mirrored: horizontal, right to left (its first item at
+    /// the right).
+    pub(super) fn mirrored(&self) -> bool {
+        self.horizontal && self.mirrored
+    }
+
     /// Whether it shows mirrored (horizontal, right to left): its left and
     /// right content padding keep their sides on screen.
     pub(super) fn set_mirrored(&mut self, mirrored: bool) {

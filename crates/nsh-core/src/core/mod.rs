@@ -1219,6 +1219,11 @@ pub struct Core<M: TextEngine> {
     /// groups' destinations), found again in every commit round
     /// (`directional.rs`).
     focus_refs: Vec<directional::FocusRefs>,
+    /// A list row an arrow went to before it was mounted: its cell takes
+    /// the focus once it is (`Core::focus_past`).
+    /// With the focus the core knew then, which moving elsewhere forgets
+    /// it.
+    pending_row: Option<(crate::focus::PendingRow, Option<NodeId>)>,
     /// The warning about `bottom` / `right` sticky insets was logged.
     sticky_warned: bool,
     /// The warning about animated insets of views that are not sticky, or
@@ -1534,6 +1539,7 @@ impl<M: TextEngine> Core<M> {
             relators: Vec::new(),
             follow_changed: false,
             focus_refs: Vec::new(),
+            pending_row: None,
             sticky_warned: false,
             inset_warned: false,
             shaders: Default::default(),
@@ -3123,6 +3129,10 @@ impl<M: TextEngine> Core<M> {
             self.sync_culled();
         }
         self.update_lists(relayout);
+        // A row an arrow went to takes the focus once it is mounted.
+        if self.pending_row.is_some() {
+            self.land_pending_row();
+        }
         // Views that waited for the budget, once lists placed their cells
         // (`pace.rs`).
         if !self.pace.waiting.is_empty() {

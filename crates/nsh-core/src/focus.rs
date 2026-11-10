@@ -358,6 +358,16 @@ impl Direction {
     pub fn forward(self) -> bool {
         matches!(self, Direction::Down | Direction::Right)
     }
+
+    /// The arrow the other way.
+    pub fn opposite(self) -> Direction {
+        match self {
+            Direction::Up => Direction::Down,
+            Direction::Down => Direction::Up,
+            Direction::Left => Direction::Right,
+            Direction::Right => Direction::Left,
+        }
+    }
 }
 
 /// The views the arrows take the focus to from a view instead of the
@@ -663,6 +673,9 @@ pub struct PendingRow {
     pub list: NodeId,
     /// The item.
     pub index: u32,
+    /// The stop the arrow left: the row is forgotten once the focus is
+    /// elsewhere.
+    pub from: NodeId,
 }
 
 /// How a scroll view brings the stop that takes the focus into sight along

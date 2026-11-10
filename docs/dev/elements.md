@@ -228,7 +228,12 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   `FocusGroup`, `Prop::FocusGroup`, internal: its `destinations` are where the arrows enter it, in order, and `trap`
   keeps them inside). The refs are looked up again in every commit round (`core/directional.rs`, as `follow` does:
   a Rust ref may be on an element rendered later, a group's own children), and their nodes reach the platform as
-  `ViewProps::next_focus` and `ViewProps::focus_group`.
+  `ViewProps::next_focus` and `ViewProps::focus_group`. A list's rows past those mounted are not skipped: while the
+  scroll view around the focus can scroll on toward the arrow, a stop outside it is not reached
+  (`focus::Target::Scroll`); the platform scrolls it and calls `EngineControl::focus_past`, and in a list the core
+  scrolls to the next row by index (`Command::ScrollToIndex`, `focus::next_row`: a row of columns along a grid,
+  inverted and right-to-left lists the other way) and sends that row's cell `Command::Focus` once it shows it; the
+  platform focuses the cell's first stop. The row is forgotten when the focus is reported elsewhere first.
   A shown overlay's content is in the Tab order where the app put the overlay, not where its native view is (at the
   end of its root view), as WAI-ARIA's non-modal popups have it: a popover's content right after its trigger, so
   Shift+Tab from it goes back to the trigger and Tab past its last stop goes on to what follows the popover. A list

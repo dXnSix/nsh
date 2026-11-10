@@ -38687,12 +38687,15 @@ fn a_backdrop_follows_the_order_views_draw_in() {
 }
 
 /// What the core does for the TV's focus (`directional.rs`): the views
-/// focus props name, found in every commit.
+/// focus props name, found in every commit, and a list scrolled to the row
+/// an arrow went to before that row was mounted.
 mod directional_focus {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::{
         element::{FocusGroupTargets, FocusTarget},
-        focus::{GroupConfig, NextFocus},
+        focus::{Direction, GroupConfig, NextFocus},
     };
 
     fn view(id: NodeId) -> Vec<Op> {
@@ -38790,6 +38793,100 @@ mod directional_focus {
         set(&mut c, 2, Prop::FocusGroup(None));
         let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
         assert_eq!(props.focus_group, None);
+    }
+
+    /// A list of 1000 rows of 100 points, its window rendered: the cell
+    /// showing each item.
+    fn rendered_list(c: &mut Core<FakeEngine>) -> (u32, Vec<u32>, HashMap<u32, NodeId>) {
+        thousand_rows(c);
+        c.commit();
+        let (mut next_id, mut cells) = (100, Vec::new());
+        render_binds(c, &mut next_id, &mut cells, 100.0);
+        c.commit();
+        let shown = shown(c, &cells);
+        (next_id, cells, shown)
+    }
+
+    /// The items the cells show, from the core's own slots.
+    fn shown(c: &Core<FakeEngine>, cells: &[u32]) -> HashMap<u32, NodeId> {
+        let list = c.key(2).unwrap();
+        let state = c.nodes[list as usize].list.as_ref().unwrap();
+        cells
+            .iter()
+            .filter_map(|&id| {
+                let key = c.key(id).ok()?;
+                let index = state.slots.iter().find(|s| s.cell == key)?.ready()?;
+                Some((index, id))
+            })
+            .collect()
+    }
+
+    /// The cell a batch sends `Command::Focus`, if any.
+    fn focus_command(batch: Option<MountBatch>) -> Option<NodeId> {
+        batch?.items.iter().find_map(|item| match item {
+            MountItem::Command {
+                id,
+                command: Command::Focus,
+            } => Some(*id),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn an_arrow_past_the_mounted_rows_scrolls_the_list_and_focuses_the_row() {
+        let mut c = core();
+        let (mut next_id, mut cells, shown_now) = rendered_list(&mut c);
+        let last = *shown_now.keys().max().unwrap();
+        assert!(c.focus_past(shown_now[&last], Direction::Down));
+        let batch = c.commit().unwrap();
+        // The list scrolls to the next row, by index: its end at the
+        // viewport's (400 points tall).
+        let y = (last + 2) as f32 * 100.0 - 400.0;
+        assert!(batch.items.iter().any(|item| matches!(
+            item,
+            MountItem::Command { id: 2, command: Command::ScrollTo { y: to, animated: true, .. } }
+                if to.0 == y
+        )));
+        assert_eq!(focus_command(Some(batch)), None);
+        // Once the row shows in a cell, the cell takes the focus, once.
+        c.set_scroll_offset(2, point(px(0.0), px(y)), u32::MAX);
+        let mut focused = focus_command(c.commit());
+        render_binds(&mut c, &mut next_id, &mut cells, 100.0);
+        focused = focused.or(focus_command(c.commit()));
+        assert!(focused.is_some());
+        assert_eq!(focused, shown(&c, &cells).get(&(last + 1)).copied());
+        assert!(c.pending_row.is_none());
+        assert_eq!(focus_command(c.commit()), None);
+    }
+
+    #[test]
+    fn an_arrow_that_leaves_the_list_or_its_end_scrolls_nothing() {
+        let mut c = core();
+        let (_, _, shown) = rendered_list(&mut c);
+        // Across a list of one column, and before its first row.
+        assert!(!c.focus_past(shown[&0], Direction::Right));
+        assert!(!c.focus_past(shown[&0], Direction::Up));
+        // A view in no list.
+        apply(&mut c, view(4));
+        c.commit();
+        assert!(!c.focus_past(4, Direction::Down));
+        assert!(!c.focus_past(999, Direction::Down));
+        assert!(c.pending_row.is_none());
+    }
+
+    #[test]
+    fn a_row_waiting_is_forgotten_when_the_focus_moves_elsewhere() {
+        let mut c = core();
+        let (_, _, shown) = rendered_list(&mut c);
+        let last = *shown.keys().max().unwrap();
+        assert!(c.focus_past(shown[&last], Direction::Down));
+        c.commit();
+        assert!(c.pending_row.is_some());
+        // Another view reports the focus.
+        apply(&mut c, view(4));
+        c.set_states(4, crate::tailwind::state::FOCUSED);
+        c.commit();
+        assert!(c.pending_row.is_none());
     }
 }
 
