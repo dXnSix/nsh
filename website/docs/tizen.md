@@ -93,6 +93,20 @@ The tests open the app on the TV in NSH's development package, installed as `nsh
 on it over the dev protocol. The app fills the TV's screen: `open`'s `width` and `height` are refused there. Apps open
 one at a time.
 
+## Apps with Rust crates
+
+An app with crates of its own (`nsh.json` `"rust"`) gets its own runtime library, built for each architecture with the
+Tizen target specs the `tizen` component ships. That needs, besides the Tizen SDK:
+
+- the nightly Rust toolchain the component names, with `rust-src` and `llvm-tools` (`nsh` says which);
+- clang;
+- the Tizen 8.0 rootstrap (`package-manager-cli install TIZEN-8.0-NativeAppDevelopment-CLI`; or set
+  `TIZEN_ROOTSTRAP_ARMV7`, `TIZEN_ROOTSTRAP_AARCH64`, `TIZEN_ROOTSTRAP_X86_64`);
+- the SDK's GCC 9.2 toolchain (`package-manager-cli install NativeToolchain-Gcc-9.2`; or set
+  `TIZEN_GCC_TOOLCHAIN_<ARCH>`).
+
+Until NSH's Tizen crate is on crates.io, such apps build against a checkout of NSH (`nsh init --nsh-source <dir>`).
+
 ## What the app sees
 
 - `platform.os` is `"tizen"` (`Os::Tizen`), the idiom `"tv"` (`platform.tv` is `true`), `platform.desktop` is

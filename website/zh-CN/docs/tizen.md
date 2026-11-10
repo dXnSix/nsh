@@ -85,6 +85,19 @@ nsh test --target tizen               # 在 sdb 列出的电视（或模拟器�
 测试在电视上用 NSH 的开发包打开应用（与 `nsh run` 的安装方式相同），测试步骤通过开发协议作用于应用。应用占满电视屏幕：在这里
 `open` 的 `width` 和 `height` 会被拒绝。应用一次打开一个。
 
+## 带 Rust crate 的应用
+
+带有自己 crate 的应用（`nsh.json` 中的 `"rust"`）会得到自己的运行时库，用 `tizen` 组件附带的 Tizen 目标规格为每个架构构建。
+除了 Tizen SDK，这还需要：
+
+- 组件指定的 nightly Rust 工具链，带 `rust-src` 和 `llvm-tools`（`nsh` 会说明是哪一个）；
+- clang；
+- Tizen 8.0 rootstrap（`package-manager-cli install TIZEN-8.0-NativeAppDevelopment-CLI`；或设置
+  `TIZEN_ROOTSTRAP_ARMV7`、`TIZEN_ROOTSTRAP_AARCH64`、`TIZEN_ROOTSTRAP_X86_64`）；
+- SDK 的 GCC 9.2 工具链（`package-manager-cli install NativeToolchain-Gcc-9.2`；或设置 `TIZEN_GCC_TOOLCHAIN_<ARCH>`）。
+
+在 NSH 的 Tizen crate 发布到 crates.io 之前，这类应用需要基于 NSH 的源码检出构建（`nsh init --nsh-source <dir>`）。
+
 ## 应用看到什么
 
 - `platform.os` 为 `"tizen"`（`Os::Tizen`），形态为 `"tv"`（`platform.tv` 为 `true`），`platform.desktop` 为 `false`；

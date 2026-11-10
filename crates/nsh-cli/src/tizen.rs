@@ -104,6 +104,15 @@ impl Arch {
         }
     }
 
+    /// Its target spec (`runtime/tizen/targets/<spec>.json`).
+    pub(crate) fn spec(self) -> &'static str {
+        match self {
+            Arch::Armv7l => "armv7-tizen-linux-gnueabi",
+            Arch::Aarch64 => "aarch64-tizen-linux-gnu",
+            Arch::X86_64 => "x86_64-tizen-linux-gnu",
+        }
+    }
+
     /// The architecture `sdb capability` reports as `cpu_arch`.
     fn of_device(cpu_arch: &str) -> Option<Arch> {
         match cpu_arch {
@@ -976,6 +985,226 @@ impl Drop for DevRun {
     }
 }
 
+/// What a cross build of an app's Tizen library needs of this machine
+/// (dXn.GpuiTizen's `cargo xtask cross` finds the same): the `tizen`
+/// component's target specs and the nightly they build with, clang, the
+/// Tizen 8.0 rootstrap (the sysroot) and the Tizen SDK's GCC 9.2 toolchain
+/// (the start files and `libgcc_s` the rootstrap leaves out, and GNU ld).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Cross {
+    /// `runtime/tizen/targets`.
+    pub(crate) targets: PathBuf,
+    /// The nightly (`targets/toolchain`).
+    pub(crate) toolchain: String,
+    /// Its `lib/rustlib/<host>/bin` (`llvm-ar`).
+    pub(crate) rustlib_bin: PathBuf,
+    /// `TIZEN_CLANG`, else `clang`.
+    pub(crate) clang: String,
+    pub(crate) rootstrap: PathBuf,
+    pub(crate) gcc: PathBuf,
+}
+
+impl Arch {
+    /// The triple clang compiles C code for (the rootstrap's GCC's).
+    fn clang_triple(self) -> &'static str {
+        match self {
+            Arch::Armv7l => "armv7l-tizen-linux-gnueabi",
+            Arch::Aarch64 => "aarch64-tizen-linux-gnu",
+            Arch::X86_64 => "x86_64-tizen-linux-gnu",
+        }
+    }
+
+    /// C flags of its ABI (32-bit ARM's soft-float calls with NEON).
+    fn c_flags(self) -> &'static [&'static str] {
+        match self {
+            Arch::Armv7l => &["-march=armv7-a", "-mfloat-abi=softfp", "-mfpu=neon"],
+            Arch::Aarch64 | Arch::X86_64 => &[],
+        }
+    }
+
+    /// `TIZEN_ROOTSTRAP_<ARCH>`, `TIZEN_GCC_TOOLCHAIN_<ARCH>`'s suffix.
+    fn env_name(self) -> &'static str {
+        match self {
+            Arch::Armv7l => "ARMV7",
+            Arch::Aarch64 => "AARCH64",
+            Arch::X86_64 => "X86_64",
+        }
+    }
+
+    /// The rootstrap in the Tizen SDK (Tizen 8.0's common profile).
+    fn sdk_rootstrap(self) -> &'static str {
+        match self {
+            Arch::Armv7l => "platforms/tizen-8.0/tizen/rootstraps/tizen-8.0-device.core",
+            Arch::Aarch64 => "platforms/tizen-8.0/tizen/rootstraps/tizen-8.0-device64.core",
+            Arch::X86_64 => "platforms/tizen-8.0/tizen/rootstraps/tizen-8.0-emulator64.core",
+        }
+    }
+
+    /// The GCC toolchain in the Tizen SDK.
+    fn sdk_gcc(self) -> &'static str {
+        match self {
+            Arch::Armv7l => "tools/arm-linux-gnueabi-gcc-9.2",
+            Arch::Aarch64 => "tools/aarch64-linux-gnu-gcc-9.2",
+            Arch::X86_64 => "tools/x86_64-linux-gnu-gcc-9.2",
+        }
+    }
+
+    /// GCC's triple, which names its directories in the toolchain.
+    fn gcc_triple(self) -> &'static str {
+        match self {
+            Arch::Armv7l => "arm-tizen-linux-gnueabi",
+            Arch::Aarch64 => "aarch64-tizen-linux-gnu",
+            Arch::X86_64 => "x86_64-tizen-linux-gnu",
+        }
+    }
+}
+
+/// The cross build of an app's Tizen library for `arch` (dXn.GpuiTizen's
+/// `cross::plan`): Cargo's arguments before its subcommand (the nightly's
+/// `build-std` for the custom target), the environment (the C compiler,
+/// archiver and flags for the target, the linker and its arguments:
+/// the rootstrap as sysroot, GNU ld and GCC's start files), and the target
+/// spec.
+pub(crate) fn cross_plan(
+    arch: Arch,
+    cross: &Cross,
+) -> (Vec<String>, Vec<(String, String)>, PathBuf) {
+    let spec = cross.targets.join(format!("{}.json", arch.spec()));
+    let suffix = arch.spec().replace('-', "_");
+    let triple = arch.clang_triple();
+    let sysroot = format!("--sysroot={}", cross.rootstrap.display());
+    let mut c_flags = vec![format!("--target={triple}"), sysroot.clone()];
+    c_flags.extend(arch.c_flags().iter().map(|f| (*f).to_owned()));
+    // zstd's weak tracing hooks would be imports outside Tizen's API.
+    c_flags.push("-DZSTD_TRACE=0".to_owned());
+    let gcc_lib = cross
+        .gcc
+        .join("lib/gcc")
+        .join(arch.gcc_triple())
+        .join("9.2.0");
+    let runtime = cross.gcc.join(arch.gcc_triple()).join(match arch {
+        Arch::Armv7l => "lib",
+        Arch::Aarch64 | Arch::X86_64 => "lib64",
+    });
+    let mut link = vec![
+        format!("--target={triple}"),
+        sysroot,
+        // GNU ld: the rootstraps' libraries list imports lld rejects.
+        format!(
+            "--ld-path={}",
+            cross
+                .gcc
+                .join(arch.gcc_triple())
+                .join("bin/ld.bfd")
+                .display()
+        ),
+        format!("-B{}", gcc_lib.display()),
+        format!("-L{}", gcc_lib.display()),
+        format!("-L{}", runtime.display()),
+    ];
+    link.extend(arch.c_flags().iter().map(|f| (*f).to_owned()));
+    let rustflags: Vec<String> = link.iter().map(|a| format!("-Clink-arg={a}")).collect();
+    let env = vec![
+        ("RUSTUP_TOOLCHAIN".to_owned(), cross.toolchain.clone()),
+        (format!("CC_{suffix}"), cross.clang.clone()),
+        (format!("CFLAGS_{suffix}"), c_flags.join(" ")),
+        (
+            format!("AR_{suffix}"),
+            cross.rustlib_bin.join("llvm-ar").display().to_string(),
+        ),
+        (
+            format!("BINDGEN_EXTRA_CLANG_ARGS_{suffix}"),
+            c_flags.join(" "),
+        ),
+        (
+            format!("CARGO_TARGET_{}_LINKER", suffix.to_uppercase()),
+            cross.clang.clone(),
+        ),
+        ("CARGO_ENCODED_RUSTFLAGS".to_owned(), rustflags.join("\x1f")),
+    ];
+    let args = vec![
+        "-Zbuild-std=std,panic_abort".to_owned(),
+        "-Zjson-target-spec".to_owned(),
+    ];
+    (args, env, spec)
+}
+
+/// Where the Tizen SDK is: `TIZEN_SDK`, else `~/tizen-studio`.
+fn sdk_root() -> Option<PathBuf> {
+    std::env::var_os("TIZEN_SDK")
+        .filter(|sdk| !sdk.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join("tizen-studio")))
+}
+
+/// A Cargo command set up to cross-build for `arch` with the target specs
+/// in `targets` ([`cross_plan`]), and the spec to build with
+/// (`--target <spec>`), once this machine has what it needs.
+pub(crate) fn cross_command(arch: Arch, targets: &Path) -> anyhow::Result<(Command, PathBuf)> {
+    let toolchain = fs::read_to_string(targets.join("toolchain"))
+        .with_context(|| format!("read {}", targets.join("toolchain").display()))?
+        .trim()
+        .to_owned();
+    let found = |env: String, in_sdk: &str| -> Option<PathBuf> {
+        std::env::var_os(&env)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| sdk_root().map(|sdk| sdk.join(in_sdk)))
+            .filter(|dir| dir.is_dir())
+    };
+    let rootstrap = found(
+        format!("TIZEN_ROOTSTRAP_{}", arch.env_name()),
+        arch.sdk_rootstrap(),
+    )
+    .with_context(|| {
+        format!(
+            "building the app's crates for {} needs the Tizen 8.0 rootstrap: install it with the Tizen SDK's              package manager (`package-manager-cli install TIZEN-8.0-NativeAppDevelopment-CLI`) or set TIZEN_ROOTSTRAP_{}",
+            arch.name(),
+            arch.env_name()
+        )
+    })?;
+    let gcc = found(
+        format!("TIZEN_GCC_TOOLCHAIN_{}", arch.env_name()),
+        arch.sdk_gcc(),
+    )
+    .with_context(|| {
+        format!(
+            "building the app's crates for {} needs the Tizen SDK's GCC 9.2 toolchain: install it              (`package-manager-cli install NativeToolchain-Gcc-9.2`) or set TIZEN_GCC_TOOLCHAIN_{}",
+            arch.name(),
+            arch.env_name()
+        )
+    })?;
+    let libdir = Command::new("rustc")
+        .env("RUSTUP_TOOLCHAIN", &toolchain)
+        .args(["--print", "target-libdir"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .with_context(|| {
+            format!(
+                "the app's crates build for Tizen with {toolchain}: rustup toolchain install {toolchain} \
+                 --component rust-src,llvm-tools"
+            )
+        })?;
+    let rustlib_bin = PathBuf::from(String::from_utf8_lossy(&libdir.stdout).trim())
+        .parent()
+        .context("rustc's target libdir")?
+        .join("bin");
+    let cross = Cross {
+        targets: targets.to_owned(),
+        toolchain,
+        rustlib_bin,
+        clang: std::env::var("TIZEN_CLANG").unwrap_or_else(|_| "clang".to_owned()),
+        rootstrap,
+        gcc,
+    };
+    let (args, env, spec) = cross_plan(arch, &cross);
+    // Rustup's `cargo`, which takes the nightly from `RUSTUP_TOOLCHAIN`.
+    let mut command = Command::new("cargo");
+    command.args(args).envs(env).env_remove("RUSTFLAGS");
+    Ok((command, spec))
+}
+
 /// A free port on this machine.
 fn free_port() -> anyhow::Result<u16> {
     Ok(TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
@@ -1377,5 +1606,68 @@ mod tests {
         assert!(!installed(&record, "tv-1", "build a"));
         assert!(installed(&record, "tv-2", "build a"));
         assert_eq!(record.lines().count(), 2);
+    }
+
+    #[test]
+    fn an_apps_crates_cross_build_with_the_components_specs() {
+        let cross = Cross {
+            targets: PathBuf::from("/nsh/runtime/tizen/targets"),
+            toolchain: "nightly-2026-10-18".into(),
+            rustlib_bin: PathBuf::from("/rustlib/bin"),
+            clang: "clang".into(),
+            rootstrap: PathBuf::from("/sdk/rootstrap"),
+            gcc: PathBuf::from("/sdk/gcc"),
+        };
+        let (args, env, spec) = cross_plan(Arch::Armv7l, &cross);
+        assert_eq!(args, ["-Zbuild-std=std,panic_abort", "-Zjson-target-spec"]);
+        assert_eq!(
+            spec,
+            Path::new("/nsh/runtime/tizen/targets/armv7-tizen-linux-gnueabi.json")
+        );
+        let get = |key: &str| env.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+        assert_eq!(get("RUSTUP_TOOLCHAIN"), Some("nightly-2026-10-18"));
+        assert_eq!(get("CC_armv7_tizen_linux_gnueabi"), Some("clang"));
+        assert_eq!(
+            get("CFLAGS_armv7_tizen_linux_gnueabi"),
+            Some(
+                "--target=armv7l-tizen-linux-gnueabi --sysroot=/sdk/rootstrap -march=armv7-a -mfloat-abi=softfp -mfpu=neon -DZSTD_TRACE=0"
+            )
+        );
+        assert_eq!(
+            get("AR_armv7_tizen_linux_gnueabi"),
+            Some("/rustlib/bin/llvm-ar")
+        );
+        assert_eq!(
+            get("CARGO_TARGET_ARMV7_TIZEN_LINUX_GNUEABI_LINKER"),
+            Some("clang")
+        );
+        let rustflags: Vec<&str> = get("CARGO_ENCODED_RUSTFLAGS")
+            .unwrap()
+            .split('\x1f')
+            .collect();
+        assert_eq!(
+            rustflags,
+            [
+                "-Clink-arg=--target=armv7l-tizen-linux-gnueabi",
+                "-Clink-arg=--sysroot=/sdk/rootstrap",
+                "-Clink-arg=--ld-path=/sdk/gcc/arm-tizen-linux-gnueabi/bin/ld.bfd",
+                "-Clink-arg=-B/sdk/gcc/lib/gcc/arm-tizen-linux-gnueabi/9.2.0",
+                "-Clink-arg=-L/sdk/gcc/lib/gcc/arm-tizen-linux-gnueabi/9.2.0",
+                "-Clink-arg=-L/sdk/gcc/arm-tizen-linux-gnueabi/lib",
+                "-Clink-arg=-march=armv7-a",
+                "-Clink-arg=-mfloat-abi=softfp",
+                "-Clink-arg=-mfpu=neon",
+            ]
+        );
+        let (_, env, _) = cross_plan(Arch::X86_64, &cross);
+        let flags = &env
+            .iter()
+            .find(|(k, _)| k == "CARGO_ENCODED_RUSTFLAGS")
+            .unwrap()
+            .1;
+        assert!(
+            flags.contains("-L/sdk/gcc/x86_64-tizen-linux-gnu/lib64"),
+            "{flags}"
+        );
     }
 }

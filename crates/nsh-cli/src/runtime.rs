@@ -266,9 +266,31 @@ fn android_existing(dir: PathBuf, dev: bool) -> anyhow::Result<PathBuf> {
 
 /// The Tizen runtime's variant directory (`Nsh.Tizen.Host.dll`,
 /// `<arch>/libnsh.so`), with development support or not, with a library for
-/// each of `archs`.
+/// each of `archs`; an app with Rust crates of its own gets its own
+/// libraries ([`crate::rust_app::RustApp::tizen`]).
 pub(crate) fn tizen(dev: bool, archs: &[crate::tizen::Arch]) -> anyhow::Result<PathBuf> {
-    prebuilt_tizen(dev, archs)
+    let prebuilt = prebuilt_tizen(dev, archs)?;
+    match crate::rust_app::current() {
+        Some(app) => app.tizen(&prebuilt, dev, archs),
+        None => Ok(prebuilt),
+    }
+}
+
+/// The Tizen target specs and the nightly they build with
+/// (`runtime/tizen/targets`), for an app's Rust crates.
+pub(crate) fn tizen_targets() -> anyhow::Result<PathBuf> {
+    let release = prebuilt_tizen(false, &[])?;
+    let targets = release
+        .parent()
+        .context("the Tizen runtime's directory")?
+        .join("targets");
+    if !targets.join("toolchain").exists() {
+        bail!(
+            "the Tizen runtime has no target specs at {}\nin a nsh checkout, build it with: cargo xtask tizen",
+            targets.display()
+        );
+    }
+    Ok(targets)
 }
 
 fn prebuilt_tizen(dev: bool, archs: &[crate::tizen::Arch]) -> anyhow::Result<PathBuf> {

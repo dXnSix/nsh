@@ -13,6 +13,7 @@ SDK's `tz`; `nsh run`, `nsh package` and `nsh test` take either as `--target`.
 | `nsh package` | a signed TPK (one per `--arch`, or the multi-architecture `.zip`) | a signed `.wgt` |
 | `nsh run` | the development TPK over `sdb` (`sdb reverse`, else `sdb forward`) | a development `.wgt` opening the dev server's page at the LAN address |
 | `nsh test` | the development TPK on the TV or the emulator, over the dev protocol | headless Chromium, the TV's page in the TV idiom |
+| Apps with Rust crates | `.nsh/rust/tizen`, built with the component's target specs | the web runtime of the app's crates |
 
 ## What apps see
 
@@ -213,6 +214,21 @@ tested by `cargo test -p nsh-cli --bin nsh tizen::tests`, and the commands throu
   `open` serves the build in a test session, maps 8790 to it and launches the runtime, whose GPUI test agent takes
   the steps; one app at a time (the port is fixed). `open`'s platform there is Linux's, unsized (the app fills the
   screen).
+
+## Apps with Rust crates
+
+As Android's library, an app with `"rust"` crates gets its own `libnsh.so` (`rust_app.rs`,
+`RustApp::tizen_workspace`, beside `gpui_workspace`): `.nsh/rust/tizen`, a workspace of its own whose member
+`tizen-lib` is a `cdylib` of `nsh-platform-tizen` and the app's crates (`nsh::ui_sets!` with `nsh/base` and their sets,
+`nsh::root!` for a Rust app's root), and whose root manifest carries the forks' `[patch.crates-io]` lines (git: the
+nine `gpui-fast-*` crates from dXnSix/gpui-fast `tizen-release`, the wgpu crates from dXnSix/wgpu `v30-tizen`, the same
+set as dXn.GpuiTizen's patch config; `rust_app::TIZEN_PATCHES`). It is built for the requested architectures with
+the component's target specs (`runtime/tizen/targets`), not dXn.GpuiTizen's checkout: `tizen::cross_command` runs
+the nightly the specs name (`targets/toolchain`) with `-Zbuild-std=std,panic_abort -Zjson-target-spec`, clang for C
+with the rootstrap as sysroot, and clang driving the GCC toolchain's GNU ld (dXn.GpuiTizen's `cross::plan`). The
+machine needs that nightly (`rust-src`, `llvm-tools`), clang, the Tizen 8.0 rootstrap (`TIZEN_ROOTSTRAP_<ARCH>`,
+else the SDK's) and the SDK's GCC 9.2 toolchain (`TIZEN_GCC_TOOLCHAIN_<ARCH>`, else the SDK's `tools/`).
+`nsh-platform-tizen` is not on crates.io yet: until it is, such apps build against a checkout of nsh.
 
 ## Limits
 
