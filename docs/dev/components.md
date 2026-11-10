@@ -755,7 +755,14 @@ by default, `NumberRole` an `f32`, `FontRole` a family). A role is a constant of
 its name, so two constants of one name are one role: the core's and the platforms' are `element::role` (`POPOVER`,
 `POPOVER_FOREGROUND`, `PRIMARY`, `ACCENT`, `ACCENT_FOREGROUND`, `MUTED_FOREGROUND`, `BORDER`, `DESTRUCTIVE`,
 `FONT_SANS`), nsh-base's `nsh_base::role` (one per field of `Theme`, written by `theme!` from its one list, with
-`RADIUS`, `FONT_MONO` and `SELECTION`), and another UI set declares its own. `Tokens::role(role)` reads the token a
+`RADIUS`, `FONT_MONO`, `SELECTION` and the status roles `SUCCESS`, `WARNING`, `INFO` and `HIGHLIGHT`, which like
+`SELECTION` have no token in the default theme: `Editor`'s `warning_color` / `info_color` / `match_color` and
+`TextView`'s `alert_color` / `mark_color` read `theme().tokens().role(..)` and fall back on their own constants;
+and the diff roles `DIFF_ADDED` and `DIFF_DELETED`, which `DiffView`'s `added_color` / `deleted_color` read the same
+way, each use a binding so the rows follow the theme; and the seven `SYNTAX_*` roles, which `syntax::Palette::of_theme`
+reads once per scope that styles spans (`Token::style(&palette)`; `Palette::default()` is Allsum's): the editor's
+and the diff view's row scopes and a scope of its own around a `TextView` block's spans, so that spans made once
+per change of the code are made again when the theme changes), and another UI set declares its own. `Tokens::role(role)` reads the token a
 theme maps the role onto (`Tokens::with_role`, or `with_roles` for a list of `AnyRole`s of several kinds; kept by
 `over`, keyed by the role's name), else the token of the role's name, so without a mapping every reader gets what it
 always did. The core's readers use roles too (the default font, `role(role::FONT_SANS)`; the mobile tab bar's tint,
