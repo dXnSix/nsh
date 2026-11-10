@@ -68,11 +68,10 @@ program (`Program.cs`, one P/Invoke into `libnsh.so`'s `nsh_tizen_main`; no Tize
 files (`dotnet build -c Release`, by `cargo xtask tizen`), so packaging an app needs no .NET SDK. Without a .NET SDK
 that has Tizen's workload, the crate's `host::tests` check what MSBuild would refuse first: the project must be
 well-formed XML (no `--` in its comments: MSB4025), on `Tizen.NET.Sdk`, building the `Nsh.Tizen.Host` executable the
-runtime files ship, and the program must keep its one P/Invoke (`$PATCH` and `$LOCK` as in [Building](#building)):
+runtime files ship, and the program must keep its one P/Invoke:
 
 ```sh
-cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib host::tests \
-  --config "$PATCH" --config "resolver.lockfile-path='$LOCK'"
+cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib host::tests
 ```
 
 `nsh_tizen_main` is the crate's own with its feature `entry` (a default one): the prebuilt runtime's, which runs the
@@ -128,44 +127,30 @@ HTTP at the reverse-mapped port. Logs go to the dev server while connected and t
 ## Building
 
 dXn.GpuiTizen is a git dependency of the GPUI workspace, pinned by `rev` (`crates/gpui/Cargo.toml`), until it is on
-crates.io. Its TV builds take gpui-fast and wgpu from their forks: `[patch.crates-io]` over all nine `gpui-fast-*`
-crates and the wgpu crates (`wgpu-hal` among them), the same set as dXn.GpuiTizen's. Until the forks are published
-that patch is a local Cargo config, never committed: dXn.GpuiTizen's `cargo xtask gpui-fast-release --verify` writes
-it to `artifacts-temp/gpui-fast-patch.toml` (paths into the gpui-fast fork's release workspace and `../wgpu`).
+crates.io. Its TV builds take gpui-fast and wgpu from their forks: the workspace's `[patch.crates-io]` takes all nine
+`gpui-fast-*` crates from `dXnSix/gpui-fast` at `tizen-release` and the wgpu stack from `dXnSix/wgpu` at `v30-tizen`,
+the same set as dXn.GpuiTizen's own; the committed `crates/gpui/Cargo.lock` pins the commits. While changing the
+forks themselves, dXn.GpuiTizen's `cargo xtask gpui-fast-release --verify` writes a local Cargo config
+(`artifacts-temp/gpui-fast-patch.toml`, paths into the gpui-fast fork's release workspace and `../wgpu`) that
+overrides the git patch when passed with `--config`; resolve such builds into a lockfile kept outside the checkout
+(`--config "resolver.lockfile-path='<dir>/Cargo.lock'"`), so `crates/gpui/Cargo.lock` never records the paths.
 
 Publishing: `nsh-platform-tizen` is not published (`publish = false`); it ships built, as the CLI's `tizen` component.
 `cargo publish` takes a git dependency from crates.io by its `version`, so the workspace entries of dXn.GpuiTizen's
 crates carry one beside `git` and `rev` (`0.1.0`, theirs). A crate that `release-crate.yml` publishes and that
-depends on them needs `dxn_gpui_tizen` (and `dxn_gpui_tizen_sys`) on crates.io at that version before the NSH
-release that includes it; until then the GPUI workspace's publish step fails on it. `nsh-platform-gpui` is one: it
-depends on `dxn_gpui_tizen` on Tizen (`cfg(target_vendor = "tizen")`, its videos), and `cargo publish` checks
-target-specific dependencies too, so dXn.GpuiTizen goes to crates.io before the first NSH release with Tizen videos.
-
-Before dXn.GpuiTizen is pushed, Git reaches it in the local checkout (Cargo cannot patch an unreachable git
-source), so every Cargo command runs with:
-
-```sh
-export CARGO_NET_GIT_FETCH_WITH_CLI=true GIT_CONFIG_COUNT=3 \
-  GIT_CONFIG_KEY_0=url.<dXn.GpuiTizen checkout>.insteadOf GIT_CONFIG_VALUE_0=https://github.com/dXnSix/dXn.GpuiTizen \
-  GIT_CONFIG_KEY_1=url.<gpui-fast checkout>.insteadOf GIT_CONFIG_VALUE_1=https://github.com/dXnSix/gpui-fast \
-  GIT_CONFIG_KEY_2=url.<wgpu checkout>.insteadOf GIT_CONFIG_VALUE_2=https://github.com/dXnSix/wgpu
-```
+depends on them needs `dxn_gpui_tizen` (and `dxn_gpui_tizen_sys`) on crates.io at that version, and gpui-fast's and
+wgpu's releases of the forks' changes, before the NSH release that includes it; until then the GPUI workspace's
+publish step fails on it. `nsh-platform-gpui` is one: it depends on `dxn_gpui_tizen` on Tizen
+(`cfg(target_vendor = "tizen")`, its videos), and `cargo publish` checks target-specific dependencies too, so
+dXn.GpuiTizen goes to crates.io before the first NSH release with Tizen videos.
 
 dXn.GpuiTizen builds on Linux only against the forks (its EGL path uses gpui-fast's external-target renderer), so
 the GPUI workspace leaves `nsh-platform-tizen` out of its `default-members`: a bare `cargo test` or `cargo clippy`
-there (`gpui.yml`) builds the desktop crates alone, and the TV backend is built by name, with the patch.
-
-The committed `crates/gpui/Cargo.lock` is resolved without the patch (it records the GitHub source of
-dXn.GpuiTizen and the published gpui-fast). Builds and tests with the patch resolve into a lockfile kept outside the
-checkout, so it never records the local paths:
+there (`gpui.yml`) builds the desktop crates alone, and the TV backend is built by name:
 
 ```sh
-PATCH=<dXn.GpuiTizen>/artifacts-temp/gpui-fast-patch.toml
-LOCK=<dXn.GpuiTizen>/artifacts-temp/locks/nsh-tizen/Cargo.lock    # seeded from crates/gpui/Cargo.lock
-cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib \
-  --config "$PATCH" --config "resolver.lockfile-path='$LOCK'"
-cargo clippy --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --all-targets --features dev \
-  --config "$PATCH" --config "resolver.lockfile-path='$LOCK'" -- -D warnings
+cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib
+cargo clippy --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --all-targets --features dev -- -D warnings
 ```
 
 TV libraries are cross-built from dXn.GpuiTizen's checkout with its target specs, the Tizen 8.0 rootstrap and the
@@ -173,14 +158,14 @@ SDK's GCC toolchain (its `docs/setup.md`), for `armv7` (32-bit ARM TVs), `x86_64
 `--with-dev-variant` builds the `dev` library beside the release one (in `<target dir>/dev-variant`), and
 `--check-symbols` checks each, found by package whatever the library's name: exactly one
 export, `nsh_tizen_main`, and only documented Tizen symbols and glibc imported. `cargo xtask cross` keeps its own
-copy of the workspace's lockfile under `artifacts-temp/locks/` and passes `--config` on to Cargo:
+copy of the workspace's lockfile under `artifacts-temp/locks/` (and passes `--config` on to Cargo, for the local patch config):
 
 ```sh
 cd <dXn.GpuiTizen>
 cargo xtask cross --target armv7 --release --manifest-path <nsh>/crates/gpui/Cargo.toml -p nsh-platform-tizen \
-  --with-dev-variant --check-symbols --entry nsh_tizen_main --config "$PATCH"
+  --with-dev-variant --check-symbols --entry nsh_tizen_main
 cargo xtask cross --target armv7 --clippy --manifest-path <nsh>/crates/gpui/Cargo.toml -p nsh-platform-tizen \
-  --config "$PATCH" -- -D warnings
+  -- -D warnings
 ```
 
 Once the forks and dXn.GpuiTizen are published, `crates/gpui/Cargo.toml` takes the patch as git lines and the
@@ -203,13 +188,13 @@ target/tizen/targets/<spec>.json, toolchain                    dXn.GpuiTizen's t
 target/tizen/targets/symbols.allow                             dXn.GpuiTizen's symbol allowlist (dxn_gpui_tizen_sys)
 ```
 
-dXn.GpuiTizen's checkout is `DXN_GPUI_TIZEN`, else `../dXn.GpuiTizen` next to this checkout. Until the forks are
-published, the patch config goes on every command (`--config`, or `NSH_TIZEN_CARGO_CONFIG`, comma-separated), and
-the environment of "Building" above:
+dXn.GpuiTizen's checkout is `DXN_GPUI_TIZEN`, else `../dXn.GpuiTizen` next to this checkout. The forks come from the
+workspace's git patch; a local patch config of the forks' checkouts (see "Building") goes on with `--config`, or
+`NSH_TIZEN_CARGO_CONFIG` (comma-separated):
 
 ```sh
-DXN_GPUI_TIZEN=<dXn.GpuiTizen> cargo xtask tizen --config "$PATCH"                 # both variants, every arch
-DXN_GPUI_TIZEN=<dXn.GpuiTizen> cargo xtask tizen --variant dev --arch armv7l --config "$PATCH"
+DXN_GPUI_TIZEN=<dXn.GpuiTizen> cargo xtask tizen                                    # both variants, every arch
+DXN_GPUI_TIZEN=<dXn.GpuiTizen> cargo xtask tizen --variant dev --arch armv7l
 cargo test -p xtask --bin xtask tizen::tests                                          # arguments, layout, dist
 ```
 
@@ -274,7 +259,7 @@ crates whose one export is its own `nsh_tizen_main` (`nsh::set_ui_sets` with `ns
 `nsh::main`, or `nsh::run_rust(argc, argv, app_root)` for a Rust app's root), and whose root manifest carries the
 forks' `[patch.crates-io]` lines (git: the
 nine `gpui-fast-*` crates from dXnSix/gpui-fast `tizen-release`, the wgpu crates from dXnSix/wgpu `v30-tizen`, the same
-set as dXn.GpuiTizen's patch config; `rust_app::TIZEN_PATCHES`). It is built for the requested architectures with
+set as the GPUI workspace's and dXn.GpuiTizen's; `rust_app::TIZEN_PATCHES`). It is built for the requested architectures with
 the component's target specs (`runtime/tizen/targets`), not dXn.GpuiTizen's checkout: `tizen::cross_command` runs
 the nightly the specs name (`targets/toolchain`) with `-Zbuild-std=std,panic_abort -Zjson-target-spec`, clang for C
 with the rootstrap as sysroot, and clang driving the GCC toolchain's GNU ld (dXn.GpuiTizen's `cross::plan`). The

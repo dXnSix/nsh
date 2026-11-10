@@ -3338,8 +3338,7 @@ dependencies = [
 [[package]]
 name = "gpui-fast"
 version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ee67914f779fdcfce4c7f59f6ba8fa68f680bd137648b25a801cd5d9cb1b8ab"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#53659f04dd355732c9665eea99b58d41b1557f27"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3409,8 +3408,7 @@ dependencies = [
 [[package]]
 name = "gpui-fast-apple"
 version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cdf402e4a795abb27cd9545a6b519f123f4f2b8050fc7f6e7e25e376f34867d"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#53659f04dd355732c9665eea99b58d41b1557f27"
 dependencies = [
  "anyhow",
  "async-task",
@@ -3449,8 +3447,7 @@ dependencies = [
 [[package]]
 name = "gpui-fast-linux"
 version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59c465cccb420a54d2abc14af42ce82ecb1ea473b531ddbd299eb4e15ae2dd83"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#53659f04dd355732c9665eea99b58d41b1557f27"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3494,8 +3491,7 @@ dependencies = [
 [[package]]
 name = "gpui-fast-macos"
 version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d809f618f836aff7fc654c00c3f6e64d41abd83713140998dd83e8ad6906b1e9"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#53659f04dd355732c9665eea99b58d41b1557f27"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3535,8 +3531,7 @@ dependencies = [
 [[package]]
 name = "gpui-fast-macros"
 version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46724abd05d2c874cc31e1996bb862539c5735780dd363cb550469003a6e5140"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#53659f04dd355732c9665eea99b58d41b1557f27"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3547,8 +3542,7 @@ dependencies = [
 [[package]]
 name = "gpui-fast-platform"
 version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb75fcc655a819d87a75180f32528d26b869b421a53c5974046c6e2948c46ecf"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#53659f04dd355732c9665eea99b58d41b1557f27"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -3564,8 +3558,7 @@ dependencies = [
 [[package]]
 name = "gpui-fast-web"
 version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5194d398f801160d6be5660055a14b175aed9b2dbca348d56065d742b11dbd9"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#53659f04dd355732c9665eea99b58d41b1557f27"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -3593,8 +3586,7 @@ dependencies = [
 [[package]]
 name = "gpui-fast-wgpu"
 version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a3be892e9d079745739d0e52e397fd43b61d215de4fd1477bb554a9bcf0c7e1"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#53659f04dd355732c9665eea99b58d41b1557f27"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -3621,8 +3613,7 @@ dependencies = [
 [[package]]
 name = "gpui-fast-windows"
 version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "088654835f1408e1aaa79afcc316530461a14fa1c4e543d47b1881b6ced63f19"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#53659f04dd355732c9665eea99b58d41b1557f27"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -5363,8 +5354,7 @@ dependencies = [
 [[package]]
 name = "naga"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a616d2fb8c89516ac2723a581f69d6c18576046bed761bd6b305e5618e6ae130"
+source = "git+https://github.com/dXnSix/wgpu?branch=v30-tizen#4e3d80d5de97d1e66860f0f74fca92d50be70d4a"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -5389,8 +5379,7 @@ dependencies = [
 [[package]]
 name = "naga-types"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "590afbf58a6f4f62873cd5cff4468061844bafa1cdf399cc954537c22d768d49"
+source = "git+https://github.com/dXnSix/wgpu?branch=v30-tizen#4e3d80d5de97d1e66860f0f74fca92d50be70d4a"
 dependencies = [
  "hashbrown 0.17.1",
  "indexmap",
@@ -10533,8 +10522,7 @@ dependencies = [
 [[package]]
 name = "wgpu"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "527ccdf43dd5b2e8676eed9984ce00e2bbb0a1b85b70c1969dcb6cd2eb55ab9e"
+source = "git+https://github.com/dXnSix/wgpu?branch=v30-tizen#4e3d80d5de97d1e66860f0f74fca92d50be70d4a"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.2",
@@ -10596,8 +10584,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14c018fce9b6270aa203c2fdd56f3cce996713534bd757e4ea58c8560b121f14"
+source = "git+https://github.com/dXnSix/wgpu?branch=v30-tizen#4e3d80d5de97d1e66860f0f74fca92d50be70d4a"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -10640,8 +10627,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-apple"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "061f3d319a40d39d00b1ecc2c33b89fe21d4e6fe01859df3500a3a8ecccd6b68"
+source = "git+https://github.com/dXnSix/wgpu?branch=v30-tizen#4e3d80d5de97d1e66860f0f74fca92d50be70d4a"
 dependencies = [
  "wgpu-hal 30.0.1",
 ]
@@ -10658,8 +10644,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-emscripten"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d98b86cf4abf524a902dd35f18ca6a3f08fc2ae9847c8f10b48e30491b1f0b86"
+source = "git+https://github.com/dXnSix/wgpu?branch=v30-tizen#4e3d80d5de97d1e66860f0f74fca92d50be70d4a"
 dependencies = [
  "wgpu-hal 30.0.1",
 ]
@@ -10667,8 +10652,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-wasm"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d260ca2ca8adc654f513a869bf3cac0b47f5b8d3f87803d6942015f8de597aae"
+source = "git+https://github.com/dXnSix/wgpu?branch=v30-tizen#4e3d80d5de97d1e66860f0f74fca92d50be70d4a"
 dependencies = [
  "wgpu-hal 30.0.1",
 ]
@@ -10685,8 +10669,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-windows-linux-android"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7586165fd5f6d881cb9ce4bb71f40d6caab2c0f1837e3fc1d9788a197fb6004f"
+source = "git+https://github.com/dXnSix/wgpu?branch=v30-tizen#4e3d80d5de97d1e66860f0f74fca92d50be70d4a"
 dependencies = [
  "wgpu-hal 30.0.1",
 ]
@@ -10748,8 +10731,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6b7fb58561a792bc237628ba0792e332de418fefe145f13b5ed8201e6d52f58"
+source = "git+https://github.com/dXnSix/wgpu?branch=v30-tizen#4e3d80d5de97d1e66860f0f74fca92d50be70d4a"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -10814,8 +10796,7 @@ dependencies = [
 [[package]]
 name = "wgpu-naga-bridge"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2f62e73117bb7a62bfd9c5a5841438a823f6566c6442a808ee269d2d055c081"
+source = "git+https://github.com/dXnSix/wgpu?branch=v30-tizen#4e3d80d5de97d1e66860f0f74fca92d50be70d4a"
 dependencies = [
  "naga 30.0.1",
  "wgpu-types 30.0.1",
@@ -10838,8 +10819,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99dad6f1fbdbbdb4c278a6508b059d44688f5cebddf78d005a46a31340269286"
+source = "git+https://github.com/dXnSix/wgpu?branch=v30-tizen#4e3d80d5de97d1e66860f0f74fca92d50be70d4a"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
