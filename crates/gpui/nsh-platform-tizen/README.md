@@ -9,6 +9,10 @@ hot updates, connected through `sdb reverse` or, failing that, `sdb forward`.
 
 `host/` is the C# host (`Program.cs`, `Nsh.Tizen.Host.csproj`).
 
+An app with Rust crates of its own builds its own `libnsh.so` from this crate (`nsh` generates it in
+`.nsh/rust/tizen`): `nsh::ui_sets!(…)` exports the app's UI sets and `nsh::root!(…)` a Rust app's root, which
+`nsh_tizen_main` finds in its library before it starts, as Android's library does.
+
 ## Building
 
 dXn.GpuiTizen is a git dependency pinned by `rev`; TV builds take gpui-fast and wgpu from their forks through a

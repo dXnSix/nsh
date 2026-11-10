@@ -40,6 +40,11 @@ program (`Program.cs`, one P/Invoke into `libnsh.so`'s `nsh_tizen_main`; no Tize
 `Tizen.NET.Sdk` (`Nsh.Tizen.Host.csproj`), the same as dXn.GpuiTizen's own host. It is built once into the runtime
 files (`dotnet build -c Release`), so packaging an app needs no .NET SDK.
 
+`nsh_tizen_main` first looks up `nsh_app_ui_sets` and `nsh_app_root` in its own library (`dladdr` on itself, then
+`dlopen(RTLD_NOLOAD)` and `dlsym`: the host loads it `RTLD_LOCAL`, out of the global scope): an app's library with Rust
+crates of its own defines them with `nsh::ui_sets!` and `nsh::root!`, as Android's does, and the prebuilt runtime
+has neither.
+
 ## The development runtime
 
 With `--features dev` the library runs the dev server's app instead of a packaged bundle: its bundles with hot
