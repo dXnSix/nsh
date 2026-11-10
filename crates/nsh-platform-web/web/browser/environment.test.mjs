@@ -8,7 +8,7 @@ import { createEnvironment } from "./environment.js";
 
 /** The environment on signals that count their writes (`writes`); `invoke`
  * stands in for the engine's calls. */
-function environment(invoke = () => undefined) {
+function environment(invoke = () => undefined, graph = {}) {
   const writes = [];
   const reactive = {
     signal(value) {
@@ -20,6 +20,7 @@ function environment(invoke = () => undefined) {
     untracked: fn => fn(),
     batch: fn => fn(),
     context: fn => fn,
+    ...graph,
   };
   const env = createEnvironment(reactive, invoke, { rootProp() {} });
   return { env, writes };
@@ -148,4 +149,33 @@ test("a part is written only when it changed", () => {
   const fewer = settings({ timeZone: "Asia/Tokyo", languages: ["de-AT"] });
   env.update(engine({ lifecycle: "inactive", locale: "fr-FR", localeSettings: fewer }));
   assert.deepEqual(writes, [fewer]);
+});
+
+test("what a ThemeScope renders reads the scope's appearance", () => {
+  // A context as the graph's: the value of the nearest provider around
+  // what reads it.
+  const provided = [];
+  const asked = [];
+  const { env } = environment((op, args) => { if (op === 402) asked.push(args); }, {
+    computed: fn => fn,
+    context(fallback) {
+      if (fallback !== undefined) return fallback;
+      const read = () => provided.at(-1);
+      read.Provider = props => { provided.push(props.value); try { return props.children; } finally { provided.pop(); } };
+      return read;
+    },
+  });
+  const read = () => { env.api.token("up"); return env.api.colorScheme(); };
+  env.update(engine());
+  // No scope: the surface's.
+  assert.equal(read(), "light");
+  // In a dark scope, and in a scope without an appearance inside it.
+  const props = { appearance: "dark" };
+  assert.deepEqual(env.inScope(props, () => [read(), env.inScope({}, read)]), ["dark", "dark"]);
+  // A scope without one of its own is the surface's, whatever it turns.
+  env.update(engine({ colorScheme: "dark" }));
+  assert.equal(env.inScope({}, read), "dark");
+  assert.equal(env.inScope({ appearance: "light" }, read), "light");
+  // `token()` asks for the side the scope shows.
+  assert.deepEqual(asked, [["up", false], ["up", true], ["up", true], ["up", true], ["up", false]]);
 });

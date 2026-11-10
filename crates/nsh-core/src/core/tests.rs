@@ -36778,3 +36778,301 @@ mod layout_kept_by_restyle {
         assert!(frames(&batch).contains(&3));
     }
 }
+
+/// A view with an appearance of its own (`Prop::Appearance` on a view that
+/// is not the root: a `ThemeScope`'s): it and the views in it are shown
+/// light or dark whatever the surface shows.
+mod scope_appearance {
+    use super::*;
+    use crate::{platform::Appearance, tailwind::ClassEnvironment};
+
+    const WHITE: Color = Color(0xffff_ffff);
+    const BLACK: Color = Color(0x0000_00ff);
+
+    fn child(c: &mut Core<FakeEngine>, parent: NodeId, id: NodeId, classes: &str) {
+        apply(
+            c,
+            vec![
+                Op::Create { id, tag: Tag::View },
+                class_op(id, classes),
+                Op::Insert {
+                    parent,
+                    child: id,
+                    before: None,
+                },
+            ],
+        );
+    }
+
+    fn appearance(c: &mut Core<FakeEngine>, id: NodeId, appearance: Appearance) {
+        apply(
+            c,
+            vec![Op::SetProp {
+                id,
+                prop: Prop::Appearance(appearance),
+            }],
+        );
+    }
+
+    fn background(batch: &MountBatch, id: NodeId) -> Option<Color> {
+        view_style_of(batch, id).map(|s| s.background_color)
+    }
+
+    fn system_dark(c: &mut Core<FakeEngine>, dark: bool) {
+        c.set_class_environment(ClassEnvironment {
+            dark,
+            ..Default::default()
+        });
+    }
+
+    /// A scope (2) with a view in it (3), and a view beside it (4).
+    fn scoped() -> Core<FakeEngine> {
+        let mut c = core();
+        child(&mut c, ROOT_ID, 2, "bg-white dark:bg-black");
+        child(&mut c, 2, 3, "bg-white dark:bg-black");
+        child(&mut c, ROOT_ID, 4, "bg-white dark:bg-black");
+        c.commit().unwrap();
+        c
+    }
+
+    #[test]
+    fn a_views_appearance_is_its_own_and_its_subtrees() {
+        let mut c = scoped();
+        appearance(&mut c, 2, Appearance::Dark);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 2), Some(BLACK));
+        assert_eq!(background(&batch, 3), Some(BLACK));
+        // The view beside it is the surface's, and is not styled again.
+        assert_eq!(background(&batch, 4), None);
+        // The surface is not told another appearance: the view is.
+        assert!(
+            !batch
+                .items
+                .iter()
+                .any(|i| matches!(i, MountItem::Appearance { .. }))
+        );
+        assert!(batch.items.iter().any(|i| matches!(
+            i,
+            MountItem::ViewProps { id: 2, props } if props.appearance == Appearance::Dark
+        )));
+        // Without one of its own again, it is shown as the surface.
+        appearance(&mut c, 2, Appearance::System);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 2), Some(WHITE));
+        assert_eq!(background(&batch, 3), Some(WHITE));
+        assert!(batch.items.iter().any(|i| matches!(
+            i,
+            MountItem::ViewProps { id: 2, props } if props.appearance == Appearance::System
+        )));
+    }
+
+    #[test]
+    fn the_surfaces_appearance_leaves_a_scope_as_it_is() {
+        let mut c = scoped();
+        appearance(&mut c, 2, Appearance::Light);
+        // Light in a light surface: nothing to show again.
+        assert!(c.commit().is_none_or(|b| background(&b, 2).is_none()));
+        system_dark(&mut c, true);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 4), Some(BLACK));
+        assert_eq!(background(&batch, 2), None);
+        assert_eq!(background(&batch, 3), None);
+        // The app's own appearance does not reach into it either.
+        appearance(&mut c, ROOT_ID, Appearance::Light);
+        appearance(&mut c, ROOT_ID, Appearance::Dark);
+        assert!(c.commit().is_none_or(|b| background(&b, 3).is_none()));
+    }
+
+    #[test]
+    fn the_nearest_appearance_wins() {
+        let mut c = scoped();
+        child(&mut c, 3, 5, "bg-white dark:bg-black");
+        c.commit().unwrap();
+        appearance(&mut c, 3, Appearance::Light);
+        appearance(&mut c, 2, Appearance::Dark);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 2), Some(BLACK));
+        // Light before and after: shown as it was.
+        assert_eq!(background(&batch, 3), None);
+        assert_eq!(background(&batch, 5), None);
+        // The inner one gone: the outer one's.
+        appearance(&mut c, 3, Appearance::System);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 3), Some(BLACK));
+        assert_eq!(background(&batch, 5), Some(BLACK));
+    }
+
+    #[test]
+    fn a_view_moved_into_a_scope_takes_its_appearance() {
+        let mut c = scoped();
+        appearance(&mut c, 2, Appearance::Dark);
+        c.commit().unwrap();
+        // A new view made in it.
+        child(&mut c, 3, 5, "bg-white dark:bg-black");
+        assert_eq!(background(&c.commit().unwrap(), 5), Some(BLACK));
+        // The view beside the scope moves in, then out again.
+        apply(
+            &mut c,
+            vec![
+                Op::Remove {
+                    parent: ROOT_ID,
+                    child: 4,
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 4,
+                    before: None,
+                },
+            ],
+        );
+        assert_eq!(background(&c.commit().unwrap(), 4), Some(BLACK));
+        apply(
+            &mut c,
+            vec![
+                Op::Remove {
+                    parent: 2,
+                    child: 4,
+                },
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 4,
+                    before: None,
+                },
+            ],
+        );
+        assert_eq!(background(&c.commit().unwrap(), 4), Some(WHITE));
+    }
+
+    #[test]
+    fn token_classes_take_the_scopes_appearance() {
+        let mut c = core();
+        child(&mut c, ROOT_ID, 2, "bg-background");
+        child(&mut c, 2, 3, "bg-primary border border-border");
+        c.commit().unwrap();
+        appearance(&mut c, 2, Appearance::Dark);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 2), Some(Color(0x0a0a_0aff)));
+        let inner = view_style_of(&batch, 3).unwrap();
+        assert_eq!(inner.background_color, Color(0xfafa_faff));
+        assert_eq!(inner.borders.colors[0], Color(0x2626_26ff));
+    }
+
+    #[test]
+    fn a_view_whose_classes_ignore_the_appearance_is_left_alone() {
+        let mut c = core();
+        child(&mut c, ROOT_ID, 2, "p-2");
+        child(&mut c, 2, 3, "bg-white");
+        c.commit().unwrap();
+        appearance(&mut c, 2, Appearance::Dark);
+        let batch = c.commit().unwrap();
+        assert_eq!(view_style_of(&batch, 2), None);
+        assert_eq!(view_style_of(&batch, 3), None);
+    }
+}
+
+/// [`crate::element::ThemeScope`]: what reads the appearance in Rust reads
+/// the scope's, and a component's theme colors take its side.
+mod theme_scope {
+    use super::*;
+    use crate::{
+        element::{Environment, Root},
+        platform::ColorScheme,
+        prelude::*,
+    };
+
+    thread_local! {
+        static SCHEME: Cell<Option<Signal<Option<ColorScheme>>>> = const { Cell::new(None) };
+    }
+
+    /// A text saying the appearance it reads, on a theme color.
+    #[component]
+    fn Reader() -> impl IntoElement {
+        view()
+            .bg(AdaptiveColor::rgb(0xffffff, 0x000000))
+            .child(text(|| if dark() { "dark" } else { "light" }))
+    }
+
+    /// A reader beside a scope with a reader, and a scope in the scope.
+    #[component]
+    fn App() -> impl IntoElement {
+        let scheme = signal(Some(ColorScheme::Dark));
+        SCHEME.with(|saved| saved.set(Some(scheme)));
+        view().child(reader()).child(
+            theme_scope()
+                .appearance(scheme)
+                .child(reader())
+                .child(theme_scope().child(reader())),
+        )
+    }
+
+    fn texts(batch: &MountBatch) -> Vec<String> {
+        batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::Text { text, .. } => Some(text.text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn backgrounds(batch: &MountBatch) -> Vec<Color> {
+        batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::ViewStyle { style, .. } if style.background_color != Color(0) => {
+                    Some(style.background_color)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn scheme(c: &mut Core<FakeEngine>, scheme: Option<ColorScheme>) {
+        let _entered = c.components.runtime.enter();
+        SCHEME.with(Cell::get).unwrap().set(scheme);
+    }
+
+    const WHITE: Color = Color(0xffff_ffff);
+    const BLACK: Color = Color(0x0000_00ff);
+
+    #[test]
+    fn what_a_scope_holds_reads_and_draws_its_appearance() {
+        let mut c = core();
+        c.mount_root(&Root::of::<App>());
+        let batch = c.commit().unwrap();
+        // Outside, in the scope, and in the scope without an appearance
+        // of its own inside it.
+        assert_eq!(texts(&batch), ["light", "dark", "dark"]);
+        assert_eq!(backgrounds(&batch), [WHITE, BLACK, BLACK]);
+    }
+
+    #[test]
+    fn a_scopes_appearance_changes_under_what_it_holds() {
+        let mut c = core();
+        c.mount_root(&Root::of::<App>());
+        c.commit().unwrap();
+        scheme(&mut c, Some(ColorScheme::Light));
+        let batch = c.commit().unwrap();
+        assert_eq!(texts(&batch), ["light", "light"]);
+        assert_eq!(backgrounds(&batch), [WHITE, WHITE]);
+        // The surface turns dark: only the reader outside follows.
+        c.set_environment(Environment {
+            dark: true,
+            ..Default::default()
+        });
+        c.set_class_environment(crate::tailwind::ClassEnvironment {
+            dark: true,
+            ..Default::default()
+        });
+        let batch = c.commit().unwrap();
+        assert_eq!(texts(&batch), ["dark"]);
+        assert_eq!(backgrounds(&batch), [BLACK]);
+        // Without an appearance of its own, the scope is the surface's.
+        scheme(&mut c, None);
+        let batch = c.commit().unwrap();
+        assert_eq!(texts(&batch), ["dark", "dark"]);
+        assert_eq!(backgrounds(&batch), [BLACK, BLACK]);
+    }
+}

@@ -60,6 +60,8 @@ pub(crate) struct Ambient {
     themes: FxHashMap<TypeId, (Arc<Tokens>, Box<dyn Any>)>,
     /// The app's address (`set_app_url` resolves against its page base).
     app_url: Option<crate::url_scheme::AppUrlCell>,
+    /// A [`super::ThemeScope`] was made on this surface.
+    scoped: bool,
 }
 
 /// The surface's cache of theme types read ([`super::theme_of`]). `f` runs
@@ -71,6 +73,17 @@ pub(crate) fn with_theme_cache<R>(
 }
 
 impl Ambient {
+    /// Whether a [`super::ThemeScope`] was made on this surface: until
+    /// then what reads the appearance looks for no scope.
+    pub(crate) fn scoped(&self) -> bool {
+        self.scoped
+    }
+
+    /// A [`super::ThemeScope`] is made.
+    pub(crate) fn set_scoped(&mut self) {
+        self.scoped = true;
+    }
+
     /// The hosts whose insets components read.
     pub(crate) fn inset_hosts(&self) -> Vec<NodeId> {
         self.insets.keys().copied().collect()
@@ -280,9 +293,16 @@ pub fn keyboard_duration() -> f32 {
     env(|e| e.keyboard_duration)
 }
 
-/// Dark appearance (TS: `colorScheme() === "dark"`). Theme colors follow
-/// it without this; read it for anything else.
+/// Dark appearance (TS: `colorScheme() === "dark"`): the nearest
+/// [`super::ThemeScope`]'s around what reads it, else the surface's. Theme
+/// colors follow it without this; read it for anything else.
 pub fn dark() -> bool {
+    super::theme_scope::ScopeAppearance::dark().unwrap_or_else(surface_dark)
+}
+
+/// Dark appearance as the surface shows it (the app's, else the system's),
+/// whatever scope is around.
+pub(super) fn surface_dark() -> bool {
     env(|e| e.dark)
 }
 

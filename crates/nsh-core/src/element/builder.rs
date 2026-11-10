@@ -244,6 +244,9 @@ pub struct Attrs {
     pub(crate) class: Option<SharedString>,
     /// The view is a selectable view ([`crate::selection`]).
     pub(crate) selectable_view: bool,
+    /// The appearance the view and what is in it are shown in
+    /// ([`super::ThemeScope`]).
+    pub(crate) appearance: crate::platform::Appearance,
     /// The text continues the one before it ([`Element::continues_text`]).
     pub(crate) continues_text: bool,
     /// The states it shows as its control's part
@@ -308,6 +311,9 @@ impl Attrs {
         }
         if self.selectable_view != old.selectable_view {
             out.push(Prop::SelectableView(self.selectable_view));
+        }
+        if self.appearance != old.appearance {
+            out.push(Prop::Appearance(self.appearance));
         }
         if self.continues_text != old.continues_text {
             out.push(Prop::ContinuesText(self.continues_text));
