@@ -48,8 +48,8 @@ nsh-platform-gpui = { version = "0.4.0", path = "nsh-platform-gpui", default-fea
 # (dXn.GpuiTizen), by commit until they are published (`docs/dev/tizen.md`).
 # TV builds take gpui-fast and wgpu from their forks through a local Cargo
 # config of `[patch.crates-io]` lines, never committed here.
-dxn_gpui_tizen = { git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "e8e5693b4d6f654334cb61b31eae65833690a03d" }
-dxn_gpui_tizen_sys = { git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "e8e5693b4d6f654334cb61b31eae65833690a03d" }
+dxn_gpui_tizen = { git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "83cd3e076c7c09861e67f7d1f37f975c3362e828" }
+dxn_gpui_tizen_sys = { git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "83cd3e076c7c09861e67f7d1f37f975c3362e828" }
 # Freeing the C strings the Tizen APIs return.
 libc = "0.2"
 
