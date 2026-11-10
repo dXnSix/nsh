@@ -66,7 +66,14 @@ nsh run my-app --target web --idiom tv                             # the dev ser
 { "dev": { "idiom": "tv" } }
 ```
 
-The other hosts (`--target macos`, `ios`, `android`, ...) run in their device's own idiom: they refuse `--idiom`, and leave `nsh.json`'s `dev.idiom` out with a warning.
+`nsh test` takes the same setting for the hosts its tests open the app on, so a spec checks the TV's layouts and focus on the desktop (in CI too):
+
+```sh
+nsh test my-app --target gpui --idiom tv   # each test's app in a GPUI window, as on a TV
+nsh test my-app --target web --idiom tv    # in a headless browser's page
+```
+
+The other hosts (`--target macos`, `ios`, `android`, ...) run in their device's own idiom, and headless runs in the one `open`'s `platform` gives: they refuse `--idiom`, and leave `nsh.json`'s `dev.idiom` out with a warning.
 
 ## Platform-only props
 

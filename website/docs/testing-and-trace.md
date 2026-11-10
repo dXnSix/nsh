@@ -584,7 +584,9 @@ the other phone's on iOS or Android), `host.handlers` and `url` reject with `ERR
 is written or says what it needs. A desktop's `platform` (`"macos"` for a desktop's mouse and keys) runs on every
 desktop target and the web, as that target's platform and always as a desktop: in the browser the page starts in the
 desktop idiom whatever its width, where without a `platform` (or with `"web"`) it measures its idiom as a browser does
-(a desktop from 600 points wide). An app with Rust crates of its own runs in a development host built with its crates, which NSH
+(a desktop from 600 points wide). `--idiom tv` (or `nsh.json` `dev.idiom`) runs the apps as on a TV on `--target gpui`
+and `web`, over a desktop `platform` the test gives: `platform.tv` is `true` and `tv={{…}}` props apply
+([TVs](./platform-specific.md#tv-layouts-on-the-desktop)). An app with Rust crates of its own runs in a development host built with its crates, which NSH
 builds for the platform; a Rust app's host runs its root, so `open(".")` starts it there as it does headless.
 
 `nsh test --target tui` runs the tests against the terminal renderer in an in-memory terminal, suitable for CI.

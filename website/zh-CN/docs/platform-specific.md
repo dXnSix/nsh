@@ -66,7 +66,14 @@ nsh run my-app --target web --idiom tv                             # 开发服�
 { "dev": { "idiom": "tv" } }
 ```
 
-其他宿主（`--target macos`、`ios`、`android` 等）以其设备自己的界面风格运行：它们拒绝 `--idiom`，并忽略 `nsh.json` 的 `dev.idiom`，同时给出警告。
+`nsh test` 为测试打开应用所用的宿主接受同样的设置，这样规格测试就能在桌面上（包括 CI 中）检查电视的布局和焦点：
+
+```sh
+nsh test my-app --target gpui --idiom tv   # 每个测试的应用都在 GPUI 窗口中像在电视上一样运行
+nsh test my-app --target web --idiom tv    # 在无头浏览器的页面中
+```
+
+其他宿主（`--target macos`、`ios`、`android` 等）以其设备自己的界面风格运行，headless 运行则使用 `open` 的 `platform` 给出的界面风格：它们拒绝 `--idiom`，并忽略 `nsh.json` 的 `dev.idiom`，同时给出警告。
 
 ## 平台专属属性
 

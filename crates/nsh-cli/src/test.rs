@@ -68,6 +68,7 @@ pub(crate) fn test(
     display: Option<usize>,
     foreground: bool,
     device: Option<&str>,
+    idiom: Option<crate::run::DevIdiom>,
 ) -> anyhow::Result<()> {
     let app_dir = entry.parent().unwrap_or(Path::new(".")).to_path_buf();
     let work_dir = app_dir.join(".nsh/test");
@@ -126,6 +127,10 @@ pub(crate) fn test(
             "--web-host goes with headless runs: --target web takes nsh.json's web.host, the other targets have no page host"
         );
     }
+    // The idiom the GPUI host and the web page start the apps in, before
+    // anything runs (`--idiom`, else nsh.json's `dev.idiom`, as `nsh run`
+    // takes it).
+    let idiom = crate::run::DevIdiom::for_test(idiom, entry, target)?;
     // The page's host of headless runs: `--web-host`, else nsh.json's.
     // Absolute: an app's headless runner opens it too.
     let page_host = match web_host {
@@ -152,7 +157,9 @@ pub(crate) fn test(
     let host = target
         .filter(|_| !files.is_empty())
         .map(|target| {
-            crate::test_host::starter(target, browser, &work_dir, fps, display, foreground, device)
+            crate::test_host::starter(
+                target, browser, &work_dir, fps, display, foreground, device, idiom,
+            )
         })
         .transpose()?;
     // What `open` checks its options against on that host.
