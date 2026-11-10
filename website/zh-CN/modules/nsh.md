@@ -285,6 +285,7 @@ import { role } from "nsh";
 <View style={{ backgroundColor: role("popover"), borderLeftWidth: 3, borderLeftColor: role("warning") ?? "#d97706" }} />
 ```
 
+类把角色当作变量读取：在主题没有同名令牌时，`bg-(--popover)` 是主题把 `popover` 映射到的令牌（[主题令牌](../docs/tailwind.md#theme-tokens)）。
 Rust 通过角色的常量读取：`theme().tokens().role(nsh_base::role::POPOVER)`。
 
 ## setTheme

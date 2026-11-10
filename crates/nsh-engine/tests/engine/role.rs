@@ -1,8 +1,12 @@
 //! `role()` from TSX: what a theme role draws with, as `token()` gives a
 //! token. Under a design system's theme type it is the token the type maps
-//! the role onto; without one, the token of the role's name.
+//! the role onto; without one, the token of the role's name. A class reads
+//! a role as a variable (`bg-(--popover)`).
 
-use nsh_core::element::{AdaptiveColor, AppTheme, Registry};
+use nsh_core::{
+    Color, MountBatch, MountItem,
+    element::{AdaptiveColor, AppTheme, Registry},
+};
 use nsh_engine::Environment;
 
 use crate::components::{shows, start_with, start_with_sets, until};
@@ -198,4 +202,108 @@ fn a_theme_file_maps_roles_onto_its_tokens() {
         !batches.iter().any(|b| shows(b, "popover #111111ff")),
         "{batches:?}"
     );
+}
+
+const CLASSES: &str = r##"import { mount, signal, Text, updateTheme, View } from "nsh";
+
+const step = signal(0);
+setTimeout(() => {
+  updateTheme({ cssVars: { light: { overlay: "#333333" }, dark: { overlay: "#cccccc" } } });
+  step.set(1);
+}, 30);
+
+mount(() => (
+  <View>
+    <Text>{`step ${step()}`}</Text>
+    <View class="bg-(--popover) rounded-(--radius) p-2" />
+    <View class="bg-(--warning)" />
+  </View>
+));
+"##;
+
+/// The opaque backgrounds and the corner radii the batches gave views, each
+/// sorted.
+fn drawn(batches: &[MountBatch]) -> (Vec<Color>, Vec<f32>) {
+    let styles = || {
+        batches
+            .iter()
+            .flat_map(|b| &b.items)
+            .filter_map(|i| match i {
+                MountItem::ViewStyle { style, .. } => Some(style),
+                _ => None,
+            })
+    };
+    let mut backgrounds: Vec<Color> = styles()
+        .map(|s| s.background_color)
+        .filter(|c| c.0 & 0xff == 0xff)
+        .collect();
+    backgrounds.sort_by_key(|c| c.0);
+    let mut radii: Vec<f32> = styles()
+        .map(|s| s.corner_radius.top_left.unwrap_or(s.border_radius).0)
+        .filter(|r| *r > 0.0)
+        .collect();
+    radii.sort_by(f32::total_cmp);
+    (backgrounds, radii)
+}
+
+#[test]
+fn a_class_reads_a_role_as_a_variable() {
+    for (appearance, popover, warning, changed) in [
+        ("light", 0x1111_11ff, 0xaa55_00ff_u32, 0x3333_33ff),
+        ("dark", 0xeeee_eeff, 0xffcc_00ff, 0xcccc_ccff),
+    ] {
+        let config = format!(r#"{{ "appearance": "{appearance}" }}"#);
+        let (_engine, rx) = start_with_sets(
+            CLASSES,
+            Environment::default(),
+            None,
+            Some(&config),
+            brand(),
+        );
+        // The type maps `popover` onto `overlay`, `warning` onto
+        // `status-caution` and `radius` onto `corner`.
+        let (backgrounds, radii) = drawn(&until(&rx, |b| shows(b, "step 0")));
+        let mut wanted = [Color(popover), Color(warning)];
+        wanted.sort_by_key(|c| c.0);
+        assert_eq!(backgrounds, wanted, "{appearance}");
+        assert_eq!(radii, [6.0], "{appearance}");
+        // `overlay` changes: the view reading it through the role is
+        // restyled, the other is not.
+        let (backgrounds, _) = drawn(&until(&rx, |b| shows(b, "step 1")));
+        assert_eq!(backgrounds, [Color(changed)], "{appearance}");
+    }
+}
+
+const MAPPED_LATER: &str = r##"import { mount, signal, Text, updateTheme, View } from "nsh";
+
+const step = signal(0);
+setTimeout(() => {
+  updateTheme({ cssVars: {}, roles: { warning: "surface" } });
+  step.set(1);
+}, 30);
+setTimeout(() => {
+  updateTheme({ cssVars: { light: { surface: "#eeeeee" } } });
+  step.set(2);
+}, 60);
+
+mount(() => (
+  <View>
+    <Text>{`step ${step()}`}</Text>
+    <View class="h-4 bg-(--warning)" />
+  </View>
+));
+"##;
+
+#[test]
+fn a_class_takes_a_role_mapped_while_the_app_runs() {
+    let config = r##"{ "theme": { "cssVars": { "light": { "surface": "#fafafa" } } } }"##;
+    let (_engine, rx) = start_with(MAPPED_LATER, Environment::default(), None, Some(config));
+    // Nothing maps `warning` and the theme has no such token: no class yet.
+    let (backgrounds, _) = drawn(&until(&rx, |b| shows(b, "step 0")));
+    assert_eq!(backgrounds, []);
+    // The theme maps it: the class is the token's color, and follows it.
+    let (backgrounds, _) = drawn(&until(&rx, |b| shows(b, "step 1")));
+    assert_eq!(backgrounds, [Color(0xfafa_faff)]);
+    let (backgrounds, _) = drawn(&until(&rx, |b| shows(b, "step 2")));
+    assert_eq!(backgrounds, [Color(0xeeee_eeff)]);
 }

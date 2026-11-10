@@ -3574,9 +3574,11 @@ style id:themed backgroundColor #b45309ff
 # A theme's `roles`: the role reads the token it is mapped onto.
 tap id:map
 expect role popover #fafafaff
+style id:classed backgroundColor #fafafaff
 tap id:dark
 expect role warning #fbbf24ff
 expect role popover #262626ff
+style id:classed backgroundColor #262626ff
 style id:themed backgroundColor #fbbf24ff
 covers [nsh] role
 

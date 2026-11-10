@@ -290,7 +290,9 @@ import { role } from "nsh";
 <View style={{ backgroundColor: role("popover"), borderLeftWidth: 3, borderLeftColor: role("warning") ?? "#d97706" }} />
 ```
 
-Rust reads a role by its constant: `theme().tokens().role(nsh_base::role::POPOVER)`.
+A class reads a role as a variable: `bg-(--popover)` is the token the theme maps `popover` onto, where the theme has
+no token of that name ([Theme tokens](../docs/tailwind.md#theme-tokens)). Rust reads a role by its constant:
+`theme().tokens().role(nsh_base::role::POPOVER)`.
 
 ## setTheme
 

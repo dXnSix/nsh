@@ -727,7 +727,10 @@ it changes, and they are resolved again when the tokens change (`Components::app
   TS reads a role with `role(name)` (`nsh-js` `env.rs`, the web's op 414): `Tokens::mapped`, by name, then the
   token of the role's name, as `Tokens::role`; it tracks both tokens, and a theme that maps roles onto other tokens
   runs every reader again. The names are typed from the roles the UI sets list (`Registry::roles`,
-  `description::roles`, `roles.d.ts`).
+  `description::roles`, `roles.d.ts`). A class reads a role as a variable (`bg-(--popover)`): `ClassTokens` holds
+  the role map and `ClassTokens::variable` gives the token of the name, else the one the role is mapped onto; the
+  list records the token it read, and a change of the map resolves every class (`same_names`). The build's class
+  check has the map with the tokens it reads (the theme types' defaults, `nsh.json`'s `"roles"`).
   `ThemeScope` (`element/theme_scope.rs`, exported by `nsh` and the prelude) is a view with an appearance of its
   own for itself and what is in it. Classes and adaptive declarations need nothing from it: the core applies them
   by node (`Core::dark_at`, `styles.md`). What reads the appearance in code reads the nearest scope's: `dark()` and

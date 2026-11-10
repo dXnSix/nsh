@@ -252,12 +252,13 @@ token 的名称就是主题文件中 CSS 变量去掉 `--` 后的名称：`muted
 | 写法 | 取值 | 示例 |
 |---|---|---|
 | 任意颜色类里的颜色名 | 主题颜色，也可带不透明度 | `bg-primary`、`text-muted-foreground/70`、`bg-up/30`、`border-t-border`、`ring-ring`、`from-accent`、`placeholder:text-muted-foreground` |
-| `(--name)`，Tailwind 4 的变量简写 | 主题颜色或数值 | `bg-(--primary)`、`rounded-(--radius)`、`p-(--gap-card)` |
+| `(--name)`，Tailwind 4 的变量简写 | 主题颜色或数值，或同名主题角色被映射到的 token | `bg-(--primary)`、`rounded-(--radius)`、`p-(--gap-card)`、`bg-(--popover)` |
 | `(color:--name)`、`(length:--name)`、`(number:--name)`、`(family-name:--name)` | 同上，在一个类可以接受多种值时标明类型 | `text-(color:--up)`、`text-(length:--text-title)`、`font-(family-name:--font-mono)` |
 | `font-sans`、`font-mono` | 主题设置的字体 | `font-mono` |
 | 数字 token 名称在其命名空间的工具类中 | Tailwind 4 命名空间中的数字 token，按名称的其余部分 | `rounded-card`（`radius-card`）、`p-gutter`、`gap-x-gutter`（`spacing-gutter`）、`text-body`（`text-body`）、`font-strong`（`font-weight-strong`）、`tracking-label`、`leading-body`、`blur-soft` |
 
 - **应用自己的令牌。** 主题文件中的每个名称都是 token，就像 CSS `@theme` 中的每个变量：`"up": "#16a34a"` 生成 `bg-up`、`text-up` 和 `bg-up/30`；`"radius-card": "14px"` 生成 `rounded-(--radius-card)`；`"font-display": "Pacifico"` 生成 `font-(family-name:--font-display)`。长度的单位是点；`(number:--name)` 传入不带单位的数值。
+- **主题角色。** 变量也可以指名[主题角色](../modules/nsh.md#role)：当主题没有名为 `popover` 的 token，并把角色 `popover` 映射到自己的 token `overlay`（主题类型的 `role = …`，或主题文件的 `"roles": { "popover": "overlay" }`）时，`bg-(--popover)` 在每种外观下都是 `overlay` 的颜色，并随它变化。因此在多个应用之间共享的组件只需写一次 `bg-(--popover) rounded-(--radius)`，就适用于每个设计系统。同名的 token 优先，而不带括号的类（`bg-popover`）只指名 token。构建时会根据主题映射的角色检查该变量。
 - **字体。** `font-sans` 是应用的字体：没有设置自己字体族的文字都用它绘制，就像网页使用 Tailwind 的 `--font-sans`。`font-mono` 是 `font-mono` 类和 `TextView` 中代码的字体。未设置时两者都是系统字体。
 - **两种外观。** token 带有主题的浅色值和深色值：`bg-primary`、`theme().primary` 和 `token("primary")` 都会随外观自动切换，不需要 `dark:` 类。只在一种外观里设置的颜色在两种外观下都使用该值。数字也可以有深色值：在浅色的 `14px` 之外写 `"dark": { "radius-card": "6px" }`，`rounded-card` 和 `rounded-(--radius-card)` 在浅色外观下为 14 点，在深色外观下为 6 点，`token("radius-card")` 取当前显示外观的值；主题只给出一次的数字在两种外观下相同。
 - **具名数字类名。** 名称以 Tailwind 4 某个命名空间开头的数字 token，是该命名空间工具类的一个类名，按名称的其余部分命名，就像 Tailwind 中 `--radius-card` 产生 `rounded-card`：`radius-` 对应圆角工具类（`rounded-card`、`rounded-t-card`、`rounded-bl-card`）；`spacing-` 对应内边距、外边距、间距、尺寸、偏移和平移（`p-gutter`、`-mt-gutter`、`gap-x-gutter`、`w-gutter`、`inset-x-gutter`）；`text-` 对应字号；`font-weight-` 对应字重（`"font-weight-strong": "650"` 产生 `font-strong`）；`tracking-`、`leading-` 和 `blur-` 对应各自的工具类。`tracking-` token 是以点为单位的长度（`px` 或 `rem`）；`em` 单位的值会被略过，shadcn 的 `tracking-normal: 0em` 一直如此。它们可以用在变体下，并像所有 token 类名一样跟随主题。`text-` 也是颜色工具类：同名的颜色在那里仍然优先；其他情况下较长的工具类优先（`inset-shadow-card` 是内阴影的颜色 `card`）。
