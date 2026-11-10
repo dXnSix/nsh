@@ -134,12 +134,25 @@ pub(crate) fn watch(surface: &Rc<Surface>, window: &gtk::Window) {
             window.stop_signal_emission_by_name("move-focus");
         }
     });
+    // The stop the focus left reports its blur in the window's first
+    // handlers, the one it reached its focus after all of them (`after`):
+    // an input's own handler, connected later, reports between them, so
+    // `onBlur` always comes before `onFocus`.
+    let current = Rc::new(RefCell::new(None::<NshView>));
     let weak = Rc::downgrade(surface);
-    let current = RefCell::new(None::<NshView>);
+    let leaving = current.clone();
     window.connect_focus_widget_notify(move |window| {
         if let Some(surface) = weak.upgrade() {
-            moved(&surface, window, &current);
+            left(&surface, window, &leaving);
         }
+    });
+    let weak = Rc::downgrade(surface);
+    let watched = window.downgrade();
+    window.connect_local("notify::focus-widget", true, move |_| {
+        if let (Some(surface), Some(window)) = (weak.upgrade(), watched.upgrade()) {
+            reached(&surface, &window, &current);
+        }
+        None
     });
 }
 
@@ -280,22 +293,38 @@ fn focused_stop(surface: &Surface, focus: Option<gtk::Widget>) -> Option<NshView
         .filter(is_stop)
 }
 
-/// The window's focus moved: the stop it left and the one it reached say so.
-fn moved(surface: &Surface, window: &gtk::Window, current: &RefCell<Option<NshView>>) {
+/// The window's focus moved, first round: the stop it left says so.
+fn left(surface: &Surface, window: &gtk::Window, current: &RefCell<Option<NshView>>) {
     let next = focused_stop(surface, GtkWindowExt::focus(window));
     if *current.borrow() == next {
         return;
     }
-    let previous = current.replace(next.clone());
-    if let Some(view) = previous {
-        view.set_focusable(false);
-        crate::input::set_state(surface, &view, state::FOCUSED, false);
-        surface.event(view.id(), EventKind::Blur, EventPayload::None);
+    if let Some(view) = current.take() {
+        blurred(surface, &view);
+    }
+}
+
+/// The window's focus moved, last round (after every other handler, an
+/// input's own blur among them): the stop it reached says so.
+fn reached(surface: &Surface, window: &gtk::Window, current: &RefCell<Option<NshView>>) {
+    let next = focused_stop(surface, GtkWindowExt::focus(window));
+    if *current.borrow() == next {
+        return;
+    }
+    if let Some(view) = current.replace(next.clone()) {
+        blurred(surface, &view);
     }
     if let Some(view) = next {
         crate::input::set_state(surface, &view, state::FOCUSED, true);
         surface.event(view.id(), EventKind::Focus, EventPayload::None);
     }
+}
+
+/// Stop `view` lost the focus.
+fn blurred(surface: &Surface, view: &NshView) {
+    view.set_focusable(false);
+    crate::input::set_state(surface, view, state::FOCUSED, false);
+    surface.event(view.id(), EventKind::Blur, EventPayload::None);
 }
 
 /// A key on its way to the focus: whether it was taken here.
@@ -525,6 +554,109 @@ mod tab_order {
             assert!(
                 !view(&surface, 5).is_focusable(),
                 "the plain view is no stop"
+            );
+            window.destroy();
+        });
+    }
+}
+
+/// The view the focus leaves reports `onBlur` before the one it reaches
+/// reports `onFocus`, an input among them (whose own handler on the
+/// window's focus is connected after the stops'):
+/// `cargo test -p nsh-platform-linux --lib key_focus::blur_first`.
+#[cfg(test)]
+mod blur_first {
+    use std::sync::{Arc, Mutex};
+
+    use nsh_core::element::IntoElement;
+
+    use super::*;
+    use crate::gtk_test::{run, show, surface, wait_until};
+
+    type Heard = Arc<Mutex<Vec<(&'static str, EventKind)>>>;
+
+    struct Recorder(Heard);
+
+    /// A field (`name`) and a stop (`first`) after it.
+    #[nsh_core::element::component]
+    fn FieldAndStop() -> impl IntoElement {
+        use nsh_core::prelude::*;
+
+        let heard = engine_context::<Recorder>().unwrap().0.clone();
+        let hear = |name: &'static str, kind: EventKind| {
+            let heard = heard.clone();
+            move |_: &EventPayload| heard.lock().unwrap().push((name, kind))
+        };
+        view()
+            .child(
+                nsh_core::element::input()
+                    .test_id("name")
+                    .w(px(100.0))
+                    .h(px(30.0))
+                    .on(EventKind::Focus, hear("name", EventKind::Focus))
+                    .on(EventKind::Blur, hear("name", EventKind::Blur)),
+            )
+            .child(
+                view()
+                    .test_id("first")
+                    .w(px(100.0))
+                    .h(px(30.0))
+                    .on(EventKind::Press, |_: &EventPayload| {})
+                    .on(EventKind::Focus, hear("first", EventKind::Focus))
+                    .on(EventKind::Blur, hear("first", EventKind::Blur)),
+            )
+    }
+
+    /// Waits until the app has handled every event sent so far.
+    fn flush(surface: &Surface) {
+        let (sent, received) = std::sync::mpsc::channel();
+        surface.control(|control| {
+            control.flush(move |done| {
+                let _ = sent.send(done);
+            });
+        });
+        assert!(wait_until(|| received.try_recv() == Ok(true)));
+    }
+
+    fn tab(window: &gtk::Window) {
+        window.emit_move_focus(gtk::DirectionType::TabForward);
+    }
+
+    #[test]
+    fn blur_comes_before_focus_between_a_field_and_a_stop() {
+        run(|| {
+            let surface = surface();
+            let heard = Heard::default();
+            let mut config = nsh_engine::EngineConfig::new(nsh_engine::Root::of::<FieldAndStop>());
+            config.context = config.context.with(Recorder(heard.clone()));
+            surface.start(config);
+            let window = show(&surface);
+            let mapped = |id: &str| {
+                surface
+                    .mounter
+                    .borrow()
+                    .views
+                    .values()
+                    .any(|v| v.state().props.test_id.as_deref() == Some(id) && v.is_mapped())
+            };
+            assert!(wait_until(|| mapped("name") && mapped("first")));
+            let take = || {
+                flush(&surface);
+                std::mem::take(&mut *heard.lock().unwrap())
+            };
+            tab(&window);
+            assert_eq!(take(), [("name", EventKind::Focus)]);
+            tab(&window);
+            assert_eq!(
+                take(),
+                [("name", EventKind::Blur), ("first", EventKind::Focus)],
+                "from the field to the stop"
+            );
+            tab(&window);
+            assert_eq!(
+                take(),
+                [("first", EventKind::Blur), ("name", EventKind::Focus)],
+                "around, from the stop to the field"
             );
             window.destroy();
         });
