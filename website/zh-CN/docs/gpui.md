@@ -143,7 +143,7 @@ view.load(App::Js(Bundle::source(code)));
 - **画布文字**是近似的：旋转时保持直立，`maxWidth` 下缩小字号而不是压窄，渐变以单一颜色绘制，`strokeText` 绘制为填充，阴影
   不模糊，合成操作和 `clearRect` 对它不起作用。
 - **滚动视图**不支持缩放（`zoomTo` 和缩放相关属性被忽略）。
-- **视频**在 Linux 上播放（GStreamer）；在 macOS 和 Windows 上显示占位内容并报告 `onError`。
+- **视频**在 Linux 上播放（GStreamer），在三星电视上通过电视自己的播放器播放（在视频平面上，或在旋转、淡化或被裁剪的视图中作为纹理）；在 macOS 和 Windows 上显示占位内容并报告 `onError`。
 - **Web 视图**是位于 NSH 在该位置所绘制一切内容之上的原生视图。Linux 上需要 X11（见[环境要求](#环境要求)）；在 Xwayland
   下页面一直是黑的（日志中有 "Failed to create GBM buffer"）时，请用 `WEBKIT_DISABLE_DMABUF_RENDERER=1` 运行应用。macOS 和
   Windows 上裁剪祖先不会裁剪它们，加载失败也不会报告 `onError`。不支持 `baseUrl`、`scrollable` 和
