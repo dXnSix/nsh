@@ -276,6 +276,7 @@ nsh package --target tizen-web                     # .nsh/out/tizen-web/<Name>/ 
 nsh package --target tizen-web --sign my-profile   # .nsh/out/<Name>.wgt, signed with the Tizen SDK's tz
 nsh run --target tizen-web                         # on the TV (nsh.json tizen.signing) and in a browser here
 nsh test --target tizen-web                        # the tests in headless Chromium, on the TV's page, 1920×1080
+nsh package --target tizen-web --probe             # a package that shows how the TV loads a page's files
 ```
 
 - **The package** is the [published site](#publish-an-app) with `config.xml` (the package and application ids, the
@@ -309,6 +310,9 @@ nsh test --target tizen-web                        # the tests in headless Chrom
   address it prints shows the app in the TV idiom, with hot updates. With `nsh.json` `tizen.signing` it also signs,
   installs and launches a development package on the TV (`--device`: its `sdb` serial), whose page opens the dev
   server's at this machine's address on the network.
+- **The loader probe** (`--probe`) is a package of its own, `NshLdProbe.Probe`: on the TV it tries each way the app's
+  page loads its files (module scripts, an import map, an iframe's realm, a script fetched with CORS, WebAssembly) and
+  shows what each did, with the engine's version.
 
 ## Build the website's player
 

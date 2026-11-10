@@ -1,5 +1,5 @@
 //! `--target tizen-web`: the packages `nsh package` writes, the development
-//! package and page of `nsh run`. A fake web runtime
+//! package and page of `nsh run`, the loader probe. A fake web runtime
 //! (`NSH_RUNTIME`: a linkable module of three functions, the crate's
 //! `nsh.js` and `browser/`) packages without building the real one, and a
 //! fake `tz` on `PATH` stands in for the Tizen SDK.
@@ -449,6 +449,69 @@ fn a_profile_installs_and_launches_the_development_package() {
             "run -p NshDevHost.NshDev -e 192.168.1.5:26101".to_owned(),
         ]
     );
+}
+
+#[test]
+fn the_probe_tries_how_the_page_loads_its_files() {
+    let dir = app("{}");
+    // No app is built: the probe is a package of its own.
+    fs::remove_file(dir.0.join("app/App.tsx")).unwrap();
+    let output = package(&dir, &["--probe"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let probe = dir.0.join("out/tizen-web/probe");
+    let names = files(&probe);
+    assert_eq!(
+        names,
+        [
+            "config.xml",
+            "index.html",
+            "probe/chunk.js",
+            "probe/classic.js",
+            "probe/import-map.js",
+            "probe/mapped.js",
+            "probe/module.js",
+            "probe/probe.wasm",
+        ]
+    );
+    assert_eq!(entries(&dir.0.join("out/tizen-web/probe.wgt")), names);
+    let config = read(probe.join("config.xml"));
+    assert!(
+        config.contains(r#"<tizen:application id="NshLdProbe.Probe" package="NshLdProbe" required_version="8.0"/>"#),
+        "{config}"
+    );
+    assert!(config.contains(r#"<tizen:privilege name="http://tizen.org/privilege/internet"/>"#));
+    let page = read(probe.join("index.html"));
+    // The import map comes before every module script.
+    let map = page.find(r#"<script type="importmap">"#).unwrap();
+    assert!(map < page.find(r#"<script type="module""#).unwrap());
+    for part in [
+        r#""nsh-probe-mapped": "./probe/mapped.js""#,
+        r#"<script type="module" src="probe/module.js"></script>"#,
+        r#"document.createElement("iframe")"#,
+        r#"bootstrap.crossOrigin = "anonymous""#,
+        "URL.createObjectURL",
+        "WebAssembly.instantiateStreaming",
+        "WebAssembly.instantiate(bytes",
+    ] {
+        assert!(page.contains(part), "{part}");
+    }
+    assert!(read(probe.join("probe/module.js")).contains(r#"import("nsh-probe-chunk")"#));
+    assert!(read(probe.join("probe/import-map.js")).contains(r#"from "nsh-probe-mapped""#));
+    let wasm = fs::read(probe.join("probe/probe.wasm")).unwrap();
+    assert_eq!(&wasm[..8], b"\0asm\x01\0\0\0");
+    assert!(stderr(&output).contains("unsigned"), "{}", stderr(&output));
+    // Signed as an app's package is.
+    let output = package(&dir, &["--probe", "--sign", "tv-profile"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(read(dir.0.join("tz.log")).starts_with("pack -t wgt -s tv-profile -b "));
+    assert!(dir.0.join("out/NshProbe.wgt").exists());
+    // The probe is the TV's target's.
+    let output = nsh(&dir)
+        .args(["package", "--target", "web", "--probe"])
+        .arg(dir.0.join("app"))
+        .output()
+        .unwrap();
+    assert!(stderr(&output).contains("--probe goes with --target tizen-web"));
 }
 
 /// A web runtime as wasm-ld writes it with `--emit-relocs`, as small as

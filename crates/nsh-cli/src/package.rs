@@ -358,6 +358,8 @@ pub(crate) struct PackageOptions<'a> {
     pub(crate) run: bool,
     /// The web: the URL the site's files are served from (`--asset-url`).
     pub(crate) asset_url: Option<&'a str>,
+    /// Tizen web: the loader probe instead of the app (`--probe`).
+    pub(crate) probe: bool,
 }
 
 /// Reads `nsh.json` next to `entry`, if any; relative paths become absolute.
@@ -578,6 +580,12 @@ pub(crate) fn release_name_and_id(
 }
 
 pub(crate) fn package(options: PackageOptions<'_>) -> anyhow::Result<()> {
+    if options.probe {
+        if options.target != PackageTarget::TizenWeb {
+            bail!("--probe goes with --target tizen-web");
+        }
+        return crate::tizen_web::probe(&options);
+    }
     if options.asset_url.is_some() && options.target != PackageTarget::Web {
         bail!("--asset-url is where a web site's files are served from: package with --target web");
     }

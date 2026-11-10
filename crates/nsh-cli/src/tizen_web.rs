@@ -17,9 +17,10 @@
 //! no history entries (the remote's Back is the shim's). `nsh run --target
 //! tizen-web` serves the same page from the dev server ([`dev_page`]) and
 //! installs a development package whose page opens it ([`run_dev`]); `nsh
-//! test --target tizen-web` opens it in headless Chromium. Only signing,
-//! installing and launching run the SDK (`tz`); everything else is written
-//! here.
+//! test --target tizen-web` opens it in headless Chromium. `--probe`
+//! writes a package that tries how the page loads its files on a TV
+//! ([`probe`]). Only signing, installing and launching run the SDK
+//! (`tz`); everything else is written here.
 
 use std::{
     fmt::Write as _,
@@ -44,6 +45,30 @@ const SHIM: &str = include_str!("tizen_web/shim.js");
 const SHIM_NAME: &str = "nsh-tizen.js";
 /// The development package's page, which opens the dev server's.
 const DEV_PAGE: &str = include_str!("tizen_web/dev.html");
+/// The loader probe's page and files ([`probe`]).
+const PROBE_PAGE: &str = include_str!("tizen_web/probe/index.html");
+const PROBE_FILES: &[(&str, &str)] = &[
+    ("probe/module.js", include_str!("tizen_web/probe/module.js")),
+    (
+        "probe/import-map.js",
+        include_str!("tizen_web/probe/import-map.js"),
+    ),
+    ("probe/mapped.js", include_str!("tizen_web/probe/mapped.js")),
+    ("probe/chunk.js", include_str!("tizen_web/probe/chunk.js")),
+    (
+        "probe/classic.js",
+        include_str!("tizen_web/probe/classic.js"),
+    ),
+];
+/// The probe's WebAssembly module: `answer()` returns 42.
+const PROBE_WASM: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic, version
+    0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f, // types: () -> i32
+    0x03, 0x02, 0x01, 0x00, // functions: one of type 0
+    0x07, 0x0a, 0x01, 0x06, b'a', b'n', b's', b'w', b'e', b'r', 0x00, 0x00, // export "answer"
+    0x0a, 0x06, 0x01, 0x04, 0x00, 0x41, 0x2a, 0x0b, // code: i32.const 42
+];
+
 /// `required_version` without `nsh.json` `tizen.apiVersion`: Tizen 8.0,
 /// the TVs of 2024 on, whose engines run the web runtime as built.
 const API_VERSION: &str = "8.0";
@@ -57,6 +82,8 @@ const PRIVILEGES: &[&str] = &[
 /// app's dev server it was written for), as the other targets have one
 /// development host.
 const DEV_PACKAGE: &str = "NshDevHost";
+/// The loader probe's package id.
+const PROBE_PACKAGE: &str = "NshLdProbe";
 
 /// A Tizen web app's manifest, `config.xml` ([`Widget::config_xml`]).
 #[derive(Debug)]
@@ -541,6 +568,63 @@ pub(crate) fn run_dev(entry: &Path, url: &str, device: Option<&str>) -> anyhow::
     let signed = work.join("NshDev.wgt");
     sign(profile, &unsigned, &signed)?;
     install_and_launch(&signed, &widget.app, device)
+}
+
+/// `nsh package --target tizen-web --probe`: a package with the probe's
+/// page and files in `<out>/tizen-web/probe/`, zipped, signed as an app's
+/// package is. Its page tries the ways the app's page loads its files and
+/// shows what each did on the TV's screen.
+pub(crate) fn probe(options: &PackageOptions<'_>) -> anyhow::Result<()> {
+    let root = options.out.join("tizen-web");
+    let dir = root.join("probe");
+    let widget = write_probe(&dir)?;
+    let unsigned = root.join("probe.wgt");
+    zip_dir(&dir, &unsigned)?;
+    ui::done(format!("wrote the loader probe {}", ui::path(&dir)));
+    let profile = options.sign.or(options.config.tizen.signing.as_deref());
+    let Some(profile) = profile else {
+        ui::warn(format!(
+            "{} is unsigned: pass --sign <profile> to sign it",
+            ui::path(&unsigned)
+        ));
+        if options.run {
+            bail!("--run installs a signed package: pass --sign <profile>");
+        }
+        return Ok(());
+    };
+    let signed = options.out.join("NshProbe.wgt");
+    sign(profile, &unsigned, &signed)?;
+    if options.run {
+        install_and_launch(&signed, &widget.app, None)?;
+    }
+    Ok(())
+}
+
+/// The probe's files in `dir`.
+fn write_probe(dir: &Path) -> anyhow::Result<Widget> {
+    if dir.exists() {
+        fs::remove_dir_all(dir).with_context(|| format!("remove {}", dir.display()))?;
+    }
+    fs::create_dir_all(dir.join("probe")).with_context(|| format!("create {}", dir.display()))?;
+    fs::write(dir.join("index.html"), PROBE_PAGE)?;
+    for (path, text) in PROBE_FILES {
+        fs::write(dir.join(path), text)?;
+    }
+    fs::write(dir.join("probe/probe.wasm"), PROBE_WASM)?;
+    let widget = Widget {
+        iri: widget_iri("com.longbridge.nsh.probe"),
+        package: PROBE_PACKAGE.to_owned(),
+        app: format!("{PROBE_PACKAGE}.Probe"),
+        name: "NSH Probe".to_owned(),
+        version: "1.0.0".to_owned(),
+        required_version: API_VERSION.to_owned(),
+        icon: false,
+        privileges: PRIVILEGES.iter().map(|p| (*p).to_owned()).collect(),
+        access: vec!["*".to_owned()],
+        navigation: Vec::new(),
+    };
+    fs::write(dir.join("config.xml"), widget.config_xml())?;
+    Ok(widget)
 }
 
 #[cfg(test)]

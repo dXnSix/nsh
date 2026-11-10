@@ -224,6 +224,7 @@ Builds an installable app in release mode. A Rust app (`nsh.json` `"root"`) is p
 | `--abi <ABI>` | Android: the ABIs of the APK (`arm64-v8a`, `armeabi-v7a`, `x86_64`), repeated or separated by commas. Default: `arm64-v8a` and `armeabi-v7a`, plus the device's with `--run`. |
 | `--run` | Install and launch the app afterwards: in the simulator (`ios-simulator`) or on the connected Android device; `macos`, `linux` and `windows` launch it; `web` serves the site on this machine at the address it prints; `tizen-web` installs the signed package on the TV and launches it. |
 | `--asset-url <URL>` | Web: the http(s) URL the site's files are served from, a CDN, as the page names them; `index.html` and `manifest.webmanifest` stay at the page's address (named relatively, as without the flag), and the CDN answers with `Access-Control-Allow-Origin`. Default: next to the page, named relatively. `--run` serves the site from this machine as it is, so it goes without it. |
+| `--probe` | `tizen-web`: instead of the app, a package (`tizen-web/probe/`, signed into `NshProbe.wgt` with a profile) that tries on the TV each way the app's page loads its files (module scripts, an import map, an iframe's realm, a script fetched with CORS, WebAssembly) and shows what each did. |
 
 ```sh
 nsh package my-app --target ios-simulator --run

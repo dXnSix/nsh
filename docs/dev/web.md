@@ -260,6 +260,10 @@ there is no `Os::TizenWeb`.
   the page opens in a browser here, as on the TV.
 - **`nsh test --target tizen-web`** runs `nsh test --target web`'s headless Chromium on the same page
   (`test_web::starter(browser, true)`), 1920×1080 by default.
+- **`--probe`** writes `<out>/tizen-web/probe/` (`NshLdProbe.Probe`): a page that tries, from package files, a module
+  script, the page's import map (static and `import()`), a same-origin iframe realm, a classic bootstrap fetched with
+  CORS into it, the realm's import map and a blob module, and a Wasm `fetch` (`instantiateStreaming` and
+  `arrayBuffer`), and shows each result, the user agent and the engine's `scrollend`, `popover` and `inert`.
 
 `cargo test -p nsh-cli --test cli tizen_web::` packages with a fake runtime (`NSH_RUNTIME`: a linkable module of
 three functions) and a fake `tz`; `cargo test -p nsh-cli --bin nsh tizen_web::` checks the ids, versions and `tz`'s

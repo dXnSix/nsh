@@ -565,6 +565,7 @@ fn package_for_run(
         format: crate::android::Format::Apk,
         run: false,
         asset_url: None,
+        probe: false,
     })
 }
 

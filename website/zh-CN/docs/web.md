@@ -250,6 +250,7 @@ nsh package --target tizen-web                     # .nsh/out/tizen-web/<Name>/ 
 nsh package --target tizen-web --sign my-profile   # .nsh/out/<Name>.wgt，用 Tizen SDK 的 tz 签名
 nsh run --target tizen-web                         # 在电视上（nsh.json 的 tizen.signing）和本机浏览器中
 nsh test --target tizen-web                        # 在 headless Chromium 里用电视的页面运行测试，1920×1080
+nsh package --target tizen-web --probe             # 一个包，显示电视如何加载页面的文件
 ```
 
 - **包**是[发布的站点](#发布应用)，加上 `config.xml`（包 id 和应用 id、版本、所需的 Tizen 版本、网络和遥控器按键权限、横屏、
@@ -278,6 +279,8 @@ nsh test --target tizen-web                        # 在 headless Chromium 里�
 - **开发**：`nsh run --target tizen-web` 由开发服务器提供电视的页面，所以本机浏览器打开它打印的地址，就能看到电视 idiom
   下的应用，并且支持热更新。配置了 `nsh.json` 的 `tizen.signing` 时，它还会在电视上签名、安装并启动一个开发包
   （`--device`：电视的 `sdb` 序列号），开发包的页面会打开本机在局域网中的地址上的开发服务器页面。
+- **加载探针**（`--probe`）是一个独立的包 `NshLdProbe.Probe`：它在电视上逐一尝试应用页面加载文件的各种方式（module
+  脚本、import map、iframe 的 realm、用 CORS 获取的脚本、WebAssembly），并显示每一项的结果和引擎的版本。
 
 ## 构建本站的播放器
 
