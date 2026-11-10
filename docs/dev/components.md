@@ -729,6 +729,19 @@ it changes, and they are resolved again when the tokens change (`Components::app
   platforms get it as `ViewProps::appearance` on the scope's view: iOS `overrideUserInterfaceStyle`, macOS
   `NSView.appearance`, the web `color-scheme`; the scroll indicators macOS, Windows, Linux and GPUI draw
   themselves ask the nearest view with one. Menus, alerts and sheets are the surface's.
+  With a `theme` (`ScopeTheme`: a theme file, or tokens made in Rust) the scope also has design tokens of its own:
+  its theme's values over the tokens around it, a name those lack left out (`ThemeTokens::scoped`,
+  `Tokens::within`). The component makes them, again whenever the tokens around it change, and gives them to the
+  core whole (`Prop::ScopeTokens`). The core keeps the nearest scope per node (`Node::token_scope`,
+  `Core::update_token_scope`) and resolves a class list for a node in one with `Core::classes_at`: the surface's
+  list, unless it reads a token whose value in the scope is not the surface's (the read sets of `ClassList`), in
+  which case it is parsed with the scope's values, once per scope (`Tailwind::parse_with`, the scope's own cache).
+  New values of a scope resolve again only the classes in it that read a token that changed
+  (`Core::set_scope_tokens`). `tokens()` and `theme_of()` read the nearest scope's through its context
+  (`ScopeTokens`; the cache of theme types is per tokens read, `ThemeCache`). In TS the component's JS face makes
+  the same tokens for its children (`env.rs` `make_scope_tokens`, in a slot of the environment; the web's ops 411
+  to 413) and `token()` reads the nearest scope's, tracked as one; a scope without a theme passes on the ones
+  around it, so `token()` there still follows the surface's by name.
 - `.active(|s| ..)`, `.hover(..)`, `.focus(..)`, `.disabled_style(..)`, `.selected(..)`, `.checked(..)` lower into
   rules on the view's interaction states (Tailwind's ranks): press feedback is native. On a nested component's element
   they style its root. `.group()` makes a view a group and `.group_active(|s| ..)`

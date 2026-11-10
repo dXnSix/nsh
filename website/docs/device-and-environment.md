@@ -226,6 +226,8 @@ Scopes nest, and the nearest one with an `appearance` decides; a scope without o
 
 In Rust, read the appearance where it is used, in a binding or a style's closure: `dark()` and `color()` answer for the scope around what reads them.
 
+A scope can also give its content its own values of the theme's tokens, with `theme`: see [Tokens for a part of the app](./tailwind.md#tokens-for-a-part-of-the-app).
+
 > [!TIP]
 > Test both appearances while developing: `xcrun simctl ui booted appearance dark` switches an iOS simulator, and Android has a dark theme toggle in Quick Settings. The change reaches your app at once, without a reload.
 

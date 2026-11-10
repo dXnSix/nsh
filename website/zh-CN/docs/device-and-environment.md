@@ -226,6 +226,8 @@ import { Text, ThemeScope, View } from "nsh";
 
 在 Rust 中，在使用外观的地方读取它，即在绑定或样式的闭包中：`dark()` 和 `color()` 给出读取它们的位置所在作用域的外观。
 
+作用域还可以通过 `theme` 让其内容使用它自己的主题 token 值：见[应用某一部分的 token](./tailwind.md#tokens-for-a-part-of-the-app)。
+
 > [!TIP]
 > 开发时两种外观都要测试：`xcrun simctl ui booted appearance dark` 可以切换 iOS 模拟器，Android 的快捷设置里有深色主题开关。变化会立即传到应用中，无需重新加载。
 

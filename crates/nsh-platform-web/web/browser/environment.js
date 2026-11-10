@@ -20,12 +20,14 @@ export function createEnvironment(reactive, invoke, dom) {
   const platform = { os: "web", version: "0.0", idiom: "desktop", desktop: true, catalyst: false,
     select(spec) { return "web" in spec ? spec.web : this.desktop ? spec.desktop ?? spec.default : spec.mobile ?? spec.default; } };
   let appearance = "system", systemScheme = "light";
-  // The appearance a `ThemeScope` shows, for what it renders (nsh-js's
-  // `scope_scheme`, `env.rs`): an accessor of "light" or "dark". No scope is
-  // looked for until one is made.
+  // What a `ThemeScope` shows, for what it renders (nsh-js's `scope_scheme`
+  // and `scope_tokens`, `env.rs`): `scheme`, an accessor of "light" or
+  // "dark", and `tokens`, an accessor of what names its tokens for the
+  // engine (`undefined`: the surface's). No scope is looked for until one is
+  // made.
   const scope = reactive.context(undefined);
   let scoped = false;
-  const shownScheme = () => { const around = scoped && scope(); return around ? around() : fields.colorScheme(); };
+  const shownScheme = () => { const around = scoped && scope(); return around ? around.scheme() : fields.colorScheme(); };
   const setColorScheme = scheme => {
     if (!["light", "dark", "system"].includes(scheme)) throw new TypeError('setColorScheme: expected "light", "dark" or "system"');
     appearance = scheme;
@@ -50,7 +52,11 @@ export function createEnvironment(reactive, invoke, dom) {
     ...device, ...accessibility,
     safeArea: () => fields.safeArea(), safeAreaInsets: () => insets(), keyboardFrame: () => fields.keyboard(),
     screenReader: () => fields.screenReader(),
-    token(name) { tokens(); return invoke(402, [name, shownScheme() === "dark"]); },
+    token(name) {
+      const around = scoped && scope(), named = around ? around.tokens() : undefined;
+      if (named === undefined) tokens();
+      return invoke(402, [name, shownScheme() === "dark", named ?? null]);
+    },
     // nsh-js's `setTheme` (`env.rs`): the engine checks and applies it, or
     // throws its `TypeError`; what read a token follows once it took.
     setTheme(theme) { invoke(406, [theme]); tokens.update(value => value + 1); },
@@ -60,17 +66,27 @@ export function createEnvironment(reactive, invoke, dom) {
   };
   return {
     api, insets, host: () => fields.host(), titleBar: () => fields.titleBar(),
-    // A `ThemeScope`'s children (`children()`), made in its scope: its
-    // `appearance`, else what the scope around it shows, else the surface
-    // (nsh-js's `scoped_reader`, `components.rs`).
+    // A `ThemeScope`'s children (`children()`), made in its scope (nsh-js's
+    // `scoped_reader`, `components.rs`): its `appearance`, else what the
+    // scope around it shows, else the surface; and its `theme` over the
+    // tokens around it, which the engine makes and keeps in a slot.
     inScope(props, children) {
       const outer = scoped ? scope() : undefined;
       scoped = true;
       const shows = reactive.computed(() => {
         const own = props.appearance;
-        return own === "light" || own === "dark" ? own : outer ? outer() : fields.colorScheme();
+        return own === "light" || own === "dark" ? own : outer ? outer.scheme() : fields.colorScheme();
       });
-      return scope.Provider({ value: shows, get children() { return children(); } });
+      const slot = invoke(412, []);
+      reactive.cleanup(() => invoke(413, [slot, true]));
+      const draws = reactive.computed(() => {
+        const theme = props.theme, around = outer ? outer.tokens() : undefined;
+        // No tokens of its own: the ones around it.
+        if (theme === null || typeof theme !== "object") { invoke(413, [slot, false]); return around; }
+        if (around === undefined) tokens();
+        return invoke(411, [slot, theme, around ?? null]);
+      });
+      return scope.Provider({ value: { scheme: shows, tokens: draws }, get children() { return children(); } });
     },
     modules: { "nsh/device": device, "nsh/accessibility": accessibility },
     update(next) {

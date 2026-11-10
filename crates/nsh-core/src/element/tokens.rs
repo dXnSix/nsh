@@ -375,6 +375,30 @@ impl ThemeTokens {
         Some(out)
     }
 
+    /// The tokens a [`super::ThemeScope`] draws with: the values theme
+    /// file `json` sets, over `current` (the tokens around the scope,
+    /// which a `var()` it does not set names). A scope sets values and adds
+    /// no names: a name `current` lacks is left out, as a value that cannot
+    /// be read is, each said in the second part. `Err`: `json` is no theme
+    /// file. `None`: no UI set reads theme changes.
+    pub fn scoped(
+        &self,
+        current: &Tokens,
+        json: &str,
+    ) -> Option<Result<(Tokens, Vec<String>), String>> {
+        let read = self.provider.as_ref()?.overrides_left_out(json, current)?;
+        Some(read.map(|(part, left_out)| {
+            let mut said: Vec<String> = left_out.iter().map(ToString::to_string).collect();
+            let (tokens, unknown) = part.within(current);
+            said.extend(
+                unknown
+                    .iter()
+                    .map(|name| format!("`{name}`: the theme has no token of this name")),
+            );
+            (tokens, said)
+        }))
+    }
+
     /// `app` under the embedding app's tokens.
     fn under_host(&self, app: Tokens) -> Tokens {
         match &self.host {
@@ -579,6 +603,28 @@ impl Tokens {
         copy(&mut self.numbers, from, to);
         copy(&mut self.fonts, from, to);
         copy(&mut self.shadows, from, to);
+    }
+
+    /// These tokens over `base` as a scope's values are over the tokens
+    /// around it ([`super::ThemeScope`]): the values of the names `base`
+    /// has. The names it lacks are left out and returned, sorted.
+    pub fn within(mut self, base: &Tokens) -> (Tokens, Vec<Box<str>>) {
+        let mut unknown: Vec<Box<str>> = self
+            .colors
+            .keys()
+            .chain(self.numbers.keys())
+            .chain(self.dark_numbers.keys())
+            .chain(self.fonts.keys())
+            .chain(self.shadows.keys())
+            .filter(|name| base.get(name).is_none())
+            .cloned()
+            .collect();
+        unknown.sort();
+        unknown.dedup();
+        for name in &unknown {
+            self.remove_named(name);
+        }
+        (self.over(base), unknown)
     }
 
     /// Removes token `name`, of whatever kind.

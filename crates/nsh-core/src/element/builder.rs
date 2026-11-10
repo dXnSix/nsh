@@ -247,6 +247,9 @@ pub struct Attrs {
     /// The appearance the view and what is in it are shown in
     /// ([`super::ThemeScope`]).
     pub(crate) appearance: crate::platform::Appearance,
+    /// The design tokens the view and what is in it are drawn with
+    /// ([`super::ThemeScope`]).
+    pub(crate) scope_tokens: Option<Arc<super::Tokens>>,
     /// The text continues the one before it ([`Element::continues_text`]).
     pub(crate) continues_text: bool,
     /// The states it shows as its control's part
@@ -314,6 +317,9 @@ impl Attrs {
         }
         if self.appearance != old.appearance {
             out.push(Prop::Appearance(self.appearance));
+        }
+        if self.scope_tokens != old.scope_tokens {
+            out.push(Prop::ScopeTokens(self.scope_tokens.clone()));
         }
         if self.continues_text != old.continues_text {
             out.push(Prop::ContinuesText(self.continues_text));

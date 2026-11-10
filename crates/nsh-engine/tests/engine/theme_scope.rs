@@ -161,3 +161,122 @@ fn a_rust_component_in_a_scope_reads_its_appearance() {
         .collect();
     assert_eq!(said, ["swatch light", "swatch dark"]);
 }
+
+const TOKENS: &str = r##"import { mount, signal, Text, ThemeScope, type Theme, token, updateTheme, View } from "nsh";
+import { TokenSwatch } from "test/ui";
+
+const theme = signal<Theme | undefined>({ cssVars: { light: { up: "#7c3aed" }, dark: { up: "#a78bfa" } } });
+const step = signal(0);
+setTimeout(() => { theme.set({ cssVars: { light: { up: "#db2777" } } }); step.set(1); }, 30);
+setTimeout(() => { updateTheme({ cssVars: { light: { down: "#111111" }, dark: { down: "#111111" } } }); step.set(2); }, 60);
+setTimeout(() => { theme.set(undefined); step.set(3); }, 90);
+
+function Reader(props: { name: string }) {
+  return (
+    <View class="bg-up">
+      <Text>{`${props.name} ${token("up")} ${token("down")}`}</Text>
+    </View>
+  );
+}
+
+mount(() => (
+  <View>
+    <Text>{`step ${step()}`}</Text>
+    <Reader name="out" />
+    <ThemeScope theme={theme()}>
+      <Reader name="in" />
+      <TokenSwatch />
+      <ThemeScope appearance="dark">
+        <Reader name="dark" />
+      </ThemeScope>
+    </ThemeScope>
+  </View>
+));
+"##;
+
+const TOKENS_THEME: &str = r##"{ "theme": { "cssVars": {
+    "light": { "up": "#00ff00", "down": "#ff0000" },
+    "dark": { "up": "#004400", "down": "#440000" } } } }"##;
+
+/// The backgrounds the batches up to `step` gave views, sorted.
+fn at(rx: &crossbeam_channel::Receiver<MountBatch>, step: &str) -> (Vec<String>, Vec<Color>) {
+    let batches = until(rx, |b| shows(b, step));
+    assert!(batches.iter().any(|b| shows(b, step)), "{batches:?}");
+    let mut texts: Vec<String> = batches
+        .iter()
+        .flat_map(|b| &b.items)
+        .filter_map(|i| match i {
+            MountItem::Text { text, .. } if !text.text.starts_with("step") => {
+                Some(text.text.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    texts.sort();
+    let mut colors: Vec<Color> = batches
+        .iter()
+        .flat_map(|b| &b.items)
+        .filter_map(|i| match i {
+            MountItem::ViewStyle { style, .. } if style.background_color.0 & 0xff == 0xff => {
+                Some(style.background_color)
+            }
+            _ => None,
+        })
+        .collect();
+    colors.sort_by_key(|c| c.0);
+    (texts, colors)
+}
+
+#[test]
+fn what_a_scope_renders_reads_and_draws_its_tokens() {
+    let (_engine, rx) = start_with(TOKENS, Environment::default(), None, Some(TOKENS_THEME));
+    // The scope sets `up` and leaves `down`: in it `token()`, the class
+    // and a Rust component read its `up`, in each appearance.
+    let (texts, colors) = at(&rx, "step 0");
+    assert_eq!(
+        texts,
+        [
+            "dark #a78bfaff #440000ff",
+            "in #7c3aedff #ff0000ff",
+            "out #00ff00ff #ff0000ff",
+            "swatch 7c3aed"
+        ]
+    );
+    assert_eq!(
+        colors,
+        [Color(0x00ff_00ff), Color(0x7c3a_edff), Color(0xa78b_faff)]
+    );
+    // The scope's theme changes: only what it holds follows (its dark
+    // value is the light one now).
+    let (texts, colors) = at(&rx, "step 1");
+    assert_eq!(
+        texts,
+        [
+            "dark #db2777ff #440000ff",
+            "in #db2777ff #ff0000ff",
+            "swatch db2777"
+        ]
+    );
+    assert_eq!(colors, [Color(0xdb27_77ff), Color(0xdb27_77ff)]);
+    // The app changes a token the scope leaves alone: it reaches into it.
+    let (texts, _) = at(&rx, "step 2");
+    assert_eq!(
+        texts,
+        [
+            "dark #db2777ff #111111ff",
+            "in #db2777ff #111111ff",
+            "out #00ff00ff #111111ff"
+        ]
+    );
+    // Without a theme it is drawn with the app's.
+    let (texts, colors) = at(&rx, "step 3");
+    assert_eq!(
+        texts,
+        [
+            "dark #004400ff #111111ff",
+            "in #00ff00ff #111111ff",
+            "swatch 00ff00"
+        ]
+    );
+    assert_eq!(colors, [Color(0x0044_00ff), Color(0x00ff_00ff)]);
+}

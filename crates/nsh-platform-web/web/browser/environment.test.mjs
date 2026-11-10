@@ -151,13 +151,22 @@ test("a part is written only when it changed", () => {
   assert.deepEqual(writes, [fewer]);
 });
 
-test("what a ThemeScope renders reads the scope's appearance", () => {
+test("what a ThemeScope renders reads the scope's appearance and tokens", () => {
   // A context as the graph's: the value of the nearest provider around
-  // what reads it.
+  // what reads it. The engine's part (`src/browser/mod.rs`): a slot per
+  // scope, and a name for the tokens made in it.
   const provided = [];
   const asked = [];
-  const { env } = environment((op, args) => { if (op === 402) asked.push(args); }, {
-    computed: fn => fn,
+  const made = [];
+  let slots = 0;
+  const { env } = environment((op, args) => {
+    if (op === 402) asked.push(args);
+    if (op === 412) return slots++;
+    if (op === 411) { made.push(args); return 1048576 + args[0]; }
+  }, {
+    // A memo that runs once, as a graph's with nothing changing.
+    computed: fn => { let made = false, value; return () => { if (!made) { made = true; value = fn(); } return value; }; },
+    cleanup() {},
     context(fallback) {
       if (fallback !== undefined) return fallback;
       const read = () => provided.at(-1);
@@ -176,6 +185,13 @@ test("what a ThemeScope renders reads the scope's appearance", () => {
   env.update(engine({ colorScheme: "dark" }));
   assert.equal(env.inScope({}, read), "dark");
   assert.equal(env.inScope({ appearance: "light" }, read), "light");
-  // `token()` asks for the side the scope shows.
-  assert.deepEqual(asked, [["up", false], ["up", true], ["up", true], ["up", true], ["up", false]]);
+  // `token()` asks for the side the scope shows, of the surface's tokens.
+  assert.deepEqual(asked, [["up", false, null], ["up", true, null], ["up", true, null], ["up", true, null], ["up", false, null]]);
+  // A scope with a theme: the engine makes its tokens over the surface's,
+  // a scope in it over those, and `token()` names the nearest scope's.
+  asked.length = 0;
+  const violet = { cssVars: { light: { up: "#7c3aed" } } }, pink = { cssVars: { light: { up: "#db2777" } } };
+  env.inScope({ theme: violet }, () => { read(); env.inScope({}, read); env.inScope({ theme: pink }, read); });
+  assert.deepEqual(made, [[4, violet, null], [6, pink, 1048580]]);
+  assert.deepEqual(asked.map(args => args[2]), [1048580, 1048580, 1048582]);
 });

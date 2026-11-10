@@ -848,10 +848,10 @@ fn said((tokens, left_out): (Tokens, Vec<String>)) -> (Tokens, Vec<super::theme_
 pub fn theme_of<T: AppTheme>() -> Arc<T> {
     let tokens = super::tokens();
     let cached = super::ambient::with_theme_cache(|cache| {
-        let (seen, theme) = cache.get(&TypeId::of::<T>())?;
-        Arc::ptr_eq(seen, &tokens)
-            .then(|| theme.downcast_ref::<Arc<T>>().cloned())
-            .flatten()
+        cache
+            .get(TypeId::of::<T>(), &tokens)?
+            .downcast_ref::<Arc<T>>()
+            .cloned()
     });
     if let Some(theme) = cached {
         return theme;
@@ -862,7 +862,8 @@ pub fn theme_of<T: AppTheme>() -> Arc<T> {
     super::ambient::with_theme_cache(|cache| {
         cache.insert(
             TypeId::of::<T>(),
-            (tokens.clone(), Box::new(theme.clone()) as Box<dyn Any>),
+            tokens.clone(),
+            Box::new(theme.clone()) as Box<dyn Any>,
         );
     });
     theme

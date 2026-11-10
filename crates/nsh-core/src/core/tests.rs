@@ -37076,3 +37076,344 @@ mod theme_scope {
         assert_eq!(backgrounds(&batch), [BLACK, BLACK]);
     }
 }
+
+/// A view with design tokens of its own (`Prop::ScopeTokens`, a
+/// `ThemeScope`'s): the classes of theme tokens in it resolve with its
+/// values, and only those that read a token it changes.
+mod scope_tokens {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::element::{AdaptiveColor, Tokens};
+
+    const VIOLET: Color = Color(0x7c3a_edff);
+    const PINK: Color = Color(0xdb27_77ff);
+    /// The sample theme's `primary`, light.
+    const PRIMARY: Color = Color(0x1717_17ff);
+
+    fn child(c: &mut Core<FakeEngine>, parent: NodeId, id: NodeId, classes: &str) {
+        apply(
+            c,
+            vec![
+                Op::Create { id, tag: Tag::View },
+                class_op(id, classes),
+                Op::Insert {
+                    parent,
+                    child: id,
+                    before: None,
+                },
+            ],
+        );
+    }
+
+    /// The surface's tokens with `primary` a color of the scope's own.
+    fn with_primary(c: &Core<FakeEngine>, color: Color) -> Option<Arc<Tokens>> {
+        let mut tokens = (**c.tokens()).clone();
+        tokens.set_color("primary", AdaptiveColor::rgb(color.0 >> 8, color.0 >> 8));
+        Some(Arc::new(tokens))
+    }
+
+    fn scope(c: &mut Core<FakeEngine>, id: NodeId, tokens: Option<Arc<Tokens>>) {
+        apply(
+            c,
+            vec![Op::SetProp {
+                id,
+                prop: Prop::ScopeTokens(tokens),
+            }],
+        );
+    }
+
+    fn background(batch: &MountBatch, id: NodeId) -> Option<Color> {
+        view_style_of(batch, id).map(|s| s.background_color)
+    }
+
+    /// A scope (2) with a view reading `primary` (3) and one reading
+    /// `border` (4) in it, and a view reading `primary` beside it (5).
+    fn scoped() -> Core<FakeEngine> {
+        let mut c = core();
+        child(&mut c, ROOT_ID, 2, "bg-primary");
+        child(&mut c, 2, 3, "bg-primary");
+        child(&mut c, 2, 4, "bg-border");
+        child(&mut c, ROOT_ID, 5, "bg-primary");
+        c.commit().unwrap();
+        c
+    }
+
+    #[test]
+    fn classes_in_a_scope_resolve_with_its_tokens() {
+        let mut c = scoped();
+        let violet = with_primary(&c, VIOLET);
+        scope(&mut c, 2, violet);
+        let batch = c.commit().unwrap();
+        // The scope itself and the view in it; not the view beside it, and
+        // not the one reading a token the scope leaves as it is.
+        assert_eq!(background(&batch, 2), Some(VIOLET));
+        assert_eq!(background(&batch, 3), Some(VIOLET));
+        assert_eq!(background(&batch, 4), None);
+        assert_eq!(background(&batch, 5), None);
+        // A list that reads nothing the scope changes is the surface's own.
+        let (shared, _) = c.tailwind.get("bg-border");
+        let key = c.key(4).unwrap() as usize;
+        assert!(Rc::ptr_eq(c.nodes[key].classes.as_ref().unwrap(), &shared));
+        // Without tokens of its own again: the surface's.
+        scope(&mut c, 2, None);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 2), Some(PRIMARY));
+        assert_eq!(background(&batch, 3), Some(PRIMARY));
+        assert_eq!(background(&batch, 5), None);
+    }
+
+    #[test]
+    fn a_scopes_new_values_restyle_only_what_reads_them() {
+        let mut c = scoped();
+        let violet = with_primary(&c, VIOLET);
+        scope(&mut c, 2, violet);
+        c.commit().unwrap();
+        let pink = with_primary(&c, PINK);
+        scope(&mut c, 2, pink.clone());
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 3), Some(PINK));
+        assert_eq!(background(&batch, 4), None);
+        assert_eq!(background(&batch, 5), None);
+        // The same values again: nothing to show.
+        scope(&mut c, 2, pink);
+        assert!(c.commit().is_none_or(|b| background(&b, 3).is_none()));
+    }
+
+    #[test]
+    fn the_nearest_scope_wins_and_a_moved_view_takes_the_scope_it_is_in() {
+        let mut c = scoped();
+        let violet = with_primary(&c, VIOLET);
+        let pink = with_primary(&c, PINK);
+        scope(&mut c, 2, violet);
+        scope(&mut c, 3, pink);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 2), Some(VIOLET));
+        assert_eq!(background(&batch, 3), Some(PINK));
+        // A view made in the inner scope, and the one beside the scopes
+        // moved into the outer one, then out again.
+        child(&mut c, 3, 6, "bg-primary");
+        assert_eq!(background(&c.commit().unwrap(), 6), Some(PINK));
+        let moved = |c: &mut Core<FakeEngine>, from, to| {
+            apply(
+                c,
+                vec![
+                    Op::Remove {
+                        parent: from,
+                        child: 5,
+                    },
+                    Op::Insert {
+                        parent: to,
+                        child: 5,
+                        before: None,
+                    },
+                ],
+            );
+            background(&c.commit().unwrap(), 5)
+        };
+        assert_eq!(moved(&mut c, ROOT_ID, 2), Some(VIOLET));
+        assert_eq!(moved(&mut c, 2, ROOT_ID), Some(PRIMARY));
+    }
+
+    #[test]
+    fn the_surfaces_tokens_reach_what_a_scope_leaves_alone() {
+        let mut c = scoped();
+        let violet = with_primary(&c, VIOLET);
+        scope(&mut c, 2, violet);
+        c.commit().unwrap();
+        // The app's theme changes `border` and `primary`. The scope's
+        // component gives its tokens again, its own `primary` over the new
+        // ones: the view reading `border` in it follows the app, the one
+        // reading `primary` keeps the scope's.
+        let mut theme = (**c.tokens()).clone();
+        theme.set_color("border", AdaptiveColor::rgb(0x00ff00, 0x00ff00));
+        theme.set_color("primary", AdaptiveColor::rgb(0x0000ff, 0x0000ff));
+        c.set_tokens(theme);
+        let violet = with_primary(&c, VIOLET);
+        scope(&mut c, 2, violet);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 5), Some(Color(0x0000_ffff)));
+        assert_eq!(background(&batch, 4), Some(Color(0x00ff_00ff)));
+        assert!(background(&batch, 3).is_none_or(|color| color == VIOLET));
+        // `border` is the surface's again in the scope: its list is shared.
+        let (shared, _) = c.tailwind.get("bg-border");
+        let key = c.key(4).unwrap() as usize;
+        assert!(Rc::ptr_eq(c.nodes[key].classes.as_ref().unwrap(), &shared));
+    }
+
+    #[test]
+    fn a_scope_resolves_variants_and_the_appearance_with_its_values() {
+        let mut c = core();
+        child(&mut c, ROOT_ID, 2, "p-2");
+        child(
+            &mut c,
+            2,
+            3,
+            "bg-white hover:bg-primary/50 border border-primary",
+        );
+        c.commit().unwrap();
+        let mut tokens = (**c.tokens()).clone();
+        tokens.set_color("primary", AdaptiveColor::rgb(0x7c3aed, 0xdb2777));
+        scope(&mut c, 2, Some(Arc::new(tokens)));
+        let batch = c.commit().unwrap();
+        assert_eq!(view_style_of(&batch, 3).unwrap().borders.colors[0], VIOLET);
+        // Dark in the scope: its dark value.
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: 2,
+                prop: Prop::Appearance(crate::platform::Appearance::Dark),
+            }],
+        );
+        let batch = c.commit().unwrap();
+        assert_eq!(view_style_of(&batch, 3).unwrap().borders.colors[0], PINK);
+    }
+}
+
+/// [`crate::element::ThemeScope`] with a theme: what reads the tokens in
+/// Rust reads the scope's, and the app's classes on its elements resolve
+/// with them.
+mod theme_scope_tokens {
+    use super::*;
+    use crate::{
+        element::{Root, Tokens},
+        prelude::*,
+    };
+
+    thread_local! {
+        static THEME: Cell<Option<Signal<Option<ScopeTheme>>>> = const { Cell::new(None) };
+    }
+
+    fn hex(tokens: &Tokens, name: &str) -> String {
+        tokens.color(name).map_or_else(
+            || "none".into(),
+            |c| format!("{:06x}", Color::from(c.light).0 >> 8),
+        )
+    }
+
+    /// A view in the app's `bg-primary`, saying the tokens it reads.
+    #[component]
+    fn Reader() -> impl IntoElement {
+        view().app_class(Some("bg-primary".into())).child(text(|| {
+            let tokens = tokens();
+            format!(
+                "{} {} {}",
+                hex(&tokens, "primary"),
+                hex(&tokens, "border"),
+                hex(&tokens, "nope")
+            )
+        }))
+    }
+
+    fn with(colors: &[(&str, u32)]) -> ScopeTheme {
+        let mut tokens = Tokens::default();
+        for (name, color) in colors {
+            tokens.set_color(name, AdaptiveColor::rgb(*color, *color));
+        }
+        tokens.into()
+    }
+
+    /// A reader beside a scope with its own `primary` (and a name the
+    /// theme lacks), and in it a scope with its own `border`.
+    #[component]
+    fn App() -> impl IntoElement {
+        let theme = signal(Some(with(&[("primary", 0x7c3aed), ("nope", 0x123456)])));
+        THEME.with(|saved| saved.set(Some(theme)));
+        view().child(reader()).child(
+            theme_scope().theme(theme).child(reader()).child(
+                theme_scope()
+                    .theme(Some(with(&[("border", 0x00ff00)])))
+                    .child(reader()),
+            ),
+        )
+    }
+
+    /// The texts the batch shows, sorted (which reader runs first is no
+    /// contract).
+    fn texts(batch: &MountBatch) -> Vec<String> {
+        let mut texts: Vec<String> = batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::Text { text, .. } => Some(text.text.clone()),
+                _ => None,
+            })
+            .collect();
+        texts.sort();
+        texts
+    }
+
+    fn backgrounds(batch: &MountBatch) -> Vec<Color> {
+        batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::ViewStyle { style, .. } if style.background_color != Color(0) => {
+                    Some(style.background_color)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn theme(c: &mut Core<FakeEngine>, theme: Option<ScopeTheme>) -> MountBatch {
+        {
+            let _entered = c.components.runtime.enter();
+            THEME.with(Cell::get).unwrap().set(theme);
+        }
+        c.commit().unwrap()
+    }
+
+    const PRIMARY: Color = Color(0x1717_17ff);
+    const VIOLET: Color = Color(0x7c3a_edff);
+    const PINK: Color = Color(0xdb27_77ff);
+
+    #[test]
+    fn what_a_scope_holds_reads_and_draws_its_tokens() {
+        let mut c = core();
+        c.mount_root(&Root::of::<App>());
+        let batch = c.commit().unwrap();
+        // Outside; in the scope (the name the theme lacks is left out);
+        // in the scope inside it, which starts from the outer one's.
+        assert_eq!(
+            texts(&batch),
+            [
+                "171717 e5e5e5 none",
+                "7c3aed 00ff00 none",
+                "7c3aed e5e5e5 none"
+            ]
+        );
+        assert_eq!(backgrounds(&batch), [PRIMARY, VIOLET, VIOLET]);
+    }
+
+    #[test]
+    fn a_scopes_theme_changes_under_what_it_holds() {
+        let mut c = core();
+        c.mount_root(&Root::of::<App>());
+        c.commit().unwrap();
+        let batch = theme(&mut c, Some(with(&[("primary", 0xdb2777)])));
+        assert_eq!(texts(&batch), ["db2777 00ff00 none", "db2777 e5e5e5 none"]);
+        assert_eq!(backgrounds(&batch), [PINK, PINK]);
+        // Without a theme of its own it is drawn with the app's.
+        let batch = theme(&mut c, None);
+        assert_eq!(texts(&batch), ["171717 00ff00 none", "171717 e5e5e5 none"]);
+        assert_eq!(backgrounds(&batch), [PRIMARY, PRIMARY]);
+    }
+
+    #[test]
+    fn the_apps_theme_reaches_the_tokens_a_scope_leaves_alone() {
+        let mut c = core();
+        c.mount_root(&Root::of::<App>());
+        c.commit().unwrap();
+        let mut app = (**c.tokens()).clone();
+        app.set_color("primary", AdaptiveColor::rgb(0x0000ff, 0x0000ff));
+        app.set_color("border", AdaptiveColor::rgb(0xff0000, 0xff0000));
+        c.set_tokens(app);
+        let batch = c.commit().unwrap();
+        // The app's `border` in the outer scope, which keeps its `primary`;
+        // the inner one sets both and says nothing new.
+        assert_eq!(texts(&batch), ["0000ff ff0000 none", "7c3aed ff0000 none"]);
+        // Only the reader outside is drawn in another color.
+        assert_eq!(backgrounds(&batch), [Color(0x0000_ffff)]);
+    }
+}

@@ -888,6 +888,9 @@ impl<M: TextEngine> Core<M> {
         }
         let typed = registry.has_theme_types();
         self.components.registry = registry;
+        self.components
+            .runtime
+            .set_theme_tokens(self.theme_tokens());
         // The tokens were sent before the registry was in place: an app with
         // theme types has a theme of its own (`Tokens::is_themed`).
         if typed {
@@ -906,6 +909,9 @@ impl<M: TextEngine> Core<M> {
             registry.run_setups_not_in(&self.components.registry);
         }
         self.components.registry = registry;
+        self.components
+            .runtime
+            .set_theme_tokens(self.theme_tokens());
     }
 
     /// The app's theme file (`nsh.json`, `setTheme`, a Rust app's
@@ -1843,7 +1849,8 @@ impl<M: TextEngine> Core<M> {
             combined.push(' ');
             combined.push_str(name);
         }
-        let user = (!combined.trim().is_empty()).then(|| self.tailwind.get(&combined).0);
+        let key = self.key(host).ok();
+        let user = (!combined.trim().is_empty()).then(|| self.classes_at(key, &combined).0);
         self.set_user(host, user);
     }
 
@@ -2060,7 +2067,7 @@ impl<M: TextEngine> Core<M> {
             self.components.mark(rooted);
             return;
         }
-        let cx = self.root_context(inst);
+        let cx = self.root_context(host, inst);
         let given_changed = std::mem::take(&mut inst.given_changed);
         let attrs = if let Some(node) = inst.bound.get_mut(&host) {
             let (style, classes) = (node.style.clone(), node.classes.clone());
@@ -2552,7 +2559,7 @@ impl<M: TextEngine> Core<M> {
             };
         // What the views above give it and the components on its host, the
         // outer last.
-        let cx = self.root_context(inst);
+        let cx = self.root_context(host, inst);
         let app = if cx.combined {
             cx.app.as_ref()
         } else {
@@ -2696,7 +2703,7 @@ impl<M: TextEngine> Core<M> {
     /// animated values and insets the views above give it and the
     /// components whose views' roots it is (the outer last), the app's
     /// style and JS's events on the top host.
-    pub(super) fn root_context(&mut self, inst: &Instance) -> RootContext {
+    pub(super) fn root_context(&mut self, host: NodeId, inst: &Instance) -> RootContext {
         let mut cx = RootContext {
             user: inst.user.clone(),
             combined: false,
@@ -2728,7 +2735,7 @@ impl<M: TextEngine> Core<M> {
         // The classes the element was given in Rust (`app_class`), as the
         // app's `class` on its host.
         if let Some(class) = inst.given.as_ref().and_then(|g| g.class.clone()) {
-            let given = self.app_class_list(&class);
+            let given = self.app_class_list(host, &class);
             cx.user = self.merge_user(cx.user.take(), Some(given));
         }
         let mut app = inst.app_style.clone();
@@ -2746,7 +2753,7 @@ impl<M: TextEngine> Core<M> {
             }
             cx.user = self.merge_user(cx.user.take(), outer);
             if let Some(class) = given.and_then(|g| g.class.clone()) {
-                let given = self.app_class_list(&class);
+                let given = self.app_class_list(host, &class);
                 cx.user = self.merge_user(cx.user.take(), Some(given));
             }
         }
@@ -2767,7 +2774,7 @@ impl<M: TextEngine> Core<M> {
     /// [`Self::root_context`] of the component hosted by `host`.
     pub(super) fn root_context_of(&mut self, host: NodeId) -> Option<RootContext> {
         let inst = self.components.instances.remove(&host)?;
-        let cx = self.root_context(&inst);
+        let cx = self.root_context(host, &inst);
         self.components.instances.insert(host, inst);
         Some(cx)
     }
@@ -3006,7 +3013,7 @@ impl<M: TextEngine> Core<M> {
             }
             return self.apply_styles(id, style, old_style, old, outer);
         };
-        let app = self.app_class_list(class);
+        let app = self.app_class_list(id, class);
         let user = self.merge_user(Some(app), outer.clone());
         let classes = self.apply_styles(id, style, old_style, old, user);
         self.components
@@ -3017,8 +3024,9 @@ impl<M: TextEngine> Core<M> {
 
     /// The rules of the app's classes `class` (the unknown ones warned of
     /// once, as a host's).
-    pub(super) fn app_class_list(&mut self, class: &str) -> std::rc::Rc<ClassList> {
-        let (list, fresh) = self.tailwind.get(class);
+    pub(super) fn app_class_list(&mut self, id: NodeId, class: &str) -> std::rc::Rc<ClassList> {
+        let key = self.key(id).ok();
+        let (list, fresh) = self.classes_at(key, class);
         if fresh && !list.unknown().is_empty() {
             log::warn!(
                 "unknown classes: {}",

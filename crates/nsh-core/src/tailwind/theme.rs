@@ -988,6 +988,15 @@ impl Theme {
     pub(crate) fn replace_tokens(&mut self, tokens: Arc<ClassTokens>) {
         self.tokens = Some(tokens);
     }
+
+    /// Puts `tokens` in place of the theme's and returns those (to parse
+    /// a class with other values, then put them back).
+    pub(crate) fn swap_tokens(
+        &mut self,
+        tokens: Option<Arc<ClassTokens>>,
+    ) -> Option<Arc<ClassTokens>> {
+        std::mem::replace(&mut self.tokens, tokens)
+    }
 }
 
 #[cfg(test)]

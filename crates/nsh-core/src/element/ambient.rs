@@ -57,7 +57,10 @@ pub(crate) struct Ambient {
     main_close_press: Option<Signal<(u64, crate::desktop::CloseReason)>>,
     /// The theme types read of the tokens ([`super::theme_of`]): by type,
     /// the tokens read and the theme.
-    themes: FxHashMap<TypeId, (Arc<Tokens>, Box<dyn Any>)>,
+    themes: ThemeCache,
+    /// How theme files are read ([`ThemeTokens`]), for a
+    /// [`super::ThemeScope`]'s `theme`.
+    theme_tokens: Option<super::ThemeTokens>,
     /// The app's address (`set_app_url` resolves against its page base).
     app_url: Option<crate::url_scheme::AppUrlCell>,
     /// A [`super::ThemeScope`] was made on this surface.
@@ -66,10 +69,39 @@ pub(crate) struct Ambient {
 
 /// The surface's cache of theme types read ([`super::theme_of`]). `f` runs
 /// with the surface's data borrowed: it runs no app code.
-pub(crate) fn with_theme_cache<R>(
-    f: impl FnOnce(&mut FxHashMap<TypeId, (Arc<Tokens>, Box<dyn Any>)>) -> R,
-) -> R {
+pub(crate) fn with_theme_cache<R>(f: impl FnOnce(&mut ThemeCache) -> R) -> R {
     with_data(|d| f(&mut d.ambient.themes))
+}
+
+/// The theme types read so far ([`super::theme_of`]): by type and by the
+/// tokens read (the surface's, and each [`super::ThemeScope`]'s), the theme.
+#[derive(Default)]
+pub(crate) struct ThemeCache(FxHashMap<(TypeId, usize), ReadTheme>);
+
+/// A theme type's value, with the tokens it was read of.
+type ReadTheme = (Arc<Tokens>, Box<dyn Any>);
+
+impl ThemeCache {
+    /// Types read of this many tokens are kept; past it the cache starts
+    /// over (tokens no longer drawn with go with it).
+    const KEPT: usize = 32;
+
+    /// The theme of type `ty` read of `tokens`, if it was.
+    pub(crate) fn get(&self, ty: TypeId, tokens: &Arc<Tokens>) -> Option<&dyn Any> {
+        self.0
+            .get(&(ty, Arc::as_ptr(tokens) as usize))
+            .map(|(_, theme)| &**theme)
+    }
+
+    /// Keeps `theme`, the type `ty` read of `tokens`.
+    pub(crate) fn insert(&mut self, ty: TypeId, tokens: Arc<Tokens>, theme: Box<dyn Any>) {
+        if self.0.len() >= Self::KEPT {
+            self.0.clear();
+        }
+        // The tokens are held, so their address names them while kept.
+        self.0
+            .insert((ty, Arc::as_ptr(&tokens) as usize), (tokens, theme));
+    }
 }
 
 impl Ambient {
@@ -82,6 +114,11 @@ impl Ambient {
     /// A [`super::ThemeScope`] is made.
     pub(crate) fn set_scoped(&mut self) {
         self.scoped = true;
+    }
+
+    /// How theme files are read on this surface.
+    pub(crate) fn theme_tokens(&self) -> Option<super::ThemeTokens> {
+        self.theme_tokens.clone()
     }
 
     /// The hosts whose insets components read.
@@ -220,6 +257,12 @@ impl super::Runtime {
     ) -> crate::desktop::WindowPlacement {
         let _entered = self.enter();
         displays_signal().with_untracked(|d| placement.fit_on_displays(d))
+    }
+
+    /// How the surface's UI sets read theme files.
+    pub(crate) fn set_theme_tokens(&self, theme: super::ThemeTokens) {
+        let _entered = self.enter();
+        with_data(|d| d.ambient.theme_tokens = Some(theme));
     }
 
     /// The design tokens now: what read them runs again.
@@ -453,6 +496,11 @@ pub fn is_desktop() -> bool {
 /// The design tokens the app is drawn with (reading them subscribes: new
 /// tokens reach what read them).
 pub fn tokens() -> Arc<Tokens> {
+    super::theme_scope::ScopeTokens::nearest().unwrap_or_else(surface_tokens)
+}
+
+/// The design tokens the surface is drawn with, whatever scope is around.
+pub(super) fn surface_tokens() -> Arc<Tokens> {
     with_data(|d| d.ambient.tokens)
         .expect("the core sets the tokens")
         .get()

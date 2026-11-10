@@ -31,10 +31,10 @@ use std::sync::Arc;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 pub use self::theme::{Theme, ThemeError};
-pub(crate) use self::utilities::{Decl, Len, Part};
-use self::{
+use self::utilities::{Parts, touched};
+pub(crate) use self::{
     theme::ClassTokens,
-    utilities::{Parts, touched},
+    utilities::{Decl, Len, Part},
 };
 use crate::{
     geometry::{Points, Size},
@@ -964,6 +964,27 @@ impl Tailwind {
     /// The parsed form of `classes` (cached by string).
     pub fn classes(&mut self, classes: &str) -> std::rc::Rc<ClassList> {
         self.get(classes).0
+    }
+
+    /// `classes` parsed with the design tokens `tokens` in place of the
+    /// theme's (a scope's values); nothing is cached.
+    pub(crate) fn parse_with(&mut self, tokens: &Arc<ClassTokens>, classes: &str) -> ClassList {
+        let own = self.theme.swap_tokens(Some(tokens.clone()));
+        let parsed = parse(&self.theme, classes);
+        self.theme.swap_tokens(own);
+        parsed
+    }
+
+    /// The tokens whose values in `tokens` are not the theme's: the classes
+    /// that read one resolve to something else with `tokens`. Every class
+    /// may when the names differ.
+    pub(crate) fn difference(&self, tokens: &ClassTokens) -> TokenChange {
+        let own = self.theme.tokens();
+        if own.same_names(tokens) {
+            TokenChange::Values(own.changed(tokens))
+        } else {
+            TokenChange::All
+        }
     }
 
     /// Like [`Tailwind::classes`], and whether `classes` was parsed just
