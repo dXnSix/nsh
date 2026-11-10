@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 
 mod derive_app_theme;
+mod derive_gradient_token;
 mod derive_token_roles;
 mod native_components;
 

@@ -83,15 +83,22 @@ const KINDS: &[Kind] = &[
         prefix: "shadow-",
         types: &["AdaptiveShadow"],
     },
+    Kind {
+        name: "gradient",
+        variant: "Gradient",
+        prefix: "background-image-",
+        types: &["AdaptiveGradient"],
+    },
 ];
 
 /// What a role a `kind` token plays reads (`nsh_core::element::RoleValue`):
-/// a color, a number or a font family. `None`: no role reads box shadows.
+/// a color, a number or a font family. `None`: no role reads box shadows
+/// or gradients.
 fn role_value(kind: &Kind) -> Option<TokenStream2> {
     match kind.name {
         "color" => Some(quote!(::nsh_core::element::AdaptiveColor)),
         "font" => Some(quote!(::std::sync::Arc<::core::primitive::str>)),
-        "shadow" => None,
+        "shadow" | "gradient" => None,
         _ => Some(quote!(::core::primitive::f32)),
     }
 }
@@ -226,13 +233,14 @@ fn unreadable(kind: &Kind, name: &str) -> Option<String> {
     let readable = match kind.name {
         "font" => starts("font-") && !starts("font-weight-"),
         "shadow" => starts("shadow-"),
+        "gradient" => starts("background-image-"),
         "color" => !starts("font-"),
         _ => !starts("font-") || starts("font-weight-"),
     };
     (!readable).then(|| {
         format!(
-            "the {} token `{name}` is named as no {} is (a font is `font-*`, a shadow `shadow-*`, a weight \
-             `font-weight-*`, and nothing else starts `font-`)",
+            "the {} token `{name}` is named as no {} is (a font is `font-*`, a shadow `shadow-*`, a gradient \
+             `background-image-*`, a weight `font-weight-*`, and nothing else starts `font-`)",
             kind.name, kind.name
         )
     })
@@ -258,6 +266,7 @@ fn classes(kind: &Kind, name: &str) -> String {
         "leading" => format!("`leading-{rest}`"),
         "blur" => format!("`blur-{rest}`"),
         "shadow" => format!("`shadow-{rest}`"),
+        "gradient" => format!("`bg-{rest}`"),
         _ => return String::new(),
     };
     format!(" ({class})")

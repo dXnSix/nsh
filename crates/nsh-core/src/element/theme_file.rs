@@ -12,7 +12,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::{AdaptiveColor, AdaptiveShadow, Tokens};
+use super::{AdaptiveColor, AdaptiveGradient, AdaptiveShadow, Tokens};
 use crate::{Color, JsonValue, color::Hsla};
 
 /// Points per `rem`, as Tailwind's theme has them.
@@ -331,6 +331,13 @@ pub fn write(tokens: &Tokens) -> String {
             JsonValue::from(s.css(true)),
         );
     }
+    for (name, g) in tokens.gradients() {
+        put(
+            name,
+            JsonValue::from(g.css(false)),
+            JsonValue::from(g.css(true)),
+        );
+    }
     let mut vars = serde_json::Map::new();
     for (key, section) in [("theme", theme), ("light", light), ("dark", dark)] {
         if !section.is_empty() {
@@ -505,6 +512,32 @@ fn apply_css_vars(
                 continue;
             }
         }
+        // A gradient (`background-image-hero`: `linear-gradient(to right,
+        // #7c3aed, #db2777)`), per appearance, as Tailwind's
+        // `--background-image-*`: a `background-image-*` value that reads
+        // as CSS gradients, one or several. A `var()` in a stop is the
+        // theme's color in that appearance, as it is in a color. Any other
+        // value is read as before.
+        if name.starts_with(GRADIENTS) {
+            let read = |vars: &FxHashMap<String, String>, dark: bool| {
+                let css = substituted(name, vars, base, dark, &mut FxHashSet::default())?;
+                Ok(css
+                    .and_then(|css| crate::css::gradients(&css))
+                    .filter(|layers| !layers.is_empty()))
+            };
+            match (read(&light_vars, false), read(&dark_vars, true)) {
+                (Ok(Some(light)), Ok(Some(dark))) => {
+                    tokens.set_gradient(name, AdaptiveGradient::new(light, dark));
+                    continue;
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    ignored.push(e);
+                    continue;
+                }
+                // No gradient in an appearance: read as any other value.
+                _ => {}
+            }
+        }
         // A weight (`font-weight-strong`: `650`) is a number, as
         // Tailwind's `--font-weight-*`; every other `font-*` a family.
         if name.starts_with("font-weight-")
@@ -583,6 +616,10 @@ fn apply_css_vars(
     }
 }
 
+/// The namespace of gradient tokens, Tailwind's `--background-image-*`:
+/// `background-image-hero` is the class `bg-hero`.
+pub(crate) const GRADIENTS: &str = "background-image-";
+
 /// The color `name` is in `vars` (of one appearance), with the colors it
 /// names (`var(--x)`, `var(--x, fallback)`) resolved: the file's, else
 /// `base`'s. `None` when it is no color. A name that names itself is an
@@ -594,10 +631,27 @@ fn resolve_color(
     dark: bool,
     seen: &mut FxHashSet<String>,
 ) -> Result<Option<Hsla>, LeftOut> {
-    let Some(value) = vars.get(name) else {
+    if !vars.contains_key(name) {
         return Ok(base
             .color(name)
             .map(|c| if dark { c.dark } else { c.light }));
+    }
+    Ok(substituted(name, vars, base, dark, seen)?.and_then(|css| color(&css)))
+}
+
+/// The value of `name` in `vars` (of one appearance) with each `var(--x)`
+/// and `var(--x, fallback)` in it written as the color it names
+/// ([`resolve_color`]), or its fallback. `None` when `vars` have no
+/// `name`, or a variable in it is no color and has no fallback.
+fn substituted(
+    name: &str,
+    vars: &FxHashMap<String, String>,
+    base: &Tokens,
+    dark: bool,
+    seen: &mut FxHashSet<String>,
+) -> Result<Option<String>, LeftOut> {
+    let Some(value) = vars.get(name) else {
+        return Ok(None);
     };
     if !seen.insert(name.to_owned()) {
         return Err(LeftOut::about(name, " names itself"));
@@ -641,7 +695,7 @@ fn resolve_color(
     }
     out.push_str(rest);
     seen.remove(name);
-    Ok(color(&out))
+    Ok(Some(out))
 }
 
 /// The reader of theme files, name-agnostic: the same tokens and the same

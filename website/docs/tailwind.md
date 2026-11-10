@@ -269,6 +269,15 @@ A token's name is its CSS variable's without `--`, as the theme file writes it: 
   as shadcn's `tracking-normal: 0em` always was. They work under variants and follow the theme as every token class
   does. `text-` is a color utility's too: there a color of the same name stays first; elsewhere the longer utility
   wins (`inset-shadow-card` is the inset shadow's color `card`).
+- **Gradient tokens.** A `background-image-<n>` entry written as CSS gradients (`"background-image-hero":
+  "linear-gradient(135deg, #7c3aed, #db2777)"`, a value per appearance in `light` and `dark`; linear, radial and
+  conic, repeating, one or several) is a gradient token, as Tailwind 4's `--background-image-*` are: the class
+  `bg-hero` and `bg-(image:--background-image-hero)` draw it, in the appearance shown. A `var()` in a stop is the
+  theme's color in that appearance (`linear-gradient(to right, var(--primary), var(--accent))` written once in
+  `theme` is a gradient for each). A color `hero` or a class of Tailwind's own keeps `bg-hero`, and the build lists
+  the token as it does a number's; read it with the `(image:--…)` form then. In Rust,
+  `.adaptive_gradient(move || tokens().gradient("background-image-hero").cloned().unwrap_or_default())` follows the
+  theme and the appearance; `token("background-image-hero")` is its CSS, which the `backgroundImage` style takes.
 - **Shadow tokens.** A `shadow-<n>` entry written as CSS `box-shadow` (`"shadow-raised": "0 1px 2px #0000001a"`, a
   value per appearance in `light` and `dark`) is a shadow token: the class `shadow-raised` and `shadow-(--shadow-raised)`
   draw its layers, in the appearance shown. Other `shadow-*` names a theme has (shadcn's `shadow-color`,

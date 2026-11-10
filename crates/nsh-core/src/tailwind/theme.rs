@@ -13,7 +13,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::{
     css,
     effects::BoxShadow,
-    element::AdaptiveColor,
+    element::{AdaptiveColor, theme_file::GRADIENTS},
     style::{Color, TextShadow},
 };
 
@@ -88,6 +88,8 @@ pub(crate) struct ClassTokens {
     fonts: FxHashMap<Box<str>, Arc<str>>,
     /// Box shadows, per appearance (`shadow-raised`).
     shadows: FxHashMap<Box<str>, crate::element::AdaptiveShadow>,
+    /// Gradients, per appearance (`background-image-hero`: `bg-hero`).
+    gradients: FxHashMap<Box<str>, crate::element::AdaptiveGradient>,
     /// Whether a number's name is in one of Tailwind's namespaces
     /// (`radius-card`): without one no utility names a number
     /// ([`ClassTokens::named_number`]), which a theme without such
@@ -110,6 +112,10 @@ impl ClassTokens {
                 .shadows()
                 .map(|(k, s)| (k.into(), s.clone()))
                 .collect(),
+            gradients: theme
+                .gradients()
+                .map(|(k, g)| (k.into(), g.clone()))
+                .collect(),
             namespaced: theme
                 .numbers()
                 .chain(theme.dark_numbers())
@@ -117,13 +123,15 @@ impl ClassTokens {
         }
     }
 
-    /// The names of the colors, the numbers, the fonts and the shadows.
+    /// The names of the colors, the numbers, the fonts, the shadows and
+    /// the gradients.
     pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
         self.colors
             .keys()
             .chain(self.numbers.keys())
             .chain(self.fonts.keys())
             .chain(self.shadows.keys())
+            .chain(self.gradients.keys())
             .map(|n| &**n)
     }
 
@@ -134,7 +142,12 @@ impl ClassTokens {
             && self.numbers.len() == other.numbers.len()
             && self.fonts.len() == other.fonts.len()
             && self.shadows.len() == other.shadows.len()
+            && self.gradients.len() == other.gradients.len()
             && self.shadows.keys().all(|k| other.shadows.contains_key(k))
+            && self
+                .gradients
+                .keys()
+                .all(|k| other.gradients.contains_key(k))
             && self.colors.keys().all(|k| other.colors.contains_key(k))
             && self.numbers.keys().all(|k| other.numbers.contains_key(k))
             && self.fonts.keys().all(|k| other.fonts.contains_key(k))
@@ -168,6 +181,9 @@ impl ClassTokens {
         }
         for (name, shadow) in &self.shadows {
             differ(name, other.shadows.get(name) == Some(shadow));
+        }
+        for (name, gradient) in &self.gradients {
+            differ(name, other.gradients.get(name) == Some(gradient));
         }
         changed
     }
@@ -220,7 +236,11 @@ impl ClassTokens {
                 };
                 let name = var.strip_prefix("--")?;
                 out.push('[');
-                if let Some(h) = hint {
+                // A gradient token by its variable, as Tailwind reads an
+                // image (`bg-(image:--background-image-hero)`): the value
+                // alone, which the utility reads as gradients.
+                let gradient = self.gradients.get(name).filter(|_| hint == Some("image"));
+                if let Some(h) = hint.filter(|_| gradient.is_none()) {
                     out.push_str(h);
                     out.push(':');
                 }
@@ -232,6 +252,9 @@ impl ClassTokens {
                 let shadow = self.shadows.get(name).filter(|_| hint.is_none());
                 match (color, self.number(name, dark)) {
                     (Some(c), _) => hex(&mut out, c),
+                    (None, _) if let Some(g) = gradient => {
+                        out.push_str(&g.css(dark).replace(' ', "_"))
+                    }
                     (None, _) if let Some(s) = shadow => {
                         out.push_str(&s.css(dark).replace(' ', "_"))
                     }
@@ -277,7 +300,19 @@ impl ClassTokens {
                 return Some(named);
             }
             (_, Some(color)) => color,
-            (None, None) => return None,
+            // A gradient token is the class `bg-<n>` of its name
+            // (`background-image-hero`: `bg-hero`), as Tailwind's
+            // `--background-image-*` are, after a color of that name: its
+            // gradients as an arbitrary value.
+            (None, None) => {
+                let name = utility.strip_prefix("bg-")?;
+                let (token, gradient) = self
+                    .gradients
+                    .iter()
+                    .find(|(token, _)| token.strip_prefix(GRADIENTS) == Some(name))?;
+                read.push(token_key(token));
+                return Some(format!("bg-[{}]", gradient.css(dark).replace(' ', "_")));
+            }
         };
         read.push(token_key(name));
         let mut out = String::with_capacity(utility.len() + 16);
@@ -351,6 +386,18 @@ impl ClassTokens {
             if !classes.is_empty() {
                 classes.sort();
                 out.push((token.to_string(), classes));
+            }
+        }
+        // A gradient token's class is `bg-<n>`: one of Tailwind's own
+        // (`bg-none`, a palette color's `bg-black`) or a theme color `<n>`
+        // keeps it.
+        for token in self.gradients.keys() {
+            let Some(name) = token.strip_prefix(GRADIENTS) else {
+                continue;
+            };
+            let class = format!("bg-{name}");
+            if super::utilities::parse(theme, &class).is_some() || self.colors.contains_key(name) {
+                out.push((token.to_string(), vec![class]));
             }
         }
         out.sort();
