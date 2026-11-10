@@ -122,6 +122,76 @@ macro_rules! theme {
             ///
             /// Name `selection`.
             pub const SELECTION: Role = Role::new("selection");
+            /// What succeeded: a `[!TIP]` alert in a `TextView`. No token
+            /// of the default theme: the component draws its own green
+            /// when the theme has none.
+            ///
+            /// Name `success`.
+            pub const SUCCESS: Role = Role::new("success");
+            /// What to watch out for: an `Editor`'s warning diagnostics, a
+            /// `[!WARNING]` alert in a `TextView`. No token of the default
+            /// theme: each draws its own amber when the theme has none.
+            ///
+            /// Name `warning`.
+            pub const WARNING: Role = Role::new("warning");
+            /// What is worth knowing: an `Editor`'s info diagnostics, a
+            /// `[!NOTE]` alert in a `TextView`. No token of the default
+            /// theme: each draws its own blue when the theme has none.
+            ///
+            /// Name `info`.
+            pub const INFO: Role = Role::new("info");
+            /// What is marked: an `Editor`'s search matches, marked text
+            /// (`<mark>`) in a `TextView`. No token of the
+            /// default theme: each draws its own yellow when the theme has
+            /// none. The components draw it translucent; the token is the
+            /// solid color.
+            ///
+            /// Name `highlight`.
+            pub const HIGHLIGHT: Role = Role::new("highlight");
+            /// A diff's added lines: a `DiffView`'s row tint, indicators,
+            /// changed words and file counts. No token of the default
+            /// theme: the view draws its own green when the theme has
+            /// none. The view draws the tints translucent; the token is
+            /// the solid color.
+            ///
+            /// Name `diff-added`.
+            pub const DIFF_ADDED: Role = Role::new("diff-added");
+            /// A diff's deleted lines, as [`DIFF_ADDED`] its added ones:
+            /// the view draws its own red when the theme has none.
+            ///
+            /// Name `diff-deleted`.
+            pub const DIFF_DELETED: Role = Role::new("diff-deleted");
+            /// Comments in highlighted code: an `Editor`'s, a `DiffView`'s
+            /// and a `TextView`'s code blocks'. No token of the default
+            /// theme, as none of the `SYNTAX_*` roles has: the highlighter
+            /// draws its own palette where the theme has none.
+            ///
+            /// Name `syntax-comment`.
+            pub const SYNTAX_COMMENT: Role = Role::new("syntax-comment");
+            /// Keywords, the words of operators, headings.
+            ///
+            /// Name `syntax-keyword`.
+            pub const SYNTAX_KEYWORD: Role = Role::new("syntax-keyword");
+            /// Strings, regular expressions, escapes.
+            ///
+            /// Name `syntax-string`.
+            pub const SYNTAX_STRING: Role = Role::new("syntax-string");
+            /// Numbers, constants and literals.
+            ///
+            /// Name `syntax-number`.
+            pub const SYNTAX_NUMBER: Role = Role::new("syntax-number");
+            /// Names of functions and classes.
+            ///
+            /// Name `syntax-function`.
+            pub const SYNTAX_FUNCTION: Role = Role::new("syntax-function");
+            /// Attributes, parameters, properties and keys.
+            ///
+            /// Name `syntax-property`.
+            pub const SYNTAX_PROPERTY: Role = Role::new("syntax-property");
+            /// Types, built-ins and tags.
+            ///
+            /// Name `syntax-type`.
+            pub const SYNTAX_TYPE: Role = Role::new("syntax-type");
         }
 
         /// A theme: shadcn/ui's tokens, each a field, and the app's own

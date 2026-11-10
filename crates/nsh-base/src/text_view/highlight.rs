@@ -45,7 +45,7 @@ mod syntect_highlighter {
     };
 
     use crate::{
-        syntax::{Parse, Token, find_syntax, loaded, plain, scope_token, syntaxes},
+        syntax::{Palette, Parse, Token, find_syntax, loaded, plain, scope_token, syntaxes},
         text_view::CodeBlock,
     };
 
@@ -69,9 +69,16 @@ mod syntect_highlighter {
             return None;
         }
         let source = code.code.clone();
+        // The spans are made in a scope of their own, which reading the
+        // palette subscribes to the theme: they are made again when it
+        // changes, whatever made the block.
         let partial = if loaded() {
             match now(find_syntax(language)?, &source) {
-                Ok(tokens) => return Some(spans(&source, &tokens)),
+                Ok(tokens) => {
+                    return Some(vec![dynamic(move || {
+                        spans(&source, &tokens, &Palette::of_theme())
+                    })]);
+                }
                 Err(partial) => partial,
             }
         } else {
@@ -80,7 +87,8 @@ mod syntect_highlighter {
         let highlighted = signal(partial);
         later(language.to_owned(), source.clone(), highlighted);
         Some(vec![dynamic(move || {
-            highlighted.with(|tokens| spans(&source, tokens))
+            let palette = Palette::of_theme();
+            highlighted.with(|tokens| spans(&source, tokens, &palette))
         })])
     }
 
@@ -127,8 +135,8 @@ mod syntect_highlighter {
         });
     }
 
-    /// `code` in spans styled by its tokens.
-    fn spans(code: &str, tokens: &Tokens) -> Vec<AnyElement> {
+    /// `code` in spans styled by its tokens, in `palette`.
+    fn spans(code: &str, tokens: &Tokens, palette: &Palette) -> Vec<AnyElement> {
         let mut out = Vec::with_capacity(tokens.len() * 2 + 1);
         let mut at = 0;
         for (range, token) in tokens {
@@ -136,7 +144,7 @@ mod syntect_highlighter {
                 out.push(text(code[at..range.start].to_owned()).into_element());
             }
             let mut span = text(code[range.clone()].to_owned());
-            *span.style() = token.style();
+            *span.style() = token.style(palette);
             out.push(span.into_element());
             at = range.end;
         }
@@ -450,7 +458,7 @@ mod syntect_highlighter {
             assert_eq!(token_of(&tokens, rs, "f32"), Some(Token::Built));
             assert_eq!(token_of(&tokens, rs, "as"), Some(Token::Keyword));
             assert_eq!(token_of(&tokens, rs, "="), None);
-            assert!(spans(rs, &tokens).len() >= tokens.len());
+            assert!(spans(rs, &tokens, &Palette::default()).len() >= tokens.len());
         }
 
         /// `cargo test --release -p nsh-base bench_highlight -- --ignored --nocapture`

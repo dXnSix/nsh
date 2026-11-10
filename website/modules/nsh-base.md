@@ -317,9 +317,19 @@ and reads the token of that name unless the theme maps it onto another token:
 | `destructive` | `theme().destructive`; an Android alert's destructive action |
 | `border`, `ring` | `theme().border` / `ring`; Linux's menu borders and separators (`border`) |
 | `selection` | `theme().selection()` (`primary` at 22 % without it) |
+| `success` | a `TextView`'s tip alert (its own green without it) |
+| `warning` | an `Editor`'s warning diagnostics; a `TextView`'s warning alert (their own ambers without it) |
+| `info` | an `Editor`'s info diagnostics; a `TextView`'s note alert (their own blues without it) |
+| `highlight` | an `Editor`'s search matches; a `TextView`'s marked text (their own yellows without it) |
+| `diff-added`, `diff-deleted` | a `DiffView`'s added and deleted lines: their tints, indicators, changed words and the file list's counts (its own green and red without them) |
+| `syntax-comment`, `syntax-keyword`, `syntax-string`, `syntax-number`, `syntax-function`, `syntax-property`, `syntax-type` | highlighted code in an `Editor`, a `DiffView` and a `TextView`'s code blocks: comments, keywords, strings, numbers and constants, names of functions and classes, properties and parameters, types and built-ins (the highlighter's own palette without them) |
 | `radius` | `theme().radius` |
 | `font-sans` | the default font of every text; `theme().font_sans` |
 | `font-mono` | `theme().font_mono` |
+
+`selection`, `success`, `warning`, `info`, `highlight`, `diff-added`, `diff-deleted` and the `syntax-*` roles have no
+token in the default theme: each part draws its own color until the theme has a token of that name (`"warning": "#b45309"` in its `cssVars`) or maps the role onto one
+of its own. The parts draw `highlight` and a diff's tints translucent; the token is the solid color.
 
 A role is no token and no class: `bg-primary` is a class when the theme has a token `primary`. In Rust, a role is a
 constant, an `nsh_core::element::Role`: the ones above are in `nsh_base::role` (`role::POPOVER.name()` is

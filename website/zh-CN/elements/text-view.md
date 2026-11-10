@@ -9,7 +9,7 @@ demo: text-view
 
 `TextView` 显示用 Markdown、HTML 或应用自己构建的文档块写成的文档：标题、段落、强调、链接、列表与任务列表、引用和 GitHub 的提示块（alert）、代码、表格、图片、公式、脚注和折叠块。它为 AI 模型在聊天中的回复而设计：回复以 Markdown 流式到达，每来一段，文本就带着格式显示出来。解析在 Rust 中完成，文档用 [`Text`](./text.md) 元素和视图绘制。
 
-它负责行为，并自带一套阅读排版：15pt 正文、宽松的 25.5pt 行高，半粗体标题且上方留有空间，链接以主题的 `primary` 色加下划线，代码使用主题的 `font-mono`，放在带边框的圆角框中，表格四边都有线、表头行带底色，引用在一侧带一条线，提示块是带图标、采用 GitHub 提示色的着色框。颜色取自主题的令牌（`foreground`、`muted-foreground`、`border`、`muted`、`primary`，警示（caution）用 `destructive`），因此主题和深色外观都会作用于它。每个部件在这些默认样式之上接收应用的样式：TSX 中是 `classes` 和 `styles`，Rust 中是按部件给出的类型化样式（`TextViewParts`）。Rust 用 `nsh_base::text_view()` 创建它，TSX 用从 `nsh/base` 导入的 `<TextView>`。
+它负责行为，并自带一套阅读排版：15pt 正文、宽松的 25.5pt 行高，半粗体标题且上方留有空间，链接以主题的 `primary` 色加下划线，代码使用主题的 `font-mono`，放在带边框的圆角框中，表格四边都有线、表头行带底色，引用在一侧带一条线，提示块是带图标、采用 GitHub 提示色的着色框。颜色取自主题的令牌（`foreground`、`muted-foreground`、`border`、`muted`、`primary`，警示（caution）用 `destructive`），因此主题和深色外观都会作用于它。主题若有 `success`、`warning`、`info` 或 `highlight` 令牌，提示（tip）块、警告块、备注（note）块和标记文本也会用它们着色（[主题角色](../modules/nsh-base.md#主题角色)）；没有时保持各自的颜色。每个部件在这些默认样式之上接收应用的样式：TSX 中是 `classes` 和 `styles`，Rust 中是按部件给出的类型化样式（`TextViewParts`）。Rust 用 `nsh_base::text_view()` 创建它，TSX 用从 `nsh/base` 导入的 `<TextView>`。
 
 ```rust tabs
 use nsh_base::{TextViewLinkPressEvent, text_view, theme};
@@ -214,7 +214,7 @@ fn reply(markdown: Signal<SharedString>) -> impl IntoElement {
 | `emphasis` | `Emphasis` | 强调文本（斜体）。 |
 | `strikethrough` | `Strikethrough` | 删除线文本。 |
 | `underline` | `Underline` | 下划线文本（`<u>`、`<ins>`）。 |
-| `highlight` | `Highlight` | 高亮文本（`<mark>`，圆角黄色底）。 |
+| `highlight` | `Highlight` | 高亮文本（`<mark>`，圆角底色为主题的 `highlight`，没有时为黄色）。 |
 | `superscript`、`subscript` | `Superscript`, `Subscript` | 上标和下标（字号更小）。 |
 | `link` | `Link` | 链接（主题的 `primary` 色，带下划线）。 |
 | `image` | `Image` | 图片。 |
@@ -381,7 +381,7 @@ import { TextView } from "nsh/base";
 />
 ```
 
-代码块开箱即有语法高亮：围栏上标明语言（`ts`、`tsx`、`rust`、`python`、`bash`、`json`、`toml`、`yaml`、`diff` 等约两百种）时，代码以 Allsum 的代码配色显示，随外观切换浅色或深色；未标明语言的代码块按原样显示。应用想用自己的高亮时，用 `renderCodeBlock` 显示代码，使用它自己的组件或它的 Rust crate 中的组件；Rust 视图通过 [`CodeHighlighter`](#syntax-highlighting) 把高亮器交给 `TextView`。下面用应用自己的高亮显示代码，并让图片占满宽度：
+代码块开箱即有语法高亮：围栏上标明语言（`ts`、`tsx`、`rust`、`python`、`bash`、`json`、`toml`、`yaml`、`diff` 等约两百种）时，代码以 Allsum 的代码配色显示，随外观切换浅色或深色；未标明语言的代码块按原样显示。主题用与角色同名的令牌（`syntax-keyword`、`syntax-string` 等：[主题角色](../modules/nsh-base.md#主题角色)）为某一类代码重新着色；`diff` 代码块中被删除的行使用 `diff-deleted`，与 `DiffView` 的删除行相同。应用想用自己的高亮时，用 `renderCodeBlock` 显示代码，使用它自己的组件或它的 Rust crate 中的组件；Rust 视图通过 [`CodeHighlighter`](#syntax-highlighting) 把高亮器交给 `TextView`。下面用应用自己的高亮显示代码，并让图片占满宽度：
 
 ```rust tabs
 use nsh_base::text_view;
