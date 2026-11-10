@@ -2715,9 +2715,37 @@ iOS 与 macOS 一致（`mod` 是 Command），Android 与 Windows、Linux 一致
 
 应用自己的快捷键请用 `mod`：它就是各平台应用习惯使用的那个键（macOS 上是 ⌘K，Windows 和 Linux 上是 Ctrl+K），一种写法到处适用。Windows 键和 Super 基本归系统使用，所以在 macOS 以外很少该用 `cmd`。
 
-键可以是字母、数字或标点键，写作它在美式键盘上不按 Shift 时输入的字符（`k`、`1`、`,`、`/`、`[`；`?` 写作 `"shift+/"`，Shift+K 写作 `"shift+k"`），也可以是名称：`plus`（`=` / `+` 键，也可写 `=`）、`minus`（也可写 `-`）、`space`、`enter`（`return`）、`escape`（`esc`）、`tab`、`backspace`、`delete`（`del`）、`insert`、方向键 `up`、`down`、`left`、`right`（`arrowup` 等）、`home`、`end`、`pageup`、`pagedown`、`f1` 到 `f24`。大小写不影响：`"Mod+Shift+K"` 就是 `"mod+shift+k"`，大写字母表示同一个键，并不意味着 Shift（`"mod+K"` 就是 `"mod+k"`）。推荐的写法是全小写，本页示例都这样写。`"mod-k"` 和 `"mod++"` 会报错，错误信息给出正确的写法。`nsh/desktop` 的菜单快捷键使用同样的写法。
+键可以是字母、数字或标点键，写作它在美式键盘上不按 Shift 时输入的字符（`k`、`1`、`,`、`/`、`[`；`?` 写作 `"shift+/"`，Shift+K 写作 `"shift+k"`），也可以是名称：`plus`（`=` / `+` 键，也可写 `=`）、`minus`（也可写 `-`）、`space`、`enter`（`return`）、`escape`（`esc`）、`tab`、`backspace`、`delete`（`del`）、`insert`、方向键 `up`、`down`、`left`、`right`（`arrowup` 等）、`home`、`end`、`pageup`、`pagedown`、`f1` 到 `f24`，以及下文的媒体键与电视遥控器按键。大小写不影响：`"Mod+Shift+K"` 就是 `"mod+shift+k"`，大写字母表示同一个键，并不意味着 Shift（`"mod+K"` 就是 `"mod+k"`）。推荐的写法是全小写，本页示例都这样写。`"mod-k"` 和 `"mod++"` 会报错，错误信息给出正确的写法。`nsh/desktop` 的菜单快捷键使用同样的写法（媒体键与电视遥控器按键除外）。
 
 快捷键适用于任何键盘布局：在西里尔或希腊字母布局下，`mod+k` 是美式布局中输入 K 的那个键，与菜单快捷键一致。
+
+#### 媒体键与电视遥控器按键
+
+媒体键盘和电视遥控器有自己的按键，命名方式与其他键相同：
+
+| 按键 | 名称 | 也可写作 |
+|---|---|---|
+| 播放 / 暂停 | `mediaplaypause` | |
+| 播放 | `mediaplay` | |
+| 暂停 | `mediapause` | |
+| 停止 | `mediastop` | |
+| 快退 | `mediarewind` | |
+| 快进 | `mediafastforward` | |
+| 下一曲 | `medianext` | `mediatracknext` |
+| 上一曲 | `mediaprevious` | `mediatrackprevious` |
+| 红、绿、黄、蓝 | `red`、`green`、`yellow`、`blue` | `colorf0red`、`colorf1green`、`colorf2yellow`、`colorf3blue` |
+| 频道加、频道减 | `channelup`、`channeldown` | |
+| 信息 | `info` | |
+
+```tsx
+keymap.bind({
+  mediaplaypause: () => player.toggle(),
+  red: () => openFilters(),
+  channelup: () => nextChannel(),
+});
+```
+
+它们来自各平台报告的按键：Windows 的媒体键（播放 / 暂停、停止、下一曲、上一曲），Android 上的全部这些键（`KEYCODE_MEDIA_*`、`KEYCODE_PROG_RED` 等、`KEYCODE_CHANNEL_*`、`KEYCODE_INFO`），浏览器中按 `KeyboardEvent.key` 识别（在三星电视上也按遥控器的键码识别），Tizen 电视上则通过 GPUI 后端。它们不输入文字，所以在文本输入框中绑定也会触发。`keymap.label` 用文字显示它们（`"Play/Pause"`、`"Red"`、`"Channel Up"`）。
 
 对于无效的按键组合，`bind` 会抛出一个说明问题所在的 `TypeError`（`keymap.bind: invalid keystroke "cmd+kk": unknown key "kk"`），并拒绝系统保留的按键组合，应用因此永远无法让它们失效：
 
