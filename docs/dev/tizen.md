@@ -54,7 +54,9 @@ developer's machine through `sdb`, not the network, so the client's connections 
   worked last first.
 
 Over `sdb forward` the bundles, hot updates and logs work; the app's `asset:/` files come from the dev server over
-HTTP at the reverse-mapped port. Logs go to the dev server while connected and to dlog otherwise.
+HTTP at the reverse-mapped port. Logs go to the dev server while connected and to dlog otherwise. Its hello names
+`HostPlatform::Tizen` (`AppView::connect_dev_server_with`'s `platform`), whose install command `nsh dev` shows as
+`nsh run --target tizen`; servers older than it read it as `Other`.
 
 ## Building
 
