@@ -2963,9 +2963,37 @@ iOS follows macOS (`mod` is Command) and Android follows Windows and Linux (`mod
 
 Use `mod` for an app's own shortcuts: it is the key each platform's apps use for them (⌘K on macOS, Ctrl+K on Windows and Linux), so one spelling fits everywhere. The Windows key and Super mostly belong to the system, so `cmd` is rarely right outside macOS.
 
-The key is a letter, digit or punctuation key, written as the character it types on a US keyboard without Shift (`k`, `1`, `,`, `/`, `[`; `"shift+/"` for `?`, `"shift+k"` for Shift+K), or a name: `plus` (the `=` / `+` key, also written `=`), `minus` (also `-`), `space`, `enter` (`return`), `escape` (`esc`), `tab`, `backspace`, `delete` (`del`), `insert`, the arrows `up`, `down`, `left`, `right` (`arrowup`, …), `home`, `end`, `pageup`, `pagedown`, `f1` to `f24`. Case does not matter: `"Mod+Shift+K"` is `"mod+shift+k"`, and a capital letter is the same key, not Shift (`"mod+K"` is `"mod+k"`). Lowercase is the recommended style, which these pages use. `"mod-k"` and `"mod++"` are errors whose messages give the right spelling. Menu shortcuts in `nsh/desktop` take the same keystrokes.
+The key is a letter, digit or punctuation key, written as the character it types on a US keyboard without Shift (`k`, `1`, `,`, `/`, `[`; `"shift+/"` for `?`, `"shift+k"` for Shift+K), or a name: `plus` (the `=` / `+` key, also written `=`), `minus` (also `-`), `space`, `enter` (`return`), `escape` (`esc`), `tab`, `backspace`, `delete` (`del`), `insert`, the arrows `up`, `down`, `left`, `right` (`arrowup`, …), `home`, `end`, `pageup`, `pagedown`, `f1` to `f24`, and the media and TV remote keys below. Case does not matter: `"Mod+Shift+K"` is `"mod+shift+k"`, and a capital letter is the same key, not Shift (`"mod+K"` is `"mod+k"`). Lowercase is the recommended style, which these pages use. `"mod-k"` and `"mod++"` are errors whose messages give the right spelling. Menu shortcuts in `nsh/desktop` take the same keystrokes, the media and TV remote keys aside.
 
 Shortcuts work with any keyboard layout: on a Cyrillic or Greek layout, `mod+k` is the key that types K on a US layout, as menu shortcuts are.
+
+#### Media and TV remote keys
+
+Media keyboards and TV remotes have keys of their own, named like the others:
+
+| Key | Name | Also written |
+|---|---|---|
+| Play / Pause | `mediaplaypause` | |
+| Play | `mediaplay` | |
+| Pause | `mediapause` | |
+| Stop | `mediastop` | |
+| Rewind | `mediarewind` | |
+| Fast forward | `mediafastforward` | |
+| Next track | `medianext` | `mediatracknext` |
+| Previous track | `mediaprevious` | `mediatrackprevious` |
+| Red, green, yellow, blue | `red`, `green`, `yellow`, `blue` | `colorf0red`, `colorf1green`, `colorf2yellow`, `colorf3blue` |
+| Channel up, channel down | `channelup`, `channeldown` | |
+| Info | `info` | |
+
+```tsx
+keymap.bind({
+  mediaplaypause: () => player.toggle(),
+  red: () => openFilters(),
+  channelup: () => nextChannel(),
+});
+```
+
+They come from the keys each platform reports: Windows' media keys (play / pause, stop, next and previous track), every one of them on Android (`KEYCODE_MEDIA_*`, `KEYCODE_PROG_RED` …, `KEYCODE_CHANNEL_*`, `KEYCODE_INFO`), in browsers by their `KeyboardEvent.key` (and on Samsung TVs by the remote's key codes), and on Tizen TVs through the GPUI backend. They type no text, so their bindings fire in text inputs too. `keymap.label` names them in words (`"Play/Pause"`, `"Red"`, `"Channel Up"`).
 
 `bind` throws a `TypeError` that says what is wrong with an invalid keystroke (`keymap.bind: invalid keystroke "cmd+kk": unknown key "kk"`), and refuses the keystrokes the system keeps for itself, so an app can never break them:
 

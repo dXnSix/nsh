@@ -201,6 +201,23 @@ fn dom_key(key: nsh_core::keymap::Key, shift: bool) -> Option<(String, String)> 
         Key::PageUp => named("PageUp", "PageUp"),
         Key::PageDown => named("PageDown", "PageDown"),
         Key::F(n) => Some((format!("F{n}"), format!("F{n}"))),
+        // The UI Events' media keys have a `code`; the TV remote's other
+        // keys only a `key`.
+        Key::MediaPlayPause => named("MediaPlayPause", "MediaPlayPause"),
+        Key::MediaStop => named("MediaStop", "MediaStop"),
+        Key::MediaNext => named("MediaTrackNext", "MediaTrackNext"),
+        Key::MediaPrevious => named("MediaTrackPrevious", "MediaTrackPrevious"),
+        Key::MediaPlay => named("MediaPlay", ""),
+        Key::MediaPause => named("MediaPause", ""),
+        Key::MediaRewind => named("MediaRewind", ""),
+        Key::MediaFastForward => named("MediaFastForward", ""),
+        Key::ColorRed => named("ColorF0Red", ""),
+        Key::ColorGreen => named("ColorF1Green", ""),
+        Key::ColorYellow => named("ColorF2Yellow", ""),
+        Key::ColorBlue => named("ColorF3Blue", ""),
+        Key::ChannelUp => named("ChannelUp", ""),
+        Key::ChannelDown => named("ChannelDown", ""),
+        Key::Info => named("Info", ""),
         Key::Char(' ') => named(" ", "Space"),
         Key::Char(c) => {
             let code = match c {

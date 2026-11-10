@@ -341,6 +341,8 @@ fn trigger(
         Key::PageUp => "Page_Up".to_owned(),
         Key::PageDown => "Page_Down".to_owned(),
         Key::F(n) => format!("F{n}"),
+        // GTK gets no media or TV remote keys from NSH: no trigger.
+        _ => return None,
     };
     let letter = matches!(keystroke.key, Key::Char(c) if c.is_ascii_alphabetic());
     let name = match gtk::gdk::Key::from_name(&name) {
