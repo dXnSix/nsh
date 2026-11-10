@@ -216,9 +216,10 @@ tested by `cargo test -p nsh-cli --bin nsh tizen::tests`, and the commands throu
   package `tz` wrote (inside or next to the staged tree) to `<out>/<name>.tpk`. Without a profile it refuses, saying
   how to make one. With several architectures each package's version gets the fourth number (armv7l 1, aarch64 2,
   x86_64 3) and the CPU feature (`platform.core.cpu.arch.armv7` / `armv8` / `x86_64`), and the packages go to
-  `<out>/<package>-<version>.<n>-<arch>.tpk` and into `<out>/<package>-<version>.zip` for Seller Office
-  (dXn.GpuiTizen's `xtask/src/package/` conventions). `--run` installs the TV's architecture's package and
-  launches it.
+  `<out>/<package>-<version>.<n>-<arch>.tpk`, and the TVs' ones (armv7l, aarch64; `Arch::in_store`) into
+  `<out>/<package>-<version>.zip` for Seller Office; the emulator's x86_64 package stays out of it (dXn.GpuiTizen's
+  `xtask/src/package/` conventions, `STORE_TARGETS`). `--run` installs the TV's architecture's package and launches
+  it.
 - **`nsh run --target tizen [--device <serial>]`** finds the device (`sdb devices`; the only one, or `--device`) and
   what it is (`sdb capability`: `cpu_arch`, and `secure_protocol`, a retail TV, which has no shell), builds the
   development TPK (`NshDevTizn.NshDev`, one package for every app, apart from `tizen-web`'s `NshDevHost`) from

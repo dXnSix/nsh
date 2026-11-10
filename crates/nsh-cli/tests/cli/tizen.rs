@@ -275,11 +275,13 @@ fn a_package_is_the_host_the_library_and_the_app_signed_with_tz() {
 #[test]
 fn several_architectures_make_the_multi_architecture_upload() {
     let dir = app(SIGNED);
-    let output = package(&dir, &["--arch", "aarch64,armv7", "--sign", "other"]);
+    // The emulator's too: a package of its own, not in the upload.
+    let output = package(&dir, &["--arch", "aarch64,x86_64,armv7", "--sign", "other"]);
     assert!(output.status.success(), "{}", stderr(&output));
     for (arch, file, number, feature) in [
         ("armv7l", "armv7", 1, "armv7"),
         ("aarch64", "aarch64", 2, "armv8"),
+        ("x86_64", "x86_64", 3, "x86_64"),
     ] {
         let staged = dir.0.join("out/tizen").join(format!("Counter-{arch}"));
         assert_eq!(
@@ -302,7 +304,7 @@ fn several_architectures_make_the_multi_architecture_upload() {
         );
     }
     let log = read(dir.0.join("tz.log"));
-    assert_eq!(log.lines().count(), 2, "{log}");
+    assert_eq!(log.lines().count(), 3, "{log}");
     assert!(
         log.lines().all(|l| l.starts_with("pack -t tpk -s other ")),
         "{log}"
@@ -317,6 +319,17 @@ fn several_architectures_make_the_multi_architecture_upload() {
             "{name} in the upload"
         );
     }
+    let emulator = "AbCdE12345-1.2.0.3-x86_64.tpk";
+    assert!(
+        !zip.windows(emulator.len())
+            .any(|w| w == emulator.as_bytes()),
+        "{emulator} not in the upload"
+    );
+    assert!(
+        stderr(&output).contains("the emulator's package (x86_64) is not part of the upload"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]

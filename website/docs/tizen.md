@@ -59,8 +59,9 @@ asks) and its `tizen-manifest.xml`, made from `nsh.json`. `nsh package` signs it
 
 - **`--arch`** takes `armv7l` (32-bit ARM, the TVs; the default), `aarch64` and `x86_64` (the emulator). With several,
   each package's version gets a fourth number (armv7l `.1`, aarch64 `.2`, x86_64 `.3`) and the CPU feature its TVs
-  match, as Samsung's Seller Office asks of a multi-architecture upload, and the packages also go into
-  `<package>-<version>.zip`, the upload itself.
+  match, as Samsung's Seller Office asks of a multi-architecture upload, and the TVs' packages (armv7l, aarch64) also go
+  into `<package>-<version>.zip`, the upload itself. The emulator's package (x86_64) stays out of the upload, a package
+  of its own.
 - **`--run`** installs the package of the TV's architecture on the connected TV and launches it.
 
 ## `nsh.json`

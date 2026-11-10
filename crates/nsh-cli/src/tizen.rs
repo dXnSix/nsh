@@ -23,8 +23,9 @@
 //!
 //! With several architectures (`--arch armv7l,aarch64`) each package's
 //! version gets a fourth number (armv7l 1, aarch64 2, x86_64 3) and the CPU
-//! feature its TVs match, and the packages go into the multi-architecture
-//! `.zip` Samsung's Seller Office takes: `<out>/<package>-<version>.<n>-<arch>.tpk`,
+//! feature its TVs match, `<out>/<package>-<version>.<n>-<arch>.tpk`, and the
+//! TVs' packages (armv7l, aarch64; not the emulator's x86_64) go into the
+//! multi-architecture `.zip` Samsung's Seller Office takes,
 //! `<out>/<package>-<version>.zip` (dXn.GpuiTizen's conventions).
 //!
 //! `nsh run --target tizen` installs the development TPK (the `dev`
@@ -97,6 +98,13 @@ impl Arch {
             Arch::Aarch64 => 2,
             Arch::X86_64 => 3,
         }
+    }
+
+    /// Whether its package goes into the multi-architecture upload: the
+    /// TVs' (armv7l, aarch64), not the emulator's (dXn.GpuiTizen's
+    /// `STORE_TARGETS`).
+    pub(crate) fn in_store(self) -> bool {
+        matches!(self, Arch::Armv7l | Arch::Aarch64)
     }
 
     /// The CPU feature its package requires there (`<feature>`).
@@ -528,8 +536,8 @@ fn app_files(config: &AppConfig, name: &str, id: &str, built: &Built) -> AppFile
 
 /// `nsh package --target tizen`: a TPK per architecture of `archs` from the
 /// release runtime, signed with the certificate profile (`--sign`, else
-/// `nsh.json` `tizen.signing`); several also go into the multi-architecture
-/// `.zip`. With `--run`, the package of the TV's architecture is
+/// `nsh.json` `tizen.signing`); of several, the TVs' also go into the
+/// multi-architecture `.zip`. With `--run`, the package of the TV's architecture is
 /// installed and launched there.
 pub(crate) fn package(
     options: &PackageOptions<'_>,
@@ -573,11 +581,15 @@ pub(crate) fn package(
     }
     if multi {
         let zip = options.out.join(zip_name(&manifest));
-        write_zip(&zip, &packages)?;
+        let upload = store_packages(&packages);
+        write_zip(&zip, &upload)?;
         ui::done(format!(
             "wrote the multi-architecture upload {}",
             ui::path(&zip)
         ));
+        if upload.len() < packages.len() {
+            ui::note("the emulator's package (x86_64) is not part of the upload");
+        }
     }
     if let Some(device) = device {
         let tpk = packages
@@ -597,6 +609,16 @@ pub(crate) fn package(
         step.done(format!("launched {} on {}", manifest.app, device.serial));
     }
     Ok(())
+}
+
+/// The packages of `packages` the multi-architecture upload takes: the
+/// TVs' ([`Arch::in_store`]); the emulator's stays a package of its own.
+pub(crate) fn store_packages(packages: &[(Arch, PathBuf)]) -> Vec<(Arch, PathBuf)> {
+    packages
+        .iter()
+        .filter(|(arch, _)| arch.in_store())
+        .cloned()
+        .collect()
 }
 
 /// The multi-architecture upload: each package at the top level, stored.
@@ -1937,6 +1959,20 @@ mod tests {
         for hint in [rootstrap, gcc] {
             assert!(!hint.contains("  "), "{hint}");
         }
+    }
+
+    #[test]
+    fn the_upload_takes_the_tvs_packages_not_the_emulators() {
+        assert_eq!(
+            [Arch::Armv7l, Arch::Aarch64, Arch::X86_64].map(Arch::in_store),
+            [true, true, false]
+        );
+        let packages = vec![
+            (Arch::Armv7l, PathBuf::from("a-1.0.0.1-armv7.tpk")),
+            (Arch::Aarch64, PathBuf::from("a-1.0.0.2-aarch64.tpk")),
+            (Arch::X86_64, PathBuf::from("a-1.0.0.3-x86_64.tpk")),
+        ];
+        assert_eq!(store_packages(&packages), packages[..2]);
     }
 
     #[test]
