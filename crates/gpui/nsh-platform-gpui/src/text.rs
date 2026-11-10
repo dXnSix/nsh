@@ -122,8 +122,10 @@ const UI_FAMILIES: &[&str] = &[
     "DejaVu Sans",
     "Liberation Sans",
 ];
-/// A Tizen TV's ([`tv`]).
+/// A Tizen TV's ([`tv`], whose functions match them ignoring case and
+/// spaces in its place).
 #[cfg(target_vendor = "tizen")]
+#[allow(dead_code)]
 const UI_FAMILIES: &[&str] = tv::FAMILIES;
 #[cfg(not(target_os = "linux"))]
 const UI_FAMILIES: &[&str] = &[];
