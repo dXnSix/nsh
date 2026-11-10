@@ -2176,7 +2176,7 @@ dependencies = [
 [[package]]
 name = "dxn_gpui_tizen"
 version = "0.1.0"
-source = "git+https://github.com/dXnSix/dXn.GpuiTizen?rev=e8e5693b4d6f654334cb61b31eae65833690a03d#e8e5693b4d6f654334cb61b31eae65833690a03d"
+source = "git+https://github.com/dXnSix/dXn.GpuiTizen?rev=83cd3e076c7c09861e67f7d1f37f975c3362e828#83cd3e076c7c09861e67f7d1f37f975c3362e828"
 dependencies = [
  "accesskit_unix",
  "anyhow",
@@ -2196,7 +2196,7 @@ dependencies = [
 [[package]]
 name = "dxn_gpui_tizen_sys"
 version = "0.1.0"
-source = "git+https://github.com/dXnSix/dXn.GpuiTizen?rev=e8e5693b4d6f654334cb61b31eae65833690a03d#e8e5693b4d6f654334cb61b31eae65833690a03d"
+source = "git+https://github.com/dXnSix/dXn.GpuiTizen?rev=83cd3e076c7c09861e67f7d1f37f975c3362e828#83cd3e076c7c09861e67f7d1f37f975c3362e828"
 
 [[package]]
 name = "dyn-clone"
