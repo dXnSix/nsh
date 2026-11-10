@@ -271,8 +271,10 @@ pub enum CloseRequest {
 /// feature `platform`, or the app a platform of the host's own runs):
 ///
 /// ```no_run
-/// use nsh_platform_gpui::gpui::{self, AppContext, WindowOptions};
-/// use nsh_platform_gpui::{App, AppOptions, AppView, Bundle};
+/// use nsh_platform_gpui::{
+///     App, AppOptions, AppView, Bundle,
+///     gpui::{self, AppContext, WindowOptions},
+/// };
 ///
 /// fn open(cx: &mut gpui::App) {
 ///     cx.open_window(WindowOptions::default(), |window, cx| {
