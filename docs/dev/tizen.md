@@ -1,5 +1,30 @@
 # Tizen (Samsung TVs)
 
+NSH has two Samsung TV targets. **`tizen`** (this page) runs apps natively: a TPK whose C# host starts
+`libnsh.so`. **`tizen-web`** runs them in the TV's browser engine as a Tizen web app (`.wgt`), the web runtime with a
+TV shim ([web.md](web.md), "Tizen web apps"). Both read the same `nsh.json` `tizen` section and sign with the Tizen
+SDK's `tz`; `nsh run`, `nsh package` and `nsh test` take either as `--target`.
+
+| | `tizen` | `tizen-web` |
+| --- | --- | --- |
+| Runtime | `nsh-platform-tizen` (GPUI on dXn.GpuiTizen), the `tizen` component | the web runtime (`nsh-platform-web`), the `web` component |
+| `platform.os` | `"tizen"` (`Os::Tizen`) | `"web"` (`Os::Web`) |
+| Idiom | TV (`platform.tv`) | TV, from its page |
+| `nsh package` | a signed TPK (one per `--arch`, or the multi-architecture `.zip`) | a signed `.wgt` |
+| `nsh run` | the development TPK over `sdb` (`sdb reverse`, else `sdb forward`) | a development `.wgt` opening the dev server's page at the LAN address |
+| `nsh test` | the development TPK on the TV or the emulator, over the dev protocol | headless Chromium, the TV's page in the TV idiom |
+
+## What apps see
+
+`platform.os` is `"tizen"` (Rust's `Os::Tizen`), the idiom `"tv"` (`platform.tv`), `platform.desktop` false;
+`platform.select({ tizen })` picks a value before `tv`, and TV props (`tv={{…}}`) apply. The remote's keys arrive as
+NSH keys (`TV-1`: the arrows, Enter, `BrowserBack`, the color and media keys, `Info`); Back is NSH's back
+navigation, and from the first screen, with nothing taking it, the app asks before leaving (Samsung's rule).
+`nsh/tizen` gives the product information and registers the remote's keys ([js-modules.md](js-modules.md)). The
+TV's settings (locale, time zone, font scale, reduce motion) reach the app as on every platform; the appearance is
+dark. Pause and resume are `Lifecycle::Background` and `Active`. A Tizen web app is the web in the TV idiom, with the
+same `nsh/tizen` served from the TV's web APIs.
+
 NSH apps run natively on Samsung TVs (Tizen 8.0 and later) through `crates/gpui/nsh-platform-tizen`: NSH's GPUI
 backend (`nsh-platform-gpui`'s `AppView`) on [dXn.GpuiTizen](https://github.com/dXnSix/dXn.GpuiTizen)'s Tizen
 platform for GPUI (`dxn_gpui_tizen`: `ui_app_main` and Ecore's main loop, one full-screen window on Ecore_Wl2, EGL
@@ -147,9 +172,55 @@ both variants takes about 5 minutes on an Apple silicon Mac with a warm target d
 stripping takes armv7l's release library from 59 MB to 41 MB (a TPK of `examples/counter`: 23 MB).
 
 `cargo xtask dist` packs `runtime/tizen/` (both variants' host and stripped libraries for the three architectures,
-and `targets/`) when dXn.GpuiTizen's checkout and the .NET SDK are there (`NSH_DIST_NO_TIZEN` leaves it out).
+and `targets/`) when dXn.GpuiTizen's checkout and the .NET SDK are there (`NSH_DIST_NO_TIZEN` leaves it out), and
+`nsh component pack` makes it the `tizen` component (`nsh-tizen.tar.gz`, the same for every host). The CLI
+(`runtime::tizen`) takes `NSH_RUNTIME/tizen/<variant>`, else the distribution's, adding the component the first time
+a command needs it, else in a checkout `cargo xtask tizen --variant <variant> --arch <archs>`'s output.
 
-## Not yet on Tizen
+## The CLI's Tizen target
 
-- Packaging (`nsh package --target tizen`), `nsh run --target tizen` and the `tizen` component come with the CLI's
-  Tizen target.
+`crates/nsh-cli/src/tizen.rs`; the `sdb` and `tz` command lines and the manifest and staging are pure functions,
+tested by `cargo test -p nsh-cli --bin nsh tizen::tests`, and the commands through the binary with a fake runtime,
+`tz` and `sdb` by `cargo test -p nsh-cli --test cli tizen::`.
+
+- **`nsh.json` `tizen`** (`package::TizenConfig`, `tizen-web`'s): `package` (exactly 10 letters and digits, by
+  default made from the app's `id`), `appId` (`<package>.<name>`), `version` (`x.y.z`; `x.y` gets `.0`),
+  `apiVersion` (`8.0`), `privileges` (URIs, added to the internet's), `signing` (the certificate profile).
+- **`nsh package --target tizen [--arch <a>,...] [--sign <profile>] [--run]`** stages
+  `<out>/tizen/<name>-<arch>/` from the release runtime: `bin/Nsh.Tizen.Host.dll`, `lib/libnsh.so` for the
+  architecture, `res/nsh/` (`bundle.nshc`, `capabilities.json`, `app.json`, `assets/`: `nsh-platform-tizen`'s
+  `package.rs`), `shared/res/icon.png` (512×423) and `tizen-manifest.xml` (`tizen::Manifest`: a `dotnet`
+  `ui-application` running the host on the `tv-samsung` profile, as dXn.GpuiTizen's
+  `host/tizen-manifest.template.xml`), then signs it with `tz pack -t tpk -s <profile> <staging>` and moves the
+  package `tz` wrote (inside or next to the staged tree) to `<out>/<name>.tpk`. Without a profile it refuses, saying
+  how to make one. With several architectures each package's version gets the fourth number (armv7l 1, aarch64 2,
+  x86_64 3) and the CPU feature (`platform.core.cpu.arch.armv7` / `armv8` / `x86_64`), and the packages go to
+  `<out>/<package>-<version>.<n>-<arch>.tpk` and into `<out>/<package>-<version>.zip` for Seller Office
+  (dXn.GpuiTizen's `xtask/src/package/` conventions). `--run` installs the TV's architecture's package and
+  launches it.
+- **`nsh run --target tizen [--device <serial>]`** finds the device (`sdb devices`; the only one, or `--device`) and
+  what it is (`sdb capability`: `cpu_arch`, and `secure_protocol`, a retail TV, which has no shell), builds the
+  development TPK (`NshDevTizn.NshDev`, one package for every app, apart from `tizen-web`'s `NshDevHost`) from
+  `runtime/tizen/dev/` for its architecture into `.nsh/tizen/` and signs it with `nsh.json` `tizen.signing` when the
+  runtime changed, installs it with `sdb install` when the device does not have this build (`.nsh/tizen/installed`:
+  a digest of the runtime per serial), then stops what an earlier session left, maps the TV's port 8790 to the dev
+  server with `sdb reverse` and launches it (`sdb shell 0 execute <app id>` on a TV, `app_launcher -s` on the
+  emulator). When `sdb reverse` fails it maps a free local port to the TV's 8791 with `sdb forward` and relays each
+  connection there to the dev server (the library listens after three refusals of 8790). The run ends stopping the
+  app and removing the mappings, Ctrl-C too. An app of Rust only (`"root"`) is packaged (signed) and installed with
+  `nsh package --run`'s path.
+- **`nsh test --target tizen`** (`test_tizen.rs`) installs the development TPK as `nsh run` does, then for each
+  `open` serves the build in a test session, maps 8790 to it and launches the runtime, whose GPUI test agent takes
+  the steps; one app at a time (the port is fixed). `open`'s platform there is Linux's, unsized (the app fills the
+  screen).
+
+## Limits
+
+- Nothing here has run on a TV or the emulator yet: the `sdb` commands (`0 execute`, `0 kill`, `sdb reverse`'s
+  form), where `tz pack` writes a TPK made from a staged tree, and the multi-architecture packaging assumptions
+  (feature keys, four-part versions) are dXn.GpuiTizen's, unverified until the owner's run.
+- Retail TVs have no `sdb shell`: `0 execute` and `0 kill` are the TV's launch and stop commands; logs reach the
+  developer through the dev server only.
+- The development TPK is one package for every app; a TV's install record is the app's, so after another app's run
+  with another nsh, `nsh run` may skip an install it needs (delete `.nsh/tizen/installed`).
+- `nsh test --target tizen` runs one app at a time and cannot give each its own data directory.

@@ -80,6 +80,7 @@ nsh component remove gpui     # free the space again
 | `android` | The Android runtime (`--target android`) | Every platform |
 | `android-symbols` | The Android runtime's symbols, for crash reports and `ndk-stack` | Every platform |
 | `ios` | The iOS and Mac Catalyst runtimes (`--target ios`, `catalyst`) | macOS on Apple silicon |
+| `tizen` | The Samsung TV runtime (`--target tizen`), with the Tizen target specs apps' Rust crates build with | Every platform |
 | `web` | The web runtimes (`--target web`) | Every platform |
 | `gpui` | The [GPUI](./gpui.md) development host (`--target gpui`) | Every platform, built for it |
 | `tui` | The terminal development host (`--target tui`) | Every platform, built for it |
@@ -231,6 +232,7 @@ Building the Android runtime from a checkout (`cargo xtask android`) additionall
 | `nsh run --target gpui` (the backend GPUI apps embed) | Yes | Yes | Yes |
 | `nsh run --target ios`, `nsh package --target ios` / `ios-simulator` | Yes, with Xcode | No | No |
 | `nsh run --target android`, `nsh package --target android` | Yes | Yes, from a checkout | Yes, with the Android runtime |
+| `nsh run --target tizen`, `nsh package --target tizen` | Yes, with the Tizen SDK | Yes, with the Tizen SDK | Yes, with the Tizen SDK |
 | `nsh keygen`, `certify`, `publish`, `verify`, `revoke` | Yes | Yes | Yes |
 
 On Linux, build the CLI and the Android runtime from a checkout (`cargo build -p nsh-cli` and `cargo xtask android --dev`); the NDK's Linux toolchain is used automatically. On Windows the NDK's Windows toolchain is used the same way, and `cargo xtask dist` includes the Android runtime when it finds the Android SDK.

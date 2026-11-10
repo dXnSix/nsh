@@ -28,7 +28,9 @@ mod test;
 mod test_android;
 mod test_host;
 mod test_ios;
+mod test_tizen;
 mod test_web;
+mod tizen;
 mod tizen_web;
 mod ui;
 mod updater;
@@ -172,10 +174,11 @@ enum Command {
         junit: Option<PathBuf>,
         /// Run the apps the tests open on this platform's development host
         /// instead of headless: the steps act with the platform's own input
-        /// (macos, linux, windows, gpui, tui, web, ios and android; tui uses
-        /// an in-memory terminal; web runs them
+        /// (macos, linux, windows, gpui, tui, web, tizen-web, ios, android
+        /// and tizen; tui uses an in-memory terminal; web runs them
         /// in a headless Chrome, Edge or Chromium, ios in a simulator,
-        /// android on the first device adb lists).
+        /// android on the first device adb lists, tizen on the TV or
+        /// emulator `sdb devices` lists).
         #[arg(long, value_enum)]
         target: Option<run::Target>,
         /// The Chrome, Edge or Chromium executable `--target web` runs the
@@ -293,7 +296,8 @@ enum Command {
         #[arg(long, value_enum, default_value_t = run::Target::native())]
         target: run::Target,
         /// iOS simulator to use (name or UDID); default: a booted one, else
-        /// the newest iPhone.
+        /// the newest iPhone. Tizen: the TV's or emulator's `sdb` serial
+        /// (default: the only one `sdb devices` lists).
         #[arg(long)]
         device: Option<String>,
         /// Points per terminal Cell, overriding nsh.json tui.pointsPerCell (default: 8x16).
@@ -536,8 +540,8 @@ struct PackageArgs {
     #[arg(long)]
     icon: Option<PathBuf>,
     /// Code signing identity for devices, e.g. "Apple Development: …";
-    /// Tizen web: the certificate profile `tz` signs with (default:
-    /// `nsh.json` `tizen.signing`).
+    /// Tizen and Tizen web: the certificate profile `tz` signs with
+    /// (default: `nsh.json` `tizen.signing`).
     #[arg(long)]
     sign: Option<String>,
     /// Provisioning profile for devices (`.mobileprovision`).
@@ -556,12 +560,17 @@ struct PackageArgs {
     /// arm64-v8a and armeabi-v7a; with --run also the device's).
     #[arg(long, value_delimiter = ',', value_parser = crate::android::ABIS)]
     abi: Vec<String>,
+    /// Tizen architectures of the TPKs, repeated or separated by commas
+    /// (default: armv7l, the TVs'; with --run the TV's): one TPK each,
+    /// several also the multi-architecture `.zip` for Seller Office.
+    #[arg(long, value_delimiter = ',', value_enum)]
+    arch: Vec<crate::tizen::Arch>,
     /// Android: what to write, an APK (installed directly) or an Android
     /// App Bundle (`aab`, uploaded to Google Play).
     #[arg(long, value_enum, default_value_t)]
     format: crate::android::Format,
-    /// Install and launch the app in the simulator or on the Android device
-    /// afterwards (Linux, macOS, Windows: launch it; web: serve it on this
+    /// Install and launch the app in the simulator, on the Android device
+    /// or on the TV (Tizen: the only one `sdb devices` lists) afterwards (Linux, macOS, Windows: launch it; web: serve it on this
     /// machine at the address it prints).
     #[arg(long)]
     run: bool,
@@ -960,6 +969,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 key_alias,
                 keystore_password,
                 abi,
+                arch,
                 format,
                 run,
                 asset_url,
@@ -986,6 +996,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                     )
                 }),
                 abis: &abi,
+                tizen_archs: &arch,
                 format,
                 run,
                 asset_url: asset_url.as_deref(),

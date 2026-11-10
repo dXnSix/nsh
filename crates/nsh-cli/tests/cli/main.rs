@@ -2,6 +2,8 @@
 #[cfg(unix)]
 mod runtime;
 #[cfg(unix)]
+mod tizen;
+#[cfg(unix)]
 mod tizen_web;
 #[cfg(unix)]
 mod tui;

@@ -62,6 +62,7 @@ pub(crate) fn starter(
         Target::TizenWeb => return crate::test_web::starter(browser, true),
         Target::Ios => return crate::test_ios::starter(work, fps),
         Target::Android => return crate::test_android::starter(work),
+        Target::Tizen => return crate::test_tizen::starter(work),
         _ => {}
     }
     if !matches!(
@@ -69,7 +70,7 @@ pub(crate) fn starter(
         Target::Macos | Target::Linux | Target::Windows | Target::Gpui | Target::Tui
     ) {
         anyhow::bail!(
-            "nsh test --target takes macos, linux, windows, gpui, tui, web, tizen-web, ios or android"
+            "nsh test --target takes macos, linux, windows, gpui, tui, web, tizen-web, ios, android or tizen"
         );
     }
     // Built (in a checkout) or found once, before the first test.
@@ -103,6 +104,9 @@ pub(crate) fn host_target(target: Target) -> nsh_testing::HostTarget {
         Target::Web => ("web", Platform::Web, true),
         // A Tizen web app reports the web, in the TV idiom.
         Target::TizenWeb => ("tizen-web", Platform::Web, true),
+        // A TV's app fills its screen; `open`'s platforms have no Tizen,
+        // whose system is Linux underneath.
+        Target::Tizen => ("tizen", Platform::Linux, false),
         Target::Gpui => ("gpui", desktop, true),
         // The terminal reports this machine's OS, in the terminal idiom.
         Target::Tui => ("tui", desktop, true),
@@ -354,6 +358,49 @@ pub(crate) fn indented(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A TV's app fills its screen, and the desktop hosts' flags are
+    /// refused before the TV is looked for.
+    #[test]
+    fn tizen_runs_apps_full_screen_without_the_desktops_flags() {
+        let host = host_target(Target::Tizen);
+        assert_eq!(host.name, "tizen");
+        assert!(!host.sized);
+        for (fps, display, foreground, message) in [
+            (
+                true,
+                None,
+                false,
+                "--fps goes with --target linux, macos, windows or ios",
+            ),
+            (false, Some(2), false, "--display goes with --target macos"),
+            (false, None, true, "--foreground goes with --target macos"),
+        ] {
+            let err = starter(
+                Target::Tizen,
+                None,
+                Path::new("."),
+                fps,
+                display,
+                foreground,
+            )
+            .err();
+            assert_eq!(err.map(|e| e.to_string()).as_deref(), Some(message));
+        }
+        let err = starter(
+            Target::Tizen,
+            Some(Path::new("chrome")),
+            Path::new("."),
+            false,
+            None,
+            false,
+        )
+        .err();
+        assert_eq!(
+            err.map(|e| e.to_string()).as_deref(),
+            Some("--browser goes with --target web or tizen-web")
+        );
+    }
 
     /// `--foreground` goes with the macOS host alone: the other targets
     /// refuse it before anything is built or started.
