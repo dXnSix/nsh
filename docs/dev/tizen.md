@@ -72,6 +72,12 @@ crates and the wgpu crates (`wgpu-hal` among them), the same set as dXn.GpuiTize
 that patch is a local Cargo config, never committed: dXn.GpuiTizen's `cargo xtask gpui-fast-release --verify` writes
 it to `artifacts-temp/gpui-fast-patch.toml` (paths into the gpui-fast fork's release workspace and `../wgpu`).
 
+Publishing: `nsh-platform-tizen` is not published (`publish = false`); it ships built, as the CLI's `tizen` component.
+`cargo publish` takes a git dependency from crates.io by its `version`, so the workspace entries of dXn.GpuiTizen's
+crates carry one beside `git` and `rev` (`0.1.0`, theirs). A crate that `release-crate.yml` publishes and that
+depends on them needs `dxn_gpui_tizen` (and `dxn_gpui_tizen_sys`) on crates.io at that version before the NSH
+release that includes it; until then the GPUI workspace's publish step fails on it.
+
 Before dXn.GpuiTizen is pushed, Git reaches it in the local checkout (Cargo cannot patch an unreachable git
 source), so every Cargo command runs with:
 
