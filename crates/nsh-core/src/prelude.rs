@@ -257,7 +257,7 @@ pub use crate::element::{
     clipboard_has_image, clipboard_has_string, clipboard_image, clipboard_string,
     close_notification, color, component, component_ref, computed, dark, data_dir,
     dismiss_keyboard, dynamic, each, effect, element_ref, engine_context, fetch, font_scale,
-    fps_enabled, global, haptic, idiom, image_size, is_catalyst, is_desktop, key_label,
+    fps_enabled, global, haptic, idiom, image_size, is_catalyst, is_desktop, is_tv, key_label,
     keyboard_duration, keyboard_height, keystroke_label, lifecycle, locale, locale_settings,
     log_file, measure_text, motion, move_to_trash, next_app_url_change, next_frame,
     next_notification_press, next_open_files, next_second_instance, next_url_scheme_open,

@@ -137,7 +137,9 @@ pub enum Idiom {
     /// UIKit's Mac idiom (Mac Catalyst optimized for Mac). Catalyst runs
     /// the iOS backend, so this idiom is mobile, not [`Idiom::Desktop`].
     Mac,
-    /// A TV.
+    /// A TV: a 10-foot screen driven by a remote, on any OS (an Android
+    /// TV, a TV's browser). Never desktop ([`Idiom::desktop_on`]): apps
+    /// branch on it with `platform.tv` / `tv={{…}}` ([`Environment::tv`]).
     Tv,
     /// Desktop: a desktop backend (macOS, Windows, Linux), or a browser with
     /// a mouse and a wide viewport ([`Idiom::desktop_on`]). Mac Catalyst is
@@ -151,12 +153,16 @@ pub enum Idiom {
 impl Idiom {
     /// Whether desktop behavior applies on `os` in this idiom, NSH's one
     /// definition of desktop: a desktop OS (macOS, Windows, Linux), a
-    /// browser in the desktop idiom, or a terminal. `desktop={{…}}` props,
+    /// browser in the desktop idiom, or a terminal; never the TV idiom,
+    /// which is not a desktop on any OS. `desktop={{…}}` props,
     /// `platform.select({ desktop })` and `platform.desktop` all follow it,
     /// and so does `platform.idiom === "desktop"` outside a terminal
     /// ([`Idiom::reported_on`]).
     pub fn desktop_on(self, os: Os) -> bool {
-        os.is_desktop() || (os == Os::Web && self == Idiom::Desktop) || self == Idiom::Terminal
+        self != Idiom::Tv
+            && (os.is_desktop()
+                || (os == Os::Web && self == Idiom::Desktop)
+                || self == Idiom::Terminal)
     }
 
     /// The idiom apps see on `os` (TS: `platform.idiom`): [`Idiom::Terminal`]
@@ -359,6 +365,14 @@ impl Environment {
     /// The idiom apps see (TS: `platform.idiom`, [`Idiom::reported_on`]).
     pub fn reported_idiom(&self) -> Idiom {
         self.idiom.reported_on(self.os)
+    }
+
+    /// The app runs on a TV: the TV idiom, on any OS (TS: `platform.tv`,
+    /// `tv={{…}}` props, `platform.select({ tv })`). A TV is not a desktop
+    /// ([`Environment::desktop`] is false), so what is not TV-specific
+    /// behaves as on mobile.
+    pub fn tv(&self) -> bool {
+        self.idiom == Idiom::Tv
     }
 }
 
@@ -1452,7 +1466,7 @@ mod tests {
             (Os::MacOs, Idiom::Desktop, true),
             (Os::Windows, Idiom::Desktop, true),
             (Os::Linux, Idiom::Desktop, true),
-            // A desktop OS is desktop whatever idiom it was given.
+            // A desktop OS is desktop whatever idiom it was given, but a TV.
             (Os::Linux, Idiom::Phone, true),
             (Os::Web, Idiom::Desktop, true),
             (Os::Web, Idiom::Pad, false),
@@ -1480,6 +1494,35 @@ mod tests {
         );
         assert!(!Os::MacOs.is_catalyst() && !Os::Web.is_catalyst());
         assert_eq!(Os::Ios.is_catalyst(), cfg!(target_abi = "macabi"));
+    }
+
+    #[test]
+    fn the_tv_idiom_is_a_tv_and_never_a_desktop_on_any_os() {
+        for os in [
+            Os::MacOs,
+            Os::Windows,
+            Os::Linux,
+            Os::Ios,
+            Os::Android,
+            Os::Web,
+        ] {
+            let env = Environment {
+                os,
+                idiom: Idiom::Tv,
+                ..Environment::default()
+            };
+            assert!(env.tv(), "{os:?}");
+            assert!(!env.desktop(), "{os:?}");
+            assert_eq!(env.reported_idiom(), Idiom::Tv, "{os:?}");
+        }
+        for idiom in [Idiom::Phone, Idiom::Pad, Idiom::Desktop, Idiom::Terminal] {
+            let env = Environment {
+                os: Os::Web,
+                idiom,
+                ..Environment::default()
+            };
+            assert!(!env.tv(), "{idiom:?}");
+        }
     }
 
     #[test]

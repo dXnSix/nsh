@@ -78,6 +78,8 @@ pub(crate) struct Dom {
     os: Cell<Os>,
     /// Desktop behavior applies (`desktop={{…}}`; `Environment::desktop`).
     desktop: Cell<bool>,
+    /// The app runs on a TV (`tv={{…}}`; `Environment::tv`).
+    tv: Cell<bool>,
     /// The layout direction sent to the root (`None`: nothing mounted yet).
     rtl: Cell<Option<bool>>,
     /// The `onDismiss` handlers of modals the app removed, kept until the
@@ -299,6 +301,7 @@ impl Dom {
             root: Cell::new(UNDEFINED),
             os: Cell::new(Os::Ios),
             desktop: Cell::new(false),
+            tv: Cell::new(false),
             rtl: Cell::new(None),
             env_rtl: Cell::new(false),
             unshown_text: Cell::new(0),
@@ -319,10 +322,11 @@ impl Dom {
     }
 
     /// The platform `ios={{…}}` / `android={{…}}` / `web={{…}}` props are
-    /// for, and whether `desktop={{…}}` props apply.
-    pub(crate) fn set_platform(&self, os: Os, desktop: bool) {
+    /// for, and whether `desktop={{…}}` and `tv={{…}}` props apply.
+    pub(crate) fn set_platform(&self, os: Os, desktop: bool, tv: bool) {
         self.os.set(os);
         self.desktop.set(desktop);
+        self.tv.set(tv);
     }
 
     /// The platform the app runs on.
@@ -1354,7 +1358,7 @@ fn set_prop(
         }
         // SAFETY: live node data.
         "component" | "componentSlot" => unsafe { (*p).places = true },
-        "ios" | "android" | "macos" | "desktop" | "web" => {
+        "ios" | "android" | "macos" | "desktop" | "web" | "tv" => {
             return platform_props(cx, node, name, value, prev);
         }
         "contentStyle" | "contentClass" if unsafe { (*p).tag } == Some(Tag::Scroll) => {
@@ -1600,9 +1604,9 @@ pub(crate) fn is_ancestor_of(cx: *mut JsContext, node: NodeId, of: NodeId) -> bo
 }
 
 /// `ios={{…}}` / `android={{…}}` / `macos={{…}}` / `web={{…}}` /
-/// `desktop={{…}}`: the props of this platform only, each set (or cleared)
-/// on its own. Desktop props apply on the desktop OSes and in
-/// desktop-class browsers.
+/// `desktop={{…}}` / `tv={{…}}`: the props of this platform only, each set
+/// (or cleared) on its own. Desktop props apply on the desktop OSes and in
+/// desktop-class browsers, TV props in the TV idiom on any OS.
 fn platform_props(
     cx: *mut JsContext,
     node: JsValue,
@@ -1613,6 +1617,7 @@ fn platform_props(
     let dom = dom(cx);
     let applies = match name {
         "desktop" => dom.desktop.get(),
+        "tv" => dom.tv.get(),
         other => other == dom.os.get().name(),
     };
     if !applies {

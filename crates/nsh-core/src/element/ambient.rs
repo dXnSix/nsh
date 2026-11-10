@@ -458,12 +458,21 @@ pub fn is_catalyst() -> bool {
 
 /// Whether desktop behavior applies, NSH's one definition of desktop: a
 /// desktop OS (macOS, Windows, Linux), a browser in the desktop idiom or
-/// a terminal (TS: `platform.desktop`, [`Idiom::desktop_on`]); it does not
-/// change.
+/// a terminal, never a TV (TS: `platform.desktop`, [`Idiom::desktop_on`]);
+/// it does not change.
 pub fn is_desktop() -> bool {
     with_data(|d| d.ambient.env.as_ref().map(|e| e.env))
         .expect("the core sets the environment")
         .with_untracked(|e| e.idiom.desktop_on(e.os))
+}
+
+/// Whether the app runs on a TV: the TV idiom, on any OS (TS:
+/// `platform.tv`, [`crate::platform::Environment::tv`]). A TV is not a
+/// desktop ([`is_desktop`] is false); it does not change.
+pub fn is_tv() -> bool {
+    with_data(|d| d.ambient.env.as_ref().map(|e| e.env))
+        .expect("the core sets the environment")
+        .with_untracked(|e| e.idiom == Idiom::Tv)
 }
 
 /// The design tokens the app is drawn with (reading them subscribes: new

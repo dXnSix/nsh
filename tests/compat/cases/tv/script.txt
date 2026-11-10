@@ -1,0 +1,20 @@
+# What a user does and sees (compat/apps.rs): each case after its tap.
+platform android tv
+# mod-device-tv
+tap id:case-mod-device-tv
+expect OS: android
+expect Idiom: tv
+expect TV: true Desktop: false
+expect Select: tv
+expect Select OS: android
+expect Select mobile: mobile
+covers [nsh] platform
+# props-platform-tv
+tap id:case-props-platform-tv
+expect Card
+prop id:card accessibilityLabel On a TV
+style id:card opacity 0.5
+frame id:card 0 64 390 120
+noprop id:card windowDrag
+frame id:plain 0 184 390 60
+covers [props] tv
