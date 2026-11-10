@@ -8,8 +8,8 @@ use std::{rc::Rc, time::Duration};
 
 use gpui::TestAppContext;
 use nsh_core::{
-    AccessibilityRole, EventKind, EventMask, InputConfig, ModalAnimation, ModalConfig, MountBatch,
-    MountItem, NodeId, Points, ROOT_ID, ViewKind, ViewProps,
+    AccessibilityRole, Command, EventKind, EventMask, InputConfig, ModalAnimation, ModalConfig,
+    MountBatch, MountItem, NodeId, Points, ROOT_ID, ViewKind, ViewProps,
     overlay::{PlacedAnchor, Placement},
     tailwind::state::FOCUSED,
 };
@@ -466,4 +466,35 @@ fn a_backdrop_takes_the_page_out_of_reach(cx: &mut TestAppContext) {
     tree.items.push(MountItem::Remove { id: 42 });
     tree.apply(&surface);
     assert_eq!(focused(&surface), Some(4));
+}
+
+#[gpui::test]
+fn blur_takes_the_focus_off_the_focused_view(cx: &mut TestAppContext) {
+    let (surface, _app) = surface(cx);
+    let mut tree = Tree::default();
+    tree.pressable(4, PAGE, (10.0, 10.0, 80.0, 40.0))
+        .pressable(6, PAGE, (110.0, 10.0, 80.0, 40.0));
+    tree.apply(&surface);
+    assert!(key(&surface, "right"));
+    assert_eq!(focused(&surface), Some(4));
+    heard(&surface);
+    // `blur()` on another view leaves it.
+    tree.items.push(MountItem::Command {
+        id: 6,
+        command: Command::Blur,
+    });
+    tree.apply(&surface);
+    assert_eq!(focused(&surface), Some(4));
+    assert_eq!(heard(&surface), []);
+    tree.items.push(MountItem::Command {
+        id: 4,
+        command: Command::Blur,
+    });
+    tree.apply(&surface);
+    assert_eq!(focused(&surface), None);
+    assert!(!has_focused_state(&surface, 4));
+    assert_eq!(heard(&surface), [(4, EventKind::Blur)]);
+    // Enter presses nothing now.
+    assert!(!key(&surface, "enter"));
+    assert_eq!(heard(&surface), []);
 }
