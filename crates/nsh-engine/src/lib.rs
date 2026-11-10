@@ -1331,9 +1331,9 @@ impl EngineControl {
 
     /// An arrow toward `direction` found no stop to go to inside the list
     /// around `from`, the stop with the keyboard focus: the list scrolls to
-    /// its next row by index and that row's cell takes the focus once it is
-    /// mounted (`Command::Focus`; `Core::focus_past`). Nothing happens
-    /// outside a list or at its end.
+    /// its next row by index and the first stop in that row's cell takes
+    /// the focus once it is mounted (`Command::Focus`; `Core::focus_past`).
+    /// Nothing happens outside a list or at its end.
     pub fn focus_past(&self, from: NodeId, direction: nsh_core::focus::Direction) {
         let _ = self.tx.send(Message::FocusPast(from, direction));
     }

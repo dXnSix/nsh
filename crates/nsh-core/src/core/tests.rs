@@ -33721,13 +33721,26 @@ mod directional_focus {
         assert_eq!(props.focus_group, None);
     }
 
-    /// A list of 1000 rows of 100 points, its window rendered: the cell
-    /// showing each item.
+    /// The cells take presses: each row is a stop of the keyboard focus.
+    fn pressable(c: &mut Core<FakeEngine>, cells: &[u32]) {
+        for &id in cells {
+            c.apply(Op::Listen {
+                id,
+                event: EventKind::Press,
+                enabled: true,
+            })
+            .unwrap();
+        }
+    }
+
+    /// A list of 1000 rows of 100 points that take presses, its window
+    /// rendered: the cell showing each item.
     fn rendered_list(c: &mut Core<FakeEngine>) -> (u32, Vec<u32>, HashMap<u32, NodeId>) {
         thousand_rows(c);
         c.commit();
         let (mut next_id, mut cells) = (100, Vec::new());
         render_binds(c, &mut next_id, &mut cells, 100.0);
+        pressable(c, &cells);
         c.commit();
         let shown = shown(c, &cells);
         (next_id, cells, shown)
@@ -33778,11 +33791,71 @@ mod directional_focus {
         c.set_scroll_offset(2, point(px(0.0), px(y)), u32::MAX);
         let mut focused = focus_command(c.commit());
         render_binds(&mut c, &mut next_id, &mut cells, 100.0);
+        pressable(&mut c, &cells);
         focused = focused.or(focus_command(c.commit()));
         assert!(focused.is_some());
         assert_eq!(focused, shown(&c, &cells).get(&(last + 1)).copied());
         assert!(c.pending_row.is_none());
         assert_eq!(focus_command(c.commit()), None);
+    }
+
+    #[test]
+    fn the_first_stop_inside_a_row_takes_the_focus() {
+        let mut c = core();
+        apply(&mut c, view(2));
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 4,
+                    tag: Tag::View,
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 4,
+                    before: None,
+                },
+                Op::Create {
+                    id: 6,
+                    tag: Tag::View,
+                },
+                Op::Listen {
+                    id: 6,
+                    event: EventKind::Press,
+                    enabled: true,
+                },
+                Op::Insert {
+                    parent: 4,
+                    child: 6,
+                    before: None,
+                },
+                Op::Create {
+                    id: 8,
+                    tag: Tag::View,
+                },
+                Op::SetProp {
+                    id: 8,
+                    prop: Prop::Focusable(Some(true)),
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 8,
+                    before: Some(4),
+                },
+            ],
+        );
+        c.commit();
+        let key = c.key(2).unwrap();
+        // In tree order: the focusable view before the pressable's parent.
+        assert_eq!(c.first_stop_in(key), c.key(8).ok());
+        c.apply(Op::SetProp {
+            id: 8,
+            prop: Prop::Focusable(Some(false)),
+        })
+        .unwrap();
+        assert_eq!(c.first_stop_in(key), c.key(6).ok());
+        // None at all.
+        assert_eq!(c.first_stop_in(c.key(8).unwrap()), None);
     }
 
     #[test]
