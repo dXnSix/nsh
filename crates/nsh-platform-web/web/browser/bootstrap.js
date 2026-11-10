@@ -5210,7 +5210,7 @@
 		let scoped = false;
 		const shownScheme = () => {
 			const around = scoped && scope();
-			return around ? around() : fields.colorScheme();
+			return around ? around.scheme() : fields.colorScheme();
 		};
 		const setColorScheme = (scheme) => {
 			if (![
@@ -5247,8 +5247,13 @@
 				keyboardFrame: () => fields.keyboard(),
 				screenReader: () => fields.screenReader(),
 				token(name) {
-					tokens();
-					return invoke(402, [name, shownScheme() === "dark"]);
+					const around = scoped && scope(), named = around ? around.tokens() : void 0;
+					if (named === void 0) tokens();
+					return invoke(402, [
+						name,
+						shownScheme() === "dark",
+						named ?? null
+					]);
 				},
 				setTheme(theme) {
 					invoke(406, [theme]);
@@ -5271,10 +5276,28 @@
 				scoped = true;
 				const shows = reactive.computed(() => {
 					const own = props.appearance;
-					return own === "light" || own === "dark" ? own : outer ? outer() : fields.colorScheme();
+					return own === "light" || own === "dark" ? own : outer ? outer.scheme() : fields.colorScheme();
+				});
+				const slot = invoke(412, []);
+				reactive.cleanup(() => invoke(413, [slot, true]));
+				const draws = reactive.computed(() => {
+					const theme = props.theme, around = outer ? outer.tokens() : void 0;
+					if (theme === null || typeof theme !== "object") {
+						invoke(413, [slot, false]);
+						return around;
+					}
+					if (around === void 0) tokens();
+					return invoke(411, [
+						slot,
+						theme,
+						around ?? null
+					]);
 				});
 				return scope.Provider({
-					value: shows,
+					value: {
+						scheme: shows,
+						tokens: draws
+					},
 					get children() {
 						return children();
 					}

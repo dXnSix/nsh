@@ -42,6 +42,12 @@ struct Runtime {
     registries: RefCell<Vec<nsh_core::element::Registry>>,
     tokens: RefCell<Option<std::sync::Arc<nsh_core::element::Tokens>>>,
     theme: RefCell<Option<nsh_core::element::ThemeTokens>>,
+    /// The tokens each live `ThemeScope` draws with, by its slot, as
+    /// nsh-js's (`env.rs`, `Env::scope_tokens`); the free slots; and the
+    /// count of the times a scope's tokens were made.
+    scope_tokens: RefCell<Vec<Option<std::sync::Arc<nsh_core::element::Tokens>>>>,
+    scope_free: RefCell<Vec<usize>>,
+    scope_versions: std::cell::Cell<u32>,
     /// The theme file the app was built with (`setup`), which
     /// `setTheme(null)` gives back.
     built_theme: RefCell<Option<String>>,
@@ -73,6 +79,9 @@ impl Default for Runtime {
             registries: RefCell::default(),
             tokens: RefCell::default(),
             theme: RefCell::default(),
+            scope_tokens: RefCell::default(),
+            scope_free: RefCell::default(),
+            scope_versions: std::cell::Cell::new(0),
             built_theme: RefCell::default(),
             current_theme: RefCell::default(),
             host: RefCell::default(),
@@ -83,7 +92,20 @@ impl Default for Runtime {
         }
     }
 }
+/// A scope's slot is the low part of its memo's value; the rest counts its
+/// changes (nsh-js's `SCOPE_SLOTS`).
+const SCOPE_SLOTS: f64 = 1_048_576.0;
+
 impl Runtime {
+    /// The tokens a `ThemeScope`'s memo value `named` names.
+    fn scope_tokens_named(&self, named: f64) -> Option<std::sync::Arc<nsh_core::element::Tokens>> {
+        if !named.is_finite() || named < 0.0 {
+            return None;
+        }
+        let slot = (named % SCOPE_SLOTS) as usize;
+        self.scope_tokens.borrow().get(slot).cloned().flatten()
+    }
+
     /// Makes `error` the JS exception the call throws (its class, message
     /// and `code` / ... fields); the `PropError` returned carries its
     /// message.
@@ -175,7 +197,13 @@ impl Runtime {
                 use nsh_core::element::Token;
                 let name = args.index(0)?.as_string().unwrap_or_default();
                 let dark = args.index(1)?.truthy();
-                let tokens = self.tokens.borrow().clone();
+                // In a `ThemeScope` with tokens, the scope's (its memo's
+                // value names them), else the surface's.
+                let scoped = args
+                    .index(2)?
+                    .as_number()
+                    .and_then(|named| self.scope_tokens_named(named));
+                let tokens = scoped.or_else(|| self.tokens.borrow().clone());
                 // A number in the appearance shown, as nsh-js's `token()`.
                 let token = tokens.as_ref().and_then(|t| match t.get(&name) {
                     Some(Token::Number(_)) => t.number_in(&name, dark).map(Token::Number),
@@ -306,6 +334,67 @@ impl Runtime {
                 });
                 if let Some(tokens) = tokens {
                     *self.tokens.borrow_mut() = Some(std::sync::Arc::new(tokens));
+                }
+                Ok(Value(0))
+            }
+            // A `ThemeScope`'s tokens, as nsh-js's `make_scope_tokens`
+            // (`env.rs`): its theme's values over the tokens around it (the
+            // ones the scope around it names, else the surface's), kept in
+            // its slot. Returns the scope's memo value, new when the tokens
+            // are.
+            411 => {
+                let slot = args.index(0)?.as_number().unwrap_or(-1.0) as usize;
+                let theme = args.index(1)?;
+                let around = args
+                    .index(2)?
+                    .as_number()
+                    .and_then(|named| self.scope_tokens_named(named))
+                    .or_else(|| self.tokens.borrow().clone())
+                    .unwrap_or_default();
+                let json = protocol::to_json(&compat::Value::new(theme))?.to_string();
+                // What it leaves out is said once, by the component in the
+                // core.
+                let read = self
+                    .theme
+                    .borrow()
+                    .as_ref()
+                    .and_then(|t| t.scoped(&around, &json));
+                let tokens = match read {
+                    Some(Ok((tokens, _))) => std::sync::Arc::new(tokens),
+                    _ => around,
+                };
+                let mut slots = self.scope_tokens.borrow_mut();
+                let Some(held) = slots.get_mut(slot) else {
+                    return Ok(Value(0));
+                };
+                if !held.as_ref().is_some_and(|held| **held == *tokens) {
+                    *held = Some(tokens);
+                    self.scope_versions
+                        .set(self.scope_versions.get().wrapping_add(1));
+                }
+                Ok(Value::number(
+                    f64::from(self.scope_versions.get()) * SCOPE_SLOTS + slot as f64,
+                ))
+            }
+            // A slot for a new `ThemeScope`'s tokens.
+            412 => {
+                let free = self.scope_free.borrow_mut().pop();
+                let slot = free.unwrap_or_else(|| {
+                    let mut slots = self.scope_tokens.borrow_mut();
+                    slots.push(None);
+                    slots.len() - 1
+                });
+                Ok(Value::number(slot as f64))
+            }
+            // The scope of a slot is gone (or has no theme now).
+            413 => {
+                let slot = args.index(0)?.as_number().unwrap_or(-1.0) as usize;
+                let gone = args.index(1)?.truthy();
+                if let Some(held) = self.scope_tokens.borrow_mut().get_mut(slot) {
+                    *held = None;
+                    if gone {
+                        self.scope_free.borrow_mut().push(slot);
+                    }
                 }
                 Ok(Value(0))
             }
