@@ -9,9 +9,10 @@
 //!   its own `127.0.0.1`, so no URL has to reach it);
 //! - and when that port refuses [`FALLBACK_AFTER`] times in a row (a TV
 //!   without `sdb reverse`, or the mapping gone), also by listening on
-//!   [`LISTEN_PORT`], which `nsh run` maps from the machine with `sdb
-//!   forward` and connects to, relaying to the dev server. From then on
-//!   both are tried in turn, each connection the dev client's next
+//!   [`LISTEN_PORT`] of its loopback, which `nsh run` maps from the machine
+//!   with `sdb forward` and connects to, relaying to the dev server (`sdbd`
+//!   connects there locally; no other host on the TV's network can). From
+//!   then on both are tried in turn, each connection the dev client's next
 //!   ([`Connector`]); the session speaks the same protocol over either.
 //!
 //! The assets come from the dev server over HTTP at the same port, which
@@ -124,13 +125,15 @@ impl Connector {
         }
     }
 
-    /// The TV's ports: [`DEV_PORT`] and, on every interface `sdb forward`
-    /// may come through, [`LISTEN_PORT`].
+    /// The TV's ports, both on its loopback: [`DEV_PORT`], and
+    /// [`LISTEN_PORT`], where `sdbd` delivers the connections `sdb forward`
+    /// makes. Never another interface: a host on the TV's network could
+    /// then connect in the dev server's place and run its code in the app.
     #[cfg_attr(not(target_vendor = "tizen"), allow(dead_code))]
     pub(crate) fn tv() -> Connector {
         Connector::new(
             SocketAddr::from(([127, 0, 0, 1], DEV_PORT)),
-            SocketAddr::from(([0, 0, 0, 0], LISTEN_PORT)),
+            SocketAddr::from(([127, 0, 0, 1], LISTEN_PORT)),
         )
     }
 
@@ -284,6 +287,14 @@ mod tests {
         assert_eq!(policy.next(), Route::Reverse);
         // A failed forward try never counts towards anything.
         assert!(policy.listening());
+    }
+
+    #[test]
+    fn the_tv_listens_on_its_loopback_only() {
+        let tv = Connector::tv();
+        assert_eq!(tv.reverse, SocketAddr::from(([127, 0, 0, 1], DEV_PORT)));
+        assert!(tv.listen.ip().is_loopback(), "{}", tv.listen);
+        assert_eq!(tv.listen.port(), LISTEN_PORT);
     }
 
     /// A free port of this machine's loopback (closed again).

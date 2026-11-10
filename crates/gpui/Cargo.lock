@@ -5757,6 +5757,7 @@ dependencies = [
  "nsh-dev",
  "nsh-engine",
  "nsh-platform-gpui",
+ "roxmltree 0.21.1",
  "serde_json",
 ]
 

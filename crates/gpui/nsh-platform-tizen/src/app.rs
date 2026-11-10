@@ -3,10 +3,12 @@
 //! ([`crate::back`]). It joins `AppView` to the Tizen platform:
 //!
 //! - the TV's settings (`dxn_gpui_tizen::settings`) go to `AppView`'s
-//!   setters as they change ([`crate::settings`]);
+//!   setters before the app loads, so its engine starts with them, and
+//!   again as they change ([`crate::settings`], [`opening`]);
 //! - the window's activation, which the platform turns off while the app
 //!   framework has the app paused, is the app's state ([`crate::lifecycle`]);
-//! - a back press nothing in the app took asks before leaving, and the
+//! - a back press nothing in the app took asks before leaving (in the TV's
+//!   language, at its font scale, an alert dialog: [`crate::prompt`]), and the
 //!   question answered `Exit` (or the app's `exitApp`, which closes the
 //!   window) quits GPUI, which ends `ui_app_main`.
 //!
@@ -17,14 +19,15 @@ use futures_util::StreamExt as _;
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable as _, FontWeight,
     InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Render,
-    SharedString, Styled as _, Window, WindowBounds, WindowOptions, div,
-    prelude::FluentBuilder as _, px, rgb, rgba,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowBounds,
+    WindowOptions, div, prelude::FluentBuilder as _, px, rgb, rgba,
 };
 use nsh_platform_gpui::{AppOptions, AppView};
 
 use crate::{
     back::{Choice, Effect, ExitPrompt},
-    settings::{self, HostValues},
+    prompt,
+    settings::{self, HostValues, Setter},
 };
 
 /// What the window runs.
@@ -70,6 +73,28 @@ pub(crate) fn launch(source: Source, options: AppOptions, name: Option<String>, 
     }
 }
 
+/// What the window does to `AppView` as it opens, in order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Opening {
+    /// One of the TV's settings, through `AppView`'s setter.
+    Set(Setter),
+    /// The app (or the dev server's): its engine starts with what was set.
+    Load,
+}
+
+/// The steps for the TV's settings `tv` as the window opens, and the values
+/// they give `AppView` (what later changes are compared with): every
+/// setter, then the app.
+pub(crate) fn opening(tv: &SystemSettings) -> (HostValues, Vec<Opening>) {
+    let values = HostValues::of(tv);
+    let mut steps: Vec<Opening> = settings::changes(None, &values)
+        .into_iter()
+        .map(Opening::Set)
+        .collect();
+    steps.push(Opening::Load);
+    (values, steps)
+}
+
 /// `AppView` filling the window, and the exit question over it.
 pub(crate) struct TizenApp {
     view: Entity<AppView>,
@@ -106,11 +131,11 @@ impl TizenApp {
         view.update(cx, |view, cx| {
             view.set_lifecycle(Some(crate::lifecycle::of_window(active)), cx)
         });
-        // The TV's settings now, and whenever they change (the platform
-        // calls subscribers on the main thread, outside GPUI's updates:
-        // they are applied from a task).
+        // The TV's settings whenever they change (the platform calls
+        // subscribers on the main thread, outside GPUI's updates: they are
+        // applied from a task), subscribed before they are read below so
+        // that no change goes missing.
         let (tx, mut rx) = futures_channel::mpsc::unbounded::<SystemSettings>();
-        let _ = tx.unbounded_send(tv_settings::current());
         let subscription = tv_settings::subscribe(move |settings| {
             let _ = tx.unbounded_send(settings.clone());
         });
@@ -125,10 +150,24 @@ impl TizenApp {
             }
         })
         .detach();
-        match source {
-            Source::App(app) => view.read(cx).load(app),
-            #[cfg(feature = "dev")]
-            Source::Dev(url) => view.update(cx, |view, cx| crate::dev::connect(view, url, cx)),
+        // The TV's settings now, then the app: its engine starts with them
+        // (`load` reads the environment once, for the app's first code).
+        let (applied, steps) = opening(&tv_settings::current());
+        let mut source = Some(source);
+        for step in steps {
+            match step {
+                Opening::Set(setter) => {
+                    view.update(cx, |view, cx| settings::apply(view, setter, cx))
+                }
+                Opening::Load => match source.take() {
+                    Some(Source::App(app)) => view.read(cx).load(app),
+                    #[cfg(feature = "dev")]
+                    Some(Source::Dev(url)) => {
+                        view.update(cx, |view, cx| crate::dev::connect(view, url, cx))
+                    }
+                    None => {}
+                },
+            }
         }
         let focus = view.focus_handle(cx);
         window.focus(&focus, cx);
@@ -137,7 +176,7 @@ impl TizenApp {
             prompt: ExitPrompt::default(),
             prompt_focus: cx.focus_handle(),
             name: name.map(SharedString::from),
-            applied: None,
+            applied: Some(applied),
             settings: Some(subscription),
         }
     }
@@ -210,20 +249,30 @@ impl TizenApp {
         cx.notify();
     }
 
-    /// The question: a card over the dimmed app, its two answers in a row.
+    /// The question: a card over the dimmed app, its two answers in a row,
+    /// in the TV's language and at its font scale, an alert dialog for
+    /// assistive technologies ([`crate::prompt`]).
     fn render_prompt(&self, chosen: Choice, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let title = match &self.name {
-            Some(name) => SharedString::from(format!("Exit {name}?")),
-            None => SharedString::new_static("Exit the app?"),
-        };
-        let button = |choice: Choice, label: &'static str, cx: &mut Context<Self>| {
+        let locale = self.applied.as_ref().and_then(|values| values.locale);
+        let font_scale = self.applied.as_ref().and_then(|values| values.font_scale);
+        let size = |pixels: f32| px(prompt::scaled(pixels, font_scale));
+        let words = prompt::words(locale.as_ref(), self.name.as_deref());
+        let (dialog, answers) = prompt::access(&words, chosen);
+        let button = |choice: Choice, node: prompt::Node, cx: &mut Context<Self>| {
             let chosen = choice == chosen;
+            let id = match choice {
+                Choice::Stay => "nsh-exit-stay",
+                Choice::Exit => "nsh-exit-leave",
+            };
             div()
-                .id(label)
-                .px(px(28.0))
-                .py(px(10.0))
-                .rounded(px(10.0))
-                .text_size(px(18.0))
+                .id(id)
+                .role(node.role)
+                .aria_label(node.label.clone())
+                .when(node.focused, |b| b.aria_active_descendant())
+                .px(size(28.0))
+                .py(size(10.0))
+                .rounded(size(10.0))
+                .text_size(size(18.0))
                 .font_weight(FontWeight::MEDIUM)
                 .border_2()
                 .when(chosen, |b| {
@@ -240,8 +289,9 @@ impl TizenApp {
                     MouseButton::Left,
                     cx.listener(move |app, _, window, cx| app.answer(choice, window, cx)),
                 )
-                .child(label)
+                .child(node.label)
         };
+        let [stay, exit] = answers;
         div()
             .absolute()
             .inset_0()
@@ -249,33 +299,38 @@ impl TizenApp {
             .items_center()
             .justify_center()
             .bg(rgba(0x0000_00b3))
-            .track_focus(&self.prompt_focus)
-            .on_key_down(cx.listener(Self::prompt_key))
             .child(
                 div()
+                    .id("nsh-exit-question")
+                    .role(dialog.role)
+                    .aria_label(dialog.label)
+                    // The question has the keys while it is shown: its
+                    // node is the focused one's ancestor.
+                    .track_focus(&self.prompt_focus)
+                    .on_key_down(cx.listener(Self::prompt_key))
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap(px(28.0))
-                    .px(px(48.0))
-                    .py(px(36.0))
-                    .rounded(px(20.0))
+                    .gap(size(28.0))
+                    .px(size(48.0))
+                    .py(size(36.0))
+                    .rounded(size(20.0))
                     .bg(rgb(0x171717))
                     .border_1()
                     .border_color(rgb(0x2e2e2e))
                     .child(
                         div()
-                            .text_size(px(24.0))
+                            .text_size(size(24.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(rgb(0xfafafa))
-                            .child(title),
+                            .child(SharedString::from(words.title)),
                     )
                     .child(
                         div()
                             .flex()
-                            .gap(px(20.0))
-                            .child(button(Choice::Stay, "Stay", cx))
-                            .child(button(Choice::Exit, "Exit", cx)),
+                            .gap(size(20.0))
+                            .child(button(Choice::Stay, stay, cx))
+                            .child(button(Choice::Exit, exit, cx)),
                     ),
             )
     }
@@ -300,5 +355,64 @@ impl Render for TizenApp {
             .relative()
             .child(self.view.clone())
             .children(prompt)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dxn_gpui_tizen::settings::SystemSettings;
+    use nsh_platform_gpui::{Appearance, Locale};
+
+    use super::*;
+
+    fn chinese_tv() -> SystemSettings {
+        SystemSettings {
+            locale: Some("zh-CN".into()),
+            time_zone: Some("Asia/Shanghai".into()),
+            font_scale: Some(1.5),
+            screen_reader: Some(true),
+            high_contrast: None,
+            reduce_motion: Some(true),
+        }
+    }
+
+    #[test]
+    fn the_tvs_settings_are_set_before_the_app_loads() {
+        let tv = chinese_tv();
+        let (applied, steps) = opening(&tv);
+        assert_eq!(applied, HostValues::of(&tv));
+        // Every setter, then the app, once.
+        assert_eq!(steps.last(), Some(&Opening::Load));
+        assert_eq!(steps.iter().filter(|s| **s == Opening::Load).count(), 1);
+        let set: Vec<Setter> = steps
+            .iter()
+            .filter_map(|step| match step {
+                Opening::Set(setter) => Some(*setter),
+                Opening::Load => None,
+            })
+            .collect();
+        assert_eq!(set, settings::changes(None, &applied));
+        for setter in [
+            Setter::Locale(Locale::parse("zh-CN")),
+            Setter::FontScale(Some(1.5)),
+            Setter::ScreenReader(Some(true)),
+            Setter::ReduceMotion(Some(true)),
+            Setter::Appearance(Appearance::Dark),
+        ] {
+            assert!(set.contains(&setter), "{setter:?}");
+        }
+        // The same settings reported again change nothing.
+        assert_eq!(
+            settings::changes(Some(&applied), &HostValues::of(&tv)),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn a_tv_that_reports_nothing_still_loads_after_the_defaults() {
+        let (applied, steps) = opening(&SystemSettings::default());
+        assert_eq!(applied.font_scale, None);
+        assert_eq!(steps.len(), 7);
+        assert_eq!(steps[6], Opening::Load);
     }
 }
