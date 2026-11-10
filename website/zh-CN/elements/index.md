@@ -103,6 +103,7 @@ TSX 从 `nsh/base` 导入，Rust 从 `nsh_base` crate 导入。它们负责行�
 | `<DockArea>` | `nsh_base::dock_area()` | 由分栏、标签组和边缘停靠区组成、用户自行安排的工作区 | [Dock](./dock.md) |
 | `<Editor>` | `nsh_base::editor()` | 带高亮、多光标、折叠和搜索的代码编辑器 | [Editor](./editor.md) |
 | `<Input>` | `nsh_base::input()` | 原生文本输入框（UITextField 或 UITextView / EditText） | [Input](./input.md) |
+| `<FocusGroup>` | `nsh_base::focus_group()` | 方向键从指定的停靠点进入、可以不让焦点离开的区域 | [FocusGroup](./focus-group.md) |
 | `<HoverCard>` | `nsh_base::hover_card()` | 预览触发元素所指向的内容，在指针停留在它上面时显示 | [HoverCard](./hover-card.md) |
 | `<Link>` | `nsh_base::link()` | 打开页面、网站或应用内路由的按压目标 | [Link](./link.md) |
 | `<Menu>`、`<ContextMenu>`、`<MenuItem>`、`<MenuSeparator>`、`<Submenu>` | `nsh_base::menu()`、... | 菜单：桌面上是带级联子菜单的弹出层，手机上是 sheet | [Menu](./menu.md) |
@@ -335,6 +336,7 @@ ref 的 `focus()` 像 Tab 一样把键盘焦点移到停靠点上（显示它的
 - `autoFocus` 在视图出现时让它获得焦点：屏幕上的第一张卡片、对话框的主按钮。
 - `preferredFocus` 选定焦点进入时停在哪里：一行中当前的项、对话框的默认操作。
 - `nextFocusDown` 等属性让方向键绕过几何位置，在没有对齐的行之间跳转。要指向在它之后渲染的视图，用一个由目标的 `ref` 设置的 signal（`nextFocusDown={next()}`）。
+- [`FocusGroup`](./focus-group.md) 从它的 `destinations` 进入；设置 `trap` 后，方向键不会让焦点离开它。
 - 在很长的 `List` 中，方向键会继续去往还不在屏幕上的行：列表滚动到下一行，焦点落在那一行上。
 
 ```rust tabs
