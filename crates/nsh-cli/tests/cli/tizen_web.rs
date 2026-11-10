@@ -359,29 +359,32 @@ fn the_development_package_opens_the_dev_servers_tv_page() {
     let mut child = run_until(&dir, |app| app.join(".nsh/tizen-web/dev.wgt").exists());
     let package = dir.0.join("app/.nsh/tizen-web/dev");
     let config = read(package.join("config.xml"));
-    let origin = config
-        .split(r#"<access origin=""#)
+    // Its page opens the dev server's.
+    let page = read(package.join("index.html"));
+    let url = page
+        .split("const URL_ = \"")
         .nth(1)
         .and_then(|rest| rest.split('"').next())
+        .unwrap_or_else(|| panic!("{page}"));
+    let origin = url.trim_end_matches('/').to_owned();
+    assert!(origin.starts_with("http://"), "{page}");
+    assert!(!origin.ends_with(":0"), "{page}");
+    let host = origin
+        .trim_start_matches("http://")
+        .rsplit_once(':')
         .unwrap()
-        .to_owned();
-    assert!(origin.starts_with("http://"), "{config}");
-    assert!(!origin.ends_with(":0"), "{config}");
-    let host = origin.trim_start_matches("http://");
+        .0;
+    // A development package's policy: any origin (the page, its WebSocket at
+    // `ws://`), navigation to the server's host (hosts take no port).
     for part in [
         r#"<tizen:application id="NshDevHost.NshDev" package="NshDevHost" required_version="8.0"/>"#.to_owned(),
         format!("<tizen:allow-navigation>{host}</tizen:allow-navigation>"),
+        r#"<access origin="*" subdomains="true"/>"#.to_owned(),
         r#"<tizen:privilege name="http://tizen.org/privilege/internet"/>"#.to_owned(),
     ] {
         assert!(config.contains(&part), "{part} in {config}");
     }
-    assert!(!config.contains(r#"origin="*""#), "{config}");
-    // Its page opens the dev server's.
-    let page = read(package.join("index.html"));
-    assert!(
-        page.contains(&format!("const URL_ = \"{origin}/\";")),
-        "{page}"
-    );
+    assert_eq!(config.matches("<access ").count(), 1, "{config}");
     assert_eq!(files(&package), ["config.xml", "index.html"]);
     assert_eq!(
         entries(&dir.0.join("app/.nsh/tizen-web/dev.wgt")),

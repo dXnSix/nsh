@@ -509,14 +509,16 @@ pub(crate) fn dev_page((page, mut files): (String, web::Files)) -> (String, web:
 }
 
 /// The development package for the dev server at `url` (`http://<LAN
-/// address>:<port>/`): a page that opens the server's, allowed to reach and
-/// open it, in `dir`.
+/// address>:<port>/`): a page that opens the server's, in `dir`. Its
+/// policy is a development package's, open: any origin (the dev server's
+/// page, its WebSocket at `ws://`, what the app fetches), and navigation to
+/// the server's host (`<tizen:allow-navigation>` takes hosts, without a
+/// port).
 fn write_dev_package(dir: &Path, url: &str) -> anyhow::Result<Widget> {
-    let origin = url.trim_end_matches('/');
-    let host = origin
-        .split_once("://")
-        .map_or(origin, |(_, host)| host)
-        .to_owned();
+    let host = url::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .with_context(|| format!("the dev server's address {url} has no host"))?;
     let widget = Widget {
         iri: widget_iri("com.longbridge.nsh.dev"),
         package: DEV_PACKAGE.to_owned(),
@@ -526,7 +528,7 @@ fn write_dev_package(dir: &Path, url: &str) -> anyhow::Result<Widget> {
         required_version: API_VERSION.to_owned(),
         icon: false,
         privileges: PRIVILEGES.iter().map(|p| (*p).to_owned()).collect(),
-        access: vec![origin.to_owned()],
+        access: vec!["*".to_owned()],
         navigation: vec![host],
     };
     if dir.exists() {

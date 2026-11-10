@@ -256,8 +256,10 @@ there is no `Os::TizenWeb`.
 - **`nsh run --target tizen-web`** serves the dev page with the shim (`tizen_web::dev_page`: `{{scripts}}`,
   `{{idiom}}` and `{{history}}` of `web/dev.html`, which `with_page_host` leaves empty for the web) and writes the
   development package `.nsh/tizen-web/dev/` (`NshDevHost.NshDev`, one for every app): a page that opens the dev
-  server's at this machine's LAN address once it answers, `<access>` and `<tizen:allow-navigation>` for that origin
-  only. With `nsh.json` `tizen.signing` it is signed, installed and launched (`--device`: the TV's serial); without,
+  server's at this machine's LAN address once it answers. A development package's policy is open:
+  `<access origin="*" subdomains="true">` (the page, its WebSocket at `ws://`, what the app fetches) and
+  `<tizen:allow-navigation>` with the server's host (the entry takes hosts, no port). The remote page loads no
+  `$WEBAPIS/webapis/webapis.js` (only package pages resolve `$WEBAPIS`), so Samsung's `webapis` is missing there. With `nsh.json` `tizen.signing` it is signed, installed and launched (`--device`: the TV's serial); without,
   the page opens in a browser here, as on the TV.
 - **`nsh test --target tizen-web`** runs `nsh test --target web`'s headless Chromium on the same page
   (`test_web::starter(browser, true)`), 1920×1080 by default.
