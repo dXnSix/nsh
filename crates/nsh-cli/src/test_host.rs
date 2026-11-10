@@ -30,7 +30,8 @@ const CONNECT: Duration = Duration::from_secs(60);
 /// has the host log its performance monitor's readings; `display` (one-based)
 /// is the display the macOS host opens its windows on (by default a
 /// secondary one when there is one); `foreground` lets the macOS host's apps
-/// become the active app, which run in the background otherwise.
+/// become the active app, which run in the background otherwise; `device`
+/// is the TV `--target tizen` runs them on (its `sdb` serial).
 pub(crate) fn starter(
     target: Target,
     browser: Option<&Path>,
@@ -38,9 +39,13 @@ pub(crate) fn starter(
     fps: bool,
     display: Option<usize>,
     foreground: bool,
+    device: Option<&str>,
 ) -> anyhow::Result<StartHost> {
     if browser.is_some() && !matches!(target, Target::Web | Target::TizenWeb) {
         anyhow::bail!("--browser goes with --target web or tizen-web");
+    }
+    if device.is_some() && target != Target::Tizen {
+        anyhow::bail!("--device goes with --target tizen");
     }
     if fps
         && !matches!(
@@ -62,7 +67,7 @@ pub(crate) fn starter(
         Target::TizenWeb => return crate::test_web::starter(browser, true),
         Target::Ios => return crate::test_ios::starter(work, fps),
         Target::Android => return crate::test_android::starter(work),
-        Target::Tizen => return crate::test_tizen::starter(work),
+        Target::Tizen => return crate::test_tizen::starter(work, device),
         _ => {}
     }
     if !matches!(
@@ -383,6 +388,7 @@ mod tests {
                 fps,
                 display,
                 foreground,
+                None,
             )
             .err();
             assert_eq!(err.map(|e| e.to_string()).as_deref(), Some(message));
@@ -394,6 +400,7 @@ mod tests {
             false,
             None,
             false,
+            None,
         )
         .err();
         assert_eq!(
@@ -414,10 +421,43 @@ mod tests {
             Target::Ios,
             Target::Android,
         ] {
-            let err = starter(target, None, Path::new("."), false, None, true).err();
+            let err = starter(target, None, Path::new("."), false, None, true, None).err();
             assert_eq!(
                 err.map(|e| e.to_string()).as_deref(),
                 Some("--foreground goes with --target macos"),
+                "{target:?}"
+            );
+        }
+    }
+
+    /// `--device` names the TV `--target tizen` runs the apps on; the other
+    /// targets refuse it before anything is built or started.
+    #[test]
+    fn a_device_is_for_the_tizen_target_only() {
+        for target in [
+            Target::Macos,
+            Target::Linux,
+            Target::Windows,
+            Target::Gpui,
+            Target::Tui,
+            Target::Web,
+            Target::TizenWeb,
+            Target::Ios,
+            Target::Android,
+        ] {
+            let err = starter(
+                target,
+                None,
+                Path::new("."),
+                false,
+                None,
+                false,
+                Some("192.168.1.20:26101"),
+            )
+            .err();
+            assert_eq!(
+                err.map(|e| e.to_string()).as_deref(),
+                Some("--device goes with --target tizen"),
                 "{target:?}"
             );
         }

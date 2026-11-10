@@ -15,13 +15,18 @@ publish = false
 workspace = true
 
 # `libnsh.so`, the library a TPK's C# host calls (`nsh_tizen_main`), as
-# Android's `libnsh.so`; the rlib is for the hosts of apps with Rust crates
-# of their own.
+# Android's `libnsh.so`; the rlib is for the libraries of apps with Rust
+# crates of their own.
 [lib]
 name = "nsh"
 crate-type = ["cdylib", "rlib"]
 
 [features]
+default = ["entry"]
+# The library's one export, `nsh_tizen_main`, which runs the packaged
+# bundle: the prebuilt runtime's. The library of an app with Rust crates
+# (`.nsh/rust/tizen`) leaves it out and defines its own.
+entry = []
 # The development runtime: the dev server's bundles with hot updates, logs
 # forwarded to the developer's terminal (`sdb reverse`, else `sdb forward`).
 dev = ["nsh-platform-gpui/dev", "dep:nsh-dev"]

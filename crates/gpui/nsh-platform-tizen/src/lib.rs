@@ -43,37 +43,15 @@ mod settings;
 mod tizen;
 mod tv;
 
-pub use nsh_core::element::Registry;
-pub use nsh_platform_gpui::{Root, set_ui_sets};
+pub use nsh_platform_gpui::set_ui_sets;
 
-/// Makes this library an app's `libnsh.so` that serves `$sets` (an
-/// expression giving the `Vec<Registry>` of `nsh/base` and the app's own
-/// Rust components), as Android's `ui_sets!` does: `nsh run` and `nsh
-/// package --target tizen` build one for apps with `"rust"` in `nsh.json`
-/// (`.nsh/rust/tizen`), and `nsh_tizen_main` serves them.
-#[macro_export]
-macro_rules! ui_sets {
-    ($sets:expr) => {
-        #[unsafe(no_mangle)]
-        fn nsh_app_ui_sets() -> ::std::vec::Vec<$crate::Registry> {
-            $sets
-        }
-    };
-}
-
-/// Makes `$root` (an expression giving a [`Root`]) the root of an app of
-/// Rust only (`nsh.json` `"root"`) in this library: what `nsh_tizen_main`
-/// runs instead of a bundle (the development library: when its dev server
-/// publishes the app as the host's root).
-#[macro_export]
-macro_rules! root {
-    ($root:expr) => {
-        #[unsafe(no_mangle)]
-        fn nsh_app_root() -> $crate::Root {
-            $root
-        }
-    };
-}
+/// Whether this build defines the library's entry, `nsh_tizen_main`
+/// (feature `entry`, a default one). The library of an app with Rust crates
+/// defines its own, which calls [`set_ui_sets`] and [`main`] or
+/// [`run_rust`], and depends on this crate without it: its generated code
+/// asserts this is `false`, so that the two cannot meet in one library.
+#[doc(hidden)]
+pub const ENTRY: bool = cfg!(feature = "entry");
 
 /// Runs the app packaged with the library (or, built with `dev`, the
 /// development runtime) until it exits: `nsh_tizen_main`'s body, for the
@@ -106,57 +84,18 @@ pub unsafe fn run_rust(
     unsafe { tizen::main(argc, argv, Some(root)) }
 }
 
-/// The TV library's one export: the C# host's P/Invoke.
+/// The TV library's one export: the C# host's P/Invoke (feature `entry`:
+/// the prebuilt runtime's, which runs the packaged bundle).
 ///
 /// # Safety
 ///
 /// Called by the host with `argc` NUL-terminated strings in `argv`.
-#[cfg(target_vendor = "tizen")]
+#[cfg(all(target_vendor = "tizen", feature = "entry"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nsh_tizen_main(
     argc: core::ffi::c_int,
     argv: *mut *mut core::ffi::c_char,
 ) -> core::ffi::c_int {
-    // An app's library with Rust components of its own ([`ui_sets!`],
-    // [`root!`]).
-    // SAFETY: `ui_sets!` defines the symbol with this signature, in a
-    // library built with this crate.
-    if let Some(sets) = unsafe { app_symbol::<fn() -> Vec<Registry>>(c"nsh_app_ui_sets") } {
-        set_ui_sets(sets());
-    }
-    // SAFETY: as above, `root!`'s.
-    let root = unsafe { app_symbol::<fn() -> Root>(c"nsh_app_root") };
     // SAFETY: argv comes from the host as documented above.
-    unsafe { tizen::main(argc, argv, root) }
-}
-
-/// The symbol `name` of this library (the one that holds this function),
-/// as a `T`. The .NET host loads it on its own (`RTLD_LOCAL`), so the
-/// global scope would not find it: the library is looked up by an address
-/// in it.
-///
-/// # Safety
-///
-/// `T` must be the type of the function the symbol names (a `fn` pointer).
-#[cfg(target_vendor = "tizen")]
-unsafe fn app_symbol<T: Copy>(name: &core::ffi::CStr) -> Option<T> {
-    const { assert!(size_of::<T>() == size_of::<*mut core::ffi::c_void>()) };
-    // SAFETY: `dladdr` fills `info` for an address of a loaded library,
-    // this function's own; `dlopen` with `RTLD_NOLOAD` only takes another
-    // reference to that library, dropped by `dlclose`; `dlsym` looks a
-    // NUL-terminated name up in it.
-    unsafe {
-        let mut info: libc::Dl_info = core::mem::zeroed();
-        let here = nsh_tizen_main as *const core::ffi::c_void;
-        if libc::dladdr(here, &mut info) == 0 || info.dli_fname.is_null() {
-            return None;
-        }
-        let library = libc::dlopen(info.dli_fname, libc::RTLD_LAZY | libc::RTLD_NOLOAD);
-        if library.is_null() {
-            return None;
-        }
-        let symbol = libc::dlsym(library, name.as_ptr());
-        libc::dlclose(library);
-        (!symbol.is_null()).then(|| core::mem::transmute_copy::<*mut core::ffi::c_void, T>(&symbol))
-    }
+    unsafe { main(argc, argv) }
 }

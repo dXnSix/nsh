@@ -59,8 +59,9 @@ asks) and its `tizen-manifest.xml`, made from `nsh.json`. `nsh package` signs it
 
 - **`--arch`** takes `armv7l` (32-bit ARM, the TVs; the default), `aarch64` and `x86_64` (the emulator). With several,
   each package's version gets a fourth number (armv7l `.1`, aarch64 `.2`, x86_64 `.3`) and the CPU feature its TVs
-  match, as Samsung's Seller Office asks of a multi-architecture upload, and the packages also go into
-  `<package>-<version>.zip`, the upload itself.
+  match, as Samsung's Seller Office asks of a multi-architecture upload, and the TVs' packages (armv7l, aarch64) also go
+  into `<package>-<version>.zip`, the upload itself. The emulator's package (x86_64) stays out of the upload, a package
+  of its own.
 - **`--run`** installs the package of the TV's architecture on the connected TV and launches it.
 
 ## `nsh.json`
@@ -86,11 +87,12 @@ wrong.
 ## Testing
 
 ```sh
-nsh test --target tizen               # the app's tests on the TV (or the emulator) sdb lists
+nsh test --target tizen                              # the app's tests on the TV (or the emulator) sdb lists
+nsh test --target tizen --device 192.168.1.5:26101   # on this one of several
 ```
 
-The tests open the app on the TV in NSH's development package, installed as `nsh run` installs it, and their steps act
-on it over the dev protocol. The app fills the TV's screen: `open`'s `width` and `height` are refused there. Apps open
+The tests open the app on the TV in NSH's development package, installed and connected as `nsh run` does it, and their
+steps act on it over the dev protocol. The app fills the TV's screen: `open`'s `width` and `height` are refused there. Apps open
 one at a time.
 
 ## Apps with Rust crates
@@ -100,12 +102,19 @@ Tizen target specs the `tizen` component ships. That needs, besides the Tizen SD
 
 - the nightly Rust toolchain the component names, with `rust-src` and `llvm-tools` (`nsh` says which);
 - clang;
-- the Tizen 8.0 rootstrap (`package-manager-cli install TIZEN-8.0-NativeAppDevelopment-CLI`; or set
-  `TIZEN_ROOTSTRAP_ARMV7`, `TIZEN_ROOTSTRAP_AARCH64`, `TIZEN_ROOTSTRAP_X86_64`);
-- the SDK's GCC 9.2 toolchain (`package-manager-cli install NativeToolchain-Gcc-9.2`; or set
-  `TIZEN_GCC_TOOLCHAIN_<ARCH>`).
+- the Tizen 8.0 rootstrap
+  (`~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license TIZEN-8.0-NativeAppDevelopment-CLI`;
+  or set `TIZEN_ROOTSTRAP_ARMV7`, `TIZEN_ROOTSTRAP_AARCH64`, `TIZEN_ROOTSTRAP_X86_64`);
+- the SDK's GCC 9.2 toolchain
+  (`~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license NativeToolchain-Gcc-9.2`; or set
+  `TIZEN_GCC_TOOLCHAIN_<ARCH>`);
+- a checkout of [dXn.GpuiTizen](https://github.com/dXnSix/dXn.GpuiTizen), whose symbol check every TV library passes
+  (it exports `nsh_tizen_main` alone and calls only Tizen's documented APIs): `DXN_GPUI_TIZEN`, else
+  `dXn.GpuiTizen` next to the checkout of NSH.
 
-Until NSH's Tizen crate is on crates.io, such apps build against a checkout of NSH (`nsh init --nsh-source <dir>`).
+NSH's Tizen crate is not published on crates.io (the runtime ships built, as the `tizen` component), so such apps build
+against a checkout of NSH (`nsh init --template rust --nsh-source <dir>`); with crates that take NSH from crates.io,
+`--target tizen` stops and says so.
 
 ## What the app sees
 

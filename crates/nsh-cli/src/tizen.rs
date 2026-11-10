@@ -23,8 +23,9 @@
 //!
 //! With several architectures (`--arch armv7l,aarch64`) each package's
 //! version gets a fourth number (armv7l 1, aarch64 2, x86_64 3) and the CPU
-//! feature its TVs match, and the packages go into the multi-architecture
-//! `.zip` Samsung's Seller Office takes: `<out>/<package>-<version>.<n>-<arch>.tpk`,
+//! feature its TVs match, `<out>/<package>-<version>.<n>-<arch>.tpk`, and the
+//! TVs' packages (armv7l, aarch64; not the emulator's x86_64) go into the
+//! multi-architecture `.zip` Samsung's Seller Office takes,
 //! `<out>/<package>-<version>.zip` (dXn.GpuiTizen's conventions).
 //!
 //! `nsh run --target tizen` installs the development TPK (the `dev`
@@ -41,6 +42,10 @@ use std::{
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::Command,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
@@ -93,6 +98,13 @@ impl Arch {
             Arch::Aarch64 => 2,
             Arch::X86_64 => 3,
         }
+    }
+
+    /// Whether its package goes into the multi-architecture upload: the
+    /// TVs' (armv7l, aarch64), not the emulator's (dXn.GpuiTizen's
+    /// `STORE_TARGETS`).
+    pub(crate) fn in_store(self) -> bool {
+        matches!(self, Arch::Armv7l | Arch::Aarch64)
     }
 
     /// The CPU feature its package requires there (`<feature>`).
@@ -524,8 +536,8 @@ fn app_files(config: &AppConfig, name: &str, id: &str, built: &Built) -> AppFile
 
 /// `nsh package --target tizen`: a TPK per architecture of `archs` from the
 /// release runtime, signed with the certificate profile (`--sign`, else
-/// `nsh.json` `tizen.signing`); several also go into the multi-architecture
-/// `.zip`. With `--run`, the package of the TV's architecture is
+/// `nsh.json` `tizen.signing`); of several, the TVs' also go into the
+/// multi-architecture `.zip`. With `--run`, the package of the TV's architecture is
 /// installed and launched there.
 pub(crate) fn package(
     options: &PackageOptions<'_>,
@@ -569,11 +581,15 @@ pub(crate) fn package(
     }
     if multi {
         let zip = options.out.join(zip_name(&manifest));
-        write_zip(&zip, &packages)?;
+        let upload = store_packages(&packages);
+        write_zip(&zip, &upload)?;
         ui::done(format!(
             "wrote the multi-architecture upload {}",
             ui::path(&zip)
         ));
+        if upload.len() < packages.len() {
+            ui::note("the emulator's package (x86_64) is not part of the upload");
+        }
     }
     if let Some(device) = device {
         let tpk = packages
@@ -593,6 +609,16 @@ pub(crate) fn package(
         step.done(format!("launched {} on {}", manifest.app, device.serial));
     }
     Ok(())
+}
+
+/// The packages of `packages` the multi-architecture upload takes: the
+/// TVs' ([`Arch::in_store`]); the emulator's stays a package of its own.
+pub(crate) fn store_packages(packages: &[(Arch, PathBuf)]) -> Vec<(Arch, PathBuf)> {
+    packages
+        .iter()
+        .filter(|(arch, _)| arch.in_store())
+        .cloned()
+        .collect()
 }
 
 /// The multi-architecture upload: each package at the top level, stored.
@@ -793,19 +819,123 @@ fn output(command: &mut Command, doing: &str) -> anyhow::Result<String> {
     Ok(text)
 }
 
-/// How `nsh run --target tizen` gets the development TPK on the device and
-/// starts it, in order: stop what an earlier session left running, install
-/// the package at `install` (when the device does not have this build),
-/// map the dev port to the dev server's `port` and launch it. A refused
-/// reverse mapping falls back to [`Sdb::forward`] ([`run_dev`]).
-pub(crate) fn run_sequence(sdb: &Sdb, install: Option<&Path>, port: u16) -> Vec<Vec<String>> {
+/// One `sdb` command of [`open_sequence`], with what its failure means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Step {
+    /// Stops what an earlier session left running; fails when nothing
+    /// runs, which is fine.
+    Stop(Vec<String>),
+    /// Maps the TV's dev port to the dev server; refused, the library is
+    /// reached through `sdb forward` and the relay instead.
+    Reverse(Vec<String>),
+    /// Launches the development runtime; its failure ends the run.
+    Launch(Vec<String>),
+}
+
+/// How `nsh run --target tizen` and each `open` of `nsh test --target
+/// tizen` start the development runtime once it is installed, in order:
+/// what an earlier session left running stopped, the dev port mapped to
+/// the dev server's `port`, the runtime launched ([`open`] runs them).
+pub(crate) fn open_sequence(sdb: &Sdb, port: u16) -> Vec<Step> {
     let app = Manifest::dev().app;
-    let mut sequence = vec![sdb.stop(&app)];
-    if let Some(tpk) = install {
-        sequence.push(sdb.install(tpk));
+    vec![
+        Step::Stop(sdb.stop(&app)),
+        Step::Reverse(sdb.reverse(DEV_PORT, port)),
+        Step::Launch(sdb.launch(&app)),
+    ]
+}
+
+/// What [`open`] runs its steps with: `sdb`, and for a refused reverse
+/// mapping a free port of this machine and the relay from it.
+pub(crate) trait Bridge {
+    /// Runs `sdb` with `args`; its output if it succeeds.
+    fn run(&mut self, args: &[String]) -> anyhow::Result<String>;
+    /// A free port of this machine for `sdb forward`.
+    fn free_port(&mut self) -> anyhow::Result<u16>;
+    /// Relays the connections made to `local` to the dev server until
+    /// what it returns is dropped.
+    fn relay(&mut self, local: u16) -> Relay;
+}
+
+/// The device itself: `sdb`'s commands run, connections relayed to the dev
+/// server at `server`.
+pub(crate) struct Live<'a> {
+    pub(crate) sdb: &'a Sdb,
+    pub(crate) server: u16,
+}
+
+impl Bridge for Live<'_> {
+    fn run(&mut self, args: &[String]) -> anyhow::Result<String> {
+        self.sdb.run(args)
     }
-    sequence.push(sdb.reverse(DEV_PORT, port));
-    sequence.push(sdb.launch(&app));
+
+    fn free_port(&mut self) -> anyhow::Result<u16> {
+        free_port()
+    }
+
+    fn relay(&mut self, local: u16) -> Relay {
+        relay(local, self.server)
+    }
+}
+
+/// What [`open`] mapped, which [`close_sequence`] removes.
+#[derive(Debug, Default)]
+pub(crate) struct Opened {
+    /// The TV's dev port, mapped by `sdb reverse`.
+    pub(crate) reverse: bool,
+    /// This machine's port mapped by `sdb forward` to the TV's listening
+    /// library, and its relay.
+    pub(crate) forward: Option<(u16, Relay)>,
+}
+
+/// Runs [`open_sequence`] for the dev server at `port` through `bridge`,
+/// each step with its failure policy, recording in `opened` what it mapped
+/// (also when a later step fails, for [`close_sequence`]).
+pub(crate) fn open(
+    sdb: &Sdb,
+    port: u16,
+    bridge: &mut impl Bridge,
+    opened: &mut Opened,
+) -> anyhow::Result<()> {
+    for step in open_sequence(sdb, port) {
+        match step {
+            // An earlier session's library would connect first.
+            Step::Stop(stop) => {
+                let _ = bridge.run(&stop);
+            }
+            Step::Reverse(reverse) => match bridge.run(&reverse) {
+                Ok(_) => opened.reverse = true,
+                Err(error) => {
+                    // A TV without `sdb reverse`: the library listens once
+                    // the reverse port keeps refusing, and this machine
+                    // connects to it through `sdb forward`, relaying to the
+                    // dev server.
+                    ui::warn(format!(
+                        "sdb reverse failed ({error:#}): relaying through sdb forward instead (the app's assets need sdb reverse)"
+                    ));
+                    let local = bridge.free_port()?;
+                    bridge.run(&sdb.forward(local, LISTEN_PORT))?;
+                    opened.forward = Some((local, bridge.relay(local)));
+                }
+            },
+            Step::Launch(launch) => {
+                bridge.run(&launch)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The `sdb` commands that end a session: the runtime stopped, what
+/// [`open`] mapped removed.
+pub(crate) fn close_sequence(sdb: &Sdb, opened: &Opened) -> Vec<Vec<String>> {
+    let mut sequence = vec![sdb.stop(&Manifest::dev().app)];
+    if opened.reverse {
+        sequence.push(sdb.remove_reverse(DEV_PORT));
+    }
+    if let Some((local, _)) = &opened.forward {
+        sequence.push(sdb.remove_forward(*local));
+    }
     sequence
 }
 
@@ -919,7 +1049,7 @@ pub(crate) fn install_dev(
 /// `nsh run --target tizen`'s device side, once the dev server listens on
 /// `port`: the development TPK installed on the device (`device`: its
 /// serial; by default the only one) when it does not have this build,
-/// the dev port mapped, the library launched. Returns what undoes it.
+/// then [`open`]'s sequence. Returns what undoes it.
 pub(crate) fn run_dev(entry: &Path, device: Option<&str>, port: u16) -> anyhow::Result<DevRun> {
     let entry = dunce::canonicalize(entry)?;
     let work = entry
@@ -928,36 +1058,20 @@ pub(crate) fn run_dev(entry: &Path, device: Option<&str>, port: u16) -> anyhow::
         .join(".nsh/tizen");
     let config = crate::package::read_config(&entry)?;
     let sdb = install_dev(&work, config.tizen.signing.as_deref(), device)?;
-    // Installed already: the sequence without its install step.
-    let mut sequence = run_sequence(&sdb, None, port).into_iter();
-    // An earlier session's library would connect first.
-    if let Some(stop) = sequence.next() {
-        let _ = sdb.run(&stop);
-    }
-    let reverse = sequence.next().context("the reverse step")?;
     let mut run = DevRun {
         sdb: sdb.clone(),
-        reverse: false,
-        forward: None,
+        opened: Opened::default(),
     };
-    match sdb.run(&reverse) {
-        Ok(_) => run.reverse = true,
-        Err(error) => {
-            // A TV without `sdb reverse`: the library listens once the
-            // reverse port keeps refusing, and this machine connects to it
-            // through `sdb forward`, relaying to the dev server.
-            ui::warn(format!(
-                "sdb reverse failed ({error:#}): relaying through sdb forward instead (the app's assets need sdb reverse)"
-            ));
-            let local = free_port()?;
-            sdb.run(&sdb.forward(local, LISTEN_PORT))?;
-            run.forward = Some(local);
-            relay(local, port);
-        }
-    }
-    let launch = sequence.next().context("the launch step")?;
     let step = ui::Step::start("launching the development runtime");
-    sdb.run(&launch)?;
+    open(
+        &sdb,
+        port,
+        &mut Live {
+            sdb: &sdb,
+            server: port,
+        },
+        &mut run.opened,
+    )?;
     step.done(format!(
         "launched the development runtime on {}",
         sdb.serial
@@ -966,21 +1080,16 @@ pub(crate) fn run_dev(entry: &Path, device: Option<&str>, port: u16) -> anyhow::
 }
 
 /// What [`run_dev`] set up on the device, undone when dropped: the app
-/// stopped, the port mappings removed.
+/// stopped, the port mappings removed ([`close_sequence`]).
 pub(crate) struct DevRun {
     sdb: Sdb,
-    reverse: bool,
-    forward: Option<u16>,
+    opened: Opened,
 }
 
 impl Drop for DevRun {
     fn drop(&mut self) {
-        let _ = self.sdb.run(&self.sdb.stop(&Manifest::dev().app));
-        if self.reverse {
-            let _ = self.sdb.run(&self.sdb.remove_reverse(DEV_PORT));
-        }
-        if let Some(local) = self.forward {
-            let _ = self.sdb.run(&self.sdb.remove_forward(local));
+        for command in close_sequence(&self.sdb, &self.opened) {
+            let _ = self.sdb.run(&command);
         }
     }
 }
@@ -1137,10 +1246,44 @@ fn sdk_root() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join("tizen-studio")))
 }
 
+/// The Tizen SDK's package manager installing `package`, as dXn.GpuiTizen's
+/// `docs/setup.md` gives it.
+fn package_manager(package: &str) -> String {
+    format!(
+        "~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license {package}"
+    )
+}
+
+/// What to do without the Tizen 8.0 rootstrap for `arch`.
+pub(crate) fn rootstrap_hint(arch: Arch) -> String {
+    format!(
+        "building the app's crates for {} needs the Tizen 8.0 rootstrap: install it with the Tizen SDK's \
+         package manager (`{}`) or set TIZEN_ROOTSTRAP_{}",
+        arch.name(),
+        package_manager("TIZEN-8.0-NativeAppDevelopment-CLI"),
+        arch.env_name()
+    )
+}
+
+/// What to do without the Tizen SDK's GCC 9.2 toolchain for `arch`.
+pub(crate) fn gcc_hint(arch: Arch) -> String {
+    format!(
+        "building the app's crates for {} needs the Tizen SDK's GCC 9.2 toolchain: install it \
+         (`{}`) or set TIZEN_GCC_TOOLCHAIN_{}",
+        arch.name(),
+        package_manager("NativeToolchain-Gcc-9.2"),
+        arch.env_name()
+    )
+}
+
 /// A Cargo command set up to cross-build for `arch` with the target specs
 /// in `targets` ([`cross_plan`]), and the spec to build with
-/// (`--target <spec>`), once this machine has what it needs.
-pub(crate) fn cross_command(arch: Arch, targets: &Path) -> anyhow::Result<(Command, PathBuf)> {
+/// (`--target <spec>`), once this machine has what it needs; with the
+/// nightly's `lib/rustlib/<host>/bin` ([`strip_command`]'s `llvm-strip`).
+pub(crate) fn cross_command(
+    arch: Arch,
+    targets: &Path,
+) -> anyhow::Result<(Command, PathBuf, PathBuf)> {
     let toolchain = fs::read_to_string(targets.join("toolchain"))
         .with_context(|| format!("read {}", targets.join("toolchain").display()))?
         .trim()
@@ -1156,24 +1299,12 @@ pub(crate) fn cross_command(arch: Arch, targets: &Path) -> anyhow::Result<(Comma
         format!("TIZEN_ROOTSTRAP_{}", arch.env_name()),
         arch.sdk_rootstrap(),
     )
-    .with_context(|| {
-        format!(
-            "building the app's crates for {} needs the Tizen 8.0 rootstrap: install it with the Tizen SDK's              package manager (`package-manager-cli install TIZEN-8.0-NativeAppDevelopment-CLI`) or set TIZEN_ROOTSTRAP_{}",
-            arch.name(),
-            arch.env_name()
-        )
-    })?;
+    .with_context(|| rootstrap_hint(arch))?;
     let gcc = found(
         format!("TIZEN_GCC_TOOLCHAIN_{}", arch.env_name()),
         arch.sdk_gcc(),
     )
-    .with_context(|| {
-        format!(
-            "building the app's crates for {} needs the Tizen SDK's GCC 9.2 toolchain: install it              (`package-manager-cli install NativeToolchain-Gcc-9.2`) or set TIZEN_GCC_TOOLCHAIN_{}",
-            arch.name(),
-            arch.env_name()
-        )
-    })?;
+    .with_context(|| gcc_hint(arch))?;
     let libdir = Command::new("rustc")
         .env("RUSTUP_TOOLCHAIN", &toolchain)
         .args(["--print", "target-libdir"])
@@ -1202,7 +1333,59 @@ pub(crate) fn cross_command(arch: Arch, targets: &Path) -> anyhow::Result<(Comma
     // Rustup's `cargo`, which takes the nightly from `RUSTUP_TOOLCHAIN`.
     let mut command = Command::new("cargo");
     command.args(args).envs(env).env_remove("RUSTFLAGS");
-    Ok((command, spec))
+    Ok((command, spec, cross.rustlib_bin))
+}
+
+/// The one symbol a TV library exports: the C# host's P/Invoke.
+pub(crate) const ENTRY: &str = "nsh_tizen_main";
+
+/// dXn.GpuiTizen's checkout, whose symbol check an app's library goes
+/// through: `dxn_gpui_tizen` (`DXN_GPUI_TIZEN`), else `../dXn.GpuiTizen`
+/// next to the checkout of nsh the app builds against (`nsh_source`), as
+/// `cargo xtask tizen` finds it; `None` when that holds no `xtask`.
+pub(crate) fn dxn_gpui_tizen(
+    dxn_gpui_tizen: Option<std::ffi::OsString>,
+    nsh_source: Option<&Path>,
+) -> Option<PathBuf> {
+    let dir = match dxn_gpui_tizen.filter(|dir| !dir.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => nsh_source?.join("../dXn.GpuiTizen"),
+    };
+    dir.join("xtask").is_dir().then_some(dir)
+}
+
+/// dXn.GpuiTizen's symbol check of the TV library `library`, in its
+/// checkout `dxn` (`cargo xtask check-symbols`, with its pinned nightly's
+/// `llvm-nm` and `llvm-readobj`): exactly one export, [`ENTRY`], nothing
+/// weak, and only documented Tizen symbols (its `symbols.allow`), glibc,
+/// `libgcc_s` and the loader imported, as `cargo xtask tizen` checks the
+/// runtime (`--check-symbols --entry nsh_tizen_main`).
+pub(crate) fn symbol_check(dxn: &Path, library: &Path) -> Command {
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(dxn)
+        .args(["xtask", "check-symbols"])
+        .arg(library)
+        .args(["--entry", ENTRY])
+        // Its `rust-toolchain.toml` picks the toolchain there.
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .env_remove("RUSTC")
+        .env_remove("CARGO");
+    command
+}
+
+/// The nightly's `llvm-strip` (in `rustlib_bin`) writing `library` to `to`
+/// without what the loader does not need (`--strip-unneeded`: the export
+/// stays), as `cargo xtask tizen` strips the runtime.
+pub(crate) fn strip_command(rustlib_bin: &Path, library: &Path, to: &Path) -> Command {
+    let mut command =
+        Command::new(rustlib_bin.join(format!("llvm-strip{}", std::env::consts::EXE_SUFFIX)));
+    command
+        .arg("--strip-unneeded")
+        .arg("-o")
+        .arg(to)
+        .arg(library);
+    command
 }
 
 /// A free port on this machine.
@@ -1210,12 +1393,25 @@ fn free_port() -> anyhow::Result<u16> {
     Ok(TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
 }
 
-/// Relays, for as long as this process runs, each connection made to
-/// this machine's `local` port (`sdb forward` to the TV's listening
-/// library) to the dev server at `server`, one after another.
-fn relay(local: u16, server: u16) {
+/// A relay of [`relay`], which stops once this is dropped (after the
+/// session it carries, if any).
+#[derive(Debug, Default)]
+pub(crate) struct Relay(Arc<AtomicBool>);
+
+impl Drop for Relay {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Relays, until what it returns is dropped, each connection made to this
+/// machine's `local` port (`sdb forward` to the TV's listening library) to
+/// the dev server at `server`, one after another.
+fn relay(local: u16, server: u16) -> Relay {
+    let relay = Relay::default();
+    let stopped = relay.0.clone();
     std::thread::spawn(move || {
-        loop {
+        while !stopped.load(Ordering::Relaxed) {
             // `sdb forward` takes the connection whether or not the
             // library listens yet: a session is one that carries bytes.
             if let Ok(tv) = TcpStream::connect(("127.0.0.1", local))
@@ -1226,6 +1422,7 @@ fn relay(local: u16, server: u16) {
             std::thread::sleep(Duration::from_millis(500));
         }
     });
+    relay
 }
 
 /// Copies bytes both ways between `a` and `b` until either closes.
@@ -1553,45 +1750,229 @@ mod tests {
         assert!(capabilities("secure_protocol:enabled\n").is_err());
     }
 
+    /// A device whose commands are recorded, failing those that contain
+    /// one of `fails`.
+    struct Fake {
+        fails: Vec<&'static str>,
+        ran: Vec<Vec<String>>,
+        relayed: Vec<u16>,
+    }
+
+    impl Fake {
+        fn failing(fails: &[&'static str]) -> Fake {
+            Fake {
+                fails: fails.to_vec(),
+                ran: Vec::new(),
+                relayed: Vec::new(),
+            }
+        }
+    }
+
+    impl Bridge for Fake {
+        fn run(&mut self, args: &[String]) -> anyhow::Result<String> {
+            self.ran.push(args.to_vec());
+            let line = args.join(" ");
+            match self.fails.iter().find(|f| line.contains(*f)) {
+                Some(fail) => bail!("sdb could not {fail}"),
+                None => Ok(String::new()),
+            }
+        }
+
+        fn free_port(&mut self) -> anyhow::Result<u16> {
+            Ok(50000)
+        }
+
+        fn relay(&mut self, local: u16) -> Relay {
+            self.relayed.push(local);
+            Relay::default()
+        }
+    }
+
     #[test]
-    fn sdb_installs_maps_and_launches_the_development_package() {
-        let tv = Sdb {
-            secure: true,
-            ..device(true)
-        };
-        let tpk = Path::new("/app/.nsh/tizen/NshDev-x86_64.tpk");
+    fn the_runtime_opens_as_its_sequence_says_each_step_with_its_failure_policy() {
+        let tv = device(true);
         assert_eq!(
-            run_sequence(&tv, Some(tpk), 8791),
+            open_sequence(&tv, 8791),
+            [
+                Step::Stop(line(&["shell", "0", "kill", "NshDevTizn.NshDev"])),
+                Step::Reverse(line(&["reverse", "tcp:8790", "tcp:8791"])),
+                Step::Launch(line(&["shell", "0", "execute", "NshDevTizn.NshDev"])),
+            ]
+        );
+        // Nothing ran: the stop fails, and the runtime still starts.
+        let mut fake = Fake::failing(&["kill"]);
+        let mut opened = Opened::default();
+        open(&tv, 8791, &mut fake, &mut opened).unwrap();
+        assert_eq!(
+            fake.ran,
             [
                 line(&["shell", "0", "kill", "NshDevTizn.NshDev"]),
-                line(&["install", "/app/.nsh/tizen/NshDev-x86_64.tpk"]),
                 line(&["reverse", "tcp:8790", "tcp:8791"]),
                 line(&["shell", "0", "execute", "NshDevTizn.NshDev"]),
             ]
         );
-        // Installed already, on the emulator (a shell).
-        let emulator = device(false);
+        assert!(opened.reverse && opened.forward.is_none());
+        assert!(fake.relayed.is_empty());
         assert_eq!(
-            run_sequence(&emulator, None, 9000),
+            close_sequence(&tv, &opened),
+            [
+                line(&["shell", "0", "kill", "NshDevTizn.NshDev"]),
+                line(&["reverse", "--remove", "tcp:8790"]),
+            ]
+        );
+        // No `sdb reverse` (on the emulator, a shell): `sdb forward` to the
+        // library's listening port, relayed.
+        let emulator = device(false);
+        let mut fake = Fake::failing(&["reverse"]);
+        let mut opened = Opened::default();
+        open(&emulator, 9000, &mut fake, &mut opened).unwrap();
+        assert_eq!(
+            fake.ran,
             [
                 line(&["shell", "app_launcher", "-k", "NshDevTizn.NshDev"]),
                 line(&["reverse", "tcp:8790", "tcp:9000"]),
+                line(&["forward", "tcp:50000", "tcp:8791"]),
                 line(&["shell", "app_launcher", "-s", "NshDevTizn.NshDev"]),
             ]
         );
-        // The fallback and what undoes both.
+        assert!(!opened.reverse);
         assert_eq!(
-            emulator.forward(50000, LISTEN_PORT),
-            line(&["forward", "tcp:50000", "tcp:8791"])
+            opened.forward.as_ref().map(|(local, _)| *local),
+            Some(50000)
+        );
+        assert_eq!(fake.relayed, [50000]);
+        assert_eq!(
+            close_sequence(&emulator, &opened),
+            [
+                line(&["shell", "app_launcher", "-k", "NshDevTizn.NshDev"]),
+                line(&["forward", "--remove", "tcp:50000"]),
+            ]
+        );
+        // A failed launch fails the open; what it mapped is recorded, to be
+        // removed.
+        let mut fake = Fake::failing(&["execute"]);
+        let mut opened = Opened::default();
+        let error = open(&tv, 8791, &mut fake, &mut opened).unwrap_err();
+        assert!(error.to_string().contains("execute"), "{error}");
+        assert!(opened.reverse);
+        // A refused forward too.
+        let mut fake = Fake::failing(&["reverse", "forward"]);
+        let mut opened = Opened::default();
+        assert!(open(&tv, 8791, &mut fake, &mut opened).is_err());
+        assert_eq!(fake.ran.len(), 3, "{:?}", fake.ran);
+        assert!(opened.forward.is_none());
+    }
+
+    fn args(command: &Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn an_apps_library_is_checked_by_dxn_gpui_tizen_and_stripped() {
+        let check = symbol_check(
+            Path::new("/src/dXn.GpuiTizen"),
+            Path::new("/t/armv7-tizen-linux-gnueabi/release/libapp_tizen_lib.so"),
+        );
+        assert_eq!(check.get_program(), "cargo");
+        assert_eq!(
+            check.get_current_dir(),
+            Some(Path::new("/src/dXn.GpuiTizen"))
         );
         assert_eq!(
-            emulator.remove_forward(50000),
-            line(&["forward", "--remove", "tcp:50000"])
+            args(&check),
+            [
+                "xtask",
+                "check-symbols",
+                "/t/armv7-tizen-linux-gnueabi/release/libapp_tizen_lib.so",
+                "--entry",
+                "nsh_tizen_main",
+            ]
+        );
+        // dXn.GpuiTizen's `rust-toolchain.toml` picks its nightly.
+        let mut removed: Vec<String> = check
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+        removed.sort();
+        assert_eq!(removed, ["CARGO", "RUSTC", "RUSTUP_TOOLCHAIN"]);
+        let strip = strip_command(
+            Path::new("/rustlib/bin"),
+            Path::new("/t/libapp.so"),
+            Path::new("/out/armv7l/libnsh.so"),
         );
         assert_eq!(
-            emulator.remove_reverse(DEV_PORT),
-            line(&["reverse", "--remove", "tcp:8790"])
+            strip.get_program(),
+            Path::new("/rustlib/bin").join(format!("llvm-strip{}", std::env::consts::EXE_SUFFIX))
         );
+        assert_eq!(
+            args(&strip),
+            [
+                "--strip-unneeded",
+                "-o",
+                "/out/armv7l/libnsh.so",
+                "/t/libapp.so"
+            ]
+        );
+        // The checkout: DXN_GPUI_TIZEN, else next to nsh's.
+        let dir = std::env::temp_dir().join(format!("nsh-tizen-dxn-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("nsh")).unwrap();
+        assert_eq!(dxn_gpui_tizen(None, Some(&dir.join("nsh"))), None);
+        assert_eq!(dxn_gpui_tizen(None, None), None);
+        fs::create_dir_all(dir.join("dXn.GpuiTizen/xtask")).unwrap();
+        assert_eq!(
+            dxn_gpui_tizen(None, Some(&dir.join("nsh"))),
+            Some(dir.join("nsh/../dXn.GpuiTizen"))
+        );
+        fs::create_dir_all(dir.join("elsewhere/xtask")).unwrap();
+        assert_eq!(
+            dxn_gpui_tizen(Some(dir.join("elsewhere").into()), Some(&dir.join("nsh"))),
+            Some(dir.join("elsewhere"))
+        );
+        assert_eq!(
+            dxn_gpui_tizen(Some(dir.join("nothing").into()), Some(&dir.join("nsh"))),
+            None
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_sdk_hints_give_the_package_managers_command() {
+        let rootstrap = rootstrap_hint(Arch::Armv7l);
+        assert_eq!(
+            rootstrap,
+            "building the app's crates for armv7l needs the Tizen 8.0 rootstrap: install it with the Tizen SDK's \
+             package manager (`~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license \
+             TIZEN-8.0-NativeAppDevelopment-CLI`) or set TIZEN_ROOTSTRAP_ARMV7"
+        );
+        let gcc = gcc_hint(Arch::Aarch64);
+        assert_eq!(
+            gcc,
+            "building the app's crates for aarch64 needs the Tizen SDK's GCC 9.2 toolchain: install it \
+             (`~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license \
+             NativeToolchain-Gcc-9.2`) or set TIZEN_GCC_TOOLCHAIN_AARCH64"
+        );
+        for hint in [rootstrap, gcc] {
+            assert!(!hint.contains("  "), "{hint}");
+        }
+    }
+
+    #[test]
+    fn the_upload_takes_the_tvs_packages_not_the_emulators() {
+        assert_eq!(
+            [Arch::Armv7l, Arch::Aarch64, Arch::X86_64].map(Arch::in_store),
+            [true, true, false]
+        );
+        let packages = vec![
+            (Arch::Armv7l, PathBuf::from("a-1.0.0.1-armv7.tpk")),
+            (Arch::Aarch64, PathBuf::from("a-1.0.0.2-aarch64.tpk")),
+            (Arch::X86_64, PathBuf::from("a-1.0.0.3-x86_64.tpk")),
+        ];
+        assert_eq!(store_packages(&packages), packages[..2]);
     }
 
     #[test]

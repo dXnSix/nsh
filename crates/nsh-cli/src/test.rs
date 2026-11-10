@@ -67,6 +67,7 @@ pub(crate) fn test(
     web_host: Option<PathBuf>,
     display: Option<usize>,
     foreground: bool,
+    device: Option<&str>,
 ) -> anyhow::Result<()> {
     let app_dir = entry.parent().unwrap_or(Path::new(".")).to_path_buf();
     let work_dir = app_dir.join(".nsh/test");
@@ -151,7 +152,7 @@ pub(crate) fn test(
     let host = target
         .filter(|_| !files.is_empty())
         .map(|target| {
-            crate::test_host::starter(target, browser, &work_dir, fps, display, foreground)
+            crate::test_host::starter(target, browser, &work_dir, fps, display, foreground, device)
         })
         .transpose()?;
     // What `open` checks its options against on that host.

@@ -41,7 +41,7 @@ library a TPK's C# host calls, exports one symbol, `nsh_tizen_main(argc, argv)`.
 
 | Module | What it does |
 | --- | --- |
-| `lib.rs` | `nsh_tizen_main`, and for the hosts of apps with Rust crates of their own `main`, `run_rust` and `set_ui_sets` |
+| `lib.rs` | `nsh_tizen_main` (feature `entry`, a default one), and for the libraries of apps with Rust crates of their own `main`, `run_rust` and `set_ui_sets` |
 | `tizen.rs` (Tizen only) | `dxn_gpui_tizen::run` with the package's bundle (or the development runtime), the app framework's data and cache directories (`app_get_data_path`, `app_get_cache_path`, each with `nsh/` in it), with `dev` the system's log (dlog, tag `NSH`) |
 | `app.rs` | The full-screen window holding `AppView`, and the exit question over it; the TV's settings and the app's state given to `AppView` before the app loads (its engine starts with them), the settings again as they change; Exit quits GPUI, which ends `ui_app_main` |
 | `settings.rs` | `dxn_gpui_tizen::settings` (locale, time zone, font scale, screen reader, reduce motion) as the values of `AppView`'s setters, and the setters to call again when they change; the appearance is dark (Tizen 8.0 reports no light or dark setting) |
@@ -75,10 +75,36 @@ cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib ho
   --config "$PATCH" --config "resolver.lockfile-path='$LOCK'"
 ```
 
-`nsh_tizen_main` first looks up `nsh_app_ui_sets` and `nsh_app_root` in its own library (`dladdr` on itself, then
-`dlopen(RTLD_NOLOAD)` and `dlsym`: the host loads it `RTLD_LOCAL`, out of the global scope): an app's library with Rust
-crates of its own defines them with `nsh::ui_sets!` and `nsh::root!`, as Android's does, and the prebuilt runtime
-has neither.
+`nsh_tizen_main` is the crate's own with its feature `entry` (a default one): the prebuilt runtime's, which runs the
+packaged bundle. The library of an app with Rust crates of its own ([below](#apps-with-rust-crates)) depends on the
+crate without it and defines its own `nsh_tizen_main`, which gives the runtime the app's UI sets (`set_ui_sets`) and
+runs it (`main`, or `run_rust` with a Rust app's root): every TV library exports that one symbol and nothing else.
+The generated code asserts `nsh::ENTRY` (`cfg!(feature = "entry")`) is false, so the two entries never meet in one
+library (they would be a duplicate symbol at the link anyway).
+
+## Public API
+
+- `nsh-platform-tizen` (not published): `nsh_tizen_main` (feature `entry`), `main(argc, argv)`,
+  `run_rust(argc, argv, root)` and `set_ui_sets` (Tizen only, but `set_ui_sets`), `ENTRY` (hidden).
+- `nsh-platform-gpui`: `AppView::connect_dev_server_with(url, transport, platform, cx)` (feature `dev`), the dev client
+  over the connections of a `nsh_dev::DevTransport`. It came in with `pr/tizen/06-module` as
+  `connect_dev_server_with(url, transport, cx)`; `pr/tizen/07-cli` adds `platform` (`nsh_dev::protocol::HostPlatform`,
+  what the hello names: `Tizen` for the TV's runtime), and that four-argument form supersedes the three-argument one.
+  No release carries the three-argument form: the two land together.
+
+## Panics
+
+TV libraries keep unwinding (`panic = "unwind"`, Rust's default; neither the GPUI workspace's release profile nor
+`.nsh/rust/tizen`'s sets `panic`), a deliberate exception to dXn.GpuiTizen's `panic = "abort"`. NSH relies on
+`catch_unwind` for correctness in what a TV library runs: Rust code of a view runs shielded and a panic goes to the
+nearest `catch_error` boundary instead of the graph (`nsh-core`'s `element/reactive.rs`, `component.rs`;
+[components.md](components.md), "Failures"), a panic in a module's op or a class's method rejects that call and
+leaves the engine running (`nsh-js`'s `classes.rs`, `components.rs`), SVG decoding returns an error on a panic in usvg
+or resvg (`svg/mod.rs`), and the engine's host channel survives a panicking handler (`nsh-engine`'s
+`host_channel.rs`). With `abort` each of those would end the app instead. The builds still use
+`-Zbuild-std=std,panic_abort`, which only makes the abort runtime available; a panic that reaches an `extern "C"`
+boundary (`nsh_tizen_main`, the platform's callbacks) still aborts there, as Rust does since 1.81. The symbol check
+accepts the unwinder's imports (`libgcc_s`'s `_Unwind_*`, versioned `GCC_*`).
 
 ## The development runtime
 
@@ -214,39 +240,53 @@ tested by `cargo test -p nsh-cli --bin nsh tizen::tests`, and the commands throu
   package `tz` wrote (inside or next to the staged tree) to `<out>/<name>.tpk`. Without a profile it refuses, saying
   how to make one. With several architectures each package's version gets the fourth number (armv7l 1, aarch64 2,
   x86_64 3) and the CPU feature (`platform.core.cpu.arch.armv7` / `armv8` / `x86_64`), and the packages go to
-  `<out>/<package>-<version>.<n>-<arch>.tpk` and into `<out>/<package>-<version>.zip` for Seller Office
-  (dXn.GpuiTizen's `xtask/src/package/` conventions). `--run` installs the TV's architecture's package and
-  launches it.
+  `<out>/<package>-<version>.<n>-<arch>.tpk`, and the TVs' ones (armv7l, aarch64; `Arch::in_store`) into
+  `<out>/<package>-<version>.zip` for Seller Office; the emulator's x86_64 package stays out of it (dXn.GpuiTizen's
+  `xtask/src/package/` conventions, `STORE_TARGETS`). `--run` installs the TV's architecture's package and launches
+  it.
 - **`nsh run --target tizen [--device <serial>]`** finds the device (`sdb devices`; the only one, or `--device`) and
   what it is (`sdb capability`: `cpu_arch`, and `secure_protocol`, a retail TV, which has no shell), builds the
   development TPK (`NshDevTizn.NshDev`, one package for every app, apart from `tizen-web`'s `NshDevHost`) from
   `runtime/tizen/dev/` for its architecture into `.nsh/tizen/` and signs it with `nsh.json` `tizen.signing` when the
   runtime changed, installs it with `sdb install` when the device does not have this build (`.nsh/tizen/installed`:
-  a digest of the runtime per serial), then stops what an earlier session left, maps the TV's port 8790 to the dev
-  server with `sdb reverse` and launches it (`sdb shell 0 execute <app id>` on a TV, `app_launcher -s` on the
-  emulator). When `sdb reverse` fails it maps a free local port to the TV's 8791 with `sdb forward` and relays each
-  connection there to the dev server (the library listens after three refusals of 8790). The run ends stopping the
-  app and removing the mappings, Ctrl-C too. An app of Rust only (`"root"`) is packaged (signed) and installed with
+  a digest of the runtime per serial), then runs `tizen::open_sequence` with `tizen::open`, each step with its
+  failure policy (`tizen::Step`): it stops what an earlier session left (a failure, nothing running, is fine), maps
+  the TV's port 8790 to the dev server with `sdb reverse` and launches it (`sdb shell 0 execute <app id>` on a TV,
+  `app_launcher -s` on the emulator; a failure ends the run). When `sdb reverse` fails it maps a free local port to
+  the TV's 8791 with `sdb forward` and relays each connection there to the dev server (the library listens after
+  three refusals of 8790). The run ends stopping the app and removing the mappings (`tizen::close_sequence`), Ctrl-C
+  too. An app of Rust only (`"root"`) is packaged (signed) and installed with
   `nsh package --run`'s path.
-- **`nsh test --target tizen`** (`test_tizen.rs`) installs the development TPK as `nsh run` does, then for each
-  `open` serves the build in a test session, maps 8790 to it and launches the runtime, whose GPUI test agent takes
-  the steps; one app at a time (the port is fixed). `open`'s platform there is Linux's, unsized (the app fills the
+- **`nsh test --target tizen [--device <serial>]`** (`test_tizen.rs`) installs the development TPK as `nsh run`
+  does, then for each `open` serves the build in a test session and starts the runtime on it with the same
+  `tizen::open` (stop, `sdb reverse` else `sdb forward` and the relay, launch), whose GPUI test agent takes the steps;
+  closing the app stops it and removes the mapping. One app at a time (the port is fixed). `--device` goes with
+  `--target tizen` only. `open`'s platform there is Linux's, unsized (the app fills the
   screen).
 
 ## Apps with Rust crates
 
 As Android's library, an app with `"rust"` crates gets its own `libnsh.so` (`rust_app.rs`,
 `RustApp::tizen_workspace`, beside `gpui_workspace`): `.nsh/rust/tizen`, a workspace of its own whose member
-`tizen-lib` is a `cdylib` of `nsh-platform-tizen` and the app's crates (`nsh::ui_sets!` with `nsh/base` and their sets,
-`nsh::root!` for a Rust app's root), and whose root manifest carries the forks' `[patch.crates-io]` lines (git: the
+`tizen-lib` is a `cdylib` of `nsh-platform-tizen` (`default-features = false`: without its `entry`) and the app's
+crates whose one export is its own `nsh_tizen_main` (`nsh::set_ui_sets` with `nsh/base` and their sets, then
+`nsh::main`, or `nsh::run_rust(argc, argv, app_root)` for a Rust app's root), and whose root manifest carries the
+forks' `[patch.crates-io]` lines (git: the
 nine `gpui-fast-*` crates from dXnSix/gpui-fast `tizen-release`, the wgpu crates from dXnSix/wgpu `v30-tizen`, the same
 set as dXn.GpuiTizen's patch config; `rust_app::TIZEN_PATCHES`). It is built for the requested architectures with
 the component's target specs (`runtime/tizen/targets`), not dXn.GpuiTizen's checkout: `tizen::cross_command` runs
 the nightly the specs name (`targets/toolchain`) with `-Zbuild-std=std,panic_abort -Zjson-target-spec`, clang for C
 with the rootstrap as sysroot, and clang driving the GCC toolchain's GNU ld (dXn.GpuiTizen's `cross::plan`). The
 machine needs that nightly (`rust-src`, `llvm-tools`), clang, the Tizen 8.0 rootstrap (`TIZEN_ROOTSTRAP_<ARCH>`,
-else the SDK's) and the SDK's GCC 9.2 toolchain (`TIZEN_GCC_TOOLCHAIN_<ARCH>`, else the SDK's `tools/`).
-`nsh-platform-tizen` is not on crates.io yet: until it is, such apps build against a checkout of nsh.
+else the SDK's) and the SDK's GCC 9.2 toolchain (`TIZEN_GCC_TOOLCHAIN_<ARCH>`, else the SDK's `tools/`; the hints
+give dXn.GpuiTizen's `docs/setup.md` command, `package-manager-cli.bin install --accept-license <package>`). Each
+architecture's library then goes through dXn.GpuiTizen's symbol check, as the runtime's does
+(`tizen::symbol_check`: `cargo xtask check-symbols <lib> --entry nsh_tizen_main` in its checkout, `DXN_GPUI_TIZEN`,
+else `dXn.GpuiTizen` next to nsh's checkout; without one the build is refused before it starts), and is stripped with
+the nightly's `llvm-strip --strip-unneeded` into `.nsh/rust/tizen-{release,dev}/<arch>/libnsh.so` (`tizen::strip_command`;
+the target directory keeps the symbols). `nsh-platform-tizen` is not published (it ships built, as the `tizen`
+component), so such apps build against a checkout of nsh: `RustApp::tizen` refuses crates that take nsh from
+crates.io, naming `nsh init --template rust --nsh-source <dir>`.
 
 ## Limits
 

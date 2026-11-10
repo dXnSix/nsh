@@ -1903,10 +1903,12 @@ opt-level = \"s\"
 
     /// The workspace of the app's Tizen library (`<workspace>/tizen`),
     /// written when it is built, as GPUI's is ([`Self::gpui_workspace`]):
-    /// a `cdylib` of `nsh-platform-tizen` with the app's crates that exports
-    /// their UI sets (`nsh::ui_sets!`, found by the library when the C#
-    /// host starts it), and the root manifest's `[patch.crates-io]` lines
-    /// for the gpui-fast and wgpu forks TV builds take ([`TIZEN_PATCHES`]).
+    /// a `cdylib` of `nsh-platform-tizen` (without its feature `entry`) and
+    /// the app's crates whose one export is its own `nsh_tizen_main`, which
+    /// gives the runtime their UI sets (`nsh::set_ui_sets`) and runs it
+    /// (`nsh::main`, or `nsh::run_rust` with a Rust app's root), and the
+    /// root manifest's `[patch.crates-io]` lines for the gpui-fast and wgpu
+    /// forks TV builds take ([`TIZEN_PATCHES`]).
     pub(crate) fn tizen_workspace(&self) -> anyhow::Result<PathBuf> {
         let ws = self.workspace.join("tizen");
         self.write_workspace_manifest_patched(
@@ -1929,26 +1931,40 @@ opt-level = \"s\"
                 self.bin("tizen-lib"),
                 self.tizen_lib(),
                 src("nsh-core"),
-                src("nsh-platform-tizen"),
+                self.nsh
+                    .dep("nsh-platform-tizen", ", default-features = false"),
                 self.nsh.dep("nsh-base", HIGHLIGHT),
                 self.dependencies(),
             ),
         )?;
         let tizen = "#[cfg(target_vendor = \"tizen\")]\n";
         // A Rust app's root: what the library runs instead of a bundle (in
-        // development, when the test session says so).
-        let root = match &self.root {
-            Some(root) => format!(
-                "{tizen}nsh::root!(app_root());\n{}",
-                self.root_fn(tizen, root)
+        // development, the dev server's app, when the test session says so).
+        let (run, root) = match &self.root {
+            Some(root) => (
+                "nsh::run_rust(argc, argv, app_root)",
+                self.root_fn(tizen, root),
             ),
-            None => String::new(),
+            None => ("nsh::main(argc, argv)", String::new()),
         };
         write(
             &ws.join("tizen-lib/lib.rs"),
             &format!(
-                "//! The app's `libnsh.so` on Samsung TVs: the Tizen runtime with `nsh/base` and\n//! the app's Rust components.\n\n\
-                 {tizen}nsh::ui_sets!({});\n{root}{}",
+                "//! The app's `libnsh.so` on Samsung TVs: the Tizen runtime with `nsh/base` and\n\
+                 //! the app's Rust components.\n\n\
+                 // The library's entry is this one; nsh-platform-tizen's own (feature `entry`) stays out.\n\
+                 {tizen}const _: () = assert!(\n    !nsh::ENTRY,\n    \
+                 \"nsh-platform-tizen's feature `entry` defines nsh_tizen_main too: depend on it with default-features = false\"\n);\n\n\
+                 /// The library's one export, the C# host's P/Invoke: the runtime with the app's UI sets.\n\
+                 ///\n/// # Safety\n///\n\
+                 /// Called by the host with `argc` NUL-terminated strings in `argv`, valid while the app runs.\n\
+                 {tizen}#[unsafe(no_mangle)]\n\
+                 pub unsafe extern \"C\" fn nsh_tizen_main(\n    \
+                 argc: ::core::ffi::c_int,\n    argv: *mut *mut ::core::ffi::c_char,\n\
+                 ) -> ::core::ffi::c_int {{\n    \
+                 nsh::set_ui_sets({});\n    \
+                 // SAFETY: argv as the host passes it, documented above.\n    \
+                 unsafe {{ {run} }}\n}}\n{root}{}",
                 self.sets(),
                 self.app_sets(tizen)
             ),
@@ -2376,13 +2392,30 @@ opt-level = \"s\"
     /// app's `libnsh.so` (`<arch>/`) for each of `archs`, built in its Tizen
     /// workspace ([`Self::tizen_workspace`]) with the target specs of the
     /// `tizen` component, the Tizen 8.0 rootstrap and the Tizen SDK's GCC
-    /// toolchain (`tizen::cross_command`).
+    /// toolchain (`tizen::cross_command`), checked by dXn.GpuiTizen's
+    /// symbol check (`tizen::symbol_check`: one export, `nsh_tizen_main`)
+    /// and stripped (`tizen::strip_command`), as the prebuilt runtime is.
+    /// It builds against a checkout of nsh: `nsh-platform-tizen` is not on
+    /// crates.io (it ships built, as the `tizen` component).
     pub(crate) fn tizen(
         &self,
         prebuilt: &Path,
         dev: bool,
         archs: &[crate::tizen::Arch],
     ) -> anyhow::Result<PathBuf> {
+        if self.nsh == Nsh::Registry {
+            bail!(
+                "an app's Rust crates build for --target tizen against a checkout of nsh: nsh-platform-tizen is not \
+                 on crates.io (it ships built, as the tizen component). Have the app's crates take nsh's crates from \
+                 a checkout by path (`nsh init --template rust --nsh-source <dir>`)"
+            );
+        }
+        let dxn = crate::tizen::dxn_gpui_tizen(std::env::var_os("DXN_GPUI_TIZEN"), self.nsh.source())
+            .context(
+                "the app's libnsh.so is checked by dXn.GpuiTizen's symbol check (one export, nsh_tizen_main; only \
+                 documented Tizen symbols imported): set DXN_GPUI_TIZEN to its checkout, or put it next to nsh's as \
+                 dXn.GpuiTizen (docs/dev/tizen.md)",
+            )?;
         let ws = self.tizen_workspace()?;
         let targets = crate::runtime::tizen_targets()?;
         let out = self
@@ -2398,7 +2431,7 @@ opt-level = \"s\"
         let artifact = format!("lib{}.so", self.tizen_lib());
         let features: &[&str] = if dev { &["--features", "dev"] } else { &[] };
         for &arch in archs {
-            let (cmd, spec) = crate::tizen::cross_command(arch, &targets)?;
+            let (cmd, spec, rustlib_bin) = crate::tizen::cross_command(arch, &targets)?;
             let build = Build {
                 workspace: &ws,
                 package: &package,
@@ -2410,9 +2443,17 @@ opt-level = \"s\"
                 what: &format!("libnsh.so of {} for {}", self.packages(), arch.name()),
             };
             let lib = self.build_tizen(cmd, &spec, &build)?;
+            run_checked(
+                crate::tizen::symbol_check(&dxn, &lib),
+                &format!("checking the symbols of {}", build.what),
+            )?;
             let dir = out.join(arch.name());
             fs::create_dir_all(&dir)?;
-            install(&lib, &dir.join("libnsh.so"))?;
+            // The symbols stay in the target directory's copy.
+            run_checked(
+                crate::tizen::strip_command(&rustlib_bin, &lib, &dir.join("libnsh.so")),
+                &format!("stripping {}", build.what),
+            )?;
         }
         Ok(out)
     }
@@ -2766,6 +2807,27 @@ fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
          /// status bar.\n\
          {cfg}fn app_root() -> nsh_core::element::Root {{\n    {make}\n}}\n"
     )
+}
+
+/// Runs `command`, a step `doing` something, failing with its output when
+/// it fails.
+fn run_checked(mut command: Command, doing: &str) -> anyhow::Result<()> {
+    let step = ui::Step::start(doing.to_owned());
+    let output = command
+        .output()
+        .with_context(|| format!("run {:?}", command.get_program()))?;
+    if !output.status.success() {
+        return Err(ui::failure(
+            format!("{doing} failed"),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        ));
+    }
+    step.done(doing.to_owned());
+    Ok(())
 }
 
 /// What tells one build of `program` from another: its size and time.
@@ -3517,7 +3579,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tizen_workspace_takes_the_forks_and_exports_the_ui_sets() {
+    fn a_tizen_workspace_takes_the_forks_and_defines_the_one_export() {
         let dir = std::env::temp_dir().join(format!("nsh-rust-tizen-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut app = app(&dir, &[("app-native", dir.join("native"))], None);
@@ -3581,20 +3643,41 @@ mod tests {
                  [lib]\nname = {lib:?}\npath = \"lib.rs\"\ncrate-type = [\"cdylib\"]\n\n\
                  [features]\ndev = [\"nsh-platform-tizen/dev\"]\n\n\
                  [dependencies]\nnsh-core = {{ version = \"={version}\" }}\n\
-                 nsh-platform-tizen = {{ version = \"={version}\" }}\n\
+                 nsh-platform-tizen = {{ version = \"={version}\", default-features = false }}\n\
                  nsh-base = {{ version = \"={version}\", features = [\"highlight\"] }}\n{}\n",
                 app.dependencies()
             )
         );
+        // The library's one export is its own entry, which hands the
+        // runtime the UI sets; the crate's entry (feature `entry`) stays out.
         let cfg = "#[cfg(target_vendor = \"tizen\")]\n";
+        let entry = |run: &str| {
+            format!(
+                "// The library's entry is this one; nsh-platform-tizen's own (feature `entry`) stays out.\n\
+                 {cfg}const _: () = assert!(\n    !nsh::ENTRY,\n    \
+                 \"nsh-platform-tizen's feature `entry` defines nsh_tizen_main too: depend on it with default-features = false\"\n);\n\n\
+                 /// The library's one export, the C# host's P/Invoke: the runtime with the app's UI sets.\n\
+                 ///\n/// # Safety\n///\n\
+                 /// Called by the host with `argc` NUL-terminated strings in `argv`, valid while the app runs.\n\
+                 {cfg}#[unsafe(no_mangle)]\n\
+                 pub unsafe extern \"C\" fn nsh_tizen_main(\n    \
+                 argc: ::core::ffi::c_int,\n    argv: *mut *mut ::core::ffi::c_char,\n\
+                 ) -> ::core::ffi::c_int {{\n    \
+                 nsh::set_ui_sets(vec![nsh_base::registry(), set_app_app_native()]);\n    \
+                 // SAFETY: argv as the host passes it, documented above.\n    \
+                 unsafe {{ {run} }}\n}}\n"
+            )
+        };
         assert_eq!(
             read("tizen/tizen-lib/lib.rs"),
             format!(
-                "//! The app's `libnsh.so` on Samsung TVs: the Tizen runtime with `nsh/base` and\n//! the app's Rust components.\n\n\
-                 {cfg}nsh::ui_sets!(vec![nsh_base::registry(), set_app_app_native()]);\n{}",
+                "//! The app's `libnsh.so` on Samsung TVs: the Tizen runtime with `nsh/base` and\n//! the app's Rust components.\n\n{}{}",
+                entry("nsh::main(argc, argv)"),
                 app.app_sets(cfg)
             )
         );
+        let lib = read("tizen/tizen-lib/lib.rs");
+        assert_eq!(lib.matches("#[unsafe(no_mangle)]").count(), 1, "{lib}");
         // Against a checkout: nsh's crates by path, in the same table.
         app.nsh = Nsh::Source(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
         app.tizen_workspace().unwrap();
@@ -3609,7 +3692,8 @@ mod tests {
             "{manifest}"
         );
         assert!(
-            read("tizen/tizen-lib/Cargo.toml").contains("crates/gpui/nsh-platform-tizen\" }"),
+            read("tizen/tizen-lib/Cargo.toml")
+                .contains("crates/gpui/nsh-platform-tizen\", default-features = false }"),
             "{}",
             read("tizen/tizen-lib/Cargo.toml")
         );
@@ -3625,11 +3709,42 @@ mod tests {
             translations: None,
         });
         app.tizen_workspace().unwrap();
+        let lib = read("tizen/tizen-lib/lib.rs");
         assert!(
-            read("tizen/tizen-lib/lib.rs").contains(&format!("{cfg}nsh::root!(app_root());\n")),
-            "{}",
-            read("tizen/tizen-lib/lib.rs")
+            lib.contains(&entry("nsh::run_rust(argc, argv, app_root)")),
+            "{lib}"
         );
+        assert!(
+            lib.contains(&format!("{cfg}fn app_root() -> nsh_core::element::Root {{")),
+            "{lib}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `nsh-platform-tizen` is not on crates.io: an app's crates that take
+    /// nsh from there are refused for Tizen before anything is written or
+    /// built, saying how to build against a checkout.
+    #[test]
+    fn a_tizen_library_needs_a_checkout_of_nsh() {
+        let dir =
+            std::env::temp_dir().join(format!("nsh-rust-tizen-registry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = app(&dir, &[("app-native", dir.join("native"))], None);
+        app.nsh = Nsh::Registry;
+        let error = app
+            .tizen(&dir.join("prebuilt"), false, &[crate::tizen::Arch::Armv7l])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("against a checkout of nsh"), "{error}");
+        assert!(
+            error.contains("nsh-platform-tizen is not on crates.io"),
+            "{error}"
+        );
+        assert!(
+            error.contains("nsh init --template rust --nsh-source <dir>"),
+            "{error}"
+        );
+        assert!(!app.workspace.join("tizen").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

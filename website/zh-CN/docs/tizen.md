@@ -54,8 +54,8 @@ nsh package App.tsx --target tizen --sign my-profile --run      # 用另一个�
 `tizen-manifest.xml`。`nsh package` 运行 Tizen SDK 的 `tz pack -t tpk -s <profile>` 为它签名；没有证书配置时会停下并说明如何创建。
 
 - **`--arch`** 接受 `armv7l`（32 位 ARM，电视；默认）、`aarch64` 和 `x86_64`（模拟器）。指定多个时，每个包的版本号会加上第四位
-  （armv7l `.1`、aarch64 `.2`、x86_64 `.3`）以及其电视匹配的 CPU 特性，这是三星 Seller Office 对多架构上传的要求；这些包还会放进
-  `<package>-<version>.zip`，即上传文件本身。
+  （armv7l `.1`、aarch64 `.2`、x86_64 `.3`）以及其电视匹配的 CPU 特性，这是三星 Seller Office 对多架构上传的要求；电视的包（armv7l、aarch64）
+  还会放进 `<package>-<version>.zip`，即上传文件本身。模拟器的包（x86_64）不放进上传文件，单独成包。
 - **`--run`** 把与电视架构对应的包安装到已连接的电视上并启动。
 
 ## `nsh.json`
@@ -79,10 +79,11 @@ nsh package App.tsx --target tizen --sign my-profile --run      # 用另一个�
 ## 测试
 
 ```sh
-nsh test --target tizen               # 在 sdb 列出的电视（或模拟器）上运行应用的测试
+nsh test --target tizen                              # 在 sdb 列出的电视（或模拟器）上运行应用的测试
+nsh test --target tizen --device 192.168.1.5:26101   # 有多台设备时选其中一台
 ```
 
-测试在电视上用 NSH 的开发包打开应用（与 `nsh run` 的安装方式相同），测试步骤通过开发协议作用于应用。应用占满电视屏幕：在这里
+测试在电视上用 NSH 的开发包打开应用（安装和连接方式与 `nsh run` 相同），测试步骤通过开发协议作用于应用。应用占满电视屏幕：在这里
 `open` 的 `width` 和 `height` 会被拒绝。应用一次打开一个。
 
 ## 带 Rust crate 的应用
@@ -92,11 +93,17 @@ nsh test --target tizen               # 在 sdb 列出的电视（或模拟器�
 
 - 组件指定的 nightly Rust 工具链，带 `rust-src` 和 `llvm-tools`（`nsh` 会说明是哪一个）；
 - clang；
-- Tizen 8.0 rootstrap（`package-manager-cli install TIZEN-8.0-NativeAppDevelopment-CLI`；或设置
-  `TIZEN_ROOTSTRAP_ARMV7`、`TIZEN_ROOTSTRAP_AARCH64`、`TIZEN_ROOTSTRAP_X86_64`）；
-- SDK 的 GCC 9.2 工具链（`package-manager-cli install NativeToolchain-Gcc-9.2`；或设置 `TIZEN_GCC_TOOLCHAIN_<ARCH>`）。
+- Tizen 8.0 rootstrap
+  （`~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license TIZEN-8.0-NativeAppDevelopment-CLI`；
+  或设置 `TIZEN_ROOTSTRAP_ARMV7`、`TIZEN_ROOTSTRAP_AARCH64`、`TIZEN_ROOTSTRAP_X86_64`）；
+- SDK 的 GCC 9.2 工具链
+  （`~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license NativeToolchain-Gcc-9.2`；
+  或设置 `TIZEN_GCC_TOOLCHAIN_<ARCH>`）；
+- [dXn.GpuiTizen](https://github.com/dXnSix/dXn.GpuiTizen) 的源码检出，每个电视库都要通过它的符号检查（只导出 `nsh_tizen_main`，
+  只调用 Tizen 有文档的 API）：`DXN_GPUI_TIZEN`，否则为 NSH 源码检出旁边的 `dXn.GpuiTizen`。
 
-在 NSH 的 Tizen crate 发布到 crates.io 之前，这类应用需要基于 NSH 的源码检出构建（`nsh init --nsh-source <dir>`）。
+NSH 的 Tizen crate 不发布到 crates.io（运行时以构建好的 `tizen` 组件提供），所以这类应用需要基于 NSH 的源码检出构建
+（`nsh init --template rust --nsh-source <dir>`）；应用的 crate 从 crates.io 获取 NSH 时，`--target tizen` 会停下并说明原因。
 
 ## 应用看到什么
 

@@ -10,8 +10,14 @@ hot updates, connected through `sdb reverse` or, failing that, `sdb forward`.
 `host/` is the C# host (`Program.cs`, `Nsh.Tizen.Host.csproj`).
 
 An app with Rust crates of its own builds its own `libnsh.so` from this crate (`nsh` generates it in
-`.nsh/rust/tizen`): `nsh::ui_sets!(…)` exports the app's UI sets and `nsh::root!(…)` a Rust app's root, which
-`nsh_tizen_main` finds in its library before it starts, as Android's library does.
+`.nsh/rust/tizen`): it depends on the crate without its default feature `entry` (the runtime's `nsh_tizen_main`) and
+defines its own `nsh_tizen_main`, which calls `set_ui_sets` with the app's UI sets and then `main` (or `run_rust`
+with a Rust app's root). Either way the library exports that one symbol and nothing else.
+
+TV libraries of this crate unwind on a panic, a deliberate exception to dXn.GpuiTizen's `panic = "abort"`: NSH
+catches panics to keep the app running (a view's Rust code and its `catch_error` boundaries, a module's op that
+rejects its call, SVG decoding, the engine's host channel), which `abort` would turn into the app ending
+(`docs/dev/tizen.md`, "Panics").
 
 ## Building
 
