@@ -9,6 +9,22 @@ expect Select: tv
 expect Select OS: android
 expect Select mobile: mobile
 covers [nsh] platform
+# mod-tizen
+tap id:case-mod-tizen
+# no Samsung TV: nsh/tizen is not available and every call rejects as
+# unavailable here.
+expect Tizen: false
+expect Product: ERR_FEATURE_UNAVAILABLE_ON_PLATFORM
+expect Register: ERR_FEATURE_UNAVAILABLE_ON_PLATFORM
+expect Unregister: ERR_FEATURE_UNAVAILABLE_ON_PLATFORM
+expect Exit: ERR_FEATURE_UNAVAILABLE_ON_PLATFORM
+expect Preview: ERR_FEATURE_UNAVAILABLE_ON_PLATFORM
+covers [nsh/tizen] isAvailable
+covers [nsh/tizen] productInfo
+covers [nsh/tizen] registerKey
+covers [nsh/tizen] unregisterKey
+covers [nsh/tizen] exitApp
+covers [nsh/tizen] setPreviewData
 # props-platform-tv
 tap id:case-props-platform-tv
 expect Card

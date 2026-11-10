@@ -124,7 +124,10 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
 
 - The CLI watches sources with notify and pushes every rebuild over WebSocket (`/ws`, default port 8790, or `--port`) to all
   connected hosts; new clients subscribe before receiving the current state, so no event is missed. Protocol: `crates/nsh-dev/src/protocol.rs`
-  (JSON text frames + binary frames).
+  (JSON text frames + binary frames). A host connects to the server's URL (`DevClient::start`), or speaks the same
+  protocol over connections of its own (`DevClient::start_with` and a `DevTransport`): a device that reaches the
+  machine through a tool's port mapping, as a TV through `sdb reverse` or `sdb forward`, where the TV listens and the
+  CLI connects and relays to the server.
 - Without `--port`, `nsh run` and `nsh dev` take the port their app (its entry) had last, else the first free one from
   8790; `nsh dev --server-only` takes 8790, which embedding apps keep in their code. `nsh run` and `nsh dev` bind to
   loopback, with `--target ios`, `android` or `web` and `nsh dev --server-only` to every address, for other machines

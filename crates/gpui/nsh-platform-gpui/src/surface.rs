@@ -138,6 +138,10 @@ pub(crate) type ShortcutHandler = Box<dyn Fn(&crate::input::KeyEvent) -> bool>;
 /// Called when the app reports an error (development hosts show it).
 pub(crate) type ErrorHandler = Box<dyn Fn(&AppError)>;
 
+/// What hears a back press nothing in the app took, with the surface's
+/// window ([`crate::AppView::on_unhandled_back`]).
+pub(crate) type UnhandledBack = Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>;
+
 /// A handler as kept: shared, so it is called with nothing borrowed (it may
 /// restart the app or set another handler).
 type Handler<F> = RefCell<Option<Rc<F>>>;
@@ -285,6 +289,9 @@ pub(crate) struct Surface {
     /// standing in for the system's ([`crate::AppView::set_reduce_motion`],
     /// `set_screen_reader`, `set_time_zone`).
     pub(crate) host_settings: Cell<crate::host_settings::HostSettings>,
+    /// Hears the back presses nothing in the app took
+    /// ([`crate::AppView::on_unhandled_back`]).
+    pub(crate) on_unhandled_back: RefCell<Option<UnhandledBack>>,
     /// The app's windows of its own besides the main one, oldest first
     /// ([`crate::window`]).
     pub(crate) windows: RefCell<Vec<Rc<crate::window::AppWindow>>>,
@@ -362,6 +369,7 @@ impl Surface {
             host_dark: Cell::new(None),
             host_environment: Cell::default(),
             host_settings: Cell::default(),
+            on_unhandled_back: RefCell::default(),
             windows: RefCell::default(),
             input_root: RefCell::default(),
         });

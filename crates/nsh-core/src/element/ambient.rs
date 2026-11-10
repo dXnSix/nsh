@@ -612,6 +612,11 @@ pub fn set_clipboard(text: impl Into<String>) {
     act(super::services::set_clipboard(text.into()));
 }
 
+/// Leaves the app (`Command::ExitApp`), from a call or a task.
+pub(crate) fn exit_app() {
+    act(Action::Command(crate::ROOT_ID, Command::ExitApp));
+}
+
 /// The text on the system clipboard, `""` when it holds none (TS:
 /// `Clipboard.readText`), to await in a task.
 pub fn clipboard_string() -> Answer<String> {

@@ -82,7 +82,7 @@ pub use nsh_base::{Theme, ThemeError};
 pub use nsh_core::{
     desktop::WindowBackend,
     element::{AdaptiveColor, Color, Hsla, Rgba},
-    platform::{Appearance, Locale, TimeZone},
+    platform::{Appearance, Lifecycle, Locale, TimeZone},
 };
 pub use nsh_engine::{
     App, AppError, AppErrorKind, Bundle, ByteSize, CacheLocation, CacheOptions, CachePolicy, Idiom,
@@ -101,5 +101,6 @@ pub use crate::{
     app::{AppOptions, AppSource, AppView, CloseRequest, open_app_window, set_ui_sets},
     chrome::titlebar_options,
     image::AssetBase,
+    keys::nsh_key,
     native::{ComponentContext, ComponentFactory, Components, NativeComponent},
 };
