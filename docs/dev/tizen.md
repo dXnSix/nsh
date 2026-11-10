@@ -82,6 +82,30 @@ runs it (`main`, or `run_rust` with a Rust app's root): every TV library exports
 The generated code asserts `nsh::ENTRY` (`cfg!(feature = "entry")`) is false, so the two entries never meet in one
 library (they would be a duplicate symbol at the link anyway).
 
+## Public API
+
+- `nsh-platform-tizen` (not published): `nsh_tizen_main` (feature `entry`), `main(argc, argv)`,
+  `run_rust(argc, argv, root)` and `set_ui_sets` (Tizen only, but `set_ui_sets`), `ENTRY` (hidden).
+- `nsh-platform-gpui`: `AppView::connect_dev_server_with(url, transport, platform, cx)` (feature `dev`), the dev client
+  over the connections of a `nsh_dev::DevTransport`. It came in with `pr/tizen/06-module` as
+  `connect_dev_server_with(url, transport, cx)`; `pr/tizen/07-cli` adds `platform` (`nsh_dev::protocol::HostPlatform`,
+  what the hello names: `Tizen` for the TV's runtime), and that four-argument form supersedes the three-argument one.
+  No release carries the three-argument form: the two land together.
+
+## Panics
+
+TV libraries keep unwinding (`panic = "unwind"`, Rust's default; neither the GPUI workspace's release profile nor
+`.nsh/rust/tizen`'s sets `panic`), a deliberate exception to dXn.GpuiTizen's `panic = "abort"`. NSH relies on
+`catch_unwind` for correctness in what a TV library runs: Rust code of a view runs shielded and a panic goes to the
+nearest `catch_error` boundary instead of the graph (`nsh-core`'s `element/reactive.rs`, `component.rs`;
+[components.md](components.md), "Failures"), a panic in a module's op or a class's method rejects that call and
+leaves the engine running (`nsh-js`'s `classes.rs`, `components.rs`), SVG decoding returns an error on a panic in usvg
+or resvg (`svg/mod.rs`), and the engine's host channel survives a panicking handler (`nsh-engine`'s
+`host_channel.rs`). With `abort` each of those would end the app instead. The builds still use
+`-Zbuild-std=std,panic_abort`, which only makes the abort runtime available; a panic that reaches an `extern "C"`
+boundary (`nsh_tizen_main`, the platform's callbacks) still aborts there, as Rust does since 1.81. The symbol check
+accepts the unwinder's imports (`libgcc_s`'s `_Unwind_*`, versioned `GCC_*`).
+
 ## The development runtime
 
 With `--features dev` the library runs the dev server's app instead of a packaged bundle: its bundles with hot
