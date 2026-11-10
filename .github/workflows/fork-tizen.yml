@@ -15,6 +15,14 @@ name: Fork Tizen
 # check out `dXnSix/gpui-fast` (`tizen-release`) and `dXnSix/wgpu` (`v30-tizen`) and pass dXn.GpuiTizen's
 # patch config (`cargo xtask gpui-fast-release --from`). A fork-only file (branch kind `fork/*`): it never goes
 # upstream and adds only its own file.
+#
+# The emulator job reads these repository secrets, only in its signing step (removed at the end):
+# TIZEN_AUTHOR_P12 and TIZEN_DISTRIBUTOR_P12 (base64-encoded author.p12 and distributor.p12),
+# TIZEN_AUTHOR_PASSWORD, TIZEN_DISTRIBUTOR_PASSWORD, and TIZEN_PROFILES_XML (a profiles.xml naming a
+# profile `ci`, with @CERT_DIR@, @AUTHOR_PASSWORD@ and @DISTRIBUTOR_PASSWORD@ where the certificates'
+# directory and the passwords go). dXnSix/dXn.GpuiTizen, dXnSix/gpui-fast and dXnSix/wgpu must be
+# readable by this workflow. The Tizen SDK is installed with `--accept-license`: running the jobs
+# that install it is the repository owner's acceptance of Samsung's SDK licence on the runner.
 
 on:
   push:
@@ -33,8 +41,9 @@ on:
 permissions:
   contents: read
 
+# Per event too, so a push to main never cancels a manual emulator run.
 concurrency:
-  group: fork-tizen-${{ github.event.pull_request.number || github.ref }}
+  group: fork-tizen-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -107,11 +116,15 @@ jobs:
       - name: Linux packages (GPUI's host, headless Chromium)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang libclang-dev xvfb xauth \
+          sudo apt-get install -y --no-install-recommends clang libclang-dev llvm xvfb xauth \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev \
-            libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers libvulkan1 chromium-browser || true
-      - name: Rust
+            libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers libvulkan1
+      # The web runtime `nsh test --target tizen-web` builds is wasm32, with C (zstd) that needs an
+      # `ar` for WebAssembly objects; headless Chromium is the image's Chrome.
+      - name: Rust (with wasm32)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
@@ -120,6 +133,8 @@ jobs:
       - name: The TV idiom on the GPUI host (arrows and Tab over pressables)
         run: xvfb-run -a cargo run -p nsh-cli -- test tests/apps/pressable-focus --target gpui
       - name: The counter as a Tizen web app (TV shim, TV idiom)
+        env:
+          AR_wasm32_unknown_unknown: llvm-ar
         run: cargo run -p nsh-cli -- test examples/counter --target tizen-web
 
   emulator:
@@ -189,7 +204,9 @@ jobs:
                              ("@AUTHOR_PASSWORD@", os.environ["AUTHOR_PASSWORD"]),
                              ("@DISTRIBUTOR_PASSWORD@", os.environ["DISTRIBUTOR_PASSWORD"])):
               xml = xml.replace(key, value)
-          (pathlib.Path.home() / "tizen-studio-data/profile/profiles.xml").write_text(xml)
+          path = pathlib.Path.home() / "tizen-studio-data/profile/profiles.xml"
+          path.write_text(xml)
+          path.chmod(0o600)
           PY
       - name: The TV runtime for the emulator (x86_64)
         run: cargo xtask tizen --arch x86_64 --config "$PATCH_CONFIG"
@@ -199,8 +216,13 @@ jobs:
           platform="$(em-cli list-platform | grep -io 'tv-samsung[^ ]*' | head -1)"
           [ -n "$platform" ] || { echo "::error::no TV emulator platform installed"; exit 1; }
           em-cli create -n nsh-tv -p "$platform"
-          nohup xvfb-run -a -s '-screen 0 1920x1080x24' em-cli launch -n nsh-tv >"$RUNNER_TEMP/emulator.log" 2>&1 &
-          timeout 900 bash -c 'until sdb devices | grep -q "emulator-.*device"; do sleep 10; done'
+          # Xvfb of its own, for the job's whole life (not tied to em-cli's process).
+          Xvfb :99 -screen 0 1920x1080x24 >"$RUNNER_TEMP/xvfb.log" 2>&1 &
+          echo "DISPLAY=:99" >>"$GITHUB_ENV"
+          DISPLAY=:99 nohup em-cli launch -n nsh-tv >"$RUNNER_TEMP/emulator.log" 2>&1 &
+          # Listed by sdb first, ready for a shell and packages a little later.
+          timeout 900 bash -c 'until sdb devices | grep -q "emulator-.*device" && [ "$(sdb shell echo ready 2>/dev/null | tr -d "\r")" = ready ]; do sleep 10; done'
+          sleep 30
       - name: The counter's spec on the emulator (signed with the profile `ci`)
         run: |
           jq '.tizen.signing = "ci"' examples/counter/nsh.json >"$RUNNER_TEMP/nsh.json"
