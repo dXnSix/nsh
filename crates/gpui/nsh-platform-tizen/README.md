@@ -30,4 +30,6 @@ cargo xtask cross --target armv7 --release --manifest-path <nsh>/crates/gpui/Car
   --with-dev-variant --check-symbols --entry nsh_tizen_main --config "$PATCH"
 ```
 
-`--target` is `armv7` (32-bit ARM TVs), `x86_64` (the emulator) or `aarch64`.
+`--target` is `armv7` (32-bit ARM TVs), `x86_64` (the emulator) or `aarch64`. NSH's own runtime (`runtime/tizen`, the
+`tizen` component: both variants, the host, the target specs) is built from this checkout with
+`DXN_GPUI_TIZEN=<dXn.GpuiTizen> cargo xtask tizen --config "$PATCH"`, which runs the same cross builds.
