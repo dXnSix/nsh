@@ -191,7 +191,8 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
   refuse the flag and leave `nsh.json`'s out with a warning, `open`'s `platform` saying theirs) starts each test's
   GPUI host with `--idiom` (`test_host::start`) and gives the test page `IDIOM` (`test_web::start`), over the test's
   `TestEnvironment::idiom`. The `cli` test binary's `dev_idiom` module checks the arguments and the page each host
-  gets, for `nsh run`, `nsh dev` and `nsh test`. The hosts are stopped with the run
+  gets, for `nsh run`, `nsh dev` and `nsh test`; `tests/apps/tv-idiom` is a spec that runs in the TV idiom (`nsh test
+  tests/apps/tv-idiom --target gpui --idiom tv`, or `--target web`). The hosts are stopped with the run
   (Ctrl-C, SIGTERM, the session ending); a host that exits with an error ends it with its kept output. On Windows the host starts in a
   process group of its own (`CREATE_NEW_PROCESS_GROUP`), out of the console's Ctrl-C, so a stop is not taken for the
   host failing, and in a job object that kills it when the job closes (`run::KillOnClose`): Windows ends a child with
