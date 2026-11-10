@@ -56,7 +56,8 @@ developer's machine through `sdb`, not the network, so the client's connections 
 (`nsh_dev::DevTransport`):
 
 - first `ws://127.0.0.1:8790/ws`, a fixed port on the TV that `nsh run` maps to the dev server with `sdb reverse`;
-- after three refusals in a row it also listens on the TV's port 8791, which `nsh run` maps from the machine with
+- after three refusals in a row it also listens on port 8791 of the TV's loopback (`sdbd` delivers the connections
+  of `sdb forward` there; no other host on the TV's network reaches it), which `nsh run` maps from the machine with
   `sdb forward` and connects to, relaying to the dev server; from then on both are tried in turn, the one that
   worked last first.
 
