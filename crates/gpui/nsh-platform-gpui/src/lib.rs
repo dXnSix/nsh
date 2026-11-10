@@ -25,6 +25,16 @@
 
 #![cfg(any(target_os = "linux", target_os = "macos", windows))]
 
+// A Tizen TV's host brings GPUI's platform: the desktops' (`gpui_platform`,
+// which takes gpui-fast-linux, X11, xkbcommon, fontconfig and FreeType)
+// does not build there.
+#[cfg(all(feature = "platform", target_vendor = "tizen"))]
+compile_error!(
+    "nsh-platform-gpui builds for Tizen without its default features \
+     (`--no-default-features --features js`): the TV host brings GPUI's platform, \
+     and the feature `platform` (GPUI's desktop platform) is not built for Tizen"
+);
+
 mod access;
 #[cfg(feature = "dev")]
 mod agent;
