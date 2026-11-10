@@ -224,15 +224,19 @@ tested by `cargo test -p nsh-cli --bin nsh tizen::tests`, and the commands throu
   development TPK (`NshDevTizn.NshDev`, one package for every app, apart from `tizen-web`'s `NshDevHost`) from
   `runtime/tizen/dev/` for its architecture into `.nsh/tizen/` and signs it with `nsh.json` `tizen.signing` when the
   runtime changed, installs it with `sdb install` when the device does not have this build (`.nsh/tizen/installed`:
-  a digest of the runtime per serial), then stops what an earlier session left, maps the TV's port 8790 to the dev
-  server with `sdb reverse` and launches it (`sdb shell 0 execute <app id>` on a TV, `app_launcher -s` on the
-  emulator). When `sdb reverse` fails it maps a free local port to the TV's 8791 with `sdb forward` and relays each
-  connection there to the dev server (the library listens after three refusals of 8790). The run ends stopping the
-  app and removing the mappings, Ctrl-C too. An app of Rust only (`"root"`) is packaged (signed) and installed with
+  a digest of the runtime per serial), then runs `tizen::open_sequence` with `tizen::open`, each step with its
+  failure policy (`tizen::Step`): it stops what an earlier session left (a failure, nothing running, is fine), maps
+  the TV's port 8790 to the dev server with `sdb reverse` and launches it (`sdb shell 0 execute <app id>` on a TV,
+  `app_launcher -s` on the emulator; a failure ends the run). When `sdb reverse` fails it maps a free local port to
+  the TV's 8791 with `sdb forward` and relays each connection there to the dev server (the library listens after
+  three refusals of 8790). The run ends stopping the app and removing the mappings (`tizen::close_sequence`), Ctrl-C
+  too. An app of Rust only (`"root"`) is packaged (signed) and installed with
   `nsh package --run`'s path.
-- **`nsh test --target tizen`** (`test_tizen.rs`) installs the development TPK as `nsh run` does, then for each
-  `open` serves the build in a test session, maps 8790 to it and launches the runtime, whose GPUI test agent takes
-  the steps; one app at a time (the port is fixed). `open`'s platform there is Linux's, unsized (the app fills the
+- **`nsh test --target tizen [--device <serial>]`** (`test_tizen.rs`) installs the development TPK as `nsh run`
+  does, then for each `open` serves the build in a test session and starts the runtime on it with the same
+  `tizen::open` (stop, `sdb reverse` else `sdb forward` and the relay, launch), whose GPUI test agent takes the steps;
+  closing the app stops it and removes the mapping. One app at a time (the port is fixed). `--device` goes with
+  `--target tizen` only. `open`'s platform there is Linux's, unsized (the app fills the
   screen).
 
 ## Apps with Rust crates

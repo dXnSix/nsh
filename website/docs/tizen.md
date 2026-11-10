@@ -86,11 +86,12 @@ wrong.
 ## Testing
 
 ```sh
-nsh test --target tizen               # the app's tests on the TV (or the emulator) sdb lists
+nsh test --target tizen                              # the app's tests on the TV (or the emulator) sdb lists
+nsh test --target tizen --device 192.168.1.5:26101   # on this one of several
 ```
 
-The tests open the app on the TV in NSH's development package, installed as `nsh run` installs it, and their steps act
-on it over the dev protocol. The app fills the TV's screen: `open`'s `width` and `height` are refused there. Apps open
+The tests open the app on the TV in NSH's development package, installed and connected as `nsh run` does it, and their
+steps act on it over the dev protocol. The app fills the TV's screen: `open`'s `width` and `height` are refused there. Apps open
 one at a time.
 
 ## Apps with Rust crates

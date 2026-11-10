@@ -41,6 +41,10 @@ use std::{
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::Command,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
@@ -793,19 +797,123 @@ fn output(command: &mut Command, doing: &str) -> anyhow::Result<String> {
     Ok(text)
 }
 
-/// How `nsh run --target tizen` gets the development TPK on the device and
-/// starts it, in order: stop what an earlier session left running, install
-/// the package at `install` (when the device does not have this build),
-/// map the dev port to the dev server's `port` and launch it. A refused
-/// reverse mapping falls back to [`Sdb::forward`] ([`run_dev`]).
-pub(crate) fn run_sequence(sdb: &Sdb, install: Option<&Path>, port: u16) -> Vec<Vec<String>> {
+/// One `sdb` command of [`open_sequence`], with what its failure means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Step {
+    /// Stops what an earlier session left running; fails when nothing
+    /// runs, which is fine.
+    Stop(Vec<String>),
+    /// Maps the TV's dev port to the dev server; refused, the library is
+    /// reached through `sdb forward` and the relay instead.
+    Reverse(Vec<String>),
+    /// Launches the development runtime; its failure ends the run.
+    Launch(Vec<String>),
+}
+
+/// How `nsh run --target tizen` and each `open` of `nsh test --target
+/// tizen` start the development runtime once it is installed, in order:
+/// what an earlier session left running stopped, the dev port mapped to
+/// the dev server's `port`, the runtime launched ([`open`] runs them).
+pub(crate) fn open_sequence(sdb: &Sdb, port: u16) -> Vec<Step> {
     let app = Manifest::dev().app;
-    let mut sequence = vec![sdb.stop(&app)];
-    if let Some(tpk) = install {
-        sequence.push(sdb.install(tpk));
+    vec![
+        Step::Stop(sdb.stop(&app)),
+        Step::Reverse(sdb.reverse(DEV_PORT, port)),
+        Step::Launch(sdb.launch(&app)),
+    ]
+}
+
+/// What [`open`] runs its steps with: `sdb`, and for a refused reverse
+/// mapping a free port of this machine and the relay from it.
+pub(crate) trait Bridge {
+    /// Runs `sdb` with `args`; its output if it succeeds.
+    fn run(&mut self, args: &[String]) -> anyhow::Result<String>;
+    /// A free port of this machine for `sdb forward`.
+    fn free_port(&mut self) -> anyhow::Result<u16>;
+    /// Relays the connections made to `local` to the dev server until
+    /// what it returns is dropped.
+    fn relay(&mut self, local: u16) -> Relay;
+}
+
+/// The device itself: `sdb`'s commands run, connections relayed to the dev
+/// server at `server`.
+pub(crate) struct Live<'a> {
+    pub(crate) sdb: &'a Sdb,
+    pub(crate) server: u16,
+}
+
+impl Bridge for Live<'_> {
+    fn run(&mut self, args: &[String]) -> anyhow::Result<String> {
+        self.sdb.run(args)
     }
-    sequence.push(sdb.reverse(DEV_PORT, port));
-    sequence.push(sdb.launch(&app));
+
+    fn free_port(&mut self) -> anyhow::Result<u16> {
+        free_port()
+    }
+
+    fn relay(&mut self, local: u16) -> Relay {
+        relay(local, self.server)
+    }
+}
+
+/// What [`open`] mapped, which [`close_sequence`] removes.
+#[derive(Debug, Default)]
+pub(crate) struct Opened {
+    /// The TV's dev port, mapped by `sdb reverse`.
+    pub(crate) reverse: bool,
+    /// This machine's port mapped by `sdb forward` to the TV's listening
+    /// library, and its relay.
+    pub(crate) forward: Option<(u16, Relay)>,
+}
+
+/// Runs [`open_sequence`] for the dev server at `port` through `bridge`,
+/// each step with its failure policy, recording in `opened` what it mapped
+/// (also when a later step fails, for [`close_sequence`]).
+pub(crate) fn open(
+    sdb: &Sdb,
+    port: u16,
+    bridge: &mut impl Bridge,
+    opened: &mut Opened,
+) -> anyhow::Result<()> {
+    for step in open_sequence(sdb, port) {
+        match step {
+            // An earlier session's library would connect first.
+            Step::Stop(stop) => {
+                let _ = bridge.run(&stop);
+            }
+            Step::Reverse(reverse) => match bridge.run(&reverse) {
+                Ok(_) => opened.reverse = true,
+                Err(error) => {
+                    // A TV without `sdb reverse`: the library listens once
+                    // the reverse port keeps refusing, and this machine
+                    // connects to it through `sdb forward`, relaying to the
+                    // dev server.
+                    ui::warn(format!(
+                        "sdb reverse failed ({error:#}): relaying through sdb forward instead (the app's assets need sdb reverse)"
+                    ));
+                    let local = bridge.free_port()?;
+                    bridge.run(&sdb.forward(local, LISTEN_PORT))?;
+                    opened.forward = Some((local, bridge.relay(local)));
+                }
+            },
+            Step::Launch(launch) => {
+                bridge.run(&launch)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The `sdb` commands that end a session: the runtime stopped, what
+/// [`open`] mapped removed.
+pub(crate) fn close_sequence(sdb: &Sdb, opened: &Opened) -> Vec<Vec<String>> {
+    let mut sequence = vec![sdb.stop(&Manifest::dev().app)];
+    if opened.reverse {
+        sequence.push(sdb.remove_reverse(DEV_PORT));
+    }
+    if let Some((local, _)) = &opened.forward {
+        sequence.push(sdb.remove_forward(*local));
+    }
     sequence
 }
 
@@ -919,7 +1027,7 @@ pub(crate) fn install_dev(
 /// `nsh run --target tizen`'s device side, once the dev server listens on
 /// `port`: the development TPK installed on the device (`device`: its
 /// serial; by default the only one) when it does not have this build,
-/// the dev port mapped, the library launched. Returns what undoes it.
+/// then [`open`]'s sequence. Returns what undoes it.
 pub(crate) fn run_dev(entry: &Path, device: Option<&str>, port: u16) -> anyhow::Result<DevRun> {
     let entry = dunce::canonicalize(entry)?;
     let work = entry
@@ -928,36 +1036,20 @@ pub(crate) fn run_dev(entry: &Path, device: Option<&str>, port: u16) -> anyhow::
         .join(".nsh/tizen");
     let config = crate::package::read_config(&entry)?;
     let sdb = install_dev(&work, config.tizen.signing.as_deref(), device)?;
-    // Installed already: the sequence without its install step.
-    let mut sequence = run_sequence(&sdb, None, port).into_iter();
-    // An earlier session's library would connect first.
-    if let Some(stop) = sequence.next() {
-        let _ = sdb.run(&stop);
-    }
-    let reverse = sequence.next().context("the reverse step")?;
     let mut run = DevRun {
         sdb: sdb.clone(),
-        reverse: false,
-        forward: None,
+        opened: Opened::default(),
     };
-    match sdb.run(&reverse) {
-        Ok(_) => run.reverse = true,
-        Err(error) => {
-            // A TV without `sdb reverse`: the library listens once the
-            // reverse port keeps refusing, and this machine connects to it
-            // through `sdb forward`, relaying to the dev server.
-            ui::warn(format!(
-                "sdb reverse failed ({error:#}): relaying through sdb forward instead (the app's assets need sdb reverse)"
-            ));
-            let local = free_port()?;
-            sdb.run(&sdb.forward(local, LISTEN_PORT))?;
-            run.forward = Some(local);
-            relay(local, port);
-        }
-    }
-    let launch = sequence.next().context("the launch step")?;
     let step = ui::Step::start("launching the development runtime");
-    sdb.run(&launch)?;
+    open(
+        &sdb,
+        port,
+        &mut Live {
+            sdb: &sdb,
+            server: port,
+        },
+        &mut run.opened,
+    )?;
     step.done(format!(
         "launched the development runtime on {}",
         sdb.serial
@@ -966,21 +1058,16 @@ pub(crate) fn run_dev(entry: &Path, device: Option<&str>, port: u16) -> anyhow::
 }
 
 /// What [`run_dev`] set up on the device, undone when dropped: the app
-/// stopped, the port mappings removed.
+/// stopped, the port mappings removed ([`close_sequence`]).
 pub(crate) struct DevRun {
     sdb: Sdb,
-    reverse: bool,
-    forward: Option<u16>,
+    opened: Opened,
 }
 
 impl Drop for DevRun {
     fn drop(&mut self) {
-        let _ = self.sdb.run(&self.sdb.stop(&Manifest::dev().app));
-        if self.reverse {
-            let _ = self.sdb.run(&self.sdb.remove_reverse(DEV_PORT));
-        }
-        if let Some(local) = self.forward {
-            let _ = self.sdb.run(&self.sdb.remove_forward(local));
+        for command in close_sequence(&self.sdb, &self.opened) {
+            let _ = self.sdb.run(&command);
         }
     }
 }
@@ -1284,12 +1371,25 @@ fn free_port() -> anyhow::Result<u16> {
     Ok(TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
 }
 
-/// Relays, for as long as this process runs, each connection made to
-/// this machine's `local` port (`sdb forward` to the TV's listening
-/// library) to the dev server at `server`, one after another.
-fn relay(local: u16, server: u16) {
+/// A relay of [`relay`], which stops once this is dropped (after the
+/// session it carries, if any).
+#[derive(Debug, Default)]
+pub(crate) struct Relay(Arc<AtomicBool>);
+
+impl Drop for Relay {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Relays, until what it returns is dropped, each connection made to this
+/// machine's `local` port (`sdb forward` to the TV's listening library) to
+/// the dev server at `server`, one after another.
+fn relay(local: u16, server: u16) -> Relay {
+    let relay = Relay::default();
+    let stopped = relay.0.clone();
     std::thread::spawn(move || {
-        loop {
+        while !stopped.load(Ordering::Relaxed) {
             // `sdb forward` takes the connection whether or not the
             // library listens yet: a session is one that carries bytes.
             if let Ok(tv) = TcpStream::connect(("127.0.0.1", local))
@@ -1300,6 +1400,7 @@ fn relay(local: u16, server: u16) {
             std::thread::sleep(Duration::from_millis(500));
         }
     });
+    relay
 }
 
 /// Copies bytes both ways between `a` and `b` until either closes.
@@ -1627,45 +1728,117 @@ mod tests {
         assert!(capabilities("secure_protocol:enabled\n").is_err());
     }
 
+    /// A device whose commands are recorded, failing those that contain
+    /// one of `fails`.
+    struct Fake {
+        fails: Vec<&'static str>,
+        ran: Vec<Vec<String>>,
+        relayed: Vec<u16>,
+    }
+
+    impl Fake {
+        fn failing(fails: &[&'static str]) -> Fake {
+            Fake {
+                fails: fails.to_vec(),
+                ran: Vec::new(),
+                relayed: Vec::new(),
+            }
+        }
+    }
+
+    impl Bridge for Fake {
+        fn run(&mut self, args: &[String]) -> anyhow::Result<String> {
+            self.ran.push(args.to_vec());
+            let line = args.join(" ");
+            match self.fails.iter().find(|f| line.contains(*f)) {
+                Some(fail) => bail!("sdb could not {fail}"),
+                None => Ok(String::new()),
+            }
+        }
+
+        fn free_port(&mut self) -> anyhow::Result<u16> {
+            Ok(50000)
+        }
+
+        fn relay(&mut self, local: u16) -> Relay {
+            self.relayed.push(local);
+            Relay::default()
+        }
+    }
+
     #[test]
-    fn sdb_installs_maps_and_launches_the_development_package() {
-        let tv = Sdb {
-            secure: true,
-            ..device(true)
-        };
-        let tpk = Path::new("/app/.nsh/tizen/NshDev-x86_64.tpk");
+    fn the_runtime_opens_as_its_sequence_says_each_step_with_its_failure_policy() {
+        let tv = device(true);
         assert_eq!(
-            run_sequence(&tv, Some(tpk), 8791),
+            open_sequence(&tv, 8791),
+            [
+                Step::Stop(line(&["shell", "0", "kill", "NshDevTizn.NshDev"])),
+                Step::Reverse(line(&["reverse", "tcp:8790", "tcp:8791"])),
+                Step::Launch(line(&["shell", "0", "execute", "NshDevTizn.NshDev"])),
+            ]
+        );
+        // Nothing ran: the stop fails, and the runtime still starts.
+        let mut fake = Fake::failing(&["kill"]);
+        let mut opened = Opened::default();
+        open(&tv, 8791, &mut fake, &mut opened).unwrap();
+        assert_eq!(
+            fake.ran,
             [
                 line(&["shell", "0", "kill", "NshDevTizn.NshDev"]),
-                line(&["install", "/app/.nsh/tizen/NshDev-x86_64.tpk"]),
                 line(&["reverse", "tcp:8790", "tcp:8791"]),
                 line(&["shell", "0", "execute", "NshDevTizn.NshDev"]),
             ]
         );
-        // Installed already, on the emulator (a shell).
-        let emulator = device(false);
+        assert!(opened.reverse && opened.forward.is_none());
+        assert!(fake.relayed.is_empty());
         assert_eq!(
-            run_sequence(&emulator, None, 9000),
+            close_sequence(&tv, &opened),
+            [
+                line(&["shell", "0", "kill", "NshDevTizn.NshDev"]),
+                line(&["reverse", "--remove", "tcp:8790"]),
+            ]
+        );
+        // No `sdb reverse` (on the emulator, a shell): `sdb forward` to the
+        // library's listening port, relayed.
+        let emulator = device(false);
+        let mut fake = Fake::failing(&["reverse"]);
+        let mut opened = Opened::default();
+        open(&emulator, 9000, &mut fake, &mut opened).unwrap();
+        assert_eq!(
+            fake.ran,
             [
                 line(&["shell", "app_launcher", "-k", "NshDevTizn.NshDev"]),
                 line(&["reverse", "tcp:8790", "tcp:9000"]),
+                line(&["forward", "tcp:50000", "tcp:8791"]),
                 line(&["shell", "app_launcher", "-s", "NshDevTizn.NshDev"]),
             ]
         );
-        // The fallback and what undoes both.
+        assert!(!opened.reverse);
         assert_eq!(
-            emulator.forward(50000, LISTEN_PORT),
-            line(&["forward", "tcp:50000", "tcp:8791"])
+            opened.forward.as_ref().map(|(local, _)| *local),
+            Some(50000)
         );
+        assert_eq!(fake.relayed, [50000]);
         assert_eq!(
-            emulator.remove_forward(50000),
-            line(&["forward", "--remove", "tcp:50000"])
+            close_sequence(&emulator, &opened),
+            [
+                line(&["shell", "app_launcher", "-k", "NshDevTizn.NshDev"]),
+                line(&["forward", "--remove", "tcp:50000"]),
+            ]
         );
-        assert_eq!(
-            emulator.remove_reverse(DEV_PORT),
-            line(&["reverse", "--remove", "tcp:8790"])
-        );
+        // A failed launch fails the open; what it mapped is recorded, to be
+        // removed.
+        let mut fake = Fake::failing(&["execute"]);
+        let mut opened = Opened::default();
+        let error = open(&tv, 8791, &mut fake, &mut opened).unwrap_err();
+        assert!(error.to_string().contains("execute"), "{error}");
+        assert!(opened.reverse);
+        // A refused forward too.
+        let mut fake = Fake::failing(&["reverse", "forward"]);
+        let mut opened = Opened::default();
+        assert!(open(&tv, 8791, &mut fake, &mut opened).is_err());
+        assert_eq!(fake.ran.len(), 3, "{:?}", fake.ran);
+        assert!(opened.forward.is_none());
     }
 
     fn args(command: &Command) -> Vec<String> {

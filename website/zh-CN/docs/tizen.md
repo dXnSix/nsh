@@ -79,10 +79,11 @@ nsh package App.tsx --target tizen --sign my-profile --run      # 用另一个�
 ## 测试
 
 ```sh
-nsh test --target tizen               # 在 sdb 列出的电视（或模拟器）上运行应用的测试
+nsh test --target tizen                              # 在 sdb 列出的电视（或模拟器）上运行应用的测试
+nsh test --target tizen --device 192.168.1.5:26101   # 有多台设备时选其中一台
 ```
 
-测试在电视上用 NSH 的开发包打开应用（与 `nsh run` 的安装方式相同），测试步骤通过开发协议作用于应用。应用占满电视屏幕：在这里
+测试在电视上用 NSH 的开发包打开应用（安装和连接方式与 `nsh run` 相同），测试步骤通过开发协议作用于应用。应用占满电视屏幕：在这里
 `open` 的 `width` 和 `height` 会被拒绝。应用一次打开一个。
 
 ## 带 Rust crate 的应用

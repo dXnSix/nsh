@@ -178,7 +178,7 @@ enum Command {
         /// and tizen; tui uses an in-memory terminal; web runs them
         /// in a headless Chrome, Edge or Chromium, ios in a simulator,
         /// android on the first device adb lists, tizen on the TV or
-        /// emulator `sdb devices` lists).
+        /// emulator `sdb devices` lists, or `--device`).
         #[arg(long, value_enum)]
         target: Option<run::Target>,
         /// The Chrome, Edge or Chromium executable `--target web` runs the
@@ -204,6 +204,10 @@ enum Command {
         /// the app in use, and the tests' input goes to them directly.
         #[arg(long)]
         foreground: bool,
+        /// With `--target tizen`: the TV's or emulator's `sdb` serial
+        /// (default: the only one `sdb devices` lists).
+        #[arg(long)]
+        device: Option<String>,
     },
     /// Type check an app with TypeScript's native compiler (TypeScript 7,
     /// downloaded once from the npm registry; no Node needed); an app with
@@ -902,6 +906,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             web_host,
             display,
             foreground,
+            device,
         } => test::test(
             &path,
             &entry,
@@ -914,6 +919,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             web_host,
             display.map(|n| n as usize),
             foreground,
+            device.as_deref(),
         ),
         Command::Dev {
             entry,
