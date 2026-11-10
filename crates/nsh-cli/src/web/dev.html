@@ -51,6 +51,10 @@
   // Whether pages and dialogs are browser history entries (`nsh.json`
   // `web.history`; `null`: the player's default).
   const HISTORY = {{history}};
+  // The idiom the session runs the app in (`nsh run --idiom`, `nsh.json`
+  // `dev.idiom`: "tv" builds a TV's layouts in a desktop browser; `null`:
+  // the one the pointer and the width suggest).
+  const IDIOM = {{idiom}};
   const status = document.getElementById("status");
   const problem = document.getElementById("problem");
   const decoder = new TextDecoder();
@@ -104,6 +108,7 @@
     host: HOST ? { call: (name, args) => host.call(name, args) } : undefined,
     assetBase: "/assets/",
     history: HISTORY ?? undefined,
+    idiom: IDIOM ?? undefined,
     readAsset,
     onLog: (level, message) => send({ type: "log", level: levels[level] ?? "info", target: "js", message }),
   });

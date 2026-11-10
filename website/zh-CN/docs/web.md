@@ -237,7 +237,7 @@ nsh run --target web               # Rust 应用，在它的目录里
 nsh run App.tsx --target web       # TSX 应用
 ```
 
-会启动开发服务器，并打印它的页面地址 `http://127.0.0.1:8790/`，在任意浏览器中打开即可。这个页面和其他开发宿主一样：运行应用的每次构建，在应用上方显示构建错误和运行时错误，并把应用的日志发送到终端。修改 Rust 应用的 crate 会重新构建它的运行时，已打开的页面会自动加载；TSX 的修改则就地应用（热更新）。同一网络中的手机打开 `nsh run` 在其下方打印的地址（`on this network: http://192.168.…:8790/`）即可。只要 Web 运行时存在（发行包中总是存在），`nsh dev` 也会提供同一个页面。
+会启动开发服务器，并打印它的页面地址 `http://127.0.0.1:8790/`，在任意浏览器中打开即可。这个页面和其他开发宿主一样：运行应用的每次构建，在应用上方显示构建错误和运行时错误，并把应用的日志发送到终端。修改 Rust 应用的 crate 会重新构建它的运行时，已打开的页面会自动加载；TSX 的修改则就地应用（热更新）。同一网络中的手机打开 `nsh run` 在其下方打印的地址（`on this network: http://192.168.…:8790/`）即可。只要 Web 运行时存在（发行包中总是存在），`nsh dev` 也会提供同一个页面。`--idiom tv`（或 `nsh.json` 中的 `"dev": { "idiom": "tv" }`）让应用在页面上像在电视上一样运行，以便在桌面浏览器中构建它的 10 英尺布局和焦点（[电视](./platform-specific.md#在桌面上构建电视布局)）。
 
 ## 构建本站的播放器
 
@@ -362,7 +362,7 @@ export async function createHost(player) {
 
 - `"desktop"`：有鼠标（能悬停的精确指针），且容器宽度至少 600 点。此时 `platform.desktop` 为 `true`，`platform.select` 选 `desktop`，`desktop={{…}}` 属性生效。
 - `"pad"`：短边至少 600 点的触摸屏；其余为 `"phone"`。两者都属于移动端：`platform.select` 选 `mobile`。
-- `"tv"`：只在页面通过播放器的 `idiom: "tv"` 告知时才是（电视上的浏览器无法从指针判断：Tizen 的 `.wgt` 页面会传入它）。此时 `platform.tv` 为 `true`，`platform.select` 选 `tv`（然后是 `mobile`），`tv={{…}}` 属性生效；电视不是桌面。
+- `"tv"`：只在页面通过播放器的 `idiom: "tv"` 告知时才是（电视上的浏览器无法从指针判断：Tizen 的 `.wgt` 页面会传入它；开发页面在 `nsh run --target web --idiom tv` 时传入它）。此时 `platform.tv` 为 `true`，`platform.select` 选 `tv`（然后是 `mobile`），`tv={{…}}` 属性生效；电视不是桌面。
 
 界面风格在应用启动时确定，运行期间不变，与其他平台一致；变窄的桌面窗口仍是桌面，按自己的 `windowSize()` 布局。`web={{…}}` 属性、`platform.select({ web })` 和 `web:` 类只在浏览器中生效；`ios={{…}}`、`native` 和 `ios:` 在浏览器中不生效。
 

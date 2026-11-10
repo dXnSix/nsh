@@ -49,6 +49,23 @@ import { platform, Text, View } from "nsh";
 
 A key set both in `tv={{…}}` and on the element itself is the one set last: keep each prop in one place.
 
+### TV layouts on the desktop
+
+The GPUI host and the web dev page run an app as on a TV, so its 10-foot layouts and focus are built on a Mac (or any desktop) with hot reload:
+
+```sh
+nsh run my-app --target gpui --idiom tv --window-size 1920x1080   # a GPUI window, a TV's screen in points
+nsh run my-app --target web --idiom tv                             # the dev server's page, in any browser
+```
+
+`platform.tv` is `true` there and `tv={{…}}` props apply, with the OS staying the machine's (`macos`, or `web`). An app built mostly for TVs sets it in `nsh.json`, which `--idiom` overrides:
+
+```json
+{ "dev": { "idiom": "tv" } }
+```
+
+The other hosts (`--target macos`, `ios`, `android`, ...) run in their device's own idiom: they refuse `--idiom`, and leave `nsh.json`'s `dev.idiom` out with a warning.
+
 ## Platform-only props
 
 In Rust, a prop one platform has is a builder method like any other (`.ripple(..)`, `.elevation(..)` for Android, `.input_accessory(..)` for iOS, `.macos_backdrop(..)` for macOS, `.window_drag(..)` for the desktops); the other platforms leave it aside. In TSX, props that exist on one platform only are grouped in an object named after it. Each element accepts `ios`, `android`, `macos`, `desktop` (macOS, Windows, Linux, and browsers in the desktop idiom) and `web` (browsers); on other platforms the object is ignored, and on its own platform only its keys are applied. macOS applies both `macos` and `desktop`; a desktop browser applies both `desktop` and `web`.
