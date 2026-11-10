@@ -28,7 +28,7 @@ library a TPK's C# host calls, exports one symbol, `nsh_tizen_main(argc, argv)`.
 The logic modules build on the desktops too, and their unit tests run there:
 
 ```sh
-cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib                 # keys, settings, back, lifecycle, package
+cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib                 # keys, settings, back, lifecycle, package, host
 cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --features dev --lib  # and dev's connection policy
 ```
 
@@ -37,7 +37,15 @@ cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --featur
 Tizen's app model starts a third-party native app as a .NET app: `crates/gpui/nsh-platform-tizen/host/` is the
 program (`Program.cs`, one P/Invoke into `libnsh.so`'s `nsh_tizen_main`; no TizenFX) and its project on
 `Tizen.NET.Sdk` (`Nsh.Tizen.Host.csproj`), the same as dXn.GpuiTizen's own host. It is built once into the runtime
-files (`dotnet build -c Release`), so packaging an app needs no .NET SDK.
+files (`dotnet build -c Release`), so packaging an app needs no .NET SDK. Without a .NET SDK that has Tizen's
+workload, the crate's `host::tests` check what MSBuild would refuse first: the project must be well-formed XML (no
+`--` in its comments: MSB4025), on `Tizen.NET.Sdk`, building the `Nsh.Tizen.Host` executable the runtime files ship,
+and the program must keep its one P/Invoke (`$PATCH` and `$LOCK` as in [Building](#building)):
+
+```sh
+cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib host::tests \
+  --config "$PATCH" --config "resolver.lockfile-path='$LOCK'"
+```
 
 ## The development runtime
 

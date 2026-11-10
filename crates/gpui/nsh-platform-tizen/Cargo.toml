@@ -40,6 +40,10 @@ futures-util.workspace = true
 serde_json.workspace = true
 nsh-dev = { workspace = true, features = ["client"], optional = true }
 
+# The C# host's project, parsed by the tests as MSBuild reads it (XML).
+[dev-dependencies]
+roxmltree = "0.21"
+
 # The app framework's directories and (feature `dev`) the system's log,
 # through dXn.GpuiTizen's bindings.
 [target.'cfg(target_vendor = "tizen")'.dependencies]

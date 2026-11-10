@@ -14,6 +14,7 @@
 //!   nothing takes Back (`back`);
 //! - `keys`: the remote's key names as NSH reads them;
 //! - `package`: the app in the TPK's resources;
+//! - `host`: the C# host's project and program, checked (tests only);
 //! - `tizen` (Tizen only): the entry point and the app framework's
 //!   directories and log;
 //! - `dev` (feature `dev`): the development runtime, connected through
@@ -29,6 +30,7 @@ mod app;
 mod back;
 #[cfg(feature = "dev")]
 mod dev;
+mod host;
 mod keys;
 mod lifecycle;
 mod package;
