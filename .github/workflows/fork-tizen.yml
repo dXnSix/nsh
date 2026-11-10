@@ -1,0 +1,212 @@
+name: Fork Tizen
+
+# Samsung TVs (Tizen), the fork's own checks; upstream has no Tizen target.
+#
+# - `cross`: `nsh-platform-tizen` (`libnsh.so`) for armv7, x86_64 and aarch64, release and dev, through
+#   dXn.GpuiTizen's cross driver (`cargo xtask cross`, its target specs and its symbol check: one export,
+#   `nsh_tizen_main`, and only documented Tizen 8.0 symbols), with the Tizen SDK's 8.0 rootstraps installed
+#   in the job.
+# - `tv-specs`: the TV idiom's specs on the desktop GPUI host (`nsh test --target gpui`) and in headless
+#   Chromium with the TV shim (`nsh test --target tizen-web`).
+# - `emulator` (manual only): the counter's spec on the Samsung TV emulator (`nsh test --target tizen`) on a
+#   runner with KVM, signed with the profile in the repository's secrets.
+#
+# Until the gpui-fast and wgpu forks' git `[patch.crates-io]` lines are committed in `crates/gpui`, the jobs
+# check out `dXnSix/gpui-fast` (`tizen-release`) and `dXnSix/wgpu` (`v30-tizen`) and pass dXn.GpuiTizen's
+# patch config (`cargo xtask gpui-fast-release --from`). A fork-only file (branch kind `fork/*`): it never goes
+# upstream and adds only its own file.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+  workflow_dispatch:
+    inputs:
+      emulator:
+        description: 'Also run the specs on the Samsung TV emulator'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-tizen-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  # NSH's `cargo xtask tizen` finds dXn.GpuiTizen's cross driver here.
+  DXN_GPUI_TIZEN: ${{ github.workspace }}/.tizen/dXn.GpuiTizen
+  PATCH_CONFIG: ${{ github.workspace }}/.tizen/dXn.GpuiTizen/artifacts-temp/gpui-fast-patch.toml
+
+jobs:
+  cross:
+    if: github.event.action != 'closed' && !github.event.pull_request.draft
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [armv7, x86_64, aarch64]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: dXn.GpuiTizen (cross driver, target specs, symbol check)
+        uses: actions/checkout@v4
+        with:
+          repository: dXnSix/dXn.GpuiTizen
+          path: .tizen/dXn.GpuiTizen
+          persist-credentials: false
+      - name: The Tizen SDK and the 8.0 rootstraps
+        uses: ./.tizen/dXn.GpuiTizen/.github/actions/tizen-sdk
+        with:
+          packages: TIZEN-8.0-NativeAppDevelopment-CLI
+      - name: The gpui-fast and wgpu forks (until crates/gpui commits their git patch)
+        uses: actions/checkout@v4
+        with:
+          repository: dXnSix/gpui-fast
+          ref: tizen-release
+          path: .tizen/forks/gpui-fast
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: dXnSix/wgpu
+          ref: v30-tizen
+          path: .tizen/forks/wgpu
+          persist-credentials: false
+      - name: Rust (dXn.GpuiTizen's pinned nightly) and the gpui-fast patch config
+        working-directory: .tizen/dXn.GpuiTizen
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+          "$HOME/.cargo/bin/cargo" xtask gpui-fast-release --from ../forks/gpui-fast --wgpu ../forks/wgpu
+      - name: clang
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang
+      - name: libnsh.so, release and dev, one export each
+        working-directory: .tizen/dXn.GpuiTizen
+        run: |
+          cargo xtask cross --target ${{ matrix.target }} --release \
+            --manifest-path "$GITHUB_WORKSPACE/crates/gpui/Cargo.toml" -p nsh-platform-tizen \
+            --with-dev-variant --check-symbols --entry nsh_tizen_main --config "$PATCH_CONFIG"
+      - name: Clippy for the TV
+        working-directory: .tizen/dXn.GpuiTizen
+        run: |
+          cargo xtask cross --target ${{ matrix.target }} --clippy \
+            --manifest-path "$GITHUB_WORKSPACE/crates/gpui/Cargo.toml" -p nsh-platform-tizen \
+            --config "$PATCH_CONFIG" -- -D warnings
+
+  tv-specs:
+    if: github.event.action != 'closed' && !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux packages (GPUI's host, headless Chromium)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang libclang-dev xvfb xauth \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev \
+            libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers libvulkan1 chromium-browser || true
+      - name: Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            crates/gpui -> crates/gpui/target
+      - name: The TV idiom on the GPUI host (arrows and Tab over pressables)
+        run: xvfb-run -a cargo run -p nsh-cli -- test tests/apps/pressable-focus --target gpui
+      - name: The counter as a Tizen web app (TV shim, TV idiom)
+        run: cargo run -p nsh-cli -- test examples/counter --target tizen-web
+
+  emulator:
+    if: github.event_name == 'workflow_dispatch' && inputs.emulator
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: dXn.GpuiTizen
+        uses: actions/checkout@v4
+        with:
+          repository: dXnSix/dXn.GpuiTizen
+          path: .tizen/dXn.GpuiTizen
+          persist-credentials: false
+      - name: KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: The gpui-fast and wgpu forks (until crates/gpui commits their git patch)
+        uses: actions/checkout@v4
+        with:
+          repository: dXnSix/gpui-fast
+          ref: tizen-release
+          path: .tizen/forks/gpui-fast
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: dXnSix/wgpu
+          ref: v30-tizen
+          path: .tizen/forks/wgpu
+          persist-credentials: false
+      - name: Rust (dXn.GpuiTizen's pinned nightly) and the gpui-fast patch config
+        working-directory: .tizen/dXn.GpuiTizen
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+          "$HOME/.cargo/bin/cargo" xtask gpui-fast-release --from ../forks/gpui-fast --wgpu ../forks/wgpu
+      - name: Linux packages
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang xvfb xauth jq
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: ./.tizen/dXn.GpuiTizen/.github/actions/tizen-sdk
+        with:
+          packages: TIZEN-8.0-NativeAppDevelopment-CLI Emulator TV-SAMSUNG-Public-Emulator
+      - name: Signing profile (from secrets)
+        env:
+          AUTHOR_P12: ${{ secrets.TIZEN_AUTHOR_P12 }}
+          DISTRIBUTOR_P12: ${{ secrets.TIZEN_DISTRIBUTOR_P12 }}
+          AUTHOR_PASSWORD: ${{ secrets.TIZEN_AUTHOR_PASSWORD }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.TIZEN_DISTRIBUTOR_PASSWORD }}
+          PROFILES_XML: ${{ secrets.TIZEN_PROFILES_XML }}
+        run: |
+          set -euo pipefail
+          [ -n "$AUTHOR_P12" ] && [ -n "$DISTRIBUTOR_P12" ] && [ -n "$PROFILES_XML" ] \
+            || { echo "::error::the TIZEN_* signing secrets are not set"; exit 1; }
+          certs="$RUNNER_TEMP/tizen-certs"
+          mkdir -p "$certs" ~/tizen-studio-data/profile
+          base64 -d <<<"$AUTHOR_P12" >"$certs/author.p12"
+          base64 -d <<<"$DISTRIBUTOR_P12" >"$certs/distributor.p12"
+          python3 - "$certs" <<'PY'
+          import os, sys, pathlib
+          xml = os.environ["PROFILES_XML"]
+          for key, value in (("@CERT_DIR@", sys.argv[1]),
+                             ("@AUTHOR_PASSWORD@", os.environ["AUTHOR_PASSWORD"]),
+                             ("@DISTRIBUTOR_PASSWORD@", os.environ["DISTRIBUTOR_PASSWORD"])):
+              xml = xml.replace(key, value)
+          (pathlib.Path.home() / "tizen-studio-data/profile/profiles.xml").write_text(xml)
+          PY
+      - name: The TV runtime for the emulator (x86_64)
+        run: cargo xtask tizen --arch x86_64 --config "$PATCH_CONFIG"
+      - name: Boot the TV emulator headless
+        run: |
+          set -euo pipefail
+          platform="$(em-cli list-platform | grep -io 'tv-samsung[^ ]*' | head -1)"
+          [ -n "$platform" ] || { echo "::error::no TV emulator platform installed"; exit 1; }
+          em-cli create -n nsh-tv -p "$platform"
+          nohup xvfb-run -a -s '-screen 0 1920x1080x24' em-cli launch -n nsh-tv >"$RUNNER_TEMP/emulator.log" 2>&1 &
+          timeout 900 bash -c 'until sdb devices | grep -q "emulator-.*device"; do sleep 10; done'
+      - name: The counter's spec on the emulator (signed with the profile `ci`)
+        run: |
+          jq '.tizen.signing = "ci"' examples/counter/nsh.json >"$RUNNER_TEMP/nsh.json"
+          cp "$RUNNER_TEMP/nsh.json" examples/counter/nsh.json
+          cargo run -p nsh-cli -- test examples/counter --target tizen
+      - name: Emulator log
+        if: always()
+        run: cat "$RUNNER_TEMP/emulator.log" || true
+      - name: Remove the signing material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/tizen-certs" ~/tizen-studio-data/profile/profiles.xml
