@@ -73,6 +73,10 @@ export CARGO_NET_GIT_FETCH_WITH_CLI=true GIT_CONFIG_COUNT=3 \
   GIT_CONFIG_KEY_2=url.<wgpu checkout>.insteadOf GIT_CONFIG_VALUE_2=https://github.com/dXnSix/wgpu
 ```
 
+dXn.GpuiTizen builds on Linux only against the forks (its EGL path uses gpui-fast's external-target renderer), so
+the GPUI workspace leaves `nsh-platform-tizen` out of its `default-members`: a bare `cargo test` or `cargo clippy`
+there (`gpui.yml`) builds the desktop crates alone, and the TV backend is built by name, with the patch.
+
 The committed `crates/gpui/Cargo.lock` is resolved without the patch (it records the GitHub source of
 dXn.GpuiTizen and the published gpui-fast). Builds and tests with the patch resolve into a lockfile kept outside the
 checkout, so it never records the local paths:

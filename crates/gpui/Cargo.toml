@@ -6,6 +6,11 @@
 [workspace]
 resolver = "3"
 members = ["nsh-platform-gpui", "nsh-gpui-host", "nsh-platform-tizen"]
+# What a bare `cargo test` / `cargo clippy` here builds: the Samsung TV
+# backend needs dXn.GpuiTizen, which builds on Linux only against the
+# gpui-fast fork (a local Cargo config until it is published), so it is
+# built by name (`-p nsh-platform-tizen`, `docs/dev/tizen.md`).
+default-members = ["nsh-platform-gpui", "nsh-gpui-host"]
 
 [workspace.package]
 version = "0.4.0"
