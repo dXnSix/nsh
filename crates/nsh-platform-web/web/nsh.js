@@ -420,7 +420,10 @@ const NAMED_KEYS = {
 };
 /**
  * The remote's keys by Samsung TVs' `keyCode`s (`tizen.tvinputdevice`), for
- * engines whose events give them no `key` ("Unidentified").
+ * engines whose events give them no `key` ("Unidentified"), and in the TV
+ * idiom for every key `NAMED_KEYS` does not name: a TV's engine may report
+ * none (""), or a key of its own for one (keyCode 19 is Pause/Break's
+ * `Pause`; a TV has no such key, only the remote's pause).
  */
 const TV_KEY_CODES = {
   10252: 270, 415: 271, 19: 272, 413: 273, 412: 274, 417: 275, 10233: 276, 10232: 277, 403: 278, 404: 279,
@@ -479,14 +482,16 @@ function regional(locale) {
  * The key of a key event as `nsh_key` takes it (-1: none): the character
  * it types without modifiers, or, when Shift or Option change it or the
  * layout types no ASCII there, the US layout's character of the same key
- * (shortcuts work on any layout, as menus' do).
+ * (shortcuts work on any layout, as menus' do). `tv`: in the TV idiom,
+ * where a remote's key codes (`TV_KEY_CODES`) win over any key name that is
+ * not a named key's.
  */
-function keyCode(e) {
+function keyCode(e, tv = false) {
   // Some IME and webview key events carry no `key`; fall back to `code`.
   const k = typeof e.key === "string" ? e.key : "";
   const named = NAMED_KEYS[k];
   if (named) return named;
-  if (k === "Unidentified" && TV_KEY_CODES[e.keyCode]) return TV_KEY_CODES[e.keyCode];
+  if ((tv || k === "Unidentified") && TV_KEY_CODES[e.keyCode]) return TV_KEY_CODES[e.keyCode];
   const f = /^F([0-9]{1,2})$/.exec(k);
   if (f) return Number(f[1]) >= 1 && Number(f[1]) <= 24 ? 512 + Number(f[1]) : -1;
   if (k.length === 1 && !e.shiftKey && !e.altKey && k >= " " && k <= "~") return k.toLowerCase().charCodeAt(0);
@@ -7848,7 +7853,7 @@ class Player {
    * focus' own bindings (`Keymap::find_at`).
    */
   shortcut(e, editing, control = false) {
-    const code = e.isComposing ? -1 : keyCode(e);
+    const code = e.isComposing ? -1 : keyCode(e, this.idiom === "tv");
     if (code < 0) return -1;
     const mods = (e.ctrlKey ? 1 : 0) | (e.altKey ? 2 : 0) | (e.shiftKey ? 4 : 0) | (e.metaKey ? 8 : 0);
     return this.wasm.nsh_key(code, mods, (editing ? 1 : 0) | (control ? 2 : 0), e.repeat ? 1 : 0);
