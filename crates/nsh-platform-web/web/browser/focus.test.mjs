@@ -9,7 +9,7 @@
 // docs/dev/web.md) the same cases run on the module's `nsh_focus_move` and
 // `nsh_focus_reveal`, so `nsh_core::focus` decides. The decisions
 // themselves are tested on the host: `cargo test -p nsh-platform-web --test
-// text focus_moves`.
+// text focus_moves` (what a TV adds: `focus_moves::tv`).
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -28,13 +28,17 @@ async function realWasm() {
   return (await WebAssembly.instantiate(module, imports)).exports;
 }
 
-/** A fake engine: records each `nsh_focus_move` request and answers `answer()`. */
-function fakeWasm(answer) {
+/** A fake engine: records each `nsh_focus_move` request and answers
+ * `answer()`, each `nsh_focus_auto` one (in `autos`) and answers `autoAnswer()`. */
+function fakeWasm(answer, autoAnswer) {
   const memory = { buffer: new ArrayBuffer(1 << 16) };
   let next = 8;
   const requests = [];
+  const autos = [];
+  const read = (ptr, len) => JSON.parse(new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len)));
   return {
     requests,
+    autos,
     memory,
     nsh_alloc(len) {
       const ptr = next;
@@ -44,9 +48,14 @@ function fakeWasm(answer) {
     nsh_dealloc() {},
     nsh_key: () => -1,
     nsh_focus_move(ptr, len) {
-      requests.push(JSON.parse(new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len))));
+      requests.push(read(ptr, len));
       return answer() ?? -1;
     },
+    nsh_focus_auto(ptr, len) {
+      autos.push(read(ptr, len));
+      return autoAnswer() ?? -1;
+    },
+    nsh_focus_past: () => -1,
     // Centered vertically, as little as shows it horizontally (no margin
     // here: the module's adds the core's).
     nsh_focus_reveal(start, len, viewport, vertical) {
@@ -60,6 +69,7 @@ function fakeWasm(answer) {
 /** An element of the fake DOM: a view when it has an `id`. */
 class El {
   constructor({ id, rect = [0, 0, 0, 0], kind, stop, field, props, shown = true, horizontal, classes = [] } = {}, children = []) {
+    this.isConnected = true;
     if (id !== undefined) this._id = id;
     this._kind = kind;
     this._props = props;
@@ -139,15 +149,23 @@ class El {
   }
 }
 
-/** A player over `root` (the root view, 800 × 600) on the module or a fake answering `answer`. */
-async function setup(children, answer = () => null) {
+/** A player over `root` (the root view, 800 × 600) on the module or a fake
+ * answering `answer` (`autoAnswer` for `autoFocus`); `pasts` records the
+ * page's `nsh_focus_past` calls. */
+async function setup(children, answer = () => null, autoAnswer = () => null) {
   const root = new El({ id: 1, rect: [0, 0, 800, 600] }, children);
   const page = new El({}, [root]);
   globalThis.document = { body: new El({}), activeElement: null };
   document.activeElement = document.body;
   globalThis.getSelection = () => null;
   const player = Object.create(Player.prototype);
-  const wasm = module ? await realWasm() : fakeWasm(answer);
+  const wasm = module ? { ...(await realWasm()) } : fakeWasm(answer, autoAnswer);
+  const pasts = [];
+  const past = wasm.nsh_focus_past;
+  wasm.nsh_focus_past = (from, direction) => {
+    pasts.push([from, direction]);
+    return past(from, direction);
+  };
   const scrolls = [];
   Object.assign(player, {
     root,
@@ -160,9 +178,13 @@ async function setup(children, answer = () => null) {
     },
     keyFocus() {},
     setState() {},
+    // The module is called at once (no pump follows).
+    call(f) {
+      f(wasm);
+    },
   });
   void page;
-  return { player, root, wasm, scrolls, requests: wasm.requests ?? [] };
+  return { player, root, wasm, scrolls, pasts, requests: wasm.requests ?? [], autos: wasm.autos ?? [] };
 }
 
 /** A key event of `key` on the page, which records whether it was prevented. */
@@ -358,4 +380,147 @@ test("Return presses the stop an arrow focused", async () => {
   const { e } = press(player, "Enter");
   assert.ok(e.defaultPrevented);
   assert.deepEqual(pressed, [["in", 11], ["out", 11, true]]);
+});
+
+// What a TV adds (`focus::directional`, `focus::auto_focus`): the props the
+// page has of each view (`op_vp`'s `autoFocus`, `preferredFocus`,
+// `nextFocus`, `focusGroup`) reach the module in the stops' description.
+
+/** A view that is no stop, with `props`, around `children`. */
+const box = (id, rect, props, children = []) => new El({ id, rect, props }, children);
+
+test("preferredFocus: with nothing focused an arrow enters at the preferred stop", async () => {
+  // 8's own view is no stop: a row's preferredFocus is its items'.
+  const row = [button(4, [10, 10, 80, 40]), button(6, [110, 10, 80, 40]), box(7, [210, 10, 80, 40], { preferredFocus: true }, [button(8, [210, 10, 80, 40])])];
+  const answers = [8, 6];
+  const { player, requests } = await setup([new El({ id: 2, rect: [0, 0, 800, 600] }, row)], () => answers.shift());
+  assert.equal(press(player, "ArrowDown").focused, 8);
+  // Then the arrows move as ever.
+  assert.equal(press(player, "ArrowLeft").focused, 6);
+  if (!module) {
+    assert.equal(requests[0].focused, null);
+    assert.deepEqual(requests[0].stops.map((s) => [s.id, s.preferred]), [[4, false], [6, false], [8, true]]);
+  }
+});
+
+test("nextFocus: an arrow goes to the view named, or the first stop inside it", async () => {
+  const from = button(6, [110, 10, 80, 40], { props: { nextFocus: { down: 12 } } });
+  const card = box(12, [300, 250, 80, 40], {}, [button(14, [300, 250, 80, 40])]);
+  const stops = [button(4, [10, 10, 80, 40]), from, button(10, [10, 100, 80, 40]), card];
+  const answers = [14, 4];
+  const { player, requests } = await setup([new El({ id: 2, rect: [0, 0, 800, 600] }, stops)], () => answers.shift());
+  from.focus();
+  // Past the nearest below (10), to the stop inside the card.
+  assert.equal(press(player, "ArrowDown").focused, 14);
+  // Without a route that way, the nearest.
+  from.focus();
+  assert.equal(press(player, "ArrowLeft").focused, 4);
+  if (!module) {
+    assert.deepEqual(requests[0].stops.map((s) => [s.id, s.next ?? null]), [[4, null], [6, { down: 12 }], [10, null], [14, null]]);
+    assert.deepEqual(requests[0].views, [[12, [14]]]);
+  }
+});
+
+test("FocusGroup: the arrows enter a group at its destination", async () => {
+  const shelf = [button(22, [10, 10, 80, 40]), button(24, [110, 10, 80, 40]), button(26, [210, 10, 80, 40])];
+  const group = box(20, [0, 0, 400, 60], { focusGroup: { trap: false, destinations: [26] } }, shelf);
+  const below = button(4, [10, 100, 80, 40]);
+  const answers = [26, 24];
+  const { player, requests } = await setup([new El({ id: 2, rect: [0, 0, 800, 600] }, [group, below])], () => answers.shift());
+  below.focus();
+  // Up reaches 22 by geometry; the group takes the focus to 26.
+  assert.equal(press(player, "ArrowUp").focused, 26);
+  // Inside it, the nearest.
+  assert.equal(press(player, "ArrowLeft").focused, 24);
+  if (!module) {
+    assert.deepEqual(requests[0].groups, [{ id: 20, parent: null, trap: false, destinations: [26] }]);
+    assert.deepEqual(requests[0].stops.map((s) => [s.id, s.group]), [[22, 20], [24, 20], [26, 20], [4, null]]);
+    assert.deepEqual(requests[0].views, [[26, [26]]]);
+  }
+});
+
+test("FocusGroup with trap: the arrows never take the focus out of it", async () => {
+  const inner = box(30, [0, 0, 400, 60], { focusGroup: { trap: false, destinations: [] } }, [button(22, [10, 10, 80, 40]), button(24, [110, 10, 80, 40])]);
+  const group = box(20, [0, 0, 400, 60], { focusGroup: { trap: true, destinations: [] } }, [inner]);
+  const below = button(26, [10, 100, 80, 40]);
+  const answers = [null, 24];
+  const { player, requests } = await setup([new El({ id: 2, rect: [0, 0, 800, 600] }, [group, below])], () => answers.shift());
+  inner.children[0].focus();
+  // Nothing below inside the trap: the arrow goes nowhere.
+  const { e, focused } = press(player, "ArrowDown");
+  assert.equal(focused, 22);
+  assert.equal(e.defaultPrevented, false);
+  assert.equal(press(player, "ArrowRight").focused, 24);
+  if (!module) {
+    // Groups nest: the inner one names the trap around it.
+    assert.deepEqual(requests[0].groups, [
+      { id: 20, parent: null, trap: true, destinations: [] },
+      { id: 30, parent: 20, trap: false, destinations: [] },
+    ]);
+    assert.deepEqual(requests[0].stops.map((s) => [s.id, s.group]), [[22, 30], [24, 30], [26, null]]);
+  }
+});
+
+test("autoFocus: the first stop to appear with it takes the focus, once", async () => {
+  const page = new El({ id: 2, rect: [0, 0, 800, 600] }, [button(4, [10, 10, 80, 40])]);
+  const autoAnswers = [6, null, 34];
+  const answers = [4];
+  const { player, root, autos } = await setup([page], () => answers.shift(), () => autoAnswers.shift());
+  // A batch brings two with autoFocus (`op_vp`): the first in tree order
+  // takes it, once the call that applied the batch returns.
+  page.add(button(6, [110, 10, 80, 40], { props: { autoFocus: true } }));
+  page.add(button(8, [210, 10, 80, 40], { props: { autoFocus: true } }));
+  player.autoPending = player.autoViews = true;
+  player.focusAfterBatch();
+  assert.equal(document.activeElement, document.body);
+  await null;
+  assert.equal(document.activeElement._id, 6);
+  // Once: their props sent again take nothing from the user.
+  assert.equal(press(player, "ArrowLeft").focused, 4);
+  player.autoPending = true;
+  player.focusAfterBatch();
+  await null;
+  assert.equal(document.activeElement._id, 4);
+  // A modal presented is a new scope: its autoFocus stop takes the focus.
+  const modal = new El({ id: 30, kind: "modal", rect: [0, 0, 800, 600] }, [
+    new El({ id: 31, rect: [0, 0, 800, 600] }, [button(32, [10, 200, 80, 40]), button(34, [110, 200, 80, 40], { props: { autoFocus: true } })]),
+  ]);
+  root.add(modal);
+  player.focusAfterBatch();
+  await null;
+  assert.equal(document.activeElement._id, 34);
+  if (!module) {
+    assert.deepEqual(autos[0].stops.map((s) => [s.id, s.auto]), [[4, false], [6, true], [8, true]]);
+    assert.deepEqual(autos[0].seen, []);
+    assert.deepEqual(autos[1].seen, [6, 8]);
+    assert.deepEqual(autos[2].modals, [[30, true]]);
+  }
+});
+
+test("a scroll view that can scroll on keeps the focus, and a list goes on to its next row", async () => {
+  const rows = [button(6, [10, 10, 200, 40]), button(8, [10, 120, 200, 40])];
+  const list = new El({ id: 5, kind: "scroll", rect: [0, 0, 400, 200] }, rows);
+  list.scrollHeight = 1000;
+  list.scrollWidth = 400;
+  const below = button(10, [10, 250, 200, 40]);
+  // -2 - 5: scroll view 5 scrolls.
+  const answers = [-7, 10];
+  const { player, scrolls, pasts, requests } = await setup([new El({ id: 2, rect: [0, 0, 800, 600] }, [list, below])], () => answers.shift());
+  rows[1].focus();
+  // More content below: it scrolls by a key's step, the focus stays in it,
+  // and the engine hears the arrow (a list scrolls to its next row).
+  const { e, focused } = press(player, "ArrowDown");
+  assert.equal(focused, 8);
+  assert.ok(e.defaultPrevented);
+  assert.deepEqual(scrolls, [[5, 0, 40, true]]);
+  assert.deepEqual(pasts, [[8, 1]]);
+  // At its end the arrow leaves it.
+  list.scrollTop = 800;
+  assert.equal(press(player, "ArrowDown").focused, 10);
+  assert.deepEqual(pasts, [[8, 1]]);
+  if (!module) {
+    assert.deepEqual(requests[0].scrollViews, [{ id: 5, horizontal: false, start: false, end: true }]);
+    assert.deepEqual(requests[1].scrollViews, [{ id: 5, horizontal: false, start: true, end: false }]);
+    assert.deepEqual(requests[0].stops.map((s) => [s.id, s.scrollers]), [[6, [5]], [8, [5]], [10, []]]);
+  }
 });

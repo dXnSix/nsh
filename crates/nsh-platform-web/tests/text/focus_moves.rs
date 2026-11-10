@@ -1,11 +1,13 @@
 //! The arrow keys' focus moves (`focus::decide`, `nsh_focus_move`): the
 //! page's description of its stops in CSS pixels reaches `nsh_core::focus`,
 //! and the stop it picks comes back; `focus::reveal` (`nsh_focus_reveal`)
-//! is the core's reveal delta.
+//! is the core's reveal delta. `tv` has what a TV adds (`focus_moves::tv`).
 
 use serde_json::{Value, json};
 
-use crate::focus::{decide, reveal};
+use crate::focus::{Arrow, decide, reveal};
+
+mod tv;
 
 /// A stop `id` at `[x, y, width, height]` on the root's page (layer 2).
 fn stop(id: u32, frame: [f32; 4]) -> Value {
@@ -26,7 +28,10 @@ fn moves(
     layers: Value,
 ) -> Option<u32> {
     let request = json!({ "key": key, "focused": focused, "modals": modals, "stops": stops, "layers": layers });
-    decide(&request.to_string())
+    decide(&request.to_string()).map(|arrow| match arrow {
+        Arrow::Focus(id) => id,
+        Arrow::Scroll(id) => panic!("scroll view {id} scrolls, with no scroll views described"),
+    })
 }
 
 /// Three buttons in a row over two in a row below.

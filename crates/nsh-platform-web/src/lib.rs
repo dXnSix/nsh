@@ -1504,8 +1504,10 @@ pub extern "C" fn nsh_key(key: u32, modifiers: u32, focus: u32, repeat: u32) -> 
 }
 
 /// Where an arrow key moves the keyboard focus (`web/nsh.js`
-/// `arrowFocus`): the stop that takes it, as `focus::decide` reads the
-/// page's JSON description, or -1 for none (the key goes on). Decided on
+/// `arrowFocus`), as `focus::decide` reads the page's JSON description:
+/// the stop that takes it; -2 - the scroll view's id when the scroll view
+/// around the focus scrolls on instead (the page scrolls it and tells
+/// [`nsh_focus_past`]); or -1 for neither (the key goes on). Decided on
 /// the spot by `nsh_core::focus`, without the engine.
 ///
 /// # Safety
@@ -1515,7 +1517,43 @@ pub extern "C" fn nsh_key(key: u32, modifiers: u32, focus: u32, repeat: u32) -> 
 pub unsafe extern "C" fn nsh_focus_move(ptr: *const u8, len: usize) -> f64 {
     // SAFETY: guaranteed by the caller.
     let json = unsafe { string(ptr, len) };
-    focus::decide(&json).map_or(-1.0, f64::from)
+    match focus::decide(&json) {
+        Some(focus::Arrow::Focus(id)) => f64::from(id),
+        Some(focus::Arrow::Scroll(id)) => -2.0 - f64::from(id),
+        None => -1.0,
+    }
+}
+
+/// The stop that takes the keyboard focus as it appears (`autoFocus`,
+/// `web/nsh.js` `autoFocus`), as `focus::auto` reads the page's JSON
+/// description, or -1 for none.
+///
+/// # Safety
+///
+/// `ptr..ptr + len` is memory from [`nsh_alloc`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nsh_focus_auto(ptr: *const u8, len: usize) -> f64 {
+    // SAFETY: guaranteed by the caller.
+    let json = unsafe { string(ptr, len) };
+    focus::auto(&json).map_or(-1.0, f64::from)
+}
+
+/// An arrow toward `direction` (0 up, 1 down, 2 left, 3 right) scrolled
+/// the scroll view around stop `from`, which has the keyboard focus,
+/// instead of leaving it ([`nsh_focus_move`]): a list around it scrolls to
+/// its next row by index, whose first stop takes the focus once it is
+/// mounted (`EngineControl::focus_past`).
+#[unsafe(no_mangle)]
+pub extern "C" fn nsh_focus_past(from: u32, direction: u32) -> f64 {
+    use nsh_core::focus::Direction;
+    let direction = match direction {
+        0 => Direction::Up,
+        1 => Direction::Down,
+        2 => Direction::Left,
+        3 => Direction::Right,
+        _ => return -1.0,
+    };
+    send(|app| app.control.focus_past(from, direction))
 }
 
 /// How far a scroll view moves along its axis (`vertical` 1, horizontal
