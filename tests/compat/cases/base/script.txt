@@ -4413,6 +4413,21 @@ tap text:Pop
 expect Page home
 absent Page details
 covers [props] transitionShader
+# base-focus-group
+tap id:case-base-focus-group
+expect Trap: false
+# The group's view: no trap, entered at its second item (a child of its
+# own, found once mounted); its row laid out as the app's style says.
+prop id:shelf focusGroup trap=false destinations=id:second
+noprop id:first focusGroup
+frame id:second 20 0 20 20
+frame id:third 40 0 20 20
+# The app's state moves the destination and sets the trap.
+tap id:third
+expect Trap: true
+prop id:shelf focusGroup trap=true destinations=id:third
+covers [props] FocusGroup.destinations
+covers [props] FocusGroup.trap
 # base-hover-card
 tap id:case-base-hover-card
 # `defaultOpen`: open at first; a press outside closes it.
