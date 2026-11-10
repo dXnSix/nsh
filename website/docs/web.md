@@ -265,6 +265,55 @@ TSX edits are applied in place (hot updates). Phones on the same network open th
 address `nsh run` prints under it (`on this network: http://192.168.…:8790/`). `nsh dev` serves the same page once the
 web runtime is there (in the distribution, always).
 
+## Samsung TVs
+
+Samsung TVs run an app as a Tizen web app (a `.wgt`) in their browser engine, the TVs of 2024 on (Tizen 8). The app is
+the published site plus Tizen's manifest and a TV shim; `platform.os` is `"web"` and the app runs in the TV idiom:
+`platform.tv` is `true`, `platform.select` picks `tv` and `tv={{…}}` props apply.
+
+```sh
+nsh package --target tizen-web                     # .nsh/out/tizen-web/<Name>/ and <Name>.wgt, unsigned
+nsh package --target tizen-web --sign my-profile   # .nsh/out/<Name>.wgt, signed with the Tizen SDK's tz
+nsh run --target tizen-web                         # on the TV (nsh.json tizen.signing) and in a browser here
+nsh test --target tizen-web                        # the tests in headless Chromium, on the TV's page, 1920×1080
+nsh package --target tizen-web --probe             # a package that shows how the TV loads a page's files
+```
+
+- **The package** is the [published site](#publish-an-app) with `config.xml` (the package and application ids, the
+  version, the Tizen version it needs, the internet and remote-key privileges, landscape, the icon at 512×423) and the
+  TV shim, which the page runs before the runtime. A certificate profile of Samsung's Certificate Manager signs it:
+  `--sign <profile>` or `nsh.json` `tizen.signing`; `nsh package` runs `tz pack` of the Tizen SDK for it, and
+  `--run` installs and launches the signed package with `tz`.
+- **The remote:** Back goes back in the app as the browser's back key does (the newest dialog closes, the innermost
+  stack pops, `onBackPress` and `popOnBack` work); on the first screen, with nothing to go back to, the app asks
+  whether to exit and exits on Exit, as Samsung's rules ask. The arrows, Enter, the color keys, the media keys and
+  the channel keys reach the app as their [`keymap`](../modules/nsh.md#media-and-tv-remote-keys) names (`red`,
+  `mediaplaypause`, `channelup`, ...); the page registers them with the TV.
+- **`nsh.json` `tizen`** names the package. Every key has a default:
+
+  ```json
+  "tizen": {
+    "packageId": "AbCdE12345",
+    "appId": "AbCdE12345.Counter",
+    "version": "1.2.0",
+    "apiVersion": "8.0",
+    "privileges": ["http://tizen.org/privilege/tv.audio"],
+    "signing": "my-profile"
+  }
+  ```
+
+  `packageId` is 10 letters and digits (by default made from the app's `id`); `appId` is `<packageId>.<name>` (by
+  default the app's name, letters and digits); `version` is Tizen's `x.y.z` of numbers (by default the app's
+  `version`, else `1.0.0`); `apiVersion` is the lowest Tizen that installs the package (`8.0`); `privileges` are
+  asked for besides the internet's and the remote's keys'; `signing` is the certificate profile.
+- **Developing:** `nsh run --target tizen-web` serves the TV's page from the dev server, so a browser here at the
+  address it prints shows the app in the TV idiom, with hot updates. With `nsh.json` `tizen.signing` it also signs,
+  installs and launches a development package on the TV (`--device`: its `sdb` serial), whose page opens the dev
+  server's at this machine's address on the network.
+- **The loader probe** (`--probe`) is a package of its own, `NshLdProbe.Probe`: on the TV it tries each way the app's
+  page loads its files (module scripts, an import map, an iframe's realm, a script fetched with CORS, WebAssembly) and
+  shows what each did, with the engine's version.
+
 ## Build the website's player
 
 ```sh

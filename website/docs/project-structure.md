@@ -142,6 +142,7 @@ Every other key is optional; a TSX app may also leave out the four. A TSX app's 
 | `ios` | object | `package` | What iOS packages add: `infoPlist`, keys of the app's `Info.plist`, and `entitlements`, which device builds check against the provisioning profile. NSH's own keys are refused ([Packaging](./packaging.md#infoplist-keys-and-entitlements)). |
 | `android` | object | `package` | What Android packages set: `targetSdk`, the API level the app targets and compiles against (default 35) ([Packaging](./packaging.md#target-api-level)). |
 | `macos` | object | `package` | What macOS packages add: `infoPlist` and `entitlements`, as `ios`'s ([Packaging](./packaging.md#infoplist-keys-and-entitlements)). |
+| `tizen` | object | `package`, `run` | What Samsung TV packages (`--target tizen-web`) set: `packageId` (10 letters and digits), `appId` (`<packageId>.<name>`), `version` (`x.y.z`), `apiVersion` (the Tizen they need, `8.0`), `privileges` and `signing` (the certificate profile `tz` signs with), each with a default ([Web](./web.md#samsung-tvs)). |
 | `root` | string | `run`, `package` | A Rust app's root component, its path in the `rust` crate, the first one of a list (`App`, `shell::Gallery`): `nsh run` and `nsh package` of the app's directory mount it with no QuickJS, on every platform; `nsh run App.tsx` still runs the TSX entry ([Building with Rust](./rust.md)). |
 
 The flags of `nsh package` and `nsh publish` (`--name`, `--id`, `--app-version`, `--build`, `--icon`, `--min-runtime`) override the file's values ([CLI](./cli.md)).

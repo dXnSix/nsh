@@ -42,16 +42,27 @@ const FRAME: Duration = Duration::from_millis(16);
 const SCROLL_STEP: f32 = 20.0;
 
 /// Starts the apps tests open in pages of `browser` (`--browser`), else of
-/// the Chrome, Edge or Chromium found on this machine.
-pub(crate) fn starter(browser: Option<&Path>) -> anyhow::Result<StartHost> {
+/// the Chrome, Edge or Chromium found on this machine. `tv` (`--target
+/// tizen-web`): a Tizen web app's page, with the TV shim, in the TV idiom
+/// and a TV's 1920×1080 by default (`tizen_web::dev_page`).
+pub(crate) fn starter(browser: Option<&Path>, tv: bool) -> anyhow::Result<StartHost> {
     let exe = cdp::find(browser)?;
     // Built (in a checkout) or found once, before the first test.
     let runtime = crate::runtime::test_web()?;
-    let host = Arc::new(crate::web::dev_host(&runtime, false)?);
+    let mut host = crate::web::dev_host(&runtime, false)?;
+    if tv {
+        host = crate::tizen_web::dev_page(host);
+    }
+    let host = Arc::new(host);
+    let size = if tv {
+        Size::new(Points(1920.0), Points(1080.0))
+    } else {
+        Size::new(Points(390.0), Points(844.0))
+    };
     // One browser for the run, started with the first app.
     let running = Arc::new(Mutex::new(None::<Arc<Browser>>));
     Ok(Arc::new(move |entry: &Path, options: &HostOptions| {
-        start(&exe, &running, &host, entry, options).map(|h| Box::new(h) as Box<dyn Host>)
+        start(&exe, &running, &host, entry, options, size).map(|h| Box::new(h) as Box<dyn Host>)
     }))
 }
 
@@ -86,6 +97,7 @@ fn start(
     host: &(String, Vec<(String, Vec<u8>)>),
     entry: &Path,
     options: &HostOptions,
+    size: Size<Points>,
 ) -> Result<WebHost, String> {
     let server = Arc::new(crate::test_host::serve(entry, options)?);
     let (page, files) =
@@ -108,9 +120,7 @@ fn start(
         "Emulation.setFocusEmulationEnabled",
         json!({ "enabled": true }),
     )?;
-    let size = options
-        .size
-        .unwrap_or(Size::new(Points(390.0), Points(844.0)));
+    let size = options.size.unwrap_or(size);
     set_size(&page, size.width, size.height)?;
     page.call(
         "Page.navigate",

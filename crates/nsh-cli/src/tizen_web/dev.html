@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nsh dev</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #f2f2f7; }
+  body { display: flex; align-items: center; justify-content: center; font: 32px/1.4 system-ui, sans-serif; text-align: center; }
+  small { display: block; margin-top: 16px; font-size: 24px; opacity: .6; }
+</style>
+</head>
+<body>
+<div id="status">Connecting to the dev server…<small>{{url}}</small></div>
+<script>
+  // Written by `nsh run --target tizen-web`: the development Tizen web app
+  // opens the dev server's page (the TV shim, the TV idiom, hot reload) once
+  // the server answers; until then it says where it is trying. Back exits.
+  const URL_ = {{url_json}};
+  const status = document.getElementById("status");
+  async function connect() {
+    try {
+      // Another origin: an opaque answer says the server is there.
+      await fetch(URL_ + "nsh.version", { mode: "no-cors", cache: "no-store" });
+      location.replace(URL_);
+    } catch (error) {
+      status.firstChild.textContent = "Waiting for the dev server (nsh run --target tizen-web)…";
+      setTimeout(connect, 1000);
+    }
+  }
+  window.addEventListener("keydown", (e) => {
+    if (e.keyCode === 10009) window.tizen?.application.getCurrentApplication().exit();
+  });
+  connect();
+</script>
+</body>
+</html>
