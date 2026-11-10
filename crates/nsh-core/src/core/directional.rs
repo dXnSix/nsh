@@ -179,20 +179,22 @@ impl<M: TextEngine> Core<M> {
                     horizontal: list.horizontal,
                 };
                 // An inverted list's next item is above (before) it, and
-                // so is a right-to-left one's to the left.
+                // so is a right-to-left one's to the left (both: to the
+                // right again).
                 let along = direction.horizontal() == list.horizontal;
-                let toward = if along && (list.inverted || list.mirrored()) {
+                let toward = if along && (list.inverted != list.mirrored()) {
                     direction.opposite()
                 } else {
                     direction
                 };
                 if let Some(to) = next_row(&row, toward) {
-                    // It comes in at the edge the arrow goes toward.
-                    let end = if list.inverted {
-                        !toward.forward()
-                    } else {
-                        toward.forward()
-                    };
+                    // It comes in at the edge the arrow goes toward: the
+                    // viewport's end (1) for the next items, its start (0)
+                    // for the previous ones. An inverted list mirrors
+                    // `viewPosition` as it mirrors its layout (0 is its
+                    // bottom), and a right-to-left one's offsets run left
+                    // to right as laid out (the platform mirrors it).
+                    let end = toward.forward();
                     self.commands.push((
                         row.list,
                         Command::ScrollToIndex {
