@@ -506,6 +506,26 @@ impl Hash for Layers {
     }
 }
 
+/// Gradients, compared as they are and hashed by how CSS writes them.
+#[derive(Debug, Clone)]
+pub(crate) struct GradientLayers(Arc<[Gradient]>);
+
+impl PartialEq for GradientLayers {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || self.0 == other.0
+    }
+}
+
+impl Eq for GradientLayers {}
+
+impl Hash for GradientLayers {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for gradient in self.0.iter() {
+            gradient.css().hash(state);
+        }
+    }
+}
+
 /// Layers of [`TextShadow`](crate::TextShadow)s, compared and hashed by
 /// their bits.
 #[derive(Debug, Clone)]
@@ -567,6 +587,9 @@ pub(crate) enum Declaration {
     Shadows(Layers),
     /// Layers per appearance, light then dark ([`Styled::adaptive_shadow`]).
     AdaptiveShadows(Layers, Layers),
+    /// Background gradients per appearance, light then dark
+    /// ([`Styled::adaptive_gradient`]).
+    AdaptiveGradients(GradientLayers, GradientLayers),
     PartColor(ColorPart, AdaptiveColor),
     Ring(Bits),
     RingOffset(Bits),
@@ -739,6 +762,16 @@ impl Declaration {
                     Part::Shadow(dark.0.clone()),
                 ]))
             }),
+            Declaration::AdaptiveGradients(light, dark) => {
+                let images = |layers: &GradientLayers| {
+                    PropertyValue::Gradients(layers.0.iter().cloned().collect())
+                };
+                out.push(if light == dark {
+                    Decl::Set(StyleKey::BackgroundImage, images(light))
+                } else {
+                    Decl::Adaptive(StyleKey::BackgroundImage, [images(light), images(dark)])
+                });
+            }
             Declaration::PartColor(which, c) => out.push(if c.light == c.dark {
                 Decl::Part(which.part(c.light))
             } else {
@@ -2979,6 +3012,24 @@ pub trait Styled: Sized {
         self.style().bind_value(angle, |s, angle: Radians| {
             s.push(Declaration::Gradient(GradientShape::Conic(Bits(angle.0))));
         });
+        self
+    }
+
+    /// Gradients as the background, per appearance: a theme's gradient
+    /// token (`move || theme_of::<Acme>().hero.clone()`), or gradients
+    /// read from CSS ([`AdaptiveGradient::parse`]). A closure follows theme
+    /// changes, and the platform switches the gradients with the appearance
+    /// with nothing running, as [`Styled::bg`] does a color. The first
+    /// gradient is on top; they replace what the gradient styles
+    /// ([`Styled::bg_linear`], [`Styled::gradient_from`]) make.
+    fn adaptive_gradient(mut self, gradient: impl IntoReactive<AdaptiveGradient>) -> Self {
+        self.style()
+            .bind_value(gradient, |s, gradient: AdaptiveGradient| {
+                s.push(Declaration::AdaptiveGradients(
+                    GradientLayers(gradient.light),
+                    GradientLayers(gradient.dark),
+                ));
+            });
         self
     }
 

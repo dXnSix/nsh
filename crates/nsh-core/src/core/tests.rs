@@ -37417,3 +37417,125 @@ mod theme_scope_tokens {
         assert_eq!(backgrounds(&batch), [Color(0x0000_ffff)]);
     }
 }
+
+/// `Styled::adaptive_gradient`: gradients per appearance as a view's
+/// background, a theme's gradient token among them.
+mod reactive_gradient {
+    use super::*;
+    use crate::{
+        effects::Gradient,
+        element::{AdaptiveGradient, Root, Tokens},
+        prelude::*,
+    };
+
+    fn css(css: &str) -> Vec<Gradient> {
+        crate::css::gradients(css).unwrap()
+    }
+
+    #[component]
+    fn Hero() -> impl IntoElement {
+        view().size_10().adaptive_gradient(move || {
+            tokens()
+                .gradient("background-image-hero")
+                .cloned()
+                .unwrap_or_default()
+        })
+    }
+
+    #[component]
+    fn Still() -> impl IntoElement {
+        view().size_10().adaptive_gradient(
+            AdaptiveGradient::parse("linear-gradient(to right, #ff0000, #0000ff)").unwrap(),
+        )
+    }
+
+    /// The background gradients of the batch's views.
+    fn images(batch: &MountBatch) -> Vec<Vec<Gradient>> {
+        batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::ViewStyle { style, .. } => {
+                    style.effects.as_ref().map(|e| e.background_images.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn themed(light: &str, dark: &str) -> Tokens {
+        let mut t = crate::element::tokens::sample();
+        t.set_gradient(
+            "background-image-hero",
+            AdaptiveGradient::new(css(light), css(dark)),
+        );
+        t
+    }
+
+    const LIGHT: &str = "linear-gradient(135deg, #7c3aed, #db2777)";
+    const DARK: &str = "linear-gradient(135deg, #a78bfa, #f472b6)";
+
+    #[test]
+    fn an_adaptive_gradient_follows_the_appearance_and_the_theme() {
+        let mut c = core();
+        c.set_tokens(themed(LIGHT, DARK));
+        c.mount_root(&Root::of::<Hero>());
+        let batch = c.commit().unwrap();
+        assert_eq!(images(&batch), [css(LIGHT)]);
+        c.set_class_environment(crate::tailwind::ClassEnvironment {
+            dark: true,
+            ..Default::default()
+        });
+        let batch = c.commit().unwrap();
+        assert_eq!(images(&batch), [css(DARK)]);
+        // A new theme's gradient reaches the binding that read it.
+        c.set_tokens(themed(LIGHT, "radial-gradient(#ffffff, #000000)"));
+        let mut seen = Vec::new();
+        while let Some(batch) = c.commit() {
+            seen.extend(images(&batch));
+        }
+        assert_eq!(seen.last(), Some(&css("radial-gradient(#ffffff, #000000)")));
+    }
+
+    #[test]
+    fn gradients_given_once_are_the_same_in_both_appearances() {
+        let mut c = core();
+        c.mount_root(&Root::of::<Still>());
+        let batch = c.commit().unwrap();
+        let still = css("linear-gradient(to right, #ff0000, #0000ff)");
+        assert_eq!(images(&batch), [still]);
+        c.set_class_environment(crate::tailwind::ClassEnvironment {
+            dark: true,
+            ..Default::default()
+        });
+        // Nothing depends on the appearance: nothing is sent.
+        assert!(c.commit().is_none_or(|b| images(&b).is_empty()));
+    }
+
+    #[test]
+    fn a_token_class_and_token_draw_the_same_gradient() {
+        let mut c = core();
+        c.set_tokens(themed(LIGHT, DARK));
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::View,
+                },
+                class_op(2, "bg-hero"),
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+        let batch = c.commit().unwrap();
+        assert_eq!(images(&batch), [css(LIGHT)]);
+        // A change of the token restyles the class that reads it.
+        c.set_tokens(themed("radial-gradient(#ffffff, #000000)", DARK));
+        let batch = c.commit().unwrap();
+        assert_eq!(images(&batch), [css("radial-gradient(#ffffff, #000000)")]);
+    }
+}

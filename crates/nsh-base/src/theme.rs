@@ -346,6 +346,9 @@ fn rename(from: &Tokens, from_name: &str, to: &mut Tokens, to_name: &str) {
     if let Some(shadow) = from.shadow(from_name) {
         to.set_shadow(to_name, shadow.clone());
     }
+    if let Some(gradient) = from.gradient(from_name) {
+        to.set_gradient(to_name, gradient.clone());
+    }
 }
 
 /// The default theme's tokens, which [`Theme::of`] falls back on (the
