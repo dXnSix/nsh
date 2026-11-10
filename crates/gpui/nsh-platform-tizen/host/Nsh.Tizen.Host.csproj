@@ -1,0 +1,29 @@
+<Project Sdk="Tizen.NET.Sdk/1.2.1">
+
+  <!--
+    The host of NSH's TPKs: built once (`dotnet build -c Release`) into the runtime files, so
+    packaging an app needs no .NET SDK. `nsh package --target tizen` stages the DLL with the app's
+    `tizen-manifest.xml`, `lib/libnsh.so` (release or dev) and `res/nsh/`, and signs the package
+    with the developer's certificate profile (`tz pack`). The SDK's own TPK step stays off.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- .NET 6 (Tizen 8.0); also runs on the .NET 8 of 2026 TVs. -->
+    <TargetFramework>tizen80</TargetFramework>
+    <AssemblyName>Nsh.Tizen.Host</AssemblyName>
+    <RootNamespace>Nsh.Tizen.Host</RootNamespace>
+    <LangVersion>10.0</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
+    <TizenCreateTpkOnBuild>false</TizenCreateTpkOnBuild>
+    <!-- The compile-time framework references (no TizenFX assembly is called or shipped). -->
+    <TizenNetPackageVersion>11.0.0.18033</TizenNetPackageVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <Optimize>true</Optimize>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+</Project>

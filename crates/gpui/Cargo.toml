@@ -5,7 +5,7 @@
 # `target/` (`.cargo/config.toml`).
 [workspace]
 resolver = "3"
-members = ["nsh-platform-gpui", "nsh-gpui-host"]
+members = ["nsh-platform-gpui", "nsh-gpui-host", "nsh-platform-tizen"]
 
 [workspace.package]
 version = "0.4.0"
@@ -38,6 +38,15 @@ nsh-base = { version = "0.4.0", path = "../nsh-base", default-features = false }
 nsh-bundler = { version = "0.4.0", path = "../nsh-bundler", default-features = false }
 # Shader views' renderer (wgpu, the version GPUI draws with).
 nsh-platform-gpui = { version = "0.4.0", path = "nsh-platform-gpui", default-features = false }
+
+# Samsung TVs: GPUI's Tizen platform and its bindings to the Tizen C APIs
+# (dXn.GpuiTizen), by commit until they are published (`docs/dev/tizen.md`).
+# TV builds take gpui-fast and wgpu from their forks through a local Cargo
+# config of `[patch.crates-io]` lines, never committed here.
+dxn_gpui_tizen = { git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "e8e5693b4d6f654334cb61b31eae65833690a03d" }
+dxn_gpui_tizen_sys = { git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "e8e5693b4d6f654334cb61b31eae65833690a03d" }
+# Freeing the C strings the Tizen APIs return.
+libc = "0.2"
 
 # The same versions as the main workspace's.
 anyhow = "1"

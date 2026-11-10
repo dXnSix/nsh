@@ -106,7 +106,7 @@ tables exclude the vendor), whatever the features:
   placeholder's place there (a `VideoItem` with its interface).
 - **Screenshots** (`dev`'s `synth::frame`) report that they are unsupported: no X server, and GPUI cannot read a
   frame back.
-- **The TV host** passes the TV's settings on through the
+- **The TV host** is `nsh-platform-tizen` ([tizen.md](tizen.md)): it passes the TV's settings on through the
   setters above, the app framework's pause and resume through `AppView::set_lifecycle` (`background` / `active`,
   over what the window's activation and visibility give), and takes a back press nothing in the app took
   (`AppView::on_unhandled_back`) to ask whether to leave the app. `nsh_key` gives it the NSH key `AppView` reads a

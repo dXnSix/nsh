@@ -2174,6 +2174,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "dxn_gpui_tizen"
+version = "0.1.0"
+source = "git+https://github.com/dXnSix/dXn.GpuiTizen?rev=e8e5693b4d6f654334cb61b31eae65833690a03d#e8e5693b4d6f654334cb61b31eae65833690a03d"
+dependencies = [
+ "accesskit_unix",
+ "anyhow",
+ "dxn_gpui_tizen_sys",
+ "futures",
+ "gpui-fast",
+ "gpui-fast-wgpu",
+ "khronos-egl",
+ "libc",
+ "libloading",
+ "log",
+ "raw-window-handle",
+ "ttf-parser",
+ "uuid",
+]
+
+[[package]]
+name = "dxn_gpui_tizen_sys"
+version = "0.1.0"
+source = "git+https://github.com/dXnSix/dXn.GpuiTizen?rev=e8e5693b4d6f654334cb61b31eae65833690a03d#e8e5693b4d6f654334cb61b31eae65833690a03d"
+
+[[package]]
 name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5715,6 +5740,24 @@ dependencies = [
  "windows-sys 0.61.2",
  "x11rb",
  "zbus",
+]
+
+[[package]]
+name = "nsh-platform-tizen"
+version = "0.4.0"
+dependencies = [
+ "dxn_gpui_tizen",
+ "dxn_gpui_tizen_sys",
+ "futures-channel",
+ "futures-util",
+ "gpui-fast",
+ "libc",
+ "log",
+ "nsh-core",
+ "nsh-dev",
+ "nsh-engine",
+ "nsh-platform-gpui",
+ "serde_json",
 ]
 
 [[package]]

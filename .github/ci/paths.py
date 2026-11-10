@@ -82,14 +82,30 @@ WORKFLOWS = {
     },
 }
 
+# The GPUI backend's workspace (`crates/gpui`, its own `Cargo.toml` and
+# `Cargo.lock`): what its workflow builds and tests, the same way. It builds
+# the main workspace's crates it uses too, but its workflow runs only on its
+# own changes and daily (`gpui.yml`), so only its own members are needed.
+GPUI_WORKFLOWS = {
+    "gpui.yml": {
+        "packages": ["nsh-platform-gpui", "nsh-gpui-host", "nsh-platform-tizen"],
+        "files": ["examples/embed-gpui/**"],
+    },
+}
+
 ALWAYS = ["Cargo.toml", "Cargo.lock", ".cargo/**", "rust-toolchain.toml", ".github/actions/cargo/**"]
+# What every build of the GPUI workspace reads outside it (its CI picks the
+# toolchain itself).
+GPUI_ALWAYS = [".cargo/**", ".github/actions/cargo/**"]
 
 
-def crates():
+def crates(manifest=None):
     """Workspace members: name -> (directory, names of the members it depends on)."""
+    command = ["cargo", "metadata", "--no-deps", "--format-version", "1"]
+    if manifest:
+        command += ["--manifest-path", manifest]
     out = subprocess.run(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-        cwd=ROOT, check=True, capture_output=True, text=True,
+        command, cwd=ROOT, check=True, capture_output=True, text=True,
     ).stdout
     packages = json.loads(out)["packages"]
     members = {p["name"] for p in packages}
@@ -102,7 +118,7 @@ def crates():
     }
 
 
-def needed(name, spec, graph):
+def needed(name, spec, graph, always=ALWAYS):
     seen, stack = set(), list(spec["packages"])
     while stack:
         package = stack.pop()
@@ -111,7 +127,7 @@ def needed(name, spec, graph):
             stack.extend(graph[package][1])
     dirs = sorted(f"{graph[p][0]}/**" for p in seen)
     dirs = [d for d in dirs if not covered(d, spec["files"])]
-    return dirs + spec["files"] + ALWAYS + [f".github/workflows/{name}"]
+    return dirs + spec["files"] + always + [f".github/workflows/{name}"]
 
 
 def covered(path, patterns):
@@ -150,8 +166,11 @@ def main():
             if types != PULL_REQUEST_TYPES:
                 failed = True
                 print(f"{path.name} must take pull_request types {PULL_REQUEST_TYPES}")
-    for name, spec in WORKFLOWS.items():
-        want = needed(name, spec, graph)
+    gpui = crates("crates/gpui/Cargo.toml")
+    workflows = [(name, spec, graph, ALWAYS) for name, spec in WORKFLOWS.items()]
+    workflows += [(name, spec, gpui, GPUI_ALWAYS) for name, spec in GPUI_WORKFLOWS.items()]
+    for name, spec, graph, always in workflows:
+        want = needed(name, spec, graph, always)
         if "--print" in sys.argv:
             print(f"{name}:")
             print("\n".join(f'      - "{p}"' for p in want))

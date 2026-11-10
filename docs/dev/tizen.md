@@ -1,0 +1,93 @@
+# Tizen (Samsung TVs)
+
+NSH apps run natively on Samsung TVs (Tizen 8.0 and later) through `crates/gpui/nsh-platform-tizen`: NSH's GPUI
+backend (`nsh-platform-gpui`'s `AppView`) on [dXn.GpuiTizen](https://github.com/dXnSix/dXn.GpuiTizen)'s Tizen
+platform for GPUI (`dxn_gpui_tizen`: `ui_app_main` and Ecore's main loop, one full-screen window on Ecore_Wl2, EGL
+and GL ES, the remote's keys, the on-screen keyboard, the app's lifecycle, the TV's settings). A Tizen target is
+`target_os = "linux"` with `target_vendor = "tizen"`; how `nsh-platform-gpui` builds for it is in
+[gpui.md](gpui.md) ("Tizen"). The app reports `Os::Tizen` and the TV idiom.
+
+## The crate
+
+`nsh-platform-tizen` is a `cdylib` and an `rlib` with the library name `nsh`, like Android's: `libnsh.so`, the
+library a TPK's C# host calls, exports one symbol, `nsh_tizen_main(argc, argv)`. It lives in the GPUI workspace
+(`crates/gpui/`), as it needs GPUI. Its modules (`src/`):
+
+| Module | What it does |
+| --- | --- |
+| `lib.rs` | `nsh_tizen_main`, and for the hosts of apps with Rust crates of their own `main`, `run_rust` and `set_ui_sets` |
+| `tizen.rs` (Tizen only) | `dxn_gpui_tizen::run` with the package's bundle, the app framework's data and cache directories (`app_get_data_path`, `app_get_cache_path`, each with `nsh/` in it) |
+| `app.rs` | The full-screen window holding `AppView`, and the exit question over it; the TV's settings and the app's state given to `AppView`; Exit quits GPUI, which ends `ui_app_main` |
+| `settings.rs` | `dxn_gpui_tizen::settings` (locale, time zone, font scale, screen reader, reduce motion) as the values of `AppView`'s setters, and the setters to call again when they change; the appearance is dark (Tizen 8.0 reports no light or dark setting) |
+| `lifecycle.rs` | The platform's window activation (off while the app framework has the app paused) as `Lifecycle::Background` / `Active`, through `AppView::set_lifecycle` |
+| `back.rs` | Samsung's rule for Back: NSH's back navigation first (a modal, a stack, `onBackPress`); when nothing takes it (`AppView::on_unhandled_back`), the app asks whether to leave, staying chosen |
+| `keys.rs` | The remote's key names (dXn.GpuiTizen's `keys::NAMED_KEYS`) as NSH reads them: NSH keys (`nsh_platform_gpui::nsh_key`, `TV-1`'s `ColorRed`, `MediaPlayPause`, `Info`, ...), `back` (navigation), `exit` (the TV's) |
+| `package.rs` | The app in the TPK's resources: `res/nsh/bundle.nshc` (with `capabilities.json` and `bundle.js.map`), `res/nsh/assets/`, `res/nsh/app.json` (name, id, appearance), as Linux's packages hold them |
+
+The logic modules build on the desktops too, and their unit tests run there:
+
+```sh
+cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib   # keys, settings, back, lifecycle, package
+```
+
+## The C# host
+
+Tizen's app model starts a third-party native app as a .NET app: `crates/gpui/nsh-platform-tizen/host/` is the
+program (`Program.cs`, one P/Invoke into `libnsh.so`'s `nsh_tizen_main`; no TizenFX) and its project on
+`Tizen.NET.Sdk` (`Nsh.Tizen.Host.csproj`), the same as dXn.GpuiTizen's own host. It is built once into the runtime
+files (`dotnet build -c Release`), so packaging an app needs no .NET SDK.
+
+## Building
+
+dXn.GpuiTizen is a git dependency of the GPUI workspace, pinned by `rev` (`crates/gpui/Cargo.toml`), until it is on
+crates.io. Its TV builds take gpui-fast and wgpu from their forks: `[patch.crates-io]` over all nine `gpui-fast-*`
+crates and the wgpu crates (`wgpu-hal` among them), the same set as dXn.GpuiTizen's. Until the forks are published
+that patch is a local Cargo config, never committed: dXn.GpuiTizen's `cargo xtask gpui-fast-release --verify` writes
+it to `artifacts-temp/gpui-fast-patch.toml` (paths into the gpui-fast fork's release workspace and `../wgpu`).
+
+Before dXn.GpuiTizen is pushed, Git reaches it in the local checkout (Cargo cannot patch an unreachable git
+source), so every Cargo command runs with:
+
+```sh
+export CARGO_NET_GIT_FETCH_WITH_CLI=true GIT_CONFIG_COUNT=3 \
+  GIT_CONFIG_KEY_0=url.<dXn.GpuiTizen checkout>.insteadOf GIT_CONFIG_VALUE_0=https://github.com/dXnSix/dXn.GpuiTizen \
+  GIT_CONFIG_KEY_1=url.<gpui-fast checkout>.insteadOf GIT_CONFIG_VALUE_1=https://github.com/dXnSix/gpui-fast \
+  GIT_CONFIG_KEY_2=url.<wgpu checkout>.insteadOf GIT_CONFIG_VALUE_2=https://github.com/dXnSix/wgpu
+```
+
+The committed `crates/gpui/Cargo.lock` is resolved without the patch (it records the GitHub source of
+dXn.GpuiTizen and the published gpui-fast). Builds and tests with the patch resolve into a lockfile kept outside the
+checkout, so it never records the local paths:
+
+```sh
+PATCH=<dXn.GpuiTizen>/artifacts-temp/gpui-fast-patch.toml
+LOCK=<dXn.GpuiTizen>/artifacts-temp/locks/nsh-tizen/Cargo.lock    # seeded from crates/gpui/Cargo.lock
+cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib \
+  --config "$PATCH" --config "resolver.lockfile-path='$LOCK'"
+cargo clippy --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --all-targets \
+  --config "$PATCH" --config "resolver.lockfile-path='$LOCK'" -- -D warnings
+```
+
+TV libraries are cross-built from dXn.GpuiTizen's checkout with its target specs, the Tizen 8.0 rootstrap and the
+SDK's GCC toolchain (its `docs/setup.md`), for `armv7` (32-bit ARM TVs), `x86_64` (the emulator) and `aarch64`.
+`--check-symbols` checks the library: exactly one export, `nsh_tizen_main`, and only documented Tizen symbols and
+glibc imported. `cargo xtask cross` keeps its own
+copy of the workspace's lockfile under `artifacts-temp/locks/` and passes `--config` on to Cargo:
+
+```sh
+cd <dXn.GpuiTizen>
+cargo xtask cross --target armv7 --release --manifest-path <nsh>/crates/gpui/Cargo.toml -p nsh-platform-tizen \
+  --check-symbols --entry nsh_tizen_main --config "$PATCH"
+cargo xtask cross --target armv7 --clippy --manifest-path <nsh>/crates/gpui/Cargo.toml -p nsh-platform-tizen \
+  --config "$PATCH" -- -D warnings
+```
+
+Once the forks and dXn.GpuiTizen are published, `crates/gpui/Cargo.toml` takes the patch as git lines and the
+environment above goes.
+
+## Not yet on Tizen
+
+- The platform turns its window's activation off while the app is paused once it reports pause and resume to GPUI
+  (`on_active_status_change`); until then the app's state stays `active`.
+- Packaging (`nsh package --target tizen`), `nsh run --target tizen` and the `tizen` component come with the CLI's
+  Tizen target.

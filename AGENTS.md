@@ -144,6 +144,10 @@ crates/
                        backend for embedding, standalone apps run on each OS's own backend (docs/dev/gpui.md)
   gpui/nsh-gpui-host/  Development host on GPUI (`nsh run --target gpui`): shows a TSX app as GPUI apps that embed it
                        show it; connects to a dev server or runs a bundle
+  gpui/nsh-platform-tizen/ Samsung TV backend (Tizen): `libnsh.so` (`nsh_tizen_main`, the C# host's one P/Invoke, `host/`),
+                       the GPUI backend's `AppView` full screen on dXn.GpuiTizen's Tizen platform (a git dependency); the TV's
+                       settings and the app's state given to the view, Back with the question before leaving; feature `dev`:
+                       the development runtime over `sdb reverse` / `sdb forward` (docs/dev/tizen.md)
   nsh-ios-host/        Development host app (Catalyst / iOS simulator); connects to a dev server or runs a local bundle
   nsh-ios-app/         Release runner: the executable of iOS apps built by `nsh package`
   nsh-cli/             The `nsh` command line (a binary): init / build / test / check / dev / run / package; keygen /
@@ -217,6 +221,7 @@ are never linked into the CLI: it reads their UI sets as data (`nsh_core::elemen
 | the macOS backend (`nsh-platform-macos`, AppKit) | `docs/dev/macos.md` |
 | the Windows backend (`nsh-platform-windows`, Win32 / Direct2D) | `docs/dev/windows.md` |
 | the GPUI backend (`nsh-platform-gpui`, macOS / Windows / Linux) | `docs/dev/gpui.md` |
+| the Samsung TV backend (`nsh-platform-tizen`, Tizen) and its builds | `docs/dev/tizen.md` |
 | anything apps use: exports, `nsh:rt`, props, events, style keys, Tailwind, declarations, behavior, formats | `docs/dev/compatibility.md` |
 | a hot path | `docs/dev/performance.md` (baselines) |
 | anything platform-specific | `docs/dev/pitfalls.md` (verified constraints, by area) |
