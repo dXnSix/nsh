@@ -14,8 +14,8 @@
 //!   nothing takes Back (`back`);
 //! - `keys`: the remote's key names as NSH reads them;
 //! - `package`: the app in the TPK's resources;
-//! - `tv`: the TV's side of `nsh/tizen` (product information, the
-//!   remote's keys);
+//! - `tv`: the TV's side of `nsh/tizen` (`system_info`'s product
+//!   information, the remote's keys grabbed while the app runs);
 //! - `tizen` (Tizen only): the entry point and the app framework's
 //!   directories and log;
 //! - `dev` (feature `dev`): the development runtime, connected through

@@ -39,6 +39,7 @@ pub(crate) fn remote(name: &str) -> Option<Remote> {
 
 /// The Tizen key name of `key` (`XF86Red` for `ColorRed`), for a key the
 /// platform names (`NAMED_KEYS`).
+#[cfg_attr(not(target_vendor = "tizen"), allow(dead_code))]
 pub(crate) fn tizen_name(key: Key) -> Option<&'static str> {
     NAMED_KEYS
         .iter()

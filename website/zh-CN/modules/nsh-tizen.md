@@ -43,7 +43,7 @@ function registerKey(key: string): Promise<void>;
 function unregisterKey(key: string): Promise<void>;
 ```
 
-遥控器的颜色键、媒体键、频道键和 Info 键在应用取用之前属于电视。`key` 是 [`keymap`](./nsh.md#keymap) 中的按键名：`"red"`、`"green"`、`"yellow"`、`"blue"`、`"mediaplaypause"`、`"mediaplay"`、`"mediapause"`、`"mediastop"`、`"mediarewind"`、`"mediafastforward"`、`"medianext"`、`"mediaprevious"`、`"channelup"`、`"channeldown"`、`"info"`。方向键、确认键和返回键总是到达应用。不是按键名的值以 `TypeError` 拒绝，电视不交给应用的按键以 `RangeError` 拒绝。在原生应用中，颜色键、媒体键和频道键在应用显示期间都属于应用，因此注册它们会立即完成。
+遥控器的颜色键、媒体键、频道键和 Info 键在应用取用之前属于电视。`key` 是 [`keymap`](./nsh.md#keymap) 中的按键名：`"red"`、`"green"`、`"yellow"`、`"blue"`、`"mediaplaypause"`、`"mediaplay"`、`"mediapause"`、`"mediastop"`、`"mediarewind"`、`"mediafastforward"`、`"medianext"`、`"mediaprevious"`、`"channelup"`、`"channeldown"`、`"info"`。方向键、确认键和返回键总是到达应用。不是按键名的值以 `TypeError` 拒绝，电视不交给应用的按键以 `RangeError` 拒绝。在原生应用中，颜色键、媒体键和频道键从一开始就属于应用；`unregisterKey` 把某个键还给电视，`registerKey("info")` 也会取用 Info 键。在应用显示期间按键一直属于应用，电视隐藏和显示应用时也是如此。
 
 ```tsx
 import { keymap } from "nsh";

@@ -53,7 +53,8 @@ in [`keymap`](./nsh.md#keymap): `"red"`, `"green"`, `"yellow"`, `"blue"`, `"medi
 `"mediapause"`, `"mediastop"`, `"mediarewind"`, `"mediafastforward"`, `"medianext"`, `"mediaprevious"`,
 `"channelup"`, `"channeldown"`, `"info"`. The arrows, Enter and Back always reach the app. A name of no key rejects
 with a `TypeError`, a key the TV does not give apps with a `RangeError`. In a native app the color, media and channel
-keys are the app's while it is shown, so registering them resolves at once.
+keys are the app's from the start; `unregisterKey` gives one back to the TV, and `registerKey("info")` takes the Info
+key too. A key stays the app's while the app is shown, as the TV hides and shows it.
 
 ```tsx
 import { keymap } from "nsh";

@@ -45,6 +45,12 @@ fn launch(root: Option<fn() -> Root>, cx: &mut gpui::App) {
     };
     let package = Package::read(&dir);
     let mut options = options(&package);
+    // `nsh/tizen`: the TV's product information and the remote's keys,
+    // grabbed on this thread.
+    let (tv, grabs) = crate::tv::Tv::new(crate::tv::product());
+    crate::tv::serve(grabs, cx);
+    options.context = std::mem::take(&mut options.context)
+        .with(nsh_core::runtime::TizenServices(std::sync::Arc::new(tv)));
     match source(root, &package, &mut options) {
         Some(source) => app::launch(source, options, package.name, cx),
         None => cx.quit(),
@@ -110,10 +116,6 @@ fn options(package: &Package) -> AppOptions {
     if let Some(name) = &package.name {
         options.title = name.clone();
     }
-    // `nsh/tizen`: the TV's product information and the remote's keys.
-    let tv = crate::tv::Tv::new(crate::tv::product());
-    options.context = std::mem::take(&mut options.context)
-        .with(nsh_core::runtime::TizenServices(std::sync::Arc::new(tv)));
     options
 }
 
@@ -125,7 +127,7 @@ fn app_dir(get: unsafe extern "C" fn() -> *mut c_char) -> Option<PathBuf> {
 }
 
 /// The text of a malloc'd C string, which is freed.
-pub(crate) fn malloced(ptr: *mut c_char) -> Option<String> {
+fn malloced(ptr: *mut c_char) -> Option<String> {
     if ptr.is_null() {
         return None;
     }
