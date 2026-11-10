@@ -1,6 +1,7 @@
 //! `--idiom` and `nsh.json` `dev.idiom`: the idiom the GPUI host and the web
-//! dev page run the app in (a TV's on the desktop), what each host is given,
-//! and the hosts that take none.
+//! dev page run the app in (a TV's on the desktop), with `nsh run`, `nsh dev`
+//! and `nsh test --target`, what each host is given, and the hosts that take
+//! none.
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
@@ -40,6 +41,12 @@ impl App {
         )
         .unwrap();
         fs::write(dir.0.join("nsh.json"), config).unwrap();
+        fs::write(
+            dir.0.join("App.test.tsx"),
+            "import { open, test } from 'nsh/test';\n\
+             test('opens', async () => { const app = await open('./App.tsx'); await app.waitFor('Hello'); });\n",
+        )
+        .unwrap();
         for (platform, host) in [("gpui", "nsh-gpui-host"), ("macos", "nsh-macos-host")] {
             let path = dir.0.join("runtime").join(platform).join(host);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -247,4 +254,155 @@ fn the_web_dev_page_gives_the_player_the_idiom() {
     assert!(page.contains("const IDIOM = \"desktop\";"), "{page}");
     let page = app.dev_page(&["dev", "--server-only", "--port", "0"]);
     assert!(page.contains("const IDIOM = \"tv\";"), "{page}");
+}
+
+const TEST_GPUI: &[&str] = &["test", "--target", "gpui"];
+
+/// What a test host gets: the stand-in hosts exit before they connect, so
+/// the run fails after it started them.
+fn started(output: &Output) -> String {
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.status.success(), "{all}");
+    assert!(all.contains("before it connected"), "{all}");
+    all
+}
+
+#[test]
+fn nsh_test_starts_the_gpui_host_in_the_idiom_of_the_flag_or_nsh_json() {
+    // Neither: the host's own (no argument).
+    let app = App::new("{}");
+    started(&app.run(TEST_GPUI));
+    let args = app.host_args();
+    assert!(args.contains("--dev-server ws://127.0.0.1:"), "{args}");
+    assert!(!args.contains("--idiom"), "{args}");
+    // The flag.
+    started(&app.run(&[TEST_GPUI, &["--idiom", "tv"]].concat()));
+    assert!(has_idiom(&app.host_args(), "tv"), "{}", app.host_args());
+    // nsh.json's development setting.
+    let app = App::new(r#"{ "dev": { "idiom": "tv" } }"#);
+    started(&app.run(TEST_GPUI));
+    assert!(has_idiom(&app.host_args(), "tv"), "{}", app.host_args());
+    // The flag wins over nsh.json.
+    started(&app.run(&[TEST_GPUI, &["--idiom", "desktop"]].concat()));
+    let args = app.host_args();
+    assert!(
+        has_idiom(&args, "desktop") && !has_idiom(&args, "tv"),
+        "{args}"
+    );
+}
+
+#[test]
+fn nsh_test_refuses_the_idiom_where_the_hosts_take_none_before_starting() {
+    let app = App::new("{}");
+    let refused = |args: &[&str]| {
+        let output = app.run(args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{args:?} accepted it");
+        assert!(
+            stderr.contains("--idiom needs --target gpui or web"),
+            "{args:?}: {stderr}"
+        );
+        assert!(app.host_args().is_empty(), "{args:?} started a host");
+    };
+    for target in [
+        "macos", "linux", "windows", "catalyst", "ios", "android", "tui",
+    ] {
+        refused(&["test", "--target", target, "--idiom", "tv"]);
+    }
+    // Headless: the tests' `open` says the platform.
+    refused(&["test", "--idiom", "tv"]);
+    // A value no host takes.
+    let output = app.run(&[TEST_GPUI, &["--idiom", "phone"]].concat());
+    assert!(!output.status.success());
+    assert!(app.host_args().is_empty());
+}
+
+#[test]
+fn nsh_test_leaves_nsh_json_idiom_out_with_a_warning_where_it_does_not_apply() {
+    let app = App::new(r#"{ "dev": { "idiom": "tv" } }"#);
+    // Another host: started in its own idiom.
+    let shown = started(&app.run(&["test", "--target", "macos"]));
+    assert!(
+        shown.contains(
+            "nsh.json dev.idiom \"tv\" applies to --target gpui and web: --target macos runs in its host's own idiom"
+        ),
+        "{shown}"
+    );
+    let args = app.host_args();
+    assert!(args.contains("--dev-server"), "{args}");
+    assert!(!args.contains("--idiom"), "{args}");
+    // Headless: the tests run, as `open`'s platform says.
+    let shown = succeeded(&app.run(&["test"]));
+    assert!(
+        shown.contains(
+            "applies to --target gpui and web: headless runs take the idiom of `open`'s platform"
+        ),
+        "{shown}"
+    );
+    assert!(shown.contains("1 passed"), "{shown}");
+}
+
+#[test]
+fn nsh_test_gives_the_web_test_page_the_idiom() {
+    // A browser that fetches the page `nsh test` serves on the port it
+    // listens on, then fails to start.
+    for tool in ["lsof", "curl"] {
+        let found = Command::new("sh")
+            .args(["-c", &format!("command -v {tool}")])
+            .output()
+            .unwrap();
+        assert!(found.status.success(), "the test needs {tool}");
+    }
+    let page = |app: &App, args: &[&str]| {
+        let browser = app.0.join("browser.sh");
+        let fetched = app.0.join("page.html");
+        let _ = fs::remove_file(&fetched);
+        fs::write(
+            &browser,
+            format!(
+                "#!/bin/sh\n\
+                 for port in $(lsof -nP -a -p \"$PPID\" -iTCP -sTCP:LISTEN -Fn | sed -n 's/^n.*:\\([0-9][0-9]*\\)$/\\1/p'); do\n\
+                 \x20 curl -s \"http://127.0.0.1:$port/\" >> '{}'\n\
+                 done\n\
+                 exit 1\n",
+                fetched.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&browser, fs::Permissions::from_mode(0o755)).unwrap();
+        let output = app.run(
+            &[
+                &[
+                    "test",
+                    "--target",
+                    "web",
+                    "--browser",
+                    browser.to_str().unwrap(),
+                ],
+                args,
+            ]
+            .concat(),
+        );
+        assert!(!output.status.success());
+        fs::read_to_string(&fetched).unwrap_or_else(|_| {
+            panic!(
+                "no page fetched: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        })
+    };
+    let app = App::new("{}");
+    // The test's (`open`'s desktop platform), else the page's own measure.
+    let shown = page(&app, &[]);
+    assert!(shown.contains("const IDIOM = null;"), "{shown}");
+    assert!(shown.contains("idiom: IDIOM ?? undefined"), "{shown}");
+    assert!(page(&app, &["--idiom", "tv"]).contains("const IDIOM = \"tv\";"));
+    // nsh.json's, and the flag over it.
+    let app = App::new(r#"{ "dev": { "idiom": "tv" } }"#);
+    assert!(page(&app, &[]).contains("const IDIOM = \"tv\";"));
+    assert!(page(&app, &["--idiom", "desktop"]).contains("const IDIOM = \"desktop\";"));
 }

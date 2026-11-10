@@ -117,8 +117,44 @@ impl DevIdiom {
         entry: &Path,
         target: Option<Target>,
     ) -> anyhow::Result<Option<DevIdiom>> {
+        Self::choose(flag, entry, Self::applies_to(target), || {
+            format!(
+                "--target {} runs in its host's own idiom",
+                target_name(target)
+            )
+        })
+    }
+
+    /// The idiom the hosts of `nsh test --target <target>` start the apps
+    /// the tests open in, as [`resolve`](Self::resolve) chooses it for `nsh
+    /// run`: the GPUI host's and the web test page's; `None` for `target`
+    /// is a headless run, which takes the idiom of `open`'s `platform`.
+    pub(crate) fn for_test(
+        flag: Option<DevIdiom>,
+        entry: &Path,
+        target: Option<Target>,
+    ) -> anyhow::Result<Option<DevIdiom>> {
+        let applies = matches!(target, Some(Target::Gpui | Target::Web));
+        Self::choose(flag, entry, applies, || match target {
+            Some(_) => format!(
+                "--target {} runs in its host's own idiom",
+                target_name(target)
+            ),
+            None => "headless runs take the idiom of `open`'s platform".to_owned(),
+        })
+    }
+
+    /// `flag`, refused unless the host `applies`, else `nsh.json`'s
+    /// `dev.idiom`, left out with a warning that says what the host runs in
+    /// (`elsewhere`) unless it `applies`.
+    fn choose(
+        flag: Option<DevIdiom>,
+        entry: &Path,
+        applies: bool,
+        elsewhere: impl FnOnce() -> String,
+    ) -> anyhow::Result<Option<DevIdiom>> {
         if let Some(idiom) = flag {
-            if !Self::applies_to(target) {
+            if !applies {
                 bail!(
                     "--idiom needs --target gpui or web: the desktop GPUI host and the web dev page take an idiom, \
                      the other hosts run in their device's own"
@@ -126,21 +162,26 @@ impl DevIdiom {
             }
             return Ok(Some(idiom));
         }
-        let configured = crate::package::read_config(entry)?.dev.idiom;
-        match (configured, target) {
-            (Some(idiom), Some(target)) if !Self::applies_to(Some(target)) => {
-                let name = clap::ValueEnum::to_possible_value(&target)
-                    .map(|value| value.get_name().to_owned())
-                    .unwrap_or_default();
+        match crate::package::read_config(entry)?.dev.idiom {
+            Some(idiom) if !applies => {
                 ui::warn(format!(
-                    "nsh.json dev.idiom \"{}\" applies to --target gpui and web: --target {name} runs in its host's own idiom",
+                    "nsh.json dev.idiom \"{}\" applies to --target gpui and web: {}",
                     idiom.as_str(),
+                    elsewhere(),
                 ));
                 Ok(None)
             }
-            (configured, _) => Ok(configured),
+            configured => Ok(configured),
         }
     }
+}
+
+/// `target` as `--target` names it.
+fn target_name(target: Option<Target>) -> String {
+    target
+        .and_then(|target| clap::ValueEnum::to_possible_value(&target))
+        .map(|value| value.get_name().to_owned())
+        .unwrap_or_default()
 }
 
 /// How the development host runs the app and what it shows besides it.
