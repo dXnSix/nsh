@@ -17,7 +17,7 @@ library a TPK's C# host calls, exports one symbol, `nsh_tizen_main(argc, argv)`.
 | --- | --- |
 | `lib.rs` | `nsh_tizen_main`, and for the hosts of apps with Rust crates of their own `main`, `run_rust` and `set_ui_sets` |
 | `tizen.rs` (Tizen only) | `dxn_gpui_tizen::run` with the package's bundle (or the development runtime), the app framework's data and cache directories (`app_get_data_path`, `app_get_cache_path`, each with `nsh/` in it), with `dev` the system's log (dlog, tag `NSH`) |
-| `app.rs` | The full-screen window holding `AppView`, and the exit question over it; the TV's settings and the app's state given to `AppView`; Exit quits GPUI, which ends `ui_app_main` |
+| `app.rs` | The full-screen window holding `AppView`, and the exit question over it; the TV's settings and the app's state given to `AppView` before the app loads (its engine starts with them), the settings again as they change; Exit quits GPUI, which ends `ui_app_main` |
 | `settings.rs` | `dxn_gpui_tizen::settings` (locale, time zone, font scale, screen reader, reduce motion) as the values of `AppView`'s setters, and the setters to call again when they change; the appearance is dark (Tizen 8.0 reports no light or dark setting) |
 | `lifecycle.rs` | The platform's window activation (off while the app framework has the app paused, which the platform reports to GPUI with the window hidden) as `Lifecycle::Background` / `Active`, through `AppView::set_lifecycle` |
 | `back.rs` | Samsung's rule for Back: NSH's back navigation first (a modal, a stack, `onBackPress`); when nothing takes it (`AppView::on_unhandled_back`), the app asks whether to leave, staying chosen |
@@ -28,7 +28,7 @@ library a TPK's C# host calls, exports one symbol, `nsh_tizen_main(argc, argv)`.
 The logic modules build on the desktops too, and their unit tests run there:
 
 ```sh
-cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib                 # keys, settings, back, lifecycle, package, host
+cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --lib                 # app, keys, settings, back, lifecycle, package, host
 cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-tizen --features dev --lib  # and dev's connection policy
 ```
 

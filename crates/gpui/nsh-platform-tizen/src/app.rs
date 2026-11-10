@@ -3,7 +3,8 @@
 //! ([`crate::back`]). It joins `AppView` to the Tizen platform:
 //!
 //! - the TV's settings (`dxn_gpui_tizen::settings`) go to `AppView`'s
-//!   setters as they change ([`crate::settings`]);
+//!   setters before the app loads, so its engine starts with them, and
+//!   again as they change ([`crate::settings`], [`opening`]);
 //! - the window's activation, which the platform turns off while the app
 //!   framework has the app paused, is the app's state ([`crate::lifecycle`]);
 //! - a back press nothing in the app took asks before leaving, and the
@@ -24,7 +25,7 @@ use nsh_platform_gpui::{AppOptions, AppView};
 
 use crate::{
     back::{Choice, Effect, ExitPrompt},
-    settings::{self, HostValues},
+    settings::{self, HostValues, Setter},
 };
 
 /// What the window runs.
@@ -70,6 +71,28 @@ pub(crate) fn launch(source: Source, options: AppOptions, name: Option<String>, 
     }
 }
 
+/// What the window does to `AppView` as it opens, in order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Opening {
+    /// One of the TV's settings, through `AppView`'s setter.
+    Set(Setter),
+    /// The app (or the dev server's): its engine starts with what was set.
+    Load,
+}
+
+/// The steps for the TV's settings `tv` as the window opens, and the values
+/// they give `AppView` (what later changes are compared with): every
+/// setter, then the app.
+pub(crate) fn opening(tv: &SystemSettings) -> (HostValues, Vec<Opening>) {
+    let values = HostValues::of(tv);
+    let mut steps: Vec<Opening> = settings::changes(None, &values)
+        .into_iter()
+        .map(Opening::Set)
+        .collect();
+    steps.push(Opening::Load);
+    (values, steps)
+}
+
 /// `AppView` filling the window, and the exit question over it.
 pub(crate) struct TizenApp {
     view: Entity<AppView>,
@@ -106,11 +129,11 @@ impl TizenApp {
         view.update(cx, |view, cx| {
             view.set_lifecycle(Some(crate::lifecycle::of_window(active)), cx)
         });
-        // The TV's settings now, and whenever they change (the platform
-        // calls subscribers on the main thread, outside GPUI's updates:
-        // they are applied from a task).
+        // The TV's settings whenever they change (the platform calls
+        // subscribers on the main thread, outside GPUI's updates: they are
+        // applied from a task), subscribed before they are read below so
+        // that no change goes missing.
         let (tx, mut rx) = futures_channel::mpsc::unbounded::<SystemSettings>();
-        let _ = tx.unbounded_send(tv_settings::current());
         let subscription = tv_settings::subscribe(move |settings| {
             let _ = tx.unbounded_send(settings.clone());
         });
@@ -125,10 +148,24 @@ impl TizenApp {
             }
         })
         .detach();
-        match source {
-            Source::App(app) => view.read(cx).load(app),
-            #[cfg(feature = "dev")]
-            Source::Dev(url) => view.update(cx, |view, cx| crate::dev::connect(view, url, cx)),
+        // The TV's settings now, then the app: its engine starts with them
+        // (`load` reads the environment once, for the app's first code).
+        let (applied, steps) = opening(&tv_settings::current());
+        let mut source = Some(source);
+        for step in steps {
+            match step {
+                Opening::Set(setter) => {
+                    view.update(cx, |view, cx| settings::apply(view, setter, cx))
+                }
+                Opening::Load => match source.take() {
+                    Some(Source::App(app)) => view.read(cx).load(app),
+                    #[cfg(feature = "dev")]
+                    Some(Source::Dev(url)) => {
+                        view.update(cx, |view, cx| crate::dev::connect(view, url, cx))
+                    }
+                    None => {}
+                },
+            }
         }
         let focus = view.focus_handle(cx);
         window.focus(&focus, cx);
@@ -137,7 +174,7 @@ impl TizenApp {
             prompt: ExitPrompt::default(),
             prompt_focus: cx.focus_handle(),
             name: name.map(SharedString::from),
-            applied: None,
+            applied: Some(applied),
             settings: Some(subscription),
         }
     }
@@ -300,5 +337,64 @@ impl Render for TizenApp {
             .relative()
             .child(self.view.clone())
             .children(prompt)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dxn_gpui_tizen::settings::SystemSettings;
+    use nsh_platform_gpui::{Appearance, Locale};
+
+    use super::*;
+
+    fn chinese_tv() -> SystemSettings {
+        SystemSettings {
+            locale: Some("zh-CN".into()),
+            time_zone: Some("Asia/Shanghai".into()),
+            font_scale: Some(1.5),
+            screen_reader: Some(true),
+            high_contrast: None,
+            reduce_motion: Some(true),
+        }
+    }
+
+    #[test]
+    fn the_tvs_settings_are_set_before_the_app_loads() {
+        let tv = chinese_tv();
+        let (applied, steps) = opening(&tv);
+        assert_eq!(applied, HostValues::of(&tv));
+        // Every setter, then the app, once.
+        assert_eq!(steps.last(), Some(&Opening::Load));
+        assert_eq!(steps.iter().filter(|s| **s == Opening::Load).count(), 1);
+        let set: Vec<Setter> = steps
+            .iter()
+            .filter_map(|step| match step {
+                Opening::Set(setter) => Some(*setter),
+                Opening::Load => None,
+            })
+            .collect();
+        assert_eq!(set, settings::changes(None, &applied));
+        for setter in [
+            Setter::Locale(Locale::parse("zh-CN")),
+            Setter::FontScale(Some(1.5)),
+            Setter::ScreenReader(Some(true)),
+            Setter::ReduceMotion(Some(true)),
+            Setter::Appearance(Appearance::Dark),
+        ] {
+            assert!(set.contains(&setter), "{setter:?}");
+        }
+        // The same settings reported again change nothing.
+        assert_eq!(
+            settings::changes(Some(&applied), &HostValues::of(&tv)),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn a_tv_that_reports_nothing_still_loads_after_the_defaults() {
+        let (applied, steps) = opening(&SystemSettings::default());
+        assert_eq!(applied.font_scale, None);
+        assert_eq!(steps.len(), 7);
+        assert_eq!(steps[6], Opening::Load);
     }
 }
