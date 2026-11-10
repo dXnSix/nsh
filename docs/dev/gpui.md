@@ -119,6 +119,12 @@ tables exclude the vendor), whatever the features:
   opens again as one where it was. Props become the player's calls (`ops`), its notices NSH's events (`Events`:
   `onLoadStart`, `onLoad` with the duration, `onProgress`, `onBuffer`, `onEnd`, `onError`), and `controls` draws
   NSH's own bar (`controls`, shared with GStreamer's). `rate` stays 1 (no public native API); `onLoad`'s size is 0.
+  The player seeks only once prepared, so `Gate` keeps a seek given before that (and the time a reopened video was
+  at) until its `Ready`, playing after it. When the system interrupts the player (another app takes the decoder,
+  typically around a pause and resume) and leaves it unprepared, or paused while `paused` is false, the app hears
+  `onBuffer` with `true`; once the app is `Active` again (`lifecycle()`, looked at every half second until it is)
+  the player is prepared again if it has to be, given `muted`, `volume` and `repeat` again, sought to where it was
+  and played as `paused` says, and `onBuffer` with `false` follows; a prepare that fails is `onError`.
 - **Screenshots** (`dev`'s `synth::frame`) report that they are unsupported: no X server, and GPUI cannot read a
   frame back.
 - **The TV host** is `nsh-platform-tizen` ([tizen.md](tizen.md)): it passes the TV's settings on through the
