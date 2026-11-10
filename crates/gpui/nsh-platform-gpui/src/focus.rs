@@ -649,3 +649,5 @@ pub(crate) fn reset(surface: &Surface) {
 
 #[cfg(test)]
 mod directional_focus;
+#[cfg(test)]
+mod tab_stops;

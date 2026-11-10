@@ -17,10 +17,10 @@ use nsh_core::{
 use crate::{geom::rect, input::Modifiers, surface::Surface};
 
 /// The page, under the surface's root, as large as the window.
-const PAGE: NodeId = 2;
+pub(super) const PAGE: NodeId = 2;
 
 /// A surface 400 x 300 points with its page, in the test app.
-fn surface(cx: &mut TestAppContext) -> (Rc<Surface>, impl Drop) {
+pub(super) fn surface(cx: &mut TestAppContext) -> (Rc<Surface>, impl Drop) {
     let app = cx.update(crate::rt::init_test_app);
     let surface = Surface::new(Default::default());
     surface.resized(400.0, 300.0, 1.0);
@@ -32,13 +32,13 @@ fn surface(cx: &mut TestAppContext) -> (Rc<Surface>, impl Drop) {
 
 /// Mount items, applied as one batch.
 #[derive(Default)]
-struct Tree {
-    items: Vec<MountItem>,
+pub(super) struct Tree {
+    pub(super) items: Vec<MountItem>,
 }
 
 impl Tree {
     /// A view of `kind` at `frame` in `parent`.
-    fn view(
+    pub(super) fn view(
         &mut self,
         id: NodeId,
         parent: NodeId,
@@ -60,7 +60,7 @@ impl Tree {
 
     /// A view that takes presses and hears its focus, with `focus:`
     /// styles (it tracks `FOCUSED`).
-    fn pressable(&mut self, id: NodeId, parent: NodeId, frame: (f32, f32, f32, f32)) -> &mut Self {
+    pub(super) fn pressable(&mut self, id: NodeId, parent: NodeId, frame: (f32, f32, f32, f32)) -> &mut Self {
         self.view(id, parent, ViewKind::View, frame);
         self.events(
             id,
@@ -79,7 +79,7 @@ impl Tree {
         self
     }
 
-    fn events(&mut self, id: NodeId, kinds: &[EventKind]) -> &mut Self {
+    pub(super) fn events(&mut self, id: NodeId, kinds: &[EventKind]) -> &mut Self {
         let mut events = EventMask::default();
         for &kind in kinds {
             events.set(kind, true);
@@ -88,7 +88,7 @@ impl Tree {
         self
     }
 
-    fn props(&mut self, id: NodeId, props: ViewProps) -> &mut Self {
+    pub(super) fn props(&mut self, id: NodeId, props: ViewProps) -> &mut Self {
         self.items.push(MountItem::ViewProps {
             id,
             props: Box::new(props),
@@ -96,7 +96,7 @@ impl Tree {
         self
     }
 
-    fn apply(&mut self, surface: &Rc<Surface>) {
+    pub(super) fn apply(&mut self, surface: &Rc<Surface>) {
         let items = std::mem::take(&mut self.items);
         surface.apply_batch(&MountBatch { items });
     }
@@ -105,7 +105,7 @@ impl Tree {
 /// Presses the key GPUI names `name` ("down", "enter", ...), as the
 /// surface's key listener gives it on (`crate::events`). Whether it was
 /// taken.
-fn key(surface: &Rc<Surface>, name: &str) -> bool {
+pub(super) fn key(surface: &Rc<Surface>, name: &str) -> bool {
     let vk = crate::keys::vk_of(name).expect("a key GPUI names");
     crate::input::key(
         surface,
@@ -119,16 +119,16 @@ fn key(surface: &Rc<Surface>, name: &str) -> bool {
 }
 
 /// The node with the keyboard focus: a field's or a view's.
-fn focused(surface: &Surface) -> Option<NodeId> {
+pub(super) fn focused(surface: &Surface) -> Option<NodeId> {
     crate::focus::current(surface).map(|view| view.id())
 }
 
 /// The events sent since the last call.
-fn heard(surface: &Surface) -> Vec<(NodeId, EventKind)> {
+pub(super) fn heard(surface: &Surface) -> Vec<(NodeId, EventKind)> {
     std::mem::take(&mut *surface.heard.borrow_mut())
 }
 
-fn has_focused_state(surface: &Surface, id: NodeId) -> bool {
+pub(super) fn has_focused_state(surface: &Surface, id: NodeId) -> bool {
     surface.view(id).unwrap().state().states & FOCUSED != 0
 }
 
