@@ -428,13 +428,12 @@ impl Mounter {
             // An input edits; a stop takes the keyboard focus.
             Command::Focus => match view {
                 Some(view) if view.kind() == ViewKind::Input => crate::text_input::focus(view),
-                Some(view) => crate::key_focus::focus(surface, view),
+                Some(view) => crate::focus::focus_command(surface, view),
                 None => {}
             },
             Command::Blur => match view {
-                Some(view) if view.kind() == ViewKind::Input => crate::text_input::blur(view),
-                Some(view) if crate::key_focus::blur(surface, view) => {}
-                _ => crate::text_input::blur_all(surface),
+                Some(view) => crate::focus::blur_command(surface, view),
+                None => crate::text_input::blur_all(surface),
             },
             Command::SetSelection { start, end } => {
                 if let Some(view) = view {
