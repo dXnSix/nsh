@@ -1137,10 +1137,44 @@ fn sdk_root() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join("tizen-studio")))
 }
 
+/// The Tizen SDK's package manager installing `package`, as dXn.GpuiTizen's
+/// `docs/setup.md` gives it.
+fn package_manager(package: &str) -> String {
+    format!(
+        "~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license {package}"
+    )
+}
+
+/// What to do without the Tizen 8.0 rootstrap for `arch`.
+pub(crate) fn rootstrap_hint(arch: Arch) -> String {
+    format!(
+        "building the app's crates for {} needs the Tizen 8.0 rootstrap: install it with the Tizen SDK's \
+         package manager (`{}`) or set TIZEN_ROOTSTRAP_{}",
+        arch.name(),
+        package_manager("TIZEN-8.0-NativeAppDevelopment-CLI"),
+        arch.env_name()
+    )
+}
+
+/// What to do without the Tizen SDK's GCC 9.2 toolchain for `arch`.
+pub(crate) fn gcc_hint(arch: Arch) -> String {
+    format!(
+        "building the app's crates for {} needs the Tizen SDK's GCC 9.2 toolchain: install it \
+         (`{}`) or set TIZEN_GCC_TOOLCHAIN_{}",
+        arch.name(),
+        package_manager("NativeToolchain-Gcc-9.2"),
+        arch.env_name()
+    )
+}
+
 /// A Cargo command set up to cross-build for `arch` with the target specs
 /// in `targets` ([`cross_plan`]), and the spec to build with
-/// (`--target <spec>`), once this machine has what it needs.
-pub(crate) fn cross_command(arch: Arch, targets: &Path) -> anyhow::Result<(Command, PathBuf)> {
+/// (`--target <spec>`), once this machine has what it needs; with the
+/// nightly's `lib/rustlib/<host>/bin` ([`strip_command`]'s `llvm-strip`).
+pub(crate) fn cross_command(
+    arch: Arch,
+    targets: &Path,
+) -> anyhow::Result<(Command, PathBuf, PathBuf)> {
     let toolchain = fs::read_to_string(targets.join("toolchain"))
         .with_context(|| format!("read {}", targets.join("toolchain").display()))?
         .trim()
@@ -1156,24 +1190,12 @@ pub(crate) fn cross_command(arch: Arch, targets: &Path) -> anyhow::Result<(Comma
         format!("TIZEN_ROOTSTRAP_{}", arch.env_name()),
         arch.sdk_rootstrap(),
     )
-    .with_context(|| {
-        format!(
-            "building the app's crates for {} needs the Tizen 8.0 rootstrap: install it with the Tizen SDK's              package manager (`package-manager-cli install TIZEN-8.0-NativeAppDevelopment-CLI`) or set TIZEN_ROOTSTRAP_{}",
-            arch.name(),
-            arch.env_name()
-        )
-    })?;
+    .with_context(|| rootstrap_hint(arch))?;
     let gcc = found(
         format!("TIZEN_GCC_TOOLCHAIN_{}", arch.env_name()),
         arch.sdk_gcc(),
     )
-    .with_context(|| {
-        format!(
-            "building the app's crates for {} needs the Tizen SDK's GCC 9.2 toolchain: install it              (`package-manager-cli install NativeToolchain-Gcc-9.2`) or set TIZEN_GCC_TOOLCHAIN_{}",
-            arch.name(),
-            arch.env_name()
-        )
-    })?;
+    .with_context(|| gcc_hint(arch))?;
     let libdir = Command::new("rustc")
         .env("RUSTUP_TOOLCHAIN", &toolchain)
         .args(["--print", "target-libdir"])
@@ -1202,7 +1224,59 @@ pub(crate) fn cross_command(arch: Arch, targets: &Path) -> anyhow::Result<(Comma
     // Rustup's `cargo`, which takes the nightly from `RUSTUP_TOOLCHAIN`.
     let mut command = Command::new("cargo");
     command.args(args).envs(env).env_remove("RUSTFLAGS");
-    Ok((command, spec))
+    Ok((command, spec, cross.rustlib_bin))
+}
+
+/// The one symbol a TV library exports: the C# host's P/Invoke.
+pub(crate) const ENTRY: &str = "nsh_tizen_main";
+
+/// dXn.GpuiTizen's checkout, whose symbol check an app's library goes
+/// through: `dxn_gpui_tizen` (`DXN_GPUI_TIZEN`), else `../dXn.GpuiTizen`
+/// next to the checkout of nsh the app builds against (`nsh_source`), as
+/// `cargo xtask tizen` finds it; `None` when that holds no `xtask`.
+pub(crate) fn dxn_gpui_tizen(
+    dxn_gpui_tizen: Option<std::ffi::OsString>,
+    nsh_source: Option<&Path>,
+) -> Option<PathBuf> {
+    let dir = match dxn_gpui_tizen.filter(|dir| !dir.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => nsh_source?.join("../dXn.GpuiTizen"),
+    };
+    dir.join("xtask").is_dir().then_some(dir)
+}
+
+/// dXn.GpuiTizen's symbol check of the TV library `library`, in its
+/// checkout `dxn` (`cargo xtask check-symbols`, with its pinned nightly's
+/// `llvm-nm` and `llvm-readobj`): exactly one export, [`ENTRY`], nothing
+/// weak, and only documented Tizen symbols (its `symbols.allow`), glibc,
+/// `libgcc_s` and the loader imported, as `cargo xtask tizen` checks the
+/// runtime (`--check-symbols --entry nsh_tizen_main`).
+pub(crate) fn symbol_check(dxn: &Path, library: &Path) -> Command {
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(dxn)
+        .args(["xtask", "check-symbols"])
+        .arg(library)
+        .args(["--entry", ENTRY])
+        // Its `rust-toolchain.toml` picks the toolchain there.
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .env_remove("RUSTC")
+        .env_remove("CARGO");
+    command
+}
+
+/// The nightly's `llvm-strip` (in `rustlib_bin`) writing `library` to `to`
+/// without what the loader does not need (`--strip-unneeded`: the export
+/// stays), as `cargo xtask tizen` strips the runtime.
+pub(crate) fn strip_command(rustlib_bin: &Path, library: &Path, to: &Path) -> Command {
+    let mut command =
+        Command::new(rustlib_bin.join(format!("llvm-strip{}", std::env::consts::EXE_SUFFIX)));
+    command
+        .arg("--strip-unneeded")
+        .arg("-o")
+        .arg(to)
+        .arg(library);
+    command
 }
 
 /// A free port on this machine.
@@ -1592,6 +1666,104 @@ mod tests {
             emulator.remove_reverse(DEV_PORT),
             line(&["reverse", "--remove", "tcp:8790"])
         );
+    }
+
+    fn args(command: &Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn an_apps_library_is_checked_by_dxn_gpui_tizen_and_stripped() {
+        let check = symbol_check(
+            Path::new("/src/dXn.GpuiTizen"),
+            Path::new("/t/armv7-tizen-linux-gnueabi/release/libapp_tizen_lib.so"),
+        );
+        assert_eq!(check.get_program(), "cargo");
+        assert_eq!(
+            check.get_current_dir(),
+            Some(Path::new("/src/dXn.GpuiTizen"))
+        );
+        assert_eq!(
+            args(&check),
+            [
+                "xtask",
+                "check-symbols",
+                "/t/armv7-tizen-linux-gnueabi/release/libapp_tizen_lib.so",
+                "--entry",
+                "nsh_tizen_main",
+            ]
+        );
+        // dXn.GpuiTizen's `rust-toolchain.toml` picks its nightly.
+        let mut removed: Vec<String> = check
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+        removed.sort();
+        assert_eq!(removed, ["CARGO", "RUSTC", "RUSTUP_TOOLCHAIN"]);
+        let strip = strip_command(
+            Path::new("/rustlib/bin"),
+            Path::new("/t/libapp.so"),
+            Path::new("/out/armv7l/libnsh.so"),
+        );
+        assert_eq!(
+            strip.get_program(),
+            Path::new("/rustlib/bin").join(format!("llvm-strip{}", std::env::consts::EXE_SUFFIX))
+        );
+        assert_eq!(
+            args(&strip),
+            [
+                "--strip-unneeded",
+                "-o",
+                "/out/armv7l/libnsh.so",
+                "/t/libapp.so"
+            ]
+        );
+        // The checkout: DXN_GPUI_TIZEN, else next to nsh's.
+        let dir = std::env::temp_dir().join(format!("nsh-tizen-dxn-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("nsh")).unwrap();
+        assert_eq!(dxn_gpui_tizen(None, Some(&dir.join("nsh"))), None);
+        assert_eq!(dxn_gpui_tizen(None, None), None);
+        fs::create_dir_all(dir.join("dXn.GpuiTizen/xtask")).unwrap();
+        assert_eq!(
+            dxn_gpui_tizen(None, Some(&dir.join("nsh"))),
+            Some(dir.join("nsh/../dXn.GpuiTizen"))
+        );
+        fs::create_dir_all(dir.join("elsewhere/xtask")).unwrap();
+        assert_eq!(
+            dxn_gpui_tizen(Some(dir.join("elsewhere").into()), Some(&dir.join("nsh"))),
+            Some(dir.join("elsewhere"))
+        );
+        assert_eq!(
+            dxn_gpui_tizen(Some(dir.join("nothing").into()), Some(&dir.join("nsh"))),
+            None
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_sdk_hints_give_the_package_managers_command() {
+        let rootstrap = rootstrap_hint(Arch::Armv7l);
+        assert_eq!(
+            rootstrap,
+            "building the app's crates for armv7l needs the Tizen 8.0 rootstrap: install it with the Tizen SDK's \
+             package manager (`~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license \
+             TIZEN-8.0-NativeAppDevelopment-CLI`) or set TIZEN_ROOTSTRAP_ARMV7"
+        );
+        let gcc = gcc_hint(Arch::Aarch64);
+        assert_eq!(
+            gcc,
+            "building the app's crates for aarch64 needs the Tizen SDK's GCC 9.2 toolchain: install it \
+             (`~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license \
+             NativeToolchain-Gcc-9.2`) or set TIZEN_GCC_TOOLCHAIN_AARCH64"
+        );
+        for hint in [rootstrap, gcc] {
+            assert!(!hint.contains("  "), "{hint}");
+        }
     }
 
     #[test]

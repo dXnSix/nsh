@@ -10,8 +10,9 @@ hot updates, connected through `sdb reverse` or, failing that, `sdb forward`.
 `host/` is the C# host (`Program.cs`, `Nsh.Tizen.Host.csproj`).
 
 An app with Rust crates of its own builds its own `libnsh.so` from this crate (`nsh` generates it in
-`.nsh/rust/tizen`): `nsh::ui_sets!(…)` exports the app's UI sets and `nsh::root!(…)` a Rust app's root, which
-`nsh_tizen_main` finds in its library before it starts, as Android's library does.
+`.nsh/rust/tizen`): it depends on the crate without its default feature `entry` (the runtime's `nsh_tizen_main`) and
+defines its own `nsh_tizen_main`, which calls `set_ui_sets` with the app's UI sets and then `main` (or `run_rust`
+with a Rust app's root). Either way the library exports that one symbol and nothing else.
 
 ## Building
 

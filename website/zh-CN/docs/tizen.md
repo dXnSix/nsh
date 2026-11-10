@@ -92,11 +92,17 @@ nsh test --target tizen               # 在 sdb 列出的电视（或模拟器�
 
 - 组件指定的 nightly Rust 工具链，带 `rust-src` 和 `llvm-tools`（`nsh` 会说明是哪一个）；
 - clang；
-- Tizen 8.0 rootstrap（`package-manager-cli install TIZEN-8.0-NativeAppDevelopment-CLI`；或设置
-  `TIZEN_ROOTSTRAP_ARMV7`、`TIZEN_ROOTSTRAP_AARCH64`、`TIZEN_ROOTSTRAP_X86_64`）；
-- SDK 的 GCC 9.2 工具链（`package-manager-cli install NativeToolchain-Gcc-9.2`；或设置 `TIZEN_GCC_TOOLCHAIN_<ARCH>`）。
+- Tizen 8.0 rootstrap
+  （`~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license TIZEN-8.0-NativeAppDevelopment-CLI`；
+  或设置 `TIZEN_ROOTSTRAP_ARMV7`、`TIZEN_ROOTSTRAP_AARCH64`、`TIZEN_ROOTSTRAP_X86_64`）；
+- SDK 的 GCC 9.2 工具链
+  （`~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license NativeToolchain-Gcc-9.2`；
+  或设置 `TIZEN_GCC_TOOLCHAIN_<ARCH>`）；
+- [dXn.GpuiTizen](https://github.com/dXnSix/dXn.GpuiTizen) 的源码检出，每个电视库都要通过它的符号检查（只导出 `nsh_tizen_main`，
+  只调用 Tizen 有文档的 API）：`DXN_GPUI_TIZEN`，否则为 NSH 源码检出旁边的 `dXn.GpuiTizen`。
 
-在 NSH 的 Tizen crate 发布到 crates.io 之前，这类应用需要基于 NSH 的源码检出构建（`nsh init --nsh-source <dir>`）。
+NSH 的 Tizen crate 不发布到 crates.io（运行时以构建好的 `tizen` 组件提供），所以这类应用需要基于 NSH 的源码检出构建
+（`nsh init --template rust --nsh-source <dir>`）；应用的 crate 从 crates.io 获取 NSH 时，`--target tizen` 会停下并说明原因。
 
 ## 应用看到什么
 

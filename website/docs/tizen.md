@@ -100,12 +100,19 @@ Tizen target specs the `tizen` component ships. That needs, besides the Tizen SD
 
 - the nightly Rust toolchain the component names, with `rust-src` and `llvm-tools` (`nsh` says which);
 - clang;
-- the Tizen 8.0 rootstrap (`package-manager-cli install TIZEN-8.0-NativeAppDevelopment-CLI`; or set
-  `TIZEN_ROOTSTRAP_ARMV7`, `TIZEN_ROOTSTRAP_AARCH64`, `TIZEN_ROOTSTRAP_X86_64`);
-- the SDK's GCC 9.2 toolchain (`package-manager-cli install NativeToolchain-Gcc-9.2`; or set
-  `TIZEN_GCC_TOOLCHAIN_<ARCH>`).
+- the Tizen 8.0 rootstrap
+  (`~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license TIZEN-8.0-NativeAppDevelopment-CLI`;
+  or set `TIZEN_ROOTSTRAP_ARMV7`, `TIZEN_ROOTSTRAP_AARCH64`, `TIZEN_ROOTSTRAP_X86_64`);
+- the SDK's GCC 9.2 toolchain
+  (`~/tizen-studio/package-manager/package-manager-cli.bin install --accept-license NativeToolchain-Gcc-9.2`; or set
+  `TIZEN_GCC_TOOLCHAIN_<ARCH>`);
+- a checkout of [dXn.GpuiTizen](https://github.com/dXnSix/dXn.GpuiTizen), whose symbol check every TV library passes
+  (it exports `nsh_tizen_main` alone and calls only Tizen's documented APIs): `DXN_GPUI_TIZEN`, else
+  `dXn.GpuiTizen` next to the checkout of NSH.
 
-Until NSH's Tizen crate is on crates.io, such apps build against a checkout of NSH (`nsh init --nsh-source <dir>`).
+NSH's Tizen crate is not published on crates.io (the runtime ships built, as the `tizen` component), so such apps build
+against a checkout of NSH (`nsh init --template rust --nsh-source <dir>`); with crates that take NSH from crates.io,
+`--target tizen` stops and says so.
 
 ## What the app sees
 
