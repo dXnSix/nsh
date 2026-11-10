@@ -267,7 +267,7 @@ nsh package --target tizen-web --probe             # 一个包，显示电视如
 
   ```json
   "tizen": {
-    "packageId": "AbCdE12345",
+    "package": "AbCdE12345",
     "appId": "AbCdE12345.Counter",
     "version": "1.2.0",
     "apiVersion": "8.0",
@@ -276,7 +276,7 @@ nsh package --target tizen-web --probe             # 一个包，显示电视如
   }
   ```
 
-  `packageId` 是 10 个字母和数字（默认由应用的 `id` 生成）；`appId` 是 `<packageId>.<name>`（默认取应用名中的字母和数字）；
+  `package` 是 10 个字母和数字（默认由应用的 `id` 生成）；`appId` 是 `<package>.<name>`（默认取应用名中的字母和数字）；
   `version` 是 Tizen 的 `x.y.z` 数字版本（默认是应用的 `version`，否则 `1.0.0`）；`apiVersion` 是能安装这个包的最低
   Tizen 版本（`8.0`）；`privileges` 是在网络和遥控器按键之外申请的权限；`signing` 是证书配置。
 - **开发**：`nsh run --target tizen-web` 由开发服务器提供电视的页面，所以本机浏览器打开它打印的地址，就能看到电视 idiom

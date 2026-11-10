@@ -122,7 +122,7 @@ impl Widget {
     /// its display `name` and its `id`; checked as Tizen checks it.
     fn of(config: &AppConfig, name: &str, id: &str) -> anyhow::Result<Widget> {
         let tizen = &config.tizen;
-        let package = match &tizen.package_id {
+        let package = match &tizen.package {
             Some(package) => check_package_id(package)?.to_owned(),
             None => package_id(id),
         };
@@ -241,7 +241,7 @@ fn package_id(id: &str) -> String {
 
 fn check_package_id(package: &str) -> anyhow::Result<&str> {
     if package.len() != 10 || !package.bytes().all(|b| b.is_ascii_alphanumeric()) {
-        bail!("nsh.json tizen.packageId `{package}`: Tizen takes 10 letters and digits");
+        bail!("nsh.json tizen.package `{package}`: Tizen takes 10 letters and digits");
     }
     Ok(package)
 }
@@ -725,7 +725,7 @@ mod tests {
     #[test]
     fn names_and_urls_are_escaped_in_the_manifest_and_the_dev_page() {
         let mut config = AppConfig::default();
-        config.tizen.package_id = Some("AbCdE12345".to_owned());
+        config.tizen.package = Some("AbCdE12345".to_owned());
         let widget = Widget::of(&config, "Tom & \"Jerry\" <TV>", "com.acme.tj").unwrap();
         assert_eq!(widget.app, "AbCdE12345.TomJerryTV");
         let xml = widget.config_xml();

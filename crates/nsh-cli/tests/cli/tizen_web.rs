@@ -231,7 +231,7 @@ fn the_tizen_section_names_the_package_and_its_privileges() {
     let dir = app(
         r#"{ "id": "com.acme.counter", "name": "Counter", "version": "2.1", "icon": "icon.png",
             "web": { "base": "/apps/counter/" },
-            "tizen": { "packageId": "AbCdE12345", "appId": "AbCdE12345.Count", "version": "3.4.5",
+            "tizen": { "package": "AbCdE12345", "appId": "AbCdE12345.Count", "version": "3.4.5",
                 "apiVersion": "9.0", "privileges": ["http://tizen.org/privilege/tv.audio",
                 "http://tizen.org/privilege/internet"] } }"#,
     );
@@ -264,11 +264,11 @@ fn the_tizen_section_names_the_package_and_its_privileges() {
 fn ids_and_versions_tizen_refuses_are_refused() {
     for (config, message) in [
         (
-            r#""tizen": { "packageId": "short" }"#,
-            "tizen.packageId `short`",
+            r#""tizen": { "package": "short" }"#,
+            "tizen.package `short`",
         ),
         (
-            r#""tizen": { "packageId": "AbCdE12345", "appId": "Other12345.App" }"#,
+            r#""tizen": { "package": "AbCdE12345", "appId": "Other12345.App" }"#,
             "tizen.appId `Other12345.App`",
         ),
         (r#""version": "1.0.0-beta""#, "version `1.0.0-beta`"),

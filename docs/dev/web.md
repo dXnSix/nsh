@@ -239,8 +239,8 @@ there is no `Os::TizenWeb`.
   profile (`--sign`, `nsh.json` `tizen.signing`) `tz pack -t wgt -s <profile> -b <unsigned> -o <out>/<name>.wgt`
   signs it (`tz`'s repackaging), and `--run` installs (`tz install -p`) and launches it (`tz run -p <app id>`).
   `tz` is found on `PATH` or at `~/tizen-studio/tools/tizen-core/tz`; only those three calls need the SDK.
-- **`config.xml`**: `nsh.json` `tizen` (`packageId`, 10 letters and digits, by default made from the app's `id`;
-  `appId`, by default `<packageId>.<name's letters and digits>`; `version`, Tizen's `x.y.z`, by default the app's;
+- **`config.xml`**: `nsh.json` `tizen` (`package`, 10 letters and digits, by default made from the app's `id`;
+  `appId`, by default `<package>.<name's letters and digits>`; `version`, Tizen's `x.y.z`, by default the app's;
   `apiVersion`, `required_version`, by default `8.0`; `privileges`, added to the internet and `tv.inputdevice`
   ones; `signing`), the `tv-samsung` profile, `<access origin="*">` (the app's `capabilities` and the page's CSP
   limit its requests), landscape, the icon. The section's keys are named for a native Tizen target to share.
