@@ -755,7 +755,8 @@ mod tests {
             let json = serde_json::json!({"cssVars": {"light": {"shadow-sm": value}}}).to_string();
             let (theme, ignored) = Theme::from_json_lenient(&json).unwrap();
             assert!(ignored.is_empty(), "{value}: {ignored:?}");
-            assert_eq!(theme.tokens().get("shadow-sm"), None);
+            // A shadow token where it reads as one, never a color.
+            assert_eq!(theme.color("shadow-sm"), None);
         }
     }
 
