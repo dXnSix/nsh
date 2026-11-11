@@ -144,6 +144,13 @@ pub(crate) struct DevSession {
     status: Option<(String, u64)>,
     shown: u64,
     error: Option<DevError>,
+    /// An error came since the last message was handled: a hidden window
+    /// shows it.
+    errored: bool,
+    /// The window opened hidden for the app's options ([`open_app_window`](crate::open_app_window)):
+    /// it shows when the first app comes, unless they say it starts hidden,
+    /// or an error does.
+    held: bool,
 }
 
 /// The error overlay's content.
@@ -204,6 +211,7 @@ impl DevSession {
     }
 
     fn show_error(&mut self, title: &str, message: &str, prose: bool) {
+        self.errored = true;
         self.error = Some(DevError {
             title: title.to_owned(),
             message: clean_message(message).into_owned(),
@@ -214,10 +222,12 @@ impl DevSession {
 
 /// Connects `this` to the dev server at `url` (`ws://host:port/ws`),
 /// through `transport`'s connections when it has one, replacing its
-/// session if it had one.
+/// session if it had one. `held`: its window opened hidden until the app's
+/// options come.
 pub(crate) fn start(
     this: &AppView,
     url: String,
+    held: bool,
     transport: Option<(Box<dyn nsh_dev::DevTransport>, HostPlatform)>,
     cx: &mut Context<AppView>,
 ) {
@@ -231,6 +241,7 @@ pub(crate) fn start(
     }
     let surface = this.surface();
     let previous = this.dev.borrow_mut().take();
+    let held = held || previous.as_ref().is_some_and(|p| p.held);
     let reloads = match previous {
         Some(previous) => {
             *previous.reloads.borrow_mut() = tx.clone();
@@ -262,6 +273,8 @@ pub(crate) fn start(
         status: None,
         shown: 0,
         error: None,
+        errored: false,
+        held,
     };
     session.show_status(Status::Connecting(&url));
 
@@ -433,7 +446,29 @@ fn handle(view: &AppView, msg: Msg) {
             None
         }
     };
+    // The window held for the app shows with it, unless its options say
+    // it starts hidden (nsh.json `window.defaultVisible: false`), as the
+    // app's package shows it; or with an error.
+    let show = session.held && (load.is_some() || session.error.is_some()) && {
+        session.held = false;
+        let visible = load.as_ref().is_none_or(|app| {
+            app.main_window()
+                .is_none_or(nsh_core::desktop::MainWindowOptions::visible_at_launch)
+        });
+        if !visible {
+            log::info!("the main window starts hidden (nsh.json window.defaultVisible: false)");
+        }
+        visible
+    };
+    let errored = std::mem::take(&mut session.errored);
     drop(dev);
+    if show {
+        crate::window::main_request(view.surface(), &nsh_core::desktop::WindowRequest::Show);
+    } else if errored {
+        // A window hidden by the app (one hidden since launch whose
+        // startup failed: a tray app before its icon came) shows the error.
+        crate::window::show_main_if_hidden(view.surface());
+    }
     if let Some(app) = load {
         view.load(app);
     }

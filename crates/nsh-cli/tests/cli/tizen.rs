@@ -172,7 +172,7 @@ fn the_tizen_target_parses_for_run_package_and_test() {
         .output()
         .unwrap();
     assert!(
-        stderr(&output).contains("--arch only applies to --target tizen"),
+        stderr(&output).contains("--arch only applies to --target macos and tizen"),
         "{}",
         stderr(&output)
     );

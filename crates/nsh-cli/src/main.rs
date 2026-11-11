@@ -190,6 +190,12 @@ enum Command {
         /// `nsh/host` calls of each app the tests open and sends its events.
         #[arg(long, value_name = "JS")]
         web_host: Option<PathBuf>,
+        /// The device the apps run on: with `--target ios` the simulator
+        /// (name or UDID; default: a booted one, else the newest iPhone),
+        /// with `--target tizen` the TV's or emulator's `sdb` serial
+        /// (default: the only one `sdb devices` lists).
+        #[arg(long, value_name = "DEVICE")]
+        device: Option<String>,
         /// With `--target macos`: the display the apps' windows open on,
         /// centered: 1 is the primary display (the one with the menu bar),
         /// 2 the next, and so on; the main one when there is no such
@@ -204,10 +210,6 @@ enum Command {
         /// the app in use, and the tests' input goes to them directly.
         #[arg(long)]
         foreground: bool,
-        /// With `--target tizen`: the TV's or emulator's `sdb` serial
-        /// (default: the only one `sdb devices` lists).
-        #[arg(long)]
-        device: Option<String>,
     },
     /// Type check an app with TypeScript's native compiler (TypeScript 7,
     /// downloaded once from the npm registry; no Node needed); an app with
@@ -564,11 +566,14 @@ struct PackageArgs {
     /// arm64-v8a and armeabi-v7a; with --run also the device's).
     #[arg(long, value_delimiter = ',', value_parser = crate::android::ABIS)]
     abi: Vec<String>,
-    /// Tizen architectures of the TPKs, repeated or separated by commas
-    /// (default: armv7l, the TVs'; with --run the TV's): one TPK each,
-    /// several also the multi-architecture `.zip` for Seller Office.
-    #[arg(long, value_delimiter = ',', value_enum)]
-    arch: Vec<crate::tizen::Arch>,
+    /// The processors the package runs on. macOS: `arm64` (Apple silicon),
+    /// `x86_64` (Intel) or `universal` (both, in one executable); default:
+    /// this Mac's. Tizen: the TPKs' architectures, `armv7l`, `aarch64` or
+    /// `x86_64` (the emulator), repeated or separated by commas (default:
+    /// armv7l, the TVs'; with --run the TV's): one TPK each, several also
+    /// the multi-architecture `.zip` for Seller Office.
+    #[arg(long, value_delimiter = ',', value_name = "ARCH")]
+    arch: Vec<String>,
     /// Android: what to write, an APK (installed directly) or an Android
     /// App Bundle (`aab`, uploaded to Google Play).
     #[arg(long, value_enum, default_value_t)]
@@ -873,6 +878,38 @@ fn run(mut command: Command) -> anyhow::Result<()> {
     }
 }
 
+/// `nsh package --arch`'s values for `target`: one macOS architecture, or
+/// the Tizen ones (any number); the other targets take none.
+fn package_archs(
+    target: package::PackageTarget,
+    values: &[String],
+) -> anyhow::Result<(Option<package::Arch>, Vec<crate::tizen::Arch>)> {
+    use clap::ValueEnum as _;
+    match target {
+        _ if values.is_empty() => Ok((None, Vec::new())),
+        package::PackageTarget::Macos => match values {
+            [value] => package::Arch::from_str(value, false)
+                .map(|arch| (Some(arch), Vec::new()))
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "--arch {value}: macOS packages run on arm64, x86_64 or universal"
+                    )
+                }),
+            _ => anyhow::bail!("--target macos takes one --arch"),
+        },
+        package::PackageTarget::Tizen => values
+            .iter()
+            .map(|value| {
+                crate::tizen::Arch::from_str(value, false).map_err(|_| {
+                    anyhow::anyhow!("--arch {value}: TVs run on armv7l, aarch64 or x86_64")
+                })
+            })
+            .collect::<anyhow::Result<_>>()
+            .map(|archs| (None, archs)),
+        _ => anyhow::bail!("--arch only applies to --target macos and tizen"),
+    }
+}
+
 fn dispatch(command: Command) -> anyhow::Result<()> {
     match command {
         Command::Init {
@@ -904,9 +941,9 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             target,
             browser,
             web_host,
+            device,
             display,
             foreground,
-            device,
         } => test::test(
             &path,
             &entry,
@@ -917,9 +954,9 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             target,
             browser.as_deref(),
             web_host,
+            device.as_deref(),
             display.map(|n| n as usize),
             foreground,
-            device.as_deref(),
         ),
         Command::Dev {
             entry,
@@ -981,12 +1018,13 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 asset_url,
                 probe,
             } = *args;
+            let (arch, tizen_archs) = package_archs(target, &arch)?;
             let mut config = package::read_config(&entry)?;
             config.name = name.or(config.name);
             config.id = id.or(config.id);
             config.version = version.or(config.version);
             config.build = build.or(config.build);
-            config.icon = icon.or(config.icon);
+            config.icon = icon.map(package::AppIcon::All).or(config.icon);
             package::package(package::PackageOptions {
                 entry: &entry,
                 target,
@@ -1002,8 +1040,9 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                     )
                 }),
                 abis: &abi,
-                tizen_archs: &arch,
+                tizen_archs: &tizen_archs,
                 format,
+                arch,
                 run,
                 asset_url: asset_url.as_deref(),
                 probe,
@@ -1132,7 +1171,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
 mod command_tests {
     use clap::Parser as _;
 
-    use super::{Cli, Command, run::Target};
+    use super::{Cli, Command, package_archs, run::Target};
 
     #[test]
     fn publish_ios_and_package_signing_have_separate_arguments() {
@@ -1227,19 +1266,21 @@ mod command_tests {
                 .err()
                 .expect("version exits");
             assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
-            assert_eq!(
-                error.to_string(),
-                format!(
-                    "nsh {} ({}{})\n",
-                    env!("CARGO_PKG_VERSION"),
-                    env!("NSH_GIT_SHA"),
-                    if env!("NSH_CHANNEL") == "nightly" {
-                        " nightly"
-                    } else {
-                        ""
-                    }
-                )
-            );
+            let text = error.to_string();
+            let prefix = format!("nsh {} ({}", env!("CARGO_PKG_VERSION"), env!("NSH_GIT_SHA"));
+            let rest = text.strip_prefix(&prefix).expect("version and revision");
+            if env!("NSH_CHANNEL") == "nightly" {
+                // ` nightly YYYY-MM-DD)`: the date it was built.
+                let date = rest
+                    .strip_prefix(" nightly ")
+                    .and_then(|r| r.strip_suffix(")\n"))
+                    .expect("nightly build date");
+                assert!(
+                    date.len() == 10 && date.as_bytes()[4] == b'-' && date.as_bytes()[7] == b'-'
+                );
+            } else {
+                assert_eq!(rest, ")\n");
+            }
         }
     }
 
@@ -1257,6 +1298,34 @@ mod command_tests {
         assert!(
             matches!(cli.command, Command::Build { out, .. } if out == std::path::Path::new("custom"))
         );
+    }
+
+    #[test]
+    fn macos_packages_name_their_processors() {
+        use super::package::Arch;
+        let arch = |args: &[&str]| {
+            let mut line = vec!["nsh", "package", "--target", "macos"];
+            line.extend_from_slice(args);
+            match Cli::try_parse_from(line).map(|cli| cli.command) {
+                Ok(Command::Package(args)) => {
+                    package_archs(args.target, &args.arch).map(|(arch, _)| arch)
+                }
+                Ok(_) => panic!("expected nsh package"),
+                Err(e) => Err(e.into()),
+            }
+        };
+        assert_eq!(arch(&[]).unwrap(), None);
+        for (value, expected) in [
+            ("arm64", Arch::Arm64),
+            ("aarch64", Arch::Arm64),
+            ("x86_64", Arch::X86_64),
+            ("universal", Arch::Universal),
+        ] {
+            assert_eq!(arch(&["--arch", value]).unwrap(), Some(expected), "{value}");
+        }
+        for value in ["x86-64", "i386", "x86_64-apple-darwin"] {
+            assert!(arch(&["--arch", value]).is_err(), "{value}");
+        }
     }
 
     #[test]

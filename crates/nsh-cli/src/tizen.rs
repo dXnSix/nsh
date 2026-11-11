@@ -55,7 +55,7 @@ use anyhow::{Context as _, bail};
 
 use crate::{
     build::Built,
-    package::{AppConfig, PackageOptions},
+    package::{AppConfig, PackageOptions, PackageTarget},
     tizen_web, ui,
 };
 
@@ -533,7 +533,7 @@ fn app_files(config: &AppConfig, name: &str, id: &str, built: &Built) -> AppFile
             .iter()
             .map(|a| (a.path.clone(), a.source.clone()))
             .collect(),
-        icon: config.icon.clone(),
+        icon: config.icon(PackageTarget::Tizen).map(Path::to_path_buf),
     }
 }
 

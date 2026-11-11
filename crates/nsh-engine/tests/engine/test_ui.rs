@@ -26,8 +26,37 @@ pub(crate) fn registry() -> Registry {
         .register::<Stepper>()
         .register::<TextField>()
         .register::<Sheet>()
-        .register::<Shortcut>();
+        .register::<Shortcut>()
+        .register::<Swatch>()
+        .register::<TokenSwatch>();
     registry
+}
+
+/// A text saying the theme's `up` it reads (`swatch 00ff00`): a
+/// `ThemeScope` around it decides.
+#[component]
+pub(crate) fn TokenSwatch() -> impl IntoElement {
+    text(|| {
+        let up = tokens()
+            .color("up")
+            .map(|c| nsh_core::Color::from(c.light).0 >> 8);
+        format!("swatch {:06x}", up.unwrap_or(0))
+    })
+}
+
+// --- Swatch: says the appearance it reads ------------------------------------
+
+/// A text saying the appearance it reads (`swatch dark`): a `ThemeScope`
+/// around it decides.
+#[component]
+pub(crate) fn Swatch() -> impl IntoElement {
+    text(|| {
+        if dark() {
+            "swatch dark"
+        } else {
+            "swatch light"
+        }
+    })
 }
 
 // --- Button: a press target with a label, and its event --------------------
