@@ -1925,6 +1925,78 @@ pub trait Interactive: Element {
         self
     }
 
+    /// The view, a stop of the keyboard focus, takes the focus when it
+    /// appears (TS: `autoFocus`): mounted, or its screen or modal comes up;
+    /// the first in tree order of those that appear together, where the
+    /// arrows move the focus between views (GPUI, TVs). An input is focused
+    /// when it appears.
+    fn auto_focus(mut self, focus: impl IntoReactive<bool>) -> Self {
+        super::host::bind_prop(self.node(), focus, Prop::AutoFocus);
+        self
+    }
+
+    /// The view, a stop of the keyboard focus, takes it where the focus
+    /// enters, over the nearest stop (TS: `preferredFocus`): the
+    /// `FocusGroup` it is in when the arrows enter it, or its scope when an
+    /// arrow is pressed with nothing focused.
+    fn preferred_focus(mut self, preferred: impl IntoReactive<bool>) -> Self {
+        super::host::bind_prop(self.node(), preferred, Prop::PreferredFocus);
+        self
+    }
+
+    /// Up takes the keyboard focus from this view to the element carrying
+    /// `target` (its first stop when it is none itself), over the nearest
+    /// stop above (TS: `nextFocusUp`). The element may be rendered after
+    /// this one; while it names nothing in reach, the nearest stop.
+    fn next_focus_up(mut self, target: &super::ElementRef) -> Self {
+        super::host::set(self.node(), Prop::NextFocusUp(Some(target.into())));
+        self
+    }
+
+    /// Down takes the keyboard focus to the element carrying `target` (TS:
+    /// `nextFocusDown`; as [`Interactive::next_focus_up`]).
+    fn next_focus_down(mut self, target: &super::ElementRef) -> Self {
+        super::host::set(self.node(), Prop::NextFocusDown(Some(target.into())));
+        self
+    }
+
+    /// Left takes the keyboard focus to the element carrying `target` (TS:
+    /// `nextFocusLeft`; as [`Interactive::next_focus_up`]).
+    fn next_focus_left(mut self, target: &super::ElementRef) -> Self {
+        super::host::set(self.node(), Prop::NextFocusLeft(Some(target.into())));
+        self
+    }
+
+    /// Right takes the keyboard focus to the element carrying `target` (TS:
+    /// `nextFocusRight`; as [`Interactive::next_focus_up`]).
+    fn next_focus_right(mut self, target: &super::ElementRef) -> Self {
+        super::host::set(self.node(), Prop::NextFocusRight(Some(target.into())));
+        self
+    }
+
+    /// Makes the view a focus group (`nsh/base`'s `FocusGroup` is the
+    /// component apps use): the arrows enter it at the first of
+    /// `destinations` that is or holds a stop in reach, and with `trap`
+    /// never take the focus out of it (`nsh_core::focus::directional`).
+    /// The destinations are looked up in every commit, so they may be the
+    /// group's own children.
+    fn focus_group(
+        mut self,
+        trap: impl IntoReactive<bool>,
+        destinations: impl IntoReactive<Vec<super::FocusTarget>>,
+    ) -> Self {
+        let (trap, destinations) = (trap.into_reactive(), destinations.into_reactive());
+        super::host::bind_prop(
+            self.node(),
+            move || super::FocusGroupTargets {
+                trap: trap.get(),
+                destinations: destinations.get(),
+            },
+            |group| Prop::FocusGroup(Some(group)),
+        );
+        self
+    }
+
     /// `nativeID`: names the view for others: inputs find an input accessory
     /// by it, and the embedding app a scroll view it watches (`watchScroll`).
     fn native_id(mut self, id: &str) -> Self {

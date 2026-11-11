@@ -144,7 +144,10 @@ pub use self::{
         MethodSpec, Methods, NoEvent, Param, PropDecode, PropKind, PropSpec, Props, Registry, Root,
         ScrollbarSource, declarations,
     },
-    element_ref::{ComponentRef, ElementRef, EvaluateOptions, Evaluation, FollowTarget},
+    element_ref::{
+        ComponentRef, ElementRef, EvaluateOptions, Evaluation, FocusGroupTargets, FocusTarget,
+        FollowTarget,
+    },
     engine_context::{EngineContext, EngineContextGuard, engine_context},
     env::Environment,
     events::{

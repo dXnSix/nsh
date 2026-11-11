@@ -1226,6 +1226,7 @@ enum Message {
     Event(NodeId, EventKind, EventPayload),
     Scroll(NodeId, Point<Points>, u32),
     Kept(Vec<NodeId>),
+    FocusPast(NodeId, nsh_core::focus::Direction),
     ContentCulling(bool),
     InputScroll(NodeId, Point<Points>, Size<Points>, Size<Points>),
     Zoom(NodeId, f32),
@@ -1348,6 +1349,15 @@ impl EngineControl {
     /// the last call's; none releases them.
     pub fn keep_rendered(&self, nodes: Vec<NodeId>) {
         let _ = self.tx.send(Message::Kept(nodes));
+    }
+
+    /// An arrow toward `direction` found no stop to go to inside the list
+    /// around `from`, the stop with the keyboard focus: the list scrolls to
+    /// its next row by index and the first stop in that row's cell takes
+    /// the focus once it is mounted (`Command::Focus`; `Core::focus_past`).
+    /// Nothing happens outside a list or at its end.
+    pub fn focus_past(&self, from: NodeId, direction: nsh_core::focus::Direction) {
+        let _ = self.tx.send(Message::FocusPast(from, direction));
     }
 
     /// Whether scroll views make the native views of their content as it
@@ -3762,6 +3772,9 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             }
         }
         Message::Kept(nodes) => state.core.set_kept(&nodes),
+        Message::FocusPast(from, direction) => {
+            state.core.focus_past(from, direction);
+        }
         Message::ContentCulling(enabled) => {
             state.core.set_content_culling(enabled);
             if let Some(script) = script {

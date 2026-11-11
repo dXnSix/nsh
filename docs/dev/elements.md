@@ -188,12 +188,31 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   ("Kept rows" in `scrolling-and-lists.md`).
   (`focusable={true}` on a view that takes no presses made nothing focusable before 2026-10-26; with no release
   recorded, it now means what React Native's `focusable` and the web's `tabIndex={0}` mean.) The arrows of macOS,
-  Windows and Linux move it to the nearest stop in their direction (`focus.rs` on macOS and Windows,
-  `key_focus::arrow` on Linux, `nsh_core::focus`, as the terminal's do); with nothing focused Left / Right take the
-  first stop and Up / Down the first / last in sight, where the desktops used to scroll (until 2026-11-10 on macOS
-  and Linux); `tests/apps/pressable-focus` checks them with
-  `nsh test --target <macos|linux|windows>`. GPUI's Tab moves the focus between fields and
-  native components only so far; iOS and Android move it between inputs.
+  Windows, Linux and GPUI move it to the nearest stop in their direction (`focus.rs` on macOS, Windows and GPUI,
+  `key_focus::arrow` on Linux, `nsh_core::focus`, as the terminal's do), and Return and Space press the stop they
+  reach; with nothing focused Left / Right take the first stop and Up / Down the first / last in sight, where the
+  desktops used to scroll (until 2026-11-10 on macOS and Linux); `tests/apps/pressable-focus` checks them with
+  `nsh test --target <macos|linux|windows>`. GPUI's Tab stops at every stop in tree order too; iOS and Android move
+  it between inputs.
+  What a TV's remote needs goes on top, in `nsh_core::focus::directional` over the same candidates: `autoFocus` (any
+  element now, `Prop::AutoFocus`; an input's stays its `InputConfig::auto_focus`, any other view's is
+  `ViewProps::auto_focus`: the stop takes the focus when it appears in the focus scope, the first in tree order of
+  those appearing together, `focus::auto_focus`), `preferredFocus` (`ViewProps::preferred_focus`: where the focus
+  enters a `FocusGroup`, or an arrow is pressed with nothing focused, it wins over the nearest stop),
+  `nextFocusUp` / `Down` / `Left` / `Right` (`Prop::NextFocus*`, a ref, the overlay `anchor`'s convention; Rust
+  `.next_focus_down(&element_ref)`; the platform goes to the view named, or the first stop inside it, when it is in
+  reach, and leaves the arrow to geometry otherwise; a route may leave a trapped group) and focus groups (`nsh/base`'s
+  `FocusGroup`, `Prop::FocusGroup`, internal: its `destinations` are where the arrows enter it, in order, and `trap`
+  keeps them inside). The refs are looked up again in every commit round (`core/directional.rs`, as `follow` does:
+  a Rust ref may be on an element rendered later, a group's own children), and their nodes reach the platform as
+  `ViewProps::next_focus` and `ViewProps::focus_group`. A list's rows past those mounted are not skipped: while the
+  scroll view around the focus can scroll on toward the arrow, a stop outside it is not reached
+  (`focus::Target::Scroll`); the platform scrolls it and calls `EngineControl::focus_past`, and in a list the core
+  scrolls to the next row by index (`Command::ScrollToIndex`, `focus::next_row`: a row of columns along a grid,
+  inverted and right-to-left lists the other way, an inverted right-to-left one as laid out), bringing it in at the edge the
+  arrow goes toward (`viewPosition` 1 for the next items, 0 for the previous ones: an inverted list mirrors it as it
+  mirrors its layout, a right-to-left one's offsets run left to right as laid out) and, once a cell shows that row, sends the first stop in it
+  `Command::Focus` (`ViewProps::focus_stop` in tree order), as its ref's `focus()` would. The row is forgotten when the focus is reported elsewhere first.
   A shown overlay's content is in the Tab order where the app put the overlay, not where its native view is (at the
   end of its root view), as WAI-ARIA's non-modal popups have it: a popover's content right after its trigger, so
   Shift+Tab from it goes back to the trigger and Tab past its last stop goes on to what follows the popover. A list
@@ -216,8 +235,8 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   the view first responder (`input::focus_control`, past a field that edits), the browser focuses the element with
   `focusVisible` and treats it as keyboard focus whatever its heuristics say after a click (`focusPressable`), the
   headless driver moves its focus (`focus_calls`); on a view that is not a stop it does nothing. Linux grabs the
-  stop's widget (`key_focus::focus`), Windows gives it its focus as Tab does (`focus::focus_view`). GPUI does not follow
-  `focus()` on views yet; iOS and Android focus inputs only.
+  stop's widget (`key_focus::focus`), Windows gives it its focus as Tab does (`focus::focus_view`), and GPUI gives it
+  its arrows' focus after the batch (`focus::asked`); iOS and Android focus inputs only.
 - **`onPanEnd` / `onPanStart`** carry `value` (`{ x?, y? }`, the axes `pan` binds): the bound pan values at that moment (a drag may grab a value mid
   animation), for snapping.
 - **Imperative calls**: nodes have `focus()`, `blur()` (inputs, and views that take presses where they are stops of
