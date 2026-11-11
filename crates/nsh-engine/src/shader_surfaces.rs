@@ -227,7 +227,8 @@ fn slot(device: &wgpu::Device, width: u32, height: u32) -> Option<Slot> {
     };
     drop(hal);
     // SAFETY: `raw` is a 2D texture of `device`'s Metal device, one level
-    // and one layer, in `FORMAT`, of the size given.
+    // and one layer, in `FORMAT`, of the size given; the texture owns it (no
+    // drop callback).
     let hal_texture = unsafe {
         wgpu::hal::metal::Device::texture_from_raw(
             raw,
@@ -240,9 +241,11 @@ fn slot(device: &wgpu::Device, width: u32, height: u32) -> Option<Slot> {
                 height,
                 depth: 1,
             },
+            None,
         )
     };
-    // SAFETY: the descriptor says what `hal_texture` is.
+    // SAFETY: the descriptor says what `hal_texture` is, and nothing has
+    // rendered into it yet.
     let texture = unsafe {
         device.create_texture_from_hal::<wgpu::hal::api::Metal>(
             hal_texture,
@@ -262,6 +265,7 @@ fn slot(device: &wgpu::Device, width: u32, height: u32) -> Option<Slot> {
                     | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             },
+            wgpu::TextureUses::UNINITIALIZED,
         )
     };
     Some(Slot {

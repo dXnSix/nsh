@@ -92,7 +92,8 @@ mod macos {
             .child(confirm())
     }
 
-    /// A dialog named by its title, opened once the test asks.
+    /// A dialog named by its title and described by its message, opened
+    /// once the test asks.
     #[component]
     fn Confirm() -> impl IntoElement {
         let open = signal(false);
@@ -105,6 +106,7 @@ mod macos {
             nsh_base::dialog()
                 .test_id("rename")
                 .label("Rename file")
+                .accessibility_description("Other apps see the new name too.")
                 .child(
                     view()
                         .child(text("Rename file"))
@@ -228,9 +230,10 @@ mod macos {
             )
     }
 
-    /// Reads AXFrame through NSAccessibility in a normal window. Screen
-    /// coordinates have their origin at the bottom left, unlike our root.
-    fn check_frame(root: &NSView, id: &str, expected: (f64, f64, f64, f64)) {
+    /// The AXFrame of `id` through NSAccessibility in a normal window, and
+    /// the frame `expected` (in the root's points) is in screen coordinates,
+    /// whose origin is at the bottom left, unlike our root.
+    fn frames(root: &NSView, id: &str, expected: (f64, f64, f64, f64)) -> ([f64; 4], [f64; 4]) {
         let element = find(root, id).expect("a mounted element");
         let actual = element.accessibilityFrame();
         let window = root.window().expect("a window");
@@ -248,6 +251,21 @@ mod macos {
             actual.size.width,
             actual.size.height,
         ];
+        (actual, expected)
+    }
+
+    /// Whether `id`'s AXFrame is the frame `expected` already.
+    fn frame_is(root: &NSView, id: &str, expected: (f64, f64, f64, f64)) -> bool {
+        let (actual, expected) = frames(root, id, expected);
+        actual
+            .into_iter()
+            .zip(expected)
+            .all(|(got, want)| (got - want).abs() < 0.01)
+    }
+
+    /// Reads AXFrame through NSAccessibility and checks it is `expected`.
+    fn check_frame(root: &NSView, id: &str, expected: (f64, f64, f64, f64)) {
+        let (actual, expected) = frames(root, id, expected);
         println!("AXFrame {id}: {actual:?}, expected {expected:?}");
         for (got, want) in actual.into_iter().zip(expected) {
             assert!(
@@ -435,11 +453,26 @@ mod macos {
         println!("window backing scale: {}", window.backingScaleFactor());
         for percent in [120, 80, 100] {
             ZOOM.store(percent, Ordering::SeqCst);
-            // Allow the reactive scale and the ordinary display pass to
-            // settle. Do not force screenshot rendering of the views.
-            let soon = NSDate::dateWithTimeIntervalSinceNow(0.15);
-            NSRunLoop::currentRunLoop().runUntilDate(&soon);
             let s = percent as f64 / 100.0;
+            // Until the reactive scale and the ordinary display pass have
+            // settled, however long a loaded runner takes (a fixed 0.15 s
+            // read the previous zoom's frames on CI); screenshot rendering of
+            // the views is never forced.
+            until(&format!("the frames at {percent}%"), || {
+                frame_is(
+                    &root,
+                    "scaled-row",
+                    (140.0 - 80.0 * s, 180.0 - 50.0 * s, 80.0 * s, 20.0 * s),
+                ) && frame_is(
+                    &root,
+                    "nested-row",
+                    (140.0 - 62.0 * s, 180.0 + 8.0 * s, 20.0 * s, 18.0 * s),
+                ) && frame_is(
+                    &root,
+                    "rotated-row",
+                    (140.0, 180.0 - 60.0 * s, 30.0 * s, 10.0 * s),
+                )
+            });
             check_frame(
                 &root,
                 "scaled-row",
@@ -481,6 +514,12 @@ mod macos {
                 .map(|s| s.to_string())
                 .as_deref(),
             Some("Rename file")
+        );
+        // Its description is its help, which VoiceOver reads after the
+        // name.
+        assert_eq!(
+            dialog.accessibilityHelp().map(|s| s.to_string()).as_deref(),
+            Some("Other apps see the new name too.")
         );
         assert_eq!(read(&dialog, "save"), (Some("Save".into()), None, 0));
 

@@ -322,7 +322,8 @@ names its tokens its own way. A role mapped onto a name that is no token of the 
 a type already maps, is refused as a value that cannot be read is; a role's name no UI set has is a build warning.
 `updateTheme` adds to the roles mapped.
 
-The theme is read whole: when a value cannot be read (a color NSH does not know, such as `#zz` or `lab()`, a `var()`
+The theme is read whole: when a value cannot be read (a color NSH does not know, such as `#zz`, `lab()` or
+`rgb(255 0 0)garbage`, a `var()`
 that names no color, or a value that is no color in one appearance where the other's is), `setTheme` throws a
 `TypeError` that names each one, and the theme shown stays. Values of no kind a token has, such as a letter spacing in
 `em`, are left out as they are from `nsh.json`'s. Build the new theme from the app's own, so the tokens its classes name keep a value
@@ -1160,7 +1161,7 @@ interface ThemeScopeProps {
 
 A view that shows itself and everything in it in an appearance of its own, with design tokens of its own, or both, whatever the app's and the system's: a dark sidebar beside a light page, a card with its own `primary`, a theme's preview beside the app. It is a view, so its `class` and `style` lay it out and draw it.
 
-In a scope, everything that follows the appearance follows the scope's: `dark:` classes, the classes of theme tokens (`bg-background`), the theme colors of components, [`colorScheme()`](#colorscheme) and [`token()`](#token). The platform's own controls in it follow too on iOS, macOS and the web (a text input's keyboard and menus, web views, form controls), and so do the scroll indicators the desktop backends draw. Scopes nest: the nearest one with an `appearance` decides, and a scope without one is shown as the view around it.
+In a scope, everything that follows the appearance follows the scope's: `dark:` classes, the classes of theme tokens (`bg-background`), the theme colors of components, [`colorScheme()`](#colorscheme) and [`token()`](#token). The platform's own controls in it follow too on iOS, macOS and the web (a text input's keyboard and menus, web views, form controls), and so do the tab bar on Android and the scroll indicators the desktop backends draw. Scopes nest: the nearest one with an `appearance` decides, and a scope without one is shown as the view around it.
 
 With a `theme` (a theme file, as [`updateTheme`](#updatetheme-resettheme) takes one), the classes of theme tokens, the components' theme and [`token()`](#token) take the scope's values for the tokens it sets, in each appearance, and the app's for the others; a `var()` it does not set itself names the tokens around the scope. A scope sets tokens the app's theme has: a name the theme lacks is left out with a warning, so the classes that exist are the same everywhere. A scope inside another starts from the outer one's values, and a change of the app's theme reaches every token a scope leaves alone.
 

@@ -614,6 +614,12 @@ fn key_pressed(
     if !root.is_mapped() {
         return false;
     }
+    // An arrow moves the keyboard focus to the stop that way, if any.
+    if let Some(arrow) = crate::key_focus::Arrow::of(key, modifiers)
+        && crate::key_focus::arrow(surface, root, arrow)
+    {
+        return true;
+    }
     let focus = root.root().and_then(|r| r.focus());
     // Fields (and hosted widgets that scroll themselves) keep their keys,
     // also those they do not use: Down in a one-line field is no scroll.
