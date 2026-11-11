@@ -38,6 +38,10 @@ const CONNECT: Duration = Duration::from_secs(60);
 /// hosts that run them in the background ([`runs_in_background`]) become the
 /// active app; `idiom` is the one the GPUI host and the web page start them in
 /// ([`DevIdiom::for_test`]), in place of the host's own.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the host's options of `nsh test`, one each"
+)]
 pub(crate) fn starter(
     target: Target,
     browser: Option<&Path>,
