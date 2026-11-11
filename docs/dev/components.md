@@ -746,8 +746,8 @@ it changes, and they are resolved again when the tokens change (`Components::app
   on the surface), TS's `colorScheme()` and `token()` through the context its JS face provides to its children
   (`nsh-js` `components.rs` `scoped_reader`, `env.rs` `scope_scheme`; the web's `environment.js` `inScope`). The
   platforms get it as `ViewProps::appearance` on the scope's view: iOS `overrideUserInterfaceStyle`, macOS
-  `NSView.appearance`, the web `color-scheme`; the scroll indicators macOS, Windows, Linux and GPUI draw
-  themselves ask the nearest view with one. Menus, alerts and sheets are the surface's.
+  `NSView.appearance`, the web `color-scheme`; Android's tab bar (`Mounter.java` `nightAt`) and the scroll
+  indicators macOS, Windows, Linux and GPUI draw themselves ask the nearest view with one. Menus, alerts and sheets are the surface's.
   With a `theme` (`ScopeTheme`: a theme file, or tokens made in Rust) the scope also has design tokens of its own:
   its theme's values over the tokens around it, a name those lack left out (`ThemeTokens::scoped`,
   `Tokens::within`). The component makes them, again whenever the tokens around it change, and gives them to the
