@@ -13,6 +13,8 @@ name: Fork CI
 # - `macos`, `ios`, `android`, `web`: clippy, tests, and the examples' tests on
 #   the platform (`nsh test --target <platform>`, `.github/fork/examples.sh`):
 #   macOS windows, an iOS simulator, an Android emulator, headless Chrome.
+#   `web` runs the examples' tests only: clippy for the web crate is
+#   upstream's to add, as no upstream workflow runs it.
 # - `windows-arm64`: upstream's Windows checks (`windows.yml`), on Windows on
 #   Arm (`windows-11-arm`), which no upstream workflow runs on.
 #
@@ -240,15 +242,11 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
           targets: wasm32-unknown-unknown
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # `nsh-platform-web` is empty off WebAssembly.
-      - name: Clippy
-        run: cargo clippy -p nsh-platform-web --target wasm32-unknown-unknown --features compiler -- -D warnings
       # `nsh test --target web` opens the apps in the image's Chrome.
       - name: Run the examples' tests in headless Chrome
         run: |
