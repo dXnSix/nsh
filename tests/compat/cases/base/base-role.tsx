@@ -33,6 +33,9 @@ function BaseRole() {
       <View testID="dark" onPress={() => setColorScheme("dark")}>
         <Text>Go dark</Text>
       </View>
+      <View testID="unwarn" onPress={() => resetTheme(["warning"])}>
+        <Text>The theme's own warning color</Text>
+      </View>
     </View>
   );
 }

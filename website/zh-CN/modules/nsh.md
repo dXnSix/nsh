@@ -337,7 +337,7 @@ setTheme(null); // 恢复应用的主题
 
 ```ts
 function updateTheme(theme: Theme): void;
-function resetTheme(names?: (keyof Tokens)[]): void;
+function resetTheme(names?: (keyof Tokens | keyof Roles)[]): void;
 ```
 
 `updateTheme` 在应用运行时修改 `theme` 设置的令牌，其余令牌保持不变；`setTheme` 则替换全部令牌。`theme` 的格式与 `setTheme`
