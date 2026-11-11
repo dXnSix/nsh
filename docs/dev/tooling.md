@@ -376,6 +376,20 @@ report it:
   presses (a press of the pointer takes it off), and on the web Shift+F10 raises `ContextMenu` with no pointer on
   the nearest view around it that listens (`pointerType: null`, at its bottom-start corner); else the focused input takes a character, Backspace or the return key, else
   Escape goes back when there is something to go back from;
+- `press_remote_key` (`headless/keyboard.rs`, `app.keyboard.remote`): a TV remote's key by name (`remote.rs`'s
+  `RemoteKey`: the arrows `up` / `down` / `left` / `right`, `enter` (`ok`), `back`, and the media and TV keys of
+  `nsh_core::keymap`, `mediaplaypause` … `info`; no number, volume or Exit keys, which Samsung's Smart Remote lacks
+  or the system keeps). A key is `press_key`'s of the same name; `back` goes back as a TV does (`go_back`: the root's
+  `onBackPress` listener first, else what there is to go back from, else nothing, so it never fails as `back()`
+  does). An unknown name fails with the names there are. On a real target `TestStep::PressRemoteKey` reaches
+  `Native::press_remote_key`, whose default is `press_keys` of the key's name and `back` for Back; GPUI presses
+  Back as the Tizen platform gives it (`VK_BROWSER_BACK`, `agent::remote_virtual_key`), the web presses the media
+  and TV keys with Samsung TVs' key codes (`test_web.rs`' `tv_key_event`, `nsh.js`'s `TV_KEY_CODES`), and the
+  terminal's agent names them as the keymap does (`red`), which `key_scheme` parses. Every key works headless and
+  on the terminal, GPUI, the web, Android (`KEYCODE_*`) and Linux (the media and TV keys go to the app's shortcuts,
+  GTK having none); Windows presses the arrows, OK, Back and its four `VK_MEDIA_*` keys (`mediaplaypause`,
+  `mediastop`, `medianext`, `mediaprevious`), macOS and iOS the arrows, OK and Back only (a Mac's media keys go to
+  the system, an iOS keyboard has none). There the other keys fail the step, naming the key and the platform;
 - `wait`, `wait_for` / `wait_for_gone` / `wait_until` (until a selector matches, matches no more, a condition on the
   screen holds), `next_change` (one batch or animation frame: what `nsh/test`'s `waitUntil` waits for between calls
   of its JS condition), `next_frame` (on a manual clock: one frame of the clock, `wait_frame`, then a moment for a

@@ -10,6 +10,9 @@
 //! platform does (macOS, the web), Return and Space press the pressable it
 //! is on, Shift+F10 asks it for its context menu (the web, Linux), the
 //! focused input takes the keys that edit it, and Escape goes back.
+//!
+//! The step `keyboard.remote(<key>)` presses a TV remote's key
+//! ([`crate::remote`]) the same way, Back aside, which goes back.
 
 use nsh_core::{
     Command, EventKind, EventPayload, MountBatch, MountItem, NodeId, PayloadValue, ROOT_ID,
@@ -21,6 +24,7 @@ use nsh_core::{
 };
 
 use super::Headless;
+use crate::remote::RemoteKey;
 
 impl Headless {
     /// The steps `keyboard.down(<keys>)` / `keyboard.up(<keys>)`: holds or
@@ -64,6 +68,28 @@ impl Headless {
         self.step(format!("keyboard.press({keys})"));
         self.input_with(nsh_core::platform::InputModality::Keyboard);
         let stroke = Keystroke::parse(keys, self.environment.os).map_err(|e| e.to_string())?;
+        self.press_stroke(stroke)
+    }
+
+    /// The step `keyboard.remote(<key>)`: presses the TV remote's key
+    /// named `key` ([`RemoteKey`]). Its keys are the keyboard's of the same
+    /// name, as [`Headless::press_key`] presses them (OK is Enter); Back goes
+    /// back as a TV's does: the app's back listener hears it
+    /// (`onBackPress`), else it goes back from what there is to go back
+    /// from, else nothing happens (a key, not a step that must go back).
+    pub fn press_remote_key(&mut self, key: &str) -> Result<(), String> {
+        self.step(format!("keyboard.remote({key})"));
+        match RemoteKey::parse(key)?.keystroke() {
+            Some(stroke) => self.press_stroke(stroke),
+            None => {
+                self.go_back(true);
+                self.done()
+            }
+        }
+    }
+
+    /// Presses `stroke` (`keyboard.press`, `keyboard.remote`).
+    fn press_stroke(&mut self, stroke: Keystroke) -> Result<(), String> {
         let editing = self.screen.focused().is_some();
         // A hardware keyboard fires the app's shortcuts (`on_key`,
         // `keymap.bind`), on every platform: those of the focused window
