@@ -16,7 +16,7 @@
 use nsh_base::input;
 use nsh_core::{
     element::{
-        AnyElement, BlendMode, BoxShadow, Image,
+        AdaptiveShadow, AnyElement, BlendMode, BoxShadow, Image,
         palette::{
             AMBER, BLACK, BLUE, EMERALD, FUCHSIA, GREEN, Hue, INDIGO, ORANGE, PINK, RED, ROSE, SKY,
             VIOLET, WHITE, YELLOW, ZINC,
@@ -178,7 +178,7 @@ fn hero() -> AnyElement {
         .gradient_via(adaptive(rgb(0xfafaf8), rgb(0x18191c)))
         .gradient_to(colors::INSET)
         .p_5()
-        .adaptive_shadow(
+        .adaptive_shadow(AdaptiveShadow::new(
             [
                 inset_shadow(1.0, 0.0, rgb(0xffffff)),
                 drop(6.0, 20.0, rgb_a(0x14140a, 0.08)),
@@ -187,7 +187,7 @@ fn hero() -> AnyElement {
                 inset_shadow(1.0, 0.0, rgb_a(0xffffff, 0.08)),
                 drop(10.0, 28.0, rgb_a(0x000000, 0.38)),
             ],
-        )
+        ))
         .child(
             view()
                 .absolute()
@@ -323,10 +323,10 @@ fn stats() -> AnyElement {
             .border_color(colors::LINE)
             .finish_fill(Finish::Card)
             .p_3()
-            .adaptive_shadow(
+            .adaptive_shadow(AdaptiveShadow::new(
                 [inset_shadow(1.0, 0.0, rgb(0xffffff))],
                 [inset_shadow(1.0, 0.0, rgb_a(0xffffff, 0.05))],
-            )
+            ))
             .child(text(label).text_xs().text_color(ZINC.shade(500)))
             .child(
                 text(value)

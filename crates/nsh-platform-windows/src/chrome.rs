@@ -40,7 +40,9 @@ use std::{
 
 use nsh_core::{
     Color, EventKind, EventPayload, ImageSource, PayloadValue, ROOT_ID,
-    desktop::{DesktopCommand, Key, MenuAction, MenuItem, MenuRole, Shortcut, menu_icon},
+    desktop::{
+        DesktopCommand, Key, MenuAction, MenuItem, MenuRole, Shortcut, WindowRequest, menu_icon,
+    },
     geometry::{Edges, Points},
 };
 use windows::{
@@ -51,8 +53,9 @@ use windows::{
             Gdi::{
                 BI_RGB, BITMAPINFO, BITMAPINFOHEADER, COLOR_GRAYTEXT, COLOR_MENUTEXT,
                 CreateDIBSection, CreateSolidBrush, DIB_RGB_COLORS, DT_CENTER, DT_HIDEPREFIX,
-                DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW, FillRect, GetSysColor,
-                GetWindowDC, HBITMAP, HDC, ReleaseDC, SetBkMode, SetTextColor, TRANSPARENT,
+                DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW, FillRect, GetMonitorInfoW,
+                GetSysColor, GetWindowDC, HBITMAP, HDC, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+                MonitorFromWindow, ReleaseDC, SetBkMode, SetTextColor, TRANSPARENT,
             },
         },
         System::LibraryLoader::{GetProcAddress, LoadLibraryW},
@@ -355,6 +358,23 @@ pub(crate) fn command(surface: &Rc<Surface>, command: &DesktopCommand) {
     match command {
         DesktopCommand::SetAttributes(diff) => crate::shell::apply(surface, hwnd, diff),
         DesktopCommand::Request(request) => {
+            // SAFETY: a plain query on the surface's live window.
+            let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
+            match request {
+                // A main window hidden at launch (nsh.json
+                // `defaultVisible: false`) shows as it would have then:
+                // drawn before DWM composites it, in the mode it opens in.
+                WindowRequest::Show | WindowRequest::Focus
+                    if surface.main_unshown.get() && !visible =>
+                {
+                    crate::app::show_main(surface, hwnd);
+                }
+                // The app's own mode replaces the one it was to open in.
+                WindowRequest::SetMode(_) | WindowRequest::SetPlacement(_) => {
+                    surface.main_opening_mode.take();
+                }
+                _ => {}
+            }
             if !crate::shell::request(hwnd, request) {
                 // `Request(Close)`: past `closeOnPress`.
                 crate::window_close::close(surface);
@@ -588,6 +608,43 @@ pub(crate) fn nc_calc_size(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> Option
             };
     }
     Some(LRESULT(0))
+}
+
+/// `WM_GETMINMAXINFO`: a frameless window's maximized rect is its
+/// monitor's work area grown by the frame border, which `WM_NCCALCSIZE`
+/// insets back out when zoomed. The client then lands on the work area
+/// and the taskbar keeps its strip; left to the system, a frameless
+/// window's maximized rect covers the whole monitor.
+pub(crate) fn nc_max_size(hwnd: HWND, info: &mut MINMAXINFO) {
+    if !frameless(hwnd) {
+        return;
+    }
+    let mut monitor = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: plain calls with a local out value.
+    let ok = unsafe {
+        let m = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        GetMonitorInfoW(m, &mut monitor).as_bool()
+    };
+    if !ok {
+        return;
+    }
+    let (work, origin) = (monitor.rcWork, monitor.rcMonitor);
+    let inset = frame_thickness(hwnd);
+    // `ptMaxPosition` is relative to the monitor's origin, not the
+    // virtual screen: the system places it on the monitor the window
+    // maximizes on. The track sizes stay `track_sizes`', so a user can
+    // still drag the window across monitors.
+    info.ptMaxPosition = POINT {
+        x: work.left - origin.left - inset,
+        y: work.top - origin.top - inset,
+    };
+    info.ptMaxSize = POINT {
+        x: (work.right - work.left) + inset * 2,
+        y: (work.bottom - work.top) + inset * 2,
+    };
 }
 
 /// The visible border the system draws along a window's top edge, in
