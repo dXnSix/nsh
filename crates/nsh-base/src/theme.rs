@@ -720,6 +720,46 @@ mod tests {
     }
 
     #[test]
+    fn an_identifier_attached_to_a_color_function_is_listed() {
+        for value in [
+            "rgb(255 0 0)garbage",
+            "RGB(255 0 0)garbage",
+            "oklch(0.7 0.1 30)junk",
+            "color-mix(in srgb, rgb(255 0 0), #fff)garbage",
+            "rgb(255 0 0)inset-x 0 1px",
+            "rgb(255 0 0)inset2 0 1px",
+            "rgb(255 0 0)_junk",
+            "rgb(255 0 0)--junk",
+        ] {
+            let json = format!(r#"{{ "cssVars": {{ "light": {{ "brand": "{value}" }} }} }}"#);
+            let (theme, ignored) = Theme::from_json_lenient(&json).unwrap();
+            assert_eq!(ignored, [format!("`brand`: {value} is no color")]);
+            assert_eq!(theme.color("brand"), None);
+        }
+    }
+
+    #[test]
+    fn shadows_after_a_color_function_keep_their_import_behavior() {
+        for value in [
+            "rgb(0 0 0 / 0.1) 0px 1px 2px",
+            "rgb(0 0 0 / 0.1)0px 1px 2px",
+            "rgb(0 0 0 / 0.1)-1px 1px 2px",
+            "rgb(0 0 0 / 0.1)0 .1em .2em",
+            "rgb(0 0 0 / 0.1)inset 0 1px",
+            "rgb(0 0 0 / 0.1)INSET 0 1px",
+            "rgb(0 0 0 / 0.1)i\\6e set 0 1px",
+            "rgb(0 0 0 / 0.1)var(--shadow-x) 1px",
+            "rgb(0 0 0 / 0.1)calc(1px + 1em) 2px",
+            "rgb(0 0 0 / 0.1)0 1px 2px, inset 0 1px 1px #000",
+        ] {
+            let json = serde_json::json!({"cssVars": {"light": {"shadow-sm": value}}}).to_string();
+            let (theme, ignored) = Theme::from_json_lenient(&json).unwrap();
+            assert!(ignored.is_empty(), "{value}: {ignored:?}");
+            assert_eq!(theme.tokens().get("shadow-sm"), None);
+        }
+    }
+
+    #[test]
     fn a_dark_length_does_not_hide_an_unreadable_light_color() {
         let (theme, ignored) = Theme::from_json_lenient(
             r##"{ "cssVars": { "light": { "brand": "#zz" }, "dark": { "brand": "12px" } } }"##,
