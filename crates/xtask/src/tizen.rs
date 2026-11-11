@@ -436,9 +436,10 @@ mod tests {
 
     use super::*;
 
+    /// As strings, with `/` whatever this machine's separator.
     fn strings(args: &[OsString]) -> Vec<String> {
         args.iter()
-            .map(|a| a.to_string_lossy().into_owned())
+            .map(|a| a.to_string_lossy().replace('\\', "/"))
             .collect()
     }
 
@@ -597,8 +598,8 @@ mod tests {
             .iter()
             .map(|(from, to)| {
                 (
-                    from.to_string_lossy().into_owned(),
-                    to.to_string_lossy().into_owned(),
+                    from.to_string_lossy().replace('\\', "/"),
+                    to.to_string_lossy().replace('\\', "/"),
                 )
             })
             .collect();
@@ -631,7 +632,7 @@ mod tests {
         let files = dist_files(Path::new("/b"), Path::new("/d"), &[Arch::Armv7l]);
         let to: Vec<String> = files
             .iter()
-            .map(|(_, to)| to.to_string_lossy().into_owned())
+            .map(|(_, to)| to.to_string_lossy().replace('\\', "/"))
             .collect();
         assert_eq!(
             to,
