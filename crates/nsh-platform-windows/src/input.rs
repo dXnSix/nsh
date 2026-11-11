@@ -1199,6 +1199,9 @@ pub(crate) fn key(surface: &Rc<Surface>, event: KeyEvent) -> bool {
     let handled = shortcut
         || crate::system::key(surface, &event)
         || crate::keymap::key(surface, &event)
+        // Return and Space press the focused control once its own bindings
+        // passed on them, before the menu's shortcuts.
+        || crate::focus::press_key(surface, &event)
         || crate::chrome::shortcut(surface, &event)
         || crate::text_input::key(surface, &event)
         || crate::text::key(surface, &event)
