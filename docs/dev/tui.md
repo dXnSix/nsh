@@ -839,7 +839,11 @@ canvas itself included.
 
 `key_scheme.rs` maps keystrokes to actions; `keyboard.rs` applies focus, activation and scrolling, and
 `navigation.rs` handles back. This keeps a future vim scheme independent of the actions, with one scheme selected
-today and no mode switch. The app's `nsh/keymap` table is matched first, including its editing and repeat policy, and with it the
+today and no mode switch. The focus rules below are `nsh_core::focus`'s, over plain data any backend has:
+`keyboard.rs` gives it the stops of the last frame (each one's Cells, one point each, so every edge is exact and
+frames touch, overlap and sort as their Cells do, with its focus stop, input scope, layer and tree order) and the
+root view's layers, and applies what it decides: the stop Tab, the arrows or a modal moves the focus to, the reveal
+delta of each Scroll around it, and the stop a modal or a layer gives the focus back to when it closes. The app's `nsh/keymap` table is matched first, including its editing and repeat policy, and with it the
 bindings a focused component holds (a slider's or a list's arrows), so a focused component gets its keys before
 the scheme moves focus. Those bindings follow the focus in the app's effects, so a key right after a focus change waits up to 100 ms for the engine to run it (`EngineControl::flush`, then `Message::Focused` behind its batches), applying the batches meanwhile: Escape and Tab sent together leave an editor rather than indent it. Ctrl+C copies a text selection (in a field or selectable text) and otherwise exits. Outside fields, C-h e opens diagnostics; inside fields,
 C-h is Backspace (leave the field with Esc or C-g to open diagnostics). While the diagnostics panel is open,
@@ -847,7 +851,7 @@ it owns keys and the app's field caret is hidden; closing it restores the caret 
 
 | Keys | Action |
 |---|---|
-| Ctrl+N, Tab | Next focusable view in tree order; with the focus in the open popup of a trigger (a date picker's calendar, a menu), the next one in it, round it: its box covers the controls around the trigger, and Escape closes it and gives the trigger the focus. A popup anchored to no focusable view is passed through in tree order; one over a backdrop that covers the page (a dialog, a sheet) keeps the focus inside it (`covering_layer`), and closing it gives the focus back to the stop it covered, also when Escape closes it before the focus went in |
+| Ctrl+N, Tab | Next focusable view in tree order; with the focus in the open popup of a trigger (a date picker's calendar, a menu), the next one in it, round it: its box covers the controls around the trigger, and Escape closes it and gives the trigger the focus. A popup anchored to no focusable view is passed through in tree order; one over a backdrop that covers the page (a dialog, a sheet) keeps the focus inside it (`focus::covering_layer`), and closing it gives the focus back to the stop it covered, also when Escape closes it before the focus went in |
 | Ctrl+P, Shift+Tab | Previous focusable view in tree order, in the same popup as Tab |
 | Down / Up | Nearest focusable view below / above, one in an overlapping column first; with none focused, the first / last one in sight, inside an open anchored popup (a menu or select opened by a click) when one is open. One out of sight within a wheel step is revealed; one farther away is approached by a wheel step (three rows) of the innermost Scroll that can still move that way, focus then staying on a control in sight |
 | Ctrl+F, Right / Ctrl+B, Left | Nearest focusable view to the right / left on the same row |

@@ -15,6 +15,7 @@ mod degraded;
 mod diff_view;
 mod dock;
 mod editor;
+mod focus_cell_size;
 mod focus_navigation;
 mod geometry;
 mod keyboard;

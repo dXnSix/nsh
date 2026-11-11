@@ -184,11 +184,13 @@ TSX 应用用 [`<Window>` 和 `Window.open`](../modules/nsh-desktop.md#windows) 
 |---|---|
 | Return | 在 `Input` 中按 `submitBehavior` 行事：提交（`onSubmit`）、提交并离开输入框，或换行（多行输入框） |
 | Shift+Return、Alt+Return | 在回车即提交的多行输入框中换行（Ctrl+Return 提交） |
-| Tab、Shift+Tab | 按屏幕顺序移到下一个 / 上一个输入框，只在最上层的对话框之内 |
+| Tab、Shift+Tab（加 Ctrl 亦可） | 按视图树的顺序移到下一个 / 上一个输入框或可按压视图，只在最上层的对话框之内 |
+| Return、空格 | 按下获得焦点、带 `onPress` 的视图 |
 | Escape | 离开有焦点的输入框；否则清除文本选区，再关闭最上层的对话框或返回上一页 |
 | Alt+Left、Back 键、鼠标的后退键 | 返回上一页（在输入框中也是） |
 | Ctrl+方向键、Home / End，加 Shift；Ctrl+Backspace / Delete | 在输入框中按词和行移动、选择、删除，与其他 GTK 应用一致 |
 | Ctrl+Z、Ctrl+Shift+Z、Ctrl+X / C / V / A | 撤销、重做、剪切、复制、粘贴、全选（`masked` 输入框拒绝剪切和复制）；Ctrl+A / Ctrl+C 选择并复制 可选择的文本 |
+| 方向键（输入框自己用的除外） | 把焦点移到该方向上最近的可按压视图、输入框或 `focusable` 视图（只在最上层的对话框之内），并把它滚动到可见；上 / 下方向键会离开单行输入框；该方向上没有时，按下文滚动 |
 | 方向键；Page Up / Down、Space、Shift+Space；Home / End | 滚动有焦点的视图所在或鼠标下方的滚动视图：一行、一页、到开头 / 结尾（输入框有焦点时不滚动） |
 | Ctrl+W、F11、Ctrl+Q | 关闭窗口、全屏、退出（`nsh package` 和 `nsh run` 的应用） |
 | Ctrl+R | 重新加载最新的构建（`nsh run`） |
