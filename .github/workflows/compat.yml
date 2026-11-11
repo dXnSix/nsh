@@ -106,10 +106,13 @@ jobs:
         with:
           path: nsh
 
+      # The owner's nsh-compat: longbridge's here, a fork's own in a fork
+      # (dXnSix/nsh-compat holds the harness's support for what the fork's
+      # cases check before longbridge's has it).
       - uses: actions/checkout@v4
         if: steps.run.outputs.check == 'true'
         with:
-          repository: longbridge/nsh-compat
+          repository: ${{ github.repository_owner }}/nsh-compat
           path: nsh-compat
 
       # QuickJS is C (bindgen needs libclang).
