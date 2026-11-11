@@ -103,6 +103,7 @@ pub use crate::element::{
     Length,
     ListAlignment,
     ListLayout,
+    ListScrollPosition,
     ListViewport,
     Listener,
     MacOsBackdrop,
