@@ -1,10 +1,14 @@
 //! The app's keyboard shortcuts (`nsh/keymap`): the table the engine
 //! mounts ([`MountItem::Keymap`](nsh_core::MountItem::Keymap)), matched on
 //! every key down the window gets ([`crate::input::key`]): after the dialogs
-//! the surface shows, before the focused field, selectable text, navigation
-//! and scroll views. A key that fires a binding is consumed (its `WM_CHAR`
-//! too) and reported to JS with the root's `KeyCommand` event; JS runs the
-//! handler afterwards.
+//! the surface shows, before the application menu's shortcuts, the focused
+//! field, selectable text, navigation and scroll views. A key that fires a
+//! binding is consumed (its `WM_CHAR` too) and reported to JS with the
+//! root's `KeyCommand` event; JS runs the handler afterwards.
+//!
+//! Return and Space on a focused control ([`crate::focus::on_control`])
+//! fire only the bindings of the focus (`Keymap::find_at`); with none the
+//! key goes on and presses the control ([`crate::focus::press_key`]).
 //!
 //! Keys are matched by virtual key code: letters and digits are the same
 //! on every layout (a Cyrillic layout's keys have the US layout's codes),
@@ -57,7 +61,10 @@ pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     let editing = crate::text_input::focused(surface).is_some();
     // Only the bindings of the window the key is in (and JS's) take it.
     let window = surface.input_root().id();
-    let found = table.find_in(window, keystroke, editing, event.repeat);
+    // Return and Space on a focused control fire only the focus' own
+    // bindings; else the control takes them (`focus::press_key`).
+    let control = !editing && crate::focus::on_control(surface);
+    let found = table.find_at(window, keystroke, editing, control, event.repeat);
     if let Some(id) = found.fired() {
         surface.event(
             ROOT_ID,
