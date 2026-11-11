@@ -38,7 +38,7 @@
   `pointerEvents`' `box-none` / `box-only` (React Native's, for the view alone), `textOverflow`'s `ellipsis-start` /
   `ellipsis-middle` (where a clamped text is cut), `textAlign`'s `auto` (React Native's: the text's natural side, by its
   direction); variants past Tailwind's: `selected:` (`accessibilityState.selected`, `selectedStyle`), `ios:` /
-  `android:` / `web:` (the platform). A new one joins this list.
+  `android:` / `web:` (the platform), `terminal:` (drawn in a terminal, `Idiom::Terminal`). A new one joins this list.
 - **CSS's meanings**: inline styles mean what classes mean: a style key is the CSS property of its name (or of the form
   "Forms past CSS's" gives it). Every view, however it is styled, keeps
   React Native's defaults for what nothing sets (a column while no display is set, `flexShrink: 0`,
@@ -58,13 +58,14 @@
   keep React Native's column; `block` /
   `flow-root` use Taffy's block layout, and so do `inline` / `inline-block`: a browser blockifies inline boxes in flex
   and grid containers, which every NSH parent but a block is (there is no inline formatting context). Variants: `dark:`, `sm:`…`2xl:` / `max-*:` / `min-[..]:`, `portrait:` /
-  `landscape:`, `ios:` / `android:` / `web:`, `rtl:` / `ltr:`, `motion-safe:` / `motion-reduce:`, `active:` / `hover:` /
+  `landscape:`, `ios:` / `android:` / `web:`, `terminal:`, `pointer-fine:` / `pointer-coarse:` (CSS's `pointer` media
+  feature: fine on the desktops, a desktop browser and a terminal (`Environment::desktop()`), coarse on touch), `rtl:` / `ltr:`, `motion-safe:` / `motion-reduce:`, `active:` / `hover:` /
   `focus:` / `focus-within:` (text inputs always report their focus, so the views around one read it) / `disabled:` / `enabled:` / `selected:` (`accessibilityState.selected`, a `Button`'s
   `selected`) / `checked:` (`accessibilityState.checked`, not mixed) / `indeterminate:` (`accessibilityState.checked`
   mixed, CSS's `:indeterminate`) / `aria-expanded:` (`accessibilityState.expanded`: a `Popover`'s or `Menu`'s trigger
   while its popup is open) / `aria-pressed:` (`accessibilityState.pressed` true: a toggle button that is on; not
-  `active:`, a press in progress) / `aria-busy:` / `aria-checked:` / `aria-selected:` (Tailwind v4's
-  `&[aria-busy="true"]`, ...: `busy`, `checked` true, `selected`; `aria-current:` and Tailwind's other `aria-*` names are
+  `active:`, a press in progress) / `aria-busy:` / `aria-checked:` / `aria-invalid:` / `aria-selected:` (Tailwind v4's
+  `&[aria-busy="true"]`, ...: `busy`, `checked` true, `invalid`, `selected`; `aria-current:` and Tailwind's other `aria-*` names are
   unknown, NSH has no such states), `data-<name>:` (Tailwind v4's boolean form, `&[data-<name>]`: a `data-*` attribute
   a Rust component's part shows, `Interactive::project_data`, `Prop::ProjectedData`, as a calendar's day shows
   `data-range-start`; names of lower case letters, digits and `-`; the value form `data-[state=open]:` is unknown;
@@ -72,13 +73,13 @@
   sends nothing when its attributes change), `group-*:` (named groups `group/name`; `group-data-<name>:` too), `first:` / `last:` /
   `odd:` / `even:` / `only:`, `placeholder:` / `selection:` (a color only, the pseudo-element's: `placeholder:text-*` / `selection:bg-*`, the
   `placeholderColor` / `selectionColor` style keys; other utilities under them are unknown), `!` (important). The state classes have style props of their own (`activeStyle`, `hoverStyle`,
-  `focusStyle`, `focusWithinStyle`, `disabledStyle`, `checkedStyle`, `indeterminateStyle`, `expandedStyle`,
+  `focusStyle`, `focusVisibleStyle`, `focusWithinStyle`, `disabledStyle`, `checkedStyle`, `indeterminateStyle`, `expandedStyle`,
   `pressedStyle`, a `Button`'s `selectedStyle`), resolved the same way: later states win, `disabled` over all. `selected`, `checked`, `indeterminate`,
-  `expanded`, `pressed` (`state::ARIA_PRESSED`) and `busy` are value states (`state::ACCESSIBILITY`, set by
+  `expanded`, `pressed` (`state::ARIA_PRESSED`), `busy` and `invalid` are value states (`state::ACCESSIBILITY`, set by
   `Core::set_accessibility_states` from `classes::accessibility_states`) the core sets from the accessibility state (never reported by the platform). The first three are
   below the interaction states: `checked`, then `indeterminate` (Tailwind's order), then `selected`, then `hover`,
   `focus`, `active` (gpui-base's order of value states); the `aria-*` variants are above them (`aria-busy`,
-  `aria-checked`, `aria-expanded`, `aria-pressed`, `aria-selected`, by name), as Tailwind's `aria-*` variants come
+  `aria-checked`, `aria-expanded`, `aria-invalid`, `aria-pressed`, `aria-selected`, by name), as Tailwind's `aria-*` variants come
   after its pseudo-classes, so an open popup's trigger keeps its look while hovered or pressed. `disabled` (any element) applies `disabled:` and drops
   the node's press listeners from what is mounted, so it shows no press feedback either. A part of a Rust component
   shows its control's `checked`, `indeterminate` and `disabled` to its own classes and state styles
@@ -96,7 +97,12 @@
   `ElementRef::on_focus_in` / `on_focus_out` (GPUI's names, a focus handle's), watches the core runs at the end of
   the commit round the focus moved in (`core/watch.rs`). `dark:` follows the appearance
   shown: the app's own when it set one (`nsh.json` `"appearance"`, `setColorScheme`; `Core::set_appearance`), else the
-  system's. The theme is Tailwind 4's
+  system's; in a view with an appearance of its own (a `ThemeScope`), that view's (`Core::dark_at`: the core keeps
+  per node what the nearest such view says, pushed down when a view is inserted or the prop changes, and applies each
+  node's classes in it, so a scope restyles only its own nodes whose classes depend on the appearance, and a change
+  of the surface's leaves them alone). A view with design tokens of its own (a `ThemeScope` with a `theme`) has the
+  classes in it resolved with its values: a list that reads a token the scope changes is parsed for the scope, every
+  other list is the surface's (`Core::classes_at`, `components.md` "ThemeScope"). The theme is Tailwind 4's
   extended by `nsh.json` `"tailwind"` (`colors`, `spacing`, `breakpoints`, `fontSize`, `radius`, `shadow`, ...; unknown
   keys are build errors). Rust components do not use classes: their typed styles (`element/style.rs`, every utility group has its
   methods, tested against the classes) lower into the same rules and their
@@ -107,12 +113,21 @@
   Tailwind palette has no color of that name (a palette color of the same name wins), and every token is a variable
   (`bg-(--primary)`, `rounded-(--radius)`, `text-(length:--x)`, `font-(family-name:--font-mono)`); the fonts
   `font-sans` / `font-mono`, when the theme sets them, are what the `font-sans` / `font-mono` utilities set
-  (`ClassTokens::replaces`), and `font-sans` is the default font of every text (Tailwind's `--font-sans`, a page's
+  (`ClassTokens::replaces`); a number token of a Tailwind 4 namespace (`radius-`, `spacing-`, `text-`, `font-weight-`,
+  `tracking-`, `leading-`, `blur-`) is a named class of that namespace's utilities (`rounded-card`, `p-gutter`,
+  `font-strong`: `ClassTokens::substitute` → `named_number`, an arbitrary value by name prefix, so cssVars-only TSX
+  apps get them), checked after Tailwind's own names, which keep winning (`Theme::shadowed_tokens` lists each token's
+  classes that stay Tailwind's or, for `text-`, a color's, which the bundler warns of), and before colors at the same
+  utility except for `text-` (the longer utility wins otherwise: `inset-shadow-card`); the theme reader makes
+  `font-weight-*` numbers and leaves `em` lengths out, so `tracking-*` tokens are points; and `font-sans` is the default
+  font of every text (Tailwind's `--font-sans`, a page's
   preflight). Such a utility is parsed with the light and the dark values as arbitrary ones (two rules of its rank
   when they differ, so it follows the appearance with no `dark:`) and depends on `deps::THEME`. When the design
   tokens the app draws with change (`Core::set_tokens`, `set_host_tokens`; a host's keep the app's names they lack,
   `Tokens::over`), `Core::class_tokens_changed` drops the cached strings that name tokens and resolves
-  their nodes (and the app's classes on Rust components) again; when the names change, every class. `nsh build` / `nsh dev` warn about unknown static classes in app code (`file:line:col:
+  their nodes (and the app's classes on Rust components) again; when the names change, every class. Classes name
+  tokens only, never roles (`element::Role`, what NSH's own parts draw with, `components.md` "The theme"): a role
+  mapped onto another token (`Tokens::with_role`) adds no class. `nsh build` / `nsh dev` warn about unknown static classes in app code (`file:line:col:
   unknown class '...'`, target `nsh::build`); the core logs each unknown class once at run time. Settings
   that are props in React Native are style keys here, as in CSS (`numberOfLines`, `textOverflow`, `userSelect`,
   `pointerEvents`, `objectFit`; `line-clamp-*`, `truncate`, `text-ellipsis`, `select-*`, `pointer-events-*`,
@@ -147,8 +162,15 @@
   `flex-start`, which makes taffy's block a formatting context); strings keep their whitespace (`whitespace-*` sets
   wrapping only; the JSX compiler collapses literal JSX text); `transition` / `transition-all` animate their groups
   (`TransitionProps`: colors, opacity, transform, shadows, shape), and filters, backdrop filters, gradients and layout
-  take their new values at once; `focus-visible:` is `focus:` (the state bits, a `u8`, have none left for a focus's
-  origin, which only the desktops and the web report).
+  take their new values at once; `focus-visible:` (`state::FOCUS_VISIBLE`) is the focus that shows, after the
+  browsers' `:focus-visible`: the platforms report only how the user last gave input (`InputModality`: a key, or a
+  pointer, pen or finger going down; `EngineControl::set_input_modality`), and the core decides (`classes.rs`
+  `focus_shows`): an input that edits always shows its focus, any other view unless the last input was a pointer, so
+  Tab, a group's arrows and a shortcut show it, a press or a tap does not, a move the app makes (`focus()`, a calendar
+  or a dialog opening) shows it after a key and not after a press, and a key typed while the focus does not show
+  shows it. `focus:` is any focus. A part projected focused (`project_focused`: a tree's or a list's cursor, the
+  control keeping the platform's focus) also shows `focus-visible:` while the focus shows, so on such a part
+  `focus:` is the cursor and `focus-visible:` the cursor the keyboard is on.
 - **Layout values**: `box-content` / `box-border` select Taffy's content-box / border-box sizing. Width and
   height accept `min-content`, `max-content` and `fit-content` (`w/h/size-min/max/fit`); min-content text measures
   each Unicode line-breaking segment with the platform text engine and caches the widest one. `flow-root` uses

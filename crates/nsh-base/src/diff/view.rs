@@ -20,12 +20,27 @@ use super::{
     layout::Row,
     review::HoverPart,
 };
-use crate::theme;
+use crate::{role, theme};
 
-/// Added lines' green.
-pub(crate) const ADDED: AdaptiveColor = AdaptiveColor::rgb(0x16a34a, 0x4ade80);
-/// Deleted lines' red.
-pub(crate) const DELETED: AdaptiveColor = AdaptiveColor::rgb(0xdc2626, 0xf87171);
+/// Added lines' green, where the theme has no `diff-added`
+/// ([`added_color`]).
+const ADDED: AdaptiveColor = AdaptiveColor::rgb(0x16a34a, 0x4ade80);
+/// Deleted lines' red, where the theme has no `diff-deleted`
+/// ([`deleted_color`]).
+const DELETED: AdaptiveColor = AdaptiveColor::rgb(0xdc2626, 0xf87171);
+
+/// Added lines' color: the theme's `diff-added` ([`role::DIFF_ADDED`]: the
+/// token the app's theme maps it onto, else the one of that name), else the
+/// view's own green.
+pub(crate) fn added_color() -> AdaptiveColor {
+    theme().tokens().role(role::DIFF_ADDED).unwrap_or(ADDED)
+}
+
+/// Deleted lines' color: the theme's `diff-deleted`
+/// ([`role::DIFF_DELETED`]), else the view's own red.
+pub(crate) fn deleted_color() -> AdaptiveColor {
+    theme().tokens().role(role::DIFF_DELETED).unwrap_or(DELETED)
+}
 /// The width of a bar indicator.
 const BAR: f32 = 3.0;
 /// The room around a gutter's numbers and before a line's text.
@@ -459,8 +474,8 @@ fn gutter_row(
                     .ml(px(PAD))
                     .w(Length::from(sign_width()))
                     .text_color(move || match tint {
-                        Tint::Added => ADDED,
-                        Tint::Deleted => DELETED,
+                        Tint::Added => added_color(),
+                        Tint::Deleted => deleted_color(),
                         _ => theme().muted_foreground,
                     });
                 first = first.child(match which {
@@ -470,9 +485,10 @@ fn gutter_row(
             }
             el = el.child(first);
             if props.indicators.get() == DiffIndicators::Bars {
-                let which = match tint {
-                    Tint::Added => Some((DiffViewPart::IndicatorAdded, ADDED)),
-                    Tint::Deleted => Some((DiffViewPart::IndicatorDeleted, DELETED)),
+                // Each a function, so the bar follows the theme.
+                let which: Option<(_, fn() -> AdaptiveColor)> = match tint {
+                    Tint::Added => Some((DiffViewPart::IndicatorAdded, added_color)),
+                    Tint::Deleted => Some((DiffViewPart::IndicatorDeleted, deleted_color)),
                     _ => None,
                 };
                 if let Some((p, color)) = which {
@@ -499,8 +515,8 @@ fn line_tint(props: DiffViewProps, tint: Tint) -> Option<AdaptiveColor> {
     match tint {
         Tint::Context => None,
         Tint::Filler => Some(theme().muted.opacity(0.5)),
-        Tint::Added if props.background.get() => Some(ADDED.opacity(0.12)),
-        Tint::Deleted if props.background.get() => Some(DELETED.opacity(0.12)),
+        Tint::Added if props.background.get() => Some(added_color().opacity(0.12)),
+        Tint::Deleted if props.background.get() => Some(deleted_color().opacity(0.12)),
         _ => None,
     }
 }
@@ -586,6 +602,9 @@ fn line_row(
         .child(dynamic(move || {
             let (cell, _) = cell.get()?;
             let tint = cell.kind;
+            // Read in the row's own scope: its spans are made again when
+            // the theme changes.
+            let palette = crate::syntax::Palette::of_theme();
             let mut list = vec![DiffViewPart::Line];
             match tint {
                 Tint::Added => list.push(DiffViewPart::LineAdded),
@@ -616,7 +635,7 @@ fn line_row(
             for (index, spans) in lines.into_iter().enumerate() {
                 let spans = spans
                     .into_iter()
-                    .map(|span| span_view(props, span, tint))
+                    .map(|span| span_view(props, span, tint, &palette))
                     .collect::<Vec<_>>();
                 let lh = lh.clone();
                 // The code's lines select across rows in the side's area
@@ -647,17 +666,22 @@ fn line_row(
         .child(tint_el)
 }
 
-fn span_view(props: DiffViewProps, span: Span, tint: Tint) -> AnyElement {
+fn span_view(
+    props: DiffViewProps,
+    span: Span,
+    tint: Tint,
+    palette: &crate::syntax::Palette,
+) -> AnyElement {
     let mut el = text(span.text);
     if let Some(token) = span.token {
-        *el.style() = token.style();
+        *el.style() = token.style(palette);
     }
     if span.changed {
-        let (color, which) = match tint {
-            Tint::Deleted => (DELETED, DiffViewPart::WordDeleted),
-            _ => (ADDED, DiffViewPart::WordAdded),
+        let (color, which): (fn() -> AdaptiveColor, _) = match tint {
+            Tint::Deleted => (deleted_color, DiffViewPart::WordDeleted),
+            _ => (added_color, DiffViewPart::WordAdded),
         };
-        el = part(el.bg(color.opacity(0.3)), props, which);
+        el = part(el.bg(move || color().opacity(0.3)), props, which);
     }
     el.into_element()
 }
