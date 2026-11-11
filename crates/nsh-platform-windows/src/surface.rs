@@ -167,6 +167,8 @@ pub(crate) struct Surface {
     pub(crate) nav: RefCell<crate::navigation::Nav>,
     /// Pointer input state ([`crate::input`]).
     pub(crate) input: crate::input::Input,
+    /// The keyboard focus on views ([`crate::focus`]).
+    pub(crate) focus: crate::focus::Focus,
     /// Native file-drop destinations.
     pub(crate) file_drop: crate::file_drop::State,
     engine: RefCell<Option<Engine>>,
@@ -300,6 +302,7 @@ impl Surface {
             anim: RefCell::new(UiAnimation::default()),
             nav: RefCell::default(),
             input: Default::default(),
+            focus: Default::default(),
             file_drop: Default::default(),
             engine: RefCell::new(None),
             control: RefCell::new(None),
@@ -538,6 +541,7 @@ impl Surface {
         *self.anim.borrow_mut() = UiAnimation::default();
         self.nav.borrow_mut().reset();
         crate::input::reset(self);
+        crate::focus::reset(self);
         crate::keymap::clear(self);
         self.js_frame.set(false);
         self.resize_late.set(false);

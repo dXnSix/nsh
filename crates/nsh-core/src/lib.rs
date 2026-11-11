@@ -25,6 +25,7 @@ pub mod element;
 mod fenwick;
 pub mod file_dialog;
 pub mod filesystem;
+pub mod focus;
 pub mod geometry;
 mod grid;
 pub mod host_channel;
