@@ -37,6 +37,7 @@ mod decor;
 pub mod dev;
 mod file_drop;
 mod file_requests;
+mod focus;
 mod fps;
 mod geom;
 mod gfx;
@@ -69,7 +70,10 @@ mod window;
 mod window_close;
 mod window_state;
 
-pub use nsh_core::platform::{Appearance, Locale};
+pub use nsh_core::{
+    file_type,
+    platform::{Appearance, Locale},
+};
 pub use nsh_engine::{
     App, Bundle, ByteSize, CacheLocation, CacheOptions, CachePolicy, Limits, Root,
 };

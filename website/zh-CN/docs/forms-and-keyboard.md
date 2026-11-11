@@ -179,7 +179,7 @@ let composing = false;
 | `autoCorrect` | `boolean` | `true` | 系统的自动更正。 |
 | `autoComplete` | `AutoComplete` | | 输入框内容的类型，用于自动填充。 |
 | `multiline` | `boolean` | `false` | 多行；回车插入换行（`submitBehavior` 另有设置时除外）。 |
-| `maxLength` | `number` | | 用户最多能输入的字符数。 |
+| `maxLength` | `number` | | 用户最多能输入的字符数。超出的粘贴只插入放得下的部分，与浏览器一致。 |
 | `readonly` | `boolean` | `false` | 用户可以选择和复制文本，但不能修改。 |
 | `autoFocus` | `boolean` | `false` | 出现时自动获得焦点。 |
 | `submitBehavior` | `"submit" \| "blurAndSubmit" \| "newline"` | 单行 `"blurAndSubmit"`，多行 `"newline"` | 回车键做什么：提交并保持焦点、提交后失去焦点，或插入换行（仅多行）。 |
@@ -362,7 +362,7 @@ mount(SignIn);
 | `set_selection(start, end)` | `setSelection(start, end?)` | 选中 `start..end`（UTF-16 码元）；两者相等时为光标（TSX：不传 `end`）。 |
 | `insert_text(text)` | `insertText(text)` | 以用户编辑的方式用 `text` 替换选区：是输入框撤销历史中的一步，由 `onChange` 报告；目前只在 Linux、Web 和无头测试中生效（[粘贴](#粘贴图片和文件)）。 |
 
-在 macOS 和 Web 上，可按压视图的 ref 的 `focus()` 和 `blur()` 也会像 Tab 一样移动键盘焦点（[键盘焦点](../elements/index.md#键盘焦点)）。
+在 macOS、Windows、Linux 和 Web 上，可按压视图的 ref 的 `focus()` 和 `blur()` 也会像 Tab 一样移动键盘焦点（[键盘焦点](../elements/index.md#键盘焦点)）。
 
 Rust 中的 `dismiss_keyboard()` 和 TSX 中 `nsh` 的 `Keyboard.dismiss()` 让当前拥有焦点的输入框失去焦点：
 

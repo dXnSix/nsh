@@ -242,6 +242,7 @@ noprop id:plain supportedOrientations
 # A dialog for screen readers, with no name of its own.
 prop id:plain role dialog
 noprop id:plain accessibilityLabel
+noprop id:plain accessibilityDescription
 # Closed while `open` is false.
 absent Synced dialog
 absent Guarded dialog
@@ -291,9 +292,10 @@ expect Guarded dialog
 prop id:guarded closeOnEscape false
 prop id:guarded closeOnBackdropPress false
 prop id:guarded closeOnSwipe false
-# An alert dialog named by its label.
+# An alert dialog named by its label and described by its message.
 prop id:guarded role alertdialog
 prop id:guarded accessibilityLabel Guarded
+prop id:guarded accessibilityDescription Only the app closes it.
 event text:"Guarded dialog" onCancel reason=cancel
 expect Log: guarded cancel
 event text:"Guarded dialog" onCancel reason=swipe
@@ -320,6 +322,7 @@ covers [props] ios.supportedOrientations
 covers [props] Dialog.open
 covers [props] role
 covers [props] accessibilityLabel
+covers [props] accessibilityDescription
 covers [events] Dialog.onOpen
 covers [events] Dialog.onClose
 covers [events] Dialog.onCancel
@@ -1091,13 +1094,14 @@ covers [props] role
 covers [events] onChange
 # base-radio
 tap id:case-base-radio
-# The group is a radio group for screen readers; each radio is a radio
-# of its own, checked and selected while checked: `checkedStyle`, and
+# The group is a radio group for screen readers, named by the app; each
+# radio is a radio of its own, checked and selected while checked: `checkedStyle`, and
 # `group-checked:` of the app's dot (30 wide, a margin of 8) puts the
 # label at 38.
 expect Plan: basic
 expect Changes: 0
 prop id:plans role radiogroup
+prop id:plans accessibilityLabel Plan
 prop id:basic role radio
 prop id:basic accessibilityState selected=true checked=true
 style id:basic backgroundColor #00ff00ff
@@ -3606,6 +3610,7 @@ tap id:case-base-set-theme
 expect theme up #138a5aff
 expect theme radius-card 14
 style id:themed backgroundColor #138a5aff
+prop id:page headerStyle backgroundColor=#138a5aff
 # `token()` reads it at once and classes follow. nsh.json's theme is not
 # under it (`radius-card` is gone), the default is (`primary`).
 tap id:set
@@ -3614,10 +3619,12 @@ expect theme up #2563ebff
 expect theme radius-card undefined
 expect theme primary #171717ff
 style id:themed backgroundColor #2563ebff
+prop id:page headerStyle backgroundColor=#2563ebff
 # Its dark value in the dark appearance.
 tap id:dark
 expect theme up #93c5fdff
 style id:themed backgroundColor #93c5fdff
+prop id:page headerStyle backgroundColor=#93c5fdff
 tap id:system
 expect theme up #2563ebff
 # A theme with a value NSH cannot read (no color in the dark appearance):
@@ -3639,6 +3646,10 @@ tap id:bad-length
 expect theme result bad-length refused TypeError
 expect theme up #2563ebff
 style id:themed backgroundColor #2563ebff
+tap id:bad-suffix
+expect theme result bad-suffix refused TypeError
+expect theme up #2563ebff
+style id:themed backgroundColor #2563ebff
 tap id:built
 expect theme result built
 expect theme up #138a5aff
@@ -3655,6 +3666,7 @@ expect dark up #a78bfaff
 style id:outside backgroundColor #138a5aff
 style id:inside backgroundColor #7c3aedff
 style id:dark backgroundColor #a78bfaff
+prop id:scoped-page headerStyle backgroundColor=#7c3aedff
 # Another theme: only what the scope holds follows.
 tap id:pink
 expect inside up #db2777ff radius-card 14
@@ -3663,12 +3675,14 @@ expect outside up #138a5aff
 style id:inside backgroundColor #db2777ff
 style id:dark backgroundColor #f472b6ff
 style id:outside backgroundColor #138a5aff
+prop id:scoped-page headerStyle backgroundColor=#db2777ff
 # Without a theme it is drawn with the app's.
 tap id:none
 expect inside up #138a5aff radius-card 14
 expect dark up #45d49aff
 style id:inside backgroundColor #138a5aff
 style id:dark backgroundColor #45d49aff
+prop id:scoped-page headerStyle backgroundColor=#138a5aff
 covers [nsh] ThemeScope
 
 # base-update-theme
@@ -4523,6 +4537,7 @@ expect Configure: false true unknown
 expect Extension: bold mark 100 true
 expect Extend: 200 underline true
 expect Define: HEY extension xHI
+expect Suggest: true true
 expect Named: text threw
 expect Editable: false
 expect Both: threw
@@ -4572,6 +4587,11 @@ expect BubbleMenu
 covers [props] RichEditor.bubbleMenu
 expect CellA
 expect CellD
+# An editor without a height is as tall as its two lines; one with a
+# `maxHeight` stops there.
+expect AutoTwo
+frame id:rich-auto 20 329 370 34
+frame id:rich-capped 20 367 370 40
 # base-transition-shader
 tap id:case-base-transition-shader
 # Pages and a dialog with a `transitionShader` come and go as without one:

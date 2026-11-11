@@ -47,6 +47,7 @@ view()
 | `.accessible(..)` | `accessible` | `boolean` | The view is one element for assistive technologies; its children are not exposed separately. |
 | `.label(..)` | `accessibilityLabel` | `string` | What screen readers read, instead of the texts inside. |
 | `.hint(..)` | `accessibilityHint` | `string` | What activating the element does, read after a pause. |
+| `.accessibility_description(..)` | `accessibilityDescription` | `string` | More about the element than its name, read after it: a dialog's message, what a field expects. |
 | `.role(..)` | `role` | `AccessibilityRole` | What the element is. |
 | `.accessibility_state(..)` | `accessibilityState` | `AccessibilityState` | Its state: disabled, selected, checked, busy, expanded, pressed, current, has popup. `selected` also applies the selected style, `checked` the checked style when true and the indeterminate style when `"mixed"`, `pressed` the pressed style when true. |
 | `.accessibility_level(..)` | `accessibilityLevel` | `number` | The level of a heading (1 the top), the depth of a tree item (1 at the top). |
@@ -279,6 +280,8 @@ function Upload() {
 ```
 
 Announce changes the user would otherwise miss: a background save finishing, an error appearing away from the focus, a timer ending. On Android, `android={{ accessibilityLiveRegion: "polite" }}` on a view makes TalkBack announce its changes by itself.
+
+An alert (`.role(AccessibilityRole::Alert)`, `role="alert"`) is read by itself on macOS and the web: its label, or else the texts inside it, as it appears and again when its content changes, ahead of what the screen reader was saying. An error shown with the role needs no announcement of its own there; on macOS the same text announced in the same update is read once. On the other platforms, announce it as well.
 
 ## Text size
 
