@@ -68,7 +68,7 @@ impl Headless {
         self.step(format!("keyboard.press({keys})"));
         self.input_with(nsh_core::platform::InputModality::Keyboard);
         let stroke = Keystroke::parse(keys, self.environment.os).map_err(|e| e.to_string())?;
-        self.press_stroke(stroke)
+        self.press_stroke(stroke, keys)
     }
 
     /// The step `keyboard.remote(<key>)`: presses the TV remote's key
@@ -80,7 +80,7 @@ impl Headless {
     pub fn press_remote_key(&mut self, key: &str) -> Result<(), String> {
         self.step(format!("keyboard.remote({key})"));
         match RemoteKey::parse(key)?.keystroke() {
-            Some(stroke) => self.press_stroke(stroke),
+            Some(stroke) => self.press_stroke(stroke, &stroke.to_string()),
             None => {
                 self.go_back(true);
                 self.done()
@@ -88,8 +88,8 @@ impl Headless {
         }
     }
 
-    /// Presses `stroke` (`keyboard.press`, `keyboard.remote`).
-    fn press_stroke(&mut self, stroke: Keystroke) -> Result<(), String> {
+    /// Presses `stroke`, written `keys` (`keyboard.press`, `keyboard.remote`).
+    fn press_stroke(&mut self, stroke: Keystroke, keys: &str) -> Result<(), String> {
         let editing = self.screen.focused().is_some();
         // A hardware keyboard fires the app's shortcuts (`on_key`,
         // `keymap.bind`), on every platform: those of the focused window
