@@ -783,7 +783,8 @@ sets, else the types' default. A name that no type declares, or a value of anoth
 left out when the app runs. A key that is a role's name, in a section that also sets the token the role is mapped
 onto, gives way to that token; so does the second of two roles' names that set one token to two values. An embedding
 app's theme overrides and TSX's `setTheme` and `updateTheme` read their files the same way: they leave a name no type
-declares out, and refuse a value they cannot read.
+declares out, and refuse a value they cannot read. `resetTheme` reads its names the same way: a role's name gives the
+token the role is mapped onto its value in the app's theme back.
 
 ```json
 {

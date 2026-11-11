@@ -781,6 +781,17 @@ impl std::fmt::Debug for TokenProvider {
 }
 
 impl TokenProvider {
+    /// The token a theme file's `name` names: under theme types the token
+    /// a role of that name is mapped onto ([`ThemeSet::target`]), as
+    /// `setTheme` and `updateTheme` read it; any other name, and every
+    /// name without theme types, is its own.
+    pub(crate) fn token_name<'a>(&'a self, name: &'a str) -> &'a str {
+        match self {
+            TokenProvider::Themes(set) => set.target(name).unwrap_or(name),
+            TokenProvider::Source { .. } => name,
+        }
+    }
+
     /// The tokens of theme file `json` over the defaults (`None`: the
     /// defaults), with what of it was left out.
     pub(crate) fn read(&self, json: Option<&str>) -> Result<(Tokens, Vec<String>), String> {
