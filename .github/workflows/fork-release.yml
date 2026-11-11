@@ -22,11 +22,18 @@ name: Fork release
 # is made once the four required platforms built; Windows ARM64 is attached
 # when it built and never holds the release back.
 #
-# The Android NDK has no toolchain for arm64 Linux, and the Windows on Arm
-# image has no Android SDK, so the arm64 Linux and Windows archives have no
-# Android runtime: their legs set `android: "none"`, which skips Java and the
-# SDK and sets `NSH_DIST_NO_ANDROID` for `cargo xtask dist`, as upstream's
-# `release.yml` does with `no_android`.
+# The Android and web runtimes are the same on every machine. As in
+# upstream's `release.yml`, the x86_64 Linux leg (`shared`) alone builds
+# them; every other leg sets `NSH_DIST_NO_ANDROID` and `NSH_DIST_NO_WEB` and
+# skips Java, the Android platform and the wasm32 C tools. Upstream ships
+# them as components of their own (`nsh component pack`), which an installed
+# nsh downloads from longbridge/nsh's release; the fork's archives keep the
+# whole distribution instead, so the Release job copies them from the x86_64
+# Linux archive into the others before it attests them. The macOS and x86_64
+# Windows archives get the Android runtime, its embedding SDK
+# (`embed/android`) and the web runtime; the arm64 Linux and Windows archives
+# get the web runtime only, as before: their legs never built Android (the
+# NDK has no toolchain for arm64 Linux, the Windows on Arm image no SDK).
 
 on:
   push:
@@ -83,25 +90,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The components the same everywhere (Android, web) come from x86_64
+        # Linux's build alone (`shared`), as in upstream's `release.yml`; the
+        # Release job copies them into the other archives (see above).
         include:
           # The iOS runtimes and SDK need Xcode; the macOS runtime is built
           # for this machine (Apple silicon).
           - name: macos-arm64
             os: macos-15
-          # 24.04 has GTK 4.14 and Pango 1.52+, what the Linux runtime needs;
-          # its binaries need glibc 2.39 and GTK 4.14 or newer where they run.
+          # Ubuntu 24.04 has GTK 4.14 and Pango 1.52+, what the Linux runtime
+          # needs; its binaries need glibc 2.39 and GTK 4.14 or newer where
+          # they run.
           - name: linux-x86_64
             os: ubuntu-24.04
-          # The Linux guests (Lima) on Apple silicon Macs; no Android runtime.
+            shared: true
+          # The Linux guests (Lima) on Apple silicon Macs.
           - name: linux-arm64
             os: ubuntu-24.04-arm
-            android: "none"
           - name: windows-x86_64
             os: windows-latest
           # Optional: it may fail without holding the release back.
           - name: windows-arm64
             os: windows-11-arm
-            android: "none"
             optional: true
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.optional == true }}
@@ -141,18 +151,13 @@ jobs:
       # The Android runtime: `javac` + `d8` (Java 17), the SDK's
       # `platforms;android-35` and an NDK (the images have the SDK and NDKs).
       - uses: actions/setup-java@v4
-        if: matrix.android != 'none'
+        if: ${{ matrix.shared }}
         with:
           distribution: temurin
           java-version: "17"
       - name: Install the Android platform
-        if: matrix.android != 'none'
+        if: ${{ matrix.shared }}
         run: |
-          # `xtask dist` makes a Windows distribution without an Android SDK.
-          if [[ "$RUNNER_OS" == Windows && -z "${ANDROID_HOME:-}" ]]; then
-            echo "no Android SDK on this runner: the distribution has no Android runtime"
-            exit 0
-          fi
           if [[ ! -f "$ANDROID_HOME/platforms/android-35/android.jar" ]]; then
             sdkmanager=$(ls "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager* | head -1)
             yes | "$sdkmanager" "platforms;android-35" > /dev/null || true
@@ -168,6 +173,7 @@ jobs:
       # The web runtime's C code (zstd) needs upstream LLVM: Apple's clang
       # does not target wasm32. Check the C tools before building runtimes.
       - name: Set up WebAssembly C tools
+        if: ${{ matrix.shared }}
         run: |
           suffix=""
           if [[ "$RUNNER_OS" == macOS ]]; then
@@ -223,9 +229,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-fork-release-cargo-
 
+      # The release profile's fat LTO over one codegen unit links each of
+      # the distribution's ~15 executables single-threaded, 5 to 25 minutes
+      # apiece: thin LTO over 16 units takes a fraction of that for little
+      # run-time cost. The web profile, which inherits release, keeps fat
+      # LTO: what pages download is built for size (docs/dev/web.md).
       - name: Build the distribution
         env:
-          NSH_DIST_NO_ANDROID: ${{ matrix.android == 'none' && '1' || '' }}
+          CARGO_PROFILE_RELEASE_LTO: thin
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_WEB_LTO: fat
+          CARGO_PROFILE_WEB_CODEGEN_UNITS: "1"
+          NSH_DIST_NO_ANDROID: ${{ !matrix.shared && '1' || '' }}
+          NSH_DIST_NO_WEB: ${{ !matrix.shared && '1' || '' }}
         run: cargo xtask dist -v
 
       # The packaged CLI makes and bundles a new app.
@@ -300,6 +316,55 @@ jobs:
           for digest in *.sha256; do
             shasum -a 256 -c "$digest"
           done
+
+      # The Android and web runtimes come from x86_64 Linux's build alone
+      # (see above): each other archive gets those it held when every leg
+      # built them, is packed again and gets a new digest (a `*` before the
+      # name on Windows, as Git Bash's `sha256sum` writes it). Windows
+      # ARM64's archive is missing when its leg failed.
+      - name: Add the shared runtimes
+        working-directory: assets
+        run: |
+          shared="$RUNNER_TEMP/shared"
+          mkdir -p "$shared"
+          tar -xzf nsh-linux-x86_64.tar.gz -C "$shared" \
+            nsh/runtime/android nsh/runtime/web nsh/embed/android
+          add() {
+            local archive=$1 path="$PWD/$1" work="$RUNNER_TEMP/repack" part
+            shift
+            [[ -f "$archive" ]] || return 0
+            rm -rf "$work"
+            mkdir -p "$work"
+            if [[ "$archive" == *.zip ]]; then
+              unzip -q "$archive" -d "$work"
+            else
+              tar -xzf "$archive" -C "$work"
+            fi
+            for part in "$@"; do
+              if [[ -e "$work/nsh/$part" ]]; then
+                echo "::error::$archive already holds $part"
+                return 1
+              fi
+              mkdir -p "$(dirname "$work/nsh/$part")"
+              cp -a "$shared/nsh/$part" "$work/nsh/$part"
+            done
+            rm "$archive"
+            if [[ "$archive" == *.zip ]]; then
+              (cd "$work" && zip -qry "$path" nsh)
+              sha256sum -b "$archive" > "$archive.sha256"
+            else
+              tar -czf "$archive" -C "$work" nsh
+              sha256sum "$archive" > "$archive.sha256"
+            fi
+            rm -rf "$work"
+            echo "$archive: added $*"
+          }
+          add nsh-macos-arm64.tar.gz runtime/android runtime/web embed/android
+          add nsh-windows-x86_64.zip runtime/android runtime/web embed/android
+          add nsh-linux-arm64.tar.gz runtime/web
+          add nsh-windows-arm64.zip runtime/web
+          rm -rf "$shared"
+          ls -l
 
       - uses: actions/attest-build-provenance@v2
         with:
