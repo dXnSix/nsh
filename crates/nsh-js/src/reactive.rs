@@ -1313,6 +1313,18 @@ pub(crate) fn set_signal(cx: *mut JsContext, obj: JsValue, value: JsValue) {
     }
 }
 
+/// Reads signal object `obj` (borrowed) for its tracking alone, as calling
+/// it does without the call: the current listener follows it. Nothing for
+/// a dead one.
+pub(crate) fn track(cx: *mut JsContext, obj: JsValue) {
+    let class = unsafe { graph(cx) }.data.classes.signal;
+    if let Some(id) = unsafe { node_of(cx, obj, class) } {
+        let value = r::read(Js(cx), id);
+        // SAFETY: the reference the read returned.
+        unsafe { qjs::JS_FreeValue(cx, value) };
+    }
+}
+
 /// The number signal object `obj` holds (untracked), if it holds one.
 pub(crate) fn peek_number(cx: *mut JsContext, obj: JsValue) -> Option<f64> {
     let v = peek(cx, obj);
