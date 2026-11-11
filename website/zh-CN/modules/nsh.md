@@ -6,7 +6,7 @@ order: 2
 
 # nsh
 
-`nsh` 是核心模块：响应式 API（signal、computed、effect、context）、`mount`、`token`、`setTheme`、宿主元素 `View`、`Text`、`Scroll` 和 `Overlay`，[可选择的视图](#selectable-views)、[安全区域与键盘](#safe-area-and-keyboard)，[动画](#animation)、[设备与环境](#device)、[`PanResponder`](#panresponder)、[剪贴板](#clipboard)、[照片选择器](#picker)、[语音识别](#speech)、[声音](#sound)、[存储](#storage)、[宿主通道](#host)、[键盘快捷键](#keymap)、[原生组件与模块](#nativecomponent-and-nativemodule)、[无障碍](#accessibility)，以及元素、样式和事件的 TypeScript 类型。响应式图本身以 Rust 原生运行；读取一个 signal 是一次对运行时的调用，只需几纳秒，只有你自己写的闭包会在 JavaScript 解释器中执行。
+`nsh` 是核心模块：响应式 API（signal、computed、effect、context）、`mount`、`token`、`setTheme`、`updateTheme`、`resetTheme`、宿主元素 `View`、`Text`、`Scroll` 和 `Overlay`，[可选择的视图](#selectable-views)、[安全区域与键盘](#safe-area-and-keyboard)，[动画](#animation)、[设备与环境](#device)、[`PanResponder`](#panresponder)、[剪贴板](#clipboard)、[照片选择器](#picker)、[语音识别](#speech)、[声音](#sound)、[存储](#storage)、[宿主通道](#host)、[键盘快捷键](#keymap)、[原生组件与模块](#nativecomponent-and-nativemodule)、[无障碍](#accessibility)，以及元素、样式和事件的 TypeScript 类型。响应式图本身以 Rust 原生运行；读取一个 signal 是一次对运行时的调用，只需几纳秒，只有你自己写的闭包会在 JavaScript 解释器中执行。
 
 ```ts
 import { batch, cleanup, computed, context, effect, ErrorBoundary, mount, Overlay, Scroll, signal, split, Text, token, untracked, View } from "nsh";
@@ -254,8 +254,8 @@ function token<K extends keyof Tokens>(name: K): Tokens[K];
 ```
 
 应用主题（`nsh.json` 的 `"theme"`，叠加在 shadcn/ui 的令牌之上）中名为 `name` 的设计令牌在当前外观下的值：颜色是 `#rrggbbaa`，
-长度是以点为单位的数值，字体是字体族名称。名称是主题中 CSS 变量去掉 `--` 后的名称（`primary`、`muted-foreground`、`radius`、
-`font-mono`，以及应用自己的令牌，如 `up`）。读取它是响应式的：读取令牌的组件、memo 或 effect 会在主题或外观变化时重新运行。
+长度是以点为单位的数值，字体是字体族名称，阴影是它的 CSS `box-shadow` 各层，渐变是它的 CSS `background-image`。名称是主题中 CSS 变量去掉 `--` 后的名称（`primary`、`muted-foreground`、`radius`、
+`font-mono`，以及应用自己的令牌，如 `up`）。读取它是响应式的：读取令牌的组件、memo 或 effect 会在主题或外观变化时重新运行。在 [`ThemeScope`](#themescope) 中，它是该作用域的值和外观。
 `Tokens` 列出应用的令牌及其类型；NSH 根据主题把它写入 `.nsh/types/nsh/tokens.d.ts`。在类名中直接引用令牌（`bg-primary`、
 `rounded-(--radius)`）：见[主题 token](../docs/tailwind.md#主题-token)。
 
@@ -264,6 +264,29 @@ import { effect, token } from "nsh";
 
 effect(() => console.log("primary is", token("primary"), "radius", token("radius")));
 ```
+
+## role
+
+```ts
+function role<K extends keyof Roles>(name: K): Roles[K] | undefined;
+```
+
+主题角色 `name` 在当前外观下用来绘制的值，形式与 [`token()`](#token) 给出令牌的值相同：应用主题把该角色映射到的令牌（主题类型的 `role = …`），
+否则是与角色同名的令牌，否则是 `undefined`。角色说明 UI 的某个部分是做什么用的（`popover`、`border`、`warning`），无论应用的设计系统如何命名
+对应的令牌：按角色编写的组件可以被任何设计系统主题化。读取它是响应式的，与 `token()` 一样。
+
+`Roles` 列出应用的 UI 集合绘制时使用的角色（`nsh/base` 的角色见[主题角色](./nsh-base.md#theme-roles)）以及每个角色读取的内容；NSH 把它写入
+`.nsh/types/nsh/roles.d.ts`。主题没有对应令牌的角色是 `undefined`，所以组件为它保留自己的颜色：
+
+```tsx
+import { role } from "nsh";
+
+// 弹出层的表面，无论这个应用如何称呼它；在主题有警告色之前使用琥珀色。
+<View style={{ backgroundColor: role("popover"), borderLeftWidth: 3, borderLeftColor: role("warning") ?? "#d97706" }} />
+```
+
+类把角色当作变量读取：在主题没有同名令牌时，`bg-(--popover)` 是主题把 `popover` 映射到的令牌（[主题令牌](../docs/tailwind.md#theme-tokens)）。
+Rust 通过角色的常量读取：`theme().tokens().role(nsh_base::role::POPOVER)`。
 
 ## setTheme
 
@@ -276,15 +299,21 @@ interface Theme {
     light?: Record<string, string | number>;
     dark?: Record<string, string | number>;
   };
+  roles?: Record<string, string>;
 }
 ```
+
+`roles` 按名称把主题角色映射到主题的令牌上：`roles: { popover: "surface" }` 让所有用 `popover` 绘制的部分（`nsh/base` 的弹出层、
+[`role("popover")`](#role)）用令牌 `surface` 绘制，并在它变化时跟随；而 `"popover": "var(--surface)"` 只会复制一次它的颜色。没有 Rust 主题类型的
+应用用它按自己的方式命名令牌。把角色映射到主题中不存在的令牌名，或在主题类型下映射某个类型已经映射的角色，会像无法读取的值一样被拒绝；
+没有任何 UI 集合拥有的角色名会产生构建警告。`updateTheme` 会在已映射的角色之上追加。
 
 在应用运行时把 `theme` 设为应用的主题，取代 `nsh.json` 的 `"theme"`：格式与它相同，也和它一样叠加在 shadcn/ui 的令牌之上。
 它立即生效：调用之后 `token()` 马上读到新的令牌，引用令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在下一帧跟上，两种外观都是。
 嵌入方应用的[主题覆盖](../docs/tailwind.md#主题-token)仍然优先于它。传 `null` 恢复应用构建时的主题。
 
 主题要整个读得懂：有值读不懂时（NSH 不认识的颜色，如 `#zz` 或 `lab()`；指不到颜色的 `var()`；或一种外观下是颜色、另一种外观下却不是颜色的值），
-`setTheme` 抛出 `TypeError`，逐一列出这些值，正在显示的主题保持不变。阴影这类不属于任何令牌类型的值会被略过，和 `nsh.json`
+`setTheme` 抛出 `TypeError`，逐一列出这些值，正在显示的主题保持不变。`em` 单位的字间距这类不属于任何令牌类型的值会被略过，和 `nsh.json`
 的主题一样。新主题请从应用自己的主题出发，只改不同的部分，这样类名引用的令牌都还有值（`up` 在 `nsh.json` 的主题里时的 `bg-up`）。
 Rust：对 `nsh_base::Theme` 调用 `set_tokens(theme.into())`（[主题 token](../docs/tailwind.md#主题-token)）。
 
@@ -300,6 +329,62 @@ function brand(color: string) {
 
 brand("#e11d48");
 setTheme(null); // 恢复应用的主题
+```
+
+<a id="updatetheme-resettheme"></a>
+
+## updateTheme、resetTheme
+
+```ts
+function updateTheme(theme: Theme): void;
+function resetTheme(names?: (keyof Tokens | keyof Roles)[]): void;
+```
+
+`updateTheme` 在应用运行时修改 `theme` 设置的令牌，其余令牌保持不变；`setTheme` 则替换全部令牌。`theme` 的格式与 `setTheme`
+的相同，读取方式也相同：要整个读得懂（有 NSH 读不懂的值时抛出列出该值的 `TypeError`，任何令牌都不变）。调用之后 `token()`
+马上读到新的值，引用这些令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在下一帧跟上。连续两次更新都会生效，后一次覆盖前一次。
+`var(--name)` 指向本次更新没有设置的令牌时，取该令牌当前显示的值；不属于任何令牌类型的值会被略过，该令牌保持原值。
+嵌入方应用的[主题覆盖](../docs/tailwind.md#主题-token)仍然优先。
+
+`resetTheme` 把 `names` 中的令牌恢复为应用主题中的值，即 `nsh.json` 的主题或 `setTheme` 设置的主题；不传名字时恢复全部令牌。
+主题中没有的名字会被移除。没有列出的令牌保持不变。在[主题类型](../docs/rust.md#主题类型)下，角色的名称指该角色所映射的令牌，与主题文件中一样。Rust：`update_tokens` 和 `reset_tokens`（[主题](../docs/rust.md#主题)）。
+
+```tsx
+import { resetTheme, updateTheme } from "nsh";
+
+// 换一个品牌色，浅色和深色各一个；主题的其余部分不变。
+updateTheme({ cssVars: { light: { primary: "#e11d48" }, dark: { primary: "#fb7185" } } });
+resetTheme(["primary"]); // 恢复应用的 primary
+```
+
+## appInfo
+
+```ts
+function appInfo(): AppInfo;
+
+interface AppInfo {
+  readonly id: string | null;
+  readonly name: string | null;
+  readonly version: string | null;
+  readonly build: number | null;
+  readonly development: boolean;
+}
+```
+
+应用构建时的信息：id、名称、版本号、构建号，以及是否为开发构建。打包产物报告的是 `nsh package`、`nsh publish` 给包的
+名称和版本（包括 `--id`、`--name`、`--version`、`--build`），没有给出时版本为 `1.0.0`、构建号为 `1`；其他构建报告
+`nsh.json` 的 `"id"`、`"name"`、`"version"` 和 `"build"`，没有的项为 `null`。`nsh run`、`nsh dev`、`nsh test` 和不带
+`--release` 的 `nsh build` 是开发构建；`nsh package`、`nsh publish` 和 `nsh build --release` 不是。在任何平台、任何模块中
+都能读取，包括模块顶层的代码：构建会在应用的模块运行之前把这些信息交给运行时。
+
+安装的应用本体的版本见 `nsh/updater` 的 [`shellInfo()`](./nsh-updater.md#shellinfo)。
+
+```tsx
+import { appInfo, Text } from "nsh";
+
+const { version, build, development } = appInfo();
+
+export const About = () => <Text>{`${version} (${build})${development ? " · dev" : ""}`}</Text>;
 ```
 
 ## View、Text、Scroll、Overlay
@@ -921,7 +1006,7 @@ const wide = () => windowSize().width >= 600;
 const colorScheme: Accessor<"light" | "dark">;
 ```
 
-显示的外观：系统的外观，除非应用设置了自己的（`nsh.json` 的 `"appearance"`、[`setColorScheme`](#setcolorscheme)）。响应式。Rust：`dark() -> bool`；主题颜色（`AdaptiveColor`）和 `.dark(…)` 样式变体无需读取它就会跟随。Tailwind 的 `dark:` 变体也跟随它（见 [Tailwind](../docs/tailwind.md)）。
+显示的外观：系统的外观，除非应用设置了自己的（`nsh.json` 的 `"appearance"`、[`setColorScheme`](#setcolorscheme)）；在设置了外观的 [`ThemeScope`](#themescope) 中，是该作用域的外观。响应式。Rust：`dark() -> bool`；主题颜色（`AdaptiveColor`）和 `.dark(…)` 样式变体无需读取它就会跟随。Tailwind 的 `dark:` 变体也跟随它（见 [Tailwind](../docs/tailwind.md)）。
 
 ```rust tabs
 view().flex_1().bg(move || if dark() { black() } else { white() })
@@ -1010,6 +1095,57 @@ function setColorScheme(scheme: "light" | "dark" | "system"): void;
 
 无论系统外观如何，立即以 `scheme` 显示应用：`colorScheme()`、`dark:` 类、组件的主题和平台控件（警告框、状态栏的默认样式）都随之变化；`"system"` 重新跟随系统。`nsh.json` 的 `"appearance"` 从启动时就设置它。Rust：`set_color_scheme(Appearance::Dark)`（`Appearance::Light`、`Appearance::System`）。
 
+### ThemeScope
+
+```ts
+const ThemeScope: (props: ThemeScopeProps) => JSX.Element;
+
+interface ThemeScopeProps {
+  /** `"light"` 或 `"dark"`；省略时，作用域按其外层视图的外观显示。 */
+  appearance?: "light" | "dark";
+  /** 一个主题文件，它的值叠加在作用域外层的令牌之上；省略时，作用域使用外层的令牌绘制。 */
+  theme?: Theme;
+  children?: JSX.Element;
+  // 以及视图的 `class`、`classList`、`style`、状态样式、`testID`、`onLayout`
+}
+```
+
+一个视图，无论应用和系统的外观如何，它自身及其中的一切都以它自己的外观、它自己的设计令牌或两者同时显示：浅色页面旁的深色侧边栏，拥有自己 `primary` 的卡片，应用旁的主题预览。它是视图，所以它的 `class` 和 `style` 负责布局和绘制。
+
+在作用域内，凡是跟随外观的都跟随作用域的外观：`dark:` 类、主题 token 的类（`bg-background`）、组件的主题颜色、[`colorScheme()`](#colorscheme) 和 [`token()`](#token)。在 iOS、macOS 和 Web 上，其中的平台控件也跟随它（文本输入的键盘和菜单、Web 视图、表单控件），桌面后端绘制的滚动指示器同样如此。作用域可以嵌套：由最近的设置了 `appearance` 的作用域决定，没有设置的作用域按其外层视图的外观显示。
+
+设置了 `theme`（一个主题文件，与 [`updateTheme`](#updatetheme-resettheme) 接受的相同）时，主题令牌的类、组件的主题和 [`token()`](#token) 在每种外观下对它设置的令牌使用作用域的值，对其余令牌使用应用的值；它自己没有设置的 `var()` 指向作用域外层的令牌。作用域只设置应用主题已有的令牌：主题没有的名称会被略过并给出警告，所以存在的类在各处都相同。嵌套在内的作用域从外层作用域的值开始，应用主题的变化会传到作用域没有设置的每个令牌。
+
+与 CSS 一样，视图继承来的颜色保持不变：作用域要设置自己的背景色和文字颜色。平台绘制的菜单、警告框和面板属于应用，即使由作用域内的视图打开也是如此。Rust：`theme_scope().appearance(ColorScheme::Dark).child(…)` 和 `.theme(Some(ScopeTheme::file(json)))`，或用 `ScopeTheme::from(tokens)` 和 `ScopeTheme::of(&theme)` 传入在 Rust 中构造的令牌和主题类型的值；`dark()`、`color()`、`tokens()` 和 `theme_of()` 给出读取它们的绑定所在作用域的结果。
+
+```rust tabs
+view().flex_row().flex_1().child(
+    theme_scope()
+        .appearance(ColorScheme::Dark)
+        .child(view().w(px(240.)).bg(AdaptiveColor::rgb(0xffffff, 0x18181b)).child(sidebar())),
+)
+```
+
+```tsx tabs
+import { ThemeScope, View } from "nsh";
+
+<View class="flex-1 flex-row">
+  <ThemeScope appearance="dark" class="w-60 bg-white dark:bg-zinc-900">
+    <Sidebar />
+  </ThemeScope>
+  <View class="flex-1 bg-white dark:bg-zinc-900">{/* 页面，使用应用的外观 */}</View>
+</View>
+```
+
+```tsx
+// 使用自己品牌色的套餐卡片：其中的 `bg-primary` 和 `token("primary")` 是作用域的值。
+<ThemeScope theme={{ cssVars: { light: { primary: "#7c3aed" }, dark: { primary: "#a78bfa" } } }}>
+  <View class="rounded-(--radius) bg-primary p-4">
+    <Text class="text-primary-foreground">Upgrade</Text>
+  </View>
+</ThemeScope>
+```
+
 ### fpsEnabled 和 setFpsEnabled
 
 ```ts
@@ -1021,6 +1157,20 @@ function setFpsEnabled(enabled: boolean): void;
 
 ```tsx
 <Switch checked={fpsEnabled()} onChange={({ checked }) => setFpsEnabled(checked)} />
+```
+
+### shadersAvailable
+
+```ts
+const shadersAvailable: Accessor<boolean>;
+```
+
+平台能否绘制 shader 视图（`Shader`、`ShaderEffect`、`ShaderTransition`、`ScreenEffect`、`ScreenTransition`），响应式。在 iOS、Android、macOS、Windows、Linux、GPUI、Web 和无头测试中为 `true`；在终端中、以及关闭 `shader` 特性构建的应用中为 `false`。它从 `true` 开始，当第一个 shader 挂载、而 NSH 打不开这台机器的 GPU 时（例如浏览器没有 WebGL 2）变为 `false`，之后不再变回；所以在它为真时显示 shader，否则显示应用自己的绘制（见 [Shader](../elements/shader.md#shader-能否绘制)）。Rust：`shaders_available() -> bool`。
+
+```tsx
+<If when={shadersAvailable()} else={<Image src={backdrop} style={{ flex: 1 }} />}>
+  <Shader source={BACKDROP} style={{ flex: 1 }} />
+</If>
 ```
 
 ### platform
@@ -1599,7 +1749,7 @@ hasImage(): Promise<boolean>;
 writeImage(src: string): Promise<void>;
 ```
 
-把 `src`（base64 `data:` URL，或 `readImage` 给的 `url`）的图片放到剪贴板上，替换原有内容。Rust：`set_clipboard_image(src)`。Windows 上接受 PNG，这是浏览器、Office 和截图工具读取的格式。Android 上以 `"ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"` 拒绝。
+把 `src`（base64 `data:` URL，或 `readImage` 给的 `url`）的图片放到剪贴板上，替换原有内容。Rust：`set_clipboard_image(src)`。Windows 上接受 PNG，这是浏览器、Office 和截图工具读取的格式。Web 上图片以 PNG 放到剪贴板，这是浏览器写入的图片格式；其他格式的图片同时原样放上去：作为 HTML（`<img>`，粘贴时在 `html` 里），在 Chromium 系浏览器中还作为原图，`readImage` 读回的就是它，所以 GIF 保留动画。Android 上以 `"ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"` 拒绝。
 
 ```rust tabs
 set_clipboard_image(image.url.clone());
@@ -1825,7 +1975,7 @@ for (const { file } of picked) {
 
 | 平台 | 选择器 | 过滤器 |
 |---|---|---|
-| macOS | `NSOpenPanel` 表单 | 所有扩展名合为一组 |
+| macOS | `NSOpenPanel`：应用窗口上的表单；该窗口不可见时（如托盘应用隐藏的主窗口）在最前面单独显示 | 所有扩展名合为一组 |
 | Windows | `IFileOpenDialog` | 每个过滤器一个选项，显示其名称 |
 | Linux | `GtkFileDialog`（有 portal 时用 portal 的） | 每个过滤器一个选项，显示其名称 |
 | iOS | `UIDocumentPickerViewController`，以副本形式 | 所有扩展名合为一组 |
@@ -1897,7 +2047,7 @@ await Notifications.show({ id: "sync", title: "Synced", body: "12 new photos", s
 
 ### Notifications.permission
 
-`permission()` 只查询不询问，`requestPermission()` 首次会显示系统提示。两者的结果都是 `"default"`（尚未询问）、`"granted"`、`"denied"`（只能在系统设置里更改）或 `"unavailable"`。
+`permission()` 只查询不询问，`requestPermission()` 首次会显示系统提示。两者的结果都是 `"default"`（尚未询问）、`"granted"`、`"denied"`（只能在系统设置里更改）或 `"unavailable"`。在 Apple 平台上，`requestPermission()` 询问之后按系统设置里的权限返回：用户关掉了通知的应用得到 `"denied"`。
 
 ## UrlScheme
 
@@ -1948,17 +2098,19 @@ scheme 以字母开头，后面是字母、数字、`+`、`-` 或 `.`，按小�
 ```ts
 const UrlScheme: {
   on(event: "open", listener: (event: { url: string }) => void): () => void;
+  /** 地址不是应用自己改的（Web 上的后退和前进、用户输入的地址）。 */
+  on(event: "change", listener: (event: { url: string; reason: "back" | "forward" | "address" }) => void): () => void;
   /** 应用的地址，没有时为 null。 */
   url(): string | null;
   /** 设置当前页面的地址；应用的页面保持不变。 */
-  setUrl(url: string): void;
+  setUrl(url: string, options?: { history?: "replace" | "push" }): void;
 };
 ```
 
 | 平台 | `url()` | `setUrl(url)` |
 | --- | --- | --- |
-| Web，应用占据整个页面 | 页面的地址：加载时的地址、`setUrl` 设置的地址，或浏览器后退回到的那条记录的地址 | 替换当前历史记录的地址，与 `history.replaceState` 一样解析（相对于页面的 `<base href>`），在同一轮压入或弹出的页面的历史记录之后生效 |
-| 原生平台，以及 iframe 中的 Web | 最后一个打开应用的链接（启动应用的链接同时作为第一个 `open` 到达），或之后 `setUrl` 设置的地址；两者都没有时为 `null` | 为 `url()` 保存这个 URL；把它交给系统（Handoff、App Links）由嵌入应用负责 |
+| Web，应用占据整个页面 | 页面的地址：加载时的地址、`setUrl` 设置的地址，或浏览器后退回到的那条记录的地址 | 替换当前历史记录的地址，与 `history.replaceState` 一样解析（相对于页面的 `<base href>`），在同一轮压入或弹出的页面的历史记录之后生效；带 `history: "push"` 时，像 `history.pushState` 一样在它之后新建一条自己的记录（见下文） |
+| 原生平台，以及 iframe 中的 Web | 最后一个打开应用的链接（启动应用的链接同时作为第一个 `open` 到达），或之后 `setUrl` 设置的地址；两者都没有时为 `null` | 为 `url()` 保存这个 URL，带 `history: "push"` 时也一样（没有可以压入的历史记录）；把它交给系统（Handoff、App Links）由嵌入应用负责 |
 
 URL 不是字符串、超过 16 KiB 或含有空白字符时抛出 `TypeError`；在 Web 上应用占据整个页面时，不是页面同源 URL 的地址同样抛出 `TypeError`。
 应用只有一个地址，Rust 读的也是它，`url()` 直接读取它：链接、Rust 的 `set_app_url` 和 `setUrl` 的改动都立即可见。在上表的平台上，启动应用的链接在应用的代码运行之前就已到达，所以第一次调用 `url()` 就能读到它，它同时也作为第一个 `open` 到达（在 Web 上，页面的地址从一开始就在）。
@@ -2001,6 +2153,42 @@ export function App() {
 
 Rust 代码 await `nsh_core::prelude` 的 `app_url()`，调用 `set_app_url(url)`，与 `next_url_scheme_open()` 并列；它们和 `url()`、
 `setUrl` 是同一个地址，`setUrl` 会抛错的 URL，`set_app_url` 返回错误。在 Web 上它和 `setUrl` 一样按页面的基准地址解析 URL，与页面不同源的地址返回错误。
+
+应用里自成一处、却没有为它压入页面的地址（标签页、查询里的筛选或排序、分栏视图选中的行），用 `history: "push"` 设置，
+这样浏览器的后退会回到之前的地址，而不是离开页面。应用通过 [`change`](#urlschemeonchange) 收到这次后退以及之后的前进：
+
+```tsx
+function selectTab(tab: Tab) {
+  current.set(tab);
+  UrlScheme.setUrl(`?tab=${tab}`, { history: "push" });
+}
+UrlScheme.on("change", ({ url }) => current.set(tabOf(url)));
+```
+
+压入的地址是当前条目之后、显示着的页面上的一条记录，并像 `history.pushState` 一样丢弃浏览器的前进记录。在压入页面的那一轮，
+地址归页面的记录，不另建记录（就像 `onChange` 设置的那样）；在弹出页面的那一轮，它是后退落到的那条记录之后的一条记录。压入当前显示的
+地址不会新建记录；同一轮里最后的地址生效，压入优先于替换。`history` 为其他值时抛出 `TypeError`。Rust 调用
+`set_app_url_with(url, HistoryBehavior::Push)`（`nsh_core::url_scheme`）。
+
+### UrlScheme.on("change")
+
+`change` 报告应用的地址发生了变化，而这一变化既不是应用自己做的，也不是它的页面能说明的；事件带有地址和变化的原因。此时
+`url()` 已经读到新地址，应用显示它所指向的内容：
+
+```tsx
+// 标签页在地址里（`?tab=live`）；后退或前进到另一个标签页的条目时，显示那个标签页。
+UrlScheme.on("change", ({ url }) => tab.set(tabOf(url)));
+```
+
+| `reason` | 何时（Web 上，应用占满整个页面时） |
+| --- | --- |
+| `"back"`、`"forward"` | 浏览器的后退或前进到了页面相同、地址不同的条目（用户输入的地址），或者后退弹出了页面，而应用在响应时没有设置地址（没有 `onChange` 设置地址），留下的地址也不是应用设置的 |
+| `"address"` | 用户给页面输入了应用的地址，即在地址栏里输入 `#fragment`：在当前条目之后新建一个条目，应用的页面保持不变 |
+
+栈能说明的情况保持不变：弹出页面的后退归栈处理（`onChange`），前进到栈里已经没有的页面是 `open`，应用自己的 `setUrl`
+不是 `change`。没有监听者时发生的变化不会保留：`url()` 里有它们。原生平台、GPUI 宿主和终端没有地址的历史记录，所以
+`change` 只在 Web 上出现。Rust 代码 await `nsh_core::prelude` 的 `next_app_url_change()`，得到带有 `url` 和 `reason` 的
+`AppUrlChange`。
 
 ## Speech
 
@@ -2156,7 +2344,7 @@ import { AudioPlayer, Sound } from "nsh";
 ```ts
 declare class Sound {
   static available(): Promise<boolean>;
-  static load(src: string): Promise<Sound>;
+  static load(src: string | Uint8Array): Promise<Sound>;
   play(options?: { volume?: number; rate?: number }): void;
   stop(): void;
   readonly duration: number;
@@ -2200,7 +2388,7 @@ type AudioErrorCode =
 
 ### Sound.load
 
-从导入的音频文件（`import click from "./sounds/click.wav"`：导入得到文件的 `asset:/` URL，文件随应用发布）、`file:` URL、`data:` URI 或应用 `network` capability 授权的 `http(s)` URL 加载音效，并解码进内存。引擎已加载过的源会共享：两个组件加载同一个点击音只解码一次。音效在 `dispose()` 时释放，或在加载它的一方离开时（组件卸载）释放。单个音效编码后最大 8 MB、时长最长 5 秒，一个应用同时最多持有 64 个音效、共 16 MB 解码后音频；超出时 `load` 以 `code` 为 `"ERR_NSH_QUOTA_EXCEEDED"` 拒绝。更长的音频交给 `AudioPlayer`。
+从导入的音频文件（`import click from "./sounds/click.wav"`：导入得到文件的 `asset:/` URL，文件随应用发布）、`file:` URL、`data:` URI 或应用 `network` capability 授权的 `http(s)` URL 加载音效，也可以直接给音频文件的字节（应用生成或下载的 `Uint8Array`；Rust 里还可以是嵌进程序的字节，`load_sound(include_bytes!("tick.wav"))`），并解码进内存。字节的格式（WAV、AAC、MP3 等）从字节本身读出。引擎已加载过的源会共享，相同的字节也一样：两个组件加载同一个点击音只解码一次。音效在 `dispose()` 时释放，或在加载它的一方离开时（组件卸载）释放。单个音效编码后最大 8 MB、时长最长 5 秒，一个应用同时最多持有 64 个音效、共 16 MB 解码后音频；超出时 `load` 以 `code` 为 `"ERR_NSH_QUOTA_EXCEEDED"` 拒绝。更长的音频交给 `AudioPlayer`。
 
 ### Sound.play
 
