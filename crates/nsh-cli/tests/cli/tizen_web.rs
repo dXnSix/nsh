@@ -193,6 +193,7 @@ fn a_package_is_the_web_site_with_a_manifest_and_the_tv_shim() {
         "<name>Counter</name>",
         r#"<tizen:privilege name="http://tizen.org/privilege/internet"/>"#,
         r#"<tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>"#,
+        r#"<tizen:privilege name="http://developer.samsung.com/privilege/productinfo"/>"#,
         r#"<tizen:profile name="tv-samsung"/>"#,
         r#"screen-orientation="landscape""#,
         r#"version="1.0.0""#,
@@ -210,6 +211,11 @@ fn a_package_is_the_web_site_with_a_manifest_and_the_tv_shim() {
         .find(&format!(r#"<script src="{shim}"></script>"#))
         .unwrap_or_else(|| panic!("{page}"));
     assert!(shim_at < page.find(r#"<script type="module">"#).unwrap());
+    // After the TV's `webapis`, which `nsh/tizen` uses through the shim.
+    let webapis = page
+        .find(r#"<script src="$WEBAPIS/webapis/webapis.js"></script>"#)
+        .unwrap_or_else(|| panic!("{page}"));
+    assert!(webapis < shim_at);
     assert!(page.contains(r#""idiom":"tv""#), "{page}");
     assert!(page.contains(r#""history":false"#), "{page}");
     assert!(page.contains("idiom: app.idiom"), "{page}");

@@ -289,6 +289,9 @@ nsh package --target tizen-web --probe             # a package that shows how th
   whether to exit and exits on Exit, as Samsung's rules ask. The arrows, Enter, the color keys, the media keys and
   the channel keys reach the app as their [`keymap`](../modules/nsh.md#media-and-tv-remote-keys) names (`red`,
   `mediaplaypause`, `channelup`, ...); the page registers them with the TV.
+- **[`nsh/tizen`](../modules/nsh-tizen.md)** works in the package: `isAvailable()` is `true`, and `productInfo`,
+  `registerKey` / `unregisterKey`, `exitApp` and `setPreviewData` (Smart Hub's preview) call the TV's `tizen` and
+  `webapis` APIs. In a browser elsewhere `isAvailable()` is `false`.
 - **`nsh.json` `tizen`** names the package. Every key has a default:
 
   ```json

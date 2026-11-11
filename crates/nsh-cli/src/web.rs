@@ -95,6 +95,9 @@ pub(crate) fn package(
 /// (`tizen_web.rs`) adds its TV shim and starts the player on a TV.
 #[derive(Default)]
 pub(crate) struct Variant<'a> {
+    /// Classic scripts of the device the page runs first, by URL (a Tizen
+    /// web app's `$WEBAPIS/webapis/webapis.js`).
+    pub(crate) device_scripts: &'a [&'a str],
     /// Classic scripts the page runs before `nsh.js`, `(name, source)`:
     /// added to the site under names with their digest.
     pub(crate) scripts: &'a [(&'a str, &'a str)],
@@ -313,11 +316,14 @@ pub(crate) fn write_site(
     if let Some(idiom) = variant.idiom {
         app["idiom"] = idiom.into();
     }
-    let scripts = variant
-        .scripts
+    let mut scripts: Vec<String> = variant
+        .device_scripts
         .iter()
-        .map(|(name, source)| site.add(name, source.as_bytes()))
-        .collect::<anyhow::Result<Vec<_>>>()?;
+        .map(|url| (*url).to_owned())
+        .collect();
+    for (name, source) in variant.scripts {
+        scripts.push(site.add(name, source.as_bytes())?);
+    }
     let html = page(&PageParts {
         name,
         appearance,
