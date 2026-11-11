@@ -6,7 +6,10 @@ use std::hash::{BuildHasher, RandomState};
 
 use nsh_base::{dialog, input};
 use nsh_core::{
-    element::{AnyElement, Idiom, Input, KeyboardDismissMode, LayoutAnimation, Orientation, Os},
+    element::{
+        AdaptiveShadow, AnyElement, Idiom, Input, KeyboardDismissMode, LayoutAnimation,
+        Orientation, Os,
+    },
     prelude::*,
 };
 
@@ -252,7 +255,10 @@ fn PressableSheet() -> impl IntoElement {
             view()
                 .role(AccessibilityRole::Button)
                 .on_press(open(true))
-                .adaptive_shadow(accent_light.iter().copied(), accent_dark.iter().copied())
+                .adaptive_shadow(AdaptiveShadow::new(
+                    accent_light.iter().copied(),
+                    accent_dark.iter().copied(),
+                ))
                 .h_12()
                 .flex_row()
                 .items_center()
@@ -321,10 +327,10 @@ fn LayoutAnimations() -> impl IntoElement {
                 .rounded(px(14.0))
                 .border_curve(BorderCurve::Continuous)
                 .bg(tone.tint())
-                .adaptive_shadow(
+                .adaptive_shadow(AdaptiveShadow::new(
                     [inset_shadow(1.0, 0.0, rgb(white))],
                     [inset_shadow(1.0, 0.0, rgb_a(white, 0.06))],
-                )
+                ))
                 .items_center()
                 .justify_center()
                 .child(
