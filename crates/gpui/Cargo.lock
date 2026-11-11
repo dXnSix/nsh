@@ -5470,7 +5470,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-base"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "html5ever 0.27.0",
@@ -5499,7 +5499,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-bundler"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dunce",
  "log",
@@ -5512,7 +5512,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cap-std",
  "crc32fast",
@@ -5552,7 +5552,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-dev"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "dunce",
@@ -5564,7 +5564,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-engine"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "block2 0.6.2",
  "crossbeam-channel",
@@ -5590,7 +5590,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-gpui-host"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "log",
  "nsh-dev",
@@ -5600,11 +5600,11 @@ dependencies = [
 
 [[package]]
 name = "nsh-i18n"
-version = "0.4.0"
+version = "0.5.0"
 
 [[package]]
 name = "nsh-js"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",
@@ -5626,7 +5626,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-macros"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "imagesize 0.15.0",
  "proc-macro2",
@@ -5638,7 +5638,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-package"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
@@ -5652,7 +5652,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-platform-gpui"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -5692,7 +5692,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-testing"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "crossbeam-channel",
@@ -5707,7 +5707,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-updater"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",

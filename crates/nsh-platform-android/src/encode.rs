@@ -764,6 +764,7 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
                     // No host answers `nsh/host` here (`Environment::host`):
                     // the core rejects the calls first.
                     | Command::HostCall { .. }
+                    | Command::HostPost { .. }
                     // No eyedropper (`Environment::screen_color`): the core
                     // answers no color first.
                     | Command::PickScreenColor { .. } => e.int(-1),
@@ -1320,7 +1321,9 @@ fn view_props(e: &mut Encoded, p: &ViewProps) {
         Some(true) => 1,
     });
     e.opt_string(a.label.as_deref());
-    e.opt_string(a.hint.as_deref());
+    // The hint text: the description, then the hint (Android has no
+    // description of its own beside the label).
+    e.opt_string(a.help_text(None).as_deref());
     e.int(role_index(a.role));
     let s = a.state;
     let mut flags = 0;
@@ -1413,6 +1416,10 @@ fn view_props(e: &mut Encoded, p: &ViewProps) {
     }
     e.bool(p.selectable_view);
     e.bool(p.continues_text);
+    // A view shown in an appearance of its own (`ThemeScope`): 0 none,
+    // 1 light, 2 dark. The platform's controls in it follow
+    // (`Mounter.java` `nightAt`).
+    e.int(p.appearance as i32);
 }
 
 /// Index of `role` in `A11y.java`'s class name table.
@@ -1976,6 +1983,33 @@ mod tests {
             assert_eq!(ints(request), vec![COMMAND, 3, 30, 7]);
         }
     }
+    #[test]
+    fn a_views_own_appearance_ends_its_props() {
+        use nsh_core::platform::Appearance;
+        let last = |appearance| {
+            let props = ViewProps {
+                appearance,
+                ..ViewProps::default()
+            };
+            let encoded = encode(
+                MountBatch {
+                    items: vec![MountItem::ViewProps {
+                        id: 3,
+                        props: Box::new(props),
+                    }],
+                },
+                0,
+            );
+            let at = encoded.bytes.len() - 4;
+            i32::from_le_bytes(encoded.bytes[at..].try_into().unwrap())
+        };
+        // `Mounter.java` `viewProps` reads it last: 0 none (the view is
+        // shown as the views around it), 1 light, 2 dark.
+        assert_eq!(last(Appearance::System), 0);
+        assert_eq!(last(Appearance::Light), 1);
+        assert_eq!(last(Appearance::Dark), 2);
+    }
+
     #[test]
     fn web_evaluations_carry_the_originating_engine_generation() {
         let encoded = encode(

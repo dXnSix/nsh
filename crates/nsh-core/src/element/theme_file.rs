@@ -483,17 +483,33 @@ fn written_as_color(value: &str) -> bool {
     ) {
         return false;
     }
-    // A shadow may start with a complete color function and end in lengths.
+    if value.ends_with(')') {
+        return true;
+    }
+    // A shadow may start with a color function. Its next component need
+    // not be separated by whitespace, but an attached bare name other than inset
+    // cannot follow the color.
     let mut depth = 1;
-    value.ends_with(')')
-        || !rest.chars().any(|c| {
-            depth += match c {
-                '(' => 1,
-                ')' => -1,
-                _ => 0,
-            };
-            depth == 0
-        })
+    for (i, c) in rest.char_indices() {
+        depth += match c {
+            '(' => 1,
+            ')' => -1,
+            _ => 0,
+        };
+        if depth == 0 {
+            let suffix = &rest[i + 1..];
+            let end = suffix
+                .find(|c: char| c.is_ascii() && !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+                .unwrap_or(suffix.len());
+            let (name, tail) = suffix.split_at(end);
+            return name
+                .trim_start_matches('-')
+                .starts_with(|c: char| c.is_ascii_alphabetic() || c == '_' || !c.is_ascii())
+                && !name.eq_ignore_ascii_case("inset")
+                && !tail.starts_with(['(', '\\']);
+        }
+    }
+    true
 }
 
 /// A CSS length in points: `0.625rem`, `10px`, `10`.
