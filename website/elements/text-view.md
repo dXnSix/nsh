@@ -16,7 +16,8 @@ It owns behavior and comes with a reading typography of its own: 15pt text in ge
 headings with room above them, links underlined in the theme's `primary` color, code in the theme's `font-mono` in a bordered, rounded box, tables ruled on every side with a tinted header row, quotes with a line at their side and
 alerts as tinted boxes with an icon in GitHub's alert colors. Its colors are the theme's tokens (`foreground`, `muted-foreground`, `border`,
 `muted`, `primary`, and `destructive` for a caution), so a theme and the dark appearance reach
-it. Each part takes the app's styles over these defaults: `classes` and `styles` in TSX, typed styles by part
+it. A theme with a `success`, `warning`, `info` or `highlight` token also colors the tip, warning and note alerts
+and marked text ([Theme roles](../modules/nsh-base.md#theme-roles)); without them they keep their own colors. Each part takes the app's styles over these defaults: `classes` and `styles` in TSX, typed styles by part
 (`TextViewParts`) in Rust. Rust makes one with `nsh_base::text_view()`, TSX with `<TextView>` from `nsh/base`.
 
 ```rust tabs
@@ -247,7 +248,7 @@ Some nodes are several parts, which apply in order: a level 2 heading is `headin
 | `emphasis` | `Emphasis` | Emphasized text (italic). |
 | `strikethrough` | `Strikethrough` | Struck-through text. |
 | `underline` | `Underline` | Underlined text (`<u>`, `<ins>`). |
-| `highlight` | `Highlight` | Highlighted text (`<mark>`, on a rounded yellow). |
+| `highlight` | `Highlight` | Highlighted text (`<mark>`, on a rounded box of the theme's `highlight`, yellow without it). |
 | `superscript`, `subscript` | `Superscript`, `Subscript` | Superscript and subscript (smaller). |
 | `link` | `Link` | Links (in the theme's `primary` color, underlined). |
 | `image` | `Image` | Images. |
@@ -437,7 +438,9 @@ import { TextView } from "nsh/base";
 
 Code blocks are highlighted out of the box: for a language named on the fence (`ts`, `tsx`, `rust`, `python`, `bash`,
 `json`, `toml`, `yaml`, `diff` and about two hundred more), the code shows in Allsum's code palette, light or dark with the
-appearance; a block without a language shows plain. An app with highlighting of its own shows its code with
+appearance; a block without a language shows plain. A theme recolors a kind of code with a token of its role's name
+(`syntax-keyword`, `syntax-string`, …: [Theme roles](../modules/nsh-base.md#theme-roles)); a removed line of a
+`diff` block takes `diff-deleted`, as a `DiffView`'s deleted lines do. An app with highlighting of its own shows its code with
 `renderCodeBlock`, from its own component or one of its Rust crate; a Rust view gives `TextView` its highlighter with
 [`CodeHighlighter`](#syntax-highlighting). Here code with highlighting of the app's own, and an image that fills the
 width:
@@ -826,7 +829,7 @@ parts with [`TextViewParts`](#typed-part-styles).
 |---|---|---|
 | `onLinkPress` | `.on_link_press(\|event: &TextViewLinkPressEvent\| ..)` | A link was pressed: `{ url, modifiers }`: its URL, `#anchor` for a heading, `#footnote-<label>` for a footnote, and the modifier keys held. |
 | `onCodeBlockAction` | `.on_code_block_action(\|event: &TextViewCodeActionEvent\| ..)` | A code block's action was pressed (after `copy` copied). |
-| `onSelectionChange` | `.on_selection_change(\|event: &TextViewSelectionEvent\| ..)` | The selection of a `selectable` `TextView` changed: `{ text, start }`, the selected text as Copy takes it, `""` once nothing is selected ([Reading the selection](./text-selection.md#reading-the-selection)). Inside a selectable view the outer view reports instead. |
+| `onSelectionChange` | `.on_selection_change(\|event: &TextViewSelectionEvent\| ..)` | The selection of a `selectable` `TextView` changed: `{ text, start, bounds, pageBounds }`, the selected text as Copy takes it and its box, `""` once nothing is selected ([Reading the selection](./text-selection.md#reading-the-selection)). Inside a selectable view the outer view reports instead. |
 
 ## Methods
 

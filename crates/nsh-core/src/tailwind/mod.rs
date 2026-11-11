@@ -28,13 +28,13 @@ mod utilities;
 
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 pub use self::theme::{Theme, ThemeError};
-pub(crate) use self::utilities::{Decl, Len, Part};
-use self::{
+use self::utilities::{Parts, touched};
+pub(crate) use self::{
     theme::ClassTokens,
-    utilities::{Parts, touched},
+    utilities::{Decl, Len, Part},
 };
 use crate::{
     geometry::{Points, Size},
@@ -79,10 +79,20 @@ pub mod state {
     /// The view is busy (`aria-busy:`): its `accessibilityState.busy`.
     /// Set by the core, never reported by the platform.
     pub const BUSY: u16 = 1024;
+    /// The view has the keyboard focus and shows it (`focus-visible:`):
+    /// the keyboard moved it there, or it is an input that edits, as CSS's
+    /// `:focus-visible`. Set by the core from [`FOCUSED`] and the surface's
+    /// input modality (`Core::set_input_modality`), never reported by the
+    /// platform.
+    pub const FOCUS_VISIBLE: u16 = 2048;
+    /// The view's content does not pass the app's checks
+    /// (`aria-invalid:`): its `accessibilityState.invalid`. Set by the
+    /// core, never reported by the platform.
+    pub const INVALID: u16 = 4096;
     /// The states the core sets from the accessibility state, which the
     /// platforms never report.
     pub(crate) const ACCESSIBILITY: u16 =
-        SELECTED | CHECKED | INDETERMINATE | EXPANDED | ARIA_PRESSED | BUSY;
+        SELECTED | CHECKED | INDETERMINATE | EXPANDED | ARIA_PRESSED | BUSY | INVALID;
 }
 
 /// The view's place among its siblings (`first:`, `odd:`, ...).
@@ -129,6 +139,9 @@ pub mod deps {
     /// The view's own `data-*` attributes (`data-range-start:`); a group's
     /// are [`GROUP`].
     pub const DATA: u16 = 2048;
+    /// The pointer's precision and the terminal (`pointer-fine:`,
+    /// `pointer-coarse:`, `terminal:`).
+    pub const DEVICE: u16 = 4096;
 }
 
 /// CSS's `ch` where no font is known ([`ClassList::apply`]): half a `rem`,
@@ -158,6 +171,18 @@ pub enum Platform {
     Web,
 }
 
+/// How precise the primary pointer is (`pointer-fine:`, `pointer-coarse:`),
+/// as CSS's `pointer` media feature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Pointer {
+    /// A finger on a touch screen.
+    #[default]
+    Coarse,
+    /// A mouse or a trackpad: desktop behavior (a desktop OS, a desktop
+    /// browser, a terminal).
+    Fine,
+}
+
 /// The environment variants depend on, set by the engine.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ClassEnvironment {
@@ -167,6 +192,10 @@ pub struct ClassEnvironment {
     pub platform: Platform,
     /// The user asked for less motion.
     pub reduce_motion: bool,
+    /// The primary pointer's precision.
+    pub pointer: Pointer,
+    /// Drawn in a terminal (`terminal:`).
+    pub terminal: bool,
 }
 
 /// What a node's classes are matched against: the core builds it per
@@ -209,6 +238,8 @@ pub(crate) struct Condition {
     platform: Option<Platform>,
     rtl: Option<bool>,
     reduce_motion: Option<bool>,
+    pointer: Option<Pointer>,
+    terminal: Option<bool>,
     /// Required [`state`] bits.
     states: u16,
     /// [`state`] bits that must be off (`enabled:`).
@@ -232,6 +263,8 @@ impl Condition {
     fn matches(&self, cx: &Context<'_>, data: Data<'_>) -> bool {
         if self.dark.is_some_and(|d| d != cx.env.dark)
             || self.platform.is_some_and(|p| p != cx.env.platform)
+            || self.pointer.is_some_and(|p| p != cx.env.pointer)
+            || self.terminal.is_some_and(|t| t != cx.env.terminal)
             || self.rtl.is_some_and(|r| r != cx.rtl)
             || self
                 .reduce_motion
@@ -282,8 +315,11 @@ impl Condition {
     /// Applies only while the view (or its group) is pressed, hovered or
     /// focused: press feedback.
     fn interactive(&self) -> bool {
-        const INTERACTION: u16 =
-            state::PRESSED | state::HOVERED | state::FOCUSED | state::FOCUS_WITHIN;
+        const INTERACTION: u16 = state::PRESSED
+            | state::HOVERED
+            | state::FOCUSED
+            | state::FOCUS_WITHIN
+            | state::FOCUS_VISIBLE;
         self.states & INTERACTION != 0
             || self
                 .group
@@ -307,6 +343,9 @@ impl Condition {
         }
         if self.reduce_motion.is_some() {
             d |= deps::MOTION;
+        }
+        if self.pointer.is_some() || self.terminal.is_some() {
+            d |= deps::DEVICE;
         }
         if self.states != 0 || self.not_states != 0 {
             d |= deps::STATE;
@@ -437,13 +476,14 @@ pub(crate) mod rank {
     pub(crate) const ARIA_BUSY: Key = Key::new(40);
     pub(crate) const ARIA_CHECKED: Key = Key::new(41);
     pub(crate) const EXPANDED: Key = Key::new(42);
-    pub(crate) const ARIA_PRESSED: Key = Key::new(43);
-    pub(crate) const ARIA_SELECTED: Key = Key::new(44);
+    pub(crate) const ARIA_INVALID: Key = Key::new(43);
+    pub(crate) const ARIA_PRESSED: Key = Key::new(44);
+    pub(crate) const ARIA_SELECTED: Key = Key::new(45);
     /// `data-*`, after `aria-*` as Tailwind registers them, in the order
     /// of their names ([`Key::data`]).
-    pub(crate) const DATA: u16 = 45;
-    pub(crate) const MOTION_SAFE: Key = Key::new(46);
-    pub(crate) const MOTION_REDUCE: Key = Key::new(47);
+    pub(crate) const DATA: u16 = 46;
+    pub(crate) const MOTION_SAFE: Key = Key::new(47);
+    pub(crate) const MOTION_REDUCE: Key = Key::new(48);
     /// `max-*` breakpoints, widest first.
     pub(crate) const MAX: u16 = 50;
     /// Breakpoints and `min-*`, narrowest first.
@@ -453,10 +493,14 @@ pub(crate) mod rank {
     pub(crate) const LTR: Key = Key::new(62);
     pub(crate) const RTL: Key = Key::new(63);
     pub(crate) const DARK: Key = Key::new(64);
+    /// Tailwind's pointer variants, after `dark:` as it registers them.
+    pub(crate) const POINTER_COARSE: Key = Key::new(65);
+    pub(crate) const POINTER_FINE: Key = Key::new(66);
     /// NSH's platform variants, after Tailwind's.
     pub(crate) const IOS: Key = Key::new(70);
     pub(crate) const ANDROID: Key = Key::new(71);
     pub(crate) const WEB: Key = Key::new(72);
+    pub(crate) const TERMINAL: Key = Key::new(73);
 }
 
 impl Rule {
@@ -624,6 +668,8 @@ pub struct ClassList {
     groups: Vec<Box<str>>,
     /// Classes that are not known utilities.
     unknown: Vec<Box<str>>,
+    /// The design tokens its rules read ([`theme::token_key`]), each once.
+    tokens: Vec<u64>,
 }
 
 impl ClassList {
@@ -631,6 +677,30 @@ impl ClassList {
     #[inline]
     pub fn deps(&self) -> u16 {
         self.deps
+    }
+
+    /// Whether its rules read one of the tokens `changed` says changed.
+    #[inline]
+    pub(crate) fn reads(&self, changed: &TokenChange) -> bool {
+        match changed {
+            TokenChange::All => true,
+            TokenChange::Values(keys) => self.tokens.iter().any(|t| keys.contains(t)),
+        }
+    }
+
+    /// Whether its rules read the design token `name`.
+    #[cfg(test)]
+    pub(crate) fn reads_token(&self, name: &str) -> bool {
+        self.tokens.contains(&theme::token_key(name))
+    }
+
+    /// Takes in the tokens another list read.
+    fn read(&mut self, tokens: &[u64]) {
+        for token in tokens {
+            if !self.tokens.contains(token) {
+                self.tokens.push(*token);
+            }
+        }
     }
 
     /// [`state`] bits whose changes the platform must report.
@@ -866,11 +936,24 @@ impl ClassList {
         }
         list.groups.extend(over.groups.iter().cloned());
         list.unknown.extend(over.unknown.iter().cloned());
+        list.read(&over.tokens);
         list.tracked |= over.tracked;
         list.rules
             .sort_by(|a, b| (a.important, &a.rank).cmp(&(b.important, &b.rank)));
         list
     }
+}
+
+/// What a change of the design tokens changed for classes
+/// ([`Tailwind::set_tokens`]).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum TokenChange {
+    /// The values of these tokens ([`theme::token_key`]); the names are as
+    /// they were. Only the classes that read one resolve again.
+    Values(FxHashSet<u64>),
+    /// The names: every class resolves again (an unknown one may name a
+    /// new token).
+    All,
 }
 
 /// The class cache and theme of one engine.
@@ -896,20 +979,22 @@ impl Tailwind {
 
     /// Takes design tokens `theme`. Returns which classes
     /// to resolve again: none ([`None`]) when the tokens did not change,
-    /// those that name tokens ([`deps::THEME`]) when only their values
-    /// did, else all (`u16::MAX`: unknown classes may name new ones).
-    pub(crate) fn set_tokens(&mut self, theme: &crate::element::Tokens) -> Option<u16> {
+    /// those that read a token whose value did when only values did
+    /// ([`TokenChange::Values`]), else all (unknown classes may name new
+    /// ones).
+    pub(crate) fn set_tokens(&mut self, theme: &crate::element::Tokens) -> Option<TokenChange> {
         let tokens = ClassTokens::new(theme);
         let current = self.theme.tokens();
         if *current == tokens {
             return None;
         }
         let changed = if current.same_names(&tokens) {
-            self.cache.retain(|_, list| list.deps & deps::THEME == 0);
-            deps::THEME
+            let changed = TokenChange::Values(current.changed(&tokens));
+            self.cache.retain(|_, list| !list.reads(&changed));
+            changed
         } else {
             self.cache.clear();
-            u16::MAX
+            TokenChange::All
         };
         self.theme.replace_tokens(Arc::new(tokens));
         Some(changed)
@@ -923,6 +1008,27 @@ impl Tailwind {
     /// The parsed form of `classes` (cached by string).
     pub fn classes(&mut self, classes: &str) -> std::rc::Rc<ClassList> {
         self.get(classes).0
+    }
+
+    /// `classes` parsed with the design tokens `tokens` in place of the
+    /// theme's (a scope's values); nothing is cached.
+    pub(crate) fn parse_with(&mut self, tokens: &Arc<ClassTokens>, classes: &str) -> ClassList {
+        let own = self.theme.swap_tokens(Some(tokens.clone()));
+        let parsed = parse(&self.theme, classes);
+        self.theme.swap_tokens(own);
+        parsed
+    }
+
+    /// The tokens whose values in `tokens` are not the theme's: the classes
+    /// that read one resolve to something else with `tokens`. Every class
+    /// may when the names differ.
+    pub(crate) fn difference(&self, tokens: &ClassTokens) -> TokenChange {
+        let own = self.theme.tokens();
+        if own.same_names(tokens) {
+            TokenChange::Values(own.changed(tokens))
+        } else {
+            TokenChange::All
+        }
     }
 
     /// Like [`Tailwind::classes`], and whether `classes` was parsed just
@@ -945,8 +1051,10 @@ impl Tailwind {
 /// Parses a class string.
 pub fn parse(theme: &Theme, classes: &str) -> ClassList {
     let mut list = ClassList::default();
+    // The tokens the utilities read go straight into the list's.
+    let mut read = Vec::new();
     for token in classes.split_ascii_whitespace() {
-        match parse_token(theme, token) {
+        match parse_token(theme, token, &mut read) {
             Some(Token::Rule(rule)) => list.add(rule),
             Some(Token::Themed(rule, dark)) => {
                 list.add(rule);
@@ -962,6 +1070,7 @@ pub fn parse(theme: &Theme, classes: &str) -> ClassList {
             None => list.unknown.push(token.into()),
         }
     }
+    list.tokens = read;
     // Stable: equal ranks keep the order of the string.
     list.rules
         .sort_by(|a, b| (a.important, &a.rank).cmp(&(b.important, &b.rank)));
@@ -997,7 +1106,9 @@ fn split_variants(token: &str) -> Vec<&str> {
     parts
 }
 
-fn parse_token(theme: &Theme, token: &str) -> Option<Token> {
+/// Parses one class; the design tokens it read are added to `read`
+/// ([`theme::token_key`], each once).
+fn parse_token(theme: &Theme, token: &str, read: &mut Vec<u64>) -> Option<Token> {
     let parts = split_variants(token);
     let (utility, variants) = parts.split_last()?;
     let mut utility = *utility;
@@ -1027,10 +1138,10 @@ fn parse_token(theme: &Theme, token: &str) -> Option<Token> {
         return Some(Token::Ignored);
     }
     if theme.tokens().replaces(utility) {
-        return themed(theme, cond, rank, important, utility);
+        return themed(theme, cond, rank, important, utility, read);
     }
     let Some(decls) = utilities::parse(theme, utility) else {
-        return themed(theme, cond, rank, important, utility);
+        return themed(theme, cond, rank, important, utility, read);
     };
     if cond.pseudo() && cond.pseudo_color(&decls).is_none() {
         return None;
@@ -1066,13 +1177,44 @@ fn ignored(utility: &str) -> bool {
 
 /// `utility` naming theme tokens (`bg-primary`, `rounded-(--radius)`):
 /// parsed with their light and their dark values; two rules of the same
-/// rank when those differ, so later utilities still win in both.
+/// rank when those differ, so later utilities still win in both. The
+/// tokens it read are added to `read`, each once; none when it is no class.
 fn themed(
     theme: &Theme,
     cond: Condition,
     rank: Rank,
     important: bool,
     utility: &str,
+    read: &mut Vec<u64>,
+) -> Option<Token> {
+    let known = read.len();
+    let token = themed_rules(theme, cond, rank, important, utility, read, known);
+    if token.is_none() {
+        read.truncate(known);
+    }
+    // The tokens an earlier class of the list read are there already.
+    let mut at = known;
+    while at < read.len() {
+        if read[..at].contains(&read[at]) {
+            read.swap_remove(at);
+        } else {
+            at += 1;
+        }
+    }
+    token
+}
+
+/// [`themed`]'s rules; `read` keeps what it had up to `known`, then the
+/// tokens the utility read in the appearance parsed last (both read the
+/// same ones).
+fn themed_rules(
+    theme: &Theme,
+    cond: Condition,
+    rank: Rank,
+    important: bool,
+    utility: &str,
+    read: &mut Vec<u64>,
+    known: usize,
 ) -> Option<Token> {
     let tokens = theme.tokens();
     let pseudo = Condition {
@@ -1080,8 +1222,9 @@ fn themed(
         selection: cond.selection,
         ..Condition::default()
     };
-    let parse = |dark: bool| {
-        let decls = utilities::parse(theme, &tokens.substitute(utility, dark)?)?;
+    let mut parse = |dark: bool| {
+        read.truncate(known);
+        let decls = utilities::parse(theme, &tokens.substitute(utility, dark, read)?)?;
         (!pseudo.pseudo() || pseudo.pseudo_color(&decls).is_some()).then_some(decls)
     };
     let rule = |cond: Condition, decls: Vec<Decl>| Rule {
@@ -1181,7 +1324,7 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<Key> {
             rank::FOCUS
         }
         "focus-visible" => {
-            states(cond, FOCUSED);
+            states(cond, FOCUS_VISIBLE);
             rank::FOCUS_VISIBLE
         }
         "active" => {
@@ -1207,6 +1350,10 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<Key> {
         "aria-expanded" => {
             states(cond, EXPANDED);
             rank::EXPANDED
+        }
+        "aria-invalid" => {
+            states(cond, INVALID);
+            rank::ARIA_INVALID
         }
         "aria-pressed" => {
             states(cond, ARIA_PRESSED);
@@ -1256,6 +1403,18 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<Key> {
             cond.platform = Some(Platform::Web);
             rank::WEB
         }
+        "pointer-coarse" => {
+            cond.pointer = Some(Pointer::Coarse);
+            rank::POINTER_COARSE
+        }
+        "pointer-fine" => {
+            cond.pointer = Some(Pointer::Fine);
+            rank::POINTER_FINE
+        }
+        "terminal" => {
+            cond.terminal = Some(true);
+            rank::TERMINAL
+        }
         v => {
             // `data-range-start`: Tailwind 4's boolean form, `[data-range-start]`.
             if let Some(name) = v.strip_prefix("data-").filter(|n| data_name(n)) {
@@ -1286,7 +1445,7 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<Key> {
                     "hover" => (HOVERED, rank::HOVER),
                     "active" => (PRESSED, rank::ACTIVE),
                     "focus" => (FOCUSED, rank::FOCUS),
-                    "focus-visible" => (FOCUSED, rank::FOCUS_VISIBLE),
+                    "focus-visible" => (FOCUS_VISIBLE, rank::FOCUS_VISIBLE),
                     "focus-within" => (FOCUS_WITHIN, rank::FOCUS_WITHIN),
                     "disabled" => (DISABLED, rank::DISABLED),
                     "selected" => (SELECTED, rank::SELECTED),
@@ -1295,6 +1454,7 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<Key> {
                     "aria-busy" => (BUSY, rank::ARIA_BUSY),
                     "aria-checked" => (CHECKED, rank::ARIA_CHECKED),
                     "aria-expanded" => (EXPANDED, rank::EXPANDED),
+                    "aria-invalid" => (INVALID, rank::ARIA_INVALID),
                     "aria-pressed" => (ARIA_PRESSED, rank::ARIA_PRESSED),
                     "aria-selected" => (SELECTED, rank::ARIA_SELECTED),
                     _ => return None,
