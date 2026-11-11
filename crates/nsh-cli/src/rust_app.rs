@@ -3742,8 +3742,10 @@ mod tests {
             manifest.contains(&format!("[patch.crates-io]\n{patches}nsh-macros = ")),
             "{manifest}"
         );
+        // Whatever this machine's separators (TOML escapes Windows' `\`).
         assert!(
             read("tizen/tizen-lib/Cargo.toml")
+                .replace("\\\\", "/")
                 .contains("crates/gpui/nsh-platform-tizen\", default-features = false }"),
             "{}",
             read("tizen/tizen-lib/Cargo.toml")

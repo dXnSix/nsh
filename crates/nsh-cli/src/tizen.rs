@@ -1601,7 +1601,8 @@ mod tests {
         let entries = stage(&runtime, Arch::Armv7l, &app, &manifest);
         let paths: Vec<String> = entries
             .iter()
-            .map(|e| e.path().to_string_lossy().into_owned())
+            // Where they go in the package, whatever this machine's separator.
+            .map(|e| e.path().to_string_lossy().replace('\\', "/"))
             .collect();
         assert_eq!(
             paths,
@@ -1963,8 +1964,8 @@ mod tests {
             )
         );
         assert_eq!(
-            get("AR_armv7_tizen_linux_gnueabi"),
-            Some("/rustlib/bin/llvm-ar")
+            get("AR_armv7_tizen_linux_gnueabi").map(Path::new),
+            Some(Path::new("/rustlib/bin/llvm-ar"))
         );
         assert_eq!(
             get("CARGO_TARGET_ARMV7_TIZEN_LINUX_GNUEABI_LINKER"),
