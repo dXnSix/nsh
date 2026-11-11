@@ -113,6 +113,10 @@ pub(super) struct NodeParts {
     styles: Vec<(Part, std::rc::Rc<StylePatch>)>,
     /// The classes of the other parts.
     classes: Vec<(Part, std::rc::Rc<ClassList>)>,
+    /// The names a part's classes were set by (`headerClass`,
+    /// `contentClass`; a typed list has none): they are parsed again when
+    /// the theme or the design tokens they read change.
+    class_names: Vec<(Part, Box<str>)>,
 }
 
 /// The [`state`] bits an element is in by its accessibility state `s`:
@@ -752,8 +756,35 @@ impl<M: TextEngine> Core<M> {
     /// Sets the classes of `key`'s `part` (a page's header, a list's
     /// content).
     pub(super) fn set_part_class(&mut self, key: Key, part: Part, names: &str) {
-        let classes = (!names.trim().is_empty()).then(|| self.tailwind.classes(names));
+        // With the design tokens of the scope `key` is in, as its own.
+        let classes = (!names.trim().is_empty()).then(|| self.classes_at(Some(key), names).0);
+        let named = classes.is_some();
         self.set_part_class_list(key, part, classes);
+        if named && let Some(parts) = self.nodes[key as usize].parts.as_deref_mut() {
+            parts.class_names.push((part, names.into()));
+        }
+    }
+
+    /// Parses again the parts' classes set by name whose rules `reads`
+    /// (the theme was replaced, or design tokens they name changed).
+    fn part_classes_again(&mut self, reads: impl Fn(&ClassList) -> bool) {
+        let named: Vec<(Key, Part, Box<str>)> = self
+            .nodes
+            .iter()
+            .filter_map(|(k, n)| Some((k as Key, n.parts.as_deref()?)))
+            .flat_map(|(k, p)| {
+                let reads = &reads;
+                p.class_names
+                    .iter()
+                    .filter(move |(part, _)| {
+                        p.classes.iter().any(|(of, list)| of == part && reads(list))
+                    })
+                    .map(move |(part, names)| (k, *part, names.clone()))
+            })
+            .collect();
+        for (key, part, names) in named {
+            self.set_part_class(key, part, &names);
+        }
     }
 
     /// Sets `part`'s classes of `key` to `classes`, already parsed (typed
@@ -772,8 +803,12 @@ impl<M: TextEngine> Core<M> {
                 ..NodeParts::default()
             })
         });
+        parts.class_names.retain(|(p, _)| *p != part);
         let at = parts.classes.iter().position(|(p, _)| *p == part);
         match (at, classes) {
+            // The same rules (a scope that leaves the tokens they read as
+            // they are gives the surface's list back): nothing to send.
+            (Some(i), Some(c)) if std::rc::Rc::ptr_eq(&parts.classes[i].1, &c) => return,
             (Some(i), Some(c)) => parts.classes[i].1 = c,
             (Some(i), None) => {
                 parts.classes.remove(i);
@@ -885,6 +920,8 @@ impl<M: TextEngine> Core<M> {
         names: Option<Box<str>>,
         list: Option<Vec<Box<str>>>,
     ) {
+        // The names it has, resolved again (the tokens or a scope changed).
+        let again = names.is_none() && list.is_none();
         let node = &mut self.nodes[key as usize];
         let current = node.class_names.get_or_insert_default();
         if let Some(n) = names {
@@ -916,6 +953,18 @@ impl<M: TextEngine> Core<M> {
             }
             Some(classes)
         };
+        // Resolved again to the rules it has: nothing to style. So a scope
+        // that leaves the tokens a view reads as they are, set or changed
+        // around views that are there, costs that view a lookup.
+        if again {
+            let node = &self.nodes[key as usize];
+            let has = node.parts.as_deref().map_or(&node.classes, |p| &p.base);
+            if let (Some(has), Some(now)) = (has, &classes)
+                && std::rc::Rc::ptr_eq(has, now)
+            {
+                return;
+            }
+        }
         self.set_class_list(key, classes);
     }
 
@@ -996,11 +1045,13 @@ impl<M: TextEngine> Core<M> {
         for key in keys {
             self.set_classes(key, None, None);
         }
+        self.part_classes_again(|_| true);
     }
 
     /// The design tokens changed: the classes reading the ones that did
-    /// (`bg-primary`) are resolved again, on nodes and on Rust components;
-    /// all of them when the tokens' names changed.
+    /// (`bg-primary`) are resolved again, on nodes, on their parts (a
+    /// page's header, a list's content) and on Rust components; all of
+    /// them when the tokens' names changed.
     pub(super) fn class_tokens_changed(&mut self) {
         let tokens = self.components.tokens.clone();
         let Some(changed) = self.tailwind.set_tokens(&tokens) else {
@@ -1028,6 +1079,7 @@ impl<M: TextEngine> Core<M> {
         for key in keys {
             self.set_classes(key, None, None);
         }
+        self.part_classes_again(|c| all || (c.deps() & deps::THEME != 0 && c.reads(&changed)));
         let hosts: Vec<NodeId> = self
             .components
             .instances
@@ -1187,8 +1239,8 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// Resolves the classes of `key` again where they read a token of
-    /// `changed`: its own (`class`), the app's on the component it hosts
-    /// and on its element.
+    /// `changed`: its own (`class`), its parts' (a page's header, a list's
+    /// content), the app's on the component it hosts and on its element.
     fn resolve_classes_again(&mut self, key: Key, changed: &TokenChange) {
         let reads = |c: &Option<std::rc::Rc<ClassList>>| {
             c.as_ref()
@@ -1197,6 +1249,21 @@ impl<M: TextEngine> Core<M> {
         let node = &self.nodes[key as usize];
         let id = node.id;
         let own = reads(&node.classes);
+        let parts: Vec<(Part, Box<str>)> = node.parts.as_deref().map_or_else(Vec::new, |p| {
+            p.class_names
+                .iter()
+                .filter(|(part, _)| {
+                    p.classes.iter().any(|(of, list)| {
+                        of == part && list.deps() & deps::THEME != 0 && list.reads(changed)
+                    })
+                })
+                .cloned()
+                .collect()
+        });
+        for (part, names) in parts {
+            self.set_part_class(key, part, &names);
+        }
+        let node = &self.nodes[key as usize];
         if node.class_names.is_some() && own {
             self.set_classes(key, None, None);
         }

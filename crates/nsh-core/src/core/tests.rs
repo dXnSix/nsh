@@ -42053,3 +42053,320 @@ fn big_rows_bench() {
     }
     eprintln!("total {total} views");
 }
+
+/// A part's classes (a page's `headerClass`, a list's `contentClass`) that
+/// name design tokens follow the tokens, as a view's `class` does.
+mod part_class_tokens {
+    use super::*;
+    use crate::{color::rgb, element::AdaptiveColor};
+
+    /// A stack with screen 3, its header's classes `names`.
+    fn page(c: &mut Core<FakeEngine>, names: &str) {
+        apply(
+            c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::Stack,
+                },
+                style_op(2, &[("flex", StyleValue::Number(1.0))]),
+                Op::Create {
+                    id: 3,
+                    tag: Tag::Screen,
+                },
+                Op::SetProp {
+                    id: 3,
+                    prop: Prop::HeaderClass(names.into()),
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 3,
+                    before: None,
+                },
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+    }
+
+    /// The header's background and title colors a batch sends for screen 3.
+    fn header(batch: Option<MountBatch>) -> Option<(Option<Color>, Option<Color>)> {
+        batch?.items.iter().find_map(|i| match i {
+            MountItem::ScreenConfig { id: 3, config } => {
+                Some((config.background_color, config.title_color))
+            }
+            _ => None,
+        })
+    }
+
+    /// The sample tokens with `primary` set.
+    fn with_primary(color: crate::element::AdaptiveColor) -> crate::element::Tokens {
+        let mut tokens = crate::element::tokens::sample();
+        tokens.set_color("primary", color);
+        tokens
+    }
+
+    #[test]
+    fn a_headers_token_classes_follow_the_tokens() {
+        let mut c = core();
+        page(&mut c, "bg-primary text-primary-foreground");
+        let foreground = Some(Color::from(token("primary-foreground").light));
+        assert_eq!(
+            header(c.commit()),
+            Some((Some(Color::from(token("primary").light)), foreground))
+        );
+        // The token's value changes: the header is sent with the new one.
+        c.set_tokens(with_primary(AdaptiveColor::rgb(0x00ff00, 0x004400)));
+        assert_eq!(
+            header(c.commit()),
+            Some((Some(Color::from(rgb(0x00ff00))), foreground))
+        );
+        // It stays the token's in the other appearance.
+        c.set_class_environment(crate::tailwind::ClassEnvironment {
+            dark: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            header(c.commit()).map(|h| h.0),
+            Some(Some(Color::from(rgb(0x004400))))
+        );
+        // The same values again send nothing.
+        c.set_tokens(with_primary(AdaptiveColor::rgb(0x00ff00, 0x004400)));
+        assert_eq!(header(c.commit()), None);
+    }
+
+    #[test]
+    fn a_header_without_token_classes_is_left_alone() {
+        let mut c = core();
+        page(&mut c, "bg-[#112233]");
+        assert_eq!(
+            header(c.commit()).map(|h| h.0),
+            Some(Some(Color(0x1122_33ff)))
+        );
+        c.set_tokens(with_primary(rgb(0x00ff00).into()));
+        assert_eq!(header(c.commit()), None);
+    }
+
+    #[test]
+    fn a_lists_content_token_classes_follow_the_tokens() {
+        let mut c = core();
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::List,
+                },
+                Op::SetProp {
+                    id: 2,
+                    prop: Prop::ListContentClass("p-(--radius) gap-2".into()),
+                },
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+        c.commit();
+        let padding = |c: &Core<FakeEngine>| {
+            let key = c.key(2).unwrap();
+            let content = c.nodes[key as usize].list.as_ref().unwrap().content;
+            (content.padding.top, content.row_gap)
+        };
+        assert_eq!(padding(&c), (px(12.0), px(8.0)));
+        let mut tokens = crate::element::tokens::sample();
+        tokens.set_number("radius", 20.0);
+        c.set_tokens(tokens);
+        c.commit();
+        assert_eq!(padding(&c), (px(20.0), px(8.0)));
+    }
+}
+
+/// A part's classes (a page's `headerClass`, a list's `contentClass`) are
+/// resolved with the design tokens of the `ThemeScope` their view is in.
+mod scope_part_classes {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::element::{AdaptiveColor, Tokens};
+
+    const VIOLET: Color = Color(0x7c3a_edff);
+    const PINK: Color = Color(0xdb27_77ff);
+    /// The sample theme's `primary`, light.
+    const PRIMARY: Color = Color(0x1717_17ff);
+
+    /// The surface's tokens with `primary` a color of the scope's own.
+    fn with_primary(c: &Core<FakeEngine>, color: Color) -> Option<Arc<Tokens>> {
+        let mut tokens = (**c.tokens()).clone();
+        tokens.set_color("primary", AdaptiveColor::rgb(color.0 >> 8, color.0 >> 8));
+        Some(Arc::new(tokens))
+    }
+
+    fn scope(c: &mut Core<FakeEngine>, tokens: Option<Arc<Tokens>>) {
+        apply(
+            c,
+            vec![Op::SetProp {
+                id: 2,
+                prop: Prop::ScopeTokens(tokens),
+            }],
+        );
+    }
+
+    /// View 2, to be a scope, around a stack (3) with screen 4, its
+    /// header's classes `names`.
+    fn page(names: &str) -> Core<FakeEngine> {
+        let mut c = core();
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::View,
+                },
+                style_op(2, &[("flex", StyleValue::Number(1.0))]),
+                Op::Create {
+                    id: 3,
+                    tag: Tag::Stack,
+                },
+                style_op(3, &[("flex", StyleValue::Number(1.0))]),
+                Op::Create {
+                    id: 4,
+                    tag: Tag::Screen,
+                },
+                Op::SetProp {
+                    id: 4,
+                    prop: Prop::HeaderClass(names.into()),
+                },
+                Op::Insert {
+                    parent: 3,
+                    child: 4,
+                    before: None,
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 3,
+                    before: None,
+                },
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+        c
+    }
+
+    /// The header's background a batch sends for screen 4.
+    fn header(batch: Option<MountBatch>) -> Option<Option<Color>> {
+        batch?.items.iter().find_map(|i| match i {
+            MountItem::ScreenConfig { id: 4, config } => Some(config.background_color),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_header_in_a_scope_takes_its_tokens() {
+        let mut c = page("bg-primary");
+        assert_eq!(header(c.commit()), Some(Some(PRIMARY)));
+        // The view around it becomes a scope with a `primary` of its own.
+        let violet = with_primary(&c, VIOLET);
+        scope(&mut c, violet);
+        assert_eq!(header(c.commit()), Some(Some(VIOLET)));
+        // The scope's value changes.
+        let pink = with_primary(&c, PINK);
+        scope(&mut c, pink);
+        assert_eq!(header(c.commit()), Some(Some(PINK)));
+        // The surface's `border` changes: the header reads `primary`, which
+        // is the scope's.
+        let mut tokens = (**c.tokens()).clone();
+        tokens.set_color("border", AdaptiveColor::rgb(0x00ff00, 0x00ff00));
+        c.set_tokens(tokens);
+        assert_eq!(header(c.commit()), None);
+        // No scope any more: the surface's again.
+        scope(&mut c, None);
+        assert_eq!(header(c.commit()), Some(Some(PRIMARY)));
+    }
+
+    #[test]
+    fn a_header_set_in_a_scope_starts_with_its_tokens() {
+        let mut c = page("bg-border");
+        let violet = with_primary(&c, VIOLET);
+        scope(&mut c, violet);
+        c.commit();
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: 4,
+                prop: Prop::HeaderClass("bg-primary".into()),
+            }],
+        );
+        assert_eq!(header(c.commit()), Some(Some(VIOLET)));
+    }
+
+    #[test]
+    fn a_header_reading_what_the_scope_leaves_is_not_sent_again() {
+        let mut c = page("bg-border");
+        c.commit();
+        let violet = with_primary(&c, VIOLET);
+        scope(&mut c, violet);
+        assert_eq!(header(c.commit()), None);
+    }
+
+    #[test]
+    fn a_lists_content_in_a_scope_takes_its_tokens() {
+        let mut c = core();
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::View,
+                },
+                style_op(2, &[("flex", StyleValue::Number(1.0))]),
+                Op::Create {
+                    id: 3,
+                    tag: Tag::List,
+                },
+                Op::SetProp {
+                    id: 3,
+                    prop: Prop::ListContentClass("p-(--radius)".into()),
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 3,
+                    before: None,
+                },
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+        c.commit();
+        let padding = |c: &Core<FakeEngine>| {
+            let key = c.key(3).unwrap();
+            c.nodes[key as usize]
+                .list
+                .as_ref()
+                .unwrap()
+                .content
+                .padding
+                .top
+        };
+        assert_eq!(padding(&c), px(12.0));
+        let mut tokens = (**c.tokens()).clone();
+        tokens.set_number("radius", 20.0);
+        scope(&mut c, Some(Arc::new(tokens)));
+        c.commit();
+        assert_eq!(padding(&c), px(20.0));
+        scope(&mut c, None);
+        c.commit();
+        assert_eq!(padding(&c), px(12.0));
+    }
+}
