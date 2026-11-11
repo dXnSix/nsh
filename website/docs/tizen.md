@@ -54,8 +54,9 @@ nsh package App.tsx --target tizen --sign my-profile --run      # signed with an
 ```
 
 A package holds the host, NSH's runtime for the architecture, the app's bundle and assets, its icon (512×423, as Samsung
-asks) and its `tizen-manifest.xml`, made from `nsh.json`. `nsh package` signs it by running the Tizen SDK's
-`tz pack -t tpk -s <profile>`; without a profile it stops and says how to make one.
+asks) and its `tizen-manifest.xml`, made from `nsh.json`. `nsh package` signs it with the Tizen SDK's `tz pack`
+(`-t tpk -s <profile>`, re-signing a zip of the package); without a profile it stops and says how to make one. TVs
+and the TV emulator install it with the SDK's `tz install`, which `--run` and `nsh run` use.
 
 - **`--arch`** takes `armv7l` (32-bit ARM, the TVs; the default), `aarch64` and `x86_64` (the emulator). With several,
   each package's version gets a fourth number (armv7l `.1`, aarch64 `.2`, x86_64 `.3`) and the CPU feature its TVs

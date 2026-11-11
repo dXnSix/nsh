@@ -19,7 +19,8 @@
 //!   res/nsh/                        bundle.nshc, capabilities.json, app.json, assets/
 //!   shared/res/icon.png             the icon, 512×423
 //!   tizen-manifest.xml              from nsh.json ([`Manifest`])
-//! <out>/<name>.tpk                  signed by `tz pack -t tpk -s <profile>`
+//! <out>/<name>.tpk                  the staged package zipped, then re-signed by
+//!                                   `tz pack -t tpk -s <profile> -b <unsigned> -o <out>`
 //! ```
 //!
 //! With several architectures (`--arch armv7l,aarch64`) each package's
@@ -31,7 +32,7 @@
 //!
 //! `nsh run --target tizen` installs the development TPK (the `dev`
 //! library, one package for every app: [`DEV_PACKAGE`]) on the TV with
-//! `sdb install` when the device does not have this build, maps the
+//! `tz install` when the device does not have this build, maps the
 //! library's dev port to the dev server with `sdb reverse` (else listens
 //! for it through `sdb forward` and relays), and launches it ([`Sdb`]).
 //! The `nsh.json` `tizen` section is `tizen-web`'s ([`crate::package::TizenConfig`]).
@@ -453,68 +454,67 @@ pub(crate) fn zip_name(manifest: &Manifest) -> String {
     format!("{}-{}.zip", manifest.package, manifest.version)
 }
 
-/// `tz`'s command that signs the staged package in `staging` with
-/// certificate profile `profile`.
-pub(crate) fn sign_command(tz: &Path, profile: &str, staging: &Path) -> Command {
+/// `tz`'s command that signs `unsigned` (the staged package, zipped) with
+/// certificate profile `profile` into `signed`: its repackaging of a
+/// package. `tz pack` signs only a `tz` project or, with `-b`, a package;
+/// given the staged directory it answers "is not a valid project".
+pub(crate) fn sign_command(tz: &Path, profile: &str, unsigned: &Path, signed: &Path) -> Command {
     let mut command = Command::new(tz);
     command
-        .args(["pack", "-t", "tpk", "-s", profile])
-        .arg(staging);
+        .args(["pack", "-t", "tpk", "-s", profile, "-b"])
+        .arg(unsigned)
+        .arg("-o")
+        .arg(signed);
     command
 }
 
-/// The package `tz pack` wrote for `staging` (where is not documented:
-/// inside it or next to it), the newest `.tpk` there since `since`.
-fn signed_package(staging: &Path, since: SystemTime) -> anyhow::Result<PathBuf> {
-    let mut written = Vec::new();
-    for dir in [Some(staging), staging.parent()].into_iter().flatten() {
-        for entry in fs::read_dir(dir)?.filter_map(Result::ok) {
-            let path = entry.path();
-            let fresh = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .is_ok_and(|modified| modified >= since);
-            if fresh && path.extension().is_some_and(|e| e == "tpk") {
-                written.push(path);
-            }
-        }
-    }
-    match written.as_slice() {
-        [tpk] => Ok(tpk.clone()),
-        _ => bail!(
-            "tz pack wrote {} packages inside or next to {}, not one",
-            written.len(),
-            staging.display()
-        ),
-    }
+/// The unsigned package [`sign`] zips the staged one into, beside `signed`.
+fn unsigned_path(signed: &Path) -> PathBuf {
+    signed.with_extension("unsigned.tpk")
+}
+
+/// `tz`'s command that installs the package at `tpk` on the device
+/// `serial`. A TV, and the TV emulator, has no `pkgcmd`: `sdb install`
+/// hands a `.tpk` to the web-app installer, which rejects it while `sdb`
+/// exits 0. `tz install` uses the TVs' installer (`0 vd_appinstall`) and
+/// fails when it does.
+pub(crate) fn install_command(tz: &Path, tpk: &Path, serial: &str) -> Command {
+    let mut command = Command::new(tz);
+    command
+        .args(["install", "-p"])
+        .arg(tpk)
+        .args(["-e", serial]);
+    command
 }
 
 /// Signs the staged package in `staging` with `profile` into `to`.
 fn sign(profile: &str, staging: &Path, to: &Path) -> anyhow::Result<()> {
     let step = ui::Step::start(format!("signing {} with `{profile}`", ui::path(staging)));
-    // Stale packages next to it would be taken for what `tz` writes.
-    for dir in [Some(staging), staging.parent()].into_iter().flatten() {
-        for entry in fs::read_dir(dir)?.filter_map(Result::ok) {
-            if entry.path().extension().is_some_and(|e| e == "tpk") {
-                let _ = fs::remove_file(entry.path());
-            }
-        }
-    }
-    // File times have a coarse resolution on some file systems.
-    let since = SystemTime::now() - Duration::from_secs(2);
-    tizen_web::run_tz(
-        sign_command(&tizen_web::tz()?, profile, staging),
-        "sign the package",
-    )?;
-    let signed = signed_package(staging, since)?;
     if let Some(dir) = to.parent() {
         fs::create_dir_all(dir)?;
     }
+    let unsigned = unsigned_path(to);
+    tizen_web::zip_dir(staging, &unsigned)?;
     let _ = fs::remove_file(to);
-    fs::rename(&signed, to)
-        .with_context(|| format!("move {} to {}", signed.display(), to.display()))?;
+    let signed = tizen_web::run_tz(
+        sign_command(&tizen_web::tz()?, profile, &unsigned, to),
+        "sign the package",
+    );
+    let _ = fs::remove_file(&unsigned);
+    signed?;
+    if !to.is_file() {
+        bail!("tz pack wrote no {}", to.display());
+    }
     step.done(format!("packaged {}", ui::path(to)));
     Ok(())
+}
+
+/// Installs the package at `tpk` on `device` ([`install_command`]).
+fn install_package(device: &Sdb, tpk: &Path) -> anyhow::Result<()> {
+    tizen_web::run_tz(
+        install_command(&tizen_web::tz()?, tpk, &device.serial),
+        "install the package",
+    )
 }
 
 /// The app's files in a package: its bundle, capabilities and assets, and
@@ -607,7 +607,7 @@ pub(crate) fn package(
                 )
             })?;
         let step = ui::Step::start(format!("installing {} on {}", manifest.app, device.serial));
-        device.run(&device.install(tpk))?;
+        install_package(&device, tpk)?;
         device.run(&device.launch(&manifest.app))?;
         step.done(format!("launched {} on {}", manifest.app, device.serial));
     }
@@ -750,11 +750,6 @@ impl Sdb {
         let mut all = vec!["-s".to_owned(), self.serial.clone()];
         all.extend(args.iter().map(|a| (*a).to_owned()));
         all
-    }
-
-    /// Installs the package at `tpk` (over an older one of its id).
-    pub(crate) fn install(&self, tpk: &Path) -> Vec<String> {
-        self.args(["install", &tpk.to_string_lossy()])
     }
 
     /// Starts application `app`.
@@ -1035,7 +1030,7 @@ pub(crate) fn install_dev(
             "installing the development package on {}",
             sdb.serial
         ));
-        sdb.run(&sdb.install(&tpk))?;
+        install_package(&sdb, &tpk)?;
         let record = fs::read_to_string(work.join("installed")).unwrap_or_default();
         fs::write(
             work.join("installed"),
@@ -1653,31 +1648,59 @@ mod tests {
         let _ = fs::remove_dir_all(&runtime);
     }
 
-    #[test]
-    fn tz_signs_the_staged_package_and_the_new_package_is_found() {
-        let args: Vec<String> =
-            sign_command(Path::new("tz"), "tv", Path::new("/out/tizen/App-armv7l"))
+    /// A TV takes a package signed from a zip of the staged tree
+    /// (`tz pack -b`), installed by `tz install`, never `sdb install`.
+    mod tz_commands {
+        use super::*;
+
+        fn args(command: &Command) -> Vec<String> {
+            command
                 .get_args()
                 .map(|a| a.to_string_lossy().into_owned())
-                .collect();
-        assert_eq!(
-            args,
-            ["pack", "-t", "tpk", "-s", "tv", "/out/tizen/App-armv7l"]
-        );
-        let dir = std::env::temp_dir().join(format!("nsh-tizen-signed-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        let staging = dir.join("App-armv7l");
-        fs::create_dir_all(&staging).unwrap();
-        let since = SystemTime::now() - Duration::from_secs(2);
-        assert!(signed_package(&staging, since).is_err());
-        fs::write(dir.join("AbCdE12345-1.0.0-arm.tpk"), "tpk").unwrap();
-        assert_eq!(
-            signed_package(&staging, since).unwrap(),
-            dir.join("AbCdE12345-1.0.0-arm.tpk")
-        );
-        fs::write(staging.join("second.tpk"), "tpk").unwrap();
-        assert!(signed_package(&staging, since).is_err());
-        let _ = fs::remove_dir_all(&dir);
+                .collect()
+        }
+
+        #[test]
+        fn tz_re_signs_the_zipped_staged_package_into_the_named_one() {
+            let signed = Path::new("/out/AbCdE12345-1.0.0-armv7l.tpk");
+            let unsigned = unsigned_path(signed);
+            assert_eq!(
+                unsigned,
+                Path::new("/out/AbCdE12345-1.0.0-armv7l.unsigned.tpk")
+            );
+            assert_eq!(
+                args(&sign_command(Path::new("tz"), "tv", &unsigned, signed)),
+                [
+                    "pack",
+                    "-t",
+                    "tpk",
+                    "-s",
+                    "tv",
+                    "-b",
+                    "/out/AbCdE12345-1.0.0-armv7l.unsigned.tpk",
+                    "-o",
+                    "/out/AbCdE12345-1.0.0-armv7l.tpk",
+                ]
+            );
+        }
+
+        #[test]
+        fn tz_installs_on_the_device_by_its_serial() {
+            assert_eq!(
+                args(&install_command(
+                    Path::new("tz"),
+                    Path::new("/w/NshDev-armv7l.tpk"),
+                    "192.168.1.20:26101"
+                )),
+                [
+                    "install",
+                    "-p",
+                    "/w/NshDev-armv7l.tpk",
+                    "-e",
+                    "192.168.1.20:26101"
+                ]
+            );
+        }
     }
 
     #[test]

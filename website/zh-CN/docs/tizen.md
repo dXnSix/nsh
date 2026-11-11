@@ -51,7 +51,7 @@ nsh package App.tsx --target tizen --sign my-profile --run      # 用另一个�
 ```
 
 包中有宿主、对应架构的 NSH 运行时、应用的 bundle 和资源、图标（512×423，三星要求的尺寸），以及由 `nsh.json` 生成的
-`tizen-manifest.xml`。`nsh package` 运行 Tizen SDK 的 `tz pack -t tpk -s <profile>` 为它签名；没有证书配置时会停下并说明如何创建。
+`tizen-manifest.xml`。`nsh package` 用 Tizen SDK 的 `tz pack`（`-t tpk -s <profile>`，对包的 zip 重新签名）为它签名；没有证书配置时会停下并说明如何创建。电视和电视模拟器用 SDK 的 `tz install` 安装它，`--run` 和 `nsh run` 都这样做。
 
 - **`--arch`** 接受 `armv7l`（32 位 ARM，电视；默认）、`aarch64` 和 `x86_64`（模拟器）。指定多个时，每个包的版本号会加上第四位
   （armv7l `.1`、aarch64 `.2`、x86_64 `.3`）以及其电视匹配的 CPU 特性，这是三星 Seller Office 对多架构上传的要求；电视的包（armv7l、aarch64）
