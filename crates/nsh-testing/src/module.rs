@@ -1882,6 +1882,27 @@ impl Keyboard {
         steps.run(move |app| app.press_key(&keys)).await
     }
 
+    /// Presses the TV remote's key `key`: `"up"`, `"down"`, `"left"`,
+    /// `"right"`, `"enter"` (also `"ok"`), `"back"`, and the media and TV
+    /// keys `"mediaplaypause"`, `"mediaplay"`, `"mediapause"`,
+    /// `"mediastop"`, `"mediarewind"`, `"mediafastforward"`,
+    /// `"medianext"`, `"mediaprevious"`, `"red"`, `"green"`, `"yellow"`,
+    /// `"blue"`, `"channelup"`, `"channeldown"`, `"info"` (case does not
+    /// matter). The app's shortcut of the key's name hears it
+    /// (`keymap.bind`), else it acts as `press` does (`"ok"` presses the
+    /// view the focus is on); `"back"` goes back as the platform does
+    /// (`onBackPress`), and does nothing when there is nothing to go back
+    /// from. An unknown name rejects with the names there are. Every key
+    /// works headless and on the terminal, GPUI (Tizen TVs), the web,
+    /// Android and Linux; on Windows the arrows, OK, Back and the four media
+    /// keys a Windows keyboard has (`"mediaplaypause"`, `"mediastop"`,
+    /// `"medianext"`, `"mediaprevious"`); on macOS and iOS only the arrows,
+    /// OK and Back: elsewhere it rejects, naming the key and the platform.
+    pub async fn remote(this: Instance<Self>, key: String) -> Result<(), JsError> {
+        let steps = this.with(|k| k.steps.clone());
+        steps.run(move |app| app.press_remote_key(&key)).await
+    }
+
     /// Holds modifier keys down (`"mod"`, `"shift"`, `"alt"`, `"ctrl"`,
     /// `"meta"`, joined by `+`) until `up`: the presses, drags and hovers
     /// meanwhile carry them (a Mod-click, a Shift-drag). Headless and on Linux.
@@ -1992,6 +2013,21 @@ impl App {
     /// with `menu()`). Desktops and the web only: a phone has no mouse.
     pub async fn right_click(this: Instance<Self>, selector: String) -> Result<(), JsError> {
         step(&this, move |app| app.right_click(&selector)).await
+    }
+
+    /// An input method composes `text` in the input `selector` names (or
+    /// the first input in it), as a user typing pinyin or kana sees it: the
+    /// input takes the focus and `text` shows marked at the caret, in
+    /// place of what it composed, without changing its value
+    /// (`onCompositionChange`); the input is laid out with it. An empty
+    /// `text` ends the composition with nothing committed: end it so before
+    /// the next step on the input. Headless and on macOS for now.
+    pub async fn compose(
+        this: Instance<Self>,
+        selector: String,
+        text: String,
+    ) -> Result<(), JsError> {
+        step(&this, move |app| app.compose(&selector, &text)).await
     }
 
     /// Pastes `content` into the input `selector` names (or the first input

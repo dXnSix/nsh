@@ -685,6 +685,17 @@ impl AppView {
                 if matches!(mouse.kind, crate::MouseKind::Down(crate::MouseButton::Left)) {
                     self.surface.wake.notify();
                 }
+                self.pointer.mouse_up(
+                    mouse,
+                    &crate::input::PointerContext {
+                        area: self.area,
+                        cells: self.options.cells,
+                        hits: &self.hits,
+                        geometry: &self.geometry,
+                        tree: &mut self.tree,
+                        control: &engine.control(),
+                    },
+                );
                 let handled = if matches!(
                     mouse.kind,
                     crate::MouseKind::Down(crate::MouseButton::Right)
@@ -946,6 +957,8 @@ impl AppView {
             K::PageUp => Key::PageUp,
             K::PageDown => Key::PageDown,
             K::F(n) => Key::F(n),
+            // Menu items have no media or TV remote keys.
+            _ => return false,
         };
         let m = stroke.modifiers;
         let pressed = nsh_core::desktop::Shortcut {

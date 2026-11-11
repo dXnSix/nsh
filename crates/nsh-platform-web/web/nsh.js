@@ -36,7 +36,9 @@
 // popovers), `overlay` (false: no error box), `onError`, `onLog`, `host`
 // (the functions `nsh/host`'s `host.call(name, args)` reaches: an object
 // whose `call(name, args)` returns the result or a promise of it; a throw
-// or a rejection rejects the app's call; without it `host.available()` is
+// or a rejection rejects the app's call; its optional `post(name, args)`
+// takes the app's `host.post`, which goes to `call` without one, its result
+// and failures dropped; without it `host.available()` is
 // false). The page sends
 // `host.on` listeners events with `player.hostEvent(event, payload)`
 // (JSON; it throws when the payload is not); events sent before the app
@@ -59,6 +61,10 @@ const PRESS_EVENTS = ["onPress", "onLongPress", "onPressIn", "onPressOut"];
 const MOUSE_EVENTS = ["onMouseEnter", "onMouseLeave", "onMouseMove"];
 /** The DOM's `buttons` bits, in the order a held button is named by. */
 const MOUSE_BUTTONS = [[1, "left"], [2, "right"], [4, "middle"], [8, "back"], [16, "forward"]];
+/** The DOM's `button` numbers, in the order a released button is named by. */
+const MOUSE_BUTTON_NAMES = ["left", "middle", "right", "back", "forward"];
+/** The DOM's `buttons` bit of each `button` number. */
+const MOUSE_BUTTON_BITS = [1, 4, 2, 8, 16];
 /** The keys whose press or release is reported as a mouse move. */
 const MOUSE_MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta"]);
 // What lays out a field's text, copied to the hidden copy that finds its
@@ -397,6 +403,15 @@ img.nsh-fill { pointer-events: none; }
 
 /** An Apple keyboard: Command is the shortcut key, Option+Left moves by word. */
 const APPLE = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform ?? navigator.platform);
+/**
+ * Whether the engine sends `scrollend` (Chromium 114 on, Firefox 109 on, Safari
+ * 26 on). Without it (the Chromium 108 of 2024's Samsung TVs) a scroll the
+ * browser drives ends once no scroll event came for `SCROLL_QUIET` ms
+ * (`scrolled`).
+ */
+const SCROLLEND = typeof window === "undefined" || "onscrollend" in window;
+/** How long a scroll stays still before it ended, where no `scrollend` says so. */
+const SCROLL_QUIET = 150;
 
 /**
  * Whether `nsh_key`'s answer consumes the key: a binding that fires (not one
@@ -404,10 +419,25 @@ const APPLE = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform ?? navig
  */
 const consumedShortcut = (found) => found >= 0 || found === -2;
 
-/** `nsh_key`'s codes of the keys that are not characters. */
+/** `nsh_key`'s codes of the keys that are not characters (`KeyboardEvent.key`). */
 const NAMED_KEYS = {
   Enter: 256, Escape: 257, Tab: 258, Backspace: 259, Delete: 260, Insert: 261, ArrowUp: 262, ArrowDown: 263,
   ArrowLeft: 264, ArrowRight: 265, Home: 266, End: 267, PageUp: 268, PageDown: 269,
+  // Media keys and a TV remote's.
+  MediaPlayPause: 270, MediaPlay: 271, MediaPause: 272, MediaStop: 273, MediaRewind: 274, MediaFastForward: 275,
+  MediaTrackNext: 276, MediaTrackPrevious: 277, ColorF0Red: 278, ColorF1Green: 279, ColorF2Yellow: 280,
+  ColorF3Blue: 281, ChannelUp: 282, ChannelDown: 283, Info: 284,
+};
+/**
+ * The remote's keys by Samsung TVs' `keyCode`s (`tizen.tvinputdevice`), for
+ * engines whose events give them no `key` ("Unidentified"), and in the TV
+ * idiom for every key `NAMED_KEYS` does not name: a TV's engine may report
+ * none (""), or a key of its own for one (keyCode 19 is Pause/Break's
+ * `Pause`; a TV has no such key, only the remote's pause).
+ */
+const TV_KEY_CODES = {
+  10252: 270, 415: 271, 19: 272, 413: 273, 412: 274, 417: 275, 10233: 276, 10232: 277, 403: 278, 404: 279,
+  405: 280, 406: 281, 427: 282, 428: 283, 457: 284,
 };
 /** The US layout's characters of the punctuation keys (`KeyboardEvent.code`). */
 const CODE_CHARS = {
@@ -462,13 +492,16 @@ function regional(locale) {
  * The key of a key event as `nsh_key` takes it (-1: none): the character
  * it types without modifiers, or, when Shift or Option change it or the
  * layout types no ASCII there, the US layout's character of the same key
- * (shortcuts work on any layout, as menus' do).
+ * (shortcuts work on any layout, as menus' do). `tv`: in the TV idiom,
+ * where a remote's key codes (`TV_KEY_CODES`) win over any key name that is
+ * not a named key's.
  */
-function keyCode(e) {
+function keyCode(e, tv = false) {
   // Some IME and webview key events carry no `key`; fall back to `code`.
   const k = typeof e.key === "string" ? e.key : "";
   const named = NAMED_KEYS[k];
   if (named) return named;
+  if ((tv || k === "Unidentified") && TV_KEY_CODES[e.keyCode]) return TV_KEY_CODES[e.keyCode];
   const f = /^F([0-9]{1,2})$/.exec(k);
   if (f) return Number(f[1]) >= 1 && Number(f[1]) <= 24 ? 512 + Number(f[1]) : -1;
   if (k.length === 1 && !e.shiftKey && !e.altKey && k >= " " && k <= "~") return k.toLowerCase().charCodeAt(0);
@@ -2167,6 +2200,8 @@ class Player {
     const child = this.view(childId);
     if (!parent || !child) return;
     if (child._kind === "modal") {
+      child._host = parent;
+      this.goneModals?.delete(child);
       this.present(child);
       return;
     }
@@ -2184,6 +2219,7 @@ class Player {
     // Appended children stay under a border drawn over them.
     const last = host._borderOver && host._border?.parentNode === host ? host._border : null;
     host.insertBefore(child, before && before.parentNode === host ? before : last);
+    this.showHosted(child);
     this.readingChanged(host);
     if (parent._kind === "stack") {
       this.changedStacks.add(parent);
@@ -2194,7 +2230,9 @@ class Player {
   op_r([, id]) {
     const el = this.view(id);
     if (!el) return;
+    this.hideHosted(el);
     if (el._kind === "modal") {
+      this.goneModals?.delete(el);
       this.dismiss(el);
       return;
     }
@@ -2203,6 +2241,31 @@ class Player {
     this.detach(el, parent);
     if (parent?._kind === "stack") this.stackChanged(parent);
     this.screenGone(el, focused);
+  }
+
+  /** Modals presented from inside `el`, which leaves the tree, go with it:
+   * they are the root's children, out of `el`'s subtree, and the browser's
+   * graph deletes them only once their nodes are collected. */
+  hideHosted(el) {
+    for (const modal of [...this.root.children]) {
+      const host = modal._host;
+      if (modal._kind !== "modal" || modal._leaving || !host || (host !== el && !el.contains(host))) continue;
+      (this.goneModals ??= new Set()).add(modal);
+      this.dismiss(modal, true);
+      this.hideHosted(modal);
+    }
+  }
+
+  /** `el` is back in the tree: the modals that went with it come back. */
+  showHosted(el) {
+    if (!this.goneModals?.size) return;
+    for (const modal of this.goneModals) {
+      const host = modal._host;
+      if ((host !== el && !el.contains(host)) || !this.root.contains(host)) continue;
+      this.goneModals.delete(modal);
+      this.present(modal);
+      this.showHosted(modal);
+    }
   }
 
   /** Takes `el` out of `parent`: a screen once its stack is reconciled
@@ -2237,6 +2300,7 @@ class Player {
       el._video.load();
     }
     if (el._kind === "modal") {
+      this.goneModals?.delete(el);
       this.dismiss(el);
       return;
     }
@@ -4403,15 +4467,27 @@ class Player {
       el._momentum = true;
       this.scrollEvent(el, "onMomentumStart");
     }
+    // No `scrollend` here: the scroll ends once it is still (a held
+    // scroll bar ends with its release, `releaseBar`).
+    if (!SCROLLEND) {
+      clearTimeout(el._quietEnd);
+      el._quietEnd = setTimeout(() => {
+        el._quietEnd = 0;
+        if (!el._barHeld) this.scrollEnded(el);
+      }, SCROLL_QUIET);
+    }
     // Pulled to refresh, the offset is negative, as on the native backends.
     this.call((w) => w.nsh_scroll(el._id, el.scrollLeft, el.scrollTop - (el._pull ?? 0), el._applied));
   }
 
-  /** The browser's scrolling stopped: the end, unless the scroll is driven
+  /** The browser's scrolling stopped (its `scrollend`, or where it has
+   * none a quiet `SCROLL_QUIET` ms): the end, unless the scroll is driven
    * here (`drive`) or a finger still holds it. */
   scrollEnded(el) {
     clearTimeout(el._commandEnd);
     el._commandEnd = 0;
+    clearTimeout(el._quietEnd);
+    el._quietEnd = 0;
     el._smooth = null;
     if (el._driven || el._touchDrag) return;
     // The browser's end of a scroll that ended here (`ownEnd`).
@@ -4570,6 +4646,49 @@ class Player {
     clearTimeout(el._wheelZoomTimer);
     el._wheelZoomTimer = setTimeout(() => this.zoomEnded(el, fx, fy), 200);
     return true;
+  }
+
+  /** `onPinch` of Safari's touchpad pinches (gesture events, `phase` 0 /
+   * 1 / 2): the nearest view around the target that listens hears the
+   * pinch from its start to its end; true when it takes it: no view that
+   * pinches natively (a zoomable scroll view, `pinch` values) is nearer,
+   * nor is it one (`input::wheel_listener`). Other browsers send a pinch
+   * as Ctrl + wheel, which `onWheel` hears. */
+  pinchEvent(e, phase) {
+    let p = this.pinching;
+    if (phase === 0) {
+      p = this.pinching = null;
+      const view = this.viewOf(e.target);
+      let nearer = false;
+      for (const el of view ? this.ancestors(view) : []) {
+        const zooms = (this.zooms(el) && el._behavior.pinch) || !!el._gestures?.pinch;
+        if (el._events?.has("onPinch")) {
+          p = this.pinching = { el, takes: !nearer && !zooms, scale: 1 };
+          break;
+        }
+        nearer ||= zooms;
+      }
+    }
+    if (!p) return false;
+    if (!p.el.isConnected) {
+      this.pinching = null;
+      return false;
+    }
+    if (p.takes) e.preventDefault();
+    const r = p.el.getBoundingClientRect();
+    const [pageX, pageY] = this.point(e);
+    // Nothing changes at the end, as on the native backends.
+    const delta = phase === 2 ? 0 : e.scale / (p.scale || 1) - 1;
+    p.scale = e.scale;
+    this.event(p.el._id, "onPinch", {
+      position: { x: e.clientX - r.left, y: e.clientY - r.top },
+      pagePosition: { x: pageX, y: pageY },
+      delta,
+      phase: phase === 0 ? "start" : phase === 1 ? "move" : "end",
+      modifiers: { control: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, platform: e.metaKey },
+    });
+    if (phase === 2) this.pinching = null;
+    return p.takes;
   }
 
   /** Safari's touchpad pinches (gesture events; it sends no ctrl+wheel). */
@@ -6255,6 +6374,7 @@ class Player {
       case "pickImages": this.pickImages(args[0], args[1], args[2], args[3], args[4]); break;
       case "pickFiles": this.pickFiles(args[0], args[1], args[2], args[3]); break;
       case "hostCall": this.hostCall(args[0], args[1], args[2]); break;
+      case "hostPost": this.hostPost(args[0], args[1]); break;
       case "imageInfo": this.imageInfo(args[0], args[1]); break;
       case "back": this.defaultBack(); break;
       case "setAppUrl": this.setPageUrl(args[0]); break;
@@ -6934,6 +7054,19 @@ class Player {
   }
 
   /**
+   * `nsh/host`'s `host.post`: `options.host.post(name, args)`, or its
+   * `call(name, args)` when it has no `post`. Nothing goes back to the
+   * app, so a throw, a rejection or a result is dropped.
+   */
+  hostPost(name, args) {
+    const host = this.options.host;
+    try {
+      const done = typeof host?.post === "function" ? host.post(name, args) : host?.call?.(name, args);
+      Promise.resolve(done).catch(() => {});
+    } catch {}
+  }
+
+  /**
    * Sends `event` with `payload` to the app's `host.on(event)` listeners.
    * The payload is serialized here, so one that is not JSON throws to the
    * caller rather than inside a deferred engine call. Events sent before
@@ -7482,6 +7615,27 @@ class Player {
     }
   }
 
+  /**
+   * `onMouseUp` of the views under the mouse and the views they are in
+   * (inside out), with the button released. A `pointercancel` releases
+   * nothing.
+   */
+  mouseUp(e) {
+    // A `button` this build cannot name is no release to report: the engine
+    // drops such a payload too, and a real mouse only reports 0-4.
+    const button = MOUSE_BUTTON_NAMES[e.button];
+    if (!button) return;
+    const target = document.elementFromPoint(e.clientX, e.clientY);
+    if (!target || !this.root.contains(target)) return;
+    for (const el of this.ancestors(this.viewOf(target))) {
+      if (!el._events?.has("onMouseUp")) continue;
+      const payload = this.mouseEvent(el, e);
+      if (!payload) continue;
+      payload.button = button;
+      this.event(el._id, "onMouseUp", payload);
+    }
+  }
+
   installInput() {
     const root = this.root;
     // What the user gives input with, told before it acts (the capture
@@ -7512,12 +7666,15 @@ class Player {
     document.addEventListener("selectionchange", () => this.areaSelectionChanged());
     root.addEventListener("wheel", (e) => this.wheel(e), { passive: false });
     // Safari's touchpad pinches (it sends no ctrl+wheel).
-    root.addEventListener("gesturestart", (e) => this.gestureZoom(e, 0));
-    root.addEventListener("gesturechange", (e) => this.gesture && this.gestureZoom(e, 1));
-    root.addEventListener("gestureend", (e) => this.gesture && this.gestureZoom(e, 2));
+    root.addEventListener("gesturestart", (e) => this.pinchEvent(e, 0) || this.gestureZoom(e, 0));
+    root.addEventListener("gesturechange", (e) => this.pinchEvent(e, 1) || (this.gesture && this.gestureZoom(e, 1)));
+    root.addEventListener("gestureend", (e) => this.pinchEvent(e, 2) || (this.gesture && this.gestureZoom(e, 2)));
     root.addEventListener("pointermove", (e) => {
       this.mouseMoved(e);
       if (e.pointerType !== "mouse") return;
+      // A button released while another is still held comes as a move
+      // that names it (`pointerup` is only the last button's release).
+      if (e.button >= 0 && !(e.buttons & MOUSE_BUTTON_BITS[e.button])) this.mouseUp(e);
       this.hover = [e.clientX, e.clientY];
       this.hoverButtons = e.buttons;
       // Reveal only a draggable thumb under the pointer.
@@ -7653,13 +7810,15 @@ class Player {
    * The app's shortcut (`nsh/keymap`) key `e` fires, matched natively
    * against the mounted table: its binding, -2 for a held key whose binding
    * does not repeat, -1 for none, `-3 - id` for binding `id` that passes the
-   * key through (reported, then the key goes on).
+   * key through (reported, then the key goes on). `control`: a control
+   * that Return and Space press has the focus, so they fire only the
+   * focus' own bindings (`Keymap::find_at`).
    */
-  shortcut(e, editing) {
-    const code = e.isComposing ? -1 : keyCode(e);
+  shortcut(e, editing, control = false) {
+    const code = e.isComposing ? -1 : keyCode(e, this.idiom === "tv");
     if (code < 0) return -1;
     const mods = (e.ctrlKey ? 1 : 0) | (e.altKey ? 2 : 0) | (e.shiftKey ? 4 : 0) | (e.metaKey ? 8 : 0);
-    return this.wasm.nsh_key(code, mods, editing ? 1 : 0, e.repeat ? 1 : 0);
+    return this.wasm.nsh_key(code, mods, (editing ? 1 : 0) | (control ? 2 : 0), e.repeat ? 1 : 0);
   }
 
   keyDown(e) {
@@ -7668,9 +7827,14 @@ class Player {
     const focus = document.activeElement;
     const inRoot = focus && this.root.contains(focus);
     const editing = inRoot && !!focus.closest(".nsh-field, iframe");
+    const plain = !e.ctrlKey && !e.altKey && !e.metaKey;
+    // The control the focus is on, which Return and Space press (a stop
+    // that takes no presses, a `focusable` chart, hears them through the
+    // shortcuts only); a system dialog over the page keeps its own keys.
+    const control = inRoot && !editing && !!focus._pressable && !this.dialogs?.length;
     // The app's shortcuts first, where the focus is (`nsh/keymap`), then
-    // reported.
-    const found = this.shortcut(e, editing);
+    // reported. On a control, Return and Space fire only the focus' own.
+    const found = this.shortcut(e, editing, control);
     if (found <= -3) {
       const id = -3 - found;
       this.call((w) => w.nsh_key_command(id));
@@ -7681,7 +7845,20 @@ class Player {
       return;
     }
     if (e.defaultPrevented || e.isComposing) return;
-    const plain = !e.ctrlKey && !e.altKey && !e.metaKey;
+    // Then they press the control (`nsh_core::input::presses_focused_control`):
+    // a binding of Return elsewhere does not act instead of the control the
+    // focus was moved to.
+    if (control && plain && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      // Return presses at once, Space when it is released, as buttons do.
+      this.keyPress = { press: focus, states: this.ancestors(focus).filter((v) => v._tracked & PRESSED) };
+      this.pressIn(this.keyPress);
+      for (const v of this.keyPress.states) this.setState(v, PRESSED, true);
+      if (e.key === "Enter") this.keyPressEnd(true);
+      return;
+    }
     const dialog = this.dialogs?.[this.dialogs.length - 1];
     if (dialog) {
       if (e.key === "Escape") {
@@ -7704,16 +7881,6 @@ class Player {
       if (this.contextMenu(e, true)) return;
     }
     if (this.selectionKey(e)) return;
-    if (inRoot && focus._pressable && plain && !e.shiftKey && (e.key === "Enter" || e.key === " ")) {
-      e.preventDefault();
-      if (e.repeat) return;
-      // Return presses at once, Space when it is released, as buttons do.
-      this.keyPress = { press: focus, states: this.ancestors(focus).filter((v) => v._tracked & PRESSED) };
-      this.pressIn(this.keyPress);
-      for (const v of this.keyPress.states) this.setState(v, PRESSED, true);
-      if (e.key === "Enter") this.keyPressEnd(true);
-      return;
-    }
     const backKey = e.key === "BrowserBack" || (e.altKey && !APPLE && e.key === "ArrowLeft") || (e.metaKey && APPLE && e.key === "[");
     if ((e.key === "Escape" && plain) || backKey) {
       // With history the browser goes back itself on its keys (`popState`).
@@ -7974,32 +8141,56 @@ class Player {
   /**
    * `onWheel` of the nearest view around `e`'s target that listens; true
    * when it takes the wheel: no scroll view is nearer, nor is it one
-   * (`input::wheel_listener`). Deltas are lines for `DOM_DELTA_LINE`,
-   * points otherwise (a page is the viewport's height).
+   * (`input::wheel_listener`). One scroll stays where it went
+   * (`input::WheelLatch`): a view that took it keeps it while it keeps
+   * coming (events 200 ms apart, whichever way it turns, as `wheelLock`
+   * keeps a scroll view's), and a scroll going on in a scroll view
+   * (`wheelLock`) is only observed. Deltas are lines for
+   * `DOM_DELTA_LINE`, points otherwise (a page is the viewport's height).
    */
   wheelEvent(e) {
     if (!this.wheelTracked?.size) return false;
-    const view = this.viewOf(e.target);
-    if (!view) return false;
+    const now = performance.now();
+    const held = this.wheelTaker;
+    let el = null;
+    let takes = false;
+    if (held && now - held.t < 200
+      && held.el.isConnected && held.el._events?.has("onWheel")) {
+      el = held.el;
+      takes = true;
+    } else {
+      [el, takes] = this.wheelListenerOf(e.target) ?? [null, false];
+      const lock = this.wheelLock;
+      if (takes && lock && now - lock.t <= 200 && lock.el.isConnected) takes = false;
+    }
+    this.wheelTaker = takes ? { el, t: now } : null;
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const [pageX, pageY] = this.point(e);
+    const page = e.deltaMode === 2 ? this.size[1] : 1;
+    this.event(el._id, "onWheel", {
+      position: { x: e.clientX - r.left, y: e.clientY - r.top },
+      pagePosition: { x: pageX, y: pageY },
+      delta: { x: e.deltaX * page, y: e.deltaY * page },
+      deltaMode: e.deltaMode === 1 ? "lines" : "points",
+      modifiers: { control: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, platform: e.metaKey },
+    });
+    return takes;
+  }
+
+  /** The nearest view around `target` listening to `onWheel`, and whether
+   * it takes the wheel (`input::wheel_listener`): no scroll view is nearer,
+   * nor is it one. */
+  wheelListenerOf(target) {
+    const view = this.viewOf(target);
+    if (!view) return null;
     let scrollSeen = false;
     for (const el of this.ancestors(view)) {
       const scrolls = el._kind === "scroll";
-      if (el._events?.has("onWheel")) {
-        const r = el.getBoundingClientRect();
-        const [pageX, pageY] = this.point(e);
-        const page = e.deltaMode === 2 ? this.size[1] : 1;
-        this.event(el._id, "onWheel", {
-          position: { x: e.clientX - r.left, y: e.clientY - r.top },
-          pagePosition: { x: pageX, y: pageY },
-          delta: { x: e.deltaX * page, y: e.deltaY * page },
-          deltaMode: e.deltaMode === 1 ? "lines" : "points",
-          modifiers: { control: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, platform: e.metaKey },
-        });
-        return !scrollSeen && !scrolls;
-      }
+      if (el._events?.has("onWheel")) return [el, !scrollSeen && !scrolls];
       scrollSeen ||= scrolls;
     }
-    return false;
+    return null;
   }
 
   /** Moves `el` by (`dx`, `dy`), gliding there when `smooth`; once it
@@ -8463,7 +8654,12 @@ class Player {
   }
 
   pointerUp(e, cancelled) {
-    if (e.pointerType === "mouse") this.hoverButtons = e.buttons;
+    if (e.pointerType === "mouse") {
+      this.hoverButtons = e.buttons;
+      // Before the press's end, as the desktops report it, and for every
+      // button: a secondary click tracks no pointer down (`pointerDown`).
+      if (!cancelled) this.mouseUp(e);
+    }
     const p = this.pointers.get(e.pointerId);
     if (!p) return;
     if (p.mode === "bar") {

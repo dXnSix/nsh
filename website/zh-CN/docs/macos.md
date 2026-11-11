@@ -17,7 +17,7 @@ macOS 后端的行为是桌面应用：鼠标、触控板和键盘输入，可�
 
 ## 环境要求
 
-- 运行应用的机器需要 **macOS 14** 及以上。
+- 运行应用的机器需要 **macOS 14** 及以上，或应用指定的更高版本（见[最低系统版本](./packaging.md#最低系统版本)）。
 - Xcode 命令行工具（`xcode-select --install`），用于构建 Rust 应用的 runner、从源码构建 NSH 的 macOS 运行时以及打包应用
   （`codesign`、`sips`）。在 Mac 上用 `cargo xtask dist` 制作的发行版把 TSX 应用的运行时放在 `runtime/macos/` 中。
 
@@ -93,6 +93,11 @@ nsh package App.tsx --target macos [--run]   # TSX 应用
 ```
 
 `.app` 使用 ad hoc 签名，因此可以在构建它的 Mac 上运行。要分发它，请用 Developer ID 签名并进行公证。`--run` 会在打包后打开应用。
+
+应用把它的警告、错误以及 `console.log` 和 `console.info` 日志写入统一日志，以它的 id 为子系统：“控制台”应用会显示它们，
+`log stream --predicate 'subsystem == "com.example.notes"'` 也会。从终端启动时（`.nsh/out/<Name>.app/Contents/MacOS/<Name>`），
+它还会把日志打印在终端里；标准错误重定向到文件时（`2> app.log`、`open --stderr app.log`）也会写进文件
+（[打包应用的日志](./dev-server-and-debugging.md#a-packaged-apps-logs)）。
 
 ## 菜单栏应用
 
@@ -242,11 +247,12 @@ VoiceOver 和 UI 自动化工具将 `Table` 和 `Grid` 读取为 `AXTable`，将
 |---|---|
 | Return | 在 `Input` 中按 `submitBehavior` 的设定：提交（`onSubmit`）、提交并离开输入框，或换行（多行输入框） |
 | Shift+Return、Option+Return、Ctrl+Return | 在 Return 用于提交的多行输入框中换行 |
-| Tab、Shift+Tab（加 Ctrl 亦可） | 按屏幕顺序切换到下一个 / 上一个输入框或可按压视图，限于最新的对话框内；Option+Tab 在多行输入框中输入制表符 |
+| Tab、Shift+Tab（加 Ctrl 亦可） | 按视图树的顺序切换到下一个 / 上一个输入框或可按压视图，限于最新的对话框内；Option+Tab 在多行输入框中输入制表符 |
 | Escape | 离开有焦点的输入框；否则清除文本选区，再关闭最新的对话框或返回 |
 | Option+Left、Cmd+[、鼠标后退键 | 返回（输入框有焦点时不会：此时 Option+Left 移动光标） |
 | Option / Cmd + 方向键（可加 Shift）；Option+Delete、Cmd+Delete；Ctrl+A / E / K | 在输入框中按词和按行移动、选择和删除，与所有 Mac 应用一致 |
 | Cmd+Z、Shift+Cmd+Z、Cmd+X / C / V / A | 撤销、重做、剪切、复制、粘贴、全选（`masked` 输入框拒绝剪切和复制）；Cmd+A / Cmd+C 选择并复制 可选择的文本 |
+| 方向键（输入框自己用的除外） | 把焦点移到该方向上最近的可按压视图、输入框或 `focusable` 视图（限于最新的对话框内），并把它滚动到可见；上 / 下方向键会离开单行输入框；该方向上没有时，按下文滚动 |
 | 方向键；Page Up / Down、Space、Shift+Space、Option+Up / Down；Home / End、Cmd+Up / Down | 滚动有焦点的视图所在或鼠标下方的滚动视图：一行、一页、到开头 / 结尾（输入框有焦点时不滚动） |
 | Cmd+W、Cmd+M、Ctrl+Cmd+F、Cmd+H、Option+Cmd+H、Cmd+Q | 关闭、最小化、全屏、隐藏、隐藏其他、退出（`nsh package` 和 `nsh run` 应用的菜单） |
 | Cmd+R | 重新加载最新的构建（`nsh run`） |

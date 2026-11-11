@@ -453,6 +453,17 @@ impl Native for MacNative {
         self.on_key(move |surface, window| synth::type_text(surface, window, &text));
     }
 
+    fn focused(&self) -> Option<NodeId> {
+        self.on_key(|_, window| crate::text_input::test_focused(window))
+            .flatten()
+    }
+
+    fn compose(&self, text: &str) -> Result<(), String> {
+        let text = text.to_owned();
+        self.on_key(move |_, window| crate::text_input::test_compose(window, &text))
+            .unwrap_or_else(|| Err("the window is gone".into()))
+    }
+
     fn paste(&self, content: &nsh_core::PasteEvent) -> Result<(), String> {
         let content = content.clone();
         self.on_key(move |_, window| crate::text_input::test_paste(window, &content))
@@ -556,6 +567,28 @@ impl Native for MacNative {
             Key::PageUp => "Page_Up".into(),
             Key::PageDown => "Page_Down".into(),
             Key::F(n) => format!("F{n}"),
+            // A Mac's media keys reach the system (Now Playing) as
+            // system-defined events, never an app's key events: posting
+            // one would play the user's music, not press the app's key.
+            Key::MediaPlayPause
+            | Key::MediaPlay
+            | Key::MediaPause
+            | Key::MediaStop
+            | Key::MediaRewind
+            | Key::MediaFastForward
+            | Key::MediaNext
+            | Key::MediaPrevious
+            | Key::ColorRed
+            | Key::ColorGreen
+            | Key::ColorYellow
+            | Key::ColorBlue
+            | Key::ChannelUp
+            | Key::ChannelDown
+            | Key::Info => {
+                return Err(format!(
+                    "{keys:?} has no key on macOS: a Mac gives an app no media or TV remote keys"
+                ));
+            }
         });
         self.activate();
         self.on_key(move |surface, window| synth::key(surface, window, &name))

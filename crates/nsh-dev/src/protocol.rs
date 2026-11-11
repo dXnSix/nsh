@@ -499,6 +499,13 @@ pub enum TestStep {
         /// The keystroke: `"mod+k"`, `"escape"`.
         keys: String,
     },
+    /// Presses a TV remote's key by its name (`app.keyboard.remote`):
+    /// `"up"`, `"ok"`, `"back"`, `"red"`, `"mediaplaypause"`
+    /// (`nsh_testing::remote`, which the agent checks it against).
+    PressRemoteKey {
+        /// The key's name.
+        key: String,
+    },
     /// Holds modifier keys down, or lets go of them, for the pointer's
     /// steps until then (`app.keyboard.down` / `up`).
     HoldKeys {
@@ -520,6 +527,15 @@ pub enum TestStep {
     },
     /// Lets go of the pointer `DragAndHold` left down (`app.drop`).
     Drop,
+    /// An input method composes `text` in the input (`app.compose`):
+    /// marked text at the caret, in place of what it composed; empty, the
+    /// composition ends with nothing committed.
+    Compose {
+        /// Which input.
+        selector: String,
+        /// What it composes.
+        text: String,
+    },
     /// Drops local files on a view (`app.dropFiles`).
     DropFiles {
         /// Where.

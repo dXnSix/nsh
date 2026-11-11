@@ -179,7 +179,7 @@ In Rust, each prop is a method of `input()` named in snake case (`.placeholder(.
 | `autoCorrect` | `boolean` | `true` | The system's corrections. |
 | `autoComplete` | `AutoComplete` | | What the input holds, for autofill. |
 | `multiline` | `boolean` | `false` | Several lines; return inserts a line break unless `submitBehavior` says otherwise. |
-| `maxLength` | `number` | | The most characters the user can enter. |
+| `maxLength` | `number` | | The most characters the user can enter. A longer paste goes in cut to what fits, as in a browser. |
 | `readonly` | `boolean` | `false` | The user can select and copy the text but not change it. |
 | `autoFocus` | `boolean` | `false` | Focused when it appears. |
 | `submitBehavior` | `"submit" \| "blurAndSubmit" \| "newline"` | single line `"blurAndSubmit"`, multiline `"newline"` | What return does: submit and keep the focus, submit and unfocus, or insert a line break (multiline only). |
@@ -364,7 +364,7 @@ An input's ref has:
 | `set_selection(start, end)` | `setSelection(start, end?)` | Selects `start..end` (UTF-16 units); a caret when they are equal (TSX: without `end`). |
 | `insert_text(text)` | `insertText(text)` | Inserts `text` in place of the selection as the user's edit: one step of the input's undo history, reported by `onChange`; Linux, the web and headless tests only ([pasting](#pasting-images-and-files)). |
 
-On macOS and the web, `focus()` and `blur()` on the ref of a view that takes presses move the keyboard focus as Tab does ([keyboard focus](../elements/index.md#keyboard-focus)).
+On macOS, Windows, Linux and the web, `focus()` and `blur()` on the ref of a view that takes presses move the keyboard focus as Tab does ([keyboard focus](../elements/index.md#keyboard-focus)).
 
 `dismiss_keyboard()` in Rust and `Keyboard.dismiss()` from `nsh` in TSX unfocus whichever input has focus:
 

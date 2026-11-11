@@ -322,7 +322,8 @@ names its tokens its own way. A role mapped onto a name that is no token of the 
 a type already maps, is refused as a value that cannot be read is; a role's name no UI set has is a build warning.
 `updateTheme` adds to the roles mapped.
 
-The theme is read whole: when a value cannot be read (a color NSH does not know, such as `#zz` or `lab()`, a `var()`
+The theme is read whole: when a value cannot be read (a color NSH does not know, such as `#zz`, `lab()` or
+`rgb(255 0 0)garbage`, a `var()`
 that names no color, or a value that is no color in one appearance where the other's is), `setTheme` throws a
 `TypeError` that names each one, and the theme shown stays. Values of no kind a token has, such as a letter spacing in
 `em`, are left out as they are from `nsh.json`'s. Build the new theme from the app's own, so the tokens its classes name keep a value
@@ -1160,7 +1161,7 @@ interface ThemeScopeProps {
 
 A view that shows itself and everything in it in an appearance of its own, with design tokens of its own, or both, whatever the app's and the system's: a dark sidebar beside a light page, a card with its own `primary`, a theme's preview beside the app. It is a view, so its `class` and `style` lay it out and draw it.
 
-In a scope, everything that follows the appearance follows the scope's: `dark:` classes, the classes of theme tokens (`bg-background`), the theme colors of components, [`colorScheme()`](#colorscheme) and [`token()`](#token). The platform's own controls in it follow too on iOS, macOS and the web (a text input's keyboard and menus, web views, form controls), and so do the scroll indicators the desktop backends draw. Scopes nest: the nearest one with an `appearance` decides, and a scope without one is shown as the view around it.
+In a scope, everything that follows the appearance follows the scope's: `dark:` classes, the classes of theme tokens (`bg-background`), the theme colors of components, [`colorScheme()`](#colorscheme) and [`token()`](#token). The platform's own controls in it follow too on iOS, macOS and the web (a text input's keyboard and menus, web views, form controls), and so do the tab bar on Android and the scroll indicators the desktop backends draw. Scopes nest: the nearest one with an `appearance` decides, and a scope without one is shown as the view around it.
 
 With a `theme` (a theme file, as [`updateTheme`](#updatetheme-resettheme) takes one), the classes of theme tokens, the components' theme and [`token()`](#token) take the scope's values for the tokens it sets, in each appearance, and the app's for the others; a `var()` it does not set itself names the tokens around the scope. A scope sets tokens the app's theme has: a name the theme lacks is left out with a warning, so the classes that exist are the same everywhere. A scope inside another starts from the outer one's values, and a change of the app's theme reaches every token a scope leaves alone.
 
@@ -3045,9 +3046,37 @@ iOS follows macOS (`mod` is Command) and Android follows Windows and Linux (`mod
 
 Use `mod` for an app's own shortcuts: it is the key each platform's apps use for them (⌘K on macOS, Ctrl+K on Windows and Linux), so one spelling fits everywhere. The Windows key and Super mostly belong to the system, so `cmd` is rarely right outside macOS.
 
-The key is a letter, digit or punctuation key, written as the character it types on a US keyboard without Shift (`k`, `1`, `,`, `/`, `[`; `"shift+/"` for `?`, `"shift+k"` for Shift+K), or a name: `plus` (the `=` / `+` key, also written `=`), `minus` (also `-`), `space`, `enter` (`return`), `escape` (`esc`), `tab`, `backspace`, `delete` (`del`), `insert`, the arrows `up`, `down`, `left`, `right` (`arrowup`, …), `home`, `end`, `pageup`, `pagedown`, `f1` to `f24`. Case does not matter: `"Mod+Shift+K"` is `"mod+shift+k"`, and a capital letter is the same key, not Shift (`"mod+K"` is `"mod+k"`). Lowercase is the recommended style, which these pages use. `"mod-k"` and `"mod++"` are errors whose messages give the right spelling. Menu shortcuts in `nsh/desktop` take the same keystrokes.
+The key is a letter, digit or punctuation key, written as the character it types on a US keyboard without Shift (`k`, `1`, `,`, `/`, `[`; `"shift+/"` for `?`, `"shift+k"` for Shift+K), or a name: `plus` (the `=` / `+` key, also written `=`), `minus` (also `-`), `space`, `enter` (`return`), `escape` (`esc`), `tab`, `backspace`, `delete` (`del`), `insert`, the arrows `up`, `down`, `left`, `right` (`arrowup`, …), `home`, `end`, `pageup`, `pagedown`, `f1` to `f24`, and the media and TV remote keys below. Case does not matter: `"Mod+Shift+K"` is `"mod+shift+k"`, and a capital letter is the same key, not Shift (`"mod+K"` is `"mod+k"`). Lowercase is the recommended style, which these pages use. `"mod-k"` and `"mod++"` are errors whose messages give the right spelling. Menu shortcuts in `nsh/desktop` take the same keystrokes, the media and TV remote keys aside.
 
 Shortcuts work with any keyboard layout: on a Cyrillic or Greek layout, `mod+k` is the key that types K on a US layout, as menu shortcuts are.
+
+#### Media and TV remote keys
+
+Media keyboards and TV remotes have keys of their own, named like the others:
+
+| Key | Name | Also written |
+|---|---|---|
+| Play / Pause | `mediaplaypause` | |
+| Play | `mediaplay` | |
+| Pause | `mediapause` | |
+| Stop | `mediastop` | |
+| Rewind | `mediarewind` | |
+| Fast forward | `mediafastforward` | |
+| Next track | `medianext` | `mediatracknext` |
+| Previous track | `mediaprevious` | `mediatrackprevious` |
+| Red, green, yellow, blue | `red`, `green`, `yellow`, `blue` | `colorf0red`, `colorf1green`, `colorf2yellow`, `colorf3blue` |
+| Channel up, channel down | `channelup`, `channeldown` | |
+| Info | `info` | |
+
+```tsx
+keymap.bind({
+  mediaplaypause: () => player.toggle(),
+  red: () => openFilters(),
+  channelup: () => nextChannel(),
+});
+```
+
+They come from the keys each platform reports: Windows' media keys (play / pause, stop, next and previous track), every one of them on Android (`KEYCODE_MEDIA_*`, `KEYCODE_PROG_RED` …, `KEYCODE_CHANNEL_*`, `KEYCODE_INFO`), in browsers by their `KeyboardEvent.key` (and on Samsung TVs by the remote's key codes), and on Tizen TVs through the GPUI backend. They type no text, so their bindings fire in text inputs too. `keymap.label` names them in words (`"Play/Pause"`, `"Red"`, `"Channel Up"`).
 
 `bind` throws a `TypeError` that says what is wrong with an invalid keystroke (`keymap.bind: invalid keystroke "cmd+kk": unknown key "kk"`), and refuses the keystrokes the system keeps for itself, so an app can never break them:
 

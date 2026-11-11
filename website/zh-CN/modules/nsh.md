@@ -312,7 +312,8 @@ interface Theme {
 它立即生效：调用之后 `token()` 马上读到新的令牌，引用令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在下一帧跟上，两种外观都是。
 嵌入方应用的[主题覆盖](../docs/tailwind.md#主题-token)仍然优先于它。传 `null` 恢复应用构建时的主题。
 
-主题要整个读得懂：有值读不懂时（NSH 不认识的颜色，如 `#zz` 或 `lab()`；指不到颜色的 `var()`；或一种外观下是颜色、另一种外观下却不是颜色的值），
+主题要整个读得懂：有值读不懂时（NSH 不认识的颜色，如 `#zz`、`lab()` 或 `rgb(255 0 0)garbage`；
+指不到颜色的 `var()`；或一种外观下是颜色、另一种外观下却不是颜色的值），
 `setTheme` 抛出 `TypeError`，逐一列出这些值，正在显示的主题保持不变。`em` 单位的字间距这类不属于任何令牌类型的值会被略过，和 `nsh.json`
 的主题一样。新主题请从应用自己的主题出发，只改不同的部分，这样类名引用的令牌都还有值（`up` 在 `nsh.json` 的主题里时的 `bg-up`）。
 Rust：对 `nsh_base::Theme` 调用 `set_tokens(theme.into())`（[主题 token](../docs/tailwind.md#主题-token)）。
@@ -1112,7 +1113,7 @@ interface ThemeScopeProps {
 
 一个视图，无论应用和系统的外观如何，它自身及其中的一切都以它自己的外观、它自己的设计令牌或两者同时显示：浅色页面旁的深色侧边栏，拥有自己 `primary` 的卡片，应用旁的主题预览。它是视图，所以它的 `class` 和 `style` 负责布局和绘制。
 
-在作用域内，凡是跟随外观的都跟随作用域的外观：`dark:` 类、主题 token 的类（`bg-background`）、组件的主题颜色、[`colorScheme()`](#colorscheme) 和 [`token()`](#token)。在 iOS、macOS 和 Web 上，其中的平台控件也跟随它（文本输入的键盘和菜单、Web 视图、表单控件），桌面后端绘制的滚动指示器同样如此。作用域可以嵌套：由最近的设置了 `appearance` 的作用域决定，没有设置的作用域按其外层视图的外观显示。
+在作用域内，凡是跟随外观的都跟随作用域的外观：`dark:` 类、主题 token 的类（`bg-background`）、组件的主题颜色、[`colorScheme()`](#colorscheme) 和 [`token()`](#token)。在 iOS、macOS 和 Web 上，其中的平台控件也跟随它（文本输入的键盘和菜单、Web 视图、表单控件），Android 上的标签栏和桌面后端绘制的滚动指示器同样如此。作用域可以嵌套：由最近的设置了 `appearance` 的作用域决定，没有设置的作用域按其外层视图的外观显示。
 
 设置了 `theme`（一个主题文件，与 [`updateTheme`](#updatetheme-resettheme) 接受的相同）时，主题令牌的类、组件的主题和 [`token()`](#token) 在每种外观下对它设置的令牌使用作用域的值，对其余令牌使用应用的值；它自己没有设置的 `var()` 指向作用域外层的令牌。作用域只设置应用主题已有的令牌：主题没有的名称会被略过并给出警告，所以存在的类在各处都相同。嵌套在内的作用域从外层作用域的值开始，应用主题的变化会传到作用域没有设置的每个令牌。
 
@@ -2903,9 +2904,37 @@ iOS 与 macOS 一致（`mod` 是 Command），Android 与 Windows、Linux 一致
 
 应用自己的快捷键请用 `mod`：它就是各平台应用习惯使用的那个键（macOS 上是 ⌘K，Windows 和 Linux 上是 Ctrl+K），一种写法到处适用。Windows 键和 Super 基本归系统使用，所以在 macOS 以外很少该用 `cmd`。
 
-键可以是字母、数字或标点键，写作它在美式键盘上不按 Shift 时输入的字符（`k`、`1`、`,`、`/`、`[`；`?` 写作 `"shift+/"`，Shift+K 写作 `"shift+k"`），也可以是名称：`plus`（`=` / `+` 键，也可写 `=`）、`minus`（也可写 `-`）、`space`、`enter`（`return`）、`escape`（`esc`）、`tab`、`backspace`、`delete`（`del`）、`insert`、方向键 `up`、`down`、`left`、`right`（`arrowup` 等）、`home`、`end`、`pageup`、`pagedown`、`f1` 到 `f24`。大小写不影响：`"Mod+Shift+K"` 就是 `"mod+shift+k"`，大写字母表示同一个键，并不意味着 Shift（`"mod+K"` 就是 `"mod+k"`）。推荐的写法是全小写，本页示例都这样写。`"mod-k"` 和 `"mod++"` 会报错，错误信息给出正确的写法。`nsh/desktop` 的菜单快捷键使用同样的写法。
+键可以是字母、数字或标点键，写作它在美式键盘上不按 Shift 时输入的字符（`k`、`1`、`,`、`/`、`[`；`?` 写作 `"shift+/"`，Shift+K 写作 `"shift+k"`），也可以是名称：`plus`（`=` / `+` 键，也可写 `=`）、`minus`（也可写 `-`）、`space`、`enter`（`return`）、`escape`（`esc`）、`tab`、`backspace`、`delete`（`del`）、`insert`、方向键 `up`、`down`、`left`、`right`（`arrowup` 等）、`home`、`end`、`pageup`、`pagedown`、`f1` 到 `f24`，以及下文的媒体键与电视遥控器按键。大小写不影响：`"Mod+Shift+K"` 就是 `"mod+shift+k"`，大写字母表示同一个键，并不意味着 Shift（`"mod+K"` 就是 `"mod+k"`）。推荐的写法是全小写，本页示例都这样写。`"mod-k"` 和 `"mod++"` 会报错，错误信息给出正确的写法。`nsh/desktop` 的菜单快捷键使用同样的写法（媒体键与电视遥控器按键除外）。
 
 快捷键适用于任何键盘布局：在西里尔或希腊字母布局下，`mod+k` 是美式布局中输入 K 的那个键，与菜单快捷键一致。
+
+#### 媒体键与电视遥控器按键
+
+媒体键盘和电视遥控器有自己的按键，命名方式与其他键相同：
+
+| 按键 | 名称 | 也可写作 |
+|---|---|---|
+| 播放 / 暂停 | `mediaplaypause` | |
+| 播放 | `mediaplay` | |
+| 暂停 | `mediapause` | |
+| 停止 | `mediastop` | |
+| 快退 | `mediarewind` | |
+| 快进 | `mediafastforward` | |
+| 下一曲 | `medianext` | `mediatracknext` |
+| 上一曲 | `mediaprevious` | `mediatrackprevious` |
+| 红、绿、黄、蓝 | `red`、`green`、`yellow`、`blue` | `colorf0red`、`colorf1green`、`colorf2yellow`、`colorf3blue` |
+| 频道加、频道减 | `channelup`、`channeldown` | |
+| 信息 | `info` | |
+
+```tsx
+keymap.bind({
+  mediaplaypause: () => player.toggle(),
+  red: () => openFilters(),
+  channelup: () => nextChannel(),
+});
+```
+
+它们来自各平台报告的按键：Windows 的媒体键（播放 / 暂停、停止、下一曲、上一曲），Android 上的全部这些键（`KEYCODE_MEDIA_*`、`KEYCODE_PROG_RED` 等、`KEYCODE_CHANNEL_*`、`KEYCODE_INFO`），浏览器中按 `KeyboardEvent.key` 识别（在三星电视上也按遥控器的键码识别），Tizen 电视上则通过 GPUI 后端。它们不输入文字，所以在文本输入框中绑定也会触发。`keymap.label` 用文字显示它们（`"Play/Pause"`、`"Red"`、`"Channel Up"`）。
 
 对于无效的按键组合，`bind` 会抛出一个说明问题所在的 `TypeError`（`keymap.bind: invalid keystroke "cmd+kk": unknown key "kk"`），并拒绝系统保留的按键组合，应用因此永远无法让它们失效：
 

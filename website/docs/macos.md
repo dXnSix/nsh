@@ -19,7 +19,8 @@ over the window and a menu bar.
 
 ## Requirements
 
-- **macOS 14** or later, where the app runs.
+- **macOS 14** or later, where the app runs, or the later version the app names
+  ([Minimum system version](./packaging.md#minimum-system-version)).
 - Xcode's command line tools (`xcode-select --install`), to build Rust apps' runners and NSH's macOS runtime from a
   checkout, and to package apps (`codesign`, `sips`). The distribution made with `cargo xtask dist` on a Mac ships the
   runtime of TSX apps in `runtime/macos/`.
@@ -111,6 +112,11 @@ Writes an app bundle:
 
 The `.app` is signed ad hoc, so it runs on the Mac that built it. To distribute it, sign it with a Developer ID and
 notarize it. `--run` opens the app after packaging it.
+
+The app logs its warnings, its errors and its `console.log` and `console.info` lines to the unified log, with its id
+as the subsystem: Console shows them, and so does `log stream --predicate 'subsystem == "com.example.notes"'`. Its
+standard error gets them too: the terminal it was started from (`.nsh/out/<Name>.app/Contents/MacOS/<Name>`) or a file
+(`2> app.log`, `open --stderr app.log`) ([A packaged app's logs](./dev-server-and-debugging.md#a-packaged-apps-logs)).
 
 ## Menu bar apps
 
@@ -291,11 +297,12 @@ press action and their row role, and labels and text children remain available t
 | Return | In an `Input`, what `submitBehavior` says: submit (`onSubmit`), submit and leave the field, or a new line (multiline inputs) |
 | Return, keypad Enter, Space | Activate a focused view with `onPress` once on key-down; auto-repeat is consumed |
 | Shift+Return, Option+Return, Ctrl+Return | A new line in a multiline input whose return submits |
-| Tab, Shift+Tab (Ctrl too) | The next / previous field or pressable view in screen order, within the newest dialog; Option+Tab types a tab in a multiline input |
+| Tab, Shift+Tab (Ctrl too) | The next / previous field or pressable view in tree order, within the newest dialog; Option+Tab types a tab in a multiline input |
 | Escape | Leaves the focused field; else clears a text selection, then closes the newest dialog or goes back |
 | Option+Left, Cmd+[, mouse back button | Go back (not while a field has the focus: there Option+Left moves the caret) |
 | Option / Cmd + arrows, with Shift; Option+Delete, Cmd+Delete; Ctrl+A / E / K | Move, select and delete by word and line in a field, as in every Mac app |
 | Cmd+Z, Shift+Cmd+Z, Cmd+X / C / V / A | Undo, redo, cut, copy, paste, select all (a `masked` field refuses cut and copy); Cmd+A / Cmd+C select and copy selectable text |
+| Arrows (outside a field's own) | Move the focus to the nearest pressable, field or `focusable` view in their direction, within the newest dialog, and scroll it into view; Up / Down leave a single-line field; with none that way they scroll as below |
 | Arrows; Page Up / Down, Space, Shift+Space, Option+Up / Down; Home / End, Cmd+Up / Down | Scroll the scroll view around the focused view or under the mouse by a line, a page, to the start / end (not while a field has the focus) |
 | Cmd+W, Cmd+M, Ctrl+Cmd+F, Cmd+H, Option+Cmd+H, Cmd+Q | Close, minimize, full screen, hide, hide others, quit (`nsh package` and `nsh run` apps' menus) |
 | Cmd+R | Reloads the latest build (`nsh run`) |

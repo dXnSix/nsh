@@ -203,6 +203,24 @@ test("events sent before the app runs reach it in order once it starts, later on
   assert.deepEqual(events(sent), ["a", "b", "c"]);
 });
 
+test("posts go to the page host's post, else its call, and nothing comes back", async () => {
+  const posted = [];
+  const { player, sent } = fakePlayer({ host: { call: () => 1, post: (...args) => posted.push(args) } });
+  player.begin(390, started);
+  player.hostPost("note", { a: 1 });
+  assert.deepEqual(posted, [["note", { a: 1 }]]);
+  const called = [];
+  const fallback = fakePlayer({ host: { call: async (...args) => { called.push(args); throw new Error("boom"); } } });
+  fallback.player.begin(390, started);
+  fallback.player.hostPost("note", 2);
+  const throwing = fakePlayer({ host: { call() {}, post() { throw new Error("boom"); } } });
+  throwing.player.hostPost("note", 3);
+  fakePlayer().player.hostPost("note", 4);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(called, [["note", 2]]);
+  assert.deepEqual([...sent, ...fallback.sent, ...throwing.sent], []);
+});
+
 test("events for an app that failed to start reach neither it nor the next app", () => {
   const { player, sent } = fakePlayer();
   player.hostEvent("before");
@@ -538,6 +556,60 @@ test("Return presses a focused pressable, not a focused stop that takes no press
   assert.deepEqual(pressed, [button]);
   assert.equal(key(chart), false);
   assert.deepEqual(pressed, [button]);
+});
+
+test("Return and Space press the focused control unless the focus binds them", () => {
+  const { player } = fakePlayer();
+  // The app binds Return, Space and Mod+Return everywhere but text fields
+  // (binding 7), as the native match answers: on a control (focus bit 2)
+  // plain Return and Space fire only the focus' own bindings (binding 9,
+  // while `own`).
+  let own = false;
+  player.wasm.nsh_key = (code, mods, focus) => {
+    const pressing = (code === keyCode({ key: "Enter" }) || code === keyCode({ key: " " })) && !(mods & 11);
+    if (focus & 2 && pressing) return own ? 9 : -1;
+    return 7;
+  };
+  const fired = [];
+  player.call = (f) => f({ nsh_key_command: (id) => fired.push(id) });
+  player.modifiersChanged = () => {};
+  player.takesKeys = () => true;
+  player.selectionKey = () => false;
+  player.scrollKey = () => false;
+  player.back = () => false;
+  player.ancestors = () => [];
+  const pressed = [];
+  player.pressIn = (p) => pressed.push(p.press);
+  player.pressOut = () => {};
+  player.root = { contains: () => true };
+  const key = (focus, e) => {
+    globalThis.document = { activeElement: focus };
+    player.keyDown({ preventDefault() {}, stopPropagation() {}, ...e });
+    if (e.key === " ") player.keyUp({ key: " " });
+    delete globalThis.document;
+  };
+  const button = focusView(true, {});
+  const chart = focusView(false, { focusable: true });
+  // On a button: the button takes them, the app's binding never fires.
+  key(button, { key: "Enter" });
+  key(button, { key: " " });
+  key(button, { key: "Enter", shiftKey: true });
+  assert.deepEqual(pressed, [button, button, button]);
+  assert.deepEqual(fired, []);
+  // With Control or Command held the binding fires, as it does with the
+  // focus on no control or on a stop that takes no presses.
+  key(button, { key: "Enter", ctrlKey: true });
+  key(button, { key: "Enter", metaKey: true });
+  key(null, { key: "Enter" });
+  key(chart, { key: "Enter" });
+  assert.deepEqual(pressed, [button, button, button]);
+  assert.deepEqual(fired, [7, 7, 7, 7]);
+  // The focus' own binding (a menu button opening its menu) takes them
+  // before the press.
+  own = true;
+  key(button, { key: "Enter" });
+  assert.deepEqual(pressed, [button, button, button]);
+  assert.deepEqual(fired, [7, 7, 7, 7, 9]);
 });
 
 /**
@@ -2236,6 +2308,44 @@ test("a key event without `key` falls back to its physical key instead of throwi
   assert.equal(keyCode({ key: null, code: "Digit3" }), 51);
   assert.equal(keyCode({}), -1);
   assert.equal(keyCode({ key: "a", code: "KeyA" }), 97);
+});
+
+test("media and TV remote keys by their names, and by Samsung TVs' key codes when unidentified", () => {
+  const named = {
+    MediaPlayPause: 270, MediaPlay: 271, MediaPause: 272, MediaStop: 273, MediaRewind: 274, MediaFastForward: 275,
+    MediaTrackNext: 276, MediaTrackPrevious: 277, ColorF0Red: 278, ColorF1Green: 279, ColorF2Yellow: 280,
+    ColorF3Blue: 281, ChannelUp: 282, ChannelDown: 283, Info: 284,
+  };
+  for (const [key, code] of Object.entries(named)) assert.equal(keyCode({ key }), code, key);
+  const tizen = {
+    10252: 270, 415: 271, 19: 272, 413: 273, 412: 274, 417: 275, 10233: 276, 10232: 277, 403: 278, 404: 279,
+    405: 280, 406: 281, 427: 282, 428: 283, 457: 284,
+  };
+  for (const [keyCode_, code] of Object.entries(tizen)) {
+    assert.equal(keyCode({ key: "Unidentified", keyCode: Number(keyCode_) }), code, keyCode_);
+  }
+  // A desktop's Pause key (keyCode 19) is no media key; nor is an unknown unidentified one.
+  assert.equal(keyCode({ key: "Pause", keyCode: 19, code: "Pause" }), -1);
+  assert.equal(keyCode({ key: "Unidentified", keyCode: 10009 }), -1);
+  assert.equal(keyCode({ key: "", keyCode: 415 }), -1);
+});
+
+test("TV remote keys by Samsung TVs' key codes in the TV idiom, whatever key the engine names", () => {
+  // A TV has no Pause/Break key: keyCode 19 is the remote's pause.
+  assert.equal(keyCode({ key: "Pause", keyCode: 19, code: "Pause" }, true), 272);
+  assert.equal(keyCode({ key: "", keyCode: 415 }, true), 271);
+  assert.equal(keyCode({ keyCode: 403 }, true), 278);
+  assert.equal(keyCode({ key: "XF86PlayBack", keyCode: 10252 }, true), 270);
+  // A named key keeps its name; a key no remote has keeps its character.
+  assert.equal(keyCode({ key: "MediaStop", keyCode: 19 }, true), 273);
+  assert.equal(keyCode({ key: "ArrowUp", keyCode: 38 }, true), 262);
+  assert.equal(keyCode({ key: "a", keyCode: 65, code: "KeyA" }, true), 97);
+  assert.equal(keyCode({ key: "Unidentified", keyCode: 10009 }, true), -1);
+  // The player's shortcuts read the key so in the TV idiom only.
+  const pause = { key: "Pause", keyCode: 19, code: "Pause" };
+  const shortcut = (idiom) => Player.prototype.shortcut.call({ idiom, wasm: { nsh_key: (code) => code } }, pause, false);
+  assert.equal(shortcut("tv"), 272);
+  assert.equal(shortcut("desktop"), -1);
 });
 
 /** A browser clipboard that keeps what is written and image codecs that
