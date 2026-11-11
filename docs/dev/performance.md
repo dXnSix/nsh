@@ -4,6 +4,37 @@ Performance is the project's first priority; the rules are in `AGENTS.md`. Chang
 after `nsh test --trace` timings and item counts (`nsh trace` before it, in the records below). Current baselines
 (Apple Silicon except where noted):
 
+Retained RichEditor rows (2026-11-08 audit, Linux x86_64, against `058a745a`; dev/test profile with
+`nsh-core` and `nsh-base` at `opt-level=3`, `ApproxTextEngine`). Editing the visible first paragraph with content
+culling enabled, 80 ASCII characters per paragraph, both Core order checks applied together:
+
+| Paragraphs | Before (ms/edit) | After (ms/edit) |
+|---|---|---|
+| 1,000 | 7.56 | 6.16 |
+| 5,000 | 88.18 | 52.39 |
+| 10,000 | 315.43 | 128.07 |
+
+Four warmup edits precede alternating single-character insertions and deletions. These are medians of process
+means: seven alternating rounds of 32 measured edits for 1,000 paragraphs, three rounds of four for the larger
+sizes. Every measured edit emits one Text and zero Create, Delete or Frame items. Timing covers session dispatch,
+controller synchronization, reactive updates and Core commit/settling; setup, QuickJS and native text shaping,
+mounting and drawing are excluded. The two checks were measured as one variant. RichEditor's own block walk and
+other document-wide work remain, so these measurements describe the saved matching and placement work rather than
+linear complete-editor updates.
+
+Follow-up `nsh test examples/bench/RichEditor.tsx --trace` against `41100f2b` (2026-11-09, Linux x86_64,
+Ryzen 9 7950X, pinned to CPU 0, the same package optimization settings): three alternating runs, four warmup edits
+then four measured edits per run. The median of each run's mean commit time is **15.00 → 9.91 ms** for 1,000
+paragraphs. Every edit's complete mount batch matches between versions; measured commits keep 0 ops / 4 items /
+4,011 nodes (one Text and three selection Frames, zero Create, Delete, Insert or Remove). Initial counts stay at
+19 ops / 9,048 items / 4,011 nodes. This JS-driven headless control keeps content culling disabled and measures the
+commit log, excluding the controller work outside the commit and native input, shaping, mounting and drawing.
+It is separate from the Rust audit above.
+
+The counter control (`echo 'await app.press("+1")' | nsh test examples/counter/App.tsx --trace`, one run per
+version) keeps 56 ops / 50 items / 21 nodes initially and 10 ops / 7 items / 24 nodes after the press. Commit times
+are 335 / 219 → 290 / 213 µs, a smoke check of unchanged work rather than a benchmark.
+
 Markdown TeX preprocessing (`text_view/markdown/latex.rs`, 2026-11-08, Linux x86_64,
 release, against `3b4f2abf`): a paragraph of
 ``"`a` x ".repeat(k) + "\\(x^2\\)"``, math enabled, streaming off. Eleven alternating
@@ -310,6 +341,37 @@ sends 2631 mount items instead of 2885 (no `ViewProps` set and set back in one c
   median ~5µs vs ~14µs in JS, commit ~15µs vs ~22µs. Scrolling a 1000-row `List` (avatar, two texts, a bound color)
   6000 pt: ~77µs vs ~150µs of JS per rebinding frame, commit ~205µs vs ~276µs.
 
+## Views made over frames (all platforms)
+
+A list row bound in the overscan, or a long reply staged into a chat, used to make its whole subtree in one batch:
+hundreds of native views nobody sees yet, created and committed by the platform in one frame (423 views took one 87 ms
+frame on macOS, mostly the Core Animation commit). The core now spreads them (`crates/nsh-core/src/core/pace.rs`):
+
+- once a turn has made 64 views, a view about to be made in a scroll view or a list cell waits, culled as content culling
+  holds views back (laid out, given a frame, made at once by a command for it);
+- after each layout the waiting views that show (their frame meets the viewport of every scroll view and list around
+  them) are made at once, down to their leaves; the rest come in later turns, nearest the viewport first, at most 32
+  views or 4 ms a turn, and the engine asks for a display frame while some wait;
+- content culling's overscan keeps the same budget.
+
+Views not made yet are not in the platform's accessibility tree, as culled content is not: they are out of sight and
+come within a few frames. Selection and select-all read the core's nodes, not native views. Test drivers turn content
+culling off, which turns pacing off, so their steps reach every view. Nothing waits that may show away from its frame
+(sticky, followers, overlays, screens, modals, transformed or animated views), nor anything outside scroll views and
+lists.
+
+Reproduce: `cargo test -p nsh-core --release --lib -- --ignored big_rows_bench --nocapture` (a 480 pt list of rows of
+420 views each, 5 rows bound). Linux x64, release:
+
+| | first batch | later batches | batches |
+|---|---|---|---|
+| before | 2,105 views (4,640 items), core 1.04 ms | none | 1 |
+| after | 100 views (290 items), core 1.02 ms | 32 views each (96 items), core < 25 us | 64 |
+
+Every view in sight is in the first batch in both. The platform's cost is per view made, so at the macOS figure of
+about 0.2 ms a view the first frame goes from about 420 ms of platform work to about 20 ms, and each later one about
+6 ms.
+
 ## Shader pictures on Linux
 
 What the GTK backend reads back for shaders' pictures (`nsh-platform-linux` `shader.rs`, `docs/dev/shaders.md`), and
@@ -567,7 +629,7 @@ draw a panel.
   on the main thread (18 ms of every frame: ~190 new drawings a second). After: no cap in NSH's windows, canvases
   rasterized on two workers and only what animates in place (`canvas.rs`).
 
-The dev profile builds `quickjs-jit-sys` and `taffy` with `opt-level = 3`, so debug timings are meaningful too; release uses fat LTO.
+The dev profile builds `quickjs-jit-sys` and `taffy` with `opt-level = 3`, so debug timings are meaningful too; release uses fat LTO (the published distribution thin LTO over 16 codegen units: `docs/dev/tooling.md` "Releases").
 
 - Linux (GTK 4, release; a 1896×1030 window on a 120 Hz headless Hyprland output, NVIDIA; `--fps` readings and the
   host's threads' CPU from `/proc`, 20 s runs). Before = main as of `8ff7b9f6` (GSK's Vulkan renderer, canvases

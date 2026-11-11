@@ -13,6 +13,7 @@ use crate::{
     AccessibilityProp, AccessibilityRole, AccessibilityState, AccessibilityValue, Bounds,
     ContextMenuEvent, EdgeInsets, EventKind, EventPayload, Hsla, ImageSource, ListContentStyle,
     MouseEvent, NativeProp, NodeId, PointerEvents, Points, PressEvent, Prop, Size, Tag, TouchEvent,
+    WheelEvent,
     geometry::{DevicePixels, Radians},
     style::Color,
 };
@@ -244,6 +245,12 @@ pub struct Attrs {
     pub(crate) class: Option<SharedString>,
     /// The view is a selectable view ([`crate::selection`]).
     pub(crate) selectable_view: bool,
+    /// The appearance the view and what is in it are shown in
+    /// ([`super::ThemeScope`]).
+    pub(crate) appearance: crate::platform::Appearance,
+    /// The design tokens the view and what is in it are drawn with
+    /// ([`super::ThemeScope`]).
+    pub(crate) scope_tokens: Option<Arc<super::Tokens>>,
     /// The text continues the one before it ([`Element::continues_text`]).
     pub(crate) continues_text: bool,
     /// The states it shows as its control's part
@@ -308,6 +315,12 @@ impl Attrs {
         }
         if self.selectable_view != old.selectable_view {
             out.push(Prop::SelectableView(self.selectable_view));
+        }
+        if self.appearance != old.appearance {
+            out.push(Prop::Appearance(self.appearance));
+        }
+        if self.scope_tokens != old.scope_tokens {
+            out.push(Prop::ScopeTokens(self.scope_tokens.clone()));
         }
         if self.continues_text != old.continues_text {
             out.push(Prop::ContinuesText(self.continues_text));
@@ -1482,6 +1495,20 @@ pub trait Interactive: Element {
         )
     }
 
+    /// A mouse wheel or touchpad scrolled over it (or an element inside
+    /// it): by how much ([`WheelEvent::delta`], lines or points), where and
+    /// with which modifier keys. The nearest element that listens hears it;
+    /// when it is nearer than any scroll view under the pointer it takes
+    /// the wheel and nothing scrolls natively (a canvas zooming on
+    /// Control + wheel and panning otherwise); a scroll view listening, or
+    /// an element around one, only observes it.
+    fn on_wheel<M>(self, listener: impl IntoListener<WheelEvent, M>) -> Self {
+        self.on(
+            EventKind::Wheel,
+            events::typed(listener.into_listener(), events::wheel),
+        )
+    }
+
     /// The secondary button was pressed over it (a right click,
     /// Control-click on Apple platforms): where, to open a menu at
     /// (`page_x`, `page_y`). The nearest element that listens hears it;
@@ -1495,9 +1522,10 @@ pub trait Interactive: Element {
 
     /// The selection across the texts of a selectable view
     /// ([`Self::selectable`]) changed: the selected text, as a copy gives
-    /// it, empty once nothing is selected, and where it starts in the
-    /// view's whole text (TSX `onSelectionChange` of a `<View selectable>`,
-    /// `{ text, start }`). Only the outermost selectable view of an area
+    /// it, empty once nothing is selected, where it starts in the view's
+    /// whole text, and the box around it in the view and in its root view
+    /// (TSX `onSelectionChange` of a `<View selectable>`, `{ text, start,
+    /// bounds, pageBounds }`). Only the outermost selectable view of an area
     /// reports it; an [`Input`](super::Input)'s own selection is its
     /// `on_selection_change`.
     fn on_text_selection_change<M>(
@@ -1969,7 +1997,8 @@ pub trait Interactive: Element {
         self
     }
 
-    /// The id inputs name an input accessory by (`nativeID`).
+    /// `nativeID`: names the view for others: inputs find an input accessory
+    /// by it, and the embedding app a scroll view it watches (`watchScroll`).
     fn native_id(mut self, id: &str) -> Self {
         super::host::set(self.node(), Prop::NativeId(Some(id.into())));
         self
@@ -1993,6 +2022,16 @@ pub trait Interactive: Element {
     fn focus(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
         let s = f(StyleRefinement::default());
         self.style().extend_as(Variant::FOCUS, s);
+        self
+    }
+
+    /// Styles while focused and showing it (Tailwind's `focus-visible:`;
+    /// TS: `focusVisibleStyle`): the keyboard moved the focus there, or it
+    /// is an input that edits. Focus a press gave shows [`Self::focus`]'s
+    /// styles only: the ring for keyboard users goes here.
+    fn focus_visible(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+        let s = f(StyleRefinement::default());
+        self.style().extend_as(Variant::FOCUS_VISIBLE, s);
         self
     }
 
@@ -2111,6 +2150,9 @@ pub trait Interactive: Element {
     /// that keeps the focus itself: the cell of a one-time-code input that
     /// takes the next character, the highlighted option of a list (NSH
     /// has no active descendant). The platform's focus stays where it is.
+    /// While the focus shows (the control's `focus-visible:`) the part
+    /// shows it too, so `focus-visible:` on it is the cursor the keyboard
+    /// moves and stays off after a press.
     fn project_focused(mut self, focused: impl IntoReactive<bool>) -> Self {
         self.node().bind_attr(focused, |a, focused| {
             project(a, crate::tailwind::state::FOCUSED, focused)
@@ -2646,6 +2688,14 @@ impl<C: Component> ComponentElement<C> {
         self
     }
 
+    /// Styles while its root has focus and shows it (`focus-visible:`):
+    /// the keyboard moved the focus there.
+    pub fn focus_visible(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+        let s = f(StyleRefinement::default());
+        self.node.style.extend_as(Variant::FOCUS_VISIBLE, s);
+        self
+    }
+
     /// Styles while its root or an element inside it has focus
     /// (`focus-within:`).
     pub fn focus_within(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
@@ -2813,6 +2863,14 @@ pub trait ComponentBuilder: Element {
         self
     }
 
+    /// Styles while its root has focus and shows it (`focus-visible:`):
+    /// the keyboard moved the focus there.
+    fn focus_visible(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+        let s = f(StyleRefinement::default());
+        self.node().style.extend_as(Variant::FOCUS_VISIBLE, s);
+        self
+    }
+
     /// Styles while its root or an element inside it has focus
     /// (`focus-within:`).
     fn focus_within(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
@@ -2873,6 +2931,7 @@ mod file_listener_tests {
             view().on_file_drag_enter(unit),
             view().on_file_drag_enter(move |e: &events::FileDragEvent| {
                 assert_eq!(e.uris, ["file:///tmp/a%20b.png"]);
+                assert_eq!(e.mime_types, ["image/png"]);
                 d.set(d.get() + 1);
             }),
         ];

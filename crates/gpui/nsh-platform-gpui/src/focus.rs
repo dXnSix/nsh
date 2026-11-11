@@ -57,7 +57,8 @@
 //!   stop of the scope not given its chance yet takes the focus
 //!   (`focus::auto_focus`); `Command::Focus` on a stop that is no input (a
 //!   ref's `focus()`, the core's for a list row) moves the focus to it
-//!   after the batch.
+//!   after the batch, and the window takes the keyboard; a pointer going
+//!   down outside the focused view takes it away ([`pointer_down`]).
 //! - **Layers**: focus that went into a root view's child (the page, a
 //!   sheet's panel, an overlay) from a stop of another comes back to that
 //!   stop when the layer goes ([`focus::Layers`]); a stop a backdrop
@@ -623,6 +624,14 @@ fn focus_stop(surface: &Rc<Surface>, view: &NshView) {
     }
 }
 
+/// The pointer went down on `hit`: the view with this module's focus lets
+/// go of it unless `hit` is inside it.
+pub(crate) fn pointer_down(surface: &Surface, hit: &NshView) {
+    if focused(surface).is_some_and(|view| !contains(&view, hit)) {
+        blur_view(surface);
+    }
+}
+
 /// A key down for the focus: the arrows move it, Enter and Space press the
 /// focused view. True when it was taken.
 pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
@@ -824,6 +833,7 @@ pub(crate) fn end_batch(surface: &Rc<Surface>) {
     if let Some(view) = asked
         && still_stop(surface, &scope, &view).0
     {
+        surface.window_focus_requested.set(true);
         focus_stop(surface, &view);
     }
     // A modal that came, or one that went: its `autoFocus` stops appear.
