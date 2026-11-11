@@ -276,7 +276,7 @@ fn stops_in(scope: &NshView) -> Vec<Stop> {
     .collect();
     for stop in &mut walk.stops {
         if let Some(&at) = order.get(&stop.node.id) {
-            stop.node.order = Order::view(at);
+            stop.node.order.tree = at;
         }
     }
     focus::candidates(walk.stops, scope.id(), &layers(scope))
