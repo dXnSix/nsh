@@ -363,6 +363,14 @@ pub(crate) fn write_types(dir: &Path) {
         "nsh/tokens.d.ts".to_owned(),
         nsh_bundler::tokens_declaration_of(&tokens, &sets),
     ));
+    // The roles the sets list, for `role()`; a role two sets list with two
+    // kinds is the build's to report, and names none meanwhile.
+    definitions.push((
+        "nsh/roles.d.ts".to_owned(),
+        nsh_bundler::roles_declaration(&sets)
+            .or_else(|_| nsh_bundler::roles_declaration(&[]))
+            .unwrap_or_default(),
+    ));
     remove_stale(&types, &types, &definitions);
     let files = definitions
         .iter()

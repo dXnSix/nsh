@@ -79,6 +79,8 @@ pub(crate) enum Action {
     ),
     /// Reads the system clipboard; the answer resolves the slot.
     ReadClipboard(ClipboardRead),
+    /// Runs a function on the platform's main thread, after the commit.
+    MainThread(crate::main_thread::MainThreadTask),
     /// Registers a font (TrueType, OpenType, WOFF or WOFF2 data); its family
     /// name, or why it is no font, resolves the slot.
     RegisterFont(Vec<u8>, AnswerSlot<Result<String, String>>),
@@ -118,16 +120,29 @@ pub(crate) enum Action {
     /// The next link the system hands the app ([`crate::url_scheme`])
     /// resolves the slot, those that came before first.
     NextUrlSchemeOpen(AnswerSlot<String>),
+    /// The next later launch of the app
+    /// ([`crate::single_instance::SecondInstance`]) resolves the slot, those
+    /// that came before first.
+    NextSecondInstance(AnswerSlot<crate::single_instance::SecondInstance>),
+    /// The next address move the app did not make
+    /// ([`crate::url_scheme::AppUrlChange`]) resolves the slot.
+    NextAppUrlChange(AnswerSlot<crate::url_scheme::AppUrlChange>),
     /// The app's address resolves the slot ([`crate::url_scheme`]).
     AppUrl(AnswerSlot<Option<String>>),
-    /// The app sets its address ([`crate::url_scheme`]).
-    SetAppUrl(String),
+    /// The app sets its address ([`crate::url_scheme`]), replacing the
+    /// history entry's or pushing one.
+    SetAppUrl(String, crate::url_scheme::HistoryBehavior),
     /// A sound's or a player's request ([`crate::audio`]).
     Audio(AudioAction),
     /// Whether a web view's ref gives its page trusted input here
     /// (`sendInput`): the platform delivers it and the app holds
     /// `webview.input`; the answer resolves the slot.
     WebInputAvailable(AnswerSlot<bool>),
+    /// Whether a web view's ref evaluates scripts here.
+    WebEvaluateAvailable(AnswerSlot<bool>),
+    /// Whether a web view shows a page here: the platform shows web views
+    /// and the app holds `webview`; the answer resolves the slot.
+    WebViewAvailable(AnswerSlot<bool>),
     /// A request on local paths for the platform
     /// ([`crate::file_dialog`]); its answer resolves the slot.
     FileRequest(crate::file_dialog::FileRequest, FileAnswer),
@@ -159,6 +174,28 @@ pub(crate) enum Action {
     /// Sets some of the app's design tokens, over its others
     /// ([`super::update_tokens`]).
     UpdateTokens(super::Tokens),
+    /// Sets the tokens a theme type's fields wrote, over the app's others
+    /// ([`super::set_theme`]): a number that keeps its value keeps its
+    /// dark one. `played`: the roles the type's tokens play, through which
+    /// a type that is not registered sets the tokens they are mapped onto.
+    SetTheme {
+        tokens: super::Tokens,
+        played: super::theme::Played,
+    },
+    /// Sets the tokens a theme type's patch wrote, over the app's others
+    /// ([`super::update_theme`]), through the roles as
+    /// [`Action::SetTheme`].
+    UpdateTheme {
+        tokens: super::Tokens,
+        played: super::theme::Played,
+    },
+    /// Puts a theme type's tokens back to the app's theme's
+    /// ([`super::reset_theme`]), through the roles as
+    /// [`Action::SetTheme`].
+    ResetTheme {
+        names: Vec<Box<str>>,
+        played: super::theme::Played,
+    },
     /// Puts the app's design tokens of these names back to its theme's
     /// ([`super::reset_tokens`]).
     ResetTokens(Vec<Box<str>>),
@@ -173,9 +210,27 @@ pub(crate) enum Action {
     /// Measures the node with the layout of the commit the action goes out
     /// with; the measurement resolves the slot.
     Measure(NodeId, AnswerSlot<Option<crate::Measurement>>),
+    /// Measures where the list's viewport starts among its rows with the
+    /// layout of the commit the action goes out with; the position
+    /// resolves the slot.
+    MeasureScrollPosition(NodeId, AnswerSlot<Option<crate::ListScrollPosition>>),
+    /// Evaluates a web view's script within a timeout, with its answer
+    /// kept by the core.
+    Evaluate(
+        NodeId,
+        String,
+        std::time::Duration,
+        crate::platform::web_evaluation::Slot,
+    ),
+    /// Rejects a request that exceeded its deadline.
+    WebEvaluationTimeout(u32),
     /// How long the node's transitions run with the styles of the commit
     /// the action goes out with; the time resolves the slot.
     TransitionTime(NodeId, AnswerSlot<std::time::Duration>),
+    /// Presses what a pointer at the press's page position would inside
+    /// the node, with the layout of the commit the action goes out with;
+    /// whether a view took it resolves the slot.
+    PressAt(NodeId, crate::PressEvent, AnswerSlot<bool>),
 }
 
 /// What a speech recognition session asks of the core
@@ -386,6 +441,10 @@ pub(crate) struct Executor {
     derived: RefCell<super::animated::Derived>,
     /// The components' listeners of the back button.
     pub(crate) back: Rc<RefCell<super::back::BackListeners>>,
+    /// What runs as the app quits ([`super::desktop::on_app_quit`]).
+    pub(crate) quit: Rc<RefCell<super::quit::QuitListeners>>,
+    /// The quit listeners' work still running ([`crate::Core::start_quit`]).
+    pub(crate) quitting: Rc<std::cell::Cell<usize>>,
     /// The views' keyboard shortcuts.
     pub(crate) keys: Rc<RefCell<super::keys::ViewKeys>>,
     /// The views' menus' handlers.

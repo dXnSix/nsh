@@ -304,18 +304,29 @@ NSH 自己绘制的部分通过**角色**读取主题：`theme()` 的各个字�
 | `destructive` | `theme().destructive`；Android 提示框中的破坏性操作 |
 | `border`、`ring` | `theme().border` / `ring`；Linux 菜单的边框和分隔线（`border`） |
 | `selection` | `theme().selection()`（没有时为 22 % 的 `primary`） |
+| `success` | `TextView` 的提示（tip）块（没有时用它自己的绿色） |
+| `warning` | `Editor` 的警告诊断；`TextView` 的警告块（没有时用各自的琥珀色） |
+| `info` | `Editor` 的信息诊断；`TextView` 的备注（note）块（没有时用各自的蓝色） |
+| `highlight` | `Editor` 的搜索匹配项；`TextView` 的标记文本（没有时用各自的黄色） |
+| `diff-added`、`diff-deleted` | `DiffView` 的新增行和删除行：底色、指示标记、改动的单词以及文件列表中的计数（没有时用它自己的绿色和红色） |
+| `syntax-comment`、`syntax-keyword`、`syntax-string`、`syntax-number`、`syntax-function`、`syntax-property`、`syntax-type` | `Editor`、`DiffView` 和 `TextView` 代码块中高亮的代码：注释、关键字、字符串、数字与常量、函数与类的名称、属性与参数、类型与内置项（没有时用高亮器自己的配色） |
 | `radius` | `theme().radius` |
 | `font-sans` | 所有文本的默认字体；`theme().font_sans` |
 | `font-mono` | `theme().font_mono` |
 
-角色不是 token，也不是类名：主题有名为 `primary` 的 token 时，`bg-primary` 才是一个类名。在 Rust 中，角色是
-`nsh_core::element::Role`（`Role::Popover.name()` 为 `"popover"`），`Tokens::with_roles` 把角色映射到 token
-（`tokens.with_roles([(Role::Popover, "surface-overlay")])`），之后 `tokens.role_color(Role::Popover)` 读取它。
+`selection`、`success`、`warning`、`info`、`highlight`、`diff-added`、`diff-deleted` 和各 `syntax-*` 角色在默认主题中没有 token：在主题拥有同名 token（`cssVars` 中的
+`"warning": "#b45309"`）或把该角色映射到自己的某个 token（主题类型的 `role = …`，或主题文件的 `"roles": { "warning": "caution" }`）之前，各部件绘制自己的颜色。各部件以半透明绘制 `highlight` 和 diff 的底色；token 是不透明的颜色。
+
+角色不是 token，也不是类名：主题有名为 `primary` 的 token 时，`bg-primary` 才是一个类名。TSX 用 `nsh` 的 [`role()`](./nsh.md#role) 读取角色。在 Rust 中，角色是一个常量，类型为
+`nsh_core::element::Role`：上表中的角色在 `nsh_base::role` 里（`role::POPOVER.name()` 为 `"popover"`，`role::RADIUS`
+读取数字，`role::FONT_SANS` 读取字体族）。`Tokens::with_role` 把一个角色映射到 token
+（`tokens.with_role(role::POPOVER, "surface-overlay")`），之后 `tokens.role(role::POPOVER)` 读取它。有自己组件的 crate
+用同样的方式声明这些组件所用的角色（`pub const BANNER: Role = Role::new("banner");`）：角色就是它的名字，不论由谁声明。
 没有映射时，每个角色读取同名的 token，所以 shadcn 主题的显示与以往相同。只有应用有自己的主题时（`Tokens::is_themed`，由核心设置），
 各平台的控件才采用主题的颜色；使用默认主题的应用保留系统的提示框颜色。
 
 已注册的[主题类型](../docs/rust.md#主题类型)把角色映射到自己的 token 上（`TokenSpec::role`），`theme()` 的字段随之读取这些 token：
-设计系统把 `Role::Popover` 映射到 `surface-overlay` 时，`theme().popover` 就是 `surface-overlay`，`nsh/base` 的组件、标签栏和各平台的控件
+设计系统把 `role::POPOVER` 映射到 `surface-overlay` 时，`theme().popover` 就是 `surface-overlay`，`nsh/base` 的组件、标签栏和各平台的控件
 都以该设计系统绘制。
 
 <a id="controls"></a>

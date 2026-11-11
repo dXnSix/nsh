@@ -26,6 +26,7 @@ mod fetch;
 mod focus;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod fs;
+mod gradient_tokens;
 mod handle_bench;
 mod host;
 mod host_channel;
@@ -47,6 +48,8 @@ mod package;
 mod parity;
 mod platform;
 mod process;
+mod role;
+mod runtime;
 mod rust_animation;
 mod rust_app;
 mod rust_classes;
@@ -69,7 +72,9 @@ mod test_ui;
 mod theme;
 mod theme_overrides;
 mod theme_root;
+mod theme_scope;
 mod theme_update;
+mod token_by_name;
 mod url_scheme;
 mod websocket;
 

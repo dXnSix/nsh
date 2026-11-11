@@ -6,10 +6,10 @@
 
 use std::time::Duration;
 
-use nsh_base::{Theme, theme};
+use nsh_base::{Theme, role, theme};
 use nsh_core::{
     Color, Size,
-    element::{AppTheme, Registry, Role, Root, TokenKind, TokenSpec, Tokens},
+    element::{AppTheme, Registry, Root, TokenKind, TokenSpec, Tokens},
     prelude::*,
 };
 use nsh_engine::EngineConfig;
@@ -38,8 +38,8 @@ fn theme_is_shadcns_tokens_each_playing_its_role() {
     assert_eq!(specs.len(), 34);
     for spec in specs {
         assert_eq!(
-            spec.role.map(Role::name),
-            Some(&*spec.name),
+            spec.roles.iter().map(|r| r.name()).collect::<Vec<_>>(),
+            [&*spec.name],
             "{}",
             spec.name
         );
@@ -110,7 +110,7 @@ impl AppTheme for Ds {
 
     fn token_specs() -> &'static [TokenSpec] {
         static SPECS: std::sync::LazyLock<Vec<TokenSpec>> = std::sync::LazyLock::new(|| {
-            vec![TokenSpec::new("surface-overlay", TokenKind::Color).role(Role::Popover)]
+            vec![TokenSpec::new("surface-overlay", TokenKind::Color).role(role::POPOVER)]
         });
         &SPECS
     }

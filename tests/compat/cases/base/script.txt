@@ -239,6 +239,9 @@ prop id:plain closeOnEscape true
 prop id:plain closeOnBackdropPress true
 prop id:plain closeOnSwipe true
 noprop id:plain supportedOrientations
+# A dialog for screen readers, with no name of its own.
+prop id:plain role dialog
+noprop id:plain accessibilityLabel
 # Closed while `open` is false.
 absent Synced dialog
 absent Guarded dialog
@@ -288,6 +291,9 @@ expect Guarded dialog
 prop id:guarded closeOnEscape false
 prop id:guarded closeOnBackdropPress false
 prop id:guarded closeOnSwipe false
+# An alert dialog named by its label.
+prop id:guarded role alertdialog
+prop id:guarded accessibilityLabel Guarded
 event text:"Guarded dialog" onCancel reason=cancel
 expect Log: guarded cancel
 event text:"Guarded dialog" onCancel reason=swipe
@@ -312,6 +318,8 @@ covers [props] closeOnSwipe
 covers [props] closeOnBackdropPress
 covers [props] ios.supportedOrientations
 covers [props] Dialog.open
+covers [props] role
+covers [props] accessibilityLabel
 covers [events] Dialog.onOpen
 covers [events] Dialog.onClose
 covers [events] Dialog.onCancel
@@ -740,11 +748,11 @@ tap text:MenuTrigger
 expect NewItem
 expect Log: menu true triggerPress
 expect Life: menu open
-style parent:parent:text:NewItem backgroundColor #00ff00ff
-frame parent:text:NewItem 4 4 382 17
-style below:parent:parent:text:NewItem backgroundColor #000000ff
-style below:parent:parent:text:NewItem opacity 0.5
-frame id:separator 4 55 382 1
+style parent:parent:parent:text:NewItem backgroundColor #00ff00ff
+frame parent:text:NewItem 0 0 382 17
+style below:parent:parent:parent:text:NewItem backgroundColor #000000ff
+style below:parent:parent:parent:text:NewItem opacity 0.5
+frame id:separator 0 51 382 1
 prop parent:text:OffItem accessibilityState disabled=true
 prop parent:text:KeepItem accessibilityLabel Keep the menu
 tap text:KeepItem
@@ -800,10 +808,10 @@ touch end
 expect CopyItem
 expect Log: context true longPress
 expect Life: context open
-style parent:parent:text:CopyItem backgroundColor #ff0000ff
-frame parent:text:CopyItem 2 2 386 17
-style below:parent:parent:text:CopyItem backgroundColor #0000ffff
-style below:parent:parent:text:CopyItem opacity 0.25
+style parent:parent:parent:text:CopyItem backgroundColor #ff0000ff
+frame parent:text:CopyItem 0 0 386 17
+style below:parent:parent:parent:text:CopyItem backgroundColor #0000ffff
+style below:parent:parent:parent:text:CopyItem opacity 0.25
 tap text:CopyItem
 expect Log: context false select
 absent CopyItem
@@ -2022,7 +2030,7 @@ expect Confirmed: green
 absent TagFooter
 # Without `multiple`, typing in the input opens the list, and a choice
 # replaces the value and closes it.
-type label:One re
+type id:one-input re
 expect Red
 tap label:Red
 expect One: red
@@ -2038,6 +2046,7 @@ covers [props] Combobox.footer
 covers [props] Combobox.footerClass
 covers [props] Combobox.footerStyle
 covers [props] Combobox.triggerButton
+covers [props] Combobox.inputTestID
 covers [props] accessibilityLabel
 covers [events] onChange
 covers [events] Combobox.onConfirm
@@ -2559,6 +2568,7 @@ expect Find: true triggerPress
 expect Apple
 prop below:scroll:label:Apple placeholder Find food
 prop below:scroll:label:Apple accessibilityLabel FindField
+prop id:find-search placeholder Find food
 prop below:scroll:label:Apple autoFocus false
 style below:scroll:label:Apple backgroundColor #abcdefff
 style below:scroll:label:Apple borderRadius 4
@@ -2584,6 +2594,7 @@ absent Apple
 covers [props] Select.searchable
 covers [props] Select.searchPlaceholder
 covers [props] Select.searchAccessibilityLabel
+covers [props] Select.searchTestID
 covers [props] Select.searchClass
 covers [props] Select.searchStyle
 covers [props] Select.empty
@@ -3558,7 +3569,35 @@ expect token primary #171717ff
 expect token radius-card 14
 style id:up backgroundColor #138a5aff
 style id:primary backgroundColor #17171780
+style id:faded color #138a5a80
 covers [nsh] token
+
+# base-role
+# A role without a theme type: the token of its name, in the appearance
+# shown; none until the theme has one.
+tap id:case-base-role
+expect role popover #ffffffff
+expect role radius 10
+expect role warning its own
+style id:themed backgroundColor #d97706ff
+tap id:warn
+expect role warning #b45309ff
+style id:themed backgroundColor #b45309ff
+# A theme's `roles`: the role reads the token it is mapped onto.
+tap id:map
+expect role popover #fafafaff
+style id:classed backgroundColor #fafafaff
+tap id:dark
+expect role warning #fbbf24ff
+expect role popover #262626ff
+style id:classed backgroundColor #262626ff
+style id:themed backgroundColor #fbbf24ff
+# `resetTheme` takes a role's name: the token of that name goes back to
+# the app's theme, which has none.
+tap id:unwarn
+expect role warning its own
+style id:themed backgroundColor #d97706ff
+covers [nsh] role
 
 # base-set-theme
 # Another theme while the app runs, in place of nsh.json's and over
@@ -3587,12 +3626,50 @@ tap id:bad
 expect theme result refused TypeError
 expect theme up #2563ebff
 style id:themed backgroundColor #2563ebff
+# Malformed JSON shapes and colors leave the current theme in force.
+tap id:bad-structure
+expect theme result bad-structure refused TypeError
+expect theme up #2563ebff
+style id:themed backgroundColor #2563ebff
+tap id:bad-function
+expect theme result bad-function refused TypeError
+expect theme up #2563ebff
+style id:themed backgroundColor #2563ebff
+tap id:bad-length
+expect theme result bad-length refused TypeError
+expect theme up #2563ebff
+style id:themed backgroundColor #2563ebff
 tap id:built
 expect theme result built
 expect theme up #138a5aff
 expect theme radius-card 14
 style id:themed backgroundColor #138a5aff
 covers [nsh] setTheme
+
+# base-theme-scope
+# A scope with a theme: its values of the tokens it sets, over the app's.
+tap id:case-base-theme-scope
+expect outside up #138a5aff
+expect inside up #7c3aedff radius-card 14
+expect dark up #a78bfaff
+style id:outside backgroundColor #138a5aff
+style id:inside backgroundColor #7c3aedff
+style id:dark backgroundColor #a78bfaff
+# Another theme: only what the scope holds follows.
+tap id:pink
+expect inside up #db2777ff radius-card 14
+expect dark up #f472b6ff
+expect outside up #138a5aff
+style id:inside backgroundColor #db2777ff
+style id:dark backgroundColor #f472b6ff
+style id:outside backgroundColor #138a5aff
+# Without a theme it is drawn with the app's.
+tap id:none
+expect inside up #138a5aff radius-card 14
+expect dark up #45d49aff
+style id:inside backgroundColor #138a5aff
+style id:dark backgroundColor #45d49aff
+covers [nsh] ThemeScope
 
 # base-update-theme
 # Some of the app's tokens changed while it runs, over nsh.json's theme;
@@ -3686,6 +3763,58 @@ tap id:light
 style id:raised boxShadow 0 2 4 0 #0000004d
 covers [nsh] token
 covers [props] class
+
+# base-gradient-tokens
+# A gradient token: the class naming it and `token()` follow the appearance.
+tap id:case-base-gradient-tokens
+tap id:set
+expect gradients result set
+tap id:light
+expect gradients hero linear-gradient(135deg, #7c3aedff, #db2777ff)
+style id:hero backgroundImage linear-gradient(135deg, #7c3aedff, #db2777ff)
+tap id:dark
+expect gradients hero linear-gradient(135deg, #a78bfaff, #f472b6ff)
+style id:hero backgroundImage linear-gradient(135deg, #a78bfaff, #f472b6ff)
+tap id:light
+style id:hero backgroundImage linear-gradient(135deg, #7c3aedff, #db2777ff)
+covers [nsh] token
+covers [props] class
+
+# base-status-roles
+# The status roles of nsh/base: a TextView's tip and warning alerts in
+# their own colors while the theme has no `success` and `warning`.
+tap id:case-base-status-roles
+expect Tip text
+expect Warning text
+style text:"✓" color #1a7f37ff
+style text:"!" color #9a6700ff
+# In the theme's once it has them.
+tap id:status
+style text:"✓" color #15803dff
+style text:"!" color #b45309ff
+# Their own again with nsh.json's theme.
+tap id:built
+style text:"✓" color #1a7f37ff
+style text:"!" color #9a6700ff
+covers [nsh] setTheme
+
+# base-diff-roles
+# The diff roles of nsh/base: a DiffView's signs in the view's own green
+# and red while the theme has no `diff-added` and `diff-deleted`.
+tap id:case-base-diff-roles
+expect new line
+expect old line
+style text:"+" color #16a34aff
+style text:"−" color #dc2626ff
+# In the theme's once it has them.
+tap id:diff
+style text:"+" color #0f766eff
+style text:"−" color #be123cff
+# Their own again with nsh.json's theme.
+tap id:built
+style text:"+" color #16a34aff
+style text:"−" color #dc2626ff
+covers [nsh] setTheme
 
 # base-resizable
 tap id:case-base-resizable
@@ -4191,12 +4320,18 @@ expect Visible: 0-5
 tap text:Cell 1:name fig
 expect Selected: row 1 column 0
 expect Pressed: 1:0 1
+# The column fixed at the end is drawn, and a press on it reports it by
+# its place in `columns`.
+expect Cell 2:act go
+tap text:Cell 2:act go
+expect Selected: row 2 column 2
+expect Pressed: 2:2 1
 # Screen readers get a grid named by the app.
 prop label:Fruits role grid
 # The ref sets the selection without reporting it, and reads it with the
 # rows in view.
 tap id:select
-expect Selected: row 1 column 0
+expect Selected: row 2 column 2
 tap id:read
 expect Read: 2:1 0-5
 tap id:scroll
@@ -4247,6 +4382,7 @@ expect State: text string true false
 expect Attr: true
 expect Split: true 3
 expect Content: Plain line **b**
+expect Html: <h2>T</h2><p>a <em>b</em></p>
 expect Insert: xyb
 expect Dispatch: all xy
 expect Node: true node

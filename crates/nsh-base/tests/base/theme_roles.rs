@@ -3,10 +3,10 @@
 //! names its popover surface `surface-overlay` draws `nsh/base`'s popovers
 //! in it. Without a mapping it is the theme it always was.
 
-use nsh_base::{Theme, theme};
+use nsh_base::{Theme, role, theme};
 use nsh_core::{
     Color, Size,
-    element::{Role, Root, Tokens},
+    element::{Root, Tokens},
     prelude::*,
 };
 use nsh_engine::EngineConfig;
@@ -50,13 +50,12 @@ fn theme_reads_the_tokens_roles_map_onto() {
     tokens.set_color("highlight", AdaptiveColor::rgb(0x00ff00, 0x00ff00));
     tokens.set_number("radius-control", 6.0);
     tokens.set_font("font-body", "Inter");
-    let tokens = tokens.with_roles([
-        (Role::Popover, "surface-overlay"),
-        (Role::Primary, "action"),
-        (Role::Selection, "highlight"),
-        (Role::Radius, "radius-control"),
-        (Role::FontSans, "font-body"),
-    ]);
+    let tokens = tokens
+        .with_role(role::POPOVER, "surface-overlay")
+        .with_role(role::PRIMARY, "action")
+        .with_role(role::SELECTION, "highlight")
+        .with_role(role::RADIUS, "radius-control")
+        .with_role(role::FONT_SANS, "font-body");
     let mut app = start::<Fields>(tokens);
     app.wait_for(
         "text:popover #123456ff primary #abcdefff selection #00ff00ff radius 6 font Inter",
@@ -84,7 +83,7 @@ fn without_a_mapping_the_theme_is_the_same() {
 fn a_role_mapped_onto_a_missing_token_falls_back() {
     let tokens = Theme::default()
         .into_tokens()
-        .with_roles([(Role::Popover, "nowhere")]);
+        .with_role(role::POPOVER, "nowhere");
     let default = Theme::default();
     let mut app = start::<Fields>(tokens);
     app.wait_for(&format!(

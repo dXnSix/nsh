@@ -127,7 +127,9 @@ iOS 的 `AppView` 上用 `AppSource::Rust` 挂载 Rust 根组件。
 
 要在包括 Web 在内的所有平台上运行的代码，使用 NSH 提供的服务：HTTP 用 `fetch`（[网络](./networking.md#在-rust-组件中)），
 等待用 `timer`、`set_timeout` 和 `set_interval`，时钟用 `nsh_core::time::Instant` 和 `nsh_core::time::unix_ms()`。
-`background` 和 `blocking` 在原生目标的线程上运行任务。
+`background` 和 `blocking` 在原生目标的线程上运行任务。`run_on_main_thread(f)` 在平台的主线程上运行 `f`，用于只能在主线程调用的 API
+（AppKit 的状态栏项、UIKit）：它在本轮的视图挂载之后运行，结果是一个在引擎线程上 await 的 future。不是 `async` 的模块函数调用
+`cx.run_on_main_thread(f)`。在 Web 上和 headless 测试中，`f` 在提交结束时于引擎线程上运行；在原生平台上则稍后运行，引擎同时继续工作：以 await 到结果为准判断 `f` 已运行。`f` 返回一个值，由 await 它的代码用这个值写 signal、调用 NSH 的函数。
 
 ## 桌面标题栏
 
@@ -339,7 +341,7 @@ Rust 中；TSX 传入 props、接收事件。类型不对的 prop（`u32` 类型
 
 函数和成员按 Rust 签名运行。不是 `async` 的在 TSX 调用中直接运行并返回值（`Portfolio.total()` 是数字，`ledger.balance` 是属性）：
 它们计算并保存状态。`async fn` 返回 Promise，作为任务运行，可以使用 NSH 的服务（`fetch`、`timer`、对话框）；带
-`cx: &mut ModuleCx` 参数的模块函数与 UI 按顺序作用于平台（toast、状态栏），组件 ref 的方法也是这样；它们的返回类型决定 TSX
+`cx: &mut ModuleCx` 参数的模块函数与 UI 按顺序作用于平台（toast、状态栏），还可以 `spawn` 一个任务，任务会运行到结束。组件 ref 的方法也与 UI 按顺序作用于平台；它们的返回类型决定 TSX
 得到什么：返回 `()` 的得到 `void`，没有回复（TSX 调用后继续往下执行）；返回 `Result<(), E>` 的得到 `Promise<void>`，遇到 `Err`
 时以其消息 reject（调用与 UI 的修改一起运行，那时 TSX 的调用已经返回，所以由 Promise 带回错误；没人 await 或 catch 的会记录为
 [未处理的 rejection](./dev-server-and-debugging.md#日志)）；返回值的得到 `Promise<T>`。参数和返回值的类型来自签名：数字、
@@ -520,6 +522,10 @@ fn the_module_formats_money() {
 - 值按 CSS 的写法书写。颜色可以是任意 CSS 颜色（`#7c3aed`、`rgb(…)`、`hsl(…)`、`oklch(…)`、`white`）、
   `color-mix(in oklab, var(--primary) 80%, white)`，或同一外观的另一个令牌 `var(--primary)`（可带后备值：`var(--brand, #7c3aed)`）。
   长度使用 `rem`（16 点）或 `px`（点）。字体是字体族列表：使用其中第一个非通用的字体族，第一个是通用字体族（`system-ui`、`sans-serif`）时使用系统字体。
+- **渐变。** 写成 CSS 渐变的 `background-image-<n>`（`"background-image-hero": "linear-gradient(135deg, #7c3aed, #db2777)"`，可在 `light` 和 `dark` 中分别给值）
+  是渐变 token：`tokens().gradient("background-image-hero")` 是一个 `AdaptiveGradient`，`.adaptive_gradient(move ||
+  tokens().gradient("background-image-hero").cloned().unwrap_or_default())` 把它绘制为背景，跟随主题变化，并像 `.bg(..)` 一样随外观原生切换。
+  `AdaptiveGradient::parse("linear-gradient(…)")` 读取应用自己的渐变，两种外观相同。
 - **阴影。** 写成 CSS `box-shadow` 的 `shadow-<n>`（`"shadow-raised": "0 1px 2px #0000001a"`，可在 `light` 和 `dark` 中分别给值）
   是阴影 token：`tokens().shadow("shadow-raised")` 是一个 `AdaptiveShadow`，`.adaptive_shadow(move ||
   tokens().shadow("shadow-raised").cloned().unwrap_or_default())` 绘制它，跟随主题变化，并像 `.bg(..)` 一样随外观原生切换。
@@ -593,6 +599,7 @@ reset_tokens(["primary"]); // 恢复应用的 primary
 `rounded-surface-card`）。`#[derive(AppTheme)]` 根据结构体的字段生成实现：
 
 ```rust
+use nsh_base::role;
 use nsh_core::prelude::*;
 
 /// 设计系统的令牌。
@@ -602,10 +609,10 @@ pub struct DsTheme {
     #[token(color)]
     pub surface_raised: AdaptiveColor,
     /// 弹出层与菜单。
-    #[token(color, role = "popover")]
+    #[token(color, role = role::POPOVER)]
     pub surface_overlay: AdaptiveColor,
     /// 主操作。
-    #[token(color, role = "primary")]
+    #[token(color, role = role::PRIMARY)]
     pub action: AdaptiveColor,
     /// 卡片的圆角。
     #[token(radius)]
@@ -629,13 +636,16 @@ impl Default for DsTheme {
   `spacing`（`spacing-*`）、`text`（`text-*`）、`weight`（`font-weight-*`）、`tracking`、`leading`、`blur`、
   `font`（`font-*`）和 `shadow`（`shadow-*`）。颜色是 `AdaptiveColor`，数字是 `f32` 或 `Points`，字体族是 `SharedString`
   或 `String`，阴影是 `AdaptiveShadow`。`name = "…"` 为令牌命名（带命名空间的种类，名称保留其命名空间：
-  `#[token(radius, name = "radius-corner")]`），`role = "…"` 把一个角色映射到它。
+  `#[token(radius, name = "radius-corner")]`），`role = <路径>` 把一个角色映射到它，写角色常量的路径
+  （`nsh_base::role::POPOVER`，或组件库自己的角色），它担任的每个角色写一次
+  （`#[token(color, role = role::CARD, role = role::POPOVER)]`：两者共用一个表面）。不是角色的路径，以及读取的种类与令牌不符的角色
+  （把圆角的角色用在颜色上），都会被编译器拒绝。
 - `#[token(nested)]` 包含另一个 `AppTheme` 类型，其名称按上面的方式放在 `<字段名>-` 之下（`surface: Surface` 中的
   `raised`：`surface-raised`；`#[token(shadow)] raised`：`shadow-surface-raised`），读作
   `theme_of::<DsTheme>().surface.raised`。令牌中缺少的名称取内部类型的 `Default`，而不是外部 `Default` 给该字段的值。
   `#[token(flatten)]` 相同但不加前缀；`#[token(skip)]` 不是令牌（该字段保留 `Default` 的值）。
 - 数值字段是其令牌的浅色值，与 `number()` 相同：用 `tokens().number_in("radius-card", dark())` 读取深色值，
-  或用类名（`rounded-card`）绘制，它会跟随外观。`set_theme` 为每个数值只写一个值，因此会丢掉主题文件给出的深色值；
+  或用类名（`rounded-card`）绘制，它会跟随外观。`set_theme` 会保留值未被它改变的数值的深色值，被它改变的数值在两种外观下都是这个值；
   `update_theme` 只改变补丁设置的字段。
 - 字段的文档注释就是其令牌的文档，`.nsh/types/nsh/tokens.d.ts` 会在 `token()` 上显示它。
 - 它生成 `DsThemePatch`，每个字段都是 `Option`（嵌套字段为其类型的补丁），文档写明其令牌和读取它的类名，供
@@ -678,13 +688,22 @@ reset_theme::<DsTheme>(); // 恢复应用的 action
   `reset_theme::<T>()` 把 `T` 的名称恢复为应用主题中的值（叠加在各类型默认值之上的 `nsh.json` 主题）。它们与应用的其他操作按顺序生效，
   和 `update_tokens` 一样；同步的 `#[module]` 函数使用其 `ModuleCx` 的 `cx.set_theme(..)`、`cx.update_theme::<T>(..)` 和
   `cx.reset_theme::<T>()`。
+- 数字字段是其令牌的浅色值。`set_theme` 不会改动值未变化的数字的深色值，所以读取主题、修改一个字段再设置回去，只会改变这一个字段：
+  `let mut t = (*theme_of::<DsTheme>()).clone(); t.action = red; set_theme(t);`。被它改变的数字，以及补丁设置的数字，
+  在两种外观下都是这个值；要再给它一个深色值，使用 `Tokens::set_dark_number` 和 `update_tokens`。
 
-**角色。** NSH 自己的部分用角色绘制（`Role`：`popover`、`primary`、`border`、`radius`、`font-sans` 等；
-[主题角色](../modules/nsh-base.md#theme-roles)）。类型用 `TokenSpec::role` 把角色映射到自己的令牌上，于是 `nsh_base` 的 `theme()`
+**角色。** NSH 自己的部分用角色绘制，角色是用它绘制的 crate 里的常量（`nsh_base::role`：`POPOVER`、`PRIMARY`、`BORDER`、`RADIUS`、
+`FONT_SANS` 等；[主题角色](../modules/nsh-base.md#theme-roles)），有自己组件的 crate 用同样的方式声明自己的角色
+（`pub const BANNER: Role = Role::new("banner");`）。类型用 `TokenSpec::role` 把角色映射到自己的令牌上，颜色令牌担任颜色的角色，
+数字担任数字的，字体担任字体的，于是 `nsh_base` 的 `theme()`
 字段和组件、标签栏、各平台的菜单和提示框，以及默认字体，都用该类型的令牌绘制：上例中 `theme().popover` 是设计系统的
-`surface-overlay`，`theme().primary` 是它的 `action`。
+`surface-overlay`，`theme().primary` 是它的 `action`。一个令牌可以担任多个角色（`.role(role::CARD).role(role::POPOVER)`）：
+卡片和弹出层共用一个表面的设计系统把两个角色都映射到它上面，它每次变化两者都会跟随。一个角色只由一个令牌担任。
 
-**名称。** 令牌的名称说明它的类型，就像 CSS 变量的名称一样：字体的名称以 `font-` 开头，阴影的以 `shadow-` 开头，字重的以 `font-weight-` 开头，其他类型的名称都不以 `font-` 开头。注册一个名称与类型不符、或重复声明同一名称或重复映射同一角色的类型会 panic。
+一个 UI 集合在它的注册表中列出其组件绘制时使用的角色，无论主题是否映射了它们，这样工具链就知道这些角色：`registry.roles(role::all())`，其中
+`nsh_core::roles! { /// A banner's surface. pub BANNER: Role = "banner", }` 写出这些常量，并在旁边生成 `all()`。`nsh/base` 列出了它自己的角色。
+
+**名称。** 令牌的名称说明它的类型，就像 CSS 变量的名称一样：字体的名称以 `font-` 开头，阴影的以 `shadow-` 开头，字重的以 `font-weight-` 开头，其他类型的名称都不以 `font-` 开头。注册一个名称与类型不符、重复声明同一名称或重复映射同一角色、或其令牌担任另一种类的角色的类型会 panic。
 
 **多个类型。** 设计系统的 crate 和应用的 crate 各自注册自己的类型：设计系统的令牌，以及应用在其旁边的自有令牌（例如投注应用的
 `odds-up`）。每个类型用 `theme_of` 读取自己的令牌，所有已注册类型的名称合并成一个主题。两个类型声明同一个令牌名称或映射同一个角色时，
@@ -693,7 +712,8 @@ reset_theme::<DsTheme>(); // 恢复应用的 action
 **主题文件。** `nsh.json` 的 `"theme"` 保持 shadcn 的 `cssVars` 格式，按名称设置各类型的令牌，每个值按其声明的种类读取（颜色按
 CSS 颜色，圆角按长度）。角色的名称设置该角色所映射的令牌：下例中的 `"primary"` 设置设计系统的 `action`。`var(--surface-raised)`
 指文件设置的令牌，文件没有设置时指类型的默认值。没有类型声明的名称，或种类不符的值，会产生构建警告，并在应用运行时被略去。
-在同时设置了某个角色所映射令牌的部分中，以该角色名称为键的值让位于那个令牌。嵌入应用的主题覆盖以及 TSX 的 `setTheme` 和 `updateTheme` 也以同样的方式读取它们的文件：它们略过没有任何类型声明的名称，并拒绝读不懂的值。
+在同时设置了某个角色所映射令牌的部分中，以该角色名称为键的值让位于那个令牌；两个角色的名称把同一个令牌设为两个不同的值时，第二个同样让位。嵌入应用的主题覆盖以及 TSX 的 `setTheme` 和 `updateTheme` 也以同样的方式读取它们的文件：它们略过没有任何类型声明的名称，并拒绝读不懂的值。`resetTheme` 也以同样的方式读取名称：角色的名称会把该角色所映射的令牌恢复为应用主题中的值。
+除了 `cssVars`，文件的 `"roles"` 可以把没有类型映射的角色映射到类型的某个令牌上（`"roles": { "warning": "status-caution" }`）；类型已经映射的角色属于该类型，文件对它的映射会被略去。
 
 ```json
 {
@@ -709,7 +729,10 @@ CSS 颜色，圆角按长度）。角色的名称设置该角色所映射的令�
 `.nsh/types/nsh/tokens.d.ts` 按种类为 `token()` 提供类型，并附带文档注释（[主题 token](./tailwind.md#主题-token)）。
 
 **nsh-base 的主题。** `nsh_base::Theme` 也是一个主题类型，它保持未注册，因此始终是默认来源：`theme()` 就是 `theme_of::<Theme>()`，
-shadcn 应用用 `update_theme::<Theme>(tokens)` 修改它的部分令牌，补丁是按名称组织的 `Tokens`。
+shadcn 应用用 `update_theme::<Theme>(tokens)` 修改它的部分令牌，补丁是按名称组织的 `Tokens`。在有自己主题类型的应用里，`Theme`
+的设置函数设置的是它的字段所读取的令牌：角色被应用的类型映射的令牌，就是该角色所映射到的令牌（上例中的 `popover` 是设计系统的
+`surface-overlay`），与主题文件中这个名称的含义相同。所以 `let mut t = (*theme()).clone(); t.popover = c; set_theme(t);`
+在任何应用里都会改变弹出层的颜色，并且不会把它读取后未改动的字段变成 shadcn 令牌。
 
 ## 多个 crate
 

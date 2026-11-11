@@ -29,7 +29,7 @@ mod collapsible;
 mod color_picker;
 mod combobox;
 mod command;
-mod data_table;
+pub mod data_table;
 mod date_picker;
 #[cfg(feature = "editor")]
 mod diff;
@@ -179,9 +179,10 @@ pub use crate::{
     link::{Link, LinkElement, LinkEvent, LinkOpenWith, LinkProps, link},
     menu::{
         ContextMenu, ContextMenuElement, ContextMenuProps, Menu, MenuElement, MenuEvent, MenuItem,
-        MenuItemElement, MenuItemEvent, MenuItemProps, MenuProps, MenuSeparator,
-        MenuSeparatorElement, MenuSeparatorProps, Submenu, SubmenuElement, SubmenuEvent,
-        SubmenuProps, context_menu, menu, menu_item, menu_separator, submenu,
+        MenuItemElement, MenuItemEvent, MenuItemProps, MenuList, MenuListElement, MenuListEntry,
+        MenuListProps, MenuProps, MenuSeparator, MenuSeparatorElement, MenuSeparatorProps, Submenu,
+        SubmenuElement, SubmenuEvent, SubmenuProps, context_menu, menu, menu_item, menu_list,
+        menu_separator, submenu,
     },
     navigation::{dialog, nav_page, nav_stack},
     number_input::{
@@ -237,7 +238,7 @@ pub use crate::{
         TextViewLinkPressEvent, TextViewLinks, TextViewMath, TextViewPart, TextViewParts,
         TextViewProps, TextViewSelectionEvent, TextViewStyles, text_view,
     },
-    theme::{DEFAULT_THEME, Theme, ThemeError, theme, theme_overrides, tokens_of},
+    theme::{DEFAULT_THEME, Theme, ThemeError, role, theme, theme_overrides, tokens_of},
     time_field::{
         HourCycle, TimeField, TimeFieldElement, TimeFieldEvent, TimeFieldProps,
         TimeFieldSegmentEntry, TimeOfDay, TimePrecision, TimeSegment, time_field,
@@ -301,7 +302,10 @@ pub fn registry_of(parts: impl IntoIterator<Item = parts::Part>) -> Registry {
         .native_values(&["NavStack", "NavPage", "Dialog", "createNavStack", "Input"])
         // The theme: the app's over the default, as design tokens.
         .tokens_from(theme::read_tokens)
-        .token_overrides_from(nsh_core::element::theme_file::overrides);
+        .token_overrides_from(nsh_core::element::theme_file::overrides)
+        // The roles the theme and the components draw with, for TS's
+        // `role()`.
+        .roles(theme::role::all());
     registry
 }
 

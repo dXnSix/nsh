@@ -22,6 +22,7 @@ use nsh_core::{
     platform::{Appearance, ColorScheme, Environment, Idiom, Os},
 };
 use rquickjs::qjs;
+use rustc_hash::FxHashMap;
 
 use crate::{
     modules::{Export, Item, Ts},
@@ -51,9 +52,10 @@ enum Part {
     WindowState,
     Displays,
     Fps,
+    Shaders,
 }
 
-const PARTS: usize = 15;
+const PARTS: usize = 16;
 
 /// The environment's part of a context's state.
 pub(crate) struct Env {
@@ -63,16 +65,41 @@ pub(crate) struct Env {
     signals: [Cell<JsValue>; PARTS],
     /// Read-only accessors of the signals (owned memos).
     accessors: [Cell<JsValue>; PARTS],
+    /// What names a `ThemeScope`'s appearance in the context of what it
+    /// renders ([`provide_scope`]): an object of its own, made with the
+    /// first scope.
+    scope_key: Cell<JsValue>,
+    /// What names a `ThemeScope`'s design tokens in the context of what it
+    /// renders ([`provide_scope_tokens`]), as [`Env::scope_key`] names its
+    /// appearance.
+    scope_tokens_key: Cell<JsValue>,
+    /// The tokens each live `ThemeScope` draws with, by its slot
+    /// ([`new_scope_slot`]); `None`: a free slot, or not made yet.
+    scope_tokens: RefCell<Vec<Option<Arc<Tokens>>>>,
+    /// Set on every change of the surface's tokens, for the scopes: a
+    /// scope's tokens are made over all of them, whichever `token()` reads
+    /// by name. Made with the first scope.
+    scopes_signal: Cell<JsValue>,
+    /// The slots of scopes that are gone, to use again.
+    scope_free: RefCell<Vec<usize>>,
+    /// Counts the times a scope's tokens were made: its memo's value is new
+    /// each time, so what read `token()` in it runs again.
+    scope_versions: Cell<u32>,
     /// The app's appearance (`nsh.json`, `setColorScheme`).
     appearance: Cell<Appearance>,
     /// The insets context (owned): screens and modals provide theirs.
     insets: Cell<JsValue>,
     /// The design tokens the app is drawn with ([`set_tokens`]).
     tokens: RefCell<Arc<Tokens>>,
-    /// A signal of their version (owned): `token()` reads it, so what read
-    /// a token follows a new theme.
+    /// A signal of their version (owned), which every `token()` reads:
+    /// set when most of the tokens read changed (a new theme), and for the
+    /// names past [`TOKEN_SIGNALS`].
     tokens_signal: Cell<JsValue>,
     tokens_version: Cell<u32>,
+    /// A signal per token `token()` read (owned), set when that token's
+    /// value changes and few do: what read a token follows that token,
+    /// and a change of another one runs nothing of it.
+    token_signals: RefCell<FxHashMap<Box<str>, JsValue>>,
     /// The tokens the app's theme file gives ([`set_theme_tokens`]), taken
     /// in when the entry hands the theme to the renderer ([`take_theme`]).
     theme: RefCell<ThemeTokens>,
@@ -84,6 +111,19 @@ pub(crate) struct Env {
     current_theme: RefCell<Option<String>>,
     /// The displays the platform reported last.
     displays: RefCell<Vec<Display>>,
+    /// What `appInfo()` reports: the build's ([`set_app_info`]).
+    app: RefCell<AppInfo>,
+}
+
+/// The app as it was built (`appInfo()`), from the JSON the bundler writes.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct AppInfo {
+    id: Option<String>,
+    name: Option<String>,
+    version: Option<String>,
+    build: Option<f64>,
+    development: bool,
 }
 
 impl Default for Env {
@@ -92,18 +132,69 @@ impl Default for Env {
             current: RefCell::new(None),
             signals: std::array::from_fn(|_| Cell::new(UNDEFINED)),
             accessors: std::array::from_fn(|_| Cell::new(UNDEFINED)),
+            scope_key: Cell::new(UNDEFINED),
+            scope_tokens_key: Cell::new(UNDEFINED),
+            scope_tokens: RefCell::default(),
+            scopes_signal: Cell::new(UNDEFINED),
+            scope_free: RefCell::default(),
+            scope_versions: Cell::new(0),
             appearance: Cell::new(Appearance::System),
             insets: Cell::new(UNDEFINED),
             tokens: RefCell::new(Arc::default()),
             tokens_signal: Cell::new(UNDEFINED),
             tokens_version: Cell::new(0),
+            token_signals: RefCell::default(),
             theme: RefCell::new(ThemeTokens::default()),
             built_theme: RefCell::default(),
             current_theme: RefCell::default(),
             displays: RefCell::default(),
+            app: RefCell::default(),
         }
     }
 }
+
+/// Takes in the app's information as the build wrote it (`setup`'s fifth
+/// argument); what this runtime cannot read is left out.
+pub(crate) fn set_app_info(cx: *mut JsContext, json: &str) {
+    match serde_json::from_str(json) {
+        Ok(info) => *env(cx).app.borrow_mut() = info,
+        Err(e) => log::warn!("appInfo: {e}, ignored"),
+    }
+}
+
+/// `appInfo()`: the app as it was built.
+unsafe extern "C" fn app_info(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+) -> JsValue {
+    let app = env(cx).app.borrow();
+    let text = |value: &Option<String>| match value {
+        Some(value) => string(cx, value),
+        None => qjs::JS_NULL,
+    };
+    object(
+        cx,
+        &[
+            (c"id", text(&app.id)),
+            (c"name", text(&app.name)),
+            (c"version", text(&app.version)),
+            (c"build", app.build.map_or(qjs::JS_NULL, qjs::JS_NewFloat64)),
+            (c"development", boolean(app.development)),
+        ],
+    )
+}
+
+/// `appInfo` of `nsh`.
+pub(crate) const APP_INFO_EXPORT: crate::modules::Item = (
+    "appInfo",
+    Export::Function(app_info, 0),
+    Ts::function(
+        "The app as it was built: its id, name, version and build number\n(`nsh.json`'s; a package's as `nsh package` and `nsh publish` name and\nversion it, `--id`, `--name`, `--version` and `--build` included, with\nversion `1.0.0` and build `1` where nothing gives them), and whether it\nis a development build (`nsh run`, `nsh dev`, `nsh test`, `nsh build`\nwithout `--release`). `nsh/updater`'s `shellInfo()` reports the\ninstalled app's.",
+        &["(): AppInfo"],
+    ),
+);
 
 fn env<'a>(cx: *mut JsContext) -> &'a Env {
     // SAFETY: a projection of the state's field, reached by shared
@@ -120,7 +211,13 @@ impl Env {
                 qjs::JS_FreeValue(raw, c.replace(UNDEFINED));
             }
             qjs::JS_FreeValue(raw, self.insets.replace(UNDEFINED));
+            qjs::JS_FreeValue(raw, self.scope_key.replace(UNDEFINED));
+            qjs::JS_FreeValue(raw, self.scope_tokens_key.replace(UNDEFINED));
+            qjs::JS_FreeValue(raw, self.scopes_signal.replace(UNDEFINED));
             qjs::JS_FreeValue(raw, self.tokens_signal.replace(UNDEFINED));
+            for (_, signal) in self.token_signals.get_mut().drain() {
+                qjs::JS_FreeValue(raw, signal);
+            }
         }
     }
 }
@@ -159,17 +256,77 @@ pub(crate) fn init(cx: *mut JsContext) {
     e.tokens_signal.set(reactive::new_signal(cx, number(0.0)));
 }
 
+/// How many tokens get a signal of their own ([`Env::token_signals`]):
+/// the names `token()` reads are a theme's, a few dozen. Once an app has
+/// read more (names it makes up without end), every change of the tokens
+/// sets the signal of all of them.
+const TOKEN_SIGNALS: usize = 1024;
+
 /// Takes in the design tokens the app is drawn with: what read a token
-/// runs again.
+/// whose value changed runs again, once however many of the tokens it read
+/// changed.
+///
+/// A change of few of the tokens read (`updateTheme` of a color) sets
+/// their own signals. A change of most of them (a new theme) sets the one
+/// signal of all tokens in their place: nearly every reader runs either
+/// way, and one signal runs them in the order they were made, the tree's,
+/// where the names' signals would run them name by name.
 pub(crate) fn set_tokens(cx: *mut JsContext, tokens: Arc<Tokens>) {
     let e = env(cx);
     if **e.tokens.borrow() == *tokens {
         return;
     }
-    e.tokens.replace(tokens);
+    let old = e.tokens.replace(tokens.clone());
     let version = e.tokens_version.get().wrapping_add(1);
     e.tokens_version.set(version);
-    reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
+    // What `token()` reads of a name: its value, and a number's dark one. A
+    // name that came or went differs too.
+    let read = |tokens: &Tokens, name: &str| (tokens.get(name), tokens.number_in(name, true));
+    // Collected first: a binding running again may read a new name.
+    let (changed, names): (Vec<JsValue>, usize) = {
+        let signals = e.token_signals.borrow();
+        let changed = signals
+            .iter()
+            .filter(|(name, _)| read(&old, name) != read(&tokens, name))
+            .map(|(_, signal)| *signal)
+            .collect();
+        (changed, signals.len())
+    };
+    // The scopes' tokens are made over these, whatever changed.
+    let scopes = e.scopes_signal.get();
+    // SAFETY: a value the environment owns.
+    let scoped = !unsafe { qjs::JS_IsUndefined(scopes) };
+    // Roles mapped onto other tokens: what read a role reads another one.
+    let whole = names >= TOKEN_SIGNALS || 2 * changed.len() > names || !old.same_roles(&tokens);
+    if whole && !scoped {
+        return reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
+    }
+    reactive::batch_with(cx, || {
+        if whole {
+            reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
+        } else {
+            for signal in changed {
+                reactive::set_signal(cx, signal, number(version as f32));
+            }
+        }
+        if scoped {
+            reactive::set_signal(cx, scopes, number(version as f32));
+        }
+    });
+}
+
+/// The signal of token `name` (borrowed), made the first time the name is
+/// read; none past [`TOKEN_SIGNALS`] names.
+fn token_signal(cx: *mut JsContext, e: &Env, name: &str) -> Option<JsValue> {
+    if let Some(signal) = e.token_signals.borrow().get(name) {
+        return Some(*signal);
+    }
+    if e.token_signals.borrow().len() >= TOKEN_SIGNALS {
+        return None;
+    }
+    let signal = reactive::new_signal(cx, number(e.tokens_version.get() as f32));
+    e.token_signals.borrow_mut().insert(name.into(), signal);
+    Some(signal)
 }
 
 /// Sets how the app's theme file makes the tokens it is drawn with
@@ -381,39 +538,73 @@ pub(crate) const RESET_THEME_EXPORT: crate::modules::Item = (
     "resetTheme",
     Export::Function(reset_theme, 1),
     Ts::function(
-        "Puts the tokens `names` back to their values in the app's theme\n(`nsh.json`'s `\"theme\"`, or the one `setTheme` set), undoing `updateTheme`\nfor them; without names, every token. A name the theme does not have is\nremoved. The other tokens stay as they are.",
-        &["(names?: (keyof Tokens)[]): void"],
+        "Puts the tokens `names` back to their values in the app's theme\n(`nsh.json`'s `\"theme\"`, or the one `setTheme` set), undoing `updateTheme`\nfor them; without names, every token. A name the theme does not have is\nremoved. The other tokens stay as they are. A role's name names the token\nthe app's theme types map it onto, as it does in a theme file.",
+        &["(names?: (keyof Tokens | keyof Roles)[]): void"],
     ),
 );
 
 /// `token(name)`: the design token `name` in the appearance shown (a
 /// color as `#rrggbbaa`, a number, a font family), `undefined` when there
-/// is none. Reading it tracks the tokens and the appearance.
+/// is none. Reading it tracks that token ([`token_signal`]), the signal
+/// of all tokens and the appearance.
 unsafe extern "C" fn token(
     cx: *mut JsContext,
     _this: JsValue,
     argc: c_int,
     argv: *mut JsValue,
 ) -> JsValue {
+    read_token(cx, crate::dom::string_arg(cx, arg(argc, argv, 0)), false)
+}
+
+/// `role(name)`: what the theme role `name` draws with, as `token()` gives
+/// a token: the token a theme maps the role onto, else the token of the
+/// role's name (`Tokens::role`, by name). Reading it tracks both tokens.
+unsafe extern "C" fn role(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    read_token(cx, crate::dom::string_arg(cx, arg(argc, argv, 0)), true)
+}
+
+/// The token `name` (`role`: the one the role `name` reads) in the
+/// appearance shown, tracked.
+fn read_token(cx: *mut JsContext, name: Option<String>, role: bool) -> JsValue {
     let e = env(cx);
-    for tracked in [
-        e.tokens_signal.get(),
-        e.accessors[Part::ColorScheme as usize].get(),
-    ] {
-        // SAFETY: calls a signal and an accessor the environment owns.
-        unsafe {
-            let read = qjs::JS_Call(cx, tracked, UNDEFINED, 0, ptr::null_mut());
-            if qjs::JS_IsException(read) {
-                return read;
+    // The tokens of the scope around what reads them (tracked as one: a
+    // change of any runs it again), else the surface's, by name.
+    let scoped = match scope_tokens(cx) {
+        Ok(scoped) => scoped,
+        Err(exception) => return exception,
+    };
+    let tracked = scoped.is_none();
+    let tokens = scoped.unwrap_or_else(|| e.tokens.borrow().clone());
+    // A role reads the token a theme maps it onto, when that has a value.
+    let mapped = name
+        .as_deref()
+        .filter(|_| role)
+        .and_then(|name| tokens.mapped(name))
+        .map(str::to_owned);
+    if tracked {
+        reactive::track(cx, e.tokens_signal.get());
+        for name in [name.as_deref(), mapped.as_deref()].into_iter().flatten() {
+            if let Some(signal) = token_signal(cx, e, name) {
+                reactive::track(cx, signal);
             }
-            qjs::JS_FreeValue(cx, read);
         }
     }
-    let Some(name) = crate::dom::string_arg(cx, arg(argc, argv, 0)) else {
+    // The appearance of the scope around what reads it, else the surface's.
+    let dark = match shown_dark(cx) {
+        Ok(dark) => dark,
+        Err(exception) => return exception,
+    };
+    let Some(name) = name else {
         return UNDEFINED;
     };
-    let dark = scheme(e, &current(cx)) == "dark";
-    let tokens = e.tokens.borrow().clone();
+    let name = mapped
+        .filter(|token| tokens.get(token).is_some())
+        .unwrap_or(name);
     // A number in the appearance shown (its dark value, when it has one).
     let value = match tokens.get(&name) {
         Some(Token::Number(_)) => tokens.number_in(&name, dark).map(Token::Number),
@@ -428,16 +619,28 @@ unsafe extern "C" fn token(
         Some(Token::Font(f)) => string(cx, &f),
         // Box shadows as CSS writes them, of the appearance shown.
         Some(Token::Shadow(s)) => string(cx, &s.css(dark)),
+        // Gradients as CSS writes them, of the appearance shown.
+        Some(Token::Gradient(g)) => string(cx, &g.css(dark)),
         _ => UNDEFINED,
     }
 }
+
+/// `role` of `nsh`.
+pub(crate) const ROLE_EXPORT: crate::modules::Item = (
+    "role",
+    Export::Function(role, 1),
+    Ts::function(
+        "What the theme role `name` draws with in the appearance shown, reactive,\nas `token()` gives a token: the token the app's theme maps the role onto\n(a theme type's `role = …`), else the token of the role's name, else\n`undefined`. A component written against a role is themed by any design\nsystem: `role(\"popover\")` is `overlay`'s color where the app calls that\nsurface `overlay`. The names are the roles the app's UI sets list.",
+        &["<K extends keyof Roles>(name: K): Roles[K] | undefined"],
+    ),
+);
 
 /// `token` of `nsh`.
 pub(crate) const TOKEN_EXPORT: crate::modules::Item = (
     "token",
     Export::Function(token, 1),
     Ts::function(
-        "The design token `name` of the app's theme (`nsh.json` `\"theme\"`, over\nshadcn/ui's tokens) in the appearance shown, reactive: a color as\n`#rrggbbaa`, a number (a length in points), a font family. The names are\nthe theme's CSS variables without `--`, which classes name too\n(`bg-primary`, `bg-up/30`, `rounded-(--radius)`).",
+        "The design token `name` of the app's theme (`nsh.json` `\"theme\"`, over\nshadcn/ui's tokens) in the appearance shown, reactive: a color as\n`#rrggbbaa`, a number (a length in points), a font family, box shadows and\ngradients as CSS writes them. The names are\nthe theme's CSS variables without `--`, which classes name too\n(`bg-primary`, `bg-up/30`, `rounded-(--radius)`).",
         &["<K extends keyof Tokens>(name: K): Tokens[K]"],
     ),
 );
@@ -480,6 +683,269 @@ fn boolean(v: bool) -> JsValue {
 fn string(cx: *mut JsContext, s: &str) -> JsValue {
     // SAFETY: a new string.
     unsafe { qjs::JS_NewStringLen(cx, s.as_ptr().cast(), s.len() as _) }
+}
+
+/// The accessor of the appearance the nearest `ThemeScope` around the
+/// current owner shows (owned), if there is one.
+pub(crate) fn scope_scheme(cx: *mut JsContext) -> Option<JsValue> {
+    let key = env(cx).scope_key.get();
+    // No scope was made yet: nothing to look for.
+    // SAFETY: a value the environment owns.
+    if unsafe { qjs::JS_IsUndefined(key) } {
+        return None;
+    }
+    reactive::lookup(cx, key)
+}
+
+/// What the current owner makes from now on is in a `ThemeScope` showing
+/// what `scheme` (borrowed: an accessor of `"light"` or `"dark"`) says.
+pub(crate) fn provide_scope(cx: *mut JsContext, scheme: JsValue) {
+    let e = env(cx);
+    // SAFETY: a new object the environment keeps, as the scopes' key.
+    unsafe {
+        if qjs::JS_IsUndefined(e.scope_key.get()) {
+            e.scope_key.set(qjs::JS_NewObject(cx));
+        }
+    }
+    reactive::provide(cx, e.scope_key.get(), scheme);
+}
+
+/// A scope's slot is the low part of its memo's value; the rest counts its
+/// changes ([`Env::scope_versions`]).
+const SCOPE_SLOTS: f64 = 1_048_576.0;
+
+/// The accessor of the design tokens the nearest `ThemeScope` around the
+/// current owner draws with (owned), if there is one with tokens.
+pub(crate) fn scope_tokens_accessor(cx: *mut JsContext) -> Option<JsValue> {
+    let key = env(cx).scope_tokens_key.get();
+    // SAFETY: a value the environment owns.
+    if unsafe { qjs::JS_IsUndefined(key) } {
+        return None;
+    }
+    reactive::lookup(cx, key)
+}
+
+/// What the current owner makes from now on is in a `ThemeScope` drawn
+/// with the tokens `accessor` (borrowed: [`make_scope_tokens`]'s memo)
+/// names.
+pub(crate) fn provide_scope_tokens(cx: *mut JsContext, accessor: JsValue) {
+    let e = env(cx);
+    // SAFETY: a new object the environment keeps, as the scopes' key.
+    unsafe {
+        if qjs::JS_IsUndefined(e.scope_tokens_key.get()) {
+            e.scope_tokens_key.set(qjs::JS_NewObject(cx));
+        }
+    }
+    reactive::provide(cx, e.scope_tokens_key.get(), accessor);
+}
+
+/// A slot for a new `ThemeScope`'s tokens ([`free_scope_slot`] gives it
+/// back).
+pub(crate) fn new_scope_slot(cx: *mut JsContext) -> usize {
+    let e = env(cx);
+    // SAFETY: a value the environment owns; the signal borrows the number.
+    if unsafe { qjs::JS_IsUndefined(e.scopes_signal.get()) } {
+        e.scopes_signal.set(reactive::new_signal(
+            cx,
+            number(e.tokens_version.get() as f32),
+        ));
+    }
+    if let Some(slot) = e.scope_free.borrow_mut().pop() {
+        return slot;
+    }
+    let mut slots = e.scope_tokens.borrow_mut();
+    slots.push(None);
+    slots.len() - 1
+}
+
+/// The scope of `slot` is gone (its memo with it): the slot is free for a
+/// scope made later.
+pub(crate) fn free_scope_slot(cx: *mut JsContext, slot: usize) {
+    let e = env(cx);
+    if let Some(tokens) = e.scope_tokens.borrow_mut().get_mut(slot) {
+        *tokens = None;
+        e.scope_free.borrow_mut().push(slot);
+    }
+}
+
+/// The tokens the memo value `named` (borrowed: a scope's accessor's)
+/// names.
+fn scope_tokens_named(cx: *mut JsContext, named: JsValue) -> Option<Arc<Tokens>> {
+    let mut value = 0f64;
+    // SAFETY: a number conversion of a live value.
+    if unsafe { qjs::JS_ToFloat64(cx, &mut value, named) } != 0 || !value.is_finite() {
+        return None;
+    }
+    let slot = (value % SCOPE_SLOTS) as usize;
+    env(cx).scope_tokens.borrow().get(slot).cloned().flatten()
+}
+
+/// The tokens the nearest `ThemeScope` around the current owner draws
+/// with, tracked; `None`: no scope with tokens around. The exception when
+/// reading them throws.
+fn scope_tokens(cx: *mut JsContext) -> Result<Option<Arc<Tokens>>, JsValue> {
+    let Some(accessor) = scope_tokens_accessor(cx) else {
+        return Ok(None);
+    };
+    // SAFETY: calls the scope's accessor, ours until freed.
+    unsafe {
+        let named = qjs::JS_Call(cx, accessor, UNDEFINED, 0, ptr::null_mut());
+        qjs::JS_FreeValue(cx, accessor);
+        if qjs::JS_IsException(named) {
+            return Err(named);
+        }
+        let tokens = scope_tokens_named(cx, named);
+        qjs::JS_FreeValue(cx, named);
+        Ok(tokens)
+    }
+}
+
+/// Makes the tokens of the `ThemeScope` of `slot`: the values `theme`
+/// (borrowed: its `theme` prop, a theme file's object) sets over the
+/// tokens around it, those `outer` (borrowed: the accessor of the scope
+/// around it, else `undefined`) names or the surface's. Without a theme
+/// they are the ones around it. Returns the scope's memo value (a number),
+/// new when the tokens are; an exception when reading throws.
+pub(crate) fn make_scope_tokens(
+    cx: *mut JsContext,
+    slot: usize,
+    theme: JsValue,
+    outer: JsValue,
+) -> JsValue {
+    let e = env(cx);
+    // SAFETY: an inline tag check.
+    let has_outer = unsafe { qjs::JS_IsFunction(cx, outer) };
+    // SAFETY: an inline tag check.
+    if !unsafe { qjs::JS_IsObject(theme) } {
+        // No tokens of its own: the ones around it, by their own value
+        // (`undefined`: the surface's, which `token()` follows by name).
+        if let Some(held) = e.scope_tokens.borrow_mut().get_mut(slot) {
+            *held = None;
+        }
+        return if has_outer {
+            // SAFETY: calls the outer scope's accessor.
+            unsafe { qjs::JS_Call(cx, outer, UNDEFINED, 0, ptr::null_mut()) }
+        } else {
+            UNDEFINED
+        };
+    }
+    let around = if has_outer {
+        // SAFETY: calls the outer scope's accessor; its value is ours.
+        unsafe {
+            let named = qjs::JS_Call(cx, outer, UNDEFINED, 0, ptr::null_mut());
+            if qjs::JS_IsException(named) {
+                return named;
+            }
+            let tokens = scope_tokens_named(cx, named);
+            qjs::JS_FreeValue(cx, named);
+            tokens
+        }
+    } else {
+        None
+    };
+    let around = around.unwrap_or_else(|| {
+        reactive::track(cx, e.scopes_signal.get());
+        e.tokens.borrow().clone()
+    });
+    let json = match to_json(cx, theme) {
+        Ok(json) => json.to_string(),
+        Err(exception) => return exception,
+    };
+    // What it leaves out is said once, by the component in the core.
+    let tokens = match e.theme.borrow().scoped(&around, &json) {
+        Some(Ok((tokens, _))) => Arc::new(tokens),
+        _ => around,
+    };
+    let mut slots = e.scope_tokens.borrow_mut();
+    let Some(held) = slots.get_mut(slot) else {
+        return UNDEFINED;
+    };
+    // The same tokens as before: the memo keeps its value.
+    let same = held.as_ref().is_some_and(|held| **held == *tokens);
+    if !same {
+        *held = Some(tokens);
+        e.scope_versions.set(e.scope_versions.get().wrapping_add(1));
+    }
+    qjs::JS_NewFloat64(f64::from(e.scope_versions.get()) * SCOPE_SLOTS + slot as f64)
+}
+
+/// The appearance the surface shows (owned: `"light"` or `"dark"`),
+/// whatever scope is around. Reading it tracks it.
+pub(crate) fn surface_scheme(cx: *mut JsContext) -> JsValue {
+    let accessor = env(cx).accessors[Part::ColorScheme as usize].get();
+    // SAFETY: calls an accessor the environment owns.
+    unsafe { qjs::JS_Call(cx, accessor, UNDEFINED, 0, ptr::null_mut()) }
+}
+
+/// The appearance shown where it is read (owned: `"light"` or `"dark"`):
+/// the nearest `ThemeScope`'s, else the surface's. Reading it tracks it.
+fn shown_scheme(cx: *mut JsContext) -> JsValue {
+    match scope_scheme(cx) {
+        // SAFETY: calls the scope's accessor, ours until freed.
+        Some(scope) => unsafe {
+            let shown = qjs::JS_Call(cx, scope, UNDEFINED, 0, ptr::null_mut());
+            qjs::JS_FreeValue(cx, scope);
+            shown
+        },
+        None => surface_scheme(cx),
+    }
+}
+
+/// Whether the appearance shown where it is read is dark ([`shown_scheme`]),
+/// tracked; the exception when reading it throws. Without a scope around,
+/// the surface's is read off the environment, with no string made.
+fn shown_dark(cx: *mut JsContext) -> Result<bool, JsValue> {
+    let shown = match scope_scheme(cx) {
+        // SAFETY: calls the scope's accessor, ours until freed.
+        Some(scope) => unsafe {
+            let shown = qjs::JS_Call(cx, scope, UNDEFINED, 0, ptr::null_mut());
+            qjs::JS_FreeValue(cx, scope);
+            shown
+        },
+        None => {
+            let read = surface_scheme(cx);
+            // SAFETY: a live value, ours.
+            unsafe {
+                if qjs::JS_IsException(read) {
+                    return Err(read);
+                }
+                qjs::JS_FreeValue(cx, read);
+            }
+            return Ok(scheme(env(cx), &current(cx)) == "dark");
+        }
+    };
+    // SAFETY: a live value, ours.
+    if unsafe { qjs::JS_IsException(shown) } {
+        return Err(shown);
+    }
+    let dark = crate::dom::string_arg(cx, shown).as_deref() == Some("dark");
+    unsafe { qjs::JS_FreeValue(cx, shown) };
+    Ok(dark)
+}
+
+/// `colorScheme()`.
+unsafe extern "C" fn color_scheme(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+) -> JsValue {
+    shown_scheme(cx)
+}
+
+/// `colorScheme` itself (owned): a function, called as the accessors are.
+fn color_scheme_export(cx: *mut JsContext) -> JsValue {
+    // SAFETY: a new function.
+    unsafe {
+        qjs::JS_NewCFunction2(
+            cx,
+            Some(color_scheme),
+            c"colorScheme".as_ptr(),
+            0,
+            qjs::JSCFunctionEnum_JS_CFUNC_generic,
+            0,
+        )
+    }
 }
 
 /// The color scheme shown: the app's, else the system's.
@@ -645,6 +1111,9 @@ pub(crate) fn set_environment(cx: *mut JsContext, next: &Environment) -> Result<
     }
     if changed(&|p| p.lifecycle == next.lifecycle) {
         writes.push((Part::Lifecycle, string(cx, next.lifecycle.name())));
+    }
+    if changed(&|p| p.shaders == next.shaders) {
+        writes.push((Part::Shaders, boolean(next.shaders)));
     }
     if changed(&|p| p.window_state == next.window_state) {
         writes.push((
@@ -868,7 +1337,7 @@ pub(crate) const ELEMENTS: &[Item] = &[(
     "Input",
     Export::Value(|cx| crate::dom::host_component(cx, "input", true)),
     Ts::function(
-        "A native text input (UITextField / UITextView, EditText); `ref` has\n`focus()`, `blur()` and `setSelection(start, end)`.",
+        "A native text input (UITextField / UITextView, EditText); `ref` has\n`focus()`, `blur()`, `setSelection(start, end)` and `insertText(text)`.",
         &["(props: InputProps): JSX.Element"],
     ),
 )];
@@ -986,9 +1455,9 @@ pub(crate) const DEVICE_EXPORTS: &[Item] = &[
     ),
     (
         "colorScheme",
-        Export::Value(|cx| accessor(cx, Part::ColorScheme)),
+        Export::Value(color_scheme_export),
         Ts::value(
-            "The appearance shown (reactive): the system's, unless the app set its\nown (`nsh.json` `\"appearance\"`, `setColorScheme`).",
+            "The appearance shown (reactive): the system's, unless the app set its\nown (`nsh.json` `\"appearance\"`, `setColorScheme`). In a `ThemeScope`\nwith an appearance, the scope's.",
             "Accessor<\"light\" | \"dark\">",
         ),
     ),
@@ -1054,6 +1523,14 @@ pub(crate) const DEVICE_EXPORTS: &[Item] = &[
         Ts::value(
             "The platform the app runs on, constant while it runs.",
             "PlatformInfo",
+        ),
+    ),
+    (
+        "shadersAvailable",
+        Export::Value(|cx| accessor(cx, Part::Shaders)),
+        Ts::value(
+            "Whether the platform draws shader views (`Shader`, `ShaderEffect`,\n`ShaderTransition`, `ScreenEffect`, `ScreenTransition`) (reactive).\n`false` where the platform was built without a renderer or draws in a\nterminal's cells; elsewhere `true` until the first shader mounts on a\nmachine without a GPU (WebGL 2 in a browser), when it turns `false` for\ngood. Show a shader while it holds and the app's own drawing (a `Canvas`,\nan image) otherwise.",
+            "Accessor<boolean>",
         ),
     ),
 ];

@@ -78,7 +78,8 @@ Rust components (`nsh/base`'s and those of an app's own crate) accept `class` an
 |---|---|---|
 | `active:` | The view is pressed | `.active(\|s\| ..)` |
 | `hover:` | A pointer is over the view (iPad and Mac pointers) | `.hover(\|s\| ..)` |
-| `focus:`, `focus-visible:` | An input has focus | `.focus(\|s\| ..)` |
+| `focus:` | The element has focus | `.focus(\|s\| ..)` |
+| `focus-visible:` | The element has focus and shows it: the keyboard moved it there | `.focus_visible(\|s\| ..)` |
 | `focus-within:` | The view or a descendant has focus (the content of an `Overlay` is a descendant of the view it is in) | `.focus_within(..)` |
 | `disabled:`, `enabled:` | The element's `disabled` prop is true / false | `.disabled_style(\|s\| ..)` |
 | `selected:` | The element is selected (a `Button`'s `selected`, `accessibilityState.selected`) | `.selected_style(..)` |
@@ -86,9 +87,9 @@ Rust components (`nsh/base`'s and those of an app's own crate) accept `class` an
 | `indeterminate:` | The element is indeterminate (`accessibilityState.checked` is `"mixed"`) | `.indeterminate_style(..)` |
 | `aria-expanded:` | The element is expanded (`accessibilityState.expanded` is `true`): a `Popover`'s or `Menu`'s trigger while its popup is open | `.expanded_style(..)` |
 | `aria-pressed:` | The element is a toggle button that is on (`accessibilityState.pressed` is `true`; `"mixed"` is not pressed). Not `active:`, a press in progress | `.aria_pressed(..)`, `.pressed_style(..)` |
-| `aria-busy:`, `aria-checked:`, `aria-selected:` | `accessibilityState.busy`, `checked` (`true`, not `"mixed"`) or `selected` is `true`, as Tailwind's `aria-*` variants: after the pseudo-classes, in the order of their names | |
+| `aria-busy:`, `aria-checked:`, `aria-invalid:`, `aria-selected:` | `accessibilityState.busy`, `checked` (`true`, not `"mixed"`), `invalid` or `selected` is `true`, as Tailwind's `aria-*` variants: after the pseudo-classes, in the order of their names | |
 | `data-<name>:` | The element has the `data-*` attribute `name`, as Tailwind's boolean `data-*` variants (`&[data-range-start]`): what a component's part shows beyond its states, a calendar's day at the start of a range (`data-range-start:`). After the `aria-*` variants, in the order of their names | `Interactive::project_data(name, ..)` sets one on a component's part |
-| `group-active:`, `group-hover:`, `group-focus:`, `group-focus-within:`, `group-disabled:`, `group-selected:`, `group-checked:`, `group-indeterminate:`, `group-aria-expanded:`, `group-aria-pressed:`, `group-aria-busy:`, `group-aria-checked:`, `group-aria-selected:`, `group-data-<name>:` | The nearest ancestor with the `group` class is in that state, or has that `data-*` attribute | `.group()` on the ancestor; `.group_active(..)`, `.group_hover(..)`, `.group_focus_within(..)` inside |
+| `group-active:`, `group-hover:`, `group-focus:`, `group-focus-within:`, `group-disabled:`, `group-selected:`, `group-checked:`, `group-indeterminate:`, `group-aria-expanded:`, `group-aria-pressed:`, `group-aria-busy:`, `group-aria-checked:`, `group-aria-invalid:`, `group-aria-selected:`, `group-data-<name>:` | The nearest ancestor with the `group` class is in that state, or has that `data-*` attribute | `.group()` on the ancestor; `.group_active(..)`, `.group_hover(..)`, `.group_focus_within(..)` inside |
 | `group-active/name:` ... | The same, for an ancestor marked `group/name` | `.group_named("name")`; `.group_active_named("name", ..)`, ... |
 | `first:`, `last:`, `odd:`, `even:`, `only:` | The element's own position among its siblings. To color a row's label by the row's position, put `last:text-*` on the row: the label inherits it | Plain Rust from the row's index (`at.is_first()`, `at.is_last()`, `at.index() % 2`) |
 | `placeholder:` | Styles an input's placeholder (`placeholder:text-zinc-400`) | `.placeholder_color(..)` |
@@ -99,6 +100,8 @@ Rust components (`nsh/base`'s and those of an app's own crate) accept `class` an
 | `min-[600px]:`, `max-[600px]:` | Arbitrary breakpoints | The same |
 | `portrait:`, `landscape:` | The window's orientation | `window().width > window().height` |
 | `ios:`, `android:`, `web:` | The platform | `.when(os() == Os::Ios, \|v\| ..)` |
+| `terminal:` | Drawn in a terminal | `.when(idiom() == Idiom::Terminal, \|v\| ..)` |
+| `pointer-fine:`, `pointer-coarse:` | The primary pointer is a mouse or trackpad (the desktops, a desktop browser, a terminal) / a finger | `.when(is_desktop(), \|v\| ..)` |
 | `rtl:`, `ltr:` | The [layout direction](./layout.md#right-to-left) | `.direction(LayoutDirection::..)` on a view |
 | `motion-safe:`, `motion-reduce:` | The user's reduce motion setting | `reduce_motion()` |
 
@@ -161,12 +164,12 @@ Breakpoints compare against the window (the surface NSH renders into), not the d
 - **Every view is a box of its own.** `overflow-x-hidden` and `overflow-y-hidden` clip both axes, as `overflow-hidden` does (scrolling is the [scroll](../elements/scroll.md) element's); `invisible` hides the view and everything in it; `mix-blend-*` blends a view with everything drawn behind it; `block` boxes keep their own margins and their children's apart; an `absolute` view is placed in its nearest positioned ancestor, as in CSS; `fixed` lays a view out in its root view (other elements are placed as `absolute`).
 - **Text keeps its whitespace.** Spaces and line breaks in a string are drawn as written, and `whitespace-*` sets the wrapping; the JSX compiler collapses the whitespace of literal JSX text, as JSX does.
 - **Transitions animate property groups**: `transition` animates colors, opacity, shadows and transforms, `transition-all` also corner radii and border widths; filters, backdrop filters, gradients and layout take their new values at once.
-- **`focus-visible:` is `focus:`**: it applies whenever the element has focus.
+- **`focus-visible:` follows the browsers' `:focus-visible`**: it applies while the focus shows. Tab, the arrow keys of a group and shortcuts show it; a press or a tap does not; a move the app makes (`focus()`, a calendar or a dialog opening) shows it after a key and not after a press; a text input shows it whenever it has focus. `focus:` applies whenever the element has focus, so the keyboard's ring goes on `focus-visible:`. The row the keys act on inside a component that keeps the focus (a tree's row, a list's highlighted option) takes `focus:` while it is that row and `focus-visible:` while the component's focus shows too.
 - **State backgrounds show over gradients.** In CSS a gradient covers `background-color`, so `active:bg-*` on a `bg-linear-*` surface would never be seen; in NSH a background color from `active:`, `hover:`, `focus:` or `group-*:` replaces the gradient while that state holds (unless the state sets a gradient of its own, such as `active:from-*`). So do `activeStyle` and the other state styles, and animated background colors.
 - **Text and touch settings are style keys**: `line-clamp-*` sets `numberOfLines`, `text-ellipsis` and `text-clip` set `textOverflow`, `truncate` both, `select-*` sets `userSelect` and `pointer-events-*` sets `pointerEvents`, so they work in state variants and lose to the inline `style` as every class does; `caret-*`, `placeholder:text-*` and `selection:bg-*` set the `caretColor`, `placeholderColor` and `selectionColor` styles the same way. In Rust these are `Styled` methods (`.number_of_lines(..)`, `.truncate()`, `.text_overflow(..)`, `.select_text()`, `.pointer_events(..)`, ...). `whitespace-nowrap` keeps a text on one line as a class. `object-*` set the `objectFit` and `objectPosition` styles of images and videos, which a style's keys replace as any other.
 - **The supported set**: utilities and variants of Tailwind 4 that have a native meaning. `peer-*` variants, pseudo-elements (`before:`, `after:`) and arbitrary properties (`[mask-type:luminance]`) are reported as unknown classes, and so is every utility NSH has no native meaning for, so a class never means something else than in a browser. Rendering hints (`antialiased`, `will-change-transform`, `appearance-none`, `box-border`, ...) are accepted and change nothing.
 
-Everything else works as documented by Tailwind 4: the color palette, opacity modifiers (`bg-black/40`), arbitrary values (`bg-[#34c759]`, `w-[72px]`, `grid-cols-[1fr_2fr]`; on `p`, `px`, `py`, `pt`, `pr`, `pb`, `pl` and the `m` utilities also the environment variables, `pt-[env(safe-area-inset-top)]`, `pb-[calc(env(keyboard-inset-height)+49px)]`, see [Safe area](../elements/safe-area.md) and [Keyboard](../elements/keyboard.md)), fractions (`w-1/2`, `translate-x-1/2`), shadows and rings, gradients (`bg-linear-to-r`, `bg-radial`, `bg-conic` with `from-` / `via-` / `to-`), filters, `backdrop-blur-*`, `mix-blend-*`, transforms, `transition-*` and `duration-*`, `animate-spin` / `ping` / `pulse` / `bounce`, and grid, each with its typed method in Rust. The platform limits of [filters and blending](./styling.md#filters-and-blending) apply to classes too.
+Everything else works as documented by Tailwind 4: the color palette, opacity modifiers (`bg-black/40`), arbitrary values (`bg-[#34c759]`, `w-[72px]`, `grid-cols-[1fr_2fr]`; on `p`, `px`, `py`, `pt`, `pr`, `pb`, `pl` and the `m` utilities also the environment variables, `pt-[env(safe-area-inset-top)]`, `pb-[calc(env(keyboard-inset-height)+49px)]`, see [Safe area](../elements/safe-area.md) and [Keyboard](../elements/keyboard.md)), fractions (`w-1/2`, `translate-x-1/2`), shadows and rings, gradients (`bg-linear-to-r`, `bg-radial`, `bg-conic` with `from-` / `via-` / `to-`, or one written out, `bg-[linear-gradient(45deg,#f00,#00f)]`, with Tailwind's `image:` hint too), filters, `backdrop-blur-*`, `mix-blend-*`, transforms, `transition-*` and `duration-*`, `animate-spin` / `ping` / `pulse` / `bounce`, and grid, each with its typed method in Rust. The platform limits of [filters and blending](./styling.md#filters-and-blending) apply to classes too.
 
 ## Theme
 
@@ -252,12 +255,13 @@ A token's name is its CSS variable's without `--`, as the theme file writes it: 
 | Form | Takes | Example |
 |---|---|---|
 | A color name in any color utility | A theme color, with an opacity too | `bg-primary`, `text-muted-foreground/70`, `bg-up/30`, `border-t-border`, `ring-ring`, `from-accent`, `placeholder:text-muted-foreground` |
-| `(--name)`, Tailwind 4's variable shorthand | A theme color or number | `bg-(--primary)`, `rounded-(--radius)`, `p-(--gap-card)` |
+| `(--name)`, Tailwind 4's variable shorthand | A theme color or number, or the token a theme role of that name is mapped onto | `bg-(--primary)`, `rounded-(--radius)`, `p-(--gap-card)`, `bg-(--popover)` |
 | `(color:--name)`, `(length:--name)`, `(number:--name)`, `(family-name:--name)` | The same, typed where a utility takes several kinds | `text-(color:--up)`, `text-(length:--text-title)`, `font-(family-name:--font-mono)` |
 | `font-sans`, `font-mono` | The theme's fonts, when it sets them | `font-mono` |
 | A number token's name in its namespace's utilities | A number token of a Tailwind 4 namespace, by the rest of its name | `rounded-card` (`radius-card`), `p-gutter`, `gap-x-gutter` (`spacing-gutter`), `text-body` (`text-body`), `font-strong` (`font-weight-strong`), `tracking-label`, `leading-body`, `blur-soft` |
 
 - **Your own tokens.** Every name in the theme file is a token, as every variable of a CSS `@theme` is: `"up": "#16a34a"` makes `bg-up`, `text-up` and `bg-up/30`; `"radius-card": "14px"` makes `rounded-(--radius-card)`; `"font-display": "Pacifico"` makes `font-(family-name:--font-display)`. Lengths are in points; `(number:--name)` passes the plain number.
+- **Theme roles.** A variable names a [theme role](../modules/nsh.md#role) as well: where the theme has no token `popover` and maps the role `popover` onto its token `overlay` (a theme type's `role = …`, or the theme file's `"roles": { "popover": "overlay" }`), `bg-(--popover)` is `overlay`'s color in each appearance and follows it. So a component shared between apps writes `bg-(--popover) rounded-(--radius)` once for every design system. A token of the name comes first, and a bare class (`bg-popover`) names tokens only. The build checks the variable against the roles the theme maps.
 - **Fonts.** `font-sans` is the app's font: every text that sets no family of its own is drawn with it, as a page is with Tailwind's `--font-sans`. `font-mono` is the font of `font-mono` and of code in `TextView`. Unset, both are the system's fonts.
 - **Both appearances.** A token has the light and the dark value of the theme: `bg-primary`, `theme().primary` and `token("primary")` switch with the appearance by themselves, with no `dark:` class. A color the theme sets in one appearance only is used in both. Numbers have a dark value too: `"dark": { "radius-card": "6px" }` beside a light `14px` makes `rounded-card` and `rounded-(--radius-card)` 14 points in the light appearance and 6 in the dark one, and `token("radius-card")` the value of the one shown; a number the theme gives once is the same in both.
 - **Named number classes.** A number token whose name starts with one of Tailwind 4's namespaces is a class of that
@@ -269,6 +273,15 @@ A token's name is its CSS variable's without `--`, as the theme file writes it: 
   as shadcn's `tracking-normal: 0em` always was. They work under variants and follow the theme as every token class
   does. `text-` is a color utility's too: there a color of the same name stays first; elsewhere the longer utility
   wins (`inset-shadow-card` is the inset shadow's color `card`).
+- **Gradient tokens.** A `background-image-<n>` entry written as CSS gradients (`"background-image-hero":
+  "linear-gradient(135deg, #7c3aed, #db2777)"`, a value per appearance in `light` and `dark`; linear, radial and
+  conic, repeating, one or several) is a gradient token, as Tailwind 4's `--background-image-*` are: the class
+  `bg-hero` and `bg-(image:--background-image-hero)` draw it, in the appearance shown. A `var()` in a stop is the
+  theme's color in that appearance (`linear-gradient(to right, var(--primary), var(--accent))` written once in
+  `theme` is a gradient for each). A color `hero` or a class of Tailwind's own keeps `bg-hero`, and the build lists
+  the token as it does a number's; read it with the `(image:--…)` form then. In Rust,
+  `.adaptive_gradient(move || tokens().gradient("background-image-hero").cloned().unwrap_or_default())` follows the
+  theme and the appearance; `token("background-image-hero")` is its CSS, which the `backgroundImage` style takes.
 - **Shadow tokens.** A `shadow-<n>` entry written as CSS `box-shadow` (`"shadow-raised": "0 1px 2px #0000001a"`, a
   value per appearance in `light` and `dark`) is a shadow token: the class `shadow-raised` and `shadow-(--shadow-raised)`
   draw its layers, in the appearance shown. Other `shadow-*` names a theme has (shadcn's `shadow-color`,
@@ -314,6 +327,37 @@ import { Canvas, token } from "nsh";
 ```
 
 The names are typed: NSH writes the app's tokens into `.nsh/types/nsh/tokens.d.ts` from its theme, so `token("up")` is a `string` once `"up"` is in the theme, and a name the theme lacks is a type error. Under theme types it lists the types' tokens, each typed by its kind (a `number`, or a `string` for a color, a font and a shadow) with its doc comment.
+
+### Tokens for a part of the app
+
+`ThemeScope` gives a part of the app its own values of the theme's tokens, as a class that sets CSS variables does on the web. Its `theme` is a theme file whose values are set over the tokens around it; token classes, `token()` and the Rust components in it follow, in each appearance:
+
+```rust tabs
+use nsh_base::theme;
+use nsh_core::prelude::*;
+
+let brand = r##"{ "cssVars": { "light": { "primary": "#7c3aed" }, "dark": { "primary": "#a78bfa" } } }"##;
+
+theme_scope().theme(Some(ScopeTheme::file(brand))).child(
+    view()
+        .rounded(move || theme().radius)
+        .bg(move || theme().primary)
+        .p_4()
+        .child(text("Upgrade").text_color(move || theme().primary_foreground)),
+)
+```
+
+```tsx tabs
+import { Text, ThemeScope, View } from "nsh";
+
+<ThemeScope theme={{ cssVars: { light: { primary: "#7c3aed" }, dark: { primary: "#a78bfa" } } }}>
+  <View class="rounded-(--radius) bg-primary p-4">
+    <Text class="text-primary-foreground">Upgrade</Text>
+  </View>
+</ThemeScope>
+```
+
+A scope sets values of tokens the app's theme has: a name the theme lacks is left out with a warning, so every class means a token everywhere. The tokens it leaves alone stay the app's and follow `setTheme` and `updateTheme`; a scope inside another starts from the outer one's values. With `appearance` a scope also shows its content light or dark ([Device and environment](./device-and-environment.md#a-part-of-the-app-in-its-own-appearance)).
 
 ## The class check
 

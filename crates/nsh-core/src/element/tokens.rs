@@ -12,11 +12,11 @@
 //! `tailwind/theme.rs`), TS reads them with `nsh`'s `token()`, and Rust
 //! components with [`super::tokens`].
 
-use std::sync::Arc;
+use std::{borrow::Cow, marker::PhantomData, sync::Arc};
 
 use rustc_hash::FxHashMap;
 
-use super::style::{AdaptiveColor, AdaptiveShadow};
+use super::style::{AdaptiveColor, AdaptiveGradient, AdaptiveShadow};
 
 /// The app's default font family's token: Tailwind's `--font-sans`.
 pub const FONT_SANS: &str = "font-sans";
@@ -28,10 +28,10 @@ pub const FONT_MONO: &str = "font-mono";
 /// font families. The default has none.
 ///
 /// They may map [`Role`]s, what NSH's own parts draw with, onto tokens of
-/// other names ([`Tokens::with_roles`]): a theme whose surface for popovers
-/// is `surface-overlay` maps [`Role::Popover`] onto it, and every part that
-/// draws a popover reads that token ([`Tokens::role_color`]). Without a
-/// mapping a role reads the token of its own name (`popover`).
+/// other names ([`Tokens::with_role`]): a theme whose surface for popovers
+/// is `surface-overlay` maps [`role::POPOVER`] onto it, and every part that
+/// draws a popover reads that token ([`Tokens::role`]). Without a mapping a
+/// role reads the token of its own name (`popover`).
 #[derive(Debug, Clone, Default)]
 pub struct Tokens {
     colors: FxHashMap<Box<str>, AdaptiveColor>,
@@ -43,8 +43,11 @@ pub struct Tokens {
     fonts: FxHashMap<Box<str>, Arc<str>>,
     /// Box shadows, per appearance.
     shadows: FxHashMap<Box<str>, AdaptiveShadow>,
-    /// Role -> the name of the token it reads (`None`: each its own name).
-    roles: Option<Arc<FxHashMap<Role, Box<str>>>>,
+    /// Gradients (a `background-image`'s), per appearance.
+    gradients: FxHashMap<Box<str>, AdaptiveGradient>,
+    /// A role's name -> the name of the token it reads (`None`: each its
+    /// own name).
+    roles: Option<Arc<FxHashMap<Box<str>, Box<str>>>>,
     /// Whether the app has a theme of its own ([`Tokens::is_themed`]): not
     /// a token, so not compared.
     themed: bool,
@@ -57,124 +60,281 @@ impl PartialEq for Tokens {
             && self.dark_numbers == other.dark_numbers
             && self.fonts == other.fonts
             && self.shadows == other.shadows
+            && self.gradients == other.gradients
             && self.roles == other.roles
     }
 }
 
-macro_rules! roles {
-    ($( $(#[doc = $doc:literal])* $variant:ident = $name:literal ),* $(,)?) => {
-        /// What NSH's own parts draw with: `nsh-base`'s theme
-        /// (`theme().popover`), the platforms' own controls (Linux's menus,
-        /// the mobile tab bar, iOS's and Android's alerts), the default
-        /// font. Each reads the token of its name ([`Role::name`],
-        /// shadcn/ui's), or the token a theme maps it onto
-        /// ([`Tokens::with_roles`]). A role is no token and no class:
-        /// `bg-primary` exists when a theme has a token `primary`.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        #[non_exhaustive]
-        pub enum Role {
-            $(
-                $(#[doc = $doc])*
-                #[doc = concat!("\n\nName `", $name, "`.")]
-                $variant,
-            )*
+/// What one of NSH's own parts draws with: a surface, the color of what is
+/// on it, a radius, a font family. `nsh-base`'s theme reads them
+/// (`theme().popover`), as do the platforms' own controls (Linux's menus,
+/// the mobile tab bar, iOS's and Android's alerts) and the default font.
+///
+/// A role is a constant of the crate that draws with it: the core's and the
+/// platforms' are in [`role`], `nsh-base`'s in `nsh_base::role`, and a
+/// design system's components have their own
+/// (`pub const BANNER: Role = Role::new("banner");`). It reads the token of
+/// its name ([`Role::name`]), or the token a theme maps it onto
+/// ([`Tokens::with_role`]). A role is its name: two constants of one name
+/// are one role. It is no token and no class: `bg-primary` exists when a
+/// theme has a token `primary`.
+///
+/// `V` is what it reads ([`RoleValue`]): a color unless it says otherwise
+/// ([`NumberRole`], [`FontRole`]).
+pub struct Role<V = AdaptiveColor> {
+    name: &'static str,
+    value: PhantomData<fn() -> V>,
+}
+
+/// A role that reads a number (`radius`).
+pub type NumberRole = Role<f32>;
+
+/// A role that reads a font family (`font-sans`).
+pub type FontRole = Role<Arc<str>>;
+
+impl<V> Role<V> {
+    /// The role named `name`: the token it reads unless a theme maps it,
+    /// as a theme file spells it (`popover-foreground`).
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            value: PhantomData,
         }
+    }
 
-        impl Role {
-            /// Every role.
-            pub const ALL: &'static [Role] = &[$(Role::$variant),*];
+    /// Its name.
+    pub const fn name(self) -> &'static str {
+        self.name
+    }
+}
 
-            /// Its name: the token it reads unless a theme maps it, as
-            /// shadcn/ui spells it (`popover-foreground`).
-            pub fn name(self) -> &'static str {
-                match self {
-                    $(Role::$variant => $name,)*
-                }
+impl<V> Clone for Role<V> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<V> Copy for Role<V> {}
+
+impl<V> PartialEq for Role<V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl<V> Eq for Role<V> {}
+
+impl<V> std::hash::Hash for Role<V> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+    }
+}
+
+impl<V> std::fmt::Debug for Role<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Role").field(&self.name).finish()
+    }
+}
+
+/// What a [`Role`] reads: a color ([`AdaptiveColor`]), a number (`f32`) or
+/// a font family (`Arc<str>`).
+pub trait RoleValue: Sized + sealed::Sealed {
+    /// Which of them.
+    const KIND: RoleKind;
+
+    /// The token `name` of `tokens` as this, if they have it.
+    #[doc(hidden)]
+    fn read(tokens: &Tokens, name: &str) -> Option<Self>;
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::AdaptiveColor {}
+    impl Sealed for f32 {}
+    impl Sealed for std::sync::Arc<str> {}
+}
+
+impl RoleValue for AdaptiveColor {
+    const KIND: RoleKind = RoleKind::Color;
+
+    fn read(tokens: &Tokens, name: &str) -> Option<Self> {
+        tokens.color(name)
+    }
+}
+
+impl RoleValue for f32 {
+    const KIND: RoleKind = RoleKind::Number;
+
+    fn read(tokens: &Tokens, name: &str) -> Option<Self> {
+        tokens.number(name)
+    }
+}
+
+impl RoleValue for Arc<str> {
+    const KIND: RoleKind = RoleKind::Font;
+
+    fn read(tokens: &Tokens, name: &str) -> Option<Self> {
+        tokens.font(name).cloned()
+    }
+}
+
+/// What a role reads ([`RoleValue::KIND`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RoleKind {
+    /// A color per appearance.
+    Color,
+    /// A number.
+    Number,
+    /// A font family.
+    Font,
+}
+
+impl RoleKind {
+    /// Its name, as the toolchain writes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            RoleKind::Color => "color",
+            RoleKind::Number => "number",
+            RoleKind::Font => "font",
+        }
+    }
+
+    /// The kind of this name ([`RoleKind::name`]).
+    pub fn from_name(name: &str) -> Option<RoleKind> {
+        Some(match name {
+            "color" => RoleKind::Color,
+            "number" => RoleKind::Number,
+            "font" => RoleKind::Font,
+            _ => return None,
+        })
+    }
+}
+
+/// A role of any kind: its name and what it reads, for lists of roles of
+/// several kinds ([`Tokens::with_roles`]). Every [`Role`] is one
+/// (`role::POPOVER.into()`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AnyRole {
+    name: Cow<'static, str>,
+    kind: RoleKind,
+}
+
+impl AnyRole {
+    /// The role named `name` that reads a `kind`: for a role known by its
+    /// name alone, as the toolchain knows an app's.
+    pub fn new(name: impl Into<Cow<'static, str>>, kind: RoleKind) -> Self {
+        Self {
+            name: name.into(),
+            kind,
+        }
+    }
+
+    /// Its name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// What it reads.
+    pub fn kind(&self) -> RoleKind {
+        self.kind
+    }
+}
+
+impl<V: RoleValue> From<Role<V>> for AnyRole {
+    fn from(role: Role<V>) -> Self {
+        Self {
+            name: Cow::Borrowed(role.name),
+            kind: V::KIND,
+        }
+    }
+}
+
+/// A role as a UI set lists it for the toolchain ([`super::Registry::roles`]):
+/// the role, and what it is for. TS types `role()` from these, whether or
+/// not a theme maps the role.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleSpec {
+    /// The role.
+    pub role: AnyRole,
+    /// Its doc comment, as written (lines as they are).
+    pub doc: &'static str,
+}
+
+impl RoleSpec {
+    /// `role`, documented by `doc`.
+    pub fn new(role: impl Into<AnyRole>, doc: &'static str) -> Self {
+        Self {
+            role: role.into(),
+            doc,
+        }
+    }
+
+    /// Its doc as one text: the lines of each paragraph joined, without
+    /// the paragraph that only names it (``Name `popover`.``).
+    pub fn doc_text(&self) -> String {
+        let mut paragraphs: Vec<String> = Vec::new();
+        let mut current: Vec<&str> = Vec::new();
+        for line in self.doc.lines().chain([""]) {
+            let line = line.trim();
+            if !line.is_empty() {
+                current.push(line);
+            } else if !current.is_empty() {
+                paragraphs.push(current.join(" "));
+                current.clear();
             }
+        }
+        paragraphs.retain(|p| !p.starts_with("Name `"));
+        paragraphs.join("\n\n")
+    }
+}
 
-            /// The role of this name (`"popover"`), if any.
-            pub fn from_name(name: &str) -> Option<Role> {
-                match name {
-                    $($name => Some(Role::$variant),)*
-                    _ => None,
-                }
-            }
+/// Declares role constants with their docs, and `all()`, which lists them
+/// as [`RoleSpec`]s for a UI set's registry ([`super::Registry::roles`]):
+/// `pub NAME: Type = "name"`, each under its doc comment.
+#[macro_export]
+macro_rules! roles {
+    ($( $(#[doc = $doc:literal])* $vis:vis $role:ident: $ty:ty = $name:expr ),* $(,)?) => {
+        $(
+            $(#[doc = $doc])*
+            $vis const $role: $ty = <$ty>::new($name);
+        )*
+
+        /// These roles with their docs, for a UI set's registry
+        /// (`Registry::roles`).
+        pub fn all() -> ::std::vec::Vec<$crate::element::RoleSpec> {
+            ::std::vec![
+                $( $crate::element::RoleSpec::new($role, ::core::concat!($($doc, "\n"),*)) ),*
+            ]
         }
     };
 }
 
-roles! {
-    /// The app's background.
-    Background = "background",
-    /// Text and icons on the background.
-    Foreground = "foreground",
-    /// Cards.
-    Card = "card",
-    /// Text on cards.
-    CardForeground = "card-foreground",
-    /// Popovers, menus, tooltips, alerts.
-    Popover = "popover",
-    /// Text on popovers.
-    PopoverForeground = "popover-foreground",
-    /// The main action: buttons, the tab bar's and alerts' tint.
-    Primary = "primary",
-    /// Text on the main action.
-    PrimaryForeground = "primary-foreground",
-    /// Secondary actions.
-    Secondary = "secondary",
-    /// Text on secondary actions.
-    SecondaryForeground = "secondary-foreground",
-    /// Muted surfaces.
-    Muted = "muted",
-    /// Secondary text: hints, captions, an alert's message.
-    MutedForeground = "muted-foreground",
-    /// What is hovered or highlighted: menu items, list rows.
-    Accent = "accent",
-    /// Text on what is highlighted.
-    AccentForeground = "accent-foreground",
-    /// Destructive actions and errors.
-    Destructive = "destructive",
-    /// Borders and dividers.
-    Border = "border",
-    /// The borders of inputs.
-    Input = "input",
-    /// Focus rings.
-    Ring = "ring",
-    /// A chart's first series.
-    Chart1 = "chart-1",
-    /// A chart's second series.
-    Chart2 = "chart-2",
-    /// A chart's third series.
-    Chart3 = "chart-3",
-    /// A chart's fourth series.
-    Chart4 = "chart-4",
-    /// A chart's fifth series.
-    Chart5 = "chart-5",
-    /// The sidebar.
-    Sidebar = "sidebar",
-    /// Text on the sidebar.
-    SidebarForeground = "sidebar-foreground",
-    /// The sidebar's main action.
-    SidebarPrimary = "sidebar-primary",
-    /// Text on the sidebar's main action.
-    SidebarPrimaryForeground = "sidebar-primary-foreground",
-    /// What is highlighted in the sidebar.
-    SidebarAccent = "sidebar-accent",
-    /// Text on what is highlighted in the sidebar.
-    SidebarAccentForeground = "sidebar-accent-foreground",
-    /// The sidebar's borders.
-    SidebarBorder = "sidebar-border",
-    /// Focus rings in the sidebar.
-    SidebarRing = "sidebar-ring",
-    /// The highlight of a selection (`nsh-base` draws `primary` at 22 %
-    /// when the theme has none).
-    Selection = "selection",
-    /// The corner radius.
-    Radius = "radius",
-    /// The app's default font family.
-    FontSans = "font-sans",
-    /// The monospaced font family.
-    FontMono = "font-mono",
+/// The roles the core and the platforms' own controls draw with. A UI set
+/// has more of its own (`nsh_base::role`).
+pub mod role {
+    use super::{FontRole, Role};
+
+    crate::roles! {
+        /// Popovers, menus, tooltips, alerts.
+        pub POPOVER: Role = "popover",
+        /// Text on popovers.
+        pub POPOVER_FOREGROUND: Role = "popover-foreground",
+        /// The main action: buttons, the tab bar's and alerts' tint.
+        pub PRIMARY: Role = "primary",
+        /// What is hovered or highlighted: menu items, list rows.
+        pub ACCENT: Role = "accent",
+        /// Text on what is highlighted.
+        pub ACCENT_FOREGROUND: Role = "accent-foreground",
+        /// Secondary text: hints, captions, an alert's message.
+        pub MUTED_FOREGROUND: Role = "muted-foreground",
+        /// Borders and dividers.
+        pub BORDER: Role = "border",
+        /// Destructive actions and errors.
+        pub DESTRUCTIVE: Role = "destructive",
+        /// The app's default font family.
+        pub FONT_SANS: FontRole = super::FONT_SANS,
+    }
 }
 
 /// A token's value.
@@ -189,6 +349,8 @@ pub enum Token {
     Font(Arc<str>),
     /// Box shadows, per appearance.
     Shadow(AdaptiveShadow),
+    /// Gradients, per appearance.
+    Gradient(AdaptiveGradient),
 }
 
 /// Makes the tokens of a theme file's content (`Some`), or the defaults
@@ -222,11 +384,11 @@ pub struct ThemeTokens {
 
 /// What of `left_out` refuses a file read whole: every value that could not
 /// be read, `; `-separated, but no name only that no theme type declares.
-fn refused(left_out: &[String]) -> Option<String> {
-    let what: Vec<&str> = left_out
+fn refused(left_out: &[super::theme_file::LeftOut]) -> Option<String> {
+    let what: Vec<String> = left_out
         .iter()
-        .filter(|w| !super::theme_file::is_undeclared(w))
-        .map(String::as_str)
+        .filter(|l| !l.is_undeclared())
+        .map(ToString::to_string)
         .collect();
     (!what.is_empty()).then(|| what.join("; "))
 }
@@ -253,7 +415,7 @@ impl ThemeTokens {
     /// Under theme types a name no type declares is left out, not refused
     /// (#1190). `None`: no UI set reads themes.
     pub fn checked(&self, json: &str) -> Option<Result<Tokens, String>> {
-        Some(match self.provider.as_ref()?.read(Some(json)) {
+        Some(match self.provider.as_ref()?.read_left_out(Some(json)) {
             Ok((app, left_out)) => match refused(&left_out) {
                 None => Ok(self.under_host(app)),
                 Some(what) => Err(what),
@@ -268,20 +430,23 @@ impl ThemeTokens {
     /// the embedding app's. Read whole: `Err` as [`ThemeTokens::checked`].
     /// `None`: no UI set reads theme changes.
     pub fn updated(&self, current: &Tokens, json: &str) -> Option<Result<Tokens, String>> {
-        Some(match self.provider.as_ref()?.overrides(json, current)? {
-            Ok((part, left_out)) => match refused(&left_out) {
-                None => Ok(self.under_host(part).over(current)),
-                Some(what) => Err(what),
+        Some(
+            match self.provider.as_ref()?.overrides_left_out(json, current)? {
+                Ok((part, left_out)) => match refused(&left_out) {
+                    None => Ok(self.under_host(part).over(current)),
+                    Some(what) => Err(what),
+                },
+                Err(e) => Err(e),
             },
-            Err(e) => Err(e),
-        })
+        )
     }
 
     /// The tokens drawn with once the tokens `names` (`None`: every one)
     /// go back to their values in the app's theme file `json` (`nsh`'s
     /// `resetTheme`), the others staying as in `current`: a name the file
-    /// and the defaults lack is gone. `None`: no UI set reads themes, or
-    /// `json` is not one.
+    /// and the defaults lack is gone. Under theme types a role's name is
+    /// the token it is mapped onto, as in a theme file. `None`: no UI set
+    /// reads themes, or `json` is not one.
     pub fn reset(
         &self,
         current: &Tokens,
@@ -294,9 +459,37 @@ impl ThemeTokens {
         };
         let mut out = current.clone();
         for name in names {
+            let name = match &self.provider {
+                Some(provider) => provider.token_name(name),
+                None => name,
+            };
             out.copy_named(&theme, name);
         }
         Some(out)
+    }
+
+    /// The tokens a [`super::ThemeScope`] draws with: the values theme
+    /// file `json` sets, over `current` (the tokens around the scope,
+    /// which a `var()` it does not set names). A scope sets values and adds
+    /// no names: a name `current` lacks is left out, as a value that cannot
+    /// be read is, each said in the second part. `Err`: `json` is no theme
+    /// file. `None`: no UI set reads theme changes.
+    pub fn scoped(
+        &self,
+        current: &Tokens,
+        json: &str,
+    ) -> Option<Result<(Tokens, Vec<String>), String>> {
+        let read = self.provider.as_ref()?.overrides_left_out(json, current)?;
+        Some(read.map(|(part, left_out)| {
+            let mut said: Vec<String> = left_out.iter().map(ToString::to_string).collect();
+            let (tokens, unknown) = part.within(current);
+            said.extend(
+                unknown
+                    .iter()
+                    .map(|name| format!("`{name}`: the theme has no token of this name")),
+            );
+            (tokens, said)
+        }))
     }
 
     /// `app` under the embedding app's tokens.
@@ -372,6 +565,21 @@ impl Tokens {
         self.shadows.iter().map(|(k, s)| (&**k, s))
     }
 
+    /// The gradients named `name` (`background-image-hero`).
+    pub fn gradient(&self, name: &str) -> Option<&AdaptiveGradient> {
+        self.gradients.get(name)
+    }
+
+    /// Sets the gradients named `name`.
+    pub fn set_gradient(&mut self, name: &str, gradient: impl Into<AdaptiveGradient>) {
+        self.gradients.insert(name.into(), gradient.into());
+    }
+
+    /// Each gradient token by name.
+    pub fn gradients(&self) -> impl Iterator<Item = (&str, &AdaptiveGradient)> {
+        self.gradients.iter().map(|(k, g)| (&**k, g))
+    }
+
     /// The token named `name`, of any kind (a color first, as classes take
     /// it).
     pub fn get(&self, name: &str) -> Option<Token> {
@@ -384,56 +592,70 @@ impl Tokens {
         if let Some(f) = self.fonts.get(name) {
             return Some(Token::Font(f.clone()));
         }
-        self.shadows.get(name).cloned().map(Token::Shadow)
+        if let Some(s) = self.shadows.get(name) {
+            return Some(Token::Shadow(s.clone()));
+        }
+        self.gradients.get(name).cloned().map(Token::Gradient)
     }
 
-    /// These tokens with `roles` mapped onto the tokens named (over the
-    /// roles they map already): [`Tokens::role_color`] and the others
-    /// read a role's token through them.
-    pub fn with_roles<S: Into<Box<str>>>(
+    /// These tokens with `role` mapped onto the token named `token` (in
+    /// place of the one it was mapped onto): [`Tokens::role`] reads it
+    /// through the mapping.
+    pub fn with_role<V: RoleValue>(self, role: Role<V>, token: impl Into<Box<str>>) -> Self {
+        self.with_roles([(role, token)])
+    }
+
+    /// These tokens with each of `roles` mapped onto the token named, as
+    /// [`Tokens::with_role`] maps one: roles of several kinds as
+    /// [`AnyRole`]s (`role.into()`).
+    pub fn with_roles<R: Into<AnyRole>, S: Into<Box<str>>>(
         mut self,
-        roles: impl IntoIterator<Item = (Role, S)>,
+        roles: impl IntoIterator<Item = (R, S)>,
     ) -> Self {
         let mut map = self.roles.as_deref().cloned().unwrap_or_default();
-        map.extend(roles.into_iter().map(|(role, name)| (role, name.into())));
+        map.extend(
+            roles
+                .into_iter()
+                .map(|(role, token)| (role.into().name().into(), token.into())),
+        );
         self.roles = (!map.is_empty()).then(|| Arc::new(map));
         self
     }
 
-    /// Each role mapped onto a token of another name, with that name.
-    pub fn roles(&self) -> impl Iterator<Item = (Role, &str)> {
+    /// Each role mapped onto a token of another name: the role's name and
+    /// the token's.
+    pub fn roles(&self) -> impl Iterator<Item = (&str, &str)> {
         self.roles
             .iter()
             .flat_map(|r| r.iter())
-            .map(|(role, name)| (*role, &**name))
+            .map(|(role, token)| (&**role, &**token))
+    }
+
+    /// The name of the token the role named `role` is mapped onto, if a
+    /// theme mapped it: for a role known by its name alone, as TS's
+    /// `role()` knows one ([`Tokens::role`] reads a role constant).
+    pub fn mapped(&self, role: &str) -> Option<&str> {
+        self.roles.as_ref()?.get(role).map(|token| &**token)
+    }
+
+    /// Whether `other` maps the same roles onto the same tokens.
+    pub fn same_roles(&self, other: &Tokens) -> bool {
+        self.roles == other.roles
     }
 
     /// The name of the token `role` reads: the one a theme mapped it onto,
     /// else its own ([`Role::name`]).
-    pub fn role_name(&self, role: Role) -> &str {
-        self.roles
-            .as_ref()
-            .and_then(|r| r.get(&role))
-            .map_or(role.name(), |name| name)
+    pub fn role_name<V>(&self, role: Role<V>) -> &str {
+        self.mapped(role.name()).unwrap_or(role.name())
     }
 
-    /// The color `role` draws with: its token's ([`Tokens::role_name`]),
-    /// else the one of its own name.
-    pub fn role_color(&self, role: Role) -> Option<AdaptiveColor> {
-        self.color(self.role_name(role))
-            .or_else(|| self.color(role.name()))
-    }
-
-    /// The number `role` draws with, as [`Tokens::role_color`].
-    pub fn role_number(&self, role: Role) -> Option<f32> {
-        self.number(self.role_name(role))
-            .or_else(|| self.number(role.name()))
-    }
-
-    /// The font family `role` draws with, as [`Tokens::role_color`].
-    pub fn role_font(&self, role: Role) -> Option<&Arc<str>> {
-        self.font(self.role_name(role))
-            .or_else(|| self.font(role.name()))
+    /// What `role` draws with: the token a theme mapped it onto, else the
+    /// one of its own name. A color for a [`Role`], a number for a
+    /// [`NumberRole`], a font family for a [`FontRole`].
+    pub fn role<V: RoleValue>(&self, role: Role<V>) -> Option<V> {
+        self.mapped(role.name())
+            .and_then(|token| V::read(self, token))
+            .or_else(|| V::read(self, role.name()))
     }
 
     /// Whether the app is drawn with a theme of its own: tokens other than
@@ -458,6 +680,7 @@ impl Tokens {
             && self.dark_numbers.is_empty()
             && self.fonts.is_empty()
             && self.shadows.is_empty()
+            && self.gradients.is_empty()
     }
 
     /// Each color by name.
@@ -478,6 +701,60 @@ impl Tokens {
     /// Each font family by name.
     pub fn fonts(&self) -> impl Iterator<Item = (&str, &Arc<str>)> {
         self.fonts.iter().map(|(k, f)| (&**k, f))
+    }
+
+    /// Gives token `to` what token `from` is, of whatever kind, unless
+    /// there is a `to` of that kind already; `from` stays.
+    pub(crate) fn copy_as(&mut self, from: &str, to: &str) {
+        fn copy<V: Clone>(map: &mut FxHashMap<Box<str>, V>, from: &str, to: &str) {
+            if !map.contains_key(to)
+                && let Some(value) = map.get(from).cloned()
+            {
+                map.insert(to.into(), value);
+            }
+        }
+        copy(&mut self.colors, from, to);
+        // A number's dark value goes with its light one, not onto another.
+        if !self.numbers.contains_key(to) && self.numbers.contains_key(from) {
+            copy(&mut self.dark_numbers, from, to);
+        }
+        copy(&mut self.numbers, from, to);
+        copy(&mut self.fonts, from, to);
+        copy(&mut self.shadows, from, to);
+        copy(&mut self.gradients, from, to);
+    }
+
+    /// These tokens over `base` as a scope's values are over the tokens
+    /// around it ([`super::ThemeScope`]): the values of the names `base`
+    /// has. The names it lacks are left out and returned, sorted.
+    pub fn within(mut self, base: &Tokens) -> (Tokens, Vec<Box<str>>) {
+        let mut unknown: Vec<Box<str>> = self
+            .colors
+            .keys()
+            .chain(self.numbers.keys())
+            .chain(self.dark_numbers.keys())
+            .chain(self.fonts.keys())
+            .chain(self.shadows.keys())
+            .chain(self.gradients.keys())
+            .filter(|name| base.get(name).is_none())
+            .cloned()
+            .collect();
+        unknown.sort();
+        unknown.dedup();
+        for name in &unknown {
+            self.remove_named(name);
+        }
+        (self.over(base), unknown)
+    }
+
+    /// Removes token `name`, of whatever kind.
+    pub(crate) fn remove_named(&mut self, name: &str) {
+        self.colors.remove(name);
+        self.numbers.remove(name);
+        self.dark_numbers.remove(name);
+        self.fonts.remove(name);
+        self.shadows.remove(name);
+        self.gradients.remove(name);
     }
 
     /// Makes token `name` what it is in `from`, of whatever kind, or
@@ -502,16 +779,37 @@ impl Tokens {
         copy(&mut self.dark_numbers, &from.dark_numbers, name);
         copy(&mut self.fonts, &from.fonts, name);
         copy(&mut self.shadows, &from.shadows, name);
+        copy(&mut self.gradients, &from.gradients, name);
     }
 
     /// `self` with the tokens of `base` it does not have.
     pub fn over(&self, base: &Tokens) -> Tokens {
+        self.over_with(base, false)
+    }
+
+    /// [`Tokens::over`] for tokens a theme type's fields wrote
+    /// ([`super::set_theme`]). A number field is its token's light value
+    /// and knows no dark one, so a number `self` leaves at the light value
+    /// `base` has keeps the dark value `base` has; one it changes is its
+    /// value in both appearances, as [`Tokens::set_number`] makes it.
+    pub(crate) fn over_as_fields(&self, base: &Tokens) -> Tokens {
+        self.over_with(base, true)
+    }
+
+    /// `self` over `base`; `fields`: as a theme type's fields
+    /// ([`Tokens::over_as_fields`]).
+    fn over_with(&self, base: &Tokens, fields: bool) -> Tokens {
         let mut out = base.clone();
         out.colors
             .extend(self.colors.iter().map(|(k, c)| (k.clone(), *c)));
         // A number of `self` is its values: a dark one of `base`'s goes
         // unless `self` has its own.
         for (k, n) in &self.numbers {
+            let unchanged =
+                fields && !self.dark_numbers.contains_key(k) && base.numbers.get(k) == Some(n);
+            if unchanged {
+                continue;
+            }
             out.numbers.insert(k.clone(), *n);
             out.dark_numbers.remove(k);
         }
@@ -521,11 +819,13 @@ impl Tokens {
             .extend(self.fonts.iter().map(|(k, f)| (k.clone(), f.clone())));
         out.shadows
             .extend(self.shadows.iter().map(|(k, s)| (k.clone(), s.clone())));
+        out.gradients
+            .extend(self.gradients.iter().map(|(k, g)| (k.clone(), g.clone())));
         if let Some(roles) = &self.roles {
             out.roles = match out.roles {
                 Some(base) => {
                     let mut map = Arc::unwrap_or_clone(base);
-                    map.extend(roles.iter().map(|(r, n)| (*r, n.clone())));
+                    map.extend(roles.iter().map(|(r, n)| (r.clone(), n.clone())));
                     Some(Arc::new(map))
                 }
                 None => Some(roles.clone()),
@@ -589,19 +889,80 @@ mod tests {
     }
 }
 
+/// Tokens a theme type's fields wrote, over the app's
+/// ([`Tokens::over_as_fields`]): a number left at its light value keeps the
+/// dark one.
+#[cfg(test)]
+mod theme_set_numbers {
+    use super::*;
+    use crate::color::rgb;
+
+    fn base() -> Tokens {
+        let mut base = Tokens::default();
+        base.set_number("radius-card", 10.0);
+        base.set_dark_number("radius-card", 6.0);
+        base.set_number("spacing-gutter", 16.0);
+        base.set_color("ink", rgb(0x111111).into());
+        base
+    }
+
+    #[test]
+    fn a_number_at_its_light_value_keeps_the_dark_one() {
+        let mut fields = Tokens::default();
+        fields.set_number("radius-card", 10.0);
+        fields.set_color("ink", rgb(0x222222).into());
+        let tokens = fields.over_as_fields(&base());
+        assert_eq!(tokens.number_in("radius-card", false), Some(10.0));
+        assert_eq!(tokens.number_in("radius-card", true), Some(6.0));
+        assert_eq!(tokens.color("ink"), Some(rgb(0x222222).into()));
+        assert_eq!(tokens.number("spacing-gutter"), Some(16.0));
+        // By name, a number set is both appearances'.
+        assert_eq!(
+            fields.over(&base()).number_in("radius-card", true),
+            Some(10.0)
+        );
+    }
+
+    #[test]
+    fn a_number_that_changes_or_is_new_is_both_appearances() {
+        let mut fields = Tokens::default();
+        fields.set_number("radius-card", 12.0);
+        fields.set_number("radius-chip", 4.0);
+        let tokens = fields.over_as_fields(&base());
+        assert_eq!(tokens.number_in("radius-card", false), Some(12.0));
+        assert_eq!(tokens.number_in("radius-card", true), Some(12.0));
+        assert_eq!(tokens.number_in("radius-chip", true), Some(4.0));
+    }
+
+    #[test]
+    fn a_number_written_with_a_dark_value_takes_it() {
+        let mut fields = Tokens::default();
+        fields.set_number("radius-card", 10.0);
+        fields.set_dark_number("radius-card", 8.0);
+        let tokens = fields.over_as_fields(&base());
+        assert_eq!(tokens.number_in("radius-card", false), Some(10.0));
+        assert_eq!(tokens.number_in("radius-card", true), Some(8.0));
+    }
+}
+
 /// Roles: what NSH's own parts draw with, read through a theme's mapping.
+/// A role is a constant its crate declares, of the kind it reads.
 #[cfg(test)]
 mod theme_roles {
     use super::*;
     use crate::color::rgb;
 
+    /// Roles of a UI set's own, as `nsh-base` declares its.
+    const CARD: Role = Role::new("card");
+    const RADIUS: NumberRole = Role::new("radius");
+
     #[test]
     fn a_role_reads_the_token_of_its_name_without_a_mapping() {
         let tokens = sample();
-        assert_eq!(tokens.role_color(Role::Popover), tokens.color("popover"));
-        assert_eq!(tokens.role_number(Role::Radius), tokens.number("radius"));
+        assert_eq!(tokens.role(role::POPOVER), tokens.color("popover"));
+        assert_eq!(tokens.role(RADIUS), tokens.number("radius"));
         assert_eq!(
-            tokens.role_name(Role::PopoverForeground),
+            tokens.role_name(role::POPOVER_FOREGROUND),
             "popover-foreground"
         );
         assert_eq!(tokens.roles().count(), 0);
@@ -614,46 +975,92 @@ mod theme_roles {
         tokens.set_color("popover", rgb(0xffffff).into());
         tokens.set_number("radius-control", 6.0);
         tokens.set_font("font-body", "Inter");
-        let tokens = tokens.with_roles([
-            (Role::Popover, "surface-overlay"),
-            (Role::Radius, "radius-control"),
-            (Role::FontSans, "font-body"),
-            (Role::Primary, "action"),
-        ]);
-        assert_eq!(tokens.role_color(Role::Popover), Some(rgb(0x123456).into()));
-        assert_eq!(tokens.role_number(Role::Radius), Some(6.0));
-        assert_eq!(
-            tokens.role_font(Role::FontSans).map(|f| &**f),
-            Some("Inter")
-        );
+        let tokens = tokens
+            .with_role(role::POPOVER, "surface-overlay")
+            .with_role(RADIUS, "radius-control")
+            .with_role(role::FONT_SANS, "font-body")
+            .with_role(role::PRIMARY, "action");
+        assert_eq!(tokens.role(role::POPOVER), Some(rgb(0x123456).into()));
+        assert_eq!(tokens.role(RADIUS), Some(6.0));
+        assert_eq!(tokens.role(role::FONT_SANS).as_deref(), Some("Inter"));
         // The token it maps onto is missing: the role's own name.
-        assert_eq!(tokens.role_color(Role::Primary), None);
+        assert_eq!(tokens.role(role::PRIMARY), None);
         // A role is no token.
         assert_eq!(
             tokens.get("popover"),
             Some(Token::Color(rgb(0xffffff).into()))
         );
         assert!(tokens.color("primary").is_none());
+        let mut mapped: Vec<_> = tokens.roles().collect();
+        mapped.sort();
+        assert_eq!(
+            mapped,
+            [
+                ("font-sans", "font-body"),
+                ("popover", "surface-overlay"),
+                ("primary", "action"),
+                ("radius", "radius-control"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_role_mapped_onto_a_token_that_is_missing_reads_its_own_name() {
+        let mut tokens = Tokens::default();
+        tokens.set_color("popover", rgb(0xffffff).into());
+        let tokens = tokens.with_role(role::POPOVER, "nowhere");
+        assert_eq!(tokens.role(role::POPOVER), Some(rgb(0xffffff).into()));
+        assert_eq!(tokens.role_name(role::POPOVER), "nowhere");
     }
 
     #[test]
     fn over_keeps_the_roles_of_both_and_the_tops_win() {
-        let base = Tokens::default().with_roles([(Role::Popover, "a"), (Role::Card, "b")]);
-        let top = Tokens::default().with_roles([(Role::Popover, "c")]);
+        let base = Tokens::default()
+            .with_role(role::POPOVER, "a")
+            .with_role(CARD, "b");
+        let top = Tokens::default().with_role(role::POPOVER, "c");
         let tokens = top.over(&base);
-        assert_eq!(tokens.role_name(Role::Popover), "c");
-        assert_eq!(tokens.role_name(Role::Card), "b");
+        assert_eq!(tokens.role_name(role::POPOVER), "c");
+        assert_eq!(tokens.role_name(CARD), "b");
         let plain = Tokens::default().over(&base);
-        assert_eq!(plain.role_name(Role::Card), "b");
+        assert_eq!(plain.role_name(CARD), "b");
     }
 
     #[test]
-    fn names_are_shadcns_and_read_back() {
-        for role in Role::ALL {
-            assert_eq!(Role::from_name(role.name()), Some(*role));
-        }
-        assert_eq!(Role::Selection.name(), "selection");
-        assert_eq!(Role::from_name("surface"), None);
+    fn a_role_is_its_name_whoever_declares_it() {
+        // Another crate's constant of the same name is the same role.
+        const THEIRS: Role = Role::new("popover");
+        assert_eq!(THEIRS, role::POPOVER);
+        assert_ne!(CARD, role::POPOVER);
+        let mut tokens = Tokens::default();
+        tokens.set_color("surface-overlay", rgb(0x123456).into());
+        let tokens = tokens.with_role(role::POPOVER, "surface-overlay");
+        assert_eq!(tokens.role(THEIRS), Some(rgb(0x123456).into()));
+        assert_eq!(role::POPOVER.name(), "popover");
+        assert_eq!(role::FONT_SANS.name(), FONT_SANS);
+        assert_eq!(format!("{CARD:?}"), r#"Role("card")"#);
+    }
+
+    #[test]
+    fn roles_of_several_kinds_are_listed_as_any_role() {
+        let any: AnyRole = RADIUS.into();
+        assert_eq!((any.name(), any.kind()), ("radius", RoleKind::Number));
+        assert_eq!(AnyRole::from(role::POPOVER).kind(), RoleKind::Color);
+        assert_eq!(AnyRole::from(role::FONT_SANS).kind(), RoleKind::Font);
+        // One known by its name alone, as the toolchain knows an app's.
+        assert_eq!(
+            AnyRole::new(String::from("popover"), RoleKind::Color),
+            role::POPOVER.into()
+        );
+        let tokens = Tokens::default().with_roles([
+            (AnyRole::from(role::POPOVER), "surface-overlay"),
+            (RADIUS.into(), "radius-control"),
+        ]);
+        assert_eq!(tokens.role_name(role::POPOVER), "surface-overlay");
+        assert_eq!(tokens.role_name(RADIUS), "radius-control");
+        // Mapped again, a role reads the later token.
+        let tokens = tokens.with_role(role::POPOVER, "sheet");
+        assert_eq!(tokens.role_name(role::POPOVER), "sheet");
     }
 
     #[test]

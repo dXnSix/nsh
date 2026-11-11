@@ -140,7 +140,12 @@ Windows, Linux, GPUI and iOS.
 Code for every platform, the web included, uses NSH's services: `fetch` for HTTP
 ([Networking](./networking.md#from-rust-components)), `timer`, `set_timeout` and `set_interval` for waiting,
 `nsh_core::time::Instant` and `nsh_core::time::unix_ms()` for the clock. `background` and `blocking` run work on the
-native targets' threads.
+native targets' threads. `run_on_main_thread(f)` runs `f` on the platform's main thread, for APIs that only work there
+(AppKit's status items, UIKit): after the views of the current turn are mounted, and its result is a future to await
+on the engine thread. A module function that is not `async` calls `cx.run_on_main_thread(f)`. On the web and in
+headless tests `f` runs on the engine thread at the end of the commit, and on the native platforms later, while the
+engine goes on: await the result to know that `f` ran. `f` returns a value, and the code that awaits it writes signals
+and calls NSH's functions with it.
 
 ## Desktop title bars
 
@@ -366,8 +371,8 @@ prop keeps its value and the rest of the component renders.
 A function or a member runs the way its Rust signature says. One that is not `async` runs inside the TSX call and
 returns its value (`Portfolio.total()` is a number, `ledger.balance` a property): it computes and keeps state. An
 `async fn` returns a Promise and runs as a task with NSH's services (`fetch`, `timer`, dialogs). A module function
-taking `cx: &mut ModuleCx` reaches the platform in order with the UI (a toast, the status bar), and so does a
-component's ref method; their return type decides what TSX gets: one returning `()` gives `void`, with no reply
+taking `cx: &mut ModuleCx` reaches the platform in order with the UI (a toast, the status bar) and may `spawn` a
+task, which runs to its end. A component's ref method also reaches the platform in order with the UI; their return type decides what TSX gets: one returning `()` gives `void`, with no reply
 (TSX calls it and moves on); one returning `Result<(), E>` gives `Promise<void>`, which rejects with the `Err`'s
 message (the call runs with the UI's changes, after the TSX call returned, so the Promise carries its error; one
 nobody awaits or catches is logged as an [unhandled rejection](./dev-server-and-debugging.md#logs)); one
@@ -575,6 +580,12 @@ values of the light appearance, `dark` those of the dark one, and `theme` those 
   fallback: `var(--brand, #7c3aed)`). Lengths are `rem` (16 points) or `px` (points). Fonts are font family lists:
   the first family that is not a generic one is used, and a generic first family (`system-ui`, `sans-serif`) is the
   system font.
+- **Gradients.** A `background-image-<n>` written as CSS gradients (`"background-image-hero": "linear-gradient(135deg,
+  #7c3aed, #db2777)"`, per appearance in `light` and `dark`) is a gradient token:
+  `tokens().gradient("background-image-hero")` is an `AdaptiveGradient`, and
+  `.adaptive_gradient(move || tokens().gradient("background-image-hero").cloned().unwrap_or_default())` draws it as
+  the background, following theme changes and switching with the appearance natively as `.bg(..)` does.
+  `AdaptiveGradient::parse("linear-gradient(…)")` reads gradients of the app's own, the same in both.
 - **Shadows.** A `shadow-<n>` written as CSS `box-shadow` (`"shadow-raised": "0 1px 2px #0000001a"`, per appearance in
   `light` and `dark`) is a shadow token: `tokens().shadow("shadow-raised")` is an `AdaptiveShadow`, and
   `.adaptive_shadow(move || tokens().shadow("shadow-raised").cloned().unwrap_or_default())` draws it, following theme
@@ -658,6 +669,7 @@ read it (`radius-card`: `radius-surface-card`, `rounded-surface-card`). `#[deriv
 struct's fields:
 
 ```rust
+use nsh_base::role;
 use nsh_core::prelude::*;
 
 /// The design system's tokens.
@@ -667,10 +679,10 @@ pub struct DsTheme {
     #[token(color)]
     pub surface_raised: AdaptiveColor,
     /// Popovers and menus.
-    #[token(color, role = "popover")]
+    #[token(color, role = role::POPOVER)]
     pub surface_overlay: AdaptiveColor,
     /// The main action.
-    #[token(color, role = "primary")]
+    #[token(color, role = role::PRIMARY)]
     pub action: AdaptiveColor,
     /// Cards' corners.
     #[token(radius)]
@@ -694,15 +706,19 @@ impl Default for DsTheme {
   `rounded-card`), `spacing` (`spacing-*`), `text` (`text-*`), `weight` (`font-weight-*`), `tracking`, `leading`,
   `blur`, `font` (`font-*`) and `shadow` (`shadow-*`). A color is an `AdaptiveColor`, a number an `f32` or `Points`, a
   font family a `SharedString` or `String`, a shadow an `AdaptiveShadow`. `name = "…"` names a token (a namespaced
-  kind's name keeps its namespace: `#[token(radius, name = "radius-corner")]`), `role = "…"` maps a role onto it.
+  kind's name keeps its namespace: `#[token(radius, name = "radius-corner")]`), `role = <path>` maps a role onto it,
+  the role's constant by its path (`nsh_base::role::POPOVER`, or a component library's own), once for each role it
+  plays (`#[token(color, role = role::CARD, role = role::POPOVER)]`: one surface for both). The compiler refuses a
+  path that is no role, and a role that reads another kind than the token holds (a radius' role on a color).
 - `#[token(nested)]` holds another `AppTheme` type, its names under `<field>-` as above (`surface: Surface` with
   `raised`: `surface-raised`, with `#[token(shadow)] raised`: `shadow-surface-raised`), read as
   `theme_of::<DsTheme>().surface.raised`. A name the tokens lack keeps the inner type's `Default`, not the value the
   outer `Default` gives the field. `#[token(flatten)]` is the same with no prefix; `#[token(skip)]` is no token (the
   field keeps `Default`'s value).
 - A number field is its token's light value, as `number()` is: read a dark value with `tokens().number_in("radius-card",
-  dark())`, or draw with the class (`rounded-card`), which follows the appearance. `set_theme` writes one value per
-  number, so it drops a dark value the theme file gave; `update_theme` changes only the fields its patch sets.
+  dark())`, or draw with the class (`rounded-card`), which follows the appearance. `set_theme` keeps the dark value
+  of a number it leaves at its value, and a number it changes is that value in both appearances; `update_theme`
+  changes only the fields its patch sets.
 - A field's doc comment is its token's, which `.nsh/types/nsh/tokens.d.ts` shows on `token()`.
 - It makes `DsThemePatch`, each field an `Option` (a nested one its type's patch) documented with its token and the
   classes that read it, for `update_theme`.
@@ -747,16 +763,28 @@ reset_theme::<DsTheme>(); // the app's action again
   app's theme (`nsh.json`'s over the types' defaults). They apply in order with the app's other actions, as
   `update_tokens` does; a synchronous `#[module]` function has `cx.set_theme(..)`, `cx.update_theme::<T>(..)` and
   `cx.reset_theme::<T>()` of its `ModuleCx`.
+- A number field is its token's light value. `set_theme` leaves the dark value of a number whose value it does not
+  change, so reading a theme, changing one field and setting it changes that field only:
+  `let mut t = (*theme_of::<DsTheme>()).clone(); t.action = red; set_theme(t);`. A number it does change, and one a
+  patch sets, is that value in both appearances; give it a dark value again with `Tokens::set_dark_number` and
+  `update_tokens`.
 
-**Roles.** NSH's own parts draw with roles (`Role`: `popover`, `primary`, `border`, `radius`, `font-sans`, …;
-[Theme roles](../modules/nsh-base.md#theme-roles)). A type maps roles onto its tokens with `TokenSpec::role`, so
+**Roles.** NSH's own parts draw with roles, constants of the crate that draws with them (`nsh_base::role`: `POPOVER`,
+`PRIMARY`, `BORDER`, `RADIUS`, `FONT_SANS`, …; [Theme roles](../modules/nsh-base.md#theme-roles)), and a crate with
+components of its own declares its roles the same way (`pub const BANNER: Role = Role::new("banner");`). A type maps
+roles onto its tokens with `TokenSpec::role`, a color token a color's role, a number a number's, a font a font's, so
 `nsh_base`'s `theme()` fields and components, the tab bar, the platforms' menus and alerts, and the default font draw
 with the type's tokens: above, `theme().popover` is the design system's `surface-overlay` and `theme().primary` its
-`action`.
+`action`. A token may play several roles (`.role(role::CARD).role(role::POPOVER)`): a design system with one surface
+for cards and popovers maps both onto it, and both follow every change of it. A role is played by one token.
+
+A set lists the roles its components draw with in its registry, mapped by a theme or not, so the toolchain knows
+them: `registry.roles(role::all())`, where `nsh_core::roles! { /// A banner's surface. pub BANNER: Role = "banner", }`
+writes the constants with `all()` beside them. `nsh/base` lists its own.
 
 **Names.** A token's name says what its kind is, as a CSS variable's does: a font's starts with `font-`, a shadow's
 with `shadow-`, a weight's with `font-weight-`, and no other kind's with `font-`. Registering a type whose name and
-kind disagree, or that declares a name or maps a role twice, panics.
+kind disagree, that declares a name or maps a role twice, or whose token plays a role of another kind, panics.
 
 **Several types.** A design system's crate and the app's crate each register their own type: the design system's
 tokens, and the app's own beside them (`odds-up` for a betting app). Each reads its own with `theme_of`, and the names
@@ -768,8 +796,12 @@ read as its declared kind (a color as a CSS color, a radius as a length). A role
 mapped onto: `"primary"` below sets the design system's `action`. `var(--surface-raised)` names a token the file
 sets, else the types' default. A name that no type declares, or a value of another kind, is a build warning and is
 left out when the app runs. A key that is a role's name, in a section that also sets the token the role is mapped
-onto, gives way to that token. An embedding app's theme overrides and TSX's `setTheme` and `updateTheme` read their
-files the same way: they leave a name no type declares out, and refuse a value they cannot read.
+onto, gives way to that token; so does the second of two roles' names that set one token to two values. An embedding
+app's theme overrides and TSX's `setTheme` and `updateTheme` read their files the same way: they leave a name no type
+declares out, and refuse a value they cannot read. `resetTheme` reads its names the same way: a role's name gives the
+token the role is mapped onto its value in the app's theme back. Beside `cssVars`, a file's `"roles"` maps a role
+no type maps onto one of the types' tokens (`"roles": { "warning": "status-caution" }`); a role a type maps is the
+type's, and the file's mapping of it is left out.
 
 ```json
 {
@@ -787,7 +819,10 @@ files the same way: they leave a name no type declares out, and refuse a value t
 
 **nsh-base's theme.** `nsh_base::Theme` is a theme type too, left unregistered so it stays the default source:
 `theme()` is `theme_of::<Theme>()`, and a shadcn app changes some of its tokens with `update_theme::<Theme>(tokens)`,
-a patch of `Tokens` by name.
+a patch of `Tokens` by name. In an app with a theme type of its own, `Theme`'s setters set what its fields read: a
+token whose role the app's type maps is the token the role is mapped onto (`popover`, above, is the design system's
+`surface-overlay`), as that name is in a theme file. So `let mut t = (*theme()).clone(); t.popover = c; set_theme(t);`
+recolors popovers in any app, and makes no shadcn token of a field it leaves as it read it.
 
 ## Several crates
 

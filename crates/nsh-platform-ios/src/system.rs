@@ -36,16 +36,16 @@ thread_local! {
 }
 
 /// The tint of a surface's alerts and action sheets for its design tokens
-/// ([`nsh_core::Command::Tokens`]): the theme's [`Role::Primary`] when the
+/// ([`nsh_core::Command::Tokens`]): the theme's [`role::PRIMARY`] when the
 /// app has a theme of its own (the core says so: `Tokens::is_themed`), else
 /// `None` (the system's).
 ///
-/// [`Role::Primary`]: nsh_core::element::Role::Primary
+/// [`role::PRIMARY`]: nsh_core::element::role::PRIMARY
 pub(crate) fn alert_tint(
     tokens: &nsh_core::element::Tokens,
 ) -> Option<nsh_core::element::AdaptiveColor> {
     tokens
-        .role_color(nsh_core::element::Role::Primary)
+        .role(nsh_core::element::role::PRIMARY)
         .filter(|_| tokens.is_themed())
 }
 
@@ -54,15 +54,20 @@ pub(crate) fn appearance() -> UIUserInterfaceStyle {
     APPEARANCE.get()
 }
 
+/// UIKit's style of `appearance` (`Unspecified`: as the view around it).
+pub(crate) fn interface_style(appearance: Appearance) -> UIUserInterfaceStyle {
+    match appearance {
+        Appearance::System => UIUserInterfaceStyle::Unspecified,
+        Appearance::Light => UIUserInterfaceStyle::Light,
+        Appearance::Dark => UIUserInterfaceStyle::Dark,
+    }
+}
+
 /// Applies the app's appearance to the surface `root` and to what is
 /// shown outside of it (the status bar's default style, alerts and modals
 /// shown from now on).
 pub(crate) fn set_appearance(appearance: Appearance, root: &UIView) {
-    let style = match appearance {
-        Appearance::System => UIUserInterfaceStyle::Unspecified,
-        Appearance::Light => UIUserInterfaceStyle::Light,
-        Appearance::Dark => UIUserInterfaceStyle::Dark,
-    };
+    let style = interface_style(appearance);
     APPEARANCE.set(style);
     root.setOverrideUserInterfaceStyle(style);
     if let Some(window) = root.window() {

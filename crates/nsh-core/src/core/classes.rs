@@ -3,16 +3,21 @@
 //! on changes: the appearance, the window size, the layout direction, the
 //! node's interaction states, its group's states or its sibling position.
 
+use std::sync::Arc;
+
+use rustc_hash::FxHashMap;
+
 use super::{Core, Key, Kind, NO_KEY, dirty, disabling_changes};
 use crate::{
     geometry::{Points, Size},
     mount::MountItem,
     ops::NodeId,
-    platform::{Appearance, ColorScheme},
+    platform::{Appearance, ColorScheme, InputModality},
     props::PointerEvents,
     style::{Color, Style, StylePatch, ViewStyle},
     tailwind::{
-        ClassEnvironment, ClassList, ClassProps, Context, Rule, Theme, deps, position, rank, state,
+        ClassEnvironment, ClassList, ClassProps, ClassTokens, Context, Rule, Theme, TokenChange,
+        deps, position, rank, state,
     },
     text::TextEngine,
 };
@@ -67,6 +72,8 @@ pub(super) enum Part {
     Pressed,
     /// `focusWithinStyle`.
     FocusWithin,
+    /// `focusVisibleStyle`.
+    FocusVisible,
     /// A page's `headerStyle` / `headerClass`.
     Header,
     /// A list's `contentClass`.
@@ -87,6 +94,7 @@ impl Part {
             Part::Expanded => (state::EXPANDED, rank::EXPANDED),
             Part::Pressed => (state::ARIA_PRESSED, rank::ARIA_PRESSED),
             Part::FocusWithin => (state::FOCUS_WITHIN, rank::FOCUS_WITHIN),
+            Part::FocusVisible => (state::FOCUS_VISIBLE, rank::FOCUS_VISIBLE),
             _ => return None,
         })
     }
@@ -97,8 +105,8 @@ impl Part {
 pub(super) struct NodeParts {
     /// The classes as set, before the state styles are merged in.
     base: Option<std::rc::Rc<ClassList>>,
-    /// The state styles, by [`Part`] (the first ten).
-    states: [Option<std::rc::Rc<StylePatch>>; 10],
+    /// The state styles, by [`Part`] (the first eleven).
+    states: [Option<std::rc::Rc<StylePatch>>; 11],
     /// The state styles as rules (none without any).
     state_rules: Option<std::rc::Rc<ClassList>>,
     /// The inline styles of the other parts.
@@ -109,7 +117,7 @@ pub(super) struct NodeParts {
 
 /// The [`state`] bits an element is in by its accessibility state `s`:
 /// selected, checked (true), indeterminate (checked mixed), expanded,
-/// pressed (true: a toggle button that is on) and busy.
+/// pressed (true: a toggle button that is on), busy and invalid.
 pub(super) fn accessibility_states(s: &crate::AccessibilityState) -> u16 {
     use crate::Checked;
     let mut states = 0;
@@ -130,11 +138,14 @@ pub(super) fn accessibility_states(s: &crate::AccessibilityState) -> u16 {
     if s.busy {
         states |= state::BUSY;
     }
+    if s.invalid {
+        states |= state::INVALID;
+    }
     states
 }
 
 /// The state style parts, by their index in [`NodeParts::states`].
-const STATE_PARTS: [Part; 10] = [
+const STATE_PARTS: [Part; 11] = [
     Part::Active,
     Part::Hover,
     Part::Focus,
@@ -145,7 +156,21 @@ const STATE_PARTS: [Part; 10] = [
     Part::Expanded,
     Part::Pressed,
     Part::FocusWithin,
+    Part::FocusVisible,
 ];
+
+/// The design tokens of a view that has its own (`Prop::ScopeTokens`, a
+/// [`crate::element::ThemeScope`]'s), for the classes in it.
+#[derive(Debug)]
+pub(super) struct TokenScope {
+    /// The tokens, as classes read them.
+    class_tokens: Arc<ClassTokens>,
+    /// The tokens whose values are not the surface's: a class list that
+    /// reads none of them is the surface's, shared.
+    differs: TokenChange,
+    /// The class lists that read one, parsed with the scope's values.
+    cache: FxHashMap<Box<str>, std::rc::Rc<ClassList>>,
+}
 
 impl<M: TextEngine> Core<M> {
     /// Sets the environment class variants depend on (`dark:`, `ios:`,
@@ -192,12 +217,66 @@ impl<M: TextEngine> Core<M> {
         }
         let changed = (if env.dark != self.class_env.dark { deps::DARK } else { 0 })
             | (if env.reduce_motion != self.class_env.reduce_motion { deps::MOTION } else { 0 })
+            | (if env.pointer != self.class_env.pointer || env.terminal != self.class_env.terminal {
+                deps::DEVICE
+            } else {
+                0
+            })
             // `ios:` / `android:` never change at run time, but a new
             // platform must reach classes resolved before it was known.
             | (if env.platform != self.class_env.platform { u16::MAX } else { 0 });
         self.class_env = env;
         self.restyle_where(changed);
         self.parts_restyled();
+    }
+
+    /// Whether `key` is shown dark: as the nearest view with an appearance
+    /// of its own says (a [`crate::element::ThemeScope`]), else as the
+    /// surface is.
+    pub(super) fn dark_at(&self, key: Key) -> bool {
+        self.nodes[key as usize]
+            .scoped_dark
+            .unwrap_or(self.class_env.dark)
+    }
+
+    /// The environment `key`'s class variants resolve in: the surface's,
+    /// with the appearance of the scope it is in.
+    fn class_env_at(&self, key: Key) -> ClassEnvironment {
+        let mut env = self.class_env;
+        if let Some(dark) = self.nodes[key as usize].scoped_dark {
+            env.dark = dark;
+        }
+        env
+    }
+
+    /// Resolves again the appearance `key` is shown in (it set or dropped
+    /// one of its own, or moved under another view) and that of the views
+    /// taking it from `key`: those whose classes depend on the appearance
+    /// are styled again.
+    pub(super) fn update_appearance(&mut self, key: Key) {
+        let node = &self.nodes[key as usize];
+        let scoped = node.appearance.or(match node.parent {
+            NO_KEY => None,
+            parent => self.nodes[parent as usize].scoped_dark,
+        });
+        if node.scoped_dark == scoped {
+            return;
+        }
+        let was = self.dark_at(key);
+        let node = &mut self.nodes[key as usize];
+        node.scoped_dark = scoped;
+        if self.dark_at(key) != was
+            && self.nodes[key as usize]
+                .classes
+                .as_ref()
+                .is_some_and(|c| c.deps() & deps::DARK != 0)
+        {
+            self.restyle(key);
+        }
+        let children = self.nodes[key as usize].children.clone();
+        for child in children {
+            self.update_appearance(child);
+        }
     }
 
     /// The platform reports interaction states of view `id` (`active:`,
@@ -218,6 +297,10 @@ impl<M: TextEngine> Core<M> {
         if held {
             new |= state::PRESSED;
         }
+        if !held && self.press_cancelled(key) {
+            new &= !state::PRESSED;
+        }
+        let node = &mut self.nodes[key as usize];
         if new == node.states {
             return;
         }
@@ -234,19 +317,119 @@ impl<M: TextEngine> Core<M> {
     /// losing it yet, and a view losing it that is not the focus changes
     /// nothing. The chain is worked out in the next commit round, once for
     /// all the reports before it, so a move reported as a blur then a
-    /// focus leaves the views both chains share as they were. The root
+    /// focus leaves the views both chains share as they were; a blur no
+    /// focus follows in that round waits for the next display frame
+    /// (`blur_held`), so the focus arriving in a later message is still
+    /// the same move. The root
     /// view taking it (macOS's first responder when no view has it) is no
     /// focus.
     fn focus_reported(&mut self, key: Key, focused: bool) {
         let id = self.nodes[key as usize].id;
         if focused {
             self.focus = (key != self.root).then_some((key, id));
+            self.focus_visible = self.focus_shows(key);
+            self.blur_held = false;
         } else if self.focus == Some((key, id)) {
             self.focus = None;
+            self.blur_held = true;
         } else {
             return;
         }
         self.focus_moved = true;
+    }
+
+    /// The platform reports what the user gave the surface input with
+    /// last ([`InputModality`]), before the focus moves it causes: a key
+    /// typed while the focus does not show makes it show, as browsers
+    /// do. A pointer leaves a focus that shows as it is: only a move of
+    /// the focus decides again ([`Self::focus_shows`]).
+    pub fn set_input_modality(&mut self, modality: InputModality) {
+        self.modality = Some(modality);
+        if modality == InputModality::Keyboard && self.focus.is_some() && !self.focus_visible {
+            self.focus_visible = true;
+            self.focus_visible_moved = true;
+        }
+    }
+
+    /// Whether the focus coming to `key` shows (`focus-visible:`), the
+    /// one rule every platform follows, after CSS's `:focus-visible`: an
+    /// input that edits always shows it (it takes typing), any other view
+    /// unless the surface's last input was a pointer, so the keyboard's
+    /// moves show (Tab, a group's arrows, a shortcut) and so does a move
+    /// the app makes (`focus()`, a calendar or a dialog moving it as it
+    /// opens) after a key, while a press, a tap or a move after one does
+    /// not. Before any input it shows, as a browser's `autofocus` does.
+    pub(super) fn focus_shows(&self, key: Key) -> bool {
+        let node = &self.nodes[key as usize];
+        let edits = node.kind == Kind::Input
+            && node
+                .input
+                .as_ref()
+                .is_some_and(|input| input.config.editable);
+        edits || self.modality != Some(InputModality::Pointer)
+    }
+
+    /// Puts `FOCUS_VISIBLE` on the focus while it shows and takes it off
+    /// the view that had it: one view changes, the rest are not touched.
+    pub(super) fn update_focus_visible(&mut self) {
+        let alive = |this: &Self, (k, id): (Key, NodeId)| {
+            this.nodes.get(k as usize).is_some_and(|n| n.id == id)
+        };
+        let target = self.focus.filter(|&f| self.focus_visible && alive(self, f));
+        if target == self.focus_visible_on {
+            return;
+        }
+        let flipped = target.is_some() != self.focus_visible_on.is_some();
+        if let Some(old) = self.focus_visible_on.take()
+            && alive(self, old)
+        {
+            let node = &mut self.nodes[old.0 as usize];
+            if node.states & state::FOCUS_VISIBLE != 0 {
+                node.states &= !state::FOCUS_VISIBLE;
+                self.states_changed(old.0);
+            }
+        }
+        if let Some((k, _)) = target {
+            let node = &mut self.nodes[k as usize];
+            if node.states & state::FOCUS_VISIBLE == 0 {
+                node.states |= state::FOCUS_VISIBLE;
+                self.states_changed(k);
+            }
+        }
+        self.focus_visible_on = target;
+        if flipped {
+            self.restyle_projected_focus();
+        }
+    }
+
+    /// The states `key` is styled by: its own and those it shows as a
+    /// part of a control, with `FOCUS_VISIBLE` on a part projected focused
+    /// while the focus shows. Virtual focus is projected while its control
+    /// has the focus, so on its rows `focus:` is the cursor and
+    /// `focus-visible:` the cursor the keyboard is on.
+    pub(super) fn styled_states(&self, key: Key) -> u16 {
+        let node = &self.nodes[key as usize];
+        let states = node.states | node.projected;
+        if node.projected & state::FOCUSED != 0 && self.focus_visible_on.is_some() {
+            states | state::FOCUS_VISIBLE
+        } else {
+            states
+        }
+    }
+
+    /// Restyles the parts projected focused: the focus started or stopped
+    /// showing. Those released since are dropped.
+    fn restyle_projected_focus(&mut self) {
+        let mut parts = std::mem::take(&mut self.projected_focus);
+        parts.retain(|&(k, id)| {
+            self.nodes
+                .get(k as usize)
+                .is_some_and(|n| n.id == id && n.projected & state::FOCUSED != 0)
+        });
+        for &(k, _) in &parts {
+            self.states_changed(k);
+        }
+        self.projected_focus = parts;
     }
 
     /// Puts `focus-within` on the focus and the views around it, and takes
@@ -258,6 +441,7 @@ impl<M: TextEngine> Core<M> {
     /// is in, as in a React portal.
     pub(super) fn update_focus_within(&mut self) {
         self.focus_moved = false;
+        self.blur_held = false;
         let focus = self
             .focus
             .filter(|&(k, id)| self.nodes.get(k as usize).is_some_and(|n| n.id == id));
@@ -363,7 +547,7 @@ impl<M: TextEngine> Core<M> {
 
     /// Restyles `key` if its classes read its states, and the nodes inside
     /// it that read its group states.
-    fn states_changed(&mut self, key: Key) {
+    pub(super) fn states_changed(&mut self, key: Key) {
         let Some(classes) = self.nodes[key as usize].classes.clone() else {
             return;
         };
@@ -392,10 +576,20 @@ impl<M: TextEngine> Core<M> {
     pub(super) fn set_projected_states(&mut self, key: Key, states: u16) {
         let node = &mut self.nodes[key as usize];
         if node.projected != states {
+            let focus_changed = (node.projected ^ states) & state::FOCUSED != 0;
             node.projected = states;
+            let id = node.id;
             if self.mount_projected && node.created {
-                let id = node.id;
                 self.mount.push(MountItem::ProjectStates { id, states });
+            }
+            if focus_changed {
+                // The key's entry before, and those released since, go.
+                let nodes = &self.nodes;
+                self.projected_focus
+                    .retain(|&(k, i)| k != key && nodes.get(k as usize).is_some_and(|n| n.id == i));
+                if states & state::FOCUSED != 0 {
+                    self.projected_focus.push((key, id));
+                }
             }
             self.states_changed(key);
         }
@@ -641,7 +835,7 @@ impl<M: TextEngine> Core<M> {
             Some(classes) => {
                 let group = |_: &str| 0;
                 let cx = Context {
-                    env: self.class_env,
+                    env: self.class_env_at(key),
                     window: self.viewport,
                     rtl: node.rtl,
                     states: 0,
@@ -658,7 +852,7 @@ impl<M: TextEngine> Core<M> {
 
     /// The parts whose classes resolve again when the environment changes
     /// (a header's `dark:` colors).
-    fn parts_restyled(&mut self) {
+    pub(super) fn parts_restyled(&mut self) {
         let keys: Vec<(Key, Part)> = self
             .nodes
             .iter()
@@ -694,7 +888,7 @@ impl<M: TextEngine> Core<M> {
         let classes = if combined.trim().is_empty() {
             None
         } else {
-            let (classes, fresh) = self.tailwind.get(&combined);
+            let (classes, fresh) = self.classes_at(Some(key), &combined);
             if fresh && !classes.unknown().is_empty() {
                 log::warn!(
                     "unknown classes: {}",
@@ -790,20 +984,31 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
-    /// The design tokens changed: classes naming them
-    /// (`bg-primary`) are resolved again, on nodes and on Rust components.
+    /// The design tokens changed: the classes reading the ones that did
+    /// (`bg-primary`) are resolved again, on nodes and on Rust components;
+    /// all of them when the tokens' names changed.
     pub(super) fn class_tokens_changed(&mut self) {
         let tokens = self.components.tokens.clone();
         let Some(changed) = self.tailwind.set_tokens(&tokens) else {
             return;
         };
+        let all = changed == TokenChange::All;
+        // What the scopes change is told from the surface's values of now;
+        // with other names, a class may be another one in a scope too.
+        for scope in self.token_scopes.values_mut() {
+            scope.differs = self.tailwind.difference(&scope.class_tokens);
+            if all {
+                scope.cache.clear();
+            }
+        }
         let reads = |c: &Option<std::rc::Rc<ClassList>>| {
-            c.as_ref().is_some_and(|c| c.deps() & changed != 0)
+            c.as_ref()
+                .is_some_and(|c| c.deps() & deps::THEME != 0 && c.reads(&changed))
         };
         let keys: Vec<Key> = self
             .nodes
             .iter()
-            .filter(|(_, n)| n.class_names.is_some() && (changed == u16::MAX || reads(&n.classes)))
+            .filter(|(_, n)| n.class_names.is_some() && (all || reads(&n.classes)))
             .map(|(k, _)| k as Key)
             .collect();
         for key in keys {
@@ -815,30 +1020,179 @@ impl<M: TextEngine> Core<M> {
             .iter()
             .filter(|(_, inst)| {
                 (!inst.class.is_empty() || !inst.class_list.is_empty())
-                    && (changed == u16::MAX || reads(&inst.user))
+                    && (all || reads(&inst.user))
             })
             .map(|(host, _)| *host)
             .collect();
         for host in hosts {
             self.update_user_class(host);
         }
-        // The app's classes on the views' elements (`app_class`).
+        // The app's classes on the views' elements (`app_class`): those
+        // whose element's rules, the app's among them, read a changed one.
         let nodes: Vec<_> = self
             .components
             .app_classes
             .iter()
+            .filter(|(id, _)| {
+                all || self
+                    .key(**id)
+                    .is_ok_and(|key| reads(&self.nodes[key as usize].classes))
+            })
             .map(|(&id, entry)| (id, entry.clone()))
             .collect();
-        for (id, (own, class, outer)) in nodes {
-            let app = self.app_class_list(&class);
-            let user = self.merge_user(Some(app), outer);
-            let list = match (own, user) {
-                (Some(a), Some(b)) => Some(std::rc::Rc::new(a.merged(&b))),
-                (a, b) => a.or(b),
-            };
-            if let Ok(key) = self.key(id) {
-                self.set_class_list(key, list);
+        for (id, entry) in nodes {
+            self.set_app_classes(id, entry);
+        }
+    }
+
+    /// Resolves the app's classes on a view's element again
+    /// ([`Self::apply_el_styles`]'s entry of it).
+    fn set_app_classes(
+        &mut self,
+        id: NodeId,
+        (own, class, outer): (
+            Option<std::rc::Rc<ClassList>>,
+            crate::element::SharedString,
+            Option<std::rc::Rc<ClassList>>,
+        ),
+    ) {
+        let app = self.app_class_list(id, &class);
+        let user = self.merge_user(Some(app), outer);
+        let list = match (own, user) {
+            (Some(a), Some(b)) => Some(std::rc::Rc::new(a.merged(&b))),
+            (a, b) => a.or(b),
+        };
+        if let Ok(key) = self.key(id) {
+            self.set_class_list(key, list);
+        }
+    }
+
+    /// The rules of `classes` for view `key`: the surface's, or, in a scope
+    /// with design tokens of its own that changes a token they read, the
+    /// scope's (parsed with its values, once). Whether they were parsed for
+    /// the surface just now, as [`crate::tailwind::Tailwind::get`] says.
+    pub(super) fn classes_at(
+        &mut self,
+        key: Option<Key>,
+        classes: &str,
+    ) -> (std::rc::Rc<ClassList>, bool) {
+        let (list, fresh) = self.tailwind.get(classes);
+        let Some(scope) = key
+            .map(|key| self.nodes[key as usize].token_scope)
+            .filter(|scope| *scope != NO_KEY)
+            .and_then(|scope| self.token_scopes.get_mut(&scope))
+        else {
+            return (list, fresh);
+        };
+        if list.deps() & deps::THEME == 0 || !list.reads(&scope.differs) {
+            return (list, fresh);
+        }
+        if let Some(scoped) = scope.cache.get(classes) {
+            return (scoped.clone(), fresh);
+        }
+        let scoped = std::rc::Rc::new(self.tailwind.parse_with(&scope.class_tokens, classes));
+        // Bounded as the surface's cache is.
+        if scope.cache.len() >= 4096 {
+            scope.cache.clear();
+        }
+        scope.cache.insert(classes.into(), scoped.clone());
+        (scoped, fresh)
+    }
+
+    /// `Prop::ScopeTokens`: view `key` and the views in it are drawn with
+    /// design tokens `tokens` (`None`: with those around it again).
+    pub(super) fn set_scope_tokens(
+        &mut self,
+        key: Key,
+        tokens: Option<Arc<crate::element::Tokens>>,
+    ) {
+        let Some(tokens) = tokens else {
+            if self.token_scopes.remove(&key).is_some() {
+                self.update_token_scope(key);
             }
+            return;
+        };
+        let class_tokens = Arc::new(ClassTokens::new(&tokens));
+        let differs = self.tailwind.difference(&class_tokens);
+        let Some(scope) = self.token_scopes.get_mut(&key) else {
+            self.token_scopes.insert(
+                key,
+                TokenScope {
+                    class_tokens,
+                    differs,
+                    cache: FxHashMap::default(),
+                },
+            );
+            return self.update_token_scope(key);
+        };
+        if *scope.class_tokens == *class_tokens {
+            return;
+        }
+        // Only what read a token whose value changed in the scope.
+        let changed = if scope.class_tokens.same_names(&class_tokens) {
+            TokenChange::Values(scope.class_tokens.changed(&class_tokens))
+        } else {
+            TokenChange::All
+        };
+        scope.cache.retain(|_, list| !list.reads(&changed));
+        scope.class_tokens = class_tokens;
+        scope.differs = differs;
+        let keys: Vec<Key> = self
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.token_scope == key)
+            .map(|(k, _)| k as Key)
+            .collect();
+        for key in keys {
+            self.resolve_classes_again(key, &changed);
+        }
+    }
+
+    /// Resolves again which scope's design tokens `key` is drawn with (it
+    /// got or lost its own, or moved) and the views taking it from `key`:
+    /// those whose classes read a theme token are resolved in it.
+    pub(super) fn update_token_scope(&mut self, key: Key) {
+        let node = &self.nodes[key as usize];
+        let scope = if self.token_scopes.contains_key(&key) {
+            key
+        } else {
+            match node.parent {
+                NO_KEY => NO_KEY,
+                parent => self.nodes[parent as usize].token_scope,
+            }
+        };
+        if node.token_scope == scope {
+            return;
+        }
+        self.nodes[key as usize].token_scope = scope;
+        self.resolve_classes_again(key, &TokenChange::All);
+        let children = self.nodes[key as usize].children.clone();
+        for child in children {
+            self.update_token_scope(child);
+        }
+    }
+
+    /// Resolves the classes of `key` again where they read a token of
+    /// `changed`: its own (`class`), the app's on the component it hosts
+    /// and on its element.
+    fn resolve_classes_again(&mut self, key: Key, changed: &TokenChange) {
+        let reads = |c: &Option<std::rc::Rc<ClassList>>| {
+            c.as_ref()
+                .is_some_and(|c| c.deps() & deps::THEME != 0 && c.reads(changed))
+        };
+        let node = &self.nodes[key as usize];
+        let id = node.id;
+        let own = reads(&node.classes);
+        if node.class_names.is_some() && own {
+            self.set_classes(key, None, None);
+        }
+        if self.components.instances.get(&id).is_some_and(|inst| {
+            (!inst.class.is_empty() || !inst.class_list.is_empty()) && reads(&inst.user)
+        }) {
+            self.update_user_class(id);
+        }
+        if own && let Some(entry) = self.components.app_classes.get(&id).cloned() {
+            self.set_app_classes(id, entry);
         }
     }
 
@@ -892,6 +1246,9 @@ impl<M: TextEngine> Core<M> {
             .nodes
             .iter()
             .filter(|(_, n)| n.classes.as_ref().is_some_and(|c| c.deps() & changed != 0))
+            // A view in a scope with an appearance of its own is shown as
+            // before when only the surface's changed.
+            .filter(|(_, n)| changed != deps::DARK || n.scoped_dark.is_none())
             .map(|(k, _)| k as Key)
             .collect();
         for key in keys {
@@ -1011,7 +1368,7 @@ impl<M: TextEngine> Core<M> {
                 .as_ref()
                 .is_some_and(|c| c.groups().iter().any(|g| **g == *name))
             {
-                return node.states | node.projected;
+                return self.styled_states(k);
             }
             k = node.parent;
         }
@@ -1263,13 +1620,13 @@ impl<M: TextEngine> Core<M> {
             let positional = pos != 0 && node.parent != NO_KEY;
             let window = self.viewport;
             let cx = Context {
-                env: self.class_env,
+                env: self.class_env_at(key),
                 window,
                 // The direction it lays out in once styled (a node created
                 // detached takes the root's), so its sided classes land
                 // right the first time.
                 rtl: self.resolved_rtl(key),
-                states: node.states | node.projected,
+                states: self.styled_states(key),
                 position: pos,
                 group: &group,
             };

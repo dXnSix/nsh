@@ -20,8 +20,8 @@
 //! classes name (`bg-primary`, `bg-up/30`, `rounded-(--radius)`) and TS
 //! reads (`token()` of `nsh`); it reads `nsh.json`'s theme with
 //! [`tokens_of`], which `nsh/base`'s registry brings. [`theme()`] reads
-//! each field through its [`Role`] (the token a theme maps it onto, else
-//! the token of its name), and the components that draw a look of their
+//! each field through its role ([`role`]: the token a theme maps it onto,
+//! else the token of its name), and the components that draw a look of their
 //! own read it: `Editor`, `TextView`, `RichEditor`, `DiffView`, `Terminal`,
 //! `Toast`, the scroll bar and the terminal looks of the controls.
 
@@ -87,6 +87,140 @@ pub(crate) fn read_tokens(json: Option<&str>) -> Result<(Tokens, Vec<String>), S
 
 macro_rules! theme {
     ($( $(#[doc = $doc:literal])* $name:ident = $key:literal => $role:ident ),* $(,)?) => {
+        /// The roles `nsh-base`'s theme and components draw with: shadcn/ui's
+        /// tokens, each the role of its name. An app's own theme maps them
+        /// onto its tokens ([`nsh_core::element::Tokens::with_role`]);
+        /// without a mapping each reads the token of its name. The ones the
+        /// core and the platforms' own controls draw with too
+        /// ([`nsh_core::element::role`]: `POPOVER`, `PRIMARY`, …) are the
+        /// same roles, as a role is its name.
+        pub mod role {
+            use nsh_core::element::{FontRole, Role};
+
+            #[allow(unused_imports)]
+            use super::Theme;
+
+            $(
+                $(#[doc = $doc])*
+                #[doc = concat!("\n\nName `", $key, "`.")]
+                pub const $role: Role = Role::new($key);
+            )*
+            /// The app's default font family.
+            ///
+            /// Name `font-sans`.
+            pub const FONT_SANS: FontRole = nsh_core::element::role::FONT_SANS;
+
+            /// The roles beside the theme's fields.
+            mod more {
+                use nsh_core::element::{FontRole, NumberRole, Role};
+
+                #[allow(unused_imports)]
+                use super::super::Theme;
+
+                nsh_core::roles! {
+                    /// The corner radius.
+                    ///
+                    /// Name `radius`.
+                    pub RADIUS: NumberRole = "radius",
+                    /// The monospaced font family.
+                    ///
+                    /// Name `font-mono`.
+                    pub FONT_MONO: FontRole = "font-mono",
+                    /// The highlight of a selection ([`Theme::selection`] draws
+                    /// `primary` at 22 % when the theme has none).
+                    ///
+                    /// Name `selection`.
+                    pub SELECTION: Role = "selection",
+                    /// What succeeded: a `[!TIP]` alert in a `TextView`. No token
+                    /// of the default theme: the component draws its own green
+                    /// when the theme has none.
+                    ///
+                    /// Name `success`.
+                    pub SUCCESS: Role = "success",
+                    /// What to watch out for: an `Editor`'s warning diagnostics, a
+                    /// `[!WARNING]` alert in a `TextView`. No token of the default
+                    /// theme: each draws its own amber when the theme has none.
+                    ///
+                    /// Name `warning`.
+                    pub WARNING: Role = "warning",
+                    /// What is worth knowing: an `Editor`'s info diagnostics, a
+                    /// `[!NOTE]` alert in a `TextView`. No token of the default
+                    /// theme: each draws its own blue when the theme has none.
+                    ///
+                    /// Name `info`.
+                    pub INFO: Role = "info",
+                    /// What is marked: an `Editor`'s search matches, marked text
+                    /// (`<mark>`) in a `TextView`. No token of the
+                    /// default theme: each draws its own yellow when the theme has
+                    /// none. The components draw it translucent; the token is the
+                    /// solid color.
+                    ///
+                    /// Name `highlight`.
+                    pub HIGHLIGHT: Role = "highlight",
+                    /// A diff's added lines: a `DiffView`'s row tint, indicators,
+                    /// changed words and file counts. No token of the default
+                    /// theme: the view draws its own green when the theme has
+                    /// none. The view draws the tints translucent; the token is
+                    /// the solid color.
+                    ///
+                    /// Name `diff-added`.
+                    pub DIFF_ADDED: Role = "diff-added",
+                    /// A diff's deleted lines, as [`DIFF_ADDED`] its added ones:
+                    /// the view draws its own red when the theme has none.
+                    ///
+                    /// Name `diff-deleted`.
+                    pub DIFF_DELETED: Role = "diff-deleted",
+                    /// Comments in highlighted code: an `Editor`'s, a `DiffView`'s
+                    /// and a `TextView`'s code blocks'. No token of the default
+                    /// theme, as none of the `SYNTAX_*` roles has: the highlighter
+                    /// draws its own palette where the theme has none.
+                    ///
+                    /// Name `syntax-comment`.
+                    pub SYNTAX_COMMENT: Role = "syntax-comment",
+                    /// Keywords, the words of operators, headings.
+                    ///
+                    /// Name `syntax-keyword`.
+                    pub SYNTAX_KEYWORD: Role = "syntax-keyword",
+                    /// Strings, regular expressions, escapes.
+                    ///
+                    /// Name `syntax-string`.
+                    pub SYNTAX_STRING: Role = "syntax-string",
+                    /// Numbers, constants and literals.
+                    ///
+                    /// Name `syntax-number`.
+                    pub SYNTAX_NUMBER: Role = "syntax-number",
+                    /// Names of functions and classes.
+                    ///
+                    /// Name `syntax-function`.
+                    pub SYNTAX_FUNCTION: Role = "syntax-function",
+                    /// Attributes, parameters, properties and keys.
+                    ///
+                    /// Name `syntax-property`.
+                    pub SYNTAX_PROPERTY: Role = "syntax-property",
+                    /// Types, built-ins and tags.
+                    ///
+                    /// Name `syntax-type`.
+                    pub SYNTAX_TYPE: Role = "syntax-type",
+                }
+            }
+            pub use more::{
+                RADIUS, FONT_MONO, SELECTION, SUCCESS, WARNING, INFO, HIGHLIGHT, DIFF_ADDED, DIFF_DELETED, SYNTAX_COMMENT, SYNTAX_KEYWORD, SYNTAX_STRING, SYNTAX_NUMBER, SYNTAX_FUNCTION, SYNTAX_PROPERTY, SYNTAX_TYPE,
+            };
+
+            /// Every role `nsh-base`'s theme and components draw with, with
+            /// its doc: what its registry lists for the toolchain
+            /// (`Registry::roles`), which types TS's `role()` from them.
+            pub fn all() -> Vec<nsh_core::element::RoleSpec> {
+                use nsh_core::element::RoleSpec;
+                let mut all = vec![
+                    $( RoleSpec::new($role, concat!($($doc, "\n"),*)) ),*
+                ];
+                all.push(RoleSpec::new(FONT_SANS, " The app's default font family.\n"));
+                all.extend(more::all());
+                all
+            }
+        }
+
         /// A theme: shadcn/ui's tokens, each a field, and the app's own
         /// ones by name ([`Theme::color`], [`Theme::number`],
         /// [`Theme::font`]).
@@ -121,7 +255,9 @@ macro_rules! theme {
         /// It is not registered ([`nsh_core::element::Registry::theme`]):
         /// `nsh/base` reads themes with [`read_tokens`], so it stays the
         /// default and an app's own types win. A patch is tokens by name
-        /// (`update_theme::<Theme>(tokens)`).
+        /// (`update_theme::<Theme>(tokens)`). Under an app's own type its
+        /// setters set what its fields read: a token playing a role the
+        /// type maps (`popover`) is the token the role is mapped onto.
         impl AppTheme for Theme {
             type Patch = Tokens;
 
@@ -131,20 +267,37 @@ macro_rules! theme {
                         $(
                             TokenSpec::new($key, TokenKind::Color)
                                 .doc(concat!($($doc),*))
-                                .role(Role::$role),
+                                .role(role::$role),
                         )*
                     ];
-                    specs.push(TokenSpec::new("radius", TokenKind::Number).doc("The corner radius.").role(Role::Radius));
-                    specs.push(TokenSpec::new("font-sans", TokenKind::Font).doc("The app's font family.").role(Role::FontSans));
-                    specs.push(TokenSpec::new("font-mono", TokenKind::Font).doc("The monospaced font family.").role(Role::FontMono));
+                    specs.push(TokenSpec::new("radius", TokenKind::Number).doc("The corner radius.").role(role::RADIUS));
+                    specs.push(TokenSpec::new("font-sans", TokenKind::Font).doc("The app's font family.").role(role::FONT_SANS));
+                    specs.push(TokenSpec::new("font-mono", TokenKind::Font).doc("The monospaced font family.").role(role::FONT_MONO));
                     specs
                 });
                 &SPECS
             }
 
+            /// Each field as the token of its name. A field still at the
+            /// default it fell back on, where the tokens the theme was read
+            /// from had no token for its role, is left out: under an app's
+            /// own theme type, a theme read and set makes no shadcn token
+            /// of what the app did not change.
             fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
-                $( out.set_color(&format!("{prefix}{}", $key), self.$name); )*
-                out.set_number(&TokenKind::Number.prefixed(prefix, "radius"), self.radius.0);
+                let fell_back = |role: Role, value: AdaptiveColor| {
+                    self.tokens.role(role).is_none()
+                        && DEFAULT_TOKENS.color(role.name()) == Some(value)
+                };
+                $(
+                    if !fell_back(role::$role, self.$name) {
+                        out.set_color(&format!("{prefix}{}", $key), self.$name);
+                    }
+                )*
+                let radius_fell_back = self.tokens.role(role::RADIUS).is_none()
+                    && DEFAULT_TOKENS.number(role::RADIUS.name()) == Some(self.radius.0);
+                if !radius_fell_back {
+                    out.set_number(&TokenKind::Number.prefixed(prefix, "radius"), self.radius.0);
+                }
                 if let Some(f) = &self.font_sans {
                     out.set_font(&TokenKind::Font.prefixed(prefix, "font-sans"), f.to_string());
                 }
@@ -183,18 +336,18 @@ macro_rules! theme {
             fn of(tokens: Arc<Tokens>) -> Self {
                 let color = |role: Role| {
                     tokens
-                        .role_color(role)
+                        .role(role)
                         .or_else(|| DEFAULT_TOKENS.color(role.name()))
                         .unwrap_or(AdaptiveColor::TRANSPARENT)
                 };
                 Theme {
-                    $( $name: color(Role::$role), )*
+                    $( $name: color(role::$role), )*
                     radius: px(tokens
-                        .role_number(Role::Radius)
-                        .or_else(|| DEFAULT_TOKENS.number(Role::Radius.name()))
+                        .role(role::RADIUS)
+                        .or_else(|| DEFAULT_TOKENS.number(role::RADIUS.name()))
                         .unwrap_or(0.0)),
-                    font_sans: tokens.role_font(Role::FontSans).cloned().map(SharedString::from),
-                    font_mono: tokens.role_font(Role::FontMono).cloned().map(SharedString::from),
+                    font_sans: tokens.role(role::FONT_SANS).map(SharedString::from),
+                    font_mono: tokens.role(role::FONT_MONO).map(SharedString::from),
                     tokens,
                 }
             }
@@ -220,6 +373,9 @@ fn rename(from: &Tokens, from_name: &str, to: &mut Tokens, to_name: &str) {
     if let Some(shadow) = from.shadow(from_name) {
         to.set_shadow(to_name, shadow.clone());
     }
+    if let Some(gradient) = from.gradient(from_name) {
+        to.set_gradient(to_name, gradient.clone());
+    }
 }
 
 /// The default theme's tokens, which [`Theme::of`] falls back on (the
@@ -233,67 +389,67 @@ static DEFAULT_TOKENS: LazyLock<Tokens> = LazyLock::new(|| {
 
 theme! {
     /// The app's background.
-    background = "background" => Background,
+    background = "background" => BACKGROUND,
     /// Text and icons on [`Theme::background`].
-    foreground = "foreground" => Foreground,
+    foreground = "foreground" => FOREGROUND,
     /// Cards.
-    card = "card" => Card,
+    card = "card" => CARD,
     /// Text on [`Theme::card`].
-    card_foreground = "card-foreground" => CardForeground,
+    card_foreground = "card-foreground" => CARD_FOREGROUND,
     /// Popovers, menus, tooltips.
-    popover = "popover" => Popover,
+    popover = "popover" => POPOVER,
     /// Text on [`Theme::popover`].
-    popover_foreground = "popover-foreground" => PopoverForeground,
+    popover_foreground = "popover-foreground" => POPOVER_FOREGROUND,
     /// The main action.
-    primary = "primary" => Primary,
+    primary = "primary" => PRIMARY,
     /// Text on [`Theme::primary`].
-    primary_foreground = "primary-foreground" => PrimaryForeground,
+    primary_foreground = "primary-foreground" => PRIMARY_FOREGROUND,
     /// Secondary actions.
-    secondary = "secondary" => Secondary,
+    secondary = "secondary" => SECONDARY,
     /// Text on [`Theme::secondary`].
-    secondary_foreground = "secondary-foreground" => SecondaryForeground,
+    secondary_foreground = "secondary-foreground" => SECONDARY_FOREGROUND,
     /// Muted surfaces.
-    muted = "muted" => Muted,
+    muted = "muted" => MUTED,
     /// Secondary text: hints, captions, placeholders.
-    muted_foreground = "muted-foreground" => MutedForeground,
+    muted_foreground = "muted-foreground" => MUTED_FOREGROUND,
     /// What is hovered or focused: menu items, list rows.
-    accent = "accent" => Accent,
+    accent = "accent" => ACCENT,
     /// Text on [`Theme::accent`].
-    accent_foreground = "accent-foreground" => AccentForeground,
+    accent_foreground = "accent-foreground" => ACCENT_FOREGROUND,
     /// Destructive actions and errors.
-    destructive = "destructive" => Destructive,
+    destructive = "destructive" => DESTRUCTIVE,
     /// Borders and dividers.
-    border = "border" => Border,
+    border = "border" => BORDER,
     /// The borders of inputs.
-    input = "input" => Input,
+    input = "input" => INPUT,
     /// Focus rings.
-    ring = "ring" => Ring,
+    ring = "ring" => RING,
     /// A chart's first series.
-    chart_1 = "chart-1" => Chart1,
+    chart_1 = "chart-1" => CHART_1,
     /// A chart's second series.
-    chart_2 = "chart-2" => Chart2,
+    chart_2 = "chart-2" => CHART_2,
     /// A chart's third series.
-    chart_3 = "chart-3" => Chart3,
+    chart_3 = "chart-3" => CHART_3,
     /// A chart's fourth series.
-    chart_4 = "chart-4" => Chart4,
+    chart_4 = "chart-4" => CHART_4,
     /// A chart's fifth series.
-    chart_5 = "chart-5" => Chart5,
+    chart_5 = "chart-5" => CHART_5,
     /// The sidebar.
-    sidebar = "sidebar" => Sidebar,
+    sidebar = "sidebar" => SIDEBAR,
     /// Text on [`Theme::sidebar`].
-    sidebar_foreground = "sidebar-foreground" => SidebarForeground,
+    sidebar_foreground = "sidebar-foreground" => SIDEBAR_FOREGROUND,
     /// The sidebar's main action.
-    sidebar_primary = "sidebar-primary" => SidebarPrimary,
+    sidebar_primary = "sidebar-primary" => SIDEBAR_PRIMARY,
     /// Text on [`Theme::sidebar_primary`].
-    sidebar_primary_foreground = "sidebar-primary-foreground" => SidebarPrimaryForeground,
+    sidebar_primary_foreground = "sidebar-primary-foreground" => SIDEBAR_PRIMARY_FOREGROUND,
     /// What is hovered or focused in the sidebar.
-    sidebar_accent = "sidebar-accent" => SidebarAccent,
+    sidebar_accent = "sidebar-accent" => SIDEBAR_ACCENT,
     /// Text on [`Theme::sidebar_accent`].
-    sidebar_accent_foreground = "sidebar-accent-foreground" => SidebarAccentForeground,
+    sidebar_accent_foreground = "sidebar-accent-foreground" => SIDEBAR_ACCENT_FOREGROUND,
     /// The sidebar's borders.
-    sidebar_border = "sidebar-border" => SidebarBorder,
+    sidebar_border = "sidebar-border" => SIDEBAR_BORDER,
     /// Focus rings in the sidebar.
-    sidebar_ring = "sidebar-ring" => SidebarRing,
+    sidebar_ring = "sidebar-ring" => SIDEBAR_RING,
 }
 
 impl Default for Theme {
@@ -331,7 +487,7 @@ impl Theme {
     /// 22 %.
     pub fn selection(&self) -> AdaptiveColor {
         self.tokens
-            .role_color(Role::Selection)
+            .role(role::SELECTION)
             .unwrap_or_else(|| self.primary.opacity(0.22))
     }
 
@@ -535,6 +691,45 @@ mod tests {
     }
 
     #[test]
+    fn a_non_object_css_vars_is_listed() {
+        for vars in ["null", "[]", "true", "12", r#""light""#] {
+            let json = format!(r#"{{ "cssVars": {vars} }}"#);
+            let (_, ignored) = Theme::from_json_lenient(&json).unwrap();
+            assert_eq!(ignored, ["cssVars: expected an object"], "{json}");
+        }
+        let (_, ignored) = Theme::from_json_lenient(r#"{ "cssVars": {} }"#).unwrap();
+        assert!(ignored.is_empty());
+    }
+
+    #[test]
+    fn an_unclosed_color_function_is_listed() {
+        for value in [
+            "rgb(255 0 0",
+            "oklch(0.7 0.1",
+            "color-mix(in srgb, rgb(255 0 0), #fff",
+        ] {
+            let json = format!(r#"{{ "cssVars": {{ "light": {{ "brand": "{value}" }} }} }}"#);
+            let (_, ignored) = Theme::from_json_lenient(&json).unwrap();
+            assert_eq!(ignored, [format!("`brand`: {value} is no color")]);
+        }
+        let (_, ignored) = Theme::from_json_lenient(
+            r#"{ "cssVars": { "theme": { "shadow-sm": "rgb(0 0 0 / 0.1) 0px 1px 2px" } } }"#,
+        )
+        .unwrap();
+        assert!(ignored.is_empty());
+    }
+
+    #[test]
+    fn a_dark_length_does_not_hide_an_unreadable_light_color() {
+        let (theme, ignored) = Theme::from_json_lenient(
+            r##"{ "cssVars": { "light": { "brand": "#zz" }, "dark": { "brand": "12px" } } }"##,
+        )
+        .unwrap();
+        assert_eq!(ignored, ["`brand`: #zz is no color"]);
+        assert_eq!(theme.number("brand"), Some(12.0));
+    }
+
+    #[test]
     fn a_color_that_is_none_is_listed() {
         let (theme, mut ignored) = Theme::from_json_lenient(
             r##"{ "cssVars": {
@@ -604,5 +799,63 @@ mod tests {
         assert_eq!(tokens.color("background"), None);
         assert_eq!(theme_overrides("{}").unwrap().colors().count(), 0);
         assert!(theme_overrides("not json").is_err());
+    }
+}
+
+/// The roles `nsh-base` lists for the toolchain ([`role::all`]): every
+/// constant of [`role`], once, with what it reads and its doc.
+#[cfg(test)]
+mod listed_roles {
+    use nsh_core::element::{RoleKind, description::SetDescription};
+
+    use super::role;
+
+    #[test]
+    fn every_role_is_listed_once_with_its_kind() {
+        let all = role::all();
+        let mut names: Vec<&str> = all.iter().map(|spec| spec.role.name()).collect();
+        // The theme's 31 colors, its radius and two fonts, the selection,
+        // and the 13 roles of its components' own colors.
+        assert_eq!(names.len(), 31 + 3 + 1 + 13);
+        names.sort_unstable();
+        let listed = names.len();
+        names.dedup();
+        assert_eq!(names.len(), listed, "a role is listed twice");
+        let kind = |name: &str| {
+            all.iter()
+                .find(|spec| spec.role.name() == name)
+                .map(|spec| spec.role.kind())
+        };
+        assert_eq!(kind(role::POPOVER.name()), Some(RoleKind::Color));
+        assert_eq!(kind(role::WARNING.name()), Some(RoleKind::Color));
+        assert_eq!(kind(role::SYNTAX_KEYWORD.name()), Some(RoleKind::Color));
+        assert_eq!(kind(role::RADIUS.name()), Some(RoleKind::Number));
+        assert_eq!(kind(role::FONT_SANS.name()), Some(RoleKind::Font));
+        assert_eq!(kind(role::FONT_MONO.name()), Some(RoleKind::Font));
+        // Each says what it is for.
+        assert!(all.iter().all(|spec| !spec.doc_text().is_empty()));
+    }
+
+    #[test]
+    fn the_registry_describes_them() {
+        let described = SetDescription::of(&crate::registry()).unwrap();
+        assert_eq!(described.roles.len(), role::all().len());
+        let popover = described
+            .roles
+            .iter()
+            .find(|r| r.name == "popover")
+            .unwrap();
+        assert_eq!(popover.kind, "color");
+        assert!(!popover.doc.contains("Name `"), "{}", popover.doc);
+        let warning = described
+            .roles
+            .iter()
+            .find(|r| r.name == "warning")
+            .unwrap();
+        assert!(
+            warning.doc.starts_with("What to watch out for"),
+            "{}",
+            warning.doc
+        );
     }
 }

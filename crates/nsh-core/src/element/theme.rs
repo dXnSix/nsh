@@ -19,7 +19,7 @@ use std::{
 
 use rustc_hash::FxHashMap;
 
-use super::{Role, Tokens};
+use super::{AnyRole, Role, RoleKind, RoleValue, Tokens};
 
 /// A theme type: design tokens as the fields of a Rust type. Its token
 /// names are [`AppTheme::token_specs`]'; a field of a nested type is that
@@ -31,14 +31,14 @@ use super::{Role, Tokens};
 ///
 /// ```
 /// use nsh_core::{
-///     element::{AdaptiveColor, AppTheme},
+///     element::{AdaptiveColor, AppTheme, role},
 ///     geometry::Points,
 /// };
 ///
 /// #[derive(Clone, PartialEq, Default, AppTheme)]
 /// struct Ds {
 ///     /// Popovers and menus.
-///     #[token(color, role = "popover")]
+///     #[token(color, role = role::POPOVER)]
 ///     overlay: AdaptiveColor,
 ///     #[token(radius)]
 ///     card: Points,
@@ -49,6 +49,31 @@ use super::{Role, Tokens};
 ///     .map(|s| s.name.to_string())
 ///     .collect();
 /// assert_eq!(names, ["overlay", "radius-card"]);
+/// ```
+///
+/// A role is a constant of the crate that draws with it, named by its
+/// path: the core's ([`super::role`]), a UI set's (`nsh_base::role`), or a
+/// component library's own. A token plays several roles with a `role` for
+/// each: one surface for cards and popovers.
+///
+/// ```
+/// use nsh_core::element::{AdaptiveColor, AppTheme, Role, role};
+///
+/// /// What a library's cards draw on.
+/// const CARD: Role = Role::new("card");
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Flat {
+///     #[token(color, role = CARD, role = role::POPOVER)]
+///     surface: AdaptiveColor,
+/// }
+///
+/// let roles: Vec<_> = Flat::token_specs()[0]
+///     .roles
+///     .iter()
+///     .map(|r| r.name())
+///     .collect();
+/// assert_eq!(roles, ["card", "popover"]);
 /// ```
 ///
 /// The derive refuses, at the attribute, a name given twice in one type:
@@ -89,40 +114,79 @@ use super::{Role, Tokens};
 /// }
 /// ```
 ///
-/// a role of no name:
+/// a role's name in place of its constant:
 ///
 /// ```compile_fail
 /// use nsh_core::element::{AdaptiveColor, AppTheme};
 ///
 /// #[derive(Clone, PartialEq, Default, AppTheme)]
 /// struct Ds {
-///     #[token(color, role = "surface")]
+///     #[token(color, role = "popover")]
 ///     ink: AdaptiveColor,
 /// }
 /// ```
 ///
-/// a role of another kind of token (`radius` is a number):
+/// and the compiler a role there is not:
 ///
 /// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
+/// use nsh_core::element::{AdaptiveColor, AppTheme, role};
 ///
 /// #[derive(Clone, PartialEq, Default, AppTheme)]
 /// struct Ds {
-///     #[token(color, role = "radius")]
+///     #[token(color, role = role::SURFACE)]
 ///     ink: AdaptiveColor,
 /// }
 /// ```
 ///
-/// a role mapped twice:
+/// and a role that reads another kind than the token holds (a radius is a
+/// number):
 ///
 /// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
+/// use nsh_core::element::{AdaptiveColor, AppTheme, NumberRole, Role};
+///
+/// const RADIUS: NumberRole = Role::new("radius");
 ///
 /// #[derive(Clone, PartialEq, Default, AppTheme)]
 /// struct Ds {
-///     #[token(color, role = "card")]
+///     #[token(color, role = RADIUS)]
 ///     ink: AdaptiveColor,
-///     #[token(color, role = "card")]
+/// }
+/// ```
+///
+/// The derive refuses a role on a shadow token, which no role reads:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveShadow, AppTheme, role};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(shadow, role = role::POPOVER)]
+///     raised: AdaptiveShadow,
+/// }
+/// ```
+///
+/// a role mapped twice, onto two tokens:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme, role};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(color, role = role::POPOVER)]
+///     ink: AdaptiveColor,
+///     #[token(color, role = role::POPOVER)]
+///     paper: AdaptiveColor,
+/// }
+/// ```
+///
+/// or twice onto one:
+///
+/// ```compile_fail
+/// use nsh_core::element::{AdaptiveColor, AppTheme, role};
+///
+/// #[derive(Clone, PartialEq, Default, AppTheme)]
+/// struct Ds {
+///     #[token(color, role = role::POPOVER, role = role::POPOVER)]
 ///     paper: AdaptiveColor,
 /// }
 /// ```
@@ -166,11 +230,11 @@ use super::{Role, Tokens};
 /// a `name` or `role` on a field that is no token:
 ///
 /// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
+/// use nsh_core::element::{AdaptiveColor, AppTheme, role};
 ///
 /// #[derive(Clone, PartialEq, Default, AppTheme)]
 /// struct Ds {
-///     #[token(skip, role = "card")]
+///     #[token(skip, role = role::POPOVER)]
 ///     ink: AdaptiveColor,
 /// }
 /// ```
@@ -300,7 +364,7 @@ pub trait AppTheme: Clone + PartialEq + Default + 'static {
     }
 }
 
-/// One token of a theme type: its name, kind, doc and the role it plays.
+/// One token of a theme type: its name, kind, doc and the roles it plays.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenSpec {
     /// Its name (`surface-raised`, `radius-card`).
@@ -309,8 +373,10 @@ pub struct TokenSpec {
     pub kind: TokenKind,
     /// Its doc comment (the field's), for the toolchain's declarations.
     pub doc: &'static str,
-    /// The role it plays (`Role::Popover`), if any.
-    pub role: Option<Role>,
+    /// The roles it plays (`role::POPOVER`), if any. A design system with
+    /// one surface for cards and popovers has one token play both, so both
+    /// follow every change of it; a role is played by one token.
+    pub roles: Vec<AnyRole>,
 }
 
 impl TokenSpec {
@@ -320,7 +386,7 @@ impl TokenSpec {
             name: name.into(),
             kind,
             doc: "",
-            role: None,
+            roles: Vec::new(),
         }
     }
 
@@ -330,9 +396,15 @@ impl TokenSpec {
         self
     }
 
-    /// Playing `role`.
-    pub fn role(mut self, role: Role) -> Self {
-        self.role = Some(role);
+    /// Playing `role`, beside the roles it plays already. The role reads
+    /// what the token holds: a color token plays a [`Role`], a number a
+    /// [`super::NumberRole`], a font a [`super::FontRole`] (registering a
+    /// type whose token plays a role of another kind panics).
+    pub fn role<V: RoleValue>(mut self, role: Role<V>) -> Self {
+        let role = AnyRole::from(role);
+        if !self.roles.contains(&role) {
+            self.roles.push(role);
+        }
         self
     }
 }
@@ -364,6 +436,8 @@ pub enum TokenKind {
     Font,
     /// Box shadows per appearance (`shadow-*`).
     Shadow,
+    /// Gradients per appearance (`background-image-*`: `bg-*`).
+    Gradient,
 }
 
 impl TokenKind {
@@ -381,6 +455,7 @@ impl TokenKind {
             TokenKind::Blur => "blur",
             TokenKind::Font => "font",
             TokenKind::Shadow => "shadow",
+            TokenKind::Gradient => "gradient",
         }
     }
 
@@ -398,13 +473,28 @@ impl TokenKind {
             "blur" => TokenKind::Blur,
             "font" => TokenKind::Font,
             "shadow" => TokenKind::Shadow,
+            "gradient" => TokenKind::Gradient,
             _ => return None,
         })
     }
 
+    /// What a role its token plays reads (`None`: no role reads box
+    /// shadows or gradients).
+    pub(crate) fn role_kind(self) -> Option<RoleKind> {
+        match self {
+            TokenKind::Color => Some(RoleKind::Color),
+            TokenKind::Font => Some(RoleKind::Font),
+            TokenKind::Shadow | TokenKind::Gradient => None,
+            _ => Some(RoleKind::Number),
+        }
+    }
+
     /// Whether its value is a number token.
     pub fn is_number(self) -> bool {
-        !matches!(self, TokenKind::Color | TokenKind::Font | TokenKind::Shadow)
+        !matches!(
+            self,
+            TokenKind::Color | TokenKind::Font | TokenKind::Shadow | TokenKind::Gradient
+        )
     }
 
     /// The namespace its names take, which its classes read them by
@@ -421,6 +511,7 @@ impl TokenKind {
             TokenKind::Blur => "blur-",
             TokenKind::Font => "font-",
             TokenKind::Shadow => "shadow-",
+            TokenKind::Gradient => super::theme_file::GRADIENTS,
         }
     }
 
@@ -445,6 +536,7 @@ impl TokenKind {
             TokenKind::Color => tokens.color(name).is_some(),
             TokenKind::Font => tokens.font(name).is_some(),
             TokenKind::Shadow => tokens.shadow(name).is_some(),
+            TokenKind::Gradient => tokens.gradient(name).is_some(),
             _ => tokens.number(name).is_some(),
         }
     }
@@ -501,10 +593,14 @@ impl std::fmt::Debug for ThemeSpec {
 }
 
 /// The roles `specs` map, onto their names.
-fn roles_of(specs: &[TokenSpec]) -> Vec<(Role, Box<str>)> {
+fn roles_of(specs: &[TokenSpec]) -> Vec<(AnyRole, Box<str>)> {
     specs
         .iter()
-        .filter_map(|s| Some((s.role?, s.name.as_ref().into())))
+        .flat_map(|s| {
+            s.roles
+                .iter()
+                .map(|role| (role.clone(), s.name.as_ref().into()))
+        })
         .collect()
 }
 
@@ -533,7 +629,7 @@ impl ThemeSet {
             let tokens = spec
                 .token_specs()
                 .iter()
-                .map(|s| (s.name.as_ref(), s.kind, s.role));
+                .map(|s| (s.name.as_ref(), s.kind, s.roles.as_slice()));
             if let Err(e) = set.try_add(spec.type_name(), tokens, spec.defaults()) {
                 panic!("{e}");
             }
@@ -549,13 +645,14 @@ impl ThemeSet {
         }
     }
 
-    /// Adds type `type_name`'s tokens (name, kind, role) and `defaults`
+    /// Adds type `type_name`'s tokens (name, kind, roles) and `defaults`
     /// (whose roles are set from the tokens'). A type already added is
-    /// skipped. `Err`: a name or a role another type claims, naming both.
+    /// skipped. `Err`: a name or a role another type claims, naming both,
+    /// or a role two of its tokens play.
     pub(crate) fn try_add<'a>(
         &mut self,
         type_name: &str,
-        tokens: impl IntoIterator<Item = (&'a str, TokenKind, Option<Role>)>,
+        tokens: impl IntoIterator<Item = (&'a str, TokenKind, &'a [AnyRole])>,
         defaults: Tokens,
     ) -> Result<(), String> {
         if self.types.iter().any(|t| **t == *type_name) {
@@ -563,20 +660,21 @@ impl ThemeSet {
         }
         let tokens: Vec<_> = tokens.into_iter().collect();
         let mut roles = Vec::new();
-        for (i, (name, kind, role)) in tokens.iter().enumerate() {
+        for (i, (name, kind, plays)) in tokens.iter().enumerate() {
             // A theme file's value is read by the name's form: the name
             // says what its kind is, as a CSS variable's does.
             let read_as = |prefix: &str| name.starts_with(prefix);
             let readable = match kind {
                 TokenKind::Font => read_as("font-") && !read_as("font-weight-"),
                 TokenKind::Shadow => read_as("shadow-"),
+                TokenKind::Gradient => read_as(super::theme_file::GRADIENTS),
                 TokenKind::Color => !read_as("font-"),
                 _ => !read_as("font-") || read_as("font-weight-"),
             };
             if !readable {
                 return Err(format!(
                     "`{type_name}`: the {} token `{name}` is named as no {} is (a font is `font-*`, a shadow \
-                     `shadow-*`, a weight `font-weight-*`)",
+                     `shadow-*`, a gradient `background-image-*`, a weight `font-weight-*`)",
                     kind.name(),
                     kind.name()
                 ));
@@ -586,27 +684,44 @@ impl ThemeSet {
                     "`{type_name}` declares the theme token `{name}` twice"
                 ));
             }
-            if let Some(role) = role
-                && tokens[..i].iter().any(|(_, _, r)| r == &Some(*role))
-            {
-                return Err(format!(
-                    "`{type_name}` maps the role `{}` twice",
-                    role.name()
-                ));
-            }
             if let Some((owner, _)) = self.names.get(*name) {
                 return Err(format!(
                     "the theme token `{name}` is declared by both `{owner}` and `{type_name}`"
                 ));
             }
-            if let Some(role) = role {
-                if let Some(owner) = self.role_owner(*role) {
+            // A token may play several roles; a role is played by one token.
+            for (j, role) in plays.iter().enumerate() {
+                if plays[..j].contains(role) {
+                    continue;
+                }
+                // A role reads what its token holds.
+                if kind.role_kind() != Some(role.kind()) {
+                    return Err(format!(
+                        "`{type_name}`: the role `{}` reads {}, and `{name}` is a {} token",
+                        role.name(),
+                        match role.kind() {
+                            RoleKind::Color => "a color",
+                            RoleKind::Number => "a number",
+                            RoleKind::Font => "a font family",
+                        },
+                        kind.name()
+                    ));
+                }
+                // By name: a role is its name, whoever declares it.
+                let named = |r: &AnyRole| r.name() == role.name();
+                if tokens[..i].iter().any(|(_, _, r)| r.iter().any(named)) {
+                    return Err(format!(
+                        "`{type_name}` maps the role `{}` twice",
+                        role.name()
+                    ));
+                }
+                if let Some(owner) = self.role_owner(role.name()) {
                     return Err(format!(
                         "the role `{}` is mapped by both `{owner}` and `{type_name}`",
                         role.name()
                     ));
                 }
-                roles.push((*role, Box::<str>::from(*name)));
+                roles.push((role.clone(), Box::<str>::from(*name)));
             }
         }
         for (name, kind, _) in tokens {
@@ -617,13 +732,20 @@ impl ThemeSet {
         Ok(())
     }
 
-    /// The type mapping `role`, if any.
-    fn role_owner(&self, role: Role) -> Option<&str> {
+    /// The type mapping the role named `role`, if any.
+    fn role_owner(&self, role: &str) -> Option<&str> {
+        self.defaults
+            .mapped(role)
+            .and_then(|name| self.names.get(name))
+            .map(|(owner, _)| &**owner)
+    }
+
+    /// Each role the types map onto a token of another name: the role's
+    /// name and the token's.
+    pub(crate) fn renamed_roles(&self) -> impl Iterator<Item = (&str, &str)> {
         self.defaults
             .roles()
-            .find(|(r, _)| *r == role)
-            .and_then(|(_, name)| self.names.get(name))
-            .map(|(owner, _)| &**owner)
+            .filter(|(role, token)| role != token && self.names.contains_key(*token))
     }
 
     /// Each declared name, with its owner type and kind.
@@ -639,8 +761,9 @@ impl ThemeSet {
         if self.names.contains_key(key) {
             return Some(key);
         }
-        let role = Role::from_name(key)?;
-        Some(self.defaults.role_name(role)).filter(|name| self.names.contains_key(*name))
+        self.defaults
+            .mapped(key)
+            .filter(|name| self.names.contains_key(*name))
     }
 }
 
@@ -668,11 +791,32 @@ impl std::fmt::Debug for TokenProvider {
 }
 
 impl TokenProvider {
+    /// The token a theme file's `name` names: under theme types the token
+    /// a role of that name is mapped onto ([`ThemeSet::target`]), as
+    /// `setTheme` and `updateTheme` read it; any other name, and every
+    /// name without theme types, is its own.
+    pub(crate) fn token_name<'a>(&'a self, name: &'a str) -> &'a str {
+        match self {
+            TokenProvider::Themes(set) => set.target(name).unwrap_or(name),
+            TokenProvider::Source { .. } => name,
+        }
+    }
+
     /// The tokens of theme file `json` over the defaults (`None`: the
     /// defaults), with what of it was left out.
     pub(crate) fn read(&self, json: Option<&str>) -> Result<(Tokens, Vec<String>), String> {
+        let (tokens, left_out) = self.read_left_out(json)?;
+        Ok((tokens, super::theme_file::sentences(left_out)))
+    }
+
+    /// [`TokenProvider::read`], each thing left out with what the core
+    /// asks of it (whether it is only a name no type declares).
+    pub(crate) fn read_left_out(
+        &self,
+        json: Option<&str>,
+    ) -> Result<(Tokens, Vec<super::theme_file::LeftOut>), String> {
         match self {
-            TokenProvider::Source { read, .. } => read(json),
+            TokenProvider::Source { read, .. } => read(json).map(said),
             TokenProvider::Themes(set) => match json {
                 None => Ok((set.defaults.clone(), Vec::new())),
                 Some(json) => super::theme_file::parse_declared(json, &set.defaults, set),
@@ -687,13 +831,34 @@ impl TokenProvider {
         json: &str,
         base: &Tokens,
     ) -> Option<Result<(Tokens, Vec<String>), String>> {
+        Some(
+            self.overrides_left_out(json, base)?
+                .map(|(tokens, left_out)| (tokens, super::theme_file::sentences(left_out))),
+        )
+    }
+
+    /// [`TokenProvider::overrides`], as [`TokenProvider::read_left_out`].
+    pub(crate) fn overrides_left_out(
+        &self,
+        json: &str,
+        base: &Tokens,
+    ) -> Option<Result<(Tokens, Vec<super::theme_file::LeftOut>), String>> {
         match self {
-            TokenProvider::Source { overrides, .. } => Some((*overrides)?(json, base)),
+            TokenProvider::Source { overrides, .. } => Some((*overrides)?(json, base).map(said)),
             TokenProvider::Themes(set) => {
                 Some(super::theme_file::overrides_declared(json, base, set))
             }
         }
     }
+}
+
+/// A UI set's own reader says what it left out in sentences alone.
+fn said((tokens, left_out): (Tokens, Vec<String>)) -> (Tokens, Vec<super::theme_file::LeftOut>) {
+    let left_out = left_out
+        .into_iter()
+        .map(super::theme_file::LeftOut::said)
+        .collect();
+    (tokens, left_out)
 }
 
 /// The theme of type `T` the surface is drawn with now: its names in the
@@ -704,10 +869,10 @@ impl TokenProvider {
 pub fn theme_of<T: AppTheme>() -> Arc<T> {
     let tokens = super::tokens();
     let cached = super::ambient::with_theme_cache(|cache| {
-        let (seen, theme) = cache.get(&TypeId::of::<T>())?;
-        Arc::ptr_eq(seen, &tokens)
-            .then(|| theme.downcast_ref::<Arc<T>>().cloned())
-            .flatten()
+        cache
+            .get(TypeId::of::<T>(), &tokens)?
+            .downcast_ref::<Arc<T>>()
+            .cloned()
     });
     if let Some(theme) = cached {
         return theme;
@@ -718,7 +883,8 @@ pub fn theme_of<T: AppTheme>() -> Arc<T> {
     super::ambient::with_theme_cache(|cache| {
         cache.insert(
             TypeId::of::<T>(),
-            (tokens.clone(), Box::new(theme.clone()) as Box<dyn Any>),
+            tokens.clone(),
+            Box::new(theme.clone()) as Box<dyn Any>,
         );
     });
     theme
@@ -727,8 +893,41 @@ pub fn theme_of<T: AppTheme>() -> Arc<T> {
 /// Draws the app with `theme`: its names take its values, every other
 /// token stays (another type's, the app's own). In order with the app's
 /// other actions, as [`super::update_tokens`].
+///
+/// A number field is its token's light value. A number `theme` leaves at
+/// the value it has keeps the dark value it has, so a theme read
+/// ([`theme_of`]), changed in one field and set changes that field only;
+/// one `theme` changes is that value in both appearances, as
+/// [`update_theme`] makes a number it sets.
+///
+/// A type that is not registered and whose tokens play roles
+/// (`nsh_base::Theme`: shadcn's names, each the role of its name) sets, in
+/// an app whose own theme type maps a role onto another token, that token:
+/// `theme().popover` set there is the design system's `surface-overlay`,
+/// as the role's name sets it in a theme file. So do [`update_theme`] and
+/// [`reset_theme`]. A registered type's roles are mapped onto its own
+/// tokens, which it sets as ever.
 pub fn set_theme<T: AppTheme>(theme: T) {
-    super::update_tokens(theme_tokens(&theme));
+    super::ambient::theme_action(super::task::Action::SetTheme {
+        tokens: theme_tokens(&theme),
+        played: played::<T>(),
+    });
+}
+
+/// The roles a theme type's tokens play, each with its token's name: what
+/// the core needs of the type when one of its setters runs.
+pub(crate) type Played = Vec<(Box<str>, Box<str>)>;
+
+/// The roles `T`'s tokens play ([`Played`]).
+pub(crate) fn played<T: AppTheme>() -> Played {
+    T::token_specs()
+        .iter()
+        .flat_map(|spec| {
+            spec.roles
+                .iter()
+                .map(|role| (role.name().into(), spec.name.as_ref().into()))
+        })
+        .collect()
 }
 
 /// `theme`'s tokens, without the roles its specs map: the roles are the
@@ -741,14 +940,28 @@ pub(crate) fn theme_tokens<T: AppTheme>(theme: &T) -> Tokens {
 
 /// Changes the fields of `T` that `patch` sets, the others staying.
 pub fn update_theme<T: AppTheme>(patch: T::Patch) {
-    super::update_tokens(patch_tokens::<T>(&patch));
+    super::ambient::theme_action(super::task::Action::UpdateTheme {
+        tokens: patch_tokens::<T>(&patch),
+        played: played::<T>(),
+    });
 }
 
 /// Puts `T`'s tokens back to the app's theme's (`nsh.json`'s over the
 /// types' defaults, or the one last set whole), undoing [`set_theme`] and
 /// [`update_theme`].
 pub fn reset_theme<T: AppTheme>() {
-    super::reset_tokens(T::token_specs().iter().map(|s| s.name.as_ref()));
+    super::ambient::theme_action(super::task::Action::ResetTheme {
+        names: names::<T>(),
+        played: played::<T>(),
+    });
+}
+
+/// `T`'s token names.
+pub(crate) fn names<T: AppTheme>() -> Vec<Box<str>> {
+    T::token_specs()
+        .iter()
+        .map(|s| s.name.as_ref().into())
+        .collect()
 }
 
 /// The tokens `patch` sets.
