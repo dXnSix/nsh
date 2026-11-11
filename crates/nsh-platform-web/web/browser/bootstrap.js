@@ -3309,8 +3309,9 @@
 			refresh() {
 				if (live()) apply(invoke(200, []));
 			},
-			measure(node) {
-				return call(315, [], node, [], true, false);
+			/** `ref.measure()`, or with `"scrollPosition"` a list's `ref.measureScrollPosition()`. */
+			measure(node, what) {
+				return call(315, [], node, what ? [what] : [], true, false);
 			},
 			reply(id, ok, value) {
 				const waiter = pending.get(id);
@@ -3352,12 +3353,14 @@
 			"zoomTo",
 			"scrollToIndex",
 			"scrollToEnd",
+			"reveal",
 			"reload",
 			"goBack",
 			"goForward",
 			"stopLoading",
 			"injectJavaScript",
 			"postMessage",
+			"insertText",
 			"sendInput",
 			"load",
 			"seek"
@@ -3369,6 +3372,14 @@
 				name,
 				argument
 			]);
+		};
+		prototype.evaluate = async function(script, options) {
+			if (typeof script !== "string") throw new TypeError("evaluate expects a script string");
+			if (options !== void 0 && (options === null || typeof options !== "object")) throw new TypeError("evaluate's options must be an object");
+			if (!values.nodeIds.has(this)) throw new TypeError("nsh: not a node");
+			const error = /* @__PURE__ */ new Error("web views evaluate no scripts here");
+			error.code = "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM";
+			throw error;
 		};
 		prototype.setSelection = function(start, end = start) {
 			return call(314, [
@@ -3399,6 +3410,9 @@
 		};
 		prototype.measure = function() {
 			return measure(this);
+		};
+		prototype.measureScrollPosition = function() {
+			return measure(this, "scrollPosition");
 		};
 		const finalizers = new FinalizationRegistry((id) => {
 			if (live()) {
@@ -3678,7 +3692,7 @@
 
 //#endregion
 //#region ../nsh-platform-web/web/browser/components.js
-	function createComponents(invoke, values, reactive, dom) {
+	function createComponents(invoke, values, reactive, dom, environment) {
 		const states = /* @__PURE__ */ new WeakMap();
 		const hostProps = [
 			"class",
@@ -3688,6 +3702,7 @@
 			"hoverStyle",
 			"focusStyle",
 			"focusWithinStyle",
+			"focusVisibleStyle",
 			"disabledStyle",
 			"testID",
 			"tooltip",
@@ -3771,7 +3786,8 @@
 				reactive.untracked(() => props.ref(api));
 			}
 			if (spec.props.some((prop) => prop.kind === "children") && "children" in props) {
-				const children = spec.lazy ? rt.cond(state.lazy, () => props.children) : reactive.computed(() => props.children);
+				const read = spec.scope ? () => environment.inScope(props, () => props.children) : () => props.children;
+				const children = spec.lazy ? rt.cond(state.lazy, read) : reactive.computed(read);
 				rt.insert(node, children, anchor);
 			}
 			return node;
@@ -5155,6 +5171,22 @@
 		const keys = Object.keys(a);
 		return keys.length === Object.keys(b).length && keys.every((key) => same(a[key], b[key], depth - 1));
 	}
+	/** `appInfo()`'s object from the build's JSON, its fields typed as
+	* nsh-js's `AppInfo` reads them. */
+	function readAppInfo(json) {
+		let info = {};
+		try {
+			info = JSON.parse(json) ?? {};
+		} catch {}
+		const text = (value) => typeof value === "string" ? value : null;
+		return {
+			id: text(info.id),
+			name: text(info.name),
+			version: text(info.version),
+			build: Number.isFinite(info.build) ? info.build : null,
+			development: info.development === true
+		};
+	}
 	function createEnvironment(reactive, invoke, dom) {
 		const fields = Object.fromEntries(Object.entries({
 			window: {
@@ -5184,6 +5216,7 @@
 			screenReader: false,
 			host: false,
 			lifecycle: "active",
+			shaders: true,
 			localeSettings: {
 				languages: ["en-US"],
 				timeZone: "UTC",
@@ -5209,6 +5242,21 @@
 			}
 		};
 		let appearance = "system", systemScheme = "light";
+		const scope = reactive.context(void 0);
+		let scoped = false;
+		const shownScheme = () => {
+			const around = scoped && scope();
+			return around ? around.scheme() : fields.colorScheme();
+		};
+		const readToken = (op, name) => {
+			const around = scoped && scope(), named = around ? around.tokens() : void 0;
+			if (named === void 0) tokens();
+			return invoke(op, [
+				name,
+				shownScheme() === "dark",
+				named ?? null
+			]);
+		};
 		const setColorScheme = (scheme) => {
 			if (![
 				"light",
@@ -5221,7 +5269,7 @@
 		};
 		const device = {
 			windowSize: () => fields.window(),
-			colorScheme: () => fields.colorScheme(),
+			colorScheme: () => shownScheme(),
 			setColorScheme,
 			fontScale: () => fields.fontScale(),
 			pixelRatio: () => fields.pixelRatio(),
@@ -5229,32 +5277,73 @@
 			localeSettings: () => fields.localeSettings(),
 			lifecycle: () => fields.lifecycle(),
 			platform,
+			shadersAvailable: () => fields.shaders(),
 			fpsEnabled: () => false
 		};
 		const accessibility = {
 			reduceMotion: () => fields.reduceMotion(),
 			screenReaderEnabled: () => fields.screenReader()
 		};
+		let appInfo = readAppInfo("{}");
 		return {
 			api: {
 				...device,
 				...accessibility,
+				appInfo: () => appInfo,
 				safeArea: () => fields.safeArea(),
 				safeAreaInsets: () => insets(),
 				keyboardFrame: () => fields.keyboard(),
 				screenReader: () => fields.screenReader(),
-				token(name) {
-					tokens();
-					return invoke(402, [name, fields.colorScheme() === "dark"]);
-				},
+				token: (name) => readToken(402, name),
+				role: (name) => readToken(414, name),
 				setTheme(theme) {
 					invoke(406, [theme]);
+					tokens.update((value) => value + 1);
+				},
+				updateTheme(theme) {
+					invoke(409, [theme]);
+					tokens.update((value) => value + 1);
+				},
+				resetTheme(names) {
+					invoke(410, [names]);
 					tokens.update((value) => value + 1);
 				}
 			},
 			insets,
 			host: () => fields.host(),
 			titleBar: () => fields.titleBar(),
+			inScope(props, children) {
+				const outer = scoped ? scope() : void 0;
+				scoped = true;
+				const shows = reactive.computed(() => {
+					const own = props.appearance;
+					return own === "light" || own === "dark" ? own : outer ? outer.scheme() : fields.colorScheme();
+				});
+				const slot = invoke(412, []);
+				reactive.cleanup(() => invoke(413, [slot, true]));
+				const draws = reactive.computed(() => {
+					const theme = props.theme, around = outer ? outer.tokens() : void 0;
+					if (theme === null || typeof theme !== "object") {
+						invoke(413, [slot, false]);
+						return around;
+					}
+					if (around === void 0) tokens();
+					return invoke(411, [
+						slot,
+						theme,
+						around ?? null
+					]);
+				});
+				return scope.Provider({
+					value: {
+						scheme: shows,
+						tokens: draws
+					},
+					get children() {
+						return children();
+					}
+				});
+			},
 			modules: {
 				"nsh/device": device,
 				"nsh/accessibility": accessibility
@@ -5287,7 +5376,7 @@
 					fields.locale.set(tag);
 				});
 			},
-			setup(tailwind, theme, scheme, statusBar) {
+			setup(tailwind, theme, scheme, statusBar, app) {
 				if (typeof tailwind === "string") dom.rootProp("tailwindTheme", tailwind);
 				if (typeof theme === "string") {
 					dom.rootProp("uiTheme", theme);
@@ -5300,6 +5389,7 @@
 					"system"
 				].includes(scheme)) setColorScheme(scheme);
 				if (typeof statusBar === "string") invoke(405, [statusBar]);
+				if (typeof app === "string") appInfo = readAppInfo(app);
 			}
 		};
 	}
@@ -6049,11 +6139,12 @@
 	* `base()`, what `history.replaceState` resolves against (the page's
 	* `document.baseURI`); `origin`, the page's. `url()` reads the core's
 	* address as it is, which has the page's from before the app's code runs.
+	* The options (`{ history }`) go to the core as they are, which checks them.
 	*/
 	function configureAddress(urlScheme, page) {
 		const { setUrl } = urlScheme;
-		urlScheme.setUrl = (to) => {
-			if (typeof to !== "string" || NOT_IN_AN_ADDRESS.test(to) || new TextEncoder().encode(to).length > MAX_ADDRESS_BYTES) return setUrl(to);
+		urlScheme.setUrl = (to, ...options) => {
+			if (typeof to !== "string" || NOT_IN_AN_ADDRESS.test(to) || new TextEncoder().encode(to).length > MAX_ADDRESS_BYTES) return setUrl(to, ...options);
 			let resolved;
 			try {
 				resolved = new URL(to, page.base());
@@ -6061,7 +6152,7 @@
 				throw new TypeError(`UrlScheme.setUrl: not a URL: ${to}`);
 			}
 			if (resolved.origin !== page.origin) throw new TypeError(`UrlScheme.setUrl: ${resolved.href} is not of the page's origin`);
-			setUrl(resolved.href);
+			setUrl(resolved.href, ...options);
 		};
 	}
 

@@ -53,6 +53,7 @@ const HOST_PROPS: &[&str] = &[
     "hoverStyle",
     "focusStyle",
     "focusWithinStyle",
+    "focusVisibleStyle",
     "disabledStyle",
     "testID",
     "tooltip",
@@ -158,15 +159,126 @@ pub(crate) fn promise(cx: *mut JsContext, call: u32) -> JsValue {
     promise
 }
 
+/// `ref.evaluate(script, { timeout })` of a web view: a promise the core
+/// settles with `{ value }` or the failure. A wrong argument rejects it too
+/// (a `TypeError` / `RangeError`), as every call that returns a promise.
+pub(crate) fn evaluate(
+    cx: *mut JsContext,
+    id: Option<u32>,
+    script: JsValue,
+    options: JsValue,
+) -> JsValue {
+    use nsh_core::element::{IntoThrown, JsError};
+    let call = next_call(cx);
+    let promise = promise(cx, call);
+    // SAFETY: an inline tag check of the newly allocated promise.
+    if unsafe { qjs::JS_IsException(promise) } {
+        return promise;
+    }
+    let reject = |error: JsError| {
+        let _ = settle(cx, call, Err(error.into_thrown()));
+        promise
+    };
+    // SAFETY: checks the borrowed argument's tag; no user conversion runs.
+    let script = match unsafe { qjs::JS_IsString(script) }
+        .then(|| string_arg(cx, script))
+        .flatten()
+    {
+        Some(script) => script,
+        None => return reject(JsError::Type("evaluate expects a script string".into())),
+    };
+    let timeout = match evaluate_timeout(cx, options) {
+        Ok(timeout) => timeout,
+        Err(error) => return reject(error),
+    };
+    let Some(id) = id else {
+        return reject(JsError::Type("nsh: not a node".into()));
+    };
+    if dom::push_op(
+        cx,
+        Op::Evaluate {
+            id,
+            call,
+            script,
+            timeout,
+        },
+    )
+    .is_err()
+    {
+        // The op limit stops the engine; the promise still rejects.
+        // SAFETY: take the exception push_op raised on this live VM.
+        unsafe { qjs::JS_FreeValue(cx, qjs::JS_GetException(cx)) };
+        return reject(JsError::Error(
+            "the engine stopped before evaluating".into(),
+        ));
+    }
+    promise
+}
+
+/// `evaluate`'s `options.timeout` (milliseconds, 30 seconds when absent).
+fn evaluate_timeout(
+    cx: *mut JsContext,
+    options: JsValue,
+) -> Result<std::time::Duration, nsh_core::element::JsError> {
+    use nsh_core::element::{EvaluateOptions, JsError};
+    // SAFETY: tag checks of a borrowed argument.
+    if unsafe { qjs::JS_IsUndefined(options) } {
+        return Ok(EvaluateOptions::default().timeout);
+    }
+    // SAFETY: as above.
+    if !unsafe { qjs::JS_IsObject(options) } {
+        return Err(JsError::Type("evaluate's options must be an object".into()));
+    }
+    // SAFETY: reads a property of a live object; the value is freed below.
+    let timeout = unsafe { qjs::JS_GetPropertyStr(cx, options, c"timeout".as_ptr()) };
+    // SAFETY: tag checks and a number conversion of the owned value.
+    let result = unsafe {
+        if qjs::JS_IsException(timeout) {
+            qjs::JS_FreeValue(cx, qjs::JS_GetException(cx));
+            Err(JsError::Type("evaluate's timeout could not be read".into()))
+        } else if qjs::JS_IsUndefined(timeout) {
+            Ok(EvaluateOptions::default().timeout)
+        } else if !qjs::JS_IsNumber(timeout) {
+            Err(JsError::Type("evaluate's timeout must be a number".into()))
+        } else {
+            let mut ms = 0f64;
+            qjs::JS_ToFloat64(cx, &mut ms, timeout);
+            if ms.is_finite() && ms > 0.0 && ms <= u32::MAX as f64 {
+                Ok(std::time::Duration::from_secs_f64(ms / 1000.0))
+            } else {
+                Err(JsError::Range(
+                    "evaluate's timeout must be a positive number of milliseconds".into(),
+                ))
+            }
+        }
+    };
+    // SAFETY: frees the owned property value.
+    unsafe { qjs::JS_FreeValue(cx, timeout) };
+    result
+}
+
 /// `ref.measure()`: a promise of where node `id` is after this turn's
 /// layout, which the core answers on the root (`Command::Measure`).
 pub(crate) fn measure(cx: *mut JsContext, id: u32) -> JsValue {
+    measure_with(cx, id, |call| Command::Measure { call })
+}
+
+/// `ref.measureScrollPosition()`: a promise of where list `id`'s viewport
+/// starts among its rows after this turn's layout, which the core answers
+/// on the root (`Command::MeasureScrollPosition`).
+pub(crate) fn measure_scroll_position(cx: *mut JsContext, id: u32) -> JsValue {
+    measure_with(cx, id, |call| Command::MeasureScrollPosition { call })
+}
+
+/// A promise of the core's answer to `command` (for a new call) on node
+/// `id`.
+fn measure_with(cx: *mut JsContext, id: u32, command: impl FnOnce(u32) -> Command) -> JsValue {
     let call = next_call(cx);
     if let Err(e) = dom::push_op(
         cx,
         Op::Command {
             id,
-            command: Command::Measure { call },
+            command: command(call),
         },
     ) {
         return e;
@@ -821,6 +933,13 @@ fn render_component(
     // them.
     if spec.takes_children() && has(cx, props, "children") {
         let reader = Owned(cx, prop_reader(cx, props, "children"));
+        // A `ThemeScope`'s children are made in its scope: `colorScheme()`
+        // and `token()` in them read its appearance.
+        let reader = if nsh_core::element::is_theme_scope(spec.name) {
+            Owned(cx, scoped_reader(cx, props, reader.1))
+        } else {
+            reader
+        };
         let children = match &lazy {
             Some(shown) => {
                 let c = Owned(cx, dom::cond_value(cx, shown.1, reader.1));
@@ -842,6 +961,127 @@ fn render_component(
         dom::insert_value_at(cx, node, children.1, anchor.as_ref().map(|a| a.1))?;
     }
     Ok(guard.take())
+}
+
+/// The reader of a `ThemeScope`'s children (owned): `reader` (borrowed),
+/// run with the scope provided to what it makes.
+fn scoped_reader(cx: *mut JsContext, props: JsValue, reader: JsValue) -> JsValue {
+    // The appearance the scope shows: its own, else the one around it.
+    let outer = crate::env::scope_scheme(cx);
+    let mut sdata = [props, outer.unwrap_or(UNDEFINED)];
+    // SAFETY: the functions keep dups of their data; ours are freed.
+    unsafe {
+        let shows = qjs::JS_NewCFunctionData(cx, Some(scope_shows), 0, 0, 2, sdata.as_mut_ptr());
+        qjs::JS_FreeValue(cx, sdata[1]);
+        let scheme = reactive::memo(cx, shows, false);
+        // Its tokens: its `theme` over those around it, in a slot of the
+        // environment's, given back with the component.
+        let slot = qjs::JS_NewFloat64(crate::env::new_scope_slot(cx) as f64);
+        let mut cdata = [slot];
+        let cleanup = qjs::JS_NewCFunctionData(cx, Some(scope_gone), 0, 0, 1, cdata.as_mut_ptr());
+        reactive::add_cleanup(cx, cleanup);
+        let outer = crate::env::scope_tokens_accessor(cx);
+        let mut tdata = [props, outer.unwrap_or(UNDEFINED), slot];
+        let draws = qjs::JS_NewCFunctionData(cx, Some(scope_draws), 0, 0, 3, tdata.as_mut_ptr());
+        qjs::JS_FreeValue(cx, tdata[1]);
+        let tokens = reactive::memo(cx, draws, false);
+        let mut rdata = [scheme, reader, tokens];
+        let f = qjs::JS_NewCFunctionData(cx, Some(read_scoped), 0, 0, 3, rdata.as_mut_ptr());
+        qjs::JS_FreeValue(cx, scheme);
+        qjs::JS_FreeValue(cx, tokens);
+        f
+    }
+}
+
+/// The slot of a `ThemeScope`'s data value.
+fn scope_slot(cx: *mut JsContext, value: JsValue) -> usize {
+    let mut slot = 0f64;
+    // SAFETY: a number (`scoped_reader`).
+    unsafe { qjs::JS_ToFloat64(cx, &mut slot, value) };
+    slot as usize
+}
+
+/// A `ThemeScope` is disposed: its tokens' slot is given back.
+unsafe extern "C" fn scope_gone(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+    _magic: c_int,
+    data: *mut JsValue,
+) -> JsValue {
+    // SAFETY: one data value (`scoped_reader`).
+    crate::env::free_scope_slot(cx, scope_slot(cx, unsafe { *data }));
+    UNDEFINED
+}
+
+/// The tokens a `ThemeScope` draws with: its `theme` over the tokens
+/// around it (`env::make_scope_tokens`).
+unsafe extern "C" fn scope_draws(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+    _magic: c_int,
+    data: *mut JsValue,
+) -> JsValue {
+    // SAFETY: three data values (`scoped_reader`).
+    let (props, outer, slot) = unsafe { (*data, *data.add(1), *data.add(2)) };
+    let theme = get(cx, props, "theme");
+    // SAFETY: a live value, ours.
+    if unsafe { qjs::JS_IsException(theme) } {
+        return theme;
+    }
+    let made = crate::env::make_scope_tokens(cx, scope_slot(cx, slot), theme, outer);
+    unsafe { qjs::JS_FreeValue(cx, theme) };
+    made
+}
+
+/// What a `ThemeScope` shows: its `appearance`, else what the scope around
+/// it shows, else the surface (`"light"` or `"dark"`).
+unsafe extern "C" fn scope_shows(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+    _magic: c_int,
+    data: *mut JsValue,
+) -> JsValue {
+    // SAFETY: two data values (`scoped_reader`).
+    let (props, outer) = unsafe { (*data, *data.add(1)) };
+    let own = get(cx, props, "appearance");
+    // SAFETY: live values; the one read is ours.
+    unsafe {
+        if qjs::JS_IsException(own) {
+            return own;
+        }
+        if qjs::JS_IsString(own) && matches!(string_arg(cx, own).as_deref(), Some("light" | "dark"))
+        {
+            return own;
+        }
+        qjs::JS_FreeValue(cx, own);
+        if qjs::JS_IsFunction(cx, outer) {
+            return qjs::JS_Call(cx, outer, UNDEFINED, 0, std::ptr::null_mut());
+        }
+    }
+    crate::env::surface_scheme(cx)
+}
+
+/// Reads a `ThemeScope`'s children in its scope.
+unsafe extern "C" fn read_scoped(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+    _magic: c_int,
+    data: *mut JsValue,
+) -> JsValue {
+    // SAFETY: three data values (`scoped_reader`).
+    let (scheme, reader, tokens) = unsafe { (*data, *data.add(1), *data.add(2)) };
+    crate::env::provide_scope(cx, scheme);
+    crate::env::provide_scope_tokens(cx, tokens);
+    // SAFETY: calls the children's reader.
+    unsafe { qjs::JS_Call(cx, reader, UNDEFINED, 0, std::ptr::null_mut()) }
 }
 
 /// A JS value owned until dropped (or taken).
