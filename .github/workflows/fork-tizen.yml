@@ -14,7 +14,8 @@ name: Fork Tizen
 #   `tizen-emulator.yml` (its `docs/ci-emulator.md`): Xvfb with GLX before `em-cli create`, ready when
 #   `sdb capability` answers, passwords in an unlocked gnome-keyring for `tz security-profiles add`.
 #
-# Draft pull requests run `cross` and `tv-specs` only when labelled `ci:tizen`. `crates/gpui` commits the git
+# Draft pull requests run `cross` and `tv-specs` only when labelled `ci:tizen`; a label takes effect with the
+# next push (the workflow takes no `labeled` events: `.github/ci/paths.py`). `crates/gpui` commits the git
 # `[patch.crates-io]` lines of the gpui-fast and wgpu forks, so the jobs need no fork checkouts. A fork-only
 # file (branch kind `fork/*`): it never goes upstream and adds only its own file.
 #
@@ -30,7 +31,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, closed]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -46,7 +47,7 @@ permissions:
 # Per event and label too, so a push to main never cancels a manual emulator run, and one label's run never
 # cancels another's.
 concurrency:
-  group: fork-tizen-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.label.name }}
+  group: fork-tizen-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -58,11 +59,10 @@ env:
 
 jobs:
   cross:
-    # Not on drafts unless labelled `ci:tizen`; a label event runs them only for that label.
+    # Not on drafts unless labelled `ci:tizen`.
     if: >-
       github.event.action != 'closed'
       && (!github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'ci:tizen'))
-      && (github.event.action != 'labeled' || github.event.label.name == 'ci:tizen')
     strategy:
       fail-fast: false
       matrix:
@@ -102,11 +102,10 @@ jobs:
             -- -D warnings
 
   tv-specs:
-    # Not on drafts unless labelled `ci:tizen`; a label event runs them only for that label.
+    # Not on drafts unless labelled `ci:tizen`.
     if: >-
       github.event.action != 'closed'
       && (!github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'ci:tizen'))
-      && (github.event.action != 'labeled' || github.event.label.name == 'ci:tizen')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -145,8 +144,7 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.emulator)
       || (github.event_name == 'pull_request' && github.event.action != 'closed'
-          && contains(github.event.pull_request.labels.*.name, 'ci:tizen-emulator')
-          && (github.event.action != 'labeled' || github.event.label.name == 'ci:tizen-emulator'))
+          && contains(github.event.pull_request.labels.*.name, 'ci:tizen-emulator'))
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
