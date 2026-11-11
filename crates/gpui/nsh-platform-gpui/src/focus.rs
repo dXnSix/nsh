@@ -37,7 +37,10 @@
 //!   component with the keyboard ([`crate::input::key_now`]'s order).
 //! - **Enter and Space** press the focused view when it takes presses
 //!   (`PressDown`, `PressUp`, `Press` at its middle, as the terminal
-//!   does); one that takes none leaves them to the app's bindings.
+//!   does), once the focus' own bindings passed on them: the app's other
+//!   bindings of those keys give way to it ([`on_control`],
+//!   `Keymap::find_at`); one that takes none leaves them to the app's
+//!   bindings.
 //! - **What a TV adds** (`focus::directional`): with nothing focused the
 //!   first `preferredFocus` stop in sight takes an arrow; a stop's
 //!   `nextFocus*` route goes to the view named or the first stop inside
@@ -630,6 +633,14 @@ pub(crate) fn pointer_down(surface: &Surface, hit: &NshView) {
     if focused(surface).is_some_and(|view| !contains(&view, hit)) {
         blur_view(surface);
     }
+}
+
+/// Whether the focused view is a control that Return and Space press (it
+/// takes presses): the app's bindings of those keys then give way to it,
+/// but for the focus' own (`Keymap::find_at`,
+/// [`nsh_core::input::presses_focused_control`]).
+pub(crate) fn on_control(surface: &Surface) -> bool {
+    focused(surface).is_some_and(|view| has_press(view.state().events))
 }
 
 /// A key down for the focus: the arrows move it, Enter and Space press the
