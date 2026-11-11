@@ -2307,3 +2307,140 @@ mod text_color_opacity {
         assert_eq!(s.text.line_height, Some(px(28.0)));
     }
 }
+
+/// A class list keeps the tokens its rules read, and a change of the
+/// tokens' values resolves again only the cached classes that read one of
+/// them ([`Tailwind::set_tokens`]).
+mod tokens_by_name {
+    use std::rc::Rc;
+
+    use super::*;
+    use crate::element::{AdaptiveColor, Tokens};
+
+    fn tokens() -> Tokens {
+        let mut t = Tokens::default();
+        t.set_color("brand", AdaptiveColor::rgb(0x2563eb, 0x93c5fd));
+        t.set_color("accent", AdaptiveColor::rgb(0xf5f5f5, 0x262626));
+        t.set_color("card", AdaptiveColor::rgb(0xffffff, 0x171717));
+        t.set_number("radius", 10.0);
+        t.set_number("gutter", 12.0);
+        t.set_font("font-sans", "Inter");
+        t
+    }
+
+    fn list(classes: &str) -> ClassList {
+        let mut theme = Theme::default();
+        theme.set_tokens(&tokens());
+        let list = parse(&theme, classes);
+        assert!(list.unknown().is_empty(), "{classes}: {:?}", list.unknown());
+        list
+    }
+
+    fn tailwind() -> Tailwind {
+        let mut tailwind = Tailwind::new();
+        tailwind.set_tokens(&tokens());
+        tailwind
+    }
+
+    #[test]
+    fn a_list_reads_the_tokens_its_classes_name() {
+        let l = list("p-4 bg-brand border-accent/50 hover:text-brand");
+        assert!(l.reads_token("brand") && l.reads_token("accent"));
+        assert!(!l.reads_token("card"));
+        let dark = list("dark:bg-card");
+        assert!(dark.reads_token("card") && !dark.reads_token("brand"));
+        let plain = list("p-4 bg-white rounded-lg");
+        for name in ["brand", "accent", "card", "radius", "gutter"] {
+            assert!(!plain.reads_token(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_variable_and_a_font_are_read_by_name() {
+        let radius = list("rounded-(--radius)");
+        assert!(radius.reads_token("radius") && !radius.reads_token("gutter"));
+        assert!(list("bg-(--brand)").reads_token("brand"));
+        assert!(list("text-(color:--brand)").reads_token("brand"));
+        let both = list("p-(--gutter) rounded-(--radius)");
+        assert!(both.reads_token("gutter") && both.reads_token("radius"));
+        assert!(list("font-sans").reads_token("font-sans"));
+        assert!(list("font-(family-name:--font-sans)").reads_token("font-sans"));
+    }
+
+    #[test]
+    fn a_class_that_is_none_reads_nothing() {
+        let mut theme = Theme::default();
+        theme.set_tokens(&tokens());
+        // `(--missing)` names no token, after one that is there; and
+        // `nope-` is no utility, whatever color follows it.
+        for classes in ["p-2 bg-(--brand)-(--missing)", "p-2 nope-brand"] {
+            let l = parse(&theme, classes);
+            assert_eq!(l.unknown().len(), 1, "{classes}");
+            assert!(!l.reads_token("brand"), "{classes}");
+        }
+    }
+
+    #[test]
+    fn a_merged_list_reads_what_both_read() {
+        let merged = list("bg-brand").merged(&list("text-accent"));
+        assert!(merged.reads_token("brand") && merged.reads_token("accent"));
+        assert!(!merged.reads_token("card"));
+    }
+
+    #[test]
+    fn a_change_of_a_value_resolves_only_the_classes_reading_it() {
+        let mut tailwind = tailwind();
+        let brand = tailwind.classes("p-2 bg-brand");
+        let accent = tailwind.classes("p-2 bg-accent");
+        let plain = tailwind.classes("p-2");
+        let mut t = tokens();
+        t.set_color("brand", AdaptiveColor::rgb(0x16a34a, 0x4ade80));
+        let changed = tailwind.set_tokens(&t).expect("a change");
+        assert_ne!(changed, TokenChange::All);
+        assert!(brand.reads(&changed));
+        assert!(!accent.reads(&changed) && !plain.reads(&changed));
+        // Parsed again with the new value; the others are the lists they were.
+        let again = tailwind.classes("p-2 bg-brand");
+        assert!(!Rc::ptr_eq(&brand, &again));
+        assert_ne!(*brand, *again);
+        assert!(Rc::ptr_eq(&accent, &tailwind.classes("p-2 bg-accent")));
+        assert!(Rc::ptr_eq(&plain, &tailwind.classes("p-2")));
+    }
+
+    #[test]
+    fn each_kind_of_token_is_a_change_of_its_name() {
+        let change = |edit: fn(&mut Tokens)| {
+            let mut tailwind = tailwind();
+            let mut t = tokens();
+            edit(&mut t);
+            tailwind.set_tokens(&t).expect("a change")
+        };
+        let number = change(|t| t.set_number("radius", 20.0));
+        assert_ne!(number, TokenChange::All);
+        assert!(list("rounded-(--radius)").reads(&number));
+        assert!(!list("p-(--gutter) bg-card").reads(&number));
+        // A color's dark value alone.
+        let dark = change(|t| t.set_color("card", AdaptiveColor::rgb(0xffffff, 0x000000)));
+        assert!(list("bg-card").reads(&dark) && !list("bg-brand").reads(&dark));
+        let font = change(|t| t.set_font("font-sans", "Geist"));
+        assert!(list("font-sans").reads(&font) && !list("bg-brand").reads(&font));
+    }
+
+    #[test]
+    fn new_names_resolve_every_class_and_the_same_tokens_none() {
+        let mut tailwind = tailwind();
+        let accent = tailwind.classes("p-2 bg-accent");
+        assert_eq!(tailwind.set_tokens(&tokens()), None);
+        assert!(Rc::ptr_eq(&accent, &tailwind.classes("p-2 bg-accent")));
+        // `bg-extra` was no class: a new name may make any unknown one.
+        let unknown = tailwind.classes("bg-extra");
+        assert_eq!(unknown.unknown().len(), 1);
+        let mut t = tokens();
+        t.set_color("extra", AdaptiveColor::rgb(0xff0000, 0xff0000));
+        let changed = tailwind.set_tokens(&t).expect("a change");
+        assert_eq!(changed, TokenChange::All);
+        assert!(accent.reads(&changed) && unknown.reads(&changed));
+        assert!(tailwind.classes("bg-extra").unknown().is_empty());
+        assert!(!Rc::ptr_eq(&accent, &tailwind.classes("p-2 bg-accent")));
+    }
+}

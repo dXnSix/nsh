@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     css,
@@ -119,6 +119,28 @@ impl ClassTokens {
             && self.fonts.keys().all(|k| other.fonts.contains_key(k))
     }
 
+    /// The tokens whose value differs between `self` and `other`, which
+    /// have the same names ([`ClassTokens::same_names`]): their keys
+    /// ([`token_key`]).
+    pub(crate) fn changed(&self, other: &ClassTokens) -> FxHashSet<u64> {
+        let mut changed = FxHashSet::default();
+        let mut differ = |name: &str, same: bool| {
+            if !same {
+                changed.insert(token_key(name));
+            }
+        };
+        for (name, color) in &self.colors {
+            differ(name, other.colors.get(name) == Some(color));
+        }
+        for (name, number) in &self.numbers {
+            differ(name, other.numbers.get(name) == Some(number));
+        }
+        for (name, font) in &self.fonts {
+            differ(name, other.fonts.get(name) == Some(font));
+        }
+        changed
+    }
+
     /// Whether `utility` is one of Tailwind's that a token replaces:
     /// `font-sans` and `font-mono` when the theme has those fonts.
     pub(crate) fn replaces(&self, utility: &str) -> bool {
@@ -128,13 +150,20 @@ impl ClassTokens {
     /// `utility` with its tokens replaced by their values in the light or
     /// dark appearance, as arbitrary values: `bg-primary/50` is
     /// `bg-[color:#171717ff]/50`, `rounded-(--radius)` is `rounded-[12px]`.
-    /// `None` when it names none, or one there is not.
-    pub(crate) fn substitute(&self, utility: &str, dark: bool) -> Option<String> {
+    /// `None` when it names none, or one there is not. The tokens it read
+    /// are added to `read` ([`token_key`]).
+    pub(crate) fn substitute(
+        &self,
+        utility: &str,
+        dark: bool,
+        read: &mut Vec<u64>,
+    ) -> Option<String> {
         let hex = |out: &mut String, c: &AdaptiveColor| {
             let c = if dark { c.dark } else { c.light };
             let _ = write!(out, "#{:08x}", Color::from(c).0);
         };
         if let Some(family) = self.fonts.get(utility) {
+            read.push(token_key(utility));
             return Some(format!("font-[family-name:{}]", family.replace(' ', "_")));
         }
         if utility.contains('(') {
@@ -172,6 +201,7 @@ impl ClassTokens {
                     }
                     (None, None) => return None,
                 }
+                read.push(token_key(name));
                 out.push(']');
                 rest = &rest[close + 1..];
             }
@@ -185,6 +215,7 @@ impl ClassTokens {
             let name = rest.split_once('/').map_or(rest, |(n, _)| n);
             (i > 0 && self.colors.contains_key(name)).then_some((i, name))
         })?;
+        read.push(token_key(name));
         let mut out = String::with_capacity(utility.len() + 16);
         out.push_str(&utility[..=start]);
         out.push_str("[color:");
@@ -193,6 +224,16 @@ impl ClassTokens {
         out.push_str(&utility[start + 1 + name.len()..]);
         Some(out)
     }
+}
+
+/// What a class list keeps of a token it read, and a change of the tokens
+/// says of one whose value changed: a hash of its name. Two names of one
+/// key only make a class resolve again that did not need to.
+pub(crate) fn token_key(name: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = rustc_hash::FxHasher::default();
+    name.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn map<V>(entries: &[(&str, V)]) -> FxHashMap<Box<str>, V>
