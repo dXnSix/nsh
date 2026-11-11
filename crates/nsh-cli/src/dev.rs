@@ -144,7 +144,7 @@ impl DevSession {
         let runtime =
             crate::runtime::web(crate::runtime::WebKind::Dev, false)?.context("no web runtime")?;
         let page = crate::tizen_web::dev_page(crate::web::dev_host(&runtime, self.rust_root)?);
-        let (page, files) = crate::web::with_page_host(page, &self.entry)?;
+        let (page, files) = crate::web::with_page_host(page, &self.entry, None)?;
         self.server.serve_web(page, files);
         Ok(())
     }

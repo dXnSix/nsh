@@ -515,7 +515,7 @@ fn run_tizen_web(
     device: Option<&str>,
 ) -> anyhow::Result<()> {
     crate::runtime::web(crate::runtime::WebKind::Dev, true)?.context("no web runtime")?;
-    let session = DevSession::start(entry, listen, release, limits)?;
+    let session = DevSession::start(entry, listen, release, limits, None)?;
     session.serve_tv_page()?;
     crate::tizen_web::run_dev(entry, &session.device_web_url(), device)?;
     session.print_web_url();
@@ -534,7 +534,7 @@ fn run_tizen(
     limits: Option<HostLimits>,
     device: Option<&str>,
 ) -> anyhow::Result<()> {
-    let session = DevSession::start(entry, listen, release, limits)?;
+    let session = DevSession::start(entry, listen, release, limits, None)?;
     // The mappings and the app go when the run ends, Ctrl-C too.
     let stoppable = ui::Stoppable::new();
     let run = crate::tizen::run_dev(entry, device, session.port())?;

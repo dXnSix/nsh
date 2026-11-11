@@ -430,6 +430,7 @@ mod tests {
                 None,
                 display,
                 foreground,
+                None,
             )
             .err();
             assert_eq!(err.map(|e| e.to_string()).as_deref(), Some(message));
@@ -442,6 +443,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         )
         .err();
         assert_eq!(
