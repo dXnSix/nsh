@@ -113,9 +113,12 @@ jobs:
       - name: Linux packages (GPUI's host, headless Chromium)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang libclang-dev llvm xvfb xauth \
-            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev \
-            libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers libvulkan1
+          # The GPUI host's system libraries, as gpui.yml installs them (GTK 3, WebKitGTK 4.1, GStreamer).
+          sudo apt-get install -y --no-install-recommends clang libclang-dev llvm build-essential \
+            pkg-config xvfb xauth libasound2-dev libfontconfig-dev libfreetype-dev libssl-dev \
+            libvulkan1 mesa-vulkan-drivers libwayland-dev libx11-xcb-dev libxcb1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libzstd-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
       # The web runtime `nsh test --target tizen-web` builds is wasm32, with C (zstd) that needs an
       # `ar` for WebAssembly objects; headless Chromium is the image's Chrome.
       - name: Rust (with wasm32)
