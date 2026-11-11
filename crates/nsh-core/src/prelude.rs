@@ -138,6 +138,8 @@ pub use crate::element::{
     PasteEvent,
     PastedFile,
     Percentage,
+    PinchEvent,
+    PinchPhase,
     Placement,
     PlaybackDirection,
     Point,
