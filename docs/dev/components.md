@@ -735,8 +735,8 @@ it changes, and they are resolved again when the tokens change (`Components::app
   on the surface), TS's `colorScheme()` and `token()` through the context its JS face provides to its children
   (`nsh-js` `components.rs` `scoped_reader`, `env.rs` `scope_scheme`; the web's `environment.js` `inScope`). The
   platforms get it as `ViewProps::appearance` on the scope's view: iOS `overrideUserInterfaceStyle`, macOS
-  `NSView.appearance`, the web `color-scheme`; the scroll indicators macOS, Windows, Linux and GPUI draw
-  themselves ask the nearest view with one. Menus, alerts and sheets are the surface's.
+  `NSView.appearance`, the web `color-scheme`; Android's tab bar (`Mounter.java` `nightAt`) and the scroll
+  indicators macOS, Windows, Linux and GPUI draw themselves ask the nearest view with one. Menus, alerts and sheets are the surface's.
 - `.active(|s| ..)`, `.hover(..)`, `.focus(..)`, `.disabled_style(..)`, `.selected(..)`, `.checked(..)` lower into
   rules on the view's interaction states (Tailwind's ranks): press feedback is native. On a nested component's element
   they style its root. `.group()` makes a view a group and `.group_active(|s| ..)`

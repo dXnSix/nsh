@@ -133,7 +133,10 @@ final class TabBarComponent implements NshComponent {
         for (Item item : items) item.setSelected(item.index == selected);
     }
 
-    /** The colors of the appearance shown (the app's, else the system's). */
+    /**
+     * The colors of the appearance shown: that of a view around the bar with one of its own (a
+     * {@code ThemeScope}), else the app's, else the system's.
+     */
     private void paint() {
         boolean dark = night.getAsBoolean();
         bar.setBackgroundColor(color(dark ? 0xff211f26 : 0xfff3edf7, dark ? android.R.color.system_neutral1_900 : android.R.color.system_neutral1_50));
@@ -193,13 +196,21 @@ final class TabBarComponent implements NshComponent {
         }
 
         @Override
+        protected void onAttachedToWindow() {
+            super.onAttachedToWindow();
+            // Under its views now, or under others: one of them may have an
+            // appearance of its own.
+            appearanceChanged();
+        }
+
+        @Override
         public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
             super.onInitializeAccessibilityNodeInfo(info);
             // A tab list: one row of the tabs.
             info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(1, items.size(), false));
         }
 
-        /** The appearance shown changed (the system's, or the app's). */
+        /** The appearance shown changed (the system's, the app's, or that of a view around the bar). */
         void appearanceChanged() {
             boolean now = night.getAsBoolean();
             if (now == wasNight) return;
@@ -216,7 +227,7 @@ final class TabBarComponent implements NshComponent {
         return insets.getSystemWindowInsetBottom();
     }
 
-    /** The app's appearance changed: the bar follows it. */
+    /** The appearance the bar is shown in changed: the bar follows it. */
     void appearanceChanged() {
         bar.appearanceChanged();
     }

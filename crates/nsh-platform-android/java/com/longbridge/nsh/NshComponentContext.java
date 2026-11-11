@@ -13,6 +13,11 @@ public final class NshComponentContext {
         this.id = id;
     }
 
+    /** The node id of the component's view. */
+    int id() {
+        return id;
+    }
+
     /**
      * The context of the {@link NshView} the component is in (its activity's):
      * for the component's views, resources and system services. Its

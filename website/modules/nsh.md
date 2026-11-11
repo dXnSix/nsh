@@ -1093,7 +1093,7 @@ interface ThemeScopeProps {
 
 A view that shows itself and everything in it in an appearance of its own, whatever the app's and the system's: a dark sidebar beside a light page, a light sheet of paper in a dark app. It is a view, so its `class` and `style` lay it out and draw it.
 
-In a scope, everything that follows the appearance follows the scope's: `dark:` classes, the classes of theme tokens (`bg-background`), the theme colors of components, [`colorScheme()`](#colorscheme) and [`token()`](#token). The platform's own controls in it follow too on iOS, macOS and the web (a text input's keyboard and menus, web views, form controls), and so do the scroll indicators the desktop backends draw. Scopes nest: the nearest one with an `appearance` decides, and a scope without one is shown as the view around it.
+In a scope, everything that follows the appearance follows the scope's: `dark:` classes, the classes of theme tokens (`bg-background`), the theme colors of components, [`colorScheme()`](#colorscheme) and [`token()`](#token). The platform's own controls in it follow too on iOS, macOS and the web (a text input's keyboard and menus, web views, form controls), and so do the tab bar on Android and the scroll indicators the desktop backends draw. Scopes nest: the nearest one with an `appearance` decides, and a scope without one is shown as the view around it.
 
 As in CSS, a color a view inherited stays what it was: a scope sets its own background and text color. Menus, alerts and sheets the platform draws are the app's, also when a view in a scope opens them. Rust: `theme_scope().appearance(ColorScheme::Dark).child(…)`; `dark()` and `color()` answer for the scope around the binding that reads them.
 

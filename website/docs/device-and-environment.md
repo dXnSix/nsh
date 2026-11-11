@@ -196,7 +196,7 @@ import { colorScheme, setColorScheme } from "nsh";
 
 ### A part of the app in its own appearance
 
-`ThemeScope` (Rust: `theme_scope()`) is a view that shows itself and everything in it light or dark whatever the app shows: a dark sidebar beside a light page, a light document in a dark editor. In it `dark()` and `colorScheme()`, adaptive colors, `dark:` classes, the theme's colors and `token()` follow the scope, and so do the platform's own controls in it on iOS, macOS and the web, and the scroll indicators the desktop backends draw:
+`ThemeScope` (Rust: `theme_scope()`) is a view that shows itself and everything in it light or dark whatever the app shows: a dark sidebar beside a light page, a light document in a dark editor. In it `dark()` and `colorScheme()`, adaptive colors, `dark:` classes, the theme's colors and `token()` follow the scope, and so do the platform's own controls in it on iOS, macOS and the web, the tab bar on Android, and the scroll indicators the desktop backends draw:
 
 ```rust tabs
 use nsh_core::prelude::*;

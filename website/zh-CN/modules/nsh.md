@@ -1055,7 +1055,7 @@ interface ThemeScopeProps {
 
 一个视图，无论应用和系统的外观如何，它自身及其中的一切都以它自己的外观显示：浅色页面旁的深色侧边栏，深色应用中的一张浅色纸。它是视图，所以它的 `class` 和 `style` 负责布局和绘制。
 
-在作用域内，凡是跟随外观的都跟随作用域的外观：`dark:` 类、主题 token 的类（`bg-background`）、组件的主题颜色、[`colorScheme()`](#colorscheme) 和 [`token()`](#token)。在 iOS、macOS 和 Web 上，其中的平台控件也跟随它（文本输入的键盘和菜单、Web 视图、表单控件），桌面后端绘制的滚动指示器同样如此。作用域可以嵌套：由最近的设置了 `appearance` 的作用域决定，没有设置的作用域按其外层视图的外观显示。
+在作用域内，凡是跟随外观的都跟随作用域的外观：`dark:` 类、主题 token 的类（`bg-background`）、组件的主题颜色、[`colorScheme()`](#colorscheme) 和 [`token()`](#token)。在 iOS、macOS 和 Web 上，其中的平台控件也跟随它（文本输入的键盘和菜单、Web 视图、表单控件），Android 上的标签栏和桌面后端绘制的滚动指示器同样如此。作用域可以嵌套：由最近的设置了 `appearance` 的作用域决定，没有设置的作用域按其外层视图的外观显示。
 
 与 CSS 一样，视图继承来的颜色保持不变：作用域要设置自己的背景色和文字颜色。平台绘制的菜单、警告框和面板属于应用，即使由作用域内的视图打开也是如此。Rust：`theme_scope().appearance(ColorScheme::Dark).child(…)`；`dark()` 和 `color()` 给出读取它们的绑定所在作用域的外观。
 
