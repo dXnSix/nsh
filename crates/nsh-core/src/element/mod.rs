@@ -57,6 +57,7 @@ pub(crate) mod module;
 mod once;
 pub mod palette;
 mod prop;
+pub(crate) mod quit;
 pub mod reactive;
 pub(crate) mod renderer;
 mod resource;
@@ -68,6 +69,9 @@ pub(crate) mod status_bar;
 mod style;
 mod system;
 pub(crate) mod task;
+pub mod theme;
+pub mod theme_file;
+mod theme_scope;
 pub mod tokens;
 mod value;
 pub(crate) mod virtual_list;
@@ -96,13 +100,15 @@ macro_rules! decl {
 }
 
 pub use nsh_macros::{
-    Event, JsObject, PropEnum, Props, asset, assets, class, component, methods, module,
+    AppTheme, Event, JsObject, PropEnum, Props, asset, assets, class, component, methods, module,
     native_components, native_module,
 };
 
 // The core's parts of `nsh_base`'s navigation and dialogs.
 #[doc(hidden)]
 pub use self::host::{modal, screen, stack};
+#[doc(hidden)]
+pub use self::theme_scope::is_theme_scope;
 pub use self::{
     ambient::*,
     animated::{
@@ -112,7 +118,8 @@ pub use self::{
     },
     asset::{AssetFile, AssetKind, FileAsset, FontAsset, ImageAsset, ImageSrc},
     audio::{
-        AudioFailure, AudioPlayer, PlayerState, Sound, audio_available, audio_player, load_sound,
+        AudioFailure, AudioPlayer, PlayerState, Sound, SoundSource, audio_available, audio_player,
+        load_sound,
     },
     builder::{
         __hint_tooltip, Accessible, AnyElement, Attrs, BoundListConfig, Child, Children,
@@ -137,7 +144,10 @@ pub use self::{
         MethodSpec, Methods, NoEvent, Param, PropDecode, PropKind, PropSpec, Props, Registry, Root,
         ScrollbarSource, declarations,
     },
-    element_ref::{ComponentRef, ElementRef, FocusGroupTargets, FocusTarget, FollowTarget},
+    element_ref::{
+        ComponentRef, ElementRef, EvaluateOptions, Evaluation, FocusGroupTargets, FocusTarget,
+        FollowTarget,
+    },
     engine_context::{EngineContext, EngineContextGuard, engine_context},
     env::Environment,
     events::{
@@ -174,15 +184,22 @@ pub use self::{
     scrollable::Scrollable,
     services::{Fetch, HttpResponse, Prefetch},
     style::{
-        AdaptiveColor, BorderCurve, FontWeight, LayoutDirection, StyleRefinement, Styled,
-        WritingDirection,
+        AdaptiveColor, AdaptiveGradient, AdaptiveShadow, BorderCurve, FontWeight, LayoutDirection,
+        StyleRefinement, Styled, WritingDirection,
     },
     system::{
         CallCx, Cleanup, ErrorClass, ErrorFields, Held, IntoThrown, JsError, Later, Local, Locals,
         Quotas, RefuseConnections, Stop, System, codes, io_code,
     },
     task::{Answer, ClipboardImage, DialogAnswer, ImageSize, Task},
-    tokens::{FONT_MONO, FONT_SANS, ThemeTokens, Token, TokenSource, Tokens},
+    theme::{
+        AppTheme, ThemeSpec, TokenKind, TokenSpec, reset_theme, set_theme, theme_of, update_theme,
+    },
+    theme_scope::{ScopeTheme, ThemeScope, ThemeScopeElement, ThemeScopeProps, theme_scope},
+    tokens::{
+        AnyRole, FONT_MONO, FONT_SANS, FontRole, NumberRole, Role, RoleKind, RoleSpec, RoleValue,
+        ThemeTokens, Token, TokenOverrides, TokenSource, Tokens, role,
+    },
     value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},
     virtual_list::{ListLayout, ViewableItems, VirtualList, virtual_list},
     watch::OrderWatch,
@@ -191,7 +208,7 @@ pub(crate) use self::{
     animated::LiveNode,
     back::BackListener,
     builder::{ElKind, PlaceFn},
-    component::{AnyInstance, caught},
+    component::{AnyInstance, caught, panic_message},
     task::{
         Action, AfterAnswer, AnswerSlot, AudioAction, ClipboardRead, Executor, FileAnswer,
         NotificationAction, SpeechAction,
@@ -209,12 +226,13 @@ pub use crate::{
     EllipsizeMode, EventKind, EventPayload, Haptic, HapticImpact, HapticNotification,
     HeaderSystemItem, KeyboardAppearance, KeyboardDismissMode, KeyboardTaps, KeyboardType,
     KeyframeAnimation, Keyframes, LayoutAnimation, LayoutCurve, LayoutProperty, LayoutTransition,
-    ListAlignment, ListViewport, MacOsBackdrop, MacOsBackdropBlending, MacOsBackdropMaterial,
-    MacOsBackdropState, Measurement, ModalAnimation, ModalPresentation, MouseButton, MouseEvent,
-    PanActivation, PasteBehavior, PasteEvent, PastedFile, PointerEvents, PointerType, PressEvent,
-    ResizeMode, ReturnKeyType, ScreenAnimation, SnapAlignment, StatusBarConfig, StatusBarSetting,
-    StatusBarStyle, SubmitBehavior, TextShadow, TouchEvent, TransformKind, TransformOrigin,
-    Viewability,
+    ListAlignment, ListScrollPosition, ListViewport, MacOsBackdrop, MacOsBackdropBlending,
+    MacOsBackdropMaterial, MacOsBackdropState, Measurement, ModalAnimation, ModalPresentation,
+    MouseButton, MouseEvent, PanActivation, PasteBehavior, PasteEvent, PastedFile, PointerEvents,
+    PointerType, PressEvent, ResizeMode, ReturnKeyType, RevealOptions, ScreenAnimation,
+    ScrollAlignment, SnapAlignment, StatusBarConfig, StatusBarSetting, StatusBarStyle,
+    SubmitBehavior, TextShadow, TouchEvent, TransformKind, TransformOrigin, Viewability,
+    WheelDelta, WheelEvent,
     animation::{
         Curve, EaseMode, Easing, Extrapolate, Keyframe, KeyframeTiming, MotionChannel, MotionKind,
         MotionPreset, MotionSpec, Output as AnimationOutput, PlaybackDirection, StaggerFrom,
@@ -224,6 +242,7 @@ pub use crate::{
         ColorParseError, Hsla, Rgba, black, blue, green, hsl, hsla, opaque_grey, red, rgb, rgba,
         transparent_black, transparent_white, white, yellow,
     },
+    main_thread::{MainThreadError, OnMainThread},
     overlay::{Align, Placement},
     platform::{
         Appearance, HourCycle, HttpBody, HttpHead, HttpRequest, Idiom, Languages, Lifecycle,
@@ -236,6 +255,82 @@ pub use crate::{
 #[doc(hidden)]
 pub mod __private {
     pub use serde_json::Map as JsonMap;
+
+    /// A field `#[derive(AppTheme)]` reads and writes as one token: a color
+    /// ([`super::AdaptiveColor`]), a number (`f32`, [`crate::geometry::Points`]),
+    /// a font family ([`super::SharedString`], `String`) or box shadows
+    /// ([`super::AdaptiveShadow`]).
+    pub trait ThemeValue: Sized {
+        /// Writes it as the token `name`.
+        fn write(&self, name: &str, out: &mut super::Tokens);
+        /// The token `name` as this, if `tokens` have it.
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self>;
+    }
+
+    impl ThemeValue for super::AdaptiveColor {
+        fn write(&self, name: &str, out: &mut super::Tokens) {
+            out.set_color(name, *self);
+        }
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
+            tokens.color(name)
+        }
+    }
+
+    impl ThemeValue for f32 {
+        fn write(&self, name: &str, out: &mut super::Tokens) {
+            out.set_number(name, *self);
+        }
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
+            tokens.number(name)
+        }
+    }
+
+    impl ThemeValue for crate::geometry::Points {
+        fn write(&self, name: &str, out: &mut super::Tokens) {
+            out.set_number(name, self.0);
+        }
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
+            tokens.number(name).map(crate::geometry::Points)
+        }
+    }
+
+    impl ThemeValue for super::SharedString {
+        fn write(&self, name: &str, out: &mut super::Tokens) {
+            out.set_font(name, self.to_string());
+        }
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
+            tokens
+                .font(name)
+                .map(|f| super::SharedString::from(f.to_string()))
+        }
+    }
+
+    impl ThemeValue for String {
+        fn write(&self, name: &str, out: &mut super::Tokens) {
+            out.set_font(name, self.clone());
+        }
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
+            tokens.font(name).map(|f| f.to_string())
+        }
+    }
+
+    impl ThemeValue for super::AdaptiveGradient {
+        fn write(&self, name: &str, out: &mut super::Tokens) {
+            out.set_gradient(name, self.clone());
+        }
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
+            tokens.gradient(name).cloned()
+        }
+    }
+
+    impl ThemeValue for super::AdaptiveShadow {
+        fn write(&self, name: &str, out: &mut super::Tokens) {
+            out.set_shadow(name, self.clone());
+        }
+        fn read(tokens: &super::Tokens, name: &str) -> Option<Self> {
+            tokens.shadow(name).cloned()
+        }
+    }
 
     /// The type of a props struct's field `I` as its setter takes it (the
     /// value of an `Option`): `#[derive(Props)]` implements it where the

@@ -29,7 +29,7 @@ use std::{
 use crossbeam_channel::{Receiver, Sender};
 use gtk4::{self as gtk, glib, prelude::*};
 use nsh_core::{EventKind, EventPayload, MountBatch, MountItem, NodeId, Points, ROOT_ID, Size};
-use nsh_engine::{Engine, EngineConfig, EngineControl, Environment, MountSink};
+use nsh_engine::{Engine, EngineConfig, EngineControl, Environment, MainThreadTask, MountSink};
 use rustc_hash::FxHashMap;
 
 use crate::{animation::UiAnimation, mount::Mounter, text::PangoTextEngine, view::NshView};
@@ -40,6 +40,9 @@ enum Message {
     Error(String),
     Frame,
     HotUpdateFailed,
+    /// A function the app runs on the main thread
+    /// ([`MountSink::run_on_main_thread`]), after the batches before it.
+    Run(MainThreadTask),
 }
 
 thread_local! {
@@ -94,6 +97,10 @@ impl MountSink for Sink {
     fn hot_update_failed(&self) {
         self.send(Message::HotUpdateFailed);
     }
+
+    fn run_on_main_thread(&self, task: MainThreadTask) {
+        self.send(Message::Run(task));
+    }
 }
 
 /// Called when the app reports a fatal error (development hosts show it).
@@ -137,7 +144,7 @@ pub(crate) struct Surface {
     /// The embedding app's theme overrides
     /// ([`crate::AppView::set_theme_overrides`]): sent to every engine the
     /// surface starts, before its first frame.
-    pub(crate) host_tokens: RefCell<Option<nsh_engine::Tokens>>,
+    pub(crate) host_theme: RefCell<Option<String>>,
     /// JS asked for a display frame.
     js_frame: Cell<bool>,
     /// The tick callback runs.
@@ -209,12 +216,17 @@ pub(crate) enum Next {
 
 impl Surface {
     /// The GPU device shader views render with ([`crate::shader`]), opened
-    /// the first time one asks.
+    /// the first time one asks; without one the app hears that shader views
+    /// draw nothing (`shadersAvailable()`).
     pub(crate) fn shader_renderer(&self) -> Option<Rc<nsh_engine::shader::Renderer>> {
         self.shader_renderer
             .get_or_init(|| {
-                nsh_engine::shader::Renderer::new(nsh_engine::shader::PixelFormat::Rgba)
-                    .map(Rc::new)
+                let renderer =
+                    nsh_engine::shader::Renderer::new(nsh_engine::shader::PixelFormat::Rgba);
+                if renderer.is_none() {
+                    self.control(EngineControl::shaders_unavailable);
+                }
+                renderer.map(Rc::new)
             })
             .clone()
     }
@@ -250,7 +262,7 @@ impl Surface {
             environment: Cell::new(environment),
             appearance: Cell::default(),
             host_environment: Cell::default(),
-            host_tokens: RefCell::new(None),
+            host_theme: RefCell::new(None),
             js_frame: Cell::new(false),
             ticking: Cell::new(false),
             frame_callbacks: RefCell::default(),
@@ -390,13 +402,13 @@ impl Surface {
         // The embedding app's theme overrides are in the first frame, and
         // the links that came before are the app's address when its code
         // first runs (`UrlScheme.url()`).
-        let tokens = self.host_tokens.borrow().clone();
+        let theme = self.host_theme.borrow().clone();
         let links = self.pending_links.take();
         // The app reads the displays as it first renders.
         let displays = crate::window::displays();
         let setup = |control: &EngineControl| {
-            if tokens.is_some() {
-                control.set_tokens(tokens);
+            if let Some(json) = theme {
+                control.set_theme_overrides(json);
             }
             if !displays.is_empty() {
                 control.set_displays(displays);
@@ -490,6 +502,12 @@ impl Surface {
         }
     }
 
+    /// Lays the app out at `width` × `height` before GTK sizes the root,
+    /// which it does only as its window shows ([`crate::window::launch_hidden`]).
+    pub(crate) fn assume_size(&self, width: f32, height: f32) {
+        self.resized(width, height);
+    }
+
     fn resized(&self, width: f32, height: f32) {
         {
             let mut s = self.root.state_mut();
@@ -553,6 +571,7 @@ impl Surface {
                         f();
                     }
                 }
+                Message::Run(task) => task.run(),
             }
         }
         if applied {

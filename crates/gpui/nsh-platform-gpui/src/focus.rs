@@ -57,7 +57,8 @@
 //!   stop of the scope not given its chance yet takes the focus
 //!   (`focus::auto_focus`); `Command::Focus` on a stop that is no input (a
 //!   ref's `focus()`, the core's for a list row) moves the focus to it
-//!   after the batch.
+//!   after the batch, and the window takes the keyboard; a pointer going
+//!   down outside the focused view takes it away ([`pointer_down`]).
 //! - **Layers**: focus that went into a root view's child (the page, a
 //!   sheet's panel, an overlay) from a stop of another comes back to that
 //!   stop when the layer goes ([`focus::Layers`]); a stop a backdrop
@@ -367,6 +368,34 @@ fn stops_in(surface: &Surface, scope: &NshView, axis: Option<bool>) -> (Vec<Stop
             walk.view(child, to_root, clip, around);
         }
     });
+    // Tab's order: a shown overlay's content after the view it follows
+    // (`ViewProps::tab_after`, `nsh_core::input::tab_order`).
+    let order: rustc_hash::FxHashMap<NodeId, usize> = nsh_core::input::tab_order(
+        scope.clone(),
+        |view| {
+            if left_out(view) {
+                return Vec::new();
+            }
+            view.with_children_in_reading_order(|children| {
+                children
+                    .iter()
+                    .filter(|child| child.kind() != ViewKind::Modal)
+                    .cloned()
+                    .collect()
+            })
+        },
+        NshView::id,
+        |view| view.state().props.tab_after,
+    )
+    .into_iter()
+    .enumerate()
+    .map(|(at, view)| (view.id(), at))
+    .collect();
+    for stop in &mut walk.stops {
+        if let Some(&at) = order.get(&stop.node.id) {
+            stop.node.order.tree = at;
+        }
+    }
     let mut stops = focus::candidates(walk.stops, scope.id(), &layers(scope));
     // Routes and destinations name views: the stops they reach.
     let routes: Vec<NextFocus> = stops
@@ -394,7 +423,8 @@ fn stops_in(surface: &Surface, scope: &NshView, axis: Option<bool>) -> (Vec<Stop
 }
 
 /// The stops Tab goes through in `scope` (a modal, or a window's root):
-/// the arrows' ([`stops_in`]), in tree order.
+/// the arrows' ([`stops_in`]), in tree order, a shown overlay's content
+/// after the view it follows.
 pub(crate) fn tab_stops(surface: &Surface, scope: &NshView) -> Vec<NshView> {
     stops_in(surface, scope, None)
         .0
@@ -641,6 +671,14 @@ fn focus_stop(surface: &Rc<Surface>, view: &NshView) {
     }
 }
 
+/// The pointer went down on `hit`: the view with this module's focus lets
+/// go of it unless `hit` is inside it.
+pub(crate) fn pointer_down(surface: &Surface, hit: &NshView) {
+    if focused(surface).is_some_and(|view| !contains(&view, hit)) {
+        blur_view(surface);
+    }
+}
+
 /// A key down for the focus: the arrows move it, Enter and Space press the
 /// focused view. True when it was taken.
 pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
@@ -842,6 +880,7 @@ pub(crate) fn end_batch(surface: &Rc<Surface>) {
     if let Some(view) = asked
         && still_stop(surface, &scope, &view).0
     {
+        surface.window_focus_requested.set(true);
         focus_stop(surface, &view);
     }
     // A modal that came, or one that went: its `autoFocus` stops appear.

@@ -41,7 +41,8 @@ use crossbeam_channel::{Receiver, Sender};
 use dispatch2::{DispatchQueue, DispatchQueueGlobalPriority, GlobalQueueIdentifier};
 use nsh_core::{EventKind, EventPayload, MountBatch, MountItem, NodeId, Points, ROOT_ID, Size};
 use nsh_engine::{
-    Chunk, Engine, EngineConfig, EngineControl, Environment, MountSink, perf::PerfMonitor,
+    Chunk, Engine, EngineConfig, EngineControl, Environment, MainThreadTask, MountSink,
+    perf::PerfMonitor,
 };
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, sel,
@@ -65,6 +66,9 @@ enum Message {
     /// The app imports chunk `id` (`import()` of a split bundle), which its
     /// bundle does not hold ([`MountSink::load_chunk`]).
     LoadChunk(String),
+    /// A function the app runs on the main thread
+    /// ([`MountSink::run_on_main_thread`]), after the batches before it.
+    Run(MainThreadTask),
 }
 
 /// How long the main thread waits for the layout at a new window size
@@ -140,6 +144,10 @@ impl MountSink for Sink {
 
     fn hot_update_failed(&self) {
         self.send(Message::HotUpdateFailed);
+    }
+
+    fn run_on_main_thread(&self, task: MainThreadTask) {
+        self.send(Message::Run(task));
     }
 
     fn resized(&self, size: Size<Points>) {
@@ -218,7 +226,7 @@ pub(crate) struct Surface {
     /// The embedding app's theme overrides
     /// ([`crate::AppView::set_theme_overrides`]): sent to every engine the
     /// surface starts, before its first frame.
-    pub(crate) host_tokens: RefCell<Option<nsh_engine::Tokens>>,
+    pub(crate) host_theme: RefCell<Option<String>>,
     /// Links that came before the engine started (the one that launched
     /// the app): sent before the app's code runs, so its first
     /// `UrlScheme.url()` reads them.
@@ -297,6 +305,10 @@ pub(crate) struct Surface {
     pub(crate) main_window: crate::window::Held,
     /// The window observed for its bounds ([`crate::window_state`]).
     pub(crate) window: crate::window_state::Watch,
+    /// The mode the standalone app's main window opens in, until it first
+    /// shows (hidden at launch: nsh.json `window.defaultVisible: false`)
+    /// ([`crate::window::launched_main`]).
+    pub(crate) main_open_mode: Cell<Option<nsh_core::desktop::WindowMode>>,
     /// Videos, web views and registered native components.
     pub(crate) native: crate::native::NativeState,
     /// The app's keyboard shortcuts ([`crate::keymap`]).
@@ -355,7 +367,7 @@ impl Surface {
             appearance: Cell::default(),
             chunks: RefCell::new(None),
             host_environment: Cell::default(),
-            host_tokens: RefCell::new(None),
+            host_theme: RefCell::new(None),
             launch_links: RefCell::new(Vec::new()),
             js_frame: Cell::new(false),
             queued: RefCell::default(),
@@ -390,6 +402,7 @@ impl Surface {
             chrome: Default::default(),
             main_window: Default::default(),
             window: Default::default(),
+            main_open_mode: Cell::new(None),
             shaders: Default::default(),
         });
         SURFACES.with(|s| s.borrow_mut().insert(key, Rc::downgrade(&surface)));
@@ -436,13 +449,13 @@ impl Surface {
         *self.rx.borrow_mut() = Some(rx);
         *self.pending.borrow_mut() = pending;
         // The embedding app's theme overrides are in the first frame.
-        let tokens = self.host_tokens.borrow().clone();
+        let theme = self.host_theme.borrow().clone();
         // The displays are there as the app first renders.
         let displays = crate::window_state::displays(self.mtm);
         let links = std::mem::take(&mut *self.launch_links.borrow_mut());
         let setup = |control: &EngineControl| {
-            if tokens.is_some() {
-                control.set_tokens(tokens);
+            if let Some(json) = theme {
+                control.set_theme_overrides(json);
             }
             control.set_displays(displays);
             for url in links {
@@ -700,6 +713,7 @@ impl Surface {
                 }
             }
             Message::Resized(_) => self.resize_late.set(false),
+            Message::Run(task) => task.run(),
             Message::LoadChunk(id) => {
                 // The chunk's file name is its id: `is_chunk_name`
                 // (nsh-js) restricted it to a plain `<stem>.js`, so this
@@ -747,6 +761,7 @@ impl Surface {
             *at = Some(now);
         }
         crate::access::prepare(batch);
+        self.mounter.borrow_mut().begin_batch(&batch.items);
         for item in &batch.items {
             self.anim.borrow_mut().apply(item);
             if !matches!(
@@ -1130,9 +1145,9 @@ impl Surface {
             self.control(|c| c.frame());
         }
         // A batch changes more than moves count (clips, deletions); else
-        // only a move can show a view put off. An endless animation keeps
-        // the frames coming without moving any view (transforms and
-        // opacity are not looked at): no pass on each of its frames.
+        // only a move can show a view put off. A transform counts only
+        // when its subtree has deferred drawing or placement, so an
+        // endless animation elsewhere does not force a pass every frame.
         if applied || crate::sight::moves() != self.revisited.get() {
             self.revisit();
         }

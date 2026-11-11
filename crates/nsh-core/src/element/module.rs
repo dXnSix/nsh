@@ -332,6 +332,18 @@ impl ModuleCx {
         self.actions.push(Action::BuiltInScrollbars(source, theme));
     }
 
+    /// Runs `f` on the platform's main thread after the call, as
+    /// [`run_on_main_thread`](super::run_on_main_thread) does: `spawn` a task
+    /// that awaits the result, or drop it.
+    pub fn run_on_main_thread<R: Send + 'static>(
+        &mut self,
+        f: impl FnOnce() -> R + Send + 'static,
+    ) -> crate::main_thread::OnMainThread<R> {
+        let (task, result) = crate::main_thread::task(f);
+        self.actions.push(Action::MainThread(task));
+        result
+    }
+
     /// Unfocuses the focused input, hiding the software keyboard.
     pub fn dismiss_keyboard(&mut self) {
         self.actions.push(Action::Command(ROOT_ID, Command::Blur));
@@ -381,6 +393,46 @@ impl ModuleCx {
     /// [`crate::platform::Appearance::System`] follows the system again.
     pub fn set_color_scheme(&mut self, appearance: crate::platform::Appearance) {
         self.actions.push(Action::Appearance(appearance));
+    }
+
+    /// Changes some of the app's design tokens, as
+    /// [`crate::element::update_tokens`] does.
+    pub fn update_tokens(&mut self, tokens: impl Into<crate::element::Tokens>) {
+        self.actions.push(Action::UpdateTokens(tokens.into()));
+    }
+
+    /// Puts the design tokens `names` back to the app's theme's values, as
+    /// [`crate::element::reset_tokens`] does.
+    pub fn reset_tokens<S: Into<Box<str>>>(&mut self, names: impl IntoIterator<Item = S>) {
+        self.actions.push(Action::ResetTokens(
+            names.into_iter().map(Into::into).collect(),
+        ));
+    }
+
+    /// Draws the app with theme `theme`, as [`crate::element::set_theme`].
+    pub fn set_theme<T: crate::element::AppTheme>(&mut self, theme: T) {
+        self.actions.push(Action::SetTheme {
+            tokens: crate::element::theme::theme_tokens(&theme),
+            played: crate::element::theme::played::<T>(),
+        });
+    }
+
+    /// Changes the fields of `T` that `patch` sets, as
+    /// [`crate::element::update_theme`].
+    pub fn update_theme<T: crate::element::AppTheme>(&mut self, patch: T::Patch) {
+        self.actions.push(Action::UpdateTheme {
+            tokens: crate::element::theme::patch_tokens::<T>(&patch),
+            played: crate::element::theme::played::<T>(),
+        });
+    }
+
+    /// Puts `T`'s tokens back to the app's theme's, as
+    /// [`crate::element::reset_theme`].
+    pub fn reset_theme<T: crate::element::AppTheme>(&mut self) {
+        self.actions.push(Action::ResetTheme {
+            names: crate::element::theme::names::<T>(),
+            played: crate::element::theme::played::<T>(),
+        });
     }
 
     /// Shows the app in `locale` whatever the user's language (`None`: the
