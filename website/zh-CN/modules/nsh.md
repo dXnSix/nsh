@@ -337,7 +337,7 @@ setTheme(null); // 恢复应用的主题
 
 ```ts
 function updateTheme(theme: Theme): void;
-function resetTheme(names?: (keyof Tokens)[]): void;
+function resetTheme(names?: (keyof Tokens | keyof Roles)[]): void;
 ```
 
 `updateTheme` 在应用运行时修改 `theme` 设置的令牌，其余令牌保持不变；`setTheme` 则替换全部令牌。`theme` 的格式与 `setTheme`
@@ -347,7 +347,7 @@ function resetTheme(names?: (keyof Tokens)[]): void;
 嵌入方应用的[主题覆盖](../docs/tailwind.md#主题-token)仍然优先。
 
 `resetTheme` 把 `names` 中的令牌恢复为应用主题中的值，即 `nsh.json` 的主题或 `setTheme` 设置的主题；不传名字时恢复全部令牌。
-主题中没有的名字会被移除。没有列出的令牌保持不变。Rust：`update_tokens` 和 `reset_tokens`（[主题](../docs/rust.md#主题)）。
+主题中没有的名字会被移除。没有列出的令牌保持不变。在[主题类型](../docs/rust.md#主题类型)下，角色的名称指该角色所映射的令牌，与主题文件中一样。Rust：`update_tokens` 和 `reset_tokens`（[主题](../docs/rust.md#主题)）。
 
 ```tsx
 import { resetTheme, updateTheme } from "nsh";

@@ -3561,6 +3561,7 @@ expect token primary #171717ff
 expect token radius-card 14
 style id:up backgroundColor #138a5aff
 style id:primary backgroundColor #17171780
+style id:faded color #138a5a80
 covers [nsh] token
 
 # base-role
@@ -3583,6 +3584,11 @@ expect role warning #fbbf24ff
 expect role popover #262626ff
 style id:classed backgroundColor #262626ff
 style id:themed backgroundColor #fbbf24ff
+# `resetTheme` takes a role's name: the token of that name goes back to
+# the app's theme, which has none.
+tap id:unwarn
+expect role warning its own
+style id:themed backgroundColor #d97706ff
 covers [nsh] role
 
 # base-set-theme

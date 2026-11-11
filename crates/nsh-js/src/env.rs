@@ -538,8 +538,8 @@ pub(crate) const RESET_THEME_EXPORT: crate::modules::Item = (
     "resetTheme",
     Export::Function(reset_theme, 1),
     Ts::function(
-        "Puts the tokens `names` back to their values in the app's theme\n(`nsh.json`'s `\"theme\"`, or the one `setTheme` set), undoing `updateTheme`\nfor them; without names, every token. A name the theme does not have is\nremoved. The other tokens stay as they are.",
-        &["(names?: (keyof Tokens)[]): void"],
+        "Puts the tokens `names` back to their values in the app's theme\n(`nsh.json`'s `\"theme\"`, or the one `setTheme` set), undoing `updateTheme`\nfor them; without names, every token. A name the theme does not have is\nremoved. The other tokens stay as they are. A role's name names the token\nthe app's theme types map it onto, as it does in a theme file.",
+        &["(names?: (keyof Tokens | keyof Roles)[]): void"],
     ),
 );
 

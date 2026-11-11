@@ -347,7 +347,7 @@ setTheme(null); // the app's theme again
 
 ```ts
 function updateTheme(theme: Theme): void;
-function resetTheme(names?: (keyof Tokens)[]): void;
+function resetTheme(names?: (keyof Tokens | keyof Roles)[]): void;
 ```
 
 `updateTheme` changes the tokens `theme` sets while the app runs and keeps the others, where `setTheme` replaces them
@@ -360,6 +360,8 @@ shown now, and a value of no kind a token has is left out, so that token keeps i
 
 `resetTheme` puts the tokens `names` back to their values in the app's theme, `nsh.json`'s or the one `setTheme` set;
 without names, every token. A name the theme does not have is removed. The tokens it does not name stay as they are.
+Under [theme types](../docs/rust.md#theme-types) a role's name names the token the role is mapped onto, as it does in
+a theme file.
 Rust: `update_tokens` and `reset_tokens` ([Theme](../docs/rust.md#theme)).
 
 ```tsx

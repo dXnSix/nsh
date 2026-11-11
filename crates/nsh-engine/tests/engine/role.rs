@@ -307,3 +307,47 @@ fn a_class_takes_a_role_mapped_while_the_app_runs() {
     let (backgrounds, _) = drawn(&until(&rx, |b| shows(b, "step 2")));
     assert_eq!(backgrounds, [Color(0xeeee_eeff)]);
 }
+
+const RESET: &str = r##"import { mount, resetTheme, role, signal, Text, updateTheme, View } from "nsh";
+
+const step = signal(0);
+setTimeout(() => {
+  updateTheme({ cssVars: { light: { popover: "#333333", "status-caution": "#444444" } } });
+  step.set(1);
+}, 30);
+setTimeout(() => { resetTheme(["popover"]); step.set(2); }, 60);
+
+mount(() => (
+  <View>
+    <Text>{`step ${step()}`}</Text>
+    <Text>{`popover ${role("popover")}`}</Text>
+    <Text>{`warning ${role("warning")}`}</Text>
+  </View>
+));
+"##;
+
+#[test]
+fn reset_theme_takes_a_roles_name() {
+    let config = r#"{ "appearance": "light" }"#;
+    let (_engine, rx) = start_with_sets(RESET, Environment::default(), None, Some(config), brand());
+    // Under the type a role's name in a theme file sets `overlay`.
+    let batches = until(&rx, |b| shows(b, "step 1"));
+    assert!(
+        batches.iter().any(|b| shows(b, "popover #333333ff")),
+        "{batches:?}"
+    );
+    assert!(
+        batches.iter().any(|b| shows(b, "warning #444444ff")),
+        "{batches:?}"
+    );
+    // And in `resetTheme` it gives `overlay` its default back, and only it.
+    let batches = until(&rx, |b| shows(b, "step 2"));
+    assert!(
+        batches.iter().any(|b| shows(b, "popover #111111ff")),
+        "{batches:?}"
+    );
+    assert!(
+        !batches.iter().any(|b| shows(b, "warning #aa5500ff")),
+        "{batches:?}"
+    );
+}
