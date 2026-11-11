@@ -268,6 +268,24 @@ expect Bound: not bound
 tap id:bind
 expect Bound: function function
 covers [nsh] keymap
+# mod-keymap-tv
+tap id:case-mod-keymap-tv
+# The media and TV remote keys: named, labelled in words, and firing their
+# bindings when pressed.
+expect TV bound: 15
+expect TV pressed: none
+expect TV label: Play/Pause, Red, Channel Up
+key red
+expect TV pressed: red
+key mediaplaypause
+expect TV pressed: mediaplaypause
+key channeldown
+expect TV pressed: channeldown
+key info
+expect TV pressed: info
+tap id:aliases
+expect TV aliases: function
+covers [nsh] keymap
 # mod-mobile
 tap id:case-mod-mobile
 expect Mobile: true
