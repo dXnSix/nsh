@@ -72,6 +72,8 @@ struct Spec {
     level: Option<u32>,
     expanded: Option<bool>,
     busy: bool,
+    /// The content does not pass the app's checks (AT-SPI's invalid entry).
+    invalid: bool,
     hidden: bool,
 }
 
@@ -354,7 +356,12 @@ pub(crate) fn text_changed(view: &NshView) {
         let Some(drawn) = &s.text else { return };
         let old = s.access.text.replace(drawn.text.clone());
         match old {
-            Some(old) if Arc::ptr_eq(&old, &drawn.text) || old.text == drawn.text.text => return,
+            Some(old)
+                if Arc::ptr_eq(&old, &drawn.text)
+                    || old.visible_text() == drawn.text.visible_text() =>
+            {
+                return;
+            }
             old => old.is_none(),
         }
     };
@@ -377,8 +384,9 @@ fn update(view: &NshView) -> bool {
         let a = &s.props.accessibility;
         // An app-drawn window button is a button, as the system's is.
         let pressable = has_press_role(s.events) || s.props.window_control.is_some();
-        let text = s.text.as_ref().map(|t| t.text.text.as_str());
-        let spec = spec_for(a, s.kind, pressable, text, s.style.hidden);
+        // Hidden runs are not read.
+        let text = s.text.as_ref().map(|t| t.text.visible_text());
+        let spec = spec_for(a, s.kind, pressable, text.as_deref(), s.style.hidden);
         if s.access.spec.as_deref() == Some(&spec) {
             return false;
         }
@@ -523,6 +531,12 @@ fn apply(view: &NshView, old: Option<&Spec>, new: &Spec) {
             gtk::AccessibleState::Busy,
         ),
         (
+            new.invalid,
+            old.map(|o| o.invalid),
+            accessible::State::Invalid(gtk::AccessibleInvalidState::True),
+            gtk::AccessibleState::Invalid,
+        ),
+        (
             new.hidden,
             old.map(|o| o.hidden),
             accessible::State::Hidden(true),
@@ -640,6 +654,7 @@ fn spec_for(
         level: a.level,
         expanded: a.state.expanded,
         busy: a.state.busy,
+        invalid: a.state.invalid,
         hidden: a.hidden || invisible,
     }
 }
@@ -699,6 +714,8 @@ fn role_for(a: &Accessibility, kind: ViewKind, pressable: bool) -> Gtk {
         Role::Navigation => Gtk::Navigation,
         Role::Tree => Gtk::Tree,
         Role::TreeItem => Gtk::TreeItem,
+        Role::Dialog => Gtk::Dialog,
+        Role::AlertDialog => Gtk::AlertDialog,
     }
 }
 
@@ -725,7 +742,7 @@ fn announce_live(view: &NshView) {
         let live = v.state().props.accessibility.live_region;
         if live != LiveRegion::None {
             if let Some(t) = &view.state().text {
-                view.announce(&t.text.text, priority(live));
+                view.announce(&t.text.visible_text(), priority(live));
             }
             return;
         }
@@ -2343,6 +2360,8 @@ mod tests {
             (Role::TreeItem, Gtk::TreeItem),
             (Role::MenuItemCheckbox, Gtk::MenuItemCheckbox),
             (Role::MenuItemRadio, Gtk::MenuItemRadio),
+            (Role::Dialog, Gtk::Dialog),
+            (Role::AlertDialog, Gtk::AlertDialog),
         ] {
             assert_eq!(
                 role_for(&with_role(role), ViewKind::View, false),
@@ -2377,6 +2396,21 @@ mod tests {
             spec_for(&checkbox, ViewKind::View, true, None, false).checked,
             None
         );
+    }
+
+    /// An invalid field is AT-SPI's invalid entry (GTK's `Invalid`).
+    #[test]
+    fn invalid() {
+        let field = Accessibility {
+            label: Some("Email".into()),
+            state: AccessibilityState {
+                invalid: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(spec_for(&field, ViewKind::Input, false, None, false).invalid);
+        assert!(!spec_for(&with_role(Role::Button), ViewKind::View, true, None, false).invalid);
     }
 
     #[test]

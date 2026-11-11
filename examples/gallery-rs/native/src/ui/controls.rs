@@ -3,7 +3,7 @@
 
 use nsh_core::{
     Bounds, Points,
-    element::{JsObject, PropEnum},
+    element::{AdaptiveShadow, JsObject, PropEnum},
     prelude::*,
 };
 
@@ -106,7 +106,7 @@ pub(crate) fn Toggle(props: ToggleProps, cx: Scope<ToggleEvent>) -> impl IntoEle
                 .gradient_from(rgb_a(0xffffff, 0.3))
                 .gradient_to(rgb_a(0xffffff, 0.0))
                 .gradient_to_position(percentage(0.6))
-                .adaptive_shadow(
+                .adaptive_shadow(AdaptiveShadow::new(
                     knob_light.iter().copied(),
                     [
                         inset_shadow(1.0, 0.0, rgb_a(0xffffff, 0.2)),
@@ -119,7 +119,7 @@ pub(crate) fn Toggle(props: ToggleProps, cx: Scope<ToggleEvent>) -> impl IntoEle
                             inset: false,
                         },
                     ],
-                )
+                ))
                 .bind_translate_x(&on.interpolate(&[0.0, 1.0], &[0.0, 20.0])),
         )
         .into_element()
@@ -254,7 +254,10 @@ pub(crate) fn Segmented(props: SegmentedProps, cx: Scope<SegmentedEvent>) -> imp
         .p(px(3.0))
         .rounded(px(height / 2.0))
         .bg(colors::INSET)
-        .adaptive_shadow(track_light.iter().copied(), track_dark.iter().copied())
+        .adaptive_shadow(AdaptiveShadow::new(
+            track_light.iter().copied(),
+            track_dark.iter().copied(),
+        ))
         .border_1()
         .border_color(colors::BORDER)
         .role(AccessibilityRole::Tablist)
