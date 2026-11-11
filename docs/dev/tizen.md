@@ -222,19 +222,20 @@ tested by `cargo test -p nsh-cli --bin nsh tizen::tests`, and the commands throu
   architecture, `res/nsh/` (`bundle.nshc`, `capabilities.json`, `app.json`, `assets/`: `nsh-platform-tizen`'s
   `package.rs`), `shared/res/icon.png` (512×423) and `tizen-manifest.xml` (`tizen::Manifest`: a `dotnet`
   `ui-application` running the host on the `tv-samsung` profile, as dXn.GpuiTizen's
-  `host/tizen-manifest.template.xml`), then signs it with `tz pack -t tpk -s <profile> <staging>` and moves the
-  package `tz` wrote (inside or next to the staged tree) to `<out>/<name>.tpk`. Without a profile it refuses, saying
-  how to make one. With several architectures each package's version gets the fourth number (armv7l 1, aarch64 2,
+  `host/tizen-manifest.template.xml`), then zips the staged tree into `<out>/<name>.unsigned.tpk` and re-signs it
+  with `tz pack -t tpk -s <profile> -b <unsigned> -o <out>/<name>.tpk` (`tizen::sign_command`), removing the unsigned
+  zip: `tz pack` signs only a `tz` project or, with `-b`, a package, and answers "is not a valid project" for a plain
+  directory. Without a profile it refuses, saying how to make one. With several architectures each package's version gets the fourth number (armv7l 1, aarch64 2,
   x86_64 3) and the CPU feature (`platform.core.cpu.arch.armv7` / `armv8` / `x86_64`), and the packages go to
   `<out>/<package>-<version>.<n>-<arch>.tpk`, and the TVs' ones (armv7l, aarch64; `Arch::in_store`) into
   `<out>/<package>-<version>.zip` for Seller Office; the emulator's x86_64 package stays out of it (dXn.GpuiTizen's
   `xtask/src/package/` conventions, `STORE_TARGETS`). `--run` installs the TV's architecture's package and launches
-  it.
+  it, installing with `tz install -p <tpk> -e <serial>` (`tizen::install_command`).
 - **`nsh run --target tizen [--device <serial>]`** finds the device (`sdb devices`; the only one, or `--device`) and
   what it is (`sdb capability`: `cpu_arch`, and `secure_protocol`, a retail TV, which has no shell), builds the
   development TPK (`NshDevTizn.NshDev`, one package for every app, apart from `tizen-web`'s `NshDevHost`) from
   `runtime/tizen/dev/` for its architecture into `.nsh/tizen/` and signs it with `nsh.json` `tizen.signing` when the
-  runtime changed, installs it with `sdb install` when the device does not have this build (`.nsh/tizen/installed`:
+  runtime changed, installs it with `tz install -p <tpk> -e <serial>` when the device does not have this build (`.nsh/tizen/installed`:
   a digest of the runtime per serial), then runs `tizen::open_sequence` with `tizen::open`, each step with its
   failure policy (`tizen::Step`): it stops what an earlier session left (a failure, nothing running, is fine), maps
   the TV's port 8790 to the dev server with `sdb reverse` and launches it (`sdb shell 0 execute <app id>` on a TV,
@@ -281,9 +282,13 @@ crates.io, naming `nsh init --template rust --nsh-source <dir>`.
 
 ## Limits
 
-- Nothing here has run on a TV or the emulator yet: the `sdb` commands (`0 execute`, `0 kill`, `sdb reverse`'s
-  form), where `tz pack` writes a TPK made from a staged tree, and the multi-architecture packaging assumptions
-  (feature keys, four-part versions) are dXn.GpuiTizen's, unverified until the owner's run.
+- Nothing here has run on a TV yet: the `sdb` commands (`0 kill`, `sdb reverse`'s form) and the multi-architecture
+  packaging assumptions (feature keys, four-part versions) are dXn.GpuiTizen's, unverified until the owner's run.
+  dXn.GpuiTizen's emulator CI has confirmed, on the Samsung TV emulator (Tizen 10.0), that `sdb capability` reports
+  `secure_protocol:enabled` there too, that `0 execute` is the launch, and that installing takes `tz install` (TVs'
+  `0 vd_appinstall`): there is no `pkgcmd`, and `sdb install` hands a `.tpk` to the web-app installer, which rejects
+  it while `sdb` exits 0. The emulator, like a TV, takes only a Samsung certificate whose distributor lists its
+  DUID.
 - Retail TVs have no `sdb shell`: `0 execute` and `0 kill` are the TV's launch and stop commands; logs reach the
   developer through the dev server only.
 - The development TPK is one package for every app; a TV's install record is the app's, so after another app's run

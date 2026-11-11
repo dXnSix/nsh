@@ -50,15 +50,18 @@ fn app(config: &str) -> Directory {
         fs::write(runtime.join("Nsh.Tizen.Host.dll"), "host").unwrap();
     }
     fs::create_dir_all(root.join("bin")).unwrap();
-    // `tz`: its arguments, one line a call; `pack` writes a package next
-    // to the staged one (its manifest, to read back).
+    // `tz`: its arguments, one line a call; `pack -b <unsigned> -o <out>`
+    // writes the unsigned package's manifest as the signed one, to read back.
     script(
         &root.join("bin/tz"),
         r#"#!/bin/sh
 printf '%s\n' "$*" >> "$TZ_LOG"
 if [ "$1" = pack ]; then
-  for last; do :; done
-  cp "$last/tizen-manifest.xml" "$last/../$(basename "$last")-signed.tpk"
+  while [ $# -gt 0 ]; do
+    case "$1" in -b) unsigned="$2"; shift ;; -o) out="$2"; shift ;; esac
+    shift
+  done
+  unzip -p "$unsigned" tizen-manifest.xml > "$out"
 fi
 "#,
     );
@@ -264,12 +267,20 @@ fn a_package_is_the_host_the_library_and_the_app_signed_with_tz() {
         assert!(manifest.contains(part), "{part} in {manifest}");
     }
     assert!(!manifest.contains("<feature"), "{manifest}");
+    // The staged package zipped and re-signed by `tz pack -b`; the
+    // unsigned zip is gone afterwards.
+    let out = dir.0.join("out");
     assert_eq!(
         read(dir.0.join("tz.log")).trim(),
-        format!("pack -t tpk -s tv-profile {}", staged.display())
+        format!(
+            "pack -t tpk -s tv-profile -b {} -o {}",
+            out.join("Counter.unsigned.tpk").display(),
+            out.join("Counter.tpk").display()
+        )
     );
+    assert!(!out.join("Counter.unsigned.tpk").exists());
     // What `tz` wrote, as `<out>/<name>.tpk`.
-    assert_eq!(read(dir.0.join("out/Counter.tpk")), manifest);
+    assert_eq!(read(out.join("Counter.tpk")), manifest);
 }
 
 #[test]
@@ -306,7 +317,8 @@ fn several_architectures_make_the_multi_architecture_upload() {
     let log = read(dir.0.join("tz.log"));
     assert_eq!(log.lines().count(), 3, "{log}");
     assert!(
-        log.lines().all(|l| l.starts_with("pack -t tpk -s other ")),
+        log.lines()
+            .all(|l| l.starts_with("pack -t tpk -s other -b ")),
         "{log}"
     );
     let zip = fs::read(dir.0.join("out/AbCdE12345-1.2.0.zip")).unwrap();
@@ -370,29 +382,37 @@ fn run_installs_maps_and_launches_the_development_package() {
     assert!(dev.contains(r#"package="NshDevTizn""#), "{dev}");
     assert_eq!(read(work.join("dev-armv7l/lib/libnsh.so")), "dev armv7l");
     assert!(!work.join("dev-armv7l/res/nsh/bundle.nshc").exists());
+    // Installed by `tz install` (a TV has no `pkgcmd`; `sdb install`
+    // would hand the package to the web-app installer).
+    let tz_log = read(dir.0.join("tz.log"));
+    assert_eq!(
+        tz_log.lines().last(),
+        Some(&*format!("install -p {} -e tv-1", tpk.display())),
+        "{tz_log}"
+    );
     let log = read(dir.0.join("sdb.log"));
+    assert!(!log.contains(" install "), "{log}");
     let lines: Vec<&str> = log.lines().collect();
     assert_eq!(
-        lines[..4],
+        lines[..3],
         [
             "devices",
             "-s tv-1 capability",
-            &*format!("-s tv-1 install {}", tpk.display()),
             "-s tv-1 shell 0 kill NshDevTizn.NshDev"
         ],
         "{log}"
     );
     assert!(
-        lines[4].starts_with("-s tv-1 reverse tcp:8790 tcp:"),
+        lines[3].starts_with("-s tv-1 reverse tcp:8790 tcp:"),
         "{log}"
     );
     assert_eq!(
-        lines[5], "-s tv-1 shell 0 execute NshDevTizn.NshDev",
+        lines[4], "-s tv-1 shell 0 execute NshDevTizn.NshDev",
         "{log}"
     );
     // Undone on the way out.
     assert_eq!(
-        lines[6..],
+        lines[5..],
         [
             "-s tv-1 shell 0 kill NshDevTizn.NshDev",
             "-s tv-1 reverse --remove tcp:8790"
@@ -409,5 +429,6 @@ fn run_installs_maps_and_launches_the_development_package() {
         .unwrap();
     let log = read(dir.0.join("sdb.log"));
     assert!(!log.contains(" install "), "{log}");
-    assert_eq!(read(dir.0.join("tz.log")).lines().count(), 1);
+    // One `pack` and one `install`, both from the first run.
+    assert_eq!(read(dir.0.join("tz.log")).lines().count(), 2);
 }
