@@ -35126,3 +35126,103 @@ mod theme_set_files {
         assert_eq!(left_out, ["`radius-card`: no radius value"]);
     }
 }
+
+/// `resetTheme` with names under a theme set: a role's name is the token it
+/// is mapped onto, as it is in a theme file that sets it.
+mod theme_reset_roles {
+    use super::{app_theme::sets, *};
+    use crate::{Prop, color::rgb};
+
+    fn light(c: &Core<FakeEngine>, name: &str) -> Option<Color> {
+        c.tokens().color(name).map(|t| Color::from(t.light))
+    }
+
+    fn set_root(c: &mut Core<FakeEngine>, prop: Prop) {
+        apply(c, vec![Op::SetProp { id: ROOT_ID, prop }]);
+    }
+
+    fn update(c: &mut Core<FakeEngine>, light: &str) {
+        let file = format!(r#"{{ "cssVars": {{ "light": {light} }} }}"#);
+        set_root(c, Prop::UiThemeUpdate(file.into()));
+    }
+
+    fn reset(c: &mut Core<FakeEngine>, names: &[&str]) {
+        let names = names.iter().map(|n| (*n).into()).collect();
+        set_root(c, Prop::UiThemeReset(Some(names)));
+    }
+
+    #[test]
+    fn a_roles_name_resets_the_token_it_is_mapped_onto() {
+        let mut c = core();
+        c.set_components(sets());
+        let overlay = Some(Color::from(rgb(0x111111)));
+        assert_eq!(light(&c, "surface-overlay"), overlay);
+        // `popover` is the role `surface-overlay` plays: its name sets the
+        // token, and gives it its default back.
+        update(
+            &mut c,
+            r##"{ "popover": "#abcdef", "odds-up": "#0000ff" }"##,
+        );
+        assert_eq!(
+            light(&c, "surface-overlay"),
+            Some(Color::from(rgb(0xabcdef)))
+        );
+        reset(&mut c, &["popover"]);
+        assert_eq!(light(&c, "surface-overlay"), overlay);
+        // Only it: the other token keeps what the app set.
+        assert_eq!(light(&c, "odds-up"), Some(Color::from(rgb(0x0000ff))));
+        // No token of the role's name comes of it.
+        assert!(light(&c, "popover").is_none());
+    }
+
+    #[test]
+    fn a_tokens_own_name_resets_it_as_before() {
+        let mut c = core();
+        c.set_components(sets());
+        update(
+            &mut c,
+            r##"{ "surface-overlay": "#abcdef", "odds-up": "#0000ff" }"##,
+        );
+        reset(&mut c, &["surface-overlay"]);
+        assert_eq!(
+            light(&c, "surface-overlay"),
+            Some(Color::from(rgb(0x111111)))
+        );
+        assert_eq!(light(&c, "odds-up"), Some(Color::from(rgb(0x0000ff))));
+        // Both names of one token, and a name that is neither.
+        update(&mut c, r##"{ "popover": "#abcdef" }"##);
+        reset(&mut c, &["popover", "surface-overlay", "nothing"]);
+        assert_eq!(
+            light(&c, "surface-overlay"),
+            Some(Color::from(rgb(0x111111)))
+        );
+        assert_eq!(light(&c, "odds-up"), Some(Color::from(rgb(0x0000ff))));
+        // Every one.
+        set_root(&mut c, Prop::UiThemeReset(None));
+        assert_eq!(light(&c, "odds-up"), Some(Color::from(rgb(0x00aa00))));
+    }
+
+    /// JS computes the tokens of the frame it is in before the reset
+    /// reaches the core: both read the names alike.
+    #[test]
+    fn the_core_and_js_reset_alike() {
+        let mut c = core();
+        c.set_components(sets());
+        update(
+            &mut c,
+            r##"{ "popover": "#abcdef", "odds-up": "#0000ff" }"##,
+        );
+        let current = (**c.tokens()).clone();
+        let names: Vec<Box<str>> = vec!["popover".into()];
+        let js = c
+            .theme_tokens()
+            .reset(&current, r#"{ "cssVars": {} }"#, Some(&names))
+            .unwrap();
+        reset(&mut c, &["popover"]);
+        assert_eq!(&js, &**c.tokens());
+        assert_eq!(
+            js.color("surface-overlay").map(|t| Color::from(t.light)),
+            Some(Color::from(rgb(0x111111)))
+        );
+    }
+}

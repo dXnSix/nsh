@@ -356,8 +356,9 @@ impl ThemeTokens {
     /// The tokens drawn with once the tokens `names` (`None`: every one)
     /// go back to their values in the app's theme file `json` (`nsh`'s
     /// `resetTheme`), the others staying as in `current`: a name the file
-    /// and the defaults lack is gone. `None`: no UI set reads themes, or
-    /// `json` is not one.
+    /// and the defaults lack is gone. Under theme types a role's name is
+    /// the token it is mapped onto, as in a theme file. `None`: no UI set
+    /// reads themes, or `json` is not one.
     pub fn reset(
         &self,
         current: &Tokens,
@@ -370,6 +371,10 @@ impl ThemeTokens {
         };
         let mut out = current.clone();
         for name in names {
+            let name = match &self.provider {
+                Some(provider) => provider.token_name(name),
+                None => name,
+            };
             out.copy_named(&theme, name);
         }
         Some(out)

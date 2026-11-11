@@ -796,7 +796,9 @@ cannot read and nothing changed); `null` sends the file the entry gave again. So
 with `element::update_tokens(tokens)` and `reset_tokens(names)` (`Action::UpdateTokens` / `ResetTokens`, applied in
 order with the app's other actions so two updates in a turn compose; `ModuleCx` has both for synchronous `#[module]`
 functions) and TS's `updateTheme(theme)` / `resetTheme(names?)` (`env.rs`; the web's ops 409 and 410): the root's
-`Prop::UiThemeUpdate` / `Prop::UiThemeReset` (pushed by the runtime, no JS name), with `token()` reading the result
+`Prop::UiThemeUpdate` / `Prop::UiThemeReset` (pushed by the runtime, no JS name; under theme types the reset's names
+are read as a theme file's, a role's name being its token: `TokenProvider::token_name`, in the core and in
+`ThemeTokens::reset`), with `token()` reading the result
 at once (`ThemeTokens::updated`, read whole as `checked`; `ThemeTokens::reset`). An update reads only the tokens the
 file sets, with what the UI set brings for it (`Registry::token_overrides_from`: `nsh/base` gives `theme_file::overrides`): a
 value it cannot read keeps the token's value, and a `var()` naming a token it does not set is the token drawn with

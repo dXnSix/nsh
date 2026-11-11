@@ -963,6 +963,21 @@ impl<M: TextEngine> Core<M> {
         tokens
     }
 
+    /// The tokens that `names` name as a theme file names them: under theme
+    /// types a role's name is the token it is mapped onto
+    /// (`TokenProvider::token_name`).
+    pub(super) fn theme_file_names(&self, mut names: Vec<Box<str>>) -> Vec<Box<str>> {
+        if let Some(provider) = self.components.registry.token_provider() {
+            for name in &mut names {
+                let token = provider.token_name(name);
+                if *token != **name {
+                    *name = token.into();
+                }
+            }
+        }
+        names
+    }
+
     /// Puts the app's tokens `names` (`None`: every one) back to its
     /// theme's ([`Core::set_tokens`]); a name the theme lacks is removed.
     pub(crate) fn reset_tokens(&mut self, names: Option<&[Box<str>]>) {

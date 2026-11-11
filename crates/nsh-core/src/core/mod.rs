@@ -4924,6 +4924,7 @@ impl<M: TextEngine> Core<M> {
                 return Ok(());
             }
             Prop::UiThemeReset(names) => {
+                let names = names.map(|names| self.theme_file_names(names));
                 self.reset_tokens(names.as_deref());
                 return Ok(());
             }
