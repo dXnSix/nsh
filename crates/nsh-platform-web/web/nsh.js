@@ -2723,6 +2723,8 @@ class Player {
     set("aria-haspopup", p.hasPopup && "true");
     set("aria-pressed", p.pressed);
     set("aria-current", p.current);
+    set("aria-invalid", p.invalid && "true");
+    if (el._field) this.fieldAria(el, el._field);
     set("aria-level", p.level);
     const [min, max, now, text] = p.value ?? [];
     set("aria-valuemin", min);
@@ -2764,6 +2766,13 @@ class Player {
       });
     }
     this.updateAria(el);
+  }
+
+  /** The states of input view `el` that belong on its `field` too: the
+   * field is the element screen readers read as the input. */
+  fieldAria(el, field) {
+    if (el._props?.invalid) field.setAttribute("aria-invalid", "true");
+    else field.removeAttribute("aria-invalid");
   }
 
   /** The keyboard focus reached pressable `el`: `focus:` and `onFocus`. */
@@ -4872,6 +4881,7 @@ class Player {
       if (el._content) this.placeContent(el);
     }
     swapClass(field, "_class", this.styleClass(css));
+    this.fieldAria(el, field);
     // Filling the view, or placed at its content's frame (`placeContent`).
     field.classList.toggle("nsh-inset", !el._content);
     field.placeholder = config.placeholder;
