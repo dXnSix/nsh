@@ -2314,10 +2314,16 @@ static PREFIXES: &[(&str, Handler)] = &[
         })
     }),
     ("bg", |t, v, _| {
-        if let Some(a) = arbitrary(v)
+        // `[image:…]` says the value is an image, as Tailwind's type hint
+        // does; gradients are the images there are.
+        let value = arbitrary(v);
+        let image = value
+            .as_deref()
+            .map(|a| arbitrary_hinted(a, "image").unwrap_or(a));
+        if let Some(a) = image
             && a.contains("gradient(")
         {
-            if css::gradient(&css::with_current_color(&a, Color::BLACK)).is_none() {
+            if css::gradient(&css::with_current_color(a, Color::BLACK)).is_none() {
                 // Reported here: the class is also unknown, but that does
                 // not say the gradient is what was rejected.
                 log::warn!("invalid gradient in class `bg-{v}`: {a}");
@@ -2325,7 +2331,7 @@ static PREFIXES: &[(&str, Handler)] = &[
             }
             return one(Decl::Style(StyleDecl::Set(
                 K::BackgroundImage,
-                K::BackgroundImage.parse_value(StyleValue::Str(&a)).ok()?,
+                K::BackgroundImage.parse_value(StyleValue::Str(a)).ok()?,
             )));
         }
         if let Some(a) = current(v) {
