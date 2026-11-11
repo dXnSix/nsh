@@ -1541,8 +1541,10 @@ mod tests {
     /// Tizen natively: its own OS, `"tizen"`, a TV by default and
     /// never a desktop; a Tizen web app stays `Os::Web`.
     mod tizen {
-        use crate::keymap::{Keystroke, apple_keys};
-        use crate::platform::{Environment, Idiom, Os};
+        use crate::{
+            keymap::{Keystroke, apple_keys},
+            platform::{Environment, Idiom, Os},
+        };
 
         #[test]
         fn tizen_is_its_own_os_and_not_a_desktop_one() {
