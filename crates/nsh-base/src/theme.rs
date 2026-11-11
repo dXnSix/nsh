@@ -755,7 +755,16 @@ mod tests {
             let json = serde_json::json!({"cssVars": {"light": {"shadow-sm": value}}}).to_string();
             let (theme, ignored) = Theme::from_json_lenient(&json).unwrap();
             assert!(ignored.is_empty(), "{value}: {ignored:?}");
-            assert_eq!(theme.tokens().get("shadow-sm"), None);
+            // A shadow, not a color: the fork imports shadows as shadow
+            // tokens where it can read them (`Token::Shadow`), longbridge's
+            // leaves them out.
+            assert!(
+                !matches!(
+                    theme.tokens().get("shadow-sm"),
+                    Some(nsh_core::element::Token::Color(_))
+                ),
+                "{value}"
+            );
         }
     }
 
