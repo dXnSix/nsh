@@ -34,7 +34,9 @@ nsh-engine = { version = "0.5.0", path = "../nsh-engine", default-features = fal
 nsh-base = { version = "0.5.0", path = "../nsh-base", default-features = false }
 # The JSX compiler alone (tests compile their apps).
 nsh-bundler = { version = "0.5.0", path = "../nsh-bundler", default-features = false }
-# Shader views' renderer (wgpu, the version GPUI draws with).
+# The backend itself. Its shader views render through `nsh-engine`'s `shader`
+# feature, on the main workspace's wgpu (30), the version gpui-fast draws with,
+# so this lockfile holds one wgpu and one naga.
 nsh-platform-gpui = { version = "0.5.0", path = "nsh-platform-gpui", default-features = false }
 
 # The same versions as the main workspace's.

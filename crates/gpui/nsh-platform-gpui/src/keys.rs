@@ -1,6 +1,14 @@
 //! Keys: GPUI's keystrokes as the virtual key codes ([`crate::input::KeyEvent::vk`],
 //! Windows' `VK_*` values) the input, scrolling, keymap and editing code
 //! shared with the Windows backend work with.
+//!
+//! The media and TV remote keys come with the names the Tizen platform gives
+//! GPUI (`mediaplaypause`, `red`, `channelup`, `info`, ...). Windows has
+//! virtual keys for four of them (`VK_MEDIA_*`); the others get codes of
+//! this backend's own past Windows' 0xFF ([`TV_KEYS`]), which no Windows key
+//! has, so the code shared with Windows never mistakes them for one.
+
+use nsh_core::keymap::Key;
 
 /// `VK_BACK`.
 pub(crate) const VK_BACK: u16 = 0x08;
@@ -42,6 +50,51 @@ pub(crate) const VK_DELETE: u16 = 0x2E;
 pub(crate) const VK_LWIN: u16 = 0x5B;
 /// `VK_BROWSER_BACK`.
 pub(crate) const VK_BROWSER_BACK: u16 = 0xA6;
+/// `VK_MEDIA_NEXT_TRACK`.
+pub(crate) const VK_MEDIA_NEXT_TRACK: u16 = 0xB0;
+/// `VK_MEDIA_PREV_TRACK`.
+pub(crate) const VK_MEDIA_PREV_TRACK: u16 = 0xB1;
+/// `VK_MEDIA_STOP`.
+pub(crate) const VK_MEDIA_STOP: u16 = 0xB2;
+/// `VK_MEDIA_PLAY_PAUSE`.
+pub(crate) const VK_MEDIA_PLAY_PAUSE: u16 = 0xB3;
+
+/// The TV remote's keys Windows has no virtual key for: their GPUI names,
+/// the codes this backend gives them (past 0xFF) and their keys.
+pub(crate) const TV_KEYS: &[(&str, u16, Key)] = &[
+    ("mediaplay", 0x100, Key::MediaPlay),
+    ("mediapause", 0x101, Key::MediaPause),
+    ("mediarewind", 0x102, Key::MediaRewind),
+    ("mediafastforward", 0x103, Key::MediaFastForward),
+    ("red", 0x104, Key::ColorRed),
+    ("green", 0x105, Key::ColorGreen),
+    ("yellow", 0x106, Key::ColorYellow),
+    ("blue", 0x107, Key::ColorBlue),
+    ("channelup", 0x108, Key::ChannelUp),
+    ("channeldown", 0x109, Key::ChannelDown),
+    ("info", 0x10A, Key::Info),
+];
+
+/// The key of virtual key code `vk`: Windows' ([`Key::from_virtual_key`])
+/// or one of [`TV_KEYS`].
+pub(crate) fn key_of(vk: u16) -> Option<Key> {
+    Key::from_virtual_key(vk).or_else(|| {
+        TV_KEYS
+            .iter()
+            .find(|(_, code, _)| *code == vk)
+            .map(|&(_, _, key)| key)
+    })
+}
+
+/// The virtual key code of `key`, as [`key_of`] takes it.
+pub(crate) fn virtual_key(key: Key) -> Option<u16> {
+    key.virtual_key().or_else(|| {
+        TV_KEYS
+            .iter()
+            .find(|(_, _, k)| *k == key)
+            .map(|&(_, code, _)| code)
+    })
+}
 
 /// The virtual key code of GPUI key name `key` (`Keystroke::key`), or
 /// `None` for keys nsh does not use.
@@ -67,6 +120,13 @@ pub(crate) fn vk_of(key: &str) -> Option<u16> {
         "insert" => VK_INSERT,
         "delete" => VK_DELETE,
         "back" => VK_BROWSER_BACK,
+        "medianext" => VK_MEDIA_NEXT_TRACK,
+        "mediaprevious" => VK_MEDIA_PREV_TRACK,
+        "mediastop" => VK_MEDIA_STOP,
+        "mediaplaypause" => VK_MEDIA_PLAY_PAUSE,
+        // Ecore's name of Info: the Tizen platform names it `info`, but
+        // passed this name on before it did.
+        "xf86info" => virtual_key(Key::Info)?,
         ";" => 0xBA,
         "=" => 0xBB,
         "," => 0xBC,
@@ -79,6 +139,9 @@ pub(crate) fn vk_of(key: &str) -> Option<u16> {
         "]" => 0xDD,
         "'" => 0xDE,
         _ => {
+            if let Some(&(_, code, _)) = TV_KEYS.iter().find(|(name, _, _)| *name == key) {
+                return Some(code);
+            }
             if let Some(n) = key.strip_prefix('f').and_then(|n| n.parse::<u16>().ok())
                 && (1..=24).contains(&n)
             {
@@ -121,5 +184,55 @@ mod tests {
         assert_eq!(vk_of("enter"), Some(VK_RETURN));
         assert_eq!(vk_of("/"), Some(0xBF));
         assert_eq!(vk_of("é"), None);
+    }
+
+    /// The media and TV remote keys by the Tizen platform's names
+    /// (dXn.GpuiTizen's design `d14-keys`).
+    mod tv {
+        use nsh_core::keymap::Key;
+
+        use super::super::*;
+
+        #[test]
+        fn names() {
+            let names = [
+                ("mediaplaypause", Key::MediaPlayPause),
+                ("mediaplay", Key::MediaPlay),
+                ("mediapause", Key::MediaPause),
+                ("mediastop", Key::MediaStop),
+                ("mediarewind", Key::MediaRewind),
+                ("mediafastforward", Key::MediaFastForward),
+                ("medianext", Key::MediaNext),
+                ("mediaprevious", Key::MediaPrevious),
+                ("red", Key::ColorRed),
+                ("green", Key::ColorGreen),
+                ("yellow", Key::ColorYellow),
+                ("blue", Key::ColorBlue),
+                ("channelup", Key::ChannelUp),
+                ("channeldown", Key::ChannelDown),
+                ("info", Key::Info),
+                ("xf86info", Key::Info),
+            ];
+            for (name, key) in names {
+                let vk = vk_of(name).unwrap_or_else(|| panic!("{name}"));
+                assert_eq!(key_of(vk), Some(key), "{name}");
+                assert_eq!(key_of(virtual_key(key).unwrap()), Some(key), "{key:?}");
+            }
+            // Windows' own media keys keep their codes.
+            assert_eq!(vk_of("mediaplaypause"), Some(0xB3));
+            assert_eq!(vk_of("medianext"), Some(0xB0));
+            // Back is the browser's back key, which navigation takes; Exit
+            // is no key of NSH's.
+            assert_eq!(vk_of("back"), Some(VK_BROWSER_BACK));
+            assert_eq!(vk_of("exit"), None);
+        }
+
+        #[test]
+        fn codes_of_their_own_are_no_windows_keys() {
+            for &(_, code, _) in TV_KEYS {
+                assert!(code > 0xFF);
+                assert_eq!(Key::from_virtual_key(code), None);
+            }
+        }
     }
 }

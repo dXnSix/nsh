@@ -240,8 +240,9 @@ pub(crate) struct InputState {
     held: RefCell<Option<(String, u32)>>,
     /// The handlers' context, for reports after programmatic changes.
     cx: std::cell::OnceCell<Ctx>,
-    /// The window whose focus widget is watched, and the handler.
-    window: RefCell<Option<(glib::WeakRef<gtk::Window>, glib::SignalHandlerId)>>,
+    /// The window whose focus widget is watched, and the handlers (the
+    /// blur's, the focus').
+    window: RefCell<Option<(glib::WeakRef<gtk::Window>, [glib::SignalHandlerId; 2])>>,
     /// The handler that focuses the editor once it is shown (`autoFocus`).
     auto_focus: RefCell<Option<(gtk::Widget, glib::SignalHandlerId)>>,
 }
@@ -454,16 +455,28 @@ impl Ctx {
         {
             return;
         }
-        if let Some((old, handler)) = watched.take()
+        if let Some((old, handlers)) = watched.take()
             && let Some(old) = old.upgrade()
         {
-            old.disconnect(handler);
+            for handler in handlers {
+                old.disconnect(handler);
+            }
         }
+        // A blur is reported in the window's first handlers, a focus after
+        // all of them (`after`), so the view the focus left reports
+        // `onBlur` before the one it reached reports `onFocus`, whichever
+        // was connected first (`key_focus::watch` does the same).
         let c = self.clone();
-        let handler = window.connect_focus_widget_notify(move |_| c.focus_changed());
-        *watched = Some((window.downgrade(), handler));
+        let blur = window.connect_focus_widget_notify(move |_| c.focus_changed(false));
+        let c = self.clone();
+        let focus = window.connect_local("notify::focus-widget", true, move |_| {
+            c.focus_changed(true);
+            None
+        });
+        *watched = Some((window.downgrade(), [blur, focus]));
         drop(watched);
-        self.focus_changed();
+        self.focus_changed(false);
+        self.focus_changed(true);
     }
 
     /// The input method's preedit text changed: empty when its
@@ -523,8 +536,9 @@ impl Ctx {
         });
     }
 
-    /// Focus entered or left the editor.
-    fn focus_changed(&self) {
+    /// Focus entered (`entered`) or left the editor: only that change is
+    /// reported.
+    fn focus_changed(&self, entered: bool) {
         let Some((surface, view, input)) = self.get() else {
             return;
         };
@@ -535,7 +549,7 @@ impl Ctx {
             .root()
             .and_then(|r| r.focus())
             .is_some_and(|f| f == widget || f.is_ancestor(&widget));
-        if input.focused.replace(focused) == focused {
+        if focused != entered || input.focused.replace(focused) == focused {
             return;
         }
         self.flush_change();
@@ -587,10 +601,12 @@ impl Ctx {
 
 impl Drop for InputState {
     fn drop(&mut self) {
-        if let Some((window, handler)) = self.window.take()
+        if let Some((window, handlers)) = self.window.take()
             && let Some(window) = window.upgrade()
         {
-            window.disconnect(handler);
+            for handler in handlers {
+                window.disconnect(handler);
+            }
         }
     }
 }
@@ -1562,6 +1578,22 @@ pub(crate) fn content(view: &NshView, content: Bounds<Points>) {
 /// keyboard to show it over on the desktop, so it stays unmounted.
 pub(crate) fn accessory(_surface: &Rc<Surface>, _parent: &NshView, child: &NshView) {
     log::debug!("input accessory {} is not shown on Linux", child.id());
+}
+
+/// The widget of input `view` that takes the keyboard focus: its text, or
+/// its text view.
+pub(crate) fn key_widget(view: &NshView) -> Option<gtk::Widget> {
+    let input = view.state().input.clone()?;
+    let widget = input.editor.borrow().widget();
+    Some(widget)
+}
+
+/// Whether input `view` edits (its config's `editable`).
+pub(crate) fn editable(view: &NshView) -> bool {
+    view.state()
+        .input
+        .as_ref()
+        .is_some_and(|input| input.config.borrow().editable)
 }
 
 /// `focus()`.

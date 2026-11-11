@@ -948,6 +948,7 @@ pub(crate) fn key(surface: &Rc<Surface>, event: &NSEvent, down: bool) -> bool {
         return false;
     };
     let root = &event_root(surface);
+    let arrow = crate::focus::Arrow::of(event.keyCode(), flags);
     let focus = root.ns().window().and_then(|w| w.firstResponder());
     let from_focus = match &focus {
         Some(r) => match r.downcast_ref::<ViewObj>() {
@@ -964,6 +965,13 @@ pub(crate) fn key(surface: &Rc<Surface>, event: &NSEvent, down: bool) -> bool {
         },
         None => None,
     };
+    // An arrow moves the keyboard focus to the stop that way, if any
+    // ([`crate::focus`]), else it scrolls.
+    if let Some(arrow) = arrow
+        && crate::focus::arrow(surface, from_focus.as_ref().map(NshView::ns), arrow)
+    {
+        return true;
+    }
     if let Some(view) = from_focus
         && crate::scroll::key_scroll(surface, &view, horizontal, m)
     {
@@ -991,6 +999,74 @@ pub(crate) fn is_key_stop(view: &NshView) -> bool {
         }
     }
     view.can_target() && !view.ns().isHiddenOrHasHiddenAncestor()
+}
+
+/// The stops of Tab under `scope` (the newest modal, or a window's root),
+/// in tree order (a scroll view's content as it is on screen,
+/// [`NshView::children_in_reading_order`]), each as the view that becomes
+/// first responder: the views [`is_key_stop`] takes, the inputs' fields
+/// and text views, and the hosted AppKit views that can be key views (a
+/// web view: the first in each one's subtree). Another modal is a scope of
+/// its own; views the pointer cannot reach take none of their subtree.
+pub(crate) fn tab_stops(scope: &objc2_app_kit::NSView) -> Vec<Retained<objc2_app_kit::NSView>> {
+    let mut stops = Vec::new();
+    if let Some(scope) = NshView::from_ns(scope) {
+        for child in scope.children_in_reading_order() {
+            collect_tab_stops(&child, &mut stops);
+        }
+    }
+    stops
+}
+
+fn collect_tab_stops(view: &NshView, out: &mut Vec<Retained<objc2_app_kit::NSView>>) {
+    if view.kind() == ViewKind::Modal
+        || !view.can_target()
+        || view.ns().isHiddenOrHasHiddenAncestor()
+    {
+        return;
+    }
+    if view.kind() == ViewKind::Input {
+        if let Some(field) = crate::text_input::key_view(view)
+            && field.canBecomeKeyView()
+        {
+            out.push(field);
+        }
+        return;
+    }
+    if is_key_stop(view) {
+        out.push(Retained::from(view.ns()));
+    }
+    let natives: Vec<_> = view
+        .state()
+        .natives
+        .iter()
+        .map(|n| n.view.clone())
+        .collect();
+    out.extend(
+        natives
+            .iter()
+            .filter_map(|native| first_key_view(native, 0)),
+    );
+    for child in view.children_in_reading_order() {
+        collect_tab_stops(&child, out);
+    }
+}
+
+/// The first view of a hosted AppKit view's subtree, depth first from it,
+/// that can be a key view.
+fn first_key_view(
+    view: &objc2_app_kit::NSView,
+    depth: usize,
+) -> Option<Retained<objc2_app_kit::NSView>> {
+    if view.isHidden() || depth > 16 {
+        return None;
+    }
+    if view.canBecomeKeyView() {
+        return Some(Retained::from(view));
+    }
+    view.subviews()
+        .iter()
+        .find_map(|sub| first_key_view(&sub, depth + 1))
 }
 
 /// A stop that Return and Space press ([`is_key_stop`] taking presses): a
@@ -1448,7 +1524,6 @@ pub(crate) fn local(_surface: &Surface, view: &NshView, x: f32, y: f32) -> (f32,
 /// transforms on the way (layer transforms, which AppKit's conversions
 /// leave out), as [`local`] undoes them. `None` when a transform's
 /// perspective puts the point at infinity.
-#[cfg(feature = "dev")]
 pub(crate) fn to_top(view: &NshView, p: (f32, f32), transforms: bool) -> Option<(f32, f32)> {
     let mut p = p;
     for pair in chain(view).windows(2) {
@@ -1465,7 +1540,6 @@ pub(crate) fn to_top(view: &NshView, p: (f32, f32), transforms: bool) -> Option<
 
 /// Where row-vector transform `m` shows point `p` of a view's plane
 /// (z = 0), perspective included: what [`unproject`] inverts.
-#[cfg(feature = "dev")]
 fn project(m: &nsh_core::Matrix, p: (f32, f32)) -> Option<(f32, f32)> {
     let m = &m.0;
     let (x, y) = (p.0 as f64, p.1 as f64);
@@ -3242,7 +3316,6 @@ mod tests {
         assert_eq!(unproject(&flat, (1.0, 1.0)), None);
     }
 
-    #[cfg(feature = "dev")]
     #[test]
     fn projects_points_where_hit_testing_finds_them() {
         // A quarter turn, nonuniform scale and translation, with perspective.
@@ -3264,7 +3337,6 @@ mod tests {
         assert!((local.1 - 20.0).abs() < 0.0001);
     }
 
-    #[cfg(feature = "dev")]
     #[test]
     fn projection_at_infinity_has_no_test_target() {
         let mut m = nsh_core::Matrix::IDENTITY;

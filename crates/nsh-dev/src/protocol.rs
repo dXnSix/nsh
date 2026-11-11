@@ -499,6 +499,13 @@ pub enum TestStep {
         /// The keystroke: `"mod+k"`, `"escape"`.
         keys: String,
     },
+    /// Presses a TV remote's key by its name (`app.keyboard.remote`):
+    /// `"up"`, `"ok"`, `"back"`, `"red"`, `"mediaplaypause"`
+    /// (`nsh_testing::remote`, which the agent checks it against).
+    PressRemoteKey {
+        /// The key's name.
+        key: String,
+    },
     /// Holds modifier keys down, or lets go of them, for the pointer's
     /// steps until then (`app.keyboard.down` / `up`).
     HoldKeys {

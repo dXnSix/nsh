@@ -567,6 +567,28 @@ impl Native for MacNative {
             Key::PageUp => "Page_Up".into(),
             Key::PageDown => "Page_Down".into(),
             Key::F(n) => format!("F{n}"),
+            // A Mac's media keys reach the system (Now Playing) as
+            // system-defined events, never an app's key events: posting
+            // one would play the user's music, not press the app's key.
+            Key::MediaPlayPause
+            | Key::MediaPlay
+            | Key::MediaPause
+            | Key::MediaStop
+            | Key::MediaRewind
+            | Key::MediaFastForward
+            | Key::MediaNext
+            | Key::MediaPrevious
+            | Key::ColorRed
+            | Key::ColorGreen
+            | Key::ColorYellow
+            | Key::ColorBlue
+            | Key::ChannelUp
+            | Key::ChannelDown
+            | Key::Info => {
+                return Err(format!(
+                    "{keys:?} has no key on macOS: a Mac gives an app no media or TV remote keys"
+                ));
+            }
         });
         self.activate();
         self.on_key(move |surface, window| synth::key(surface, window, &name))

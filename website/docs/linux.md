@@ -202,11 +202,13 @@ The environment is a desktop's: the safe area and the keyboard height are 0, `id
 |---|---|
 | Return | In an `Input`, what `submitBehavior` says: submit (`onSubmit`), submit and leave the field, or a new line (multiline inputs) |
 | Shift+Return, Alt+Return | A new line in a multiline input whose return submits (Ctrl+Return submits) |
-| Tab, Shift+Tab | The next / previous field in screen order, within the newest dialog |
+| Tab, Shift+Tab (Ctrl too) | The next / previous field or pressable view in tree order, within the newest dialog |
+| Return, Space | Press the focused view with `onPress` |
 | Escape | Leaves the focused field; else clears a text selection, then closes the newest dialog or goes back |
 | Alt+Left, Back key, mouse back button | Go back (also from a field) |
 | Ctrl+arrows, Home / End, with Shift; Ctrl+Backspace / Delete | Move, select and delete by word and line in a field, as in every GTK app |
 | Ctrl+Z, Ctrl+Shift+Z, Ctrl+X / C / V / A | Undo, redo, cut, copy, paste, select all (a `masked` field refuses cut and copy); Ctrl+A / Ctrl+C select and copy selectable text |
+| Arrows (outside a field's own) | Move the focus to the nearest pressable, field or `focusable` view in their direction, within the newest dialog, and scroll it into view; Up / Down leave a single-line field; with none that way they scroll as below |
 | Arrows; Page Up / Down, Space, Shift+Space; Home / End | Scroll the scroll view around the focused view or under the mouse by a line, a page, to the start / end (not while a field has the focus) |
 | Ctrl+W, F11, Ctrl+Q | Close the window, full screen, quit (`nsh package` and `nsh run` apps) |
 | Ctrl+R | Reloads the latest build (`nsh run`) |

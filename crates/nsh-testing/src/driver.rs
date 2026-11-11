@@ -46,6 +46,8 @@ pub(crate) trait Driver: Send {
         Err("`drop` runs headless and on Linux for now".into())
     }
     fn press_key(&mut self, keys: &str) -> Result<(), String>;
+    /// Presses the TV remote's key named `key` (`crate::remote`).
+    fn press_remote_key(&mut self, key: &str) -> Result<(), String>;
     /// Holds (`down`) or lets go of modifier keys for the pointer's steps.
     fn hold_keys(&mut self, keys: &str, down: bool) -> Result<(), String> {
         let _ = (keys, down);
@@ -208,6 +210,9 @@ impl Driver for Headless {
     }
     fn press_key(&mut self, keys: &str) -> Result<(), String> {
         Headless::press_key(self, keys)
+    }
+    fn press_remote_key(&mut self, key: &str) -> Result<(), String> {
+        Headless::press_remote_key(self, key)
     }
     fn hover(&mut self, selector: &str) -> Result<(), String> {
         Headless::hover(self, selector)
@@ -472,6 +477,7 @@ fn step_name(step: &TestStep) -> Option<String> {
             format!("drag({selector}, {}, {})", Points(*x), Points(*y))
         }
         TestStep::PressKey { keys } => format!("keyboard.press({keys})"),
+        TestStep::PressRemoteKey { key } => format!("keyboard.remote({key})"),
         TestStep::Hover { selector } => format!("hover({selector})"),
         TestStep::RightClick { selector } => format!("rightClick({selector})"),
         TestStep::Paste { selector, .. } => format!("paste({selector})"),
@@ -559,6 +565,9 @@ impl Driver for Remote {
     }
     fn press_key(&mut self, keys: &str) -> Result<(), String> {
         self.action(TestStep::PressKey { keys: keys.into() })
+    }
+    fn press_remote_key(&mut self, key: &str) -> Result<(), String> {
+        self.action(TestStep::PressRemoteKey { key: key.into() })
     }
     fn drag_and_hold(&mut self, selector: &str, by: Point<Points>) -> Result<(), String> {
         self.action(TestStep::DragAndHold {
