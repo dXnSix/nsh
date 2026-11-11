@@ -41,6 +41,7 @@ pub mod menu;
 mod module;
 #[cfg(feature = "js")]
 mod page_host;
+pub mod remote;
 #[cfg(feature = "js")]
 mod run;
 #[cfg(feature = "js")]

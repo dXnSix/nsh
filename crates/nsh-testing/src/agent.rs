@@ -32,8 +32,8 @@ use nsh_dev::protocol::{PickTarget, SceneQuery, SpanStyle, StepOutcome, TestStep
 mod forward;
 
 pub use self::forward::{Outgoing, Send as SendOutgoing};
-pub use crate::screen::Pick;
 use crate::{MemoryStorage, screen::Screen, selector::Selector};
+pub use crate::{remote::RemoteKey, screen::Pick};
 
 /// How far a dragging finger moves in a display frame, as headless drags
 /// move it.
@@ -1142,6 +1142,20 @@ pub trait Native: Send + Sync {
         let _ = keys;
         Err("this platform's test agent presses no hardware keys: run the test headless".into())
     }
+    /// Presses the TV remote's key `key` (`app.keyboard.remote`), as the
+    /// platform's remote gives it to the app. By default Back goes back as
+    /// [`Native::back`] does, and the other keys are the hardware
+    /// keyboard's keys of the same name ([`Native::press_keys`]); a platform
+    /// whose remote reports them otherwise (GPUI on Tizen, a TV's browser)
+    /// presses them so. A key the platform's keyboard lacks fails, naming
+    /// the key and the platform (the media and TV keys on macOS and iOS, all
+    /// but Windows' four `VK_MEDIA_*` keys on Windows).
+    fn press_remote_key(&self, key: RemoteKey) -> Result<(), String> {
+        match key.keystroke() {
+            Some(stroke) => self.press_keys(&stroke.to_string()),
+            None => self.back(),
+        }
+    }
     /// Drags from `from` to `to` as [`Native::drag`] does, keeping the
     /// button down until [`Native::drop_at`].
     fn drag_and_hold(&self, from: Point<Points>, to: Point<Points>) -> Result<(), String> {
@@ -1509,6 +1523,11 @@ impl Agent {
             TestStep::PressKey { keys } => {
                 done(self.native.press_keys(&keys).and_then(|()| self.settled()))
             }
+            TestStep::PressRemoteKey { key } => done(
+                RemoteKey::parse(&key)
+                    .and_then(|key| self.native.press_remote_key(key))
+                    .and_then(|()| self.settled()),
+            ),
             TestStep::Back => done(self.native.back().and_then(|()| self.settled())),
             TestStep::Forward => done(self.native.forward().and_then(|()| self.settled())),
             TestStep::Wait { ms } => {
@@ -2668,5 +2687,102 @@ mod tests {
         ));
         assert!(typed.lock().unwrap().is_empty());
         drop(engine);
+    }
+
+    /// `keyboard.remote`'s step on a real host: the remote's keys are the
+    /// hardware keyboard's of their names, Back the platform's going back,
+    /// unless the platform says otherwise (`Native::press_remote_key`).
+    mod remote_keys {
+        use super::*;
+
+        /// A platform that records the keys it is asked to press.
+        struct Remote(Arc<Mutex<Vec<String>>>);
+
+        impl Native for Remote {
+            fn bounds(&self, _: NodeId) -> Option<Bounds<Points>> {
+                None
+            }
+            fn viewport(&self) -> Size<Points> {
+                Size::new(Points(1920.0), Points(1080.0))
+            }
+            fn press(&self, _: Point<Points>) {}
+            fn long_press(&self, _: Point<Points>, _: Duration) {}
+            fn scroll(&self, _: Point<Points>, _: Point<Points>) {}
+            fn drag(&self, _: Point<Points>, _: Point<Points>) {}
+            fn press_keys(&self, keys: &str) -> Result<(), String> {
+                self.0.lock().unwrap().push(keys.to_owned());
+                Ok(())
+            }
+            fn type_text(&self, _: &str) {}
+            fn key(&self, _: Key) {}
+            fn input_text(&self, _: NodeId) -> Option<String> {
+                None
+            }
+            fn back(&self) -> Result<(), String> {
+                self.0.lock().unwrap().push("<back>".to_owned());
+                Ok(())
+            }
+            fn answer_dialog(&self, _: Option<&str>) -> Result<(), String> {
+                Ok(())
+            }
+            fn animating(&self) -> bool {
+                false
+            }
+            fn screenshot(&self) -> Result<Vec<u8>, String> {
+                Ok(Vec::new())
+            }
+            fn resize(&self, _: Points, _: Points) -> Result<(), String> {
+                Ok(())
+            }
+            fn set_dark(&self, _: bool) -> Result<(), String> {
+                Ok(())
+            }
+            fn quit(&self) {}
+        }
+
+        #[test]
+        fn the_keys_are_the_keyboard_s_and_back_goes_back() {
+            let pressed = Arc::new(Mutex::new(Vec::new()));
+            let agent = Agent::new(
+                Arc::new(Model::default()),
+                Box::new(Remote(pressed.clone())),
+            );
+            let ok = StepOutcome::Done {
+                value: serde_json::Value::Null,
+            };
+            for key in [
+                "up",
+                "OK",
+                "red",
+                "mediaplaypause",
+                "channelup",
+                "info",
+                "back",
+            ] {
+                let step = TestStep::PressRemoteKey { key: key.into() };
+                assert_eq!(agent.take(step), ok, "{key}");
+            }
+            assert_eq!(
+                *pressed.lock().unwrap(),
+                [
+                    "up",
+                    "enter",
+                    "red",
+                    "mediaplaypause",
+                    "channelup",
+                    "info",
+                    "<back>"
+                ]
+            );
+            let unknown = agent.take(TestStep::PressRemoteKey {
+                key: "power".into(),
+            });
+            assert!(
+                matches!(&unknown, StepOutcome::Failed { message }
+                    if message.starts_with("\"power\" is no TV remote key: a remote's keys are up, down,")),
+                "{unknown:?}"
+            );
+            assert_eq!(pressed.lock().unwrap().len(), 7);
+        }
     }
 }

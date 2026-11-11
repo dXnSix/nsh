@@ -410,8 +410,11 @@ impl Native for LinuxNative {
         .into_iter()
         .filter_map(|(on, k)| on.then_some(k))
         .collect();
-        let keysym = crate::xtest::key_keysym(stroke.key);
-        if self.real_keys(move |x| x.stroke(&held, keysym)) == Some(true) {
+        // The media and TV remote keys have no GTK shortcuts: the app's
+        // shortcuts below take them.
+        if let Some(keysym) = crate::xtest::key_keysym(stroke.key)
+            && self.real_keys(move |x| x.stroke(&held, keysym)) == Some(true)
+        {
             return Ok(());
         }
         // The app's shortcuts first, as GTK's shortcut controller (capture

@@ -396,6 +396,15 @@ img.nsh-fill { pointer-events: none; }
 
 /** An Apple keyboard: Command is the shortcut key, Option+Left moves by word. */
 const APPLE = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform ?? navigator.platform);
+/**
+ * Whether the engine sends `scrollend` (Chromium 114 on, Firefox 109 on, Safari
+ * 26 on). Without it (the Chromium 108 of 2024's Samsung TVs) a scroll the
+ * browser drives ends once no scroll event came for `SCROLL_QUIET` ms
+ * (`scrolled`).
+ */
+const SCROLLEND = typeof window === "undefined" || "onscrollend" in window;
+/** How long a scroll stays still before it ended, where no `scrollend` says so. */
+const SCROLL_QUIET = 150;
 
 /**
  * Whether `nsh_key`'s answer consumes the key: a binding that fires (not one
@@ -403,10 +412,25 @@ const APPLE = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform ?? navig
  */
 const consumedShortcut = (found) => found >= 0 || found === -2;
 
-/** `nsh_key`'s codes of the keys that are not characters. */
+/** `nsh_key`'s codes of the keys that are not characters (`KeyboardEvent.key`). */
 const NAMED_KEYS = {
   Enter: 256, Escape: 257, Tab: 258, Backspace: 259, Delete: 260, Insert: 261, ArrowUp: 262, ArrowDown: 263,
   ArrowLeft: 264, ArrowRight: 265, Home: 266, End: 267, PageUp: 268, PageDown: 269,
+  // Media keys and a TV remote's.
+  MediaPlayPause: 270, MediaPlay: 271, MediaPause: 272, MediaStop: 273, MediaRewind: 274, MediaFastForward: 275,
+  MediaTrackNext: 276, MediaTrackPrevious: 277, ColorF0Red: 278, ColorF1Green: 279, ColorF2Yellow: 280,
+  ColorF3Blue: 281, ChannelUp: 282, ChannelDown: 283, Info: 284,
+};
+/**
+ * The remote's keys by Samsung TVs' `keyCode`s (`tizen.tvinputdevice`), for
+ * engines whose events give them no `key` ("Unidentified"), and in the TV
+ * idiom for every key `NAMED_KEYS` does not name: a TV's engine may report
+ * none (""), or a key of its own for one (keyCode 19 is Pause/Break's
+ * `Pause`; a TV has no such key, only the remote's pause).
+ */
+const TV_KEY_CODES = {
+  10252: 270, 415: 271, 19: 272, 413: 273, 412: 274, 417: 275, 10233: 276, 10232: 277, 403: 278, 404: 279,
+  405: 280, 406: 281, 427: 282, 428: 283, 457: 284,
 };
 /** The US layout's characters of the punctuation keys (`KeyboardEvent.code`). */
 const CODE_CHARS = {
@@ -461,13 +485,16 @@ function regional(locale) {
  * The key of a key event as `nsh_key` takes it (-1: none): the character
  * it types without modifiers, or, when Shift or Option change it or the
  * layout types no ASCII there, the US layout's character of the same key
- * (shortcuts work on any layout, as menus' do).
+ * (shortcuts work on any layout, as menus' do). `tv`: in the TV idiom,
+ * where a remote's key codes (`TV_KEY_CODES`) win over any key name that is
+ * not a named key's.
  */
-function keyCode(e) {
+function keyCode(e, tv = false) {
   // Some IME and webview key events carry no `key`; fall back to `code`.
   const k = typeof e.key === "string" ? e.key : "";
   const named = NAMED_KEYS[k];
   if (named) return named;
+  if ((tv || k === "Unidentified") && TV_KEY_CODES[e.keyCode]) return TV_KEY_CODES[e.keyCode];
   const f = /^F([0-9]{1,2})$/.exec(k);
   if (f) return Number(f[1]) >= 1 && Number(f[1]) <= 24 ? 512 + Number(f[1]) : -1;
   if (k.length === 1 && !e.shiftKey && !e.altKey && k >= " " && k <= "~") return k.toLowerCase().charCodeAt(0);
@@ -4402,15 +4429,27 @@ class Player {
       el._momentum = true;
       this.scrollEvent(el, "onMomentumStart");
     }
+    // No `scrollend` here: the scroll ends once it is still (a held
+    // scroll bar ends with its release, `releaseBar`).
+    if (!SCROLLEND) {
+      clearTimeout(el._quietEnd);
+      el._quietEnd = setTimeout(() => {
+        el._quietEnd = 0;
+        if (!el._barHeld) this.scrollEnded(el);
+      }, SCROLL_QUIET);
+    }
     // Pulled to refresh, the offset is negative, as on the native backends.
     this.call((w) => w.nsh_scroll(el._id, el.scrollLeft, el.scrollTop - (el._pull ?? 0), el._applied));
   }
 
-  /** The browser's scrolling stopped: the end, unless the scroll is driven
+  /** The browser's scrolling stopped (its `scrollend`, or where it has
+   * none a quiet `SCROLL_QUIET` ms): the end, unless the scroll is driven
    * here (`drive`) or a finger still holds it. */
   scrollEnded(el) {
     clearTimeout(el._commandEnd);
     el._commandEnd = 0;
+    clearTimeout(el._quietEnd);
+    el._quietEnd = 0;
     el._smooth = null;
     if (el._driven || el._touchDrag) return;
     // The browser's end of a scroll that ended here (`ownEnd`).
@@ -7655,7 +7694,7 @@ class Player {
    * key through (reported, then the key goes on).
    */
   shortcut(e, editing) {
-    const code = e.isComposing ? -1 : keyCode(e);
+    const code = e.isComposing ? -1 : keyCode(e, this.idiom === "tv");
     if (code < 0) return -1;
     const mods = (e.ctrlKey ? 1 : 0) | (e.altKey ? 2 : 0) | (e.shiftKey ? 4 : 0) | (e.metaKey ? 8 : 0);
     return this.wasm.nsh_key(code, mods, editing ? 1 : 0, e.repeat ? 1 : 0);

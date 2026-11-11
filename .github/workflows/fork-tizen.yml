@@ -1,0 +1,287 @@
+name: Fork Tizen
+
+# Samsung TVs (Tizen), the fork's own checks; upstream has no Tizen target.
+#
+# - `cross`: `nsh-platform-tizen` (`libnsh.so`) for armv7, x86_64 and aarch64, release and dev, through
+#   dXn.GpuiTizen's cross driver (`cargo xtask cross`, its target specs and its symbol check: one export,
+#   `nsh_tizen_main`, and only documented Tizen 8.0 symbols), with the Tizen SDK's 8.0 rootstraps installed
+#   in the job.
+# - `tv-specs`: the TV idiom's specs (`tests/apps/tv-idiom`, and `tests/apps/pressable-focus`'s arrows) on
+#   the desktop GPUI host (`nsh test --target gpui --idiom tv`) and in headless Chromium with the TV shim
+#   (`nsh test --target tizen-web`).
+# - `emulator` (manual, or on a pull request labelled `ci:tizen-emulator`): the counter's spec on the Samsung TV
+#   emulator (`nsh test --target tizen`) on a runner with KVM. The steps follow dXn.GpuiTizen's
+#   `tizen-emulator.yml` (its `docs/ci-emulator.md`): Xvfb with GLX before `em-cli create`, ready when
+#   `sdb capability` answers, passwords in an unlocked gnome-keyring for `tz security-profiles add`.
+#
+# `plan` looks at what the checkout has: in a branch without `nsh-platform-tizen` (the fork's `main` before the
+# `pr/tizen/*` branches, this branch alone) `cross` and `emulator` skip, without the TV idiom's specs or
+# `--target tizen-web` `tv-specs` does, each with a notice.
+#
+# Draft pull requests run `cross` and `tv-specs` only when labelled `ci:tizen`; a label takes effect with the
+# next push (the workflow takes no `labeled` events: `.github/ci/paths.py`). `crates/gpui` commits the git
+# `[patch.crates-io]` lines of the gpui-fast and wgpu forks, so the jobs need no fork checkouts. A fork-only
+# file (branch kind `fork/*`): it never goes upstream and adds only its own file.
+#
+# The emulator job installs only with a Samsung certificate whose distributor lists the TV emulator's DUID
+# (`XTCJYJZXZBZVK`): the Samsung TV emulator trusts only Samsung's distributor roots. It reads these
+# repository secrets, only in its signing step: TIZEN_AUTHOR_P12 and TIZEN_DISTRIBUTOR_P12 (base64-encoded
+# author.p12 and distributor.p12), TIZEN_AUTHOR_PASSWORD and TIZEN_DISTRIBUTOR_PASSWORD. Without them it boots
+# the emulator and skips the spec with a warning. dXnSix/dXn.GpuiTizen, dXnSix/gpui-fast and dXnSix/wgpu must
+# be readable by this workflow. The Tizen SDK is installed with `--accept-license`: running the jobs that
+# install it is the repository owner's acceptance of Samsung's SDK licence on the runner.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+    inputs:
+      emulator:
+        description: 'Also run the specs on the Samsung TV emulator'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Per event and label too, so a push to main never cancels a manual emulator run, and one label's run never
+# cancels another's.
+concurrency:
+  group: fork-tizen-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  # NSH's `cargo xtask tizen` finds dXn.GpuiTizen's cross driver here.
+  DXN_GPUI_TIZEN: ${{ github.workspace }}/.tizen/dXn.GpuiTizen
+
+jobs:
+  # What the checkout has of the Tizen work: this workflow can be in a branch (the fork's `main`, this one alone)
+  # before the crates and the CLI it checks are, and then the jobs that need them skip with a notice.
+  plan:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-24.04
+    outputs:
+      tizen: ${{ steps.has.outputs.tizen }}
+      tv: ${{ steps.has.outputs.tv }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: has
+        run: |
+          tizen=false tv=false
+          if [ -d crates/gpui/nsh-platform-tizen ]; then tizen=true
+          else echo "::notice::no crates/gpui/nsh-platform-tizen: cross and emulator skip"; fi
+          if [ -d tests/apps/tv-idiom ] && [ -f crates/nsh-cli/src/tizen_web.rs ]; then tv=true
+          else echo "::notice::no tests/apps/tv-idiom or --target tizen-web: tv-specs skips"; fi
+          echo "tizen=$tizen" >> "$GITHUB_OUTPUT"
+          echo "tv=$tv" >> "$GITHUB_OUTPUT"
+
+  cross:
+    # Not on drafts unless labelled `ci:tizen`.
+    needs: plan
+    if: >-
+      needs.plan.outputs.tizen == 'true'
+      && (!github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'ci:tizen'))
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [armv7, x86_64, aarch64]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: dXn.GpuiTizen (cross driver, target specs, symbol check)
+        uses: actions/checkout@v4
+        with:
+          repository: dXnSix/dXn.GpuiTizen
+          path: .tizen/dXn.GpuiTizen
+          persist-credentials: false
+      - name: The Tizen SDK and the 8.0 rootstraps
+        uses: ./.tizen/dXn.GpuiTizen/.github/actions/tizen-sdk
+        with:
+          packages: TIZEN-8.0-NativeAppDevelopment-CLI
+      - name: Rust (dXn.GpuiTizen's pinned nightly)
+        working-directory: .tizen/dXn.GpuiTizen
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+          "$HOME/.cargo/bin/cargo" --version
+      - name: clang
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang
+      - name: libnsh.so, release and dev, one export each
+        working-directory: .tizen/dXn.GpuiTizen
+        run: |
+          cargo xtask cross --target ${{ matrix.target }} --release \
+            --manifest-path "$GITHUB_WORKSPACE/crates/gpui/Cargo.toml" -p nsh-platform-tizen \
+            --with-dev-variant --check-symbols --entry nsh_tizen_main
+      - name: Clippy for the TV
+        working-directory: .tizen/dXn.GpuiTizen
+        run: |
+          cargo xtask cross --target ${{ matrix.target }} --clippy \
+            --manifest-path "$GITHUB_WORKSPACE/crates/gpui/Cargo.toml" -p nsh-platform-tizen \
+            -- -D warnings
+
+  tv-specs:
+    # Not on drafts unless labelled `ci:tizen`.
+    needs: plan
+    if: >-
+      needs.plan.outputs.tv == 'true'
+      && (!github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'ci:tizen'))
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux packages (GPUI's host, headless Chromium)
+        run: |
+          sudo apt-get update
+          # The GPUI host's system libraries, as gpui.yml installs them (GTK 3, WebKitGTK 4.1, GStreamer).
+          sudo apt-get install -y --no-install-recommends clang libclang-dev llvm build-essential \
+            pkg-config xvfb xauth libasound2-dev libfontconfig-dev libfreetype-dev libssl-dev \
+            libvulkan1 mesa-vulkan-drivers libwayland-dev libx11-xcb-dev libxcb1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libzstd-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      # The web runtime `nsh test --target tizen-web` builds is wasm32, with C (zstd) that needs an
+      # `ar` for WebAssembly objects; headless Chromium is the image's Chrome.
+      - name: Rust (with wasm32)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            crates/gpui -> crates/gpui/target
+      - name: The TV idiom on the GPUI host (platform.tv, tv props, the arrows)
+        run: |
+          xvfb-run -a cargo run -p nsh-cli -- test tests/apps/tv-idiom --target gpui --idiom tv
+          xvfb-run -a cargo run -p nsh-cli -- test tests/apps/pressable-focus --target gpui --idiom tv --filter arrows
+      - name: The TV idiom as a Tizen web app (TV shim), and the counter
+        env:
+          AR_wasm32_unknown_unknown: llvm-ar
+        run: |
+          cargo run -p nsh-cli -- test tests/apps/tv-idiom --target tizen-web
+          cargo run -p nsh-cli -- test examples/counter --target tizen-web
+
+  emulator:
+    needs: plan
+    if: >-
+      needs.plan.outputs.tizen == 'true'
+      && ((github.event_name == 'workflow_dispatch' && inputs.emulator)
+          || (github.event_name == 'pull_request'
+              && contains(github.event.pull_request.labels.*.name, 'ci:tizen-emulator')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: dXn.GpuiTizen
+        uses: actions/checkout@v4
+        with:
+          repository: dXnSix/dXn.GpuiTizen
+          path: .tizen/dXn.GpuiTizen
+          persist-credentials: false
+      - name: Free disk space
+        # The SDK, the TV emulator platform and its VM image do not fit next to the runner image's tools.
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium /usr/local/julia*
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
+      - name: KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+      - name: Rust (dXn.GpuiTizen's pinned nightly)
+        working-directory: .tizen/dXn.GpuiTizen
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+          "$HOME/.cargo/bin/cargo" --version
+      - name: Linux packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang xvfb xauth jq x11-utils mesa-utils \
+            libgl1-mesa-dri libglx-mesa0 gnome-keyring libsecret-tools dbus-x11
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: ./.tizen/dXn.GpuiTizen/.github/actions/tizen-sdk
+        with:
+          packages: TIZEN-8.0-NativeAppDevelopment-CLI Emulator TV-SAMSUNG-Public-Emulator
+      - name: Signing profile `ci`
+        env:
+          AUTHOR_P12: ${{ secrets.TIZEN_AUTHOR_P12 }}
+          DISTRIBUTOR_P12: ${{ secrets.TIZEN_DISTRIBUTOR_P12 }}
+          AUTHOR_PASSWORD: ${{ secrets.TIZEN_AUTHOR_PASSWORD }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.TIZEN_DISTRIBUTOR_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$AUTHOR_P12" ] || [ -z "$DISTRIBUTOR_P12" ]; then
+            echo "SAMSUNG_SIGNED=false" >>"$GITHUB_ENV"
+            echo "::warning::no Samsung signing secrets (TIZEN_AUTHOR_P12, ...): the emulator boots, but the spec does not run"
+            exit 0
+          fi
+          # `tz security-profiles add` keeps the passwords in the OS keyring; a hosted runner has none.
+          eval "$(dbus-launch --sh-syntax)"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >>"$GITHUB_ENV"
+          keyring="$(printf '%s' ci | gnome-keyring-daemon --unlock --components=secrets)"
+          eval "$keyring"
+          echo "$keyring" | grep -E '^[A-Z_]+=' >>"$GITHUB_ENV" || true
+          certs="$RUNNER_TEMP/tizen-certs"
+          mkdir -p "$certs"
+          chmod 700 "$certs"
+          base64 -d <<<"$AUTHOR_P12" >"$certs/author.p12"
+          base64 -d <<<"$DISTRIBUTOR_P12" >"$certs/distributor.p12"
+          tz security-profiles add -n ci -A \
+            -a "$certs/author.p12" -p "$AUTHOR_PASSWORD" \
+            -d "$certs/distributor.p12" -P "$DISTRIBUTOR_PASSWORD"
+          echo "SAMSUNG_SIGNED=true" >>"$GITHUB_ENV"
+      - name: The TV runtime for the emulator (x86_64)
+        if: env.SAMSUNG_SIGNED == 'true'
+        run: cargo xtask tizen --arch x86_64
+      - name: Boot the TV emulator headless
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          platform="$(em-cli list-platform | grep -io 'tv-samsung[^ ]*' | head -1)"
+          [ -n "$platform" ] || { echo "::error::no TV emulator platform installed"; exit 1; }
+          # Xvfb with GLX before `em-cli create`: without a display, create configures VIGS's software
+          # backend, and the TV tuner device then stops the VM (`winsys interface 'vigs_wsi' not found`).
+          Xvfb :99 -screen 0 1920x1080x24 +extension GLX >"$RUNNER_TEMP/xvfb.log" 2>&1 &
+          export DISPLAY=:99
+          echo "DISPLAY=:99" >>"$GITHUB_ENV"
+          timeout 30 bash -c 'until xdpyinfo >/dev/null 2>&1; do sleep 1; done'
+          em-cli create -n nsh-tv -p "$platform"
+          nohup em-cli launch -n nsh-tv >"$RUNNER_TEMP/emulator.log" 2>&1 &
+          # Ready when `sdb capability` answers: the TV emulator's `sdb shell` runs no plain commands.
+          if ! timeout 900 bash -c 'until sdb devices | grep -q "emulator-.*device" && timeout 20 sdb capability 2>/dev/null | grep -q cpu_arch; do sleep 10; done'; then
+            echo "::error::the emulator did not come up in 15 minutes"
+            timeout 20 sdb devices || true
+            for log in "$RUNNER_TEMP/emulator.log" ~/tizen-studio-data/emulator/vms/nsh-tv/logs/emulator.log; do
+              [ -f "$log" ] && { echo "::group::$log"; tail -n 200 "$log"; echo "::endgroup::"; }
+            done
+            exit 1
+          fi
+          sleep 30
+          sdb capability
+      - name: The counter's spec on the emulator (signed with the profile `ci`)
+        if: env.SAMSUNG_SIGNED == 'true'
+        run: |
+          jq '.tizen.signing = "ci"' examples/counter/nsh.json >"$RUNNER_TEMP/nsh.json"
+          cp "$RUNNER_TEMP/nsh.json" examples/counter/nsh.json
+          cargo run -p nsh-cli -- test examples/counter --target tizen
+      - name: Emulator log
+        if: always()
+        timeout-minutes: 5
+        run: |
+          cat "$RUNNER_TEMP/emulator.log" || true
+          tail -n 300 ~/tizen-studio-data/emulator/vms/nsh-tv/logs/emulator.klog 2>/dev/null || true
+      - name: Remove the signing material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/tizen-certs" ~/tizen-studio-data/profile/profiles.xml
