@@ -294,7 +294,58 @@ walkthroughs, see the [Navigation guide](../docs/navigation.md) and [Forms and k
 | `statusBar` on pages and dialogs | `.status_bar(..)` | The status bar while a page or dialog is up. See [Status bar](#status-bar). |
 
 In Rust, `theme()` reads the app's theme as design tokens (`theme().primary`, `theme().radius`), the same tokens
-TSX's [theme classes](../docs/tailwind.md#theme-tokens) use.
+TSX's [theme classes](../docs/tailwind.md#theme-tokens) use. It is `theme_of::<Theme>()`: `nsh_base::Theme` is a
+[theme type](../docs/rust.md#theme-types), an `AppTheme` of shadcn's 31 colors, `radius`, `font-sans` and
+`font-mono`, each playing the role of its name. It stays unregistered, so it is the default token source and an app's
+registered types take its place. A shadcn app changes some of its tokens with `update_theme::<Theme>(tokens)`, a patch
+of `Tokens` by name, and `reset_theme::<Theme>()` puts them back.
+
+### Theme roles
+
+What NSH draws itself reads the theme through **roles**: `theme()`'s fields, the mobile tab bar's tint, the default
+font, and the platforms' own controls (Linux's menus, iOS's and Android's alerts). A role is the name of what is drawn,
+and reads the token of that name unless the theme maps it onto another token:
+
+| Role | Drawn by |
+|---|---|
+| `background`, `foreground` | `theme().background` / `foreground`; a GPUI app's surface embedded in its host's theme |
+| `card`, `card-foreground`, `secondary`, `secondary-foreground`, `muted`, `input`, `chart-1` … `chart-5`, `sidebar` … `sidebar-ring` | the `theme()` fields of those names |
+| `popover`, `popover-foreground` | `theme().popover` / `popover_foreground`; Linux's menus; Android's alerts |
+| `primary`, `primary-foreground` | `theme().primary` / `primary_foreground`; the tab bar's selected tab; iOS's and Android's alert buttons |
+| `muted-foreground` | `theme().muted_foreground`; Linux's menu shortcuts; an Android alert's message |
+| `accent`, `accent-foreground` | `theme().accent` / `accent_foreground`; Linux's highlighted menu item |
+| `destructive` | `theme().destructive`; an Android alert's destructive action |
+| `border`, `ring` | `theme().border` / `ring`; Linux's menu borders and separators (`border`) |
+| `selection` | `theme().selection()` (`primary` at 22 % without it) |
+| `success` | a `TextView`'s tip alert (its own green without it) |
+| `warning` | an `Editor`'s warning diagnostics; a `TextView`'s warning alert (their own ambers without it) |
+| `info` | an `Editor`'s info diagnostics; a `TextView`'s note alert (their own blues without it) |
+| `highlight` | an `Editor`'s search matches; a `TextView`'s marked text (their own yellows without it) |
+| `diff-added`, `diff-deleted` | a `DiffView`'s added and deleted lines: their tints, indicators, changed words and the file list's counts (its own green and red without them) |
+| `syntax-comment`, `syntax-keyword`, `syntax-string`, `syntax-number`, `syntax-function`, `syntax-property`, `syntax-type` | highlighted code in an `Editor`, a `DiffView` and a `TextView`'s code blocks: comments, keywords, strings, numbers and constants, names of functions and classes, properties and parameters, types and built-ins (the highlighter's own palette without them) |
+| `radius` | `theme().radius` |
+| `font-sans` | the default font of every text; `theme().font_sans` |
+| `font-mono` | `theme().font_mono` |
+
+`selection`, `success`, `warning`, `info`, `highlight`, `diff-added`, `diff-deleted` and the `syntax-*` roles have no
+token in the default theme: each part draws its own color until the theme has a token of that name (`"warning": "#b45309"` in its `cssVars`) or maps the role onto one
+of its own (a theme type's `role = …`, or a theme file's `"roles": { "warning": "caution" }`). The parts draw `highlight` and a diff's tints translucent; the token is the solid color.
+
+A role is no token and no class: `bg-primary` is a class when the theme has a token `primary`. TSX reads a role with
+[`role()`](./nsh.md#role) from `nsh`. In Rust, a role is a
+constant, an `nsh_core::element::Role`: the ones above are in `nsh_base::role` (`role::POPOVER.name()` is
+`"popover"`, `role::RADIUS` reads a number, `role::FONT_SANS` a font family). `Tokens::with_role` maps a role onto a
+token (`tokens.with_role(role::POPOVER, "surface-overlay")`), which `tokens.role(role::POPOVER)` then reads. A crate
+with components of its own declares the roles they draw with the same way
+(`pub const BANNER: Role = Role::new("banner");`): a role is its name, whoever declares it.
+Without a mapping every role reads the token of its own name, so a shadcn theme draws as it always did. The platforms'
+controls take the theme's colors only when the app has a theme of its own (`Tokens::is_themed`, which the core sets);
+an app on the default theme keeps the system's alert colors.
+
+A registered [theme type](../docs/rust.md#theme-types) maps roles onto its own tokens (`TokenSpec::role`), and
+`theme()`'s fields then read those tokens: with a design system that maps `role::POPOVER` onto `surface-overlay`,
+`theme().popover` is `surface-overlay`, and `nsh/base`'s components, the tab bar and the platforms' controls draw in
+the design system.
 
 ## Controls
 

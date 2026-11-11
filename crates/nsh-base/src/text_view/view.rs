@@ -19,6 +19,7 @@ use super::{
 };
 use crate::{
     link_hint::{HintAt, link_hint},
+    role,
     terminal::is_terminal,
     theme::theme,
 };
@@ -197,6 +198,12 @@ pub struct TextViewSelectionEvent {
     /// Where it starts in the view's whole text (UTF-16 units), when the
     /// platform knows it.
     pub start: Option<u32>,
+    /// The box around it in the view, while something is selected and the
+    /// platform knows it.
+    pub bounds: Option<Bounds<Points>>,
+    /// The same box in the root view the view is in, as of the event (an
+    /// `Overlay`'s `anchor`).
+    pub page_bounds: Option<Bounds<Points>>,
 }
 
 /// An action of the code blocks of a [`TextView`] (`codeBlockActions`).
@@ -314,6 +321,8 @@ pub fn TextView(props: TextViewProps, cx: Scope<TextViewEvent>) -> impl IntoElem
             cx.emit(TextViewEvent::SelectionChange(TextViewSelectionEvent {
                 text: e.text.clone().into(),
                 start: e.start,
+                bounds: e.bounds,
+                page_bounds: e.page_bounds,
             }));
         })
         .map(|mut el| {
@@ -1615,7 +1624,9 @@ impl Cx {
                 let color = color.as_deref().and_then(|c| c.parse::<Hsla>().ok());
                 let span = self
                     .span(content, key)
-                    .bg(move || color.map_or_else(|| HIGHLIGHT.opacity(0.4), AdaptiveColor::from))
+                    .bg(move || {
+                        color.map_or_else(|| mark_color().opacity(0.4), AdaptiveColor::from)
+                    })
                     .rounded(px(3.0));
                 // A solid color of the document's is the same in both
                 // appearances: its text takes the ink that reads on it
@@ -2062,21 +2073,32 @@ fn code_span(span: Text) -> Text {
         .rounded(px(4.0))
 }
 
-/// The color of an alert of kind `alert`: GitHub's alert colors (shadcn's
-/// tokens have no status colors), a caution the theme's `destructive`.
+/// The color of an alert of kind `alert`. A note, a tip and a warning take
+/// the theme's `info`, `success` and `warning` ([`role::INFO`],
+/// [`role::SUCCESS`], [`role::WARNING`]: the token the app's theme maps the
+/// role onto, else the one of that name) when it has one, else GitHub's
+/// alert colors, as shadcn's tokens have no status colors. An important one
+/// is GitHub's purple, a caution the theme's `destructive`.
 fn alert_color(alert: Alert) -> AdaptiveColor {
+    let themed = |role, own| theme().tokens().role(role).unwrap_or(own);
     match alert {
-        Alert::Note => AdaptiveColor::rgb(0x0969da, 0x4493f8),
-        Alert::Tip => AdaptiveColor::rgb(0x1a7f37, 0x3fb950),
+        Alert::Note => themed(role::INFO, AdaptiveColor::rgb(0x0969da, 0x4493f8)),
+        Alert::Tip => themed(role::SUCCESS, AdaptiveColor::rgb(0x1a7f37, 0x3fb950)),
         Alert::Important => AdaptiveColor::rgb(0x8250df, 0xab7df8),
-        Alert::Warning => AdaptiveColor::rgb(0x9a6700, 0xd29922),
+        Alert::Warning => themed(role::WARNING, AdaptiveColor::rgb(0x9a6700, 0xd29922)),
         Alert::Caution => theme().destructive,
     }
 }
 
 /// Highlighted text's background, at 40% (`==text==`, `<mark>`): a
-/// marker's yellow.
+/// marker's yellow, where the theme has no `highlight` ([`mark_color`]).
 const HIGHLIGHT: AdaptiveColor = AdaptiveColor::rgb(0xfde047, 0xca8a04);
+
+/// Highlighted text's color: the theme's `highlight` ([`role::HIGHLIGHT`]),
+/// else the view's own yellow.
+fn mark_color() -> AdaptiveColor {
+    theme().tokens().role(role::HIGHLIGHT).unwrap_or(HIGHLIGHT)
+}
 
 /// The theme's monospaced font (`font-mono`), else the system's.
 fn mono_font() -> SharedString {
