@@ -152,6 +152,64 @@ pub struct Gradient {
 }
 
 impl Gradient {
+    /// The gradient as CSS writes one (`linear-gradient(90deg, #7c3aedff,
+    /// #db2777ff 50%)`): its geometry, then its stops as they are, colors
+    /// as `#rrggbbaa`, positions in percent or pixels. The CSS reader
+    /// (`css::gradient`) reads it back as the same gradient; a gradient
+    /// read with an interpolation method (`in oklch`) is written with the
+    /// stops that method made.
+    pub fn css(&self) -> String {
+        // Whole degrees and percents as they were written: radians and
+        // fractions in `f32` can be an ulp off.
+        let round = |v: f32| (v * 1e4).round() / 1e4;
+        let percent = |p: Percentage| round(p.0 * 100.0);
+        let mut stops = String::new();
+        for stop in &self.stops {
+            stops.push_str(&format!(", #{:08x}", stop.color.0));
+            match stop.position {
+                Some(DefiniteLength::Fraction(p)) => stops.push_str(&format!(" {}%", percent(p))),
+                Some(DefiniteLength::Absolute(a)) => {
+                    stops.push_str(&format!(" {}px", round(a.to_points(REM_SIZE).0)));
+                }
+                None => {}
+            }
+        }
+        let repeating = if self.repeating { "repeating-" } else { "" };
+        match self.kind {
+            GradientKind::Linear { angle } => {
+                format!(
+                    "{repeating}linear-gradient({}deg{stops})",
+                    round(angle.to_degrees())
+                )
+            }
+            GradientKind::LinearCorner { right, bottom } => format!(
+                "{repeating}linear-gradient(to {} {}{stops})",
+                if bottom { "bottom" } else { "top" },
+                if right { "right" } else { "left" }
+            ),
+            GradientKind::Radial { circle, size, x, y } => {
+                let size = match size {
+                    GradientSize::ClosestSide => "closest-side",
+                    GradientSize::ClosestCorner => "closest-corner",
+                    GradientSize::FarthestSide => "farthest-side",
+                    GradientSize::FarthestCorner => "farthest-corner",
+                };
+                format!(
+                    "{repeating}radial-gradient({} {size} at {}% {}%{stops})",
+                    if circle { "circle" } else { "ellipse" },
+                    percent(x),
+                    percent(y)
+                )
+            }
+            GradientKind::Conic { from, x, y } => format!(
+                "{repeating}conic-gradient(from {}deg at {}% {}%{stops})",
+                round(from.to_degrees()),
+                percent(x),
+                percent(y)
+            ),
+        }
+    }
+
     /// Whether a stop is placed in points, so the stops depend on the
     /// size of the box ([`Gradient::resolved_stops`]).
     pub fn has_lengths(&self) -> bool {

@@ -38,6 +38,9 @@
 //! - **Enter and Space** press the focused view when it takes presses
 //!   (`PressDown`, `PressUp`, `Press` at its middle, as the terminal
 //!   does); one that takes none leaves them to the app's bindings.
+//! - **`focus()`** on a stop that shows gives it the focus
+//!   ([`focus_command`]); a pointer going down outside the focused view
+//!   takes it away ([`pointer_down`]).
 //! - **Layers**: focus that went into a root view's child (the page, a
 //!   sheet's panel, an overlay) from a stop of another comes back to that
 //!   stop when the layer goes ([`focus::Layers`]); a stop a backdrop
@@ -477,6 +480,42 @@ fn focus_stop(surface: &Rc<Surface>, view: &NshView) {
             set(surface, Some(view));
             crate::scroll::reveal(surface, view);
         }
+    }
+}
+
+/// `focus()` on a view that is not an input: a stop that is attached and
+/// shown (neither it nor a view around it hidden, concealed or out of the
+/// pointer's reach) takes the keyboard focus, as one the arrows reach
+/// does, and the window takes the keyboard.
+pub(crate) fn focus_command(surface: &Rc<Surface>, view: &NshView) {
+    if !is_stop(surface, view) || !reachable(view) || focused(surface).as_ref() == Some(view) {
+        return;
+    }
+    surface.window_focus_requested.set(true);
+    focus_stop(surface, view);
+}
+
+/// `view` and every view around it take part ([`left_out`]), up to an
+/// attached root.
+fn reachable(view: &NshView) -> bool {
+    let mut at = Some(view.clone());
+    while let Some(v) = at {
+        if left_out(&v) {
+            return false;
+        }
+        at = v.parent_view();
+        if at.is_none() && !v.attached() {
+            return false;
+        }
+    }
+    true
+}
+
+/// The pointer went down on `hit`: the view with this module's focus lets
+/// go of it unless `hit` is inside it.
+pub(crate) fn pointer_down(surface: &Surface, hit: &NshView) {
+    if focused(surface).is_some_and(|view| !contains(&view, hit)) {
+        blur_view(surface);
     }
 }
 

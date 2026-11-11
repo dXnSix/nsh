@@ -30,7 +30,7 @@ use super::{
     layout::{self, Expansions, Header, Layout, Options, Row},
     model::{self, DiffModel, Hunk},
     patch::{self, FilePatch},
-    view::{ADDED, DELETED, PAD, part},
+    view::{PAD, added_color, deleted_color, part},
 };
 use crate::{
     editor::{
@@ -530,12 +530,12 @@ fn header(dv: Dv, row: usize, file: DiffFile) -> AnyElement {
             .child(
                 text(format!("+{}", file.added))
                     .ml(px(PAD))
-                    .text_color(ADDED),
+                    .text_color(added_color),
             )
             .child(
                 text(format!("−{}", file.deleted))
                     .ml(px(PAD))
-                    .text_color(DELETED),
+                    .text_color(deleted_color),
             ),
         props,
         DiffViewPart::FileHeader,
