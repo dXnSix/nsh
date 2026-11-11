@@ -920,6 +920,8 @@ impl<M: TextEngine> Core<M> {
         names: Option<Box<str>>,
         list: Option<Vec<Box<str>>>,
     ) {
+        // The names it has, resolved again (the tokens or a scope changed).
+        let again = names.is_none() && list.is_none();
         let node = &mut self.nodes[key as usize];
         let current = node.class_names.get_or_insert_default();
         if let Some(n) = names {
@@ -951,6 +953,18 @@ impl<M: TextEngine> Core<M> {
             }
             Some(classes)
         };
+        // Resolved again to the rules it has: nothing to style. So a scope
+        // that leaves the tokens a view reads as they are, set or changed
+        // around views that are there, costs that view a lookup.
+        if again {
+            let node = &self.nodes[key as usize];
+            let has = node.parts.as_deref().map_or(&node.classes, |p| &p.base);
+            if let (Some(has), Some(now)) = (has, &classes)
+                && std::rc::Rc::ptr_eq(has, now)
+            {
+                return;
+            }
+        }
         self.set_class_list(key, classes);
     }
 
