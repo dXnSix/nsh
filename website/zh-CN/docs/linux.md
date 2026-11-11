@@ -69,7 +69,7 @@ nsh package App.tsx --target linux [--run]   # TSX 应用
   <Name>                 可执行文件：Rust 应用是用它的 crate 构建的自有 runner；TSX 应用是 nsh 的发布版运行器
   nsh/bundle.nshc        编译后的 TSX 应用
   nsh/assets/…           应用导入的资源（也包括 Rust crate 的 `assets!()`）
-  nsh/app.json           窗口标题和应用 id
+  nsh/app.json           窗口标题、应用 id 和 nsh.json 中的窗口设置
   <id>.desktop           桌面条目（StartupWMClass 为应用 id）
   <id>.png               图标（nsh.json 指定了图标时）
 .nsh/out/<Name>.tar.gz
@@ -131,7 +131,7 @@ view.load(Bundle::source(code).into());
 
 `AppView::set_locale(Some(locale))` 和 `AppView::set_font_scale(Some(scale))` 用你的应用的语言和文字大小代替系统的设置（`None` 恢复跟随系统）：`locale()`、`Intl`、`fontScale()` 和文字立即跟随（[设备与环境](./device-and-environment.md#在嵌入它的应用中)）。
 
-`AppView::set_theme_overrides(Some(json))` 把你的应用的品牌加在应用的[主题](./tailwind.md#主题-token)之上：格式与 `nsh.json` 的 `"theme"` 相同的主题文件，其中的 token 在浅色和深色模式下都覆盖应用的同名 token，应用的其他 token 保持不变；`bg-primary` 等类名立即更新样式，之后加载的应用一开始就使用它（`None` 恢复应用自己的主题；无法解析的文件返回错误，不做任何改动）。
+`AppView::set_theme_overrides(Some(json))` 把你的应用的品牌加在应用的[主题](./tailwind.md#主题-token)之上：格式与 `nsh.json` 的 `"theme"` 相同的主题文件，其中的 token 在浅色和深色模式下都覆盖应用的同名 token，应用的其他 token 保持不变；`bg-primary` 等类名立即更新样式，之后加载的应用一开始就使用它（`None` 恢复应用自己的主题；无法解析的文件返回错误，不做任何改动）。应用用它自己的主题读取器读取这个文件，所以文件没有设置的 `var(--name)` 取默认主题中该令牌的值。
 
 ### 多个窗口共享数据
 

@@ -40,6 +40,8 @@ pub(crate) struct Host {
     density: Density,
     trace: bool,
     engine: Mutex<Option<Engine>>,
+    /// Fences WebView completions from engines replaced on this surface.
+    web_generation: AtomicU64,
     /// The running engine's control, for answers the sink gives itself
     /// (never locked while an engine stops, unlike `engine`).
     answers: Mutex<Option<EngineControl>>,
@@ -50,6 +52,9 @@ pub(crate) struct Host {
     /// Animation items of submitted batches, by batch number, applied on the
     /// UI thread once Java has applied that batch.
     animation_queue: Mutex<VecDeque<(u64, Vec<MountItem>)>>,
+    /// Functions the app runs on the UI thread
+    /// ([`MountSink::run_on_main_thread`]), until Java's post runs them.
+    main_thread_tasks: Mutex<VecDeque<nsh_engine::MainThreadTask>>,
     seq: AtomicU64,
     ui: Mutex<UiAnimation>,
     epoch: Instant,
@@ -58,6 +63,8 @@ pub(crate) struct Host {
     granted: Mutex<Option<nsh_engine::Capabilities>>,
     /// The VM limits of loaded apps (`NshView.setLimits`).
     limits: Mutex<nsh_engine::Limits>,
+    /// The embedding app's runtime for apps loaded from now on.
+    runtime: Mutex<Option<tokio::runtime::Handle>>,
     /// Where loaded apps keep their data, each in a directory named by its
     /// id ([`EngineConfig::data_dir`]): `nsh` in the files directory.
     pub(crate) data_dir: Option<std::path::PathBuf>,
@@ -66,8 +73,9 @@ pub(crate) struct Host {
     storage: Mutex<Option<std::path::PathBuf>>,
     /// What the running app may reach (web view navigations check it).
     access: Mutex<Arc<nsh_engine::Access>>,
-    /// The embedding app's theme overrides (`NshView.setThemeOverrides`).
-    host_tokens: Mutex<Option<nsh_engine::Tokens>>,
+    /// The embedding app's theme overrides (`NshView.setThemeOverrides`):
+    /// a theme file the engine reads.
+    host_theme: Mutex<Option<String>>,
     /// Links the system opened the app with (`NshView.openUrl`) before an
     /// engine started: the next one applies them before the app's code
     /// first runs (`UrlScheme.url()`).
@@ -117,6 +125,15 @@ impl Host {
         self.engine.lock().ok()?.as_ref().map(Engine::control)
     }
 
+    /// The user gave the surface input with `modality` (a finger, a mouse
+    /// or a hardware key going down): told before it acts, so the focus
+    /// it moves shows or not (`focus-visible:`).
+    pub(crate) fn input_with(&self, modality: nsh_core::platform::InputModality) {
+        if let Some(control) = self.control() {
+            control.set_input_modality(modality);
+        }
+    }
+
     /// Hands event `kind` of node `id` to the running app.
     pub(crate) fn dispatch(&self, id: NodeId, kind: EventKind, payload: EventPayload) {
         if let Some(control) = self.control() {
@@ -132,10 +149,13 @@ impl Host {
     /// The embedding app's theme overrides (`None`: the app's own theme):
     /// sent to the running app at once, and to every app loaded later
     /// before its first frame.
-    fn set_host_tokens(&self, tokens: Option<nsh_engine::Tokens>) {
-        *self.host_tokens.lock().expect("tokens") = tokens.clone();
+    fn set_host_theme(&self, json: Option<String>) {
+        *self.host_theme.lock().expect("theme") = json.clone();
         if let Some(control) = self.control() {
-            control.set_tokens(tokens);
+            match json {
+                Some(json) => control.set_theme_overrides(json),
+                None => control.set_tokens(None),
+            }
         }
     }
 
@@ -175,7 +195,11 @@ impl Host {
         }
         // Stop the old engine first: its batches must not reach the new app.
         *self.answers.lock().expect("answers") = None;
-        let old = self.engine.lock().expect("engine").take();
+        let (old, web_generation) = {
+            let mut engine = self.engine.lock().expect("engine");
+            let generation = self.web_generation.fetch_add(1, Ordering::Relaxed) + 1;
+            (engine.take(), generation)
+        };
         if let Some(old) = old {
             drop(old);
             // No `Delete` follows for its views: its native components
@@ -211,7 +235,7 @@ impl Host {
             header_heights: (nsh_core::Points(56.0), nsh_core::Points(56.0)),
             limits: *self.limits.lock().expect("limits"),
             ui_sets: crate::ui_sets(),
-            runtime: None,
+            runtime: self.runtime.lock().expect("runtime").clone(),
             data_dir: self.data_dir.clone(),
             cache,
             storage: self.storage.lock().expect("storage").as_ref().map(|dir| {
@@ -228,7 +252,7 @@ impl Host {
             windows: None,
         };
         let density = self.density.clone();
-        let sink = Sink(self.clone());
+        let sink = Sink(self.clone(), web_generation);
         // A test session's app: the test's storage, network and trace.
         #[cfg(feature = "dev")]
         if let Some(model) = &*self.test_model.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -237,12 +261,12 @@ impl Host {
         // The embedding app's theme overrides are in the first frame, and
         // the links that came before are the app's address when its code
         // first runs.
-        let tokens = self.host_tokens.lock().expect("tokens").clone();
+        let theme = self.host_theme.lock().expect("theme").clone();
         let links = std::mem::take(&mut *self.url_schemes.lock().expect("links"));
         let fonts = self.fonts.lock().expect("fonts").clone();
         let setup = move |control: &EngineControl| {
-            if tokens.is_some() {
-                control.set_tokens(tokens);
+            if let Some(json) = theme {
+                control.set_theme_overrides(json);
             }
             for font in fonts {
                 control.register_font(font);
@@ -425,7 +449,7 @@ fn register_inline_images(host: &Host, batch: &MountBatch) {
 
 /// Hands commits to the UI thread: one `NshView.submit(bytes, objects, seq)`
 /// call per batch.
-struct Sink(Arc<Host>);
+struct Sink(Arc<Host>, u64);
 
 impl MountSink for Sink {
     fn submit(&self, batch: MountBatch) {
@@ -436,7 +460,7 @@ impl MountSink for Sink {
         }
         answer_clipboard_reads(host, &batch);
         register_inline_images(host, &batch);
-        let mut encoded = encode::encode(batch);
+        let mut encoded = encode::encode(batch, self.1);
         if let Some(keymap) = encoded.keymap.take() {
             host.keymap
                 .lock()
@@ -497,6 +521,27 @@ impl MountSink for Sink {
                 env.call_method_unchecked(
                     view.as_obj(),
                     java().view_request_frame,
+                    ReturnType::Primitive(Primitive::Void),
+                    &[],
+                )
+            }
+            .map(|_| ())
+        });
+    }
+
+    fn run_on_main_thread(&self, task: nsh_engine::MainThreadTask) {
+        self.0
+            .main_thread_tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push_back(task);
+        let view = &self.0.view;
+        with_env(|env| {
+            // SAFETY: matches the signature checked in `java::init`.
+            unsafe {
+                env.call_method_unchecked(
+                    view.as_obj(),
+                    java().view_run_main_thread_tasks,
                     ReturnType::Primitive(Primitive::Void),
                     &[],
                 )
@@ -588,6 +633,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_create(
         density: Density::new(density),
         trace: trace != 0,
         engine: Mutex::new(None),
+        web_generation: AtomicU64::new(0),
         answers: Mutex::new(None),
         pending: Mutex::new(None),
         viewport: Mutex::new(Size::new(px(0.0), px(0.0))),
@@ -596,18 +642,24 @@ extern "system" fn Java_com_longbridge_nsh_Native_create(
             // the system's viewer reads it through the FilesProvider. The
             // dialogs have no answer here.
             file_requests: true,
+            web_evaluate: true,
+            // wgpu on Vulkan or GLES, in builds with it, until it finds no
+            // GPU.
+            shaders: nsh_engine::shader::LINKED,
             ..Environment::default()
         }),
         animation_queue: Mutex::new(VecDeque::new()),
+        main_thread_tasks: Mutex::new(VecDeque::new()),
         seq: AtomicU64::new(0),
         ui: Mutex::new(UiAnimation::default()),
         epoch: Instant::now(),
         granted: Mutex::new(None),
         limits: Mutex::new(nsh_engine::Limits::default()),
+        runtime: Mutex::new(None),
         data_dir,
         storage: Mutex::new(None),
         access: Mutex::new(Arc::default()),
-        host_tokens: Mutex::new(None),
+        host_theme: Mutex::new(None),
         url_schemes: Mutex::default(),
         fonts: Mutex::new(Vec::new()),
         inline_images: Mutex::default(),
@@ -879,19 +931,22 @@ extern "system" fn Java_com_longbridge_nsh_Native_setThemeOverrides<'local>(
 ) -> JString<'local> {
     // SAFETY: Java passes its live handle.
     let host = unsafe { host(handle) };
-    let tokens = if json.is_null() {
+    let theme = if json.is_null() {
         Ok(None)
     } else {
         match env.get_string(&json) {
-            Ok(json) => nsh_base::theme_overrides(&String::from(json))
-                .map(Some)
-                .map_err(|err| format!("invalid theme: {err}")),
+            Ok(json) => {
+                let json = String::from(json);
+                nsh_core::element::theme_file::check(&json)
+                    .map(|()| Some(json))
+                    .map_err(|err| format!("invalid theme: {err}"))
+            }
             Err(err) => Err(format!("invalid theme: {err}")),
         }
     };
-    match tokens {
-        Ok(tokens) => {
-            host.set_host_tokens(tokens);
+    match theme {
+        Ok(theme) => {
+            host.set_host_theme(theme);
             JString::from(JObject::null())
         }
         Err(err) => env
@@ -943,6 +998,30 @@ extern "system" fn Java_com_longbridge_nsh_Native_allowsWebview(
     };
     let access = host.access.lock().expect("access").clone();
     access.allows_webview(&String::from(url)).into()
+}
+
+/// Whether the running app's web pages may capture `kind` (`"microphone"`,
+/// `"camera"`).
+#[unsafe(no_mangle)]
+extern "system" fn Java_com_longbridge_nsh_Native_allowsWebMedia(
+    mut env: JNIEnv<'_>,
+    _: JClass<'_>,
+    handle: jlong,
+    kind: JString<'_>,
+) -> jboolean {
+    use nsh_core::access::WebMedia;
+    // SAFETY: Java passes its live handle.
+    let host = unsafe { host(handle) };
+    let Ok(kind) = env.get_string(&kind) else {
+        return 0;
+    };
+    let media = match String::from(kind).as_str() {
+        "microphone" => WebMedia::Microphone,
+        "camera" => WebMedia::Camera,
+        _ => return 0,
+    };
+    let access = host.access.lock().expect("access").clone();
+    access.allows_web_media(media).into()
 }
 
 /// The URL a media load redirected from `base` to `location` goes on to, or
@@ -1074,6 +1153,25 @@ extern "system" fn Java_com_longbridge_nsh_Native_load(
     #[cfg(not(feature = "js"))]
     let _ = updater;
     host.load(bundle);
+}
+
+/// Sets the runtime for apps loaded next in one `NshView`.
+///
+/// Call before loading an app or connecting a dev server. Later changes
+/// apply from the next load, including an app waiting for its first size;
+/// a running engine keeps its runtime. `None` restores NSH's shared runtime.
+/// The embedding app owns the runtime and must keep it running until its
+/// engines stop. Destroying the view does not shut the runtime down.
+///
+/// # Safety
+///
+/// `handle` must be the live native handle of a `NshView` from this linked
+/// library (its `handle` field). Call on the view's UI thread, before it is
+/// destroyed, so destruction cannot invalidate the handle during this call.
+pub unsafe fn set_runtime(handle: jlong, runtime: Option<tokio::runtime::Handle>) {
+    // SAFETY: the caller guarantees a live handle that cannot be destroyed.
+    let host = unsafe { host(handle) };
+    *host.runtime.lock().expect("runtime") = runtime;
 }
 
 /// Runs a Rust app's root in the `NshView` with native handle `handle`
@@ -1275,6 +1373,9 @@ extern "system" fn Java_com_longbridge_nsh_Native_event(
         EventKind::AccessibilityAction => {
             EventPayload::Map(vec![("actionName", PayloadValue::Str(read_text()))])
         }
+        EventKind::EditAction => {
+            EventPayload::Map(vec![("action", PayloadValue::Str(read_text()))])
+        }
         // Insets: x / y carry top / bottom, `count` packs left and right.
         EventKind::Insets => EventPayload::Map(vec![
             ("top", PayloadValue::Number(x as f64)),
@@ -1354,6 +1455,9 @@ extern "system" fn Java_com_longbridge_nsh_Native_press(
     let Some(kind) = encode::kind_from(kind) else {
         return;
     };
+    if kind == EventKind::PressDown {
+        host.input_with(nsh_core::platform::InputModality::Pointer);
+    }
     let event = nsh_core::PressEvent {
         position: point(px(x), px(y)),
         page_position: point(px(page_x), px(page_y)),
@@ -1431,9 +1535,13 @@ extern "system" fn Java_com_longbridge_nsh_Native_touch(
                 page: point(px(c[i * 4]), px(c[i * 4 + 1])),
                 location: point(px(c[i * 4 + 2]), px(c[i * 4 + 3])),
                 changed: flags[i] != 0,
+                pointer_type: nsh_core::PointerType::Touch,
             }
         })
         .collect();
+    if phase == 0 {
+        host.input_with(nsh_core::platform::InputModality::Pointer);
+    }
     let phase = match phase {
         0 => nsh_core::TouchPhase::Start,
         1 => nsh_core::TouchPhase::Move,
@@ -1675,6 +1783,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_eventMap(
                 "canGoBack" => "canGoBack",
                 "canGoForward" => "canGoForward",
                 "data" => "data",
+                "generation" => "generation",
                 "message" => "message",
                 "code" => "code",
                 "duration" => "duration",
@@ -1730,6 +1839,27 @@ extern "system" fn Java_com_longbridge_nsh_Native_eventMap(
             EventPayload::Map(fields)
         }
     };
+    if kind == EventKind::WebEvaluation {
+        let generation = match &payload {
+            EventPayload::Map(fields) => fields.iter().find_map(|(key, value)| match value {
+                PayloadValue::Str(value) if *key == "generation" => value.parse::<u64>().ok(),
+                _ => None,
+            }),
+            _ => None,
+        };
+        // Check and capture the control under the same lock load() uses
+        // to replace it: a late callback can only reach its own engine.
+        let control = {
+            let engine = host.engine.lock().expect("engine");
+            (generation == Some(host.web_generation.load(Ordering::Relaxed)))
+                .then(|| engine.as_ref().map(Engine::control))
+                .flatten()
+        };
+        if let Some(control) = control {
+            control.dispatch_event(id as NodeId, kind, payload);
+        }
+        return;
+    }
     match host.control() {
         Some(control) => control.dispatch_event(id as NodeId, kind, payload),
         // A link before the app runs (the launch intent's): the engine
@@ -1769,7 +1899,36 @@ extern "system" fn Java_com_longbridge_nsh_Native_afterBatch(
         ui.apply(item);
     }
     finish(host, &mut ui);
-    floats(&env, &ui.outputs())
+    let unavailable = ui.shaders.take_unavailable();
+    let outputs = floats(&env, &ui.outputs());
+    drop(ui);
+    // No GPU for the shader views just mounted: the app hears it
+    // (`shadersAvailable()`).
+    if unavailable && let Some(control) = host.control() {
+        control.shaders_unavailable();
+    }
+    outputs
+}
+
+/// Runs the next function the app asked to run on the UI thread
+/// ([`MountSink::run_on_main_thread`]). On the UI thread.
+#[unsafe(no_mangle)]
+extern "system" fn Java_com_longbridge_nsh_Native_runMainThreadTasks(
+    _env: JNIEnv<'_>,
+    _: JClass<'_>,
+    handle: jlong,
+) {
+    // SAFETY: Java passes its live handle.
+    let host = unsafe { host(handle) };
+    // One post per task, so a task never runs ahead of a batch posted after an earlier task.
+    let task = host
+        .main_thread_tasks
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .pop_front();
+    if let Some(task) = task {
+        task.run();
+    }
 }
 
 /// A `Choreographer` frame (nanoseconds).

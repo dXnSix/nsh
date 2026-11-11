@@ -6,7 +6,7 @@
 use nsh_core::{
     Bounds, Points, Ripple, TouchPhase, TouchPoint,
     animation::{Curve, EaseMode},
-    element::{Animation, BoxShadow, TouchEvent},
+    element::{AdaptiveShadow, Animation, BoxShadow, TouchEvent},
     prelude::*,
 };
 
@@ -61,7 +61,7 @@ fn stage() -> View {
 /// The highlight and shadow of a small colored knob.
 fn knob<E: Finished>(element: E) -> E {
     let (light, _) = Finish::Knob.shadows();
-    element.adaptive_shadow(
+    element.adaptive_shadow(AdaptiveShadow::new(
         light.iter().copied(),
         [
             inset_shadow(1.0, 0.0, rgb_a(0xffffff, 0.35)),
@@ -74,7 +74,7 @@ fn knob<E: Finished>(element: E) -> E {
                 inset: false,
             },
         ],
-    )
+    ))
 }
 
 /// A plain label with the API it uses, in code type.

@@ -461,13 +461,13 @@ const drafting = signal<DiffLineRange | null>(null);
 | `lineNumberDeleted` | 删除行的行号，在 `lineNumber` 之后应用 | |
 | `content` | 一侧的文本，在行号栏旁边 | 文本前后各 8pt |
 | `line` | 一侧的每一行 | |
-| `lineAdded` | 新增的行，在 `line` 之后应用 | 绿色底色 |
-| `lineDeleted` | 删除的行，在 `line` 之后应用 | 红色底色 |
+| `lineAdded` | 新增的行，在 `line` 之后应用 | 主题 `diff-added` 的底色；没有时为绿色 |
+| `lineDeleted` | 删除的行，在 `line` 之后应用 | 主题 `diff-deleted` 的底色；没有时为红色 |
 | `filler` | 并排行中另一侧没有对应行时空着的一半 | 淡淡的 `muted` 填充 |
-| `wordAdded` | 新增行内改动的单词 | 更深的绿色 |
-| `wordDeleted` | 删除行内改动的单词 | 更深的红色 |
-| `indicatorAdded` | 新增行的竖条（`"bars"`）或 `+`（`"classic"`） | 绿色，3pt 宽 |
-| `indicatorDeleted` | 删除行的竖条或 `−` | 红色，3pt 宽 |
+| `wordAdded` | 新增行内改动的单词 | 同上，更深 |
+| `wordDeleted` | 删除行内改动的单词 | 同上，更深 |
+| `indicatorAdded` | 新增行的竖条（`"bars"`）或 `+`（`"classic"`） | 主题的 `diff-added`，没有时为绿色；3pt 宽 |
+| `indicatorDeleted` | 删除行的竖条或 `−` | 主题的 `diff-deleted`，没有时为红色；3pt 宽 |
 | `separator` | 折叠行的分隔行，或补丁的 hunk 标题 | `muted` 底色上的 `⋯` 和行数 |
 | `hunkActions` | 应用在一处改动上的操作所在的盒子 | 改动的右上角 |
 | `lineSelected` | 覆盖在选中各行所在一侧的行上 | 主题的选区颜色（与 `Editor` 的选区一致） |

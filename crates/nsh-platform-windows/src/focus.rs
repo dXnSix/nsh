@@ -20,7 +20,8 @@
 //!   dialog's) takes those under it out of reach (`focus::covering_layer`).
 //!   Their order is the order Tab and screen readers go through the views
 //!   ([`NshView::with_children_in_reading_order`]: tree order, a scroll
-//!   view's content as it is on screen).
+//!   view's content as it is on screen; a shown overlay's content after the
+//!   view it follows, `nsh_core::input::tab_order`).
 //! - **Tab** and Shift+Tab move to the next and previous stop, around from
 //!   the last (`focus::tab`, through `nsh_core::input::tab_stop`); a field
 //!   reached has its text selected, as in Windows' dialogs, any other stop
@@ -53,7 +54,7 @@ use nsh_core::{
     Bounds, EventKind, EventPayload, NodeId, PointerEvents, Points, ViewKind,
     focus::{self, Candidate, Layer, Order},
     geometry::{point, size},
-    input::has_press,
+    input::{has_press, tab_order},
     tailwind::state::FOCUSED,
 };
 
@@ -249,6 +250,35 @@ fn stops_in(scope: &NshView) -> Vec<Stop> {
             walk.view(child, to_root, clip, Some(child.id()), false);
         }
     });
+    // Tab's order: a shown overlay's content after the view it follows
+    // (`ViewProps::tab_after`, `nsh_core::input::tab_order`), as the
+    // headless driver and GPUI have it.
+    let order: rustc_hash::FxHashMap<NodeId, usize> = tab_order(
+        scope.clone(),
+        |view| {
+            if left_out(view) {
+                return Vec::new();
+            }
+            view.with_children_in_reading_order(|children| {
+                children
+                    .iter()
+                    .filter(|child| child.kind() != ViewKind::Modal)
+                    .cloned()
+                    .collect()
+            })
+        },
+        NshView::id,
+        |view| view.state().props.tab_after,
+    )
+    .into_iter()
+    .enumerate()
+    .map(|(at, view)| (view.id(), at))
+    .collect();
+    for stop in &mut walk.stops {
+        if let Some(&at) = order.get(&stop.node.id) {
+            stop.node.order = Order::view(at);
+        }
+    }
     focus::candidates(walk.stops, scope.id(), &layers(scope))
 }
 
