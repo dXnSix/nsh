@@ -8,12 +8,12 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     css,
     effects::BoxShadow,
-    element::AdaptiveColor,
+    element::{AdaptiveColor, theme_file::GRADIENTS},
     style::{Color, TextShadow},
 };
 
@@ -75,6 +75,10 @@ pub struct Theme {
 /// fonts `font-sans` and `font-mono` are what `font-sans` and `font-mono`
 /// set, as `--font-sans` and `--font-mono` are in Tailwind.
 ///
+/// A variable that is no token's name is the theme role of that name
+/// (`bg-(--popover)` where the theme maps `popover` onto its `overlay`):
+/// the token the role is mapped onto. A bare class names no role.
+///
 /// Classes naming them are parsed with each appearance's values (one rule
 /// per appearance when they differ), so applying them costs what a palette
 /// color does; when the tokens change, only they are parsed again
@@ -83,7 +87,22 @@ pub struct Theme {
 pub(crate) struct ClassTokens {
     colors: FxHashMap<Box<str>, AdaptiveColor>,
     numbers: FxHashMap<Box<str>, f32>,
+    /// The dark values of the numbers that have one of their own.
+    dark_numbers: FxHashMap<Box<str>, f32>,
     fonts: FxHashMap<Box<str>, Arc<str>>,
+    /// Box shadows, per appearance (`shadow-raised`).
+    shadows: FxHashMap<Box<str>, crate::element::AdaptiveShadow>,
+    /// Gradients, per appearance (`background-image-hero`: `bg-hero`).
+    gradients: FxHashMap<Box<str>, crate::element::AdaptiveGradient>,
+    /// Whether a number's name is in one of Tailwind's namespaces
+    /// (`radius-card`): without one no utility names a number
+    /// ([`ClassTokens::named_number`]), which a theme without such
+    /// tokens then never looks for.
+    namespaced: bool,
+    /// The theme roles mapped onto a token of another name, by the role's
+    /// name ([`crate::element::Tokens::with_roles`]): what a variable
+    /// that is no token's name reads.
+    roles: FxHashMap<Box<str>, Box<str>>,
 }
 
 static DEFAULT_TOKENS: LazyLock<Arc<ClassTokens>> =
@@ -95,28 +114,88 @@ impl ClassTokens {
         ClassTokens {
             colors: theme.colors().map(|(k, c)| (k.into(), c)).collect(),
             numbers: theme.numbers().map(|(k, n)| (k.into(), n)).collect(),
+            dark_numbers: theme.dark_numbers().map(|(k, n)| (k.into(), n)).collect(),
             fonts: theme.fonts().map(|(k, f)| (k.into(), f.clone())).collect(),
+            shadows: theme
+                .shadows()
+                .map(|(k, s)| (k.into(), s.clone()))
+                .collect(),
+            gradients: theme
+                .gradients()
+                .map(|(k, g)| (k.into(), g.clone()))
+                .collect(),
+            namespaced: theme
+                .numbers()
+                .chain(theme.dark_numbers())
+                .any(|(k, _)| is_namespaced(k)),
+            roles: theme.roles().map(|(r, t)| (r.into(), t.into())).collect(),
         }
     }
 
-    /// The names of the colors, the numbers and the fonts.
+    /// The names of the colors, the numbers, the fonts, the shadows and
+    /// the gradients.
     pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
         self.colors
             .keys()
             .chain(self.numbers.keys())
             .chain(self.fonts.keys())
+            .chain(self.shadows.keys())
+            .chain(self.gradients.keys())
             .map(|n| &**n)
     }
 
-    /// Whether `self` and `other` have the same names (only their values
-    /// may differ).
+    /// Whether `self` and `other` have the same names and map the same
+    /// roles (only their values may differ).
     pub(crate) fn same_names(&self, other: &ClassTokens) -> bool {
-        self.colors.len() == other.colors.len()
+        self.roles == other.roles
+            && self.colors.len() == other.colors.len()
             && self.numbers.len() == other.numbers.len()
             && self.fonts.len() == other.fonts.len()
+            && self.shadows.len() == other.shadows.len()
+            && self.gradients.len() == other.gradients.len()
+            && self.shadows.keys().all(|k| other.shadows.contains_key(k))
+            && self
+                .gradients
+                .keys()
+                .all(|k| other.gradients.contains_key(k))
             && self.colors.keys().all(|k| other.colors.contains_key(k))
             && self.numbers.keys().all(|k| other.numbers.contains_key(k))
             && self.fonts.keys().all(|k| other.fonts.contains_key(k))
+    }
+
+    /// The tokens whose value differs between `self` and `other`, which
+    /// have the same names ([`ClassTokens::same_names`]): their keys
+    /// ([`token_key`]). A number counts with its dark value, which one of
+    /// the two may lack.
+    pub(crate) fn changed(&self, other: &ClassTokens) -> FxHashSet<u64> {
+        let mut changed = FxHashSet::default();
+        let mut differ = |name: &str, same: bool| {
+            if !same {
+                changed.insert(token_key(name));
+            }
+        };
+        for (name, color) in &self.colors {
+            differ(name, other.colors.get(name) == Some(color));
+        }
+        for (name, number) in &self.numbers {
+            differ(name, other.numbers.get(name) == Some(number));
+        }
+        for name in self.dark_numbers.keys().chain(other.dark_numbers.keys()) {
+            differ(
+                name,
+                self.dark_numbers.get(name) == other.dark_numbers.get(name),
+            );
+        }
+        for (name, font) in &self.fonts {
+            differ(name, other.fonts.get(name) == Some(font));
+        }
+        for (name, shadow) in &self.shadows {
+            differ(name, other.shadows.get(name) == Some(shadow));
+        }
+        for (name, gradient) in &self.gradients {
+            differ(name, other.gradients.get(name) == Some(gradient));
+        }
+        changed
     }
 
     /// Whether `utility` is one of Tailwind's that a token replaces:
@@ -128,14 +207,29 @@ impl ClassTokens {
     /// `utility` with its tokens replaced by their values in the light or
     /// dark appearance, as arbitrary values: `bg-primary/50` is
     /// `bg-[color:#171717ff]/50`, `rounded-(--radius)` is `rounded-[12px]`.
-    /// `None` when it names none, or one there is not.
-    pub(crate) fn substitute(&self, utility: &str, dark: bool) -> Option<String> {
+    /// `None` when it names none, or one there is not. The tokens it read
+    /// are added to `read` ([`token_key`]).
+    pub(crate) fn substitute(
+        &self,
+        utility: &str,
+        dark: bool,
+        read: &mut Vec<u64>,
+    ) -> Option<String> {
         let hex = |out: &mut String, c: &AdaptiveColor| {
             let c = if dark { c.dark } else { c.light };
             let _ = write!(out, "#{:08x}", Color::from(c).0);
         };
         if let Some(family) = self.fonts.get(utility) {
+            read.push(token_key(utility));
             return Some(format!("font-[family-name:{}]", family.replace(' ', "_")));
+        }
+        // A shadow token is the class of its name (`shadow-raised`), as
+        // Tailwind's `--shadow-*` are: its layers as an arbitrary value.
+        if utility.starts_with("shadow-")
+            && let Some(shadow) = self.shadows.get(utility)
+        {
+            read.push(token_key(utility));
+            return Some(format!("shadow-[{}]", shadow.css(dark).replace(' ', "_")));
         }
         if utility.contains('(') {
             // `(--name)` and `(hint:--name)`, Tailwind 4's shorthand of
@@ -150,9 +244,13 @@ impl ClassTokens {
                     Some((h, v)) => (Some(h), v),
                     None => (None, inner),
                 };
-                let name = var.strip_prefix("--")?;
+                let name = self.variable(var.strip_prefix("--")?);
                 out.push('[');
-                if let Some(h) = hint {
+                // A gradient token by its variable, as Tailwind reads an
+                // image (`bg-(image:--background-image-hero)`): the value
+                // alone, which the utility reads as gradients.
+                let gradient = self.gradients.get(name).filter(|_| hint == Some("image"));
+                if let Some(h) = hint.filter(|_| gradient.is_none()) {
                     out.push_str(h);
                     out.push(':');
                 }
@@ -161,8 +259,15 @@ impl ClassTokens {
                     .get(name)
                     .filter(|_| hint.is_none_or(|h| h == "color"));
                 let font = self.fonts.get(name).filter(|_| hint == Some("family-name"));
-                match (color, self.numbers.get(name)) {
+                let shadow = self.shadows.get(name).filter(|_| hint.is_none());
+                match (color, self.number(name, dark)) {
                     (Some(c), _) => hex(&mut out, c),
+                    (None, _) if let Some(g) = gradient => {
+                        out.push_str(&g.css(dark).replace(' ', "_"))
+                    }
+                    (None, _) if let Some(s) = shadow => {
+                        out.push_str(&s.css(dark).replace(' ', "_"))
+                    }
                     (None, _) if let Some(f) = font => out.push_str(&f.replace(' ', "_")),
                     (None, Some(n)) if hint == Some("number") => {
                         let _ = write!(out, "{n}");
@@ -172,19 +277,54 @@ impl ClassTokens {
                     }
                     (None, None) => return None,
                 }
+                read.push(token_key(name));
                 out.push(']');
                 rest = &rest[close + 1..];
             }
             out.push_str(rest);
             return Some(out);
         }
-        // A color name after a utility's prefix (`border-t-` `muted`), with
-        // an optional opacity modifier.
-        let (start, name) = utility.match_indices('-').find_map(|(i, _)| {
+        // A number token of the utility's namespace (`rounded-card`:
+        // `radius-card`), or a color name after a utility's prefix
+        // (`border-t-` `muted`) with an optional opacity modifier. Of both,
+        // the longer utility (`inset-shadow-` `card` over `inset-`
+        // `shadow-card`); at the same one the namespace, which a color of
+        // the same name (`card`) does not hide, as a namespace is what
+        // Tailwind looks a utility's value up in. `text-` is a color
+        // utility's too, where a color stays first, as it was.
+        let number = self.named_number(utility, dark);
+        let color = utility.match_indices('-').find_map(|(i, _)| {
             let rest = &utility[i + 1..];
             let name = rest.split_once('/').map_or(rest, |(n, _)| n);
             (i > 0 && self.colors.contains_key(name)).then_some((i, name))
-        })?;
+        });
+        let (start, name) = match (number, color) {
+            (Some((_, key, named)), None) => {
+                read.push(key);
+                return Some(named);
+            }
+            (Some((at, key, named)), Some((start, _)))
+                if !utility.starts_with("text-") && at >= start =>
+            {
+                read.push(key);
+                return Some(named);
+            }
+            (_, Some(color)) => color,
+            // A gradient token is the class `bg-<n>` of its name
+            // (`background-image-hero`: `bg-hero`), as Tailwind's
+            // `--background-image-*` are, after a color of that name: its
+            // gradients as an arbitrary value.
+            (None, None) => {
+                let name = utility.strip_prefix("bg-")?;
+                let (token, gradient) = self
+                    .gradients
+                    .iter()
+                    .find(|(token, _)| token.strip_prefix(GRADIENTS) == Some(name))?;
+                read.push(token_key(token));
+                return Some(format!("bg-[{}]", gradient.css(dark).replace(' ', "_")));
+            }
+        };
+        read.push(token_key(name));
         let mut out = String::with_capacity(utility.len() + 16);
         out.push_str(&utility[..=start]);
         out.push_str("[color:");
@@ -193,6 +333,227 @@ impl ClassTokens {
         out.push_str(&utility[start + 1 + name.len()..]);
         Some(out)
     }
+}
+
+impl ClassTokens {
+    /// The token a variable `name` reads: the token of that name, else the
+    /// one the role of that name is mapped onto. The token is first, as a
+    /// variable is a token's name; [`crate::element::Tokens::role`] reads
+    /// the mapping first.
+    fn variable<'a>(&'a self, name: &'a str) -> &'a str {
+        let token = self.colors.contains_key(name)
+            || self.numbers.contains_key(name)
+            || self.dark_numbers.contains_key(name)
+            || self.fonts.contains_key(name)
+            || self.shadows.contains_key(name)
+            || self.gradients.contains_key(name);
+        match self.roles.get(name) {
+            Some(mapped) if !token => mapped,
+            _ => name,
+        }
+    }
+
+    /// The number named `name` in the dark appearance or the light one
+    /// ([`crate::element::Tokens::number_in`]).
+    fn number(&self, name: &str, dark: bool) -> Option<f32> {
+        dark.then(|| self.dark_numbers.get(name).copied())
+            .flatten()
+            .or_else(|| self.numbers.get(name).copied())
+    }
+
+    /// A utility naming a number token of its namespace (`rounded-card`:
+    /// `radius-card`; `p-gutter`: `spacing-gutter`) with the token's value
+    /// as an arbitrary one (`rounded-[14px]`), as Tailwind 4 makes classes
+    /// of a theme's `--radius-*`, `--spacing-*`, … variables.
+    /// With the length of the utility's prefix (`rounded`: 7) and the
+    /// token's key ([`token_key`]).
+    fn named_number(&self, utility: &str, dark: bool) -> Option<(usize, u64, String)> {
+        if !self.namespaced {
+            return None;
+        }
+        utility.match_indices('-').find_map(|(i, _)| {
+            let (prefix, name) = (&utility[..i], &utility[i + 1..]);
+            let (namespace, length) = namespace(prefix.trim_start_matches('-'))?;
+            let token = format!("{namespace}-{name}");
+            let value = self.number(&token, dark)?;
+            Some((
+                i,
+                token_key(&token),
+                match length {
+                    true => format!("{prefix}-[{value}px]"),
+                    false => format!("{prefix}-[{value}]"),
+                },
+            ))
+        })
+    }
+
+    /// Each number token some of whose namespaced classes stay another
+    /// meaning, with those classes, sorted: Tailwind's own names
+    /// (`radius-lg`: `rounded-lg`; `spacing-md`: `max-w-md`), and for a
+    /// size `text-<n>` a theme color `<n>` (`text-card`), which keeps
+    /// `text-<n>`. The token is no class there.
+    pub(crate) fn shadowed(&self, theme: &Theme) -> Vec<(String, Vec<String>)> {
+        let mut out = Vec::new();
+        for token in self.numbers.keys() {
+            let Some((ns, name)) = NAMESPACES
+                .iter()
+                .find_map(|ns| Some((*ns, token.strip_prefix(ns)?.strip_prefix('-')?)))
+            else {
+                continue;
+            };
+            let mut classes: Vec<String> = PREFIXES
+                .iter()
+                .filter(|(_, of, _)| *of == ns)
+                .map(|(prefix, ..)| format!("{prefix}-{name}"))
+                .filter(|class| {
+                    super::utilities::parse(theme, class).is_some()
+                        || (ns == "text" && self.colors.contains_key(name))
+                })
+                .collect();
+            if !classes.is_empty() {
+                classes.sort();
+                out.push((token.to_string(), classes));
+            }
+        }
+        // A gradient token's class is `bg-<n>`: one of Tailwind's own
+        // (`bg-none`, a palette color's `bg-black`) or a theme color `<n>`
+        // keeps it.
+        for token in self.gradients.keys() {
+            let Some(name) = token.strip_prefix(GRADIENTS) else {
+                continue;
+            };
+            let class = format!("bg-{name}");
+            if super::utilities::parse(theme, &class).is_some() || self.colors.contains_key(name) {
+                out.push((token.to_string(), vec![class]));
+            }
+        }
+        out.sort();
+        out
+    }
+}
+
+/// Tailwind 4's namespaces of number tokens (`radius-card`).
+const NAMESPACES: [&str; 7] = [
+    "radius",
+    "spacing",
+    "text",
+    "font-weight",
+    "tracking",
+    "leading",
+    "blur",
+];
+
+/// The utilities whose values a namespace's tokens are: each prefix, its
+/// namespace, whether the value is a length (points) or a plain number (a
+/// weight, a line height).
+const PREFIXES: &[(&str, &str, bool)] = &[
+    ("rounded", "radius", true),
+    ("rounded-t", "radius", true),
+    ("rounded-r", "radius", true),
+    ("rounded-b", "radius", true),
+    ("rounded-l", "radius", true),
+    ("rounded-s", "radius", true),
+    ("rounded-e", "radius", true),
+    ("rounded-tl", "radius", true),
+    ("rounded-tr", "radius", true),
+    ("rounded-br", "radius", true),
+    ("rounded-bl", "radius", true),
+    ("rounded-ss", "radius", true),
+    ("rounded-se", "radius", true),
+    ("rounded-es", "radius", true),
+    ("rounded-ee", "radius", true),
+    ("text", "text", true),
+    ("font", "font-weight", false),
+    ("tracking", "tracking", true),
+    ("leading", "leading", false),
+    ("blur", "blur", true),
+    ("backdrop-blur", "blur", true),
+    ("p", "spacing", true),
+    ("px", "spacing", true),
+    ("py", "spacing", true),
+    ("pt", "spacing", true),
+    ("pr", "spacing", true),
+    ("pb", "spacing", true),
+    ("pl", "spacing", true),
+    ("ps", "spacing", true),
+    ("pe", "spacing", true),
+    ("m", "spacing", true),
+    ("mx", "spacing", true),
+    ("my", "spacing", true),
+    ("mt", "spacing", true),
+    ("mr", "spacing", true),
+    ("mb", "spacing", true),
+    ("ml", "spacing", true),
+    ("ms", "spacing", true),
+    ("me", "spacing", true),
+    ("gap", "spacing", true),
+    ("gap-x", "spacing", true),
+    ("gap-y", "spacing", true),
+    ("w", "spacing", true),
+    ("h", "spacing", true),
+    ("size", "spacing", true),
+    ("min-w", "spacing", true),
+    ("min-h", "spacing", true),
+    ("max-w", "spacing", true),
+    ("max-h", "spacing", true),
+    ("inset", "spacing", true),
+    ("inset-x", "spacing", true),
+    ("inset-y", "spacing", true),
+    ("top", "spacing", true),
+    ("right", "spacing", true),
+    ("bottom", "spacing", true),
+    ("left", "spacing", true),
+    ("start", "spacing", true),
+    ("end", "spacing", true),
+    ("space-x", "spacing", true),
+    ("space-y", "spacing", true),
+    ("translate-x", "spacing", true),
+    ("translate-y", "spacing", true),
+    ("basis", "spacing", true),
+    ("indent", "spacing", true),
+    ("scroll-m", "spacing", true),
+    ("scroll-mx", "spacing", true),
+    ("scroll-my", "spacing", true),
+    ("scroll-mt", "spacing", true),
+    ("scroll-mr", "spacing", true),
+    ("scroll-mb", "spacing", true),
+    ("scroll-ml", "spacing", true),
+    ("scroll-p", "spacing", true),
+    ("scroll-px", "spacing", true),
+    ("scroll-py", "spacing", true),
+    ("scroll-pt", "spacing", true),
+    ("scroll-pr", "spacing", true),
+    ("scroll-pb", "spacing", true),
+    ("scroll-pl", "spacing", true),
+];
+
+/// What a class list keeps of a token it read, and a change of the tokens
+/// says of one whose value changed: a hash of its name. Two names of one
+/// key only make a class resolve again that did not need to.
+pub(crate) fn token_key(name: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = rustc_hash::FxHasher::default();
+    name.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Whether `name` is a token of one of [`NAMESPACES`] (`radius-card`, not
+/// `radius`), which a utility of that namespace can name.
+fn is_namespaced(name: &str) -> bool {
+    NAMESPACES.iter().any(|ns| {
+        name.strip_prefix(ns)
+            .is_some_and(|rest| rest.starts_with('-'))
+    })
+}
+
+/// The namespace of the tokens a utility of prefix `prefix` names
+/// (`rounded-t`: `radius`; `gap-x`: `spacing`), with whether its value is a
+/// length.
+fn namespace(prefix: &str) -> Option<(&'static str, bool)> {
+    PREFIXES
+        .iter()
+        .find(|(p, ..)| *p == prefix)
+        .map(|(_, ns, length)| (*ns, *length))
 }
 
 fn map<V>(entries: &[(&str, V)]) -> FxHashMap<Box<str>, V>
@@ -672,6 +1033,15 @@ impl Theme {
         names
     }
 
+    /// Each number token of the theme's design tokens some of whose
+    /// namespaced classes keep another meaning, with those classes, sorted:
+    /// Tailwind's own (`radius-lg`: `rounded-lg`), or a theme color's for a
+    /// size `text-<n>`. The token is no class there (the build warns of
+    /// it).
+    pub fn shadowed_tokens(&self) -> Vec<(String, Vec<String>)> {
+        self.tokens().shadowed(self)
+    }
+
     /// The design tokens classes name.
     pub(crate) fn tokens(&self) -> &ClassTokens {
         self.tokens.as_deref().unwrap_or(&DEFAULT_TOKENS)
@@ -691,6 +1061,15 @@ impl Theme {
     /// Replaces the tokens.
     pub(crate) fn replace_tokens(&mut self, tokens: Arc<ClassTokens>) {
         self.tokens = Some(tokens);
+    }
+
+    /// Puts `tokens` in place of the theme's and returns those (to parse
+    /// a class with other values, then put them back).
+    pub(crate) fn swap_tokens(
+        &mut self,
+        tokens: Option<Arc<ClassTokens>>,
+    ) -> Option<Arc<ClassTokens>> {
+        std::mem::replace(&mut self.tokens, tokens)
     }
 }
 

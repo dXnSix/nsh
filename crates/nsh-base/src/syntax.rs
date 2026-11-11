@@ -9,6 +9,12 @@
 //! the styles of both appearances and the colors follow the appearance
 //! without highlighting again. What maps to nothing keeps the code's own
 //! color (the app's).
+//!
+//! A kind's color is the theme's for its role where the theme has one
+//! (`syntax-keyword`: [`crate::role::SYNTAX_KEYWORD`]), else the palette's
+//! own ([`Palette`]). The tokens do not change with the theme, only the
+//! spans' styles: what styles spans does it in a reactive scope, which
+//! reading the palette subscribes to the theme.
 
 use nsh_core::{element::StyleRefinement, prelude::*};
 
@@ -16,6 +22,7 @@ use nsh_core::{element::StyleRefinement, prelude::*};
 pub(crate) use self::syntect_syntaxes::load_async;
 #[cfg(feature = "highlight")]
 pub(crate) use self::syntect_syntaxes::{Parse, find_syntax, loaded, plain, scope_token, syntaxes};
+use crate::role;
 
 /// What a span of code is, colored alike (as Allsum's `--hl-*` tokens
 /// color highlight.js's classes).
@@ -49,21 +56,77 @@ pub(crate) enum Token {
     Storage,
 }
 
+/// The colors of the kinds of token, light and dark.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(not(feature = "highlight"), allow(dead_code))]
+pub(crate) struct Palette {
+    comment: AdaptiveColor,
+    keyword: AdaptiveColor,
+    string: AdaptiveColor,
+    number: AdaptiveColor,
+    title: AdaptiveColor,
+    attr: AdaptiveColor,
+    built: AdaptiveColor,
+    deletion: AdaptiveColor,
+}
+
+impl Default for Palette {
+    /// Allsum's reading palette (its `--hl-*` tokens).
+    fn default() -> Self {
+        let color = AdaptiveColor::rgb;
+        Palette {
+            comment: color(0x6e7781, 0x7d7a72),
+            keyword: color(0x8250df, 0xc4a7ff),
+            string: color(0x116329, 0x9fd68a),
+            number: color(0x953800, 0xf5b27a),
+            title: color(0x0550ae, 0x82b8ff),
+            attr: color(0x7d4e00, 0xf0c674),
+            built: color(0x0a7285, 0x6fd3d8),
+            deletion: color(0xcf222e, 0xf87171),
+        }
+    }
+}
+
+#[cfg_attr(not(feature = "highlight"), allow(dead_code))]
+impl Palette {
+    /// The palette the theme gives now: each kind the theme's color for
+    /// its role (`syntax-comment` … `syntax-type`, and `diff-deleted` for
+    /// a diff's removed lines: the token the app's theme maps the role
+    /// onto, else the one of that name), else Allsum's. Reading it
+    /// subscribes to the theme: the scope that styles spans with it makes
+    /// them again when the theme changes.
+    pub(crate) fn of_theme() -> Self {
+        let theme = crate::theme();
+        let tokens = theme.tokens();
+        let own = Palette::default();
+        let color = |role, own| tokens.role(role).unwrap_or(own);
+        Palette {
+            comment: color(role::SYNTAX_COMMENT, own.comment),
+            keyword: color(role::SYNTAX_KEYWORD, own.keyword),
+            string: color(role::SYNTAX_STRING, own.string),
+            number: color(role::SYNTAX_NUMBER, own.number),
+            title: color(role::SYNTAX_FUNCTION, own.title),
+            attr: color(role::SYNTAX_PROPERTY, own.attr),
+            built: color(role::SYNTAX_TYPE, own.built),
+            deletion: color(role::DIFF_DELETED, own.deletion),
+        }
+    }
+}
+
 #[cfg_attr(not(feature = "highlight"), allow(dead_code))]
 impl Token {
-    /// Allsum's reading palette (its `--hl-*` tokens), light and dark.
-    pub(crate) fn style(self) -> StyleRefinement {
+    /// Its style in `palette`: its kind's color, a comment italic.
+    pub(crate) fn style(self, palette: &Palette) -> StyleRefinement {
         let s = StyleRefinement::default();
-        let color = AdaptiveColor::rgb;
         match self {
-            Self::Comment => s.text_color(color(0x6e7781, 0x7d7a72)).italic(),
-            Self::Keyword => s.text_color(color(0x8250df, 0xc4a7ff)),
-            Self::String => s.text_color(color(0x116329, 0x9fd68a)),
-            Self::Number => s.text_color(color(0x953800, 0xf5b27a)),
-            Self::Title => s.text_color(color(0x0550ae, 0x82b8ff)),
-            Self::Attr => s.text_color(color(0x7d4e00, 0xf0c674)),
-            Self::Built => s.text_color(color(0x0a7285, 0x6fd3d8)),
-            Self::Deletion => s.text_color(color(0xcf222e, 0xf87171)),
+            Self::Comment => s.text_color(palette.comment).italic(),
+            Self::Keyword => s.text_color(palette.keyword),
+            Self::String => s.text_color(palette.string),
+            Self::Number => s.text_color(palette.number),
+            Self::Title => s.text_color(palette.title),
+            Self::Attr => s.text_color(palette.attr),
+            Self::Built => s.text_color(palette.built),
+            Self::Deletion => s.text_color(palette.deletion),
             Self::Bold => s.font_weight(FontWeight::BOLD),
             Self::Italic => s.italic(),
             Self::Operator | Self::Storage => s,

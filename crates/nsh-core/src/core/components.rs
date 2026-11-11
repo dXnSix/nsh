@@ -172,9 +172,10 @@ pub(super) struct Instance {
     /// which the components JS made among them are under.
     children_owner: Option<crate::element::Owner>,
     /// It joined a host as its children (content a view passed a nested
-    /// component, `tabs().child(tab())`): its view waits, as one JS made
-    /// does, to be in the tree under where that host's view places it, so
-    /// it reads the context there.
+    /// component, `tabs().child(tab())`, or inside plain views of that
+    /// content): its view waits, as one JS made does, to be in the tree
+    /// under where that host's view places it, so it reads the context
+    /// there.
     joined: bool,
     /// The component its view's root is, made on this host (its alias,
     /// [`Core::alias`]): its view makes the host's node.
@@ -510,10 +511,29 @@ struct UrlScheme {
     pending: std::collections::VecDeque<String>,
     /// The listener waiting for a link.
     next: Option<AnswerSlot<String>>,
+    /// Address moves no listener took yet
+    /// ([`crate::url_scheme::AppUrlChange`]), kept once something listened
+    /// ([`Self::hears_changes`]), at most [`crate::url_scheme::MAX_PENDING`].
+    changes: std::collections::VecDeque<crate::url_scheme::AppUrlChange>,
+    /// The listener waiting for an address move.
+    next_change: Option<AnswerSlot<crate::url_scheme::AppUrlChange>>,
+    /// Something listens to address moves: those before it are stale (the
+    /// address has them), those after it wait between its answers.
+    hears_changes: bool,
     /// The app's address: the last link taken, the page's on the web, or
     /// what the app set (`UrlScheme.setUrl`, `set_app_url`). The one copy,
     /// which every VM's `System` shares ([`Core::app_url_cell`]).
     address: crate::url_scheme::AppUrlCell,
+}
+
+/// Later launches of the app ([`crate::single_instance`]).
+#[derive(Default)]
+struct SecondInstances {
+    /// Launches no listener took yet, at most
+    /// [`crate::single_instance::MAX_PENDING`].
+    pending: std::collections::VecDeque<crate::single_instance::SecondInstance>,
+    /// The listener waiting for a launch.
+    next: Option<AnswerSlot<crate::single_instance::SecondInstance>>,
 }
 
 /// The speech recognition session running ([`crate::speech`]).
@@ -527,6 +547,7 @@ struct SpeechSession {
 
 /// The core's component state.
 pub(super) struct Components {
+    pub(super) web_evaluations: super::web_evaluation::Evaluations,
     registry: Registry,
     /// The specs of the components made by type (not by name from the
     /// registry), one per type.
@@ -537,6 +558,13 @@ pub(super) struct Components {
     /// app's root): drawn with while the embedding app sets none
     /// ([`Core::set_host_tokens`]).
     app_tokens: Arc<Tokens>,
+    /// The app's theme: its tokens as last set whole (a UI set's defaults,
+    /// `nsh.json`'s theme, `setTheme`, `set_tokens`), which
+    /// [`Core::reset_tokens`] puts tokens back to.
+    file_tokens: Arc<Tokens>,
+    /// The UI set's default tokens: drawn with others, the app has a theme
+    /// of its own ([`Tokens::is_themed`]); `None`: no set reads themes.
+    default_tokens: Option<Arc<Tokens>>,
     /// The embedding app's tokens: win over [`Self::app_tokens`].
     host_tokens: Option<Arc<Tokens>>,
     /// Boxed: making a view (or applying its patches) takes its instance
@@ -606,6 +634,7 @@ pub(super) struct Components {
     notifications: Notifications,
     /// The links that open the app ([`crate::url_scheme`]).
     url_schemes: UrlScheme,
+    second_instances: SecondInstances,
     /// Calls of the embedding app's functions (`nsh/host`), by request id:
     /// their answers.
     host_calls: FxHashMap<u64, AnswerSlot<Result<crate::JsonValue, crate::element::JsError>>>,
@@ -617,6 +646,9 @@ pub(super) struct Components {
     /// The language the app asked to show in (`Some(None)`: the user's
     /// again), for the engine ([`Core::take_locale_request`]).
     pub(super) locale_request: Option<Option<crate::platform::Locale>>,
+    /// Functions for the platform's main thread, for the engine
+    /// ([`Core::take_main_thread_tasks`]).
+    main_thread: Vec<crate::main_thread::MainThreadTask>,
     next_url_open: u32,
     /// Colors being picked on the screen, by request id: their answers.
     screen_colors: FxHashMap<u32, AnswerSlot<Option<crate::Hsla>>>,
@@ -637,9 +669,15 @@ pub(super) struct Components {
     /// Elements to measure once this commit is laid out
     /// ([`crate::element::ElementRef::measure`]).
     pub(super) measures: Vec<(NodeId, AnswerSlot<Option<crate::Measurement>>)>,
+    /// Lists to tell where their viewports start once this commit is laid
+    /// out ([`crate::element::ElementRef::measure_scroll_position`]).
+    pub(super) scroll_positions: Vec<(NodeId, AnswerSlot<Option<crate::ListScrollPosition>>)>,
     /// Elements whose transitions' time to tell once this commit is
     /// styled ([`crate::element::ElementRef::transition_time`]).
     pub(super) transition_times: Vec<(NodeId, AnswerSlot<std::time::Duration>)>,
+    /// Presses to pass on inside elements once this commit is laid out
+    /// ([`crate::element::ElementRef::press_at`]).
+    pub(super) presses: Vec<(NodeId, crate::PressEvent, AnswerSlot<bool>)>,
     /// The components' own lists, by node.
     virtual_lists: FxHashMap<NodeId, VirtualListState>,
     /// Views JS made, waiting to be in the tree to make their view.
@@ -697,6 +735,8 @@ impl Default for Components {
             specs: FxHashMap::default(),
             tokens: Arc::new(Tokens::default()),
             app_tokens: Arc::new(Tokens::default()),
+            file_tokens: Arc::new(Tokens::default()),
+            default_tokens: None,
             host_tokens: None,
             instances: FxHashMap::default(),
             owners: FxHashMap::default(),
@@ -721,6 +761,7 @@ impl Default for Components {
             url_opens: FxHashMap::default(),
             url_requests: Vec::new(),
             locale_request: None,
+            main_thread: Vec::new(),
             next_url_open: 0,
             screen_colors: FxHashMap::default(),
             next_screen_color: 1,
@@ -733,14 +774,18 @@ impl Default for Components {
             audio: FxHashMap::default(),
             notifications: Notifications::default(),
             url_schemes: UrlScheme::default(),
+            second_instances: SecondInstances::default(),
             host_calls: FxHashMap::default(),
             next_host_call: 1,
+            web_evaluations: Default::default(),
             fetches: FxHashMap::default(),
             fetch_requests: Vec::new(),
             next_fetch: 1,
             animations: FxHashMap::default(),
             measures: Vec::new(),
+            scroll_positions: Vec::new(),
             transition_times: Vec::new(),
+            presses: Vec::new(),
             virtual_lists: FxHashMap::default(),
             list_counts: FxHashMap::default(),
             waiting: Vec::new(),
@@ -857,13 +902,23 @@ impl<M: TextEngine> Core<M> {
     /// sets' setup functions ([`Registry::setup`]).
     pub fn set_components(&mut self, registry: Registry) {
         if let Some(Ok((tokens, _))) = registry.tokens(None) {
+            self.components.default_tokens = Some(Arc::new(tokens.clone()));
             self.set_tokens(tokens);
         }
         {
             let _entered = self.components.runtime.enter();
             registry.run_setups();
         }
+        let typed = registry.has_theme_types();
         self.components.registry = registry;
+        self.components
+            .runtime
+            .set_theme_tokens(self.theme_tokens());
+        // The tokens were sent before the registry was in place: an app with
+        // theme types has a theme of its own (`Tokens::is_themed`).
+        if typed {
+            self.tokens_changed();
+        }
     }
 
     /// Replaces the components of a running core with `registry`, a
@@ -877,13 +932,16 @@ impl<M: TextEngine> Core<M> {
             registry.run_setups_not_in(&self.components.registry);
         }
         self.components.registry = registry;
+        self.components
+            .runtime
+            .set_theme_tokens(self.theme_tokens());
     }
 
-    /// `uiTheme` on the root: the app's theme file (`nsh.json`, `setTheme`),
-    /// which the UI set that reads themes makes tokens of. What it cannot
-    /// read is left out and the rest applies, so a bundle made by a newer
-    /// NSH keeps its theme here.
-    pub(super) fn set_ui_theme(&mut self, json: &str) {
+    /// The app's theme file (`nsh.json`, `setTheme`, a Rust app's
+    /// [`Root::theme`]; `uiTheme` on the root), which the UI set that reads
+    /// themes makes tokens of. What it cannot read is left out and the rest
+    /// applies, so a bundle made by a newer NSH keeps its theme here.
+    pub fn set_ui_theme(&mut self, json: &str) {
         match self.components.registry.tokens(Some(json)) {
             Some(Ok((tokens, left_out))) => {
                 for what in left_out {
@@ -897,10 +955,116 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// The app's design tokens; it is drawn with them unless the
-    /// embedding app set its own ([`Core::set_host_tokens`]).
+    /// embedding app set its own ([`Core::set_host_tokens`]). They are its
+    /// theme from now on: what [`Core::reset_tokens`] goes back to.
     pub fn set_tokens(&mut self, tokens: Tokens) {
-        self.components.app_tokens = Arc::new(tokens);
+        let tokens = Arc::new(tokens);
+        self.components.file_tokens = tokens.clone();
+        self.components.app_tokens = tokens;
         self.tokens_changed();
+    }
+
+    /// Changes some of the app's design tokens: those of `tokens` take
+    /// their values, the others stay. Applied in order, so two changes in
+    /// one turn compose.
+    pub(crate) fn update_tokens(&mut self, tokens: Tokens) {
+        self.components.app_tokens = Arc::new(tokens.over(&self.components.app_tokens));
+        self.tokens_changed();
+    }
+
+    /// Takes the tokens a theme type's fields wrote
+    /// ([`crate::element::set_theme`]), as [`Core::update_tokens`] takes
+    /// tokens, but a number left at its value keeps its dark one: a number
+    /// field is the light value, and setting a theme that was read must
+    /// not change what it could not read. Applied in order, as an update.
+    pub(crate) fn set_theme_tokens(&mut self, tokens: Tokens) {
+        self.components.app_tokens = Arc::new(tokens.over_as_fields(&self.components.app_tokens));
+        self.tokens_changed();
+    }
+
+    /// `tokens`, written by a theme type whose tokens play the roles
+    /// `played` (each with its token's name), as the app's tokens take
+    /// them: a token playing a role the app's tokens map onto a token of
+    /// another name is that token. So a type that is not registered
+    /// (`nsh-base`'s `Theme`, whose `popover` plays the role `popover`)
+    /// sets what its fields read, the design system's `surface-overlay`,
+    /// as a theme file's `popover` key does; a token one of whose roles is
+    /// not mapped away keeps its own name too. A registered type's roles
+    /// are mapped onto its own tokens, so its tokens are as it wrote them.
+    /// The mapping is the one of now: the action runs in order.
+    fn through_roles(&self, mut tokens: Tokens, played: &[(Box<str>, Box<str>)]) -> Tokens {
+        let app = &self.components.app_tokens;
+        let (mut moved, mut stays): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
+        for (role, name) in played {
+            match app.mapped(role) {
+                Some(token) if *token != **name => {
+                    tokens.copy_as(name, token);
+                    moved.push(name);
+                }
+                _ => stays.push(name),
+            }
+        }
+        for name in moved {
+            if !stays.contains(&name) {
+                tokens.remove_named(name);
+            }
+        }
+        tokens
+    }
+
+    /// The tokens that `names` name as a theme file names them: under theme
+    /// types a role's name is the token it is mapped onto
+    /// (`TokenProvider::token_name`).
+    pub(super) fn theme_file_names(&self, mut names: Vec<Box<str>>) -> Vec<Box<str>> {
+        if let Some(provider) = self.components.registry.token_provider() {
+            for name in &mut names {
+                let token = provider.token_name(name);
+                if *token != **name {
+                    *name = token.into();
+                }
+            }
+        }
+        names
+    }
+
+    /// Puts the app's tokens `names` (`None`: every one) back to its
+    /// theme's ([`Core::set_tokens`]); a name the theme lacks is removed.
+    pub(crate) fn reset_tokens(&mut self, names: Option<&[Box<str>]>) {
+        let file = &self.components.file_tokens;
+        self.components.app_tokens = match names {
+            None => file.clone(),
+            Some(names) => {
+                let mut tokens = (*self.components.app_tokens).clone();
+                for name in names {
+                    tokens.copy_named(file, name);
+                }
+                Arc::new(tokens)
+            }
+        };
+        self.tokens_changed();
+    }
+
+    /// `uiThemeUpdate` on the root (`nsh`'s `updateTheme`): the tokens a
+    /// theme file sets change, read by the UI set
+    /// ([`Registry::token_overrides_from`]) against the tokens drawn with
+    /// now; what it cannot read is left out and keeps its value.
+    pub(super) fn update_ui_theme(&mut self, json: &str) {
+        let provider = self.components.registry.token_provider();
+        let Some(read) = provider
+            .as_ref()
+            .and_then(|p| p.overrides(json, &self.components.tokens))
+        else {
+            return log::warn!("theme: no UI set reads theme changes");
+        };
+        match read {
+            Ok((tokens, left_out)) => {
+                for what in left_out {
+                    log::warn!("theme: {what}, ignored");
+                }
+                self.update_tokens(tokens);
+            }
+            Err(e) => log::warn!("theme: {e}"),
+        }
     }
 
     /// The app's translations ([`crate::i18n`]): what `t!` and TS's `t`
@@ -917,6 +1081,15 @@ impl<M: TextEngine> Core<M> {
         self.components.locale_request.take()
     }
 
+    /// The functions components, tasks and module functions asked to run
+    /// on the platform's main thread since the last call
+    /// ([`crate::element::run_on_main_thread`]), in order: the engine hands
+    /// them to its sink after the commit.
+    #[doc(hidden)]
+    pub fn take_main_thread_tasks(&mut self) -> Vec<crate::main_thread::MainThreadTask> {
+        std::mem::take(&mut self.components.main_thread)
+    }
+
     /// The embedding app's design tokens (`None`: the app's again): an app
     /// embedded in a native app looks like it, whatever the app sets.
     pub fn set_host_tokens(&mut self, tokens: Option<Tokens>) {
@@ -924,12 +1097,44 @@ impl<M: TextEngine> Core<M> {
         self.tokens_changed();
     }
 
+    /// The embedding app's theme overrides (`None`: the app's own theme
+    /// again): a theme file whose tokens win over the app's of the same
+    /// names, read by the UI set that reads themes
+    /// ([`Registry::token_overrides_from`], else the core's
+    /// [`crate::element::theme_file::overrides`]) against the UI set's
+    /// default tokens, so a `var()` it does not set names the default
+    /// theme's token. What it cannot read is left out; text that is no JSON
+    /// changes nothing.
+    pub fn set_host_theme(&mut self, json: Option<&str>) {
+        let Some(json) = json else {
+            return self.set_host_tokens(None);
+        };
+        let provider = self.components.registry.token_provider();
+        let defaults = match provider.as_ref().map(|p| p.read(None)) {
+            Some(Ok((tokens, _))) => tokens,
+            _ => Tokens::default(),
+        };
+        let read = provider
+            .as_ref()
+            .and_then(|p| p.overrides(json, &defaults))
+            .unwrap_or_else(|| crate::element::theme_file::overrides(json, &defaults));
+        match read {
+            Ok((tokens, left_out)) => {
+                for what in left_out {
+                    log::warn!("theme overrides: {what}, ignored");
+                }
+                self.set_host_tokens(Some(tokens));
+            }
+            Err(e) => log::warn!("theme overrides: {e}"),
+        }
+    }
+
     /// What [`Core::tokens`] become when the root's `uiTheme` (the app's
     /// theme file) is set, with the embedding app's tokens of now: JS reads
     /// them in the turn that sends the theme, before it reaches the core.
     pub fn theme_tokens(&self) -> crate::element::ThemeTokens {
         crate::element::ThemeTokens::new(
-            self.components.registry.token_source(),
+            self.components.registry.token_provider(),
             self.components.host_tokens.clone(),
         )
     }
@@ -943,12 +1148,24 @@ impl<M: TextEngine> Core<M> {
     /// The tokens drawn with now: a signal of the surface, so only the
     /// bindings that read them run again, and only when they changed.
     fn tokens_changed(&mut self) {
-        let tokens = match &self.components.host_tokens {
+        let mut tokens = match &self.components.host_tokens {
             // The app's own tokens the host's do not have stay.
             Some(host) => Arc::new(host.over(&self.components.app_tokens)),
             None => self.components.app_tokens.clone(),
         };
-        if *tokens == *self.components.tokens {
+        // Whether the app has a theme of its own, which the platforms'
+        // controls take their colors from only then.
+        // An app whose sets register theme types has a theme of its own,
+        // its design system's.
+        let themed = self.components.registry.has_theme_types()
+            || match &self.components.default_tokens {
+                Some(default) => *tokens != **default,
+                None => !tokens.is_empty(),
+            };
+        if tokens.is_themed() != themed {
+            Arc::make_mut(&mut tokens).set_themed(themed);
+        }
+        if *tokens == *self.components.tokens && themed == self.components.tokens.is_themed() {
             self.components.tokens = tokens;
             return;
         }
@@ -968,8 +1185,8 @@ impl<M: TextEngine> Core<M> {
         let font = self
             .components
             .tokens
-            .font(crate::element::FONT_SANS)
-            .map(|f| crate::style::FontFamily::new(f));
+            .role(crate::element::role::FONT_SANS)
+            .map(|f| crate::style::FontFamily::new(&f));
         self.set_default_font(font);
         self.class_tokens_changed();
     }
@@ -1151,6 +1368,43 @@ impl<M: TextEngine> Core<M> {
                 self.component_failed(host, message);
             }
         }
+    }
+
+    /// Whether something runs as the app quits ([`crate::element::desktop::on_app_quit`],
+    /// `Application.on("quit")`): the engine gives it time to.
+    pub fn has_quit_listeners(&self) -> bool {
+        !self.components.executor.quit.borrow().is_empty()
+    }
+
+    /// The app quits: starts each quit listener's work, oldest first, as
+    /// tasks the engine runs ([`Core::run_component_tasks`]) until
+    /// [`Core::quit_pending`] is false or
+    /// [`QUIT_TIMEOUT`](crate::element::desktop::QUIT_TIMEOUT) has passed.
+    /// Whether any started.
+    pub fn start_quit(&mut self) -> bool {
+        let _entered = self.components.runtime.enter();
+        let executor = self.components.executor.clone();
+        let listeners = executor.quit.borrow().all();
+        for listener in listeners {
+            match caught(|| listener()) {
+                Ok(future) => {
+                    let pending = crate::element::quit::Pending::new(&executor.quitting);
+                    // Detached: it runs until it ends or the engine stops.
+                    drop(crate::element::task::spawn_future(&executor, async move {
+                        future.await;
+                        drop(pending);
+                    }));
+                }
+                Err(message) => log::error!(target: "js", "a quit listener failed: {message}"),
+            }
+        }
+        self.apply_actions();
+        self.quit_pending()
+    }
+
+    /// Whether the work quit listeners started is still running.
+    pub fn quit_pending(&self) -> bool {
+        self.components.executor.quitting.get() > 0
     }
 
     /// Runs the closures that waited for the app's answer to the events
@@ -1382,9 +1636,7 @@ impl<M: TextEngine> Core<M> {
                 if was_empty || place == Placement::Each {
                     self.components.mark(parent);
                 }
-                if let Some(joined) = self.components.instances.get_mut(&child) {
-                    joined.joined = true;
-                }
+                self.join_content(child);
                 match place {
                     // Before its next JS sibling, else before what the
                     // view puts after the children.
@@ -1575,8 +1827,14 @@ impl<M: TextEngine> Core<M> {
             RustCall::Op(run) => {
                 let mut cx = ModuleCx::default();
                 // The app's code: a panic rejects the call (its actions are
-                // dropped) instead of unwinding through the engine.
-                let result = match caught(|| run(&mut cx)) {
+                // dropped) instead of unwinding through the engine. It runs
+                // in the graph, as a listener does: it may `spawn` and use
+                // signals.
+                let ran = {
+                    let _entered = self.components.runtime.enter();
+                    caught(|| run(&mut cx))
+                };
+                let result = match ran {
                     Ok(result) => {
                         for action in std::mem::take(&mut cx.actions) {
                             self.apply_action(action);
@@ -1673,7 +1931,8 @@ impl<M: TextEngine> Core<M> {
             combined.push(' ');
             combined.push_str(name);
         }
-        let user = (!combined.trim().is_empty()).then(|| self.tailwind.get(&combined).0);
+        let key = self.key(host).ok();
+        let user = (!combined.trim().is_empty()).then(|| self.classes_at(key, &combined).0);
         self.set_user(host, user);
     }
 
@@ -1890,7 +2149,7 @@ impl<M: TextEngine> Core<M> {
             self.components.mark(rooted);
             return;
         }
-        let cx = self.root_context(inst);
+        let cx = self.root_context(host, inst);
         let given_changed = std::mem::take(&mut inst.given_changed);
         let attrs = if let Some(node) = inst.bound.get_mut(&host) {
             let (style, classes) = (node.style.clone(), node.classes.clone());
@@ -1963,6 +2222,29 @@ impl<M: TextEngine> Core<M> {
                     prop: Prop::TestId(test_id.clone()),
                 });
                 inst.root_test_id_applied = test_id;
+            }
+        }
+    }
+
+    /// Node `id` joined a host as its children: the components in it, the
+    /// node itself or inside its plain views however deep
+    /// (`tabs().child(view().child(tab()))`), are `joined`, so their views
+    /// wait to be placed and read the context of the host's view as a
+    /// direct child does. A component's own content joins it in turn.
+    fn join_content(&mut self, id: NodeId) {
+        let mut stack = vec![id];
+        while let Some(id) = stack.pop() {
+            if let Some(inst) = self.components.instances.get_mut(&id) {
+                inst.joined = true;
+                continue;
+            }
+            if let Ok(k) = self.key(id) {
+                stack.extend(
+                    self.nodes[k as usize]
+                        .children
+                        .iter()
+                        .map(|&c| self.nodes[c as usize].id),
+                );
             }
         }
     }
@@ -2382,7 +2664,7 @@ impl<M: TextEngine> Core<M> {
             };
         // What the views above give it and the components on its host, the
         // outer last.
-        let cx = self.root_context(inst);
+        let cx = self.root_context(host, inst);
         let app = if cx.combined {
             cx.app.as_ref()
         } else {
@@ -2526,7 +2808,7 @@ impl<M: TextEngine> Core<M> {
     /// animated values and insets the views above give it and the
     /// components whose views' roots it is (the outer last), the app's
     /// style and JS's events on the top host.
-    pub(super) fn root_context(&mut self, inst: &Instance) -> RootContext {
+    pub(super) fn root_context(&mut self, host: NodeId, inst: &Instance) -> RootContext {
         let mut cx = RootContext {
             user: inst.user.clone(),
             combined: false,
@@ -2558,7 +2840,7 @@ impl<M: TextEngine> Core<M> {
         // The classes the element was given in Rust (`app_class`), as the
         // app's `class` on its host.
         if let Some(class) = inst.given.as_ref().and_then(|g| g.class.clone()) {
-            let given = self.app_class_list(&class);
+            let given = self.app_class_list(host, &class);
             cx.user = self.merge_user(cx.user.take(), Some(given));
         }
         let mut app = inst.app_style.clone();
@@ -2576,7 +2858,7 @@ impl<M: TextEngine> Core<M> {
             }
             cx.user = self.merge_user(cx.user.take(), outer);
             if let Some(class) = given.and_then(|g| g.class.clone()) {
-                let given = self.app_class_list(&class);
+                let given = self.app_class_list(host, &class);
                 cx.user = self.merge_user(cx.user.take(), Some(given));
             }
         }
@@ -2597,7 +2879,7 @@ impl<M: TextEngine> Core<M> {
     /// [`Self::root_context`] of the component hosted by `host`.
     pub(super) fn root_context_of(&mut self, host: NodeId) -> Option<RootContext> {
         let inst = self.components.instances.remove(&host)?;
-        let cx = self.root_context(&inst);
+        let cx = self.root_context(host, &inst);
         self.components.instances.insert(host, inst);
         Some(cx)
     }
@@ -2836,7 +3118,7 @@ impl<M: TextEngine> Core<M> {
             }
             return self.apply_styles(id, style, old_style, old, outer);
         };
-        let app = self.app_class_list(class);
+        let app = self.app_class_list(id, class);
         let user = self.merge_user(Some(app), outer.clone());
         let classes = self.apply_styles(id, style, old_style, old, user);
         self.components
@@ -2847,8 +3129,9 @@ impl<M: TextEngine> Core<M> {
 
     /// The rules of the app's classes `class` (the unknown ones warned of
     /// once, as a host's).
-    pub(super) fn app_class_list(&mut self, class: &str) -> std::rc::Rc<ClassList> {
-        let (list, fresh) = self.tailwind.get(class);
+    pub(super) fn app_class_list(&mut self, id: NodeId, class: &str) -> std::rc::Rc<ClassList> {
+        let key = self.key(id).ok();
+        let (list, fresh) = self.classes_at(key, class);
         if fresh && !list.unknown().is_empty() {
             log::warn!(
                 "unknown classes: {}",
@@ -3056,6 +3339,18 @@ impl<M: TextEngine> Core<M> {
         host: NodeId,
         inst: &mut Instance,
     ) -> (Vec<Expanded>, Option<usize>) {
+        // Kept rows update through their item bindings. In the same order,
+        // matching would only move these elements into the output unchanged.
+        if old.len() == new.len()
+            && old.iter().zip(&new).all(|(previous, (owner, el))| {
+                owner.is_none()
+                    && matches!(&el.kind, ElKind::Keep)
+                    && el.key.is_some()
+                    && el.key == previous.key
+            })
+        {
+            return (old, None);
+        }
         // `children_each`: one wrapper per JS child, keyed by it; in a view,
         // a region following them.
         let new = if new
@@ -4813,6 +5108,10 @@ impl<M: TextEngine> Core<M> {
     }
 
     fn dispatch_event(&mut self, id: NodeId, kind: EventKind, payload: &EventPayload) -> bool {
+        // A cancelled press's release reaches no one, JS included.
+        if self.drop_cancelled_press(id, kind, payload) {
+            return true;
+        }
         // Touches come on the root with the listening nodes around each
         // finger: the components hear theirs, JS its own.
         if kind == EventKind::Touch && id == ROOT_ID {
@@ -5077,6 +5376,7 @@ impl<M: TextEngine> Core<M> {
 
     /// The app's address, which the engine shares with every VM's
     /// `System` (`UrlScheme.url()` reads it there).
+    #[doc(hidden)]
     pub fn app_url_cell(&self) -> crate::url_scheme::AppUrlCell {
         self.components.url_schemes.address.clone()
     }
@@ -5084,8 +5384,16 @@ impl<M: TextEngine> Core<M> {
     /// Hands `url`, a link the system gave the app, to the listener, or
     /// keeps it for the next; drops it when the app does not claim it.
     /// `page`: the address of the page the app is (the web), which needs
-    /// no scheme of the app's; `quiet` only takes it as the address.
-    fn url_scheme(&mut self, url: String, page: bool, quiet: bool) {
+    /// no scheme of the app's; `quiet` only takes it as the address;
+    /// `change`, an address the app moved to without making the move,
+    /// goes to the change listener instead of `open`.
+    fn url_scheme(
+        &mut self,
+        url: String,
+        page: bool,
+        quiet: bool,
+        change: Option<crate::url_scheme::AppUrlChangeReason>,
+    ) {
         let links = &mut self.components.url_schemes;
         let checked = if page {
             crate::url_scheme::check_page_url(&url)
@@ -5101,6 +5409,21 @@ impl<M: TextEngine> Core<M> {
             return;
         }
         let links = &mut self.components.url_schemes;
+        if let Some(reason) = change {
+            if !links.hears_changes {
+                return;
+            }
+            let change = crate::url_scheme::AppUrlChange { url, reason };
+            if let Some(answer) = links.next_change.take() {
+                answer.borrow_mut().deliver(change);
+                return;
+            }
+            if links.changes.len() == crate::url_scheme::MAX_PENDING {
+                links.changes.pop_front();
+            }
+            links.changes.push_back(change);
+            return;
+        }
         if let Some(answer) = links.next.take() {
             answer.borrow_mut().deliver(url);
             return;
@@ -5273,7 +5596,7 @@ impl<M: TextEngine> Core<M> {
                 answer.borrow_mut().deliver(available);
                 return;
             }
-            AudioAction::Open { command, sink } => {
+            AudioAction::Open { mut command, sink } => {
                 debug_assert!(matches!(
                     command,
                     AudioCommand::Load { .. }
@@ -5293,16 +5616,33 @@ impl<M: TextEngine> Core<M> {
                     );
                     return;
                 }
+                // A sound loads what the check granted (`Access::media_url`).
                 if let AudioCommand::Open { src, .. } | AudioCommand::LoadUrl { url: src, .. } =
-                    &command
-                    && !self.access.allows_media(src)
+                    &mut command
                 {
-                    sink.send(failed(AudioError::NotAllowed, "the source is not granted"));
-                    sink.close();
-                    self.deny(format!(
-                        "`{src}` is not granted by capabilities.network in nsh.json"
-                    ));
-                    return;
+                    match self.media_source(src) {
+                        Some(granted) => {
+                            if let Some(url) = granted {
+                                *src = url.to_string();
+                            }
+                        }
+                        None => {
+                            let base = self.base_url.as_deref();
+                            let capability = crate::access::media_capability(src, base);
+                            let advice = crate::access::media_grant_advice(src, base);
+                            // Worded without the app's text: the player's
+                            // error names the capability from it.
+                            sink.send(failed(
+                                AudioError::NotAllowed,
+                                &format!("{}{capability}", super::SOURCE_NOT_GRANTED),
+                            ));
+                            sink.close();
+                            self.deny(format!(
+                                "`{src}` is not granted by capabilities.{capability}: {advice}"
+                            ));
+                            return;
+                        }
+                    }
                 }
                 if self.audio.is_none() && !self.components.environment.audio {
                     sink.send(failed(AudioError::Unavailable, "nothing plays sound here"));
@@ -5379,15 +5719,46 @@ impl<M: TextEngine> Core<M> {
             Action::Frame(answer) => self.wait_frame(answer),
             Action::Appearance(appearance) => self.set_appearance(appearance),
             Action::Tokens(tokens) => self.set_tokens(tokens),
+            Action::UpdateTokens(tokens) => self.update_tokens(tokens),
+            Action::SetTheme { tokens, played } => {
+                let tokens = self.through_roles(tokens, &played);
+                self.set_theme_tokens(tokens);
+            }
+            Action::UpdateTheme { tokens, played } => {
+                let tokens = self.through_roles(tokens, &played);
+                self.update_tokens(tokens);
+            }
+            Action::ResetTheme { mut names, played } => {
+                // The tokens the type's roles are mapped onto go back with
+                // its own names.
+                for (role, _) in &played {
+                    if let Some(token) = self.components.app_tokens.mapped(role)
+                        && !names.iter().any(|n| **n == *token)
+                    {
+                        names.push(token.into());
+                    }
+                }
+                self.reset_tokens(Some(&names));
+            }
+            Action::ResetTokens(names) => self.reset_tokens(Some(&names)),
             Action::Translations(translations) => self.set_translations(translations),
             Action::Locale(locale) => self.components.locale_request = Some(locale),
+            Action::MainThread(task) => self.components.main_thread.push(task),
             Action::BuiltInScrollbars(source, theme) => {
                 self.set_builtin_scrollbars(theme.map(|theme| (source, theme)))
             }
             Action::Measure(id, answer) => self.components.measures.push((id, answer)),
+            Action::MeasureScrollPosition(id, answer) => {
+                self.components.scroll_positions.push((id, answer))
+            }
+            Action::Evaluate(node, script, timeout, answer) => {
+                self.start_web_evaluation(node, script, timeout, answer)
+            }
+            Action::WebEvaluationTimeout(request) => self.timeout_web_evaluation(request),
             Action::TransitionTime(id, answer) => {
                 self.components.transition_times.push((id, answer))
             }
+            Action::PressAt(id, press, answer) => self.components.presses.push((id, press, answer)),
             // A terminal decodes no images: the answer is at once, and no
             // request goes to the platform.
             Action::ImageInfo(_, answer)
@@ -5560,11 +5931,26 @@ impl<M: TextEngine> Core<M> {
                     None => links.next = Some(answer),
                 }
             }
+            Action::NextSecondInstance(answer) => {
+                let launches = &mut self.components.second_instances;
+                match launches.pending.pop_front() {
+                    Some(launch) => answer.borrow_mut().deliver(launch),
+                    None => launches.next = Some(answer),
+                }
+            }
+            Action::NextAppUrlChange(answer) => {
+                let links = &mut self.components.url_schemes;
+                links.hears_changes = true;
+                match links.changes.pop_front() {
+                    Some(change) => answer.borrow_mut().deliver(change),
+                    None => links.next_change = Some(answer),
+                }
+            }
             Action::AppUrl(answer) => {
                 let address = self.components.url_schemes.address.get();
                 answer.borrow_mut().deliver(address);
             }
-            Action::SetAppUrl(url) => {
+            Action::SetAppUrl(url, history) => {
                 // Checked where the app called (`set_app_url`, `setUrl`);
                 // where the app is the page, the address stays of its
                 // origin (both refuse others first).
@@ -5581,15 +5967,29 @@ impl<M: TextEngine> Core<M> {
                 address.set(url.clone());
                 // Only the web shows an address (its history entries).
                 if web {
+                    let command = match history {
+                        crate::url_scheme::HistoryBehavior::Push => Command::PushAppUrl(url),
+                        _ => Command::SetAppUrl(url),
+                    };
                     let _ = self.apply_op(Op::Command {
                         id: crate::ROOT_ID,
-                        command: Command::SetAppUrl(url),
+                        command,
                     });
                 }
             }
             Action::WebInputAvailable(answer) => {
                 let available =
                     self.components.environment.web_input && self.access.allows_web_input();
+                answer.borrow_mut().deliver(available);
+            }
+            Action::WebEvaluateAvailable(answer) => {
+                let available =
+                    self.components.environment.web_evaluate && self.access.allows_webviews();
+                answer.borrow_mut().deliver(available);
+            }
+            Action::WebViewAvailable(answer) => {
+                let available =
+                    self.components.environment.web_views && self.access.allows_webviews();
                 answer.borrow_mut().deliver(available);
             }
             Action::PickScreenColor(answer) => {
@@ -5892,6 +6292,35 @@ impl<M: TextEngine> Core<M> {
                 if item < crate::element::menus::FIRST_ID {
                     return false;
                 }
+                // The platform's answer to a global shortcut's registration.
+                let registered = match payload {
+                    EventPayload::Map(entries) => entries.iter().find_map(|(k, v)| match v {
+                        crate::PayloadValue::Bool(b) if *k == "registered" => Some(*b),
+                        _ => None,
+                    }),
+                    _ => None,
+                };
+                if let Some(registered) = registered {
+                    menus.borrow_mut().registered(item, registered);
+                    self.apply_actions();
+                    return true;
+                }
+                let click = menus.borrow().tray_click(item);
+                if let Some(click) = click {
+                    let bounds = match payload {
+                        EventPayload::Map(entries) => entries.iter().find_map(|(k, v)| match v {
+                            crate::PayloadValue::Bounds(b) if *k == "bounds" => Some(*b),
+                            _ => None,
+                        }),
+                        _ => None,
+                    };
+                    let result = caught(|| click(bounds));
+                    self.apply_actions();
+                    if let Err(message) = result {
+                        log::error!(target: "js", "the tray's click failed: {message}");
+                    }
+                    return true;
+                }
                 let handler = menus.borrow().handler(item);
                 // An item of a menu replaced since the platform showed it.
                 if let Some(handler) = handler {
@@ -5923,6 +6352,10 @@ impl<M: TextEngine> Core<M> {
                     id: crate::ROOT_ID,
                     command: Command::Back,
                 });
+                true
+            }
+            EventKind::WebEvaluation => {
+                self.answer_web_evaluation(id, payload);
                 true
             }
             EventKind::ImageInfo if id == crate::ROOT_ID => {
@@ -5990,6 +6423,22 @@ impl<M: TextEngine> Core<M> {
                 self.notification_event(payload);
                 true
             }
+            EventKind::SecondInstance if id == crate::ROOT_ID => {
+                let Some(launch) = crate::single_instance::SecondInstance::from_payload(payload)
+                else {
+                    return false;
+                };
+                let launches = &mut self.components.second_instances;
+                if let Some(answer) = launches.next.take() {
+                    answer.borrow_mut().deliver(launch);
+                } else {
+                    if launches.pending.len() == crate::single_instance::MAX_PENDING {
+                        launches.pending.pop_front();
+                    }
+                    launches.pending.push_back(launch);
+                }
+                true
+            }
             EventKind::UrlScheme if id == crate::ROOT_ID => {
                 let EventPayload::Map(entries) = payload else {
                     return false;
@@ -6009,6 +6458,20 @@ impl<M: TextEngine> Core<M> {
                 };
                 let page = flag(crate::url_scheme::PAGE).unwrap_or(false);
                 let quiet = flag(crate::url_scheme::QUIET).unwrap_or(false);
+                // An address move the app did not make (the web's back or
+                // forward), by its reason; one of a newer platform's reasons
+                // is still the address, quietly.
+                let change = entries.iter().find_map(|(k, v)| match v {
+                    crate::PayloadValue::Str(s) if *k == crate::url_scheme::CHANGE => {
+                        Some(crate::url_scheme::AppUrlChangeReason::parse(s))
+                    }
+                    _ => None,
+                });
+                let (quiet, change) = match change {
+                    Some(None) => (true, None),
+                    Some(reason) => (quiet, reason),
+                    None => (quiet, None),
+                };
                 // The page's base URL (the web), which Rust's `set_app_url`
                 // resolves against.
                 if let Some(base) = entries.iter().find_map(|(k, v)| match v {
@@ -6019,7 +6482,7 @@ impl<M: TextEngine> Core<M> {
                 }) {
                     self.components.url_schemes.address.set_page_base(base);
                 }
-                self.url_scheme(url.clone(), page, quiet);
+                self.url_scheme(url.clone(), page, quiet, change);
                 true
             }
             EventKind::OpenUrl if id == crate::ROOT_ID => {
