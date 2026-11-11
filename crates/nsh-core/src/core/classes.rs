@@ -113,6 +113,10 @@ pub(super) struct NodeParts {
     styles: Vec<(Part, std::rc::Rc<StylePatch>)>,
     /// The classes of the other parts.
     classes: Vec<(Part, std::rc::Rc<ClassList>)>,
+    /// The names a part's classes were set by (`headerClass`,
+    /// `contentClass`; a typed list has none): they are parsed again when
+    /// the theme or the design tokens they read change.
+    class_names: Vec<(Part, Box<str>)>,
 }
 
 /// The [`state`] bits an element is in by its accessibility state `s`:
@@ -753,7 +757,33 @@ impl<M: TextEngine> Core<M> {
     /// content).
     pub(super) fn set_part_class(&mut self, key: Key, part: Part, names: &str) {
         let classes = (!names.trim().is_empty()).then(|| self.tailwind.classes(names));
+        let named = classes.is_some();
         self.set_part_class_list(key, part, classes);
+        if named && let Some(parts) = self.nodes[key as usize].parts.as_deref_mut() {
+            parts.class_names.push((part, names.into()));
+        }
+    }
+
+    /// Parses again the parts' classes set by name whose rules `reads`
+    /// (the theme was replaced, or design tokens they name changed).
+    fn part_classes_again(&mut self, reads: impl Fn(&ClassList) -> bool) {
+        let named: Vec<(Key, Part, Box<str>)> = self
+            .nodes
+            .iter()
+            .filter_map(|(k, n)| Some((k as Key, n.parts.as_deref()?)))
+            .flat_map(|(k, p)| {
+                let reads = &reads;
+                p.class_names
+                    .iter()
+                    .filter(move |(part, _)| {
+                        p.classes.iter().any(|(of, list)| of == part && reads(list))
+                    })
+                    .map(move |(part, names)| (k, *part, names.clone()))
+            })
+            .collect();
+        for (key, part, names) in named {
+            self.set_part_class(key, part, &names);
+        }
     }
 
     /// Sets `part`'s classes of `key` to `classes`, already parsed (typed
@@ -772,6 +802,7 @@ impl<M: TextEngine> Core<M> {
                 ..NodeParts::default()
             })
         });
+        parts.class_names.retain(|(p, _)| *p != part);
         let at = parts.classes.iter().position(|(p, _)| *p == part);
         match (at, classes) {
             (Some(i), Some(c)) => parts.classes[i].1 = c,
@@ -996,11 +1027,13 @@ impl<M: TextEngine> Core<M> {
         for key in keys {
             self.set_classes(key, None, None);
         }
+        self.part_classes_again(|_| true);
     }
 
     /// The design tokens changed: the classes reading the ones that did
-    /// (`bg-primary`) are resolved again, on nodes and on Rust components;
-    /// all of them when the tokens' names changed.
+    /// (`bg-primary`) are resolved again, on nodes, on their parts (a
+    /// page's header, a list's content) and on Rust components; all of
+    /// them when the tokens' names changed.
     pub(super) fn class_tokens_changed(&mut self) {
         let tokens = self.components.tokens.clone();
         let Some(changed) = self.tailwind.set_tokens(&tokens) else {
@@ -1028,6 +1061,7 @@ impl<M: TextEngine> Core<M> {
         for key in keys {
             self.set_classes(key, None, None);
         }
+        self.part_classes_again(|c| all || (c.deps() & deps::THEME != 0 && c.reads(&changed)));
         let hosts: Vec<NodeId> = self
             .components
             .instances
