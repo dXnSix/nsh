@@ -1288,6 +1288,17 @@ fn payload_object<'js>(cx: &Ctx<'js>, payload: &EventPayload) -> rquickjs::Resul
                 None => obj.set("pressedButton", Value::new_null(cx.clone()))?,
             }
         }
+        EventPayload::Wheel(e) => {
+            obj.set("position", point_object(cx, e.position)?)?;
+            obj.set("pagePosition", point_object(cx, e.page_position)?)?;
+            let (x, y) = e.delta.xy();
+            let delta = rquickjs::Object::new(cx.clone())?;
+            delta.set("x", x)?;
+            delta.set("y", y)?;
+            obj.set("delta", delta)?;
+            obj.set("deltaMode", e.delta.mode_name())?;
+            obj.set("modifiers", modifiers_object(cx, &e.modifiers)?)?;
+        }
         EventPayload::ContextMenu(e) => {
             obj.set("position", point_object(cx, e.position)?)?;
             obj.set("pagePosition", point_object(cx, e.page_position)?)?;
@@ -1300,10 +1311,13 @@ fn payload_object<'js>(cx: &Ctx<'js>, payload: &EventPayload) -> rquickjs::Resul
         }
         EventPayload::FileDrop(uris) | EventPayload::FileDropAt { uris, .. } => {
             let list = rquickjs::Array::new(cx.clone())?;
+            let types = rquickjs::Array::new(cx.clone())?;
             for (index, uri) in uris.iter().enumerate() {
                 list.set(index, uri.as_str())?;
+                types.set(index, nsh_core::platform::file_mime_type(uri))?;
             }
             obj.set("uris", list)?;
+            obj.set("mimeTypes", types)?;
             if let EventPayload::FileDropAt { page_position, .. } = payload {
                 obj.set("pagePosition", point_object(cx, *page_position)?)?;
             }
@@ -2237,7 +2251,7 @@ const report = (v) => text(String(v));
             import { element, prop } from "nsh:rt";
             globalThis.seen = [];
             const target = element("view");
-            prop(target, "onFileDragEnter", (e) => seen.push("enter " + e.uris.join(";")));
+            prop(target, "onFileDragEnter", (e) => seen.push("enter " + e.uris.join(";") + " " + e.mimeTypes.join(";")));
             prop(target, "onFileDragLeave", () => seen.push("leave"));
             prop(target, "onFileDrop", (e) => seen.push("drop " + e.uris.join(";")));
             const old = element("view");
@@ -2260,9 +2274,9 @@ const report = (v) => text(String(v));
             assert_eq!(
                 seen,
                 [
-                    "enter file:///tmp/a%20b.png;file:///tmp/%E4%B8%AD.txt",
+                    "enter file:///tmp/a%20b.png;file:///tmp/%E4%B8%AD.txt image/png;text/plain",
                     "leave",
-                    "enter file:///tmp/next.png",
+                    "enter file:///tmp/next.png image/png",
                     "drop file:///tmp/next.png",
                     "old"
                 ]
@@ -2281,6 +2295,8 @@ const report = (v) => text(String(v));
             let value = payload_object(&cx, &EventPayload::FileDrop(uris.clone())).unwrap();
             let actual: Vec<String> = value.as_object().unwrap().get("uris").unwrap();
             assert_eq!(actual, uris);
+            let types: Vec<String> = value.as_object().unwrap().get("mimeTypes").unwrap();
+            assert_eq!(types, ["text/plain", ""]);
         });
     }
 
