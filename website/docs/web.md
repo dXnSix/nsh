@@ -263,7 +263,8 @@ like the others: it runs each build of the app, shows build errors and runtime e
 logs to the terminal. A change to a Rust app's crate builds its runtime again and the open page loads it by itself;
 TSX edits are applied in place (hot updates). Phones on the same network open the
 address `nsh run` prints under it (`on this network: http://192.168.…:8790/`). `nsh dev` serves the same page once the
-web runtime is there (in the distribution, always).
+web runtime is there (in the distribution, always). `--idiom tv` (or `nsh.json` `"dev": { "idiom": "tv" }`) runs the app
+on the page as on a TV, to build its 10-foot layouts and focus in a desktop browser ([TVs](./platform-specific.md#tv-layouts-on-the-desktop)).
 
 ## Samsung TVs
 
@@ -473,7 +474,7 @@ The module is copied as it is, so it imports other code by absolute URL. The app
 
 - `"desktop"`: a mouse (a fine pointer that hovers) and a container at least 600 points wide. `platform.desktop` is `true`, `platform.select` picks `desktop` and `desktop={{…}}` props apply.
 - `"pad"`: a touch screen whose short side is at least 600 points; `"phone"` otherwise. These are mobile: `platform.select` picks `mobile`.
-- `"tv"`: only when the page says so, with the player's `idiom: "tv"` (a TV's browser cannot be told from its pointer: a Tizen `.wgt` page passes it). `platform.tv` is `true`, `platform.select` picks `tv` (then `mobile`) and `tv={{…}}` props apply; a TV is not a desktop.
+- `"tv"`: only when the page says so, with the player's `idiom: "tv"` (a TV's browser cannot be told from its pointer: a Tizen `.wgt` page passes it; the dev page passes it with `nsh run --target web --idiom tv`). `platform.tv` is `true`, `platform.select` picks `tv` (then `mobile`) and `tv={{…}}` props apply; a TV is not a desktop.
 
 The idiom is decided when the app starts and stays the same while it runs, as on every platform; a narrow desktop window is still a desktop, laid out for its `windowSize()`. `web={{…}}` props, `platform.select({ web })` and `web:` classes apply in browsers only; `ios={{…}}`, `native` and `ios:` do not apply there.
 

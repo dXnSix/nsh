@@ -54,7 +54,9 @@
   const HISTORY = {{history}};
   // The player's idiom: "tv" on a Tizen web app's development page (`nsh
   // run --target tizen-web`, `nsh test --target tizen-web`), which runs the
-  // TV shim before this script; `null`: the one the page suggests.
+  // TV shim before this script, or the session's (`nsh run --idiom`,
+  // `nsh.json` `dev.idiom`: "tv" builds a TV's layouts in a desktop
+  // browser); `null`: the one the pointer and the width suggest.
   const IDIOM = {{idiom}};
   const status = document.getElementById("status");
   const problem = document.getElementById("problem");

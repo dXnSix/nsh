@@ -42,10 +42,15 @@ const FRAME: Duration = Duration::from_millis(16);
 const SCROLL_STEP: f32 = 20.0;
 
 /// Starts the apps tests open in pages of `browser` (`--browser`), else of
-/// the Chrome, Edge or Chromium found on this machine. `tv` (`--target
+/// the Chrome, Edge or Chromium found on this machine, in `idiom` when the
+/// run sets one (`--idiom`, `nsh.json` `dev.idiom`). `tv` (`--target
 /// tizen-web`): a Tizen web app's page, with the TV shim, in the TV idiom
 /// and a TV's 1920×1080 by default (`tizen_web::dev_page`).
-pub(crate) fn starter(browser: Option<&Path>, tv: bool) -> anyhow::Result<StartHost> {
+pub(crate) fn starter(
+    browser: Option<&Path>,
+    tv: bool,
+    idiom: Option<crate::run::DevIdiom>,
+) -> anyhow::Result<StartHost> {
     let exe = cdp::find(browser)?;
     // Built (in a checkout) or found once, before the first test.
     let runtime = crate::runtime::test_web()?;
@@ -60,7 +65,8 @@ pub(crate) fn starter(browser: Option<&Path>, tv: bool) -> anyhow::Result<StartH
         Size::new(Points(390.0), Points(844.0))
     };
     Ok(Arc::new(move |entry: &Path, options: &HostOptions| {
-        start(&exe, &host, entry, options, size).map(|h| Box::new(h) as Box<dyn Host>)
+        start(&exe, &host, entry, options, size, idiom)
+            .map(|h| Box::new(h) as Box<dyn Host>)
     }))
 }
 
@@ -108,10 +114,14 @@ fn start(
     entry: &Path,
     options: &HostOptions,
     size: Size<Points>,
+    idiom: Option<crate::run::DevIdiom>,
 ) -> Result<WebHost, String> {
     let server = Arc::new(crate::test_host::serve(entry, options)?);
+    // The run's idiom, as `nsh run --target web --idiom` gives the page,
+    // over the test's (`TestEnvironment::idiom`: `open`'s desktop
+    // `platform`); without one the test's, else the one the page measures.
     let (page, files) =
-        crate::web::with_page_host(host.clone(), entry).map_err(|e| format!("{e:#}"))?;
+        crate::web::with_page_host(host.clone(), entry, idiom).map_err(|e| format!("{e:#}"))?;
     server.serve_web(page, files);
     let browser = {
         let mut running = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
