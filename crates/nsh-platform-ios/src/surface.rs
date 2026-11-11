@@ -9,7 +9,8 @@ use block2::RcBlock;
 use dispatch2::{DispatchQueue, MainThreadBound};
 use nsh_core::{MountBatch, Points, Size};
 use nsh_engine::{
-    App, ColorScheme, Edges, Engine, EngineConfig, Environment, Idiom, Lifecycle, MountSink, Policy,
+    App, ColorScheme, Edges, Engine, EngineConfig, Environment, Idiom, Lifecycle, MainThreadTask,
+    MountSink, Policy,
 };
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
@@ -82,6 +83,11 @@ impl MountSink for MainThreadSink {
         });
     }
 
+    fn run_on_main_thread(&self, task: MainThreadTask) {
+        // The main queue is serial: after the batches submitted before it.
+        DispatchQueue::main().exec_async(move || task.run());
+    }
+
     fn hot_update_failed(&self) {
         let handler = self.on_hot_failed.clone();
         DispatchQueue::main().exec_async(move || {
@@ -134,8 +140,9 @@ pub(crate) struct RootViewIvars {
     /// The embedding app's locale and text size over the system's
     /// ([`Surface::set_host_environment`]).
     host: Cell<nsh_engine::HostEnvironment>,
-    /// The embedding app's theme overrides ([`Surface::set_host_tokens`]).
-    host_tokens: RefCell<Option<nsh_engine::Tokens>>,
+    /// The embedding app's theme overrides ([`Surface::set_host_tokens`],
+    /// [`Surface::set_host_theme`]).
+    host_theme: RefCell<Option<HostTheme>>,
     /// Font files the embedding app registers ([`Surface::add_font`]).
     fonts: RefCell<Vec<Vec<u8>>>,
     /// Keyboard notification registrations.
@@ -310,7 +317,7 @@ impl RootView {
             lifecycle: Cell::new(lifecycle(mtm)),
             environment: Cell::new(None),
             host: Cell::default(),
-            host_tokens: RefCell::new(None),
+            host_theme: RefCell::new(None),
             fonts: RefCell::new(Vec::new()),
             observers: RefCell::new(Vec::new()),
             url_schemes: RefCell::new(Vec::new()),
@@ -394,6 +401,9 @@ impl RootView {
             notifications: true,
             // AVAudioEngine and AVPlayer.
             audio: true,
+            web_evaluate: true,
+            // wgpu on Metal, in builds with it, until it finds no GPU.
+            shaders: nsh_engine::shader::LINKED,
             // No file dialogs, file manager or trash (Catalyst included):
             // the default, so the core answers those requests.
             ..Environment::default()
@@ -751,7 +761,7 @@ impl RootView {
             header_heights: header_heights(mtm),
             limits: self.ivars().options.limits,
             ui_sets: crate::ui_sets(),
-            runtime: None,
+            runtime: self.ivars().options.runtime.clone(),
             data_dir: self.ivars().options.data_dir.clone(),
             cache: system_cache(self.ivars().options.cache.clone()),
             storage: self.ivars().options.storage.as_ref().map(|dir| {
@@ -787,12 +797,14 @@ impl RootView {
         // The embedding app's theme overrides are in the first frame, and
         // the links that came before are the app's address when its code
         // first runs (`UrlScheme.url()`).
-        let tokens = self.ivars().host_tokens.borrow().clone();
+        let theme = self.ivars().host_theme.borrow().clone();
         let links = std::mem::take(&mut *self.ivars().url_schemes.borrow_mut());
         let fonts = self.ivars().fonts.borrow().clone();
         let engine = match Engine::start_with(config, CoreTextEngine::default, sink, |control| {
-            if tokens.is_some() {
-                control.set_tokens(tokens);
+            match theme {
+                Some(HostTheme::Tokens(tokens)) => control.set_tokens(Some(tokens)),
+                Some(HostTheme::File(json)) => control.set_theme_overrides(json),
+                None => {}
             }
             for font in fonts {
                 control.register_font(font);
@@ -827,6 +839,7 @@ impl RootView {
             access,
             self.ivars().options.components.clone(),
         );
+        installed.watch_scrolls(self.ivars().options.scroll_watchers.clone());
         // The app's downloaded images go through its disk cache.
         installed.set_image_cache(engine.image_cache());
         if self.ivars().options.fps || nsh_engine::perf::enabled_by_env() {
@@ -864,6 +877,7 @@ fn header_heights(mtm: MainThreadMarker) -> (Points, Points) {
 
 /// Options of a [`Surface`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SurfaceOptions {
     /// Log per-commit timings.
     pub trace: bool,
@@ -871,6 +885,10 @@ pub struct SurfaceOptions {
     pub asset_base: Option<AssetBase>,
     /// The VM limits of the apps it runs.
     pub limits: nsh_engine::Limits,
+    /// The runtime for async tasks; `None` uses NSH's shared runtime.
+    /// The embedding app owns it and must keep it running until the view
+    /// stops. Dropping the view does not shut the runtime down.
+    pub runtime: Option<tokio::runtime::Handle>,
     /// What the embedding app grants the apps it runs at most (`None`: what
     /// each app declares).
     pub granted: Option<nsh_engine::Capabilities>,
@@ -889,6 +907,9 @@ pub struct SurfaceOptions {
     pub cache: nsh_engine::CacheOptions,
     /// The native components the apps can use (`nsh/native`).
     pub components: crate::component::Components,
+    /// The scroll views the embedding app watches by `nativeID`
+    /// ([`crate::AppView::watch_scroll`]).
+    pub scroll_watchers: crate::ScrollWatchers,
     /// The embedding app's channel with the apps (`nsh/host`): launch
     /// parameters, events and handlers of their calls and posts, one for
     /// every app the surface runs.
@@ -904,11 +925,13 @@ impl Default for SurfaceOptions {
             trace: false,
             asset_base: None,
             limits: nsh_engine::Limits::default(),
+            runtime: None,
             granted: None,
             data_dir: data_dir(),
             storage: None,
             cache: nsh_engine::CacheOptions::default(),
             components: crate::component::Components::default(),
+            scroll_watchers: crate::ScrollWatchers::default(),
             host: nsh_engine::HostChannel::default(),
             fps: false,
         }
@@ -1041,9 +1064,23 @@ impl Surface {
     /// app's own again): sent to the running app at once, and to every app
     /// started later before its first frame.
     pub fn set_host_tokens(&self, tokens: Option<nsh_engine::Tokens>) {
-        *self.view.ivars().host_tokens.borrow_mut() = tokens.clone();
+        *self.view.ivars().host_theme.borrow_mut() = tokens.clone().map(HostTheme::Tokens);
         if let Some(running) = &*self.view.ivars().running.borrow() {
             running.engine.control().set_tokens(tokens);
+        }
+    }
+
+    /// The embedding app's theme overrides as a theme file, which the
+    /// engine reads with the app's UI set against its defaults (`None`: the
+    /// app's own theme again): sent to the running app at once, and to every
+    /// app started later before its first frame.
+    pub fn set_host_theme(&self, json: Option<String>) {
+        *self.view.ivars().host_theme.borrow_mut() = json.clone().map(HostTheme::File);
+        if let Some(running) = &*self.view.ivars().running.borrow() {
+            match json {
+                Some(json) => running.engine.control().set_theme_overrides(json),
+                None => running.engine.control().set_tokens(None),
+            }
         }
     }
 
@@ -1225,4 +1262,13 @@ fn os_version(mtm: MainThreadMarker) -> (u16, u16) {
         let mut parts = version.split('.').map(|p| p.parse().unwrap_or(0));
         (parts.next().unwrap_or(0), parts.next().unwrap_or(0))
     })
+}
+
+/// The embedding app's theme overrides a surface keeps for the apps it
+/// starts: tokens made already ([`Surface::set_host_tokens`]), or a theme
+/// file the engine reads ([`Surface::set_host_theme`]).
+#[derive(Clone)]
+enum HostTheme {
+    Tokens(nsh_engine::Tokens),
+    File(String),
 }
