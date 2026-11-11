@@ -5,7 +5,7 @@
 
 use nsh_core::{
     animation::{Curve, EaseMode},
-    element::{Animation, TransformKind},
+    element::{AdaptiveShadow, Animation, TransformKind},
     prelude::*,
 };
 
@@ -39,10 +39,10 @@ fn stage() -> View {
         .border_1()
         .border_color(colors::LINE)
         .finish_fill(Finish::Card)
-        .adaptive_shadow(
+        .adaptive_shadow(AdaptiveShadow::new(
             [inset_shadow(1.0, 0.0, rgb(0xffffff))],
             [inset_shadow(1.0, 0.0, rgb_a(0xffffff, 0.05))],
-        )
+        ))
 }
 
 /// A specimen box: a raised surface the styles are tried on.
@@ -166,7 +166,7 @@ fn face(
         .bg_linear_to_b()
         .gradient_from(from)
         .gradient_to(to)
-        .adaptive_shadow(
+        .adaptive_shadow(AdaptiveShadow::new(
             [
                 inset_shadow(1.0, 0.0, rgb(0xffffff)),
                 BoxShadow {
@@ -189,7 +189,7 @@ fn face(
                     inset: false,
                 },
             ],
-        )
+        ))
         .border_color(rim)
         .child(
             view().flex_row().justify_between().child(badge).child(

@@ -15,7 +15,7 @@ In Rust the accessors are functions of `nsh_core::prelude`; in TSX they come fro
 | Rust | TSX | Value |
 |---|---|---|
 | `window()` | `windowSize()` (`nsh`) | The surface's width and height, in points. |
-| `dark()` | `colorScheme()` (`nsh`) | Dark or light: the system's, or the app's own (`set_color_scheme`, `setColorScheme`). |
+| `dark()` | `colorScheme()` (`nsh`) | Dark or light: the system's, or the app's own (`set_color_scheme`, `setColorScheme`); in a `ThemeScope`, the scope's. |
 | `font_scale()` | `fontScale()` (`nsh`) | The user's preferred text size relative to the default (1 is the default). |
 | `safe_area()` | `safeArea()` (`nsh`) | Insets of the surface not covered by system UI: top, right, bottom, left. |
 | `cx.insets()` | `safeAreaInsets()` (`nsh`) | The insets where the calling component renders (a page, a dialog). |
@@ -193,6 +193,40 @@ import { colorScheme, setColorScheme } from "nsh";
   <Text class="text-neutral-900 dark:text-neutral-50">{colorScheme() === "dark" ? "Light" : "Dark"}</Text>
 </View>
 ```
+
+### A part of the app in its own appearance
+
+`ThemeScope` (Rust: `theme_scope()`) is a view that shows itself and everything in it light or dark whatever the app shows: a dark sidebar beside a light page, a light document in a dark editor. In it `dark()` and `colorScheme()`, adaptive colors, `dark:` classes, the theme's colors and `token()` follow the scope, and so do the platform's own controls in it on iOS, macOS and the web, and the scroll indicators the desktop backends draw:
+
+```rust tabs
+use nsh_core::prelude::*;
+
+view().flex_1().flex_row().child(
+    theme_scope().appearance(ColorScheme::Dark).child(
+        view()
+            .w(px(240.))
+            .p_4()
+            .bg(AdaptiveColor::rgb(0xffffff, 0x18181b))
+            .child(text("Always dark").text_color(AdaptiveColor::rgb(0x18181b, 0xf4f4f5))),
+    ),
+)
+```
+
+```tsx tabs
+import { Text, ThemeScope, View } from "nsh";
+
+<View class="flex-1 flex-row">
+  <ThemeScope appearance="dark" class="w-60 p-4 bg-white dark:bg-zinc-900">
+    <Text class="text-zinc-900 dark:text-zinc-100">Always dark</Text>
+  </ThemeScope>
+</View>
+```
+
+Scopes nest, and the nearest one with an `appearance` decides; a scope without one is shown as the view around it, so `appearance={pinned() ? "dark" : undefined}` turns a scope on and off. A scope sets its own background and text color, since a color a view inherited from outside stays what it was, as in CSS. Menus, alerts and sheets the platform draws stay in the app's appearance.
+
+In Rust, read the appearance where it is used, in a binding or a style's closure: `dark()` and `color()` answer for the scope around what reads them.
+
+A scope can also give its content its own values of the theme's tokens, with `theme`: see [Tokens for a part of the app](./tailwind.md#tokens-for-a-part-of-the-app).
 
 > [!TIP]
 > Test both appearances while developing: `xcrun simctl ui booted appearance dark` switches an iOS simulator, and Android has a dark theme toggle in Quick Settings. The change reaches your app at once, without a reload.
@@ -498,6 +532,19 @@ idiom `"tv"` ([TVs](./platform-specific.md#tvs)).
 In a terminal ([the terminal backend](./tui.md)), `platform.idiom` is `"terminal"`, `platform.desktop` is `true` and
 `platform.os` is the machine's own system. `colorScheme()` follows the terminal's background, `reduceMotion()` is
 `true`, and the safe area and the keyboard height are 0.
+
+## The app's data directory
+
+`data_dir()` in Rust, `process.dataDir` in TSX, is the directory the app keeps its own files in, such as a SQLite database: `<data dir>/<app id>`, beside its `storage.json`, on every native platform, Android and iOS included. It is `None` (`null`) where the host keeps no files for the app, such as the web. The directory may not exist yet, so create it before writing.
+
+```rust
+use nsh_core::prelude::*;
+
+if let Some(dir) = data_dir() {
+    std::fs::create_dir_all(&dir)?;
+    let db = dir.join("app.sqlite");
+}
+```
 
 ## Pixel density
 
