@@ -43,9 +43,10 @@ on:
 permissions:
   contents: read
 
-# Per event too, so a push to main never cancels a manual emulator run.
+# Per event and label too, so a push to main never cancels a manual emulator run, and one label's run never
+# cancels another's.
 concurrency:
-  group: fork-tizen-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: fork-tizen-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.label.name }}
   cancel-in-progress: true
 
 env:
