@@ -102,7 +102,9 @@
   node's classes in it, so a scope restyles only its own nodes whose classes depend on the appearance, and a change
   of the surface's leaves them alone). A view with design tokens of its own (a `ThemeScope` with a `theme`) has the
   classes in it resolved with its values: a list that reads a token the scope changes is parsed for the scope, every
-  other list is the surface's (`Core::classes_at`, `components.md` "ThemeScope"). The theme is Tailwind 4's
+  other list is the surface's (`Core::classes_at`, `components.md` "ThemeScope"). A view's parts (a page's
+  `headerClass`, a list's `contentClass`) are resolved in its scope as its own classes are, and parsed again by
+  their names when a token they read changes there or on the surface. The theme is Tailwind 4's
   extended by `nsh.json` `"tailwind"` (`colors`, `spacing`, `breakpoints`, `fontSize`, `radius`, `shadow`, ...; unknown
   keys are build errors). Rust components do not use classes: their typed styles (`element/style.rs`, every utility group has its
   methods, tested against the classes) lower into the same rules and their

@@ -13,7 +13,7 @@ members = ["nsh-platform-gpui", "nsh-gpui-host", "nsh-platform-tizen"]
 default-members = ["nsh-platform-gpui", "nsh-gpui-host"]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 license = "Apache-2.0"
 homepage = "https://nsh.dev"
@@ -34,17 +34,17 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_vendor, values("tiz
 
 [workspace.dependencies]
 # nsh's crates, from the main workspace.
-nsh-core = { version = "0.4.0", path = "../nsh-core" }
-nsh-dev = { version = "0.4.0", path = "../nsh-dev" }
-nsh-testing = { version = "0.4.0", path = "../nsh-testing", default-features = false }
-nsh-engine = { version = "0.4.0", path = "../nsh-engine", default-features = false }
-nsh-base = { version = "0.4.0", path = "../nsh-base", default-features = false }
+nsh-core = { version = "0.5.0", path = "../nsh-core" }
+nsh-dev = { version = "0.5.0", path = "../nsh-dev" }
+nsh-testing = { version = "0.5.0", path = "../nsh-testing", default-features = false }
+nsh-engine = { version = "0.5.0", path = "../nsh-engine", default-features = false }
+nsh-base = { version = "0.5.0", path = "../nsh-base", default-features = false }
 # The JSX compiler alone (tests compile their apps).
-nsh-bundler = { version = "0.4.0", path = "../nsh-bundler", default-features = false }
+nsh-bundler = { version = "0.5.0", path = "../nsh-bundler", default-features = false }
 # The backend itself. Its shader views render through `nsh-engine`'s `shader`
 # feature, on the main workspace's wgpu (30), the version gpui-fast draws with,
 # so this lockfile holds one wgpu and one naga.
-nsh-platform-gpui = { version = "0.4.0", path = "nsh-platform-gpui", default-features = false }
+nsh-platform-gpui = { version = "0.5.0", path = "nsh-platform-gpui", default-features = false }
 
 # Samsung TVs: GPUI's Tizen platform and its bindings to the Tizen C APIs
 # (dXn.GpuiTizen), by commit until they are published (`docs/dev/tizen.md`).

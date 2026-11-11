@@ -196,7 +196,7 @@ import { colorScheme, setColorScheme } from "nsh";
 
 ### 应用的一部分使用自己的外观
 
-`ThemeScope`（Rust：`theme_scope()`）是一个视图，无论应用显示什么外观，它自身及其中的一切都以浅色或深色显示：浅色页面旁的深色侧边栏，深色编辑器中的浅色文档。在其中，`dark()` 和 `colorScheme()`、自适应颜色、`dark:` 类、主题的颜色和 `token()` 都跟随作用域；在 iOS、macOS 和 Web 上，其中的平台控件也跟随它，桌面后端绘制的滚动指示器同样如此：
+`ThemeScope`（Rust：`theme_scope()`）是一个视图，无论应用显示什么外观，它自身及其中的一切都以浅色或深色显示：浅色页面旁的深色侧边栏，深色编辑器中的浅色文档。在其中，`dark()` 和 `colorScheme()`、自适应颜色、`dark:` 类、主题的颜色和 `token()` 都跟随作用域；在 iOS、macOS 和 Web 上，其中的平台控件也跟随它，Android 上其中的标签栏同样如此，桌面后端绘制的滚动指示器同样如此：
 
 ```rust tabs
 use nsh_core::prelude::*;
