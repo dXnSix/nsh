@@ -24,10 +24,6 @@ publish = false
 missing_docs = "warn"
 unreachable_pub = "deny"
 private_interfaces = "deny"
-# Tizen's targets (`armv7-tizen-linux-gnueabi`, ...) are custom target specs,
-# `target_os = "linux"` with `target_vendor = "tizen"`, which rustc's own
-# list of vendors leaves out (`nsh_core::platform::Os::Tizen`).
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_vendor, values("tizen"))'] }
 
 [workspace.dependencies]
 ratatui-core = { version = "0.1.2", features = ["std", "layout-cache", "underline-color"] }
