@@ -26,6 +26,10 @@ use crate::{
 
 /// The machine's operating system, reported as the desktop hosts report theirs:
 /// files, processes and OS-specific behavior follow it.
+#[allow(
+    unexpected_cfgs,
+    reason = "Tizen's targets are custom target specs, a vendor rustc's own list leaves out"
+)]
 pub(crate) const OS: nsh_core::platform::Os = if cfg!(target_os = "macos") {
     nsh_core::platform::Os::MacOs
 } else if cfg!(target_os = "windows") {

@@ -125,6 +125,10 @@ impl Default for Os {
     /// The mobile OS of this build (headless runs, `nsh test`, behave as iOS); desktop
     /// backends set theirs. A Tizen build (`target_vendor = "tizen"`, whose
     /// `target_os` is `linux`) is Tizen's.
+    #[allow(
+        unexpected_cfgs,
+        reason = "Tizen's targets are custom target specs, a vendor rustc's own list leaves out"
+    )]
     fn default() -> Self {
         if cfg!(target_vendor = "tizen") {
             Os::Tizen
@@ -1613,6 +1617,10 @@ mod tests {
         }
 
         #[test]
+        #[allow(
+            unexpected_cfgs,
+            reason = "Tizen's targets are custom target specs, a vendor rustc's own list leaves out"
+        )]
         fn tizen_builds_report_tizen() {
             // A Tizen target is `target_os = "linux"`: the vendor decides.
             let tizen = cfg!(target_vendor = "tizen");
