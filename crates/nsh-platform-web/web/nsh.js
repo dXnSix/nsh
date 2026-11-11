@@ -396,6 +396,15 @@ img.nsh-fill { pointer-events: none; }
 
 /** An Apple keyboard: Command is the shortcut key, Option+Left moves by word. */
 const APPLE = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform ?? navigator.platform);
+/**
+ * Whether the engine sends `scrollend` (Chromium 114 on, Firefox 109 on, Safari
+ * 26 on). Without it (the Chromium 108 of 2024's Samsung TVs) a scroll the
+ * browser drives ends once no scroll event came for `SCROLL_QUIET` ms
+ * (`scrolled`).
+ */
+const SCROLLEND = typeof window === "undefined" || "onscrollend" in window;
+/** How long a scroll stays still before it ended, where no `scrollend` says so. */
+const SCROLL_QUIET = 150;
 
 /**
  * Whether `nsh_key`'s answer consumes the key: a binding that fires (not one
@@ -4402,15 +4411,27 @@ class Player {
       el._momentum = true;
       this.scrollEvent(el, "onMomentumStart");
     }
+    // No `scrollend` here: the scroll ends once it is still (a held
+    // scroll bar ends with its release, `releaseBar`).
+    if (!SCROLLEND) {
+      clearTimeout(el._quietEnd);
+      el._quietEnd = setTimeout(() => {
+        el._quietEnd = 0;
+        if (!el._barHeld) this.scrollEnded(el);
+      }, SCROLL_QUIET);
+    }
     // Pulled to refresh, the offset is negative, as on the native backends.
     this.call((w) => w.nsh_scroll(el._id, el.scrollLeft, el.scrollTop - (el._pull ?? 0), el._applied));
   }
 
-  /** The browser's scrolling stopped: the end, unless the scroll is driven
+  /** The browser's scrolling stopped (its `scrollend`, or where it has
+   * none a quiet `SCROLL_QUIET` ms): the end, unless the scroll is driven
    * here (`drive`) or a finger still holds it. */
   scrollEnded(el) {
     clearTimeout(el._commandEnd);
     el._commandEnd = 0;
+    clearTimeout(el._quietEnd);
+    el._quietEnd = 0;
     el._smooth = null;
     if (el._driven || el._touchDrag) return;
     // The browser's end of a scroll that ended here (`ownEnd`).
