@@ -79,7 +79,7 @@ Writes a directory, the same as an archive, and an installer:
   <Name>.exe             the executable, with the app's icon: a Rust app's own runner, built with its crate; nsh's release runner for TSX
   nsh\bundle.nshc         a TSX app, compiled
   nsh\assets\…           the assets it imports (a Rust crate's `assets!()` too)
-  nsh\app.json           the window title, the app id, the version and the appearance
+  nsh\app.json           the window title, the app id, the version, the appearance and nsh.json's window options
 .nsh\out\<Name>.zip
 .nsh\out\<Name>.iss        the Inno Setup script for the installer
 .nsh\out\<Name>-setup.exe  the installer, when Inno Setup 6 is installed
@@ -160,10 +160,11 @@ cache directory and 256 MiB of images by default).
 text size in place of the system's (`None` follows the system's again): `locale()`, `Intl`, `fontScale()` and text
 follow at once ([Device and environment](./device-and-environment.md#in-an-embedding-app)).
 
-`AppView::set_theme_overrides(Some(json))` puts your app's brand over the app's [theme](./tailwind.md#theme-tokens): a theme file
-in the format of `nsh.json`'s `"theme"`, whose tokens win over the app's of the same names in light and dark mode
-while the app's others stay; classes such as `bg-primary` restyle at once, and apps loaded later start with it
-(`None` gives the app its own theme back; a file that does not parse is an error and changes nothing).
+`AppView::set_theme_overrides(Some(json))` puts your app's brand over the app's [theme](./tailwind.md#theme-tokens): a
+theme file in the format of `nsh.json`'s `"theme"`, whose tokens win over the app's of the same names in light and dark
+mode while the app's others stay; classes such as `bg-primary` restyle at once, and apps loaded later start with it
+(`None` gives the app its own theme back; a file that does not parse is an error and changes nothing). The app reads the
+file with its own theme's reader, so a `var(--name)` the file does not set is the default theme's value of that token.
 
 Native components are registered with `AppView::register_component`; see
 [Native components](./native-components.md#registering-on-windows-rust). `set_ui_sets(sets)` sets the UI sets every
