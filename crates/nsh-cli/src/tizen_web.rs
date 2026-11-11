@@ -36,7 +36,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{
     build::Built,
-    package::{AppConfig, PackageOptions},
+    package::{AppConfig, PackageOptions, PackageTarget},
     ui, web,
 };
 
@@ -428,7 +428,7 @@ pub(crate) fn package(
             installed: true,
         },
     )?;
-    if let Some(icon) = &config.icon {
+    if let Some(icon) = config.icon(PackageTarget::TizenWeb) {
         write_icon(icon, &dir.join("icon.png"))?;
     }
     if matches!(widget.preview, Some(Preview::Service(_))) {
