@@ -477,7 +477,7 @@ mod tests {
     /// the apps on: the other targets refuse it before anything is built or
     /// started.
     #[test]
-    fn device_is_for_the_ios_and_tizen_hosts_only() {
+    fn a_device_is_for_the_tizen_target_only_or_ios() {
         for target in [
             Target::Macos,
             Target::Linux,
