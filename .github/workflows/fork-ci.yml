@@ -193,6 +193,7 @@ jobs:
           echo "NSH_RUNTIME=$RUNNER_TEMP/nsh-runtime" >> "$GITHUB_ENV"
           cargo build -p nsh-cli
       - name: Run the examples' tests in an Android emulator
+        id: emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -207,7 +208,23 @@ jobs:
           # emulator down; GLES is what an emulator on a Mac gives wgpu.
           emulator-options: -no-window -gpu swiftshader_indirect -feature -Vulkan -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: bash .github/fork/examples.sh android
+          script: |
+            bash .github/fork/emulator-logs.sh start "$RUNNER_TEMP/emulator-logs"
+            bash .github/fork/examples.sh android
+      # An emulator that goes away during a test (as it did on the gallery's
+      # Styles page, `examples.sh`) leaves no line in this log: the device's
+      # log, the runner's memory and kernel log and the emulator's crash
+      # reports say what ended it (`.github/fork/emulator-logs.sh`).
+      - name: Collect the emulator's logs
+        if: failure() && steps.emulator.conclusion == 'failure'
+        run: bash .github/fork/emulator-logs.sh collect "$RUNNER_TEMP/emulator-logs"
+      - name: Upload the emulator's logs
+        if: failure() && steps.emulator.conclusion == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-emulator-logs-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/emulator-logs
+          retention-days: 7
 
   web:
     # Nothing for drafts or a pull request being closed.
