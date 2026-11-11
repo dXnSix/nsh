@@ -1971,10 +1971,9 @@ mod tests {
             get("CARGO_TARGET_ARMV7_TIZEN_LINUX_GNUEABI_LINKER"),
             Some("clang")
         );
-        let rustflags: Vec<&str> = get("CARGO_ENCODED_RUSTFLAGS")
-            .unwrap()
-            .split('\x1f')
-            .collect();
+        // The SDK's paths as this machine joins them: `/` for the comparison.
+        let rustflags = get("CARGO_ENCODED_RUSTFLAGS").unwrap().replace('\\', "/");
+        let rustflags: Vec<&str> = rustflags.split('\x1f').collect();
         assert_eq!(
             rustflags,
             [
@@ -1990,11 +1989,12 @@ mod tests {
             ]
         );
         let (_, env, _) = cross_plan(Arch::X86_64, &cross);
-        let flags = &env
+        let flags = env
             .iter()
             .find(|(k, _)| k == "CARGO_ENCODED_RUSTFLAGS")
             .unwrap()
-            .1;
+            .1
+            .replace('\\', "/");
         assert!(
             flags.contains("-L/sdk/gcc/x86_64-tizen-linux-gnu/lib64"),
             "{flags}"
