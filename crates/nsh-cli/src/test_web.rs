@@ -65,8 +65,7 @@ pub(crate) fn starter(
         Size::new(Points(390.0), Points(844.0))
     };
     Ok(Arc::new(move |entry: &Path, options: &HostOptions| {
-        start(&exe, &host, entry, options, size, idiom)
-            .map(|h| Box::new(h) as Box<dyn Host>)
+        start(&exe, &host, entry, options, size, idiom).map(|h| Box::new(h) as Box<dyn Host>)
     }))
 }
 
