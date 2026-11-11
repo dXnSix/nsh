@@ -6,7 +6,7 @@ order: 2
 
 # nsh
 
-`nsh` is the core module: the reactive API (signals, computed values, effects, context), `mount`, `token`, `setTheme`, the host elements `View`, `Text`, `Scroll` and `Overlay`, [selectable views](#selectable-views), [the safe area and the keyboard](#safe-area-and-keyboard), [animation](#animation), [the device and its environment](#device), [`PanResponder`](#panresponder), the [clipboard](#clipboard), the [photo picker](#picker), [speech recognition](#speech), [sound](#sound), [storage](#storage), the [host channel](#host), [keyboard shortcuts](#keymap), [native components and modules](#nativecomponent-and-nativemodule), [accessibility](#accessibility), and the TypeScript types of elements, styles and events. The reactive graph itself runs natively in Rust; reading a signal is a call into the runtime that costs a few nanoseconds, and only your own closures run in the JavaScript interpreter.
+`nsh` is the core module: the reactive API (signals, computed values, effects, context), `mount`, `token`, `setTheme`, `updateTheme`, `resetTheme`, the host elements `View`, `Text`, `Scroll` and `Overlay`, [selectable views](#selectable-views), [the safe area and the keyboard](#safe-area-and-keyboard), [animation](#animation), [the device and its environment](#device), [`PanResponder`](#panresponder), the [clipboard](#clipboard), the [photo picker](#picker), [speech recognition](#speech), [sound](#sound), [storage](#storage), the [host channel](#host), [keyboard shortcuts](#keymap), [native components and modules](#nativecomponent-and-nativemodule), [accessibility](#accessibility), and the TypeScript types of elements, styles and events. The reactive graph itself runs natively in Rust; reading a signal is a call into the runtime that costs a few nanoseconds, and only your own closures run in the JavaScript interpreter.
 
 ```ts
 import { batch, cleanup, computed, context, effect, ErrorBoundary, mount, Overlay, Scroll, signal, split, Text, token, untracked, View } from "nsh";
@@ -254,9 +254,11 @@ function token<K extends keyof Tokens>(name: K): Tokens[K];
 ```
 
 The design token `name` of the app's theme (`"theme"` in `nsh.json`, over shadcn/ui's tokens) in the appearance shown:
-a color as `#rrggbbaa`, a length as a number of points, a font as its family name. Names are the theme's CSS variables
+a color as `#rrggbbaa`, a length as a number of points, a font as its family name, a shadow as its CSS `box-shadow`
+layers, a gradient as its CSS `background-image`. Names are the theme's CSS variables
 without `--` (`primary`, `muted-foreground`, `radius`, `font-mono`, and the app's own, such as `up`). Reading it is
-reactive: a component, memo or effect that reads a token runs again when the theme or the appearance changes.
+reactive: a component, memo or effect that reads a token runs again when the theme or the appearance changes. In a
+[`ThemeScope`](#themescope) it is the scope's value and appearance.
 `Tokens` lists the app's tokens with their types; NSH writes it into `.nsh/types/nsh/tokens.d.ts` from the theme. For
 classes, name the tokens directly (`bg-primary`, `rounded-(--radius)`): [Theme tokens](../docs/tailwind.md#theme-tokens).
 
@@ -265,6 +267,32 @@ import { effect, token } from "nsh";
 
 effect(() => console.log("primary is", token("primary"), "radius", token("radius")));
 ```
+
+## role
+
+```ts
+function role<K extends keyof Roles>(name: K): Roles[K] | undefined;
+```
+
+What the theme role `name` draws with in the appearance shown, as [`token()`](#token) gives a token: the token the
+app's theme maps the role onto (a theme type's `role = …`), else the token of the role's name, else `undefined`.
+A role is what a part of the UI is for (`popover`, `border`, `warning`), whatever an app's design system calls the
+token: a component written against roles is themed by any of them. Reading it is reactive, as `token()` is.
+
+`Roles` lists the roles the app's UI sets draw with (`nsh/base`'s: [Theme roles](./nsh-base.md#theme-roles)), each
+with what it reads; NSH writes it into `.nsh/types/nsh/roles.d.ts`. A role the theme has no token for is
+`undefined`, so a component keeps a color of its own for it:
+
+```tsx
+import { role } from "nsh";
+
+// The popover's surface, whatever this app calls it; amber until the theme has a warning color.
+<View style={{ backgroundColor: role("popover"), borderLeftWidth: 3, borderLeftColor: role("warning") ?? "#d97706" }} />
+```
+
+A class reads a role as a variable: `bg-(--popover)` is the token the theme maps `popover` onto, where the theme has
+no token of that name ([Theme tokens](../docs/tailwind.md#theme-tokens)). Rust reads a role by its constant:
+`theme().tokens().role(nsh_base::role::POPOVER)`.
 
 ## setTheme
 
@@ -277,6 +305,7 @@ interface Theme {
     light?: Record<string, string | number>;
     dark?: Record<string, string | number>;
   };
+  roles?: Record<string, string>;
 }
 ```
 
@@ -286,10 +315,17 @@ and the classes naming tokens, `nsh/base` and Rust components' `theme()` follow 
 appearances. An embedding app's [theme overrides](../docs/tailwind.md#theme-tokens) still win over it. `null` gives
 back the theme the app was built with.
 
+`roles` maps theme roles onto the theme's tokens by name: `roles: { popover: "surface" }` has everything that draws
+with `popover` (`nsh/base`'s popovers, [`role("popover")`](#role)) draw with the token `surface`, and follow it when
+it changes, where `"popover": "var(--surface)"` would copy its color once. It is how an app without a Rust theme type
+names its tokens its own way. A role mapped onto a name that is no token of the theme, and under theme types a role
+a type already maps, is refused as a value that cannot be read is; a role's name no UI set has is a build warning.
+`updateTheme` adds to the roles mapped.
+
 The theme is read whole: when a value cannot be read (a color NSH does not know, such as `#zz` or `lab()`, a `var()`
 that names no color, or a value that is no color in one appearance where the other's is), `setTheme` throws a
-`TypeError` that names each one, and the theme shown stays. Values of no kind a token has, such as shadows, are left
-out as they are from `nsh.json`'s. Build the new theme from the app's own, so the tokens its classes name keep a value
+`TypeError` that names each one, and the theme shown stays. Values of no kind a token has, such as a letter spacing in
+`em`, are left out as they are from `nsh.json`'s. Build the new theme from the app's own, so the tokens its classes name keep a value
 (`bg-up` when `up` is in `nsh.json`'s theme), and change what differs. Rust: `set_tokens(theme.into())` of an
 `nsh_base::Theme` ([Theme tokens](../docs/tailwind.md#theme-tokens)).
 
@@ -305,6 +341,67 @@ function brand(color: string) {
 
 brand("#e11d48");
 setTheme(null); // the app's theme again
+```
+
+## updateTheme, resetTheme
+
+```ts
+function updateTheme(theme: Theme): void;
+function resetTheme(names?: (keyof Tokens | keyof Roles)[]): void;
+```
+
+`updateTheme` changes the tokens `theme` sets while the app runs and keeps the others, where `setTheme` replaces them
+all. `theme` has the format of `setTheme`'s and is read the same way: whole, or not at all (a value NSH cannot read
+throws a `TypeError` naming it, and no token changes). `token()` reads the new values right after the call, and the
+classes naming the tokens, `nsh/base` and Rust components' `theme()` follow with the next frame. Two updates in a row
+both take, the later over the earlier. A `var(--name)` naming a token the update does not set is that token's value
+shown now, and a value of no kind a token has is left out, so that token keeps its value. An embedding app's
+[theme overrides](../docs/tailwind.md#theme-tokens) still win.
+
+`resetTheme` puts the tokens `names` back to their values in the app's theme, `nsh.json`'s or the one `setTheme` set;
+without names, every token. A name the theme does not have is removed. The tokens it does not name stay as they are.
+Under [theme types](../docs/rust.md#theme-types) a role's name names the token the role is mapped onto, as it does in
+a theme file.
+Rust: `update_tokens` and `reset_tokens` ([Theme](../docs/rust.md#theme)).
+
+```tsx
+import { resetTheme, updateTheme } from "nsh";
+
+// One brand color, light and dark; the rest of the theme stays.
+updateTheme({ cssVars: { light: { primary: "#e11d48" }, dark: { primary: "#fb7185" } } });
+resetTheme(["primary"]); // the app's primary again
+```
+
+## appInfo
+
+```ts
+function appInfo(): AppInfo;
+
+interface AppInfo {
+  readonly id: string | null;
+  readonly name: string | null;
+  readonly version: string | null;
+  readonly build: number | null;
+  readonly development: boolean;
+}
+```
+
+The app as it was built: its id, name, version and build number, and whether it is a development build. A package
+reports what `nsh package` and `nsh publish` name and version it as, their `--id`, `--name`, `--version` and `--build`
+included, with version `1.0.0` and build `1` where nothing gives them; other builds report `nsh.json`'s `"id"`,
+`"name"`, `"version"` and `"build"`, `null` where it leaves them out. `nsh run`, `nsh dev`, `nsh test` and `nsh build`
+without `--release` make development builds; `nsh package`, `nsh publish` and `nsh build --release` make release
+builds. It reads the same on every platform and in any module, at its top level too: the build hands the information
+to the runtime before the app's modules run.
+
+`nsh/updater`'s [`shellInfo()`](./nsh-updater.md#shellinfo) reports the installed app's version.
+
+```tsx
+import { appInfo, Text } from "nsh";
+
+const { version, build, development } = appInfo();
+
+export const About = () => <Text>{`${version} (${build})${development ? " · dev" : ""}`}</Text>;
 ```
 
 ## View, Text, Scroll, Overlay
@@ -936,7 +1033,7 @@ const wide = () => windowSize().width >= 600;
 const colorScheme: Accessor<"light" | "dark">;
 ```
 
-The appearance shown: the system's, unless the app set its own (`nsh.json` `"appearance"`, [`setColorScheme`](#setcolorscheme)). Reactive. Rust: `dark() -> bool`; theme colors (`AdaptiveColor`) and the `.dark(…)` style variant follow it without reading it. Tailwind's `dark:` variant follows it too (see [Tailwind](../docs/tailwind.md)).
+The appearance shown: the system's, unless the app set its own (`nsh.json` `"appearance"`, [`setColorScheme`](#setcolorscheme)); in a [`ThemeScope`](#themescope) with an appearance, the scope's. Reactive. Rust: `dark() -> bool`; theme colors (`AdaptiveColor`) and the `.dark(…)` style variant follow it without reading it. Tailwind's `dark:` variant follows it too (see [Tailwind](../docs/tailwind.md)).
 
 ```rust tabs
 view().flex_1().bg(move || if dark() { black() } else { white() })
@@ -1046,6 +1143,57 @@ function setColorScheme(scheme: "light" | "dark" | "system"): void;
 
 Shows the app in `scheme` whatever the system's appearance, at once: `colorScheme()`, `dark:` classes, the components' theme and the platform's controls (alerts, the status bar's default style) follow it; `"system"` follows the system again. `nsh.json` `"appearance"` sets it from the start. Rust: `set_color_scheme(Appearance::Dark)` (`Appearance::Light`, `Appearance::System`).
 
+### ThemeScope
+
+```ts
+const ThemeScope: (props: ThemeScopeProps) => JSX.Element;
+
+interface ThemeScopeProps {
+  /** `"light"` or `"dark"`; left out, the scope is shown as the view around it. */
+  appearance?: "light" | "dark";
+  /** A theme file whose values are set over the tokens around the scope; left out, the scope is drawn with those. */
+  theme?: Theme;
+  children?: JSX.Element;
+  // and a view's `class`, `classList`, `style`, state styles, `testID`, `onLayout`
+}
+```
+
+A view that shows itself and everything in it in an appearance of its own, with design tokens of its own, or both, whatever the app's and the system's: a dark sidebar beside a light page, a card with its own `primary`, a theme's preview beside the app. It is a view, so its `class` and `style` lay it out and draw it.
+
+In a scope, everything that follows the appearance follows the scope's: `dark:` classes, the classes of theme tokens (`bg-background`), the theme colors of components, [`colorScheme()`](#colorscheme) and [`token()`](#token). The platform's own controls in it follow too on iOS, macOS and the web (a text input's keyboard and menus, web views, form controls), and so do the scroll indicators the desktop backends draw. Scopes nest: the nearest one with an `appearance` decides, and a scope without one is shown as the view around it.
+
+With a `theme` (a theme file, as [`updateTheme`](#updatetheme-resettheme) takes one), the classes of theme tokens, the components' theme and [`token()`](#token) take the scope's values for the tokens it sets, in each appearance, and the app's for the others; a `var()` it does not set itself names the tokens around the scope. A scope sets tokens the app's theme has: a name the theme lacks is left out with a warning, so the classes that exist are the same everywhere. A scope inside another starts from the outer one's values, and a change of the app's theme reaches every token a scope leaves alone.
+
+As in CSS, a color a view inherited stays what it was: a scope sets its own background and text color. Menus, alerts and sheets the platform draws are the app's, also when a view in a scope opens them. Rust: `theme_scope().appearance(ColorScheme::Dark).child(…)` and `.theme(Some(ScopeTheme::file(json)))`, or `ScopeTheme::from(tokens)` and `ScopeTheme::of(&theme)` for tokens and a theme type's value made in Rust; `dark()`, `color()`, `tokens()` and `theme_of()` answer for the scope around the binding that reads them.
+
+```rust tabs
+view().flex_row().flex_1().child(
+    theme_scope()
+        .appearance(ColorScheme::Dark)
+        .child(view().w(px(240.)).bg(AdaptiveColor::rgb(0xffffff, 0x18181b)).child(sidebar())),
+)
+```
+
+```tsx tabs
+import { ThemeScope, View } from "nsh";
+
+<View class="flex-1 flex-row">
+  <ThemeScope appearance="dark" class="w-60 bg-white dark:bg-zinc-900">
+    <Sidebar />
+  </ThemeScope>
+  <View class="flex-1 bg-white dark:bg-zinc-900">{/* the page, in the app's appearance */}</View>
+</View>
+```
+
+```tsx
+// A plan's card in its own brand color: `bg-primary` and `token("primary")` in it are the scope's.
+<ThemeScope theme={{ cssVars: { light: { primary: "#7c3aed" }, dark: { primary: "#a78bfa" } } }}>
+  <View class="rounded-(--radius) bg-primary p-4">
+    <Text class="text-primary-foreground">Upgrade</Text>
+  </View>
+</ThemeScope>
+```
+
 ### fpsEnabled and setFpsEnabled
 
 ```ts
@@ -1057,6 +1205,25 @@ function setFpsEnabled(enabled: boolean): void;
 
 ```tsx
 <Switch checked={fpsEnabled()} onChange={({ checked }) => setFpsEnabled(checked)} />
+```
+
+### shadersAvailable
+
+```ts
+const shadersAvailable: Accessor<boolean>;
+```
+
+Whether the platform draws shader views (`Shader`, `ShaderEffect`, `ShaderTransition`, `ScreenEffect`,
+`ScreenTransition`), reactive. It is `true` on iOS, Android, macOS, Windows, Linux, GPUI, the web and in headless tests,
+and `false` in a terminal and in apps built with the `shader` feature turned off. It starts `true` and turns `false`
+for good when the first shader mounts on a machine whose GPU NSH cannot open (a browser without WebGL 2), so show the
+shader while it holds and the app's own drawing otherwise ([Shader](../elements/shader.md#whether-shaders-draw)).
+Rust: `shaders_available() -> bool`.
+
+```tsx
+<If when={shadersAvailable()} else={<Image src={backdrop} style={{ flex: 1 }} />}>
+  <Shader source={BACKDROP} style={{ flex: 1 }} />
+</If>
 ```
 
 ### platform
@@ -1645,7 +1812,10 @@ writeImage(src: string): Promise<void>;
 
 Puts the image of `src`, a base64 `data:` URL or the `url` `readImage` gave, on the clipboard, replacing what it holds.
 Rust: `set_clipboard_image(src)`. On Windows it takes a PNG, the format browsers, Office and the Snipping Tool read. On
-Android it rejects with `"ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"`.
+the web the image goes on the clipboard as a PNG, the image format browsers write; an image of another format also goes
+on as it is, as HTML (`<img>`, in a paste's `html`) and, in Chromium browsers, as the original `readImage` returns, so a
+GIF keeps its frames. On Android it rejects with
+`"ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"`.
 
 ```rust tabs
 set_clipboard_image(image.url.clone());
@@ -1876,7 +2046,7 @@ for (const { file } of picked) {
 
 | Platform | Picker | Filters |
 |---|---|---|
-| macOS | `NSOpenPanel` sheet | All the extensions at once |
+| macOS | `NSOpenPanel`: a sheet of the app's window, or, while that window is out of sight (a tray app's hidden main window), a panel of its own in front | All the extensions at once |
 | Windows | `IFileOpenDialog` | One choice per filter, shown by its name |
 | Linux | `GtkFileDialog` (the portal's where there is one) | One choice per filter, shown by its name |
 | iOS | `UIDocumentPickerViewController`, as copies | All the extensions at once |
@@ -1964,7 +2134,9 @@ only the running app: one left on screen after the app exits does nothing.
 ### Notifications.permission
 
 `permission()` answers without asking, `requestPermission()` shows the system's prompt the first time. Both resolve with
-`"default"` (not asked yet), `"granted"`, `"denied"` (only the system's settings change it) or `"unavailable"`.
+`"default"` (not asked yet), `"granted"`, `"denied"` (only the system's settings change it) or `"unavailable"`. On Apple
+platforms `requestPermission()` resolves with the permission the system's settings hold once it has asked: `"denied"` for
+an app the user turned notifications off for.
 
 ## UrlScheme
 
@@ -2019,17 +2191,19 @@ An app that embeds NSH owns its schemes and hands a URL to its view: `AppView.op
 ```ts
 const UrlScheme: {
   on(event: "open", listener: (event: { url: string }) => void): () => void;
+  /** The address moved without the app moving it (the web's back and forward, an address the user typed). */
+  on(event: "change", listener: (event: { url: string; reason: "back" | "forward" | "address" }) => void): () => void;
   /** The app's address, or null when it has none. */
   url(): string | null;
   /** Sets the address of the page shown; the app's pages stay as they are. */
-  setUrl(url: string): void;
+  setUrl(url: string, options?: { history?: "replace" | "push" }): void;
 };
 ```
 
 | Platform | `url()` | `setUrl(url)` |
 | --- | --- | --- |
-| The web, the app the whole page | The page's address: the one it loaded, what `setUrl` set, or the entry's the browser's back went back to | Replaces the current history entry's address, resolved as `history.replaceState` resolves it (against the page's `<base href>`), after the entries of the pages pushed or popped in the same turn |
-| The native platforms, and the web in an iframe | The last link that opened the app (the link that launched it also comes as the first `open`), or what `setUrl` set after it; `null` before either | Keeps the URL for `url()`; giving it to the system (Handoff, App Links) is the embedding app's |
+| The web, the app the whole page | The page's address: the one it loaded, what `setUrl` set, or the entry's the browser's back went back to | Replaces the current history entry's address, resolved as `history.replaceState` resolves it (against the page's `<base href>`), after the entries of the pages pushed or popped in the same turn; with `history: "push"`, an entry of its own after it, as `history.pushState` makes one (below) |
+| The native platforms, and the web in an iframe | The last link that opened the app (the link that launched it also comes as the first `open`), or what `setUrl` set after it; `null` before either | Keeps the URL for `url()`, with `history: "push"` too (there is no history to push to); giving it to the system (Handoff, App Links) is the embedding app's |
 
 A URL that is not a string, longer than 16 KiB or with whitespace is a `TypeError`, and so on the web, when the app is
 the whole page, is one that is not a URL of the page's origin. The app keeps one address, which Rust reads too, and `url()` reads it as it is: a link,
@@ -2081,6 +2255,46 @@ export function App() {
 Rust code awaits `app_url()` and calls `set_app_url(url)` of `nsh_core::prelude`, beside `next_url_scheme_open()`; the
 same address as `url()` and `setUrl`, and `set_app_url` returns an error for the URLs `setUrl` throws for. On the web it
 resolves a URL against the page's base, as `setUrl` does, and one of another origin than the page's is an error.
+
+An address that is a place of its own in the app, with no page pushed for it (a tab, a filter or sort in the query, a
+split view's selected row), is set with `history: "push"`, so the browser's back goes back to the address before it
+instead of leaving the page. The app hears that back and the forward after it as
+[`change`](#urlschemeonchange):
+
+```tsx
+function selectTab(tab: Tab) {
+  current.set(tab);
+  UrlScheme.setUrl(`?tab=${tab}`, { history: "push" });
+}
+UrlScheme.on("change", ({ url }) => current.set(tabOf(url)));
+```
+
+A push is an entry at the pages shown, after the current one, and drops the browser's forward entries, as
+`history.pushState` does. In the turn that pushes a page, the address goes to the page's entry, with no entry of its
+own (as `onChange` sets it); in the turn that pops one, it is an entry after the one the back lands on. Pushing the
+address shown makes no entry, and in one turn the last address wins and a push wins over a replace. `history` of
+another value is a `TypeError`. Rust calls `set_app_url_with(url, HistoryBehavior::Push)` (`nsh_core::url_scheme`).
+
+### UrlScheme.on("change")
+
+`change` reports a move of the app's address that the app did not make and that its pages do not account for, with the
+address and what moved it. `url()` reads the address already, and the app shows what it names:
+
+```tsx
+// The tab is in the address (`?tab=live`); a back or forward to another tab's entry shows that tab.
+UrlScheme.on("change", ({ url }) => tab.set(tabOf(url)));
+```
+
+| `reason` | When (on the web, the app the whole page) |
+| --- | --- |
+| `"back"`, `"forward"` | The browser's back or forward went to an entry of the same pages with another address (an address the user typed), or a back popped pages and left an address the app did not set as it answered (no `onChange` sets one) |
+| `"address"` | The user gave the page an address of the app's, a `#fragment` typed in the address bar: a new entry after the current one, with the app's pages as they are |
+
+What the stack accounts for stays as it is: a back that pops pages is the stack's (`onChange`), a forward to a page the
+stack no longer has is `open`, and the app's own `setUrl` is no `change`. Moves that come while nothing listens are not
+kept: `url()` has them. The native platforms, GPUI hosts and terminals have no history of addresses, so `change` comes
+only on the web. Rust code awaits `next_app_url_change()` of `nsh_core::prelude`, an `AppUrlChange` with the `url` and
+its `reason`.
 
 ## Speech
 
@@ -2250,7 +2464,7 @@ import { AudioPlayer, Sound } from "nsh";
 ```ts
 declare class Sound {
   static available(): Promise<boolean>;
-  static load(src: string): Promise<Sound>;
+  static load(src: string | Uint8Array): Promise<Sound>;
   play(options?: { volume?: number; rate?: number }): void;
   stop(): void;
   readonly duration: number;
@@ -2296,8 +2510,10 @@ type AudioErrorCode =
 
 Loads a sound from an imported audio file (`import click from "./sounds/click.wav"`: the import is the file's
 `asset:/` URL, and the file ships with the app), a `file:` URL, a `data:` URI or an `http(s)` URL
-the app's `network` capability grants, and decodes it into memory. A source the engine loaded already is shared: two
-components loading the same click cost one decode. The sound is freed by `dispose()`, or when what loaded it goes (a
+the app's `network` capability grants, or from a sound file's bytes (a `Uint8Array` the app made or downloaded; in
+Rust also bytes it embeds, `load_sound(include_bytes!("tick.wav"))`), and decodes it into memory. The bytes' format
+(WAV, AAC, MP3, ...) is read from the bytes themselves. A source the engine loaded already is shared, and so are equal
+bytes: two components loading the same click cost one decode. The sound is freed by `dispose()`, or when what loaded it goes (a
 component unmounts). A sound is at most 8 MB encoded and 5 seconds long, and an app holds at most 64 sounds and 16 MB
 of decoded audio at once; past them `load` rejects with `code` `"ERR_NSH_QUOTA_EXCEEDED"`. Longer audio is an
 `AudioPlayer`'s.

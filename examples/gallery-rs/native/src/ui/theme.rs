@@ -12,8 +12,8 @@
 use nsh_core::{
     animation::{Curve, EaseMode},
     element::{
-        AdaptiveColor, BoxShadow, Easing, Rgba, Spring, StyleRefinement, Styled, Timing,
-        percentage, rgb, rgba,
+        AdaptiveColor, AdaptiveShadow, BoxShadow, Easing, Rgba, Spring, Styled, Timing, percentage,
+        rgb, rgba,
     },
     geometry::px,
 };
@@ -543,24 +543,16 @@ pub(crate) trait Finished: Styled + Sized {
     /// Its shadows only (TS `finish.card.boxShadow`).
     fn finish_shadow(self, finish: Finish) -> Self {
         let (light, dark) = finish.shadows();
-        self.adaptive_shadow(light.iter().copied(), dark.iter().copied())
-    }
-
-    /// Box shadows for each appearance.
-    fn adaptive_shadow(
-        self,
-        light: impl IntoIterator<Item = BoxShadow>,
-        dark: impl IntoIterator<Item = BoxShadow>,
-    ) -> Self {
-        let dark: Vec<BoxShadow> = dark.into_iter().collect();
-        self.shadow(light)
-            .dark(move |s: StyleRefinement| s.shadow(dark))
+        self.adaptive_shadow(AdaptiveShadow::new(
+            light.iter().copied(),
+            dark.iter().copied(),
+        ))
     }
 }
 
 impl<T: Styled + Sized> Finished for T {}
 
-/// A shadow layer inside the box, for [`Finished::adaptive_shadow`].
+/// A shadow layer inside the box, for [`Styled::adaptive_shadow`].
 pub(crate) const fn inset_shadow(y: f32, blur: f32, color: Rgba) -> BoxShadow {
     inner(y, blur, 0.0, color)
 }
