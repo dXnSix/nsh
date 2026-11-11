@@ -688,7 +688,10 @@ browsers' touches into what phones report:
   window (`dialogs: "viewport"`). Ctrl + wheel (a touchpad's pinch) pinches the view
   under the pointer and never zooms the page. Scroll events follow the desktop backends: touch drags send
   `onScrollDragStart` / `EndDrag`, glides and snaps `onMomentumStart` / `End`, every scroll ends with one
-  `onScrollEnd` (the browser's `scrollend` after a scroll driven here, `drive` / `ownEnd`, is not another).
+  `onScrollEnd` (the browser's `scrollend` after a scroll driven here, `drive` / `ownEnd`, is not another). An
+  engine without `scrollend` (Chromium before 114: the Chromium 108 of 2024's Samsung TVs; `SCROLLEND` in `nsh.js`)
+  ends a scroll the browser drives once no scroll event came for 150 ms (`SCROLL_QUIET`, `scrolled`), a glide's with
+  `onMomentumEnd` first and a held scroll bar's at its release (`browser/scrollend.test.mjs`).
 - **Mouse drags never scroll**, in every idiom, as on the desktop backends: dragging the content is a touchscreen's
   way to scroll, the mouse has the wheel, the keyboard and the scroll bar. Its drags go to pans, the responder system
   and selectable text (`pointerDown` only takes touches and pens in zoomable views, which pan themselves; a press
@@ -705,7 +708,10 @@ browsers' touches into what phones report:
   Rust, `nsh_key` matches a key on the spot with `Keymap::find` and `nsh_key_command` reports the binding.
   Its `f64` result preserves the full `u32` ID range, including Rust shortcuts and overlay Escape, apart from
   the `-1` (unmatched) and `-2` (held repeat) sentinels. Keys are passed as the character they type without
-  modifiers, else the US layout's character of their `code`; `mod` was resolved by the browser's platform,
+  modifiers, else the US layout's character of their `code`, the media and TV remote keys by their `key`
+  (`MediaPlayPause`, `ColorF0Red`, `ChannelUp`, `Info`, ...) or, when it is `Unidentified`, by Samsung TVs' key
+  codes (`TV_KEY_CODES`: `tizen.tvinputdevice`'s); in the TV idiom by those codes whenever the `key` is none of
+  `NAMED_KEYS` (a TV's engine may report no `key`, or `Pause` for keyCode 19, which on a TV is the remote's pause); `mod` was resolved by the browser's platform,
   `appleKeyboard` in the environment JSON); an open dialog (Escape presses its
   cancel button); a focused field (Escape leaves it); a custom context menu (Shift+F10 or the Menu key);
   selectable text with a selection (select all, in a selectable view the whole area; Escape); a focused

@@ -3282,6 +3282,40 @@ mod tests {
         }
     }
 
+    /// Tab stops at pressables on Windows as on the other desktops:
+    /// `cargo test -p nsh-testing --lib headless::tests::windows_tab`.
+    mod windows_tab {
+        use super::*;
+
+        #[test]
+        fn tab_stops_at_pressables_and_return_presses_them() {
+            let mut config = EngineConfig::new(Root::of::<FocusStops>());
+            config.environment.os = nsh_core::platform::Os::Windows;
+            config.environment.idiom = nsh_core::platform::Idiom::Desktop;
+            let mut app = Headless::start(config).unwrap();
+            app.first_render().unwrap();
+            let id = |app: &Headless, s: &str| match app.screen().view(&Selector::parse(s).unwrap())
+            {
+                crate::screen::Pick::One(id) => id,
+                _ => panic!("{s} is shown"),
+            };
+            let (card, chart, button) = (
+                id(&app, "id:card"),
+                id(&app, "id:chart"),
+                id(&app, "id:button"),
+            );
+            for stop in [card, chart, button] {
+                app.press_key("tab").unwrap();
+                assert_eq!(app.screen().key_focus(), Some(stop));
+            }
+            app.press_key("enter").unwrap();
+            app.wait_for("Opens 0 presses 1 steps 0 focused false")
+                .unwrap();
+            app.press_key("shift+tab").unwrap();
+            assert_eq!(app.screen().key_focus(), Some(chart));
+        }
+    }
+
     /// A list of 200 rows of its own, each a button showing its row.
     #[component]
     fn LongList() -> impl IntoElement {

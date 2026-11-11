@@ -19,6 +19,7 @@ import ModHostChannel from "./mod-host-channel";
 import ModI18n from "./mod-i18n";
 import ModIos from "./mod-ios";
 import ModKeymap from "./mod-keymap";
+import ModKeymapTv from "./mod-keymap-tv";
 import ModMobile from "./mod-mobile";
 import ModPicker from "./mod-picker";
 import ModNotifications from "./mod-notifications";
@@ -44,6 +45,7 @@ const cases: Record<string, () => JSX.Element> = {
   "mod-i18n": ModI18n,
   "mod-ios": ModIos,
   "mod-keymap": ModKeymap,
+  "mod-keymap-tv": ModKeymapTv,
   "mod-mobile": ModMobile,
   "mod-picker": ModPicker,
   "mod-notifications": ModNotifications,
