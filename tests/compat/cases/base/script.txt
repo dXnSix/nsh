@@ -3666,6 +3666,7 @@ expect dark up #a78bfaff
 style id:outside backgroundColor #138a5aff
 style id:inside backgroundColor #7c3aedff
 style id:dark backgroundColor #a78bfaff
+prop id:scoped-page headerStyle backgroundColor=#7c3aedff
 # Another theme: only what the scope holds follows.
 tap id:pink
 expect inside up #db2777ff radius-card 14
@@ -3674,12 +3675,14 @@ expect outside up #138a5aff
 style id:inside backgroundColor #db2777ff
 style id:dark backgroundColor #f472b6ff
 style id:outside backgroundColor #138a5aff
+prop id:scoped-page headerStyle backgroundColor=#db2777ff
 # Without a theme it is drawn with the app's.
 tap id:none
 expect inside up #138a5aff radius-card 14
 expect dark up #45d49aff
 style id:inside backgroundColor #138a5aff
 style id:dark backgroundColor #45d49aff
+prop id:scoped-page headerStyle backgroundColor=#138a5aff
 covers [nsh] ThemeScope
 
 # base-update-theme

@@ -756,7 +756,8 @@ impl<M: TextEngine> Core<M> {
     /// Sets the classes of `key`'s `part` (a page's header, a list's
     /// content).
     pub(super) fn set_part_class(&mut self, key: Key, part: Part, names: &str) {
-        let classes = (!names.trim().is_empty()).then(|| self.tailwind.classes(names));
+        // With the design tokens of the scope `key` is in, as its own.
+        let classes = (!names.trim().is_empty()).then(|| self.classes_at(Some(key), names).0);
         let named = classes.is_some();
         self.set_part_class_list(key, part, classes);
         if named && let Some(parts) = self.nodes[key as usize].parts.as_deref_mut() {
@@ -805,6 +806,9 @@ impl<M: TextEngine> Core<M> {
         parts.class_names.retain(|(p, _)| *p != part);
         let at = parts.classes.iter().position(|(p, _)| *p == part);
         match (at, classes) {
+            // The same rules (a scope that leaves the tokens they read as
+            // they are gives the surface's list back): nothing to send.
+            (Some(i), Some(c)) if std::rc::Rc::ptr_eq(&parts.classes[i].1, &c) => return,
             (Some(i), Some(c)) => parts.classes[i].1 = c,
             (Some(i), None) => {
                 parts.classes.remove(i);
@@ -1221,8 +1225,8 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// Resolves the classes of `key` again where they read a token of
-    /// `changed`: its own (`class`), the app's on the component it hosts
-    /// and on its element.
+    /// `changed`: its own (`class`), its parts' (a page's header, a list's
+    /// content), the app's on the component it hosts and on its element.
     fn resolve_classes_again(&mut self, key: Key, changed: &TokenChange) {
         let reads = |c: &Option<std::rc::Rc<ClassList>>| {
             c.as_ref()
@@ -1231,6 +1235,21 @@ impl<M: TextEngine> Core<M> {
         let node = &self.nodes[key as usize];
         let id = node.id;
         let own = reads(&node.classes);
+        let parts: Vec<(Part, Box<str>)> = node.parts.as_deref().map_or_else(Vec::new, |p| {
+            p.class_names
+                .iter()
+                .filter(|(part, _)| {
+                    p.classes.iter().any(|(of, list)| {
+                        of == part && list.deps() & deps::THEME != 0 && list.reads(changed)
+                    })
+                })
+                .cloned()
+                .collect()
+        });
+        for (part, names) in parts {
+            self.set_part_class(key, part, &names);
+        }
+        let node = &self.nodes[key as usize];
         if node.class_names.is_some() && own {
             self.set_classes(key, None, None);
         }
