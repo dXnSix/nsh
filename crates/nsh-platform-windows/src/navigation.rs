@@ -148,13 +148,14 @@ fn is_shown(view: &NshView) -> bool {
     }
 }
 
-/// Takes the keyboard focus away from a field inside `view` before it is
-/// concealed or removed: typing must not go to a field nobody sees.
+/// Takes the keyboard focus away from a field (or a focused view) inside
+/// `view` before it is concealed or removed: typing must not go to a field
+/// nobody sees.
 fn drop_focus(surface: &Surface, view: &NshView) {
-    if let Some(field) = crate::text_input::focused(surface)
+    if let Some(field) = crate::focus::current(surface)
         && is_ancestor(view, &field)
     {
-        crate::text_input::blur(&field);
+        crate::focus::blur(surface, &field);
     }
 }
 
@@ -443,9 +444,9 @@ struct ModalNav {
     /// the app's removal only forgets it.
     closed: bool,
     reported: Reported,
-    /// The field that had the keyboard focus when it was presented: it
-    /// gets it back when the modal closes, as a desktop dialog gives it
-    /// back.
+    /// The field (or the focused view, [`crate::focus`]) that had the
+    /// keyboard focus when it was presented: it gets it back when the
+    /// modal closes, as a desktop dialog gives it back.
     restore: Option<NshView>,
     /// The root view of the window of the app's own it is presented in
     /// (`ModalConfig::window`); `None`: the main window's.
@@ -1180,11 +1181,11 @@ impl Nav {
         set_fade(&view, 1.0);
         if let Some(field) = restore
             && field.attached()
-            && crate::text_input::focused(surface).is_none()
+            && crate::focus::current(surface).is_none()
             && is_ancestor(&self.focus_scope(surface), &field)
         {
             // Not while another modal still covers it.
-            crate::text_input::focus(&field);
+            crate::focus::restore(surface, &field);
         }
         match image {
             Some(picture) => {
@@ -1577,11 +1578,11 @@ pub(crate) fn present(surface: &Rc<Surface>, view: &NshView) {
     if m.view.is_some() {
         return;
     }
-    // The field being typed in under the modal leaves it (until the modal
-    // closes); one of the modal's own keeps it.
-    let field = crate::text_input::focused(surface).filter(|f| !is_ancestor(view, f));
+    // The field being typed in under the modal (or the focused view there)
+    // leaves it until the modal closes; one of the modal's own keeps it.
+    let field = crate::focus::current(surface).filter(|f| !is_ancestor(view, f));
     if let Some(field) = &field {
-        crate::text_input::blur(field);
+        crate::focus::blur(surface, field);
     }
     m.restore = field;
     m.view = Some(view.clone());
@@ -1624,9 +1625,9 @@ pub(crate) fn release(surface: &Rc<Surface>, view: &NshView) {
     set_fade(view, 1.0);
     if let Some(field) = restore
         && field.attached()
-        && crate::text_input::focused(surface).is_none()
+        && crate::focus::current(surface).is_none()
     {
-        crate::text_input::focus(&field);
+        crate::focus::restore(surface, &field);
     }
 }
 

@@ -241,6 +241,15 @@ impl Native for TuiNative {
         let name = match stroke.key {
             nsh_core::keymap::Key::Char(c) => c.to_string(),
             nsh_core::keymap::Key::F(n) => format!("F{n}"),
+            // Terminals have no names of their own for the media and TV
+            // remote keys, and a key's `Debug` (`ColorRed`) parses as no
+            // keystroke: the keymap's names (`red`), which `key_scheme`
+            // parses.
+            key if key.is_media_or_remote() => nsh_core::keymap::Keystroke {
+                key,
+                modifiers: Default::default(),
+            }
+            .to_string(),
             key => format!("{key:?}"),
         };
         self.press_key(name, stroke.modifiers)
