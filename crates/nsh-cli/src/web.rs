@@ -1035,12 +1035,16 @@ pub(crate) fn dev_host(runtime: &WebRuntime, rust: bool) -> anyhow::Result<(Stri
 
 /// The dev host's page and files ([`dev_host`]) for the app at `entry`:
 /// with its page's host module (`nsh.json` `web.host`) as `nsh-host.js`,
-/// read now (a change takes another session), or none, and its
-/// `web.history`. A Tizen web app's page (`tizen_web::dev_page`) has filled
-/// in its scripts, idiom and history first; a web page has none of them.
+/// read now (a change takes another session), or none, its
+/// `web.history`, and the idiom the session runs it in (`--idiom`,
+/// `nsh.json` `dev.idiom`: the player's `idiom`; `None`: the one the
+/// browser measures, or a test's). A Tizen web app's page
+/// (`tizen_web::dev_page`) has filled in its scripts, idiom and history
+/// first; a web page has none of them.
 pub(crate) fn with_page_host(
     (page, mut files): (String, Files),
     entry: &Path,
+    idiom: Option<crate::run::DevIdiom>,
 ) -> anyhow::Result<(String, Files)> {
     let web = crate::package::read_config(entry)?.web;
     let history = match web.history {
@@ -1061,11 +1065,15 @@ pub(crate) fn with_page_host(
         }
         None => "null".to_owned(),
     };
+    let idiom = match idiom {
+        Some(idiom) => serde_json::to_string(idiom.as_str())?,
+        None => "null".to_owned(),
+    };
     Ok((
         page.replace("{{host}}", &host)
             .replace("{{history}}", &history)
             .replace("{{scripts}}\n", "")
-            .replace("{{idiom}}", "null"),
+            .replace("{{idiom}}", &idiom),
         files,
     ))
 }
@@ -1648,7 +1656,7 @@ mod tests {
         };
         // No nsh.json, or one without `web.host`: no host, and the
         // player's own default for the history.
-        let (page, files) = with_page_host(base(), &entry).unwrap();
+        let (page, files) = with_page_host(base(), &entry, None).unwrap();
         assert_eq!(page, "const HOST = null; const HISTORY = null;");
         assert!(files.is_empty());
         fs::write(dir.join("host.js"), "export function createHost() {}").unwrap();
@@ -1657,7 +1665,7 @@ mod tests {
             r#"{ "web": { "host": "host.js", "history": false } }"#,
         )
         .unwrap();
-        let (page, files) = with_page_host(base(), &entry).unwrap();
+        let (page, files) = with_page_host(base(), &entry, None).unwrap();
         assert_eq!(
             page,
             "const HOST = \"./nsh-host.js\"; const HISTORY = false;"
@@ -1675,7 +1683,7 @@ mod tests {
             r#"{ "web": { "host": "../host.js" } }"#,
         )
         .unwrap();
-        assert!(with_page_host(base(), &entry).is_err());
+        assert!(with_page_host(base(), &entry, None).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -2722,8 +2730,12 @@ mod tests {
         // The app's page host (`web.host`).
         fs::write(dir.join("host.js"), "export function createHost() {}").unwrap();
         fs::write(dir.join("nsh.json"), r#"{ "web": { "host": "host.js" } }"#).unwrap();
-        let (page, files) =
-            with_page_host(dev_host(&runtime, false).unwrap(), &dir.join("App.tsx")).unwrap();
+        let (page, files) = with_page_host(
+            dev_host(&runtime, false).unwrap(),
+            &dir.join("App.tsx"),
+            None,
+        )
+        .unwrap();
         let server =
             nsh_dev::DevServer::start("127.0.0.1:0".parse().unwrap(), "", None, |_| {}).unwrap();
         server.serve_web(page, files);

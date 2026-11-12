@@ -51,6 +51,30 @@ import { platform, Text, View } from "nsh";
 
 同一个键既写在 `tv={{…}}` 中又写在元素本身上时，以最后设置的为准：每个属性只放在一个地方。
 
+### 在桌面上构建电视布局
+
+GPUI 宿主和 Web 开发页面可以让应用像在电视上一样运行，这样就能在 Mac（或任何桌面）上借助热重载构建它的 10 英尺布局和焦点：
+
+```sh
+nsh run my-app --target gpui --idiom tv --window-size 1920x1080   # GPUI 窗口，以点为单位的电视屏幕
+nsh run my-app --target web --idiom tv                             # 开发服务器的页面，可在任意浏览器中打开
+```
+
+此时 `platform.tv` 为 `true`，`tv={{…}}` 属性生效，操作系统仍是本机的（`macos` 或 `web`）。主要为电视构建的应用可以在 `nsh.json` 中设置它，`--idiom` 会覆盖该设置：
+
+```json
+{ "dev": { "idiom": "tv" } }
+```
+
+`nsh test` 为测试打开应用所用的宿主接受同样的设置，这样规格测试就能在桌面上（包括 CI 中）检查电视的布局和焦点：
+
+```sh
+nsh test my-app --target gpui --idiom tv   # 每个测试的应用都在 GPUI 窗口中像在电视上一样运行
+nsh test my-app --target web --idiom tv    # 在无头浏览器的页面中
+```
+
+其他宿主（`--target macos`、`ios`、`android` 等）以其设备自己的界面风格运行，headless 运行则使用 `open` 的 `platform` 给出的界面风格：它们拒绝 `--idiom`，并忽略 `nsh.json` 的 `dev.idiom`，同时给出警告。
+
 ## 平台专属属性
 
 在 Rust 中，只有一个平台才有的属性和其他属性一样是构建方法（Android 的 `.ripple(..)`、`.elevation(..)`，iOS 的 `.input_accessory(..)`，macOS 的 `.macos_backdrop(..)`，桌面的 `.window_drag(..)`）；其他平台会忽略它。在 TSX 中，只存在于某一个平台的属性，归入以该平台命名的对象中。每个元素都接受 `ios`、`android`、`macos`、`desktop`（macOS、Windows、Linux，以及界面风格为桌面的浏览器）和 `web`（浏览器）；在其他平台上这个对象会被忽略，在它自己的平台上只应用其中的键。macOS 同时应用 `macos` 和 `desktop`；桌面浏览器同时应用 `desktop` 和 `web`。

@@ -61,7 +61,7 @@ nsh build my-app --release -o build
 dist/nsh/runtime/gpui/nsh-gpui-host --bundle build/bundle.nshc --window-size 390x844   # 源码仓库中：target/debug/nsh-gpui-host
 ```
 
-`--window-size` 是窗口的尺寸，单位为点（`<宽>x<高>`）。
+`--window-size` 是窗口的尺寸，单位为点（`<宽>x<高>`）。`--idiom tv` 让应用像在电视上一样运行（`platform.tv`、`tv={{…}}` 属性），窗口尺寸不变；`nsh run --target gpui --idiom tv` 和 `nsh.json` 的 `dev.idiom` 会传入它（[电视](./platform-specific.md#在桌面上构建电视布局)）。
 
 ## 打包
 

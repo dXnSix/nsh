@@ -195,7 +195,11 @@ build to the same file) and takes `nsh.js` from the crate.
   (`/sports/football`), which `SiteServer::start_at` (`--run`) serves under it; the dev page has `<base href="/">`
   (the dev server serves its files at the root). `nsh.json` `web.history` reaches `createPlayer`'s `history` on
   both pages (the packaged page's `app.history`, the dev page's `HISTORY`, which `with_page_host` fills in); without
-  it the player's default (`window.top === window`) holds. The app ships as minified ES modules
+  it the player's default (`window.top === window`) holds. The dev page's `IDIOM` (`with_page_host` too: the session's
+  `--idiom` or `nsh.json` `dev.idiom`, `run::DevIdiom::resolve`; for `nsh test --target web` the run's,
+  `DevIdiom::for_test`, else `null`, where the test's setup sets the idiom) is the player's `idiom`, over the setup's,
+  so `nsh run --target web --idiom tv` runs the app as on a TV in any browser and `nsh test --target web --idiom tv`
+  tests it so. The app ships as minified ES modules
   (`app.<digest>.js` and `<chunk>.<digest>.js`). An import map resolves original chunk URLs to hashed files;
   transitive entry fonts load before startup and dynamic imports prepare the requested chunk's font dependencies.
   The browser loads static dependencies, module cycles and dynamic chunks itself. No bytecode or hardening

@@ -5,7 +5,11 @@ its workspace), on macOS, Windows and Linux alike. Its purpose is embedding: an 
 GPUI Kit apps (`gpui_component`) show NSH modules anywhere in their element tree. Standalone apps run and are packaged
 with each OS's own backend (AppKit, Win32, GTK 4). `crates/gpui/nsh-gpui-host` is the development host (`nsh run
 --target gpui`): it shows a TSX app in a GPUI window as the apps that embed it show it, with hot reload, and takes
-the steps of `nsh test --target gpui` for checking the backend. The crate started as a port of the Windows backend (`windows.md`): one
+the steps of `nsh test --target gpui` for checking the backend. `AppOptions::idiom` (`Idiom::Desktop` by default) is the
+idiom a view's surface starts in (`initial_environment`; `system::update` never resets it): the host's `--idiom tv`,
+which `nsh run --target gpui --idiom tv` and `nsh.json` `dev.idiom` pass, runs the app as on a TV (`Environment::tv()`,
+`tv={{…}}` props, mobile behavior) on this machine's OS, so a TV's layouts and focus are built on a desktop; the window
+keeps its size (`--window-size`). The crate started as a port of the Windows backend (`windows.md`): one
 retained view per node, NSH draws every view itself, and the input, scrolling, transition, keymap and editing logic is
 the Windows backend's, platform-free. Only drawing, text, the main-thread queue, events and the window are GPUI's.
 User-facing page: `website/docs/gpui.md`.
@@ -312,7 +316,8 @@ The development host takes the steps of `nsh/test` tests (`docs/dev/tooling.md`,
 implements `nsh_testing::agent::Native`. Each call goes to the main thread (`rt::invoke`, then `rt::on_app` for the
 app), finds the window whose `AppView` shows the surface, and acts through the handlers real input goes through
 (`synth.rs`): a press is a mouse down and up at the view's middle (the window's view focused first), a scroll precise
-touchpad events a frame apart, typing `text_input::char_input`, select all the platform's command key with A, back
+touchpad events a frame apart, typing `text_input::char_input`, a key `input::key` (a Tab it does not take wraps
+around, `input::tab_past_ends`, as GPUI's `FocusNext` does in a window with no other tab stop), select all the platform's command key with A, back
 the mouse's back button (it goes back from wherever the focus is), a dialog's answer a click at its button's laid-out
 middle (`system::dialog_point`), a screenshot `synth::frame` as a PNG. A view's bounds are its frame's corners through
 `NshView::to_root`. `dev.rs` hands the test session's model to the surface through the session's own messages, so it

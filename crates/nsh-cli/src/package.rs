@@ -208,6 +208,9 @@ pub(crate) struct AppConfig {
     /// Terminal layout options.
     #[serde(default)]
     pub(crate) tui: TuiConfig,
+    /// How `nsh run` and `nsh dev` run the app.
+    #[serde(default)]
+    pub(crate) dev: DevConfig,
     /// URL schemes that open the app (`"myapp"`: `myapp://...`), which
     /// packages register with the system; the app hears them through
     /// `UrlScheme.on("open", ...)`. [`read_config`] checks them and lowers
@@ -316,6 +319,16 @@ impl AndroidConfig {
 pub(crate) struct TuiConfig {
     /// Width and height of one Cell in points (`8x16` by default).
     pub(crate) points_per_cell: Option<String>,
+}
+
+/// `nsh.json` `"dev"`: development sessions' settings (`nsh run`, `nsh dev`).
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DevConfig {
+    /// The idiom the GPUI host and the web dev page run the app in
+    /// (`"tv"`, `"desktop"`); `--idiom` overrides it
+    /// ([`crate::run::DevIdiom::resolve`]).
+    pub(crate) idiom: Option<crate::run::DevIdiom>,
 }
 
 impl AppConfig {
