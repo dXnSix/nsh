@@ -264,7 +264,7 @@
   host asks there whether to leave the app.
 - **The host's theme overrides**: a host that embeds one app in several branded host apps overrides the app's theme
   tokens (brand colors, `radius`, ...) at run time: Rust `AppView::set_theme_overrides(Option<&str>)` (AppKit, GTK,
-  Win32; the iOS `AppView`'s too), Swift `NshAppView.setThemeOverrides(_:)` (C `nsh_app_set_theme_overrides`), Java
+  Win32; GPUI's takes `cx` as well; the iOS `AppView`'s too), Swift `NshAppView.setThemeOverrides(_:)` (C `nsh_app_set_theme_overrides`), Java
   `NshView.setThemeOverrides`. The value is a theme file in the format of `nsh.json`'s `"theme"` (shadcn's `cssVars`:
   `theme`, `light` and `dark` sections, values as CSS writes them; `components.md` "The theme"). The SDK checks on
   the calling thread that it is JSON (`nsh_core::element::theme_file::check`): text that is not is an error (Swift
@@ -280,8 +280,8 @@
   every app loaded later, a development reload included; `None` / `nil` / `null` gives the app its own theme back. A
   token takes both appearances: one the file gives only in `light` (or `theme`) is that color in dark mode too, as
   in a theme file, so an override that differs in dark mode names it in `dark`. GPUI's `AppView::set_theme` /
-  `set_theme_json` (below) give a whole theme instead, the default's where the file is silent; its
-  `set_theme_overrides(json, cx)` takes overrides as the others do.
+  `set_theme_json` (below) give a whole theme instead, the default's where the file is silent; GPUI's surface keeps
+  the two apart and sends the overrides over the theme (`Tokens::over`), so each stays when the other changes.
 - **The iOS SDK** (`crates/xtask/src/ios.rs`): per platform slice (device, simulator, Catalyst) a static
   `NativeShell.framework` whose binary is `nsh-platform-ios` with feature `embed` (built by `cargo rustc --crate-type
   staticlib`, so the hosts never build or export it) merged by `libtool` with the Swift module, compiled with library

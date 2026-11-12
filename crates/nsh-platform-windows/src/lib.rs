@@ -55,6 +55,7 @@ mod render;
 mod richedit;
 mod scroll;
 mod selectable_view;
+mod session;
 mod shader;
 mod shell;
 mod surface;

@@ -167,6 +167,12 @@ so only load it from your own app's files.
 - `AppView::set_locale(locale, cx)` and `AppView::set_font_scale(scale, cx)` give the app your app's language and
   text size in place of the system's (`None` follows the system's again): `locale()`, `Intl`, `fontScale()` and text
   follow at once ([Device and environment](./device-and-environment.md#in-an-embedding-app)).
+- `AppView::set_theme_overrides(Some(json), cx)` puts your app's brand over the app's [theme](./tailwind.md#theme-tokens):
+  a theme file in the format of `nsh.json`'s `"theme"`, whose tokens win over the app's of the same names in light
+  and dark mode while the app's others stay; classes such as `bg-primary` restyle at once, and apps loaded later start
+  with it (`None` gives the app its own theme back; a file that does not parse is an error and changes nothing). With
+  a whole theme from `set_theme` / `set_theme_json`, the overrides win over that one's tokens, and each stays when the
+  other changes.
 - `AppView::set_reduce_motion(reduce, cx)`, `AppView::set_screen_reader(on, cx)` and `AppView::set_time_zone(zone,
   cx)` do the same for less motion, the screen reader and the time zone (`TimeZone::parse("Asia/Seoul")`):
   `reduceMotion()`, `screenReaderEnabled()` and `localeSettings()`'s `timeZone` follow at once (`Date`'s local times

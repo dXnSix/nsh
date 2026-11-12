@@ -98,7 +98,10 @@ pub use crate::app::run_app;
 #[cfg(feature = "dev")]
 pub use crate::app::set_root;
 pub use crate::{
-    app::{AppOptions, AppSource, AppView, CloseRequest, open_app_window, set_ui_sets},
+    app::{
+        AppOptions, AppSource, AppView, CloseRequest, WindowDisplay, open_app_window, run_app,
+        set_ui_sets,
+    },
     chrome::titlebar_options,
     image::AssetBase,
     keys::nsh_key,

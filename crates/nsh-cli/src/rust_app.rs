@@ -343,6 +343,9 @@ pub(crate) struct RootConfig {
     url_schemes: Vec<String>,
     /// `"window"` (JSON, checked): the main window's launch options.
     window: Option<String>,
+    /// `"capabilities"` (JSON, as this NSH reads it: what it does not know
+    /// left out): what the app may reach.
+    capabilities: Option<String>,
     /// The app's translations (`locales/`) as JSON, written to the
     /// workspace and compiled into the runners.
     translations: Option<PathBuf>,
@@ -357,7 +360,10 @@ pub(crate) fn is_root(entry: &Path) -> bool {
 }
 
 /// The `"rust"` crates of the app whose entry is `entry`, if it has any.
-pub(crate) fn of(entry: &Path) -> anyhow::Result<Option<RustApp>> {
+/// `_unify` (upstream's #1776: the command builds programs for this
+/// machine besides the describing one) is not used: the fork builds each
+/// program with its own features, without #1687's `hack` crate (fork #214).
+pub(crate) fn of(entry: &Path, _unify: bool) -> anyhow::Result<Option<RustApp>> {
     let entry = dunce::canonicalize(entry)
         .with_context(|| format!("entry not found: {}", entry.display()))?;
     let dir = entry.parent().context("entry has no directory")?;
@@ -632,6 +638,21 @@ fn root_config(
             Some(v.to_string())
         }
     };
+    // Read as a TSX app's are (`nsh_bundler::capabilities`): what this NSH
+    // does not know is not granted.
+    let capabilities = match config.get("capabilities") {
+        None => None,
+        Some(v) => {
+            let (capabilities, dropped) = nsh_core::access::Capabilities::from_json_lenient(v)
+                .map_err(|e| anyhow::anyhow!("nsh.json: {e}"))?;
+            for what in dropped {
+                crate::ui::warn(format_args!(
+                    "nsh.json: {what}, not granted (one of a newer NSH, or a typo)"
+                ));
+            }
+            Some(capabilities.to_json().to_string())
+        }
+    };
     let translations = nsh_i18n::read_translations(dir).map_err(|e| anyhow::anyhow!(e))?;
     let translations = if translations.is_empty() {
         None
@@ -648,6 +669,7 @@ fn root_config(
         status_bar,
         url_schemes,
         window,
+        capabilities,
         translations,
     })
 }
@@ -2796,7 +2818,8 @@ fn set_fn(krate: &AppCrate) -> String {
 }
 
 /// `app_root()`, a Rust app's root (`nsh.json` `"root"`, `"theme"`,
-/// `"appearance"`, `"statusBar"`, `"id"`, `"schemes"`, `"window"`) in the crate the generated code links as `krate`, under
+/// `"appearance"`, `"statusBar"`, `"id"`, `"schemes"`, `"window"`,
+/// `"capabilities"`) in the crate the generated code links as `krate`, under
 /// `cfg`.
 fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
     let mut make = format!(
@@ -2820,6 +2843,9 @@ fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
     }
     if !root.url_schemes.is_empty() {
         make.push_str(&format!("\n        .url_schemes({:?})", root.url_schemes));
+    }
+    if let Some(capabilities) = &root.capabilities {
+        make.push_str(&format!("\n        .capabilities_json({capabilities:?})"));
     }
     if let Some(appearance) = &root.appearance {
         let variant = if appearance == "dark" {
@@ -3218,6 +3244,7 @@ mod tests {
                 status_bar: None,
                 url_schemes: Vec::new(),
                 window: None,
+                capabilities: None,
                 translations: None,
             };
             let app = app(&dir, &[(package, dir.join("native"))], Some(root));
@@ -3477,6 +3504,7 @@ mod tests {
                 window: Some(
                     r#"{"defaultSize":{"width":900,"height":600},"title":"Notes"}"#.into(),
                 ),
+                capabilities: None,
                 translations: None,
             },
         );
@@ -3496,6 +3524,48 @@ mod tests {
     }
 
     #[test]
+    fn a_rust_app_declares_its_capabilities() {
+        let dir = std::env::temp_dir().join(format!("nsh-rust-caps-{}", std::process::id()));
+        let ws = dir.join(".nsh/rust");
+        std::fs::create_dir_all(&ws).unwrap();
+        let config = |json: &str| serde_json::from_str::<serde_json::Value>(json).unwrap();
+        let root = super::root_config(&dir, &config(r#"{ "root": "App" }"#), &ws).unwrap();
+        assert_eq!(root.capabilities, None);
+        // What this NSH does not know is not granted; the rest is kept.
+        let root = super::root_config(
+            &dir,
+            &config(
+                r#"{ "root": "App", "capabilities": { "openUrl": { "schemes": ["https"] }, "bluetooth": true } }"#,
+            ),
+            &ws,
+        )
+        .unwrap();
+        let json = root.capabilities.clone().unwrap();
+        let read = nsh_core::access::Capabilities::from_json(&config(&json)).unwrap();
+        let expected = nsh_core::access::Capabilities::from_json(&config(
+            r#"{ "openUrl": { "schemes": ["https"] } }"#,
+        ))
+        .unwrap();
+        assert_eq!(read, expected);
+        let code = super::root_fn("", "app_native", &root);
+        assert!(
+            code.contains(&format!(".capabilities_json({json:?})")),
+            "{code}"
+        );
+        // A declaration that is no object grants nothing.
+        let root = super::root_config(
+            &dir,
+            &config(r#"{ "root": "App", "capabilities": 1 }"#),
+            &ws,
+        )
+        .unwrap();
+        let read = nsh_core::access::Capabilities::from_json(&config(&root.capabilities.unwrap()))
+            .unwrap();
+        assert_eq!(read, nsh_core::access::Capabilities::default());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_rust_app_gets_runners_without_js() {
         let dir = std::env::temp_dir().join(format!("nsh-rust-runners-{}", std::process::id()));
         let app = app(
@@ -3509,6 +3579,7 @@ mod tests {
                 status_bar: None,
                 url_schemes: Vec::new(),
                 window: None,
+                capabilities: None,
                 translations: None,
             }),
         );
@@ -4364,6 +4435,7 @@ panic = \"abort\"
                 status_bar: None,
                 url_schemes: Vec::new(),
                 window: None,
+                capabilities: None,
                 translations: None,
             }),
         );
