@@ -17,6 +17,8 @@
 //! runtime/gpui/nsh-gpui-host[.exe]           development host (GPUI, this OS)
 //! runtime/android/release/             classes.dex + lib/<abi>/libnsh.so
 //! runtime/android/dev/                 the same with development support
+//! runtime/tizen/{release,dev}/         Nsh.Tizen.Host.dll + <arch>/libnsh.so (Samsung TVs)
+//! runtime/tizen/targets/               the Tizen target specs, for apps' Rust crates
 //! runtime/web/nsh.wasm                 the web runtime (`nsh-platform-web`)
 //!                                      (`nsh-browser.wasm`: linkable, `nsh package` links each app's from it)
 //! runtime/web/nsh.js                   the DOM runtime that loads it
@@ -261,6 +263,105 @@ fn android_existing(dir: PathBuf, dev: bool) -> anyhow::Result<PathBuf> {
         dir.display(),
         if dev { " --dev" } else { "" }
     )
+}
+
+/// The Tizen runtime's variant directory (`Nsh.Tizen.Host.dll`,
+/// `<arch>/libnsh.so`), with development support or not, with a library for
+/// each of `archs`; an app with Rust crates of its own gets its own
+/// libraries ([`crate::rust_app::RustApp::tizen`]).
+pub(crate) fn tizen(dev: bool, archs: &[crate::tizen::Arch]) -> anyhow::Result<PathBuf> {
+    let prebuilt = prebuilt_tizen(dev, archs)?;
+    match crate::rust_app::current() {
+        Some(app) => app.tizen(&prebuilt, dev, archs),
+        None => Ok(prebuilt),
+    }
+}
+
+/// The Tizen target specs, the nightly they build with and the symbol
+/// allowlist a TV library is checked against (`runtime/tizen/targets`),
+/// for an app's Rust crates.
+pub(crate) fn tizen_targets() -> anyhow::Result<PathBuf> {
+    let release = prebuilt_tizen(false, &[])?;
+    let targets = release
+        .parent()
+        .context("the Tizen runtime's directory")?
+        .join("targets");
+    for (file, what) in [
+        ("toolchain", "target specs"),
+        (crate::tizen::ALLOWLIST, "symbol allowlist"),
+    ] {
+        if !targets.join(file).exists() {
+            bail!(
+                "the Tizen runtime has no {what} at {} (an older tizen component: `nsh component remove tizen`, then `nsh component add tizen`)\n\
+                 in a nsh checkout, build it with: cargo xtask tizen",
+                targets.join(file).display()
+            );
+        }
+    }
+    Ok(targets)
+}
+
+fn prebuilt_tizen(dev: bool, archs: &[crate::tizen::Arch]) -> anyhow::Result<PathBuf> {
+    let variant = if dev { "dev" } else { "release" };
+    if let Some(root) = env::var_os("NSH_RUNTIME") {
+        return tizen_existing(PathBuf::from(root).join("tizen").join(variant), archs, dev);
+    }
+    let exe = cli_exe()?;
+    let bin = exe.parent().context("cli has no parent directory")?;
+    let dist = bin.join("../runtime/tizen").join(variant);
+    let host = dist.join(crate::tizen::HOST);
+    if !host.exists() {
+        add_component("tizen", &host)?;
+    }
+    if host.exists() {
+        return tizen_existing(dist, archs, dev);
+    }
+    // Cargo checkout: `cargo xtask tizen` output (dXn.GpuiTizen's cross
+    // driver, `docs/dev/tizen.md`).
+    if let Some(root) = checkout(bin) {
+        let built = root.join("target/tizen").join(variant);
+        let missing = !built.join(crate::tizen::HOST).exists()
+            || archs
+                .iter()
+                .any(|arch| !built.join(arch.name()).join("libnsh.so").exists());
+        if missing {
+            let names: Vec<&str> = archs.iter().map(|arch| arch.name()).collect();
+            let arch = names.join(",");
+            let mut args = vec!["xtask", "tizen", "--variant", variant];
+            if !arch.is_empty() {
+                args.extend(["--arch", &arch]);
+            }
+            cargo(&root, &args, "the Tizen runtime")?;
+        }
+        return tizen_existing(built, archs, dev);
+    }
+    tizen_existing(dist, archs, dev)
+}
+
+fn tizen_existing(
+    dir: PathBuf,
+    archs: &[crate::tizen::Arch],
+    dev: bool,
+) -> anyhow::Result<PathBuf> {
+    let hint = if dev { " --variant dev" } else { "" };
+    if !dir.join(crate::tizen::HOST).exists() {
+        bail!(
+            "the Tizen runtime is not at {}\nin a nsh checkout, build it with: cargo xtask tizen{hint}",
+            dir.display()
+        );
+    }
+    for arch in archs {
+        let library = dir.join(arch.name()).join("libnsh.so");
+        if !library.exists() {
+            bail!(
+                "the Tizen runtime has no {} library at {}\nin a nsh checkout, build it with: cargo xtask tizen{hint} --arch {}",
+                arch.name(),
+                library.display(),
+                arch.name()
+            );
+        }
+    }
+    Ok(dir)
 }
 
 /// The web runtime: the engine (`nsh.wasm`) and the DOM runtime that

@@ -117,8 +117,13 @@ pub(crate) fn test(
     if browser.is_some() && target.is_none() {
         bail!("--browser goes with --target web");
     }
-    if device.is_some() && target != Some(crate::run::Target::Ios) {
-        bail!("--device goes with --target ios");
+    if device.is_some()
+        && !matches!(
+            target,
+            Some(crate::run::Target::Ios | crate::run::Target::Tizen)
+        )
+    {
+        bail!("--device goes with --target ios or tizen");
     }
     if display.is_some() && target != Some(crate::run::Target::Macos) {
         bail!("--display goes with --target macos");
@@ -969,7 +974,7 @@ test src/lib.rs - App (line 3) ... ok
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(
             err.map(|e| e.to_string()).as_deref(),
-            Some("--device goes with --target ios")
+            Some("--device goes with --target ios or tizen")
         );
     }
 

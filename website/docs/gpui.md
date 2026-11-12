@@ -157,8 +157,9 @@ so only load it from your own app's files.
   widgets, overlays). False by default.
 - `AppView::connect_dev_server(url, cx)` (feature `dev`) loads the app from `nsh dev` and reloads it as you edit,
   with the error overlay over the view; `AppView::on_error` keeps hearing the app's errors.
-  `AppView::connect_dev_server_with(url, transport, cx)` does the same over the connections your `nsh_dev::DevTransport`
-  makes, for a device that reaches your machine through a port mapping.
+  `AppView::connect_dev_server_with(url, transport, platform, cx)` does the same over the connections your
+  `nsh_dev::DevTransport` makes, for a device that reaches your machine through a port mapping; `platform` (a
+  `nsh_dev::protocol::HostPlatform`) tells the dev server what kind of host it is.
 - `AppView::on_app_error(|error| …)` hears the app's errors: `error.kind` (the app failed to load, an uncaught
   exception, the VM stopped), `error.is_fatal()` when no JS of the app runs again, `error.message`, `error.stack`
   and `error.package` (the id and build of the signed package it came from). `AppView::on_error` gets the same
@@ -199,7 +200,11 @@ What draws or behaves differently from the native desktop backends:
   gradients paint it in one color, `strokeText` fills, its shadows are not blurred, and composite operations and
   `clearRect` do not apply to it.
 - **Scroll views** do not zoom (`zoomTo` and the zoom props are ignored).
-- **Video** plays on Linux (GStreamer); on macOS and Windows a video shows a placeholder and reports `onError`.
+- **Video** plays on Linux (GStreamer) and on Samsung TVs (the TV's player, on its video plane or, inside turning,
+  fading or clipped views, as a texture); on macOS and Windows a video shows a placeholder and reports `onError`.
+  When a TV takes its decoder from the app (another app, or around a pause and resume), the video reports `onBuffer`
+  with `true`, and once the app is active again it goes on where it was, as `paused` says, with `onBuffer` `false`
+  (`onError` if the TV does not give the decoder back).
 - **Web views** are native views above everything NSH draws at their place. On Linux they need X11 (see
   [Requirements](#requirements)); where pages stay black under Xwayland ("Failed to create GBM buffer" in the log),
   run the app with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. On macOS and Windows clipping ancestors do not cut them and

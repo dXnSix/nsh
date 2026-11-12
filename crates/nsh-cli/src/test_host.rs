@@ -32,7 +32,8 @@ const CONNECT: Duration = Duration::from_secs(60);
 /// Starts the apps tests open on `target`'s host; `browser` is the one
 /// `--target web` runs them in (else the one found on this machine); `fps`
 /// has the host log its performance monitor's readings; `device` is the iOS
-/// simulator (name or UDID); `display` (one-based)
+/// simulator (name or UDID) or the TV `--target tizen` runs them on (its
+/// `sdb` serial); `display` (one-based)
 /// is the display the macOS host opens its windows on (by default a
 /// secondary one when there is one); `foreground` lets the macOS host's apps
 /// become the active app, which run in the background otherwise; `idiom`
@@ -63,8 +64,8 @@ pub(crate) fn starter(
     {
         anyhow::bail!("--fps goes with --target linux, macos, windows or ios");
     }
-    if device.is_some() && target != Target::Ios {
-        anyhow::bail!("--device goes with --target ios");
+    if device.is_some() && !matches!(target, Target::Ios | Target::Tizen) {
+        anyhow::bail!("--device goes with --target ios or tizen");
     }
     if display.is_some() && target != Target::Macos {
         anyhow::bail!("--display goes with --target macos");
@@ -81,6 +82,7 @@ pub(crate) fn starter(
         Target::TizenWeb => return crate::test_web::starter(browser, true, None),
         Target::Ios => return crate::test_ios::starter(work, fps, device),
         Target::Android => return crate::test_android::starter(work),
+        Target::Tizen => return crate::test_tizen::starter(work, device),
         _ => {}
     }
     if !matches!(
@@ -88,7 +90,7 @@ pub(crate) fn starter(
         Target::Macos | Target::Linux | Target::Windows | Target::Gpui | Target::Tui
     ) {
         anyhow::bail!(
-            "nsh test --target takes macos, linux, windows, gpui, tui, web, tizen-web, ios or android"
+            "nsh test --target takes macos, linux, windows, gpui, tui, web, tizen-web, ios, android or tizen"
         );
     }
     // Built (in a checkout) or found once, before the first test.
@@ -124,6 +126,9 @@ pub(crate) fn host_target(target: Target) -> nsh_testing::HostTarget {
         Target::Web => ("web", Platform::Web, true),
         // A Tizen web app reports the web, in the TV idiom.
         Target::TizenWeb => ("tizen-web", Platform::Web, true),
+        // A TV's app fills its screen; `open`'s platforms have no Tizen,
+        // whose system is Linux underneath.
+        Target::Tizen => ("tizen", Platform::Linux, false),
         Target::Gpui => ("gpui", desktop, true),
         // The terminal reports this machine's OS, in the terminal idiom.
         Target::Tui => ("tui", desktop, true),
@@ -404,6 +409,53 @@ pub(crate) fn indented(text: &str) -> String {
 mod tests {
     use super::*;
 
+    /// A TV's app fills its screen, and the desktop hosts' flags are
+    /// refused before the TV is looked for.
+    #[test]
+    fn tizen_runs_apps_full_screen_without_the_desktops_flags() {
+        let host = host_target(Target::Tizen);
+        assert_eq!(host.name, "tizen");
+        assert!(!host.sized);
+        for (fps, display, foreground, message) in [
+            (
+                true,
+                None,
+                false,
+                "--fps goes with --target linux, macos, windows or ios",
+            ),
+            (false, Some(2), false, "--display goes with --target macos"),
+            (false, None, true, "--foreground goes with --target macos"),
+        ] {
+            let err = starter(
+                Target::Tizen,
+                None,
+                Path::new("."),
+                fps,
+                None,
+                display,
+                foreground,
+                None,
+            )
+            .err();
+            assert_eq!(err.map(|e| e.to_string()).as_deref(), Some(message));
+        }
+        let err = starter(
+            Target::Tizen,
+            Some(Path::new("chrome")),
+            Path::new("."),
+            false,
+            None,
+            None,
+            false,
+            None,
+        )
+        .err();
+        assert_eq!(
+            err.map(|e| e.to_string()).as_deref(),
+            Some("--browser goes with --target web or tizen-web")
+        );
+    }
+
     /// `--foreground` goes with the macOS host alone: the other targets
     /// refuse it before anything is built or started.
     #[test]
@@ -425,10 +477,11 @@ mod tests {
         }
     }
 
-    /// `--device` names an iOS simulator: the other targets refuse it before
-    /// anything is built or started.
+    /// `--device` names an iOS simulator or the TV `--target tizen` runs
+    /// the apps on: the other targets refuse it before anything is built or
+    /// started.
     #[test]
-    fn device_is_for_the_ios_host_only() {
+    fn a_device_is_for_the_tizen_target_only_or_ios() {
         for target in [
             Target::Macos,
             Target::Linux,
@@ -436,6 +489,7 @@ mod tests {
             Target::Gpui,
             Target::Tui,
             Target::Web,
+            Target::TizenWeb,
             Target::Android,
         ] {
             let err = starter(
@@ -443,7 +497,7 @@ mod tests {
                 None,
                 Path::new("."),
                 false,
-                Some("iPhone 16"),
+                Some("192.168.1.20:26101"),
                 None,
                 false,
                 None,
@@ -451,7 +505,7 @@ mod tests {
             .err();
             assert_eq!(
                 err.map(|e| e.to_string()).as_deref(),
-                Some("--device goes with --target ios"),
+                Some("--device goes with --target ios or tizen"),
                 "{target:?}"
             );
         }

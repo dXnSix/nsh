@@ -46,6 +46,11 @@ pub(crate) enum PackageTarget {
     /// Samsung TVs: a Tizen web app (`.wgt`), the web's site with
     /// `config.xml` and the TV shim, signed with `tz` (`--sign <profile>`).
     TizenWeb,
+    /// Samsung TVs natively: a TPK (the C# host, `libnsh.so` per `--arch`,
+    /// the bundle, `tizen-manifest.xml`), signed with `tz` (`--sign
+    /// <profile>`); several architectures also make the multi-architecture
+    /// `.zip`.
+    Tizen,
     /// Packages made with the GPUI runner, which is gone: GPUI is the
     /// backend for embedding in GPUI apps. Refused with the OS's own target
     /// to use instead ([`PackageTarget::desktop`]).
@@ -241,7 +246,8 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     pub(crate) android: AndroidConfig,
     /// What Tizen packages (Samsung TVs) set in their manifest: the Tizen
-    /// web app's `config.xml` (`tizen_web.rs`).
+    /// web app's `config.xml` (`tizen_web.rs`), the TPK's
+    /// `tizen-manifest.xml` (`tizen.rs`).
     #[serde(default)]
     pub(crate) tizen: TizenConfig,
 }
@@ -616,6 +622,9 @@ pub(crate) struct PackageOptions<'a> {
     ///
     /// [`android::DEFAULT_ABIS`]: crate::android::DEFAULT_ABIS
     pub(crate) abis: &'a [String],
+    /// Tizen: the TPKs' architectures (empty: armv7l, or with `run` the
+    /// TV's).
+    pub(crate) tizen_archs: &'a [crate::tizen::Arch],
     /// Android: an APK or an App Bundle.
     pub(crate) format: crate::android::Format,
     /// macOS: the processors the app runs on (`None`: this Mac's).
@@ -659,7 +668,7 @@ impl AppIcon {
             PackageTarget::Macos => "macos",
             PackageTarget::Windows => "windows",
             PackageTarget::Web => "web",
-            PackageTarget::TizenWeb => "tizen",
+            PackageTarget::TizenWeb | PackageTarget::Tizen => "tizen",
             PackageTarget::Gpui => return None,
         };
         match self {
@@ -981,8 +990,11 @@ pub(crate) fn package(options: PackageOptions<'_>) -> anyhow::Result<()> {
     if !options.abis.is_empty() && options.target != PackageTarget::Android {
         bail!("--abi only applies to --target android");
     }
+    if !options.tizen_archs.is_empty() && options.target != PackageTarget::Tizen {
+        bail!("--arch only applies to --target macos and tizen");
+    }
     if options.arch.is_some() && options.target != PackageTarget::Macos {
-        bail!("--arch only applies to --target macos");
+        bail!("--arch only applies to --target macos and tizen");
     }
     if options.format != crate::android::Format::Apk {
         if options.target != PackageTarget::Android {
@@ -1057,6 +1069,9 @@ pub(crate) fn package(options: PackageOptions<'_>) -> anyhow::Result<()> {
         PackageTarget::TizenWeb => {
             return crate::tizen_web::package(&options, config, &name, &id, &built);
         }
+        PackageTarget::Tizen => {
+            return crate::tizen::package(&options, config, &name, &id, &built);
+        }
         PackageTarget::Gpui => unreachable!("refused above"),
     };
     let runner = runtime::file(platform, true)?;
@@ -1108,6 +1123,7 @@ pub(crate) fn package(options: PackageOptions<'_>) -> anyhow::Result<()> {
         | PackageTarget::Windows
         | PackageTarget::Web
         | PackageTarget::TizenWeb
+        | PackageTarget::Tizen
         | PackageTarget::Gpui => "iphonesimulator",
     };
     let mut info = info_plist(&name, &id, &executable, config, sdk)?;
@@ -1150,6 +1166,7 @@ pub(crate) fn package(options: PackageOptions<'_>) -> anyhow::Result<()> {
         | PackageTarget::Windows
         | PackageTarget::Web
         | PackageTarget::TizenWeb
+        | PackageTarget::Tizen
         | PackageTarget::Gpui => {
             unreachable!("packaged above")
         }
@@ -2145,12 +2162,13 @@ mod tests {
                 arch: Some(Arch::X86_64),
                 run: false,
                 asset_url: None,
+                tizen_archs: &[],
                 probe: false,
             })
             .unwrap_err();
             assert_eq!(
                 error.to_string(),
-                "--arch only applies to --target macos",
+                "--arch only applies to --target macos and tizen",
                 "{target:?}"
             );
         }

@@ -5670,6 +5670,7 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
+ "dxn_gpui_tizen",
  "fontdb",
  "futures-channel",
  "futures-util",

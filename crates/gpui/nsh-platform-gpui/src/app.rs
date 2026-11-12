@@ -453,15 +453,17 @@ impl AppView {
     /// makes, for a device that reaches the developer's machine through a
     /// tool's port mapping rather than the network (a TV, `sdb`): the
     /// session speaks to the server at `url` (its host and path, and where
-    /// the app's assets are) over each.
+    /// the app's assets are) over each, the host telling the server it is a
+    /// `platform` one (whose install command `nsh dev` shows).
     #[cfg(feature = "dev")]
     pub fn connect_dev_server_with(
         &self,
         url: impl Into<String>,
         transport: Box<dyn nsh_dev::DevTransport>,
+        platform: nsh_dev::protocol::HostPlatform,
         cx: &mut Context<Self>,
     ) {
-        crate::dev::start(self, url.into(), false, Some(transport), cx);
+        crate::dev::start(self, url.into(), false, Some((transport, platform)), cx);
     }
 
     /// Registers native component `name` (`nativeComponent(name, ...)` in

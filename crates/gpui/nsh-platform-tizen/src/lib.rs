@@ -45,6 +45,14 @@ mod tv;
 
 pub use nsh_platform_gpui::set_ui_sets;
 
+/// Whether this build defines the library's entry, `nsh_tizen_main`
+/// (feature `entry`, a default one). The library of an app with Rust crates
+/// defines its own, which calls [`set_ui_sets`] and [`main`] or
+/// [`run_rust`], and depends on this crate without it: its generated code
+/// asserts this is `false`, so that the two cannot meet in one library.
+#[doc(hidden)]
+pub const ENTRY: bool = cfg!(feature = "entry");
+
 /// Runs the app packaged with the library (or, built with `dev`, the
 /// development runtime) until it exits: `nsh_tizen_main`'s body, for the
 /// host of an app with Rust components of its own, which calls
@@ -76,12 +84,13 @@ pub unsafe fn run_rust(
     unsafe { tizen::main(argc, argv, Some(root)) }
 }
 
-/// The TV library's one export: the C# host's P/Invoke.
+/// The TV library's one export: the C# host's P/Invoke (feature `entry`:
+/// the prebuilt runtime's, which runs the packaged bundle).
 ///
 /// # Safety
 ///
 /// Called by the host with `argc` NUL-terminated strings in `argv`.
-#[cfg(target_vendor = "tizen")]
+#[cfg(all(target_vendor = "tizen", feature = "entry"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nsh_tizen_main(
     argc: core::ffi::c_int,

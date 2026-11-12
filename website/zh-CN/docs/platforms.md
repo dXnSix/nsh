@@ -22,6 +22,7 @@ NSH 运行在手机、桌面、终端和网页上：iOS、Android、macOS、Wind
 | [Linux](./linux.md) | GTK 4 控件；Pango | GTK 4.14+ | `nsh run`（Linux 上的默认目标） | 一个目录和一个 `.tar.gz` |
 | [GPUI](./gpui.md) | GPUI；GPUI 的文字系统 | macOS、Windows、Linux（Vulkan） | 在你的 GPUI 应用里；TSX 也可用 `nsh run --target gpui` | 随嵌入它的 GPUI 应用发布 |
 | [Web](./web.md) | HTML 与 CSS；浏览器的字体 | 现代浏览器，桌面和手机；三星电视（`tizen-web`） | `nsh run --target web` | 一个静态网站；一个 Tizen Web 应用（`.wgt`） |
+| [Tizen](./tizen.md) | 电视 GPU 上的 GPUI；应用的字体 | 三星电视（Tizen 8.0 及以上）、Tizen 模拟器 | `nsh run --target tizen` | 一个签名的 TPK |
 | [TUI](./tui.md) | 在终端 Cell 网格上用 ratatui 绘制；终端的字体 | macOS、Windows 和 Linux 上的终端 | `nsh run --target tui` | 随嵌入它的终端应用发布 |
 
 - **[GPUI](./gpui.md)** 用姊妹项目 GPUI Kit 所基于的 [GPUI](https://gpui-kit.com) 绘制应用，在 macOS、Windows 和 Linux 上表现一致：它是嵌入 GPUI 和 GPUI Kit 应用的后端，这些应用把 `AppView` 放进自己的元素树。独立的桌面应用用各操作系统自己的后端（AppKit、Win32、GTK 4）运行和打包。
@@ -40,10 +41,10 @@ Rust 应用（`nsh.json` 写明 `"root"` 根组件）在自己的目录里运行
 ```sh
 # Rust 应用，在它的目录里
 nsh run --target macos             # 或 ios、android、windows、linux、tui、web、catalyst
-nsh package --target macos         # 或 ios、ios-simulator、android、windows、linux、web、tizen-web
+nsh package --target macos         # 或 ios、ios-simulator、android、windows、linux、web、tizen-web、tizen
 
 # TSX 应用
-nsh run App.tsx --target macos     # 或 ios、android、windows、linux、gpui、tui、web、tizen-web、catalyst
+nsh run App.tsx --target macos     # 或 ios、android、windows、linux、gpui、tui、web、tizen-web、tizen、catalyst
 nsh package App.tsx --target macos
 ```
 
