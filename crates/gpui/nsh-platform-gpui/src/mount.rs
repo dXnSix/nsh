@@ -151,7 +151,7 @@ impl Mounter {
             MountItem::Remove { id } => {
                 if let Some(view) = &self.get(*id) {
                     crate::input::removed(surface, view);
-                    crate::key_focus::detached(surface, view);
+                    crate::focus::detached(surface, view);
                     crate::text_input::removing(surface, view);
                     crate::file_drop::invalidate(surface, *id);
                     crate::navigation::removing(surface, view);
@@ -164,7 +164,7 @@ impl Mounter {
             MountItem::Delete { id } => {
                 if let Some(view) = self.views.remove(*id) {
                     crate::input::removed(surface, &view);
-                    crate::key_focus::detached(surface, &view);
+                    crate::focus::detached(surface, &view);
                     crate::text_input::removing(surface, &view);
                     crate::file_drop::invalidate(surface, *id);
                     crate::navigation::removing(surface, &view);
