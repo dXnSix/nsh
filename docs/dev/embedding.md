@@ -262,6 +262,16 @@
   app's state (`lifecycle()`), over what the windows' activation and visibility give, and `on_unhandled_back(f)` hands
   the embedding app the back presses nothing in the app took (no modal, stack or `onBackPress` listener): the TV's
   host asks there whether to leave the app.
+- **The host's own floating UI** (the safe area): a host that draws its own UI over the view (a tab bar floating over
+  the content) adds it to the safe area, so the app's content scrolls under that UI and still ends clear of it
+  (`safeAreaInsets()`, `env(safe-area-inset-*)`). On iOS that is UIKit's own: the surface reads the view's
+  `safeAreaInsets` (`surface.rs`), which the host's `additionalSafeAreaInsets` on its view controller adds to. On
+  Android the view publishes the system bars' insets it sits under, so Java `NshView.setAdditionalSafeAreaInsets(left,
+  top, right, bottom)` (px, on the UI thread) adds the host's on top in `publishEnvironment`; the keyboard still
+  measures from the view's edge. All zeros takes them away. When the safe area changes (the host's insets or the
+  system bars), the view reports every mounted screen's insets again (`Mounter.reportAllScreenInsets`), so the pages
+  already shown in a `NavStack` follow. A host's UI floating over the content is a mobile pattern: the desktop hosts
+  lay their own UI out beside the view.
 - **The host's theme overrides**: a host that embeds one app in several branded host apps overrides the app's theme
   tokens (brand colors, `radius`, ...) at run time: Rust `AppView::set_theme_overrides(Option<&str>)` (AppKit, GTK,
   Win32; GPUI's takes `cx` as well; the iOS `AppView`'s too), Swift `NshAppView.setThemeOverrides(_:)` (C `nsh_app_set_theme_overrides`), Java
