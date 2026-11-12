@@ -395,6 +395,21 @@ pub(crate) fn focused(surface: &Surface) -> Option<NshView> {
     None
 }
 
+/// View `view` was removed (or deleted): if it holds the view with this
+/// module's focus, the focus goes at once, with no `onBlur` to a view that
+/// no longer exists (a removal animation keeps it attached a while, when
+/// Return and Space must not press it). Its state is cleared all the same:
+/// a kept node may be inserted again.
+pub(crate) fn detached(surface: &Surface, view: &NshView) {
+    let Some(stop) = focused(surface) else {
+        return;
+    };
+    if crate::input::holds(view, &stop) {
+        surface.focus.view.borrow_mut().take();
+        crate::input::set_state(surface, &stop, FOCUSED, false);
+    }
+}
+
 /// The view with the keyboard focus: the focused field, else the view
 /// with this module's.
 pub(crate) fn current(surface: &Surface) -> Option<NshView> {
