@@ -113,7 +113,7 @@ pub(crate) fn init_thread() {
 
 /// UI fonts of Linux desktops, in order of preference: GPUI's own name for
 /// the UI font stands for a font apps rarely have there.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_vendor = "tizen")))]
 const UI_FAMILIES: &[&str] = &[
     "Adwaita Sans",
     "Cantarell",
@@ -122,16 +122,99 @@ const UI_FAMILIES: &[&str] = &[
     "DejaVu Sans",
     "Liberation Sans",
 ];
+/// A Tizen TV's ([`tv`], whose functions match them ignoring case and
+/// spaces in its place).
+#[cfg(target_vendor = "tizen")]
+#[allow(dead_code)]
+const UI_FAMILIES: &[&str] = tv::FAMILIES;
 #[cfg(not(target_os = "linux"))]
 const UI_FAMILIES: &[&str] = &[];
 
 /// Fonts tried before the system's fallback for characters the font
 /// lacks (Linux): symbols with a text presentation (♥, ✓, ★) take a text
-/// font there, as fontconfig gives Pango, rather than an emoji font.
-#[cfg(target_os = "linux")]
+/// font there, as fontconfig gives Pango, rather than an emoji font. On a
+/// Tizen TV, the TV's families and their scripts' ([`tv::fallbacks`]).
+#[cfg(all(target_os = "linux", not(target_vendor = "tizen")))]
 const TEXT_FALLBACKS: &[&str] = &["DejaVu Sans", "Noto Sans Symbols 2", "Noto Sans Symbols"];
 #[cfg(not(target_os = "linux"))]
 const TEXT_FALLBACKS: &[&str] = &[];
+
+/// The UI fonts of Samsung's Tizen TVs.
+#[cfg(any(test, target_vendor = "tizen"))]
+mod tv;
+
+/// The candidates for the UI font among the `installed` families (by
+/// lowercase name), in order of preference.
+fn ui_candidates(installed: &FxHashMap<String, String>) -> Vec<&String> {
+    #[cfg(target_vendor = "tizen")]
+    {
+        tv::ui_candidates(installed.values())
+    }
+    #[cfg(not(target_vendor = "tizen"))]
+    {
+        UI_FAMILIES
+            .iter()
+            .filter_map(|f| installed.get(&f.to_lowercase()))
+            .collect()
+    }
+}
+
+/// The preferred UI family that is installed: the first of [`UI_FAMILIES`]
+/// (on a TV, matched ignoring case and spaces, as [`tv`] matches them).
+fn preferred_ui(installed: &FxHashMap<String, String>) -> Option<&String> {
+    #[cfg(target_vendor = "tizen")]
+    {
+        tv::ui_candidates(installed.values()).into_iter().next()
+    }
+    #[cfg(not(target_vendor = "tizen"))]
+    {
+        UI_FAMILIES
+            .iter()
+            .find_map(|f| installed.get(&f.to_lowercase()))
+    }
+}
+
+/// Whether `family` is one of [`UI_FAMILIES`].
+fn is_ui_family(family: &str) -> bool {
+    #[cfg(target_vendor = "tizen")]
+    {
+        tv::is_ui_family(family)
+    }
+    #[cfg(not(target_vendor = "tizen"))]
+    {
+        UI_FAMILIES.iter().any(|f| f.eq_ignore_ascii_case(family))
+    }
+}
+
+/// Whether two family names name the same family (on a TV, ignoring case
+/// and spaces too).
+fn same_family(a: &str, b: &str) -> bool {
+    #[cfg(target_vendor = "tizen")]
+    {
+        tv::same_family(a, b)
+    }
+    #[cfg(not(target_vendor = "tizen"))]
+    {
+        a == b
+    }
+}
+
+/// The fonts tried for what UI font `ui` lacks, among the `installed`
+/// families (by lowercase name), before the system's fallback.
+fn text_fallbacks(installed: &FxHashMap<String, String>, ui: &str) -> Vec<String> {
+    #[cfg(target_vendor = "tizen")]
+    {
+        tv::fallbacks(installed.values(), ui)
+    }
+    #[cfg(not(target_vendor = "tizen"))]
+    {
+        let _ = ui;
+        TEXT_FALLBACKS
+            .iter()
+            .filter_map(|f| installed.get(&f.to_lowercase()).cloned())
+            .collect()
+    }
+}
 
 /// Fonts with text glyphs for symbols that are text by default (♥, ✓,
 /// ★) but that a fallback may take from an emoji font, which ignores the
@@ -236,9 +319,8 @@ fn family_candidates(name: &str) -> Vec<&str> {
 /// weight only, so a variable UI font (GNOME's Adwaita Sans) would draw
 /// every weight alike.
 fn ui_font(system: &TextSystem, installed: &FxHashMap<String, String>) -> String {
-    UI_FAMILIES
-        .iter()
-        .filter_map(|f| installed.get(&f.to_lowercase()))
+    ui_candidates(installed)
+        .into_iter()
         .find(|family| {
             let font = gpui::font(family.to_string());
             system.resolve_font(&font) != system.resolve_font(&font.clone().bold())
@@ -403,12 +485,10 @@ impl GpuiTextEngine {
             } else {
                 self.ui.to_string()
             };
-            let desktop = UI_FAMILIES
-                .iter()
-                .find_map(|f| installed.get(&f.to_lowercase()));
+            let desktop = preferred_ui(&installed);
             fonts.ui_lines = match desktop {
                 // Only for a UI font this engine chose (one of the list).
-                Some(d) if *d != ui && UI_FAMILIES.iter().any(|f| f.eq_ignore_ascii_case(&ui)) => {
+                Some(d) if !same_family(d, &ui) && is_ui_family(&ui) => {
                     let id = self.system.resolve_font(&gpui::font(d.clone()));
                     let em = px(1.0);
                     Some((
@@ -424,10 +504,7 @@ impl GpuiTextEngine {
                 .map(|f| SharedString::from(f.clone()))
                 .collect();
             fonts.ui = SharedString::from(ui);
-            let fallbacks: Vec<String> = TEXT_FALLBACKS
-                .iter()
-                .filter_map(|f| installed.get(&f.to_lowercase()).cloned())
-                .collect();
+            let fallbacks = text_fallbacks(&installed, &fonts.ui);
             fonts.fallbacks =
                 (!fallbacks.is_empty()).then(|| gpui::FontFallbacks::from_fonts(fallbacks));
             fonts.installed = installed;
@@ -3033,7 +3110,8 @@ fn unit_at(text: &str, index: u32, unit: Unit) -> (u32, u32) {
     }
 }
 
-#[cfg(test)]
+// The platform's text system shapes them (feature `platform`).
+#[cfg(all(test, feature = "platform"))]
 mod tests {
     use std::sync::OnceLock;
 

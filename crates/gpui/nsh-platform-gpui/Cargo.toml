@@ -12,7 +12,12 @@ repository.workspace = true
 workspace = true
 
 [features]
-default = ["js", "webview"]
+default = ["platform", "js", "webview"]
+# GPUI's platform (`gpui_platform`: its windows, event loop and text system
+# on each OS): `run_app` and the `embed` example. Without it the crate only
+# draws in a GPUI app whose platform the host brings, as on a platform GPUI
+# Fast does not ship (a Samsung TV's Tizen, `docs/dev/gpui.md`).
+platform = ["dep:gpui_platform"]
 # JS apps (bundles, signed packages); without it, the library only runs a
 # Rust app and links no QuickJS.
 js = ["nsh-engine/js"]
@@ -21,14 +26,15 @@ dev = ["js", "dep:nsh-dev", "dep:nsh-testing"]
 # Screenshots on macOS and Windows (`nsh test --target gpui`'s): GPUI
 # renders the window's frame offscreen (its `test-support`; development
 # hosts only).
-shot = ["gpui/test-support", "gpui_platform/test-support"]
+shot = ["gpui/test-support", "gpui_platform?/test-support"]
 # Compile GPUI's Metal shaders at run time (macOS), so building needs no Metal
-# Toolchain (`xcodebuild -downloadComponent MetalToolchain`).
-runtime-shaders = ["gpui_platform/runtime_shaders"]
+# Toolchain (`xcodebuild -downloadComponent MetalToolchain`); with `platform`.
+runtime-shaders = ["gpui_platform?/runtime_shaders"]
 # Web views (wry; on Linux GTK 3 and WebKitGTK 4.1, on an X11 window).
+# Nothing on Tizen: web views report that they are unsupported there.
 webview = ["dep:wry", "dep:gtk", "dep:webkit2gtk"]
 # Videos (GStreamer 1.20+ with its base and good plug-ins; libav for most
-# codecs).
+# codecs). Nothing on Tizen: GStreamer is not there.
 video = ["dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video"]
 
 [dependencies]
@@ -40,7 +46,7 @@ nsh-core = { workspace = true, features = ["svg", "loader"] }
 nsh-engine = { workspace = true, features = ["net", "shader"] }
 nsh-base = { workspace = true, features = ["editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
 gpui.workspace = true
-gpui_platform.workspace = true
+gpui_platform = { workspace = true, optional = true }
 image = { workspace = true, features = ["gif", "webp", "jpeg", "bmp", "ico", "tiff"] }
 rustc-hash.workspace = true
 tiny-skia.workspace = true
@@ -55,12 +61,18 @@ futures-channel.workspace = true
 futures-util.workspace = true
 nsh-dev = { workspace = true, features = ["client"], optional = true }
 nsh-testing = { workspace = true, features = ["agent"], optional = true }
+
+# Web views and videos on the desktops (Tizen, `target_os = "linux"` with
+# `target_vendor = "tizen"`, has neither GTK nor GStreamer).
+[target.'cfg(all(any(target_os = "linux", target_os = "macos", windows), not(target_vendor = "tizen")))'.dependencies]
 wry = { workspace = true, optional = true }
 gstreamer = { workspace = true, optional = true }
 gstreamer-app = { workspace = true, optional = true }
 gstreamer-video = { workspace = true, optional = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+# Linux desktops; a Tizen TV's settings come from its host instead
+# (`AppView`'s setters).
+[target.'cfg(all(target_os = "linux", not(target_vendor = "tizen")))'.dependencies]
 # The desktop's settings (XDG settings portal, AT-SPI).
 zbus.workspace = true
 # `shot` script steps read the window from the X server.
@@ -74,6 +86,7 @@ webkit2gtk = { workspace = true, optional = true }
 [[example]]
 name = "embed"
 test = false
+required-features = ["platform"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 raw-window-handle.workspace = true

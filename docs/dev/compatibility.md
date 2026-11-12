@@ -69,8 +69,9 @@ good, whatever the version number says. Between releases, and before the first c
    `url_scheme::schemes_from_json_lenient`, the bundler's `resolve`, `Capabilities::from_json_lenient` (a capability or `http` grant it cannot read is not granted, so
    nothing left out widens access). Only text that is no JSON object, a file `nsh.json` names that is missing,
    NSH's own `Info.plist` keys, a minimum system version (`MinimumOSVersion`, `LSMinimumSystemVersion`) that is no
-   version string or is below the runtime's, and an Android `targetSdk` below the minimum are errors: a package
-   declaring a lower system than the one its app needs would install where it cannot run.
+   version string or is below the runtime's, an Android `targetSdk` below the minimum and a `tizen` id or version
+   Tizen refuses (a `--target tizen-web` package, `tizen_web.rs`) are errors: a package declaring a lower system than
+   the one its app needs would install where it cannot run.
 7. **The only exception is security**: a capability that cannot be kept safe may be closed. A pull request of
    `nsh-compat` adds what it removes to that repository's `closed.txt`, each with its reason (`<entry> -- <reason>`,
    the entry as the checks report the break: `[<module>] <path>`, `<file>: <Name>`, `<file>: <Name>.<member>` or
@@ -130,7 +131,7 @@ The cases are grouped by domain (`base`, `core`, `events`, `layout`, `paint`, `p
 each. The domain's `App.tsx` imports every case and shows one at a time: the script taps `id:case-<case>` (one of the
 one-point views over the top left corner, out of the layout) and checks that case, then the next. What applies to a
 whole app has a domain of its own: the platform (`android`; `macos`, which also declares capabilities; `browser`, a
-desktop browser with the user's text size at 2; `terminal`, the Terminal idiom on Linux; `tv`, the TV idiom on Android) and `nsh.json`'s settings (the `layout` domain's theme spacing, the
+desktop browser with the user's text size at 2; `terminal`, the Terminal idiom on Linux; `tv`, the TV idiom on Android; `tizen`, a native Tizen app) and `nsh.json`'s settings (the `layout` domain's theme spacing, the
 `base` domain's status bar). A case goes where its platform and settings are, and where they change nothing its
 neighbors check. An app whose `nsh.json` declares `capabilities` runs with the `capabilities.json` and `app.json` its
 build wrote and a new, empty data directory, so a script checks what a grant allows and what stays refused (the

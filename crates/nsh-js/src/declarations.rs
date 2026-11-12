@@ -211,8 +211,9 @@ export interface OverlayProps extends CommonProps, OverlayHostProps {
  * tooltip, layout events and the ref (`ref.command(name, args)`). */
 export type ComponentHostProps = { [K in "class" | "classList" | "style" | "activeStyle" | "hoverStyle" | "focusStyle" | "focusWithinStyle" | "focusVisibleStyle" | "disabledStyle" | "testID" | "tooltip" | "onLayout" | "ref"]?: ViewProps[K] };
 
-/** An operating system (`platform.os`). */
-export type OS = "ios" | "android" | "macos" | "windows" | "linux" | "web";
+/** An operating system (`platform.os`). `"tizen"` is a native Tizen app (a
+ * TV); a Tizen web app (`.wgt`) is `"web"`. */
+export type OS = "ios" | "android" | "macos" | "windows" | "linux" | "web" | "tizen";
 
 export declare namespace JSX {
   /** What components return and children accept. */
@@ -1038,6 +1039,46 @@ declare const text: "export default ignored";
         let mut values = exported_values(os);
         values.sort();
         assert_eq!(values, ["EOL", "arch", "default", "homedir", "platform"]);
+    }
+
+    /// `nsh/tizen` (Samsung TVs) is declared from its spec: its functions
+    /// and the type of `productInfo`'s answer.
+    mod tizen {
+        use super::*;
+
+        #[test]
+        fn nsh_tizen_declares_its_functions() {
+            let files = type_definitions(&[]);
+            let (_, tizen) = files
+                .iter()
+                .find(|(path, _)| path == "nsh/tizen.d.ts")
+                .expect("nsh/tizen.d.ts");
+            let mut values = exported_values(tizen);
+            values.sort();
+            assert_eq!(
+                values,
+                [
+                    "exitApp",
+                    "isAvailable",
+                    "productInfo",
+                    "registerKey",
+                    "setPreviewData",
+                    "unregisterKey"
+                ],
+                "{tizen}"
+            );
+            assert!(tizen.contains("isAvailable(): boolean"), "{tizen}");
+            assert!(
+                tizen.contains("productInfo(): Promise<ProductInfo>"),
+                "{tizen}"
+            );
+            assert!(
+                tizen.contains("registerKey(key: string): Promise<void>"),
+                "{tizen}"
+            );
+            assert!(tizen.contains("interface ProductInfo"), "{tizen}");
+            assert!(tizen.contains("platformVersion"), "{tizen}");
+        }
     }
 
     #[test]

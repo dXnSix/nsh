@@ -36,11 +36,15 @@ use nsh_core::{
 
 use crate::{input::KeyEvent, keys, surface::Surface};
 
-/// The platform bindings are read for.
-const OS: Os = if cfg!(target_os = "macos") {
+/// The OS of this build: the platform bindings are read for, and the one
+/// the environment reports.
+pub(crate) const OS: Os = if cfg!(target_os = "macos") {
     Os::MacOs
 } else if cfg!(windows) {
     Os::Windows
+} else if cfg!(target_vendor = "tizen") {
+    // A Tizen target is `target_os = "linux"`: its vendor goes first.
+    Os::Tizen
 } else {
     Os::Linux
 };

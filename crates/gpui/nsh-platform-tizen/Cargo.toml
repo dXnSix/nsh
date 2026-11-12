@@ -1,0 +1,54 @@
+[package]
+name = "nsh-platform-tizen"
+description = "Samsung TV backend (Tizen): nsh apps in the GPUI backend's AppView, on dXn.GpuiTizen's Tizen platform for GPUI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+readme = "README.md"
+repository.workspace = true
+# Not on crates.io: it ships built, as the CLI's `tizen` component (the
+# libraries and the C# host in `runtime/tizen/`).
+publish = false
+
+[lints]
+workspace = true
+
+# `libnsh.so`, the library a TPK's C# host calls (`nsh_tizen_main`), as
+# Android's `libnsh.so`; the rlib is for the hosts of apps with Rust crates
+# of their own.
+[lib]
+name = "nsh"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# The development runtime: the dev server's bundles with hot updates, logs
+# forwarded to the developer's terminal (`sdb reverse`, else `sdb forward`).
+dev = ["nsh-platform-gpui/dev", "dep:nsh-dev"]
+
+[dependencies]
+log.workspace = true
+
+# The logic builds and is tested on the desktops; only `target_vendor =
+# "tizen"` runs it.
+[target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dependencies]
+nsh-platform-gpui = { workspace = true, features = ["js"] }
+nsh-core.workspace = true
+# Signed packages of the app's code the app downloaded (`nsh/updater`).
+nsh-engine.workspace = true
+dxn_gpui_tizen.workspace = true
+gpui.workspace = true
+futures-channel.workspace = true
+futures-util.workspace = true
+serde_json.workspace = true
+nsh-dev = { workspace = true, features = ["client"], optional = true }
+
+# The C# host's project, parsed by the tests as MSBuild reads it (XML).
+[dev-dependencies]
+roxmltree = "0.21"
+
+# The app framework's directories and (feature `dev`) the system's log,
+# through dXn.GpuiTizen's bindings.
+[target.'cfg(target_vendor = "tizen")'.dependencies]
+dxn_gpui_tizen_sys.workspace = true
+libc.workspace = true

@@ -128,6 +128,27 @@ impl DevSession {
         format!("http://127.0.0.1:{}/", self.server.local_addr().port())
     }
 
+    /// The web host's page for a device on this network (a TV): at this
+    /// machine's first LAN address, else (no network) at loopback.
+    pub(crate) fn device_web_url(&self) -> String {
+        let port = self.server.local_addr().port();
+        match self.network_ips().first() {
+            Some(ip) => format!("http://{ip}:{port}/"),
+            None => self.web_url(),
+        }
+    }
+
+    /// Serves the web host's page of a Tizen web app instead of the web's:
+    /// with the TV shim, in the TV idiom (`tizen_web::dev_page`).
+    pub(crate) fn serve_tv_page(&self) -> anyhow::Result<()> {
+        let runtime =
+            crate::runtime::web(crate::runtime::WebKind::Dev, false)?.context("no web runtime")?;
+        let page = crate::tizen_web::dev_page(crate::web::dev_host(&runtime, self.rust_root)?);
+        let (page, files) = crate::web::with_page_host(page, &self.entry, None)?;
+        self.server.serve_web(page, files);
+        Ok(())
+    }
+
     /// This machine's addresses other machines reach the server on.
     fn network_ips(&self) -> Vec<Ipv4Addr> {
         if self.network { lan_ips() } else { Vec::new() }

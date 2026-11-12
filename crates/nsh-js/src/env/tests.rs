@@ -36,7 +36,7 @@ mod tv {
 
     /// What the app showed on `os` in `idiom`: its report, then the test
     /// ids and native ids its views were given (in order).
-    fn run(os: Os, idiom: Idiom) -> (Host, String, Vec<String>) {
+    pub(super) fn run(os: Os, idiom: Idiom) -> (Host, String, Vec<String>) {
         let host = Host::new().unwrap();
         host.set_environment(&Environment {
             os,
@@ -127,5 +127,86 @@ mod tv {
         host.eval_source(r#"globalThis.group.set({ testID: "tv 2" });"#)
             .unwrap();
         assert!(seen(&host).1.is_empty());
+    }
+}
+
+/// Tizen natively (`Os::Tizen`): `platform.os` is `"tizen"` in the TV
+/// idiom, never desktop, and `platform.select` takes its `tizen` key before
+/// `tv`; a Tizen web app is `"web"` and takes `web`'s.
+mod tizen {
+    use nsh_core::{
+        Op,
+        platform::{Environment, Idiom, Os},
+    };
+
+    use crate::host::Host;
+
+    /// Reports `platform` and what `platform.select` picks, as one text.
+    const APP: &str = r#"
+        import { text } from "nsh:rt";
+        import { platform } from "nsh";
+        const pick = (spec) => platform.select(spec) ?? "-";
+        text([
+            platform.name, platform.os, platform.os === "tizen", platform.idiom,
+            platform.tv, platform.desktop,
+            pick({ tizen: "tizen", web: "web", tv: "tv", mobile: "mobile" }),
+            pick({ linux: "linux", tv: "tv", desktop: "desktop" }),
+            pick({ native: "native", default: "default" }),
+        ].join(" "));
+    "#;
+
+    /// What the app showed on `os` in `idiom`.
+    fn report(os: Os, idiom: Idiom) -> String {
+        let host = Host::new().unwrap();
+        host.set_environment(&Environment {
+            os,
+            idiom,
+            ..Environment::default()
+        });
+        host.eval_source(APP).unwrap();
+        let mut ops = Vec::new();
+        host.take_ops(&mut ops);
+        ops.into_iter()
+            .filter_map(|op| match op {
+                Op::CreateText { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tizen_reports_its_os_and_its_select_key() {
+        assert_eq!(
+            report(Os::Tizen, Idiom::default_on(Os::Tizen)),
+            "tizen tizen true tv true false tizen tv native"
+        );
+    }
+
+    #[test]
+    fn tizen_is_never_a_desktop() {
+        // Not Linux's key, and no desktop, whatever idiom was set: one it
+        // does not apply in reads as Tizen's own, the TV.
+        assert_eq!(
+            report(Os::Tizen, Idiom::Desktop),
+            "tizen tizen true tv true false tizen tv native"
+        );
+        assert_eq!(
+            report(Os::Tizen, Idiom::Phone),
+            "tizen tizen true phone false false tizen - native"
+        );
+    }
+
+    #[test]
+    fn tizen_web_apps_are_web_on_a_tv() {
+        assert_eq!(
+            report(Os::Web, Idiom::Tv),
+            "web web false tv true false web tv default"
+        );
+    }
+
+    #[test]
+    fn tizen_takes_tv_props() {
+        let (_, _, props) = super::tv::run(Os::Tizen, Idiom::Tv);
+        assert_eq!(props, ["testID=tv", "nativeID=on a TV"]);
     }
 }

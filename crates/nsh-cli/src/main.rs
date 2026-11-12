@@ -29,6 +29,7 @@ mod test_android;
 mod test_host;
 mod test_ios;
 mod test_web;
+mod tizen_web;
 mod ui;
 mod updater;
 mod web;
@@ -553,7 +554,9 @@ struct PackageArgs {
     /// App icon: a square PNG, ideally 1024×1024.
     #[arg(long)]
     icon: Option<PathBuf>,
-    /// Code signing identity for devices, e.g. "Apple Development: …".
+    /// Code signing identity for devices, e.g. "Apple Development: …";
+    /// Tizen web: the certificate profile `tz` signs with (default:
+    /// `nsh.json` `tizen.signing`).
     #[arg(long)]
     sign: Option<String>,
     /// Provisioning profile for devices (`.mobileprovision`).
@@ -592,6 +595,12 @@ struct PackageArgs {
     /// relatively, so the site runs from any directory.
     #[arg(long, value_name = "URL", conflicts_with = "run")]
     asset_url: Option<String>,
+    /// Tizen web: instead of the app, a package that tries on the TV the
+    /// ways the app's page loads its files (module scripts, an import map,
+    /// an iframe's realm, a script fetched with CORS, WebAssembly) and
+    /// shows what each did.
+    #[arg(long)]
+    probe: bool,
 }
 
 /// `nsh component`'s actions.
@@ -631,6 +640,8 @@ impl Command {
             | Command::Dev { entry, .. }
             | Command::Run { entry, .. }
             | Command::Publish { entry, .. } => Some(entry),
+            // The loader probe builds no app ([`probe_entry`]).
+            Command::Package(args) if args.probe => None,
             Command::Package(args) => Some(&mut args.entry),
             Command::Init { .. }
             | Command::Keygen { .. }
@@ -642,6 +653,16 @@ impl Command {
             | Command::Symbolicate { .. }
             | Command::Revoke { .. } => None,
         }
+    }
+}
+
+/// The entry of `nsh package --probe`'s app, which need not exist: the
+/// probe reads only the `nsh.json` beside it (its signing profile).
+fn probe_entry(entry: &std::path::Path) -> PathBuf {
+    if entry.is_dir() {
+        entry.join("App.tsx")
+    } else {
+        entry.to_path_buf()
     }
 }
 
@@ -745,6 +766,11 @@ fn run(mut command: Command) -> anyhow::Result<()> {
     if let Command::Test { path, entry, .. } = &mut command {
         *path = dunce::canonicalize(&*path).with_context(|| format!("{}", path.display()))?;
         *entry = test::app_entry(path)?;
+    }
+    if let Command::Package(args) = &mut command
+        && args.probe
+    {
+        args.entry = probe_entry(&args.entry);
     }
     if let Some(entry) = command.entry_mut() {
         *entry = entry::resolve(entry)?;
@@ -971,6 +997,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 arch,
                 run,
                 asset_url,
+                probe,
             } = *args;
             let mut config = package::read_config(&entry)?;
             config.name = name.or(config.name);
@@ -997,6 +1024,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 arch,
                 run,
                 asset_url: asset_url.as_deref(),
+                probe,
             })
         }
         Command::Run {

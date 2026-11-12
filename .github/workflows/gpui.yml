@@ -17,6 +17,7 @@ on:
       - "crates/gpui/**"
       - "examples/embed-gpui/**"
       - ".github/workflows/gpui.yml"
+      - ".cargo/**"
       - ".github/actions/cargo/**"
   schedule:
     - cron: "0 */3 * * *"

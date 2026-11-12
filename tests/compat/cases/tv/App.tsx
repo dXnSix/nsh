@@ -4,10 +4,12 @@
 // the steps after it are that case's.
 import { type JSX, View, mount, signal } from "nsh";
 import ModDeviceTv from "./mod-device-tv";
+import ModTizen from "./mod-tizen";
 import PropsPlatformTv from "./props-platform-tv";
 
 const cases: Record<string, () => JSX.Element> = {
   "mod-device-tv": ModDeviceTv,
+  "mod-tizen": ModTizen,
   "props-platform-tv": PropsPlatformTv,
 };
 const shown = signal("");

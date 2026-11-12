@@ -33,13 +33,24 @@
 //!
 //! Without feature `video` (or when GStreamer cannot start), a video draws
 //! a neutral placeholder and reports `onError` for each source.
+//!
+//! On Tizen GStreamer is not there, whatever the features: the placeholder
+//! stands in for the TV's own player for now. That player is the other
+//! backend this module selects: a `VideoItem` with the placeholder's
+//! interface (`new`, `set`, `seek`, `close`, [`Hosted`]), which
+//! `crate::native` creates, hands the props and commands to and drops as
+//! for GStreamer's.
+//!
+//! [`Hosted`]: crate::view::Hosted
 
-#[cfg(not(feature = "video"))]
+// The backend. Tizen's player goes here, under `target_vendor = "tizen"`,
+// in the placeholder's place.
+#[cfg(any(not(feature = "video"), target_vendor = "tizen"))]
 pub(crate) use placeholder::VideoItem;
-#[cfg(feature = "video")]
+#[cfg(all(feature = "video", not(target_vendor = "tizen")))]
 pub(crate) use player::VideoItem;
 
-#[cfg(not(feature = "video"))]
+#[cfg(any(not(feature = "video"), target_vendor = "tizen"))]
 mod placeholder {
     use std::{cell::RefCell, rc::Rc};
 
@@ -100,7 +111,7 @@ mod placeholder {
     }
 }
 
-#[cfg(feature = "video")]
+#[cfg(all(feature = "video", not(target_vendor = "tizen")))]
 mod player {
     use std::{
         cell::{Cell, RefCell},
@@ -958,7 +969,7 @@ mod player {
 
 /// Where a picture of `natural` size goes in a box of `size` (x, y, width,
 /// height).
-#[cfg(feature = "video")]
+#[cfg(all(feature = "video", not(target_vendor = "tizen")))]
 fn fit(mode: nsh_core::ResizeMode, natural: (f32, f32), size: (f32, f32)) -> (f32, f32, f32, f32) {
     use nsh_core::ResizeMode;
     let (nw, nh) = natural;
@@ -979,7 +990,7 @@ fn fit(mode: nsh_core::ResizeMode, natural: (f32, f32), size: (f32, f32)) -> (f3
 }
 
 /// A time for the control bar: `m:ss`, `h:mm:ss` from an hour on.
-#[cfg(feature = "video")]
+#[cfg(all(feature = "video", not(target_vendor = "tizen")))]
 fn clock(seconds: f64) -> String {
     let total = if seconds.is_finite() && seconds > 0.0 {
         seconds.floor() as u64
@@ -996,12 +1007,12 @@ fn clock(seconds: f64) -> String {
 
 /// `x`, or 0 when it is not a finite number (live streams have no
 /// duration).
-#[cfg(feature = "video")]
+#[cfg(all(feature = "video", not(target_vendor = "tizen")))]
 fn finite(x: f64) -> f64 {
     if x.is_finite() { x } else { 0.0 }
 }
 
-#[cfg(all(test, feature = "video"))]
+#[cfg(all(test, feature = "video", not(target_vendor = "tizen")))]
 mod tests {
     use nsh_core::ResizeMode;
 

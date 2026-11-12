@@ -43,6 +43,9 @@ pub(crate) enum PackageTarget {
     /// The web: a static site (`index.html` and files named by their
     /// content) for any web server or CDN.
     Web,
+    /// Samsung TVs: a Tizen web app (`.wgt`), the web's site with
+    /// `config.xml` and the TV shim, signed with `tz` (`--sign <profile>`).
+    TizenWeb,
     /// Packages made with the GPUI runner, which is gone: GPUI is the
     /// backend for embedding in GPUI apps. Refused with the OS's own target
     /// to use instead ([`PackageTarget::desktop`]).
@@ -237,6 +240,40 @@ pub(crate) struct AppConfig {
     /// What Android packages set in their manifest.
     #[serde(default)]
     pub(crate) android: AndroidConfig,
+    /// What Tizen packages (Samsung TVs) set in their manifest: the Tizen
+    /// web app's `config.xml` (`tizen_web.rs`).
+    #[serde(default)]
+    pub(crate) tizen: TizenConfig,
+}
+
+/// `nsh.json` `"tizen"`: Samsung TVs' packages. Every key has a default.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TizenConfig {
+    /// The package id: 10 letters and digits, unique on the TV and in
+    /// Samsung's store. Default: made from the app's `id`.
+    pub(crate) package: Option<String>,
+    /// The application id, `<package>.<name>` (the name: letters and
+    /// digits). Default: the package id and the app's name.
+    pub(crate) app_id: Option<String>,
+    /// The package's version, `x.y.z` of numbers (Tizen's form). Default:
+    /// the app's `version`.
+    pub(crate) version: Option<String>,
+    /// The Tizen version the package needs at least (`required_version`):
+    /// `8.0` by default, 2024's TVs.
+    pub(crate) api_version: Option<String>,
+    /// Privileges the package asks for besides the internet's.
+    #[serde(default)]
+    pub(crate) privileges: Vec<String>,
+    /// The certificate profile `tz` signs with (Samsung's Certificate
+    /// Manager); `--sign` names another. Without one a package is unsigned.
+    pub(crate) signing: Option<String>,
+    /// Smart Hub's preview of the app (the tiles the TV shows for it on
+    /// its home screen): `"service"`, a personal preview the app sets with
+    /// `nsh/tizen`'s `setPreviewData` (through a background service the
+    /// package carries), or the http(s) URL of a public preview's JSON,
+    /// which the TV reads itself. Without it the app has no preview.
+    pub(crate) smart_hub_preview: Option<String>,
 }
 
 /// `nsh.json` `"android"`.
@@ -589,6 +626,8 @@ pub(crate) struct PackageOptions<'a> {
     pub(crate) run: bool,
     /// The web: the URL the site's files are served from (`--asset-url`).
     pub(crate) asset_url: Option<&'a str>,
+    /// Tizen web: the loader probe instead of the app (`--probe`).
+    pub(crate) probe: bool,
 }
 
 /// `nsh.json` `"icon"`: one PNG for every target, or one per platform
@@ -601,13 +640,15 @@ pub(crate) enum AppIcon {
     /// The icon of every target.
     All(PathBuf),
     /// The icons by platform: `macos`, `windows`, `linux`, `ios`, `android`,
-    /// `web` ([`AppIcon::PLATFORMS`]).
+    /// `web`, `tizen` ([`AppIcon::PLATFORMS`]).
     Platforms(std::collections::BTreeMap<String, PathBuf>),
 }
 
 impl AppIcon {
     /// The keys of [`AppIcon::Platforms`].
-    const PLATFORMS: [&str; 6] = ["macos", "windows", "linux", "ios", "android", "web"];
+    const PLATFORMS: [&str; 7] = [
+        "macos", "windows", "linux", "ios", "android", "web", "tizen",
+    ];
 
     /// The icon of `target`'s platform.
     pub(crate) fn of(&self, target: PackageTarget) -> Option<&Path> {
@@ -618,6 +659,7 @@ impl AppIcon {
             PackageTarget::Macos => "macos",
             PackageTarget::Windows => "windows",
             PackageTarget::Web => "web",
+            PackageTarget::TizenWeb => "tizen",
             PackageTarget::Gpui => return None,
         };
         match self {
@@ -913,6 +955,12 @@ pub(crate) fn release_name_and_id(
 }
 
 pub(crate) fn package(options: PackageOptions<'_>) -> anyhow::Result<()> {
+    if options.probe {
+        if options.target != PackageTarget::TizenWeb {
+            bail!("--probe goes with --target tizen-web");
+        }
+        return crate::tizen_web::probe(&options);
+    }
     if options.asset_url.is_some() && options.target != PackageTarget::Web {
         bail!("--asset-url is where a web site's files are served from: package with --target web");
     }
@@ -950,7 +998,8 @@ pub(crate) fn package(options: PackageOptions<'_>) -> anyhow::Result<()> {
     let config = &options.config;
     let (name, id) = release_name_and_id(&entry, config)?;
     let schemes = config.url_schemes();
-    if options.target == PackageTarget::Web && !schemes.is_empty() {
+    if matches!(options.target, PackageTarget::Web | PackageTarget::TizenWeb) && !schemes.is_empty()
+    {
         ui::warn(
             "nsh.json schemes: a web page opens from its address, so the schemes are left out",
         );
@@ -968,13 +1017,13 @@ pub(crate) fn package(options: PackageOptions<'_>) -> anyhow::Result<()> {
     let mut built = if crate::rust_app::is_root(&entry) {
         crate::build::rust_root()
     } else {
-        let split = matches!(options.target, PackageTarget::Web);
+        let split = matches!(options.target, PackageTarget::Web | PackageTarget::TizenWeb);
         let built = crate::build::compile_package(&entry, split, config)
             .map_err(|e| e.into_error(&entry))?;
         ui::done(format!("built {} {}", ui::path(&entry), built.summary("")));
         built
     };
-    if options.target != PackageTarget::Web {
+    if !matches!(options.target, PackageTarget::Web | PackageTarget::TizenWeb) {
         crate::updater::add_config(config, &id, options.out, &mut built)?;
     }
     let platform = match options.target {
@@ -1004,6 +1053,9 @@ pub(crate) fn package(options: PackageOptions<'_>) -> anyhow::Result<()> {
         }
         PackageTarget::Web => {
             return crate::web::package(&options, config, &name, &id, &built);
+        }
+        PackageTarget::TizenWeb => {
+            return crate::tizen_web::package(&options, config, &name, &id, &built);
         }
         PackageTarget::Gpui => unreachable!("refused above"),
     };
@@ -1055,6 +1107,7 @@ pub(crate) fn package(options: PackageOptions<'_>) -> anyhow::Result<()> {
         | PackageTarget::Macos
         | PackageTarget::Windows
         | PackageTarget::Web
+        | PackageTarget::TizenWeb
         | PackageTarget::Gpui => "iphonesimulator",
     };
     let mut info = info_plist(&name, &id, &executable, config, sdk)?;
@@ -1096,6 +1149,7 @@ pub(crate) fn package(options: PackageOptions<'_>) -> anyhow::Result<()> {
         | PackageTarget::Macos
         | PackageTarget::Windows
         | PackageTarget::Web
+        | PackageTarget::TizenWeb
         | PackageTarget::Gpui => {
             unreachable!("packaged above")
         }
@@ -2091,6 +2145,7 @@ mod tests {
                 arch: Some(Arch::X86_64),
                 run: false,
                 asset_url: None,
+                probe: false,
             })
             .unwrap_err();
             assert_eq!(

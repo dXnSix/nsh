@@ -181,6 +181,12 @@ go elsewhere under these rules rather than into them.
   `desktop` / `mobile`) and Rust's `is_tv()`; `platform.idiom` is `"tv"` there. No prop is a TV's alone, so
   `TvProps` holds the props every element takes (`HostProps`, its style and state styles), set on TVs only; a TV is
   not a desktop, so the rest (`nsh-base`'s presentation) is mobile's (design `d30-tv-category`).
+- **Tizen is an OS where it runs natively**: `Os::Tizen` (`platform.os` `"tizen"`, `OS`'s `"tizen"`,
+  `platform.select({ tizen })`) is a native Tizen build (`target_vendor = "tizen"`, whose `target_os` is `linux`:
+  compile-time detection checks the vendor before Linux). It is not a desktop OS (`Os::is_desktop`), its idiom is
+  the TV's (`Idiom::default_on`; `Idiom::Desktop` reads as `"tv"` there, `Idiom::reported_on`), so desktop behavior
+  never applies but in a terminal. A Tizen web app (`.wgt`) is a browser: `Os::Web`, in the TV idiom its page tells
+  the player; there is no `Os::TizenWeb` (design `d30-tv-category`).
 - **Accessors** are named after what they read (`safeArea()`, `windowSize()`, `titleBar()`); they never differ from
   a module's name by case only.
 - **Navigation verbs** are `gpui-base`'s: `push`, `pop`, `popToRoot`, `replace` (`NavStackState`); replacing all is
