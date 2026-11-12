@@ -3834,6 +3834,7 @@ mod tests {
             status_bar: None,
             url_schemes: Vec::new(),
             window: None,
+            capabilities: None,
             translations: None,
         });
         app.tizen_workspace().unwrap();
@@ -4774,6 +4775,7 @@ panic = \"abort\"
                 status_bar: None,
                 url_schemes: Vec::new(),
                 window: None,
+                capabilities: None,
                 translations: None,
             }
         }
