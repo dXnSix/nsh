@@ -802,9 +802,10 @@ browsers' touches into what phones report:
   `appleKeyboard` in the environment JSON); an open dialog (Escape presses its
   cancel button); a focused field (Escape leaves it); a custom context menu (Shift+F10 or the Menu key);
   selectable text with a selection (select all, in a selectable view the whole area; Escape); a focused
-  pressable (Return presses it, Space when released); going back (Escape, Alt+Left, Cmd+[, BrowserBack); scrolling the
-  scroll view around the focus or under the mouse (arrows by 40 points, Page Up / Down and Space by 0.875 of a page,
-  Home / End).
+  pressable (Return presses it, Space when released); going back (Escape, Alt+Left, Cmd+[, BrowserBack); the arrows
+  moving the focus to a stop that way (`arrowFocus`, "Focus" below); scrolling the
+  scroll view around the focus or under the mouse (arrows by 40 points when no stop is that way, Page Up / Down and
+  Space by 0.875 of a page, Home / End).
   Context-menu keys are handled explicitly because Chromium on macOS does not emit `contextmenu` for them.
   A handled key prevents the browser default to avoid duplicate openings; native fields and selectable text
   retain their own menus, and keyboard requests carry no pointer and use the trigger's bottom-start corner.
@@ -816,7 +817,42 @@ browsers' touches into what phones report:
   `reading-flow` (Chromium), it is read in the order it is on screen (`orderReading`: `reading-order` on its children,
   the DOM, which is also their paint order, left alone), as a list's recycled cells are not in their rows' order in it; `focus:` states follow the keyboard focus (`focus-visible:` while it shows, as the browser's `:focus-visible`), and
   they are all that shows it: as the desktop backends, the runtime draws no ring of its own; a popped page gives the focus back to what had it when the page was pushed
-  (`screenGone`). A click never moves the focus (`mousedown` is prevented outside fields, selectable
+  (`screenGone`). The arrows (without modifiers or Shift) move the focus between the stops as the terminal backend
+  does, with `nsh_core::focus`'s rules compiled into the module: `focusStops` describes what the page renders
+  (each stop's `getBoundingClientRect`, in CSS pixels, which the rules compare one axis at a time as they are; whether
+  some of it is in sight inside its root view and the scroll views around it; its scope, the `Dialog` it is in or the
+  root; its layer, the child of that root view around it; the anchored overlay around it, from the props'
+  `anchored`; a menu item's role), each root view's layers (what of each is in sight, and whether it takes presses, as
+  a sheet's backdrop does) and the modals with whether each shows, as JSON. `nsh_focus_move` (`src/focus.rs`) picks the
+  newest modal that shows, leaves out the layers under a backdrop that covers the page, keeps a focused menu item's
+  arrows in its popup (the terminal's rule) and answers `focus::directional`'s stop (without TV props
+  `focus::horizontal` / `vertical`'s: with nothing focused, Left / Right the first stop, Up / Down the first / last in
+  sight, in an open popup first), -2 - a scroll view's id when that view scrolls on instead, or -1: no stop that way,
+  and the key scrolls. The page focuses the stop (`focusStop`: a field's input for a field, `preventScroll`: the
+  browser does not scroll for it) and reveals it (`revealFocus`): each scroll view around it, innermost first, glides by
+  `nsh_focus_reveal`'s delta along its axis (`focus::reveal`: centered vertically, as little as shows it
+  horizontally, as on the terminal). What a TV adds is decided in the same call, as on the GPUI backend (a TV's web
+  app relies on it): `props_json` sends a view's `autoFocus`, `preferredFocus`, `nextFocus`
+  (`{"down": node}`) and `focusGroup` (`{"trap", "destinations"}`, `focus::write_props`), and `focusStops` hands each
+  stop those of the views around it (`auto`, `preferred`, the `next` routes, the nearest's first), the innermost
+  focus group (`group`) and the scroll views around it (`scrollers`, innermost first), and describes the groups
+  (`groups`, each with the group around it), the scroll views (`scrollViews`: axis, and whether it can scroll on
+  toward its start and its end, from where a glide is going) and the stops inside each view a route or a destination
+  names (`views`: the first in reach is the stop it reaches). With nothing focused the first `preferredFocus` stop in
+  sight takes an arrow; a route goes past geometry; a group is entered at its first destination in reach (else its
+  preferred stop) and with `trap` keeps the arrows; while the scroll view along the arrow's axis around the focus
+  can scroll on and the stop is outside it, it scrolls by a key's step instead (`keyScroll`) and the page tells
+  `nsh_focus_past` (`EngineControl::focus_past`): a list scrolls to its next row by index and the core's
+  `Command::Focus` (`op_cmd` `focus`) focuses that row's first stop once it is mounted. `autoFocus`: after a batch
+  that brought a view with it (`op_vp`), or a new focus scope once the app has such views (`focusAfterBatch`),
+  `nsh_focus_auto` (`focus::auto`, `focus::auto_focus`) picks the first stop of the scope with it that has not had its
+  chance (`autoSeen`, forgotten once the view is removed), and the page focuses it as an arrow does. A focused field
+  keeps its arrows (`keyDown` returns before them), and so does a component that binds them in its keymap (`Tabs`, `RadioGroup`, a list's: the shortcuts come first); `focus:`,
+  `onFocus` / `onBlur` follow as for Tab, and Return presses the stop. `src/focus.rs` depends on nothing of the
+  browser: `cargo test -p nsh-platform-web --test text focus_moves` tests its decisions on the host (what a TV adds:
+  `focus_moves::tv`), and `node --expose-gc --test crates/nsh-platform-web/web/browser/focus.test.mjs` the page's description and how it
+  applies the answer on a fake DOM, with a recording fake of the module, or with `NSH_BROWSER_WASM` (any wasm32 build
+  of the crate) the module's own exports. A click never moves the focus (`mousedown` is prevented outside fields, selectable
   text, selectable views and hosted pages), as in native apps; it focuses the app's window in an iframe. A touch moves
   the focus as the browser does (a tap outside a field closes the keyboard), unless its press made the app focus a field
   (an editor's text): the mouse events the browser makes of the touch then leave the focus in the field (`mouseDown`,

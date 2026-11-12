@@ -67,6 +67,12 @@ const MOUSE_BUTTON_NAMES = ["left", "middle", "right", "back", "forward"];
 const MOUSE_BUTTON_BITS = [1, 4, 2, 8, 16];
 /** The keys whose press or release is reported as a mouse move. */
 const MOUSE_MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta"]);
+/** The arrows that move the keyboard focus (`arrowFocus`), as `nsh_focus_move` names them. */
+const ARROW_KEYS = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+/** The arrows as `nsh_focus_past` numbers them. */
+const ARROW_DIRECTIONS = { up: 0, down: 1, left: 2, right: 3 };
+/** The roles of a menu's items: the arrows stay in their popup. */
+const MENU_ROLES = new Set(["menuitem", "menuitemcheckbox", "menuitemradio"]);
 // What lays out a field's text, copied to the hidden copy that finds its
 // caret (`caretBounds`).
 const CARET_STYLE = [
@@ -630,6 +636,22 @@ function fillRun(run, text, parts, links) {
     at = to;
   }
   if (at < text.length) run.append(text.slice(at));
+}
+
+/** What rectangles `a` and `b` share (`{ left, top, right, bottom }`), or
+ * null when they share no area. */
+function intersection(a, b) {
+  const left = Math.max(a.left, b.left);
+  const top = Math.max(a.top, b.top);
+  const right = Math.min(a.right, b.right);
+  const bottom = Math.min(a.bottom, b.bottom);
+  return right > left && bottom > top ? { left, top, right, bottom } : null;
+}
+
+/** Whether `el` is rendered and not `visibility: hidden` (a page under the
+ * top one, a view hidden by its style). */
+function shows(el) {
+  return el.checkVisibility?.({ visibilityProperty: true }) ?? true;
 }
 
 /** The text node and offset of character `offset` of a run. */
@@ -2075,6 +2097,7 @@ class Player {
     if (this.changedStacks.size) this.reconcileStacks();
     if (this.removals.length) this.finishRemovals();
     if (this.readingHosts?.size) this.orderReading();
+    this.focusAfterBatch();
   }
 
   /** `el` was placed or added in `parent`: when that is a scroll view's
@@ -2722,6 +2745,8 @@ class Player {
     if (props.href != null) el.setAttribute("href", props.href);
     else el.removeAttribute("href");
     el._props = props;
+    // A stop that takes the focus as it appears: looked at after the batch.
+    if (props.autoFocus) this.autoPending = this.autoViews = true;
     // A list in its parent's viewport: its cells are read in screen order.
     if (el._screenOrder !== props.screenOrder) {
       el._screenOrder = props.screenOrder;
@@ -2851,7 +2876,7 @@ class Player {
    * focus as Tab gives it, with the ring (`focusVisible`, where browsers
    * take it) and `focus:` whatever the browser's heuristics decide after a
    * click; one a click focused becomes keyboard focused. */
-  focusPressable(el) {
+  focusPressable(el, preventScroll = false) {
     if (el.tabIndex !== 0) return;
     if (document.activeElement === el) {
       if (!el._keyFocus) this.keyFocus(el);
@@ -2859,7 +2884,7 @@ class Player {
     }
     el._focusCall = true;
     try {
-      el.focus({ focusVisible: true });
+      el.focus({ focusVisible: true, preventScroll });
     } finally {
       el._focusCall = false;
     }
@@ -7888,6 +7913,10 @@ class Player {
       if (this.back()) e.preventDefault();
       return;
     }
+    if (plain && !e.shiftKey && this.arrowFocus(e, inRoot ? focus : null)) {
+      e.preventDefault();
+      return;
+    }
     if (plain && this.scrollKey(e, inRoot ? focus : null)) e.preventDefault();
   }
 
@@ -8054,6 +8083,13 @@ class Player {
     const chain = this.scrollChain(start);
     const el = chain.find((v) => !!v._horizontal === horizontal) ?? (horizontal ? null : chain[0]);
     if (!el) return false;
+    this.keyScroll(el, e);
+    return true;
+  }
+
+  /** Scrolls scroll view `el` for key `e`, one of `scrollKey`'s. */
+  keyScroll(el, e) {
+    const k = e.key;
     const h = !!el._horizontal;
     const pos = h ? el.scrollLeft : el.scrollTop;
     const max = h ? el.scrollWidth - el.clientWidth : el.scrollHeight - el.clientHeight;
@@ -8062,7 +8098,257 @@ class Player {
       " ": e.shiftKey ? -page : page, Home: -pos, End: max - pos }[k];
     if (el._snapPoints) this.snapStep(el, Math.sign(d));
     else this.scrollSmoothly(el, h ? d : 0, h ? 0 : d, true);
+  }
+
+  /**
+   * Left / Right / Up / Down move the keyboard focus over the frames of
+   * the stops, as on the terminal and GPUI backends: the page describes
+   * the stops it renders (`focusStops`), `nsh_focus_move` decides with
+   * `nsh_core::focus` (in the newest modal that shows, without the layers
+   * under a backdrop that covers the page, with what a TV adds:
+   * `preferredFocus`, `nextFocus*`, focus groups), and the stop that takes
+   * the focus comes into sight (`focusStop`). While the scroll view around
+   * the focus can scroll on that way and the stop is outside it (or there
+   * is none), the scroll view scrolls instead and the engine hears
+   * `nsh_focus_past`: a list scrolls to its next row by index, and the
+   * core focuses that row's first stop once it is mounted. False when no
+   * stop is that way: the key scrolls (`scrollKey`). A field keeps its
+   * arrows, and so does a component whose keymap binds them: `keyDown`
+   * returns before.
+   */
+  arrowFocus(e, focus) {
+    const key = ARROW_KEYS[e.key];
+    if (!key) return false;
+    const { stops, scrollViews, request } = this.focusStops(focus);
+    if (!stops.size) return false;
+    const json = JSON.stringify({ key, ...request });
+    const answer = this.withStrings([json], (p, l) => this.wasm.nsh_focus_move(p, l));
+    if (answer <= -2) {
+      const view = scrollViews.get(-2 - answer);
+      if (!view) return false;
+      const from = request.focused;
+      if (from != null) this.call((w) => w.nsh_focus_past(from, ARROW_DIRECTIONS[key]));
+      this.keyScroll(view, e);
+      return true;
+    }
+    const el = stops.get(answer);
+    if (!el) return false;
+    this.focusStop(el);
     return true;
+  }
+
+  /** Gives stop `el` the keyboard focus as an arrow does (a field's input
+   * for a field, `preventScroll`: the browser does not scroll for it) and
+   * brings it into sight (`revealFocus`). */
+  focusStop(el) {
+    if (el._field) el._field.focus({ preventScroll: true });
+    else this.focusPressable(el, true);
+    this.revealFocus(el);
+  }
+
+  /** The batch is applied: after one that brought a view with `autoFocus`
+   * (`op_vp`), or a new focus scope (a modal presented or gone) once the
+   * app has such views, the stops that take the focus as they appear are
+   * looked at (`autoFocus`), once the call that applied it has returned:
+   * the focus events that follow reach the engine, which is not
+   * reentrant. */
+  focusAfterBatch() {
+    const scope = this.topModal()?._id ?? ROOT_ID;
+    if (this.focusScope !== scope) {
+      this.focusScope = scope;
+      if (this.autoViews) this.autoPending = true;
+    }
+    if (!this.autoPending || this.autoQueued) return;
+    this.autoQueued = true;
+    queueMicrotask(() => {
+      this.autoQueued = false;
+      this.autoPending = false;
+      if (this.wasm && !this.trapped) this.autoFocus();
+    });
+  }
+
+  /** The first stop of the focus scope with `autoFocus` (its own, or a
+   * view's around it) that has not had its chance takes the focus
+   * (`nsh_focus_auto`, `focus::auto_focus`); every one there has had it
+   * then, and has it again only once it was removed and comes back. */
+  autoFocus() {
+    const active = document.activeElement;
+    const { stops, request } = this.focusStops(active && this.root.contains(active) ? active : null);
+    const seen = (this.autoSeen ??= new Set());
+    for (const el of seen) if (!el.isConnected) seen.delete(el);
+    const json = JSON.stringify({ ...request, seen: [...seen].map((el) => el._id) });
+    const answer = this.withStrings([json], (p, l) => this.wasm.nsh_focus_auto(p, l));
+    // The scope `nsh_core::focus::focus_scope` picks: the newest modal that shows.
+    let scope = ROOT_ID;
+    for (const [id, showing] of request.modals) if (showing) scope = id;
+    for (const stop of request.stops) if (stop.auto && stop.scope === scope) seen.add(stops.get(stop.id));
+    const el = stops.get(answer);
+    if (el) this.focusStop(el);
+  }
+
+  /**
+   * The focus stops the page renders as `nsh_focus_move` takes them: each
+   * one's DOM rectangle (`getBoundingClientRect`, CSS pixels), whether some
+   * of it is in sight (inside its root view and the scroll views around
+   * it), its scope (the modal it is in, else the root), its layer (the
+   * child of that root view around it), the anchored overlay around it (a
+   * popup), its `autoFocus` and `preferredFocus` and `nextFocus*` routes
+   * (its own, or those of the views around it, the nearest's first), the
+   * innermost focus group around it and the scroll views around it; the
+   * root views' layers (`frame`: what of it is in sight, null for nothing;
+   * `presses`: it takes presses, as a backdrop does); the modals, oldest
+   * first, with whether each shows; the focus groups (`focusGroup`), each
+   * with the group around it; the scroll views, with whether each can
+   * scroll on toward its start and its end; and the stops inside each view
+   * a route or a group's destination names. `stops` maps ids to the
+   * views, `scrollViews` ids to the scroll views. `focus` is the element
+   * with the focus, if in the root.
+   */
+  focusStops(focus) {
+    const stops = new Map();
+    const list = [];
+    const layers = [];
+    const modals = [];
+    const out = { groups: [], scrollViews: new Map(), scrolls: [], named: new Map() };
+    const roots = [[ROOT_ID, this.root]];
+    for (const child of this.root.children) {
+      if (child._kind !== "modal") continue;
+      roots.push([child._id, child]);
+      modals.push([child._id, !child._leaving && shows(child)]);
+    }
+    for (const [scope, root] of roots) {
+      const bounds = root.getBoundingClientRect();
+      const own = [];
+      for (const layer of root.children) {
+        if (layer._id === undefined || layer._kind === "modal") continue;
+        const seen = intersection(layer.getBoundingClientRect(), bounds);
+        own.push({
+          id: layer._id,
+          frame: seen && [seen.left, seen.top, seen.right - seen.left, seen.bottom - seen.top],
+          presses: !!layer._pressable && !layer.classList.contains("nsh-inert") && shows(layer),
+        });
+        const at = { scope, layer: layer._id, popup: null, clips: [bounds], group: null, scrollers: [], auto: false, preferred: false, next: null };
+        this.collectStops(layer, at, stops, list, out);
+      }
+      layers.push([scope, own]);
+    }
+    const current = focus ? this.viewOf(focus) : null;
+    const focused = current && stops.get(current._id) === current ? current._id : null;
+    // The stops each view a route or a destination names reaches: itself
+    // when it is one, else those inside it.
+    const views = [];
+    for (const [id, el] of out.named) {
+      if (el) views.push([id, list.filter((stop) => el.contains(stops.get(stop.id))).map((stop) => stop.id)]);
+    }
+    return {
+      stops,
+      scrollViews: out.scrollViews,
+      request: { focused, modals, stops: list, layers, groups: out.groups, scrollViews: out.scrolls, views },
+    };
+  }
+
+  /** The stops in `el` and the views in it, in DOM order (`focusStops`):
+   * `at` is what the views around `el` hand the stops inside it. */
+  collectStops(el, at, stops, list, out) {
+    if (el._id !== undefined) {
+      if (out.named.has(el._id)) out.named.set(el._id, el);
+      const props = el._props;
+      if (props) {
+        if (props.anchored) at = { ...at, popup: el._id };
+        if (props.autoFocus && !at.auto) at = { ...at, auto: true };
+        if (props.preferredFocus && !at.preferred) at = { ...at, preferred: true };
+        if (props.nextFocus) {
+          at = { ...at, next: { ...at.next, ...props.nextFocus } };
+          for (const id of Object.values(props.nextFocus)) this.nameView(id, out);
+        }
+        if (props.focusGroup) {
+          const { trap, destinations } = props.focusGroup;
+          out.groups.push({ id: el._id, parent: at.group, trap, destinations });
+          for (const id of destinations) this.nameView(id, out);
+          at = { ...at, group: el._id };
+        }
+      }
+      const field = el._field;
+      const rect = field || el.getAttribute("tabindex") === "0" ? el.getBoundingClientRect() : null;
+      // A field takes the focus at any size, but not hidden at none.
+      const stop = rect && (field ? !field.disabled && (rect.width > 0 || rect.height > 0) : true) && shows(el);
+      if (stop) {
+        const entry = {
+          id: el._id,
+          frame: [rect.left, rect.top, rect.width, rect.height],
+          visible: at.clips.every((clip) => intersection(rect, clip) !== null),
+          editable: !!field && !field.readOnly,
+          scope: at.scope,
+          layer: at.layer,
+          popup: at.popup,
+          menu: MENU_ROLES.has(props?.role),
+          auto: at.auto,
+          preferred: at.preferred,
+          group: at.group,
+          scrollers: at.scrollers,
+        };
+        if (at.next) entry.next = at.next;
+        list.push(entry);
+        stops.set(el._id, el);
+      }
+      if (el._kind === "scroll") {
+        at = { ...at, clips: [...at.clips, el.getBoundingClientRect()], scrollers: [el._id, ...at.scrollers] };
+        out.scrollViews.set(el._id, el);
+        out.scrolls.push(this.scrollRoom(el));
+      }
+    }
+    for (const child of el.children) this.collectStops(child, at, stops, list, out);
+  }
+
+  /** View `id` is named by a route or a destination: the stops inside it
+   * are looked for (`focusStops`). It is the page's view of that id, or
+   * the one the walk meets later. */
+  nameView(id, out) {
+    if (id == null || out.named.has(id)) return;
+    out.named.set(id, this.views?.get(id) ?? null);
+  }
+
+  /** Scroll view `el` as `nsh_focus_move` takes it: its axis, and whether
+   * it can scroll on toward its start and its end (from where a glide in
+   * flight is going), as the keys scroll it. */
+  scrollRoom(el) {
+    const h = !!el._horizontal;
+    const at = el._glide ? (h ? el._glide.x : el._glide.y) : h ? el.scrollLeft : el.scrollTop;
+    const max = h ? el.scrollWidth - el.clientWidth : el.scrollHeight - el.clientHeight;
+    const enabled = el._behavior?.enabled !== false;
+    return { id: el._id, horizontal: h, start: enabled && at > 0.5, end: enabled && at < max - 0.5 };
+  }
+
+  /**
+   * Brings stop `el`, which an arrow focused, into sight: each scroll view
+   * around it, innermost first, glides by `nsh_focus_reveal`'s delta along
+   * its axis (`focus::reveal`: centered vertically, as little as shows it
+   * horizontally, as on the terminal), and the views further out see the
+   * stop where that puts it.
+   */
+  revealFocus(el) {
+    const rect = el.getBoundingClientRect();
+    let [x, y] = [rect.left, rect.top];
+    for (const view of this.ancestors(el.parentNode)) {
+      if (view._kind !== "scroll") continue;
+      const h = !!view._horizontal;
+      const box = view.getBoundingClientRect();
+      // CSS pixels of its layout per pixel shown (a dialog's scaled layer).
+      const scale = (h ? view.offsetWidth / box.width : view.offsetHeight / box.height) || 1;
+      const start = (h ? x - box.left : y - box.top) * scale - (h ? view.clientLeft : view.clientTop);
+      const len = (h ? rect.width : rect.height) * scale;
+      const delta = this.wasm.nsh_focus_reveal(start, len, h ? view.clientWidth : view.clientHeight, h ? 0 : 1);
+      if (!Number.isFinite(delta)) continue;
+      const shown = h ? view.scrollLeft : view.scrollTop;
+      const max = h ? view.scrollWidth - view.clientWidth : view.scrollHeight - view.clientHeight;
+      const to = Math.min(Math.max(shown + delta, 0), Math.max(max, 0));
+      // A glide in flight goes on from where it was going.
+      const going = view._glide ? (h ? view._glide.x : view._glide.y) : shown;
+      if (to === going) continue;
+      this.scrollSmoothly(view, h ? to - going : 0, h ? 0 : to - going, true);
+      if (h) x -= (to - shown) / scale;
+      else y -= (to - shown) / scale;
+    }
   }
 
   // Wheels and touchpads

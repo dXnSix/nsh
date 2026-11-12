@@ -1,5 +1,5 @@
-//! The web backend's text rules, input encoding, event payloads and bound
-//! animated values, off WebAssembly: the crate itself is empty there
+//! The web backend's text rules, input encoding, event payloads, bound
+//! animated values and arrow-key focus moves, off WebAssembly: the crate itself is empty there
 //! (`lib.rs`), so this binary builds the modules that depend on nothing of
 //! the browser from their sources.
 
@@ -20,6 +20,9 @@ mod input;
 
 #[path = "../../src/event.rs"]
 mod event;
+
+#[path = "../../src/focus.rs"]
+mod focus;
 
 #[path = "../../src/animation.rs"]
 #[allow(dead_code, reason = "the wasm-only frame loop uses the rest")]
@@ -50,6 +53,7 @@ mod encode {
 
 mod animated;
 mod events;
+mod focus_moves;
 mod fonts;
 mod hit_testing;
 mod lines;

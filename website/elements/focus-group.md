@@ -7,8 +7,8 @@ demo: el-focus-group
 
 # FocusGroup
 
-On a TV, and in the GPUI backend, the arrow keys move the keyboard focus to the nearest stop in their direction. A
-`FocusGroup` is a region they treat as one: a shelf of tiles, a row of tabs, a side menu. The focus enters a group at
+On a TV, in the GPUI backend and in browsers, the arrow keys move the keyboard focus to the nearest stop in their
+direction. A `FocusGroup` is a region they treat as one: a shelf of tiles, a row of tabs, a side menu. The focus enters a group at
 its `destinations`, in order (the tile focused last in a shelf, the selected tab), rather than at the stop nearest the
 focus; without one in reach, at the group's `preferredFocus` stop, else the nearest. With `trap`, the arrows never take
 the focus out of the group: an open side menu, a dialog drawn in the page. Inside a group the arrows go to the nearest
@@ -88,5 +88,6 @@ content. The views inside it keep their own focus props: `autoFocus`, `preferred
 
 ## Platforms
 
-The group's rules apply where the arrow keys move the focus between views: the GPUI backend, and TVs. On the other
-platforms it is a plain view, and its stops are reached as everywhere else (Tab on the desktops and the web).
+The group's rules apply where the arrow keys move the focus between views: the GPUI backend, the web (browsers, and
+a TV's web app) and TVs. On the other platforms it is a plain view, and its stops are reached as everywhere else (Tab
+on the desktops).
