@@ -154,12 +154,8 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       # GTK 4 and GStreamer: the examples' crates (`gallery-rs`, `rust-exports`) are built
       # for this machine too (GTK's Linux platform plays sounds and videos with GStreamer).
-      # WebKitGTK 6.0 (it brings libsoup 3): a Rust app's generated workspace has a
-      # `hack` member that gives its describing program the features its host programs
-      # use, the Linux host's web views among them, so an Android build compiles
-      # GTK's WebKit bindings on this machine too.
-      - name: Install clang, GTK 4, WebKitGTK and GStreamer
-        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev libwebkitgtk-6.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - name: Install clang, GTK 4 and GStreamer
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
       # The Android runtime: `javac` + `d8` (Java 17), the SDK's
       # `platforms;android-35` and an NDK: the image's default
       # (`ANDROID_NDK_HOME`, 27). QuickJS's bindings, generated with the
@@ -243,12 +239,8 @@ jobs:
       # QuickJS's WebAssembly build needs LLVM (clang, llvm-ar); GTK 4 and
       # GStreamer: the examples' crates (`gallery-rs`, `rust-exports`) are built for
       # this machine too (GTK's Linux platform plays sounds and videos with GStreamer).
-      # WebKitGTK 6.0 (it brings libsoup 3): a Rust app's generated workspace has a
-      # `hack` member that gives its describing program the features its host programs
-      # use, the Linux host's web views among them, so a web build compiles GTK's
-      # WebKit bindings on this machine too.
-      - name: Install clang, LLVM, GTK 4, WebKitGTK and GStreamer
-        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev libgtk-4-dev libwebkitgtk-6.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - name: Install clang, LLVM, GTK 4 and GStreamer
+        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
