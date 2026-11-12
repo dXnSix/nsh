@@ -1858,20 +1858,23 @@ fn a_command_without_a_search_field_takes_the_keyboard_on_focus(cx: &mut TestApp
         cx.add_window_view(|window, cx| AppView::new(AppOptions::default(), window, cx));
     view.update(cx, |view, _| view.load(App::Js(Bundle::source(code))));
     cx.update(|window, cx| window.focus(&view.focus_handle(cx), cx));
-    // `focus()` moves the keyboard from the field to the command.
+    // `focus()` moves the keyboard from the field to the command, and the
+    // command binds its keys once its `onFocus` ran in the engine: keys
+    // pressed before that reach no binding (as on a busy machine).
     let start = Instant::now();
     loop {
         cx.run_until_parked();
         let moved = view.read_with(cx, |view, _| {
             crate::focus::focused(view.surface()).is_some()
                 && crate::text_input::focused(view.surface()).is_none()
+                && crate::keymap::bound(view.surface())
         });
         if moved {
             break;
         }
         assert!(
             start.elapsed() < Duration::from_secs(10),
-            "the command never took the focus"
+            "the command never took the focus and bound its keys"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
