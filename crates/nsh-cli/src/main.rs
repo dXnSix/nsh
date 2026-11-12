@@ -28,7 +28,10 @@ mod test;
 mod test_android;
 mod test_host;
 mod test_ios;
+mod test_tizen;
 mod test_web;
+mod tizen;
+mod tizen_web;
 mod ui;
 mod updater;
 mod web;
@@ -171,10 +174,11 @@ enum Command {
         junit: Option<PathBuf>,
         /// Run the apps the tests open on this platform's development host
         /// instead of headless: the steps act with the platform's own input
-        /// (macos, linux, windows, gpui, tui, web, ios and android; tui uses
-        /// an in-memory terminal; web runs them
+        /// (macos, linux, windows, gpui, tui, web, tizen-web, ios, android
+        /// and tizen; tui uses an in-memory terminal; web runs them
         /// in a headless Chrome, Edge or Chromium, ios in a simulator,
-        /// android on the first device adb lists).
+        /// android on the first device adb lists, tizen on the TV or
+        /// emulator `sdb devices` lists, or `--device`).
         #[arg(long, value_enum)]
         target: Option<run::Target>,
         /// The Chrome, Edge or Chromium executable `--target web` runs the
@@ -186,8 +190,10 @@ enum Command {
         /// `nsh/host` calls of each app the tests open and sends its events.
         #[arg(long, value_name = "JS")]
         web_host: Option<PathBuf>,
-        /// With `--target ios`: the simulator the apps run in (name or
-        /// UDID); default: a booted one, else the newest iPhone.
+        /// The device the apps run on: with `--target ios` the simulator
+        /// (name or UDID; default: a booted one, else the newest iPhone),
+        /// with `--target tizen` the TV's or emulator's `sdb` serial
+        /// (default: the only one `sdb devices` lists).
         #[arg(long, value_name = "DEVICE")]
         device: Option<String>,
         /// With `--target macos`: the display the apps' windows open on,
@@ -204,6 +210,11 @@ enum Command {
         /// the app in use, and the tests' input goes to them directly.
         #[arg(long)]
         foreground: bool,
+        /// The idiom the apps the tests open run in, over `nsh.json`
+        /// `dev.idiom`, as with `nsh run`: `tv` tests a TV's layouts and
+        /// focus on this machine (`--target gpui` and `web`).
+        #[arg(long, value_enum)]
+        idiom: Option<run::DevIdiom>,
     },
     /// Type check an app with TypeScript's native compiler (TypeScript 7,
     /// downloaded once from the npm registry; no Node needed); an app with
@@ -252,6 +263,11 @@ enum Command {
         /// Serve hot reload to hosts you start yourself.
         #[arg(long, conflicts_with_all = ["target", "device"])]
         server_only: bool,
+        /// The idiom to run the app in, over `nsh.json` `dev.idiom`: `tv`
+        /// builds a TV's layouts and focus on this machine (`--target gpui`
+        /// and `web`, and the page `--server-only` serves to browsers).
+        #[arg(long, value_enum)]
+        idiom: Option<run::DevIdiom>,
     },
     /// Package an installable app from the prebuilt runtime (no Rust
     /// needed). Metadata comes from `nsh.json` next to the entry, overridden
@@ -296,7 +312,8 @@ enum Command {
         #[arg(long, value_enum, default_value_t = run::Target::native())]
         target: run::Target,
         /// iOS simulator to use (name or UDID); default: a booted one, else
-        /// the newest iPhone.
+        /// the newest iPhone. Tizen: the TV's or emulator's `sdb` serial
+        /// (default: the only one `sdb devices` lists).
         #[arg(long)]
         device: Option<String>,
         /// Points per terminal Cell, overriding nsh.json tui.pointsPerCell (default: 8x16).
@@ -316,6 +333,11 @@ enum Command {
         /// main one when there is no such display (`--target macos` only).
         #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
         display: Option<u32>,
+        /// The idiom to run the app in, over `nsh.json` `dev.idiom`: `tv`
+        /// builds a TV's layouts and focus on this machine (`--target gpui`
+        /// and `web`).
+        #[arg(long, value_enum)]
+        idiom: Option<run::DevIdiom>,
     },
     /// Create a signing key: `<name>.secret` (keep it offline for a root)
     /// and `<name>.pub` (what apps trust, for a root).
@@ -538,7 +560,9 @@ struct PackageArgs {
     /// App icon: a square PNG, ideally 1024×1024.
     #[arg(long)]
     icon: Option<PathBuf>,
-    /// Code signing identity for devices, e.g. "Apple Development: …".
+    /// Code signing identity for devices, e.g. "Apple Development: …";
+    /// Tizen and Tizen web: the certificate profile `tz` signs with
+    /// (default: `nsh.json` `tizen.signing`).
     #[arg(long)]
     sign: Option<String>,
     /// Provisioning profile for devices (`.mobileprovision`).
@@ -557,17 +581,20 @@ struct PackageArgs {
     /// arm64-v8a and armeabi-v7a; with --run also the device's).
     #[arg(long, value_delimiter = ',', value_parser = crate::android::ABIS)]
     abi: Vec<String>,
+    /// The processors the package runs on. macOS: `arm64` (Apple silicon),
+    /// `x86_64` (Intel) or `universal` (both, in one executable); default:
+    /// this Mac's. Tizen: the TPKs' architectures, `armv7l`, `aarch64` or
+    /// `x86_64` (the emulator), repeated or separated by commas (default:
+    /// armv7l, the TVs'; with --run the TV's): one TPK each, several also
+    /// the multi-architecture `.zip` for Seller Office.
+    #[arg(long, value_delimiter = ',', value_name = "ARCH")]
+    arch: Vec<String>,
     /// Android: what to write, an APK (installed directly) or an Android
     /// App Bundle (`aab`, uploaded to Google Play).
     #[arg(long, value_enum, default_value_t)]
     format: crate::android::Format,
-    /// macOS: the processors the app runs on, `arm64` (Apple silicon),
-    /// `x86_64` (Intel) or `universal` (both, in one executable). Default:
-    /// this Mac's.
-    #[arg(long, value_enum)]
-    arch: Option<package::Arch>,
-    /// Install and launch the app in the simulator or on the Android device
-    /// afterwards (Linux, macOS, Windows: launch it; web: serve it on this
+    /// Install and launch the app in the simulator, on the Android device
+    /// or on the TV (Tizen: the only one `sdb devices` lists) afterwards (Linux, macOS, Windows: launch it; web: serve it on this
     /// machine at the address it prints).
     #[arg(long)]
     run: bool,
@@ -577,6 +604,12 @@ struct PackageArgs {
     /// relatively, so the site runs from any directory.
     #[arg(long, value_name = "URL", conflicts_with = "run")]
     asset_url: Option<String>,
+    /// Tizen web: instead of the app, a package that tries on the TV the
+    /// ways the app's page loads its files (module scripts, an import map,
+    /// an iframe's realm, a script fetched with CORS, WebAssembly) and
+    /// shows what each did.
+    #[arg(long)]
+    probe: bool,
 }
 
 /// `nsh component`'s actions.
@@ -616,6 +649,8 @@ impl Command {
             | Command::Dev { entry, .. }
             | Command::Run { entry, .. }
             | Command::Publish { entry, .. } => Some(entry),
+            // The loader probe builds no app ([`probe_entry`]).
+            Command::Package(args) if args.probe => None,
             Command::Package(args) => Some(&mut args.entry),
             Command::Init { .. }
             | Command::Keygen { .. }
@@ -627,6 +662,16 @@ impl Command {
             | Command::Symbolicate { .. }
             | Command::Revoke { .. } => None,
         }
+    }
+}
+
+/// The entry of `nsh package --probe`'s app, which need not exist: the
+/// probe reads only the `nsh.json` beside it (its signing profile).
+fn probe_entry(entry: &std::path::Path) -> PathBuf {
+    if entry.is_dir() {
+        entry.join("App.tsx")
+    } else {
+        entry.to_path_buf()
     }
 }
 
@@ -730,6 +775,11 @@ fn run(mut command: Command) -> anyhow::Result<()> {
     if let Command::Test { path, entry, .. } = &mut command {
         *path = dunce::canonicalize(&*path).with_context(|| format!("{}", path.display()))?;
         *entry = test::app_entry(path)?;
+    }
+    if let Command::Package(args) = &mut command
+        && args.probe
+    {
+        args.entry = probe_entry(&args.entry);
     }
     if let Some(entry) = command.entry_mut() {
         *entry = entry::resolve(entry)?;
@@ -843,6 +893,38 @@ fn run(mut command: Command) -> anyhow::Result<()> {
     }
 }
 
+/// `nsh package --arch`'s values for `target`: one macOS architecture, or
+/// the Tizen ones (any number); the other targets take none.
+fn package_archs(
+    target: package::PackageTarget,
+    values: &[String],
+) -> anyhow::Result<(Option<package::Arch>, Vec<crate::tizen::Arch>)> {
+    use clap::ValueEnum as _;
+    match target {
+        _ if values.is_empty() => Ok((None, Vec::new())),
+        package::PackageTarget::Macos => match values {
+            [value] => package::Arch::from_str(value, false)
+                .map(|arch| (Some(arch), Vec::new()))
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "--arch {value}: macOS packages run on arm64, x86_64 or universal"
+                    )
+                }),
+            _ => anyhow::bail!("--target macos takes one --arch"),
+        },
+        package::PackageTarget::Tizen => values
+            .iter()
+            .map(|value| {
+                crate::tizen::Arch::from_str(value, false).map_err(|_| {
+                    anyhow::anyhow!("--arch {value}: TVs run on armv7l, aarch64 or x86_64")
+                })
+            })
+            .collect::<anyhow::Result<_>>()
+            .map(|archs| (None, archs)),
+        _ => anyhow::bail!("--arch only applies to --target macos and tizen"),
+    }
+}
+
 fn dispatch(command: Command) -> anyhow::Result<()> {
     match command {
         Command::Init {
@@ -877,6 +959,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             device,
             display,
             foreground,
+            idiom,
         } => test::test(
             &path,
             &entry,
@@ -890,6 +973,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             device.as_deref(),
             display.map(|n| n as usize),
             foreground,
+            idiom,
         ),
         Command::Dev {
             entry,
@@ -899,6 +983,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             target,
             device,
             server_only,
+            idiom,
         } => {
             no_limits_for_rust(&entry, limits)?;
             // `--server-only` serves hosts started elsewhere, on other
@@ -909,7 +994,10 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 network: server_only || target.uses_network(),
             };
             if server_only {
-                let session = dev::DevSession::start(&entry, listen, release, limits)?;
+                // The page it serves takes the idiom; hosts started
+                // separately take theirs on their command line.
+                let idiom = run::DevIdiom::resolve(idiom, &entry, None)?;
+                let session = dev::DevSession::start(&entry, listen, release, limits, idiom)?;
                 session.print_urls();
                 session.watch(|| Ok(false))
             } else {
@@ -922,6 +1010,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                         trace: false,
                         fps: false,
                         points_per_cell: None,
+                        idiom,
                     },
                     target,
                     device.as_deref(),
@@ -945,11 +1034,13 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 key_alias,
                 keystore_password,
                 abi,
-                format,
                 arch,
+                format,
                 run,
                 asset_url,
+                probe,
             } = *args;
+            let (arch, tizen_archs) = package_archs(target, &arch)?;
             let mut config = package::read_config(&entry)?;
             config.name = name.or(config.name);
             config.id = id.or(config.id);
@@ -971,10 +1062,12 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                     )
                 }),
                 abis: &abi,
+                tizen_archs: &tizen_archs,
                 format,
                 arch,
                 run,
                 asset_url: asset_url.as_deref(),
+                probe,
             })
         }
         Command::Run {
@@ -990,6 +1083,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             size,
             display,
             points_per_cell,
+            idiom,
         } => {
             no_limits_for_rust(&entry, limits)?;
             run::run(
@@ -1004,6 +1098,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                     trace,
                     fps,
                     points_per_cell,
+                    idiom,
                 },
                 target,
                 device.as_deref(),
@@ -1100,7 +1195,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
 mod command_tests {
     use clap::Parser as _;
 
-    use super::{Cli, Command, run::Target};
+    use super::{Cli, Command, package_archs, run::Target};
 
     #[test]
     fn publish_ios_and_package_signing_have_separate_arguments() {
@@ -1236,9 +1331,11 @@ mod command_tests {
             let mut line = vec!["nsh", "package", "--target", "macos"];
             line.extend_from_slice(args);
             match Cli::try_parse_from(line).map(|cli| cli.command) {
-                Ok(Command::Package(args)) => Ok(args.arch),
+                Ok(Command::Package(args)) => {
+                    package_archs(args.target, &args.arch).map(|(arch, _)| arch)
+                }
                 Ok(_) => panic!("expected nsh package"),
-                Err(e) => Err(e),
+                Err(e) => Err(e.into()),
             }
         };
         assert_eq!(arch(&[]).unwrap(), None);

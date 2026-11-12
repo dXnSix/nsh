@@ -431,6 +431,21 @@ pub struct ViewProps {
     /// keys); `Some(false)` keeps a view that takes presses out; `None`, the
     /// default, leaves it to the presses ([`ViewProps::focus_stop`]).
     pub focusable: Option<bool>,
+    /// `autoFocus` of a view that is not an input: it takes the keyboard
+    /// focus when it appears in the scope the focus moves in, where the
+    /// arrows move it between views ([`crate::focus::auto_focus`]).
+    pub auto_focus: bool,
+    /// `preferredFocus`: the stop wins over the nearest one where the
+    /// keyboard focus enters (its `FocusGroup`, or a scope with nothing
+    /// focused, [`crate::focus::directional`]).
+    pub preferred_focus: bool,
+    /// `nextFocusUp` / `Down` / `Left` / `Right`: the views the arrows take
+    /// the keyboard focus to from this one, by node (the core finds the
+    /// refs' nodes in every commit).
+    pub next_focus: crate::focus::NextFocus,
+    /// The view is a focus group (`nsh/base`'s `FocusGroup`): whether it
+    /// traps the arrows and the nodes of its destinations, in order.
+    pub focus_group: Option<crate::focus::GroupConfig>,
     /// The view is a selectable view (`View`'s `selectable`): the
     /// texts in its subtree that are not `selectable={false}` share one
     /// selection, from text to text ([`crate::selection`]); an area inside

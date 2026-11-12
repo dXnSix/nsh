@@ -3356,7 +3356,8 @@
 		"android",
 		"macos",
 		"desktop",
-		"web"
+		"web",
+		"tv"
 	]);
 	function createDom(invoke, values, reactive, live, wake) {
 		const handlers = /* @__PURE__ */ new WeakMap(), owners = /* @__PURE__ */ new WeakMap(), heldProps = /* @__PURE__ */ new WeakMap();
@@ -3515,7 +3516,7 @@
 		const platformProps = (node, name, value) => {
 			const previous = heldProps.get(node)?.get(name);
 			hold(node, name, value);
-			if (!(name === "desktop" ? platform?.desktop : name === platform?.os)) return;
+			if (!(name === "desktop" ? platform?.desktop : name === "tv" ? platform?.tv : name === platform?.os)) return;
 			const next = value !== null && typeof value === "object" ? value : {};
 			if (previous !== null && typeof previous === "object") {
 				for (const key of Object.keys(previous)) if (!Object.hasOwn(next, key)) prop(node, key, void 0);
@@ -5249,9 +5250,12 @@
 			version: "0.0",
 			idiom: "desktop",
 			desktop: true,
+			tv: false,
 			catalyst: false,
 			select(spec) {
-				return "web" in spec ? spec.web : this.desktop ? spec.desktop ?? spec.default : spec.mobile ?? spec.default;
+				if ("web" in spec) return spec.web;
+				if (this.tv && "tv" in spec) return spec.tv;
+				return this.desktop ? spec.desktop ?? spec.default : spec.mobile ?? spec.default;
 			}
 		};
 		let appearance = "system", systemScheme = "light";

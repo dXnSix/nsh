@@ -133,6 +133,7 @@ fn field_pending(view: &Entity<AppView>, cx: &mut VisualTestContext) -> Option<S
 
 /// Runs the window until the focused field holds `text` for after its
 /// composition.
+#[track_caller]
 fn wait_for_pending(view: &Entity<AppView>, cx: &mut VisualTestContext, text: &str) {
     let start = Instant::now();
     loop {
@@ -160,6 +161,7 @@ fn ime(
 
 /// Runs the window (and waits for the engine's thread) until the focused
 /// field reads `text`.
+#[track_caller]
 fn wait_for(view: &Entity<AppView>, cx: &mut VisualTestContext, text: &str) {
     let start = Instant::now();
     loop {
@@ -421,14 +423,26 @@ fn a_popovers_field_follows_its_trigger_in_the_tab_order(cx: &mut TestAppContext
             ));
         });
     };
-    // Into the popover, which is shown at the end of the root view, then
-    // on to the field after it, and back.
+    // Tab goes through every stop ([`crate::focus::tab_stops`]): the
+    // popover's trigger, which takes presses, then into the popover, which
+    // is shown at the end of the root view, then on to the field after it,
+    // and back.
+    let on_trigger = |view: &Entity<AppView>, cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            crate::focus::focused(view.surface()).is_some()
+                && crate::text_input::focused(view.surface()).is_none()
+        })
+    };
+    tab(&view, cx, false);
+    assert!(on_trigger(&view, cx), "Tab did not reach the trigger");
     tab(&view, cx, false);
     wait_for(&view, cx, "inside");
     tab(&view, cx, false);
     wait_for(&view, cx, "after");
     tab(&view, cx, true);
     wait_for(&view, cx, "inside");
+    tab(&view, cx, true);
+    assert!(on_trigger(&view, cx), "Shift+Tab did not reach the trigger");
     tab(&view, cx, true);
     wait_for(&view, cx, "before");
 }
@@ -1081,6 +1095,7 @@ fn presses_carry_where_the_pointer_was(cx: &mut TestAppContext) {
 
 /// Runs the window until the focused field's text satisfies `done`, and
 /// returns it.
+#[track_caller]
 fn wait_until(
     view: &Entity<AppView>,
     cx: &mut VisualTestContext,
@@ -1137,6 +1152,7 @@ fn owned_view(
 }
 
 /// Runs the window until `done` holds.
+#[track_caller]
 fn wait_until_window(
     cx: &mut VisualTestContext,
     what: &str,
@@ -1842,20 +1858,23 @@ fn a_command_without_a_search_field_takes_the_keyboard_on_focus(cx: &mut TestApp
         cx.add_window_view(|window, cx| AppView::new(AppOptions::default(), window, cx));
     view.update(cx, |view, _| view.load(App::Js(Bundle::source(code))));
     cx.update(|window, cx| window.focus(&view.focus_handle(cx), cx));
-    // `focus()` moves the keyboard from the field to the command.
+    // `focus()` moves the keyboard from the field to the command, and the
+    // command binds its keys once its `onFocus` ran in the engine: keys
+    // pressed before that reach no binding (as on a busy machine).
     let start = Instant::now();
     loop {
         cx.run_until_parked();
         let moved = view.read_with(cx, |view, _| {
-            crate::key_focus::focused(view.surface()).is_some()
+            crate::focus::focused(view.surface()).is_some()
                 && crate::text_input::focused(view.surface()).is_none()
+                && crate::keymap::bound(view.surface())
         });
         if moved {
             break;
         }
         assert!(
             start.elapsed() < Duration::from_secs(10),
-            "the command never took the focus"
+            "the command never took the focus and bound its keys"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -1870,6 +1889,6 @@ fn a_command_without_a_search_field_takes_the_keyboard_on_focus(cx: &mut TestApp
         "{text}"
     );
     assert!(view.read_with(cx, |view, _| {
-        crate::key_focus::focused(view.surface()).is_none()
+        crate::focus::focused(view.surface()).is_none()
     }));
 }

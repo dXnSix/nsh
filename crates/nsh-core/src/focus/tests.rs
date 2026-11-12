@@ -462,3 +462,306 @@ fn frames_scaled_along_each_axis_on_its_own_move_the_focus_as_they_did() {
         );
     }
 }
+
+/// What a TV adds: preferred and initial focus, overrides, focus groups
+/// and lists scrolled by index ([`directional`], [`auto_focus`],
+/// [`first_stop`], [`next_row`]).
+mod tv {
+    use super::*;
+
+    /// Never scrolls; nothing is inside a scroll view.
+    fn directional_plain(
+        nodes: &[Candidate],
+        current: Option<usize>,
+        direction: Direction,
+        groups: &[Group],
+    ) -> Target {
+        directional(nodes, current, direction, groups, |_| false, |_, _| false)
+    }
+
+    fn group(id: NodeId, parent: Option<NodeId>, trap: bool, destinations: &[NodeId]) -> Group {
+        Group {
+            id,
+            parent,
+            trap,
+            destinations: destinations.to_vec(),
+        }
+    }
+
+    /// A row of three stops 40 points apart, and one below the first.
+    fn grid() -> Vec<Candidate> {
+        vec![
+            stop(1, 0.0, 0.0, 40.0, 20.0),
+            stop(2, 60.0, 0.0, 40.0, 20.0),
+            stop(3, 120.0, 0.0, 40.0, 20.0),
+            stop(4, 0.0, 60.0, 40.0, 20.0),
+        ]
+    }
+
+    #[test]
+    fn without_the_tv_s_props_the_arrows_move_as_on_the_desktops() {
+        let nodes = grid();
+        for current in [None, Some(0), Some(1), Some(2), Some(3)] {
+            for (direction, horizontal_axis, forward) in [
+                (Direction::Left, true, false),
+                (Direction::Right, true, true),
+                (Direction::Up, false, false),
+                (Direction::Down, false, true),
+            ] {
+                let expected = if horizontal_axis {
+                    horizontal(&nodes, current, forward)
+                } else {
+                    vertical(&nodes, current, forward)
+                }
+                .filter(|&to| Some(to) != current);
+                let target = directional_plain(&nodes, current, direction, &[]);
+                assert_eq!(
+                    target,
+                    expected.map_or(Target::None, Target::Stop),
+                    "{direction:?} from {current:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn with_nothing_focused_the_preferred_stop_wins_over_geometry() {
+        let mut nodes = grid();
+        nodes[2].preferred = true;
+        assert_eq!(
+            directional_plain(&nodes, None, Direction::Down, &[]),
+            Target::Stop(2)
+        );
+        assert_eq!(
+            directional_plain(&nodes, None, Direction::Left, &[]),
+            Target::Stop(2)
+        );
+        // An open popup comes first, as without the prop.
+        let mut with_popup = nodes.clone();
+        with_popup[3].popup = true;
+        assert_eq!(
+            directional_plain(&with_popup, None, Direction::Down, &[]),
+            Target::Stop(3)
+        );
+        // One out of sight is no start.
+        nodes[2].visible = false;
+        assert_eq!(
+            directional_plain(&nodes, None, Direction::Down, &[]),
+            Target::Stop(0)
+        );
+    }
+
+    #[test]
+    fn an_override_routes_the_arrow_past_geometry() {
+        let mut nodes = grid();
+        // Down from the last of the row goes to the stop below the first.
+        nodes[2].next.down = Some(4);
+        assert_eq!(
+            directional_plain(&nodes, Some(2), Direction::Down, &[]),
+            Target::Stop(3)
+        );
+        // Only that arrow: Left keeps its neighbor.
+        assert_eq!(
+            directional_plain(&nodes, Some(2), Direction::Left, &[]),
+            Target::Stop(1)
+        );
+        // A route to a view that is no stop in reach leaves the arrow to
+        // geometry.
+        nodes[0].next.right = Some(99);
+        assert_eq!(
+            directional_plain(&nodes, Some(0), Direction::Right, &[]),
+            Target::Stop(1)
+        );
+        // It leaves a trapped group: the app's own route.
+        for node in &mut nodes[..3] {
+            node.group = Some(50);
+        }
+        let groups = [group(50, None, true, &[])];
+        assert_eq!(
+            directional_plain(&nodes, Some(2), Direction::Down, &groups),
+            Target::Stop(3)
+        );
+    }
+
+    #[test]
+    fn a_trapping_group_keeps_the_arrows_inside() {
+        let mut nodes = grid();
+        for node in &mut nodes[..3] {
+            node.group = Some(50);
+        }
+        let trapped = [group(50, None, true, &[])];
+        assert_eq!(
+            directional_plain(&nodes, Some(0), Direction::Down, &trapped),
+            Target::None
+        );
+        assert_eq!(
+            directional_plain(&nodes, Some(0), Direction::Right, &trapped),
+            Target::Stop(1)
+        );
+        // Without the trap, Down leaves it.
+        let open = [group(50, None, false, &[])];
+        assert_eq!(
+            directional_plain(&nodes, Some(0), Direction::Down, &open),
+            Target::Stop(3)
+        );
+        // A trap around the group a stop is in holds it too.
+        for node in &mut nodes[..2] {
+            node.group = Some(51);
+        }
+        let nested = [group(50, None, true, &[]), group(51, Some(50), false, &[])];
+        assert_eq!(
+            directional_plain(&nodes, Some(1), Direction::Right, &nested),
+            Target::Stop(2)
+        );
+        assert_eq!(
+            directional_plain(&nodes, Some(1), Direction::Down, &nested),
+            Target::None
+        );
+    }
+
+    #[test]
+    fn entering_a_group_goes_to_its_first_destination_in_reach() {
+        let mut nodes = grid();
+        // The row is a group entered at its last stop.
+        for node in &mut nodes[..3] {
+            node.group = Some(50);
+        }
+        let from_below = Some(3);
+        let groups = [group(50, None, false, &[77, 3])];
+        assert_eq!(
+            directional_plain(&nodes, from_below, Direction::Up, &groups),
+            Target::Stop(2),
+            "77 is no stop: the next destination"
+        );
+        // Moving inside the group keeps geometry.
+        assert_eq!(
+            directional_plain(&nodes, Some(0), Direction::Right, &groups),
+            Target::Stop(1)
+        );
+        // A destination outside the group is none of its own.
+        let groups = [group(50, None, false, &[4])];
+        assert_eq!(
+            directional_plain(&nodes, from_below, Direction::Up, &groups),
+            Target::Stop(0)
+        );
+    }
+
+    #[test]
+    fn entering_a_group_without_destinations_goes_to_its_preferred_stop() {
+        let mut nodes = grid();
+        for node in &mut nodes[..3] {
+            node.group = Some(50);
+        }
+        nodes[1].preferred = true;
+        let groups = [group(50, None, false, &[])];
+        assert_eq!(
+            directional_plain(&nodes, Some(3), Direction::Up, &groups),
+            Target::Stop(1)
+        );
+        // Outside a group a preferred stop is reached by geometry only.
+        let mut flat = grid();
+        flat[1].preferred = true;
+        assert_eq!(
+            directional_plain(&flat, Some(3), Direction::Up, &[]),
+            Target::Stop(0)
+        );
+    }
+
+    #[test]
+    fn a_scroll_view_that_can_scroll_on_keeps_the_focus() {
+        // A list (60) of two mounted rows, a button below it.
+        let mut nodes = vec![
+            stop(1, 0.0, 0.0, 100.0, 20.0),
+            stop(2, 0.0, 20.0, 100.0, 20.0),
+            stop(3, 0.0, 200.0, 100.0, 20.0),
+        ];
+        nodes[0].scroller = Some(60);
+        nodes[1].scroller = Some(60);
+        let inside = |scroller: NodeId, id: NodeId| scroller == 60 && id <= 2;
+        let scrolls = |more: bool| {
+            move |nodes: &[Candidate], current| {
+                directional(nodes, current, Direction::Down, &[], |_| more, inside)
+            }
+        };
+        // A row mounted below: it takes the focus.
+        assert_eq!(scrolls(true)(&nodes, Some(0)), Target::Stop(1));
+        // The last mounted row, the list goes on: it scrolls, the button
+        // below is not reached.
+        assert_eq!(scrolls(true)(&nodes, Some(1)), Target::Scroll(60));
+        // At the list's end the arrow leaves it.
+        assert_eq!(scrolls(false)(&nodes, Some(1)), Target::Stop(2));
+        // Nothing below at all: it scrolls while it can.
+        nodes.pop();
+        assert_eq!(scrolls(true)(&nodes, Some(1)), Target::Scroll(60));
+        assert_eq!(scrolls(false)(&nodes, Some(1)), Target::None);
+    }
+
+    #[test]
+    fn auto_focus_is_the_first_stop_that_asks_and_was_not_seen() {
+        let mut nodes = grid();
+        assert_eq!(auto_focus(&nodes, |_| false), None);
+        nodes[1].auto_focus = true;
+        nodes[3].auto_focus = true;
+        assert_eq!(auto_focus(&nodes, |_| false), Some(1));
+        assert_eq!(auto_focus(&nodes, |id| id == 2), Some(3));
+        assert_eq!(auto_focus(&nodes, |_| true), None);
+    }
+
+    #[test]
+    fn a_scope_opened_gives_the_focus_to_auto_focus_then_preferred_then_first() {
+        let mut nodes = grid();
+        assert_eq!(first_stop(&nodes), Some(0));
+        nodes[2].preferred = true;
+        assert_eq!(first_stop(&nodes), Some(2));
+        nodes[3].auto_focus = true;
+        assert_eq!(first_stop(&nodes), Some(3));
+        assert_eq!(first_stop::<Candidate>(&[]), None);
+    }
+
+    #[test]
+    fn the_next_row_of_a_list_is_one_along_its_axis() {
+        let row = |index, count, columns, horizontal| Row {
+            list: 60,
+            index,
+            count,
+            columns,
+            horizontal,
+        };
+        let list = row(4, 10, 1, false);
+        assert_eq!(next_row(&list, Direction::Down), Some(5));
+        assert_eq!(next_row(&list, Direction::Up), Some(3));
+        // Across a list of one column: geometry's.
+        assert_eq!(next_row(&list, Direction::Right), None);
+        // The ends.
+        assert_eq!(next_row(&row(9, 10, 1, false), Direction::Down), None);
+        assert_eq!(next_row(&row(0, 10, 1, false), Direction::Up), None);
+        // A horizontal list moves with Left and Right.
+        assert_eq!(next_row(&row(4, 10, 1, true), Direction::Right), Some(5));
+        assert_eq!(next_row(&row(4, 10, 1, true), Direction::Down), None);
+        // A grid of three columns: a row of them along, one across.
+        let grid = row(4, 10, 3, false);
+        assert_eq!(next_row(&grid, Direction::Down), Some(7));
+        assert_eq!(next_row(&grid, Direction::Up), Some(1));
+        assert_eq!(next_row(&grid, Direction::Right), Some(5));
+        assert_eq!(next_row(&grid, Direction::Left), Some(3));
+        assert_eq!(next_row(&row(5, 10, 3, false), Direction::Right), None);
+        assert_eq!(next_row(&row(8, 10, 3, false), Direction::Down), None);
+        // No columns counts as one.
+        assert_eq!(next_row(&row(4, 10, 0, false), Direction::Down), Some(5));
+    }
+
+    #[test]
+    fn groups_are_found_through_their_parents() {
+        let groups = [group(50, None, false, &[]), group(51, Some(50), true, &[])];
+        assert!(in_group(&groups, Some(51), 50));
+        assert!(in_group(&groups, Some(51), 51));
+        assert!(!in_group(&groups, Some(50), 51));
+        assert!(!in_group(&groups, None, 50));
+        // A loop the backend made ends.
+        let looped = [
+            group(50, Some(51), false, &[]),
+            group(51, Some(50), false, &[]),
+        ];
+        assert!(!in_group(&looped, Some(50), 99));
+    }
+}

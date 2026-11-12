@@ -126,7 +126,10 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
 
 - The CLI watches sources with notify and pushes every rebuild over WebSocket (`/ws`, default port 8790, or `--port`) to all
   connected hosts; new clients subscribe before receiving the current state, so no event is missed. Protocol: `crates/nsh-dev/src/protocol.rs`
-  (JSON text frames + binary frames).
+  (JSON text frames + binary frames). A host connects to the server's URL (`DevClient::start`), or speaks the same
+  protocol over connections of its own (`DevClient::start_with` and a `DevTransport`): a device that reaches the
+  machine through a tool's port mapping, as a TV through `sdb reverse` or `sdb forward`, where the TV listens and the
+  CLI connects and relays to the server.
 - Without `--port`, `nsh run` and `nsh dev` take the port their app (its entry) had last, else the first free one from
   8790; `nsh dev --server-only` takes 8790, which embedding apps keep in their code. `nsh run` and `nsh dev` bind to
   loopback, with `--target ios`, `android` or `web` and `nsh dev --server-only` to every address, for other machines
@@ -184,7 +187,18 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
   (`crates/nsh-macos-host`) in place too: it makes itself a regular app without a bundle. `--target gpui` runs the
   GPUI host (`crates/gpui/nsh-gpui-host`) in place on any of the three: it shows a TSX app as GPUI apps that embed it
   show it (GPUI is the backend for embedding; a Rust app of Rust only runs on the OS's own backend). GPUI hosts report
-  `HostPlatform::Gpui`, so the dev server shows them `nsh run --target gpui`. The hosts are stopped with the run
+  `HostPlatform::Gpui`, so the dev server shows them `nsh run --target gpui`. `--idiom tv|desktop` (`run::DevIdiom`,
+  over `nsh.json` `"dev": { "idiom": "tv" }`; `DevIdiom::resolve`) is the idiom the GPUI host (its `--idiom`,
+  `AppOptions::idiom`) and the web dev page (`IDIOM`, the player's `idiom`) run the app in: a TV's on the desktop. The
+  idiom is the hosts' at start, not part of the protocol (a change of `nsh.json` takes another session, as
+  `web.history`). The flag needs `--target gpui` or `web` (or `nsh dev --server-only`, whose page takes it) and fails
+  before anything starts elsewhere; `nsh.json`'s is left out with a warning for the other hosts, which run in their
+  device's own idiom. `nsh test --target gpui|web --idiom` (`DevIdiom::for_test`, the same choice; headless runs
+  refuse the flag and leave `nsh.json`'s out with a warning, `open`'s `platform` saying theirs) starts each test's
+  GPUI host with `--idiom` (`test_host::start`) and gives the test page `IDIOM` (`test_web::start`), over the test's
+  `TestEnvironment::idiom`. The `cli` test binary's `dev_idiom` module checks the arguments and the page each host
+  gets, for `nsh run`, `nsh dev` and `nsh test`; `tests/apps/tv-idiom` is a spec that runs in the TV idiom (`nsh test
+  tests/apps/tv-idiom --target gpui --idiom tv`, or `--target web`). The hosts are stopped with the run
   (Ctrl-C, SIGTERM, the session ending); a host that exits with an error ends it with its kept output. On Windows the host starts in a
   process group of its own (`CREATE_NEW_PROCESS_GROUP`), out of the console's Ctrl-C, so a stop is not taken for the
   host failing, and in a job object that kills it when the job closes (`run::KillOnClose`): Windows ends a child with

@@ -116,6 +116,7 @@ and take their look from the app.
 | `<DiffView>` | `nsh_base::diff_view()` | The changes between two texts or of a patch, split or unified | [DiffView](./diff-view.md) |
 | `<DockArea>` | `nsh_base::dock_area()` | A workspace of splits, tab groups and edge docks the user arranges | [Dock](./dock.md) |
 | `<Editor>` | `nsh_base::editor()` | A code editor with highlighting, several carets, folding and search | [Editor](./editor.md) |
+| `<FocusGroup>` | `nsh_base::focus_group()` | A region the arrow keys enter at chosen stops and may not leave | [FocusGroup](./focus-group.md) |
 | `<HoverCard>` | `nsh_base::hover_card()` | A preview of what its trigger points at, while the pointer rests on it | [HoverCard](./hover-card.md) |
 | `<Input>` | `nsh_base::input()` | The native text input (UITextField or UITextView / EditText) | [Input](./input.md) |
 | `<Link>` | `nsh_base::link()` | A press target that opens a page, a site or a route of the app | [Link](./link.md) |
@@ -474,6 +475,54 @@ its ref's `on_focus_in(..)` and `on_focus_out(..)`: moving between views inside 
 | `focusable` | `.focusable(..)` | `boolean` | `true` for views that take presses | Whether the view is a stop of Tab. `true` makes any view one, whether it takes presses or leaves them to the views around it; `false` leaves a pressable to the pointer (a backdrop that closes a popover, rows the arrow keys move between). |
 | `onFocus` | `.on_focus(..)` | `() => void` | | Tab (or `focus()`) gave the view the keyboard focus. |
 | `onBlur` | `.on_blur(..)` | `() => void` | | The keyboard focus left the view. |
+| `autoFocus` | `.auto_focus(..)` | `boolean` | `false` | The view takes the keyboard focus when it appears: mounted, or its screen or modal comes up (the first in tree order of those that appear together). On an input it shows the keyboard, on every platform; any other stop takes it in the GPUI backend and on the web (TVs included). |
+| `preferredFocus` | `.preferred_focus(..)` | `boolean` | `false` | The view takes the focus where the focus enters, over the nearest stop: its `FocusGroup` when the arrows enter it, or its screen when an arrow is pressed with nothing focused. In the GPUI backend and on the web (TVs included). |
+| `nextFocusUp`, `nextFocusDown`, `nextFocusLeft`, `nextFocusRight` | `.next_focus_up(&r)`, `.next_focus_down(&r)`, `.next_focus_left(&r)`, `.next_focus_right(&r)` | `ViewRef \| null` | | Where that arrow takes the focus from this view: the view named, or the first stop inside it. While it names nothing the focus can reach, the arrow goes to the nearest stop. In the GPUI backend and on the web (TVs included). |
+
+#### Arrow keys and TVs
+
+On macOS, Windows, Linux, the web, in the GPUI backend and on TVs, the arrow keys move the focus to the nearest stop
+in their direction, and Return or Space presses it. A remote drives the whole app that way, so these props shape where
+the focus goes (in the GPUI backend and on the web, TVs included; the other platforms keep the nearest stop):
+
+- `autoFocus` gives the focus to a view as it appears: the first card of a screen, the main button of a dialog.
+- `preferredFocus` picks the stop the focus enters at: a row's current item, a dialog's default action.
+- `nextFocusDown` and its siblings route an arrow past geometry, between rows that do not line up. Name a view
+  rendered after this one with a signal its `ref` sets (`nextFocusDown={next()}`).
+- A [`FocusGroup`](./focus-group.md) is entered at its `destinations` and, with `trap`, keeps the arrows inside.
+- In a long `List`, the arrows go on to rows that are not on screen yet: the list scrolls to the next row and the focus
+  lands on it.
+
+```rust tabs
+let play = element_ref();
+view()
+    .child(
+        view()
+            .auto_focus(true)
+            .next_focus_down(&play)
+            .on_press(resume)
+            .child(text("Resume")),
+    )
+    .child(
+        view()
+            .element_ref(&play)
+            .preferred_focus(true)
+            .on_press(start)
+            .child(text("Play")),
+    )
+```
+
+```tsx tabs
+const play = signal<ViewRef>();
+<View>
+  <View autoFocus nextFocusDown={play()} onPress={resume}>
+    <Text>Resume</Text>
+  </View>
+  <View ref={play} preferredFocus onPress={start}>
+    <Text>Play</Text>
+  </View>
+</View>
+```
 
 ```rust tabs
 view()
@@ -632,6 +681,7 @@ their platform.
 | `android={{…}}` | Android. Every element takes `ripple`, `elevation` and `accessibilityLiveRegion` (below). |
 | `desktop={{…}}` | Desktop platforms and desktop browsers; ignored on mobile. Every element takes `windowDrag` (below). |
 | `web={{…}}` | Browsers; ignored elsewhere. |
+| `tv={{…}}` | TVs, on any OS (`platform.tv`); ignored elsewhere. No prop is a TV's alone: it takes the props every element takes, its `style` and its state styles, set on TVs only (`tv={{ class: "p-8 text-2xl" }}`). |
 
 | `android` key | Rust | Type | Description |
 |---|---|---|---|

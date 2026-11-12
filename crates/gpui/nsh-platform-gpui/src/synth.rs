@@ -107,7 +107,7 @@ pub(crate) async fn frame(
     window: AnyWindowHandle,
     cx: &mut AsyncApp,
 ) -> Option<anyhow::Result<(::image::RgbaImage, gpui::Size<gpui::Pixels>)>> {
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_vendor = "tizen")))]
     {
         let watch = match in_window(window, cx, |window, _| x11::Watch::new(window))? {
             Ok(watch) => watch,
@@ -129,6 +129,16 @@ pub(crate) async fn frame(
             Ok((capture(window)?, window.viewport_size()))
         })
     }
+    // Tizen: GPUI cannot read a frame back and there is no X server.
+    #[cfg(target_vendor = "tizen")]
+    {
+        if !drawn(window, cx).await {
+            return None;
+        }
+        Some(Err(anyhow::anyhow!(
+            "screenshots are not supported on Tizen"
+        )))
+    }
 }
 
 /// The window's last frame, in device pixels.
@@ -144,7 +154,7 @@ pub(crate) fn capture(_window: &mut Window) -> anyhow::Result<::image::RgbaImage
 }
 
 /// Shots on Linux: a redirected pixmap, independent of window stacking.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_vendor = "tizen")))]
 pub(crate) mod x11 {
     use std::time::{Duration, Instant};
 
@@ -437,7 +447,7 @@ pub(crate) mod x11 {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, target_os = "linux", not(target_vendor = "tizen")))]
 mod tests {
     use super::*;
 

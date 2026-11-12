@@ -57,7 +57,7 @@ frame.src = "https://apps.example.com/player.html"; // 播放器设置 dialogs: 
 发布出去的应用，在桌面浏览器里表现得像桌面应用，在手机浏览器里表现得像手机应用：
 
 - **滚轮和触控板**滚动沿其方向、还能继续滚动的最内层滚动视图（没有可滚动的纵向视图时，纵向滚轮也会滚动横向列表），并且直到这次滚动结束都停留在这个视图上；滚轮的每一格平滑滑动，分页和吸附的视图每次滚动移动一页。Ctrl + 滚轮和触控板捏合会捏合带原生捏合值的视图，而不是缩放页面。和桌面平台一样，用鼠标拖动不会滚动：鼠标拖动交给拖拽手势、响应者系统和文字选择。滚动视图像桌面平台一样上报 `onScrollDragStart` / `onScrollDragEnd`、`onMomentumStart` / `End` 和 `onScrollEnd`，在每种浏览器里都是如此：引擎不发送 `scrollend` 时（Chromium 114 之前的版本，比如 2024 年的三星电视），滚动在最后一次移动 150 ms 后结束。
-- **键盘**：Tab 和 Shift+Tab 在可按压的视图和输入框之间移动（应用的 `focus-visible:` 样式标出键盘焦点）；回车按下获得焦点的视图，空格在松开时按下；方向键、Page Up / Page Down、空格、Home 和 End 滚动焦点所在或鼠标下方的滚动视图；Escape 先离开输入框、关闭对话框，再返回。`keymap` 的快捷键在浏览器里同样有效，当场匹配（Mac 上的 Safari 和 Chrome 里 `mod` 是 Command，其他地方是 Control）。
+- **键盘**：Tab 和 Shift+Tab 在可按压的视图和输入框之间移动（应用的 `focus-visible:` 样式标出键盘焦点）；方向键把焦点移到该方向上最近的控件，限于打开的对话框和面板遮罩之上的部分，并把它滚动到可见处，与终端一致（获得焦点的输入框保留自己的方向键，绑定了方向键的组件如 `Tabs`、`RadioGroup` 也一样）；电视遥控器需要的那些在这里同样有效，电视上的 Web 应用和任何浏览器都一样：视图的 `autoFocus`、`preferredFocus`、`nextFocusUp` / `Down` / `Left` / `Right` 路线以及 `FocusGroup` 的 `destinations` 和 `trap`，焦点所在的滚动视图或长 `List` 会先继续滚动再让焦点离开，列表滚到下一行（见[方向键与电视](../elements/index.md#方向键与电视)）；回车按下获得焦点的视图，空格在松开时按下；该方向上没有控件时的方向键、Page Up / Page Down、空格、Home 和 End 滚动焦点所在或鼠标下方的滚动视图；Escape 先离开输入框、关闭对话框，再返回。`keymap` 的快捷键在浏览器里同样有效，当场匹配（Mac 上的 Safari 和 Chrome 里 `mod` 是 Command，其他地方是 Control）。
 - **返回**：Escape、Alt+左方向键（Mac 上是 Cmd+[）和鼠标的后退键会关闭最上层的对话框或弹出当前显示的最内层的栈（未选中的 tab 里的栈保留它的页面），和 Android 返回键一样；`popOnBack` 和 `onBackPress` 也照常生效。应用占据整个页面时，正在显示的栈里压入的每个页面和打开的每个对话框都是一条浏览器历史记录，浏览器的后退按钮会在应用内返回。`nsh.json` 的 `web.history` 为打包的页面和开发服务器的页面决定这一点：`false` 让浏览器历史只保留页面自己的记录，`true` 在 iframe 里也加入应用的记录。
 - **地址**：应用占据整个页面时，[`UrlScheme.setUrl(url)`](../modules/nsh.md#urlscheme) 设置当前历史记录的地址，相对于页面地址（以及它的 `<base href>`）解析，`UrlScheme.url()` 读取它。浏览器的后退按钮在应用内后退：栈的页面返回，地址变为那条记录的地址。用户输入的地址（`#fragment`）是应用在当前页面上的一条记录，后退或前进到页面相同的记录时，[`UrlScheme.on("change")`](../modules/nsh.md#urlschemeonchange) 把那条记录的地址告诉应用。`setUrl(url, { history: "push" })` 为应用自己的地址（标签页、筛选）新建这样一条记录。
 - **触摸**：只有滚动视图可以平移；应用下面的页面本身不会滚动、缩放或下拉刷新，点按没有延迟。嵌在 iframe 里时，应用不处理的滑动会滚动外层页面。在带原生平移、捏合的视图和响应者系统上的拖动都交给应用处理。
@@ -237,7 +237,60 @@ nsh run --target web               # Rust 应用，在它的目录里
 nsh run App.tsx --target web       # TSX 应用
 ```
 
-会启动开发服务器，并打印它的页面地址 `http://127.0.0.1:8790/`，在任意浏览器中打开即可。这个页面和其他开发宿主一样：运行应用的每次构建，在应用上方显示构建错误和运行时错误，并把应用的日志发送到终端。修改 Rust 应用的 crate 会重新构建它的运行时，已打开的页面会自动加载；TSX 的修改则就地应用（热更新）。同一网络中的手机打开 `nsh run` 在其下方打印的地址（`on this network: http://192.168.…:8790/`）即可。只要 Web 运行时存在（发行包中总是存在），`nsh dev` 也会提供同一个页面。
+会启动开发服务器，并打印它的页面地址 `http://127.0.0.1:8790/`，在任意浏览器中打开即可。这个页面和其他开发宿主一样：运行应用的每次构建，在应用上方显示构建错误和运行时错误，并把应用的日志发送到终端。修改 Rust 应用的 crate 会重新构建它的运行时，已打开的页面会自动加载；TSX 的修改则就地应用（热更新）。同一网络中的手机打开 `nsh run` 在其下方打印的地址（`on this network: http://192.168.…:8790/`）即可。只要 Web 运行时存在（发行包中总是存在），`nsh dev` 也会提供同一个页面。`--idiom tv`（或 `nsh.json` 中的 `"dev": { "idiom": "tv" }`）让应用在页面上像在电视上一样运行，以便在桌面浏览器中构建它的 10 英尺布局和焦点（[电视](./platform-specific.md#在桌面上构建电视布局)）。
+
+## 三星电视
+
+三星电视（2024 年起的机型，Tizen 8）在自己的浏览器引擎里以 Tizen Web 应用（`.wgt`）运行应用。应用就是发布的站点，加上 Tizen
+的清单和一个电视 shim；`platform.os` 是 `"web"`，应用以电视 idiom 运行：`platform.tv` 为 `true`，`platform.select`
+选 `tv`，`tv={{…}}` 属性生效。
+
+```sh
+nsh package --target tizen-web                     # .nsh/out/tizen-web/<Name>/ 和 <Name>.wgt，未签名
+nsh package --target tizen-web --sign my-profile   # .nsh/out/<Name>.wgt，用 Tizen SDK 的 tz 签名
+nsh run --target tizen-web                         # 在电视上（nsh.json 的 tizen.signing）和本机浏览器中
+nsh test --target tizen-web                        # 在 headless Chromium 里用电视的页面运行测试，1920×1080
+nsh package --target tizen-web --probe             # 一个包，显示电视如何加载页面的文件
+```
+
+- **包**是[发布的站点](#发布应用)，加上 `config.xml`（包 id 和应用 id、版本、所需的 Tizen 版本、网络和遥控器按键权限、横屏、
+  512×423 的图标）和电视 shim，页面在运行时之前先运行它。用三星证书管理器的证书配置签名：`--sign <profile>` 或 `nsh.json` 的
+  `tizen.signing`；`nsh package` 为此运行 Tizen SDK 的 `tz pack`，`--run` 用 `tz` 安装并启动签名后的包。
+- **遥控器**：返回键像浏览器的返回键一样在应用里返回（关闭最新的对话框、弹出最内层的导航栈，`onBackPress` 和 `popOnBack`
+  照常生效）；在第一个页面上、没有可返回的内容时，应用会询问是否退出，选择“Exit”后退出，符合三星的规则。方向键、确认键、
+  颜色键、媒体键和频道键以 [`keymap`](../modules/nsh.md#媒体键与电视遥控器按键) 的名字（`red`、`mediaplaypause`、
+  `channelup` 等）送到应用；页面会向电视注册这些按键。
+- **[`nsh/tizen`](../modules/nsh-tizen.md)** 在包中可用：`isAvailable()` 为 `true`，`productInfo`、`registerKey` /
+  `unregisterKey`、`exitApp` 和 `setPreviewData`（Smart Hub 的预览）调用电视的 `tizen` 和 `webapis` API。在其他地方的浏览器中
+  `isAvailable()` 为 `false`。
+- **`nsh.json` 的 `tizen`** 为包命名，每个键都有默认值：
+
+  ```json
+  "tizen": {
+    "package": "AbCdE12345",
+    "appId": "AbCdE12345.Counter",
+    "version": "1.2.0",
+    "apiVersion": "8.0",
+    "privileges": ["http://tizen.org/privilege/tv.audio"],
+    "signing": "my-profile",
+    "smartHubPreview": "service"
+  }
+  ```
+
+  `package` 是 10 个字母和数字（默认由应用的 `id` 生成）；`appId` 是 `<package>.<name>`（默认取应用名中的字母和数字）；
+  `version` 是 Tizen 的 `x.y.z` 数字版本（默认是应用的 `version`，否则 `1.0.0`）；`apiVersion` 是能安装这个包的最低
+  Tizen 版本（`8.0`）；`privileges` 是在网络和遥控器按键之外申请的权限；`signing` 是证书配置；
+  `smartHubPreview` 是应用的 Smart Hub 预览（见下）。
+- **Smart Hub 预览**，即电视在主屏幕上为应用显示的磁贴，需要用 `tizen.smartHubPreview` 主动开启。一个 URL
+  （`"https://example.com/tv/preview.json"`）表示公共预览：包中声明它，电视从你的服务器读取这个三星预览格式的 JSON。`"service"`
+  表示个人预览，由应用用 [`nsh/tizen`](../modules/nsh-tizen.md) 的 `setPreviewData` 设置：三星从后台服务获取预览，所以包中带有
+  NSH 的一个小服务，这个调用会带着数据启动它。三星每 10 分钟只允许更新一次，从 U 盘安装的包不显示预览。磁贴的 `action_data`
+  暂时还不会送到应用。两种形式都按三星的指南实现，尚未在电视上验证。
+- **开发**：`nsh run --target tizen-web` 由开发服务器提供电视的页面，所以本机浏览器打开它打印的地址，就能看到电视 idiom
+  下的应用，并且支持热更新。配置了 `nsh.json` 的 `tizen.signing` 时，它还会在电视上签名、安装并启动一个开发包
+  （`--device`：电视的 `sdb` 序列号），开发包的页面会打开本机在局域网中的地址上的开发服务器页面。
+- **加载探针**（`--probe`）是一个独立的包 `NshLdProbe.Probe`：它在电视上逐一尝试应用页面加载文件的各种方式（module
+  脚本、import map、iframe 的 realm、用 CORS 获取的脚本、WebAssembly、页面内容安全策略下的 fetch、三星的 `webapis.js`），并显示每一项的结果和引擎的版本。
 
 ## 构建本站的播放器
 
@@ -280,7 +333,7 @@ const player = await createPlayer(document.querySelector("#phone"), {
   wasm: "./nsh.wasm",
   assetBase: "./assets/",   // `asset:/…` URI（导入的图片）从这里加载
   // dark: true,            // 强制外观；不设置时跟随系统
-  // idiom: "phone",        // 强制 "phone"、"pad" 或 "desktop"；不设置时由指针和尺寸决定
+  // idiom: "phone",        // 强制 "phone"、"pad"、"desktop" 或 "tv"（电视上的页面）；不设置时由指针和尺寸决定
   // history: false,        // 页面和对话框是否作为浏览器历史记录；默认只在应用占据整个页面时开启，iframe 里不开启
   // dialogs: "viewport",   // Dialog 和 AlertDialog 覆盖整个浏览器窗口；默认覆盖容器
 });
@@ -365,6 +418,7 @@ export async function createHost(player) {
 
 - `"desktop"`：有鼠标（能悬停的精确指针），且容器宽度至少 600 点。此时 `platform.desktop` 为 `true`，`platform.select` 选 `desktop`，`desktop={{…}}` 属性生效。
 - `"pad"`：短边至少 600 点的触摸屏；其余为 `"phone"`。两者都属于移动端：`platform.select` 选 `mobile`。
+- `"tv"`：只在页面通过播放器的 `idiom: "tv"` 告知时才是（电视上的浏览器无法从指针判断：Tizen 的 `.wgt` 页面会传入它；开发页面在 `nsh run --target web --idiom tv` 时传入它）。此时 `platform.tv` 为 `true`，`platform.select` 选 `tv`（然后是 `mobile`），`tv={{…}}` 属性生效；电视不是桌面。
 
 界面风格在应用启动时确定，运行期间不变，与其他平台一致；变窄的桌面窗口仍是桌面，按自己的 `windowSize()` 布局。`web={{…}}` 属性、`platform.select({ web })` 和 `web:` 类只在浏览器中生效；`ios={{…}}`、`native` 和 `ios:` 在浏览器中不生效。
 

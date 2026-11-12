@@ -5,6 +5,9 @@
 //!   Windows), restarted when Rust code changes.
 //! - `android`: the Android runtime (`libnsh.so` per ABI, `classes.dex`)
 //!   into `target/android/<profile>`, where `nsh run` / `nsh package` find it.
+//! - `tizen`: the Tizen runtime (`libnsh.so` per architecture, release and
+//!   development builds, and the TPKs' C# host) into `target/tizen`, through
+//!   dXn.GpuiTizen's cross driver (`DXN_GPUI_TIZEN`).
 //! - `dist`: the distribution in `dist/nsh`: the `nsh` CLI plus every
 //!   prebuilt runtime, so app developers never need Rust.
 //! - `ios-embed`: only the iOS embedding SDK (`NativeShell.xcframework`,
@@ -25,6 +28,7 @@ mod emoji;
 mod ios;
 mod run;
 mod term;
+mod tizen;
 mod web;
 
 use clap::{Parser, Subcommand};
@@ -73,6 +77,20 @@ enum Task {
     },
     /// Run clippy on the Android crate (with the NDK set up).
     ClippyAndroid,
+    /// Build the Tizen runtime (Samsung TVs) through dXn.GpuiTizen's cross
+    /// driver: its checkout is `DXN_GPUI_TIZEN`, else `../dXn.GpuiTizen`.
+    Tizen {
+        /// Which libraries: the packaged apps', the development one, or both.
+        #[arg(long, value_enum, default_value = "both")]
+        variant: tizen::Variant,
+        /// Architectures to build (default: armv7l, aarch64 and x86_64).
+        #[arg(long, value_delimiter = ',')]
+        arch: Vec<String>,
+        /// A Cargo config file for the TV builds (the forks' `[patch.crates-io]`
+        /// lines while they are unpublished); repeatable.
+        #[arg(long, env = "NSH_TIZEN_CARGO_CONFIG", value_delimiter = ',')]
+        config: Vec<std::path::PathBuf>,
+    },
     /// Build the distribution in `dist/nsh`.
     Dist,
     /// Build only the iOS embedding XCFrameworks.
@@ -155,6 +173,20 @@ fn task(task: Task) -> anyhow::Result<()> {
             android::build(release, dev, &abis).map(|_| ())
         }
         Task::ClippyAndroid => android::clippy(),
+        Task::Tizen {
+            variant,
+            arch,
+            config,
+        } => {
+            let archs = if arch.is_empty() {
+                tizen::ARCHS.to_vec()
+            } else {
+                arch.iter()
+                    .map(|a| tizen::Arch::parse(a))
+                    .collect::<anyhow::Result<_>>()?
+            };
+            tizen::build(variant, &archs, &config).map(|_| ())
+        }
         Task::Dist => dist::dist(),
         Task::IosEmbed(options) => ios::build(options).map(|out| term::note(out.display())),
         Task::Web { out } => web::build(&out),

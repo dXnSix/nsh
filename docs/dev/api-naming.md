@@ -169,13 +169,24 @@ go elsewhere under these rules rather than into them.
   2026-10-29). Each object is typed (`IOSProps`, `AndroidProps`, `MacOSProps`, `DesktopProps`, an element's own
   extending them), so a key no platform has fails the type check.
 - **One definition of desktop**: desktop is a desktop OS (macOS, Windows, Linux), the web in the desktop idiom or
-  a terminal (`Idiom::desktop_on`, `Environment::desktop()`); everything else is mobile, Mac Catalyst included (it
-  runs the iOS backend: `ios={{…}}` applies). `desktop={{…}}` props, `platform.select({ desktop, mobile })`,
+  a terminal, never the TV idiom (`Idiom::desktop_on`, `Environment::desktop()`); everything else is mobile, Mac
+  Catalyst included (it runs the iOS backend: `ios={{…}}` applies), and TVs. `desktop={{…}}` props, `platform.select({ desktop, mobile })`,
   `platform.desktop`, `platform.idiom === "desktop"` (`Idiom::reported_on`; a terminal reports `"terminal"`), Rust's
   `is_desktop()` and `nsh-base`'s per-device presentation all follow it; nothing apps see defines desktop otherwise. `"mac"` stays UIKit's Mac idiom under
   Catalyst (mobile), `platform.catalyst` is Catalyst in either idiom (`Os::is_catalyst`). The one narrower check is
   `nsh/desktop`'s `isAvailable` (`Os::is_desktop`): where its window and menu APIs work, the desktop OSes (decided by
   the user, 2026-10-29).
+- **The TV category** follows the TV idiom on any OS, not an OS (`Environment::tv()`: Android TV, a TV's browser
+  page, a TV platform): `platform.tv`, `tv={{…}}` props, `platform.select`'s `tv` key (after the OS's own key, before
+  `desktop` / `mobile`) and Rust's `is_tv()`; `platform.idiom` is `"tv"` there. No prop is a TV's alone, so
+  `TvProps` holds the props every element takes (`HostProps`, its style and state styles), set on TVs only; a TV is
+  not a desktop, so the rest (`nsh-base`'s presentation) is mobile's (design `d30-tv-category`).
+- **Tizen is an OS where it runs natively**: `Os::Tizen` (`platform.os` `"tizen"`, `OS`'s `"tizen"`,
+  `platform.select({ tizen })`) is a native Tizen build (`target_vendor = "tizen"`, whose `target_os` is `linux`:
+  compile-time detection checks the vendor before Linux). It is not a desktop OS (`Os::is_desktop`), its idiom is
+  the TV's (`Idiom::default_on`; `Idiom::Desktop` reads as `"tv"` there, `Idiom::reported_on`), so desktop behavior
+  never applies but in a terminal. A Tizen web app (`.wgt`) is a browser: `Os::Web`, in the TV idiom its page tells
+  the player; there is no `Os::TizenWeb` (design `d30-tv-category`).
 - **Accessors** are named after what they read (`safeArea()`, `windowSize()`, `titleBar()`); they never differ from
   a module's name by case only.
 - **Navigation verbs** are `gpui-base`'s: `push`, `pop`, `popToRoot`, `replace` (`NavStackState`); replacing all is
@@ -572,6 +583,8 @@ and `Input`'s React Native names follow the rules as well.
 | A `ToggleGroup` (`Role::Toolbar`) inside a `Toolbar` | the toggle group is a `group` of the toolbar and its toggles are the toolbar's items | WAI-ARIA APG toolbar (a group of toggle buttons inside one toolbar) | One toolbar for screen readers and one stop of the keyboard focus; the group's `disabled` still disables its toggles |
 | `gpui-component`'s `Toolbar::with_size` (`xsmall` … `medium`, `large` falling back to `medium`), `prepare_for_toolbar` (ghost, compact buttons), its heights, paddings and gaps per size | (left out) | `gpui-component` `toolbar.rs`, `sizing.rs` | A look: the app's classes |
 | `gpui-component`'s `child` / `children` (`Sizable` items given the toolbar's size) and `content` / `contents` | children | `gpui-component` `toolbar.rs` | No size to pass: every child is content |
+| **FocusGroup** (`nsh/base`) | | | |
+| (none in `gpui-base` or `gpui-component`: GPUI moves the focus with Tab and its handles, not between views by direction) | `FocusGroup` with `destinations: ViewRef[]` and `trap: boolean`; Rust `focus_group().destinations(..).trap(..)` | React Native tvOS's `TVFocusGuideView` (`destinations`, `trapFocusUp` / `Down` / `Left` / `Right`), Android TV's focus groups | A TV's arrows need regions entered at chosen stops; one `trap` for every direction, as a menu or a dialog drawn in the page wants (the four of tvOS are one shape that does not grow: a direction left open is a route of a view inside, `nextFocus*`). The rules are `nsh_core::focus::directional`'s |
 | **Accordion** (`nsh/base`) | | | |
 | `Accordion::new(id)`, `AccordionItem::new()`, `AccordionHeader::new(trigger)`, `AccordionTrigger::new(id)`, `AccordionPanel::new()` | `Accordion`, `AccordionItem`, `AccordionHeader`, `AccordionTrigger`, `AccordionPanel`; Rust `accordion()`, `accordion_item()`, `accordion_header()`, `accordion_trigger()`, `accordion_panel()` | `accordion.rs` | The parts and their names are `gpui-base`'s; the trigger is a child of the header, as JSX nests it; ids are the elements' (`testID` for tests), as `Radio::id` |
 | `AccordionItem::open(bool)`, `AccordionTrigger::open(bool)` / `on_change(bool, ..)`, `AccordionPanel::open(bool)`; `gpui-component`'s `AccordionItem::open` and `Accordion::on_toggle_click(&[usize])` | `value: string[]` on `Accordion`, the open items' `value`s (`AccordionItem.value: string`, required), and `onChange({ value })`; the item hands its trigger and panel whether it is open | `accordion.rs`; `gpui-component` `accordion.rs`; "Value state", "Shapes that can grow" (identifiers) above | One controlled value, as `Combobox`'s `value: string[]`, so the one-at-a-time rule lives in the root and the app writes one handler; values, not indices, so the app matches on its own ids and items can come and go. No `defaultValue`: `gpui-kit` has no `default_*` here |

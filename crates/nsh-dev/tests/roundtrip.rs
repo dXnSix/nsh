@@ -191,6 +191,54 @@ fn each_run_of_the_server_has_its_own_session() {
     assert_ne!(session_of(), session_of());
 }
 
+/// A client given its connections (`DevClient::start_with`, a TV's port
+/// forwarded from the developer's machine) speaks the same protocol over
+/// them, retrying when one fails.
+#[test]
+fn a_client_speaks_over_the_connections_its_transport_makes() {
+    use std::net::TcpStream;
+
+    struct Transport {
+        addr: std::net::SocketAddr,
+        tries: u32,
+    }
+    impl nsh_dev::DevTransport for Transport {
+        fn connect(&mut self) -> std::io::Result<TcpStream> {
+            self.tries += 1;
+            if self.tries == 1 {
+                return Err(std::io::ErrorKind::ConnectionRefused.into());
+            }
+            TcpStream::connect(self.addr)
+        }
+    }
+    let server = DevServer::start("127.0.0.1:0".parse().unwrap(), "bc-1", None, |_| {}).unwrap();
+    server.publish(
+        vec![7],
+        "v1".into(),
+        None,
+        AppInfo::default(),
+        None,
+        Vec::new(),
+    );
+    let addr = server.local_addr();
+    let (tx, rx) = mpsc::channel();
+    let _client = DevClient::start_with(
+        format!("ws://{addr}{WS_PATH}"),
+        Box::new(Transport { addr, tries: 0 }),
+        host("test-device", "bc-1"),
+        move |e| {
+            let _ = tx.send(e);
+        },
+    )
+    .unwrap();
+    match next_non_status(&rx) {
+        DevEvent::Bundle {
+            version: 1, bytes, ..
+        } => assert_eq!(bytes, vec![7]),
+        other => panic!("{other:?}"),
+    }
+}
+
 /// A host built for another app (without the app's own UI set) gets no
 /// bundle but a message saying why, and the server reports it; once a
 /// bundle needs only what it has, it gets bundles again.

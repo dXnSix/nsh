@@ -29,8 +29,14 @@ export function createEnvironment(reactive, invoke, dom) {
   const fields = Object.fromEntries(Object.entries(initial).map(([name, value]) => [name, reactive.signal(value)]));
   const tokens = reactive.signal(0);
   const insets = reactive.context(() => fields.safeArea());
-  const platform = { os: "web", version: "0.0", idiom: "desktop", desktop: true, catalyst: false,
-    select(spec) { return "web" in spec ? spec.web : this.desktop ? spec.desktop ?? spec.default : spec.mobile ?? spec.default; } };
+  // `select` as nsh-js's `platform_select`: the OS's key, then `tv` on a
+  // TV, then `desktop` / `mobile`, then `default` (`native` is not the web).
+  const platform = { os: "web", version: "0.0", idiom: "desktop", desktop: true, tv: false, catalyst: false,
+    select(spec) {
+      if ("web" in spec) return spec.web;
+      if (this.tv && "tv" in spec) return spec.tv;
+      return this.desktop ? spec.desktop ?? spec.default : spec.mobile ?? spec.default;
+    } };
   let appearance = "system", systemScheme = "light";
   // What a `ThemeScope` shows, for what it renders (nsh-js's `scope_scheme`
   // and `scope_tokens`, `env.rs`): `scheme`, an accessor of "light" or

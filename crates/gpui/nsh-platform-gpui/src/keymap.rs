@@ -36,11 +36,15 @@ use nsh_core::{
 
 use crate::{input::KeyEvent, keys, surface::Surface};
 
-/// The platform bindings are read for.
-const OS: Os = if cfg!(target_os = "macos") {
+/// The OS of this build: the platform bindings are read for, and the one
+/// the environment reports.
+pub(crate) const OS: Os = if cfg!(target_os = "macos") {
     Os::MacOs
 } else if cfg!(windows) {
     Os::Windows
+} else if cfg!(target_vendor = "tizen") {
+    // A Tizen target is `target_os = "linux"`: its vendor goes first.
+    Os::Tizen
 } else {
     Os::Linux
 };
@@ -56,6 +60,13 @@ pub(crate) struct KeymapState {
 /// `MountItem::Keymap`: replaces the surface's table.
 pub(crate) fn set(surface: &Surface, keymap: Arc<Keymap>) {
     *surface.keymap.table.borrow_mut() = (!keymap.is_empty()).then_some(keymap);
+}
+
+/// Whether the surface has bindings (the window tests wait for a focused
+/// component's).
+#[cfg(all(test, feature = "shot"))]
+pub(crate) fn bound(surface: &Surface) -> bool {
+    surface.keymap.table.borrow().is_some()
 }
 
 /// Drops the table (the app stopped).
@@ -82,8 +93,8 @@ pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent, editing: bool) -> boo
     // Only the bindings of the window the key is in (and JS's) take it.
     let window = surface.input_root().id();
     // Return and Space on a focused control fire only the focus' own
-    // bindings; else the control takes them (`key_focus::key`).
-    let control = !editing && crate::key_focus::on_control(surface);
+    // bindings; else the control takes them (`focus::key`).
+    let control = !editing && crate::focus::on_control(surface);
     let found = table.find_at(window, keystroke, editing, control, repeat);
     if let Some(id) = found.fired() {
         surface.event(
