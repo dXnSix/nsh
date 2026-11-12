@@ -316,7 +316,8 @@ The development host takes the steps of `nsh/test` tests (`docs/dev/tooling.md`,
 implements `nsh_testing::agent::Native`. Each call goes to the main thread (`rt::invoke`, then `rt::on_app` for the
 app), finds the window whose `AppView` shows the surface, and acts through the handlers real input goes through
 (`synth.rs`): a press is a mouse down and up at the view's middle (the window's view focused first), a scroll precise
-touchpad events a frame apart, typing `text_input::char_input`, select all the platform's command key with A, back
+touchpad events a frame apart, typing `text_input::char_input`, a key `input::key` (a Tab it does not take wraps
+around, `input::tab_past_ends`, as GPUI's `FocusNext` does in a window with no other tab stop), select all the platform's command key with A, back
 the mouse's back button (it goes back from wherever the focus is), a dialog's answer a click at its button's laid-out
 middle (`system::dialog_point`), a screenshot `synth::frame` as a PNG. A view's bounds are its frame's corners through
 `NshView::to_root`. `dev.rs` hands the test session's model to the surface through the session's own messages, so it

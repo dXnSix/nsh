@@ -133,6 +133,7 @@ fn field_pending(view: &Entity<AppView>, cx: &mut VisualTestContext) -> Option<S
 
 /// Runs the window until the focused field holds `text` for after its
 /// composition.
+#[track_caller]
 fn wait_for_pending(view: &Entity<AppView>, cx: &mut VisualTestContext, text: &str) {
     let start = Instant::now();
     loop {
@@ -160,6 +161,7 @@ fn ime(
 
 /// Runs the window (and waits for the engine's thread) until the focused
 /// field reads `text`.
+#[track_caller]
 fn wait_for(view: &Entity<AppView>, cx: &mut VisualTestContext, text: &str) {
     let start = Instant::now();
     loop {
@@ -1093,6 +1095,7 @@ fn presses_carry_where_the_pointer_was(cx: &mut TestAppContext) {
 
 /// Runs the window until the focused field's text satisfies `done`, and
 /// returns it.
+#[track_caller]
 fn wait_until(
     view: &Entity<AppView>,
     cx: &mut VisualTestContext,
@@ -1149,6 +1152,7 @@ fn owned_view(
 }
 
 /// Runs the window until `done` holds.
+#[track_caller]
 fn wait_until_window(
     cx: &mut VisualTestContext,
     what: &str,
@@ -1854,20 +1858,23 @@ fn a_command_without_a_search_field_takes_the_keyboard_on_focus(cx: &mut TestApp
         cx.add_window_view(|window, cx| AppView::new(AppOptions::default(), window, cx));
     view.update(cx, |view, _| view.load(App::Js(Bundle::source(code))));
     cx.update(|window, cx| window.focus(&view.focus_handle(cx), cx));
-    // `focus()` moves the keyboard from the field to the command.
+    // `focus()` moves the keyboard from the field to the command, and the
+    // command binds its keys once its `onFocus` ran in the engine: keys
+    // pressed before that reach no binding (as on a busy machine).
     let start = Instant::now();
     loop {
         cx.run_until_parked();
         let moved = view.read_with(cx, |view, _| {
             crate::focus::focused(view.surface()).is_some()
                 && crate::text_input::focused(view.surface()).is_none()
+                && crate::keymap::bound(view.surface())
         });
         if moved {
             break;
         }
         assert!(
             start.elapsed() < Duration::from_secs(10),
-            "the command never took the focus"
+            "the command never took the focus and bound its keys"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
