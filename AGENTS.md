@@ -146,6 +146,10 @@ crates/
                        backend for embedding, standalone apps run on each OS's own backend (docs/dev/gpui.md)
   gpui/nsh-gpui-host/  Development host on GPUI (`nsh run --target gpui`): shows a TSX app as GPUI apps that embed it
                        show it; connects to a dev server or runs a bundle
+  gpui/nsh-platform-tizen/ Samsung TV backend (Tizen): `libnsh.so` (`nsh_tizen_main`, the C# host's one P/Invoke, `host/`),
+                       the GPUI backend's `AppView` full screen on dXn.GpuiTizen's Tizen platform (a git dependency); the TV's
+                       settings and the app's state given to the view, Back with the question before leaving; feature `dev`:
+                       the development runtime over `sdb reverse` / `sdb forward` (docs/dev/tizen.md)
   nsh-ios-host/        Development host app (Catalyst / iOS simulator); connects to a dev server or runs a local bundle
   nsh-ios-app/         Release runner: the executable of iOS apps built by `nsh package`
   nsh-cli/             The `nsh` command line (a binary): init / build / test / check / dev / run / package; keygen /
@@ -154,7 +158,8 @@ crates/
                        with a `describe` program, which prints the sets as data for the CLI to bundle, compile and declare with, the
                        hosts and runners, and the headless runner of `nsh test`; it takes nsh's crates where the app's crates do:
                        crates.io at the CLI's version, or the checkout they depend on by path; docs/dev/tooling.md); web packages and the
-                       browser host's pages (`web.rs`, `web/`); `nsh test --target web`'s headless browser (`cdp.rs`, `test_web.rs`);
+                       browser host's pages (`web.rs`, `web/`); Samsung TVs' Tizen web apps (`tizen_web.rs`, `tizen_web/`:
+                       `config.xml`, the TV shim, the development package, the loader probe; docs/dev/web.md); `nsh test --target web`'s headless browser (`cdp.rs`, `test_web.rs`);
                        what it prints (`ui.rs`:
                        one line per step, tools' output only on failure, `-v` for everything; docs/dev/tooling.md "Output")
   xtask/               Maintainer tasks: `cargo xtask android` (Android runtime), `ios-embed` (the iOS SDK), `dist` (the distribution),
@@ -223,6 +228,7 @@ are never linked into the CLI: it reads their UI sets as data (`nsh_core::elemen
 | the macOS backend (`nsh-platform-macos`, AppKit) | `docs/dev/macos.md` |
 | the Windows backend (`nsh-platform-windows`, Win32 / Direct2D) | `docs/dev/windows.md` |
 | the GPUI backend (`nsh-platform-gpui`, macOS / Windows / Linux) | `docs/dev/gpui.md` |
+| the Samsung TV backend (`nsh-platform-tizen`, Tizen) and its builds | `docs/dev/tizen.md` |
 | anything apps use: exports, `nsh:rt`, props, events, style keys, Tailwind, declarations, behavior, formats | `docs/dev/compatibility.md` |
 | a hot path | `docs/dev/performance.md` (baselines) |
 | anything platform-specific | `docs/dev/pitfalls.md` (verified constraints, by area) |
@@ -299,6 +305,7 @@ echo 'await app.screenshot("a.png"); await app.press("label:Navigation"); await 
 ./target/debug/nsh run examples/gallery --target gpui                      # in a GPUI window (macOS, Windows, Linux), as GPUI apps embed it
 ./target/debug/nsh run examples/gallery --target web                       # in the browser (the dev server serves the page)
 ./target/debug/nsh package examples/gallery --target web --run             # a static site (files named by content), served on this machine
+./target/debug/nsh package examples/gallery --target tizen-web --sign <profile>   # a Samsung TV's .wgt, signed with the Tizen SDK's tz
 ./target/debug/nsh package examples/gallery --target ios-simulator --run   # installable app (.app / .ipa / .apk)
 cargo xtask android [--release] [--dev]                                            # Android runtime into target/android/<profile>[-dev]
 cargo xtask dist                                                                   # the distribution in dist/nsh

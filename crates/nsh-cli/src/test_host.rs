@@ -41,8 +41,8 @@ pub(crate) fn starter(
     display: Option<usize>,
     foreground: bool,
 ) -> anyhow::Result<StartHost> {
-    if browser.is_some() && target != Target::Web {
-        anyhow::bail!("--browser goes with --target web");
+    if browser.is_some() && !matches!(target, Target::Web | Target::TizenWeb) {
+        anyhow::bail!("--browser goes with --target web or tizen-web");
     }
     if fps
         && !matches!(
@@ -62,7 +62,9 @@ pub(crate) fn starter(
         anyhow::bail!("--foreground goes with --target macos");
     }
     match target {
-        Target::Web => return crate::test_web::starter(browser),
+        Target::Web => return crate::test_web::starter(browser, false),
+        // The same page with the TV shim, in the TV idiom.
+        Target::TizenWeb => return crate::test_web::starter(browser, true),
         Target::Ios => return crate::test_ios::starter(work, fps, device),
         Target::Android => return crate::test_android::starter(work),
         _ => {}
@@ -72,7 +74,7 @@ pub(crate) fn starter(
         Target::Macos | Target::Linux | Target::Windows | Target::Gpui | Target::Tui
     ) {
         anyhow::bail!(
-            "nsh test --target takes macos, linux, windows, gpui, tui, web, ios or android"
+            "nsh test --target takes macos, linux, windows, gpui, tui, web, tizen-web, ios or android"
         );
     }
     // Built (in a checkout) or found once, before the first test.
@@ -104,6 +106,8 @@ pub(crate) fn host_target(target: Target) -> nsh_testing::HostTarget {
         Target::Windows => ("windows", Platform::Windows, true),
         Target::Linux => ("linux", Platform::Linux, true),
         Target::Web => ("web", Platform::Web, true),
+        // A Tizen web app reports the web, in the TV idiom.
+        Target::TizenWeb => ("tizen-web", Platform::Web, true),
         Target::Gpui => ("gpui", desktop, true),
         // The terminal reports this machine's OS, in the terminal idiom.
         Target::Tui => ("tui", desktop, true),

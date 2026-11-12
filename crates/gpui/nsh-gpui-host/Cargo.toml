@@ -19,14 +19,14 @@ runtime-shaders = ["nsh-platform-gpui/runtime-shaders"]
 log.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dependencies]
-nsh-platform-gpui = { workspace = true, features = ["dev", "webview"] }
+nsh-platform-gpui = { workspace = true, features = ["platform", "dev", "webview"] }
 nsh-dev.workspace = true
 nsh-engine = { workspace = true, features = ["js"] }
 
 # Offscreen `shot` script steps (Linux reads the window from the X server).
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
-nsh-platform-gpui = { workspace = true, features = ["dev", "shot", "webview"] }
+nsh-platform-gpui = { workspace = true, features = ["platform", "dev", "shot", "webview"] }
 
 # Videos play through GStreamer, which Linux desktops have.
 [target.'cfg(target_os = "linux")'.dependencies]
-nsh-platform-gpui = { workspace = true, features = ["dev", "webview", "video"] }
+nsh-platform-gpui = { workspace = true, features = ["platform", "dev", "webview", "video"] }

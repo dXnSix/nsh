@@ -60,3 +60,4 @@ mod toggle;
 mod token_roles;
 mod toolbar;
 mod tree;
+mod tv_props;

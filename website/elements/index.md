@@ -632,6 +632,7 @@ their platform.
 | `android={{…}}` | Android. Every element takes `ripple`, `elevation` and `accessibilityLiveRegion` (below). |
 | `desktop={{…}}` | Desktop platforms and desktop browsers; ignored on mobile. Every element takes `windowDrag` (below). |
 | `web={{…}}` | Browsers; ignored elsewhere. |
+| `tv={{…}}` | TVs, on any OS (`platform.tv`); ignored elsewhere. No prop is a TV's alone: it takes the props every element takes, its `style` and its state styles, set on TVs only (`tv={{ class: "p-8 text-2xl" }}`). |
 
 | `android` key | Rust | Type | Description |
 |---|---|---|---|

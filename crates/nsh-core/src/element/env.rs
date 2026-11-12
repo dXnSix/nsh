@@ -118,7 +118,7 @@ impl Default for Environment {
             os: Os::default(),
             platform: None,
             os_version: (0, 0),
-            idiom: Idiom::Phone,
+            idiom: Idiom::default_on(Os::default()),
             locale: Locale::EN_US,
             locale_settings: LocaleSettings::default(),
             apple_keyboard: false,

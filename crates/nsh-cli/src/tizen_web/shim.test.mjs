@@ -1,0 +1,348 @@
+// The TV shim of Tizen web apps (`shim.js`) on fake `tizen` globals and a
+// fake page: `node --test crates/nsh-cli/src/tizen_web/shim.test.mjs`.
+// The app stands in for `nsh.js`, whose window `keydown` listener takes
+// `BrowserBack` when it goes back and `Escape` when it closes a dialog.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import vm from "node:vm";
+
+const SHIM = await readFile(new URL("./shim.js", import.meta.url), "utf8");
+
+class FakeEvent {
+  constructor(type, init = {}) {
+    Object.assign(this, { type, key: "", code: "", keyCode: 0, repeat: false, bubbles: false, cancelable: false }, init);
+    this.defaultPrevented = false;
+    this.stopped = false;
+    this.stoppedNow = false;
+  }
+  preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
+  stopPropagation() { this.stopped = true; }
+  stopImmediatePropagation() { this.stopped = this.stoppedNow = true; }
+}
+
+/** An event target with a parent: capture from the top, then bubbling. */
+class Target {
+  constructor(parent = null) {
+    this.parent = parent;
+    this.listeners = [];
+  }
+  addEventListener(type, fn, capture = false) {
+    this.listeners.push({ type, fn, capture: capture === true || capture?.capture === true });
+  }
+  dispatchEvent(event) {
+    const path = [];
+    for (let at = this; at; at = at.parent) path.push(at);
+    const call = (target, capture) => {
+      for (const l of target.listeners) {
+        if (l.type !== event.type || (l.capture !== capture && target !== this)) continue;
+        l.fn(event);
+        if (event.stoppedNow) return;
+      }
+    };
+    for (const target of path.slice(1).reverse()) {
+      call(target, true);
+      if (event.stopped) return !event.defaultPrevented;
+    }
+    call(this, true);
+    if (!event.bubbles || event.stopped) return !event.defaultPrevented;
+    for (const target of path.slice(1)) {
+      call(target, false);
+      if (event.stopped) break;
+    }
+    return !event.defaultPrevented;
+  }
+}
+
+/** A page with the shim on it: `tizen` (none: off a TV) and the app's
+ * answer to each key (`takes(key)`: whether it goes back on it). */
+function page({ tizen, webapis, preview = null, takes = () => false } = {}) {
+  const window = new Target();
+  const document = { title: "Counter", activeElement: null };
+  class Element extends Target {
+    constructor(tag) {
+      super(null);
+      this.tag = tag;
+      this.style = {};
+      this.children = [];
+      this.attributes = {};
+      this.textContent = "";
+    }
+    setAttribute(name, value) { this.attributes[name] = value; }
+    append(...children) {
+      for (const child of children) {
+        child.parent = this;
+        this.children.push(child);
+      }
+    }
+    remove() {
+      this.parent.children = this.parent.children.filter((c) => c !== this);
+      this.parent = null;
+    }
+    focus() { document.activeElement = this; }
+    click() { this.dispatchEvent(new FakeEvent("click", { bubbles: true })); }
+  }
+  document.body = new Element("body");
+  document.body.parent = window;
+  document.createElement = (tag) => new Element(tag);
+  const closed = [];
+  Object.assign(window, { document, KeyboardEvent: FakeEvent, close: () => closed.push(true) });
+  if (tizen) window.tizen = tizen;
+  if (webapis) window.webapis = webapis;
+  const heard = [];
+  // `nsh.js`: hears keys at the window, takes the ones it goes back on.
+  window.addEventListener("keydown", (e) => {
+    heard.push(e.key || e.keyCode);
+    if (takes(e.key)) e.preventDefault();
+  });
+  const context = vm.createContext(window);
+  vm.runInContext("globalThis.globalThis = globalThis;", context);
+  // The package's preview, as `nsh package` writes it.
+  const shimSource = SHIM.replace("const PREVIEW = null;", `const PREVIEW = ${JSON.stringify(preview)};`);
+  vm.runInContext(shimSource, context, { filename: "shim.js" });
+  /** The remote's key `keyCode` going down and up where the focus is. */
+  const press = (keyCode, key = "") => {
+    const target = document.activeElement ?? document.body;
+    const down = new FakeEvent("keydown", { key, keyCode, bubbles: true, cancelable: true });
+    target.dispatchEvent(down);
+    target.dispatchEvent(new FakeEvent("keyup", { key, keyCode, bubbles: true, cancelable: true }));
+    return down;
+  };
+  const dialog = () => document.body.children.find((c) => c.attributes.role === "alertdialog");
+  return { window, document, heard, press, dialog, closed, shim: window.nshTizen };
+}
+
+/** A TV's `tizen`: `supported` keys, `refused` ones that throw. */
+function tv({ supported, refused = [] } = {}) {
+  const registered = [];
+  const exits = [];
+  const tizen = {
+    registered,
+    exits,
+    tvinputdevice: {
+      getSupportedKeys: () => (supported ?? []).map((name) => ({ name, code: 0 })),
+      registerKey(name) {
+        if (refused.includes(name)) throw new Error(`NotSupportedError: ${name}`);
+        registered.push(name);
+      },
+      unregisterKey(name) {
+        registered.splice(registered.indexOf(name), 1);
+      },
+    },
+    systeminfo: {
+      getCapability(key) {
+        if (key === "http://tizen.org/feature/platform.version") return "8.0";
+        throw new Error(`NotSupportedError: ${key}`);
+      },
+    },
+    launched: [],
+    refuseLaunch: null,
+    ApplicationControl: class { constructor(operation, uri, mime, category, data) { Object.assign(this, { operation, data }); } },
+    ApplicationControlData: class { constructor(key, value) { Object.assign(this, { key, value }); } },
+    application: {
+      getCurrentApplication: () => ({ exit: () => exits.push(true) }),
+      launchAppControl(control, id, ok, fail) {
+        // Plain values of this realm (the shim's are its context's).
+        this.owner.launched.push(JSON.parse(JSON.stringify({ id, operation: control.operation, data: [...control.data].map((d) => [d.key, d.value]) })));
+        if (this.owner.refuseLaunch) fail({ message: this.owner.refuseLaunch });
+        else ok();
+      },
+    },
+  };
+  tizen.application.owner = tizen;
+  return tizen;
+}
+
+const ALL = [
+  "ColorF0Red", "ColorF1Green", "ColorF2Yellow", "ColorF3Blue",
+  "MediaPlayPause", "MediaPlay", "MediaPause", "MediaStop", "MediaRewind", "MediaFastForward",
+  "MediaTrackNext", "MediaTrackPrevious", "ChannelUp", "ChannelDown", "Info",
+];
+
+test("the color, media and channel keys the TV has are registered", () => {
+  // This model has no Info key and refuses ChannelDown.
+  const tizen = tv({ supported: [...ALL.filter((k) => k !== "Info"), "Exit", "0"], refused: ["ChannelDown"] });
+  const { shim } = page({ tizen });
+  const expected = ALL.filter((k) => k !== "Info" && k !== "ChannelDown");
+  assert.deepEqual(tizen.registered, expected);
+  assert.deepEqual([...shim.keys], expected);
+  assert.equal(shim.tv, true);
+  // Exit and the digits are the system's: never registered.
+  assert.ok(!tizen.registered.includes("Exit"));
+});
+
+test("a TV that cannot list its keys gets every key it takes", () => {
+  const tizen = tv();
+  tizen.tvinputdevice.getSupportedKeys = () => { throw new Error("no list"); };
+  const { shim } = page({ tizen });
+  assert.deepEqual([...shim.keys], ALL);
+});
+
+test("Back goes back in the app as BrowserBack", () => {
+  const tizen = tv({ supported: ALL });
+  const { press, heard, dialog } = page({ tizen, takes: (key) => key === "BrowserBack" });
+  const down = press(10009, "XF86Back");
+  // The remote's own key never reaches the app, only the back it means.
+  assert.deepEqual(heard, ["BrowserBack"]);
+  assert.equal(down.defaultPrevented, true);
+  assert.equal(dialog(), undefined);
+  assert.deepEqual(tizen.exits, []);
+});
+
+test("Back closes what an Escape closes when BrowserBack goes nowhere", () => {
+  const tizen = tv({ supported: ALL });
+  const { press, heard, dialog } = page({ tizen, takes: (key) => key === "Escape" });
+  press(10009);
+  assert.deepEqual(heard, ["BrowserBack", "Escape"]);
+  assert.equal(dialog(), undefined);
+});
+
+test("Back on the first screen asks before exiting, and exits on Exit", () => {
+  const tizen = tv({ supported: ALL });
+  const { press, heard, dialog, document } = page({ tizen });
+  press(10009);
+  assert.deepEqual(heard, ["BrowserBack", "Escape"]);
+  const shown = dialog();
+  assert.ok(shown, "the exit confirmation shows");
+  const [exit, cancel] = shown.children[0].children[1].children;
+  assert.equal(shown.children[0].children[0].textContent, "Exit Counter?");
+  assert.equal(document.activeElement, exit);
+  // The arrows move between the buttons; the app hears none of it.
+  press(39);
+  assert.equal(document.activeElement, cancel);
+  press(37);
+  assert.equal(document.activeElement, exit);
+  press(13, "Enter");
+  assert.deepEqual(heard, ["BrowserBack", "Escape"]);
+  assert.equal(dialog(), undefined);
+  assert.deepEqual(tizen.exits, [true]);
+});
+
+test("Back or Cancel on the confirmation stays in the app", async () => {
+  const tizen = tv({ supported: ALL });
+  const { press, dialog, shim } = page({ tizen });
+  press(10009);
+  press(10009);
+  assert.equal(dialog(), undefined);
+  press(10009);
+  press(39);
+  press(13, "Enter");
+  assert.equal(dialog(), undefined);
+  // The web half of `nsh/tizen` asks the same way.
+  const answer = shim.confirmExit();
+  dialog().children[0].children[1].children[1].click();
+  assert.equal(await answer, false);
+  assert.deepEqual(tizen.exits, []);
+});
+
+test("off a TV nothing registers and exiting closes the window", () => {
+  const { shim, press, closed, heard } = page({ takes: (key) => key === "BrowserBack" });
+  assert.equal(shim.tv, false);
+  assert.deepEqual([...shim.keys], []);
+  press(10009);
+  assert.deepEqual(heard, ["BrowserBack"]);
+  shim.exit();
+  assert.deepEqual(closed, [true]);
+});
+
+test("other keys reach the app as they are", () => {
+  const { press, heard } = page({ tizen: tv({ supported: ALL }) });
+  press(403, "ColorF0Red");
+  press(38, "ArrowUp");
+  assert.deepEqual(heard, ["ColorF0Red", "ArrowUp"]);
+});
+
+test("the web half of nsh/tizen reaches the TV through nshTizen", () => {
+  const tizen = tv({ supported: ALL });
+  const webapis = {
+    productinfo: { getRealModel: () => "QN65S95D", getModel: () => "24_PONTUSM_QTV", getFirmware: () => "T-PTMDEUC-1250.0" },
+  };
+  const { shim } = page({ tizen, webapis });
+  assert.deepEqual({ ...shim.productInfo() }, {
+    model: "QN65S95D", platformVersion: "8.0", build: "T-PTMDEUC-1250.0", manufacturer: null,
+  });
+  shim.unregisterKey("ColorF0Red");
+  assert.ok(!shim.keys.includes("ColorF0Red") && !tizen.registered.includes("ColorF0Red"));
+  shim.registerKey("ColorF0Red");
+  assert.ok(shim.keys.includes("ColorF0Red") && tizen.registered.includes("ColorF0Red"));
+});
+
+test("a TV without webapis.js reports what tizen knows", () => {
+  const { shim } = page({ tizen: tv({ supported: ALL }) });
+  assert.deepEqual({ ...shim.productInfo() }, { model: null, platformVersion: "8.0", build: null, manufacturer: null });
+});
+
+test("a personal preview goes to the package's preview service", async () => {
+  const tizen = tv({ supported: ALL });
+  const { shim } = page({ tizen, preview: { service: "AbCdE12345.NshPreview" } });
+  assert.deepEqual({ ...shim.preview }, { service: "AbCdE12345.NshPreview" });
+  await shim.setPreviewData('{"sections":[]}');
+  assert.deepEqual(tizen.launched, [{
+    id: "AbCdE12345.NshPreview",
+    operation: "http://tizen.org/appcontrol/operation/service",
+    data: [["preview", ['{"sections":[]}']]],
+  }]);
+  tizen.refuseLaunch = "NotFoundError";
+  await assert.rejects(shim.setPreviewData("{}"), /NotFoundError/);
+});
+
+test("without a personal preview setPreviewData says why", async () => {
+  const none = page({ tizen: tv({ supported: ALL }) }).shim;
+  await assert.rejects(none.setPreviewData("{}"), /tizen\.smartHubPreview to "service"/);
+  const pub = page({ tizen: tv({ supported: ALL }), preview: { endpoint: "https://example.com/p.json" } }).shim;
+  await assert.rejects(pub.setPreviewData("{}"), /public: the TV reads it from https:\/\/example\.com\/p\.json/);
+});
+
+test("the shim says which Smart Hub preview its package has", () => {
+  // `nsh package` writes the package's into `PREVIEW`; the source has none.
+  assert.equal(page({ tizen: tv({ supported: ALL }) }).shim.preview, null);
+});
+
+// The background service of a personal Smart Hub preview (`preview-service.js`).
+const SERVICE = await readFile(new URL("./preview-service.js", import.meta.url), "utf8");
+
+/** The service in a fake service runtime: the request's data and the TV's
+ * `webapis.preview` (`refuse`: its error). */
+function service({ data, webapis = true, refuse = null } = {}) {
+  const events = [];
+  const module = { exports: {} };
+  const preview = {
+    setPreviewData(json, ok, fail) {
+      events.push(["setPreviewData", json]);
+      if (refuse) fail({ message: refuse });
+      else ok();
+    },
+  };
+  const app = {
+    getRequestedAppControl: () => ({ appControl: { data: data === undefined ? [] : [{ key: "preview", value: [data] }] } }),
+    exit: () => events.push(["exit"]),
+  };
+  const context = vm.createContext({
+    module,
+    console: { error: (message) => events.push(["error", message]) },
+    tizen: { application: { getCurrentApplication: () => app } },
+    require: (path) => {
+      events.push(["require", path]);
+      if (!webapis) throw new Error("no module");
+      return { preview };
+    },
+  });
+  vm.runInContext(SERVICE, context, { filename: "preview-service.js" });
+  return { run: () => module.exports.onRequest(), events };
+}
+
+test("the preview service hands the app's data to webapis.preview and ends", () => {
+  const ok = service({ data: '{"sections":[]}' });
+  ok.run();
+  assert.deepEqual(ok.events, [["require", "$WEBAPIS/service/webapis.js"], ["setPreviewData", '{"sections":[]}'], ["exit"]]);
+  // The TV's refusal, no data and no webapis end it too.
+  const refused = service({ data: "{}", refuse: "invalid" });
+  refused.run();
+  assert.deepEqual(refused.events.slice(-2), [["error", "nsh preview: invalid"], ["exit"]]);
+  const empty = service();
+  empty.run();
+  assert.deepEqual(empty.events.slice(-2), [["error", "nsh preview: no preview data"], ["exit"]]);
+  const without = service({ data: "{}", webapis: false });
+  without.run();
+  assert.deepEqual(without.events.slice(-2), [["error", "nsh preview: no webapis.preview"], ["exit"]]);
+});

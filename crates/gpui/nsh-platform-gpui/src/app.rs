@@ -14,9 +14,9 @@ use gpui::{
     IntoElement, ParentElement, Render, Styled, Window, prelude::FluentBuilder as _,
 };
 use nsh_base::{Theme, ThemeError};
-use nsh_core::platform::{Appearance, Locale};
+use nsh_core::platform::{Appearance, Lifecycle, Locale, TimeZone};
 use nsh_engine::{
-    App, AppError, Bundle, ColorScheme, EngineConfig, Environment, Idiom, Limits, Os, Root,
+    App, AppError, Bundle, ColorScheme, EngineConfig, Environment, Idiom, Limits, Root,
 };
 
 use crate::{
@@ -267,11 +267,16 @@ pub enum CloseRequest {
 /// for the engine, so they take `cx` to redraw at once: call them through
 /// `view.update(cx, |view, cx| …)`.
 ///
-/// ```no_run
-/// use gpui::{AppContext, Application, WindowOptions};
-/// use nsh_platform_gpui::{App, AppOptions, AppView, Bundle};
+/// In a running GPUI app (`gpui_platform::application().run(|cx| …)` with the
+/// feature `platform`, or the app a platform of the host's own runs):
 ///
-/// gpui_platform::application().run(|cx| {
+/// ```no_run
+/// use nsh_platform_gpui::{
+///     App, AppOptions, AppView, Bundle,
+///     gpui::{self, AppContext, WindowOptions},
+/// };
+///
+/// fn open(cx: &mut gpui::App) {
 ///     cx.open_window(WindowOptions::default(), |window, cx| {
 ///         cx.new(|cx| {
 ///             let view = AppView::new(AppOptions::default(), window, cx);
@@ -281,7 +286,7 @@ pub enum CloseRequest {
 ///         })
 ///     })
 ///     .unwrap();
-/// });
+/// }
 /// ```
 pub struct AppView {
     surface: Rc<Surface>,
@@ -433,7 +438,22 @@ impl AppView {
     /// `view.update(cx, |view, cx| …)`.
     #[cfg(feature = "dev")]
     pub fn connect_dev_server(&self, url: impl Into<String>, cx: &mut Context<Self>) {
-        crate::dev::start(self, url.into(), false, cx);
+        crate::dev::start(self, url.into(), false, None, cx);
+    }
+
+    /// [`AppView::connect_dev_server`] over the connections `transport`
+    /// makes, for a device that reaches the developer's machine through a
+    /// tool's port mapping rather than the network (a TV, `sdb`): the
+    /// session speaks to the server at `url` (its host and path, and where
+    /// the app's assets are) over each.
+    #[cfg(feature = "dev")]
+    pub fn connect_dev_server_with(
+        &self,
+        url: impl Into<String>,
+        transport: Box<dyn nsh_dev::DevTransport>,
+        cx: &mut Context<Self>,
+    ) {
+        crate::dev::start(self, url.into(), false, Some(transport), cx);
     }
 
     /// Registers native component `name` (`nativeComponent(name, ...)` in
@@ -574,6 +594,66 @@ impl AppView {
         let mut host = self.surface.host_environment.get();
         host.font_scale = scale;
         self.surface.host_environment.set(host);
+        crate::system::host_appearance_changed(&self.surface);
+        crate::rt::flush(cx);
+    }
+
+    /// The embedding app's reduce motion, which stands in for the user's:
+    /// what `reduceMotion()` (`nsh`) and Rust components' `reduce_motion()`
+    /// read and native animations follow, at once and for every app loaded
+    /// later. `None` follows the system's again (on Tizen, which reports
+    /// none to the process: motion on).
+    pub fn set_reduce_motion(&self, reduce: Option<bool>, cx: &mut GpuiApp) {
+        self.set_host_settings(|s| s.reduce_motion = reduce, cx);
+    }
+
+    /// The embedding app's screen reader state, which stands in for the
+    /// system's: what `screenReaderEnabled()` (`nsh`) and Rust components'
+    /// `screen_reader()` read, at once and for every app loaded later.
+    /// `None` follows the system's again (on Tizen, which reports none to
+    /// the process: off).
+    pub fn set_screen_reader(&self, on: Option<bool>, cx: &mut GpuiApp) {
+        self.set_host_settings(|s| s.screen_reader = on, cx);
+    }
+
+    /// The embedding app's time zone, which stands in for the system's:
+    /// what `localeSettings()`'s `timeZone` (`nsh`) and Rust components'
+    /// `locale_settings().time_zone` read, at once and for every app loaded
+    /// later (`Date`'s local times stay the process's, its `TZ`). `None`
+    /// follows the system's again.
+    pub fn set_time_zone(&self, zone: Option<TimeZone>, cx: &mut GpuiApp) {
+        self.set_host_settings(|s| s.time_zone = zone, cx);
+    }
+
+    /// The embedding app's state of the app (`lifecycle()`: `active`,
+    /// `inactive`, `background`), which stands in for the one the
+    /// windows' activation and visibility give: what `lifecycle()` (`nsh`)
+    /// and Rust components' `lifecycle()` read, at once and for every app
+    /// loaded later. A host whose platform tells it more than the window
+    /// does passes it on (the Tizen TV host: `background` while the app
+    /// framework has the app paused). `None` follows the windows again.
+    pub fn set_lifecycle(&self, lifecycle: Option<Lifecycle>, cx: &mut GpuiApp) {
+        self.set_host_settings(|s| s.lifecycle = lifecycle, cx);
+    }
+
+    /// Hands every back press nothing in the app took to `f` (the Back
+    /// key, Escape or Alt+Left with no modal to close, no stack to pop and
+    /// no `onBackPress` listener that kept it), on the main thread with the
+    /// view's window, instead of letting it go: a TV host asks there
+    /// whether to leave the app. Replaces the handler set before.
+    pub fn on_unhandled_back(&self, f: impl Fn(&mut Window, &mut GpuiApp) + 'static) {
+        *self.surface.on_unhandled_back.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// Changes the host's settings with `f` and applies them.
+    fn set_host_settings(
+        &self,
+        f: impl FnOnce(&mut crate::host_settings::HostSettings),
+        cx: &mut GpuiApp,
+    ) {
+        let mut host = self.surface.host_settings.get();
+        f(&mut host);
+        self.surface.host_settings.set(host);
         crate::system::host_appearance_changed(&self.surface);
         crate::rt::flush(cx);
     }
@@ -908,14 +988,9 @@ fn initial_environment() -> Environment {
     Environment {
         window: nsh_core::Size::default(),
         color_scheme: ColorScheme::Light,
-        os: if cfg!(target_os = "macos") {
-            Os::MacOs
-        } else if cfg!(windows) {
-            Os::Windows
-        } else {
-            Os::Linux
-        },
-        idiom: Idiom::Desktop,
+        os: crate::keymap::OS,
+        // A desktop's, a TV's on Tizen.
+        idiom: Idiom::default_on(crate::keymap::OS),
         file_requests: true,
         // wry, in builds with it.
         web_views: cfg!(feature = "webview"),
@@ -1009,7 +1084,7 @@ fn open(
             Ok(app) => view.read(cx).load(app),
             #[cfg(feature = "dev")]
             Err(AppSource::DevServer(url)) => {
-                view.update(cx, |view, cx| crate::dev::start(view, url, held, cx))
+                view.update(cx, |view, cx| crate::dev::start(view, url, held, None, cx))
             }
             #[allow(unreachable_patterns)]
             Err(_) => {}
@@ -1131,7 +1206,8 @@ fn main_window_options(
 }
 
 /// Runs `source` in a window until it is closed. Fails when the window
-/// cannot open.
+/// cannot open. Feature `platform` (GPUI's platform runs the event loop).
+#[cfg(feature = "platform")]
 pub fn run_app(source: AppSource, options: AppOptions) -> std::process::ExitCode {
     let ok = Rc::new(std::cell::Cell::new(true));
     let result = ok.clone();
