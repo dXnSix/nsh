@@ -7,9 +7,11 @@ name: Fork CI
 #
 # - `upstream`: starts, on the pull request's branch, each upstream workflow
 #   its own `pull_request` event did not run (`.github/fork/dispatch.py`):
-#   Core, Linux, Windows, GPUI, Examples, Rust application and Compat, as
-#   they are defined upstream. Their checks show on the pull request with the
-#   others.
+#   Core, Linux, Windows, GPUI, Examples and Rust application, as they are
+#   defined upstream. Their checks show on the pull request with the others.
+#   Upstream's Compat is disabled in the fork: it reads longbridge's
+#   nsh-compat, which fails the fork's own cases. `fork-compat.yml` is the
+#   fork's compat check.
 # - `macos`, `ios`, `android`, `web`: clippy, tests, and the examples' tests on
 #   the platform (`nsh test --target <platform>`, `.github/fork/examples.sh`):
 #   macOS windows, an iOS simulator, an Android emulator, headless Chrome.

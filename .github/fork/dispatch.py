@@ -6,7 +6,8 @@ wants each of its pull requests checked on every platform, so this starts,
 on the pull request's branch, each workflow its own `pull_request` event did
 not run: those whose paths the change does not touch. The ones it touched
 already run, and run once. Workflows disabled in the fork (Website,
-Packages) and the fork's own (`fork-*.yml`) are left out.
+Packages, Compat: `fork-compat.yml` is the fork's) and the fork's own
+(`fork-*.yml`) are left out.
 
 Usage: dispatch.py <base sha> <head branch>  (at the root of a checkout of
 the head, with `gh` signed in as the workflow's token, `actions: write`).

@@ -1,0 +1,84 @@
+name: Fork compat
+
+# The fork's compat check: `cargo xtask compat` (docs/dev/compatibility.md)
+# with the fork's own nsh-compat, dXnSix/nsh-compat, in place of
+# longbridge/nsh-compat.
+#
+# The fork's cases (`tests/compat/cases/tizen`, `tv`, the focus props in
+# `base` and `props`) print what only dXnSix/nsh-compat's harness reads
+# (`platform tizen`, `platform android tv`, `focusGroup`, `autoFocus`); its
+# `main` is longbridge's with those companions merged, each gated on what
+# the checkout has. Against longbridge's harness those cases fail, so
+# upstream's Compat (`compat.yml`, kept as upstream's) is not the fork's
+# check: this one is.
+#
+# `cargo xtask compat` clones longbridge's nsh-compat into
+# `target/nsh-compat/nsh-compat` unless a checkout is there already, and
+# then only brings that one up to date: so dXnSix/nsh-compat is cloned there
+# first.
+#
+# Runs on every pull request, whatever it changes, as Fork CI's jobs do (no
+# paths: the Tizen and TV cases, and the crates they build, are all
+# covered), and on every push to `main`. A fork-only file (branch kind
+# `fork/*`): it never goes upstream, and adds only its own file.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # As upstream's workflows (`.github/ci/paths.py`): `closed` runs nothing,
+    # but it takes the pull request's concurrency group and so cancels its
+    # runs still queued or running once it merges or closes.
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# By the pull request's number, as Fork CI's group: a merged pull request's
+# `closed` event runs with `refs/heads/main`, and in a group by ref it would
+# cancel the push run the merge started on `main`.
+concurrency:
+  group: fork-compat-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  # The toolchain file's iOS and Android targets are only the release's.
+  RUSTUP_TOOLCHAIN: stable
+
+jobs:
+  compat:
+    # Nothing for drafts or a pull request being closed.
+    if: github.event_name != 'pull_request' || (github.event.action != 'closed' && !github.event.pull_request.draft)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # QuickJS is C (bindgen needs libclang).
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # A restored cache may hold an earlier run's checkout, and its link
+      # back to this checkout (`target/nsh-compat/nsh`).
+      - name: The fork's nsh-compat
+        run: |
+          rm -rf target/nsh-compat
+          mkdir -p target/nsh-compat
+          git clone --quiet https://github.com/dXnSix/nsh-compat.git target/nsh-compat/nsh-compat
+          git -C target/nsh-compat/nsh-compat log -1 --format='dXnSix/nsh-compat %h %s'
+      - name: Check
+        run: cargo xtask compat
+      # Not saved with the cache: the next run clones it again, and the link
+      # would lead the cache's cleanup back into this checkout.
+      - name: Remove the nsh-compat checkout
+        if: always()
+        run: rm -rf target/nsh-compat
