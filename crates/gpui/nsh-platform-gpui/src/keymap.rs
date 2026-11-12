@@ -62,8 +62,9 @@ pub(crate) fn set(surface: &Surface, keymap: Arc<Keymap>) {
     *surface.keymap.table.borrow_mut() = (!keymap.is_empty()).then_some(keymap);
 }
 
-/// Whether the surface has bindings (tests wait for a focused component's).
-#[cfg(test)]
+/// Whether the surface has bindings (the window tests wait for a focused
+/// component's).
+#[cfg(all(test, feature = "shot"))]
 pub(crate) fn bound(surface: &Surface) -> bool {
     surface.keymap.table.borrow().is_some()
 }
