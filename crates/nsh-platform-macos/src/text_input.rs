@@ -847,20 +847,6 @@ pub(crate) fn editable(view: &NshView) -> bool {
         .is_some_and(|input| input.config.borrow().editable)
 }
 
-/// Whether a view of the key view loop that is not ours (an input's field,
-/// a hosted view) shows to the keyboard: the view of ours holding it does
-/// ([`NshView::seen_by_keys`]).
-fn held_seen(view: &NSView) -> bool {
-    let mut at = crate::view::superview(view);
-    while let Some(ns) = at {
-        if let Some(view) = NshView::from_ns(&ns) {
-            return view.seen_by_keys();
-        }
-        at = crate::view::superview(&ns);
-    }
-    true
-}
-
 /// Defines a field class: `NSTextField` or `NSSecureTextField` that tells
 /// [`Ctx`] what its field editor does.
 macro_rules! define_field {

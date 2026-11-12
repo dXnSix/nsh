@@ -1177,6 +1177,7 @@ fn collect_tab_stops(view: &NshView, out: &mut Vec<Retained<objc2_app_kit::NSVie
     if view.kind() == ViewKind::Input {
         if let Some(field) = crate::text_input::key_view(view)
             && field.canBecomeKeyView()
+            && view.seen_by_keys()
         {
             out.push(field);
         }
@@ -1185,17 +1186,21 @@ fn collect_tab_stops(view: &NshView, out: &mut Vec<Retained<objc2_app_kit::NSVie
     if is_key_stop(view) {
         out.push(Retained::from(view.ns()));
     }
-    let natives: Vec<_> = view
-        .state()
-        .natives
-        .iter()
-        .map(|n| n.view.clone())
-        .collect();
-    out.extend(
-        natives
+    // A hosted view shows to the keyboard as the view of ours holding it
+    // does ([`NshView::seen_by_keys`]).
+    if view.seen_by_keys() {
+        let natives: Vec<_> = view
+            .state()
+            .natives
             .iter()
-            .filter_map(|native| first_key_view(native, 0)),
-    );
+            .map(|n| n.view.clone())
+            .collect();
+        out.extend(
+            natives
+                .iter()
+                .filter_map(|native| first_key_view(native, 0)),
+        );
+    }
     for child in view.children_in_reading_order() {
         collect_tab_stops(&child, out);
     }
