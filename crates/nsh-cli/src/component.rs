@@ -73,6 +73,13 @@ pub(crate) const COMPONENTS: &[Component] = &[
         hosts: Some(&["macos-arm64"]),
     },
     Component {
+        name: "tizen",
+        what: "Samsung TV runtime (`--target tizen`, `nsh package --target tizen`)",
+        paths: &["runtime/tizen"],
+        per_host: false,
+        hosts: None,
+    },
+    Component {
         name: "web",
         what: "web runtime (`--target web`, `nsh package --target web`)",
         paths: &["runtime/web"],
@@ -480,6 +487,46 @@ mod tests {
         );
         assert!(!Component::named("ios").unwrap().for_host("linux-x86_64"));
         assert!(Component::named("nope").is_err());
+    }
+
+    #[test]
+    fn tizen_is_one_archive_of_the_tv_runtime_for_every_host() {
+        let tizen = Component::named("tizen").unwrap();
+        assert_eq!(tizen.paths, ["runtime/tizen"]);
+        assert_eq!(tizen.asset("macos-arm64"), "nsh-tizen.tar.gz");
+        assert_eq!(tizen.asset("linux-x86_64"), "nsh-tizen.tar.gz");
+        assert!(tizen.for_host("windows-x86_64"));
+        // Packed and installed whole: both variants, the specs, the allowlist.
+        let dir = temp("tizen");
+        let from = dir.join("from");
+        for file in [
+            "runtime/tizen/release/Nsh.Tizen.Host.dll",
+            "runtime/tizen/release/armv7l/libnsh.so",
+            "runtime/tizen/dev/Nsh.Tizen.Host.dll",
+            "runtime/tizen/dev/armv7l/libnsh.so",
+            "runtime/tizen/targets/armv7-tizen-linux-gnueabi.json",
+            "runtime/tizen/targets/toolchain",
+            "runtime/tizen/targets/symbols.allow",
+        ] {
+            fs::create_dir_all(from.join(file).parent().unwrap()).unwrap();
+            fs::write(from.join(file), file).unwrap();
+        }
+        let record = serde_json::to_vec(&Record::this_build()).unwrap();
+        let archive = dir.join("nsh-tizen.tar.gz");
+        write_archive(&from, tizen, &record, &archive).unwrap();
+        let unpacked = dir.join("unpacked");
+        unpack(&archive, &unpacked).unwrap();
+        let root = dir.join("root");
+        install(&root, tizen, &unpacked.join("nsh")).unwrap();
+        assert!(tizen.installed(&root));
+        assert_eq!(
+            fs::read_to_string(root.join("runtime/tizen/dev/armv7l/libnsh.so")).unwrap(),
+            "runtime/tizen/dev/armv7l/libnsh.so"
+        );
+        assert!(root.join("runtime/tizen/targets/toolchain").exists());
+        // The symbol allowlist an app's library is checked against.
+        assert!(root.join("runtime/tizen/targets/symbols.allow").exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

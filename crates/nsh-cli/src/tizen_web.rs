@@ -292,7 +292,7 @@ impl Widget {
     }
 }
 
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -301,7 +301,7 @@ fn escape(text: &str) -> String {
 
 /// The package id made from the app's id: 10 letters and digits, the first
 /// a letter, the same for the same id.
-fn package_id(id: &str) -> String {
+pub(crate) fn package_id(id: &str) -> String {
     const LETTERS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     const DIGITS: &[u8] = b"0123456789";
     let hash = Sha256::digest(id.as_bytes());
@@ -319,14 +319,14 @@ fn package_id(id: &str) -> String {
         .collect()
 }
 
-fn check_package_id(package: &str) -> anyhow::Result<&str> {
+pub(crate) fn check_package_id(package: &str) -> anyhow::Result<&str> {
     if package.len() != 10 || !package.bytes().all(|b| b.is_ascii_alphanumeric()) {
         bail!("nsh.json tizen.package `{package}`: Tizen takes 10 letters and digits");
     }
     Ok(package)
 }
 
-fn check_app_id<'a>(app: &'a str, package: &str) -> anyhow::Result<&'a str> {
+pub(crate) fn check_app_id<'a>(app: &'a str, package: &str) -> anyhow::Result<&'a str> {
     let name = app.strip_prefix(package).and_then(|r| r.strip_prefix('.'));
     match name {
         Some(name)
@@ -344,7 +344,7 @@ fn check_app_id<'a>(app: &'a str, package: &str) -> anyhow::Result<&'a str> {
 
 /// The application id's name for the app's display name: its letters and
 /// digits (`App` if it has none), at most 52.
-fn app_name(name: &str) -> String {
+pub(crate) fn app_name(name: &str) -> String {
     let name: String = name
         .chars()
         .filter(char::is_ascii_alphanumeric)
@@ -359,7 +359,7 @@ fn app_name(name: &str) -> String {
 
 /// Tizen's versions: `x.y.z` (or `x.y`), x and y at most 255, z at most
 /// 65535.
-fn check_version(version: &str) -> anyhow::Result<()> {
+pub(crate) fn check_version(version: &str) -> anyhow::Result<()> {
     let parts: Vec<&str> = version.split('.').collect();
     let limits = [255u32, 255, 65535];
     let ok = (2..=3).contains(&parts.len())
@@ -376,7 +376,7 @@ fn check_version(version: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn check_api_version(version: &str) -> anyhow::Result<()> {
+pub(crate) fn check_api_version(version: &str) -> anyhow::Result<()> {
     let parts: Vec<&str> = version.split('.').collect();
     if !(2..=3).contains(&parts.len())
         || parts
@@ -471,7 +471,7 @@ fn shim(preview: Option<&Preview>) -> String {
 }
 
 /// The app's icon as Tizen TVs show it: 512×423, the square icon centered.
-fn write_icon(icon: &Path, to: &Path) -> anyhow::Result<()> {
+pub(crate) fn write_icon(icon: &Path, to: &Path) -> anyhow::Result<()> {
     let image = image::open(icon).with_context(|| format!("read {}", icon.display()))?;
     let side = 423;
     let scaled = image.resize_to_fill(side, side, image::imageops::FilterType::Lanczos3);
@@ -489,7 +489,7 @@ fn write_icon(icon: &Path, to: &Path) -> anyhow::Result<()> {
 
 /// Zips the files of `dir` into `archive`, at its root, in a fixed order;
 /// the archive appears whole.
-fn zip_dir(dir: &Path, archive: &Path) -> anyhow::Result<()> {
+pub(crate) fn zip_dir(dir: &Path, archive: &Path) -> anyhow::Result<()> {
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
     let part = archive.with_extension("wgt.part");
@@ -517,7 +517,7 @@ fn zip_dir(dir: &Path, archive: &Path) -> anyhow::Result<()> {
 
 /// The Tizen SDK's `tz`: on `PATH`, else where the SDK installs it
 /// (`~/tizen-studio/tools/tizen-core/tz`; `docs/dev/web.md`).
-fn tz() -> anyhow::Result<PathBuf> {
+pub(crate) fn tz() -> anyhow::Result<PathBuf> {
     let file = format!("tz{}", std::env::consts::EXE_SUFFIX);
     let on_path = std::env::var_os("PATH")
         .into_iter()
@@ -564,7 +564,7 @@ fn install_commands(tz: &Path, wgt: &Path, package: &str, serial: Option<&str>) 
 }
 
 /// Runs a step's `tz` command; its output only if it fails.
-fn run_tz(mut command: Command, doing: &str) -> anyhow::Result<()> {
+pub(crate) fn run_tz(mut command: Command, doing: &str) -> anyhow::Result<()> {
     let (status, output) =
         ui::capture(&mut command, |_| {}).with_context(|| format!("run tz to {doing}"))?;
     if !status.success() {

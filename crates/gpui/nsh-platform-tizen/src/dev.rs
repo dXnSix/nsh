@@ -196,7 +196,12 @@ impl nsh_dev::DevTransport for Connector {
 
 /// Connects `view` to the dev server at `url` through the TV's ports.
 pub(crate) fn connect(view: &AppView, url: String, cx: &mut gpui::Context<AppView>) {
-    view.connect_dev_server_with(url, Box::new(Connector::tv()), cx);
+    view.connect_dev_server_with(
+        url,
+        Box::new(Connector::tv()),
+        nsh_dev::protocol::HostPlatform::Tizen,
+        cx,
+    );
 }
 
 /// Logs what the development hosts show (NSH's, the app's `js`, and
