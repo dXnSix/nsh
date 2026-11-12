@@ -7,11 +7,21 @@
 //! the focus into sight ([`reveal`]), and which stop takes the focus back
 //! when a modal or a layer goes ([`Modals`], [`Layers`]).
 //!
+//! What a TV adds, over the same data ([`directional`]): the stop that
+//! takes the focus as it appears (`autoFocus`, [`auto_focus`]) or where
+//! the focus enters (`preferredFocus`), the app's own routes
+//! (`nextFocusUp` / `Down` / `Left` / `Right`, [`NextFocus`]), focus
+//! groups that are entered at their destinations and may trap the arrows
+//! ([`Group`], `nsh/base`'s `FocusGroup`), and the rows of a list past
+//! those mounted, which the list scrolls to by index before the focus
+//! lands there ([`Target::Scroll`], [`next_row`]).
+//!
 //! The backends describe their views ([`Candidate`], [`Layer`]: ids,
 //! frames, focus stops, scopes and tree order) and apply what comes back:
 //! they move the focus, report `focused` / `focus-within` and `Focus` /
 //! `Blur`, and scroll their views. The terminal backend uses it, its Cells
-//! one point each.
+//! one point each, and so does the GPUI backend, over its views' frames in
+//! the window's points.
 //!
 //! Frames are in the unit the backend lays out in, scaled along each axis
 //! on its own: the surface's points, or a terminal's Cells, one point each
@@ -85,6 +95,21 @@ pub struct Candidate {
     pub popup: bool,
     /// Where it comes in the focus order.
     pub order: Order,
+    /// It takes the focus when it appears (`autoFocus`, [`auto_focus`]).
+    pub auto_focus: bool,
+    /// It wins over geometry where the focus enters (`preferredFocus`): a
+    /// focus group it is in, or a scope with nothing focused.
+    pub preferred: bool,
+    /// The stops the arrows go to from it instead of the nearest one
+    /// (`nextFocusUp` / `Down` / `Left` / `Right`), as the backend found
+    /// them: the stop each names, or the first stop inside the view it
+    /// names.
+    pub next: NextFocus,
+    /// The innermost focus group around it (a `FocusGroup`'s view,
+    /// [`Group`]).
+    pub group: Option<NodeId>,
+    /// The innermost scroll view or list around it.
+    pub scroller: Option<NodeId>,
 }
 
 impl Candidate {
@@ -308,6 +333,349 @@ pub fn vertical<C: AsRef<Candidate>>(
             .then_with(|| compare(a.2, b.2))
     })
     .map(|(index, _)| index)
+}
+
+/// An arrow key, the way it moves the focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Direction {
+    /// Up.
+    Up,
+    /// Down.
+    Down,
+    /// Left.
+    Left,
+    /// Right.
+    Right,
+}
+
+impl Direction {
+    /// Left or Right.
+    pub fn horizontal(self) -> bool {
+        matches!(self, Direction::Left | Direction::Right)
+    }
+
+    /// Down or Right: toward the end of the content.
+    pub fn forward(self) -> bool {
+        matches!(self, Direction::Down | Direction::Right)
+    }
+
+    /// The arrow the other way.
+    pub fn opposite(self) -> Direction {
+        match self {
+            Direction::Up => Direction::Down,
+            Direction::Down => Direction::Up,
+            Direction::Left => Direction::Right,
+            Direction::Right => Direction::Left,
+        }
+    }
+}
+
+/// The views the arrows take the focus to from a view instead of the
+/// nearest stop (`nextFocusUp`, `nextFocusDown`, `nextFocusLeft`,
+/// `nextFocusRight`): explicit routes, as a TV's remote needs between
+/// rows that do not line up.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct NextFocus {
+    /// Where Up goes.
+    pub up: Option<NodeId>,
+    /// Where Down goes.
+    pub down: Option<NodeId>,
+    /// Where Left goes.
+    pub left: Option<NodeId>,
+    /// Where Right goes.
+    pub right: Option<NodeId>,
+}
+
+impl NextFocus {
+    /// Where the arrow toward `direction` goes, if anywhere.
+    pub fn toward(&self, direction: Direction) -> Option<NodeId> {
+        match direction {
+            Direction::Up => self.up,
+            Direction::Down => self.down,
+            Direction::Left => self.left,
+            Direction::Right => self.right,
+        }
+    }
+
+    /// The route toward `direction`, set or cleared.
+    pub fn set(&mut self, direction: Direction, to: Option<NodeId>) {
+        match direction {
+            Direction::Up => self.up = to,
+            Direction::Down => self.down = to,
+            Direction::Left => self.left = to,
+            Direction::Right => self.right = to,
+        }
+    }
+
+    /// No route is set.
+    pub fn is_empty(&self) -> bool {
+        *self == NextFocus::default()
+    }
+}
+
+/// What a focus group's view carries (`nsh/base`'s `FocusGroup`), its
+/// views found: in [`crate::ViewProps::focus_group`].
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GroupConfig {
+    /// The arrows do not take the focus out of the group.
+    pub trap: bool,
+    /// The views the focus enters the group at, in order: the first one
+    /// that is (or holds) a stop in reach wins.
+    pub destinations: Vec<NodeId>,
+}
+
+/// A focus group as a backend describes it: a `FocusGroup`'s view, the
+/// group around it, and what it carries ([`GroupConfig`]), its
+/// destinations as stops.
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Group {
+    /// The group's view.
+    pub id: NodeId,
+    /// The group around it, if any.
+    pub parent: Option<NodeId>,
+    /// The arrows do not take the focus out of it.
+    pub trap: bool,
+    /// The stops it enters at, in order: the stop each destination names,
+    /// or the first stop inside it.
+    pub destinations: Vec<NodeId>,
+}
+
+/// Whether `group` is `inner` or a group around it, among `groups`.
+pub fn in_group(groups: &[Group], inner: Option<NodeId>, group: NodeId) -> bool {
+    let mut at = inner;
+    // A parent chain the backend made in a loop ends after every group.
+    for _ in 0..=groups.len() {
+        let Some(id) = at else { return false };
+        if id == group {
+            return true;
+        }
+        at = groups.iter().find(|g| g.id == id).and_then(|g| g.parent);
+    }
+    false
+}
+
+/// The groups from `inner` outwards, innermost first.
+fn chain(groups: &[Group], inner: Option<NodeId>) -> Vec<NodeId> {
+    let mut out = Vec::new();
+    let mut at = inner;
+    while let Some(id) = at {
+        if out.contains(&id) {
+            break;
+        }
+        out.push(id);
+        at = groups.iter().find(|g| g.id == id).and_then(|g| g.parent);
+    }
+    out
+}
+
+/// Where an arrow takes the focus ([`directional`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// The candidate at this index takes it.
+    Stop(usize),
+    /// The scroll view or list around the focused stop (its
+    /// [`Candidate::scroller`]) scrolls on toward the arrow first, and
+    /// keeps the focus: what comes into sight there takes it on a later
+    /// arrow, and a list's next row takes it as soon as it is mounted
+    /// ([`next_row`], `Core::focus_past`).
+    Scroll(NodeId),
+    /// Nowhere: the key goes on.
+    None,
+}
+
+/// Where an arrow toward `direction` takes the focus from `current` among
+/// `candidates` (in focus order), the TV's rules over the desktops' ones
+/// ([`horizontal`], [`vertical`]), first to last:
+///
+/// - **Nothing focused**: the first `preferred` stop in sight (in an open
+///   popup anchored to another view when one shows), else the geometric
+///   first ([`horizontal`], [`vertical`]).
+/// - **Overrides**: the stop `current`'s [`NextFocus`] names toward the
+///   arrow, when it is one of `candidates`; one that names none (gone, out
+///   of reach) leaves the arrow to the rules below. An override is the
+///   app's own route: it may leave a trapped group.
+/// - **Trap**: inside a group of `groups` that traps (the innermost one
+///   around `current` that does), only the stops inside it are reached:
+///   an arrow with nothing there goes nowhere.
+/// - **Scroll first**: while the scroll view or list around `current`
+///   (`Candidate::scroller`) can scroll on toward the arrow
+///   (`can_scroll`), a stop outside it (`inside(scroller, stop)` false),
+///   or none, is not reached: it scrolls on instead ([`Target::Scroll`]),
+///   so the rows past those mounted are not skipped.
+/// - **Entering a group**: a stop reached in a group `current` is not in
+///   hands the focus to the outermost such group's first destination in
+///   reach, else to its first `preferred` stop, else keeps it.
+pub fn directional<C: AsRef<Candidate>>(
+    candidates: &[C],
+    current: Option<usize>,
+    direction: Direction,
+    groups: &[Group],
+    can_scroll: impl Fn(NodeId) -> bool,
+    inside: impl Fn(NodeId, NodeId) -> bool,
+) -> Target {
+    let node = |index: usize| candidates[index].as_ref();
+    let position = |id: NodeId| candidates.iter().position(|c| c.as_ref().id == id);
+    let Some(at) = current.filter(|&at| at < candidates.len()) else {
+        // An open popup holds what the arrows are for, as in `vertical`.
+        let popup = candidates
+            .iter()
+            .any(|c| c.as_ref().visible && c.as_ref().popup);
+        if let Some(preferred) = candidates
+            .iter()
+            .map(AsRef::as_ref)
+            .position(|c| c.preferred && c.visible && (!popup || c.popup))
+        {
+            return Target::Stop(preferred);
+        }
+        let first = if direction.horizontal() {
+            horizontal(candidates, None, direction.forward())
+        } else {
+            vertical(candidates, None, direction.forward())
+        };
+        return first.map_or(Target::None, Target::Stop);
+    };
+    let from = *node(at);
+    if let Some(to) = from.next.toward(direction).and_then(position)
+        && to != at
+    {
+        return Target::Stop(to);
+    }
+    // The stops in reach: those of the innermost trapping group around it.
+    let own = chain(groups, from.group);
+    let trap = own
+        .iter()
+        .copied()
+        .find(|&id| groups.iter().any(|g| g.id == id && g.trap));
+    let pool: Vec<usize> = (0..candidates.len())
+        .filter(|&i| trap.is_none_or(|g| in_group(groups, node(i).group, g)))
+        .collect();
+    let reach: Vec<&Candidate> = pool.iter().map(|&i| node(i)).collect();
+    let here = pool.iter().position(|&i| i == at);
+    let found = if direction.horizontal() {
+        horizontal(&reach, here, direction.forward())
+    } else {
+        vertical(&reach, here, direction.forward())
+    }
+    .map(|i| pool[i])
+    .filter(|&i| i != at);
+    if let Some(scroller) = from.scroller
+        && found.is_none_or(|to| !inside(scroller, node(to).id))
+        && can_scroll(scroller)
+    {
+        return Target::Scroll(scroller);
+    }
+    let Some(to) = found else {
+        return Target::None;
+    };
+    // The outermost group the stop reached is in and `current` is not.
+    let entered = chain(groups, node(to).group)
+        .into_iter()
+        .rev()
+        .find(|id| !own.contains(id));
+    let Some(group) = entered.and_then(|id| groups.iter().find(|g| g.id == id)) else {
+        return Target::Stop(to);
+    };
+    let member = |i: &usize| in_group(groups, node(*i).group, group.id);
+    let destination = group
+        .destinations
+        .iter()
+        .find_map(|&id| position(id).filter(|i| member(i) && pool.contains(i)));
+    let preferred = || {
+        pool.iter()
+            .copied()
+            .find(|i| member(i) && node(*i).preferred)
+    };
+    Target::Stop(destination.or_else(preferred).unwrap_or(to))
+}
+
+/// The stop of `candidates` (in focus order) that takes the focus as it
+/// appears (`autoFocus`): the first that does and is not `seen` (one
+/// already given the chance when it appeared, or that a backend left to
+/// the user since).
+pub fn auto_focus<C: AsRef<Candidate>>(
+    candidates: &[C],
+    seen: impl Fn(NodeId) -> bool,
+) -> Option<usize> {
+    candidates
+        .iter()
+        .map(AsRef::as_ref)
+        .position(|c| c.auto_focus && !seen(c.id))
+}
+
+/// The stop a scope opened with nothing focused gives the focus to (a
+/// modal presented, [`Modals::update`]'s `first`): the first that takes it
+/// as it appears (`autoFocus`), else the first `preferred` one, else the
+/// first.
+pub fn first_stop<C: AsRef<Candidate>>(candidates: &[C]) -> Option<usize> {
+    let all = || candidates.iter().map(AsRef::as_ref);
+    all()
+        .position(|c| c.auto_focus)
+        .or_else(|| all().position(|c| c.preferred))
+        .or((!candidates.is_empty()).then_some(0))
+}
+
+/// A row of a list, as the core knows it: what an arrow from a stop in it
+/// moves along ([`next_row`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Row {
+    /// The list.
+    pub list: NodeId,
+    /// The row's item.
+    pub index: u32,
+    /// How many items the list has.
+    pub count: u32,
+    /// Items per row (`numColumns`, at least 1).
+    pub columns: u32,
+    /// The list scrolls horizontally.
+    pub horizontal: bool,
+}
+
+/// The item an arrow toward `direction` reaches from `row` along its list:
+/// the next one along the list's axis (a row of columns further, in a
+/// list of several), the one beside it across it in a list of columns, or
+/// none at the ends and across a list of one column (the arrow leaves the
+/// list there by geometry).
+pub fn next_row(row: &Row, direction: Direction) -> Option<u32> {
+    let columns = row.columns.max(1);
+    let along = direction.horizontal() == row.horizontal;
+    let step = if along { columns } else { 1 };
+    if !along
+        && (columns == 1 || {
+            let column = row.index % columns;
+            if direction.forward() {
+                column + 1 == columns
+            } else {
+                column == 0
+            }
+        })
+    {
+        return None;
+    }
+    let to = if direction.forward() {
+        row.index.checked_add(step)?
+    } else {
+        row.index.checked_sub(step)?
+    };
+    (to < row.count).then_some(to)
+}
+
+/// A list row an arrow went to before it was mounted: the list scrolls
+/// to it, and its first stop takes the focus once it is mounted.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PendingRow {
+    /// The list.
+    pub list: NodeId,
+    /// The item.
+    pub index: u32,
+    /// The stop the arrow left: the row is forgotten once the focus is
+    /// elsewhere.
+    pub from: NodeId,
 }
 
 /// How a scroll view brings the stop that takes the focus into sight along

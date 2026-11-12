@@ -85,6 +85,7 @@ impl Mounter {
             self.detach(surface, &view);
         }
         crate::navigation::end_batch(surface);
+        crate::focus::end_batch(surface);
         crate::system::end_batch(surface);
     }
 
@@ -343,6 +344,7 @@ impl Mounter {
                 let Some(view) = &self.get(*id) else { return };
                 view.state_mut().props = props.clone();
                 crate::input::props_changed(surface, view);
+                crate::focus::props_changed(surface, view);
                 crate::access::props_changed(view);
             }
             MountItem::LayoutAnimation(a) => self.layout_animation = Some(*a),
@@ -402,7 +404,6 @@ impl Mounter {
         if crate::navigation::defer_detach(surface, view) {
             return;
         }
-        crate::key_focus::detached(surface, view);
         match view.kind() {
             ViewKind::Modal => return crate::navigation::dismiss(surface, view),
             ViewKind::HeaderItem => return crate::navigation::header_item_removed(surface, view),
@@ -424,13 +425,12 @@ impl Mounter {
             // An input edits; a stop takes the keyboard focus.
             Command::Focus => match view {
                 Some(view) if view.kind() == ViewKind::Input => crate::text_input::focus(view),
-                Some(view) => crate::key_focus::focus(surface, view),
+                Some(view) => crate::focus::asked(surface, view),
                 None => {}
             },
             Command::Blur => match view {
-                Some(view) if view.kind() == ViewKind::Input => crate::text_input::blur(view),
-                Some(view) if crate::key_focus::blur(surface, view) => {}
-                _ => crate::text_input::blur_all(surface),
+                Some(view) => crate::focus::blur_command(surface, view),
+                None => crate::text_input::blur_all(surface),
             },
             Command::SetSelection { start, end } => {
                 if let Some(view) = view {

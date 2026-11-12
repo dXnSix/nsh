@@ -135,7 +135,7 @@ pub(crate) struct Modifiers {
 
 impl Modifiers {
     /// As the core's modifiers (`meta` is its `cmd`).
-    fn core(self) -> nsh_core::keymap::Modifiers {
+    pub(crate) fn core(self) -> nsh_core::keymap::Modifiers {
         nsh_core::keymap::Modifiers {
             ctrl: self.ctrl,
             alt: self.alt,
@@ -1346,7 +1346,7 @@ pub(crate) fn key_now(surface: &Rc<Surface>, event: KeyEvent) -> bool {
         || crate::text::key(surface, &event)
         || crate::selectable_view::key(surface, &event)
         || crate::navigation::key_pressed(surface, &event)
-        || crate::key_focus::key(surface, &event)
+        || crate::focus::key(surface, &event)
         || {
             let (x, y) = input.last.get().unwrap_or((-1.0, -1.0));
             crate::scroll::key(surface, &event, x, y)
@@ -1382,31 +1382,28 @@ pub(crate) fn component_key(surface: &Rc<Surface>, event: KeyEvent) -> bool {
     handled
 }
 
-/// Tab and Shift + Tab move the keyboard focus between the text fields (and
-/// the native components that take the keyboard), in tree order (GTK's focus chain does this on Linux), within the newest
-/// modal: the views under it never get the focus. The field reached has
-/// its text selected, as in Windows' dialogs. Past the last field (the
-/// first with Shift) the key is not taken: the window's focus moves on to
-/// the embedding app's next tab stop, or wraps around when there is none
-/// ([`crate::app`], [`tab_to_edge`]).
+/// Tab and Shift + Tab move the keyboard focus between the stops the
+/// arrows go through ([`crate::focus::tab_stops`]: text fields that edit,
+/// pressables and `focusable` views with an area, the native components
+/// that take the keyboard, less those a backdrop covers), in tree order
+/// through [`input::tab_stop`], within the newest modal: the views under it
+/// never get the focus. The field reached has its text selected, as in
+/// Windows' dialogs. Past the last stop (the first with Shift) the key is
+/// not taken: the window's focus moves on to the embedding app's next tab
+/// stop, or wraps around when there is none ([`tab_past_ends`]).
 fn tab(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     let m = event.modifiers;
     if event.vk != VK_TAB || m.ctrl || m.alt || m.meta {
         return false;
     }
-    let mut stops = Vec::new();
-    collect_stops(
-        surface,
-        &crate::navigation::focus_scope(surface),
-        &mut stops,
-    );
+    let stops = crate::focus::tab_stops(surface, &crate::navigation::focus_scope(surface));
     if stops.is_empty() {
         return false;
     }
-    let focused = crate::text_input::focused(surface)
+    let focused = crate::focus::current(surface)
         .or_else(|| crate::native::focused_component(surface).and_then(|id| surface.view(id)));
     let current = focused.and_then(|f| stops.iter().position(|v| *v == f));
-    // Past the ends the window's focus moves on ([`tab_to_edge`]).
+    // Past the ends the window's focus moves on ([`tab_past_ends`]).
     let Some(next) = input::tab_stop(current, stops.len(), m.shift, false) else {
         return false;
     };
@@ -1414,17 +1411,24 @@ fn tab(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     true
 }
 
+/// Tab (Shift + Tab with `shift`) the surface did not take, past its last
+/// stop (its first): `leave` moves the window's focus to the embedding
+/// app's next tab stop, and when there is none the focus wraps around to
+/// the first stop (the last, [`tab_to_edge`]). When the focus leaves the
+/// view, or no stop is left to wrap to, the stop that had it lets go of it
+/// (a field's or a view's: `FOCUSED` off, `onBlur`).
+pub(crate) fn tab_past_ends(surface: &Rc<Surface>, shift: bool, leave: impl FnOnce() -> bool) {
+    if leave() || !tab_to_edge(surface, shift) {
+        crate::focus::blur_all(surface);
+    }
+}
+
 /// Focuses the first Tab stop (the last with `shift`), reached with Tab
 /// from outside them: from the embedding app's widgets, or past the last
 /// stop when the window has no other tab stop (they wrap around, as in the
 /// other backends' windows). True when there is one.
 pub(crate) fn tab_to_edge(surface: &Rc<Surface>, shift: bool) -> bool {
-    let mut stops = Vec::new();
-    collect_stops(
-        surface,
-        &crate::navigation::focus_scope(surface),
-        &mut stops,
-    );
+    let stops = crate::focus::tab_stops(surface, &crate::navigation::focus_scope(surface));
     let next = if shift { stops.last() } else { stops.first() };
     match next {
         Some(view) => {
@@ -1435,47 +1439,23 @@ pub(crate) fn tab_to_edge(surface: &Rc<Surface>, shift: bool) -> bool {
     }
 }
 
-/// Moves the keyboard focus to `view`: a text field, or a native component
-/// (focused by [`crate::native::apply_focus`], which has the window).
+/// Moves the keyboard focus to `view`: a text field, a native component
+/// (focused by [`crate::native::apply_focus`], which has the window), or any
+/// other stop, which takes [`crate::focus`]'s focus and is revealed in its
+/// scroll views.
 fn focus_stop(surface: &Rc<Surface>, view: &NshView) {
-    if view.kind() == ViewKind::Native {
-        crate::native::tab_to(surface, view.id());
-    } else {
-        crate::text_input::tab_to(view);
+    match view.kind() {
+        ViewKind::Native => {
+            // The view the arrows focused loses it ([`crate::focus`]).
+            crate::focus::set(surface, None);
+            crate::native::tab_to(surface, view.id());
+        }
+        ViewKind::Input => crate::text_input::tab_to(view),
+        _ => {
+            crate::focus::set(surface, Some(view));
+            crate::scroll::reveal(surface, view);
+        }
     }
-}
-
-/// The Tab stops shown under `view`, in tree order (a scroll view's
-/// content as it is on screen; a shown overlay's content after the view it
-/// follows, [`input::tab_order`]): enabled text fields and
-/// the native components that take the keyboard.
-fn collect_stops(surface: &Surface, view: &NshView, out: &mut Vec<NshView>) {
-    let skipped = |view: &NshView| {
-        let s = view.state();
-        s.style.hidden || s.concealed || s.props.pointer_events == PointerEvents::None
-    };
-    let order = input::tab_order(
-        view.clone(),
-        |view| {
-            if skipped(view) {
-                return Vec::new();
-            }
-            view.with_children_in_reading_order(<[NshView]>::to_vec)
-        },
-        NshView::id,
-        |view| view.state().props.tab_after,
-    );
-    out.extend(order.into_iter().filter(|view| {
-        if skipped(view) {
-            return false;
-        }
-        let s = view.state();
-        match s.kind {
-            ViewKind::Input => !s.props.accessibility.state.disabled,
-            ViewKind::Native => crate::native::focusable(surface, s.id),
-            _ => false,
-        }
-    }));
 }
 
 // --- Hit testing --------------------------------------------------------------------
@@ -1654,7 +1634,7 @@ fn down(
     let Some(mut hit) = pick(&surface.input_root(), x, y, true) else {
         return;
     };
-    crate::key_focus::pointer_down(surface, &hit.view);
+    crate::focus::pointer_down(surface, &hit.view);
     let touch = key != Key::Mouse;
     let mut item = None;
     if let Some(native) = hit.item.take() {

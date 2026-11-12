@@ -421,14 +421,26 @@ fn a_popovers_field_follows_its_trigger_in_the_tab_order(cx: &mut TestAppContext
             ));
         });
     };
-    // Into the popover, which is shown at the end of the root view, then
-    // on to the field after it, and back.
+    // Tab goes through every stop ([`crate::focus::tab_stops`]): the
+    // popover's trigger, which takes presses, then into the popover, which
+    // is shown at the end of the root view, then on to the field after it,
+    // and back.
+    let on_trigger = |view: &Entity<AppView>, cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            crate::focus::focused(view.surface()).is_some()
+                && crate::text_input::focused(view.surface()).is_none()
+        })
+    };
+    tab(&view, cx, false);
+    assert!(on_trigger(&view, cx), "Tab did not reach the trigger");
     tab(&view, cx, false);
     wait_for(&view, cx, "inside");
     tab(&view, cx, false);
     wait_for(&view, cx, "after");
     tab(&view, cx, true);
     wait_for(&view, cx, "inside");
+    tab(&view, cx, true);
+    assert!(on_trigger(&view, cx), "Shift+Tab did not reach the trigger");
     tab(&view, cx, true);
     wait_for(&view, cx, "before");
 }
@@ -1847,7 +1859,7 @@ fn a_command_without_a_search_field_takes_the_keyboard_on_focus(cx: &mut TestApp
     loop {
         cx.run_until_parked();
         let moved = view.read_with(cx, |view, _| {
-            crate::key_focus::focused(view.surface()).is_some()
+            crate::focus::focused(view.surface()).is_some()
                 && crate::text_input::focused(view.surface()).is_none()
         });
         if moved {
@@ -1870,6 +1882,6 @@ fn a_command_without_a_search_field_takes_the_keyboard_on_focus(cx: &mut TestApp
         "{text}"
     );
     assert!(view.read_with(cx, |view, _| {
-        crate::key_focus::focused(view.surface()).is_none()
+        crate::focus::focused(view.surface()).is_none()
     }));
 }
