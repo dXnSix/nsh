@@ -516,7 +516,17 @@ mod tests {
             Target::Android,
         ] {
             assert!(!opens_on_a_display(target), "{target:?}");
-            let err = starter(target, None, Path::new("."), false, None, Some(2), false, None).err();
+            let err = starter(
+                target,
+                None,
+                Path::new("."),
+                false,
+                None,
+                Some(2),
+                false,
+                None,
+            )
+            .err();
             assert_eq!(
                 err.map(|e| e.to_string()).as_deref(),
                 Some(DISPLAY_TARGETS),
