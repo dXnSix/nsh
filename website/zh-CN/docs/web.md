@@ -260,6 +260,9 @@ nsh package --target tizen-web --probe             # 一个包，显示电视如
   照常生效）；在第一个页面上、没有可返回的内容时，应用会询问是否退出，选择“Exit”后退出，符合三星的规则。方向键、确认键、
   颜色键、媒体键和频道键以 [`keymap`](../modules/nsh.md#媒体键与电视遥控器按键) 的名字（`red`、`mediaplaypause`、
   `channelup` 等）送到应用；页面会向电视注册这些按键。
+- **[`nsh/tizen`](../modules/nsh-tizen.md)** 在包中可用：`isAvailable()` 为 `true`，`productInfo`、`registerKey` /
+  `unregisterKey`、`exitApp` 和 `setPreviewData`（Smart Hub 的预览）调用电视的 `tizen` 和 `webapis` API。在其他地方的浏览器中
+  `isAvailable()` 为 `false`。
 - **`nsh.json` 的 `tizen`** 为包命名，每个键都有默认值：
 
   ```json

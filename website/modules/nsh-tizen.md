@@ -24,7 +24,12 @@ import type { ProductInfo } from "nsh/tizen";
 function isAvailable(): boolean;
 ```
 
-`true` in an app running natively on a Samsung TV; `false` elsewhere.
+`true` in an app running on a Samsung TV, natively (`--target tizen`) or as a Tizen web app (`--target tizen-web`,
+a `.wgt` in the TV's browser engine); `false` elsewhere, the web in a browser included.
+
+In a Tizen web app the module calls the TV's web APIs: `productInfo` reads `webapis.productinfo` and
+`tizen.systeminfo`, the keys go to `tizen.tvinputdevice`, `exitApp` to `tizen.application`, and `setPreviewData` to
+the package's Smart Hub preview service, which calls `webapis.preview`. The package `nsh package --target tizen-web` writes asks for what they need.
 
 ## productInfo
 
@@ -54,7 +59,7 @@ in [`keymap`](./nsh.md#keymap): `"red"`, `"green"`, `"yellow"`, `"blue"`, `"medi
 `"channelup"`, `"channeldown"`, `"info"`. The arrows, Enter and Back always reach the app. A name of no key rejects
 with a `TypeError`, a key the TV does not give apps with a `RangeError`. In a native app the color, media and channel
 keys are the app's from the start; `unregisterKey` gives one back to the TV, and `registerKey("info")` takes the Info
-key too. A key stays the app's while the app is shown, as the TV hides and shows it.
+key too. In a Tizen web app every one of them, Info included, is the app's from the start. A key stays the app's while the app is shown, as the TV hides and shows it.
 
 ```tsx
 import { keymap } from "nsh";
@@ -70,7 +75,7 @@ keymap.bind("red", () => toggleSubtitles());
 function exitApp(): Promise<void>;
 ```
 
-Leaves the app. On its first screen, Back already asks the user whether to leave, as Samsung's guidelines ask of TV
+Leaves the app at once. On its first screen, Back already asks the user whether to leave, as Samsung's guidelines ask of TV
 apps; call `exitApp` from a menu item of your own.
 
 ## setPreviewData
@@ -80,5 +85,11 @@ function setPreviewData(data: unknown): Promise<void>;
 ```
 
 Sets the app's Smart Hub preview, the tiles the TV shows for the app on its home screen, in Samsung's preview format.
-A TV takes the preview from web apps; in a native app the call rejects with
-`ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`.
+A TV takes the preview from web apps. Samsung sets a personal preview from a background service of the package, so a
+Tizen web app declares one with `nsh.json` `"tizen": { "smartHubPreview": "service" }`: the package then carries
+NSH's preview service, and `setPreviewData` starts it with `data` as JSON; the service hands it to
+`webapis.preview.setPreviewData` and ends. The promise settles when the TV has started the service, and rejects with
+`ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` when it does not, when the package declares no personal preview, or when its
+preview is public (a URL in `smartHubPreview`, whose JSON the TV reads from your server, [Web](../docs/web.md#samsung-tvs)).
+Samsung allows one update every 10 minutes. This follows Samsung's guides and is not yet checked on a TV. In a native
+app the call rejects with `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`.

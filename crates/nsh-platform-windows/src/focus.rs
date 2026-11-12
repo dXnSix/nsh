@@ -38,9 +38,15 @@
 //!   bindings, the focused field (Left / Right, and Up / Down in a
 //!   multiline one) and selectable text with a selection come first
 //!   ([`crate::input::key`]'s order).
-//! - **Return and Space** press the focused view when it takes presses
-//!   (`PressDown`, `PressUp`, `Press` at its middle); one that takes none
-//!   leaves them to the app's bindings, which come first
+//! - **Return and Space** (neither Control, Alt nor the Windows key held:
+//!   `nsh_core::input::presses_focused_control`) are the focused view's
+//!   when it takes presses and no field is edited, as on the other
+//!   desktops: only the focus' own bindings take them first
+//!   (`Keymap::find_at`, [`on_control`]), else they press it (`PressDown`,
+//!   `PressUp`, `Press` at its middle: [`press_key`]), before the menu's
+//!   shortcuts. A binding of Return elsewhere (a dialog's main action)
+//!   does not act instead of the control the focus was moved to. A view
+//!   that takes no presses leaves them to the app's bindings
 //!   ([`crate::input::key`]'s order).
 //! - **Layers**: focus that went into a root view's child (the page, a
 //!   sheet's panel, an overlay) from a stop of another comes back to that
@@ -54,7 +60,8 @@ use nsh_core::{
     Bounds, EventKind, EventPayload, NodeId, PointerEvents, Points, ViewKind,
     focus::{self, Candidate, Layer, Order},
     geometry::{point, size},
-    input::{has_press, tab_order},
+    input::{has_press, presses_focused_control, tab_order},
+    keymap::Key,
     tailwind::state::FOCUSED,
 };
 
@@ -72,6 +79,9 @@ const VK_UP: u16 = 0x26;
 const VK_RIGHT: u16 = 0x27;
 /// `VK_DOWN`.
 const VK_DOWN: u16 = 0x28;
+
+/// What a press of Return or Space sends the focused view.
+const PRESS: [EventKind; 3] = [EventKind::PressDown, EventKind::PressUp, EventKind::Press];
 
 /// A surface's keyboard focus on views that are not fields.
 #[derive(Default)]
@@ -541,16 +551,15 @@ fn focus_stop(surface: &Rc<Surface>, view: &NshView) {
     }
 }
 
-/// A key down for the focus: the arrows move it, Return and Space press
-/// the focused view. True when it was taken.
+/// A key down for the focus: the arrows move it. True when it was taken.
+/// (Return and Space come earlier: [`press_key`].)
 pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     let m = event.modifiers;
-    if !event.down || m.ctrl || m.alt || m.meta {
+    if !event.down || m.ctrl || m.alt || m.meta || m.shift {
         return false;
     }
     match event.vk {
-        VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN if !m.shift => arrow(surface, event.vk),
-        VK_RETURN | VK_SPACE => press(surface, event),
+        VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN => arrow(surface, event.vk),
         _ => false,
     }
 }
@@ -588,28 +597,53 @@ fn arrow(surface: &Rc<Surface>, vk: u16) -> bool {
     true
 }
 
-/// Return or Space: presses the view with this module's focus when it
-/// takes presses and shows (an auto-repeat presses nothing more).
-fn press(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
-    let Some(view) = focused(surface) else {
+/// The control Return and Space press: the view with this module's focus
+/// when it hears a press ([`PRESS`]) and shows in its window, while no
+/// field is edited. With the box it covers in the window's points.
+fn control(surface: &Surface) -> Option<(NshView, Edges)> {
+    if crate::text_input::focused(surface).is_some() {
+        return None;
+    }
+    let view = focused(surface)?;
+    let events = view.state().events;
+    if !PRESS.into_iter().any(|kind| events.contains(kind)) {
+        return None;
+    }
+    let own = view.to_root().and_then(|m| edges(&view, &m))?;
+    shows(intersect(own, window_edges(&view))).then_some((view, own))
+}
+
+/// Whether the keyboard focus is on a control that Return and Space press
+/// ([`press_key`]): the app's bindings of those keys then give way to it,
+/// but for the focus' own (`Keymap::find_at`).
+pub(crate) fn on_control(surface: &Surface) -> bool {
+    control(surface).is_some()
+}
+
+/// Return or Space (`presses_focused_control`) press the control with the
+/// focus (`control`), once the bindings of the focus passed on them
+/// ([`crate::keymap::key`]) and before the menu's shortcuts: a binding of
+/// Return elsewhere does not act instead of the control the focus was
+/// moved to. An auto-repeat presses nothing more. True when it was taken.
+pub(crate) fn press_key(surface: &Surface, event: &KeyEvent) -> bool {
+    let key = match event.vk {
+        VK_RETURN => Key::Enter,
+        VK_SPACE => Key::Char(' '),
+        _ => return false,
+    };
+    if !event.down || !presses_focused_control(key, event.modifiers.core()) {
+        return false;
+    }
+    let Some((view, own)) = control(surface) else {
         return false;
     };
+    if event.repeat {
+        return true;
+    }
     let (id, events, frame) = {
         let s = view.state();
         (s.id, s.events, s.frame)
     };
-    if !has_press(events) {
-        return false;
-    }
-    let Some(own) = view.to_root().and_then(|m| edges(&view, &m)) else {
-        return false;
-    };
-    if !shows(intersect(own, window_edges(&view))) {
-        return false;
-    }
-    if event.repeat {
-        return true;
-    }
     let (width, height) = (frame.size.width.0, frame.size.height.0);
     let payload = EventPayload::Press(nsh_core::PressEvent {
         position: point(Points(width / 2.0), Points(height / 2.0)),
@@ -617,7 +651,7 @@ fn press(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
         modifiers: event.modifiers.core(),
         clicks: 1,
     });
-    for kind in [EventKind::PressDown, EventKind::PressUp, EventKind::Press] {
+    for kind in PRESS {
         if events.contains(kind) {
             surface.event(id, kind, payload.clone());
         }
@@ -719,4 +753,134 @@ fn shows_in_window(view: &NshView) -> bool {
 pub(crate) fn reset(surface: &Surface) {
     surface.focus.view.borrow_mut().take();
     *surface.focus.layers.borrow_mut() = focus::Layers::default();
+}
+
+#[cfg(test)]
+mod tests {
+    /// Return and Space on the focused control:
+    /// `cargo test -p nsh-platform-windows --lib focus::tests::return_and_space`.
+    mod return_and_space {
+        use std::{rc::Rc, sync::Arc};
+
+        use nsh_core::{
+            Bounds, EventKind, Points, ViewKind,
+            geometry::{point, size},
+            keymap::{KeyBinding, Keymap, Keystroke, When},
+        };
+
+        use super::super::{VK_RETURN, VK_SPACE, on_control, press_key};
+        use crate::{
+            input::{KeyEvent, Modifiers},
+            surface::Surface,
+            view::NshView,
+        };
+
+        /// A window with one button in sight.
+        fn window() -> (Rc<Surface>, NshView) {
+            let surface = Surface::new(Default::default());
+            surface.resized((200, 100), 1.0);
+            let button = NshView::new(2, ViewKind::View);
+            {
+                let mut s = button.state_mut();
+                s.frame = Bounds::new(
+                    point(Points(10.0), Points(10.0)),
+                    size(Points(80.0), Points(30.0)),
+                );
+                s.events.set(EventKind::Press, true);
+            }
+            button.insert_before(&surface.root, None);
+            (surface, button)
+        }
+
+        fn down(vk: u16, ctrl: bool) -> KeyEvent {
+            KeyEvent {
+                vk,
+                down: true,
+                repeat: false,
+                modifiers: Modifiers {
+                    ctrl,
+                    ..Modifiers::default()
+                },
+            }
+        }
+
+        fn stroke(keys: &str) -> Keystroke {
+            Keystroke::parse_with(keys, false).unwrap()
+        }
+
+        /// A dialog's Return, Space and Control+Return.
+        fn bindings() -> Vec<KeyBinding> {
+            vec![
+                KeyBinding::new(1, stroke("enter"), When::NotEditing, false),
+                KeyBinding::new(2, stroke("space"), When::NotEditing, false),
+                KeyBinding::new(3, stroke("ctrl+enter"), When::Always, false),
+            ]
+        }
+
+        #[test]
+        fn press_the_focused_control_before_the_other_bindings() {
+            let (surface, button) = window();
+            crate::keymap::set(&surface, Arc::new(Keymap::new(bindings())));
+            // The focus on no control: the bindings take them, nothing is
+            // pressed.
+            assert!(!on_control(&surface));
+            for vk in [VK_RETURN, VK_SPACE] {
+                assert!(crate::keymap::key(&surface, &down(vk, false)));
+                assert!(!press_key(&surface, &down(vk, false)));
+            }
+            // On the button: they are its.
+            *surface.focus.view.borrow_mut() = Some(button);
+            assert!(on_control(&surface));
+            for vk in [VK_RETURN, VK_SPACE] {
+                assert!(!crate::keymap::key(&surface, &down(vk, false)));
+                assert!(press_key(&surface, &down(vk, false)));
+            }
+            // A held key presses nothing more, and stays the control's.
+            let held = KeyEvent {
+                repeat: true,
+                ..down(VK_RETURN, false)
+            };
+            assert!(!crate::keymap::key(&surface, &held));
+            assert!(press_key(&surface, &held));
+            // With Control held the binding of that keystroke fires.
+            assert!(crate::keymap::key(&surface, &down(VK_RETURN, true)));
+            assert!(!press_key(&surface, &down(VK_RETURN, true)));
+        }
+
+        #[test]
+        fn the_focus_own_bindings_come_first() {
+            let (surface, button) = window();
+            let mut table = bindings();
+            // A menu button's Return, bound while it has the focus.
+            table.push(
+                KeyBinding::new(4, stroke("enter"), When::NotEditing, false).focus_keys(true),
+            );
+            crate::keymap::set(&surface, Arc::new(Keymap::new(table)));
+            *surface.focus.view.borrow_mut() = Some(button);
+            assert!(crate::keymap::key(&surface, &down(VK_RETURN, false)));
+            // Space has none: it presses.
+            assert!(!crate::keymap::key(&surface, &down(VK_SPACE, false)));
+            assert!(press_key(&surface, &down(VK_SPACE, false)));
+        }
+
+        #[test]
+        fn a_view_that_takes_no_presses_leaves_them_to_the_bindings() {
+            let (surface, view) = window();
+            view.state_mut().events.set(EventKind::Press, false);
+            crate::keymap::set(&surface, Arc::new(Keymap::new(bindings())));
+            *surface.focus.view.borrow_mut() = Some(view.clone());
+            assert!(!on_control(&surface));
+            assert!(crate::keymap::key(&surface, &down(VK_RETURN, false)));
+            assert!(!press_key(&surface, &down(VK_RETURN, false)));
+            // So does a control out of sight: nothing would press it.
+            {
+                let mut s = view.state_mut();
+                s.events.set(EventKind::Press, true);
+                s.frame.origin.y = Points(400.0);
+            }
+            assert!(!on_control(&surface));
+            assert!(crate::keymap::key(&surface, &down(VK_SPACE, false)));
+            assert!(!press_key(&surface, &down(VK_SPACE, false)));
+        }
+    }
 }

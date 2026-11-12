@@ -19,7 +19,9 @@ import type { ProductInfo } from "nsh/tizen";
 function isAvailable(): boolean;
 ```
 
-在三星电视上原生运行的应用中为 `true`，其他地方为 `false`。
+在三星电视上运行的应用中为 `true`，无论是原生运行（`--target tizen`）还是作为 Tizen Web 应用（`--target tizen-web`，在电视浏览器引擎中运行的 `.wgt`）；其他地方为 `false`，包括浏览器中的 Web。
+
+在 Tizen Web 应用中，这个模块调用电视的 Web API：`productInfo` 读取 `webapis.productinfo` 和 `tizen.systeminfo`，按键交给 `tizen.tvinputdevice`，`exitApp` 交给 `tizen.application`，`setPreviewData` 交给包中调用 `webapis.preview` 的 Smart Hub 预览服务。`nsh package --target tizen-web` 写出的包会申请它们所需的权限。
 
 ## productInfo
 
@@ -43,7 +45,7 @@ function registerKey(key: string): Promise<void>;
 function unregisterKey(key: string): Promise<void>;
 ```
 
-遥控器的颜色键、媒体键、频道键和 Info 键在应用取用之前属于电视。`key` 是 [`keymap`](./nsh.md#keymap) 中的按键名：`"red"`、`"green"`、`"yellow"`、`"blue"`、`"mediaplaypause"`、`"mediaplay"`、`"mediapause"`、`"mediastop"`、`"mediarewind"`、`"mediafastforward"`、`"medianext"`、`"mediaprevious"`、`"channelup"`、`"channeldown"`、`"info"`。方向键、确认键和返回键总是到达应用。不是按键名的值以 `TypeError` 拒绝，电视不交给应用的按键以 `RangeError` 拒绝。在原生应用中，颜色键、媒体键和频道键从一开始就属于应用；`unregisterKey` 把某个键还给电视，`registerKey("info")` 也会取用 Info 键。在应用显示期间按键一直属于应用，电视隐藏和显示应用时也是如此。
+遥控器的颜色键、媒体键、频道键和 Info 键在应用取用之前属于电视。`key` 是 [`keymap`](./nsh.md#keymap) 中的按键名：`"red"`、`"green"`、`"yellow"`、`"blue"`、`"mediaplaypause"`、`"mediaplay"`、`"mediapause"`、`"mediastop"`、`"mediarewind"`、`"mediafastforward"`、`"medianext"`、`"mediaprevious"`、`"channelup"`、`"channeldown"`、`"info"`。方向键、确认键和返回键总是到达应用。不是按键名的值以 `TypeError` 拒绝，电视不交给应用的按键以 `RangeError` 拒绝。在原生应用中，颜色键、媒体键和频道键从一开始就属于应用；`unregisterKey` 把某个键还给电视，`registerKey("info")` 也会取用 Info 键。在 Tizen Web 应用中，这些键（包括 Info）从一开始都属于应用。在应用显示期间按键一直属于应用，电视隐藏和显示应用时也是如此。
 
 ```tsx
 import { keymap } from "nsh";
@@ -59,7 +61,7 @@ keymap.bind("red", () => toggleSubtitles());
 function exitApp(): Promise<void>;
 ```
 
-退出应用。在应用的第一个界面上，返回键已经会先询问用户是否退出，这正是三星对电视应用的要求；你可以在自己的菜单项中调用 `exitApp`。
+立即退出应用。在应用的第一个界面上，返回键已经会先询问用户是否退出，这正是三星对电视应用的要求；你可以在自己的菜单项中调用 `exitApp`。
 
 ## setPreviewData
 
@@ -67,4 +69,4 @@ function exitApp(): Promise<void>;
 function setPreviewData(data: unknown): Promise<void>;
 ```
 
-设置应用的 Smart Hub 预览，即电视在主屏幕上为应用显示的磁贴，格式为三星的预览格式。电视从 Web 应用获取预览；在原生应用中这个调用以 `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` 拒绝。
+设置应用的 Smart Hub 预览，即电视在主屏幕上为应用显示的磁贴，格式为三星的预览格式。电视从 Web 应用获取预览。三星从包中的后台服务设置个人预览，因此 Tizen Web 应用要在 `nsh.json` 中用 `"tizen": { "smartHubPreview": "service" }` 声明它：这样包中会带上 NSH 的预览服务，`setPreviewData` 会以 JSON 形式带着 `data` 启动它，服务把数据交给 `webapis.preview.setPreviewData` 后结束。电视启动服务后 promise 完成；电视没有启动它、包没有声明个人预览，或者预览是公共预览（`smartHubPreview` 中的 URL，电视从你的服务器读取其 JSON，见 [Web](../docs/web.md#三星电视)）时，promise 以 `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` 拒绝。三星每 10 分钟只允许更新一次。这一实现遵循三星的指南，尚未在电视上验证。在原生应用中这个调用以 `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` 拒绝。
