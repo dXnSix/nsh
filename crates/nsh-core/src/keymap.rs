@@ -581,7 +581,7 @@ impl Keystroke {
                 Key::Char('f') if only(true, false, true) => Some("it toggles full screen"),
                 _ => None,
             },
-            Os::Linux | Os::Windows | Os::Android => match self.key {
+            Os::Linux | Os::Windows | Os::Android | Os::Tizen => match self.key {
                 Key::Char('q') if only(true, false, false) => Some("it quits the app"),
                 Key::F(4) if only(false, true, false) => Some("it closes the window"),
                 Key::F(11) if m == Modifiers::default() => Some("it toggles full screen"),
@@ -733,7 +733,7 @@ pub fn apple_keys(os: Os, apple_keyboard: bool) -> bool {
     match os {
         Os::MacOs | Os::Ios => true,
         Os::Web => apple_keyboard,
-        Os::Android | Os::Windows | Os::Linux => false,
+        Os::Android | Os::Windows | Os::Linux | Os::Tizen => false,
     }
 }
 

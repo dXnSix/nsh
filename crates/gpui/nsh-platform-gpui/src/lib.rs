@@ -25,6 +25,16 @@
 
 #![cfg(any(target_os = "linux", target_os = "macos", windows))]
 
+// A Tizen TV's host brings GPUI's platform: the desktops' (`gpui_platform`,
+// which takes gpui-fast-linux, X11, xkbcommon, fontconfig and FreeType)
+// does not build there.
+#[cfg(all(feature = "platform", target_vendor = "tizen"))]
+compile_error!(
+    "nsh-platform-gpui builds for Tizen without its default features \
+     (`--no-default-features --features js`): the TV host brings GPUI's platform, \
+     and the feature `platform` (GPUI's desktop platform) is not built for Tizen"
+);
+
 mod access;
 #[cfg(feature = "dev")]
 mod agent;
@@ -39,6 +49,7 @@ mod events;
 mod file_drop;
 mod focus;
 mod geom;
+mod host_settings;
 mod image;
 mod input;
 mod keymap;
@@ -71,7 +82,7 @@ pub use nsh_base::{Theme, ThemeError};
 pub use nsh_core::{
     desktop::WindowBackend,
     element::{AdaptiveColor, Color, Hsla, Rgba},
-    platform::{Appearance, Locale},
+    platform::{Appearance, Lifecycle, Locale, TimeZone},
 };
 pub use nsh_engine::{
     App, AppError, AppErrorKind, Bundle, ByteSize, CacheLocation, CacheOptions, CachePolicy,
@@ -82,11 +93,14 @@ pub use nsh_engine::{
 #[cfg(feature = "js")]
 pub use nsh_engine::{LoadedPackage, accept_package, load_package, package, verify_package};
 
+#[cfg(feature = "platform")]
+pub use crate::app::run_app;
 #[cfg(feature = "dev")]
 pub use crate::app::set_root;
 pub use crate::{
-    app::{AppOptions, AppSource, AppView, CloseRequest, open_app_window, run_app, set_ui_sets},
+    app::{AppOptions, AppSource, AppView, CloseRequest, open_app_window, set_ui_sets},
     chrome::titlebar_options,
     image::AssetBase,
+    keys::nsh_key,
     native::{ComponentContext, ComponentFactory, Components, NativeComponent},
 };

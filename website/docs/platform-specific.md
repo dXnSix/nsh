@@ -1,6 +1,6 @@
 ---
 title: Platform-specific code
-description: Writing one app for phones, desktops and browsers - platform-only props in ios={{}} / android={{}} / macos={{}} / desktop={{}} / web={{}}, the nsh/mobile and nsh/desktop modules, platform.os and platform.select, and platform Tailwind variants.
+description: Writing one app for phones, desktops, TVs and browsers - platform-only props in ios={{}} / android={{}} / macos={{}} / desktop={{}} / web={{}} / tv={{}}, the nsh/mobile and nsh/desktop modules, platform.os, platform.tv and platform.select, and platform Tailwind variants.
 order: 17
 group: platforms
 ---
@@ -12,15 +12,44 @@ One NSH bundle runs on iOS, Android, macOS, Windows and Linux (and in Mac Cataly
 | Rust | TSX | For |
 |---|---|---|
 | [Builder methods (`.ripple(..)`, `.input_accessory(..)`)](#platform-only-props) | [`ios={{…}}`, `android={{…}}`, `macos={{…}}`, `desktop={{…}}`, `web={{…}}`](#platform-only-props) | Props only one platform has. |
+| [`.when(is_tv(), ..)`](#tvs) | [`tv={{…}}`, `platform.tv`](#tvs) | Props and values for TVs, on any OS. |
 | [`on_back_press`, `nsh_core::element::desktop`](#platform-modules) | [`nsh/mobile`, `nsh/desktop`](#platform-modules) | APIs only mobile platforms or only desktops have. |
-| [`os()`, `idiom()`, `is_desktop()`](#platformos-and-platformselect) | [`platform.os`, `platform.desktop`, `platform.select`](#platformos-and-platformselect) | Choosing values or code per platform. |
+| [`os()`, `idiom()`, `is_desktop()`, `is_tv()`](#platformos-and-platformselect) | [`platform.os`, `platform.desktop`, `platform.tv`, `platform.select`](#platformos-and-platformselect) | Choosing values or code per platform. |
 | [`.when(os() == Os::Ios, ..)`](#platform-variants-in-tailwind) | [`ios:` / `android:` / `web:` classes](#platform-variants-in-tailwind) | Styles per platform. |
 
 ## Desktop and mobile
 
-Every platform is desktop or mobile, by one rule. Desktop is macOS, Windows, Linux, and browsers in the desktop idiom (a mouse and a wide window, [the web](./web.md)). Mobile is iOS, Android, and browsers in the phone or tablet idiom; Mac Catalyst runs the iOS backend, so it is mobile too, with `ios={{…}}` props. `desktop={{…}}` props, `platform.select({ desktop, mobile })`, `platform.desktop` and `platform.idiom === "desktop"` all follow this rule, as do `nsh/base`'s components (a menu is a popup on desktops and a sheet on mobile) and, in Rust, `is_desktop()`.
+Every platform is desktop or mobile, by one rule. Desktop is macOS, Windows, Linux, and browsers in the desktop idiom (a mouse and a wide window, [the web](./web.md)). Mobile is iOS, Android, browsers in the phone or tablet idiom, and [TVs](#tvs); Mac Catalyst runs the iOS backend, so it is mobile too, with `ios={{…}}` props. `desktop={{…}}` props, `platform.select({ desktop, mobile })`, `platform.desktop` and `platform.idiom === "desktop"` all follow this rule, as do `nsh/base`'s components (a menu is a popup on desktops and a sheet on mobile) and, in Rust, `is_desktop()`.
 
 `nsh/desktop`'s `isAvailable` answers a narrower question: whether that module's window and menu APIs work, which they do on macOS, Windows and Linux. Gate layout, density and input on `platform.desktop`, and calls of `Window` and `Menu` on `isAvailable`.
+
+## TVs
+
+A TV is a category of its own, on any OS: Android TV, a TV's browser (a page tells the [web player](./web.md#the-browser-as-a-platform) with `idiom: "tv"`), a TV platform. What apps branch on is the TV, not the OS: `platform.tv` (Rust's `is_tv()`) is `true` there and `platform.idiom` is `"tv"`, `tv={{…}}` props apply, and `platform.select` looks for `tv` after the OS's own key and before `desktop` / `mobile`. A TV is not a desktop (`platform.desktop` is `false`), so everything else behaves as on mobile: `nsh/base`'s popups open as on phones.
+
+On a Samsung TV, a native Tizen app has an OS of its own: `platform.os` is `"tizen"` (Rust's `Os::Tizen`), always in the TV idiom and never a desktop, and `platform.select({ tizen })` picks a value for it before `tv`. A Tizen web app (`.wgt`) runs in the TV's browser: `platform.os` is `"web"` there, with `platform.tv` `true` from its page. Branch on `platform.tv` for the TV, and on `"tizen"` only for what the native app alone does.
+
+No prop exists on TVs alone, so `tv={{…}}` takes the props every element takes (classes, style, state styles, accessibility, focus, handlers) and sets them on TVs only: a 10-foot layout without a second component. In Rust, the same choice is a `.when(is_tv(), ..)`.
+
+```rust tabs
+use nsh_core::prelude::*;
+
+view()
+    .p_4()
+    .when(is_tv(), |v| v.p_8())
+    .focusable(true)
+    .child(text(if is_tv() { "Press OK to play" } else { "Tap to play" }))
+```
+
+```tsx tabs
+import { platform, Text, View } from "nsh";
+
+<View class="p-4" tv={{ class: "p-8", focusStyle: { transform: [{ scale: 1.05 }] } }} focusable>
+  <Text>{platform.select({ tv: "Press OK to play", default: "Tap to play" })}</Text>
+</View>
+```
+
+A key set both in `tv={{…}}` and on the element itself is the one set last: keep each prop in one place.
 
 ## Platform-only props
 
@@ -225,7 +254,7 @@ In an app embedded in a native one, the host app's view controller decides the s
 
 ## platform.os and platform.select
 
-`os()` in Rust and the `platform` constant from `nsh` in TSX tell you where the app runs: `Os::Ios`, `Os::Android`, `Os::MacOs`, `Os::Windows`, `Os::Linux` or `Os::Web`, and `platform.os` `"ios"`, `"android"`, `"macos"`, `"windows"`, `"linux"` or `"web"` (Mac Catalyst is `"ios"`, with `platform.catalyst` in either of its idioms; the [macOS backend](./macos.md) is `"macos"`, the [Linux backend](./linux.md) `"linux"` and the [Windows backend](./windows.md) `"windows"`, and their elements apply their `desktop` props; [browsers](./web.md) are `"web"`, and apply `desktop` props too when `platform.desktop` is `true`). `platform_name()` in Rust and `platform.name` in TSX name the platform itself: the OS's name on NSH's own platforms, and a [platform built outside NSH](./platform-extensions.md) its own (`"miniprogram"`), with `platform.os` the OS of the device it runs on. See [Device and environment](./device-and-environment.md#the-platform) for the version, the idiom and the rest.
+`os()` in Rust and the `platform` constant from `nsh` in TSX tell you where the app runs: `Os::Ios`, `Os::Android`, `Os::MacOs`, `Os::Windows`, `Os::Linux`, `Os::Web` or `Os::Tizen`, and `platform.os` `"ios"`, `"android"`, `"macos"`, `"windows"`, `"linux"`, `"web"` or `"tizen"` (a native Tizen app on a TV; [TVs](#tvs)) (Mac Catalyst is `"ios"`, with `platform.catalyst` in either of its idioms; the [macOS backend](./macos.md) is `"macos"`, the [Linux backend](./linux.md) `"linux"` and the [Windows backend](./windows.md) `"windows"`, and their elements apply their `desktop` props; [browsers](./web.md) are `"web"`, and apply `desktop` props too when `platform.desktop` is `true`). `platform_name()` in Rust and `platform.name` in TSX name the platform itself: the OS's name on NSH's own platforms, and a [platform built outside NSH](./platform-extensions.md) its own (`"miniprogram"`), with `platform.os` the OS of the device it runs on. See [Device and environment](./device-and-environment.md#the-platform) for the version, the idiom and the rest.
 
 ```rust tabs
 use nsh_core::{element::Os, prelude::*};
@@ -245,7 +274,7 @@ if (platform.os === "android") {
 
 ### platform.select
 
-In Rust a `match os()` chooses the value, with `is_desktop()` for the desktops. In TSX, `platform.select(spec)` returns the value for this platform. It looks for the OS's own key, then `desktop` or `mobile` by [the rule above](#desktop-and-mobile) (`platform.desktop`), then `native` (every platform but the web), then `default`:
+In Rust a `match os()` chooses the value, with `is_desktop()` for the desktops and `is_tv()` for TVs. In TSX, `platform.select(spec)` returns the value for this platform. It looks for the OS's own key, then `tv` on a [TV](#tvs) (`platform.tv`), then `desktop` or `mobile` by [the rule above](#desktop-and-mobile) (`platform.desktop`), then `native` (every platform but the web), then `default`:
 
 ```rust tabs
 use nsh_core::{element::Os, prelude::*};

@@ -96,6 +96,14 @@ pub(crate) fn virtual_key(key: Key) -> Option<u16> {
     })
 }
 
+/// The NSH key [`crate::AppView`] reads GPUI key name `name` as (a
+/// `Keystroke`'s `key`: `enter`, `back`, `red`, `a`), or `None` for a key
+/// NSH does not use (a platform's own, such as a TV's `exit`): what an
+/// embedding app's platform checks its key names against.
+pub fn nsh_key(name: &str) -> Option<Key> {
+    vk_of(name).and_then(key_of)
+}
+
 /// The virtual key code of GPUI key name `key` (`Keystroke::key`), or
 /// `None` for keys nsh does not use.
 pub(crate) fn vk_of(key: &str) -> Option<u16> {
