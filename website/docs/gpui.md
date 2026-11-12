@@ -208,6 +208,15 @@ What draws or behaves differently from the native desktop backends:
   ([website data](./web-view-and-video.md#website-data)).
 - **Accessibility** goes through AccessKit: screen readers can activate, focus, set values and scroll elements into
   view everywhere; custom actions and the context-menu action are not passed on yet.
+- **Keyboard focus**: the arrow keys move the focus to the nearest pressable, field or `focusable` view in their
+  direction, inside the newest dialog (a menu keeps Left and Right while one of its items has it), and scroll it into
+  view; Enter and Space press it, and its `focus:` styles, `onFocus` and `onBlur` follow. A field keeps the arrows it
+  uses (Up and Down leave a single-line one). `autoFocus`, `preferredFocus`, the `nextFocusUp` / `Down` / `Left` /
+  `Right` routes and [`FocusGroup`](../elements/focus-group.md) shape where the arrows go, as on a TV, and in a long
+  list they go on to rows not on screen yet. A ref's `focus()` moves the focus to a pressable or `focusable` view, and
+  `blur()` takes it off. Tab and Shift+Tab stop at the same
+  pressables, fields, `focusable` views and native components, in tree order; when Tab moves on out of an embedded
+  view, the one it leaves loses the focus.
 
 For comparison, each native backend's own list: [macOS](./macos.md#what-differs-on-macos),
 [Windows](./windows.md#what-differs-on-windows), [Linux](./linux.md#what-differs-on-linux).

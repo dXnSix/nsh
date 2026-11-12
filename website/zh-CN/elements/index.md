@@ -103,6 +103,7 @@ TSX 从 `nsh/base` 导入，Rust 从 `nsh_base` crate 导入。它们负责行�
 | `<DockArea>` | `nsh_base::dock_area()` | 由分栏、标签组和边缘停靠区组成、用户自行安排的工作区 | [Dock](./dock.md) |
 | `<Editor>` | `nsh_base::editor()` | 带高亮、多光标、折叠和搜索的代码编辑器 | [Editor](./editor.md) |
 | `<Input>` | `nsh_base::input()` | 原生文本输入框（UITextField 或 UITextView / EditText） | [Input](./input.md) |
+| `<FocusGroup>` | `nsh_base::focus_group()` | 方向键从指定的停靠点进入、可以不让焦点离开的区域 | [FocusGroup](./focus-group.md) |
 | `<HoverCard>` | `nsh_base::hover_card()` | 预览触发元素所指向的内容，在指针停留在它上面时显示 | [HoverCard](./hover-card.md) |
 | `<Link>` | `nsh_base::link()` | 打开页面、网站或应用内路由的按压目标 | [Link](./link.md) |
 | `<Menu>`、`<ContextMenu>`、`<MenuItem>`、`<MenuSeparator>`、`<Submenu>` | `nsh_base::menu()`、... | 菜单：桌面上是带级联子菜单的弹出层，手机上是 sheet | [Menu](./menu.md) |
@@ -386,6 +387,51 @@ ref 的 `focus()` 像 Tab 一样把键盘焦点移到停靠点上（显示它的
 | `focusable` | `.focusable(..)` | `boolean` | 可按压的视图为 `true` | 视图是否是 Tab 的停靠点。`true` 让任何视图成为停靠点，无论它自己接收按压，还是把按压留给外层视图；`false` 把可按压的视图留给指针（关闭浮层的背景层、用方向键切换的列表行）。 |
 | `onFocus` | `.on_focus(..)` | `() => void` | | Tab（或 `focus()`）让视图获得了键盘焦点。 |
 | `onBlur` | `.on_blur(..)` | `() => void` | | 键盘焦点离开了视图。 |
+| `autoFocus` | `.auto_focus(..)` | `boolean` | `false` | 视图出现时获得键盘焦点：挂载时，或它所在的屏幕、模态框出现时（同时出现的多个视图中，视图树顺序的第一个）。在输入框上会弹出键盘，所有平台都如此；其他停靠点在 GPUI 后端和 Web 上（包括电视）获得焦点。 |
+| `preferredFocus` | `.preferred_focus(..)` | `boolean` | `false` | 焦点进入时由这个视图获得焦点，优先于最近的停靠点：方向键进入它所在的 `FocusGroup` 时，或没有焦点时按下方向键时它所在的屏幕。适用于 GPUI 后端和 Web（包括电视）。 |
+| `nextFocusUp`、`nextFocusDown`、`nextFocusLeft`、`nextFocusRight` | `.next_focus_up(&r)`、`.next_focus_down(&r)`、`.next_focus_left(&r)`、`.next_focus_right(&r)` | `ViewRef \| null` | | 从这个视图按下该方向键时焦点去往的位置：指定的视图，或其中的第一个停靠点。指定的视图焦点到达不了时，方向键照常去往最近的停靠点。适用于 GPUI 后端和 Web（包括电视）。 |
+
+#### 方向键与电视
+
+在 macOS、Windows、Linux、Web、GPUI 后端以及电视上，方向键把焦点移到该方向上最近的停靠点，Return 或空格按下它。遥控器就是这样操作整个应用的，
+下面这些属性决定焦点的去向（在 GPUI 后端和 Web 上，包括电视；其他平台仍去往最近的停靠点）：
+
+- `autoFocus` 在视图出现时让它获得焦点：屏幕上的第一张卡片、对话框的主按钮。
+- `preferredFocus` 选定焦点进入时停在哪里：一行中当前的项、对话框的默认操作。
+- `nextFocusDown` 等属性让方向键绕过几何位置，在没有对齐的行之间跳转。要指向在它之后渲染的视图，用一个由目标的 `ref` 设置的 signal（`nextFocusDown={next()}`）。
+- [`FocusGroup`](./focus-group.md) 从它的 `destinations` 进入；设置 `trap` 后，方向键不会让焦点离开它。
+- 在很长的 `List` 中，方向键会继续去往还不在屏幕上的行：列表滚动到下一行，焦点落在那一行上。
+
+```rust tabs
+let play = element_ref();
+view()
+    .child(
+        view()
+            .auto_focus(true)
+            .next_focus_down(&play)
+            .on_press(resume)
+            .child(text("继续")),
+    )
+    .child(
+        view()
+            .element_ref(&play)
+            .preferred_focus(true)
+            .on_press(start)
+            .child(text("播放")),
+    )
+```
+
+```tsx tabs
+const play = signal<ViewRef>();
+<View>
+  <View autoFocus nextFocusDown={play()} onPress={resume}>
+    <Text>继续</Text>
+  </View>
+  <View ref={play} preferredFocus onPress={start}>
+    <Text>播放</Text>
+  </View>
+</View>
+```
 
 ```rust tabs
 view()
