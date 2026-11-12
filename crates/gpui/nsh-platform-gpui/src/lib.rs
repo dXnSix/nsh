@@ -41,7 +41,6 @@ mod focus;
 mod geom;
 mod image;
 mod input;
-mod key_focus;
 mod keymap;
 mod keys;
 mod mount;

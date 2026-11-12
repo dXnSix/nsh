@@ -1987,7 +1987,7 @@ fn a_command_without_a_search_field_takes_the_keyboard_on_focus(cx: &mut TestApp
     loop {
         cx.run_until_parked();
         let moved = view.read_with(cx, |view, _| {
-            crate::key_focus::focused(view.surface()).is_some()
+            crate::focus::focused(view.surface()).is_some()
                 && crate::text_input::focused(view.surface()).is_none()
         });
         if moved {
@@ -2010,6 +2010,6 @@ fn a_command_without_a_search_field_takes_the_keyboard_on_focus(cx: &mut TestApp
         "{text}"
     );
     assert!(view.read_with(cx, |view, _| {
-        crate::key_focus::focused(view.surface()).is_none()
+        crate::focus::focused(view.surface()).is_none()
     }));
 }

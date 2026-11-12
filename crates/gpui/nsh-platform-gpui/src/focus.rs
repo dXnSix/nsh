@@ -37,7 +37,14 @@
 //!   component with the keyboard ([`crate::input::key_now`]'s order).
 //! - **Enter and Space** press the focused view when it takes presses
 //!   (`PressDown`, `PressUp`, `Press` at its middle, as the terminal
-//!   does); one that takes none leaves them to the app's bindings.
+//!   does), once the focus' own bindings passed on them: the app's other
+//!   bindings of those keys give way to it ([`on_control`],
+//!   `Keymap::find_at`); one that takes none leaves them to the app's
+//!   bindings.
+//! - **`focus()`** on a stop that shows gives it the focus
+//!   ([`focus_command`]); a pointer going down outside the focused view
+//!   takes it away ([`pointer_down`]), and a focused view that is removed
+//!   loses it at once, without `onBlur` ([`detached`]).
 //! - **Layers**: focus that went into a root view's child (the page, a
 //!   sheet's panel, an overlay) from a stop of another comes back to that
 //!   stop when the layer goes ([`focus::Layers`]); a stop a backdrop
@@ -478,6 +485,65 @@ fn focus_stop(surface: &Rc<Surface>, view: &NshView) {
             crate::scroll::reveal(surface, view);
         }
     }
+}
+
+/// `focus()` on a view that is not an input: a stop that is attached and
+/// shown (neither it nor a view around it hidden, concealed or out of the
+/// pointer's reach) takes the keyboard focus, as one the arrows reach
+/// does, and the window takes the keyboard.
+pub(crate) fn focus_command(surface: &Rc<Surface>, view: &NshView) {
+    if !is_stop(surface, view) || !reachable(view) || focused(surface).as_ref() == Some(view) {
+        return;
+    }
+    surface.window_focus_requested.set(true);
+    focus_stop(surface, view);
+}
+
+/// `view` and every view around it take part ([`left_out`]), up to an
+/// attached root.
+fn reachable(view: &NshView) -> bool {
+    let mut at = Some(view.clone());
+    while let Some(v) = at {
+        if left_out(&v) {
+            return false;
+        }
+        at = v.parent_view();
+        if at.is_none() && !v.attached() {
+            return false;
+        }
+    }
+    true
+}
+
+/// The pointer went down on `hit`: the view with this module's focus lets
+/// go of it unless `hit` is inside it.
+pub(crate) fn pointer_down(surface: &Surface, hit: &NshView) {
+    if focused(surface).is_some_and(|view| !contains(&view, hit)) {
+        blur_view(surface);
+    }
+}
+
+/// A view was removed: if it holds the focused view, the focus goes, at
+/// once (a removal animation or a departing screen keeps it attached a
+/// while, when Return and Space must not press it). No `onBlur` goes to a
+/// view that no longer exists; its state is cleared all the same, as a
+/// kept node may be inserted again.
+pub(crate) fn detached(surface: &Surface, view: &NshView) {
+    let Some(stop) = focused(surface) else {
+        return;
+    };
+    if contains(view, &stop) {
+        surface.focus.view.borrow_mut().take();
+        crate::input::set_state(surface, &stop, FOCUSED, false);
+    }
+}
+
+/// Whether the focused view is a control that Return and Space press (it
+/// takes presses): the app's bindings of those keys then give way to it,
+/// but for the focus' own (`Keymap::find_at`,
+/// [`nsh_core::input::presses_focused_control`]).
+pub(crate) fn on_control(surface: &Surface) -> bool {
+    focused(surface).is_some_and(|view| has_press(view.state().events))
 }
 
 /// A key down for the focus: the arrows move it, Enter and Space press the
