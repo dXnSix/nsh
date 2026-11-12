@@ -372,12 +372,33 @@ jobs:
             assets/nsh-*.tar.gz
             assets/nsh-*.zip
 
+      # GitHub's generated notes start from the latest release before this
+      # one, which in the fork can be `nightly`: the fork's copy of upstream's
+      # `release.yml` publishes it on its schedule. They start from the
+      # previous `nshx-*` tag instead, so they list every fork PR since it.
+      - name: Write the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          previous=$(gh api --paginate "repos/$GH_REPO/git/matching-refs/tags/nshx-" --jq '.[].ref' |
+            sed 's|^refs/tags/||' | sort -V |
+            awk -v tag="$TAG" '$0 == tag { print last; exit } { last = $0 }')
+          echo "the notes start from ${previous:-the first commit}"
+          args=(-f "tag_name=$TAG")
+          if [[ -n "$previous" ]]; then
+            args+=(-f "previous_tag_name=$previous")
+          fi
+          gh api "repos/$GH_REPO/releases/generate-notes" "${args[@]}" --jq .body \
+            > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
           name: ${{ env.TAG }}
           draft: false
           prerelease: false
-          generate_release_notes: true
+          body_path: ${{ runner.temp }}/notes.md
           fail_on_unmatched_files: true
           files: assets/*
