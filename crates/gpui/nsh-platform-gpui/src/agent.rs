@@ -110,7 +110,8 @@ impl GpuiNative {
     }
 
     /// Presses key `vk` in the focused window; Escape nothing took closes
-    /// a window of the app's own that says so, as a real one does.
+    /// a window of the app's own that says so, and Tab past the last stop
+    /// (the first with Shift) wraps around, as in a real one.
     fn keystroke(&self, vk: u16, modifiers: Modifiers) -> Option<()> {
         self.in_focused(move |surface, own, cx| {
             if let Some((id, _)) = &own
@@ -119,6 +120,15 @@ impl GpuiNative {
                 return;
             }
             let taken = synth::press(surface, vk, modifiers);
+            // A real window's Tab the surface did not take is GPUI's
+            // `FocusNext` (`AppView::tab`); a test's window has no other tab
+            // stop, so the focus wraps around.
+            if !taken
+                && vk == crate::keys::VK_TAB
+                && !(modifiers.ctrl || modifiers.alt || modifiers.meta)
+            {
+                crate::input::tab_past_ends(surface, modifiers.shift, || false);
+            }
             if let Some((id, window)) = own
                 && !taken
                 && vk == crate::keys::VK_ESCAPE
