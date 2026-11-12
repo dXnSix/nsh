@@ -146,6 +146,8 @@ pub(crate) fn watch(surface: &Rc<Surface>, window: &gtk::Window) {
     let leaving = current.clone();
     window.connect_focus_widget_notify(move |window| {
         if let Some(surface) = weak.upgrade() {
+            // The screen reader follows the keyboard focus again.
+            crate::access::clear_reader_focus(&surface);
             left(&surface, window, &leaving);
         }
     });
