@@ -80,6 +80,7 @@ nsh component remove gpui     # 删除以释放空间
 | `android` | Android 运行时（`--target android`） | 所有平台 |
 | `android-symbols` | Android 运行时的符号，用于崩溃报告和 `ndk-stack` | 所有平台 |
 | `ios` | iOS 和 Mac Catalyst 运行时（`--target ios`、`catalyst`） | Apple silicon 的 macOS |
+| `tizen` | 三星电视运行时（`--target tizen`），带有应用的 Rust crate 构建所用的 Tizen 目标规格 | 所有平台 |
 | `web` | Web 运行时（`--target web`） | 所有平台 |
 | `gpui` | [GPUI](./gpui.md) 开发宿主（`--target gpui`） | 所有平台，各自构建 |
 | `tui` | 终端开发宿主（`--target tui`） | 所有平台，各自构建 |
@@ -232,6 +233,7 @@ sdkmanager "platforms;android-35" "build-tools;35.0.1" "platform-tools"
 | `nsh run --target gpui`（GPUI 应用嵌入的后端） | 可以 | 可以 | 可以 |
 | `nsh run --target ios`, `nsh package --target ios` / `ios-simulator` | 可以，需要 Xcode | 不可以 | 不可以 |
 | `nsh run --target android`, `nsh package --target android` | 可以 | 可以，需从源码构建 | 可以，需有 Android 运行时 |
+| `nsh run --target tizen`, `nsh package --target tizen` | 可以，需要 Tizen SDK | 可以，需要 Tizen SDK | 可以，需要 Tizen SDK |
 | `nsh keygen`, `certify`, `publish`, `verify`, `revoke` | 可以 | 可以 | 可以 |
 
 在 Linux 上，请从源码构建 CLI 和 Android 运行时（`cargo build -p nsh-cli` 与 `cargo xtask android --dev`）；会自动使用 NDK 的 Linux 工具链。在 Windows 上同样会使用 NDK 的 Windows 工具链，`cargo xtask dist` 找到 Android SDK 时会包含 Android 运行时。

@@ -367,7 +367,7 @@ Give one square PNG, ideally 1024×1024, in `nsh.json` (`"icon": "icon.png"`) or
 
 Platforms draw icons differently: macOS artwork sits inset on a transparent canvas (824 of 1024 pixels), while
 Windows, Linux and Android fill it. Give `icon` an object to use a PNG per platform; its keys are `macos`, `windows`,
-`linux`, `ios`, `android` and `web`, and a platform left out gets the system's default:
+`linux`, `ios`, `android`, `web` and `tizen` (Samsung TVs), and a platform left out gets the system's default:
 
 ```json
 {

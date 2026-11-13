@@ -140,6 +140,19 @@ impl ScrollHost for Host<'_> {
     }
 
     fn dark(&self) -> bool {
+        // In a view with an appearance of its own (`ThemeScope`), that
+        // one: the nearest around the scroll view. A state being changed
+        // right now is passed over.
+        use nsh_core::platform::Appearance;
+        let mut around = Some(self.view.clone());
+        while let Some(view) = around {
+            match view.try_state().map(|state| state.props.appearance) {
+                Ok(Appearance::Dark) => return true,
+                Ok(Appearance::Light) => return false,
+                _ => {}
+            }
+            around = view.parent_view();
+        }
         self.surface.environment.get().color_scheme == nsh_engine::ColorScheme::Dark
     }
 }
@@ -600,6 +613,12 @@ fn key_pressed(
     };
     if !root.is_mapped() {
         return false;
+    }
+    // An arrow moves the keyboard focus to the stop that way, if any.
+    if let Some(arrow) = crate::key_focus::Arrow::of(key, modifiers)
+        && crate::key_focus::arrow(surface, root, arrow)
+    {
+        return true;
     }
     let focus = root.root().and_then(|r| r.focus());
     // Fields (and hosted widgets that scroll themselves) keep their keys,

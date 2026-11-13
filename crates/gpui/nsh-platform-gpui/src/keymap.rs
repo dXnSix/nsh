@@ -64,6 +64,13 @@ pub(crate) fn set(surface: &Surface, keymap: Arc<Keymap>) {
     *surface.keymap.table.borrow_mut() = (!keymap.is_empty()).then_some(keymap);
 }
 
+/// Whether the surface has bindings (the window tests wait for a focused
+/// component's).
+#[cfg(all(test, feature = "shot"))]
+pub(crate) fn bound(surface: &Surface) -> bool {
+    surface.keymap.table.borrow().is_some()
+}
+
 /// Drops the table (the app stopped).
 pub(crate) fn clear(surface: &Surface) {
     surface.keymap.table.borrow_mut().take();
@@ -106,7 +113,7 @@ pub(crate) fn key_stroke(
     // Only the bindings of the window the key is in (and JS's) take it.
     let window = surface.input_root().id();
     // Return and Space on a focused control fire only the focus' own
-    // bindings; else the control takes them (`key_focus::key`).
+    // bindings; else the control takes them (`focus::key`).
     let control = !editing && crate::key_focus::on_control(surface);
     let found = table.find_at(window, keystroke, editing, control, repeat);
     if let Some(id) = found.fired() {
@@ -200,9 +207,10 @@ fn keystroke(event: &KeyEvent) -> Option<Keystroke> {
     })
 }
 
-/// The key of virtual key code `vk` (`VK_*`).
+/// The key of virtual key code `vk` (`VK_*`, or a TV key's code:
+/// [`keys::TV_KEYS`]).
 fn key_of(vk: u16) -> Option<Key> {
-    Key::from_virtual_key(vk)
+    keys::key_of(vk)
 }
 
 #[cfg(test)]
@@ -349,5 +357,42 @@ mod tests {
         assert_eq!(super::key_of(0x74), Some(Key::F(5)));
         assert_eq!(super::key_of(0xBF), Some(Key::Char('/')));
         assert_eq!(super::key_of(0x10), None);
+    }
+
+    /// The TV remote's keys, by the Tizen platform's names, fire their
+    /// bindings.
+    #[test]
+    fn tv_keys_fire_their_bindings() {
+        use nsh_core::keymap::{KeyBinding, Keymap, Keystroke, When};
+
+        use super::KeyEvent;
+        use crate::{keys::vk_of, surface::Surface};
+
+        let surface = Surface::new(nsh_engine::Environment::default());
+        let names = ["red", "mediaplaypause", "channelup", "info", "medianext"];
+        let bindings = names
+            .iter()
+            .zip(1..)
+            .map(|(name, id)| {
+                KeyBinding::new(
+                    id,
+                    Keystroke::parse_with(name, true).unwrap(),
+                    When::Auto,
+                    false,
+                )
+            })
+            .collect();
+        *surface.keymap.table.borrow_mut() = Some(std::sync::Arc::new(Keymap::new(bindings)));
+        for name in names.iter().chain(&["xf86info"]) {
+            let event = KeyEvent {
+                vk: vk_of(name).unwrap(),
+                down: true,
+                repeat: false,
+                modifiers: Default::default(),
+            };
+            // While a field is edited, too: they type nothing.
+            assert!(super::key_stroke(&surface, &event, true, None), "{name}");
+            surface.keymap.held.set(None);
+        }
     }
 }

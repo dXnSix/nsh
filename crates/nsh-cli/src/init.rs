@@ -357,11 +357,19 @@ pub(crate) fn write_types(dir: &Path) {
     definitions.extend(nsh_bundler::type_definitions());
     // The theme's errors are the build's to report: its names are the
     // default's meanwhile.
-    let tokens =
-        nsh_bundler::theme_tokens(dir).unwrap_or_else(|_| nsh_base::Theme::default().into_tokens());
+    let tokens = nsh_bundler::theme_tokens_of(dir, &sets)
+        .unwrap_or_else(|_| nsh_base::Theme::default().into_tokens());
     definitions.push((
         "nsh/tokens.d.ts".to_owned(),
-        nsh_bundler::tokens_declaration(&tokens),
+        nsh_bundler::tokens_declaration_of(&tokens, &sets),
+    ));
+    // The roles the sets list, for `role()`; a role two sets list with two
+    // kinds is the build's to report, and names none meanwhile.
+    definitions.push((
+        "nsh/roles.d.ts".to_owned(),
+        nsh_bundler::roles_declaration(&sets)
+            .or_else(|_| nsh_bundler::roles_declaration(&[]))
+            .unwrap_or_default(),
     ));
     remove_stale(&types, &types, &definitions);
     let files = definitions

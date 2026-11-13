@@ -1255,6 +1255,7 @@ enum Message {
     Event(NodeId, EventKind, EventPayload),
     Scroll(NodeId, Point<Points>, u32),
     Kept(Vec<NodeId>),
+    FocusPast(NodeId, nsh_core::focus::Direction),
     ContentCulling(bool),
     InputScroll(NodeId, Point<Points>, Size<Points>, Size<Points>),
     InputComposing(NodeId, Option<String>),
@@ -1294,6 +1295,8 @@ enum Message {
     Perf(Option<Arc<perf::PerfMonitor>>),
     /// The embedding app's design tokens.
     Tokens(Option<Box<Tokens>>),
+    /// The embedding app's theme overrides, a theme file the core reads.
+    ThemeOverrides(String),
     /// A font file the embedding app registers (TrueType, OpenType, WOFF or
     /// WOFF2), before the first frame and whenever it registers another.
     HostFont(Vec<u8>),
@@ -1376,6 +1379,15 @@ impl EngineControl {
     /// the last call's; none releases them.
     pub fn keep_rendered(&self, nodes: Vec<NodeId>) {
         let _ = self.tx.send(Message::Kept(nodes));
+    }
+
+    /// An arrow toward `direction` found no stop to go to inside the list
+    /// around `from`, the stop with the keyboard focus: the list scrolls to
+    /// its next row by index and the first stop in that row's cell takes
+    /// the focus once it is mounted (`Command::Focus`; `Core::focus_past`).
+    /// Nothing happens outside a list or at its end.
+    pub fn focus_past(&self, from: NodeId, direction: nsh_core::focus::Direction) {
+        let _ = self.tx.send(Message::FocusPast(from, direction));
     }
 
     /// Whether scroll views make the native views of their content as it
@@ -1563,6 +1575,17 @@ impl EngineControl {
     /// [`Engine::start_with`]'s `setup`, they are in the first frame.
     pub fn set_tokens(&self, tokens: Option<Tokens>) {
         let _ = self.tx.send(Message::Tokens(tokens.map(Box::new)));
+    }
+
+    /// Sets the embedding app's theme overrides: a theme file (shadcn's
+    /// `cssVars`, as `nsh.json`'s `"theme"`) whose tokens win over the app's of
+    /// the same names, read by the core with the app's UI sets against their
+    /// default tokens ([`Core::set_host_theme`]), so a `var()` the file does
+    /// not set names the default theme's token.
+    /// [`EngineControl::set_tokens`]`(None)` gives the app its own theme back.
+    /// Sent from [`Engine::start_with`]'s `setup`, they are in the first frame.
+    pub fn set_theme_overrides(&self, json: impl Into<String>) {
+        let _ = self.tx.send(Message::ThemeOverrides(json.into()));
     }
 
     /// Registers a font file the embedding app ships (TrueType, OpenType,
@@ -2143,6 +2166,9 @@ impl<M: TextEngine + 'static> Driver<M> {
             if let Some(tokens) = root.tokens_ref() {
                 core.set_tokens(tokens.clone());
             }
+            if let Some(json) = root.theme_ref() {
+                core.set_ui_theme(json);
+            }
             if let Some(appearance) = root.appearance_ref() {
                 core.set_appearance(appearance);
             }
@@ -2202,6 +2228,7 @@ impl<M: TextEngine + 'static> Driver<M> {
         while let Ok(message) = rx.try_recv() {
             match message {
                 Message::Tokens(tokens) => core.set_host_tokens(tokens.map(|t| *t)),
+                Message::ThemeOverrides(json) => core.set_host_theme(Some(&json)),
                 Message::HostFont(data) => {
                     if let Err(err) = core.register_font(&data) {
                         log::error!("font failed: {err}");
@@ -3921,6 +3948,9 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             }
         }
         Message::Kept(nodes) => state.core.set_kept(&nodes),
+        Message::FocusPast(from, direction) => {
+            state.core.focus_past(from, direction);
+        }
         Message::ContentCulling(enabled) => {
             state.core.set_content_culling(enabled);
             if let Some(script) = script {
@@ -4039,6 +4069,12 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
         }
         Message::Tokens(tokens) => {
             state.core.set_host_tokens(tokens.map(|t| *t));
+            if let Some(script) = script {
+                script.set_theme_tokens(state.core.theme_tokens());
+            }
+        }
+        Message::ThemeOverrides(json) => {
+            state.core.set_host_theme(Some(&json));
             if let Some(script) = script {
                 script.set_theme_tokens(state.core.theme_tokens());
             }

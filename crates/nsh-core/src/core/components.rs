@@ -579,6 +579,13 @@ pub(super) struct Components {
     /// app's root): drawn with while the embedding app sets none
     /// ([`Core::set_host_tokens`]).
     app_tokens: Arc<Tokens>,
+    /// The app's theme: its tokens as last set whole (a UI set's defaults,
+    /// `nsh.json`'s theme, `setTheme`, `set_tokens`), which
+    /// [`Core::reset_tokens`] puts tokens back to.
+    file_tokens: Arc<Tokens>,
+    /// The UI set's default tokens: drawn with others, the app has a theme
+    /// of its own ([`Tokens::is_themed`]); `None`: no set reads themes.
+    default_tokens: Option<Arc<Tokens>>,
     /// The embedding app's tokens: win over [`Self::app_tokens`].
     host_tokens: Option<Arc<Tokens>>,
     /// Boxed: making a view (or applying its patches) takes its instance
@@ -760,6 +767,8 @@ impl Default for Components {
             specs: FxHashMap::default(),
             tokens: Arc::new(Tokens::default()),
             app_tokens: Arc::new(Tokens::default()),
+            file_tokens: Arc::new(Tokens::default()),
+            default_tokens: None,
             host_tokens: None,
             instances: FxHashMap::default(),
             owners: FxHashMap::default(),
@@ -931,13 +940,23 @@ impl<M: TextEngine> Core<M> {
     /// sets' setup functions ([`Registry::setup`]).
     pub fn set_components(&mut self, registry: Registry) {
         if let Some(Ok((tokens, _))) = registry.tokens(None) {
+            self.components.default_tokens = Some(Arc::new(tokens.clone()));
             self.set_tokens(tokens);
         }
         {
             let _entered = self.components.runtime.enter();
             registry.run_setups();
         }
+        let typed = registry.has_theme_types();
         self.components.registry = registry;
+        self.components
+            .runtime
+            .set_theme_tokens(self.theme_tokens());
+        // The tokens were sent before the registry was in place: an app with
+        // theme types has a theme of its own (`Tokens::is_themed`).
+        if typed {
+            self.tokens_changed();
+        }
     }
 
     /// Replaces the components of a running core with `registry`, a
@@ -951,13 +970,16 @@ impl<M: TextEngine> Core<M> {
             registry.run_setups_not_in(&self.components.registry);
         }
         self.components.registry = registry;
+        self.components
+            .runtime
+            .set_theme_tokens(self.theme_tokens());
     }
 
-    /// `uiTheme` on the root: the app's theme file (`nsh.json`, `setTheme`),
-    /// which the UI set that reads themes makes tokens of. What it cannot
-    /// read is left out and the rest applies, so a bundle made by a newer
-    /// NSH keeps its theme here.
-    pub(super) fn set_ui_theme(&mut self, json: &str) {
+    /// The app's theme file (`nsh.json`, `setTheme`, a Rust app's
+    /// [`Root::theme`]; `uiTheme` on the root), which the UI set that reads
+    /// themes makes tokens of. What it cannot read is left out and the rest
+    /// applies, so a bundle made by a newer NSH keeps its theme here.
+    pub fn set_ui_theme(&mut self, json: &str) {
         match self.components.registry.tokens(Some(json)) {
             Some(Ok((tokens, left_out))) => {
                 for what in left_out {
@@ -971,10 +993,116 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// The app's design tokens; it is drawn with them unless the
-    /// embedding app set its own ([`Core::set_host_tokens`]).
+    /// embedding app set its own ([`Core::set_host_tokens`]). They are its
+    /// theme from now on: what [`Core::reset_tokens`] goes back to.
     pub fn set_tokens(&mut self, tokens: Tokens) {
-        self.components.app_tokens = Arc::new(tokens);
+        let tokens = Arc::new(tokens);
+        self.components.file_tokens = tokens.clone();
+        self.components.app_tokens = tokens;
         self.tokens_changed();
+    }
+
+    /// Changes some of the app's design tokens: those of `tokens` take
+    /// their values, the others stay. Applied in order, so two changes in
+    /// one turn compose.
+    pub(crate) fn update_tokens(&mut self, tokens: Tokens) {
+        self.components.app_tokens = Arc::new(tokens.over(&self.components.app_tokens));
+        self.tokens_changed();
+    }
+
+    /// Takes the tokens a theme type's fields wrote
+    /// ([`crate::element::set_theme`]), as [`Core::update_tokens`] takes
+    /// tokens, but a number left at its value keeps its dark one: a number
+    /// field is the light value, and setting a theme that was read must
+    /// not change what it could not read. Applied in order, as an update.
+    pub(crate) fn set_theme_tokens(&mut self, tokens: Tokens) {
+        self.components.app_tokens = Arc::new(tokens.over_as_fields(&self.components.app_tokens));
+        self.tokens_changed();
+    }
+
+    /// `tokens`, written by a theme type whose tokens play the roles
+    /// `played` (each with its token's name), as the app's tokens take
+    /// them: a token playing a role the app's tokens map onto a token of
+    /// another name is that token. So a type that is not registered
+    /// (`nsh-base`'s `Theme`, whose `popover` plays the role `popover`)
+    /// sets what its fields read, the design system's `surface-overlay`,
+    /// as a theme file's `popover` key does; a token one of whose roles is
+    /// not mapped away keeps its own name too. A registered type's roles
+    /// are mapped onto its own tokens, so its tokens are as it wrote them.
+    /// The mapping is the one of now: the action runs in order.
+    fn through_roles(&self, mut tokens: Tokens, played: &[(Box<str>, Box<str>)]) -> Tokens {
+        let app = &self.components.app_tokens;
+        let (mut moved, mut stays): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
+        for (role, name) in played {
+            match app.mapped(role) {
+                Some(token) if *token != **name => {
+                    tokens.copy_as(name, token);
+                    moved.push(name);
+                }
+                _ => stays.push(name),
+            }
+        }
+        for name in moved {
+            if !stays.contains(&name) {
+                tokens.remove_named(name);
+            }
+        }
+        tokens
+    }
+
+    /// The tokens that `names` name as a theme file names them: under theme
+    /// types a role's name is the token it is mapped onto
+    /// (`TokenProvider::token_name`).
+    pub(super) fn theme_file_names(&self, mut names: Vec<Box<str>>) -> Vec<Box<str>> {
+        if let Some(provider) = self.components.registry.token_provider() {
+            for name in &mut names {
+                let token = provider.token_name(name);
+                if *token != **name {
+                    *name = token.into();
+                }
+            }
+        }
+        names
+    }
+
+    /// Puts the app's tokens `names` (`None`: every one) back to its
+    /// theme's ([`Core::set_tokens`]); a name the theme lacks is removed.
+    pub(crate) fn reset_tokens(&mut self, names: Option<&[Box<str>]>) {
+        let file = &self.components.file_tokens;
+        self.components.app_tokens = match names {
+            None => file.clone(),
+            Some(names) => {
+                let mut tokens = (*self.components.app_tokens).clone();
+                for name in names {
+                    tokens.copy_named(file, name);
+                }
+                Arc::new(tokens)
+            }
+        };
+        self.tokens_changed();
+    }
+
+    /// `uiThemeUpdate` on the root (`nsh`'s `updateTheme`): the tokens a
+    /// theme file sets change, read by the UI set
+    /// ([`Registry::token_overrides_from`]) against the tokens drawn with
+    /// now; what it cannot read is left out and keeps its value.
+    pub(super) fn update_ui_theme(&mut self, json: &str) {
+        let provider = self.components.registry.token_provider();
+        let Some(read) = provider
+            .as_ref()
+            .and_then(|p| p.overrides(json, &self.components.tokens))
+        else {
+            return log::warn!("theme: no UI set reads theme changes");
+        };
+        match read {
+            Ok((tokens, left_out)) => {
+                for what in left_out {
+                    log::warn!("theme: {what}, ignored");
+                }
+                self.update_tokens(tokens);
+            }
+            Err(e) => log::warn!("theme: {e}"),
+        }
     }
 
     /// The app's translations ([`crate::i18n`]): what `t!` and TS's `t`
@@ -1042,12 +1170,44 @@ impl<M: TextEngine> Core<M> {
         self.tokens_changed();
     }
 
+    /// The embedding app's theme overrides (`None`: the app's own theme
+    /// again): a theme file whose tokens win over the app's of the same
+    /// names, read by the UI set that reads themes
+    /// ([`Registry::token_overrides_from`], else the core's
+    /// [`crate::element::theme_file::overrides`]) against the UI set's
+    /// default tokens, so a `var()` it does not set names the default
+    /// theme's token. What it cannot read is left out; text that is no JSON
+    /// changes nothing.
+    pub fn set_host_theme(&mut self, json: Option<&str>) {
+        let Some(json) = json else {
+            return self.set_host_tokens(None);
+        };
+        let provider = self.components.registry.token_provider();
+        let defaults = match provider.as_ref().map(|p| p.read(None)) {
+            Some(Ok((tokens, _))) => tokens,
+            _ => Tokens::default(),
+        };
+        let read = provider
+            .as_ref()
+            .and_then(|p| p.overrides(json, &defaults))
+            .unwrap_or_else(|| crate::element::theme_file::overrides(json, &defaults));
+        match read {
+            Ok((tokens, left_out)) => {
+                for what in left_out {
+                    log::warn!("theme overrides: {what}, ignored");
+                }
+                self.set_host_tokens(Some(tokens));
+            }
+            Err(e) => log::warn!("theme overrides: {e}"),
+        }
+    }
+
     /// What [`Core::tokens`] become when the root's `uiTheme` (the app's
     /// theme file) is set, with the embedding app's tokens of now: JS reads
     /// them in the turn that sends the theme, before it reaches the core.
     pub fn theme_tokens(&self) -> crate::element::ThemeTokens {
         crate::element::ThemeTokens::new(
-            self.components.registry.token_source(),
+            self.components.registry.token_provider(),
             self.components.host_tokens.clone(),
         )
     }
@@ -1061,12 +1221,24 @@ impl<M: TextEngine> Core<M> {
     /// The tokens drawn with now: a signal of the surface, so only the
     /// bindings that read them run again, and only when they changed.
     fn tokens_changed(&mut self) {
-        let tokens = match &self.components.host_tokens {
+        let mut tokens = match &self.components.host_tokens {
             // The app's own tokens the host's do not have stay.
             Some(host) => Arc::new(host.over(&self.components.app_tokens)),
             None => self.components.app_tokens.clone(),
         };
-        if *tokens == *self.components.tokens {
+        // Whether the app has a theme of its own, which the platforms'
+        // controls take their colors from only then.
+        // An app whose sets register theme types has a theme of its own,
+        // its design system's.
+        let themed = self.components.registry.has_theme_types()
+            || match &self.components.default_tokens {
+                Some(default) => *tokens != **default,
+                None => !tokens.is_empty(),
+            };
+        if tokens.is_themed() != themed {
+            Arc::make_mut(&mut tokens).set_themed(themed);
+        }
+        if *tokens == *self.components.tokens && themed == self.components.tokens.is_themed() {
             self.components.tokens = tokens;
             return;
         }
@@ -1086,8 +1258,8 @@ impl<M: TextEngine> Core<M> {
         let font = self
             .components
             .tokens
-            .font(crate::element::FONT_SANS)
-            .map(|f| crate::style::FontFamily::new(f));
+            .role(crate::element::role::FONT_SANS)
+            .map(|f| crate::style::FontFamily::new(&f));
         self.set_default_font(font);
         self.class_tokens_changed();
     }
@@ -1972,7 +2144,8 @@ impl<M: TextEngine> Core<M> {
             combined.push(' ');
             combined.push_str(name);
         }
-        let user = (!combined.trim().is_empty()).then(|| self.tailwind.get(&combined).0);
+        let key = self.key(host).ok();
+        let user = (!combined.trim().is_empty()).then(|| self.classes_at(key, &combined).0);
         self.set_user(host, user);
     }
 
@@ -2189,7 +2362,7 @@ impl<M: TextEngine> Core<M> {
             self.components.mark(rooted);
             return;
         }
-        let cx = self.root_context(inst);
+        let cx = self.root_context(host, inst);
         let given_changed = std::mem::take(&mut inst.given_changed);
         let attrs = if let Some(node) = inst.bound.get_mut(&host) {
             let (style, classes) = (node.style.clone(), node.classes.clone());
@@ -2704,7 +2877,7 @@ impl<M: TextEngine> Core<M> {
             };
         // What the views above give it and the components on its host, the
         // outer last.
-        let cx = self.root_context(inst);
+        let cx = self.root_context(host, inst);
         let app = if cx.combined {
             cx.app.as_ref()
         } else {
@@ -2850,7 +3023,7 @@ impl<M: TextEngine> Core<M> {
     /// animated values and insets the views above give it and the
     /// components whose views' roots it is (the outer last), the app's
     /// style and JS's events on the top host.
-    pub(super) fn root_context(&mut self, inst: &Instance) -> RootContext {
+    pub(super) fn root_context(&mut self, host: NodeId, inst: &Instance) -> RootContext {
         let mut cx = RootContext {
             user: inst.user.clone(),
             combined: false,
@@ -2883,7 +3056,7 @@ impl<M: TextEngine> Core<M> {
         // The classes the element was given in Rust (`app_class`), as the
         // app's `class` on its host.
         if let Some(class) = inst.given.as_ref().and_then(|g| g.class.clone()) {
-            let given = self.app_class_list(&class);
+            let given = self.app_class_list(host, &class);
             cx.user = self.merge_user(cx.user.take(), Some(given));
         }
         let mut app = inst.app_style.clone();
@@ -2902,7 +3075,7 @@ impl<M: TextEngine> Core<M> {
             }
             cx.user = self.merge_user(cx.user.take(), outer);
             if let Some(class) = given.and_then(|g| g.class.clone()) {
-                let given = self.app_class_list(&class);
+                let given = self.app_class_list(host, &class);
                 cx.user = self.merge_user(cx.user.take(), Some(given));
             }
         }
@@ -2923,7 +3096,7 @@ impl<M: TextEngine> Core<M> {
     /// [`Self::root_context`] of the component hosted by `host`.
     pub(super) fn root_context_of(&mut self, host: NodeId) -> Option<RootContext> {
         let inst = self.components.instances.remove(&host)?;
-        let cx = self.root_context(&inst);
+        let cx = self.root_context(host, &inst);
         self.components.instances.insert(host, inst);
         Some(cx)
     }
@@ -3162,7 +3335,7 @@ impl<M: TextEngine> Core<M> {
             }
             return self.apply_styles(id, style, old_style, old, outer);
         };
-        let app = self.app_class_list(class);
+        let app = self.app_class_list(id, class);
         let user = self.merge_user(Some(app), outer.clone());
         let classes = self.apply_styles(id, style, old_style, old, user);
         self.components
@@ -3173,8 +3346,9 @@ impl<M: TextEngine> Core<M> {
 
     /// The rules of the app's classes `class` (the unknown ones warned of
     /// once, as a host's).
-    pub(super) fn app_class_list(&mut self, class: &str) -> std::rc::Rc<ClassList> {
-        let (list, fresh) = self.tailwind.get(class);
+    pub(super) fn app_class_list(&mut self, id: NodeId, class: &str) -> std::rc::Rc<ClassList> {
+        let key = self.key(id).ok();
+        let (list, fresh) = self.classes_at(key, class);
         if fresh && !list.unknown().is_empty() {
             log::warn!(
                 "unknown classes: {}",
@@ -5998,6 +6172,28 @@ impl<M: TextEngine> Core<M> {
             Action::Frame(answer) => self.wait_frame(answer),
             Action::Appearance(appearance) => self.set_appearance(appearance),
             Action::Tokens(tokens) => self.set_tokens(tokens),
+            Action::UpdateTokens(tokens) => self.update_tokens(tokens),
+            Action::SetTheme { tokens, played } => {
+                let tokens = self.through_roles(tokens, &played);
+                self.set_theme_tokens(tokens);
+            }
+            Action::UpdateTheme { tokens, played } => {
+                let tokens = self.through_roles(tokens, &played);
+                self.update_tokens(tokens);
+            }
+            Action::ResetTheme { mut names, played } => {
+                // The tokens the type's roles are mapped onto go back with
+                // its own names.
+                for (role, _) in &played {
+                    if let Some(token) = self.components.app_tokens.mapped(role)
+                        && !names.iter().any(|n| **n == *token)
+                    {
+                        names.push(token.into());
+                    }
+                }
+                self.reset_tokens(Some(&names));
+            }
+            Action::ResetTokens(names) => self.reset_tokens(Some(&names)),
             Action::Translations(translations) => self.set_translations(translations),
             Action::Locale(locale) => self.components.locale_request = Some(locale),
             Action::MainThread(task) => self.components.main_thread.push(task),

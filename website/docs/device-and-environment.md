@@ -15,7 +15,7 @@ In Rust the accessors are functions of `nsh_core::prelude`; in TSX they come fro
 | Rust | TSX | Value |
 |---|---|---|
 | `window()` | `windowSize()` (`nsh`) | The surface's width and height, in points. |
-| `dark()` | `colorScheme()` (`nsh`) | Dark or light: the system's, or the app's own (`set_color_scheme`, `setColorScheme`). |
+| `dark()` | `colorScheme()` (`nsh`) | Dark or light: the system's, or the app's own (`set_color_scheme`, `setColorScheme`); in a `ThemeScope`, the scope's. |
 | `font_scale()` | `fontScale()` (`nsh`) | The user's preferred text size relative to the default (1 is the default). |
 | `safe_area()` | `safeArea()` (`nsh`) | Insets of the surface not covered by system UI: top, right, bottom, left. |
 | `cx.insets()` | `safeAreaInsets()` (`nsh`) | The insets where the calling component renders (a page, a dialog). |
@@ -194,6 +194,40 @@ import { colorScheme, setColorScheme } from "nsh";
   <Text class="text-neutral-900 dark:text-neutral-50">{colorScheme() === "dark" ? "Light" : "Dark"}</Text>
 </View>
 ```
+
+### A part of the app in its own appearance
+
+`ThemeScope` (Rust: `theme_scope()`) is a view that shows itself and everything in it light or dark whatever the app shows: a dark sidebar beside a light page, a light document in a dark editor. In it `dark()` and `colorScheme()`, adaptive colors, `dark:` classes, the theme's colors and `token()` follow the scope, and so do the platform's own controls in it on iOS, macOS and the web, the tab bar on Android, and the scroll indicators the desktop backends draw:
+
+```rust tabs
+use nsh_core::prelude::*;
+
+view().flex_1().flex_row().child(
+    theme_scope().appearance(ColorScheme::Dark).child(
+        view()
+            .w(px(240.))
+            .p_4()
+            .bg(AdaptiveColor::rgb(0xffffff, 0x18181b))
+            .child(text("Always dark").text_color(AdaptiveColor::rgb(0x18181b, 0xf4f4f5))),
+    ),
+)
+```
+
+```tsx tabs
+import { Text, ThemeScope, View } from "nsh";
+
+<View class="flex-1 flex-row">
+  <ThemeScope appearance="dark" class="w-60 p-4 bg-white dark:bg-zinc-900">
+    <Text class="text-zinc-900 dark:text-zinc-100">Always dark</Text>
+  </ThemeScope>
+</View>
+```
+
+Scopes nest, and the nearest one with an `appearance` decides; a scope without one is shown as the view around it, so `appearance={pinned() ? "dark" : undefined}` turns a scope on and off. A scope sets its own background and text color, since a color a view inherited from outside stays what it was, as in CSS. Menus, alerts and sheets the platform draws stay in the app's appearance.
+
+In Rust, read the appearance where it is used, in a binding or a style's closure: `dark()` and `color()` answer for the scope around what reads them.
+
+A scope can also give its content its own values of the theme's tokens, with `theme`: see [Tokens for a part of the app](./tailwind.md#tokens-for-a-part-of-the-app).
 
 > [!TIP]
 > Test both appearances while developing: `xcrun simctl ui booted appearance dark` switches an iOS simulator, and Android has a dark theme toggle in Quick Settings. The change reaches your app at once, without a reload.
@@ -454,24 +488,26 @@ On Android, a view embedded below a toolbar gets only the parts of the system ba
 
 ## The platform
 
-`os()`, `os_version()`, `idiom()`, `is_desktop()` and `is_catalyst()` in Rust, and the `platform` constant from `nsh` in TSX, describe where the app runs. They stay the same while the app runs.
+`os()`, `os_version()`, `idiom()`, `is_desktop()`, `is_tv()` and `is_catalyst()` in Rust, and the `platform` constant from `nsh` in TSX, describe where the app runs. They stay the same while the app runs.
 
 | Rust | TSX | Description |
 |---|---|---|
-| `os()` | `platform.os` | `Os::Ios`, `Os::Android`, `Os::MacOs`, `Os::Windows`, `Os::Linux` or `Os::Web` (`os().name()` is TSX's string). Mac Catalyst is iOS. |
+| `os()` | `platform.os` | `Os::Ios`, `Os::Android`, `Os::MacOs`, `Os::Windows`, `Os::Linux`, `Os::Web` or `Os::Tizen` (`os().name()` is TSX's string). Mac Catalyst is iOS; a Tizen web app is the web. |
 | `os_version()` | `platform.version` | Major and minor; on Android the API level and 0. |
 | `idiom()` | `platform.idiom` | `Idiom::Phone`, `Pad`, `Mac`, `Tv`, `Desktop` or `Terminal`; `Terminal` in a terminal, else `Desktop` exactly where `is_desktop()` holds. |
-| `is_desktop()` | `platform.desktop` | macOS, Windows or Linux, a desktop browser or a terminal ([Desktop and mobile](./platform-specific.md#desktop-and-mobile)). |
+| `is_desktop()` | `platform.desktop` | macOS, Windows or Linux, a desktop browser or a terminal; never a TV ([Desktop and mobile](./platform-specific.md#desktop-and-mobile)). |
+| `is_tv()` | `platform.tv` | A TV, on any OS: Android TV, Tizen, a TV's browser ([TVs](./platform-specific.md#tvs)). |
 | `is_catalyst()` | `platform.catalyst` | Mac Catalyst, in either of its idioms. |
 
 TSX's `platform` in full:
 
 | Member | Description |
 |---|---|
-| `platform.os` | `"ios"`, `"android"`, `"macos"`, `"windows"`, `"linux"` or `"web"`. Mac Catalyst reports `"ios"`. |
+| `platform.os` | `"ios"`, `"android"`, `"macos"`, `"windows"`, `"linux"`, `"web"` or `"tizen"`. Mac Catalyst reports `"ios"`, a Tizen web app (`.wgt`) `"web"`. |
 | `platform.version` | A string: iOS and desktops: the OS version (`"17.5"`); Android: the API level (`"35"`); the web: `"0.0"`. |
 | `platform.idiom` | `"phone"`, `"pad"`, `"mac"`, `"tv"`, `"desktop"` or `"terminal"`. `"terminal"` in a terminal, else `"desktop"` exactly where `platform.desktop` is `true`. `"mac"` is UIKit's Mac idiom under Mac Catalyst, a mobile idiom. |
-| `platform.desktop` | Desktop behavior applies: macOS, Windows, Linux, desktop browsers and terminals. `desktop={{…}}` props and `platform.select({ desktop })` follow it. |
+| `platform.desktop` | Desktop behavior applies: macOS, Windows, Linux, desktop browsers and terminals; never a TV. `desktop={{…}}` props and `platform.select({ desktop })` follow it. |
+| `platform.tv` | The app runs on a TV (`idiom` `"tv"`), on any OS. `tv={{…}}` props and `platform.select({ tv })` follow it. |
 | `platform.catalyst` | The app runs under Mac Catalyst (`os` `"ios"`), in the Mac or the iPad idiom. |
 | `platform.select(spec)` | The value for this platform; see [Platform-specific code](./platform-specific.md#platformselect). |
 
@@ -509,6 +545,10 @@ when the app starts. The locale, `localeSettings()` (the browser's preferred lan
 its language and its time zone), `lifecycle()` (`"background"` in a hidden tab, `"inactive"` without the
 focus), `reduceMotion()`, `fontScale()` (the browser's text size), `pixelRatio()`, the safe area and the keyboard height
 come from the browser and follow it live.
+
+In a native Tizen app on a Samsung TV, `platform.os` is `"tizen"`, the idiom `"tv"` (`platform.tv` is `true`) and
+`platform.desktop` `false`. A Tizen web app (`.wgt`) is a browser: `platform.os` is `"web"`, and its page makes the
+idiom `"tv"` ([TVs](./platform-specific.md#tvs)).
 
 In a terminal ([the terminal backend](./tui.md)), `platform.idiom` is `"terminal"`, `platform.desktop` is `true` and
 `platform.os` is the machine's own system. `colorScheme()` follows the terminal's background, `reduceMotion()` is

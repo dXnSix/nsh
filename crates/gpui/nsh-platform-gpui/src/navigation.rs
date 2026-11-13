@@ -159,13 +159,14 @@ fn is_shown(view: &NshView) -> bool {
     }
 }
 
-/// Takes the keyboard focus away from a field inside `view` before it is
-/// concealed or removed: typing must not go to a field nobody sees.
+/// Takes the keyboard focus away from a field (or the view the arrows
+/// focused) inside `view` before it is concealed or removed: typing must
+/// not go to a field nobody sees.
 fn drop_focus(surface: &Surface, view: &NshView) {
-    if let Some(field) = crate::text_input::focused(surface)
+    if let Some(field) = crate::focus::current(surface)
         && is_ancestor(view, &field)
     {
-        crate::text_input::blur(&field);
+        crate::focus::blur(surface, &field);
     }
 }
 
@@ -387,9 +388,9 @@ struct ModalNav {
     /// the app's removal only forgets it.
     closed: bool,
     reported: Reported,
-    /// The field that had the keyboard focus when it was presented: it
-    /// gets it back when the modal closes, as a desktop dialog gives it
-    /// back.
+    /// The field (or the view the arrows focused, [`crate::focus`]) that
+    /// had the keyboard focus when it was presented: it gets it back when
+    /// the modal closes, as a desktop dialog gives it back.
     restore: Option<NshView>,
 }
 
@@ -997,11 +998,11 @@ impl Nav {
         set_fade(&view, 1.0);
         if let Some(field) = restore
             && field.attached()
-            && crate::text_input::focused(surface).is_none()
+            && crate::focus::current(surface).is_none()
             && is_ancestor(&self.focus_scope(surface, window), &field)
         {
             // Not while another modal still covers it.
-            crate::text_input::focus(&field);
+            crate::focus::restore(surface, &field);
         }
         match leaves {
             Some((duration, fade)) => {
@@ -1189,12 +1190,32 @@ impl Nav {
 pub(crate) fn default_back(surface: &Rc<Surface>) {
     let key = surface.key();
     crate::rt::invoke(move || {
-        if let Some(surface) = Surface::by_key(key)
-            && let Ok(mut nav) = surface.nav.try_borrow_mut()
-        {
-            nav.go_back_to(&surface, false);
+        if let Some(surface) = Surface::by_key(key) {
+            let taken = match surface.nav.try_borrow_mut() {
+                Ok(mut nav) => nav.go_back_to(&surface, false),
+                Err(_) => return,
+            };
+            if !taken {
+                unhandled_back(&surface);
+            }
         }
     });
+}
+
+/// A back press nothing in the app took: the embedding app's handler
+/// ([`crate::AppView::on_unhandled_back`]) hears it, on the main thread
+/// with the window the surface is in (once it was drawn in one). Whether
+/// there is one: the press is then the embedding app's.
+fn unhandled_back(surface: &Rc<Surface>) -> bool {
+    let Some(handler) = surface.on_unhandled_back.borrow().clone() else {
+        return false;
+    };
+    if let Some(window) = crate::system::window_of(surface) {
+        crate::rt::on_app(move |cx| {
+            let _ = window.update(cx, |_, window, cx| handler(window, cx));
+        });
+    }
+    true
 }
 
 /// Goes back (the newest modal, the innermost stack or the app's
@@ -1210,7 +1231,8 @@ pub(crate) fn go_back(surface: &Rc<Surface>) -> bool {
 /// key go back. Whether it was taken. Escape in a focused text field only
 /// leaves the field (a desktop convention: it never navigates away from
 /// what is being typed); Alt+Left and the Back key still go back. A key
-/// held down goes back once.
+/// held down goes back once. With nothing to go back to, the embedding
+/// app's handler takes it, if it set one ([`unhandled_back`]).
 pub(crate) fn key_pressed(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     if !event.down || event.repeat || !is_back_key(event.vk, event.modifiers) {
         return false;
@@ -1221,7 +1243,7 @@ pub(crate) fn key_pressed(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
         crate::text_input::blur(&field);
         return true;
     }
-    go_back(surface)
+    go_back(surface) || unhandled_back(surface)
 }
 
 /// A view is about to be removed or deleted: when it is (or is inside) the
@@ -1377,11 +1399,12 @@ pub(crate) fn present(surface: &Rc<Surface>, view: &NshView) {
         |m| matches!(m, Motion::ModalOut { view: v, .. } if v == view),
     );
     let m = nav.modals.entry(id).or_default();
-    // The field being typed in under the modal leaves it (until the modal
-    // closes); one of the modal's own keeps it.
-    let field = crate::text_input::focused(surface).filter(|f| !is_ancestor(view, f));
+    // The field being typed in under the modal (or the view the arrows
+    // focused there) leaves it until the modal closes; one of the modal's
+    // own keeps it.
+    let field = crate::focus::current(surface).filter(|f| !is_ancestor(view, f));
     if let Some(field) = &field {
-        crate::text_input::blur(field);
+        crate::focus::blur(surface, field);
     }
     m.restore = field;
     m.view = Some(view.clone());
@@ -1420,9 +1443,9 @@ pub(crate) fn release(surface: &Rc<Surface>, view: &NshView) {
     set_fade(view, 1.0);
     if let Some(field) = restore
         && field.attached()
-        && crate::text_input::focused(surface).is_none()
+        && crate::focus::current(surface).is_none()
     {
-        crate::text_input::focus(&field);
+        crate::focus::restore(surface, &field);
     }
 }
 
@@ -1545,6 +1568,45 @@ mod tests {
         assert!(!is_back_key(VK_ESCAPE, ctrl));
         assert!(!is_back_key(VK_LEFT, Modifiers { ctrl: true, ..alt }));
         assert!(!is_back_key(0x41, none));
+    }
+
+    /// A back press nothing takes goes to the embedding app's handler,
+    /// when it set one (`AppView::on_unhandled_back`).
+    mod unhandled_back {
+        use super::*;
+        use crate::input::KeyEvent;
+
+        fn press(vk: u16) -> KeyEvent {
+            KeyEvent {
+                vk,
+                down: true,
+                repeat: false,
+                modifiers: Modifiers::default(),
+            }
+        }
+
+        #[test]
+        fn the_embedding_app_takes_what_nothing_goes_back_to() {
+            let surface = Surface::new(nsh_engine::Environment::default());
+            // No handler: the press is nobody's.
+            assert!(!key_pressed(&surface, &press(VK_BROWSER_BACK)));
+            *surface.on_unhandled_back.borrow_mut() = Some(Rc::new(|_, _| {}));
+            for vk in [VK_BROWSER_BACK, VK_ESCAPE] {
+                assert!(key_pressed(&surface, &press(vk)), "{vk:#x}");
+            }
+            // Other keys, ups and repeats stay nobody's.
+            assert!(!key_pressed(&surface, &press(0x41)));
+            let up = KeyEvent {
+                down: false,
+                ..press(VK_BROWSER_BACK)
+            };
+            assert!(!key_pressed(&surface, &up));
+            let repeat = KeyEvent {
+                repeat: true,
+                ..press(VK_BROWSER_BACK)
+            };
+            assert!(!key_pressed(&surface, &repeat));
+        }
     }
 
     /// A root that counts as attached to a surface, and views under it.

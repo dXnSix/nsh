@@ -1,0 +1,12 @@
+# What a user does and sees (compat/apps.rs): each case after its tap.
+platform tizen
+# mod-device-tizen
+tap id:case-mod-device-tizen
+expect OS: tizen Name: tizen
+expect Tizen: true
+expect Idiom: tv
+expect TV: true Desktop: false
+expect Select: tizen
+expect Select TV: tv
+expect Select native: native
+covers [nsh] platform

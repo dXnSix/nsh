@@ -882,14 +882,15 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
                         }
                     }
                     // `SystemUi.dialog` draws alerts and action sheets in
-                    // them: each of `DIALOG_TOKENS`, light then dark (0: the
-                    // system's). An app without a theme of its own (its
-                    // tokens the default theme's) keeps the system's colors.
+                    // them: each of `DIALOG_ROLES`, light then dark (0: the
+                    // system's). An app without a theme of its own (the
+                    // core says so: `Tokens::is_themed`) keeps the system's
+                    // colors.
                     Command::Tokens(tokens) => {
                         e.int(27);
-                        let themed = nsh_base::tokens_of(None).is_ok_and(|d| *tokens != d);
-                        for name in DIALOG_TOKENS {
-                            let color = tokens.color(name).filter(|_| themed);
+                        let themed = tokens.is_themed();
+                        for role in DIALOG_ROLES {
+                            let color = tokens.role(role).filter(|_| themed);
                             for c in [color.map(|c| c.light), color.map(|c| c.dark)] {
                                 e.int(c.map_or(0, |c| argb(c.into())));
                             }
@@ -902,15 +903,15 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
     e
 }
 
-/// The tokens alerts and action sheets are drawn in (`SystemUi.java`'s
+/// The roles alerts and action sheets are drawn in (`SystemUi.java`'s
 /// order): the dialog, its title, its message, its buttons and a
 /// destructive action.
-const DIALOG_TOKENS: [&str; 5] = [
-    "popover",
-    "popover-foreground",
-    "muted-foreground",
-    "primary",
-    "destructive",
+const DIALOG_ROLES: [nsh_core::element::Role; 5] = [
+    nsh_core::element::role::POPOVER,
+    nsh_core::element::role::POPOVER_FOREGROUND,
+    nsh_core::element::role::MUTED_FOREGROUND,
+    nsh_core::element::role::PRIMARY,
+    nsh_core::element::role::DESTRUCTIVE,
 ];
 
 /// An audio command after its opcode (47), as `Audio.command` reads it:
@@ -1461,6 +1462,10 @@ fn view_props(e: &mut Encoded, p: &ViewProps) {
     }
     e.bool(p.selectable_view);
     e.bool(p.continues_text);
+    // A view shown in an appearance of its own (`ThemeScope`): 0 none,
+    // 1 light, 2 dark. The platform's controls in it follow
+    // (`Mounter.java` `nightAt`).
+    e.int(p.appearance as i32);
 }
 
 /// Index of `role` in `A11y.java`'s class name table.
@@ -2059,6 +2064,33 @@ mod tests {
             assert_eq!(ints(request), vec![COMMAND, 3, 30, 7]);
         }
     }
+    #[test]
+    fn a_views_own_appearance_ends_its_props() {
+        use nsh_core::platform::Appearance;
+        let last = |appearance| {
+            let props = ViewProps {
+                appearance,
+                ..ViewProps::default()
+            };
+            let encoded = encode(
+                MountBatch {
+                    items: vec![MountItem::ViewProps {
+                        id: 3,
+                        props: Box::new(props),
+                    }],
+                },
+                0,
+            );
+            let at = encoded.bytes.len() - 4;
+            i32::from_le_bytes(encoded.bytes[at..].try_into().unwrap())
+        };
+        // `Mounter.java` `viewProps` reads it last: 0 none (the view is
+        // shown as the views around it), 1 light, 2 dark.
+        assert_eq!(last(Appearance::System), 0);
+        assert_eq!(last(Appearance::Light), 1);
+        assert_eq!(last(Appearance::Dark), 2);
+    }
+
     #[test]
     fn a_canvas_render_carries_its_size_scale_and_drawing() {
         use nsh_core::canvas::{CanvasOp, Drawing, Num, render::ImageFormat};

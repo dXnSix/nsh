@@ -411,6 +411,25 @@ pub(crate) fn thumb_end(surface: &Rc<Surface>, view: &NshView) {
     shared::thumb_end(&Host::new(surface, view));
 }
 
+/// Whether `view` (its `state`) is shown dark, for its indicator: as its
+/// own appearance says, else the nearest view around it with one (a
+/// `ThemeScope`), else as the window is (`window`).
+fn shown_dark(window: bool, view: &NshView, state: &ViewState) -> bool {
+    use nsh_core::platform::Appearance;
+    let mut appearance = state.props.appearance;
+    let mut around = view.parent_view();
+    while appearance == Appearance::System {
+        let Some(parent) = around else {
+            return window;
+        };
+        appearance = parent
+            .try_state()
+            .map_or(Appearance::System, |state| state.props.appearance);
+        around = parent.parent_view();
+    }
+    appearance == Appearance::Dark
+}
+
 /// Draws a scroll view's indicator, over its content (inside its clip),
 /// and the refresh spinner; the context is in the view's coordinates. The
 /// indicator runs along what the views around `view` leave in sight of it
@@ -418,10 +437,12 @@ pub(crate) fn thumb_end(surface: &Rc<Surface>, view: &NshView) {
 pub(crate) fn draw_indicator(cx: &mut DrawCx<'_>, view: &NshView, state: &ViewState) {
     let Some(s) = &state.scroll else { return };
     let size = state.frame.size;
+    // In a view with an appearance of its own (`ThemeScope`), that one.
+    let dark = shown_dark(cx.dark, view, state);
     if let Some((center, progress)) =
         s.spinner(size.width, state.events.contains(EventKind::Refresh))
     {
-        draw_spinner(cx, center.x.0, center.y.0, progress, s.live.spin);
+        draw_spinner(cx, center.x.0, center.y.0, progress, s.live.spin, dark);
     }
     if !s.indicator || s.live.alpha <= 0.0 {
         return;
@@ -439,7 +460,7 @@ pub(crate) fn draw_indicator(cx: &mut DrawCx<'_>, view: &NshView, state: &ViewSt
     // indicator style: the appearance says what the window is, not what
     // the content under the knob is, which may be light in a dark app.
     let a = s.live.alpha;
-    let (knob, border) = if cx.dark {
+    let (knob, border) = if dark {
         (
             Color::rgba(255, 255, 255, (140.0 * a) as u8),
             Color::rgba(0, 0, 0, (70.0 * a) as u8),
@@ -469,8 +490,15 @@ fn fill_rounded(cx: &mut DrawCx<'_>, x: f32, y: f32, w: f32, h: f32, radius: f32
 }
 
 /// The activity spinner's spokes ([`shared::spokes`]) at `(x, y)`.
-fn draw_spinner(cx: &mut DrawCx<'_>, x: f32, y: f32, progress: Percentage, spin: Radians) {
-    let base = if cx.dark { 255.0 } else { 64.0 };
+fn draw_spinner(
+    cx: &mut DrawCx<'_>,
+    x: f32,
+    y: f32,
+    progress: Percentage,
+    spin: Radians,
+    dark: bool,
+) {
+    let base = if dark { 255.0 } else { 64.0 };
     let world = cx.transform;
     for (angle, fade) in shared::spokes(progress, spin) {
         let m = Mat4::new()
@@ -602,27 +630,41 @@ fn key_scroll_view(view: &NshView, horizontal: bool, sign: f32) -> Option<NshVie
     let mut current = Some(view.clone());
     while let Some(v) = current {
         current = v.parent_view();
-        if v.kind() != ViewKind::Scroll {
-            continue;
-        }
-        let (dx, dy) = {
-            let state = v.state();
-            let mirrored = state.scroll.as_ref().is_some_and(|s| s.mirrored);
-            if horizontal {
-                // can_scroll mirrors horizontal deltas; keys are mirrored
-                // in `key`, so undo it here.
-                (if mirrored { -sign } else { sign }, 0.0)
-            } else {
-                (0.0, sign)
-            }
-        };
-        if can_scroll(&v, dx, dy) {
+        if v.kind() == ViewKind::Scroll && key_can_scroll(&v, horizontal, sign) {
             chain.push(v);
         }
     }
     let along = |v: &NshView| v.state().scroll.as_ref().is_some_and(|s| s.horizontal) == horizontal;
     let first = chain.iter().position(along).unwrap_or(0);
     chain.into_iter().nth(first)
+}
+
+/// Scroll view `view` can move as a key moving toward `sign` along an axis
+/// moves it.
+pub(crate) fn key_can_scroll(view: &NshView, horizontal: bool, sign: f32) -> bool {
+    let (dx, dy) = {
+        let state = view.state();
+        let mirrored = state.scroll.as_ref().is_some_and(|s| s.mirrored);
+        if horizontal {
+            // can_scroll mirrors horizontal deltas; keys are mirrored in
+            // `key`, so undo it here.
+            (if mirrored { -sign } else { sign }, 0.0)
+        } else {
+            (0.0, sign)
+        }
+    };
+    can_scroll(view, dx, dy)
+}
+
+/// Keyboard scrolling of scroll view `view` itself, as [`key`] scrolls
+/// the one under the pointer: an arrow that keeps the focus in it
+/// ([`crate::focus`]). True when it was a scrolling key.
+pub(crate) fn key_view(surface: &Rc<Surface>, view: &NshView, event: &KeyEvent) -> bool {
+    let Some((horizontal, m)) = key_move(event) else {
+        return false;
+    };
+    shared::key_scroll(&Host::new(surface, view), m, horizontal);
+    true
 }
 
 /// The innermost view at `(x, y)` (`view`'s coordinates).

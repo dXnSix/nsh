@@ -147,7 +147,7 @@ pub(crate) struct Surface {
     /// The embedding app's theme overrides
     /// ([`crate::AppView::set_theme_overrides`]): sent to every engine the
     /// surface starts, before its first frame.
-    pub(crate) host_tokens: RefCell<Option<nsh_engine::Tokens>>,
+    pub(crate) host_theme: RefCell<Option<String>>,
     /// JS asked for a display frame.
     js_frame: Cell<bool>,
     /// The tick callback runs.
@@ -271,7 +271,7 @@ impl Surface {
             environment: Cell::new(environment),
             appearance: Cell::default(),
             host_environment: Cell::default(),
-            host_tokens: RefCell::new(None),
+            host_theme: RefCell::new(None),
             js_frame: Cell::new(false),
             ticking: Cell::new(false),
             frame_callbacks: RefCell::default(),
@@ -413,13 +413,13 @@ impl Surface {
         // The embedding app's theme overrides are in the first frame, and
         // the links that came before are the app's address when its code
         // first runs (`UrlScheme.url()`).
-        let tokens = self.host_tokens.borrow().clone();
+        let theme = self.host_theme.borrow().clone();
         let links = self.pending_links.take();
         // The app reads the displays as it first renders.
         let displays = crate::window::displays();
         let setup = |control: &EngineControl| {
-            if tokens.is_some() {
-                control.set_tokens(tokens);
+            if let Some(json) = theme {
+                control.set_theme_overrides(json);
             }
             if !displays.is_empty() {
                 control.set_displays(displays);

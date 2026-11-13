@@ -255,7 +255,13 @@
   are in the first frame of every app loaded later; the platform's own drawing that reads the environment (alerts)
   follows too. `None` / `nil` / `null` / 0 follows the system's again (its settings are read again). The text
   size scales what allows font scaling (`Core::set_font_scale`): texts, inputs, the components' labels; lengths, `rem`
-  in classes included, stay as they are. The layout direction stays the system's language's.
+  in classes included, stay as they are. The layout direction stays the system's language's. GPUI's `AppView` also
+  takes `set_reduce_motion(Option<bool>)`, `set_screen_reader(Option<bool>)` and `set_time_zone(Option<TimeZone>)`
+  (`host_settings.rs`), written over the system's in the same place: a Tizen TV's host passes the TV's settings on
+  with them, as nothing else in its process reports them. `set_lifecycle(Option<Lifecycle>)` does the same for the
+  app's state (`lifecycle()`), over what the windows' activation and visibility give, and `on_unhandled_back(f)` hands
+  the embedding app the back presses nothing in the app took (no modal, stack or `onBackPress` listener): the TV's
+  host asks there whether to leave the app.
 - **The host's own floating UI** (the safe area): a host that draws its own UI over the view (a tab bar floating over
   the content) adds it to the safe area, so the app's content scrolls under that UI and still ends clear of it
   (`safeAreaInsets()`, `env(safe-area-inset-*)`). On iOS that is UIKit's own: the surface reads the view's
@@ -270,14 +276,17 @@
   tokens (brand colors, `radius`, ...) at run time: Rust `AppView::set_theme_overrides(Option<&str>)` (AppKit, GTK,
   Win32; GPUI's takes `cx` as well; the iOS `AppView`'s too), Swift `NshAppView.setThemeOverrides(_:)` (C `nsh_app_set_theme_overrides`), Java
   `NshView.setThemeOverrides`. The value is a theme file in the format of `nsh.json`'s `"theme"` (shadcn's `cssVars`:
-  `theme`, `light` and `dark` sections, values as CSS writes them; `components.md` "The theme"); it is parsed on the
-  calling thread by `nsh_base::theme_overrides`, which keeps only the tokens the file sets (a `var()` it names and
-  does not set is the default theme's), and a file that does not parse is an error (Swift throws `NshError`, Java an
-  `IllegalArgumentException`, C returns it) that changes nothing. The tokens go to the engine as host tokens
-  (`EngineControl::set_tokens`, `Core::set_host_tokens`): they win over the app's tokens of the same names in both
+  `theme`, `light` and `dark` sections, values as CSS writes them; `components.md` "The theme"). The SDK checks on
+  the calling thread that it is JSON (`nsh_core::element::theme_file::check`): text that is not is an error (Swift
+  throws `NshError`, Java an `IllegalArgumentException`, C returns it) that changes nothing. The file goes to the
+  engine whole (`EngineControl::set_theme_overrides`, `Message::ThemeOverrides`), and the core reads it with the
+  app's UI set (`Core::set_host_theme`: `Registry::token_overrides_from`, `nsh/base`'s being the core's
+  `theme_file::overrides`) against the UI set's default tokens (`nsh/base`'s default theme), keeping only the tokens
+  the file sets (a `var()` it names and does not set is the default theme's token). They become host tokens (`Core::set_host_tokens`;
+  `EngineControl::set_tokens(None)` clears them): they win over the app's tokens of the same names in both
   appearances, the app's others stay (`Tokens::over`), and classes naming the changed tokens (`bg-primary`,
   `rounded-(--radius)`) are resolved again at once, as are Rust components reading `theme()`. Each platform keeps
-  them on its surface and starts every engine with them (`Engine::start_with`), so they are in the first frame of
+  the file on its surface and starts every engine with it (`Engine::start_with`), so they are in the first frame of
   every app loaded later, a development reload included; `None` / `nil` / `null` gives the app its own theme back. A
   token takes both appearances: one the file gives only in `light` (or `theme`) is that color in dark mode too, as
   in a theme file, so an override that differs in dark mode names it in `dark`. GPUI's `AppView::set_theme` /

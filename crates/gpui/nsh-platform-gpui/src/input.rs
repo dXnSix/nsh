@@ -141,7 +141,7 @@ pub(crate) struct Modifiers {
 
 impl Modifiers {
     /// As the core's modifiers (`meta` is its `cmd`).
-    fn core(self) -> nsh_core::keymap::Modifiers {
+    pub(crate) fn core(self) -> nsh_core::keymap::Modifiers {
         nsh_core::keymap::Modifiers {
             ctrl: self.ctrl,
             alt: self.alt,
@@ -1432,6 +1432,7 @@ pub(crate) fn key_now_raw(
         || crate::text::key(surface, &event)
         || crate::selectable_view::key(surface, &event)
         || crate::navigation::key_pressed(surface, &event)
+        || crate::focus::key(surface, &event)
         || crate::key_focus::key(surface, &event)
         || {
             let (x, y) = input.last.get().unwrap_or((-1.0, -1.0));
@@ -1628,6 +1629,18 @@ fn tab(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     };
     focus_stop(surface, &stops[next]);
     true
+}
+
+/// Tab (Shift + Tab with `shift`) the surface did not take, past its last
+/// stop (its first): `leave` moves the window's focus to the embedding
+/// app's next tab stop, and when there is none the focus wraps around to
+/// the first stop (the last, [`tab_to_edge`]). When the focus leaves the
+/// view, or no stop is left to wrap to, the stop that had it lets go of it
+/// (a field's or a view's: `FOCUSED` off, `onBlur`).
+pub(crate) fn tab_past_ends(surface: &Rc<Surface>, shift: bool, leave: impl FnOnce() -> bool) {
+    if leave() || !tab_to_edge(surface, shift) {
+        crate::focus::blur_all(surface);
+    }
 }
 
 /// Focuses the first Tab stop (the last with `shift`), reached with Tab

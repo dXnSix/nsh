@@ -6,7 +6,9 @@
 // The page's host (`app.host`, nsh.json `web.host`) answers the app's
 // `nsh/host` calls: its `createHost(player)` runs once the player exists,
 // before the app starts, so no call comes earlier. Its pages and dialogs
-// are browser history entries as nsh.json `web.history` says.
+// are browser history entries as nsh.json `web.history` says. A Tizen web
+// app's page (`--target tizen-web`) runs its TV shim before this script and
+// starts the player in the TV idiom (`app.idiom`).
 //
 // What it starts is in the page (`#nsh-app`, JSON). Every URL of the app
 // is resolved once against the page's base (its `<base href>`, nsh.json
@@ -69,6 +71,8 @@ try {
       sides: app.sides,
       // nsh.json `web.history`; without it the player's default.
       history: app.history,
+      // A Tizen web app's: "tv" (no pointer heuristic tells a TV).
+      idiom: app.idiom,
       readAsset: (uri) => fonts.get(path(uri)) ?? null,
       // The chunk's fonts and the side modules of the runtime it needs.
       prepareChunk: (id) => Promise.all([

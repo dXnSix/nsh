@@ -2,7 +2,8 @@
 //! `nsh/accessibility`'s commands, `nsh/device`'s `openUrl`, `nsh`'s
 //! `Image` and `WebView` functions, all of `nsh/clipboard`, `nsh/picker`, `nsh`'s
 //! `Speech`, `UrlScheme`, `setFpsEnabled` and `nsh/storage`,
-//! `nsh/desktop`'s `Application`, the surface-independent `os` metadata,
+//! `nsh/desktop`'s `Application`, `nsh/tizen` (Samsung TVs), the
+//! surface-independent `os` metadata,
 //! `net`'s sockets, `websocket`'s connections, `fs/promises`' files and
 //! `nsh/host`'s calls. Their JS face is made
 //! from their specs like a UI set's (`nsh-js` `components.rs`), and so are
@@ -32,11 +33,13 @@ mod picker;
 mod process;
 mod speech;
 mod storage;
+mod tizen;
 mod updater;
 mod url_scheme;
 mod websocket;
 mod webview;
 
+pub use tizen::{TizenHost, TizenServices, TvProduct};
 pub use updater::{PackageVersion, UpdaterHost, UpdaterSink};
 
 /// The [`crate::element::Quotas`] kind WebSockets count under: the `websocket`
@@ -71,6 +74,7 @@ pub fn registries() -> &'static [Registry] {
             .module::<storage::Storage>()
             .module::<host::Host>()
             .module::<fps::Fps>()
+            .register::<crate::element::ThemeScope>()
             // The environment's accessors and hooks, made by `nsh-js`.
             .reexport(&["safeArea", "safeAreaInsets", "keyboardFrame"], &[]);
         let mut mobile = Registry::runtime("nsh/mobile");
@@ -96,8 +100,10 @@ pub fn registries() -> &'static [Registry] {
         };
         let mut updater = Registry::runtime("nsh/updater");
         updater.module::<updater::Updater>();
+        let mut tizen = Registry::runtime("nsh/tizen");
+        tizen.module::<tizen::Tizen>();
         vec![
-            nsh, desktop, mobile, os, net, process, fs, websocket, updater,
+            nsh, desktop, mobile, os, net, process, fs, websocket, updater, tizen,
         ]
     })
 }

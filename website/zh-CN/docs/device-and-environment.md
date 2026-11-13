@@ -15,7 +15,7 @@ demo: guide-device
 | Rust | TSX | 值 |
 |---|---|---|
 | `window()` | `windowSize()`（`nsh`） | surface 的宽和高，单位为点。 |
-| `dark()` | `colorScheme()`（`nsh`） | 深色或浅色：系统的外观，或应用自己设置的外观（`set_color_scheme`、`setColorScheme`）。 |
+| `dark()` | `colorScheme()`（`nsh`） | 深色或浅色：系统的外观，或应用自己设置的外观（`set_color_scheme`、`setColorScheme`）；在 `ThemeScope` 中，是该作用域的外观。 |
 | `font_scale()` | `fontScale()`（`nsh`） | 用户偏好的文字大小相对于默认值的比例（1 为默认）。 |
 | `safe_area()` | `safeArea()`（`nsh`） | surface 中未被系统 UI 遮挡的 inset：上、右、下、左。 |
 | `cx.insets()` | `safeAreaInsets()`（`nsh`） | 调用组件渲染位置（页面、对话框）的 inset。 |
@@ -194,6 +194,40 @@ import { colorScheme, setColorScheme } from "nsh";
   <Text class="text-neutral-900 dark:text-neutral-50">{colorScheme() === "dark" ? "Light" : "Dark"}</Text>
 </View>
 ```
+
+### 应用的一部分使用自己的外观
+
+`ThemeScope`（Rust：`theme_scope()`）是一个视图，无论应用显示什么外观，它自身及其中的一切都以浅色或深色显示：浅色页面旁的深色侧边栏，深色编辑器中的浅色文档。在其中，`dark()` 和 `colorScheme()`、自适应颜色、`dark:` 类、主题的颜色和 `token()` 都跟随作用域；在 iOS、macOS 和 Web 上，其中的平台控件也跟随它，Android 上其中的标签栏同样如此，桌面后端绘制的滚动指示器同样如此：
+
+```rust tabs
+use nsh_core::prelude::*;
+
+view().flex_1().flex_row().child(
+    theme_scope().appearance(ColorScheme::Dark).child(
+        view()
+            .w(px(240.))
+            .p_4()
+            .bg(AdaptiveColor::rgb(0xffffff, 0x18181b))
+            .child(text("Always dark").text_color(AdaptiveColor::rgb(0x18181b, 0xf4f4f5))),
+    ),
+)
+```
+
+```tsx tabs
+import { Text, ThemeScope, View } from "nsh";
+
+<View class="flex-1 flex-row">
+  <ThemeScope appearance="dark" class="w-60 p-4 bg-white dark:bg-zinc-900">
+    <Text class="text-zinc-900 dark:text-zinc-100">Always dark</Text>
+  </ThemeScope>
+</View>
+```
+
+作用域可以嵌套，由最近的设置了 `appearance` 的作用域决定；没有设置的作用域按其外层视图的外观显示，所以 `appearance={pinned() ? "dark" : undefined}` 可以打开和关闭一个作用域。作用域要设置自己的背景色和文字颜色，因为视图从外部继承来的颜色保持不变，与 CSS 一样。平台绘制的菜单、警告框和面板保持应用的外观。
+
+在 Rust 中，在使用外观的地方读取它，即在绑定或样式的闭包中：`dark()` 和 `color()` 给出读取它们的位置所在作用域的外观。
+
+作用域还可以通过 `theme` 让其内容使用它自己的主题 token 值：见[应用某一部分的 token](./tailwind.md#tokens-for-a-part-of-the-app)。
 
 > [!TIP]
 > 开发时两种外观都要测试：`xcrun simctl ui booted appearance dark` 可以切换 iOS 模拟器，Android 的快捷设置里有深色主题开关。变化会立即传到应用中，无需重新加载。
@@ -442,24 +476,26 @@ function BottomBar() {
 
 ## 平台
 
-Rust 中的 `os()`、`os_version()`、`idiom()`、`is_desktop()` 和 `is_catalyst()`，以及 TSX 中 `nsh` 的常量 `platform`，描述应用运行的平台。它们在应用运行期间保持不变。
+Rust 中的 `os()`、`os_version()`、`idiom()`、`is_desktop()`、`is_tv()` 和 `is_catalyst()`，以及 TSX 中 `nsh` 的常量 `platform`，描述应用运行的平台。它们在应用运行期间保持不变。
 
 | Rust | TSX | 说明 |
 |---|---|---|
-| `os()` | `platform.os` | `Os::Ios`、`Os::Android`、`Os::MacOs`、`Os::Windows`、`Os::Linux` 或 `Os::Web`（`os().name()` 即 TSX 的字符串）。Mac Catalyst 为 iOS。 |
+| `os()` | `platform.os` | `Os::Ios`、`Os::Android`、`Os::MacOs`、`Os::Windows`、`Os::Linux`、`Os::Web` 或 `Os::Tizen`（`os().name()` 即 TSX 的字符串）。Mac Catalyst 为 iOS；Tizen Web 应用为 Web。 |
 | `os_version()` | `platform.version` | 主版本号和次版本号；Android 上为 API 级别和 0。 |
 | `idiom()` | `platform.idiom` | `Idiom::Phone`、`Pad`、`Mac`、`Tv`、`Desktop` 或 `Terminal`；在终端中为 `Terminal`，否则 `is_desktop()` 成立时恰好是 `Desktop`。 |
-| `is_desktop()` | `platform.desktop` | macOS、Windows 或 Linux、桌面浏览器或终端（[桌面与移动端](./platform-specific.md#桌面与移动端)）。 |
+| `is_desktop()` | `platform.desktop` | macOS、Windows 或 Linux、桌面浏览器或终端；电视从不是桌面（[桌面与移动端](./platform-specific.md#桌面与移动端)）。 |
+| `is_tv()` | `platform.tv` | 电视，与操作系统无关：Android TV、Tizen、电视上的浏览器（[电视](./platform-specific.md#电视)）。 |
 | `is_catalyst()` | `platform.catalyst` | Mac Catalyst，无论哪种界面风格。 |
 
 TSX 的 `platform` 完整成员：
 
 | 成员 | 说明 |
 |---|---|
-| `platform.os` | `"ios"`、`"android"`、`"macos"`、`"windows"`、`"linux"` 或 `"web"`。Mac Catalyst 报告 `"ios"`。 |
+| `platform.os` | `"ios"`、`"android"`、`"macos"`、`"windows"`、`"linux"`、`"web"` 或 `"tizen"`。Mac Catalyst 报告 `"ios"`，Tizen Web 应用（`.wgt`）报告 `"web"`。 |
 | `platform.version` | 字符串：iOS 和桌面平台为系统版本（`"17.5"`）；Android 为 API 级别（`"35"`）；Web 为 `"0.0"`。 |
 | `platform.idiom` | `"phone"`、`"pad"`、`"mac"`、`"tv"`、`"desktop"` 或 `"terminal"`。在终端中为 `"terminal"`，否则 `platform.desktop` 为 `true` 时恰好是 `"desktop"`。`"mac"` 是 Mac Catalyst 下 UIKit 的 Mac 界面风格，属于移动端界面风格。 |
-| `platform.desktop` | 适用桌面行为：macOS、Windows、Linux、桌面浏览器和终端。`desktop={{…}}` 属性和 `platform.select({ desktop })` 以它为准。 |
+| `platform.desktop` | 适用桌面行为：macOS、Windows、Linux、桌面浏览器和终端；电视从不是桌面。`desktop={{…}}` 属性和 `platform.select({ desktop })` 以它为准。 |
+| `platform.tv` | 应用运行在电视上（`idiom` 为 `"tv"`），与操作系统无关。`tv={{…}}` 属性和 `platform.select({ tv })` 以它为准。 |
 | `platform.catalyst` | 应用运行在 Mac Catalyst 下（`os` 为 `"ios"`），无论是 Mac 还是 iPad 界面风格。 |
 | `platform.select(spec)` | 当前平台对应的值；见[平台特定代码](./platform-specific.md#platformselect)。 |
 
@@ -494,6 +530,9 @@ const hapticsSupported = platform.os === "ios" || (platform.os === "android" && 
 `"desktop"`，平板上为 `"pad"`，手机上为 `"phone"`，在应用启动时确定。区域设置、`localeSettings()`（浏览器的首选语言、浏览器按其语言给出的地区偏好和它的时区）、`lifecycle()`（标签页隐藏时为
 `"background"`，失去焦点时为 `"inactive"`）、`reduceMotion()`、`fontScale()`（浏览器的文字大小）、`pixelRatio()`、
 安全区域和键盘高度都来自浏览器，并实时跟随。
+
+在三星电视上的原生 Tizen 应用中，`platform.os` 为 `"tizen"`，界面风格为 `"tv"`（`platform.tv` 为 `true`），`platform.desktop`
+为 `false`。Tizen Web 应用（`.wgt`）是浏览器：`platform.os` 为 `"web"`，由页面把界面风格设为 `"tv"`（[电视](./platform-specific.md#电视)）。
 
 在终端中（[终端后端](./tui.md)），`platform.idiom` 为 `"terminal"`，`platform.desktop` 为 `true`，`platform.os` 是本机自己的系统。
 `colorScheme()` 跟随终端的背景色，`reduceMotion()` 为 `true`，安全区域和键盘高度为 0。

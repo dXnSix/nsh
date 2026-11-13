@@ -7,7 +7,7 @@ demo: ui-navigation
 
 # nsh/base
 
-`nsh/base` 是应用界面的基础组件层：不带样式、负责行为、状态、焦点和无障碍的组件，各平台通用。它位于基础元素（`nsh`、`nsh/mobile` 和 `nsh/desktop`）与应用自己的组件库之间，就像 GPUI Kit 中 `gpui-base` 位于 `gpui` 与带样式的组件库之间（见[模块](./index.md#three-layers)）。它提供控件（`Button`、`Link`、`Checkbox`、带 `ColorArea`、`ColorSlider`、`ColorField`、`ColorSwatch` 和 `ColorEyeDropper` 部件的 `ColorPicker`、`NumberInput`、放在 `RadioGroup` 里的 `Radio`、`Slider`、`Switch`、放在 `Tabs` 里的 `Tab`、放在 `ToggleGroup` 里的 `Toggle`、`Select`、`Combobox`、`Calendar`、`TimeField`、`DatePicker`）、命令面板（`Command`）、表情选择面板（`EmojiPicker`）、控件栏（带 `ToolbarGroup` 和 `ToolbarSeparator` 的 `Toolbar`）、应用自己外观的滚动条（`Scrollbar`）、可展开和收起的区域（`Collapsible`，以及带 `AccordionItem`、`AccordionHeader`、`AccordionTrigger` 和 `AccordionPanel` 部件的 `Accordion`）、进度条（`Progress`）、一次性验证码（`OtpInput`）、一组内容的分页（`Pagination`）、包含子项目的项目（`Tree`）、构建图表的部件（`nsh/base/plot` 中的 `Plot` 及 `Line`、`Area`、`Bar`、`Rule`、`Dot`、`Cell`、`Grid`、`Pie`、`Arc`）、由用户自行安排的工作区（放在 `ResizablePanelGroup` 里的 `ResizablePanel`，以及 `DockArea` 的分栏、标签组和停靠区）、Markdown 或 HTML 文档（`TextView`）、代码编辑器（`Editor`）、文本之间的改动（`DiffView`）、表格（`Table` 及其部件、`DataTable`）、文本输入框（`Input`）、显示在一切之上的弹出层（`Popover`，`Menu` 和 `ContextMenu` 及其 `MenuItem`、`MenuSeparator` 和 `Submenu`，`Tooltip`，`Sheet`）、toast（放在 `ToastStack` 中的 `Toast`，生命周期由 `ToastManager` 管理）、导航（由 `createNavStack` 创建的状态驱动、由多个 `NavPage` 组成的 `NavStack`，以及在所有内容之上展示内容的 `Dialog`）和系统警告对话框（`AlertDialog`）。页面和对话框还决定状态栏（`statusBar`）。
+`nsh/base` 是应用界面的基础组件层：不带样式、负责行为、状态、焦点和无障碍的组件，各平台通用。它位于基础元素（`nsh`、`nsh/mobile` 和 `nsh/desktop`）与应用自己的组件库之间，就像 GPUI Kit 中 `gpui-base` 位于 `gpui` 与带样式的组件库之间（见[模块](./index.md#three-layers)）。它提供控件（`Button`、`Link`、`Checkbox`、带 `ColorArea`、`ColorSlider`、`ColorField`、`ColorSwatch` 和 `ColorEyeDropper` 部件的 `ColorPicker`、`NumberInput`、放在 `RadioGroup` 里的 `Radio`、`Slider`、`Switch`、放在 `Tabs` 里的 `Tab`、放在 `ToggleGroup` 里的 `Toggle`、`Select`、`Combobox`、`Calendar`、`TimeField`、`DatePicker`）、命令面板（`Command`）、表情选择面板（`EmojiPicker`）、控件栏（带 `ToolbarGroup` 和 `ToolbarSeparator` 的 `Toolbar`）、方向键从指定的停靠点进入、可以不让焦点离开的区域（`FocusGroup`）、应用自己外观的滚动条（`Scrollbar`）、可展开和收起的区域（`Collapsible`，以及带 `AccordionItem`、`AccordionHeader`、`AccordionTrigger` 和 `AccordionPanel` 部件的 `Accordion`）、进度条（`Progress`）、一次性验证码（`OtpInput`）、一组内容的分页（`Pagination`）、包含子项目的项目（`Tree`）、构建图表的部件（`nsh/base/plot` 中的 `Plot` 及 `Line`、`Area`、`Bar`、`Rule`、`Dot`、`Cell`、`Grid`、`Pie`、`Arc`）、由用户自行安排的工作区（放在 `ResizablePanelGroup` 里的 `ResizablePanel`，以及 `DockArea` 的分栏、标签组和停靠区）、Markdown 或 HTML 文档（`TextView`）、代码编辑器（`Editor`）、文本之间的改动（`DiffView`）、表格（`Table` 及其部件、`DataTable`）、文本输入框（`Input`）、显示在一切之上的弹出层（`Popover`，`Menu` 和 `ContextMenu` 及其 `MenuItem`、`MenuSeparator` 和 `Submenu`，`Tooltip`，`Sheet`）、toast（放在 `ToastStack` 中的 `Toast`，生命周期由 `ToastManager` 管理）、导航（由 `createNavStack` 创建的状态驱动、由多个 `NavPage` 组成的 `NavStack`，以及在所有内容之上展示内容的 `Dialog`）和系统警告对话框（`AlertDialog`）。页面和对话框还决定状态栏（`statusBar`）。
 
 基础组件还包括 `Avatar` 和 `AvatarGroup`（原生管理图片加载状态），以及用于逐页浏览内容的 `Carousel` 和其部件。
 
@@ -19,7 +19,7 @@ use nsh_base::{
     alert_dialog, button, carousel, carousel_content, carousel_item, carousel_next,
     carousel_pagination, carousel_pagination_item, carousel_previous, checkbox, color_area, color_field, color_picker,
     color_slider, color_swatch, dialog, diff_view, dock_area, editor, hover_card, link,
-    calendar, combobox, command, date_picker, emoji_picker, h_resizable, nav_page, nav_stack, radio, radio_group, resizable_panel, select, switch, tab, tabs, text_view, theme, time_field, toast, toast_stack, toggle, toggle_group, toolbar, toolbar_group, toolbar_separator, tree, v_resizable,
+    calendar, combobox, command, date_picker, emoji_picker, focus_group, h_resizable, nav_page, nav_stack, radio, radio_group, resizable_panel, select, switch, tab, tabs, text_view, theme, time_field, toast, toast_stack, toggle, toggle_group, toolbar, toolbar_group, toolbar_separator, tree, v_resizable,
 };
 ```
 
@@ -76,6 +76,7 @@ import {
   Combobox,
   Command,
   EmojiPicker,
+  FocusGroup,
   Calendar,
   TimeField,
   DatePicker,
@@ -243,6 +244,7 @@ import type {
 | [`Carousel`](../elements/carousel.md) 及其部件 | `carousel()`、`carousel_content()`、`carousel_item()`、`carousel_previous()`、`carousel_next()`、`carousel_pagination()`、`carousel_pagination_item()` | 在平台原生滚动上一次显示一个位置的幻灯片，带上一张 / 下一张、分页、按键和无缝循环；`index` 由应用持有。 |
 | [`Toggle`](../elements/toggle.md)、[`ToggleGroup`](../elements/toggle.md) | `toggle()`、`toggle_group()` | 一个处于开或关的按钮，以及由它们组成的工具栏；哪些按下由应用持有。 |
 | [`Toolbar`](../elements/toolbar.md)、[`ToolbarGroup`](../elements/toolbar.md)、[`ToolbarSeparator`](../elements/toolbar.md) | `toolbar()`、`toolbar_group()`、`toolbar_separator()` | 由按钮、开关按钮和链接组成的一栏：在键盘焦点里只占一站，方向键沿着它移动；相关项目的分组，以及它们之间的分隔线。 |
+| [`FocusGroup`](../elements/focus-group.md) | `focus_group()` | 方向键当作一个整体对待的区域（电视上的一排内容、侧边菜单）：从它的 destinations 进入，设置 `trap` 后不会离开。 |
 | [`Select`](../elements/select.md) | `select()` | 从一组条目中选出一个值：桌面上是触发元素处的弹出层，手机上是 sheet；`value` 由应用持有，触发元素由应用绘制。 |
 | [`Combobox`](../elements/combobox.md) | `combobox()` | 从一组条目中选出一个或多个（`multiple`）值，在输入框中输入以筛选它们；`value` 由应用持有，字段的样式由应用设置。 |
 | [`Calendar`](../elements/calendar.md) | `calendar()` | 从按周排列的月份中选出一个日期或一段日期，带月份和年份视图与键盘操作；`value` 由应用持有，条目由应用绘制。 |
@@ -279,7 +281,53 @@ import type {
 | [`Toast`、`ToastStack`、`ToastManager`](../elements/toast.md) | `toast()`、`toast_stack()`、`ToastManager` | 无样式的 toast：语义根、层叠的栈、它们的生命周期。 |
 | 页面和对话框的 `statusBar` | `.status_bar(..)` | 页面或对话框显示期间的状态栏。见[状态栏](#status-bar)。 |
 
-在 Rust 中，`theme()` 以设计 token 的形式读取应用的主题（`theme().primary`、`theme().radius`），与 TSX 的[主题类](../docs/tailwind.md#主题-token)使用同样的 token。
+在 Rust 中，`theme()` 以设计 token 的形式读取应用的主题（`theme().primary`、`theme().radius`），与 TSX 的[主题类](../docs/tailwind.md#主题-token)使用同样的 token。它就是 `theme_of::<Theme>()`：`nsh_base::Theme` 是一个
+[主题类型](../docs/rust.md#主题类型)，即由 shadcn 的 31 种颜色、`radius`、`font-sans` 和 `font-mono` 组成的 `AppTheme`，每个 token
+承担与其同名的角色。它保持未注册，因此是默认的 token 来源，应用注册的类型会取代它。shadcn 应用用 `update_theme::<Theme>(tokens)`
+修改部分 token，补丁是按名称组织的 `Tokens`，`reset_theme::<Theme>()` 再把它们恢复。
+
+<a id="theme-roles"></a>
+
+### 主题角色
+
+NSH 自己绘制的部分通过**角色**读取主题：`theme()` 的各个字段、移动端标签栏的强调色、默认字体，以及各平台自己的控件（Linux
+的菜单、iOS 和 Android 的提示框）。角色是所绘制内容的名字，它读取同名的 token，除非主题把它映射到另一个 token：
+
+| 角色 | 由谁绘制 |
+|---|---|
+| `background`、`foreground` | `theme().background` / `foreground`；嵌入在宿主主题中的 GPUI 应用的界面 |
+| `card`、`card-foreground`、`secondary`、`secondary-foreground`、`muted`、`input`、`chart-1` … `chart-5`、`sidebar` … `sidebar-ring` | 同名的 `theme()` 字段 |
+| `popover`、`popover-foreground` | `theme().popover` / `popover_foreground`；Linux 的菜单；Android 的提示框 |
+| `primary`、`primary-foreground` | `theme().primary` / `primary_foreground`；标签栏中选中的标签；iOS 和 Android 提示框的按钮 |
+| `muted-foreground` | `theme().muted_foreground`；Linux 菜单中的快捷键；Android 提示框的消息 |
+| `accent`、`accent-foreground` | `theme().accent` / `accent_foreground`；Linux 菜单中高亮的项 |
+| `destructive` | `theme().destructive`；Android 提示框中的破坏性操作 |
+| `border`、`ring` | `theme().border` / `ring`；Linux 菜单的边框和分隔线（`border`） |
+| `selection` | `theme().selection()`（没有时为 22 % 的 `primary`） |
+| `success` | `TextView` 的提示（tip）块（没有时用它自己的绿色） |
+| `warning` | `Editor` 的警告诊断；`TextView` 的警告块（没有时用各自的琥珀色） |
+| `info` | `Editor` 的信息诊断；`TextView` 的备注（note）块（没有时用各自的蓝色） |
+| `highlight` | `Editor` 的搜索匹配项；`TextView` 的标记文本（没有时用各自的黄色） |
+| `diff-added`、`diff-deleted` | `DiffView` 的新增行和删除行：底色、指示标记、改动的单词以及文件列表中的计数（没有时用它自己的绿色和红色） |
+| `syntax-comment`、`syntax-keyword`、`syntax-string`、`syntax-number`、`syntax-function`、`syntax-property`、`syntax-type` | `Editor`、`DiffView` 和 `TextView` 代码块中高亮的代码：注释、关键字、字符串、数字与常量、函数与类的名称、属性与参数、类型与内置项（没有时用高亮器自己的配色） |
+| `radius` | `theme().radius` |
+| `font-sans` | 所有文本的默认字体；`theme().font_sans` |
+| `font-mono` | `theme().font_mono` |
+
+`selection`、`success`、`warning`、`info`、`highlight`、`diff-added`、`diff-deleted` 和各 `syntax-*` 角色在默认主题中没有 token：在主题拥有同名 token（`cssVars` 中的
+`"warning": "#b45309"`）或把该角色映射到自己的某个 token（主题类型的 `role = …`，或主题文件的 `"roles": { "warning": "caution" }`）之前，各部件绘制自己的颜色。各部件以半透明绘制 `highlight` 和 diff 的底色；token 是不透明的颜色。
+
+角色不是 token，也不是类名：主题有名为 `primary` 的 token 时，`bg-primary` 才是一个类名。TSX 用 `nsh` 的 [`role()`](./nsh.md#role) 读取角色。在 Rust 中，角色是一个常量，类型为
+`nsh_core::element::Role`：上表中的角色在 `nsh_base::role` 里（`role::POPOVER.name()` 为 `"popover"`，`role::RADIUS`
+读取数字，`role::FONT_SANS` 读取字体族）。`Tokens::with_role` 把一个角色映射到 token
+（`tokens.with_role(role::POPOVER, "surface-overlay")`），之后 `tokens.role(role::POPOVER)` 读取它。有自己组件的 crate
+用同样的方式声明这些组件所用的角色（`pub const BANNER: Role = Role::new("banner");`）：角色就是它的名字，不论由谁声明。
+没有映射时，每个角色读取同名的 token，所以 shadcn 主题的显示与以往相同。只有应用有自己的主题时（`Tokens::is_themed`，由核心设置），
+各平台的控件才采用主题的颜色；使用默认主题的应用保留系统的提示框颜色。
+
+已注册的[主题类型](../docs/rust.md#主题类型)把角色映射到自己的 token 上（`TokenSpec::role`），`theme()` 的字段随之读取这些 token：
+设计系统把 `role::POPOVER` 映射到 `surface-overlay` 时，`theme().popover` 就是 `surface-overlay`，`nsh/base` 的组件、标签栏和各平台的控件
+都以该设计系统绘制。
 
 <a id="controls"></a>
 
@@ -334,6 +382,10 @@ import type {
 ### Toolbar、ToolbarGroup 与 ToolbarSeparator
 
 一栏控件：文本编辑器的格式栏、媒体播放器的播放控制、竖排的工具面板。工具栏是屏幕阅读器播报的那一个（名字来自 `accessibilityLabel`），在键盘焦点里只占一站，覆盖其中的 `Button`、`Toggle` 和 `Link`：Tab 从上次离开的项目进入，沿 `axis` 的方向键在其中移动，Home 和 End 跳到两端，都不会按下任何东西。`ToolbarGroup` 是一段有名字的相关项目（撤销与重做、对齐方式），放在工具栏里的 `ToggleGroup` 是它的一个分组，其中的开关按钮就是工具栏的项目。`ToolbarSeparator` 是应用在各段之间画的一条线。工具栏或分组上的 `disabled` 禁用其中每个项目。工具栏不持有值、没有外观：每个控件保留自己的状态，栏、分组和分隔线的样式由应用决定。见 [Toolbar](../elements/toolbar.md)。
+
+### FocusGroup
+
+方向键当作一个整体对待的区域，在方向键于视图之间移动焦点的地方生效（GPUI 后端、电视）：一排卡片、一行标签、一个侧边菜单。焦点从它的 `destinations` 中第一个能到达的视图进入（上次获得焦点的卡片），否则从设置了 `preferredFocus` 的停靠点进入，否则从离焦点最近的停靠点进入；设置 `trap` 后方向键永远不会让焦点离开它。它没有外观：是一个由应用设置样式、包住子元素的视图。见 [FocusGroup](../elements/focus-group.md)。
 
 ### Select
 
@@ -610,6 +662,6 @@ nav_page()
 
 - [导航指南](../docs/navigation.md)。
 - [表单与键盘](../docs/forms-and-keyboard.md)。
-- [Avatar](../elements/avatar.md)、[Button](../elements/button.md)、[Carousel](../elements/carousel.md)、[Link](../elements/link.md)、[Checkbox](../elements/checkbox.md)、[Radio](../elements/radio.md)、[Switch](../elements/switch.md)、[Tabs](../elements/tabs.md)、[Toggle](../elements/toggle.md)、[Toolbar](../elements/toolbar.md)、[Select](../elements/select.md)、[Combobox](../elements/combobox.md)、[Calendar](../elements/calendar.md)、[TimeField](../elements/time-field.md)、[DatePicker](../elements/date-picker.md)、[Collapsible](../elements/collapsible.md)、[HoverCard](../elements/hover-card.md)、[Accordion](../elements/accordion.md)、[Progress](../elements/progress.md)、[Terminal](../elements/terminal.md)、[Slider](../elements/slider.md)、[ColorPicker](../elements/color-picker.md)、[Scrollbar](../elements/scrollbar.md)、[NumberInput](../elements/number-input.md)、[OtpInput](../elements/otp-input.md)、[Pagination](../elements/pagination.md)、[Tree](../elements/tree.md)、[Plot](../elements/plot.md)、[NavStack](../elements/nav-stack.md)、[Dialog](../elements/dialog.md)、[AlertDialog](../elements/alert-dialog.md)、[TextView](../elements/text-view.md)、[Editor](../elements/editor.md)、[DiffView](../elements/diff-view.md)、[Table](../elements/table.md)、[DataTable](../elements/data-table.md)、[Text](../elements/text.md) 与 [Input](../elements/input.md)。
+- [Avatar](../elements/avatar.md)、[Button](../elements/button.md)、[Carousel](../elements/carousel.md)、[Link](../elements/link.md)、[Checkbox](../elements/checkbox.md)、[Radio](../elements/radio.md)、[Switch](../elements/switch.md)、[Tabs](../elements/tabs.md)、[Toggle](../elements/toggle.md)、[Toolbar](../elements/toolbar.md)、[FocusGroup](../elements/focus-group.md)、[Select](../elements/select.md)、[Combobox](../elements/combobox.md)、[Calendar](../elements/calendar.md)、[TimeField](../elements/time-field.md)、[DatePicker](../elements/date-picker.md)、[Collapsible](../elements/collapsible.md)、[HoverCard](../elements/hover-card.md)、[Accordion](../elements/accordion.md)、[Progress](../elements/progress.md)、[Terminal](../elements/terminal.md)、[Slider](../elements/slider.md)、[ColorPicker](../elements/color-picker.md)、[Scrollbar](../elements/scrollbar.md)、[NumberInput](../elements/number-input.md)、[OtpInput](../elements/otp-input.md)、[Pagination](../elements/pagination.md)、[Tree](../elements/tree.md)、[Plot](../elements/plot.md)、[NavStack](../elements/nav-stack.md)、[Dialog](../elements/dialog.md)、[AlertDialog](../elements/alert-dialog.md)、[TextView](../elements/text-view.md)、[Editor](../elements/editor.md)、[DiffView](../elements/diff-view.md)、[Table](../elements/table.md)、[DataTable](../elements/data-table.md)、[Text](../elements/text.md) 与 [Input](../elements/input.md)。
 - [设备与环境](../docs/device-and-environment.md)。
 - [`BackHandler`](./nsh-mobile.md#backhandler)：`BackHandler` 及其他 Android 专用 API。

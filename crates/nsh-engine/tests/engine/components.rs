@@ -32,14 +32,23 @@ pub(crate) fn start_with(
     capabilities: Option<&str>,
     config: Option<&str>,
 ) -> (Engine, Receiver<MountBatch>) {
+    start_with_sets(app, environment, capabilities, config, Vec::new())
+}
+
+/// [`start_with`] with the UI sets `sets` beside `nsh/base` and `test/ui`
+/// (a design system's, with its theme types).
+pub(crate) fn start_with_sets(
+    app: &str,
+    environment: Environment,
+    capabilities: Option<&str>,
+    config: Option<&str>,
+    sets: Vec<nsh_core::element::Registry>,
+) -> (Engine, Receiver<MountBatch>) {
     let (tx, rx) = crossbeam_channel::unbounded();
+    let mut engine_config = app_config(app, environment, capabilities, config, &sets);
+    engine_config.ui_sets.extend(sets);
     (
-        Engine::start(
-            app_config(app, environment, capabilities, config),
-            || ApproxTextEngine,
-            ChannelSink(tx),
-        )
-        .unwrap(),
+        Engine::start(engine_config, || ApproxTextEngine, ChannelSink(tx)).unwrap(),
         rx,
     )
 }
@@ -50,6 +59,7 @@ fn app_config(
     environment: Environment,
     capabilities: Option<&str>,
     config: Option<&str>,
+    sets: &[nsh_core::element::Registry],
 ) -> EngineConfig {
     static APPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
@@ -67,6 +77,7 @@ fn app_config(
     // `nsh/base` with its submodules (`nsh/base/plot`).
     let described: Vec<nsh_core::element::description::SetDescription> = ui_sets
         .iter()
+        .chain(sets)
         .flat_map(nsh_core::element::Registry::sets)
         .map(Into::into)
         .collect();
@@ -5593,7 +5604,7 @@ fn a_base_sliders_drag_ends_on_the_apps_answer_to_its_last_move() {
     };
     let (tx, rx) = crossbeam_channel::unbounded();
     let mut engine = nsh_engine::LocalEngine::start(
-        app_config(BASE_SLIDER_TENS, environment, None, None),
+        app_config(BASE_SLIDER_TENS, environment, None, None, &[]),
         ApproxTextEngine,
         ChannelSink(tx),
     )

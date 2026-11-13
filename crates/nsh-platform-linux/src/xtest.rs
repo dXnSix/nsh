@@ -359,10 +359,12 @@ pub(crate) fn char_keysym(c: char) -> KeySym {
     }
 }
 
-/// The keysym of a key of `nsh_core::keymap` (a `Char` is unshifted).
-pub(crate) fn key_keysym(key: nsh_core::keymap::Key) -> KeySym {
+/// The keysym of a key of `nsh_core::keymap` (a `Char` is unshifted);
+/// none for the media and TV remote keys, which the app's shortcuts on GTK
+/// do not take (`keymap::trigger`).
+pub(crate) fn key_keysym(key: nsh_core::keymap::Key) -> Option<KeySym> {
     use nsh_core::keymap::Key as K;
-    match key {
+    Some(match key {
         K::Char(c) => char_keysym(c),
         K::Enter => 0xff0d,
         K::Escape => 0xff1b,
@@ -379,7 +381,8 @@ pub(crate) fn key_keysym(key: nsh_core::keymap::Key) -> KeySym {
         K::PageUp => 0xff55,
         K::PageDown => 0xff56,
         K::F(n) => 0xffbe + KeySym::from(n.saturating_sub(1)),
-    }
+        _ => return None,
+    })
 }
 
 /// A modifier's keysym by its name in `holdKeys` / `pressKeys`.

@@ -10,7 +10,7 @@ demo: ui-navigation
 `nsh/base` is the base component layer of an app's UI: unstyled components that own behavior, state, focus and
 accessibility, on every platform. It sits between the primitives (`nsh`, `nsh/mobile` and `nsh/desktop`) and the
 app's own component library, as `gpui-base` sits between `gpui` and a styled library in GPUI Kit (see
-[Modules](./index.md#three-layers)). It provides controls (`Button`, `Link`, `Checkbox`, `ColorPicker` with its `ColorArea`, `ColorSlider`, `ColorField`, `ColorSwatch` and `ColorEyeDropper`, `NumberInput`, `Radio` in a `RadioGroup`, `Slider`, `Switch`, `Tab` in `Tabs`, `Toggle` in a `ToggleGroup`, `Select`, `Combobox`, `Calendar`, `TimeField`, `DatePicker`), command palettes (`Command`), emoji pickers (`EmojiPicker`), bars of controls (`Toolbar` with its `ToolbarGroup` and `ToolbarSeparator`), scroll bars of the app's own look (`Scrollbar`), regions that expand and collapse (`Collapsible`, and `Accordion` with its `AccordionItem`, `AccordionHeader`, `AccordionTrigger` and `AccordionPanel`), a progress bar (`Progress`), one-time codes (`OtpInput`), the pages of a set (`Pagination`), items that hold items (`Tree`), the parts charts are built from (`Plot` with `Line`, `Area`, `Bar`, `Rule`, `Dot`, `Cell`, `Grid`, `Pie` and `Arc`, in `nsh/base/plot`), workspaces the user arranges (`ResizablePanel`s in a
+[Modules](./index.md#three-layers)). It provides controls (`Button`, `Link`, `Checkbox`, `ColorPicker` with its `ColorArea`, `ColorSlider`, `ColorField`, `ColorSwatch` and `ColorEyeDropper`, `NumberInput`, `Radio` in a `RadioGroup`, `Slider`, `Switch`, `Tab` in `Tabs`, `Toggle` in a `ToggleGroup`, `Select`, `Combobox`, `Calendar`, `TimeField`, `DatePicker`), command palettes (`Command`), emoji pickers (`EmojiPicker`), bars of controls (`Toolbar` with its `ToolbarGroup` and `ToolbarSeparator`), regions the arrow keys enter at chosen stops and may not leave (`FocusGroup`), scroll bars of the app's own look (`Scrollbar`), regions that expand and collapse (`Collapsible`, and `Accordion` with its `AccordionItem`, `AccordionHeader`, `AccordionTrigger` and `AccordionPanel`), a progress bar (`Progress`), one-time codes (`OtpInput`), the pages of a set (`Pagination`), items that hold items (`Tree`), the parts charts are built from (`Plot` with `Line`, `Area`, `Bar`, `Rule`, `Dot`, `Cell`, `Grid`, `Pie` and `Arc`, in `nsh/base/plot`), workspaces the user arranges (`ResizablePanel`s in a
 `ResizablePanelGroup`, and `DockArea`'s splits, tab groups and docks), carousels (`Carousel` and its parts), documents of Markdown or HTML (`TextView`), a code editor (`Editor`) the changes between texts (`DiffView`) and tables of rows and columns (`Table` and its parts, `DataTable`), text inputs
 (`Input`), popups shown on top of everything (`Popover`, `Menu` and `ContextMenu` with their `MenuItem`,
 `MenuSeparator` and `Submenu`, `Tooltip`, `Sheet`), toasts (`Toast` in a `ToastStack`, their lifecycle in a `ToastManager`), navigation (a `NavStack` of `NavPage`s driven
@@ -31,7 +31,7 @@ use nsh_base::{
     MarkdownExtension, MarkdownOptions, accordion, accordion_header, accordion_item, accordion_panel, accordion_trigger,
     alert_dialog, button, carousel, carousel_content, carousel_item, carousel_next,
     carousel_pagination, carousel_pagination_item, carousel_previous, checkbox, color_area, color_field, color_picker,
-    color_slider, color_swatch, dialog, diff_view, dock_area, editor, hover_card, link,
+    color_slider, color_swatch, dialog, diff_view, dock_area, editor, focus_group, hover_card, link,
     calendar, combobox, command, date_picker, emoji_picker, h_resizable, nav_page, nav_stack, radio, radio_group, resizable_panel, select, switch, tab, tabs, text_view, theme, time_field, toast, toast_stack, toggle, toggle_group, toolbar, toolbar_group, toolbar_separator, tree, v_resizable,
 };
 ```
@@ -89,6 +89,7 @@ import {
   Combobox,
   Command,
   EmojiPicker,
+  FocusGroup,
   Calendar,
   TimeField,
   DatePicker,
@@ -256,6 +257,7 @@ walkthroughs, see the [Navigation guide](../docs/navigation.md) and [Forms and k
 | [`Tab`](../elements/tabs.md), [`Tabs`](../elements/tabs.md) | `tab()`, `tabs()` | One tab of a tab list, and the list; the app owns which one is selected and shows its content. |
 | [`Toggle`](../elements/toggle.md), [`ToggleGroup`](../elements/toggle.md) | `toggle()`, `toggle_group()` | A button that is on or off, and a toolbar of them; the app owns which ones are pressed. |
 | [`Toolbar`](../elements/toolbar.md), [`ToolbarGroup`](../elements/toolbar.md), [`ToolbarSeparator`](../elements/toolbar.md) | `toolbar()`, `toolbar_group()`, `toolbar_separator()` | A bar of buttons, toggles and links: one stop of the keyboard focus whose arrow keys move along it; groups of related items and lines between them. |
+| [`FocusGroup`](../elements/focus-group.md) | `focus_group()` | A region the arrow keys treat as one (a TV's shelf, a side menu): entered at its destinations, and with `trap` never left. |
 | [`Carousel`](../elements/carousel.md) and its parts | `carousel()`, `carousel_content()`, `carousel_item()`, `carousel_previous()`, `carousel_next()`, `carousel_pagination()`, `carousel_pagination_item()` | Slides shown one place at a time on the platform's own scrolling, with previous / next, a pagination, the keys and a seamless loop; the app owns `index`. |
 | [`Select`](../elements/select.md) | `select()` | One value from a list of items: a popup at the trigger on desktops, a sheet on phones; the app owns `value` and draws the trigger. |
 | [`Combobox`](../elements/combobox.md) | `combobox()` | One value or several (`multiple`) from a list of items filtered by typing into its input; the app owns `value` and styles the field. |
@@ -294,7 +296,58 @@ walkthroughs, see the [Navigation guide](../docs/navigation.md) and [Forms and k
 | `statusBar` on pages and dialogs | `.status_bar(..)` | The status bar while a page or dialog is up. See [Status bar](#status-bar). |
 
 In Rust, `theme()` reads the app's theme as design tokens (`theme().primary`, `theme().radius`), the same tokens
-TSX's [theme classes](../docs/tailwind.md#theme-tokens) use.
+TSX's [theme classes](../docs/tailwind.md#theme-tokens) use. It is `theme_of::<Theme>()`: `nsh_base::Theme` is a
+[theme type](../docs/rust.md#theme-types), an `AppTheme` of shadcn's 31 colors, `radius`, `font-sans` and
+`font-mono`, each playing the role of its name. It stays unregistered, so it is the default token source and an app's
+registered types take its place. A shadcn app changes some of its tokens with `update_theme::<Theme>(tokens)`, a patch
+of `Tokens` by name, and `reset_theme::<Theme>()` puts them back.
+
+### Theme roles
+
+What NSH draws itself reads the theme through **roles**: `theme()`'s fields, the mobile tab bar's tint, the default
+font, and the platforms' own controls (Linux's menus, iOS's and Android's alerts). A role is the name of what is drawn,
+and reads the token of that name unless the theme maps it onto another token:
+
+| Role | Drawn by |
+|---|---|
+| `background`, `foreground` | `theme().background` / `foreground`; a GPUI app's surface embedded in its host's theme |
+| `card`, `card-foreground`, `secondary`, `secondary-foreground`, `muted`, `input`, `chart-1` … `chart-5`, `sidebar` … `sidebar-ring` | the `theme()` fields of those names |
+| `popover`, `popover-foreground` | `theme().popover` / `popover_foreground`; Linux's menus; Android's alerts |
+| `primary`, `primary-foreground` | `theme().primary` / `primary_foreground`; the tab bar's selected tab; iOS's and Android's alert buttons |
+| `muted-foreground` | `theme().muted_foreground`; Linux's menu shortcuts; an Android alert's message |
+| `accent`, `accent-foreground` | `theme().accent` / `accent_foreground`; Linux's highlighted menu item |
+| `destructive` | `theme().destructive`; an Android alert's destructive action |
+| `border`, `ring` | `theme().border` / `ring`; Linux's menu borders and separators (`border`) |
+| `selection` | `theme().selection()` (`primary` at 22 % without it) |
+| `success` | a `TextView`'s tip alert (its own green without it) |
+| `warning` | an `Editor`'s warning diagnostics; a `TextView`'s warning alert (their own ambers without it) |
+| `info` | an `Editor`'s info diagnostics; a `TextView`'s note alert (their own blues without it) |
+| `highlight` | an `Editor`'s search matches; a `TextView`'s marked text (their own yellows without it) |
+| `diff-added`, `diff-deleted` | a `DiffView`'s added and deleted lines: their tints, indicators, changed words and the file list's counts (its own green and red without them) |
+| `syntax-comment`, `syntax-keyword`, `syntax-string`, `syntax-number`, `syntax-function`, `syntax-property`, `syntax-type` | highlighted code in an `Editor`, a `DiffView` and a `TextView`'s code blocks: comments, keywords, strings, numbers and constants, names of functions and classes, properties and parameters, types and built-ins (the highlighter's own palette without them) |
+| `radius` | `theme().radius` |
+| `font-sans` | the default font of every text; `theme().font_sans` |
+| `font-mono` | `theme().font_mono` |
+
+`selection`, `success`, `warning`, `info`, `highlight`, `diff-added`, `diff-deleted` and the `syntax-*` roles have no
+token in the default theme: each part draws its own color until the theme has a token of that name (`"warning": "#b45309"` in its `cssVars`) or maps the role onto one
+of its own (a theme type's `role = …`, or a theme file's `"roles": { "warning": "caution" }`). The parts draw `highlight` and a diff's tints translucent; the token is the solid color.
+
+A role is no token and no class: `bg-primary` is a class when the theme has a token `primary`. TSX reads a role with
+[`role()`](./nsh.md#role) from `nsh`. In Rust, a role is a
+constant, an `nsh_core::element::Role`: the ones above are in `nsh_base::role` (`role::POPOVER.name()` is
+`"popover"`, `role::RADIUS` reads a number, `role::FONT_SANS` a font family). `Tokens::with_role` maps a role onto a
+token (`tokens.with_role(role::POPOVER, "surface-overlay")`), which `tokens.role(role::POPOVER)` then reads. A crate
+with components of its own declares the roles they draw with the same way
+(`pub const BANNER: Role = Role::new("banner");`): a role is its name, whoever declares it.
+Without a mapping every role reads the token of its own name, so a shadcn theme draws as it always did. The platforms'
+controls take the theme's colors only when the app has a theme of its own (`Tokens::is_themed`, which the core sets);
+an app on the default theme keeps the system's alert colors.
+
+A registered [theme type](../docs/rust.md#theme-types) maps roles onto its own tokens (`TokenSpec::role`), and
+`theme()`'s fields then read those tokens: with a design system that maps `role::POPOVER` onto `surface-overlay`,
+`theme().popover` is `surface-overlay`, and `nsh/base`'s components, the tab bar and the platforms' controls draw in
+the design system.
 
 ## Controls
 
@@ -375,6 +428,13 @@ and redo, an alignment), and a `ToggleGroup` inside a toolbar is one of its grou
 `ToolbarSeparator` is a line the app draws between runs. `disabled` on the toolbar or a group disables every item in
 it. The toolbar holds no value and has no look: each control keeps its own state, and the app styles the bar, its
 groups and separators. See [Toolbar](../elements/toolbar.md).
+
+### FocusGroup
+
+A region the arrow keys treat as one, where they move the focus between views (the GPUI backend, TVs): a shelf of
+tiles, a row of tabs, a side menu. The focus enters it at the first of its `destinations` in reach (the tile focused
+last), else at its `preferredFocus` stop, else at the stop nearest the focus, and with `trap` the arrows never take it
+out. It has no look: a view the app styles around its children. See [FocusGroup](../elements/focus-group.md).
 
 ### Select
 
@@ -732,7 +792,7 @@ launch screen.
 
 - [Navigation guide](../docs/navigation.md).
 - [Forms and keyboard](../docs/forms-and-keyboard.md).
-- [Avatar](../elements/avatar.md), [Button](../elements/button.md), [Carousel](../elements/carousel.md), [Link](../elements/link.md), [Checkbox](../elements/checkbox.md), [Radio](../elements/radio.md), [Switch](../elements/switch.md), [Tabs](../elements/tabs.md), [Toggle](../elements/toggle.md), [Toolbar](../elements/toolbar.md), [Select](../elements/select.md), [Combobox](../elements/combobox.md), [Command](../elements/command.md), [Calendar](../elements/calendar.md), [TimeField](../elements/time-field.md), [DatePicker](../elements/date-picker.md), [Collapsible](../elements/collapsible.md), [HoverCard](../elements/hover-card.md), [Accordion](../elements/accordion.md), [Progress](../elements/progress.md), [Terminal](../elements/terminal.md), [Slider](../elements/slider.md), [ColorPicker](../elements/color-picker.md), [Scrollbar](../elements/scrollbar.md), [NumberInput](../elements/number-input.md), [OtpInput](../elements/otp-input.md), [Pagination](../elements/pagination.md), [Tree](../elements/tree.md), [Plot](../elements/plot.md), [NavStack](../elements/nav-stack.md), [Dialog](../elements/dialog.md), [AlertDialog](../elements/alert-dialog.md), [TextView](../elements/text-view.md), [Editor](../elements/editor.md), [DiffView](../elements/diff-view.md), [Table](../elements/table.md), [DataTable](../elements/data-table.md), [Text](../elements/text.md) and [Input](../elements/input.md).
+- [Avatar](../elements/avatar.md), [Button](../elements/button.md), [Carousel](../elements/carousel.md), [Link](../elements/link.md), [Checkbox](../elements/checkbox.md), [Radio](../elements/radio.md), [Switch](../elements/switch.md), [Tabs](../elements/tabs.md), [Toggle](../elements/toggle.md), [Toolbar](../elements/toolbar.md), [FocusGroup](../elements/focus-group.md), [Select](../elements/select.md), [Combobox](../elements/combobox.md), [Command](../elements/command.md), [Calendar](../elements/calendar.md), [TimeField](../elements/time-field.md), [DatePicker](../elements/date-picker.md), [Collapsible](../elements/collapsible.md), [HoverCard](../elements/hover-card.md), [Accordion](../elements/accordion.md), [Progress](../elements/progress.md), [Terminal](../elements/terminal.md), [Slider](../elements/slider.md), [ColorPicker](../elements/color-picker.md), [Scrollbar](../elements/scrollbar.md), [NumberInput](../elements/number-input.md), [OtpInput](../elements/otp-input.md), [Pagination](../elements/pagination.md), [Tree](../elements/tree.md), [Plot](../elements/plot.md), [NavStack](../elements/nav-stack.md), [Dialog](../elements/dialog.md), [AlertDialog](../elements/alert-dialog.md), [TextView](../elements/text-view.md), [Editor](../elements/editor.md), [DiffView](../elements/diff-view.md), [Table](../elements/table.md), [DataTable](../elements/data-table.md), [Text](../elements/text.md) and [Input](../elements/input.md).
   [AlertDialog](../elements/alert-dialog.md), [TextView](../elements/text-view.md), [Editor](../elements/editor.md), [DiffView](../elements/diff-view.md), [Table](../elements/table.md), [DataTable](../elements/data-table.md),
   [Text](../elements/text.md) and
   [Input](../elements/input.md).

@@ -3862,6 +3862,79 @@ mod tests {
         }
     }
 
+    /// Tab stops at pressables on Windows as on the other desktops:
+    /// `cargo test -p nsh-testing --lib headless::tests::windows_tab`.
+    mod windows_tab {
+        use super::*;
+
+        #[test]
+        fn tab_stops_at_pressables_and_return_presses_them() {
+            let mut config = EngineConfig::new(Root::of::<FocusStops>());
+            config.environment.os = nsh_core::platform::Os::Windows;
+            config.environment.idiom = nsh_core::platform::Idiom::Desktop;
+            let mut app = Headless::start(config).unwrap();
+            app.first_render().unwrap();
+            let id = |app: &Headless, s: &str| match app.screen().view(&Selector::parse(s).unwrap())
+            {
+                crate::screen::Pick::One(id) => id,
+                _ => panic!("{s} is shown"),
+            };
+            let (card, chart, button) = (
+                id(&app, "id:card"),
+                id(&app, "id:chart"),
+                id(&app, "id:button"),
+            );
+            for stop in [card, chart, button] {
+                app.press_key("tab").unwrap();
+                assert_eq!(app.screen().key_focus(), Some(stop));
+            }
+            app.press_key("enter").unwrap();
+            app.wait_for("Opens 0 presses 1 steps 0 focused false")
+                .unwrap();
+            app.press_key("shift+tab").unwrap();
+            assert_eq!(app.screen().key_focus(), Some(chart));
+        }
+    }
+
+    /// Return and Space are the focused control's on Windows as on the
+    /// other desktops (`nsh-platform-windows`' `focus::press_key`):
+    /// `cargo test -p nsh-testing --lib headless::tests::windows_return_space`.
+    mod windows_return_space {
+        use super::*;
+
+        #[test]
+        fn return_and_space_press_the_focused_control_before_the_shortcuts() {
+            let mut config = EngineConfig::new(Root::of::<ReturnAllows>());
+            config.environment.os = Os::Windows;
+            config.environment.idiom = nsh_core::platform::Idiom::Desktop;
+            let mut app = Headless::start(config).unwrap();
+            app.first_render().unwrap();
+            // The focus on no control: Return is the dialog's.
+            app.press_key("enter").unwrap();
+            app.wait_for("Allows 1 denies 0 cancels 0 sends 0").unwrap();
+            // Tab to the field, then Deny: Return and Space press it, not
+            // the binding.
+            app.press_key("tab").unwrap();
+            app.press_key("tab").unwrap();
+            app.press_key("enter").unwrap();
+            app.wait_for("Allows 1 denies 1 cancels 0 sends 0").unwrap();
+            app.press_key("space").unwrap();
+            app.wait_for("Allows 1 denies 2 cancels 0 sends 0").unwrap();
+            app.press_key("tab").unwrap();
+            app.press_key("shift+enter").unwrap();
+            app.wait_for("Allows 1 denies 2 cancels 1 sends 0").unwrap();
+            // With Control held the binding of that keystroke fires.
+            app.press_key("mod+enter").unwrap();
+            app.wait_for("Allows 1 denies 2 cancels 1 sends 1").unwrap();
+            // In the text field Return is the field's.
+            app.type_text("id:note", "Hi").unwrap();
+            app.press_key("enter").unwrap();
+            app.wait_for("Allows 1 denies 2 cancels 1 sends 1").unwrap();
+            app.press_key("mod+enter").unwrap();
+            app.wait_for("Allows 1 denies 2 cancels 1 sends 2").unwrap();
+        }
+    }
+
     /// A list of 200 rows of its own, each a button showing its row.
     #[component]
     fn LongList() -> impl IntoElement {

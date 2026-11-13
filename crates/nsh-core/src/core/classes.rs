@@ -3,6 +3,10 @@
 //! on changes: the appearance, the window size, the layout direction, the
 //! node's interaction states, its group's states or its sibling position.
 
+use std::sync::Arc;
+
+use rustc_hash::FxHashMap;
+
 use super::{Core, Key, Kind, NO_KEY, dirty, disabling_changes};
 use crate::{
     geometry::{Points, Size},
@@ -12,7 +16,8 @@ use crate::{
     props::PointerEvents,
     style::{Color, Style, StylePatch, ViewStyle},
     tailwind::{
-        ClassEnvironment, ClassList, ClassProps, Context, Rule, Theme, deps, position, rank, state,
+        ClassEnvironment, ClassList, ClassProps, ClassTokens, Context, Rule, Theme, TokenChange,
+        deps, position, rank, state,
     },
     text::TextEngine,
 };
@@ -158,6 +163,19 @@ const STATE_PARTS: [Part; 11] = [
     Part::FocusVisible,
 ];
 
+/// The design tokens of a view that has its own (`Prop::ScopeTokens`, a
+/// [`crate::element::ThemeScope`]'s), for the classes in it.
+#[derive(Debug)]
+pub(super) struct TokenScope {
+    /// The tokens, as classes read them.
+    class_tokens: Arc<ClassTokens>,
+    /// The tokens whose values are not the surface's: a class list that
+    /// reads none of them is the surface's, shared.
+    differs: TokenChange,
+    /// The class lists that read one, parsed with the scope's values.
+    cache: FxHashMap<Box<str>, std::rc::Rc<ClassList>>,
+}
+
 impl<M: TextEngine> Core<M> {
     /// Sets the environment class variants depend on (`dark:`, `ios:`,
     /// `motion-reduce:`): nodes whose classes depend on it are styled again.
@@ -214,6 +232,55 @@ impl<M: TextEngine> Core<M> {
         self.class_env = env;
         self.restyle_where(changed);
         self.parts_restyled();
+    }
+
+    /// Whether `key` is shown dark: as the nearest view with an appearance
+    /// of its own says (a [`crate::element::ThemeScope`]), else as the
+    /// surface is.
+    pub(super) fn dark_at(&self, key: Key) -> bool {
+        self.nodes[key as usize]
+            .scoped_dark
+            .unwrap_or(self.class_env.dark)
+    }
+
+    /// The environment `key`'s class variants resolve in: the surface's,
+    /// with the appearance of the scope it is in.
+    fn class_env_at(&self, key: Key) -> ClassEnvironment {
+        let mut env = self.class_env;
+        if let Some(dark) = self.nodes[key as usize].scoped_dark {
+            env.dark = dark;
+        }
+        env
+    }
+
+    /// Resolves again the appearance `key` is shown in (it set or dropped
+    /// one of its own, or moved under another view) and that of the views
+    /// taking it from `key`: those whose classes depend on the appearance
+    /// are styled again.
+    pub(super) fn update_appearance(&mut self, key: Key) {
+        let node = &self.nodes[key as usize];
+        let scoped = node.appearance.or(match node.parent {
+            NO_KEY => None,
+            parent => self.nodes[parent as usize].scoped_dark,
+        });
+        if node.scoped_dark == scoped {
+            return;
+        }
+        let was = self.dark_at(key);
+        let node = &mut self.nodes[key as usize];
+        node.scoped_dark = scoped;
+        if self.dark_at(key) != was
+            && self.nodes[key as usize]
+                .classes
+                .as_ref()
+                .is_some_and(|c| c.deps() & deps::DARK != 0)
+        {
+            self.restyle(key);
+        }
+        let children = self.nodes[key as usize].children.clone();
+        for child in children {
+            self.update_appearance(child);
+        }
     }
 
     /// The platform reports interaction states of view `id` (`active:`,
@@ -721,7 +788,8 @@ impl<M: TextEngine> Core<M> {
     /// Sets the classes of `key`'s `part` (a page's header, a list's
     /// content).
     pub(super) fn set_part_class(&mut self, key: Key, part: Part, names: &str) {
-        let classes = (!names.trim().is_empty()).then(|| self.tailwind.classes(names));
+        // With the design tokens of the scope `key` is in, as its own.
+        let classes = (!names.trim().is_empty()).then(|| self.classes_at(Some(key), names).0);
         let named = classes.is_some();
         self.set_part_class_list(key, part, classes);
         if named && let Some(parts) = self.nodes[key as usize].parts.as_deref_mut() {
@@ -770,6 +838,9 @@ impl<M: TextEngine> Core<M> {
         parts.class_names.retain(|(p, _)| *p != part);
         let at = parts.classes.iter().position(|(p, _)| *p == part);
         match (at, classes) {
+            // The same rules (a scope that leaves the tokens they read as
+            // they are gives the surface's list back): nothing to send.
+            (Some(i), Some(c)) if std::rc::Rc::ptr_eq(&parts.classes[i].1, &c) => return,
             (Some(i), Some(c)) => parts.classes[i].1 = c,
             (Some(i), None) => {
                 parts.classes.remove(i);
@@ -845,7 +916,7 @@ impl<M: TextEngine> Core<M> {
             Some(classes) => {
                 let group = |_: &str| 0;
                 let cx = Context {
-                    env: self.class_env,
+                    env: self.class_env_at(key),
                     window: self.viewport,
                     rtl: node.rtl,
                     states: 0,
@@ -862,7 +933,7 @@ impl<M: TextEngine> Core<M> {
 
     /// The parts whose classes resolve again when the environment changes
     /// (a header's `dark:` colors).
-    fn parts_restyled(&mut self) {
+    pub(super) fn parts_restyled(&mut self) {
         let keys: Vec<(Key, Part)> = self
             .nodes
             .iter()
@@ -881,6 +952,8 @@ impl<M: TextEngine> Core<M> {
         names: Option<Box<str>>,
         list: Option<Vec<Box<str>>>,
     ) {
+        // The names it has, resolved again (the tokens or a scope changed).
+        let again = names.is_none() && list.is_none();
         let node = &mut self.nodes[key as usize];
         let current = node.class_names.get_or_insert_default();
         if let Some(n) = names {
@@ -898,7 +971,7 @@ impl<M: TextEngine> Core<M> {
         let classes = if combined.trim().is_empty() {
             None
         } else {
-            let (classes, fresh) = self.tailwind.get(&combined);
+            let (classes, fresh) = self.classes_at(Some(key), &combined);
             if fresh && !classes.unknown().is_empty() {
                 log::warn!(
                     "unknown classes: {}",
@@ -912,6 +985,18 @@ impl<M: TextEngine> Core<M> {
             }
             Some(classes)
         };
+        // Resolved again to the rules it has: nothing to style. So a scope
+        // that leaves the tokens a view reads as they are, set or changed
+        // around views that are there, costs that view a lookup.
+        if again {
+            let node = &self.nodes[key as usize];
+            let has = node.parts.as_deref().map_or(&node.classes, |p| &p.base);
+            if let (Some(has), Some(now)) = (has, &classes)
+                && std::rc::Rc::ptr_eq(has, now)
+            {
+                return;
+            }
+        }
         self.set_class_list(key, classes);
     }
 
@@ -995,57 +1080,232 @@ impl<M: TextEngine> Core<M> {
         self.part_classes_again(|_| true);
     }
 
-    /// The design tokens changed: classes naming them
+    /// The design tokens changed: the classes reading the ones that did
     /// (`bg-primary`) are resolved again, on nodes, on their parts (a
-    /// page's header, a list's content) and on Rust components.
+    /// page's header, a list's content) and on Rust components; all of
+    /// them when the tokens' names changed.
     pub(super) fn class_tokens_changed(&mut self) {
         let tokens = self.components.tokens.clone();
         let Some(changed) = self.tailwind.set_tokens(&tokens) else {
             return;
         };
+        let all = changed == TokenChange::All;
+        // What the scopes change is told from the surface's values of now;
+        // with other names, a class may be another one in a scope too.
+        for scope in self.token_scopes.values_mut() {
+            scope.differs = self.tailwind.difference(&scope.class_tokens);
+            if all {
+                scope.cache.clear();
+            }
+        }
         let reads = |c: &Option<std::rc::Rc<ClassList>>| {
-            c.as_ref().is_some_and(|c| c.deps() & changed != 0)
+            c.as_ref()
+                .is_some_and(|c| c.deps() & deps::THEME != 0 && c.reads(&changed))
         };
         let keys: Vec<Key> = self
             .nodes
             .iter()
-            .filter(|(_, n)| n.class_names.is_some() && (changed == u16::MAX || reads(&n.classes)))
+            .filter(|(_, n)| n.class_names.is_some() && (all || reads(&n.classes)))
             .map(|(k, _)| k as Key)
             .collect();
         for key in keys {
             self.set_classes(key, None, None);
         }
-        self.part_classes_again(|c| changed == u16::MAX || c.deps() & changed != 0);
+        self.part_classes_again(|c| all || (c.deps() & deps::THEME != 0 && c.reads(&changed)));
         let hosts: Vec<NodeId> = self
             .components
             .instances
             .iter()
             .filter(|(_, inst)| {
                 (!inst.class.is_empty() || !inst.class_list.is_empty())
-                    && (changed == u16::MAX || reads(&inst.user))
+                    && (all || reads(&inst.user))
             })
             .map(|(host, _)| *host)
             .collect();
         for host in hosts {
             self.update_user_class(host);
         }
-        // The app's classes on the views' elements (`app_class`).
+        // The app's classes on the views' elements (`app_class`): those
+        // whose element's rules, the app's among them, read a changed one.
         let nodes: Vec<_> = self
             .components
             .app_classes
             .iter()
+            .filter(|(id, _)| {
+                all || self
+                    .key(**id)
+                    .is_ok_and(|key| reads(&self.nodes[key as usize].classes))
+            })
             .map(|(&id, entry)| (id, entry.clone()))
             .collect();
-        for (id, (own, class, outer)) in nodes {
-            let app = self.app_class_list(&class);
-            let user = self.merge_user(Some(app), outer);
-            let list = match (own, user) {
-                (Some(a), Some(b)) => Some(std::rc::Rc::new(a.merged(&b))),
-                (a, b) => a.or(b),
-            };
-            if let Ok(key) = self.key(id) {
-                self.set_class_list(key, list);
+        for (id, entry) in nodes {
+            self.set_app_classes(id, entry);
+        }
+    }
+
+    /// Resolves the app's classes on a view's element again
+    /// ([`Self::apply_el_styles`]'s entry of it).
+    fn set_app_classes(
+        &mut self,
+        id: NodeId,
+        (own, class, outer): (
+            Option<std::rc::Rc<ClassList>>,
+            crate::element::SharedString,
+            Option<std::rc::Rc<ClassList>>,
+        ),
+    ) {
+        let app = self.app_class_list(id, &class);
+        let user = self.merge_user(Some(app), outer);
+        let list = match (own, user) {
+            (Some(a), Some(b)) => Some(std::rc::Rc::new(a.merged(&b))),
+            (a, b) => a.or(b),
+        };
+        if let Ok(key) = self.key(id) {
+            self.set_class_list(key, list);
+        }
+    }
+
+    /// The rules of `classes` for view `key`: the surface's, or, in a scope
+    /// with design tokens of its own that changes a token they read, the
+    /// scope's (parsed with its values, once). Whether they were parsed for
+    /// the surface just now, as [`crate::tailwind::Tailwind::get`] says.
+    pub(super) fn classes_at(
+        &mut self,
+        key: Option<Key>,
+        classes: &str,
+    ) -> (std::rc::Rc<ClassList>, bool) {
+        let (list, fresh) = self.tailwind.get(classes);
+        let Some(scope) = key
+            .map(|key| self.nodes[key as usize].token_scope)
+            .filter(|scope| *scope != NO_KEY)
+            .and_then(|scope| self.token_scopes.get_mut(&scope))
+        else {
+            return (list, fresh);
+        };
+        if list.deps() & deps::THEME == 0 || !list.reads(&scope.differs) {
+            return (list, fresh);
+        }
+        if let Some(scoped) = scope.cache.get(classes) {
+            return (scoped.clone(), fresh);
+        }
+        let scoped = std::rc::Rc::new(self.tailwind.parse_with(&scope.class_tokens, classes));
+        // Bounded as the surface's cache is.
+        if scope.cache.len() >= 4096 {
+            scope.cache.clear();
+        }
+        scope.cache.insert(classes.into(), scoped.clone());
+        (scoped, fresh)
+    }
+
+    /// `Prop::ScopeTokens`: view `key` and the views in it are drawn with
+    /// design tokens `tokens` (`None`: with those around it again).
+    pub(super) fn set_scope_tokens(
+        &mut self,
+        key: Key,
+        tokens: Option<Arc<crate::element::Tokens>>,
+    ) {
+        let Some(tokens) = tokens else {
+            if self.token_scopes.remove(&key).is_some() {
+                self.update_token_scope(key);
             }
+            return;
+        };
+        let class_tokens = Arc::new(ClassTokens::new(&tokens));
+        let differs = self.tailwind.difference(&class_tokens);
+        let Some(scope) = self.token_scopes.get_mut(&key) else {
+            self.token_scopes.insert(
+                key,
+                TokenScope {
+                    class_tokens,
+                    differs,
+                    cache: FxHashMap::default(),
+                },
+            );
+            return self.update_token_scope(key);
+        };
+        if *scope.class_tokens == *class_tokens {
+            return;
+        }
+        // Only what read a token whose value changed in the scope.
+        let changed = if scope.class_tokens.same_names(&class_tokens) {
+            TokenChange::Values(scope.class_tokens.changed(&class_tokens))
+        } else {
+            TokenChange::All
+        };
+        scope.cache.retain(|_, list| !list.reads(&changed));
+        scope.class_tokens = class_tokens;
+        scope.differs = differs;
+        let keys: Vec<Key> = self
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.token_scope == key)
+            .map(|(k, _)| k as Key)
+            .collect();
+        for key in keys {
+            self.resolve_classes_again(key, &changed);
+        }
+    }
+
+    /// Resolves again which scope's design tokens `key` is drawn with (it
+    /// got or lost its own, or moved) and the views taking it from `key`:
+    /// those whose classes read a theme token are resolved in it.
+    pub(super) fn update_token_scope(&mut self, key: Key) {
+        let node = &self.nodes[key as usize];
+        let scope = if self.token_scopes.contains_key(&key) {
+            key
+        } else {
+            match node.parent {
+                NO_KEY => NO_KEY,
+                parent => self.nodes[parent as usize].token_scope,
+            }
+        };
+        if node.token_scope == scope {
+            return;
+        }
+        self.nodes[key as usize].token_scope = scope;
+        self.resolve_classes_again(key, &TokenChange::All);
+        let children = self.nodes[key as usize].children.clone();
+        for child in children {
+            self.update_token_scope(child);
+        }
+    }
+
+    /// Resolves the classes of `key` again where they read a token of
+    /// `changed`: its own (`class`), its parts' (a page's header, a list's
+    /// content), the app's on the component it hosts and on its element.
+    fn resolve_classes_again(&mut self, key: Key, changed: &TokenChange) {
+        let reads = |c: &Option<std::rc::Rc<ClassList>>| {
+            c.as_ref()
+                .is_some_and(|c| c.deps() & deps::THEME != 0 && c.reads(changed))
+        };
+        let node = &self.nodes[key as usize];
+        let id = node.id;
+        let own = reads(&node.classes);
+        let parts: Vec<(Part, Box<str>)> = node.parts.as_deref().map_or_else(Vec::new, |p| {
+            p.class_names
+                .iter()
+                .filter(|(part, _)| {
+                    p.classes.iter().any(|(of, list)| {
+                        of == part && list.deps() & deps::THEME != 0 && list.reads(changed)
+                    })
+                })
+                .cloned()
+                .collect()
+        });
+        for (part, names) in parts {
+            self.set_part_class(key, part, &names);
+        }
+        let node = &self.nodes[key as usize];
+        if node.class_names.is_some() && own {
+            self.set_classes(key, None, None);
+        }
+        if self.components.instances.get(&id).is_some_and(|inst| {
+            (!inst.class.is_empty() || !inst.class_list.is_empty()) && reads(&inst.user)
+        }) {
+            self.update_user_class(id);
+        }
+        if own && let Some(entry) = self.components.app_classes.get(&id).cloned() {
+            self.set_app_classes(id, entry);
         }
     }
 
@@ -1099,6 +1359,9 @@ impl<M: TextEngine> Core<M> {
             .nodes
             .iter()
             .filter(|(_, n)| n.classes.as_ref().is_some_and(|c| c.deps() & changed != 0))
+            // A view in a scope with an appearance of its own is shown as
+            // before when only the surface's changed.
+            .filter(|(_, n)| changed != deps::DARK || n.scoped_dark.is_none())
             .map(|(k, _)| k as Key)
             .collect();
         for key in keys {
@@ -1470,7 +1733,7 @@ impl<M: TextEngine> Core<M> {
             let positional = pos != 0 && node.parent != NO_KEY;
             let window = self.viewport;
             let cx = Context {
-                env: self.class_env,
+                env: self.class_env_at(key),
                 window,
                 // The direction it lays out in once styled (a node created
                 // detached takes the root's), so its sided classes land

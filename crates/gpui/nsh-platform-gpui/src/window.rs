@@ -510,6 +510,7 @@ struct Background {
 impl gpui::Global for Background {}
 
 /// Runs the app in the background from now on (before its first window).
+#[cfg(feature = "platform")]
 pub(crate) fn run_in_background(cx: &mut App) {
     cx.set_global(Background {
         key: Cell::new(None),
@@ -676,6 +677,7 @@ impl gpui::Global for Placement {}
 
 /// The standalone app's windows open centered on `display` from now on, at
 /// their size when `keep_size` whether or not they fit on it.
+#[cfg(feature = "platform")]
 pub(crate) fn place_windows(display: Option<crate::WindowDisplay>, keep_size: bool, cx: &mut App) {
     let display = display.and_then(|d| resolve_display(d, cx));
     cx.set_global(Placement { display, keep_size });
@@ -717,6 +719,7 @@ fn centered_keeping_size(area: Bounds<Pixels>, size: gpui::Size<Pixels>) -> Boun
 }
 
 /// The display `which` names, if there is one.
+#[cfg(feature = "platform")]
 fn resolve_display(which: crate::WindowDisplay, cx: &App) -> Option<gpui::DisplayId> {
     let displays = native::displays(cx);
     let index = match which {
@@ -741,6 +744,7 @@ fn resolve_display(which: crate::WindowDisplay, cx: &App) -> Option<gpui::Displa
 /// display's first) besides the primary one that does not mirror it: a
 /// mirror shows the same part of the desktop, so its frame is the
 /// primary's.
+#[cfg(any(feature = "platform", test))]
 fn secondary<T: PartialEq>(frames: &[T]) -> Option<usize> {
     let primary = frames.first()?;
     frames.iter().position(|f| f != primary)

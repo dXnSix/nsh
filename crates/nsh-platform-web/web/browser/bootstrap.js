@@ -3365,7 +3365,8 @@
 		"android",
 		"macos",
 		"desktop",
-		"web"
+		"web",
+		"tv"
 	]);
 	function createDom(invoke, values, reactive, live, wake) {
 		const handlers = /* @__PURE__ */ new WeakMap(), owners = /* @__PURE__ */ new WeakMap(), heldProps = /* @__PURE__ */ new WeakMap();
@@ -3524,7 +3525,7 @@
 		const platformProps = (node, name, value) => {
 			const previous = heldProps.get(node)?.get(name);
 			hold(node, name, value);
-			if (!(name === "desktop" ? platform?.desktop : name === platform?.os)) return;
+			if (!(name === "desktop" ? platform?.desktop : name === "tv" ? platform?.tv : name === platform?.os)) return;
 			const next = value !== null && typeof value === "object" ? value : {};
 			if (previous !== null && typeof previous === "object") {
 				for (const key of Object.keys(previous)) if (!Object.hasOwn(next, key)) prop(node, key, void 0);
@@ -3717,7 +3718,7 @@
 
 //#endregion
 //#region ../nsh-platform-web/web/browser/components.js
-	function createComponents(invoke, values, reactive, dom) {
+	function createComponents(invoke, values, reactive, dom, environment) {
 		const states = /* @__PURE__ */ new WeakMap();
 		const handler = (name) => "on" + name[0].toUpperCase() + name.slice(1);
 		const make = (spec, call) => function(props = {}) {
@@ -3797,7 +3798,8 @@
 				reactive.untracked(() => props.ref(api));
 			}
 			if (spec.props.some((prop) => prop.kind === "children") && "children" in props) {
-				const children = spec.lazy ? rt.cond(state.lazy, () => props.children) : reactive.computed(() => props.children);
+				const read = spec.scope ? () => environment.inScope(props, () => props.children) : () => props.children;
+				const children = spec.lazy ? rt.cond(state.lazy, read) : reactive.computed(read);
 				rt.insert(node, children, anchor);
 			}
 			return node;
@@ -5366,10 +5368,12 @@
 			version: "0.0",
 			idiom: "desktop",
 			desktop: true,
+			tv: false,
 			catalyst: false,
 			select(spec) {
 				if (!spec || typeof spec !== "object") return void 0;
 				const keys = this.name !== this.os ? [this.name, this.os] : [this.os];
+				if (this.tv) keys.push("tv");
 				keys.push(this.desktop ? "desktop" : "mobile");
 				if (this.os !== "web") keys.push("native");
 				keys.push("default");
@@ -5380,6 +5384,21 @@
 			}
 		};
 		let appearance = "system", systemScheme = "light";
+		const scope = reactive.context(void 0);
+		let scoped = false;
+		const shownScheme = () => {
+			const around = scoped && scope();
+			return around ? around.scheme() : fields.colorScheme();
+		};
+		const readToken = (op, name) => {
+			const around = scoped && scope(), named = around ? around.tokens() : void 0;
+			if (named === void 0) tokens();
+			return invoke(op, [
+				name,
+				shownScheme() === "dark",
+				named ?? null
+			]);
+		};
 		const setColorScheme = (scheme) => {
 			if (![
 				"light",
@@ -5392,7 +5411,7 @@
 		};
 		const device = {
 			windowSize: () => fields.window(),
-			colorScheme: () => fields.colorScheme(),
+			colorScheme: () => shownScheme(),
 			setColorScheme,
 			fontScale: () => fields.fontScale(),
 			pixelRatio: () => fields.pixelRatio(),
@@ -5419,18 +5438,56 @@
 				safeAreaInsets: () => insets(),
 				keyboardFrame: () => fields.keyboard(),
 				screenReader: () => fields.screenReader(),
-				token(name) {
-					tokens();
-					return invoke(402, [name, fields.colorScheme() === "dark"]);
-				},
+				token: (name) => readToken(402, name),
+				role: (name) => readToken(414, name),
 				setTheme(theme) {
 					invoke(406, [theme]);
+					tokens.update((value) => value + 1);
+				},
+				updateTheme(theme) {
+					invoke(409, [theme]);
+					tokens.update((value) => value + 1);
+				},
+				resetTheme(names) {
+					invoke(410, [names]);
 					tokens.update((value) => value + 1);
 				}
 			},
 			insets,
 			host: () => fields.host(),
 			titleBar: () => fields.titleBar(),
+			inScope(props, children) {
+				const outer = scoped ? scope() : void 0;
+				scoped = true;
+				const shows = reactive.computed(() => {
+					const own = props.appearance;
+					return own === "light" || own === "dark" ? own : outer ? outer.scheme() : fields.colorScheme();
+				});
+				const slot = invoke(412, []);
+				reactive.cleanup(() => invoke(413, [slot, true]));
+				const draws = reactive.computed(() => {
+					const theme = props.theme, around = outer ? outer.tokens() : void 0;
+					if (theme === null || typeof theme !== "object") {
+						invoke(413, [slot, false]);
+						return around;
+					}
+					if (around === void 0) tokens();
+					return invoke(411, [
+						slot,
+						theme,
+						around ?? null
+					]);
+				});
+				return scope.Provider({
+					value: {
+						scheme: shows,
+						tokens: draws
+					},
+					get children() {
+						return children();
+					}
+				});
+			},
 			modules: {
 				"nsh/device": device,
 				"nsh/accessibility": accessibility

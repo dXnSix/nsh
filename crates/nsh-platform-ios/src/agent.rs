@@ -246,10 +246,16 @@ impl Native for IosNative {
         use nsh_core::keymap::Keystroke;
         let stroke =
             Keystroke::parse(keys, nsh_core::platform::Os::Ios).map_err(|e| e.to_string())?;
-        let usage = stroke
-            .key
-            .hid_usage()
-            .ok_or_else(|| format!("a hardware keyboard has no key {keys:?}"))?;
+        let usage = stroke.key.hid_usage().ok_or_else(|| {
+            if stroke.key.is_media_or_remote() {
+                format!(
+                    "{keys:?} has no key on iOS: an iPhone's or iPad's hardware keyboard has no \
+                     media or TV remote keys"
+                )
+            } else {
+                format!("a hardware keyboard has no key {keys:?}")
+            }
+        })?;
         let m = stroke.modifiers;
         let modifiers: Vec<u16> = [
             (m.ctrl, synth::CONTROL),

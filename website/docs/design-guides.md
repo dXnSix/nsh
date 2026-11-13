@@ -245,6 +245,12 @@ Read colors from the theme (`theme()` in Rust, token classes in TSX) and use the
 - `chart-1` to `chart-5` for data series;
 - `border`, `input`, and `ring` for structure and interaction.
 
+These are the shadcn names of the default theme. A design system with a token structure of its own (surfaces by
+level, actions by emphasis) names its tokens in its own vocabulary and defines them as a
+[theme type](./rust.md#theme-types); it maps NSH's roles (`popover`, `primary`, `border`, `radius`) onto its tokens, so
+base components and platform controls draw in its colors. Its components read the type with `theme_of`, and classes
+name its tokens (`bg-surface-raised`). The guidance below applies by role, whatever the tokens are called.
+
 ```rust tabs
 use nsh_base::theme;
 

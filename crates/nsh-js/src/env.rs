@@ -23,6 +23,7 @@ use nsh_core::{
     platform::{Appearance, ColorScheme, Environment, Idiom, Os},
 };
 use rquickjs::qjs;
+use rustc_hash::FxHashMap;
 
 use crate::{
     modules::{Export, Item, Ts},
@@ -67,22 +68,50 @@ pub(crate) struct Env {
     signals: [Cell<JsValue>; PARTS],
     /// Read-only accessors of the signals (owned memos).
     accessors: [Cell<JsValue>; PARTS],
+    /// What names a `ThemeScope`'s appearance in the context of what it
+    /// renders ([`provide_scope`]): an object of its own, made with the
+    /// first scope.
+    scope_key: Cell<JsValue>,
+    /// What names a `ThemeScope`'s design tokens in the context of what it
+    /// renders ([`provide_scope_tokens`]), as [`Env::scope_key`] names its
+    /// appearance.
+    scope_tokens_key: Cell<JsValue>,
+    /// The tokens each live `ThemeScope` draws with, by its slot
+    /// ([`new_scope_slot`]); `None`: a free slot, or not made yet.
+    scope_tokens: RefCell<Vec<Option<Arc<Tokens>>>>,
+    /// Set on every change of the surface's tokens, for the scopes: a
+    /// scope's tokens are made over all of them, whichever `token()` reads
+    /// by name. Made with the first scope.
+    scopes_signal: Cell<JsValue>,
+    /// The slots of scopes that are gone, to use again.
+    scope_free: RefCell<Vec<usize>>,
+    /// Counts the times a scope's tokens were made: its memo's value is new
+    /// each time, so what read `token()` in it runs again.
+    scope_versions: Cell<u32>,
     /// The app's appearance (`nsh.json`, `setColorScheme`).
     appearance: Cell<Appearance>,
     /// The insets context (owned): screens and modals provide theirs.
     insets: Cell<JsValue>,
     /// The design tokens the app is drawn with ([`set_tokens`]).
     tokens: RefCell<Arc<Tokens>>,
-    /// A signal of their version (owned): `token()` reads it, so what read
-    /// a token follows a new theme.
+    /// A signal of their version (owned), which every `token()` reads:
+    /// set when most of the tokens read changed (a new theme), and for the
+    /// names past [`TOKEN_SIGNALS`].
     tokens_signal: Cell<JsValue>,
     tokens_version: Cell<u32>,
+    /// A signal per token `token()` read (owned), set when that token's
+    /// value changes and few do: what read a token follows that token,
+    /// and a change of another one runs nothing of it.
+    token_signals: RefCell<FxHashMap<Box<str>, JsValue>>,
     /// The tokens the app's theme file gives ([`set_theme_tokens`]), taken
     /// in when the entry hands the theme to the renderer ([`take_theme`]).
     theme: RefCell<ThemeTokens>,
     /// The theme file the app was built with (`nsh.json`), which
     /// `setTheme(null)` gives back (`None`: it has none).
     built_theme: RefCell<Option<String>>,
+    /// The theme file the app's tokens come from now (the built one, or
+    /// `setTheme`'s): what `resetTheme` puts tokens back to.
+    current_theme: RefCell<Option<String>>,
     /// The displays the platform reported last.
     displays: RefCell<Vec<Display>>,
     /// What `appInfo()` reports: the build's ([`set_app_info`]).
@@ -106,13 +135,21 @@ impl Default for Env {
             current: RefCell::new(None),
             signals: std::array::from_fn(|_| Cell::new(UNDEFINED)),
             accessors: std::array::from_fn(|_| Cell::new(UNDEFINED)),
+            scope_key: Cell::new(UNDEFINED),
+            scope_tokens_key: Cell::new(UNDEFINED),
+            scope_tokens: RefCell::default(),
+            scopes_signal: Cell::new(UNDEFINED),
+            scope_free: RefCell::default(),
+            scope_versions: Cell::new(0),
             appearance: Cell::new(Appearance::System),
             insets: Cell::new(UNDEFINED),
             tokens: RefCell::new(Arc::default()),
             tokens_signal: Cell::new(UNDEFINED),
             tokens_version: Cell::new(0),
+            token_signals: RefCell::default(),
             theme: RefCell::new(ThemeTokens::default()),
             built_theme: RefCell::default(),
+            current_theme: RefCell::default(),
             displays: RefCell::default(),
             app: RefCell::default(),
         }
@@ -177,7 +214,13 @@ impl Env {
                 qjs::JS_FreeValue(raw, c.replace(UNDEFINED));
             }
             qjs::JS_FreeValue(raw, self.insets.replace(UNDEFINED));
+            qjs::JS_FreeValue(raw, self.scope_key.replace(UNDEFINED));
+            qjs::JS_FreeValue(raw, self.scope_tokens_key.replace(UNDEFINED));
+            qjs::JS_FreeValue(raw, self.scopes_signal.replace(UNDEFINED));
             qjs::JS_FreeValue(raw, self.tokens_signal.replace(UNDEFINED));
+            for (_, signal) in self.token_signals.get_mut().drain() {
+                qjs::JS_FreeValue(raw, signal);
+            }
         }
     }
 }
@@ -219,17 +262,77 @@ pub(crate) fn init(cx: *mut JsContext) {
     e.tokens_signal.set(reactive::new_signal(cx, number(0.0)));
 }
 
+/// How many tokens get a signal of their own ([`Env::token_signals`]):
+/// the names `token()` reads are a theme's, a few dozen. Once an app has
+/// read more (names it makes up without end), every change of the tokens
+/// sets the signal of all of them.
+const TOKEN_SIGNALS: usize = 1024;
+
 /// Takes in the design tokens the app is drawn with: what read a token
-/// runs again.
+/// whose value changed runs again, once however many of the tokens it read
+/// changed.
+///
+/// A change of few of the tokens read (`updateTheme` of a color) sets
+/// their own signals. A change of most of them (a new theme) sets the one
+/// signal of all tokens in their place: nearly every reader runs either
+/// way, and one signal runs them in the order they were made, the tree's,
+/// where the names' signals would run them name by name.
 pub(crate) fn set_tokens(cx: *mut JsContext, tokens: Arc<Tokens>) {
     let e = env(cx);
     if **e.tokens.borrow() == *tokens {
         return;
     }
-    e.tokens.replace(tokens);
+    let old = e.tokens.replace(tokens.clone());
     let version = e.tokens_version.get().wrapping_add(1);
     e.tokens_version.set(version);
-    reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
+    // What `token()` reads of a name: its value, and a number's dark one. A
+    // name that came or went differs too.
+    let read = |tokens: &Tokens, name: &str| (tokens.get(name), tokens.number_in(name, true));
+    // Collected first: a binding running again may read a new name.
+    let (changed, names): (Vec<JsValue>, usize) = {
+        let signals = e.token_signals.borrow();
+        let changed = signals
+            .iter()
+            .filter(|(name, _)| read(&old, name) != read(&tokens, name))
+            .map(|(_, signal)| *signal)
+            .collect();
+        (changed, signals.len())
+    };
+    // The scopes' tokens are made over these, whatever changed.
+    let scopes = e.scopes_signal.get();
+    // SAFETY: a value the environment owns.
+    let scoped = !unsafe { qjs::JS_IsUndefined(scopes) };
+    // Roles mapped onto other tokens: what read a role reads another one.
+    let whole = names >= TOKEN_SIGNALS || 2 * changed.len() > names || !old.same_roles(&tokens);
+    if whole && !scoped {
+        return reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
+    }
+    reactive::batch_with(cx, || {
+        if whole {
+            reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
+        } else {
+            for signal in changed {
+                reactive::set_signal(cx, signal, number(version as f32));
+            }
+        }
+        if scoped {
+            reactive::set_signal(cx, scopes, number(version as f32));
+        }
+    });
+}
+
+/// The signal of token `name` (borrowed), made the first time the name is
+/// read; none past [`TOKEN_SIGNALS`] names.
+fn token_signal(cx: *mut JsContext, e: &Env, name: &str) -> Option<JsValue> {
+    if let Some(signal) = e.token_signals.borrow().get(name) {
+        return Some(*signal);
+    }
+    if e.token_signals.borrow().len() >= TOKEN_SIGNALS {
+        return None;
+    }
+    let signal = reactive::new_signal(cx, number(e.tokens_version.get() as f32));
+    e.token_signals.borrow_mut().insert(name.into(), signal);
+    Some(signal)
 }
 
 /// Sets how the app's theme file makes the tokens it is drawn with
@@ -245,6 +348,7 @@ pub(crate) fn set_theme_tokens(cx: *mut JsContext, theme: ThemeTokens) {
 pub(crate) fn take_theme(cx: *mut JsContext, json: &str) {
     let e = env(cx);
     e.built_theme.replace(Some(json.to_owned()));
+    e.current_theme.replace(Some(json.to_owned()));
     let tokens = e.theme.borrow().of(json);
     if let Some(tokens) = tokens {
         set_tokens(cx, Arc::new(tokens));
@@ -297,9 +401,107 @@ unsafe extern "C" fn set_theme(
     } else {
         return type_error(cx, "setTheme: expected a theme ({ cssVars }) or null");
     };
+    e.current_theme.replace(Some(json.clone()));
     let op = nsh_core::Op::SetProp {
         id: nsh_core::ROOT_ID,
         prop: nsh_core::Prop::UiTheme(json.into()),
+    };
+    if let Err(err) = crate::dom::push_op(cx, op) {
+        return err;
+    }
+    if let Some(tokens) = tokens {
+        set_tokens(cx, Arc::new(tokens));
+    }
+    reactive::finish_value(cx, UNDEFINED)
+}
+
+/// `v` as JSON (a theme, a list of names); `Err`: the exception thrown.
+fn to_json(cx: *mut JsContext, v: JsValue) -> Result<serde_json::Value, JsValue> {
+    // SAFETY: a context reference and a dup for the converter.
+    let value = unsafe {
+        let rcx = rquickjs::Ctx::from_raw(ptr::NonNull::new_unchecked(cx));
+        rquickjs::Value::from_raw(rcx, qjs::JS_DupValue(cx, v))
+    };
+    crate::protocol::to_json(&value).map_err(|_| qjs::JS_EXCEPTION)
+}
+
+/// `updateTheme(theme)`: the tokens `theme` sets change, the others stay
+/// (`setTheme` replaces them all); read whole or not at all, as
+/// `setTheme`'s. `token()` reads the new tokens at once; the core has them
+/// when this turn's ops reach it, in order, so two updates compose.
+unsafe extern "C" fn update_theme(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let e = env(cx);
+    let v = arg(argc, argv, 0);
+    // SAFETY: an inline tag check.
+    if !unsafe { qjs::JS_IsObject(v) } {
+        return type_error(cx, "updateTheme: expected a theme ({ cssVars })");
+    }
+    let json = match to_json(cx, v) {
+        Ok(json) => json.to_string(),
+        Err(exception) => return exception,
+    };
+    let current = e.tokens.borrow().clone();
+    let updated = e.theme.borrow().updated(&current, &json);
+    let tokens = match updated {
+        Some(Err(what)) => return type_error(cx, &format!("updateTheme: {what}")),
+        Some(Ok(tokens)) => Some(tokens),
+        // No UI set reads themes: the core says so.
+        None => None,
+    };
+    let op = nsh_core::Op::SetProp {
+        id: nsh_core::ROOT_ID,
+        prop: nsh_core::Prop::UiThemeUpdate(json.into()),
+    };
+    if let Err(err) = crate::dom::push_op(cx, op) {
+        return err;
+    }
+    if let Some(tokens) = tokens {
+        set_tokens(cx, Arc::new(tokens));
+    }
+    reactive::finish_value(cx, UNDEFINED)
+}
+
+/// `resetTheme(names?)`: the tokens `names` (none given: every one) go
+/// back to the app's theme's, `nsh.json`'s or `setTheme`'s.
+unsafe extern "C" fn reset_theme(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    const EXPECTED: &str = "resetTheme: expected token names (string[]) or nothing";
+    let e = env(cx);
+    let v = arg(argc, argv, 0);
+    // SAFETY: inline tag checks.
+    let names = if unsafe { qjs::JS_IsNull(v) || qjs::JS_IsUndefined(v) } {
+        None
+    } else {
+        let json = match to_json(cx, v) {
+            Ok(json) => json,
+            Err(exception) => return exception,
+        };
+        let Some(list) = json.as_array() else {
+            return type_error(cx, EXPECTED);
+        };
+        let names: Option<Vec<Box<str>>> =
+            list.iter().map(|n| n.as_str().map(Into::into)).collect();
+        match names {
+            Some(names) => Some(names),
+            None => return type_error(cx, EXPECTED),
+        }
+    };
+    let json = e.current_theme.borrow().clone();
+    let json = json.unwrap_or_else(|| NO_THEME.to_owned());
+    let current = e.tokens.borrow().clone();
+    let tokens = e.theme.borrow().reset(&current, &json, names.as_deref());
+    let op = nsh_core::Op::SetProp {
+        id: nsh_core::ROOT_ID,
+        prop: nsh_core::Prop::UiThemeReset(names),
     };
     if let Err(err) = crate::dom::push_op(cx, op) {
         return err;
@@ -327,34 +529,93 @@ pub(crate) const SET_THEME_EXPORT: crate::modules::Item = (
     ),
 );
 
+/// `updateTheme` of `nsh`.
+pub(crate) const UPDATE_THEME_EXPORT: crate::modules::Item = (
+    "updateTheme",
+    Export::Function(update_theme, 1),
+    Ts::function(
+        "Changes the tokens `theme` sets while the app runs, keeping the others\n(`setTheme` replaces them all): `token()` reads them at once, and classes\nnaming tokens, `nsh/base` and Rust components' `theme()` follow with the\nnext frame. Two updates in a row both take, the later over the earlier. An\nembedding app's theme overrides still win. The theme is read whole, as\n`setTheme`'s: a value NSH cannot read throws a `TypeError` naming it, and\nno token changes.",
+        &["(theme: Theme): void"],
+    ),
+);
+
+/// `resetTheme` of `nsh`.
+pub(crate) const RESET_THEME_EXPORT: crate::modules::Item = (
+    "resetTheme",
+    Export::Function(reset_theme, 1),
+    Ts::function(
+        "Puts the tokens `names` back to their values in the app's theme\n(`nsh.json`'s `\"theme\"`, or the one `setTheme` set), undoing `updateTheme`\nfor them; without names, every token. A name the theme does not have is\nremoved. The other tokens stay as they are. A role's name names the token\nthe app's theme types map it onto, as it does in a theme file.",
+        &["(names?: (keyof Tokens | keyof Roles)[]): void"],
+    ),
+);
+
 /// `token(name)`: the design token `name` in the appearance shown (a
 /// color as `#rrggbbaa`, a number, a font family), `undefined` when there
-/// is none. Reading it tracks the tokens and the appearance.
+/// is none. Reading it tracks that token ([`token_signal`]), the signal
+/// of all tokens and the appearance.
 unsafe extern "C" fn token(
     cx: *mut JsContext,
     _this: JsValue,
     argc: c_int,
     argv: *mut JsValue,
 ) -> JsValue {
+    read_token(cx, crate::dom::string_arg(cx, arg(argc, argv, 0)), false)
+}
+
+/// `role(name)`: what the theme role `name` draws with, as `token()` gives
+/// a token: the token a theme maps the role onto, else the token of the
+/// role's name (`Tokens::role`, by name). Reading it tracks both tokens.
+unsafe extern "C" fn role(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    read_token(cx, crate::dom::string_arg(cx, arg(argc, argv, 0)), true)
+}
+
+/// The token `name` (`role`: the one the role `name` reads) in the
+/// appearance shown, tracked.
+fn read_token(cx: *mut JsContext, name: Option<String>, role: bool) -> JsValue {
     let e = env(cx);
-    for tracked in [
-        e.tokens_signal.get(),
-        e.accessors[Part::ColorScheme as usize].get(),
-    ] {
-        // SAFETY: calls a signal and an accessor the environment owns.
-        unsafe {
-            let read = qjs::JS_Call(cx, tracked, UNDEFINED, 0, ptr::null_mut());
-            if qjs::JS_IsException(read) {
-                return read;
+    // The tokens of the scope around what reads them (tracked as one: a
+    // change of any runs it again), else the surface's, by name.
+    let scoped = match scope_tokens(cx) {
+        Ok(scoped) => scoped,
+        Err(exception) => return exception,
+    };
+    let tracked = scoped.is_none();
+    let tokens = scoped.unwrap_or_else(|| e.tokens.borrow().clone());
+    // A role reads the token a theme maps it onto, when that has a value.
+    let mapped = name
+        .as_deref()
+        .filter(|_| role)
+        .and_then(|name| tokens.mapped(name))
+        .map(str::to_owned);
+    if tracked {
+        reactive::track(cx, e.tokens_signal.get());
+        for name in [name.as_deref(), mapped.as_deref()].into_iter().flatten() {
+            if let Some(signal) = token_signal(cx, e, name) {
+                reactive::track(cx, signal);
             }
-            qjs::JS_FreeValue(cx, read);
         }
     }
-    let Some(name) = crate::dom::string_arg(cx, arg(argc, argv, 0)) else {
+    // The appearance of the scope around what reads it, else the surface's.
+    let dark = match shown_dark(cx) {
+        Ok(dark) => dark,
+        Err(exception) => return exception,
+    };
+    let Some(name) = name else {
         return UNDEFINED;
     };
-    let dark = scheme(e, &current(cx)) == "dark";
-    let value = e.tokens.borrow().get(&name);
+    let name = mapped
+        .filter(|token| tokens.get(token).is_some())
+        .unwrap_or(name);
+    // A number in the appearance shown (its dark value, when it has one).
+    let value = match tokens.get(&name) {
+        Some(Token::Number(_)) => tokens.number_in(&name, dark).map(Token::Number),
+        value => value,
+    };
     match value {
         Some(Token::Color(c)) => {
             let c = nsh_core::Color::from(if dark { c.dark } else { c.light });
@@ -362,16 +623,30 @@ unsafe extern "C" fn token(
         }
         Some(Token::Number(n)) => number(n),
         Some(Token::Font(f)) => string(cx, &f),
+        // Box shadows as CSS writes them, of the appearance shown.
+        Some(Token::Shadow(s)) => string(cx, &s.css(dark)),
+        // Gradients as CSS writes them, of the appearance shown.
+        Some(Token::Gradient(g)) => string(cx, &g.css(dark)),
         _ => UNDEFINED,
     }
 }
+
+/// `role` of `nsh`.
+pub(crate) const ROLE_EXPORT: crate::modules::Item = (
+    "role",
+    Export::Function(role, 1),
+    Ts::function(
+        "What the theme role `name` draws with in the appearance shown, reactive,\nas `token()` gives a token: the token the app's theme maps the role onto\n(a theme type's `role = …`), else the token of the role's name, else\n`undefined`. A component written against a role is themed by any design\nsystem: `role(\"popover\")` is `overlay`'s color where the app calls that\nsurface `overlay`. The names are the roles the app's UI sets list.",
+        &["<K extends keyof Roles>(name: K): Roles[K] | undefined"],
+    ),
+);
 
 /// `token` of `nsh`.
 pub(crate) const TOKEN_EXPORT: crate::modules::Item = (
     "token",
     Export::Function(token, 1),
     Ts::function(
-        "The design token `name` of the app's theme (`nsh.json` `\"theme\"`, over\nshadcn/ui's tokens) in the appearance shown, reactive: a color as\n`#rrggbbaa`, a number (a length in points), a font family. The names are\nthe theme's CSS variables without `--`, which classes name too\n(`bg-primary`, `bg-up/30`, `rounded-(--radius)`).",
+        "The design token `name` of the app's theme (`nsh.json` `\"theme\"`, over\nshadcn/ui's tokens) in the appearance shown, reactive: a color as\n`#rrggbbaa`, a number (a length in points), a font family, box shadows and\ngradients as CSS writes them. The names are\nthe theme's CSS variables without `--`, which classes name too\n(`bg-primary`, `bg-up/30`, `rounded-(--radius)`).",
         &["<K extends keyof Tokens>(name: K): Tokens[K]"],
     ),
 );
@@ -414,6 +689,269 @@ fn boolean(v: bool) -> JsValue {
 fn string(cx: *mut JsContext, s: &str) -> JsValue {
     // SAFETY: a new string.
     unsafe { qjs::JS_NewStringLen(cx, s.as_ptr().cast(), s.len() as _) }
+}
+
+/// The accessor of the appearance the nearest `ThemeScope` around the
+/// current owner shows (owned), if there is one.
+pub(crate) fn scope_scheme(cx: *mut JsContext) -> Option<JsValue> {
+    let key = env(cx).scope_key.get();
+    // No scope was made yet: nothing to look for.
+    // SAFETY: a value the environment owns.
+    if unsafe { qjs::JS_IsUndefined(key) } {
+        return None;
+    }
+    reactive::lookup(cx, key)
+}
+
+/// What the current owner makes from now on is in a `ThemeScope` showing
+/// what `scheme` (borrowed: an accessor of `"light"` or `"dark"`) says.
+pub(crate) fn provide_scope(cx: *mut JsContext, scheme: JsValue) {
+    let e = env(cx);
+    // SAFETY: a new object the environment keeps, as the scopes' key.
+    unsafe {
+        if qjs::JS_IsUndefined(e.scope_key.get()) {
+            e.scope_key.set(qjs::JS_NewObject(cx));
+        }
+    }
+    reactive::provide(cx, e.scope_key.get(), scheme);
+}
+
+/// A scope's slot is the low part of its memo's value; the rest counts its
+/// changes ([`Env::scope_versions`]).
+const SCOPE_SLOTS: f64 = 1_048_576.0;
+
+/// The accessor of the design tokens the nearest `ThemeScope` around the
+/// current owner draws with (owned), if there is one with tokens.
+pub(crate) fn scope_tokens_accessor(cx: *mut JsContext) -> Option<JsValue> {
+    let key = env(cx).scope_tokens_key.get();
+    // SAFETY: a value the environment owns.
+    if unsafe { qjs::JS_IsUndefined(key) } {
+        return None;
+    }
+    reactive::lookup(cx, key)
+}
+
+/// What the current owner makes from now on is in a `ThemeScope` drawn
+/// with the tokens `accessor` (borrowed: [`make_scope_tokens`]'s memo)
+/// names.
+pub(crate) fn provide_scope_tokens(cx: *mut JsContext, accessor: JsValue) {
+    let e = env(cx);
+    // SAFETY: a new object the environment keeps, as the scopes' key.
+    unsafe {
+        if qjs::JS_IsUndefined(e.scope_tokens_key.get()) {
+            e.scope_tokens_key.set(qjs::JS_NewObject(cx));
+        }
+    }
+    reactive::provide(cx, e.scope_tokens_key.get(), accessor);
+}
+
+/// A slot for a new `ThemeScope`'s tokens ([`free_scope_slot`] gives it
+/// back).
+pub(crate) fn new_scope_slot(cx: *mut JsContext) -> usize {
+    let e = env(cx);
+    // SAFETY: a value the environment owns; the signal borrows the number.
+    if unsafe { qjs::JS_IsUndefined(e.scopes_signal.get()) } {
+        e.scopes_signal.set(reactive::new_signal(
+            cx,
+            number(e.tokens_version.get() as f32),
+        ));
+    }
+    if let Some(slot) = e.scope_free.borrow_mut().pop() {
+        return slot;
+    }
+    let mut slots = e.scope_tokens.borrow_mut();
+    slots.push(None);
+    slots.len() - 1
+}
+
+/// The scope of `slot` is gone (its memo with it): the slot is free for a
+/// scope made later.
+pub(crate) fn free_scope_slot(cx: *mut JsContext, slot: usize) {
+    let e = env(cx);
+    if let Some(tokens) = e.scope_tokens.borrow_mut().get_mut(slot) {
+        *tokens = None;
+        e.scope_free.borrow_mut().push(slot);
+    }
+}
+
+/// The tokens the memo value `named` (borrowed: a scope's accessor's)
+/// names.
+fn scope_tokens_named(cx: *mut JsContext, named: JsValue) -> Option<Arc<Tokens>> {
+    let mut value = 0f64;
+    // SAFETY: a number conversion of a live value.
+    if unsafe { qjs::JS_ToFloat64(cx, &mut value, named) } != 0 || !value.is_finite() {
+        return None;
+    }
+    let slot = (value % SCOPE_SLOTS) as usize;
+    env(cx).scope_tokens.borrow().get(slot).cloned().flatten()
+}
+
+/// The tokens the nearest `ThemeScope` around the current owner draws
+/// with, tracked; `None`: no scope with tokens around. The exception when
+/// reading them throws.
+fn scope_tokens(cx: *mut JsContext) -> Result<Option<Arc<Tokens>>, JsValue> {
+    let Some(accessor) = scope_tokens_accessor(cx) else {
+        return Ok(None);
+    };
+    // SAFETY: calls the scope's accessor, ours until freed.
+    unsafe {
+        let named = qjs::JS_Call(cx, accessor, UNDEFINED, 0, ptr::null_mut());
+        qjs::JS_FreeValue(cx, accessor);
+        if qjs::JS_IsException(named) {
+            return Err(named);
+        }
+        let tokens = scope_tokens_named(cx, named);
+        qjs::JS_FreeValue(cx, named);
+        Ok(tokens)
+    }
+}
+
+/// Makes the tokens of the `ThemeScope` of `slot`: the values `theme`
+/// (borrowed: its `theme` prop, a theme file's object) sets over the
+/// tokens around it, those `outer` (borrowed: the accessor of the scope
+/// around it, else `undefined`) names or the surface's. Without a theme
+/// they are the ones around it. Returns the scope's memo value (a number),
+/// new when the tokens are; an exception when reading throws.
+pub(crate) fn make_scope_tokens(
+    cx: *mut JsContext,
+    slot: usize,
+    theme: JsValue,
+    outer: JsValue,
+) -> JsValue {
+    let e = env(cx);
+    // SAFETY: an inline tag check.
+    let has_outer = unsafe { qjs::JS_IsFunction(cx, outer) };
+    // SAFETY: an inline tag check.
+    if !unsafe { qjs::JS_IsObject(theme) } {
+        // No tokens of its own: the ones around it, by their own value
+        // (`undefined`: the surface's, which `token()` follows by name).
+        if let Some(held) = e.scope_tokens.borrow_mut().get_mut(slot) {
+            *held = None;
+        }
+        return if has_outer {
+            // SAFETY: calls the outer scope's accessor.
+            unsafe { qjs::JS_Call(cx, outer, UNDEFINED, 0, ptr::null_mut()) }
+        } else {
+            UNDEFINED
+        };
+    }
+    let around = if has_outer {
+        // SAFETY: calls the outer scope's accessor; its value is ours.
+        unsafe {
+            let named = qjs::JS_Call(cx, outer, UNDEFINED, 0, ptr::null_mut());
+            if qjs::JS_IsException(named) {
+                return named;
+            }
+            let tokens = scope_tokens_named(cx, named);
+            qjs::JS_FreeValue(cx, named);
+            tokens
+        }
+    } else {
+        None
+    };
+    let around = around.unwrap_or_else(|| {
+        reactive::track(cx, e.scopes_signal.get());
+        e.tokens.borrow().clone()
+    });
+    let json = match to_json(cx, theme) {
+        Ok(json) => json.to_string(),
+        Err(exception) => return exception,
+    };
+    // What it leaves out is said once, by the component in the core.
+    let tokens = match e.theme.borrow().scoped(&around, &json) {
+        Some(Ok((tokens, _))) => Arc::new(tokens),
+        _ => around,
+    };
+    let mut slots = e.scope_tokens.borrow_mut();
+    let Some(held) = slots.get_mut(slot) else {
+        return UNDEFINED;
+    };
+    // The same tokens as before: the memo keeps its value.
+    let same = held.as_ref().is_some_and(|held| **held == *tokens);
+    if !same {
+        *held = Some(tokens);
+        e.scope_versions.set(e.scope_versions.get().wrapping_add(1));
+    }
+    qjs::JS_NewFloat64(f64::from(e.scope_versions.get()) * SCOPE_SLOTS + slot as f64)
+}
+
+/// The appearance the surface shows (owned: `"light"` or `"dark"`),
+/// whatever scope is around. Reading it tracks it.
+pub(crate) fn surface_scheme(cx: *mut JsContext) -> JsValue {
+    let accessor = env(cx).accessors[Part::ColorScheme as usize].get();
+    // SAFETY: calls an accessor the environment owns.
+    unsafe { qjs::JS_Call(cx, accessor, UNDEFINED, 0, ptr::null_mut()) }
+}
+
+/// The appearance shown where it is read (owned: `"light"` or `"dark"`):
+/// the nearest `ThemeScope`'s, else the surface's. Reading it tracks it.
+fn shown_scheme(cx: *mut JsContext) -> JsValue {
+    match scope_scheme(cx) {
+        // SAFETY: calls the scope's accessor, ours until freed.
+        Some(scope) => unsafe {
+            let shown = qjs::JS_Call(cx, scope, UNDEFINED, 0, ptr::null_mut());
+            qjs::JS_FreeValue(cx, scope);
+            shown
+        },
+        None => surface_scheme(cx),
+    }
+}
+
+/// Whether the appearance shown where it is read is dark ([`shown_scheme`]),
+/// tracked; the exception when reading it throws. Without a scope around,
+/// the surface's is read off the environment, with no string made.
+fn shown_dark(cx: *mut JsContext) -> Result<bool, JsValue> {
+    let shown = match scope_scheme(cx) {
+        // SAFETY: calls the scope's accessor, ours until freed.
+        Some(scope) => unsafe {
+            let shown = qjs::JS_Call(cx, scope, UNDEFINED, 0, ptr::null_mut());
+            qjs::JS_FreeValue(cx, scope);
+            shown
+        },
+        None => {
+            let read = surface_scheme(cx);
+            // SAFETY: a live value, ours.
+            unsafe {
+                if qjs::JS_IsException(read) {
+                    return Err(read);
+                }
+                qjs::JS_FreeValue(cx, read);
+            }
+            return Ok(scheme(env(cx), &current(cx)) == "dark");
+        }
+    };
+    // SAFETY: a live value, ours.
+    if unsafe { qjs::JS_IsException(shown) } {
+        return Err(shown);
+    }
+    let dark = crate::dom::string_arg(cx, shown).as_deref() == Some("dark");
+    unsafe { qjs::JS_FreeValue(cx, shown) };
+    Ok(dark)
+}
+
+/// `colorScheme()`.
+unsafe extern "C" fn color_scheme(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+) -> JsValue {
+    shown_scheme(cx)
+}
+
+/// `colorScheme` itself (owned): a function, called as the accessors are.
+fn color_scheme_export(cx: *mut JsContext) -> JsValue {
+    // SAFETY: a new function.
+    unsafe {
+        qjs::JS_NewCFunction2(
+            cx,
+            Some(color_scheme),
+            c"colorScheme".as_ptr(),
+            0,
+            qjs::JSCFunctionEnum_JS_CFUNC_generic,
+            0,
+        )
+    }
 }
 
 /// The color scheme shown: the app's, else the system's.
@@ -894,6 +1432,7 @@ fn platform(cx: *mut JsContext) -> JsValue {
             (c"version", string(cx, &os_version(&e))),
             (c"idiom", string(cx, idiom(&e))),
             (c"desktop", boolean(e.desktop())),
+            (c"tv", boolean(e.tv())),
             (c"catalyst", boolean(e.os.is_catalyst())),
             (c"select", select),
         ],
@@ -901,8 +1440,8 @@ fn platform(cx: *mut JsContext) -> JsValue {
 }
 
 /// `platform.select(spec)`: this platform's name (when built outside NSH),
-/// else its OS, else `mobile` / `desktop`, else `native` (not on the web),
-/// else `default`.
+/// else its OS, else `tv` (on a TV), else `mobile` / `desktop`, else
+/// `native` (not on the web), else `default`.
 unsafe extern "C" fn platform_select(
     cx: *mut JsContext,
     _this: JsValue,
@@ -917,11 +1456,12 @@ unsafe extern "C" fn platform_select(
     let env = current(cx);
     let kind = if env.desktop() { "desktop" } else { "mobile" };
     let external = env.platform.filter(|&name| name != env.os.name());
-    let rest = [env.os.name(), kind, "native", "default"];
+    let rest = [env.os.name(), "tv", kind, "native", "default"];
     for key in external
         .into_iter()
         .chain(rest)
         .filter(|k| *k != "native" || env.os != Os::Web)
+        .filter(|k| *k != "tv" || env.tv())
     {
         let Ok(key) = std::ffi::CString::new(key) else {
             continue;
@@ -946,9 +1486,9 @@ pub(crate) const DEVICE_EXPORTS: &[Item] = &[
     ),
     (
         "colorScheme",
-        Export::Value(|cx| accessor(cx, Part::ColorScheme)),
+        Export::Value(color_scheme_export),
         Ts::value(
-            "The appearance shown (reactive): the system's, unless the app set its\nown (`nsh.json` `\"appearance\"`, `setColorScheme`).",
+            "The appearance shown (reactive): the system's, unless the app set its\nown (`nsh.json` `\"appearance\"`, `setColorScheme`). In a `ThemeScope`\nwith an appearance, the scope's.",
             "Accessor<\"light\" | \"dark\">",
         ),
     ),
@@ -1050,8 +1590,15 @@ pub(crate) const DEVICE_TYPES: &str = r#"export interface PlatformSelectSpec<T> 
   windows?: T;
   linux?: T;
   web?: T;
+  /** A native Tizen app (`platform.os` is `"tizen"`, a TV); a Tizen web
+   * app (`.wgt`) looks for `web`. */
+  tizen?: T;
+  /** Where `platform.tv` is true: the TV idiom, on any OS (Android TV, a
+   * TV's browser); looked up after the OS's own key, before `mobile`. */
+  tv?: T;
   /** Where `platform.desktop` is false: iOS (Mac Catalyst included),
-   * Android, and browsers in the phone or tablet idiom. */
+   * Android, browsers in the phone or tablet idiom, and TVs (Tizen
+   * included). */
   mobile?: T;
   /** Where `platform.desktop` is true: macOS, Windows, Linux, browsers in
    * the desktop idiom, and terminals. */
@@ -1113,12 +1660,15 @@ export interface LocaleSettings {
 
 export interface PlatformInfo {
   /** The platform the app runs on: the OS's name on NSH's own platforms
-   * (`"ios"`, `"android"`, `"macos"`, `"windows"`, `"linux"`, `"web"`), or
+   * (`"ios"`, `"android"`, `"macos"`, `"windows"`, `"linux"`, `"web"`,
+   * `"tizen"`), or
    * the name of a platform built outside NSH (`"miniprogram"`), whose OS is
    * `os`: handle a name you do not know. */
   readonly name: OS | (string & {});
   /** The operating system (`"ios"`, `"android"`, `"macos"`, `"windows"`,
-   * `"linux"`, `"web"`). */
+   * `"linux"`, `"web"`, `"tizen"`). A native Tizen app is `"tizen"`, in
+   * the TV idiom; a Tizen web app (`.wgt`) is `"web"`, a TV by what its
+   * page tells the player. */
   readonly os: OS;
   /** iOS and desktops: the OS version (`"17.5"`); Android: the API level
    * (`"35"`); the web: `"0.0"`. */
@@ -1126,23 +1676,29 @@ export interface PlatformInfo {
   /** The kind of device. `"terminal"` in a terminal: drawn on a grid of
    * character cells, with desktop behavior (`desktop` true; `os` is still
    * the machine's). Elsewhere `"desktop"` exactly where `desktop` is true,
-   * else the idiom the system reports: `"phone"`, `"pad"`, `"tv"`, and
-   * `"mac"`, UIKit's Mac idiom under Mac Catalyst (a mobile idiom). */
+   * else the idiom the system reports: `"phone"`, `"pad"`, `"tv"` (on any
+   * OS: `tv` is true), and `"mac"`, UIKit's Mac idiom under Mac Catalyst (a
+   * mobile idiom). */
   readonly idiom: "phone" | "pad" | "mac" | "tv" | "desktop" | "terminal";
   /** Desktop behavior applies, NSH's one definition of desktop: macOS,
    * Windows, Linux, browsers in the desktop idiom (a mouse and a wide
-   * viewport), and terminals. `desktop={{…}}` props and `select({ desktop })`
-   * follow it. Mac Catalyst runs the iOS backend and is mobile.
-   * `nsh/desktop`'s `isAvailable` is narrower: its window and menu APIs work
-   * on the desktop OSes, not in browsers. */
+   * viewport), and terminals; never a TV. `desktop={{…}}` props and
+   * `select({ desktop })` follow it. Mac Catalyst runs the iOS backend and
+   * is mobile. `nsh/desktop`'s `isAvailable` is narrower: its window and
+   * menu APIs work on the desktop OSes, not in browsers. */
   readonly desktop: boolean;
+  /** The app runs on a TV: the TV idiom (`idiom` is `"tv"`), on any OS
+   * (Android TV, Tizen, a TV's browser, whose page says so). `tv={{…}}` props and
+   * `select({ tv })` follow it. A TV is not a desktop (`desktop` is false),
+   * so the rest behaves as on mobile. */
+  readonly tv: boolean;
   /** The app runs under Mac Catalyst, in the Mac or the iPad idiom
    * (`os` is `"ios"`, `desktop` false). */
   readonly catalyst: boolean;
   /** The value for this platform: its `name` (`"miniprogram"`, ...),
-   * else its OS (`ios`, `macos`, `web`, ...), else `desktop` / `mobile`
-   * (by `platform.desktop`), else `native` (not on the web), else
-   * `default`. */
+   * else its OS (`ios`, `macos`, `web`, `tizen`, ...), else `tv` on a TV
+   * (`platform.tv`), else `desktop` / `mobile` (by `platform.desktop`),
+   * else `native` (not on the web), else `default`. */
   select<T>(spec: PlatformSelectSpec<T>): T | undefined;
 }
 "#;
@@ -1168,3 +1724,6 @@ pub(crate) const ACCESSIBILITY_EXPORTS: &[Item] = &[
         ),
     ),
 ];
+
+#[cfg(test)]
+mod tests;

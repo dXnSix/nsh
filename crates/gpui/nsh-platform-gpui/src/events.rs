@@ -410,6 +410,7 @@ pub(crate) fn install<V: gpui::EntityInputHandler>(
     });
 
     let s = surface.clone();
+    let own = focus.clone();
     window.on_key_event(move |e: &KeyDownEvent, phase, window, cx| {
         let _in = crate::window::enter(&s, root);
         if phase != DispatchPhase::Bubble {
@@ -436,7 +437,10 @@ pub(crate) fn install<V: gpui::EntityInputHandler>(
         let handled = if crate::native::focused(&s, window) {
             crate::input::component_key(&s, event, raw.as_ref())
         } else {
-            crate::input::window_key(&s, event, raw)
+            let handled = crate::input::window_key(&s, event, raw);
+            // An arrow that reached a component gives it the window's focus.
+            crate::native::apply_focus(&s, &own, window, cx);
+            handled
         };
         // Escape nothing took closes a window that says so.
         let handled = handled

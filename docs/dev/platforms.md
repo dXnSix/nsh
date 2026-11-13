@@ -104,7 +104,15 @@ system, so the environment holds both: the platform's name and the OS beneath it
 runs on: the Mini Program platform reports iOS or Android from `wx.getDeviceInfo().platform`, and in WeChat DevTools
 the simulated device's `system`. The OS's props (`ios={{…}}`, `android={{…}}`) then apply as they do on that OS, and
 the backend skips the mount items it does not show. `Idiom` says whether desktop behavior applies (`Idiom::Desktop`)
-or mobile (`Phone`, `Pad`).
+or mobile (`Phone`, `Pad`), and a TV (`Tv`, on any OS).
+
+A Tizen TV is an OS of its own where the app runs natively: `Os::Tizen` (`platform.os` `"tizen"`), in the TV idiom
+(`Idiom::default_on(Os::Tizen)`), never desktop. Tizen's Rust targets are custom target specs
+(`armv7-tizen-linux-gnueabi`, ...) with `target_os = "linux"` and `target_vendor = "tizen"`, so whatever picks the
+`Os` at compile time (`Os::default`, the GPUI and terminal backends' `OS`) checks `cfg!(target_vendor = "tizen")`
+before falling back to Linux; the workspaces declare the vendor to `unexpected_cfgs`. A Tizen web app (`.wgt`) runs
+the [web player](web.md) instead: `Os::Web`, with the page passing `idiom: "tv"`. Paths, processes and the rest
+that follow the machine (`std::env::consts::OS`, `"linux"` there) are Linux's.
 
 ## WebAssembly hosts
 

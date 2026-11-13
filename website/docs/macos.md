@@ -271,10 +271,11 @@ cache directory and 256 MiB of images by default).
 text size in place of the system's (`None` follows the system's again): `locale()`, `Intl`, `fontScale()` and text
 follow at once ([Device and environment](./device-and-environment.md#in-an-embedding-app)).
 
-`AppView::set_theme_overrides(Some(json))` puts your app's brand over the app's [theme](./tailwind.md#theme-tokens): a theme file
-in the format of `nsh.json`'s `"theme"`, whose tokens win over the app's of the same names in light and dark mode
-while the app's others stay; classes such as `bg-primary` restyle at once, and apps loaded later start with it
-(`None` gives the app its own theme back; a file that does not parse is an error and changes nothing).
+`AppView::set_theme_overrides(Some(json))` puts your app's brand over the app's [theme](./tailwind.md#theme-tokens): a
+theme file in the format of `nsh.json`'s `"theme"`, whose tokens win over the app's of the same names in light and dark
+mode while the app's others stay; classes such as `bg-primary` restyle at once, and apps loaded later start with it
+(`None` gives the app its own theme back; a file that does not parse is an error and changes nothing). The app reads the
+file with its own theme's reader, so a `var(--name)` the file does not set is the default theme's value of that token.
 
 Native components are registered with `AppView::register_component`; see
 [Native components](./native-components.md#registering-on-macos-rust). `set_ui_sets(sets)` sets the UI sets every
@@ -316,11 +317,12 @@ press action and their row role, and labels and text children remain available t
 | Return | In an `Input`, what `submitBehavior` says: submit (`onSubmit`), submit and leave the field, or a new line (multiline inputs) |
 | Return, keypad Enter, Space | Activate a focused view with `onPress` once on key-down; auto-repeat is consumed |
 | Shift+Return, Option+Return, Ctrl+Return | A new line in a multiline input whose return submits |
-| Tab, Shift+Tab (Ctrl too) | The next / previous field or pressable view in screen order, within the newest dialog; Option+Tab types a tab in a multiline input |
+| Tab, Shift+Tab (Ctrl too) | The next / previous field or pressable view in tree order, within the newest dialog; Option+Tab types a tab in a multiline input |
 | Escape | Leaves the focused field; else clears a text selection, then closes the newest dialog or goes back |
 | Option+Left, Cmd+[, mouse back button | Go back (not while a field has the focus: there Option+Left moves the caret) |
 | Option / Cmd + arrows, with Shift; Option+Delete, Cmd+Delete; Ctrl+A / E / K | Move, select and delete by word and line in a field, as in every Mac app |
 | Cmd+Z, Shift+Cmd+Z, Cmd+X / C / V / A | Undo, redo, cut, copy, paste, select all (a `masked` field refuses cut and copy); Cmd+A / Cmd+C select and copy selectable text |
+| Arrows (outside a field's own) | Move the focus to the nearest pressable, field or `focusable` view in their direction, within the newest dialog, and scroll it into view; Up / Down leave a single-line field; with none that way they scroll as below |
 | Arrows; Page Up / Down, Space, Shift+Space, Option+Up / Down; Home / End, Cmd+Up / Down | Scroll the scroll view around the focused view or under the mouse by a line, a page, to the start / end (not while a field has the focus) |
 | Cmd+W, Cmd+M, Ctrl+Cmd+F, Cmd+H, Option+Cmd+H, Cmd+Q | Close, minimize, full screen, hide, hide others, quit (`nsh package` and `nsh run` apps' menus) |
 | Cmd+R | Reloads the latest build (`nsh run`) |

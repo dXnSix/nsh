@@ -335,8 +335,13 @@ pub(crate) const TYPES: &str = r#"export interface KeyBindingOptions {
  * Shift (`k`, `1`, `/`, `[`; `"shift+/"` for `?`), `plus` (`=`), `minus`
  * (`-`), `space`, `enter`, `escape`, `tab`, `backspace`, `delete`, `insert`,
  * `up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, `f1` to
- * `f24`; they match on any keyboard layout, and menu shortcuts
- * (`nsh/desktop`) take the same. The platform consumes a key that fires a
+ * `f24`, and the media and TV remote keys `mediaplaypause`, `mediaplay`,
+ * `mediapause`, `mediastop`, `mediarewind`, `mediafastforward`, `medianext`,
+ * `mediaprevious`, `red`, `green`, `yellow`, `blue`, `channelup`,
+ * `channeldown`, `info` (where the platform reports them: Windows' media
+ * keys, Android, browsers and TVs, GPUI on Tizen; they fire in text inputs
+ * too); they match on any keyboard layout, and menu shortcuts
+ * (`nsh/desktop`) take the same, the media and TV remote keys aside. The platform consumes a key that fires a
  * binding, unless the binding passes it through (`passThrough`); when several bindings have its keystroke, the newest that may
  * fire runs. */
 export interface Keymap {

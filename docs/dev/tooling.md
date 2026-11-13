@@ -11,9 +11,12 @@
   `nsh/jsx-runtime.d.ts` (where `jsxImportSource` finds `JSX`: no intrinsic elements, so every tag is checked as the
   component it names and generic ones are inferred: `native-pipeline.md`), `nsh/globals.d.ts` (console, timers,
   frames, the web APIs and the control flow components `If` / `Each`), and from the bundler `nsh/assets.d.ts` (what
-  image and font imports give) and `nsh/tokens.d.ts` (`nsh_bundler::tokens_declaration`: `interface Tokens` of `nsh`,
-  every design token of the app's theme, `nsh.json` `"theme"` over the default, by name with its type, which types
-  `token()`; a theme that does not parse gives the default's names, and the build reports it). Each file declares its own names; the `import type` lines between them are worked out
+  image and font imports give) and `nsh/tokens.d.ts` (`nsh_bundler::tokens_declaration_of`: `interface Tokens` of
+  `nsh`, every design token of the app's theme, `nsh.json` `"theme"` over the default, by name with its type, which
+  types `token()`; under the app's theme types their names, typed by kind with their docs (`components.md` "Theme
+  types"); a theme that does not parse gives the default's names, and the build reports it) and `nsh/roles.d.ts`
+  (`nsh_bundler::roles_declaration`: `interface Roles` of `nsh`, the roles the UI sets list and the core's own,
+  `description::roles`, by name with what each reads and its doc, which types `role()`). Each file declares its own names; the `import type` lines between them are worked out
   from the names each uses. Next to them nsh writes `.nsh/tsconfig.json` (`nsh_bundler::TSCONFIG_BASE`): the
   compiler options mapping `nsh` and `nsh/*` there (`jsxImportSource: "nsh"`, no DOM library, `ESNext.Disposable`)
   and the globals, assets and tokens files; the `tsconfig.json` `nsh init` writes (`nsh_bundler::TSCONFIG`) only extends it
@@ -123,7 +126,10 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
 
 - The CLI watches sources with notify and pushes every rebuild over WebSocket (`/ws`, default port 8790, or `--port`) to all
   connected hosts; new clients subscribe before receiving the current state, so no event is missed. Protocol: `crates/nsh-dev/src/protocol.rs`
-  (JSON text frames + binary frames).
+  (JSON text frames + binary frames). A host connects to the server's URL (`DevClient::start`), or speaks the same
+  protocol over connections of its own (`DevClient::start_with` and a `DevTransport`): a device that reaches the
+  machine through a tool's port mapping, as a TV through `sdb reverse` or `sdb forward`, where the TV listens and the
+  CLI connects and relays to the server.
 - Without `--port`, `nsh run` and `nsh dev` take the port their app (its entry) had last, else the first free one from
   8790; `nsh dev --server-only` takes 8790, which embedding apps keep in their code. `nsh run` and `nsh dev` bind to
   loopback, with `--target ios`, `android` or `web` and `nsh dev --server-only` to every address, for other machines
@@ -181,7 +187,18 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
   (`crates/nsh-macos-host`) in place too: it makes itself a regular app without a bundle. `--target gpui` runs the
   GPUI host (`crates/gpui/nsh-gpui-host`) in place on any of the three: it shows a TSX app as GPUI apps that embed it
   show it (GPUI is the backend for embedding; a Rust app of Rust only runs on the OS's own backend). GPUI hosts report
-  `HostPlatform::Gpui`, so the dev server shows them `nsh run --target gpui`. The hosts are stopped with the run
+  `HostPlatform::Gpui`, so the dev server shows them `nsh run --target gpui`. `--idiom tv|desktop` (`run::DevIdiom`,
+  over `nsh.json` `"dev": { "idiom": "tv" }`; `DevIdiom::resolve`) is the idiom the GPUI host (its `--idiom`,
+  `AppOptions::idiom`) and the web dev page (`IDIOM`, the player's `idiom`) run the app in: a TV's on the desktop. The
+  idiom is the hosts' at start, not part of the protocol (a change of `nsh.json` takes another session, as
+  `web.history`). The flag needs `--target gpui` or `web` (or `nsh dev --server-only`, whose page takes it) and fails
+  before anything starts elsewhere; `nsh.json`'s is left out with a warning for the other hosts, which run in their
+  device's own idiom. `nsh test --target gpui|web --idiom` (`DevIdiom::for_test`, the same choice; headless runs
+  refuse the flag and leave `nsh.json`'s out with a warning, `open`'s `platform` saying theirs) starts each test's
+  GPUI host with `--idiom` (`test_host::start`) and gives the test page `IDIOM` (`test_web::start`), over the test's
+  `TestEnvironment::idiom`. The `cli` test binary's `dev_idiom` module checks the arguments and the page each host
+  gets, for `nsh run`, `nsh dev` and `nsh test`; `tests/apps/tv-idiom` is a spec that runs in the TV idiom (`nsh test
+  tests/apps/tv-idiom --target gpui --idiom tv`, or `--target web`). The hosts are stopped with the run
   (Ctrl-C, SIGTERM, the session ending); a host that exits with an error ends it with its kept output. On Windows the host starts in a
   process group of its own (`CREATE_NEW_PROCESS_GROUP`), out of the console's Ctrl-C, so a stop is not taken for the
   host failing, and in a job object that kills it when the job closes (`run::KillOnClose`): Windows ends a child with
@@ -378,6 +395,20 @@ report it:
   above, `Keymap::find_at`, and the application menu not at all), and on the web Shift+F10 raises `ContextMenu` with no pointer on
   the nearest view around it that listens (`pointerType: null`, at its bottom-start corner); else the focused input takes a character, Backspace or the return key, else
   Escape goes back when there is something to go back from;
+- `press_remote_key` (`headless/keyboard.rs`, `app.keyboard.remote`): a TV remote's key by name (`remote.rs`'s
+  `RemoteKey`: the arrows `up` / `down` / `left` / `right`, `enter` (`ok`), `back`, and the media and TV keys of
+  `nsh_core::keymap`, `mediaplaypause` … `info`; no number, volume or Exit keys, which Samsung's Smart Remote lacks
+  or the system keeps). A key is `press_key`'s of the same name; `back` goes back as a TV does (`go_back`: the root's
+  `onBackPress` listener first, else what there is to go back from, else nothing, so it never fails as `back()`
+  does). An unknown name fails with the names there are. On a real target `TestStep::PressRemoteKey` reaches
+  `Native::press_remote_key`, whose default is `press_keys` of the key's name and `back` for Back; GPUI presses
+  Back as the Tizen platform gives it (`VK_BROWSER_BACK`, `agent::remote_virtual_key`), the web presses the media
+  and TV keys with Samsung TVs' key codes (`test_web.rs`' `tv_key_event`, `nsh.js`'s `TV_KEY_CODES`), and the
+  terminal's agent names them as the keymap does (`red`), which `key_scheme` parses. Every key works headless and
+  on the terminal, GPUI, the web, Android (`KEYCODE_*`) and Linux (the media and TV keys go to the app's shortcuts,
+  GTK having none); Windows presses the arrows, OK, Back and its four `VK_MEDIA_*` keys (`mediaplaypause`,
+  `mediastop`, `medianext`, `mediaprevious`), macOS and iOS the arrows, OK and Back only (a Mac's media keys go to
+  the system, an iOS keyboard has none). There the other keys fail the step, naming the key and the platform;
 - `wait`, `wait_for` / `wait_for_gone` / `wait_until` (until a selector matches, matches no more, a condition on the
   screen holds), `next_change` (one batch or animation frame: what `nsh/test`'s `waitUntil` waits for between calls
   of its JS condition), `next_frame` (on a manual clock: one frame of the clock, `wait_frame`, then a moment for a
@@ -899,8 +930,11 @@ program that describes them, builds the hosts and runners with them, and does ev
   - `describe` (nsh-core and the app's crates, nothing else): calls each crate's entry and prints one JSON document,
     `nsh_core::element::description::Description` (format `FORMAT`, the nsh-core version that wrote it, then per crate in
     `"rust"`'s order its specifier, exports with their kinds, TypeScript declarations, re-exported runtime values and
-    types, the values nsh-js makes for it, the files it ships and the exports TS sees without a doc comment, which
-    `nsh` warns of as it writes `.nsh/types`);
+    types, the values nsh-js makes for it, the files it ships, the exports TS sees without a doc comment, which
+    `nsh` warns of as it writes `.nsh/types`, and the theme types it registers, `themes`: each type's tokens with
+    their kinds, docs and roles and its defaults as a theme file, which the bundler and `nsh` read with
+    `description::theme_types`; and the roles it lists, `roles` (`Registry::roles`: name, kind and doc of every role
+    its components draw with, mapped or not), which `description::roles` merges with the core's own);
   - `test` (`nsh-testing` without `bundle`, `nsh/base` and the app's sets, and a Rust app's root): the headless
     runner of `nsh test` (`nsh_testing::runner`);
   - the hosts and runners, passing the sets after `nsh/base`'s (`vec![nsh_base::registry(), set_app_charts(),

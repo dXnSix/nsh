@@ -1,6 +1,6 @@
 import { itemsProps } from "./list.js";
 // Rust component descriptors supply the public props, slots and ref API.
-export function createComponents(invoke, values, reactive, dom) {
+export function createComponents(invoke, values, reactive, dom, environment) {
   const states = new WeakMap();
   const handler = name => "on" + name[0].toUpperCase() + name.slice(1);
   const make = (spec, call) => function (props = {}) {
@@ -53,7 +53,9 @@ export function createComponents(invoke, values, reactive, dom) {
       reactive.untracked(() => props.ref(api));
     }
     if (spec.props.some(prop => prop.kind === "children") && "children" in props) {
-      const children = spec.lazy ? rt.cond(state.lazy, () => props.children) : reactive.computed(() => props.children);
+      // A `ThemeScope`'s children are made in its scope.
+      const read = spec.scope ? () => environment.inScope(props, () => props.children) : () => props.children;
+      const children = spec.lazy ? rt.cond(state.lazy, read) : reactive.computed(read);
       rt.insert(node, children, anchor);
     }
     return node;

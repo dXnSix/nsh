@@ -103,6 +103,32 @@ impl FollowTarget {
     }
 }
 
+/// A view a focus prop names (`nextFocusDown`, a `FocusGroup`'s
+/// `destinations`): a node JS passes (a ref), or whatever element carries
+/// a Rust ref, looked up again in every commit, so the element may be
+/// rendered after the view that names it (a group's own children).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum FocusTarget {
+    /// None: the prop names nothing.
+    #[default]
+    None,
+    /// A node JS passes (a `ref`).
+    Node(NodeId),
+    /// The element carrying a Rust ref.
+    Ref(FollowTarget),
+}
+
+impl FocusTarget {
+    /// The node it names now, if one is mounted.
+    pub fn node(&self) -> Option<NodeId> {
+        match self {
+            FocusTarget::None => None,
+            FocusTarget::Node(id) => Some(*id).filter(|&id| id != 0),
+            FocusTarget::Ref(target) => target.node(),
+        }
+    }
+}
+
 /// An element another one names for assistive technologies
 /// ([`crate::AccessibilityProp::ActiveDescendant`],
 /// [`crate::AccessibilityProp::Controls`],
@@ -135,6 +161,57 @@ impl ElementTarget {
             Named::Ref(target) => Some(target.0.node.get()).filter(|&n| n != 0),
         }
     }
+}
+
+impl From<&ElementRef> for FocusTarget {
+    fn from(r: &ElementRef) -> Self {
+        r.target()
+            .map_or(FocusTarget::None, |t| FocusTarget::Ref(FollowTarget(t)))
+    }
+}
+
+impl From<ElementRef> for FocusTarget {
+    fn from(r: ElementRef) -> Self {
+        FocusTarget::from(&r)
+    }
+}
+
+impl From<super::NodeRef> for FocusTarget {
+    fn from(n: super::NodeRef) -> Self {
+        FocusTarget::Node(n.0)
+    }
+}
+
+/// TS: a ref, or none yet (a signal its `ref` sets, read before the view
+/// is mounted): it names nothing until it is set.
+impl super::JsValue for FocusTarget {
+    fn ts_type(types: &mut super::TsTypes) -> String {
+        format!("{} | null | undefined", super::NodeRef::ts_type(types))
+    }
+
+    fn from_js(value: super::JsIn<'_>) -> Result<Self, super::PropError> {
+        Ok(Option::<super::NodeRef>::from_js(value)?.map_or(FocusTarget::None, FocusTarget::from))
+    }
+
+    fn to_js<'a>(
+        &self,
+        host: &'a dyn super::JsHost,
+    ) -> Result<super::JsOwned<'a>, super::PropError> {
+        self.node().map(super::NodeRef).to_js(host)
+    }
+}
+
+/// What a focus group's view is given (`nsh/base`'s `FocusGroup`,
+/// `Interactive::focus_group`): the core finds its destinations' nodes
+/// in every commit and hands the platform a
+/// [`crate::focus::GroupConfig`] ([`crate::ViewProps::focus_group`]).
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FocusGroupTargets {
+    /// The arrows do not take the focus out of the group.
+    pub trap: bool,
+    /// The views the focus enters the group at, in order.
+    pub destinations: Vec<FocusTarget>,
 }
 
 impl ElementRef {

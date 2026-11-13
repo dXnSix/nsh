@@ -213,23 +213,7 @@ impl Host for Runtime {
     }
     fn set_environment(&self, e: &Environment) {
         super::set_apple_keyboard(e.apple_keyboard);
-        let data = serde_json::json!({
-            "window":{"width":e.window.width.0,"height":e.window.height.0},
-            "safeArea":{"top":e.safe_area.top.0,"right":e.safe_area.right.0,"bottom":e.safe_area.bottom.0,"left":e.safe_area.left.0},
-            "titleBar":{"height":e.title_bar.top.0,"left":e.title_bar.left.0,"right":e.title_bar.right.0},
-            "keyboard":{"height":e.keyboard_height.0,"duration":e.keyboard_duration},
-            "colorScheme":if e.color_scheme==nsh_engine::ColorScheme::Dark {"dark"}else{"light"},
-            "fontScale":e.font_scale,"rtl":e.rtl,"reduceMotion":e.reduce_motion,"pixelRatio":e.pixel_ratio,
-            "screenReader":e.screen_reader,"locale":e.locale.as_str(),"host":e.host,"lifecycle":e.lifecycle.name(),
-            "shaders":e.shaders,"wakeCount":e.wake_count,
-            "localeSettings":{
-                "languages":e.locale_settings.languages.iter().map(|l| l.as_str().to_owned()).collect::<Vec<_>>(),
-                "timeZone":e.locale_settings.time_zone.as_str(),
-                "hourCycle":e.locale_settings.hour_cycle.name(),"firstDayOfWeek":e.locale_settings.first_day_of_week.number(),
-                "measurementSystem":e.locale_settings.measurement_system.name(),"temperatureUnit":e.locale_settings.temperature_unit.name()
-            },
-            "platform":{"name":e.platform_name(),"os":"web","version":e.os_version.0,"idiom":format!("{:?}",e.reported_idiom()).to_lowercase(),"desktop":e.desktop(),"appleKeyboard":e.apple_keyboard}
-        });
+        let data = environment_data(e);
         self.event(
             "environment",
             self.bindings
@@ -332,4 +316,27 @@ impl Host for Runtime {
         self.fetches.clear();
         self.bindings.stop();
     }
+}
+
+/// The environment as the engine sends it to the page's runtime
+/// (`environment.js`'s `update`): the window, the user's settings and the
+/// platform (`idiom`, `desktop`, `tv`).
+pub(super) fn environment_data(e: &Environment) -> serde_json::Value {
+    serde_json::json!({
+        "window":{"width":e.window.width.0,"height":e.window.height.0},
+        "safeArea":{"top":e.safe_area.top.0,"right":e.safe_area.right.0,"bottom":e.safe_area.bottom.0,"left":e.safe_area.left.0},
+        "titleBar":{"height":e.title_bar.top.0,"left":e.title_bar.left.0,"right":e.title_bar.right.0},
+        "keyboard":{"height":e.keyboard_height.0,"duration":e.keyboard_duration},
+        "colorScheme":if e.color_scheme==nsh_engine::ColorScheme::Dark {"dark"}else{"light"},
+        "fontScale":e.font_scale,"rtl":e.rtl,"reduceMotion":e.reduce_motion,"pixelRatio":e.pixel_ratio,
+        "screenReader":e.screen_reader,"locale":e.locale.as_str(),"host":e.host,"lifecycle":e.lifecycle.name(),
+        "shaders":e.shaders,"wakeCount":e.wake_count,
+        "localeSettings":{
+            "languages":e.locale_settings.languages.iter().map(|l| l.as_str().to_owned()).collect::<Vec<_>>(),
+            "timeZone":e.locale_settings.time_zone.as_str(),
+            "hourCycle":e.locale_settings.hour_cycle.name(),"firstDayOfWeek":e.locale_settings.first_day_of_week.number(),
+            "measurementSystem":e.locale_settings.measurement_system.name(),"temperatureUnit":e.locale_settings.temperature_unit.name()
+        },
+        "platform":{"name":e.platform_name(),"os":"web","version":e.os_version.0,"idiom":format!("{:?}",e.reported_idiom()).to_lowercase(),"desktop":e.desktop(),"tv":e.tv(),"appleKeyboard":e.apple_keyboard}
+    })
 }

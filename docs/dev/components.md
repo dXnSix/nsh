@@ -12,7 +12,7 @@ images whose load state drives their fallback natively, and a row that
 places its first `limit` avatars.
 
 - **`nsh/base`**: unstyled base components of `gpui-base`'s scope, the crate `nsh-base` (`crates/nsh-base`,
-  `nsh_base::registry()`): `Button`, `Link` (a press target that opens its `href`: through the core's `openUrl` flow, or the app's `onOpen` with `openWith="app"`), `Carousel` with `CarouselContent`, `CarouselItem`, `CarouselPrevious`, `CarouselNext`, `CarouselPagination` and `CarouselPaginationItem` (slides on a native scroll view: "Carousels" below), `Checkbox`, `Radio`, `RadioGroup`, `Switch`, `Tab`, `Tabs`, `Toggle`, `ToggleGroup`, `Toolbar`, `ToolbarGroup`, `ToolbarSeparator`, `Select` (one value from a list: "Popups" below), `Combobox` (one value or several from the same list), `Calendar` (a date or a range from months of days), `TimeField` (a time of day by segments), `DatePicker` (a calendar and a time field in a popup: "Popups" below), `Collapsible`, `Accordion` with `AccordionItem`, `AccordionHeader`, `AccordionTrigger` and `AccordionPanel`, `Progress`, `Slider`, `Scrollbar` ("Scroll bars" below), `ColorPicker` with `ColorArea`, `ColorSlider`, `ColorField`, `ColorSwatch` and `ColorEyeDropper` (a color in RGB, HSL, HSB or OKLCH, its parts laid out by the app), `NumberInput`, `OtpInput`, `Pagination` (the pages of a set: Previous, the pages around the current one, ellipses, Next; its places made once, a page change changing what they show), `Tree` (items that hold items, virtualized: the expanded items' rows only, the selection and expansion the app's, one Tab stop whose arrows move the selection), `Command` (a command palette: a search field over the app's commands filtered natively by label and keywords, in a virtualized list under their sections' headers; the highlight projected `focus:` while the field keeps the keyboard focus, `onSelect({ id })`), `EmojiPicker` (a search field over every emoji: "Emoji pickers" below), `Table` with `TableHeader`, `TableBody`, `TableFooter`, `TableRow`, `TableHead`, `TableCell` and `TableCaption` (a table's accessibility roles around the app's rows), `TextView` (`text-view.md`), `ResizablePanelGroup` and `ResizablePanel`, `DockArea`
+  `nsh_base::registry()`): `Button`, `Link` (a press target that opens its `href`: through the core's `openUrl` flow, or the app's `onOpen` with `openWith="app"`), `FocusGroup` (a region the arrows enter at its `destinations` and, with `trap`, never leave: a view carrying `Prop::FocusGroup`, its refs found by the core in every commit, the rules `nsh_core::focus::directional`'s; `focus_group.rs`), `Carousel` with `CarouselContent`, `CarouselItem`, `CarouselPrevious`, `CarouselNext`, `CarouselPagination` and `CarouselPaginationItem` (slides on a native scroll view: "Carousels" below), `Checkbox`, `Radio`, `RadioGroup`, `Switch`, `Tab`, `Tabs`, `Toggle`, `ToggleGroup`, `Toolbar`, `ToolbarGroup`, `ToolbarSeparator`, `Select` (one value from a list: "Popups" below), `Combobox` (one value or several from the same list), `Calendar` (a date or a range from months of days), `TimeField` (a time of day by segments), `DatePicker` (a calendar and a time field in a popup: "Popups" below), `Collapsible`, `Accordion` with `AccordionItem`, `AccordionHeader`, `AccordionTrigger` and `AccordionPanel`, `Progress`, `Slider`, `Scrollbar` ("Scroll bars" below), `ColorPicker` with `ColorArea`, `ColorSlider`, `ColorField`, `ColorSwatch` and `ColorEyeDropper` (a color in RGB, HSL, HSB or OKLCH, its parts laid out by the app), `NumberInput`, `OtpInput`, `Pagination` (the pages of a set: Previous, the pages around the current one, ellipses, Next; its places made once, a page change changing what they show), `Tree` (items that hold items, virtualized: the expanded items' rows only, the selection and expansion the app's, one Tab stop whose arrows move the selection), `Command` (a command palette: a search field over the app's commands filtered natively by label and keywords, in a virtualized list under their sections' headers; the highlight projected `focus:` while the field keeps the keyboard focus, `onSelect({ id })`), `EmojiPicker` (a search field over every emoji: "Emoji pickers" below), `Table` with `TableHeader`, `TableBody`, `TableFooter`, `TableRow`, `TableHead`, `TableCell` and `TableCaption` (a table's accessibility roles around the app's rows), `TextView` (`text-view.md`), `ResizablePanelGroup` and `ResizablePanel`, `DockArea`
   (`dock.md`), `Editor` (a code editor, `editor.md`), `DiffView` (the changes between two texts, `diff.md`), `DataTable` (a table over any number of rows and columns, `data-table.md`), the popups on the core's overlays (`Popover`,
   `HoverCard`, `Menu` with `MenuItem`, `MenuSeparator` and `Submenu`, `ContextMenu`, `Tooltip`, `Sheet`: "Popups" below), toasts
   (`Toast`, `ToastStack` and the class `ToastManager`: "Toasts" below) and the
@@ -325,10 +325,10 @@ reasons: `reactive-components.md`.
   | `registerFont(source)` | `register_font(data).await` in a task: the font's family name (`nsh_core::font_family`) or why the data is no font; `Action::RegisterFont`, applied by the core (`nsh_core::font_family`, then `Core::register_font`: WOFF / WOFF2 decompressed, the text engine's `register_font`, text measured again). TS's is the core runtime module `fonts.rs`, which fetches a URL first (a refusal, of the URL or a redirect, rejects with `ERR_ACCESS_DENIED`: `Fetch::detailed`, `Core::fetch_refused`) and resolves `{ family }` |
   | `fetch(url)` | `fetch(url).await` / `fetch(HttpRequest::post(url, body).header(..)).await` in a task: an `HttpResponse` (`status()`, `ok()`, `header(..)`, `text()`, `body`) or the error; the engine's network stack and capability checks, as JS's, so it works on the web too; the request is cancelled with its task. `asset:/` URLs (`FileAsset::uri`, `assets!()`), from both, are the app's bundled files, the scheme in any case: the engine's `Net` answers them from `EngineConfig::assets` on the runtime's blocking pool (in WebAssembly in the turn), with no capability, and downloads what the host serves at `Assets::url` (the web page's files it did not preload); hosts are asked for the file by its path alone, `asset:/<path>` with the scheme in lower case and no query or fragment (`asset_file`: one file on every host, as a web server serves it); either way the response answers at the URL asked for, its scheme in lower case and without its fragment (`asset_response_url`), with the type its extension gives (`nsh_core::platform::content_type`, which the dev server serves files with too); a file the host does not have fails as a network error, and so do a path that would leave the host's directory (an empty, `.` or `..` segment, encoded or not, a backslash, a NUL or a colon: `is_inside_assets`; hosts join the path to their directory as it comes) and a method other than `GET` or `HEAD`, refused in `Net::asset` before any host reads the file or is asked where it serves it |
   | `cleanup` | `cleanup(f)` (runs before the owner runs again or goes) |
-  | `windowSize()`, `safeArea()`, `keyboardFrame()`, `colorScheme()`, `localeSettings()`, `lifecycle()`, ... | `window()`, `safe_area()`, `keyboard_height()`, `dark()`, `font_scale()`, `locale_settings()`, `lifecycle()`, `reduce_motion()`, `screen_reader()`: reading subscribes (`layout_rtl()`, the surface's direction, is a hidden accessor for `nsh-base`'s controls only, which trade Left and Right by it: Rust's `rtl()` is dropped, apps set a view's `direction`) |
+  | `windowSize()`, `safeArea()`, `keyboardFrame()`, `colorScheme()`, `localeSettings()`, `lifecycle()`, ... | `window()`, `safe_area()`, `keyboard_height()`, `dark()` (in a `ThemeScope`, the scope's), `font_scale()`, `locale_settings()`, `lifecycle()`, `reduce_motion()`, `screen_reader()`: reading subscribes (`layout_rtl()`, the surface's direction, is a hidden accessor for `nsh-base`'s controls only, which trade Left and Right by it: Rust's `rtl()` is dropped, apps set a view's `direction`) |
   | `<Window>`, `Window.open`, `currentWindow()`, `WindowRef`'s `set({ title, titleBar, … })`, `setMode`, `setBounds`, `setPlacement`, `close()`, `on(..)`, `titleBar()`, `windowState()`, `displays()`, `Menu.setMenuBar`, `Application.quit()`, `Application.restart()`, `Application.launchAtLogin()`, `Application.setLaunchAtLogin(enabled)` (`nsh/desktop`) | `element::desktop::window()` (a builder: `.id()`, `.kind()`, `.title()`, `.attributes(..)`, `.open(..)`, `.on_open_change(..)`, `.content(..)`), `current_window()` / `main_window()` (a `WindowRef`: `set(WindowAttributes)`, `set_mode(..)`, `set_bounds(..)`, `set_placement(..)`, `close()`, `state()`, `on_close_press(..)`, `on_focus_change(..)`, …), `title_bar()`, `displays()`, `set_menu_bar(..)`, `quit()`, `restart()`, `launch_at_login().await` (a `bool`) / `set_launch_at_login(true).await` (a `Result<(), LaunchAtLoginError>`) in a task (`Action::LoginItem` and the core's backend thread, as JS's); the same window commands and native controls, with title-bar insets forwarded through `element::Environment`; `.window_drag(bool)`, `.window_control(..)` and `.window_resize(..)` on any interactive element mark native title bar regions |
   | `Menu.setApplicationMenu(items)`, `Menu.popup(items, at)` (`nsh/desktop`) | `element::desktop::set_application_menu(vec![MenuItem::submenu(..)])` (`None`: the default menu), `popup_menu(items)` / `popup_menu_at(items, at)` (an `Answer<()>` once it closes); `MenuItem::new(label).shortcut("mod+n").icon(asset!("new.svg")).on_select(f)`, `::role(..)`, `::separator()`, `::submenu(..)`. The same `DesktopCommand`s as JS's; a view's item ids start at 2^31, above JS's, and the core runs a view's handler (under the owner that set the menu, while it lives) when the root's `Menu` event reports it; a context menu closing goes to both sides (`element/menus.rs`) |
-  | `pixelRatio()`, `Math.round(x * pixelRatio()) / pixelRatio()`, `platform.os` / `version` / `idiom` / `desktop` / `catalyst` | `pixel_ratio()`, `round_to_nearest_pixel(v)`, `os()`, `os_version()`, `idiom()`, `is_desktop()`, `is_catalyst()` |
+  | `pixelRatio()`, `Math.round(x * pixelRatio()) / pixelRatio()`, `platform.os` / `version` / `idiom` / `desktop` / `tv` / `catalyst` | `pixel_ratio()`, `round_to_nearest_pixel(v)`, `os()`, `os_version()`, `idiom()`, `is_desktop()`, `is_tv()`, `is_catalyst()` |
   | `Intl.NumberFormat()`, `toLocaleString()` (the user's locale) | `locale()` (a `Locale`: `de-DE`; reading subscribes), formatted with a Rust crate: `Intl` and the locale-aware `toLocale*String`s are JS globals of TS apps |
   | `requestAnimationFrame(cb)`, `cancelAnimationFrame` | `request_animation_frame(\|at\| ..)` returns a `Spawned`; in a task `next_frame().await` (an `Instant`), once per frame in a loop |
   | a view's `direction` style | `.direction(LayoutDirection::Rtl)` (`Styled`); the surface's direction follows the user's language |
@@ -728,6 +728,39 @@ it changes, and they are resolved again when the tokens change (`Components::app
   from both (`Core::set_appearance`), and tells the platform (`MountItem::Appearance`: iOS
   `overrideUserInterfaceStyle` on the root view, presented modals and alerts, the status bar's default style; Android
   the status bar's default style and alert themes; native widgets elsewhere keep the system's).
+  A theme file maps roles too, in a `"roles"` section beside `cssVars` (`theme_file.rs` `apply_roles`: role name
+  to token name, the token one the file sets or the base has; `Tokens::with_roles`, so `updateTheme` adds to them).
+  Under theme types a file may map only the roles no type maps (`overrides_declared`). The build warns of a role's
+  name no set lists (`nsh-bundler` `unknown_roles`).
+  TS reads a role with `role(name)` (`nsh-js` `env.rs`, the web's op 414): `Tokens::mapped`, by name, then the
+  token of the role's name, as `Tokens::role`; it tracks both tokens, and a theme that maps roles onto other tokens
+  runs every reader again. The names are typed from the roles the UI sets list (`Registry::roles`,
+  `description::roles`, `roles.d.ts`). A class reads a role as a variable (`bg-(--popover)`): `ClassTokens` holds
+  the role map and `ClassTokens::variable` gives the token of the name, else the one the role is mapped onto; the
+  list records the token it read, and a change of the map resolves every class (`same_names`). The build's class
+  check has the map with the tokens it reads (the theme types' defaults, `nsh.json`'s `"roles"`).
+  `ThemeScope` (`element/theme_scope.rs`, exported by `nsh` and the prelude) is a view with an appearance of its
+  own for itself and what is in it. Classes and adaptive declarations need nothing from it: the core applies them
+  by node (`Core::dark_at`, `styles.md`). What reads the appearance in code reads the nearest scope's: `dark()` and
+  `color()` through the context the component provides (`ScopeAppearance`, looked for only once a scope was made
+  on the surface), TS's `colorScheme()` and `token()` through the context its JS face provides to its children
+  (`nsh-js` `components.rs` `scoped_reader`, `env.rs` `scope_scheme`; the web's `environment.js` `inScope`). The
+  platforms get it as `ViewProps::appearance` on the scope's view: iOS `overrideUserInterfaceStyle`, macOS
+  `NSView.appearance`, the web `color-scheme`; Android's tab bar (`Mounter.java` `nightAt`) and the scroll
+  indicators macOS, Windows, Linux and GPUI draw themselves ask the nearest view with one. Menus, alerts and sheets are the surface's.
+  With a `theme` (`ScopeTheme`: a theme file, or tokens made in Rust) the scope also has design tokens of its own:
+  its theme's values over the tokens around it, a name those lack left out (`ThemeTokens::scoped`,
+  `Tokens::within`). The component makes them, again whenever the tokens around it change, and gives them to the
+  core whole (`Prop::ScopeTokens`). The core keeps the nearest scope per node (`Node::token_scope`,
+  `Core::update_token_scope`) and resolves a class list for a node in one with `Core::classes_at`: the surface's
+  list, unless it reads a token whose value in the scope is not the surface's (the read sets of `ClassList`), in
+  which case it is parsed with the scope's values, once per scope (`Tailwind::parse_with`, the scope's own cache).
+  New values of a scope resolve again only the classes in it that read a token that changed
+  (`Core::set_scope_tokens`). `tokens()` and `theme_of()` read the nearest scope's through its context
+  (`ScopeTokens`; the cache of theme types is per tokens read, `ThemeCache`). In TS the component's JS face makes
+  the same tokens for its children (`env.rs` `make_scope_tokens`, in a slot of the environment; the web's ops 411
+  to 413) and `token()` reads the nearest scope's, tracked as one; a scope without a theme passes on the ones
+  around it, so `token()` there still follows the surface's by name.
 - `.active(|s| ..)`, `.hover(..)`, `.focus(..)`, `.disabled_style(..)`, `.selected(..)`, `.checked(..)` lower into
   rules on the view's interaction states (Tailwind's ranks): press feedback is native. On a nested component's element
   they style its root. `.group()` makes a view a group and `.group_active(|s| ..)`
@@ -762,7 +795,28 @@ page's; `font-mono` is the monospaced one) and has none of its own. The theme is
 `-foreground`, `sidebar-border`, `sidebar-ring` and `radius`, one field each (`theme().primary`, `theme().chart_1`,
 `theme().sidebar_ring`, `theme().radius`), plus Tailwind's fonts `font-sans` / `font-mono` (`theme().font_sans`,
 `theme().font_mono`; `None`, the system's fonts). `theme()` returns the theme of the tokens drawn with now, made once
-per change of them; an app's own tokens are read by name (`theme().color("up")`). The defaults are shadcn's `neutral` theme (`default-theme.json`, `radius` 0.625rem = 10 pt); no component of
+per change of them; an app's own tokens are read by name (`theme().color("up")`). Each field is read through its
+**role** (`element::Role<V>`: a name, `name()` shadcn's spelling, and in its type what it reads, `RoleValue`: a color
+by default, `NumberRole` an `f32`, `FontRole` a family). A role is a constant of the crate that draws with it and is
+its name, so two constants of one name are one role: the core's and the platforms' are `element::role` (`POPOVER`,
+`POPOVER_FOREGROUND`, `PRIMARY`, `ACCENT`, `ACCENT_FOREGROUND`, `MUTED_FOREGROUND`, `BORDER`, `DESTRUCTIVE`,
+`FONT_SANS`), nsh-base's `nsh_base::role` (one per field of `Theme`, written by `theme!` from its one list, with
+`RADIUS`, `FONT_MONO`, `SELECTION` and the status roles `SUCCESS`, `WARNING`, `INFO` and `HIGHLIGHT`, which like
+`SELECTION` have no token in the default theme: `Editor`'s `warning_color` / `info_color` / `match_color` and
+`TextView`'s `alert_color` / `mark_color` read `theme().tokens().role(..)` and fall back on their own constants;
+and the diff roles `DIFF_ADDED` and `DIFF_DELETED`, which `DiffView`'s `added_color` / `deleted_color` read the same
+way, each use a binding so the rows follow the theme; and the seven `SYNTAX_*` roles, which `syntax::Palette::of_theme`
+reads once per scope that styles spans (`Token::style(&palette)`; `Palette::default()` is Allsum's): the editor's
+and the diff view's row scopes and a scope of its own around a `TextView` block's spans, so that spans made once
+per change of the code are made again when the theme changes), and another UI set declares its own. `Tokens::role(role)` reads the token a
+theme maps the role onto (`Tokens::with_role`, or `with_roles` for a list of `AnyRole`s of several kinds; kept by
+`over`, keyed by the role's name), else the token of the role's name, so without a mapping every reader gets what it
+always did. The core's readers use roles too (the default font, `role(role::FONT_SANS)`; the mobile tab bar's tint,
+`role::PRIMARY`), and so do the platforms' (Linux's menus, iOS's alert tint, Android's `DIALOG_ROLES`; GPUI's host
+background is the host theme's `background` field, which `Theme::of` reads through `role::BACKGROUND`). A role is no
+token and adds no class. The core
+says whether the app has a theme of its own on the tokens it draws with (`Tokens::is_themed`: other than the UI set's
+defaults, `registry.tokens(None)`), which iOS and Android check before taking a theme's colors for their alerts. The defaults are shadcn's `neutral` theme (`default-theme.json`, `radius` 0.625rem = 10 pt); no component of
 `nsh/base` draws with them but `TextView`'s reading typography and the default looks of `Editor` and `DiffView`.
 
 A theme file is shadcn's registry `cssVars`, as shadcn and tweakcn export them: `{ "cssVars": { "theme": {…},
@@ -770,7 +824,11 @@ A theme file is shadcn's registry `cssVars`, as shadcn and tweakcn export them: 
 where `dark` leaves them out). Values are CSS: colors (hex, `rgb()`, `hsl()`, `oklch()`, `oklab()`, names,
 `color-mix()`, `var(--x[, fallback])` of the same appearance's tokens, the file's or the default's), lengths (`rem`
 is 16 pt, `px`) and font family lists for `font-*` names (the first family that is not generic, `system-ui` /
-`sans-serif` / ... meaning the system's); values of no kind a token has (shadows, letter spacing) are left out. A
+`sans-serif` / ... meaning the system's); a `shadow-*` value that reads as `box-shadow` layers is a shadow token
+(`Tokens::shadow`, per appearance), a `background-image-*` value that reads as CSS gradients a gradient token
+(`Tokens::gradient`, per appearance, a `var()` in a stop read as the theme's color in each; its class is `bg-<n>`
+through the arbitrary `bg-[…]`, after a utility or a color of that name, `ClassTokens::substitute`; written back
+by `Gradient::css`, which `css::gradient` reads as the same gradient), and values of no kind a token has (a letter spacing in `em`) are left out. A
 value written as a color that is none (`#zz`, `lab()`, a `var()` that names no color) is left out and reported, and so
 is one that is no color in one appearance where the other's is a color (that color is both's): `nsh build` warns of
 them, the core logs them, `setTheme` refuses the file for them. An
@@ -790,16 +848,144 @@ them with `element::set_tokens(tokens)` (`set_tokens(theme.into())` of an `nsh_b
 `tokens()` accessor, as `set_color_scheme` is beside `color_scheme()`). A TSX app calls `setTheme(theme)` of `nsh`
 (`nsh-js` `env.rs`; the web's `browser/environment.js` and op 406): `setup`'s way, the root's `uiTheme` and `token()`
 reading the new tokens at once, for a file read whole (`ThemeTokens::checked`, else a `TypeError` naming what it
-cannot read and nothing changed); `null` sends the file the entry gave again. The core sends the tokens drawn with to the
+cannot read and nothing changed); `null` sends the file the entry gave again. Some tokens change, the others staying,
+with `element::update_tokens(tokens)` and `reset_tokens(names)` (`Action::UpdateTokens` / `ResetTokens`, applied in
+order with the app's other actions so two updates in a turn compose; `ModuleCx` has both for synchronous `#[module]`
+functions) and TS's `updateTheme(theme)` / `resetTheme(names?)` (`env.rs`; the web's ops 409 and 410): the root's
+`Prop::UiThemeUpdate` / `Prop::UiThemeReset` (pushed by the runtime, no JS name; under theme types the reset's names
+are read as a theme file's, a role's name being its token: `TokenProvider::token_name`, in the core and in
+`ThemeTokens::reset`), with `token()` reading the result
+at once (`ThemeTokens::updated`, read whole as `checked`; `ThemeTokens::reset`). An update reads only the tokens the
+file sets, with what the UI set brings for it (`Registry::token_overrides_from`: `nsh/base` gives `theme_file::overrides`): a
+value it cannot read keeps the token's value, and a `var()` naming a token it does not set is the token drawn with
+now. A reset puts names back to the app's theme, its tokens as last set whole (`Core::set_tokens`: the UI set's
+defaults with `nsh.json`'s theme, `setTheme`, `set_tokens`; the core's `file_tokens`), removing a name the theme
+lacks. The core sends the tokens drawn with to the
 platform when they change (`Command::Tokens` on the root), which colors its own controls with them (Linux's menus:
 `docs/dev/linux.md`; Android's alerts and action sheets: `popover` behind, `popover-foreground` for the title and
 the options, `muted-foreground` for the message, `primary` for the buttons and `destructive` for a destructive action,
-over the system dialog's shape; iOS's alerts take `primary` as their tint, which iOS 17 draws the regular and cancel
-actions in and iOS 26 does not use; an app without a theme of its own keeps the system's colors on both). `nsh_base::theme()` reads the tokens from a signal of
+over the system dialog's shape, each as a role; iOS's alerts take `role::PRIMARY` as their tint, which iOS 17 draws the
+regular and cancel actions in and iOS 26 does not use; an app without a theme of its own, `!Tokens::is_themed()`,
+keeps the system's colors on both). `nsh_base::theme()` reads the tokens from a signal of
 the surface (`element::tokens`): new tokens run again the bindings that read them. An embedding app can give a
 surface its own (`Core::set_host_tokens`, `EngineControl::set_tokens`; sent from `Engine::start_with`'s `setup` they
 are in the first frame and JS's first render): they win over the app's until cleared, and the app's names they lack
 stay, so an embedded app looks like its host (`embedding.md`, "GPUI and GPUI Kit apps").
+
+### Theme types
+
+An app or a design system brings its own tokens as a Rust type (`element/theme.rs`, user docs: `website/docs/rust.md`,
+"Theme types"). `AppTheme` is the type's face: `type Patch` (some fields, each `None` for as it is), `token_specs()`,
+`write_tokens(&self, prefix, out)`, `read_tokens(tokens, prefix)` (a name the tokens lack keeps `Default`'s value; a
+nested type's field, the nested type's), `write_patch(patch, prefix, out)` and the provided `to_tokens()`, its tokens
+with the roles its specs map (`Tokens::with_roles`). A `TokenSpec` is a name, a `TokenKind` (`#[non_exhaustive]`:
+`Color`, `Number`, `Radius`, `Spacing`, `Text`, `Weight`, `Tracking`, `Leading`, `Blur`, `Font`, `Shadow`; `name()` /
+`from_name()` its spelling in descriptions, `is_number()` every kind but `Color`, `Font` and `Shadow`, `namespace()` the
+namespace its classes read, `radius-` to `shadow-`, none for `Color` and `Number`), a doc comment and the roles it
+plays (`AnyRole`s: a role's name and what it reads), built with `TokenSpec::new(name, kind).doc(..).role(..)`. The
+prefix lets a type hold another:
+`TokenKind::prefixed(prefix, name)` puts it after the name's namespace when it has one, so the classes still find it
+(`radius-card` under `button-`: `radius-button-card`, `rounded-button-card`), else in front (`surface-raised`). The
+tokens stay flat and by name, so classes, `token()` and theme files read them as they read any theme's; a type is a
+typed view of its names. Some impls are written by hand (`nsh-base`'s `Theme`; in the tests, `core/tests.rs` `mod
+app_theme` and `nsh-engine`'s `tests/engine/app_theme.rs`); `#[derive(AppTheme)]` writes them (`nsh-macros`
+`src/theme.rs`: each field's `#[token(kind, name, role)]`, `nested`, `flatten` or `skip`; names in kebab case with the
+kind's namespace, a nested type's through `TokenKind::prefixed`; the impl through `__private::ThemeValue`, which
+`AdaptiveColor`, `f32`, `Points`, `SharedString`, `String` and `AdaptiveShadow` implement; `<Type>Patch` of `Option`s,
+each documented with its token and classes; the compile errors of `AppTheme`'s doctests, which apply
+`ThemeSet::try_add`'s rule of names and kinds; a role is its constant's path, written into `.role::<V>(path)` with
+`V` what a token of the field's kind holds, so rustc refuses a path that is no role and a role of another kind, and
+the derive only a path written twice and a role on a shadow).
+
+`Registry::theme::<T>()` records `ThemeSpec::of::<T>()`: the type's name, its `TypeId`, its specs and its defaults
+(`T::default().to_tokens()`), each behind a function pointer, so the registry stays `Clone` and needs no `T`
+(`Registry::theme_specs`). `Registry::merged` unions the sets' specs by `TypeId` and builds the crate-private
+`ThemeSet` of them: each name with its owner type and kind, the types in registration order, and the union of their
+defaults with the role aliases. A token's spec lists the roles it plays (`TokenSpec::roles`, one `.role(..)` each):
+several roles may read one token, and one role reads one token. Roles are told apart by name alone, so a UI set's
+own constant maps as the core's do and two constants of one name are one role. `ThemeSet::try_add` returns an error
+naming both types for a name or a role (`role_owner`) another type claims, for a role two tokens of one type play,
+and for a role that reads another kind than its token holds (`TokenKind::role_kind`; no role reads a shadow);
+`ThemeSet::new` panics with it, as two components of one name do.
+`ThemeSet::target(key)` is the name a theme file's key sets: a declared name, else the token a role of that name
+(`primary`, or a UI set's own) is mapped onto (`Tokens::mapped`); `renamed_roles` are the mapped roles a `var()`
+may name. The description carries a role as its name, and the toolchain gives it the kind of the token that plays
+it.
+
+`TokenProvider` is how theme files are read: `Source { read, overrides }`, a set's `tokens_from` and
+`token_overrides_from` functions (`nsh/base`'s `read_tokens` and `theme_file::overrides`), or
+`Themes(Arc<ThemeSet>)`.
+`Registry::token_provider` gives `Themes` whenever a set registers a type, so the types win over the default source,
+and `Source` otherwise. Its `read(json)` (`None`: the defaults) backs `Registry::tokens`, which `Core::set_components`
+(the defaults, `default_tokens` and `is_themed`'s baseline) and `Core::set_ui_theme` read; its `overrides(json, base)`
+backs `Core::update_ui_theme` (`updateTheme`) and `Core::set_host_theme` (the embedding app's overrides). `ThemeTokens`
+(`Core::theme_tokens`) carries the same provider beside the host tokens, so `of`, `checked` and `updated` (`token()`
+before the first render, `setTheme`, `updateTheme`) read a file as the core does.
+
+Under a `ThemeSet` a file is read by `theme_file::overrides_declared(json, base, set)`, which parses it once: in the
+parsed document its keys are rewritten through `ThemeSet::target` (`declared_names`), a key no type declares is
+dropped and listed (`` `brand`: no theme type declares it ``), and a `var()` naming a role names its token
+(`rename_vars`, which takes a `var()` as the reader does, however it is spaced and inside a fallback); the document
+is then read as any theme file is (`read_into`, so `var()` names the file's tokens, else `base`'s, the types'
+defaults), and each declared name keeps a value only of its kind (`TokenKind::holds`, `Tokens::copy_named`), others
+listed (`` `odds-up`: no color value ``), as is a declared name the file sets and leaves unread. A role's key in a
+section that also sets its token gives way to it (listed), as does the second of two roles' keys that set one token
+to two values. `theme_file::parse_declared` lays that over `base`. Inside the core what was left out is a
+`theme_file::LeftOut`: its sentence, the token the sentence starts with (so a declared name is not listed twice), and
+whether it is only a name no type declares, which `ThemeTokens::checked` / `updated` do not refuse a file for
+(`setTheme` leaves the name out, #1190). Nothing reads a sentence back; the public readers and `TokenProvider::read`
+list the sentences (`theme_file::sentences`), `read_left_out` / `overrides_left_out` the `LeftOut`s.
+`ThemeSet::try_add` also refuses a token named as no value of its kind is read (a font not `font-*`, a shadow not
+`shadow-*`, another kind `font-*` but a weight's `font-weight-*`) and a name or a role a type gives twice. An app with
+a registered type has a theme of its own (`Tokens::is_themed`, `Registry::has_theme_types`).
+`theme_file::write(tokens)` writes tokens back as a theme file (a value both appearances share in `theme`, the others
+in `light` and `dark`; roles none of it), which the descriptions carry as a type's defaults.
+
+`theme_of::<T>()` reads `tokens()` (so it subscribes, as `tokens()` does) and caches per surface in `Ambient`'s `themes`
+(`ambient::with_theme_cache`: by `TypeId`, the `Arc<Tokens>` read and the `Arc<T>` as `Box<dyn Any>`): while the cached
+tokens are pointer-equal to the current ones the cached theme is returned, else `T::read_tokens(&tokens, "")` is cached
+in its place. The type's `read_tokens` runs with the cache let go, so it may read the tokens or another type.
+`set_theme` takes its tokens without the roles its specs map (`theme::theme_tokens`: the registered types' roles
+stay) as `update_tokens` does, but as a type's fields (`Action::SetTheme`, `Core::set_theme_tokens`,
+`Tokens::over_as_fields`): a number field is the light value, so a number left at the light value the app's tokens
+have keeps their dark one, and a theme read and set back changes nothing. `update_theme` is `update_tokens` of the
+patch's tokens (`theme::patch_tokens`), and `reset_theme` `reset_tokens` of `T`'s names; `ModuleCx` has the three for
+synchronous `#[module]` functions. Each of the three is an action of its own (`Action::SetTheme`, `UpdateTheme`,
+`ResetTheme`) carrying the roles `T`'s tokens play with their names (`theme::played`), and the core sets through
+them when the action runs (`Core::through_roles`): a token playing a role the app's tokens map onto a token of
+another name is that token (`Tokens::copy_as`, then its own name dropped unless another of its roles is not mapped
+away), and a reset puts the mapped tokens back with `T`'s own names. A registered type's roles are mapped onto its
+own tokens, so this changes nothing for it; it is what makes the setters of a type that is not registered, nsh-base's
+`Theme`, set what its fields read under an app's own type, as a theme file's role key does. `Theme::write_tokens`
+leaves out a field still at the default it fell back on where the theme's tokens had none for its role, so setting a
+theme that was read makes no shadcn token of what the app did not change.
+
+`nsh_base::Theme` implements `AppTheme` in its `theme!` macro: the 31 shadcn colors, `radius`, `font-sans` and
+`font-mono`, each spec playing the role of its name, and `type Patch = Tokens` (`update_theme::<Theme>(tokens)`; under
+a prefix the names are renamed, `rename`). Its `read_tokens` under no prefix is `Theme::of`, which reads every field
+through its role, so under a registered type its fields are the tokens the type maps their roles onto. It is never
+registered: `nsh_base::registry()` keeps `tokens_from(read_tokens)`, the default any registered type replaces.
+`nsh_base::theme()` is `theme_of::<Theme>()`, in place of the thread-local it kept.
+
+The toolchain never links the app's crates, so the description carries the types (since description format 3,
+`element/description.rs`): `SetDescription::themes`, one `ThemeDescription` per type with its type name, its tokens
+(`ThemeTokenDescription`: name, kind, doc, role by name) and its defaults as a theme file (`theme_file::write`).
+A description of another format than this `nsh`'s is refused. `description::theme_types(sets)` merges them as
+`Registry::merged` does (through `ThemeSet::try_add`, an error naming both types in place of the panic) into
+`ThemeTypes`: `read(json)` is the core's `TokenProvider::Themes` read, and `tokens()` lists each declared name with its
+kind and doc, sorted. `Ok(None)` when no set registers a type.
+
+The bundler takes them from `BundleOptions::ui_sets`. `tailwind_setup(dir, ui_sets)` seeds the class theme from the
+types' defaults (`ThemeTypes::read(None)`) in place of `nsh_base::Theme::default()` and reads `nsh.json`'s
+`"theme"` with `ThemeTypes::read(Some(json))`, warning of what it leaves out (`warn_ignored`), so classes are the
+types' names (`bg-surface-raised`, `rounded-card`) and a role's name is no class. `theme_tokens_of(dir, ui_sets)` is
+the app's tokens under the types (`theme_tokens(dir)` without), and `types::tokens_declaration_of(tokens, ui_sets)`
+writes `tokens.d.ts` from the types' specs (each name a `number`, or a `string` for a color, a font and a shadow, by
+`TokenKind::is_number`, with its doc as JSDoc), else `tokens_declaration(tokens)`; `nsh-cli`'s `init.rs`
+`write_types` uses both. After the describe step (`rust_app.rs`, `read_description`), the CLI's `warn_typed_theme`
+reads the root's theme file under `theme_types` and warns (`nsh.json: theme: …, ignored`) of the names no type
+declares and the values of another kind (`typed_theme_warnings`); a value it cannot read at all is `root_config`'s to
+report. With no type registered, every step is what it was.
 
 ## The host node and ids
 

@@ -2,6 +2,7 @@ mod canvas_render;
 mod classes;
 mod components;
 mod cull;
+mod directional;
 mod follow;
 mod layout_scope;
 mod layout_tree;
@@ -633,6 +634,19 @@ struct Node {
     rtl: bool,
     /// `direction`: `None` inherits.
     direction: Option<bool>,
+    /// The appearance the view sets for itself and the views in it,
+    /// whatever the surface's (`Prop::Appearance` on a view, a
+    /// [`crate::element::ThemeScope`]'s): dark, or light. `None`: none of
+    /// its own.
+    appearance: Option<bool>,
+    /// Dark or light as the nearest view with an appearance says (its own,
+    /// else one around it); `None`: the surface's ([`Core::dark_at`]).
+    scoped_dark: Option<bool>,
+    /// The nearest view with design tokens of its own, itself included
+    /// (`Prop::ScopeTokens`, a [`crate::element::ThemeScope`]'s; an entry
+    /// of [`Core::token_scopes`]): its classes resolve with those values.
+    /// `NO_KEY`: none, the surface's.
+    token_scope: Key,
     /// Start / end properties, if any.
     logical: Option<Box<crate::style::Logical>>,
     /// Touch, accessibility and test properties; most views have none.
@@ -929,6 +943,9 @@ impl Node {
             vertical_align: crate::style::VerticalAlign::Baseline,
             rtl: false,
             direction: None,
+            appearance: None,
+            scoped_dark: None,
+            token_scope: NO_KEY,
             logical: None,
             props: None,
             text: String::new(),
@@ -1220,6 +1237,15 @@ pub struct Core<M: TextEngine> {
     /// What they follow, or frames around them, changed since they were
     /// placed.
     follow_changed: bool,
+    /// The views focus props name other views from (`nextFocus*`, focus
+    /// groups' destinations), found again in every commit round
+    /// (`directional.rs`).
+    focus_refs: Vec<directional::FocusRefs>,
+    /// A list row an arrow went to before it was mounted: its cell takes
+    /// the focus once it is (`Core::focus_past`).
+    /// With the focus the core knew then, which moving elsewhere forgets
+    /// it.
+    pending_row: Option<(crate::focus::PendingRow, Option<NodeId>)>,
     /// The warning about `bottom` / `right` sticky insets was logged.
     sticky_warned: bool,
     /// The warning about animated insets of views that are not sticky, or
@@ -1398,6 +1424,9 @@ pub struct Core<M: TextEngine> {
     /// What class variants read from the environment (`dark` as shown:
     /// [`Core::set_appearance`]).
     class_env: ClassEnvironment,
+    /// The views with design tokens of their own (`Prop::ScopeTokens`),
+    /// with the class lists that resolve differently in them.
+    token_scopes: rustc_hash::FxHashMap<Key, classes::TokenScope>,
     /// The appearance the app asked for.
     appearance: crate::platform::Appearance,
     /// The platform reports dark appearance.
@@ -1546,6 +1575,8 @@ impl<M: TextEngine> Core<M> {
             followers: Vec::new(),
             relators: Vec::new(),
             follow_changed: false,
+            focus_refs: Vec::new(),
+            pending_row: None,
             sticky_warned: false,
             inset_warned: false,
             shaders: Default::default(),
@@ -1611,6 +1642,7 @@ impl<M: TextEngine> Core<M> {
             needs_layout: true,
             tailwind: Tailwind::new(),
             class_env: ClassEnvironment::default(),
+            token_scopes: rustc_hash::FxHashMap::default(),
             appearance: crate::platform::Appearance::System,
             system_dark: false,
             overlays: Vec::new(),
@@ -3106,6 +3138,9 @@ impl<M: TextEngine> Core<M> {
             self.mount.insert(0, MountItem::LayoutAnimation(animation));
         }
         self.flush_pointer_events();
+        if !self.focus_refs.is_empty() {
+            self.sync_focus_refs();
+        }
         if !self.relators.is_empty() {
             self.sync_relations();
         }
@@ -3156,6 +3191,10 @@ impl<M: TextEngine> Core<M> {
         self.update_lists(relayout);
         if !self.slop_moved.is_empty() {
             self.update_slop_overflow();
+        }
+        // A row an arrow went to takes the focus once it is mounted.
+        if self.pending_row.is_some() {
+            self.land_pending_row();
         }
         // Views that waited for the budget, once lists placed their cells
         // (`pace.rs`).
@@ -5161,6 +5200,26 @@ impl<M: TextEngine> Core<M> {
                 self.set_follow_transition(key, transition);
                 return Ok(());
             }
+            Prop::NextFocusUp(target) => {
+                self.set_next_focus(key, crate::focus::Direction::Up, target);
+                return Ok(());
+            }
+            Prop::NextFocusDown(target) => {
+                self.set_next_focus(key, crate::focus::Direction::Down, target);
+                return Ok(());
+            }
+            Prop::NextFocusLeft(target) => {
+                self.set_next_focus(key, crate::focus::Direction::Left, target);
+                return Ok(());
+            }
+            Prop::NextFocusRight(target) => {
+                self.set_next_focus(key, crate::focus::Direction::Right, target);
+                return Ok(());
+            }
+            Prop::FocusGroup(group) => {
+                self.set_focus_group(key, group);
+                return Ok(());
+            }
             Prop::Accessibility(AccessibilityProp::ActiveDescendant(target)) => {
                 self.set_relation(key, relations::Relation::ActiveDescendant, target);
                 return Ok(());
@@ -5620,6 +5679,15 @@ impl<M: TextEngine> Core<M> {
                 self.set_ui_theme(&json);
                 return Ok(());
             }
+            Prop::UiThemeUpdate(json) => {
+                self.update_ui_theme(&json);
+                return Ok(());
+            }
+            Prop::UiThemeReset(names) => {
+                let names = names.map(|names| self.theme_file_names(names));
+                self.reset_tokens(names.as_deref());
+                return Ok(());
+            }
             Prop::LayoutDirection(rtl) => {
                 // The surface's direction (the root's): the user's language, as
                 // JS or the policy sets it.
@@ -5636,7 +5704,27 @@ impl<M: TextEngine> Core<M> {
                 // `setColorScheme`.
                 if key == self.root {
                     self.set_appearance(appearance);
+                    return Ok(());
                 }
+                // A view's: its own and its subtree's, whatever the
+                // surface shows (`ThemeScope`).
+                let own = match appearance {
+                    crate::platform::Appearance::System => None,
+                    crate::platform::Appearance::Light => Some(false),
+                    crate::platform::Appearance::Dark => Some(true),
+                };
+                if node.appearance != own {
+                    node.appearance = own;
+                    let props = node.props.get_or_insert_default();
+                    props.appearance = appearance;
+                    self.mark(key, dirty::VIEW_PROPS);
+                    self.update_appearance(key);
+                    self.parts_restyled();
+                }
+                return Ok(());
+            }
+            Prop::ScopeTokens(tokens) => {
+                self.set_scope_tokens(key, tokens);
                 return Ok(());
             }
             Prop::Keymap(keymap) => {
@@ -5790,6 +5878,19 @@ impl<M: TextEngine> Core<M> {
                 let props = node.props.get_or_insert_default();
                 if props.focusable != value {
                     props.focusable = value;
+                    flags |= dirty::VIEW_PROPS;
+                }
+            }
+            // An input's is its config's (below).
+            Prop::AutoFocus(value) if node.input.is_none() => {
+                if node.props.as_ref().is_some_and(|p| p.auto_focus) != value {
+                    node.props.get_or_insert_default().auto_focus = value;
+                    flags |= dirty::VIEW_PROPS;
+                }
+            }
+            Prop::PreferredFocus(value) => {
+                if node.props.as_ref().is_some_and(|p| p.preferred_focus) != value {
+                    node.props.get_or_insert_default().preferred_focus = value;
                     flags |= dirty::VIEW_PROPS;
                 }
             }
@@ -6326,6 +6427,8 @@ impl<M: TextEngine> Core<M> {
         self.outer_moved |= !self.parent_lists.is_empty() && self.may_hold_page_list(child);
         self.sticky_changed |= !self.sticky_nodes.is_empty();
         self.update_direction(child);
+        self.update_appearance(child);
+        self.update_token_scope(child);
         if self.nodes[parent as usize].child_perspective.is_some() {
             self.mark(child, dirty::VIEW | dirty::ANIMATION);
         }
@@ -6429,6 +6532,10 @@ impl<M: TextEngine> Core<M> {
     fn detach(&mut self, key: Key) {
         self.input_bar_moves(key);
         self.unlink(key, true);
+        // Out of the scope it was in: its key may name another view later.
+        if !self.token_scopes.is_empty() {
+            self.update_token_scope(key);
+        }
     }
 
     /// A multiline input with a built-in bar beside it leaves its place:
@@ -6602,6 +6709,9 @@ impl<M: TextEngine> Core<M> {
             self.parent_lists.retain(|&k| k != key);
         }
         let node = self.nodes.remove(key as usize);
+        if !self.token_scopes.is_empty() {
+            self.token_scopes.remove(&key);
+        }
         self.ch_readers -= usize::from(node.reads_ch);
         self.slots.remove(id as usize);
         if node.class_props.as_ref().and_then(|c| c.pointer_events)

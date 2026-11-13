@@ -147,6 +147,10 @@ pub(crate) type ShortcutHandler = Box<dyn Fn(&crate::input::KeyEvent) -> bool>;
 /// Called when the app reports an error (development hosts show it).
 pub(crate) type ErrorHandler = Box<dyn Fn(&AppError)>;
 
+/// What hears a back press nothing in the app took, with the surface's
+/// window ([`crate::AppView::on_unhandled_back`]).
+pub(crate) type UnhandledBack = Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>;
+
 /// A handler as kept: shared, so it is called with nothing borrowed (it may
 /// restart the app or set another handler).
 type Handler<F> = RefCell<Option<Rc<F>>>;
@@ -167,6 +171,8 @@ pub(crate) struct Surface {
     pub(crate) nav: RefCell<crate::navigation::Nav>,
     /// Pointer input state ([`crate::input`]).
     pub(crate) input: crate::input::Input,
+    /// The keyboard focus on views ([`crate::focus`]).
+    pub(crate) focus: crate::focus::Focus,
     /// The destination of a file dragged in from another application.
     pub(crate) file_drop: crate::file_drop::State,
     engine: RefCell<Option<Engine>>,
@@ -271,6 +277,14 @@ pub(crate) struct Surface {
     /// with what they changed applied here.
     events_sent: Cell<u64>,
     events_handled: Cell<u64>,
+    /// The events sent, in order (tests read them without an engine).
+    #[cfg(test)]
+    pub(crate) heard: RefCell<Vec<(NodeId, EventKind)>>,
+    /// The arrows past a scroll view's stops told to the engine
+    /// ([`Surface::focus_past`]), in order (tests read them without an
+    /// engine).
+    #[cfg(test)]
+    pub(crate) asked_past: RefCell<Vec<(NodeId, nsh_core::focus::Direction)>>,
     /// The embedding app's theme ([`crate::AppView::set_theme`]): sent to
     /// every engine the surface starts, before its first frame.
     pub(crate) host_theme: RefCell<Option<nsh_base::Theme>>,
@@ -287,6 +301,13 @@ pub(crate) struct Surface {
     /// The embedding app's locale and text size, standing in for the
     /// system's ([`crate::AppView::set_locale`], `set_font_scale`).
     pub(crate) host_environment: Cell<nsh_core::platform::HostEnvironment>,
+    /// The embedding app's reduce motion, screen reader and time zone,
+    /// standing in for the system's ([`crate::AppView::set_reduce_motion`],
+    /// `set_screen_reader`, `set_time_zone`).
+    pub(crate) host_settings: Cell<crate::host_settings::HostSettings>,
+    /// Hears the back presses nothing in the app took
+    /// ([`crate::AppView::on_unhandled_back`]).
+    pub(crate) on_unhandled_back: RefCell<Option<UnhandledBack>>,
     /// The app's windows of its own besides the main one, oldest first
     /// ([`crate::window`]).
     pub(crate) windows: RefCell<Vec<Rc<crate::window::AppWindow>>>,
@@ -309,6 +330,7 @@ impl Surface {
             anim: RefCell::new(UiAnimation::default()),
             nav: RefCell::default(),
             input: Default::default(),
+            focus: Default::default(),
             file_drop: Default::default(),
             engine: RefCell::new(None),
             control: RefCell::new(None),
@@ -354,12 +376,18 @@ impl Surface {
             batches: Cell::new(0),
             events_sent: Cell::new(0),
             events_handled: Cell::new(0),
+            #[cfg(test)]
+            heard: RefCell::default(),
+            #[cfg(test)]
+            asked_past: RefCell::default(),
             chrome: Default::default(),
             host_theme: RefCell::new(None),
             host_overrides: RefCell::new(None),
             transparent: Cell::new(false),
             host_dark: Cell::new(None),
             host_environment: Cell::default(),
+            host_settings: Cell::default(),
+            on_unhandled_back: RefCell::default(),
             windows: RefCell::default(),
             input_root: RefCell::default(),
         });
@@ -498,6 +526,7 @@ impl Surface {
         *self.anim.borrow_mut() = UiAnimation::default();
         self.nav.borrow_mut().reset();
         crate::input::reset(self);
+        crate::focus::reset(self);
         crate::keymap::clear(self);
         crate::text_input::surface_stopped(self.key);
         self.js_frame.set(false);
@@ -543,8 +572,19 @@ impl Surface {
         }
     }
 
+    /// Tells the engine an arrow from stop `from` toward `direction`
+    /// scrolled the scroll view around it on instead of leaving it: a list
+    /// scrolls to its next row by index (`EngineControl::focus_past`).
+    pub(crate) fn focus_past(&self, from: NodeId, direction: nsh_core::focus::Direction) {
+        #[cfg(test)]
+        self.asked_past.borrow_mut().push((from, direction));
+        self.control(|c| c.focus_past(from, direction));
+    }
+
     /// Sends an event to JS.
     pub(crate) fn event(&self, id: NodeId, kind: EventKind, payload: EventPayload) {
+        #[cfg(test)]
+        self.heard.borrow_mut().push((id, kind));
         self.control(|c| {
             c.dispatch_event(id, kind, payload);
             self.events_sent.set(self.events_sent.get() + 1);
@@ -588,6 +628,7 @@ impl Surface {
     /// app's settings over the system's.
     pub(crate) fn set_environment(&self, mut environment: Environment) {
         self.host_environment.get().apply(&mut environment);
+        self.host_settings.get().apply(&mut environment);
         if self.environment.replace(environment) != environment {
             self.control(|c| c.set_environment(environment));
             crate::system::environment_applied(self);
@@ -734,6 +775,12 @@ impl Surface {
             }
         }
         self.ensure_ticking();
+    }
+
+    /// Applies `batch` as if the engine had sent it (tests without one).
+    #[cfg(test)]
+    pub(crate) fn apply_batch(self: &Rc<Self>, batch: &MountBatch) {
+        self.apply(batch);
     }
 
     fn apply(self: &Rc<Self>, batch: &MountBatch) {

@@ -1323,6 +1323,19 @@ pub(crate) fn in_focus_scope(surface: &Surface, view: &NshView) -> bool {
     scope.is_none_or(|scope| view == scope || view.is_ancestor(scope))
 }
 
+/// The view the keyboard focus moves in, in the window `root` is the root
+/// view of: its newest modal, else `root` itself.
+pub(crate) fn focus_scope(surface: &Surface, root: &NshView) -> NshView {
+    let Ok(nav) = surface.nav.try_borrow() else {
+        return root.clone();
+    };
+    crate::window::try_root_id(surface, root)
+        .and_then(|window| nav.newest_in(surface, window))
+        .and_then(|id| nav.modals.get(&id))
+        .and_then(|modal| modal.view.clone())
+        .unwrap_or_else(|| root.clone())
+}
+
 /// Goes back (the newest modal, the innermost stack or the app's
 /// `onBackPress`): whether something took it.
 pub(crate) fn go_back(surface: &Rc<Surface>) -> bool {

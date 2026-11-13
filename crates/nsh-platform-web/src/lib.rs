@@ -1,7 +1,7 @@
 //! WebAssembly backend for nsh: runs an app in a browser page and renders
 //! it to the DOM: apps published with `nsh package --target web`, the web
 //! development host and the website's live demos. `platform.os` is `"web"`;
-//! the page reports the idiom (phone, tablet or desktop browser), locale
+//! the page reports the idiom (phone, tablet, desktop browser or TV), locale
 //! and the user's settings ([`nsh_environment`]).
 //!
 //! - The app's TSX runs on the browser's own JavaScript engine (feature
@@ -37,6 +37,7 @@ mod encode;
 mod event;
 mod ffi;
 mod filesystem;
+mod focus;
 mod net;
 mod shader;
 mod storage;
@@ -486,7 +487,9 @@ fn page() -> Environment {
 }
 
 /// What the page knows about the user and the device, as JSON: `idiom`
-/// (`"phone"`, `"pad"`, `"desktop"`), `locale` (a BCP 47 tag), `rtl`,
+/// (`"phone"`, `"pad"`, `"desktop"`, or `"tv"`: a page on a TV, a `.wgt`,
+/// says so, as no pointer heuristic can; anything else is a phone),
+/// `locale` (a BCP 47 tag), `rtl`,
 /// `reduceMotion`, `fontScale`, `pixelRatio`, `safeArea` (`[top, right,
 /// bottom, left]`), `keyboard` (the height the on-screen keyboard
 /// covers), `appleKeyboard` (the browser runs on an Apple platform: its
@@ -514,6 +517,7 @@ pub unsafe extern "C" fn nsh_environment(ptr: *const u8, len: usize) -> f64 {
         env.idiom = match idiom {
             "desktop" => Idiom::Desktop,
             "pad" => Idiom::Pad,
+            "tv" => Idiom::Tv,
             _ => Idiom::Phone,
         };
     }
@@ -1514,6 +1518,22 @@ fn key_of(code: u32) -> Option<Key> {
         267 => Key::End,
         268 => Key::PageUp,
         269 => Key::PageDown,
+        // The media and TV remote keys (`nsh.js`'s `NAMED_KEYS`).
+        270 => Key::MediaPlayPause,
+        271 => Key::MediaPlay,
+        272 => Key::MediaPause,
+        273 => Key::MediaStop,
+        274 => Key::MediaRewind,
+        275 => Key::MediaFastForward,
+        276 => Key::MediaNext,
+        277 => Key::MediaPrevious,
+        278 => Key::ColorRed,
+        279 => Key::ColorGreen,
+        280 => Key::ColorYellow,
+        281 => Key::ColorBlue,
+        282 => Key::ChannelUp,
+        283 => Key::ChannelDown,
+        284 => Key::Info,
         // F1 to F24.
         513..=536 => Key::F((code - 512) as u8),
         _ => return None,
@@ -1563,6 +1583,67 @@ pub extern "C" fn nsh_key(key: u32, modifiers: u32, focus: u32, repeat: u32) -> 
         KeyMatch::Fire(id) => id as f64,
         KeyMatch::Notify(id) => -3.0 - id as f64,
     }
+}
+
+/// Where an arrow key moves the keyboard focus (`web/nsh.js`
+/// `arrowFocus`), as `focus::decide` reads the page's JSON description:
+/// the stop that takes it; -2 - the scroll view's id when the scroll view
+/// around the focus scrolls on instead (the page scrolls it and tells
+/// [`nsh_focus_past`]); or -1 for neither (the key goes on). Decided on
+/// the spot by `nsh_core::focus`, without the engine.
+///
+/// # Safety
+///
+/// `ptr..ptr + len` is memory from [`nsh_alloc`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nsh_focus_move(ptr: *const u8, len: usize) -> f64 {
+    // SAFETY: guaranteed by the caller.
+    let json = unsafe { string(ptr, len) };
+    match focus::decide(&json) {
+        Some(focus::Arrow::Focus(id)) => f64::from(id),
+        Some(focus::Arrow::Scroll(id)) => -2.0 - f64::from(id),
+        None => -1.0,
+    }
+}
+
+/// The stop that takes the keyboard focus as it appears (`autoFocus`,
+/// `web/nsh.js` `autoFocus`), as `focus::auto` reads the page's JSON
+/// description, or -1 for none.
+///
+/// # Safety
+///
+/// `ptr..ptr + len` is memory from [`nsh_alloc`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nsh_focus_auto(ptr: *const u8, len: usize) -> f64 {
+    // SAFETY: guaranteed by the caller.
+    let json = unsafe { string(ptr, len) };
+    focus::auto(&json).map_or(-1.0, f64::from)
+}
+
+/// An arrow toward `direction` (0 up, 1 down, 2 left, 3 right) scrolled
+/// the scroll view around stop `from`, which has the keyboard focus,
+/// instead of leaving it ([`nsh_focus_move`]): a list around it scrolls to
+/// its next row by index, whose first stop takes the focus once it is
+/// mounted (`EngineControl::focus_past`).
+#[unsafe(no_mangle)]
+pub extern "C" fn nsh_focus_past(from: u32, direction: u32) -> f64 {
+    use nsh_core::focus::Direction;
+    let direction = match direction {
+        0 => Direction::Up,
+        1 => Direction::Down,
+        2 => Direction::Left,
+        3 => Direction::Right,
+        _ => return -1.0,
+    };
+    send(|app| app.control.focus_past(from, direction))
+}
+
+/// How far a scroll view moves along its axis (`vertical` 1, horizontal
+/// 0) to bring the stop an arrow focused into sight (`focus::reveal`, CSS
+/// pixels): NaN while it shows whole already.
+#[unsafe(no_mangle)]
+pub extern "C" fn nsh_focus_reveal(start: f32, len: f32, viewport: f32, vertical: u32) -> f64 {
+    focus::reveal(start, len, viewport, vertical != 0).map_or(f64::NAN, f64::from)
 }
 
 /// Binding `id` of the app's shortcuts fired ([`nsh_key`]): the root's

@@ -64,11 +64,72 @@ pub(crate) struct Ambient {
     /// The main window's close presses: how many, and the last one's
     /// reason ([`crate::element::desktop::WindowRef::on_close_press`]).
     main_close_press: Option<Signal<(u64, crate::desktop::CloseReason)>>,
+    /// The theme types read of the tokens ([`super::theme_of`]): by type,
+    /// the tokens read and the theme.
+    themes: ThemeCache,
+    /// How theme files are read ([`ThemeTokens`]), for a
+    /// [`super::ThemeScope`]'s `theme`.
+    theme_tokens: Option<super::ThemeTokens>,
     /// The app's address (`set_app_url` resolves against its page base).
     app_url: Option<crate::url_scheme::AppUrlCell>,
+    /// A [`super::ThemeScope`] was made on this surface.
+    scoped: bool,
+}
+
+/// The surface's cache of theme types read ([`super::theme_of`]). `f` runs
+/// with the surface's data borrowed: it runs no app code.
+pub(crate) fn with_theme_cache<R>(f: impl FnOnce(&mut ThemeCache) -> R) -> R {
+    with_data(|d| f(&mut d.ambient.themes))
+}
+
+/// The theme types read so far ([`super::theme_of`]): by type and by the
+/// tokens read (the surface's, and each [`super::ThemeScope`]'s), the theme.
+#[derive(Default)]
+pub(crate) struct ThemeCache(FxHashMap<(TypeId, usize), ReadTheme>);
+
+/// A theme type's value, with the tokens it was read of.
+type ReadTheme = (Arc<Tokens>, Box<dyn Any>);
+
+impl ThemeCache {
+    /// Types read of this many tokens are kept; past it the cache starts
+    /// over (tokens no longer drawn with go with it).
+    const KEPT: usize = 32;
+
+    /// The theme of type `ty` read of `tokens`, if it was.
+    pub(crate) fn get(&self, ty: TypeId, tokens: &Arc<Tokens>) -> Option<&dyn Any> {
+        self.0
+            .get(&(ty, Arc::as_ptr(tokens) as usize))
+            .map(|(_, theme)| &**theme)
+    }
+
+    /// Keeps `theme`, the type `ty` read of `tokens`.
+    pub(crate) fn insert(&mut self, ty: TypeId, tokens: Arc<Tokens>, theme: Box<dyn Any>) {
+        if self.0.len() >= Self::KEPT {
+            self.0.clear();
+        }
+        // The tokens are held, so their address names them while kept.
+        self.0
+            .insert((ty, Arc::as_ptr(&tokens) as usize), (tokens, theme));
+    }
 }
 
 impl Ambient {
+    /// Whether a [`super::ThemeScope`] was made on this surface: until
+    /// then what reads the appearance looks for no scope.
+    pub(crate) fn scoped(&self) -> bool {
+        self.scoped
+    }
+
+    /// A [`super::ThemeScope`] is made.
+    pub(crate) fn set_scoped(&mut self) {
+        self.scoped = true;
+    }
+
+    /// How theme files are read on this surface.
+    pub(crate) fn theme_tokens(&self) -> Option<super::ThemeTokens> {
+        self.theme_tokens.clone()
+    }
+
     /// The hosts whose insets components read.
     pub(crate) fn inset_hosts(&self) -> Vec<NodeId> {
         self.insets.keys().copied().collect()
@@ -227,6 +288,12 @@ impl super::Runtime {
         displays_signal().with_untracked(|d| placement.fit_on_displays(d))
     }
 
+    /// How the surface's UI sets read theme files.
+    pub(crate) fn set_theme_tokens(&self, theme: super::ThemeTokens) {
+        let _entered = self.enter();
+        with_data(|d| d.ambient.theme_tokens = Some(theme));
+    }
+
     /// The design tokens now: what read them runs again.
     pub(crate) fn set_tokens(&self, tokens: Arc<Tokens>) {
         let _entered = self.enter();
@@ -298,9 +365,16 @@ pub fn keyboard_duration() -> f32 {
     env(|e| e.keyboard_duration)
 }
 
-/// Dark appearance (TS: `colorScheme() === "dark"`). Theme colors follow
-/// it without this; read it for anything else.
+/// Dark appearance (TS: `colorScheme() === "dark"`): the nearest
+/// [`super::ThemeScope`]'s around what reads it, else the surface's. Theme
+/// colors follow it without this; read it for anything else.
 pub fn dark() -> bool {
+    super::theme_scope::ScopeAppearance::dark().unwrap_or_else(surface_dark)
+}
+
+/// Dark appearance as the surface shows it (the app's, else the system's),
+/// whatever scope is around.
+pub(super) fn surface_dark() -> bool {
     env(|e| e.dark)
 }
 
@@ -474,17 +548,30 @@ pub fn is_catalyst() -> bool {
 
 /// Whether desktop behavior applies, NSH's one definition of desktop: a
 /// desktop OS (macOS, Windows, Linux), a browser in the desktop idiom or
-/// a terminal (TS: `platform.desktop`, [`Idiom::desktop_on`]); it does not
-/// change.
+/// a terminal, never a TV (TS: `platform.desktop`, [`Idiom::desktop_on`]);
+/// it does not change.
 pub fn is_desktop() -> bool {
     with_data(|d| d.ambient.env.as_ref().map(|e| e.env))
         .expect("the core sets the environment")
         .with_untracked(|e| e.idiom.desktop_on(e.os))
 }
 
+/// Whether the app runs on a TV: the TV idiom ([`idiom`] is
+/// [`Idiom::Tv`]), on any OS (TS: `platform.tv`,
+/// [`crate::platform::Environment::tv`]). A TV is not a desktop
+/// ([`is_desktop`] is false); it does not change.
+pub fn is_tv() -> bool {
+    idiom() == Idiom::Tv
+}
+
 /// The design tokens the app is drawn with (reading them subscribes: new
 /// tokens reach what read them).
 pub fn tokens() -> Arc<Tokens> {
+    super::theme_scope::ScopeTokens::nearest().unwrap_or_else(surface_tokens)
+}
+
+/// The design tokens the surface is drawn with, whatever scope is around.
+pub(super) fn surface_tokens() -> Arc<Tokens> {
     with_data(|d| d.ambient.tokens)
         .expect("the core sets the tokens")
         .get()
@@ -498,6 +585,33 @@ pub fn tokens() -> Arc<Tokens> {
 /// `nsh_base::Theme`).
 pub fn set_tokens(tokens: impl Into<Tokens>) {
     act(Action::Tokens(tokens.into()));
+}
+
+/// Changes some of the app's design tokens: each token `tokens` has takes
+/// its value, the others stay as they are ([`set_tokens`] replaces them
+/// all). The change applies in order with the app's other actions, so two
+/// updates in one turn both take, the later over the earlier; what reads
+/// a changed token follows in the same frame. TS: `updateTheme`.
+pub fn update_tokens(tokens: impl Into<Tokens>) {
+    act(Action::UpdateTokens(tokens.into()));
+}
+
+/// Asks for a theme type's change ([`super::set_theme`],
+/// [`super::update_theme`], [`super::reset_theme`]), in order with the
+/// app's other actions as [`update_tokens`].
+pub(crate) fn theme_action(action: Action) {
+    act(action);
+}
+
+/// Puts the design tokens `names` back to their values in the app's theme
+/// (the UI set's defaults with `nsh.json`'s theme, or the theme last set
+/// whole with [`set_tokens`] or `setTheme`), undoing [`update_tokens`] for
+/// them; a name the theme lacks is removed. The other tokens stay as they
+/// are. TS: `resetTheme`.
+pub fn reset_tokens<S: Into<Box<str>>>(names: impl IntoIterator<Item = S>) {
+    act(Action::ResetTokens(
+        names.into_iter().map(Into::into).collect(),
+    ));
 }
 
 /// The width of `text` on one line in `font` (the CSS `font` shorthand; an
@@ -661,6 +775,11 @@ pub fn open_url(url: impl Into<String>) -> Answer<bool> {
 /// Puts `text` on the system clipboard (TS: `Clipboard.writeText`).
 pub fn set_clipboard(text: impl Into<String>) {
     act(super::services::set_clipboard(text.into()));
+}
+
+/// Leaves the app (`Command::ExitApp`), from a call or a task.
+pub(crate) fn exit_app() {
+    act(Action::Command(crate::ROOT_ID, Command::ExitApp));
 }
 
 /// Puts `item` on the system clipboard (TS: `Clipboard.write`): its

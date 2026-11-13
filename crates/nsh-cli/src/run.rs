@@ -31,6 +31,14 @@ pub(crate) enum Target {
     /// The web development host, in the browser (the dev server serves its
     /// page).
     Web,
+    /// The web development host on a Samsung TV: a Tizen web app that opens
+    /// the dev server's page with the TV shim, in the TV idiom (the same page
+    /// opens in a browser here).
+    TizenWeb,
+    /// The development runtime on a Samsung TV or the Tizen emulator, natively
+    /// (`nsh-platform-tizen`): a development TPK installed with `sdb`, which
+    /// reaches the dev server through `sdb reverse` (or `sdb forward`).
+    Tizen,
     /// The GPUI development host, in a window on this machine (macOS,
     /// Windows or Linux): the app as GPUI apps that embed it show it.
     Gpui,
@@ -44,7 +52,10 @@ impl Target {
     /// and a device's host may be on the network; a desktop window, the
     /// terminal and Catalyst connect on this machine.
     pub(crate) fn uses_network(self) -> bool {
-        matches!(self, Target::Ios | Target::Android | Target::Web)
+        matches!(
+            self,
+            Target::Ios | Target::Android | Target::Web | Target::TizenWeb
+        )
     }
 
     /// The default: this system’s native desktop host (AppKit on macOS,
@@ -69,11 +80,119 @@ impl Target {
             Target::Windows => crate::runtime::Platform::Windows,
             Target::Gpui => crate::runtime::Platform::Gpui,
             Target::Tui => crate::runtime::Platform::Tui,
-            Target::Ios | Target::Android | Target::Web => {
+            Target::Ios | Target::Android | Target::Web | Target::TizenWeb | Target::Tizen => {
                 crate::runtime::Platform::IphoneSimulator
             }
         }
     }
+}
+
+/// The idiom a development session runs the app in, in place of the one
+/// its host has (`--idiom`, `nsh.json` `dev.idiom`): the GPUI host's
+/// (`--target gpui`) and the web dev page's (`--target web`, and the page
+/// `nsh dev --server-only` serves), so that a TV's 10-foot layouts and
+/// focus are built on a desktop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum DevIdiom {
+    /// A desktop: the GPUI host's own idiom; the web page in the desktop
+    /// idiom whatever its pointer and width.
+    Desktop,
+    /// A TV (`platform.tv`, `tv={{…}}` props, mobile behavior).
+    Tv,
+}
+
+impl DevIdiom {
+    /// Its name, as the hosts take it (`--idiom tv`, the player's
+    /// `idiom: "tv"`).
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            DevIdiom::Desktop => "desktop",
+            DevIdiom::Tv => "tv",
+        }
+    }
+
+    /// Whether `target`'s host takes an idiom: the GPUI host and the web
+    /// dev page (`None`: `nsh dev --server-only`, whose page browsers open).
+    fn applies_to(target: Option<Target>) -> bool {
+        matches!(target, None | Some(Target::Gpui | Target::Web))
+    }
+
+    /// The idiom a session for `target` runs the app at `entry` in: `flag`
+    /// (`--idiom`), which only the hosts that take one accept, else
+    /// `nsh.json`'s `dev.idiom`, which another host leaves out with a
+    /// warning (the file is the app's, for every target); `None`: the
+    /// host's own.
+    pub(crate) fn resolve(
+        flag: Option<DevIdiom>,
+        entry: &Path,
+        target: Option<Target>,
+    ) -> anyhow::Result<Option<DevIdiom>> {
+        Self::choose(flag, entry, Self::applies_to(target), || {
+            format!(
+                "--target {} runs in its host's own idiom",
+                target_name(target)
+            )
+        })
+    }
+
+    /// The idiom the hosts of `nsh test --target <target>` start the apps
+    /// the tests open in, as [`resolve`](Self::resolve) chooses it for `nsh
+    /// run`: the GPUI host's and the web test page's; `None` for `target`
+    /// is a headless run, which takes the idiom of `open`'s `platform`.
+    pub(crate) fn for_test(
+        flag: Option<DevIdiom>,
+        entry: &Path,
+        target: Option<Target>,
+    ) -> anyhow::Result<Option<DevIdiom>> {
+        let applies = matches!(target, Some(Target::Gpui | Target::Web));
+        Self::choose(flag, entry, applies, || match target {
+            Some(_) => format!(
+                "--target {} runs in its host's own idiom",
+                target_name(target)
+            ),
+            None => "headless runs take the idiom of `open`'s platform".to_owned(),
+        })
+    }
+
+    /// `flag`, refused unless the host `applies`, else `nsh.json`'s
+    /// `dev.idiom`, left out with a warning that says what the host runs in
+    /// (`elsewhere`) unless it `applies`.
+    fn choose(
+        flag: Option<DevIdiom>,
+        entry: &Path,
+        applies: bool,
+        elsewhere: impl FnOnce() -> String,
+    ) -> anyhow::Result<Option<DevIdiom>> {
+        if let Some(idiom) = flag {
+            if !applies {
+                bail!(
+                    "--idiom needs --target gpui or web: the desktop GPUI host and the web dev page take an idiom, \
+                     the other hosts run in their device's own"
+                );
+            }
+            return Ok(Some(idiom));
+        }
+        match crate::package::read_config(entry)?.dev.idiom {
+            Some(idiom) if !applies => {
+                ui::warn(format!(
+                    "nsh.json dev.idiom \"{}\" applies to --target gpui and web: {}",
+                    idiom.as_str(),
+                    elsewhere(),
+                ));
+                Ok(None)
+            }
+            configured => Ok(configured),
+        }
+    }
+}
+
+/// `target` as `--target` names it.
+fn target_name(target: Option<Target>) -> String {
+    target
+        .and_then(|target| clap::ValueEnum::to_possible_value(&target))
+        .map(|value| value.get_name().to_owned())
+        .unwrap_or_default()
 }
 
 /// How the development host runs the app and what it shows besides it.
@@ -88,6 +207,9 @@ pub(crate) struct HostFlags {
     pub(crate) fps: bool,
     /// Terminal Cell dimensions, overriding nsh.json.
     pub(crate) points_per_cell: Option<String>,
+    /// The idiom to run the app in (`--idiom`), over `nsh.json`'s
+    /// ([`DevIdiom::resolve`]).
+    pub(crate) idiom: Option<DevIdiom>,
 }
 
 /// The host window's own options: the desktop hosts take the size
@@ -167,10 +289,12 @@ pub(crate) fn run(
         trace,
         fps,
         points_per_cell,
+        idiom,
     } = flags;
     if points_per_cell.is_some() && target != Target::Tui {
         bail!("--points-per-cell needs --target tui");
     }
+    let idiom = DevIdiom::resolve(idiom, entry, Some(target))?;
     if fps
         && !matches!(
             target,
@@ -207,18 +331,25 @@ pub(crate) fn run(
                 trace,
                 fps,
                 points_per_cell,
+                idiom,
             },
             &work,
         );
     }
     if crate::rust_app::is_root(entry) {
-        return run_rust_app(entry, listen, target, device, &work);
+        return run_rust_app(entry, listen, target, device, idiom, &work);
     }
     if target == Target::Android {
         return run_android(entry, listen, release, limits, &work, trace);
     }
     if target == Target::Web {
-        return run_web(entry, listen, release, limits);
+        return run_web(entry, listen, release, limits, idiom);
+    }
+    if target == Target::TizenWeb {
+        return run_tizen_web(entry, listen, release, limits, device);
+    }
+    if target == Target::Tizen {
+        return run_tizen(entry, listen, release, limits, device);
     }
     // The host a previous session left running would connect to this one
     // until it is replaced.
@@ -234,11 +365,13 @@ pub(crate) fn run(
         | Target::Macos
         | Target::Windows
         | Target::Web
+        | Target::TizenWeb
+        | Target::Tizen
         | Target::Gpui
         | Target::Tui => None,
     };
     // The host it starts connects by itself: no addresses to show.
-    let session = DevSession::start(entry, listen, release, limits)?;
+    let session = DevSession::start(entry, listen, release, limits, idiom)?;
     let host = crate::runtime::file(target.platform(), false)?;
     let mut args = vec!["--dev-server".to_owned(), session.local_url()];
     if trace {
@@ -316,6 +449,11 @@ pub(crate) fn run(
                 .args(&args)
                 .args(["--app-id", &crate::package::app_id(entry)?])
                 .args(window.args());
+            // The environment's idiom from the app's start (a TV's on the
+            // desktop); the window keeps its size (`--window-size`).
+            if let Some(idiom) = idiom {
+                command.args(["--idiom", idiom.as_str()]);
+            }
             run_local(&session, &mut command, "the GPUI host")
         }
         Target::Ios => {
@@ -339,7 +477,9 @@ pub(crate) fn run(
             drop(stoppable);
             result
         }
-        Target::Android | Target::Web | Target::Tui => unreachable!("handled above"),
+        Target::Android | Target::Web | Target::TizenWeb | Target::Tizen | Target::Tui => {
+            unreachable!("handled above")
+        }
     }
 }
 
@@ -353,12 +493,55 @@ fn run_web(
     listen: crate::dev::Listen,
     release: bool,
     limits: Option<HostLimits>,
+    idiom: Option<DevIdiom>,
 ) -> anyhow::Result<()> {
     // Built first in a checkout: the session serves the runtime it finds.
     crate::runtime::web(crate::runtime::WebKind::Dev, true)?.context("no web runtime")?;
-    let session = DevSession::start(entry, listen, release, limits)?;
+    let session = DevSession::start(entry, listen, release, limits, idiom)?;
     session.print_web_url();
     session.watch(|| Ok(false))
+}
+
+/// Starts a dev session whose page has the TV shim and the TV idiom
+/// (`tizen_web::dev_page`), and installs and launches on a Samsung TV
+/// (`--device`: its `sdb` serial; by default the one `tz` picks) a
+/// development Tizen web app that opens that page at this machine's LAN
+/// address (`tizen_web::run_dev`). The same page opens in a browser here.
+fn run_tizen_web(
+    entry: &Path,
+    listen: crate::dev::Listen,
+    release: bool,
+    limits: Option<HostLimits>,
+    device: Option<&str>,
+) -> anyhow::Result<()> {
+    crate::runtime::web(crate::runtime::WebKind::Dev, true)?.context("no web runtime")?;
+    let session = DevSession::start(entry, listen, release, limits, None)?;
+    session.serve_tv_page()?;
+    crate::tizen_web::run_dev(entry, &session.device_web_url(), device)?;
+    session.print_web_url();
+    session.watch(|| Ok(false))
+}
+
+/// Starts a dev session and runs the app on a Samsung TV or the Tizen
+/// emulator (`--device`: its `sdb` serial; by default the only one): the
+/// development TPK installed when the device does not have this build, the
+/// library's dev port mapped to the session's (`tizen::run_dev`), hot
+/// updates as on Android.
+fn run_tizen(
+    entry: &Path,
+    listen: crate::dev::Listen,
+    release: bool,
+    limits: Option<HostLimits>,
+    device: Option<&str>,
+) -> anyhow::Result<()> {
+    let session = DevSession::start(entry, listen, release, limits, None)?;
+    // The mappings and the app go when the run ends, Ctrl-C too.
+    let stoppable = ui::Stoppable::new();
+    let run = crate::tizen::run_dev(entry, device, session.port())?;
+    let result = session.watch(|| Ok(false));
+    drop(run);
+    drop(stoppable);
+    result
 }
 
 /// Runs a Rust app (`nsh.json` `"root"`): its own runner, with no JS
@@ -372,6 +555,7 @@ fn run_rust_app(
     listen: crate::dev::Listen,
     target: Target,
     device: Option<&str>,
+    idiom: Option<DevIdiom>,
     work: &Path,
 ) -> anyhow::Result<()> {
     let app =
@@ -505,9 +689,27 @@ fn run_rust_app(
         }
         Target::Web => {
             crate::runtime::web(crate::runtime::WebKind::Dev, true)?.context("no web runtime")?;
-            let session = DevSession::start(&entry, listen, false, None)?;
+            let session = DevSession::start(&entry, listen, false, None, idiom)?;
             session.print_web_url();
             session.watch(|| Ok(false))
+        }
+        Target::TizenWeb => bail!(
+            "a Rust app (nsh.json \"root\") runs on a TV as a package: nsh package --target tizen-web"
+        ),
+        // Packaged (signed) and installed on the TV, as on Android.
+        Target::Tizen => {
+            crate::package::package(crate::package::PackageOptions {
+                run: true,
+                ..package_options(
+                    &entry,
+                    crate::package::PackageTarget::Tizen,
+                    &run.join("tizen"),
+                    config,
+                    &[],
+                )
+            })?;
+            let _stoppable = ui::Stoppable::new();
+            app.watch(|| Ok(false))
         }
         Target::Gpui | Target::Tui => unreachable!("handled before Rust runner selection"),
     }
@@ -522,7 +724,18 @@ fn package_for_run(
     config: crate::package::AppConfig,
     abis: &[String],
 ) -> anyhow::Result<()> {
-    crate::package::package(crate::package::PackageOptions {
+    crate::package::package(package_options(entry, target, out, config, abis))
+}
+
+/// [`package_for_run`]'s options.
+fn package_options<'a>(
+    entry: &'a Path,
+    target: crate::package::PackageTarget,
+    out: &'a Path,
+    config: crate::package::AppConfig,
+    abis: &'a [String],
+) -> crate::package::PackageOptions<'a> {
+    crate::package::PackageOptions {
         entry,
         target,
         out,
@@ -531,12 +744,14 @@ fn package_for_run(
         profile: None,
         keystore: None,
         abis,
+        tizen_archs: &[],
         format: crate::android::Format::Apk,
         arch: None,
         run: false,
         asset_url: None,
+        probe: false,
         development: true,
-    })
+    }
 }
 
 /// Runs `command` (a Rust app's runner, its output in this terminal) until
@@ -590,6 +805,8 @@ fn run_tui(
         trace,
         fps,
         points_per_cell,
+        // The terminal host takes none (`DevIdiom::resolve`).
+        idiom: _,
     } = flags;
     let config = crate::package::read_config(entry)?;
     let cells = points_per_cell
@@ -600,7 +817,7 @@ fn run_tui(
     fs::create_dir_all(work)?;
     let path = work.join("tui.log");
     let building = ui::Step::start(format!("building {}", ui::path(entry)));
-    let session = DevSession::start(entry, listen, release, limits)?;
+    let session = DevSession::start(entry, listen, release, limits, None)?;
     building.finish();
     // A Rust root also uses the development host, which receives the Root event.
     let host = crate::runtime::test_host(Platform::Tui)?;
@@ -779,7 +996,7 @@ fn run_android(
     let serial = android::device(&sdk)?;
     // As on iOS: the host of a previous session must not connect first.
     let _ = android::adb(&sdk, &serial, &["shell", "am", "force-stop", BUNDLE_ID]);
-    let session = DevSession::start(entry, listen, release, limits)?;
+    let session = DevSession::start(entry, listen, release, limits, None)?;
     install_android_host(&sdk, &serial, work, &crate::runtime::android(true, &[])?)?;
     // The device reaches the dev server on its own 127.0.0.1, until the
     // run ends.
@@ -1231,6 +1448,8 @@ fn info_plist(target: Target) -> String {
         | Target::Macos
         | Target::Windows
         | Target::Web
+        | Target::TizenWeb
+        | Target::Tizen
         | Target::Gpui
         | Target::Tui => {
             "<key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>\n    \
@@ -1434,7 +1653,10 @@ mod tests {
             .filter(|target| target.uses_network())
             .copied()
             .collect();
-        assert_eq!(network, [Target::Ios, Target::Android, Target::Web]);
+        assert_eq!(
+            network,
+            [Target::Ios, Target::Android, Target::Web, Target::TizenWeb]
+        );
     }
 
     /// `--window-size` reaches every desktop host; GPUI runs no app of

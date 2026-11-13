@@ -2,6 +2,7 @@
 //! what a user does with them and what the app hears and shows.
 
 mod accordion;
+mod app_theme;
 mod avatar;
 mod button;
 mod calendar;
@@ -15,6 +16,7 @@ mod data_table;
 mod date_picker;
 mod dialog;
 mod diff;
+mod diff_roles;
 mod dock;
 mod dropdown_presence;
 mod editor;
@@ -24,6 +26,7 @@ mod editor_diagnostics;
 mod editor_languages;
 #[cfg(feature = "emoji-picker")]
 mod emoji_picker;
+mod focus_group;
 mod focus_within;
 mod hover_card;
 mod link;
@@ -38,13 +41,16 @@ mod popups;
 mod radio;
 mod resizable;
 mod rich_editor;
+mod role_types;
 mod rust_root;
 mod scrollbar;
 mod select;
 mod sheet;
 mod slider;
+mod status_roles;
 mod submenu;
 mod switch;
+mod syntax_roles;
 mod tabs;
 #[cfg(feature = "term")]
 mod term;
@@ -54,7 +60,12 @@ mod term_cells;
 mod term_input;
 mod terminal;
 mod text_view;
+mod theme_roles;
+mod theme_set_numbers;
+mod theme_set_roles;
 mod time_field;
 mod toggle;
+mod token_roles;
 mod toolbar;
 mod tree;
+mod tv_props;

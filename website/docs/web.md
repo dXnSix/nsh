@@ -39,8 +39,8 @@ requestAnimationFrame ──────────────┘             
 
 Published apps behave as desktop apps in desktop browsers and as phone apps in phone browsers:
 
-- **Wheels and touchpads** scroll the innermost scroll view along their axis that can still move (a vertical wheel scrolls a horizontal list when nothing vertical can), and stay on it until the scroll ends; wheel notches glide, paging and snapping views move one page per scroll. Ctrl + wheel and touchpad pinches pinch views with native pinch values instead of zooming the page. Dragging with the mouse does not scroll, as on the desktop platforms: mouse drags go to pans, the responder system and text selection. Scroll views report `onScrollDragStart` / `onScrollDragEnd`, `onMomentumStart` / `End` and `onScrollEnd` as on the desktop platforms.
-- **Keyboard**: Tab and Shift+Tab move between pressables and inputs (the app's `focus-visible:` styles show the keyboard focus); Return presses the focused pressable, Space presses it when released; arrows, Page Up / Page Down, Space, Home and End scroll the scroll view around the focus or under the mouse; Escape leaves a field, closes the dialog, then goes back. `keymap` shortcuts work in the browser, matched on the spot (`mod` is Command in Safari and Chrome on a Mac, Control elsewhere).
+- **Wheels and touchpads** scroll the innermost scroll view along their axis that can still move (a vertical wheel scrolls a horizontal list when nothing vertical can), and stay on it until the scroll ends; wheel notches glide, paging and snapping views move one page per scroll. Ctrl + wheel and touchpad pinches pinch views with native pinch values instead of zooming the page. Dragging with the mouse does not scroll, as on the desktop platforms: mouse drags go to pans, the responder system and text selection. Scroll views report `onScrollDragStart` / `onScrollDragEnd`, `onMomentumStart` / `End` and `onScrollEnd` as on the desktop platforms, in every browser: where the engine sends no `scrollend` (Chromium before 114, as on 2024's Samsung TVs), a scroll ends 150 ms after it last moved.
+- **Keyboard**: Tab and Shift+Tab move between pressables and inputs (the app's `focus-visible:` styles show the keyboard focus); the arrows move the focus to the nearest control in that direction, in the open dialog and above a sheet's backdrop, scrolling it into sight, as in the terminal (a focused input keeps its arrows, and so does a component that binds them, such as `Tabs` or `RadioGroup`); what a TV's remote needs works there too, in a TV's web app as in any browser: `autoFocus` on a view, `preferredFocus`, the `nextFocusUp` / `Down` / `Left` / `Right` routes and `FocusGroup`'s `destinations` and `trap`, and a scroll view or a long `List` around the focus scrolls on before the focus leaves it, the list to its next row (see [Arrow keys and TVs](../elements/index.md#arrow-keys-and-tvs)); Return presses the focused pressable, Space presses it when released; the arrows where no control is that way, Page Up / Page Down, Space, Home and End scroll the scroll view around the focus or under the mouse; Escape leaves a field, closes the dialog, then goes back. `keymap` shortcuts work in the browser, matched on the spot (`mod` is Command in Safari and Chrome on a Mac, Control elsewhere).
 - **Going back**: Escape, Alt+Left (Cmd+[ on a Mac) and the mouse's back button close the newest dialog or pop the innermost shown stack (a stack in a tab that is not selected keeps its pages), as the Android back button does; `popOnBack` and `onBackPress` work as there. When the app is the whole page, every page pushed on a shown stack and every open dialog is a browser history entry, so the browser's back button goes back in the app. `nsh.json` `web.history` decides it for the packaged page and the dev server's: `false` keeps the browser's history to the page's own entries, `true` adds the app's in an iframe too.
 - **Addresses**: when the app is the whole page, [`UrlScheme.setUrl(url)`](../modules/nsh.md#urlscheme) sets the address of the current history entry, resolved against the page's address (and its `<base href>`), and `UrlScheme.url()` reads it. The browser's back button goes back in the app: the stack's pages go back and the address becomes the entry's. An address the user types (a `#fragment`) is an entry of the app's at the pages shown, and a back or forward to an entry of the same pages tells the app the entry's address with [`UrlScheme.on("change")`](../modules/nsh.md#urlschemeonchange). `setUrl(url, { history: "push" })` makes such an entry for an address of the app's own, a tab or a filter.
 - **Touch**: only scroll views pan; the page itself never scrolls, zooms or pulls to refresh under the app, and taps have no delay. In an iframe, swipes the app does not take scroll the embedding page. Drags on views with native pans, pinches and the responder system are the app's.
@@ -280,7 +280,69 @@ like the others: it runs each build of the app, shows build errors and runtime e
 logs to the terminal. A change to a Rust app's crate builds its runtime again and the open page loads it by itself;
 TSX edits are applied in place (hot updates). Phones on the same network open the
 address `nsh run` prints under it (`on this network: http://192.168.…:8790/`). `nsh dev` serves the same page once the
-web runtime is there (in the distribution, always).
+web runtime is there (in the distribution, always). `--idiom tv` (or `nsh.json` `"dev": { "idiom": "tv" }`) runs the app
+on the page as on a TV, to build its 10-foot layouts and focus in a desktop browser ([TVs](./platform-specific.md#tv-layouts-on-the-desktop)).
+
+## Samsung TVs
+
+Samsung TVs run an app as a Tizen web app (a `.wgt`) in their browser engine, the TVs of 2024 on (Tizen 8). The app is
+the published site plus Tizen's manifest and a TV shim; `platform.os` is `"web"` and the app runs in the TV idiom:
+`platform.tv` is `true`, `platform.select` picks `tv` and `tv={{…}}` props apply.
+
+```sh
+nsh package --target tizen-web                     # .nsh/out/tizen-web/<Name>/ and <Name>.wgt, unsigned
+nsh package --target tizen-web --sign my-profile   # .nsh/out/<Name>.wgt, signed with the Tizen SDK's tz
+nsh run --target tizen-web                         # on the TV (nsh.json tizen.signing) and in a browser here
+nsh test --target tizen-web                        # the tests in headless Chromium, on the TV's page, 1920×1080
+nsh package --target tizen-web --probe             # a package that shows how the TV loads a page's files
+```
+
+- **The package** is the [published site](#publish-an-app) with `config.xml` (the package and application ids, the
+  version, the Tizen version it needs, the internet and remote-key privileges, landscape, the icon at 512×423) and the
+  TV shim, which the page runs before the runtime. A certificate profile of Samsung's Certificate Manager signs it:
+  `--sign <profile>` or `nsh.json` `tizen.signing`; `nsh package` runs `tz pack` of the Tizen SDK for it, and
+  `--run` installs and launches the signed package with `tz`.
+- **The remote:** Back goes back in the app as the browser's back key does (the newest dialog closes, the innermost
+  stack pops, `onBackPress` and `popOnBack` work); on the first screen, with nothing to go back to, the app asks
+  whether to exit and exits on Exit, as Samsung's rules ask. The arrows, Enter, the color keys, the media keys and
+  the channel keys reach the app as their [`keymap`](../modules/nsh.md#media-and-tv-remote-keys) names (`red`,
+  `mediaplaypause`, `channelup`, ...); the page registers them with the TV.
+- **[`nsh/tizen`](../modules/nsh-tizen.md)** works in the package: `isAvailable()` is `true`, and `productInfo`,
+  `registerKey` / `unregisterKey`, `exitApp` and `setPreviewData` (Smart Hub's preview) call the TV's `tizen` and
+  `webapis` APIs. In a browser elsewhere `isAvailable()` is `false`.
+- **`nsh.json` `tizen`** names the package. Every key has a default:
+
+  ```json
+  "tizen": {
+    "package": "AbCdE12345",
+    "appId": "AbCdE12345.Counter",
+    "version": "1.2.0",
+    "apiVersion": "8.0",
+    "privileges": ["http://tizen.org/privilege/tv.audio"],
+    "signing": "my-profile",
+    "smartHubPreview": "service"
+  }
+  ```
+
+  `package` is 10 letters and digits (by default made from the app's `id`); `appId` is `<package>.<name>` (by
+  default the app's name, letters and digits); `version` is Tizen's `x.y.z` of numbers (by default the app's
+  `version`, else `1.0.0`); `apiVersion` is the lowest Tizen that installs the package (`8.0`); `privileges` are
+  asked for besides the internet's and the remote's keys'; `signing` is the certificate profile;
+  `smartHubPreview` is the app's Smart Hub preview (below).
+- **Smart Hub's preview**, the tiles the TV shows for the app on its home screen, is opt-in with
+  `tizen.smartHubPreview`. A URL (`"https://example.com/tv/preview.json"`) is a public preview: the package declares
+  it, and the TV reads that JSON, in Samsung's preview format, from your server. `"service"` is a personal preview the
+  app sets with [`nsh/tizen`](../modules/nsh-tizen.md)'s `setPreviewData`: Samsung takes it from a background
+  service, so the package carries a small one of NSH's that the call starts with the data. Samsung allows one update
+  every 10 minutes, and packages installed from a USB drive show no preview. A tile's `action_data` does not reach the
+  app yet. Both forms follow Samsung's guides and are not yet checked on a TV.
+- **Developing:** `nsh run --target tizen-web` serves the TV's page from the dev server, so a browser here at the
+  address it prints shows the app in the TV idiom, with hot updates. With `nsh.json` `tizen.signing` it also signs,
+  installs and launches a development package on the TV (`--device`: its `sdb` serial), whose page opens the dev
+  server's at this machine's address on the network.
+- **The loader probe** (`--probe`) is a package of its own, `NshLdProbe.Probe`: on the TV it tries each way the app's
+  page loads its files (module scripts, an import map, an iframe's realm, a script fetched with CORS, WebAssembly, a fetch under the page's Content-Security-Policy, Samsung's `webapis.js`) and
+  shows what each did, with the engine's version.
 
 ## Build the website's player
 
@@ -327,7 +389,7 @@ const player = await createPlayer(document.querySelector("#phone"), {
   wasm: "./nsh.wasm",
   assetBase: "./assets/",   // where `asset:/…` URIs (image imports) are served from
   // dark: true,            // force an appearance; otherwise it follows the system
-  // idiom: "phone",        // force "phone", "pad" or "desktop"; otherwise the pointer and the size decide
+  // idiom: "phone",        // force "phone", "pad", "desktop" or "tv" (a page on a TV); otherwise the pointer and the size decide
   // history: false,        // pages and dialogs as browser history entries; by default only when the app is the page, not in an iframe
   // dialogs: "viewport",   // Dialog, Sheet and AlertDialog over the whole browser window; by default over the container
 });
@@ -432,6 +494,7 @@ The module is copied as it is, so it imports other code by absolute URL. The app
 
 - `"desktop"`: a mouse (a fine pointer that hovers) and a container at least 600 points wide. `platform.desktop` is `true`, `platform.select` picks `desktop` and `desktop={{…}}` props apply.
 - `"pad"`: a touch screen whose short side is at least 600 points; `"phone"` otherwise. These are mobile: `platform.select` picks `mobile`.
+- `"tv"`: only when the page says so, with the player's `idiom: "tv"` (a TV's browser cannot be told from its pointer: a Tizen `.wgt` page passes it; the dev page passes it with `nsh run --target web --idiom tv`). `platform.tv` is `true`, `platform.select` picks `tv` (then `mobile`) and `tv={{…}}` props apply; a TV is not a desktop.
 
 The idiom is decided when the app starts and stays the same while it runs, as on every platform; a narrow desktop window is still a desktop, laid out for its `windowSize()`. `web={{…}}` props, `platform.select({ web })` and `web:` classes apply in browsers only; `ios={{…}}`, `native` and `ios:` do not apply there.
 

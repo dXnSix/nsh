@@ -515,3 +515,33 @@ covers [nsh] WebView
 tap id:case-shaders-available
 expect Shaders available: true
 covers [nsh] shadersAvailable
+# core-theme-scope
+tap id:case-core-theme-scope
+# A dark scope in a light app: what it holds reads and draws dark, and so
+# does a scope without an appearance of its own inside it.
+expect Outside: light
+expect Inside: dark
+expect Nested: dark
+style id:outside backgroundColor #ffffffff
+style id:scope backgroundColor #000000ff
+style id:inside backgroundColor #000000ff
+# The app's own appearance leaves the scope as it says.
+tap id:app-dark
+expect Outside: dark
+style id:outside backgroundColor #000000ff
+tap id:scope-light
+expect Inside: light
+expect Nested: light
+absent Inside: dark
+expect Outside: dark
+style id:scope backgroundColor #ffffffff
+style id:inside backgroundColor #ffffffff
+style id:outside backgroundColor #000000ff
+# Without an appearance of its own it is shown as the app.
+tap id:scope-none
+expect Inside: dark
+style id:inside backgroundColor #000000ff
+tap id:app-system
+expect Outside: light
+expect Inside: light
+covers [nsh] ThemeScope

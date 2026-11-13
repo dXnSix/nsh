@@ -82,11 +82,42 @@ final class Mounter {
     private int barStyle = -1;
     private boolean barHidden;
 
+    /**
+     * The appearance of the views with one of their own (a {@code ThemeScope}; `encode.rs` `view_props`), by node
+     * id: 1 light, 2 dark.
+     */
+    private final android.util.SparseIntArray viewAppearance = new android.util.SparseIntArray();
+
     /** Dark appearance as shown: the app's, else the system's. */
     boolean night() {
         if (appearance != 0) return appearance == 2;
         return (context.getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
                 == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+    }
+
+    /**
+     * Dark appearance as shown to view {@code id}: that of the nearest view with an appearance of its own, itself
+     * or around it (a {@code ThemeScope}), else the surface's.
+     */
+    boolean nightAt(int id) {
+        if (viewAppearance.size() != 0) {
+            for (Object at = views.get(id); at instanceof View; at = ((View) at).getParent()) {
+                int own = at instanceof Node ? viewAppearance.get(((Node) at).nodeId()) : 0;
+                if (own != 0) return own == 2;
+            }
+        }
+        return night();
+    }
+
+    /** The appearance shown changed, the surface's or a view's own: the controls that draw in it follow. */
+    private void appearanceChanged() {
+        for (int i = 0; i < views.size(); i++) {
+            View v = views.valueAt(i);
+            if (v instanceof ComponentBox && ((ComponentBox) v).component instanceof TabBarComponent) {
+                ((TabBarComponent) ((ComponentBox) v).component).appearanceChanged();
+            }
+            if (v instanceof StackBox.ScreenBox) ((StackBox.ScreenBox) v).appearanceChanged();
+        }
     }
 
     /** A screen's options (`encode.rs` `screen_config`). */
@@ -219,7 +250,7 @@ final class Mounter {
         this.context = host.getContext();
         this.density = host.getResources().getDisplayMetrics().density;
         this.images = images;
-        components.put(TabBarComponent.NAME, c -> new TabBarComponent(context, c, this::night));
+        components.put(TabBarComponent.NAME, c -> new TabBarComponent(context, c, () -> nightAt(c.id())));
         images.redirects = (base, location) -> Native.mediaRedirect(handle(), base, location);
         images.inline = uri -> {
             long handle = handle();
@@ -413,13 +444,7 @@ final class Mounter {
                 }
                 case APPEARANCE: {
                     appearance = b.getInt();
-                    for (int i = 0; i < views.size(); i++) {
-                        View v = views.valueAt(i);
-                        if (v instanceof ComponentBox && ((ComponentBox) v).component instanceof TabBarComponent) {
-                            ((TabBarComponent) ((ComponentBox) v).component).appearanceChanged();
-                        }
-                        if (v instanceof StackBox.ScreenBox) ((StackBox.ScreenBox) v).appearanceChanged();
-                    }
+                    appearanceChanged();
                     if (barStyle == 0) {
                         SystemUi.statusBar(context, barStyle, barHidden, night());
                         for (ModalHost m : shownModals) m.statusBar(barStyle, barHidden, night());
@@ -983,6 +1008,7 @@ final class Mounter {
         }
         if (v == focused) focused = null;
         views.remove(id);
+        viewAppearance.delete(id);
         headerItems.remove(id);
         headerSizes.remove(id);
         statics.remove(id);
@@ -1647,7 +1673,13 @@ final class Mounter {
         }
         boolean selectableView = b.getInt() != 0;
         boolean continuesText = b.getInt() != 0;
+        int ownAppearance = b.getInt();
         if (v == null) return;
+        if (ownAppearance != viewAppearance.get(id)) {
+            if (ownAppearance == 0) viewAppearance.delete(id);
+            else viewAppearance.put(id, ownAppearance);
+            appearanceChanged();
+        }
         if (v instanceof TextBox) ((TextBox) v).continuesText = continuesText;
         SelectableView area = selectableViews.get(id);
         if (selectableView && (area == null || area.view != v)) {

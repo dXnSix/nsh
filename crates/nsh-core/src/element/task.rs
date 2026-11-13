@@ -207,6 +207,34 @@ pub(crate) enum Action {
     Appearance(crate::platform::Appearance),
     /// Sets the app's design tokens.
     Tokens(super::Tokens),
+    /// Sets some of the app's design tokens, over its others
+    /// ([`super::update_tokens`]).
+    UpdateTokens(super::Tokens),
+    /// Sets the tokens a theme type's fields wrote, over the app's others
+    /// ([`super::set_theme`]): a number that keeps its value keeps its
+    /// dark one. `played`: the roles the type's tokens play, through which
+    /// a type that is not registered sets the tokens they are mapped onto.
+    SetTheme {
+        tokens: super::Tokens,
+        played: super::theme::Played,
+    },
+    /// Sets the tokens a theme type's patch wrote, over the app's others
+    /// ([`super::update_theme`]), through the roles as
+    /// [`Action::SetTheme`].
+    UpdateTheme {
+        tokens: super::Tokens,
+        played: super::theme::Played,
+    },
+    /// Puts a theme type's tokens back to the app's theme's
+    /// ([`super::reset_theme`]), through the roles as
+    /// [`Action::SetTheme`].
+    ResetTheme {
+        names: Vec<Box<str>>,
+        played: super::theme::Played,
+    },
+    /// Puts the app's design tokens of these names back to its theme's
+    /// ([`super::reset_tokens`]).
+    ResetTokens(Vec<Box<str>>),
     /// Sets the app's translations ([`crate::i18n`]).
     Translations(crate::i18n::Translations),
     /// Shows the app in a language whatever the user's (`None`: the
