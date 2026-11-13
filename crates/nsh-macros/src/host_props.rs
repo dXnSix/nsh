@@ -35,13 +35,14 @@ struct VariantAttrs {
 
 fn variant_attrs(attrs: &[syn::Attribute]) -> syn::Result<VariantAttrs> {
     let mut out = VariantAttrs::default();
+    let nsh_core = crate::root::nsh_core();
     let platform = |p: &str| match p {
-        "ios" => quote!(::nsh_core::js::host::Platform::Ios),
-        "android" => quote!(::nsh_core::js::host::Platform::Android),
-        "macos" => quote!(::nsh_core::js::host::Platform::Macos),
-        "desktop" => quote!(::nsh_core::js::host::Platform::Desktop),
-        "web" => quote!(::nsh_core::js::host::Platform::Web),
-        _ => quote!(::nsh_core::js::host::Platform::All),
+        "ios" => quote!(#nsh_core::js::host::Platform::Ios),
+        "android" => quote!(#nsh_core::js::host::Platform::Android),
+        "macos" => quote!(#nsh_core::js::host::Platform::Macos),
+        "desktop" => quote!(#nsh_core::js::host::Platform::Desktop),
+        "web" => quote!(#nsh_core::js::host::Platform::Web),
+        _ => quote!(#nsh_core::js::host::Platform::All),
     };
     for attr in attrs {
         if !attr.path().is_ident("prop") {
@@ -91,7 +92,8 @@ pub(crate) fn host_props(input: DeriveInput) -> syn::Result<TokenStream2> {
             "`HostProps` is derived for enums",
         ));
     };
-    let host = quote!(::nsh_core::js::host);
+    let nsh_core = crate::root::nsh_core();
+    let host = quote!(#nsh_core::js::host);
     let mut decode_arms = Vec::new();
     let mut nested_decode = Vec::new();
     let mut reset_arms = Vec::new();
@@ -286,7 +288,7 @@ pub(crate) fn host_props(input: DeriveInput) -> syn::Result<TokenStream2> {
                 }
             }
 
-            fn specs(types: &mut ::nsh_core::element::TsTypes, out: &mut ::std::vec::Vec<#host::HostPropSpec>) {
+            fn specs(types: &mut #nsh_core::element::TsTypes, out: &mut ::std::vec::Vec<#host::HostPropSpec>) {
                 let _ = (&types, &out);
                 #(#specs)*
             }

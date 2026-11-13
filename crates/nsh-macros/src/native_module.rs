@@ -63,7 +63,14 @@ pub(crate) fn expand(specifier: LitStr, item: ItemFn) -> syn::Result<TokenStream
     // there.
     let span = Span::call_site();
     let entry = syn::Ident::new(ENTRY, span);
-    let ui = quote!(::nsh_core::element);
+    let nsh_core = crate::root::nsh_core();
+    let ui = quote!(#nsh_core::element);
+    // The same from the module the check below is in (`super::nsh_core`
+    // when the crate takes nsh through another crate).
+    let ui_in_module = {
+        let nsh_core = crate::root::nsh_core_in_module();
+        quote!(#nsh_core::element)
+    };
     // The generated workspace calls `app_<package>::__nsh_native_module`,
     // so the entry has to be at the crate's root. A glob in a block shadows
     // the names of the module around it: in a module of its own,
@@ -73,10 +80,10 @@ pub(crate) fn expand(specifier: LitStr, item: ItemFn) -> syn::Result<TokenStream
         const _: () = {
             mod __nsh_native_module_at_root {
                 #[allow(unused_imports)]
-                use #ui::__private::native_module_not_at_root as #entry;
+                use #ui_in_module::__private::native_module_not_at_root as #entry;
 
                 #[allow(dead_code)]
-                fn check() -> #ui::Registry {
+                fn check() -> #ui_in_module::Registry {
                     #[allow(unused_imports)]
                     use crate::*;
                     #entry()

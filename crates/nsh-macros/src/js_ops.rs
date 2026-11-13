@@ -102,8 +102,9 @@ pub(crate) fn js_ops(input: DeriveInput) -> syn::Result<TokenStream2> {
         ));
     };
     let cx = context(&input.attrs)?;
-    let ops = quote!(::nsh_core::js::ops);
-    let host = quote!(::nsh_core::js::host);
+    let nsh_core = crate::root::nsh_core();
+    let ops = quote!(#nsh_core::js::ops);
+    let host = quote!(#nsh_core::js::host);
     let mut arms = Vec::new();
     let mut nested = Vec::new();
     let mut methods = Vec::new();
@@ -190,7 +191,7 @@ pub(crate) fn js_ops(input: DeriveInput) -> syn::Result<TokenStream2> {
                     [#((#names, #defaults)),*];
                 let mut params = ::std::vec::Vec::with_capacity(#count);
                 #({
-                    let ts = if ::nsh_core::element::DECLARATIONS {
+                    let ts = if #nsh_core::element::DECLARATIONS {
                         <#fields as #ops::OpArg<#cx>>::ts(types)
                     } else {
                         ::std::string::String::new()
@@ -225,7 +226,7 @@ pub(crate) fn js_ops(input: DeriveInput) -> syn::Result<TokenStream2> {
                 out.push(#ops::OpProperty {
                     name: #property,
                     code: #code,
-                    ts: if ::nsh_core::element::DECLARATIONS {
+                    ts: if #nsh_core::element::DECLARATIONS {
                         #ts
                     } else {
                         ::std::string::String::new()
@@ -254,12 +255,12 @@ pub(crate) fn js_ops(input: DeriveInput) -> syn::Result<TokenStream2> {
                 ::core::result::Result::Ok(::core::option::Option::None)
             }
 
-            fn methods(types: &mut ::nsh_core::element::TsTypes, out: &mut ::std::vec::Vec<#ops::OpMethod>) {
+            fn methods(types: &mut #nsh_core::element::TsTypes, out: &mut ::std::vec::Vec<#ops::OpMethod>) {
                 let _ = (&types, &out);
                 #(#methods)*
             }
 
-            fn properties(types: &mut ::nsh_core::element::TsTypes, out: &mut ::std::vec::Vec<#ops::OpProperty>) {
+            fn properties(types: &mut #nsh_core::element::TsTypes, out: &mut ::std::vec::Vec<#ops::OpProperty>) {
                 let _ = (&types, &out);
                 #(#properties)*
             }

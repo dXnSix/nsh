@@ -286,7 +286,8 @@ fn asset_in(dir: &Path, package: &str, lit: LitStr) -> syn::Result<TokenStream> 
     }
     let uri = format!("asset:/@{package}/{path}");
     let source = source(&file, span)?;
-    let ui = quote!(::nsh_core::element);
+    let nsh_core = crate::root::nsh_core();
+    let ui = quote!(#nsh_core::element);
     Ok(match kind(&file) {
         Kind::Image => {
             let dim = imagesize::size(&file).map_err(|e| {
@@ -317,9 +318,9 @@ fn asset_in(dir: &Path, package: &str, lit: LitStr) -> syn::Result<TokenStream> 
                 #(const _: &[u8] = ::core::include_bytes!(#variant_sources);)*
                 #ui::ImageAsset {
                     url: #uri,
-                    size: ::nsh_core::geometry::size(
-                        ::nsh_core::geometry::Points(#width),
-                        ::nsh_core::geometry::Points(#height),
+                    size: #nsh_core::geometry::size(
+                        #nsh_core::geometry::Points(#width),
+                        #nsh_core::geometry::Points(#height),
                     ),
                     scales: &[#(#scales),*],
                 }
@@ -336,9 +337,9 @@ fn asset_in(dir: &Path, package: &str, lit: LitStr) -> syn::Result<TokenStream> 
                 const _: &[u8] = ::core::include_bytes!(#source);
                 #ui::ImageAsset {
                     url: #uri,
-                    size: ::nsh_core::geometry::size(
-                        ::nsh_core::geometry::Points(#width),
-                        ::nsh_core::geometry::Points(#height),
+                    size: #nsh_core::geometry::size(
+                        #nsh_core::geometry::Points(#width),
+                        #nsh_core::geometry::Points(#height),
                     ),
                     scales: &[],
                 }
@@ -389,7 +390,8 @@ fn assets_in(dir: &Path, package: &str, span: Span) -> syn::Result<TokenStream> 
         files(dir, &mut found)
             .map_err(|e| syn::Error::new(span, format!("{}: {e}", dir.display())))?;
     }
-    let ui = quote!(::nsh_core::element);
+    let nsh_core = crate::root::nsh_core();
+    let ui = quote!(#nsh_core::element);
     let mut entries = Vec::new();
     for file in &found {
         let rel = file.strip_prefix(dir).expect("listed under the directory");

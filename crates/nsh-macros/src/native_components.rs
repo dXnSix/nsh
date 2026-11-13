@@ -71,7 +71,12 @@ pub(crate) fn expand(platform: Ident, item: ItemFn) -> syn::Result<TokenStream2>
     // Hygienic: a call-site name would shadow the app's function when it
     // has the same name (`fn components(components: …)`).
     let arg = Ident::new("components", Span::mixed_site());
-    let ui = quote!(::nsh_core::element);
+    // nsh's elements from the module the check below is in
+    // (`super::nsh_core` when the crate takes nsh through another crate).
+    let ui_in_module = {
+        let nsh_core = crate::root::nsh_core_in_module();
+        quote!(#nsh_core::element)
+    };
     // As `#[native_module]`'s: the generated hosts call the entry at the
     // crate's root, so a glob of `crate::*` in a module of its own finds it
     // there, and the fallback says where it goes when it is not. The call
@@ -82,7 +87,7 @@ pub(crate) fn expand(platform: Ident, item: ItemFn) -> syn::Result<TokenStream2>
         const _: () = {
             mod #check {
                 #[allow(unused_imports)]
-                use #ui::__private::native_components_not_at_root as #entry;
+                use #ui_in_module::__private::native_components_not_at_root as #entry;
 
                 #[allow(dead_code, unreachable_code, clippy::diverging_sub_expression)]
                 fn check() {

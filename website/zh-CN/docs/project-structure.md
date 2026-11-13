@@ -207,6 +207,8 @@ NSH 不需要 `node_modules`。取而代之的是，每个构建应用的命令�
 
 Rust 应用的代码就是它的 crate 的模块（`mod screens;`），依赖和任何 crate 一样来自 crates.io；NSH 自己的 crate 是 `nsh-core`（基础元素、signal 和带类型的样式，`use nsh_core::prelude::*`）和 `nsh-base`（基础组件和主题）。
 
+基于 NSH 的框架可以重新导出它们，让应用只依赖这个框架：框架的 prelude 把 `nsh_core` 和宏一起带入作用域（`pub use nsh_core;`）；在 `Cargo.toml` 没有写 `nsh-core` 的 crate 里，NSH 的宏（`#[component]`、`#[native_module]`、各个 derive）引用作用域里的这个 `nsh_core`，而不是 crate 自己的依赖。
+
 在 TSX 中，可以把应用拆成任意多个 `.ts` 和 `.tsx` 模块，用相对路径导入；扩展名可以省略：
 
 ```tsx
