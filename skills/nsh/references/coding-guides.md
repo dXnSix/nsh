@@ -47,6 +47,14 @@ Token opacity such as `bg-primary/90` or `theme().primary.opacity(0.9)` keeps th
 User-authored colors and data values, such as an image's pixels or a color picker's selected value, remain data;
 the surrounding controls still use theme tokens.
 
+A design system with a token structure of its own (surfaces by level, actions by emphasis, its own radii and type
+steps) defines it as a [theme type](./rust.md#theme-types): a struct of its tokens with `#[derive(AppTheme)]`,
+registered by its UI set with `registry.theme::<T>()`. Its tokens become the app's theme in place of the shadcn tokens: the theme file sets
+them by name, classes name them (`bg-surface-raised`, `rounded-card`), and the type maps NSH's roles (`popover`,
+`primary`, `border`) onto its tokens so `nsh/base` and the platforms' own controls draw in it. The app's own tokens
+form a second type beside the design system's. A shadcn-shaped app keeps the default theme and adds its tokens to the
+theme file.
+
 Before finishing, inspect new presentation code for raw color literals and palette classes, verify shared component
 use, and exercise the feature's states in both appearances and the platforms it targets. Record any unavailable
 platform verification rather than assuming one screenshot proves all targets.
@@ -691,6 +699,11 @@ for every widget.
 Change the theme through the app's theme file (`nsh.json` `"theme"`), or let the embedding app give its own: classes
 naming tokens and Rust bindings reading `theme()` are restyled natively whenever it changes, with no JavaScript
 running. Code that copies a token's value into a signal of its own stops following it.
+
+Components of a design system with a theme type read its fields in their bindings,
+`.bg(move || theme_of::<DsTheme>().surface_raised)`: the read is reactive and made once per change of the tokens, so
+every binding can call it. Change the type's tokens at run time with `update_theme::<DsTheme>(patch)` and put them
+back with `reset_theme::<DsTheme>()`; both restyle natively, as a theme file does.
 
 An outward focus ring needs physical room. An ancestor with `overflow: hidden` (`overflow-hidden`) clips it. Prefer
 layouts that leave room; if a product must clip heavily, draw the focused state inside the control instead of silently

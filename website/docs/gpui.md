@@ -74,7 +74,7 @@ nsh build my-app --release -o build
 dist/nsh/runtime/gpui/nsh-gpui-host --bundle build/bundle.nshc --window-size 390x844   # in a checkout: target/debug/nsh-gpui-host
 ```
 
-`--window-size` is the window's size in points (`<width>x<height>`).
+`--window-size` is the window's size in points (`<width>x<height>`). `--idiom tv` runs the app as on a TV (`platform.tv`, `tv={{…}}` props), in a window of the same size; `nsh run --target gpui --idiom tv` and `nsh.json` `dev.idiom` pass it ([TVs](./platform-specific.md#tv-layouts-on-the-desktop)).
 
 ## Packaging
 
@@ -135,6 +135,8 @@ so only load it from your own app's files.
   nsh.json `window` settings. With `"defaultVisible": false` it opens hidden on macOS and Windows and shows when the
   app shows it ([The main window](../modules/nsh-desktop.md#the-main-window)); on Linux GPUI shows it as it opens.
 - `run_app(source, options)` starts GPUI and runs one app in a window until it closes (what the development host does).
+  It comes with the default feature `platform` (GPUI's own platform crate, `gpui_platform`); an app that brings its
+  GPUI platform itself turns default features off and keeps `AppView` and `open_app_window`.
 - `AppView::register_component(name, factory)` registers a native component of yours before loading
   ([Native components](./native-components.md)).
 - `AppOptions::cache` (or `AppView::set_cache`, for the apps loaded next) sets where the apps keep their caches, the
@@ -158,6 +160,9 @@ so only load it from your own app's files.
   widgets, overlays). False by default.
 - `AppView::connect_dev_server(url, cx)` (feature `dev`) loads the app from `nsh dev` and reloads it as you edit,
   with the error overlay over the view; `AppView::on_error` keeps hearing the app's errors.
+  `AppView::connect_dev_server_with(url, transport, platform, cx)` does the same over the connections your
+  `nsh_dev::DevTransport` makes, for a device that reaches your machine through a port mapping; `platform` (a
+  `nsh_dev::protocol::HostPlatform`) tells the dev server what kind of host it is.
 - `AppView::on_app_error(|error| …)` hears the app's errors: `error.kind` (the app failed to load, an uncaught
   exception, the VM stopped), `error.is_fatal()` when no JS of the app runs again, `error.message`, `error.stack`
   and `error.package` (the id and build of the signed package it came from). `AppView::on_error` gets the same
@@ -171,6 +176,15 @@ so only load it from your own app's files.
   with it (`None` gives the app its own theme back; a file that does not parse is an error and changes nothing). With
   a whole theme from `set_theme` / `set_theme_json`, the overrides win over that one's tokens, and each stays when the
   other changes.
+- `AppView::set_reduce_motion(reduce, cx)`, `AppView::set_screen_reader(on, cx)` and `AppView::set_time_zone(zone,
+  cx)` do the same for less motion, the screen reader and the time zone (`TimeZone::parse("Asia/Seoul")`):
+  `reduceMotion()`, `screenReaderEnabled()` and `localeSettings()`'s `timeZone` follow at once (`Date`'s local times
+  stay the process's).
+- `AppView::set_lifecycle(state, cx)` gives the app your app's state (`Lifecycle::Active`, `Inactive`,
+  `Background`) in place of the one its window gives: `lifecycle()` follows at once. `None` follows the window again.
+- `AppView::on_unhandled_back(|window, cx| …)` hears the back presses the app leaves to you: Back, Escape or
+  Alt+Left with no dialog to close, no page to go back from and no `onBackPress` listener that kept it. Use it to
+  leave a screen of your own app, or to ask before leaving the app.
 - `AppView::run_package(&package)` runs a [signed package](./signed-packages.md#loading-packages-in-a-host-app)
   from `verify_package` or `load_package`; `accept_package` records it once your app decided it is healthy.
 - `set_ui_sets(sets)` sets the UI sets every engine serves: NSH's (`nsh_base::registry()`) and your crates'
@@ -195,7 +209,11 @@ What draws or behaves differently from the native desktop backends:
 - **Canvas text** is approximated: upright under rotations, made smaller rather than narrower for `maxWidth`,
   gradients paint it in one color, `strokeText` fills, its shadows are not blurred, and composite operations and
   `clearRect` do not apply to it.
-- **Video** plays on Linux (GStreamer); on macOS and Windows a video shows a placeholder and reports `onError`.
+- **Video** plays on Linux (GStreamer) and on Samsung TVs (the TV's player, on its video plane or, inside turning,
+  fading or clipped views, as a texture); on macOS and Windows a video shows a placeholder and reports `onError`.
+  When a TV takes its decoder from the app (another app, or around a pause and resume), the video reports `onBuffer`
+  with `true`, and once the app is active again it goes on where it was, as `paused` says, with `onBuffer` `false`
+  (`onError` if the TV does not give the decoder back).
 - **Web views** are native views above everything NSH draws at their place. On Linux they need X11 (see
   [Requirements](#requirements)); where pages stay black under Xwayland ("Failed to create GBM buffer" in the log),
   run the app with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. On macOS and Windows clipping ancestors do not cut them and
@@ -204,6 +222,15 @@ What draws or behaves differently from the native desktop backends:
   ([website data](./web-view-and-video.md#website-data)).
 - **Accessibility** goes through AccessKit: screen readers can activate, focus, set values and scroll elements into
   view everywhere; custom actions and the context-menu action are not passed on yet.
+- **Keyboard focus**: the arrow keys move the focus to the nearest pressable, field or `focusable` view in their
+  direction, inside the newest dialog (a menu keeps Left and Right while one of its items has it), and scroll it into
+  view; Enter and Space press it, and its `focus:` styles, `onFocus` and `onBlur` follow. A field keeps the arrows it
+  uses (Up and Down leave a single-line one). `autoFocus`, `preferredFocus`, the `nextFocusUp` / `Down` / `Left` /
+  `Right` routes and [`FocusGroup`](../elements/focus-group.md) shape where the arrows go, as on a TV, and in a long
+  list they go on to rows not on screen yet. A ref's `focus()` moves the focus to a pressable or `focusable` view, and
+  `blur()` takes it off. Tab and Shift+Tab stop at the same
+  pressables, fields, `focusable` views and native components, in tree order; when Tab moves on out of an embedded
+  view, the one it leaves loses the focus.
 
 For comparison, each native backend's own list: [macOS](./macos.md#what-differs-on-macos),
 [Windows](./windows.md#what-differs-on-windows), [Linux](./linux.md#what-differs-on-linux).

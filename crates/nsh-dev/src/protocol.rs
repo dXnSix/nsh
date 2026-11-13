@@ -119,6 +119,10 @@ pub enum HostPlatform {
     Gpui,
     /// The terminal host (macOS, Windows, Linux).
     Tui,
+    /// The development runtime on a Samsung TV or the Tizen emulator
+    /// (`nsh-platform-tizen`). Servers older than it read it as
+    /// [`HostPlatform::Other`].
+    Tizen,
     /// A platform this version does not know.
     #[serde(other)]
     Other,
@@ -498,6 +502,13 @@ pub enum TestStep {
     PressKey {
         /// The keystroke: `"mod+k"`, `"escape"`.
         keys: String,
+    },
+    /// Presses a TV remote's key by its name (`app.keyboard.remote`):
+    /// `"up"`, `"ok"`, `"back"`, `"red"`, `"mediaplaypause"`
+    /// (`nsh_testing::remote`, which the agent checks it against).
+    PressRemoteKey {
+        /// The key's name.
+        key: String,
     },
     /// Holds modifier keys down, or lets go of them, for the pointer's
     /// steps until then (`app.keyboard.down` / `up`).
@@ -1084,6 +1095,37 @@ mod tests {
                 ..
             } if sets == ["app/native", "app/charts"]
         ));
+    }
+
+    #[test]
+    fn tizen_hosts_say_so_and_older_servers_read_other() {
+        let hello = ClientMessage::Hello {
+            protocol: PROTOCOL_VERSION,
+            bytecode_version: "x".into(),
+            device: "Samsung TV".into(),
+            platform: Some(HostPlatform::Tizen),
+            ui_sets: None,
+            tests: false,
+        };
+        let text = serde_json::to_string(&hello).unwrap();
+        assert!(text.contains(r#""platform":"tizen""#), "{text}");
+        assert_eq!(serde_json::from_str::<ClientMessage>(&text).unwrap(), hello);
+        // A server of before Tizen: its platforms end at the terminal's.
+        #[derive(Debug, Deserialize, PartialEq)]
+        #[serde(rename_all = "snake_case")]
+        enum Older {
+            Tui,
+            #[serde(other)]
+            Other,
+        }
+        #[derive(Deserialize)]
+        struct OlderHello {
+            platform: Option<Older>,
+        }
+        let older: OlderHello = serde_json::from_str(&text).unwrap();
+        assert_eq!(older.platform, Some(Older::Other));
+        let tui: OlderHello = serde_json::from_str(r#"{"platform":"tui"}"#).unwrap();
+        assert_eq!(tui.platform, Some(Older::Tui));
     }
 
     /// The messages with float fields, each with fractions.

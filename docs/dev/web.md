@@ -195,7 +195,11 @@ build to the same file) and takes `nsh.js` from the crate.
   (`/sports/football`), which `SiteServer::start_at` (`--run`) serves under it; the dev page has `<base href="/">`
   (the dev server serves its files at the root). `nsh.json` `web.history` reaches `createPlayer`'s `history` on
   both pages (the packaged page's `app.history`, the dev page's `HISTORY`, which `with_page_host` fills in); without
-  it the player's default (`window.top === window`) holds. The app ships as minified ES modules
+  it the player's default (`window.top === window`) holds. The dev page's `IDIOM` (`with_page_host` too: the session's
+  `--idiom` or `nsh.json` `dev.idiom`, `run::DevIdiom::resolve`; for `nsh test --target web` the run's,
+  `DevIdiom::for_test`, else `null`, where the test's setup sets the idiom) is the player's `idiom`, over the setup's,
+  so `nsh run --target web --idiom tv` runs the app as on a TV in any browser and `nsh test --target web --idiom tv`
+  tests it so. The app ships as minified ES modules
   (`app.<digest>.js` and `<chunk>.<digest>.js`). An import map resolves original chunk URLs to hashed files;
   transitive entry fonts load before startup and dynamic imports prepare the requested chunk's font dependencies.
   The browser loads static dependencies, module cycles and dynamic chunks itself. No bytecode or hardening
@@ -225,6 +229,89 @@ build to the same file) and takes `nsh.js` from the crate.
   an animation runs, `testPage` what only the DOM knows (`getBoundingClientRect` in CSS pixels, the viewport, an
   input's value, where a dialog's button is, where a text's characters are: each run knows its first character's
   offset). The input itself is the browser's trusted input, sent by the CLI.
+
+### Tizen web apps (`--target tizen-web`)
+
+`crates/nsh-cli/src/tizen_web.rs`: Samsung TVs through their browser engine (route A of the Tizen work). A Tizen web
+app is the web's site plus Tizen's manifest and a TV shim; it reports `Os::Web` in the TV idiom (`platform.tv`),
+there is no `Os::TizenWeb`.
+
+- **`nsh package --target tizen-web`** calls `web::write_site` with a `web::Variant`: the shim (`tizen_web/shim.js`)
+  as a classic script in the head, before the module script; `app.idiom = "tv"` (the page passes `createPlayer`
+  `idiom: app.idiom`); `app.history = false` (the remote's Back is the shim's, a `.wgt` keeps no history entries);
+  `installed` (no `web.base`, no `.br` / `.gz` copies). It adds `config.xml` (`Widget`) and `icon.png` (512×423),
+  writes `<out>/tizen-web/<name>/` and zips it into `<out>/tizen-web/<name>.wgt`, unsigned; with a certificate
+  profile (`--sign`, `nsh.json` `tizen.signing`) `tz pack -t wgt -s <profile> -b <unsigned> -o <out>/<name>.wgt`
+  signs it (`tz`'s repackaging), and `--run` installs (`tz install -p`) and launches it by its package id
+  (`tz run -p <package>`, which `tz run --help` calls "launch app using package ID").
+  `tz` is found on `PATH` or at `~/tizen-studio/tools/tizen-core/tz`; only those three calls need the SDK.
+- **`config.xml`**: `nsh.json` `tizen` (`package`, 10 letters and digits, by default made from the app's `id`;
+  `appId`, by default `<package>.<name's letters and digits>`; `version`, Tizen's `x.y.z`, by default the app's;
+  `apiVersion`, `required_version`, by default `8.0`; `privileges`, added to the internet and `tv.inputdevice`
+  ones; `signing`; `smartHubPreview`), the `tv-samsung` profile, `<access origin="*">` (the app's `capabilities`
+  and the page's CSP limit its requests), landscape, the icon. The section's keys are named for a native Tizen
+  target to share.
+- **Smart Hub's preview** (`tizen.smartHubPreview`, `Preview`), as Samsung's guides declare one: a URL is a public
+  preview, `<tizen:metadata key="http://samsung.com/tv/metadata/use.preview" value="endpoint_URL=<url>"/>`, whose
+  JSON the TV fetches itself (the app's server serves it; nothing in the package sets it). `"service"` is a personal
+  preview, `use.preview` `bg_service`: Samsung sets it from a background service of the package, so the package
+  carries one, `<tizen:service id="<package>.NshPreview">` with `service/preview.js` (`tizen_web/preview-service.js`,
+  tested in `shim.test.mjs`), and asks for `application.launch`; the shim's `PREVIEW` (`nshTizen.preview`) names
+  the service, and `nsh/tizen`'s `setPreviewData` launches it with the data, which it hands to
+  `webapis.preview.setPreviewData` before it exits (`require("$WEBAPIS/service/webapis.js")` where the service has
+  no `webapis`). The tiles' `action_data` (Samsung's `eden_resume` app control, `getRequestedAppControl`) is not
+  delivered to the app yet. Samsung's own limits hold: one `setPreviewData` per 10 minutes, no preview for packages
+  installed from USB.
+- **The shim** (`shim.js`, tested by `node --test crates/nsh-cli/src/tizen_web/shim.test.mjs` on fake `tizen`
+  globals): the remote's Back (key code 10009) is sent to the app as a `BrowserBack` key down (`nsh.js` `keyDown`'s
+  back path), then, when nothing took it (`preventDefault`), as an `Escape` (a dialog, a field); when neither went
+  anywhere it shows an exit confirmation (arrows, Enter, Back) and exits with
+  `tizen.application.getCurrentApplication().exit()`. It registers the color, media and channel keys the TV has with
+  `tizen.tvinputdevice.registerKey`; `nsh.js` reads them by Samsung's key codes in the TV idiom (`TV_KEY_CODES`).
+  `globalThis.nshTizen` (`tv`, `keys`, `back()`, `confirmExit()`, `exit()`, `productInfo()`, `registerKey(name)` /
+  `unregisterKey(name)` by Tizen's key names, `preview`, `setPreviewData(json)`: the package's preview service
+  launched with `tizen.application.launchAppControl`, the data under `preview`) is the seam the web half of `nsh/tizen` calls;
+  the page loads the TV's `$WEBAPIS/webapis/webapis.js` before it, and the package asks for
+  `http://developer.samsung.com/privilege/productinfo`.
+- **`nsh/tizen` on the web** (`nsh-platform-web`'s `web/browser/tizen.js`, `createTizen`, in place of the runtime's
+  namespace in `browser/runtime.js`): where the shim says the page is a TV's (`nshTizen.tv`, `tizen` present),
+  `isAvailable()` is true and the calls go to the shim: `productInfo()` (`webapis.productinfo`'s model and firmware,
+  `tizen.systeminfo`'s platform version and maker, `null` where the TV does not say), `registerKey` /
+  `unregisterKey` (`keymap`'s names mapped to Tizen's, checked as natively: a `TypeError` for no key, found with
+  `keymap.label`, a `RangeError` for one the TV does not give apps), `exitApp()` (at once, no confirmation),
+  `setPreviewData(data)` (the data as JSON to the package's preview service, `tizen.smartHubPreview: "service"`;
+  without one, or with a public preview, the shim rejects and says why); the TV's errors reject with
+  `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`. Its promises and errors are the app realm's. Every other page (the web, the
+  dev page in a browser here) keeps the runtime's module: `isAvailable()` false, every call rejecting as on the
+  platforms that are no TV. `node --test crates/nsh-platform-web/web/browser/tizen.test.mjs` checks it on a fake
+  shim; `shim.test.mjs` the shim's side on fake `tizen` and `webapis`.
+- **`nsh run --target tizen-web`** serves the dev page with the shim (`tizen_web::dev_page`: `{{scripts}}`,
+  `{{idiom}}` and `{{history}}` of `web/dev.html`, which `with_page_host` leaves empty for the web) and writes the
+  development package `.nsh/tizen-web/dev/` (`NshDevHost.NshDev`, one for every app): a page that opens the dev
+  server's at this machine's LAN address once it answers. A development package's policy is open:
+  `<access origin="*" subdomains="true">` (the page, its WebSocket at `ws://`, what the app fetches) and
+  `<tizen:allow-navigation>` with the server's host (the entry takes hosts, no port). The remote page loads no
+  `$WEBAPIS/webapis/webapis.js` (only package pages resolve `$WEBAPIS`), so Samsung's `webapis` is missing there. With `nsh.json` `tizen.signing` it is signed, installed and launched (`--device`: the TV's serial); without,
+  the page opens in a browser here, as on the TV.
+- **`nsh test --target tizen-web`** runs `nsh test --target web`'s headless Chromium on the same page
+  (`test_web::starter(browser, true)`), 1920×1080 by default.
+- **`--probe`** writes `<out>/tizen-web/probe/` (`NshLdProbe.Probe`): a page that tries, from package files, a module
+  script, the page's import map (static and `import()`), a same-origin iframe realm, a classic bootstrap fetched with
+  CORS into it, the realm's import map and a blob module, and a Wasm `fetch` (`instantiateStreaming` and
+  `arrayBuffer`), the same fetch in a package page under `connect-src 'self'` (`probe/csp.html` in an iframe: the
+  policy an app's page gets when its `capabilities` limit the network) and Samsung's `$WEBAPIS/webapis/webapis.js`,
+  and shows each result, the user agent and the engine's `scrollend`, `popover` and `inert`.
+
+`cargo test -p nsh-cli --test cli tizen_web::` packages with a fake runtime (`NSH_RUNTIME`: a linkable module of
+three functions) and a fake `tz`; `cargo test -p nsh-cli --bin nsh tizen_web::` checks the ids, versions and `tz`'s
+command lines.
+
+On a TV (the owner's device checks, DEV-6), still unverified: signing with a real profile (`tz pack ... -b`);
+installing and launching (`tz install`, `tz run -p <package>`); every row of the probe; that the development package
+navigates to the dev server's page (host-only `allow-navigation`) and that page reaches its `ws://` WebSocket, and
+whether it gets `tizen`'s APIs there (Back still arrives as key code 10009); and Smart Hub's preview: a public
+preview's `endpoint_URL`, and a personal one through `service/preview.js` (whether the TV starts the service from
+`launchAppControl`, and whether a service has `webapis` as a global or from `$WEBAPIS/service/webapis.js`).
 
 ### Runtimes linked for each app
 
@@ -490,10 +577,14 @@ The idiom is fixed at start, as `Environment::idiom` is everywhere: `desktop` fo
 any width, as a narrow window on a native desktop (headless Chromium reports no pointer and measures as a tablet or phone unless launched
 with a fine, hovering one, as `nsh test --target web` does), `pad` for a screen whose short side is at least 600, else
 `phone`; the player's `idiom` option overrides it, and so does a test's setup (`TestEnvironment::idiom`: `open`'s
-desktop `platform` starts the app in the desktop idiom at any width). `Environment::desktop()`
+desktop `platform` starts the app in the desktop idiom at any width). A page on a TV (a Tizen `.wgt`) passes
+`idiom: "tv"`, which no pointer heuristic can tell: `nsh_environment` maps it to `Idiom::Tv` (`platform.tv`,
+`tv={{…}}` props, mobile behavior; `tv.test.mjs`, which with `NSH_BROWSER_WASM` checks the module's own
+`nsh_environment` and the environment it sends, `nsh_browser_test_environment`). `Environment::desktop()`
 (desktop OS, the web in the desktop idiom, or the terminal idiom) decides `desktop={{…}}` props, `platform.select`'s `desktop` key,
-`platform.desktop` and `platform.idiom` (`Environment::reported_idiom()`; the page's `browser/environment.js`
-gets both from the engine's environment); `Os::is_desktop()` stays the desktop backends' OSes (`nsh/desktop`'s windows and menus). Like the
+`platform.desktop` and `platform.idiom` (`Environment::reported_idiom()`), `Environment::tv()` decides `tv={{…}}`
+props, `select`'s `tv` key and `platform.tv` (the page's `browser/environment.js` gets all three from the engine's
+environment); `Os::is_desktop()` stays the desktop backends' OSes (`nsh/desktop`'s windows and menus). Like the
 desktop backends, the web gives the core no header heights (`NO_NATIVE_HEADER`): a page's `header` slot is all
 there is at its top. The browser's bars are the browser's: the web ignores `Command::StatusBar` (pages' and dialogs' `statusBar`).
 
@@ -696,7 +787,10 @@ browsers' touches into what phones report:
   window (`dialogs: "viewport"`). Ctrl + wheel (a touchpad's pinch) pinches the view
   under the pointer and never zooms the page. Scroll events follow the desktop backends: touch drags send
   `onScrollDragStart` / `EndDrag`, glides and snaps `onMomentumStart` / `End`, every scroll ends with one
-  `onScrollEnd` (the browser's `scrollend` after a scroll driven here, `drive` / `ownEnd`, is not another).
+  `onScrollEnd` (the browser's `scrollend` after a scroll driven here, `drive` / `ownEnd`, is not another). An
+  engine without `scrollend` (Chromium before 114: the Chromium 108 of 2024's Samsung TVs; `SCROLLEND` in `nsh.js`)
+  ends a scroll the browser drives once no scroll event came for 150 ms (`SCROLL_QUIET`, `scrolled`), a glide's with
+  `onMomentumEnd` first and a held scroll bar's at its release (`browser/scrollend.test.mjs`).
 - **Mouse drags never scroll**, in every idiom, as on the desktop backends: dragging the content is a touchscreen's
   way to scroll, the mouse has the wheel, the keyboard and the scroll bar. Its drags go to pans, the responder system
   and selectable text (`pointerDown` only takes touches and pens in zoomable views, which pan themselves; a press
@@ -713,7 +807,10 @@ browsers' touches into what phones report:
   Rust, `nsh_key` matches a key on the spot with `Keymap::find` and `nsh_key_command` reports the binding.
   Its `f64` result preserves the full `u32` ID range, including Rust shortcuts and overlay Escape, apart from
   the `-1` (unmatched) and `-2` (held repeat) sentinels. Those matches use the canonical shortcut key: the character
-  typed without modifiers, else the US layout's character of their `code`; `mod` was resolved by the browser's
+  typed without modifiers, else the US layout's character of their `code`, the media and TV remote keys by their `key`
+  (`MediaPlayPause`, `ColorF0Red`, `ChannelUp`, `Info`, ...) or, when it is `Unidentified`, by Samsung TVs' key
+  codes (`TV_KEY_CODES`: `tizen.tvinputdevice`'s); in the TV idiom by those codes whenever the `key` is none of
+  `NAMED_KEYS` (a TV's engine may report no `key`, or `Pause` for keyCode 19, which on a TV is the remote's pause); `mod` was resolved by the browser's
   platform, `appleKeyboard` in the environment JSON); then the focused view's raw key transition and its mounted
   `captureKeys` policy (`nsh_key_event`, Rust's `KeyEvent` and `KeyCapture`): the event carries the browser's own
   `KeyboardEvent.key` as its logical key (its actual case and layout, never forced onto a US layout), the DOM's own
@@ -735,9 +832,10 @@ browsers' touches into what phones report:
   pages, videos and a key an input method is composing keep their own keys. Then: an open dialog (Escape presses its
   cancel button); a focused field (Escape leaves it); a custom context menu (Shift+F10 or the Menu key);
   selectable text with a selection (select all, in a selectable view the whole area; Escape); a focused
-  pressable (Return presses it, Space when released); going back (Escape, Alt+Left, Cmd+[, BrowserBack); scrolling the
-  scroll view around the focus or under the mouse (arrows by 40 points, Page Up / Down and Space by 0.875 of a page,
-  Home / End).
+  pressable (Return presses it, Space when released); going back (Escape, Alt+Left, Cmd+[, BrowserBack); the arrows
+  moving the focus to a stop that way (`arrowFocus`, "Focus" below); scrolling the
+  scroll view around the focus or under the mouse (arrows by 40 points when no stop is that way, Page Up / Down and
+  Space by 0.875 of a page, Home / End).
   Context-menu keys are handled explicitly because Chromium on macOS does not emit `contextmenu` for them.
   A handled key prevents the browser default to avoid duplicate openings; native fields and selectable text
   retain their own menus, and keyboard requests carry no pointer and use the trigger's bottom-start corner.
@@ -753,7 +851,42 @@ browsers' touches into what phones report:
   `reading-flow` (Chromium), it is read in the order it is on screen (`orderReading`: `reading-order` on its children,
   the DOM, which is also their paint order, left alone), as a list's recycled cells are not in their rows' order in it; `focus:` states follow the keyboard focus (`focus-visible:` while it shows, as the browser's `:focus-visible`), and
   they are all that shows it: as the desktop backends, the runtime draws no ring of its own; a popped page gives the focus back to what had it when the page was pushed
-  (`screenGone`). A click never moves the focus (`mousedown` is prevented outside fields, selectable
+  (`screenGone`). The arrows (without modifiers or Shift) move the focus between the stops as the terminal backend
+  does, with `nsh_core::focus`'s rules compiled into the module: `focusStops` describes what the page renders
+  (each stop's `getBoundingClientRect`, in CSS pixels, which the rules compare one axis at a time as they are; whether
+  some of it is in sight inside its root view and the scroll views around it; its scope, the `Dialog` it is in or the
+  root; its layer, the child of that root view around it; the anchored overlay around it, from the props'
+  `anchored`; a menu item's role), each root view's layers (what of each is in sight, and whether it takes presses, as
+  a sheet's backdrop does) and the modals with whether each shows, as JSON. `nsh_focus_move` (`src/focus.rs`) picks the
+  newest modal that shows, leaves out the layers under a backdrop that covers the page, keeps a focused menu item's
+  arrows in its popup (the terminal's rule) and answers `focus::directional`'s stop (without TV props
+  `focus::horizontal` / `vertical`'s: with nothing focused, Left / Right the first stop, Up / Down the first / last in
+  sight, in an open popup first), -2 - a scroll view's id when that view scrolls on instead, or -1: no stop that way,
+  and the key scrolls. The page focuses the stop (`focusStop`: a field's input for a field, `preventScroll`: the
+  browser does not scroll for it) and reveals it (`revealFocus`): each scroll view around it, innermost first, glides by
+  `nsh_focus_reveal`'s delta along its axis (`focus::reveal`: centered vertically, as little as shows it
+  horizontally, as on the terminal). What a TV adds is decided in the same call, as on the GPUI backend (a TV's web
+  app relies on it): `props_json` sends a view's `autoFocus`, `preferredFocus`, `nextFocus`
+  (`{"down": node}`) and `focusGroup` (`{"trap", "destinations"}`, `focus::write_props`), and `focusStops` hands each
+  stop those of the views around it (`auto`, `preferred`, the `next` routes, the nearest's first), the innermost
+  focus group (`group`) and the scroll views around it (`scrollers`, innermost first), and describes the groups
+  (`groups`, each with the group around it), the scroll views (`scrollViews`: axis, and whether it can scroll on
+  toward its start and its end, from where a glide is going) and the stops inside each view a route or a destination
+  names (`views`: the first in reach is the stop it reaches). With nothing focused the first `preferredFocus` stop in
+  sight takes an arrow; a route goes past geometry; a group is entered at its first destination in reach (else its
+  preferred stop) and with `trap` keeps the arrows; while the scroll view along the arrow's axis around the focus
+  can scroll on and the stop is outside it, it scrolls by a key's step instead (`keyScroll`) and the page tells
+  `nsh_focus_past` (`EngineControl::focus_past`): a list scrolls to its next row by index and the core's
+  `Command::Focus` (`op_cmd` `focus`) focuses that row's first stop once it is mounted. `autoFocus`: after a batch
+  that brought a view with it (`op_vp`), or a new focus scope once the app has such views (`focusAfterBatch`),
+  `nsh_focus_auto` (`focus::auto`, `focus::auto_focus`) picks the first stop of the scope with it that has not had its
+  chance (`autoSeen`, forgotten once the view is removed), and the page focuses it as an arrow does. A focused field
+  keeps its arrows (`keyDown` returns before them), and so does a component that binds them in its keymap (`Tabs`, `RadioGroup`, a list's: the shortcuts come first); `focus:`,
+  `onFocus` / `onBlur` follow as for Tab, and Return presses the stop. `src/focus.rs` depends on nothing of the
+  browser: `cargo test -p nsh-platform-web --test text focus_moves` tests its decisions on the host (what a TV adds:
+  `focus_moves::tv`), and `node --expose-gc --test crates/nsh-platform-web/web/browser/focus.test.mjs` the page's description and how it
+  applies the answer on a fake DOM, with a recording fake of the module, or with `NSH_BROWSER_WASM` (any wasm32 build
+  of the crate) the module's own exports. A click never moves the focus (`mousedown` is prevented outside fields, selectable
   text, selectable views and hosted pages), as in native apps; it focuses the app's window in an iframe. A touch moves
   the focus as the browser does (a tap outside a field closes the keyboard), unless its press made the app focus a field
   (an editor's text): the mouse events the browser makes of the touch then leave the focus in the field (`mouseDown`,

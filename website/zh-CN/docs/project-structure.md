@@ -138,11 +138,13 @@ mount(App);
 | `window` | object | 每次构建、`package` | 桌面平台上主窗口的启动设置，从第一帧起生效：`title`、`defaultSize`、`minSize`、`titleBar`、`backdrop` 以及窗口的其他选项和属性，写法与 `nsh/desktop` 的 `WindowOptions` 相同（`{ "defaultSize": { "width": 1100, "height": 720 }, "titleBar": { "style": "hidden" } }`），以及 `defaultVisible`（为 `false` 时启动时隐藏，像托盘应用那样）（[主窗口](../modules/nsh-desktop.md#主窗口)）。 |
 | `resolve` | object | 每次构建 | 裸导入如何解析：npm 包的导出条件和别名（[npm 包](#npm-包)）。 |
 | `rust` | string 或 string[] | 每个命令 | 应用的 Rust crate 或 crate 列表，路径相对于 `nsh.json`：其中的组件和模块，TSX 按每个 crate 的 `#[native_module]` 名称导入（[用 Rust 开发](./rust.md#多个-crate)）。 |
+| `dev` | object | `run`、`dev`、`test` | 开发会话的设置。`dev.idiom`：`"tv"` 让应用在 GPUI 宿主和 Web 开发页面上（`nsh test --target gpui` 和 `web` 也是如此）像在电视上一样运行，以便在桌面上构建和测试 10 英尺布局和焦点；或 `"desktop"`。`--idiom` 覆盖它，其他宿主和 headless 测试会忽略它并给出警告（[电视](./platform-specific.md#在桌面上构建电视布局)）。 |
 | `web` | object | `package` | Web 包给页面添加的内容。`web.host`：一个 JS 模块，路径相对于 `nsh.json`，导出 `createHost(player)`，应答应用的 [`host`](../modules/nsh.md#host) 调用；`web.connect`：该模块自己的请求访问的主机，写法同 `capabilities.network.hosts` 的模式，页面的 Content-Security-Policy 允许它们（[Web](./web.md#宿主的函数)）；`web.base`：站点所在的路径（`"/apps/counter/"`），即页面的 `<base href>`，使页面在应用自己的路径上也能加载（[Web](./web.md#部署)）；`web.history`：压入的页面和打开的对话框是否作为浏览器历史记录（默认在应用占据整个页面时是，在 iframe 里不是）。 |
 | `updater` | object | `package` | 打包后的应用从哪里获取更新：`{ "github": "owner/repo" }` 或 `{ "url": "https://…/latest.json", "publicKey": "…" }`，配 `github` 时 `publicKey` 可选；[OTA 更新](./ota-updates.md)另需 `"packages": { "roots": [...] }`（[应用更新](./app-updates.md)、[nsh/updater](../modules/nsh-updater.md#nshjson)）。 |
 | `ios` | object | `package` | iOS 包添加的内容：`infoPlist` 是应用 `Info.plist` 的键，`entitlements` 在真机构建时对照描述文件检查。NSH 自己的键会被拒绝（[打包](./packaging.md#infoplist-键与-entitlements)）；`infoPlist` 的 `MinimumOSVersion` 提高应用所需的 iOS 版本（[最低系统版本](./packaging.md#最低系统版本)）。 |
 | `android` | object | `package` | Android 包的设置：`targetSdk`，应用的目标 API 级别，也是编译所用的级别（默认 35）（[打包](./packaging.md#目标-api-级别)）；`usesCleartextTraffic`，是否允许普通的 `http://` 请求（默认 `false`）（[打包](./packaging.md#明文-http)）。 |
 | `macos` | object | `package`、`run`、`test` | macOS 包添加的内容：`infoPlist` 和 `entitlements`，与 `ios` 的相同（[打包](./packaging.md#infoplist-键与-entitlements)），`infoPlist` 的 `LSMinimumSystemVersion` 提高应用所需的 macOS 版本（[最低系统版本](./packaging.md#最低系统版本)）；以及 `activationPolicy`，即无论 NSH 以哪种方式启动应用，它如何参与系统界面：`"regular"`（默认），有 Dock 图标和菜单栏；或 `"accessory"`，即菜单栏应用（[macOS](./macos.md#菜单栏应用)）。 |
+| `tizen` | object | `package`、`run`、`test` | 三星电视的包（`--target tizen` 和 `tizen-web`）设置的内容：`package`（恰好 10 个字母和数字）、`appId`（`<package>.<name>`）、`version`（`x.y.z`）、`apiVersion`（所需的 Tizen 版本，`8.0`）、`privileges` 和 `signing`（`tz` 签名所用的证书配置，`nsh run` 和 `nsh test --target tizen` 也用它为开发包签名）和 `smartHubPreview`（Tizen Web 应用的 Smart Hub 预览：`"service"` 或公共预览的 URL），都有默认值（[Tizen](./tizen.md#nshjson)、[Web](./web.md#三星电视)）。 |
 | `root` | string | `run`, `package` | Rust 应用的根组件，即它在 `rust` crate（列表时为第一个）中的路径（`App`、`shell::Gallery`）：对应用目录执行 `nsh run` 和 `nsh package` 时，在所有平台上直接挂载它，不使用 QuickJS；`nsh run App.tsx` 仍然运行 TSX 入口（[用 Rust 开发](./rust.md)）。 |
 
 `nsh package` 和 `nsh publish` 的参数（`--name`、`--id`、`--app-version`、`--build`、`--icon`、`--min-runtime`）会覆盖文件中的值（[CLI](./cli.md)）。
@@ -194,6 +196,7 @@ NSH 不需要 `node_modules`。取而代之的是，每个构建应用的命令�
 | `globals.d.ts` | `If` 和 `Each`；`console`、定时器、`requestAnimationFrame`、`fetch` 及其他[全局 API](../modules/globals.md) |
 | `assets.d.ts` | 导入图片或字体得到的值 |
 | `tokens.d.ts` | `Tokens`：应用的设计令牌，来自它的 `"theme"`，为 [`token()`](../modules/nsh.md#token) 提供类型 |
+| `roles.d.ts` | `Roles`：UI 集合绘制时使用的主题角色，为 [`role()`](../modules/nsh.md#role) 提供类型 |
 | `mobile.d.ts`、`desktop.d.ts` | 每个模块一个文件（`nsh/mobile`、`nsh/desktop`） |
 | `base.d.ts` | `nsh/base` |
 

@@ -19,7 +19,7 @@ use nsh_core::{
     desktop::WindowState,
     geometry::{Bounds, Point, Points, Size, point},
 };
-use nsh_testing::agent::{Key, Native};
+use nsh_testing::agent::{Key, Native, RemoteKey};
 
 use crate::{
     app::AppView,
@@ -42,6 +42,18 @@ pub(crate) struct GpuiNative {
     key: u64,
     /// The root node of the window pointer input goes to.
     target: AtomicU32,
+}
+
+/// The virtual key code of the TV remote's key `key`, as the Tizen
+/// platform gives it to GPUI (`keys::vk_of` of its name): Back is the key
+/// `back`, the browser's back key (`VK_BROWSER_BACK`), which goes back from
+/// where the focus is; the other keys are theirs (`keys::virtual_key`).
+fn remote_virtual_key(key: RemoteKey) -> Result<u16, String> {
+    match key {
+        RemoteKey::Back => Ok(crate::keys::VK_BROWSER_BACK),
+        RemoteKey::Key(k) => crate::keys::virtual_key(k)
+            .ok_or_else(|| format!("GPUI has no key {k:?} of a TV remote")),
+    }
 }
 
 /// The window showing the surface `key`.
@@ -134,10 +146,15 @@ impl GpuiNative {
     }
 
     /// Presses key `vk` in the focused window; Escape nothing took closes
-    /// a window of the app's own that says so, as a real one does.
+    /// a window of the app's own that says so, and Tab past the last stop
+    /// (the first with Shift) wraps around, as in a real one.
     fn keystroke(&self, vk: u16, modifiers: Modifiers) -> Option<()> {
         self.press_in_focus(
-            move |surface| synth::press(surface, vk, modifiers),
+            move |surface| {
+                let taken = synth::press(surface, vk, modifiers);
+                wrap_tab(surface, taken, vk == crate::keys::VK_TAB, modifiers);
+                taken
+            },
             vk == crate::keys::VK_ESCAPE,
         )
     }
@@ -401,23 +418,37 @@ impl Native for GpuiNative {
     }
 
     fn press_keys(&self, keys: &str) -> Result<(), String> {
-        use nsh_core::platform::Os;
-        let os = if cfg!(target_os = "macos") {
-            Os::MacOs
-        } else if cfg!(windows) {
-            Os::Windows
-        } else {
-            Os::Linux
-        };
         // The step's keystroke is the source of the key (its raw event
         // carries it; `physical` is `None`), so the press and release take
         // the same router real keys do.
-        let stroke = nsh_core::keymap::Keystroke::parse(keys, os).map_err(|e| e.to_string())?;
+        let stroke =
+            nsh_core::keymap::Keystroke::parse(keys, crate::keys::OS).map_err(|e| e.to_string())?;
         self.press_in_focus(
-            move |surface| synth::press_keys(surface, &stroke),
+            move |surface| {
+                let taken = synth::press_keys(surface, &stroke);
+                let m = stroke.modifiers;
+                let modifiers = Modifiers {
+                    shift: m.shift,
+                    ctrl: m.ctrl,
+                    alt: m.alt,
+                    meta: m.cmd,
+                };
+                wrap_tab(
+                    surface,
+                    taken,
+                    stroke.key == nsh_core::keymap::Key::Tab,
+                    modifiers,
+                );
+                taken
+            },
             stroke.key == nsh_core::keymap::Key::Escape,
         )
         .ok_or_else(|| "the window is gone".to_owned())
+    }
+
+    fn press_remote_key(&self, key: RemoteKey) -> Result<(), String> {
+        self.keystroke(remote_virtual_key(key)?, Modifiers::default())
+            .ok_or_else(|| "the window is gone".to_owned())
     }
 
     fn target_window(&self, window: NodeId) -> Result<(), String> {
@@ -566,4 +597,47 @@ fn mapped_bounds(
         point(Points(x0), Points(y0)),
         Size::new(Points(x1 - x0), Points(y1 - y0)),
     ))
+}
+
+/// A Tab the surface did not take: in a real window it is GPUI's
+/// `FocusNext` (`AppView::tab`); a test's window has no other tab stop, so
+/// the focus wraps around (`taken`: the surface took the key; `tab`: it is
+/// Tab).
+fn wrap_tab(surface: &Rc<Surface>, taken: bool, tab: bool, modifiers: Modifiers) {
+    if !taken && tab && !(modifiers.ctrl || modifiers.alt || modifiers.meta) {
+        crate::input::tab_past_ends(surface, modifiers.shift, || false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// `keyboard.remote` on GPUI: the remote's keys as the Tizen platform
+    /// gives them (`Native::press_remote_key`).
+    mod remote_keys {
+        use nsh_core::keymap::Key;
+        use nsh_testing::agent::RemoteKey;
+
+        use super::super::remote_virtual_key;
+        use crate::keys::{self, VK_BROWSER_BACK};
+
+        #[test]
+        fn back_is_the_browser_s_back_key() {
+            let back = RemoteKey::parse("back").unwrap();
+            assert_eq!(remote_virtual_key(back), Ok(VK_BROWSER_BACK));
+            assert_eq!(keys::vk_of("back"), Some(VK_BROWSER_BACK));
+        }
+
+        #[test]
+        fn every_other_key_is_the_one_its_tizen_name_gives() {
+            let names = RemoteKey::names();
+            for name in names.split(", ").filter(|&n| n != "back") {
+                // The Tizen platform's names are the keymap's, OK aside.
+                let tizen = if name == "ok" { "enter" } else { name };
+                let vk = remote_virtual_key(RemoteKey::parse(name).unwrap()).unwrap();
+                assert_eq!(Some(vk), keys::vk_of(tizen), "{name}");
+            }
+            let red = remote_virtual_key(RemoteKey::parse("red").unwrap()).unwrap();
+            assert_eq!(keys::key_of(red), Some(Key::ColorRed));
+        }
+    }
 }

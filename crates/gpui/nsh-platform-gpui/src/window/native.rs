@@ -40,7 +40,9 @@ mod mac {
         NSWindow, NSWindowButton, NSWindowCollectionBehavior, NSWindowLevel, NSWindowOrderingMode,
         NSWindowStyleMask, NSWindowTitleVisibility,
     };
-    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    #[cfg(feature = "platform")]
+    use objc2_foundation::NSRect;
+    use objc2_foundation::{NSPoint, NSSize};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     use super::*;
@@ -260,6 +262,7 @@ mod mac {
     /// (the one with the menu bar) first, then the others in the system's
     /// order; their ids are GPUI's (`CGDirectDisplayID`). GPUI's own frames
     /// all start at the origin.
+    #[cfg(feature = "platform")]
     pub(crate) fn displays(_cx: &gpui::App) -> Vec<(gpui::DisplayId, gpui::Bounds<gpui::Pixels>)> {
         #[link(name = "CoreGraphics", kind = "framework")]
         unsafe extern "C" {
@@ -300,6 +303,7 @@ mod mac {
     /// (`NSApplicationActivationPolicyProhibited`, which keeps it out of
     /// the Dock too; an `Accessory` app is not guaranteed to stay inactive
     /// as its window comes up).
+    #[cfg(feature = "platform")]
     pub(crate) fn run_in_background() {
         if let Some(mtm) = MainThreadMarker::new() {
             NSApplication::sharedApplication(mtm)
@@ -567,6 +571,7 @@ mod win {
     pub(crate) fn removing(_window: &Window) {}
 
     /// GPUI's displays, the primary one first.
+    #[cfg(feature = "platform")]
     pub(crate) fn displays(cx: &gpui::App) -> Vec<(gpui::DisplayId, gpui::Bounds<gpui::Pixels>)> {
         super::super::gpui_displays(cx)
     }
@@ -574,6 +579,7 @@ mod win {
     /// Windows has no app activation: a background app's windows show
     /// without activating ([`show`]) and nothing brings them to the
     /// foreground.
+    #[cfg(feature = "platform")]
     pub(crate) fn run_in_background() {}
 
     pub(crate) fn hide(window: &Window) {
@@ -723,12 +729,14 @@ mod linux {
     pub(crate) fn removing(_window: &Window) {}
 
     /// GPUI's displays, the primary one first.
+    #[cfg(feature = "platform")]
     pub(crate) fn displays(cx: &gpui::App) -> Vec<(gpui::DisplayId, gpui::Bounds<gpui::Pixels>)> {
         super::super::gpui_displays(cx)
     }
 
     /// Nothing to set: a background app's windows open without the focus
     /// and are never activated.
+    #[cfg(feature = "platform")]
     pub(crate) fn run_in_background() {}
 
     /// GPUI cannot hide a window: it minimizes.

@@ -23,6 +23,7 @@ import CoreResource from "./core-resource";
 import CoreReveal from "./core-reveal";
 import CoreShader from "./core-shader";
 import CoreShaderEffects from "./core-shader-effects";
+import CoreThemeScope from "./core-theme-scope";
 import AssetImports from "./asset-imports";
 import ModuleUrl from "./module-url";
 import WebLoad from "./web-load";
@@ -53,6 +54,7 @@ const cases: Record<string, () => JSX.Element> = {
   "core-reveal": CoreReveal,
   "core-shader": CoreShader,
   "core-shader-effects": CoreShaderEffects,
+  "core-theme-scope": CoreThemeScope,
   "module-url": ModuleUrl,
   "steps": Steps,
   "web-load": WebLoad,

@@ -3905,6 +3905,16 @@ impl Mounter {
         let (control, mtm) = (self.control.clone(), self.mtm);
         let native_id = props.native_id.clone();
         let Some(s) = self.slot_mut(id) else { return };
+        // A view shown in an appearance of its own (`ThemeScope`): UIKit's
+        // controls in it follow (inputs and their keyboards, menus, web
+        // views). The root's is the app's (`system::set_appearance`).
+        if id != nsh_core::ROOT_ID {
+            let style = crate::system::interface_style(props.appearance);
+            let view = s.native.view();
+            if view.overrideUserInterfaceStyle() != style {
+                view.setOverrideUserInterfaceStyle(style);
+            }
+        }
         s.long_press_delay = props.long_press_delay;
         s.pan_scroll_handoff = props.pan_scroll_handoff;
         if let Some(pan) = &s.gestures.pan {

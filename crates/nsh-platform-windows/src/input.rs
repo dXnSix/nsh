@@ -1307,12 +1307,16 @@ pub(crate) fn key(surface: &Rc<Surface>, event: KeyEvent) -> bool {
         // The focused custom view's raw keys, and the capture rules that
         // take a key before the menu's shortcuts and the defaults.
         || crate::keyboard::press(surface, &event)
+        // Return and Space press the focused control once its own bindings
+        // passed on them, before the menu's shortcuts.
+        || crate::focus::press_key(surface, &event)
         || crate::chrome::shortcut(surface, &event)
         || crate::text_input::key(surface, &event)
         || crate::text::key(surface, &event)
         || crate::selectable_view::key(surface, &event)
         || crate::app_window::escape(surface, &event)
         || crate::navigation::key_pressed(surface, &event)
+        || crate::focus::key(surface, &event)
         || {
             let (x, y) = input.last.get().unwrap_or((-1.0, -1.0));
             crate::scroll::key(surface, &event, x, y)

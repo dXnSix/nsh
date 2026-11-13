@@ -23,7 +23,7 @@ use super::{IntoReactive, Reactive, SharedString};
 use crate::{
     BlendMode, BoxShadow, Cursor, FontVariant, ObjectPosition, TransformOrigin, TransitionProps,
     color::{Hsla, Rgba, transparent_black},
-    effects::{Filter, GradientKind, GradientSize, KeyframeAnimation, Keyframes},
+    effects::{Filter, Gradient, GradientKind, GradientSize, KeyframeAnimation, Keyframes},
     geometry::{
         AbsoluteLength, DefiniteLength, Length, Percentage, Points, REM_SIZE, Radians, Rems, deg,
         percentage, px, relative,
@@ -62,6 +62,139 @@ impl FontWeight {
     /// 900.
     pub const BLACK: Self = Self(900);
 }
+
+/// Box shadows (CSS's `box-shadow` layers) for each appearance: the
+/// platform switches between them with nothing running, as it does an
+/// [`AdaptiveColor`]. A theme's shadow tokens are adaptive
+/// ([`super::Tokens::shadow`]); layers given once are the same in both.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AdaptiveShadow {
+    /// In light appearance.
+    pub light: Arc<[BoxShadow]>,
+    /// In dark appearance.
+    pub dark: Arc<[BoxShadow]>,
+}
+
+impl AdaptiveShadow {
+    /// `light` and `dark`.
+    pub fn new(
+        light: impl IntoIterator<Item = BoxShadow>,
+        dark: impl IntoIterator<Item = BoxShadow>,
+    ) -> Self {
+        Self {
+            light: light.into_iter().collect(),
+            dark: dark.into_iter().collect(),
+        }
+    }
+
+    /// The layers of the appearance (`dark` or light).
+    pub fn layers(&self, dark: bool) -> &[BoxShadow] {
+        if dark { &self.dark } else { &self.light }
+    }
+
+    /// The layers of the appearance as CSS writes them (`0px 1px 2px 0px
+    /// #0000001a`, comma-separated; `none` for none).
+    pub fn css(&self, dark: bool) -> String {
+        let layers = self.layers(dark);
+        if layers.is_empty() {
+            return "none".into();
+        }
+        let layer = |l: &BoxShadow| {
+            format!(
+                "{}{}px {}px {}px {}px #{:08x}",
+                if l.inset { "inset " } else { "" },
+                l.offset_x.0,
+                l.offset_y.0,
+                l.blur.0,
+                l.spread.0,
+                l.color.0
+            )
+        };
+        layers.iter().map(layer).collect::<Vec<_>>().join(", ")
+    }
+}
+
+impl<I: IntoIterator<Item = BoxShadow>> From<I> for AdaptiveShadow {
+    /// The same layers in both appearances.
+    fn from(layers: I) -> Self {
+        let layers: Arc<[BoxShadow]> = layers.into_iter().collect();
+        Self {
+            light: layers.clone(),
+            dark: layers,
+        }
+    }
+}
+
+crate::static_reactive!(AdaptiveShadow: AdaptiveShadow);
+
+/// Gradients (CSS's `background-image` layers of them) for each appearance:
+/// the platform switches between them with nothing running, as it does an
+/// [`AdaptiveColor`]. A theme's gradient tokens are adaptive
+/// ([`super::Tokens::gradient`]); gradients given once are the same in
+/// both.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AdaptiveGradient {
+    /// In light appearance.
+    pub light: Arc<[Gradient]>,
+    /// In dark appearance.
+    pub dark: Arc<[Gradient]>,
+}
+
+impl AdaptiveGradient {
+    /// `light` and `dark`.
+    pub fn new(
+        light: impl IntoIterator<Item = Gradient>,
+        dark: impl IntoIterator<Item = Gradient>,
+    ) -> Self {
+        Self {
+            light: light.into_iter().collect(),
+            dark: dark.into_iter().collect(),
+        }
+    }
+
+    /// The gradients CSS `css` writes as a `background-image`
+    /// (`linear-gradient(to right, #7c3aed, #db2777)`, several
+    /// comma-separated), the same in both appearances; `None` when it
+    /// writes none, or something else.
+    pub fn parse(css: &str) -> Option<Self> {
+        let layers = crate::css::gradients(css).filter(|layers| !layers.is_empty())?;
+        Some(layers.into())
+    }
+
+    /// The gradients of the appearance (`dark` or light), the first on
+    /// top.
+    pub fn layers(&self, dark: bool) -> &[Gradient] {
+        if dark { &self.dark } else { &self.light }
+    }
+
+    /// The gradients of the appearance as CSS writes them
+    /// (`linear-gradient(90deg, #7c3aedff, #db2777ff)`, comma-separated;
+    /// `none` for none): what [`Self::parse`] reads back.
+    pub fn css(&self, dark: bool) -> String {
+        let layers = self.layers(dark);
+        if layers.is_empty() {
+            return "none".into();
+        }
+        layers
+            .iter()
+            .map(Gradient::css)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+impl<I: IntoIterator<Item = Gradient>> From<I> for AdaptiveGradient {
+    /// The same gradients in both appearances.
+    fn from(layers: I) -> Self {
+        let layers: Arc<[Gradient]> = layers.into_iter().collect();
+        Self {
+            light: layers.clone(),
+            dark: layers,
+        }
+    }
+}
+
+crate::static_reactive!(AdaptiveGradient: AdaptiveGradient);
 
 /// A color for each appearance: the platform switches between them
 /// with nothing running. Theme colors are adaptive; an [`Hsla`] (or anything
@@ -376,6 +509,26 @@ impl Hash for Layers {
     }
 }
 
+/// Gradients, compared as they are and hashed by how CSS writes them.
+#[derive(Debug, Clone)]
+pub(crate) struct GradientLayers(Arc<[Gradient]>);
+
+impl PartialEq for GradientLayers {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || self.0 == other.0
+    }
+}
+
+impl Eq for GradientLayers {}
+
+impl Hash for GradientLayers {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for gradient in self.0.iter() {
+            gradient.css().hash(state);
+        }
+    }
+}
+
 /// Layers of [`TextShadow`](crate::TextShadow)s, compared and hashed by
 /// their bits.
 #[derive(Debug, Clone)]
@@ -435,6 +588,11 @@ pub(crate) enum Declaration {
     TextShadow(&'static str),
     /// Box shadows of the element's own.
     Shadows(Layers),
+    /// Layers per appearance, light then dark ([`Styled::adaptive_shadow`]).
+    AdaptiveShadows(Layers, Layers),
+    /// Background gradients per appearance, light then dark
+    /// ([`Styled::adaptive_gradient`]).
+    AdaptiveGradients(GradientLayers, GradientLayers),
     PartColor(ColorPart, AdaptiveColor),
     Ring(Bits),
     RingOffset(Bits),
@@ -599,6 +757,24 @@ impl Declaration {
                 )
             }
             Declaration::Shadows(layers) => part(out, Part::Shadow(layers.0.clone())),
+            Declaration::AdaptiveShadows(light, dark) => out.push(if light.0 == dark.0 {
+                Decl::Part(Part::Shadow(light.0.clone()))
+            } else {
+                Decl::AdaptivePart(Box::new([
+                    Part::Shadow(light.0.clone()),
+                    Part::Shadow(dark.0.clone()),
+                ]))
+            }),
+            Declaration::AdaptiveGradients(light, dark) => {
+                let images = |layers: &GradientLayers| {
+                    PropertyValue::Gradients(layers.0.iter().cloned().collect())
+                };
+                out.push(if light == dark {
+                    Decl::Set(StyleKey::BackgroundImage, images(light))
+                } else {
+                    Decl::Adaptive(StyleKey::BackgroundImage, [images(light), images(dark)])
+                });
+            }
             Declaration::PartColor(which, c) => out.push(if c.light == c.dark {
                 Decl::Part(which.part(c.light))
             } else {
@@ -2644,6 +2820,23 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Box shadows of its own per appearance, and reactive: a closure
+    /// reading a theme's shadow token (`.adaptive_shadow(move ||
+    /// tokens().shadow("shadow-raised").cloned().unwrap_or_default())`)
+    /// follows theme changes, and the platform switches the layers with the
+    /// appearance with nothing running, as [`Styled::bg`] does a color.
+    /// [`Styled::shadow`] takes static layers, the same in both.
+    fn adaptive_shadow(mut self, shadow: impl IntoReactive<AdaptiveShadow>) -> Self {
+        self.style()
+            .bind_value(shadow, |s, shadow: AdaptiveShadow| {
+                s.push(Declaration::AdaptiveShadows(
+                    Layers(shadow.light),
+                    Layers(shadow.dark),
+                ));
+            });
+        self
+    }
+
     /// The shadow's color: of the presets' layers (an opaque color keeps
     /// their alpha, Tailwind's `shadow-sky-500`; one with an alpha sets it,
     /// `shadow-sky-500/50`).
@@ -2824,6 +3017,24 @@ pub trait Styled: Sized {
         self.style().bind_value(angle, |s, angle: Radians| {
             s.push(Declaration::Gradient(GradientShape::Conic(Bits(angle.0))));
         });
+        self
+    }
+
+    /// Gradients as the background, per appearance: a theme's gradient
+    /// token (`move || theme_of::<Acme>().hero.clone()`), or gradients
+    /// read from CSS ([`AdaptiveGradient::parse`]). A closure follows theme
+    /// changes, and the platform switches the gradients with the appearance
+    /// with nothing running, as [`Styled::bg`] does a color. The first
+    /// gradient is on top; they replace what the gradient styles
+    /// ([`Styled::bg_linear`], [`Styled::gradient_from`]) make.
+    fn adaptive_gradient(mut self, gradient: impl IntoReactive<AdaptiveGradient>) -> Self {
+        self.style()
+            .bind_value(gradient, |s, gradient: AdaptiveGradient| {
+                s.push(Declaration::AdaptiveGradients(
+                    GradientLayers(gradient.light),
+                    GradientLayers(gradient.dark),
+                ));
+            });
         self
     }
 

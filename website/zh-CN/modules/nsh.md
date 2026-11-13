@@ -6,7 +6,7 @@ order: 2
 
 # nsh
 
-`nsh` 是核心模块：响应式 API（signal、computed、effect、context）、`mount`、`token`、`setTheme`、宿主元素 `View`、`Text`、`Scroll` 和 `Overlay`，[可选择的视图](#selectable-views)、[安全区域与键盘](#safe-area-and-keyboard)，[动画](#animation)、[设备与环境](#device)、[`PanResponder`](#panresponder)、[剪贴板](#clipboard)、[照片选择器](#picker)、[语音识别](#speech)、[声音](#sound)、[存储](#storage)、[宿主通道](#host)、[键盘快捷键](#keymap)、[原生组件与模块](#nativecomponent-and-nativemodule)、[无障碍](#accessibility)，以及元素、样式和事件的 TypeScript 类型。响应式图本身以 Rust 原生运行；读取一个 signal 是一次对运行时的调用，只需几纳秒，只有你自己写的闭包会在 JavaScript 解释器中执行。
+`nsh` 是核心模块：响应式 API（signal、computed、effect、context）、`mount`、`token`、`setTheme`、`updateTheme`、`resetTheme`、宿主元素 `View`、`Text`、`Scroll` 和 `Overlay`，[可选择的视图](#selectable-views)、[安全区域与键盘](#safe-area-and-keyboard)，[动画](#animation)、[设备与环境](#device)、[`PanResponder`](#panresponder)、[剪贴板](#clipboard)、[照片选择器](#picker)、[语音识别](#speech)、[声音](#sound)、[存储](#storage)、[宿主通道](#host)、[键盘快捷键](#keymap)、[原生组件与模块](#nativecomponent-and-nativemodule)、[无障碍](#accessibility)，以及元素、样式和事件的 TypeScript 类型。响应式图本身以 Rust 原生运行；读取一个 signal 是一次对运行时的调用，只需几纳秒，只有你自己写的闭包会在 JavaScript 解释器中执行。
 
 ```ts
 import { batch, cleanup, computed, context, effect, ErrorBoundary, mount, Overlay, Scroll, signal, split, Text, token, untracked, View } from "nsh";
@@ -254,8 +254,8 @@ function token<K extends keyof Tokens>(name: K): Tokens[K];
 ```
 
 应用主题（`nsh.json` 的 `"theme"`，叠加在 shadcn/ui 的令牌之上）中名为 `name` 的设计令牌在当前外观下的值：颜色是 `#rrggbbaa`，
-长度是以点为单位的数值，字体是字体族名称。名称是主题中 CSS 变量去掉 `--` 后的名称（`primary`、`muted-foreground`、`radius`、
-`font-mono`，以及应用自己的令牌，如 `up`）。读取它是响应式的：读取令牌的组件、memo 或 effect 会在主题或外观变化时重新运行。
+长度是以点为单位的数值，字体是字体族名称，阴影是它的 CSS `box-shadow` 各层，渐变是它的 CSS `background-image`。名称是主题中 CSS 变量去掉 `--` 后的名称（`primary`、`muted-foreground`、`radius`、
+`font-mono`，以及应用自己的令牌，如 `up`）。读取它是响应式的：读取令牌的组件、memo 或 effect 会在主题或外观变化时重新运行。在 [`ThemeScope`](#themescope) 中，它是该作用域的值和外观。
 `Tokens` 列出应用的令牌及其类型；NSH 根据主题把它写入 `.nsh/types/nsh/tokens.d.ts`。在类名中直接引用令牌（`bg-primary`、
 `rounded-(--radius)`）：见[主题 token](../docs/tailwind.md#主题-token)。
 
@@ -264,6 +264,29 @@ import { effect, token } from "nsh";
 
 effect(() => console.log("primary is", token("primary"), "radius", token("radius")));
 ```
+
+## role
+
+```ts
+function role<K extends keyof Roles>(name: K): Roles[K] | undefined;
+```
+
+主题角色 `name` 在当前外观下用来绘制的值，形式与 [`token()`](#token) 给出令牌的值相同：应用主题把该角色映射到的令牌（主题类型的 `role = …`），
+否则是与角色同名的令牌，否则是 `undefined`。角色说明 UI 的某个部分是做什么用的（`popover`、`border`、`warning`），无论应用的设计系统如何命名
+对应的令牌：按角色编写的组件可以被任何设计系统主题化。读取它是响应式的，与 `token()` 一样。
+
+`Roles` 列出应用的 UI 集合绘制时使用的角色（`nsh/base` 的角色见[主题角色](./nsh-base.md#theme-roles)）以及每个角色读取的内容；NSH 把它写入
+`.nsh/types/nsh/roles.d.ts`。主题没有对应令牌的角色是 `undefined`，所以组件为它保留自己的颜色：
+
+```tsx
+import { role } from "nsh";
+
+// 弹出层的表面，无论这个应用如何称呼它；在主题有警告色之前使用琥珀色。
+<View style={{ backgroundColor: role("popover"), borderLeftWidth: 3, borderLeftColor: role("warning") ?? "#d97706" }} />
+```
+
+类把角色当作变量读取：在主题没有同名令牌时，`bg-(--popover)` 是主题把 `popover` 映射到的令牌（[主题令牌](../docs/tailwind.md#theme-tokens)）。
+Rust 通过角色的常量读取：`theme().tokens().role(nsh_base::role::POPOVER)`。
 
 ## setTheme
 
@@ -276,8 +299,14 @@ interface Theme {
     light?: Record<string, string | number>;
     dark?: Record<string, string | number>;
   };
+  roles?: Record<string, string>;
 }
 ```
+
+`roles` 按名称把主题角色映射到主题的令牌上：`roles: { popover: "surface" }` 让所有用 `popover` 绘制的部分（`nsh/base` 的弹出层、
+[`role("popover")`](#role)）用令牌 `surface` 绘制，并在它变化时跟随；而 `"popover": "var(--surface)"` 只会复制一次它的颜色。没有 Rust 主题类型的
+应用用它按自己的方式命名令牌。把角色映射到主题中不存在的令牌名，或在主题类型下映射某个类型已经映射的角色，会像无法读取的值一样被拒绝；
+没有任何 UI 集合拥有的角色名会产生构建警告。`updateTheme` 会在已映射的角色之上追加。
 
 在应用运行时把 `theme` 设为应用的主题，取代 `nsh.json` 的 `"theme"`：格式与它相同，也和它一样叠加在 shadcn/ui 的令牌之上。
 它立即生效：调用之后 `token()` 马上读到新的令牌，引用令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在下一帧跟上，两种外观都是。
@@ -285,7 +314,7 @@ interface Theme {
 
 主题要整个读得懂：有值读不懂时（NSH 不认识的颜色，如 `#zz`、`lab()` 或 `rgb(255 0 0)garbage`；
 指不到颜色的 `var()`；或一种外观下是颜色、另一种外观下却不是颜色的值），
-`setTheme` 抛出 `TypeError`，逐一列出这些值，正在显示的主题保持不变。阴影这类不属于任何令牌类型的值会被略过，和 `nsh.json`
+`setTheme` 抛出 `TypeError`，逐一列出这些值，正在显示的主题保持不变。`em` 单位的字间距这类不属于任何令牌类型的值会被略过，和 `nsh.json`
 的主题一样。新主题请从应用自己的主题出发，只改不同的部分，这样类名引用的令牌都还有值（`up` 在 `nsh.json` 的主题里时的 `bg-up`）。
 Rust：对 `nsh_base::Theme` 调用 `set_tokens(theme.into())`（[主题 token](../docs/tailwind.md#主题-token)）。
 
@@ -301,6 +330,32 @@ function brand(color: string) {
 
 brand("#e11d48");
 setTheme(null); // 恢复应用的主题
+```
+
+<a id="updatetheme-resettheme"></a>
+
+## updateTheme、resetTheme
+
+```ts
+function updateTheme(theme: Theme): void;
+function resetTheme(names?: (keyof Tokens | keyof Roles)[]): void;
+```
+
+`updateTheme` 在应用运行时修改 `theme` 设置的令牌，其余令牌保持不变；`setTheme` 则替换全部令牌。`theme` 的格式与 `setTheme`
+的相同，读取方式也相同：要整个读得懂（有 NSH 读不懂的值时抛出列出该值的 `TypeError`，任何令牌都不变）。调用之后 `token()`
+马上读到新的值，引用这些令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在下一帧跟上。连续两次更新都会生效，后一次覆盖前一次。
+`var(--name)` 指向本次更新没有设置的令牌时，取该令牌当前显示的值；不属于任何令牌类型的值会被略过，该令牌保持原值。
+嵌入方应用的[主题覆盖](../docs/tailwind.md#主题-token)仍然优先。
+
+`resetTheme` 把 `names` 中的令牌恢复为应用主题中的值，即 `nsh.json` 的主题或 `setTheme` 设置的主题；不传名字时恢复全部令牌。
+主题中没有的名字会被移除。没有列出的令牌保持不变。在[主题类型](../docs/rust.md#主题类型)下，角色的名称指该角色所映射的令牌，与主题文件中一样。Rust：`update_tokens` 和 `reset_tokens`（[主题](../docs/rust.md#主题)）。
+
+```tsx
+import { resetTheme, updateTheme } from "nsh";
+
+// 换一个品牌色，浅色和深色各一个；主题的其余部分不变。
+updateTheme({ cssVars: { light: { primary: "#e11d48" }, dark: { primary: "#fb7185" } } });
+resetTheme(["primary"]); // 恢复应用的 primary
 ```
 
 ## appInfo
@@ -952,7 +1007,7 @@ const wide = () => windowSize().width >= 600;
 const colorScheme: Accessor<"light" | "dark">;
 ```
 
-显示的外观：系统的外观，除非应用设置了自己的（`nsh.json` 的 `"appearance"`、[`setColorScheme`](#setcolorscheme)）。响应式。Rust：`dark() -> bool`；主题颜色（`AdaptiveColor`）和 `.dark(…)` 样式变体无需读取它就会跟随。Tailwind 的 `dark:` 变体也跟随它（见 [Tailwind](../docs/tailwind.md)）。
+显示的外观：系统的外观，除非应用设置了自己的（`nsh.json` 的 `"appearance"`、[`setColorScheme`](#setcolorscheme)）；在设置了外观的 [`ThemeScope`](#themescope) 中，是该作用域的外观。响应式。Rust：`dark() -> bool`；主题颜色（`AdaptiveColor`）和 `.dark(…)` 样式变体无需读取它就会跟随。Tailwind 的 `dark:` 变体也跟随它（见 [Tailwind](../docs/tailwind.md)）。
 
 ```rust tabs
 view().flex_1().bg(move || if dark() { black() } else { white() })
@@ -1063,6 +1118,57 @@ function setColorScheme(scheme: "light" | "dark" | "system"): void;
 
 无论系统外观如何，立即以 `scheme` 显示应用：`colorScheme()`、`dark:` 类、组件的主题和平台控件（警告框、状态栏的默认样式）都随之变化；`"system"` 重新跟随系统。`nsh.json` 的 `"appearance"` 从启动时就设置它。Rust：`set_color_scheme(Appearance::Dark)`（`Appearance::Light`、`Appearance::System`）。
 
+### ThemeScope
+
+```ts
+const ThemeScope: (props: ThemeScopeProps) => JSX.Element;
+
+interface ThemeScopeProps {
+  /** `"light"` 或 `"dark"`；省略时，作用域按其外层视图的外观显示。 */
+  appearance?: "light" | "dark";
+  /** 一个主题文件，它的值叠加在作用域外层的令牌之上；省略时，作用域使用外层的令牌绘制。 */
+  theme?: Theme;
+  children?: JSX.Element;
+  // 以及视图的 `class`、`classList`、`style`、状态样式、`testID`、`onLayout`
+}
+```
+
+一个视图，无论应用和系统的外观如何，它自身及其中的一切都以它自己的外观、它自己的设计令牌或两者同时显示：浅色页面旁的深色侧边栏，拥有自己 `primary` 的卡片，应用旁的主题预览。它是视图，所以它的 `class` 和 `style` 负责布局和绘制。
+
+在作用域内，凡是跟随外观的都跟随作用域的外观：`dark:` 类、主题 token 的类（`bg-background`）、组件的主题颜色、[`colorScheme()`](#colorscheme) 和 [`token()`](#token)。在 iOS、macOS 和 Web 上，其中的平台控件也跟随它（文本输入的键盘和菜单、Web 视图、表单控件），Android 上的标签栏和桌面后端绘制的滚动指示器同样如此。作用域可以嵌套：由最近的设置了 `appearance` 的作用域决定，没有设置的作用域按其外层视图的外观显示。
+
+设置了 `theme`（一个主题文件，与 [`updateTheme`](#updatetheme-resettheme) 接受的相同）时，主题令牌的类、组件的主题和 [`token()`](#token) 在每种外观下对它设置的令牌使用作用域的值，对其余令牌使用应用的值；它自己没有设置的 `var()` 指向作用域外层的令牌。作用域只设置应用主题已有的令牌：主题没有的名称会被略过并给出警告，所以存在的类在各处都相同。嵌套在内的作用域从外层作用域的值开始，应用主题的变化会传到作用域没有设置的每个令牌。
+
+与 CSS 一样，视图继承来的颜色保持不变：作用域要设置自己的背景色和文字颜色。平台绘制的菜单、警告框和面板属于应用，即使由作用域内的视图打开也是如此。Rust：`theme_scope().appearance(ColorScheme::Dark).child(…)` 和 `.theme(Some(ScopeTheme::file(json)))`，或用 `ScopeTheme::from(tokens)` 和 `ScopeTheme::of(&theme)` 传入在 Rust 中构造的令牌和主题类型的值；`dark()`、`color()`、`tokens()` 和 `theme_of()` 给出读取它们的绑定所在作用域的结果。
+
+```rust tabs
+view().flex_row().flex_1().child(
+    theme_scope()
+        .appearance(ColorScheme::Dark)
+        .child(view().w(px(240.)).bg(AdaptiveColor::rgb(0xffffff, 0x18181b)).child(sidebar())),
+)
+```
+
+```tsx tabs
+import { ThemeScope, View } from "nsh";
+
+<View class="flex-1 flex-row">
+  <ThemeScope appearance="dark" class="w-60 bg-white dark:bg-zinc-900">
+    <Sidebar />
+  </ThemeScope>
+  <View class="flex-1 bg-white dark:bg-zinc-900">{/* 页面，使用应用的外观 */}</View>
+</View>
+```
+
+```tsx
+// 使用自己品牌色的套餐卡片：其中的 `bg-primary` 和 `token("primary")` 是作用域的值。
+<ThemeScope theme={{ cssVars: { light: { primary: "#7c3aed" }, dark: { primary: "#a78bfa" } } }}>
+  <View class="rounded-(--radius) bg-primary p-4">
+    <Text class="text-primary-foreground">Upgrade</Text>
+  </View>
+</ThemeScope>
+```
+
 ### fpsEnabled 和 setFpsEnabled
 
 ```ts
@@ -1124,10 +1230,11 @@ const shadersAvailable: Accessor<boolean>;
 const platform: Platform;
 
 interface Platform {
-  readonly os: "ios" | "android" | "macos" | "windows" | "linux" | "web";
+  readonly os: "ios" | "android" | "macos" | "windows" | "linux" | "web" | "tizen";
   readonly version: string;
   readonly idiom: "phone" | "pad" | "mac" | "tv" | "desktop" | "terminal";
   readonly desktop: boolean;
+  readonly tv: boolean;
   readonly catalyst: boolean;
   select<T>(spec: PlatformSelectSpec<T>): T | undefined;
 }
@@ -1137,10 +1244,11 @@ interface Platform {
 
 | 成员 | Rust | 说明 |
 |---|---|---|
-| `os` | `os() -> Os`（`os().name()` 即 TS 的字符串） | 操作系统。iOS、iOS 模拟器和 Mac Catalyst 都报告 `"ios"`，浏览器报告 `"web"`。 |
+| `os` | `os() -> Os`（`os().name()` 即 TS 的字符串） | 操作系统。iOS、iOS 模拟器和 Mac Catalyst 都报告 `"ios"`，浏览器报告 `"web"`（Tizen Web 应用也是），原生 Tizen 应用报告 `"tizen"`（电视）。 |
 | `version` | `os_version() -> (u16, u16)` | iOS 和桌面系统：系统版本（`"17.5"`）；Android：API 级别（`"35"`）；Web：`"0.0"`。Rust 给出主版本和次版本号，在 Android 上是 API 级别和 0。 |
-| `idiom` | `idiom() -> Idiom` | 设备类型：在终端里（`--target tui`）是 `"terminal"`：画在字符格子上，适用桌面行为（`desktop` 为 `true`；`os` 仍是本机的操作系统）；其他情况下 `desktop` 为 `true` 时恰好是 `"desktop"`，否则是 `"phone"`、`"pad"`（iPad、Android 平板、以 iPad 形态运行的 Mac Catalyst）、`"mac"`（以 UIKit 的 Mac 形态运行的 Mac Catalyst，属于移动端形态）或 `"tv"`（Apple TV、Android TV）。 |
-| `desktop` | `is_desktop() -> bool` | 适用桌面行为：macOS、Windows、Linux、有鼠标且窗口较宽的浏览器，以及终端。`desktop={{…}}` 属性、`select({ desktop })` 和 `idiom` 的 `"desktop"`（终端除外）都以它为准。Mac Catalyst 运行 iOS 后端，属于移动端：那里适用 `ios={{…}}` 属性。[`nsh/desktop`](./nsh-desktop.md#isavailable) 的 `isAvailable` 是更窄的判断，表示它的窗口和菜单 API 可用，即 macOS、Windows 和 Linux。 |
+| `idiom` | `idiom() -> Idiom` | 设备类型：在终端里（`--target tui`）是 `"terminal"`：画在字符格子上，适用桌面行为（`desktop` 为 `true`；`os` 仍是本机的操作系统）；其他情况下 `desktop` 为 `true` 时恰好是 `"desktop"`，否则是 `"phone"`、`"pad"`（iPad、Android 平板、以 iPad 形态运行的 Mac Catalyst）、`"mac"`（以 UIKit 的 Mac 形态运行的 Mac Catalyst，属于移动端形态）或 `"tv"`（Android TV、Tizen、电视上的浏览器：`tv` 为 `true`，与操作系统无关）。 |
+| `desktop` | `is_desktop() -> bool` | 适用桌面行为：macOS、Windows、Linux、有鼠标且窗口较宽的浏览器，以及终端。`desktop={{…}}` 属性、`select({ desktop })` 和 `idiom` 的 `"desktop"`（终端除外）都以它为准。Mac Catalyst 运行 iOS 后端，属于移动端：那里适用 `ios={{…}}` 属性；电视从不是桌面。[`nsh/desktop`](./nsh-desktop.md#isavailable) 的 `isAvailable` 是更窄的判断，表示它的窗口和菜单 API 可用，即 macOS、Windows 和 Linux。 |
+| `tv` | `is_tv() -> bool` | 应用运行在电视上：电视界面风格，与操作系统无关（Android TV、Tizen、电视上的浏览器，由页面告知）。`tv={{…}}` 属性和 `select({ tv })` 以它为准；`desktop` 为 `false`，所以其余行为与移动端相同。 |
 | `catalyst` | `is_catalyst() -> bool` | 应用运行在 Mac Catalyst 下，无论是 Mac 形态还是 iPad 形态（`os` 为 `"ios"`）。 |
 | `select(spec)` | `match os() { … }` | 当前平台对应的值（见下文）。 |
 
@@ -1162,7 +1270,9 @@ interface PlatformSelectSpec<T> {
   windows?: T;
   linux?: T;
   web?: T;
-  mobile?: T;   // platform.desktop 为 false：iOS（包括 Mac Catalyst）、Android，以及手机和平板上的浏览器
+  tizen?: T;    // 原生 Tizen 应用；Tizen Web 应用查找 web
+  tv?: T;       // platform.tv 为 true：电视，与操作系统无关
+  mobile?: T;   // platform.desktop 为 false：iOS（包括 Mac Catalyst）、Android、手机和平板上的浏览器，以及电视
   desktop?: T;  // platform.desktop 为 true：macOS、Windows、Linux、桌面浏览器，以及终端
   native?: T;   // 除 Web 外的所有平台
   default?: T;
@@ -1170,7 +1280,7 @@ interface PlatformSelectSpec<T> {
 }
 ```
 
-依次返回 `platform.name`（在 NSH 之外构建的平台）对应的值，否则当前操作系统（`ios`、`android`、`web` 等）对应的值，否则按 `platform.desktop` 取 `desktop` 或 `mobile`，否则 `native`（除 Web 外的所有平台），否则 `default`，都没有则返回 `undefined`。Rust 代码对 `os()` 做 `match`（配合 `platform_name()` 和 `is_desktop()`）。
+依次返回 `platform.name`（在 NSH 之外构建的平台）对应的值，否则当前操作系统（`ios`、`android`、`web`、`tizen` 等）对应的值，否则在电视上（`platform.tv`）取 `tv`，否则按 `platform.desktop` 取 `desktop` 或 `mobile`，否则 `native`（除 Web 外的所有平台），否则 `default`，都没有则返回 `undefined`。Rust 代码对 `os()` 做 `match`（配合 `platform_name()`，`tv` 用 `is_tv()`，`mobile` / `desktop` 用 `is_desktop()`）。
 
 ```rust tabs
 use nsh_core::platform::Os;
@@ -2911,9 +3021,37 @@ iOS 与 macOS 一致（`mod` 是 Command），Android 与 Windows、Linux 一致
 
 应用自己的快捷键请用 `mod`：它就是各平台应用习惯使用的那个键（macOS 上是 ⌘K，Windows 和 Linux 上是 Ctrl+K），一种写法到处适用。Windows 键和 Super 基本归系统使用，所以在 macOS 以外很少该用 `cmd`。
 
-键可以是字母、数字或标点键，写作它在美式键盘上不按 Shift 时输入的字符（`k`、`1`、`,`、`/`、`[`；`?` 写作 `"shift+/"`，Shift+K 写作 `"shift+k"`），也可以是名称：`plus`（`=` / `+` 键，也可写 `=`）、`minus`（也可写 `-`）、`space`、`enter`（`return`）、`escape`（`esc`）、`tab`、`backspace`、`delete`（`del`）、`insert`、方向键 `up`、`down`、`left`、`right`（`arrowup` 等）、`home`、`end`、`pageup`、`pagedown`、`f1` 到 `f24`。大小写不影响：`"Mod+Shift+K"` 就是 `"mod+shift+k"`，大写字母表示同一个键，并不意味着 Shift（`"mod+K"` 就是 `"mod+k"`）。推荐的写法是全小写，本页示例都这样写。`"mod-k"` 和 `"mod++"` 会报错，错误信息给出正确的写法。`nsh/desktop` 的菜单快捷键使用同样的写法。
+键可以是字母、数字或标点键，写作它在美式键盘上不按 Shift 时输入的字符（`k`、`1`、`,`、`/`、`[`；`?` 写作 `"shift+/"`，Shift+K 写作 `"shift+k"`），也可以是名称：`plus`（`=` / `+` 键，也可写 `=`）、`minus`（也可写 `-`）、`space`、`enter`（`return`）、`escape`（`esc`）、`tab`、`backspace`、`delete`（`del`）、`insert`、方向键 `up`、`down`、`left`、`right`（`arrowup` 等）、`home`、`end`、`pageup`、`pagedown`、`f1` 到 `f24`，以及下文的媒体键与电视遥控器按键。大小写不影响：`"Mod+Shift+K"` 就是 `"mod+shift+k"`，大写字母表示同一个键，并不意味着 Shift（`"mod+K"` 就是 `"mod+k"`）。推荐的写法是全小写，本页示例都这样写。`"mod-k"` 和 `"mod++"` 会报错，错误信息给出正确的写法。`nsh/desktop` 的菜单快捷键使用同样的写法（媒体键与电视遥控器按键除外）。
 
 快捷键适用于任何键盘布局：在西里尔或希腊字母布局下，`mod+k` 是美式布局中输入 K 的那个键，与菜单快捷键一致。
+
+#### 媒体键与电视遥控器按键
+
+媒体键盘和电视遥控器有自己的按键，命名方式与其他键相同：
+
+| 按键 | 名称 | 也可写作 |
+|---|---|---|
+| 播放 / 暂停 | `mediaplaypause` | |
+| 播放 | `mediaplay` | |
+| 暂停 | `mediapause` | |
+| 停止 | `mediastop` | |
+| 快退 | `mediarewind` | |
+| 快进 | `mediafastforward` | |
+| 下一曲 | `medianext` | `mediatracknext` |
+| 上一曲 | `mediaprevious` | `mediatrackprevious` |
+| 红、绿、黄、蓝 | `red`、`green`、`yellow`、`blue` | `colorf0red`、`colorf1green`、`colorf2yellow`、`colorf3blue` |
+| 频道加、频道减 | `channelup`、`channeldown` | |
+| 信息 | `info` | |
+
+```tsx
+keymap.bind({
+  mediaplaypause: () => player.toggle(),
+  red: () => openFilters(),
+  channelup: () => nextChannel(),
+});
+```
+
+它们来自各平台报告的按键：Windows 的媒体键（播放 / 暂停、停止、下一曲、上一曲），Android 上的全部这些键（`KEYCODE_MEDIA_*`、`KEYCODE_PROG_RED` 等、`KEYCODE_CHANNEL_*`、`KEYCODE_INFO`），浏览器中按 `KeyboardEvent.key` 识别（在三星电视上也按遥控器的键码识别），Tizen 电视上则通过 GPUI 后端。它们不输入文字，所以在文本输入框中绑定也会触发。`keymap.label` 用文字显示它们（`"Play/Pause"`、`"Red"`、`"Channel Up"`）。
 
 对于无效的按键组合，`bind` 会抛出一个说明问题所在的 `TypeError`（`keymap.bind: invalid keystroke "cmd+kk": unknown key "kk"`），并拒绝系统保留的按键组合，应用因此永远无法让它们失效：
 
@@ -3328,7 +3466,7 @@ function Saved() {
 | `Point`、`Size`、`Bounds`、`Edges`、`Modifiers` | 事件数据和属性所用的形状，字段与 GPUI 相同（`nsh_core::geometry`） |
 | `PixelSize` | 图片或视频自身的像素尺寸（`onLoad`、`Image.getSize`、剪贴板和照片选择器的图片）；`Size` 的单位是点 |
 | `ImageAsset` | 导入图片文件得到的对象（`{ url, size: Size, scales? }`；`scales` 列出它的[像素密度变体](../docs/images-and-assets.md#像素密度)） |
-| `OS` | `"ios" \| "android" \| "macos" \| "windows" \| "linux" \| "web"` |
+| `OS` | `"ios" \| "android" \| "macos" \| "windows" \| "linux" \| "web" \| "tizen"` |
 | `AccessibilityRole`、`AccessibilityState` | 无障碍属性 |
 
 ```tsx

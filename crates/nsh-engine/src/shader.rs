@@ -1047,8 +1047,12 @@ impl ShaderView {
             if r.state.load(Ordering::Acquire) != state::MAPPED {
                 continue;
             }
-            if i == newest && r.serial > self.frame.serial {
-                let data = r.buffer.slice(..).get_mapped_range();
+            // A range that cannot be read (never, while the state says
+            // mapped) leaves the frame shown as it is.
+            if i == newest
+                && r.serial > self.frame.serial
+                && let Ok(data) = r.buffer.slice(..).get_mapped_range()
+            {
                 self.frame.pixels.clear();
                 self.frame.pixels.extend_from_slice(&data);
                 drop(data);

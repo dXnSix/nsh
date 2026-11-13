@@ -143,7 +143,7 @@ QuickJS 字节码是受信任的输入，只能从你自己应用的文件中加
 
 `AppView::set_locale(Some(locale))` 和 `AppView::set_font_scale(Some(scale))` 用你的应用的语言和文字大小代替系统的设置（`None` 恢复跟随系统）：`locale()`、`Intl`、`fontScale()` 和文字立即跟随（[设备与环境](./device-and-environment.md#在嵌入它的应用中)）。
 
-`AppView::set_theme_overrides(Some(json))` 把你的应用的品牌加在应用的[主题](./tailwind.md#主题-token)之上：格式与 `nsh.json` 的 `"theme"` 相同的主题文件，其中的 token 在浅色和深色模式下都覆盖应用的同名 token，应用的其他 token 保持不变；`bg-primary` 等类名立即更新样式，之后加载的应用一开始就使用它（`None` 恢复应用自己的主题；无法解析的文件返回错误，不做任何改动）。
+`AppView::set_theme_overrides(Some(json))` 把你的应用的品牌加在应用的[主题](./tailwind.md#主题-token)之上：格式与 `nsh.json` 的 `"theme"` 相同的主题文件，其中的 token 在浅色和深色模式下都覆盖应用的同名 token，应用的其他 token 保持不变；`bg-primary` 等类名立即更新样式，之后加载的应用一开始就使用它（`None` 恢复应用自己的主题；无法解析的文件返回错误，不做任何改动）。应用用它自己的主题读取器读取这个文件，所以文件没有设置的 `var(--name)` 取默认主题中该令牌的值。
 
 原生组件通过 `AppView::register_component` 注册，见[原生组件](./native-components.md#在-windows-上注册rust)。
 `set_ui_sets(sets)` 设置每个引擎提供的 UI 集合：NSH 的（`nsh_base::registry()`）和你的 crate 的（`my_app::registry()`，
@@ -168,7 +168,9 @@ QuickJS 字节码是受信任的输入，只能从你自己应用的文件中加
 |---|---|
 | Return | 在 `Input` 中按 `submitBehavior` 行事：提交（`onSubmit`）、提交并离开输入框，或换行（多行输入框） |
 | Shift+Return、Alt+Return | 在回车即提交的多行输入框中换行（Ctrl+Return 提交） |
-| Tab、Shift+Tab | 移到下一个 / 上一个文本框，只在最上层的对话框之内；与 Windows 的对话框一样，文本框中的文字会被选中 |
+| Tab、Shift+Tab | 按视图树的顺序移到下一个 / 上一个文本框或可按压视图，只在最上层的对话框之内；与 Windows 的对话框一样，文本框中的文字会被选中 |
+| Return、空格 | 按下获得焦点、带 `onPress` 的视图 |
+| 方向键（输入框自己用的除外） | 把焦点移到该方向上最近的可按压视图、输入框或 `focusable` 视图（限于最上层的对话框之内），并把它滚动到可见；该方向上没有时，按下文滚动 |
 | Escape | 离开有焦点的输入框；否则清除文本选区，再关闭最上层的对话框或返回上一页 |
 | Alt+Left、浏览器后退键、鼠标的后退键 | 返回上一页（在输入框中也是） |
 | Ctrl+方向键、Home / End、Ctrl+Home / End，加 Shift；Ctrl+Backspace / Delete | 在输入框中按词和行移动、选择、删除，与其他 Windows 应用一致 |
@@ -191,7 +193,7 @@ QuickJS 字节码是受信任的输入，只能从你自己应用的文件中加
 - **`mixBlendMode` 和 `backdropFilter`** 会绘制，但在带 `filter` 或 3D 变换的视图内部不生效；`borderCurve: "continuous"`
   绘制为圆形圆角。
 - **文本**：头部和中间省略号只用于单行（多行时改为尾部省略号）；彩色 emoji 只支持 COLR 字体；小型大写字母只在字体提供时可用。
-- **文本输入**：键盘类型和自动填充不适用（没有软键盘）；Tab 在文本框之间切换。右键打开编辑菜单（撤销、剪切、复制、粘贴、删除、
+- **文本输入**：键盘类型和自动填充不适用（没有软键盘）。右键打开编辑菜单（撤销、剪切、复制、粘贴、删除、
   全选），可选中的文本右键也有菜单（复制、全选）。
 - **无障碍**（UI Automation）：提示对话框和 toast 不会暴露出来；标题（heading）的级别都报告为 1。
 - **输入辅助视图**和**状态栏**（桌面上没有对应物）。

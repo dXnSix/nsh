@@ -85,6 +85,7 @@ impl Mounter {
             self.detach(surface, &view);
         }
         crate::navigation::end_batch(surface);
+        crate::focus::end_batch(surface);
         crate::system::end_batch(surface);
     }
 
@@ -347,6 +348,7 @@ impl Mounter {
                 let Some(view) = &self.get(*id) else { return };
                 view.state_mut().props = props.clone();
                 crate::input::props_changed(surface, view);
+                crate::focus::props_changed(surface, view);
                 crate::access::props_changed(view);
             }
             MountItem::LayoutAnimation(a) => self.layout_animation = Some(*a),
@@ -427,7 +429,7 @@ impl Mounter {
             // An input edits; a stop takes the keyboard focus.
             Command::Focus => match view {
                 Some(view) if view.kind() == ViewKind::Input => crate::text_input::focus(view),
-                Some(view) => crate::key_focus::focus(surface, view),
+                Some(view) => crate::focus::asked(surface, view),
                 None => {}
             },
             Command::Blur => match view {

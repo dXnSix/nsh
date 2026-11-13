@@ -16,8 +16,9 @@ they do in any text field.
 
 The editor owns behavior and comes with a look of its own built from the theme's tokens: the theme's `font-mono` at
 13pt in 20pt rows, line numbers in `muted-foreground`, a faint `muted` band behind the lines with a caret, selections
-in a tint of `primary`, indent guides in `border`, and the built-in syntax colors that [`TextView`](./text-view.md)'s
-code blocks use, in light and dark. Each part takes the app's styles over these defaults (`classes` and `styles`).
+in a tint of `primary`, indent guides in `border`, and the syntax colors that [`TextView`](./text-view.md)'s
+code blocks use: a built-in palette in light and dark, each kind of code recolored by a theme token of its role's name
+(`syntax-keyword`, `syntax-string`, …: [Theme roles](../modules/nsh-base.md#theme-roles)). Each part takes the app's styles over these defaults (`classes` and `styles`).
 Rust makes one with `nsh_base::editor()`, TSX with `<Editor>` from `nsh/base`.
 
 ```rust tabs
@@ -715,15 +716,15 @@ with the user's text size (`fontScale()`), and the rows grow with it.
 | `selection` | Behind selected text | A tint of `primary` |
 | `caret` | The carets | 2pt wide, `foreground`, blinking |
 | `composition` | The text an input method is composing | Underlined |
-| `searchMatch` | The matches of `search` | Translucent amber |
-| `currentSearchMatch` | The match the selection is on, after `searchMatch` | Stronger amber |
+| `searchMatch` | The matches of `search` | The theme's `highlight`, translucent; amber without it |
+| `currentSearchMatch` | The match the selection is on, after `searchMatch` | The same, stronger |
 | `matchingBracket` | The bracket at the caret and its partner | A 1pt border |
 | `indentGuide` | A guide per indentation level | A 1pt line of `border` |
 | `foldPlaceholder` | What a folded line shows after its text | ` ⋯ `, `muted-foreground` |
 | `placeholder` | Shown while the text is empty | `muted-foreground` |
 | `diagnosticError` | The line under an error | `destructive` |
-| `diagnosticWarning` | The line under a warning | Amber |
-| `diagnosticInfo` | The line under an information | Blue |
+| `diagnosticWarning` | The line under a warning | The theme's `warning`; amber without it |
+| `diagnosticInfo` | The line under an information | The theme's `info`; blue without it |
 | `diagnosticHint` | The line under a hint | `muted-foreground` |
 | `unnecessaryText` | The text of an `unnecessary` diagnostic | `muted-foreground` |
 | `deprecatedText` | The text of a `deprecated` diagnostic | Struck through |

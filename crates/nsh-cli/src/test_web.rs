@@ -24,7 +24,7 @@ use nsh_dev::{
 };
 use nsh_testing::{
     Host, HostOptions, StartHost,
-    agent::{Agent, Key, Native, RemoteScene},
+    agent::{Agent, Key, Native, RemoteKey, RemoteScene},
 };
 use serde_json::{Value, json};
 
@@ -42,14 +42,30 @@ const FRAME: Duration = Duration::from_millis(16);
 const SCROLL_STEP: f32 = 20.0;
 
 /// Starts the apps tests open in pages of `browser` (`--browser`), else of
-/// the Chrome, Edge or Chromium found on this machine.
-pub(crate) fn starter(browser: Option<&Path>) -> anyhow::Result<StartHost> {
+/// the Chrome, Edge or Chromium found on this machine, in `idiom` when the
+/// run sets one (`--idiom`, `nsh.json` `dev.idiom`). `tv` (`--target
+/// tizen-web`): a Tizen web app's page, with the TV shim, in the TV idiom
+/// and a TV's 1920×1080 by default (`tizen_web::dev_page`).
+pub(crate) fn starter(
+    browser: Option<&Path>,
+    tv: bool,
+    idiom: Option<crate::run::DevIdiom>,
+) -> anyhow::Result<StartHost> {
     let exe = cdp::find(browser)?;
     // Built (in a checkout) or found once, before the first test.
     let runtime = crate::runtime::test_web()?;
-    let host = Arc::new(crate::web::dev_host(&runtime, false)?);
+    let mut host = crate::web::dev_host(&runtime, false)?;
+    if tv {
+        host = crate::tizen_web::dev_page(host);
+    }
+    let host = Arc::new(host);
+    let size = if tv {
+        Size::new(Points(1920.0), Points(1080.0))
+    } else {
+        Size::new(Points(390.0), Points(844.0))
+    };
     Ok(Arc::new(move |entry: &Path, options: &HostOptions| {
-        start(&exe, &host, entry, options).map(|h| Box::new(h) as Box<dyn Host>)
+        start(&exe, &host, entry, options, size, idiom).map(|h| Box::new(h) as Box<dyn Host>)
     }))
 }
 
@@ -96,10 +112,15 @@ fn start(
     host: &(String, Vec<(String, Vec<u8>)>),
     entry: &Path,
     options: &HostOptions,
+    size: Size<Points>,
+    idiom: Option<crate::run::DevIdiom>,
 ) -> Result<WebHost, String> {
     let server = Arc::new(crate::test_host::serve(entry, options)?);
+    // The run's idiom, as `nsh run --target web --idiom` gives the page,
+    // over the test's (`TestEnvironment::idiom`: `open`'s desktop
+    // `platform`); without one the test's, else the one the page measures.
     let (page, files) =
-        crate::web::with_page_host(host.clone(), entry).map_err(|e| format!("{e:#}"))?;
+        crate::web::with_page_host(host.clone(), entry, idiom).map_err(|e| format!("{e:#}"))?;
     server.serve_web(page, files);
     let browser = {
         let mut running = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
@@ -118,9 +139,7 @@ fn start(
         "Emulation.setFocusEmulationEnabled",
         json!({ "enabled": true }),
     )?;
-    let size = options
-        .size
-        .unwrap_or(Size::new(Points(390.0), Points(844.0)));
+    let size = options.size.unwrap_or(size);
     set_size(&page, size.width, size.height)?;
     page.call(
         "Page.navigate",
@@ -201,6 +220,23 @@ fn dom_key(key: nsh_core::keymap::Key, shift: bool) -> Option<(String, String)> 
         Key::PageUp => named("PageUp", "PageUp"),
         Key::PageDown => named("PageDown", "PageDown"),
         Key::F(n) => Some((format!("F{n}"), format!("F{n}"))),
+        // The UI Events' media keys have a `code`; the TV remote's other
+        // keys only a `key`.
+        Key::MediaPlayPause => named("MediaPlayPause", "MediaPlayPause"),
+        Key::MediaStop => named("MediaStop", "MediaStop"),
+        Key::MediaNext => named("MediaTrackNext", "MediaTrackNext"),
+        Key::MediaPrevious => named("MediaTrackPrevious", "MediaTrackPrevious"),
+        Key::MediaPlay => named("MediaPlay", ""),
+        Key::MediaPause => named("MediaPause", ""),
+        Key::MediaRewind => named("MediaRewind", ""),
+        Key::MediaFastForward => named("MediaFastForward", ""),
+        Key::ColorRed => named("ColorF0Red", ""),
+        Key::ColorGreen => named("ColorF1Green", ""),
+        Key::ColorYellow => named("ColorF2Yellow", ""),
+        Key::ColorBlue => named("ColorF3Blue", ""),
+        Key::ChannelUp => named("ChannelUp", ""),
+        Key::ChannelDown => named("ChannelDown", ""),
+        Key::Info => named("Info", ""),
         Key::Char(' ') => named(" ", "Space"),
         Key::Char(c) => {
             let code = match c {
@@ -223,6 +259,40 @@ fn dom_key(key: nsh_core::keymap::Key, shift: bool) -> Option<(String, String)> 
             Some((typed.to_string(), code))
         }
     }
+}
+
+/// Samsung TVs' `keyCode`s of the remote's media and TV keys
+/// (`tizen.tvinputdevice`, as `nsh.js`'s `TV_KEY_CODES` reads them), which a
+/// TV's browser gives the page with the key's `key`.
+fn tv_key_code(key: nsh_core::keymap::Key) -> Option<u32> {
+    use nsh_core::keymap::Key;
+    Some(match key {
+        Key::MediaPlayPause => 10252,
+        Key::MediaPlay => 415,
+        Key::MediaPause => 19,
+        Key::MediaStop => 413,
+        Key::MediaRewind => 412,
+        Key::MediaFastForward => 417,
+        Key::MediaNext => 10233,
+        Key::MediaPrevious => 10232,
+        Key::ColorRed => 403,
+        Key::ColorGreen => 404,
+        Key::ColorYellow => 405,
+        Key::ColorBlue => 406,
+        Key::ChannelUp => 427,
+        Key::ChannelDown => 428,
+        Key::Info => 457,
+        _ => return None,
+    })
+}
+
+/// A media or TV key's event as a Samsung TV's browser gives it to the
+/// page: its `key`, its `code` and the remote's key code (`keyCode`). `None`
+/// for the arrows and OK, which are a keyboard's keys there too.
+fn tv_key_event(key: nsh_core::keymap::Key) -> Option<(String, String, u32)> {
+    let vk = tv_key_code(key)?;
+    let (key, code) = dom_key(key, false)?;
+    Some((key, code, vk))
 }
 
 impl WebNative {
@@ -511,6 +581,19 @@ impl Native for WebNative {
         Ok(())
     }
 
+    fn press_remote_key(&self, key: RemoteKey) -> Result<(), String> {
+        let Some(stroke) = key.keystroke() else {
+            return self.back();
+        };
+        match tv_key_event(stroke.key) {
+            Some((key, code, vk)) => {
+                self.press_key(&key, &code, vk, 0, &[], None);
+                Ok(())
+            }
+            None => self.press_keys(&stroke.to_string()),
+        }
+    }
+
     fn type_text(&self, text: &str) {
         for ch in text.chars() {
             let ch = ch.to_string();
@@ -626,5 +709,81 @@ impl Native for WebNative {
 
     fn quit(&self) {
         self.page.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// `keyboard.remote` on the web: the media and TV keys as a Samsung
+    /// TV's browser gives them (`WebNative::press_remote_key`).
+    mod remote_keys {
+        use std::collections::HashMap;
+
+        use nsh_core::keymap::Key;
+        use nsh_testing::agent::RemoteKey;
+
+        use super::super::tv_key_event;
+
+        /// The entries `name: number` of the object `nsh.js` declares as
+        /// `const <object> = { ... };`.
+        fn js_table(source: &str, object: &str) -> HashMap<String, u32> {
+            let start = source
+                .find(&format!("const {object} = {{"))
+                .unwrap_or_else(|| panic!("nsh.js has no {object}"));
+            let body = &source[start..];
+            let body = &body[body.find('{').unwrap() + 1..body.find("};").unwrap()];
+            body.lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .flat_map(|l| l.split(','))
+                .filter_map(|entry| {
+                    let (name, value) = entry.split_once(':')?;
+                    Some((name.trim().to_owned(), value.trim().parse().ok()?))
+                })
+                .collect()
+        }
+
+        #[test]
+        fn the_media_and_tv_keys_carry_samsung_s_key_codes() {
+            let red = tv_key_event(Key::ColorRed);
+            assert_eq!(red, Some(("ColorF0Red".into(), String::new(), 403)));
+            let pause = tv_key_event(Key::MediaPause);
+            assert_eq!(pause, Some(("MediaPause".into(), String::new(), 19)));
+            let next = tv_key_event(Key::MediaNext);
+            assert_eq!(
+                next,
+                Some(("MediaTrackNext".into(), "MediaTrackNext".into(), 10233))
+            );
+            // The arrows and OK are a keyboard's keys.
+            for key in [Key::Up, Key::Down, Key::Left, Key::Right, Key::Enter] {
+                assert_eq!(tv_key_event(key), None, "{key:?}");
+            }
+        }
+
+        /// Every remote key the agent presses with a key code is the key
+        /// `nsh.js` reads, by its `key` and by its key code alike.
+        #[test]
+        fn nsh_js_reads_each_as_the_same_key() {
+            let path = concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../nsh-platform-web/web/nsh.js"
+            );
+            let source = std::fs::read_to_string(path).unwrap();
+            let named = js_table(&source, "NAMED_KEYS");
+            let by_code = js_table(&source, "TV_KEY_CODES");
+            let names = RemoteKey::names();
+            let mut pressed = 0;
+            for name in names.split(", ") {
+                let Some(stroke) = RemoteKey::parse(name).unwrap().keystroke() else {
+                    continue;
+                };
+                let Some((key, _, vk)) = tv_key_event(stroke.key) else {
+                    continue;
+                };
+                let code = named[&key];
+                assert_eq!(by_code.get(&vk.to_string()), Some(&code), "{name}");
+                pressed += 1;
+            }
+            assert_eq!(pressed, 15);
+        }
     }
 }

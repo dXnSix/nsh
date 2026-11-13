@@ -28,13 +28,13 @@ mod utilities;
 
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 pub use self::theme::{Theme, ThemeError};
-pub(crate) use self::utilities::{Decl, Len, Part};
-use self::{
+use self::utilities::{Parts, touched};
+pub(crate) use self::{
     theme::ClassTokens,
-    utilities::{Parts, touched},
+    utilities::{Decl, Len, Part},
 };
 use crate::{
     geometry::{Points, Size},
@@ -668,6 +668,8 @@ pub struct ClassList {
     groups: Vec<Box<str>>,
     /// Classes that are not known utilities.
     unknown: Vec<Box<str>>,
+    /// The design tokens its rules read ([`theme::token_key`]), each once.
+    tokens: Vec<u64>,
 }
 
 impl ClassList {
@@ -675,6 +677,30 @@ impl ClassList {
     #[inline]
     pub fn deps(&self) -> u16 {
         self.deps
+    }
+
+    /// Whether its rules read one of the tokens `changed` says changed.
+    #[inline]
+    pub(crate) fn reads(&self, changed: &TokenChange) -> bool {
+        match changed {
+            TokenChange::All => true,
+            TokenChange::Values(keys) => self.tokens.iter().any(|t| keys.contains(t)),
+        }
+    }
+
+    /// Whether its rules read the design token `name`.
+    #[cfg(test)]
+    pub(crate) fn reads_token(&self, name: &str) -> bool {
+        self.tokens.contains(&theme::token_key(name))
+    }
+
+    /// Takes in the tokens another list read.
+    fn read(&mut self, tokens: &[u64]) {
+        for token in tokens {
+            if !self.tokens.contains(token) {
+                self.tokens.push(*token);
+            }
+        }
     }
 
     /// [`state`] bits whose changes the platform must report.
@@ -910,11 +936,24 @@ impl ClassList {
         }
         list.groups.extend(over.groups.iter().cloned());
         list.unknown.extend(over.unknown.iter().cloned());
+        list.read(&over.tokens);
         list.tracked |= over.tracked;
         list.rules
             .sort_by(|a, b| (a.important, &a.rank).cmp(&(b.important, &b.rank)));
         list
     }
+}
+
+/// What a change of the design tokens changed for classes
+/// ([`Tailwind::set_tokens`]).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum TokenChange {
+    /// The values of these tokens ([`theme::token_key`]); the names are as
+    /// they were. Only the classes that read one resolve again.
+    Values(FxHashSet<u64>),
+    /// The names: every class resolves again (an unknown one may name a
+    /// new token).
+    All,
 }
 
 /// The class cache and theme of one engine.
@@ -940,20 +979,22 @@ impl Tailwind {
 
     /// Takes design tokens `theme`. Returns which classes
     /// to resolve again: none ([`None`]) when the tokens did not change,
-    /// those that name tokens ([`deps::THEME`]) when only their values
-    /// did, else all (`u16::MAX`: unknown classes may name new ones).
-    pub(crate) fn set_tokens(&mut self, theme: &crate::element::Tokens) -> Option<u16> {
+    /// those that read a token whose value did when only values did
+    /// ([`TokenChange::Values`]), else all (unknown classes may name new
+    /// ones).
+    pub(crate) fn set_tokens(&mut self, theme: &crate::element::Tokens) -> Option<TokenChange> {
         let tokens = ClassTokens::new(theme);
         let current = self.theme.tokens();
         if *current == tokens {
             return None;
         }
         let changed = if current.same_names(&tokens) {
-            self.cache.retain(|_, list| list.deps & deps::THEME == 0);
-            deps::THEME
+            let changed = TokenChange::Values(current.changed(&tokens));
+            self.cache.retain(|_, list| !list.reads(&changed));
+            changed
         } else {
             self.cache.clear();
-            u16::MAX
+            TokenChange::All
         };
         self.theme.replace_tokens(Arc::new(tokens));
         Some(changed)
@@ -967,6 +1008,27 @@ impl Tailwind {
     /// The parsed form of `classes` (cached by string).
     pub fn classes(&mut self, classes: &str) -> std::rc::Rc<ClassList> {
         self.get(classes).0
+    }
+
+    /// `classes` parsed with the design tokens `tokens` in place of the
+    /// theme's (a scope's values); nothing is cached.
+    pub(crate) fn parse_with(&mut self, tokens: &Arc<ClassTokens>, classes: &str) -> ClassList {
+        let own = self.theme.swap_tokens(Some(tokens.clone()));
+        let parsed = parse(&self.theme, classes);
+        self.theme.swap_tokens(own);
+        parsed
+    }
+
+    /// The tokens whose values in `tokens` are not the theme's: the classes
+    /// that read one resolve to something else with `tokens`. Every class
+    /// may when the names differ.
+    pub(crate) fn difference(&self, tokens: &ClassTokens) -> TokenChange {
+        let own = self.theme.tokens();
+        if own.same_names(tokens) {
+            TokenChange::Values(own.changed(tokens))
+        } else {
+            TokenChange::All
+        }
     }
 
     /// Like [`Tailwind::classes`], and whether `classes` was parsed just
@@ -989,8 +1051,10 @@ impl Tailwind {
 /// Parses a class string.
 pub fn parse(theme: &Theme, classes: &str) -> ClassList {
     let mut list = ClassList::default();
+    // The tokens the utilities read go straight into the list's.
+    let mut read = Vec::new();
     for token in classes.split_ascii_whitespace() {
-        match parse_token(theme, token) {
+        match parse_token(theme, token, &mut read) {
             Some(Token::Rule(rule)) => list.add(rule),
             Some(Token::Themed(rule, dark)) => {
                 list.add(rule);
@@ -1006,6 +1070,7 @@ pub fn parse(theme: &Theme, classes: &str) -> ClassList {
             None => list.unknown.push(token.into()),
         }
     }
+    list.tokens = read;
     // Stable: equal ranks keep the order of the string.
     list.rules
         .sort_by(|a, b| (a.important, &a.rank).cmp(&(b.important, &b.rank)));
@@ -1041,7 +1106,9 @@ fn split_variants(token: &str) -> Vec<&str> {
     parts
 }
 
-fn parse_token(theme: &Theme, token: &str) -> Option<Token> {
+/// Parses one class; the design tokens it read are added to `read`
+/// ([`theme::token_key`], each once).
+fn parse_token(theme: &Theme, token: &str, read: &mut Vec<u64>) -> Option<Token> {
     let parts = split_variants(token);
     let (utility, variants) = parts.split_last()?;
     let mut utility = *utility;
@@ -1071,10 +1138,10 @@ fn parse_token(theme: &Theme, token: &str) -> Option<Token> {
         return Some(Token::Ignored);
     }
     if theme.tokens().replaces(utility) {
-        return themed(theme, cond, rank, important, utility);
+        return themed(theme, cond, rank, important, utility, read);
     }
     let Some(decls) = utilities::parse(theme, utility) else {
-        return themed(theme, cond, rank, important, utility);
+        return themed(theme, cond, rank, important, utility, read);
     };
     if cond.pseudo() && cond.pseudo_color(&decls).is_none() {
         return None;
@@ -1110,13 +1177,44 @@ fn ignored(utility: &str) -> bool {
 
 /// `utility` naming theme tokens (`bg-primary`, `rounded-(--radius)`):
 /// parsed with their light and their dark values; two rules of the same
-/// rank when those differ, so later utilities still win in both.
+/// rank when those differ, so later utilities still win in both. The
+/// tokens it read are added to `read`, each once; none when it is no class.
 fn themed(
     theme: &Theme,
     cond: Condition,
     rank: Rank,
     important: bool,
     utility: &str,
+    read: &mut Vec<u64>,
+) -> Option<Token> {
+    let known = read.len();
+    let token = themed_rules(theme, cond, rank, important, utility, read, known);
+    if token.is_none() {
+        read.truncate(known);
+    }
+    // The tokens an earlier class of the list read are there already.
+    let mut at = known;
+    while at < read.len() {
+        if read[..at].contains(&read[at]) {
+            read.swap_remove(at);
+        } else {
+            at += 1;
+        }
+    }
+    token
+}
+
+/// [`themed`]'s rules; `read` keeps what it had up to `known`, then the
+/// tokens the utility read in the appearance parsed last (both read the
+/// same ones).
+fn themed_rules(
+    theme: &Theme,
+    cond: Condition,
+    rank: Rank,
+    important: bool,
+    utility: &str,
+    read: &mut Vec<u64>,
+    known: usize,
 ) -> Option<Token> {
     let tokens = theme.tokens();
     let pseudo = Condition {
@@ -1124,8 +1222,9 @@ fn themed(
         selection: cond.selection,
         ..Condition::default()
     };
-    let parse = |dark: bool| {
-        let decls = utilities::parse(theme, &tokens.substitute(utility, dark)?)?;
+    let mut parse = |dark: bool| {
+        read.truncate(known);
+        let decls = utilities::parse(theme, &tokens.substitute(utility, dark, read)?)?;
         (!pseudo.pseudo() || pseudo.pseudo_color(&decls).is_some()).then_some(decls)
     };
     let rule = |cond: Condition, decls: Vec<Decl>| Rule {

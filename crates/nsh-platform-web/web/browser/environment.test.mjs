@@ -8,7 +8,7 @@ import { createEnvironment } from "./environment.js";
 
 /** The environment on signals that count their writes (`writes`); `invoke`
  * stands in for the engine's calls. */
-function environment(invoke = () => undefined) {
+function environment(invoke = () => undefined, graph = {}) {
   const writes = [];
   const reactive = {
     signal(value) {
@@ -20,6 +20,7 @@ function environment(invoke = () => undefined) {
     untracked: fn => fn(),
     batch: fn => fn(),
     context: fn => fn,
+    ...graph,
   };
   const env = createEnvironment(reactive, invoke, { rootProp() {} });
   return { env, writes };
@@ -94,6 +95,22 @@ test("setTheme hands the theme to the engine and reads the tokens again once it 
   assert.deepEqual(writes, [1, 2]);
 });
 
+test("updateTheme and resetTheme hand their values to the engine and read the tokens again once they took", () => {
+  const calls = [];
+  const theme = { cssVars: { light: { brand: "#e11d48" } } };
+  const { env, writes } = environment((op, args) => {
+    calls.push([op, args]);
+    if (op === 409 && args[0]?.cssVars?.light?.brand === "#zz") throw new TypeError("updateTheme: `brand`: #zz is no color");
+  });
+  env.api.updateTheme(theme);
+  env.api.resetTheme(["brand"]);
+  env.api.resetTheme();
+  assert.deepEqual(calls, [[409, [theme]], [410, [["brand"]]], [410, [undefined]]]);
+  assert.deepEqual(writes, [1, 2, 3]);
+  assert.throws(() => env.api.updateTheme({ cssVars: { light: { brand: "#zz" } } }), TypeError);
+  assert.deepEqual(writes, [1, 2, 3]);
+});
+
 test("the lifecycle is the engine's", () => {
   const { env } = environment();
   // Before the engine reports, the native environment's default.
@@ -160,6 +177,57 @@ test("setup hands over what appInfo reports, as the build wrote it", () => {
   // The entry's own setup, without the fifth argument, keeps it.
   env.setup(null, null, null, null);
   assert.equal(env.api.appInfo().version, "1.2.0");
+});
+
+test("what a ThemeScope renders reads the scope's appearance and tokens", () => {
+  // A context as the graph's: the value of the nearest provider around
+  // what reads it. The engine's part (`src/browser/mod.rs`): a slot per
+  // scope, and a name for the tokens made in it.
+  const provided = [];
+  const asked = [];
+  const made = [];
+  let slots = 0;
+  const { env } = environment((op, args) => {
+    if (op === 402) asked.push(args);
+    if (op === 412) return slots++;
+    if (op === 411) { made.push(args); return 1048576 + args[0]; }
+  }, {
+    // A memo that runs once, as a graph's with nothing changing.
+    computed: fn => { let made = false, value; return () => { if (!made) { made = true; value = fn(); } return value; }; },
+    cleanup() {},
+    context(fallback) {
+      if (fallback !== undefined) return fallback;
+      const read = () => provided.at(-1);
+      read.Provider = props => { provided.push(props.value); try { return props.children; } finally { provided.pop(); } };
+      return read;
+    },
+  });
+  const read = () => { env.api.token("up"); return env.api.colorScheme(); };
+  env.update(engine());
+  // No scope: the surface's.
+  assert.equal(read(), "light");
+  // In a dark scope, and in a scope without an appearance inside it.
+  const props = { appearance: "dark" };
+  assert.deepEqual(env.inScope(props, () => [read(), env.inScope({}, read)]), ["dark", "dark"]);
+  // A scope without one of its own is the surface's, whatever it turns.
+  env.update(engine({ colorScheme: "dark" }));
+  assert.equal(env.inScope({}, read), "dark");
+  assert.equal(env.inScope({ appearance: "light" }, read), "light");
+  // `role()` asks as `token()` does, with its own call.
+  const roles = [];
+  const { env: other } = environment((op, args) => { if (op === 414) roles.push(args); });
+  other.update(engine({ colorScheme: "dark" }));
+  other.api.role("popover");
+  assert.deepEqual(roles, [["popover", true, null]]);
+  // `token()` asks for the side the scope shows, of the surface's tokens.
+  assert.deepEqual(asked, [["up", false, null], ["up", true, null], ["up", true, null], ["up", true, null], ["up", false, null]]);
+  // A scope with a theme: the engine makes its tokens over the surface's,
+  // a scope in it over those, and `token()` names the nearest scope's.
+  asked.length = 0;
+  const violet = { cssVars: { light: { up: "#7c3aed" } } }, pink = { cssVars: { light: { up: "#db2777" } } };
+  env.inScope({ theme: violet }, () => { read(); env.inScope({}, read); env.inScope({ theme: pink }, read); });
+  assert.deepEqual(made, [[4, violet, null], [6, pink, 1048580]]);
+  assert.deepEqual(asked.map(args => args[2]), [1048580, 1048580, 1048582]);
 });
 
 test("platform.select checks platform.name before platform.os and reads a built-in OS key once", () => {

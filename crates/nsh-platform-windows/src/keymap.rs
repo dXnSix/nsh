@@ -9,6 +9,10 @@
 //! captured private message, input synthesized inside the backend) made
 //! none, and none are taken for it.
 //!
+//! Return and Space on a focused control ([`crate::focus::on_control`])
+//! fire only the bindings of the focus (`Keymap::find_at`); with none the
+//! key goes on and presses the control ([`crate::focus::press_key`]).
+//!
 //! Keys are matched by virtual key code: letters and digits are the same
 //! on every layout (a Cyrillic layout's keys have the US layout's codes),
 //! punctuation by the US layout's `VK_OEM_*` keys.
@@ -60,7 +64,10 @@ pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     let editing = crate::text_input::focused(surface).is_some();
     // Only the bindings of the window the key is in (and JS's) take it.
     let window = surface.input_root().id();
-    let found = table.find_in(window, keystroke, editing, event.repeat);
+    // Return and Space on a focused control fire only the focus' own
+    // bindings; else the control takes them (`focus::press_key`).
+    let control = !editing && crate::focus::on_control(surface);
+    let found = table.find_at(window, keystroke, editing, control, event.repeat);
     if let Some(id) = found.fired() {
         surface.event(
             ROOT_ID,

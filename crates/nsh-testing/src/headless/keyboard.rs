@@ -16,9 +16,12 @@
 //! application menu's item with that shortcut is chosen (`onMenu`); else
 //! Tab moves the keyboard focus between the inputs and the views that are
 //! its stops (those that take presses, and `focusable` ones that take none)
-//! where the platform does (macOS, the web, Linux), Shift+F10 asks it for
-//! its context menu (the web, Linux), the focused input takes the keys that
-//! edit it, and Escape goes back.
+//! where the platform does (macOS, Windows, Linux, the web), Shift+F10 asks
+//! it for its context menu (the web, Linux), the focused input takes the
+//! keys that edit it, and Escape goes back.
+//!
+//! The step `keyboard.remote(<key>)` presses a TV remote's key
+//! ([`crate::remote`]) the same way, Back aside, which goes back.
 
 use nsh_core::{
     Command, EventKind, EventPayload, KeyEvent, MountBatch, MountItem, NodeId, PayloadValue,
@@ -32,6 +35,7 @@ use nsh_core::{
 };
 
 use super::Headless;
+use crate::remote::RemoteKey;
 
 impl Headless {
     /// The steps `keyboard.down(<keys>)` / `keyboard.up(<keys>)`: holds or
@@ -111,6 +115,32 @@ impl Headless {
     fn send_key(&mut self, keys: &str) -> Result<bool, String> {
         self.input_with(nsh_core::platform::InputModality::Keyboard);
         let stroke = Keystroke::parse(keys, self.environment.os).map_err(|e| e.to_string())?;
+        self.press_stroke(stroke, keys)
+    }
+
+    /// The step `keyboard.remote(<key>)`: presses the TV remote's key
+    /// named `key` ([`RemoteKey`]). Its keys are the keyboard's of the same
+    /// name, as [`Headless::press_key`] presses them (OK is Enter); Back goes
+    /// back as a TV's does: the app's back listener hears it
+    /// (`onBackPress`), else it goes back from what there is to go back
+    /// from, else nothing happens (a key, not a step that must go back).
+    pub fn press_remote_key(&mut self, key: &str) -> Result<(), String> {
+        self.step(format!("keyboard.remote({key})"));
+        match RemoteKey::parse(key)?.keystroke() {
+            Some(stroke) => {
+                self.press_stroke(stroke, &stroke.to_string())?;
+                self.done()
+            }
+            None => {
+                self.go_back(true);
+                self.done()
+            }
+        }
+    }
+
+    /// Sends `stroke`, written `keys` (`keyboard.press`, `keyboard.remote`),
+    /// without settling ([`Headless::send_key`]'s answer).
+    fn press_stroke(&mut self, stroke: Keystroke, keys: &str) -> Result<bool, String> {
         let editing = self.screen.focused().is_some();
         // The control with the keyboard focus, which Return and Space press
         // (a stop that takes no presses, a `focusable` chart, hears its keys
@@ -233,10 +263,11 @@ impl Headless {
                 // Shift+F10 asks the focused view for its context menu
                 // where views take the keyboard focus and the key is the
                 // platform's: the web and Linux (macOS has no such key;
-                // Windows focuses fields only). The nearest view around it
-                // listening hears `onContextMenu`, with no pointer, at its
-                // bottom-start corner; a focused input keeps the key for
-                // its own edit menu.
+                // Windows does not ask a focused view for its menu yet).
+                // The nearest view around it listening hears
+                // `onContextMenu`, with no pointer, at its bottom-start
+                // corner; a focused input keeps the key for its own edit
+                // menu.
                 if matches!(self.environment.os, Os::Web | Os::Linux)
                     && nsh_core::input::opens_context_menu(false, Some(stroke.key), m)
                 {
@@ -325,11 +356,14 @@ impl Headless {
             && self.environment.idiom != nsh_core::platform::Idiom::Terminal
     }
 
-    /// Whether Tab stops at views (not only inputs), as on macOS, the web,
-    /// Linux and in a terminal (the other platforms move it between fields only).
+    /// Whether Tab stops at views (not only inputs), as on the desktops
+    /// (macOS, Windows, Linux), the web and in a terminal (iOS and Android
+    /// move it between fields only).
     fn tabs_to_views(&self) -> bool {
-        matches!(self.environment.os, Os::MacOs | Os::Web | Os::Linux)
-            || self.environment.idiom == nsh_core::platform::Idiom::Terminal
+        matches!(
+            self.environment.os,
+            Os::MacOs | Os::Web | Os::Linux | Os::Windows
+        ) || self.environment.idiom == nsh_core::platform::Idiom::Terminal
     }
 
     /// Tab (`back`: Shift+Tab): the keyboard focus moves to the next stop
@@ -639,6 +673,22 @@ fn view_key_event(stroke: &Keystroke) -> KeyEvent {
             23 => "F23",
             _ => "F24",
         }),
+        // The media and TV remote keys by the web's names (`KeyboardEvent.key`).
+        keymap::Key::MediaPlayPause => Some("MediaPlayPause"),
+        keymap::Key::MediaPlay => Some("MediaPlay"),
+        keymap::Key::MediaPause => Some("MediaPause"),
+        keymap::Key::MediaStop => Some("MediaStop"),
+        keymap::Key::MediaRewind => Some("MediaRewind"),
+        keymap::Key::MediaFastForward => Some("MediaFastForward"),
+        keymap::Key::MediaNext => Some("MediaTrackNext"),
+        keymap::Key::MediaPrevious => Some("MediaTrackPrevious"),
+        keymap::Key::ColorRed => Some("ColorF0Red"),
+        keymap::Key::ColorGreen => Some("ColorF1Green"),
+        keymap::Key::ColorYellow => Some("ColorF2Yellow"),
+        keymap::Key::ColorBlue => Some("ColorF3Blue"),
+        keymap::Key::ChannelUp => Some("ChannelUp"),
+        keymap::Key::ChannelDown => Some("ChannelDown"),
+        keymap::Key::Info => Some("Info"),
     };
     let typed = match stroke.key {
         keymap::Key::Char(c) => Some(if m.shift { shifted(c) } else { c }),

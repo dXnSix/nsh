@@ -211,7 +211,7 @@ view.load(Bundle::source(code).into());
 
 `AppView::set_locale(Some(locale))` 和 `AppView::set_font_scale(Some(scale))` 用你的应用的语言和文字大小代替系统的设置（`None` 恢复跟随系统）：`locale()`、`Intl`、`fontScale()` 和文字立即跟随（[设备与环境](./device-and-environment.md#在嵌入它的应用中)）。
 
-`AppView::set_theme_overrides(Some(json))` 把你的应用的品牌加在应用的[主题](./tailwind.md#主题-token)之上：格式与 `nsh.json` 的 `"theme"` 相同的主题文件，其中的 token 在浅色和深色模式下都覆盖应用的同名 token，应用的其他 token 保持不变；`bg-primary` 等类名立即更新样式，之后加载的应用一开始就使用它（`None` 恢复应用自己的主题；无法解析的文件返回错误，不做任何改动）。
+`AppView::set_theme_overrides(Some(json))` 把你的应用的品牌加在应用的[主题](./tailwind.md#主题-token)之上：格式与 `nsh.json` 的 `"theme"` 相同的主题文件，其中的 token 在浅色和深色模式下都覆盖应用的同名 token，应用的其他 token 保持不变；`bg-primary` 等类名立即更新样式，之后加载的应用一开始就使用它（`None` 恢复应用自己的主题；无法解析的文件返回错误，不做任何改动）。应用用它自己的主题读取器读取这个文件，所以文件没有设置的 `var(--name)` 取默认主题中该令牌的值。
 
 原生组件通过 `AppView::register_component` 注册，见[原生组件](./native-components.md#在-macos-上注册rust)。
 `set_ui_sets(sets)` 设置每个引擎提供的 UI 集合：NSH 的（`nsh_base::registry()`）和你的 crate 的（`my_app::registry()`，
@@ -257,11 +257,12 @@ VoiceOver 和 UI 自动化工具将 `Table` 和 `Grid` 读取为 `AXTable`，将
 |---|---|
 | Return | 在 `Input` 中按 `submitBehavior` 的设定：提交（`onSubmit`）、提交并离开输入框，或换行（多行输入框） |
 | Shift+Return、Option+Return、Ctrl+Return | 在 Return 用于提交的多行输入框中换行 |
-| Tab、Shift+Tab（加 Ctrl 亦可） | 按屏幕顺序切换到下一个 / 上一个输入框或可按压视图，限于最新的对话框内；Option+Tab 在多行输入框中输入制表符 |
+| Tab、Shift+Tab（加 Ctrl 亦可） | 按视图树的顺序切换到下一个 / 上一个输入框或可按压视图，限于最新的对话框内；Option+Tab 在多行输入框中输入制表符 |
 | Escape | 离开有焦点的输入框；否则清除文本选区，再关闭最新的对话框或返回 |
 | Option+Left、Cmd+[、鼠标后退键 | 返回（输入框有焦点时不会：此时 Option+Left 移动光标） |
 | Option / Cmd + 方向键（可加 Shift）；Option+Delete、Cmd+Delete；Ctrl+A / E / K | 在输入框中按词和按行移动、选择和删除，与所有 Mac 应用一致 |
 | Cmd+Z、Shift+Cmd+Z、Cmd+X / C / V / A | 撤销、重做、剪切、复制、粘贴、全选（`masked` 输入框拒绝剪切和复制）；Cmd+A / Cmd+C 选择并复制 可选择的文本 |
+| 方向键（输入框自己用的除外） | 把焦点移到该方向上最近的可按压视图、输入框或 `focusable` 视图（限于最新的对话框内），并把它滚动到可见；上 / 下方向键会离开单行输入框；该方向上没有时，按下文滚动 |
 | 方向键；Page Up / Down、Space、Shift+Space、Option+Up / Down；Home / End、Cmd+Up / Down | 滚动有焦点的视图所在或鼠标下方的滚动视图：一行、一页、到开头 / 结尾（输入框有焦点时不滚动） |
 | Cmd+W、Cmd+M、Ctrl+Cmd+F、Cmd+H、Option+Cmd+H、Cmd+Q | 关闭、最小化、全屏、隐藏、隐藏其他、退出（`nsh package` 和 `nsh run` 应用的菜单） |
 | Cmd+R | 重新加载最新的构建（`nsh run`） |

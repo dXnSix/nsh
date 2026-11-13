@@ -5,7 +5,12 @@
 # `target/` (`.cargo/config.toml`).
 [workspace]
 resolver = "3"
-members = ["nsh-platform-gpui", "nsh-gpui-host"]
+members = ["nsh-platform-gpui", "nsh-gpui-host", "nsh-platform-tizen"]
+# What a bare `cargo test` / `cargo clippy` here builds: the Samsung TV
+# backend needs dXn.GpuiTizen, which builds on Linux only against the
+# gpui-fast fork (a local Cargo config until it is published), so it is
+# built by name (`-p nsh-platform-tizen`, `docs/dev/tizen.md`).
+default-members = ["nsh-platform-gpui", "nsh-gpui-host"]
 
 [workspace.package]
 version = "0.5.0"
@@ -24,6 +29,8 @@ publish = false
 missing_docs = "warn"
 unreachable_pub = "deny"
 private_interfaces = "deny"
+# As the main workspace's: Tizen's custom targets (`target_vendor = "tizen"`).
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_vendor, values("tizen"))'] }
 
 [workspace.dependencies]
 # nsh's crates, from the main workspace.
@@ -34,8 +41,21 @@ nsh-engine = { version = "0.5.0", path = "../nsh-engine", default-features = fal
 nsh-base = { version = "0.5.0", path = "../nsh-base", default-features = false }
 # The JSX compiler alone (tests compile their apps).
 nsh-bundler = { version = "0.5.0", path = "../nsh-bundler", default-features = false }
-# Shader views' renderer (wgpu, the version GPUI draws with).
+# The backend itself. Its shader views render through `nsh-engine`'s `shader`
+# feature, on the main workspace's wgpu (30), the version gpui-fast draws with,
+# so this lockfile holds one wgpu and one naga.
 nsh-platform-gpui = { version = "0.5.0", path = "nsh-platform-gpui", default-features = false }
+
+# Samsung TVs: GPUI's Tizen platform and its bindings to the Tizen C APIs
+# (dXn.GpuiTizen), by commit until they are published (`docs/dev/tizen.md`).
+# The version is the one crates.io will have: `cargo publish` drops `git` and
+# `rev` and takes it from there, so dXn.GpuiTizen is published before an NSH
+# release with a crate that depends on it. TV builds take gpui-fast and wgpu
+# from their forks (`[patch.crates-io]` below).
+dxn_gpui_tizen = { version = "0.1.0", git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "83cd3e076c7c09861e67f7d1f37f975c3362e828" }
+dxn_gpui_tizen_sys = { version = "0.1.0", git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "83cd3e076c7c09861e67f7d1f37f975c3362e828" }
+# Freeing the C strings the Tizen APIs return.
+libc = "0.2"
 
 # The same versions as the main workspace's.
 anyhow = "1"
@@ -110,3 +130,30 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.regex-syntax]
 opt-level = 3
+
+# The renderer changes dXn.GpuiTizen builds on, until gpui-fast and wgpu release
+# them: all nine `gpui-fast-*` crates from the gpui-fast fork's `tizen-release`
+# and the wgpu stack from the wgpu fork's `v30-tizen`, the same set as
+# dXn.GpuiTizen's own `Cargo.toml` (`docs/dev/tizen.md`). Dropped, with the
+# git dependencies above, once both are published.
+[patch.crates-io]
+gpui-fast-macros = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
+gpui-fast = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
+gpui-fast-apple = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
+gpui-fast-wgpu = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
+gpui-fast-macos = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
+gpui-fast-linux = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
+gpui-fast-windows = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
+gpui-fast-web = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
+gpui-fast-platform = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
+wgpu-hal = { git = "https://github.com/dXnSix/wgpu", branch = "v30-tizen" }
+naga = { git = "https://github.com/dXnSix/wgpu", branch = "v30-tizen" }
+naga-types = { git = "https://github.com/dXnSix/wgpu", branch = "v30-tizen" }
+wgpu-types = { git = "https://github.com/dXnSix/wgpu", branch = "v30-tizen" }
+wgpu-naga-bridge = { git = "https://github.com/dXnSix/wgpu", branch = "v30-tizen" }
+wgpu-core = { git = "https://github.com/dXnSix/wgpu", branch = "v30-tizen" }
+wgpu-core-deps-apple = { git = "https://github.com/dXnSix/wgpu", branch = "v30-tizen" }
+wgpu-core-deps-emscripten = { git = "https://github.com/dXnSix/wgpu", branch = "v30-tizen" }
+wgpu-core-deps-wasm = { git = "https://github.com/dXnSix/wgpu", branch = "v30-tizen" }
+wgpu-core-deps-windows-linux-android = { git = "https://github.com/dXnSix/wgpu", branch = "v30-tizen" }
+wgpu = { git = "https://github.com/dXnSix/wgpu", branch = "v30-tizen" }

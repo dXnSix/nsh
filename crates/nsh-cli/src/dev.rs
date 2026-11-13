@@ -57,12 +57,15 @@ pub(crate) struct Listen {
 impl DevSession {
     /// Starts the server and publishes the first build (or its error).
     /// Hosts run the app with `limits` as an embedding app that sets them
-    /// would (`--limits`), or with none, as an app on its own.
+    /// would (`--limits`), or with none, as an app on its own; the web page
+    /// it serves runs it in `idiom` (`--idiom`, `nsh.json` `dev.idiom`), or
+    /// in the one the browser measures.
     pub(crate) fn start(
         entry: &Path,
         listen: Listen,
         release: bool,
         limits: Option<nsh_core::js::HostLimits>,
+        idiom: Option<crate::run::DevIdiom>,
     ) -> anyhow::Result<DevSession> {
         let entry = dunce::canonicalize(entry)
             .with_context(|| format!("entry not found: {}", entry.display()))?;
@@ -79,8 +82,11 @@ impl DevSession {
         // --target web` builds it in a checkout).
         let rust_root = crate::rust_app::is_root(&entry);
         if let Ok(Some(runtime)) = crate::runtime::web(crate::runtime::WebKind::Dev, false) {
-            let (page, files) =
-                crate::web::with_page_host(crate::web::dev_host(&runtime, rust_root)?, &entry)?;
+            let (page, files) = crate::web::with_page_host(
+                crate::web::dev_host(&runtime, rust_root)?,
+                &entry,
+                idiom,
+            )?;
             server.serve_web(page, files);
         }
         let session = DevSession {
@@ -120,6 +126,27 @@ impl DevSession {
     /// The web host's page for browsers on this machine.
     pub(crate) fn web_url(&self) -> String {
         format!("http://127.0.0.1:{}/", self.server.local_addr().port())
+    }
+
+    /// The web host's page for a device on this network (a TV): at this
+    /// machine's first LAN address, else (no network) at loopback.
+    pub(crate) fn device_web_url(&self) -> String {
+        let port = self.server.local_addr().port();
+        match self.network_ips().first() {
+            Some(ip) => format!("http://{ip}:{port}/"),
+            None => self.web_url(),
+        }
+    }
+
+    /// Serves the web host's page of a Tizen web app instead of the web's:
+    /// with the TV shim, in the TV idiom (`tizen_web::dev_page`).
+    pub(crate) fn serve_tv_page(&self) -> anyhow::Result<()> {
+        let runtime =
+            crate::runtime::web(crate::runtime::WebKind::Dev, false)?.context("no web runtime")?;
+        let page = crate::tizen_web::dev_page(crate::web::dev_host(&runtime, self.rust_root)?);
+        let (page, files) = crate::web::with_page_host(page, &self.entry, None)?;
+        self.server.serve_web(page, files);
+        Ok(())
     }
 
     /// This machine's addresses other machines reach the server on.
@@ -464,6 +491,7 @@ fn install_commands(dir: &Path) -> Vec<(HostPlatform, String)> {
         (HostPlatform::Tui, run(Target::Tui, "tui")),
         (HostPlatform::IosSimulator, run(Target::Ios, "ios")),
         (HostPlatform::Android, run(Target::Android, "android")),
+        (HostPlatform::Tizen, run(Target::Tizen, "tizen")),
         (HostPlatform::Web, run(Target::Web, "web")),
     ]
 }

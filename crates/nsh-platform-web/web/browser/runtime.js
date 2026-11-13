@@ -1,4 +1,5 @@
 import { createWebPage } from "./page.js";
+import { createTizen } from "./tizen.js";
 
 // A module given as source text, as a blob URL; its source map inline, so
 // DevTools maps it.
@@ -261,7 +262,7 @@ export function createBrowserHost(player) {
         scope.installFetch(realm, call, { active, wake: requestPump, network });
         lists = createLists(call, values, reactive, dom, active, requestPump);
         dom.rt.list = lists.render;
-        components = createComponents(call, values, reactive, dom);
+        components = createComponents(call, values, reactive, dom, env);
         modules = createModules(call, values, active, requestPump, components.make);
         // A UI set a later gate registers fills this namespace in place.
         for (const specifier of Object.keys(nativeExports)) if (!modules.exports.has(specifier)) modules.exports.set(specifier, Object.create(null));
@@ -305,6 +306,8 @@ export function createBrowserHost(player) {
         namespaces.set("nsh/ios", { ...mobile, isAvailable: false });
         namespaces.set("nsh", nsh);
         namespaces.set("nsh/web", page.exports);
+        // In a Tizen web app, the TV's APIs through the page's TV shim.
+        if (namespaces.has("nsh/tizen")) namespaces.set("nsh/tizen", createTizen(namespaces.get("nsh/tizen"), globalThis.nshTizen, realm, nsh.keymap.label));
         namespaces.set("nsh:rt", dom.rt);
         // Development bundles import it for `__nsh_hot`, the global their
         // modules and update scripts call.

@@ -6,7 +6,7 @@ order: 2
 
 # nsh
 
-`nsh` is the core module: the reactive API (signals, computed values, effects, context), `mount`, `token`, `setTheme`, the host elements `View`, `Text`, `Scroll` and `Overlay`, [selectable views](#selectable-views), [the safe area and the keyboard](#safe-area-and-keyboard), [animation](#animation), [the device and its environment](#device), [`PanResponder`](#panresponder), the [clipboard](#clipboard), the [photo picker](#picker), [speech recognition](#speech), [sound](#sound), [storage](#storage), the [host channel](#host), [keyboard shortcuts](#keymap), [native components and modules](#nativecomponent-and-nativemodule), [accessibility](#accessibility), and the TypeScript types of elements, styles and events. The reactive graph itself runs natively in Rust; reading a signal is a call into the runtime that costs a few nanoseconds, and only your own closures run in the JavaScript interpreter.
+`nsh` is the core module: the reactive API (signals, computed values, effects, context), `mount`, `token`, `setTheme`, `updateTheme`, `resetTheme`, the host elements `View`, `Text`, `Scroll` and `Overlay`, [selectable views](#selectable-views), [the safe area and the keyboard](#safe-area-and-keyboard), [animation](#animation), [the device and its environment](#device), [`PanResponder`](#panresponder), the [clipboard](#clipboard), the [photo picker](#picker), [speech recognition](#speech), [sound](#sound), [storage](#storage), the [host channel](#host), [keyboard shortcuts](#keymap), [native components and modules](#nativecomponent-and-nativemodule), [accessibility](#accessibility), and the TypeScript types of elements, styles and events. The reactive graph itself runs natively in Rust; reading a signal is a call into the runtime that costs a few nanoseconds, and only your own closures run in the JavaScript interpreter.
 
 ```ts
 import { batch, cleanup, computed, context, effect, ErrorBoundary, mount, Overlay, Scroll, signal, split, Text, token, untracked, View } from "nsh";
@@ -254,9 +254,11 @@ function token<K extends keyof Tokens>(name: K): Tokens[K];
 ```
 
 The design token `name` of the app's theme (`"theme"` in `nsh.json`, over shadcn/ui's tokens) in the appearance shown:
-a color as `#rrggbbaa`, a length as a number of points, a font as its family name. Names are the theme's CSS variables
+a color as `#rrggbbaa`, a length as a number of points, a font as its family name, a shadow as its CSS `box-shadow`
+layers, a gradient as its CSS `background-image`. Names are the theme's CSS variables
 without `--` (`primary`, `muted-foreground`, `radius`, `font-mono`, and the app's own, such as `up`). Reading it is
-reactive: a component, memo or effect that reads a token runs again when the theme or the appearance changes.
+reactive: a component, memo or effect that reads a token runs again when the theme or the appearance changes. In a
+[`ThemeScope`](#themescope) it is the scope's value and appearance.
 `Tokens` lists the app's tokens with their types; NSH writes it into `.nsh/types/nsh/tokens.d.ts` from the theme. For
 classes, name the tokens directly (`bg-primary`, `rounded-(--radius)`): [Theme tokens](../docs/tailwind.md#theme-tokens).
 
@@ -265,6 +267,32 @@ import { effect, token } from "nsh";
 
 effect(() => console.log("primary is", token("primary"), "radius", token("radius")));
 ```
+
+## role
+
+```ts
+function role<K extends keyof Roles>(name: K): Roles[K] | undefined;
+```
+
+What the theme role `name` draws with in the appearance shown, as [`token()`](#token) gives a token: the token the
+app's theme maps the role onto (a theme type's `role = …`), else the token of the role's name, else `undefined`.
+A role is what a part of the UI is for (`popover`, `border`, `warning`), whatever an app's design system calls the
+token: a component written against roles is themed by any of them. Reading it is reactive, as `token()` is.
+
+`Roles` lists the roles the app's UI sets draw with (`nsh/base`'s: [Theme roles](./nsh-base.md#theme-roles)), each
+with what it reads; NSH writes it into `.nsh/types/nsh/roles.d.ts`. A role the theme has no token for is
+`undefined`, so a component keeps a color of its own for it:
+
+```tsx
+import { role } from "nsh";
+
+// The popover's surface, whatever this app calls it; amber until the theme has a warning color.
+<View style={{ backgroundColor: role("popover"), borderLeftWidth: 3, borderLeftColor: role("warning") ?? "#d97706" }} />
+```
+
+A class reads a role as a variable: `bg-(--popover)` is the token the theme maps `popover` onto, where the theme has
+no token of that name ([Theme tokens](../docs/tailwind.md#theme-tokens)). Rust reads a role by its constant:
+`theme().tokens().role(nsh_base::role::POPOVER)`.
 
 ## setTheme
 
@@ -277,6 +305,7 @@ interface Theme {
     light?: Record<string, string | number>;
     dark?: Record<string, string | number>;
   };
+  roles?: Record<string, string>;
 }
 ```
 
@@ -286,11 +315,18 @@ and the classes naming tokens, `nsh/base` and Rust components' `theme()` follow 
 appearances. An embedding app's [theme overrides](../docs/tailwind.md#theme-tokens) still win over it. `null` gives
 back the theme the app was built with.
 
+`roles` maps theme roles onto the theme's tokens by name: `roles: { popover: "surface" }` has everything that draws
+with `popover` (`nsh/base`'s popovers, [`role("popover")`](#role)) draw with the token `surface`, and follow it when
+it changes, where `"popover": "var(--surface)"` would copy its color once. It is how an app without a Rust theme type
+names its tokens its own way. A role mapped onto a name that is no token of the theme, and under theme types a role
+a type already maps, is refused as a value that cannot be read is; a role's name no UI set has is a build warning.
+`updateTheme` adds to the roles mapped.
+
 The theme is read whole: when a value cannot be read (a color NSH does not know, such as `#zz`, `lab()` or
 `rgb(255 0 0)garbage`, a `var()`
 that names no color, or a value that is no color in one appearance where the other's is), `setTheme` throws a
-`TypeError` that names each one, and the theme shown stays. Values of no kind a token has, such as shadows, are left
-out as they are from `nsh.json`'s. Build the new theme from the app's own, so the tokens its classes name keep a value
+`TypeError` that names each one, and the theme shown stays. Values of no kind a token has, such as a letter spacing in
+`em`, are left out as they are from `nsh.json`'s. Build the new theme from the app's own, so the tokens its classes name keep a value
 (`bg-up` when `up` is in `nsh.json`'s theme), and change what differs. Rust: `set_tokens(theme.into())` of an
 `nsh_base::Theme` ([Theme tokens](../docs/tailwind.md#theme-tokens)).
 
@@ -306,6 +342,35 @@ function brand(color: string) {
 
 brand("#e11d48");
 setTheme(null); // the app's theme again
+```
+
+## updateTheme, resetTheme
+
+```ts
+function updateTheme(theme: Theme): void;
+function resetTheme(names?: (keyof Tokens | keyof Roles)[]): void;
+```
+
+`updateTheme` changes the tokens `theme` sets while the app runs and keeps the others, where `setTheme` replaces them
+all. `theme` has the format of `setTheme`'s and is read the same way: whole, or not at all (a value NSH cannot read
+throws a `TypeError` naming it, and no token changes). `token()` reads the new values right after the call, and the
+classes naming the tokens, `nsh/base` and Rust components' `theme()` follow with the next frame. Two updates in a row
+both take, the later over the earlier. A `var(--name)` naming a token the update does not set is that token's value
+shown now, and a value of no kind a token has is left out, so that token keeps its value. An embedding app's
+[theme overrides](../docs/tailwind.md#theme-tokens) still win.
+
+`resetTheme` puts the tokens `names` back to their values in the app's theme, `nsh.json`'s or the one `setTheme` set;
+without names, every token. A name the theme does not have is removed. The tokens it does not name stay as they are.
+Under [theme types](../docs/rust.md#theme-types) a role's name names the token the role is mapped onto, as it does in
+a theme file.
+Rust: `update_tokens` and `reset_tokens` ([Theme](../docs/rust.md#theme)).
+
+```tsx
+import { resetTheme, updateTheme } from "nsh";
+
+// One brand color, light and dark; the rest of the theme stays.
+updateTheme({ cssVars: { light: { primary: "#e11d48" }, dark: { primary: "#fb7185" } } });
+resetTheme(["primary"]); // the app's primary again
 ```
 
 ## appInfo
@@ -969,7 +1034,7 @@ const wide = () => windowSize().width >= 600;
 const colorScheme: Accessor<"light" | "dark">;
 ```
 
-The appearance shown: the system's, unless the app set its own (`nsh.json` `"appearance"`, [`setColorScheme`](#setcolorscheme)). Reactive. Rust: `dark() -> bool`; theme colors (`AdaptiveColor`) and the `.dark(…)` style variant follow it without reading it. Tailwind's `dark:` variant follows it too (see [Tailwind](../docs/tailwind.md)).
+The appearance shown: the system's, unless the app set its own (`nsh.json` `"appearance"`, [`setColorScheme`](#setcolorscheme)); in a [`ThemeScope`](#themescope) with an appearance, the scope's. Reactive. Rust: `dark() -> bool`; theme colors (`AdaptiveColor`) and the `.dark(…)` style variant follow it without reading it. Tailwind's `dark:` variant follows it too (see [Tailwind](../docs/tailwind.md)).
 
 ```rust tabs
 view().flex_1().bg(move || if dark() { black() } else { white() })
@@ -1101,6 +1166,57 @@ function setColorScheme(scheme: "light" | "dark" | "system"): void;
 
 Shows the app in `scheme` whatever the system's appearance, at once: `colorScheme()`, `dark:` classes, the components' theme and the platform's controls (alerts, the status bar's default style) follow it; `"system"` follows the system again. `nsh.json` `"appearance"` sets it from the start. Rust: `set_color_scheme(Appearance::Dark)` (`Appearance::Light`, `Appearance::System`).
 
+### ThemeScope
+
+```ts
+const ThemeScope: (props: ThemeScopeProps) => JSX.Element;
+
+interface ThemeScopeProps {
+  /** `"light"` or `"dark"`; left out, the scope is shown as the view around it. */
+  appearance?: "light" | "dark";
+  /** A theme file whose values are set over the tokens around the scope; left out, the scope is drawn with those. */
+  theme?: Theme;
+  children?: JSX.Element;
+  // and a view's `class`, `classList`, `style`, state styles, `testID`, `onLayout`
+}
+```
+
+A view that shows itself and everything in it in an appearance of its own, with design tokens of its own, or both, whatever the app's and the system's: a dark sidebar beside a light page, a card with its own `primary`, a theme's preview beside the app. It is a view, so its `class` and `style` lay it out and draw it.
+
+In a scope, everything that follows the appearance follows the scope's: `dark:` classes, the classes of theme tokens (`bg-background`), the theme colors of components, [`colorScheme()`](#colorscheme) and [`token()`](#token). The platform's own controls in it follow too on iOS, macOS and the web (a text input's keyboard and menus, web views, form controls), and so do the tab bar on Android and the scroll indicators the desktop backends draw. Scopes nest: the nearest one with an `appearance` decides, and a scope without one is shown as the view around it.
+
+With a `theme` (a theme file, as [`updateTheme`](#updatetheme-resettheme) takes one), the classes of theme tokens, the components' theme and [`token()`](#token) take the scope's values for the tokens it sets, in each appearance, and the app's for the others; a `var()` it does not set itself names the tokens around the scope. A scope sets tokens the app's theme has: a name the theme lacks is left out with a warning, so the classes that exist are the same everywhere. A scope inside another starts from the outer one's values, and a change of the app's theme reaches every token a scope leaves alone.
+
+As in CSS, a color a view inherited stays what it was: a scope sets its own background and text color. Menus, alerts and sheets the platform draws are the app's, also when a view in a scope opens them. Rust: `theme_scope().appearance(ColorScheme::Dark).child(…)` and `.theme(Some(ScopeTheme::file(json)))`, or `ScopeTheme::from(tokens)` and `ScopeTheme::of(&theme)` for tokens and a theme type's value made in Rust; `dark()`, `color()`, `tokens()` and `theme_of()` answer for the scope around the binding that reads them.
+
+```rust tabs
+view().flex_row().flex_1().child(
+    theme_scope()
+        .appearance(ColorScheme::Dark)
+        .child(view().w(px(240.)).bg(AdaptiveColor::rgb(0xffffff, 0x18181b)).child(sidebar())),
+)
+```
+
+```tsx tabs
+import { ThemeScope, View } from "nsh";
+
+<View class="flex-1 flex-row">
+  <ThemeScope appearance="dark" class="w-60 bg-white dark:bg-zinc-900">
+    <Sidebar />
+  </ThemeScope>
+  <View class="flex-1 bg-white dark:bg-zinc-900">{/* the page, in the app's appearance */}</View>
+</View>
+```
+
+```tsx
+// A plan's card in its own brand color: `bg-primary` and `token("primary")` in it are the scope's.
+<ThemeScope theme={{ cssVars: { light: { primary: "#7c3aed" }, dark: { primary: "#a78bfa" } } }}>
+  <View class="rounded-(--radius) bg-primary p-4">
+    <Text class="text-primary-foreground">Upgrade</Text>
+  </View>
+</ThemeScope>
+```
+
 ### fpsEnabled and setFpsEnabled
 
 ```ts
@@ -1167,10 +1283,11 @@ Rust: `shaders_available() -> bool`.
 const platform: Platform;
 
 interface Platform {
-  readonly os: "ios" | "android" | "macos" | "windows" | "linux" | "web";
+  readonly os: "ios" | "android" | "macos" | "windows" | "linux" | "web" | "tizen";
   readonly version: string;
   readonly idiom: "phone" | "pad" | "mac" | "tv" | "desktop" | "terminal";
   readonly desktop: boolean;
+  readonly tv: boolean;
   readonly catalyst: boolean;
   select<T>(spec: PlatformSelectSpec<T>): T | undefined;
 }
@@ -1180,10 +1297,11 @@ The platform the app runs on, constant while it runs.
 
 | Member | Rust | Description |
 |---|---|---|
-| `os` | `os() -> Os` (`os().name()` is the TS string) | The operating system. iOS, the iOS simulator and Mac Catalyst report `"ios"`, browsers `"web"`. |
+| `os` | `os() -> Os` (`os().name()` is the TS string) | The operating system. iOS, the iOS simulator and Mac Catalyst report `"ios"`, browsers `"web"` (a Tizen web app too), a native Tizen app `"tizen"` (a TV). |
 | `version` | `os_version() -> (u16, u16)` | iOS and desktops: the OS version (`"17.5"`); Android: the API level (`"35"`); the web: `"0.0"`. Rust gives the major and minor version, or the API level and 0 on Android. |
-| `idiom` | `idiom() -> Idiom` | The kind of device: `"terminal"` in a terminal (`--target tui`): drawn on a grid of character cells, with desktop behavior (`desktop` is `true`; `os` is still the machine's); elsewhere `"desktop"` exactly where `desktop` is `true`, else `"phone"`, `"pad"` (an iPad, an Android tablet, Mac Catalyst in the iPad idiom), `"mac"` (Mac Catalyst in UIKit's Mac idiom, a mobile idiom) or `"tv"` (Apple TV, Android TV). |
-| `desktop` | `is_desktop() -> bool` | Desktop behavior applies: macOS, Windows, Linux, browsers with a mouse and a wide window, and terminals. `desktop={{…}}` props, `select({ desktop })` and `idiom` `"desktop"` (outside a terminal) all follow it. Mac Catalyst runs the iOS backend, so it is mobile: `ios={{…}}` props apply there. [`nsh/desktop`](./nsh-desktop.md#isavailable)'s `isAvailable` is the narrower check for its window and menu APIs, which macOS, Windows and Linux have. |
+| `idiom` | `idiom() -> Idiom` | The kind of device: `"terminal"` in a terminal (`--target tui`): drawn on a grid of character cells, with desktop behavior (`desktop` is `true`; `os` is still the machine's); elsewhere `"desktop"` exactly where `desktop` is `true`, else `"phone"`, `"pad"` (an iPad, an Android tablet, Mac Catalyst in the iPad idiom), `"mac"` (Mac Catalyst in UIKit's Mac idiom, a mobile idiom) or `"tv"` (Android TV, Tizen, a TV's browser: `tv` is `true`, on any OS). |
+| `desktop` | `is_desktop() -> bool` | Desktop behavior applies: macOS, Windows, Linux, browsers with a mouse and a wide window, and terminals. `desktop={{…}}` props, `select({ desktop })` and `idiom` `"desktop"` (outside a terminal) all follow it. Mac Catalyst runs the iOS backend, so it is mobile: `ios={{…}}` props apply there; a TV is never desktop. [`nsh/desktop`](./nsh-desktop.md#isavailable)'s `isAvailable` is the narrower check for its window and menu APIs, which macOS, Windows and Linux have. |
+| `tv` | `is_tv() -> bool` | The app runs on a TV: the TV idiom, on any OS (Android TV, Tizen, a TV's browser, whose page says so). `tv={{…}}` props and `select({ tv })` follow it; `desktop` is `false`, so the rest behaves as on mobile. |
 | `catalyst` | `is_catalyst() -> bool` | The app runs under Mac Catalyst, in the Mac or the iPad idiom (`os` is `"ios"`). |
 | `select(spec)` | `match os() { … }` | The value for this platform (see below). |
 
@@ -1205,7 +1323,9 @@ interface PlatformSelectSpec<T> {
   windows?: T;
   linux?: T;
   web?: T;
-  mobile?: T;   // platform.desktop false: iOS (Mac Catalyst included), Android, phone and tablet browsers
+  tizen?: T;    // a native Tizen app; a Tizen web app looks for web
+  tv?: T;       // platform.tv true: TVs, on any OS
+  mobile?: T;   // platform.desktop false: iOS (Mac Catalyst included), Android, phone and tablet browsers, TVs
   desktop?: T;  // platform.desktop true: macOS, Windows, Linux, desktop browsers, terminals
   native?: T;   // every platform but the web
   default?: T;
@@ -1213,7 +1333,7 @@ interface PlatformSelectSpec<T> {
 }
 ```
 
-Returns the value for `platform.name` (on a platform built outside NSH), else the current OS (`ios`, `android`, `web`, ...), else `desktop` or `mobile` (by `platform.desktop`), else `native` (every platform but the web), else `default`, else `undefined`. Rust code matches on `os()` (with `platform_name()` and `is_desktop()`).
+Returns the value for `platform.name` (on a platform built outside NSH), else the current OS (`ios`, `android`, `web`, `tizen`, ...), else `tv` on a TV (`platform.tv`), else `desktop` or `mobile` (by `platform.desktop`), else `native` (every platform but the web), else `default`, else `undefined`. Rust code matches on `os()` (with `platform_name()` and `is_tv()` for `tv`, `is_desktop()`).
 
 ```rust tabs
 use nsh_core::platform::Os;
@@ -3049,9 +3169,37 @@ iOS follows macOS (`mod` is Command) and Android follows Windows and Linux (`mod
 
 Use `mod` for an app's own shortcuts: it is the key each platform's apps use for them (⌘K on macOS, Ctrl+K on Windows and Linux), so one spelling fits everywhere. The Windows key and Super mostly belong to the system, so `cmd` is rarely right outside macOS.
 
-The key is a letter, digit or punctuation key, written as the character it types on a US keyboard without Shift (`k`, `1`, `,`, `/`, `[`; `"shift+/"` for `?`, `"shift+k"` for Shift+K), or a name: `plus` (the `=` / `+` key, also written `=`), `minus` (also `-`), `space`, `enter` (`return`), `escape` (`esc`), `tab`, `backspace`, `delete` (`del`), `insert`, the arrows `up`, `down`, `left`, `right` (`arrowup`, …), `home`, `end`, `pageup`, `pagedown`, `f1` to `f24`. Case does not matter: `"Mod+Shift+K"` is `"mod+shift+k"`, and a capital letter is the same key, not Shift (`"mod+K"` is `"mod+k"`). Lowercase is the recommended style, which these pages use. `"mod-k"` and `"mod++"` are errors whose messages give the right spelling. Menu shortcuts in `nsh/desktop` take the same keystrokes.
+The key is a letter, digit or punctuation key, written as the character it types on a US keyboard without Shift (`k`, `1`, `,`, `/`, `[`; `"shift+/"` for `?`, `"shift+k"` for Shift+K), or a name: `plus` (the `=` / `+` key, also written `=`), `minus` (also `-`), `space`, `enter` (`return`), `escape` (`esc`), `tab`, `backspace`, `delete` (`del`), `insert`, the arrows `up`, `down`, `left`, `right` (`arrowup`, …), `home`, `end`, `pageup`, `pagedown`, `f1` to `f24`, and the media and TV remote keys below. Case does not matter: `"Mod+Shift+K"` is `"mod+shift+k"`, and a capital letter is the same key, not Shift (`"mod+K"` is `"mod+k"`). Lowercase is the recommended style, which these pages use. `"mod-k"` and `"mod++"` are errors whose messages give the right spelling. Menu shortcuts in `nsh/desktop` take the same keystrokes, the media and TV remote keys aside.
 
 Shortcuts work with any keyboard layout: on a Cyrillic or Greek layout, `mod+k` is the key that types K on a US layout, as menu shortcuts are.
+
+#### Media and TV remote keys
+
+Media keyboards and TV remotes have keys of their own, named like the others:
+
+| Key | Name | Also written |
+|---|---|---|
+| Play / Pause | `mediaplaypause` | |
+| Play | `mediaplay` | |
+| Pause | `mediapause` | |
+| Stop | `mediastop` | |
+| Rewind | `mediarewind` | |
+| Fast forward | `mediafastforward` | |
+| Next track | `medianext` | `mediatracknext` |
+| Previous track | `mediaprevious` | `mediatrackprevious` |
+| Red, green, yellow, blue | `red`, `green`, `yellow`, `blue` | `colorf0red`, `colorf1green`, `colorf2yellow`, `colorf3blue` |
+| Channel up, channel down | `channelup`, `channeldown` | |
+| Info | `info` | |
+
+```tsx
+keymap.bind({
+  mediaplaypause: () => player.toggle(),
+  red: () => openFilters(),
+  channelup: () => nextChannel(),
+});
+```
+
+They come from the keys each platform reports: Windows' media keys (play / pause, stop, next and previous track), every one of them on Android (`KEYCODE_MEDIA_*`, `KEYCODE_PROG_RED` …, `KEYCODE_CHANNEL_*`, `KEYCODE_INFO`), in browsers by their `KeyboardEvent.key` (and on Samsung TVs by the remote's key codes), and on Tizen TVs through the GPUI backend. They type no text, so their bindings fire in text inputs too. `keymap.label` names them in words (`"Play/Pause"`, `"Red"`, `"Channel Up"`).
 
 `bind` throws a `TypeError` that says what is wrong with an invalid keystroke (`keymap.bind: invalid keystroke "cmd+kk": unknown key "kk"`), and refuses the keystrokes the system keeps for itself, so an app can never break them:
 
@@ -3466,7 +3614,7 @@ function Saved() {
 | `Point`, `Size`, `Bounds`, `Edges`, `Modifiers` | The shapes payloads and props are made of, with GPUI's fields (`nsh_core::geometry`) |
 | `PixelSize` | An image's or a video's own size in pixels (`onLoad`, `Image.getSize`, the clipboard's and the picker's images), where `Size` is points |
 | `ImageAsset` | What importing an image file gives (`{ url, size: Size, scales? }`; `scales` lists its [pixel-density variants](../docs/images-and-assets.md#pixel-densities)) |
-| `OS` | `"ios" \| "android" \| "macos" \| "windows" \| "linux" \| "web"` |
+| `OS` | `"ios" \| "android" \| "macos" \| "windows" \| "linux" \| "web" \| "tizen"` |
 | `AccessibilityRole`, `AccessibilityState` | Accessibility props |
 
 ```tsx

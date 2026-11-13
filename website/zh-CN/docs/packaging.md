@@ -324,7 +324,7 @@ entitlements：
 - **Windows：** 缩放为 16 到 64 像素以及 256 像素，作为图标嵌入可执行文件，窗口、资源管理器和任务栏都会显示它；同时写到 bundle 旁的 `nsh\icon.ico`，通知会显示它。在 macOS 或 Linux 上打包时，可执行文件在资源管理器里保持默认图标，窗口和任务栏显示 `icon.ico`。`nsh run --target windows` 和 `nsh test --target windows` 也会显示它。
 - **Web：** 缩放为 32 像素（favicon）、180 像素（`apple-touch-icon`）以及 192 和 512 像素（Web 应用清单）。
 
-各平台绘制图标的方式不同：macOS 的图案在透明画布上内缩（1024 像素中占 824），Windows、Linux 和 Android 则铺满画布。给 `icon` 一个对象，即可为每个平台使用各自的 PNG；键为 `macos`、`windows`、`linux`、`ios`、`android` 和 `web`，未列出的平台显示系统默认图标：
+各平台绘制图标的方式不同：macOS 的图案在透明画布上内缩（1024 像素中占 824），Windows、Linux 和 Android 则铺满画布。给 `icon` 一个对象，即可为每个平台使用各自的 PNG；键为 `macos`、`windows`、`linux`、`ios`、`android`、`web` 和 `tizen`（三星电视），未列出的平台显示系统默认图标：
 
 ```json
 {

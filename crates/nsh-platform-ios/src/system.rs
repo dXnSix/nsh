@@ -62,14 +62,17 @@ thread_local! {
 const TURN_TIME: Duration = Duration::from_secs(2);
 
 /// The tint of a surface's alerts and action sheets for its design tokens
-/// ([`nsh_core::Command::Tokens`]): the theme's `primary` when the app has
-/// a theme of its own (tokens other than the default theme's), else `None`
-/// (the system's).
+/// ([`nsh_core::Command::Tokens`]): the theme's [`role::PRIMARY`] when the
+/// app has a theme of its own (the core says so: `Tokens::is_themed`), else
+/// `None` (the system's).
+///
+/// [`role::PRIMARY`]: nsh_core::element::role::PRIMARY
 pub(crate) fn alert_tint(
     tokens: &nsh_core::element::Tokens,
 ) -> Option<nsh_core::element::AdaptiveColor> {
-    let themed = nsh_base::tokens_of(None).is_ok_and(|d| *tokens != d);
-    tokens.color("primary").filter(|_| themed)
+    tokens
+        .role(nsh_core::element::role::PRIMARY)
+        .filter(|_| tokens.is_themed())
 }
 
 /// The appearance the app asked for (`Unspecified`: the system's).
@@ -77,15 +80,20 @@ pub(crate) fn appearance() -> UIUserInterfaceStyle {
     APPEARANCE.get()
 }
 
+/// UIKit's style of `appearance` (`Unspecified`: as the view around it).
+pub(crate) fn interface_style(appearance: Appearance) -> UIUserInterfaceStyle {
+    match appearance {
+        Appearance::System => UIUserInterfaceStyle::Unspecified,
+        Appearance::Light => UIUserInterfaceStyle::Light,
+        Appearance::Dark => UIUserInterfaceStyle::Dark,
+    }
+}
+
 /// Applies the app's appearance to the surface `root` and to what is
 /// shown outside of it (the status bar's default style, alerts and modals
 /// shown from now on).
 pub(crate) fn set_appearance(appearance: Appearance, root: &UIView) {
-    let style = match appearance {
-        Appearance::System => UIUserInterfaceStyle::Unspecified,
-        Appearance::Light => UIUserInterfaceStyle::Light,
-        Appearance::Dark => UIUserInterfaceStyle::Dark,
-    };
+    let style = interface_style(appearance);
     APPEARANCE.set(style);
     root.setOverrideUserInterfaceStyle(style);
     if let Some(window) = root.window() {
@@ -817,6 +825,8 @@ mod tests {
         let mut themed = plain.clone();
         let ink = plain.color("foreground").unwrap();
         themed.set_color("primary", ink);
+        // The core marks the tokens of an app with a theme of its own.
+        themed.set_themed(true);
 
         let a = alert_tint(&themed);
         let b = alert_tint(&plain);

@@ -516,13 +516,13 @@ and the rows and sides grow with it.
 | `lineNumberDeleted` | The numbers of deleted lines, after `lineNumber` | |
 | `content` | A side's text, beside its gutter | 8pt before and after the text |
 | `line` | Every row of a side | |
-| `lineAdded` | Added lines' rows, after `line` | A green tint |
-| `lineDeleted` | Deleted lines' rows, after `line` | A red tint |
+| `lineAdded` | Added lines' rows, after `line` | A tint of the theme's `diff-added`; green without it |
+| `lineDeleted` | Deleted lines' rows, after `line` | A tint of the theme's `diff-deleted`; red without it |
 | `filler` | The empty half of a split row beside a line the other side lacks | A faint `muted` fill |
-| `wordAdded` | The words changed within an added line | A stronger green |
-| `wordDeleted` | The words changed within a deleted line | A stronger red |
-| `indicatorAdded` | An added line's bar (`"bars"`) or `+` (`"classic"`) | Green, 3pt wide |
-| `indicatorDeleted` | A deleted line's bar or `−` | Red, 3pt wide |
+| `wordAdded` | The words changed within an added line | The same, stronger |
+| `wordDeleted` | The words changed within a deleted line | The same, stronger |
+| `indicatorAdded` | An added line's bar (`"bars"`) or `+` (`"classic"`) | The theme's `diff-added`, green without it; 3pt wide |
+| `indicatorDeleted` | A deleted line's bar or `−` | The theme's `diff-deleted`, red without it; 3pt wide |
 | `separator` | A separator of collapsed lines, or a patch's hunk header | `⋯` and the count on `muted` |
 | `hunkActions` | The box of the app's actions on a change | At the change's top right |
 | `lineSelected` | Over the selected lines' rows of their side | The theme's selection color (as the `Editor`'s selections) |

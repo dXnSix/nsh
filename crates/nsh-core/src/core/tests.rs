@@ -40926,6 +40926,2807 @@ fn a_backdrop_follows_the_order_views_draw_in() {
     );
 }
 
+/// What the core does for the TV's focus (`directional.rs`): the views
+/// focus props name, found in every commit, and a list scrolled to the row
+/// an arrow went to before that row was mounted.
+mod directional_focus {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::{
+        element::{FocusGroupTargets, FocusTarget},
+        focus::{Direction, GroupConfig, NextFocus},
+    };
+
+    fn view(id: NodeId) -> Vec<Op> {
+        vec![
+            Op::Create { id, tag: Tag::View },
+            style_op(id, &[("height", StyleValue::Number(20.0))]),
+            Op::Insert {
+                parent: ROOT_ID,
+                child: id,
+                before: None,
+            },
+        ]
+    }
+
+    fn props_of(batch: &MountBatch, id: NodeId) -> Option<ViewProps> {
+        batch.items.iter().rev().find_map(|item| match item {
+            MountItem::ViewProps { id: of, props } if *of == id => Some((**props).clone()),
+            _ => None,
+        })
+    }
+
+    fn set(c: &mut Core<FakeEngine>, id: NodeId, prop: Prop) {
+        c.apply(Op::SetProp { id, prop }).unwrap();
+    }
+
+    #[test]
+    fn auto_and_preferred_focus_reach_the_view_s_props() {
+        let mut c = core();
+        apply(&mut c, view(2));
+        c.commit();
+        set(&mut c, 2, Prop::AutoFocus(true));
+        set(&mut c, 2, Prop::PreferredFocus(true));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        assert!(props.auto_focus && props.preferred_focus);
+        // An input's is its config's, as before.
+        let mut c = input_core();
+        c.commit();
+        set(&mut c, 2, Prop::AutoFocus(true));
+        let batch = c.commit().unwrap();
+        assert!(props_of(&batch, 2).is_none_or(|p| !p.auto_focus));
+        assert!(batch.items.iter().any(|item| matches!(
+            item,
+            MountItem::Input { id: 2, config } if config.auto_focus
+        )));
+    }
+
+    #[test]
+    fn a_route_names_its_view_once_it_is_made() {
+        let mut c = core();
+        apply(&mut c, view(2));
+        c.commit();
+        set(&mut c, 2, Prop::NextFocusDown(Some(FocusTarget::Node(4))));
+        set(&mut c, 2, Prop::NextFocusRight(Some(FocusTarget::Node(2))));
+        // Node 4 is not made yet: Down names nothing.
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        let mut expected = NextFocus {
+            right: Some(2),
+            ..NextFocus::default()
+        };
+        assert_eq!(props.next_focus, expected);
+        // Made later, it is found without the route being set again.
+        apply(&mut c, view(4));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent again");
+        expected.down = Some(4);
+        assert_eq!(props.next_focus, expected);
+        // Nothing it names changed: nothing is sent.
+        c.apply(style_op(4, &[("height", StyleValue::Number(30.0))]))
+            .unwrap();
+        assert!(c.commit().is_none_or(|b| props_of(&b, 2).is_none()));
+        // Cleared, it goes.
+        set(&mut c, 2, Prop::NextFocusDown(None));
+        set(&mut c, 2, Prop::NextFocusRight(None));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        assert!(props.next_focus.is_empty());
+        assert!(c.focus_refs.is_empty());
+    }
+
+    #[test]
+    fn a_focus_group_carries_its_trap_and_the_destinations_found() {
+        let mut c = core();
+        apply(&mut c, view(2));
+        apply(&mut c, view(4));
+        c.commit();
+        let group = FocusGroupTargets {
+            trap: true,
+            destinations: vec![FocusTarget::Node(98), FocusTarget::Node(4)],
+        };
+        set(&mut c, 2, Prop::FocusGroup(Some(group)));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        let expected = GroupConfig {
+            trap: true,
+            destinations: vec![4],
+        };
+        assert_eq!(props.focus_group, Some(expected));
+        set(&mut c, 2, Prop::FocusGroup(None));
+        let props = props_of(&c.commit().unwrap(), 2).expect("props sent");
+        assert_eq!(props.focus_group, None);
+    }
+
+    /// The cells take presses: each row is a stop of the keyboard focus.
+    fn pressable(c: &mut Core<FakeEngine>, cells: &[u32]) {
+        for &id in cells {
+            c.apply(Op::Listen {
+                id,
+                event: EventKind::Press,
+                enabled: true,
+            })
+            .unwrap();
+        }
+    }
+
+    /// A list of 1000 rows of 100 points that take presses, its window
+    /// rendered: the cell showing each item.
+    fn rendered_list(c: &mut Core<FakeEngine>) -> (u32, Vec<u32>, HashMap<u32, NodeId>) {
+        thousand_rows(c);
+        c.commit();
+        let (mut next_id, mut cells) = (100, Vec::new());
+        render_binds(c, &mut next_id, &mut cells, 100.0);
+        pressable(c, &cells);
+        c.commit();
+        let shown = shown(c, &cells);
+        (next_id, cells, shown)
+    }
+
+    /// The items the cells show, from the core's own slots.
+    fn shown(c: &Core<FakeEngine>, cells: &[u32]) -> HashMap<u32, NodeId> {
+        let list = c.key(2).unwrap();
+        let state = c.nodes[list as usize].list.as_ref().unwrap();
+        cells
+            .iter()
+            .filter_map(|&id| {
+                let key = c.key(id).ok()?;
+                let index = state.slots.iter().find(|s| s.cell == key)?.ready()?;
+                Some((index, id))
+            })
+            .collect()
+    }
+
+    /// The cell a batch sends `Command::Focus`, if any.
+    fn focus_command(batch: Option<MountBatch>) -> Option<NodeId> {
+        batch?.items.iter().find_map(|item| match item {
+            MountItem::Command {
+                id,
+                command: Command::Focus,
+            } => Some(*id),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn an_arrow_past_the_mounted_rows_scrolls_the_list_and_focuses_the_row() {
+        let mut c = core();
+        let (mut next_id, mut cells, shown_now) = rendered_list(&mut c);
+        let last = *shown_now.keys().max().unwrap();
+        assert!(c.focus_past(shown_now[&last], Direction::Down));
+        let batch = c.commit().unwrap();
+        // The list scrolls to the next row, by index: its end at the
+        // viewport's (400 points tall).
+        let y = (last + 2) as f32 * 100.0 - 400.0;
+        assert!(batch.items.iter().any(|item| matches!(
+            item,
+            MountItem::Command { id: 2, command: Command::ScrollTo { y: to, animated: true, .. } }
+                if to.0 == y
+        )));
+        assert_eq!(focus_command(Some(batch)), None);
+        // Once the row shows in a cell, the cell takes the focus, once.
+        c.set_scroll_offset(2, point(px(0.0), px(y)), u32::MAX);
+        let mut focused = focus_command(c.commit());
+        render_binds(&mut c, &mut next_id, &mut cells, 100.0);
+        pressable(&mut c, &cells);
+        focused = focused.or(focus_command(c.commit()));
+        assert!(focused.is_some());
+        assert_eq!(focused, shown(&c, &cells).get(&(last + 1)).copied());
+        assert!(c.pending_row.is_none());
+        assert_eq!(focus_command(c.commit()), None);
+    }
+
+    #[test]
+    fn the_first_stop_inside_a_row_takes_the_focus() {
+        let mut c = core();
+        apply(&mut c, view(2));
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 4,
+                    tag: Tag::View,
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 4,
+                    before: None,
+                },
+                Op::Create {
+                    id: 6,
+                    tag: Tag::View,
+                },
+                Op::Listen {
+                    id: 6,
+                    event: EventKind::Press,
+                    enabled: true,
+                },
+                Op::Insert {
+                    parent: 4,
+                    child: 6,
+                    before: None,
+                },
+                Op::Create {
+                    id: 8,
+                    tag: Tag::View,
+                },
+                Op::SetProp {
+                    id: 8,
+                    prop: Prop::Focusable(Some(true)),
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 8,
+                    before: Some(4),
+                },
+            ],
+        );
+        c.commit();
+        let key = c.key(2).unwrap();
+        // In tree order: the focusable view before the pressable's parent.
+        assert_eq!(c.first_stop_in(key), c.key(8).ok());
+        c.apply(Op::SetProp {
+            id: 8,
+            prop: Prop::Focusable(Some(false)),
+        })
+        .unwrap();
+        assert_eq!(c.first_stop_in(key), c.key(6).ok());
+        // None at all.
+        assert_eq!(c.first_stop_in(c.key(8).unwrap()), None);
+    }
+
+    #[test]
+    fn an_arrow_that_leaves_the_list_or_its_end_scrolls_nothing() {
+        let mut c = core();
+        let (_, _, shown) = rendered_list(&mut c);
+        // Across a list of one column, and before its first row.
+        assert!(!c.focus_past(shown[&0], Direction::Right));
+        assert!(!c.focus_past(shown[&0], Direction::Up));
+        // A view in no list.
+        apply(&mut c, view(4));
+        c.commit();
+        assert!(!c.focus_past(4, Direction::Down));
+        assert!(!c.focus_past(999, Direction::Down));
+        assert!(c.pending_row.is_none());
+    }
+
+    #[test]
+    fn a_row_waiting_is_forgotten_when_the_focus_moves_elsewhere() {
+        let mut c = core();
+        let (_, _, shown) = rendered_list(&mut c);
+        let last = *shown.keys().max().unwrap();
+        assert!(c.focus_past(shown[&last], Direction::Down));
+        c.commit();
+        assert!(c.pending_row.is_some());
+        // Another view reports the focus.
+        apply(&mut c, view(4));
+        c.set_states(4, crate::tailwind::state::FOCUSED);
+        c.commit();
+        assert!(c.pending_row.is_none());
+    }
+
+    /// A list of 1000 items of 100 points along its axis (vertical: 400
+    /// tall; horizontal: 400 wide) that take presses, with `props` set
+    /// (and the root's with `rtl`), its window rendered: the cell showing
+    /// each item.
+    fn list_with(
+        c: &mut Core<FakeEngine>,
+        props: &[Prop],
+        horizontal: bool,
+        rtl: bool,
+    ) -> (u32, Vec<u32>, HashMap<u32, NodeId>) {
+        let n = StyleValue::Number;
+        let mut ops = Vec::new();
+        if rtl {
+            ops.push(Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::LayoutDirection(true),
+            });
+        }
+        ops.push(Op::Create {
+            id: 2,
+            tag: Tag::List,
+        });
+        ops.push(if horizontal {
+            style_op(2, &[("width", n(400.0)), ("height", n(100.0))])
+        } else {
+            style_op(2, &[("height", n(400.0))])
+        });
+        for prop in [
+            Prop::Horizontal(horizontal),
+            Prop::EstimatedItemSize(px(50.0)),
+            Prop::Count(1000),
+        ]
+        .into_iter()
+        .chain(props.iter().cloned())
+        {
+            ops.push(Op::SetProp { id: 2, prop });
+        }
+        ops.push(Op::Insert {
+            parent: ROOT_ID,
+            child: 2,
+            before: None,
+        });
+        apply(c, ops);
+        c.commit();
+        let (mut next_id, mut cells) = (100, Vec::new());
+        bind_rows(c, &mut next_id, &mut cells, horizontal);
+        pressable(c, &cells);
+        c.commit();
+        let shown = shown(c, &cells);
+        (next_id, cells, shown)
+    }
+
+    /// The list's binds, each cell 100 points along the list's axis.
+    fn bind_rows(
+        c: &mut Core<FakeEngine>,
+        next_id: &mut u32,
+        cells: &mut Vec<u32>,
+        horizontal: bool,
+    ) {
+        let main = if horizontal { "width" } else { "height" };
+        let mut binds = Vec::new();
+        c.take_list_binds(&mut binds);
+        c.take_paced_list_binds(usize::MAX, &mut binds);
+        for bind in binds {
+            for (slot, index) in bind.binds {
+                while cells.len() <= slot as usize {
+                    let id = *next_id;
+                    *next_id += 1;
+                    apply(
+                        c,
+                        vec![
+                            Op::Create { id, tag: Tag::Cell },
+                            Op::SetProp {
+                                id,
+                                prop: Prop::Slot(CellSlot::Item(cells.len() as u32)),
+                            },
+                            Op::Insert {
+                                parent: bind.list,
+                                child: id,
+                                before: None,
+                            },
+                        ],
+                    );
+                    cells.push(id);
+                }
+                let cell = cells[slot as usize];
+                c.apply(style_op(cell, &[(main, StyleValue::Number(100.0))]))
+                    .unwrap();
+                c.apply(Op::SetProp {
+                    id: cell,
+                    prop: Prop::CellIndex(index),
+                })
+                .unwrap();
+            }
+        }
+    }
+
+    /// The list's scroll commands followed (each offset reported back, the
+    /// rows it brings rendered) until it rests: its offset along its axis
+    /// then, and where along it the row of `index` is in the viewport
+    /// (its start and end).
+    fn rest_at(
+        c: &mut Core<FakeEngine>,
+        next_id: &mut u32,
+        cells: &mut Vec<u32>,
+        horizontal: bool,
+        index: u32,
+    ) -> (f32, f32, f32) {
+        let mut frames = HashMap::new();
+        let mut offset = None;
+        for _ in 0..8 {
+            let Some(batch) = c.commit() else { break };
+            let mut moved = false;
+            for item in &batch.items {
+                match item {
+                    MountItem::Frame { id, frame } => {
+                        frames.insert(*id, *frame);
+                    }
+                    MountItem::Command {
+                        id: 2,
+                        command: Command::ScrollTo { x, y, .. },
+                    } => {
+                        c.set_scroll_offset(2, point(*x, *y), u32::MAX);
+                        offset = Some(if horizontal { x.0 } else { y.0 });
+                        moved = true;
+                    }
+                    _ => {}
+                }
+            }
+            bind_rows(c, next_id, cells, horizontal);
+            pressable(c, cells);
+            if !moved && c.pending_row.is_none() {
+                break;
+            }
+        }
+        let offset = offset.expect("the list scrolled");
+        let cell = shown(c, cells)[&index];
+        let frame = frames[&cell];
+        let (start, size) = if horizontal {
+            (frame.origin.x.0, frame.size.width.0)
+        } else {
+            (frame.origin.y.0, frame.size.height.0)
+        };
+        (offset, start - offset, start + size - offset)
+    }
+
+    #[test]
+    fn an_inverted_list_brings_its_next_row_in_at_the_top() {
+        let mut c = core();
+        let (mut next_id, mut cells, shown) =
+            list_with(&mut c, &[Prop::Inverted(true)], false, false);
+        let last = *shown.keys().max().unwrap();
+        // Item 0 is at the bottom: Down from it is past the list's start.
+        assert!(!c.focus_past(shown[&0], Direction::Down));
+        // Up goes on to the next item, above.
+        assert!(c.focus_past(shown[&last], Direction::Up));
+        assert_eq!(c.pending_row.map(|(row, _)| row.index), Some(last + 1));
+        let (_, start, end) = rest_at(&mut c, &mut next_id, &mut cells, false, last + 1);
+        assert_eq!((start, end), (0.0, 100.0), "at the top of the viewport");
+    }
+
+    #[test]
+    fn a_right_to_left_list_brings_its_next_row_in_at_the_left() {
+        let mut c = core();
+        let (mut next_id, mut cells, shown) = list_with(&mut c, &[], true, true);
+        let last = *shown.keys().max().unwrap();
+        // Item 0 is at the right: Right from it is past the list's start.
+        assert!(!c.focus_past(shown[&0], Direction::Right));
+        assert!(c.focus_past(shown[&last], Direction::Left));
+        assert_eq!(c.pending_row.map(|(row, _)| row.index), Some(last + 1));
+        // The list's offsets run left to right as laid out (the platform
+        // mirrors it): the end of its viewport shows at the left.
+        let (_, start, end) = rest_at(&mut c, &mut next_id, &mut cells, true, last + 1);
+        assert_eq!((start, end), (300.0, 400.0), "at the left of the viewport");
+    }
+
+    #[test]
+    fn an_inverted_right_to_left_list_brings_its_next_row_in_at_the_right() {
+        let mut c = core();
+        let (mut next_id, mut cells, shown) =
+            list_with(&mut c, &[Prop::Inverted(true)], true, true);
+        let last = *shown.keys().max().unwrap();
+        // Inverted and mirrored: item 0 at the left, the next ones to its
+        // right.
+        assert!(!c.focus_past(shown[&0], Direction::Left));
+        assert!(c.focus_past(shown[&last], Direction::Right));
+        assert_eq!(c.pending_row.map(|(row, _)| row.index), Some(last + 1));
+        // The start of its viewport as laid out shows at the right.
+        let (_, start, end) = rest_at(&mut c, &mut next_id, &mut cells, true, last + 1);
+        assert_eq!((start, end), (0.0, 100.0), "at the right of the viewport");
+    }
+
+    #[test]
+    fn a_grid_steps_a_row_of_columns_at_a_time() {
+        let mut c = core();
+        let (mut next_id, mut cells, shown) = list_with(&mut c, &[Prop::Columns(4)], false, false);
+        let last = *shown.keys().max().unwrap();
+        let from = last - last % 4;
+        // Across: along the row, not past the list.
+        assert!(!c.focus_past(shown[&from], Direction::Left));
+        assert!(c.focus_past(shown[&from], Direction::Down));
+        assert_eq!(c.pending_row.map(|(row, _)| row.index), Some(from + 4));
+        let (_, start, end) = rest_at(&mut c, &mut next_id, &mut cells, false, from + 4);
+        assert_eq!(
+            (start, end),
+            (300.0, 400.0),
+            "at the bottom of the viewport"
+        );
+    }
+}
+
+/// Some of the app's tokens changed or put back while it runs
+/// (`update_tokens`, `reset_tokens`, `nsh`'s `updateTheme` and
+/// `resetTheme`), over the tokens the app has as a whole.
+mod token_update {
+    use super::*;
+    use crate::{
+        Prop,
+        element::{Registry, RustCall, RustOp, ToJs, Tokens},
+        prelude::*,
+    };
+
+    /// A theme file's colors (shadcn's `cssVars`, `light` only) over
+    /// `brand` and `accent` (`None`: those).
+    fn source(json: Option<&str>) -> Result<(Tokens, Vec<String>), String> {
+        let mut tokens = tokens_with(&[
+            ("brand", rgb(0x111111).into()),
+            ("accent", rgb(0x222222).into()),
+        ]);
+        let Some(json) = json else {
+            return Ok((tokens, Vec::new()));
+        };
+        let value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        let mut left_out = Vec::new();
+        let light = value.pointer("/cssVars/light").and_then(|v| v.as_object());
+        for (key, value) in light.into_iter().flatten() {
+            match value.as_str().and_then(Color::parse) {
+                Some(color) => tokens.set_color(key, color.into()),
+                None => left_out.push(format!("`{key}`: no color")),
+            }
+        }
+        Ok((tokens, left_out))
+    }
+
+    /// The colors a theme file (as [`source`] reads it) sets, and only
+    /// those; one it cannot read is left out.
+    fn read(json: &str, _base: &Tokens) -> Result<(Tokens, Vec<String>), String> {
+        let value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        let mut tokens = Tokens::default();
+        let mut left_out = Vec::new();
+        let light = value.pointer("/cssVars/light").and_then(|v| v.as_object());
+        for (key, value) in light.into_iter().flatten() {
+            match value.as_str().and_then(Color::parse) {
+                Some(color) => tokens.set_color(key, color.into()),
+                None => left_out.push(format!("`{key}`: no color")),
+            }
+        }
+        Ok((tokens, left_out))
+    }
+
+    /// A theme file setting `colors` in the light appearance.
+    fn file(colors: &[(&str, &str)]) -> String {
+        let fields: Vec<String> = colors
+            .iter()
+            .map(|(k, v)| format!(r#""{k}": "{v}""#))
+            .collect();
+        format!(
+            r#"{{ "cssVars": {{ "light": {{ {} }} }} }}"#,
+            fields.join(", ")
+        )
+    }
+
+    /// A core whose UI set reads [`source`]'s theme files, with the app's
+    /// theme `colors`.
+    fn themed_core(colors: &[(&str, &str)]) -> Core<FakeEngine> {
+        let mut c = core();
+        let mut registry = Registry::new();
+        registry.tokens_from(source).token_overrides_from(read);
+        c.set_components(registry);
+        set_root(&mut c, Prop::UiTheme(file(colors).into()));
+        c
+    }
+
+    fn set_root(c: &mut Core<FakeEngine>, prop: Prop) {
+        apply(c, vec![Op::SetProp { id: ROOT_ID, prop }]);
+    }
+
+    /// The light color of token `name` drawn with now.
+    fn light(c: &Core<FakeEngine>, name: &str) -> Option<Color> {
+        c.tokens().color(name).map(|t| Color::from(t.light))
+    }
+
+    /// The tokens each `Command::Tokens` of the batches committed now sent.
+    fn sent(c: &mut Core<FakeEngine>) -> Vec<Arc<Tokens>> {
+        let mut sent = Vec::new();
+        while let Some(batch) = c.commit() {
+            sent.extend(batch.items.into_iter().filter_map(|i| match i {
+                MountItem::Command {
+                    id: crate::ROOT_ID,
+                    command: Command::Tokens(tokens),
+                } => Some(tokens),
+                _ => None,
+            }));
+        }
+        sent
+    }
+
+    /// Two updates in one turn: the second over the first.
+    #[component]
+    fn TwoUpdates() -> impl IntoElement {
+        update_tokens(tokens_with(&[
+            ("brand", rgb(0x0000ff).into()),
+            ("accent", rgb(0x00ff00).into()),
+        ]));
+        update_tokens(tokens_with(&[("brand", rgb(0xff0000).into())]));
+        view()
+    }
+
+    #[test]
+    fn two_updates_in_one_turn_compose_and_reach_the_platform() {
+        let mut c = themed_core(&[("brand", "#333333")]);
+        c.commit();
+        c.mount_root(&crate::element::Root::new::<TwoUpdates>(|| ()));
+        let sent = sent(&mut c);
+        assert_eq!(sent.last(), Some(c.tokens()), "{sent:?}");
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0xff0000))));
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x00ff00))));
+        // The sample tokens `core()` set before the UI set's stay replaced.
+        assert_eq!(c.tokens().color("primary"), None);
+    }
+
+    #[test]
+    fn an_update_changes_only_its_tokens_and_what_reads_them() {
+        let mut c = themed_core(&[]);
+        view_with_classes(&mut c, 2, "w-10 h-10 bg-brand");
+        view_with_classes(&mut c, 4, "w-10 h-10 bg-accent");
+        c.commit().unwrap();
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(file(&[("brand", "#0000ff")]).into()),
+        );
+        let batch = c.commit().unwrap();
+        assert_eq!(
+            view_style_of(&batch, 2).unwrap().background_color,
+            Color::from(rgb(0x0000ff))
+        );
+        assert!(view_style_of(&batch, 4).is_none());
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x222222))));
+    }
+
+    #[test]
+    fn an_update_sets_a_value_equal_to_the_default() {
+        let mut c = themed_core(&[("brand", "#333333")]);
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(file(&[("brand", "#111111")]).into()),
+        );
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x111111))));
+    }
+
+    #[test]
+    fn a_reset_puts_named_tokens_back_to_the_theme() {
+        let mut c = themed_core(&[("brand", "#333333")]);
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(
+                file(&[
+                    ("brand", "#0000ff"),
+                    ("accent", "#00ff00"),
+                    ("extra", "#ff0000"),
+                ])
+                .into(),
+            ),
+        );
+        set_root(
+            &mut c,
+            Prop::UiThemeReset(Some(vec!["brand".into(), "extra".into()])),
+        );
+        // The theme file's value, not the default's.
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x333333))));
+        // Not in the theme: gone.
+        assert_eq!(light(&c, "extra"), None);
+        // Not named: kept.
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x00ff00))));
+        set_root(&mut c, Prop::UiThemeReset(None));
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x222222))));
+    }
+
+    #[test]
+    fn set_tokens_still_replaces_them_all_and_becomes_the_theme() {
+        let mut c = themed_core(&[("brand", "#333333")]);
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(file(&[("accent", "#00ff00")]).into()),
+        );
+        c.set_tokens(tokens_with(&[("brand", rgb(0x444444).into())]));
+        assert_eq!(light(&c, "accent"), None);
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(file(&[("brand", "#0000ff")]).into()),
+        );
+        set_root(&mut c, Prop::UiThemeReset(Some(vec!["brand".into()])));
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x444444))));
+    }
+
+    /// A value it cannot read keeps the token as it is: the app's, not the
+    /// default's.
+    #[test]
+    fn an_update_leaves_out_what_it_cannot_read() {
+        let mut c = themed_core(&[("accent", "#444444")]);
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(file(&[("brand", "#0000ff"), ("accent", "#zz")]).into()),
+        );
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x0000ff))));
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x444444))));
+    }
+
+    /// The set that reads themes reads their changes: one later in the
+    /// list does not, as it may read another format.
+    #[test]
+    fn the_readers_of_a_theme_and_its_changes_come_from_one_set() {
+        let mut c = core();
+        let mut first = Registry::new();
+        first.tokens_from(source);
+        let mut second = Registry::new();
+        second.tokens_from(source).token_overrides_from(read);
+        c.set_components(Registry::merged(&[first, second]));
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(file(&[("brand", "#0000ff")]).into()),
+        );
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x111111))));
+    }
+
+    /// No UI set reads theme changes: nothing changes.
+    #[test]
+    fn an_update_without_a_reader_changes_nothing() {
+        let mut c = core();
+        let mut registry = Registry::new();
+        registry.tokens_from(source);
+        c.set_components(registry);
+        set_root(
+            &mut c,
+            Prop::UiThemeUpdate(file(&[("brand", "#0000ff")]).into()),
+        );
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x111111))));
+        assert!(c.theme_tokens().updated(c.tokens(), &file(&[])).is_none());
+    }
+
+    #[test]
+    fn module_functions_update_and_reset_tokens() {
+        let mut c = themed_core(&[("brand", "#333333")]);
+        let call = |run: fn(&mut crate::element::ModuleCx)| {
+            Op::Rust(RustOp {
+                call: 0,
+                run: RustCall::Op(Box::new(move |cx| {
+                    run(cx);
+                    Ok(Box::new(()) as Box<dyn ToJs>)
+                })),
+            })
+        };
+        c.apply(call(|cx| {
+            cx.update_tokens(tokens_with(&[("brand", rgb(0x0000ff).into())]));
+            cx.update_tokens(tokens_with(&[("accent", rgb(0x00ff00).into())]));
+        }))
+        .unwrap();
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x0000ff))));
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x00ff00))));
+        c.apply(call(|cx| cx.reset_tokens(["brand"]))).unwrap();
+        assert_eq!(light(&c, "brand"), Some(Color::from(rgb(0x333333))));
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x00ff00))));
+    }
+
+    /// What JS reads at once (`token()`) is what the core then draws with.
+    #[test]
+    fn js_reads_the_tokens_the_core_draws_with() {
+        let mut c = themed_core(&[("brand", "#333333")]);
+        c.set_host_tokens(Some(tokens_with(&[("accent", rgb(0xabcdef).into())])));
+        let theme = c.theme_tokens();
+        let update = file(&[("brand", "#0000ff"), ("accent", "#00ff00")]);
+        let read = theme.updated(c.tokens(), &update).unwrap().unwrap();
+        set_root(&mut c, Prop::UiThemeUpdate(update.into()));
+        assert_eq!(&read, &**c.tokens());
+        // The embedding app's token wins.
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0xabcdef))));
+        let names: Vec<Box<str>> = vec!["brand".into()];
+        let read = theme
+            .reset(c.tokens(), &file(&[("brand", "#333333")]), Some(&names))
+            .unwrap();
+        set_root(&mut c, Prop::UiThemeReset(Some(names)));
+        assert_eq!(&read, &**c.tokens());
+        assert!(
+            theme
+                .updated(c.tokens(), &file(&[("brand", "#zz")]))
+                .unwrap()
+                .is_err()
+        );
+    }
+}
+
+/// What the core itself draws with reads roles (`Role`): the mobile tab
+/// bar's tint, the default font; and the core says whether the app has a
+/// theme of its own on the tokens it sends the platform.
+mod theme_roles {
+    use super::*;
+    use crate::{
+        Prop,
+        element::{Registry, Root, Tokens, role},
+        platform::Os,
+        prelude::*,
+    };
+
+    #[component]
+    fn Bar() -> impl IntoElement {
+        crate::mobile::TabBar::element(crate::mobile::TabBarProps {
+            items: vec![crate::mobile::TabBarItem::new("Home")].into(),
+            selected_index: 0.into(),
+            hidden: false.into(),
+        })
+    }
+
+    /// The `tint` the tab bar sent last in the batches committed now.
+    fn tint(c: &mut Core<FakeEngine>) -> Option<serde_json::Value> {
+        let mut last = None;
+        while let Some(batch) = c.commit() {
+            for item in batch.items {
+                if let MountItem::ComponentProps { props, .. } = item {
+                    for (name, value) in props {
+                        if &*name == "tint" {
+                            last = value;
+                        }
+                    }
+                }
+            }
+        }
+        last
+    }
+
+    #[test]
+    fn the_tab_bar_takes_the_color_its_role_maps_onto() {
+        let mut c = core();
+        c.set_environment(crate::element::Environment {
+            os: Os::Ios,
+            ..Default::default()
+        });
+        let mut tokens = crate::element::tokens::sample();
+        tokens.set_color("action", rgb(0x123456).into());
+        c.set_tokens(tokens.with_role(role::PRIMARY, "action"));
+        c.mount_root(&Root::of::<Bar>());
+        assert_eq!(tint(&mut c), Some(serde_json::json!("#123456")));
+    }
+
+    #[test]
+    fn text_takes_the_font_its_role_maps_onto() {
+        let mut c = core();
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::Text,
+                },
+                Op::CreateText {
+                    id: 3,
+                    text: "hello".into(),
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 3,
+                    before: None,
+                },
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+        c.commit();
+        let mut tokens = crate::element::tokens::sample();
+        tokens.set_font("font-body", "Inter");
+        tokens.set_font(crate::element::FONT_SANS, "Helvetica");
+        c.set_tokens(tokens.with_role(role::FONT_SANS, "font-body"));
+        let text = text_item(&c.commit().unwrap()).unwrap();
+        assert_eq!(
+            text.spans[0].style.font_family,
+            Some(crate::style::FontFamily::new("Inter"))
+        );
+    }
+
+    /// The tokens of a theme file of the tests' format over the sample's.
+    fn source(json: Option<&str>) -> Result<(Tokens, Vec<String>), String> {
+        test_tokens(json)
+    }
+
+    /// The tokens each `Command::Tokens` committed now sent.
+    fn sent(c: &mut Core<FakeEngine>) -> Vec<Arc<Tokens>> {
+        let mut sent = Vec::new();
+        while let Some(batch) = c.commit() {
+            sent.extend(batch.items.into_iter().filter_map(|i| match i {
+                MountItem::Command {
+                    id: crate::ROOT_ID,
+                    command: Command::Tokens(tokens),
+                } => Some(tokens),
+                _ => None,
+            }));
+        }
+        sent
+    }
+
+    #[test]
+    fn the_core_says_whether_the_app_has_a_theme_of_its_own() {
+        let mut c = Core::new(FakeEngine::default(), size_pt(320.0, 480.0));
+        let mut registry = Registry::new();
+        registry.tokens_from(source);
+        c.set_components(registry);
+        // The UI set's defaults: no theme of its own.
+        assert!(sent(&mut c).last().is_some_and(|t| !t.is_themed()));
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(r##"{ "primary": "#0000ff" }"##.into()),
+            }],
+        );
+        assert!(sent(&mut c).last().is_some_and(|t| t.is_themed()));
+        // An embedding app's theme makes it one too, and clearing it with
+        // the app's own theme back to the defaults gives none.
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme("{}".into()),
+            }],
+        );
+        assert!(sent(&mut c).last().is_some_and(|t| !t.is_themed()));
+        let mut host = Tokens::default();
+        host.set_color("primary", rgb(0x00ff00).into());
+        c.set_host_tokens(Some(host));
+        assert!(sent(&mut c).last().is_some_and(|t| t.is_themed()));
+        c.set_host_tokens(None);
+        assert!(sent(&mut c).last().is_some_and(|t| !t.is_themed()));
+    }
+
+    /// No UI set reads themes: tokens of any kind are the app's theme.
+    #[test]
+    fn without_a_ui_set_any_tokens_are_a_theme() {
+        let mut c = Core::new(FakeEngine::default(), size_pt(320.0, 480.0));
+        c.set_tokens(crate::element::tokens::sample());
+        assert!(sent(&mut c).last().is_some_and(|t| t.is_themed()));
+    }
+}
+
+/// `.adaptive_shadow()`: box shadows per appearance, reactive, as `.bg`
+/// is; `.shadow(layers)` stays static.
+mod reactive_shadow {
+    use super::*;
+    use crate::{
+        BoxShadow,
+        element::{AdaptiveShadow, Root, Tokens},
+        prelude::*,
+    };
+
+    fn layer(y: f32, rgba: u32) -> BoxShadow {
+        BoxShadow {
+            offset_y: px(y),
+            blur: px(2.0 * y),
+            color: Color(rgba),
+            ..Default::default()
+        }
+    }
+
+    #[component]
+    fn Raised() -> impl IntoElement {
+        view().size_10().adaptive_shadow(move || {
+            tokens()
+                .shadow("shadow-raised")
+                .cloned()
+                .unwrap_or_default()
+        })
+    }
+
+    #[component]
+    fn Still() -> impl IntoElement {
+        view().size_10().shadow([layer(3.0, 0x0000_ffff)])
+    }
+
+    /// The shadows of the batch's views.
+    fn shadows(batch: &MountBatch) -> Vec<Vec<BoxShadow>> {
+        batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::ViewStyle { style, .. } => {
+                    style.effects.as_ref().map(|e| e.box_shadows.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn themed(light: BoxShadow, dark: BoxShadow) -> Tokens {
+        let mut t = crate::element::tokens::sample();
+        t.set_shadow("shadow-raised", AdaptiveShadow::new([light], [dark]));
+        t
+    }
+
+    #[test]
+    fn an_adaptive_shadow_follows_the_appearance_and_the_theme() {
+        let mut c = core();
+        c.set_tokens(themed(layer(1.0, 0x0000_001a), layer(2.0, 0xffff_ff33)));
+        c.mount_root(&Root::of::<Raised>());
+        let batch = c.commit().unwrap();
+        assert_eq!(shadows(&batch), [vec![layer(1.0, 0x0000_001a)]]);
+        c.set_class_environment(crate::tailwind::ClassEnvironment {
+            dark: true,
+            ..Default::default()
+        });
+        let batch = c.commit().unwrap();
+        assert_eq!(shadows(&batch), [vec![layer(2.0, 0xffff_ff33)]]);
+        // A new theme's shadow reaches the binding that read it.
+        c.set_tokens(themed(layer(4.0, 0x0000_001a), layer(5.0, 0xffff_ff33)));
+        let mut seen = Vec::new();
+        while let Some(batch) = c.commit() {
+            seen.extend(shadows(&batch));
+        }
+        assert_eq!(
+            seen.last(),
+            Some(&vec![layer(5.0, 0xffff_ff33)]),
+            "{seen:?}"
+        );
+    }
+
+    #[test]
+    fn static_layers_stay_the_same_in_both() {
+        let mut c = core();
+        c.mount_root(&Root::of::<Still>());
+        let batch = c.commit().unwrap();
+        assert_eq!(shadows(&batch), [vec![layer(3.0, 0x0000_ffff)]]);
+        c.set_class_environment(crate::tailwind::ClassEnvironment {
+            dark: true,
+            ..Default::default()
+        });
+        assert!(c.commit().is_none_or(|b| shadows(&b).is_empty()));
+    }
+}
+
+/// Theme types (`AppTheme`), registered by UI sets: one theme of their
+/// names that replaces the default source, `theme_of`, and the three
+/// setters.
+mod app_theme {
+    use super::*;
+    use crate::{
+        Prop,
+        element::{
+            AdaptiveColor, AppTheme, ModuleCx, Registry, Root, RustCall, RustOp, ToJs, TokenKind,
+            TokenSpec, Tokens, role,
+        },
+        prelude::*,
+    };
+
+    thread_local! {
+        /// How many times a `Ds` was read from tokens (on this test's
+        /// thread).
+        static DS_READS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// A design system's theme, written by hand.
+    #[derive(Debug, Clone, PartialEq)]
+    pub(super) struct Ds {
+        pub(super) overlay: AdaptiveColor,
+        pub(super) card: f32,
+    }
+
+    impl Default for Ds {
+        fn default() -> Self {
+            Ds {
+                overlay: AdaptiveColor::rgb(0x111111, 0x222222),
+                card: 14.0,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub(super) struct DsPatch {
+        pub(super) overlay: Option<AdaptiveColor>,
+        pub(super) card: Option<f32>,
+    }
+
+    impl AppTheme for Ds {
+        type Patch = DsPatch;
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("surface-overlay", TokenKind::Color)
+                        .doc("Popovers.")
+                        .role(role::POPOVER),
+                    TokenSpec::new("radius-card", TokenKind::Radius).doc("Cards."),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
+            out.set_color(&format!("{prefix}surface-overlay"), self.overlay);
+            out.set_number(
+                &TokenKind::Radius.prefixed(prefix, "radius-card"),
+                self.card,
+            );
+        }
+
+        fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
+            DS_READS.set(DS_READS.get() + 1);
+            let d = Ds::default();
+            Ds {
+                overlay: tokens
+                    .color(&format!("{prefix}surface-overlay"))
+                    .unwrap_or(d.overlay),
+                card: tokens
+                    .number(&TokenKind::Radius.prefixed(prefix, "radius-card"))
+                    .unwrap_or(d.card),
+            }
+        }
+
+        fn write_patch(patch: &DsPatch, prefix: &str, out: &mut Tokens) {
+            if let Some(c) = patch.overlay {
+                out.set_color(&format!("{prefix}surface-overlay"), c);
+            }
+            if let Some(n) = patch.card {
+                out.set_number(&TokenKind::Radius.prefixed(prefix, "radius-card"), n);
+            }
+        }
+    }
+
+    /// The app's own tokens beside the design system's.
+    #[derive(Debug, Clone, PartialEq)]
+    pub(super) struct Odds {
+        pub(super) up: AdaptiveColor,
+    }
+
+    impl Default for Odds {
+        fn default() -> Self {
+            Odds {
+                up: AdaptiveColor::rgb(0x00aa00, 0x00ff00),
+            }
+        }
+    }
+
+    impl AppTheme for Odds {
+        type Patch = Option<AdaptiveColor>;
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| vec![TokenSpec::new("odds-up", TokenKind::Color)])
+        }
+
+        fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
+            out.set_color(&format!("{prefix}odds-up"), self.up);
+        }
+
+        fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
+            Odds {
+                up: tokens
+                    .color(&format!("{prefix}odds-up"))
+                    .unwrap_or(Odds::default().up),
+            }
+        }
+
+        fn write_patch(patch: &Self::Patch, prefix: &str, out: &mut Tokens) {
+            if let Some(c) = patch {
+                out.set_color(&format!("{prefix}odds-up"), *c);
+            }
+        }
+    }
+
+    /// Another type declaring `surface-overlay`.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Clash;
+
+    impl AppTheme for Clash {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| vec![TokenSpec::new("surface-overlay", TokenKind::Color)])
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Clash
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    /// Another type mapping `popover`.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct RoleClash;
+
+    impl AppTheme for RoleClash {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS
+                .get_or_init(|| vec![TokenSpec::new("panel", TokenKind::Color).role(role::POPOVER)])
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            RoleClash
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    /// The design system's set and the app's, merged.
+    pub(in crate::core) fn sets() -> Registry {
+        let mut ds = Registry::new();
+        ds.theme::<Ds>();
+        let mut app = Registry::new();
+        app.theme::<Odds>();
+        Registry::merged(&[ds, app])
+    }
+
+    fn light(c: &Core<FakeEngine>, name: &str) -> Option<Color> {
+        c.tokens().color(name).map(|t| Color::from(t.light))
+    }
+
+    #[test]
+    fn the_types_names_merge_and_win_over_the_default_source() {
+        let mut c = core();
+        let mut registry = sets();
+        registry.tokens_from(test_tokens);
+        c.set_components(registry);
+        // The types' defaults, with the role they map; the source's are gone.
+        assert_eq!(
+            light(&c, "surface-overlay"),
+            Some(Color::from(rgb(0x111111)))
+        );
+        assert_eq!(light(&c, "odds-up"), Some(Color::from(rgb(0x00aa00))));
+        assert_eq!(c.tokens().number("radius-card"), Some(14.0));
+        assert_eq!(c.tokens().role_name(role::POPOVER), "surface-overlay");
+        assert_eq!(c.tokens().color("primary"), None);
+    }
+
+    #[test]
+    fn without_a_type_the_source_is_as_before() {
+        let mut registry = Registry::new();
+        registry.tokens_from(test_tokens);
+        let merged = Registry::merged(&[registry.clone(), Registry::new()]);
+        assert_eq!(merged.tokens(None), registry.tokens(None));
+        assert!(merged.theme_specs().is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "declared by both")]
+    fn a_name_declared_twice_panics() {
+        let mut a = Registry::new();
+        a.theme::<Ds>();
+        let mut b = Registry::new();
+        b.theme::<Clash>();
+        let _ = Registry::merged(&[a, b]);
+    }
+
+    #[test]
+    #[should_panic(expected = "mapped by both")]
+    fn a_role_mapped_twice_panics() {
+        let mut a = Registry::new();
+        a.theme::<Ds>();
+        let mut b = Registry::new();
+        b.theme::<RoleClash>();
+        let _ = Registry::merged(&[a, b]);
+    }
+
+    /// Shows the design system's theme as `theme_of` reads it.
+    #[component]
+    fn Reads() -> impl IntoElement {
+        text(move || {
+            let ds = theme_of::<Ds>();
+            let odds = theme_of::<Odds>();
+            format!(
+                "{:08x} {} {:08x}",
+                Color::from(ds.overlay.light).0,
+                ds.card,
+                Color::from(odds.up.light).0
+            )
+        })
+    }
+
+    fn shown(c: &mut Core<FakeEngine>) -> Option<String> {
+        let mut last = None;
+        while let Some(batch) = c.commit() {
+            if let Some(t) = text_item(&batch) {
+                last = Some(t.text.to_string());
+            }
+        }
+        last
+    }
+
+    #[test]
+    fn theme_of_reads_the_tokens_once_per_change_and_the_setters_change_them() {
+        let mut c = core();
+        c.set_components(sets());
+        // The app's theme file over the types' defaults; a role's name sets
+        // the token it is mapped onto.
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(
+                    r##"{ "cssVars": { "light": { "popover": "#333333" }, "theme": { "radius-card": "10px" } } }"##.into(),
+                ),
+            }],
+        );
+        c.mount_root(&Root::of::<Reads>());
+        assert_eq!(shown(&mut c).as_deref(), Some("333333ff 10 00aa00ff"));
+        let reads = DS_READS.get();
+        // Nothing changed: no new read.
+        c.set_viewport(size_pt(321.0, 480.0));
+        let _ = shown(&mut c);
+        assert_eq!(DS_READS.get(), reads);
+        let call = |run: fn(&mut ModuleCx)| {
+            Op::Rust(RustOp {
+                call: 0,
+                run: RustCall::Op(Box::new(move |cx| {
+                    run(cx);
+                    Ok(Box::new(()) as Box<dyn ToJs>)
+                })),
+            })
+        };
+        // `update_theme` changes the fields the patch sets.
+        c.apply(call(|cx| {
+            cx.update_theme::<Ds>(DsPatch {
+                card: Some(20.0),
+                ..Default::default()
+            })
+        }))
+        .unwrap();
+        assert_eq!(shown(&mut c).as_deref(), Some("333333ff 20 00aa00ff"));
+        // `set_theme` replaces only the type's names.
+        c.apply(call(|cx| {
+            cx.set_theme(Ds {
+                overlay: AdaptiveColor::rgb(0x444444, 0x444444),
+                card: 4.0,
+            })
+        }))
+        .unwrap();
+        assert_eq!(shown(&mut c).as_deref(), Some("444444ff 4 00aa00ff"));
+        c.apply(call(|cx| {
+            cx.update_theme::<Odds>(Some(AdaptiveColor::rgb(0xff0000, 0xff0000)))
+        }))
+        .unwrap();
+        assert_eq!(shown(&mut c).as_deref(), Some("444444ff 4 ff0000ff"));
+        // `reset_theme` puts the type's names back to the theme file's.
+        c.apply(call(|cx| cx.reset_theme::<Ds>())).unwrap();
+        assert_eq!(shown(&mut c).as_deref(), Some("333333ff 10 ff0000ff"));
+    }
+
+    /// A number field is its token's light value: `update_theme` of other
+    /// fields and `set_theme` with the number at its value keep a dark one
+    /// the theme file gave; `set_theme` with another value is both
+    /// appearances'.
+    #[test]
+    fn a_number_field_is_the_light_value_and_set_theme_keeps_the_dark_one_it_leaves() {
+        let mut c = core();
+        c.set_components(sets());
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(
+                    r##"{ "cssVars": { "theme": { "radius-card": "10px" }, "dark": { "radius-card": "6px" } } }"##
+                        .into(),
+                ),
+            }],
+        );
+        c.mount_root(&Root::of::<Reads>());
+        assert_eq!(shown(&mut c).as_deref(), Some("111111ff 10 00aa00ff"));
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(6.0));
+        let call = |run: fn(&mut ModuleCx)| {
+            Op::Rust(RustOp {
+                call: 0,
+                run: RustCall::Op(Box::new(move |cx| {
+                    run(cx);
+                    Ok(Box::new(()) as Box<dyn ToJs>)
+                })),
+            })
+        };
+        c.apply(call(|cx| {
+            cx.update_theme::<Ds>(DsPatch {
+                overlay: Some(AdaptiveColor::rgb(0x444444, 0x444444)),
+                ..Default::default()
+            })
+        }))
+        .unwrap();
+        let _ = shown(&mut c);
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(6.0));
+        c.apply(call(|cx| {
+            cx.set_theme(Ds {
+                overlay: AdaptiveColor::rgb(0x444444, 0x444444),
+                card: 10.0,
+            })
+        }))
+        .unwrap();
+        let _ = shown(&mut c);
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(6.0));
+        c.apply(call(|cx| {
+            cx.set_theme(Ds {
+                overlay: AdaptiveColor::rgb(0x444444, 0x444444),
+                card: 12.0,
+            })
+        }))
+        .unwrap();
+        let _ = shown(&mut c);
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(12.0));
+    }
+
+    /// Two cores (two surfaces) each read their own tokens.
+    #[test]
+    fn two_surfaces_keep_their_own_theme() {
+        let mut a = core();
+        a.set_components(sets());
+        a.mount_root(&Root::of::<Reads>());
+        let mut b = core();
+        b.set_components(sets());
+        let mut tokens = (**b.tokens()).clone();
+        tokens.set_number("radius-card", 3.0);
+        b.set_tokens(tokens);
+        b.mount_root(&Root::of::<Reads>());
+        assert_eq!(shown(&mut a).as_deref(), Some("111111ff 14 00aa00ff"));
+        assert_eq!(shown(&mut b).as_deref(), Some("111111ff 3 00aa00ff"));
+        let mut tokens = (**a.tokens()).clone();
+        tokens.set_number("radius-card", 7.0);
+        a.set_tokens(tokens);
+        assert_eq!(shown(&mut a).as_deref(), Some("111111ff 7 00aa00ff"));
+        b.set_viewport(size_pt(300.0, 400.0));
+        let _ = shown(&mut b);
+        let mut tokens = (**b.tokens()).clone();
+        tokens.set_number("radius-card", 5.0);
+        b.set_tokens(tokens);
+        assert_eq!(shown(&mut b).as_deref(), Some("111111ff 5 00aa00ff"));
+    }
+
+    #[test]
+    fn to_tokens_carries_the_roles() {
+        let tokens = Ds::default().to_tokens();
+        assert_eq!(tokens.role_name(role::POPOVER), "surface-overlay");
+        assert_eq!(tokens.number("radius-card"), Some(14.0));
+    }
+
+    /// Reads `Odds` while it is read: `theme_of` runs a type's code with
+    /// the cache let go.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Nested(String);
+
+    impl AppTheme for Nested {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            &[]
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Nested(format!(
+                "{:08x}",
+                Color::from(theme_of::<Odds>().up.light).0
+            ))
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[component]
+    fn ReadsNested() -> impl IntoElement {
+        text(move || theme_of::<Nested>().0.clone())
+    }
+
+    #[test]
+    fn a_type_may_read_another_while_it_is_read() {
+        let mut c = core();
+        c.set_components(sets());
+        c.mount_root(&Root::of::<ReadsNested>());
+        assert_eq!(shown(&mut c).as_deref(), Some("00aa00ff"));
+    }
+
+    /// A font token named as no font is.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Misnamed;
+
+    impl AppTheme for Misnamed {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| vec![TokenSpec::new("body", TokenKind::Font)])
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Misnamed
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    #[should_panic(expected = "is named as no font is")]
+    fn a_token_named_as_no_value_of_its_kind_panics() {
+        Registry::new().theme::<Misnamed>();
+    }
+
+    /// One type declaring a name twice.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Twice;
+
+    impl AppTheme for Twice {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("ink", TokenKind::Color),
+                    TokenSpec::new("ink", TokenKind::Color),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Twice
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    #[should_panic(expected = "twice")]
+    fn a_type_declaring_a_name_twice_panics() {
+        Registry::new().theme::<Twice>();
+    }
+
+    /// A type set while it runs maps no roles again: the registered types'
+    /// stay.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Plain;
+
+    impl AppTheme for Plain {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![TokenSpec::new("popover", TokenKind::Color).role(role::POPOVER)]
+            })
+        }
+
+        fn write_tokens(&self, _: &str, out: &mut Tokens) {
+            out.set_color("popover", AdaptiveColor::rgb(0xff0000, 0xff0000));
+        }
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Plain
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    fn set_theme_keeps_the_registered_types_roles_and_the_app_is_themed() {
+        let mut c = core();
+        c.set_components(sets());
+        // A registered type is the app's own theme: alerts take it.
+        assert!(c.tokens().is_themed());
+        c.apply(Op::Rust(RustOp {
+            call: 0,
+            run: RustCall::Op(Box::new(|cx| {
+                cx.set_theme(Plain);
+                Ok(Box::new(()) as Box<dyn ToJs>)
+            })),
+        }))
+        .unwrap();
+        assert_eq!(c.tokens().role_name(role::POPOVER), "surface-overlay");
+    }
+}
+
+/// `set_theme` and the dark values of a type's numbers: a number field is
+/// the light value, so a theme read and set back keeps what it could not
+/// read, and a number it changes is its value in both appearances.
+mod theme_set_numbers {
+    use super::{
+        app_theme::{Ds, DsPatch, sets},
+        *,
+    };
+    use crate::{
+        Prop,
+        element::{AdaptiveColor, AppTheme, ModuleCx, Root, RustCall, RustOp, ToJs, Tokens},
+        prelude::*,
+    };
+
+    /// A core with the design system's types, whose theme file gives
+    /// `radius-card` 10 points, and 6 in the dark appearance.
+    fn themed_core() -> Core<FakeEngine> {
+        let mut c = core();
+        c.set_components(sets());
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(
+                    r##"{ "cssVars": { "theme": { "radius-card": "10px" }, "dark": { "radius-card": "6px" } } }"##.into(),
+                ),
+            }],
+        );
+        assert_eq!(card(&c), (Some(10.0), Some(6.0)));
+        c
+    }
+
+    /// `radius-card` in the light and in the dark appearance.
+    fn card(c: &Core<FakeEngine>) -> (Option<f32>, Option<f32>) {
+        (
+            c.tokens().number_in("radius-card", false),
+            c.tokens().number_in("radius-card", true),
+        )
+    }
+
+    fn overlay(c: &Core<FakeEngine>) -> Option<AdaptiveColor> {
+        c.tokens().color("surface-overlay")
+    }
+
+    /// Runs `run` as a synchronous module function does.
+    fn call(c: &mut Core<FakeEngine>, run: impl FnOnce(&mut ModuleCx) + 'static) {
+        c.apply(Op::Rust(RustOp {
+            call: 0,
+            run: RustCall::Op(Box::new(move |cx| {
+                run(cx);
+                Ok(Box::new(()) as Box<dyn ToJs>)
+            })),
+        }))
+        .unwrap();
+    }
+
+    /// How many `Command::Tokens` the batches committed now sent.
+    fn sent(c: &mut Core<FakeEngine>) -> usize {
+        let mut sent = 0;
+        while let Some(batch) = c.commit() {
+            sent += batch
+                .items
+                .iter()
+                .filter(|i| {
+                    matches!(
+                        i,
+                        MountItem::Command {
+                            command: Command::Tokens(_),
+                            ..
+                        }
+                    )
+                })
+                .count();
+        }
+        sent
+    }
+
+    #[test]
+    fn a_theme_read_changed_in_one_field_and_set_keeps_a_numbers_dark_value() {
+        let mut c = themed_core();
+        let mut theme = Ds::read_tokens(c.tokens(), "");
+        assert_eq!(theme.card, 10.0);
+        theme.overlay = AdaptiveColor::rgb(0x444444, 0x555555);
+        call(&mut c, move |cx| cx.set_theme(theme));
+        assert_eq!(overlay(&c), Some(AdaptiveColor::rgb(0x444444, 0x555555)));
+        assert_eq!(card(&c), (Some(10.0), Some(6.0)));
+    }
+
+    #[test]
+    fn a_theme_read_and_set_back_changes_nothing() {
+        let mut c = themed_core();
+        let _ = sent(&mut c);
+        let before = c.tokens().clone();
+        let theme = Ds::read_tokens(c.tokens(), "");
+        call(&mut c, move |cx| cx.set_theme(theme));
+        assert_eq!(**c.tokens(), *before);
+        assert_eq!(sent(&mut c), 0);
+    }
+
+    #[test]
+    fn a_number_the_theme_changes_is_its_value_in_both_appearances() {
+        let mut c = themed_core();
+        let mut theme = Ds::read_tokens(c.tokens(), "");
+        theme.card = 20.0;
+        call(&mut c, move |cx| cx.set_theme(theme));
+        assert_eq!(card(&c), (Some(20.0), Some(20.0)));
+    }
+
+    /// A patch names the fields it sets: a number it sets is that value in
+    /// both appearances, the one it has too.
+    #[test]
+    fn update_theme_sets_a_number_in_both_appearances() {
+        let mut c = themed_core();
+        call(&mut c, |cx| {
+            cx.update_theme::<Ds>(DsPatch {
+                card: Some(10.0),
+                ..Default::default()
+            })
+        });
+        assert_eq!(card(&c), (Some(10.0), Some(10.0)));
+    }
+
+    /// Tokens by name are as they were: a number set is both appearances'.
+    #[test]
+    fn update_tokens_sets_a_number_in_both_appearances() {
+        let mut c = themed_core();
+        call(&mut c, |cx| {
+            let mut tokens = Tokens::default();
+            tokens.set_number("radius-card", 10.0);
+            cx.update_tokens(tokens);
+        });
+        assert_eq!(card(&c), (Some(10.0), Some(10.0)));
+    }
+
+    /// Two themes set in one turn, from a component: the second over the
+    /// first, each against the tokens as the one before left them.
+    #[component]
+    fn TwoSets() -> impl IntoElement {
+        // Leaves the number alone, then changes it.
+        set_theme(Ds {
+            overlay: AdaptiveColor::rgb(0x444444, 0x444444),
+            card: 10.0,
+        });
+        set_theme(Ds {
+            overlay: AdaptiveColor::rgb(0x777777, 0x777777),
+            card: 20.0,
+        });
+        // The value the one before set: its dark value went with that set.
+        set_theme(Ds {
+            overlay: AdaptiveColor::rgb(0x888888, 0x888888),
+            card: 20.0,
+        });
+        view()
+    }
+
+    #[test]
+    fn themes_set_in_one_turn_compose() {
+        let mut c = themed_core();
+        c.mount_root(&Root::new::<TwoSets>(|| ()));
+        let _ = sent(&mut c);
+        assert_eq!(overlay(&c), Some(AdaptiveColor::rgb(0x888888, 0x888888)));
+        assert_eq!(card(&c), (Some(20.0), Some(20.0)));
+    }
+
+    #[component]
+    fn SetsBack() -> impl IntoElement {
+        set_theme(Ds {
+            overlay: AdaptiveColor::rgb(0x444444, 0x444444),
+            card: 10.0,
+        });
+        view()
+    }
+
+    /// The function a component calls takes the same path as a module's.
+    #[test]
+    fn set_theme_from_a_component_keeps_a_numbers_dark_value() {
+        let mut c = themed_core();
+        c.mount_root(&Root::new::<SetsBack>(|| ()));
+        let _ = sent(&mut c);
+        assert_eq!(overlay(&c), Some(AdaptiveColor::rgb(0x444444, 0x444444)));
+        assert_eq!(card(&c), (Some(10.0), Some(6.0)));
+    }
+}
+
+/// A token playing several roles: a design system with one surface for
+/// cards and popovers maps both roles onto it. Each role reads it, both
+/// follow every change of it, each role's name sets it in a theme file,
+/// and a role is still played by one token.
+mod token_roles {
+    use super::*;
+    use crate::{
+        color::rgb,
+        element::{
+            AdaptiveColor, AnyRole, AppTheme, ModuleCx, Registry, RustCall, RustOp, ToJs,
+            TokenKind, TokenSpec, Tokens,
+        },
+    };
+
+    /// Roles of a UI set's own, beside the core's: `nsh-base` has these.
+    mod role {
+        use crate::element::Role;
+        pub(super) use crate::element::role::*;
+
+        pub(super) const BACKGROUND: Role = Role::new("background");
+        pub(super) const CARD: Role = Role::new("card");
+        pub(super) const CARD_FOREGROUND: Role = Role::new("card-foreground");
+    }
+
+    /// One surface for cards and popovers, and one ink on both.
+    #[derive(Debug, Clone, PartialEq)]
+    struct Flat {
+        surface: AdaptiveColor,
+        ink: AdaptiveColor,
+    }
+
+    impl Default for Flat {
+        fn default() -> Self {
+            Flat {
+                surface: AdaptiveColor::rgb(0xf5f5f5, 0x171717),
+                ink: AdaptiveColor::rgb(0x111111, 0xeeeeee),
+            }
+        }
+    }
+
+    impl AppTheme for Flat {
+        type Patch = Option<AdaptiveColor>;
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("surface", TokenKind::Color)
+                        .role(role::CARD)
+                        .role(role::POPOVER),
+                    TokenSpec::new("ink", TokenKind::Color)
+                        .role(role::CARD_FOREGROUND)
+                        .role(role::POPOVER_FOREGROUND),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
+            out.set_color(&format!("{prefix}surface"), self.surface);
+            out.set_color(&format!("{prefix}ink"), self.ink);
+        }
+
+        fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
+            let d = Flat::default();
+            Flat {
+                surface: tokens
+                    .color(&format!("{prefix}surface"))
+                    .unwrap_or(d.surface),
+                ink: tokens.color(&format!("{prefix}ink")).unwrap_or(d.ink),
+            }
+        }
+
+        /// The patch is the surface.
+        fn write_patch(patch: &Self::Patch, prefix: &str, out: &mut Tokens) {
+            if let Some(c) = patch {
+                out.set_color(&format!("{prefix}surface"), *c);
+            }
+        }
+    }
+
+    fn flat() -> Registry {
+        let mut registry = Registry::new();
+        registry.theme::<Flat>();
+        registry
+    }
+
+    fn file(json: &str) -> String {
+        format!(r#"{{ "cssVars": {json} }}"#)
+    }
+
+    #[test]
+    fn a_token_plays_each_of_its_roles() {
+        let mut c = core();
+        c.set_components(flat());
+        let tokens = c.tokens();
+        for role in [role::CARD, role::POPOVER] {
+            assert_eq!(tokens.role_name(role), "surface");
+            assert_eq!(tokens.role(role), Some(Flat::default().surface));
+        }
+        for role in [role::CARD_FOREGROUND, role::POPOVER_FOREGROUND] {
+            assert_eq!(tokens.role_name(role), "ink");
+        }
+        // A role it does not play reads its own name, as before.
+        assert_eq!(tokens.role_name(role::PRIMARY), "primary");
+        // The roles are no tokens.
+        assert!(tokens.color("card").is_none() && tokens.color("popover").is_none());
+        // A type's own tokens carry them too.
+        let own = Flat::default().to_tokens();
+        assert_eq!(own.role_name(role::CARD), "surface");
+        assert_eq!(own.role_name(role::POPOVER), "surface");
+    }
+
+    #[test]
+    fn both_roles_follow_a_change_of_the_token() {
+        let mut c = core();
+        c.set_components(flat());
+        c.apply(Op::Rust(RustOp {
+            call: 0,
+            run: RustCall::Op(Box::new(|cx: &mut ModuleCx| {
+                cx.update_theme::<Flat>(Some(AdaptiveColor::rgb(0x123456, 0x654321)));
+                Ok(Box::new(()) as Box<dyn ToJs>)
+            })),
+        }))
+        .unwrap();
+        for role in [role::CARD, role::POPOVER] {
+            assert_eq!(
+                c.tokens().role(role),
+                Some(AdaptiveColor::rgb(0x123456, 0x654321)),
+                "{role:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_roles_name_sets_the_token_in_a_theme_file() {
+        let provider = flat().token_provider().unwrap();
+        for key in ["card", "popover", "surface"] {
+            let (tokens, left_out) = provider
+                .read(Some(&file(&format!(
+                    r##"{{ "light": {{ "{key}": "#123456" }} }}"##
+                ))))
+                .unwrap();
+            assert!(left_out.is_empty(), "{key}: {left_out:?}");
+            assert_eq!(
+                tokens.color("surface").map(|c| Color::from(c.light)),
+                Some(Color::from(rgb(0x123456))),
+                "{key}"
+            );
+            assert!(tokens.color("card").is_none() && tokens.color("popover").is_none());
+        }
+    }
+
+    #[test]
+    fn two_roles_names_with_one_value_set_the_token_once() {
+        let provider = flat().token_provider().unwrap();
+        let (tokens, left_out) = provider
+            .read(Some(&file(
+                r##"{ "light": { "card": "#123456", "popover": "#123456" } }"##,
+            )))
+            .unwrap();
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert_eq!(
+            tokens.color("surface").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x123456)))
+        );
+    }
+
+    #[test]
+    fn the_second_of_two_roles_names_with_two_values_is_left_out() {
+        let provider = flat().token_provider().unwrap();
+        let (tokens, left_out) = provider
+            .read(Some(&file(
+                r##"{ "light": { "popover": "#222222", "card": "#111111" } }"##,
+            )))
+            .unwrap();
+        assert_eq!(
+            left_out,
+            ["`popover`: `card` sets the token its role is mapped onto, `surface`, too"]
+        );
+        assert_eq!(
+            tokens.color("surface").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x111111)))
+        );
+        // Each in a section of its own is each section's value.
+        let (tokens, left_out) = provider
+            .read(Some(&file(
+                r##"{ "light": { "card": "#111111" }, "dark": { "popover": "#222222" } }"##,
+            )))
+            .unwrap();
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert_eq!(
+            tokens.color("surface"),
+            Some(AdaptiveColor::rgb(0x111111, 0x222222))
+        );
+    }
+
+    #[test]
+    fn a_var_naming_either_role_names_the_token() {
+        let provider = flat().token_provider().unwrap();
+        let (tokens, left_out) = provider
+            .read(Some(&file(
+                r##"{ "light": { "surface": "#123456", "ink": "var(--popover)" } }"##,
+            )))
+            .unwrap();
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert_eq!(
+            tokens.color("ink").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x123456)))
+        );
+    }
+
+    #[test]
+    fn a_role_given_twice_to_a_token_is_one() {
+        let spec = TokenSpec::new("surface", TokenKind::Color)
+            .role(role::CARD)
+            .role(role::POPOVER)
+            .role(role::CARD);
+        let names: Vec<_> = spec.roles.iter().map(AnyRole::name).collect();
+        assert_eq!(names, ["card", "popover"]);
+        assert!(TokenSpec::new("ink", TokenKind::Color).roles.is_empty());
+    }
+
+    /// Two tokens of one type playing `card`.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Double;
+
+    impl AppTheme for Double {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("paper", TokenKind::Color)
+                        .role(role::BACKGROUND)
+                        .role(role::CARD),
+                    TokenSpec::new("sheet", TokenKind::Color).role(role::CARD),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Double
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    #[should_panic(expected = "maps the role `card` twice")]
+    fn a_role_two_tokens_of_one_type_play_panics() {
+        Registry::new().theme::<Double>();
+    }
+
+    /// Another type's token playing `popover`, one of `Flat`'s `surface`'s.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Overlay;
+
+    impl AppTheme for Overlay {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("overlay", TokenKind::Color)
+                        .role(role::ACCENT)
+                        .role(role::POPOVER),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Overlay
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    #[should_panic(expected = "the role `popover` is mapped by both")]
+    fn a_role_another_types_token_plays_panics() {
+        let mut other = Registry::new();
+        other.theme::<Overlay>();
+        let _ = Registry::merged(&[flat(), other]);
+    }
+}
+
+/// Roles a UI set declares for what its own components draw, mapped by a
+/// theme type as the core's are: a role is its name and reads what its
+/// token holds.
+mod named_roles {
+    use super::*;
+    use crate::{
+        color::rgb,
+        element::{
+            AdaptiveColor, AppTheme, NumberRole, Registry, Role, TokenKind, TokenSpec, Tokens, role,
+        },
+    };
+
+    /// A component library's roles: a banner's surface and a chip's radius.
+    const BANNER: Role = Role::new("banner");
+    const CHIP_RADIUS: NumberRole = Role::new("chip-radius");
+
+    /// The app's theme: its `notice` is the library's banner and the
+    /// core's popover, its `radius-pill` the library's chips' radius.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct App;
+
+    impl AppTheme for App {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("notice", TokenKind::Color)
+                        .role(BANNER)
+                        .role(role::POPOVER),
+                    TokenSpec::new("radius-pill", TokenKind::Radius).role(CHIP_RADIUS),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, _: &str, out: &mut Tokens) {
+            out.set_color("notice", AdaptiveColor::rgb(0x111111, 0x222222));
+            out.set_number("radius-pill", 99.0);
+        }
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            App
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    fn app() -> Registry {
+        let mut registry = Registry::new();
+        registry.theme::<App>();
+        registry
+    }
+
+    #[test]
+    fn a_ui_sets_own_role_reads_the_token_a_type_maps_it_onto() {
+        let mut c = core();
+        c.set_components(app());
+        let tokens = c.tokens();
+        assert_eq!(tokens.role_name(BANNER), "notice");
+        assert_eq!(
+            tokens.role(BANNER),
+            Some(AdaptiveColor::rgb(0x111111, 0x222222))
+        );
+        assert_eq!(tokens.role(CHIP_RADIUS), Some(99.0));
+        assert_eq!(tokens.role(role::POPOVER), tokens.role(BANNER));
+        // The role is no token.
+        assert!(tokens.color("banner").is_none());
+    }
+
+    #[test]
+    fn its_name_sets_the_token_in_a_theme_file() {
+        let provider = app().token_provider().unwrap();
+        let (tokens, left_out) = provider
+            .read(Some(
+                r##"{ "cssVars": { "light": { "banner": "#123456" }, "theme": { "chip-radius": "12px" } } }"##,
+            ))
+            .unwrap();
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert_eq!(
+            tokens.color("notice").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x123456)))
+        );
+        assert_eq!(tokens.number("radius-pill"), Some(12.0));
+        assert!(tokens.color("banner").is_none() && tokens.number("chip-radius").is_none());
+    }
+
+    /// A color token playing a role that reads a number.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Mixed;
+
+    impl AppTheme for Mixed {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| vec![TokenSpec::new("ink", TokenKind::Color).role(CHIP_RADIUS)])
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Mixed
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    #[should_panic(expected = "the role `chip-radius` reads a number, and `ink` is a color token")]
+    fn a_token_playing_a_role_of_another_kind_panics() {
+        Registry::new().theme::<Mixed>();
+    }
+
+    /// Another crate's constant named as the core's `popover`.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Theirs;
+
+    impl AppTheme for Theirs {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            const POPOVER: Role = Role::new("popover");
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| vec![TokenSpec::new("sheet", TokenKind::Color).role(POPOVER)])
+        }
+
+        fn write_tokens(&self, _: &str, _: &mut Tokens) {}
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Theirs
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    #[should_panic(expected = "the role `popover` is mapped by both")]
+    fn two_constants_of_one_name_are_one_role_across_types() {
+        let mut other = Registry::new();
+        other.theme::<Theirs>();
+        let _ = Registry::merged(&[app(), other]);
+    }
+}
+
+/// The setters of a theme type that is not registered, in an app whose own
+/// type maps roles: a token playing a mapped role is the token the role is
+/// mapped onto, as the role's name is in a theme file. `nsh-base`'s `Theme`
+/// is such a type.
+mod theme_set_roles {
+    use super::*;
+    use crate::{
+        Prop,
+        element::{
+            AdaptiveColor, AppTheme, ModuleCx, NumberRole, Registry, Role, Root, RustCall, RustOp,
+            ToJs, TokenKind, TokenSpec, Tokens, role,
+        },
+        prelude::*,
+    };
+
+    /// A UI set's roles beside the core's.
+    const CARD: Role = Role::new("card");
+    const RADIUS: NumberRole = Role::new("radius");
+
+    /// The app's design system, registered: its overlay is the popover,
+    /// its cards' radius the radius.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Sys;
+
+    impl AppTheme for Sys {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("surface-overlay", TokenKind::Color).role(role::POPOVER),
+                    TokenSpec::new("radius-card", TokenKind::Radius).role(RADIUS),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, _: &str, out: &mut Tokens) {
+            out.set_color("surface-overlay", AdaptiveColor::rgb(0x111111, 0x111111));
+            out.set_number("radius-card", 14.0);
+        }
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Sys
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    /// A UI set's theme by its own names, not registered: each token
+    /// plays the role of its name.
+    #[derive(Debug, Clone, PartialEq)]
+    struct Shad {
+        popover: AdaptiveColor,
+        primary: AdaptiveColor,
+        radius: f32,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    struct ShadPatch {
+        popover: Option<AdaptiveColor>,
+        primary: Option<AdaptiveColor>,
+    }
+
+    impl Default for Shad {
+        fn default() -> Self {
+            Shad {
+                popover: AdaptiveColor::rgb(0xffffff, 0x000000),
+                primary: AdaptiveColor::rgb(0x171717, 0xfafafa),
+                radius: 10.0,
+            }
+        }
+    }
+
+    impl AppTheme for Shad {
+        type Patch = ShadPatch;
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("popover", TokenKind::Color).role(role::POPOVER),
+                    TokenSpec::new("primary", TokenKind::Color).role(role::PRIMARY),
+                    TokenSpec::new("radius", TokenKind::Number).role(RADIUS),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
+            out.set_color(&format!("{prefix}popover"), self.popover);
+            out.set_color(&format!("{prefix}primary"), self.primary);
+            out.set_number(&format!("{prefix}radius"), self.radius);
+        }
+
+        /// Through the roles, as `nsh-base`'s `Theme` reads.
+        fn read_tokens(tokens: &Tokens, _: &str) -> Self {
+            let d = Shad::default();
+            Shad {
+                popover: tokens.role(role::POPOVER).unwrap_or(d.popover),
+                primary: tokens.role(role::PRIMARY).unwrap_or(d.primary),
+                radius: tokens.role(RADIUS).unwrap_or(d.radius),
+            }
+        }
+
+        fn write_patch(patch: &ShadPatch, prefix: &str, out: &mut Tokens) {
+            if let Some(c) = patch.popover {
+                out.set_color(&format!("{prefix}popover"), c);
+            }
+            if let Some(c) = patch.primary {
+                out.set_color(&format!("{prefix}primary"), c);
+            }
+        }
+    }
+
+    const RED: AdaptiveColor = AdaptiveColor::rgb(0xff0000, 0xff0000);
+    const GREEN: AdaptiveColor = AdaptiveColor::rgb(0x00ff00, 0x00ff00);
+    const FILE: AdaptiveColor = AdaptiveColor::rgb(0x333333, 0x333333);
+
+    /// A core with the design system's type, whose theme file gives the
+    /// overlay a color and the cards' radius a dark value.
+    fn app() -> Core<FakeEngine> {
+        let mut registry = Registry::new();
+        registry.theme::<Sys>();
+        let mut c = core();
+        c.set_components(registry);
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(
+                    r##"{ "cssVars": { "theme": { "surface-overlay": "#333333", "radius-card": "10px" }, "dark": { "radius-card": "6px" } } }"##.into(),
+                ),
+            }],
+        );
+        assert_eq!(c.tokens().color("surface-overlay"), Some(FILE));
+        c
+    }
+
+    fn call(c: &mut Core<FakeEngine>, run: impl FnOnce(&mut ModuleCx) + 'static) {
+        c.apply(Op::Rust(RustOp {
+            call: 0,
+            run: RustCall::Op(Box::new(move |cx| {
+                run(cx);
+                Ok(Box::new(()) as Box<dyn ToJs>)
+            })),
+        }))
+        .unwrap();
+    }
+
+    fn colors(c: &Core<FakeEngine>) -> Vec<String> {
+        let mut names: Vec<String> = c.tokens().colors().map(|(n, _)| n.to_owned()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn set_theme_sets_the_token_a_mapped_role_reads_and_an_unmapped_ones_own() {
+        let mut c = app();
+        let mut theme = Shad::read_tokens(c.tokens(), "");
+        assert_eq!(theme.popover, FILE);
+        theme.popover = RED;
+        theme.primary = GREEN;
+        call(&mut c, move |cx| cx.set_theme(theme));
+        // The popover is the design system's overlay; no token `popover`.
+        assert_eq!(c.tokens().color("surface-overlay"), Some(RED));
+        assert_eq!(c.tokens().role(role::POPOVER), Some(RED));
+        // No type maps `primary`: the token of its name, which the role
+        // reads.
+        assert_eq!(c.tokens().role(role::PRIMARY), Some(GREEN));
+        assert_eq!(colors(&c), ["primary", "surface-overlay"]);
+        // The radius went through its role too, and kept its dark value,
+        // being left at the light one.
+        assert!(c.tokens().number("radius").is_none());
+        assert_eq!(c.tokens().number_in("radius-card", false), Some(10.0));
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(6.0));
+        // The type reads back what it set.
+        let read = Shad::read_tokens(c.tokens(), "");
+        assert_eq!(
+            (read.popover, read.primary, read.radius),
+            (RED, GREEN, 10.0)
+        );
+    }
+
+    #[test]
+    fn update_theme_and_reset_theme_go_through_the_roles_too() {
+        let mut c = app();
+        call(&mut c, |cx| {
+            cx.update_theme::<Shad>(ShadPatch {
+                popover: Some(RED),
+                primary: Some(GREEN),
+            })
+        });
+        assert_eq!(c.tokens().color("surface-overlay"), Some(RED));
+        assert_eq!(colors(&c), ["primary", "surface-overlay"]);
+        // Back to the theme file's: the overlay its color, `primary` gone.
+        call(&mut c, |cx| cx.reset_theme::<Shad>());
+        assert_eq!(c.tokens().color("surface-overlay"), Some(FILE));
+        assert_eq!(colors(&c), ["surface-overlay"]);
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(6.0));
+    }
+
+    /// The functions a component calls take the same path, in order.
+    #[component]
+    fn Sets() -> impl IntoElement {
+        update_theme::<Shad>(ShadPatch {
+            popover: Some(GREEN),
+            primary: Some(GREEN),
+        });
+        reset_theme::<Shad>();
+        set_theme(Shad {
+            popover: RED,
+            ..Shad::default()
+        });
+        view()
+    }
+
+    #[test]
+    fn the_setters_from_a_component_go_through_the_roles_in_order() {
+        let mut c = app();
+        c.mount_root(&Root::new::<Sets>(|| ()));
+        while c.commit().is_some() {}
+        assert_eq!(c.tokens().color("surface-overlay"), Some(RED));
+        // The default `primary` the last one set, as its own name.
+        assert_eq!(c.tokens().color("primary"), Some(Shad::default().primary));
+        assert!(c.tokens().color("popover").is_none());
+    }
+
+    #[test]
+    fn a_registered_type_sets_its_own_tokens_as_before() {
+        // `Sys` writes one overlay and one radius, whatever it is given.
+        let mut c = app();
+        call(&mut c, |cx| cx.set_theme(Sys));
+        assert_eq!(
+            c.tokens().color("surface-overlay"),
+            Some(AdaptiveColor::rgb(0x111111, 0x111111))
+        );
+        assert_eq!(colors(&c), ["surface-overlay"]);
+        assert_eq!(c.tokens().number_in("radius-card", true), Some(14.0));
+        assert_eq!(c.tokens().role_name(role::POPOVER), "surface-overlay");
+    }
+
+    #[test]
+    fn without_a_mapping_the_type_sets_its_own_names() {
+        // No theme type: every role reads the token of its name.
+        let mut c = core();
+        c.set_components(Registry::new());
+        call(&mut c, |cx| {
+            cx.set_theme(Shad {
+                popover: RED,
+                ..Shad::default()
+            })
+        });
+        assert_eq!(c.tokens().color("popover"), Some(RED));
+        assert_eq!(c.tokens().role(role::POPOVER), Some(RED));
+        assert_eq!(c.tokens().number("radius"), Some(10.0));
+        assert!(c.tokens().color("surface-overlay").is_none());
+    }
+
+    /// One token playing two roles, of which the app maps one.
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Flat;
+
+    impl AppTheme for Flat {
+        type Patch = ();
+
+        fn token_specs() -> &'static [TokenSpec] {
+            static SPECS: std::sync::OnceLock<Vec<TokenSpec>> = std::sync::OnceLock::new();
+            SPECS.get_or_init(|| {
+                vec![
+                    TokenSpec::new("surface", TokenKind::Color)
+                        .role(CARD)
+                        .role(role::POPOVER),
+                ]
+            })
+        }
+
+        fn write_tokens(&self, _: &str, out: &mut Tokens) {
+            out.set_color("surface", RED);
+        }
+
+        fn read_tokens(_: &Tokens, _: &str) -> Self {
+            Flat
+        }
+
+        fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
+    }
+
+    #[test]
+    fn a_token_one_of_whose_roles_is_not_mapped_keeps_its_name_too() {
+        let mut c = app();
+        call(&mut c, |cx| cx.set_theme(Flat));
+        assert_eq!(c.tokens().color("surface-overlay"), Some(RED));
+        assert_eq!(c.tokens().color("surface"), Some(RED));
+    }
+
+    #[test]
+    fn a_value_given_for_the_mapped_token_itself_stays() {
+        // Tokens by name beside the role's: the name wins.
+        let mut tokens = Tokens::default();
+        tokens.set_color("popover", RED);
+        tokens.set_color("surface-overlay", GREEN);
+        tokens.set_number("radius", 20.0);
+        tokens.set_dark_number("radius", 8.0);
+        tokens.copy_as("popover", "surface-overlay");
+        tokens.copy_as("radius", "radius-card");
+        assert_eq!(tokens.color("surface-overlay"), Some(GREEN));
+        // A number goes with its dark value.
+        assert_eq!(tokens.number_in("radius-card", false), Some(20.0));
+        assert_eq!(tokens.number_in("radius-card", true), Some(8.0));
+        tokens.remove_named("radius");
+        assert!(tokens.number("radius").is_none() && tokens.number_in("radius", true).is_none());
+    }
+}
+
+/// Theme files and embedding overrides read under a theme set: by the
+/// types' names and kinds, a role's name setting the token it is mapped
+/// onto, `var()` against the types' defaults, an undeclared name left out.
+mod theme_set_files {
+    use super::{app_theme::sets, *};
+    use crate::{Prop, color::rgb, element::role};
+
+    fn light(c: &Core<FakeEngine>, name: &str) -> Option<Color> {
+        c.tokens().color(name).map(|t| Color::from(t.light))
+    }
+
+    fn file(json: &str) -> String {
+        format!(r#"{{ "cssVars": {json} }}"#)
+    }
+
+    #[test]
+    fn a_theme_file_sets_the_types_names_by_kind() {
+        let provider = sets().token_provider().unwrap();
+        let (tokens, mut left_out) = provider
+            .read(Some(&file(
+                r##"{ "light": { "surface-overlay": "#333333", "primary": "#444444", "odds-up": "10px", "brand": "#555555" },
+                      "theme": { "radius-card": "12px", "popover-foreground": "#666666" } }"##,
+            )))
+            .unwrap();
+        left_out.sort();
+        assert_eq!(
+            left_out,
+            [
+                "`brand`: no theme type declares it",
+                "`odds-up`: no color value",
+                "`popover-foreground`: no theme type declares it",
+                "`primary`: no theme type declares it",
+            ]
+        );
+        assert_eq!(
+            tokens
+                .color("surface-overlay")
+                .map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x333333)))
+        );
+        assert_eq!(tokens.number("radius-card"), Some(12.0));
+        // Left out, the type's default stays.
+        assert_eq!(
+            tokens.color("odds-up").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x00aa00)))
+        );
+        assert!(tokens.color("brand").is_none());
+        assert_eq!(tokens.role_name(role::POPOVER), "surface-overlay");
+    }
+
+    #[test]
+    fn a_roles_name_sets_the_token_it_is_mapped_onto() {
+        let provider = sets().token_provider().unwrap();
+        let (tokens, left_out) = provider
+            .read(Some(&file(r##"{ "light": { "popover": "#123456" } }"##)))
+            .unwrap();
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert_eq!(
+            tokens
+                .color("surface-overlay")
+                .map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x123456)))
+        );
+        assert!(tokens.color("popover").is_none());
+    }
+
+    #[test]
+    fn var_names_the_types_defaults() {
+        let provider = sets().token_provider().unwrap();
+        let (tokens, left_out) = provider
+            .read(Some(&file(
+                r##"{ "light": { "odds-up": "var(--surface-overlay)" } }"##,
+            )))
+            .unwrap();
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert_eq!(
+            tokens.color("odds-up").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x111111)))
+        );
+    }
+
+    /// The first frame's tokens (JS reads them before the theme reaches the
+    /// core) and the core's agree, the types' defaults under the file.
+    #[test]
+    fn the_core_and_js_read_the_file_alike() {
+        let mut c = core();
+        c.set_components(sets());
+        let json = file(r##"{ "light": { "odds-up": "#00ff00" } }"##);
+        let read = c.theme_tokens().of(&json).unwrap();
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(json.into()),
+            }],
+        );
+        assert_eq!(&read, &**c.tokens());
+        assert_eq!(light(&c, "odds-up"), Some(Color::from(rgb(0x00ff00))));
+        assert_eq!(
+            light(&c, "surface-overlay"),
+            Some(Color::from(rgb(0x111111)))
+        );
+    }
+
+    /// An embedding app's override by a role's name recolors the token the
+    /// role is mapped onto, and only declared names are read.
+    #[test]
+    fn host_overrides_read_under_the_set() {
+        let mut c = core();
+        c.set_components(sets());
+        c.set_host_theme(Some(&file(
+            r##"{ "light": { "popover": "#abcdef", "brand": "#000000" } }"##,
+        )));
+        assert_eq!(
+            light(&c, "surface-overlay"),
+            Some(Color::from(rgb(0xabcdef)))
+        );
+        assert!(light(&c, "brand").is_none());
+        assert_eq!(
+            c.tokens().role(role::POPOVER).map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0xabcdef)))
+        );
+        // `updateTheme` under the set reads the same way.
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiThemeUpdate(
+                    file(r##"{ "light": { "odds-up": "#0000ff", "brand": "#000000" } }"##).into(),
+                ),
+            }],
+        );
+        assert_eq!(light(&c, "odds-up"), Some(Color::from(rgb(0x0000ff))));
+        assert!(light(&c, "brand").is_none());
+    }
+
+    /// `setTheme` (read whole) leaves out a name no type declares rather
+    /// than refusing the file, and refuses a value it cannot read.
+    #[test]
+    fn set_theme_leaves_undeclared_names_out() {
+        let mut c = core();
+        c.set_components(sets());
+        let theme = c.theme_tokens();
+        let read = theme
+            .checked(&file(
+                r##"{ "light": { "odds-up": "#00ff00", "brand": "#000000" } }"##,
+            ))
+            .unwrap()
+            .unwrap();
+        assert!(read.color("brand").is_none());
+        assert!(
+            theme
+                .checked(&file(r##"{ "light": { "odds-up": "#zz" } }"##))
+                .unwrap()
+                .is_err()
+        );
+    }
+
+    /// A section setting a token and the role mapped onto it keeps the
+    /// token's value; a `var()` of a role names its token.
+    #[test]
+    fn a_tokens_own_name_wins_over_its_roles_and_var_follows_roles() {
+        let provider = sets().token_provider().unwrap();
+        let (tokens, left_out) = provider
+            .read(Some(&file(
+                r##"{ "light": { "surface-overlay": "#123456", "popover": "#654321", "odds-up": "var(--popover)" } }"##,
+            )))
+            .unwrap();
+        assert_eq!(
+            left_out,
+            ["`popover`: the token its role is mapped onto, `surface-overlay`, is set too"]
+        );
+        assert_eq!(
+            tokens
+                .color("surface-overlay")
+                .map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x123456)))
+        );
+        assert_eq!(
+            tokens.color("odds-up").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x123456)))
+        );
+    }
+
+    /// A declared name the file sets and leaves unread is listed.
+    #[test]
+    fn a_declared_name_left_unread_is_listed() {
+        let provider = sets().token_provider().unwrap();
+        let (_, left_out) = provider
+            .read(Some(&file(r##"{ "theme": { "radius-card": "auto" } }"##)))
+            .unwrap();
+        assert_eq!(left_out, ["`radius-card`: no radius value"]);
+    }
+}
+
+/// `resetTheme` with names under a theme set: a role's name is the token it
+/// is mapped onto, as it is in a theme file that sets it.
+mod theme_reset_roles {
+    use super::{app_theme::sets, *};
+    use crate::{Prop, color::rgb};
+
+    fn light(c: &Core<FakeEngine>, name: &str) -> Option<Color> {
+        c.tokens().color(name).map(|t| Color::from(t.light))
+    }
+
+    fn set_root(c: &mut Core<FakeEngine>, prop: Prop) {
+        apply(c, vec![Op::SetProp { id: ROOT_ID, prop }]);
+    }
+
+    fn update(c: &mut Core<FakeEngine>, light: &str) {
+        let file = format!(r#"{{ "cssVars": {{ "light": {light} }} }}"#);
+        set_root(c, Prop::UiThemeUpdate(file.into()));
+    }
+
+    fn reset(c: &mut Core<FakeEngine>, names: &[&str]) {
+        let names = names.iter().map(|n| (*n).into()).collect();
+        set_root(c, Prop::UiThemeReset(Some(names)));
+    }
+
+    #[test]
+    fn a_roles_name_resets_the_token_it_is_mapped_onto() {
+        let mut c = core();
+        c.set_components(sets());
+        let overlay = Some(Color::from(rgb(0x111111)));
+        assert_eq!(light(&c, "surface-overlay"), overlay);
+        // `popover` is the role `surface-overlay` plays: its name sets the
+        // token, and gives it its default back.
+        update(
+            &mut c,
+            r##"{ "popover": "#abcdef", "odds-up": "#0000ff" }"##,
+        );
+        assert_eq!(
+            light(&c, "surface-overlay"),
+            Some(Color::from(rgb(0xabcdef)))
+        );
+        reset(&mut c, &["popover"]);
+        assert_eq!(light(&c, "surface-overlay"), overlay);
+        // Only it: the other token keeps what the app set.
+        assert_eq!(light(&c, "odds-up"), Some(Color::from(rgb(0x0000ff))));
+        // No token of the role's name comes of it.
+        assert!(light(&c, "popover").is_none());
+    }
+
+    #[test]
+    fn a_tokens_own_name_resets_it_as_before() {
+        let mut c = core();
+        c.set_components(sets());
+        update(
+            &mut c,
+            r##"{ "surface-overlay": "#abcdef", "odds-up": "#0000ff" }"##,
+        );
+        reset(&mut c, &["surface-overlay"]);
+        assert_eq!(
+            light(&c, "surface-overlay"),
+            Some(Color::from(rgb(0x111111)))
+        );
+        assert_eq!(light(&c, "odds-up"), Some(Color::from(rgb(0x0000ff))));
+        // Both names of one token, and a name that is neither.
+        update(&mut c, r##"{ "popover": "#abcdef" }"##);
+        reset(&mut c, &["popover", "surface-overlay", "nothing"]);
+        assert_eq!(
+            light(&c, "surface-overlay"),
+            Some(Color::from(rgb(0x111111)))
+        );
+        assert_eq!(light(&c, "odds-up"), Some(Color::from(rgb(0x0000ff))));
+        // Every one.
+        set_root(&mut c, Prop::UiThemeReset(None));
+        assert_eq!(light(&c, "odds-up"), Some(Color::from(rgb(0x00aa00))));
+    }
+
+    /// JS computes the tokens of the frame it is in before the reset
+    /// reaches the core: both read the names alike.
+    #[test]
+    fn the_core_and_js_reset_alike() {
+        let mut c = core();
+        c.set_components(sets());
+        update(
+            &mut c,
+            r##"{ "popover": "#abcdef", "odds-up": "#0000ff" }"##,
+        );
+        let current = (**c.tokens()).clone();
+        let names: Vec<Box<str>> = vec!["popover".into()];
+        let js = c
+            .theme_tokens()
+            .reset(&current, r#"{ "cssVars": {} }"#, Some(&names))
+            .unwrap();
+        reset(&mut c, &["popover"]);
+        assert_eq!(&js, &**c.tokens());
+        assert_eq!(
+            js.color("surface-overlay").map(|t| Color::from(t.light)),
+            Some(Color::from(rgb(0x111111)))
+        );
+    }
+}
+
 mod each_order {
     use super::*;
     use crate::{
@@ -41289,6 +44090,950 @@ mod each_order {
         let reordered = children(&c, parent);
         assert_eq!(&reordered[1..3], &[original[3], original[1]]);
         assert_eq!(MADE.with(Cell::get), 3);
+    }
+}
+
+/// A change of some tokens' values resolves again only what reads one of
+/// them (`Tailwind::set_tokens`): the nodes with classes, the Rust
+/// components' hosts and the elements carrying the app's classes
+/// (`app_class`). The others keep the very class lists they had.
+mod token_classes_by_name {
+    use std::rc::Rc;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::{
+        Prop,
+        element::{Props, Registry, Tokens},
+        prelude::*,
+        tailwind::ClassList,
+    };
+
+    fn tokens(brand: u32, accent: u32) -> Tokens {
+        tokens_with(&[("brand", rgb(brand).into()), ("accent", rgb(accent).into())])
+    }
+
+    fn themed_core() -> Core<FakeEngine> {
+        let mut c = core();
+        c.set_tokens(tokens(0x111111, 0x222222));
+        c
+    }
+
+    /// The class list view `id` is styled with.
+    fn classes(c: &Core<FakeEngine>, id: NodeId) -> Rc<ClassList> {
+        let key = c.key(id).unwrap();
+        c.nodes[key as usize].classes.clone().expect("classes")
+    }
+
+    #[test]
+    fn a_token_resolves_again_only_the_nodes_reading_it() {
+        let mut c = themed_core();
+        view_with_classes(&mut c, 2, "w-10 h-10 bg-brand");
+        view_with_classes(&mut c, 4, "w-10 h-10 bg-accent");
+        view_with_classes(&mut c, 6, "w-10 h-10");
+        c.commit().unwrap();
+        let before = [2, 4, 6].map(|id| classes(&c, id));
+        c.update_tokens(tokens_with(&[("brand", rgb(0x0000ff).into())]));
+        let batch = c.commit().unwrap();
+        assert_eq!(
+            view_style_of(&batch, 2).unwrap().background_color,
+            Color::from(rgb(0x0000ff))
+        );
+        assert!(view_style_of(&batch, 4).is_none() && view_style_of(&batch, 6).is_none());
+        let after = [2, 4, 6].map(|id| classes(&c, id));
+        assert!(!Rc::ptr_eq(&before[0], &after[0]));
+        assert!(Rc::ptr_eq(&before[1], &after[1]));
+        assert!(Rc::ptr_eq(&before[2], &after[2]));
+    }
+
+    #[test]
+    fn every_changed_token_reaches_its_readers() {
+        let mut c = themed_core();
+        view_with_classes(&mut c, 2, "w-10 h-10 bg-brand");
+        view_with_classes(&mut c, 4, "w-10 h-10 border-2 border-accent/50");
+        c.commit().unwrap();
+        c.set_tokens(tokens(0x00ff00, 0xff0000));
+        let batch = c.commit().unwrap();
+        assert_eq!(
+            view_style_of(&batch, 2).unwrap().background_color,
+            Color::from(rgb(0x00ff00))
+        );
+        assert!(view_style_of(&batch, 4).is_some());
+    }
+
+    #[test]
+    fn a_new_name_resolves_the_classes_that_were_unknown() {
+        let mut c = themed_core();
+        view_with_classes(&mut c, 2, "w-10 h-10 bg-extra");
+        view_with_classes(&mut c, 4, "w-10 h-10 bg-accent");
+        c.commit().unwrap();
+        let accent = classes(&c, 4);
+        let mut with_extra = tokens(0x111111, 0x222222);
+        with_extra.set_color("extra", rgb(0x0000ff).into());
+        c.set_tokens(with_extra);
+        let batch = c.commit().unwrap();
+        assert_eq!(
+            view_style_of(&batch, 2).unwrap().background_color,
+            Color::from(rgb(0x0000ff))
+        );
+        // Every class was resolved again: the names changed.
+        assert!(!Rc::ptr_eq(&accent, &classes(&c, 4)));
+    }
+
+    /// A view styling a part with the app's classes.
+    #[derive(Clone, PartialEq, Props)]
+    struct CardProps {
+        #[prop(default)]
+        heading_class: crate::element::Prop<Option<SharedString>>,
+    }
+
+    #[component]
+    fn Card(props: CardProps) -> impl IntoElement {
+        view().child(view().border_2().app_class(props.heading_class))
+    }
+
+    /// A `Card` hosted by view 2, with the app's classes `host` on the
+    /// host and `heading` on its heading.
+    fn core_with_card(host: &str, heading: &str) -> Core<FakeEngine> {
+        let mut c = themed_core();
+        let mut registry = Registry::new();
+        registry.register::<Card>();
+        c.set_components(registry);
+        // The registry has no tokens of its own: the app's stay.
+        c.set_tokens(tokens(0x111111, 0x222222));
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::View,
+                },
+                Op::SetProp {
+                    id: 2,
+                    prop: Prop::Component(std::any::type_name::<Card>().into()),
+                },
+                Op::SetProp {
+                    id: 2,
+                    prop: rust_prop::<CardProps>("headingClass", Some(json!(heading))),
+                },
+                class_op(2, host),
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+        c
+    }
+
+    /// The heading's view: the host's only child.
+    fn heading(c: &Core<FakeEngine>) -> NodeId {
+        let key = c.key(2).unwrap();
+        let child = c.nodes[key as usize].children[0];
+        c.nodes[child as usize].id
+    }
+
+    #[test]
+    fn the_apps_classes_on_an_element_follow_the_tokens_they_read() {
+        let mut c = core_with_card("p-2", "bg-brand");
+        c.commit().unwrap();
+        let id = heading(&c);
+        let before = classes(&c, id);
+        // Another token: the element keeps its list.
+        c.update_tokens(tokens_with(&[("accent", rgb(0x00ff00).into())]));
+        if let Some(batch) = c.commit() {
+            assert!(view_style_of(&batch, id).is_none());
+        }
+        assert!(Rc::ptr_eq(&before, &classes(&c, id)));
+        // Its own: resolved again, with its own border still there.
+        c.update_tokens(tokens_with(&[("brand", rgb(0x0000ff).into())]));
+        let batch = c.commit().unwrap();
+        let style = view_style_of(&batch, id).unwrap();
+        assert_eq!(style.background_color, Color::from(rgb(0x0000ff)));
+        assert_eq!(style.borders.widths.to_array().map(|w| w.0), [2.0; 4]);
+    }
+
+    #[test]
+    fn the_apps_classes_on_a_host_follow_the_tokens_they_read() {
+        let mut c = core_with_card("bg-accent", "p-2");
+        c.commit().unwrap();
+        let user = |c: &Core<FakeEngine>| c.components.instances[&2].user.clone().expect("classes");
+        let before = user(&c);
+        c.update_tokens(tokens_with(&[("brand", rgb(0x0000ff).into())]));
+        if let Some(batch) = c.commit() {
+            assert!(view_style_of(&batch, 2).is_none());
+        }
+        assert!(Rc::ptr_eq(&before, &user(&c)));
+        c.update_tokens(tokens_with(&[("accent", rgb(0x00ff00).into())]));
+        let batch = c.commit().unwrap();
+        assert_eq!(
+            view_style_of(&batch, 2).unwrap().background_color,
+            Color::from(rgb(0x00ff00))
+        );
+        assert!(!Rc::ptr_eq(&before, &user(&c)));
+    }
+}
+
+/// A view with an appearance of its own (`Prop::Appearance` on a view that
+/// is not the root: a `ThemeScope`'s): it and the views in it are shown
+/// light or dark whatever the surface shows.
+mod scope_appearance {
+    use super::*;
+    use crate::{platform::Appearance, tailwind::ClassEnvironment};
+
+    const WHITE: Color = Color(0xffff_ffff);
+    const BLACK: Color = Color(0x0000_00ff);
+
+    fn child(c: &mut Core<FakeEngine>, parent: NodeId, id: NodeId, classes: &str) {
+        apply(
+            c,
+            vec![
+                Op::Create { id, tag: Tag::View },
+                class_op(id, classes),
+                Op::Insert {
+                    parent,
+                    child: id,
+                    before: None,
+                },
+            ],
+        );
+    }
+
+    fn appearance(c: &mut Core<FakeEngine>, id: NodeId, appearance: Appearance) {
+        apply(
+            c,
+            vec![Op::SetProp {
+                id,
+                prop: Prop::Appearance(appearance),
+            }],
+        );
+    }
+
+    fn background(batch: &MountBatch, id: NodeId) -> Option<Color> {
+        view_style_of(batch, id).map(|s| s.background_color)
+    }
+
+    fn system_dark(c: &mut Core<FakeEngine>, dark: bool) {
+        c.set_class_environment(ClassEnvironment {
+            dark,
+            ..Default::default()
+        });
+    }
+
+    /// A scope (2) with a view in it (3), and a view beside it (4).
+    fn scoped() -> Core<FakeEngine> {
+        let mut c = core();
+        child(&mut c, ROOT_ID, 2, "bg-white dark:bg-black");
+        child(&mut c, 2, 3, "bg-white dark:bg-black");
+        child(&mut c, ROOT_ID, 4, "bg-white dark:bg-black");
+        c.commit().unwrap();
+        c
+    }
+
+    #[test]
+    fn a_views_appearance_is_its_own_and_its_subtrees() {
+        let mut c = scoped();
+        appearance(&mut c, 2, Appearance::Dark);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 2), Some(BLACK));
+        assert_eq!(background(&batch, 3), Some(BLACK));
+        // The view beside it is the surface's, and is not styled again.
+        assert_eq!(background(&batch, 4), None);
+        // The surface is not told another appearance: the view is.
+        assert!(
+            !batch
+                .items
+                .iter()
+                .any(|i| matches!(i, MountItem::Appearance { .. }))
+        );
+        assert!(batch.items.iter().any(|i| matches!(
+            i,
+            MountItem::ViewProps { id: 2, props } if props.appearance == Appearance::Dark
+        )));
+        // Without one of its own again, it is shown as the surface.
+        appearance(&mut c, 2, Appearance::System);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 2), Some(WHITE));
+        assert_eq!(background(&batch, 3), Some(WHITE));
+        assert!(batch.items.iter().any(|i| matches!(
+            i,
+            MountItem::ViewProps { id: 2, props } if props.appearance == Appearance::System
+        )));
+    }
+
+    #[test]
+    fn the_surfaces_appearance_leaves_a_scope_as_it_is() {
+        let mut c = scoped();
+        appearance(&mut c, 2, Appearance::Light);
+        // Light in a light surface: nothing to show again.
+        assert!(c.commit().is_none_or(|b| background(&b, 2).is_none()));
+        system_dark(&mut c, true);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 4), Some(BLACK));
+        assert_eq!(background(&batch, 2), None);
+        assert_eq!(background(&batch, 3), None);
+        // The app's own appearance does not reach into it either.
+        appearance(&mut c, ROOT_ID, Appearance::Light);
+        appearance(&mut c, ROOT_ID, Appearance::Dark);
+        assert!(c.commit().is_none_or(|b| background(&b, 3).is_none()));
+    }
+
+    #[test]
+    fn the_nearest_appearance_wins() {
+        let mut c = scoped();
+        child(&mut c, 3, 5, "bg-white dark:bg-black");
+        c.commit().unwrap();
+        appearance(&mut c, 3, Appearance::Light);
+        appearance(&mut c, 2, Appearance::Dark);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 2), Some(BLACK));
+        // Light before and after: shown as it was.
+        assert_eq!(background(&batch, 3), None);
+        assert_eq!(background(&batch, 5), None);
+        // The inner one gone: the outer one's.
+        appearance(&mut c, 3, Appearance::System);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 3), Some(BLACK));
+        assert_eq!(background(&batch, 5), Some(BLACK));
+    }
+
+    #[test]
+    fn a_view_moved_into_a_scope_takes_its_appearance() {
+        let mut c = scoped();
+        appearance(&mut c, 2, Appearance::Dark);
+        c.commit().unwrap();
+        // A new view made in it.
+        child(&mut c, 3, 5, "bg-white dark:bg-black");
+        assert_eq!(background(&c.commit().unwrap(), 5), Some(BLACK));
+        // The view beside the scope moves in, then out again.
+        apply(
+            &mut c,
+            vec![
+                Op::Remove {
+                    parent: ROOT_ID,
+                    child: 4,
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 4,
+                    before: None,
+                },
+            ],
+        );
+        assert_eq!(background(&c.commit().unwrap(), 4), Some(BLACK));
+        apply(
+            &mut c,
+            vec![
+                Op::Remove {
+                    parent: 2,
+                    child: 4,
+                },
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 4,
+                    before: None,
+                },
+            ],
+        );
+        assert_eq!(background(&c.commit().unwrap(), 4), Some(WHITE));
+    }
+
+    #[test]
+    fn token_classes_take_the_scopes_appearance() {
+        let mut c = core();
+        child(&mut c, ROOT_ID, 2, "bg-background");
+        child(&mut c, 2, 3, "bg-primary border border-border");
+        c.commit().unwrap();
+        appearance(&mut c, 2, Appearance::Dark);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 2), Some(Color(0x0a0a_0aff)));
+        let inner = view_style_of(&batch, 3).unwrap();
+        assert_eq!(inner.background_color, Color(0xfafa_faff));
+        assert_eq!(inner.borders.colors[0], Color(0x2626_26ff));
+    }
+
+    #[test]
+    fn a_view_whose_classes_ignore_the_appearance_is_left_alone() {
+        let mut c = core();
+        child(&mut c, ROOT_ID, 2, "p-2");
+        child(&mut c, 2, 3, "bg-white");
+        c.commit().unwrap();
+        appearance(&mut c, 2, Appearance::Dark);
+        let batch = c.commit().unwrap();
+        assert_eq!(view_style_of(&batch, 2), None);
+        assert_eq!(view_style_of(&batch, 3), None);
+    }
+}
+
+/// [`crate::element::ThemeScope`]: what reads the appearance in Rust reads
+/// the scope's, and a component's theme colors take its side.
+mod theme_scope {
+    use super::*;
+    use crate::{
+        element::{Environment, Root},
+        platform::ColorScheme,
+        prelude::*,
+    };
+
+    thread_local! {
+        static SCHEME: Cell<Option<Signal<Option<ColorScheme>>>> = const { Cell::new(None) };
+    }
+
+    /// A text saying the appearance it reads, on a theme color.
+    #[component]
+    fn Reader() -> impl IntoElement {
+        view()
+            .bg(AdaptiveColor::rgb(0xffffff, 0x000000))
+            .child(text(|| if dark() { "dark" } else { "light" }))
+    }
+
+    /// A reader beside a scope with a reader, and a scope in the scope.
+    #[component]
+    fn App() -> impl IntoElement {
+        let scheme = signal(Some(ColorScheme::Dark));
+        SCHEME.with(|saved| saved.set(Some(scheme)));
+        view().child(reader()).child(
+            theme_scope()
+                .appearance(scheme)
+                .child(reader())
+                .child(theme_scope().child(reader())),
+        )
+    }
+
+    fn texts(batch: &MountBatch) -> Vec<String> {
+        batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::Text { text, .. } => Some(text.text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn backgrounds(batch: &MountBatch) -> Vec<Color> {
+        batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::ViewStyle { style, .. } if style.background_color != Color(0) => {
+                    Some(style.background_color)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn scheme(c: &mut Core<FakeEngine>, scheme: Option<ColorScheme>) {
+        let _entered = c.components.runtime.enter();
+        SCHEME.with(Cell::get).unwrap().set(scheme);
+    }
+
+    const WHITE: Color = Color(0xffff_ffff);
+    const BLACK: Color = Color(0x0000_00ff);
+
+    #[test]
+    fn what_a_scope_holds_reads_and_draws_its_appearance() {
+        let mut c = core();
+        c.mount_root(&Root::of::<App>());
+        let batch = c.commit().unwrap();
+        // Outside, in the scope, and in the scope without an appearance
+        // of its own inside it.
+        assert_eq!(texts(&batch), ["light", "dark", "dark"]);
+        assert_eq!(backgrounds(&batch), [WHITE, BLACK, BLACK]);
+    }
+
+    #[test]
+    fn a_scopes_appearance_changes_under_what_it_holds() {
+        let mut c = core();
+        c.mount_root(&Root::of::<App>());
+        c.commit().unwrap();
+        scheme(&mut c, Some(ColorScheme::Light));
+        let batch = c.commit().unwrap();
+        assert_eq!(texts(&batch), ["light", "light"]);
+        assert_eq!(backgrounds(&batch), [WHITE, WHITE]);
+        // The surface turns dark: only the reader outside follows.
+        c.set_environment(Environment {
+            dark: true,
+            ..Default::default()
+        });
+        c.set_class_environment(crate::tailwind::ClassEnvironment {
+            dark: true,
+            ..Default::default()
+        });
+        let batch = c.commit().unwrap();
+        assert_eq!(texts(&batch), ["dark"]);
+        assert_eq!(backgrounds(&batch), [BLACK]);
+        // Without an appearance of its own, the scope is the surface's.
+        scheme(&mut c, None);
+        let batch = c.commit().unwrap();
+        assert_eq!(texts(&batch), ["dark", "dark"]);
+        assert_eq!(backgrounds(&batch), [BLACK, BLACK]);
+    }
+}
+
+/// A view with design tokens of its own (`Prop::ScopeTokens`, a
+/// `ThemeScope`'s): the classes of theme tokens in it resolve with its
+/// values, and only those that read a token it changes.
+mod scope_tokens {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::element::{AdaptiveColor, Tokens};
+
+    const VIOLET: Color = Color(0x7c3a_edff);
+    const PINK: Color = Color(0xdb27_77ff);
+    /// The sample theme's `primary`, light.
+    const PRIMARY: Color = Color(0x1717_17ff);
+
+    fn child(c: &mut Core<FakeEngine>, parent: NodeId, id: NodeId, classes: &str) {
+        apply(
+            c,
+            vec![
+                Op::Create { id, tag: Tag::View },
+                class_op(id, classes),
+                Op::Insert {
+                    parent,
+                    child: id,
+                    before: None,
+                },
+            ],
+        );
+    }
+
+    /// The surface's tokens with `primary` a color of the scope's own.
+    fn with_primary(c: &Core<FakeEngine>, color: Color) -> Option<Arc<Tokens>> {
+        let mut tokens = (**c.tokens()).clone();
+        tokens.set_color("primary", AdaptiveColor::rgb(color.0 >> 8, color.0 >> 8));
+        Some(Arc::new(tokens))
+    }
+
+    fn scope(c: &mut Core<FakeEngine>, id: NodeId, tokens: Option<Arc<Tokens>>) {
+        apply(
+            c,
+            vec![Op::SetProp {
+                id,
+                prop: Prop::ScopeTokens(tokens),
+            }],
+        );
+    }
+
+    fn background(batch: &MountBatch, id: NodeId) -> Option<Color> {
+        view_style_of(batch, id).map(|s| s.background_color)
+    }
+
+    /// A scope (2) with a view reading `primary` (3) and one reading
+    /// `border` (4) in it, and a view reading `primary` beside it (5).
+    fn scoped() -> Core<FakeEngine> {
+        let mut c = core();
+        child(&mut c, ROOT_ID, 2, "bg-primary");
+        child(&mut c, 2, 3, "bg-primary");
+        child(&mut c, 2, 4, "bg-border");
+        child(&mut c, ROOT_ID, 5, "bg-primary");
+        c.commit().unwrap();
+        c
+    }
+
+    #[test]
+    fn classes_in_a_scope_resolve_with_its_tokens() {
+        let mut c = scoped();
+        let violet = with_primary(&c, VIOLET);
+        scope(&mut c, 2, violet);
+        let batch = c.commit().unwrap();
+        // The scope itself and the view in it; not the view beside it, and
+        // not the one reading a token the scope leaves as it is.
+        assert_eq!(background(&batch, 2), Some(VIOLET));
+        assert_eq!(background(&batch, 3), Some(VIOLET));
+        assert_eq!(background(&batch, 4), None);
+        assert_eq!(background(&batch, 5), None);
+        // A list that reads nothing the scope changes is the surface's own.
+        let (shared, _) = c.tailwind.get("bg-border");
+        let key = c.key(4).unwrap() as usize;
+        assert!(Rc::ptr_eq(c.nodes[key].classes.as_ref().unwrap(), &shared));
+        // Without tokens of its own again: the surface's.
+        scope(&mut c, 2, None);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 2), Some(PRIMARY));
+        assert_eq!(background(&batch, 3), Some(PRIMARY));
+        assert_eq!(background(&batch, 5), None);
+    }
+
+    #[test]
+    fn a_scopes_new_values_restyle_only_what_reads_them() {
+        let mut c = scoped();
+        let violet = with_primary(&c, VIOLET);
+        scope(&mut c, 2, violet);
+        c.commit().unwrap();
+        let pink = with_primary(&c, PINK);
+        scope(&mut c, 2, pink.clone());
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 3), Some(PINK));
+        assert_eq!(background(&batch, 4), None);
+        assert_eq!(background(&batch, 5), None);
+        // The same values again: nothing to show.
+        scope(&mut c, 2, pink);
+        assert!(c.commit().is_none_or(|b| background(&b, 3).is_none()));
+    }
+
+    #[test]
+    fn the_nearest_scope_wins_and_a_moved_view_takes_the_scope_it_is_in() {
+        let mut c = scoped();
+        let violet = with_primary(&c, VIOLET);
+        let pink = with_primary(&c, PINK);
+        scope(&mut c, 2, violet);
+        scope(&mut c, 3, pink);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 2), Some(VIOLET));
+        assert_eq!(background(&batch, 3), Some(PINK));
+        // A view made in the inner scope, and the one beside the scopes
+        // moved into the outer one, then out again.
+        child(&mut c, 3, 6, "bg-primary");
+        assert_eq!(background(&c.commit().unwrap(), 6), Some(PINK));
+        let moved = |c: &mut Core<FakeEngine>, from, to| {
+            apply(
+                c,
+                vec![
+                    Op::Remove {
+                        parent: from,
+                        child: 5,
+                    },
+                    Op::Insert {
+                        parent: to,
+                        child: 5,
+                        before: None,
+                    },
+                ],
+            );
+            background(&c.commit().unwrap(), 5)
+        };
+        assert_eq!(moved(&mut c, ROOT_ID, 2), Some(VIOLET));
+        assert_eq!(moved(&mut c, 2, ROOT_ID), Some(PRIMARY));
+    }
+
+    #[test]
+    fn the_surfaces_tokens_reach_what_a_scope_leaves_alone() {
+        let mut c = scoped();
+        let violet = with_primary(&c, VIOLET);
+        scope(&mut c, 2, violet);
+        c.commit().unwrap();
+        // The app's theme changes `border` and `primary`. The scope's
+        // component gives its tokens again, its own `primary` over the new
+        // ones: the view reading `border` in it follows the app, the one
+        // reading `primary` keeps the scope's.
+        let mut theme = (**c.tokens()).clone();
+        theme.set_color("border", AdaptiveColor::rgb(0x00ff00, 0x00ff00));
+        theme.set_color("primary", AdaptiveColor::rgb(0x0000ff, 0x0000ff));
+        c.set_tokens(theme);
+        let violet = with_primary(&c, VIOLET);
+        scope(&mut c, 2, violet);
+        let batch = c.commit().unwrap();
+        assert_eq!(background(&batch, 5), Some(Color(0x0000_ffff)));
+        assert_eq!(background(&batch, 4), Some(Color(0x00ff_00ff)));
+        assert!(background(&batch, 3).is_none_or(|color| color == VIOLET));
+        // `border` is the surface's again in the scope: its list is shared.
+        let (shared, _) = c.tailwind.get("bg-border");
+        let key = c.key(4).unwrap() as usize;
+        assert!(Rc::ptr_eq(c.nodes[key].classes.as_ref().unwrap(), &shared));
+    }
+
+    #[test]
+    fn a_scope_resolves_variants_and_the_appearance_with_its_values() {
+        let mut c = core();
+        child(&mut c, ROOT_ID, 2, "p-2");
+        child(
+            &mut c,
+            2,
+            3,
+            "bg-white hover:bg-primary/50 border border-primary",
+        );
+        c.commit().unwrap();
+        let mut tokens = (**c.tokens()).clone();
+        tokens.set_color("primary", AdaptiveColor::rgb(0x7c3aed, 0xdb2777));
+        scope(&mut c, 2, Some(Arc::new(tokens)));
+        let batch = c.commit().unwrap();
+        assert_eq!(view_style_of(&batch, 3).unwrap().borders.colors[0], VIOLET);
+        // Dark in the scope: its dark value.
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: 2,
+                prop: Prop::Appearance(crate::platform::Appearance::Dark),
+            }],
+        );
+        let batch = c.commit().unwrap();
+        assert_eq!(view_style_of(&batch, 3).unwrap().borders.colors[0], PINK);
+    }
+}
+
+/// [`crate::element::ThemeScope`] with a theme: what reads the tokens in
+/// Rust reads the scope's, and the app's classes on its elements resolve
+/// with them.
+mod theme_scope_tokens {
+    use super::*;
+    use crate::{
+        element::{Root, Tokens},
+        prelude::*,
+    };
+
+    thread_local! {
+        static THEME: Cell<Option<Signal<Option<ScopeTheme>>>> = const { Cell::new(None) };
+    }
+
+    fn hex(tokens: &Tokens, name: &str) -> String {
+        tokens.color(name).map_or_else(
+            || "none".into(),
+            |c| format!("{:06x}", Color::from(c.light).0 >> 8),
+        )
+    }
+
+    /// A view in the app's `bg-primary`, saying the tokens it reads.
+    #[component]
+    fn Reader() -> impl IntoElement {
+        view().app_class(Some("bg-primary".into())).child(text(|| {
+            let tokens = tokens();
+            format!(
+                "{} {} {}",
+                hex(&tokens, "primary"),
+                hex(&tokens, "border"),
+                hex(&tokens, "nope")
+            )
+        }))
+    }
+
+    fn with(colors: &[(&str, u32)]) -> ScopeTheme {
+        let mut tokens = Tokens::default();
+        for (name, color) in colors {
+            tokens.set_color(name, AdaptiveColor::rgb(*color, *color));
+        }
+        tokens.into()
+    }
+
+    /// A reader beside a scope with its own `primary` (and a name the
+    /// theme lacks), and in it a scope with its own `border`.
+    #[component]
+    fn App() -> impl IntoElement {
+        let theme = signal(Some(with(&[("primary", 0x7c3aed), ("nope", 0x123456)])));
+        THEME.with(|saved| saved.set(Some(theme)));
+        view().child(reader()).child(
+            theme_scope().theme(theme).child(reader()).child(
+                theme_scope()
+                    .theme(Some(with(&[("border", 0x00ff00)])))
+                    .child(reader()),
+            ),
+        )
+    }
+
+    /// The texts the batch shows, sorted (which reader runs first is no
+    /// contract).
+    fn texts(batch: &MountBatch) -> Vec<String> {
+        let mut texts: Vec<String> = batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::Text { text, .. } => Some(text.text.clone()),
+                _ => None,
+            })
+            .collect();
+        texts.sort();
+        texts
+    }
+
+    fn backgrounds(batch: &MountBatch) -> Vec<Color> {
+        batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::ViewStyle { style, .. } if style.background_color != Color(0) => {
+                    Some(style.background_color)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn theme(c: &mut Core<FakeEngine>, theme: Option<ScopeTheme>) -> MountBatch {
+        {
+            let _entered = c.components.runtime.enter();
+            THEME.with(Cell::get).unwrap().set(theme);
+        }
+        c.commit().unwrap()
+    }
+
+    const PRIMARY: Color = Color(0x1717_17ff);
+    const VIOLET: Color = Color(0x7c3a_edff);
+    const PINK: Color = Color(0xdb27_77ff);
+
+    #[test]
+    fn what_a_scope_holds_reads_and_draws_its_tokens() {
+        let mut c = core();
+        c.mount_root(&Root::of::<App>());
+        let batch = c.commit().unwrap();
+        // Outside; in the scope (the name the theme lacks is left out);
+        // in the scope inside it, which starts from the outer one's.
+        assert_eq!(
+            texts(&batch),
+            [
+                "171717 e5e5e5 none",
+                "7c3aed 00ff00 none",
+                "7c3aed e5e5e5 none"
+            ]
+        );
+        assert_eq!(backgrounds(&batch), [PRIMARY, VIOLET, VIOLET]);
+    }
+
+    #[test]
+    fn a_scopes_theme_changes_under_what_it_holds() {
+        let mut c = core();
+        c.mount_root(&Root::of::<App>());
+        c.commit().unwrap();
+        let batch = theme(&mut c, Some(with(&[("primary", 0xdb2777)])));
+        assert_eq!(texts(&batch), ["db2777 00ff00 none", "db2777 e5e5e5 none"]);
+        assert_eq!(backgrounds(&batch), [PINK, PINK]);
+        // Without a theme of its own it is drawn with the app's.
+        let batch = theme(&mut c, None);
+        assert_eq!(texts(&batch), ["171717 00ff00 none", "171717 e5e5e5 none"]);
+        assert_eq!(backgrounds(&batch), [PRIMARY, PRIMARY]);
+    }
+
+    #[test]
+    fn the_apps_theme_reaches_the_tokens_a_scope_leaves_alone() {
+        let mut c = core();
+        c.mount_root(&Root::of::<App>());
+        c.commit().unwrap();
+        let mut app = (**c.tokens()).clone();
+        app.set_color("primary", AdaptiveColor::rgb(0x0000ff, 0x0000ff));
+        app.set_color("border", AdaptiveColor::rgb(0xff0000, 0xff0000));
+        c.set_tokens(app);
+        let batch = c.commit().unwrap();
+        // The app's `border` in the outer scope, which keeps its `primary`;
+        // the inner one sets both and says nothing new.
+        assert_eq!(texts(&batch), ["0000ff ff0000 none", "7c3aed ff0000 none"]);
+        // Only the reader outside is drawn in another color.
+        assert_eq!(backgrounds(&batch), [Color(0x0000_ffff)]);
+    }
+}
+
+/// `Styled::adaptive_gradient`: gradients per appearance as a view's
+/// background, a theme's gradient token among them.
+mod reactive_gradient {
+    use super::*;
+    use crate::{
+        effects::Gradient,
+        element::{AdaptiveGradient, Root, Tokens},
+        prelude::*,
+    };
+
+    fn css(css: &str) -> Vec<Gradient> {
+        crate::css::gradients(css).unwrap()
+    }
+
+    #[component]
+    fn Hero() -> impl IntoElement {
+        view().size_10().adaptive_gradient(move || {
+            tokens()
+                .gradient("background-image-hero")
+                .cloned()
+                .unwrap_or_default()
+        })
+    }
+
+    #[component]
+    fn Still() -> impl IntoElement {
+        view().size_10().adaptive_gradient(
+            AdaptiveGradient::parse("linear-gradient(to right, #ff0000, #0000ff)").unwrap(),
+        )
+    }
+
+    /// The background gradients of the batch's views.
+    fn images(batch: &MountBatch) -> Vec<Vec<Gradient>> {
+        batch
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::ViewStyle { style, .. } => {
+                    style.effects.as_ref().map(|e| e.background_images.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn themed(light: &str, dark: &str) -> Tokens {
+        let mut t = crate::element::tokens::sample();
+        t.set_gradient(
+            "background-image-hero",
+            AdaptiveGradient::new(css(light), css(dark)),
+        );
+        t
+    }
+
+    const LIGHT: &str = "linear-gradient(135deg, #7c3aed, #db2777)";
+    const DARK: &str = "linear-gradient(135deg, #a78bfa, #f472b6)";
+
+    #[test]
+    fn an_adaptive_gradient_follows_the_appearance_and_the_theme() {
+        let mut c = core();
+        c.set_tokens(themed(LIGHT, DARK));
+        c.mount_root(&Root::of::<Hero>());
+        let batch = c.commit().unwrap();
+        assert_eq!(images(&batch), [css(LIGHT)]);
+        c.set_class_environment(crate::tailwind::ClassEnvironment {
+            dark: true,
+            ..Default::default()
+        });
+        let batch = c.commit().unwrap();
+        assert_eq!(images(&batch), [css(DARK)]);
+        // A new theme's gradient reaches the binding that read it.
+        c.set_tokens(themed(LIGHT, "radial-gradient(#ffffff, #000000)"));
+        let mut seen = Vec::new();
+        while let Some(batch) = c.commit() {
+            seen.extend(images(&batch));
+        }
+        assert_eq!(seen.last(), Some(&css("radial-gradient(#ffffff, #000000)")));
+    }
+
+    #[test]
+    fn gradients_given_once_are_the_same_in_both_appearances() {
+        let mut c = core();
+        c.mount_root(&Root::of::<Still>());
+        let batch = c.commit().unwrap();
+        let still = css("linear-gradient(to right, #ff0000, #0000ff)");
+        assert_eq!(images(&batch), [still]);
+        c.set_class_environment(crate::tailwind::ClassEnvironment {
+            dark: true,
+            ..Default::default()
+        });
+        // Nothing depends on the appearance: nothing is sent.
+        assert!(c.commit().is_none_or(|b| images(&b).is_empty()));
+    }
+
+    #[test]
+    fn a_token_class_and_token_draw_the_same_gradient() {
+        let mut c = core();
+        c.set_tokens(themed(LIGHT, DARK));
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::View,
+                },
+                class_op(2, "bg-hero"),
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+        let batch = c.commit().unwrap();
+        assert_eq!(images(&batch), [css(LIGHT)]);
+        // A change of the token restyles the class that reads it.
+        c.set_tokens(themed("radial-gradient(#ffffff, #000000)", DARK));
+        let batch = c.commit().unwrap();
+        assert_eq!(images(&batch), [css("radial-gradient(#ffffff, #000000)")]);
     }
 }
 
@@ -42144,6 +45889,191 @@ mod first_mount {
             runs.sort_by(f64::total_cmp);
             println!("first mount n={n}: {:.1} ms", runs[2]);
         }
+    }
+}
+
+/// A part's classes (a page's `headerClass`, a list's `contentClass`) are
+/// resolved with the design tokens of the `ThemeScope` their view is in.
+mod scope_part_classes {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::element::{AdaptiveColor, Tokens};
+
+    const VIOLET: Color = Color(0x7c3a_edff);
+    const PINK: Color = Color(0xdb27_77ff);
+    /// The sample theme's `primary`, light.
+    const PRIMARY: Color = Color(0x1717_17ff);
+
+    /// The surface's tokens with `primary` a color of the scope's own.
+    fn with_primary(c: &Core<FakeEngine>, color: Color) -> Option<Arc<Tokens>> {
+        let mut tokens = (**c.tokens()).clone();
+        tokens.set_color("primary", AdaptiveColor::rgb(color.0 >> 8, color.0 >> 8));
+        Some(Arc::new(tokens))
+    }
+
+    fn scope(c: &mut Core<FakeEngine>, tokens: Option<Arc<Tokens>>) {
+        apply(
+            c,
+            vec![Op::SetProp {
+                id: 2,
+                prop: Prop::ScopeTokens(tokens),
+            }],
+        );
+    }
+
+    /// View 2, to be a scope, around a stack (3) with screen 4, its
+    /// header's classes `names`.
+    fn page(names: &str) -> Core<FakeEngine> {
+        let mut c = core();
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::View,
+                },
+                style_op(2, &[("flex", StyleValue::Number(1.0))]),
+                Op::Create {
+                    id: 3,
+                    tag: Tag::Stack,
+                },
+                style_op(3, &[("flex", StyleValue::Number(1.0))]),
+                Op::Create {
+                    id: 4,
+                    tag: Tag::Screen,
+                },
+                Op::SetProp {
+                    id: 4,
+                    prop: Prop::HeaderClass(names.into()),
+                },
+                Op::Insert {
+                    parent: 3,
+                    child: 4,
+                    before: None,
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 3,
+                    before: None,
+                },
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+        c
+    }
+
+    /// The header's background a batch sends for screen 4.
+    fn header(batch: Option<MountBatch>) -> Option<Option<Color>> {
+        batch?.items.iter().find_map(|i| match i {
+            MountItem::ScreenConfig { id: 4, config } => Some(config.background_color),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_header_in_a_scope_takes_its_tokens() {
+        let mut c = page("bg-primary");
+        assert_eq!(header(c.commit()), Some(Some(PRIMARY)));
+        // The view around it becomes a scope with a `primary` of its own.
+        let violet = with_primary(&c, VIOLET);
+        scope(&mut c, violet);
+        assert_eq!(header(c.commit()), Some(Some(VIOLET)));
+        // The scope's value changes.
+        let pink = with_primary(&c, PINK);
+        scope(&mut c, pink);
+        assert_eq!(header(c.commit()), Some(Some(PINK)));
+        // The surface's `border` changes: the header reads `primary`, which
+        // is the scope's.
+        let mut tokens = (**c.tokens()).clone();
+        tokens.set_color("border", AdaptiveColor::rgb(0x00ff00, 0x00ff00));
+        c.set_tokens(tokens);
+        assert_eq!(header(c.commit()), None);
+        // No scope any more: the surface's again.
+        scope(&mut c, None);
+        assert_eq!(header(c.commit()), Some(Some(PRIMARY)));
+    }
+
+    #[test]
+    fn a_header_set_in_a_scope_starts_with_its_tokens() {
+        let mut c = page("bg-border");
+        let violet = with_primary(&c, VIOLET);
+        scope(&mut c, violet);
+        c.commit();
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: 4,
+                prop: Prop::HeaderClass("bg-primary".into()),
+            }],
+        );
+        assert_eq!(header(c.commit()), Some(Some(VIOLET)));
+    }
+
+    #[test]
+    fn a_header_reading_what_the_scope_leaves_is_not_sent_again() {
+        let mut c = page("bg-border");
+        c.commit();
+        let violet = with_primary(&c, VIOLET);
+        scope(&mut c, violet);
+        assert_eq!(header(c.commit()), None);
+    }
+
+    #[test]
+    fn a_lists_content_in_a_scope_takes_its_tokens() {
+        let mut c = core();
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::View,
+                },
+                style_op(2, &[("flex", StyleValue::Number(1.0))]),
+                Op::Create {
+                    id: 3,
+                    tag: Tag::List,
+                },
+                Op::SetProp {
+                    id: 3,
+                    prop: Prop::ListContentClass("p-(--radius)".into()),
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 3,
+                    before: None,
+                },
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+        c.commit();
+        let padding = |c: &Core<FakeEngine>| {
+            let key = c.key(3).unwrap();
+            c.nodes[key as usize]
+                .list
+                .as_ref()
+                .unwrap()
+                .content
+                .padding
+                .top
+        };
+        assert_eq!(padding(&c), px(12.0));
+        let mut tokens = (**c.tokens()).clone();
+        tokens.set_number("radius", 20.0);
+        scope(&mut c, Some(Arc::new(tokens)));
+        c.commit();
+        assert_eq!(padding(&c), px(20.0));
+        scope(&mut c, None);
+        c.commit();
+        assert_eq!(padding(&c), px(12.0));
     }
 }
 

@@ -787,6 +787,25 @@ fn commit(key: u64, id: nsh_core::NodeId) {
     crate::surface::quiet(|| view.commit_bounds(origin.0, origin.1));
 }
 
+/// Whether `view` is shown dark, for its indicator: as its `own` appearance
+/// says, else the nearest view around it with one (a `ThemeScope`), else
+/// as the surface is. `view`'s own state may be borrowed.
+fn shown_dark(surface: &Surface, view: &NshView, own: nsh_core::platform::Appearance) -> bool {
+    use nsh_core::platform::Appearance;
+    let mut appearance = own;
+    let mut around = view.parent_view();
+    while appearance == Appearance::System {
+        let Some(parent) = around else {
+            return surface.environment.get().color_scheme == nsh_engine::ColorScheme::Dark;
+        };
+        appearance = parent
+            .try_state()
+            .map_or(Appearance::System, |state| state.props.appearance);
+        around = parent.parent_view();
+    }
+    appearance == Appearance::Dark
+}
+
 /// Moves `view`'s offset to `to` (not clamped: drags rubber band) and
 /// updates everything that follows it.
 fn moved_to(surface: &Rc<Surface>, view: &NshView, to: Offset) {
@@ -800,6 +819,7 @@ fn moved_to(surface: &Rc<Surface>, view: &NshView, to: Offset) {
 fn shown_at(surface: &Rc<Surface>, view: &NshView, to: Offset) {
     let (id, x, y, pulled) = {
         let mut state = view.state_mut();
+        let own = state.props.appearance;
         let Some(s) = state.scroll.as_mut() else {
             return;
         };
@@ -809,7 +829,7 @@ fn shown_at(surface: &Rc<Surface>, view: &NshView, to: Offset) {
         if s.indicator {
             s.live.shown = now();
             s.live.alpha = 1.0;
-            s.live.dark = surface.environment.get().color_scheme == nsh_engine::ColorScheme::Dark;
+            s.live.dark = shown_dark(surface, view, own);
         }
         s.live.report = true;
         let (x, y) = reported(&state);
@@ -2062,6 +2082,7 @@ pub(crate) fn hovered(surface: &Rc<Surface>, view: &NshView) {
     {
         let mut state = view.state_mut();
         let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
+        let own = state.props.appearance;
         let Some(s) = state.scroll.as_mut() else {
             return;
         };
@@ -2073,7 +2094,7 @@ pub(crate) fn hovered(surface: &Rc<Surface>, view: &NshView) {
             return;
         }
         s.live.alpha = 1.0;
-        s.live.dark = surface.environment.get().color_scheme == nsh_engine::ColorScheme::Dark;
+        s.live.dark = shown_dark(surface, view, own);
     }
     update_overlays(view);
     ensure_ticking(surface, view);
@@ -2084,13 +2105,14 @@ pub(crate) fn thumb_begin(surface: &Rc<Surface>, view: &NshView) {
     interrupt(surface, view);
     {
         let mut state = view.state_mut();
+        let own = state.props.appearance;
         let Some(s) = state.scroll.as_mut() else {
             return;
         };
         s.live.phase = Phase::Thumb { start: main(s) };
         s.live.shown = now();
         s.live.alpha = 1.0;
-        s.live.dark = surface.environment.get().color_scheme == nsh_engine::ColorScheme::Dark;
+        s.live.dark = shown_dark(surface, view, own);
     }
     update_overlays(view);
     emit(surface, view, EventKind::ScrollDragStart);

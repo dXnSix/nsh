@@ -78,7 +78,7 @@ Apps whose Rust crates depend on NSH through Git use the checkout Cargo resolves
 ## nsh run
 
 ```sh
-nsh run [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>]
+nsh run [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|tizen-web|tizen] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>] [--idiom tv|desktop]
 ```
 
 ```sh
@@ -93,8 +93,8 @@ On the native window and mobile targets, a Rust app (`nsh.json` `"root"`, [Build
 
 | Flag | Default | Description |
 |---|---|---|
-| `--target <TARGET>` | `macos` on macOS, `linux` on Linux, `windows` on Windows | `catalyst`: the Mac Catalyst host, an iPhone-sized window (390×844). `ios`: the host in an iOS simulator. `android`: the host on an Android device or emulator. `macos`: the AppKit host, a 1200×800 window ([macOS](./macos.md)). `linux`: the GTK host, a 390×844 window ([Linux](./linux.md)). `windows`: the Win32 host, a 1200×800 window ([Windows](./windows.md)). `gpui`: the GPUI host, a 1200×800 window, on macOS, Windows or Linux, showing a TSX app as GPUI apps that embed it show it ([GPUI](./gpui.md)). `tui`: the host in the current terminal ([TUI](./tui.md)). `web`: the dev server's page, at the address it prints ([Web](./web.md#develop-in-the-browser)). Any other name runs the platform of that name built outside NSH ([External targets](#external-targets)). |
-| `--device <DEVICE>` | | iOS simulator to use, by name (`"iPhone 16 Pro"`) or UDID. Default: a booted one, else the newest iPhone, which is booted. |
+| `--target <TARGET>` | `macos` on macOS, `linux` on Linux, `windows` on Windows | `catalyst`: the Mac Catalyst host, an iPhone-sized window (390×844). `ios`: the host in an iOS simulator. `android`: the host on an Android device or emulator. `macos`: the AppKit host, a 1200×800 window ([macOS](./macos.md)). `linux`: the GTK host, a 390×844 window ([Linux](./linux.md)). `windows`: the Win32 host, a 1200×800 window ([Windows](./windows.md)). `gpui`: the GPUI host, a 1200×800 window, on macOS, Windows or Linux, showing a TSX app as GPUI apps that embed it show it ([GPUI](./gpui.md)). `tui`: the host in the current terminal ([TUI](./tui.md)). `web`: the dev server's page, at the address it prints ([Web](./web.md#develop-in-the-browser)). `tizen-web`: the same page as a Samsung TV's, in the TV idiom, in a browser here and, with `nsh.json` `tizen.signing`, on the TV ([Web](./web.md#samsung-tvs)). `tizen`: NSH's development package on a Samsung TV or the Tizen emulator, natively, installed and connected over `sdb` (needs `nsh.json` `tizen.signing`; [Tizen](./tizen.md)). Any other name runs the platform of that name built outside NSH ([External targets](#external-targets)). |
+| `--device <DEVICE>` | | iOS simulator to use, by name (`"iPhone 16 Pro"`) or UDID. Default: a booted one, else the newest iPhone, which is booted. With `tizen-web` and `tizen`: the TV's `sdb` serial (`192.168.1.5:26101`; `tizen`'s default: the only one `sdb devices` lists). |
 | `--port <PORT>` | The app's last port, else the first free one from `8790` | Dev server port. Replaces the previous NSH development session on this port after its cleanup completes. |
 | `--release` | | Minify and strip debug info. Release bundles have no hot module replacement: every save reloads the app. An app with a Rust crate also gets an optimized (`--release`) development host, with its crates and NSH's built as in a package. |
 | `--limits [<LIMITS>]` | | Runs the app as an app embedded in another one, within the limits its host app sets: `memory` and `stack` (in `KB`, `MB` or `GB`), `load` and `call` (in `ms` or `s`) and `nodes`, such as `--limits memory=128MB,call=500ms`. The ones left out keep the embedding defaults, which `--limits` alone runs with ([Sandbox and capabilities](./sandbox-and-capabilities.md#limits)). Without it the app runs on its own, as a packaged app does. TSX entries. |
@@ -104,10 +104,11 @@ On the native window and mobile targets, a Rust app (`nsh.json` `"root"`, [Build
 | `--points-per-cell <WIDTHxHEIGHT>` | `nsh.json` `tui.pointsPerCell`, otherwise `8x16` | Terminal Cell width and height in points (`--target tui`). |
 | `--window-size <WIDTHxHEIGHT>` | Host default | Initial window size in points, such as `800x600` (`--target macos`, `linux`, `windows` and `gpui`, TSX entries). |
 | `--display <N>` | The main display | The display the window opens on, centered: `1` is the primary display (the one with the menu bar), `2` the next, and so on; a number with no display opens it on the main one (`--target macos`, TSX entries). |
+| `--idiom <IDIOM>` | `nsh.json` `dev.idiom`, otherwise the host's own | The kind of device the app runs as: `tv` runs it as on a TV (`platform.tv`, `tv={{…}}` props, mobile behavior), so 10-foot layouts and focus are built on this machine; `desktop` runs the web page in the desktop idiom whatever the browser's pointer and width ([TVs](./platform-specific.md#tv-layouts-on-the-desktop)). `--target gpui` (the window keeps its size: `--window-size 1920x1080` shows a TV's whole screen) and `--target web`; the other hosts run in their device's own idiom and refuse it. |
 
 With `--target android`, the first device `adb devices` lists is used; the dev server's port is forwarded to it with `adb reverse`. See [Getting started](./getting-started.md#run-it) and [Dev server and debugging](./dev-server-and-debugging.md).
 
-A replacement waits up to ten seconds for the previous session to finish cleanup. Several apps run side by side on ports of their own, and running an app again replaces its previous session. A `--port` occupied by another program, or an older NSH CLI, produces an error naming the port; `--port 0` asks the OS for a free port. `nsh run` serves this machine only, and with `--target ios`, `android` or `web` also the network.
+A replacement waits up to ten seconds for the previous session to finish cleanup. Several apps run side by side on ports of their own, and running an app again replaces its previous session. A `--port` occupied by another program, or an older NSH CLI, produces an error naming the port; `--port 0` asks the OS for a free port. `nsh run` serves this machine only, and with `--target ios`, `android`, `web` or `tizen-web` also the network.
 With `--target tui`, the app runs in the current terminal with hot updates on save. CLI and host diagnostics go to the app's `.nsh/tui.log`. Press `C-h e` for logs and errors, Escape or `C-g` to close the panel, and `r` to reload. App errors open the panel automatically; an update restores the app display. Each Cell defaults to 8×16 points. `--points-per-cell 10x20` takes precedence over `"tui": { "pointsPerCell": "10x20" }` in `nsh.json`; both dimensions must be finite and positive, and apply when the run starts. Rust apps run their root in a generated terminal development host and rebuild/restart when Rust code changes.
 
 On Unix, the terminal host exits on SIGHUP, SIGTERM, SIGINT or terminal disconnection and restores the terminal settings that remain accessible. Idle apps sleep between input checks; interactive runs use live terminal input, and `--headless` accepts redirected input for tests.
@@ -115,7 +116,7 @@ On Unix, the terminal host exits on SIGHUP, SIGTERM, SIGINT or terminal disconne
 ## nsh dev
 
 ```sh
-nsh dev [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web] [--device <DEVICE>] [--server-only] [--port <PORT>] [--release] [--limits [<LIMITS>]]
+nsh dev [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|tizen-web|tizen] [--device <DEVICE>] [--server-only] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--idiom tv|desktop]
 ```
 
 Starts the dev server and opens this system’s native host: AppKit on macOS, GTK on Linux, Win32 on Windows. Choose `--target ios` or `--target android` explicitly for mobile development. `--server-only` serves hosts you start yourself. The server builds the app, watches the entry’s directory, and pushes every rebuild to connected hosts. With `--server-only`, it prints the URL for hosts on this machine and one per LAN address for devices, and, when the web runtime is there, the page browsers open to run the app ([Web](./web.md#develop-in-the-browser)):
@@ -128,12 +129,12 @@ Starts the dev server and opens this system’s native host: AppKit on macOS, GT
   browsers on this network: http://192.168.1.20:8790/
 ```
 
-Use `nsh dev --server-only` with an app that embeds the development SDK (`NativeShellDev.xcframework`, `nsh-dev.aar`). `--target`, `--device`, `--port`, `--release` and `--limits` work as for `nsh run`; `--server-only` selects a server without a launched host.
+Use `nsh dev --server-only` with an app that embeds the development SDK (`NativeShellDev.xcframework`, `nsh-dev.aar`). `--target`, `--device`, `--port`, `--release`, `--limits` and `--idiom` work as for `nsh run`; `--server-only` selects a server without a launched host, and with it `--idiom` (or `nsh.json` `dev.idiom`) sets the idiom of the page it serves to browsers (a GPUI host you start yourself takes `--idiom tv` on its own command line).
 
 ## nsh test
 
 ```sh
-nsh test [PATH] [--filter <NAME>] [--trace] [--fps] [--junit <FILE>] [--target <TARGET>] [--browser <PATH>] [--web-host <JS>] [--device <DEVICE>] [--display <N>] [--foreground]
+nsh test [PATH] [--filter <NAME>] [--trace] [--fps] [--junit <FILE>] [--target <TARGET>] [--browser <PATH>] [--web-host <JS>] [--device <DEVICE>] [--display <N>] [--foreground] [--idiom tv|desktop]
 ```
 
 Runs the app's tests headless ([Testing](./testing-and-trace.md)): the test files (`*.test.tsx`, `*.test.ts`, importing `nsh/test`) in `PATH`, a directory (default: the current one; hidden directories, `node_modules` and `target` are skipped), or the test file `PATH`. Given a directory of an app with Rust crates of its own (`nsh.json` `"rust"`: a Rust app or a TSX app with a crate), it first runs `cargo test` for each crate in the directory, in the crate's own directory, and shows and counts each Rust test with the TypeScript tests, under the file of its test target (`src/lib.rs › tests::adds`); a Rust app with only Rust tests is tested this way too. Each test file runs on an engine of its own and each app its tests open on another, fresh one. It prints a line per test, and for a failure what was thrown, where in the test file and the texts on screen; any failure makes it exit with a non-zero code. Given the app's entry (`nsh test App.tsx`; a Rust app's: `nsh test nsh.json`), it opens the app on the network, lets it run for 1.2 s and takes the steps standard input gives (`await app.press("Add")`, with `app` the app). A TSX app runs in the CLI's own process; an app with Rust crates of its own runs in a headless runner built with them, which the CLI builds the entries for. Headless runs behave as iOS unless a test opens the app as Android (`open`'s `platform`): `platform.os` is `"ios"`, and `ios:` classes and `ios={{…}}` props apply.
@@ -149,11 +150,12 @@ Runs the app's tests headless ([Testing](./testing-and-trace.md)): the test file
 | `--trace` | Prints every mount batch of the apps the tests open, under the step it came in (`── press(Add): 7 items`), and the time of every commit: what the first frame, a step or a frame of scrolling costs. With `--target`, the host's batches and timings. |
 | `--fps` | With `--target linux`, `macos`, `windows` or `ios`: the host logs its performance monitor's readings once a second (frame rate, frame phases, commits, CPU, memory), shown with `-v`. |
 | `--junit <FILE>` | Also writes the results to `FILE` as a JUnit XML report, the format CI services show test results from: a `testsuite` per test file, a `testcase` per test. |
-| `--target <TARGET>` | Runs the apps the tests open on this platform's development host instead of headless (`macos`, `linux`, `windows`, `gpui`, `tui`, `web`, `ios` and `android`; `tui` runs them in an in-memory terminal, `web` in a headless Chrome, Edge or Chromium): the steps act with the platform's own input ([Testing](./testing-and-trace.md#on-a-real-platform)), and `open` checks its options against the platform, rejecting one it cannot honor (`ERR_NSH_TEST_UNSUPPORTED`: `width` and `height` on iOS and Android, a `platform` of another kind of device). The crates' Rust tests run on this machine, in runs without `--target`. |
-| `--browser <PATH>` | The Chrome, Edge or Chromium executable `--target web` runs the apps in (default: the one installed on this machine). |
-| `--device <DEVICE>` | With `--target ios`: the simulator the apps run in, by name (`"iPhone 16 Pro"`) or UDID. Default: a booted one, else the newest iPhone, which is booted. |
+| `--target <TARGET>` | Runs the apps the tests open on this platform's development host instead of headless (`macos`, `linux`, `windows`, `gpui`, `tui`, `web`, `tizen-web`, `ios`, `android` and `tizen`; `tui` runs them in an in-memory terminal, `web` in a headless Chrome, Edge or Chromium, `tizen-web` there on a Samsung TV's page, in the TV idiom, 1920×1080 by default, `tizen` on the Samsung TV or emulator `sdb` lists or `--device` names, one app at a time): the steps act with the platform's own input ([Testing](./testing-and-trace.md#on-a-real-platform)), and `open` checks its options against the platform, rejecting one it cannot honor (`ERR_NSH_TEST_UNSUPPORTED`: `width` and `height` on iOS, Android and Tizen, a `platform` of another kind of device). The crates' Rust tests run on this machine, in runs without `--target`. |
+| `--browser <PATH>` | The Chrome, Edge or Chromium executable `--target web` and `tizen-web` run the apps in (default: the one installed on this machine). |
+| `--device <DEVICE>` | The device the apps run on: with `--target ios` the simulator, by name (`"iPhone 16 Pro"`) or UDID (default: a booted one, else the newest iPhone, which is booted); with `--target tizen` the TV's or emulator's `sdb` serial (`192.168.1.5:26101`; default: the only one `sdb devices` lists). |
 | `--display <N>` | With `--target macos` or `gpui`: the display the apps' windows open on, centered: `1` is the primary display (on macOS the one with the menu bar), `2` the next, and so on; a number with no display opens them on the main one. By default they open on a secondary display (the first besides the primary one, not a mirror of it), so a test run keeps to a screen of its own, and on the primary one when it is the only one. The tests run the same on every display. |
 | `--foreground` | With `--target macos`, `windows`, `gpui` or `linux`: the apps become the active app, as they do for a user. By default they run in the background: their windows show, the keyboard stays with the app you type in, and the tests' clicks, keys and shortcuts go to the windows directly. On a Linux desktop the background keys are typed into the widgets, as on Wayland; a test of Tab, the arrow keys or an input method runs with `--foreground` there. On a display nobody types on (Xvfb), Linux apps run as in the foreground either way. A test that depends on the app being active (`lifecycle()` follows whether the app is active) or a measurement such as `examples/gallery/tools/perf.py` (which passes it) should run with it. |
+| `--idiom <IDIOM>` | The idiom the apps the tests open run in, over `nsh.json` `dev.idiom`, as with `nsh run`: `tv` runs them as on a TV (`platform.tv`, `tv={{…}}` props), so a TV's layouts and focus are tested on this machine, `desktop` as a desktop. `--target gpui` and `--target web` (over a desktop `platform` the test's `open` gives); the other targets and headless runs refuse it, and leave `nsh.json`'s out with a warning ([TVs](./platform-specific.md#tv-layouts-on-the-desktop)). |
 | `--web-host <JS>` | The web page's host module the apps opened headless get (default: `nsh.json` `web.host`; it exports `createHost(player)`): it answers their [`host`](../modules/nsh.md#host) calls and its `player.hostEvent` reaches `host.on` ([Testing](./testing-and-trace.md#the-pages-host)). Headless runs only; `--target web` runs `nsh.json`'s `web.host`. |
 
 ## nsh check
@@ -202,30 +204,31 @@ It writes:
 ## nsh package
 
 ```sh
-nsh package [ENTRY] --target ios|ios-simulator|android|macos|linux|windows|web [-o <OUT>] [flags]
+nsh package [ENTRY] --target ios|ios-simulator|android|macos|linux|windows|web|tizen-web|tizen [-o <OUT>] [flags]
 ```
 
 Builds an installable app in release mode. A Rust app (`nsh.json` `"root"`) is packaged with its own runner, built with Cargo from your crates and NSH's, its root mounted with no QuickJS ([Building with Rust](./rust.md)); a TSX app with the prebuilt runtime. No Xcode project or Gradle build is involved: NSH assembles the app bundle itself and uses Xcode's `actool` and `codesign` (iOS) or the SDK's `aapt2`, `zipalign` and `apksigner` (Android); for macOS it assembles an ad hoc signed `.app` with `codesign` (and `sips` for the icon); for Linux it copies the runner and writes a `.tar.gz` with `tar`; for Windows it copies the runner, embeds the icon and writes a `.zip`, with no tools; for the web it writes a static site, with no tools. Metadata comes from `nsh.json`, overridden by the flags.
 
 | Flag | Description |
 |---|---|
-| `--target <TARGET>` | Required. `ios`: iOS devices, a signed `.ipa` (or an unsigned `.app` without `--sign`). `ios-simulator`: an ad hoc signed `.app`. `android`: a signed `.apk`. `macos`: an ad hoc signed `.app` ([macOS](./macos.md#packaging)). `linux`: a directory `<Name>/` (the executable, `nsh/`, a `.desktop` file) and `<Name>.tar.gz` ([Linux](./linux.md#packaging)). `windows`: a directory `<Name>\` (`<Name>.exe`, `nsh\`), `<Name>.zip`, an Inno Setup script `<Name>.iss` and, with Inno Setup installed, the installer `<Name>-setup.exe` ([Windows](./windows.md#packaging)). `web`: a directory `<Name>/`, a static site (`index.html` and files named by their content) ([Web](./web.md#publish-an-app)). Any other name packages for the platform of that name built outside NSH ([External targets](#external-targets)). |
+| `--target <TARGET>` | Required. `ios`: iOS devices, a signed `.ipa` (or an unsigned `.app` without `--sign`). `ios-simulator`: an ad hoc signed `.app`. `android`: a signed `.apk`. `macos`: an ad hoc signed `.app` ([macOS](./macos.md#packaging)). `linux`: a directory `<Name>/` (the executable, `nsh/`, a `.desktop` file) and `<Name>.tar.gz` ([Linux](./linux.md#packaging)). `windows`: a directory `<Name>\` (`<Name>.exe`, `nsh\`), `<Name>.zip`, an Inno Setup script `<Name>.iss` and, with Inno Setup installed, the installer `<Name>-setup.exe` ([Windows](./windows.md#packaging)). `web`: a directory `<Name>/`, a static site (`index.html` and files named by their content) ([Web](./web.md#publish-an-app)). `tizen-web`: a Samsung TV's Tizen web app, the site with `config.xml` and the TV shim in `tizen-web/<Name>/`, zipped into `tizen-web/<Name>.wgt`, and with a profile `<Name>.wgt`, signed ([Web](./web.md#samsung-tvs)). `tizen`: a Samsung TV's TPK, staged in `tizen/<Name>-<arch>/` and signed into `<Name>.tpk` (with several `--arch`, `<package>-<version>.<n>-<arch>.tpk` each and the multi-architecture `<package>-<version>.zip`); it needs a certificate profile ([Tizen](./tizen.md#packaging)). Any other name packages for the platform of that name built outside NSH ([External targets](#external-targets)). |
 | `-o, --out <OUT>` | Output directory (default `.nsh/out`). |
 | `--name <NAME>` | Display name. |
 | `--id <ID>` | Bundle identifier, e.g. `com.example.app`. |
 | `--app-version <VERSION>` | Version, e.g. `1.2.0`. |
 | `--build <BUILD>` | Build number. |
 | `--icon <ICON>` | App icon: a square PNG, ideally 1024×1024. |
-| `--sign <IDENTITY>` | iOS devices: code signing identity, e.g. `"Apple Development: …"`. |
+| `--sign <IDENTITY>` | iOS devices: code signing identity, e.g. `"Apple Development: …"`. `tizen-web` and `tizen`: the certificate profile the Tizen SDK's `tz` signs with (default: `nsh.json` `tizen.signing`). |
 | `--profile <FILE>` | iOS devices: provisioning profile (`.mobileprovision`). Entitlements come from it. |
 | `--keystore <FILE>` | Android: release keystore. Default: the debug key in `~/.android/debug.keystore` (created if missing). |
 | `--key-alias <ALIAS>` | Android: key alias in the keystore. |
 | `--keystore-password <PASSWORD>` | Android: keystore password. Also read from `NSH_KEYSTORE_PASSWORD`. |
 | `--format <FORMAT>` | Android: `apk` (default) or `aab`, an Android App Bundle for Google Play, signed with `jarsigner`. Not with `--run`. |
 | `--abi <ABI>` | Android: the ABIs of the APK (`arm64-v8a`, `armeabi-v7a`, `x86_64`), repeated or separated by commas. Default: `arm64-v8a` and `armeabi-v7a`, plus the device's with `--run`. |
-| `--arch <ARCH>` | macOS: the processors the app runs on, `arm64` (Apple silicon), `x86_64` (Intel) or `universal` (both, in one executable). Default: this Mac's. A runner for another processor needs its Rust target (`rustup target add x86_64-apple-darwin`). |
-| `--run` | Install and launch the app afterwards: in the simulator (`ios-simulator`) or on the connected Android device; `macos`, `linux` and `windows` launch it; `web` serves the site on this machine at the address it prints. |
+| `--arch <ARCH>` | The processors the package runs on. macOS: `arm64` (Apple silicon), `x86_64` (Intel) or `universal` (both, in one executable); default: this Mac's. A runner for another processor needs its Rust target (`rustup target add x86_64-apple-darwin`). Tizen: the architectures of the TPKs (`armv7l`, `aarch64`, `x86_64`), repeated or separated by commas: one package each, several also the multi-architecture `.zip` for Samsung's Seller Office; default: `armv7l`, the TVs', and with `--run` the TV's. |
+| `--run` | Install and launch the app afterwards: in the simulator (`ios-simulator`) or on the connected Android device; `macos`, `linux` and `windows` launch it; `web` serves the site on this machine at the address it prints; `tizen-web` and `tizen` install the signed package on the TV and launch it. |
 | `--asset-url <URL>` | Web: the http(s) URL the site's files are served from, a CDN, as the page names them; `index.html` and `manifest.webmanifest` stay at the page's address (named relatively, as without the flag), and the CDN answers with `Access-Control-Allow-Origin`. Default: next to the page, named relatively. `--run` serves the site from this machine as it is, so it goes without it. |
+| `--probe` | `tizen-web`: instead of the app, a package (`tizen-web/probe/`, signed into `NshProbe.wgt` with a profile) that tries on the TV each way the app's page loads its files (module scripts, an import map, an iframe's realm, a script fetched with CORS, WebAssembly, a fetch under the page's Content-Security-Policy, Samsung's `webapis.js`) and shows what each did. |
 
 ```sh
 nsh package my-app --target ios-simulator --run
@@ -235,6 +238,8 @@ nsh package my-app --target macos
 nsh package my-app --target linux
 nsh package my-app --target windows
 nsh package my-app --target web
+nsh package my-app --target tizen-web --sign my-samsung-profile
+nsh package my-app --target tizen --arch armv7l,aarch64 --sign my-samsung-profile
 ```
 
 See [Packaging](./packaging.md).
@@ -261,7 +266,7 @@ nsh update [stable|nightly]
 
 ## nsh component
 
-Adds, removes or lists the runtimes installed next to an installed `nsh`: those of the platforms other than the one it runs on (`android`, `android-symbols`, `ios`, `web`, `gpui`, `tui`). A command that needs one adds it itself the first time ([Installation](./installation.md#components)).
+Adds, removes or lists the runtimes installed next to an installed `nsh`: those of the platforms other than the one it runs on (`android`, `android-symbols`, `ios`, `tizen`, `web`, `gpui`, `tui`). A command that needs one adds it itself the first time ([Installation](./installation.md#components)).
 
 ```sh
 nsh component list

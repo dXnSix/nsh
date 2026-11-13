@@ -854,6 +854,20 @@ fn props_json(p: &ViewProps) -> String {
     if p.selectable_view {
         s.push_str(",\"selectableView\":true");
     }
+    // What the arrows read on a TV (`arrowFocus`, `autoFocus`).
+    crate::focus::write_props(&mut s, p);
+    // An overlay anchored to another view (a menu's, a select's or a
+    // popover's popup): what the arrows go into first (`arrowFocus`).
+    if p.overlay_anchor.is_some() {
+        s.push_str(",\"anchored\":true");
+    }
+    // A view shown in an appearance of its own (`ThemeScope`): the
+    // browser's controls in it follow (`color-scheme`).
+    match p.appearance {
+        nsh_core::platform::Appearance::Light => s.push_str(",\"appearance\":\"light\""),
+        nsh_core::platform::Appearance::Dark => s.push_str(",\"appearance\":\"dark\""),
+        nsh_core::platform::Appearance::System => {}
+    }
     // A wrapped line's later part: a copy joins it to the part before.
     if p.continues_text {
         s.push_str(",\"continuesText\":true");

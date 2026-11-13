@@ -137,7 +137,7 @@ view.load(Bundle::source(code).into());
 
 `AppView::set_locale(Some(locale))` 和 `AppView::set_font_scale(Some(scale))` 用你的应用的语言和文字大小代替系统的设置（`None` 恢复跟随系统）：`locale()`、`Intl`、`fontScale()` 和文字立即跟随（[设备与环境](./device-and-environment.md#在嵌入它的应用中)）。
 
-`AppView::set_theme_overrides(Some(json))` 把你的应用的品牌加在应用的[主题](./tailwind.md#主题-token)之上：格式与 `nsh.json` 的 `"theme"` 相同的主题文件，其中的 token 在浅色和深色模式下都覆盖应用的同名 token，应用的其他 token 保持不变；`bg-primary` 等类名立即更新样式，之后加载的应用一开始就使用它（`None` 恢复应用自己的主题；无法解析的文件返回错误，不做任何改动）。
+`AppView::set_theme_overrides(Some(json))` 把你的应用的品牌加在应用的[主题](./tailwind.md#主题-token)之上：格式与 `nsh.json` 的 `"theme"` 相同的主题文件，其中的 token 在浅色和深色模式下都覆盖应用的同名 token，应用的其他 token 保持不变；`bg-primary` 等类名立即更新样式，之后加载的应用一开始就使用它（`None` 恢复应用自己的主题；无法解析的文件返回错误，不做任何改动）。应用用它自己的主题读取器读取这个文件，所以文件没有设置的 `var(--name)` 取默认主题中该令牌的值。
 
 ### 多个窗口共享数据
 
@@ -190,11 +190,13 @@ TSX 应用用 [`<Window>` 和 `Window.open`](../modules/nsh-desktop.md#windows) 
 |---|---|
 | Return | 在 `Input` 中按 `submitBehavior` 行事：提交（`onSubmit`）、提交并离开输入框，或换行（多行输入框） |
 | Shift+Return、Alt+Return | 在回车即提交的多行输入框中换行（Ctrl+Return 提交） |
-| Tab、Shift+Tab | 按屏幕顺序移到下一个 / 上一个输入框，只在最上层的对话框之内 |
+| Tab、Shift+Tab（加 Ctrl 亦可） | 按视图树的顺序移到下一个 / 上一个输入框或可按压视图，只在最上层的对话框之内 |
+| Return、空格 | 按下获得焦点、带 `onPress` 的视图 |
 | Escape | 离开有焦点的输入框；否则清除文本选区，再关闭最上层的对话框或返回上一页 |
 | Alt+Left、Back 键、鼠标的后退键 | 返回上一页（在输入框中也是） |
 | Ctrl+方向键、Home / End，加 Shift；Ctrl+Backspace / Delete | 在输入框中按词和行移动、选择、删除，与其他 GTK 应用一致 |
 | Ctrl+Z、Ctrl+Shift+Z、Ctrl+X / C / V / A | 撤销、重做、剪切、复制、粘贴、全选（`masked` 输入框拒绝剪切和复制）；Ctrl+A / Ctrl+C 选择并复制 可选择的文本 |
+| 方向键（输入框自己用的除外） | 把焦点移到该方向上最近的可按压视图、输入框或 `focusable` 视图（只在最上层的对话框之内），并把它滚动到可见；上 / 下方向键会离开单行输入框；该方向上没有时，按下文滚动 |
 | 方向键；Page Up / Down、Space、Shift+Space；Home / End | 滚动有焦点的视图所在或鼠标下方的滚动视图：一行、一页、到开头 / 结尾（输入框有焦点时不滚动） |
 | Ctrl+W、F11、Ctrl+Q | 关闭窗口、全屏、退出（`nsh package` 和 `nsh run` 的应用） |
 | Ctrl+R | 重新加载最新的构建（`nsh run`） |

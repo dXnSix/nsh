@@ -2904,6 +2904,44 @@ test("a key event without `key` falls back to its code instead of throwing", () 
   assert.equal(keyCode({ key: "a", code: "KeyA" }), 97);
 });
 
+test("media and TV remote keys by their names, and by Samsung TVs' key codes when unidentified", () => {
+  const named = {
+    MediaPlayPause: 270, MediaPlay: 271, MediaPause: 272, MediaStop: 273, MediaRewind: 274, MediaFastForward: 275,
+    MediaTrackNext: 276, MediaTrackPrevious: 277, ColorF0Red: 278, ColorF1Green: 279, ColorF2Yellow: 280,
+    ColorF3Blue: 281, ChannelUp: 282, ChannelDown: 283, Info: 284,
+  };
+  for (const [key, code] of Object.entries(named)) assert.equal(keyCode({ key }), code, key);
+  const tizen = {
+    10252: 270, 415: 271, 19: 272, 413: 273, 412: 274, 417: 275, 10233: 276, 10232: 277, 403: 278, 404: 279,
+    405: 280, 406: 281, 427: 282, 428: 283, 457: 284,
+  };
+  for (const [keyCode_, code] of Object.entries(tizen)) {
+    assert.equal(keyCode({ key: "Unidentified", keyCode: Number(keyCode_) }), code, keyCode_);
+  }
+  // A desktop's Pause key (keyCode 19) is no media key; nor is an unknown unidentified one.
+  assert.equal(keyCode({ key: "Pause", keyCode: 19, code: "Pause" }), -1);
+  assert.equal(keyCode({ key: "Unidentified", keyCode: 10009 }), -1);
+  assert.equal(keyCode({ key: "", keyCode: 415 }), -1);
+});
+
+test("TV remote keys by Samsung TVs' key codes in the TV idiom, whatever key the engine names", () => {
+  // A TV has no Pause/Break key: keyCode 19 is the remote's pause.
+  assert.equal(keyCode({ key: "Pause", keyCode: 19, code: "Pause" }, true), 272);
+  assert.equal(keyCode({ key: "", keyCode: 415 }, true), 271);
+  assert.equal(keyCode({ keyCode: 403 }, true), 278);
+  assert.equal(keyCode({ key: "XF86PlayBack", keyCode: 10252 }, true), 270);
+  // A named key keeps its name; a key no remote has keeps its character.
+  assert.equal(keyCode({ key: "MediaStop", keyCode: 19 }, true), 273);
+  assert.equal(keyCode({ key: "ArrowUp", keyCode: 38 }, true), 262);
+  assert.equal(keyCode({ key: "a", keyCode: 65, code: "KeyA" }, true), 97);
+  assert.equal(keyCode({ key: "Unidentified", keyCode: 10009 }, true), -1);
+  // The player's shortcuts read the key so in the TV idiom only.
+  const pause = { key: "Pause", keyCode: 19, code: "Pause" };
+  const shortcut = (idiom) => Player.prototype.shortcut.call({ idiom, wasm: { nsh_key: (code) => code } }, pause, false);
+  assert.equal(shortcut("tv"), 272);
+  assert.equal(shortcut("desktop"), -1);
+});
+
 /** A browser `OffscreenCanvas` whose 2D context records its calls into
  * `log.calls`; `fail` makes `convertToBlob` reject with it (an `Error`, or
  * an error named `failName`); a canvas of more than `limit` pixels draws

@@ -611,7 +611,15 @@ impl Mounter {
             }
             MountItem::ViewProps { id, props } => {
                 let Some(view) = self.get(*id) else { return };
-                view.state_mut().props = props.clone();
+                // A view shown in an appearance of its own (`ThemeScope`):
+                // AppKit's views in it follow (inputs, web views). The
+                // root's is the app's (`system::set_appearance`).
+                let was = std::mem::replace(&mut view.state_mut().props, props.clone());
+                if *id != nsh_core::ROOT_ID && was.appearance != props.appearance {
+                    use objc2_app_kit::NSAppearanceCustomization;
+                    view.ns()
+                        .setAppearance(crate::system::ns_appearance(props.appearance).as_deref());
+                }
                 crate::input::props_changed(surface, view);
                 crate::access::props_changed(view);
             }

@@ -277,6 +277,8 @@ pub mod on {
 
 /// The platform a prop is for: everywhere, or inside `ios={{…}}` /
 /// `android={{…}}` / `macos={{…}}` / `desktop={{…}}` / `web={{…}}`.
+/// `tv={{…}}` has none of its own: no prop is a TV's alone (`TvProps`
+/// takes the props every element takes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
     /// Every platform.

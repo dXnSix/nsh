@@ -266,10 +266,16 @@ impl Native for WindowsNative {
     fn press_keys(&self, keys: &str) -> Result<(), String> {
         let stroke = nsh_core::keymap::Keystroke::parse(keys, nsh_core::platform::Os::Windows)
             .map_err(|e| e.to_string())?;
-        let vk = stroke
-            .key
-            .virtual_key()
-            .ok_or_else(|| format!("{keys:?} has no key on a Windows keyboard"))?;
+        let vk = stroke.key.virtual_key().ok_or_else(|| {
+            if stroke.key.is_media_or_remote() {
+                format!(
+                    "{keys:?} has no key on Windows: of the media and TV remote keys a Windows \
+                     keyboard has only mediaplaypause, mediastop, medianext and mediaprevious"
+                )
+            } else {
+                format!("{keys:?} has no key on a Windows keyboard")
+            }
+        })?;
         let m = stroke.modifiers;
         let modifiers = Modifiers {
             shift: m.shift,

@@ -110,7 +110,7 @@ pub fn TabBar(props: TabBarProps, cx: Scope<TabBarEvent>) -> impl IntoElement {
         // One color, for the appearance shown: sent again when either changes.
         .prop("tint", || {
             tokens()
-                .color("primary")
+                .role(crate::element::role::PRIMARY)
                 .map_or(JsonValue::Null, |primary| color(primary).to_hex().into())
         })
         .on_native_event(move |event: &NativeEvent| {

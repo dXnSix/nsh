@@ -571,6 +571,7 @@ pub(crate) trait AnyInstance {
 pub struct Root {
     make: Arc<dyn Fn() -> super::AnyElement + Send + Sync>,
     tokens: Option<Arc<super::Tokens>>,
+    theme: Option<Arc<str>>,
     fonts: Vec<Arc<[u8]>>,
     appearance: Option<crate::platform::Appearance>,
     app_id: Option<String>,
@@ -587,6 +588,7 @@ impl Root {
         Self {
             make: Arc::new(move || super::IntoElement::into_element(C::element(props()))),
             tokens: None,
+            theme: None,
             fonts: Vec::new(),
             appearance: None,
             app_id: None,
@@ -696,6 +698,16 @@ impl Root {
         self
     }
 
+    /// Renders with the theme file `json` (`nsh.json`'s `"theme"`, shadcn's
+    /// `cssVars`), read by the UI set that reads themes as a JS app's is,
+    /// over its defaults: in the first frame, and the app's theme from then
+    /// on. It replaces [`Root::tokens`]: the file is read over the UI set's
+    /// defaults, not over those tokens.
+    pub fn theme(mut self, json: impl Into<Arc<str>>) -> Self {
+        self.theme = Some(json.into());
+        self
+    }
+
     /// Registers a font file (TrueType / OpenType) before the first render;
     /// styles name it by its family name.
     pub fn font(mut self, data: impl Into<Arc<[u8]>>) -> Self {
@@ -765,6 +777,11 @@ impl Root {
     /// The design tokens it renders with.
     pub fn tokens_ref(&self) -> Option<&super::Tokens> {
         self.tokens.as_deref()
+    }
+
+    /// The theme file it renders with ([`Root::theme`]).
+    pub fn theme_ref(&self) -> Option<&str> {
+        self.theme.as_deref()
     }
 
     /// The font files to register.
@@ -865,6 +882,15 @@ pub struct Registry {
     assets: Arc<Vec<&'static [super::AssetFile]>>,
     /// Makes the design tokens of a theme ([`Registry::tokens_from`]).
     tokens: Option<super::TokenSource>,
+    /// Reads the tokens a theme file sets ([`Registry::token_overrides_from`]).
+    overrides: Option<super::TokenOverrides>,
+    /// The theme types its sets register ([`Registry::theme`]).
+    themes: Arc<Vec<super::ThemeSpec>>,
+    /// The roles its components draw with ([`Registry::roles`]).
+    roles: Arc<Vec<super::RoleSpec>>,
+    /// One theme of those types, which replaces [`Self::tokens`] as the
+    /// token source (`None`: no type).
+    theme_set: Option<Arc<super::theme::ThemeSet>>,
     /// Makes the views' built-in scroll bars ([`Registry::scrollbars_from`]).
     scrollbars: Option<ScrollbarSource>,
     /// The UI sets served under paths of this one's specifier
@@ -1076,7 +1102,20 @@ impl Registry {
     pub fn merged(sets: &[Registry]) -> Self {
         let mut out = Self::default();
         for set in sets.iter().flat_map(Registry::sets) {
-            out.tokens = out.tokens.or(set.tokens);
+            // The first set that reads themes reads their changes too: both
+            // readers come from one set, so they read one format.
+            if out.tokens.is_none() && set.tokens.is_some() {
+                out.tokens = set.tokens;
+                out.overrides = set.overrides;
+            }
+            for theme in set.themes.iter() {
+                if !out.themes.iter().any(|t| t.type_id() == theme.type_id()) {
+                    Arc::make_mut(&mut out.themes).push(theme.clone());
+                }
+            }
+            for role in set.roles.iter() {
+                out.add_role(role.clone());
+            }
             out.scrollbars = out.scrollbars.or(set.scrollbars);
             Arc::make_mut(&mut out.setups).extend(set.setups.iter().cloned());
             let types = Arc::make_mut(&mut out.types);
@@ -1086,6 +1125,10 @@ impl Registry {
                 }
             }
         }
+        // The types of every set make one theme; two declaring one name or
+        // mapping one role panic, as two components of one name do.
+        out.theme_set =
+            (!out.themes.is_empty()).then(|| Arc::new(super::theme::ThemeSet::new(&out.themes)));
         out
     }
 
@@ -1173,6 +1216,16 @@ impl Registry {
         self
     }
 
+    /// Reads the tokens a theme file sets, and only those, with `reader`:
+    /// how the core changes some of the app's tokens (`nsh`'s
+    /// `updateTheme`). It pairs with the same set's [`Registry::tokens_from`]:
+    /// of the sets a host serves, the first that reads themes reads their
+    /// changes, and without this reader changes are not read.
+    pub fn token_overrides_from(&mut self, reader: super::TokenOverrides) -> &mut Self {
+        self.overrides = Some(reader);
+        self
+    }
+
     /// Makes the built-in bar of the scroll views and lists that show one
     /// ([`set_builtin_scrollbars`](super::set_builtin_scrollbars), or a
     /// theme as their `scrollbar`) with `source`. Of the sets a host
@@ -1229,12 +1282,85 @@ impl Registry {
         &self,
         json: Option<&str>,
     ) -> Option<Result<(super::Tokens, Vec<String>), String>> {
-        self.tokens.map(|source| source(json))
+        self.token_provider().map(|provider| provider.read(json))
     }
 
-    /// How the set reads a theme file ([`Registry::tokens_from`]).
-    pub(crate) fn token_source(&self) -> Option<super::TokenSource> {
-        self.tokens
+    /// How theme files are read: with the registered theme types
+    /// ([`Registry::theme`]), which win, else with the set's functions
+    /// ([`Registry::tokens_from`], [`Registry::token_overrides_from`]).
+    pub(crate) fn token_provider(&self) -> Option<super::theme::TokenProvider> {
+        if let Some(set) = &self.theme_set {
+            return Some(super::theme::TokenProvider::Themes(set.clone()));
+        }
+        self.tokens.map(|read| super::theme::TokenProvider::Source {
+            read,
+            overrides: self.overrides,
+        })
+    }
+
+    /// Registers theme type `T`: its tokens join the app's theme, which then
+    /// replaces the default source ([`Registry::tokens_from`], `nsh-base`'s
+    /// shadcn theme). Several sets may each register types; a token name
+    /// or a role two types claim panics when the sets are merged.
+    #[track_caller]
+    pub fn theme<T: super::AppTheme>(&mut self) -> &mut Self {
+        let spec = super::ThemeSpec::of::<T>();
+        if !self.themes.iter().any(|t| t.type_id() == spec.type_id()) {
+            Arc::make_mut(&mut self.themes).push(spec);
+        }
+        self.theme_set = Some(Arc::new(super::theme::ThemeSet::new(&self.themes)));
+        self
+    }
+
+    /// Whether its sets register theme types ([`Registry::theme`]).
+    pub(crate) fn has_theme_types(&self) -> bool {
+        self.theme_set.is_some()
+    }
+
+    /// The theme types registered ([`Registry::theme`]), as data.
+    pub fn theme_specs(&self) -> &[super::ThemeSpec] {
+        &self.themes
+    }
+
+    /// Lists the roles the set's components draw with, mapped by a theme
+    /// or not (`nsh_base::role::all()`, or a design system's own made with
+    /// [`crate::roles!`]): the toolchain types TS's `role()` from them. A
+    /// role is its name, so one two sets list is one role; it reads one
+    /// kind of value.
+    ///
+    /// # Panics
+    ///
+    /// If a role is listed twice reading different kinds (a color and a
+    /// number).
+    #[track_caller]
+    pub fn roles(&mut self, roles: impl IntoIterator<Item = super::RoleSpec>) -> &mut Self {
+        for role in roles {
+            self.add_role(role);
+        }
+        self
+    }
+
+    #[track_caller]
+    fn add_role(&mut self, spec: super::RoleSpec) {
+        match self
+            .roles
+            .iter()
+            .find(|r| r.role.name() == spec.role.name())
+        {
+            Some(listed) if listed.role.kind() != spec.role.kind() => panic!(
+                "the role `{}` is listed reading {} and {}",
+                spec.role.name(),
+                listed.role.kind().name(),
+                spec.role.kind().name()
+            ),
+            Some(_) => {}
+            None => Arc::make_mut(&mut self.roles).push(spec),
+        }
+    }
+
+    /// The roles listed ([`Registry::roles`]), as data.
+    pub fn role_specs(&self) -> &[super::RoleSpec] {
+        &self.roles
     }
 
     /// The files [`Registry::assets`] ships.

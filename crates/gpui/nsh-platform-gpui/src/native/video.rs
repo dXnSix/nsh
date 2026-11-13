@@ -33,13 +33,31 @@
 //!
 //! Without feature `video` (or when GStreamer cannot start), a video draws
 //! a neutral placeholder and reports `onError` for each source.
+//!
+//! On Tizen, whatever the features, videos play through the TV's own
+//! player (dXn.GpuiTizen's `VideoPlayer`, [`tizen`]): on the TV's video
+//! plane under a hole in the window, or as a texture where the view turns,
+//! fades or is clipped, with the same events and control bar. Each backend
+//! is a `VideoItem` with one interface (`new`, `set`, `seek`, `close`,
+//! [`Hosted`]), which `crate::native` creates, hands the props and commands
+//! to and drops.
+//!
+//! [`Hosted`]: crate::view::Hosted
 
-#[cfg(not(feature = "video"))]
+// The backend: Tizen's player on a TV, GStreamer's with feature `video`
+// elsewhere, else the placeholder.
+#[cfg(all(not(feature = "video"), not(target_vendor = "tizen")))]
 pub(crate) use placeholder::VideoItem;
-#[cfg(feature = "video")]
+#[cfg(all(feature = "video", not(target_vendor = "tizen")))]
 pub(crate) use player::VideoItem;
+#[cfg(target_vendor = "tizen")]
+pub(crate) use tizen::VideoItem;
 
-#[cfg(not(feature = "video"))]
+// The player's logic is tested on the desktops too.
+#[cfg(any(test, target_vendor = "tizen"))]
+mod tizen;
+
+#[cfg(all(not(feature = "video"), not(target_vendor = "tizen")))]
 mod placeholder {
     use std::{cell::RefCell, rc::Rc};
 
@@ -100,7 +118,7 @@ mod placeholder {
     }
 }
 
-#[cfg(feature = "video")]
+#[cfg(all(feature = "video", not(target_vendor = "tizen")))]
 mod player {
     use std::{
         cell::{Cell, RefCell},
@@ -111,15 +129,18 @@ mod player {
         },
     };
 
-    use gpui::{RenderImage, px};
+    use gpui::RenderImage;
     use gstreamer as gst;
     use gstreamer::prelude::*;
     use gstreamer_app as gst_app;
     use gstreamer_video as gst_video;
     use gstreamer_video::prelude::*;
-    use nsh_core::{Color, EventKind, EventPayload, NodeId, PayloadValue, ResizeMode, VideoProps};
+    use nsh_core::{EventKind, EventPayload, NodeId, PayloadValue, ResizeMode, VideoProps};
 
-    use super::{clock, finite, fit};
+    use super::{
+        controls::{self, BAR, BUTTON},
+        finite, fit,
+    };
     use crate::{
         image::AssetBase,
         input::{Cursor, PointerKind},
@@ -128,18 +149,6 @@ mod player {
         surface::Surface,
         view::{Hosted, ItemPointer},
     };
-
-    /// The control bar's height.
-    const BAR: f32 = 40.0;
-    /// The play / pause button's width at the bar's left.
-    const BUTTON: f32 = 40.0;
-    /// The room the time takes at the bar's right.
-    const TIME: f32 = 96.0;
-
-    /// The scrubber's ends on a control bar `width` wide.
-    fn scrubber(width: f32) -> (f32, f32) {
-        (BUTTON + 8.0, width - TIME - 4.0)
-    }
 
     /// Starts GStreamer once; false (logged once) when it cannot.
     fn gst_ready() -> bool {
@@ -657,108 +666,24 @@ mod player {
 
         /// Seeks to where `x` is on the scrubber of a bar `width` wide.
         fn scrub(&self, x: f32, width: f32) {
-            let (start, end) = scrubber(width);
             let (_, duration) = self.times();
-            if end <= start || duration <= 0.0 {
-                return;
+            if let Some(at) = controls::scrubbed(x, width, duration) {
+                self.seek(at);
             }
-            let fraction = ((x - start) / (end - start)).clamp(0.0, 1.0) as f64;
-            self.seek(duration * fraction);
         }
 
         /// The control bar at the bottom of `size`.
         fn draw_bar(&self, cx: &mut DrawCx<'_>, size: (f32, f32)) {
-            let (w, h) = size;
-            let top = h - BAR;
-            let cy = top + BAR / 2.0;
-            let white = Color::rgba(255, 255, 255, 255);
-            cx.fill_rect(
-                crate::geom::rect(0.0, top, w, BAR),
-                [0.0; 4],
-                Color::rgba(0, 0, 0, 140),
-            );
-            let bx = BUTTON / 2.0;
-            if self.active() {
-                cx.fill_rect(
-                    crate::geom::rect(bx - 6.0, cy - 7.0, 4.0, 14.0),
-                    [1.0; 4],
-                    white,
-                );
-                cx.fill_rect(
-                    crate::geom::rect(bx + 2.0, cy - 7.0, 4.0, 14.0),
-                    [1.0; 4],
-                    white,
-                );
-            } else {
-                cx.fill_contours(
-                    &[vec![
-                        (bx - 5.0, cy - 8.0),
-                        (bx + 8.0, cy),
-                        (bx - 5.0, cy + 8.0),
-                    ]],
-                    white,
-                );
-            }
             let (time, duration) = self.times();
-            let (start, end) = scrubber(w);
-            if end > start {
-                let fraction = if duration > 0.0 {
-                    (time / duration).clamp(0.0, 1.0) as f32
-                } else {
-                    0.0
-                };
-                let knob = start + (end - start) * fraction;
-                cx.fill_rounded(
-                    start,
-                    cy - 2.0,
-                    end - start,
-                    4.0,
-                    2.0,
-                    Color::rgba(255, 255, 255, 90),
-                );
-                cx.fill_rounded(start, cy - 2.0, knob - start, 4.0, 2.0, white);
-                let r = if self.scrubbing.get() { 7.0 } else { 6.0 };
-                cx.fill_rounded(knob - r, cy - r, r * 2.0, r * 2.0, r, white);
-            }
-            let text = format!("{} / {}", clock(time), clock(duration));
-            draw_text(cx, &text, w - 10.0, cy, white);
-        }
-    }
-
-    /// Paints `text` (12pt) ending at `right`, centered on `cy` (item
-    /// coordinates).
-    fn draw_text(cx: &mut DrawCx<'_>, text: &str, right: f32, cy: f32, color: Color) {
-        if cx.culled() {
-            return;
-        }
-        let k = cx.transform_scale();
-        let font_size = 12.0 * k;
-        let line_height = px(font_size * 1.3);
-        let color = cx.color(color);
-        let anchor = cx.map(right, cy);
-        let text = gpui::SharedString::from(text.to_owned());
-        cx.paint(|window, app| {
-            let run = gpui::TextRun {
-                len: text.len(),
-                font: gpui::font(crate::text::ui_family()),
-                color,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            let line = window
-                .text_system()
-                .shape_line(text, px(font_size), &[run], None);
-            let origin = gpui::point(anchor.x - line.width, anchor.y - line_height / 2.0);
-            let _ = line.paint(
-                origin,
-                line_height,
-                gpui::TextAlign::Left,
-                None,
-                window,
-                app,
+            controls::draw_bar(
+                cx,
+                size,
+                self.active(),
+                time,
+                duration,
+                self.scrubbing.get(),
             );
-        });
+        }
     }
 
     impl Drop for VideoItem {
@@ -956,9 +881,144 @@ mod player {
     }
 }
 
+/// NSH's control bar over a video (`controls`): play / pause, a scrubber,
+/// the time; the players draw it and take its presses.
+#[cfg(any(feature = "video", target_vendor = "tizen"))]
+mod controls {
+    use gpui::px;
+    use nsh_core::Color;
+
+    use super::clock;
+    use crate::render::DrawCx;
+
+    /// The control bar's height.
+    pub(super) const BAR: f32 = 40.0;
+    /// The play / pause button's width at the bar's left.
+    pub(super) const BUTTON: f32 = 40.0;
+    /// The room the time takes at the bar's right.
+    const TIME: f32 = 96.0;
+
+    /// The scrubber's ends on a control bar `width` wide.
+    fn scrubber(width: f32) -> (f32, f32) {
+        (BUTTON + 8.0, width - TIME - 4.0)
+    }
+
+    /// Where a press at `x` on the scrubber of a bar `width` wide seeks to,
+    /// in a video `duration` seconds long (none without a duration).
+    pub(super) fn scrubbed(x: f32, width: f32, duration: f64) -> Option<f64> {
+        let (start, end) = scrubber(width);
+        if end <= start || duration <= 0.0 {
+            return None;
+        }
+        let fraction = ((x - start) / (end - start)).clamp(0.0, 1.0) as f64;
+        Some(duration * fraction)
+    }
+
+    /// The control bar at the bottom of `size`: the pause button while
+    /// `playing`, else the play button, and `time` of `duration`.
+    pub(super) fn draw_bar(
+        cx: &mut DrawCx<'_>,
+        size: (f32, f32),
+        playing: bool,
+        time: f64,
+        duration: f64,
+        scrubbing: bool,
+    ) {
+        let (w, h) = size;
+        let top = h - BAR;
+        let cy = top + BAR / 2.0;
+        let white = Color::rgba(255, 255, 255, 255);
+        cx.fill_rect(
+            crate::geom::rect(0.0, top, w, BAR),
+            [0.0; 4],
+            Color::rgba(0, 0, 0, 140),
+        );
+        let bx = BUTTON / 2.0;
+        if playing {
+            cx.fill_rect(
+                crate::geom::rect(bx - 6.0, cy - 7.0, 4.0, 14.0),
+                [1.0; 4],
+                white,
+            );
+            cx.fill_rect(
+                crate::geom::rect(bx + 2.0, cy - 7.0, 4.0, 14.0),
+                [1.0; 4],
+                white,
+            );
+        } else {
+            cx.fill_contours(
+                &[vec![
+                    (bx - 5.0, cy - 8.0),
+                    (bx + 8.0, cy),
+                    (bx - 5.0, cy + 8.0),
+                ]],
+                white,
+            );
+        }
+        let (start, end) = scrubber(w);
+        if end > start {
+            let fraction = if duration > 0.0 {
+                (time / duration).clamp(0.0, 1.0) as f32
+            } else {
+                0.0
+            };
+            let knob = start + (end - start) * fraction;
+            cx.fill_rounded(
+                start,
+                cy - 2.0,
+                end - start,
+                4.0,
+                2.0,
+                Color::rgba(255, 255, 255, 90),
+            );
+            cx.fill_rounded(start, cy - 2.0, knob - start, 4.0, 2.0, white);
+            let r = if scrubbing { 7.0 } else { 6.0 };
+            cx.fill_rounded(knob - r, cy - r, r * 2.0, r * 2.0, r, white);
+        }
+        let text = format!("{} / {}", clock(time), clock(duration));
+        draw_text(cx, &text, w - 10.0, cy, white);
+    }
+
+    /// Paints `text` (12pt) ending at `right`, centered on `cy` (item
+    /// coordinates).
+    fn draw_text(cx: &mut DrawCx<'_>, text: &str, right: f32, cy: f32, color: Color) {
+        if cx.culled() {
+            return;
+        }
+        let k = cx.transform_scale();
+        let font_size = 12.0 * k;
+        let line_height = px(font_size * 1.3);
+        let color = cx.color(color);
+        let anchor = cx.map(right, cy);
+        let text = gpui::SharedString::from(text.to_owned());
+        cx.paint(|window, app| {
+            let run = gpui::TextRun {
+                len: text.len(),
+                font: gpui::font(crate::text::ui_family()),
+                color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let line = window
+                .text_system()
+                .shape_line(text, px(font_size), &[run], None);
+            let origin = gpui::point(anchor.x - line.width, anchor.y - line_height / 2.0);
+            let _ = line.paint(
+                origin,
+                line_height,
+                gpui::TextAlign::Left,
+                None,
+                window,
+                app,
+            );
+        });
+    }
+}
+
 /// Where a picture of `natural` size goes in a box of `size` (x, y, width,
 /// height).
-#[cfg(feature = "video")]
+#[cfg(all(feature = "video", not(target_vendor = "tizen")))]
 fn fit(mode: nsh_core::ResizeMode, natural: (f32, f32), size: (f32, f32)) -> (f32, f32, f32, f32) {
     use nsh_core::ResizeMode;
     let (nw, nh) = natural;
@@ -979,7 +1039,7 @@ fn fit(mode: nsh_core::ResizeMode, natural: (f32, f32), size: (f32, f32)) -> (f3
 }
 
 /// A time for the control bar: `m:ss`, `h:mm:ss` from an hour on.
-#[cfg(feature = "video")]
+#[cfg(any(feature = "video", target_vendor = "tizen"))]
 fn clock(seconds: f64) -> String {
     let total = if seconds.is_finite() && seconds > 0.0 {
         seconds.floor() as u64
@@ -996,12 +1056,12 @@ fn clock(seconds: f64) -> String {
 
 /// `x`, or 0 when it is not a finite number (live streams have no
 /// duration).
-#[cfg(feature = "video")]
+#[cfg(any(feature = "video", target_vendor = "tizen", test))]
 fn finite(x: f64) -> f64 {
     if x.is_finite() { x } else { 0.0 }
 }
 
-#[cfg(all(test, feature = "video"))]
+#[cfg(all(test, feature = "video", not(target_vendor = "tizen")))]
 mod tests {
     use nsh_core::ResizeMode;
 
