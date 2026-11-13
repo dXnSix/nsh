@@ -8,8 +8,9 @@ from the checkout, so they follow upstream's as it keeps them (its
 with no upstream workflow (`android`, `web`, `tizen`, and `apple`, the
 local check of `.github/fork/apple.sh`) add their crates to the shared
 ones. A change to the fork's own CI files runs every job, and so does a
-list that cannot be read. The local checks (`apple`, `android`) follow the
-scripts in `.github/fork/`, not the workflows, which they do not run.
+list that cannot be read. The local checks (`apple`: macOS and iOS,
+`emulator`: Android's examples' tests) follow the scripts in
+`.github/fork/`, not the workflows, which they do not run.
 
 Usage: changed.py <file with the changed paths, one a line> | --all
 Prints `<job>=true|false` lines for `$GITHUB_OUTPUT`.
@@ -26,7 +27,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 # a change to its scripts by the local checks too.
 SCRIPTS = [".github/fork/**"]
 EVERYTHING = SCRIPTS + [".github/workflows/fork-*.yml"]
-LOCAL = {"apple", "android"}
+LOCAL = {"apple", "emulator"}
 
 
 def upstream(name):
@@ -43,6 +44,7 @@ def areas():
     core = upstream("core.yml")
     gpui = upstream("gpui.yml") + core
     rust_app = upstream("rust-app.yml")
+    android = core + ["crates/nsh-platform-android/**", "crates/xtask/**"]
     return {
         "core": core,
         "linux": upstream("linux.yml"),
@@ -54,7 +56,8 @@ def areas():
         # The examples' tests without a platform, as Rust application's
         # `web` job runs them.
         "headless": rust_app,
-        "android": core + ["crates/nsh-platform-android/**", "crates/xtask/**"],
+        "android": android,
+        "emulator": android,
         "web": core + ["crates/nsh-platform-web/**", "crates/nsh-cli/**"],
         "tizen": gpui,
         "apple": core + [
@@ -94,6 +97,6 @@ def main():
 
 
 NAMES = ["core", "linux", "windows", "gpui", "tui", "examples", "rust-app", "headless", "android", "web",
-         "tizen", "apple"]
+         "tizen", "apple", "emulator"]
 
 main()
