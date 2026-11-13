@@ -528,6 +528,10 @@ mod tests {
                     ctrl,
                     ..Modifiers::default()
                 },
+                scan: 0,
+                extended: false,
+                sys: false,
+                translated: false,
             }
         }
 
