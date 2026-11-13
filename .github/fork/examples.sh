@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The examples' tests on a real platform (`nsh test --target <target>`):
 # macOS, iOS, Android and the web. `fork-full.yml` runs it on GitHub's
-# runners at night, and `apple.sh` on a Mac for macOS and iOS.
+# runners at night, and `local.sh` on a Mac for macOS, iOS and Android.
 # Usage: examples.sh <target> (in a checkout, after `cargo build -p nsh-cli`;
 # the script itself may come from another checkout).
 #
