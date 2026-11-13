@@ -121,33 +121,42 @@ impl GpuiNative {
         .flatten()
     }
 
-    /// Presses key `vk` in the focused window; Escape nothing took closes
-    /// a window of the app's own that says so, and Tab past the last stop
-    /// (the first with Shift) wraps around, as in a real one.
-    fn keystroke(&self, vk: u16, modifiers: Modifiers) -> Option<()> {
+    /// Runs `press` in the focused window (the main one, or the app's own
+    /// one entered for it); `escape`: Escape nothing took closes a window
+    /// of the app's own that says so, as a real one does.
+    fn press_in_focus(
+        &self,
+        press: impl FnOnce(&Rc<Surface>) -> bool + Send + 'static,
+        escape: bool,
+    ) -> Option<()> {
         self.in_focused(move |surface, own, cx| {
             if let Some((id, _)) = &own
                 && crate::window::blocked(surface, Some(*id), cx)
             {
                 return;
             }
-            let taken = synth::press(surface, vk, modifiers);
-            // A real window's Tab the surface did not take is GPUI's
-            // `FocusNext` (`AppView::tab`); a test's window has no other tab
-            // stop, so the focus wraps around.
-            if !taken
-                && vk == crate::keys::VK_TAB
-                && !(modifiers.ctrl || modifiers.alt || modifiers.meta)
-            {
-                crate::input::tab_past_ends(surface, modifiers.shift, || false);
-            }
+            let taken = press(surface);
             if let Some((id, window)) = own
                 && !taken
-                && vk == crate::keys::VK_ESCAPE
+                && escape
             {
                 crate::window::escape(surface, Some(id), window, cx);
             }
         })
+    }
+
+    /// Presses key `vk` in the focused window; Escape nothing took closes
+    /// a window of the app's own that says so, and Tab past the last stop
+    /// (the first with Shift) wraps around, as in a real one.
+    fn keystroke(&self, vk: u16, modifiers: Modifiers) -> Option<()> {
+        self.press_in_focus(
+            move |surface| {
+                let taken = synth::press(surface, vk, modifiers);
+                wrap_tab(surface, taken, vk == crate::keys::VK_TAB, modifiers);
+                taken
+            },
+            vk == crate::keys::VK_ESCAPE,
+        )
     }
 
     /// `f` with the window's view on the main thread, waited for (what it
@@ -409,19 +418,32 @@ impl Native for GpuiNative {
     }
 
     fn press_keys(&self, keys: &str) -> Result<(), String> {
-        let stroke = nsh_core::keymap::Keystroke::parse(keys, crate::keymap::OS)
+        // The step's keystroke is the source of the key (its raw event
+        // carries it; `physical` is `None`), so the press and release take
+        // the same router real keys do.
+        let stroke = nsh_core::keymap::Keystroke::parse(keys, crate::keys::OS)
             .map_err(|e| e.to_string())?;
-        let vk = crate::keys::virtual_key(stroke.key)
-            .ok_or_else(|| format!("{keys:?} has no key on this keyboard"))?;
-        let m = stroke.modifiers;
-        let modifiers = Modifiers {
-            shift: m.shift,
-            ctrl: m.ctrl,
-            alt: m.alt,
-            meta: m.cmd,
-        };
-        self.keystroke(vk, modifiers)
-            .ok_or_else(|| "the window is gone".to_owned())
+        self.press_in_focus(
+            move |surface| {
+                let taken = synth::press_keys(surface, &stroke);
+                let m = stroke.modifiers;
+                let modifiers = Modifiers {
+                    shift: m.shift,
+                    ctrl: m.ctrl,
+                    alt: m.alt,
+                    meta: m.cmd,
+                };
+                wrap_tab(
+                    surface,
+                    taken,
+                    stroke.key == nsh_core::keymap::Key::Tab,
+                    modifiers,
+                );
+                taken
+            },
+            stroke.key == nsh_core::keymap::Key::Escape,
+        )
+        .ok_or_else(|| "the window is gone".to_owned())
     }
 
     fn press_remote_key(&self, key: RemoteKey) -> Result<(), String> {
@@ -575,6 +597,16 @@ fn mapped_bounds(
         point(Points(x0), Points(y0)),
         Size::new(Points(x1 - x0), Points(y1 - y0)),
     ))
+}
+
+/// A Tab the surface did not take: in a real window it is GPUI's
+/// `FocusNext` (`AppView::tab`); a test's window has no other tab stop, so
+/// the focus wraps around (`taken`: the surface took the key; `tab`: it is
+/// Tab).
+fn wrap_tab(surface: &Rc<Surface>, taken: bool, tab: bool, modifiers: Modifiers) {
+    if !taken && tab && !(modifiers.ctrl || modifiers.alt || modifiers.meta) {
+        crate::input::tab_past_ends(surface, modifiers.shift, || false);
+    }
 }
 
 #[cfg(test)]

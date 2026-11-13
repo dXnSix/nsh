@@ -660,6 +660,7 @@ fn run_rust_app(
             use crate::android;
             let sdk = android::Sdk::find()?;
             let serial = android::device(&sdk)?;
+            let env = android_app_env(&config);
             let out = run.join("android");
             // The device's ABI alone: each one is a build of the app's crate.
             let abi = android::device_abis(&sdk, &serial)?
@@ -676,18 +677,10 @@ fn run_rust_app(
             let apk = out.join(format!("{name}.apk"));
             let step = ui::Step::start(format!("installing {id} on {serial}"));
             android::adb(&sdk, &serial, &["install", "-r", &apk.to_string_lossy()])?;
-            android::adb(
-                &sdk,
-                &serial,
-                &[
-                    "shell",
-                    "am",
-                    "start",
-                    "-S",
-                    "-n",
-                    &format!("{id}/com.longbridge.nsh.AppActivity"),
-                ],
-            )?;
+            let activity = format!("{id}/com.longbridge.nsh.AppActivity");
+            let mut start = vec!["shell", "am", "start", "-S", "-n", activity.as_str()];
+            start.extend(env.iter().map(String::as_str));
+            android::adb(&sdk, &serial, &start)?;
             step.done(format!("launched {id} on {serial}"));
             let _stoppable = ui::Stoppable::new();
             let result = app.watch(|| Ok(false));
@@ -757,6 +750,7 @@ fn package_options<'a>(
         run: false,
         asset_url: None,
         probe: false,
+        development: true,
     }
 }
 
@@ -1273,9 +1267,11 @@ fn simctl_child_env(
 
 /// The variables of this environment that the app's `nsh.json` declares in
 /// `capabilities.process.env`, as `adb shell am start` arguments for the
-/// Android development host: `am start` starts the app in a process the
-/// system makes, so each one goes as a string extra `nsh.env.<name>`, which
-/// `DevActivity` sets in its process's environment before the app starts.
+/// Android development host and a Rust app's development build: `am start`
+/// starts the app in a process the system makes, so each one goes as a
+/// string extra `nsh.env.<name>`, which `DevActivity` (or a debuggable
+/// build's `AppActivity`) sets in its process's environment before the app
+/// starts.
 /// The app reads them in `process.env` as the desktops' hosts, the CLI's
 /// children, do.
 pub(crate) fn android_app_env(config: &crate::package::AppConfig) -> Vec<String> {

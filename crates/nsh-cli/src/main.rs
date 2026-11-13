@@ -1086,6 +1086,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 run,
                 asset_url: asset_url.as_deref(),
                 probe,
+                development: false,
             })
         }
         Command::Run {

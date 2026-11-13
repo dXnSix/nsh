@@ -167,8 +167,9 @@ pub(crate) struct Surface {
     pub(crate) nav: RefCell<crate::navigation::Nav>,
     /// Pointer input state ([`crate::input`]).
     pub(crate) input: crate::input::Input,
-    /// The keyboard focus on views ([`crate::focus`]).
-    pub(crate) focus: crate::focus::Focus,
+    /// Keyboard focus of custom views, and their raw key events
+    /// ([`crate::keyboard`]).
+    pub(crate) keyboard: crate::keyboard::Keyboard,
     /// Native file-drop destinations.
     pub(crate) file_drop: crate::file_drop::State,
     engine: RefCell<Option<Engine>>,
@@ -309,7 +310,7 @@ impl Surface {
             anim: RefCell::new(UiAnimation::default()),
             nav: RefCell::default(),
             input: Default::default(),
-            focus: Default::default(),
+            keyboard: Default::default(),
             file_drop: Default::default(),
             engine: RefCell::new(None),
             control: RefCell::new(None),
@@ -404,6 +405,11 @@ impl Surface {
     /// The surface with `key`, if it is alive.
     pub(crate) fn by_key(key: u64) -> Option<Rc<Surface>> {
         SURFACES.with(|s| s.borrow().get(&key).and_then(Weak::upgrade))
+    }
+
+    /// The live surfaces of this thread.
+    pub(crate) fn all() -> Vec<Rc<Surface>> {
+        SURFACES.with(|s| s.borrow().values().filter_map(Weak::upgrade).collect())
     }
 
     /// The UI thread it lives on ([`crate::window::UiThread::invoke`] runs closures there).
@@ -554,7 +560,7 @@ impl Surface {
         *self.anim.borrow_mut() = UiAnimation::default();
         self.nav.borrow_mut().reset();
         crate::input::reset(self);
-        crate::focus::reset(self);
+        crate::text_input::stopped(self);
         crate::keymap::clear(self);
         self.js_frame.set(false);
         self.resize_late.set(false);
@@ -1065,7 +1071,7 @@ impl Surface {
     }
 
     /// Whether `nsh test --target windows` drives the app.
-    fn testing(&self) -> bool {
+    pub(crate) fn testing(&self) -> bool {
         #[cfg(feature = "dev")]
         return self.test_model.borrow().is_some();
         #[cfg(not(feature = "dev"))]

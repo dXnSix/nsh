@@ -18,6 +18,7 @@ mod dialog;
 mod diff;
 mod diff_roles;
 mod dock;
+mod dropdown_presence;
 mod editor;
 mod editor_completion;
 mod editor_definition;
@@ -51,6 +52,12 @@ mod submenu;
 mod switch;
 mod syntax_roles;
 mod tabs;
+#[cfg(feature = "term")]
+mod term;
+#[cfg(feature = "term")]
+mod term_cells;
+#[cfg(feature = "term")]
+mod term_input;
 mod terminal;
 mod text_view;
 mod theme_roles;

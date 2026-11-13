@@ -494,7 +494,8 @@ Headless runs play the platform's part NSH's protocol defines, and refuse what o
   `forward`, `go` and `type_address` report the root's `UrlScheme` events the page reports (`quiet`, `change`,
   `open`); a change to the web's history in `nsh.js` changes it too;
 - URLs the app opens (`Command::OpenUrl`) are recorded (`Screen::opened_urls`), never opened, and answered with
-  `onOpenUrl` `{ opened: true }`, as a device with an app for every scheme would (`app.openedUrls()`);
+  `onOpenUrl` `{ opened: true }`, as a device with an app for every scheme would (`app.openedUrls()`), but
+  `{ opened: false }` for those matching the globs of `Headless::fail_open_urls` (`app.failOpenUrls`);
 - the platform has no eyedropper (`Environment::screen_color` false) until a Rust test calls
   `Headless::on_screen_color(color)`: then `Command::PickScreenColor` is answered with `onScreenColor`, that color (or
   none, a cancel);
@@ -1164,10 +1165,12 @@ How users get it (`website/docs/installation.md`):
 
 ### Runners
 
-Every workflow runs on GitHub's runners: the checks, the release (its builds, its `Plan`, `Release` and `Nightly`
-jobs, the crates' publication, the Homebrew formula's update) and the Website workflow's build and deployment of the
-published site. This repository is public, so its jobs run on GitHub's fresh runners, never on machines shared with
-other projects.
+Some checks run on the organization's self-hosted runners, which keep their builds between jobs; each job's
+`runs-on` says where it runs. On a self-hosted runner a job installs its toolchain without making it the machine's
+default (`RUSTUP_TOOLCHAIN` picks it) and skips the dependency caches. Pull requests from forks and the scheduled runs
+on `main` run every check on GitHub's runners. The release (its builds, `Plan`, `Release` and `Nightly`), the crates'
+publication, the Homebrew formula's update and the website's deployment run only on GitHub's runners: the jobs that
+hold write tokens or decide and build what users download run on fresh machines.
 
 The checks (Core, Linux, Windows, TUI, Rust application, Examples, Compat) run on pull requests, and on `main` every
 three hours (skipped when `main` has not moved since the last scheduled run, `changed.yml`) and on manual runs, never on every push: a push to `main` is a pull request that already passed

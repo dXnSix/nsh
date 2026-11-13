@@ -637,6 +637,9 @@ pub(crate) struct PackageOptions<'a> {
     pub(crate) asset_url: Option<&'a str>,
     /// Tizen web: the loader probe instead of the app (`--probe`).
     pub(crate) probe: bool,
+    /// A development build for `nsh run`. Android: the APK is debuggable,
+    /// so `AppActivity` takes the environment `nsh run` passes it.
+    pub(crate) development: bool,
 }
 
 /// `nsh.json` `"icon"`: one PNG for every target, or one per platform
@@ -1312,7 +1315,7 @@ fn package_android(
             version_code: config.build.unwrap_or(1),
             target_sdk,
             activity: "com.longbridge.nsh.AppActivity",
-            dev: false,
+            dev: options.development,
             cleartext: config.android.uses_cleartext_traffic,
             notifications: config.notifications(),
             microphone: config.web_media("microphone"),
@@ -2164,6 +2167,7 @@ mod tests {
                 asset_url: None,
                 tizen_archs: &[],
                 probe: false,
+                development: false,
             })
             .unwrap_err();
             assert_eq!(

@@ -38,7 +38,7 @@ const engine = (changes = {}) => ({
   titleBar: { height: 0, left: 0, right: 0 }, keyboard: { height: 0, duration: 250 },
   colorScheme: "light", fontScale: 1, rtl: false, reduceMotion: false, pixelRatio: 2, screenReader: false,
   locale: "de-AT", host: false, lifecycle: "active", shaders: true, wakeCount: 0, localeSettings: settings(),
-  platform: { os: "web", version: "0.0", idiom: "desktop", desktop: true, appleKeyboard: false },
+  platform: { name: "web", os: "web", version: "0.0", idiom: "desktop", desktop: true, appleKeyboard: false },
   ...changes,
 });
 
@@ -228,4 +228,23 @@ test("what a ThemeScope renders reads the scope's appearance and tokens", () => 
   env.inScope({ theme: violet }, () => { read(); env.inScope({}, read); env.inScope({ theme: pink }, read); });
   assert.deepEqual(made, [[4, violet, null], [6, pink, 1048580]]);
   assert.deepEqual(asked.map(args => args[2]), [1048580, 1048580, 1048582]);
+});
+
+test("platform.select checks platform.name before platform.os and reads a built-in OS key once", () => {
+  const { env } = environment();
+  assert.equal(env.api.platform.name, "web");
+  let reads = 0;
+  assert.equal(env.api.platform.select({ get web() { reads += 1; return undefined; }, desktop: "d", default: "-" }), "d");
+  assert.equal(reads, 1);
+  assert.equal(env.api.platform.select({ web: null, default: "-" }), null);
+  assert.equal(env.api.platform.select(null), undefined);
+
+  env.update(engine({
+    platform: { name: "miniprogram", os: "ios", version: "18.0", idiom: "phone", desktop: false, appleKeyboard: true },
+  }));
+  assert.equal(env.api.platform.name, "miniprogram");
+  assert.equal(env.api.platform.select({ miniprogram: "mp", ios: "i", mobile: "m", native: "n", default: "d" }), "mp");
+  assert.equal(env.api.platform.select({ miniprogram: undefined, ios: "i", mobile: "m", default: "d" }), "i");
+  assert.equal(env.api.platform.select({ web: "w", mobile: "m", default: "d" }), "m");
+  assert.equal(env.api.platform.select({ web: "w", native: "n", default: "d" }), "n");
 });

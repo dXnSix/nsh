@@ -395,6 +395,9 @@ impl RootView {
             host: false,
             // UIKit has no screen color sampler.
             screen_color: false,
+            // Drawings replayed into Core Graphics bitmaps
+            // ([`crate::canvas::Offscreen`]).
+            canvas_render: true,
             // The Speech framework fed by the microphone.
             speech: true,
             // The notification center.
@@ -776,6 +779,7 @@ impl RootView {
             speech: None,
             audio: None,
             windows: None,
+            login_item: None,
         };
         // A test session's app: the test's storage, network and trace.
         #[cfg(feature = "dev")]
