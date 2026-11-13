@@ -336,11 +336,10 @@ pub mod parts {
         Collapsible, ColorArea, ColorEyeDropper, ColorField, ColorPicker, ColorSlider, ColorSwatch,
         Combobox, Command, ContextMenu, DataTable, DatePicker, DockArea, FocusGroup, HoverCard,
         Link, Menu, MenuButton, MenuItem, MenuSeparator, NumberInput, OtpInput, Pagination,
-        Popover, Progress,
-        Radio, RadioGroup, ResizablePanel, ResizablePanelGroup, Scrollbar, Select, Sheet, Slider,
-        Submenu, Switch, Tab, Table, TableBody, TableCaption, TableCell, TableFooter, TableHead,
-        TableHeader, TableRow, Tabs, TextView, TimeField, Toast, ToastStack, Toggle, ToggleGroup,
-        Toolbar, ToolbarGroup, ToolbarSeparator, Tooltip, Tree,
+        Popover, Progress, Radio, RadioGroup, ResizablePanel, ResizablePanelGroup, Scrollbar,
+        Select, Sheet, Slider, Submenu, Switch, Tab, Table, TableBody, TableCaption, TableCell,
+        TableFooter, TableHead, TableHeader, TableRow, Tabs, TextView, TimeField, Toast,
+        ToastStack, Toggle, ToggleGroup, Toolbar, ToolbarGroup, ToolbarSeparator, Tooltip, Tree,
     };
     #[cfg(feature = "editor")]
     use crate::{DiffView, Editor};
