@@ -597,7 +597,12 @@ mod tests {
         #[test]
         fn a_view_that_takes_no_presses_leaves_them_to_the_bindings() {
             let (surface, view) = window();
-            view.state_mut().events.set(EventKind::Press, false);
+            {
+                // A stop that takes no presses: `focusable` makes it one.
+                let mut s = view.state_mut();
+                s.events.set(EventKind::Press, false);
+                s.props.focusable = Some(true);
+            }
             crate::keymap::set(&surface, Arc::new(Keymap::new(bindings())));
             assert!(crate::keyboard::focus_control(&surface, &view));
             assert!(!on_control(&surface));
