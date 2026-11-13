@@ -210,7 +210,11 @@ fn a_package_is_the_web_site_with_a_manifest_and_the_tv_shim() {
     let shim_at = page
         .find(&format!(r#"<script src="{shim}"></script>"#))
         .unwrap_or_else(|| panic!("{page}"));
-    assert!(shim_at < page.find(r#"<script type="module">"#).unwrap());
+    // The page's own script is a file of its own (a strict `script-src`).
+    let start_at = page
+        .find(r#"<script type="module" src=""#)
+        .unwrap_or_else(|| panic!("{page}"));
+    assert!(shim_at < start_at);
     // After the TV's `webapis`, which `nsh/tizen` uses through the shim.
     let webapis = page
         .find(r#"<script src="$WEBAPIS/webapis/webapis.js"></script>"#)
@@ -218,7 +222,10 @@ fn a_package_is_the_web_site_with_a_manifest_and_the_tv_shim() {
     assert!(webapis < shim_at);
     assert!(page.contains(r#""idiom":"tv""#), "{page}");
     assert!(page.contains(r#""history":false"#), "{page}");
-    assert!(page.contains("idiom: app.idiom"), "{page}");
+    let start = &page[start_at + r#"<script type="module" src=""#.len()..];
+    let start = &start[..start.find('"').unwrap()];
+    let start = read(site.join(start.trim_start_matches("./")));
+    assert!(start.contains("idiom: app.idiom"), "{start}");
 
     // Zipped, unsigned: there is no profile.
     let unsigned = dir.0.join("out/tizen-web/Counter.wgt");
